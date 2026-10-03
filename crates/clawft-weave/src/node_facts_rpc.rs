@@ -125,6 +125,8 @@ struct LocalSigner {
     /// The last full probe and when it ran: the base live refreshes start from.
     last_full: Mutex<Option<(std::time::Instant, clawft_types::placement::NodeFacts)>>,
     emulation: Arc<EmulationCache>,
+    /// The kernel revocation list models are checked against.
+    revocations: Option<Arc<clawft_kernel::revocation::RevocationList>>,
     gate: RefreshGate,
     /// Unix seconds of the last forced probe that ran (0: none yet).
     last_forced_at: std::sync::atomic::AtomicU64,
@@ -189,6 +191,16 @@ fn read_small(path: &Path) -> Option<String> {
 
 /// Build the probe config from the runtime directory's optional inputs.
 pub fn probe_config(runtime_dir: &Path) -> ProbeConfig {
+    probe_config_with(runtime_dir, None)
+}
+
+/// [`probe_config`] with the kernel's revocation list. Models are advertised
+/// only when the daemon has trust anchors and a revocation list to check them
+/// against; without either, no models are advertised.
+pub fn probe_config_with(
+    runtime_dir: &Path,
+    revocations: Option<&Arc<clawft_kernel::revocation::RevocationList>>,
+) -> ProbeConfig {
     let mut cfg = ProbeConfig::default();
     cfg.docker_probe_image = probe_image(
         runtime_dir,
@@ -215,24 +227,64 @@ pub fn probe_config(runtime_dir: &Path) -> ProbeConfig {
             Err(e) => warn!(error = %e, "declared feeds unreadable; ignored"),
         }
     }
+    cfg.models = advertised_models(runtime_dir, revocations);
+    cfg
+}
+
+/// The `model.present` / store capabilities for the node's model registry,
+/// checked against the daemon's trust: pinned anchors from the runtime dir
+/// plus the kernel revocation list. A revoked or unattested model advertises
+/// no hashes (see `model_capabilities`). With no registry, no anchors or no
+/// revocation list, nothing is advertised rather than advertising unchecked.
+#[cfg(all(feature = "ecc", feature = "exochain", feature = "placement", unix))]
+pub fn advertised_models(
+    runtime_dir: &Path,
+    revocations: Option<&Arc<clawft_kernel::revocation::RevocationList>>,
+) -> Vec<Capability> {
+    use clawft_kernel::model_manifest::{ModelRegistry, ModelTrust, TierResolver, model_capabilities};
     let registry_path = runtime_dir.join(MODEL_REGISTRY_FILE);
-    if registry_path.exists() {
-        match clawft_kernel::model_manifest::ModelRegistry::open(&registry_path) {
-            Ok(reg) => {
-                cfg.models = clawft_kernel::model_manifest::model_capabilities(
-                    &reg,
-                    &clawft_kernel::model_manifest::TierResolver::system_default(),
-                );
-            }
-            Err(e) => warn!(error = %e, "model registry unreadable; models not advertised"),
+    if !registry_path.exists() {
+        return Vec::new();
+    }
+    let Some(list) = revocations else {
+        warn!("no revocation list yet; models are not advertised");
+        return Vec::new();
+    };
+    let anchors = match crate::workload_place_policy::load_anchors(runtime_dir) {
+        Ok(a) if !a.signers.is_empty() => a,
+        Ok(_) => {
+            warn!("no pinned model signers; models are not advertised");
+            return Vec::new();
+        }
+        Err(e) => {
+            warn!(error = %e, "trust anchors unreadable; models are not advertised");
+            return Vec::new();
+        }
+    };
+    match ModelRegistry::open(&registry_path) {
+        Ok(reg) => {
+            let reg = reg.with_trust(ModelTrust { anchors, revocations: Some(list.clone()) });
+            model_capabilities(&reg, &TierResolver::system_default())
+        }
+        Err(e) => {
+            warn!(error = %e, "model registry unreadable; models not advertised");
+            Vec::new()
         }
     }
-    cfg
+}
+
+/// Without model support compiled in, no models are advertised.
+#[cfg(not(all(feature = "ecc", feature = "exochain", feature = "placement", unix)))]
+pub fn advertised_models(
+    _runtime_dir: &Path,
+    _revocations: Option<&Arc<clawft_kernel::revocation::RevocationList>>,
+) -> Vec<Capability> {
+    Vec::new()
 }
 
 /// Probe this machine into unsigned facts. Blocking: call off the runtime.
 fn probe_blocking(signer: &LocalSigner) -> clawft_types::placement::NodeFacts {
-    let mut cfg = probe_config(&signer.runtime_dir);
+    let mut cfg = probe_config_with(&signer.runtime_dir, signer.revocations.as_ref());
     cfg.emulation_cache = Some(signer.emulation.clone());
     let node_id = clawft_kernel::node_id_from_pubkey(&signer.key.verifying_key().to_bytes());
     let facts = build_facts(
@@ -264,7 +316,7 @@ fn facts_blocking(signer: &LocalSigner, full: bool) -> clawft_types::placement::
 
 /// Probe, sign and cache this node's facts. Blocking: call off the runtime.
 fn refresh_blocking(signer: &LocalSigner, membership: &ClusterMembership) -> Result<u64, String> {
-    let cfg = probe_config(&signer.runtime_dir);
+    let cfg = probe_config_with(&signer.runtime_dir, signer.revocations.as_ref());
     let now = now_secs();
     let seq = {
         let mut last = signer.last_seq.lock().map_err(|_| "seq lock poisoned")?;
@@ -346,6 +398,7 @@ pub fn init(
     runtime_dir: PathBuf,
     membership: Arc<ClusterMembership>,
     mesh: Option<Arc<MeshRuntime>>,
+    revocations: Option<Arc<clawft_kernel::revocation::RevocationList>>,
 ) {
     // Claim first: a second call must not build (and start) a second exchange.
     if INIT.swap(true, std::sync::atomic::Ordering::SeqCst) {
@@ -374,6 +427,7 @@ pub fn init(
         exchange,
         last_full: Mutex::new(None),
         emulation: Arc::new(EmulationCache::new(Duration::from_secs(EMULATION_CACHE_SECS))),
+        revocations,
         gate: RefreshGate::new(
             Duration::from_secs(MIN_FORCED_REFRESH_SECS),
             Duration::from_secs(PROBE_TIMEOUT_SECS),
@@ -698,5 +752,92 @@ mod tests {
         let p = ev[0].payload.clone().unwrap();
         assert_eq!(p["node"], "n-local");
         assert_eq!(p["seq"], 42);
+    }
+}
+
+#[cfg(all(test, feature = "ecc", feature = "exochain", feature = "placement", unix))]
+mod model_advert_tests {
+    use super::*;
+    use clawft_kernel::model_manifest::{AdoptInput, ModelFormat, ModelRegistry, ModelSource, scan_dir};
+    use clawft_kernel::revocation::{RevocationKind, RevocationList};
+    use clawft_kernel::workload_pkg::{KeyOrigin, TrustAnchors, key_id_for};
+    use clawft_types::placement::AttrValue;
+    use std::os::unix::fs::PermissionsExt;
+
+    /// A runtime dir with one adopted fake model; returns (dir, package id, key id, pubkey hex).
+    fn runtime_with_model(pin_signer: bool) -> (tempfile::TempDir, String) {
+        let tmp = tempfile::tempdir().unwrap();
+        let model = tmp.path().join("quant");
+        std::fs::create_dir_all(&model).unwrap();
+        std::fs::write(model.join("model-0.safetensors"), vec![1u8; 512]).unwrap();
+        let key = ed25519_dalek::SigningKey::from_bytes(&[5u8; 32]);
+        let pk = key.verifying_key().to_bytes();
+        let kid = key_id_for(&pk);
+        let hexpk = hex::encode(pk);
+        let mut anchors = TrustAnchors::default();
+        anchors.push_signer(&kid, &hexpk, KeyOrigin::Operator).unwrap();
+        let run = tmp.path().join("run");
+        std::fs::create_dir_all(run.join("models")).unwrap();
+        let reg = ModelRegistry::open(run.join(MODEL_REGISTRY_FILE)).unwrap();
+        let scanned = scan_dir(
+            &model,
+            AdoptInput {
+                name: "Fake".into(),
+                format: ModelFormat::Mlx,
+                source: ModelSource { hf_repo: Some("o/m".into()), ..ModelSource::default() },
+                redistributable: false,
+            },
+        )
+        .unwrap();
+        let id = reg.adopt(scanned, &key, &kid, &anchors, false).unwrap().package_id;
+        if pin_signer {
+            let trust = serde_json::json!({
+                "schema": "weftos.workload-trust.v1",
+                "operator_keys": [{"key_id": kid, "public_key": hexpk}],
+            });
+            let p = run.join(crate::workload_place_policy::TRUST_FILE);
+            std::fs::write(&p, trust.to_string()).unwrap();
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        (tmp, id)
+    }
+
+    fn list(tmp: &tempfile::TempDir) -> Arc<RevocationList> {
+        Arc::new(RevocationList::new(tmp.path().join("revoked.json")))
+    }
+
+    fn shards(c: &Capability) -> usize {
+        match c.attrs.get("shards") {
+            Some(AttrValue::List(l)) => l.len(),
+            _ => 0,
+        }
+    }
+
+    #[test]
+    fn a_pinned_unrevoked_model_is_advertised() {
+        let (tmp, _) = runtime_with_model(true);
+        let caps = probe_config_with(&tmp.path().join("run"), Some(&list(&tmp))).models;
+        assert_eq!(caps.len(), 1);
+        assert_eq!(shards(&caps[0]), 2, "marker plus one shard hash");
+    }
+
+    #[test]
+    fn a_revoked_model_advertises_no_hashes() {
+        let (tmp, id) = runtime_with_model(true);
+        let l = list(&tmp);
+        l.revoke_subject(RevocationKind::Package, &id, "test").unwrap();
+        let caps = probe_config_with(&tmp.path().join("run"), Some(&l)).models;
+        assert!(caps.iter().all(|c| shards(c) == 0), "{caps:?}");
+    }
+
+    #[test]
+    fn no_anchors_no_revocation_list_or_plain_probe_config_advertises_nothing() {
+        let (tmp, _) = runtime_with_model(false);
+        let run = tmp.path().join("run");
+        assert!(probe_config_with(&run, Some(&list(&tmp))).models.is_empty(), "no pinned signers");
+        let (tmp, _) = runtime_with_model(true);
+        let run = tmp.path().join("run");
+        assert!(probe_config_with(&run, None).models.is_empty(), "no revocation list");
+        assert!(probe_config(&run).models.is_empty(), "plain probe_config has no list");
     }
 }
