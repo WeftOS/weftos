@@ -221,6 +221,8 @@ pub fn required_capability(method: &str) -> Capability {
         // ADR-106 phase 3: grants, approvals and the run gate per artifact.
         | "workload.cog.checkout.status"
         | "workload.cog.checkout.list"
+        // weftos.cog.v1: Cog Host's start check. Read, same standing as checkout status.
+        | "cog.check_run"
         | "infer.status"
         | "expose.list"
         // Fleet manager: one read-only document composed from sources the

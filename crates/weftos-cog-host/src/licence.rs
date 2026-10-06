@@ -1,14 +1,14 @@
 //! The ADR-106 start-time licence check in weft-cog-host (phase 3).
 //!
-//! The host asks the kernel's run gate ([`check_run`], through
-//! [`CognitumRunGate`]) before every spawn of a Cognitum-origin cog: the first
-//! start, every restart after an exit, and every start after the host itself
-//! restarts. A cog is Cognitum-origin when its record says `source: cognitum`
-//! or when its bytes are known Cognitum bytes (listed by a held grant, or a
-//! revoked artifact hash: [`CognitumRunGate::claims`]), so relabelling a
-//! checked-out binary as `local` does not escape the gate. The hashes are
-//! computed from the binary file that is about to run, never taken from the
-//! record or the install request.
+//! Before every spawn of a Cognitum-origin cog the host asks the local daemon
+//! `cog.check_run` (`weftos.cog.v1`) on its Unix socket. A cog is Cognitum-origin
+//! when its record says `source: cognitum` or when its bytes are known Cognitum
+//! bytes (listed by a held grant, or a revoked artifact hash:
+//! [`CognitumRunGate::claims`]), so relabelling a checked-out binary as `local`
+//! does not escape the gate. The hashes are computed from the binary file that
+//! is about to run, never taken from the record or the install request.
+//! Production code does not call `check_run`. A test listener does, so the
+//! grant fixtures still have a daemon double.
 //!
 //! The licence state lives in its own directory ([`default_licence_dir`]):
 //!
@@ -22,16 +22,15 @@
 //! binding, grants, approvals and revocation notices), each verified by the
 //! kernel code that verifies them on a mesh node.
 //!
-//! - **No directory**: the gate does not apply (`NotSeedBound`), exactly as a
-//!   kernel node that never held a binding.
-//! - **Configured, no binding yet**: fail closed, `binding_inactive`: a directory
-//!   with `config.json` and `trust.json` means the operator intends to bind.
-//! - **Directory present but unreadable** (no or bad config or trust file, a
-//!   poisoned store, an unreadable revocation list): fail closed, every
-//!   Cognitum-origin start is refused `binding_inactive`.
-//! - **Otherwise** the kernel verdict decides, with its refusal codes
-//!   (`binding_inactive`, `no_grant`, `grant_lapsed`, `not_in_grant`,
-//!   `hash_revoked`, `no_approval`).
+//! - **No directory**: the gate does not apply (`NotSeedBound`). No socket call.
+//! - **Directory present but unusable**: fail closed, `binding_inactive`. No socket call.
+//! - **Configured**: the daemon's `cog.check_run` decides. A configured directory
+//!   whose answer is `not_seed_bound` is still `binding_inactive` until a binding
+//!   is imported. An unreadable revocation list after a permit is `binding_inactive`.
+//! - **Daemon failures** use their own start codes: `daemon_unavailable`,
+//!   `malformed_reply`, `timeout`, and `version_mismatch`. Grant refusals keep
+//!   the kernel spellings (`binding_inactive`, `no_grant`, `grant_lapsed`,
+//!   `not_in_grant`, `hash_revoked`, `no_approval`, `not_holder`).
 //!
 //! A lapse refuses the next start and leaves a running cog alone (ADR-106
 //! section 8, soft stop). A revoked artifact hash also stops a running cog
@@ -39,13 +38,14 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use clawft_kernel::licence::{
     APPROVALS_FILE, AdmissionPosture, ApprovalStore, BOUND_MARKER, CheckoutGrantStore, Clock, CognitumRunGate,
     GRANTS_FILE, LocalMeshId, MeshId, NoExtraChecks, RunPermit, RunRefusal, RunRequest, RunVerdict, SignedApproval,
-    SignedBinding, SignedGrant, check_run, system_clock,
+    SignedBinding, SignedGrant, system_clock,
 };
+use weftos_cog_protocol::DEFAULT_TIMEOUT;
 use clawft_kernel::mesh_swarm_revoke::{SignedRevocation, verify_revocation};
 use clawft_kernel::revocation::RevocationList;
 use clawft_kernel::workload_pkg::TrustAnchors;
@@ -102,11 +102,19 @@ enum State {
 /// made by another process (`weft-cog-host licence import`).
 type Fingerprint = Vec<Option<(u64, SystemTime)>>;
 
+/// Prefix on a [`RunRefusal::BindingInactive`] message that is really a
+/// transport failure. [`check_start_hashed`] turns it into its own code.
+/// The kernel has no variant for these, and this host does not add one.
+const TRANSPORT_MARK: &str = "weftos.cog.v1:";
+
 /// The host's licence state and run gate.
 pub struct HostLicence {
     dir: PathBuf,
     clock: Clock,
     state: RwLock<(Fingerprint, Arc<State>)>,
+    /// Per-instance daemon socket. `None` uses `$WEFTOS_RUNTIME_DIR/kernel.sock`.
+    daemon_socket: Option<PathBuf>,
+    daemon_timeout: Duration,
 }
 
 fn read_capped(path: &Path) -> Result<Vec<u8>, String> {
@@ -229,7 +237,26 @@ impl HostLicence {
     pub fn with_clock(dir: PathBuf, clock: Clock) -> Self {
         let fp = fingerprint(&dir);
         let state = Arc::new(load(&dir, &clock));
-        Self { dir, clock, state: RwLock::new((fp, state)) }
+        Self {
+            dir,
+            clock,
+            state: RwLock::new((fp, state)),
+            daemon_socket: None,
+            daemon_timeout: DEFAULT_TIMEOUT,
+        }
+    }
+
+    /// Ask this socket instead of `$WEFTOS_RUNTIME_DIR/kernel.sock`.
+    /// Tests pass a private path so they do not share a process-global socket.
+    pub fn with_daemon_socket(mut self, socket: impl Into<PathBuf>) -> Self {
+        self.daemon_socket = Some(socket.into());
+        self
+    }
+
+    /// How long one `cog.check_run` waits.
+    pub fn with_daemon_timeout(mut self, timeout: Duration) -> Self {
+        self.daemon_timeout = timeout;
+        self
     }
 
     /// The licence directory.
@@ -323,27 +350,27 @@ impl HostLicence {
     }
 }
 
+/// A transport code stashed in [`RunRefusal::BindingInactive`], if this is one.
+fn transport_parts(e: &RunRefusal) -> Option<(&'static str, String)> {
+    let RunRefusal::BindingInactive(msg) = e else { return None };
+    let rest = msg.strip_prefix(TRANSPORT_MARK)?;
+    let (code, detail) = rest.split_once(':')?;
+    let code = match code {
+        "daemon_unavailable" => "daemon_unavailable",
+        "malformed_reply" => "malformed_reply",
+        "timeout" => "timeout",
+        "version_mismatch" => "version_mismatch",
+        _ => return None,
+    };
+    Some((code, detail.to_string()))
+}
+
 impl CognitumRunGate for HostLicence {
     fn check(&self, req: &RunRequest<'_>) -> Result<RunVerdict, RunRefusal> {
         match &*self.state() {
             State::Unconfigured => Ok(RunVerdict::NotSeedBound),
             State::Broken(e) => Err(RunRefusal::BindingInactive(format!("licence state unusable: {e}"))),
-            State::Ready(s) => {
-                let v = check_run(&s.grants, Some(&s.approvals), req)?;
-                // A configured directory means the operator intends to bind this Seed: until a
-                // binding is imported, a Cognitum-origin start is refused rather than let through.
-                // (No directory at all stays `NotSeedBound`.)
-                if matches!(v, RunVerdict::NotSeedBound) {
-                    return Err(RunRefusal::BindingInactive(format!(
-                        "the licence directory {} is configured but holds no binding yet: import the signed binding first",
-                        self.dir.display()
-                    )));
-                }
-                if let (RunVerdict::Permit(_), Some(e)) = (&v, s.revocations.subjects_error()) {
-                    return Err(RunRefusal::BindingInactive(format!("revocation list unreadable: {e}")));
-                }
-                Ok(v)
-            }
+            State::Ready(s) => self.check_ready(s, req),
         }
     }
 
@@ -367,11 +394,11 @@ pub fn hashes(bytes: &[u8]) -> (String, String) {
     (weftos_cog_repo::sha256_hex(bytes), blake3::hash(bytes).to_hex().to_string())
 }
 
-/// A start the gate refused. `code` is the kernel run gate's stable code.
+/// A start the gate refused. `code` is a kernel refusal or a transport code
+/// (`daemon_unavailable`, `malformed_reply`, `timeout`, `version_mismatch`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StartRefused {
-    /// `binding_inactive`, `no_grant`, `grant_lapsed`, `not_in_grant`,
-    /// `hash_revoked` or `no_approval`.
+    /// Stable code. Transport codes are not kernel [`RunRefusal`] variants.
     pub code: &'static str,
     /// The full reason, with the remedy.
     pub reason: String,
@@ -409,19 +436,40 @@ pub fn check_start_hashed(gate: &dyn CognitumRunGate, rec: &CogRecord, sha256: &
     match gate.check(&req) {
         Ok(RunVerdict::NotSeedBound) => Ok(None),
         Ok(RunVerdict::Permit(permit)) => Ok(Some(LicensedStart { blake3: blake3.to_string(), permit })),
-        Err(e) => Err(StartRefused {
-            code: e.code(),
-            reason: format!(
-                "licence run gate: [{}] {e} ({} {}, sha256 {}); remedy: {}",
-                e.code(),
-                rec.id,
-                rec.version,
-                &sha256[..16],
-                e.remedy(&rec.id, &rec.version)
-            ),
-        }),
+        Err(e) => Err(start_refused(&e, rec, sha256)),
     }
 }
+
+fn start_refused(e: &RunRefusal, rec: &CogRecord, sha256: &str) -> StartRefused {
+    let (code, shown, remedy) = match transport_parts(e) {
+        Some((code, detail)) => (
+            code,
+            detail,
+            "start the local WeftOS daemon and retry the licence check".to_string(),
+        ),
+        None => (e.code(), e.to_string(), e.remedy(&rec.id, &rec.version)),
+    };
+    StartRefused {
+        code,
+        reason: format!(
+            "licence run gate: [{code}] {shown} ({} {}, sha256 {}); remedy: {remedy}",
+            rec.id,
+            rec.version,
+            &sha256[..sha256.len().min(16)]
+        ),
+    }
+}
+
+#[path = "licence_check.rs"]
+mod licence_check;
+
+#[cfg(all(test, unix))]
+#[path = "licence_test_gate.rs"]
+mod test_gate;
+
+#[cfg(all(test, unix))]
+#[path = "licence_daemon_tests.rs"]
+mod daemon_tests;
 
 #[cfg(test)]
 #[path = "licence_tests.rs"]

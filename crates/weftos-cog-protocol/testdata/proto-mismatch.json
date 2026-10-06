@@ -1,0 +1,1 @@
+{"ok":false,"error":"protocol mismatch: client speaks 99, daemon accepts 1..=1 (abc1234)","error_kind":"proto_mismatch","id":"cog-check-1","data":{"client":{"proto":99},"daemon":{"min":1,"proto":1,"sha":"abc1234","version":"0.8.3"}}}

@@ -535,7 +535,15 @@ fn licence_verbs_are_machine_level_not_user_level() {
     }
     // The read verbs are exactly the status ones.
     let reads: Vec<_> = LICENCE_VERBS.iter().filter(|m| required_capability(m) == Capability::Read).collect();
-    assert_eq!(reads, vec![&"workload.node.binding", &"workload.cog.checkout.status", &"workload.cog.checkout.list"]);
+    assert_eq!(
+        reads,
+        vec![
+            &"workload.node.binding",
+            &"workload.cog.checkout.status",
+            &"workload.cog.checkout.list",
+            &"cog.check_run",
+        ]
+    );
 }
 
 #[test]

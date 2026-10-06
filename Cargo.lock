@@ -2165,6 +2165,7 @@ dependencies = [
  "uuid",
  "weft-licence",
  "weftos",
+ "weftos-cog-protocol",
  "weftos-cog-repo",
  "weftos-cog-sources",
  "weftos-cos-console",
@@ -11214,6 +11215,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "weftos-cog-market",
+ "weftos-cog-protocol",
  "weftos-cog-repo",
 ]
 

@@ -268,19 +268,24 @@ fn without_a_gate_nothing_changes() {
 
 const T0: u64 = 1_800_000_000;
 
+#[cfg(unix)]
 fn sk(n: u8) -> SigningKey {
     SigningKey::from_bytes(&[n; 32])
 }
+#[cfg(unix)]
 fn hexk(k: &SigningKey) -> String {
     k.verifying_key().to_bytes().iter().map(|b| format!("{b:02x}")).collect()
 }
+#[cfg(unix)]
 fn mesh() -> MeshId {
     MeshId::derive(&[9; 32], &[7; 32])
 }
 const BIN: &[u8] = b"cog binary bytes";
 
-/// A licence dir with config + trust pinning operator key `sk(1)`.
-fn fixture() -> (tempfile::TempDir, HostLicence, Arc<AtomicU64>) {
+/// A licence dir with config + trust pinning operator key `sk(1)`, and a
+/// private `cog.check_run` listener on that directory.
+#[cfg(unix)]
+fn fixture() -> (tempfile::TempDir, HostLicence, Arc<AtomicU64>, super::test_gate::Gate) {
     let dir = tempfile::tempdir().unwrap();
     let lic_dir = dir.path().join(".licence");
     std::fs::create_dir_all(&lic_dir).unwrap();
@@ -291,11 +296,14 @@ fn fixture() -> (tempfile::TempDir, HostLicence, Arc<AtomicU64>) {
     });
     std::fs::write(lic_dir.join(TRUST_FILE), trust.to_string()).unwrap();
     let now = Arc::new(AtomicU64::new(T0));
-    let c = now.clone();
-    let lic = HostLicence::with_clock(lic_dir, Arc::new(move || c.load(Ordering::SeqCst)));
-    (dir, lic, now)
+    let tick = now.clone();
+    let clock: clawft_kernel::licence::Clock = Arc::new(move || tick.load(Ordering::SeqCst));
+    let gate = super::test_gate::Gate::start(lic_dir.clone(), clock.clone());
+    let lic = HostLicence::with_clock(lic_dir, clock).with_daemon_socket(gate.socket());
+    (dir, lic, now, gate)
 }
 
+#[cfg(unix)]
 fn binding() -> SignedBinding {
     let r = BindingRecord {
         v: 2,
@@ -312,6 +320,7 @@ fn binding() -> SignedBinding {
     sign_binding(&r, &sk(1)).unwrap()
 }
 
+#[cfg(unix)]
 fn grant(seq: u64, issued: u64, ttl: u64) -> SignedGrant {
     let (sha256, blake3) = hashes(BIN);
     let g = CheckoutGrant {
@@ -334,6 +343,7 @@ fn grant(seq: u64, issued: u64, ttl: u64) -> SignedGrant {
     sign_grant(&g, &sk(2)).unwrap()
 }
 
+#[cfg(unix)]
 fn approval(signer: &SigningKey) -> SignedApproval {
     let a = Approval {
         v: 1,
@@ -346,6 +356,7 @@ fn approval(signer: &SigningKey) -> SignedApproval {
     sign_approval(&a, signer).unwrap()
 }
 
+#[cfg(unix)]
 fn code(lic: &HostLicence) -> Result<(), &'static str> {
     check_start(lic, &rec(Source::Cognitum), BIN).map(|_| ()).map_err(|e| e.code)
 }
@@ -371,8 +382,9 @@ fn a_licence_dir_without_config_fails_closed() {
 }
 
 #[test]
+#[cfg(unix)]
 fn configured_but_never_bound_fails_closed_for_cognitum_cogs() {
-    let (_d, lic, _) = fixture();
+    let (_d, lic, _, _gate) = fixture();
     assert_eq!(lic.status()["state"], "ready");
     // A configured directory means a binding is intended: nothing Cognitum-origin starts before it.
     let e = check_start(&lic, &rec(Source::Cognitum), BIN).unwrap_err();
@@ -386,8 +398,9 @@ fn configured_but_never_bound_fails_closed_for_cognitum_cogs() {
 }
 
 #[test]
+#[cfg(unix)]
 fn grant_and_approval_permit_then_withdrawal_and_revocation_refuse() {
-    let (_d, lic, now) = fixture();
+    let (_d, lic, now, _gate) = fixture();
     now.store(T0, Ordering::SeqCst);
     let out = lic.import(&Records { binding: Some(binding()), ..Default::default() }).unwrap();
     assert_eq!(out[0].outcome, "applied", "{out:?}");
@@ -425,8 +438,9 @@ fn grant_and_approval_permit_then_withdrawal_and_revocation_refuse() {
 }
 
 #[test]
+#[cfg(unix)]
 fn an_expired_grant_lapses() {
-    let (_d, lic, now) = fixture();
+    let (_d, lic, now, _gate) = fixture();
     lic.import(&Records { binding: Some(binding()), grants: vec![grant(1, T0, 3600)], approvals: vec![approval(&sk(1))], revocations: vec![] })
         .unwrap();
     assert_eq!(code(&lic), Ok(()));
@@ -435,8 +449,9 @@ fn an_expired_grant_lapses() {
 }
 
 #[test]
+#[cfg(unix)]
 fn records_from_untrusted_signers_are_refused() {
-    let (_d, lic, _) = fixture();
+    let (_d, lic, _, _gate) = fixture();
     let forged = sign_binding(&serde_json::from_str(&binding().payload).unwrap(), &sk(3)).unwrap();
     let notice = sign_revocation(RevocationKind::ArtifactHash, &hashes(BIN).1, "x", T0, &sk(3)).unwrap();
     let out = lic
@@ -454,14 +469,16 @@ fn records_from_untrusted_signers_are_refused() {
 }
 
 #[test]
+#[cfg(unix)]
 fn state_survives_a_restart_and_a_deleted_store_fails_closed() {
-    let (d, lic, _) = fixture();
+    let (d, lic, _, gate) = fixture();
     lic.import(&Records { binding: Some(binding()), grants: vec![grant(1, T0, 3600)], approvals: vec![approval(&sk(1))], revocations: vec![] })
         .unwrap();
     assert_eq!(code(&lic), Ok(()));
     let dir = lic.dir().to_path_buf();
     drop(lic);
-    let lic = HostLicence::with_clock(dir.clone(), Arc::new(|| T0 + 1));
+    // The listener still owns the original clock. The grant covers T0 + 1.
+    let lic = HostLicence::with_clock(dir.clone(), Arc::new(|| T0 + 1)).with_daemon_socket(gate.socket());
     assert_eq!(code(&lic), Ok(()), "reopened from disk");
 
     // Another process deletes the grant store: the bound marker keeps the gate on.
@@ -472,8 +489,9 @@ fn state_survives_a_restart_and_a_deleted_store_fails_closed() {
 }
 
 #[test]
+#[cfg(unix)]
 fn a_corrupt_store_or_revocation_list_fails_closed() {
-    let (_d, lic, _) = fixture();
+    let (_d, lic, _, _gate) = fixture();
     lic.import(&Records { binding: Some(binding()), grants: vec![grant(1, T0, 3600)], approvals: vec![approval(&sk(1))], revocations: vec![] })
         .unwrap();
     std::fs::write(lic.dir().join(SUBJECTS_FILE), "{not json").unwrap();
@@ -486,8 +504,9 @@ fn a_corrupt_store_or_revocation_list_fails_closed() {
 }
 
 #[test]
+#[cfg(unix)]
 fn import_limits_are_enforced() {
-    let (_d, lic, _) = fixture();
+    let (_d, lic, _, _gate) = fixture();
     let many = Records { approvals: vec![approval(&sk(1)); MAX_IMPORT_RECORDS + 1], ..Default::default() };
     assert!(lic.import(&many).unwrap_err().contains("at most"));
     assert!(serde_json::from_str::<Records>(r#"{"bogus": 1}"#).is_err(), "unknown fields are refused");

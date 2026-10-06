@@ -23,8 +23,9 @@
 
 use crate::rpc_ext::{Denial, GateFuture, GateRequest};
 
-/// Every licence verb: `licence_rpc` and `licence_checkout_rpc` /
-/// `licence_checkout_verbs`. A test pins it to those modules' lists.
+/// Every licence verb: `licence_rpc`, `licence_checkout_rpc`,
+/// `licence_checkout_verbs`, and `cog_check_rpc`. A test pins it to those
+/// modules' lists.
 pub const LICENCE_VERBS: &[&str] = &[
     "workload.node.bind",
     "workload.node.unbind",
@@ -36,6 +37,7 @@ pub const LICENCE_VERBS: &[&str] = &[
     "workload.cog.checkout.release",
     "workload.cog.checkout.renew",
     "workload.cog.checkout.list",
+    "cog.check_run",
 ];
 
 /// Answered on every daemon (with the redirect where it is not served).
@@ -103,6 +105,7 @@ mod tests {
         let mut served: Vec<&str> = crate::licence_rpc::METHODS.to_vec();
         served.extend(crate::licence_checkout_rpc::METHODS);
         served.extend(crate::licence_checkout_verbs::METHODS);
+        served.extend(crate::cog_check_rpc::METHODS);
         served.sort();
         served.dedup();
         let mut ours = LICENCE_VERBS.to_vec();

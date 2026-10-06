@@ -1,8 +1,17 @@
 //! `weftos.cog.v1` contracts between Cog Host and the local user or project daemon.
 //!
-//! This crate has no `clawft-kernel` or `clawft-types` dependency. Cog Host still
-//! calls `clawft_kernel::licence::check_run` in-process. That path stays until a
-//! client speaks these types on the daemon socket and the golden vectors match.
+//! This crate has no `clawft-kernel`, `clawft-types`, or `clawft-rpc` dependency.
+//! [`client::DaemonCheck`] speaks newline-delimited JSON on the daemon's Unix socket.
+//! Golden vectors under `testdata/` lock the request, verdict, refusal, and
+//! host-event bytes.
+
+mod wire;
+pub use wire::*;
+
+#[cfg(unix)]
+mod client;
+#[cfg(unix)]
+pub use client::DaemonCheck;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -96,6 +105,12 @@ pub enum RefusalCode {
     NotHolder,
     /// The daemon socket did not answer. Cog Host fails closed.
     DaemonUnavailable,
+}
+
+impl std::fmt::Display for RefusalCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 impl RefusalCode {
