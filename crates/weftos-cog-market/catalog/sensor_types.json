@@ -1895,6 +1895,90 @@
    "grade": "C",
    "why": "low-cost Hi-Link mmWave presence/ranging radar module; no figures in the catalog spec",
    "confidence": "low"
+  },
+  {
+   "ref": "module:ximea-xiq",
+   "type": "camera",
+   "grade": "A",
+   "why": "industrial USB3 Vision family; catalog spec resolution=VGA to 4 Mpix (family page), interface=USB3 Vision, 5 Gbit/s, power=down to 1 W",
+   "confidence": "medium"
+  },
+  {
+   "ref": "module:ximea-xic",
+   "type": "camera",
+   "grade": "A",
+   "why": "Sony Pregius USB3 machine-vision family; catalog spec resolution=about 2.3 to 24.5 Mpix on the models table, power=under 3 W",
+   "confidence": "medium"
+  },
+  {
+   "ref": "module:ximea-ximu",
+   "type": "camera",
+   "grade": "A",
+   "why": "subminiature USB camera family; catalog spec resolution=5 to 19.6 Mpix, plus a 0.3 Mpix IMX556 ToF model, form=15 x 15 mm to 17 x 17 mm, 5 g",
+   "confidence": "medium"
+  },
+  {
+   "ref": "module:ximea-xix",
+   "type": "camera",
+   "grade": "A",
+   "why": "compact PCIe machine-vision family; catalog spec form=26 x 26 x 31 mm, power=starting under 3 W, interface=PCIe, flex cable, GenICam / GenTL",
+   "confidence": "medium"
+  },
+  {
+   "ref": "module:ximea-xix-xtreme",
+   "type": "camera",
+   "grade": "S",
+   "why": "Pregius S high-speed PCIe family; catalog spec frame_rate=160 / 110 / 107 FPS at those three resolutions, interface=PCIe Gen3 x4, 32 Gbit/s",
+   "confidence": "medium"
+  },
+  {
+   "ref": "module:ximea-xix-xl",
+   "type": "camera",
+   "grade": "S",
+   "why": "large-format BSI PCIe family; catalog spec resolution=up to 245.7 Mpix (19200 x 12800 on IMX811), interface=PCIe Gen3 x4, 32 Gbit/s, copper flex or fiber",
+   "confidence": "medium"
+  },
+  {
+   "ref": "module:ximea-xib",
+   "type": "camera",
+   "grade": "A",
+   "why": "high-resolution PCIe family; catalog spec resolution=12.5, 19.6, and 47.5 Mpix on the models table, power=about 6 W",
+   "confidence": "medium"
+  },
+  {
+   "ref": "module:ximea-xib-64",
+   "type": "camera",
+   "grade": "S",
+   "why": "high-bandwidth PCIe family; catalog spec interface=PCIe Gen3 x8, 64 Gbit/s, resolution=about 1.1 Mpix at 3709 FPS through 65.4 Mpix at 71 FPS",
+   "confidence": "medium"
+  },
+  {
+   "ref": "module:ximea-xij",
+   "type": "camera",
+   "grade": "S",
+   "why": "cooled scientific sCMOS family; catalog spec readout_noise=down to 1.2 e- in the bullets; table rows 1.1 to 2.2 e-, dynamic_range=up to 90 dB in the bullets; one Pulsar row lists 95 dB",
+   "confidence": "medium"
+  },
+  {
+   "ref": "module:ximea-mx377",
+   "type": "camera",
+   "grade": "S",
+   "why": "cooled medium-format sCMOS family; catalog spec resolution=about 37.7 to 38 Mpix, 6200 x 6144 on the table, readout_noise=4 e- on the table rows, dynamic_range=90 dB",
+   "confidence": "medium"
+  },
+  {
+   "ref": "module:ximea-xiray",
+   "type": "camera",
+   "grade": "S",
+   "why": "cooled direct-phosphor X-ray camera family; catalog spec energy=7 keV and over 100 keV (family page), bits=14 and 16",
+   "confidence": "medium"
+  },
+  {
+   "ref": "module:ximea-xispec",
+   "type": "camera",
+   "grade": "S",
+   "why": "hyperspectral snapshot and line-scan family; catalog spec bands=15 to 150 across ranges inside 460–960 nm, power=1.6 W USB3 class; 2.9 W on listed PCIe rows",
+   "confidence": "medium"
   }
  ]
 }

@@ -1,7 +1,7 @@
 {
   "generated": "2026-10-03",
-  "note": "Where to find each known sensor/board manufacturer's full product catalog. Built by 5 area agents. best_ingest_path = how to bulk-pull into the parts pool. Sipeed, Pololu, Toradex added 2026-10-04. DEBIX added 2026-10-05. Banana Pi and Akizuki Denshi added 2026-10-06. sensiBel added 2026-10-06.",
-  "count": 78,
+  "note": "Where to find each known sensor/board manufacturer's full product catalog. Built by 5 area agents. best_ingest_path = how to bulk-pull into the parts pool. Sipeed, Pololu, Toradex added 2026-10-04. DEBIX added 2026-10-05. Banana Pi, Akizuki Denshi, and sensiBel added 2026-10-06. Turing Pi added 2026-10-06. XIMEA added 2026-10-06 (12 camera families; see docs/hardware/module-types.md).",
+  "count": 80,
   "manufacturers": [
     {
       "manufacturer": "Adafruit",
@@ -859,6 +859,28 @@
       "access_notes": "Oslo optical MEMS microphones. A VCSEL and photodetector read diaphragm displacement. SBM100B is shipping (80 dBA SNR, 146 dB SPL AOP, PDM/I2S/TDM). SBM140B was announced 2026-08-31 (84 dBA SNR, 136 dB dynamic range, 24-bit) with production aimed at Q1 2027; the product page says full specifications are coming. Datasheets are requested from the documents page, not posted. Eval kits AURORA (stereo), POLARIS (8-mic array), and NOVA32 are not staged.",
       "approx_products": 2,
       "best_ingest_path": "Stage chips sensibel-sbm100b and sensibel-sbm140b only. Do not split PDM, I2S, and TDM into separate rows. Do not pull the eval kits until a board is chosen.",
+      "status": "found"
+    },
+    {
+      "manufacturer": "Turing Machines (Turing Pi)",
+      "area": "boards",
+      "website": "https://turingpi.com/",
+      "catalog_source": "https://turingpi.com/shop/ ; docs https://docs.turingpi.com/docs ; BMC https://github.com/turing-machines/turing-pi",
+      "source_type": "product-listing",
+      "access_notes": "Turing Machines, Inc. Mini-ITX cluster carrier plus a Jetson-pin RK3588 compute module. Sells direct. Current carrier is the Turing Pi 2.5 (SKU TPI2V0252, 4 nodes, BMC, 1 GbE switch). Turing RK1 is RK3588, 8/16/32 GB, 6 TOPS NPU. Slots also take Raspberry Pi CM4 and listed Jetson modules. Case and heatsink are accessories.",
+      "approx_products": "2 staged",
+      "best_ingest_path": "Modules turing-pi-2-5 and turing-rk1 are staged. Do not split RAM sizes. Do not stage the case, heatsink, or the previous Turing Pi 2.",
+      "status": "found"
+    },
+    {
+      "manufacturer": "XIMEA",
+      "area": "optical-audio",
+      "website": "https://www.ximea.com/",
+      "catalog_source": "https://www.ximea.com/products ; industrial https://www.ximea.com/products/industrial-grade-cameras ; scientific https://www.ximea.com/products/scientific-grade-cameras",
+      "source_type": "product-listing",
+      "access_notes": "XIMEA GmbH industrial and scientific cameras. The finder listed 275 cameras on 2026-10-06. Current families are staged as one module each. Sales are quote-only. Host software is GenICam / GenTL plus the vendor SDK. Not a Mouser line.",
+      "approx_products": "12 staged",
+      "best_ingest_path": "Modules ximea-xiq, ximea-xic, ximea-ximu, ximea-xix, ximea-xix-xtreme, ximea-xix-xl, ximea-xib, ximea-xib-64, ximea-xij, ximea-mx377, ximea-xiray, ximea-xispec. Do not split color, monochrome, board-level, or flex cable. Do not stage legacy, xiD, xiT, cables, coolers, mounts, or the xCX computer. Type writeup: docs/hardware/module-types.md.",
       "status": "found"
     }
   ]
