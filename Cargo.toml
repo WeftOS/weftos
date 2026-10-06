@@ -81,6 +81,8 @@ members = [
     "crates/weftos-cog-sources",
     # COG-009: on-appliance cog supervisor + lifecycle API (no agent cap).
     "crates/weftos-cog-host",
+    # weftos.cog.v1: Cog Host to daemon wire types. No kernel dependency.
+    "crates/weftos-cog-protocol",
     # ADR-106: wire types of the Seed licence proxy (shared by kernel + weft-licence).
     "crates/weft-licence-wire",
     # ADR-106 phase 2: the Seed-side licence proxy (own binary, user and unit).

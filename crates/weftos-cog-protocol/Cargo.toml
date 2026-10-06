@@ -1,0 +1,14 @@
+[package]
+name = "weftos-cog-protocol"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "weftos.cog.v1 wire types for Cog Host calls to the local daemon. No kernel dependency."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

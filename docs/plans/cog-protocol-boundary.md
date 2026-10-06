@@ -14,4 +14,6 @@ Branch `feat/cog-protocol-boundary`, parent `v0.8.3` (`fafd6168f8f97280ee24e5c2d
 
 `weftos-cog-protocol` will hold versioned request, response, and event types. Cog Host will call the local user or project daemon on its Unix socket. The in-process `check_run` path stays until that client exists and the golden vectors match. Do not replace these path dependencies with a git dependency back into WeftOS.
 
-The standalone copies drop `clawft-kernel` and `clawft-types` only after the client is in place. This branch has not added the crate yet.
+The standalone copies drop `clawft-kernel` and `clawft-types` only after the client is in place.
+
+`crates/weftos-cog-protocol` defines `weftos.cog.v1`. `cog.check_run` params are the cog id, version, and the two lower-case hex hashes. Results are `not_seed_bound` or a permit. Refusal codes use the kernel spellings `binding_inactive`, `no_grant`, `grant_lapsed`, `not_in_grant`, `hash_revoked`, `no_approval`, and `not_holder`, plus `daemon_unavailable` when the socket does not answer. Cog Host does not call this crate yet. The Unix-socket client and the golden-vector comparison against `check_run` are not written.
