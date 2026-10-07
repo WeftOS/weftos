@@ -76,11 +76,11 @@ impl Server {
             match script {
                 Script::Close => drop(stream),
                 Script::Write(bytes) => {
-                    let _ = read_request(&mut stream);
+                    read_request(&mut stream);
                     let _ = stream.write_all(&bytes);
                 }
                 Script::Hold => {
-                    let _ = read_request(&mut stream);
+                    read_request(&mut stream);
                     while !stop2.load(Ordering::SeqCst) {
                         thread::sleep(Duration::from_millis(20));
                     }

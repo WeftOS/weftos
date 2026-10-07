@@ -85,7 +85,7 @@ async fn route(
         );
     };
     if let Err(response) = check_protocol(params) {
-        return response;
+        return *response;
     }
     match method {
         IMPORT_METHOD => {
@@ -101,13 +101,13 @@ async fn route(
     }
 }
 
-fn check_protocol(params: &Value) -> Result<(), Response> {
+fn check_protocol(params: &Value) -> Result<(), Box<Response>> {
     let protocol = params.get("protocol").and_then(Value::as_str).unwrap_or("");
     if protocol != PROTOCOL {
-        return Err(Response::error_with_kind(
+        return Err(Box::new(Response::error_with_kind(
             "version_mismatch",
             format!("params protocol is {protocol}"),
-        ));
+        )));
     }
     Ok(())
 }
@@ -127,31 +127,31 @@ pub(crate) fn import_cap_error(params: &Value) -> Option<Response> {
     }
 }
 
-fn rows<'a>(params: &'a Value, key: &str) -> Result<&'a [Value], Response> {
+fn rows<'a>(params: &'a Value, key: &str) -> Result<&'a [Value], Box<Response>> {
     match params.get(key) {
         None => Ok(&[]),
         Some(Value::Array(rows)) => Ok(rows.as_slice()),
-        Some(_) => Err(Response::error_with_kind("malformed_reply", format!("{key} must be an array"))),
+        Some(_) => Err(Box::new(Response::error_with_kind("malformed_reply", format!("{key} must be an array")))),
     }
 }
 
 async fn import(runtime: &LicenceRuntime, params: &Value) -> Response {
     let revocations = match rows(params, "revocations") {
         Ok(rows) => rows,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let grants = match rows(params, "grants") {
         Ok(rows) => rows,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let approvals = match rows(params, "approvals") {
         Ok(rows) => rows,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
-    if let Some(binding) = params.get("binding").filter(|value| !value.is_null()) {
-        if !binding.is_object() {
-            return Response::error_with_kind("malformed_reply", "binding must be an object");
-        }
+    if let Some(binding) = params.get("binding").filter(|value| !value.is_null())
+        && !binding.is_object()
+    {
+        return Response::error_with_kind("malformed_reply", "binding must be an object");
     }
     let exchange = crate::workload_place_rpc::licence_exchange();
     let mut lines = Vec::new();

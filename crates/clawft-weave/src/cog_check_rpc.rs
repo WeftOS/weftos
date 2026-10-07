@@ -68,7 +68,7 @@ fn decide_with(holder: Option<String>, runtime: Option<Arc<LicenceRuntime>>, par
 pub(crate) fn answer(runtime: &LicenceRuntime, approvals: Option<&ApprovalStore>, params: &Value) -> Response {
     let parsed = match classify(params) {
         Ok(parsed) => parsed,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let req = RunRequest {
         cog_id: &parsed.cog_id,
@@ -84,17 +84,17 @@ pub(crate) fn answer(runtime: &LicenceRuntime, approvals: Option<&ApprovalStore>
     }
 }
 
-fn classify(params: &Value) -> Result<CheckRunParams, Response> {
+fn classify(params: &Value) -> Result<CheckRunParams, Box<Response>> {
     let protocol = params.get("protocol").and_then(Value::as_str).unwrap_or("");
     if protocol != PROTOCOL {
-        return Err(Response::error_with_kind(
+        return Err(Box::new(Response::error_with_kind(
             "version_mismatch",
             format!("params protocol is {protocol}"),
-        ));
+        )));
     }
     let field = |name: &str| params.get(name).and_then(Value::as_str).unwrap_or("");
     CheckRunParams::new(field("cog_id"), field("version"), field("sha256"), field("blake3")).map_err(|err| {
-        Response::error_with_kind("malformed_reply", err.to_string())
+        Box::new(Response::error_with_kind("malformed_reply", err.to_string()))
     })
 }
 
