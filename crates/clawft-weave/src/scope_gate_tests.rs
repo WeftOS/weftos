@@ -542,6 +542,9 @@ fn licence_verbs_are_machine_level_not_user_level() {
             &"workload.cog.checkout.status",
             &"workload.cog.checkout.list",
             &"cog.check_run",
+            &"cog.licence.status",
+            &"cog.licence.claims",
+            &"cog.licence.revoked",
         ]
     );
 }

@@ -613,6 +613,30 @@ const ROUTES: &[ExtRoute] = &[
         capability: Capability::Read,
         handler: crate::cog_check_rpc::handle,
     },
+    #[cfg(all(feature = "placement", unix))]
+    ExtRoute {
+        prefix: "cog.licence.import",
+        capability: Capability::Admin,
+        handler: crate::cog_licence_rpc::handle,
+    },
+    #[cfg(all(feature = "placement", unix))]
+    ExtRoute {
+        prefix: "cog.licence.status",
+        capability: Capability::Read,
+        handler: crate::cog_licence_rpc::handle,
+    },
+    #[cfg(all(feature = "placement", unix))]
+    ExtRoute {
+        prefix: "cog.licence.claims",
+        capability: Capability::Read,
+        handler: crate::cog_licence_rpc::handle,
+    },
+    #[cfg(all(feature = "placement", unix))]
+    ExtRoute {
+        prefix: "cog.licence.revoked",
+        capability: Capability::Read,
+        handler: crate::cog_licence_rpc::handle,
+    },
     // mesh-local/1 (package H): authenticated by the spawn nonce and the
     // project key's proof of possession, not by a token; `Read` is the floor.
     #[cfg(unix)]
@@ -953,6 +977,30 @@ const ROUTES: &[ExtRoute] = &[
         prefix: "cog.check_run",
         capability: Capability::Read,
         handler: crate::cog_check_rpc::handle,
+    },
+    #[cfg(all(feature = "placement", unix))]
+    ExtRoute {
+        prefix: "cog.licence.import",
+        capability: Capability::Admin,
+        handler: crate::cog_licence_rpc::handle,
+    },
+    #[cfg(all(feature = "placement", unix))]
+    ExtRoute {
+        prefix: "cog.licence.status",
+        capability: Capability::Read,
+        handler: crate::cog_licence_rpc::handle,
+    },
+    #[cfg(all(feature = "placement", unix))]
+    ExtRoute {
+        prefix: "cog.licence.claims",
+        capability: Capability::Read,
+        handler: crate::cog_licence_rpc::handle,
+    },
+    #[cfg(all(feature = "placement", unix))]
+    ExtRoute {
+        prefix: "cog.licence.revoked",
+        capability: Capability::Read,
+        handler: crate::cog_licence_rpc::handle,
     },
     // mesh-local/1 (package H): authenticated by the spawn nonce and the
     // project key's proof of possession, not by a token; `Read` is the floor.

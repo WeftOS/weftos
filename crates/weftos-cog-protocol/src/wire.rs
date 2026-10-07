@@ -148,6 +148,140 @@ pub fn event_json(event: &HostEvent) -> String {
     serde_json::to_string(event).expect("event json")
 }
 
+/// One request line for a method other than [`crate::CHECK_RUN_METHOD`].
+///
+/// [`request_json`] stays the check-run builder. This one takes params the
+/// caller already built, still sorted, still without auth.
+pub fn method_request_json(id: &str, method: &str, params: &Value) -> String {
+    serde_json::to_string(&json!({
+        "method": method,
+        "params": params,
+        "id": id,
+        "proto": CLIENT_PROTO,
+    }))
+    .expect("method request json")
+}
+
+/// [`method_request_json`] with an `auth` field. `cog.licence.import` sends `admin`.
+pub fn authed_request_json(id: &str, method: &str, params: &Value, auth: &str) -> String {
+    serde_json::to_string(&json!({
+        "auth": auth,
+        "method": method,
+        "params": params,
+        "id": id,
+        "proto": CLIENT_PROTO,
+    }))
+    .expect("authed request json")
+}
+
+/// Fields of a `cog.licence.status` result. Nulls are kept.
+pub struct StatusParts<'a> {
+    /// Approval rows. Empty when the daemon has no approval store.
+    pub approvals: &'a Value,
+    /// Held binding, or none.
+    pub binding: Option<&'a Value>,
+    /// True when [`crate`] binding rules say a binding is in effect.
+    pub binding_in_effect: bool,
+    /// Grant rows.
+    pub grants: &'a Value,
+    /// How many times the revocation list has changed, or 0 when none is attached.
+    pub list_generation: u64,
+    /// Local mesh id, hex, or none.
+    pub mesh_id: Option<&'a str>,
+    /// Why the revocation list could not be read.
+    pub revocations_error: Option<&'a str>,
+    /// Artifact-hash revocations currently listed.
+    pub revoked_artifacts: u64,
+    /// Why the grant or approval store is poisoned.
+    pub store_error: Option<&'a str>,
+}
+
+/// `cog.licence.status` result, including `protocol` and nulls.
+pub fn status_value(parts: &StatusParts<'_>) -> Value {
+    json!({
+        "approvals": parts.approvals,
+        "binding": parts.binding,
+        "binding_in_effect": parts.binding_in_effect,
+        "grants": parts.grants,
+        "list_generation": parts.list_generation,
+        "mesh_id": parts.mesh_id,
+        "protocol": PROTOCOL,
+        "revocations_error": parts.revocations_error,
+        "revoked_artifacts": parts.revoked_artifacts,
+        "store_error": parts.store_error,
+    })
+}
+
+/// [`status_value`] as one JSON body.
+pub fn status_json(parts: &StatusParts<'_>) -> String {
+    serde_json::to_string(&status_value(parts)).expect("status json")
+}
+
+/// `cog.licence.claims` result.
+pub fn claims_value(claims: bool) -> Value {
+    json!({
+        "claims": claims,
+        "protocol": PROTOCOL,
+    })
+}
+
+/// [`claims_value`] as one JSON body.
+pub fn claims_json(claims: bool) -> String {
+    serde_json::to_string(&claims_value(claims)).expect("claims json")
+}
+
+/// `cog.licence.revoked` result.
+pub fn revoked_value(revoked: bool, list_generation: u64) -> Value {
+    json!({
+        "list_generation": list_generation,
+        "protocol": PROTOCOL,
+        "revoked": revoked,
+    })
+}
+
+/// [`revoked_value`] as one JSON body.
+pub fn revoked_json(revoked: bool, list_generation: u64) -> String {
+    serde_json::to_string(&revoked_value(revoked, list_generation)).expect("revoked json")
+}
+
+/// One line of a `cog.licence.import` result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportOutcome {
+    /// `binding`, `grant`, `approval`, or `revocation`.
+    pub kind: &'static str,
+    /// `applied`, `duplicate`, `ignored`, or `refused`.
+    pub outcome: &'static str,
+    /// Present only when `outcome` is `refused`.
+    pub error: Option<String>,
+}
+
+/// `cog.licence.import` result. `applied_unsaved` is `applied`: the exchange
+/// folds both store outcomes into one receipt before this line is built.
+pub fn import_result_value(lines: &[ImportOutcome]) -> Value {
+    let lines: Vec<Value> = lines
+        .iter()
+        .map(|line| {
+            let mut obj = json!({
+                "kind": line.kind,
+                "outcome": line.outcome,
+            });
+            if let Some(error) = &line.error {
+                obj.as_object_mut().expect("line object").insert("error".into(), json!(error));
+            }
+            obj
+        })
+        .collect();
+    json!({
+        "lines": lines,
+        "protocol": PROTOCOL,
+    })
+}
+
+/// [`import_result_value`] as one JSON body.
+pub fn import_result_json(lines: &[ImportOutcome]) -> String {
+    serde_json::to_string(&import_result_value(lines)).expect("import result json")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -194,5 +328,78 @@ mod tests {
             golden("event-run-refused")
         );
         assert_eq!(proto_mismatch_json("cog-check-1"), golden("proto-mismatch"));
+    }
+
+    #[test]
+    fn licence_queries_match_their_golden_vectors() {
+        let sha = "ab".repeat(32);
+        let blake = "cd".repeat(32);
+        let binding = json!({"payload": "{}", "public_key": "aa", "signature": "bb"});
+        let import_params = json!({"protocol": PROTOCOL, "binding": binding});
+        assert_eq!(
+            authed_request_json("cog-licence-import-1", crate::IMPORT_METHOD, &import_params, "admin"),
+            golden("licence-import-request")
+        );
+        assert_eq!(
+            method_request_json("cog-licence-status-1", crate::STATUS_METHOD, &json!({"protocol": PROTOCOL})),
+            golden("licence-status-request")
+        );
+        assert_eq!(
+            method_request_json(
+                "cog-licence-claims-1",
+                crate::CLAIMS_METHOD,
+                &json!({"protocol": PROTOCOL, "sha256": sha, "blake3": blake})
+            ),
+            golden("licence-claims-request")
+        );
+        assert_eq!(
+            method_request_json(
+                "cog-licence-revoked-1",
+                crate::REVOKED_METHOD,
+                &json!({"protocol": PROTOCOL, "blake3": blake})
+            ),
+            golden("licence-revoked-request")
+        );
+        let approvals = json!([]);
+        let grants = json!([]);
+        let status = StatusParts {
+            approvals: &approvals,
+            binding: None,
+            binding_in_effect: false,
+            grants: &grants,
+            list_generation: 0,
+            mesh_id: None,
+            revocations_error: None,
+            revoked_artifacts: 0,
+            store_error: None,
+        };
+        assert_eq!(status_json(&status), golden("licence-status-empty"));
+        assert_eq!(claims_json(false), golden("licence-claims-false"));
+        assert_eq!(revoked_json(false, 0), golden("licence-revoked-false"));
+        let line = ImportOutcome { kind: "binding", outcome: "applied", error: None };
+        assert_eq!(import_result_json(&[line]), golden("licence-import-result"));
+    }
+
+    #[test]
+    fn manifest_pins_every_golden_file() {
+        use sha2::{Digest, Sha256};
+        let dir = format!("{}/testdata", env!("CARGO_MANIFEST_DIR"));
+        let manifest = std::fs::read_to_string(format!("{dir}/MANIFEST.sha256")).unwrap();
+        let mut listed = std::collections::BTreeSet::new();
+        for line in manifest.lines().filter(|line| !line.is_empty()) {
+            let (hash, name) = line.split_once("  ").unwrap_or_else(|| panic!("manifest line {line}"));
+            let bytes = std::fs::read(format!("{dir}/{name}")).unwrap_or_else(|err| panic!("{name}: {err}"));
+            let digest = Sha256::digest(&bytes);
+            let got: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+            assert_eq!(got, hash, "{name}");
+            listed.insert(name.to_string());
+        }
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let name = entry.unwrap().file_name().into_string().unwrap();
+            if name == "MANIFEST.sha256" {
+                continue;
+            }
+            assert!(listed.contains(&name), "{name} is missing from MANIFEST.sha256");
+        }
     }
 }

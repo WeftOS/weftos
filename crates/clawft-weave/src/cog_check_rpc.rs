@@ -76,7 +76,12 @@ pub(crate) fn answer(runtime: &LicenceRuntime, approvals: Option<&ApprovalStore>
         sha256: &parsed.sha256,
         blake3: &parsed.blake3,
     };
-    map_verdict(&parsed.blake3, check_run(runtime.store().as_ref(), approvals, &req))
+    let list_error = runtime.store().revocation_list_error();
+    let verdict = check_run(runtime.store().as_ref(), approvals, &req);
+    match list_error.as_deref() {
+        None => map_verdict(&parsed.blake3, verdict),
+        Some(err) => map_verdict_with_list(&parsed.blake3, verdict, Some(err)),
+    }
 }
 
 fn classify(params: &Value) -> Result<CheckRunParams, Response> {
@@ -94,11 +99,30 @@ fn classify(params: &Value) -> Result<CheckRunParams, Response> {
 }
 
 pub(crate) fn map_verdict(blake3: &str, verdict: Result<RunVerdict, RunRefusal>) -> Response {
+    map_verdict_with_list(blake3, verdict, None)
+}
+
+/// [`map_verdict`], refusing a permit when the revocation list cannot be read.
+///
+/// The refusal is checked only on the permit path, after the BLAKE3 match.
+/// The message is the full binding-inactive sentence, so Cog Host does not
+/// wrap it a second time.
+pub(crate) fn map_verdict_with_list(
+    blake3: &str,
+    verdict: Result<RunVerdict, RunRefusal>,
+    list_error: Option<&str>,
+) -> Response {
     match verdict {
         Ok(RunVerdict::NotSeedBound) => Response::success(result_value(&CheckRunResult::NotSeedBound)),
         Ok(RunVerdict::Permit(RunPermit { grant_id, approval_id, blake3: permit_blake3 })) => {
             if permit_blake3 != blake3 {
                 return Response::error_with_kind("malformed_reply", "permit blake3 does not match the request");
+            }
+            if let Some(err) = list_error {
+                return Response::error_with_kind(
+                    "binding_inactive",
+                    format!("no Seed binding is in effect on this node (revocation list unreadable: {err})"),
+                );
             }
             Response::success(result_value(&CheckRunResult::Permit {
                 grant_id,
@@ -194,6 +218,24 @@ mod tests {
             })),
         );
         assert_eq!(forged.error_kind.as_deref(), Some("malformed_reply"));
+    }
+
+    #[test]
+    fn a_permit_is_refused_when_the_revocation_list_is_unreadable() {
+        let blake3 = "cd".repeat(32);
+        let permit = Ok(RunVerdict::Permit(RunPermit {
+            grant_id: "g1".into(),
+            approval_id: "a1".into(),
+            blake3: blake3.clone(),
+        }));
+        let response = map_verdict_with_list(&blake3, permit, Some("disk"));
+        assert_eq!(response.error_kind.as_deref(), Some("binding_inactive"));
+        assert_eq!(
+            response.error.as_deref(),
+            Some("no Seed binding is in effect on this node (revocation list unreadable: disk)")
+        );
+        let unbound = map_verdict_with_list(&blake3, Ok(RunVerdict::NotSeedBound), Some("disk"));
+        assert_eq!(unbound.result.unwrap(), golden("verdict-not-seed-bound"));
     }
 
     #[test]

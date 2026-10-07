@@ -1,0 +1,1 @@
+{"auth":"admin","id":"cog-licence-import-1","method":"cog.licence.import","params":{"binding":{"payload":"{}","public_key":"aa","signature":"bb"},"protocol":"weftos.cog.v1"},"proto":1}

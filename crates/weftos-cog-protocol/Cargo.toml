@@ -12,3 +12,6 @@ description = "weftos.cog.v1 wire types for Cog Host calls to the local daemon. 
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+sha2 = "0.10"

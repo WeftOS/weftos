@@ -236,6 +236,45 @@ fn grant_key_revocation_ends_every_checkout_grant() {
     assert_eq!(put(&fx, &grant(2, T0, DAY, &["aarch64"])), Err(LicenceError::KeyRevoked));
 }
 
+#[test]
+fn an_unattached_list_answers_zero_and_refuses_an_operator_notice() {
+    let fx = Fx::new();
+    assert_eq!(fx.store.revocation_generation(), 0);
+    assert_eq!(fx.store.revoked_artifact_count(), 0);
+    assert!(fx.store.revocation_list_error().is_none());
+    let notice = crate::mesh_swarm_revoke::sign_revocation(
+        RevocationKind::ArtifactHash,
+        &"ab".repeat(32),
+        "pulled",
+        1,
+        &op(),
+    )
+    .unwrap();
+    let err = fx.store.apply_operator_revocation(&notice).unwrap_err();
+    assert!(err.contains("not attached"), "{err}");
+}
+
+#[test]
+fn an_operator_notice_revokes_the_artifact_and_a_repeat_is_a_duplicate() {
+    let fx = Fx::new();
+    let list = Arc::new(RevocationList::new(fx.dir.path().join("revoked-artifacts.json")));
+    fx.store.attach_revocations(list);
+    let hash = "ab".repeat(32);
+    let notice = crate::mesh_swarm_revoke::sign_revocation(
+        RevocationKind::ArtifactHash,
+        &hash,
+        "pulled",
+        1,
+        &op(),
+    )
+    .unwrap();
+    assert_eq!(fx.store.apply_operator_revocation(&notice), Ok(true));
+    assert!(fx.store.is_hash_revoked(&hash));
+    assert_eq!(fx.store.revoked_artifact_count(), 1);
+    assert!(fx.store.revocation_generation() >= 1);
+    assert_eq!(fx.store.apply_operator_revocation(&notice), Ok(false));
+}
+
 // ── clock floor ──────────────────────────────────────────────────
 
 #[test]

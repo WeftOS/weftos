@@ -208,6 +208,47 @@ impl CheckoutGrantStore {
             .is_some_and(|l| l.is_subject_revoked(RevocationKind::ArtifactHash, blake3_hex))
     }
 
+    /// Why the attached revocation list cannot be read.
+    pub fn revocation_list_error(&self) -> Option<String> {
+        let guard = self.revocations.read().unwrap_or_else(|poison| poison.into_inner());
+        guard.as_ref().and_then(|list| list.subjects_error())
+    }
+
+    /// How many times the attached list has changed in this process. `0` when
+    /// no list is attached.
+    pub fn revocation_generation(&self) -> u64 {
+        let guard = self.revocations.read().unwrap_or_else(|poison| poison.into_inner());
+        guard.as_ref().map(|list| list.generation()).unwrap_or(0)
+    }
+
+    /// Artifact-hash subjects on the attached list. `0` when no list is attached.
+    pub fn revoked_artifact_count(&self) -> usize {
+        let guard = self.revocations.read().unwrap_or_else(|poison| poison.into_inner());
+        guard
+            .as_ref()
+            .map(|list| list.list_subjects(Some(RevocationKind::ArtifactHash)).len())
+            .unwrap_or(0)
+    }
+
+    /// Verify an operator notice and apply it. The store's read guard is
+    /// dropped before the list lock, so the two locks are not nested.
+    pub fn apply_operator_revocation(
+        &self,
+        signed: &crate::mesh_swarm_revoke::SignedRevocation,
+    ) -> Result<bool, String> {
+        let notice = crate::mesh_swarm_revoke::verify_revocation(signed, &self.anchors)
+            .map_err(|err| err.to_string())?;
+        let list = {
+            let guard = self.revocations.read().unwrap_or_else(|poison| poison.into_inner());
+            guard.clone()
+        };
+        let Some(list) = list else {
+            return Err("the revocation list is not attached on this node".into());
+        };
+        list.revoke_subject_by(notice.kind, &notice.id, &notice.reason, "operator-notice")
+            .map_err(|err| err.to_string())
+    }
+
     fn save(&self, inner: &mut Inner) -> Result<(), LicenceError> {
         let file = StoreFile {
             v: 1,

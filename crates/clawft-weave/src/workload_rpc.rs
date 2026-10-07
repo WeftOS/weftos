@@ -319,6 +319,10 @@ pub async fn dispatch(
         return crate::cog_check_rpc::dispatch(method, params, kernel).await;
     }
     #[cfg(all(feature = "placement", unix))]
+    if crate::cog_licence_rpc::handles(method) {
+        return crate::cog_licence_rpc::dispatch(method, params, kernel).await;
+    }
+    #[cfg(all(feature = "placement", unix))]
     if crate::workload_place_rpc::handles(method, &params) {
         return crate::workload_place_rpc::dispatch(method, params, kernel).await;
     }

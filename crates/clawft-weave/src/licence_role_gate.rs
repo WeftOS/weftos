@@ -38,6 +38,10 @@ pub const LICENCE_VERBS: &[&str] = &[
     "workload.cog.checkout.renew",
     "workload.cog.checkout.list",
     "cog.check_run",
+    "cog.licence.import",
+    "cog.licence.status",
+    "cog.licence.claims",
+    "cog.licence.revoked",
 ];
 
 /// Answered on every daemon (with the redirect where it is not served).
@@ -106,6 +110,7 @@ mod tests {
         served.extend(crate::licence_checkout_rpc::METHODS);
         served.extend(crate::licence_checkout_verbs::METHODS);
         served.extend(crate::cog_check_rpc::METHODS);
+        served.extend(crate::cog_licence_rpc::METHODS);
         served.sort();
         served.dedup();
         let mut ours = LICENCE_VERBS.to_vec();

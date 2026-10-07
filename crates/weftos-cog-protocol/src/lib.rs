@@ -22,6 +22,21 @@ pub const PROTOCOL: &str = "weftos.cog.v1";
 /// Daemon method whose `params` are [`CheckRunParams`].
 pub const CHECK_RUN_METHOD: &str = "cog.check_run";
 
+/// Operator import of a binding, grants, approvals, and revocation notices.
+pub const IMPORT_METHOD: &str = "cog.licence.import";
+
+/// Read-only licence document. The daemon remains the authority.
+pub const STATUS_METHOD: &str = "cog.licence.status";
+
+/// Whether a binary is a checked-out Cognitum artifact or a revoked hash.
+pub const CLAIMS_METHOD: &str = "cog.licence.claims";
+
+/// Whether one BLAKE3 is on the revocation list, plus that list's generation.
+pub const REVOKED_METHOD: &str = "cog.licence.revoked";
+
+/// Most records of one kind in a single `cog.licence.import`.
+pub const MAX_IMPORT_RECORDS: usize = 512;
+
 /// A start-time licence check for the bytes that are about to run.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CheckRunParams {
@@ -178,6 +193,11 @@ mod tests {
     fn protocol_name_and_method_are_fixed() {
         assert_eq!(PROTOCOL, "weftos.cog.v1");
         assert_eq!(CHECK_RUN_METHOD, "cog.check_run");
+        assert_eq!(IMPORT_METHOD, "cog.licence.import");
+        assert_eq!(STATUS_METHOD, "cog.licence.status");
+        assert_eq!(CLAIMS_METHOD, "cog.licence.claims");
+        assert_eq!(REVOKED_METHOD, "cog.licence.revoked");
+        assert_eq!(MAX_IMPORT_RECORDS, 512);
     }
 
     #[test]

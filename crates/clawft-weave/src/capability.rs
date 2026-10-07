@@ -107,6 +107,9 @@ pub fn required_capability(method: &str) -> Capability {
         // ADR-106: ending a checkout and renewing on demand spend the Seed's budget.
         "workload.cog.checkout.release" => Capability::Admin,
         "workload.cog.checkout.renew" => Capability::Admin,
+        // weftos.cog.v1: importing a binding, grant, approval, or revocation
+        // mutates the licence store. Exact name, not a `cog.licence.` prefix.
+        "cog.licence.import" => Capability::Admin,
 
         // ── Write: state-mutating verbs ─────────────────────────────
         "agent.register" => Capability::Write,
@@ -223,6 +226,9 @@ pub fn required_capability(method: &str) -> Capability {
         | "workload.cog.checkout.list"
         // weftos.cog.v1: Cog Host's start check. Read, same standing as checkout status.
         | "cog.check_run"
+        | "cog.licence.status"
+        | "cog.licence.claims"
+        | "cog.licence.revoked"
         | "infer.status"
         | "expose.list"
         // Fleet manager: one read-only document composed from sources the
@@ -592,6 +598,7 @@ mod tests {
             "workload.cog.checkout",
             "workload.cog.checkout.release",
             "workload.cog.checkout.renew",
+            "cog.licence.import",
         ] {
             assert_eq!(required_capability(m), Capability::Admin, "{m}");
             assert!(!write.allows_method(m), "{m}");

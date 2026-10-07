@@ -13,7 +13,7 @@ use std::time::Duration;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::wire::{request_json, CallError};
+use crate::wire::{authed_request_json, method_request_json, request_json, CallError};
 use crate::{CheckRunParams, CheckRunResult, PROTOCOL, RefusalCode};
 
 const MAX_LINE: usize = 1024 * 1024;
@@ -53,17 +53,33 @@ impl DaemonCheck {
         &self.socket
     }
 
-    /// Send `params` and read one reply line.
+    /// Send a `cog.check_run` and read one verdict.
     pub fn check(&self, params: &CheckRunParams) -> Result<CheckRunResult, CallError> {
+        let bytes = self.exchange(&request_json(&self.id, params))?;
+        parse_reply(&self.id, params, &bytes)
+    }
+
+    /// Send `method` and return its `result` object after the protocol check.
+    ///
+    /// `auth` is omitted when `None`. `cog.check_run` stays on [`Self::check`]
+    /// and does not send auth.
+    pub fn call_result(&self, method: &str, params: &Value, auth: Option<&str>) -> Result<Value, CallError> {
+        let line = match auth {
+            Some(token) => authed_request_json(&self.id, method, params, token),
+            None => method_request_json(&self.id, method, params),
+        };
+        let bytes = self.exchange(&line)?;
+        parse_result_value(&self.id, &bytes)
+    }
+
+    fn exchange(&self, line: &str) -> Result<Vec<u8>, CallError> {
         let mut stream = UnixStream::connect(&self.socket).map_err(connect_err)?;
         stream.set_read_timeout(Some(self.timeout)).map_err(io_err)?;
         stream.set_write_timeout(Some(self.timeout)).map_err(io_err)?;
-        let line = request_json(&self.id, params);
         stream.write_all(line.as_bytes()).map_err(io_err)?;
         stream.write_all(b"\n").map_err(io_err)?;
         stream.flush().map_err(io_err)?;
-        let bytes = read_line(&mut stream)?;
-        parse_reply(&self.id, params, &bytes)
+        read_line(&mut stream)
     }
 }
 
@@ -120,41 +136,61 @@ struct Envelope {
     id: Option<String>,
 }
 
-fn parse_reply(id: &str, params: &CheckRunParams, bytes: &[u8]) -> Result<CheckRunResult, CallError> {
+fn decode(id: &str, bytes: &[u8]) -> Result<Envelope, CallError> {
     let env: Envelope = serde_json::from_slice(bytes)
         .map_err(|e| CallError::MalformedReply(format!("reply is not json: {e}")))?;
     if env.id.as_deref().is_some_and(|got| got != id) {
         return Err(CallError::MalformedReply(format!(
             "reply id {} does not match {id}",
-            env.id.unwrap_or_default()
+            env.id.clone().unwrap_or_default()
         )));
     }
-    if env.ok {
-        let result = env.result.ok_or_else(|| CallError::MalformedReply("success has no result".into()))?;
-        return parse_result(params, result);
-    }
+    Ok(env)
+}
+
+fn refusal(env: Envelope) -> CallError {
     let kind = env.error_kind.unwrap_or_default();
     let message = env.error.unwrap_or_else(|| kind.clone());
     match kind.as_str() {
-        "proto_mismatch" | "version_mismatch" => Err(CallError::VersionMismatch(message)),
-        "licence_not_here" => Err(CallError::Denial { code: RefusalCode::NotHolder, message }),
-        "" => Err(CallError::MalformedReply("refusal has no error_kind".into())),
+        "proto_mismatch" | "version_mismatch" => CallError::VersionMismatch(message),
+        "licence_not_here" => CallError::Denial { code: RefusalCode::NotHolder, message },
+        "" => CallError::MalformedReply("refusal has no error_kind".into()),
         other => match RefusalCode::parse(other) {
-            Some(code) => Err(CallError::Denial { code, message }),
-            None => Err(CallError::MalformedReply(format!("unknown error_kind {other}"))),
+            Some(code) => CallError::Denial { code, message },
+            None => CallError::MalformedReply(format!("unknown error_kind {other}")),
         },
     }
 }
 
-fn parse_result(params: &CheckRunParams, result: Value) -> Result<CheckRunResult, CallError> {
-    let protocol = result.get("protocol").and_then(Value::as_str);
-    match protocol {
-        Some(p) if p == PROTOCOL => {}
-        Some(p) => {
-            return Err(CallError::VersionMismatch(format!("result protocol is {p}")));
-        }
-        None => return Err(CallError::MalformedReply("result has no protocol".into())),
+fn require_protocol(result: &Value) -> Result<(), CallError> {
+    match result.get("protocol").and_then(Value::as_str) {
+        Some(protocol) if protocol == PROTOCOL => Ok(()),
+        Some(protocol) => Err(CallError::VersionMismatch(format!("result protocol is {protocol}"))),
+        None => Err(CallError::MalformedReply("result has no protocol".into())),
     }
+}
+
+fn parse_reply(id: &str, params: &CheckRunParams, bytes: &[u8]) -> Result<CheckRunResult, CallError> {
+    let env = decode(id, bytes)?;
+    if env.ok {
+        let result = env.result.ok_or_else(|| CallError::MalformedReply("success has no result".into()))?;
+        return parse_result(params, result);
+    }
+    Err(refusal(env))
+}
+
+fn parse_result_value(id: &str, bytes: &[u8]) -> Result<Value, CallError> {
+    let env = decode(id, bytes)?;
+    if env.ok {
+        let result = env.result.ok_or_else(|| CallError::MalformedReply("success has no result".into()))?;
+        require_protocol(&result)?;
+        return Ok(result);
+    }
+    Err(refusal(env))
+}
+
+fn parse_result(params: &CheckRunParams, result: Value) -> Result<CheckRunResult, CallError> {
+    require_protocol(&result)?;
     let parsed: CheckRunResult = serde_json::from_value(result)
         .map_err(|e| CallError::MalformedReply(format!("result verdict: {e}")))?;
     if let CheckRunResult::Permit { blake3, .. } = &parsed
@@ -216,11 +252,11 @@ mod tests {
                 match script {
                     Script::Close => drop(stream),
                     Script::Write(bytes) => {
-                        let _ = read_request(&mut stream, &seen2);
+                        read_request(&mut stream, &seen2);
                         let _ = stream.write_all(&bytes);
                     }
                     Script::Hold => {
-                        let _ = read_request(&mut stream, &seen2);
+                        read_request(&mut stream, &seen2);
                         while !stop2.load(Ordering::SeqCst) {
                             thread::sleep(Duration::from_millis(20));
                         }
