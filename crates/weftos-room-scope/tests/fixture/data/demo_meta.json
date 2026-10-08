@@ -1,0 +1,12 @@
+{"run": "demo", "video_info": {"duration": 2.0, "w": 1280, "h": 720, "fps": 10.0},
+ "video_origin_epoch": 1000.0,
+ "cues": [{"epoch": 1000.5, "msg": "START synthetic"}, {"epoch": 1001.0, "msg": "STEP 1: stand on marker 1"}],
+ "markers": {"markers": {"1": {"px": [320, 180], "room_xy_m": [1.0, 1.0]}, "2": {"px": [960, 540], "room_xy_m": [3.0, 3.0]}}},
+ "homographies": {"corrected": [[0.003125, 0.0, 0.0], [0.0, 0.0055556, 0.0], [0.0, 0.0, 1.0]]},
+ "site": {"room": {"min": [0, 0, 0], "max": [4.0, 4.0, 2.5]},
+          "site": {"walls": [{"id": "w", "kind": "exterior", "min": [-0.2, 0, 0], "max": [0, 4, 2.5]}],
+                   "openings": [{"id": "d", "kind": "door", "min": [1, -0.1, 0], "max": [2, 0, 2]}],
+                   "objects": [],
+                   "router": {"position": [6.0, -1.0, 1.5]},
+                   "spots": [{"id": "A", "position": [2.0, 4.0, 1.0]}],
+                   "nodes": [{"csi_id": 1, "spot": "A", "board": "test"}, {"csi_id": 2, "spot": "A", "board": "test"}]}}}

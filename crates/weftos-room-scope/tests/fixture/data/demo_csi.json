@@ -1,0 +1,3 @@
+{"run": "demo", "t0_epoch": 1000.0, "dt": 0.5, "n": 4,
+ "nodes": {"2": {"z": [0.5, 4.0, null, 1.0], "fps": [20, 20, 3, 20], "gate": [null, null, "rate<15", null], "spot": "A", "board": "test"},
+           "1": {"z": [1.0, 2.0, 3.0, -1.0], "fps": [20, 20, 20, 20], "gate": [null, null, null, null], "spot": "A", "board": "test"}}}

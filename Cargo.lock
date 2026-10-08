@@ -11438,6 +11438,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "weftos-room-scope"
+version = "0.8.3-rc.1"
+dependencies = [
+ "eframe",
+ "egui_plot",
+ "image",
+ "serde",
+ "serde_json",
+ "weftos-cog-companion",
+]
+
+[[package]]
 name = "weftos-rvf-crypto"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
