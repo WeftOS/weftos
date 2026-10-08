@@ -111,7 +111,14 @@ pub fn csi_tables(s: &RoomScope, ui: &mut egui::Ui) {
         let mut rows: Vec<(&String, &Value)> = fa.iter().collect();
         rows.sort_by_key(|(k, _)| k.parse::<i64>().unwrap_or(0));
         egui::Grid::new("fa").striped(true).show(ui, |ui| {
-            for h in ["node", "hold gated", "n ungated", "FA z>3", "FA |z|>3"] {
+            for h in [
+                "node",
+                "hold gated",
+                "n ungated",
+                "FA z>3",
+                "FA |z|>3",
+                "FA z>3 incl. excl.",
+            ] {
                 ui.label(h);
             }
             ui.end_row();
@@ -121,8 +128,26 @@ pub fn csi_tables(s: &RoomScope, ui: &mut egui::Ui) {
                 ui.label(r["n_hold_ungated"].to_string());
                 ui.label(f2(r["fa_rate_z_gt_3"].as_f64().map(|v| v * 100.0), 1) + "%");
                 ui.label(f2(r["fa_rate_abs_z_gt_3"].as_f64().map(|v| v * 100.0), 1) + "%");
+                let incl = &sm["holdout_false_alarm_incl_excluded"][nid.as_str()]["fa_rate_z_gt_3"];
+                ui.label(f2(incl.as_f64().map(|v| v * 100.0), 1) + "%");
                 ui.end_row();
             }
         });
+    }
+    if let Some(ex) = sm["exclusions"].as_object() {
+        let w: Vec<String> = ex["windows_video_s"]
+            .as_array()
+            .map(|a| a.iter().map(|p| format!("{}–{} s", p[0], p[1])).collect())
+            .unwrap_or_default();
+        ui.label(
+            RichText::new(format!(
+                "Excluded from baseline and hold-out: video {} (±{} s): {}. Last column = without the exclusion.",
+                w.join(", "),
+                ex["pad_s"],
+                ex["reason"].as_str().unwrap_or("")
+            ))
+            .small()
+            .weak(),
+        );
     }
 }
