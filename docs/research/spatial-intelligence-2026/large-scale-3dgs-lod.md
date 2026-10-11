@@ -238,7 +238,7 @@ Exact WeftOS seam: **no new spatial index.** Appearance LoD hangs off existing `
 
 ### Watch (do not productize)
 
-- A LoD of Gaussians out-of-core (SIGGRAPH 2026) — if code lands, re-evaluate chunking.
+- A LoD of Gaussians out-of-core (SIGGRAPH 2026) — code landed, licence read 2026-10-11 (see §7a): **research-only, non-commercial. Pattern only; no code or checkpoints into weftos.** Re-evaluate chunking as a design reference, not a dependency.
 - CityGS-X PH²-3D as a *site* backend if we ever grow a multi-GPU train box.
 - Atlas / BlitzGS / HUG / GigaSLAM — list hygiene via DeepLabc/LargeScale_3DGS (re-pull when E1 starts).
 - GaussianCity-class generators — cosmetic only.
@@ -261,6 +261,25 @@ Exact WeftOS seam: **no new spatial index.** Appearance LoD hangs off existing `
 
 ---
 
+## 7a. A LoD of Gaussians licence (read 2026-10-11)
+
+Source: `LICENSE.md` in [FelixWindisch/LoDOfGaussians](https://github.com/FelixWindisch/LoDOfGaussians), `main` at commit `73f547341547ae021ff036ad74fdf73a1240b450` (pushed 2026-07-03). GitHub reports the licence as `NOASSERTION`. The file does not state its own terms: it says the original 3DGS and Hierarchical-3DGS (Inria / TUW) licences "also apply" to every part built on them, and it embeds the Hierarchical-3D-Gaussians licence text. The README says the release relies on the gsplat rasterizer and builds `simple-knn` and `gaussianhierarchy` submodules; those carry their own licences, which were not read.
+
+| Term | What it says |
+|---|---|
+| Commercial use | **Prohibited** without prior explicit consent of the licensors (Inria). Use is "for research and/or evaluation purposes only"; research users "both academic and industrial" are allowed, free of charge. |
+| Redistribution | Only under the same licence, with a complete copy of it and unmodified copyright, patent, trademark and attribution notices. |
+| Derivative works | May carry extra terms only if the research-use limitation still applies to them. |
+| Sublicensing | No right to sublicense. |
+| Attribution | Notices must be retained; citing the publications is "strongly encouraged". |
+| Field of use | Research / evaluation only. No other use without prior consent. |
+| Patents | No patent grant or patent clause beyond the retained-notice duty. The software is described as in registration with the APP (French programme registry). |
+| Warranty | None. |
+
+**Decision:** the licence decides it. Same class as CityGaussian (section 7): usable to read and to benchmark in a research setting, not copyable into weftos, not shippable in a cog or product, no derivative checkpoints. Verdict moves from "still watch, licence read pending" to **watch the paper's chunking ideas as a pattern only; no code path**. A commercial route would need a written consent from Inria, which no ticket should assume.
+
+---
+
 ## 8. Sources
 
 Fetched 2026-09-21.
@@ -274,7 +293,7 @@ Fetched 2026-09-21.
 - Horizon-GS CVPR 2025: [arXiv:2412.01745](https://arxiv.org/abs/2412.01745) · [project](https://city-super.github.io/horizon-gs/) · [code](https://github.com/InternRobotics/HorizonGS)
 - CityGS-X ICCV 2025: [arXiv:2503.23044](https://arxiv.org/abs/2503.23044) · [project](https://lifuguan.github.io/CityGS-X/) · [code](https://github.com/gyy456/CityGS-X) · [open access](https://openaccess.thecvf.com/content/ICCV2025/html/Gao_CityGS-X_A_Scalable_Architecture_for_Efficient_and_Geometrically_Accurate_Large-Scale_ICCV_2025_paper.html)
 - CityGo: [arXiv:2505.21041](https://arxiv.org/abs/2505.21041) · [code](https://github.com/LiYukeee/CityGo)
-- A LoD of Gaussians SIGGRAPH 2026: [arXiv HTML](https://arxiv.org/html/2507.01110)
+- A LoD of Gaussians SIGGRAPH 2026: [arXiv HTML](https://arxiv.org/html/2507.01110) · [code and LICENSE.md](https://github.com/FelixWindisch/LoDOfGaussians) (read 2026-10-11, commit 73f5473)
 - WeftOS: [ADR-079](../../adr/adr-079-urth-digital-twin.md) · [urth-digital-twin.md](../../weftos/urth-digital-twin.md) · [ADR-078](../../adr/adr-078-splat-feeds-world-model.md) · [ADR-056](../../adr/adr-056-bvh-spatial-index.md) · [splat-freeform-quilt.md](../../weftos/splat-freeform-quilt.md) · [splat-to-world-model.md](../../weftos/splat-to-world-model.md)
 - rUv: WorldGraph ADR-200 SuperSplat overlay (via `search_ruvnet`)
 
