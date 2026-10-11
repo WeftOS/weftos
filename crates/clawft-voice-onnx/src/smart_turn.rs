@@ -86,6 +86,22 @@ impl SmartTurnEndpoint {
         &self.model_path
     }
 
+    /// Strict model probability for 16 kHz mono f32 PCM: no heuristic fallback,
+    /// so offline tooling can tell "model said X" from "model unavailable".
+    /// Returns `Err` when the `onnx` feature, the model file or the session is
+    /// missing, or inference fails.
+    pub fn probability(&self, samples_16k: &[f32]) -> Result<f32, String> {
+        #[cfg(feature = "onnx")]
+        {
+            self.endpoint_prob(samples_16k)
+        }
+        #[cfg(not(feature = "onnx"))]
+        {
+            let _ = samples_16k;
+            Err("built without the `onnx` feature".into())
+        }
+    }
+
     #[cfg(feature = "onnx")]
     fn try_load_session(model_path: &Path) -> Option<Arc<Mutex<ort::session::Session>>> {
         if !model_path.exists() {
