@@ -1544,6 +1544,7 @@ dependencies = [
  "rustls",
  "ruvector-cluster",
  "ruvector-diskann",
+ "ruvector-rabitq",
  "ruvector-raft",
  "ruvector-replication",
  "rvf-runtime",
@@ -7994,6 +7995,20 @@ dependencies = [
  "memmap2",
  "parking_lot",
  "rand 0.8.7",
+ "rayon",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "ruvector-rabitq"
+version = "2.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08d1d2608135ef2e8cef8f2a99eba47766e916461c4205da084e65dc8afcc795"
+dependencies = [
+ "rand 0.8.7",
+ "rand_distr 0.4.3",
  "rayon",
  "serde",
  "serde_json",

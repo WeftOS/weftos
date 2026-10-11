@@ -76,6 +76,10 @@ use rand_chacha::ChaCha8Rng;
 use rand_distr::{Distribution, Normal};
 use serde::Serialize;
 
+#[cfg(feature = "rabitq-bench")]
+#[path = "vector_backend_bench/rabitq_runner.rs"]
+mod rabitq_runner;
+
 use clawft_kernel::hnsw_service::HnswServiceConfig;
 use clawft_kernel::{
     DiskAnnBackend, DiskAnnConfig, EvictionPolicy, HnswBackend, HybridBackend, HybridConfig,
@@ -297,6 +301,10 @@ struct BenchOutcome {
     rss_mb: f64,
     disk_bytes: u64,
     build_ms: f64,
+    /// 1 / mean per-query latency, one thread, queries issued serially.
+    qps_1t: f64,
+    /// All-core throughput: every thread runs the whole query set 3 times.
+    qps_mt: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     notes: Option<String>,
 }
@@ -346,6 +354,10 @@ fn run_backend(
     let p50_us = percentile(&latencies_us, 50.0);
     let p95_us = percentile(&latencies_us, 95.0);
     let recall_at_10 = recalls.iter().sum::<f64>() / recalls.len().max(1) as f64;
+    let qps_1t = 1e6 / (latencies_us.iter().sum::<f64>() / latencies_us.len().max(1) as f64);
+    let qps_mt = mt_qps(queries, &|qv| {
+        let _ = backend.search(qv, 10);
+    });
 
     let disk_bytes = disk_dir.map(dir_size).unwrap_or(0);
 
@@ -362,14 +374,35 @@ fn run_backend(
         rss_mb,
         disk_bytes,
         build_ms,
+        qps_1t,
+        qps_mt,
         notes,
     }
+}
+
+/// Multi-thread QPS: each of `available_parallelism` threads runs the whole
+/// query set 3 times; total queries / wall time.
+fn mt_qps(queries: &[Vec<f32>], f: &(dyn Fn(&[f32]) + Sync)) -> f64 {
+    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+    let t0 = Instant::now();
+    std::thread::scope(|sc| {
+        for _ in 0..threads {
+            sc.spawn(|| {
+                for _ in 0..3 {
+                    for qv in queries {
+                        f(qv);
+                    }
+                }
+            });
+        }
+    });
+    (threads * 3 * queries.len()) as f64 / t0.elapsed().as_secs_f64().max(1e-9)
 }
 
 fn print_table(outcomes: &[BenchOutcome]) {
     println!();
     println!(
-        "{:<20} {:>8} {:>7} {:>13} {:>9} {:>10} {:>10} {:>9} {:>12} {:>10}",
+        "{:<20} {:>8} {:>7} {:>13} {:>9} {:>10} {:>10} {:>9} {:>12} {:>10} {:>9} {:>9}",
         "backend",
         "n",
         "metric",
@@ -379,11 +412,13 @@ fn print_table(outcomes: &[BenchOutcome]) {
         "p95_us",
         "rss_mb",
         "disk_bytes",
-        "build_ms"
+        "build_ms",
+        "qps_1t",
+        "qps_mt"
     );
     for o in outcomes {
         println!(
-            "{:<20} {:>8} {:>7} {:>13.0} {:>9.3} {:>10.1} {:>10.1} {:>9.1} {:>12} {:>10.1}",
+            "{:<20} {:>8} {:>7} {:>13.0} {:>9.3} {:>10.1} {:>10.1} {:>9.1} {:>12} {:>10.1} {:>9.0} {:>9.0}",
             o.backend,
             o.n,
             o.metric,
@@ -394,6 +429,8 @@ fn print_table(outcomes: &[BenchOutcome]) {
             o.rss_mb,
             o.disk_bytes,
             o.build_ms,
+            o.qps_1t,
+            o.qps_mt,
         );
     }
     for o in outcomes {
@@ -427,7 +464,7 @@ fn main() {
         .map(|qv| brute_force_topk(&data, qv, 10, Metric::Cosine))
         .collect();
 
-    let gt_sqeuclidean: Option<Vec<Vec<u64>>> = if diskann_compiled {
+    let gt_sqeuclidean: Option<Vec<Vec<u64>>> = if diskann_compiled || cfg!(feature = "rabitq-bench") {
         eprintln!("[vector_backend_bench] brute-force ground truth (sqeuclidean)...");
         Some(
             queries
@@ -441,8 +478,23 @@ fn main() {
 
     let mut outcomes = Vec::new();
 
+    // `WEFT_BENCH_ONLY=hnsw,rabitq` runs just those arms (prefix match), so
+    // per-arm RSS can be read from a clean process. Unset = all arms.
+    let only = std::env::var("WEFT_BENCH_ONLY").ok();
+    let want = |arm: &str| only.as_deref().is_none_or(|o| o.split(',').any(|a| arm.starts_with(a.trim())));
+
+    #[cfg(feature = "rabitq-bench")]
+    if want("rabitq") {
+        rabitq_runner::run(
+            &mut outcomes,
+            &data,
+            &queries,
+            &gt_cosine,
+            gt_sqeuclidean.as_ref().expect("computed for rabitq-bench"), dim);
+    }
+
     // ── HNSW ──────────────────────────────────────────────────────────
-    {
+    if want("hnsw") {
         eprintln!("[vector_backend_bench] running hnsw...");
         let backend = HnswBackend::new(HnswServiceConfig {
             ef_search: HNSW_EF_SEARCH,
@@ -464,7 +516,7 @@ fn main() {
     }
 
     // ── DiskANN ───────────────────────────────────────────────────────
-    if diskann_compiled {
+    if want("diskann") && diskann_compiled {
         let gt = gt_sqeuclidean.as_ref().expect("computed above when diskann_compiled");
         for (label, use_pq) in [("diskann-pq_on", true), ("diskann-pq_off", false)] {
             eprintln!("[vector_backend_bench] running {label}...");
@@ -497,7 +549,7 @@ fn main() {
             ));
             let _ = std::fs::remove_dir_all(&dir);
         }
-    } else {
+    } else if want("diskann") {
         eprintln!("[vector_backend_bench] running diskann (stub)...");
         let dir = bench_scratch_dir("diskann-stub");
         let cfg = DiskAnnConfig {
@@ -522,7 +574,7 @@ fn main() {
     }
 
     // ── Hybrid ────────────────────────────────────────────────────────
-    {
+    if want("hybrid") {
         eprintln!("[vector_backend_bench] running hybrid...");
         let dir = bench_scratch_dir("hybrid-cold");
         // Deliberately smaller than n so the cold (DiskANN) tier is
