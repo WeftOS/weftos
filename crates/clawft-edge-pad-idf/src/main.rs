@@ -30,8 +30,10 @@
 mod board;
 mod display;
 mod drivers;
+mod inventory;
 mod mesh;
 mod net;
+mod ptt;
 mod scene;
 mod selftest;
 mod wifi_secrets;
@@ -45,7 +47,7 @@ use esp_idf_hal::peripherals::Peripherals;
 use esp_idf_hal::units::Hertz;
 use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::nvs::{EspDefaultNvs, EspDefaultNvsPartition};
-use log::{error, info};
+use log::{error, info, warn};
 
 use scene::LeafScene;
 
@@ -79,23 +81,38 @@ fn main() -> anyhow::Result<()> {
     //
     // We `mem::forget` the pin drivers so they stay LOW for the
     // program lifetime — dropping a PinDriver would reset to Hi-Z.
-    let g38 = PinDriver::output(peripherals.pins.gpio38)?;
-    let g17 = PinDriver::output(peripherals.pins.gpio17)?;
-    let g18 = PinDriver::output(peripherals.pins.gpio18)?;
-    let g42 = PinDriver::output(peripherals.pins.gpio42)?;
-    let mut g38 = g38;
-    let mut g17 = g17;
-    let mut g18 = g18;
-    let mut g42 = g42;
-    g38.set_low()?;
+    // V3.0 schematic: 17/18/42 are the NS4168 I²S amp lines (SDATA / LRCLK
+    // / BCLK) — held LOW = idle, no amp noise. GPIO38 is NOT a board
+    // enable: it is IO38_D on the J7 "GPIO D" header, reaching the
+    // alternate touch FPC P2 only through the unpopulated R5; the factory
+    // sketch reads it as BUTTON_PIN. Configure it as a pulled-up input
+    // and watch it, so a button to GND on J7 is the owner's push-to-talk.
+    // Push-to-talk (2026-10-11): button on IO44 (J10 RXD0, pull-up, to GND);
+    // with feature `ptt-mic` IO42/IO18/IO38 become the I2S0 RX bus for
+    // two INMP441 (SCK / WS tapped at R19 / R12, shared SD). Without it
+    // those pins stay idle so nothing drives what the owner has not wired.
+    let mut g17 = PinDriver::output(peripherals.pins.gpio17)?;
     g17.set_low()?;
-    g18.set_low()?;
-    g42.set_low()?;
-    std::mem::forget(g38);
     std::mem::forget(g17);
-    std::mem::forget(g18);
-    std::mem::forget(g42);
-    info!("[edge-pad-idf] GPIOs 38/17/18/42 held LOW (board enable + ctrl)");
+    #[cfg(not(feature = "ptt-mic"))]
+    {
+        let mut g18 = PinDriver::output(peripherals.pins.gpio18)?;
+        let mut g42 = PinDriver::output(peripherals.pins.gpio42)?;
+        g18.set_low()?;
+        g42.set_low()?;
+        std::mem::forget(g18);
+        std::mem::forget(g42);
+        let g38 = PinDriver::input(peripherals.pins.gpio38, Pull::Up)?;
+        std::mem::forget(g38);
+        info!("[edge-pad-idf] GPIOs 17/18/42 (I2S amp) held LOW; GPIO38 (J7 IO38_D) input pull-up, idle");
+    }
+    #[cfg(feature = "ptt-mic")]
+    {
+        ptt::mic::spawn(peripherals.i2s0, peripherals.pins.gpio42, peripherals.pins.gpio18, peripherals.pins.gpio38);
+        info!("[edge-pad-idf] GPIO17 (I2S amp SDATA) held LOW; IO42/IO18/IO38 = I2S0 RX (ptt-mic)");
+    }
+    let g44 = PinDriver::input(peripherals.pins.gpio44, Pull::Up)?;
+    ptt::spawn_button(g44);
 
     thread::sleep(Duration::from_millis(200));
 
@@ -126,6 +143,12 @@ fn main() -> anyhow::Result<()> {
             "[edge-pad-idf] PCA9557 NOT FOUND on I²C ({e:?}) — proceeding without panel reset (display will be unstable)"
         ),
     }
+
+    // Hardware inventory (read-only): who answers on the only I²C bus,
+    // and what the expander pins are doing after the reset dance.
+    let found = inventory::i2c_scan(&mut i2c);
+    inventory::i2c_identify(&mut i2c, &found);
+    inventory::chip_temperature(peripherals.temp_sensor);
 
     thread::sleep(Duration::from_millis(200));
 
@@ -196,6 +219,16 @@ fn main() -> anyhow::Result<()> {
             None
         }
     };
+
+    if let Some(w) = &_wifi {
+        match w.wifi().get_rssi() {
+            Ok(rssi) => info!("[inventory] Wi-Fi RSSI: {rssi} dBm"),
+            Err(e) => warn!("[inventory] Wi-Fi RSSI unavailable: {e}"),
+        }
+    }
+    // BLE 5 probe (the S3 has no Classic BT): advertise + 5 s active scan,
+    // logged only. Runs after Wi-Fi so coexistence is already up.
+    inventory::ble_probe(5);
 
     // ── Step 10b: touch task on a dedicated thread. ────────────────
     //
