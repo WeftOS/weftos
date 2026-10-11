@@ -34,7 +34,8 @@ s.size(); s.capabilities();
 | 1–99 | Chrome (frames, labels) |
 | 100–199 | Avatar |
 | 200–299 | Status |
-| 1000–4095 | Chat lines, recycled |
+| 300–999 | Page mode (chrome 300–304, lines 400–999) and guide views |
+| 1000–4095 | Chat lines, recycled (4092–4095: scroll thumb and unread marker) |
 
 - **API to the host:**
 
@@ -82,3 +83,7 @@ GET  /v1/cos/events (SSE) -> {kind: "state", state}
 - **Feedback:** the console shows `ptt_active` while the button is held, and the transcript as
   the user's line.
 - **Retention:** raw audio is discarded after transcription unless a debug flag is set.
+
+## Changes
+
+- 2026-10-11: console methods return `Result<(), S::Error>`; `Console` holds `&mut S`, reached through `session()`; `ObjectEvent` may add `Release{node}` (end of gesture, for swipes); `tick(now_ms)` drives avatar tweens; node range 300–999 assigned to page mode and guide views.
