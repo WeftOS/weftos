@@ -56,7 +56,9 @@ The console has a `split` layout (avatar and chat), a `page` layout (one full pa
 buttons). You drive them with the `ui.*` tools:
 
 - **A decision between options → a short survey.** One `ui.ask` per turn, 2–4 choices with
-  short captions, `index`/`total` set, and the turn ends there: the owner's tap or spoken
+  short captions, `index`/`total` set. Put any spoken framing ("Two quick questions
+  first.") in the same response that calls `ui.ask`; the host ends the turn as soon as the
+  question is on screen, with no further model round. The owner's tap or spoken
   number ("two") comes back as the next user turn (`source: touch`). Do not read a long
   list aloud when a survey will do.
 - **A multi-step task → a checklist** (`ui.checklist`): release steps, setup, a plan for

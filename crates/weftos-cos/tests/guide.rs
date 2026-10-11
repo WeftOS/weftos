@@ -134,3 +134,32 @@ async fn steps_and_layout_and_page() {
     let v = serde_json::to_value(events.iter().find(|e| matches!(e, Event::Layout { .. })).unwrap()).unwrap();
     assert_eq!(v, json!({"kind": "layout", "layout": "page"}));
 }
+
+#[tokio::test]
+async fn an_ask_ends_the_turn_with_no_second_model_call() {
+    // The model puts its spoken framing in the same response as the ui.ask
+    // call; the host speaks that and stops. A second scripted response is
+    // present and must stay unconsumed until the owner answers.
+    let framed_ask = json!({"id": "r", "choices": [{"message": {"role": "assistant", "content": "Two quick questions first.",
+        "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "ui_ask",
+            "arguments": json!({"question": "How much time today?", "choices": ["An hour", "Half a day", "All day"], "index": 1, "total": 2}).to_string()}}]},
+        "finish_reason": "tool_calls"}]});
+    let llm = ScriptedLlm::new(vec![framed_ask, ScriptedLlm::text("must not run before the answer")]);
+    let t = build_agent(llm.clone(), None, None).await;
+    let mut rx = t.agent.events();
+
+    t.agent.run_turn(TurnId::new(), UserUtterance::voice("help me plan today")).await;
+    let events = collect_until_final(&mut rx, Duration::from_secs(2)).await;
+    assert_eq!(llm.seen.lock().unwrap().len(), 1, "exactly one model call in the ask turn");
+    let spoken = events.iter().find_map(|e| match e { Event::Message { text, is_final: true, .. } => Some(text.clone()), _ => None }).unwrap();
+    assert_eq!(spoken, "Two quick questions first.");
+    assert!(events.iter().any(|e| matches!(e, Event::Ask { index: 1, total: 2, .. })));
+    assert!(events.last().is_some_and(|e| matches!(e, Event::State { state: weftos_cos::AgentState::Idle, .. })), "{events:?}");
+
+    // The answer, by touch, starts a fresh turn that consumes the next response.
+    t.agent.answer(GuideAnswer { kind: AnswerKind::Answer, id: events.iter().find_map(|e| match e { Event::Ask { id, .. } => Some(id.clone()), _ => None }).unwrap(), value: json!(2) }).await.unwrap();
+    let next = collect_until_final(&mut rx, Duration::from_secs(2)).await;
+    assert_eq!(llm.seen.lock().unwrap().len(), 2);
+    assert!(next.iter().any(|e| matches!(e, Event::Status { task, .. } if task.contains("touch"))));
+    assert!(last_user(&llm)["content"].as_str().unwrap().contains("2 — Half a day"));
+}
