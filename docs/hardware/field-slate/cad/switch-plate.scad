@@ -29,6 +29,7 @@ hinge_len      = plate_w - 20;
 $fn = 40;
 
 module plate() {
+  union() {
     difference() {
         linear_extrude(plate_t) offset(corner_r) offset(-corner_r)
             square([plate_w, plate_h], center = true);
@@ -36,7 +37,7 @@ module plate() {
         start = -(toggle_count - 1) * toggle_pitch / 2;
         for (i = [0 : toggle_count - 1]) {
             translate([start + i*toggle_pitch, toggle_y, -1]) cylinder(d = toggle_bushing, h = plate_t + 2);
-            if (toggle_key) translate([start + i*toggle_pitch - 0.6, toggle_y + toggle_bushing/2, -1]) cube([1.2, 1.6, plate_t + 2]);
+            if (toggle_key) translate([start + i*toggle_pitch - 0.6, toggle_y + toggle_bushing/2 - 0.4, -1]) cube([1.2, 2.0, plate_t + 2]);
         }
         // DIP windows
         widths = [for (n = dip_positions) n * dip_pitch + 1.5];
@@ -46,9 +47,10 @@ module plate() {
             translate([x0, dip_y - dip_win_h/2, -1]) cube([widths[b], dip_win_h, plate_t + 2]);
         }
     }
-    // hinge knuckle along the top edge for the cover
-    translate([-hinge_len/2, plate_h/2 - hinge_d/2, plate_t]) rotate([0, 90, 0])
+    // hinge knuckle along the top edge for the cover (sunk 0.5 mm into the plate for a clean union)
+    translate([-hinge_len/2, plate_h/2 - hinge_d/2, plate_t - 0.5]) rotate([0, 90, 0])
         difference() { cylinder(d = hinge_d, h = hinge_len); translate([0, 0, -1]) cylinder(d = 1.8, h = hinge_len + 2); }
+  }
 }
 
 function sum(v, i = 0) = i >= len(v) ? 0 : v[i] + sum(v, i + 1);
