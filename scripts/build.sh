@@ -1952,6 +1952,32 @@ cmd_n6_leaf() {
     return $rc
 }
 
+# ── Chief-of-staff console, ADR-118 C2 (standalone crate) ─────────────
+cmd_cos_console() {
+    header "weftos-cos-console: build, test, clippy"
+    timer_start
+    local rc=0 v=""
+    [ "$VERBOSE" = true ] && v="--verbose"
+    # Own [workspace] like its leaf siblings; build inside the crate.
+    (cd "$ROOT/crates/weftos-cos-console" \
+        && cargo build --release $v \
+        && cargo test $v \
+        && cargo clippy --all-targets $v -- -D warnings) || rc=$?
+    timer_end
+    return $rc
+}
+
+cmd_cos_console_demo() {
+    header "weftos-cos-console: replay the scripted conversation to PNG key frames"
+    timer_start
+    local rc=0
+    (cd "$ROOT/crates/weftos-cos-console" \
+        && cargo run --release --bin cos-console-demo -- \
+            --out "$ROOT/docs/design/cos-console") || rc=$?
+    timer_end
+    return $rc
+}
+
 # ── Gate check 13 helper: clawft-kernel diskann + bench feature matrix ──
 check_kernel_diskann_and_bench_matrix() {
     # --tests included deliberately: cfg-gated test modules rot separately
@@ -2527,6 +2553,11 @@ ${BOLD}Commands:${NC}
                   (crates/weftos-n6-leaf) with its host RVF validator
                   (crates/weftos-n6-leaf-hostcheck), and the embassy node
                   (crates/weftos-n6-node). Run with scripts/n6.sh leaf / node.
+  cos-console     Build, test and clippy the chief-of-staff console crate
+                  (crates/weftos-cos-console, ADR-118 C2; own workspace).
+  cos-console-demo
+                  Replay the scripted console conversation in the leaf
+                  simulator and write key frames to docs/design/cos-console/.
   test-browser    Run browser WASM regression suite under headless Chrome
                   (WEFT-388 / M5-A). Requires wasm-pack + chromedriver.
   bundle-size     Gate browser WASM bundle (raw + gzip) against the
@@ -2911,6 +2942,8 @@ main() {
         licence-uid-check)  cmd_licence_uid_check ;;
         test-pi)            cmd_test_pi ;;
         n6-leaf)            cmd_n6_leaf ;;
+        cos-console)        cmd_cos_console ;;
+        cos-console-demo)   cmd_cos_console_demo ;;
         gate)         cmd_gate ;;
         pipeline-pass) cmd_pipeline_pass ;;
         release-dry-run) cmd_release_dry_run ;;
