@@ -1,0 +1,65 @@
+# weftos-display-client
+#
+# ADR-117 phase D1: the client side of a display endpoint. An app opens
+# a `DisplaySession` on a display, sends `weftos-leaf-scene` ops, and
+# polls object-level events back (`Tap { node }`, `Drag { node, dx, dy }`,
+# `Sensor { name, value }`). The console (ADR-118 lane B) draws through
+# this crate; see docs/plans/adr-118-cos-contract.md §1 for the binding
+# API and docs/design/display-session-transport.md for the real-leaf
+# carrier design.
+#
+# Backends:
+#   - `LeafSim`   in-process simulated leaf (weftos-leaf-sim, headless).
+#   - `window`    the simulator's SDL2 window: mouse → touch, space bar
+#                 → ptt.down / ptt.up. Needs SDL2 headers at build time.
+#   - `leaf`      the real leaf over the certified-leaf channel. D1 ships
+#                 the carrier types and a clear "not yet" error only.
+#
+# Standalone crate — own workspace table, mirroring weftos-leaf-scene /
+# -renderer / -sim, so cargo does not walk up into the clawft workspace.
+[workspace]
+
+[package]
+name = "weftos-display-client"
+version = "0.1.0"
+edition = "2021"
+description = "Client library for WeftOS display endpoints: sessions, scene ops, object-level events (ADR-117 D1)."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/weave-logic-ai/weftos"
+keywords = ["weftos", "leaf", "display", "scene-graph"]
+categories = ["gui", "embedded"]
+publish = false
+
+[features]
+default = []
+# Desktop window backend on the simulator's SDL2 window. `dep:sdl2` only
+# turns on `use-pkgconfig`, so the SDL2 that Homebrew / apt installed is
+# found through pkg-config instead of needing to sit on the default
+# linker path.
+window = ["weftos-leaf-sim/window", "embedded-graphics-simulator/with-sdl", "dep:sdl2"]
+# Real-leaf backend over the certified-leaf channel (carrier stub in D1).
+leaf = ["dep:serde"]
+
+[dependencies]
+weftos-leaf-scene = { path = "../weftos-leaf-scene", features = ["std"] }
+weftos-leaf-renderer = { path = "../weftos-leaf-renderer", features = ["std"] }
+weftos-leaf-sim = { path = "../weftos-leaf-sim" }
+# Pinned alongside weftos-leaf-sim. SDL is off unless `window` is on, so
+# the default build and the tests never need SDL2 headers.
+embedded-graphics-simulator = { version = "0.8", default-features = false }
+embedded-graphics = "0.8"
+# Same sdl2 the simulator uses; present only to enable pkg-config lookup.
+sdl2 = { version = "0.38", default-features = false, features = ["use-pkgconfig"], optional = true }
+# Only the `leaf` carrier frames are serialized here; the scene types
+# bring their own serde through weftos-leaf-scene.
+serde = { version = "1", features = ["derive"], optional = true }
+
+[[example]]
+name = "tap_demo"
+
+[profile.dev]
+opt-level = 1
+
+[profile.release]
+opt-level = "s"
+lto = true
