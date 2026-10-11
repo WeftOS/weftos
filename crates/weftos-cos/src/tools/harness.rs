@@ -14,6 +14,30 @@ use super::{Gate, Tool, ToolOutcome, ToolSpec, arg_str, need_str, tool_err};
 use crate::CosError;
 use crate::config::HarnessConfig;
 
+/// The outcome of a project-history read.
+#[derive(Debug, Clone, PartialEq)]
+pub enum History {
+    /// One page, newest first; `next_before` is passed back verbatim for more.
+    Page { items: Vec<Value>, next_before: Option<String> },
+    /// HTTP 404: the project is not reachable with this credential.
+    NoAccess,
+    /// HTTP 400: a parameter was refused.
+    BadRequest(String),
+    /// Network failure, 5xx or a rejected credential.
+    Unavailable(String),
+}
+
+impl History {
+    fn to_json(&self) -> Value {
+        match self {
+            Self::Page { items, next_before } => json!({"available": true, "items": items, "next_before": next_before}),
+            Self::NoAccess => json!({"available": false, "reason": "no history access for this project"}),
+            Self::BadRequest(m) => json!({"available": false, "reason": format!("history request refused: {m}")}),
+            Self::Unavailable(m) => json!({"available": false, "reason": format!("history unavailable right now: {m}")}),
+        }
+    }
+}
+
 /// A harness credential. `Debug` and `Display` never show the value.
 #[derive(Clone)]
 pub struct SecretToken(String);
@@ -196,12 +220,33 @@ impl HarnessClient {
             .ok_or_else(|| tool_err("harness", format!("ticket not found: {reference}")))
     }
 
-    /// Read project history. The PR #19 route is write-only today, so this
-    /// returns an error ("HTTP 405") until a read route exists; callers
-    /// report history as unavailable rather than guessing.
-    pub async fn events(&self, limit: usize) -> Result<Value, CosError> {
-        let path = self.events_path()?;
-        self.get(&format!("{path}?limit={limit}")).await
+    /// Read one page of project history (dashboard PR #21: GET on the events
+    /// route, newest first). `query` holds the optional `kind`, `since`,
+    /// `limit` and `before` parameters, sent URL-encoded and unmodified.
+    /// Never an `Err`: the outcome says plainly whether history was read,
+    /// is not accessible, or is unavailable right now. The token is only
+    /// ever the Authorization header and appears in no message here.
+    pub async fn history(&self, project: Option<&str>, query: &[(&str, String)]) -> History {
+        let path = match self.events_path_for(project) {
+            Ok(p) => p,
+            Err(e) => return History::Unavailable(format!("no project to read history for ({e})")),
+        };
+        let resp = match self.http.get(self.url(&path)).bearer_auth(&self.token.0).query(query).send().await {
+            Ok(r) => r,
+            Err(_) => return History::Unavailable("the dashboard could not be reached".into()),
+        };
+        let status = resp.status().as_u16();
+        let body: Value = resp.json().await.unwrap_or(Value::Null);
+        match status {
+            200 => History::Page {
+                items: body.get("items").and_then(Value::as_array).cloned().unwrap_or_default(),
+                next_before: body.get("next_before").and_then(Value::as_str).map(str::to_string),
+            },
+            404 => History::NoAccess,
+            400 => History::BadRequest(body.get("error").and_then(Value::as_str).unwrap_or("invalid parameter").to_string()),
+            401 => History::Unavailable("the dashboard rejected the credential".into()),
+            n => History::Unavailable(format!("the dashboard answered HTTP {n}")),
+        }
     }
 
     /// Add one project-history event to `project` (or the default project):
@@ -249,7 +294,13 @@ impl Tool for ProjectsActivity {
                 "properties": {
                     "status": {"type": "string", "enum": ["todo", "in_progress", "review", "done"],
                                "description": "Only tickets in this status; all when omitted."},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 25}
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 25},
+                    "project": {"type": "string", "description": "Project UUID for history; the configured default when omitted."},
+                    "history_limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 10,
+                                      "description": "History entries to read, newest first."},
+                    "history_kind": {"type": "string", "enum": ["milestone", "install", "route", "release", "ticket", "pair", "note"]},
+                    "history_since": {"type": "string", "description": "ISO 8601 with timezone; only entries strictly after."},
+                    "history_before": {"type": "string", "description": "The next_before of the previous page, verbatim. Only when asked for more."}
                 }
             }),
             gate: Gate::Open,
@@ -267,17 +318,27 @@ impl Tool for ProjectsActivity {
             .ok()
             .and_then(|g| g.get("items").cloned())
             .unwrap_or(Value::Array(vec![]));
-        let history = match self.client.events(20).await {
-            Ok(v) => json!({"available": true, "items": v.get("items").cloned().unwrap_or(v)}),
-            Err(e) => json!({"available": false, "reason": e.to_string()}),
-        };
+        let project = arg_str(&args, "project");
+        if let Some(p) = &project
+            && !is_uuid(p)
+        {
+            return Err(tool_err(ACTIVITY, "project must be a UUID"));
+        }
+        let hlimit = args.get("history_limit").and_then(Value::as_u64).unwrap_or(10).clamp(1, 200);
+        let mut query = vec![("limit", hlimit.to_string())];
+        for (arg, param) in [("history_kind", "kind"), ("history_since", "since"), ("history_before", "before")] {
+            if let Some(v) = arg_str(&args, arg) {
+                query.push((param, v));
+            }
+        }
+        let history = self.client.history(project.as_deref(), &query).await.to_json();
         let condensed: Vec<Value> = tickets.iter().map(condense_ticket).collect();
         let summary = format!(
             "read {} ticket(s){} and {} goal(s); history {}",
             condensed.len(),
             status.map(|s| format!(" in {s}")).unwrap_or_default(),
             goals.as_array().map_or(0, Vec::len),
-            if history["available"] == true { "read" } else { "unavailable" }
+            if history["available"] == true { "read" } else { history["reason"].as_str().unwrap_or("unavailable") }
         );
         Ok(ToolOutcome { summary, result: json!({"tickets": condensed, "goals": goals, "history": history}) })
     }

@@ -102,7 +102,7 @@ impl FakeHarness {
             .route("/api/harness/goals", get(goals));
         if self.with_events_route {
             // Dashboard PR #19: POST only, project id in the path.
-            app = app.route("/api/harness/projects/{id}/events", axum::routing::post(events_post));
+            app = app.route("/api/harness/projects/{id}/events", axum::routing::post(events_post).get(events_get));
         }
         let app = app.with_state(self.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -149,6 +149,33 @@ async fn events_post(State(h): State<FakeHarness>, axum::extract::Path(id): axum
     h.posts.lock().unwrap().push((format!("/api/harness/projects/{id}/events"), body));
     (axum::http::StatusCode::CREATED, Json(json!({"id": "e1", "created": true})))
 }
+
+/// Dashboard PR #21: GET history, newest first. Two pages of one entry each
+/// for TEST_PROJECT; `before=cursor-1` selects the second. The project id
+/// `55555555-5555-4555-8555-555555555555` answers 503 and any other id 404.
+/// Records the raw query string in `posts` under `GET <path>`.
+async fn events_get(State(h): State<FakeHarness>, axum::extract::Path(id): axum::extract::Path<String>, axum::extract::RawQuery(q): axum::extract::RawQuery, headers: axum::http::HeaderMap) -> (axum::http::StatusCode, Json<Value>) {
+    if !authed(&headers) {
+        return (axum::http::StatusCode::UNAUTHORIZED, Json(json!({"error": "Invalid harness credential"})));
+    }
+    let q = q.unwrap_or_default();
+    h.posts.lock().unwrap().push((format!("GET /api/harness/projects/{id}/events"), json!({"query": q})));
+    if id == UNAVAILABLE_PROJECT {
+        return (axum::http::StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "unavailable"})));
+    }
+    if id != TEST_PROJECT {
+        return (axum::http::StatusCode::NOT_FOUND, Json(json!({"error": "not_found"})));
+    }
+    let entry = |n: u32, title: &str| json!({"id": format!("e{n}"), "project_id": id, "occurred_at": "2026-10-11T10:00:00Z", "kind": "milestone",
+        "title": title, "summary": "", "details_md": null, "source": "manual", "actor_label": "owner", "created_at": "2026-10-11T10:00:00Z"});
+    if q.contains("before=cursor-1") {
+        (axum::http::StatusCode::OK, Json(json!({"items": [entry(2, "Older milestone")], "next_before": null})))
+    } else {
+        (axum::http::StatusCode::OK, Json(json!({"items": [entry(1, "Newest milestone")], "next_before": "cursor-1"})))
+    }
+}
+
+pub const UNAVAILABLE_PROJECT: &str = "55555555-5555-4555-8555-555555555555";
 
 /// Build an agent over a scripted provider (same provider for both tiers
 /// unless `plan` is given), a fake harness when `harness` is set, and a
