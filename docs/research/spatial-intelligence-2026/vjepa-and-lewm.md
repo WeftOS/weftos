@@ -143,10 +143,12 @@ rUv OccWorld (see [ruv-worldgraph-vs-weftos.md](../ruv-worldgraph-vs-weftos.md) 
 
 | Stance | What |
 |--------|------|
-| **Watch (now)** | 2.1 dense-feature quality, license of weights vs paper, GPU cost of ViT-g/G @384, IntPhys-2 honesty gap. |
-| **Compose (when a producer exists)** | Frozen 2.1 encoder as one **visual embedder** behind `VISUAL_FEATURES`. Same join as DINO. |
+| **Watch (now)** | 2.1 dense-feature quality, license of weights vs paper (code and checkpoint MIT; paper CC BY-NC-ND), GPU cost of ViT-g/G @384 only (B tier is cheap), IntPhys-2 honesty gap. |
+| **Compose (when a producer exists)** | Frozen 2.1 encoder as one **visual embedder** behind `VISUAL_FEATURES`. Same join as DINO. Start with the distilled **ViT-B/16, 80M parameters, 384 px** checkpoint (`vjepa2_1_vitb_dist_vitG_384.pt`) from the MIT-licensed [facebookresearch/vjepa2](https://github.com/facebookresearch/vjepa2) repo (V-JEPA 2.1 announced 2026-03-16; licence confirmed MIT in the 2026-10 watch review, `../watch-review-2026-10.md` A5). It runs on the CUDA host or Apple Silicon, so the giant-model GPU cost concern does not apply to this tier. |
 | **Optional LeWM adapter (later)** | V-JEPA 2-AC-style action-conditioned predictor as a **rollout prior** for robot / capture-head planning. Facade-enforced. |
 | **Do not apply** | “Replace BVH with JEPA tokens.” “Train V-JEPA on the planet.” “Treat 65–80% grasp as Urth occupancy.” |
+
+**What "producer" means here.** A producer is a running pipeline that emits metric-anchored image regions: a camera (or splat render) source that yields frames, plus a step that has already produced a `WM_*` leaf with an AABB (W1 geometric partition, or a camera cog's detections) to pool tokens over. Today no such pipeline exists: W1 export is `bvh_published: false` and the 12x12 ft room plan (`docs/plans/world-model-data-and-training.md`) has no camera cog yet. The trigger is the first camera cog or splat-capture head that publishes frames with poses; until then the 80M checkpoint stays unloaded and no ticket is warranted.
 
 Pilot, if ever: **one L4 quilt site**, freeze the encoder, attach `VectorRef` on a handful of `WM_OBJECT` leaves, query spatial-first then visual-rank. Measure whether F4 soft edges reduce identity mistakes vs CLIP/DINO — MetaHarness receipt, not a silent champion swap (ADR-096).
 
