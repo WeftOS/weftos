@@ -91,3 +91,25 @@ fn unbuilt_targets_say_not_yet() {
         ));
     }
 }
+
+#[test]
+fn partial_damage_clears_pixels_a_node_left_behind() {
+    let (mut s, sim) = open_sim();
+    let fill = (0x40, 0x80, 0xC0);
+    s.apply(&[insert(plain_rect(1, 10, 10, 50, 50))]).unwrap();
+    assert_eq!(sim.pixel(20, 20), fill);
+
+    // Moved: the old spot is background again, the new spot is filled.
+    s.apply(&[SceneOp::Update(plain_rect(1, 200, 100, 50, 50))]).unwrap();
+    assert_eq!(sim.pixel(20, 20), (0, 0, 0), "old position must be cleared");
+    assert_eq!(sim.pixel(210, 110), fill);
+
+    // Shrunk: the part no longer covered is background.
+    s.apply(&[SceneOp::Update(plain_rect(1, 200, 100, 10, 10))]).unwrap();
+    assert_eq!(sim.pixel(240, 140), (0, 0, 0), "shrunk area must be cleared");
+    assert_eq!(sim.pixel(205, 105), fill);
+
+    // Removed: nothing of it remains.
+    s.apply(&[SceneOp::Remove(NodeId::from_raw(1))]).unwrap();
+    assert_eq!(sim.pixel(205, 105), (0, 0, 0));
+}

@@ -199,6 +199,10 @@ impl Tool for UiAsk {
                 total,
             };
             s.pending_ask = Some(ask.clone());
+            s.asked.push(ask.clone());
+            if s.asked.len() > 64 {
+                s.asked.remove(0);
+            }
             ask
         };
         self.0.set_layout(Layout::Guide);

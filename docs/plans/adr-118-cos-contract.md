@@ -62,7 +62,7 @@ other front ends:
 
 ```text
 POST /v1/cos/utterance {text, source: "voice"|"typed"|"touch"} -> 202 {turn_id}
-POST /v1/cos/answer {kind: "answer"|"toggle"|"step"|"skip", id, value} -> 202  // guide interactions
+POST /v1/cos/answer {kind: "answer"|"toggle"|"step"|"skip"|"back", id, value} -> 202  // guide interactions; back re-asks the previous survey question (Q1: re-shows Q1)
 GET  /v1/cos/events (SSE) -> {kind: "state", state}
                             {kind: "token", turn_id, text}
                             {kind: "message", turn_id, text, final: true}

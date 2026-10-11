@@ -13,7 +13,8 @@ use serde_json::json;
 use weftos_cos_console::chat_log::Role;
 use weftos_cos_console::frame::open_sim_unmetered;
 use weftos_cos_console::host::{Host, HostConfig, OFFLINE_REASON};
-use weftos_cos_console::theme::{ids, nid, GUIDE_SIDE};
+use weftos_cos_console::guide::BUTTON_Y;
+use weftos_cos_console::theme::{ids, nid, GUIDE_HEAD, GUIDE_SIDE, PAD};
 use weftos_cos_console::{AgentState, Layout, LeafSim, SensorValue};
 use weftos_display_client::{KEY_RETURN, SENSOR_KEY_CHAR, SENSOR_KEY_NAMED};
 use weftos_leaf_scene::Primitive;
@@ -122,6 +123,22 @@ fn ask_shows_the_survey_and_a_tap_posts_the_answer() {
     sim.tap(GUIDE_SIDE.x + 150, GUIDE_SIDE.y + 40 + 32);
     assert!(pump(&mut host, &mut now, |_| agent.posts_to("/v1/cos/answer").len() == 2));
     assert_eq!(agent.posts_to("/v1/cos/answer")[1], json!({"kind": "toggle", "id": "rel", "value": {"item_id": "gate", "done": true}}));
+}
+
+#[test]
+fn back_on_a_later_question_posts_the_back_answer() {
+    let agent = FakeAgent::start();
+    let (mut s, sim, cfg) = online(&agent);
+    let mut host = Host::open(&mut s, cfg).unwrap();
+    let mut now = 0;
+    assert!(pump(&mut host, &mut now, |h| h.is_online()));
+
+    agent.send(json!({"kind": "ask", "id": "q2", "question": "Second question?", "explain": "",
+        "choices": [{"n": 1, "caption": "Yes"}, {"n": 2, "caption": "No"}], "index": 2, "total": 3}));
+    assert!(pump(&mut host, &mut now, |_| scene_has(&sim, "Second question?")));
+    sim.tap(GUIDE_HEAD.x + PAD + 10, BUTTON_Y + 10);
+    assert!(pump(&mut host, &mut now, |_| !agent.posts_to("/v1/cos/answer").is_empty()));
+    assert_eq!(agent.posts_to("/v1/cos/answer"), [json!({"kind": "back", "id": "q2", "value": null})]);
 }
 
 #[test]

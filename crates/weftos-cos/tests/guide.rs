@@ -163,3 +163,43 @@ async fn an_ask_ends_the_turn_with_no_second_model_call() {
     assert!(next.iter().any(|e| matches!(e, Event::Status { task, .. } if task.contains("touch"))));
     assert!(last_user(&llm)["content"].as_str().unwrap().contains("2 — Half a day"));
 }
+
+#[tokio::test]
+async fn back_re_asks_the_previous_question_and_is_a_no_op_at_q1() {
+    let llm = ScriptedLlm::new(vec![
+        ScriptedLlm::tool_call("ui_ask", json!({"question": "First?", "choices": ["a", "b"], "index": 1, "total": 2})),
+        ScriptedLlm::tool_call("ui_ask", json!({"question": "Second?", "choices": ["c", "d"], "index": 2, "total": 2})),
+    ]);
+    let t = build_agent(llm.clone(), None, None).await;
+    let conv: Arc<dyn Conversation> = Arc::new(t.agent.clone());
+    let mut rx = conv.events();
+    let ask_of = |events: &[Event]| events.iter().rev().find_map(|e| match e { Event::Ask { id, question, index, .. } => Some((id.clone(), question.clone(), *index)), _ => None });
+
+    t.agent.run_turn(TurnId::new(), UserUtterance::voice("start")).await;
+    let q1 = ask_of(&collect_until_final(&mut rx, Duration::from_secs(2)).await).expect("Q1");
+    // At Q1, back re-shows Q1 and wakes no model.
+    let calls = llm.seen.lock().unwrap().len();
+    conv.answer(GuideAnswer { kind: AnswerKind::Back, id: q1.0.clone(), value: json!(null) }).await.unwrap();
+    let ev = tokio::time::timeout(Duration::from_secs(1), rx.recv()).await.unwrap().unwrap();
+    assert!(matches!(&ev, Event::Ask { id, index: 1, .. } if *id == q1.0), "{ev:?}");
+    assert_eq!(llm.seen.lock().unwrap().len(), calls);
+
+    conv.answer(GuideAnswer { kind: AnswerKind::Answer, id: q1.0.clone(), value: json!(1) }).await.unwrap();
+    let q2 = ask_of(&collect_until_final(&mut rx, Duration::from_secs(2)).await).expect("Q2");
+    assert_eq!(q2.2, 2);
+    conv.answer(GuideAnswer { kind: AnswerKind::Back, id: q2.0.clone(), value: json!(null) }).await.unwrap();
+    let ev = tokio::time::timeout(Duration::from_secs(1), rx.recv()).await.unwrap().unwrap();
+    assert!(matches!(&ev, Event::Ask { question, index: 1, .. } if question == "First?"), "{ev:?}");
+
+    // The re-asked Q1 is pending again; back for a stale id is refused.
+    let err = conv.answer(GuideAnswer { kind: AnswerKind::Back, id: q2.0, value: json!(null) }).await;
+    assert!(err.is_err(), "stale id must be refused");
+    conv.answer(GuideAnswer { kind: AnswerKind::Answer, id: q1.0, value: json!(2) }).await.unwrap();
+}
+
+#[tokio::test]
+async fn back_with_no_pending_question_is_refused() {
+    let t = build_agent(ScriptedLlm::new(vec![]), None, None).await;
+    let r = t.agent.answer(GuideAnswer { kind: AnswerKind::Back, id: "q1".into(), value: json!(null) }).await;
+    assert!(r.is_err());
+}

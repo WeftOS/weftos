@@ -387,8 +387,7 @@ impl<'a> Host<'a> {
     }
 }
 
-/// A guide touch as the `POST /v1/cos/answer` body (contract §3). The
-/// agent has no survey-back yet, so `Back` is not sent.
+/// A guide touch as the `POST /v1/cos/answer` body (contract §3).
 pub fn answer_body(a: GuideAnswer) -> Option<Value> {
     Some(match a {
         GuideAnswer::Answer { survey_id, choice_n } => json!({"kind": "answer", "id": survey_id, "value": choice_n}),
@@ -403,7 +402,7 @@ pub fn answer_body(a: GuideAnswer) -> Option<Value> {
             json!({"kind": "step", "id": steps_id, "value": dir})
         }
         GuideAnswer::Skip { survey_id } => json!({"kind": "skip", "id": survey_id, "value": null}),
-        GuideAnswer::Back { .. } => return None,
+        GuideAnswer::Back { survey_id } => json!({"kind": "back", "id": survey_id, "value": null}),
     })
 }
 
@@ -419,6 +418,7 @@ mod tests {
         assert_eq!(t["value"], json!({"item_id": "pg", "done": true}));
         let s = answer_body(GuideAnswer::Step { steps_id: "s".into(), dir: StepDir::Back }).unwrap();
         assert_eq!(s, json!({"kind": "step", "id": "s", "value": "back"}));
-        assert!(answer_body(GuideAnswer::Back { survey_id: "q1".into() }).is_none());
+        let b = answer_body(GuideAnswer::Back { survey_id: "q1".into() }).unwrap();
+        assert_eq!(b, json!({"kind": "back", "id": "q1", "value": null}));
     }
 }

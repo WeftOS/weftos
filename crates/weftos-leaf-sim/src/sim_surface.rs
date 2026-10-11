@@ -147,11 +147,20 @@ impl SceneSurface for SimSurface {
             let _ = self
                 .display
                 .clear(Rgb888::new(self.clear_color.r, self.clear_color.g, self.clear_color.b));
+        } else {
+            // Partial damage: the renderer only redraws nodes that
+            // overlap a rect, so pixels a node left behind (moved,
+            // shrunk, removed) must be cleared first or they ghost.
+            let bg = Rgb888::new(self.clear_color.r, self.clear_color.g, self.clear_color.b);
+            for r in damage.rects() {
+                let w = from_px_q8(r.w).max(0) as u32;
+                let h = from_px_q8(r.h).max(0) as u32;
+                let tl = EgPoint::new(from_px_q8(r.x), from_px_q8(r.y));
+                let _ = EgRectangle::new(tl, EgSize::new(w, h))
+                    .into_styled(EgPrimStyle::with_fill(bg))
+                    .draw(&mut self.display);
+            }
         }
-        // Partial-damage rects are an optimisation: the renderer
-        // already filters nodes by AABB ∩ rect, so we don't have to
-        // re-scissor. embedded-graphics' rasterizer clips automatically
-        // to the display extent.
         Ok(())
     }
 
