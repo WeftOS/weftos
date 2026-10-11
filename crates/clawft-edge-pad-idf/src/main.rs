@@ -33,6 +33,7 @@ mod drivers;
 mod inventory;
 mod mesh;
 mod net;
+mod ptt;
 mod scene;
 mod selftest;
 mod wifi_secrets;
@@ -86,18 +87,32 @@ fn main() -> anyhow::Result<()> {
     // alternate touch FPC P2 only through the unpopulated R5; the factory
     // sketch reads it as BUTTON_PIN. Configure it as a pulled-up input
     // and watch it, so a button to GND on J7 is the owner's push-to-talk.
+    // Push-to-talk (2026-10-11): button on IO44 (J10 RXD0, pull-up, to GND);
+    // with feature `ptt-mic` IO42/IO18/IO38 become the I2S0 RX bus for
+    // two INMP441 (SCK / WS tapped at R19 / R12, shared SD). Without it
+    // those pins stay idle so nothing drives what the owner has not wired.
     let mut g17 = PinDriver::output(peripherals.pins.gpio17)?;
-    let mut g18 = PinDriver::output(peripherals.pins.gpio18)?;
-    let mut g42 = PinDriver::output(peripherals.pins.gpio42)?;
     g17.set_low()?;
-    g18.set_low()?;
-    g42.set_low()?;
     std::mem::forget(g17);
-    std::mem::forget(g18);
-    std::mem::forget(g42);
-    let g38 = PinDriver::input(peripherals.pins.gpio38, Pull::Up)?;
-    inventory::spawn_button_watch(g38);
-    info!("[edge-pad-idf] GPIOs 17/18/42 (I2S amp) held LOW; GPIO38 (J7 IO38_D) input pull-up, watched");
+    #[cfg(not(feature = "ptt-mic"))]
+    {
+        let mut g18 = PinDriver::output(peripherals.pins.gpio18)?;
+        let mut g42 = PinDriver::output(peripherals.pins.gpio42)?;
+        g18.set_low()?;
+        g42.set_low()?;
+        std::mem::forget(g18);
+        std::mem::forget(g42);
+        let g38 = PinDriver::input(peripherals.pins.gpio38, Pull::Up)?;
+        std::mem::forget(g38);
+        info!("[edge-pad-idf] GPIOs 17/18/42 (I2S amp) held LOW; GPIO38 (J7 IO38_D) input pull-up, idle");
+    }
+    #[cfg(feature = "ptt-mic")]
+    {
+        ptt::mic::spawn(peripherals.i2s0, peripherals.pins.gpio42, peripherals.pins.gpio18, peripherals.pins.gpio38);
+        info!("[edge-pad-idf] GPIO17 (I2S amp SDATA) held LOW; IO42/IO18/IO38 = I2S0 RX (ptt-mic)");
+    }
+    let g44 = PinDriver::input(peripherals.pins.gpio44, Pull::Up)?;
+    ptt::spawn_button(g44);
 
     thread::sleep(Duration::from_millis(200));
 

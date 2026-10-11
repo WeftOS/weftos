@@ -143,6 +143,31 @@ read in 256 KiB chunks. Serial console is 115200.
   update bench. While unprovisioned the panel shows a touch-target screen
   (five circles + drag bar, green on hit; events on serial).
 
+## Push-to-talk and microphones (2026-10-11)
+
+Decided wiring (V3.0 board; the amp's I²S links are the only I²S pins,
+so SCK/WS are tapped at 0R pads). 3.3 V only — the INMP441 is not 5 V
+tolerant.
+
+| Signal | Board point | Notes |
+|---|---|---|
+| Push button | J10 pin 1 `RXD0` (IO44) ↔ J10 pin 4 `GND` | internal pull-up, active-low, 20 ms debounce → `ptt.down`/`ptt.up`; console becomes TX-only, flashing works unless held |
+| Mic VDD | J7 pin 3 `3V3` (or J6 `3V3`) | both mics |
+| Mic GND | J7 pin 4 `GND` | both mics |
+| Mic SCK | pad of **R19** (IO42 side) | shared by both mics and the NS4168 BCLK |
+| Mic WS | pad of **R12** (IO18 side) | shared; LRCLK of the amp |
+| Mic SD | J7 pin 1 `IO38_D` | both mics on one SD line |
+| Mic 1 L/R | GND | left slot |
+| Mic 2 L/R | 3V3 | right slot |
+
+Firmware: `cargo build --release --features ptt-mic` enables the I2S0
+standard-mode RX (stereo 32-bit slots, 16 kHz; INMP441 = 24-bit
+left-justified, `i32 >> 8`), capturing only while the button is held and
+logging per-channel RMS/dBFS every 500 ms (`[ptt-mic] rms L=… R=…`).
+The default build leaves IO18/IO42/IO38 idle so nothing drives unwired
+pins. Streaming over the leaf channel is designed, not built (see the
+module doc in `src/ptt.rs`).
+
 ## Status
 
 - Flashed and camera-verified on the CrowPanel DIS08070H (see the

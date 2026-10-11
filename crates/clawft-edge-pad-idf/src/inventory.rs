@@ -9,10 +9,7 @@
 //! "GPIO D" header. Schematic: `CrowPanel ESP32 Display-7.0-inch-V3.0-20240420.pdf`.
 
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::thread;
-use std::time::Duration;
 
-use esp_idf_hal::gpio::{Input, PinDriver};
 use esp_idf_hal::i2c::I2cDriver;
 use esp_idf_hal::temp_sensor::{TempSensor, TempSensorConfig, TempSensorDriver};
 use log::{info, warn};
@@ -167,19 +164,3 @@ pub fn ble_probe(secs: u32) {
     });
 }
 
-/// Watch IO38_D (J7 "GPIO D" header, internal pull-up) and log edges.
-/// A push button between IO38_D and GND reads as "pressed".
-pub fn spawn_button_watch(pin: PinDriver<'static, Input>) {
-    let _ = thread::Builder::new().name("button".into()).stack_size(3072).spawn(move || {
-        let mut last = pin.is_low();
-        info!("[inventory] IO38_D (J7 pin 1) initial level: {}", if last { "LOW" } else { "HIGH (pull-up)" });
-        loop {
-            let now = pin.is_low();
-            if now != last {
-                info!("[inventory] IO38_D button {}", if now { "PRESSED (low)" } else { "released (high)" });
-                last = now;
-            }
-            thread::sleep(Duration::from_millis(20));
-        }
-    });
-}

@@ -73,6 +73,12 @@ embedded-hal = "1.0"
 # 0.12 is the release that targets esp-idf-svc 0.52 (0.13 wants 0.53).
 esp32-nimble = "0.12"
 
+[features]
+# Stereo INMP441 pair on I2S0 RX (IO42 SCK, IO18 WS, IO38 SD), captured
+# while the IO44 push-to-talk button is held; off by default so no image
+# drives pins the owner has not wired. See src/ptt.rs.
+ptt-mic = []
+
 [build-dependencies]
 embuild = "0.33"
 
