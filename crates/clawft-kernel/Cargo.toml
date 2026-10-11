@@ -73,6 +73,8 @@ ecc = ["clawft-core/vector-memory", "dep:blake3", "dep:clawft-bvh"]
 quantum-pasqal = ["ecc", "dep:reqwest"]
 quantum-braket = ["ecc", "dep:reqwest"]
 diskann = ["ecc", "dep:ruvector-diskann"]
+# Bench-only: RaBitQ runner in benches/vector_backend_bench.rs.
+rabitq-bench = ["dep:ruvector-rabitq"]
 onnx-embeddings = ["dep:ort", "dep:ndarray", "dep:tokenizers", "dep:half"]
 wasm-sandbox = ["dep:wasmtime", "dep:wasmtime-wasi"]
 os-patterns = ["exochain"]
@@ -103,6 +105,7 @@ ruvector-cluster = { workspace = true, optional = true }
 ruvector-raft = { workspace = true, optional = true }
 ruvector-replication = { workspace = true, optional = true }
 ruvector-diskann = { workspace = true, optional = true }
+ruvector-rabitq = { workspace = true, optional = true }
 parking_lot = { workspace = true, optional = true }
 futures = { workspace = true, optional = true }
 exo-resource-tree = { workspace = true, optional = true }

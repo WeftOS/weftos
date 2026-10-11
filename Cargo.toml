@@ -362,6 +362,8 @@ ruvector-cluster = "2.0"
 ruvector-raft = "2.0"
 ruvector-replication = "2.0"
 ruvector-diskann = "2.1"
+# 2026-10 bench-only (kernel `rabitq-bench` feature); no product code uses it.
+ruvector-rabitq = "2.3"
 # WEFT-46: HybridRouter v2.5 sona-backed skill rerank (feature-gated
 # behind clawft-core `hybrid-rerank` so default builds never pull it).
 ruvector-sona = "0.2"
