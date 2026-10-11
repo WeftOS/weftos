@@ -166,6 +166,18 @@ cmd_native_debug() {
     report_binary_size "target/debug/weaver" "Native binary (weave, debug)"
 }
 
+# ADR-118 C3: the chief-of-staff agent host. `--features mic` adds cpal
+# push-to-talk capture; `--features mic,onnx` adds real parakeet STT.
+cmd_cos() {
+    header "Building chief-of-staff host (weftos-cos, debug)"
+    timer_start
+    local args=(cargo build -p weftos-cos --bin weftos-cos)
+    [ -n "$FEATURES" ] && args+=(--features "$FEATURES")
+    run_cmd "${args[@]}"
+    timer_end
+    report_binary_size "target/debug/weftos-cos" "Chief-of-staff host (weftos-cos, debug)"
+}
+
 # ── Build stamp env ─────────────────────────────────────────────────
 # Export GIT_SHA / GIT_DIRTY / BUILD_TS so the CLI + weaver build.rs bake
 # an authoritative, freshly-timestamped provenance stamp into the binary
@@ -1729,7 +1741,7 @@ cmd_agents_catalog() {
         timer_end
         return 0
     fi
-    node "$ROOT/scripts/agents-catalog.mjs" "${args[@]}"
+    node "$ROOT/scripts/agents-catalog.mjs" ${args[@]+"${args[@]}"}
     local rc=$?
     timer_end
     return $rc
@@ -2549,6 +2561,9 @@ ${BOLD}Usage:${NC} scripts/build.sh <command> [options]
 ${BOLD}Commands:${NC}
   native          Build native CLI binary (release)
   native-debug    Build native CLI binary (debug, fast)
+  cos             Build the chief-of-staff agent host (weftos-cos, debug; ADR-118 C3).
+                  --features mic adds push-to-talk capture, --features mic,onnx real STT.
+                  Run: target/debug/weftos-cos serve  (also `weft cos serve`)
   install         Build weft + weaver and install both to ~/.cargo/bin
                   (atomic replace, ad-hoc re-sign on macOS, fresh git build
                   stamp, prints versions). Release by default; --debug for
@@ -2934,6 +2949,7 @@ main() {
     case "$COMMAND" in
         native)       cmd_native ;;
         native-debug) cmd_native_debug ;;
+        cos)          cmd_cos ;;
         install)      cmd_install ;;
         gui-egui)     cmd_gui_egui ;;
         wasi)         cmd_wasi ;;

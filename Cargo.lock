@@ -1330,6 +1330,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "weftos-cos",
  "which",
 ]
 
@@ -10867,6 +10868,38 @@ dependencies = [
  "weftos-cog-host",
  "weftos-cog-market",
  "weftos-cog-repo",
+]
+
+[[package]]
+name = "weftos-cos"
+version = "0.8.4-rc.4"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "chrono",
+ "clap",
+ "clawft-channels",
+ "clawft-core",
+ "clawft-llm",
+ "clawft-platform",
+ "clawft-rpc",
+ "clawft-types",
+ "clawft-voice-onnx",
+ "cpal",
+ "dirs",
+ "futures-util",
+ "hound",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
