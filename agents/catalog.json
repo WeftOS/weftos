@@ -2,6 +2,45 @@
   "version": "0.8.4-rc.4",
   "agents": [
     {
+      "id": "chief-of-staff",
+      "name": "chief-of-staff",
+      "nickname": "CoS",
+      "kind": "specialist",
+      "role": "Chief of staff for one owner — plans, prioritises, kicks off work, keeps notes",
+      "description": "A concise, candid chief of staff for one owner. It reads what is going on across the owner's projects (board, goals, project history, node health), says what matters and what it would do next, starts work when told to, and keeps notes. It writes nothing shared itself: board writes are staged for the steward, docs go to the doc-gardener, memory to liber, and a purpose check goes to mo. Anything outward-facing, destructive or production-touching waits for a confirmation turn from the owner. Use when: the owner asks \"where are we\", \"what should I do next\", \"start X on card Y\", \"note that ...\", or \"is the mesh healthy\"; a spoken turn from the console arrives. NOT for: writing the board, docs or memory directly (delegate); handling the owner's credentials; acting on production or sending anything outward without a confirmation turn; long autonomous runs (it kicks off lanes, it does not become one).",
+      "trust_tier": "core",
+      "capabilities": [
+        "activity_read",
+        "manifest_stage",
+        "history_note",
+        "work_kickoff",
+        "node_health_read"
+      ],
+      "hosts": [
+        "claude",
+        "grok",
+        "codex"
+      ],
+      "skills": [
+        "chief-of-staff"
+      ],
+      "requires": [
+        {
+          "skill": "chief-of-staff"
+        }
+      ],
+      "provenance": {
+        "source_registry": "WeftOS (ADR-118 section 3)",
+        "source_url": null,
+        "upstream_license": "none (in-tree)",
+        "upstream_commit": null,
+        "adopted_at": "2026-10-10",
+        "verdict": "build",
+        "notes": "Built for the chief-of-staff console (ADR-118). The agent carries method only; project facts (board, token path, team runtime) come from project-context. It directs the owner's team and holds no write authority of its own: board writes go through the steward, docs through the doc-gardener, memory through liber, purpose checks to mo. Runtime host: crates/weftos-cos (`weftos-cos serve`, `weft cos serve`)."
+      },
+      "path": "agents/chief-of-staff"
+    },
+    {
       "id": "developer",
       "name": "developer",
       "nickname": "(none — role-named lane)",
@@ -553,6 +592,24 @@
       ],
       "members": [
         {
+          "agent": "chief-of-staff",
+          "nickname": "CoS",
+          "position": 0,
+          "one_job": "Turn the owner's asks into ranked, delegated next moves.",
+          "model_tier": "top",
+          "authority": "supervised",
+          "owner": "principal-owner",
+          "must_not": [
+            "write the board, docs or memory directly",
+            "kick off work or act on production without a confirmation turn",
+            "read, repeat or log a credential"
+          ],
+          "tiers": [
+            "internal"
+          ],
+          "active": true
+        },
+        {
           "agent": "steward",
           "nickname": "Stew",
           "position": 1,
@@ -717,6 +774,31 @@
       ],
       "schema": 1,
       "edges": [
+        {
+          "from": "chief-of-staff",
+          "to": "steward",
+          "kind": "delegates_to"
+        },
+        {
+          "from": "chief-of-staff",
+          "to": "doc-gardener",
+          "kind": "delegates_to"
+        },
+        {
+          "from": "chief-of-staff",
+          "to": "liber",
+          "kind": "delegates_to"
+        },
+        {
+          "from": "chief-of-staff",
+          "to": "developer",
+          "kind": "delegates_to"
+        },
+        {
+          "from": "chief-of-staff",
+          "to": "mo",
+          "kind": "consults"
+        },
         {
           "from": "developer",
           "to": "steward",

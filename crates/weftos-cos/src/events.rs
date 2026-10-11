@@ -1,0 +1,175 @@
+//! Event shapes on `GET /v1/cos/events` (contract §3) and the redaction
+//! pass every event goes through before it leaves the agent.
+
+use serde::{Deserialize, Serialize};
+
+use crate::conversation::TurnId;
+
+/// Agent state for the console's avatar and status line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentState {
+    Idle,
+    Listening,
+    Thinking,
+    Speaking,
+    Blocked,
+}
+
+/// One server-sent event. `kind` is the discriminator the contract names.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum Event {
+    State {
+        state: AgentState,
+        /// Only with `Blocked`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
+    Token {
+        turn_id: TurnId,
+        text: String,
+    },
+    Message {
+        turn_id: TurnId,
+        text: String,
+        #[serde(rename = "final")]
+        is_final: bool,
+    },
+    /// A tool call record: name, a one-line summary and a status. Never the
+    /// arguments.
+    Tool {
+        name: String,
+        summary: String,
+        status: String,
+    },
+    Page {
+        turn_id: TurnId,
+        markdown: String,
+    },
+    Status {
+        task: String,
+        model: String,
+        lanes_running: u32,
+    },
+}
+
+impl Event {
+    pub fn state(state: AgentState) -> Self {
+        Self::State { state, reason: None }
+    }
+
+    pub fn blocked(reason: impl Into<String>) -> Self {
+        Self::State { state: AgentState::Blocked, reason: Some(reason.into()) }
+    }
+
+    /// Redact every string field in place (see [`redact`]).
+    pub fn redacted(mut self) -> Self {
+        match &mut self {
+            Event::State { reason: Some(r), .. } => *r = redact(r),
+            Event::State { .. } => {}
+            Event::Token { text, .. } | Event::Message { text, .. } => *text = redact(text),
+            Event::Tool { summary, status, .. } => {
+                *summary = redact(summary);
+                *status = redact(status);
+            }
+            Event::Page { markdown, .. } => *markdown = redact(markdown),
+            Event::Status { task, .. } => *task = redact(task),
+        }
+        self
+    }
+}
+
+const REDACTED: &str = "[redacted]";
+
+/// Prefixes that mark a credential-shaped token: harness and node bearer
+/// tokens, common API-key shapes, and an explicit `Bearer` header.
+const SECRET_PREFIXES: &[&str] = &["wfb_", "wft_", "sk-", "sk_", "ghp_", "xoxb-", "AKIA"];
+
+fn is_token_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | '+' | '=')
+}
+
+/// Replace credential-shaped substrings with `[redacted]`.
+///
+/// Conservative on purpose: a prefix followed by at least 16 token characters
+/// is treated as a secret; `Bearer <token>` is redacted whole. Everything else
+/// passes unchanged, so normal prose and ids are not mangled.
+pub fn redact(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut rest = input;
+    while !rest.is_empty() {
+        if let Some((start, len)) = find_secret(rest) {
+            out.push_str(&rest[..start]);
+            out.push_str(REDACTED);
+            rest = &rest[start + len..];
+        } else {
+            out.push_str(rest);
+            break;
+        }
+    }
+    out
+}
+
+/// Byte offset and length of the earliest secret-shaped run in `s`.
+fn find_secret(s: &str) -> Option<(usize, usize)> {
+    let mut best: Option<(usize, usize)> = None;
+    for (idx, _) in s.char_indices() {
+        let tail = &s[idx..];
+        let at_boundary = idx == 0 || !is_token_char(s[..idx].chars().next_back().unwrap_or(' '));
+        if !at_boundary {
+            continue;
+        }
+        let mut hit: Option<usize> = None;
+        if let Some(after) = tail.strip_prefix("Bearer ") {
+            let run = after.chars().take_while(|c| is_token_char(*c)).count();
+            if run >= 8 {
+                hit = Some("Bearer ".len() + after.chars().take(run).map(char::len_utf8).sum::<usize>());
+            }
+        }
+        if hit.is_none() {
+            for p in SECRET_PREFIXES {
+                if let Some(after) = tail.strip_prefix(p) {
+                    let run = after.chars().take_while(|c| is_token_char(*c)).count();
+                    if run >= 16 {
+                        hit = Some(p.len() + after.chars().take(run).map(char::len_utf8).sum::<usize>());
+                    }
+                    break;
+                }
+            }
+        }
+        if let Some(len) = hit {
+            best = Some((idx, len));
+            break;
+        }
+    }
+    best
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn redacts_harness_token_shapes() {
+        let tok = format!("wfb_{}", "a".repeat(64));
+        let s = format!("token is {tok} ok");
+        assert_eq!(redact(&s), "token is [redacted] ok");
+        let s = format!("Authorization: Bearer {tok}");
+        assert_eq!(redact(&s), "Authorization: [redacted]");
+    }
+
+    #[test]
+    fn leaves_prose_and_short_ids_alone() {
+        assert_eq!(redact("WEFT-684 is done; sk-1 is not a key"), "WEFT-684 is done; sk-1 is not a key");
+        assert_eq!(redact("subtask_sk_name"), "subtask_sk_name");
+    }
+
+    #[test]
+    fn event_serializes_with_kind_and_final() {
+        let e = Event::Message { turn_id: TurnId::new(), text: "hi".into(), is_final: true };
+        let v = serde_json::to_value(&e).unwrap();
+        assert_eq!(v["kind"], "message");
+        assert_eq!(v["final"], true);
+    }
+}

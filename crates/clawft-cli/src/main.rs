@@ -60,6 +60,9 @@ enum Commands {
     /// Start the gateway (channels + agent loop).
     Gateway(commands::gateway::GatewayArgs),
 
+    /// Chief-of-staff agent host: conversation API and push-to-talk (ADR-118).
+    Cos(commands::cos_cmd::CosArgs),
+
     /// Manage MCP server connections (add / list / remove).
     Mcp(commands::mcp_cmd::McpArgs),
 
@@ -444,6 +447,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
     match cli.command {
         Commands::Agent(args) => commands::agent::run(args).await?,
         Commands::Gateway(args) => commands::gateway::run(args).await?,
+        Commands::Cos(args) => commands::cos_cmd::run(args).await?,
         Commands::Mcp(args) => commands::mcp_cmd::run(args).await?,
         #[cfg(feature = "services")]
         Commands::McpServer(args) => commands::mcp_server::run(args).await?,

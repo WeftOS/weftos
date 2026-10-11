@@ -1,0 +1,62 @@
+[package]
+name = "weftos-cos"
+version.workspace = true
+# rationale: in-tree host for the chief-of-staff console agent (ADR-118 C3);
+# ships as a workspace binary, not on crates.io.
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Chief-of-staff agent host: loopback conversation API (HTTP/SSE), gated tools, model routing and push-to-talk STT (ADR-118 C3)"
+
+[[bin]]
+name = "weftos-cos"
+path = "src/bin/weftos-cos.rs"
+
+[features]
+default = []
+# cpal capture from the Mac's default input while the push-to-talk button is
+# held. Off by default so the workspace build never compiles cpal.
+mic = ["dep:cpal"]
+# Real parakeet-tdt inference for STT (pulls `ort`). Without it the STT
+# backend reports the model absent and the voice path returns no transcript.
+onnx = ["clawft-voice-onnx/onnx"]
+
+[dependencies]
+# Existing WeftOS model routing: `create_adapter_from_config` resolves the
+# provider for a `provider/model` id with the app's provider overrides and the
+# placement hook; `TaskComplexityAnalyzer` scores a turn for quick vs plan.
+clawft-core = { workspace = true, features = ["native", "full"] }
+clawft-types = { workspace = true, features = ["native"] }
+clawft-platform = { workspace = true, features = ["native"] }
+clawft-llm = { workspace = true, features = ["native"] }
+# Read-only daemon RPC (`cluster.status`, `cluster.nodes`) for nodes.health.
+clawft-rpc = { workspace = true }
+# The voice seams: SttBackend, Utterance (zeroized on drop), VoiceError.
+clawft-channels = { workspace = true, features = ["voice"] }
+# Native parakeet STT; weights-free without `onnx`.
+clawft-voice-onnx = { path = "../clawft-voice-onnx" }
+
+axum = { version = "0.8", default-features = false, features = ["json", "tokio", "http1"] }
+futures-util = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+dirs = { workspace = true }
+hound = { workspace = true }
+clap = { workspace = true }
+cpal = { version = "0.15", optional = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

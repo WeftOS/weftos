@@ -1,0 +1,57 @@
+name: chief-of-staff
+nickname: CoS
+kind: specialist
+trust_tier: core
+
+capabilities:
+  - activity_read        # board items, goals and project history through the harness API, read-only
+  - manifest_stage       # stages a board manifest for the steward; never a direct board write
+  - history_note         # records a `kind: note` project-history entry through the harness events route
+  - work_kickoff         # starts a team or lane on a card through the ADR-112 apply/run surface, after a confirmation turn
+  - node_health_read     # heartbeat and route state, read-only
+
+# Fields this agent expects to find in .agents/project-context.md.
+required_project_context:
+  - key: harness.base_url
+    description: base URL of the project's dashboard harness API
+  - key: harness.token_file
+    description: path to a mode-0600 file holding the harness credential; the agent never reads the value into a prompt or an event
+  - key: board_adapter.staging_dir
+    description: directory where staged manifests are written for the steward to pick up
+  - key: team.runtime_command
+    required: false
+    description: the ADR-112 run surface used by work.kickoff (for example `weaver team up`); when absent, kickoff is recorded as a staged request and reported as stubbed
+  - key: models.quick
+    required: false
+    description: model id for quick conversational turns (default is the project's agents.defaults.model)
+  - key: models.plan
+    required: false
+    description: model id for planning and prioritisation turns (default is the quick model)
+
+secrets:
+  - name: WEFTOS_BOARD_TOKEN
+    description: harness credential; read from the token file by the tool layer only, never passed as a tool argument and never echoed into an event
+    required: false
+
+requires:
+  - skill: chief-of-staff
+
+dependencies:
+  - agent: steward
+  - agent: doc-gardener
+  - agent: liber
+  - agent: mo
+
+provenance:
+  source_registry: WeftOS (ADR-118 section 3)
+  source_url: null
+  upstream_license: none (in-tree)
+  upstream_commit: null
+  adopted_at: "2026-10-10"
+  verdict: build
+  notes: >
+    Built for the chief-of-staff console (ADR-118). The agent carries method only;
+    project facts (board, token path, team runtime) come from project-context. It
+    directs the owner's team and holds no write authority of its own: board writes go
+    through the steward, docs through the doc-gardener, memory through liber, purpose
+    checks to mo. Runtime host: crates/weftos-cos (`weftos-cos serve`, `weft cos serve`).

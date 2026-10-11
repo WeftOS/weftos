@@ -19,6 +19,21 @@ shared_skills:
   - lead-doctrine
 
 members:
+  # The owner's chief of staff (ADR-118 §3). Directs the team, holds no write
+  # authority: board via Stew, docs via Doc, memory via Liber, purpose via Mo.
+  - agent: chief-of-staff
+    nickname: CoS
+    position: 0
+    one_job: Turn the owner's asks into ranked, delegated next moves.
+    model_tier: top
+    authority: supervised
+    owner: principal-owner
+    must_not:
+      - write the board, docs or memory directly
+      - kick off work or act on production without a confirmation turn
+      - read, repeat or log a credential
+    tiers: [internal]
+    active: true
   - agent: steward
     nickname: Stew
     position: 1
@@ -139,6 +154,21 @@ members:
 # producers hand staged manifests to the steward, findings to the docs owner,
 # lessons to the memory router; advisors are consult-only and never block.
 edges:
+  - from: chief-of-staff
+    to: steward
+    kind: delegates_to
+  - from: chief-of-staff
+    to: doc-gardener
+    kind: delegates_to
+  - from: chief-of-staff
+    to: liber
+    kind: delegates_to
+  - from: chief-of-staff
+    to: developer
+    kind: delegates_to
+  - from: chief-of-staff
+    to: mo
+    kind: consults
   - from: developer
     to: steward
     kind: consumes

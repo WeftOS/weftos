@@ -14,6 +14,7 @@ pub mod analyze_cmd;
 pub mod assess_cmd;
 pub mod channels;
 pub mod config_cmd;
+pub mod cos_cmd;
 pub mod cron;
 pub mod doctor;
 pub mod daemon_conn;

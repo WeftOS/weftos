@@ -34,8 +34,8 @@ delegate = ["clawft-services/delegate", "clawft-tools/delegate"]
 # `weft voice talk` command drives `clawft_voice_talk::live::run_live` (cpal mic+
 # speaker via `live-audio`). Real STT/TTS/speaker inference needs `voice-onnx`
 # (pulls `ort`); without it the graph still constructs and degrades gracefully.
-voice = ["clawft-tools/voice", "clawft-plugin/voice", "dep:clawft-voice-talk", "clawft-voice-talk/live-audio"]
-voice-onnx = ["voice", "clawft-voice-talk/onnx"]
+voice = ["clawft-tools/voice", "clawft-plugin/voice", "dep:clawft-voice-talk", "clawft-voice-talk/live-audio", "weftos-cos/mic"]
+voice-onnx = ["voice", "clawft-voice-talk/onnx", "weftos-cos/onnx"]
 api = ["clawft-services/api"]
 
 [dependencies]
@@ -48,6 +48,8 @@ clawft-channels = { workspace = true, optional = true }
 # Native ECC Talk-Mode assembly (ADR-062 P6) — wired by the `voice` feature.
 clawft-voice-talk = { path = "../clawft-voice-talk", optional = true }
 clawft-llm = { workspace = true }
+# Chief-of-staff agent host behind `weft cos serve` (ADR-118 C3).
+weftos-cos = { path = "../weftos-cos" }
 clawft-services = { workspace = true, optional = true }
 clawft-plugin = { workspace = true }
 clawft-security = { workspace = true }
