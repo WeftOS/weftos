@@ -63,6 +63,27 @@ impl LlmProvider for ScriptedLlm {
     async fn complete(&self, model: &str, messages: &[Value], _: &[Value], _: Option<i32>, _: Option<f64>, _: Option<&Value>) -> Result<Value, String> {
         Ok(self.next(model, messages))
     }
+
+    /// Streams the scripted text as small chunks (as a real provider would),
+    /// then returns the scripted response.
+    async fn complete_stream(
+        &self,
+        model: &str,
+        messages: &[Value],
+        _: &[Value],
+        _: Option<i32>,
+        _: Option<f64>,
+        _: Option<&Value>,
+        tx: tokio::sync::mpsc::Sender<String>,
+    ) -> Result<Value, String> {
+        let v = self.next(model, messages);
+        if let Some(text) = v["choices"][0]["message"]["content"].as_str() {
+            for chunk in text.split_inclusive(' ') {
+                let _ = tx.send(chunk.to_string()).await;
+            }
+        }
+        Ok(v)
+    }
 }
 
 /// A fake dashboard harness: tickets, goals, an events route and a comment
