@@ -41,6 +41,9 @@ pub mod parakeet;
 mod parakeet_tdt;
 pub mod silero_vad;
 pub mod smart_turn;
+pub mod turn_compare;
+pub mod turn_compare_report;
+pub mod wav_input;
 pub mod whisper_mel;
 
 pub use ecapa::{EMBED_DIM, EcapaEmbedder};

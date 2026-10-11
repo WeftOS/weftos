@@ -26,6 +26,10 @@ async-trait = { workspace = true }
 tracing = { workspace = true }
 # Pure-Rust FFT for the mel-fbank front-end (always compiled + unit-tested).
 rustfft = { workspace = true }
+# Offline turn-comparison tool: WAV input + JSON report.
+hound = { workspace = true }
+tokio = { workspace = true }
+serde_json = { workspace = true }
 # Workspace pins ort with default-features = false; re-list the default set
 # (matches clawft-kernel) so real ECAPA inference works under `onnx`.
 ort = { workspace = true, optional = true, features = [
@@ -38,7 +42,7 @@ ort = { workspace = true, optional = true, features = [
     "api-24",
 ] }
 
-[dev-dependencies]
-tokio = { workspace = true }
-serde_json = { workspace = true }
-hound = { workspace = true }
+
+[[bin]]
+name = "smart-turn-compare"
+path = "src/bin/smart_turn_compare.rs"
