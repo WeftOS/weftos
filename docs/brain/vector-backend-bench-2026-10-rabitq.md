@@ -124,5 +124,43 @@ Verdict: keep `ruvector-rabitq` on watch; do not adopt. Worth a follow-up card f
 ## Not established
 
 - Real-embedding recall; recall under deletes or updates; `persist` module not exercised.
-- The cause of the HNSW arm's difference from July.
+- Why HNSW QPS at 18 threads is still below its 1-thread QPS (see the addendum).
 - Per-arm RSS free of the corpus (only whole-process RSS and the crate's `memory_bytes`).
+
+## Addendum: HNSW regression diagnosed and fixed (card f91ab271)
+
+The harness was not the cause: dataset generator, `ef_search=14`, `ef_construction=200`, cosine,
+and `instant-distance 0.6.1` are unchanged since the July run (`077d670e9`). The product path
+regressed in `clawft-kernel` after July, in two places.
+
+1. WEFT-385 region-guided search was on by default (`HnswEmlConfig::path_predict_enabled`).
+   `HnswService::search` then stopped traversing the HNSW graph and scored only the 2 nearest of 16
+   k-means regions, cloning the path table on every query under the service lock. With 300 clusters
+   that is a recall cap, not a speed knob: recall@10 0.943 -> 0.493, deterministic. It is now
+   opt-in (default `false`).
+2. The adaptive-ef layer called `HnswStore::set_ef_search` from inside `search`. That rebuilds the
+   whole graph (instant-distance bakes `ef_search` into the built index). Once the EML models
+   trained (every 1000 searches) and the learned ef differed from the configured one, searches
+   rebuilt the index under the lock. This is the 100K "10 ms/query" and the throughput that fell
+   as threads were added. The prediction is now advisory; `search` never retunes ef.
+
+Harness fix: HNSW builds its graph on the first query, so the old runs charged that cost to the
+latency/QPS means and reported build as `~0`. `run_backend` now does one untimed warm-up query
+after `flush()`, so graph construction lands in `build_ms`.
+
+Same machine, HNSW arm alone, release profile, `WEFT_BENCH_ONLY=hnsw`:
+
+| n | state | recall@10 | p50 us | p95 us | QPS 1 thread | QPS 18 threads | build ms |
+|---|---|---|---|---|---|---|---|
+| 10K | before (HEAD, guided on) | 0.493 | 1,553 | 1,871 | 115 (includes lazy build) | 93 | ~0 (mis-reported) |
+| 10K | after | 0.939 | 459 | 585 | 2,132 | 321 | 29,372 |
+| 100K | before (table above) | 0.577 | 10,165 | - | 18 | 12 | ~0 (mis-reported) |
+| 100K | after | 0.909 | 628 | 899 | 1,512 | 243 | 476,007 |
+
+Still open: QPS at 18 threads is below 1-thread QPS because `HnswService::search` holds the store
+mutex and the EML mutex for the whole query (`HnswStore::query` takes `&mut self` for the lazy
+rebuild), and EML training/recall checks also run under that lock. The graph build is slow
+(29 s at 10K, 476 s at 100K at `ef_construction=200`, 384-dim); that was always the cost and is
+now visible. Regression tests: `default_search_recall_floor`, `search_never_changes_ef_search`
+(`hnsw_service.rs`) and `path_predict_is_opt_in` (`hnsw_eml.rs`).
+

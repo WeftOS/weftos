@@ -337,6 +337,11 @@ fn run_backend(
     // returns anything at all; timed separately from insert throughput.
     let build_t0 = Instant::now();
     backend.flush().expect("bench flush should not fail");
+    // HNSW builds its graph lazily on the first query; run one untimed
+    // query so that cost lands in `build_ms`, not in the latency/QPS means.
+    if let Some(qv) = queries.first() {
+        let _ = backend.search(qv, 10);
+    }
     let build_ms = build_t0.elapsed().as_secs_f64() * 1000.0;
 
     let rss_mb = read_rss_mb();
