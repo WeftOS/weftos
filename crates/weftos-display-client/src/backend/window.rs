@@ -1,11 +1,12 @@
 //! Desktop window backend: the simulated leaf shown in the simulator's
 //! SDL2 window, with the mouse standing in for touch and the space bar
-//! for the push-to-talk button.
+//! for the push-to-talk button. Other keys arrive as `key.char` /
+//! `key.named` sensors (see [`crate::keys`]) for development typing.
 //!
 //! SDL wants its window and event pump on the main thread (macOS
 //! enforces it), so open and poll the session from `main`.
 
-use embedded_graphics_simulator::sdl2::{Keycode, MouseButton};
+use embedded_graphics_simulator::sdl2::{Keycode, Mod, MouseButton};
 use embedded_graphics_simulator::{OutputSettingsBuilder, SimulatorEvent, Window};
 use weftos_leaf_scene::{DisplayId, SceneEnvelope};
 
@@ -13,6 +14,8 @@ use super::sim::{LeafSim, SimBackend};
 use super::{Backend, BackendEvent};
 use crate::caps::{DisplayCapabilities, DisplaySize};
 use crate::error::DisplayError;
+use crate::event::SensorValue;
+use crate::keys::key_sensor;
 use crate::target::WindowConfig;
 
 pub(crate) struct WindowBackend {
@@ -66,11 +69,17 @@ impl WindowBackend {
                     self.mouse_down = false;
                     self.sim.touch_up(point.x, point.y);
                 }
-                SimulatorEvent::KeyDown { keycode, repeat, .. }
-                    if keycode == Keycode::Space && !repeat && !self.ptt_down =>
-                {
-                    self.ptt_down = true;
-                    self.sim.ptt(true);
+                SimulatorEvent::KeyDown { keycode, keymod, repeat } => {
+                    if keycode == Keycode::Space && !repeat && !self.ptt_down {
+                        self.ptt_down = true;
+                        self.sim.ptt(true);
+                    }
+                    // Every press (repeats included) also reports as a
+                    // key, so a held Backspace keeps deleting.
+                    let shift = keymod.intersects(Mod::LSHIFTMOD | Mod::RSHIFTMOD);
+                    if let Some((name, value)) = key_sensor(&keycode.name(), shift) {
+                        self.sim.sensor(name, SensorValue::Text(value));
+                    }
                 }
                 SimulatorEvent::KeyUp { keycode, .. }
                     if keycode == Keycode::Space && self.ptt_down =>

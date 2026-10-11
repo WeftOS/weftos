@@ -35,10 +35,21 @@ weftos-leaf-scene = { path = "../weftos-leaf-scene", features = ["std"] }
 weftos-leaf-renderer = { path = "../weftos-leaf-renderer", features = ["std"] }
 weftos-leaf-sim = { path = "../weftos-leaf-sim" }
 embedded-graphics-simulator = { version = "0.8", default-features = false }
+# Host (ADR-118 C3): the agent's HTTP/SSE API from a synchronous loop.
+# Loopback plain HTTP, so no TLS; `json` for the request/reply bodies.
+ureq = { version = "2.12", default-features = false, features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Wall clock for the status strip (`HH:MM`, local time).
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 [[bin]]
 name = "cos-console-demo"
 path = "src/bin/cos_console_demo.rs"
+
+[[bin]]
+name = "cos-console-host"
+path = "src/bin/cos_console_host.rs"
 
 [profile.dev]
 opt-level = 1
