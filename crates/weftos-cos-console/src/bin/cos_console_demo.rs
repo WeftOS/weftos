@@ -1,23 +1,31 @@
-//! `cos-console-demo`: replay a scripted conversation in the simulator
-//! and write key frames as PNGs.
+//! `cos-console-demo`: replay a scripted conversation through a real
+//! `DisplaySession` on the simulated leaf, in real time (so the
+//! session's op budget is respected), and write key frames as PNGs
+//! rendered from the leaf's snapshot.
 //!
 //! ```bash
 //! scripts/build.sh cos-console-demo            # writes docs/design/cos-console/*.png
-//! cargo run --release --bin cos-console-demo -- --out <dir>
+//! cargo run --release --bin cos-console-demo -- --out <dir> [--fast]
 //! ```
 
 use std::path::PathBuf;
+use std::time::Duration;
 
-use weftos_cos_console::session::SimSession;
-use weftos_cos_console::theme::CHAT;
-use weftos_cos_console::{AgentState, Console, PageDoc, StatusLine};
+use weftos_cos_console::frame::{open_sim, open_sim_unmetered, render_png};
+use weftos_cos_console::theme::{CHAT, GUIDE_HEAD, GUIDE_SIDE, PAD, TOUCH_MIN};
+use weftos_cos_console::{
+    AgentState, Checklist, ChecklistItem, Choice, Console, LeafSim, Layout, PageDoc, StatusLine,
+    Steps, Survey,
+};
 
 const FRAME_MS: u32 = 40;
 
 struct Replay<'a> {
-    console: Console<'a, SimSession>,
+    console: Console<'a>,
+    sim: LeafSim,
     now_ms: u32,
     out: PathBuf,
+    realtime: bool,
 }
 
 impl Replay<'_> {
@@ -26,18 +34,20 @@ impl Replay<'_> {
         let frames = ms.div_ceil(FRAME_MS).max(1);
         for _ in 0..frames {
             self.now_ms += FRAME_MS;
-            self.console.pump_events().expect("events");
+            if self.realtime {
+                std::thread::sleep(Duration::from_millis(FRAME_MS as u64));
+            }
+            for a in self.console.pump_events().expect("events") {
+                eprintln!("  guide answer: {a:?}");
+            }
             self.console.tick(self.now_ms).expect("tick");
         }
     }
 
     fn snapshot(&mut self, name: &str) {
-        let now = self.now_ms;
-        let s = self.console.session();
-        s.render(now).expect("render");
         let path = self.out.join(format!("{name}.png"));
-        s.save_png(&path).expect("png");
-        eprintln!("wrote {}  (t={} ms)", path.display(), now);
+        render_png(&self.sim.snapshot(), &path).expect("png");
+        eprintln!("wrote {}  (t={} ms)", path.display(), self.now_ms);
     }
 
     fn stream(&mut self, text: &str, msg_id: u64, chunk: usize, ms_per_chunk: u32) {
@@ -49,11 +59,20 @@ impl Replay<'_> {
         }
     }
 
-    fn drag_chat(&mut self, dy: i32) {
-        let x = CHAT.x + 200;
-        let y0 = CHAT.y + 160;
-        let s = self.console.session();
-        s.swipe((x, y0), (x, y0 + dy), 8);
+    /// A finger gesture from `from` to `to` in `steps` moves.
+    fn swipe(&mut self, from: (i32, i32), to: (i32, i32), steps: i32) {
+        self.sim.touch_down(from.0, from.1);
+        for i in 1..=steps {
+            let x = from.0 + (to.0 - from.0) * i / steps;
+            let y = from.1 + (to.1 - from.1) * i / steps;
+            self.sim.touch_move(x, y);
+        }
+        self.sim.touch_up(to.0, to.1);
+        self.advance(FRAME_MS);
+    }
+
+    fn tap(&mut self, x: i32, y: i32) {
+        self.sim.tap(x, y);
         self.advance(FRAME_MS);
     }
 }
@@ -61,19 +80,24 @@ impl Replay<'_> {
 fn main() {
     let mut args = std::env::args().skip(1);
     let mut out = PathBuf::from("docs/design/cos-console");
+    let mut realtime = true;
     while let Some(a) = args.next() {
-        if a == "--out" {
-            out = PathBuf::from(args.next().expect("--out <dir>"));
+        match a.as_str() {
+            "--out" => out = PathBuf::from(args.next().expect("--out <dir>")),
+            "--fast" => realtime = false,
+            _ => {}
         }
     }
     std::fs::create_dir_all(&out).expect("create output dir");
 
-    let mut sim = SimSession::new(800, 480);
-    let console = Console::new(&mut sim).expect("console");
+    let (mut session, sim) = if realtime { open_sim() } else { open_sim_unmetered() }.expect("session");
+    let console = Console::new(&mut session).expect("console");
     let mut r = Replay {
         console,
+        sim,
         now_ms: 0,
         out,
+        realtime,
     };
     r.console.set_time("09:14").unwrap();
     r.console
@@ -95,12 +119,7 @@ fn main() {
         0,
     );
     r.console.push_user_line("Remind me what is still open on the licence relay.").unwrap();
-    r.stream(
-        "Two cards: the retry on a stale token, and the log line for a refused checkout.",
-        11,
-        40,
-        0,
-    );
+    r.stream("Two cards: the retry on a stale token, and the log line for a refused checkout.", 11, 40, 0);
     r.console.push_user_line("Morning. Anything overnight?").unwrap();
     r.stream(
         "Quiet night. The cog-repo lane finished its x86 build and the dashboard reporter \
@@ -113,13 +132,13 @@ fn main() {
     r.snapshot("01-idle");
 
     // Push to talk, listen.
-    r.console.session().push_sensor("ptt.down", 1.0);
+    r.sim.ptt(true);
     r.console.set_agent_state(AgentState::Listening).unwrap();
     r.advance(700);
     r.snapshot("02-listening");
 
     // Transcript lands, the agent thinks on a frontier model.
-    r.console.session().push_sensor("ptt.up", 0.0);
+    r.sim.ptt(false);
     r.console
         .push_user_line("What's on my plate this morning, and is anything blocked?")
         .unwrap();
@@ -160,37 +179,114 @@ fn main() {
     r.advance(400);
 
     // Scroll back, then a new message arrives below.
-    r.drag_chat(140);
+    let x = CHAT.x + 200;
+    r.swipe((x, CHAT.y + 160), (x, CHAT.y + 300), 8);
     r.console.push_user_line("Yes, show me the plan.").unwrap();
     r.console.set_agent_state(AgentState::Thinking).unwrap();
     r.advance(300);
     r.snapshot("05-scrolled");
 
-    // Page mode.
-    r.console
-        .show_page(PageDoc {
-            title: "Plan for Friday 10 October".into(),
-            paragraphs: vec![
-                "09:30  Review the display-client session API (lane A). Unblocks the console merge; \
-                 fifteen minutes if the trait matches the contract.".into(),
-                "10:00  Licence relay: two cards, both one-file changes. Start a developer lane on \
-                 each and let the tester close them.".into(),
-                "11:00  PG cog host: read the two restart traces from 03:10. If the cause is the \
-                 env file reload, the fix from yesterday covers it; otherwise file a card.".into(),
-                "Afternoon is clear. Standup notes and the board summary are drafted and waiting \
-                 for your word before anything is posted.".into(),
-                "Say \"close\" or swipe right to return to the conversation.".into(),
-            ],
-        })
-        .unwrap();
+    // Page layout with the example page, then swipe back.
+    r.console.show_page(PageDoc::example()).unwrap();
     r.console.set_agent_state(AgentState::Idle).unwrap();
     r.advance(200);
     r.snapshot("06-page");
+    r.swipe((400, 300), (600, 310), 10);
+    assert_eq!(r.console.layout(), Layout::Split);
 
-    // Swipe right to return; a blocked state for the amber pose.
-    let s = r.console.session();
-    s.swipe((400, 300), (600, 310), 10);
-    r.advance(FRAME_MS);
+    // Back at the bottom of the log (a tap on the marker), then the
+    // guide layout: a checklist, with one item toggled by touch.
+    r.tap(CHAT.x + PAD + 100, CHAT.bottom() - 12);
+    r.console.push_user_line("Walk me through the release checklist.").unwrap();
+    r.console
+        .show_checklist(Checklist {
+            id: "rel-0.8.4".into(),
+            title: "Release 0.8.4 checklist".into(),
+            items: [
+                ("gate", "Phase gate green on target-0.8.4", true),
+                ("notes", "Release notes drafted", true),
+                ("sign", "Signing key present in the release environment", true),
+                ("pg", "PG rollout pinned in Terraform", false),
+                ("mac", "Mac binaries verified from the archive", false),
+                ("board", "Board cards moved to done", false),
+                ("tag", "Tag pushed and release published", false),
+            ]
+            .into_iter()
+            .map(|(id, text, done)| ChecklistItem { id: id.into(), text: text.into(), done })
+            .collect(),
+        })
+        .unwrap();
+    r.stream("Seven items; three are done. Tap one to toggle it, or tell me.", 3, 40, 0);
+    r.advance(200);
+    r.tap(GUIDE_SIDE.x + 150, GUIDE_SIDE.y + 40 + 3 * TOUCH_MIN + 32); // fourth row
+    r.advance(200);
+    r.snapshot("08-guide-checklist");
+
+    // Guide: steps, advanced once by the next button.
+    r.console
+        .show_steps(Steps {
+            id: "pg-cog-host".into(),
+            title: "Restart the PG cog host".into(),
+            steps: vec![
+                "Drain the queue: weaver cog host drain --wait".into(),
+                "Stop the unit: systemctl stop weft-cog-host".into(),
+                "Swap the binary from the verified archive".into(),
+                "Start the unit and watch the first heartbeat".into(),
+                "Confirm the catalog shows the new version".into(),
+            ],
+            current: 0,
+        })
+        .unwrap();
+    r.stream("Five steps. Say next when each one is done.", 4, 40, 0);
+    r.advance(200);
+    r.tap(GUIDE_HEAD.right() - PAD - 60, GUIDE_HEAD.bottom() - 10 - TOUCH_MIN / 2); // next
+    r.advance(200);
+    r.snapshot("09-guide-steps");
+
+    // Guide: a three-question survey; the first answer is on screen.
+    let questions = [
+        ("How did standup land?", "One tap. Your answer goes to the agent as a user turn.", vec![
+            (1, "Clear, nothing to follow up"),
+            (2, "Fine, one open question"),
+            (3, "Rough, needs a note"),
+        ]),
+        ("Priority for the afternoon?", "Pick one; the board gets re-ordered to match.", vec![
+            (1, "Licence relay cards"),
+            (2, "PG cog host traces"),
+            (3, "Display client review"),
+            (4, "Nothing, keep it clear"),
+        ]),
+        ("Post the standup notes now?", "They are drafted; nothing goes out until you say so.", vec![
+            (1, "Yes, post them"),
+            (2, "Hold until tomorrow"),
+        ]),
+    ];
+    let answers = [2, 3, 1];
+    for (i, (q, explain, choices)) in questions.iter().enumerate() {
+        r.console
+            .ask(Survey {
+                id: format!("fri-{}", i + 1),
+                question: (*q).into(),
+                explain: (*explain).into(),
+                choices: choices
+                    .iter()
+                    .map(|(n, c)| Choice { n: *n, caption: (*c).into() })
+                    .collect(),
+                index: i as u32 + 1,
+                total: 3,
+            })
+            .unwrap();
+        r.advance(200);
+        let row = answers[i] - 1;
+        r.tap(GUIDE_SIDE.x + 46, GUIDE_SIDE.y + 40 + row * 68 + 34);
+        r.advance(200);
+        if i == 0 {
+            r.snapshot("10-guide-survey");
+        }
+    }
+
+    // Back to the split; a blocked state for the amber pose.
+    r.console.set_layout(Layout::Split).unwrap();
     r.console
         .set_agent_state(AgentState::Blocked("waiting for approval: post standup notes".into()))
         .unwrap();

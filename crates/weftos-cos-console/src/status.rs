@@ -5,7 +5,7 @@ use weftos_leaf_scene::{Node, SceneOp};
 
 use crate::prim::{circle_fill, circle_stroke, text};
 use crate::text::{fit, truncate};
-use crate::theme::{AMBER, BODY, DIM, GREEN, PAD, SMALL, STATUS};
+use crate::theme::{AMBER, BODY, DIM, GREEN, PAD, SMALL, STATUS, STATUS_GUIDE};
 
 /// What the host reports (contract §2).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -50,6 +50,12 @@ const ID_PTT_RING: u32 = 203;
 const ID_PTT_DOT: u32 = 204;
 const ID_PTT_LABEL: u32 = 205;
 const ID_TIME: u32 = 206;
+/// Compact (one-line) variant for the guide layout.
+const ID_C_STATE: u32 = 210;
+const ID_C_TASK: u32 = 211;
+const ID_C_DETAIL: u32 = 212;
+const ID_C_PTT: u32 = 213;
+const ID_C_TIME: u32 = 214;
 
 const ROW1_Y: i32 = STATUS.y + 20;
 const ROW2_Y: i32 = STATUS.y + 46;
@@ -142,6 +148,42 @@ impl StatusView {
     pub fn ops(&self) -> Vec<SceneOp> {
         self.nodes().into_iter().map(SceneOp::Update).collect()
     }
+
+    /// One-line status for the guide layout, in `STATUS_GUIDE`.
+    pub fn nodes_compact(&self) -> Vec<Node> {
+        let b = STATUS_GUIDE;
+        let accent = if self.state.is_blocked() { AMBER } else { GREEN };
+        let y = b.y + 7;
+        let x0 = b.x + PAD;
+        let task_x = x0 + 10 * SMALL.cell_w;
+        let time_x = b.right() - PAD - 5 * SMALL.cell_w;
+        let ptt_cx = time_x - 16;
+        let detail_x = task_x + 24 * SMALL.cell_w;
+        let task = if self.status.task.is_empty() {
+            "-".to_string()
+        } else {
+            truncate(&self.status.task, 22)
+        };
+        let model = if self.status.model.is_empty() { "-" } else { &self.status.model };
+        let detail_cols = ((ptt_cx - 12 - detail_x) / SMALL.cell_w).max(4) as usize;
+        let detail = truncate(&format!("{model}  {} lanes", self.status.lanes_running), detail_cols);
+        let ptt = if self.status.ptt_active {
+            circle_fill(ID_C_PTT, ptt_cx, y + 5, 4, GREEN)
+        } else {
+            circle_stroke(ID_C_PTT, ptt_cx, y + 5, 4, DIM)
+        };
+        vec![
+            text(ID_C_STATE, &SMALL, x0, y, fit(self.state.word(), 9), accent),
+            text(ID_C_TASK, &SMALL, task_x, y, task, DIM),
+            text(ID_C_DETAIL, &SMALL, detail_x, y, detail, DIM),
+            ptt,
+            text(ID_C_TIME, &SMALL, time_x, y, fit(&self.time, 5), GREEN),
+        ]
+    }
+
+    pub fn ops_compact(&self) -> Vec<SceneOp> {
+        self.nodes_compact().into_iter().map(SceneOp::Update).collect()
+    }
 }
 
 #[cfg(test)]
@@ -166,6 +208,26 @@ mod tests {
             let bottom = weftos_leaf_scene::from_px_q8(r.bottom());
             assert!(x >= STATUS.x && right <= STATUS.right(), "{:?} overflows x", n.id);
             assert!(bottom <= STATUS.bottom(), "{:?} overflows y", n.id);
+        }
+    }
+
+    #[test]
+    fn compact_nodes_fit_the_one_line_box() {
+        let mut v = StatusView::new();
+        v.set_status(StatusLine {
+            task: "a long task description that needs truncating".into(),
+            model: "claude-sonnet-5-5".into(),
+            lanes_running: 3,
+            ptt_active: true,
+        });
+        for n in v.nodes_compact() {
+            assert!(ids::STATUS.contains(&n.id.path_hash()));
+            let r = n.aabb().unwrap();
+            let x = weftos_leaf_scene::from_px_q8(r.x);
+            let right = weftos_leaf_scene::from_px_q8(r.right());
+            let bottom = weftos_leaf_scene::from_px_q8(r.bottom());
+            assert!(x >= STATUS_GUIDE.x && right <= STATUS_GUIDE.right(), "{:?} overflows x", n.id);
+            assert!(bottom <= STATUS_GUIDE.bottom(), "{:?} overflows y", n.id);
         }
     }
 

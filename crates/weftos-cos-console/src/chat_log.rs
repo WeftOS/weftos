@@ -175,6 +175,13 @@ impl ChatLog {
         self.visible
     }
 
+    /// Change the window height (a layout switch); the scroll
+    /// position is clamped to the new range.
+    pub fn set_visible(&mut self, visible: usize) {
+        self.visible = visible.max(1);
+        self.clamp();
+    }
+
     pub fn max_scroll(&self) -> usize {
         self.lines.len().saturating_sub(self.visible)
     }

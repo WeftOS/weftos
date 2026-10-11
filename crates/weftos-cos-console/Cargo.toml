@@ -2,12 +2,10 @@
 #
 # ADR-118 C2: the chief-of-staff console screen as scene objects. A
 # green-screen vector interface on the 800×480 edge pad: wireframe
-# avatar, status strip, scrollable chat log, page-mode stub. Built on
-# `weftos-leaf-scene` ops and tested against `weftos-leaf-sim`.
-#
-# The display session is a small local trait (`DisplaySession`) with
-# the shape of contract §1 (`apply`, `poll_event`, `size`); lane A's
-# `weftos-display-client` is swapped in at merge.
+# avatar, status, scrollable chat log, page layout and the guide
+# layout's checklist, steps and survey views. Draws through
+# `weftos-display-client` (ADR-117 D1) and renders its key frames
+# from the simulated leaf's snapshot.
 #
 # Standalone crate — own workspace table like its leaf siblings, so
 # cargo does not walk up into the parent clawft workspace.
@@ -25,28 +23,22 @@ categories = ["gui", "graphics"]
 publish = false
 
 [features]
-default = ["sim"]
-# In-process simulator session (SceneStore + SimSurface) for the demo
-# binary and the tests. Off for a host that only talks to a real leaf.
-sim = [
-    "dep:weftos-leaf-sim",
-    "dep:weftos-leaf-renderer",
-    "dep:embedded-graphics-simulator",
-    "dep:embedded-graphics",
-]
+default = []
+# Desktop window target (SDL2) for the demo's `--window` flag.
+window = ["weftos-display-client/window"]
 
 [dependencies]
+weftos-display-client = { path = "../weftos-display-client" }
+# Frame export: a leaf snapshot rendered to PNG through the simulator
+# surface (headless, no SDL).
 weftos-leaf-scene = { path = "../weftos-leaf-scene", features = ["std"] }
-weftos-leaf-renderer = { path = "../weftos-leaf-renderer", features = ["std"], optional = true }
-weftos-leaf-sim = { path = "../weftos-leaf-sim", optional = true }
-# Headless PNG export of the simulator framebuffer (no SDL needed).
-embedded-graphics-simulator = { version = "0.8", default-features = false, optional = true }
-embedded-graphics = { version = "0.8", optional = true }
+weftos-leaf-renderer = { path = "../weftos-leaf-renderer", features = ["std"] }
+weftos-leaf-sim = { path = "../weftos-leaf-sim" }
+embedded-graphics-simulator = { version = "0.8", default-features = false }
 
 [[bin]]
 name = "cos-console-demo"
 path = "src/bin/cos_console_demo.rs"
-required-features = ["sim"]
 
 [profile.dev]
 opt-level = 1

@@ -1,13 +1,14 @@
-//! Page mode stub (C2): the visual panel expands to the full content
-//! area and shows a title and plain wrapped paragraphs. Drag to
-//! scroll; swipe right (or `hide_page`) to return to the split.
-//! Nodes 300–999: chrome at 300..400, lines recycled from 400..1000.
+//! The page layout: one full 800×456 region with a title and plain
+//! blocks (headings, paragraphs, bullet lists, rules). Drag to scroll;
+//! swipe right (or `hide_page`) returns to the split. Nodes 300–499:
+//! chrome at 300..400, lines recycled from 400..500. Rendered markdown
+//! and SVG come in C5; this is the C2 example page.
 
-use weftos_leaf_scene::{Layer, NodeId, SceneOp};
+use weftos_leaf_scene::{Layer, Node, NodeId, SceneOp};
 
 use crate::pool::LinePool;
 use crate::prim::{hit_rect, line, text};
-use crate::text::{truncate, wrap};
+use crate::text::{truncate, wrap, wrap_prefixed};
 use crate::theme::{
     ids, nid, BODY, DIM, GREEN, LINE_PITCH, PAGE, PAGE_COLS, PAGE_MARGIN, PAGE_TEXT_BOTTOM,
     PAGE_TEXT_TOP, PAGE_VISIBLE, SMALL,
@@ -16,17 +17,73 @@ use crate::theme::{
 /// Horizontal travel that counts as a swipe back to the split.
 pub const SWIPE_PX: i32 = 120;
 
-/// A page for the visual panel: title plus plain paragraphs.
+/// One block of a page.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PageBlock {
+    Heading(String),
+    Paragraph(String),
+    Bullets(Vec<String>),
+    Rule,
+}
+
+/// A page for the page layout: a title and blocks.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PageDoc {
     pub title: String,
-    pub paragraphs: Vec<String>,
+    pub blocks: Vec<PageBlock>,
+}
+
+impl PageDoc {
+    /// Title plus plain paragraphs.
+    pub fn paragraphs(title: impl Into<String>, paragraphs: Vec<String>) -> Self {
+        Self {
+            title: title.into(),
+            blocks: paragraphs.into_iter().map(PageBlock::Paragraph).collect(),
+        }
+    }
+
+    /// The C2 example page: headings, paragraphs, a bullet list and a
+    /// rule, so every block kind is on screen.
+    pub fn example() -> Self {
+        use PageBlock::*;
+        Self {
+            title: "Plan for Friday 10 October".into(),
+            blocks: vec![
+                Heading("Morning".into()),
+                Paragraph(
+                    "Review the display-client session API first; it unblocks the console merge and \
+                     takes fifteen minutes if the trait matches the contract."
+                        .into(),
+                ),
+                Bullets(vec![
+                    "09:30  display-client review (lane A)".into(),
+                    "10:00  licence relay: two one-file cards, a developer lane on each".into(),
+                    "11:00  PG cog host: read the two restart traces from 03:10".into(),
+                ]),
+                Rule,
+                Heading("Afternoon".into()),
+                Paragraph(
+                    "Clear. Standup notes and the board summary are drafted and waiting for your \
+                     word before anything is posted."
+                        .into(),
+                ),
+                Paragraph("Say \"close\" or swipe right to return to the conversation.".into()),
+            ],
+        }
+    }
+}
+
+/// A laid-out page line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PageLine {
+    Text { text: String, heading: bool },
+    Rule,
 }
 
 #[derive(Debug, Clone)]
 pub struct PageView {
     title: String,
-    lines: Vec<String>,
+    lines: Vec<PageLine>,
     /// Lines scrolled past the top.
     scroll: usize,
     pool: LinePool,
@@ -38,12 +95,39 @@ pub struct PageView {
 
 impl PageView {
     pub fn new(doc: &PageDoc) -> Self {
-        let mut lines = Vec::new();
-        for (i, p) in doc.paragraphs.iter().enumerate() {
-            if i > 0 {
-                lines.push(String::new());
+        let mut lines: Vec<PageLine> = Vec::new();
+        let blank = |lines: &mut Vec<PageLine>| {
+            if !lines.is_empty() {
+                lines.push(PageLine::Text { text: String::new(), heading: false });
             }
-            lines.extend(wrap(p, PAGE_COLS));
+        };
+        for block in &doc.blocks {
+            match block {
+                PageBlock::Heading(h) => {
+                    blank(&mut lines);
+                    for t in wrap(&h.to_uppercase(), PAGE_COLS) {
+                        lines.push(PageLine::Text { text: t, heading: true });
+                    }
+                }
+                PageBlock::Paragraph(p) => {
+                    blank(&mut lines);
+                    for t in wrap(p, PAGE_COLS) {
+                        lines.push(PageLine::Text { text: t, heading: false });
+                    }
+                }
+                PageBlock::Bullets(items) => {
+                    blank(&mut lines);
+                    for item in items {
+                        for t in wrap_prefixed(item, PAGE_COLS, "- ", "  ") {
+                            lines.push(PageLine::Text { text: t, heading: false });
+                        }
+                    }
+                }
+                PageBlock::Rule => {
+                    blank(&mut lines);
+                    lines.push(PageLine::Rule);
+                }
+            }
         }
         Self {
             title: doc.title.clone(),
@@ -95,8 +179,18 @@ impl PageView {
         ops
     }
 
-    fn render(&mut self, ops: &mut Vec<SceneOp>) {
+    fn line_node(&self, id: NodeId, slot: usize, idx: usize) -> Node {
         let x = PAGE.x + PAGE_MARGIN;
+        let y = PAGE_TEXT_TOP + slot as i32 * LINE_PITCH;
+        match &self.lines[idx] {
+            // Headings are upper-cased at layout time and sit after a
+            // blank line; one green keeps the page calm.
+            PageLine::Text { text: t, .. } => text(id.path_hash(), &BODY, x, y, t.clone(), GREEN),
+            PageLine::Rule => line(id.path_hash(), x, y + 10, PAGE.right() - PAGE_MARGIN, y + 10, DIM),
+        }
+    }
+
+    fn render(&mut self, ops: &mut Vec<SceneOp>) {
         for i in 0..PAGE_VISIBLE {
             let idx = self.scroll + i;
             let want = self.lines.get(idx).map(|_| idx);
@@ -114,8 +208,7 @@ impl PageView {
                         self.pool.free(id);
                     }
                     let id = self.pool.alloc();
-                    let y = PAGE_TEXT_TOP + i as i32 * LINE_PITCH;
-                    ops.push(SceneOp::Insert(text(id.path_hash(), &BODY, x, y, self.lines[idx].clone(), GREEN)));
+                    ops.push(SceneOp::Insert(self.line_node(id, i, idx)));
                     self.slots[i] = Some((id, idx));
                 }
             }
@@ -148,19 +241,10 @@ impl PageView {
             self.swipe = (0, 0);
             return (Vec::new(), true);
         }
-        let mut ops = Vec::new();
         self.px_accum += dy;
         let lines = self.px_accum / LINE_PITCH;
         self.px_accum -= lines * LINE_PITCH;
-        if lines != 0 {
-            let target = self.scroll as i64 - lines as i64;
-            let next = target.clamp(0, self.max_scroll() as i64) as usize;
-            if next != self.scroll {
-                self.scroll = next;
-                self.render(&mut ops);
-            }
-        }
-        (ops, false)
+        (self.scroll_lines(-lines), false)
     }
 
     /// Scroll by whole lines (positive goes further down the page).
@@ -175,7 +259,7 @@ impl PageView {
         ops
     }
 
-    /// End of a touch gesture.
+    /// End of a touch gesture (or a pause in dragging).
     pub fn release(&mut self) {
         self.swipe = (0, 0);
         self.px_accum = 0;

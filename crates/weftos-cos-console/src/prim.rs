@@ -90,6 +90,34 @@ pub fn rect_fill(id: u32, layer: Layer, x: i32, y: i32, w: i32, h: i32, color: R
     }
 }
 
+/// Stroked (1 px) rectangle on `layer`.
+pub fn rect_stroke(id: u32, layer: Layer, x: i32, y: i32, w: i32, h: i32, color: Rgba) -> Node {
+    Node {
+        id: nid(id),
+        layer,
+        transform: Transform::translate(px(x), px(y)),
+        primitive: Primitive::Rect {
+            w: px(w),
+            h: px(h),
+            radius_q8: 0,
+        },
+        style: stroke_style(color),
+        input: None,
+    }
+}
+
+/// Make a rectangle node tappable over its whole extent.
+pub fn tappable(mut node: Node) -> Node {
+    if let Primitive::Rect { w, h, .. } = node.primitive {
+        node.input = Some(InputRegion {
+            shape: HitShape::Aabb { w, h },
+            cursor_hint: CursorHint::Pointer,
+            capture: true,
+        });
+    }
+    node
+}
+
 /// Invisible touch target covering `(x, y, w, h)`; captures drags.
 /// Drawn with no fill and no stroke, so the renderer emits nothing but
 /// the hit-test still finds it.

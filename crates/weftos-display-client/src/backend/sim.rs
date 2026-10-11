@@ -9,6 +9,7 @@
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Instant;
 
 use embedded_graphics::geometry::Point as EgPoint;
 use embedded_graphics::pixelcolor::{Rgb888, RgbColor};
@@ -34,6 +35,8 @@ pub(crate) struct SimInner {
     queue: VecDeque<BackendEvent>,
     frames: u64,
     closed: bool,
+    /// Leaf clock origin: tweens are ticked against it.
+    started: Instant,
 }
 
 /// Handle to a simulated leaf. Clones share the same leaf.
@@ -63,6 +66,7 @@ impl LeafSim {
                 queue: VecDeque::new(),
                 frames: 0,
                 closed: false,
+                started: Instant::now(),
             })),
         }
     }
@@ -177,6 +181,23 @@ impl LeafSim {
         self.lock().closed
     }
 
+    /// Advance the leaf clock: pending tweens land (v1 snaps them) and
+    /// the frame is redrawn when anything moved. The session does this
+    /// on every `apply` and `poll`, as the pad's frame loop will.
+    pub fn tick(&self) -> Result<(), DisplayError> {
+        let mut g = self.lock();
+        let now_ms = g.started.elapsed().as_millis() as u32;
+        let damage = g.store.tick(now_ms);
+        if damage.is_empty() {
+            return Ok(());
+        }
+        let SimInner { store, surface, .. } = &mut *g;
+        render_damage(store, SIM_DISPLAY, &damage, surface)
+            .map_err(|e| DisplayError::Backend(format!("{e:?}")))?;
+        g.frames += 1;
+        Ok(())
+    }
+
     /// Run `f` with the simulator display, for a window to blit from.
     #[cfg(feature = "window")]
     pub(crate) fn with_display<R>(
@@ -217,7 +238,12 @@ impl Backend for SimBackend {
         if g.closed {
             return Err(DisplayError::Closed);
         }
-        let damage = g.store.apply(env);
+        // Land tweens from earlier envelopes first, so a producer that
+        // animates with tweens sees them on the simulated leaf too.
+        let now_ms = g.started.elapsed().as_millis() as u32;
+        let viewport = g.store.display(SIM_DISPLAY).map_or(Rect::ZERO, |d| d.viewport);
+        let mut damage = g.store.tick(now_ms);
+        damage.merge(&g.store.apply(env), viewport);
         if damage.is_empty() {
             return Ok(());
         }
@@ -229,6 +255,7 @@ impl Backend for SimBackend {
     }
 
     fn poll(&mut self) -> Option<BackendEvent> {
+        let _ = self.sim.tick();
         self.sim.lock().queue.pop_front()
     }
 

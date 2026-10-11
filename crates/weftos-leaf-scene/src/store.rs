@@ -119,16 +119,19 @@ impl SceneStore {
             .unwrap_or(Rect::ZERO);
         let mut damage = DamageSet::none();
         for op in &env.ops {
+            // Every op is applied even once the damage is already a
+            // full repaint: an envelope is atomic, and a batch whose
+            // early ops dirty half the screen must not lose its tail.
             let d = self.apply_op(display, op);
+            if damage.is_full() {
+                continue;
+            }
             let vp = self
                 .displays
                 .get(&display)
                 .map(|d| d.viewport)
                 .unwrap_or(viewport);
             damage.merge(&d, vp);
-            if damage.is_full() {
-                break;
-            }
         }
         damage
     }
@@ -172,9 +175,8 @@ impl SceneStore {
                 let mut acc = DamageSet::none();
                 for inner in ops {
                     let d = self.apply_op(display, inner);
-                    acc.merge(&d, vp);
-                    if acc.is_full() {
-                        break;
+                    if !acc.is_full() {
+                        acc.merge(&d, vp);
                     }
                 }
                 acc
