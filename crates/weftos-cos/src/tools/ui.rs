@@ -169,7 +169,7 @@ impl Tool for UiAsk {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             id: "ui.ask",
-            description: "Ask one survey question with 2 to 6 numbered choices. The owner taps a button or says the number; the answer arrives as the next user turn. Ask one question per turn.",
+            description: "Ask one survey question with 2 to 6 numbered choices. Put any spoken framing in this same response; the host ends the turn as soon as the question is on screen, and the owner's tap or spoken number arrives as the next user turn. One question per turn.",
             parameters: json!({"type": "object", "required": ["question", "choices"], "properties": {
                 "question": {"type": "string", "maxLength": 200},
                 "explain": {"type": "string", "maxLength": 300},
@@ -205,7 +205,7 @@ impl Tool for UiAsk {
         self.0.emit_ask(&ask);
         Ok(ToolOutcome {
             summary: format!("asked Q{}/{}: {}", ask.index, ask.total, ask.question),
-            result: json!({"id": ask.id, "awaiting": "the owner's tap or spoken number arrives as the next user turn; end this turn now"}),
+            result: json!({"id": ask.id, "awaiting": "the owner's tap or spoken number arrives as the next user turn"}),
         })
     }
 }

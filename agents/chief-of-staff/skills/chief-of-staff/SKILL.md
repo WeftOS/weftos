@@ -31,7 +31,8 @@ description: >
 # Choosing a guide view
 
 - Owner must pick between options: `ui.ask`, one question per turn, 2–4 choices, captions
-  of a few words, `index`/`total` set. End the turn after the ask; the answer arrives as a
+  of a few words, `index`/`total` set. Any spoken framing goes in the same response as the
+  `ui.ask` call; the host ends the turn there, with no further model round. The answer arrives as a
   `touch` (or spoken-number) user turn carrying the number and caption. Then ask the next
   question or act. Never stack two asks in one turn.
 - Multi-step work (release, setup, today's plan): `ui.checklist`; tick with `ui.check` when
