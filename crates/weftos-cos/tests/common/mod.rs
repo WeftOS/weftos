@@ -184,6 +184,10 @@ pub fn kinds(events: &[Event]) -> Vec<&'static str> {
             Event::Tool { .. } => "tool",
             Event::Page { .. } => "page",
             Event::Status { .. } => "status",
+            Event::Layout { .. } => "layout",
+            Event::Checklist { .. } => "checklist",
+            Event::Steps { .. } => "steps",
+            Event::Ask { .. } => "ask",
         })
         .collect()
 }

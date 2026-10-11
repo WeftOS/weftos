@@ -72,6 +72,15 @@ async fn print_events(mut rx: tokio::sync::broadcast::Receiver<Event>) {
             Ok(Event::Status { task, model, lanes_running }) => eprintln!("[status] {task} · {model} · lanes {lanes_running}"),
             Ok(Event::State { state, reason }) => eprintln!("[state] {state:?}{}", reason.map(|r| format!(": {r}")).unwrap_or_default()),
             Ok(Event::Page { .. }) => eprintln!("[page]"),
+            Ok(Event::Layout { layout }) => eprintln!("[layout] {layout:?}"),
+            Ok(Event::Checklist { title, items, .. }) => eprintln!("[checklist] {title}: {}/{}", items.iter().filter(|i| i.done).count(), items.len()),
+            Ok(Event::Steps { title, current, steps, .. }) => eprintln!("[steps] {title}: {}/{}", current + 1, steps.len()),
+            Ok(Event::Ask { question, choices, index, total, .. }) => {
+                eprintln!("[ask] Q{index}/{total} {question}");
+                for c in choices {
+                    eprintln!("       {} {}", c.n, c.caption);
+                }
+            }
             Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
             Err(_) => break,
         }

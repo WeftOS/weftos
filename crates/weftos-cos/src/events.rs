@@ -52,6 +52,66 @@ pub enum Event {
         model: String,
         lanes_running: u32,
     },
+    /// Which of the three console layouts to show (ADR-118 §1a).
+    Layout {
+        layout: Layout,
+    },
+    /// A checklist in the guide area; sent whole on every change.
+    Checklist {
+        id: String,
+        title: String,
+        items: Vec<ChecklistItem>,
+    },
+    /// Numbered instructions with the current step highlighted (0-based).
+    Steps {
+        id: String,
+        title: String,
+        steps: Vec<String>,
+        current: usize,
+    },
+    /// One survey question with 2..=6 numbered choices.
+    Ask {
+        id: String,
+        question: String,
+        explain: String,
+        choices: Vec<Choice>,
+        index: usize,
+        total: usize,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Layout {
+    #[default]
+    Split,
+    Page,
+    Guide,
+}
+
+impl Layout {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "split" => Some(Self::Split),
+            "page" => Some(Self::Page),
+            "guide" => Some(Self::Guide),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChecklistItem {
+    pub id: String,
+    pub text: String,
+    pub done: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Choice {
+    /// 1-based button number.
+    pub n: usize,
+    pub caption: String,
 }
 
 impl Event {
@@ -75,6 +135,26 @@ impl Event {
             }
             Event::Page { markdown, .. } => *markdown = redact(markdown),
             Event::Status { task, .. } => *task = redact(task),
+            Event::Layout { .. } => {}
+            Event::Checklist { title, items, .. } => {
+                *title = redact(title);
+                for it in items {
+                    it.text = redact(&it.text);
+                }
+            }
+            Event::Steps { title, steps, .. } => {
+                *title = redact(title);
+                for s in steps {
+                    *s = redact(s);
+                }
+            }
+            Event::Ask { question, explain, choices, .. } => {
+                *question = redact(question);
+                *explain = redact(explain);
+                for c in choices {
+                    c.caption = redact(&c.caption);
+                }
+            }
         }
         self
     }
