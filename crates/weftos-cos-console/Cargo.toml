@@ -1,0 +1,48 @@
+# weftos-cos-console
+#
+# ADR-118 C2: the chief-of-staff console screen as scene objects. A
+# green-screen vector interface on the 800×480 edge pad: wireframe
+# avatar, status, scrollable chat log, page layout and the guide
+# layout's checklist, steps and survey views. Draws through
+# `weftos-display-client` (ADR-117 D1) and renders its key frames
+# from the simulated leaf's snapshot.
+#
+# Standalone crate — own workspace table like its leaf siblings, so
+# cargo does not walk up into the parent clawft workspace.
+[workspace]
+
+[package]
+name = "weftos-cos-console"
+version = "0.1.0"
+edition = "2021"
+description = "Chief-of-staff console screen (ADR-118 C2): green vector UI as WeftOS leaf scene objects."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/weave-logic-ai/weftos"
+keywords = ["weftos", "leaf", "console", "scene-graph"]
+categories = ["gui", "graphics"]
+publish = false
+
+[features]
+default = []
+# Desktop window target (SDL2) for the demo's `--window` flag.
+window = ["weftos-display-client/window"]
+
+[dependencies]
+weftos-display-client = { path = "../weftos-display-client" }
+# Frame export: a leaf snapshot rendered to PNG through the simulator
+# surface (headless, no SDL).
+weftos-leaf-scene = { path = "../weftos-leaf-scene", features = ["std"] }
+weftos-leaf-renderer = { path = "../weftos-leaf-renderer", features = ["std"] }
+weftos-leaf-sim = { path = "../weftos-leaf-sim" }
+embedded-graphics-simulator = { version = "0.8", default-features = false }
+
+[[bin]]
+name = "cos-console-demo"
+path = "src/bin/cos_console_demo.rs"
+
+[profile.dev]
+opt-level = 1
+
+[profile.release]
+opt-level = "s"
+lto = true
