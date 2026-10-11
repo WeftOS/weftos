@@ -44,6 +44,8 @@ pub struct GuideState {
     pub checklists: HashMap<String, Checklist>,
     pub steps: HashMap<String, Steps>,
     pub pending_ask: Option<Ask>,
+    /// Questions asked so far, oldest first, so `back` can re-ask one.
+    pub asked: Vec<Ask>,
     pub current_turn: Option<TurnId>,
     next_id: u64,
 }
@@ -118,6 +120,7 @@ impl UiHandle {
                 self.resolve_choice(Some(&a.id), n as usize)
             }
             AnswerKind::Skip => self.resolve_skip(Some(&a.id)),
+            AnswerKind::Back => self.back(&a.id),
             AnswerKind::Toggle => {
                 let (item_id, done) = match &a.value {
                     Value::String(s) => (s.clone(), None),
@@ -194,6 +197,32 @@ impl UiHandle {
         let text = format!("Skipped Q{}/{} \"{}\"", ask.index, ask.total, ask.question);
         s.pending_ask = None;
         Ok(Resolution::Turn(UserUtterance::touch(text)))
+    }
+
+    /// Re-ask the question before the pending one in the same survey. At the
+    /// first question (or when no earlier one is known) the pending question
+    /// is shown again unchanged.
+    pub fn back(&self, id: &str) -> Result<Resolution, CosError> {
+        let ask = {
+            let mut s = self.lock();
+            let Some(cur) = s.pending_ask.clone() else { return Err(CosError::Config("no question is pending".into())) };
+            if cur.id != id {
+                return Err(CosError::Config(format!("question {id} is not the pending one")));
+            }
+            let pos = s.asked.iter().position(|a| a.id == cur.id);
+            let prev = pos.and_then(|p| p.checked_sub(1)).map(|p| s.asked[p].clone()).filter(|p| p.index < cur.index);
+            match prev {
+                Some(prev) => {
+                    s.asked.truncate(pos.unwrap_or(0));
+                    s.asked.push(prev.clone());
+                    s.pending_ask = Some(prev.clone());
+                    prev
+                }
+                None => cur,
+            }
+        };
+        self.emit_ask(&ask);
+        Ok(Resolution::Updated { note: format!("[touch] back to Q{}/{} \"{}\"; the owner may answer it again", ask.index, ask.total, ask.question) })
     }
 
     /// A spoken or typed utterance that resolves a pending question

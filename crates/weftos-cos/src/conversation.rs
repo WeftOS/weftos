@@ -50,7 +50,7 @@ pub struct GuideAnswer {
     pub id: String,
     /// `answer`: the 1-based choice number. `toggle`: the item id, or
     /// `{item_id, done}`. `step`: `"next"`, `"back"` or a 1-based step
-    /// number. `skip`: ignored.
+    /// number. `skip` and `back`: ignored.
     #[serde(default)]
     pub value: serde_json::Value,
 }
@@ -62,6 +62,8 @@ pub enum AnswerKind {
     Toggle,
     Step,
     Skip,
+    /// Re-ask the previous survey question (Q1: re-show Q1).
+    Back,
 }
 
 /// `POST /v1/cos/utterance` body.
