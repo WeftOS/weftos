@@ -24,6 +24,15 @@ const MAX_ROUNDS: usize = 4;
 const HISTORY_LIMIT: usize = 40;
 const MAX_TOKENS: i32 = 1200;
 
+/// How a turn continues after one tool call.
+enum Flow {
+    Continue,
+    /// Held for a confirmation turn.
+    Held,
+    /// A survey question is on screen; the turn ends with it spoken.
+    Asked(String),
+}
+
 /// A `Confirm` tool call waiting for the owner's yes.
 #[derive(Debug, Clone)]
 struct PendingAction {
@@ -201,9 +210,19 @@ impl Inner {
                 "tool_calls": calls,
             }));
             for call in &calls {
-                if self.run_tool_call(turn_id, call).await? {
+                match self.run_tool_call(turn_id, call).await? {
+                    Flow::Continue => {}
                     // A confirmation question was asked; the turn ends here.
-                    return Ok(());
+                    Flow::Held => return Ok(()),
+                    // A survey question is on screen: speak it and end the
+                    // turn, so the owner's answer always starts a fresh one.
+                    Flow::Asked(question) => {
+                        let text = if content.is_empty() { question } else { content.clone() };
+                        self.history.lock().await.push(json!({"role": "assistant", "content": text}));
+                        self.emit(Event::state(AgentState::Speaking));
+                        self.emit(Event::Message { turn_id: turn_id.clone(), text, is_final: true });
+                        return Ok(());
+                    }
                 }
             }
         }
@@ -237,9 +256,8 @@ impl Inner {
         Ok(v)
     }
 
-    /// Execute one tool call from the model. Returns `true` when the call was
-    /// held for confirmation (the turn should end with the question).
-    async fn run_tool_call(&self, turn_id: &TurnId, call: &Value) -> Result<bool, CosError> {
+    /// Execute one tool call from the model and say how the turn continues.
+    async fn run_tool_call(&self, turn_id: &TurnId, call: &Value) -> Result<Flow, CosError> {
         let call_id = call["id"].as_str().unwrap_or("call").to_string();
         let name = call["function"]["name"].as_str().unwrap_or("").to_string();
         let args: Value = call["function"]["arguments"]
@@ -253,7 +271,7 @@ impl Inner {
             self.log.record(turn_id, &name, &text, "refused");
             self.emit(Event::Tool { name: name.clone(), summary: text.clone(), status: "refused".into() });
             self.push_tool_result(&call_id, &json!({"error": text})).await;
-            return Ok(false);
+            return Ok(Flow::Continue);
         };
         let spec = tool.spec();
         let id = spec.id.to_string();
@@ -267,15 +285,20 @@ impl Inner {
             self.push_tool_result(&call_id, &json!({"held": true, "reason": "awaiting owner confirmation"})).await;
             self.history.lock().await.push(json!({"role": "assistant", "content": question}));
             self.emit(Event::Message { turn_id: turn_id.clone(), text: question, is_final: true });
-            return Ok(true);
+            return Ok(Flow::Held);
         }
 
+        let asked = id == "ui.ask";
+        let question = args["question"].as_str().unwrap_or_default().to_string();
         self.emit(Event::Tool { name: id.clone(), summary: "running".into(), status: "running".into() });
         match tool.call(args).await {
             Ok(out) => {
                 self.log.record(turn_id, &id, &out.summary, "ok");
                 self.emit(Event::Tool { name: id, summary: out.summary, status: "ok".into() });
                 self.push_tool_result(&call_id, &out.result).await;
+                if asked {
+                    return Ok(Flow::Asked(question));
+                }
             }
             Err(e) => {
                 let reason = redact(&e.to_string());
@@ -284,7 +307,7 @@ impl Inner {
                 self.push_tool_result(&call_id, &json!({"error": reason})).await;
             }
         }
-        Ok(false)
+        Ok(Flow::Continue)
     }
 
     async fn push_tool_result(&self, call_id: &str, result: &Value) {

@@ -100,9 +100,9 @@ async fn tickets(headers: axum::http::HeaderMap) -> (axum::http::StatusCode, Jso
         return (axum::http::StatusCode::UNAUTHORIZED, Json(json!({"error": "Invalid harness credential"})));
     }
     (axum::http::StatusCode::OK, Json(json!({"items": [
-        {"id": "11111111-1111-4111-8111-111111111111", "status": "in_progress", "priority": "high",
+        {"id": "11111111-1111-4111-8111-111111111111", "project_id": TEST_PROJECT, "status": "in_progress", "priority": "high",
          "title": "Console C2 screen", "source_url": "https://example.invalid/WEFT-901"},
-        {"id": "22222222-2222-4222-8222-222222222222", "status": "todo", "priority": "medium",
+        {"id": "22222222-2222-4222-8222-222222222222", "project_id": TEST_PROJECT, "status": "todo", "priority": "medium",
          "title": "Pad button on GPIO", "source_url": "https://example.invalid/WEFT-902"}
     ]})))
 }
@@ -136,6 +136,11 @@ pub struct TestAgent {
     pub agent: CosAgent,
     pub dir: tempfile::TempDir,
     pub llm: Arc<ScriptedLlm>,
+}
+
+/// A harness client over the fake, with or without a default project.
+pub fn harness_client(addr: SocketAddr, default_project: Option<&str>) -> Arc<HarnessClient> {
+    Arc::new(HarnessClient::new(&format!("http://{addr}"), "/api/harness/projects/{project_id}/events", default_project.map(str::to_string), SecretToken::for_tests(TEST_TOKEN)))
 }
 
 pub async fn build_agent(llm: Arc<ScriptedLlm>, plan: Option<Arc<ScriptedLlm>>, harness: Option<SocketAddr>) -> TestAgent {
