@@ -17,6 +17,13 @@ categories = ["multimedia::audio"]
 # `ort` for real SNAC + Kokoro inference (mirrors clawft-voice-onnx's gate).
 default = []
 onnx = ["dep:ort"]
+# Pocket TTS trial (WEFT-657): in-process streaming TTS via Gradium `ptts`.
+# Off by default; native-only (never part of the browser / wasi builds).
+pocket-tts = ["dep:ptts"]
+# macOS: Apple Accelerate for the CPU path.
+pocket-tts-accelerate = ["pocket-tts", "ptts/accelerate"]
+# Metal GPU backend.
+pocket-tts-metal = ["pocket-tts", "ptts/metal"]
 
 [dependencies]
 # The TtsEngine / TtsChunk / TtsTier traits + VoiceError live in clawft-channels;
@@ -32,6 +39,10 @@ futures-util = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
+serde = { workspace = true }
+# Exact rc pin: the crate is a release candidate; no `^` drift. `hf` brings the
+# tokenizer the checkpoint loader needs; it never downloads.
+ptts = { version = "=0.4.0-rc.1", optional = true, default-features = false, features = ["hf"] }
 # Workspace pins ort with default-features = false; re-list the default set
 # (matches clawft-voice-onnx) so real SNAC / Kokoro inference works under `onnx`.
 ort = { workspace = true, optional = true, features = [
@@ -47,3 +58,7 @@ ort = { workspace = true, optional = true, features = [
 [dev-dependencies]
 # Streaming Ollama mock for the deterministic Orpheus token→chunk test.
 wiremock = "0.6"
+
+[[example]]
+name = "pocket_tts_bench"
+required-features = ["pocket-tts"]

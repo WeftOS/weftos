@@ -36,6 +36,7 @@
 //!
 //! # Feature flags
 //!
+//! - `pocket-tts` — Pocket TTS via Gradium `ptts` ([`PocketTts`], trial, off by default).
 //! - `onnx` — pull in `ort` for real SNAC + Kokoro inference. Without it the
 //!   token/frame front-end still compiles and is unit-tested; the decoders
 //!   return a clear [`clawft_channels::voice::types::VoiceError`]. Chatterbox
@@ -45,6 +46,10 @@ pub mod chatterbox;
 pub mod fast_tier;
 pub mod kokoro;
 pub mod orpheus;
+pub mod pocket_tts;
+pub mod pocket_tts_bench;
+#[cfg(feature = "pocket-tts")]
+mod pocket_tts_ptts;
 pub mod snac;
 
 pub use chatterbox::{
@@ -52,8 +57,10 @@ pub use chatterbox::{
 };
 pub use fast_tier::{
     FastEnginePreference, FastTierSelection, NativeFastEngineKind, build_native_fast_engine,
-    build_native_fast_engine_with, resolve_fast_engine, select_native_fast_tier,
+    build_native_fast_engine_with, resolve_fast_engine, resolve_fast_engine_with,
+    select_native_fast_tier,
 };
 pub use kokoro::KokoroTts;
+pub use pocket_tts::{PocketTts, PocketTtsConfig};
 pub use orpheus::{OrpheusTts, parse_custom_token};
 pub use snac::{SnacDecode, SnacOnnxDecoder};

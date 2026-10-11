@@ -25,6 +25,7 @@ use tracing::{info, warn};
 
 use crate::chatterbox::ChatterboxTts;
 use crate::kokoro::KokoroTts;
+use crate::pocket_tts::{PocketTts, PocketTtsConfig};
 
 /// Env var for fast-tier preference (david / operator override).
 pub const FAST_TTS_ENV: &str = "WEFTOS_FAST_TTS";
@@ -36,6 +37,8 @@ pub enum NativeFastEngineKind {
     ClonedVoice,
     /// Preset Kokoro ONNX — accepted 0.8 default.
     KokoroPreset,
+    /// Pocket TTS via `ptts` (WEFT-657 trial, `pocket-tts` feature).
+    PocketTts,
 }
 
 /// Operator / profile preference for the native fast tier.
@@ -48,6 +51,8 @@ pub enum FastEnginePreference {
     Kokoro,
     /// Prefer Chatterbox; fall back to Kokoro if not runtime-ready.
     Chatterbox,
+    /// Pocket TTS trial; Kokoro fallback when the feature/model is absent.
+    PocketTts,
 }
 
 impl FastEnginePreference {
@@ -57,6 +62,7 @@ impl FastEnginePreference {
             "auto" | "" => Some(Self::Auto),
             "kokoro" | "preset" => Some(Self::Kokoro),
             "chatterbox" | "clone" | "cloned" | "cloned_voice" => Some(Self::Chatterbox),
+            "pocket" | "pocket-tts" | "pocket_tts" | "ptts" => Some(Self::PocketTts),
             _ => None,
         }
     }
@@ -67,6 +73,7 @@ impl FastEnginePreference {
             Self::Auto => "auto",
             Self::Kokoro => "kokoro",
             Self::Chatterbox => "chatterbox",
+            Self::PocketTts => "pocket-tts",
         }
     }
 
@@ -99,7 +106,28 @@ pub fn resolve_fast_engine(
     preference: FastEnginePreference,
     clone_runtime_ready: bool,
 ) -> FastTierSelection {
+    resolve_fast_engine_with(preference, clone_runtime_ready, false)
+}
+
+/// As [`resolve_fast_engine`], also told whether Pocket TTS is runtime-ready
+/// (feature compiled in and a model configured). `Auto` never picks Pocket TTS:
+/// it is an explicit opt-in trial.
+pub fn resolve_fast_engine_with(
+    preference: FastEnginePreference,
+    clone_runtime_ready: bool,
+    pocket_ready: bool,
+) -> FastTierSelection {
     match preference {
+        FastEnginePreference::PocketTts if pocket_ready => FastTierSelection {
+            kind: NativeFastEngineKind::PocketTts,
+            preference,
+            reason: "preference=pocket-tts and model ready",
+        },
+        FastEnginePreference::PocketTts => FastTierSelection {
+            kind: NativeFastEngineKind::KokoroPreset,
+            preference,
+            reason: "preference=pocket-tts but feature/model not ready; Kokoro fallback",
+        },
         FastEnginePreference::Kokoro => FastTierSelection {
             kind: NativeFastEngineKind::KokoroPreset,
             preference,
@@ -138,7 +166,11 @@ pub fn select_native_fast_tier_with(
     preference: FastEnginePreference,
     chatterbox: ChatterboxTts,
 ) -> FastTierSelection {
-    let sel = resolve_fast_engine(preference, chatterbox.is_runtime_available());
+    let sel = resolve_fast_engine_with(
+        preference,
+        chatterbox.is_runtime_available(),
+        preference == FastEnginePreference::PocketTts && PocketTtsConfig::from_env().is_ready(),
+    );
     if chatterbox.is_bundle_staged() && !chatterbox.is_runtime_available() {
         info!(
             target: "clawft_voice_tts::fast_tier",
@@ -173,6 +205,13 @@ pub fn build_native_fast_engine_with(preference: FastEnginePreference) -> Arc<dy
     match sel.kind {
         NativeFastEngineKind::ClonedVoice => Arc::new(chatterbox),
         NativeFastEngineKind::KokoroPreset => Arc::new(KokoroTts::new()),
+        NativeFastEngineKind::PocketTts => match PocketTts::load(&PocketTtsConfig::from_env()) {
+            Ok(engine) => Arc::new(engine),
+            Err(e) => {
+                warn!(error = %e, "pocket-tts load failed; falling back to Kokoro");
+                Arc::new(KokoroTts::new())
+            }
+        },
     }
 }
 
@@ -200,6 +239,20 @@ mod tests {
             Some(FastEnginePreference::Chatterbox)
         );
         assert_eq!(FastEnginePreference::parse("nope"), None);
+    }
+
+    #[test]
+    fn pocket_tts_is_explicit_opt_in() {
+        use FastEnginePreference as P;
+        assert_eq!(P::parse("pocket-tts"), Some(P::PocketTts));
+        assert_eq!(P::parse("ptts"), Some(P::PocketTts));
+        let ready = resolve_fast_engine_with(P::PocketTts, false, true);
+        assert_eq!(ready.kind, NativeFastEngineKind::PocketTts);
+        let not_ready = resolve_fast_engine_with(P::PocketTts, true, false);
+        assert_eq!(not_ready.kind, NativeFastEngineKind::KokoroPreset);
+        // Auto never selects it, even when ready.
+        let auto = resolve_fast_engine_with(P::Auto, false, true);
+        assert_eq!(auto.kind, NativeFastEngineKind::KokoroPreset);
     }
 
     #[test]
