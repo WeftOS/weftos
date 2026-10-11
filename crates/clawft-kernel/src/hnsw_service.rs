@@ -264,12 +264,14 @@ impl HnswService {
 
         let store_size = store.len();
 
-        // EML: adaptive ef_search — set before query so the next rebuild
-        // uses the learned value.
+        // EML: adaptive ef_search is advisory only. `HnswStore::set_ef_search`
+        // rebuilds the whole graph (instant-distance bakes ef_search into the
+        // built index), so applying a per-query prediction here ran a full
+        // rebuild under the service lock whenever the learned value moved
+        // (tens of seconds at 10K, minutes at 100K) and made throughput
+        // collapse as threads grew. Callers that want a new ef pick it
+        // explicitly via `HnswStore::set_ef_search`.
         let ef_pred = eml.predict_ef(query, store_size);
-        if ef_pred.is_learned && ef_pred.recommended_ef != store.ef_search() {
-            store.set_ef_search(ef_pred.recommended_ef);
-        }
 
         // EML: adaptive rebuild — trigger early when recall is predicted
         // to have degraded, even if the mutation count hasn't hit the
@@ -915,7 +917,13 @@ mod tests {
     /// guided search still returns the nearest neighbor.
     #[test]
     fn search_builds_path_table_and_guides() {
-        let svc = make_service();
+        let svc = HnswService::with_eml(
+            HnswServiceConfig::default(),
+            HnswEmlConfig {
+                path_predict_enabled: true,
+                ..Default::default()
+            },
+        );
         for i in 0..24 {
             let cluster = i % 3;
             let mut emb = vec![0.02 * (i as f32); 4];
@@ -1295,5 +1303,76 @@ mod tests {
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].id, "rel::edge-auth-db");
         assert_eq!(hits[0].metadata["kind"], "relationship");
+    }
+
+    /// Default-config search must keep graph-search recall. Region-guided
+    /// search (opt-in) scans only a few k-means regions and dropped
+    /// recall@10 from 0.94 to 0.49 on the 10K vector-backend bench when it
+    /// was on by default.
+    #[test]
+    fn default_search_recall_floor() {
+        const DIM: usize = 32;
+        const CLUSTERS: usize = 60;
+        let mut state = 0x9E37_79B9_7F4A_7C15u64;
+        let mut next = move || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((state >> 40) as f32 / (1u64 << 24) as f32) * 2.0 - 1.0
+        };
+        let centers: Vec<Vec<f32>> = (0..CLUSTERS)
+            .map(|_| (0..DIM).map(|_| next()).collect())
+            .collect();
+        let point = |c: &[f32], next: &mut dyn FnMut() -> f32| -> Vec<f32> {
+            c.iter().map(|v| v + 0.9 * next()).collect()
+        };
+
+        let svc = make_service();
+        for i in 0..3000 {
+            let emb = point(&centers[i % CLUSTERS], &mut next);
+            svc.insert(format!("v{i}"), emb, serde_json::json!({}));
+        }
+
+        let queries = 50;
+        let mut hits = 0usize;
+        for q in 0..queries {
+            let query = point(&centers[(q * 7) % CLUSTERS], &mut next);
+            let truth = svc.brute_force_topk(&query, 10);
+            let found: std::collections::HashSet<String> =
+                svc.search(&query, 10).into_iter().map(|r| r.id).collect();
+            hits += truth.iter().filter(|id| found.contains(*id)).count();
+        }
+        let recall = hits as f64 / (queries * 10) as f64;
+        assert!(!svc.path_table_ready(), "guided search must be opt-in");
+        assert!(recall >= 0.85, "default recall@10 {recall:.3} below floor 0.85");
+    }
+
+    /// Learned ef predictions must not trigger graph rebuilds from inside
+    /// `search` (set_ef_search rebuilds the whole index under the lock).
+    #[test]
+    fn search_never_changes_ef_search() {
+        let cfg = HnswServiceConfig {
+            ef_search: 14,
+            ..HnswServiceConfig::default()
+        };
+        let svc = HnswService::with_eml(
+            cfg,
+            HnswEmlConfig {
+                train_every_n: 20,
+                min_training_samples: 10,
+                ..Default::default()
+            },
+        );
+        for i in 0..200 {
+            let mut v = vec![0.01 * i as f32; 8];
+            v[i % 8] += 1.0;
+            svc.insert(format!("n{i}"), v, serde_json::json!({}));
+        }
+        for i in 0..120 {
+            let mut q = vec![0.0; 8];
+            q[i % 8] = 1.0;
+            let _ = svc.search(&q, 5);
+        }
+        assert_eq!(svc.ef_params().0, 14, "search must not retune ef_search");
     }
 }

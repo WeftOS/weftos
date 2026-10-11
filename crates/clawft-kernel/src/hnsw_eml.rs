@@ -54,6 +54,13 @@ pub struct HnswEmlConfig {
     /// Latency weight for score-based strategy (0..1, higher = prefer speed).
     pub latency_weight: f64,
     /// Enable region → entry-node search-path prediction (HNSW-EML #4 / WEFT-385).
+    ///
+    /// Opt-in (default `false`): guided search scores only the nearest
+    /// `path_region_probes` of `path_num_regions` k-means regions instead of
+    /// traversing the HNSW graph, so it trades recall for speed. With the
+    /// defaults (16 regions, 2 probes) it halved recall@10 on the 10K
+    /// vector-backend bench (0.943 -> 0.493) and serialised queries on the
+    /// service lock.
     pub path_predict_enabled: bool,
     /// Number of k-means regions for the path table.
     pub path_num_regions: usize,
@@ -84,7 +91,7 @@ impl Default for HnswEmlConfig {
             target_recall: 0.95,
             max_ef_boost: 2.5,
             latency_weight: 0.3,
-            path_predict_enabled: true,
+            path_predict_enabled: false,
             path_num_regions: DEFAULT_NUM_REGIONS,
             path_region_probes: DEFAULT_REGION_PROBES,
             path_entries_per_region: 3,
@@ -2134,6 +2141,26 @@ mod tests {
         HnswEmlManager::with_defaults()
     }
 
+    /// Manager with the opt-in path prediction (WEFT-385) enabled.
+    fn make_path_manager() -> HnswEmlManager {
+        HnswEmlManager::new(HnswEmlConfig {
+            path_predict_enabled: true,
+            ..Default::default()
+        })
+    }
+
+    /// Guided (lossy) search must never be on unless asked for: it halved
+    /// recall@10 on the vector-backend bench when it was the default.
+    #[test]
+    fn path_predict_is_opt_in() {
+        let mut m = make_manager();
+        assert!(!m.path_predict_enabled());
+        let entries: Vec<(String, Vec<f32>)> =
+            (0..30).map(|i| (format!("e{i}"), vec![i as f32, 1.0])).collect();
+        m.rebuild_path_table(&entries);
+        assert!(!m.has_path_table());
+    }
+
     // -- Construction & defaults --
 
     #[test]
@@ -2555,7 +2582,7 @@ mod tests {
 
     #[test]
     fn path_table_rebuild_and_predict() {
-        let mut m = make_manager();
+        let mut m = make_path_manager();
         assert!(!m.has_path_table());
 
         let entries: Vec<(String, Vec<f32>)> = (0..30)
@@ -2593,7 +2620,7 @@ mod tests {
 
     #[test]
     fn record_guided_search_tracks_region() {
-        let mut m = make_manager();
+        let mut m = make_path_manager();
         let entries: Vec<(String, Vec<f32>)> = (0..20)
             .map(|i| (format!("n{i}"), vec![i as f32, 0.0, 1.0]))
             .collect();
