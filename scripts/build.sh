@@ -766,6 +766,61 @@ doctest_runtime() {
 # without one, so a caller-pinned WEFTOS_RUNTIME_DIR runs without it.
 NEXTEST_CONFIG=()
 
+# ── Standalone crates ───────────────────────────────────────────────
+# The leaf crates (weftos-leaf-scene/-renderer/-sim, weftos-display-client,
+# …) carry their own `[workspace]` table and sit in the root `exclude`, so
+# `-p <crate>` from the workspace root cannot see them. `check|clippy|test
+# <pkg>` detects such a package and runs cargo inside its directory.
+STANDALONE_PACKAGES=()
+
+standalone_crate_dir() {
+    local dir="$ROOT/crates/$1"
+    if [ -f "$dir/Cargo.toml" ] && grep -q '^\[workspace\]' "$dir/Cargo.toml"; then
+        printf '%s' "$dir"
+    fi
+}
+
+# Move standalone names out of TEST_PACKAGES into STANDALONE_PACKAGES.
+split_standalone_packages() {
+    STANDALONE_PACKAGES=()
+    local rest=() pkg
+    for pkg in ${TEST_PACKAGES[@]+"${TEST_PACKAGES[@]}"}; do
+        if [ -n "$(standalone_crate_dir "$pkg")" ]; then
+            STANDALONE_PACKAGES+=("$pkg")
+        else
+            rest+=("$pkg")
+        fi
+    done
+    TEST_PACKAGES=(${rest[@]+"${rest[@]}"})
+}
+
+# run_standalone <check|clippy|test> — one cargo run per standalone crate.
+# Returns 0 when there were none, so callers fall through to the
+# workspace path for whatever is left in TEST_PACKAGES.
+run_standalone() {
+    local verb="$1" pkg dir rc=0
+    local feat=()
+    [ -n "$FEATURES" ] && feat=(--features "$FEATURES")
+    for pkg in ${STANDALONE_PACKAGES[@]+"${STANDALONE_PACKAGES[@]}"}; do
+        dir="$(standalone_crate_dir "$pkg")"
+        header "Running cargo $verb in crates/$pkg (standalone crate)${FEATURES:+ --features $FEATURES}"
+        timer_start
+        if [ "$DRY_RUN" = true ]; then
+            printf "  ${YELLOW}DRY${NC}   (cd crates/%s && cargo %s --all-targets%s)\n" "$pkg" "$verb" "${FEATURES:+ --features $FEATURES}"
+        else
+            case "$verb" in
+                check)  (cd "$dir" && cargo check --all-targets ${feat[@]+"${feat[@]}"}) || rc=$? ;;
+                clippy) (cd "$dir" && cargo clippy --all-targets ${feat[@]+"${feat[@]}"} -- -D warnings) || rc=$? ;;
+                test)   (cd "$dir" && cargo test ${feat[@]+"${feat[@]}"}) || rc=$? ;;
+            esac
+            if [ $rc -eq 0 ]; then pass "$verb crates/$pkg"; else fail "$verb crates/$pkg"; fi
+        fi
+        timer_end
+        [ $rc -ne 0 ] && return $rc
+    done
+    return 0
+}
+
 workspace_test() {
     isolate_test_runtime
     local extra=()
@@ -800,6 +855,11 @@ workspace_test() {
 }
 
 cmd_test() {
+    split_standalone_packages
+    if [ ${#STANDALONE_PACKAGES[@]} -gt 0 ]; then
+        run_standalone test || return $?
+        [ ${#TEST_PACKAGES[@]} -eq 0 ] && return 0
+    fi
     local scope_desc="--workspace"
     [ ${#TEST_PACKAGES[@]} -gt 0 ] && scope_desc="${TEST_PACKAGES[*]}"
     if command -v cargo-nextest >/dev/null 2>&1; then
@@ -1180,6 +1240,11 @@ cmd_check_daemon_no_mesh_testing() {
 cmd_check() {
     # `check <pkg>…` scopes to the named packages (fast loop for new crates);
     # the kernel wasm gates below only run for the whole-workspace check.
+    split_standalone_packages
+    if [ ${#STANDALONE_PACKAGES[@]} -gt 0 ]; then
+        run_standalone check || return $?
+        [ ${#TEST_PACKAGES[@]} -eq 0 ] && return 0
+    fi
     if [ ${#TEST_PACKAGES[@]} -gt 0 ]; then
         local scope=() pkg
         for pkg in "${TEST_PACKAGES[@]}"; do scope+=(-p "$pkg"); done
@@ -1235,6 +1300,11 @@ cmd_check() {
 
 cmd_clippy() {
     # `clippy <pkg>…` scopes to the named packages; none means the workspace.
+    split_standalone_packages
+    if [ ${#STANDALONE_PACKAGES[@]} -gt 0 ]; then
+        run_standalone clippy || return $?
+        [ ${#TEST_PACKAGES[@]} -eq 0 ] && return 0
+    fi
     local scope=(--workspace)
     if [ ${#TEST_PACKAGES[@]} -gt 0 ]; then
         scope=()

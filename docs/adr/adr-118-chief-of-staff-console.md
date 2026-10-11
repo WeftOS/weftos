@@ -42,6 +42,32 @@ The owner wants the edge pad to start with a completely new interface:
 - **Avatar:** a vector wireframe head with four states (idle, listening, thinking, speaking),
   animated with scene tweens and driven by the agent's state stream.
 
+### 1a. Three layouts (owner, 2026-10-10)
+
+The console switches between three named layouts. The agent or the host picks one; the user
+can return to `split` with a swipe or by voice.
+
+| Layout | Regions | Use |
+|---|---|---|
+| `split` (default) | visual panel (left 300×456), status (top right 500×64), chat log (bottom right 500×392) | conversation with the avatar |
+| `page` | one full region 800×456 | a full page: an example page now, rendered markdown and SVG later |
+| `guide` | **guide area** = the left column plus the top right, an L-shape; chat log bottom right 500×248; a one-line status above the chat | checklists, step-by-step instructions, and **surveys** |
+
+**Guide views,** drawn in the guide area:
+- **Checklist:** a title, then items with check boxes. A tap on an item toggles it, and so can
+  the agent. Progress shows as `3/7`.
+- **Instructions:** numbered steps, with the current step highlighted. "Next" and "back" are
+  touch targets, or the user says them.
+- **Survey:** one question at a time. The question text and a short explanation go at the top;
+  2–6 **large round buttons** labelled `1`, `2`, `3`, `4`… sit below, each with a short caption.
+  A tap answers immediately: the button fills, and the answer goes to the agent as a user turn
+  (`source: "touch"`). "Skip" and "back" are touch targets too. The question count shows as
+  `Q2/5`. Speaking the number ("two") works as well.
+
+Touch targets are at least 64 px across, sized for a finger on a 7" panel.
+
+Later work maps projects, tickets and environments into these views.
+
 ### 2. Voice only, with a hardware push button
 
 - **The button:** a momentary button on a pad GPIO pin, wired by the owner. The pad publishes
@@ -87,7 +113,7 @@ models are. Moving the agent to PG is a later step.
 | Phase | Delivers | Done when |
 |---|---|---|
 | C1 | Display endpoint D1 (ADR-117): sessions, scene ops, object events, client library; on the simulator | the console scene renders in the simulator from a client session |
-| C2 | Console screen: layout, theme, avatar states, status, scrollable chat log, page-mode stub | a recorded conversation replays correctly in the simulator and a Mac window |
+| C2 | Console screen: the three layouts (split, page with an example page, guide), theme, avatar states, status, scrollable chat log, checklist, instructions and survey views | a recorded conversation including a 3-question survey and a checklist replays correctly in the simulator and a Mac window |
 | C3 | Chief-of-staff agent v1 with the conversation API, push-to-talk and Mac-mic STT | the owner holds the button, speaks, sees the transcript, and gets an answer that uses project data |
 | C4 | On the pad: leaf join, the button on GPIO, display grant | the same conversation works on the pad |
 | C5 | Page mode with rendered markdown and SVG; optional pad mic and spoken replies | the agent shows a full-page plan on request |
