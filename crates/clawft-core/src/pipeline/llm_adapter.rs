@@ -249,6 +249,8 @@ impl LlmProvider for ClawftLlmAdapter {
         let mut full_text = String::new();
         let mut finish_reason = None;
         let mut usage = None;
+        let mut calls: std::collections::BTreeMap<usize, (String, String, String)> =
+            std::collections::BTreeMap::new();
 
         while let Some(chunk) = chunk_rx.recv().await {
             match chunk {
@@ -270,15 +272,35 @@ impl LlmProvider for ClawftLlmAdapter {
                         usage = u;
                     }
                 }
-                clawft_llm::StreamChunk::ToolCallDelta { .. } => {
-                    // Tool call deltas are not forwarded as text, but we
-                    // could extend this in the future
+                clawft_llm::StreamChunk::ToolCallDelta {
+                    index,
+                    id,
+                    name,
+                    arguments,
+                } => {
+                    // Not forwarded as text; fragments are assembled per
+                    // index, in the order the provider sent them.
+                    let entry = calls.entry(index).or_default();
+                    if let Some(id) = id {
+                        entry.0 = id;
+                    }
+                    if let Some(name) = name {
+                        entry.1 = name;
+                    }
+                    if let Some(args) = arguments {
+                        entry.2.push_str(&args);
+                    }
                 }
             }
         }
 
-        // Wait for the stream task to complete
-        let _ = stream_handle.await;
+        // Wait for the stream task; a provider error (or a panicked task)
+        // is the caller's error, never a silently shortened answer.
+        match stream_handle.await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => return Err(e.to_string()),
+            Err(e) => return Err(format!("stream task failed: {e}")),
+        }
 
         // Build a synthetic ChatResponse from the accumulated text
         let fr = finish_reason.unwrap_or_else(|| "stop".into());
@@ -288,12 +310,29 @@ impl LlmProvider for ClawftLlmAdapter {
             total_tokens: u.total_tokens,
         });
 
+        let mut message = ChatMessage::assistant(full_text);
+        if !calls.is_empty() {
+            if message.content.as_deref() == Some("") {
+                message.content = None;
+            }
+            message.tool_calls = Some(
+                calls
+                    .into_values()
+                    .map(|(id, name, arguments)| clawft_llm::types::ToolCall {
+                        id,
+                        call_type: "function".into(),
+                        function: clawft_llm::types::FunctionCall { name, arguments },
+                    })
+                    .collect(),
+            );
+        }
+
         let response = ChatResponse {
             id: "stream-response".into(),
             model: model.to_string(),
             choices: vec![clawft_llm::types::Choice {
                 index: 0,
-                message: ChatMessage::assistant(full_text),
+                message,
                 finish_reason: Some(fr),
             }],
             usage: llm_usage,
@@ -1014,6 +1053,112 @@ mod tests {
             err.contains("simulated network failure"),
             "error should propagate: {err}"
         );
+    }
+
+    // -- streaming ----------------------------------------------------------
+
+    struct ScriptedStream(Vec<clawft_llm::StreamChunk>, Option<String>);
+
+    #[async_trait]
+    impl clawft_llm::Provider for ScriptedStream {
+        fn name(&self) -> &str {
+            "scripted-stream"
+        }
+        async fn complete(&self, _r: &LlmChatRequest) -> clawft_llm::Result<ChatResponse> {
+            Err(clawft_llm::ProviderError::RequestFailed("unused".into()))
+        }
+        async fn complete_stream(
+            &self,
+            _r: &LlmChatRequest,
+            tx: mpsc::Sender<clawft_llm::StreamChunk>,
+        ) -> clawft_llm::Result<()> {
+            for c in &self.0 {
+                let _ = tx.send(c.clone()).await;
+            }
+            match &self.1 {
+                Some(e) => Err(clawft_llm::ProviderError::RequestFailed(e.clone())),
+                None => Ok(()),
+            }
+        }
+    }
+
+    fn delta(
+        index: usize,
+        id: Option<&str>,
+        name: Option<&str>,
+        args: Option<&str>,
+    ) -> clawft_llm::StreamChunk {
+        clawft_llm::StreamChunk::ToolCallDelta {
+            index,
+            id: id.map(String::from),
+            name: name.map(String::from),
+            arguments: args.map(String::from),
+        }
+    }
+
+    async fn run_stream(
+        chunks: Vec<clawft_llm::StreamChunk>,
+        err: Option<&str>,
+    ) -> (Result<serde_json::Value, String>, Vec<String>) {
+        let adapter =
+            ClawftLlmAdapter::new(Arc::new(ScriptedStream(chunks, err.map(String::from))));
+        let (tx, mut rx) = mpsc::channel(16);
+        let result = adapter
+            .complete_stream("m", &[], &[], None, None, None, tx)
+            .await;
+        let mut texts = vec![];
+        while let Ok(t) = rx.try_recv() {
+            texts.push(t);
+        }
+        (result, texts)
+    }
+
+    #[tokio::test]
+    async fn stream_assembles_tool_call_deltas_across_chunks() {
+        let (result, texts) = run_stream(
+            vec![
+                clawft_llm::StreamChunk::TextDelta { text: "ok ".into() },
+                delta(0, Some("call_a"), Some("get_weather"), Some("{\"ci")),
+                delta(1, Some("call_b"), Some("get_time"), Some("{}")),
+                delta(0, None, None, Some("ty\":\"Paris\"}")),
+                clawft_llm::StreamChunk::Done {
+                    finish_reason: Some("tool_calls".into()),
+                    usage: None,
+                },
+            ],
+            None,
+        )
+        .await;
+        let v = result.unwrap();
+        assert_eq!(texts, vec!["ok ".to_string()]);
+        let msg = &v["choices"][0]["message"];
+        assert_eq!(msg["content"], "ok ");
+        let tcs = msg["tool_calls"].as_array().unwrap();
+        assert_eq!(tcs.len(), 2);
+        assert_eq!(tcs[0]["id"], "call_a");
+        assert_eq!(tcs[0]["function"]["name"], "get_weather");
+        assert_eq!(tcs[0]["function"]["arguments"], "{\"city\":\"Paris\"}");
+        assert_eq!(tcs[1]["id"], "call_b");
+        assert_eq!(v["choices"][0]["finish_reason"], "tool_calls");
+    }
+
+    #[tokio::test]
+    async fn stream_tool_only_reply_has_null_content() {
+        let (result, _) = run_stream(vec![delta(0, Some("c"), Some("t"), Some("{}"))], None).await;
+        let v = result.unwrap();
+        assert!(v["choices"][0]["message"]["content"].is_null());
+    }
+
+    #[tokio::test]
+    async fn stream_provider_error_mid_stream_reaches_caller() {
+        let (result, texts) = run_stream(
+            vec![clawft_llm::StreamChunk::TextDelta { text: "par".into() }],
+            Some("connection reset"),
+        )
+        .await;
+        assert_eq!(texts, vec!["par".to_string()]);
+        let err = result.unwrap_err();
+        assert!(err.contains("connection reset"), "got: {err}");
     }
 
     // -- successful round-trip through adapter ------------------------------

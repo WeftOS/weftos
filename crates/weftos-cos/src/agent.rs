@@ -233,25 +233,23 @@ impl Inner {
         Ok(())
     }
 
-    /// One model call. Uses the non-streaming `complete` on purpose: the
-    /// pipeline adapter's `complete_stream` drops tool-call deltas and
-    /// swallows provider errors, which would hide both tool use and a dead
-    /// endpoint. The answer text is emitted as word-chunked `token` events so
-    /// the console still paints progressively; true streaming can replace this
-    /// once the adapter forwards tool calls.
+    /// One model call, streamed. Token chunks are emitted as the provider
+    /// sends them; tool calls arrive assembled in the returned response, and
+    /// a provider error (also mid-stream) fails the call.
     async fn call_model(&self, turn_id: &TurnId, route: &Route, messages: &[Value], specs: &[Value]) -> Result<Value, CosError> {
-        let v = route
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(64);
+        let call = route
             .provider
-            .complete(&route.bare_model, messages, specs, Some(MAX_TOKENS), Some(0.3), None)
-            .await
-            .map_err(CosError::Model)?;
+            .complete_stream(&route.bare_model, messages, specs, Some(MAX_TOKENS), Some(0.3), None, tx);
+        let forward = async {
+            while let Some(text) = rx.recv().await {
+                self.emit(Event::Token { turn_id: turn_id.clone(), text });
+            }
+        };
+        let (result, ()) = tokio::join!(call, forward);
+        let v = result.map_err(CosError::Model)?;
         if let Some(err) = v.get("error") {
             return Err(CosError::Model(err.to_string()));
-        }
-        if let Some(text) = v["choices"][0]["message"]["content"].as_str() {
-            for chunk in word_chunks(text, 6) {
-                self.emit(Event::Token { turn_id: turn_id.clone(), text: chunk });
-            }
         }
         Ok(v)
     }
@@ -369,29 +367,6 @@ fn describe_action(tool: &str, args: &Value) -> String {
     }
 }
 
-/// Split `text` into runs of `n` whitespace-separated words, keeping the
-/// original spacing so the chunks concatenate back to the text.
-fn word_chunks(text: &str, n: usize) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut cur = String::new();
-    let mut words = 0;
-    let mut rest = text;
-    while !rest.is_empty() {
-        let end = rest.find(char::is_whitespace).map(|i| i + rest[i..].chars().next().map_or(1, char::len_utf8)).unwrap_or(rest.len());
-        cur.push_str(&rest[..end]);
-        rest = &rest[end..];
-        words += 1;
-        if words == n {
-            out.push(std::mem::take(&mut cur));
-            words = 0;
-        }
-    }
-    if !cur.is_empty() {
-        out.push(cur);
-    }
-    out
-}
-
 fn trim_history(h: &mut Vec<Value>) {
     while h.len() > HISTORY_LIMIT {
         h.remove(0);
@@ -412,15 +387,6 @@ mod tests {
         assert!(is_yes("go ahead"));
         assert!(!is_yes("no"));
         assert!(!is_yes("yes but only the tester"));
-    }
-
-    #[test]
-    fn word_chunks_concatenate_back() {
-        let text = "one two three four five six seven eight nine ten eleven twelve thirteen";
-        let chunks = word_chunks(text, 6);
-        assert_eq!(chunks.len(), 3);
-        assert_eq!(chunks.concat(), text);
-        assert!(word_chunks("", 6).is_empty());
     }
 
     #[test]
