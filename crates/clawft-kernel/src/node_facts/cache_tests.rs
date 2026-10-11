@@ -183,6 +183,30 @@ fn an_exact_delta_replay_is_a_benign_duplicate_but_conflicts_and_older_still_ref
 }
 
 #[test]
+fn a_rebased_sender_restarting_its_delta_seq_is_not_judged_against_the_old_base() {
+    let (c, k) = (NodeFactsCache::new(), key());
+    c.insert(signed(&k, 3, 1_000), TrustTier::Paired, 1_000).unwrap();
+    let id = node_id_from_pubkey(&k.verifying_key().to_bytes());
+    c.apply_delta(&delta(&k, 3, 1, CapabilityState::Busy), 1_020).unwrap();
+
+    // The sender re-based (base 7) and its delta restarts at seq 1, but the
+    // new base has not arrived: not a regression, ask for the base.
+    let d = delta(&k, 7, 1, CapabilityState::Available);
+    assert_eq!(
+        c.apply_delta(&d, 1_021),
+        Err(CacheError::BaseBehind { node_id: id.clone(), held: 3, need: 7 })
+    );
+    // Once the new base lands, the same delta applies.
+    c.insert(signed(&k, 7, 1_030), TrustTier::Paired, 1_030).unwrap();
+    c.apply_delta(&d, 1_031).unwrap();
+    assert_eq!(c.get(&id, 1_031).unwrap().delta_seq, 1);
+
+    // A delta for an older base than held is a genuine regression.
+    let err = c.apply_delta(&delta(&k, 3, 9, CapabilityState::Busy), 1_032).unwrap_err();
+    assert!(matches!(err, CacheError::Verify(_)), "{err:?}");
+}
+
+#[test]
 fn an_operator_tier_change_applies_even_when_the_facts_are_unchanged() {
     let (c, k) = (NodeFactsCache::new(), key());
     let s = signed(&k, 1, 1_000);
