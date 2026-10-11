@@ -813,6 +813,11 @@ run_standalone() {
     local verb="$1" pkg dir rc=0
     local feat=()
     [ -n "$FEATURES" ] && feat=(--features "$FEATURES")
+    # Standalone crates with native deps (SDL2 in weftos-leaf-sim) link against
+    # Homebrew libraries on macOS, which the linker does not search by default.
+    if [ "$(uname -s)" = Darwin ] && [ -d /opt/homebrew/lib ]; then
+        export LIBRARY_PATH="/opt/homebrew/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
+    fi
     for pkg in ${STANDALONE_PACKAGES[@]+"${STANDALONE_PACKAGES[@]}"}; do
         dir="$(standalone_crate_dir "$pkg")"
         header "Running cargo $verb in crates/$pkg (standalone crate)${FEATURES:+ --features $FEATURES}"
