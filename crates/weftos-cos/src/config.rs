@@ -54,9 +54,22 @@ pub struct HarnessConfig {
     pub base_url: String,
     /// Mode-0600 file holding a `wfb_` harness credential.
     pub token_file: PathBuf,
-    /// Project-history route for `notes.record` and the history part of
-    /// `projects.activity`.
+    /// The dashboard project this console belongs to (UUID). Required for
+    /// project-history notes; the token must reach that project.
+    pub project_id: Option<String>,
+    /// Project-history route template (dashboard PR #19:
+    /// `POST /api/harness/projects/[id]/events`). `{project_id}` is
+    /// substituted from `project_id`.
     pub events_path: String,
+}
+
+fn is_uuid(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 36
+        && b.iter().enumerate().all(|(i, c)| match i {
+            8 | 13 | 18 | 23 => *c == b'-',
+            _ => c.is_ascii_hexdigit(),
+        })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -100,7 +113,8 @@ impl Default for HarnessConfig {
             token_file: std::env::var_os("WEFTOS_BOARD_TOKEN_FILE")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| config_home().join("board-token")),
-            events_path: "/api/harness/events".into(),
+            project_id: std::env::var("WEFTOS_PROJECT_ID").ok().filter(|s| !s.is_empty()),
+            events_path: "/api/harness/projects/{project_id}/events".into(),
         }
     }
 }
@@ -168,6 +182,11 @@ impl CosConfig {
         }
         if !self.harness.events_path.starts_with('/') {
             return Err(CosError::Config("harness.events_path must start with '/'".into()));
+        }
+        if let Some(id) = &self.harness.project_id
+            && !is_uuid(id)
+        {
+            return Err(CosError::Config("harness.project_id must be a UUID".into()));
         }
         Ok(())
     }

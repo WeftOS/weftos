@@ -73,6 +73,7 @@ impl SecretToken {
 pub struct HarnessClient {
     base: String,
     events_path: String,
+    project_id: Option<String>,
     token: SecretToken,
     http: reqwest::Client,
 }
@@ -80,15 +81,29 @@ pub struct HarnessClient {
 impl HarnessClient {
     pub fn from_config(cfg: &HarnessConfig) -> Result<Self, CosError> {
         let token = SecretToken::from_file(&cfg.token_file)?;
-        Ok(Self::new(&cfg.base_url, &cfg.events_path, token))
+        Ok(Self::new(&cfg.base_url, &cfg.events_path, cfg.project_id.clone(), token))
     }
 
-    pub fn new(base_url: &str, events_path: &str, token: SecretToken) -> Self {
+    /// `events_path` may contain `{project_id}`, filled from `project_id`
+    /// (dashboard PR #19: `/api/harness/projects/[id]/events`).
+    pub fn new(base_url: &str, events_path: &str, project_id: Option<String>, token: SecretToken) -> Self {
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(15))
             .build()
             .expect("reqwest client");
-        Self { base: base_url.trim_end_matches('/').to_string(), events_path: events_path.into(), token, http }
+        Self { base: base_url.trim_end_matches('/').to_string(), events_path: events_path.into(), project_id, token, http }
+    }
+
+    /// The resolved project-history path, or a clear error when the
+    /// template needs a project id and none is configured.
+    pub fn events_path(&self) -> Result<String, CosError> {
+        if !self.events_path.contains("{project_id}") {
+            return Ok(self.events_path.clone());
+        }
+        match &self.project_id {
+            Some(id) => Ok(self.events_path.replace("{project_id}", id)),
+            None => Err(tool_err("harness", "harness.project_id is not configured; project-history notes need the project's UUID")),
+        }
     }
 
     fn url(&self, path: &str) -> String {
@@ -165,12 +180,18 @@ impl HarnessClient {
             .ok_or_else(|| tool_err("harness", format!("ticket not found: {reference}")))
     }
 
+    /// Read project history. The PR #19 route is write-only today, so this
+    /// returns an error ("HTTP 405") until a read route exists; callers
+    /// report history as unavailable rather than guessing.
     pub async fn events(&self, limit: usize) -> Result<Value, CosError> {
-        self.get(&format!("{}?limit={limit}", self.events_path)).await
+        let path = self.events_path()?;
+        self.get(&format!("{path}?limit={limit}")).await
     }
 
+    /// Add one project-history event: `{kind, title, summary?, details_md?,
+    /// dedupe_key?, occurred_at?}` (PR #19 body shape).
     pub async fn post_event(&self, body: &Value) -> Result<Value, CosError> {
-        let path = self.events_path.clone();
+        let path = self.events_path()?;
         self.post(&path, body).await
     }
 }
@@ -288,8 +309,32 @@ impl Tool for NotesRecord {
                 result: json!({"kind": "note", "ticket_id": id, "at": at, "board": res}),
             });
         }
-        let body = json!({"kind": "note", "text": text, "source": "chief-of-staff", "at": at});
+        let (title, summary, details_md) = split_note(&text);
+        let mut body = json!({"kind": "note", "title": title, "summary": summary, "occurred_at": at});
+        if let Some(d) = details_md {
+            body["details_md"] = Value::String(d);
+        }
         let res = self.client.post_event(&body).await?;
-        Ok(ToolOutcome { summary: "note recorded in project history".into(), result: json!({"kind": "note", "at": at, "result": res}) })
+        Ok(ToolOutcome {
+            summary: format!("note recorded in project history{}", if res["created"] == false { " (already recorded)" } else { "" }),
+            result: json!({"kind": "note", "at": at, "result": res}),
+        })
     }
+}
+
+/// PR #19 limits: title <= 200, summary <= 1000, details_md <= 20000. The
+/// first line (or the first 200 chars) is the title; the rest is the
+/// summary, and the whole note goes to `details_md` when it does not fit.
+fn split_note(text: &str) -> (String, String, Option<String>) {
+    let clip = |s: &str, n: usize| -> String {
+        if s.chars().count() <= n { s.to_string() } else { format!("{}…", s.chars().take(n - 1).collect::<String>()) }
+    };
+    let (first, rest) = match text.split_once('\n') {
+        Some((f, r)) => (f.trim(), r.trim()),
+        None => (text.trim(), ""),
+    };
+    let title = clip(first, 200);
+    let summary = clip(rest, 1000);
+    let fits = title == first && summary == rest;
+    (title, summary, if fits { None } else { Some(clip(text.trim(), 20_000)) })
 }

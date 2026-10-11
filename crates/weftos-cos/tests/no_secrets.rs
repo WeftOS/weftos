@@ -35,12 +35,16 @@ async fn harness_tools_use_the_token_without_leaking_it() {
     assert!(statuses.contains(&("projects.activity", "ok")), "{statuses:?}");
     assert!(statuses.contains(&("notes.record", "ok")), "{statuses:?}");
 
-    // The note went to the events route as kind: note.
+    // The note went to the project-history route (PR #19 shape) as kind: note.
+    let expected = format!("/api/harness/projects/{}/events", common::TEST_PROJECT);
     let posts = posts.lock().unwrap();
-    let (path, body) = posts.iter().find(|(p, _)| p == "/api/harness/events").expect("note posted");
-    assert_eq!(path, "/api/harness/events");
+    let (path, body) = posts.iter().find(|(p, _)| *p == expected).expect("note posted");
+    assert_eq!(path, &expected);
     assert_eq!(body["kind"], "note");
-    assert_eq!(body["source"], "chief-of-staff");
+    assert_eq!(body["title"], "Moving the agent to PG after C4");
+    assert_eq!(body["summary"], "");
+    assert!(body.get("details_md").is_none());
+    assert!(body["occurred_at"].as_str().is_some());
 
     // Neither the log nor the model-facing history carries the token.
     let log = std::fs::read_to_string(t.dir.path().join("tool-log.jsonl")).unwrap();
@@ -53,8 +57,8 @@ async fn harness_tools_use_the_token_without_leaking_it() {
 
 #[tokio::test]
 async fn tool_failure_reasons_are_redacted() {
-    // Without an events route, notes.record fails; the HTTP error text must
-    // not carry anything secret-shaped either.
+    // Without the project-events route, notes.record fails; the HTTP error
+    // text must not carry anything secret-shaped either.
     let (addr, _) = FakeHarness::default().start().await;
     let llm = ScriptedLlm::new(vec![
         ScriptedLlm::tool_call("notes_record", json!({"text": "a note with no route"})),

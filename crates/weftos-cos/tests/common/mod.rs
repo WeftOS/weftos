@@ -80,7 +80,8 @@ impl FakeHarness {
             .route("/api/harness/tickets", get(tickets).post(ticket_post))
             .route("/api/harness/goals", get(goals));
         if self.with_events_route {
-            app = app.route("/api/harness/events", get(events).post(events_post));
+            // Dashboard PR #19: POST only, project id in the path.
+            app = app.route("/api/harness/projects/{id}/events", axum::routing::post(events_post));
         }
         let app = app.with_state(self.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -110,18 +111,22 @@ async fn goals() -> Json<Value> {
     Json(json!({"items": [{"id": "g1", "status": "active", "title": "Console on the pad"}]}))
 }
 
-async fn events() -> Json<Value> {
-    Json(json!({"items": [{"kind": "note", "text": "earlier note"}]}))
-}
+pub const TEST_PROJECT: &str = "33333333-3333-4333-8333-333333333333";
 
 async fn ticket_post(State(h): State<FakeHarness>, Json(body): Json<Value>) -> Json<Value> {
     h.posts.lock().unwrap().push(("/api/harness/tickets".into(), body));
     Json(json!({"id": "11111111-1111-4111-8111-111111111111", "status": "in_progress"}))
 }
 
-async fn events_post(State(h): State<FakeHarness>, Json(body): Json<Value>) -> Json<Value> {
-    h.posts.lock().unwrap().push(("/api/harness/events".into(), body));
-    Json(json!({"ok": true}))
+async fn events_post(State(h): State<FakeHarness>, axum::extract::Path(id): axum::extract::Path<String>, headers: axum::http::HeaderMap, Json(body): Json<Value>) -> (axum::http::StatusCode, Json<Value>) {
+    if !authed(&headers) {
+        return (axum::http::StatusCode::UNAUTHORIZED, Json(json!({"error": "Invalid harness credential"})));
+    }
+    if id != TEST_PROJECT {
+        return (axum::http::StatusCode::NOT_FOUND, Json(json!({"error": "not_found"})));
+    }
+    h.posts.lock().unwrap().push((format!("/api/harness/projects/{id}/events"), body));
+    (axum::http::StatusCode::CREATED, Json(json!({"id": "e1", "created": true})))
 }
 
 /// Build an agent over a scripted provider (same provider for both tiers
@@ -143,7 +148,7 @@ pub async fn build_agent(llm: Arc<ScriptedLlm>, plan: Option<Arc<ScriptedLlm>>, 
         .with(Arc::new(WorkKickoff { staging_dir: dir.path().join("staging"), runtime_command: None }))
         .with(Arc::new(NodesHealth { source: Arc::new(StaticHealth(json!({"reachable": true, "summary": {"healthy_nodes": 2, "total_nodes": 3}, "nodes": [1, 2, 3]}))) }));
     if let Some(addr) = harness {
-        let client = Arc::new(HarnessClient::new(&format!("http://{addr}"), "/api/harness/events", SecretToken::for_tests(TEST_TOKEN)));
+        let client = Arc::new(HarnessClient::new(&format!("http://{addr}"), "/api/harness/projects/{project_id}/events", Some(TEST_PROJECT.into()), SecretToken::for_tests(TEST_TOKEN)));
         tools = tools.with(Arc::new(ProjectsActivity { client: client.clone() })).with(Arc::new(NotesRecord { client }));
     }
     let agent = CosAgent::new(routes, tools, ToolLog::new(Some(dir.path().join("tool-log.jsonl"))));
