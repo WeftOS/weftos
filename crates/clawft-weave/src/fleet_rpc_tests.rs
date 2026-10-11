@@ -43,6 +43,7 @@ fn facts_entry(local: bool) -> FactsEntry {
         received_at: 1_000,
         expires_at: 1_600,
         delta_seq: 0,
+        last_delta_payload: None,
         signed: sign_node_facts(&f, &key).unwrap(),
         facts: f,
     }
