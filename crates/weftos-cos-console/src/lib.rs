@@ -16,6 +16,9 @@
 //! ```
 //!
 //! - [`Console`] is the host API from the lane contract §2.
+//! - [`host`] joins the console to the chief-of-staff agent over its
+//!   HTTP/SSE API (contract §3) and carries push-to-talk to it; the
+//!   `cos-console-host` binary runs it in a Mac window.
 //! - [`frame`] opens simulator sessions and renders a leaf snapshot to
 //!   PNG, for tests and the `cos-console-demo` binary.
 //! - Node ranges: chrome 1–99, avatar 100–199, status 200–299,
@@ -31,6 +34,7 @@ pub mod guide;
 pub mod guide_checklist;
 pub mod guide_steps;
 pub mod guide_survey;
+pub mod host;
 pub mod page;
 pub mod pool;
 pub mod prim;

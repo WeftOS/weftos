@@ -122,6 +122,12 @@ impl<'a> Console<'a> {
         self.layout == Layout::Page
     }
 
+    /// Where the chat log is drawn in the current layout (the host puts
+    /// its development typing line over its last row).
+    pub fn chat_area(&self) -> crate::theme::Box {
+        self.chat.area()
+    }
+
     /// Recycled line ids currently on screen (chat, or page lines).
     pub fn live_line_ids(&self) -> Vec<NodeId> {
         match (self.layout, &self.page) {

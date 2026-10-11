@@ -13,7 +13,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 
 use crate::conversation::{Conversation, UserUtterance};
 use crate::events::Event;
-use crate::voice::{PttEdge, PttOutcome, PushToTalk, Retention};
+use crate::voice::{PttControl, PttEdge, PttOutcome, PushToTalk, Retention};
 use crate::{CosConfig, host};
 
 #[derive(clap::Args, Clone, Debug, Default)]
@@ -45,12 +45,16 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         eprintln!("tool {tool} not bound: {reason}");
     }
     let conv: Arc<dyn Conversation> = Arc::new(built.agent.clone());
+    // One push-to-talk owner, shared by the terminal and `POST /v1/cos/ptt`
+    // (the console host's space bar or the pad button).
+    let ptt = args.mic.then(|| Arc::new(build_ptt(&cfg, conv.clone())));
+    let control: Option<Arc<dyn PttControl>> = ptt.clone().map(|p| p as Arc<dyn PttControl>);
 
-    let (local, server) = crate::server::bind(conv.clone(), addr).await?;
-    eprintln!("conversation API on http://{local}  (POST /v1/cos/utterance, GET /v1/cos/events)");
+    let (local, server) = crate::server::bind_with(conv.clone(), control, addr).await?;
+    eprintln!("conversation API on http://{local}  (POST /v1/cos/utterance, POST /v1/cos/ptt, GET /v1/cos/events)");
 
     let printer = tokio::spawn(print_events(conv.events()));
-    let stdin_loop = if args.no_stdin { None } else { Some(tokio::spawn(terminal(conv.clone(), cfg.clone(), args.mic))) };
+    let stdin_loop = if args.no_stdin { None } else { Some(tokio::spawn(terminal(conv.clone(), ptt))) };
 
     tokio::select! {
         r = server => { r?; }
@@ -87,18 +91,20 @@ async fn print_events(mut rx: tokio::sync::broadcast::Receiver<Event>) {
     }
 }
 
-async fn terminal(conv: Arc<dyn Conversation>, cfg: CosConfig, mic: bool) {
-    let ptt = if mic {
-        let stt: Arc<dyn clawft_channels::voice::stt::SttBackend> = Arc::new(match &cfg.voice.stt_model_dir {
-            Some(dir) => clawft_voice_onnx::parakeet::ParakeetStt::with_dir(dir),
-            None => clawft_voice_onnx::parakeet::ParakeetStt::new(),
-        });
-        let retention = Retention { keep_audio_debug: cfg.voice.keep_audio_debug, debug_audio_dir: cfg.voice.debug_audio_dir.clone() };
+/// Push-to-talk over the configured STT bundle and input device.
+fn build_ptt(cfg: &CosConfig, conv: Arc<dyn Conversation>) -> PushToTalk {
+    let stt: Arc<dyn clawft_channels::voice::stt::SttBackend> = Arc::new(match &cfg.voice.stt_model_dir {
+        Some(dir) => clawft_voice_onnx::parakeet::ParakeetStt::with_dir(dir),
+        None => clawft_voice_onnx::parakeet::ParakeetStt::new(),
+    });
+    let retention = Retention { keep_audio_debug: cfg.voice.keep_audio_debug, debug_audio_dir: cfg.voice.debug_audio_dir.clone() };
+    PushToTalk::new(stt, conv).with_retention(retention).with_device(cfg.voice.device.clone())
+}
+
+async fn terminal(conv: Arc<dyn Conversation>, ptt: Option<Arc<PushToTalk>>) {
+    if ptt.is_some() {
         eprintln!("push-to-talk: press Enter to start capturing, Enter again to stop; type a line to send text");
-        Some(PushToTalk::new(stt, conv.clone()).with_retention(retention).with_device(cfg.voice.device.clone()))
-    } else {
-        None
-    };
+    }
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     while let Ok(Some(line)) = lines.next_line().await {
         let text = line.trim();

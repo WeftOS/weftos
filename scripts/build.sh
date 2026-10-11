@@ -2049,6 +2049,33 @@ cmd_cos_console() {
     return $rc
 }
 
+# ADR-118 C3: the console host (window + agent + push-to-talk). Builds
+# `cos-console-host` with the SDL2 window, runs the console crate's tests
+# (host against a fake agent, headless), clippy with the window feature,
+# the display-client tests (key sensors), and the agent's API tests
+# (`POST /v1/cos/ptt`) in the workspace.
+cmd_cos_host() {
+    header "cos-console-host: build (window), test, clippy; weftos-cos API tests"
+    timer_start
+    local rc=0 v=""
+    [ "$VERBOSE" = true ] && v="--verbose"
+    (cd "$ROOT/crates/weftos-display-client" \
+        && cargo test $v \
+        && cargo clippy --all-targets --features window $v -- -D warnings) || rc=$?
+    [ $rc -eq 0 ] && (cd "$ROOT/crates/weftos-cos-console" \
+        && cargo build --release --features window --bin cos-console-host $v \
+        && cargo test $v \
+        && cargo clippy --all-targets --features window $v -- -D warnings) || rc=$?
+    # Direct (not run_cmd): a failing test must fail the lane, and its
+    # output must be visible.
+    [ $rc -eq 0 ] && (cd "$ROOT" \
+        && cargo test -p weftos-cos --test ptt_api --test api_contract $v \
+        && cargo clippy -p weftos-cos --all-targets $v -- -D warnings) || rc=$?
+    timer_end
+    [ $rc -eq 0 ] && report_binary_size "crates/weftos-cos-console/target/release/cos-console-host" "Console host (cos-console-host, release)"
+    return $rc
+}
+
 cmd_cos_console_demo() {
     header "weftos-cos-console: replay the scripted conversation to PNG key frames"
     timer_start
@@ -2643,6 +2670,10 @@ ${BOLD}Commands:${NC}
   cos-console-demo
                   Replay the scripted console conversation in the leaf
                   simulator and write key frames to docs/design/cos-console/.
+  cos-host        Build cos-console-host (SDL2 window; ADR-118 C3), run the
+                  console host tests against a fake agent, clippy, and the
+                  agent's push-to-talk API tests. Run: see
+                  docs/guides/chief-of-staff-console.md
   test-browser    Run browser WASM regression suite under headless Chrome
                   (WEFT-388 / M5-A). Requires wasm-pack + chromedriver.
   bundle-size     Gate browser WASM bundle (raw + gzip) against the
@@ -3030,6 +3061,7 @@ main() {
         n6-leaf)            cmd_n6_leaf ;;
         cos-console)        cmd_cos_console ;;
         cos-console-demo)   cmd_cos_console_demo ;;
+        cos-host)           cmd_cos_host ;;
         gate)         cmd_gate ;;
         pipeline-pass) cmd_pipeline_pass ;;
         release-dry-run) cmd_release_dry_run ;;

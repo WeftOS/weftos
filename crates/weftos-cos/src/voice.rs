@@ -51,6 +51,28 @@ pub enum PttOutcome {
     Nothing { reason: String },
 }
 
+/// The button as the API drives it (`POST /v1/cos/ptt`): whoever owns the
+/// microphone implements this. [`PushToTalk`] is the real one; tests use a
+/// recorder.
+#[async_trait::async_trait]
+pub trait PttControl: Send + Sync {
+    /// `Down` starts capture and returns `None`; `Up` finishes the turn.
+    async fn on_edge(&self, edge: PttEdge) -> Result<Option<PttOutcome>, CosError>;
+    /// Whether a capture is in progress.
+    fn is_active(&self) -> bool;
+}
+
+#[async_trait::async_trait]
+impl PttControl for PushToTalk {
+    async fn on_edge(&self, edge: PttEdge) -> Result<Option<PttOutcome>, CosError> {
+        PushToTalk::on_edge(self, edge).await
+    }
+
+    fn is_active(&self) -> bool {
+        PushToTalk::is_active(self)
+    }
+}
+
 pub struct PushToTalk {
     stt: Arc<dyn SttBackend>,
     conv: Arc<dyn Conversation>,

@@ -151,6 +151,10 @@ pub mod ids {
     /// Chat-line pool; the top of the range is kept for fixed chat
     /// fixtures (scroll thumb and the new-messages marker).
     pub const CHAT_LINES: Range<u32> = 1000..4090;
+    /// The host's development typing line (Mac window only; the pad
+    /// never shows it): background and text over the log's last row.
+    pub const CHAT_TYPED_BG: u32 = 4090;
+    pub const CHAT_TYPED_TEXT: u32 = 4091;
     pub const CHAT_THUMB: u32 = 4092;
     pub const CHAT_MARKER_BG: u32 = 4093;
     pub const CHAT_MARKER_RULE: u32 = 4094;
