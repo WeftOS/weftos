@@ -1,7 +1,7 @@
 # ADR-114: `weftos://` names: internal mesh addressing for business concepts, mesh resources and artifacts
 
 - **Status**: Proposed (2026-10-09; the owner chose the `weftos://` scheme and asked for this ADR)
-- **Updated**: 2026-10-09. Owner: names are internal mesh addressing and cover companies, projects
+- **Updated**: 2026-10-11 (§5a: every first-class surface gets a kind; proposed). 2026-10-09. Owner: names are internal mesh addressing and cover companies, projects
   and other business concepts as well as mesh resources; the authority is the mesh, not a node.
   N1 built on `target-0.8.4`: `crates/clawft-weave/src/weftos_uri.rs` (strict parser, round-trip
   and reject tables), `mesh_names.rs` (accepts this node's MeshId only; friendly mesh names are
@@ -149,6 +149,29 @@ weftos://<mesh>/teams/weftos-core?rev=sha256:…                     # a pinned 
 The two schemes are separate. WeftOS does not resolve `ruv://`. If WeftOS later hosts an rvm
 context service or runs RVF agents through rvm, it will map between the two at that boundary.
 The mapping will be explicit and recorded on the chain, and it will never be implicit.
+
+### 5a. Every first-class surface has a kind (proposed, owner 2026-10-11)
+
+Owner: if something is a top-level menu or is surfaced as a first-class object, it gets a
+`weftos://` domain. Each detail page then shows its name and links resolve by name. Applied to
+the dashboard OS redesign (`docs/plans/dashboard-os-redesign-2026-10.md`):
+
+| Surface | Kind | Status |
+|---|---|---|
+| Projects (+ Info/Goals/Board) | `projects`, `goals`, `tickets` | in v1 |
+| Companies | `companies` | in v1 |
+| Mesh Network | `nodes` | in v1 |
+| Servers | `hosts` | in v1 |
+| Installations | `installations` | in v1 |
+| AI org: agents, groups | `agents`, `teams` | in v1; definition / installation / instance split is being modelled (`docs/plans/ai-org-model.md`) |
+| Exposures (ADR-120) | `nodes/<id>/exposures/<id>` | new sub-resource |
+| Routes (ADR-116) | `nodes/<id>/routes/<prefix>` | new sub-resource |
+| Pairings (ADR-108) | `pairings` | new kind |
+| Subscriptions (cross-board links) | `subscriptions` | new kind |
+| Admin credentials | `credentials` (identity only, never the secret) | new kind, maybe |
+
+Overview, notifications and Admin are views, not objects, and get no kind. Adding a kind
+stays a reviewed change to the enum (§6).
 
 ### 6. Code
 
