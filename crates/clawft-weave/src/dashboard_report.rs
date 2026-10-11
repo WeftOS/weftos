@@ -25,6 +25,7 @@ use crate::dashboard_actions::{ActionBook, ActionHandler};
 use crate::dashboard_cfg::{self, DashboardConfig};
 use crate::dashboard_routes::RouteReportSource;
 use crate::dashboard_services::ServiceSource;
+use crate::dashboard_budget;
 use crate::dashboard_workspaces::{self, WorkspaceSource};
 use crate::mesh_pair::PairSource;
 use crate::mesh_pair_requests;
@@ -116,6 +117,9 @@ pub enum Beat {
     Ok,
     /// 401 or 403: the dashboard does not accept this token.
     Rejected(u16),
+    /// 413: the dashboard refused the report as over its size limit; carries
+    /// the serialized report length that was sent.
+    TooLarge(usize),
     /// Anything else (transport error, other status, unusable token file).
     Failed(String),
 }
@@ -321,6 +325,7 @@ impl Dashboard {
             }
             mesh_pair_requests::attach(&mut report, &src.pair_requests().await);
         }
+        dashboard_budget::fit(&mut report, dashboard_budget::REPORT_BUDGET_BYTES);
         json!({
             "node_id": self.cfg.node_id,
             "installation_id": self.cfg.installation_id,
@@ -334,6 +339,7 @@ impl Dashboard {
         let text = match &beat {
             Beat::Ok => "ok".to_owned(),
             Beat::Rejected(s) => format!("rejected ({s})"),
+            Beat::TooLarge(n) => format!("report too large ({n} bytes)"),
             Beat::Failed(e) => format!("failed: {e}"),
         };
         let ok = beat == Beat::Ok;
@@ -368,6 +374,7 @@ impl Dashboard {
                         _ => return Beat::Rejected(s),
                     }
                 }
+                Ok((413, _)) => return Beat::TooLarge(dashboard_budget::report_len(&body["report"])),
                 Ok((s, _)) => return Beat::Failed(format!("dashboard answered HTTP {s}")),
                 Err(e) => return Beat::Failed(e),
             }
@@ -400,6 +407,11 @@ impl Dashboard {
                         status = s,
                         "dashboard token rejected: the dashboard does not accept this node's token; \
                          issue a new one and write it to the token file (the reporter keeps running)"
+                    ),
+                    (Beat::TooLarge(n), prev) if prev.as_ref() != Some(&beat) => tracing::warn!(
+                        bytes = n,
+                        "dashboard rejected the report as too large ({n} bytes); the reporter trims to a {} byte budget",
+                        dashboard_budget::REPORT_BUDGET_BYTES
                     ),
                     (Beat::Failed(e), prev) if prev.as_ref() != Some(&beat) => {
                         tracing::warn!(error = %e, "dashboard heartbeat failed (backing off)")

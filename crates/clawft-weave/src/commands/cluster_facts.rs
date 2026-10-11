@@ -256,7 +256,6 @@ mod tests {
             received_at: 1_000,
             expires_at: 1_600,
             delta_seq: 0,
-            last_delta_payload: None,
             facts: f,
             signed,
         }
