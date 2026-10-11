@@ -479,3 +479,67 @@ async fn the_byte_budget_is_charged_on_the_whole_frame() {
     assert!(dropped >= 3, "4 x 256 KiB burst, then refill: {dropped} dropped");
     let _ = c;
 }
+
+fn busy(base: &NodeFacts) -> NodeFacts {
+    let mut b = base.clone();
+    b.capabilities[1].state = CapabilityState::Busy;
+    b
+}
+
+fn feed(rx: &TestNode, from: &TestNode, wires: Vec<FactsWire>, t: u64) -> Vec<Result<IngestOutcome, IngestError>> {
+    let c = ctx(&from.id, false);
+    wires
+        .into_iter()
+        .map(|w| rx.ex.ingest(&c, w, t, &mut Vec::new()))
+        .collect()
+}
+
+#[tokio::test]
+async fn a_re_announce_replays_the_delta_as_a_benign_duplicate() {
+    let (a, b) = (node(21), node(22));
+    let base = sample(&a);
+    a.ex.publish(base.clone(), now()).await.unwrap();
+    a.ex.update_live(busy(&base), now()).await.unwrap();
+
+    // The first announce applies; every later send_current is a replay.
+    let first = feed(&b, &a, a.ex.current(), now());
+    assert!(first.iter().all(Result::is_ok), "{first:?}");
+    for _ in 0..2 {
+        let again = feed(&b, &a, a.ex.current(), now());
+        assert!(matches!(again[0], Ok(IngestOutcome::Accepted { outcome: InsertOutcome::Unchanged, .. })), "{again:?}");
+        assert!(
+            matches!(again[1], Err(IngestError::Cache(CacheError::DuplicateDelta { .. }))),
+            "{again:?}"
+        );
+    }
+    assert_eq!(held(&b, &a).unwrap().load().busy, 1);
+}
+
+#[tokio::test]
+async fn a_restarted_peer_starts_over_at_delta_seq_1_without_being_refused() {
+    // Same key, fresh sender state: base seq follows the clock, delta seq
+    // is back at 1, and the content differs from the old incarnation's.
+    let (a1, b) = (node(23), node(24));
+    let base = sample(&a1);
+    let t0 = now();
+    a1.ex.publish(base.clone(), t0).await.unwrap();
+    a1.ex.update_live(busy(&base), t0).await.unwrap();
+    assert!(feed(&b, &a1, a1.ex.current(), t0).iter().all(Result::is_ok));
+
+    let a2 = node(23);
+    let t1 = t0 + 5;
+    a2.ex.publish(base.clone(), t1).await.unwrap();
+    let mut other = base.clone();
+    other.capabilities[0].state = CapabilityState::Busy;
+    a2.ex.update_live(other, t1).await.unwrap();
+    let new = a2.ex.current();
+
+    // The delta alone (its base lost in transit) asks for the base; no fault.
+    let lost = feed(&b, &a2, vec![new[1].clone()], t1);
+    assert!(matches!(lost[0], Err(IngestError::Cache(CacheError::BaseBehind { .. }))), "{lost:?}");
+    // Base then delta: the new incarnation is accepted.
+    let ok = feed(&b, &a2, new, t1);
+    assert!(ok.iter().all(Result::is_ok), "{ok:?}");
+    let got = held(&b, &a1).unwrap();
+    assert_eq!((got.delta_seq, got.capabilities()[0].state), (1, CapabilityState::Busy));
+}

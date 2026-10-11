@@ -138,6 +138,18 @@ pub enum CacheError {
         /// Replayed delta seq.
         seq: u64,
     },
+    /// The delta applies to a newer base than the one held (the sender
+    /// re-based or restarted and that base has not arrived). Benign: the
+    /// caller asks the peer for its current facts.
+    #[error("delta for {node_id} names base {need}, held base is {held}")]
+    BaseBehind {
+        /// Node.
+        node_id: String,
+        /// Base seq held.
+        held: u64,
+        /// Base seq the delta needs.
+        need: u64,
+    },
     /// No fresh base for a delta.
     #[error("no fresh facts cached for {0}")]
     UnknownNode(String),
@@ -367,6 +379,23 @@ impl NodeFactsCache {
             .ok_or_else(|| CacheError::UnknownNode(delta.node_id.clone()))?;
         if entry.public_key != pk {
             return Err(CacheError::KeyMismatch);
+        }
+        // A delta numbers its changes per base: `seq` is only comparable with
+        // `delta_seq` when both are for the held base. A re-based or restarted
+        // sender starts again at 1 on its new base, so judge the base first.
+        if delta.base_seq > entry.facts.seq {
+            return Err(CacheError::BaseBehind {
+                node_id: delta.node_id.clone(),
+                held: entry.facts.seq,
+                need: delta.base_seq,
+            });
+        }
+        if delta.base_seq < entry.facts.seq {
+            return Err(NodeFactsAdvertError::Facts(FactsError::Delta(format!(
+                "delta base_seq {} < held base {}",
+                delta.base_seq, entry.facts.seq
+            )))
+            .into());
         }
         if delta.seq == entry.delta_seq
             && entry.last_delta_payload.as_deref() == Some(signed.payload.as_str())
