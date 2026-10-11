@@ -34,7 +34,8 @@ s.size(); s.capabilities();
 | 1–99 | Chrome (frames, labels) |
 | 100–199 | Avatar |
 | 200–299 | Status |
-| 300–999 | Page mode (chrome 300–304, lines 400–999) and guide views |
+| 300–499 | Page layout |
+| 500–999 | Guide views (header 500–559, rows from 560 in strides of 10) |
 | 1000–4095 | Chat lines, recycled (4092–4095: scroll thumb and unread marker) |
 
 - **API to the host:**
@@ -50,7 +51,7 @@ c.show_checklist(Checklist { id, title, items: Vec<{id, text, done}> }); c.set_i
 c.show_steps(Steps { id, title, steps: Vec<String>, current });
 c.ask(Survey { id, question, explain, choices: Vec<{n: u8, caption}>, index, total });  // 2..=6 choices
 // guide events come back from c.on_event(..) -> Option<GuideAnswer>:
-//   Answer{survey_id, choice_n} | Toggle{checklist_id, item_id, done} | Step{steps_id, next|back} | Skip{survey_id}
+//   Answer{survey_id, choice_n} | Toggle{checklist_id, item_id, done} | Step{steps_id, dir} | Skip{survey_id} | Back{survey_id}
 c.on_event(ev);                                      // scroll by drag, swipe to close the page
 ```
 
@@ -87,3 +88,4 @@ GET  /v1/cos/events (SSE) -> {kind: "state", state}
 ## Changes
 
 - 2026-10-11: console methods return `Result<(), S::Error>`; `Console` holds `&mut S`, reached through `session()`; `ObjectEvent` may add `Release{node}` (end of gesture, for swipes); `tick(now_ms)` drives avatar tweens; node range 300–999 assigned to page mode and guide views.
+- 2026-10-11: page 300–499 and guide 500–999 (replacing 300–999); `GuideAnswer::Back{survey_id}` added; gestures end on a tap or a 250 ms pause in dragging (the client has no pointer-up event); `PageDoc` blocks are Heading, Paragraph, Bullets and Rule.
