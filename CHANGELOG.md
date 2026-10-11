@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Staging area for changes after the 0.8.4 cut.
 
+## [0.8.4-rc.6] - 2026-10-11
+
+### Added
+- Pocket TTS trial engine in `clawft-voice-tts` (the `ptts` Rust crate) behind the default-off
+  `pocket-tts` feature: streaming with prompt cancel, model path from config or
+  `WEFTOS_POCKET_TTS_DIR`, never downloads weights; `WEFTOS_FAST_TTS=pocket-tts` selects it.
+- `smart-turn-compare` (`clawft-voice-onnx`): offline comparison of the voice turn gate with
+  the Smart Turn end-of-turn model over a directory of WAVs (JSON and Markdown report).
+- Vector bench: a RaBitQ runner, single- and multi-thread QPS columns, and first-query graph
+  build counted as build time.
+
+### Fixed
+- HNSW memory search recall: guided (path-predicted) search was on by default and scored only
+  two of sixteen regions, and adaptive `ef` rebuilt the index during queries. Guided search is
+  now opt-in and search never retunes `ef`. Recall@10 on the bench: 0.49 -> 0.94 (10K),
+  0.58 -> 0.91 (100K).
+- Pairing: a primary accepts a member that advertises no reachable address (the member is
+  recorded by key and never dialled); `weaver mesh pair request` warns when this node has no
+  advertise address.
+- Node facts: a delta is judged against its base before its sequence number, so a peer that
+  re-based or restarted no longer triggers "delta seq N <= applied N" warnings.
+
 ## [0.8.4-rc.5] - 2026-10-11
 
 ### Added
