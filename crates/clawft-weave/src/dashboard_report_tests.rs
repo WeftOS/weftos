@@ -302,3 +302,18 @@ async fn an_invalid_config_cannot_build_a_reporter() {
     cfg.node_id = "nope".into();
     assert!(Dashboard::new(cfg, Ambient::default(), std::sync::Arc::new(Kids(vec![]))).is_err());
 }
+
+#[tokio::test]
+async fn a_413_is_reported_as_too_large_not_as_a_rejected_token() {
+    let fake = FakeDash::start().await;
+    fake.answer(HB, &[(413, r#"{"error":"Report too large"}"#)]);
+    let (_d, path) = token_dir(&token('a'));
+    let dash = dashboard(config(&fake.url, &path));
+
+    let beat = dash.heartbeat_once().await;
+    let Beat::TooLarge(n) = beat else { panic!("expected TooLarge, got {beat:?}") };
+    assert!(n > 0 && n <= crate::dashboard_budget::REPORT_BUDGET_BYTES, "{n}");
+    let st = dash.status_json();
+    assert_eq!(st["last_heartbeat"], format!("report too large ({n} bytes)"));
+    assert_eq!(st["consecutive_failures"], 1);
+}

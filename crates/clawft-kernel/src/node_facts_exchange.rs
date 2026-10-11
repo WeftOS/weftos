@@ -561,7 +561,9 @@ impl PeerControlSink for FactsExchange {
         };
         let mut replies = Vec::new();
         if let Err(e) = self.ingest_from(ctx, conn, wire, Self::now(), &mut replies) {
-            if matches!(
+            if matches!(&e, IngestError::Cache(CacheError::DuplicateDelta { .. })) {
+                tracing::debug!(peer = %ctx.peer_id, error = %e, "node facts delta replayed; ignored");
+            } else if matches!(
                 &e,
                 IngestError::Cache(CacheError::Verify(NodeFactsAdvertError::Facts(
                     clawft_types::placement::FactsError::FromFuture { .. }

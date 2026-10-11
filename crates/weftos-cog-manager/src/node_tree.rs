@@ -134,16 +134,16 @@ mod tests {
     #[test]
     fn root_holds_tailnet_peers_then_its_own_cogs_and_edges() {
         let mesh = vec![
-            MeshNodeRaw { node: "mac".into(), ip: "100.87.159.20".into(), is_self: true, reachable: true, cogs: vec![cog("catalog", true)], ..MeshNodeRaw::default() },
-            MeshNodeRaw { node: "cog0".into(), ip: "100.109.125.18".into(), is_self: false, reachable: true, cogs: vec![cog("ld1040c-motion", false)], ..MeshNodeRaw::default() },
+            MeshNodeRaw { node: "example-host".into(), ip: "100.64.0.10".into(), is_self: true, reachable: true, cogs: vec![cog("catalog", true)], ..MeshNodeRaw::default() },
+            MeshNodeRaw { node: "cog0".into(), ip: "100.64.0.20".into(), is_self: false, reachable: true, cogs: vec![cog("ld1040c-motion", false)], ..MeshNodeRaw::default() },
         ];
         let net = Net {
-            node: "bigmac".into(),
+            node: "example-host".into(),
             tailscale: crate::client::Tailscale {
                 available: true,
                 peers: vec![
-                    crate::client::NetPeer { name: "bigmac".into(), ip: "100.87.159.20".into(), online: true, is_self: true, ..Default::default() },
-                    crate::client::NetPeer { name: "cognitum-cog0".into(), ip: "100.109.125.18".into(), online: true, is_self: false, ..Default::default() },
+                    crate::client::NetPeer { name: "example-host".into(), ip: "100.64.0.10".into(), online: true, is_self: true, ..Default::default() },
+                    crate::client::NetPeer { name: "example-cog".into(), ip: "100.64.0.20".into(), online: true, is_self: false, ..Default::default() },
                     crate::client::NetPeer { name: "bench".into(), ip: "192.168.1.50".into(), online: true, is_self: false, ..Default::default() },
                 ],
             },
@@ -151,16 +151,16 @@ mod tests {
             ..Net::default()
         };
         let t = tree("http://127.0.0.1:9480", "", &[], Some(&net), &mesh);
-        assert_eq!(t.label, "bigmac");
+        assert_eq!(t.label, "example-host");
         assert_eq!(t.reach, Reach::ThisMachine);
-        let peer = t.children.iter().find(|c| c.role == Role::Peer && c.key == "100.109.125.18").unwrap();
-        assert_eq!(peer.connect_url.as_deref(), Some("http://100.109.125.18:9480"));
+        let peer = t.children.iter().find(|c| c.role == Role::Peer && c.key == "100.64.0.20").unwrap();
+        assert_eq!(peer.connect_url.as_deref(), Some("http://100.64.0.20:9480"));
         assert_eq!(peer.children[0].label, "ld1040c-motion");
         let lan = t.children.iter().find(|c| c.key == "192.168.1.50").unwrap();
         assert!(lan.connect_url.is_none());
         assert!(lan.note.contains("not a tailnet"));
         assert!(t.children.iter().any(|c| c.role == Role::Cog && c.label == "catalog"));
         assert!(t.children.iter().any(|c| c.role == Role::Edge && c.label.contains("esp-1")));
-        assert!(!t.children.iter().any(|c| c.key == "100.87.159.20"), "the connected node is the root, not a child of itself");
+        assert!(!t.children.iter().any(|c| c.key == "100.64.0.10"), "the connected node is the root, not a child of itself");
     }
 }

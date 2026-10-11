@@ -151,6 +151,38 @@ fn deltas_update_state_in_order_and_only_from_the_node_key() {
 }
 
 #[test]
+fn an_exact_delta_replay_is_a_benign_duplicate_but_conflicts_and_older_still_refuse() {
+    let (c, k) = (NodeFactsCache::new(), key());
+    c.insert(signed(&k, 3, 1_000), TrustTier::Paired, 1_000)
+        .unwrap();
+    let id = node_id_from_pubkey(&k.verifying_key().to_bytes());
+    let busy = delta(&k, 3, 2, CapabilityState::Busy);
+    c.apply_delta(&busy, 1_020).unwrap();
+
+    // Exact replay: distinct, benign error; state untouched.
+    assert_eq!(
+        c.apply_delta(&busy, 1_021),
+        Err(CacheError::DuplicateDelta { node_id: id.clone(), seq: 2 })
+    );
+    assert_eq!(c.get(&id, 1_021).unwrap().delta_seq, 2);
+
+    // Same seq, different content: still a refusal, not a duplicate.
+    let err = c
+        .apply_delta(&delta(&k, 3, 2, CapabilityState::Available), 1_021)
+        .unwrap_err();
+    assert!(!matches!(err, CacheError::DuplicateDelta { .. }), "{err:?}");
+    // Older seq: refused.
+    let err = c
+        .apply_delta(&delta(&k, 3, 1, CapabilityState::Available), 1_021)
+        .unwrap_err();
+    assert!(!matches!(err, CacheError::DuplicateDelta { .. }), "{err:?}");
+    assert_eq!(
+        c.get(&id, 1_021).unwrap().capabilities()[0].state,
+        CapabilityState::Busy
+    );
+}
+
+#[test]
 fn an_operator_tier_change_applies_even_when_the_facts_are_unchanged() {
     let (c, k) = (NodeFactsCache::new(), key());
     let s = signed(&k, 1, 1_000);

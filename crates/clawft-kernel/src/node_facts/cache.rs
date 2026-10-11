@@ -72,6 +72,9 @@ pub struct CachedNodeFacts {
     pub received_at: u64,
     /// Last applied delta `seq` (0 = none).
     pub delta_seq: u64,
+    /// Exact signed payload of the last applied delta, to tell an exact
+    /// replay from a conflicting re-issue of the same `seq`.
+    pub last_delta_payload: Option<String>,
     /// Signing key of the node.
     pub public_key: [u8; 32],
 }
@@ -125,6 +128,15 @@ pub enum CacheError {
         got: u64,
         /// Held seq.
         held: u64,
+    },
+    /// Exact replay of the delta already applied (same `seq`, same content).
+    /// Benign: nothing changed, callers should not treat it as a fault.
+    #[error("duplicate delta for {node_id}: seq {seq} already applied")]
+    DuplicateDelta {
+        /// Node.
+        node_id: String,
+        /// Replayed delta seq.
+        seq: u64,
     },
     /// No fresh base for a delta.
     #[error("no fresh facts cached for {0}")]
@@ -208,6 +220,7 @@ impl NodeFactsCache {
             origin,
             received_at: now,
             delta_seq: 0,
+            last_delta_payload: None,
             public_key,
         };
         // Capacity first, for a node not held yet (soft: a racing insert of
@@ -355,6 +368,14 @@ impl NodeFactsCache {
         if entry.public_key != pk {
             return Err(CacheError::KeyMismatch);
         }
+        if delta.seq == entry.delta_seq
+            && entry.last_delta_payload.as_deref() == Some(signed.payload.as_str())
+        {
+            return Err(CacheError::DuplicateDelta {
+                node_id: delta.node_id.clone(),
+                seq: delta.seq,
+            });
+        }
         if delta.seq <= entry.delta_seq {
             return Err(NodeFactsAdvertError::Facts(FactsError::Delta(format!(
                 "delta seq {} <= applied {}",
@@ -367,6 +388,7 @@ impl NodeFactsCache {
             .apply_delta(&delta)
             .map_err(NodeFactsAdvertError::Facts)?;
         entry.delta_seq = delta.seq;
+        entry.last_delta_payload = Some(signed.payload.clone());
         Ok(())
     }
 

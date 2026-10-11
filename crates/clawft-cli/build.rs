@@ -104,9 +104,12 @@ fn git_short_hash() -> Option<String> {
     Some(trimmed.to_string())
 }
 
+/// `dist-manifest.json` is excluded: the release workflow redirects
+/// `dist build` output into it at the repo root (untracked) before cargo
+/// runs, which made every tagged release binary report `<sha>-dirty`.
 fn git_is_dirty() -> Option<bool> {
     let out = Command::new("git")
-        .args(["status", "--porcelain"])
+        .args(["status", "--porcelain", "--", ".", ":(exclude)dist-manifest.json"])
         .output()
         .ok()?;
     if !out.status.success() {
