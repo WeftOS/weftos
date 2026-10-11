@@ -16,6 +16,8 @@ required_project_context:
     description: base URL of the project's dashboard harness API
   - key: harness.token_file
     description: path to a mode-0600 file holding the harness credential; the agent never reads the value into a prompt or an event
+  - key: harness.project_id
+    description: UUID of the dashboard project this console serves; project-history notes post to /api/harness/projects/<id>/events and the token must reach that project
   - key: board_adapter.staging_dir
     description: directory where staged manifests are written for the steward to pick up
   - key: team.runtime_command
