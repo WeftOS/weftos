@@ -8,6 +8,7 @@ pub mod board;
 pub mod harness;
 pub mod kickoff;
 pub mod nodes;
+pub mod ui;
 
 use std::collections::HashMap;
 use std::io::Write;

@@ -11,8 +11,9 @@ use serde_json::{Value, json};
 use tokio::sync::{Mutex, broadcast};
 
 use crate::CosError;
-use crate::conversation::{Conversation, Source, TurnId, UserUtterance};
+use crate::conversation::{Conversation, GuideAnswer, Source, TurnId, UserUtterance};
 use crate::events::{AgentState, Event, redact};
+use crate::guide::{Resolution, UiHandle};
 use crate::prompt::system_prompt;
 use crate::routing::{ModelRoutes, Route, Tier};
 use crate::tools::{Gate, ToolLog, ToolRegistry};
@@ -35,6 +36,7 @@ struct Inner {
     routes: ModelRoutes,
     tools: ToolRegistry,
     log: ToolLog,
+    ui: UiHandle,
     tx: broadcast::Sender<Event>,
     history: Mutex<Vec<Value>>,
     pending: Mutex<Option<PendingAction>>,
@@ -48,13 +50,18 @@ pub struct CosAgent {
 }
 
 impl CosAgent {
+    /// Build the agent. The `ui.*` tools are added to `tools` here, since
+    /// they need the agent's emitter and guide state.
     pub fn new(routes: ModelRoutes, tools: ToolRegistry, log: ToolLog) -> Self {
         let (tx, _) = broadcast::channel(256);
+        let ui = UiHandle::new(tx.clone());
+        let tools = crate::tools::ui::register(tools, &ui);
         Self {
             inner: Arc::new(Inner {
                 routes,
                 tools,
                 log,
+                ui,
                 tx,
                 history: Mutex::new(Vec::new()),
                 pending: Mutex::new(None),
@@ -69,6 +76,9 @@ impl CosAgent {
     pub async fn run_turn(&self, turn_id: TurnId, utterance: UserUtterance) {
         let inner = self.inner.clone();
         let _serial = inner.turn_gate.lock().await;
+        inner.ui.lock().current_turn = Some(turn_id.clone());
+        // A spoken/typed number or "skip" answers a pending survey question.
+        let utterance = inner.ui.resolve_spoken(utterance);
         inner.emit(Event::state(AgentState::Thinking));
         let result = inner.turn(&turn_id, &utterance).await;
         match result {
@@ -99,6 +109,23 @@ impl Conversation for CosAgent {
         Ok(turn_id)
     }
 
+    async fn answer(&self, answer: GuideAnswer) -> Result<TurnId, CosError> {
+        let turn_id = TurnId::new();
+        match self.inner.ui.apply_answer(&answer)? {
+            Resolution::Turn(utterance) => {
+                let agent = self.clone();
+                let id = turn_id.clone();
+                tokio::spawn(async move { agent.run_turn(id, utterance).await });
+            }
+            Resolution::Updated { note } => {
+                // The view changed and was re-emitted; the model learns about
+                // it on its next turn without being woken now.
+                self.inner.history.lock().await.push(json!({"role": "user", "content": note}));
+            }
+        }
+        Ok(turn_id)
+    }
+
     fn events(&self) -> broadcast::Receiver<Event> {
         self.inner.tx.subscribe()
     }
@@ -126,6 +153,7 @@ impl Inner {
         let source = match utterance.source {
             Source::Voice => "voice",
             Source::Typed => "typed",
+            Source::Touch => "touch",
         };
         {
             let mut h = self.history.lock().await;

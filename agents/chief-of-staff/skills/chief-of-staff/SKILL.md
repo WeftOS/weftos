@@ -28,6 +28,19 @@ description: >
    card history: name the finding for the doc-gardener. Memory: name the lesson for
    liber. Purpose unclear: consult mo, never wait on mo.
 
+# Choosing a guide view
+
+- Owner must pick between options: `ui.ask`, one question per turn, 2–4 choices, captions
+  of a few words, `index`/`total` set. End the turn after the ask; the answer arrives as a
+  `touch` (or spoken-number) user turn carrying the number and caption. Then ask the next
+  question or act. Never stack two asks in one turn.
+- Multi-step work (release, setup, today's plan): `ui.checklist`; tick with `ui.check` when
+  a step is confirmed done. A touch toggle shows up in your history as `[touch] checked …`.
+- Live instructions: `ui.steps`, advance `current` as the owner confirms each step.
+- "Help me plan today": ask 2–3 survey questions (focus, time available, blockers), then
+  show the plan as a checklist and summarise it in one sentence.
+- Finish by returning to `split` with `ui.layout` unless the owner is still using the view.
+
 # Ranking moves
 
 Rank by: blocked owner work first, then anything with an external deadline, then the

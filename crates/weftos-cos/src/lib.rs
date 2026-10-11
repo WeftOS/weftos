@@ -21,6 +21,7 @@ pub mod cli;
 pub mod config;
 pub mod conversation;
 pub mod events;
+pub mod guide;
 pub mod host;
 pub mod prompt;
 pub mod routing;
@@ -30,7 +31,7 @@ pub mod voice;
 
 pub use agent::CosAgent;
 pub use config::CosConfig;
-pub use conversation::{Conversation, Source, TurnId, UserUtterance};
+pub use conversation::{AnswerKind, Conversation, GuideAnswer, Source, TurnId, UserUtterance};
 pub use events::{AgentState, Event};
 
 /// Errors surfaced by the agent, its tools and the voice path.
