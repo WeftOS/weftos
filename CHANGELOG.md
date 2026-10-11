@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Staging area for changes after the 0.8.4 cut.
 
+## [0.8.4-rc.5] - 2026-10-11
+
+### Added
+- Chief-of-staff console (ADR-117 D1, ADR-118 C1-C3): `weftos-display-client` (display
+  sessions, scene ops, object events), the console screen with split/page/guide layouts and
+  checklist, steps and survey views, the `weftos-cos` agent with its conversation API and
+  push-to-talk, and `cos-console-host` joining screen, agent and button. Surveys accept a
+  `back` answer. The agent streams model output for real, including tool calls, and reads a
+  project's history from the dashboard.
+- `weaver mesh identity [--user]` prints the node's (or user key's) public mesh identity.
+- `[kernel.mesh] leaf_listen_addr`: a separate bind address for the certified-leaf listeners.
+- Edge pad (CrowPanel DIS08070H, ESP-IDF): first hardware boot, double-buffered flip, boot
+  self-test, touch targets, scene renderer, boot inventory, push-to-talk on IO44 and a
+  feature-gated stereo INMP441 input.
+
+### Fixed
+- The router redirects `/` to the `/_weftos/` index when no route holds the root.
+- The dashboard reporter trims its report to a 60 KB budget and logs a 413 as "report too
+  large" instead of a token rejection (rc.4 reports with routes and services were refused).
+- Release binaries no longer report `-dirty` in `--version`: the release workflow's
+  `dist-manifest.json` is excluded from the dirty check.
+- An exact replay of a node-facts delta is ignored at debug level instead of a WARN every
+  minute.
+- LeafSim clears partially damaged areas before redrawing (no ghost pixels).
+
 ## [0.8.4-rc.4] - 2026-10-10
 
 ### Added

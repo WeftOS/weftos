@@ -16,7 +16,7 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
-exo-core = { version = "0.8.4-rc.4", path = "../exo-core" }
+exo-core = { version = "0.8.4-rc.5", path = "../exo-core" }
 serde = { workspace = true }
 thiserror = { workspace = true }
 parking_lot = { workspace = true }

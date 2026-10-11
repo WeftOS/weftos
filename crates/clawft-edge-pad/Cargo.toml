@@ -8,7 +8,7 @@
 
 [package]
 name = "clawft-edge-pad"
-version = "0.8.4-rc.4"
+version = "0.8.4-rc.5"
 edition = "2021"
 description = "WeftOS Inkpad Actor firmware — ESP32-S3 + Elecrow CrowPanel DIS08070H. Spike per .planning/actors/JOURNALED-ACTOR-INKPAD.md."
 license = "MIT OR Apache-2.0"
