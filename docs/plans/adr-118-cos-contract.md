@@ -34,7 +34,8 @@ s.size(); s.capabilities();
 | 1–99 | Chrome (frames, labels) |
 | 100–199 | Avatar |
 | 200–299 | Status |
-| 1000–4095 | Chat lines, recycled |
+| 300–999 | Page mode (chrome 300–304, lines 400–999) and guide views |
+| 1000–4095 | Chat lines, recycled (4092–4095: scroll thumb and unread marker) |
 
 - **API to the host:**
 
@@ -43,7 +44,13 @@ let mut c = Console::new(&mut session);
 c.set_agent_state(AgentState::Listening | Thinking | Speaking | Idle | Blocked(reason));
 c.set_status(StatusLine { task, model, lanes_running, ptt_active });
 c.push_user_line(text); c.push_agent_text(delta_or_full, msg_id);
-c.show_page(PageDoc) /* stub in C2: title plus plain paragraphs */; c.hide_page();
+c.set_layout(Layout::Split | Layout::Page | Layout::Guide);
+c.show_page(PageDoc) /* example page in C2: title, headings, paragraphs, a list */; c.hide_page();
+c.show_checklist(Checklist { id, title, items: Vec<{id, text, done}> }); c.set_item(id, item_id, done);
+c.show_steps(Steps { id, title, steps: Vec<String>, current });
+c.ask(Survey { id, question, explain, choices: Vec<{n: u8, caption}>, index, total });  // 2..=6 choices
+// guide events come back from c.on_event(..) -> Option<GuideAnswer>:
+//   Answer{survey_id, choice_n} | Toggle{checklist_id, item_id, done} | Step{steps_id, next|back} | Skip{survey_id}
 c.on_event(ev);                                      // scroll by drag, swipe to close the page
 ```
 
@@ -53,12 +60,17 @@ The interface is an in-process Rust trait, with a local HTTP/SSE server for the 
 other front ends:
 
 ```text
-POST /v1/cos/utterance {text, source: "voice"|"typed"} -> 202 {turn_id}
+POST /v1/cos/utterance {text, source: "voice"|"typed"|"touch"} -> 202 {turn_id}
+POST /v1/cos/answer {kind: "answer"|"toggle"|"step"|"skip", id, value} -> 202  // guide interactions
 GET  /v1/cos/events (SSE) -> {kind: "state", state}
                             {kind: "token", turn_id, text}
                             {kind: "message", turn_id, text, final: true}
                             {kind: "tool", name, summary, status}      // no arguments with secrets
-                            {kind: "page", turn_id, markdown}           // for page mode (C5)
+                            {kind: "page", turn_id, markdown}           // page layout (example page now; markdown in C5)
+                            {kind: "layout", layout: "split"|"page"|"guide"}
+                            {kind: "checklist", id, title, items: [{id, text, done}]}
+                            {kind: "steps", id, title, steps: [..], current}
+                            {kind: "ask", id, question, explain, choices: [{n, caption}], index, total}
                             {kind: "status", task, model, lanes_running}
 ```
 
@@ -71,3 +83,7 @@ GET  /v1/cos/events (SSE) -> {kind: "state", state}
 - **Feedback:** the console shows `ptt_active` while the button is held, and the transcript as
   the user's line.
 - **Retention:** raw audio is discarded after transcription unless a debug flag is set.
+
+## Changes
+
+- 2026-10-11: console methods return `Result<(), S::Error>`; `Console` holds `&mut S`, reached through `session()`; `ObjectEvent` may add `Release{node}` (end of gesture, for swipes); `tick(now_ms)` drives avatar tweens; node range 300–999 assigned to page mode and guide views.

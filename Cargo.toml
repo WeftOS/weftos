@@ -175,6 +175,11 @@ exclude = [
     "crates/clawft-edge-bench",
     "crates/lgfx-bus-rgb-rs",
     "crates/weftos-leaf-sim",
+    # ADR-117 D1 display endpoint client (sessions over weftos-leaf-sim,
+    # a desktop window, later the certified leaf). Own [workspace] like
+    # its leaf siblings; `scripts/build.sh check|clippy|test
+    # weftos-display-client` runs cargo inside it.
+    "crates/weftos-display-client",
     # STM32N6 leaf firmware (thumbv8m, own [workspace]) and its host-side
     # RVF validator; built by `scripts/build.sh n6-leaf`.
     "crates/weftos-n6-leaf",
