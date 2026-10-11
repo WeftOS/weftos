@@ -16,7 +16,8 @@
 //! - `workload-peers.json`: `[{"addr": "host:port", "tier": "paired",
 //!   "key": "<64 hex>"}]`. The tier is given to the node `key` names, or,
 //!   without a key, to the key first seen at the address; a different key
-//!   answering there later never inherits it;
+//!   answering there later never inherits it. `addr` may be left out when
+//!   `key` is given: the peer is trusted (project fetch) but never dialed;
 //! - `workload-container.json`: serve a container adapter
 //!   (`{"engine": "docker", "base_image": "name@sha256:<64 hex>",
 //!   "arches_native": ["aarch64"], "arches_emulated": [],
@@ -126,7 +127,10 @@ pub fn load_anchors(dir: &Path) -> Result<TrustAnchors, String> {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PeerEntry {
-    addr: String,
+    /// Absent for a peer that has no address to dial (a paired member whose
+    /// mesh listens on loopback): it is trusted by key, never dialed.
+    #[serde(default)]
+    addr: Option<String>,
     #[serde(default = "paired")]
     tier: TrustTier,
     /// The node key (64 hex) this tier is for.
@@ -147,27 +151,57 @@ fn host_port(a: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || ".-:[]_".contains(c))
 }
 
-/// Operator peers from the runtime dir (none if the file is absent).
-pub fn load_peers(dir: &Path) -> Result<Vec<OperatorPeer>, String> {
+fn read_entries(dir: &Path) -> Result<Vec<PeerEntry>, String> {
     let peers: Vec<PeerEntry> = parse(dir, PEERS_FILE)?.unwrap_or_default();
     if peers.len() > MAX_PEERS {
         return Err(format!("{PEERS_FILE}: more than {MAX_PEERS} peers"));
     }
-    peers
-        .into_iter()
-        .map(|p| {
-            if !host_port(&p.addr) {
-                return Err(format!("{PEERS_FILE}: {:?} is not host:port", p.addr));
-            }
-            let peer = OperatorPeer::new(p.addr.clone(), p.tier);
-            match p.key {
-                None => Ok(peer),
-                Some(k) => hex_decode_exact::<32>(&k)
-                    .map(|k| peer.with_key(k))
-                    .ok_or_else(|| format!("{PEERS_FILE}: key for {:?} is not 64 hex", p.addr)),
-            }
-        })
-        .collect()
+    for p in &peers {
+        if let Some(a) = p.addr.as_deref().filter(|a| !host_port(a)) {
+            return Err(format!("{PEERS_FILE}: {a:?} is not host:port"));
+        }
+        if p.addr.is_none() && p.key.is_none() {
+            return Err(format!("{PEERS_FILE}: an entry needs an addr or a key"));
+        }
+    }
+    Ok(peers)
+}
+
+fn entry_key(p: &PeerEntry) -> Result<Option<[u8; 32]>, String> {
+    p.key.as_deref().map_or(Ok(None), |k| {
+        hex_decode_exact::<32>(k)
+            .map(Some)
+            .ok_or_else(|| format!("{PEERS_FILE}: key for {:?} is not 64 hex", p.addr.as_deref().unwrap_or("(no addr)")))
+    })
+}
+
+/// Operator peers from the runtime dir (none if the file is absent). An
+/// entry without an address is trusted by key only ([`load_peer_keys`]) and
+/// is skipped here: nothing may try to dial it.
+pub fn load_peers(dir: &Path) -> Result<Vec<OperatorPeer>, String> {
+    let mut out = Vec::new();
+    for p in read_entries(dir)? {
+        let key = entry_key(&p)?;
+        let Some(addr) = p.addr else { continue };
+        let peer = OperatorPeer::new(addr, p.tier);
+        out.push(match key {
+            Some(k) => peer.with_key(k),
+            None => peer,
+        });
+    }
+    Ok(out)
+}
+
+/// `(tier, key)` of every keyed entry, dialable or not (project fetch
+/// authorises callers by key).
+pub fn load_peer_keys(dir: &Path) -> Result<Vec<(TrustTier, [u8; 32])>, String> {
+    let mut out = Vec::new();
+    for p in read_entries(dir)? {
+        if let Some(k) = entry_key(&p)? {
+            out.push((p.tier, k));
+        }
+    }
+    Ok(out)
 }
 
 #[derive(Debug, Clone, Deserialize)]

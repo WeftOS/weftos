@@ -25,6 +25,14 @@ pub const REQUEST: &str = "mesh.pair.request";
 pub const LIST: &str = "mesh.pair.list";
 pub const CANCEL: &str = "mesh.pair.cancel";
 
+static MESH_LISTEN: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+
+/// Record the kernel mesh listen address for the `mesh.pair.request` reply
+/// (first call wins; the daemon sets it once at boot).
+pub fn set_mesh_listen(listen: Option<String>) {
+    let _ = MESH_LISTEN.set(listen);
+}
+
 /// The running daemon's source.
 pub struct DaemonPairSource {
     /// Kernel mesh listen address when the mesh is on; `None` means the
@@ -124,10 +132,13 @@ async fn handle_inner(method: &str, params: Value) -> Result<Value, String> {
         REQUEST => {
             let with = str_param(&params, "with_node")?.to_owned();
             let projects = projects_param(&params)?;
+            let dir2 = dir.clone();
             let r = tokio::task::spawn_blocking(move || mesh_pair_requests::record(&dir, &with, &projects))
                 .await
                 .map_err(|e| e.to_string())??;
-            Ok(json!({ "request": r, "note": "reported to the dashboard on the next heartbeat; a member approves it there" }))
+            let listen = MESH_LISTEN.get().cloned().flatten();
+            let advertise = tokio::task::spawn_blocking(move || advertise_for(&dir2, listen.as_deref())).await.map_err(|e| e.to_string())?;
+            Ok(json!({ "request": r, "advertise": advertise, "note": "reported to the dashboard on the next heartbeat; a member approves it there" }))
         }
         LIST => {
             let r = tokio::task::spawn_blocking(move || mesh_pair_requests::list(&dir)).await.map_err(|e| e.to_string())??;

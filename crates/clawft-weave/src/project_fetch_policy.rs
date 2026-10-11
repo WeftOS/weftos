@@ -25,14 +25,12 @@ use clawft_kernel::workload_ctl::msg::{ControllerPolicy, method};
 use clawft_types::placement::TrustTier;
 
 use crate::project_fetch_grants::{Grant, Grants};
-use crate::workload_place_policy::load_peers;
+use crate::workload_place_policy::load_peer_keys;
 
 /// `(tier, key)` of the listed peer whose node id is `node_id`: `None` when it
 /// is not listed, or listed without a key.
 pub fn listed_peer(dir: &Path, node_id: &str) -> Result<Option<(TrustTier, [u8; 32])>, String> {
-    Ok(load_peers(dir)?
-        .into_iter()
-        .find_map(|p| p.key.filter(|k| node_id_from_pubkey(k) == node_id).map(|k| (p.tier, k))))
+    Ok(load_peer_keys(dir)?.into_iter().find(|(_, k)| node_id_from_pubkey(k) == node_id))
 }
 
 fn tier_ok(t: TrustTier) -> bool {

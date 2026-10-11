@@ -220,6 +220,59 @@ fn what_is_written_is_what_the_placement_policy_loads() {
     assert_eq!(loaded[0].key.map(hex::encode), Some(peer(1).0));
 }
 
+#[test]
+fn primary_accepts_a_member_without_advertise_and_fetch_authorises_it() {
+    let d = tempfile::tempdir().unwrap();
+    let chain = Arc::new(ChainManager::new(0, 1000));
+    let dp = deps(d.path(), &chain);
+    let mut p = payload("add", "member", 1, &[ULID_A]);
+    p.as_object_mut().unwrap().remove("advertise");
+    apply(&dp, "act-1", &p).unwrap();
+    let ps = peers(d.path());
+    assert_eq!(ps.len(), 1);
+    assert_eq!(ps[0]["key"], peer(1).0);
+    assert_eq!(ps[0]["tier"], "paired");
+    assert!(ps[0].get("addr").is_none(), "no address to dial");
+    let (_, node) = peer(1);
+    let (tier, key) = crate::project_fetch_policy::listed_peer(d.path(), &node).unwrap().expect("listed by key");
+    assert_eq!(tier, clawft_types::placement::TrustTier::Paired);
+    assert_eq!(hex::encode(key), peer(1).0);
+    assert!(
+        crate::project_fetch_policy::authorize(d.path(), &node, ULID_A).is_ok(),
+        "project fetch is granted without an address"
+    );
+    // The addr-less entry is never offered to the dialer.
+    assert!(crate::workload_place_policy::load_peers(d.path()).unwrap().is_empty());
+    // And it is removable.
+    p["op"] = json!("remove");
+    apply(&dp, "act-2", &p).unwrap();
+    assert!(peers(d.path()).is_empty());
+}
+
+#[test]
+fn member_refuses_a_primary_without_advertise_and_writes_nothing() {
+    let d = tempfile::tempdir().unwrap();
+    let dp = deps(d.path(), &Arc::new(ChainManager::new(0, 1000)));
+    let mut p = payload("add", "primary", 1, &[]);
+    p.as_object_mut().unwrap().remove("advertise");
+    let e = apply(&dp, "a", &p).unwrap_err();
+    assert!(e.contains("missing field advertise") && e.contains("dial its primary"), "{e}");
+    assert!(!d.path().join(PEERS_FILE).exists());
+    assert!(!d.path().join(crate::mesh_pairings::PAIRINGS_FILE).exists());
+}
+
+#[cfg(all(feature = "placement", unix))]
+#[test]
+fn addr_less_peer_entries_are_not_dialed_but_keep_their_key() {
+    let d = tempfile::tempdir().unwrap();
+    peers_add(d.path(), &peer(1).0, clawft_types::placement::TrustTier::Paired, None).unwrap();
+    peers_add(d.path(), &peer(2).0, clawft_types::placement::TrustTier::Paired, Some("100.64.0.2:9471")).unwrap();
+    let dialable = crate::workload_place_policy::load_peers(d.path()).unwrap();
+    assert_eq!(dialable.len(), 1);
+    assert_eq!(dialable[0].addr, "100.64.0.2:9471");
+    assert_eq!(crate::workload_place_policy::load_peer_keys(d.path()).unwrap().len(), 2);
+}
+
 struct Src(Option<MeshIdentity>, Vec<PairRequest>);
 
 #[async_trait]

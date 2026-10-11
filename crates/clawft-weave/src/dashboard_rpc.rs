@@ -177,6 +177,8 @@ async fn start_with(kernel: &KernelRef, cfg: DashboardConfig, home: &std::path::
         .filter(|m| m.enabled)
         .map(|m| m.listen_addr.clone());
     #[cfg(all(feature = "placement", unix))]
+    crate::mesh_pair_rpc::set_mesh_listen(mesh_listen.clone());
+    #[cfg(all(feature = "placement", unix))]
     let pair_source = crate::mesh_pair_rpc::DaemonPairSource { mesh_listen: mesh_listen.clone() };
     let ambient = Ambient { mesh_listen, gateway_url: cfg.gateway_url.clone().or(gateway) };
     let children = Arc::new(SupervisorChildren { manifests_dir: crate::user_daemon::manifests_dir(home) });

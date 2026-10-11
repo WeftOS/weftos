@@ -12,8 +12,12 @@
 //!
 //! Trust files. On `add` the **member** writes the primary into
 //! `workload-peers.json` at tier `pinned`, with the payload's `advertise`
-//! as its address; the **primary** writes the member at tier `paired` and a
-//! grant into `project-fetch.json` ([`crate::project_fetch_grants`]). Neither
+//! as its address (required: a member must be able to dial its primary); the
+//! **primary** writes the member at tier `paired`, keyed, with the payload's
+//! `advertise` when there is one and no address otherwise (a member whose
+//! mesh listens on loopback; it is trusted for project fetch but never
+//! dialed), and a grant into `project-fetch.json`
+//! ([`crate::project_fetch_grants`]). Neither
 //! side ever touches `workload-host.json`: a paired peer is never a
 //! controller. `remove` undoes both. The placement control plane reads
 //! `workload-peers.json` on every call (`sync_peers`), so a write takes
@@ -108,7 +112,11 @@ pub struct PairPayload {
     pub peer_node: String,
     pub fingerprint: String,
     pub peer_ed25519: String,
-    pub advertise: String,
+    /// Where the peer can be dialed. Optional when this node is the primary
+    /// (the member is recorded by key and not dialed); required when this
+    /// node is the member, which must be able to reach its primary.
+    #[serde(default)]
+    pub advertise: Option<String>,
     pub role: Role,
     #[serde(default)]
     pub projects: Vec<String>,
@@ -147,7 +155,7 @@ impl PairPayload {
         if !lower_hex(&p.peer_ed25519.to_ascii_lowercase(), 64) {
             return Err("pair payload: peer_ed25519 must be 64 hex".into());
         }
-        if !host_port(&p.advertise) {
+        if p.advertise.as_deref().is_some_and(|a| !host_port(a)) {
             return Err("pair payload: advertise is not host:port".into());
         }
         mesh_pair_requests::projects_ok(&p.projects).map_err(|e| format!("pair payload: projects: {e}"))?;
@@ -170,6 +178,17 @@ impl PairPayload {
             return Err("pair refused: fingerprint does not match peer_node".into());
         }
         Ok(pk)
+    }
+
+    /// The address to record for the peer. A member (other side is the
+    /// primary) must have one to add the pairing; the primary may not.
+    fn advertise_for_add(&self) -> Result<Option<&str>, String> {
+        match (self.advertise.as_deref(), self.we_are_primary()) {
+            (None, false) => Err("pair payload: missing field advertise: a member must be able to dial its primary, \
+                                  and the primary reported no address (set [kernel.mesh] listen_addr to a tailnet address there)"
+                .into()),
+            (a, _) => Ok(a),
+        }
     }
 
     /// The tier this node gives the peer: a primary is `pinned` on its
@@ -220,9 +239,13 @@ fn has_key(entry: &Value, key_hex: &str) -> bool {
 
 /// Give `key_hex` the tier at `addr`: the entry for that key is updated,
 /// or one is appended. Every other entry is kept as it is.
-pub fn peers_add(dir: &Path, key_hex: &str, tier: TrustTier, addr: &str) -> Result<(), String> {
+/// `addr` is `None` for a peer with no address to dial: it is recorded by key only.
+pub fn peers_add(dir: &Path, key_hex: &str, tier: TrustTier, addr: Option<&str>) -> Result<(), String> {
     let mut peers = read_peers(dir)?;
-    let entry = json!({ "addr": addr, "tier": tier_name(tier), "key": key_hex.to_ascii_lowercase() });
+    let mut entry = json!({ "tier": tier_name(tier), "key": key_hex.to_ascii_lowercase() });
+    if let Some(a) = addr {
+        entry["addr"] = json!(a);
+    }
     match peers.iter().position(|e| has_key(e, key_hex)) {
         Some(i) => peers[i] = entry,
         None if peers.len() >= MAX_PEERS => return Err(format!("{PEERS_FILE}: more than {MAX_PEERS} peers")),
@@ -277,10 +300,11 @@ pub fn apply(deps: &PairDeps, action_id: &str, payload: &Value) -> Result<Value,
     let tier = p.tier();
     let kind = match p.op {
         Op::Add => {
-            peers_add(dir, &key_hex, tier, &p.advertise)?;
-            if !p.we_are_primary() {
+            let advertise = p.advertise_for_add()?;
+            peers_add(dir, &key_hex, tier, advertise)?;
+            if let (false, Some(a)) = (p.we_are_primary(), advertise) {
                 // The member remembers which primary serves which projects (ADR-114 names).
-                crate::mesh_pairings::upsert(dir, &p.peer_node, "primary", &p.projects, &p.advertise)?;
+                crate::mesh_pairings::upsert(dir, &p.peer_node, "primary", &p.projects, a)?;
             }
             if p.we_are_primary() {
                 project_fetch_grants::grant(
@@ -309,7 +333,7 @@ pub fn apply(deps: &PairDeps, action_id: &str, payload: &Value) -> Result<Value,
     let record = json!({
         "request_id": p.request_id, "action_id": action_id, "peer_node": p.peer_node,
         "fingerprint": p.fingerprint, "tier": tier_name(tier), "role": p.role,
-        "advertise": p.advertise, "projects": p.projects,
+        "advertise": p.advertise, "advertise_absent": p.advertise.is_none(), "projects": p.projects,
     });
     match &deps.chain {
         Some(cm) => {

@@ -70,6 +70,15 @@ pub fn render_requests(v: &Value) -> String {
     out
 }
 
+/// Shown before the reply when this node reports no address to dial.
+pub fn no_advertise_warning(reply: &Value) -> Option<&'static str> {
+    reply.get("advertise").is_some_and(Value::is_null).then_some(
+        "warning: this node has no advertise address (its mesh listens on loopback or is off). \
+         The primary will accept the pairing but cannot dial back. Set `[kernel.mesh] listen_addr` \
+         (or the workload-host advertise) to a tailnet address to fix it.",
+    )
+}
+
 /// Run one `pair` verb, writing to `w` (tests capture it).
 pub async fn run(cmd: PairCmd, w: &mut dyn Write) -> Result<()> {
     match cmd {
@@ -78,6 +87,9 @@ pub async fn run(cmd: PairCmd, w: &mut dyn Write) -> Result<()> {
             if raw {
                 writeln!(w, "{}", serde_json::to_string_pretty(&v)?)?;
             } else {
+                if let Some(warn) = no_advertise_warning(&v) {
+                    writeln!(w, "{warn}")?;
+                }
                 writeln!(
                     w,
                     "pair request {} recorded for node {}; it reaches the dashboard on the next heartbeat. \
@@ -112,6 +124,14 @@ pub async fn run(cmd: PairCmd, w: &mut dyn Write) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn warns_only_when_this_node_has_no_advertise_address() {
+        let w = no_advertise_warning(&json!({ "advertise": null })).unwrap();
+        assert!(w.contains("cannot dial back") && w.contains("[kernel.mesh] listen_addr"), "{w}");
+        assert!(no_advertise_warning(&json!({})).is_none(), "an older daemon reply carries no field: no guess");
+        assert!(no_advertise_warning(&json!({ "advertise": "100.64.0.1:9471" })).is_none());
+    }
 
     #[test]
     fn requests_render_one_line_each_or_say_none() {
