@@ -24,6 +24,15 @@ impl std::fmt::Debug for SecretToken {
     }
 }
 
+pub(crate) fn is_uuid(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 36
+        && b.iter().enumerate().all(|(i, c)| match i {
+            8 | 13 | 18 | 23 => *c == b'-',
+            _ => c.is_ascii_hexdigit(),
+        })
+}
+
 fn is_wfb(token: &str) -> bool {
     token.len() == 68
         && token.starts_with("wfb_")
@@ -94,16 +103,23 @@ impl HarnessClient {
         Self { base: base_url.trim_end_matches('/').to_string(), events_path: events_path.into(), project_id, token, http }
     }
 
-    /// The resolved project-history path, or a clear error when the
-    /// template needs a project id and none is configured.
-    pub fn events_path(&self) -> Result<String, CosError> {
+    /// The project-history path for `project` (falling back to the
+    /// configured default project), or a clear error when the template
+    /// needs a project id and none can be resolved.
+    pub fn events_path_for(&self, project: Option<&str>) -> Result<String, CosError> {
         if !self.events_path.contains("{project_id}") {
             return Ok(self.events_path.clone());
         }
-        match &self.project_id {
-            Some(id) => Ok(self.events_path.replace("{project_id}", id)),
-            None => Err(tool_err("harness", "harness.project_id is not configured; project-history notes need the project's UUID")),
+        match project.map(str::to_string).or_else(|| self.project_id.clone()) {
+            Some(id) if is_uuid(&id) => Ok(self.events_path.replace("{project_id}", &id)),
+            Some(id) => Err(tool_err("harness", format!("project id {id:?} is not a UUID"))),
+            None => Err(tool_err("harness", "no project to record against: give `project`, a ticket, or set harness.project_id")),
         }
+    }
+
+    /// The default project's history path.
+    pub fn events_path(&self) -> Result<String, CosError> {
+        self.events_path_for(None)
     }
 
     fn url(&self, path: &str) -> String {
@@ -188,10 +204,11 @@ impl HarnessClient {
         self.get(&format!("{path}?limit={limit}")).await
     }
 
-    /// Add one project-history event: `{kind, title, summary?, details_md?,
-    /// dedupe_key?, occurred_at?}` (PR #19 body shape).
-    pub async fn post_event(&self, body: &Value) -> Result<Value, CosError> {
-        let path = self.events_path()?;
+    /// Add one project-history event to `project` (or the default project):
+    /// `{kind, title, summary?, details_md?, dedupe_key?, occurred_at?}`
+    /// (PR #19 body shape).
+    pub async fn post_event(&self, project: Option<&str>, body: &Value) -> Result<Value, CosError> {
+        let path = self.events_path_for(project)?;
         self.post(&path, body).await
     }
 }
@@ -266,9 +283,10 @@ impl Tool for ProjectsActivity {
     }
 }
 
-/// `notes.record`: a `kind: note` project-history entry. With a ticket
-/// reference it lands as that ticket's comment (the board's existing write
-/// path); without one it goes to the harness events route.
+/// `notes.record`: a `kind: note` project-history entry on the project the
+/// note is about, resolved from an explicit `project`, else the ticket's
+/// project, else the configured default; refused when none resolves. With
+/// a ticket reference the note also lands as that ticket's comment.
 pub struct NotesRecord {
     pub client: Arc<HarnessClient>,
 }
@@ -280,13 +298,14 @@ impl Tool for NotesRecord {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             id: NOTES,
-            description: "Record a project-history note (kind: note). Optionally attached to a ticket.",
+            description: "Record a project-history note (kind: note) on the project it is about; with a ticket it is also commented on that card.",
             parameters: json!({
                 "type": "object",
                 "required": ["text"],
                 "properties": {
                     "text": {"type": "string", "minLength": 3, "maxLength": 4000},
-                    "ticket": {"type": "string", "description": "WEFT-N, source id or UUID of the card the note is about."}
+                    "ticket": {"type": "string", "description": "WEFT-N, source id or UUID of the card the note is about."},
+                    "project": {"type": "string", "description": "Project UUID when the note is about a project other than the ticket's or the default."}
                 }
             }),
             gate: Gate::Open,
@@ -299,25 +318,35 @@ impl Tool for NotesRecord {
             return Err(tool_err(NOTES, "note is longer than 4000 characters"));
         }
         let at = chrono::Utc::now().to_rfc3339();
+        let mut project = arg_str(&args, "project");
+        if let Some(p) = &project
+            && !is_uuid(p)
+        {
+            return Err(tool_err(NOTES, "project must be a UUID"));
+        }
+        let mut board = Value::Null;
+        let mut on = String::new();
         if let Some(reference) = arg_str(&args, "ticket") {
             let ticket = self.client.resolve_ticket(&reference).await?;
             let id = ticket["id"].as_str().unwrap_or_default().to_string();
+            if project.is_none() {
+                project = ticket["project_id"].as_str().filter(|p| is_uuid(p)).map(str::to_string);
+            }
             let body = json!({"ticket_id": id, "action": "comment", "value": format!("note: {text}")});
-            let res = self.client.post("/api/harness/tickets", &body).await?;
-            return Ok(ToolOutcome {
-                summary: format!("note recorded on {reference}"),
-                result: json!({"kind": "note", "ticket_id": id, "at": at, "board": res}),
-            });
+            board = json!({"ticket_id": id, "comment": self.client.post("/api/harness/tickets", &body).await?});
+            on = format!(" on {reference}");
         }
+        // The project the note is about: explicit, the ticket's, or the default.
         let (title, summary, details_md) = split_note(&text);
         let mut body = json!({"kind": "note", "title": title, "summary": summary, "occurred_at": at});
         if let Some(d) = details_md {
             body["details_md"] = Value::String(d);
         }
-        let res = self.client.post_event(&body).await?;
+        let res = self.client.post_event(project.as_deref(), &body).await?;
+        let dedupe = if res["created"] == false { " (already recorded)" } else { "" };
         Ok(ToolOutcome {
-            summary: format!("note recorded in project history{}", if res["created"] == false { " (already recorded)" } else { "" }),
-            result: json!({"kind": "note", "at": at, "result": res}),
+            summary: format!("note recorded in project history{on}{dedupe}"),
+            result: json!({"kind": "note", "at": at, "project_id": project, "history": res, "board": board}),
         })
     }
 }

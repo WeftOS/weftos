@@ -88,3 +88,35 @@ fn token_file_must_be_private() {
     std::fs::write(&path, "not-a-token\n").unwrap();
     assert!(SecretToken::from_file(&path).is_err());
 }
+
+#[tokio::test]
+async fn ticket_note_comments_the_card_and_records_history_on_its_project() {
+    use weftos_cos::tools::Tool;
+    use weftos_cos::tools::harness::NotesRecord;
+    let (addr, posts) = FakeHarness { with_events_route: true, ..Default::default() }.start().await;
+    // No default project: the project comes from the ticket.
+    let tool = NotesRecord { client: common::harness_client(addr, None) };
+    let out = tool.call(json!({"text": "Button debounce is 30 ms", "ticket": "WEFT-902"})).await.unwrap();
+    assert_eq!(out.result["project_id"], common::TEST_PROJECT);
+    assert!(out.summary.contains("on WEFT-902"), "{}", out.summary);
+    let posts = posts.lock().unwrap();
+    let comment = posts.iter().find(|(p, _)| p == "/api/harness/tickets").expect("ticket comment");
+    assert_eq!(comment.1["action"], "comment");
+    assert_eq!(comment.1["ticket_id"], "22222222-2222-4222-8222-222222222222");
+    let event = posts.iter().find(|(p, _)| p == &format!("/api/harness/projects/{}/events", common::TEST_PROJECT)).expect("history event");
+    assert_eq!(event.1["kind"], "note");
+    assert_eq!(event.1["title"], "Button debounce is 30 ms");
+}
+
+#[tokio::test]
+async fn note_without_a_resolvable_project_is_refused() {
+    use weftos_cos::tools::Tool;
+    use weftos_cos::tools::harness::NotesRecord;
+    let (addr, posts) = FakeHarness { with_events_route: true, ..Default::default() }.start().await;
+    let tool = NotesRecord { client: common::harness_client(addr, None) };
+    let err = tool.call(json!({"text": "a note about nothing in particular"})).await.unwrap_err().to_string();
+    assert!(err.contains("no project to record against"), "{err}");
+    let err = tool.call(json!({"text": "a note", "project": "not-a-uuid"})).await.unwrap_err().to_string();
+    assert!(err.contains("UUID"), "{err}");
+    assert!(posts.lock().unwrap().is_empty(), "nothing was written");
+}

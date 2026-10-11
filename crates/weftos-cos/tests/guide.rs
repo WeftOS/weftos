@@ -23,10 +23,8 @@ fn last_user(llm: &ScriptedLlm) -> serde_json::Value {
 async fn survey_over_http_then_touch_answer_becomes_a_touch_turn() {
     let llm = ScriptedLlm::new(vec![
         ScriptedLlm::tool_call("ui_ask", json!({"question": "What matters most today?", "explain": "Pick one.", "choices": ["Ship C3", "Pad button", "Docs"], "index": 1, "total": 2})),
-        // After an ask the loop makes one more model round in the same turn,
-        // which a real model uses to speak the question; here it is a stub.
-        ScriptedLlm::text("Pick one."),
-        // The touch answer turn: the model shows the plan as a checklist.
+        // ui.ask ends the turn; the next response belongs to the answer turn,
+        // where the model shows the plan as a checklist.
         ScriptedLlm::tool_call("ui_checklist", json!({"title": "Today", "items": ["Merge C3", "Wire the button"]})),
         ScriptedLlm::text("Here is your list."),
     ]);
@@ -42,6 +40,10 @@ async fn survey_over_http_then_touch_answer_becomes_a_touch_turn() {
     let ask = first.iter().find_map(|e| match e { Event::Ask { id, choices, index, total, .. } => Some((id.clone(), choices.clone(), *index, *total)), _ => None }).expect("ask event");
     assert_eq!((ask.2, ask.3), (1, 2));
     assert_eq!(ask.1.iter().map(|c| (c.n, c.caption.as_str())).collect::<Vec<_>>(), vec![(1, "Ship C3"), (2, "Pad button"), (3, "Docs")]);
+    // The ask ended the turn at once: one model call, the question spoken.
+    assert_eq!(llm.seen.lock().unwrap().len(), 1);
+    let spoken = first.iter().find_map(|e| match e { Event::Message { text, is_final: true, .. } => Some(text.clone()), _ => None }).unwrap();
+    assert_eq!(spoken, "What matters most today?");
 
     let client = reqwest::Client::new();
     let res = client.post(format!("http://{addr}/v1/cos/answer")).json(&json!({"kind": "answer", "id": ask.0, "value": 2})).send().await.unwrap();
