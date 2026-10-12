@@ -2159,6 +2159,7 @@ dependencies = [
  "toml 0.8.23",
  "tracing",
  "tracing-subscriber",
+ "ulid",
  "uuid",
  "weft-licence",
  "weftos-cog-repo",

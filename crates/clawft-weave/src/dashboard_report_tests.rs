@@ -317,3 +317,36 @@ async fn a_413_is_reported_as_too_large_not_as_a_rejected_token() {
     assert_eq!(st["last_heartbeat"], format!("report too large ({n} bytes)"));
     assert_eq!(st["consecutive_failures"], 1);
 }
+
+#[tokio::test]
+async fn the_body_carries_the_node_kind_and_the_instances_summary() {
+    let (_d, path) = token_dir(&token('a'));
+    let mut cfg = config("http://127.0.0.1:1", &path);
+    cfg.kind = crate::dashboard_cfg::NodeKind::ProjectDaemon;
+    let dash = dashboard(cfg);
+
+    let body = dash.build_body().await;
+    assert_eq!(body["report"]["kind"], "project-daemon");
+    assert!(body["report"].get("instances").is_none(), "no registry, no key");
+
+    let reg = crate::instance_registry::InstanceRegistry::new(None);
+    assert!(dash.set_instance_registry(reg.clone()));
+    let id = reg.start(crate::instance_registry::NewInstance { runner: "harness-job".into(), ..Default::default() }).unwrap();
+    let body = dash.build_body().await;
+    let i = &body["report"]["instances"];
+    assert_eq!(i["total"], 1);
+    assert_eq!(i["counts"]["starting"], 1);
+    assert_eq!(i["recent"][0]["instance_id"], id.as_str());
+    assert_eq!(i["recent"][0]["node"], NODE_ID);
+}
+
+#[test]
+fn the_default_node_kind_is_machine_and_an_unknown_kind_is_refused() {
+    let c = DashboardConfig::from_config(&json!({ "dashboard": { "enabled": false } })).unwrap();
+    assert_eq!(serde_json::to_value(c.kind).unwrap(), "machine");
+    for k in ["machine", "project-daemon", "dev", "vm"] {
+        let c = DashboardConfig::from_config(&json!({ "dashboard": { "kind": k } })).unwrap();
+        assert_eq!(serde_json::to_value(c.kind).unwrap(), k);
+    }
+    assert!(DashboardConfig::from_config(&json!({ "dashboard": { "kind": "laptop" } })).is_err());
+}
