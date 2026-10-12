@@ -64,9 +64,9 @@ Tabs on `/ai-org`: **Overview | Running | Installed | Catalog | Org**. Each is a
 |---|---|---|
 | `/ai-org` | Overview: counts, needs attention, running now | none (a view) |
 | `/ai-org/running` | Instances and team runs, grouped by node | |
-| `/ai-org/running/<instance-id>` | One instance (summary only) | none yet (instances are not addressable until an `instances` kind exists) |
+| `/ai-org/running/<instance-id>` | One instance (summary only) `instances/<ULID>` |
 | `/ai-org/installed` | Installations, grouped by environment (System, then each project) | |
-| `/ai-org/installed/<install-id>` | One installation (agent or team) | `installations/<uuid>` extended, or a sub-resource (architect's default; ADR-114 edit) |
+| `/ai-org/installed/<install-id>` | One installation (agent or team) `installations/<uuid>/agents/<id>` or `/teams/<id>` (system scope: `nodes/<node-id>/agents/<id>`) |
 | `/ai-org/catalog` | Definitions: agents and teams; filter by role type/trust/host/source | |
 | `/ai-org/catalog/agents/<id>` | One agent definition | `agents/<id>?rev=sha256:...` |
 | `/ai-org/catalog/teams/<id>` | One team definition | `teams/<id>?rev=sha256:...` |
@@ -89,16 +89,34 @@ button; in-page links resolve by name. A name is an identifier only and grants n
 from ADR-114: one thing, one name; relationships are data, never path; installing needs a
 pinned `rev`.
 
-| Object | Name | Status |
+| Object | Name | Page |
 |---|---|---|
-| Agent definition | `weftos://<mesh>/agents/<id>?rev=sha256:...` | kind exists |
-| Team definition | `weftos://<mesh>/teams/<id>?rev=sha256:...` | kind exists |
-| Installation (agent or team in an environment) | `installations/<uuid>` extended from project x host to agent installs, or a sub-resource (architect's default) | **gap**: today `installations` is the *environment*; extending it conflates the two, so a sub-resource such as `installations/<uuid>/agents/<pkg>` is safer |
-| Instance (running) | none until an `instances` kind is added | **deferred** (architect): the page shows the instance id as a plain field, no copy-name button |
-| Environment | `installations/<uuid>` (project scope); `nodes/<id>` (system scope) | exists |
+| Agent package | `weftos://<mesh>/agents/<id>?rev=sha256:<bundle digest>` | own page (Catalog) |
+| Team | `weftos://<mesh>/teams/<id>?rev=sha256:...`; a member slot is `teams/<id>/members/<agent-id>` | own page; slot is a section |
+| Project assignment (desired) | `projects/<ULID>/teams/<id>`, `projects/<ULID>/agents/<id>` | drawer on the project page and the definition page |
+| Installed copy in one checkout (realised) | `installations/<uuid>/teams/<id>`, `installations/<uuid>/agents/<id>` | row on the checkout's installation page, own detail page |
+| OS agent (node-scope install) | `nodes/<node-id>/agents/<id>` | own page, listed under System |
+| Running agent or team run | `instances/<ULID>` (new kind; ADR-114 edit needed) | own page |
+| Harness exposure | `nodes/<node-id>/exposures/harness.<id>` | section on the installation |
+| Bound memory store | `memory/<store>` | link from the installation |
+| Lead seat | `members/<uuid>` (a person) | no page |
+| Views (Overview, Running list, Catalog, Org) and team data (edges, write authority, presets, rules) | none | |
 
-Node and project of an install or instance are fields, never part of its name. Install views
-show the pinned `rev` applied.
+Rules the page enforces:
+
+- **Installation names never take `?rev`**; the pinned revision is shown as data next to the name.
+- **Instance names do not survive restarts.** A restart is a new ULID with `restart_of`. The
+  instance page shows "stable link" with the installation name (`nodes/<n>/agents/chief-of-staff`
+  or `projects/<P>/teams/weftos-core`), which resolves to the current instance. Exited
+  instances stay viewable as records for the retention period; member instances link to their
+  team run as parent.
+- **Cross-mesh:** show an authority label (friendly mesh name, display only) beside every name.
+  A shared project's assignments keep the owning mesh's authority; an instance our mesh runs for
+  it gets ours. Public packages show "same as <rev>" across meshes.
+- **A name grants nothing:** render as copyable text plus internal links, never as access.
+
+Node and project of an install or instance are fields, not part of its own name, except the
+stable-link forms above.
 
 ## 4. What a user sees first (`/ai-org`)
 
@@ -129,6 +147,8 @@ Rows link to their detail page; WHERE links to the node or project. Install is t
 primary action.
 
 ## 5. Telling things apart at a glance
+
+State vocabulary shown in the UI (architect): instance "running" = starting, idle or working; "stopped" = exited (done, recycled, failed, stopped); also awaiting_confirmation, suspended, refused. Installation: proposed, planned, approved, delivering, installed, drifted, upgrading, removed, failed, refused. OS install: enabled, disabled. Definition: draft, gated, published, deprecated, yanked.
 
 | Facet | Values | Treatment |
 |---|---|---|
@@ -214,7 +234,7 @@ Installation detail:
 ```
 AI org > Installed > weftos-core in weftos @ macbook
  TEAM install   weftos-core 0.3 (rev sha256:3fa9...)  full   state: installed   drift: none
- weftos://<mesh>/installations/<uuid>/agents/liber  (sub-resource, TBD)         [copy]
+ weftos://<mesh>/installations/<uuid>/teams/weftos-core      authority: weaveLogic  [copy]
  Environment: project weftos @ macbook  -> /projects/<id>   node -> /servers/macbook
  Hosts rendered: claude, grok, codex          Lock: .weftos/agents.lock.json (47 files)
  Bound project context: memory store, board adapter, docs root   (never overwritten)
@@ -288,8 +308,10 @@ System scope has no Install; it has Enable/Disable on the installation row (late
 
 ## 7. How installed/running connects to projects and nodes
 
-- An installation's environment is `(project, node)` for project scope (the ADR-114
-  `installation`, project x host), or a node for system scope. One project on two machines
+- **Two levels** (architect): *desired* = the project, mesh-wide (the dashboard assignment);
+  *realised* = one checkout of the project on a machine (ADR-114 `installations/<uuid>`, holding
+  the lock and drift), or a node for OS agents. The Installed tab shows both: the project row
+  (assignment drawer) expands into one row per checkout. One project on two machines
   shows two installations. Node links to `/servers/<host>`, project to `/projects/<id>`.
 - **Desired vs observed.** Assignments = desired, change sets = proposed, locks = observed
   (`project_agent_locks`). The Installed tab shows desired state now; installed/drifted appear
@@ -370,7 +392,7 @@ Open or concerning:
 4. **weftos-native host** exists in the model but the DB hosts check excludes it; shown for
    system scope only. Migration needed.
 5. **No instance table and no report field**, so Running is empty until both exist.
-6. **weftos:// kinds** for installs and instances (section 3a); needs an ADR-114 edit.
+6. **weftos:// names** (section 3a): `instances/<ULID>` is a new kind and the installation/OS-agent sub-resources are new paths; ADR-114 needs the edit (the model doc §5 still lists the instance name as open).
 7. **Principal-scoped memory for system agents** is an architect question; system-install
    detail says "none; principal scope TBD" until decided.
 8. **Legacy `agents/weftos/*.md`** (12 agents) are retired from the org view (architect default) until packaged.
@@ -394,9 +416,7 @@ Open or concerning:
    both places and cross-linked.
 9. **Running before the runtime exists.** Hide the team Run column until `weaver team up`
    ships, but show real instances as soon as nodes report them. Default: yes.
-10. **weftos:// names.** Definitions keep `agents`/`teams` pinned by `rev`; installs extend
-    `installations` (prefer a sub-resource); instances get no name until an `instances` kind
-    is added. Needs an ADR-114 edit. Default: yes (matches the architect's Q3).
+10. **weftos:// names.** Packages/teams `agents`/`teams` with `rev`; assignments `projects/<ULID>/...`; checkout installs `installations/<uuid>/...` (never `rev`); OS agents `nodes/<id>/agents/<id>`; running things `instances/<ULID>` (new kind, new ULID per restart, stable link via the installation name). Needs an ADR-114 edit. Default: yes.
 11. **Private catalogs** (a workspace's `weftos-<slug>` packages and teams) merge into the
     Catalog, labelled by source, visible only in that workspace. Default: yes (architect Q9).
 12. **Templates** show "instantiate per project", not Install. Default: yes.

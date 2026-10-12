@@ -275,15 +275,111 @@ A `weftos://` name never grants anything (ADR-114 §3).
 | tool calls and turns | ADR-110 transcripts, CoS tool events (redacted) |
 | file state | the installation lock |
 
-## 5. Names
+## 5. Names (`weftos://`)
 
-| Thing | Name |
+Owner, 2026-10-11: agents and agent groups get a `weftos://` area, and under ADR-114 §5a every
+first-class object gets a kind or a sub-resource, with its name shown on its detail page. This
+section keeps strictly to ADR-114 §2 (MeshId authority, strict segments `[A-Za-z0-9._~-]`,
+`rev` and `view` only, no percent-encoding) and §1 (one thing, one name; relationships are
+data, not path, except for sub-resources that cannot exist without their parent, like
+`projects/<ULID>/repos/<dir>`).
+
+### 5.1 First-class or not
+
+| Entity | First-class (own page)? | Name |
+|---|---|---|
+| Agent package (definition, incl. templates and derived packages) | yes | `agents/<id>`; pinned `agents/<id>?rev=sha256:…` |
+| Team definition | yes | `teams/<id>`; pinned `teams/<id>?rev=sha256:…` |
+| Member slot | no, a section of the team page | `teams/<id>/members/<agent-id>` (sub-resource; may carry the team's `rev`) |
+| Assignment to a project (desired install, mesh-wide) | no, a section of the project page and of the agent/team page; detail drawer | `projects/<ULID>/agents/<id>`, `projects/<ULID>/teams/<id>` |
+| Installed copy in one checkout (observed lock, drift) | no, a row under the installation page | `installations/<uuid>/agents/<id>`, `installations/<uuid>/teams/<id>` |
+| OS agent (node-scope installation) | listed first-class in AI org; detail page | `nodes/<node-id>/agents/<id>` |
+| Running instance (one agent) | yes (live state, model, card, transcript link) | `instances/<ULID>` (**new kind**) |
+| Team run (a running group) | yes | `instances/<ULID>`, with `type: team-run`; member instances link to it as parent |
+| Harness exposure (ADR-120) | per ADR-120 | `nodes/<node-id>/exposures/harness.<id>` |
+| Memory store bound by an installation | per ADR-114 N4 | `memory/<store>` |
+| Lead seat | no; it is a person | the principal's `members/<uuid>` |
+| Edges, write authority, presets, team rules | no; data in the team definition | none |
+| Org chart, directory, catalog, "running now" | views | none |
+
+Only one new kind: **`instances`**. Everything else reuses `agents`, `teams`, `projects`,
+`installations` and `nodes` with new sub-resources. Adding the kind and the sub-resources is a
+reviewed change to the `weftos_uri` enum and vectors (ADR-114 §6).
+
+### 5.2 Address shape per entity
+
+```text
+weftos://<mesh>/agents/steward                                   # alias: latest published steward
+weftos://<mesh>/agents/steward?rev=sha256:<64 hex>               # one exact package
+weftos://<mesh>/teams/weftos-core?rev=sha256:<64 hex>            # one exact team bundle
+weftos://<mesh>/teams/weftos-core/members/steward                # Stew's slot in weftos-core
+weftos://<mesh>/projects/<ULID>/teams/weftos-core                # weftos-core assigned to a project
+weftos://<mesh>/projects/<ULID>/agents/domain-expert-billing     # a single agent assigned to a project
+weftos://<mesh>/installations/<uuid>/teams/weftos-core           # what one checkout actually has (lock)
+weftos://<mesh>/nodes/<node-id>/agents/chief-of-staff            # CoS as an OS agent on one node
+weftos://<mesh>/instances/<ULID>                                 # one running agent or team run
+weftos://<mesh>/nodes/<node-id>/exposures/harness.weftos-core    # a team offered as a harness
+```
+
+Rules:
+
+- **Definitions are cited by revision**, like cogs (COG-008) and team bundles (TM6). `rev` is
+  the SHA-256 of the complete package bytes: the canonical bundle that TM6 signs (for a
+  package, its directory as a deterministic archive; for a team, `team.yaml` plus every
+  member package it pins). The catalog must publish this digest per package (§7 gap). A name
+  without `rev` is an alias that moves only by compare-and-swap; installing requires a `rev`
+  (ADR-114 §4).
+- **Ids:** definitions use their slug (`steward`, `weftos-core`), unique per mesh across all
+  sources (the gate refuses a private package that reuses a public id). Projects use ULIDs,
+  installations UUIDs, nodes the 32-hex node id, instances a ULID minted at start.
+- **Installation names take no `rev`.** The pinned revision is data on the installation; a
+  `rev` on an installation name is refused. One installation per environment per definition
+  id: a project cannot hold `weftos-core` twice (use a preset instead).
+- **Templates and derived packages** are both `agents/<id>`; the derived package records
+  `provenance.template = agents/<template>?rev=…` as data.
+
+### 5.3 Is an instance name stable across restarts?
+
+No, by design. An instance is one run: its ULID is minted when it starts, never reused, and a
+restart is a new instance whose record says `restart_of: instances/<previous>`. Lanes recycle
+after one task, so stable instance names would be wrong anyway. The **stable handles are the
+installation names**, which resolve to "the current instance" when asked with
+`view=overview`:
+
+- OS agent: `nodes/<node-id>/agents/chief-of-staff` → its running instance, if any.
+- Team member: `projects/<ULID>/teams/weftos-core` → the current team run and its members.
+
+An exited instance stays resolvable as a record for the audit retention period, then gets the
+uniform refusal. The kernel `agent_id` (Ed25519 identity, `AgentRegistry`) is data on the
+instance, not its name, because the registry resets on daemon restart.
+
+### 5.4 What resolves where
+
+Authorization and its chain record always come first; every refusal is the same uniform error
+(ADR-114 §3).
+
+| Name | Resolved by |
 |---|---|
-| Package | `weftos://<mesh>/agents/<id>?rev=sha256:…` |
-| Team definition | `weftos://<mesh>/teams/<id>?rev=sha256:…` |
-| Installation | `weftos://<mesh>/installations/<uuid>` (already a kind; extend from project x host to agent installs, or add a sub-resource) |
-| Instance | open: ADR-114 says `agents` covers "registered or running agents", which collides with packages (owner question 3) |
-| Memory store | `weftos://<mesh>/memory/<store>` |
+| `agents/…`, `teams/…` (and `members/…`) | the mesh's catalog store: the imported public catalog plus the workspace's private sources |
+| `projects/<ULID>/agents/…`, `…/teams/…` | the control plane's desired state for that project (dashboard assignments) |
+| `installations/<uuid>/agents/…`, `…/teams/…` | the node holding that checkout (its `.weftos/agents.lock.json`), mirrored in the report |
+| `nodes/<node-id>/agents/…` | that node's daemon; the dashboard shows the last report |
+| `instances/<ULID>` | the node running it (instance registry in the daemon); the dashboard mirror is a summary only |
+| `nodes/<node-id>/exposures/…` | that node's exposure registry (ADR-120) |
+
+**Authority is the MeshId of the mesh that owns the thing.** A public catalog package imported
+into two meshes has two names (`weftos://<A>/agents/steward`, `weftos://<B>/agents/steward`)
+but the same `rev`, so a pin can be compared across meshes without resolving the other mesh.
+
+**Cross-mesh (ADR-114 N5).** When mesh A shares a project with mesh B:
+
+- the project and its assignments keep A's authority: `weftos://<A>/projects/<P>/teams/weftos-core`;
+  B resolves them only under A's signed cross-mesh grant for that project;
+- an instance B starts for that project on B's node is B's thing: `weftos://<B>/instances/<ULID>`,
+  with the project link as data;
+- B installs public packages from its own catalog by the same `rev`, no grant needed; A's
+  private or derived packages resolve in B only with a grant naming that package;
+- revoking the grant stops resolution on the next call, as for any N5 name.
 
 ## 6. Lifecycles
 
@@ -386,7 +482,7 @@ stateDiagram-v2
 |---|---|---|
 | 1 | Are OS agents catalog packages like everything else, or a separate system class? | Packages. An OS agent is a package installed by the release at `node` scope, enabled or disabled per node. CoS already works this way. |
 | 2 | Which environments may the dashboard install into? | `project` (TM2/TM3) and enabling or disabling `node` OS agents. `machine`-global stays an ADR-109 doctor action, shown but not written by team apply. |
-| 3 | What does `weftos://…/agents/<id>` name: the package or a running agent? | The package, pinned by `rev`. Running instances get their own kind (`instances`) when needed; until then they are not addressable by name. |
+| 3 | Names: does `agents/<id>` name the package (ADR-114 says "registered or running agents"), and do we add one new kind `instances` plus the sub-resources in §5.1? | Yes to both: `agents`/`teams` name definitions pinned by `rev`; running agents and team runs are `instances/<ULID>`, not stable across restarts; installations are sub-resources of `projects`, `installations` and `nodes`. Amend ADR-114's `agents` row accordingly. |
 | 4 | Who sits at the top of the org view? | The human principal, then CoS as first report, then the team via `delegates_to` edges. Drop `reports_to` from packages. |
 | 5 | The 12 legacy `agents/weftos/*.md` agents: package them or retire them? | Retire them from the AI org until someone packages one; keep the files as reference. |
 | 6 | Do OS agents (CoS) keep memory of their own? | No agent-owned memory. CoS notes go to project history; owner preferences, if any, go to a principal-scope store bound at node install. |
