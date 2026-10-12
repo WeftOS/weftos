@@ -12,8 +12,8 @@
 #   - `LeafSim`   in-process simulated leaf (weftos-leaf-sim, headless).
 #   - `window`    the simulator's SDL2 window: mouse → touch, space bar
 #                 → ptt.down / ptt.up. Needs SDL2 headers at build time.
-#   - `leaf`      the real leaf over the certified-leaf channel. D1 ships
-#                 the carrier types and a clear "not yet" error only.
+#   - `leaf`      the real leaf, through the daemon's `display.*` RPC and
+#                 the certified-leaf channel (always built).
 #
 # Standalone crate — own workspace table, mirroring weftos-leaf-scene /
 # -renderer / -sim, so cargo does not walk up into the clawft workspace.
@@ -32,13 +32,14 @@ publish = false
 
 [features]
 default = []
+# Host-side emulation of the edge pad's wire behaviour (`WireLeaf`, the
+# `leaf-emulator` binary): a certified leaf that speaks the real channel.
+wire-leaf = ["dep:weftos-leaf-types", "dep:ed25519-dalek"]
 # Desktop window backend on the simulator's SDL2 window. `dep:sdl2` only
 # turns on `use-pkgconfig`, so the SDL2 that Homebrew / apt installed is
 # found through pkg-config instead of needing to sit on the default
 # linker path.
 window = ["weftos-leaf-sim/window", "embedded-graphics-simulator/with-sdl", "dep:sdl2"]
-# Real-leaf backend over the certified-leaf channel (carrier stub in D1).
-leaf = ["dep:serde"]
 
 [dependencies]
 weftos-leaf-scene = { path = "../weftos-leaf-scene", features = ["std"] }
@@ -50,12 +51,22 @@ embedded-graphics-simulator = { version = "0.8", default-features = false }
 embedded-graphics = "0.8"
 # Same sdl2 the simulator uses; present only to enable pkg-config lookup.
 sdl2 = { version = "0.38", default-features = false, features = ["use-pkgconfig"], optional = true }
-# Only the `leaf` carrier frames are serialized here; the scene types
-# bring their own serde through weftos-leaf-scene.
-serde = { version = "1", features = ["derive"], optional = true }
+weftos-leaf-types = { path = "../weftos-leaf-types", features = ["std"], optional = true }
+ed25519-dalek = { version = "2", default-features = false, features = ["std"], optional = true }
+# The real-leaf backend speaks the daemon's JSON-lines `display.*` RPC.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"
 
 [[example]]
 name = "tap_demo"
+
+[[bin]]
+name = "leaf-emulator"
+path = "src/bin/leaf_emulator.rs"
+required-features = ["wire-leaf"]
 
 [profile.dev]
 opt-level = 1

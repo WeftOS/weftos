@@ -73,15 +73,18 @@ fn capabilities_report_touch_and_ptt() {
 }
 
 #[test]
-fn unbuilt_targets_say_not_yet() {
+fn unreachable_targets_say_why() {
     let leaf = DisplayTarget::Leaf(LeafEndpoint {
         name: "weftos://mesh/nodes/pad/services/display".into(),
         leaf_id: "00".into(),
         display: 0,
+        daemon: Some("/nonexistent/weftos-test/kernel.sock".into()),
     });
+    // The real leaf goes through the daemon; with none to reach it
+    // refuses by saying so (never an empty session).
     assert!(matches!(
         DisplaySession::open(leaf, DisplayGrant::dev("t")),
-        Err(DisplayError::NotYet(_))
+        Err(DisplayError::Backend(why)) if why.contains("cannot reach the daemon")
     ));
     if !cfg!(feature = "window") {
         let win = DisplayTarget::Window(WindowConfig::default());

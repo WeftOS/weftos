@@ -47,6 +47,8 @@ pub mod keys;
 pub mod limits;
 pub mod session;
 pub mod target;
+#[cfg(feature = "wire-leaf")]
+pub mod wire_leaf;
 
 /// The scene vocabulary (`SceneOp`, `Node`, `NodeId`, …).
 pub use weftos_leaf_scene as scene;

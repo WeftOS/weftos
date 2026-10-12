@@ -3,11 +3,10 @@
 //! A backend is "the leaf" from the session's point of view: it keeps
 //! the scene, renders it, hit-tests touches and reports raw input back.
 //! Three exist: the in-process simulator, the desktop window on top of
-//! it, and (later) the real leaf over the certified-leaf channel.
+//! it, and the real leaf over the certified-leaf channel.
 
 pub mod sim;
 
-#[cfg(feature = "leaf")]
 pub mod leaf;
 #[cfg(feature = "window")]
 pub mod window;

@@ -15,7 +15,7 @@ use embedded_graphics::geometry::Point as EgPoint;
 use embedded_graphics::pixelcolor::{Rgb888, RgbColor};
 use weftos_leaf_renderer::{render_damage, SceneSurface};
 use weftos_leaf_scene::{
-    px, DisplayId, InputEnvelope, InputEvent, NodeId, Rect, Rgba, Scene, SceneEnvelope,
+    px, DamageSet, DisplayId, InputEnvelope, InputEvent, NodeId, Rect, Rgba, Scene, SceneEnvelope,
     SceneStore,
 };
 use weftos_leaf_sim::SimSurface;
@@ -37,6 +37,15 @@ pub(crate) struct SimInner {
     closed: bool,
     /// Leaf clock origin: tweens are ticked against it.
     started: Instant,
+    /// Damage kept back by a fragmented batch until its last fragment.
+    pending: DamageSet,
+}
+
+impl SimInner {
+    #[cfg(feature = "wire-leaf")]
+    pub(crate) fn render_caps(&self) -> u32 {
+        self.surface.capabilities().bits()
+    }
 }
 
 /// Handle to a simulated leaf. Clones share the same leaf.
@@ -67,6 +76,7 @@ impl LeafSim {
                 frames: 0,
                 closed: false,
                 started: Instant::now(),
+                pending: DamageSet::none(),
             })),
         }
     }
@@ -141,6 +151,25 @@ impl LeafSim {
         let node = g.store.hit_test(SIM_DISPLAY, xq, yq);
         let env = InputEnvelope::new(SIM_DISPLAY, node, make(xq, yq));
         g.queue.push_back(BackendEvent::Input(env));
+    }
+
+    /// Apply an envelope the way the pad does for a wire frame: keep the
+    /// damage when `render` is false (more fragments follow) and draw it
+    /// all with the last one.
+    pub fn apply_wire(&self, env: &SceneEnvelope, render: bool) -> Result<(), DisplayError> {
+        let mut g = self.lock();
+        let viewport = g.store.display(SIM_DISPLAY).map_or(Rect::ZERO, |d| d.viewport);
+        let damage = g.store.apply(env);
+        g.pending.merge(&damage, viewport);
+        if !render || g.pending.is_empty() {
+            return Ok(());
+        }
+        let damage = std::mem::replace(&mut g.pending, DamageSet::none());
+        let SimInner { store, surface, .. } = &mut *g;
+        render_damage(store, SIM_DISPLAY, &damage, surface)
+            .map_err(|e| DisplayError::Backend(format!("{e:?}")))?;
+        g.frames += 1;
+        Ok(())
     }
 
     // ── Inspection (what the leaf holds) ─────────────────────────────
