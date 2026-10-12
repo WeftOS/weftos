@@ -284,3 +284,28 @@ async fn remove_refuses_a_non_workspace_project() {
 fn find_by_root_id(f: &Fx) -> String {
     clawft_types::project::list_manifests(&f.env.manifests_dir).unwrap().manifests[0].id.clone()
 }
+
+#[tokio::test]
+async fn install_runs_the_same_add_step_as_the_cli_and_remove_undoes_it() {
+    let f = fx(0);
+    let out = handler(&f, Arc::new(FakeFetcher::new(false))).handle(&action("install", install_payload("~/Projects/demo", json!([{"url": "https://example.org/a.git"}])))).await;
+    assert_eq!(out.status, "succeeded", "{}", out.result);
+    let add = &out.result["add"];
+    assert_eq!(add["slug"], "demo");
+    assert_eq!(add["ulid"], ULID);
+    assert_eq!(add["registered_as"], "workspace");
+    assert_eq!(add["run"]["kind"], "unknown", "the fake checkout holds no compose file: said, not guessed");
+    assert!(add["notes"].as_array().unwrap().iter().any(|n| n.as_str().unwrap().contains("nothing to start")));
+    let rdir = crate::project_add_receipt::receipts_dir(&f.home);
+    let r = crate::project_add_receipt::read(&rdir, "demo").unwrap().expect("the dashboard path writes the same receipt");
+    assert_eq!(r.ulid, ULID);
+    // The CLI's remove understands what the dashboard path added (the fake weft wrote no manifest).
+    let rm = crate::project_add_remove::remove(&f.env, "demo", false, false).unwrap();
+    assert!(rm.kept.iter().any(|k| k.contains("already unregistered")), "{rm:?}");
+    assert!(crate::project_add_receipt::read(&rdir, "demo").unwrap().is_none());
+    assert!(root_exists(&f), "the checkout stays");
+}
+
+fn root_exists(f: &Fx) -> bool {
+    f.home.join("Projects/demo").is_dir()
+}

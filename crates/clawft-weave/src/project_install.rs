@@ -93,7 +93,7 @@ fn is_ulid(s: &str) -> bool {
     s.len() == 26 && s.chars().all(|c| matches!(c, '0'..='9' | 'A'..='H' | 'J' | 'K' | 'M' | 'N' | 'P'..='T' | 'V'..='Z'))
 }
 
-fn url_ok(url: &str) -> Result<(), &'static str> {
+pub(crate) fn url_ok(url: &str) -> Result<(), &'static str> {
     if url.len() > 512 || url.chars().any(|c| c.is_control() || c.is_whitespace()) {
         return Err("url has whitespace or control characters");
     }
@@ -122,7 +122,7 @@ pub(crate) fn dir_ok(dir: &str) -> bool {
     dir == "." || (!dir.is_empty() && dir.len() <= 64 && !dir.starts_with('.') && dir.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')))
 }
 
-fn branch_ok(b: &str) -> bool {
+pub(crate) fn branch_ok(b: &str) -> bool {
     !b.is_empty() && b.len() <= 200 && !b.starts_with('-') && !b.contains("..") && b.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '-' | '_' | '.'))
 }
 

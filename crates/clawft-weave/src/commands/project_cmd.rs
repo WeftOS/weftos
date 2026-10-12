@@ -7,7 +7,7 @@ use crate::project_migrate::{self, Action, MigrateError};
 
 /// Project operator subcommand.
 #[derive(Parser)]
-#[command(about = "Per-project kernel operations (migrate-kernel, anchor reset)")]
+#[command(about = "Projects on this machine: add, up, down, status, remove; kernel migration; anchor reset")]
 pub struct ProjectArgs {
     /// Project subcommand.
     #[command(subcommand)]
@@ -32,6 +32,42 @@ pub enum ProjectAction {
         /// Set the project back to the user daemon (copies are left).
         #[arg(long)]
         revert: bool,
+    },
+    /// Add a project to this machine in one step: fetch it, register it, detect
+    /// how it runs, install its router route, and say what to do next.
+    ///
+    /// SOURCE is `weftos://<mesh>/projects/<ULID>` (over the mesh, from the
+    /// paired primary) or a git URL. Never copies `.env` files or values; lists
+    /// the environment variable names the project asks for.
+    Add(super::project_add_cmd::AddOpts),
+    /// Start a project added here (process-compose, detached).
+    Up {
+        /// The project's slug.
+        slug: String,
+    },
+    /// Stop a project added here.
+    Down {
+        /// The project's slug.
+        slug: String,
+    },
+    /// Show processes, route, local URL and tailnet URL (every added project when no slug).
+    Status {
+        /// The project's slug.
+        slug: Option<String>,
+        /// Print JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Undo what `add` did: stop it, drop its route, unregister it. Keeps the checkout.
+    Remove {
+        /// The project's slug.
+        slug: String,
+        /// Also delete the checkout (refuses uncommitted changes).
+        #[arg(long)]
+        purge: bool,
+        /// With --purge: delete even with uncommitted changes.
+        #[arg(long, requires = "purge")]
+        force: bool,
     },
     /// Anchor operations on the user daemon (owner only).
     Anchor {
@@ -66,6 +102,11 @@ pub enum AnchorAction {
 pub async fn run(args: ProjectArgs) -> anyhow::Result<()> {
     match args.action {
         ProjectAction::MigrateKernel { project, dry_run, revert } => migrate(&project, dry_run, revert),
+        ProjectAction::Add(o) => super::project_add_cmd::add(o).await,
+        ProjectAction::Up { slug } => super::project_add_cmd::up(&slug, &super::project_add_cmd::pc_bin()).await,
+        ProjectAction::Down { slug } => super::project_add_cmd::down(&slug, &super::project_add_cmd::pc_bin()).await,
+        ProjectAction::Status { slug, json } => super::project_add_cmd::status(slug.as_deref(), json).await,
+        ProjectAction::Remove { slug, purge, force } => super::project_add_cmd::remove(&slug, purge, force, &super::project_add_cmd::pc_bin()).await,
         ProjectAction::Anchor { action: AnchorAction::Reset { project, reason } } => anchor_reset(&project, &reason).await,
     }
 }

@@ -6,7 +6,9 @@
 //!   then register the checkout by running the sibling `weft project init
 //!   --adopt <ULID> [--repo DIR ...]` (found next to the running binary, then on
 //!   `PATH`; an argument vector, no shell). Any failure removes only what this
-//!   install created.
+//!   install created. After it, the shared add step ([`crate::project_add`]) runs
+//!   exactly as for `weaver project add`: detect how the project runs, install its
+//!   router route, record a receipt, and put the report in the result as `add`.
 //! - `update`: `git pull --ff-only` in each repository of the registered workspace.
 //! - `remove`: unregisters the workspace manifest. It never deletes files.
 //!
@@ -14,19 +16,19 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::dashboard_actions::{Action, ActionHandler, ActionOutcome};
-use crate::project_git::{GitRunner, redact};
+use crate::project_git::GitRunner;
+use crate::project_add::{Finish, finish, register};
 use crate::project_install::{InstallRequest, ProjectFetcher, fetch_order};
 use crate::project_install_git::GitRemoteFetcher;
 use crate::project_install_layout::{Rollback, check_free, plan};
+use crate::router_routes::slugify;
 
-const ADOPT_TIMEOUT: Duration = Duration::from_secs(60);
 /// Most repositories one update touches (same cap as the reporter).
 const MAX_UPDATE_REPOS: usize = 8;
 
@@ -72,7 +74,7 @@ impl InstallEnv {
         }
     }
 
-    fn weft_bin(&self) -> Result<PathBuf, String> {
+    pub(crate) fn weft_bin(&self) -> Result<PathBuf, String> {
         if let Some(w) = &self.weft {
             return Ok(w.clone());
         }
@@ -123,40 +125,29 @@ impl InstallHandler {
             std::fs::create_dir_all(&target).map_err(|e| format!("cannot create {}: {e}", target.display()))?;
             let siblings: Vec<&Path> =
                 placements.iter().map(|p| p.dest.as_path()).filter(|d| !d.starts_with(&target)).collect();
-            self.adopt(&weft, &req, &target, &siblings).await?;
-            Ok::<_, String>(report)
+            let (ulid, registered_as) =
+                register(&self.env, &weft, &target, Some(&req.project_ulid), req.slug.as_deref(), &siblings).await?;
+            Ok::<_, String>((report, ulid, registered_as))
         };
         match done.await {
-            Ok(r) => Ok(json!({ "fetcher": r.fetcher, "root": target, "repos": r.repos, "bytes": r.bytes, "archived": r.archived })),
+            Ok((r, ulid, registered_as)) => {
+                let mut result = json!({ "fetcher": r.fetcher, "root": target, "repos": r.repos, "bytes": r.bytes, "archived": r.archived });
+                // The same detect / route / receipt step `weaver project add` runs.
+                let slug = req.slug.clone().or_else(|| target.file_name().and_then(|n| n.to_str()).and_then(slugify));
+                if let Some(slug) = slug {
+                    let siblings = placements.iter().map(|p| p.dest.clone()).filter(|d| !d.starts_with(&target)).collect();
+                    let report = finish(&self.env, Finish { slug: &slug, root: &target, siblings, ulid, registered_as, fetcher: r.fetcher, repos: r.repos.clone() });
+                    result["add"] = serde_json::to_value(&report).unwrap_or(Value::Null);
+                    if let Some(h) = crate::router_state::global() {
+                        h.reload();
+                    }
+                }
+                Ok(result)
+            }
             Err(e) => {
                 rollback.undo();
                 Err(e)
             }
-        }
-    }
-
-    async fn adopt(&self, weft: &Path, req: &InstallRequest, root: &Path, siblings: &[&Path]) -> Result<(), String> {
-        let mut cmd = tokio::process::Command::new(weft);
-        cmd.current_dir(root).args(["project", "init", "--adopt", &req.project_ulid]);
-        if let Some(slug) = &req.slug {
-            cmd.args(["--name", slug]);
-        }
-        for s in siblings {
-            cmd.arg("--repo").arg(s);
-        }
-        cmd.env("HOME", &self.env.home)
-            .env("WEFTOS_MANIFESTS_DIR", &self.env.manifests_dir)
-            .stdin(std::process::Stdio::null())
-            .kill_on_drop(true);
-        let out = tokio::time::timeout(ADOPT_TIMEOUT, cmd.output())
-            .await
-            .map_err(|_| "weft project init --adopt timed out".to_owned())?
-            .map_err(|e| format!("cannot run weft: {e}"))?;
-        if out.status.success() {
-            Ok(())
-        } else {
-            let text = redact(String::from_utf8_lossy(&out.stderr).trim());
-            Err(format!("registering the workspace failed ({}): {text}", out.status))
         }
     }
 }
