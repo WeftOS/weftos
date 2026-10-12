@@ -12,10 +12,18 @@
  * agents/teams/SCHEMA.md, ADR-112).
  *
  * Legacy content that predates this standard (agents/clawft/,
- * agents/code-reviewer/, agents/weftos/, agents/weftos-ecc/,
- * agents/weftos-kernel/, agents/weftos-mesh/, agents/README.md) has no
- * weftos-package.yaml and is therefore never discovered — it is ignored by
- * construction, not by a special-cased skip list.
+ * agents/code-reviewer/, agents/weftos-ecc/, agents/weftos-kernel/,
+ * agents/weftos-mesh/, agents/README.md) has no weftos-package.yaml. The
+ * twelve agents under agents/weftos/<id>/ are packaged as originals and
+ * marked `state: inactive` (ADR-121 decision 10).
+ *
+ * ADR-121 checks, across packages: `state` is active|inactive; `parent` is
+ * null or the digest of a package in this tree; `dependencies` entries name
+ * exactly one of agent|skill|cog|model_role and agent/skill ones resolve;
+ * the agent dependency graph has no cycle; an active package or an active
+ * team member never depends on an inactive package (inactive packages are
+ * excluded from apply). Digests are computed (scripts/lib/package-digest.mjs),
+ * never written by hand.
  *
  * Usage: node scripts/agents-validate.mjs [--quiet]
  * Exit 0 = every discovered package and team file is clean.
@@ -26,22 +34,28 @@ import { join, dirname, relative, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseYaml, splitFrontmatter } from "./lib/yaml-lite.mjs";
 import { validateTeamV1, workspaceVersion } from "./agents-team-validate.mjs";
+import { packageDigest, DIGEST_RE } from "./lib/package-digest.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
-const AGENTS_DIR = join(ROOT, "agents");
+// WEFTOS_AGENTS_DIR lets the tests validate a fixture tree.
+const AGENTS_DIR = process.env.WEFTOS_AGENTS_DIR ?? join(ROOT, "agents");
 const QUIET = process.argv.includes("--quiet");
 
 const LEGACY_TOP_LEVEL = new Set([
   "clawft",
   "code-reviewer",
-  "weftos",
   "weftos-ecc",
   "weftos-kernel",
   "weftos-mesh",
 ]);
 const KNOWN_KINDS = new Set(["specialist", "lane", "template", "skill"]);
 const KNOWN_TRUST_TIERS = new Set(["core", "internal", "client", "external", "template"]);
+const KNOWN_STATES = new Set(["active", "inactive"]);
+// Schema file: agents/schemas/brain-metadata.schema.json.
+const BRAIN_SCHEMA_ID = "weftos.brain-metadata/1";
+const KNOWN_BRAIN_NOTES = new Set(["project", "none"]);
+const DEP_KEYS = ["agent", "skill", "cog", "model_role"];
 const KNOWN_VERDICTS = new Set(["adopt", "adapt", "pattern", "build"]);
 const MAX_SKILL_LINES = 300;
 const ABSOLUTE_USER_PATH = /\/(?:Users|home)\/[^\s'")\]]+/;
@@ -281,14 +295,35 @@ function validatePackage(pkgRel, allPackageIds) {
     }
   }
 
-  // dependencies: agent: <name> must resolve to a known package id.
+  // state / parent (ADR-121 §3).
+  if ("state" in pkg && !KNOWN_STATES.has(pkg.state)) {
+    reportFail(pkgId, `weftos-package.yaml state "${pkg.state}" is not one of ${[...KNOWN_STATES].join(", ")}`);
+  }
+  if (pkg.parent !== undefined && pkg.parent !== null && !DIGEST_RE.test(String(pkg.parent))) {
+    reportFail(pkgId, `weftos-package.yaml parent must be null or sha256:<64 hex>, got ${JSON.stringify(pkg.parent)}`);
+  }
+
+  // brain (ADR-121 decision 9): which brain metadata schema entries follow and
+  // whether the agent leaves project notes.
+  if ("brain" in pkg) {
+    const b = pkg.brain;
+    if (!b || typeof b !== "object" || b.schema !== BRAIN_SCHEMA_ID) {
+      reportFail(pkgId, `weftos-package.yaml brain.schema must be "${BRAIN_SCHEMA_ID}"`);
+    } else if (!KNOWN_BRAIN_NOTES.has(b.notes)) {
+      reportFail(pkgId, `weftos-package.yaml brain.notes "${b.notes}" is not one of ${[...KNOWN_BRAIN_NOTES].join(", ")}`);
+    }
+  }
+
+  // dependencies: exactly one of agent|skill|cog|model_role per entry; agent
+  // must resolve to a known package id (skill is resolved in the cross pass).
   const dependencies = Array.isArray(pkg.dependencies) ? pkg.dependencies : [];
   for (const dep of dependencies) {
-    if (!dep || typeof dep !== "object" || !dep.agent) {
-      reportFail(pkgId, `dependencies entry is malformed: ${JSON.stringify(dep)}`);
+    const keys = dep && typeof dep === "object" ? DEP_KEYS.filter((k) => k in dep) : [];
+    if (keys.length !== 1 || typeof dep[keys[0]] !== "string" || dep[keys[0]] === "") {
+      reportFail(pkgId, `dependencies entry must name exactly one of ${DEP_KEYS.join("|")}: ${JSON.stringify(dep)}`);
       continue;
     }
-    if (allPackageIds && !allPackageIds.has(dep.agent)) {
+    if (keys[0] === "agent" && allPackageIds && !allPackageIds.has(dep.agent)) {
       reportFail(pkgId, `dependencies.agent "${dep.agent}" does not match any known agent package`);
     }
   }
@@ -392,7 +427,13 @@ function validateTeams(allPackageIds, results = []) {
       if (!allPackageIds.has(String(member.agent).split("@")[0])) {
         reportFail(teamId, `member.agent "${member.agent}" does not match any known agent package`);
       }
-      if (member.active !== false) activeCount++;
+      if (member.active !== false) {
+        activeCount++;
+        const target = results.find((r) => r.id === String(member.agent).split("@")[0]);
+        if (target?.pkg.state === "inactive") {
+          reportFail(teamId, `active member "${member.agent}" is an inactive package (excluded from apply)`);
+        }
+      }
     }
     const sharedSkills = Array.isArray(team.shared_skills) ? team.shared_skills : [];
     for (const skillPkg of sharedSkills) {
@@ -409,16 +450,93 @@ function validateTeams(allPackageIds, results = []) {
   return teams;
 }
 
+/** Packages' own skill names, so a `skill` dependency can resolve. */
+function skillNames(results) {
+  const names = new Set();
+  for (const r of results) {
+    for (const d of r.skillDirs) names.add(d);
+    if (r.topSkillFrontmatter?.name) names.add(r.topSkillFrontmatter.name);
+  }
+  return names;
+}
+
+/** Depth-first search for a cycle in the agent dependency graph; returns the path or null. */
+function findCycle(graph) {
+  const state = new Map();
+  const stack = [];
+  function visit(id) {
+    state.set(id, 1);
+    stack.push(id);
+    for (const next of graph.get(id) ?? []) {
+      if (state.get(next) === 1) return [...stack.slice(stack.indexOf(next)), next];
+      if (!state.has(next)) {
+        const c = visit(next);
+        if (c) return c;
+      }
+    }
+    stack.pop();
+    state.set(id, 2);
+    return null;
+  }
+  for (const id of [...graph.keys()].sort()) {
+    if (!state.has(id)) {
+      const c = visit(id);
+      if (c) return c;
+    }
+  }
+  return null;
+}
+
+/** ADR-121 cross-package checks; fills `digest` on every result. */
+function crossChecks(results) {
+  const byId = new Map(results.map((r) => [r.id, r]));
+  const skills = skillNames(results);
+  for (const r of results) {
+    try {
+      r.digest = packageDigest(join(AGENTS_DIR, r.path));
+    } catch (e) {
+      reportFail(r.path, e.message);
+      r.digest = null;
+    }
+  }
+  const digests = new Set(results.map((r) => r.digest));
+  const graph = new Map();
+  for (const r of results) {
+    const state = r.pkg.state ?? "active";
+    const deps = Array.isArray(r.pkg.dependencies) ? r.pkg.dependencies : [];
+    graph.set(r.id, deps.filter((d) => d && d.agent).map((d) => d.agent).filter((a) => byId.has(a)));
+    if (r.pkg.parent && !digests.has(r.pkg.parent)) {
+      reportFail(r.path, `parent ${r.pkg.parent} does not match the digest of any package in this tree`);
+    }
+    for (const dep of deps) {
+      if (dep && dep.skill && !skills.has(dep.skill)) {
+        reportFail(r.path, `dependencies.skill "${dep.skill}" does not match any skill in the tree`);
+      }
+      if (dep && dep.agent && state === "active" && byId.get(dep.agent)?.pkg.state === "inactive") {
+        reportFail(r.path, `active package depends on inactive package "${dep.agent}" (inactive packages are excluded from apply)`);
+      }
+    }
+  }
+  const cycle = findCycle(graph);
+  if (cycle) reportFail("dependencies", `dependency cycle: ${cycle.join(" -> ")}`);
+}
+
 export function runValidation() {
   errorCount = 0;
   packageCount = 0;
   const pkgRels = findPackageDirs();
   const allPackageIds = new Set(pkgRels.map((p) => basename(p)));
   const results = [];
+  const seenIds = new Set();
   for (const pkgRel of pkgRels) {
+    if (seenIds.has(basename(pkgRel))) {
+      reportFail(pkgRel, `package id "${basename(pkgRel)}" is used by more than one directory`);
+    }
+    seenIds.add(basename(pkgRel));
     const result = validatePackage(pkgRel, allPackageIds);
     if (result) results.push(result);
   }
+  crossChecks(results);
   const teams = validateTeams(allPackageIds, results);
   return { errorCount, packageCount, results, teams };
 }

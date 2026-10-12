@@ -15,6 +15,7 @@ import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runValidation } from "./agents-validate.mjs";
+import { packageDigestHex, teamDigestHex } from "./lib/package-digest.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
@@ -33,7 +34,22 @@ function workspaceVersion() {
   return m[1];
 }
 
+/** ADR-121 §3 dependencies: agents pinned by digest, skills/cogs/model roles by name. */
+function catalogDependencies(pkg, digestById) {
+  const deps = Array.isArray(pkg.dependencies) ? pkg.dependencies : [];
+  return deps
+    .map((d) => {
+      if (d.agent) return { kind: "agent", name: d.agent, digest: digestById.get(d.agent) ?? null };
+      if (d.skill) return { kind: "skill", name: d.skill };
+      if (d.cog) return { kind: "cog", name: d.cog };
+      return { kind: "model_role", name: d.model_role };
+    })
+    .sort((a, b) => `${a.kind}/${a.name}`.localeCompare(`${b.kind}/${b.name}`));
+}
+
 function buildCatalog(results, teams) {
+  const version = workspaceVersion();
+  const digestById = new Map(results.map((r) => [r.id, r.digest]));
   const agents = results
     .map((r) => {
       const pkg = r.pkg;
@@ -56,10 +72,36 @@ function buildCatalog(results, teams) {
         skills,
         requires: Array.isArray(pkg.requires) ? pkg.requires : [],
         provenance: pkg.provenance ?? {},
+        version,
+        digest: r.digest,
+        parent: pkg.parent ?? null,
+        state: pkg.state ?? "active",
+        dependencies: catalogDependencies(pkg, digestById),
         path: `agents/${r.path}`,
       };
     })
     .sort((a, b) => a.id.localeCompare(b.id));
+
+  // Team digest: the team directory plus its active member packages. Active ids
+  // follow package.rs team_members; only top-level, non-inactive packages pin.
+  const topLevel = new Map(
+    results.filter((r) => !r.path.includes("/") && (r.pkg.state ?? "active") === "active").map((r) => [r.id, r.digest.slice("sha256:".length)]),
+  );
+  const activeMemberIds = (team) => {
+    const ids = [];
+    const push = (item) => {
+      if (item === null || item === undefined) return;
+      const raw = typeof item === "string" ? item : (item.agent ?? item.id ?? item.package ?? item.skill);
+      if (typeof raw !== "string" || (typeof item === "object" && item.active === false)) return;
+      ids.push(raw.split("@")[0]);
+    };
+    for (const key of ["lead", "members", "shared_skills", "skills"]) {
+      const v = team[key];
+      if (Array.isArray(v)) v.forEach(push);
+      else push(v);
+    }
+    return ids;
+  };
 
   const teamEntries = teams
     .map((t) => ({
@@ -78,12 +120,14 @@ function buildCatalog(results, teams) {
             hosts: t.team.hosts ?? {},
           }
         : {}),
+      version,
+      digest: `sha256:${teamDigestHex(join(ROOT, t.path), activeMemberIds(t.team), topLevel)}`,
       path: t.path,
     }))
     .sort((a, b) => a.id.localeCompare(b.id));
 
   return {
-    version: workspaceVersion(),
+    version,
     agents,
     teams: teamEntries,
   };

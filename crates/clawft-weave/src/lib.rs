@@ -238,6 +238,8 @@ pub(crate) mod dashboard_test_support;
 pub mod fleet_labels;
 /// `fleet.snapshot` and `fleet.location.set` (fleet manager P1).
 pub mod fleet_rpc;
+/// `versions.list`, `versions.tree` and `versions.deps` (ADR-121 O1, read-only).
+pub mod versions_rpc;
 #[cfg(feature = "ecc")]
 pub mod spatial_rpc;
 pub mod protocol;

@@ -1,0 +1,18 @@
+[package]
+name = "clawft-versions"
+version.workspace = true
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Append-only version index for first-class objects (agents, teams, cogs), mirrored into clawft-cow-memory lineages (ADR-121)."
+
+[dependencies]
+clawft-cow-memory = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

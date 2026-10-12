@@ -1707,10 +1707,10 @@ cmd_npm_audit() {
 # ── Agent Directory (AD-1/AD-2, WEFT agent-directory design) ───────────
 # Team spec v1 (ADR-112 TM1): seeded failing fixtures must each be refused.
 agents_team_tests() {
-    node --test "$ROOT/scripts/agents-team-validate.test.mjs"
+    node --test "$ROOT/scripts/agents-team-validate.test.mjs" "$ROOT/scripts/agents-validate.test.mjs"
 }
 
-# Gate check 17: package + team validation, then the team-spec fixtures.
+# Gate check 17: package + team validation, then the team-spec and package-rule fixtures.
 agents_validate_gate_impl() {
     node "$ROOT/scripts/agents-validate.mjs" --quiet || return 1
     agents_team_tests

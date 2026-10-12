@@ -455,6 +455,22 @@ const ROUTES: &[ExtRoute] = &[
         capability: Capability::Admin,
         handler: crate::fleet_rpc::handle,
     },
+    // ADR-121 version index: read-only queries over the local version files.
+    ExtRoute {
+        prefix: "versions.list",
+        capability: Capability::Read,
+        handler: crate::versions_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "versions.tree",
+        capability: Capability::Read,
+        handler: crate::versions_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "versions.deps",
+        capability: Capability::Read,
+        handler: crate::versions_rpc::handle,
+    },
     // Dashboard reporter: status is read-only; rotating the node token is Admin
     // (with `node`, it is sent to that peer over the signed mesh wire).
     ExtRoute {
@@ -739,6 +755,22 @@ const ROUTES: &[ExtRoute] = &[
         prefix: "fleet.location.set",
         capability: Capability::Admin,
         handler: crate::fleet_rpc::handle,
+    },
+    // ADR-121 version index: read-only queries over the local version files.
+    ExtRoute {
+        prefix: "versions.list",
+        capability: Capability::Read,
+        handler: crate::versions_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "versions.tree",
+        capability: Capability::Read,
+        handler: crate::versions_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "versions.deps",
+        capability: Capability::Read,
+        handler: crate::versions_rpc::handle,
     },
     // Dashboard reporter: status is read-only; rotating the node token is Admin
     // (with `node`, it is sent to that peer over the signed mesh wire).

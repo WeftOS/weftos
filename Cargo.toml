@@ -122,6 +122,9 @@ members = [
     # .planning/ruv/integration/agenticow-integration-plan.md). Standalone;
     # no hermes-loop or exochain wiring yet (Phases 2-3).
     "crates/clawft-cow-memory",
+    # Append-only version index for first-class objects (ADR-121 O1), mirrored
+    # into clawft-cow-memory lineages.
+    "crates/clawft-versions",
     # Gaussian splat pipeline (phone video → COLMAP → Brush → SOG).
     # External tools (ffmpeg/colmap/brush) are runtime-only; crates always build.
     # Standalone: `cargo run -p clawft-splatd --release` (binary name: splatd).
@@ -419,6 +422,7 @@ clawft-service-terminal = { version = "0.8.4-rc.6", path = "crates/clawft-servic
 clawft-service-classify = { version = "0.8.4-rc.6", path = "crates/clawft-service-classify" }
 clawft-service-agent = { version = "0.8.4-rc.6", path = "crates/clawft-service-agent" }
 clawft-cow-memory = { version = "0.8.4-rc.6", path = "crates/clawft-cow-memory" }
+clawft-versions = { version = "0.8.4-rc.6", path = "crates/clawft-versions" }
 
 # EML (exp-ln) function approximation
 eml-core = { version = "0.1.0", path = "crates/eml-core" }

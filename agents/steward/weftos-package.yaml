@@ -25,6 +25,10 @@ required_project_context:
     required: false
     description: name of a separate goal/outcome object, if the board schema has one
 
+brain:
+  schema: weftos.brain-metadata/1   # agents/schemas/brain-metadata.schema.json
+  notes: project                    # leaves decision / why / where notes for later reuse
+
 secrets:
   - name: BOARD_API_TOKEN
     description: placeholder — credential for the project's board API, if the adapter needs one
