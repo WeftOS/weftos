@@ -1,7 +1,7 @@
 # ADR-114: `weftos://` names: internal mesh addressing for business concepts, mesh resources and artifacts
 
 - **Status**: Proposed (2026-10-09; the owner chose the `weftos://` scheme and asked for this ADR)
-- **Updated**: 2026-10-11 (§5a: every first-class surface gets a kind; proposed). 2026-10-09. Owner: names are internal mesh addressing and cover companies, projects
+- **Updated**: 2026-10-11 (ADR-121: `agents` names packages, new `instances` kind; §5a: every first-class surface gets a kind; proposed). 2026-10-09. Owner: names are internal mesh addressing and cover companies, projects
   and other business concepts as well as mesh resources; the authority is the mesh, not a node.
   N1 built on `target-0.8.4`: `crates/clawft-weave/src/weftos_uri.rs` (strict parser, round-trip
   and reject tables), `mesh_names.rs` (accepts this node's MeshId only; friendly mesh names are
@@ -68,7 +68,7 @@ mesh-id    = 64-lowercase-hex                  ; the licence MeshId (weft-licenc
 kind       = business-kind | mesh-kind | artifact-kind
 business-kind = "companies" | "projects" | "goals" | "tickets" | "installations" | "members"
 mesh-kind     = "nodes" | "hosts" | "services"
-artifact-kind = "cogs" | "teams" | "agents" | "memory" | "sensors"
+artifact-kind = "cogs" | "teams" | "agents" | "instances" | "memory" | "sensors"
 id         = kind-specific identifier (ULID, UUID, node id, slug)
 path       = segment *( "/" segment )          ; kind-specific sub-resources only
 query      = revision | view | revision "&" view
@@ -88,7 +88,8 @@ view       = "view=abstract" | "view=overview" | "view=content"
 | `services` | service name | none | mesh-wide services (placement, licence proxy) |
 | `cogs` | cog id | none; pin with `rev` | signed cog packages |
 | `teams` | team id | none; pin with `rev` | ADR-112 bundles (TM6) |
-| `agents` | agent id | none | registered or running agents |
+| `agents` | agent package id | none; pin with `rev` | agent packages (ADR-121); running agents are `instances` |
+| `instances` | ULID minted at start | none | running agents and team runs (ADR-121); a restart is a new instance |
 | `memory` | store id | record path | per-scope indexes (§3) |
 | `sensors` | sensor id | none | sensors reported by cogs and nodes |
 
