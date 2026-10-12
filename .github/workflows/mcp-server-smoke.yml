@@ -4,7 +4,8 @@ name: MCP server smoke
 # binary, spawns it on stdio, sends an `initialize`, then `tools/list`,
 # asserts at least one builtin tool is reported, then `tools/call` on
 # the simplest builtin (`echo`) and asserts a result content block
-# came back.
+# came back. The stateless step does the same without `initialize`
+# (MCP 2026-07-28: `server/discover` + per-request `_meta`).
 
 on:
   pull_request:
@@ -13,6 +14,7 @@ on:
       - 'crates/clawft-cli/src/commands/mcp_server.rs'
       - 'crates/clawft-services/src/mcp/**'
       - 'crates/clawft-core/src/tools/**'
+      - 'scripts/ci/mcp_smoke*.py'
       - '.github/workflows/mcp-server-smoke.yml'
   push:
     branches: [main, master]
@@ -72,3 +74,10 @@ jobs:
         run: |
           set -euo pipefail
           python3 scripts/ci/mcp_smoke.py
+
+      - name: Smoke-test mcp-server stateless (server/discover + _meta, no initialize)
+        env:
+          WEFT_BIN: ${{ steps.bin.outputs.bin }}
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/mcp_smoke_stateless.py

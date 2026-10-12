@@ -11,6 +11,7 @@ use super::ToolDefinition;
 use super::composite::CompositeToolProvider;
 use super::middleware::{Middleware, ToolCallRequest};
 use super::provider::CallToolResult;
+use super::stateless;
 
 // ── Constants ───────────────────────────────────────────────────────────
 
@@ -30,7 +31,10 @@ const INVALID_REQUEST: i32 = -32600;
 /// writes responses to a writer.
 ///
 /// Handles the `initialize` handshake, `tools/list`, `tools/call`, and
-/// `notifications/initialized` methods. Unknown methods receive a
+/// `notifications/initialized` methods. Requests carrying
+/// `_meta["io.modelcontextprotocol/protocolVersion"]` (spec 2026-07-28), and
+/// `server/discover`, are served statelessly without a handshake; see
+/// [`super::stateless`]. Unknown methods receive a
 /// `-32601 Method not found` error. Requests sent before `initialize`
 /// receive a `-32002 Server not initialized` error.
 ///
@@ -113,6 +117,18 @@ impl McpServerShell {
         // Notifications have no id -- never send a response.
         let is_notification = id.is_none();
 
+        // Stateless (2026-07-28) request: version in `_meta`, no handshake.
+        // `initialize` always selects the legacy path; a bare `server/discover`
+        // is the stdio compatibility probe and is answered either way.
+        if method != "initialize" {
+            let version = stateless::declared_version(&msg);
+            if version.is_some() || method == "server/discover" {
+                return self
+                    .handle_modern(version, method, id, &params, session_scopes)
+                    .await;
+            }
+        }
+
         match method {
             "initialize" => {
                 self.initialized = true;
@@ -156,114 +172,13 @@ impl McpServerShell {
             }
 
             "tools/list" => {
-                let mut tools = self.provider.list_tools_all();
-
-                // Apply middleware filter_tools in order.
-                for mw in &self.middlewares {
-                    tools = mw.filter_tools(tools).await;
-                }
-
-                // Session capability scopes (WEFT-697).
-                if let Some(scopes) = session_scopes {
-                    tools.retain(|t| scopes.allows_tool(&t.name));
-                }
-
-                let tools_json = serialize_tools(&tools);
-                let result = serde_json::json!({ "tools": tools_json });
-
+                let result = self.tools_list(session_scopes).await;
                 id.map(|id| make_success_response(id, result))
             }
 
             "tools/call" => {
-                let name = params
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let args = params
-                    .get("arguments")
-                    .cloned()
-                    .unwrap_or_else(|| Value::Object(Default::default()));
-
-                // Session capability gate before middleware (WEFT-697).
-                if let Some(scopes) = session_scopes
-                    && !scopes.allows_tool(&name)
-                {
-                    let err_result = CallToolResult::error(format!(
-                        "permission denied: session capability lacks tool '{name}'"
-                    ));
-                    let result_value = serde_json::to_value(&err_result).unwrap_or(Value::Null);
-                    return id.map(|id| make_success_response(id, result_value));
-                }
-
-                // Workspace root check for common path args (best-effort).
-                if let Some(scopes) = session_scopes {
-                    for key in ["path", "file", "file_path", "dir", "directory"] {
-                        if let Some(p) = args.get(key).and_then(|v| v.as_str()) {
-                            let path = std::path::Path::new(p);
-                            if !scopes.allows_workspace_path(path) {
-                                let err_result = CallToolResult::error(format!(
-                                    "permission denied: path '{p}' outside session workspace roots"
-                                ));
-                                let result_value =
-                                    serde_json::to_value(&err_result).unwrap_or(Value::Null);
-                                return id.map(|id| make_success_response(id, result_value));
-                            }
-                        }
-                    }
-                }
-
-                let mut request = ToolCallRequest {
-                    name: name.clone(),
-                    args,
-                };
-
-                // Apply middleware before_call hooks.
-                let mut mw_error = None;
-                for mw in &self.middlewares {
-                    match mw.before_call(request).await {
-                        Ok(r) => request = r,
-                        Err(e) => {
-                            mw_error = Some(e);
-                            // Reconstruct a minimal request for the error path.
-                            request = ToolCallRequest {
-                                name,
-                                args: Value::Object(Default::default()),
-                            };
-                            break;
-                        }
-                    }
-                }
-
-                let call_result = if let Some(err) = mw_error {
-                    Err(err)
-                } else {
-                    self.provider
-                        .call_tool(&request.name, request.args.clone())
-                        .await
-                };
-
-                let result_value = match call_result {
-                    Ok(mut result) => {
-                        // Apply middleware after_call hooks.
-                        for mw in &self.middlewares {
-                            match mw.after_call(&request, result).await {
-                                Ok(r) => result = r,
-                                Err(e) => {
-                                    result = CallToolResult::error(e.to_string());
-                                    break;
-                                }
-                            }
-                        }
-                        serde_json::to_value(&result).unwrap_or(Value::Null)
-                    }
-                    Err(e) => {
-                        let err_result = CallToolResult::error(e.to_string());
-                        serde_json::to_value(&err_result).unwrap_or(Value::Null)
-                    }
-                };
-
-                id.map(|id| make_success_response(id, result_value))
+                let result = self.tools_call(&params, session_scopes).await;
+                id.map(|id| make_success_response(id, result))
             }
 
             _ => {
@@ -278,6 +193,164 @@ impl McpServerShell {
                 }
             }
         }
+    }
+
+    /// `tools/list` result body, shared by the legacy and stateless paths.
+    ///
+    /// Sorted by name so the list is deterministic (spec 2026-07-28 asks for
+    /// it to help client and prompt caching).
+    async fn tools_list(
+        &self,
+        session_scopes: Option<&super::session_cap::SessionScopes>,
+    ) -> Value {
+        let mut tools = self.provider.list_tools_all();
+
+        // Apply middleware filter_tools in order.
+        for mw in &self.middlewares {
+            tools = mw.filter_tools(tools).await;
+        }
+
+        // Session capability scopes (WEFT-697).
+        if let Some(scopes) = session_scopes {
+            tools.retain(|t| scopes.allows_tool(&t.name));
+        }
+
+        tools.sort_by(|a, b| a.name.cmp(&b.name));
+        serde_json::json!({ "tools": serialize_tools(&tools) })
+    }
+
+    /// `tools/call` result body, shared by the legacy and stateless paths.
+    async fn tools_call(
+        &self,
+        params: &Value,
+        session_scopes: Option<&super::session_cap::SessionScopes>,
+    ) -> Value {
+        let name = params
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let args = params
+            .get("arguments")
+            .cloned()
+            .unwrap_or_else(|| Value::Object(Default::default()));
+
+        // Session capability gate before middleware (WEFT-697).
+        if let Some(scopes) = session_scopes
+            && !scopes.allows_tool(&name)
+        {
+            let err_result = CallToolResult::error(format!(
+                "permission denied: session capability lacks tool '{name}'"
+            ));
+            return serde_json::to_value(&err_result).unwrap_or(Value::Null);
+        }
+
+        // Workspace root check for common path args (best-effort).
+        if let Some(scopes) = session_scopes {
+            for key in ["path", "file", "file_path", "dir", "directory"] {
+                if let Some(p) = args.get(key).and_then(|v| v.as_str()) {
+                    let path = std::path::Path::new(p);
+                    if !scopes.allows_workspace_path(path) {
+                        let err_result = CallToolResult::error(format!(
+                            "permission denied: path '{p}' outside session workspace roots"
+                        ));
+                        return serde_json::to_value(&err_result).unwrap_or(Value::Null);
+                    }
+                }
+            }
+        }
+
+        let mut request = ToolCallRequest {
+            name: name.clone(),
+            args,
+        };
+
+        // Apply middleware before_call hooks.
+        let mut mw_error = None;
+        for mw in &self.middlewares {
+            match mw.before_call(request).await {
+                Ok(r) => request = r,
+                Err(e) => {
+                    mw_error = Some(e);
+                    // Reconstruct a minimal request for the error path.
+                    request = ToolCallRequest {
+                        name,
+                        args: Value::Object(Default::default()),
+                    };
+                    break;
+                }
+            }
+        }
+
+        let call_result = if let Some(err) = mw_error {
+            Err(err)
+        } else {
+            self.provider
+                .call_tool(&request.name, request.args.clone())
+                .await
+        };
+
+        match call_result {
+            Ok(mut result) => {
+                // Apply middleware after_call hooks.
+                for mw in &self.middlewares {
+                    match mw.after_call(&request, result).await {
+                        Ok(r) => result = r,
+                        Err(e) => {
+                            result = CallToolResult::error(e.to_string());
+                            break;
+                        }
+                    }
+                }
+                serde_json::to_value(&result).unwrap_or(Value::Null)
+            }
+            Err(e) => {
+                let err_result = CallToolResult::error(e.to_string());
+                serde_json::to_value(&err_result).unwrap_or(Value::Null)
+            }
+        }
+    }
+
+    /// Serve one stateless (spec 2026-07-28) message.
+    ///
+    /// No handshake and no shell state: the era is read from `_meta`, so
+    /// concurrent modern and legacy clients cannot affect each other.
+    async fn handle_modern(
+        &self,
+        version: Option<&str>,
+        method: &str,
+        id: Option<Value>,
+        params: &Value,
+        session_scopes: Option<&super::session_cap::SessionScopes>,
+    ) -> Option<Value> {
+        // Notifications get no reply.
+        let id = id?;
+        if let Some(v) = version
+            && !stateless::is_supported(v)
+        {
+            return Some(stateless::unsupported_version_error(id, v));
+        }
+        let info = stateless::server_info(SERVER_NAME, SERVER_VERSION);
+        let (mut result, cacheable) = match method {
+            "server/discover" => {
+                return Some(make_success_response(
+                    id,
+                    stateless::discover_result(info, None),
+                ));
+            }
+            "tools/list" => (self.tools_list(session_scopes).await, true),
+            "tools/call" => (self.tools_call(params, session_scopes).await, false),
+            // `ping`, `logging/setLevel` and friends were removed in 2026-07-28.
+            _ => {
+                return Some(make_error_response(
+                    id,
+                    METHOD_NOT_FOUND,
+                    &format!("Method not found: {method}"),
+                ));
+            }
+        };
+        stateless::decorate_result(&mut result, info, cacheable);
+        Some(make_success_response(id, result))
     }
 
     /// Run the server loop, reading lines from `reader` and writing
@@ -850,5 +923,147 @@ mod tests {
 
         // 4: Unknown method error.
         assert_eq!(responses[3]["error"]["code"], METHOD_NOT_FOUND);
+    }
+
+    // ── Stateless (2026-07-28) ──────────────────────────────────────────
+
+    fn modern_meta() -> Value {
+        json!({ "_meta": { "io.modelcontextprotocol/protocolVersion": "2026-07-28" } })
+    }
+
+    fn modern_params(extra: Value) -> Value {
+        let mut p = modern_meta();
+        for (k, v) in extra.as_object().unwrap() {
+            p[k] = v.clone();
+        }
+        p
+    }
+
+    async fn run_lines(server: &mut McpServerShell, input: String) -> Vec<Value> {
+        let mut output = Vec::new();
+        server
+            .run(Cursor::new(input.into_bytes()), &mut output)
+            .await
+            .unwrap();
+        parse_responses(&output)
+    }
+
+    #[tokio::test]
+    async fn stateless_list_and_call_without_initialize() {
+        let mut server = make_server();
+        let mut input = request_line(1, "tools/list", modern_meta());
+        input.push_str(&request_line(
+            2,
+            "tools/call",
+            modern_params(json!({ "name": "echo__say", "arguments": { "text": "hi" } })),
+        ));
+        let r = run_lines(&mut server, input).await;
+        assert_eq!(r.len(), 2);
+        assert_eq!(r[0]["result"]["resultType"], "complete");
+        assert_eq!(r[0]["result"]["cacheScope"], "private");
+        assert!(r[0]["result"]["ttlMs"].is_u64());
+        assert_eq!(
+            r[0]["result"]["_meta"]["io.modelcontextprotocol/serverInfo"]["name"],
+            SERVER_NAME
+        );
+        assert_eq!(r[0]["result"]["tools"][0]["name"], "echo__say");
+        assert_eq!(r[1]["result"]["resultType"], "complete");
+        assert!(r[1]["result"].get("ttlMs").is_none());
+        assert_eq!(r[1]["result"]["content"][0]["text"], "hi");
+        // Stateless traffic never flips the legacy handshake flag.
+        assert!(!server.is_initialized());
+    }
+
+    #[tokio::test]
+    async fn discover_with_and_without_meta() {
+        let mut server = make_server();
+        let mut input = request_line(1, "server/discover", json!({}));
+        input.push_str(&request_line(2, "server/discover", modern_meta()));
+        let r = run_lines(&mut server, input).await;
+        for resp in &r {
+            let res = &resp["result"];
+            assert_eq!(res["supportedVersions"], json!(["2026-07-28"]));
+            assert!(res["capabilities"]["tools"].is_object());
+            assert_eq!(res["resultType"], "complete");
+            assert!(res["ttlMs"].is_u64());
+        }
+        assert!(!server.is_initialized());
+    }
+
+    #[tokio::test]
+    async fn unsupported_version_is_refused_with_supported_list() {
+        let mut server = make_server();
+        let params = json!({ "_meta": { "io.modelcontextprotocol/protocolVersion": "1900-01-01" } });
+        for method in ["tools/list", "server/discover"] {
+            let r = run_lines(&mut server, request_line(1, method, params.clone())).await;
+            assert_eq!(r[0]["error"]["code"], stateless::UNSUPPORTED_PROTOCOL_VERSION);
+            assert_eq!(r[0]["error"]["data"]["supported"], json!(["2026-07-28"]));
+            assert_eq!(r[0]["error"]["data"]["requested"], "1900-01-01");
+        }
+    }
+
+    #[tokio::test]
+    async fn stateless_ping_is_removed() {
+        let mut server = make_server();
+        let r = run_lines(&mut server, request_line(1, "ping", modern_meta())).await;
+        assert_eq!(r[0]["error"]["code"], METHOD_NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn stateless_notification_gets_no_reply() {
+        let mut server = make_server();
+        let r = run_lines(&mut server, notification_line("tools/list", modern_meta())).await;
+        assert!(r.is_empty());
+    }
+
+    #[tokio::test]
+    async fn legacy_results_stay_unchanged_after_stateless_traffic() {
+        let mut server = make_server();
+        let mut input = request_line(1, "tools/list", modern_meta());
+        input.push_str(&init_line(2));
+        input.push_str(&request_line(3, "tools/list", json!({})));
+        let r = run_lines(&mut server, input).await;
+        assert_eq!(r[1]["result"]["protocolVersion"], PROTOCOL_VERSION);
+        assert!(r[2]["result"].get("resultType").is_none());
+        assert!(r[2]["result"].get("ttlMs").is_none());
+        // Legacy gate still refuses on a fresh shell.
+        let mut fresh = make_server();
+        let r = run_lines(&mut fresh, request_line(1, "tools/list", json!({}))).await;
+        assert_eq!(r[0]["error"]["code"], NOT_INITIALIZED);
+    }
+
+    #[tokio::test]
+    async fn tools_list_is_sorted_by_name() {
+        struct Two;
+        #[async_trait]
+        impl ToolProvider for Two {
+            fn namespace(&self) -> &str {
+                ""
+            }
+            fn list_tools(&self) -> Vec<ToolDefinition> {
+                ["zeta", "alpha", "mid"]
+                    .iter()
+                    .map(|n| ToolDefinition {
+                        name: (*n).into(),
+                        description: String::new(),
+                        input_schema: json!({"type": "object"}),
+                    })
+                    .collect()
+            }
+            async fn call_tool(&self, n: &str, _: Value) -> Result<CallToolResult, ToolError> {
+                Err(ToolError::NotFound(n.into()))
+            }
+        }
+        let mut c = CompositeToolProvider::new();
+        c.register(Box::new(Two));
+        let mut server = McpServerShell::new(c);
+        let r = run_lines(&mut server, request_line(1, "tools/list", modern_meta())).await;
+        let names: Vec<&str> = r[0]["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["alpha", "mid", "zeta"]);
     }
 }
