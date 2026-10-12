@@ -71,6 +71,8 @@ serde_yaml = { workspace = true }
 weftos-leaf-types = { path = "../weftos-leaf-types", features = ["std"] }
 # WEFT-720 / ADR-056 Phase E: BVH spatial CLI + E2E scaffold.
 clawft-bvh = { path = "../clawft-bvh" }
+# ADR-121 O3: the `agent.install` action renders the embedded agent packages (and digests them).
+weftos = { workspace = true }
 hex = "0.4"
 # Phase E: vector scene producer pipeline.
 #

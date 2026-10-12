@@ -2174,6 +2174,7 @@ dependencies = [
  "ulid",
  "uuid",
  "weft-licence",
+ "weftos",
  "weftos-cog-repo",
  "weftos-cog-sources",
  "weftos-leaf-scene",

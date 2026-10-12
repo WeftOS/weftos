@@ -6,6 +6,7 @@
 //! [`apply::apply`]).
 
 pub mod apply;
+pub mod digest;
 pub mod lock;
 pub mod package;
 pub mod plan;

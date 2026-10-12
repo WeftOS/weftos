@@ -192,6 +192,7 @@ mod infer_cfg_tests;
 mod infer_hardening_tests;
 pub mod node_facts_rpc;
 /// Operator location labels for the fleet manager (site and room per node).
+pub mod agent_install;
 pub mod dashboard_actions;
 pub mod dashboard_cfg;
 pub mod dashboard_budget;
