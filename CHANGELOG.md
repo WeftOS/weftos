@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Staging area for changes after the 0.8.4 cut.
 
+## [0.8.4-rc.7] - 2026-10-12
+
+### Added
+- AI org (ADR-121): agent packages and teams carry a content digest, version, parent, state
+  (`active` / `inactive`) and pinned dependencies in `agents/catalog.json`, checked by
+  `agents-validate`. The twelve legacy `agents/weftos/*` agents are packaged as inactive
+  originals. Packages declare a self-brain metadata schema (`weftos.brain-metadata/1`).
+- `clawft-versions` and `weaver versions list | tree | deps`: an append-only versions file per
+  node, mirrored into a copy-on-write ruvector lineage per object.
+- Instance registry: running agents are recorded (instance ULID, package, digest, state,
+  card), their start, stop, version, config and failure events go on the chain, and the
+  dashboard heartbeat carries an instances summary and the node `kind`
+  (`[dashboard] kind`: machine, project-daemon, dev, vm).
+- `agent.install` node action: installs an approved agent package or team into a project
+  checkout after verifying its digest, records it on the chain and reports the result.
+- `weftos://` gains the `instances` kind.
+
+### Changed
+- One bundle digest definition (`crates/weftos/src/init/digest.rs`, with a JS twin) is used by
+  the catalog, installs and runtime enforcement; a node refuses to start a package whose
+  files do not match its pinned digest.
+
 ## [0.8.4-rc.6] - 2026-10-11
 
 ### Added
