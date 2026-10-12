@@ -12,7 +12,7 @@
 //!
 //! This module is gated behind the `vector-memory` feature flag.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -175,26 +175,32 @@ pub struct HnswStore {
     /// O(1) lookup from entry ID to its position in `entries`.
     id_index: HashMap<String, usize>,
     /// The HNSW index, rebuilt when entries change above the threshold.
-    index: Option<HnswMap<EmbeddingPoint, usize>>,
+    index: Option<HnswMap<EmbeddingPoint, u64>>,
+    /// Stable sequence number of each entry, parallel to `entries`. Graph
+    /// values are these, never positions, so a graph hit is resolved
+    /// through `seq_pos` at query time and a deleted or replaced entry
+    /// simply fails to resolve.
+    seqs: Vec<u64>,
+    /// Live sequence number to its current position in `entries`.
+    seq_pos: HashMap<u64, usize>,
+    /// Next sequence number to hand out (never reused).
+    next_seq: u64,
+    /// Live entries absent from the current graph (inserted or upserted
+    /// since it was built); scanned by brute force alongside the graph.
+    unindexed: HashSet<u64>,
     /// ef_search parameter for queries.
     ef_search: usize,
     /// ef_construction parameter for building.
     ef_construction: usize,
     /// Whether the index is stale (entries changed since last build).
     dirty: bool,
-    /// Number of entries at the time the HNSW index was last built.
-    ///
-    /// Entries from `index_built_len..entries.len()` are "new" and must
-    /// be scanned via brute-force when the index is stale but below the
-    /// rebuild threshold.
-    index_built_len: usize,
     /// Number of inserts (and deletes) since the last HNSW rebuild.
     inserts_since_rebuild: usize,
     /// How many mutations before a full rebuild is triggered automatically.
     rebuild_threshold: usize,
-    /// Bumped whenever `entries` positions are reshuffled (delete or
-    /// upsert of an existing id). An index built against an older layout
-    /// maps to the wrong entries and must not be installed.
+    /// Bumped by `reset`, which discards every entry; a graph built before
+    /// it must not be installed. Deletes and upserts do not bump it: the
+    /// graph maps through stable sequence numbers.
     layout_gen: u64,
     /// Monotonic count of mutations (never reset by a rebuild).
     mutations: u64,
@@ -204,6 +210,8 @@ pub struct HnswStore {
 /// itself can run with no lock held. See [`HnswStore::rebuild_job`].
 pub struct RebuildJob {
     points: Vec<EmbeddingPoint>,
+    seqs: Vec<u64>,
+    next_seq: u64,
     ef_search: usize,
     ef_construction: usize,
     layout_gen: u64,
@@ -212,8 +220,8 @@ pub struct RebuildJob {
 
 /// A finished index, ready for [`HnswStore::install_index`].
 pub struct BuiltIndex {
-    map: HnswMap<EmbeddingPoint, usize>,
-    len: usize,
+    map: HnswMap<EmbeddingPoint, u64>,
+    next_seq: u64,
     ef_search: usize,
     layout_gen: u64,
     mutations: u64,
@@ -222,15 +230,13 @@ pub struct BuiltIndex {
 impl RebuildJob {
     /// Build the graph. CPU-heavy; call with no store lock held.
     pub fn build(self) -> BuiltIndex {
-        let len = self.points.len();
-        let values: Vec<usize> = (0..len).collect();
         let map = Builder::default()
             .ef_search(self.ef_search)
             .ef_construction(self.ef_construction)
-            .build(self.points, values);
+            .build(self.points, self.seqs);
         BuiltIndex {
             map,
-            len,
+            next_seq: self.next_seq,
             ef_search: self.ef_search,
             layout_gen: self.layout_gen,
             mutations: self.mutations,
@@ -245,10 +251,13 @@ impl HnswStore {
             entries: Vec::new(),
             id_index: HashMap::new(),
             index: None,
+            seqs: Vec::new(),
+            seq_pos: HashMap::new(),
+            next_seq: 0,
+            unindexed: HashSet::new(),
             ef_search: DEFAULT_EF_SEARCH,
             ef_construction: DEFAULT_EF_CONSTRUCTION,
             dirty: false,
-            index_built_len: 0,
             inserts_since_rebuild: 0,
             rebuild_threshold: DEFAULT_REBUILD_THRESHOLD,
             layout_gen: 0,
@@ -262,10 +271,13 @@ impl HnswStore {
             entries: Vec::new(),
             id_index: HashMap::new(),
             index: None,
+            seqs: Vec::new(),
+            seq_pos: HashMap::new(),
+            next_seq: 0,
+            unindexed: HashSet::new(),
             ef_search,
             ef_construction,
             dirty: false,
-            index_built_len: 0,
             inserts_since_rebuild: 0,
             rebuild_threshold: DEFAULT_REBUILD_THRESHOLD,
             layout_gen: 0,
@@ -287,15 +299,17 @@ impl HnswStore {
     pub fn insert(&mut self, id: String, embedding: Vec<f32>, metadata: serde_json::Value) {
         // Remove existing entry with the same ID (upsert) in O(1).
         if let Some(old_pos) = self.id_index.remove(&id) {
-            self.layout_gen += 1;
-            self.entries.swap_remove(old_pos);
-            // If swap_remove moved the last element into old_pos, update its index.
-            if old_pos < self.entries.len() {
-                let moved_id = self.entries[old_pos].id.clone();
-                self.id_index.insert(moved_id, old_pos);
-            }
+            self.remove_at(old_pos);
         }
+        // The replacement gets a fresh sequence number, so the old graph
+        // node for this id no longer resolves; the new vector is served
+        // from the unindexed tail until the next build.
         let new_pos = self.entries.len();
+        let seq = self.next_seq;
+        self.next_seq += 1;
+        self.seqs.push(seq);
+        self.seq_pos.insert(seq, new_pos);
+        self.unindexed.insert(seq);
         self.id_index.insert(id.clone(), new_pos);
         self.entries.push(HnswEntry {
             id,
@@ -362,6 +376,8 @@ impl HnswStore {
             ef_construction: self.ef_construction,
             layout_gen: self.layout_gen,
             mutations: self.mutations,
+            seqs: self.seqs.clone(),
+            next_seq: self.next_seq,
         })
     }
 
@@ -370,15 +386,15 @@ impl HnswStore {
     /// job was captured. Plain appends are fine: they stay in the
     /// brute-force tail until the next build.
     pub fn install_index(&mut self, built: BuiltIndex) -> bool {
-        if built.layout_gen != self.layout_gen
-            || built.ef_search != self.ef_search
-            || built.len > self.entries.len()
-        {
+        if built.layout_gen != self.layout_gen || built.ef_search != self.ef_search {
             return false;
         }
         let since = (self.mutations - built.mutations) as usize;
         self.index = Some(built.map);
-        self.index_built_len = built.len;
+        // Everything numbered below the job's watermark was captured by
+        // the graph (or deleted since, which resolves to nothing).
+        let watermark = built.next_seq;
+        self.unindexed.retain(|&q| q >= watermark);
         self.inserts_since_rebuild = since;
         self.dirty = since > 0;
         true
@@ -403,37 +419,30 @@ impl HnswStore {
         let query_point = EmbeddingPoint::new(Arc::from(query_embedding));
         let mut search = Search::default();
 
-        // Collect HNSW results. Ask for more than top_k so we have room
-        // to merge with brute-force results from new entries.
+        // Graph values are stable sequence numbers: resolve each through
+        // the live map, so a deleted or replaced entry is skipped rather
+        // than read from a position that has since shifted.
         let mut results: Vec<HnswQueryResult> = index
             .search(&query_point, &mut search)
-            .take(top_k)
             .filter_map(|item| {
-                let idx = *item.value;
-                // Guard: the index was built with index_built_len entries.
-                // After deletes + swap_remove, an index value may point
-                // beyond the current entries vec.
-                if idx < self.entries.len() {
-                    let entry = &self.entries[idx];
-                    Some(HnswQueryResult {
-                        id: entry.id.clone(),
-                        score: cosine_similarity(query_embedding, &entry.embedding),
-                        metadata: entry.metadata.clone(),
-                    })
-                } else {
-                    None
-                }
+                let &pos = self.seq_pos.get(item.value)?;
+                let entry = &self.entries[pos];
+                Some(HnswQueryResult {
+                    id: entry.id.clone(),
+                    score: cosine_similarity(query_embedding, &entry.embedding),
+                    metadata: entry.metadata.clone(),
+                })
             })
+            .take(top_k)
             .collect();
 
-        // If the index is stale (dirty but below rebuild threshold),
-        // brute-force scan entries added after the last rebuild and merge.
-        if self.dirty && self.index_built_len < self.entries.len() {
-            for entry in &self.entries[self.index_built_len..] {
-                let score = cosine_similarity(query_embedding, &entry.embedding);
+        // Entries inserted or upserted since the graph was built.
+        for seq in &self.unindexed {
+            if let Some(&pos) = self.seq_pos.get(seq) {
+                let entry = &self.entries[pos];
                 results.push(HnswQueryResult {
                     id: entry.id.clone(),
-                    score,
+                    score: cosine_similarity(query_embedding, &entry.embedding),
                     metadata: entry.metadata.clone(),
                 });
             }
@@ -446,8 +455,8 @@ impl HnswStore {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
-        // Deduplicate (an entry could appear from both HNSW and brute-force
-        // if index_built_len entries were modified via upsert).
+        // An id appears at most once among live sequence numbers; dedup is
+        // cheap insurance.
         results.dedup_by(|a, b| a.id == b.id);
 
         results.truncate(top_k);
@@ -457,19 +466,27 @@ impl HnswStore {
     /// Delete an entry by ID. Returns `true` if removed.
     pub fn delete(&mut self, id: &str) -> bool {
         if let Some(pos) = self.id_index.remove(id) {
-            self.layout_gen += 1;
             self.mutations += 1;
-            self.entries.swap_remove(pos);
-            // If swap_remove moved the last element into pos, update its index.
-            if pos < self.entries.len() {
-                let moved_id = self.entries[pos].id.clone();
-                self.id_index.insert(moved_id, pos);
-            }
+            self.remove_at(pos);
             self.dirty = true;
             self.inserts_since_rebuild += 1;
             true
         } else {
             false
+        }
+    }
+
+    /// Remove the entry at `pos` (already dropped from `id_index`) in O(1),
+    /// fixing the positions of the entry swapped into its slot.
+    fn remove_at(&mut self, pos: usize) {
+        self.entries.swap_remove(pos);
+        let seq = self.seqs.swap_remove(pos);
+        self.seq_pos.remove(&seq);
+        self.unindexed.remove(&seq);
+        if pos < self.entries.len() {
+            let moved_id = self.entries[pos].id.clone();
+            self.id_index.insert(moved_id, pos);
+            self.seq_pos.insert(self.seqs[pos], pos);
         }
     }
 
@@ -546,7 +563,7 @@ impl HnswStore {
         if self.entries.is_empty() {
             self.index = None;
             self.dirty = false;
-            self.index_built_len = 0;
+            self.unindexed.clear();
             self.inserts_since_rebuild = 0;
             return;
         }
@@ -557,7 +574,6 @@ impl HnswStore {
             .map(|e| EmbeddingPoint::new(Arc::clone(&e.embedding)))
             .collect();
 
-        let values: Vec<usize> = (0..self.entries.len()).collect();
 
         debug!(
             entries = self.entries.len(),
@@ -569,11 +585,11 @@ impl HnswStore {
         let map = Builder::default()
             .ef_search(self.ef_search)
             .ef_construction(self.ef_construction)
-            .build(points, values);
+            .build(points, self.seqs.clone());
 
         self.index = Some(map);
         self.dirty = false;
-        self.index_built_len = self.entries.len();
+        self.unindexed.clear();
         self.inserts_since_rebuild = 0;
     }
 
@@ -617,15 +633,21 @@ impl HnswStore {
         for (i, e) in entries.iter().enumerate() {
             id_index.insert(e.id.clone(), i);
         }
+        let seqs: Vec<u64> = (0..entries.len() as u64).collect();
+        let seq_pos: HashMap<u64, usize> = seqs.iter().map(|&q| (q, q as usize)).collect();
+        let next_seq = entries.len() as u64;
 
         let mut store = Self {
             entries,
             id_index,
             index: None,
+            seqs,
+            seq_pos,
+            next_seq,
+            unindexed: HashSet::new(),
             ef_search,
             ef_construction,
             dirty: true,
-            index_built_len: 0,
             inserts_since_rebuild: 0,
             rebuild_threshold: DEFAULT_REBUILD_THRESHOLD,
             layout_gen: 0,
@@ -1330,15 +1352,104 @@ mod tests {
     }
 
     #[test]
-    fn install_refuses_after_layout_change() {
+    fn install_survives_delete_and_upsert_after_capture() {
         let mut st = filled(200);
         let built = st.rebuild_job().unwrap().build();
         assert!(st.delete("e3"));
-        assert!(!st.install_index(built), "stale layout must be refused");
-        assert!(!st.has_index());
+        st.insert("e5".into(), vec![9.0, 1.0, 0., 0., 0., 0., 0., 0.], serde_json::json!({"v": 2}));
+        assert!(st.install_index(built), "positions no longer matter");
+        assert_live_consistent(&st);
+    }
+
+    #[test]
+    fn install_refuses_after_reset() {
+        let mut st = filled(200);
         let built = st.rebuild_job().unwrap().build();
-        st.insert("e5".into(), vec![1.0; 8], serde_json::json!({})); // upsert reshuffles
-        assert!(!st.install_index(built));
+        st.reset(50, 50);
+        assert!(!st.install_index(built), "reset discards every entry");
+        assert!(!st.has_index());
+    }
+
+    /// Every hit's id, score and metadata must match the live store.
+    fn assert_live_consistent(st: &HnswStore) {
+        for q in 0..8 {
+            let mut qv = vec![0.05f32; 8];
+            qv[q] = 1.0;
+            for r in st.query_shared(&qv, 10) {
+                let e = st.get(&r.id).unwrap_or_else(|| panic!("{} not live", r.id));
+                assert_eq!(r.metadata, e.metadata, "stale content for {}", r.id);
+                let want = cosine_similarity(&qv, &e.embedding);
+                assert!((r.score - want).abs() < 1e-5, "stale vector for {}", r.id);
+            }
+        }
+    }
+
+    #[test]
+    fn delete_and_upsert_between_builds_stay_correct() {
+        let mut st = filled(300);
+        st.force_rebuild();
+        assert!(st.has_index());
+        for i in (0..300).step_by(7) {
+            assert!(st.delete(&format!("e{i}")));
+        }
+        for i in (1..300).step_by(11) {
+            st.insert(
+                format!("e{i}"),
+                vec![0.2, 0.1 * (i % 5) as f32, 0.9, 0., 0., 0.3, 0., 0.1],
+                serde_json::json!({"v": i}),
+            );
+        }
+        assert!(st.has_index(), "no rebuild forced by writes");
+        assert_live_consistent(&st);
+        let deleted = st.query_shared(&[1.0, 0., 0., 0., 0., 0., 0., 0.], 300);
+        assert!(deleted.iter().all(|r| st.get(&r.id).is_some()));
+        // An upserted vector is found by its new value.
+        let nv = vec![0.2, 0.13, 0.9, 0., 0., 0.3, 0., 0.1];
+        st.insert("fresh".into(), nv.clone(), serde_json::json!({}));
+        st.delete("fresh");
+        st.insert("fresh".into(), nv.clone(), serde_json::json!({}));
+        assert_eq!(st.query_shared(&nv, 1)[0].id, "fresh");
+    }
+
+    #[test]
+    fn concurrent_writes_and_searches_stay_correct() {
+        use std::sync::{Arc as A, RwLock};
+        let st = A::new(RwLock::new(filled(300)));
+        st.write().unwrap().force_rebuild();
+        let writer = {
+            let st = A::clone(&st);
+            std::thread::spawn(move || {
+                for i in 0..300usize {
+                    let mut g = st.write().unwrap();
+                    match i % 3 {
+                        0 => {
+                            g.delete(&format!("e{}", i % 300));
+                        }
+                        1 => g.insert(
+                            format!("e{}", (i * 5) % 300),
+                            vec![0.1 * (i % 7) as f32, 1.0, 0.2, 0., 0., 0., 0., 0.3],
+                            serde_json::json!({"v": i}),
+                        ),
+                        _ => g.insert(format!("n{i}"), vec![0.4; 8], serde_json::json!({})),
+                    }
+                }
+            })
+        };
+        let readers: Vec<_> = (0..3)
+            .map(|_| {
+                let st = A::clone(&st);
+                std::thread::spawn(move || {
+                    for _ in 0..200 {
+                        let g = st.read().unwrap();
+                        assert_live_consistent(&g);
+                    }
+                })
+            })
+            .collect();
+        writer.join().unwrap();
+        for r in readers {
+            r.join().unwrap();
+        }
     }
 
     #[test]
