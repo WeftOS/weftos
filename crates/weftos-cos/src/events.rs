@@ -35,6 +35,14 @@ pub enum Event {
         text: String,
         #[serde(rename = "final")]
         is_final: bool,
+        /// The endpoint the turn belongs to. Absent on a turn the agent has
+        /// no record of.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        endpoint: Option<String>,
+        /// `true` when the endpoint named above is a remote one that speaks
+        /// this reply itself (cos.v1.1). The agent host never speaks it.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        speak: bool,
     },
     /// A tool call record: name, a one-line summary and a status. Never the
     /// arguments.
@@ -164,7 +172,7 @@ const REDACTED: &str = "[redacted]";
 
 /// Prefixes that mark a credential-shaped token: harness and node bearer
 /// tokens, common API-key shapes, and an explicit `Bearer` header.
-const SECRET_PREFIXES: &[&str] = &["wfb_", "wft_", "sk-", "sk_", "ghp_", "xoxb-", "AKIA"];
+const SECRET_PREFIXES: &[&str] = &["wfb_", "wft_", "wfe_", "sk-", "sk_", "ghp_", "xoxb-", "AKIA"];
 
 fn is_token_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | '+' | '=')
@@ -247,7 +255,7 @@ mod tests {
 
     #[test]
     fn event_serializes_with_kind_and_final() {
-        let e = Event::Message { turn_id: TurnId::new(), text: "hi".into(), is_final: true };
+        let e = Event::Message { turn_id: TurnId::new(), text: "hi".into(), is_final: true, endpoint: None, speak: false };
         let v = serde_json::to_value(&e).unwrap();
         assert_eq!(v["kind"], "message");
         assert_eq!(v["final"], true);

@@ -5,6 +5,7 @@
 //! provider routing; the harness credential is never in this file, only the
 //! path to a mode-0600 token file.
 
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
@@ -34,6 +35,52 @@ pub struct CosConfig {
     pub team: TeamConfig,
     pub voice: VoiceConfig,
     pub brain: BrainConfig,
+    /// Remote listening (cos.v1.1).
+    pub serve: ServeConfig,
+    /// Remote endpoints by id (for example `mentra`). The `host` endpoint's
+    /// speech is `voice.tts`.
+    pub endpoints: BTreeMap<String, EndpointConfig>,
+}
+
+/// Remote listening. The loopback listener at `bind` always runs; this adds
+/// a second one on the machine's Tailscale address, token-protected.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ServeConfig {
+    /// `"tailnet"` or `"tailnet:PORT"` (default port: the loopback port).
+    /// Resolved to this machine's Tailscale IPv4; never `0.0.0.0`, and a
+    /// non-tailnet address is refused.
+    pub bind: Option<String>,
+    /// Directory of per-endpoint token files (mode 0600), written by
+    /// `weftos-cos endpoint add`.
+    pub tokens_dir: PathBuf,
+}
+
+impl Default for ServeConfig {
+    fn default() -> Self {
+        Self { bind: None, tokens_dir: config_home().join("cos/endpoints") }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct EndpointConfig {
+    /// `engine: "none"` keeps the `speak` flag off this endpoint's replies.
+    /// Any other engine marks it as one that speaks them itself; the engine
+    /// details (`voice`, `command`) are for that endpoint's own use.
+    pub tts: EndpointTts,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EndpointTts {
+    pub engine: String,
+}
+
+impl Default for EndpointTts {
+    fn default() -> Self {
+        Self { engine: "auto".into() }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -197,6 +244,8 @@ impl Default for CosConfig {
             team: TeamConfig::default(),
             voice: VoiceConfig::default(),
             brain: BrainConfig::default(),
+            serve: ServeConfig::default(),
+            endpoints: BTreeMap::new(),
         }
     }
 }
@@ -242,8 +291,37 @@ impl CosConfig {
         Ok(addr)
     }
 
+    /// The port to serve on the tailnet address, when `serve.bind` asks for
+    /// one. Anything but `tailnet` / `tailnet:PORT` is refused.
+    pub fn tailnet_port(&self) -> Result<Option<u16>, CosError> {
+        let Some(spec) = &self.serve.bind else { return Ok(None) };
+        let port = match spec.as_str() {
+            "tailnet" => self.bind_addr()?.port(),
+            s => s
+                .strip_prefix("tailnet:")
+                .and_then(|p| p.parse::<u16>().ok())
+                .filter(|p| *p != 0)
+                .ok_or_else(|| CosError::Config(format!("serve.bind {spec:?} must be \"tailnet\" or \"tailnet:PORT\"; other addresses are refused")))?,
+        };
+        Ok(Some(port))
+    }
+
+    /// Remote endpoints whose engine is `none`.
+    pub fn silent_endpoints(&self) -> Vec<String> {
+        self.endpoints.iter().filter(|(_, c)| c.tts.engine == "none").map(|(n, _)| n.clone()).collect()
+    }
+
     fn validate(&self) -> Result<(), CosError> {
         self.bind_addr()?;
+        self.tailnet_port()?;
+        for (name, ep) in &self.endpoints {
+            if !crate::conversation::valid_endpoint_name(name) || name == crate::conversation::HOST_ENDPOINT {
+                return Err(CosError::Config(format!("endpoints.{name}: not a remote endpoint id (host is configured by voice.tts)")));
+            }
+            if !["auto", "say", "command", "none"].contains(&ep.tts.engine.as_str()) {
+                return Err(CosError::Config(format!("endpoints.{name}.tts.engine must be auto, say, command or none")));
+            }
+        }
         if !["auto", "on", "off", "default"].contains(&self.models.reasoning.as_str()) {
             return Err(CosError::Config("models.reasoning must be auto, on, off or default".into()));
         }
@@ -277,6 +355,31 @@ mod tests {
     fn refuses_non_loopback_bind() {
         let cfg = CosConfig { bind: "0.0.0.0:18300".into(), ..Default::default() };
         assert!(matches!(cfg.bind_addr(), Err(CosError::Config(_))));
+    }
+
+    #[test]
+    fn serve_bind_accepts_only_tailnet_specs() {
+        let mut cfg = CosConfig::default();
+        assert_eq!(cfg.tailnet_port().unwrap(), None);
+        cfg.serve.bind = Some("tailnet".into());
+        assert_eq!(cfg.tailnet_port().unwrap(), Some(18300));
+        cfg.serve.bind = Some("tailnet:19000".into());
+        assert_eq!(cfg.tailnet_port().unwrap(), Some(19000));
+        for bad in ["0.0.0.0", "0.0.0.0:18300", "192.168.1.5:18300", "tailnet:", "tailnet:0", "tailnet:abc", "Tailnet"] {
+            cfg.serve.bind = Some(bad.into());
+            assert!(matches!(cfg.tailnet_port(), Err(CosError::Config(_))), "{bad}");
+        }
+    }
+
+    #[test]
+    fn endpoints_are_validated_and_silence_is_per_endpoint() {
+        let cfg: CosConfig = serde_json::from_str(r#"{"endpoints": {"mentra": {"tts": {"engine": "none"}}, "pad": {}}}"#).unwrap();
+        cfg.validate().unwrap();
+        assert_eq!(cfg.silent_endpoints(), ["mentra"]);
+        for bad in [r#"{"endpoints": {"host": {}}}"#, r#"{"endpoints": {"Bad Name": {}}}"#, r#"{"endpoints": {"x": {"tts": {"engine": "festival"}}}}"#] {
+            let cfg: CosConfig = serde_json::from_str(bad).unwrap();
+            assert!(matches!(cfg.validate(), Err(CosError::Config(_))), "{bad}");
+        }
     }
 
     #[test]

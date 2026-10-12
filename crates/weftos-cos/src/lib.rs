@@ -20,6 +20,7 @@ pub mod agent;
 pub mod brain;
 pub mod cli;
 pub mod config;
+pub mod endpoints;
 pub mod conversation;
 pub mod events;
 pub mod guide;
