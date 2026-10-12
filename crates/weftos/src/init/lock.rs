@@ -29,7 +29,40 @@ pub struct LockAgent {
     pub id: String,
     pub weftos_version: String,
     pub commit: String,
+    /// Package version (manifest `version`, else the weftos version).
+    #[serde(default)]
+    pub version: String,
+    /// Bundle digest of the package as applied ([`super::digest::package_digest`]).
+    #[serde(default)]
+    pub digest: String,
     pub files: Vec<LockFile>,
+}
+
+/// One member slot of an applied team.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LockSlot {
+    pub agent: String,
+    #[serde(default)]
+    pub position: Option<u32>,
+    pub active: bool,
+}
+
+/// A team applied to this project.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LockTeam {
+    pub name: String,
+    /// Bundle digest of the team as applied ([`super::digest::team_digest`]).
+    pub digest: String,
+    pub version: String,
+    pub hosts: Vec<Host>,
+    pub slots: Vec<LockSlot>,
+}
+
+/// The project-context file apply seeded (removed again only if unmodified).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LockContext {
+    pub path: String,
+    pub sha256: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -44,6 +77,10 @@ pub struct Lock {
     pub team: Option<String>,
     #[serde(default)]
     pub agents: Vec<LockAgent>,
+    #[serde(default)]
+    pub teams: Vec<LockTeam>,
+    #[serde(default)]
+    pub context: Option<LockContext>,
 }
 
 impl Lock {
@@ -56,6 +93,8 @@ impl Lock {
             source: String::new(),
             team: None,
             agents: Vec::new(),
+            teams: Vec::new(),
+            context: None,
         }
     }
 
@@ -97,6 +136,11 @@ impl Lock {
             .collect()
     }
 
+    /// Nothing left that apply owns.
+    pub fn is_empty(&self) -> bool {
+        self.agents.is_empty() && self.teams.is_empty() && self.context.is_none()
+    }
+
     /// Sort agents and files so serialization is stable.
     pub fn normalize(&mut self) {
         for a in &mut self.agents {
@@ -104,6 +148,7 @@ impl Lock {
         }
         self.agents.retain(|a| !a.files.is_empty());
         self.agents.sort_by(|x, y| x.id.cmp(&y.id));
+        self.teams.sort_by(|x, y| x.name.cmp(&y.name));
     }
 }
 

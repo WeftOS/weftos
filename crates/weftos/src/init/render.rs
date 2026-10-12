@@ -218,7 +218,12 @@ pub fn agents_md_block(packages: &[Package], layout: Layout) -> String {
 
 /// Template for `.agents/project-context.md`, listing every key the
 /// installed packages expect. Written only when the file is absent.
-pub fn project_context_template<'a>(packages: impl IntoIterator<Item = &'a Package>) -> String {
+///
+/// A key in `detected` is filled with its value; the rest stay open questions.
+pub fn project_context_template<'a>(
+    packages: impl IntoIterator<Item = &'a Package>,
+    detected: &std::collections::BTreeMap<String, String>,
+) -> String {
     let mut s = String::from(
         "# Project context\n\n\
          Read first by every WeftOS agent installed here (`weftos init`). Fill in each value;\n\
@@ -229,11 +234,14 @@ pub fn project_context_template<'a>(packages: impl IntoIterator<Item = &'a Packa
         s.push_str(&format!("\n## {}\n\n", p.id));
         for k in &p.context {
             let opt = if k.required { "" } else { " (optional)" };
-            s.push_str(&format!(
-                "- `{}`{opt}: TODO ({})\n",
-                k.key,
-                one_line(&k.description)
-            ));
+            match detected.get(&k.key) {
+                Some(v) => s.push_str(&format!("- `{}`{opt}: {v} (detected)\n", k.key)),
+                None => s.push_str(&format!(
+                    "- `{}`{opt}: TODO ({})\n",
+                    k.key,
+                    one_line(&k.description)
+                )),
+            }
         }
     }
     s

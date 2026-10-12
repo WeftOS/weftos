@@ -6,8 +6,10 @@
 //! [`apply::apply`]).
 
 pub mod apply;
+pub mod birth;
 pub mod digest;
 pub mod lock;
+mod next_lock;
 pub mod package;
 pub mod plan;
 pub mod render;
@@ -15,6 +17,7 @@ mod render_claude;
 mod render_codex;
 mod render_grok;
 pub mod source;
+pub mod team;
 
 pub use plan::{AgentInitOptions, Plan};
 pub use render::Host;

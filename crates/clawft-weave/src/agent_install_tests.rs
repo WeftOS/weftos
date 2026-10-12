@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 
 use super::*;
+use weftos::init::digest::bundle_digest;
+use weftos::init::source::AgentSource;
 
 const ULID: &str = "01K00000000000000000000000";
 const REQ: &str = "11111111-2222-3333-4444-555555555555";
