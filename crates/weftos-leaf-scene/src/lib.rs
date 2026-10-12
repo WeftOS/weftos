@@ -34,6 +34,7 @@
 //! | [`envelope`] | [`SceneEnvelope`], [`InputEnvelope`], [`WIRE_VERSION`]              |
 //! | [`store`]    | [`SceneStore`] runtime — apply, tick, hit_test, to_snapshot         |
 //! | [`codec`]    | CBOR encode/decode + version-byte rejection                         |
+//! | [`session`]  | Display-session frames and the leaf-side session state machine      |
 //!
 //! ## What's **not** in this crate
 //!
@@ -57,6 +58,7 @@ pub mod node;
 pub mod op;
 pub mod primitive;
 pub mod scene;
+pub mod session;
 pub mod store;
 pub mod tween;
 
