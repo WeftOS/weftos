@@ -56,6 +56,17 @@ const DEFAULT_REBUILD_THRESHOLD: usize = 100;
 #[derive(Debug, Clone)]
 struct EmbeddingPoint {
     embedding: Arc<[f32]>,
+    /// `1 / ||embedding||`, or 0 for a zero vector (similarity 0). Cached so
+    /// each graph distance is one dot product instead of three passes.
+    inv_norm: f32,
+}
+
+impl EmbeddingPoint {
+    fn new(embedding: Arc<[f32]>) -> Self {
+        let n = dot(&embedding, &embedding).sqrt();
+        let inv_norm = if n == 0.0 { 0.0 } else { 1.0 / n };
+        Self { embedding, inv_norm }
+    }
 }
 
 /// Serialization helper: `Arc<[f32]>` does not implement Serialize/Deserialize
@@ -64,7 +75,10 @@ struct EmbeddingPoint {
 /// We keep manual impls for the snapshot path which no longer uses EmbeddingPoint.
 impl Point for EmbeddingPoint {
     fn distance(&self, other: &Self) -> f32 {
-        1.0 - cosine_similarity(&self.embedding, &other.embedding)
+        if self.embedding.len() != other.embedding.len() {
+            return 1.0;
+        }
+        1.0 - dot(&self.embedding, &other.embedding) * self.inv_norm * other.inv_norm
     }
 }
 
@@ -178,6 +192,50 @@ pub struct HnswStore {
     inserts_since_rebuild: usize,
     /// How many mutations before a full rebuild is triggered automatically.
     rebuild_threshold: usize,
+    /// Bumped whenever `entries` positions are reshuffled (delete or
+    /// upsert of an existing id). An index built against an older layout
+    /// maps to the wrong entries and must not be installed.
+    layout_gen: u64,
+    /// Monotonic count of mutations (never reset by a rebuild).
+    mutations: u64,
+}
+
+/// Inputs for an index build, captured under a read lock so the build
+/// itself can run with no lock held. See [`HnswStore::rebuild_job`].
+pub struct RebuildJob {
+    points: Vec<EmbeddingPoint>,
+    ef_search: usize,
+    ef_construction: usize,
+    layout_gen: u64,
+    mutations: u64,
+}
+
+/// A finished index, ready for [`HnswStore::install_index`].
+pub struct BuiltIndex {
+    map: HnswMap<EmbeddingPoint, usize>,
+    len: usize,
+    ef_search: usize,
+    layout_gen: u64,
+    mutations: u64,
+}
+
+impl RebuildJob {
+    /// Build the graph. CPU-heavy; call with no store lock held.
+    pub fn build(self) -> BuiltIndex {
+        let len = self.points.len();
+        let values: Vec<usize> = (0..len).collect();
+        let map = Builder::default()
+            .ef_search(self.ef_search)
+            .ef_construction(self.ef_construction)
+            .build(self.points, values);
+        BuiltIndex {
+            map,
+            len,
+            ef_search: self.ef_search,
+            layout_gen: self.layout_gen,
+            mutations: self.mutations,
+        }
+    }
 }
 
 impl HnswStore {
@@ -193,6 +251,8 @@ impl HnswStore {
             index_built_len: 0,
             inserts_since_rebuild: 0,
             rebuild_threshold: DEFAULT_REBUILD_THRESHOLD,
+            layout_gen: 0,
+            mutations: 0,
         }
     }
 
@@ -208,6 +268,8 @@ impl HnswStore {
             index_built_len: 0,
             inserts_since_rebuild: 0,
             rebuild_threshold: DEFAULT_REBUILD_THRESHOLD,
+            layout_gen: 0,
+            mutations: 0,
         }
     }
 
@@ -225,6 +287,7 @@ impl HnswStore {
     pub fn insert(&mut self, id: String, embedding: Vec<f32>, metadata: serde_json::Value) {
         // Remove existing entry with the same ID (upsert) in O(1).
         if let Some(old_pos) = self.id_index.remove(&id) {
+            self.layout_gen += 1;
             self.entries.swap_remove(old_pos);
             // If swap_remove moved the last element into old_pos, update its index.
             if old_pos < self.entries.len() {
@@ -241,6 +304,7 @@ impl HnswStore {
         });
         self.dirty = true;
         self.inserts_since_rebuild += 1;
+        self.mutations += 1;
     }
 
     /// Query the store for the top-k most similar entries.
@@ -263,20 +327,80 @@ impl HnswStore {
         }
 
         // Decide whether to do a full rebuild or use hybrid search.
-        if self.index.is_none()
-            || (self.dirty && self.inserts_since_rebuild >= self.rebuild_threshold)
-        {
+        if self.needs_rebuild() {
             self.rebuild_index();
         }
 
-        // If index build failed (shouldn't happen), fall back.
+        self.query_shared(query_embedding, top_k)
+    }
+
+    /// True when the next [`query`](Self::query) would rebuild the graph
+    /// (no index yet, or enough mutations since the last build).
+    pub fn needs_rebuild(&self) -> bool {
+        self.entries.len() >= HNSW_THRESHOLD
+            && (self.index.is_none()
+                || (self.dirty && self.inserts_since_rebuild >= self.rebuild_threshold))
+    }
+
+    /// True when an index exists (stale or not).
+    pub fn has_index(&self) -> bool {
+        self.index.is_some()
+    }
+
+    /// Capture what a build needs; `None` below the HNSW threshold.
+    pub fn rebuild_job(&self) -> Option<RebuildJob> {
+        if self.entries.len() < HNSW_THRESHOLD {
+            return None;
+        }
+        Some(RebuildJob {
+            points: self
+                .entries
+                .iter()
+                .map(|e| EmbeddingPoint::new(Arc::clone(&e.embedding)))
+                .collect(),
+            ef_search: self.ef_search,
+            ef_construction: self.ef_construction,
+            layout_gen: self.layout_gen,
+            mutations: self.mutations,
+        })
+    }
+
+    /// Install a graph built off-lock. Returns `false` (and keeps the old
+    /// index) when entries were reshuffled or ef_search changed since the
+    /// job was captured. Plain appends are fine: they stay in the
+    /// brute-force tail until the next build.
+    pub fn install_index(&mut self, built: BuiltIndex) -> bool {
+        if built.layout_gen != self.layout_gen
+            || built.ef_search != self.ef_search
+            || built.len > self.entries.len()
+        {
+            return false;
+        }
+        let since = (self.mutations - built.mutations) as usize;
+        self.index = Some(built.map);
+        self.index_built_len = built.len;
+        self.inserts_since_rebuild = since;
+        self.dirty = since > 0;
+        true
+    }
+
+    /// Read-only query: never builds. Uses the existing graph plus a
+    /// brute-force scan of entries appended since it was built; with no
+    /// graph yet it scans everything.
+    pub fn query_shared(&self, query_embedding: &[f32], top_k: usize) -> Vec<HnswQueryResult> {
+        if self.entries.is_empty() || top_k == 0 {
+            return Vec::new();
+        }
+        if self.entries.len() < HNSW_THRESHOLD {
+            return self.brute_force_query(query_embedding, top_k);
+        }
+
+        // If there is no graph, fall back.
         let Some(ref index) = self.index else {
             return self.brute_force_query(query_embedding, top_k);
         };
 
-        let query_point = EmbeddingPoint {
-            embedding: Arc::from(query_embedding),
-        };
+        let query_point = EmbeddingPoint::new(Arc::from(query_embedding));
         let mut search = Search::default();
 
         // Collect HNSW results. Ask for more than top_k so we have room
@@ -333,6 +457,8 @@ impl HnswStore {
     /// Delete an entry by ID. Returns `true` if removed.
     pub fn delete(&mut self, id: &str) -> bool {
         if let Some(pos) = self.id_index.remove(id) {
+            self.layout_gen += 1;
+            self.mutations += 1;
             self.entries.swap_remove(pos);
             // If swap_remove moved the last element into pos, update its index.
             if pos < self.entries.len() {
@@ -428,9 +554,7 @@ impl HnswStore {
         let points: Vec<EmbeddingPoint> = self
             .entries
             .iter()
-            .map(|e| EmbeddingPoint {
-                embedding: Arc::clone(&e.embedding),
-            })
+            .map(|e| EmbeddingPoint::new(Arc::clone(&e.embedding)))
             .collect();
 
         let values: Vec<usize> = (0..self.entries.len()).collect();
@@ -488,11 +612,7 @@ impl HnswStore {
     /// The HNSW graph is rebuilt when the entry count is at or above
     /// [`HNSW_THRESHOLD`]. Used by higher-level backends that embed
     /// store state inside a larger on-disk format.
-    pub fn from_entries(
-        entries: Vec<HnswEntry>,
-        ef_search: usize,
-        ef_construction: usize,
-    ) -> Self {
+    pub fn from_entries(entries: Vec<HnswEntry>, ef_search: usize, ef_construction: usize) -> Self {
         let mut id_index: HashMap<String, usize> = HashMap::with_capacity(entries.len());
         for (i, e) in entries.iter().enumerate() {
             id_index.insert(e.id.clone(), i);
@@ -508,6 +628,8 @@ impl HnswStore {
             index_built_len: 0,
             inserts_since_rebuild: 0,
             rebuild_threshold: DEFAULT_REBUILD_THRESHOLD,
+            layout_gen: 0,
+            mutations: 0,
         };
 
         if store.entries.len() >= HNSW_THRESHOLD {
@@ -515,6 +637,16 @@ impl HnswStore {
         }
 
         store
+    }
+
+    /// Empty the store and apply fresh parameters. Bumps the layout
+    /// generation so an in-flight off-lock build cannot be installed.
+    pub fn reset(&mut self, ef_search: usize, ef_construction: usize) {
+        let next_gen = self.layout_gen + 1;
+        let mutations = self.mutations + 1;
+        *self = Self::with_params(ef_search, ef_construction);
+        self.layout_gen = next_gen;
+        self.mutations = mutations;
     }
 
     /// Number of mutations since the last HNSW rebuild.
@@ -560,6 +692,21 @@ impl HnswStore {
         table: &RegionEntryTable,
         probes: usize,
     ) -> (Vec<HnswQueryResult>, PathPrediction) {
+        if self.needs_rebuild() {
+            self.rebuild_index();
+        }
+        self.query_guided_shared(query_embedding, top_k, table, probes)
+    }
+
+    /// [`query_guided`](Self::query_guided) without the rebuild step, for
+    /// callers holding only a shared reference.
+    pub fn query_guided_shared(
+        &self,
+        query_embedding: &[f32],
+        top_k: usize,
+        table: &RegionEntryTable,
+        probes: usize,
+    ) -> (Vec<HnswQueryResult>, PathPrediction) {
         let prediction = table.predict(query_embedding, probes);
 
         if self.entries.is_empty() || top_k == 0 {
@@ -586,7 +733,7 @@ impl HnswStore {
         // Fallback / merge with full HNSW only when the region pool cannot
         // fill top_k (stale table, tiny region, or empty prediction).
         if results.len() < top_k {
-            let hnsw = self.query(query_embedding, top_k);
+            let hnsw = self.query_shared(query_embedding, top_k);
             results.extend(hnsw);
             results.sort_by(|a, b| {
                 b.score
@@ -861,14 +1008,37 @@ fn cosine_partial(a: &[f32], b: &[f32], dims: &[usize]) -> f32 {
 /// Compute cosine similarity between two vectors.
 ///
 /// Returns `0.0` when either vector has zero norm or when lengths differ.
+/// Dot product with eight independent accumulators so the loop vectorizes
+/// (a single running sum is a serial dependency chain).
+fn dot(a: &[f32], b: &[f32]) -> f32 {
+    let mut acc = [0.0f32; 8];
+    let (ca, cb) = (a.chunks_exact(8), b.chunks_exact(8));
+    let tail: f32 = ca
+        .remainder()
+        .iter()
+        .zip(cb.remainder())
+        .map(|(x, y)| x * y)
+        .sum();
+    for (x, y) in ca.zip(cb) {
+        for i in 0..8 {
+            acc[i] += x[i] * y[i];
+        }
+    }
+    acc.iter().sum::<f32>() + tail
+}
+
+fn self_dot(a: &[f32]) -> f32 {
+    dot(a, a)
+}
+
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     if a.len() != b.len() {
         return 0.0;
     }
 
-    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
-    let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
-    let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let dot = dot(a, b);
+    let norm_a: f32 = self_dot(a).sqrt();
+    let norm_b: f32 = self_dot(b).sqrt();
 
     if norm_a == 0.0 || norm_b == 0.0 {
         return 0.0;
@@ -1132,5 +1302,58 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].id, "d0");
         assert!(results[0].score > 0.9);
+    }
+
+    fn filled(n: usize) -> HnswStore {
+        let mut st = HnswStore::with_params(50, 50);
+        for i in 0..n {
+            let mut v = vec![0.0f32; 8];
+            v[i % 8] = 1.0;
+            v[(i / 8) % 8] += 0.1 * (i / 64 + 1) as f32;
+            st.insert(format!("e{i}"), v, serde_json::json!({}));
+        }
+        st
+    }
+
+    #[test]
+    fn off_lock_build_installs_and_serves_tail() {
+        let mut st = filled(200);
+        assert!(st.needs_rebuild() && !st.has_index());
+        let built = st.rebuild_job().expect("above threshold").build();
+        // An append between capture and install is allowed.
+        let odd = vec![0.3, 0.7, 0.1, 0.9, 0.2, 0.4, 0.6, 0.5];
+        st.insert("tail".into(), odd.clone(), serde_json::json!({}));
+        assert!(st.install_index(built));
+        assert!(st.has_index());
+        let top = st.query_shared(&odd, 1);
+        assert_eq!(top[0].id, "tail");
+    }
+
+    #[test]
+    fn install_refuses_after_layout_change() {
+        let mut st = filled(200);
+        let built = st.rebuild_job().unwrap().build();
+        assert!(st.delete("e3"));
+        assert!(!st.install_index(built), "stale layout must be refused");
+        assert!(!st.has_index());
+        let built = st.rebuild_job().unwrap().build();
+        st.insert("e5".into(), vec![1.0; 8], serde_json::json!({})); // upsert reshuffles
+        assert!(!st.install_index(built));
+    }
+
+    #[test]
+    fn rebuild_job_is_none_below_threshold() {
+        assert!(filled(HNSW_THRESHOLD - 1).rebuild_job().is_none());
+    }
+
+    #[test]
+    fn query_shared_never_builds() {
+        let st = filled(200);
+        assert!(!st.has_index());
+        assert_eq!(
+            st.query_shared(&[1.0, 0., 0., 0., 0., 0., 0., 0.], 3).len(),
+            3
+        );
+        assert!(!st.has_index());
     }
 }

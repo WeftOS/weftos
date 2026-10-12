@@ -23,7 +23,8 @@
 //!
 //! Env vars (all optional): `WEFT_BENCH_N` (default 10_000),
 //! `WEFT_BENCH_DIM` (default 384), `WEFT_BENCH_QUERIES` (default 100),
-//! `WEFT_BENCH_SEED` (default 42, fixed for reproducibility).
+//! `WEFT_BENCH_SEED` (default 42, fixed for reproducibility),
+//! `WEFT_BENCH_HNSW_EFC` (default 200) and `WEFT_BENCH_HNSW_EF` (default 14).
 //!
 //! ## Data distribution
 //!
@@ -502,8 +503,8 @@ fn main() {
     if want("hnsw") {
         eprintln!("[vector_backend_bench] running hnsw...");
         let backend = HnswBackend::new(HnswServiceConfig {
-            ef_search: HNSW_EF_SEARCH,
-            ef_construction: 200,
+            ef_search: env_usize("WEFT_BENCH_HNSW_EF", HNSW_EF_SEARCH),
+            ef_construction: env_usize("WEFT_BENCH_HNSW_EFC", 200),
             default_dimensions: dim,
         });
         outcomes.push(run_backend(
