@@ -15,6 +15,10 @@ required_project_context:
   - key: e2e_suite_writes_live
     description: boolean — whether the project's e2e suite writes to a live/production system (if true, never execute it)
 
+brain:
+  schema: weftos.brain-metadata/1   # agents/schemas/brain-metadata.schema.json
+  notes: project                    # leaves decision / why / where notes for later reuse
+
 secrets: []
 
 requires:

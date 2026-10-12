@@ -33,7 +33,22 @@ function workspaceVersion() {
   return m[1];
 }
 
+/** ADR-121 §3 dependencies: agents pinned by digest, skills/cogs/model roles by name. */
+function catalogDependencies(pkg, digestById) {
+  const deps = Array.isArray(pkg.dependencies) ? pkg.dependencies : [];
+  return deps
+    .map((d) => {
+      if (d.agent) return { kind: "agent", name: d.agent, digest: digestById.get(d.agent) ?? null };
+      if (d.skill) return { kind: "skill", name: d.skill };
+      if (d.cog) return { kind: "cog", name: d.cog };
+      return { kind: "model_role", name: d.model_role };
+    })
+    .sort((a, b) => `${a.kind}/${a.name}`.localeCompare(`${b.kind}/${b.name}`));
+}
+
 function buildCatalog(results, teams) {
+  const version = workspaceVersion();
+  const digestById = new Map(results.map((r) => [r.id, r.digest]));
   const agents = results
     .map((r) => {
       const pkg = r.pkg;
@@ -56,6 +71,11 @@ function buildCatalog(results, teams) {
         skills,
         requires: Array.isArray(pkg.requires) ? pkg.requires : [],
         provenance: pkg.provenance ?? {},
+        version,
+        digest: r.digest,
+        parent: pkg.parent ?? null,
+        state: pkg.state ?? "active",
+        dependencies: catalogDependencies(pkg, digestById),
         path: `agents/${r.path}`,
       };
     })
@@ -83,7 +103,7 @@ function buildCatalog(results, teams) {
     .sort((a, b) => a.id.localeCompare(b.id));
 
   return {
-    version: workspaceVersion(),
+    version,
     agents,
     teams: teamEntries,
   };

@@ -2,6 +2,82 @@
   "version": "0.8.4-rc.6",
   "agents": [
     {
+      "id": "app-deployer",
+      "name": "app-deployer",
+      "nickname": "app-deployer",
+      "kind": "specialist",
+      "role": "deployer",
+      "description": "Application framework manager — handles manifest parsing, app lifecycle, agent spawning, rolling upgrades, and service wiring. Use when: an application manifest needs parsing or checking; an app must be started, stopped or upgraded in place; services of an app need wiring. NOT for: work outside this agent's own area; it is an original legacy agent, inactive until reviewed.",
+      "trust_tier": "internal",
+      "capabilities": [
+        "manifest_parsing",
+        "app_lifecycle",
+        "agent_spawning",
+        "rolling_upgrades",
+        "service_wiring"
+      ],
+      "hosts": [
+        "claude",
+        "grok",
+        "codex"
+      ],
+      "skills": [],
+      "requires": [],
+      "provenance": {
+        "source_registry": "WeftOS in-tree legacy agents (agents/weftos/app-deployer.md)",
+        "source_url": null,
+        "upstream_license": "project licence (authored in this repository)",
+        "upstream_commit": null,
+        "adopted_at": "2026-03-26",
+        "verdict": "adopt",
+        "notes": "Packaged as an original on 2026-10-11 (ADR-121 decision 10): the agent body and hooks are unchanged; only the package metadata and the Use-when sentence were added. State is inactive, so it is never applied by weftos init and shows as an inactive package."
+      },
+      "version": "0.8.4-rc.6",
+      "digest": "sha256:3581b9f73e613b147b59606b3ba1972d44f2521afff78b441a8ff7b326fa2d61",
+      "parent": null,
+      "state": "inactive",
+      "dependencies": [],
+      "path": "agents/weftos/app-deployer"
+    },
+    {
+      "id": "chain-guardian",
+      "name": "chain-guardian",
+      "nickname": "chain-guardian",
+      "kind": "specialist",
+      "role": "security engineer",
+      "description": "ExoChain and trust layer guardian — manages hash chain integrity, dual signing, RVF wire format, and post-quantum key exchange. Use when: chain integrity, dual signing or the RVF wire format needs review; a key exchange or trust-layer change is being designed. NOT for: work outside this agent's own area; it is an original legacy agent, inactive until reviewed.",
+      "trust_tier": "internal",
+      "capabilities": [
+        "chain_integrity",
+        "dual_signing",
+        "merkle_verification",
+        "rvf_wire",
+        "witness_chains"
+      ],
+      "hosts": [
+        "claude",
+        "grok",
+        "codex"
+      ],
+      "skills": [],
+      "requires": [],
+      "provenance": {
+        "source_registry": "WeftOS in-tree legacy agents (agents/weftos/chain-guardian.md)",
+        "source_url": null,
+        "upstream_license": "project licence (authored in this repository)",
+        "upstream_commit": null,
+        "adopted_at": "2026-03-26",
+        "verdict": "adopt",
+        "notes": "Packaged as an original on 2026-10-11 (ADR-121 decision 10): the agent body and hooks are unchanged; only the package metadata and the Use-when sentence were added. State is inactive, so it is never applied by weftos init and shows as an inactive package."
+      },
+      "version": "0.8.4-rc.6",
+      "digest": "sha256:edf8ccf89d4c71dafd3b9e3c03dc0a2eca1a682de3359b92d7262bdc3d58f776",
+      "parent": null,
+      "state": "inactive",
+      "dependencies": [],
+      "path": "agents/weftos/chain-guardian"
+    },
+    {
       "id": "chief-of-staff",
       "name": "chief-of-staff",
       "nickname": "CoS",
@@ -38,7 +114,71 @@
         "verdict": "build",
         "notes": "Built for the chief-of-staff console (ADR-118). The agent carries method only; project facts (board, token path, team runtime) come from project-context. It directs the owner's team and holds no write authority of its own: board writes go through the steward, docs through the doc-gardener, memory through liber, purpose checks to mo. Runtime host: crates/weftos-cos (`weftos-cos serve`, `weft cos serve`)."
       },
+      "version": "0.8.4-rc.6",
+      "digest": "sha256:64cce74655ecb03412eaf67d4154a265205a94cb48f07c76a21f06bfc7780da3",
+      "parent": null,
+      "state": "active",
+      "dependencies": [
+        {
+          "kind": "agent",
+          "name": "doc-gardener",
+          "digest": "sha256:4035f72db075fe7e874af795b704c30a3b4003f7bf0cbacbe86be3b8a447f4c5"
+        },
+        {
+          "kind": "agent",
+          "name": "liber",
+          "digest": "sha256:f1035b1f070ebc88eba0976642ec507526f710b64ba76c08f8b37689eb1a74d0"
+        },
+        {
+          "kind": "agent",
+          "name": "mo",
+          "digest": "sha256:439740154d747f99420ae9b9b2f7f657551f892e1658fc625df378b875afc0d7"
+        },
+        {
+          "kind": "agent",
+          "name": "steward",
+          "digest": "sha256:d12fb06439408ee7711ec72aa0bece49d5fd86f9b56f8d2ab13a9aa28e34a7cc"
+        }
+      ],
       "path": "agents/chief-of-staff"
+    },
+    {
+      "id": "defi-networker",
+      "name": "defi-networker",
+      "nickname": "defi-networker",
+      "kind": "specialist",
+      "role": "defi specialist",
+      "description": "DeFi mesh and economic layer specialist — designs bond staking, trust progression, slashing, and peer economic incentives. Use when: bond staking, trust progression, slashing or peer incentives are being designed or reviewed. NOT for: work outside this agent's own area; it is an original legacy agent, inactive until reviewed.",
+      "trust_tier": "internal",
+      "capabilities": [
+        "defi_mesh",
+        "economic_incentives",
+        "bond_staking",
+        "trust_progression",
+        "peer_economics"
+      ],
+      "hosts": [
+        "claude",
+        "grok",
+        "codex"
+      ],
+      "skills": [],
+      "requires": [],
+      "provenance": {
+        "source_registry": "WeftOS in-tree legacy agents (agents/weftos/defi-networker.md)",
+        "source_url": null,
+        "upstream_license": "project licence (authored in this repository)",
+        "upstream_commit": null,
+        "adopted_at": "2026-03-26",
+        "verdict": "adopt",
+        "notes": "Packaged as an original on 2026-10-11 (ADR-121 decision 10): the agent body and hooks are unchanged; only the package metadata and the Use-when sentence were added. State is inactive, so it is never applied by weftos init and shows as an inactive package."
+      },
+      "version": "0.8.4-rc.6",
+      "digest": "sha256:1d0a6903285de73e56acc313530195c4cd42c41f542e297fa1ba997afa7e8079",
+      "parent": null,
+      "state": "inactive",
+      "dependencies": [],
+      "path": "agents/weftos/defi-networker"
     },
     {
       "id": "developer",
@@ -75,6 +215,11 @@
         "verdict": "adopt",
         "notes": "Ported the harness's builder lane near-verbatim — high generalizability per the inventory, nearly identical in shape to a generic build lane already. The project-specific MCP tool binding (a code-graph explore tool) and gate-runner script path became project-context placeholders."
       },
+      "version": "0.8.4-rc.6",
+      "digest": "sha256:5a0472bf30843c177c9883052268df1928a1e6c9064a1879d0ad0110db9d9d59",
+      "parent": null,
+      "state": "active",
+      "dependencies": [],
       "path": "agents/developer"
     },
     {
@@ -113,7 +258,50 @@
         "verdict": "adopt",
         "notes": "Ported near-verbatim from the harness's doc-gardener agent — the inventory rates this the strongest-designed agent in the source set. Role, evidence rules, retraction rules and queue design are project-agnostic; only corpus paths were parameterized. Flywheel mode discipline (off / shadow / on) kept intact; ships off by default per the task brief."
       },
+      "version": "0.8.4-rc.6",
+      "digest": "sha256:4035f72db075fe7e874af795b704c30a3b4003f7bf0cbacbe86be3b8a447f4c5",
+      "parent": null,
+      "state": "active",
+      "dependencies": [],
       "path": "agents/doc-gardener"
+    },
+    {
+      "id": "doc-weaver",
+      "name": "doc-weaver",
+      "nickname": "doc-weaver",
+      "kind": "specialist",
+      "role": "documenter",
+      "description": "Documentation and knowledge specialist — manages Fumadocs site, MDX content, SPARC plans, symposium synthesis, and API reference. Use when: the docs site, MDX pages, SPARC plans or symposium synthesis need writing or restructuring; the API reference is out of date. NOT for: work outside this agent's own area; it is an original legacy agent, inactive until reviewed.",
+      "trust_tier": "internal",
+      "capabilities": [
+        "fumadocs_site",
+        "mdx_content",
+        "sparc_plans",
+        "symposium_synthesis",
+        "api_reference"
+      ],
+      "hosts": [
+        "claude",
+        "grok",
+        "codex"
+      ],
+      "skills": [],
+      "requires": [],
+      "provenance": {
+        "source_registry": "WeftOS in-tree legacy agents (agents/weftos/doc-weaver.md)",
+        "source_url": null,
+        "upstream_license": "project licence (authored in this repository)",
+        "upstream_commit": null,
+        "adopted_at": "2026-03-26",
+        "verdict": "adopt",
+        "notes": "Packaged as an original on 2026-10-11 (ADR-121 decision 10): the agent body and hooks are unchanged; only the package metadata and the Use-when sentence were added. State is inactive, so it is never applied by weftos init and shows as an inactive package."
+      },
+      "version": "0.8.4-rc.6",
+      "digest": "sha256:5d8c0be5ba91772910450d64443e398fa5d24ed5df85a20dd2fa338a9a72a886",
+      "parent": null,
+      "state": "inactive",
+      "dependencies": [],
+      "path": "agents/weftos/doc-weaver"
     },
     {
       "id": "documenter",
@@ -149,6 +337,17 @@
         "verdict": "adopt",
         "notes": "Ported the harness's per-PR documentation lane. Per the inventory, its scope is largely superseded by the doc-gardener agent for anything durable, so it's kept narrowly as the \"per-PR doc lane\" companion rather than a second estate owner — both packages exist and cross-reference each other rather than merging."
       },
+      "version": "0.8.4-rc.6",
+      "digest": "sha256:3558543f6870480f71740d0d482d0bebc354737794e603e6f177329b710b812f",
+      "parent": null,
+      "state": "active",
+      "dependencies": [
+        {
+          "kind": "agent",
+          "name": "doc-gardener",
+          "digest": "sha256:4035f72db075fe7e874af795b704c30a3b4003f7bf0cbacbe86be3b8a447f4c5"
+        }
+      ],
       "path": "agents/documenter"
     },
     {
@@ -185,7 +384,50 @@
         "verdict": "pattern",
         "notes": "Extracted as a template, not a data port, from the harness's client-domain-expert agent. Per the inventory: \"the *shape* — grounded, supervised, graded honesty — is highly reusable; the content is entirely non-portable by design.\" No client name, org fact, or corpus content traveled. Placeholders here must be filled per project from .agents/project-context.md, never hardcoded into this template."
       },
+      "version": "0.8.4-rc.6",
+      "digest": "sha256:30632c118dc0a507361e59f7c41511a0fb717cd46ffeef30a37172d821a80f25",
+      "parent": null,
+      "state": "active",
+      "dependencies": [],
       "path": "agents/templates/domain-expert"
+    },
+    {
+      "id": "ecc-analyst",
+      "name": "ecc-analyst",
+      "nickname": "ecc-analyst",
+      "kind": "specialist",
+      "role": "analyst",
+      "description": "ECC cognitive analyst — runs causal analysis, spectral health, HNSW search, coherence scoring, and pattern detection. Use when: a causal graph needs analysing; spectral health, HNSW search or coherence scoring is asked for; patterns must be detected in ECC data. NOT for: work outside this agent's own area; it is an original legacy agent, inactive until reviewed.",
+      "trust_tier": "internal",
+      "capabilities": [
+        "causal_analysis",
+        "spectral_analysis",
+        "hnsw_search",
+        "coherence_scoring",
+        "pattern_detection"
+      ],
+      "hosts": [
+        "claude",
+        "grok",
+        "codex"
+      ],
+      "skills": [],
+      "requires": [],
+      "provenance": {
+        "source_registry": "WeftOS in-tree legacy agents (agents/weftos/ecc-analyst.md)",
+        "source_url": null,
+        "upstream_license": "project licence (authored in this repository)",
+        "upstream_commit": null,
+        "adopted_at": "2026-03-26",
+        "verdict": "adopt",
+        "notes": "Packaged as an original on 2026-10-11 (ADR-121 decision 10): the agent body and hooks are unchanged; only the package metadata and the Use-when sentence were added. State is inactive, so it is never applied by weftos init and shows as an inactive package."
+      },
+      "version": "0.8.4-rc.6",
+      "digest": "sha256:44f90f690d8eb73f0c432fc92a68b1c17c94cc8aea1b1dcf1cfd6fe24ff27a13",
+      "parent": null,
+      "state": "inactive",
+      "dependencies": [],
+      "path": "agents/weftos/ecc-analyst"
     },
     {
       "id": "eikon",
@@ -223,6 +465,17 @@
         "verdict": "adapt",
         "notes": "Ported from the local model lab's eikon agent + eikon skill (SKILL.md, models.md). The role, fan-out discipline (Vision first, one VLM call for describe/categorize/ tag/OCR, SigLIP/Molmo only on request), memory discipline (one heavy model at a time, check the monitor before a big load), and the \"never invent a runner for a held model\" rule ported near-verbatim as the portable part of the design. Absolute paths and the lab's own hardware-specific serving details were replaced with the llm_home project-context key and this runtime_requires block; the specialist dispatch skills (splat, document, ground, segment, retrieve) were kept with the eikon-specialist package, matching the source's own separation — the lead agent never reads them."
       },
+      "version": "0.8.4-rc.6",
+      "digest": "sha256:b6df72b1de7c3e90e84b5e7c507e9e616f612e6c16980a3a88cdc2a861ecbb95",
+      "parent": null,
+      "state": "active",
+      "dependencies": [
+        {
+          "kind": "agent",
+          "name": "eikon-specialist",
+          "digest": "sha256:d3b301aa45c0fa1519776dc48966c38ee466554b4b0a276c58b55fa347a91abb"
+        }
+      ],
       "path": "agents/eikon"
     },
     {
@@ -263,6 +516,11 @@
         "verdict": "adapt",
         "notes": "Ported from the local model lab's eikon-specialist agent plus the five specialist skill files under its skills/eikon/specialists/ (document, ground, retrieve, segment, splat). Kept as a separate package from eikon because the source treats it as a distinct spawn target with its own tool list, its own \"brief is the whole procedure\" discipline, and a hard separation from the lead's own context (the lead is explicitly told not to open these skill files itself). The depth honesty rule (canonical unless a focal length or field of view is given) and the never-two-heavy-models-resident rule ported verbatim as load-bearing. Absolute paths were replaced with the llm_home project-context key and this runtime_requires block."
       },
+      "version": "0.8.4-rc.6",
+      "digest": "sha256:d3b301aa45c0fa1519776dc48966c38ee466554b4b0a276c58b55fa347a91abb",
+      "parent": null,
+      "state": "active",
+      "dependencies": [],
       "path": "agents/eikon-specialist"
     },
     {
@@ -298,7 +556,88 @@
         "verdict": "pattern",
         "notes": "Extracted as a template from the harness's read-only third-party-work-management reader agent. Per the inventory: \"low as a literal agent (system-specific), medium-high as a pattern — read-only external-system agent, enforced at the transport layer, that converts write-requests into findings for a named human owner.\" The specific third-party product name, its command surface, and any estate-specific details were deliberately generalized out; this template names no third-party product."
       },
+      "version": "0.8.4-rc.6",
+      "digest": "sha256:891aaf3219b3a1d19537002809344a71584598235bf64f8eb377c30be1ff024e",
+      "parent": null,
+      "state": "active",
+      "dependencies": [],
       "path": "agents/templates/external-system-reader"
+    },
+    {
+      "id": "governance-counsel",
+      "name": "governance-counsel",
+      "nickname": "governance-counsel",
+      "kind": "specialist",
+      "role": "governance expert",
+      "description": "Constitutional governance expert — designs rules, evaluates effect vectors, manages the three-branch model and trajectory learning. Use when: a governance rule is being designed; an effect vector must be evaluated; the three-branch model or trajectory learning is in question. NOT for: work outside this agent's own area; it is an original legacy agent, inactive until reviewed.",
+      "trust_tier": "internal",
+      "capabilities": [
+        "governance_rules",
+        "effect_vectors",
+        "gate_evaluation",
+        "environment_scoping",
+        "trajectory_learning"
+      ],
+      "hosts": [
+        "claude",
+        "grok",
+        "codex"
+      ],
+      "skills": [],
+      "requires": [],
+      "provenance": {
+        "source_registry": "WeftOS in-tree legacy agents (agents/weftos/governance-counsel.md)",
+        "source_url": null,
+        "upstream_license": "project licence (authored in this repository)",
+        "upstream_commit": null,
+        "adopted_at": "2026-03-26",
+        "verdict": "adopt",
+        "notes": "Packaged as an original on 2026-10-11 (ADR-121 decision 10): the agent body and hooks are unchanged; only the package metadata and the Use-when sentence were added. State is inactive, so it is never applied by weftos init and shows as an inactive package."
+      },
+      "version": "0.8.4-rc.6",
+      "digest": "sha256:8c8036ab4144bef5d1816794949a73430afcbd2cd1532d6a40bc260434b532e8",
+      "parent": null,
+      "state": "inactive",
+      "dependencies": [],
+      "path": "agents/weftos/governance-counsel"
+    },
+    {
+      "id": "kernel-architect",
+      "name": "kernel-architect",
+      "nickname": "kernel-architect",
+      "kind": "specialist",
+      "role": "architect",
+      "description": "Kernel architecture expert — plans modules, evaluates trade-offs, manages K0-K6 phase structure and feature gates. Use when: a kernel module needs planning; trade-offs between designs must be weighed; a K-phase or feature-gate decision is open. NOT for: work outside this agent's own area; it is an original legacy agent, inactive until reviewed.",
+      "trust_tier": "internal",
+      "capabilities": [
+        "kernel_design",
+        "phase_planning",
+        "module_design",
+        "api_design",
+        "feature_gates"
+      ],
+      "hosts": [
+        "claude",
+        "grok",
+        "codex"
+      ],
+      "skills": [],
+      "requires": [],
+      "provenance": {
+        "source_registry": "WeftOS in-tree legacy agents (agents/weftos/kernel-architect.md)",
+        "source_url": null,
+        "upstream_license": "project licence (authored in this repository)",
+        "upstream_commit": null,
+        "adopted_at": "2026-03-26",
+        "verdict": "adopt",
+        "notes": "Packaged as an original on 2026-10-11 (ADR-121 decision 10): the agent body and hooks are unchanged; only the package metadata and the Use-when sentence were added. State is inactive, so it is never applied by weftos init and shows as an inactive package."
+      },
+      "version": "0.8.4-rc.6",
+      "digest": "sha256:5c8be57d35cc5f44146c4f839ae3c0df707692cd9a4fbdff546dcf26e4d1e5cd",
+      "parent": null,
+      "state": "inactive",
+      "dependencies": [],
+      "path": "agents/weftos/kernel-architect"
     },
     {
       "id": "lead-doctrine",
@@ -327,6 +666,11 @@
         "verdict": "adopt",
         "notes": "Ported the lead-session doctrine only (the five ways the seat is reliably wrong, the lane-trust checklist, the stand-down routine) from the source's lead-session file — never the file itself, which was explicitly \"not a spawn target\" in the source and remains so here. All engagement-specific names, nicknames and channel-addressing details were dropped."
       },
+      "version": "0.8.4-rc.6",
+      "digest": "sha256:7602ca7e0537684c8f27ced19352db70288020683944d0046751a2f9be694e41",
+      "parent": null,
+      "state": "active",
+      "dependencies": [],
       "path": "agents/lead-doctrine"
     },
     {
@@ -364,6 +708,11 @@
         "verdict": "adopt",
         "notes": "Ported from the harness's liber agent. The routing-table destinations (decisions to doc-gardener, work to steward, confidential facts refused) generalize directly. The \"abscission\" and \"downward flow\" capabilities are explicitly not-yet-built in the source and are carried over as documented future work, not implemented here."
       },
+      "version": "0.8.4-rc.6",
+      "digest": "sha256:f1035b1f070ebc88eba0976642ec507526f710b64ba76c08f8b37689eb1a74d0",
+      "parent": null,
+      "state": "active",
+      "dependencies": [],
       "path": "agents/liber"
     },
     {
@@ -399,7 +748,50 @@
         "verdict": "adapt",
         "notes": "Ported the separation-of-measurement-from-change doctrine near-verbatim (high per the inventory). The source bound five project-specific MCP tools (a board reader, an environment-state reader, a generic API-call tool, and an API catalog) directly in its tool list — those bindings are explicitly NOT ported; this package declares a generic `measurement_bindings` placeholder instead, to be filled per project."
       },
+      "version": "0.8.4-rc.6",
+      "digest": "sha256:f1980e72093a0037e19abe45efc0005cce1abe7fb8cb78d3fdb49237beb6ee31",
+      "parent": null,
+      "state": "active",
+      "dependencies": [],
       "path": "agents/measurer"
+    },
+    {
+      "id": "mesh-engineer",
+      "name": "mesh-engineer",
+      "nickname": "mesh-engineer",
+      "kind": "specialist",
+      "role": "network engineer",
+      "description": "Mesh networking specialist — implements transports, frame types, discovery mechanisms, and the 5-layer mesh architecture. Use when: a mesh transport, frame type or discovery mechanism is being built or debugged; the mesh layers need design work. NOT for: work outside this agent's own area; it is an original legacy agent, inactive until reviewed.",
+      "trust_tier": "internal",
+      "capabilities": [
+        "mesh_transport",
+        "noise_encryption",
+        "peer_discovery",
+        "distributed_ipc",
+        "protocol_design"
+      ],
+      "hosts": [
+        "claude",
+        "grok",
+        "codex"
+      ],
+      "skills": [],
+      "requires": [],
+      "provenance": {
+        "source_registry": "WeftOS in-tree legacy agents (agents/weftos/mesh-engineer.md)",
+        "source_url": null,
+        "upstream_license": "project licence (authored in this repository)",
+        "upstream_commit": null,
+        "adopted_at": "2026-03-26",
+        "verdict": "adopt",
+        "notes": "Packaged as an original on 2026-10-11 (ADR-121 decision 10): the agent body and hooks are unchanged; only the package metadata and the Use-when sentence were added. State is inactive, so it is never applied by weftos init and shows as an inactive package."
+      },
+      "version": "0.8.4-rc.6",
+      "digest": "sha256:3f7538f8c6f606829cb7251728d33194280248ab636e9345c3f046210298ddc3",
+      "parent": null,
+      "state": "inactive",
+      "dependencies": [],
+      "path": "agents/weftos/mesh-engineer"
     },
     {
       "id": "mo",
@@ -434,6 +826,11 @@
         "verdict": "adapt",
         "notes": "Ported the consult/read-back contract near-verbatim (medium-high generalizability per the inventory). The \"Darwin\" variation-and-scoring capability described in the source is explicitly excluded — it was unbuilt there and has no WeftOS infrastructure to run on; see AGENT.md §5 for the note kept in place of the feature."
       },
+      "version": "0.8.4-rc.6",
+      "digest": "sha256:439740154d747f99420ae9b9b2f7f657551f892e1658fc625df378b875afc0d7",
+      "parent": null,
+      "state": "active",
+      "dependencies": [],
       "path": "agents/mo"
     },
     {
@@ -469,7 +866,50 @@
         "verdict": "pattern",
         "notes": "Per the inventory, the source financial-model domain-expert agent is \"deeply coupled to one client's financial model and its recalculation service\" (Low generalizability as an agent). Only the base-vs-override honesty pattern was extracted; the workbook, recalc engine, and asset-class scaffolding described in the source were deliberately NOT ported. A project adopting this template must supply its own model-tracing tooling via project context."
       },
+      "version": "0.8.4-rc.6",
+      "digest": "sha256:d2afd259961a1c8da404f9171091d60e323b8e848d6cb91d1723c610d738eeb2",
+      "parent": null,
+      "state": "active",
+      "dependencies": [],
       "path": "agents/templates/model-domain-expert"
+    },
+    {
+      "id": "process-supervisor",
+      "name": "process-supervisor",
+      "nickname": "process-supervisor",
+      "kind": "specialist",
+      "role": "supervisor",
+      "description": "Process and agent lifecycle manager — handles spawning, restart strategies, health monitoring, and resource limits. Use when: process or agent lifecycle behaviour is changing; a restart strategy, health check or resource limit must be set. NOT for: work outside this agent's own area; it is an original legacy agent, inactive until reviewed.",
+      "trust_tier": "internal",
+      "capabilities": [
+        "process_management",
+        "agent_spawning",
+        "restart_strategies",
+        "resource_limits",
+        "health_monitoring"
+      ],
+      "hosts": [
+        "claude",
+        "grok",
+        "codex"
+      ],
+      "skills": [],
+      "requires": [],
+      "provenance": {
+        "source_registry": "WeftOS in-tree legacy agents (agents/weftos/process-supervisor.md)",
+        "source_url": null,
+        "upstream_license": "project licence (authored in this repository)",
+        "upstream_commit": null,
+        "adopted_at": "2026-03-26",
+        "verdict": "adopt",
+        "notes": "Packaged as an original on 2026-10-11 (ADR-121 decision 10): the agent body and hooks are unchanged; only the package metadata and the Use-when sentence were added. State is inactive, so it is never applied by weftos init and shows as an inactive package."
+      },
+      "version": "0.8.4-rc.6",
+      "digest": "sha256:69f27a1c88f88c63d725a77bc8be94b80d007033a452e3898dd624ffc55b640a",
+      "parent": null,
+      "state": "inactive",
+      "dependencies": [],
+      "path": "agents/weftos/process-supervisor"
     },
     {
       "id": "reviewer",
@@ -504,7 +944,50 @@
         "verdict": "adopt",
         "notes": "Ported near-verbatim — high generalizability per the inventory. Read-only by tool list (no Write/Edit), matching the source's structural enforcement of \"cannot edit.\""
       },
+      "version": "0.8.4-rc.6",
+      "digest": "sha256:ee4fcd93afa3914056afc77593626b9b1507f315a70f01423b769b550c61678d",
+      "parent": null,
+      "state": "active",
+      "dependencies": [],
       "path": "agents/reviewer"
+    },
+    {
+      "id": "sandbox-warden",
+      "name": "sandbox-warden",
+      "nickname": "sandbox-warden",
+      "kind": "specialist",
+      "role": "security specialist",
+      "description": "WASM and container security warden — manages fuel metering, memory limits, capability enforcement, and sandbox isolation. Use when: WASM or container isolation is being reviewed; fuel metering, memory limits or capability enforcement need checking. NOT for: work outside this agent's own area; it is an original legacy agent, inactive until reviewed.",
+      "trust_tier": "internal",
+      "capabilities": [
+        "wasm_sandbox",
+        "container_isolation",
+        "fuel_metering",
+        "memory_limits",
+        "capability_enforcement"
+      ],
+      "hosts": [
+        "claude",
+        "grok",
+        "codex"
+      ],
+      "skills": [],
+      "requires": [],
+      "provenance": {
+        "source_registry": "WeftOS in-tree legacy agents (agents/weftos/sandbox-warden.md)",
+        "source_url": null,
+        "upstream_license": "project licence (authored in this repository)",
+        "upstream_commit": null,
+        "adopted_at": "2026-03-26",
+        "verdict": "adopt",
+        "notes": "Packaged as an original on 2026-10-11 (ADR-121 decision 10): the agent body and hooks are unchanged; only the package metadata and the Use-when sentence were added. State is inactive, so it is never applied by weftos init and shows as an inactive package."
+      },
+      "version": "0.8.4-rc.6",
+      "digest": "sha256:006d83b6c520af9f4da6567cce16b09e150c4f48eba42b49d6d384fecb2c4b63",
+      "parent": null,
+      "state": "inactive",
+      "dependencies": [],
+      "path": "agents/weftos/sandbox-warden"
     },
     {
       "id": "steward",
@@ -542,7 +1025,50 @@
         "verdict": "adapt",
         "notes": "Ported from the harness's product-board-steward agent. The write-path mechanics (intake-manifest.mjs, board-sync.mjs, a specific board schema and people roster) were replaced with a generic board-adapter contract read from project context. The discipline (dedupe-before-write, dry-run-then-confirm, disposition reporting, stand-down thresholds, mini-steward fan-out) ported near-verbatim as the portable part of the design."
       },
+      "version": "0.8.4-rc.6",
+      "digest": "sha256:d12fb06439408ee7711ec72aa0bece49d5fd86f9b56f8d2ab13a9aa28e34a7cc",
+      "parent": null,
+      "state": "active",
+      "dependencies": [],
       "path": "agents/steward"
+    },
+    {
+      "id": "test-sentinel",
+      "name": "test-sentinel",
+      "nickname": "test-sentinel",
+      "kind": "specialist",
+      "role": "tester",
+      "description": "Testing and QA sentinel — runs gate checks, manages feature matrix testing, detects regressions, and verifies build integrity. Use when: the build gate must run; feature combinations need testing; a regression must be located; build integrity needs verifying. NOT for: work outside this agent's own area; it is an original legacy agent, inactive until reviewed.",
+      "trust_tier": "internal",
+      "capabilities": [
+        "kernel_testing",
+        "feature_matrix",
+        "gate_verification",
+        "regression_detection",
+        "integration_testing"
+      ],
+      "hosts": [
+        "claude",
+        "grok",
+        "codex"
+      ],
+      "skills": [],
+      "requires": [],
+      "provenance": {
+        "source_registry": "WeftOS in-tree legacy agents (agents/weftos/test-sentinel.md)",
+        "source_url": null,
+        "upstream_license": "project licence (authored in this repository)",
+        "upstream_commit": null,
+        "adopted_at": "2026-03-26",
+        "verdict": "adopt",
+        "notes": "Packaged as an original on 2026-10-11 (ADR-121 decision 10): the agent body and hooks are unchanged; only the package metadata and the Use-when sentence were added. State is inactive, so it is never applied by weftos init and shows as an inactive package."
+      },
+      "version": "0.8.4-rc.6",
+      "digest": "sha256:2367b1665010b4c0b65178e6bfb4069f39ad64f1369ba79964189b0f5f86656d",
+      "parent": null,
+      "state": "inactive",
+      "dependencies": [],
+      "path": "agents/weftos/test-sentinel"
     },
     {
       "id": "tester",
@@ -579,7 +1105,50 @@
         "verdict": "adopt",
         "notes": "Ported near-verbatim — high generalizability per the inventory. The \"never run Playwright\" rule generalized to \"never run a live-writing e2e suite,\" gated by a project-context flag rather than hardcoding a specific test framework."
       },
+      "version": "0.8.4-rc.6",
+      "digest": "sha256:a553999a922791682db8405b4a6f46c7a29ce01192562d942cb52cb328613dc3",
+      "parent": null,
+      "state": "active",
+      "dependencies": [],
       "path": "agents/tester"
+    },
+    {
+      "id": "weaver",
+      "name": "weaver",
+      "nickname": "weaver",
+      "kind": "specialist",
+      "role": "cognitive modeler",
+      "description": "ECC cognitive modeler — runs the HYPOTHESIZE-OBSERVE-EVALUATE-ADJUST loop on causal models via the kernel-native WeaverEngine. Use when: a causal model must be started, refined or exported; model confidence is in question; data sources must be added to weak edges. NOT for: work outside this agent's own area; it is an original legacy agent, inactive until reviewed.",
+      "trust_tier": "internal",
+      "capabilities": [
+        "ecc_modeling",
+        "confidence_evaluation",
+        "source_fusion",
+        "model_export",
+        "meta_loom"
+      ],
+      "hosts": [
+        "claude",
+        "grok",
+        "codex"
+      ],
+      "skills": [],
+      "requires": [],
+      "provenance": {
+        "source_registry": "WeftOS in-tree legacy agents (agents/weftos/weaver.md)",
+        "source_url": null,
+        "upstream_license": "project licence (authored in this repository)",
+        "upstream_commit": null,
+        "adopted_at": "2026-03-26",
+        "verdict": "adopt",
+        "notes": "Packaged as an original on 2026-10-11 (ADR-121 decision 10): the agent body and hooks are unchanged; only the package metadata and the Use-when sentence were added. State is inactive, so it is never applied by weftos init and shows as an inactive package."
+      },
+      "version": "0.8.4-rc.6",
+      "digest": "sha256:0f8fc847dde8d46b204a389249596e80a0ffa5c861351531b32c70711ea6e799",
+      "parent": null,
+      "state": "inactive",
+      "dependencies": [],
+      "path": "agents/weftos/weaver"
     }
   ],
   "teams": [

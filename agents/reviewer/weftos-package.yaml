@@ -13,6 +13,10 @@ required_project_context:
     required: false
     description: symbol/code-graph query command, if the project has one
 
+brain:
+  schema: weftos.brain-metadata/1   # agents/schemas/brain-metadata.schema.json
+  notes: project                    # leaves decision / why / where notes for later reuse
+
 secrets: []
 
 requires:

@@ -30,6 +30,10 @@ required_project_context:
     required: false
     description: model id for planning and prioritisation turns (default is the quick model)
 
+brain:
+  schema: weftos.brain-metadata/1   # agents/schemas/brain-metadata.schema.json
+  notes: project                    # leaves decision / why / where notes for later reuse
+
 secrets:
   - name: WEFTOS_BOARD_TOKEN
     description: harness credential; read from the token file by the tool layer only, never passed as a tool argument and never echoed into an event

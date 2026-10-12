@@ -1,0 +1,32 @@
+name: kernel-architect
+nickname: kernel-architect
+kind: specialist
+trust_tier: internal
+state: inactive        # ADR-121 decision 10: legacy original, packaged but not applied
+
+capabilities:
+  - kernel_design
+  - phase_planning
+  - module_design
+  - api_design
+  - feature_gates
+
+required_project_context: []
+
+secrets: []
+
+requires: []
+
+dependencies: []
+
+provenance:
+  source_registry: WeftOS in-tree legacy agents (agents/weftos/kernel-architect.md)
+  source_url: null
+  upstream_license: project licence (authored in this repository)
+  upstream_commit: null
+  adopted_at: "2026-03-26"
+  verdict: adopt
+  notes: >
+    Packaged as an original on 2026-10-11 (ADR-121 decision 10): the agent body and hooks
+    are unchanged; only the package metadata and the Use-when sentence were added. State is
+    inactive, so it is never applied by weftos init and shows as an inactive package.

@@ -20,6 +20,10 @@ required_project_context:
     required: false
     description: how the project expects isolated worktrees to be created/named
 
+brain:
+  schema: weftos.brain-metadata/1   # agents/schemas/brain-metadata.schema.json
+  notes: project                    # leaves decision / why / where notes for later reuse
+
 secrets: []
 
 requires:
