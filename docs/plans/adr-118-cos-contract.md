@@ -181,11 +181,14 @@ endpoints instead.
   the glasses bridge uses its own id (`mentra`). An id is attributed per turn: every event of
   the turn that carries a reply (`message`) names it.
 - **`speak`.** `speak: true` on the final `message` of a turn that is a `voice` turn of a
-  remote endpoint whose `endpoints.<id>.tts.engine` is not `none` (default: speaks). It is
+  remote endpoint whose `endpoints.<id>.speak` is not `false` (default: speaks). It is
   never true for `host` (the host speaks those itself), for `typed` or `touch` turns, or for
   a non-final message. The host process never reads a remote endpoint's reply aloud.
-- **Config** (`~/.config/weftos/cos.json`): `"endpoints": {"mentra": {"tts": {"engine": "none"}}}`
-  keeps `speak` off that endpoint only; `host` is configured by `voice.tts` as before.
+- **Config** (`~/.config/weftos/cos.json`): `"endpoints": {"mentra": {"speak": false}}`
+  keeps `speak` off that endpoint only (`speak` is `true` or `false`, default `true`); `host` is
+  configured by `voice.tts` as before. The older `endpoints.<id>.tts.engine` is still accepted
+  (`none` means `speak: false`, `auto`/`say`/`command` mean `speak: true`); a `speak` that
+  contradicts it is refused at load.
 - **Tailnet.** `"serve": {"bind": "tailnet"}` (or `"tailnet:PORT"`) adds a second listener on
   this machine's Tailscale IPv4 beside the loopback one. Never `0.0.0.0`; an address that is
   not in 100.64.0.0/10 is refused before a socket opens, and so is any other `serve.bind`.

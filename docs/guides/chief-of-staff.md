@@ -61,7 +61,7 @@ for you so the first spoken turn is not the slow one.
   "voice": {"tts": {"engine": "auto", "voice": null, "rate": 200}, "device": null},
   "brain": {"installation": "weftos://local/installations/<id>"},
   "serve": {"bind": null},
-  "endpoints": {"mentra": {"tts": {"engine": "auto"}}}
+  "endpoints": {"mentra": {"speak": true}}
 }
 ```
 
@@ -92,8 +92,8 @@ Each front end is an endpoint with its own id; the Mac's own microphone, button 
    endpoint speaks, `"speak": true`. The Mac does not read it aloud; the Mac still reads the
    `host` turns. `ptt` is the Mac's microphone and is not available to remote endpoints.
 3. To keep one endpoint quiet without touching the Mac or another endpoint, give it
-   `"endpoints": {"mentra": {"tts": {"engine": "none"}}}` in `cos.json`; its replies then
-   arrive without `speak`.
+   `"endpoints": {"mentra": {"speak": false}}` in `cos.json`; its replies then
+   arrive without `speak`. (The older `tts.engine: "none"` still works and means the same.)
 
 Reaching the Mac from another machine, two ways:
 
