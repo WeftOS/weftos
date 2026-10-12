@@ -242,6 +242,7 @@ pub mod project_add_spec;
 #[cfg(all(test, unix))]
 mod project_install_test_support;
 /// Pairing two nodes for project work from the dashboard (ADR-108 P2b).
+pub mod mesh_genesis;
 pub mod mesh_pair;
 /// What this node paired with, by project (resolves weftos:// project names).
 pub mod mesh_pairings;

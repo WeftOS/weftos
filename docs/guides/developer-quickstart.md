@@ -14,6 +14,12 @@ project runs, install its router route, remember what was created.
 - To run it by name over the mesh: this node paired with the project's primary
   (the dashboard's pairing flow; see [Installing a project over the
   mesh](project-install.md)). To run it from git: your own git credentials.
+- A mesh id (the `<mesh>` in a `weftos://` name). `weaver mesh id` prints it and
+  where it came from. With a Seed licence it is the licence's. Without one,
+  create it once, on the mesh's primary: `weaver mesh create`, then restart
+  that daemon. Other nodes learn it when they pair with the primary (the
+  dashboard hands them the primary's signed record). A node with no mesh id
+  refuses `weaver project add weftos://...` and says so.
 - Optional: the tailnet router (`[router] enabled = true`, then
   `weaver route serve --apply`) so the project is reachable at
   `https://<machine>.<tailnet>.ts.net/<slug>/`; see [tailnet-router.md](tailnet-router.md).
@@ -114,6 +120,8 @@ and is not touched. `--purge --force` deletes even with uncommitted changes.
 | You see | Why | Do |
 |---|---|---|
 | `... already exists and is not empty` | the target path is taken | pick another `--path` |
+| `this node has no MeshId` | no licence, no `weaver mesh create`, not paired with a primary that has one | `weaver mesh create` on the primary; pair this node; retry |
+| `the name is for mesh X but this node's mesh is Y` | the name belongs to another mesh | use a name from your own mesh |
 | mesh fetch: not paired / no primary | this node is not a paired peer of the primary | pair in the dashboard, retry |
 | `no process-compose-http claim` | `up` cannot tell which port | add the claim to `compose/ports.yaml` |
 | `needs these environment variables` | `${VAR}` unset | export them or put them in the project's `.env` |
