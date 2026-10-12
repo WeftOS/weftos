@@ -1519,6 +1519,7 @@ CARGO_AUDIT_IGNORES=(
     --ignore RUSTSEC-2019-0036   # failure unsound (transitive)
     --ignore RUSTSEC-2026-0221   # event-listener unsound (transitive async stack)
     --ignore RUSTSEC-2023-0086   # lexical-core unsound (transitive)
+    --ignore RUSTSEC-2024-0449   # unsafe-libyaml unmaintained, via deprecated serde_yaml (board card: migrate off serde_yaml)
     # spin 0.9.8 yanked via multer→axum; no non-yanked path without multer bump —
     # skip yanked check for 0.8.0 cut (still report via separate note)
     --no-yanked
