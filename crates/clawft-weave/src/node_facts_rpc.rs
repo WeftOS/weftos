@@ -363,6 +363,10 @@ pub fn init(
         ex.start();
         ex
     });
+    crate::expose_rt::set_facts_source(
+        membership.clone(),
+        clawft_kernel::node_registry::node_id_from_pubkey(&key.verifying_key().to_bytes()),
+    );
     let signer = Arc::new(LocalSigner {
         key,
         runtime_dir,

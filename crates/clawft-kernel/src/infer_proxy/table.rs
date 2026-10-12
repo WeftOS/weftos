@@ -16,6 +16,7 @@ use tokio::sync::watch;
 use super::types::{MeshDialer, ProxyAudit, ProxyError, Target};
 use super::upstream::parse_loopback_base;
 use super::wire::MAX_ROLE;
+use crate::exposure::ExposureRegistry;
 use crate::ipc::GlobalPid;
 use crate::mesh_service_adv::ServiceAdvertisement;
 use crate::workload_pkg::manifest::valid_token;
@@ -85,7 +86,11 @@ pub struct PlacementTable {
     inner: RwLock<Inner>,
     gen_tx: watch::Sender<u64>,
     advert_ttl: Duration,
+    /// ADR-120: the exposure registry the `infer.<role>` roles live in.
+    exposures: Arc<ExposureRegistry>,
 }
+
+mod exposure;
 
 fn valid_role(role: &str) -> bool {
     valid_token(role, MAX_ROLE) && !role.contains('/')
@@ -99,8 +104,10 @@ impl PlacementTable {
         dialer: Option<Arc<dyn MeshDialer>>,
         audit: Option<Arc<dyn ProxyAudit>>,
     ) -> Self {
+        let node_id = node_id.into();
         Self {
-            node_id: node_id.into(),
+            exposures: Arc::new(ExposureRegistry::new(&node_id)),
+            node_id,
             dialer,
             audit,
             inner: RwLock::new(Inner::default()),
@@ -196,6 +203,7 @@ impl PlacementTable {
         if changed {
             self.bump();
         }
+        self.sync_exposure(role);
         Ok(())
     }
 
@@ -205,6 +213,7 @@ impl PlacementTable {
         if had {
             self.bump();
         }
+        self.sync_exposure(role);
     }
 
     /// Re-evaluate `role` against its adapter instance: reconcile (a dead
@@ -256,6 +265,10 @@ impl PlacementTable {
                 g.exposed.remove(role)
             }
         };
+        self.sync_exposure(role);
+        if changed && !on {
+            self.exposures.queue_withdrawal(&Self::exposure_id(role));
+        }
         if changed {
             self.audit(
                 "infer.mesh.expose",
@@ -395,7 +408,9 @@ impl PlacementTable {
     /// cannot be bounced from node to node.
     pub fn local_for_peer(&self, role: &str, peer: &str) -> Option<MeshLocal> {
         let g = self.inner.read().unwrap();
-        (g.exposed.contains(role) && g.serve_allow.get(role).is_some_and(|s| s.contains(peer)))
+        (g.exposed.contains(role)
+            && g.serve_allow.get(role).is_some_and(|s| s.contains(peer))
+            && self.serve_refusal(role).is_none())
             .then(|| {
                 g.local.get(role).map(|l| MeshLocal {
                     base: l.base.clone(),
@@ -459,7 +474,10 @@ impl PlacementTable {
     /// exposed to the mesh.
     pub fn advertisement(&self, role: &str, now_secs: u64) -> Option<ServiceAdvertisement> {
         let g = self.inner.read().unwrap();
-        let l = g.local.get(role).filter(|_| g.exposed.contains(role))?;
+        let l = g
+            .local
+            .get(role)
+            .filter(|_| g.exposed.contains(role) && self.serve_refusal(role).is_none())?;
         let mut metadata = HashMap::new();
         metadata.insert("role".to_string(), role.to_string());
         metadata.insert("node_id".to_string(), self.node_id.clone());

@@ -9,6 +9,8 @@
 //!   llama-server, mlx_lm, ollama.
 //! - `accel`: vendor accelerators, only when their tool or device exists
 //!   (nvidia-smi, hailortcli, Coral `/dev/apex_*` or USB id).
+//! - `libs`: library/toolchain versions (`x.lib.*`: CUDA, ROCm, Core ML, MLX,
+//!   PyTorch build, ONNX Runtime providers; ADR-120).
 //! - [`measured`]: `perf.*` results from the conformance harness.
 //! - [`cache`]: the verified-facts TTL cache held by `ClusterMembership`.
 //!
@@ -18,6 +20,7 @@
 
 mod accel;
 pub mod host;
+pub mod libs;
 pub mod linux;
 pub mod macos;
 pub mod measured;
@@ -29,6 +32,8 @@ pub mod cache;
 
 #[cfg(test)]
 mod fake_host;
+#[cfg(test)]
+mod tests_libs;
 #[cfg(test)]
 mod tests_linux;
 #[cfg(test)]

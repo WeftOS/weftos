@@ -84,6 +84,9 @@ pub fn required_capability(method: &str) -> Capability {
         // mesh-placement-19: who may use whose model server is a governed
         // decision, the same standing as a revocation.
         "infer.expose" | "infer.allow" | "infer.start" | "infer.stop" => Capability::Admin,
+        // ADR-120: switching an exposure and reading who called it are local
+        // operator acts; the log names callers, so it is not anonymous Read.
+        "expose.set" | "expose.off_all" | "expose.log" => Capability::Admin,
         "workload.node.bind" => Capability::Admin,
         // ADR-106: withdrawing a Seed binding is the same trust change.
         "workload.node.unbind" => Capability::Admin,
@@ -219,6 +222,7 @@ pub fn required_capability(method: &str) -> Capability {
         | "workload.cog.checkout.status"
         | "workload.cog.checkout.list"
         | "infer.status"
+        | "expose.list"
         // Fleet manager: one read-only document composed from sources the
         // daemon already holds; contacts no peer and no device.
         | "fleet.snapshot"
@@ -245,6 +249,9 @@ pub fn required_capability(method: &str) -> Capability {
 
         // An unclassified `infer.*` verb is a mutation, never anonymous Read.
         m if m.starts_with("infer.") => Capability::Admin,
+
+        // ADR-120: likewise for an unclassified `expose.*` verb.
+        m if m.starts_with("expose.") => Capability::Admin,
 
         // ADR-099 default-deny posture: an unclassified `workload.*` verb
         // is treated as a mutation, never as anonymous-callable Read.
@@ -517,6 +524,19 @@ mod tests {
         let admin = CallerCapabilities::from_scopes(["admin"]);
         assert!(anon.allows_method("infer.status"));
         for m in ["infer.expose", "infer.allow", "infer.somethingnew"] {
+            assert!(!anon.allows_method(m), "{m}");
+            assert!(!write.allows_method(m), "{m}");
+            assert!(admin.allows_method(m), "{m}");
+        }
+    }
+
+    #[test]
+    fn exposure_verbs_are_classified() {
+        let anon = CallerCapabilities::anonymous();
+        let write = CallerCapabilities::from_scopes(["write"]);
+        let admin = CallerCapabilities::from_scopes(["admin"]);
+        assert!(anon.allows_method("expose.list"));
+        for m in ["expose.set", "expose.off_all", "expose.log", "expose.somethingnew"] {
             assert!(!anon.allows_method(m), "{m}");
             assert!(!write.allows_method(m), "{m}");
             assert!(admin.allows_method(m), "{m}");

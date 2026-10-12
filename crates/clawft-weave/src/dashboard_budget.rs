@@ -2,7 +2,9 @@
 //!
 //! The dashboard refuses a report over 64 KB (HTTP 413). The reporter trims
 //! to [`REPORT_BUDGET_BYTES`] first, dropping the lowest-value sections
-//! before the higher-value ones. Identity (`host`, `weaver_version`),
+//! before the higher-value ones. `resources` and `exposures` (ADR-120) are
+//! cut late, after `routes`: the library versions first, then the exposure
+//! rows. Identity (`host`, `weaver_version`),
 //! `mesh_identity` and `health` are never trimmed.
 
 use serde_json::{Value, json};
@@ -11,7 +13,8 @@ use serde_json::{Value, json};
 pub const REPORT_BUDGET_BYTES: usize = 60 * 1024;
 
 /// Sections trimmed, lowest value first.
-const TRIM_ORDER: [&str; 6] = ["workspaces", "instances", "observed", "services", "routes", "pair_requests"];
+const TRIM_ORDER: [&str; 8] =
+    ["workspaces", "instances", "observed", "services", "routes", "resources", "exposures", "pair_requests"];
 
 /// Serialized byte length of `report` (what the dashboard measures).
 pub fn report_len(report: &Value) -> usize {
@@ -31,13 +34,22 @@ fn shrink_one(v: &mut Value) -> bool {
 }
 
 /// The part of `section` to shrink: for `instances`, the `recent` list then
-/// `drift`, so the counts survive; any other section is shrunk whole.
+/// `drift`; for `exposures`, the `items`; for `resources`, the `libs` then the
+/// GPU list, so the counts survive. Any other section is shrunk whole.
 fn target<'a>(section: &'a mut Value, key: &str) -> Option<&'a mut Value> {
-    if key != "instances" {
-        return Some(section);
-    }
-    let live = |v: Option<&Value>| v.and_then(Value::as_array).is_some_and(|a| !a.is_empty());
-    let pick = if live(section.get("recent")) { "recent" } else { "drift" };
+    let live = |v: Option<&Value>| match v {
+        Some(Value::Array(a)) => !a.is_empty(),
+        Some(Value::Object(o)) => !o.is_empty(),
+        _ => false,
+    };
+    let pick = match key {
+        "instances" if live(section.get("recent")) => "recent",
+        "instances" => "drift",
+        "exposures" => "items",
+        "resources" if live(section.get("libs")) => "libs",
+        "resources" => "gpus",
+        _ => return Some(section),
+    };
     section.get_mut(pick)
 }
 
@@ -124,6 +136,38 @@ mod tests {
         assert_eq!(r["instances"]["counts"], json!({ "idle": 40 }));
         assert!(r["instances"]["recent"].as_array().unwrap().len() < 40);
         assert_eq!(r["observed"], json!({ "a": "x" }), "observed is cut after instances");
+    }
+
+    #[test]
+    fn resources_and_exposures_shrink_their_lists_and_keep_the_rest() {
+        let libs: serde_json::Map<String, Value> = (0..40).map(|i| (format!("l{i:02}"), json!(format!("{i:0>200}")))).collect();
+        let mut r = json!({
+            "host": "h", "mesh_identity": "id",
+            "resources": { "cpu": { "arch": "aarch64" }, "libs": libs, "gpus": [{ "kind": "metal" }] },
+            "exposures": { "enabled": true, "items": big(2) },
+            "pair_requests": [1],
+        });
+        assert!(fit(&mut r, 3 * 1024));
+        assert_eq!(r["resources_truncated"], true);
+        assert_eq!(r["resources"]["cpu"], json!({ "arch": "aarch64" }));
+        assert_eq!(r["resources"]["gpus"], json!([{ "kind": "metal" }]), "gpus survive while libs can still shrink");
+        assert_eq!(r["exposures"]["items"].as_array().unwrap().len(), 2, "exposures wait for resources");
+        assert!(r.get("exposures_truncated").is_none());
+        assert_eq!(r["pair_requests"], json!([1]), "pair_requests is cut last");
+        assert!(report_len(&r) <= 3 * 1024);
+    }
+
+    #[test]
+    fn exposure_items_go_before_pair_requests() {
+        let mut r = json!({
+            "host": "h", "mesh_identity": "id",
+            "exposures": { "enabled": true, "items": big(30) },
+            "pair_requests": big(2),
+        });
+        assert!(fit(&mut r, 1500));
+        assert_eq!(r["exposures_truncated"], true);
+        assert_eq!(r["exposures"]["enabled"], true);
+        assert_eq!(r["pair_requests"].as_array().unwrap().len(), 2);
     }
 
     #[test]

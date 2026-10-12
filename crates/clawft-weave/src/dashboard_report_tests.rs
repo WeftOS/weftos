@@ -340,6 +340,31 @@ async fn the_body_carries_the_node_kind_and_the_instances_summary() {
     assert_eq!(i["recent"][0]["node"], NODE_ID);
 }
 
+#[tokio::test]
+async fn the_body_carries_the_exposures_section_without_callers_or_bodies() {
+    use clawft_kernel::exposure::{Audience, ExposureKind, ExposureRegistry, ExposureSpec, NewActivity};
+    let (_d, path) = token_dir(&token('a'));
+    let dash = dashboard(config("http://127.0.0.1:1", &path));
+    assert!(dash.build_body().await["report"].get("exposures").is_none(), "no registry, no key");
+
+    let reg = Arc::new(ExposureRegistry::new(NODE_ID));
+    let mut spec = ExposureSpec::new("infer.chat", ExposureKind::Inference, "accel.gpu.metal", "openai-chat");
+    spec.audience = Audience::Paired;
+    reg.register(spec);
+    reg.record(NewActivity {
+        exposure: "infer.chat".into(), caller_node: "n-secret-peer".into(), caller_user: Some("mat".into()),
+        bytes_in: 1, bytes_out: 2, duration_ms: 3, outcome: "ok".into(),
+    });
+    assert!(dash.set_exposure_registry(reg));
+    let body = dash.build_body().await;
+    let e = &body["report"]["exposures"];
+    assert_eq!(e["enabled"], true);
+    assert_eq!(e["items"][0]["id"], "infer.chat");
+    assert_eq!(e["items"][0]["audience"], "paired");
+    assert_eq!(e["items"][0]["n24"], 1);
+    assert!(!body.to_string().contains("n-secret-peer"));
+}
+
 #[test]
 fn the_default_node_kind_is_machine_and_an_unknown_kind_is_refused() {
     let c = DashboardConfig::from_config(&json!({ "dashboard": { "enabled": false } })).unwrap();

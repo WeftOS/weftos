@@ -1289,6 +1289,14 @@ pub async fn run(
             };
             (gate, chain)
         };
+        // ADR-120: the exposure registry exists before the inference table that registers into it.
+        {
+            let audit_fn: Option<clawft_kernel::exposure::AuditFn> = audit.clone().map(|a| {
+                Arc::new(move |k: &str, v: serde_json::Value| a.record(k, v)) as clawft_kernel::exposure::AuditFn
+            });
+            let home = clawft_types::runtime_paths::home_dir();
+            crate::expose_rt::start(&daemon_identity.node_id, &runtime_dir, home.as_deref(), audit_fn).await;
+        }
         let parts = crate::infer_wire::InitParts {
             dir: &runtime_dir,
             node_id: daemon_identity.node_id.clone(),
@@ -6474,6 +6482,10 @@ async fn dispatch(
         // mesh-placement-03: signed node facts (local + verified peers).
         #[cfg(any(feature = "mesh", feature = "exochain"))]
         "cluster.facts" => crate::node_facts_rpc::handle(params, kernel).await,
+        // ADR-120: the exposure registry (list, switch, log).
+        "expose.list" | "expose.set" | "expose.off_all" | "expose.log" => {
+            crate::expose_rpc::handle(method.as_str(), params).await
+        }
         // mesh-placement-19: inference placement (off unless inference.json exists).
         #[cfg(all(feature = "placement", unix))]
         "infer.status" | "infer.expose" | "infer.allow" | "infer.start" | "infer.stop" => {

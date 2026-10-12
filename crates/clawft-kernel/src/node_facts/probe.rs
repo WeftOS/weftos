@@ -10,7 +10,7 @@ use clawft_types::placement::{
 };
 
 use super::host::ProbeHost;
-use super::{accel, linux, macos, runtimes};
+use super::{accel, libs, linux, macos, runtimes};
 
 /// Default TTL for self-probed facts (ten minutes).
 pub const DEFAULT_FACTS_TTL_SECS: u64 = 600;
@@ -207,6 +207,7 @@ pub fn probe_capabilities(host: &dyn ProbeHost, cfg: &ProbeConfig) -> Collected 
     }
     runtimes::probe(host, &arch, cfg, &mut c);
     accel::probe(host, &mut c);
+    libs::probe(host, &mut c);
     derive_formats(&mut c);
     for feed in &cfg.declared_feeds {
         if feed.id.family() == "feed" {
@@ -340,5 +341,38 @@ pub fn refresh_live(host: &dyn ProbeHost, base: &NodeFacts, now: u64) -> NodeFac
             c.attrs.insert("free".into(), bytes_attr(free.min(total)));
         }
     }
+    refresh_vram(host, &mut f);
     f
+}
+
+/// Re-read free VRAM per CUDA device (`nvidia-smi`, one cheap query). Total
+/// and everything else stay as probed.
+fn refresh_vram(host: &dyn ProbeHost, f: &mut NodeFacts) {
+    if host.which("nvidia-smi").is_none() {
+        return;
+    }
+    let Some(out) = host.run(
+        "nvidia-smi",
+        &["--query-gpu=memory.free", "--format=csv,noheader,nounits"],
+    ) else {
+        return;
+    };
+    let free: Vec<u64> = out
+        .lines()
+        .filter_map(|l| l.trim().parse::<u64>().ok())
+        .map(|m| m * 1024 * 1024)
+        .collect();
+    for c in f.capabilities.iter_mut().filter(|c| c.id.as_str() == "mem.vram") {
+        let idx = match c.attrs.get("device") {
+            Some(AttrValue::Str(d)) => d.strip_prefix("cuda:").and_then(|n| n.parse::<usize>().ok()),
+            _ => None,
+        };
+        if let Some(fr) = idx.and_then(|i| free.get(i)) {
+            let total = match c.attrs.get("total") {
+                Some(AttrValue::Int(t)) if *t >= 0 => *t as u64,
+                _ => u64::MAX,
+            };
+            c.attrs.insert("free".into(), bytes_attr((*fr).min(total)));
+        }
+    }
 }

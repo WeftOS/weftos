@@ -135,6 +135,8 @@ pub enum Served {
 
 struct FrameSink<'a> {
     stream: &'a mut dyn MeshStream,
+    /// Response body bytes sent (activity log).
+    out: u64,
 }
 
 impl FrameSink<'_> {
@@ -161,6 +163,7 @@ impl ResponseSink for FrameSink<'_> {
     }
 
     async fn chunk(&mut self, data: &[u8]) -> Result<(), ProxyError> {
+        self.out += data.len() as u64;
         for piece in data.chunks(wire::CHUNK_BYTES) {
             self.send(Resp::Chunk(piece.to_vec())).await?;
         }
@@ -255,6 +258,15 @@ pub trait ServePolicy: Send + Sync {
     fn instance_for(&self, role: &str, peer: &str) -> Option<MeshLocal>;
     /// Whether `peer` is on any role's serve allowlist.
     fn peer_listed(&self, peer: &str) -> bool;
+    /// Where to record the request (ADR-120 activity log); `None` records nothing.
+    fn activity(&self) -> Option<&crate::exposure::ExposureRegistry> {
+        None
+    }
+    /// Why `role` is not served to `peer` (for the activity log only; the peer
+    /// is always told the generic reason).
+    fn refusal(&self, _role: &str, _peer: &str) -> String {
+        "not served to this peer".into()
+    }
 }
 
 impl ServePolicy for PlacementTable {
@@ -263,6 +275,16 @@ impl ServePolicy for PlacementTable {
     }
     fn peer_listed(&self, peer: &str) -> bool {
         self.peer_listed_any(peer)
+    }
+    fn activity(&self) -> Option<&crate::exposure::ExposureRegistry> {
+        Some(self.exposures())
+    }
+    fn refusal(&self, role: &str, peer: &str) -> String {
+        match self.serve_refusal(role) {
+            Some(r) => r.reason().to_string(),
+            None if !self.mesh_peer_allowed(role, peer) => "peer is not on the serve allowlist".into(),
+            None => "not served to this peer".into(),
+        }
     }
 }
 
@@ -300,7 +322,7 @@ pub async fn serve_infer(
         }
         peer_reason(e).to_string()
     };
-    let mut sink = FrameSink { stream };
+    let mut sink = FrameSink { stream, out: 0 };
 
     // Standing first: a peer that does not qualify holds no slot and costs
     // no read.
@@ -333,6 +355,8 @@ pub async fn serve_infer(
             return Ok(Served::Failed(refuse(&ProxyError::Timeout("first frame".into()))));
         }
     };
+    let started = std::time::Instant::now();
+    let mut seen: Option<(String, u64)> = None;
     let outcome: Result<(), ProxyError> = async {
         if frame.frame_type != FrameType::InferRequest {
             return Err(ProxyError::BadRequest("expected an infer request".into()));
@@ -344,6 +368,7 @@ pub async fn serve_infer(
                 ..limits.clone()
             },
         )?;
+        seen = Some((req.role.clone(), req.body.len() as u64));
         if !mesh_path_allowed(&req.path) {
             return Err(ProxyError::Forbidden("path is not served to peers".into()));
         }
@@ -358,6 +383,23 @@ pub async fn serve_infer(
         sink.send(Resp::End).await
     }
     .await;
+    if let (Some(reg), Some((role, bytes_in))) = (policy.activity(), seen) {
+        let outcome_text = match &outcome {
+            Ok(()) => "ok".to_string(),
+            Err(ProxyError::NoInstance(_)) => format!("refused:{}", policy.refusal(&role, &peer.node_id)),
+            Err(e @ (ProxyError::Forbidden(_) | ProxyError::Refused(_))) => format!("refused:{}", peer_reason(e)),
+            Err(e) => format!("error:{}", peer_reason(e)),
+        };
+        reg.record(crate::exposure::NewActivity {
+            exposure: format!("{}{role}", super::table::SERVICE_PREFIX),
+            caller_node: peer.node_id.clone(),
+            caller_user: None,
+            bytes_in,
+            bytes_out: sink.out,
+            duration_ms: started.elapsed().as_millis() as u64,
+            outcome: outcome_text,
+        });
+    }
     match outcome {
         Ok(()) => Ok(Served::Ok),
         Err(e) => {
