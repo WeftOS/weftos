@@ -301,7 +301,10 @@ fn learn_mesh_id(
     pinned: &[u8; 32],
     node: &str,
 ) -> Result<String, String> {
+    #[cfg(all(feature = "placement", unix))]
     let rt = crate::licence_boot::runtime();
+    #[cfg(not(all(feature = "placement", unix)))]
+    let rt: Option<std::sync::Arc<crate::mesh_genesis::NoLicenceRuntime>> = None;
     let local = rt.as_ref().and_then(|r| r.local.get());
     let id = crate::mesh_genesis::learn(dir, rec, pinned, node, local)?;
     if let Some(rt) = rt

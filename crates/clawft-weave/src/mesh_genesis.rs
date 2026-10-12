@@ -185,13 +185,18 @@ pub fn load(dir: &Path) -> Result<Option<StoredRecord>, String> {
 /// Publish `stored` at the record path, failing if a file is already there.
 fn publish(dir: &Path, stored: &StoredRecord) -> Result<(), String> {
     use std::io::Write;
+    #[cfg(unix)]
     use std::os::unix::fs::OpenOptionsExt;
     let d = dir.join(RECORD_DIR);
     std::fs::create_dir_all(&d).map_err(|e| format!("{}: {e}", d.display()))?;
     let tmp = d.join(format!(".mesh.{}.{:016x}.tmp", std::process::id(), rand::random::<u64>()));
     let text = serde_json::to_string_pretty(stored).map_err(|e| e.to_string())?;
     let written = (|| {
-        let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp)?;
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        opts.mode(0o600);
+        let mut f = opts.open(&tmp)?;
         f.write_all(text.as_bytes())?;
         f.write_all(b"\n")?;
         f.sync_all()?;
@@ -378,3 +383,14 @@ mod tests;
 #[cfg(test)]
 #[path = "mesh_genesis_wire_tests.rs"]
 mod wire_tests;
+
+/// Stand-in for `licence_boot::LicenceRuntime` where that module is not built
+/// (non-Unix targets or builds without `placement`): the callers only read the
+/// local mesh id and the runtime dir, and with no licence runtime there is none.
+#[cfg(not(all(feature = "placement", unix)))]
+pub struct NoLicenceRuntime {
+    /// Never populated: there is no licence runtime on this build.
+    pub local: clawft_kernel::licence::LocalMeshId,
+    /// Never populated.
+    pub dir: std::path::PathBuf,
+}

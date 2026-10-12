@@ -375,7 +375,10 @@ impl Dashboard {
             }
             mesh_pair_requests::attach(&mut report, &src.pair_requests().await);
         }
+        #[cfg(all(feature = "placement", unix))]
         let rt = crate::licence_boot::runtime();
+        #[cfg(not(all(feature = "placement", unix)))]
+        let rt: Option<std::sync::Arc<crate::mesh_genesis::NoLicenceRuntime>> = None;
         let mesh_id = self.mesh_id.get().and_then(|l| l.get()).or_else(|| rt.as_ref().and_then(|r| r.local.get()));
         crate::mesh_genesis::attach(&mut report, mesh_id, rt.as_ref().map(|r| r.dir.as_path()));
         dashboard_budget::fit(&mut report, dashboard_budget::REPORT_BUDGET_BYTES);
