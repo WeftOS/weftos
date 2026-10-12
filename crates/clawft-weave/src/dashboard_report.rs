@@ -164,6 +164,8 @@ pub struct Dashboard {
     services: OnceLock<Arc<dyn ServiceSource>>,
     /// `report.instances` source (ADR-121 O2); unset leaves the key out.
     instances: OnceLock<Arc<InstanceRegistry>>,
+    /// `report.exposures` source (ADR-120); unset and no daemon registry leaves the key out.
+    exposures: OnceLock<Arc<clawft_kernel::exposure::ExposureRegistry>>,
     /// Dashboard actions: queue and log (ADR-108 P2).
     pub(crate) book: Mutex<ActionBook>,
     pub(crate) handlers: Mutex<std::collections::HashMap<String, Arc<dyn ActionHandler>>>,
@@ -231,6 +233,7 @@ impl Dashboard {
             routes: OnceLock::new(),
             services: OnceLock::new(),
             instances: OnceLock::new(),
+            exposures: OnceLock::new(),
             book: Mutex::new(ActionBook::default()),
             handlers: Mutex::new(crate::dashboard_actions::default_handlers()),
         }))
@@ -260,6 +263,11 @@ impl Dashboard {
     pub fn set_instance_registry(&self, reg: Arc<InstanceRegistry>) -> bool {
         reg.set_node(&self.cfg.node_id);
         self.instances.set(reg).is_ok()
+    }
+
+    /// Report `exposures` from `reg` (first call wins).
+    pub fn set_exposure_registry(&self, reg: Arc<clawft_kernel::exposure::ExposureRegistry>) -> bool {
+        self.exposures.set(reg).is_ok()
     }
 
     pub(crate) fn with_state(&self, f: impl FnOnce(&mut DashState)) {
@@ -325,6 +333,18 @@ impl Dashboard {
         if let Some(reg) = self.instances.get() {
             reg.sync().await;
             report["instances"] = reg.summary();
+        }
+        // ADR-120: what this node has and what it offers (compact; full logs stay on the node).
+        if let Some(resources) = crate::expose_rt::resources_json() {
+            report["resources"] = resources;
+        }
+        if self.exposures.get().is_none()
+            && let Some(reg) = crate::expose_rt::global()
+        {
+            self.set_exposure_registry(reg);
+        }
+        if let Some(reg) = self.exposures.get() {
+            report["exposures"] = reg.report(clawft_kernel::exposure::registry::now_ms());
         }
         // Routes go in before workspaces, whose size trimming measures the whole report.
         if let Some(src) = self.routes.get()

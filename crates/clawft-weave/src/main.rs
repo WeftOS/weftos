@@ -77,6 +77,9 @@ enum Commands {
     /// Dashboard reporter: status and token rotation (locally or on a peer).
     Dashboard(commands::dashboard_cmd::DashboardArgs),
 
+    /// What this node exposes to the mesh: list, on, off, pause, log (ADR-120).
+    Expose(commands::expose_cmd::ExposeArgs),
+
     /// Tailnet router: routes, reload, and the Tailscale Serve front door (ADR-116).
     Route(commands::route_cmd::RouteArgs),
 
@@ -203,6 +206,7 @@ async fn async_main() -> anyhow::Result<()> {
         Commands::Cluster(args) => commands::cluster_cmd::run(args).await?,
         Commands::Fleet(args) => commands::fleet_cmd::run(args).await?,
         Commands::Dashboard(args) => commands::dashboard_cmd::run(args).await?,
+        Commands::Expose(args) => commands::expose_cmd::run(args).await?,
         Commands::Route(args) => commands::route_cmd::run(args).await?,
         Commands::Chain(args) => commands::chain_cmd::run(args).await?,
         Commands::Custody(args) => commands::custody_cmd::run(args).await?,

@@ -16,6 +16,7 @@
 //! the persistent allowlists. In service mode the mesh verbs refuse with
 //! the reason (see [`crate::infer_wire`]).
 
+use clawft_kernel::exposure::ExposureState;
 use clawft_kernel::workload_pkg::manifest::valid_token;
 use clawft_rpc::Response;
 use serde::Deserialize;
@@ -56,6 +57,24 @@ fn require_mesh(st: &InferState) -> Result<(), String> {
     Ok(())
 }
 
+/// Expose (or stop exposing) `role` to the mesh as an operator act: the
+/// placement table and the exposure registry (ADR-120) both record it, and
+/// the registry keeps the decision across restarts.
+pub(crate) fn set_role_exposed(st: &InferState, role: &str, on: bool) -> Result<(), String> {
+    require_mesh(st)?;
+    if !role_known(st, role) {
+        return Err(format!("unknown role {role:?}"));
+    }
+    st.table.expose_to_mesh(role, on);
+    let reg = st.table.exposures();
+    let id = clawft_kernel::infer_proxy::PlacementTable::exposure_id(role);
+    if reg.get(&id).is_some() {
+        let state = if on { ExposureState::On } else { ExposureState::Off };
+        reg.set_state(&id, state, "infer.expose")?;
+    }
+    Ok(())
+}
+
 fn role_known(st: &InferState, role: &str) -> bool {
     st.roles.iter().any(|r| r.cfg.role == role)
 }
@@ -81,13 +100,9 @@ pub async fn handle(method: &str, params: Value) -> Response {
                 Ok(p) => p,
                 Err(e) => return Response::error(format!("invalid params: {e}")),
             };
-            if let Err(why) = require_mesh(st) {
+            if let Err(why) = set_role_exposed(st, &p.role, p.exposed) {
                 return Response::error(why);
             }
-            if !role_known(st, &p.role) {
-                return Response::error(format!("unknown role {:?}", p.role));
-            }
-            st.table.expose_to_mesh(&p.role, p.exposed);
             Response::success(json!({"role": p.role, "exposed": p.exposed}))
         }
         "infer.allow" => {

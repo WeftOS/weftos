@@ -335,3 +335,42 @@ async fn a_flood_of_refused_requests_spawns_nothing() {
     assert!((0..=8).contains(&n), "{n} refusals sent");
     assert!(audit.kinds().len() <= 16);
 }
+
+#[tokio::test]
+async fn switching_an_exposure_off_withdraws_the_advert_at_the_peer_at_once() {
+    use crate::exposure::ExposureState;
+    let w = world(node("node-a"), node("node-b")).await;
+    meet(&w).await;
+    w.b.hub.announce(10).await;
+    settle().await;
+    assert!(w.a.table.resolve("hermes").is_some());
+    w.b.table.exposures().set_state("infer.hermes", ExposureState::Off, "test").unwrap();
+    assert_eq!(w.b.hub.flush_withdrawals().await, 1);
+    settle().await;
+    assert!(w.a.table.resolve("hermes").is_none(), "no waiting out the advert TTL");
+    // Nothing left to withdraw, and the next announce does not re-advertise.
+    assert_eq!(w.b.hub.flush_withdrawals().await, 0);
+    w.b.hub.announce(20).await;
+    settle().await;
+    assert!(w.a.table.resolve("hermes").is_none());
+    // Switched back on, the next announce restores it.
+    w.b.table.exposures().set_state("infer.hermes", ExposureState::On, "test").unwrap();
+    w.b.hub.announce(30).await;
+    settle().await;
+    assert!(w.a.table.resolve("hermes").is_some());
+}
+
+#[tokio::test]
+async fn a_peer_request_appears_in_the_serving_nodes_activity_log() {
+    let w = world(node("node-a"), node("node-b")).await;
+    meet(&w).await;
+    w.b.hub.announce(10).await;
+    settle().await;
+    let p = proxy(&w.a.table).await;
+    let resp = raw(p.addr(), &post(p.addr(), "/v1/chat/completions", r#"{"messages":[]}"#)).await;
+    assert_eq!(status(&resp), 200, "{resp}");
+    let recs = w.b.table.exposures().activity().query(Some("infer.hermes"), 10);
+    assert_eq!(recs.len(), 1, "{recs:?}");
+    assert_eq!((recs[0].caller_node.as_str(), recs[0].outcome.as_str()), ("node-a", "ok"));
+    assert!(w.b.table.exposures().activity().verify().is_ok());
+}

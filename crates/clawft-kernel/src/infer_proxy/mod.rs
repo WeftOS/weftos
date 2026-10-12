@@ -35,6 +35,8 @@ mod support;
 #[cfg(test)]
 mod tests_expose;
 #[cfg(test)]
+mod tests_exposure;
+#[cfg(test)]
 mod tests_http;
 #[cfg(test)]
 mod tests_hub;

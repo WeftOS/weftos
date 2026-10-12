@@ -193,6 +193,7 @@ impl InferHub {
             let _ = self.rt.route_to_remote(&peer, msg(json!({"t": "hello"}))).await;
         }
         let Some(table) = self.table() else { return };
+        self.flush_withdrawals().await;
         for ad in table.advertisements(now_secs) {
             let Some(role) = ad.name.strip_prefix(super::table::SERVICE_PREFIX) else {
                 continue;
@@ -209,6 +210,23 @@ impl InferHub {
                 }
             }
         }
+    }
+
+    /// Tell every connected peer to forget the advertisements the exposure
+    /// registry withdrew (switched off, paused, narrowed, master off). Called
+    /// at once by the operator verbs and on each announce.
+    pub async fn flush_withdrawals(&self) -> usize {
+        let Some(table) = self.table() else { return 0 };
+        let names = table.exposures().drain_withdrawals();
+        for name in &names {
+            for peer in self.rt.peer_ids() {
+                let m = msg(json!({"t": "withdraw", "name": name}));
+                if let Err(e) = self.rt.route_to_remote(&peer, m).await {
+                    tracing::debug!(peer, error = %e, "infer withdraw send failed");
+                }
+            }
+        }
+        names.len()
     }
 
     /// Peers this node currently holds a qualifying grant for.
@@ -332,6 +350,12 @@ impl PeerControlSink for InferHub {
                 {
                     // The sender is the connection's peer, never a field.
                     table.ingest_advertisement(&ctx.peer_id, &ad);
+                }
+            }
+            "withdraw" => {
+                if let (Some(table), Some(name)) = (self.table(), payload.get("name").and_then(Value::as_str)) {
+                    // Only the connection's own peer can withdraw its advertisement.
+                    table.withdraw_remote(&ctx.peer_id, name);
                 }
             }
             "req" => {
