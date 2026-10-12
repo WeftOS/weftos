@@ -2039,6 +2039,99 @@ cmd_n6_leaf() {
     return $rc
 }
 
+# ADR-117 real-leaf display path, no hardware: the session protocol and its
+# leaf-side state machine (weftos-leaf-scene), the display client and the
+# host-side pad emulator (weftos-display-client --features wire-leaf), and the
+# daemon side: the endpoint tests and the end-to-end test (real daemon dispatch,
+# real certified-leaf listener and discovery, emulated pad, display client and
+# console host). Clippy runs with warnings as errors on every touched crate.
+cmd_leaf_display() {
+    header "leaf-display: session protocol, pad emulator, daemon endpoint, e2e"
+    timer_start
+    local rc=0 v=""
+    [ "$VERBOSE" = true ] && v="--verbose"
+    (cd "$ROOT/crates/weftos-leaf-scene" \
+        && cargo test $v \
+        && cargo clippy --all-targets $v -- -D warnings) || rc=$?
+    [ $rc -eq 0 ] && (cd "$ROOT/crates/weftos-display-client" \
+        && cargo test --features wire-leaf $v \
+        && cargo clippy --all-targets --features wire-leaf $v -- -D warnings) || rc=$?
+    [ $rc -eq 0 ] && (cd "$ROOT/crates/weftos-cos-console" \
+        && cargo build --bin cos-console-host $v \
+        && cargo clippy --all-targets $v -- -D warnings) || rc=$?
+    if [ $rc -eq 0 ]; then
+        isolate_test_runtime
+        (cd "$ROOT" \
+            && cargo test -p clawft-weave --test display_endpoint --test display_e2e $v \
+            && cargo clippy -p clawft-weave --all-targets $v -- -D warnings) || rc=$?
+    fi
+    timer_end
+    return $rc
+}
+
+# The edge pad firmware (crates/clawft-edge-pad-idf), built in a throwaway
+# container from the cached ESP-IDF image (no host Xtensa toolchain exists).
+# The source is copied in; the image's cached IDF tree and target dir are
+# kept so the build is incremental. Nothing is flashed.
+#
+#   EDGEPAD_IMAGE            image (default weftos-leaf-build:idf532-cache)
+#   EDGEPAD_PROVISION_DIR    dir holding leaf.seed + leaf.cbor from
+#                            `weaver leaf provision`; without it the image
+#                            boots the display but never joins the mesh
+#   EDGEPAD_WIFI_SECRETS     path to the owner's wifi_secrets.rs (gitignored);
+#                            without it the image's own copy, else the
+#                            example, is used
+# Output: target/edgepad-fw/{clawft-edge-pad-idf.elf,edgepad-merged.bin}
+cmd_edgepad_fw() {
+    header "edge pad firmware build (xtensa-esp32s3-espidf, container)"
+    local image="${EDGEPAD_IMAGE:-weftos-leaf-build:idf532-cache}" out="$ROOT/target/edgepad-fw"
+    local prov="${EDGEPAD_PROVISION_DIR:-}" wifi="${EDGEPAD_WIFI_SECRETS:-}"
+    local mounts=() envs=()
+    if [ "$DRY_RUN" = true ]; then
+        printf "  ${YELLOW}DRY${NC}   docker run --rm %s: copy crates, cargo build --release, espflash save-image --merge\n" "$image"
+        return 0
+    fi
+    if ! command -v docker >/dev/null 2>&1 || ! docker image inspect "$image" >/dev/null 2>&1; then
+        skip "need docker and the $image image (see docs/guides/edgepad-console-hil.md)"
+        return 0
+    fi
+    if [ -n "$prov" ]; then
+        [ -f "$prov/leaf.seed" ] && [ -f "$prov/leaf.cbor" ] || { fail "$prov must hold leaf.seed and leaf.cbor"; return 1; }
+        mounts+=(-v "$prov":/provision:ro)
+        envs+=(-e WEFTOS_LEAF_SEED_FILE=/provision/leaf.seed -e WEFTOS_LEAF_CERT_FILE=/provision/leaf.cbor)
+    fi
+    if [ -n "$wifi" ]; then
+        [ -f "$wifi" ] || { fail "EDGEPAD_WIFI_SECRETS $wifi does not exist"; return 1; }
+        mounts+=(-v "$wifi":/provision-wifi/wifi_secrets.rs:ro)
+    fi
+    timer_start
+    mkdir -p "$out"
+    docker run --rm -v "$ROOT/crates":/source:ro -v "$out":/out ${mounts[@]+"${mounts[@]}"} ${envs[@]+"${envs[@]}"} \
+        --entrypoint bash "$image" -lc '
+            set -euo pipefail
+            source ~/export-esp.sh
+            cd /home/esp/build/crates
+            keep_wifi=""
+            [ -f clawft-edge-pad-idf/src/wifi_secrets.rs ] && { cp clawft-edge-pad-idf/src/wifi_secrets.rs /tmp/wifi_secrets.rs; keep_wifi=1; }
+            for c in clawft-edge-pad-idf weftos-leaf-types weftos-leaf-renderer weftos-leaf-scene; do
+                mkdir -p "$c"; rm -rf "$c/src"
+                tar -C "/source/$c" --exclude=./target --exclude=./.embuild --exclude=./build -cf - . | tar -C "$c" -xf -
+            done
+            cd clawft-edge-pad-idf
+            if [ -f /provision-wifi/wifi_secrets.rs ]; then cp /provision-wifi/wifi_secrets.rs src/wifi_secrets.rs
+            elif [ -n "$keep_wifi" ]; then cp /tmp/wifi_secrets.rs src/wifi_secrets.rs
+            else cp src/wifi_secrets.rs.example src/wifi_secrets.rs; echo "WARNING: building with the example wifi_secrets.rs"; fi
+            cargo build --release
+            elf=target/xtensa-esp32s3-espidf/release/clawft-edge-pad-idf
+            cp "$elf" /out/clawft-edge-pad-idf.elf
+            boot=$(ls -d target/xtensa-esp32s3-espidf/release/build/esp-idf-sys-*/out/build/bootloader/bootloader.bin | head -1)
+            espflash save-image --chip esp32s3 --flash-size 4mb --merge --bootloader "$boot" \
+                --partition-table partitions.csv "$elf" /out/edgepad-merged.bin
+        ' || { fail "edge pad firmware build failed"; timer_end; return 1; }
+    pass "firmware: $(wc -c < "$out/edgepad-merged.bin" | tr -d ' ') byte merged image ($out/edgepad-merged.bin; not flashed)"
+    timer_end
+}
+
 # ── Chief-of-staff console, ADR-118 C2 (standalone crate) ─────────────
 cmd_cos_console() {
     header "weftos-cos-console: build, test, clippy"
@@ -2675,6 +2768,13 @@ ${BOLD}Commands:${NC}
   cos-console-demo
                   Replay the scripted console conversation in the leaf
                   simulator and write key frames to docs/design/cos-console/.
+  leaf-display    ADR-117 real-leaf display path without hardware: session
+                  protocol + pad emulator tests, the daemon endpoint tests and
+                  the daemon + console host + emulated pad end-to-end test,
+                  with clippy -D warnings on every touched crate.
+  edgepad-fw      Build the edge pad firmware (crates/clawft-edge-pad-idf) in
+                  a container from the cached ESP-IDF image; does not flash.
+                  EDGEPAD_PROVISION_DIR / EDGEPAD_WIFI_SECRETS: see the lane.
   cos-host        Build cos-console-host (SDL2 window; ADR-118 C3), run the
                   console host tests against a fake agent, clippy, and the
                   agent's push-to-talk API tests. Run: see
@@ -3067,6 +3167,8 @@ main() {
         cos-console)        cmd_cos_console ;;
         cos-console-demo)   cmd_cos_console_demo ;;
         cos-host)           cmd_cos_host ;;
+        leaf-display)       cmd_leaf_display ;;
+        edgepad-fw)         cmd_edgepad_fw ;;
         gate)         cmd_gate ;;
         pipeline-pass) cmd_pipeline_pass ;;
         release-dry-run) cmd_release_dry_run ;;

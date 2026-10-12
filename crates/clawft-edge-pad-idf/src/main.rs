@@ -36,6 +36,7 @@ mod net;
 mod ptt;
 mod scene;
 mod selftest;
+mod session;
 mod wifi_secrets;
 
 use std::thread;
@@ -112,7 +113,8 @@ fn main() -> anyhow::Result<()> {
         info!("[edge-pad-idf] GPIO17 (I2S amp SDATA) held LOW; IO42/IO18/IO38 = I2S0 RX (ptt-mic)");
     }
     let g44 = PinDriver::input(peripherals.pins.gpio44, Pull::Up)?;
-    ptt::spawn_button(g44);
+    let (ptt_tx, ptt_rx) = std::sync::mpsc::sync_channel::<bool>(16);
+    ptt::spawn_button(g44, ptt_tx);
 
     thread::sleep(Duration::from_millis(200));
 
@@ -252,7 +254,7 @@ fn main() -> anyhow::Result<()> {
     //
     // Owns the display stack (surface + compositor); blocks forever
     // running the subscribe + receive + render loop.
-    mesh::run(surface, compositor, leaf_nvs, touch_rx)
+    mesh::run(surface, compositor, leaf_nvs, touch_rx, ptt_rx)
 }
 
 /// Touch-input loop. Blocks on the GT911 I²C bus at ~50 Hz; ports the

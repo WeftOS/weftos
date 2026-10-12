@@ -42,6 +42,7 @@ clawft-edge-pad-idf/
     │   ├── pca9557.rs        # blocking sync port
     │   └── gt911.rs          # blocking sync port
     ├── mesh.rs               # std::net mesh client
+    ├── session.rs            # display sessions (ADR-117), see below
     ├── net.rs                # esp-idf-svc WiFi bringup
     ├── wifi_secrets.rs       # gitignored
     └── wifi_secrets.rs.example
@@ -66,6 +67,20 @@ cargo build --release
 First build will auto-download and compile ESP-IDF v5.3.x (~10-15 min,
 ~3 GB on disk under `target/`). Subsequent builds reuse the cached
 IDF tree.
+
+## Display sessions
+
+An app (the chief-of-staff console) can hold the screen as a session over the
+certified-leaf channel: the daemon sends `Open` / `Ops` / `Close`, the pad
+renders and answers with `Opened`, hit-tested `Input` (touch), `Sensor`
+(`ptt.down` / `ptt.up` from the IO44 button), `Rejected` and `Ended`. The rules
+live in `weftos_leaf_scene::session::DisplayService`, shared with the host-side
+pad emulator; `src/session.rs` only applies its decisions to the scene.
+Design and wire: `docs/design/display-session-transport.md`. First run on the
+hardware: `docs/guides/edgepad-console-hil.md`.
+
+Build without a host Xtensa toolchain (container, no flashing):
+`EDGEPAD_PROVISION_DIR=<dir with leaf.seed + leaf.cbor> scripts/build.sh edgepad-fw`.
 
 ## Flashing
 

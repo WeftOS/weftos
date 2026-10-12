@@ -38,14 +38,17 @@ fn merge(into: &mut DamageSet, other: DamageSet) {
 /// Raster-shim node ids start here (24-bit path hash space).
 const RASTER_ID_BASE: u32 = 0xF0_0000;
 /// Boot-screen node ids.
-const BOOT_TITLE_ID: u32 = 0xFE_0001;
-const BOOT_LINE_ID: u32 = 0xFE_0002;
+pub(crate) const BOOT_TITLE_ID: u32 = 0xFE_0001;
+pub(crate) const BOOT_LINE_ID: u32 = 0xFE_0002;
 
 pub struct LeafScene {
     store: SceneStore,
     /// Raster-shim nodes currently in the store, with their layer.
     raster: Vec<(LayerSlot, NodeId)>,
     next_raster: u32,
+    /// Damage kept back by a fragmented session batch until its last
+    /// fragment arrives.
+    pending: DamageSet,
 }
 
 fn layer_of(slot: LayerSlot) -> Layer {
@@ -81,7 +84,7 @@ impl LeafScene {
     pub fn new() -> Self {
         let mut store = SceneStore::new();
         store.set_viewport(DISPLAY_ID, Rect::from_px(0, 0, SCREEN_WIDTH as i32, SCREEN_HEIGHT as i32));
-        Self { store, raster: Vec::new(), next_raster: RASTER_ID_BASE }
+        Self { store, raster: Vec::new(), next_raster: RASTER_ID_BASE, pending: DamageSet::none() }
     }
 
     /// Render the pending damage to the panel.
@@ -114,6 +117,19 @@ impl LeafScene {
         let damage = self.store.apply(env);
         info!("[scene] APPLY display={} ops={ops}", env.display_id);
         self.render(display, &damage);
+    }
+
+    /// Apply a session's ops (display-session frames). With `render`
+    /// false the damage is kept for the batch's last fragment, so a big
+    /// scene draws once instead of once per fragment.
+    pub fn apply_session_ops(&mut self, display: &mut DpiDisplay, env: &SceneEnvelope, render: bool) {
+        let damage = self.store.apply(env);
+        merge(&mut self.pending, damage);
+        info!("[scene] SESSION ops={} render={render}", env.ops.len());
+        if render && !self.pending.is_empty() {
+            let damage = core::mem::replace(&mut self.pending, DamageSet::none());
+            self.render(display, &damage);
+        }
     }
 
     /// Translate a raster `LeafPush` into scene ops and render.
@@ -185,9 +201,8 @@ impl LeafScene {
         damage
     }
 
-    /// Hit-test a touch against the retained scene (Q24.8 coords). Input
-    /// envelopes do not carry the resolved node yet (ADR-103 leaf plan).
-    #[allow(dead_code)]
+    /// Hit-test a touch against the retained scene (Q24.8 coords); the
+    /// resolved node rides in the session's `Input` frame.
     pub fn hit_test(&self, x_q8: i32, y_q8: i32) -> Option<NodeId> {
         self.store.hit_test(DISPLAY_ID, x_q8, y_q8)
     }

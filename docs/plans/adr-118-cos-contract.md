@@ -22,7 +22,8 @@ s.size(); s.capabilities();
   the pad's button; on the simulator they come from a key (space bar).
 - **Backends:** `LeafSim` (in process, for tests), a desktop-window backend
   (`weftos-leaf-canvas` or the simulator's window), and the real leaf over the certified-leaf
-  channel, which arrives later and is not needed for C1 or C2.
+  channel (built 2026-10-12: `DisplayTarget::Leaf`, through the daemon's `display.*` RPC;
+  see `docs/design/display-session-transport.md`). C1 and C2 never needed it.
 
 ## 2. Console scene (B owns)
 
@@ -90,3 +91,4 @@ GET  /v1/cos/events (SSE) -> {kind: "state", state}
 - 2026-10-11: console methods return `Result<(), S::Error>`; `Console` holds `&mut S`, reached through `session()`; `ObjectEvent` may add `Release{node}` (end of gesture, for swipes); `tick(now_ms)` drives avatar tweens; node range 300–999 assigned to page mode and guide views.
 - 2026-10-11: page 300–499 and guide 500–999 (replacing 300–999); `GuideAnswer::Back{survey_id}` added; gestures end on a tap or a 250 ms pause in dragging (the client has no pointer-up event); `PageDoc` blocks are Heading, Paragraph, Bullets and Rule.
 - 2026-10-11 (host): `POST /v1/cos/ptt {down: bool}` added to §3 (202 `{active}` on down; 202 `{active: false, posted: {text, turn_id}}` or `{nothing: reason}` on up; 503 when the agent runs without `--mic`). The console host (`cos-console-host`, in `weftos-cos-console`) talks to the agent over HTTP/SSE only and shows the voice transcript from the `up` reply. The desktop window reports keys as sensors `key.char` / `key.named` (display-client `keys`), used for the host's development typing line; the pad never sends them. `GuideAnswer::Back` is not posted (no agent kind for it yet).
+- 2026-10-12 (pad): `DisplayTarget::Leaf` is real. `cos-console-host --leaf <leaf id> [--daemon <socket>]` opens a session on the certified pad through the daemon; `Tap`, `Drag` and the `ptt.down` / `ptt.up` sensors arrive as on the simulator, hit-tested on the pad. Scene batches go out in frames of at most 4.5 KiB of CBOR (the pad reads 8 KiB), rendered once per batch. One app holds the screen at a time; a second `open` is refused with the holder's name (queueing and the system strip are D2).

@@ -77,7 +77,9 @@ The API is `docs/plans/adr-118-cos-contract.md` §3. The host links only
 
 ## Later
 
-- The pad (C4): the same host draws through the leaf display endpoint; the
-  button is the pad's GPIO sensor; typing stays off there.
+- The pad (C4): `cos-console-host --leaf <leaf id>` draws through the daemon's
+  display endpoint onto the certified edge pad; the button is the pad's IO44
+  sensor; typing stays off there. Built and tested against an emulated pad;
+  the hardware steps are in `docs/guides/edgepad-console-hil.md`.
 - Spoken replies and rendered markdown pages (C5).
 - `Back` on a survey is drawn but not yet sent; the agent has no kind for it.
