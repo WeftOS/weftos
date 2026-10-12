@@ -7,8 +7,8 @@
 //! This module is compiled only when the `ecc` feature is enabled.
 
 use std::collections::HashSet;
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Mutex, RwLock};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -109,18 +109,26 @@ pub struct HnswSearchResult {
 
 /// Kernel service wrapping the HNSW vector store.
 ///
-/// All mutable access to the inner `HnswStore` is serialized through a
-/// [`Mutex`]. Atomic counters track insert and search operations for
+/// The inner `HnswStore` sits behind a [`RwLock`]: searches share a read
+/// lock and never build the graph; builds run off-lock and are installed
+/// under a short write lock (see `ensure_index`). Atomic counters track insert and search operations for
 /// observability without requiring the lock.
 pub struct HnswService {
-    store: Mutex<HnswStore>,
+    store: RwLock<HnswStore>,
+    /// Serializes graph builds. A build runs with no store lock held, so
+    /// searches and inserts proceed meanwhile.
+    build_lock: Mutex<()>,
+    /// Set by the EML rebuild model to ask for a rebuild at the next search.
+    rebuild_requested: AtomicBool,
     config: HnswServiceConfig,
     insert_count: AtomicU64,
     search_count: AtomicU64,
     /// Monotonic epoch counter -- bumped on every mutation.
     epoch: AtomicU64,
     /// EML-based adaptive optimization (ef, rebuild, distance, path).
-    eml: Mutex<HnswEmlManager>,
+    eml: Arc<Mutex<HnswEmlManager>>,
+    /// A background training cycle is running (training never runs on a query thread).
+    training: Arc<AtomicBool>,
     /// Chain manager for exochain event logging.
     #[cfg(feature = "exochain")]
     chain_manager: Option<Arc<ChainManager>>,
@@ -130,16 +138,53 @@ pub struct HnswService {
 }
 
 impl HnswService {
+    /// Wrap a manager for service use: training moves off the query path.
+    fn new_eml(mut eml: HnswEmlManager) -> Arc<Mutex<HnswEmlManager>> {
+        eml.set_auto_train(false);
+        Arc::new(Mutex::new(eml))
+    }
+
+    /// Run a due training cycle on a short-lived thread. Training takes
+    /// seconds and holds the EML lock; inline it stalls whichever query
+    /// thread happened to cross the threshold (and with it the whole batch).
+    /// Concurrent searches skip their EML bookkeeping while it runs.
+    fn spawn_training_if_due(&self, due: bool) {
+        if !due
+            || self
+                .training
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+                .is_err()
+        {
+            return;
+        }
+        let eml = Arc::clone(&self.eml);
+        let flag = Arc::clone(&self.training);
+        let spawned = std::thread::Builder::new()
+            .name("hnsw-eml-train".into())
+            .spawn(move || {
+                if let Ok(mut m) = eml.lock() {
+                    m.train_all();
+                }
+                flag.store(false, Ordering::Release);
+            });
+        if spawned.is_err() {
+            self.training.store(false, Ordering::Release);
+        }
+    }
+
     /// Create a new service with the given configuration.
     pub fn new(config: HnswServiceConfig) -> Self {
         let store = HnswStore::with_params(config.ef_search, config.ef_construction);
         Self {
-            store: Mutex::new(store),
+            store: RwLock::new(store),
+            build_lock: Mutex::new(()),
+            rebuild_requested: AtomicBool::new(false),
             config,
             insert_count: AtomicU64::new(0),
             search_count: AtomicU64::new(0),
             epoch: AtomicU64::new(0),
-            eml: Mutex::new(HnswEmlManager::with_defaults()),
+            eml: Self::new_eml(HnswEmlManager::with_defaults()),
+            training: Arc::new(AtomicBool::new(false)),
             #[cfg(feature = "exochain")]
             chain_manager: None,
             #[cfg(feature = "exochain")]
@@ -153,12 +198,15 @@ impl HnswService {
     /// epoch (e.g. [`crate::vector_hnsw::HnswBackend`]) set it separately.
     pub fn from_store(config: HnswServiceConfig, store: HnswStore) -> Self {
         Self {
-            store: Mutex::new(store),
+            store: RwLock::new(store),
+            build_lock: Mutex::new(()),
+            rebuild_requested: AtomicBool::new(false),
             config,
             insert_count: AtomicU64::new(0),
             search_count: AtomicU64::new(0),
             epoch: AtomicU64::new(0),
-            eml: Mutex::new(HnswEmlManager::with_defaults()),
+            eml: Self::new_eml(HnswEmlManager::with_defaults()),
+            training: Arc::new(AtomicBool::new(false)),
             #[cfg(feature = "exochain")]
             chain_manager: None,
             #[cfg(feature = "exochain")]
@@ -168,19 +216,19 @@ impl HnswService {
 
     /// Snapshot all stored entries for composite backend persistence.
     pub fn snapshot_entries(&self) -> Vec<clawft_core::embeddings::hnsw_store::HnswEntry> {
-        let store = self.store.lock().expect("HnswStore lock poisoned");
+        let store = self.store.read().expect("HnswStore lock poisoned");
         store.entries().to_vec()
     }
 
     /// Current `(ef_search, ef_construction)` used by the inner store.
     pub fn ef_params(&self) -> (usize, usize) {
-        let store = self.store.lock().expect("HnswStore lock poisoned");
+        let store = self.store.read().expect("HnswStore lock poisoned");
         (store.ef_search(), store.ef_construction())
     }
 
     /// Hard-delete an entry by string id. Returns `true` if it was present.
     pub fn delete(&self, id: &str) -> bool {
-        let mut store = self.store.lock().expect("HnswStore lock poisoned");
+        let mut store = self.store.write().expect("HnswStore lock poisoned");
         let removed = store.delete(id);
         if removed {
             self.epoch.fetch_add(1, Ordering::SeqCst);
@@ -195,12 +243,15 @@ impl HnswService {
     pub fn with_eml(config: HnswServiceConfig, eml_config: HnswEmlConfig) -> Self {
         let store = HnswStore::with_params(config.ef_search, config.ef_construction);
         Self {
-            store: Mutex::new(store),
+            store: RwLock::new(store),
+            build_lock: Mutex::new(()),
+            rebuild_requested: AtomicBool::new(false),
             config,
             insert_count: AtomicU64::new(0),
             search_count: AtomicU64::new(0),
             epoch: AtomicU64::new(0),
-            eml: Mutex::new(HnswEmlManager::new(eml_config)),
+            eml: Self::new_eml(HnswEmlManager::new(eml_config)),
+            training: Arc::new(AtomicBool::new(false)),
             #[cfg(feature = "exochain")]
             chain_manager: None,
             #[cfg(feature = "exochain")]
@@ -222,7 +273,7 @@ impl HnswService {
 
     /// Insert an embedding with associated metadata (upsert semantics).
     pub fn insert(&self, id: String, embedding: Vec<f32>, metadata: serde_json::Value) {
-        let mut store = self.store.lock().expect("HnswStore lock poisoned");
+        let mut store = self.store.write().expect("HnswStore lock poisoned");
         store.insert(id.clone(), embedding, metadata);
         self.insert_count.fetch_add(1, Ordering::Relaxed);
         self.epoch.fetch_add(1, Ordering::SeqCst);
@@ -258,49 +309,52 @@ impl HnswService {
     /// (WEFT-385 / HNSW-EML #4), search is guided through predicted
     /// entry nodes. Training data is recorded for continuous learning.
     pub fn search(&self, query: &[f32], top_k: usize) -> Vec<HnswSearchResult> {
-        let mut store = self.store.lock().expect("HnswStore lock poisoned");
-        let mut eml = self.eml.lock().expect("EML lock poisoned");
+        self.ensure_index();
+        let store = self.store.read().expect("HnswStore lock poisoned");
         self.search_count.fetch_add(1, Ordering::Relaxed);
 
         let store_size = store.len();
 
-        // EML: adaptive ef_search is advisory only. `HnswStore::set_ef_search`
+        // EML bookkeeping is best-effort: if another search holds the EML
+        // lock (training and recall checks run under it), skip it rather
+        // than queue every query behind it. Skipped queries simply produce
+        // no training sample.
+        //
+        // Adaptive ef_search is advisory only. `HnswStore::set_ef_search`
         // rebuilds the whole graph (instant-distance bakes ef_search into the
-        // built index), so applying a per-query prediction here ran a full
-        // rebuild under the service lock whenever the learned value moved
-        // (tens of seconds at 10K, minutes at 100K) and made throughput
-        // collapse as threads grew. Callers that want a new ef pick it
-        // explicitly via `HnswStore::set_ef_search`.
-        let ef_pred = eml.predict_ef(query, store_size);
+        // built index), so applying a per-query prediction here would run a
+        // full rebuild whenever the learned value moved. Callers that want a
+        // new ef pick it explicitly via `HnswStore::set_ef_search`.
+        let mut ef_learned = false;
+        let mut table = None;
+        if let Ok(mut eml) = self.eml.try_lock() {
+            ef_learned = eml.predict_ef(query, store_size).is_learned;
 
-        // EML: adaptive rebuild — trigger early when recall is predicted
-        // to have degraded, even if the mutation count hasn't hit the
-        // static threshold.
-        let rebuild_pred = eml.predict_rebuild(store_size, store.inserts_since_rebuild(), 0);
-        if rebuild_pred.is_learned && rebuild_pred.should_rebuild {
-            store.force_rebuild();
-            // Path table is tied to store layout — rebuild after graph rebuild.
-            let pairs = store.entry_id_embeddings();
-            eml.rebuild_path_table(&pairs);
-        }
+            // EML: adaptive rebuild -- ask for an early rebuild when recall
+            // is predicted to have degraded, even if the mutation count
+            // hasn't hit the static threshold. Served by `ensure_index` on
+            // the next search, off the query path.
+            let rebuild_pred = eml.predict_rebuild(store_size, store.inserts_since_rebuild(), 0);
+            if rebuild_pred.is_learned && rebuild_pred.should_rebuild {
+                self.rebuild_requested.store(true, Ordering::Relaxed);
+            }
 
-        // Lazy path-table build: first search after enough inserts.
-        if eml.path_predict_enabled() && !eml.has_path_table() && store_size >= 16 {
-            let pairs = store.entry_id_embeddings();
-            eml.rebuild_path_table(&pairs);
+            // Lazy path-table build: first search after enough inserts.
+            if eml.path_predict_enabled() && !eml.has_path_table() && store_size >= 16 {
+                let pairs = store.entry_id_embeddings();
+                eml.rebuild_path_table(&pairs);
+            }
+            if eml.has_path_table() {
+                table = Some((
+                    eml.path_table().expect("has_path_table true").clone(),
+                    eml.path_region_probes(),
+                ));
+            }
         }
 
         let t0 = std::time::Instant::now();
-        let (results, path_pred, used_guided) = if eml.has_path_table() {
-            let probes = eml.path_region_probes();
-            // SAFETY: path_table borrowed only for the guided call; we re-fetch
-            // prediction metadata after releasing the table ref via clone of
-            // the needed fields. Clone table snapshot for query_guided.
-            let table = eml
-                .path_table()
-                .expect("has_path_table true")
-                .clone();
-            let (raw, pred) = store.query_guided(query, top_k, &table, probes);
+        let (results, path_pred, used_guided) = if let Some((table, probes)) = table {
+            let (raw, pred) = store.query_guided_shared(query, top_k, &table, probes);
             let mapped: Vec<HnswSearchResult> = raw
                 .into_iter()
                 .map(|r| HnswSearchResult {
@@ -321,7 +375,7 @@ impl HnswService {
             (mapped, path_pred, guided)
         } else {
             let mapped: Vec<HnswSearchResult> = store
-                .query(query, top_k)
+                .query_shared(query, top_k)
                 .into_iter()
                 .map(|r| HnswSearchResult {
                     id: r.id,
@@ -346,28 +400,33 @@ impl HnswService {
 
         let top_score = results.first().map(|r| r.score).unwrap_or(0.0);
         let ef_used = store.ef_search();
-        if used_guided {
-            let pool = path_pred.candidate_ids.len();
-            eml.record_guided_search(crate::hnsw_eml::GuidedSearch {
-                query,
-                result_count: results.len(),
-                top_score,
-                ef_used,
-                search_time_us: elapsed_us,
-                store_size,
-                prediction: &path_pred,
-                candidate_pool_size: pool,
-            });
-        } else {
-            eml.record_search(
-                query,
-                results.len(),
-                top_score,
-                ef_used,
-                elapsed_us,
-                store_size,
-            );
+        let mut train_due = false;
+        if let Ok(mut eml) = self.eml.try_lock() {
+            if used_guided {
+                let pool = path_pred.candidate_ids.len();
+                eml.record_guided_search(crate::hnsw_eml::GuidedSearch {
+                    query,
+                    result_count: results.len(),
+                    top_score,
+                    ef_used,
+                    search_time_us: elapsed_us,
+                    store_size,
+                    prediction: &path_pred,
+                    candidate_pool_size: pool,
+                });
+            } else {
+                eml.record_search(
+                    query,
+                    results.len(),
+                    top_score,
+                    ef_used,
+                    elapsed_us,
+                    store_size,
+                );
+            }
+            train_due = eml.train_due();
         }
+        self.spawn_training_if_due(train_due);
 
         // ExoChain: append multi-signal observation for training provenance.
         #[cfg(feature = "exochain")]
@@ -381,7 +440,7 @@ impl HnswService {
                     "result_count": results.len(),
                     "top_score": top_score,
                     "store_size": store_size,
-                    "is_learned": ef_pred.is_learned,
+                    "is_learned": ef_learned,
                     "path_guided": used_guided,
                     "path_region": path_pred.region_id,
                     "path_region_score": path_pred.region_score,
@@ -393,10 +452,62 @@ impl HnswService {
         results
     }
 
+    /// Build the graph if it is missing or stale, without blocking readers.
+    ///
+    /// The build runs with no store lock held; only installing the result
+    /// takes the write lock. The first build blocks callers (nothing to
+    /// serve from). Later rebuilds are done by one thread while the others
+    /// keep answering from the old graph plus the brute-force tail.
+    /// Public so callers can pre-build after a bulk load.
+    pub fn ensure_index(&self) {
+        let requested = self.rebuild_requested.load(Ordering::Relaxed);
+        let has_index = {
+            let store = self.store.read().expect("HnswStore lock poisoned");
+            if !requested && !store.needs_rebuild() {
+                return;
+            }
+            store.has_index()
+        };
+        let _guard = if has_index {
+            match self.build_lock.try_lock() {
+                Ok(g) => g,
+                Err(_) => return,
+            }
+        } else {
+            self.build_lock.lock().expect("HNSW build lock poisoned")
+        };
+        let requested = self.rebuild_requested.swap(false, Ordering::Relaxed);
+        let job = {
+            let store = self.store.read().expect("HnswStore lock poisoned");
+            if !requested && !store.needs_rebuild() {
+                return;
+            }
+            store.rebuild_job()
+        };
+        let Some(job) = job else { return };
+        let built = job.build();
+        let installed = self
+            .store
+            .write()
+            .expect("HnswStore lock poisoned")
+            .install_index(built);
+
+        // The path table is tied to store layout -- refresh it after a rebuild.
+        // Best-effort: never wait on the EML lock from the read path.
+        let has_table = self
+            .eml
+            .try_lock()
+            .map(|eml| eml.has_path_table())
+            .unwrap_or(false);
+        if installed && (requested || has_table) {
+            self.rebuild_path_table();
+        }
+    }
+
     /// Explicitly rebuild the region → entry-node path table from the
     /// current store contents (WEFT-385).
     pub fn rebuild_path_table(&self) {
-        let store = self.store.lock().expect("HnswStore lock poisoned");
+        let store = self.store.read().expect("HnswStore lock poisoned");
         let mut eml = self.eml.lock().expect("EML lock poisoned");
         let pairs = store.entry_id_embeddings();
         eml.rebuild_path_table(&pairs);
@@ -404,27 +515,29 @@ impl HnswService {
 
     /// Whether guided path prediction is active.
     pub fn path_table_ready(&self) -> bool {
-        self.eml
-            .lock()
-            .expect("EML lock poisoned")
-            .has_path_table()
+        self.eml.lock().expect("EML lock poisoned").has_path_table()
     }
 
     /// Brute-force ground-truth search for recall measurement.
     pub fn brute_force_topk(&self, query: &[f32], top_k: usize) -> Vec<String> {
-        let store = self.store.lock().expect("HnswStore lock poisoned");
+        let store = self.store.read().expect("HnswStore lock poisoned");
         store.brute_force_topk(query, top_k)
     }
 
     /// Measure recall against brute-force and feed the EML rebuild model.
     pub fn measure_recall(&self, queries: &[Vec<f32>], top_k: usize) -> f64 {
-        let mut store = self.store.lock().expect("HnswStore lock poisoned");
+        self.ensure_index();
+        let store = self.store.read().expect("HnswStore lock poisoned");
         let mut eml = self.eml.lock().expect("EML lock poisoned");
 
         let mut hnsw_ids = Vec::with_capacity(queries.len());
         let mut exact_ids = Vec::with_capacity(queries.len());
         for q in queries {
-            let hnsw: Vec<String> = store.query(q, top_k).into_iter().map(|r| r.id).collect();
+            let hnsw: Vec<String> = store
+                .query_shared(q, top_k)
+                .into_iter()
+                .map(|r| r.id)
+                .collect();
             let exact = store.brute_force_topk(q, top_k);
             hnsw_ids.push(hnsw);
             exact_ids.push(exact);
@@ -461,7 +574,7 @@ impl HnswService {
     /// available, falling back to the first N dimensions otherwise.
     /// The returned `TieredSearch` owns separate coarse/full indexes.
     pub fn build_tiered(&self, top_k: usize) -> TieredSearch {
-        let store = self.store.lock().expect("HnswStore lock poisoned");
+        let store = self.store.read().expect("HnswStore lock poisoned");
         let eml = self.eml.lock().expect("EML lock poisoned");
 
         let entries: Vec<(String, Vec<f32>, serde_json::Value)> = (0..store.len())
@@ -490,14 +603,15 @@ impl HnswService {
     /// This avoids per-query mutex acquisition overhead when processing
     /// multiple embeddings in a single tick (e.g., DEMOCRITUS loop).
     pub fn search_batch(&self, queries: &[&[f32]], top_k: usize) -> Vec<Vec<HnswSearchResult>> {
-        let mut store = self.store.lock().expect("HnswStore lock poisoned");
+        self.ensure_index();
+        let store = self.store.read().expect("HnswStore lock poisoned");
         self.search_count
             .fetch_add(queries.len() as u64, Ordering::Relaxed);
         queries
             .iter()
             .map(|query| {
                 store
-                    .query(query, top_k)
+                    .query_shared(query, top_k)
                     .into_iter()
                     .map(|r| HnswSearchResult {
                         id: r.id,
@@ -567,13 +681,13 @@ impl HnswService {
 
     /// Return the number of entries currently in the store.
     pub fn len(&self) -> usize {
-        let store = self.store.lock().expect("HnswStore lock poisoned");
+        let store = self.store.read().expect("HnswStore lock poisoned");
         store.len()
     }
 
     /// Return `true` if the store contains no entries.
     pub fn is_empty(&self) -> bool {
-        let store = self.store.lock().expect("HnswStore lock poisoned");
+        let store = self.store.read().expect("HnswStore lock poisoned");
         store.is_empty()
     }
 
@@ -609,10 +723,10 @@ impl HnswService {
             }
         }
 
-        let mut store = self.store.lock().expect("HnswStore lock poisoned");
+        let mut store = self.store.write().expect("HnswStore lock poisoned");
         #[cfg(feature = "exochain")]
         let entries_destroyed = store.len();
-        *store = HnswStore::with_params(self.config.ef_search, self.config.ef_construction);
+        store.reset(self.config.ef_search, self.config.ef_construction);
         let epoch = self.epoch.fetch_add(1, Ordering::SeqCst);
 
         // Chain logging: hnsw.clear
@@ -641,7 +755,7 @@ impl HnswService {
     /// Delegates to the underlying [`HnswStore::save`]. The HNSW index
     /// graph is not serialized; it will be rebuilt on load.
     pub fn save_to_file(&self, path: &std::path::Path) -> Result<(), std::io::Error> {
-        let store = self.store.lock().expect("HnswStore lock poisoned");
+        let store = self.store.read().expect("HnswStore lock poisoned");
         let result = store.save(path);
 
         // Chain logging: hnsw.save
@@ -1344,7 +1458,10 @@ mod tests {
         }
         let recall = hits as f64 / (queries * 10) as f64;
         assert!(!svc.path_table_ready(), "guided search must be opt-in");
-        assert!(recall >= 0.85, "default recall@10 {recall:.3} below floor 0.85");
+        assert!(
+            recall >= 0.85,
+            "default recall@10 {recall:.3} below floor 0.85"
+        );
     }
 
     /// Learned ef predictions must not trigger graph rebuilds from inside
@@ -1374,5 +1491,117 @@ mod tests {
             let _ = svc.search(&q, 5);
         }
         assert_eq!(svc.ef_params().0, 14, "search must not retune ef_search");
+    }
+
+    /// Deterministic pseudo-random 16-d vector; distinct seeds are well
+    /// separated, so an exact query must return its own entry first.
+    fn spread_vec(i: usize) -> Vec<f32> {
+        let mut state = (i as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        (0..16)
+            .map(|_| {
+                state = state
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                ((state >> 40) as f32 / (1u64 << 24) as f32) * 2.0 - 1.0
+            })
+            .collect()
+    }
+
+    /// Searching while another thread inserts and searches must stay correct
+    /// and must not rebuild under the read path: results always come back,
+    /// and an exact vector finds itself.
+    #[test]
+    fn concurrent_search_and_insert_stay_correct() {
+        let svc = Arc::new(make_service());
+        for i in 0..400 {
+            svc.insert(format!("b{i}"), spread_vec(i), serde_json::json!({}));
+        }
+        svc.ensure_index();
+
+        let mut handles = Vec::new();
+        for t in 0..8usize {
+            let svc = Arc::clone(&svc);
+            handles.push(std::thread::spawn(move || {
+                for i in 0..150usize {
+                    if t == 0 {
+                        svc.insert(format!("w{i}"), spread_vec(1000 + i), serde_json::json!({}));
+                    }
+                    let probe = (i * 7 + t) % 400;
+                    let hits = svc.search(&spread_vec(probe), 3);
+                    assert!(!hits.is_empty());
+                    assert_eq!(hits[0].id, format!("b{probe}"));
+                }
+            }));
+        }
+        for h in handles {
+            h.join().expect("searcher panicked");
+        }
+        assert_eq!(svc.len(), 550);
+        assert_eq!(svc.search_count(), 8 * 150);
+    }
+
+    /// A graph build runs with no store lock held: while one is in flight,
+    /// searches and inserts still complete.
+    #[test]
+    fn rebuild_does_not_block_readers_or_writers() {
+        let svc = Arc::new(make_service());
+        for i in 0..300 {
+            svc.insert(format!("b{i}"), spread_vec(i), serde_json::json!({}));
+        }
+        svc.ensure_index();
+        // Exceed the rebuild threshold so the next search wants a rebuild.
+        for i in 0..150 {
+            svc.insert(format!("n{i}"), spread_vec(2000 + i), serde_json::json!({}));
+        }
+        // Hold the build lock as a stand-in for a long in-flight build.
+        let building = svc.build_lock.lock().unwrap();
+        let hits = svc.search(&spread_vec(5), 3);
+        assert_eq!(hits[0].id, "b5", "stale graph plus tail must still answer");
+        svc.insert("late".into(), spread_vec(5000), serde_json::json!({}));
+        drop(building);
+        svc.ensure_index();
+        assert_eq!(svc.search(&spread_vec(5000), 1)[0].id, "late");
+    }
+
+    /// EML bookkeeping is skipped, not waited for, when its lock is busy.
+    #[test]
+    fn search_does_not_wait_on_eml_lock() {
+        let svc = make_service();
+        for i in 0..100 {
+            svc.insert(format!("b{i}"), spread_vec(i), serde_json::json!({}));
+        }
+        let _held = svc.eml.lock().unwrap();
+        // Would deadlock if search blocked on the EML mutex.
+        let hits = svc.search(&spread_vec(3), 2);
+        assert_eq!(hits[0].id, "b3");
+    }
+
+    /// A due training cycle runs on its own thread: it still happens, and
+    /// recording a search never trains inline.
+    #[test]
+    fn eml_training_runs_off_the_query_path() {
+        let svc = HnswService::with_eml(
+            HnswServiceConfig::default(),
+            HnswEmlConfig {
+                train_every_n: 20,
+                min_training_samples: 10,
+                ..Default::default()
+            },
+        );
+        for i in 0..100 {
+            svc.insert(format!("n{i}"), spread_vec(i), serde_json::json!({}));
+        }
+        for i in 0..40 {
+            let _ = svc.search(&spread_vec(i), 3);
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            let st = svc.eml_status();
+            if st.searches_since_train < 20 && !svc.training.load(Ordering::Acquire) {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "training never ran");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
     }
 }

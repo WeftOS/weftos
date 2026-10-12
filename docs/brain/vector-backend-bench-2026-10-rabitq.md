@@ -164,3 +164,71 @@ rebuild), and EML training/recall checks also run under that lock. The graph bui
 now visible. Regression tests: `default_search_recall_floor`, `search_never_changes_ef_search`
 (`hnsw_service.rs`) and `path_predict_is_opt_in` (`hnsw_eml.rs`).
 
+
+## Addendum 2 (2026-10-12): lock split and build time (cards 249077fb, 63d21285)
+
+Machine: Apple M-series, release profile, `WEFT_BENCH_ONLY=hnsw`, 384-dim, 100 queries, seed 42,
+`ef_search=14`. One run per row; the graph seed is entropy-derived, so recall moves a point or
+two between runs (see the efc=150 row below, which beat efc=200).
+
+### What was wrong, what changed
+
+1. **Reads were serialized and could stall on training.** `HnswService::search` held the store
+   mutex and the EML mutex for the whole query, and the thread that crossed `train_every_n`
+   trained four models inline. The bench's wall time is the slowest thread, so one stalled
+   trainer set the 18-thread QPS (245 with EML bookkeeping, 66,918 with it disabled, same build).
+   Now: the store is an `RwLock` and searches share the read lock through the new
+   `HnswStore::query_shared`; graph builds run off-lock (`rebuild_job` / `install_index`, guarded
+   by a layout generation so a build never installs over a delete or upsert); EML bookkeeping is
+   `try_lock` and skipped when busy; training runs on its own short-lived thread
+   (`HnswEmlManager::set_auto_train(false)` + `train_due`). Only the very first build blocks
+   searches; later rebuilds are done by one thread while the rest answer from the old graph plus
+   the brute-force tail.
+2. **Graph build was dominated by the distance function.** `1 - cosine` recomputed both norms with
+   serial f32 sums on every distance call. Points now cache `1/||v||` and use an 8-accumulator dot
+   product. `instant-distance 0.6.1` already builds in parallel (rayon) and fixes M at 32, so
+   `ef_construction` is the only build knob.
+
+### Results (ef_construction=200, the default)
+
+| n | state | recall@10 | p50 us | QPS 1 thread | QPS 18 threads | build ms |
+|---|---|---|---|---|---|---|
+| 10K | before | 0.939 | 459 | 2,132 | 321 | 29,372 |
+| 10K | after | 0.939 | 106 | 9,055 | 113,949 | 2,833 |
+| 100K | before | 0.909 | 628 | 1,512 | 243 | 476,007 |
+| 100K | after | 0.912 | 228 | 3,862 | 55,084 | 66,867 |
+
+Multi-thread QPS now scales above 1-thread (12.6x at 10K, 14x at 100K).
+
+### ef_construction sweep (after)
+
+| n | efc | recall@10 | build ms | QPS 1t | QPS mt |
+|---|---|---|---|---|---|
+| 10K | 40 | 0.897 | 669 | 13,775 | 185,247 |
+| 10K | 64 | 0.924 | 1,994 | 9,026 | 119,797 |
+| 10K | 100 | 0.938 | 2,584 | 7,285 | 120,287 |
+| 10K | 200 | 0.941 | 3,253 | 7,654 | 100,844 |
+| 100K | 40 | 0.687 | 6,120 | 7,950 | 112,723 |
+| 100K | 64 | 0.752 | 16,377 | 6,288 | 94,310 |
+| 100K | 100 | 0.863 | 25,917 | 5,561 | 80,898 |
+| 100K | 150 | 0.956 | 47,568 | 4,360 | 60,075 |
+| 100K | 200 | 0.912 | 66,867 | 3,862 | 55,084 |
+| 100K | 100, ef_search=24 | 0.974 | 32,024 | 4,375 | 54,232 |
+
+### Decision
+
+Defaults stay at `ef_construction=200`: it is the only setting that held recall@10 >= 0.9 at both
+sizes under a fixed `ef_search=14` (budget: about 3 s at 10K, about 70 s at 100K, down from 29 s
+and 476 s). Lowering efc to 100 saves roughly 60 percent of build time at 100K but drops recall
+below 0.9 unless `ef_search` is raised to about 24, which is the cheaper lever when build time
+matters; that trade is a per-deployment choice, so it is a bench knob
+(`WEFT_BENCH_HNSW_EFC`, `WEFT_BENCH_HNSW_EF`) and not a changed default.
+
+### Not established
+
+- Single runs; the efc=150 versus efc=200 inversion at 100K shows run-to-run recall noise of at
+  least four points at that size. Treat the sweep as a shape, not as exact recall values.
+- Synthetic clustered data only; real-embedding recall unchanged from the earlier caveat.
+- The brute-force tail and the index values still map by position, so deletes and upserts between
+  rebuilds can make the stale graph point at the wrong entry (pre-existing in `HnswStore`; the new
+  layout generation only stops an off-lock build from being installed over such a change).

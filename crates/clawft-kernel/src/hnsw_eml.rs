@@ -384,6 +384,9 @@ pub struct HnswEmlManager {
     rebuild_training: Vec<RebuildTrainingPoint>,
     /// Searches since last train cycle.
     searches_since_train: u64,
+    /// When false, `record_*` never trains inline; the owner polls
+    /// [`Self::train_due`] and calls [`Self::train_all`] off the query path.
+    auto_train: bool,
     /// Total searches processed.
     total_searches: u64,
     /// Total training cycles completed.
@@ -411,6 +414,7 @@ impl HnswEmlManager {
             path_training: Vec::new(),
             rebuild_training: Vec::new(),
             searches_since_train: 0,
+            auto_train: true,
             total_searches: 0,
             train_cycles: 0,
             last_recall: None,
@@ -421,6 +425,18 @@ impl HnswEmlManager {
     /// Create a manager with default configuration.
     pub fn with_defaults() -> Self {
         Self::new(HnswEmlConfig::default())
+    }
+
+    /// Choose whether recording a search may train inline (default) or
+    /// leave training to the caller, which polls [`Self::train_due`].
+    pub fn set_auto_train(&mut self, on: bool) {
+        self.auto_train = on;
+    }
+
+    /// True when enough searches have been recorded to warrant a training
+    /// cycle.
+    pub fn train_due(&self) -> bool {
+        self.searches_since_train >= self.config.train_every_n
     }
 
     /// Whether EML optimization is enabled.
@@ -489,7 +505,7 @@ impl HnswEmlManager {
         self.total_searches += 1;
 
         // Trigger periodic training.
-        if self.searches_since_train >= self.config.train_every_n {
+        if self.auto_train && self.train_due() {
             self.train_all();
         }
     }
@@ -545,7 +561,7 @@ impl HnswEmlManager {
         self.searches_since_train += 1;
         self.total_searches += 1;
 
-        if self.searches_since_train >= self.config.train_every_n {
+        if self.auto_train && self.train_due() {
             self.train_all();
         }
     }
@@ -2155,8 +2171,9 @@ mod tests {
     fn path_predict_is_opt_in() {
         let mut m = make_manager();
         assert!(!m.path_predict_enabled());
-        let entries: Vec<(String, Vec<f32>)> =
-            (0..30).map(|i| (format!("e{i}"), vec![i as f32, 1.0])).collect();
+        let entries: Vec<(String, Vec<f32>)> = (0..30)
+            .map(|i| (format!("e{i}"), vec![i as f32, 1.0]))
+            .collect();
         m.rebuild_path_table(&entries);
         assert!(!m.has_path_table());
     }
