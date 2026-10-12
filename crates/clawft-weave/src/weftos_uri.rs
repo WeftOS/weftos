@@ -18,7 +18,7 @@
 //! nothing is normalised.
 //!
 //! Kinds (v1): companies, projects, goals, tickets, installations, members,
-//! nodes, hosts, services, cogs, teams, agents, memory, sensors. Only
+//! nodes, hosts, services, cogs, teams, agents, instances, memory, sensors. Only
 //! `projects/<ULID>` (the project's root repository) and
 //! `projects/<ULID>/repos/<dir>` (a sibling repository) have a resolver today
 //! ([`WeftosUri::project_repo`]); nodes are
@@ -71,13 +71,14 @@ pub enum Kind {
     Cogs,
     Teams,
     Agents,
+    Instances,
     Memory,
     Sensors,
 }
 
 impl Kind {
     /// Every kind with its path token.
-    pub const ALL: [(Kind, &'static str); 14] = [
+    pub const ALL: [(Kind, &'static str); 15] = [
         (Kind::Companies, "companies"),
         (Kind::Projects, "projects"),
         (Kind::Goals, "goals"),
@@ -90,6 +91,7 @@ impl Kind {
         (Kind::Cogs, "cogs"),
         (Kind::Teams, "teams"),
         (Kind::Agents, "agents"),
+        (Kind::Instances, "instances"),
         (Kind::Memory, "memory"),
         (Kind::Sensors, "sensors"),
     ];

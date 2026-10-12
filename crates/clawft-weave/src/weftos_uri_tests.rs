@@ -20,6 +20,8 @@ fn every_accepted_name_round_trips_byte_for_byte() {
         format!("weftos://{MESH}/memory/notes-2026?rev=sha256:{MESH}&view=overview"),
         format!("weftos://{MESH}/companies/c1"),
         format!("weftos://{MESH}/teams/Core/members/alice"),
+        format!("weftos://{MESH}/agents/steward?rev=sha256:{MESH}"),
+        format!("weftos://{MESH}/instances/{ULID}"),
     ];
     for n in names {
         let u = WeftosUri::parse(&n).unwrap_or_else(|e| panic!("{n}: {e}"));
@@ -60,6 +62,8 @@ fn the_reject_table() {
         ("weftos:///projects/x".to_owned(), UriError::Authority),
         (format!("weftos://{m}/Projects/x"), UriError::Kind),
         (format!("weftos://{m}/things/x"), UriError::Kind),
+        (format!("weftos://{m}/instance/x"), UriError::Kind),
+        (format!("weftos://{m}/Instances/x"), UriError::Kind),
         (format!("weftos://{m}/projects"), UriError::Segment),
         (format!("weftos://{m}/projects/"), UriError::Segment),
         (format!("weftos://{m}/projects/x/"), UriError::Segment),
