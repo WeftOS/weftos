@@ -7,6 +7,14 @@
 //! the files under `teams/<team>/` the same way, then one
 //! `member <id> <package digest>\n` line per active member package, sorted by id,
 //! so a team pin also pins the packages it installs.
+//!
+//! This is the one definition. The catalog generator
+//! (`scripts/lib/package-digest.mjs`) implements the same rule and both read
+//! `scripts/lib/package-digest-vectors.json`; the catalog pins `sha256:<hex>`.
+//! [`dir_digest`] applies it to a package directory on disk (an installed
+//! package), so the embedded source and an installation hash alike.
+
+use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
@@ -38,6 +46,52 @@ fn file_lines(src: &AgentSource, prefix: &str) -> String {
         out.push_str(&format!("file {rel} {}\n", sha256_hex(bytes)));
     }
     out
+}
+
+/// Most files a package directory may hold; a bigger tree is refused.
+pub const MAX_FILES: usize = 10_000;
+
+fn walk_dir(root: &Path, dir: &Path, out: &mut Vec<(String, Vec<u8>)>) -> Result<(), InitError> {
+    let bad = |p: &Path, e: &dyn std::fmt::Display| InitError::Other(format!("{}: {e}", p.display()));
+    for entry in std::fs::read_dir(dir).map_err(|e| bad(dir, &e))? {
+        let entry = entry.map_err(|e| bad(dir, &e))?;
+        let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_str().ok_or_else(|| bad(&path, &"non-UTF-8 name"))?;
+        if name.starts_with('.') || name == "evals" {
+            continue;
+        }
+        let ty = entry.file_type().map_err(|e| bad(&path, &e))?;
+        if ty.is_symlink() {
+            return Err(bad(&path, &"symlink (a bundle cannot hide content behind one)"));
+        }
+        if ty.is_dir() {
+            walk_dir(root, &path, out)?;
+        } else if ty.is_file() {
+            let rel = path.strip_prefix(root).map_err(|e| bad(&path, &e))?;
+            let rel: Option<Vec<&str>> = rel.components().map(|c| c.as_os_str().to_str()).collect();
+            let rel = rel.ok_or_else(|| bad(&path, &"non-UTF-8 name"))?.join("/");
+            out.push((rel, std::fs::read(&path).map_err(|e| bad(&path, &e))?));
+            if out.len() > MAX_FILES {
+                return Err(bad(root, &format!("more than {MAX_FILES} files")));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Hex digest of the package directory `dir` on disk, by the same rule as
+/// [`package_digest`]. Refuses a missing or unreadable directory, a symlink and
+/// an empty bundle; never returns the digest of nothing.
+pub fn dir_digest(dir: &Path) -> Result<String, InitError> {
+    let mut files = Vec::new();
+    walk_dir(dir, dir, &mut files)?;
+    if files.is_empty() {
+        return Err(InitError::Other(format!("{}: no package files", dir.display())));
+    }
+    files.sort();
+    let text: String = files.iter().map(|(rel, bytes)| format!("file {rel} {}\n", sha256_hex(bytes))).collect();
+    Ok(finish(&text))
 }
 
 fn finish(text: &str) -> String {
@@ -130,5 +184,50 @@ mod tests {
         assert!(team_digest(&src(BASE), "nope").is_err());
         assert!(bundle_digest(&src(BASE), Subject::Agent, "teams").is_err());
         assert_eq!(Subject::parse("cog"), None);
+    }
+
+    #[test]
+    fn shared_vectors_agree_with_the_js_generator() {
+        let v: serde_json::Value = serde_json::from_str(include_str!("../../../../scripts/lib/package-digest-vectors.json")).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        for f in v["files"].as_array().unwrap() {
+            let p = dir.path().join(f["path"].as_str().unwrap());
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, f["content"].as_str().unwrap()).unwrap();
+        }
+        let want = v["digest"].as_str().unwrap();
+        assert_eq!(format!("sha256:{}", dir_digest(dir.path()).unwrap()), want);
+    }
+
+    #[test]
+    fn dir_digest_refuses_missing_empty_and_symlinks() {
+        let d = tempfile::tempdir().unwrap();
+        assert!(dir_digest(&d.path().join("missing")).is_err());
+        assert!(dir_digest(d.path()).is_err());
+        #[cfg(unix)]
+        {
+            std::fs::write(d.path().join("a.md"), "a").unwrap();
+            std::os::unix::fs::symlink("/etc/hosts", d.path().join("link")).unwrap();
+            assert!(dir_digest(d.path()).is_err());
+        }
+    }
+
+    #[test]
+    fn every_catalog_digest_equals_the_computed_one() {
+        let agents = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../agents");
+        let cat: serde_json::Value = serde_json::from_slice(&std::fs::read(agents.join("catalog.json")).unwrap()).unwrap();
+        let list = cat["agents"].as_array().unwrap();
+        assert!(!list.is_empty(), "catalog lists no agents");
+        for a in list {
+            let path = a["path"].as_str().unwrap();
+            let got = format!("sha256:{}", dir_digest(&agents.join("..").join(path)).unwrap());
+            assert_eq!(a["digest"].as_str().unwrap(), got, "catalog digest of {path} is stale (run node scripts/agents-catalog.mjs)");
+        }
+        let src = AgentSource::from_dir(&agents).unwrap();
+        for t in cat["teams"].as_array().unwrap() {
+            let name = t["name"].as_str().unwrap();
+            let got = format!("sha256:{}", team_digest(&src, name).unwrap());
+            assert_eq!(t["digest"].as_str().unwrap(), got, "catalog digest of team {name} is stale");
+        }
     }
 }

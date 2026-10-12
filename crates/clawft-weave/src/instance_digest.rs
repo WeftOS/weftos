@@ -1,19 +1,12 @@
 //! Package digest enforcement (ADR-121 §4): before an installed agent package
 //! starts, its files are checked against the digest the installation pinned.
 //!
-//! The digest definition belongs to the catalog (O1). Until it lands here,
-//! [`PackageDigest`] is the seam and [`Sha256SortedFiles`] is the default:
-//! `sha256` over `"<relative path>\0<file sha256 hex>\n"` for every regular
-//! file under the package directory, sorted by relative path (`/` separators).
-//! A symlink, a non-UTF-8 name or an unreadable file is an error, never skipped,
-//! so a package cannot hide content from the digest.
+//! The digest definition belongs to the catalog and lives in one place,
+//! `weftos::init::digest` (see its module docs). [`Sha256SortedFiles`] is the
+//! default [`PackageDigest`] and only calls it. A symlink, a non-UTF-8 name,
+//! an unreadable file or an empty directory is an error, never skipped.
 
-use std::path::{Path, PathBuf};
-
-use sha2::{Digest, Sha256};
-
-/// Most files a package may hold; a bigger tree is refused, not truncated.
-pub const MAX_FILES: usize = 10_000;
+use std::path::Path;
 
 /// Why a digest could not be computed or did not match.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,48 +40,15 @@ pub trait PackageDigest: Send + Sync {
     fn digest(&self, dir: &Path) -> Result<String, DigestError>;
 }
 
-/// The default digest: see the module docs.
+/// The default digest: `weftos::init::digest::dir_digest`, as `sha256:<hex>`.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Sha256SortedFiles;
 
-fn walk(root: &Path, dir: &Path, out: &mut Vec<(String, PathBuf)>) -> Result<(), DigestError> {
-    let unread = |p: &Path, e: &dyn std::fmt::Display| DigestError::Unreadable(format!("{}: {e}", p.display()));
-    for entry in std::fs::read_dir(dir).map_err(|e| unread(dir, &e))? {
-        let entry = entry.map_err(|e| unread(dir, &e))?;
-        let path = entry.path();
-        let ty = entry.file_type().map_err(|e| unread(&path, &e))?;
-        if ty.is_symlink() {
-            return Err(unread(&path, &"symlink"));
-        }
-        if ty.is_dir() {
-            walk(root, &path, out)?;
-        } else if ty.is_file() {
-            let rel = path.strip_prefix(root).map_err(|e| unread(&path, &e))?;
-            let rel: Option<Vec<&str>> = rel.components().map(|c| c.as_os_str().to_str()).collect();
-            let rel = rel.ok_or_else(|| unread(&path, &"non-UTF-8 name"))?.join("/");
-            out.push((rel, path));
-            if out.len() > MAX_FILES {
-                return Err(unread(root, &format!("more than {MAX_FILES} files")));
-            }
-        }
-    }
-    Ok(())
-}
-
 impl PackageDigest for Sha256SortedFiles {
     fn digest(&self, dir: &Path) -> Result<String, DigestError> {
-        let mut files = Vec::new();
-        walk(dir, dir, &mut files)?;
-        files.sort();
-        let mut all = Sha256::new();
-        for (rel, path) in files {
-            let bytes = std::fs::read(&path).map_err(|e| DigestError::Unreadable(format!("{}: {e}", path.display())))?;
-            all.update(rel.as_bytes());
-            all.update([0]);
-            all.update(hex::encode(Sha256::digest(&bytes)).as_bytes());
-            all.update(b"\n");
-        }
-        Ok(format!("sha256:{}", hex::encode(all.finalize())))
+        weftos::init::digest::dir_digest(dir)
+            .map(|hex| format!("sha256:{hex}"))
+            .map_err(|e| DigestError::Unreadable(e.to_string()))
     }
 }
 

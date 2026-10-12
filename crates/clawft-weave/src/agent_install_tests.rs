@@ -125,6 +125,15 @@ fn a_team_installs_its_active_members() {
 }
 
 #[test]
+fn a_catalog_style_sha256_prefixed_pin_installs() {
+    let l = lab();
+    let mut p = l.payload("agent", "chief-of-staff");
+    p["digest"] = json!(format!("sha256:{}", p["digest"].as_str().unwrap()));
+    let out = apply_action(&l.env, p);
+    assert_eq!(out.status, "succeeded", "{}", out.result);
+}
+
+#[test]
 fn a_digest_mismatch_is_refused_before_anything_is_written() {
     let l = lab();
     let mut p = l.payload("agent", "chief-of-staff");

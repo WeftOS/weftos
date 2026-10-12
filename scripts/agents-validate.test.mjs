@@ -7,7 +7,7 @@
  */
 import { test } from "node:test";
 import { strict as assert } from "node:assert";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -67,6 +67,17 @@ test("digest definition matches digest.rs: file lines, evals and dotfiles left o
     assert.equal(packageDigest(root), `sha256:${expect}`);
     put(root, "evals/other.md", "still ignored");
     assert.equal(packageDigest(root), `sha256:${expect}`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("shared digest vectors (also read by digest.rs) hold", () => {
+  const v = JSON.parse(readFileSync(new URL("./lib/package-digest-vectors.json", import.meta.url), "utf8"));
+  const root = mkdtempSync(join(tmpdir(), "agents-digest-vec-"));
+  try {
+    for (const f of v.files) put(root, f.path, f.content);
+    assert.equal(packageDigest(root), v.digest);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

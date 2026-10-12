@@ -87,6 +87,11 @@ struct Checked {
 }
 
 impl AgentInstallPayload {
+    /// The pinned digest without its `sha256:` prefix (the catalog form).
+    fn pin_hex(&self) -> &str {
+        self.digest.strip_prefix("sha256:").unwrap_or(&self.digest)
+    }
+
     fn check(&self) -> Result<Checked, Refusal> {
         if !uuid_ok(&self.request_id) {
             return Err(refuse("request_id is not a UUID"));
@@ -101,8 +106,9 @@ impl AgentInstallPayload {
         if self.version.is_empty() || self.version.len() > 60 || self.version.chars().any(|c| c.is_control()) {
             return Err(refuse("version must be 1-60 printable characters"));
         }
-        if self.digest.len() != 64 || !self.digest.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')) {
-            return Err(refuse("digest must be 64 lowercase hex characters"));
+        let pin = self.pin_hex();
+        if pin.len() != 64 || !pin.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')) {
+            return Err(refuse("digest must be sha256:<64 lowercase hex> (or the bare hex)"));
         }
         if self.hosts.is_empty() || self.hosts.len() > 3 {
             return Err(refuse("hosts must name one to three of claude, grok, codex"));
@@ -248,12 +254,13 @@ fn install(env: &AgentInstallEnv, p: &AgentInstallPayload) -> Result<Value, Refu
 
     let src = env.source.load()?;
     let have = bundle_digest(&src, checked.subject, &p.name).map_err(|e| refuse(format!("this node cannot install {}: {e}", p.name)))?;
-    if have != p.digest {
+    let pin = p.pin_hex();
+    if have != pin {
         return Err(refuse(format!(
             "digest mismatch: this node has {} at {} but the request pins {}; nothing was written",
             p.name,
             &have[..12],
-            &p.digest[..12]
+            &pin[..12]
         )));
     }
 
