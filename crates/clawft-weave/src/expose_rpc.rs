@@ -47,7 +47,7 @@ fn parse_state(s: &str) -> Result<ExposureState, String> {
     }
 }
 
-fn row(reg: &ExposureRegistry, e: &Exposure) -> Value {
+pub(crate) fn row(reg: &ExposureRegistry, e: &Exposure) -> Value {
     let refused = reg.check_serve(&e.id).err().map(|r| r.reason());
     json!({
         "id": e.id, "kind": e.kind, "resource": e.resource, "audience": e.audience.label(),
@@ -74,17 +74,17 @@ pub fn list_json(reg: &ExposureRegistry) -> Value {
 }
 
 #[cfg(all(feature = "placement", unix))]
-async fn flush_withdrawals() {
+pub(crate) async fn flush_withdrawals() {
     if let Some(hub) = crate::infer_wire::state().and_then(|s| s.hub.clone()) {
         hub.flush_withdrawals().await;
     }
 }
 #[cfg(not(all(feature = "placement", unix)))]
-async fn flush_withdrawals() {}
+pub(crate) async fn flush_withdrawals() {}
 
 /// `infer.<role>` goes through the inference operator act.
 #[cfg(all(feature = "placement", unix))]
-fn route_infer(id: &str, state: ExposureState) -> Result<bool, String> {
+pub(crate) fn route_infer(id: &str, state: ExposureState) -> Result<bool, String> {
     let Some(role) = id.strip_prefix("infer.") else { return Ok(false) };
     let Some(st) = crate::infer_wire::state() else {
         return Err("inference placement is off (no inference.json in the runtime directory)".into());
@@ -95,7 +95,7 @@ fn route_infer(id: &str, state: ExposureState) -> Result<bool, String> {
     }
 }
 #[cfg(not(all(feature = "placement", unix)))]
-fn route_infer(_: &str, _: ExposureState) -> Result<bool, String> {
+pub(crate) fn route_infer(_: &str, _: ExposureState) -> Result<bool, String> {
     Ok(false)
 }
 
