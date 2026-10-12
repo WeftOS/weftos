@@ -192,9 +192,16 @@ mod infer_cfg_tests;
 mod infer_hardening_tests;
 pub mod node_facts_rpc;
 /// Operator location labels for the fleet manager (site and room per node).
+pub mod agent_install;
 pub mod dashboard_actions;
 pub mod dashboard_cfg;
 pub mod dashboard_budget;
+/// Package digest enforcement before an installed agent starts (ADR-121 O2).
+pub mod instance_digest;
+/// The node's instance registry, chain records and heartbeat summary (ADR-121 O2).
+pub mod instance_registry;
+/// Pull-style runners feeding the instance registry (ADR-121 O2).
+pub mod instance_sources;
 pub mod dashboard_report;
 pub mod dashboard_rpc;
 pub mod dashboard_token;
@@ -238,6 +245,8 @@ pub(crate) mod dashboard_test_support;
 pub mod fleet_labels;
 /// `fleet.snapshot` and `fleet.location.set` (fleet manager P1).
 pub mod fleet_rpc;
+/// `versions.list`, `versions.tree` and `versions.deps` (ADR-121 O1, read-only).
+pub mod versions_rpc;
 #[cfg(feature = "ecc")]
 pub mod spatial_rpc;
 pub mod protocol;

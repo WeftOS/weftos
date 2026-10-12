@@ -52,7 +52,12 @@ secrets: []
 requires:
   - skill: eikon-specialist
 
-dependencies:
+# eikon depends on this package (it dispatches here); the reverse is a caller
+# relationship, not an install dependency, so it is not listed under
+# `dependencies` (ADR-121: the dependency graph has no cycle).
+dependencies: []
+
+callers:
   - agent: eikon
     relationship: >
       eikon-specialist is only ever spawned by eikon (or a caller following the same

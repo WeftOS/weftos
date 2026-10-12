@@ -38,7 +38,8 @@ Specialized agents for developing, operating, and evolving WeftOS.
 
 | Directory | Purpose |
 |-----------|---------|
-| `weftos/` | 12 specialized agents (this team) |
+| `weftos/<id>/` | 12 original legacy agents, packaged and marked `state: inactive` (never applied; see Package metadata) |
+| `schemas/` | JSON schemas packages refer to (`brain-metadata.schema.json`) |
 | `weftos-ecc/` | ECC Weaver skill (full specification) |
 | `weftos-kernel/` | Kernel development skill |
 | `weftos-mesh/` | Mesh networking skill |
@@ -157,3 +158,38 @@ scripts/weave-init.sh --force
 3. Write "You are a..." instructions with actual tool invocations and code patterns
 4. Add an entry to the table above
 5. Run `scripts/weave-init.sh --force` to install
+
+## Package metadata (ADR-121)
+
+Besides the sidecar fields above, `agents/catalog.json` (generated, never hand-edited) carries
+for every package:
+
+| Field | Source | Meaning |
+|---|---|---|
+| `digest` | computed | `sha256:` + hex of the bundle digest defined in `crates/weftos/src/init/digest.rs` (twin: `scripts/lib/package-digest.mjs`): one `file <path> <sha256>` line per file of the package, sorted by path, with `evals/` and dotfiles left out; a team's digest covers its own files plus a `member <id> <digest>` line per active member package. A symlink is refused. |
+| `version` | computed | the WeftOS release (`Cargo.toml`); a package has no version of its own in `weftos-package.yaml` |
+| `parent` | `parent:` in the sidecar | digest of the package this one derives from, or `null` (a derived package names the digest of its template or base) |
+| `state` | `state:` in the sidecar | `active` (default) or `inactive`. Inactive packages stay listed but are never applied by `weftos init` and may not be an active team member or an active package's dependency. |
+| `dependencies` | `dependencies:` in the sidecar | entries naming exactly one of `agent`, `skill`, `cog`, `model_role`; agents are pinned by the dependency's digest in the catalog; the agent graph has no cycle |
+
+`scripts/build.sh agents-validate` checks these (and `agents-catalog --check` fails on a stale
+digest). A caller-only relationship (for example, who spawns a package) is not a dependency and
+is recorded under `callers:`.
+
+### Each installation has its own brain
+
+Every installation of a package binds a ruvector (RVF) brain; nothing is shared between
+installations unless an entry is deliberately promoted. A package declares it in the sidecar:
+
+```yaml
+brain:
+  schema: weftos.brain-metadata/1   # agents/schemas/brain-metadata.schema.json
+  notes: project                    # or `none`
+```
+
+Every entry an agent writes to the brain carries the metadata in
+[`schemas/brain-metadata.schema.json`](schemas/brain-metadata.schema.json): `kind`, `summary`,
+`why`, `where`, the installation, the writing package's digest and a `scope`
+(`installation` or `promoted`). Agents with `notes: project` (project agents working next to a
+developer) take more care: they leave a note for every decision, saying what was decided, why,
+and where, so the brain can be reused or analysed later.

@@ -13,6 +13,7 @@
 //! # units = ["weftos.service", "weftos-gateway.service"]     # systemd --user units to report
 //! # allow_remote_rotate = true                               # accept a mesh rotate from a controller
 //! # report_workspaces = true                                 # report project checkouts + git state
+//! # kind = "machine"                                          # machine | project-daemon | dev | vm
 //! ```
 //!
 //! Off by default. A section that is present but invalid stops the reporter
@@ -65,6 +66,24 @@ pub struct DashboardConfig {
     /// `report.workspaces` (default on; ADR-108). Counts and refnames only.
     #[serde(default = "yes")]
     pub report_workspaces: bool,
+    /// What kind of node this is, reported as `report.kind` (default `machine`).
+    #[serde(default)]
+    pub kind: NodeKind,
+}
+
+/// `[dashboard] kind`: what the node is, for the dashboard's fleet view.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NodeKind {
+    /// A whole machine running the user daemon (the default).
+    #[default]
+    Machine,
+    /// A per-project daemon.
+    ProjectDaemon,
+    /// A developer workstation or checkout.
+    Dev,
+    /// A virtual machine or container host.
+    Vm,
 }
 
 fn default_interval() -> u64 {
@@ -90,6 +109,7 @@ impl Default for DashboardConfig {
             units: default_units(),
             allow_remote_rotate: true,
             report_workspaces: true,
+            kind: NodeKind::default(),
         }
     }
 }

@@ -120,6 +120,11 @@ pub const READ_ONLY_ALLOW: &[&str] = &[
     // Fleet manager: the gateway forwards this read-only snapshot on a
     // user-level daemon, so it must work outside a project.
     "fleet.snapshot",
+    // ADR-121: read-only queries over the local version index (package names,
+    // versions and digests; no payloads).
+    "versions.list",
+    "versions.tree",
+    "versions.deps",
     // ADR-116: the tailnet router index is a read of machine-level state.
     "route.list",
 ];

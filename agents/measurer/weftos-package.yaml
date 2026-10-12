@@ -17,6 +17,10 @@ required_project_context:
     required: false
     description: name of any shared mutable mode flag (e.g. local vs. live) the transport exposes
 
+brain:
+  schema: weftos.brain-metadata/1   # agents/schemas/brain-metadata.schema.json
+  notes: project                    # leaves decision / why / where notes for later reuse
+
 secrets:
   - name: MEASUREMENT_API_TOKEN
     description: placeholder — credential for whatever read-only API surface the project grants

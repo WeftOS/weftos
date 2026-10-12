@@ -56,6 +56,7 @@ clawft-graphify = { workspace = true, default-features = false, features = ["htt
 clawft-kernel = { workspace = true, features = ["native"] }
 clawft-platform = { workspace = true }
 clawft-rpc = { workspace = true }
+clawft-versions = { workspace = true }
 clawft-types = { workspace = true }
 # ADR-105: `weaver cog ...` project cog sources, licences, install, catalog.
 weftos-cog-sources = { path = "../weftos-cog-sources", features = ["net"] }
@@ -70,6 +71,8 @@ serde_yaml = { workspace = true }
 weftos-leaf-types = { path = "../weftos-leaf-types", features = ["std"] }
 # WEFT-720 / ADR-056 Phase E: BVH spatial CLI + E2E scaffold.
 clawft-bvh = { path = "../clawft-bvh" }
+# ADR-121 O3: the `agent.install` action renders the embedded agent packages (and digests them).
+weftos = { workspace = true }
 hex = "0.4"
 # Phase E: vector scene producer pipeline.
 #
@@ -88,6 +91,7 @@ async-trait = { workspace = true }
 comfy-table = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
+ulid = { workspace = true }
 dirs = { workspace = true }
 tempfile = { workspace = true }
 blake3 = { workspace = true, optional = true }

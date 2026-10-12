@@ -108,6 +108,9 @@ enum Commands {
     /// Knowledge graph extraction, query, and export (graphify).
     Graphify(commands::graphify_cmd::GraphifyArgs),
 
+    /// Version index of first-class objects: list, tree, deps (ADR-121).
+    Versions(commands::versions_cmd::VersionsArgs),
+
     /// Obsidian vault cultivation (frontmatter, links, graph analysis).
     Vault(commands::vault_cmd::VaultArgs),
 
@@ -212,6 +215,7 @@ async fn async_main() -> anyhow::Result<()> {
         Commands::Ecc(args) => commands::ecc_cmd::run(args).await?,
         Commands::Graphify(args) => commands::graphify_cmd::run(args).await?,
         Commands::Vault(args) => commands::vault_cmd::run(args).await?,
+        Commands::Versions(args) => commands::versions_cmd::run(args).await?,
         Commands::Topology(args) => commands::topology_cmd::run(args).await?,
         Commands::Leaf(args) => commands::leaf_cmd::run(args).await?,
         Commands::Benchmark { cmd } => commands::bench_cmd::run(cmd).await?,

@@ -1983,6 +1983,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "clawft-versions"
+version = "0.8.4-rc.6"
+dependencies = [
+ "clawft-cow-memory",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "clawft-voice-aec"
 version = "0.8.4-rc.6"
 dependencies = [
@@ -2129,6 +2140,7 @@ dependencies = [
  "clawft-services",
  "clawft-tools",
  "clawft-types",
+ "clawft-versions",
  "clawft-weave",
  "comfy-table",
  "dashmap",
@@ -2159,8 +2171,10 @@ dependencies = [
  "toml 0.8.23",
  "tracing",
  "tracing-subscriber",
+ "ulid",
  "uuid",
  "weft-licence",
+ "weftos",
  "weftos-cog-repo",
  "weftos-cog-sources",
  "weftos-leaf-scene",

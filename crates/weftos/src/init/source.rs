@@ -76,12 +76,15 @@ impl AgentSource {
     }
 
     /// Top-level package ids (dirs holding `weftos-package.yaml`), sorted.
+    /// A package whose sidecar says `state: inactive` (ADR-121) is never
+    /// listed, so it is never selected, planned or applied.
     pub fn package_ids(&self) -> Vec<String> {
         self.files
-            .keys()
-            .filter_map(|p| p.strip_suffix("/weftos-package.yaml"))
-            .filter(|id| !id.contains('/') && !LEGACY_DIRS.contains(id))
-            .map(str::to_string)
+            .iter()
+            .filter_map(|(p, b)| p.strip_suffix("/weftos-package.yaml").map(|id| (id, b)))
+            .filter(|(id, _)| !id.contains('/') && !LEGACY_DIRS.contains(id))
+            .filter(|(_, manifest)| !is_inactive(manifest))
+            .map(|(id, _)| id.to_string())
             .collect()
     }
 
@@ -96,6 +99,15 @@ impl AgentSource {
             .iter()
             .filter_map(move |(p, b)| p.strip_prefix(dir.as_str()).map(|r| (r, b.as_ref())))
     }
+}
+
+/// True when a package sidecar declares `state: inactive`. An unreadable
+/// sidecar is not inactive: loading it later reports the parse error.
+fn is_inactive(manifest: &[u8]) -> bool {
+    serde_yaml::from_slice::<serde_yaml::Value>(manifest)
+        .ok()
+        .and_then(|v| v.get("state").and_then(|s| s.as_str().map(|s| s == "inactive")))
+        .unwrap_or(false)
 }
 
 fn walk(
@@ -128,4 +140,27 @@ fn git_commit(dir: &Path) -> Option<String> {
         .ok()?;
     let s = String::from_utf8(out.stdout).ok()?.trim().to_string();
     (out.status.success() && !s.is_empty()).then_some(s)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn src(files: &[(&str, &str)]) -> AgentSource {
+        AgentSource {
+            files: files.iter().map(|(p, t)| (p.to_string(), Cow::Owned(t.as_bytes().to_vec()))).collect(),
+            origin: "test".into(),
+            commit: "test".into(),
+        }
+    }
+
+    #[test]
+    fn inactive_packages_are_not_applied() {
+        let s = src(&[
+            ("a/weftos-package.yaml", "name: a\n"),
+            ("b/weftos-package.yaml", "name: b\nstate: active\n"),
+            ("c/weftos-package.yaml", "name: c\nstate: inactive\n"),
+        ]);
+        assert_eq!(s.package_ids(), vec!["a", "b"]);
+    }
 }

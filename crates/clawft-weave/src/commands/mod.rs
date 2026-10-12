@@ -58,6 +58,7 @@ mod update_tests_signature;
 #[cfg(test)]
 mod update_tests_rollback;
 pub mod vault_cmd;
+pub mod versions_cmd;
 #[cfg(all(feature = "ecc", feature = "exochain"))]
 pub mod model_cmd;
 pub mod workload_cmd;

@@ -1,0 +1,26 @@
+{
+  "note": "Shared by scripts/agents-validate.test.mjs and crates/weftos/src/init/digest.rs. Files starting with '.' and evals/ are left out of the digest.",
+  "files": [
+    {
+      "path": "skills/a/SKILL.md",
+      "content": "x"
+    },
+    {
+      "path": "AGENT.md",
+      "content": "hello\n"
+    },
+    {
+      "path": ".DS_Store",
+      "content": "ignored"
+    },
+    {
+      "path": "evals/scenarios.md",
+      "content": "ignored"
+    },
+    {
+      "path": "weftos-package.yaml",
+      "content": "name: p\n"
+    }
+  ],
+  "digest": "sha256:5637d0098e1a0d9ca40e9e00acfad692bb9c1c9c41dd84fd6a0bb1f79d11828b"
+}

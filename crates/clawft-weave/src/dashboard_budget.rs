@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 pub const REPORT_BUDGET_BYTES: usize = 60 * 1024;
 
 /// Sections trimmed, lowest value first.
-const TRIM_ORDER: [&str; 5] = ["workspaces", "observed", "services", "routes", "pair_requests"];
+const TRIM_ORDER: [&str; 6] = ["workspaces", "instances", "observed", "services", "routes", "pair_requests"];
 
 /// Serialized byte length of `report` (what the dashboard measures).
 pub fn report_len(report: &Value) -> usize {
@@ -30,6 +30,17 @@ fn shrink_one(v: &mut Value) -> bool {
     }
 }
 
+/// The part of `section` to shrink: for `instances`, the `recent` list then
+/// `drift`, so the counts survive; any other section is shrunk whole.
+fn target<'a>(section: &'a mut Value, key: &str) -> Option<&'a mut Value> {
+    if key != "instances" {
+        return Some(section);
+    }
+    let live = |v: Option<&Value>| v.and_then(Value::as_array).is_some_and(|a| !a.is_empty());
+    let pick = if live(section.get("recent")) { "recent" } else { "drift" };
+    section.get_mut(pick)
+}
+
 /// Trim `report` until it fits `budget` bytes, section by section in
 /// [`TRIM_ORDER`]. Sets `<section>_truncated` on every section it cut.
 /// Returns true if the report fits afterwards.
@@ -40,7 +51,7 @@ pub fn fit(report: &mut Value, budget: usize) -> bool {
         }
         let mut cut = false;
         while report_len(report) > budget {
-            let Some(section) = report.get_mut(key) else { break };
+            let Some(section) = report.get_mut(key).and_then(|s| target(s, key)) else { break };
             if !shrink_one(section) {
                 break;
             }
@@ -98,6 +109,21 @@ mod tests {
         assert_eq!(r["routes_truncated"], true);
         assert_eq!(r["mesh_identity"], "id");
         assert!(report_len(&r) <= 2 * 1024);
+    }
+
+    #[test]
+    fn instances_shrink_their_lists_and_keep_the_counts() {
+        let mut r = json!({
+            "host": "h", "mesh_identity": "id",
+            "instances": { "total": 40, "counts": { "idle": 40 }, "recent": big(40), "drift": big(2) },
+            "observed": { "a": "x" },
+        });
+        assert!(fit(&mut r, 3 * 1024));
+        assert_eq!(r["instances_truncated"], true);
+        assert_eq!(r["instances"]["total"], 40);
+        assert_eq!(r["instances"]["counts"], json!({ "idle": 40 }));
+        assert!(r["instances"]["recent"].as_array().unwrap().len() < 40);
+        assert_eq!(r["observed"], json!({ "a": "x" }), "observed is cut after instances");
     }
 
     #[test]

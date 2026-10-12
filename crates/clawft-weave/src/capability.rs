@@ -222,6 +222,10 @@ pub fn required_capability(method: &str) -> Capability {
         // Fleet manager: one read-only document composed from sources the
         // daemon already holds; contacts no peer and no device.
         | "fleet.snapshot"
+        // ADR-121: read-only queries over the local version index.
+        | "versions.list"
+        | "versions.tree"
+        | "versions.deps"
         // Reporter state without token material; a `node` that is another
         // peer needs Admin inside the handler (it contacts that peer).
         | "dashboard.status"
@@ -232,6 +236,9 @@ pub fn required_capability(method: &str) -> Capability {
 
         // An unclassified `dashboard.*` verb is a mutation, never anonymous Read.
         m if m.starts_with("dashboard.") && m != "dashboard.status" && m != "dashboard.actions" => Capability::Admin,
+
+        // An unclassified `versions.*` verb is refused as a mutation, never anonymous Read.
+        m if m.starts_with("versions.") => Capability::Admin,
 
         // An unclassified `fleet.*` verb is a mutation, never anonymous Read.
         m if m.starts_with("fleet.") => Capability::Admin,

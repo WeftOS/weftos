@@ -17,6 +17,10 @@ required_project_context:
     required: false
     description: gitignored/confidential paths this agent must never commit (client assets, recordings, restricted corpora)
 
+brain:
+  schema: weftos.brain-metadata/1   # agents/schemas/brain-metadata.schema.json
+  notes: project                    # leaves decision / why / where notes for later reuse
+
 secrets: []
 
 requires:

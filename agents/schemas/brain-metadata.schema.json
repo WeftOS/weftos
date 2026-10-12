@@ -1,0 +1,36 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "weftos.brain-metadata/1",
+  "title": "WeftOS installation brain: metadata on one entry",
+  "description": "Every entry an agent writes to its installation's ruvector (RVF) brain carries this metadata (ADR-121 decision 9). Nothing carries between projects unless `scope` is deliberately changed to `promoted`.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "kind", "summary", "why", "where", "installation", "package", "author", "recorded_at", "scope"],
+  "properties": {
+    "schema": { "const": "weftos.brain-metadata/1" },
+    "kind": {
+      "enum": ["decision", "finding", "note", "handoff", "learning"],
+      "description": "What the entry is. Project agents working next to a developer write decisions and handoffs."
+    },
+    "summary": { "type": "string", "minLength": 1, "maxLength": 500, "description": "What was decided or found, in one or two sentences." },
+    "why": { "type": "string", "minLength": 1, "maxLength": 1000, "description": "The reason, so a later reader can tell whether it still holds." },
+    "where": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1, "maxLength": 512 },
+      "description": "Where it applies or can be checked: repository paths, card ids, weftos:// names. Never an absolute machine path."
+    },
+    "installation": { "type": "string", "minLength": 1, "description": "The installation the brain is bound to (a weftos://.../installations/<id> name or its id)." },
+    "package": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "description": "Digest of the agent package that wrote the entry." },
+    "author": { "type": "string", "minLength": 1, "description": "The package id of the writing agent." },
+    "instance": { "type": "string", "description": "The weftos://.../instances/<ULID> of the writing run, when there is one." },
+    "card": { "type": "string", "description": "The board card the work belongs to, when there is one." },
+    "recorded_at": { "type": "integer", "minimum": 0, "description": "Unix seconds." },
+    "supersedes": { "type": "array", "items": { "type": "string" }, "description": "Ids of earlier entries this one replaces." },
+    "confidence": { "enum": ["low", "medium", "high"] },
+    "scope": {
+      "enum": ["installation", "promoted"],
+      "description": "`installation` stays in this installation's brain. `promoted` was deliberately offered for reuse by another project."
+    }
+  }
+}
