@@ -52,7 +52,7 @@ branch `feat/os-redesign` and one PR.
   tab). Board credentials and the node token / new node controls move to Admin.
 
 ### Servers
-- Today they show little and allow nothing; `photo-gallery/shasta` appears as its own server
+- Today they show little and allow nothing; `<machine>/<project>` (e.g. a project daemon) appears as its own server
   with "No host facts synced" and Unknown fields. A project daemon on a machine is not a
   server; a local development copy or an agents' VM is not a server either.
 - Fix the host/node model so machines are servers, and project daemons, dev copies and VMs
