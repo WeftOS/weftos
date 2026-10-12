@@ -11,6 +11,8 @@ pub mod ide;
 pub mod middleware;
 pub mod provider;
 pub mod server;
+/// Stateless MCP (2026-07-28) helpers shared by every transport.
+pub mod stateless;
 /// Session capability tokens + bind policy (ADR-075 G5 / WEFT-697).
 pub mod session_cap;
 /// HTTP/SSE MCP listen (ADR-075 G4 / WEFT-696). Requires `api` feature (axum).

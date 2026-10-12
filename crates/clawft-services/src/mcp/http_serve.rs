@@ -30,6 +30,7 @@ use tokio::sync::Mutex;
 use tracing::{info, warn};
 
 use super::server::McpServerShell;
+use super::stateless;
 use super::session_cap::{
     ClientLabel, SessionCapability, SessionTokenStore, extract_bearer, validate_listen_policy,
 };
@@ -239,9 +240,23 @@ async fn mcp_post_handler(
             }
         }
 
+    // Stateless (2026-07-28) requests must mirror version/method/name in headers.
+    if let Some(err) = stateless::check_http_request(&msg, |n| {
+        headers.get(n).and_then(|v| v.to_str().ok())
+    }) {
+        return (StatusCode::BAD_REQUEST, Json(err)).into_response();
+    }
+
     let mut shell = state.shell.lock().await;
     match shell.handle_message(msg, Some(&cap.scopes)).await {
-        Some(resp) => (StatusCode::OK, Json(resp)).into_response(),
+        Some(resp) => {
+            let status = if stateless::is_modern_protocol_error(&resp) {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::OK
+            };
+            (status, Json(resp)).into_response()
+        }
         None => {
             // Notification — accepted, no body required.
             StatusCode::ACCEPTED.into_response()
@@ -489,5 +504,107 @@ mod tests {
             .collect();
         assert!(names.contains(&"read_file"));
         assert!(!names.contains(&"agent_spawn"));
+    }
+
+    async fn post(
+        state: &Arc<HttpMcpState>,
+        headers: &[(&str, &str)],
+        body: &str,
+    ) -> (StatusCode, Value) {
+        let mut b = Request::builder()
+            .method("POST")
+            .uri("/mcp")
+            .header("authorization", "Bearer sekret");
+        for (k, v) in headers {
+            b = b.header(*k, *v);
+        }
+        let resp = mcp_http_router(Arc::clone(state))
+            .oneshot(b.body(Body::from(body.to_string())).unwrap())
+            .await
+            .unwrap();
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let v = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+        (status, v)
+    }
+
+    const MODERN_LIST: &str = r#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}"#;
+    const MODERN_HDRS: [(&str, &str); 2] =
+        [("mcp-protocol-version", "2026-07-28"), ("mcp-method", "tools/list")];
+
+    #[tokio::test]
+    async fn stateless_http_needs_no_initialize() {
+        let state = test_state(true, Some("sekret"));
+        let (status, v) = post(&state, &MODERN_HDRS, MODERN_LIST).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(v["result"]["resultType"], "complete");
+        assert!(v["result"]["tools"].as_array().unwrap().len() >= 2);
+        assert!(!state.shell.lock().await.is_initialized());
+    }
+
+    #[tokio::test]
+    async fn stateless_http_discover_and_legacy_coexist() {
+        let state = test_state(true, Some("sekret"));
+        let discover = r#"{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}"#;
+        let hdrs = [("mcp-protocol-version", "2026-07-28"), ("mcp-method", "server/discover")];
+        let (status, v) = post(&state, &hdrs, discover).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(v["result"]["supportedVersions"][0], "2026-07-28");
+
+        // A legacy client on the same listener still handshakes and lists.
+        let init = r#"{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#;
+        let (status, v) = post(&state, &[], init).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(v["result"]["protocolVersion"], "2025-06-18");
+        let legacy = r#"{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{}}"#;
+        let (_, v) = post(&state, &[], legacy).await;
+        assert!(v["result"].get("resultType").is_none());
+
+        // And the stateless client is unaffected by the legacy handshake.
+        let (status, v) = post(&state, &MODERN_HDRS, MODERN_LIST).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(v["result"]["resultType"], "complete");
+    }
+
+    #[tokio::test]
+    async fn stateless_http_refuses_header_mismatch_and_missing() {
+        let state = test_state(true, Some("sekret"));
+        let cases: [&[(&str, &str)]; 3] = [
+            &[],
+            &[("mcp-protocol-version", "2026-07-28"), ("mcp-method", "tools/call")],
+            &[("mcp-protocol-version", "2025-06-18"), ("mcp-method", "tools/list")],
+        ];
+        for hdrs in cases {
+            let (status, v) = post(&state, hdrs, MODERN_LIST).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+            assert_eq!(v["error"]["code"], stateless::HEADER_MISMATCH);
+        }
+        // tools/call requires a matching Mcp-Name.
+        let call = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"read_file","_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}"#;
+        let base = [("mcp-protocol-version", "2026-07-28"), ("mcp-method", "tools/call")];
+        let (status, _) = post(&state, &base, call).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let mut ok = base.to_vec();
+        ok.push(("mcp-name", "wrong"));
+        let (status, _) = post(&state, &ok, call).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        ok.pop();
+        ok.push(("mcp-name", "read_file"));
+        let (status, v) = post(&state, &ok, call).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(v["result"]["resultType"], "complete");
+    }
+
+    #[tokio::test]
+    async fn stateless_http_unsupported_version_is_400() {
+        let state = test_state(true, Some("sekret"));
+        let body = r#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"1900-01-01"}}}"#;
+        let hdrs = [("mcp-protocol-version", "1900-01-01"), ("mcp-method", "tools/list")];
+        let (status, v) = post(&state, &hdrs, body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(v["error"]["code"], stateless::UNSUPPORTED_PROTOCOL_VERSION);
+        assert_eq!(v["error"]["data"]["supported"][0], "2026-07-28");
     }
 }

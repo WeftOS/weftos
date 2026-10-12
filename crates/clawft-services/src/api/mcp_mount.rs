@@ -27,6 +27,7 @@ use super::ApiState;
 use super::auth::TokenMeta;
 use crate::mcp::server::McpServerShell;
 use crate::mcp::session_cap::SessionScopes;
+use crate::mcp::stateless;
 
 /// Largest accepted request body.
 const MAX_BODY: usize = 1 << 20;
@@ -89,6 +90,7 @@ async fn mcp_post(State(state): State<ApiState>, request: axum::extract::Request
         return StatusCode::NOT_FOUND.into_response();
     };
     let label = request.extensions().get::<TokenMeta>().map(|m| m.label.clone());
+    let headers = request.headers().clone();
     let body = match axum::body::to_bytes(request.into_body(), MAX_BODY).await {
         Ok(b) => b,
         Err(_) => return StatusCode::PAYLOAD_TOO_LARGE.into_response(),
@@ -106,6 +108,12 @@ async fn mcp_post(State(state): State<ApiState>, request: axum::extract::Request
                 .into_response();
         }
     };
+    // Stateless (2026-07-28) requests must mirror version/method/name in headers.
+    if let Some(err) = stateless::check_http_request(&msg, |n| {
+        headers.get(n).and_then(|v| v.to_str().ok())
+    }) {
+        return (StatusCode::BAD_REQUEST, Json(err)).into_response();
+    }
     // Wait for our turn, but not forever behind a slow tool.
     let Ok(mut shell) = tokio::time::timeout(mount.queue_timeout, mount.shell.lock()).await else {
         return (
@@ -126,7 +134,14 @@ async fn mcp_post(State(state): State<ApiState>, request: axum::extract::Request
     let scopes = SessionScopes::owner();
     let call = shell.handle_message(msg, Some(&scopes));
     match tokio::time::timeout(mount.call_timeout, call).await {
-        Ok(Some(resp)) => (StatusCode::OK, Json(resp)).into_response(),
+        Ok(Some(resp)) => {
+            let status = if stateless::is_modern_protocol_error(&resp) {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::OK
+            };
+            (status, Json(resp)).into_response()
+        }
         Ok(None) => StatusCode::ACCEPTED.into_response(),
         Err(_) => (
             StatusCode::OK,
