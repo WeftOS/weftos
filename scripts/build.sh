@@ -1346,6 +1346,12 @@ cmd_clippy() {
     timer_end
 }
 
+# Workspace clippy plus the feature-gated lanes a bare --workspace run skips.
+cmd_clippy_gate() {
+    cargo clippy --keep-going --all-targets --workspace -- -D warnings || return $?
+    cargo clippy --all-targets -p clawft-voice-onnx --features onnx -- -D warnings
+}
+
 cmd_bench() {
     local crate="$1" name="$2"
     if [ -z "$crate" ] || [ -z "$name" ]; then
@@ -2548,8 +2554,10 @@ cmd_gate() {
     #     --all-targets lints tests, examples and benches too, so test code
     #     stays clean. Debt cleared in cards 8dfd7ed5 / 0f92a3ca and the
     #     all-targets sweep; this keeps it from returning.
+    #     Feature-gated lanes (clawft-voice-onnx --features onnx) are not
+    #     reached by a bare --workspace run, so they are linted here too.
     run_gate_check 22 "workspace clippy, all targets (warnings as errors)" \
-        cargo clippy --keep-going --all-targets --workspace -- -D warnings
+        cmd_clippy_gate
 
     # 23. Windows compile check of the cargo-dist apps (mingw cross-check). Two release
     #     candidates failed on Windows after a green gate; this closes that gap.
@@ -2621,7 +2629,7 @@ ${BOLD}Commands:${NC}
   native-debug    Build native CLI binary (debug, fast)
   cos             Build the chief-of-staff agent host (weftos-cos, debug; ADR-118 C3).
                   --features mic adds push-to-talk capture, --features mic,onnx real STT.
-                  Run: target/debug/weftos-cos serve  (also `weft cos serve`)
+                  Run: target/debug/weftos-cos serve  (also \`weft cos serve\`)
   install         Build weft + weaver and install both to ~/.cargo/bin
                   (atomic replace, ad-hoc re-sign on macOS, fresh git build
                   stamp, prints versions). Release by default; --debug for
@@ -2702,7 +2710,7 @@ ${BOLD}Commands:${NC}
   check-tests     Compile (not run) the tests of the named packages: check-tests <pkg>…
   check-daemon-no-mesh-testing  Fail if the daemon's dependency graph enables clawft-mesh-local's testing feature
   check-mesh-no-owned-state
-                  Fail if `cargo tree -p clawft-mesh-service -e normal,features` contains
+                  Fail if \`cargo tree -p clawft-mesh-service -e normal,features\` contains
                   exo-resource-tree, rvf-runtime, cognitum-gate-tilezero, clawft-weave or
                   the kernel exochain/cluster/tilezero/ecc features (P3-S "must not own")
   check           Run cargo check --workspace (fast compile check), then
@@ -2712,6 +2720,7 @@ ${BOLD}Commands:${NC}
                   into the kernel default feature set). Also asserts that
                   --features ecc fails on that target (WEFT-504). CI hard gate
                   twin: pr-gates.yml job wasm-kernel-no-mesh.
+  clippy-onnx     Run clippy (warnings as errors) on clawft-voice-onnx with --features onnx
   clippy          Run clippy with warnings-as-errors
   audit           Run cargo audit with residual ignore-list (deny warnings).
                   Requires: cargo install --locked cargo-audit
@@ -2777,7 +2786,7 @@ ${BOLD}Commands:${NC}
                   [workspace.metadata.dist] cargo-dist-version). Multi-minute
                   LTO build — not part of the default gate.
   bench <crate> <name>
-                  Run a `[[bench]] harness = false` target (e.g.
+                  Run a \`[[bench]] harness = false\` target (e.g.
                   scripts/build.sh bench clawft-kernel vector_backend_bench
                   --features diskann). Prints the bench's own report
                   in full (not truncated like other commands' output).
@@ -3048,6 +3057,7 @@ main() {
         check-mesh-no-owned-state) cmd_check_mesh_no_owned_state ;;
         check-daemon-no-mesh-testing) cmd_check_daemon_no_mesh_testing ;;
         clippy)       cmd_clippy ;;
+        clippy-onnx)  cargo clippy --all-targets -p clawft-voice-onnx --features onnx -- -D warnings ;;
         audit)        cmd_audit ;;
         npm-audit)    cmd_npm_audit ;;
         agents-validate)    cmd_agents_validate ;;

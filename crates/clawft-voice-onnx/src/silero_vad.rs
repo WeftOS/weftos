@@ -50,7 +50,7 @@ const WINDOW_SAMPLES: usize = 512;
 const CONTEXT_SAMPLES: usize = 64;
 /// LSTM state: 2 × batch × 128.
 #[cfg(feature = "onnx")]
-const STATE_LEN: usize = 2 * 1 * 128;
+const STATE_LEN: usize = 2 * 128;
 #[cfg(feature = "onnx")]
 const STATE_SHAPE: [i64; 3] = [2, 1, 128];
 /// Target sample rate for the staged model.
@@ -556,12 +556,11 @@ mod tests {
         v.reset();
 
         // Near-silence should stay low after warm-up.
-        let mut silence_last = 1.0f32;
         let mut silence_max = 0.0f32;
         for i in 0..40 {
-            silence_last = v.score(&[0i16; 160], SR);
+            let silence = v.score(&[0i16; 160], SR);
             if i >= 4 {
-                silence_max = silence_max.max(silence_last);
+                silence_max = silence_max.max(silence);
             }
         }
         v.reset();

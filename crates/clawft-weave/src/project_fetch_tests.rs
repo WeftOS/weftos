@@ -152,7 +152,7 @@ pub(crate) async fn rig() -> Rig {
     // Archived paths are kept out of git on the primary (D-C); git content
     // travels as git, whatever the archive list says.
     w(&root.join(".gitignore"), "data/\n.env\n.weftos/\nescape\nmodels/\n");
-    w(&root.join("data/set.csv"), "1,2,3\n");
+    w(&root.join("data/set.csv"), "csv-sentinel-q7x\n");
     w(&root.join(".env"), "TOKEN=nope\n");
     w(&root.join(".weftos/project.toml"), "id = \"x\"\n");
     w(&root.join(".weftos/archive.toml"), "[[archive]]\npath = \"models\"\nreason = \"weights\"\n");
@@ -241,7 +241,7 @@ async fn a_paired_member_clones_every_repository_and_the_non_git_content_then_pu
     // The sibling layout: `tools` next to the root checkout.
     assert!(dest.parent().unwrap().join("tools/run.sh").exists());
     // Non-git content arrived; what must stay home stayed home.
-    assert_eq!(std::fs::read_to_string(dest.join("data/set.csv")).unwrap(), "1,2,3\n");
+    assert_eq!(std::fs::read_to_string(dest.join("data/set.csv")).unwrap(), "csv-sentinel-q7x\n");
     assert!(rep.bytes > 0);
     assert!(!dest.join(".env").exists(), ".env never leaves the primary");
     assert!(std::fs::symlink_metadata(dest.join("escape")).is_err(), "a symlink out of the project is never sent");
@@ -258,7 +258,7 @@ async fn a_paired_member_clones_every_repository_and_the_non_git_content_then_pu
     assert_eq!(member.len(), 1);
     assert_eq!((member[0]["ok"].clone(), member[0]["repos"].clone()), (json!(true), json!(2)));
     let all = serde_json::to_string(&r.host_chain.tail(r.host_chain.len())).unwrap();
-    assert!(!all.contains("TOKEN=nope") && !all.contains("1,2,3"));
+    assert!(!all.contains("TOKEN=nope") && !all.contains("csv-sentinel-q7x"));
 
     // Incremental: a new commit on the primary travels as a bundle that
     // excludes what the member has; up to date means nothing is sent.
