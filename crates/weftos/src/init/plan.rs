@@ -7,7 +7,9 @@ use std::path::{Component, Path, PathBuf};
 
 use super::InitError;
 use super::apply::{extract_block, read_text};
-use super::lock::{LOCK_PATH, Lock, LockAgent, LockFile, RENDERER, SCHEMA, sha256_hex};
+use super::lock::{LOCK_PATH, Lock, sha256_hex};
+use super::next_lock::next_lock;
+use super::birth::detect;
 use super::package::{Package, team_members};
 use super::render::{Host, Layout, Merge, Rendered, project_context_template, render_host};
 use super::source::AgentSource;
@@ -26,6 +28,10 @@ pub struct AgentInitOptions {
     pub from: Option<PathBuf>,
     pub team: Option<String>,
     pub agents: Vec<String>,
+    /// Uninstall: packages to take out of the lock (selection is skipped).
+    pub remove: Vec<String>,
+    /// Uninstall: team records to drop from the lock.
+    pub drop_teams: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -96,6 +102,8 @@ pub struct Plan {
     pub items: Vec<PlanItem>,
     pub lock_json: String,
     pub lock_changed: bool,
+    /// The lock lists nothing any more: apply deletes the lock file.
+    pub lock_remove: bool,
 }
 
 impl Plan {
@@ -105,7 +113,7 @@ impl Plan {
 
     /// True when apply would write nothing.
     pub fn is_noop(&self) -> bool {
-        !self.lock_changed && !self.items.iter().any(|i| i.action.writes())
+        !self.lock_changed && !self.lock_remove && !self.items.iter().any(|i| i.action.writes())
     }
 }
 
@@ -209,7 +217,12 @@ fn on_disk(root: &Path, r: &Rendered) -> Result<Option<Vec<u8>>, InitError> {
 pub fn plan(opts: &AgentInitOptions) -> Result<Plan, InitError> {
     let src = load_source(opts)?;
     let mut warnings = Vec::new();
-    let (base, team) = select(&src, opts, &mut warnings)?;
+    let removing = !opts.remove.is_empty() || !opts.drop_teams.is_empty();
+    let (base, team) = if removing {
+        (Vec::new(), None)
+    } else {
+        select(&src, opts, &mut warnings)?
+    };
     let prior = Lock::read(&opts.root)?;
     let prior_lock = prior.clone().unwrap_or_else(Lock::empty);
     let prior_files = prior_lock.files_by_path();
@@ -229,6 +242,7 @@ pub fn plan(opts: &AgentInitOptions) -> Result<Plan, InitError> {
                 ids.push(id);
             }
         }
+        ids.retain(|id| !opts.remove.contains(id));
         ids.sort();
         let mut pkgs = Vec::new();
         for id in &ids {
@@ -261,8 +275,13 @@ pub fn plan(opts: &AgentInitOptions) -> Result<Plan, InitError> {
         let lock_hash = prior_files
             .get(r.path.as_str())
             .map(|(_, f)| f.sha256.as_str());
+        // A path another package's lock entry owns is not ours to take over.
+        let foreign = prior_files
+            .get(r.path.as_str())
+            .is_some_and(|(owner, _)| *owner != r.owner);
         let action = match (&disk, lock_hash) {
             (None, _) => Action::Create,
+            (Some(d), _) if foreign && *d != r.bytes => Action::Unmanaged,
             (Some(d), _) if *d == r.bytes => Action::Unchanged,
             (Some(d), Some(h)) if sha256_hex(d) == h => Action::Update,
             (Some(_), Some(_)) if opts.force => Action::Overwrite,
@@ -311,9 +330,31 @@ pub fn plan(opts: &AgentInitOptions) -> Result<Plan, InitError> {
         });
     }
 
-    if !opts.global {
+    let context_entry = prior_lock.context.clone();
+    if removing {
+        // Remove the seeded context only while it is still exactly what was seeded.
+        if let Some(c) = &context_entry
+            && let Some(disk) = read_text(&opts.root.join(&c.path))?
+            && sha256_hex(disk.as_bytes()) == c.sha256
+            && selected.is_empty()
+        {
+            safe_rel(&c.path)?;
+            items.push(PlanItem {
+                action: Action::Delete,
+                path: c.path.clone(),
+                host: None,
+                owner: "project".into(),
+                merge: Merge::File,
+                bytes: Vec::new(),
+            });
+        }
+    } else if !opts.global {
         let exists = opts.root.join(CONTEXT_PATH).exists();
-        let template = project_context_template(selected.iter().filter_map(|id| cache.get(id)));
+        let detected = detect(&opts.root);
+        let template = project_context_template(
+            selected.iter().filter_map(|id| cache.get(id)),
+            &detected,
+        );
         items.push(PlanItem {
             action: if exists { Action::Keep } else { Action::Seed },
             path: CONTEXT_PATH.into(),
@@ -328,17 +369,11 @@ pub fn plan(opts: &AgentInitOptions) -> Result<Plan, InitError> {
         });
     }
 
-    let lock = next_lock(
-        opts,
-        &src,
-        team.clone(),
-        prior.as_ref(),
-        &prior_lock,
-        &items,
-    );
+    let lock = next_lock(opts, &src, team.clone(), &prior_lock, &items)?;
     let lock_json = lock.to_json();
     let current = read_text(&opts.root.join(LOCK_PATH))?;
-    let lock_changed = current.as_deref() != Some(lock_json.as_str());
+    let lock_remove = lock.is_empty() && current.is_some();
+    let lock_changed = !lock.is_empty() && current.as_deref() != Some(lock_json.as_str());
 
     Ok(Plan {
         root: opts.root.clone(),
@@ -350,64 +385,8 @@ pub fn plan(opts: &AgentInitOptions) -> Result<Plan, InitError> {
         items,
         lock_json,
         lock_changed,
+        lock_remove,
     })
-}
-
-/// The lock after this run: entries for hosts not in the run are kept; a
-/// drifted file keeps its old hash so it stays reported as drifted.
-fn next_lock(
-    opts: &AgentInitOptions,
-    src: &AgentSource,
-    team: Option<String>,
-    prior: Option<&Lock>,
-    prior_lock: &Lock,
-    items: &[PlanItem],
-) -> Lock {
-    let mut agents: BTreeMap<String, LockAgent> = BTreeMap::new();
-    for a in &prior_lock.agents {
-        let mut kept = a.clone();
-        kept.files.retain(|f| !opts.hosts.contains(&f.host));
-        agents.insert(a.id.clone(), kept);
-    }
-    let prior_files = prior_lock.files_by_path();
-    for it in items {
-        let Some(host) = it.host else { continue };
-        let entry = match it.action {
-            Action::Create | Action::Update | Action::Unchanged | Action::Overwrite => {
-                Some(sha256_hex(&it.bytes))
-            }
-            Action::Drifted => prior_files
-                .get(it.path.as_str())
-                .map(|(_, f)| f.sha256.clone()),
-            _ => None,
-        };
-        let Some(sha256) = entry else { continue };
-        let agent = agents.entry(it.owner.clone()).or_insert_with(|| LockAgent {
-            id: it.owner.clone(),
-            ..Default::default()
-        });
-        if it.action != Action::Drifted {
-            agent.weftos_version = crate::VERSION.to_string();
-            agent.commit = src.commit.clone();
-        }
-        agent.files.push(LockFile {
-            path: it.path.clone(),
-            host,
-            sha256,
-            merge: it.merge,
-        });
-    }
-    let mut lock = Lock {
-        schema: SCHEMA,
-        renderer: RENDERER.into(),
-        weftos_version: crate::VERSION.to_string(),
-        commit: src.commit.clone(),
-        source: src.origin.clone(),
-        team: team.or_else(|| prior.and_then(|p| p.team.clone())),
-        agents: agents.into_values().collect(),
-    };
-    lock.normalize();
-    lock
 }
 
 #[cfg(test)]

@@ -21,10 +21,9 @@ use async_trait::async_trait;
 use clawft_kernel::chain::ChainManager;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use weftos::init::digest::{Subject, bundle_digest};
-use weftos::init::plan::{Action as PlanAction, AgentInitOptions, plan};
-use weftos::init::source::AgentSource;
-use weftos::init::{apply::apply, Host};
+use weftos::init::Host;
+use weftos::init::digest::Subject;
+use weftos::init::team::{ApplyRequest, apply_request};
 
 use crate::dashboard_actions::{Action, ActionHandler, ActionOutcome};
 
@@ -34,8 +33,6 @@ pub const KIND: &str = "agent.install";
 pub const CHAIN_SOURCE: &str = "agent.install";
 pub const CHAIN_INSTALLED: &str = "agent.install";
 pub const CHAIN_REFUSED: &str = "agent.install.refused";
-/// Most drifted paths named in a refusal.
-const MAX_LISTED: usize = 10;
 
 /// The payload as the dashboard queues it (`decide_agent_install`). Field names
 /// carry no `key`, `token`, `secret` or `password`: the dashboard refuses those.
@@ -143,13 +140,6 @@ impl PackageSource {
     pub(crate) fn clone_for_test(&self) -> Self {
         self.clone()
     }
-
-    fn load(&self) -> Result<AgentSource, Refusal> {
-        match self {
-            PackageSource::Embedded => Ok(AgentSource::embedded()),
-            PackageSource::Dir(d) => AgentSource::from_dir(d).map_err(|e| fail(format!("cannot read the agent packages: {e}"))),
-        }
-    }
 }
 
 /// Everything the handler needs from the machine, injected so tests never
@@ -252,50 +242,22 @@ fn install(env: &AgentInstallEnv, p: &AgentInstallPayload) -> Result<Value, Refu
         return Err(refuse("the project's checkout is not on disk"));
     }
 
-    let src = env.source.load()?;
-    let have = bundle_digest(&src, checked.subject, &p.name).map_err(|e| refuse(format!("this node cannot install {}: {e}", p.name)))?;
-    let pin = p.pin_hex();
-    if have != pin {
-        return Err(refuse(format!(
-            "digest mismatch: this node has {} at {} but the request pins {}; nothing was written",
-            p.name,
-            &have[..12],
-            &pin[..12]
-        )));
-    }
-
-    let mut opts = AgentInitOptions { root: root.clone(), hosts: checked.hosts.clone(), ..Default::default() };
-    match checked.subject {
-        Subject::Agent => opts.agents = vec![p.name.clone()],
-        Subject::Team => opts.team = Some(p.name.clone()),
-    }
-    // Plan and apply read the source themselves; a Dir source goes through `from`.
-    if let PackageSource::Dir(d) = &env.source {
-        opts.from = Some(d.clone());
-    }
-    let first = plan(&opts).map_err(|e| fail(format!("planning the install failed: {e}")))?;
-    let held: Vec<String> = first
-        .items
-        .iter()
-        .filter(|i| matches!(i.action, PlanAction::Drifted | PlanAction::Unmanaged))
-        .map(|i| i.path.clone())
-        .collect();
-    if !held.is_empty() {
-        let shown: Vec<&str> = held.iter().take(MAX_LISTED).map(String::as_str).collect();
-        return Err(refuse(format!(
-            "{} file(s) in the project were changed locally or are not WeftOS's; nothing was written: {}",
-            held.len(),
-            shown.join(", ")
-        )));
-    }
-    let already = first.is_noop();
-    let touched = if already { 0 } else { apply(&first).map_err(|e| fail(format!("writing the install failed: {e}")))? };
-
-    // Verify by re-planning: the disk must now be exactly the render.
-    let after = plan(&opts).map_err(|e| fail(format!("verifying the install failed: {e}")))?;
-    if !after.is_noop() || after.items.iter().any(|i| matches!(i.action, PlanAction::Drifted | PlanAction::Unmanaged)) {
-        return Err(fail("the installed files do not match the render; the install is not trusted"));
-    }
+    // One code path with `weftos team apply`: digest pin, collision refusal,
+    // write, verify by re-plan.
+    let req = ApplyRequest {
+        root: root.clone(),
+        subject: checked.subject,
+        name: p.name.clone(),
+        hosts: checked.hosts.clone(),
+        from: match &env.source {
+            PackageSource::Dir(d) => Some(d.clone()),
+            PackageSource::Embedded => None,
+        },
+        pin: Some(p.pin_hex().to_string()),
+        dry_run: false,
+    };
+    let applied = apply_request(&req).map_err(|e| Refusal { refused: e.refused, message: e.message })?;
+    let (first, touched, already) = (applied.plan, applied.touched, applied.already);
 
     let hosts: Vec<&str> = checked.hosts.iter().map(|h| h.as_str()).collect();
     env.record(

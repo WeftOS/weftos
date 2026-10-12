@@ -239,6 +239,49 @@ pub fn team_members(src: &AgentSource, team: &str) -> Result<Option<TeamMembers>
     Ok(Some(members))
 }
 
+/// One member slot of a team.yaml.
+pub struct TeamSlot {
+    pub agent: String,
+    pub position: Option<u32>,
+    pub active: bool,
+}
+
+/// The `members:` slots of a team.yaml in position order (pinned
+/// `agent: id@ver` resolves to the id). `None` when the team does not exist.
+pub fn team_slots(src: &AgentSource, team: &str) -> Result<Option<Vec<TeamSlot>>, InitError> {
+    let path = format!("teams/{team}/team.yaml");
+    let Some(bytes) = src.get(&path) else {
+        return Ok(None);
+    };
+    let v: Value =
+        serde_yaml::from_slice(bytes).map_err(|e| InitError::Other(format!("{path}: {e}")))?;
+    let mut slots = Vec::new();
+    if let Some(Value::Sequence(items)) = v.get("members") {
+        for item in items {
+            let id = ["agent", "id", "package"]
+                .iter()
+                .find_map(|k| item.get(*k).and_then(Value::as_str))
+                .or_else(|| item.as_str())
+                .map(|s| s.split('@').next().unwrap_or_default().to_string());
+            let Some(agent) = id else { continue };
+            slots.push(TeamSlot {
+                agent,
+                position: item.get("position").and_then(Value::as_u64).map(|p| p as u32),
+                active: item.get("active").and_then(Value::as_bool).unwrap_or(true),
+            });
+        }
+    }
+    slots.sort_by_key(|s| s.position.unwrap_or(u32::MAX));
+    Ok(Some(slots))
+}
+
+/// Manifest `version` of package `id` (None when the manifest has none).
+pub fn package_version(src: &AgentSource, id: &str) -> Option<String> {
+    let text = std::str::from_utf8(src.get(&format!("{id}/weftos-package.yaml"))?).ok()?;
+    let v: Value = serde_yaml::from_str(text).ok()?;
+    str_field(&v, "version")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

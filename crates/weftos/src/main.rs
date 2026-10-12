@@ -1,6 +1,8 @@
 //! WeftOS daemon -- boots the kernel in any project directory.
 
 use clap::Parser;
+
+mod team_cmd;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -45,6 +47,11 @@ enum Cli {
         /// Install an individual agent package (repeatable)
         #[arg(long = "agent", value_name = "ID")]
         agents: Vec<String>,
+    },
+    /// Apply, inspect and remove agent teams in a project
+    Team {
+        #[command(subcommand)]
+        cmd: team_cmd::TeamCmd,
     },
     /// Boot the WeftOS kernel
     Boot {
@@ -112,6 +119,7 @@ async fn main() {
                     from,
                     team,
                     agents,
+                    ..Default::default()
                 };
                 std::process::exit(run_agent_init(&opts));
             }
@@ -145,6 +153,7 @@ async fn main() {
                 }
             }
         }
+        Cli::Team { cmd } => std::process::exit(team_cmd::run(cmd)),
         Cli::Boot { path } => {
             if !weftos::is_initialized(&path) {
                 eprintln!("WeftOS not initialized. Run: weftos init");

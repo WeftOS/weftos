@@ -90,7 +90,14 @@ pub fn apply(plan: &Plan) -> Result<usize, InitError> {
             }
             (Action::Delete, Merge::Block) => {
                 if let Some(text) = read_text(&path)? {
-                    fs::write(&path, remove_block(&text))?;
+                    let rest = remove_block(&text);
+                    if rest.trim().is_empty() {
+                        // The block was all the file held: WeftOS created it.
+                        fs::remove_file(&path)?;
+                        prune_empty_parents(root, &path);
+                    } else {
+                        fs::write(&path, rest)?;
+                    }
                 }
             }
             (_, Merge::Block) => {
@@ -102,7 +109,12 @@ pub fn apply(plan: &Plan) -> Result<usize, InitError> {
         }
         touched += 1;
     }
-    if plan.lock_changed {
+    if plan.lock_remove {
+        let lock = root.join(LOCK_PATH);
+        fs::remove_file(&lock)?;
+        prune_empty_parents(root, &lock);
+        touched += 1;
+    } else if plan.lock_changed {
         write_file(&root.join(LOCK_PATH), plan.lock_json.as_bytes())?;
         touched += 1;
     }
