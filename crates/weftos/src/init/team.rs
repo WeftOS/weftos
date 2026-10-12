@@ -248,6 +248,39 @@ pub fn uninstall(
             (rm, vec![name.to_string()])
         }
     };
+    finish_uninstall(root, &lock, remove, drop_teams, from, dry_run, &in_lock)
+}
+
+/// Remove one standalone package. Refused when it is not installed here or an
+/// applied team still lists it as active (remove that team instead). Changed
+/// files stay and are reported, as for [`uninstall`].
+pub fn uninstall_package(
+    root: &std::path::Path,
+    package: &str,
+    from: &Option<PathBuf>,
+    dry_run: bool,
+) -> Result<Uninstalled, TeamError> {
+    let lock = read_lock(root)?;
+    let in_lock: BTreeSet<String> = lock.agents.iter().map(|a| a.id.clone()).collect();
+    if package == INDEX_OWNER || !in_lock.contains(package) {
+        return Err(refuse(format!("package '{package}' is not installed here")));
+    }
+    if let Some(t) = lock.teams.iter().find(|t| t.slots.iter().any(|s| s.active && s.agent == package)) {
+        return Err(refuse(format!("team '{}' needs package '{package}'; uninstall that team instead", t.name)));
+    }
+    let remove: BTreeSet<String> = std::iter::once(package.to_string()).collect();
+    finish_uninstall(root, &lock, remove, Vec::new(), from, dry_run, &in_lock)
+}
+
+fn finish_uninstall(
+    root: &std::path::Path,
+    lock: &Lock,
+    remove: BTreeSet<String>,
+    drop_teams: Vec<String>,
+    from: &Option<PathBuf>,
+    dry_run: bool,
+    in_lock: &BTreeSet<String>,
+) -> Result<Uninstalled, TeamError> {
     let src = load(from)?;
     let known = src.package_ids();
     if let Some(gone) = in_lock.iter().find(|a| !remove.contains(*a) && a.as_str() != INDEX_OWNER && !known.contains(a)) {
@@ -255,7 +288,7 @@ pub fn uninstall(
     }
     let opts = AgentInitOptions {
         root: root.to_path_buf(),
-        hosts: lock_hosts(&lock),
+        hosts: lock_hosts(lock),
         from: from.clone(),
         remove: remove.iter().cloned().collect(),
         drop_teams,

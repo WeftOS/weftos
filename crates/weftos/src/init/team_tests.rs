@@ -276,3 +276,37 @@ fn a_package_applies_alone() {
     missing.subject = Subject::Agent;
     assert!(apply_request(&missing).unwrap_err().refused);
 }
+
+#[test]
+fn a_standalone_package_uninstalls_and_a_team_member_is_refused() {
+    let l = lab();
+    put(&l.project, "README.md", "project\n");
+    let before = tree(&l.project);
+    let mut r = l.req("scribe", &[Host::Claude]);
+    r.subject = Subject::Agent;
+    apply_request(&r).unwrap();
+    let u = uninstall_package(&l.project, "scribe", &l.from(), false).unwrap();
+    assert_eq!(u.removed, vec!["scribe".to_string()]);
+    assert!(u.kept.is_empty());
+    assert_eq!(tree(&l.project), before);
+    // Not installed (any more), and the unknown name, are refusals.
+    assert!(uninstall_package(&l.project, "scribe", &l.from(), false).unwrap_err().refused);
+
+    apply_request(&l.req("core", &[Host::Claude])).unwrap();
+    let e = uninstall_package(&l.project, "rev", &l.from(), false).unwrap_err();
+    assert!(e.refused && e.message.contains("team 'core'"), "{}", e.message);
+    assert!(l.project.join(".claude/agents/rev.md").is_file());
+    assert!(uninstall_package(&l.project, "ghost", &l.from(), false).unwrap_err().refused);
+}
+
+#[test]
+fn an_edited_standalone_package_is_kept_and_reported() {
+    let l = lab();
+    let mut r = l.req("scribe", &[Host::Claude]);
+    r.subject = Subject::Agent;
+    apply_request(&r).unwrap();
+    put(&l.project, ".claude/agents/scribe.md", "edited by hand\n");
+    let u = uninstall_package(&l.project, "scribe", &l.from(), true).unwrap();
+    assert_eq!(u.kept, vec![".claude/agents/scribe.md".to_string()]);
+    assert_eq!(std::fs::read_to_string(l.project.join(".claude/agents/scribe.md")).unwrap(), "edited by hand\n");
+}

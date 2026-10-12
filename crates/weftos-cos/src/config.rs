@@ -65,10 +65,23 @@ impl Default for ServeConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct EndpointConfig {
-    /// `engine: "none"` keeps the `speak` flag off this endpoint's replies.
-    /// Any other engine marks it as one that speaks them itself; the engine
-    /// details (`voice`, `command`) are for that endpoint's own use.
-    pub tts: EndpointTts,
+    /// Whether this endpoint speaks replies itself (the `speak` flag on its
+    /// final `message`). Default true.
+    pub speak: Option<bool>,
+    /// Legacy form of `speak`, still accepted: `engine: "none"` means
+    /// `speak: false`, any other engine means `speak: true`.
+    pub tts: Option<EndpointTts>,
+}
+
+impl EndpointConfig {
+    /// Whether replies to this endpoint carry `speak: true`.
+    pub fn speaks(&self) -> bool {
+        match (self.speak, &self.tts) {
+            (Some(s), _) => s,
+            (None, Some(t)) => t.engine != "none",
+            (None, None) => true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -308,7 +321,7 @@ impl CosConfig {
 
     /// Remote endpoints whose engine is `none`.
     pub fn silent_endpoints(&self) -> Vec<String> {
-        self.endpoints.iter().filter(|(_, c)| c.tts.engine == "none").map(|(n, _)| n.clone()).collect()
+        self.endpoints.iter().filter(|(_, c)| !c.speaks()).map(|(n, _)| n.clone()).collect()
     }
 
     fn validate(&self) -> Result<(), CosError> {
@@ -318,8 +331,20 @@ impl CosConfig {
             if !crate::conversation::valid_endpoint_name(name) || name == crate::conversation::HOST_ENDPOINT {
                 return Err(CosError::Config(format!("endpoints.{name}: not a remote endpoint id (host is configured by voice.tts)")));
             }
-            if !["auto", "say", "command", "none"].contains(&ep.tts.engine.as_str()) {
-                return Err(CosError::Config(format!("endpoints.{name}.tts.engine must be auto, say, command or none")));
+            if let Some(t) = &ep.tts {
+                if !["auto", "say", "command", "none"].contains(&t.engine.as_str()) {
+                    return Err(CosError::Config(format!(
+                        "endpoints.{name}.tts.engine must be auto, say, command or none; a remote endpoint only needs endpoints.{name}.speak: true or false (none means speak: false)"
+                    )));
+                }
+                if let Some(speak) = ep.speak
+                    && speak != (t.engine != "none")
+                {
+                    return Err(CosError::Config(format!(
+                        "endpoints.{name}: speak: {speak} contradicts tts.engine {:?}; set endpoints.{name}.speak alone (tts.engine is the legacy form)",
+                        t.engine
+                    )));
+                }
             }
         }
         if !["auto", "on", "off", "default"].contains(&self.models.reasoning.as_str()) {
@@ -380,6 +405,26 @@ mod tests {
             let cfg: CosConfig = serde_json::from_str(bad).unwrap();
             assert!(matches!(cfg.validate(), Err(CosError::Config(_))), "{bad}");
         }
+    }
+
+    #[test]
+    fn speak_setting_and_legacy_engine_agree() {
+        let cfg: CosConfig = serde_json::from_str(
+            r#"{"endpoints": {"a": {"speak": false}, "b": {"speak": true}, "c": {}, "d": {"tts": {"engine": "none"}}, "e": {"tts": {"engine": "say"}}, "f": {"speak": false, "tts": {"engine": "none"}}}}"#,
+        )
+        .unwrap();
+        cfg.validate().unwrap();
+        assert_eq!(cfg.silent_endpoints(), ["a", "d", "f"]);
+    }
+
+    #[test]
+    fn speak_contradicting_engine_is_refused_with_an_explanation() {
+        let cfg: CosConfig = serde_json::from_str(r#"{"endpoints": {"x": {"speak": true, "tts": {"engine": "none"}}}}"#).unwrap();
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("contradicts") && err.contains("endpoints.x.speak"), "{err}");
+        let cfg: CosConfig = serde_json::from_str(r#"{"endpoints": {"x": {"tts": {"engine": "festival"}}}}"#).unwrap();
+        assert!(cfg.validate().unwrap_err().to_string().contains("speak: true or false"));
+        assert!(serde_json::from_str::<CosConfig>(r#"{"endpoints": {"x": {"speak": "no"}}}"#).is_err());
     }
 
     #[test]

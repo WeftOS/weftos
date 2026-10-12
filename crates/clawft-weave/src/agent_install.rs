@@ -52,27 +52,27 @@ pub struct AgentInstallPayload {
 
 /// A request this node refuses or cannot complete.
 #[derive(Debug)]
-struct Refusal {
+pub(crate) struct Refusal {
     /// Refused on purpose (bad request, digest mismatch, drifted files) as
     /// opposed to an operational failure.
-    refused: bool,
-    message: String,
+    pub(crate) refused: bool,
+    pub(crate) message: String,
 }
 
-fn refuse(m: impl Into<String>) -> Refusal {
+pub(crate) fn refuse(m: impl Into<String>) -> Refusal {
     Refusal { refused: true, message: m.into() }
 }
 
-fn fail(m: impl Into<String>) -> Refusal {
+pub(crate) fn fail(m: impl Into<String>) -> Refusal {
     Refusal { refused: false, message: m.into() }
 }
 
-fn uuid_ok(s: &str) -> bool {
+pub(crate) fn uuid_ok(s: &str) -> bool {
     s.len() == 36
         && s.chars().enumerate().all(|(i, c)| if matches!(i, 8 | 13 | 18 | 23) { c == '-' } else { c.is_ascii_hexdigit() })
 }
 
-fn name_ok(s: &str) -> bool {
+pub(crate) fn name_ok(s: &str) -> bool {
     !s.is_empty() && s.len() <= 64 && s.chars().next().is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
         && s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }

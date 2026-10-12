@@ -196,7 +196,8 @@ async fn start_with(kernel: &KernelRef, cfg: DashboardConfig, home: &std::path::
     d.set_pair_source(Arc::new(pair_source));
     // ADR-121 O3: agent installs are chained on the daemon's chain.
     let chain = kernel.read().await.chain_manager().cloned();
-    d.set_action_handler(Arc::new(crate::agent_install::AgentInstallHandler::new(crate::agent_install::AgentInstallEnv::from_home(home, chain))));
+    d.set_action_handler(Arc::new(crate::agent_install::AgentInstallHandler::new(crate::agent_install::AgentInstallEnv::from_home(home, chain.clone()))));
+    d.set_action_handler(Arc::new(crate::agent_uninstall::AgentUninstallHandler::new(crate::agent_install::AgentInstallEnv::from_home(home, chain))));
     d.set_route_source(Arc::new(crate::dashboard_routes::RouterRoutes::daemon()));
     d.set_service_source(Arc::new(crate::dashboard_services::ProjectServices::daemon(home)));
     if !dashboard_report::install_global(d.clone()) {

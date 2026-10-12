@@ -1,6 +1,6 @@
 //! Dashboard actions (ADR-108 P2): work the dashboard queues for this node and
 //! hands over in the heartbeat answer, `{ok, actions: [{id, kind, payload,
-//! created_at}]}`. Kinds: `install`, `update`, `remove`, `pair`, `route`, `agent.install`.
+//! created_at}]}`. Kinds: `install`, `update`, `remove`, `pair`, `route`, `agent.install`, `agent.uninstall`.
 //!
 //! The reporter keeps a bounded in-memory queue, acknowledges each action with
 //! `POST /api/nodes/actions/{id}/result` (`{status, result}`, node token as the
@@ -23,7 +23,7 @@ pub const MAX_QUEUE: usize = 64;
 /// Most actions (and outcomes) remembered for `dashboard.actions`.
 pub const MAX_LOG: usize = 128;
 /// Kinds the dashboard defines (ADR-108; `route` is ADR-116 R3, `agent.install` ADR-121 O3).
-pub const KINDS: [&str; 6] = ["install", "update", "remove", "pair", "route", "agent.install"];
+pub const KINDS: [&str; 7] = ["install", "update", "remove", "pair", "route", "agent.install", "agent.uninstall"];
 
 /// An action as the dashboard sends it.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -85,6 +85,7 @@ pub fn default_handlers() -> HashMap<String, Arc<dyn ActionHandler>> {
     m.insert(crate::mesh_pair::KIND.to_owned(), Arc::new(crate::mesh_pair::PairHandler::global()));
     m.insert(crate::router_action::KIND.to_owned(), Arc::new(crate::router_action::RouteHandler::from_process()));
     m.insert(crate::agent_install::KIND.to_owned(), Arc::new(crate::agent_install::AgentInstallHandler::from_process()));
+    m.insert(crate::agent_uninstall::KIND.to_owned(), Arc::new(crate::agent_uninstall::AgentUninstallHandler::from_process()));
     m
 }
 
