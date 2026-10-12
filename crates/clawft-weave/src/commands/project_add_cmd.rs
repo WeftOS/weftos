@@ -64,6 +64,10 @@ pub async fn add(o: AddOpts) -> anyhow::Result<()> {
         clawft_types::project::validate_id(p).map_err(|_| anyhow::anyhow!("--project is not a ULID"))?;
         plan.request.project_ulid = p.clone();
     }
+    if let SourceSpec::Mesh { mesh, .. } = &plan.spec {
+        let local = super::mesh_id_cmd::local_mesh_id().await?;
+        crate::mesh_genesis::check_authority(local, mesh).map_err(anyhow::Error::msg)?;
+    }
     check_free(&[], &plan.target).map_err(anyhow::Error::msg)?;
     let weft = env.weft_bin().map_err(anyhow::Error::msg)?;
     let rollback = Rollback::snapshot(&[], &plan.target);

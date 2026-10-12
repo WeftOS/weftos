@@ -62,6 +62,11 @@ pub struct LicenceRuntime {
     pub nonce_set: bool,
     /// The configured pin or nonce is malformed (checkout stays off).
     pub config_error: Option<String>,
+    /// Where the live mesh id came from (`None`: no id). Without a licence id
+    /// the node's mesh record (`weaver mesh create`, or learned by pairing) is used.
+    pub mesh_source: Option<crate::mesh_genesis::IdSource>,
+    /// The mesh record is unusable, or names a mesh other than the licence's.
+    pub record_issue: Option<String>,
     /// This node's id, the steward a binding names.
     pub steward_node_id: String,
     /// This node's request-signing key, 64 hex chars.
@@ -287,6 +292,7 @@ pub fn build(a: InitArgs<'_>) -> LicenceRuntime {
             config_error = Some(e.to_string());
         }
     }
+    let (mesh_source, record_issue) = apply_mesh_record(a.dir, &local, config_error.is_none());
     let policy = MeshCheckoutPolicy::open(a.dir, a.anchors, a.revocations, local.clone());
     policy.store().set_sink(Arc::new(ChainLicenceSink::new(a.chain.clone())));
     let _ = policy.store().binding_status(); // chains binding_orphaned now
@@ -311,8 +317,47 @@ pub fn build(a: InitArgs<'_>) -> LicenceRuntime {
         genesis_pinned: genesis.is_some(),
         nonce_set: nonce.is_some(),
         config_error,
+        mesh_source,
+        record_issue,
         steward_node_id: a.steward_node_id,
         steward_pubkey: a.steward_pubkey,
+    }
+}
+
+/// Mesh genesis (ADR-114 §2): with no licence id, take the id from the mesh
+/// record; with one, keep it and report a record that disagrees. A record
+/// that cannot be used leaves the id unset and says why.
+fn apply_mesh_record(
+    dir: &Path,
+    local: &LocalMeshId,
+    config_ok: bool,
+) -> (Option<crate::mesh_genesis::IdSource>, Option<String>) {
+    use crate::mesh_genesis::{IdSource, resolve};
+    if !config_ok {
+        return (None, None);
+    }
+    let licence = local.get();
+    match resolve(dir, licence) {
+        Ok(Some(r)) => {
+            let issue = r.conflicting_record.map(|c| {
+                let why = format!(
+                    "the mesh record names {} but the Seed licence names {}; the licence id is in use",
+                    c.to_hex(),
+                    r.id.to_hex()
+                );
+                tracing::error!("{why}");
+                why
+            });
+            if r.source != IdSource::Licence {
+                local.set(Some(r.id));
+            }
+            (Some(r.source), issue)
+        }
+        Ok(None) => (None, None),
+        Err(e) => {
+            tracing::error!(error = %e, "mesh record unusable; this node has no MeshId");
+            (None, Some(e))
+        }
     }
 }
 

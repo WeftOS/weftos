@@ -120,6 +120,11 @@ pub struct PairPayload {
     pub role: Role,
     #[serde(default)]
     pub projects: Vec<String>,
+    /// The primary's signed mesh record (mesh genesis). Only a member uses
+    /// it, and only when the other side is the primary: it must be signed by
+    /// `peer_ed25519`. A record that does not verify fails the whole action.
+    #[serde(default)]
+    pub mesh_record: Option<crate::mesh_genesis::SignedMeshRecord>,
 }
 
 fn lower_hex(s: &str, n: usize) -> bool {
@@ -288,6 +293,25 @@ pub fn deps() -> Option<Arc<PairDeps>> {
     DEPS.get().cloned()
 }
 
+/// A member takes the primary's mesh id: the record must verify and be signed
+/// by the key this pairing pins. The live id is set when the node had none.
+fn learn_mesh_id(
+    dir: &Path,
+    rec: &crate::mesh_genesis::SignedMeshRecord,
+    pinned: &[u8; 32],
+    node: &str,
+) -> Result<String, String> {
+    let rt = crate::licence_boot::runtime();
+    let local = rt.as_ref().and_then(|r| r.local.get());
+    let id = crate::mesh_genesis::learn(dir, rec, pinned, node, local)?;
+    if let Some(rt) = rt
+        && rt.local.get().is_none()
+    {
+        rt.local.set(Some(id));
+    }
+    Ok(id.to_hex())
+}
+
 /// Apply one verified `pair` action to the trust files and the chain.
 pub fn apply(deps: &PairDeps, action_id: &str, payload: &Value) -> Result<Value, String> {
     let p = PairPayload::parse(payload)?;
@@ -298,9 +322,14 @@ pub fn apply(deps: &PairDeps, action_id: &str, payload: &Value) -> Result<Value,
     let dir = &deps.runtime_dir;
     let key_hex = hex::encode(pk);
     let tier = p.tier();
+    let mut learned_id: Option<String> = None;
     let kind = match p.op {
         Op::Add => {
             let advertise = p.advertise_for_add()?;
+            // Verify the primary's mesh record before anything is written.
+            if let (Some(rec), false) = (&p.mesh_record, p.we_are_primary()) {
+                learned_id = Some(learn_mesh_id(dir, rec, &pk, &p.peer_node)?);
+            }
             peers_add(dir, &key_hex, tier, advertise)?;
             if let (false, Some(a)) = (p.we_are_primary(), advertise) {
                 // The member remembers which primary serves which projects (ADR-114 names).
@@ -334,6 +363,7 @@ pub fn apply(deps: &PairDeps, action_id: &str, payload: &Value) -> Result<Value,
         "request_id": p.request_id, "action_id": action_id, "peer_node": p.peer_node,
         "fingerprint": p.fingerprint, "tier": tier_name(tier), "role": p.role,
         "advertise": p.advertise, "advertise_absent": p.advertise.is_none(), "projects": p.projects,
+        "mesh_id": learned_id,
     });
     match &deps.chain {
         Some(cm) => {

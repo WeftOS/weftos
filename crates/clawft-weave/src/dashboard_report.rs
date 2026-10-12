@@ -157,6 +157,8 @@ pub struct Dashboard {
     /// `report.mesh_identity` and `report.pair_requests` source (ADR-108 P2b);
     /// unset leaves both keys out.
     pair: OnceLock<Arc<dyn PairSource>>,
+    /// `report.mesh_id` source (mesh genesis); unset falls back to the daemon's licence runtime.
+    mesh_id: OnceLock<clawft_kernel::licence::LocalMeshId>,
     /// `report.routes` source (ADR-116 R3); unset, or a source answering
     /// `None` (router off), leaves the key out.
     routes: OnceLock<Arc<dyn RouteReportSource>>,
@@ -230,6 +232,7 @@ impl Dashboard {
             children,
             workspaces,
             pair: OnceLock::new(),
+            mesh_id: OnceLock::new(),
             routes: OnceLock::new(),
             services: OnceLock::new(),
             instances: OnceLock::new(),
@@ -242,6 +245,11 @@ impl Dashboard {
     /// The config this reporter runs with.
     pub fn config(&self) -> &DashboardConfig {
         &self.cfg
+    }
+
+    /// Report `mesh_id` from `id` (first call wins); the daemon's licence runtime is the default.
+    pub fn set_mesh_id_source(&self, id: clawft_kernel::licence::LocalMeshId) -> bool {
+        self.mesh_id.set(id).is_ok()
     }
 
     /// Report `mesh_identity` and `pair_requests` from `src` (first call wins).
@@ -367,6 +375,9 @@ impl Dashboard {
             }
             mesh_pair_requests::attach(&mut report, &src.pair_requests().await);
         }
+        let rt = crate::licence_boot::runtime();
+        let mesh_id = self.mesh_id.get().and_then(|l| l.get()).or_else(|| rt.as_ref().and_then(|r| r.local.get()));
+        crate::mesh_genesis::attach(&mut report, mesh_id, rt.as_ref().map(|r| r.dir.as_path()));
         dashboard_budget::fit(&mut report, dashboard_budget::REPORT_BUDGET_BYTES);
         json!({
             "node_id": self.cfg.node_id,

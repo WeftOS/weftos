@@ -1,7 +1,7 @@
 # ADR-114: `weftos://` names: internal mesh addressing for business concepts, mesh resources and artifacts
 
 - **Status**: Proposed (2026-10-09; the owner chose the `weftos://` scheme and asked for this ADR)
-- **Updated**: 2026-10-11 (ADR-121: `agents` names packages, new `instances` kind; §5a: every first-class surface gets a kind; proposed). 2026-10-09. Owner: names are internal mesh addressing and cover companies, projects
+- **Updated**: 2026-10-12 (owner: a mesh without a Seed licence gets its MeshId by genesis, §2 note). 2026-10-11 (ADR-121: `agents` names packages, new `instances` kind; §5a: every first-class surface gets a kind; proposed). 2026-10-09. Owner: names are internal mesh addressing and cover companies, projects
   and other business concepts as well as mesh resources; the authority is the mesh, not a node.
   N1 built on `target-0.8.4`: `crates/clawft-weave/src/weftos_uri.rs` (strict parser, round-trip
   and reject tables), `mesh_names.rs` (accepts this node's MeshId only; friendly mesh names are
@@ -103,6 +103,18 @@ weftos://<mesh>/nodes/<node id>/services/workload-host             # a service o
 weftos://<mesh>/cogs/ld2450-spatial?rev=sha256:…                   # a pinned cog
 weftos://<mesh>/teams/weftos-core?rev=sha256:…                     # a pinned team bundle
 ```
+
+**Where the MeshId comes from (updated 2026-10-12).** With a Seed licence it is the licence id
+(ADR-106). A mesh without one is created once, on its primary: `weaver mesh create` mints a fresh
+32-byte nonce and derives `MeshId::derive(owner user public key, nonce)` (the licence's function,
+the user key in the genesis-pin slot), and writes a record at `<runtime>/mesh/mesh.json` signed by
+the user key and the primary's node key. It refuses if any MeshId already exists (licence or
+record). Members learn it when they pair: the pair payload carries the record, checked against the
+key the pairing pins; a tampered or foreign-signed record fails the pair. A licence id always wins
+over a record, and a disagreeing record is reported, not obeyed. `weaver mesh id` prints the id
+and its source (licence, genesis, learned from a node); the heartbeat carries `report.mesh_id`;
+`weaver project add` refuses a name whose authority is not this node's MeshId. Code:
+`mesh_genesis.rs`.
 
 **Canonical means strict.** The rules follow ADR-157 §1. The parser never repairs input.
 - **Characters:**

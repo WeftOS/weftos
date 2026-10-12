@@ -120,6 +120,13 @@ pub enum MeshCmd {
     /// never printed. `--out` also writes the raw 32-byte public key, which
     /// is what `weaver leaf provision --mesh-pubkey` pins.
     Identity(IdentityArgs),
+    /// Mint this mesh's MeshId (the `weftos://` authority) on its primary when
+    /// there is no Seed licence; refuses if the mesh already has one.
+    Create,
+    /// Confirm this node uses its Seed licence's MeshId; refuses a conflicting record.
+    AdoptLicence,
+    /// Print this node's MeshId and where it came from (licence, genesis, learned).
+    Id(crate::commands::mesh_id_cmd::IdArgs),
     /// Mesh nonce for the Seed licence mesh id (ADR-106); runs locally.
     Nonce {
         #[command(subcommand)]
@@ -262,6 +269,9 @@ pub async fn execute(cmd: MeshCmd, w: &mut dyn Write) -> Result<()> {
         }
         MeshCmd::Trust(t) => admin::trust(w, t).await,
         MeshCmd::Identity(a) => admin::identity(w, &a),
+        MeshCmd::Create => crate::commands::mesh_id_cmd::create(w).await,
+        MeshCmd::AdoptLicence => crate::commands::mesh_id_cmd::adopt_licence(w).await,
+        MeshCmd::Id(a) => crate::commands::mesh_id_cmd::id(w, &a).await,
         MeshCmd::Nonce { cmd } => crate::commands::mesh_nonce::run(cmd, w),
         #[cfg(feature = "placement")]
         MeshCmd::Pair { cmd } => crate::commands::mesh_pair_cmd::run(cmd, w).await,

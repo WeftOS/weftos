@@ -39,6 +39,7 @@ pub mod mesh_install;
 #[cfg(all(unix, feature = "mesh"))]
 pub mod mesh_install_key;
 #[cfg(all(unix, feature = "mesh"))]
+pub mod mesh_id_cmd;
 pub mod mesh_nonce;
 #[cfg(all(unix, feature = "mesh", feature = "placement"))]
 pub mod mesh_pair_cmd;
