@@ -227,6 +227,14 @@ pub mod project_install;
 pub mod project_install_git;
 pub mod project_install_handlers;
 pub mod project_install_layout;
+/// `weaver project add`: what the dashboard install and the CLI share (detect, route, receipt).
+pub mod project_add;
+pub mod project_add_detect;
+pub mod project_add_receipt;
+pub mod project_add_remove;
+pub mod project_add_route;
+pub mod project_add_run;
+pub mod project_add_spec;
 #[cfg(all(test, unix))]
 mod project_install_test_support;
 /// Pairing two nodes for project work from the dashboard (ADR-108 P2b).

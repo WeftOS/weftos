@@ -28,6 +28,8 @@ pub mod kernel_cmd;
 pub mod leaf_cmd;
 #[cfg(all(unix, feature = "exochain", feature = "placement"))]
 pub mod project_cmd;
+#[cfg(all(unix, feature = "exochain", feature = "placement"))]
+pub mod project_add_cmd;
 pub mod migrate_cmd;
 #[cfg(all(unix, feature = "mesh"))]
 pub mod mesh_cmd;

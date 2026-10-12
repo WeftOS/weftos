@@ -134,6 +134,19 @@ pub fn remove_route(dir: &Path, ulid: &str, prefix: &str) -> Result<bool, String
     Ok(true)
 }
 
+/// Delete project `ulid`'s overlay file when it holds no routes and nothing else
+/// (what `remove_route` leaves behind after the last route). `Ok(true)` when deleted.
+pub fn delete_if_empty(dir: &Path, ulid: &str) -> Result<bool, String> {
+    let path = overlay_path(dir, ulid);
+    let m = read_mapping(&path)?;
+    let empty_routes = m.get("routes").is_none_or(|r| r.is_null() || r.as_sequence().is_some_and(Vec::is_empty));
+    if !path.exists() || !empty_routes || m.keys().any(|k| k.as_str() != Some("routes")) {
+        return Ok(false);
+    }
+    std::fs::remove_file(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,6 +175,20 @@ mod tests {
         assert_eq!(routes.iter().map(|r| (r.prefix.as_str(), r.port)).collect::<Vec<_>>(), [("/a", 3002), ("/b", 3001)]);
         assert_eq!(routes[1].allow, ["alice@example.com"]);
         assert!(routes.iter().all(|r| r.source == Source::Dashboard));
+    }
+
+    #[test]
+    fn delete_if_empty_removes_only_a_file_with_no_routes_and_nothing_else() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("routes");
+        assert!(!delete_if_empty(&dir, ULID).unwrap(), "no file: nothing deleted");
+        set_route(&dir, ULID, &decl("/a", 3000)).unwrap();
+        assert!(!delete_if_empty(&dir, ULID).unwrap(), "a route is left");
+        assert!(remove_route(&dir, ULID, "/a").unwrap());
+        assert!(delete_if_empty(&dir, ULID).unwrap());
+        assert!(!overlay_path(&dir, ULID).exists());
+        std::fs::write(overlay_path(&dir, ULID), "note: keep me\nroutes: []\n").unwrap();
+        assert!(!delete_if_empty(&dir, ULID).unwrap(), "unknown keys keep the file");
     }
 
     #[test]

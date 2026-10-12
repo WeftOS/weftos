@@ -8,6 +8,8 @@ secret and no bytes through the dashboard. The git-remote path (cloning from
 the project's own git remotes) is the `git-remote` fetcher and is not covered
 here.
 
+One-step flow for developers: [developer-quickstart.md](developer-quickstart.md).
+
 Wire contract: [`docs/plans/adr-108-p2b-p3-contract.md`](../plans/adr-108-p2b-p3-contract.md)
 sections 3 and 5. Code: `crates/clawft-weave/src/project_fetch_*.rs` and
 `crates/clawft-weave/src/bin/git-remote-weftos.rs`.

@@ -26,11 +26,11 @@ use clawft_types::placement::TrustTier;
 use serde_json::{Value, json};
 
 use crate::mesh_names::MeshNames;
-use crate::project_fetch_client::{self as client, BundleMode, PlaneChannel};
+use crate::project_fetch_client::{self as client, BundleMode, FetchChannel, PlaneChannel};
 use crate::project_fetch_repos::git;
 use crate::project_fetch_serve::EVENT_PROJECT_FETCH;
 use crate::project_install::{FetchReport, FetchedRepo, InstallRequest, ProjectFetcher};
-use crate::weftos_uri::WeftosUri;
+use crate::weftos_uri::{Authority, WeftosUri};
 
 const GIT_TIMEOUT: Duration = Duration::from_secs(60);
 const REFSPECS: [&str; 2] = ["+refs/heads/*:refs/remotes/origin/*", "+refs/tags/*:refs/tags/*"];
@@ -134,7 +134,8 @@ impl ProjectFetcher for MeshFetcher {
         let plane = self.plane().ok_or("placement is not initialised on this node")?;
         let ch = PlaneChannel::new(plane, node.clone());
         let project = req.project_ulid.as_str();
-        let out = self.fetch_inner(&ch, req, project, dest).await;
+        let mesh = self.names().authority().ok_or("this node has no mesh id or alias to name the project on")?;
+        let out = self.fetch_over(&ch, mesh, req, project, dest).await;
         self.record(json!({ "node": node, "project": project, "ok": out.is_ok(), "error": out.as_ref().err(),
             "repos": out.as_ref().map(|r| r.repos.len()).unwrap_or(0), "bytes": out.as_ref().map(|r| r.bytes).unwrap_or(0) }));
         out
@@ -142,7 +143,9 @@ impl ProjectFetcher for MeshFetcher {
 }
 
 impl MeshFetcher {
-    async fn fetch_inner(&self, ch: &PlaneChannel, req: &InstallRequest, project: &str, dest: &Path) -> Result<FetchReport, String> {
+    /// Fetch `project` over any channel (the daemon's plane, or a CLI's socket to
+    /// the daemon), naming the clones on `mesh`.
+    pub(crate) async fn fetch_over(&self, ch: &dyn FetchChannel, mesh: Authority, req: &InstallRequest, project: &str, dest: &Path) -> Result<FetchReport, String> {
         let listing = client::list(ch, project).await?;
         let repos: Vec<(String, Option<String>)> = listing["repos"]
             .as_array()
@@ -152,7 +155,6 @@ impl MeshFetcher {
             .filter(|(d, _)| crate::project_install::dir_ok(d))
             .collect();
         let has_root = repos.iter().any(|(d, _)| d == ".");
-        let mesh = self.names().authority().ok_or("this node has no mesh id or alias to name the project on")?;
         let mut report = FetchReport { fetcher: "mesh", ..Default::default() };
         for (dir, branch) in &repos {
             let path = layout(dest, has_root, dir);
@@ -210,6 +212,13 @@ impl MeshFetcher {
         }
         Ok(report)
     }
+}
+
+/// From a CLI process: fetch `ulid` over the mesh through the local user daemon,
+/// which resolves `uri` to the project's paired primary (the helper's route).
+pub async fn fetch_via_daemon(uri: &str, mesh: Authority, ulid: &str, req: &InstallRequest, dest: &Path) -> Result<FetchReport, String> {
+    let ch = client::DaemonChannel::new(uri.to_owned(), None);
+    MeshFetcher::daemon(None).fetch_over(&ch, mesh, req, ulid, dest).await
 }
 
 /// Check out `branch` tracking `origin/<branch>` when the fetch brought it.
