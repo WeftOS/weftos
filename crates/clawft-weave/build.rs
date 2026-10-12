@@ -61,7 +61,10 @@ fn env_override(key: &str) -> Option<String> {
 }
 
 fn is_truthy(v: &str) -> bool {
-    matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "dirty" | "yes")
+    matches!(
+        v.to_ascii_lowercase().as_str(),
+        "1" | "true" | "dirty" | "yes"
+    )
 }
 
 /// Resolve the short git hash with an optional `-dirty` suffix.
@@ -117,7 +120,13 @@ fn git_short_hash() -> Option<String> {
 /// runs, which made every tagged release binary report `<sha>-dirty`.
 fn git_is_dirty() -> Option<bool> {
     let out = Command::new("git")
-        .args(["status", "--porcelain", "--", ".", ":(exclude)dist-manifest.json"])
+        .args([
+            "status",
+            "--porcelain",
+            "--",
+            ".",
+            ":(exclude)dist-manifest.json",
+        ])
         .output()
         .ok()?;
     if !out.status.success() {
