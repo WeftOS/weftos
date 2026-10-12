@@ -169,3 +169,37 @@ fn a_broken_record_boots_with_no_mesh_id_and_says_why() {
     assert_eq!(rt.local.get(), None);
     assert!(rt.record_issue.is_some());
 }
+
+/// The dashboard's node_actions payload check rejects any JSON key containing
+/// "token", "secret", "key" or "password" (case-insensitive), and it copies
+/// `report.mesh_record` verbatim into the member's `pair` payload. So no key
+/// name anywhere in a record, nested or in the stored `origin`, may contain one.
+#[test]
+fn no_field_name_in_a_record_trips_the_dashboard_payload_check() {
+    fn walk(v: &Value, bad: &mut Vec<String>) {
+        match v {
+            Value::Object(o) => {
+                for (k, v) in o {
+                    let l = k.to_ascii_lowercase();
+                    if ["token", "secret", "key", "password"].iter().any(|w| l.contains(w)) {
+                        bad.push(k.clone());
+                    }
+                    walk(v, bad);
+                }
+            }
+            Value::Array(a) => a.iter().for_each(|v| walk(v, bad)),
+            _ => {}
+        }
+    }
+    let d = tempfile::tempdir().unwrap();
+    let signed = create(d.path(), &key(1), &key(2), None, NOW).unwrap();
+    let mut bad = Vec::new();
+    for origin in [Origin::Genesis, Origin::Learned { node: node_id(1) }] {
+        walk(&serde_json::to_value(StoredRecord { signed: signed.clone(), origin }).unwrap(), &mut bad);
+    }
+    let mut report = json!({});
+    attach(&mut report, MeshId::from_hex(&signed.record.mesh_id), Some(d.path()));
+    assert!(report.get("mesh_record").is_some());
+    walk(&report, &mut bad);
+    assert!(bad.is_empty(), "field names the dashboard would reject: {bad:?}");
+}
