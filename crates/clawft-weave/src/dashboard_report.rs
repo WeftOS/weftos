@@ -27,6 +27,7 @@ use crate::dashboard_routes::RouteReportSource;
 use crate::dashboard_services::ServiceSource;
 use crate::dashboard_budget;
 use crate::dashboard_workspaces::{self, WorkspaceSource};
+use crate::instance_registry::InstanceRegistry;
 use crate::mesh_pair::PairSource;
 use crate::mesh_pair_requests;
 
@@ -161,6 +162,8 @@ pub struct Dashboard {
     routes: OnceLock<Arc<dyn RouteReportSource>>,
     /// `report.services` source (ADR-116 R3 add-on); unset or empty leaves the key out.
     services: OnceLock<Arc<dyn ServiceSource>>,
+    /// `report.instances` source (ADR-121 O2); unset leaves the key out.
+    instances: OnceLock<Arc<InstanceRegistry>>,
     /// Dashboard actions: queue and log (ADR-108 P2).
     pub(crate) book: Mutex<ActionBook>,
     pub(crate) handlers: Mutex<std::collections::HashMap<String, Arc<dyn ActionHandler>>>,
@@ -227,6 +230,7 @@ impl Dashboard {
             pair: OnceLock::new(),
             routes: OnceLock::new(),
             services: OnceLock::new(),
+            instances: OnceLock::new(),
             book: Mutex::new(ActionBook::default()),
             handlers: Mutex::new(crate::dashboard_actions::default_handlers()),
         }))
@@ -250,6 +254,12 @@ impl Dashboard {
     /// Report `services` from `src` (first call wins).
     pub fn set_service_source(&self, src: Arc<dyn ServiceSource>) -> bool {
         self.services.set(src).is_ok()
+    }
+
+    /// Report `instances` from `reg` (first call wins) and stamp new records with this node's id.
+    pub fn set_instance_registry(&self, reg: Arc<InstanceRegistry>) -> bool {
+        reg.set_node(&self.cfg.node_id);
+        self.instances.set(reg).is_ok()
     }
 
     pub(crate) fn with_state(&self, f: impl FnOnce(&mut DashState)) {
@@ -303,7 +313,19 @@ impl Dashboard {
             }
             observed.insert(ulid, Value::Object(o));
         }
-        let mut report = json!({ "host": self.cfg.installation_id, "weaver_version": version, "observed": observed });
+        let mut report = json!({
+            "host": self.cfg.installation_id, "weaver_version": version, "kind": self.cfg.kind, "observed": observed,
+        });
+        // The daemon installs its registry after the reporter starts; pick it up on the first beat after.
+        if self.instances.get().is_none()
+            && let Some(reg) = crate::instance_registry::global()
+        {
+            self.set_instance_registry(reg);
+        }
+        if let Some(reg) = self.instances.get() {
+            reg.sync().await;
+            report["instances"] = reg.summary();
+        }
         // Routes go in before workspaces, whose size trimming measures the whole report.
         if let Some(src) = self.routes.get()
             && let Some(routes) = src.routes().await

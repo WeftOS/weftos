@@ -195,6 +195,12 @@ pub mod node_facts_rpc;
 pub mod dashboard_actions;
 pub mod dashboard_cfg;
 pub mod dashboard_budget;
+/// Package digest enforcement before an installed agent starts (ADR-121 O2).
+pub mod instance_digest;
+/// The node's instance registry, chain records and heartbeat summary (ADR-121 O2).
+pub mod instance_registry;
+/// Pull-style runners feeding the instance registry (ADR-121 O2).
+pub mod instance_sources;
 pub mod dashboard_report;
 pub mod dashboard_rpc;
 pub mod dashboard_token;

@@ -1762,6 +1762,16 @@ pub async fn run(
         // agent.chat.end, agent.chat.cancel) can cascade-cancel a parent's
         // still-running children when the parent conversation ends (design D5).
         let _ = DAEMON_SPAWN_REGISTRY.set(Arc::clone(&spawn_registry));
+        // ADR-121 O2: the node's instance registry follows the spawn registry and chains
+        // starts, stops and failures on the daemon's chain.
+        {
+            let chain = kernel.read().await.chain_manager().cloned();
+            let reg = crate::instance_registry::InstanceRegistry::new(chain);
+            reg.add_source(Arc::new(crate::instance_sources::SubagentSource { registry: Arc::clone(&spawn_registry) }));
+            if crate::instance_registry::install_global(Arc::clone(&reg)) {
+                reg.spawn_sync_loop(std::time::Duration::from_secs(15));
+            }
+        }
         let _ = DAEMON_SUBAGENT_SPAWNER.set(
             Arc::clone(&subagent_spawner) as Arc<dyn clawft_core::agent::spawn::SubagentSpawner>,
         );

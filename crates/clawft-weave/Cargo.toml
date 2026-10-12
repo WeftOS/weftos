@@ -89,6 +89,7 @@ async-trait = { workspace = true }
 comfy-table = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
+ulid = { workspace = true }
 dirs = { workspace = true }
 tempfile = { workspace = true }
 blake3 = { workspace = true, optional = true }
