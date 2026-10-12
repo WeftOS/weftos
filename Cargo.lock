@@ -2161,6 +2161,7 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "weft-licence",
+ "weftos",
  "weftos-cog-repo",
  "weftos-cog-sources",
  "weftos-leaf-scene",
