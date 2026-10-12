@@ -2040,6 +2040,25 @@ cmd_n6_leaf() {
 }
 
 # ── Chief-of-staff console, ADR-118 C2 (standalone crate) ─────────────
+# ADR-118 C3: the owner's one command for the chief of staff. Builds the agent
+# host with push-to-talk and local STT (mic,onnx), then runs it in the
+# foreground: starts the local model server if it is down (and stops it again
+# on exit), warms the model, speaks voice replies. The console window is the
+# second command: scripts/build.sh cos-host, then cos-console-host --window.
+cmd_cos_up() {
+    header "weftos-cos up: build (mic,onnx) and serve with the local model"
+    local saved="$FEATURES"
+    FEATURES="mic,onnx"
+    cmd_cos || { FEATURES="$saved"; return 1; }
+    FEATURES="$saved"
+    if [ "$DRY_RUN" = true ]; then
+        printf "  ${YELLOW}DRY${NC}   target/debug/weftos-cos serve --start-model --mic\n"
+        return 0
+    fi
+    printf "  Console window (second terminal): scripts/build.sh cos-host && crates/weftos-cos-console/target/release/cos-console-host --window\n"
+    exec "$ROOT/target/debug/weftos-cos" serve --start-model --mic
+}
+
 cmd_cos_console() {
     header "weftos-cos-console: build, test, clippy"
     timer_start
@@ -2621,7 +2640,10 @@ ${BOLD}Commands:${NC}
   native-debug    Build native CLI binary (debug, fast)
   cos             Build the chief-of-staff agent host (weftos-cos, debug; ADR-118 C3).
                   --features mic adds push-to-talk capture, --features mic,onnx real STT.
-                  Run: target/debug/weftos-cos serve  (also `weft cos serve`)
+                  Run: target/debug/weftos-cos serve  (also: weft cos serve)
+  cos-up          One command for the chief of staff: build weftos-cos (mic,onnx),
+                  start the local model if it is down, serve with push-to-talk and
+                  spoken replies (stops the model it started on exit).
   install         Build weft + weaver and install both to ~/.cargo/bin
                   (atomic replace, ad-hoc re-sign on macOS, fresh git build
                   stamp, prints versions). Release by default; --debug for
@@ -3017,6 +3039,7 @@ main() {
         native)       cmd_native ;;
         native-debug) cmd_native_debug ;;
         cos)          cmd_cos ;;
+        cos-up)       cmd_cos_up ;;
         install)      cmd_install ;;
         gui-egui)     cmd_gui_egui ;;
         wasi)         cmd_wasi ;;

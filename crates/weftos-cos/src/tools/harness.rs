@@ -10,7 +10,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
-use super::{Gate, Tool, ToolOutcome, ToolSpec, arg_str, need_str, tool_err};
+use super::{Gate, Tool, ToolOutcome, ToolSpec, arg_str, tool_err};
 use crate::CosError;
 use crate::config::HarnessConfig;
 
@@ -207,17 +207,26 @@ impl HarnessClient {
         Ok(items)
     }
 
-    /// Resolve `WEFT-N`, a `source_id` or a UUID to a ticket.
+    /// Resolve `WEFT-N`, a `source_id`, a UUID or a unique UUID prefix of at
+    /// least 8 characters (what `projects.activity` shows) to a ticket.
     pub async fn resolve_ticket(&self, reference: &str) -> Result<Value, CosError> {
         let upper = reference.to_ascii_uppercase();
         let all = self.tickets(None, 10_000).await?;
-        all.into_iter()
-            .find(|t| {
-                t["id"] == reference
-                    || t["source_id"] == reference
-                    || t["source_url"].as_str().is_some_and(|u| u.ends_with(&upper))
-            })
-            .ok_or_else(|| tool_err("harness", format!("ticket not found: {reference}")))
+        if let Some(t) = all.iter().find(|t| {
+            t["id"] == reference || t["source_id"] == reference || t["source_url"].as_str().is_some_and(|u| u.ends_with(&upper))
+        }) {
+            return Ok(t.clone());
+        }
+        let prefix = reference.to_ascii_lowercase();
+        if prefix.len() >= 8 && prefix.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
+            let hits: Vec<&Value> = all.iter().filter(|t| t["id"].as_str().is_some_and(|id| id.starts_with(&prefix))).collect();
+            match hits.as_slice() {
+                [one] => return Ok((*one).clone()),
+                [] => {}
+                _ => return Err(tool_err("harness", format!("ticket reference {reference} is ambiguous; give more characters"))),
+            }
+        }
+        Err(tool_err("harness", format!("ticket not found: {reference}")))
     }
 
     /// Read one page of project history (dashboard PR #21: GET on the events
@@ -266,13 +275,16 @@ pub struct ProjectsActivity {
 
 const ACTIVITY: &str = "projects.activity";
 
-fn condense_ticket(t: &Value) -> Value {
+pub(crate) fn condense_ticket(t: &Value) -> Value {
+    // `WEFT-N` when there is one, else the first 8 characters of the id: a
+    // full UUID in a prompt invites a small model to loop on its hex, and
+    // `board.read` resolves the short form.
     let short = t["source_url"]
         .as_str()
         .and_then(|u| u.rsplit('/').next())
         .filter(|s| s.starts_with("WEFT-"))
         .map(str::to_string)
-        .unwrap_or_else(|| t["id"].as_str().unwrap_or("").to_string());
+        .unwrap_or_else(|| t["id"].as_str().unwrap_or("").chars().take(8).collect());
     json!({
         "ref": short,
         "status": t["status"],
@@ -281,6 +293,12 @@ fn condense_ticket(t: &Value) -> Value {
         "assignee": t.get("assignee").cloned().unwrap_or(Value::Null),
         "updated_at": t.get("updated_at").cloned().unwrap_or(Value::Null),
     })
+}
+
+/// A goal for the model: the outcome text stays on the board (a goal's
+/// description runs to a kilobyte and buried the tickets in the prompt).
+fn condense_goal(g: &Value) -> Value {
+    json!({"title": g["title"], "status": g["status"], "target_date": g.get("target_date").cloned().unwrap_or(Value::Null)})
 }
 
 #[async_trait]
@@ -316,8 +334,11 @@ impl Tool for ProjectsActivity {
             .get("/api/harness/goals?limit=100&offset=0")
             .await
             .ok()
-            .and_then(|g| g.get("items").cloned())
-            .unwrap_or(Value::Array(vec![]));
+            .and_then(|g| g.get("items").and_then(Value::as_array).cloned())
+            .unwrap_or_default()
+            .iter()
+            .map(condense_goal)
+            .collect::<Vec<_>>();
         let project = arg_str(&args, "project");
         if let Some(p) = &project
             && !is_uuid(p)
@@ -337,94 +358,11 @@ impl Tool for ProjectsActivity {
             "read {} ticket(s){} and {} goal(s); history {}",
             condensed.len(),
             status.map(|s| format!(" in {s}")).unwrap_or_default(),
-            goals.as_array().map_or(0, Vec::len),
+            goals.len(),
             if history["available"] == true { "read" } else { history["reason"].as_str().unwrap_or("unavailable") }
         );
         Ok(ToolOutcome { summary, result: json!({"tickets": condensed, "goals": goals, "history": history}) })
     }
 }
 
-/// `notes.record`: a `kind: note` project-history entry on the project the
-/// note is about, resolved from an explicit `project`, else the ticket's
-/// project, else the configured default; refused when none resolves. With
-/// a ticket reference the note also lands as that ticket's comment.
-pub struct NotesRecord {
-    pub client: Arc<HarnessClient>,
-}
-
-const NOTES: &str = "notes.record";
-
-#[async_trait]
-impl Tool for NotesRecord {
-    fn spec(&self) -> ToolSpec {
-        ToolSpec {
-            id: NOTES,
-            description: "Record a project-history note (kind: note) on the project it is about; with a ticket it is also commented on that card.",
-            parameters: json!({
-                "type": "object",
-                "required": ["text"],
-                "properties": {
-                    "text": {"type": "string", "minLength": 3, "maxLength": 4000},
-                    "ticket": {"type": "string", "description": "WEFT-N, source id or UUID of the card the note is about."},
-                    "project": {"type": "string", "description": "Project UUID when the note is about a project other than the ticket's or the default."}
-                }
-            }),
-            gate: Gate::Open,
-        }
-    }
-
-    async fn call(&self, args: Value) -> Result<ToolOutcome, CosError> {
-        let text = need_str(NOTES, &args, "text")?;
-        if text.chars().count() > 4000 {
-            return Err(tool_err(NOTES, "note is longer than 4000 characters"));
-        }
-        let at = chrono::Utc::now().to_rfc3339();
-        let mut project = arg_str(&args, "project");
-        if let Some(p) = &project
-            && !is_uuid(p)
-        {
-            return Err(tool_err(NOTES, "project must be a UUID"));
-        }
-        let mut board = Value::Null;
-        let mut on = String::new();
-        if let Some(reference) = arg_str(&args, "ticket") {
-            let ticket = self.client.resolve_ticket(&reference).await?;
-            let id = ticket["id"].as_str().unwrap_or_default().to_string();
-            if project.is_none() {
-                project = ticket["project_id"].as_str().filter(|p| is_uuid(p)).map(str::to_string);
-            }
-            let body = json!({"ticket_id": id, "action": "comment", "value": format!("note: {text}")});
-            board = json!({"ticket_id": id, "comment": self.client.post("/api/harness/tickets", &body).await?});
-            on = format!(" on {reference}");
-        }
-        // The project the note is about: explicit, the ticket's, or the default.
-        let (title, summary, details_md) = split_note(&text);
-        let mut body = json!({"kind": "note", "title": title, "summary": summary, "occurred_at": at});
-        if let Some(d) = details_md {
-            body["details_md"] = Value::String(d);
-        }
-        let res = self.client.post_event(project.as_deref(), &body).await?;
-        let dedupe = if res["created"] == false { " (already recorded)" } else { "" };
-        Ok(ToolOutcome {
-            summary: format!("note recorded in project history{on}{dedupe}"),
-            result: json!({"kind": "note", "at": at, "project_id": project, "history": res, "board": board}),
-        })
-    }
-}
-
-/// PR #19 limits: title <= 200, summary <= 1000, details_md <= 20000. The
-/// first line (or the first 200 chars) is the title; the rest is the
-/// summary, and the whole note goes to `details_md` when it does not fit.
-fn split_note(text: &str) -> (String, String, Option<String>) {
-    let clip = |s: &str, n: usize| -> String {
-        if s.chars().count() <= n { s.to_string() } else { format!("{}…", s.chars().take(n - 1).collect::<String>()) }
-    };
-    let (first, rest) = match text.split_once('\n') {
-        Some((f, r)) => (f.trim(), r.trim()),
-        None => (text.trim(), ""),
-    };
-    let title = clip(first, 200);
-    let summary = clip(rest, 1000);
-    let fits = title == first && summary == rest;
-    (title, summary, if fits { None } else { Some(clip(text.trim(), 20_000)) })
-}
+pub use super::notes::NotesRecord;

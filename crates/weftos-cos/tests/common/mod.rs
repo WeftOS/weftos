@@ -202,7 +202,7 @@ pub async fn build_agent(llm: Arc<ScriptedLlm>, plan: Option<Arc<ScriptedLlm>>, 
         .with(Arc::new(NodesHealth { source: Arc::new(StaticHealth(json!({"reachable": true, "summary": {"healthy_nodes": 2, "total_nodes": 3}, "nodes": [1, 2, 3]}))) }));
     if let Some(addr) = harness {
         let client = Arc::new(HarnessClient::new(&format!("http://{addr}"), "/api/harness/projects/{project_id}/events", Some(TEST_PROJECT.into()), SecretToken::for_tests(TEST_TOKEN)));
-        tools = tools.with(Arc::new(ProjectsActivity { client: client.clone() })).with(Arc::new(NotesRecord { client }));
+        tools = tools.with(Arc::new(ProjectsActivity { client: client.clone() })).with(Arc::new(NotesRecord { client: Some(client), brain: None }));
     }
     let agent = CosAgent::new(routes, tools, ToolLog::new(Some(dir.path().join("tool-log.jsonl"))));
     TestAgent { agent, dir, llm }

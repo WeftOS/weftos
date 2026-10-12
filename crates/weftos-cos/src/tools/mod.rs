@@ -5,9 +5,11 @@
 //! event plus a JSONL line.
 
 pub mod board;
+pub mod cards;
 pub mod harness;
 pub mod kickoff;
 pub mod nodes;
+pub mod notes;
 pub mod ui;
 
 use std::collections::HashMap;

@@ -95,7 +95,7 @@ async fn ticket_note_comments_the_card_and_records_history_on_its_project() {
     use weftos_cos::tools::harness::NotesRecord;
     let (addr, posts) = FakeHarness { with_events_route: true, ..Default::default() }.start().await;
     // No default project: the project comes from the ticket.
-    let tool = NotesRecord { client: common::harness_client(addr, None) };
+    let tool = NotesRecord { client: Some(common::harness_client(addr, None)), brain: None };
     let out = tool.call(json!({"text": "Button debounce is 30 ms", "ticket": "WEFT-902"})).await.unwrap();
     assert_eq!(out.result["project_id"], common::TEST_PROJECT);
     assert!(out.summary.contains("on WEFT-902"), "{}", out.summary);
@@ -113,7 +113,7 @@ async fn note_without_a_resolvable_project_is_refused() {
     use weftos_cos::tools::Tool;
     use weftos_cos::tools::harness::NotesRecord;
     let (addr, posts) = FakeHarness { with_events_route: true, ..Default::default() }.start().await;
-    let tool = NotesRecord { client: common::harness_client(addr, None) };
+    let tool = NotesRecord { client: Some(common::harness_client(addr, None)), brain: None };
     let err = tool.call(json!({"text": "a note about nothing in particular"})).await.unwrap_err().to_string();
     assert!(err.contains("no project to record against"), "{err}");
     let err = tool.call(json!({"text": "a note", "project": "not-a-uuid"})).await.unwrap_err().to_string();

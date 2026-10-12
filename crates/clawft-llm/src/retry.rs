@@ -273,7 +273,19 @@ impl<P: Provider> Provider for RetryPolicy<P> {
         for attempt in 0..=self.config.max_retries {
             let (attempt_tx, mut attempt_rx) = mpsc::channel::<StreamChunk>(256);
 
-            match self.inner.complete_stream(request, attempt_tx).await {
+            // Drain the attempt while it runs: a bounded channel nobody reads
+            // until the call returns stalls any stream longer than its
+            // capacity (a reasoning model sends well over 256 chunks).
+            let drain = async {
+                let mut buffered = Vec::new();
+                while let Some(chunk) = attempt_rx.recv().await {
+                    buffered.push(chunk);
+                }
+                buffered
+            };
+            let (result, buffered) = tokio::join!(self.inner.complete_stream(request, attempt_tx), drain);
+
+            match result {
                 Ok(()) => {
                     if attempt > 0 {
                         debug!(
@@ -286,7 +298,7 @@ impl<P: Provider> Provider for RetryPolicy<P> {
                         }
                     }
                     // Forward buffered chunks to the real sender.
-                    while let Some(chunk) = attempt_rx.recv().await {
+                    for chunk in buffered {
                         if tx.send(chunk).await.is_err() {
                             break;
                         }
@@ -295,7 +307,7 @@ impl<P: Provider> Provider for RetryPolicy<P> {
                 }
                 Err(err) => {
                     // Discard buffered partial chunks from this failed attempt.
-                    drop(attempt_rx);
+                    drop(buffered);
 
                     if !is_retryable(&err) || attempt == self.config.max_retries {
                         if let Some((ord, prev_attempt, prev_delay)) = last_retry.take() {
@@ -697,5 +709,69 @@ mod tests {
         // recorded as failed. (The attempts before it don't record
         // until their successor attempt's outcome is known.)
         assert_eq!(model.lock().unwrap().training_sample_count(), 1);
+    }
+
+    /// Streams `chunks` text deltas; fails the first `fail_first` attempts
+    /// after sending a partial chunk.
+    struct StreamingProvider {
+        chunks: usize,
+        fail_first: AtomicU32,
+    }
+
+    #[async_trait]
+    impl Provider for StreamingProvider {
+        fn name(&self) -> &str {
+            "streaming"
+        }
+
+        async fn complete(&self, _request: &ChatRequest) -> Result<ChatResponse> {
+            Ok(MockProvider::success_response())
+        }
+
+        async fn complete_stream(&self, _request: &ChatRequest, tx: mpsc::Sender<StreamChunk>) -> Result<()> {
+            if self.fail_first.load(Ordering::SeqCst) > 0 {
+                self.fail_first.fetch_sub(1, Ordering::SeqCst);
+                let _ = tx.send(StreamChunk::TextDelta { text: "partial".into() }).await;
+                return Err(ProviderError::Timeout);
+            }
+            for i in 0..self.chunks {
+                tx.send(StreamChunk::TextDelta { text: format!("{i} ") }).await.map_err(|_| ProviderError::Timeout)?;
+            }
+            Ok(())
+        }
+    }
+
+    async fn collect_stream(provider: StreamingProvider) -> (Result<()>, Vec<StreamChunk>) {
+        let policy = RetryPolicy::new(provider, fast_retry_config());
+        let (tx, mut rx) = mpsc::channel(8);
+        let request = test_request();
+        let run = async { policy.complete_stream(&request, tx).await };
+        let collect = async {
+            let mut out = Vec::new();
+            while let Some(c) = rx.recv().await {
+                out.push(c);
+            }
+            out
+        };
+        tokio::join!(run, collect)
+    }
+
+    /// A stream longer than the attempt buffer (256) must not stall: reasoning
+    /// models send well over that many chunks.
+    #[tokio::test]
+    async fn long_streams_complete_through_the_retry_buffer() {
+        let result = tokio::time::timeout(Duration::from_secs(5), collect_stream(StreamingProvider { chunks: 1500, fail_first: AtomicU32::new(0) }))
+            .await
+            .expect("stream stalled");
+        assert!(result.0.is_ok());
+        assert_eq!(result.1.len(), 1500);
+    }
+
+    #[tokio::test]
+    async fn a_failed_attempts_partial_chunks_are_discarded() {
+        let (result, chunks) = collect_stream(StreamingProvider { chunks: 3, fail_first: AtomicU32::new(1) }).await;
+        assert!(result.is_ok());
+        assert_eq!(chunks.len(), 3);
+        assert!(chunks.iter().all(|c| !matches!(c, StreamChunk::TextDelta { text } if text == "partial")));
     }
 }

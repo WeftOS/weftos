@@ -42,6 +42,39 @@ fn tool_request(model: &str) -> ChatRequest {
     }
 }
 
+// ── Mock: streaming carries the same serving knobs ──────────────────────
+
+#[tokio::test]
+async fn streamed_turns_carry_num_ctx_and_the_reasoning_switch() {
+    let server = MockServer::start().await;
+    let sse = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":null}]}\n\n\
+               data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n\
+               data: [DONE]\n\n";
+    // The mock only matches if the streaming body has stream, num_ctx and enable_thinking.
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(body_partial_json(serde_json::json!({
+            "stream": true,
+            "options": {"num_ctx": 32768},
+            "chat_template_kwargs": {"enable_thinking": false}
+        })))
+        .respond_with(ResponseTemplate::new(200).insert_header("content-type", "text/event-stream").set_body_string(sse))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let provider = LocalProvider::new(server.uri(), "hermes".into(), None).with_num_ctx(32768).with_reasoning(ReasoningMode::Off);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+    provider.complete_stream(&tool_request("hermes"), tx).await.unwrap();
+    let mut text = String::new();
+    while let Some(chunk) = rx.recv().await {
+        if let clawft_llm::StreamChunk::TextDelta { text: t } = chunk {
+            text.push_str(&t);
+        }
+    }
+    assert_eq!(text, "ok");
+}
+
 // ── Mock: request-body augmentation ─────────────────────────────────────
 
 #[tokio::test]
