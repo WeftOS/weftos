@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Staging area for changes after the 0.8.4 cut.
 
+## [0.8.4-rc.9] - 2026-10-12
+
+### Added
+- Mesh creation step: `weaver mesh create` gives a mesh without a Seed licence its MeshId
+  (derived from the owner's user key and a fresh nonce, the licence's scheme) as a record signed
+  by the node and the user key; `weaver mesh adopt-licence`; `weaver mesh id` prints the id and
+  where it came from. The daemon sets its local MeshId at boot (licence first, then the record),
+  members learn it when they pair (verified against the primary's pinned key), and the heartbeat
+  reports `mesh_id` and the signed `mesh_record`. `weaver project add` checks that a weftos://
+  name's mesh is the local mesh.
+- `agent.uninstall` node action (plans first; refuses edited files, packages a team still needs,
+  or names not installed; chained).
+- `expose.set` node action: the dashboard can switch an exposure off or pause it; on stays local.
+- Chief of staff: `endpoints.<id>.speak` sets whether a remote endpoint speaks its own replies.
+
+### Fixed
+- `quinn-proto` 0.11.17 (RUSTSEC-2026-0339, RUSTSEC-2026-0342).
+
 ## [0.8.4-rc.8] - 2026-10-12
 
 ### Added
