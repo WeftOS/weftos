@@ -9,6 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Staging area for changes after the 0.8.4 cut.
 
+## [0.8.4-rc.8] - 2026-10-12
+
+### Added
+- `weaver project add | up | down | status | remove`: add a project to a developer machine in one
+  step (fetch over the mesh or git, register, detect how it runs, install its `/<slug>` route,
+  list required environment variables by name), start and stop it with process-compose, and
+  undo exactly what was added. The dashboard's "Add locally" uses the same path.
+  `docs/guides/developer-quickstart.md`.
+- Chief of staff on a real model: `scripts/build.sh cos-up` starts the agent with a local model
+  (llm lab) and stops it on exit, with a cloud fallback chain; tools for the board, the current
+  card and mesh routes; notes to project history and a per-installation RVF brain; local
+  speech-to-text and spoken replies with barge-in. The conversation API is frozen as `cos.v1`
+  (`docs/plans/adr-118-cos-contract.md`), with per-endpoint replies and an optional tailnet bind
+  with per-endpoint tokens (`weftos-cos endpoint add`).
+- Display sessions over the certified-leaf channel (ADR-117): `display.*` RPCs, `weaver leaf
+  status`, `cos-console-host --leaf`, the edge-pad firmware renders sessions; hardware-in-the-loop
+  script `scripts/edgepad-console-hil.sh`.
+- Mesh resources and exposures (ADR-120 X1-X2): library and toolchain facts (CUDA, ROCm, Core ML,
+  MLX, PyTorch, ONNX Runtime) and live free VRAM; one exposure registry with
+  `weaver expose list | on | off | pause | log` and a `[mesh.expose]` master switch; unannounced
+  exposures are refused; a hash-chained activity log; exposures and resources in the heartbeat.
+- `weftos team apply | status | uninstall` (ADR-112 TM2): project-scoped apply with a lock,
+  collision refusal, a birth report and symmetric uninstall; `agent.install` uses the same path.
+- MCP: stateless 2026-07-28 requests and `server/discover` next to the 2025-06-18 handshake.
+
+### Fixed
+- HNSW memory search: queries no longer serialize on the store and model locks (10K: 18-thread
+  throughput 321 -> about 114,000 queries/s), graph builds are about 10x faster, and deletes or
+  upserts between rebuilds can no longer return the wrong entry.
+- A flaky mesh-fetch test, `clawft-voice-onnx` clippy under `--features onnx` (now in the gate),
+  and `scripts/build.sh --help` executing text in its usage message.
+- Long model streams no longer stall in the retry buffer (more than 256 chunks).
+
 ## [0.8.4-rc.7] - 2026-10-12
 
 ### Added
