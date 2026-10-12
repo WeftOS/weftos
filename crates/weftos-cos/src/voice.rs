@@ -78,6 +78,7 @@ pub struct PushToTalk {
     conv: Arc<dyn Conversation>,
     retention: Retention,
     device: Option<String>,
+    barge_in: Option<Arc<crate::speak::Speaker>>,
     #[cfg(feature = "mic")]
     capture: Mutex<Option<capture::Capture>>,
     #[cfg(not(feature = "mic"))]
@@ -86,7 +87,7 @@ pub struct PushToTalk {
 
 impl PushToTalk {
     pub fn new(stt: Arc<dyn SttBackend>, conv: Arc<dyn Conversation>) -> Self {
-        Self { stt, conv, retention: Retention::default(), device: None, capture: Mutex::new(None) }
+        Self { stt, conv, retention: Retention::default(), device: None, barge_in: None, capture: Mutex::new(None) }
     }
 
     pub fn with_retention(mut self, retention: Retention) -> Self {
@@ -99,6 +100,12 @@ impl PushToTalk {
         self
     }
 
+    /// A press of the button interrupts this speaker's reply in progress.
+    pub fn with_barge_in(mut self, speaker: Arc<crate::speak::Speaker>) -> Self {
+        self.barge_in = Some(speaker);
+        self
+    }
+
     /// Whether a capture is in progress (the console shows `ptt_active`).
     pub fn is_active(&self) -> bool {
         self.capture.lock().unwrap_or_else(|e| e.into_inner()).is_some()
@@ -107,7 +114,12 @@ impl PushToTalk {
     /// Handle a button edge: `Down` starts capture, `Up` finishes the turn.
     pub async fn on_edge(&self, edge: PttEdge) -> Result<Option<PttOutcome>, CosError> {
         match edge {
-            PttEdge::Down => self.ptt_down().map(|()| None),
+            PttEdge::Down => {
+                if let Some(s) = &self.barge_in {
+                    s.interrupt();
+                }
+                self.ptt_down().map(|()| None)
+            }
             PttEdge::Up => self.ptt_up().await.map(Some),
         }
     }

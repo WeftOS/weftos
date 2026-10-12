@@ -445,6 +445,17 @@ fn convert_response_to_value(response: &ChatResponse) -> serde_json::Value {
 /// ADR-060 Hermes alias) use keyless [`LocalProvider`] so zero-config Hermes
 /// works without inventing dummy API keys.
 pub fn create_adapter_from_config(config: &Config) -> Arc<dyn LlmProvider> {
+    create_adapter_from_config_with_reasoning(config, None)
+}
+
+/// [`create_adapter_from_config`] with a reasoning mode for local providers
+/// (`chat_template_kwargs.enable_thinking`): `Off` for concise tool and voice
+/// turns, `On` for planning. `None` leaves the server template's default.
+/// Cloud providers ignore it.
+pub fn create_adapter_from_config_with_reasoning(
+    config: &Config,
+    reasoning: Option<clawft_llm::ReasoningMode>,
+) -> Arc<dyn LlmProvider> {
     let model = &config.agents.defaults.model;
     let (prefix, bare_model) = ProviderRouter::strip_prefix(model);
 
@@ -492,7 +503,7 @@ pub fn create_adapter_from_config(config: &Config) -> Arc<dyn LlmProvider> {
         let num_ctx = provider_name == "local"
             || provider_name == "hermes"
             || bare_model == clawft_types::config::DEFAULT_LOCAL_LLM_MODEL;
-        let local = maybe_placed(&provider_name, config, &provider_config, app_api_key, num_ctx);
+        let local = maybe_placed(&provider_name, config, &provider_config, app_api_key, num_ctx, reasoning);
         // WEFT-39: shared EML RetryModel, restored from disk on first use.
         let retrying = clawft_llm::retry::RetryPolicy::with_model(
             ProviderRef(local),
@@ -619,6 +630,7 @@ fn create_adapter_for_provider(provider_name: &str, config: &Config) -> Arc<dyn 
             &provider_config,
             app_api_key,
             matches!(provider_name, "local" | "hermes"),
+            None,
         );
         let retrying = clawft_llm::retry::RetryPolicy::with_model(
             ProviderRef(local),
@@ -703,11 +715,15 @@ fn maybe_placed(
     provider_config: &LlmProviderConfig,
     app_api_key: Option<String>,
     num_ctx: bool,
+    reasoning: Option<clawft_llm::ReasoningMode>,
 ) -> Arc<dyn clawft_llm::Provider> {
     let build = move |cfg: LlmProviderConfig| -> Arc<dyn clawft_llm::Provider> {
         let mut local = LocalProvider::from_config(cfg, app_api_key.clone());
         if num_ctx {
             local = local.with_num_ctx(clawft_llm::local_provider::HERMES_DEFAULT_NUM_CTX);
+        }
+        if let Some(mode) = reasoning {
+            local = local.with_reasoning(mode);
         }
         Arc::new(local)
     };

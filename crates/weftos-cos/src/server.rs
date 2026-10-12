@@ -5,7 +5,7 @@
 //! POST /v1/cos/answer {kind, id, value}        -> 202 {turn_id}   (guide touch)
 //! POST /v1/cos/ptt {down}                      -> 202 {active, posted?|nothing?}
 //! GET  /v1/cos/events                          -> text/event-stream of Event
-//! GET  /healthz                          -> 200 {ok: true}
+//! GET  /healthz                                -> 200 {ok: true, api: "cos.v1"}
 //! ```
 //!
 //! Binds only to a loopback address; anything else is refused before the
@@ -32,6 +32,9 @@ use tokio::sync::broadcast::error::RecvError;
 use crate::CosError;
 use crate::conversation::{Conversation, GuideAnswer, UserUtterance};
 use crate::voice::{PttControl, PttEdge, PttOutcome};
+
+/// The frozen contract version (`docs/plans/adr-118-cos-contract.md` section 3).
+pub const API_VERSION: &str = "cos.v1";
 
 type Shared = Arc<dyn Conversation>;
 type SharedPtt = Option<Arc<dyn PttControl>>;
@@ -61,7 +64,7 @@ pub fn router_with(conv: Shared, ptt: SharedPtt) -> Router {
         .route("/v1/cos/answer", post(answer))
         .route("/v1/cos/ptt", post(ptt_edge))
         .route("/v1/cos/events", get(events))
-        .route("/healthz", get(|| async { Json(json!({"ok": true})) }))
+        .route("/healthz", get(|| async { Json(json!({"ok": true, "api": API_VERSION})) }))
         .with_state(Api { conv, ptt })
 }
 

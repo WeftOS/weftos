@@ -22,7 +22,7 @@ use crate::tools::{Gate, ToolLog, ToolRegistry};
 const MAX_ROUNDS: usize = 4;
 /// Messages kept in the rolling history (system prompt excluded).
 const HISTORY_LIMIT: usize = 40;
-const MAX_TOKENS: i32 = 1200;
+const MAX_TOKENS: i32 = 2400;
 
 /// How a turn continues after one tool call.
 enum Flow {
@@ -51,6 +51,7 @@ struct Inner {
     pending: Mutex<Option<PendingAction>>,
     turn_gate: Mutex<()>,
     lanes_running: AtomicU32,
+    voice_turns: std::sync::Mutex<std::collections::VecDeque<String>>,
 }
 
 #[derive(Clone)]
@@ -76,8 +77,15 @@ impl CosAgent {
                 pending: Mutex::new(None),
                 turn_gate: Mutex::new(()),
                 lanes_running: AtomicU32::new(0),
+                voice_turns: std::sync::Mutex::new(std::collections::VecDeque::new()),
             }),
         }
+    }
+
+    /// Whether `turn` began as a spoken utterance (its reply is read aloud).
+    /// Remembers the last 64 turns.
+    pub fn is_voice_turn(&self, turn: &TurnId) -> bool {
+        self.inner.voice_turns.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|t| *t == turn.0)
     }
 
     /// Run a turn to completion (tests and the typed dev loop use this; the
@@ -112,6 +120,13 @@ impl Conversation for CosAgent {
             return Err(CosError::Config("utterance longer than 8000 characters".into()));
         }
         let turn_id = TurnId::new();
+        if utterance.source == Source::Voice {
+            let mut v = self.inner.voice_turns.lock().unwrap_or_else(|e| e.into_inner());
+            v.push_back(turn_id.0.clone());
+            while v.len() > 64 {
+                v.pop_front();
+            }
+        }
         let agent = self.clone();
         let id = turn_id.clone();
         tokio::spawn(async move { agent.run_turn(id, utterance).await });
@@ -186,12 +201,27 @@ impl Inner {
         let system = json!({"role": "system", "content": system_prompt(&self.tools.specs(), &today)});
         let specs = self.tools.openai_specs();
 
+        let chain = self.routes.chain(route);
+        let mut at = 0;
         for _round in 0..MAX_ROUNDS {
             let messages: Vec<Value> = {
                 let h = self.history.lock().await;
                 std::iter::once(system.clone()).chain(h.iter().cloned()).collect()
             };
-            let response = self.call_model(turn_id, route, &messages, &specs).await?;
+            // The primary model cannot answer: move down the chain and say so
+            // on the status line, which always names the model actually
+            // answering.
+            let response = loop {
+                match self.call_model(turn_id, chain[at], &messages, &specs).await {
+                    Ok(r) => break r,
+                    Err(e) if at + 1 < chain.len() => {
+                        tracing::warn!(turn = %turn_id, from = %chain[at].model_id, to = %chain[at + 1].model_id, error = %redact(&e.to_string()), "model failed; falling back");
+                        at += 1;
+                        self.status(&format!("{task} (fallback)"), &chain[at].model_id);
+                    }
+                    Err(e) => return Err(e),
+                }
+            };
             let msg = &response["choices"][0]["message"];
             let content = msg["content"].as_str().unwrap_or("").trim().to_string();
             let calls = msg["tool_calls"].as_array().cloned().unwrap_or_default();
@@ -362,6 +392,12 @@ fn describe_action(tool: &str, args: &Value) -> String {
                 Some(lane) => format!("start the {lane} lane of {team} on {card}"),
                 None => format!("start the {team} team on {card}"),
             }
+        }
+        "board.claim" => format!("claim {} on the board", args["ticket"].as_str().unwrap_or("?")),
+        "board.note" => {
+            let text = args["text"].as_str().unwrap_or("");
+            let clipped: String = text.chars().take(80).collect();
+            format!("comment on {}: \"{clipped}\"", args["ticket"].as_str().unwrap_or("?"))
         }
         other => format!("run {other}"),
     }

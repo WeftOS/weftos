@@ -33,16 +33,33 @@ pub struct CosConfig {
     pub tool_log: Option<PathBuf>,
     pub team: TeamConfig,
     pub voice: VoiceConfig,
+    pub brain: BrainConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ModelsConfig {
-    /// Fast local model for quick turns. Default: the app's
-    /// `agents.defaults.model`.
+    /// Fast model for quick turns. Default: the local MLX Qwen3-4B
+    /// (`model::LOCAL_DEFAULT_MODEL`).
     pub quick: Option<String>,
-    /// Frontier model for planning turns. Default: the quick model.
+    /// Model for planning turns. Default: the keyed cloud provider's
+    /// frontier model when there is one, else the quick model.
     pub plan: Option<String>,
+    /// Models tried in order when the model for a turn cannot answer.
+    /// Default: the fast model of every keyed cloud provider; `[]` turns the
+    /// fallback off.
+    pub fallback: Option<Vec<String>>,
+    /// OpenAI-compatible endpoint of the local server. Applied as
+    /// `providers.local.apiBase` unless the app config already sets one.
+    pub local_api_base: String,
+    /// Local models think before answering unless told not to. `auto`
+    /// (default): off for quick turns, on for planning turns; `on`, `off`, or
+    /// `default` (leave the server template alone). A plan model that is the
+    /// quick model shares the quick setting. Cloud models ignore it.
+    pub reasoning: String,
+    /// argv that starts the local server (detached by `weftos-cos model
+    /// start`). Default: the llm lab's `~/llm/bin/serve`.
+    pub serve_command: Option<Vec<String>>,
     /// Complexity score at or above which a turn is a planning turn (ADR-026
     /// uses 30%).
     pub plan_threshold: f32,
@@ -91,6 +108,47 @@ pub struct VoiceConfig {
     /// Debug only: keep the captured audio as a WAV under `debug_audio_dir`.
     pub keep_audio_debug: bool,
     pub debug_audio_dir: Option<PathBuf>,
+    /// Spoken replies. Default: the Mac's `say` where it exists, else off.
+    pub tts: TtsConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TtsConfig {
+    /// `say` (macOS), `command` (any argv that reads the text on stdin and
+    /// plays it: a Kokoro, Pocket TTS or Orpheus wrapper) or `none`.
+    /// `auto` picks `say` when it exists.
+    pub engine: String,
+    /// `say -v`; the system voice when unset.
+    pub voice: Option<String>,
+    /// `say -r` words per minute.
+    pub rate: Option<u32>,
+    /// argv for `engine: command`.
+    pub command: Option<Vec<String>>,
+}
+
+impl Default for TtsConfig {
+    fn default() -> Self {
+        Self { engine: "auto".into(), voice: None, rate: None, command: None }
+    }
+}
+
+/// The installation brain (ADR-121 decision 9): a ruvector (RVF) store the
+/// chief of staff writes its notes to, each with brain metadata
+/// (`agents/schemas/brain-metadata.schema.json`).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct BrainConfig {
+    /// RVF file. Default `~/.weftos/brains/chief-of-staff/<installation>.rvf`.
+    pub path: Option<PathBuf>,
+    /// The installation the brain is bound to (a `weftos://.../installations/<id>`
+    /// name or its id). Default `local`.
+    pub installation: Option<String>,
+    /// `sha256:` digest of the agent package. Default: read from
+    /// `agents/catalog.json` (found from the working directory upward).
+    pub package: Option<String>,
+    /// Catalog to read the digest from, when not found from the working directory.
+    pub catalog: Option<PathBuf>,
 }
 
 fn config_home() -> PathBuf {
@@ -101,7 +159,15 @@ fn config_home() -> PathBuf {
 
 impl Default for ModelsConfig {
     fn default() -> Self {
-        Self { quick: None, plan: None, plan_threshold: 0.3 }
+        Self {
+            quick: None,
+            plan: None,
+            fallback: None,
+            local_api_base: crate::model::LOCAL_DEFAULT_BASE.into(),
+            reasoning: "auto".into(),
+            serve_command: None,
+            plan_threshold: 0.3,
+        }
     }
 }
 
@@ -130,6 +196,7 @@ impl Default for CosConfig {
             tool_log: Some(config_home().join("cos/tool-log.jsonl")),
             team: TeamConfig::default(),
             voice: VoiceConfig::default(),
+            brain: BrainConfig::default(),
         }
     }
 }
@@ -177,6 +244,9 @@ impl CosConfig {
 
     fn validate(&self) -> Result<(), CosError> {
         self.bind_addr()?;
+        if !["auto", "on", "off", "default"].contains(&self.models.reasoning.as_str()) {
+            return Err(CosError::Config("models.reasoning must be auto, on, off or default".into()));
+        }
         if !(0.0..=1.0).contains(&self.models.plan_threshold) {
             return Err(CosError::Config("models.plan_threshold must be within 0..=1".into()));
         }

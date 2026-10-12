@@ -14,6 +14,15 @@ struct Cli {
 enum Cmd {
     /// Start the agent and the conversation API.
     Serve(ServeArgs),
+    /// Check, start or stop the local model server.
+    #[command(subcommand)]
+    Model(weftos_cos::cli::ModelCmd),
+    /// Transcribe a WAV file with the configured STT (no microphone needed).
+    Transcribe {
+        wav: std::path::PathBuf,
+        #[arg(long)]
+        config: Option<std::path::PathBuf>,
+    },
 }
 
 #[tokio::main]
@@ -24,5 +33,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
     match Cli::parse().cmd {
         Cmd::Serve(args) => weftos_cos::cli::serve(args).await,
+        Cmd::Model(cmd) => weftos_cos::cli::model(cmd).await,
+        Cmd::Transcribe { wav, config } => weftos_cos::cli::transcribe(wav, config).await,
     }
 }

@@ -17,15 +17,18 @@
 //! status only, and every outbound event passes through [`events::redact`].
 
 pub mod agent;
+pub mod brain;
 pub mod cli;
 pub mod config;
 pub mod conversation;
 pub mod events;
 pub mod guide;
 pub mod host;
+pub mod model;
 pub mod prompt;
 pub mod routing;
 pub mod server;
+pub mod speak;
 pub mod tools;
 pub mod voice;
 

@@ -468,7 +468,12 @@ impl Provider for LocalProvider {
             req = req.header(k.as_str(), v.as_str());
         }
 
-        let response = req.json(&stream_request).send().await.map_err(|e| self.send_error(e))?;
+        // Same Hermes-aware body as the non-streaming path: the explicit
+        // context window and the per-turn reasoning switch apply to a
+        // streamed turn too.
+        let mut body = serde_json::to_value(&stream_request).map_err(|e| ProviderError::InvalidResponse(e.to_string()))?;
+        hermes::augment_request_body(&mut body, self.num_ctx, self.reasoning);
+        let response = req.json(&body).send().await.map_err(|e| self.send_error(e))?;
 
         let status = response.status();
         if !status.is_success() {

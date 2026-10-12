@@ -14,12 +14,13 @@
 use std::sync::Arc;
 
 use clawft_core::complexity::TaskComplexityAnalyzer;
-use clawft_core::pipeline::llm_adapter::create_adapter_from_config;
+use clawft_core::pipeline::llm_adapter::create_adapter_from_config_with_reasoning;
 use clawft_core::pipeline::transport::LlmProvider;
-use clawft_llm::ProviderRouter;
+use clawft_llm::{ProviderRouter, ReasoningMode};
 use clawft_types::config::Config;
 
 use crate::config::ModelsConfig;
+use crate::model;
 
 /// Which tier a turn was routed to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,17 +54,32 @@ impl Route {
         Self { model_id, bare_model, provider }
     }
 
-    /// Resolve `model_id` through the app config's provider routing.
-    pub fn from_app_config(app: &Config, model_id: &str) -> Self {
+    /// Resolve `model_id` through the app config's provider routing, with a
+    /// reasoning mode for local providers (`None` leaves the server default).
+    pub fn from_app_config(app: &Config, model_id: &str, reasoning: Option<ReasoningMode>) -> Self {
         let mut cfg = app.clone();
         cfg.agents.defaults.model = model_id.to_string();
-        Self::new(model_id, create_adapter_from_config(&cfg))
+        Self::new(model_id, create_adapter_from_config_with_reasoning(&cfg, reasoning))
+    }
+}
+
+/// The reasoning switch for a tier, from `models.reasoning`: `auto` thinks on
+/// planning turns and not on quick ones (a quick turn is a tool call or a
+/// short spoken answer; a model that thinks first can spend its whole budget
+/// before the first word), `on`/`off` apply to both, `default` leaves the
+/// server template alone. Only local providers act on it.
+fn reasoning_for(setting: &str, tier: Tier) -> Option<ReasoningMode> {
+    match (setting, tier) {
+        ("default", _) => None,
+        ("on", _) | ("auto", Tier::Plan) => Some(ReasoningMode::On),
+        _ => Some(ReasoningMode::Off),
     }
 }
 
 pub struct ModelRoutes {
     quick: Route,
     plan: Route,
+    fallback: Vec<Route>,
     threshold: f32,
     analyzer: TaskComplexityAnalyzer,
 }
@@ -75,17 +91,56 @@ const PLAN_CUES: &[&str] = &[
 
 impl ModelRoutes {
     pub fn new(quick: Route, plan: Route, threshold: f32) -> Self {
-        Self { quick, plan, threshold: threshold.clamp(0.0, 1.0), analyzer: TaskComplexityAnalyzer::new() }
+        Self { quick, plan, fallback: Vec::new(), threshold: threshold.clamp(0.0, 1.0), analyzer: TaskComplexityAnalyzer::new() }
     }
 
-    /// Build both routes from the app config and the host's model settings.
-    /// Quick defaults to `agents.defaults.model`; plan defaults to quick.
+    /// Routes to retry on, in order, when the primary one cannot answer.
+    pub fn with_fallback(mut self, fallback: Vec<Route>) -> Self {
+        self.fallback = fallback;
+        self
+    }
+
+    /// Build the routes from the app config and the host's model settings:
+    /// the local default, and the keyed cloud providers for planning and as
+    /// the fallback chain (see [`crate::model`]). `providers.local.apiBase`
+    /// is set from `models.local_api_base` unless the app config already has
+    /// one.
     pub fn from_app_config(app: &Config, models: &ModelsConfig) -> Self {
-        let quick_id = models.quick.clone().unwrap_or_else(|| app.agents.defaults.model.clone());
-        let plan_id = models.plan.clone().unwrap_or_else(|| quick_id.clone());
-        let quick = Route::from_app_config(app, &quick_id);
-        let plan = if plan_id == quick_id { quick.clone() } else { Route::from_app_config(app, &plan_id) };
-        Self::new(quick, plan, models.plan_threshold)
+        let clouds = model::detect_clouds(app, &model::env_present);
+        Self::from_plan(app, models, &model::ModelPlan::resolve(models, &clouds))
+    }
+
+    /// [`Self::from_app_config`] for an already resolved plan.
+    pub fn from_plan(app: &Config, models: &ModelsConfig, plan: &model::ModelPlan) -> Self {
+        let mut app = app.clone();
+        if app.providers.local.api_base.is_none() {
+            app.providers.local.api_base = Some(models.local_api_base.clone());
+        }
+        let quick = Route::from_app_config(&app, &plan.quick, reasoning_for(&models.reasoning, Tier::Quick));
+        let plan_route = if plan.plan == plan.quick {
+            quick.clone()
+        } else {
+            Route::from_app_config(&app, &plan.plan, reasoning_for(&models.reasoning, Tier::Plan))
+        };
+        Self::new(quick, plan_route, models.plan_threshold)
+            .with_fallback(plan.fallback.iter().map(|id| Route::from_app_config(&app, id, reasoning_for(&models.reasoning, Tier::Quick))).collect())
+    }
+
+    /// The routes to try for a turn whose first choice is `primary`: it, then
+    /// (for a planning turn) the quick route, then the fallbacks; no model
+    /// twice.
+    pub fn chain<'a>(&'a self, primary: &'a Route) -> Vec<&'a Route> {
+        let mut out: Vec<&Route> = vec![primary];
+        for r in std::iter::once(&self.quick).chain(self.fallback.iter()) {
+            if !out.iter().any(|o| o.model_id == r.model_id) {
+                out.push(r);
+            }
+        }
+        out
+    }
+
+    pub fn fallback(&self) -> &[Route] {
+        &self.fallback
     }
 
     /// Pick the route for an utterance.
@@ -136,6 +191,15 @@ mod tests {
             Route::new("anthropic/big-model", Arc::new(Nop)),
             0.3,
         )
+    }
+
+    #[test]
+    fn reasoning_follows_the_tier() {
+        assert_eq!(reasoning_for("auto", Tier::Quick), Some(ReasoningMode::Off));
+        assert_eq!(reasoning_for("auto", Tier::Plan), Some(ReasoningMode::On));
+        assert_eq!(reasoning_for("on", Tier::Quick), Some(ReasoningMode::On));
+        assert_eq!(reasoning_for("off", Tier::Plan), Some(ReasoningMode::Off));
+        assert_eq!(reasoning_for("default", Tier::Plan), None);
     }
 
     #[test]
