@@ -523,6 +523,38 @@ const ROUTES: &[ExtRoute] = &[
     // One prefix for shared.embed / shared.llm.chat / shared.llm.models: the
     // handler resolves the project itself (token scope or Admin) and refuses
     // anonymous callers; `Write` is the floor.
+    // ADR-117 D1/D2: an app drives a leaf display through the daemon. Exact
+    // names, not a prefix: each verb is classified in `scope_gate`.
+    ExtRoute {
+        prefix: "display.open",
+        capability: Capability::Write,
+        handler: crate::display_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "display.ops",
+        capability: Capability::Write,
+        handler: crate::display_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "display.poll",
+        capability: Capability::Write,
+        handler: crate::display_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "display.close",
+        capability: Capability::Write,
+        handler: crate::display_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "display.revoke",
+        capability: Capability::Admin,
+        handler: crate::display_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "display.status",
+        capability: Capability::Read,
+        handler: crate::display_rpc::handle,
+    },
     ExtRoute {
         prefix: "shared.",
         capability: Capability::Write,
@@ -824,6 +856,38 @@ const ROUTES: &[ExtRoute] = &[
     // One prefix for shared.embed / shared.llm.chat / shared.llm.models: the
     // handler resolves the project itself (token scope or Admin) and refuses
     // anonymous callers; `Write` is the floor.
+    // ADR-117 D1/D2: an app drives a leaf display through the daemon. Exact
+    // names, not a prefix: each verb is classified in `scope_gate`.
+    ExtRoute {
+        prefix: "display.open",
+        capability: Capability::Write,
+        handler: crate::display_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "display.ops",
+        capability: Capability::Write,
+        handler: crate::display_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "display.poll",
+        capability: Capability::Write,
+        handler: crate::display_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "display.close",
+        capability: Capability::Write,
+        handler: crate::display_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "display.revoke",
+        capability: Capability::Admin,
+        handler: crate::display_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "display.status",
+        capability: Capability::Read,
+        handler: crate::display_rpc::handle,
+    },
     ExtRoute {
         prefix: "shared.",
         capability: Capability::Write,

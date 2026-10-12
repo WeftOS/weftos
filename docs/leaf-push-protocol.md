@@ -110,6 +110,18 @@ Discovery advertises the leaf bind IP (for a wildcard, the interface that
 answers the asking leaf). This key applies to the in-daemon mesh
 (`[kernel.mesh]`); the machine mesh service reads its own `mesh.toml`.
 
+### Display sessions (ADR-117)
+
+An app can hold a leaf's screen as a session instead of pushing bare scene
+envelopes. The frames (`SessionFrame` in `weftos-leaf-scene::session`) ride
+the same two topics: host to leaf on `mesh.leaf.<pk>.push`, leaf to host on
+`mesh.leaf.<pk>.input`. The carrier is the JSON the leaf already uses,
+`{"type":"display_session","cbor_b64":"<CBOR SessionFrame>","target_pubkey":"<id>"}`;
+the leaf's replies and its touch and button events go out as signed
+`ipc.publish` frames through the same durable journal. The daemon side is the
+`display.*` RPC (`crates/clawft-weave/src/display_rpc.rs`). Wire details and
+the pad's rules: `docs/design/display-session-transport.md`.
+
 ## 4. Payloads — `LeafPush`
 
 `#[non_exhaustive]` enum — new variants are additive, old leaves ignore

@@ -158,6 +158,10 @@ clawft-weave = { path = ".", features = ["test-support"] }
 clawft-mesh-local = { workspace = true, features = ["testing"] }
 # P3-X e2e: start the real service in-process with an injected peer source.
 clawft-mesh-service = { workspace = true, features = ["testing"] }
+# ADR-117 e2e: the real display client, the console host and an emulated
+# edge pad against this daemon (tests/display_e2e.rs).
+weftos-display-client = { path = "../weftos-display-client", features = ["wire-leaf"] }
+weftos-cos-console = { path = "../weftos-cos-console" }
 
 # Spawns real child processes (the test binary acts as a fake project
 # kernel, so it needs its own `main`): see tests/project_supervisor.rs.

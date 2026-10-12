@@ -13,6 +13,9 @@ pub struct LeafEndpoint {
     /// The leaf's certified public key, hex, as `weaver leaf` uses it.
     pub leaf_id: String,
     pub display: DisplayId,
+    /// The daemon's Unix socket. `None` uses `$WEFTOS_RUNTIME_DIR/kernel.sock`,
+    /// else `~/.clawft/kernel.sock`.
+    pub daemon: Option<std::path::PathBuf>,
 }
 
 /// Desktop window settings for [`DisplayTarget::Window`].
@@ -36,10 +39,10 @@ impl Default for WindowConfig {
     }
 }
 
-/// The three backends. `Window` needs the `window` feature and `Leaf`
-/// arrives with D2; without them `open` returns `DisplayError::NotYet`
-/// rather than failing to compile, so lane B code can name every
-/// target today.
+/// The three backends. `Window` needs the `window` feature; without it
+/// `open` returns `DisplayError::NotYet` rather than failing to compile,
+/// so lane B code can name every target today. `Leaf` goes through the
+/// daemon and fails with a `Backend` error when it cannot be reached.
 #[derive(Clone)]
 pub enum DisplayTarget {
     /// In-process simulated leaf; keep a clone of the handle to drive it.

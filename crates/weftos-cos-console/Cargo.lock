@@ -923,6 +923,8 @@ dependencies = [
  "embedded-graphics",
  "embedded-graphics-simulator",
  "sdl2",
+ "serde",
+ "serde_json",
  "weftos-leaf-renderer",
  "weftos-leaf-scene",
  "weftos-leaf-sim",

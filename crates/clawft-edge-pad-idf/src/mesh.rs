@@ -12,6 +12,9 @@
 //!   CBOR, decode to `LeafPush`.
 //!
 //! Inbound display pushes still use the existing JSON mesh envelope.
+//! Display sessions (`session.rs`) ride the same push carrier; their
+//! replies and the touch / push-to-talk events go out as signed `.input`
+//! publishes through the same durable journal.
 
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, UdpSocket};
@@ -25,10 +28,12 @@ use crate::scene::LeafScene;
 use ed25519_dalek::SigningKey;
 use esp_idf_svc::nvs::EspDefaultNvs;
 use weftos_leaf_types::push_topic;
+use weftos_leaf_scene::session::{b64, envelope as wire, SessionFrame};
 use weftos_leaf_scene::{InputEnvelope, InputEvent};
 use weftos_leaf_types::link::{LeafCertificate, OfflineJournal, ParentAdvertisement, PublishAck, FRAME_MAGIC, ACK_MAGIC};
 
 use crate::display::DpiDisplay;
+use crate::session::PadSession;
 
 // Per-device credentials come from the operator's provisioned files at
 // build time. An image built without them boots the display but never
@@ -39,28 +44,12 @@ const MAX_NVS_JOURNAL: usize = 4096;
 
 const RX_BUF: usize = 8192;
 
-/// Hand-rolled subscribe `MeshIpcEnvelope` (fixed-shape JSON).
-/// Identical to `clawft-edge-pad::mesh::subscribe_envelope`.
-fn subscribe_envelope(id: &str, topic: &str) -> String {
-    format!(
-        concat!(
-            r#"{{"source_node":"{id}","dest_node":"daemon","message":{{"#,
-            r#""id":"leaf-sub-1","from":0,"target":{{"Topic":"mesh.subscribe"}},"#,
-            r#""payload":{{"Json":{{"topic":"{topic}"}}}},"#,
-            r#""timestamp":"2026-05-14T00:00:00Z"}},"#,
-            r#""hop_count":0,"envelope_id":"leaf-env-sub-1"}}"#
-        ),
-        id = id,
-        topic = topic,
-    )
-}
-
 fn input_envelope(id: &str, topic: &str, event: InputEvent) -> anyhow::Result<String> {
     let input = InputEnvelope::new(0, None, event);
     let cbor = weftos_leaf_scene::codec::encode(&input)
         .map_err(|e| anyhow::anyhow!("encode touch CBOR: {e:?}"))?;
     let inner = serde_json::json!({
-        "type": "leaf_input", "cbor_b64": base64_encode(&cbor), "target_pubkey": id
+        "type": "leaf_input", "cbor_b64": b64::encode(&cbor), "target_pubkey": id
     }).to_string();
     Ok(serde_json::json!({
         "source_node": id, "dest_node": "daemon",
@@ -70,21 +59,6 @@ fn input_envelope(id: &str, topic: &str, event: InputEvent) -> anyhow::Result<St
             "timestamp": "2026-05-14T00:00:00Z"},
         "hop_count": 0, "envelope_id": "leaf-env-input"
     }).to_string())
-}
-
-fn base64_encode(bytes: &[u8]) -> String {
-    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let a = chunk[0];
-        let b = *chunk.get(1).unwrap_or(&0);
-        let c = *chunk.get(2).unwrap_or(&0);
-        out.push(TABLE[(a >> 2) as usize] as char);
-        out.push(TABLE[(((a & 3) << 4) | (b >> 4)) as usize] as char);
-        out.push(if chunk.len() > 1 { TABLE[(((b & 15) << 2) | (c >> 6)) as usize] as char } else { '=' });
-        out.push(if chunk.len() > 2 { TABLE[(c & 63) as usize] as char } else { '=' });
-    }
-    out
 }
 
 /// Write a `[4-byte BE length][payload]` frame to the socket.
@@ -98,6 +72,25 @@ fn write_frame(sock: &mut TcpStream, payload: &[u8]) -> std::io::Result<()> {
 /// Read exactly `buf.len()` bytes or fail.
 fn read_exact(sock: &mut TcpStream, buf: &mut [u8]) -> std::io::Result<()> {
     sock.read_exact(buf)
+}
+
+/// Events parked because the journal was full.
+#[derive(Default)]
+struct Held {
+    touch: Option<InputEvent>,
+    ptt: Option<bool>,
+}
+
+/// A touch event as the session's `Input` frame: hit-tested against the
+/// retained scene here, so the host gets the object, not the coordinates.
+fn touch_frame(scene: &LeafScene, session: &PadSession, event: InputEvent) -> Option<SessionFrame> {
+    let node = match event {
+        InputEvent::PointerDown { x, y, .. } | InputEvent::PointerMove { x, y, .. } | InputEvent::PointerUp { x, y, .. } => {
+            scene.hit_test(x, y)
+        }
+        _ => None,
+    };
+    session.input_frame(InputEnvelope::new(crate::scene::DISPLAY_ID, node, event))
 }
 
 struct LeafLink {
@@ -145,19 +138,17 @@ impl LeafLink {
     fn subscribe(&mut self) -> anyhow::Result<()> {
         let id = self.cert.leaf_id();
         let topic = push_topic(&id);
-        let envelope = subscribe_envelope(&id, &topic);
+        let envelope = wire::subscribe_envelope(&id, &topic);
         let mut next = self.queue.clone();
         next.enqueue(&self.cert, &self.key, "mesh.subscribe".into(), envelope.into_bytes())
             .map_err(|e| anyhow::anyhow!("signed subscribe: {e:?}"))?;
         self.save_queue(next)
     }
 
-    /// False means the bounded journal is full. The caller retains the
-    /// event and backpressures the touch producer until replay frees space.
-    fn enqueue_input(&mut self, event: InputEvent) -> anyhow::Result<bool> {
-        let id = self.cert.leaf_id();
-        let topic = format!("mesh.leaf.{id}.input");
-        let envelope = input_envelope(&id, &topic, event)?;
+    /// Journal one signed publish. False means the bounded journal is full:
+    /// the caller retains the event and backpressures its producer until
+    /// replay frees space.
+    fn enqueue_payload(&mut self, topic: String, envelope: String) -> anyhow::Result<bool> {
         let mut next = self.queue.clone();
         match next.enqueue(&self.cert, &self.key, topic, envelope.into_bytes()) {
             Ok(_) => {},
@@ -172,17 +163,72 @@ impl LeafLink {
         Ok(true)
     }
 
-    fn stage_touch(&mut self, rx: &Receiver<InputEvent>, held: &mut Option<InputEvent>) -> anyhow::Result<()> {
+    /// A raw touch observation (no session holds the screen).
+    fn enqueue_input(&mut self, event: InputEvent) -> anyhow::Result<bool> {
+        let id = self.cert.leaf_id();
+        let topic = format!("mesh.leaf.{id}.input");
+        let envelope = input_envelope(&id, &topic, event)?;
+        self.enqueue_payload(topic, envelope)
+    }
+
+    /// A display-session frame for the host.
+    fn enqueue_frame(&mut self, frame: &SessionFrame) -> anyhow::Result<bool> {
+        let (topic, envelope) = wire::session_publish(&self.cert.leaf_id(), frame)
+            .map_err(|e| anyhow::anyhow!("encode session frame: {e}"))?;
+        self.enqueue_payload(topic, envelope)
+    }
+
+    /// Journal everything waiting to go out: the session's replies first,
+    /// then button edges, then touch. A full journal parks the one event
+    /// in `held` and stops; replay frees space and the next pass resumes.
+    fn stage_all(
+        &mut self,
+        touch_rx: &Receiver<InputEvent>,
+        ptt_rx: &Receiver<bool>,
+        held: &mut Held,
+        scene: &LeafScene,
+        session: &mut PadSession,
+    ) -> anyhow::Result<()> {
+        while let Some(frame) = session.outbox_front() {
+            if !self.enqueue_frame(frame)? {
+                warn!("[mesh] NVS leaf journal full; session replies wait for replay");
+                return Ok(());
+            }
+            session.outbox_pop();
+        }
         loop {
-            let event = match held.take() {
+            let pressed = match held.ptt.take() {
+                Some(p) => p,
+                None => match ptt_rx.try_recv() {
+                    Ok(p) => p,
+                    Err(TryRecvError::Empty | TryRecvError::Disconnected) => break,
+                },
+            };
+            match session.ptt_frame(pressed) {
+                Some(frame) => {
+                    if !self.enqueue_frame(&frame)? {
+                        held.ptt = Some(pressed);
+                        warn!("[mesh] NVS leaf journal full; button edge waits for replay");
+                        return Ok(());
+                    }
+                }
+                None => info!("[mesh] ptt {} dropped: no session holds the screen", if pressed { "down" } else { "up" }),
+            }
+        }
+        loop {
+            let event = match held.touch.take() {
                 Some(event) => event,
-                None => match rx.try_recv() {
+                None => match touch_rx.try_recv() {
                     Ok(event) => event,
                     Err(TryRecvError::Empty | TryRecvError::Disconnected) => return Ok(()),
-                }
+                },
             };
-            if !self.enqueue_input(event)? {
-                *held = Some(event);
+            let stored = match touch_frame(scene, session, event) {
+                Some(frame) => self.enqueue_frame(&frame)?,
+                None => self.enqueue_input(event)?,
+            };
+            if !stored {
+                held.touch = Some(event);
                 warn!("[mesh] NVS leaf journal full; touch producer backpressured until replay");
                 return Ok(());
             }
@@ -242,71 +288,17 @@ impl LeafLink {
     }
 }
 
-/// Extract `cbor_b64`'s base64 value from a raw envelope. Identical
-/// algorithm to the bare-metal port — scan for the key, read base64
-/// chars until the first non-alphabet byte.
-fn extract_leaf_push_cbor(envelope: &[u8]) -> Option<Vec<u8>> {
-    let needle = b"cbor_b64";
-    let key_at = envelope.windows(needle.len()).position(|w| w == needle)?;
-    let mut i = key_at + needle.len();
-    let mut b64 = Vec::new();
-    let mut started = false;
-    while i < envelope.len() {
-        let c = envelope[i];
-        if is_b64(c) {
-            started = true;
-            b64.push(c);
-        } else if started {
-            break;
-        }
-        i += 1;
-    }
-    if b64.is_empty() {
-        return None;
-    }
-    base64_decode(&b64)
-}
-
-#[inline]
-fn is_b64(c: u8) -> bool {
-    c.is_ascii_alphanumeric() || c == b'+' || c == b'/' || c == b'='
-}
-
-/// Minimal standard-alphabet base64 decoder. Identical to the bare-metal port.
-fn base64_decode(input: &[u8]) -> Option<Vec<u8>> {
-    fn val(c: u8) -> Option<u8> {
-        match c {
-            b'A'..=b'Z' => Some(c - b'A'),
-            b'a'..=b'z' => Some(c - b'a' + 26),
-            b'0'..=b'9' => Some(c - b'0' + 52),
-            b'+' => Some(62),
-            b'/' => Some(63),
-            _ => None,
-        }
-    }
-    let mut out = Vec::with_capacity(input.len() / 4 * 3);
-    let mut acc: u32 = 0;
-    let mut bits = 0u32;
-    for &c in input {
-        let v = match val(c) {
-            Some(v) => v,
-            None => continue,
-        };
-        acc = (acc << 6) | v as u32;
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push((acc >> bits) as u8);
-        }
-    }
-    Some(out)
-}
-
 /// Run the mesh client forever on the calling thread. Owns the display
 /// stack (surface + retained scene). The bare-metal port spawned this as
 /// an embassy task; the IDF port runs it on a FreeRTOS-backed std
 /// thread the caller dedicates.
-pub fn run(mut surface: DpiDisplay, mut compositor: LeafScene, nvs: EspDefaultNvs, touch_rx: Receiver<InputEvent>) -> ! {
+pub fn run(
+    mut surface: DpiDisplay,
+    mut compositor: LeafScene,
+    nvs: EspDefaultNvs,
+    touch_rx: Receiver<InputEvent>,
+    ptt_rx: Receiver<bool>,
+) -> ! {
     let mut leaf = match LeafLink::load(nvs) {
         Ok(leaf) => leaf,
         Err(e) => {
@@ -323,6 +315,7 @@ pub fn run(mut surface: DpiDisplay, mut compositor: LeafScene, nvs: EspDefaultNv
             if let Err(e) = targets.draw(&mut surface, header) { warn!("[mesh] touch screen draw failed: {e:?}"); }
             loop {
                 let mut dirty = false;
+                while ptt_rx.try_recv().is_ok() {}
                 while let Ok(event) = touch_rx.try_recv() {
                     info!("[mesh] touch (offline): {event:?}");
                     dirty |= targets.feed(event);
@@ -340,10 +333,11 @@ pub fn run(mut surface: DpiDisplay, mut compositor: LeafScene, nvs: EspDefaultNv
 
     boot_screen(&mut compositor, &mut surface, "connecting to mesh...");
     let mut shown_waiting = false;
-    let mut held_touch = None;
+    let mut held = Held::default();
+    let mut session = PadSession::new();
 
     loop {
-        if let Err(e) = leaf.stage_touch(&touch_rx, &mut held_touch) {
+        if let Err(e) = leaf.stage_all(&touch_rx, &ptt_rx, &mut held, &compositor, &mut session) {
             warn!("[mesh] cannot persist touch observation: {e}; mesh disabled");
             boot_screen(&mut compositor, &mut surface, "leaf journal unavailable");
             loop { std::thread::sleep(Duration::from_secs(30)); }
@@ -372,12 +366,12 @@ pub fn run(mut surface: DpiDisplay, mut compositor: LeafScene, nvs: EspDefaultNv
         sock.set_nodelay(true).ok();
 
         info!("[mesh] connected — replaying durable backlog before new subscribe to '{topic}'");
-        if let Err(e) = leaf.replay(&mut sock, |bytes| apply_push(bytes, &mut compositor, &mut surface)) {
+        if let Err(e) = leaf.replay(&mut sock, |bytes| apply_push(bytes, &mut compositor, &mut surface, &mut session)) {
             warn!("[mesh] signed replay failed: {e}; retry 3s");
             std::thread::sleep(Duration::from_secs(3));
             continue;
         }
-        if let Err(e) = leaf.subscribe().and_then(|_| leaf.replay(&mut sock, |bytes| apply_push(bytes, &mut compositor, &mut surface))) {
+        if let Err(e) = leaf.subscribe().and_then(|_| leaf.replay(&mut sock, |bytes| apply_push(bytes, &mut compositor, &mut surface, &mut session))) {
             warn!("[mesh] signed subscribe failed: {e}; retry 3s");
             std::thread::sleep(Duration::from_secs(3));
             continue;
@@ -394,17 +388,20 @@ pub fn run(mut surface: DpiDisplay, mut compositor: LeafScene, nvs: EspDefaultNv
 
         let mut frame = [0u8; RX_BUF];
         loop {
-            if let Err(e) = leaf.stage_touch(&touch_rx, &mut held_touch) {
+            session.tick(&mut compositor, &mut surface);
+            if let Err(e) = leaf.stage_all(&touch_rx, &ptt_rx, &mut held, &compositor, &mut session) {
                 warn!("[mesh] cannot persist touch observation: {e}; mesh disabled");
                 boot_screen(&mut compositor, &mut surface, "leaf journal unavailable");
                 loop { std::thread::sleep(Duration::from_secs(30)); }
             }
             if !leaf.queue.pending.is_empty() { sock.set_read_timeout(Some(Duration::from_secs(10))).ok(); }
-            if let Err(e) = leaf.replay(&mut sock, |bytes| apply_push(bytes, &mut compositor, &mut surface)) {
+            if let Err(e) = leaf.replay(&mut sock, |bytes| apply_push(bytes, &mut compositor, &mut surface, &mut session)) {
                 warn!("[mesh] signed touch replay failed: {e}; reconnecting");
                 break;
             }
-            sock.set_read_timeout(Some(Duration::from_millis(500))).ok();
+            // A short poll keeps touch and button edges under ~50 ms from
+            // the journal to the wire (they leave at the top of the loop).
+            sock.set_read_timeout(Some(Duration::from_millis(40))).ok();
             let mut len_buf = [0u8; 4];
             match sock.peek(&mut len_buf) {
                 Ok(0) => break,
@@ -426,7 +423,7 @@ pub fn run(mut surface: DpiDisplay, mut compositor: LeafScene, nvs: EspDefaultNv
                 warn!("[mesh] read body failed: {e:?} — reconnecting");
                 break;
             }
-            apply_push(&frame[..len], &mut compositor, &mut surface);
+            apply_push(&frame[..len], &mut compositor, &mut surface, &mut session);
         }
 
         // Connection dropped — back off and reconnect.
@@ -435,10 +432,16 @@ pub fn run(mut surface: DpiDisplay, mut compositor: LeafScene, nvs: EspDefaultNv
     }
 }
 
-fn apply_push(bytes: &[u8], scene: &mut LeafScene, surface: &mut DpiDisplay) {
-    let Some(cbor) = extract_leaf_push_cbor(bytes) else { return };
-    // Vector scene envelopes first (`weaver leaf scene …`); the older
-    // raster `LeafPush` (`weaver leaf push …`) goes through the shim so
+fn apply_push(bytes: &[u8], scene: &mut LeafScene, surface: &mut DpiDisplay, session: &mut PadSession) {
+    // Display-session frames first (`session.rs`).
+    match SessionFrame::from_carrier(bytes) {
+        Some(Ok(frame)) => return session.on_frame(frame, scene, surface),
+        Some(Err(e)) => return warn!("[mesh] undecodable display-session frame: {e}"),
+        None => {}
+    }
+    let Some(cbor) = b64::extract_member(bytes, b"cbor_b64") else { return };
+    // Vector scene envelopes (`weaver leaf scene …`); the older raster
+    // `LeafPush` (`weaver leaf push …`) goes through the shim so
     // text/clear/image pushes keep rendering as they did.
     match weftos_leaf_scene::codec::decode_scene_envelope(&cbor) {
         Ok(env) => scene.apply_envelope(surface, &env),

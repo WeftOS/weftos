@@ -1,156 +1,136 @@
 # Display sessions over the certified-leaf channel
 
-- **Status**: design note for ADR-117 D1 → D2 (2026-10-10). D1 shipped the
-  client crate `weftos-display-client` with the simulator and desktop-window
-  backends; the real-leaf backend is a typed stub that returns
-  `DisplayError::NotYet`. This note fixes how a session rides the existing
-  certified-leaf channel so D2 can build it without changing the client API.
+- **Status**: built and tested without hardware (2026-10-12); not yet run on
+  the pad. Covers ADR-117 D1 (sessions, scene ops, object events) and the
+  transport half of D2. Grants are a seam, not ADR-108 chains yet (section 7).
 - **Reads with**: `docs/adr/adr-117-display-endpoints-objects-and-bindings.md`,
-  `docs/plans/adr-118-cos-contract.md` §1, `docs/leaf-push-protocol.md` §2–§3,
-  `docs/design/vector-leaf-display.md` §4.
+  `docs/plans/adr-118-cos-contract.md` section 1, `docs/leaf-push-protocol.md`,
+  `docs/guides/edgepad-console-hil.md`.
 
-## 1. What D1 built
+## 1. The pieces
 
 ```text
-crates/weftos-display-client/
-  src/session.rs      DisplaySession: open / apply / poll_event / size / capabilities / close
-  src/target.rs       DisplayTarget::{LeafSim, Window, Leaf}
-  src/event.rs        ObjectEvent::{Tap, Drag, Sensor}; ptt.down / ptt.up names
-  src/limits.rs       SessionLimits (4,096 nodes, ops/s, image bytes), ledger, rate window
-  src/grant.rs        DisplayGrant, GrantGate (D2 seam), Arbitration record
-  src/gesture.rs      raw InputEnvelope → Tap / Drag (node captured at pointer-down)
-  src/backend/mod.rs  Backend trait: the leaf as the session sees it
-  src/backend/sim.rs  LeafSim handle + in-process leaf on weftos-leaf-sim (headless)
-  src/backend/window.rs  [feature window] SDL window: mouse → touch, space → ptt
-  src/backend/leaf.rs    [feature leaf] SessionFrame carrier types, open() = NotYet
+app (cos-console-host)           daemon                             pad (or emulator)
+DisplaySession                   display.* RPC (Unix socket)        DisplayService
+  DisplayTarget::Leaf  ───────▶   DisplayEndpoint  ───push topic──▶   (scene, hit-test, render)
+  backend/leaf.rs      ◀───────   event queues     ◀──input topic──   touch, ptt button
 ```
 
-The seam is `Backend`: the session bounds and ledgers every batch, hands an
-envelope to the backend, and turns what comes back into object events. The
-leaf side owns the `SceneStore`, the renderer and the hit-test, in the sim
-exactly as on the pad. A real-leaf backend therefore only has to carry
-`SceneEnvelope`s one way and `InputEnvelope`s plus sensor events the other.
+| Piece | Where |
+|---|---|
+| Session frames, base64, mesh envelopes, the leaf-side state machine `DisplayService` | `crates/weftos-leaf-scene/src/session/` (`no_std`, shared by firmware and emulator) |
+| Client backend (JSON-lines RPC to the daemon) | `crates/weftos-display-client/src/backend/leaf.rs` |
+| Daemon endpoint: sessions, chunking, event queues, grant policy, keepalive | `crates/clawft-weave/src/display_endpoint/` |
+| `display.*` RPC and chain records | `crates/clawft-weave/src/display_rpc.rs` |
+| Pad firmware glue | `crates/clawft-edge-pad-idf/src/session.rs`, `mesh.rs` |
+| Host-side pad emulator (`WireLeaf`, `leaf-emulator`) | `crates/weftos-display-client/src/wire_leaf/` (feature `wire-leaf`) |
 
-## 2. The channel as it stands
+The app never speaks to the pad. It holds a Unix-socket connection to the
+daemon, which owns the certified-leaf channel (signed frames, replay floor,
+ACKs, journal). That keeps grants checkable in one place and lets the console
+run on one machine while the pad sits on the LAN.
 
-From `docs/leaf-push-protocol.md` and `crates/clawft-kernel/src/mesh_leaf.rs`:
+## 2. The channel
 
-- Host → leaf on topic `mesh.leaf.<pk>.push`; leaf → host on
-  `mesh.leaf.<pk>.input`. Payloads are CBOR inside a `SignedPublish` frame
-  signed by the leaf certificate (leaf → host) or the parent (host → leaf);
-  the parent acks with a signed `PublishAck`.
-- Transport is a length-prefixed TCP stream (leaf port 9600, UDP discovery
-  9599), with a durable offline journal on the leaf that replays signed
-  frames after reconnect (`mesh.rs::LeafLink::replay`).
-- The pad already decodes a `SceneEnvelope` on `.push`
-  (`mesh.rs::apply_push` tries `decode_scene_envelope`, then the raster
-  `LeafPush`), and already emits `InputEnvelope`s from the GT911 thread on
-  `.input` (`mesh.rs::input_envelope`), with the hit-test done in
-  `LeafScene` before publishing.
+Host to leaf rides `mesh.leaf.<id>.push` (the one topic a certified leaf may
+subscribe to); leaf to host rides `mesh.leaf.<id>.input` (a certified leaf may
+publish only `.input` and `.announce`). No kernel change was needed. The
+carrier is the JSON the pad already parses:
 
-So the bytes a session needs already flow; what is missing is *who* they
-belong to.
+```json
+{"type":"display_session","cbor_b64":"<CBOR SessionFrame>","target_pubkey":"<leaf id>"}
+```
 
-## 3. Session framing
+Leaf to host, that JSON text is the `message` of a signed `ipc.publish`
+envelope, journaled in NVS and replayed oldest-first until the daemon's signed
+ACK. Un-sessioned traffic (`weaver leaf scene`, raw `leaf_input` touch) is
+unchanged.
 
-One new topic pair keeps session traffic apart from the un-sessioned
-`weaver leaf scene …` path, which stays as the operator's direct line:
+## 3. Frames (`SessionFrame`)
 
-| Direction | Topic | Body |
+| Frame | Direction | Meaning |
 |---|---|---|
-| host → leaf | `mesh.leaf.<pk>.display` | `SessionFrame::{Open, Ops, Close}` |
-| leaf → host | `mesh.leaf.<pk>.input` | `SessionFrame::{Opened, Refused, Input, Sensor, Ended}` |
+| `Open { subject, display, proof }` | host to leaf | take the screen; idempotent per subject |
+| `Opened { session, info, max_nodes, max_ops_per_sec, image_budget_bytes }` | leaf to host | size, render mask, touch and ptt, the leaf's bounds |
+| `Refused { reason }` | leaf to host | `display busy: held by <subject>`, `no such display` |
+| `Ops { session, seq, more, envelope }` | host to leaf | scene ops; `more` marks a non-final fragment; empty ops are the keepalive |
+| `Close { session }` | host to leaf | release the screen |
+| `Input { session, envelope }` | leaf to host | pointer event, hit-tested on the pad (`node_id` set) |
+| `Sensor { session, name, pressed, value }` | leaf to host | `ptt.down` / `ptt.up` |
+| `Rejected { session, seq, reason }` | leaf to host | a batch was refused whole; the session continues |
+| `Ended { session, reason }` | leaf to host | the session is over (idle, link lost, unknown) |
 
-`SessionFrame` is the enum in `src/backend/leaf.rs`, CBOR-encoded with
-`weftos_leaf_scene::codec::encode`. It wraps the existing `SceneEnvelope`
-and `InputEnvelope` unchanged, so `WIRE_VERSION` does not move. Rules:
+## 4. Rules the pad enforces (`DisplayService`)
 
-- **Open is idempotent.** `Open { subject, display, proof }` from a subject
-  that already holds a session returns the same `Opened { session, … }`.
-  Reconnects therefore never leak sessions.
-- **Opened carries the leaf's limits.** The client takes the smaller of its
-  `SessionLimits` and the advertised ones. The pad advertises 4,096 nodes,
-  its real op budget (to be measured; the renderer runs at 31 Hz), and an
-  image budget sized from free PSRAM.
-- **Ops carry a per-session `seq`.** The leaf applies in order and drops
-  `seq <= last_seen`; journal replay after a reconnect is then harmless.
-- **Close clears.** The leaf removes every node the session owns and
-  answers nothing; a later `Ops` for that session gets `Ended`.
-- **Input and Sensor name the session** so two queued apps never see each
-  other's touches. `Sensor` is how `ptt.down` / `ptt.up` travel; this avoids
-  adding `InputEvent::Button` to the scene wire format for now.
-- **Ended** is the leaf's side of teardown: revoked grant, pre-empted by
-  arbitration (D2), or reboot. The client's `poll_event` returns `None`
-  and `is_closed()` turns true, the same as the sim's `disconnect()`.
+- One holder at a time. A second subject is refused with the holder's name.
+- **Node ownership.** The service tracks the nodes the session created. `Clear`
+  and `Replace` act only on those, never on the firmware's. Ids from
+  `0xF0_0000` up (boot screen, raster shim, the future system strip) and other
+  displays' ids are refused. `SetLayerBlend` is refused (it would reach the
+  firmware's layers). Tweens must name owned nodes.
+- **Bounds.** Node cap, bitmap budget, ops per second. A batch that breaks one
+  is refused whole (`Rejected`), nothing partly applied.
+- **Replay.** `seq <= last seen` is dropped, so journal replays are harmless.
+- **Fragments.** The daemon splits a batch into frames of at most 4,608 bytes
+  of CBOR (the pad reads 8 KiB, and base64 plus the JSON wrapper cost a third
+  more). Damage is kept until the last fragment, so a big scene renders once.
+- **Idle.** A host silent for 45 s loses the screen (`Ended`). The daemon sends
+  an empty `Ops` every 10 s per live session, and closes a session whose app
+  has not called for 60 s.
+- On open the pad removes its boot text; when a session ends it redraws it.
+- With no session, touch goes out as raw `leaf_input` as before, and button
+  edges are dropped (they belong to nobody).
 
-### Node ownership on the leaf
+## 5. Daemon RPC (`display.*`)
 
-Node ids are app-chosen (the console uses 1–4095). The leaf keeps a
-`NodeId → SessionId` map next to the `SceneStore`, filled on `Insert` /
-`Update` / `Replace` and emptied on `Remove` / `Clear` / `Close`. An op
-that touches a node owned by another session is refused with `Ended
-{ reason: "node owned by another session" }` rather than applied. The
-firmware-owned system strip (D2) uses the reserved `0xFE_xxxx` range the
-boot screen already uses, outside any app's reach.
+| Method | Capability | Notes |
+|---|---|---|
+| `display.open {leaf_id, subject, resource?, proof_hex?, display?}` | Write | subscribes to the leaf's `.input`, sends `Open`, waits 5 s for the answer; errors say unreachable / refused / denied |
+| `display.ops {session, cbor_b64}` | Write | CBOR `SceneEnvelope`; one op too big for a frame is refused, never dropped |
+| `display.poll {session, max?}` | Write | `{events, rejected, ended, dropped}`; the queue holds 256 events and drops the oldest |
+| `display.close {session}` | Write | idempotent |
+| `display.revoke {subject}` | Admin | the subject's next call is refused and the pad clears its objects |
+| `display.status {leaf_id}` | Read | `{connected, session}`: is there a mesh route to the leaf, and who holds its screen (`weaver leaf status --leaf-id <id>`) |
 
-## 4. The leaf backend in the client
+Outside a project (the user daemon's `read_only` policy) the five verbs above
+are user-level Admin acts in `scope_gate` (`display.status` is a plain read); the client sends the same implicit `admin` scope as
+the CLI's daemon client, which the daemon honours only from a same-uid Unix peer.
 
-`DisplayTarget::Leaf(LeafEndpoint { name, leaf_id, display })` opens by:
+A push to a leaf with no route fails loudly (`leaf <id> is not connected`)
+instead of vanishing. Open, close and revoke are appended to the chain
+(`display.open`, `display.close`, `display.revoke`); no scene data is.
 
-1. resolving `name` through ADR-114 to the leaf's parent (the mesh node the
-   pad is enrolled under) and asking it for a session carrier — the parent
-   already holds the signed channel and the journal, so the app does not
-   speak to the pad directly;
-2. sending `Open` with the grant's `proof` and waiting for `Opened` or
-   `Refused` (→ `DisplayError::Denied`);
-3. thereafter `apply` → `Ops`, `poll` → the parent's queue of `Input` /
-   `Sensor` / `Ended` for that session, `close` → `Close`.
+## 6. Verified without hardware
 
-The carrier is a small request/stream API on the parent (the kernel mesh
-service), not a new socket from every app to the pad. That is what keeps
-ADR-108 grants checkable in one place and lets PG host the command center
-while the pad sits on the LAN.
+`scripts/build.sh leaf-display` runs, among others:
 
-## 5. The pad side (`clawft-edge-pad-idf`)
+- `weftos-leaf-scene/tests/session.rs`: frames, carrier, base64, every rule in
+  section 4;
+- `clawft-weave/tests/display_endpoint.rs`: the endpoint against the real
+  `DisplayService` behind a fake sink (fragments, revoke, keepalive, reaping,
+  refusals, the bounded queue);
+- `clawft-weave/tests/display_e2e.rs`: the real daemon dispatch over its Unix
+  socket, the real certified-leaf listener and signed discovery, an emulated
+  pad (`WireLeaf`: signed journal, ACKs, the same `DisplayService`), the real
+  display client and the console host. Scene ops land and draw; a tap and a
+  drag come back as `Tap` and `Drag` on the right node; `ptt.down` /
+  `ptt.up` light and clear the console's status dot; a second app is refused;
+  a revoked app is cut off and its objects cleared; an unconnected leaf is an
+  error.
 
-Not sketched in code in D1: the crate needs the ESP-IDF toolchain to even
-type-check, `mesh.rs` is already at 460 lines and should be split before it
-grows, and flashing is out of scope for this lane. What the `display`
-service is, so the firmware lane can size it:
+## 7. Not done
 
-- a `display_service` module owning: the session table (one holder plus a
-  short queue), the `NodeId → SessionId` map, per-session op and node
-  counters, and the `seq` watermark;
-- `apply_push` learns the `.display` topic and routes `SessionFrame`s to
-  it; the un-sessioned `SceneEnvelope` path keeps working for `weaver leaf
-  scene`;
-- the push-to-talk button: a GPIO with debounce on the touch thread,
-  emitted as `Sensor { name: "ptt.down" | "ptt.up", pressed }` through the
-  same journal path as touch;
-- `LeafServices` (leaf-push-protocol §5) gains a `display` entry with size,
-  `CapabilityMask`, media formats and `input: touch + ptt`, which is what
-  `DisplaySession::capabilities()` returns for a real leaf.
-
-Memory: the session table and ownership map are a few KiB; the real cost
-is bitmaps, which is why the image budget is advertised per leaf.
-
-## 6. Desktop window backend notes
-
-- The window is `embedded-graphics-simulator`'s SDL2 window, scale 1 by
-  default (`WindowConfig::scale` to zoom). Mouse left button is pointer 0;
-  the space bar is the push-to-talk button (key repeat is ignored).
-- SDL needs its window and event pump on the main thread on macOS: open the
-  session and call `poll_event` from `main`.
-- The `window` feature enables `sdl2/use-pkgconfig`, so a Homebrew or apt
-  SDL2 is found without `LIBRARY_PATH` tricks.
-
-## 7. Open questions
-
-1. Does the carrier live in `clawft-kernel`'s mesh leaf service or in
-   `clawft-weave` next to `weaver leaf`? Proposed: kernel, because that is
-   where the signed channel and grants already are.
-2. Should `Ops` be acked per `seq` to give the console a delivered/not
-   signal, or is the channel's `PublishAck` enough? Proposed: the ack is
-   enough for D2; a per-session ack can come with bindings (D3).
-3. Image budget on the pad: fixed at boot from free PSRAM, or re-advertised
-   as sessions come and go?
+- **Grants.** `GrantPolicy` is the seam; today it admits any subject the RPC
+  layer authorised (`Write`) and honours `display.revoke`. The `proof` bytes
+  reach the leaf but nothing verifies them. ADR-108 per-resource grants
+  (chains, pairing) are D2.
+- **Arbitration.** One holder; a second app is refused, not queued. The
+  firmware-owned system strip and swipe-to-switch are D2.
+- **Touch rate on the pad.** Every pointer move becomes a signed frame
+  journaled to NVS (4 KiB bound), so a fast drag backpressures; coalescing
+  moves is open. The emulator has no such bound.
+- **Hardware.** The firmware builds (`scripts/build.sh edgepad-fw`); it has not
+  been flashed or run on the pad. The emulator is a faithful model of the
+  wire, not of timing or of the GT911.
+- **Daemon restart.** A restarted daemon forgets its sessions; the pad ends
+  the old one when the host goes quiet (45 s) and the app reopens.

@@ -512,6 +512,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "az"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b7e4c2464d97fe331d41de9d5db0def0a96f4d823b8b32a2efd503578988973"
+
+[[package]]
 name = "backtrace"
 version = "0.3.76"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2177,6 +2183,8 @@ dependencies = [
  "weftos",
  "weftos-cog-repo",
  "weftos-cog-sources",
+ "weftos-cos-console",
+ "weftos-display-client",
  "weftos-leaf-scene",
  "weftos-leaf-types",
  "weftos-rvf-wire",
@@ -3439,6 +3447,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "embedded-graphics"
+version = "0.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e8da660bb0c829b34a56a965490597f82a55e767b91f9543be80ce8ccb416fe"
+dependencies = [
+ "az",
+ "byteorder",
+ "embedded-graphics-core",
+ "float-cmp",
+ "micromath",
+]
+
+[[package]]
+name = "embedded-graphics-core"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "95743bef3ff70fcba3930246c4e6872882bbea0dcc6da2ca860112e0cd4bd09f"
+dependencies = [
+ "az",
+ "byteorder",
+]
+
+[[package]]
+name = "embedded-graphics-simulator"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "98729c26f08b4d4cb805478064a475d6cddab72b4782023986b9ccc47a329008"
+dependencies = [
+ "base64 0.22.1",
+ "embedded-graphics",
+ "image",
+]
+
+[[package]]
 name = "embedded-io"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3814,6 +3856,9 @@ name = "float-cmp"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "98de4bbd547a563b716d8dfa9aad1cb19bfab00f4fa09a6a4ed21dbcf44ce9c4"
+dependencies = [
+ "num-traits",
+]
 
 [[package]]
 name = "fnv"
@@ -4508,6 +4553,9 @@ name = "hashbrown"
 version = "0.14.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
+dependencies = [
+ "ahash",
+]
 
 [[package]]
 name = "hashbrown"
@@ -5601,6 +5649,12 @@ dependencies = [
  "objc",
  "paste",
 ]
+
+[[package]]
+name = "micromath"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3c8dda44ff03a2f238717214da50f65d5a53b45cd213a7370424ffdb6fae815"
 
 [[package]]
 name = "mime"
@@ -9978,6 +10032,8 @@ dependencies = [
  "once_cell",
  "rustls",
  "rustls-pki-types",
+ "serde",
+ "serde_json",
  "url",
  "webpki-roots 0.26.11",
 ]
@@ -11113,6 +11169,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "weftos-cos-console"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "embedded-graphics-simulator",
+ "serde",
+ "serde_json",
+ "ureq 2.12.1",
+ "weftos-display-client",
+ "weftos-leaf-renderer",
+ "weftos-leaf-scene",
+ "weftos-leaf-sim",
+]
+
+[[package]]
+name = "weftos-display-client"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "embedded-graphics",
+ "embedded-graphics-simulator",
+ "serde",
+ "serde_json",
+ "weftos-leaf-renderer",
+ "weftos-leaf-scene",
+ "weftos-leaf-sim",
+ "weftos-leaf-types",
+]
+
+[[package]]
 name = "weftos-ecg-scope"
 version = "0.8.4-rc.7"
 dependencies = [
@@ -11139,6 +11225,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "weftos-leaf-renderer"
+version = "0.1.0"
+dependencies = [
+ "bitflags 2.11.0",
+ "embedded-graphics",
+ "hashbrown 0.14.5",
+ "weftos-leaf-scene",
+]
+
+[[package]]
 name = "weftos-leaf-scene"
 version = "0.1.0"
 dependencies = [
@@ -11146,6 +11242,16 @@ dependencies = [
  "ciborium",
  "rustc-hash 2.1.1",
  "serde",
+]
+
+[[package]]
+name = "weftos-leaf-sim"
+version = "0.1.0"
+dependencies = [
+ "embedded-graphics",
+ "embedded-graphics-simulator",
+ "weftos-leaf-renderer",
+ "weftos-leaf-scene",
 ]
 
 [[package]]

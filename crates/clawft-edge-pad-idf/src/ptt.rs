@@ -3,9 +3,9 @@
 //! Button: IO44 (UART0 RXD0 on header J10), active-low with the internal
 //! pull-up, to GND when pressed. The serial console becomes TX-only at
 //! runtime; flashing still works as long as the button is not held. A
-//! 20 ms debounce turns the level into `ptt.down` / `ptt.up` events —
-//! today a log line and the [`PTT_DOWN`] flag, later a sensor event on
-//! the leaf channel (see "Design" below).
+//! 20 ms debounce turns the level into `ptt.down` / `ptt.up` events: a log
+//! line, the [`PTT_DOWN`] flag, and an edge on a channel the mesh loop
+//! turns into the display session's `Sensor` frame (`session.rs`).
 //!
 //! Microphones (feature `ptt-mic`): two INMP441 on one I²S standard-mode
 //! bus, stereo 32-bit slots at 16 kHz. Both share SD → IO38 (an INMP441
@@ -24,17 +24,20 @@
 //! before the mesh is the obvious next step.
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::SyncSender;
 use std::thread;
 use std::time::Duration;
 
 use esp_idf_hal::gpio::{Input, PinDriver};
-use log::info;
+use log::{info, warn};
 
 /// True while the push-to-talk button is held (debounced).
 pub static PTT_DOWN: AtomicBool = AtomicBool::new(false);
 
 /// Debounce: sample every 5 ms, require 4 identical samples (20 ms).
-pub fn spawn_button(pin: PinDriver<'static, Input>) {
+/// Each stable edge (`true` = pressed) goes to `edges`; a full channel
+/// drops the edge with a warning rather than stall the debounce.
+pub fn spawn_button(pin: PinDriver<'static, Input>, edges: SyncSender<bool>) {
     let _ = thread::Builder::new().name("ptt-btn".into()).stack_size(3072).spawn(move || {
         let mut stable = pin.is_low();
         let mut candidate = stable;
@@ -52,6 +55,9 @@ pub fn spawn_button(pin: PinDriver<'static, Input>) {
                 stable = candidate;
                 PTT_DOWN.store(stable, Ordering::Relaxed);
                 info!("[ptt] {}", if stable { "ptt.down" } else { "ptt.up" });
+                if edges.try_send(stable).is_err() {
+                    warn!("[ptt] edge channel full or closed; edge dropped");
+                }
             }
             thread::sleep(Duration::from_millis(5));
         }

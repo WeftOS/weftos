@@ -183,6 +183,8 @@ exclude = [
     # its leaf siblings; `scripts/build.sh check|clippy|test
     # weftos-display-client` runs cargo inside it.
     "crates/weftos-display-client",
+    # ADR-118 console (own [workspace]); clawft-weave's e2e test path-deps it.
+    "crates/weftos-cos-console",
     # STM32N6 leaf firmware (thumbv8m, own [workspace]) and its host-side
     # RVF validator; built by `scripts/build.sh n6-leaf`.
     "crates/weftos-n6-leaf",

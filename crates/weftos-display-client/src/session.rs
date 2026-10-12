@@ -213,14 +213,6 @@ fn open_backend(target: DisplayTarget, grant: &DisplayGrant) -> Result<Box<dyn B
         DisplayTarget::Window(_) => Err(DisplayError::NotYet(
             "built without the `window` feature; rebuild weftos-display-client with --features window",
         )),
-        #[cfg(feature = "leaf")]
         DisplayTarget::Leaf(ep) => crate::backend::leaf::open(&ep, grant),
-        #[cfg(not(feature = "leaf"))]
-        DisplayTarget::Leaf(_) => {
-            let _ = grant;
-            Err(DisplayError::NotYet(
-                "real-leaf sessions are not built in D1; see docs/design/display-session-transport.md",
-            ))
-        }
     }
 }
