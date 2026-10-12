@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { packageDigest } from "./lib/package-digest.mjs";
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), "agents-validate.mjs");
@@ -52,13 +53,20 @@ function run(build) {
   }
 }
 
-test("digest definition is pinned: sorted paths, NUL, per-file sha256, LF", () => {
+test("digest definition matches digest.rs: file lines, evals and dotfiles left out", () => {
   const root = mkdtempSync(join(tmpdir(), "agents-digest-"));
   try {
     put(root, "skills/a/SKILL.md", "x");
     put(root, "AGENT.md", "hello\n");
     put(root, ".DS_Store", "ignored");
-    assert.equal(packageDigest(root), "sha256:d2c6f89a09598dbac01978bf417ce25c5a16472e5fa7a5de31721f5881aca3e9");
+    put(root, "evals/scenarios.md", "ignored");
+    // sha256("x") and sha256("hello\n"), framed as "file <path> <hex>\n", sorted by path.
+    const x = "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881";
+    const h = "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03";
+    const expect = createHash("sha256").update(`file AGENT.md ${h}\nfile skills/a/SKILL.md ${x}\n`).digest("hex");
+    assert.equal(packageDigest(root), `sha256:${expect}`);
+    put(root, "evals/other.md", "still ignored");
+    assert.equal(packageDigest(root), `sha256:${expect}`);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -33,7 +33,7 @@
         "notes": "Packaged as an original on 2026-10-11 (ADR-121 decision 10): the agent body and hooks are unchanged; only the package metadata and the Use-when sentence were added. State is inactive, so it is never applied by weftos init and shows as an inactive package."
       },
       "version": "0.8.4-rc.6",
-      "digest": "sha256:3581b9f73e613b147b59606b3ba1972d44f2521afff78b441a8ff7b326fa2d61",
+      "digest": "sha256:dd45951ec7827bfce60aba5c858e30fce446eeaac0437a266b6f37ada75a5ad2",
       "parent": null,
       "state": "inactive",
       "dependencies": [],
@@ -71,7 +71,7 @@
         "notes": "Packaged as an original on 2026-10-11 (ADR-121 decision 10): the agent body and hooks are unchanged; only the package metadata and the Use-when sentence were added. State is inactive, so it is never applied by weftos init and shows as an inactive package."
       },
       "version": "0.8.4-rc.6",
-      "digest": "sha256:edf8ccf89d4c71dafd3b9e3c03dc0a2eca1a682de3359b92d7262bdc3d58f776",
+      "digest": "sha256:c33c352243b05ac3746de8f467baa6a0f4b031beddab0e05912054db465923b2",
       "parent": null,
       "state": "inactive",
       "dependencies": [],
@@ -115,29 +115,29 @@
         "notes": "Built for the chief-of-staff console (ADR-118). The agent carries method only; project facts (board, token path, team runtime) come from project-context. It directs the owner's team and holds no write authority of its own: board writes go through the steward, docs through the doc-gardener, memory through liber, purpose checks to mo. Runtime host: crates/weftos-cos (`weftos-cos serve`, `weft cos serve`)."
       },
       "version": "0.8.4-rc.6",
-      "digest": "sha256:64cce74655ecb03412eaf67d4154a265205a94cb48f07c76a21f06bfc7780da3",
+      "digest": "sha256:537fbd002578137017a15183931acc31d8e8800500ec4c6fcb72d472bb5942d6",
       "parent": null,
       "state": "active",
       "dependencies": [
         {
           "kind": "agent",
           "name": "doc-gardener",
-          "digest": "sha256:4035f72db075fe7e874af795b704c30a3b4003f7bf0cbacbe86be3b8a447f4c5"
+          "digest": "sha256:77be754b3cdef9973eaa463fcd08af348e3c5154402cddf0a62a0d408222eb86"
         },
         {
           "kind": "agent",
           "name": "liber",
-          "digest": "sha256:f1035b1f070ebc88eba0976642ec507526f710b64ba76c08f8b37689eb1a74d0"
+          "digest": "sha256:2c60683e60cd749fea4820b4db5e9b3d57e84e5c8f15a627937c8b1d88d0d568"
         },
         {
           "kind": "agent",
           "name": "mo",
-          "digest": "sha256:439740154d747f99420ae9b9b2f7f657551f892e1658fc625df378b875afc0d7"
+          "digest": "sha256:e6583fcfcf397f9b3fb32141b5bd524aee40f5ede0538ba977dec73172ff204f"
         },
         {
           "kind": "agent",
           "name": "steward",
-          "digest": "sha256:d12fb06439408ee7711ec72aa0bece49d5fd86f9b56f8d2ab13a9aa28e34a7cc"
+          "digest": "sha256:014031f06bc867414d641ddec2f43fe84c6f7b23d0c473d3b3941a7ff549ca1b"
         }
       ],
       "path": "agents/chief-of-staff"
@@ -174,7 +174,7 @@
         "notes": "Packaged as an original on 2026-10-11 (ADR-121 decision 10): the agent body and hooks are unchanged; only the package metadata and the Use-when sentence were added. State is inactive, so it is never applied by weftos init and shows as an inactive package."
       },
       "version": "0.8.4-rc.6",
-      "digest": "sha256:1d0a6903285de73e56acc313530195c4cd42c41f542e297fa1ba997afa7e8079",
+      "digest": "sha256:6cb9e70877dd72d9468d7e274cba4d6a93b12ea50ce8b6881908b8d672e0b77b",
       "parent": null,
       "state": "inactive",
       "dependencies": [],
@@ -216,7 +216,7 @@
         "notes": "Ported the harness's builder lane near-verbatim — high generalizability per the inventory, nearly identical in shape to a generic build lane already. The project-specific MCP tool binding (a code-graph explore tool) and gate-runner script path became project-context placeholders."
       },
       "version": "0.8.4-rc.6",
-      "digest": "sha256:5a0472bf30843c177c9883052268df1928a1e6c9064a1879d0ad0110db9d9d59",
+      "digest": "sha256:13083d192f102bfcde66176d368c561f571adc4372c1527dddc5ed9a2840abf2",
       "parent": null,
       "state": "active",
       "dependencies": [],
@@ -259,7 +259,7 @@
         "notes": "Ported near-verbatim from the harness's doc-gardener agent — the inventory rates this the strongest-designed agent in the source set. Role, evidence rules, retraction rules and queue design are project-agnostic; only corpus paths were parameterized. Flywheel mode discipline (off / shadow / on) kept intact; ships off by default per the task brief."
       },
       "version": "0.8.4-rc.6",
-      "digest": "sha256:4035f72db075fe7e874af795b704c30a3b4003f7bf0cbacbe86be3b8a447f4c5",
+      "digest": "sha256:77be754b3cdef9973eaa463fcd08af348e3c5154402cddf0a62a0d408222eb86",
       "parent": null,
       "state": "active",
       "dependencies": [],
@@ -297,7 +297,7 @@
         "notes": "Packaged as an original on 2026-10-11 (ADR-121 decision 10): the agent body and hooks are unchanged; only the package metadata and the Use-when sentence were added. State is inactive, so it is never applied by weftos init and shows as an inactive package."
       },
       "version": "0.8.4-rc.6",
-      "digest": "sha256:5d8c0be5ba91772910450d64443e398fa5d24ed5df85a20dd2fa338a9a72a886",
+      "digest": "sha256:4a402ff311dee8f104c9debf18e74fa62603bef6302c24f37092e6462181aa7a",
       "parent": null,
       "state": "inactive",
       "dependencies": [],
@@ -338,14 +338,14 @@
         "notes": "Ported the harness's per-PR documentation lane. Per the inventory, its scope is largely superseded by the doc-gardener agent for anything durable, so it's kept narrowly as the \"per-PR doc lane\" companion rather than a second estate owner — both packages exist and cross-reference each other rather than merging."
       },
       "version": "0.8.4-rc.6",
-      "digest": "sha256:3558543f6870480f71740d0d482d0bebc354737794e603e6f177329b710b812f",
+      "digest": "sha256:858a72cf4ce9a9c7a243c97c7403af152db0110da576fcf2b05f4fa0f811ef31",
       "parent": null,
       "state": "active",
       "dependencies": [
         {
           "kind": "agent",
           "name": "doc-gardener",
-          "digest": "sha256:4035f72db075fe7e874af795b704c30a3b4003f7bf0cbacbe86be3b8a447f4c5"
+          "digest": "sha256:77be754b3cdef9973eaa463fcd08af348e3c5154402cddf0a62a0d408222eb86"
         }
       ],
       "path": "agents/documenter"
@@ -385,7 +385,7 @@
         "notes": "Extracted as a template, not a data port, from the harness's client-domain-expert agent. Per the inventory: \"the *shape* — grounded, supervised, graded honesty — is highly reusable; the content is entirely non-portable by design.\" No client name, org fact, or corpus content traveled. Placeholders here must be filled per project from .agents/project-context.md, never hardcoded into this template."
       },
       "version": "0.8.4-rc.6",
-      "digest": "sha256:30632c118dc0a507361e59f7c41511a0fb717cd46ffeef30a37172d821a80f25",
+      "digest": "sha256:bb78f6098435657eba78a9fd61e1bddcfb2154c4e7f4844c90e7b7c4c834d167",
       "parent": null,
       "state": "active",
       "dependencies": [],
@@ -423,7 +423,7 @@
         "notes": "Packaged as an original on 2026-10-11 (ADR-121 decision 10): the agent body and hooks are unchanged; only the package metadata and the Use-when sentence were added. State is inactive, so it is never applied by weftos init and shows as an inactive package."
       },
       "version": "0.8.4-rc.6",
-      "digest": "sha256:44f90f690d8eb73f0c432fc92a68b1c17c94cc8aea1b1dcf1cfd6fe24ff27a13",
+      "digest": "sha256:1b27da93f2f88e662aa719835e64ba2e5cfb4da532c8bb56f08dc2f6c059f529",
       "parent": null,
       "state": "inactive",
       "dependencies": [],
@@ -466,14 +466,14 @@
         "notes": "Ported from the local model lab's eikon agent + eikon skill (SKILL.md, models.md). The role, fan-out discipline (Vision first, one VLM call for describe/categorize/ tag/OCR, SigLIP/Molmo only on request), memory discipline (one heavy model at a time, check the monitor before a big load), and the \"never invent a runner for a held model\" rule ported near-verbatim as the portable part of the design. Absolute paths and the lab's own hardware-specific serving details were replaced with the llm_home project-context key and this runtime_requires block; the specialist dispatch skills (splat, document, ground, segment, retrieve) were kept with the eikon-specialist package, matching the source's own separation — the lead agent never reads them."
       },
       "version": "0.8.4-rc.6",
-      "digest": "sha256:b6df72b1de7c3e90e84b5e7c507e9e616f612e6c16980a3a88cdc2a861ecbb95",
+      "digest": "sha256:17f63668b74acc09336254a2e219f8935eeeb90f9809262c0879d599eab119a2",
       "parent": null,
       "state": "active",
       "dependencies": [
         {
           "kind": "agent",
           "name": "eikon-specialist",
-          "digest": "sha256:d3b301aa45c0fa1519776dc48966c38ee466554b4b0a276c58b55fa347a91abb"
+          "digest": "sha256:990b5fa7ba89fb04d3d9b4609a76903336ee472d098e2c3693aa87775634a75e"
         }
       ],
       "path": "agents/eikon"
@@ -517,7 +517,7 @@
         "notes": "Ported from the local model lab's eikon-specialist agent plus the five specialist skill files under its skills/eikon/specialists/ (document, ground, retrieve, segment, splat). Kept as a separate package from eikon because the source treats it as a distinct spawn target with its own tool list, its own \"brief is the whole procedure\" discipline, and a hard separation from the lead's own context (the lead is explicitly told not to open these skill files itself). The depth honesty rule (canonical unless a focal length or field of view is given) and the never-two-heavy-models-resident rule ported verbatim as load-bearing. Absolute paths were replaced with the llm_home project-context key and this runtime_requires block."
       },
       "version": "0.8.4-rc.6",
-      "digest": "sha256:d3b301aa45c0fa1519776dc48966c38ee466554b4b0a276c58b55fa347a91abb",
+      "digest": "sha256:990b5fa7ba89fb04d3d9b4609a76903336ee472d098e2c3693aa87775634a75e",
       "parent": null,
       "state": "active",
       "dependencies": [],
@@ -557,7 +557,7 @@
         "notes": "Extracted as a template from the harness's read-only third-party-work-management reader agent. Per the inventory: \"low as a literal agent (system-specific), medium-high as a pattern — read-only external-system agent, enforced at the transport layer, that converts write-requests into findings for a named human owner.\" The specific third-party product name, its command surface, and any estate-specific details were deliberately generalized out; this template names no third-party product."
       },
       "version": "0.8.4-rc.6",
-      "digest": "sha256:891aaf3219b3a1d19537002809344a71584598235bf64f8eb377c30be1ff024e",
+      "digest": "sha256:17dbdc00bb82029757fa34c5e9b2634bac995a889e4a3cb276df9346bbffd4dd",
       "parent": null,
       "state": "active",
       "dependencies": [],
@@ -595,7 +595,7 @@
         "notes": "Packaged as an original on 2026-10-11 (ADR-121 decision 10): the agent body and hooks are unchanged; only the package metadata and the Use-when sentence were added. State is inactive, so it is never applied by weftos init and shows as an inactive package."
       },
       "version": "0.8.4-rc.6",
-      "digest": "sha256:8c8036ab4144bef5d1816794949a73430afcbd2cd1532d6a40bc260434b532e8",
+      "digest": "sha256:edd842a0794b2189e926a23438c49113435dc4515dafcada3aa51352b77596cd",
       "parent": null,
       "state": "inactive",
       "dependencies": [],
@@ -633,7 +633,7 @@
         "notes": "Packaged as an original on 2026-10-11 (ADR-121 decision 10): the agent body and hooks are unchanged; only the package metadata and the Use-when sentence were added. State is inactive, so it is never applied by weftos init and shows as an inactive package."
       },
       "version": "0.8.4-rc.6",
-      "digest": "sha256:5c8be57d35cc5f44146c4f839ae3c0df707692cd9a4fbdff546dcf26e4d1e5cd",
+      "digest": "sha256:a6075e055a326d3c66f186ee509a4f75a0bd5ced2dc2c7d5a97c4b80150ece4f",
       "parent": null,
       "state": "inactive",
       "dependencies": [],
@@ -667,7 +667,7 @@
         "notes": "Ported the lead-session doctrine only (the five ways the seat is reliably wrong, the lane-trust checklist, the stand-down routine) from the source's lead-session file — never the file itself, which was explicitly \"not a spawn target\" in the source and remains so here. All engagement-specific names, nicknames and channel-addressing details were dropped."
       },
       "version": "0.8.4-rc.6",
-      "digest": "sha256:7602ca7e0537684c8f27ced19352db70288020683944d0046751a2f9be694e41",
+      "digest": "sha256:cf0cc75818c0d80d0f8662626f19d485499967a1cfaf5f56deb6625c0d18c8af",
       "parent": null,
       "state": "active",
       "dependencies": [],
@@ -709,7 +709,7 @@
         "notes": "Ported from the harness's liber agent. The routing-table destinations (decisions to doc-gardener, work to steward, confidential facts refused) generalize directly. The \"abscission\" and \"downward flow\" capabilities are explicitly not-yet-built in the source and are carried over as documented future work, not implemented here."
       },
       "version": "0.8.4-rc.6",
-      "digest": "sha256:f1035b1f070ebc88eba0976642ec507526f710b64ba76c08f8b37689eb1a74d0",
+      "digest": "sha256:2c60683e60cd749fea4820b4db5e9b3d57e84e5c8f15a627937c8b1d88d0d568",
       "parent": null,
       "state": "active",
       "dependencies": [],
@@ -749,7 +749,7 @@
         "notes": "Ported the separation-of-measurement-from-change doctrine near-verbatim (high per the inventory). The source bound five project-specific MCP tools (a board reader, an environment-state reader, a generic API-call tool, and an API catalog) directly in its tool list — those bindings are explicitly NOT ported; this package declares a generic `measurement_bindings` placeholder instead, to be filled per project."
       },
       "version": "0.8.4-rc.6",
-      "digest": "sha256:f1980e72093a0037e19abe45efc0005cce1abe7fb8cb78d3fdb49237beb6ee31",
+      "digest": "sha256:4f24cb70879222013efec3bca4b52fef9f692e75cc6986a7523998f676e20647",
       "parent": null,
       "state": "active",
       "dependencies": [],
@@ -787,7 +787,7 @@
         "notes": "Packaged as an original on 2026-10-11 (ADR-121 decision 10): the agent body and hooks are unchanged; only the package metadata and the Use-when sentence were added. State is inactive, so it is never applied by weftos init and shows as an inactive package."
       },
       "version": "0.8.4-rc.6",
-      "digest": "sha256:3f7538f8c6f606829cb7251728d33194280248ab636e9345c3f046210298ddc3",
+      "digest": "sha256:ef173d636ba57b502abdb89ee35c3e4d50336d8a62e4dde3757303396b0e8c40",
       "parent": null,
       "state": "inactive",
       "dependencies": [],
@@ -827,7 +827,7 @@
         "notes": "Ported the consult/read-back contract near-verbatim (medium-high generalizability per the inventory). The \"Darwin\" variation-and-scoring capability described in the source is explicitly excluded — it was unbuilt there and has no WeftOS infrastructure to run on; see AGENT.md §5 for the note kept in place of the feature."
       },
       "version": "0.8.4-rc.6",
-      "digest": "sha256:439740154d747f99420ae9b9b2f7f657551f892e1658fc625df378b875afc0d7",
+      "digest": "sha256:e6583fcfcf397f9b3fb32141b5bd524aee40f5ede0538ba977dec73172ff204f",
       "parent": null,
       "state": "active",
       "dependencies": [],
@@ -867,7 +867,7 @@
         "notes": "Per the inventory, the source financial-model domain-expert agent is \"deeply coupled to one client's financial model and its recalculation service\" (Low generalizability as an agent). Only the base-vs-override honesty pattern was extracted; the workbook, recalc engine, and asset-class scaffolding described in the source were deliberately NOT ported. A project adopting this template must supply its own model-tracing tooling via project context."
       },
       "version": "0.8.4-rc.6",
-      "digest": "sha256:d2afd259961a1c8da404f9171091d60e323b8e848d6cb91d1723c610d738eeb2",
+      "digest": "sha256:2d35d3326440c3b8d96069c928c75a01d4a5b4223ae78919a7c6f0e62c4b273a",
       "parent": null,
       "state": "active",
       "dependencies": [],
@@ -905,7 +905,7 @@
         "notes": "Packaged as an original on 2026-10-11 (ADR-121 decision 10): the agent body and hooks are unchanged; only the package metadata and the Use-when sentence were added. State is inactive, so it is never applied by weftos init and shows as an inactive package."
       },
       "version": "0.8.4-rc.6",
-      "digest": "sha256:69f27a1c88f88c63d725a77bc8be94b80d007033a452e3898dd624ffc55b640a",
+      "digest": "sha256:0065a93a04bb01dd9942b401aef20b9506586be5edb9c78bf9e48ef36dfef1bb",
       "parent": null,
       "state": "inactive",
       "dependencies": [],
@@ -945,7 +945,7 @@
         "notes": "Ported near-verbatim — high generalizability per the inventory. Read-only by tool list (no Write/Edit), matching the source's structural enforcement of \"cannot edit.\""
       },
       "version": "0.8.4-rc.6",
-      "digest": "sha256:ee4fcd93afa3914056afc77593626b9b1507f315a70f01423b769b550c61678d",
+      "digest": "sha256:bd01ecb46e8c679e49578cefd5be9ec9873be6fa92db549e852c2687e752f5ed",
       "parent": null,
       "state": "active",
       "dependencies": [],
@@ -983,7 +983,7 @@
         "notes": "Packaged as an original on 2026-10-11 (ADR-121 decision 10): the agent body and hooks are unchanged; only the package metadata and the Use-when sentence were added. State is inactive, so it is never applied by weftos init and shows as an inactive package."
       },
       "version": "0.8.4-rc.6",
-      "digest": "sha256:006d83b6c520af9f4da6567cce16b09e150c4f48eba42b49d6d384fecb2c4b63",
+      "digest": "sha256:ab88058aa17807ebbb7df0963b801a59e8d7d1a7a66c5d6b6803e2112834ccc6",
       "parent": null,
       "state": "inactive",
       "dependencies": [],
@@ -1026,7 +1026,7 @@
         "notes": "Ported from the harness's product-board-steward agent. The write-path mechanics (intake-manifest.mjs, board-sync.mjs, a specific board schema and people roster) were replaced with a generic board-adapter contract read from project context. The discipline (dedupe-before-write, dry-run-then-confirm, disposition reporting, stand-down thresholds, mini-steward fan-out) ported near-verbatim as the portable part of the design."
       },
       "version": "0.8.4-rc.6",
-      "digest": "sha256:d12fb06439408ee7711ec72aa0bece49d5fd86f9b56f8d2ab13a9aa28e34a7cc",
+      "digest": "sha256:014031f06bc867414d641ddec2f43fe84c6f7b23d0c473d3b3941a7ff549ca1b",
       "parent": null,
       "state": "active",
       "dependencies": [],
@@ -1064,7 +1064,7 @@
         "notes": "Packaged as an original on 2026-10-11 (ADR-121 decision 10): the agent body and hooks are unchanged; only the package metadata and the Use-when sentence were added. State is inactive, so it is never applied by weftos init and shows as an inactive package."
       },
       "version": "0.8.4-rc.6",
-      "digest": "sha256:2367b1665010b4c0b65178e6bfb4069f39ad64f1369ba79964189b0f5f86656d",
+      "digest": "sha256:d9c1ce51fc0f05d89b0b01c76162fb096aa8d31b59f12b735e8cc0c90b839992",
       "parent": null,
       "state": "inactive",
       "dependencies": [],
@@ -1106,7 +1106,7 @@
         "notes": "Ported near-verbatim — high generalizability per the inventory. The \"never run Playwright\" rule generalized to \"never run a live-writing e2e suite,\" gated by a project-context flag rather than hardcoding a specific test framework."
       },
       "version": "0.8.4-rc.6",
-      "digest": "sha256:a553999a922791682db8405b4a6f46c7a29ce01192562d942cb52cb328613dc3",
+      "digest": "sha256:403a7dda403183217e62bc0f3c2259954d9f3e0c46a2211b02b0e5a96d51ee6a",
       "parent": null,
       "state": "active",
       "dependencies": [],
@@ -1144,7 +1144,7 @@
         "notes": "Packaged as an original on 2026-10-11 (ADR-121 decision 10): the agent body and hooks are unchanged; only the package metadata and the Use-when sentence were added. State is inactive, so it is never applied by weftos init and shows as an inactive package."
       },
       "version": "0.8.4-rc.6",
-      "digest": "sha256:0f8fc847dde8d46b204a389249596e80a0ffa5c861351531b32c70711ea6e799",
+      "digest": "sha256:dfc33a9607f321630bf0502c698cf64981f0ef389ff13a0096dbc6d2dc8a7e07",
       "parent": null,
       "state": "inactive",
       "dependencies": [],
@@ -1560,6 +1560,8 @@
           }
         }
       },
+      "version": "0.8.4-rc.6",
+      "digest": "sha256:ca0b7b41ca6811093b6c2bd17517c6e58a1244a228b5c4161be46154ac918385",
       "path": "agents/teams/weftos-core"
     }
   ]

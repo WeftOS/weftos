@@ -166,7 +166,7 @@ for every package:
 
 | Field | Source | Meaning |
 |---|---|---|
-| `digest` | computed | `sha256:` over the complete bundle. Definition in `scripts/lib/package-digest.mjs`: every file under the package, sorted by relative path in byte order, one `<path> NUL <sha256 of the file> LF` line each, hashed once; `.DS_Store` is ignored and a symlink is refused. |
+| `digest` | computed | `sha256:` + hex of the bundle digest defined in `crates/weftos/src/init/digest.rs` (twin: `scripts/lib/package-digest.mjs`): one `file <path> <sha256>` line per file of the package, sorted by path, with `evals/` and dotfiles left out; a team's digest covers its own files plus a `member <id> <digest>` line per active member package. A symlink is refused. |
 | `version` | computed | the WeftOS release (`Cargo.toml`); a package has no version of its own in `weftos-package.yaml` |
 | `parent` | `parent:` in the sidecar | digest of the package this one derives from, or `null` (a derived package names the digest of its template or base) |
 | `state` | `state:` in the sidecar | `active` (default) or `inactive`. Inactive packages stay listed but are never applied by `weftos init` and may not be an active team member or an active package's dependency. |

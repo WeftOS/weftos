@@ -1,50 +1,62 @@
 /**
- * package-digest.mjs — the one definition of an agent package digest
- * (ADR-121 §3).
+ * package-digest.mjs — JS twin of crates/weftos/src/init/digest.rs, the one
+ * definition of a bundle digest (ADR-121 §3).
  *
- *   digest = "sha256:" + hex(sha256(manifest))
- *   manifest = for each regular file under the package directory, sorted by
- *              its POSIX path relative to the package root in byte order:
- *                <relative path> NUL <hex sha256 of the file bytes> LF
+ *   package = hex(sha256(lines)), lines = for each file of the package in the
+ *             `weftos init` source (any depth; names starting "." and `evals`
+ *             directories are left out, exactly as the init embed filter does),
+ *             sorted by path relative to the package in byte order:
+ *               "file <relative path> <hex sha256 of the bytes>\n"
+ *   team    = hex(sha256(lines)), the same "file" lines over teams/<team>/,
+ *             then "member <id> <package digest>\n" for each active member
+ *             package, sorted by id (active: lead, members, shared_skills,
+ *             skills with `active` not false; only top-level, non-inactive
+ *             packages count, as in AgentSource::package_ids).
  *
- * Every file in the bundle counts (AGENT.md, SKILL.md, skills/, evals/,
- * references/, weftos-package.yaml, ...) except `.DS_Store`. No timestamps,
- * modes or ownership. A symlink inside a package is refused: a digest must
- * not depend on what a link happens to point at.
- *
- * The Rust side (a node refusing a tampered installation, ADR-121 §4) must
- * implement exactly this; `scripts/agents-validate.mjs` pins the vectors.
+ * The catalog stores a digest as "sha256:" + that hex. A symlink inside a
+ * bundle is refused. Keep this in step with digest.rs.
  */
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync, lstatSync } from "node:fs";
 import { join } from "node:path";
 
-const IGNORED = new Set([".DS_Store"]);
+const sha = (data) => createHash("sha256").update(data).digest("hex");
 
 function collect(dir, rel, out) {
   for (const name of readdirSync(dir)) {
-    if (IGNORED.has(name)) continue;
+    if (name.startsWith(".") || name === "evals") continue;
     const abs = join(dir, name);
     const relPath = rel ? `${rel}/${name}` : name;
     const st = lstatSync(abs);
     if (st.isSymbolicLink()) {
-      throw new Error(`package contains a symlink (digest refuses it): ${relPath}`);
+      throw new Error(`bundle contains a symlink (digest refuses it): ${relPath}`);
     }
     if (st.isDirectory()) collect(abs, relPath, out);
     else if (st.isFile()) out.push([relPath, abs]);
   }
 }
 
-export function packageDigest(pkgAbs) {
+function fileLines(dirAbs) {
   const files = [];
-  collect(pkgAbs, "", files);
+  collect(dirAbs, "", files);
   files.sort((a, b) => Buffer.compare(Buffer.from(a[0]), Buffer.from(b[0])));
-  const h = createHash("sha256");
-  for (const [rel, abs] of files) {
-    const fileHash = createHash("sha256").update(readFileSync(abs)).digest("hex");
-    h.update(`${rel}\0${fileHash}\n`);
-  }
-  return `sha256:${h.digest("hex")}`;
+  return files.map(([rel, abs]) => `file ${rel} ${sha(readFileSync(abs))}\n`).join("");
 }
 
+/** Hex digest of one package directory. */
+export function packageDigestHex(pkgAbs) {
+  return sha(fileLines(pkgAbs));
+}
+
+/** Hex digest of a team directory plus its active member packages
+ *  (`memberHex`: Map of package id -> package hex digest). */
+export function teamDigestHex(teamAbs, memberIds, memberHex) {
+  let text = fileLines(teamAbs);
+  for (const id of [...new Set(memberIds)].sort()) {
+    if (memberHex.has(id)) text += `member ${id} ${memberHex.get(id)}\n`;
+  }
+  return sha(text);
+}
+
+export const packageDigest = (pkgAbs) => `sha256:${packageDigestHex(pkgAbs)}`;
 export const DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
