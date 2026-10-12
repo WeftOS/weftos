@@ -171,7 +171,7 @@ const INTERCEPTS: &[&str] = &["ipc.subscribe_stream", "substrate.subscribe", "ke
 
 /// Allow-listed methods whose handler is not a legacy arm (ext routes or
 /// owned by other Phase 1 packages).
-const NOT_LEGACY_ARMS: &[&str] = &["kernel.handshake", "project.list", "project.show", "auth.token.validate", "chain.subscribe", "fleet.snapshot", "route.list", "versions.list", "versions.tree", "versions.deps"];
+const NOT_LEGACY_ARMS: &[&str] = &["kernel.handshake", "project.list", "project.show", "auth.token.validate", "chain.subscribe", "fleet.snapshot", "route.list", "versions.list", "versions.tree", "versions.deps", "display.status"];
 
 fn all_methods() -> Vec<String> {
     let (mut arms, _) = dispatch_arms();
@@ -545,4 +545,20 @@ fn owner_shutdown_is_admin_only_outside_a_project() {
     assert!(decide(OutsideProjectPolicy::ReadOnly, method, true, || false).is_ok());
     assert!(decide(OutsideProjectPolicy::ReadOnly, method, false, || false).is_err());
     assert!(decide(OutsideProjectPolicy::DenyAll, method, true, || false).is_err());
+}
+
+/// ADR-117: driving a leaf display is a user-level act. Outside a project
+/// an Admin caller (the owner's console host) may; anyone else may not.
+#[test]
+fn display_verbs_are_user_level_admin_outside_a_project() {
+    for m in ["display.open", "display.ops", "display.poll", "display.close", "display.revoke"] {
+        assert!(decide(OutsideProjectPolicy::ReadOnly, m, true, || false).is_ok(), "{m} for Admin");
+        assert!(decide(OutsideProjectPolicy::ReadOnly, m, false, || false).is_err(), "{m} for a non-Admin");
+        assert!(decide(OutsideProjectPolicy::DenyAll, m, true, || false).is_err(), "{m} under deny_all");
+    }
+}
+
+#[test]
+fn display_status_is_a_read_outside_a_project() {
+    assert!(decide(OutsideProjectPolicy::ReadOnly, "display.status", false, || false).is_ok());
 }

@@ -127,6 +127,8 @@ pub const READ_ONLY_ALLOW: &[&str] = &[
     "versions.deps",
     // ADR-116: the tailnet router index is a read of machine-level state.
     "route.list",
+    // ADR-117: whether a named leaf is connected and who holds its screen.
+    "display.status",
 ];
 
 /// User-level operations: callable outside a project, but only by a caller
@@ -190,6 +192,14 @@ pub const USER_LEVEL_ALLOW: &[&str] = &[
     "project.nested.register",
     "project.nested.start",
     "project.nested.stop",
+    // ADR-117: a leaf display belongs to the machine's mesh, not one project;
+    // the console host that drives it is the owner's app, so these are
+    // user-level Admin acts (revoking a subject included).
+    "display.open",
+    "display.ops",
+    "display.poll",
+    "display.close",
+    "display.revoke",
     // mesh-local/1 (package H): spawn-nonce and PoP authenticated; a child
     // sends its project claim on every call, so it is inside a project.
     "mesh.challenge",

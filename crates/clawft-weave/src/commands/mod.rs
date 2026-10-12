@@ -25,6 +25,7 @@ pub mod ipc_cmd;
 pub mod kernel_children;
 pub mod kernel_cmd;
 pub mod leaf_cmd;
+pub mod leaf_status;
 #[cfg(all(unix, feature = "exochain", feature = "placement"))]
 pub mod project_cmd;
 pub mod migrate_cmd;

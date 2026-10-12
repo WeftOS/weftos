@@ -116,6 +116,12 @@ pub enum LeafAction {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Is this leaf connected to the daemon, and who holds its display (ADR-117).
+    Status {
+        /// The leaf id (32 hex characters) `weaver leaf provision` printed.
+        #[arg(long)]
+        leaf_id: String,
+    },
     /// Vector-scene operations — host → leaf display path.
     Scene {
         #[command(subcommand)]
@@ -229,6 +235,7 @@ pub async fn run(args: LeafArgs) -> anyhow::Result<()> {
             op,
             dry_run,
         } => run_push(target, op, dry_run).await,
+        LeafAction::Status { leaf_id } => super::leaf_status::run(&leaf_id).await,
         LeafAction::Scene { op } => run_scene(op).await,
     }
 }
