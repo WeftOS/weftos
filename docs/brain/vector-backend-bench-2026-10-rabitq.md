@@ -232,3 +232,19 @@ matters; that trade is a per-deployment choice, so it is a bench knob
 - The brute-force tail and the index values still map by position, so deletes and upserts between
   rebuilds can make the stale graph point at the wrong entry (pre-existing in `HnswStore`; the new
   layout generation only stops an off-lock build from being installed over such a change).
+
+## Addendum 3 — stale-mapping fix re-benched (2026-10-12)
+
+The stale-graph mapping fix (14b2eb909: graph values are sequence numbers resolved at query
+time) was first benched under heavy machine load (load average ~29) and looked slower. Re-run on
+a quieter machine (load ~6-8), 10K, dim 384, release, `WEFT_BENCH_ONLY=hnsw`, three runs:
+
+| Run | recall@10 | p50 µs | p95 µs | qps 1 thread | qps 18 threads | build ms |
+|---|---|---|---|---|---|---|
+| before the fix | 0.936 | 93.3 | 130.0 | 10,023 | — | — |
+| after, run 1 | 0.937 | 97.2 | 137.2 | 9,841 | 117,051 | 2,337 |
+| after, run 2 | 0.941 | 98.8 | 129.9 | 9,910 | 127,795 | 2,377 |
+| after, run 3 | 0.938 | 77.5 | 113.0 | 12,162 | 131,137 | 2,722 |
+
+No measurable regression: latency and single-thread throughput are within run-to-run noise of the
+pre-fix numbers, and recall is unchanged.
