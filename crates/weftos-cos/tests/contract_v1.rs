@@ -78,16 +78,26 @@ fn documented_requests_parse_as_the_code_types() {
     let reqs = blocks("cos-request");
     let utt: UserUtterance = serde_json::from_value(reqs[0].clone()).unwrap();
     assert_eq!(serde_json::to_value(&utt).unwrap(), reqs[0]);
-    let ans: GuideAnswer = serde_json::from_value(reqs[1].clone()).unwrap();
-    assert_eq!(serde_json::to_value(&ans).unwrap(), reqs[1]);
-    let ptt: PttRequest = serde_json::from_value(reqs[2].clone()).unwrap();
+    // v1.1: the same body with an endpoint round-trips, and the v1 body above
+    // did not gain one.
+    let remote: UserUtterance = serde_json::from_value(reqs[1].clone()).unwrap();
+    assert_eq!(remote.endpoint.as_deref(), Some("mentra"));
+    assert_eq!(serde_json::to_value(&remote).unwrap(), reqs[1]);
+    assert_eq!(utt.endpoint, None);
+    let ans: GuideAnswer = serde_json::from_value(reqs[2].clone()).unwrap();
+    assert_eq!(serde_json::to_value(&ans).unwrap(), reqs[2]);
+    let ptt: PttRequest = serde_json::from_value(reqs[3].clone()).unwrap();
     assert!(ptt.down);
+    assert_eq!(ptt.endpoint, None);
 }
 
 #[test]
 fn the_document_names_the_version_the_server_reports() {
     assert_eq!(API_VERSION, "cos.v1");
     assert!(DOC.contains("version `cos.v1`") && DOC.contains("\"api\": \"cos.v1\""));
+    // The additive v1.1 section exists and the routes table names the field.
+    assert!(DOC.contains("### 3.3 Endpoints and remote access"));
+    assert!(DOC.contains("\"endpoint\": string"));
 }
 
 async fn serve() -> (std::net::SocketAddr, common::TestAgent) {

@@ -4,18 +4,18 @@
 {"kind":"tool","name":"projects.activity","status":"ok","summary":"read 2 ticket(s) in in_progress and 1 goal(s); history read"}
 {"kind":"token","text":"Two cards are in progress: WEFT-901, the console screen, and WEFT-902, the pad button. The pad button is next.","turn_id":"t1"}
 {"kind":"state","state":"speaking"}
-{"final":true,"kind":"message","text":"Two cards are in progress: WEFT-901, the console screen, and WEFT-902, the pad button. The pad button is next.","turn_id":"t1"}
+{"endpoint":"host","final":true,"kind":"message","text":"Two cards are in progress: WEFT-901, the console screen, and WEFT-902, the pad button. The pad button is next.","turn_id":"t1"}
 {"kind":"state","state":"idle"}
 {"kind":"state","state":"thinking"}
 {"kind":"status","lanes_running":0,"model":"local/mlx-community/GLM-4.7-Flash-4bit","task":"typed turn"}
 {"kind":"tool","name":"board.claim","status":"awaiting_confirmation","summary":"claim WEFT-902 on the board"}
-{"final":true,"kind":"message","text":"About to claim WEFT-902 on the board. Say yes to go ahead; anything else cancels.","turn_id":"t2"}
+{"endpoint":"host","final":true,"kind":"message","text":"About to claim WEFT-902 on the board. Say yes to go ahead; anything else cancels.","turn_id":"t2"}
 {"kind":"state","state":"idle"}
 {"kind":"state","state":"thinking"}
 {"kind":"status","lanes_running":0,"model":"none","task":"confirmation"}
 {"kind":"tool","name":"board.claim","status":"running","summary":"claim WEFT-902 on the board"}
 {"kind":"tool","name":"board.claim","status":"ok","summary":"claimed WEFT-902"}
-{"final":true,"kind":"message","text":"Done: claimed WEFT-902.","turn_id":"t3"}
+{"endpoint":"host","final":true,"kind":"message","text":"Done: claimed WEFT-902.","turn_id":"t3"}
 {"kind":"state","state":"idle"}
 {"kind":"state","state":"thinking"}
 {"kind":"status","lanes_running":0,"model":"local/mlx-community/GLM-4.7-Flash-4bit","task":"typed turn"}
@@ -23,7 +23,7 @@
 {"kind":"tool","name":"notes.record","status":"ok","summary":"note recorded in project history on WEFT-902 and the installation brain"}
 {"kind":"token","text":"Noted on WEFT-902 and in the brain.","turn_id":"t4"}
 {"kind":"state","state":"speaking"}
-{"final":true,"kind":"message","text":"Noted on WEFT-902 and in the brain.","turn_id":"t4"}
+{"endpoint":"host","final":true,"kind":"message","text":"Noted on WEFT-902 and in the brain.","turn_id":"t4"}
 {"kind":"state","state":"idle"}
 {"kind":"state","state":"thinking"}
 {"kind":"status","lanes_running":0,"model":"local/mlx-community/GLM-4.7-Flash-4bit","task":"typed turn"}
@@ -31,7 +31,7 @@
 {"kind":"tool","name":"nodes.health","status":"ok","summary":"2/3 nodes healthy"}
 {"kind":"token","text":"Two of three nodes are healthy.","turn_id":"t5"}
 {"kind":"state","state":"speaking"}
-{"final":true,"kind":"message","text":"Two of three nodes are healthy.","turn_id":"t5"}
+{"endpoint":"host","final":true,"kind":"message","text":"Two of three nodes are healthy.","turn_id":"t5"}
 {"kind":"state","state":"idle"}
 {"kind":"state","state":"thinking"}
 {"kind":"status","lanes_running":0,"model":"local/mlx-community/GLM-4.7-Flash-4bit","task":"planning (typed)"}
@@ -40,7 +40,7 @@
 {"choices":[{"caption":"Pad button","n":1},{"caption":"Glasses bridge","n":2}],"explain":"","id":"q1","index":1,"kind":"ask","question":"What first?","total":1}
 {"kind":"tool","name":"ui.ask","status":"ok","summary":"asked Q1/1: What first?"}
 {"kind":"state","state":"speaking"}
-{"final":true,"kind":"message","text":"What first?","turn_id":"t6"}
+{"endpoint":"host","final":true,"kind":"message","text":"What first?","turn_id":"t6"}
 {"kind":"state","state":"idle"}
 {"kind":"state","state":"thinking"}
 {"kind":"status","lanes_running":0,"model":"local/mlx-community/GLM-4.7-Flash-4bit","task":"touch turn"}
@@ -49,5 +49,5 @@
 {"kind":"tool","name":"ui.checklist","status":"ok","summary":"checklist c2 (2 items)"}
 {"kind":"token","text":"Here is today's list.","turn_id":"t7"}
 {"kind":"state","state":"speaking"}
-{"final":true,"kind":"message","text":"Here is today's list.","turn_id":"t7"}
+{"endpoint":"host","final":true,"kind":"message","text":"Here is today's list.","turn_id":"t7"}
 {"kind":"state","state":"idle"}

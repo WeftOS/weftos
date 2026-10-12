@@ -9,6 +9,8 @@
 //!   Ollama) once a wrapper script exists; nothing here depends on them.
 //! - `none`: silent.
 //!
+//! Only voice turns of the `host` endpoint are spoken here; a remote endpoint
+//! (the glasses) gets the reply flagged `speak` and speaks it itself.
 //! Only voice turns are spoken. A new push-to-talk press interrupts the
 //! reply in progress (barge-in).
 
@@ -190,7 +192,7 @@ impl Speaker {
 pub async fn speak_replies(mut rx: broadcast::Receiver<Event>, agent: CosAgent, speaker: Arc<Speaker>) {
     loop {
         match rx.recv().await {
-            Ok(Event::Message { turn_id, text, is_final: true }) if agent.is_voice_turn(&turn_id) => {
+            Ok(Event::Message { turn_id, text, is_final: true, .. }) if agent.host_speaks(&turn_id) => {
                 if let Err(e) = speaker.say(&text).await {
                     tracing::warn!(error = %e, "spoken reply failed");
                 }

@@ -32,6 +32,15 @@ impl std::fmt::Display for TurnId {
     }
 }
 
+/// The endpoint of the agent host's own microphone, push-to-talk and console.
+pub const HOST_ENDPOINT: &str = "host";
+
+/// Whether `name` is a usable endpoint id: 1 to 32 characters of
+/// `a-z 0-9 _ -`.
+pub fn valid_endpoint_name(name: &str) -> bool {
+    (1..=32).contains(&name.len()) && name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
+}
+
 /// Where an utterance came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -71,19 +80,30 @@ pub enum AnswerKind {
 pub struct UserUtterance {
     pub text: String,
     pub source: Source,
+    /// Which front end the turn came from (`host` when absent). The reply's
+    /// final `message` names it, and only `host` replies are spoken by the
+    /// agent process itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
 }
 
 impl UserUtterance {
     pub fn typed(text: impl Into<String>) -> Self {
-        Self { text: text.into(), source: Source::Typed }
+        Self { text: text.into(), source: Source::Typed, endpoint: None }
     }
 
     pub fn voice(text: impl Into<String>) -> Self {
-        Self { text: text.into(), source: Source::Voice }
+        Self { text: text.into(), source: Source::Voice, endpoint: None }
+    }
+
+    /// The same utterance attributed to `endpoint`.
+    pub fn from_endpoint(mut self, endpoint: impl Into<String>) -> Self {
+        self.endpoint = Some(endpoint.into());
+        self
     }
 
     pub fn touch(text: impl Into<String>) -> Self {
-        Self { text: text.into(), source: Source::Touch }
+        Self { text: text.into(), source: Source::Touch, endpoint: None }
     }
 }
 

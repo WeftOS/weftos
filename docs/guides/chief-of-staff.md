@@ -59,7 +59,9 @@ for you so the first spoken turn is not the slow one.
              "local_api_base": "http://127.0.0.1:8081/v1", "serve_command": null},
   "harness": {"project_id": "<the dashboard project UUID>"},
   "voice": {"tts": {"engine": "auto", "voice": null, "rate": 200}, "device": null},
-  "brain": {"installation": "weftos://local/installations/<id>"}
+  "brain": {"installation": "weftos://local/installations/<id>"},
+  "serve": {"bind": null},
+  "endpoints": {"mentra": {"tts": {"engine": "auto"}}}
 }
 ```
 
@@ -76,7 +78,39 @@ for you so the first spoken turn is not the slow one.
 - Spoken replies: the final message of a voice turn is read by `say` (the default on macOS).
   `voice.tts.engine: "command"` takes any argv that reads the text on stdin and plays it,
   which is the seam for Kokoro, Pocket TTS or Orpheus once a wrapper script exists. A new
-  button press cuts the reply off. `"none"` is silent (the glasses speak for themselves).
+  button press cuts the reply off. `"none"` silences the Mac (every endpoint's replies read
+  by the host process), so for the glasses use an endpoint instead (next section).
+
+## Remote front ends (the glasses, a second device)
+
+Each front end is an endpoint with its own id; the Mac's own microphone, button and console are
+`host`. A remote front end does its own speech-to-text and speaks its own replies:
+
+1. Connect to `GET /v1/cos/events` first, then `POST /v1/cos/utterance` with
+   `{"text": ..., "source": "voice", "endpoint": "mentra"}`.
+2. The final `message` of that turn comes back with `"endpoint": "mentra"` and, when the
+   endpoint speaks, `"speak": true`. The Mac does not read it aloud; the Mac still reads the
+   `host` turns. `ptt` is the Mac's microphone and is not available to remote endpoints.
+3. To keep one endpoint quiet without touching the Mac or another endpoint, give it
+   `"endpoints": {"mentra": {"tts": {"engine": "none"}}}` in `cos.json`; its replies then
+   arrive without `speak`.
+
+Reaching the Mac from another machine, two ways:
+
+- **Tailnet listener.** Put `"serve": {"bind": "tailnet"}` in `cos.json` (or
+  `"tailnet:PORT"`). The host then also listens on its Tailscale IPv4 (found with
+  `tailscale ip -4`, which must be in 100.64.0.0/10; anything else is refused, and it never
+  listens on `0.0.0.0`). Make a token per endpoint with `weftos-cos endpoint add mentra`: it
+  writes a 0600 file under `~/.config/weftos/cos/endpoints/` and prints only the path. The
+  remote client sends `Authorization: Bearer <contents of that file>` on every request. The
+  local console on `127.0.0.1:18300` needs no token. Delete the file to revoke; `weftos-cos
+  endpoint list` shows who has one.
+- **ADR-116 router.** Leave the API on loopback and let the router forward only
+  `/v1/cos/utterance`, `/v1/cos/answer`, `/v1/cos/events` and `/healthz` from the allowed
+  peers (never `/v1/cos/ptt`). The router owns who may connect; endpoint ids still come from
+  the request body.
+
+A remote endpoint sees the whole event stream, not just its own turns.
 
 ## Tools
 

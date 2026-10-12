@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use tokio::sync::{Mutex, broadcast};
 
 use crate::CosError;
-use crate::conversation::{Conversation, GuideAnswer, Source, TurnId, UserUtterance};
+use crate::conversation::{Conversation, GuideAnswer, HOST_ENDPOINT, Source, TurnId, UserUtterance, valid_endpoint_name};
 use crate::events::{AgentState, Event, redact};
 use crate::guide::{Resolution, UiHandle};
 use crate::prompt::system_prompt;
@@ -51,7 +51,17 @@ struct Inner {
     pending: Mutex<Option<PendingAction>>,
     turn_gate: Mutex<()>,
     lanes_running: AtomicU32,
-    voice_turns: std::sync::Mutex<std::collections::VecDeque<String>>,
+    /// The last 64 turns: who they came from and whether they were spoken.
+    turns: std::sync::Mutex<std::collections::VecDeque<TurnRecord>>,
+    /// Remote endpoints whose engine is `none`: their replies are never
+    /// flagged `speak`. Another endpoint's setting does not touch this.
+    silent_endpoints: std::sync::Mutex<std::collections::HashSet<String>>,
+}
+
+struct TurnRecord {
+    id: String,
+    endpoint: String,
+    voice: bool,
 }
 
 #[derive(Clone)]
@@ -77,15 +87,40 @@ impl CosAgent {
                 pending: Mutex::new(None),
                 turn_gate: Mutex::new(()),
                 lanes_running: AtomicU32::new(0),
-                voice_turns: std::sync::Mutex::new(std::collections::VecDeque::new()),
+                turns: std::sync::Mutex::new(std::collections::VecDeque::new()),
+                silent_endpoints: std::sync::Mutex::new(std::collections::HashSet::new()),
             }),
         }
     }
 
-    /// Whether `turn` began as a spoken utterance (its reply is read aloud).
-    /// Remembers the last 64 turns.
+    fn record_turn(&self, id: &TurnId, endpoint: String, voice: bool) {
+        let mut v = self.inner.turns.lock().unwrap_or_else(|e| e.into_inner());
+        v.push_back(TurnRecord { id: id.0.clone(), endpoint, voice });
+        while v.len() > 64 {
+            v.pop_front();
+        }
+    }
+
+    /// Whether `turn` began as a spoken utterance. Remembers the last 64 turns.
     pub fn is_voice_turn(&self, turn: &TurnId) -> bool {
-        self.inner.voice_turns.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|t| *t == turn.0)
+        self.inner.turns.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|t| t.id == turn.0 && t.voice)
+    }
+
+    /// Whether the agent process itself reads this turn's reply aloud: a
+    /// spoken turn of the `host` endpoint. A remote endpoint speaks its own.
+    pub fn host_speaks(&self, turn: &TurnId) -> bool {
+        self.inner.turns.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|t| t.id == turn.0 && t.voice && t.endpoint == HOST_ENDPOINT)
+    }
+
+    /// The endpoint `turn` belongs to, while it is among the last 64.
+    pub fn turn_endpoint(&self, turn: &TurnId) -> Option<String> {
+        self.inner.turns.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|t| t.id == turn.0).map(|t| t.endpoint.clone())
+    }
+
+    /// Set which remote endpoints are silent (`voice` engine `none`). Replaces
+    /// the previous set.
+    pub fn set_silent_endpoints(&self, names: impl IntoIterator<Item = String>) {
+        *self.inner.silent_endpoints.lock().unwrap_or_else(|e| e.into_inner()) = names.into_iter().collect();
     }
 
     /// Run a turn to completion (tests and the typed dev loop use this; the
@@ -102,7 +137,7 @@ impl CosAgent {
             Ok(()) => inner.emit(Event::state(AgentState::Idle)),
             Err(e) => {
                 let reason = redact(&e.to_string());
-                inner.emit(Event::Message { turn_id: turn_id.clone(), text: format!("I hit a problem: {reason}"), is_final: true });
+                inner.emit(Event::Message { turn_id: turn_id.clone(), text: format!("I hit a problem: {reason}"), is_final: true, endpoint: None, speak: false });
                 inner.emit(Event::blocked(reason));
             }
         }
@@ -119,14 +154,13 @@ impl Conversation for CosAgent {
         if text.chars().count() > 8000 {
             return Err(CosError::Config("utterance longer than 8000 characters".into()));
         }
+        let endpoint = match utterance.endpoint.as_deref() {
+            None => HOST_ENDPOINT.to_string(),
+            Some(e) if valid_endpoint_name(e) => e.to_string(),
+            Some(e) => return Err(CosError::Config(format!("invalid endpoint {e:?}: use 1 to 32 characters of a-z, 0-9, _ or -"))),
+        };
         let turn_id = TurnId::new();
-        if utterance.source == Source::Voice {
-            let mut v = self.inner.voice_turns.lock().unwrap_or_else(|e| e.into_inner());
-            v.push_back(turn_id.0.clone());
-            while v.len() > 64 {
-                v.pop_front();
-            }
-        }
+        self.record_turn(&turn_id, endpoint, utterance.source == Source::Voice);
         let agent = self.clone();
         let id = turn_id.clone();
         tokio::spawn(async move { agent.run_turn(id, utterance).await });
@@ -137,6 +171,7 @@ impl Conversation for CosAgent {
         let turn_id = TurnId::new();
         match self.inner.ui.apply_answer(&answer)? {
             Resolution::Turn(utterance) => {
+                self.record_turn(&turn_id, HOST_ENDPOINT.to_string(), false);
                 let agent = self.clone();
                 let id = turn_id.clone();
                 tokio::spawn(async move { agent.run_turn(id, utterance).await });
@@ -162,7 +197,25 @@ fn is_yes(text: &str) -> bool {
 
 impl Inner {
     fn emit(&self, ev: Event) {
+        let ev = self.attribute(ev);
         let _ = self.tx.send(ev.redacted());
+    }
+
+    /// Stamp a `message` with its turn's endpoint, and `speak` when a remote
+    /// endpoint is to read it aloud itself.
+    fn attribute(&self, ev: Event) -> Event {
+        let Event::Message { turn_id, text, is_final, .. } = ev else { return ev };
+        let rec = self.turns.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|t| t.id == turn_id.0).map(|t| (t.endpoint.clone(), t.voice));
+        let (endpoint, speak) = match rec {
+            Some((ep, voice)) => {
+                let remote = ep != HOST_ENDPOINT;
+                let silent = self.silent_endpoints.lock().unwrap_or_else(|e| e.into_inner()).contains(&ep);
+                let speak = remote && voice && is_final && !silent;
+                (Some(ep), speak)
+            }
+            None => (None, false),
+        };
+        Event::Message { turn_id, text, is_final, endpoint, speak }
     }
 
     fn status(&self, task: &str, model: &str) {
@@ -230,7 +283,7 @@ impl Inner {
                 let text = if content.is_empty() { "(no answer)".to_string() } else { content };
                 self.history.lock().await.push(json!({"role": "assistant", "content": text}));
                 self.emit(Event::state(AgentState::Speaking));
-                self.emit(Event::Message { turn_id: turn_id.clone(), text, is_final: true });
+                self.emit(Event::Message { turn_id: turn_id.clone(), text, is_final: true, endpoint: None, speak: false });
                 return Ok(());
             }
 
@@ -250,7 +303,7 @@ impl Inner {
                         let text = if content.is_empty() { question } else { content.clone() };
                         self.history.lock().await.push(json!({"role": "assistant", "content": text}));
                         self.emit(Event::state(AgentState::Speaking));
-                        self.emit(Event::Message { turn_id: turn_id.clone(), text, is_final: true });
+                        self.emit(Event::Message { turn_id: turn_id.clone(), text, is_final: true, endpoint: None, speak: false });
                         return Ok(());
                     }
                 }
@@ -259,7 +312,7 @@ impl Inner {
 
         let text = "I ran out of tool rounds for this turn; here is what I have so far. Ask again to continue.".to_string();
         self.history.lock().await.push(json!({"role": "assistant", "content": text}));
-        self.emit(Event::Message { turn_id: turn_id.clone(), text, is_final: true });
+        self.emit(Event::Message { turn_id: turn_id.clone(), text, is_final: true, endpoint: None, speak: false });
         Ok(())
     }
 
@@ -312,7 +365,7 @@ impl Inner {
             let question = format!("About to {summary}. Say yes to go ahead; anything else cancels.");
             self.push_tool_result(&call_id, &json!({"held": true, "reason": "awaiting owner confirmation"})).await;
             self.history.lock().await.push(json!({"role": "assistant", "content": question}));
-            self.emit(Event::Message { turn_id: turn_id.clone(), text: question, is_final: true });
+            self.emit(Event::Message { turn_id: turn_id.clone(), text: question, is_final: true, endpoint: None, speak: false });
             return Ok(Flow::Held);
         }
 
@@ -351,7 +404,7 @@ impl Inner {
             self.log.record(turn_id, &pending.tool, &pending.summary, "cancelled");
             self.emit(Event::Tool { name: pending.tool, summary: pending.summary, status: "cancelled".into() });
             self.history.lock().await.push(json!({"role": "assistant", "content": text}));
-            self.emit(Event::Message { turn_id: turn_id.clone(), text, is_final: true });
+            self.emit(Event::Message { turn_id: turn_id.clone(), text, is_final: true, endpoint: None, speak: false });
             return Ok(());
         }
         let tool = self.tools.find(&pending.tool).ok_or_else(|| CosError::Tool {
@@ -376,7 +429,7 @@ impl Inner {
             }
         };
         self.history.lock().await.push(json!({"role": "assistant", "content": text}));
-        self.emit(Event::Message { turn_id: turn_id.clone(), text, is_final: true });
+        self.emit(Event::Message { turn_id: turn_id.clone(), text, is_final: true, endpoint: None, speak: false });
         Ok(())
     }
 }

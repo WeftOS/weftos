@@ -17,6 +17,9 @@ enum Cmd {
     /// Check, start or stop the local model server.
     #[command(subcommand)]
     Model(weftos_cos::cli::ModelCmd),
+    /// Create or list remote endpoints (tokens for non-loopback clients).
+    #[command(subcommand)]
+    Endpoint(weftos_cos::cli::EndpointCmd),
     /// Transcribe a WAV file with the configured STT (no microphone needed).
     Transcribe {
         wav: std::path::PathBuf,
@@ -34,6 +37,7 @@ async fn main() -> anyhow::Result<()> {
     match Cli::parse().cmd {
         Cmd::Serve(args) => weftos_cos::cli::serve(args).await,
         Cmd::Model(cmd) => weftos_cos::cli::model(cmd).await,
+        Cmd::Endpoint(cmd) => weftos_cos::cli::endpoint(cmd),
         Cmd::Transcribe { wav, config } => weftos_cos::cli::transcribe(wav, config).await,
     }
 }

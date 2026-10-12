@@ -56,14 +56,17 @@ c.ask(Survey { id, question, explain, choices: Vec<{n: u8, caption}>, index, tot
 c.on_event(ev);                                      // scroll by drag, swipe to close the page
 ```
 
-## 3. Agent conversation API, version `cos.v1` (frozen 2026-10-12)
+## 3. Agent conversation API, version `cos.v1` (frozen 2026-10-12; additive `cos.v1.1` 2026-10-12)
 
 C owns it; the console host, the pad lane and the Mentra glasses bridge use it. It is an
 in-process Rust trait (`weftos_cos::Conversation`) with a local HTTP/SSE shell over it. The
 shell is the contract for every front end.
 
-**Binding.** Loopback only, default `127.0.0.1:18300`; a non-loopback bind is refused. No
-authentication (loopback is the boundary). JSON bodies are UTF-8 with
+**Binding.** Always `127.0.0.1:18300` (configurable, loopback only), with no authentication
+(loopback is the boundary). Since `cos.v1.1` the host may also serve the same routes on its
+Tailscale address (`serve.bind = "tailnet"` in `cos.json`; section 3.3): the address is
+resolved from Tailscale, must be in 100.64.0.0/10, and anything else, `0.0.0.0` included, is
+refused. Requests from non-loopback peers need a per-endpoint bearer token. JSON bodies are UTF-8 with
 `Content-Type: application/json`. Errors are `{"error": "<text>"}`, with secrets redacted.
 
 **Versioning.** `GET /healthz` answers `{"ok": true, "api": "cos.v1"}`. Within `cos.v1` changes
@@ -77,9 +80,9 @@ code disagree.
 
 | Route | Request body | Success | Refusals |
 |---|---|---|---|
-| `POST /v1/cos/utterance` | `{"text": string, "source": "voice"\|"typed"\|"touch"}`; `text` is 1 to 8000 characters after trimming | `202 {"turn_id": string}` | `400` empty or longer text, unknown `source`, malformed JSON |
+| `POST /v1/cos/utterance` | `{"text": string, "source": "voice"\|"typed"\|"touch", "endpoint": string}`; `text` is 1 to 8000 characters after trimming; `endpoint` is optional (v1.1, default `host`) | `202 {"turn_id": string}` | `400` empty or longer text, unknown `source`, invalid `endpoint`, malformed JSON; `401`, `403` off loopback (3.3) |
 | `POST /v1/cos/answer` | `{"kind": "answer"\|"toggle"\|"step"\|"skip"\|"back", "id": string, "value": any}`; `value` defaults to `null` | `202 {"turn_id": string}` | `400` unknown or stale `id`, a `value` the kind cannot use, malformed JSON |
-| `POST /v1/cos/ptt` | `{"down": bool}` | down: `202 {"active": true}`; up: `202 {"active": false, "posted": {"text": string, "turn_id": string}}` or `202 {"active": false, "nothing": "<reason>"}` | `503` the agent runs without `--mic`; `500` capture or STT failed; `400` malformed JSON |
+| `POST /v1/cos/ptt` | `{"down": bool, "endpoint": "host"}`; `endpoint` is optional and may only be `host` | down: `202 {"active": true}`; up: `202 {"active": false, "posted": {"text": string, "turn_id": string}}` or `202 {"active": false, "nothing": "<reason>"}` | `503` the agent runs without `--mic`; `500` capture or STT failed; `400` malformed JSON or an `endpoint` other than `host`; `403` a remote endpoint's token (the microphone is the host's) |
 | `GET /v1/cos/events` | none | `200 text/event-stream` (see 3.2) | none |
 | `GET /healthz` | none | `200 {"ok": true, "api": "cos.v1"}` | none |
 
@@ -109,7 +112,7 @@ every block below and requires it to round-trip through the code's event type):
 | `state` | `state`: `idle`\|`listening`\|`thinking`\|`speaking`\|`blocked`; `reason` only with `blocked` | the avatar state |
 | `status` | `task`: string; `model`: string; `lanes_running`: number | the status line. `model` is the model that is answering this turn (`provider/model`), `none` for a confirmation turn; a retry on the fallback model sends a new `status` with `task` ending ` (fallback)` |
 | `token` | `turn_id`; `text` | a streamed piece of the reply. Optional to render; the `message` is authoritative |
-| `message` | `turn_id`; `text`; `final`: bool | the reply. `final: true` ends the turn's text; every turn that has a reply sends exactly one |
+| `message` | `turn_id`; `text`; `final`: bool; `endpoint`: string, optional (v1.1); `speak`: bool, optional, default false (v1.1) | the reply. `final: true` ends the turn's text; every turn that has a reply sends exactly one. `endpoint` names the endpoint the turn belongs to. `speak: true` means a remote endpoint is to read it aloud itself (section 3.3) |
 | `tool` | `name`: dotted id; `summary`: string; `status`: `running`\|`ok`\|`error`\|`refused`\|`awaiting_confirmation`\|`cancelled` | a tool call. Never carries arguments or credentials |
 | `page` | `turn_id`; `markdown` | a full page for the `page` layout |
 | `layout` | `layout`: `split`\|`page`\|`guide` | which layout to show |
@@ -131,6 +134,9 @@ every block below and requires it to round-trip through the code's event type):
 ```
 ```json cos-event
 {"kind": "message", "turn_id": "0b3f7c1e5a9d4e2f8c6a1d7b3e9f5a20", "text": "Two of three nodes are up.", "final": true}
+```
+```json cos-event
+{"kind": "message", "turn_id": "0b3f7c1e5a9d4e2f8c6a1d7b3e9f5a20", "text": "Two of three nodes are up.", "final": true, "endpoint": "mentra", "speak": true}
 ```
 ```json cos-event
 {"kind": "tool", "name": "nodes.health", "summary": "2/3 nodes healthy", "status": "ok"}
@@ -161,11 +167,47 @@ turn, its `tool` events end `ok`, `error` or `cancelled`. After a survey `ask` t
 the owner's tap or spoken number comes back as the next utterance (`source: touch`).
 
 **Who speaks.** The agent host reads the final `message` of a `voice` turn aloud on the Mac
-(section 4). A front end that has its own speaker (the glasses) renders `message` itself and
-may switch the host's speech off with `voice.tts.engine: "none"`.
+(section 4) only when the turn's endpoint is `host`. A turn from a remote endpoint is never
+spoken by the host; its final `message` carries that `endpoint` and, when the endpoint is
+to speak it, `speak: true`. Whether a remote endpoint speaks is its own setting, so silencing
+one never silences another or the Mac console (3.3). The old way, a front end switching the
+host's speech off with `voice.tts.engine: "none"`, still works and is still global; use
+endpoints instead.
+
+### 3.3 Endpoints and remote access (`cos.v1.1`, additive)
+
+- **Endpoint ids.** 1 to 32 characters of `a-z 0-9 _ -`. `host` is the Mac's own microphone,
+  push-to-talk and console, and is the default when a request names none. A front end such as
+  the glasses bridge uses its own id (`mentra`). An id is attributed per turn: every event of
+  the turn that carries a reply (`message`) names it.
+- **`speak`.** `speak: true` on the final `message` of a turn that is a `voice` turn of a
+  remote endpoint whose `endpoints.<id>.tts.engine` is not `none` (default: speaks). It is
+  never true for `host` (the host speaks those itself), for `typed` or `touch` turns, or for
+  a non-final message. The host process never reads a remote endpoint's reply aloud.
+- **Config** (`~/.config/weftos/cos.json`): `"endpoints": {"mentra": {"tts": {"engine": "none"}}}`
+  keeps `speak` off that endpoint only; `host` is configured by `voice.tts` as before.
+- **Tailnet.** `"serve": {"bind": "tailnet"}` (or `"tailnet:PORT"`) adds a second listener on
+  this machine's Tailscale IPv4 beside the loopback one. Never `0.0.0.0`; an address that is
+  not in 100.64.0.0/10 is refused before a socket opens, and so is any other `serve.bind`.
+  Running instead behind the ADR-116 router with an allowlist of the `/v1/cos/*` routes works
+  too, with the API left on loopback; the router then owns the peer check.
+- **Tokens.** `weftos-cos endpoint add <name>` writes a bearer token to
+  `<serve.tokens_dir>/<name>.token` (mode 0600, default `~/.config/weftos/cos/endpoints/`) and
+  prints only the file's path. Any request from a non-loopback peer must send
+  `Authorization: Bearer <token>`: missing or unknown is `401`. Loopback stays token-free for
+  the local console. A token acts only as its own endpoint: an `utterance` naming another
+  endpoint is `403`, an unnamed one takes the token's endpoint, and `ptt` is `403` (it captures
+  the host's microphone, so a remote front end does STT itself and posts a `voice` utterance).
+  A token file readable by group or others is ignored. Tokens are read per request, so a new
+  endpoint needs no restart; delete the file to revoke.
+- **Not filtered.** A remote endpoint receives the whole event stream, not only its own turns,
+  and `answer` turns are attributed to the host.
 
 ```json cos-request
 {"text": "where are we", "source": "typed"}
+```
+```json cos-request
+{"text": "where are we", "source": "voice", "endpoint": "mentra"}
 ```
 ```json cos-request
 {"kind": "answer", "id": "q1", "value": 2}
@@ -189,3 +231,4 @@ may switch the host's speech off with `voice.tts.engine: "none"`.
 - 2026-10-11 (host): `POST /v1/cos/ptt {down: bool}` added to §3 (202 `{active}` on down; 202 `{active: false, posted: {text, turn_id}}` or `{nothing: reason}` on up; 503 when the agent runs without `--mic`). The console host (`cos-console-host`, in `weftos-cos-console`) talks to the agent over HTTP/SSE only and shows the voice transcript from the `up` reply. The desktop window reports keys as sensors `key.char` / `key.named` (display-client `keys`), used for the host's development typing line; the pad never sends them. `GuideAnswer::Back` is not posted (no agent kind for it yet).
 - 2026-10-12 (cosbrain): §3 frozen as `cos.v1`: exact routes, payloads and events, `GET /healthz` carries `"api": "cos.v1"`, executable examples (`tests/contract_v1.rs`). The `status` event reports the model that is answering, including a fallback. The agent host speaks `voice` replies itself (local TTS, `voice.tts` in `cos.json`).
 - 2026-10-12 (pad): `DisplayTarget::Leaf` is real. `cos-console-host --leaf <leaf id> [--daemon <socket>]` opens a session on the certified pad through the daemon; `Tap`, `Drag` and the `ptt.down` / `ptt.up` sensors arrive as on the simulator, hit-tested on the pad. Scene batches go out in frames of at most 4.5 KiB of CBOR (the pad reads 8 KiB), rendered once per batch. One app holds the screen at a time; a second `open` is refused with the holder's name (queueing and the system strip are D2).
+- 2026-10-12 (cosroute): `cos.v1.1`, additive (the version string stays `cos.v1`): optional `endpoint` on `utterance` and `ptt`; optional `endpoint` and `speak` on `message`; per-endpoint speech (`endpoints.<id>.tts`); optional tailnet listener (`serve.bind`) with per-endpoint bearer tokens (`weftos-cos endpoint add`), required off loopback. The host speaks only `host` turns. See §3.3.

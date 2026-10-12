@@ -60,3 +60,5 @@ cpal = { version = "0.15", optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+# Drive the router directly with a chosen peer address (tests/endpoints.rs).
+tower = { version = "0.5", features = ["util"] }

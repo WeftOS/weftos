@@ -15,6 +15,7 @@ use crate::conversation::{Conversation, UserUtterance};
 use crate::events::Event;
 use crate::voice::{PttControl, PttEdge, PttOutcome, PushToTalk, Retention};
 use crate::speak::{self, Speaker};
+use crate::endpoints::{self, TokenStore};
 use crate::{CosConfig, host, model};
 
 #[derive(clap::Args, Clone, Debug, Default)]
@@ -51,6 +52,41 @@ pub enum ModelCmd {
     },
     /// Stop the server this host started (by its recorded pid only).
     Stop,
+}
+
+#[derive(clap::Subcommand, Clone, Debug)]
+pub enum EndpointCmd {
+    /// Create a remote endpoint: writes its bearer token to a 0600 file and
+    /// prints only the file's path.
+    Add {
+        name: String,
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
+    /// List the remote endpoints that have a token.
+    List {
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
+}
+
+/// `weftos-cos endpoint ...`
+pub fn endpoint(cmd: EndpointCmd) -> anyhow::Result<()> {
+    match cmd {
+        EndpointCmd::Add { name, config } => {
+            let cfg = CosConfig::load(config.as_deref())?;
+            let path = TokenStore::new(&cfg.serve.tokens_dir).add(&name)?;
+            println!("{}", path.display());
+            Ok(())
+        }
+        EndpointCmd::List { config } => {
+            let cfg = CosConfig::load(config.as_deref())?;
+            for n in TokenStore::new(&cfg.serve.tokens_dir).names() {
+                println!("{n}");
+            }
+            Ok(())
+        }
+    }
 }
 
 /// `weftos-cos model ...`
@@ -145,6 +181,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         Some(s) => eprintln!("spoken replies: {}", s.engine_name()),
         None => eprintln!("spoken replies: off"),
     }
+    built.agent.set_silent_endpoints(cfg.silent_endpoints());
     let speaking = speaker.clone().map(|s| tokio::spawn(speak::speak_replies(conv.events(), built.agent.clone(), s)));
     // One push-to-talk owner, shared by the terminal and `POST /v1/cos/ptt`
     // (the console host's space bar or the pad button).
@@ -157,8 +194,26 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     });
     let control: Option<Arc<dyn PttControl>> = ptt.clone().map(|p| p as Arc<dyn PttControl>);
 
-    let (local, server) = crate::server::bind_with(conv.clone(), control, addr).await?;
-    eprintln!("conversation API on http://{local}  (POST /v1/cos/utterance, POST /v1/cos/ptt, GET /v1/cos/events)");
+    let server = match cfg.tailnet_port()? {
+        None => {
+            let (local, server) = crate::server::bind_with(conv.clone(), control, addr).await?;
+            eprintln!("conversation API on http://{local}  (POST /v1/cos/utterance, POST /v1/cos/ptt, GET /v1/cos/events)");
+            futures_util::future::Either::Left(server)
+        }
+        Some(port) => {
+            let ip = endpoints::tailnet_ip()?;
+            let tokens = TokenStore::new(&cfg.serve.tokens_dir);
+            let (bound, server) = crate::server::bind_remote(conv.clone(), control, addr, std::net::SocketAddr::new(ip.into(), port), tokens.clone()).await?;
+            eprintln!("conversation API on http://{} (no token) and http://{} (bearer token per endpoint)", bound.loopback, bound.tailnet);
+            let names = tokens.names();
+            if names.is_empty() {
+                eprintln!("no remote endpoints yet; create one with `weftos-cos endpoint add <name>`");
+            } else {
+                eprintln!("remote endpoints: {}", names.join(", "));
+            }
+            futures_util::future::Either::Right(server)
+        }
+    };
 
     let printer = tokio::spawn(print_events(conv.events()));
     let stdin_loop = if args.no_stdin { None } else { Some(tokio::spawn(terminal(conv.clone(), ptt))) };
