@@ -47,6 +47,7 @@ project runs, install its router route, remember what was created.
 
 ```text
 weaver project add weftos://<mesh>/projects/<ULID> --slug shasta
+weaver project add weftos://<mesh>/projects/<ULID> --slug shasta --repo Shasta
 weaver project add git@github.com:org/shasta.git
 weaver project add https://github.com/org/shasta.git --path ~/dev/shasta --branch main
 ```
@@ -57,6 +58,14 @@ weaver project add https://github.com/org/shasta.git --path ~/dev/shasta --branc
   is refused with the way forward, because only the dashboard knows that
   project's repositories: use **Add locally**, or the weftos:// name from the
   project's Info panel. A bare ULID is refused too (it does not say which mesh).
+- **Repository.** A project's root is not always a repository: on the primary it
+  can be the project user's home with the repository one level down. `project add`
+  asks the primary which repositories it has. If the root is one, it is fetched
+  as before. If not and there is exactly one, that repository is checked out at
+  the target path and the output says which. If there are several, they are
+  checked out side by side under the target path. `--repo <DIR>` picks one
+  repository by name (`.` is the root) and checks it out at the target path;
+  a name the project does not have is refused, listing the ones it does.
 - **Slug.** The handle for everything below. A git URL defaults to the
   repository's name; a mesh name has no project name, so pass `--slug` (or a
   `--path`, whose last segment is used).
