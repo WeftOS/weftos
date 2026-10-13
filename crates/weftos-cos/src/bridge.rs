@@ -371,7 +371,7 @@ impl Bridge {
         }
         match req.get("kind").and_then(Value::as_str).unwrap_or("utterance") {
             "utterance" => self.deliver(req).await,
-            kind @ ("listen" | "ptt_mentra") => match self.write_control(kind, req.get("payload").unwrap_or(&Value::Null)) {
+            kind @ ("listen" | "ptt_mentra" | "voice_volume") => match self.write_control(kind, req.get("payload").unwrap_or(&Value::Null)) {
                 Ok(()) => json!({"id": id, "status": "accepted"}),
                 Err(e) => fail(e),
             },
@@ -380,7 +380,7 @@ impl Bridge {
         }
     }
 
-    /// Merge a `listen` or `ptt_mentra` change into `control.json` (atomic
+    /// Merge a `listen`, `ptt_mentra` or `voice_volume` change into `control.json` (atomic
     /// temp file + rename); the glasses loop polls it.
     fn write_control(&self, kind: &str, payload: &Value) -> Result<(), String> {
         let path = self.cfg.mentra_dir.join("control.json");
@@ -395,6 +395,12 @@ impl Bridge {
             "listen" => {
                 let on = payload.get("on").and_then(Value::as_bool).ok_or("listen payload needs a boolean `on`")?;
                 ctl["listening"] = Value::Bool(on);
+            }
+            "voice_volume" => {
+                // Linear gain the glasses speak loop applies to the reply wav;
+                // it can sit below the glasses' hardware volume floor.
+                let v = payload.get("volume").and_then(Value::as_f64).filter(|v| v.is_finite() && (0.0..=1.0).contains(v)).ok_or("voice_volume payload needs `volume` between 0 and 1")?;
+                ctl["voice_volume"] = json!(v);
             }
             _ => {
                 let hold = payload.get("hold_id").and_then(Value::as_str).filter(|h| !h.is_empty() && h.len() <= 64).ok_or("ptt_mentra payload needs a `hold_id`")?;

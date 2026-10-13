@@ -15,7 +15,7 @@ use crate::CosError;
 use crate::conversation::{Conversation, GuideAnswer, HOST_ENDPOINT, Source, TURN_HISTORY_CAP, TurnId, TurnMessage, UserUtterance, valid_endpoint_name};
 use crate::events::{AgentState, Event, redact};
 use crate::guide::{Resolution, UiHandle};
-use crate::prompt::system_prompt;
+use crate::prompt::system_prompt_with;
 use crate::routing::{ModelRoutes, Route, Tier};
 use crate::tools::cards::Focus;
 use crate::tools::{Gate, ToolLog, ToolRegistry};
@@ -343,8 +343,11 @@ impl Inner {
         tracing::info!(turn = %turn_id, tier = tier.label(), model = %route.model_id, "routed");
 
         let today = chrono::Local::now().format("%Y-%m-%d (%A)").to_string();
-        let system = json!({"role": "system", "content": system_prompt(&self.tools.specs(), &today)});
-        let specs = self.tools.openai_specs();
+        // External (MCP) servers that were down get another chance here.
+        self.tools.refresh().await;
+        let offered = self.tools.specs_for(&utterance.text);
+        let system = json!({"role": "system", "content": system_prompt_with(&offered, &today, &self.tools.catalog())});
+        let specs: Vec<Value> = offered.iter().map(|s| s.openai_spec()).collect();
 
         let chain = self.routes.chain(route);
         let max_rounds = self.max_rounds.load(Ordering::Relaxed);
@@ -610,7 +613,10 @@ fn describe_action(tool: &str, args: &Value) -> String {
             let clipped: String = text.chars().take(80).collect();
             format!("comment on {}: \"{clipped}\"", args["ticket"].as_str().unwrap_or("?"))
         }
-        other => format!("run {other}"),
+        other => {
+            let shown: String = args.to_string().chars().take(160).collect();
+            if args.as_object().is_some_and(|o| !o.is_empty()) { format!("run {other} with {shown}") } else { format!("run {other}") }
+        }
     }
 }
 

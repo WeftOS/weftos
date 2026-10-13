@@ -61,7 +61,8 @@ for you so the first spoken turn is not the slow one.
   "voice": {"tts": {"engine": "auto", "voice": null, "rate": 200}, "device": null},
   "brain": {"installation": "weftos://local/installations/<id>"},
   "serve": {"bind": null},
-  "endpoints": {"mentra": {"speak": true}}
+  "endpoints": {"mentra": {"speak": true}},
+  "mcp_servers": []
 }
 ```
 
@@ -146,7 +147,107 @@ it down, turns are not sent and the status shows `healthy: false`.
 Read: `projects.activity`, `board.read`, `card.current`, `nodes.health`, `mesh.routes`.
 Keep: `notes.record` (project history, the card, and the brain), `board.propose` (a staged
 manifest for the steward). Change shared state, so each waits for the owner's "yes":
-`board.claim`, `board.note`, `work.kickoff`. Screen: the `ui.*` tools.
+`board.claim`, `board.note`, `work.kickoff`. Screen: the `ui.*` tools. Anything else comes from
+the configured MCP servers (below), gated as configured.
+
+## Adding capabilities with MCP servers
+
+New abilities (flights, travel, code hosting, mail, a project's own tools) come from
+configuring MCP servers, not from new Rust. Each `mcp_servers` entry in `cos.json` is one
+server; its allow-listed tools appear to the model as `<id>.<tool>` (on the wire
+`<id>_<tool>`) with the server's own JSON schema. The same shape is what the planned cloud
+chief of staff keeps per user.
+
+```json
+{
+  "mcp_servers": [
+    {
+      "id": "local",
+      "transport": {"type": "stdio", "command": "target/debug/weftos-cos-mcp-echo"},
+      "allow": ["echo", "time.*"],
+      "use_for": "checking the time"
+    }
+  ]
+}
+```
+
+That server is the one to try first: `weftos-cos-mcp-echo` is built with the crate, needs no
+account, and offers `echo`, `time.now`, `note.append` and `big`. Every tool of a hand-written server
+waits for your "yes", so the first `echo` shows the confirmation turn.
+
+Fields:
+
+- `id`: lowercase letters, digits, `-`, `_`. The tool namespace.
+- `transport`: `{"type": "stdio", "command", "args", "env"}` or `{"type": "http", "url"}`
+  (streamable HTTP; answers as JSON or SSE). `env` lists variable **names** to pass to a
+  stdio server; the values come from the environment, never from this file.
+- `auth` (http only): `{"bearer_env": "NAME"}` or `{"bearer_file": "/path"}`, a variable
+  name or a mode-0600 file. A token is never inline, never logged and scrubbed from
+  errors and results. A bearer is refused over plain `http://` except to localhost.
+- `allow`: tool names or `*` globs to expose. **Empty (the default) exposes nothing**, so a
+  new server does nothing until you pick its tools.
+- `gate`: `confirm` (the call waits for the owner's "yes") is the only value a hand-written
+  server may have: `open`, here or in `tool_gates`, is refused ("unvetted servers always need
+  confirmation; add it to the catalog to open tools"). Catalog servers keep the gates their
+  publisher set, where `open` is for read-only tools and `tool_gates` overrides per tool or
+  glob (an exact name beats a glob).
+- `use_for`: one sentence telling the model when to use the server.
+- `connect_timeout_secs` (8), `call_timeout_secs` (30), `max_output_bytes` (8000, longer
+  results are cut with a "+N more bytes" note), `retry_secs` (30).
+
+Behaviour: the host connects at start and lists tools. A server that is down is reported
+(`not bound: mcp:<id>: ...` at start, "unavailable" in the model's notes) and retried at
+turn starts and whenever one of its tools is called; it never stops the host. The model sees
+at most `mcp_max_tools_per_turn` (default 12) MCP tools per turn, chosen by keyword match
+with your request when there are more; every allowed tool stays callable. Prefer narrow
+`allow` lists: a long tool list hurts the local model.
+
+### Provided servers (the catalog)
+
+A publisher such as WeaveLogic can ship a catalog of vetted servers. You switch entries on
+by id instead of writing them out:
+
+```json
+{
+  "mcp_catalog": {"path": "~/.config/weftos/cos/mcp-catalog.json", "pinned_key": null, "require_signature": false},
+  "mcp_enable": [{"id": "travel", "allow": ["search_*"], "confirm": [], "auth": {"bearer_env": "MY_TRAVEL_TOKEN"}}]
+}
+```
+
+A catalog entry carries `id`, `name`, `publisher`, `authorized`, `transport`, `auth`
+(`{"kind": "none"}`, `{"kind": "bearer_env", "env": "NAME"}`; `oauth` is recognised but cannot
+be enabled yet), a default `allow` list, `gate`, `tool_gates` and `use_for`. In `mcp_enable`,
+`allow` can only **narrow** the catalog's allow-list (a tool must match both), `confirm`
+forces tools to wait for your yes, and `auth` points the credential at your own variable or
+file. Nothing in `mcp_enable` can widen an allow-list or open a gate.
+
+Trust: servers you write in `mcp_servers` are **unvetted**, and every tool of one needs your yes; catalog
+servers are reported as `authorized by <publisher>` (or "not marked authorized") at start,
+with `signature verified` or `unsigned`. The origin is set by the host and cannot be claimed
+in `cos.json`. If the catalog has a `signature` (Ed25519, hex, over `weftos-mcp-catalog-v1\n`
+plus the document's canonical JSON without the signature), it is checked against
+`mcp_catalog.pinned_key` (or the host's built-in key, empty until the publisher issues one);
+a signature that does not verify, or a signed catalog with no key to check it, refuses the
+whole catalog. Unsigned catalogs load unless `require_signature` is true, so turn that on
+once your publisher signs.
+
+Templates (not active; fill in the real URL, command and variable names, and keep the
+values in the environment or a 0600 file):
+
+```json
+{"id": "travel", "transport": {"type": "http", "url": "https://<travel-mcp-host>/mcp"},
+ "auth": {"bearer_env": "TRAVEL_MCP_TOKEN"}, "allow": ["search_*"],
+ "use_for": "flights, hotels and trip plans"}
+
+{"id": "github", "transport": {"type": "stdio", "command": "<github-mcp-server>", "args": ["stdio"], "env": ["GITHUB_TOKEN"]},
+ "allow": ["get_*", "list_*", "search_*", "add_issue_comment"],
+ "use_for": "issues, pull requests and code in our repositories"}
+```
+
+To add a flights server: get an MCP endpoint and an API token from the flights provider,
+store the token in a 0600 file or an environment variable the host runs with, add an entry
+like the `travel` template with `allow` limited to the search tools, restart `weftos-cos
+serve`, and check the start report for `mcp:travel`.
 
 ## Brain and notes (ADR-121 decision 9)
 

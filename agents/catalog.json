@@ -115,7 +115,7 @@
         "notes": "Built for the chief-of-staff console (ADR-118). The agent carries method only; project facts (board, token path, team runtime) come from project-context. It directs the owner's team and holds no write authority of its own: board writes go through the steward, docs through the doc-gardener, memory through liber, purpose checks to mo. Runtime host: crates/weftos-cos (`weftos-cos serve`, `weft cos serve`)."
       },
       "version": "0.8.4-rc.13",
-      "digest": "sha256:abb2fab799695e7a8a168791f6b959961c6fd30ef3619a27307b907a58575bd2",
+      "digest": "sha256:f73b72f8f1b3e3262e585cbf598de19539c35883c0ecc16e795a23a9c037f8c7",
       "parent": null,
       "state": "active",
       "dependencies": [
@@ -1561,7 +1561,7 @@
         }
       },
       "version": "0.8.4-rc.13",
-      "digest": "sha256:af56781cebc820003f0d5f1c43dc304304f065b8755db55ba479f1a403406b9a",
+      "digest": "sha256:36944f663fa91996c6eda9cb8dd19da67bbae74237791c45ecfab6c52ca2a1ed",
       "path": "agents/teams/weftos-core"
     }
   ]

@@ -123,6 +123,7 @@ responses carry `{"id", "kind", "endpoint", "text", "payload", ...}`:
 | `listen` | `{"on": bool}` | the toggle (one state for both tabs) | writes `listening` in the control file |
 | `ptt_mentra` | `{"hold_id": uuid, "phase": "down"\|"up"}` | Mentra hold button | writes `ptt` in the control file; the glasses loop captures that hold and posts endpoint `mentra` |
 | `audio` | `{"hold_id": uuid, "bytes": n, "ms": n}` | Weaver hold button (phone mic) | downloads the WAV, transcribes on the Mac, posts endpoint `dashboard`, `source: "voice"` |
+| `voice_volume` | `{"volume": 0..1}` | Mentra volume slider | writes `voice_volume` in the control file; the glasses speak loop applies it as a gain (default 0.30) |
 
 The RPC splits into `request_cos_turn(p_node, p_endpoint, p_text)` and
 `request_cos_control(p_node, p_kind, p_payload)` (kinds `listen` and

@@ -346,8 +346,18 @@ async fn control_requests_merge_into_an_atomically_written_control_file() {
     result_of(&r, json!({"id": "c4", "kind": "ptt_mentra", "payload": {"hold_id": "h-1", "phase": "up"}})).await;
     assert_eq!((read()["listening"].clone(), read()["ptt"]["phase"].clone()), (json!(true), json!("up")));
 
+    // Voice volume merges in and keeps listening and the last hold.
+    result_of(&r, json!({"id": "v1", "kind": "voice_volume", "payload": {"volume": 0.3}})).await;
+    let c = read();
+    assert_eq!((c["voice_volume"].clone(), c["listening"].clone(), c["ptt"]["phase"].clone()), (json!(0.3), json!(true), json!("up")));
+    result_of(&r, json!({"id": "v2", "kind": "listen", "payload": {"on": false}})).await;
+    assert_eq!(read()["voice_volume"], json!(0.3));
+
     // Bad payloads are refused and leave the file alone.
     let before = read();
+    for (i, v) in [("v3", json!(1.5)), ("v4", json!(-0.1)), ("v5", json!("loud"))] {
+        assert_eq!(result_of(&r, json!({"id": i, "kind": "voice_volume", "payload": {"volume": v}})).await["status"], "failed");
+    }
     for (i, p) in [("c5", json!({"on": "yes"})), ("c6", json!(null))] {
         assert_eq!(result_of(&r, json!({"id": i, "kind": "listen", "payload": p})).await["status"], "failed");
     }

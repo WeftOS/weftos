@@ -393,10 +393,16 @@ impl McpTransport for StdioTransport {
 /// Transport that communicates via HTTP POST.
 ///
 /// Sends JSON-RPC requests as the body of POST requests to the
-/// configured endpoint URL.
+/// configured endpoint URL. Handles both plain JSON responses and the
+/// single-event `text/event-stream` framing that streamable-HTTP servers
+/// may answer with, and echoes the `Mcp-Session-Id` a server assigns.
 pub struct HttpTransport {
     client: reqwest::Client,
     endpoint: String,
+    /// `Authorization` header value, marked sensitive so it never shows in
+    /// reqwest's debug output. Never logged by this module.
+    authorization: Option<reqwest::header::HeaderValue>,
+    session_id: std::sync::Mutex<Option<String>>,
 }
 
 impl HttpTransport {
@@ -405,8 +411,68 @@ impl HttpTransport {
         Self {
             client: reqwest::Client::new(),
             endpoint,
+            authorization: None,
+            session_id: std::sync::Mutex::new(None),
         }
     }
+
+    /// Create a transport that sends `Authorization: Bearer <token>` and
+    /// gives up on any single request after `timeout`.
+    pub fn with_bearer(
+        endpoint: String,
+        bearer: Option<&str>,
+        timeout: std::time::Duration,
+    ) -> Result<Self> {
+        let authorization = match bearer {
+            Some(token) => {
+                let mut v = reqwest::header::HeaderValue::from_str(&format!("Bearer {token}"))
+                    .map_err(|_| {
+                        ServiceError::McpTransport("bearer token is not a valid header value".into())
+                    })?;
+                v.set_sensitive(true);
+                Some(v)
+            }
+            None => None,
+        };
+        let client = reqwest::Client::builder()
+            .timeout(timeout)
+            .build()
+            .map_err(|e| ServiceError::McpTransport(format!("HTTP client: {e}")))?;
+        Ok(Self {
+            client,
+            endpoint,
+            authorization,
+            session_id: std::sync::Mutex::new(None),
+        })
+    }
+
+    async fn post<B: serde::Serialize>(&self, body: &B) -> std::result::Result<reqwest::Response, reqwest::Error> {
+        let mut req = self
+            .client
+            .post(&self.endpoint)
+            .header(reqwest::header::ACCEPT, "application/json, text/event-stream")
+            .json(body);
+        if let Some(auth) = &self.authorization {
+            req = req.header(reqwest::header::AUTHORIZATION, auth.clone());
+        }
+        let sid = self.session_id.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if let Some(sid) = sid {
+            req = req.header("Mcp-Session-Id", sid);
+        }
+        let resp = req.send().await?;
+        if let Some(sid) = resp.headers().get("mcp-session-id").and_then(|v| v.to_str().ok()) {
+            *self.session_id.lock().unwrap_or_else(|e| e.into_inner()) = Some(sid.to_string());
+        }
+        Ok(resp)
+    }
+}
+
+/// Pick the response for `id` out of a `text/event-stream` body.
+fn response_from_sse(body: &str, id: u64) -> Option<JsonRpcResponse> {
+    body.lines()
+        .filter_map(|l| l.strip_prefix("data:"))
+        .filter_map(|d| serde_json::from_str::<JsonRpcResponse>(d.trim()).ok())
+        .find(|r| r.id == id)
 }
 
 #[async_trait]
@@ -420,10 +486,7 @@ impl McpTransport for HttpTransport {
         );
 
         let resp = self
-            .client
-            .post(&self.endpoint)
-            .json(&request)
-            .send()
+            .post(&request)
             .await
             .map_err(|e| ServiceError::McpTransport(format!("HTTP request failed: {e}")))?;
 
@@ -431,6 +494,21 @@ impl McpTransport for HttpTransport {
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
             return Err(ServiceError::McpTransport(format!("HTTP {status}: {body}")));
+        }
+
+        let is_sse = resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.starts_with("text/event-stream"));
+        if is_sse {
+            let body = resp
+                .text()
+                .await
+                .map_err(|e| ServiceError::McpTransport(format!("failed to read response: {e}")))?;
+            return response_from_sse(&body, request.id).ok_or_else(|| {
+                ServiceError::McpTransport("event stream carried no response for the request".into())
+            });
         }
 
         let response: JsonRpcResponse = resp
@@ -451,10 +529,7 @@ impl McpTransport for HttpTransport {
         );
 
         let resp = self
-            .client
-            .post(&self.endpoint)
-            .json(&notif)
-            .send()
+            .post(&notif)
             .await
             .map_err(|e| ServiceError::McpTransport(format!("HTTP notification failed: {e}")))?;
 
