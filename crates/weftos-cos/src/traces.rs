@@ -89,6 +89,10 @@ pub struct TraceBuilder {
     gates: Vec<String>,
     pub rounds: usize,
     pub failed: bool,
+    /// Staged file of the last successful `board.propose` this turn.
+    pub proposal: Option<String>,
+    /// A tool that really writes (claim, comment, kickoff) succeeded this turn.
+    pub applied: bool,
 }
 
 impl TraceBuilder {

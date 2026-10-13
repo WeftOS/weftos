@@ -176,6 +176,8 @@ pub struct SyncReport {
     pub traces_sent: usize,
     pub results_sent: usize,
     pub requests: usize,
+    /// Rows (turns, traces) the dashboard rejected twice and the cursor moved past.
+    pub rows_skipped: usize,
     /// The body that was (or, with dry run, would have been) posted.
     pub body: Value,
 }
@@ -196,6 +198,22 @@ impl Transcriber for SttTranscriber {
         let utt = clawft_channels::voice::stt::Utterance { samples, sample_rate: 16_000 };
         self.0.transcribe(&utt).await.map_err(|e| format!("stt: {e}"))
     }
+}
+
+/// How the dashboard took one sync body.
+enum Posted {
+    Reply(Value),
+    /// A 4xx other than 401/403.
+    Rejected(u16),
+}
+
+/// What a split sync delivered.
+struct Split {
+    replies: Vec<Value>,
+    turns: usize,
+    traces: usize,
+    results: usize,
+    skipped: usize,
 }
 
 #[derive(Default)]
@@ -253,19 +271,55 @@ impl Bridge {
         });
         let (turns_sent, results_sent, traces_sent) = (new_turns.len(), results.len(), new_traces.len());
         let Some(token) = token else {
-            return Ok(SyncReport { turns_sent, traces_sent, results_sent, requests: 0, body: dry_run_view(&body) });
+            return Ok(SyncReport { turns_sent, traces_sent, results_sent, rows_skipped: 0, requests: 0, body: dry_run_view(&body) });
         };
+        let first = self.post_sync(&token, &body).await?;
+        let sent = match first {
+            Posted::Reply(reply) => {
+                // Delivered: advance the cursor and drop the reported results
+                // (the poller may have added newer ones meanwhile).
+                let mut st = self.st();
+                for t in &new_turns {
+                    mark_seen(&mut st, key_of(t));
+                }
+                for t in &new_traces {
+                    mark_trace_seen(&mut st, t);
+                }
+                let n = results_sent.min(st.results.len());
+                st.results.drain(..n);
+                Split { replies: vec![reply], turns: turns_sent, traces: traces_sent, results: results_sent, skipped: 0 }
+            }
+            Posted::Rejected(code) => {
+                tracing::warn!("bridge sync: dashboard answered HTTP {code}; retrying with the batch split");
+                self.sync_split(&token, &new_turns, &new_traces, &results, body["status"].clone()).await?
+            }
+        };
+
+        let mut requests = Vec::new();
+        for reply in &sent.replies {
+            requests.extend(reply.get("requests").and_then(Value::as_array).cloned().unwrap_or_default());
+        }
+        self.handle_all(&token, &requests).await;
+        Ok(SyncReport { turns_sent: sent.turns, traces_sent: sent.traces, results_sent: sent.results, rows_skipped: sent.skipped, requests: requests.len(), body })
+    }
+
+    /// POST one sync body. A 4xx other than 401/403 is `Rejected` (the body,
+    /// not the caller, is at fault); everything else that is not 2xx is an error.
+    async fn post_sync(&self, token: &str, body: &Value) -> Result<Posted, SyncError> {
         let resp = self
             .http
             .post(format!("{}/api/nodes/cos/sync", self.cfg.dashboard_url))
-            .bearer_auth(&token)
-            .json(&body)
+            .bearer_auth(token)
+            .json(body)
             .send()
             .await
             .map_err(|e| SyncError::Failed(format!("could not reach the dashboard: {}", e.without_url())))?;
         let status = resp.status().as_u16();
         if matches!(status, 401 | 403) {
             return Err(SyncError::Rejected(format!("node token rejected (HTTP {status})")));
+        }
+        if (400..500).contains(&status) {
+            return Ok(Posted::Rejected(status));
         }
         if !(200..300).contains(&status) {
             return Err(SyncError::Failed(format!("dashboard answered HTTP {status}")));
@@ -274,24 +328,63 @@ impl Bridge {
             .json()
             .await
             .map_err(|e| SyncError::Failed(format!("dashboard reply is not JSON: {}", e.without_url())))?;
+        Ok(Posted::Reply(reply))
+    }
 
-        // Delivered: advance the cursor and drop the reported results (the
-        // poller may have added newer ones meanwhile).
-        {
-            let mut st = self.st();
-            for t in &new_turns {
-                mark_seen(&mut st, key_of(t));
+    /// The whole batch was rejected: send status and results alone, then the
+    /// turns and then the traces by halves, so one bad row cannot hold back the
+    /// rest. A row that is rejected on its own (the second rejection) is
+    /// skipped: the cursor moves past it and the skip is logged once. If status
+    /// and results are themselves rejected the rows are not blamed and nothing
+    /// advances.
+    async fn sync_split(&self, token: &str, turns: &[Value], traces: &[Value], results: &[Value], status: Value) -> Result<Split, SyncError> {
+        let mut out = Split { replies: Vec::new(), turns: 0, traces: 0, results: 0, skipped: 0 };
+        let head = json!({"turns": [], "status": status, "results": results, "traces": []});
+        match self.post_sync(token, &head).await? {
+            Posted::Reply(r) => {
+                out.replies.push(r);
+                out.results = results.len();
+                let mut st = self.st();
+                let n = results.len().min(st.results.len());
+                st.results.drain(..n);
             }
-            for t in &new_traces {
-                mark_trace_seen(&mut st, t);
-            }
-            let n = results_sent.min(st.results.len());
-            st.results.drain(..n);
+            Posted::Rejected(code) => return Err(SyncError::Failed(format!("dashboard answered HTTP {code} to status and results alone"))),
         }
-
-        let requests = reply.get("requests").and_then(Value::as_array).cloned().unwrap_or_default();
-        self.handle_all(&token, &requests).await;
-        Ok(SyncReport { turns_sent, traces_sent, results_sent, requests: requests.len(), body })
+        for (rows, is_turns) in [(turns, true), (traces, false)] {
+            let mut stack: Vec<&[Value]> = if rows.is_empty() { Vec::new() } else { vec![rows] };
+            while let Some(chunk) = stack.pop() {
+                let body = if is_turns {
+                    json!({"turns": chunk, "status": head["status"], "results": [], "traces": []})
+                } else {
+                    json!({"turns": [], "status": head["status"], "results": [], "traces": chunk})
+                };
+                match self.post_sync(token, &body).await? {
+                    Posted::Reply(r) => {
+                        out.replies.push(r);
+                        let mut st = self.st();
+                        for row in chunk {
+                            if is_turns { mark_seen(&mut st, key_of(row)) } else { mark_trace_seen(&mut st, row) }
+                        }
+                        if is_turns { out.turns += chunk.len() } else { out.traces += chunk.len() }
+                    }
+                    Posted::Rejected(code) if chunk.len() == 1 => {
+                        let row = &chunk[0];
+                        let id = row.get("turn_id").and_then(Value::as_str).unwrap_or("?");
+                        tracing::warn!("bridge sync: skipping {} {id} after two rejections (HTTP {code})", if is_turns { "turn" } else { "trace" });
+                        let mut st = self.st();
+                        if is_turns { mark_seen(&mut st, key_of(row)) } else { mark_trace_seen(&mut st, row) }
+                        out.skipped += 1;
+                    }
+                    Posted::Rejected(_) => {
+                        let (l, r) = chunk.split_at(chunk.len() / 2);
+                        // Pushed so the first half is tried first.
+                        stack.push(r);
+                        stack.push(l);
+                    }
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// Unsent final turns from the agent, oldest first, at most 50. An

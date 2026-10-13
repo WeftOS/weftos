@@ -152,7 +152,15 @@
           "is now done",
           "i've marked",
           "i have marked",
-          "has been marked"
+          "has been marked",
+          "applied the change",
+          "steward applied",
+          "i've updated",
+          "i have updated",
+          "has been closed",
+          "has been updated",
+          "i closed",
+          "i created"
         ]
       }
     },

@@ -25,6 +25,8 @@ struct Dash {
     audio: Vec<u8>,
     audio_auth: Vec<String>,
     polls: Vec<String>,
+    /// Answer 400 to any body that carries a turn or trace with this id.
+    reject_id: Option<String>,
 }
 
 #[derive(Default)]
@@ -52,8 +54,15 @@ async fn fake_dashboard() -> (SocketAddr, Arc<Mutex<Dash>>) {
         let mut d = st.lock().unwrap();
         d.auth.push(h.get("authorization").and_then(|v| v.to_str().ok()).unwrap_or("").to_owned());
         d.bodies.push(b);
-        let code = StatusCode::from_u16(d.status).unwrap();
-        let reqs = std::mem::take(&mut d.queue);
+        let mut code = StatusCode::from_u16(d.status).unwrap();
+        if let Some(bad) = d.reject_id.clone() {
+            let carries = |k: &str| d.bodies.last().unwrap()[k].as_array().is_some_and(|a| a.iter().any(|t| t["turn_id"] == bad.as_str()));
+            if carries("turns") || carries("traces") {
+                code = StatusCode::BAD_REQUEST;
+            }
+        }
+        // A rejected body hands out nothing.
+        let reqs = if code.is_success() { std::mem::take(&mut d.queue) } else { Vec::new() };
         (code, Json(json!({"requests": reqs})))
     }
     async fn pending(State(st): State<Arc<Mutex<Dash>>>, h: HeaderMap, axum::extract::RawQuery(q): axum::extract::RawQuery) -> Json<Value> {
@@ -537,4 +546,46 @@ async fn oversize_trace_lists_are_cut_to_the_dashboard_limit_and_bad_runtime_is_
     assert!(serde_json::to_string(&sent["tools_called"]).unwrap().len() <= 7000);
     assert!(!sent["tools_called"].as_array().unwrap().is_empty());
     assert_eq!(sent["runtime"], "local");
+}
+
+#[tokio::test]
+async fn a_rejected_row_is_isolated_and_skipped_without_blocking_status_or_the_rest() {
+    let r = rig().await;
+    r.agent.lock().unwrap().turns = (0..5).map(|i| turn(&format!("t{i}"), "assistant", "x")).collect();
+    r.agent.lock().unwrap().traces = Some(vec![json!({"turn_id": "t0", "ts": "2026-10-13T00:00:00.000Z"}), json!({"turn_id": "t3", "ts": "2026-10-13T00:00:01.000Z"})]);
+    {
+        let mut d = r.dash.lock().unwrap();
+        d.reject_id = Some("t3".into());
+        d.queue = vec![json!({"id": "r1", "endpoint": "dashboard", "text": "hello"})];
+    }
+    let rep = r.bridge.sync_once(false).await.unwrap();
+    assert_eq!((rep.turns_sent, rep.traces_sent, rep.rows_skipped, rep.requests), (4, 1, 2, 1));
+    {
+        let d = r.dash.lock().unwrap();
+        // Full batch rejected first, then status alone synced without rows.
+        assert!(d.bodies[0]["turns"].as_array().unwrap().len() == 5);
+        assert!(d.bodies[1]["turns"].as_array().unwrap().is_empty() && d.bodies[1]["status"]["agent"]["state"] == "idle");
+        // No accepted body carried the bad id; the others did arrive.
+        let ok_ids: Vec<String> = d.bodies.iter().skip(1).filter(|b| b["turns"].as_array().unwrap().iter().all(|t| t["turn_id"] != "t3")).flat_map(|b| b["turns"].as_array().unwrap().clone()).map(|t| t["turn_id"].as_str().unwrap().to_owned()).collect();
+        for id in ["t0", "t1", "t2", "t4"] {
+            assert!(ok_ids.iter().any(|x| x == id), "{id} not delivered: {ok_ids:?}");
+        }
+    }
+    // The bad rows are past the cursor: nothing is resent, and the results go out once.
+    let before = r.dash.lock().unwrap().bodies.len();
+    let rep = r.bridge.sync_once(false).await.unwrap();
+    assert_eq!((rep.turns_sent, rep.rows_skipped), (0, 0));
+    let d = r.dash.lock().unwrap();
+    assert_eq!(d.bodies.len(), before + 1);
+    assert_eq!(d.bodies[before]["results"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn a_rejected_status_does_not_blame_the_rows() {
+    let r = rig().await;
+    r.agent.lock().unwrap().turns = vec![turn("t0", "assistant", "x")];
+    r.dash.lock().unwrap().status = 400;
+    assert!(matches!(r.bridge.sync_once(false).await, Err(SyncError::Failed(_))));
+    r.dash.lock().unwrap().status = 200;
+    assert_eq!(r.bridge.sync_once(false).await.unwrap().turns_sent, 1);
 }

@@ -320,6 +320,12 @@ pub fn is_programmatic(endpoint: &str) -> bool {
     endpoint == "mcp" || endpoint.strip_prefix("test-").is_some_and(|run| !run.is_empty())
 }
 
+/// Whether a successful tool result means a write really happened. Staging
+/// (`board.propose`) is not one.
+fn is_apply_class(tool: &str, result: &Value) -> bool {
+    matches!(tool, "board.claim" | "board.note" | "work.kickoff") || result["applied"] == true
+}
+
 fn is_yes(text: &str) -> bool {
     let t = text.trim().trim_end_matches(['.', '!']).to_lowercase();
     matches!(t.as_str(), "yes" | "y" | "yes please" | "go" | "go ahead" | "do it" | "confirm" | "confirmed" | "ok" | "okay" | "yep" | "yeah" | "sure" | "proceed")
@@ -493,6 +499,14 @@ impl Inner {
                 } else {
                     "(no answer)".to_string()
                 };
+                // Board writes are only staged: an answer that says one was
+                // applied, with no apply-class result behind it, is untrue.
+                let text = if !tb.applied && crate::guard::claims_applied_write(&text) {
+                    tb.gate("claim", "unbacked-write");
+                    crate::guard::rewrite_unbacked_claim(&text, tb.proposal.as_deref())
+                } else {
+                    text
+                };
                 self.history.lock().await.push(json!({"role": "assistant", "content": text}));
                 self.emit(Event::state(AgentState::Speaking));
                 self.emit(Event::Message { turn_id: turn_id.clone(), text, is_final: true, endpoint: None, speak: false });
@@ -636,6 +650,12 @@ impl Inner {
         tb.called(&id, &traced_args, outcome.is_ok(), started.elapsed().as_millis() as u64);
         match outcome {
             Ok(out) => {
+                if id == "board.propose" {
+                    tb.proposal = out.result["staged_path"].as_str().map(|p| p.rsplit('/').next().unwrap_or(p).to_string());
+                }
+                if is_apply_class(&id, &out.result) {
+                    tb.applied = true;
+                }
                 self.log.record(turn_id, &id, &out.summary, "ok");
                 self.emit(Event::Tool { name: id, summary: out.summary, status: "ok".into() });
                 self.push_tool_result(&call_id, &out.result).await;
@@ -765,6 +785,14 @@ mod tests {
         assert_eq!(summarize_question("where are we on the pad? and also the glasses"), "Where are we on the pad");
         assert_eq!(summarize_question("  ?! "), "");
         assert_eq!(summarize_question("what is in progress on the board"), "What is in progress");
+    }
+
+    #[test]
+    fn staging_is_not_an_applied_write() {
+        assert!(!is_apply_class("board.propose", &json!({"staged_path": "/x/y.yaml", "applied": false})));
+        assert!(!is_apply_class("board.read", &json!({})));
+        assert!(is_apply_class("board.claim", &json!({})));
+        assert!(is_apply_class("ext.write", &json!({"applied": true})));
     }
 
     #[test]
