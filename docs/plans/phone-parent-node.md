@@ -407,6 +407,7 @@ Gates and acceptance tests:
 | A4 | Reconnect | Toggle the hotspot off for 30 s; the link re-forms in under 15 s without touching the app |
 | A5 | Wrong peer | A second device or wrong key is refused and logged |
 | A6 | No Mentra, no speech vendor on the phone | Traffic inspection shows the phone and glasses talk only to each other and to the mesh gateway; none to Mentra, none to ElevenLabs |
+| X1 | On-phone STT (experiment, owner 2026-10-13) | sherpa-onnx Parakeet (the same model family the Mac CoS uses) runs in the app as a `speech.v1` STT provider on the S24 Ultra: transcript of a 5 s utterance in under 700 ms, WER no worse than the cloud path on the owner's 20 recorded test phrases, under 5 % battery per hour of open-gate use, and placement can switch between phone and cloud STT per turn. Informs whether offline and low-latency STT moves to the phone. |
 | B1 | Bandwidth | A 5 s utterance and a 10 s reply each cost at most 25 kB over the cellular leg including headers; a day's budget extrapolated |
 | B2 | Uplink loss | Drop the phone's uplink for 5 s mid-utterance: the stream resumes by sequence or the workflow receives an `audio.gap` and answers sensibly; no crash, no duplicate speech |
 
@@ -458,7 +459,7 @@ Moved by the owner's direction (2026-10-13). The CSI research lives in `~/dev/me
 | Q3 | Distribute through Play (internal then closed testing) or sideload only? | Play internal testing in P1; public decision later |
 | Q4 | Is the camera in scope for P1 (stills on command)? | Stills yes, clips and streaming later |
 | Q5 | Cached stock phrases: server side per user, pushed to the glasses? | Yes; the phone caches nothing |
-| Q6 | Should the phone ever do speech on-device (offline mode)? | No. Offline means a reachable LAN `speech.v1` service by placement, or a cached "offline" cue |
+| Q6 | Should the phone ever do speech on-device (offline mode)? | **Revised 2026-10-13 (owner): worth testing.** An on-phone STT service (sherpa-onnx/Parakeet on the S24 Ultra) hosted by the app as a `speech.v1` STT provider that placement can choose. The workflow still decides; the phone still does no TTS or shaping. Tested in P0 as experiment X1. |
 | Q7 | How are glasses agent updates delivered? | USB or a phone-started Wi-Fi adb session the user approves each time; no standing adb |
 | Q8 | When does iOS start? | After P1 acceptance; run a one-week iOS feasibility spike (BLE doorbell and hotspot only) during P1 |
 | Q9 | Public App Store release, or TestFlight only? | TestFlight until the background behavior is proven |
