@@ -1,7 +1,7 @@
 {"kind":"state","state":"thinking"}
 {"kind":"status","lanes_running":0,"model":"local/mlx-community/GLM-4.7-Flash-4bit","task":"Where are we on the board"}
 {"kind":"tool","name":"projects.activity","status":"running","summary":"running"}
-{"kind":"tool","name":"projects.activity","status":"ok","summary":"read 2 ticket(s) in in_progress and 1 goal(s); history read"}
+{"kind":"tool","name":"projects.activity","status":"ok","summary":"read 2 of 2 ticket(s) in in_progress and 1 goal(s); history read"}
 {"kind":"token","text":"Two cards are in progress: WEFT-901, the console screen, and WEFT-902, the pad button. The pad button is next.","turn_id":"t1"}
 {"kind":"state","state":"speaking"}
 {"endpoint":"host","final":true,"kind":"message","text":"Two cards are in progress: WEFT-901, the console screen, and WEFT-902, the pad button. The pad button is next.","turn_id":"t1"}

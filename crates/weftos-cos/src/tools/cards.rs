@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
-use super::harness::{HarnessClient, condense_ticket};
+use super::harness::{HarnessClient, bounded_rows, condense_ticket};
 use super::{Gate, Tool, ToolOutcome, ToolSpec, need_str, tool_err};
 use crate::CosError;
 
@@ -47,7 +47,10 @@ fn full_ticket(t: &Value) -> Value {
     let mut v = condense_ticket(t);
     for k in ["description", "project_id", "goal_id", "source_url", "created_at"] {
         if let Some(x) = t.get(k) {
-            v[k] = x.clone();
+            v[k] = match (k, x.as_str()) {
+                ("description", Some(d)) => json!(clip(d, 800)),
+                _ => x.clone(),
+            };
         }
     }
     v
@@ -192,5 +195,111 @@ impl Tool for CardCurrent {
             }
             None => Ok(ToolOutcome { summary: "no current card".into(), result: json!({"source": "none", "card": null}) }),
         }
+    }
+}
+
+const STOP: &[&str] = &[
+    "the", "and", "for", "are", "what", "whats", "where", "how", "with", "about", "our", "now", "status", "state", "going", "next",
+    "on", "in", "of", "to", "is", "we", "it", "a", "an", "at", "do", "does", "any", "tell", "show", "please",
+];
+
+fn words(s: &str) -> Vec<String> {
+    s.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_lowercase).collect()
+}
+
+/// Query terms: lowercase words without filler.
+pub(crate) fn query_terms(q: &str) -> Vec<String> {
+    words(q).into_iter().filter(|w| !STOP.contains(&w.as_str())).collect()
+}
+
+/// Score one card against `terms`: a term hits a title word (3) or a
+/// description word (1) by prefix, or the card's `WEFT-N` ref (3). Zero
+/// means no match.
+pub(crate) fn score_ticket(t: &Value, terms: &[String]) -> usize {
+    let title = words(t["title"].as_str().unwrap_or(""));
+    let desc = words(t["description"].as_str().unwrap_or(""));
+    let reference = condense_ticket(t)["ref"].as_str().unwrap_or("").to_lowercase();
+    terms
+        .iter()
+        .map(|q| {
+            let by_ref = reference == *q || reference.rsplit('-').next() == Some(q.as_str()) && q.chars().all(|c| c.is_ascii_digit());
+            if by_ref || title.iter().any(|w| w.starts_with(q.as_str())) {
+                3
+            } else if desc.iter().any(|w| w.starts_with(q.as_str())) {
+                1
+            } else {
+                0
+            }
+        })
+        .sum()
+}
+
+/// `board.search`: cards about a topic, found by words in titles and
+/// descriptions. The harness list has no search route, so the filter runs
+/// here over the (paged) ticket list.
+pub struct BoardSearch {
+    pub client: Arc<HarnessClient>,
+}
+
+const SEARCH: &str = "board.search";
+
+#[async_trait]
+impl Tool for BoardSearch {
+    fn spec(&self) -> ToolSpec {
+        ToolSpec {
+            id: SEARCH,
+            description: "Find board cards about a topic (words in titles and descriptions), best match first. Use it for \"where are we on X\" and \"what is next for X\". Read-only.",
+            parameters: json!({"type": "object", "required": ["query"], "properties": {
+                "query": {"type": "string", "description": "Topic words, e.g. \"pad\" or \"mentra glasses\"."},
+                "status": {"type": "string", "enum": ["todo", "in_progress", "review", "done"]},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 20, "default": 8}}}),
+            gate: Gate::Open,
+        }
+    }
+
+    async fn call(&self, args: Value) -> Result<ToolOutcome, CosError> {
+        let query = need_str(SEARCH, &args, "query")?;
+        let terms = query_terms(&query);
+        if terms.is_empty() {
+            return Err(tool_err(SEARCH, "query has no topic words; give the name of the thing to look for"));
+        }
+        let status = super::arg_str(&args, "status");
+        let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(8).clamp(1, 20) as usize;
+        let all = self.client.tickets(status.as_deref(), 2000).await?;
+        let mut hits: Vec<(usize, Value)> = all.into_iter().map(|t| (score_ticket(&t, &terms), t)).filter(|(s, _)| *s > 0).collect();
+        hits.sort_by(|(sa, a), (sb, b)| sb.cmp(sa).then_with(|| b["updated_at"].as_str().cmp(&a["updated_at"].as_str())));
+        let tickets: Vec<Value> = hits.into_iter().map(|(_, t)| t).collect();
+        let (rows, more) = bounded_rows(&tickets, limit);
+        Ok(ToolOutcome {
+            summary: format!("{} card(s) match {:?}", tickets.len(), terms.join(" ")),
+            result: json!({"query": terms, "matches": tickets.len(), "shown": rows.len(), "tickets": rows, "more": more}),
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn card(title: &str, desc: &str) -> Value {
+        json!({"id": "11111111-0000-0000-0000-000000000000", "status": "todo", "title": title, "description": desc})
+    }
+
+    #[test]
+    fn query_terms_drop_filler() {
+        assert_eq!(query_terms("where are we on the pad"), vec!["pad"]);
+        assert!(query_terms("what is the status").is_empty());
+    }
+
+    #[test]
+    fn topic_matches_title_over_description_and_skips_unrelated() {
+        let terms = query_terms("pad");
+        let pad = card("Edge pad console host", "");
+        let desc = card("Rotate keys", "also touches the pad firmware");
+        let other = card("MeshId rollout", "mesh identity");
+        assert!(score_ticket(&pad, &terms) > score_ticket(&desc, &terms));
+        assert!(score_ticket(&desc, &terms) > 0);
+        assert_eq!(score_ticket(&other, &terms), 0);
+        assert_eq!(score_ticket(&card("Mentra glasses app", ""), &query_terms("mentra glasses")), 6);
     }
 }

@@ -168,7 +168,9 @@ async fn mesh_routes_says_so_when_the_daemon_is_unreachable() {
     let rpc = Arc::new(FakeRpc { reachable: false, asked: Mutex::new(vec![]) });
     let out = MeshRoutes { rpc }.call(json!({})).await.unwrap();
     assert_eq!(out.result["reachable"], false);
-    assert!(out.summary.contains("unreachable"));
+    assert_eq!(out.result["health_known"], false);
+    assert!(out.summary.contains("can't reach the daemon"), "{}", out.summary);
+    assert!(!out.summary.contains("unhealthy"));
 }
 
 /// Live smoke: reads the real board with the owner's harness credential.
