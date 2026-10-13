@@ -13,7 +13,7 @@ Status: Proposed design, revision 2, 2026-10-13. Research and design only; nothi
 
 ## 1. Summary and decisions
 
-Revision 2 (2026-10-13): the owner corrected the speech design. **The phone app does no STT, TTS or other speech processing.** It moves audio and text between the glasses node and the mesh; STT, speech shaping and TTS run in a durable workflow on the weaver side, reached over the mesh. Sections 1, 2, 5, 7, 8, 9 and 12 reflect that. Section 6.4 (the existing `clawft-android-edge` crate) and section 10 (the actual glasses Wi-Fi chip) were added in the same revision.
+Revision 2 (2026-10-13): the owner corrected the speech design. **The phone app does no STT, TTS or other speech processing.** It moves audio and text between the glasses node and the mesh; STT, speech shaping and TTS run in a durable workflow on the weaver side, reached over the mesh. Sections 1, 2, 5, 7, 8, 9 and 12 reflect that. Section 6.4 (the existing `clawft-android-edge` crate) was added in the same revision. Revision 3 adds the LED capability and the `indicator` state machine (3.6, 3.7) and moves the CSI research to the glasses workspace (section 10).
 
 1. The phone runs a **WeftOS node** (a Rust core in a native Android shell now, an iOS shell later). It is the **parent** of the glasses node. The glasses run a small agent that holds a leaf identity, streams the microphone to the phone, plays what the phone sends, and takes control commands.
 2. **Nothing goes through Mentra cloud.** The glasses keep their stock firmware and the stock Mentra client app only as the hardware owner (launcher, camera HAL, LED, speaker path). We never talk to Mentra servers and never need the Mentra phone app.
@@ -22,8 +22,6 @@ Revision 2 (2026-10-13): the owner corrected the speech design. **The phone app 
 5. Cross-platform: **one Rust core with UniFFI bindings and thin native shells** (Kotlin/Compose now, Swift/SwiftUI later). The repo already has a seed for the core, `crates/clawft-android-edge` (identity, pair store, UniFFI plumbing, 967 lines), which is a good start and not yet a node (section 6.4).
 6. Biggest risks, in order: (a) the glasses cannot hold the microphone or the speaker path from an ordinary app without a foreground launch or privileges ([U], section 3.4); (b) **where the audio ingress lives**: the cloud plan assumed audio never passes through Vercel, and a durable workflow is not a low-latency audio pipe (section 5.2); (c) iOS cannot keep a process alive in the background the way Android can (section 7.2); (d) the audio route to the glasses speaker depends on a serial command to a co-processor (section 3.5).
 7. **P0 is a spike** that proves the loop without the Mac, on Android, in two to three weeks, and answers the unknowns above, because they decide whether P1 is a plan or a rewrite.
-
-What changes for existing pieces: the Mac adb loops (`mentra-cos-listen`, `mentra-cos-speak`) become a development fallback; `mentramic` and AudioBridge merge into one glasses agent; the `mentra-leaf` bring-up process (Noise XX, signed admission hello, status envelope [R]) becomes the glasses agent's link layer; the `/phone` page's Mentra tab reads node status instead of Mac-written status files.
 
 ---
 
@@ -66,11 +64,11 @@ What changes for existing pieces: the Mac adb loops (`mentra-cos-listen`, `mentr
 
 ### 2.2 What the phone is not
 
-It is not a relay for Mentra's protocol, not a Mentra SDK app, and does not run MentraOS cloud apps. It does not require the Mentra account. The glasses' stock client keeps owning pairing with Mentra's own app; we neither use nor disturb it ([U]: whether a second BLE client can coexist, section 3.2).
+Not a relay for Mentra's protocol, not a MentraOS app, and no Mentra account is needed. The glasses' stock client keeps owning pairing with Mentra's own app; we do not use or disturb it ([U]: whether a second BLE client can coexist, section 3.2).
 
 ### 2.3 Phone as a surface and a host
 
-The cloud plan already says a device that cannot reach the cloud is fronted by a host node that announces its capabilities (plan 4.1). The glasses have a real identity (unlike the pad, which the host fronts), but their only route out is the phone. So the phone is both: a surface (it can show a message, play audio on its own speaker, take push-to-talk on its own mic) and the **transport and policy point** for the glasses. The ADR-120 rules hold at both hops: nothing exposed by default, local switch wins (on the phone screen, and a hardware gesture on the glasses if the agent can read one, [U]), the dashboard may switch off but not on, every use logged without bodies.
+The phone is both a surface (display, touch, push-to-talk) and the transport and policy point for the glasses, which have their own identity but no route out except the phone. ADR-120 holds at both hops: nothing exposed by default, the local switch wins (phone screen, and a glasses gesture if readable, [U]), the dashboard may switch off but not on, every use logged without bodies.
 
 ---
 
@@ -78,7 +76,7 @@ The cloud plan already says a device that cannot reach the cloud is fronted by a
 
 ### 3.1 What the glasses are
 
-From the device profile [R]: a MediaTek MT6761 phone-class SoC (4x Cortex-A53, about 2 GB RAM, 24 GB storage), Android 11 (API 30), arm64, a build with `ro.debuggable=1` and permissive SELinux, Wi-Fi 5 at 5 GHz (390 Mbps link rate, which is a single spatial stream at 80 MHz [I]), a MediaTek combo radio for Bluetooth, no GPS, no cellular, A/B partitions with verified boot green. The profile's own README for `mentramic` mentions Android 14 behaviors, but the profile says API 30; confirm with `getprop ro.build.version.sdk` before relying on either ([U]). Everything below assumes API 30.
+From the device profile [R]: a MediaTek MT6761 phone-class SoC (4x Cortex-A53, about 2 GB RAM, 24 GB storage), Android 11 (API 30), arm64, a build with `ro.debuggable=1` and permissive SELinux, Wi-Fi 5 at 5 GHz (390 Mbps link rate, which is a single spatial stream at 80 MHz [I]), a MediaTek combo radio for Bluetooth, no GPS, no cellular, A/B partitions with verified boot green. The `mentramic` README speaks of Android 14 behaviors, but the device properties read in Grok's probe confirm **API 30 / Android 11 [R]**; the README wording is wrong or refers to its own target SDK. Everything below assumes API 30.
 
 The device is a normal Android userspace on a debuggable build. That makes a **user-installed APK** the right deployment unit. It also makes tempting shortcuts available (`adb root`, running native binaries from `/data/local/tmp` as the shell user, which is how `mentra-leaf` runs today [R]). We do not build on them: they vanish with the adb session, a Mentra OTA may close them, and they would not be a product. **No root, no system partition, no privileged app, no custom ROM.** One USB-cable provisioning session with unprivileged `adb` commands (install, `pm grant`, `appops`, battery allow-list) is the ceiling for P0 and P1 [D].
 
@@ -114,16 +112,41 @@ A display-less device has no user to bring an activity forward. Candidate answer
 
 AudioBridge, as it exists on disk [R], does not run an HTTP server. It is a broadcast receiver driving `MediaPlayer` over a file queue (`PLAY`, `QUEUE`, `STOP`, `VOLUME` actions) on the notification stream, and it also opens a serial path to the audio co-processor and sends JSON "start I2S" and "stop I2S" commands around each playback (`mh_starti2s`, `mh_stopi2s`). The source I read contains no network listener, so the "HTTP service for a Rust daemon" described in the brief either lives elsewhere or has not been built; treat any HTTP playback path as new work **[U]**.
 
-The serial node it opens is probably the link to the BES2700 co-processor that the probe found beside the CONNSYS **[I]** (section 10.1). Two consequences. First, streaming playback needs `AudioTrack` (PCM in, low latency, flush on barge-in), not `MediaPlayer` on files; a streaming path has to keep the I2S path open for the length of an utterance and close it after silence. Second, whether an unprivileged app can open that serial node depends on file permissions and on SELinux being permissive on this build **[U]**; permissive SELinux is "unusual and helpful" per the device profile [R], and a stock-hardened Mentra release would break it. If the node is root-only, the agent cannot play audio at all without help from asg_client; the fallback is to ask asg_client to play through the path it already owns (an exported intent or its own audio API), or to use classic Bluetooth audio if the glasses present a sink, which is not known [U]. This is the second gate: **G1 passes if the agent plays a 10-second Opus stream (decoded on the glasses) through the speaker with no adb session attached, with under 150 ms from the first frame to sound and clean stop on `flush`.**
+The serial node it opens is the link to the BES2700 co-processor beside the CONNSYS **[R: the glasses' UART notes]**. Two consequences. First, streaming playback needs `AudioTrack` (PCM in, low latency, flush on barge-in), not `MediaPlayer` on files; a streaming path has to keep the I2S path open for the length of an utterance and close it after silence. Second, the serial path itself. The glasses' own protocol notes **[R]** document it: `/dev/ttyS1`, 460800 baud, 8N1, no flow control, mode `crwxrwxrwx` (world accessible, no root needed), carrying one JSON object per line, `{"C":"<code>","V":1,"B":"<data>"}` (the "K900" protocol), between the MT6761 and the BES2700. The stock `asg_client` opens it (`SerialManager.openSerial`) and runs a reader thread on it. An unprivileged app can therefore open the port to **write**; the Mac scripts already do this from `adb shell` while asg_client may also be writing ("one quoted line"). **Reading** is the problem: two readers on one tty split the bytes, which would corrupt asg_client's input. The agent is therefore write-only on the port [D] and learns the BES events that arrive on it (`hs_ntfy` button clicks, `sr_vad` hardware voice activity, `hm_batv` battery) only if asg_client forwards them as broadcasts **[U]**. Writes must be whole lines and serialized with a lock; interleaving with asg_client's own writes is the residual risk [U]. If the port turns out to be unusable, the fallback is to ask asg_client to play through the path it already owns (an exported intent or its own audio API), or classic Bluetooth audio if the glasses present a sink, which is not known [U]. This is the second gate: **G1 passes if the agent plays a 10-second Opus stream (decoded on the glasses) through the speaker with no adb session attached, with under 150 ms from the first frame to sound and clean stop on `flush`.**
 
 ### 3.6 Control, status, events
 
 The agent exposes these to the parent only (section 4.2 for wire format):
 
-- **Control**: `capture.start{mode: ptt|vad|continuous, max_s}` and `capture.stop`; `play.begin{utt_id}`, `play.flush{utt_id}`, `volume.set`; `cue{kind}` (cached tones: heard, working, done, error); `led.set{pattern}` (only if an LED is controllable, the profile lists backlight and vibrator, not a status LED **[R]**, so this is [U] pending the asg_client intent surface); `camera.capture{still|clip, quality}` (P1); `probe{kind}`; `ping`.
+- **Control**: `capture.start{mode: ptt|vad|continuous, max_s}` and `capture.stop`; `play.begin{utt_id}`, `play.flush{utt_id}`, `volume.set`; `cue{kind}` (cached tones: heard, working, done, error); `indicator.set{state}` (section 3.7), `led.set{state}` (below) and `cue_volume.set`; `camera.capture{still|clip, quality}` (P1); `probe{kind}`; `ping`.
 - **Status** every 5 s and on change: battery, charging, Wi-Fi RSSI and link rate, link RTT to the parent, mic state and level, speaker state, agent and asg_client versions, thermal state, free storage.
 - **Events**: `mic.gate{open|close, rms, voiced}`, `button{...}` and `wear{...}` only if asg_client broadcasts them [U], `link.up|down`, `playback.done{utt_id, spoken_through_seq}`.
+- **LED (supported capability, `surface.led`).** The owner confirmed an RGB LED on the inside of the frame. It is driven through the BES co-processor control path, not an Android LED class device **[R: BES2700 UART notes, `mentra-cos-speak`, and Grok's session log]**. The sequence over the serial path of section 3.5: (1) claim authority: `{"C":"android_control_led","V":1,"B":"1"}`; (2) set: `{"C":"cs_ledon","V":1,"B":"<color>,<on_ms>,<off_ms>,<cycles>,<brightness>"}` (colors per the notes: red 0, green 1, blue 2, orange 3, white 4; brightness 0 to 255; Grok's example `1,3100,100,1,180` is green, 3100 ms on, 100 ms off, one cycle, brightness 180); (3) `{"C":"cs_ledoff","V":1,"B":""}`; (4) release authority with `B":"0"`. Authority exists so the BES firmware's own LED animations do not fight ours, so the agent claims it only while a state is shown and releases it when idle [D]. A separate MTK-side recording LED (GPIO, vendor library) belongs to the camera path; **the agent never touches it** and never suppresses a recording indicator. Colors have not yet been confirmed by eye **[U]**. The states are in the `indicator` machine of section 3.7; the colors there are proposals pending an eyes-on check. A steady state is a long `on_ms` renewed before it expires, since a cycle count is the only repetition control seen. The LED is also the **mic-open indicator**: it shows `listening` whenever the gate is open (section 11). If the serial write fails, the agent falls back to a cue tone and reports `led:"unavailable"` in status, never silently dropping the indicator. Transport dependency: the LED shares the BES serial path that asg_client currently holds (section 3.5); G1 and G2 therefore also cover LED writes.
 - **Leaf announcement**: `LeafServices` with sources (mic, camera) and sinks (audio out, led). The glasses have no display, so there are no scenes: the "scene" is the cue vocabulary (tones and LED patterns), which the parent renders through the same command set. `weftos-leaf-scene` stays a pad and e-ink thing.
+
+### 3.7 Indicators: the `indicator` state machine
+
+Owner requirement: small, understandable, non-intrusive sounds that show listening started, listening ended, ongoing thinking, and done with success or error, paired with the LED for the same states.
+
+```
+idle -> listening -> captured -> thinking -> done_ok | done_error -> idle
+```
+
+| State | Cue (sound) | LED | Entered by |
+|---|---|---|---|
+| `listening` | soft rising two-note chirp (E5 to A5) | steady blue | glasses, when the gate opens or on push-to-talk |
+| `captured` | soft falling two-note chirp (A5 to E5) | blue fading out | glasses, when the gate closes |
+| `thinking` | a very quiet slow pulse loop (one low tick about every 1.8 s) | slow breathing amber | glasses, automatically after `captured` |
+| `done_ok` | one gentle chime | green flash | phone or workflow: `indicator.set{done_ok}` |
+| `done_error` | soft low double tone | red flash | phone or workflow, or the glasses on timeout or link loss |
+
+- **Cues play locally.** They are short pre-rendered assets (Opus or PCM) inside the glasses APK, so there is zero network latency. The phone and the CoS workflow send **state transitions only, never cue audio**. Reliable lane: `indicator.set{state, turn_id, seq}` (stale `seq` ignored, idempotent); the glasses report their own transitions as `evt{indicator.state}` so the workflow and ledger know what was shown.
+- **Local ownership of the fast edges.** `listening` and `captured` come from the glasses' own gate, so the first chirp never waits for a round trip. The glasses move to `thinking` on their own and hold it until a `done_*` arrives or the reply audio starts (the loop is then ducked within about 40 ms and stopped, so it never overlaps speech).
+- **Timeouts.** `thinking` becomes `done_error` after 20 s by default; the workflow can extend it with `indicator.hold{ms}` (max 60 s) for a known long tool turn. Link loss while `thinking` goes to `done_error` at once, locally, so a dead link still ends in an audible and visible error.
+- **Volume.** A separate `cue_volume`, default lower than `voice_volume` (default 0.4 of it), adjustable and mutable; the LED still runs when cues are muted. `voice_volume` already exists in the control-file contract **[R: `weftos-cos` bridge]**. Cues pass through the same playback path as speech, so the AEC reference includes them.
+- **Reuse.** The WeftOS cue work is `crates/clawft-channels/src/voice/cue.rs` (WEFT-664 replaced spoken acks with tones): `CueKind::Ack` is the rising E5 to A5 blip (70 ms and 90 ms tones, amplitude 0.15 and 0.12) and `CueKind::Working` is one low C5 tick (80 ms, 0.08), generated at 16 kHz with raised-cosine ramps, peak at or below -16 dBFS, each at most 250 ms **[R]**. `listening` is the `Ack` tone; `thinking` repeats `Working` at lower amplitude; `captured`, `done_ok` and `done_error` are new in the same style (the mirror of `Ack`; one longer-decay tone; two low tones). The assets are rendered by the same generator so the cues share one voice, and exported into the APK at build time. Exact pitches are proposals until a listening test.
+- **Accessibility.** The five sounds differ by **pitch contour and rhythm**, not only pitch: rising pair, falling pair, a repeating single tick, one rounded tone, a low descending pair. The LED repeats the state redundantly by pattern (steady, fade, breathing, flash) as well as color, so neither a hearing difference nor color blindness removes the signal.
+- **`done_ok` after speech.** Default: the chime plays when the turn completes, after any spoken reply ends. If that proves redundant, `cue_done_after_speech=false` keeps the LED flash and drops the chime (Q22).
 
 ---
 
@@ -174,7 +197,7 @@ What flows nowhere: no Mentra account, no Mentra token, no bearer on the glasses
 
 ### 4.4 BLE: what it is for and what it cannot do
 
-BLE has three jobs: discovery and pairing (section 4.3); the **doorbell** (a wake notification, essential on iOS, section 7); and a **fallback control and reduced-rate audio path** when there is no usable Wi-Fi. Typical BLE 1M throughput of a few hundred kbit/s [I] would carry 24 kbit/s Opus in each direction on an L2CAP connection-oriented channel, with noticeably worse latency; that is a degraded mode ("it still hears me, answers are slower"), not the design center. Our BLE radio is the Android CONNSYS one; the stock phone link runs on a separate co-processor (the BES2700, section 10.1), so a conflict with the stock client is less likely than first assumed **[I]**, but unproven [U].
+BLE has three jobs: discovery and pairing (section 4.3); the **doorbell** (a wake notification, essential on iOS, section 7); and a **fallback control and reduced-rate audio path** when there is no usable Wi-Fi. Typical BLE 1M throughput of a few hundred kbit/s [I] would carry 24 kbit/s Opus in each direction on an L2CAP connection-oriented channel, with noticeably worse latency; that is a degraded mode ("it still hears me, answers are slower"), not the design center. Our BLE radio is the Android CONNSYS one; the stock phone link runs on a separate co-processor (the BES2700), so a conflict with the stock client is less likely than first assumed **[I]**, but unproven [U].
 
 ---
 
@@ -249,9 +272,7 @@ That is about 0.1 to 0.2 s worse than the browser node at p50. Mode A (utterance
 
 ## 6. Cross-platform strategy
 
-### 6.1 What the workload actually needs
-
-A long-lived background service; a local TCP listener and client; BLE central (and maybe peripheral); audio I/O only on the glasses side (the phone moves Opus bytes and does no speech work); Noise, Ed25519, CBOR and certificate logic; a persistent chunked stream and HTTPS/SSE to the mesh gateway; a small UI (pair, status, switches, settings), with rich screens already existing as the web dashboard. The hard, OS-specific parts are the background execution model, BLE and permissions. No cross-platform UI toolkit removes those.
+Workload: a long-lived background service; a local TCP listener and client; BLE central (and maybe peripheral); audio I/O only on the glasses side (the phone moves Opus bytes and does no speech work); Noise, Ed25519, CBOR and certificate logic; a persistent chunked stream and HTTPS/SSE to the mesh gateway; a small UI (pair, status, switches, settings), with rich screens already existing as the web dashboard. The hard, OS-specific parts are the background execution model, BLE and permissions. No cross-platform UI toolkit removes those.
 
 ### 6.2 Options
 
@@ -323,10 +344,7 @@ Verified where marked:
 - **What the thin design changes**: the earlier plan needed the iPhone to hold an ElevenLabs socket for the whole turn. Now the iPhone holds only the upstream and downstream byte streams to the mesh gateway and the local glasses link, a smaller and more defensible workload. But the keep-alive problem is the same and sharper: the relay must run for the whole turn (seconds to tens of seconds), upstream and downstream, with the app otherwise suspended. The only legitimate wake path is the **BLE doorbell**: the glasses write a characteristic ("utterance starting"), iOS wakes the app via `bluetooth-central`, the app opens a background task for the turn, tells the glasses over BLE that it is ready, and the glasses dial the TCP session. Whether wake-to-ready fits the budget (add 200 to 600 ms) and whether iOS honors the pattern after hours of suspension are P2's central questions. `URLSession` background transfers are discretionary and unsuitable for live turns [I]. Do **not** use a silent audio loop, a fake VoIP registration or a location mode to stay awake; these are the standard reasons for rejection under 2.5.4 [I].
 - **App Store risk, honestly** [I]: an always-listening wearable companion raises privacy review (2.5.14, data collection disclosures); BLE and Wi-Fi accessories are common; the background strategy is legitimate (Bluetooth accessory communication) but must be explained in review notes. TestFlight and ad-hoc remain available while the owner decides on public release (Q9).
 
-### 7.3 What goes wrong in each case
-
-| Failure | Android | iOS |
-|---|---|---|
+---|---|---|
 | App suspended or killed overnight | OEM task killer; FGS stops; CDM presence relaunches | Suspended; BLE restoration relaunches |
 | Glasses cannot reach the phone | Hotspot off; AP client isolation | Hotspot off; IPv4 client-to-client change |
 | First connection silently blocked | Not applicable | Local Network denied or undetermined in background |
@@ -356,7 +374,7 @@ Three roles, no conflict [D]:
 
 ### 8.3 The phone's own sensors as node capabilities
 
-Offer, each as an ADR-120 exposure, default off, user switch on the phone, battery-aware sampling [D]: coarse location, activity and step count, barometer, ambient light, battery, Wi-Fi scan RSSI, Bluetooth scan, camera still, microphone (push-to-talk). They are announced as `sensor.phone.*` and `surface.*` capabilities so the CoS and the RuView/world-model work can use them in the same ways as any node's. No CSI on a phone: neither Android nor iOS exposes it through public APIs as far as I know **[I]**.
+Offered as ADR-120 exposures, default off, with a phone-screen switch and battery-aware sampling [D]: coarse location, activity and steps, barometer, ambient light, battery, Wi-Fi and Bluetooth scan RSSI, camera still, microphone (push-to-talk). Announced as `sensor.phone.*` and `surface.*`. No CSI on a phone: neither platform exposes it through public APIs as far as I know **[I]**.
 
 ---
 
@@ -411,74 +429,19 @@ Risks: iOS may not allow the always-available behavior at all (decision: foregro
 
 ### P3: CSI research (parallel, research only)
 
-See section 10. Acceptance: the read-only module and firmware inspection done and written up (CSI symbols and commands present or absent); vendor kernel source requested or declared unavailable; a T0 capture; a T4 bench capture with one ESP32-C5 receiver; a feasibility memo with go or no-go on T1 and T2. Any device modification only on a sacrificial unit. Owner decisions: Q11 (a second glasses unit to risk), Q12 (RuView priority), Q19 (T4 receiver placement).
+Plan, tiers and acceptance live in `~/dev/mentra/docs/MentraGlasses_RuView.md` (sections 8 and 11). Here: read-only module and firmware analysis first, T0 with the phone as traffic source, a T4 bench with one ESP32-C5 receiver, and ICAP (T1) only on a sacrificial unit over USB with the owner's approval. Owner decisions: Q11, Q12, Q19.
 
 ---
 
-## 10. CSI from the glasses' Wi-Fi: feasibility research
+## 10. CSI from the glasses' Wi-Fi
 
-### 10.1 What the probe established (Grok, read-only)
-
-**[R]** unless noted:
-
-- **Not a discrete radio.** The Wi-Fi is the MT6761 SoC's own CONNSYS (connectivity subsystem) on the `k61v1_64_bsp` board. Driver `wlan_drv_gen4m` (`ro.vendor.wlan.gen=gen4m`) with `wmt_drv` and `wmt_chrdev_wifi`; platform node `mediatek,wifi`; host path HIF-SDIO.
-- **Firmware** `/vendor/firmware/WIFI_RAM_CODE_soc1_0_1_1.bin`, version string `t-neptune-mp-soc1_0e1-2015-CERVINO_SOC1_0_E1_ASIC-20210616102108` (SOC1_0, built 2021-06-16), with `soc1_0_ram_wifi/bt/mcu` header images, `WMT_SOC.cfg` and `BT_FW.cfg`.
-- **Link configuration**: VHT on, Nss 1, DBDC off, associated on 2.4 GHz at probe time; interfaces `wlan0`, `p2p0`, `ap0`.
-- **Bluetooth**: Android's Bluetooth is the same CONNSYS. A **separate BES2700** handles the phone link (to Mentra's own app); the serial path that AudioBridge writes I2S start/stop JSON to is probably the link to that MCU **[I]**.
-- **No numeric chip id was readable.** The earlier candidate in revision 1 (an external MT6631) is **withdrawn**: the firmware naming and the SoC-integrated CONNSYS contradict it, and the SDIO host path alone does not distinguish an on-die from an external connectivity block.
-
-### 10.2 Known CSI tooling, and where this chip sits
-
-| Family | Public tooling | State |
-|---|---|---|
-| Intel 5300 / AX200 / AX210 | Linux 802.11n CSI Tool; PicoScenes | Mature on PCIe cards [I] |
-| Atheros / Qualcomm (AR9xxx, some QCA9xxx) | Atheros CSI Tool; PicoScenes | Mature on cards and some routers [I] |
-| Broadcom/Cypress (BCM43455c0 and relatives) | Nexmon CSI (firmware patching), including some phones | Works on specific chips and firmware builds **[V]** (project page surfaced by search) |
-| Espressif ESP32 family | `esp-csi` in ESP-IDF | Official; this project's ESP32-C5 RuView port is the in-house path [R/I] |
-| MediaTek mt76 (Filogic routers, MT7915 and similar) | MtkCSIdump and a mt76 vendor netlink patch, reverse engineered, on OpenWrt; the `ekstra-csi` project exposes I/Q plus metadata | Real and community-maintained on router parts; no firmware modification needed there **[V, secondary]** |
-| MediaTek out-of-tree Wi-Fi driver, older MT7668 module | A vendor commit "Add CSI data retrieving function": `iwpriv wlan0 driver "set_csi 1 <antenna> <trigger> <source>"` then `get_csi`; CSI taken from received beacon frames; **requires firmware support for a CSI event** | **[V]** commit page. Shows the MediaTek driver family has had CSI plumbing where the firmware supports it |
-| RuView's MediaTek work | A Filogic MIMO CSI transport validated against **simulated** profiles; its release notes say upstream mt76 and public MediaTek SDK material do not currently expose a supported raw complex CSI API, and that physical capture waits on hardware and vendor access | **[V]** release page. Not applicable to mobile combo parts |
-| **MediaTek `gen4m` / CONNSYS SOC1_0 (our case)** | **None found.** Searches for `gen4m` CSI hooks and Android-phone MediaTek CSI returned nothing specific | **[U]**. I believe newer `gen4m` trees carry a CSI build option on some generations **[I, from memory, unverified]**; whether this driver build and this 2021 firmware implement it is the first thing to read |
-
-### 10.3 Assessment for gen4m CONNSYS SOC1_0
-
-1. **Does the driver expose CSI? Unknown, and cheaply answerable without changing the device.** Pull `wlan_drv_gen4m.ko` and the firmware (read-only `adb pull`), then search the module for CSI symbols and `iwpriv`/driver-command strings, and look for the same `set_csi`/`get_csi` style commands. Also request the kernel source for this build from the ODM; the Wi-Fi driver is GPL kernel code, so the vendor owes it **[I, legal position not checked]**. Output of this step decides everything below.
-2. **Can the firmware produce CSI?** CSI exists inside any OFDM receiver; exposing it needs a firmware event and a driver handler (the MT7668 commit says exactly that). The RAM code is a 2021 binary for the connectivity MCU (likely an ARM Cortex-M core **[I]**). If the driver has a CSI command but the firmware ignores it, only a firmware patch (Nexmon-style) helps.
-3. **Replacement and signing risk.** The RAM code is loaded from the vendor partition at Wi-Fi power-up. The vendor partition is a read-only, verity-protected mount on a verified-boot-green device **[R]**. Whether MediaTek signs or checks the RAM code image is **[U]**. On this debuggable build, `adb root` already works **[R]**; whether `disable-verity` and `remount` can make `/vendor` writable without unlocking the bootloader is **[U]** and is the difference between a reversible experiment and a flash job. A bad firmware or module takes the Wi-Fi down, which takes the parent link down; keep BLE and USB adb as the recovery path, and use a sacrificial unit.
-4. **Kernel module path.** A rebuilt `.ko` must match the kernel's version magic and may be subject to module signature enforcement **[U]**.
-5. **Signal limits even if it works**: one spatial stream (Nss 1), so no angle of arrival; at probe time the link was 2.4 GHz, giving a narrow bandwidth and few subcarriers, whereas VHT80 on 5 GHz gives about 234 usable subcarriers **[I]**; DBDC off; the frame cadence is set by the AP's traffic and by the glasses' Wi-Fi power saving; phase offsets need sanitizing as on any commodity CSI.
-
-**Verdict.** Not ruled out, not cheap, and entirely hostage to step 1. Ranking by cost and risk: T0 (no change) first; T1 only if the driver already has the hook; T2 (firmware patching) only if the owner wants it badly enough to fund a reverse-engineering effort.
-
-### 10.4 Paths
-
-| Tier | What | Needs | Risk |
-|---|---|---|---|
-| **T0: no change** | Link RSSI and beacon statistics at 10 Hz from the agent; the phone sends controlled UDP at 50 to 100 Hz to raise the sample rate | The agent only | None; coarse, and tells us what the signal carries |
-| **T1: driver or module** | Enable or add the CSI command in `wlan_drv_gen4m` and load it | Kernel or module source (or a binary patch of the module), a way to make the vendor image writable or to flash | Medium to high: verified boot, OTA continuity, brick risk with the MediaTek boot-ROM tooling as the safety net |
-| **T2: chip firmware** | Patch or replace `WIFI_RAM_CODE_soc1_0_1_1.bin` so it emits CSI events | Reverse engineering of an unsigned or signed-unknown 2021 binary, a toolchain for the connectivity MCU | High and unbounded; weeks to months |
-| **T3: the BES2700** | Use the audio/BT co-processor | None realistic | The BES2700 is a Bluetooth audio and wearable SoC (the family is Cortex-M55 with Bluetooth 5.3 or 5.4; Wi-Fi is optional in the wider series per vendor summaries, with no evidence this unit has any); it has no Wi-Fi CSI to expose and no BLE channel-sounding support at those Bluetooth versions **[V partial, I]**; its firmware is closed too. Not a candidate |
-| **T4: glasses as transmitter, ESP32 as receiver** | The glasses' normal traffic (the Opus stream, or controlled UDP from the phone) is received by a fixed **ESP32-C5 RuView node** in promiscuous CSI mode near the phone or AP; CSI is computed on the ESP32 for frames sourced from the glasses | One or more ESP32-C5 nodes (the C5 port builds and boots **[R]**), a filter on the glasses' MAC; **no change to the glasses** | None to the glasses. Measures the room and the body between the wearer and the receiver; position-dependent (it works where the receivers are); needs sufficient frame cadence, which the phone can force with controlled traffic |
-| **T5: companion node in the glasses case or dock** | An ESP32-C5 RuView node permanently in the case or charging dock | Hardware work, small | Zero risk to the glasses; senses the room whenever the glasses are docked; the glasses themselves are not the sensor |
-
-"Redo the wifi firmware" in the owner's words maps to T2, or T1 if the driver turns out to have the hook. **My recommendation: do step 1 (read-only module and firmware inspection) and T0 in P1; build T4 as the first real CSI use, because it needs no risk to the glasses and reuses the ESP32-C5 work; treat T1/T2 as optional and only on a second unit.**
-
-### 10.5 What it would give RuView
-
-- A **wearable CSI source** (T1/T2): the receiver moves with the head, so CSI reflects the wearer's motion and nearby environment; useful for head motion and coarse proximity, not for mapping a fixed room. At rest on a desk, a fixed single-chain receiver, one more node beside the ESP32-C5 nodes.
-- A **mobile transmitter** (T4): the glasses as the thing being sensed, tracked by fixed receivers through the room's channel, which is the more natural fit for RuView's fixed-node pipeline.
-- The **phone is the natural traffic source** in every tier: it is the AP in hotspot mode and can address controlled UDP to the glasses at a known cadence **[D]**. Power saving on the glasses' Wi-Fi reduces the usable frame rate unless it is kept awake, which costs battery **[I]**.
-- **Privacy and law**: sensing people near the wearer without their consent is a different act from recording the wearer's own voice; it needs the same indicator and consent stance as the camera and microphone, and an owner decision on whether it is ever on outside the owner's own spaces.
-
-### 10.6 What P3 does
-
-(1) Read-only: pull and inspect the module, firmware and configs for CSI symbols and commands; request the vendor kernel source; record the chip's real identifiers if any appear in the module or `WMT_SOC.cfg`. (2) T0 capture in P1. (3) T4 on a bench with one ESP32-C5 receiver. (4) A written memo with go or no-go on T1 and T2; any device modification only on a sacrificial unit with the owner's approval.
+Moved by the owner's direction (2026-10-13). The CSI research lives in `~/dev/mentra/docs/MentraGlasses_RuView.md` (measured radio facts, the ICAP findings, tooling by chip family, tiers T0 to T5 with ICAP as the leading on-device candidate, firmware risk, the `adb root` path, the ESP32-C5 RuView receiver alternative, sources and next read-only steps; see its section 11). Short version: no CSI symbol exists in the glasses' Wi-Fi driver, raw I/Q capture (ICAP) is compiled in but time-shares the radio with networking and needs `adb root`, so it is a research tool only. This design uses it in P3 and nowhere else.
 
 ---
 
 ## 11. Privacy, safety and policy
 
-- The glasses record other people. The design keeps an indicator and a switch on every capture path: the cue tone when the gate opens or listening starts, the LED if one is controllable, and a persistent phone notification. Nothing is stored by default: audio is processed in memory; transcripts go to the user's own CoS data; the TTS cache is stock phrases only.
+- The glasses record other people. The design keeps an indicator and a switch on every capture path: the cue tone when the gate opens or listening starts, the RGB LED `listening` state whenever the gate is open (with the tone as the fallback), and a persistent phone notification. Nothing is stored by default: audio is processed in memory; transcripts go to the user's own CoS data; the TTS cache is stock phrases only.
 - Local control wins (ADR-120): the phone UI switch refuses the next command; a hardware gesture on the glasses if the agent can read one [U].
 - No bearer on the glasses, no long-lived secret on the phone beyond the wrapped seed, short-lived node tokens; the speech vendor key stays on the server.
 - Third-party processing: the speech workflow sends audio to ElevenLabs when the cloud path is active. Audio is processed in memory and not stored by default; the ledger records durations, not content. The settings show the active path (cloud or a LAN speech service chosen by placement). A strictly local mode is possible only when a LAN `speech.v1` service is reachable.
@@ -510,11 +473,13 @@ See section 10. Acceptance: the read-only module and firmware inspection done an
 | Q18 | Per-user caps on open-gate seconds and speech spend? | Yes, enforced in the workflow ledger and by the glasses' gate cap |
 | Q19 | T4 receiver placement and count? | One ESP32-C5 near the usual AP or phone position for the bench |
 | Q20 | The cloud plan said audio never passes through Vercel; does the owner accept an audio ingress outside Vercel (or a revised statement)? | Yes: a small streaming service, with the durable workflow as the control plane only |
+| Q21 | May the LED be the mic-open indicator, with the semantics in section 3.7 after an eyes-on check? | Yes |
+| Q22 | Does the `done_ok` chime play after a spoken reply? | Yes by default; `cue_done_after_speech=false` drops it |
+| Q23 | Thinking timeout before `done_error`? | 20 s, extendable to 60 s by the workflow |
 
 ## 13. Sources
 
 Verified this session (primary):
-
 - Android foreground service types and requirements: https://developer.android.com/develop/background-work/services/fgs/service-types
 - Android restrictions on starting foreground services from the background, including the while-in-use rules and exemptions: https://developer.android.com/develop/background-work/services/fgs/restrictions-bg-start
 - Android BLE in the background, `CompanionDeviceManager` presence and `CompanionDeviceService` permissions: https://developer.android.com/develop/connectivity/bluetooth/ble/background
@@ -526,18 +491,9 @@ Verified this session (primary):
 - Apple Developer Forums, Personal Hotspot STA-to-STA forwarding is not a contract: https://developer.apple.com/forums/thread/699414
 - UniFFI (Kotlin, Swift and Python full support): https://mozilla.github.io/uniffi-rs/latest/
 
-Verified only through secondary summaries (treat as [I]):
-
+Secondary only ([I]):
 - iOS `audio` background mode keeps an app running only while recording or playing (Apple forum posts surfaced by search): https://developer.apple.com/forums/thread/106415
-- MediaTek mt76 CSI extraction on OpenWrt: https://forum.openwrt.org/t/ekstra-csi-full-metadata-csi-extraction-for-mt76-on-openwrt/247100
 
 Repo and workspace material read: `docs/plans/cos-cloud-migration.md` (sections 4, 5, 8), `docs/plans/cos-dashboard-bridge.md`, `docs/leaf-push-protocol.md`, `docs/plans/adr-103-leaf-implementation.md`, `docs/adr/adr-120-mesh-resources-and-exposures.md`, `firmware/mentra-mic/` (README and manifest), the AudioBridge source and the Mentra Live device profile in the glasses workspace, and the `mentra-leaf` bring-up source.
 
-Added in revision 2:
-
-- Vendor MediaTek Wi-Fi driver commit adding CSI retrieval (`set_csi`/`get_csi`, firmware support required), MT7668 module: https://coral.googlesource.com/mt7668-wifi-mod/+/2eee9bfe00c110c0b71f53c656ad11863ebe2878 **[V]**
-- RuView MediaTek beta release notes (Filogic simulator; upstream mt76 and public SDK expose no supported raw complex CSI API): https://newreleases.io/project/github/ruvnet/RuView/release/v0.9.1-mediatek-beta.1 **[V]**
-- MtkCSIdump and mt76 CSI context, Nexmon CSI: https://forum.openwrt.org/t/csi-extraction-for-mediatek-based-wi-fi-chipsets/244703 and https://github.com/seemoo-lab/nexmon_csi (via search summaries, **[I]**)
-- BES2700 family overview (Cortex-M55 Bluetooth audio and wearable SoC): https://www.cnx-software.com/2025/06/02/bestechnic-bes2700yp-arm-cortex-m55-bluetooth-audio-soc-targets-headphones-earbuds-portable-speakers/ (**[V partial]**)
-- Not found despite searching: public documentation or source of `gen4m` CSI hooks; treat that gap as an open unknown.
-- Repo material read for revision 2: `crates/clawft-android-edge/` (all six modules), `docs/guides/android-splat-capture-edge.md`, `docs/adr/adr-077-android-splat-capture-edge-node.md`, `apps/android-splat-capture/` (Gradle files, `EdgeCore.kt`), and the glasses probe results relayed by the lead.
+Also read for revisions 2 and 3: `crates/clawft-android-edge/` (all six modules), `docs/guides/android-splat-capture-edge.md`, `docs/adr/adr-077-android-splat-capture-edge-node.md`, `apps/android-splat-capture/` (Gradle files, `EdgeCore.kt`), and the glasses probe results relayed by the lead.
