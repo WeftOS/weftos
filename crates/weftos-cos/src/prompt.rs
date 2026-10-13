@@ -63,6 +63,17 @@ mod tests {
     }
 
     #[test]
+    fn persona_routes_device_questions_and_forbids_bare_cant_establish() {
+        let p = persona();
+        assert!(p.contains("`devices.status` first"), "device routing missing");
+        for w in ["glasses", "pad", "e-ink"] {
+            assert!(p.contains(w), "{w}");
+        }
+        assert!(p.contains("Never answer\n  with a bare \"I can't establish\"") && p.contains("never fill the gap with a guess"));
+        assert!(p.contains("Say what you could not establish"), "the don't-guess rule must stay");
+    }
+
+    #[test]
     fn persona_has_no_frontmatter() {
         let p = persona();
         assert!(p.starts_with("# Who you are"), "got: {}", &p[..40.min(p.len())]);

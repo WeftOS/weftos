@@ -77,7 +77,8 @@ pub async fn build(cfg: &CosConfig) -> Result<Built, CosError> {
         .with(Arc::new(BoardPropose { staging_dir: cfg.staging_dir.clone() }))
         .with(Arc::new(WorkKickoff { staging_dir: cfg.staging_dir.clone(), runtime_command: cfg.team.runtime_command.clone() }))
         .with(Arc::new(NodesHealth { source: Arc::new(DaemonHealthSource) }))
-        .with(Arc::new(MeshRoutes { rpc: Arc::new(DaemonRpc) }));
+        .with(Arc::new(MeshRoutes { rpc: Arc::new(DaemonRpc) }))
+        .with(Arc::new(crate::tools::devices::DevicesStatus { cfg: cfg.devices.clone(), rpc: Arc::new(crate::tools::devices::DaemonLeafRpc) }));
     let client = match HarnessClient::from_config(&cfg.harness) {
         Ok(client) => Some(Arc::new(client)),
         Err(e) => {

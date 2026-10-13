@@ -40,6 +40,31 @@ pub struct CosConfig {
     /// Remote endpoints by id (for example `mentra`). The `host` endpoint's
     /// speech is `voice.tts`.
     pub endpoints: BTreeMap<String, EndpointConfig>,
+    /// Where `devices.status` looks for the owner's devices.
+    pub devices: DevicesConfig,
+}
+
+/// Paths and ids `devices.status` reads. Defaults sit under `~/.weftos/run`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DevicesConfig {
+    /// Directory holding the Mentra loops' `listen.status.json`,
+    /// `speak.status.json` and optional `control.json`.
+    pub mentra_dir: PathBuf,
+    /// Status file `weftos-cos glance-serial` writes.
+    pub glance_status: PathBuf,
+    /// Directory of provisioned leaves; each `<leaf id>.json` in it names one
+    /// leaf (there is no leaf-list RPC).
+    pub leaf_registry_dir: PathBuf,
+    /// Pad leaf ids to ask the daemon about, on top of those in the registry.
+    pub pad_leaf_ids: Vec<String>,
+}
+
+impl Default for DevicesConfig {
+    fn default() -> Self {
+        let run = dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".weftos/run");
+        Self { mentra_dir: run.join("mentra"), glance_status: run.join("glance.status.json"), leaf_registry_dir: run.join("leaf/registry"), pad_leaf_ids: Vec::new() }
+    }
 }
 
 /// Remote listening. The loopback listener at `bind` always runs; this adds
@@ -263,6 +288,7 @@ impl Default for CosConfig {
             brain: BrainConfig::default(),
             serve: ServeConfig::default(),
             endpoints: BTreeMap::new(),
+            devices: DevicesConfig::default(),
         }
     }
 }
