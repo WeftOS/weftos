@@ -54,7 +54,10 @@ It never flashes anything and never touches USB.
    reach the daemon over Tailscale (for example glasses on a phone hotspot)
    while the pad keeps the LAN address, use a list:
    `leaf_listen_addr = ["192.0.2.10", "100.64.0.5"]`; status then prints one
-   `Leaf bind:` line per address.
+   `Leaf bind:` line per address. Discovery normally listens only on each
+   `leaf_listen_addr` IP; `leaf_discovery_any = true` makes it listen on
+   `0.0.0.0:9490` instead (off by default). TCP stays on the named addresses
+   and replies advertise the one on the probe's subnet.
 
 3. **Rehearse without the pad** (optional, recommended once):
 
@@ -79,6 +82,27 @@ It never flashes anything and never touches USB.
    ```bash
    EDGEPAD_PROVISION_DIR=~/.weftos/edgepad-hil/leaf-prov scripts/build.sh edgepad-fw
    ```
+
+   **Parent hint (optional, for networks that drop broadcast).** The pad
+   normally finds the daemon by broadcasting a discovery probe to
+   `255.255.255.255:9490`. Some access points do not deliver broadcast between
+   Wi-Fi clients. Give the image the daemon's discovery endpoint and it probes
+   that address by unicast first (three tries), then falls back to broadcast.
+   The advertisement that comes back is verified exactly as before and its
+   advertised TCP address is what the pad connects to; the hint only chooses
+   where the probe goes. Set it at build time, in either way:
+
+   ```bash
+   # one-off
+   EDGEPAD_PARENT_HINT=192.168.10.100:9490 \
+   EDGEPAD_PROVISION_DIR=~/.weftos/edgepad-hil/leaf-prov scripts/build.sh edgepad-fw
+   # or keep it with the identity (one line, ip:port; never committed)
+   echo 192.168.10.100:9490 > ~/.weftos/edgepad-hil/leaf-prov/parent_hint
+   ```
+
+   The value is this Mac's `leaf_listen_addr` IP plus the discovery port shown
+   on the `Leaf bind:` line. A malformed value fails the build; a bare IP
+   without a port is refused.
 
    Output: `target/edgepad-fw/edgepad-merged.bin` (4 MB, app 64% of its slot).
    Without `EDGEPAD_PROVISION_DIR` the image boots the display but never
@@ -126,7 +150,8 @@ the session within a minute.
 |---|---|
 | `check`: no `Leaf bind:` line | gate not installed: registry dir missing at boot, mesh not enabled, or no persisted node key |
 | `check`: bind is on 127.0.0.1 | `leaf_listen_addr` not set; the pad cannot reach loopback |
-| pad logs `discovery failed` | different Wi-Fi or a firewall blocking UDP 9490; discovery is a broadcast |
+| pad logs `discovery failed` | different Wi-Fi or a firewall blocking UDP 9490; discovery is a broadcast unless the image has a parent hint |
+| pad logs `discovery probe -> 255.255.255.255:9490` repeatedly and the daemon never sees a probe | broadcast is not arriving: AP client isolation or the macOS firewall. Check with a unicast probe to the daemon's discovery address (it answers) and rebuild with `EDGEPAD_PARENT_HINT=<ip>:9490`. If the daemon binds one specific IP and the probe arrives on another interface, set `leaf_discovery_any = true` under `[kernel.mesh]` so discovery listens on `0.0.0.0:9490`; the TCP leaf listener stays on `leaf_listen_addr`. Allow the daemon through the macOS firewall if it prompts |
 | daemon logs `leaf frame refused` (wrong sequence) | the replay floor. A pad whose NVS was erased (a full merged-image flash can do it) restarts at sequence 1, behind the daemon's floor. Re-provision the leaf (`rm -r ~/.weftos/edgepad-hil/leaf-prov`, then `prepare`, rebuild, reflash), or, to keep the identity, delete `<runtime>/leaf/floors/<leaf id>.json` (your call: it lowers the replay floor for this one pad) |
 | daemon logs `leaf frame refused` (not enrolled) | the image carries a different identity than the one enrolled |
 | `cos-console-host`: `display busy: held by ...` | another app holds the screen |

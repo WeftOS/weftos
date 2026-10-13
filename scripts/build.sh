@@ -2085,6 +2085,9 @@ cmd_leaf_display() {
 #   EDGEPAD_PROVISION_DIR    dir holding leaf.seed + leaf.cbor from
 #                            `weaver leaf provision`; without it the image
 #                            boots the display but never joins the mesh
+#   EDGEPAD_PARENT_HINT      optional ip:port of the daemon's discovery socket;
+#                            the pad probes it unicast before broadcasting.
+#                            Else a one-line parent_hint file in the provision dir.
 #   EDGEPAD_WIFI_SECRETS     path to the owner's wifi_secrets.rs (gitignored);
 #                            without it the image's own copy, else the
 #                            example, is used
@@ -2106,6 +2109,14 @@ cmd_edgepad_fw() {
         [ -f "$prov/leaf.seed" ] && [ -f "$prov/leaf.cbor" ] || { fail "$prov must hold leaf.seed and leaf.cbor"; return 1; }
         mounts+=(-v "$prov":/provision:ro)
         envs+=(-e WEFTOS_LEAF_SEED_FILE=/provision/leaf.seed -e WEFTOS_LEAF_CERT_FILE=/provision/leaf.cbor)
+    fi
+    # Optional unicast parent hint (ip:port of the daemon's discovery socket):
+    # EDGEPAD_PARENT_HINT, else a one-line parent_hint file in the provision dir.
+    local hint="${EDGEPAD_PARENT_HINT:-}"
+    [ -z "$hint" ] && [ -n "$prov" ] && [ -f "$prov/parent_hint" ] && hint="$(tr -d '[:space:]' < "$prov/parent_hint")"
+    if [ -n "$hint" ]; then
+        [[ "$hint" =~ ^[0-9.]+:[0-9]+$ || "$hint" =~ ^\[[0-9a-fA-F:]+\]:[0-9]+$ ]] || { fail "EDGEPAD_PARENT_HINT must be ip:port (example 192.168.10.100:9490)"; return 1; }
+        envs+=(-e WEFTOS_LEAF_PARENT_HINT="$hint")
     fi
     if [ -n "$wifi" ]; then
         [ -f "$wifi" ] || { fail "EDGEPAD_WIFI_SECRETS $wifi does not exist"; return 1; }

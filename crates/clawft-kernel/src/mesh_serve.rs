@@ -116,13 +116,23 @@ pub async fn serve_listener_with(
             } else {
                 specs.iter().map(|s| crate::mesh_leaf_bind::LeafBindSpec::resolve(Some(s), mesh_addr)).collect()
             };
+            let wildcard = runtime.leaf_discovery_any();
+            let mut wildcard_ports = std::collections::HashSet::new();
             for plan in plans {
                 match plan {
                     Err(e) => tracing::error!(error = %e, "certified leaf listener unavailable; no leaf discovery started"),
                     Ok(plan) => {
                         let rt = Arc::clone(&runtime);
-                        let ingress = Arc::clone(&ingress);
-                        conns.spawn(async move { run_leaf_endpoint(rt, ingress, plan, limits).await });
+                        let ingress_for_endpoint = Arc::clone(&ingress);
+                        // One wildcard discovery socket per discovery port,
+                        // shared by every endpoint that uses it.
+                        if wildcard && wildcard_ports.insert(plan.discovery.port()) {
+                            let rt = Arc::clone(&runtime);
+                            let ingress = Arc::clone(&ingress);
+                            let port = plan.discovery.port();
+                            conns.spawn(async move { run_wildcard_discovery(rt, ingress, port).await });
+                        }
+                        conns.spawn(async move { run_leaf_endpoint(rt, ingress_for_endpoint, plan, limits, wildcard).await });
                     }
                 }
             }
@@ -169,6 +179,7 @@ async fn run_leaf_endpoint(
     ingress: Arc<crate::mesh_leaf::LeafIngress>,
     plan: crate::mesh_leaf_bind::LeafBind,
     limits: Limits,
+    wildcard_discovery: bool,
 ) {
     let mut warned = false;
     let leaf_listener = loop {
@@ -188,11 +199,34 @@ async fn run_leaf_endpoint(
     runtime.note_leaf_bound(crate::mesh_leaf_bind::LeafBind { tcp, discovery });
     tracing::info!(addr = %tcp, discovery = %discovery, "dedicated certified leaf listener started");
     let discover = async move {
+        // Wildcard mode answers on one shared socket (run_wildcard_discovery).
+        if wildcard_discovery { return; }
         if let Err(e) = ingress.serve_discovery(discovery, tcp.port()).await {
             tracing::error!(error = %e, "leaf discovery stopped");
         }
     };
     tokio::join!(serve_signed_leaf_listener(runtime, leaf_listener, limits), discover);
+}
+
+/// `leaf_discovery_any`: discovery UDP on `0.0.0.0:<port>`. Replies advertise a
+/// bound leaf TCP listener whose discovery port is `port`, chosen by the
+/// probe's subnet. A busy port is retried like a leaf address that cannot bind.
+async fn run_wildcard_discovery(runtime: Arc<MeshRuntime>, ingress: Arc<crate::mesh_leaf::LeafIngress>, port: u16) {
+    let mut warned = false;
+    loop {
+        let rt = Arc::clone(&runtime);
+        let bounds = move || rt.leaf_bounds().into_iter().filter(|b| b.discovery.port() == port).map(|b| b.tcp).collect();
+        match crate::mesh_leaf::serve_wildcard_discovery(&ingress, port, bounds).await {
+            Ok(()) => return,
+            Err(e) => {
+                if !warned {
+                    tracing::error!(port, error = %e, "wildcard leaf discovery stopped; retrying");
+                    warned = true;
+                }
+                tokio::time::sleep(runtime.leaf_bind_retry()).await;
+            }
+        }
+    }
 }
 
 /// Separate bounded TCP ingress for WLF1 only. The ordinary mesh listener

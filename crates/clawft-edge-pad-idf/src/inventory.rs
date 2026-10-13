@@ -4,7 +4,7 @@
 //! bus (GPIO19 SDA / GPIO20 SCL — the V3.0 schematic routes no other I²C
 //! bus), ID-register reads for the parts that answer, a PCA9557 register
 //! dump against the schematic's pin names, the chip temperature sensor,
-//! the Wi-Fi RSSI once associated, a 5 s BLE advertise + scan (no
+//! the Wi-Fi RSSI once associated, a short (3 s, own thread) BLE advertise + scan (no
 //! pairing), and a level watcher on IO38_D, the one free GPIO on the J7
 //! "GPIO D" header. Schematic: `CrowPanel ESP32 Display-7.0-inch-V3.0-20240420.pdf`.
 

@@ -1045,6 +1045,14 @@ pub struct MeshConfig {
     /// Opt-in that allows a wildcard `leaf_listen_addr`. Default: false.
     #[serde(default)]
     pub leaf_listen_any: bool,
+
+    /// Bind the certified-leaf discovery UDP socket on the wildcard address
+    /// (`0.0.0.0:<discovery port>`) so broadcast and unicast probes reach it
+    /// on any interface. The TCP leaf listeners stay on `leaf_listen_addr`,
+    /// and the reply advertises the listener on the probe's subnet.
+    /// Default: false.
+    #[serde(default)]
+    pub leaf_discovery_any: bool,
 }
 
 /// How the daemon relates to the machine mesh service (`kernel.mesh.service`).
@@ -1121,6 +1129,7 @@ impl Default for MeshConfig {
             service: MeshServicePolicy::default(),
             service_socket: None,
             leaf_listen_addr: None,
+            leaf_discovery_any: false,
             leaf_listen_any: false,
         }
     }

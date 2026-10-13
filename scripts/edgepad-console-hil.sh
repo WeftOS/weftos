@@ -119,6 +119,15 @@ cmd_prepare() {
 
          EDGEPAD_PROVISION_DIR=$PROV scripts/build.sh edgepad-fw
 
+     If the pad's broadcast probe does not reach this Mac (AP client
+     isolation, macOS firewall), give the image a parent hint, the daemon's
+     discovery endpoint; the pad then probes it by unicast first:
+
+         EDGEPAD_PARENT_HINT=<this Mac's LAN IP>:9490 EDGEPAD_PROVISION_DIR=$PROV scripts/build.sh edgepad-fw
+
+     (or put that ip:port on one line in $PROV/parent_hint). Optionally add
+     leaf_discovery_any = true under [kernel.mesh] so discovery listens on
+     0.0.0.0:9490.
   c. Flash target/edgepad-fw/edgepad-merged.bin (README of
      crates/clawft-edge-pad-idf: "Flashing"), then: $0 check, $0 run
 EOF

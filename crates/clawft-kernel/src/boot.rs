@@ -608,6 +608,7 @@ impl<P: Platform> Kernel<P> {
                 runtime.set_local_router(Arc::clone(&a2a_router));
 
                 let runtime = Arc::new(runtime);
+                runtime.set_leaf_discovery_any(mesh_config.leaf_discovery_any);
                 // A bad or wildcard-without-opt-in leaf bind aborts boot.
                 if let Some(addrs) = mesh_config.leaf_listen_addr.as_ref() {
                     let specs = crate::mesh_leaf_bind::LeafBindSpec::parse_all(&addrs.entries(), mesh_config.leaf_listen_any)

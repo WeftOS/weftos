@@ -20,6 +20,15 @@ fn main() {
         }
         _ => "const LEAF_SEED: &[u8] = &[];\nconst LEAF_CERT: &[u8] = &[];\n".to_string(),
     };
+    // Optional unicast parent hint (`ip:port`) for networks that drop broadcast.
+    println!("cargo:rerun-if-env-changed=WEFTOS_LEAF_PARENT_HINT");
+    let hint = std::env::var("WEFTOS_LEAF_PARENT_HINT").unwrap_or_default();
+    let hint = hint.trim();
+    if !hint.is_empty() {
+        let addr: std::net::SocketAddr = hint.parse().unwrap_or_else(|_| panic!("WEFTOS_LEAF_PARENT_HINT must be ip:port (example 192.168.10.100:9490)"));
+        assert!(addr.port() != 0 && !addr.ip().is_unspecified() && !addr.ip().is_multicast(), "WEFTOS_LEAF_PARENT_HINT must be a unicast ip:port");
+    }
+    let source = format!("{source}const PARENT_HINT: &str = {hint:?};\n");
     let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR"));
     std::fs::write(out.join("leaf_provision.rs"), source).expect("write leaf provision source");
 }

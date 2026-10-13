@@ -261,6 +261,20 @@ impl LeafIngress {
     /// carry `WLD1 | leaf id (32 ASCII hex) | nonce (16)`. The response is a
     /// machine-signed CBOR advertisement bound to that nonce and enrollment.
     pub async fn serve_discovery(&self, bind: std::net::SocketAddr, leaf_port: u16) -> Result<(), LeafError> {
+        self.serve_discovery_with(bind, move |peer| {
+            let ip = if bind.ip().is_unspecified() { routed_local_ip(bind.ip(), peer)? } else { bind.ip() };
+            Some(std::net::SocketAddr::new(ip, leaf_port))
+        }).await
+    }
+
+    /// Discovery on a wildcard socket (`kernel.mesh.leaf_discovery_any`).
+    /// `choose` maps the probe's source to the TCP endpoint to advertise, or
+    /// `None` to stay silent (no listener bound yet).
+    pub async fn serve_discovery_with(
+        &self,
+        bind: std::net::SocketAddr,
+        choose: impl Fn(std::net::SocketAddr) -> Option<std::net::SocketAddr>,
+    ) -> Result<(), LeafError> {
         let sock = tokio::net::UdpSocket::bind(bind).await?;
         let mut request = [0u8; 64];
         loop {
@@ -268,12 +282,8 @@ impl LeafIngress {
             if n != 52 || &request[..4] != DISCOVERY_MAGIC { continue; }
             let Ok(id) = std::str::from_utf8(&request[4..36]) else { continue };
             let mut nonce = [0u8; 16]; nonce.copy_from_slice(&request[36..52]);
-            let ip = if bind.ip().is_unspecified() {
-                let probe = std::net::UdpSocket::bind(std::net::SocketAddr::new(bind.ip(), 0))?;
-                if probe.connect(peer).is_err() { continue; }
-                match probe.local_addr() { Ok(a) => a.ip(), Err(_) => continue }
-            } else { bind.ip() };
-            let endpoint = std::net::SocketAddr::new(ip, leaf_port).to_string();
+            let Some(endpoint) = choose(peer) else { continue };
+            let endpoint = endpoint.to_string();
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
             if let Some(ad) = self.advertisement(id, endpoint, now, nonce)
                 && let Ok(bytes) = weftos_leaf_types::encode(&ad)
@@ -282,6 +292,48 @@ impl LeafIngress {
                 }
         }
     }
+}
+
+/// The local IP the OS would use to reach `peer`, from a connected UDP socket.
+fn routed_local_ip(family: std::net::IpAddr, peer: std::net::SocketAddr) -> Option<std::net::IpAddr> {
+    let probe = std::net::UdpSocket::bind(std::net::SocketAddr::new(family, 0)).ok()?;
+    probe.connect(peer).ok()?;
+    probe.local_addr().ok().map(|a| a.ip())
+}
+
+/// Pick which bound leaf TCP endpoint a probe from `peer` is told about:
+/// the one on the probe's subnet (IPv4 /24, IPv6 /64), else the one the OS
+/// routes to the peer, else the first. `None` only when nothing is bound.
+pub fn pick_leaf_endpoint(
+    candidates: &[std::net::SocketAddr],
+    peer: std::net::SocketAddr,
+    routed: Option<std::net::IpAddr>,
+) -> Option<std::net::SocketAddr> {
+    use std::net::IpAddr;
+    let same_subnet = |a: IpAddr, b: IpAddr| match (a, b) {
+        (IpAddr::V4(a), IpAddr::V4(b)) => a.octets()[..3] == b.octets()[..3],
+        (IpAddr::V6(a), IpAddr::V6(b)) => a.octets()[..8] == b.octets()[..8],
+        _ => false,
+    };
+    candidates.iter().find(|c| same_subnet(c.ip(), peer.ip()))
+        .or_else(|| routed.and_then(|r| candidates.iter().find(|c| c.ip() == r)))
+        .or_else(|| candidates.first())
+        .copied()
+}
+
+/// Wildcard discovery for one discovery port: advertises whichever bound
+/// leaf listener (from `bounds`) fits the probe's source.
+pub async fn serve_wildcard_discovery(
+    ingress: &LeafIngress,
+    port: u16,
+    bounds: impl Fn() -> Vec<std::net::SocketAddr>,
+) -> Result<(), LeafError> {
+    let bind = std::net::SocketAddr::new(std::net::Ipv4Addr::UNSPECIFIED.into(), port);
+    ingress.serve_discovery_with(bind, move |peer| {
+        let candidates = bounds();
+        let routed = routed_local_ip(std::net::Ipv4Addr::UNSPECIFIED.into(), peer);
+        pick_leaf_endpoint(&candidates, peer, routed)
+    }).await
 }
 
 #[cfg(test)]
@@ -386,5 +438,17 @@ mod tests {
         assert_eq!(ad.endpoint, endpoint);
         assert!(ad.verify_for(&machine.verifying_key().to_bytes(), &cert.parent_scope, now, &[8; 16]).is_err());
         assert!(ingress.advertisement(&"f".repeat(32), endpoint, now, [9; 16]).is_none());
+    }
+
+    #[test]
+    fn endpoint_choice_prefers_the_probes_subnet() {
+        let a = |s: &str| -> std::net::SocketAddr { s.parse().unwrap() };
+        let cands = [a("100.64.0.5:9491"), a("192.168.10.100:9491"), a("10.0.0.2:9491")];
+        assert_eq!(pick_leaf_endpoint(&cands, a("192.168.10.149:50000"), None), Some(a("192.168.10.100:9491")));
+        assert_eq!(pick_leaf_endpoint(&cands, a("10.0.0.77:1"), None), Some(a("10.0.0.2:9491")));
+        // No subnet match: the routed interface wins, then the first entry.
+        assert_eq!(pick_leaf_endpoint(&cands, a("172.16.0.9:1"), Some("10.0.0.2".parse().unwrap())), Some(a("10.0.0.2:9491")));
+        assert_eq!(pick_leaf_endpoint(&cands, a("172.16.0.9:1"), None), Some(a("100.64.0.5:9491")));
+        assert_eq!(pick_leaf_endpoint(&[], a("172.16.0.9:1"), None), None);
     }
 }
