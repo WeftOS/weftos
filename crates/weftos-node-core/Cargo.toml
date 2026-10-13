@@ -42,5 +42,6 @@ uniffi = { version = "0.29", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
+base64 = "0.22"
 # Cross-check: both crates must derive the same node id from the same identity file.
 clawft-android-edge = { path = "../clawft-android-edge", default-features = false }

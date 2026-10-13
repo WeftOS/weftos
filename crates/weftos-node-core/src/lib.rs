@@ -15,7 +15,8 @@
 //! | leaf-parent pairing (4.3) | [`pairing`] |
 //! | lanes, framing, fake transport | [`transport`] |
 //! | glasses (leaf) side: stream reassembly, commands, indicator | [`glasses`] |
-//! | UniFFI facades for Kotlin/Swift (phone, glasses) | [`ffi`], [`ffi_glasses`] |
+//! | phone side of one glasses link: pairing, utterance assembly, relay turn | [`phone`] |
+//! | UniFFI facades for Kotlin/Swift (phone, glasses, phone link) | [`ffi`], [`ffi_glasses`], [`ffi_phone`] |
 
 pub mod audio;
 pub mod error;
@@ -24,6 +25,7 @@ pub mod identity;
 pub mod indicator;
 pub mod led;
 pub mod pairing;
+pub mod phone;
 pub mod proto;
 pub mod transport;
 
@@ -31,6 +33,8 @@ pub mod transport;
 pub mod ffi;
 #[cfg(feature = "uniffi")]
 pub mod ffi_glasses;
+#[cfg(feature = "uniffi")]
+pub mod ffi_phone;
 
 pub use error::NodeError;
 

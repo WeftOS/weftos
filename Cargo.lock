@@ -11455,6 +11455,7 @@ dependencies = [
 name = "weftos-node-core"
 version = "0.8.4-rc.14"
 dependencies = [
+ "base64 0.22.1",
  "ciborium",
  "clawft-android-edge",
  "ed25519-dalek",

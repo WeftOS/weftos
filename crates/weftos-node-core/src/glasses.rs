@@ -89,7 +89,7 @@ pub struct GlassesNode {
     reply_utt: Option<u32>,
 }
 
-fn stream_frame(lane: u8, body: &[u8]) -> Result<Vec<u8>, NodeError> {
+pub(crate) fn stream_frame(lane: u8, body: &[u8]) -> Result<Vec<u8>, NodeError> {
     let mut inner = Vec::with_capacity(1 + body.len());
     inner.push(lane);
     inner.extend_from_slice(body);
