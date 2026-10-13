@@ -18,7 +18,7 @@ use axum::routing::post;
 use common::{ScriptedLlm, collect_until_final};
 use serde_json::{Value, json};
 use weftos_cos::agent::CosAgent;
-use weftos_cos::config::McpServerConfig;
+use weftos_cos::config::{McpOrigin, McpServerConfig};
 use weftos_cos::routing::{ModelRoutes, Route};
 use weftos_cos::tools::mcp::McpSource;
 use weftos_cos::tools::{Gate, ToolLog, ToolRegistry, ToolSource};
@@ -110,6 +110,12 @@ fn http_cfg(addr: SocketAddr, token: &std::path::Path, extra: Value) -> McpServe
     serde_json::from_value(v).unwrap()
 }
 
+/// Gates only open for catalog servers; give a test config that origin.
+fn authorized(mut cfg: McpServerConfig) -> McpServerConfig {
+    cfg.origin = McpOrigin::Catalog { publisher: "test".into(), authorized: true, signed: false };
+    cfg
+}
+
 async fn registry(cfg: McpServerConfig) -> (ToolRegistry, Arc<McpSource>) {
     let src = Arc::new(McpSource::new(&[cfg]).unwrap());
     src.refresh().await;
@@ -151,13 +157,13 @@ async fn an_empty_allow_list_exposes_nothing() {
 async fn gates_default_to_confirm_and_per_tool_overrides_win() {
     let dir = tempfile::tempdir().unwrap();
     let addr = start(Arc::new(Fake::default())).await;
-    let cfg = http_cfg(addr, &token_file(dir.path(), TOKEN), json!({"tool_gates": {"search_*": "open", "dump": "open", "search_flights": "confirm"}}));
+    let cfg = authorized(http_cfg(addr, &token_file(dir.path(), TOKEN), json!({"tool_gates": {"search_*": "open", "dump": "open", "search_flights": "confirm"}})));
     let (reg, _) = registry(cfg).await;
     let gate = |id: &str| reg.find(id).unwrap().spec().gate;
     assert_eq!(gate("trip.search_flights"), Gate::Confirm, "exact name beats glob");
     assert_eq!(gate("trip.dump"), Gate::Open);
     assert_eq!(gate("trip.book_flight"), Gate::Confirm, "server default is confirm");
-    let cfg = http_cfg(addr, &token_file(dir.path(), TOKEN), json!({"gate": "open", "tool_gates": {"book_*": "confirm"}}));
+    let cfg = authorized(http_cfg(addr, &token_file(dir.path(), TOKEN), json!({"gate": "open", "tool_gates": {"book_*": "confirm"}})));
     let (reg, _) = registry(cfg).await;
     assert_eq!(reg.find("trip.search_flights").unwrap().spec().gate, Gate::Open);
     assert_eq!(reg.find("trip.book_flight").unwrap().spec().gate, Gate::Confirm);
@@ -168,7 +174,7 @@ async fn a_gated_write_waits_for_yes_and_a_read_does_not() {
     let dir = tempfile::tempdir().unwrap();
     let fake = Arc::new(Fake::default());
     let addr = start(fake.clone()).await;
-    let cfg = http_cfg(addr, &token_file(dir.path(), TOKEN), json!({"tool_gates": {"search_*": "open"}}));
+    let cfg = authorized(http_cfg(addr, &token_file(dir.path(), TOKEN), json!({"tool_gates": {"search_*": "open"}})));
     let (reg, _) = registry(cfg).await;
     let llm = ScriptedLlm::new(vec![
         ScriptedLlm::tool_call("trip_search_flights", json!({"from": "JFK", "to": "LIS"})),
@@ -260,7 +266,7 @@ async fn the_bearer_reaches_the_server_and_never_leaks() {
     let fake = Arc::new(Fake { expect: Some(TOKEN.into()), ..Default::default() });
     let addr = start(fake).await;
     let file = token_file(dir.path(), TOKEN);
-    let cfg = http_cfg(addr, &file, json!({"gate": "open"}));
+    let cfg = authorized(http_cfg(addr, &file, json!({"gate": "open"})));
     assert!(!format!("{cfg:?}").contains(TOKEN), "config holds a path, not the secret");
     let (reg, _) = registry(cfg).await;
     assert_eq!(reg.specs().len(), 5, "the right token connects");
@@ -329,7 +335,7 @@ async fn the_example_stdio_server_works_end_to_end() {
     let cfg: McpServerConfig = serde_json::from_value(json!({"id": "local",
         "transport": {"type": "stdio", "command": env!("CARGO_BIN_EXE_weftos-cos-mcp-echo")},
         "allow": ["echo", "time.*", "big", "note.append"], "tool_gates": {"echo": "open", "time.*": "open", "big": "open"}, "max_output_bytes": 300})).unwrap();
-    let (reg, _) = registry(cfg).await;
+    let (reg, _) = registry(authorized(cfg)).await;
     let ids: Vec<_> = reg.specs().iter().map(|s| s.id).collect();
     assert_eq!(ids, ["local.echo", "local.time_now", "local.note_append", "local.big"]);
     let echo = reg.find("local_echo").unwrap().call(json!({"text": "hi there"})).await.unwrap();
@@ -378,4 +384,33 @@ async fn hand_written_servers_are_unvetted_and_catalog_servers_are_labelled_and_
     assert_eq!(ids, ["mine.echo", "trip.search_flights"], "book_flight is outside the user's narrowing");
     assert_eq!(reg.find("mine.echo").unwrap().spec().gate, Gate::Confirm, "hand-written defaults to confirm");
     assert_eq!(reg.find("trip.search_flights").unwrap().spec().gate, Gate::Confirm, "the user tightened a catalog open gate");
+}
+
+#[tokio::test]
+async fn unvetted_servers_refuse_open_and_confirm_every_tool() {
+    let dir = tempfile::tempdir().unwrap();
+    let addr = start(Arc::new(Fake::default())).await;
+    let file = token_file(dir.path(), TOKEN);
+    for extra in [json!({"gate": "open"}), json!({"tool_gates": {"search_*": "open"}})] {
+        let err = McpSource::new(&[http_cfg(addr, &file, extra)]).err().expect("refused").to_string();
+        assert!(err.contains("unvetted servers always need confirmation"), "{err}");
+    }
+    let (reg, _) = registry(http_cfg(addr, &file, json!({"tool_gates": {"search_*": "confirm"}}))).await;
+    assert!(reg.specs().iter().all(|s| s.gate == Gate::Confirm), "every unvetted tool needs a yes");
+    assert_eq!(reg.specs().len(), 5);
+
+    // End to end: even a read-only search is held until the owner says yes.
+    let fake = Arc::new(Fake::default());
+    let addr = start(fake.clone()).await;
+    let (reg, _) = registry(http_cfg(addr, &file, json!({}))).await;
+    let llm = ScriptedLlm::new(vec![ScriptedLlm::tool_call("trip_search_flights", json!({"from": "a", "to": "b"}))]);
+    let agent = agent(llm, reg, dir.path());
+    let mut rx = agent.events();
+    agent.run_turn(TurnId::new(), UserUtterance::typed("find flights a to b")).await;
+    let events = collect_until_final(&mut rx, Duration::from_secs(5)).await;
+    assert!(events.iter().any(|e| matches!(e, Event::Tool { status, .. } if status == "awaiting_confirmation")));
+    assert!(fake.calls.lock().unwrap().is_empty());
+    agent.run_turn(TurnId::new(), UserUtterance::voice("yes")).await;
+    let _ = collect_until_final(&mut rx, Duration::from_secs(5)).await;
+    assert_eq!(*fake.calls.lock().unwrap(), ["search_flights"]);
 }

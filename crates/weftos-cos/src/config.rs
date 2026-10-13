@@ -230,6 +230,9 @@ impl McpServerConfig {
                 }
             }
         }
+        if self.origin == McpOrigin::Unvetted && (self.gate == McpGate::Open || self.tool_gates.values().any(|g| *g == McpGate::Open)) {
+            return bad("unvetted servers always need confirmation; add it to the catalog to open tools");
+        }
         match (&self.auth.bearer_env, &self.auth.bearer_file) {
             (Some(_), Some(_)) => return bad("auth takes bearer_env or bearer_file, not both"),
             (Some(n), None) if !is_env_name(n) => return bad("auth.bearer_env must be a variable name, not the token"),
@@ -697,6 +700,11 @@ mod tests {
             assert!(matches!(mcp(bad), Err(CosError::Config(_))), "{bad}");
         }
         mcp(r#"{"id": "a", "transport": {"type": "http", "url": "http://localhost:8080/mcp"}, "auth": {"bearer_env": "T"}}"#).unwrap();
+        for open in [r#""gate": "open""#, r#""tool_gates": {"search_*": "open"}"#] {
+            let err = mcp(&format!(r#"{{"id": "a", "transport": {{"type": "stdio", "command": "x"}}, {open}}}"#)).unwrap_err().to_string();
+            assert!(err.contains("unvetted servers always need confirmation") && err.contains("catalog"), "{err}");
+        }
+        mcp(r#"{"id": "a", "transport": {"type": "stdio", "command": "x"}, "gate": "confirm", "tool_gates": {"x": "confirm"}}"#).unwrap();
         let dup: CosConfig = serde_json::from_str(r#"{"mcp_servers": [{"id": "a", "transport": {"type": "stdio", "command": "x"}}, {"id": "a", "transport": {"type": "stdio", "command": "y"}}]}"#).unwrap();
         assert!(dup.validate().unwrap_err().to_string().contains("duplicate id"));
         let cap = CosConfig { mcp_max_tools_per_turn: 0, ..Default::default() };

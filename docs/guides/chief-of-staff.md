@@ -136,7 +136,6 @@ chief of staff keeps per user.
       "id": "local",
       "transport": {"type": "stdio", "command": "target/debug/weftos-cos-mcp-echo"},
       "allow": ["echo", "time.*"],
-      "gate": "open",
       "use_for": "checking the time"
     }
   ]
@@ -144,8 +143,8 @@ chief of staff keeps per user.
 ```
 
 That server is the one to try first: `weftos-cos-mcp-echo` is built with the crate, needs no
-account, and offers `echo`, `time.now`, `note.append` and `big`. Allow `note.append` too
-(leave its gate at the default) to watch a write wait for your "yes".
+account, and offers `echo`, `time.now`, `note.append` and `big`. Every tool of a hand-written server
+waits for your "yes", so the first `echo` shows the confirmation turn.
 
 Fields:
 
@@ -158,8 +157,11 @@ Fields:
   errors and results. A bearer is refused over plain `http://` except to localhost.
 - `allow`: tool names or `*` globs to expose. **Empty (the default) exposes nothing**, so a
   new server does nothing until you pick its tools.
-- `gate`: `confirm` (the default; the call waits for the owner's "yes") or `open`
-  (read-only tools). `tool_gates` overrides per tool or glob; an exact name beats a glob.
+- `gate`: `confirm` (the call waits for the owner's "yes") is the only value a hand-written
+  server may have: `open`, here or in `tool_gates`, is refused ("unvetted servers always need
+  confirmation; add it to the catalog to open tools"). Catalog servers keep the gates their
+  publisher set, where `open` is for read-only tools and `tool_gates` overrides per tool or
+  glob (an exact name beats a glob).
 - `use_for`: one sentence telling the model when to use the server.
 - `connect_timeout_secs` (8), `call_timeout_secs` (30), `max_output_bytes` (8000, longer
   results are cut with a "+N more bytes" note), `retry_secs` (30).
@@ -190,7 +192,7 @@ be enabled yet), a default `allow` list, `gate`, `tool_gates` and `use_for`. In 
 forces tools to wait for your yes, and `auth` points the credential at your own variable or
 file. Nothing in `mcp_enable` can widen an allow-list or open a gate.
 
-Trust: servers you write in `mcp_servers` are **unvetted** and default to `confirm`; catalog
+Trust: servers you write in `mcp_servers` are **unvetted**, and every tool of one needs your yes; catalog
 servers are reported as `authorized by <publisher>` (or "not marked authorized") at start,
 with `signature verified` or `unsigned`. The origin is set by the host and cannot be claimed
 in `cos.json`. If the catalog has a `signature` (Ed25519, hex, over `weftos-mcp-catalog-v1\n`
@@ -205,12 +207,12 @@ values in the environment or a 0600 file):
 
 ```json
 {"id": "travel", "transport": {"type": "http", "url": "https://<travel-mcp-host>/mcp"},
- "auth": {"bearer_env": "TRAVEL_MCP_TOKEN"}, "allow": ["search_*"], "gate": "open",
- "tool_gates": {"book_*": "confirm"}, "use_for": "flights, hotels and trip plans"}
+ "auth": {"bearer_env": "TRAVEL_MCP_TOKEN"}, "allow": ["search_*"],
+ "use_for": "flights, hotels and trip plans"}
 
 {"id": "github", "transport": {"type": "stdio", "command": "<github-mcp-server>", "args": ["stdio"], "env": ["GITHUB_TOKEN"]},
- "allow": ["get_*", "list_*", "search_*", "add_issue_comment"], "gate": "open",
- "tool_gates": {"add_*": "confirm"}, "use_for": "issues, pull requests and code in our repositories"}
+ "allow": ["get_*", "list_*", "search_*", "add_issue_comment"],
+ "use_for": "issues, pull requests and code in our repositories"}
 ```
 
 To add a flights server: get an MCP endpoint and an API token from the flights provider,

@@ -244,7 +244,7 @@ impl McpServer {
 
     fn gate_for(&self, tool: &str) -> Gate {
         let pick = |g: McpGate| if g == McpGate::Open { Gate::Open } else { Gate::Confirm };
-        if self.cfg.force_confirm.iter().any(|p| glob_match(p, tool)) {
+        if self.cfg.origin == crate::config::McpOrigin::Unvetted || self.cfg.force_confirm.iter().any(|p| glob_match(p, tool)) {
             return Gate::Confirm;
         }
         if let Some(g) = self.cfg.tool_gates.get(tool) {
