@@ -228,10 +228,12 @@ fn main() -> anyhow::Result<()> {
             Err(e) => warn!("[inventory] Wi-Fi RSSI unavailable: {e}"),
         }
     }
-    // BLE 5 probe (the S3 has no Classic BT): advertise + 3 s active scan,
-    // logged only. It runs on its own thread so a BLE host that never
-    // finishes (seen on hardware 2026-10-13: serial silent after "BLE host
-    // starts") cannot hold up the mesh client; the outcome is logged either way.
+    // BLE 5 probe (the S3 has no Classic BT), `ble-probe` feature only. On
+    // hardware (2026-10-13) the NimBLE host never finished the scan (no
+    // "scan done", no timeout) and cannot be stopped from here, so the
+    // default image does not start BLE at all. When enabled it runs on its
+    // own thread so it cannot hold up the mesh client.
+    #[cfg(feature = "ble-probe")]
     match thread::Builder::new().name("ble-probe".into()).stack_size(16384).spawn(|| {
         info!("[inventory] BLE probe starting (3 s, off the boot path)");
         inventory::ble_probe(3);
@@ -239,6 +241,8 @@ fn main() -> anyhow::Result<()> {
         Ok(_) => {}
         Err(e) => warn!("[inventory] BLE probe thread not started: {e}; skipped"),
     }
+    #[cfg(not(feature = "ble-probe"))]
+    info!("[inventory] BLE probe disabled in this image (build with feature ble-probe)");
 
     // ── Step 10b: touch task on a dedicated thread. ────────────────
     //

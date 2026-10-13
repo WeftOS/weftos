@@ -24,6 +24,7 @@ use std::time::Duration;
 use log::{info, warn};
 
 use weftos_leaf_types::LeafPush;
+use weftos_leaf_types::frame_reader::{Fill, FrameError, FrameReader, Poll};
 use crate::scene::LeafScene;
 use ed25519_dalek::SigningKey;
 use esp_idf_svc::nvs::EspDefaultNvs;
@@ -408,7 +409,7 @@ pub fn run(
             shown_waiting = true;
         }
 
-        let mut frame = [0u8; RX_BUF];
+        let mut reader = FrameReader::new(RX_BUF);
         loop {
             session.tick(&mut compositor, &mut surface);
             if let Err(e) = leaf.stage_all(&touch_rx, &ptt_rx, &mut held, &compositor, &mut session) {
@@ -416,36 +417,37 @@ pub fn run(
                 boot_screen(&mut compositor, &mut surface, "leaf journal unavailable");
                 loop { std::thread::sleep(Duration::from_secs(30)); }
             }
-            if !leaf.queue.pending.is_empty() { sock.set_read_timeout(Some(Duration::from_secs(10))).ok(); }
-            if let Err(e) = leaf.replay(&mut sock, |bytes| apply_push(bytes, &mut compositor, &mut surface, &mut session)) {
+            // Replay reads the ACK straight off the socket, so it only runs on a
+            // frame boundary: a partly read push must finish first.
+            if reader.buffered() == 0 && !leaf.queue.pending.is_empty() { sock.set_read_timeout(Some(Duration::from_secs(10))).ok(); }
+            let replayed = if reader.buffered() == 0 {
+                leaf.replay(&mut sock, |bytes| apply_push(bytes, &mut compositor, &mut surface, &mut session))
+            } else {
+                Ok(())
+            };
+            if let Err(e) = replayed {
                 warn!("[mesh] signed touch replay failed: {e}; reconnecting");
                 break;
             }
             // A short poll keeps touch and button edges under ~50 ms from
             // the journal to the wire (they leave at the top of the loop).
             sock.set_read_timeout(Some(Duration::from_millis(40))).ok();
-            let mut len_buf = [0u8; 4];
-            match sock.peek(&mut len_buf) {
-                Ok(0) => break,
-                Ok(n) if n < len_buf.len() => continue,
-                Ok(_) => {},
-                Err(e) if matches!(e.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock) => continue,
-                Err(e) => { warn!("[mesh] peek failed: {e:?} — reconnecting"); break; }
+            // A timeout is "no data yet", never an error; a frame split
+            // across timeouts resumes from the bytes already read.
+            let polled = reader.poll(|out| match sock.read(out) {
+                Ok(0) => Ok(Fill::Closed),
+                Ok(n) => Ok(Fill::Data(n)),
+                Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => Ok(Fill::Idle),
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => Ok(Fill::Idle),
+                Err(e) => Err(e),
+            });
+            match polled {
+                Ok(Poll::Frame(bytes)) => apply_push(bytes, &mut compositor, &mut surface, &mut session),
+                Ok(Poll::Idle) => {}
+                Ok(Poll::Closed) => { warn!("[mesh] parent closed the connection — reconnecting"); break; }
+                Err(FrameError::BadLength(len)) => { warn!("[mesh] frame len {len} out of range — reconnecting"); break; }
+                Err(FrameError::Source(e)) => { warn!("[mesh] read failed: {e:?} — reconnecting"); break; }
             }
-            if let Err(e) = read_exact(&mut sock, &mut len_buf) {
-                warn!("[mesh] read len failed: {e:?} — reconnecting");
-                break;
-            }
-            let len = u32::from_be_bytes(len_buf) as usize;
-            if len == 0 || len > frame.len() {
-                warn!("[mesh] frame len {len} out of range — reconnecting");
-                break;
-            }
-            if let Err(e) = read_exact(&mut sock, &mut frame[..len]) {
-                warn!("[mesh] read body failed: {e:?} — reconnecting");
-                break;
-            }
-            apply_push(&frame[..len], &mut compositor, &mut surface, &mut session);
         }
 
         // Connection dropped — back off and reconnect.

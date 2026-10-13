@@ -78,6 +78,10 @@ esp32-nimble = "0.12"
 # while the IO44 push-to-talk button is held; off by default so no image
 # drives pins the owner has not wired. See src/ptt.rs.
 ptt-mic = []
+# Boot-time BLE advertise + scan (inventory). Off by default: on hardware
+# (2026-10-13) the NimBLE host never completed the scan and could not be
+# stopped, so the image does not start BLE unless asked.
+ble-probe = []
 
 [build-dependencies]
 embuild = "0.33"
