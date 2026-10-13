@@ -18,13 +18,13 @@
 //! Hold the space bar to talk. Enter opens a typed line for development
 //! (Enter sends, Escape cancels); `--no-typing` turns that off.
 
-use std::time::{Duration, Instant};
+use std::sync::atomic::AtomicBool;
+use std::time::Duration;
 
 use weftos_cos_console::frame::SUBJECT;
-use weftos_cos_console::host::{Host, HostConfig, DEFAULT_AGENT};
-use weftos_display_client::{DisplayGrant, DisplaySession, DisplayTarget, LeafEndpoint, WindowConfig};
-
-const FRAME: Duration = Duration::from_millis(33);
+use weftos_cos_console::host::supervise::{supervise, SuperviseConfig};
+use weftos_cos_console::host::{HostConfig, DEFAULT_AGENT};
+use weftos_display_client::{DisplayError, DisplayGrant, DisplaySession, DisplayTarget, LeafEndpoint, WindowConfig};
 
 struct Args {
     window: bool,
@@ -59,7 +59,7 @@ fn parse_args() -> Result<Args, String> {
     Ok(a)
 }
 
-fn open_session(args: &Args) -> Result<DisplaySession, String> {
+fn open_session(args: &Args) -> Result<DisplaySession, DisplayError> {
     let target = if let Some(id) = &args.leaf {
         DisplayTarget::Leaf(LeafEndpoint {
             name: format!("weftos://local/nodes/{id}/services/display"),
@@ -69,37 +69,35 @@ fn open_session(args: &Args) -> Result<DisplaySession, String> {
         })
     } else if args.window {
         if !cfg!(feature = "window") {
-            return Err("built without the `window` feature; run scripts/build.sh cos-host".into());
+            return Err(DisplayError::NotYet("built without the `window` feature; run scripts/build.sh cos-host"));
         }
         DisplayTarget::Window(WindowConfig { title: "chief of staff".into(), scale: args.scale, ..WindowConfig::default() })
     } else {
         DisplayTarget::sim().0
     };
-    DisplaySession::open(target, DisplayGrant::dev(SUBJECT)).map_err(|e| e.to_string())
+    DisplaySession::open(target, DisplayGrant::dev(SUBJECT))
 }
 
 fn main() -> Result<(), String> {
     let args = parse_args()?;
-    let mut session = open_session(&args)?;
-    let cfg = HostConfig { agent: args.agent.clone(), typing: args.typing, ..HostConfig::default() };
-    let mut host = Host::open(&mut session, cfg).map_err(|e| e.to_string())?;
+    let host = HostConfig { agent: args.agent.clone(), typing: args.typing, ..HostConfig::default() };
+    let mut cfg = SuperviseConfig::new(host);
+    // A leaf (or the daemon behind it) can drop and come back; a window
+    // the user closed is the end.
+    cfg.reopen_on_close = args.leaf.is_some();
+    cfg.limit = args.seconds.map(Duration::from_secs);
     eprintln!("console host: agent {}  (space = talk{})", args.agent, if args.typing { ", Enter = type" } else { "" });
 
-    let start = Instant::now();
-    let limit = args.seconds.map(Duration::from_secs);
-    loop {
-        let frame_start = Instant::now();
-        let now_ms = start.elapsed().as_millis() as u32;
-        host.set_clock(&chrono::Local::now().format("%H:%M").to_string()).map_err(|e| e.to_string())?;
-        if !host.step(now_ms).map_err(|e| e.to_string())? {
-            break;
-        }
-        if limit.is_some_and(|l| start.elapsed() >= l) {
-            break;
-        }
-        if let Some(rest) = FRAME.checked_sub(frame_start.elapsed()) {
-            std::thread::sleep(rest);
-        }
-    }
+    // Bad arguments were refused above; from here on only SIGINT/SIGTERM
+    // (default disposition) ends the process, plus --seconds and a
+    // closed window.
+    let stop = AtomicBool::new(false);
+    supervise(
+        || open_session(&args),
+        || chrono::Local::now().format("%H:%M").to_string(),
+        &cfg,
+        &stop,
+        |line| eprintln!("{line}"),
+    );
     Ok(())
 }

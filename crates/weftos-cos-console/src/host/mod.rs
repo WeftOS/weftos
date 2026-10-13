@@ -22,6 +22,7 @@
 pub mod agent_client;
 pub mod agent_event;
 pub mod input_line;
+pub mod supervise;
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -90,7 +91,9 @@ pub struct Host<'a> {
 impl<'a> Host<'a> {
     /// Draw the console on `session` and start talking to the agent.
     pub fn open(session: &'a mut DisplaySession, cfg: HostConfig) -> Res<Self> {
-        let console = Console::new(session)?;
+        let mut console = Console::new(session)?;
+        // From here on, ops queue and go out once per `step`.
+        console.set_batching(true);
         let link = AgentLink::connect(ClientConfig {
             base: cfg.agent.clone(),
             reconnect_min: cfg.reconnect_min,
@@ -148,7 +151,15 @@ impl<'a> Host<'a> {
             self.on_inbound(msg)?;
         }
         self.console.tick(now_ms)?;
+        self.console.flush()?;
         Ok(!self.console.session().is_closed())
+    }
+
+    /// Scene ops that bypass the console's queue (the typed line): the
+    /// queue goes out first so the order on screen is the order drawn.
+    fn draw(&mut self, ops: &[weftos_display_client::SceneOp]) -> Res {
+        self.console.flush()?;
+        self.console.session().apply(ops)
     }
 
     // ── display side ────────────────────────────────────────────────
@@ -201,17 +212,17 @@ impl<'a> Host<'a> {
                 let line = InputLine::new(self.console.chat_area());
                 let ops = line.draw_ops();
                 self.input = Some(line);
-                self.console.session().apply(&ops)
+                self.draw(&ops)
             }
             (SENSOR_KEY_NAMED, true) if key == KEY_RETURN => self.send_typed(),
             (SENSOR_KEY_NAMED, true) if key == KEY_ESCAPE => self.close_input(),
             (SENSOR_KEY_NAMED, true) if key == KEY_BACKSPACE => {
                 let ops = self.input.as_mut().map(InputLine::backspace).unwrap_or_default();
-                self.console.session().apply(&ops)
+                self.draw(&ops)
             }
             (SENSOR_KEY_CHAR, true) => {
                 let ops = self.input.as_mut().map(|l| l.push(&key)).unwrap_or_default();
-                self.console.session().apply(&ops)
+                self.draw(&ops)
             }
             _ => Ok(()),
         }
@@ -231,7 +242,7 @@ impl<'a> Host<'a> {
 
     fn close_input(&mut self) -> Res {
         let Some(line) = self.input.take() else { return Ok(()) };
-        self.console.session().apply(&line.close_ops())
+        self.draw(&line.close_ops())
     }
 
     /// After a redraw (layout change, guide view), put the typed line
@@ -244,7 +255,7 @@ impl<'a> Host<'a> {
         }
         line.set_area(self.console.chat_area());
         let ops = line.draw_ops();
-        self.console.session().apply(&ops)
+        self.draw(&ops)
     }
 
     // ── agent side ──────────────────────────────────────────────────

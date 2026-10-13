@@ -58,7 +58,15 @@ pub struct Console<'a> {
     time: String,
     now_ms: u32,
     last_drag_ms: Option<u32>,
+    /// Batching: ops wait here until [`Console::flush`] instead of going
+    /// out one publish per call.
+    batching: bool,
+    queued: Vec<SceneOp>,
 }
+
+/// More queued ops than this (a flush that keeps failing) collapse into
+/// one full redraw from the models.
+const QUEUE_CAP: usize = 2048;
 
 type Res<T = ()> = Result<T, DisplayError>;
 
@@ -84,6 +92,8 @@ impl<'a> Console<'a> {
             time: "--:--".into(),
             now_ms: 0,
             last_drag_ms: None,
+            batching: false,
+            queued: Vec::new(),
         };
         c.redraw()?;
         Ok(c)
@@ -140,7 +150,44 @@ impl<'a> Console<'a> {
         if ops.is_empty() {
             return Ok(());
         }
-        self.session.apply(&ops)
+        if !self.batching {
+            return self.session.apply(&ops);
+        }
+        // A batch that opens with Clear is a full frame: it supersedes
+        // everything queued before it (latest wins).
+        if matches!(ops.first(), Some(SceneOp::Clear)) {
+            self.queued.clear();
+        }
+        self.queued.extend(ops);
+        if self.queued.len() > QUEUE_CAP {
+            self.redraw()?;
+        }
+        Ok(())
+    }
+
+    /// Queue ops until [`Console::flush`] (one publish per host frame, so a
+    /// burst of agent events cannot flood the daemon). Off by default.
+    pub fn set_batching(&mut self, on: bool) {
+        self.batching = on;
+    }
+
+    /// Publish the queued ops as one batch. When the session says the op
+    /// rate is exceeded nothing is lost: the queue stays for the next call.
+    pub fn flush(&mut self) -> Res {
+        if self.queued.is_empty() {
+            return Ok(());
+        }
+        match self.session.apply(&self.queued) {
+            Ok(()) => {
+                self.queued.clear();
+                Ok(())
+            }
+            Err(DisplayError::OpRate { .. }) => Ok(()),
+            Err(e) => {
+                self.queued.clear();
+                Err(e)
+            }
+        }
     }
 
     /// Clear the display and draw the current layout from the models.
