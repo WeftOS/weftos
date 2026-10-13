@@ -8,6 +8,7 @@ use tokio::sync::broadcast;
 
 use crate::CosError;
 use crate::events::Event;
+use crate::traces::Trace;
 
 /// Identifier of one user turn; returned by `utter` and stamped on its events.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -152,5 +153,26 @@ pub trait Conversation: Send + Sync {
     /// `lanes_running`. An implementation without a snapshot says so.
     fn status(&self) -> serde_json::Value {
         serde_json::json!({"state": null, "unsupported": true})
+    }
+
+    /// Per-turn traces with `ts` at or after `since`, oldest first, the
+    /// newest `limit`. An implementation without traces has none.
+    fn traces(&self, _since: Option<&str>, _limit: usize) -> Vec<Trace> {
+        Vec::new()
+    }
+
+    /// The trace of one turn, once it has ended.
+    fn trace(&self, _turn_id: &str) -> Option<Trace> {
+        None
+    }
+
+    /// The tools this host has bound: id, description, gate, schema.
+    fn tools(&self) -> Vec<serde_json::Value> {
+        Vec::new()
+    }
+
+    /// Run the read-only `devices.status` tool directly (no model turn).
+    async fn devices_status(&self) -> Result<serde_json::Value, CosError> {
+        Err(CosError::Config("devices.status is not available on this conversation".into()))
     }
 }

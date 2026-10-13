@@ -19,6 +19,7 @@ use crate::prompt::system_prompt_with;
 use crate::routing::{ModelRoutes, Route, Tier};
 use crate::tools::cards::Focus;
 use crate::tools::{Gate, ToolLog, ToolRegistry};
+use crate::traces::{Trace, TraceBuilder, TraceStore};
 
 /// Default tool rounds per turn (`models.max_tool_rounds`) before the agent
 /// is made to answer with what it has.
@@ -43,6 +44,10 @@ enum Flow {
 /// A `Confirm` tool call waiting for the owner's yes.
 #[derive(Debug, Clone)]
 struct PendingAction {
+    /// The turn that asked, and the endpoint it came from: an `mcp` or
+    /// `test-*` endpoint can answer only a gate its own endpoint raised.
+    turn_id: String,
+    endpoint: String,
     tool: String,
     args: Value,
     summary: String,
@@ -55,7 +60,9 @@ struct Inner {
     ui: UiHandle,
     tx: broadcast::Sender<Event>,
     history: Mutex<Vec<Value>>,
-    pending: Mutex<Option<PendingAction>>,
+    pending: std::sync::Mutex<Option<PendingAction>>,
+    /// One trace per finished turn, for `GET /v1/cos/traces`.
+    traces: std::sync::Mutex<TraceStore>,
     turn_gate: Mutex<()>,
     max_rounds: AtomicUsize,
     focus: std::sync::Mutex<Option<Focus>>,
@@ -95,6 +102,7 @@ impl CosAgent {
     /// they need the agent's emitter and guide state.
     pub fn new(routes: ModelRoutes, tools: ToolRegistry, log: ToolLog) -> Self {
         let (tx, _) = broadcast::channel(256);
+        let quick_model = routes.quick().model_id.clone();
         let ui = UiHandle::new(tx.clone());
         let tools = crate::tools::ui::register(tools, &ui);
         Self {
@@ -105,14 +113,17 @@ impl CosAgent {
                 ui,
                 tx,
                 history: Mutex::new(Vec::new()),
-                pending: Mutex::new(None),
+                pending: std::sync::Mutex::new(None),
+                traces: std::sync::Mutex::new(TraceStore::default()),
                 turn_gate: Mutex::new(()),
                 max_rounds: AtomicUsize::new(DEFAULT_MAX_TOOL_ROUNDS),
                 focus: std::sync::Mutex::new(None),
                 lanes_running: AtomicU32::new(0),
                 turns: std::sync::Mutex::new(std::collections::VecDeque::new()),
                 messages: std::sync::Mutex::new(std::collections::VecDeque::new()),
-                snapshot: std::sync::Mutex::new(Snapshot::default()),
+                // Idle with the quick-tier model from the start, so a status
+                // read before the first turn is not null.
+                snapshot: std::sync::Mutex::new(Snapshot { state: Some(AgentState::Idle), model: Some(quick_model), ..Snapshot::default() }),
                 silent_endpoints: std::sync::Mutex::new(std::collections::HashSet::new()),
             }),
         }
@@ -169,17 +180,26 @@ impl CosAgent {
     /// API spawns it).
     pub async fn run_turn(&self, turn_id: TurnId, utterance: UserUtterance) {
         let inner = self.inner.clone();
+        // The endpoint is read before a survey answer rewrites the utterance.
+        let endpoint = self.turn_endpoint(&turn_id).or_else(|| utterance.endpoint.clone()).unwrap_or_else(|| HOST_ENDPOINT.to_string());
         let _serial = inner.turn_gate.lock().await;
+        let started = std::time::Instant::now();
         inner.ui.lock().current_turn = Some(turn_id.clone());
         // A spoken/typed number or "skip" answers a pending survey question.
         let utterance = inner.ui.resolve_spoken(utterance);
         inner.emit(Event::state(AgentState::Thinking));
-        let result = inner.turn(&turn_id, &utterance).await;
+        let mut tb = TraceBuilder::new();
+        let result = inner.turn(&turn_id, &endpoint, &utterance, &mut tb).await;
         match result {
-            Ok(()) => inner.emit(Event::state(AgentState::Idle)),
+            Ok(()) => {
+                inner.record_trace(tb.finish(&turn_id.0, &endpoint, started.elapsed().as_millis() as u64));
+                inner.emit(Event::state(AgentState::Idle));
+            }
             Err(e) => {
                 let reason = redact(&e.to_string());
+                tb.failed = true;
                 inner.emit(Event::Message { turn_id: turn_id.clone(), text: format!("I hit a problem: {reason}"), is_final: true, endpoint: None, speak: false });
+                inner.record_trace(tb.finish(&turn_id.0, &endpoint, started.elapsed().as_millis() as u64));
                 inner.emit(Event::blocked(reason));
             }
         }
@@ -240,14 +260,64 @@ impl Conversation for CosAgent {
 
     fn status(&self) -> serde_json::Value {
         let s = self.inner.snapshot.lock().unwrap_or_else(|e| e.into_inner());
+        // A held action, if any: which turn and endpoint asked, and what for.
+        // Never the arguments.
+        let pending = self
+            .inner
+            .pending
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map(|p| json!({"turn_id": p.turn_id, "endpoint": p.endpoint, "tool": p.tool, "summary": p.summary}));
         json!({
             "state": s.state,
             "reason": s.reason,
             "task": s.task,
             "model": s.model,
             "lanes_running": self.inner.lanes_running.load(Ordering::Relaxed),
+            "pending": pending,
         })
     }
+
+    fn traces(&self, since: Option<&str>, limit: usize) -> Vec<Trace> {
+        self.inner.traces.lock().unwrap_or_else(|e| e.into_inner()).since(since, limit)
+    }
+
+    fn trace(&self, turn_id: &str) -> Option<Trace> {
+        self.inner.traces.lock().unwrap_or_else(|e| e.into_inner()).get(turn_id)
+    }
+
+    fn tools(&self) -> Vec<serde_json::Value> {
+        self.inner
+            .tools
+            .specs()
+            .iter()
+            .map(|s| json!({"id": s.id, "description": s.description, "gate": if s.gate == Gate::Confirm { "confirm" } else { "open" }, "parameters": s.parameters}))
+            .collect()
+    }
+
+    async fn devices_status(&self) -> Result<serde_json::Value, CosError> {
+        // The one read-only tool the control plane may run without a model
+        // turn; it is looked up by id and must be an open gate.
+        let tool = self.inner.tools.find("devices.status").ok_or_else(|| CosError::Config("devices.status is not bound on this host".into()))?;
+        if tool.spec().gate != Gate::Open {
+            return Err(CosError::Config("devices.status is not read-only on this host".into()));
+        }
+        Ok(tool.call(json!({})).await?.result)
+    }
+}
+
+/// Whether an utterance from `asker` may answer a gate raised from `holder`.
+/// The owner's own endpoints answer each other's gates; a programmatic
+/// endpoint (`mcp`, `test-*`) answers only its own, so a test or tool client
+/// can never lift a gate that the phone or the glasses asked.
+fn may_answer(holder: &str, asker: &str) -> bool {
+    holder == asker || !is_programmatic(asker)
+}
+
+/// The endpoint names the MCP server and the eval harness speak as.
+pub fn is_programmatic(endpoint: &str) -> bool {
+    endpoint == "mcp" || endpoint.strip_prefix("test-").is_some_and(|run| !run.is_empty())
 }
 
 fn is_yes(text: &str) -> bool {
@@ -256,6 +326,10 @@ fn is_yes(text: &str) -> bool {
 }
 
 impl Inner {
+    fn record_trace(&self, t: Trace) {
+        self.traces.lock().unwrap_or_else(|e| e.into_inner()).push(t);
+    }
+
     fn emit(&self, ev: Event) {
         let ev = self.attribute(ev).redacted();
         self.note_snapshot(&ev);
@@ -321,7 +395,7 @@ impl Inner {
         });
     }
 
-    async fn turn(&self, turn_id: &TurnId, utterance: &UserUtterance) -> Result<(), CosError> {
+    async fn turn(&self, turn_id: &TurnId, endpoint: &str, utterance: &UserUtterance, tb: &mut TraceBuilder) -> Result<(), CosError> {
         let source = match utterance.source {
             Source::Voice => "voice",
             Source::Typed => "typed",
@@ -333,19 +407,39 @@ impl Inner {
             trim_history(&mut h);
         }
 
-        if let Some(pending) = self.pending.lock().await.take() {
-            return self.answer_pending(turn_id, utterance, pending).await;
+        let held = {
+            let mut p = self.pending.lock().unwrap_or_else(|e| e.into_inner());
+            if p.as_ref().is_some_and(|a| may_answer(&a.endpoint, endpoint)) { p.take() } else { None }
+        };
+        if let Some(pending) = held {
+            return self.answer_pending(turn_id, utterance, pending, tb).await;
+        }
+
+        // One owner: another person's notes or data are refused outright,
+        // with no model call and no tool.
+        if crate::guard::asks_for_someone_elses_data(&utterance.text) {
+            tb.model = "none".into();
+            tb.role = "refusal".into();
+            self.status("refusing", "none");
+            let text = crate::guard::REFUSAL.to_string();
+            self.history.lock().await.push(json!({"role": "assistant", "content": text}));
+            self.emit(Event::state(AgentState::Speaking));
+            self.emit(Event::Message { turn_id: turn_id.clone(), text, is_final: true, endpoint: None, speak: false });
+            return Ok(());
         }
 
         let (tier, route) = self.routes.pick(&utterance.text);
         let task = self.task_name(&utterance.text, tier, source);
         self.status(&task, &route.model_id);
+        tb.model = route.model_id.clone();
+        tb.role = tier.label().to_string();
         tracing::info!(turn = %turn_id, tier = tier.label(), model = %route.model_id, "routed");
 
         let today = chrono::Local::now().format("%Y-%m-%d (%A)").to_string();
         // External (MCP) servers that were down get another chance here.
         self.tools.refresh().await;
         let offered = self.tools.specs_for(&utterance.text);
+        tb.offered(offered.iter().map(|s| s.id.to_string()));
         let system = json!({"role": "system", "content": system_prompt_with(&offered, &today, &self.tools.catalog())});
         let specs: Vec<Value> = offered.iter().map(|s| s.openai_spec()).collect();
 
@@ -374,6 +468,7 @@ impl Inner {
             // The primary model cannot answer: move down the chain and say so
             // on the status line, which always names the model actually
             // answering.
+            tb.rounds += 1;
             let response = loop {
                 match self.call_model(turn_id, chain[at], &messages, call_specs, choice).await {
                     Ok(r) => break r,
@@ -381,6 +476,7 @@ impl Inner {
                         tracing::warn!(turn = %turn_id, from = %chain[at].model_id, to = %chain[at + 1].model_id, error = %redact(&e.to_string()), "model failed; falling back");
                         at += 1;
                         self.status(&format!("{task} (fallback)"), &chain[at].model_id);
+                        tb.model = chain[at].model_id.clone();
                     }
                     Err(e) => return Err(e),
                 }
@@ -419,7 +515,7 @@ impl Inner {
                     force_final = true;
                     continue;
                 }
-                match self.run_tool_call(turn_id, call).await? {
+                match self.run_tool_call(turn_id, endpoint, call, tb).await? {
                     Flow::Continue => {}
                     Flow::Failed => {
                         errors += 1;
@@ -498,7 +594,7 @@ impl Inner {
     }
 
     /// Execute one tool call from the model and say how the turn continues.
-    async fn run_tool_call(&self, turn_id: &TurnId, call: &Value) -> Result<Flow, CosError> {
+    async fn run_tool_call(&self, turn_id: &TurnId, endpoint: &str, call: &Value, tb: &mut TraceBuilder) -> Result<Flow, CosError> {
         let call_id = call["id"].as_str().unwrap_or("call").to_string();
         let name = call["function"]["name"].as_str().unwrap_or("").to_string();
         let args: Value = call["function"]["arguments"]
@@ -509,6 +605,7 @@ impl Inner {
 
         let Some(tool) = self.tools.find(&name) else {
             let text = format!("unknown tool `{name}`");
+            tb.called(&name, &args, false, 0);
             self.log.record(turn_id, &name, &text, "refused");
             self.emit(Event::Tool { name: name.clone(), summary: text.clone(), status: "refused".into() });
             self.push_tool_result(&call_id, &json!({"error": text})).await;
@@ -521,7 +618,8 @@ impl Inner {
             let summary = describe_action(&id, &args);
             self.log.record(turn_id, &id, &summary, "awaiting_confirmation");
             self.emit(Event::Tool { name: id.clone(), summary: summary.clone(), status: "awaiting_confirmation".into() });
-            *self.pending.lock().await = Some(PendingAction { tool: id.clone(), args, summary: summary.clone() });
+            tb.gate(&id, "held");
+            *self.pending.lock().unwrap_or_else(|e| e.into_inner()) = Some(PendingAction { turn_id: turn_id.0.clone(), endpoint: endpoint.to_string(), tool: id.clone(), args, summary: summary.clone() });
             let question = format!("About to {summary}. Say yes to go ahead; anything else cancels.");
             self.push_tool_result(&call_id, &json!({"held": true, "reason": "awaiting owner confirmation"})).await;
             self.history.lock().await.push(json!({"role": "assistant", "content": question}));
@@ -532,7 +630,11 @@ impl Inner {
         let asked = id == "ui.ask";
         let question = args["question"].as_str().unwrap_or_default().to_string();
         self.emit(Event::Tool { name: id.clone(), summary: "running".into(), status: "running".into() });
-        match tool.call(args).await {
+        let traced_args = args.clone();
+        let started = std::time::Instant::now();
+        let outcome = tool.call(args).await;
+        tb.called(&id, &traced_args, outcome.is_ok(), started.elapsed().as_millis() as u64);
+        match outcome {
             Ok(out) => {
                 self.log.record(turn_id, &id, &out.summary, "ok");
                 self.emit(Event::Tool { name: id, summary: out.summary, status: "ok".into() });
@@ -558,9 +660,12 @@ impl Inner {
     }
 
     /// The utterance after a held action: yes runs it, anything else cancels.
-    async fn answer_pending(&self, turn_id: &TurnId, utterance: &UserUtterance, pending: PendingAction) -> Result<(), CosError> {
+    async fn answer_pending(&self, turn_id: &TurnId, utterance: &UserUtterance, pending: PendingAction, tb: &mut TraceBuilder) -> Result<(), CosError> {
         self.status("confirmation", "none");
+        tb.model = "none".into();
+        tb.role = "confirmation".into();
         if !is_yes(&utterance.text) {
+            tb.gate(&pending.tool, "cancelled");
             let text = format!("Cancelled: {}.", pending.summary);
             self.log.record(turn_id, &pending.tool, &pending.summary, "cancelled");
             self.emit(Event::Tool { name: pending.tool, summary: pending.summary, status: "cancelled".into() });
@@ -573,7 +678,12 @@ impl Inner {
             reason: "tool vanished".into(),
         })?;
         self.emit(Event::Tool { name: pending.tool.clone(), summary: pending.summary.clone(), status: "running".into() });
-        let text = match tool.call(pending.args).await {
+        tb.gate(&pending.tool, "confirmed");
+        let traced_args = pending.args.clone();
+        let started = std::time::Instant::now();
+        let outcome = tool.call(pending.args).await;
+        tb.called(&pending.tool, &traced_args, outcome.is_ok(), started.elapsed().as_millis() as u64);
+        let text = match outcome {
             Ok(out) => {
                 if out.result["started"] == true {
                     self.lanes_running.fetch_add(1, Ordering::Relaxed);

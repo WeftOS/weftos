@@ -9,6 +9,10 @@
 //!                                                 (oldest first; limit 1..=100, default 20)
 //! GET  /v1/cos/status                          -> 200 {state, reason, task, model, lanes_running}
 //!                                                 (latest state/status events; read-only)
+//! GET  /v1/cos/traces?since=&limit=N          -> 200 {traces: [Trace]}  (oldest first; since is RFC 3339, inclusive)
+//! GET  /v1/cos/traces/<turn_id>                -> 200 Trace | 404
+//! GET  /v1/cos/tools                           -> 200 {tools: [{id, description, gate, parameters}]}
+//! GET  /v1/cos/devices                         -> 200 devices.status result (read-only, no model turn)
 //! GET  /healthz                                -> 200 {ok: true, api: "cos.v1"}
 //! ```
 //!
@@ -25,7 +29,7 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{ConnectInfo, FromRequestParts, RawQuery, State};
+use axum::extract::{ConnectInfo, FromRequestParts, Path, RawQuery, State};
 use axum::http::StatusCode;
 use axum::http::request::Parts;
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
@@ -40,6 +44,7 @@ use tokio::sync::broadcast::error::RecvError;
 use crate::CosError;
 use crate::conversation::{Conversation, GuideAnswer, HOST_ENDPOINT, TURNS_DEFAULT_LIMIT, TURNS_MAX_LIMIT, UserUtterance};
 use crate::endpoints::{AuthError, Caller, TokenStore, authorize, is_tailnet_ip};
+use crate::traces::{TRACES_DEFAULT_LIMIT, TRACES_MAX_LIMIT, valid_since};
 use crate::voice::{PttControl, PttEdge, PttOutcome};
 
 /// The frozen contract version (`docs/plans/adr-118-cos-contract.md` section 3).
@@ -104,6 +109,10 @@ pub fn router_auth(conv: Shared, ptt: SharedPtt, tokens: Option<Arc<TokenStore>>
         .route("/v1/cos/events", get(events))
         .route("/v1/cos/turns", get(turns))
         .route("/v1/cos/status", get(status))
+        .route("/v1/cos/traces", get(traces))
+        .route("/v1/cos/traces/{turn_id}", get(trace))
+        .route("/v1/cos/tools", get(tools))
+        .route("/v1/cos/devices", get(devices))
         .route("/healthz", get(|_caller: Authed| async { Json(json!({"ok": true, "api": API_VERSION})) }))
         .with_state(Api { conv, ptt, tokens })
 }
@@ -262,6 +271,63 @@ async fn turns(State(api): State<Api>, _caller: Authed, RawQuery(query): RawQuer
 /// `GET /v1/cos/status`: the agent's latest state, task and model.
 async fn status(State(api): State<Api>, _caller: Authed) -> Json<Value> {
     Json(api.conv.status())
+}
+
+/// `since` and `limit` of `GET /v1/cos/traces`: absent is "all" and the
+/// default; anything malformed is refused, never read as "no filter".
+fn traces_query(query: Option<&str>) -> Result<(Option<String>, usize), String> {
+    let mut since = None;
+    let mut limit = TRACES_DEFAULT_LIMIT;
+    for pair in query.unwrap_or("").split('&').filter(|p| !p.is_empty()) {
+        match pair.split_once('=') {
+            Some(("since", raw)) => {
+                let raw = raw.replace("%3A", ":").replace("%3a", ":").replace("%2B", "+").replace("%2b", "+");
+                if !valid_since(&raw) {
+                    return Err("since must be an RFC 3339 timestamp".into());
+                }
+                since = Some(raw);
+            }
+            Some(("limit", raw)) => {
+                limit = raw
+                    .parse::<usize>()
+                    .ok()
+                    .filter(|n| (1..=TRACES_MAX_LIMIT).contains(n))
+                    .ok_or_else(|| format!("limit must be a whole number from 1 to {TRACES_MAX_LIMIT}"))?;
+            }
+            None if pair == "since" || pair == "limit" => return Err(format!("{pair} needs a value")),
+            _ => {}
+        }
+    }
+    Ok((since, limit))
+}
+
+/// `GET /v1/cos/traces`: how recent turns were answered.
+async fn traces(State(api): State<Api>, _caller: Authed, RawQuery(query): RawQuery) -> (StatusCode, Json<Value>) {
+    match traces_query(query.as_deref()) {
+        Ok((since, limit)) => (StatusCode::OK, Json(json!({"traces": api.conv.traces(since.as_deref(), limit)}))),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(json!({"error": e}))),
+    }
+}
+
+/// `GET /v1/cos/traces/<turn_id>`: one turn's trace, once the turn has ended.
+async fn trace(State(api): State<Api>, _caller: Authed, Path(turn_id): Path<String>) -> (StatusCode, Json<Value>) {
+    match api.conv.trace(&turn_id) {
+        Some(t) => (StatusCode::OK, Json(json!(t))),
+        None => (StatusCode::NOT_FOUND, Json(json!({"error": "no trace for that turn (unknown, still running, or older than the last 200)"}))),
+    }
+}
+
+/// `GET /v1/cos/tools`: the tools bound on this host.
+async fn tools(State(api): State<Api>, _caller: Authed) -> Json<Value> {
+    Json(json!({"tools": api.conv.tools()}))
+}
+
+/// `GET /v1/cos/devices`: `devices.status`, read-only, without a model turn.
+async fn devices(State(api): State<Api>, _caller: Authed) -> (StatusCode, Json<Value>) {
+    match api.conv.devices_status().await {
+        Ok(v) => (StatusCode::OK, Json(v)),
+        Err(e) => failure(e),
+    }
 }
 
 async fn events(State(api): State<Api>, _caller: Authed) -> Sse<impl Stream<Item = Result<SseEvent, Infallible>>> {

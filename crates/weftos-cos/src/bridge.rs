@@ -30,6 +30,11 @@ const MAX_TURN_TEXT: usize = 2000;
 const MAX_STATUS_FILE: u64 = 32 * 1024;
 /// Remembered `(turn_id, role)` keys.
 const SEEN_CAP: usize = 1000;
+/// Traces per sync (the dashboard accepts 50).
+pub const MAX_TRACES_PER_SYNC: usize = 50;
+/// Largest JSON list of a trace (the dashboard stores 8 KB, 4 KB for gates).
+const MAX_TRACE_LIST_BYTES: usize = 7000;
+const MAX_TRACE_GATES_BYTES: usize = 3500;
 /// Longest phone clip (contract: 15 s of 16 kHz mono PCM16).
 const MAX_AUDIO_SECS: u32 = 15;
 /// Largest download accepted: 15 s of PCM16 plus a generous header.
@@ -164,6 +169,7 @@ impl std::fmt::Display for SyncError {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SyncReport {
     pub turns_sent: usize,
+    pub traces_sent: usize,
     pub results_sent: usize,
     pub requests: usize,
     /// The body that was (or, with dry run, would have been) posted.
@@ -194,6 +200,11 @@ struct Shared {
     seen_order: VecDeque<(String, String)>,
     /// Outcomes not yet delivered to the dashboard.
     results: Vec<Value>,
+    /// Turn ids whose trace was delivered, and the delivery order for the cap.
+    seen_traces: HashSet<String>,
+    seen_trace_order: VecDeque<String>,
+    /// Newest trace timestamp delivered; asked of the agent as `since`.
+    trace_since: Option<String>,
 }
 
 pub struct Bridge {
@@ -228,15 +239,17 @@ impl Bridge {
     pub async fn sync_once(&self, dry_run: bool) -> Result<SyncReport, SyncError> {
         let token = if dry_run { None } else { Some(read_token(&self.cfg.token_file).map_err(SyncError::Failed)?) };
         let new_turns = self.new_turns().await;
+        let new_traces = self.new_traces().await;
         let results: Vec<Value> = self.st().results.clone();
         let body = json!({
             "turns": new_turns,
             "status": self.status().await,
             "results": results,
+            "traces": new_traces,
         });
-        let (turns_sent, results_sent) = (new_turns.len(), results.len());
+        let (turns_sent, results_sent, traces_sent) = (new_turns.len(), results.len(), new_traces.len());
         let Some(token) = token else {
-            return Ok(SyncReport { turns_sent, results_sent, requests: 0, body: dry_run_view(&body) });
+            return Ok(SyncReport { turns_sent, traces_sent, results_sent, requests: 0, body: dry_run_view(&body) });
         };
         let resp = self
             .http
@@ -265,13 +278,16 @@ impl Bridge {
             for t in &new_turns {
                 mark_seen(&mut st, key_of(t));
             }
+            for t in &new_traces {
+                mark_trace_seen(&mut st, t);
+            }
             let n = results_sent.min(st.results.len());
             st.results.drain(..n);
         }
 
         let requests = reply.get("requests").and_then(Value::as_array).cloned().unwrap_or_default();
         self.handle_all(&token, &requests).await;
-        Ok(SyncReport { turns_sent, results_sent, requests: requests.len(), body })
+        Ok(SyncReport { turns_sent, traces_sent, results_sent, requests: requests.len(), body })
     }
 
     /// Unsent final turns from the agent, oldest first, at most 50. An
@@ -292,6 +308,31 @@ impl Bridge {
                         }
                         t
                     })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Traces of finished turns not yet delivered, oldest first, at most 50,
+    /// reduced to the fields the dashboard stores. An agent without the
+    /// route, or an unreachable one, yields none.
+    async fn new_traces(&self) -> Vec<Value> {
+        let since = self.st().trace_since.clone();
+        let mut url = format!("{}/v1/cos/traces?limit=100", self.cfg.agent);
+        if let Some(s) = &since {
+            // Only characters of an RFC 3339 UTC stamp reach the query.
+            if s.bytes().all(|b| b.is_ascii_digit() || matches!(b, b'-' | b':' | b'.' | b'T' | b'Z')) {
+                url.push_str(&format!("&since={}", s.replace(':', "%3A")));
+            }
+        }
+        let Some(v) = self.agent_get(&url).await else { return Vec::new() };
+        v.get("traces")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(contract_trace)
+                    .filter(|t| !self.st().seen_traces.contains(t["turn_id"].as_str().unwrap_or("")))
+                    .take(MAX_TRACES_PER_SYNC)
                     .collect()
             })
             .unwrap_or_default()
@@ -501,6 +542,50 @@ impl Bridge {
     }
 }
 
+/// The dashboard's `cos_traces` fields from an agent trace; `None` for one
+/// without a usable turn id. Lists are cut to the dashboard's size limits and
+/// no field outside the contract is sent.
+fn contract_trace(t: &Value) -> Option<Value> {
+    let turn_id = t.get("turn_id").and_then(Value::as_str).filter(|s| (1..=128).contains(&s.len()))?;
+    let list = |k: &str, max_bytes: usize| -> Vec<Value> {
+        let mut items: Vec<Value> = t.get(k).and_then(Value::as_array).cloned().unwrap_or_default();
+        while !items.is_empty() && serde_json::to_string(&items).map(|s| s.len()).unwrap_or(usize::MAX) > max_bytes {
+            items.pop();
+        }
+        items
+    };
+    let text = |k: &str, max: usize| t.get(k).and_then(Value::as_str).map(|s| s.chars().take(max).collect::<String>()).unwrap_or_default();
+    Some(json!({
+        "turn_id": turn_id,
+        "runtime": t.get("runtime").and_then(Value::as_str).filter(|r| matches!(*r, "local" | "shadow" | "cloud")).unwrap_or("local"),
+        "model": text("model", 128),
+        "role": text("role", 64),
+        "tools_offered": list("tools_offered", MAX_TRACE_LIST_BYTES),
+        "tools_called": list("tools_called", MAX_TRACE_LIST_BYTES),
+        "gates": list("gates", MAX_TRACE_GATES_BYTES),
+        "latency_ms": t.get("latency_ms").and_then(Value::as_u64).filter(|n| *n <= 999_999_999),
+        "cost_usd": t.get("cost_usd").and_then(Value::as_f64).filter(|c| c.is_finite() && (0.0..1000.0).contains(c)),
+        "ts": t.get("ts").and_then(Value::as_str).unwrap_or(""),
+    }))
+}
+
+fn mark_trace_seen(st: &mut Shared, t: &Value) {
+    let Some(id) = t["turn_id"].as_str() else { return };
+    if st.seen_traces.insert(id.to_owned()) {
+        st.seen_trace_order.push_back(id.to_owned());
+        while st.seen_trace_order.len() > SEEN_CAP {
+            if let Some(old) = st.seen_trace_order.pop_front() {
+                st.seen_traces.remove(&old);
+            }
+        }
+    }
+    if let Some(ts) = t["ts"].as_str().filter(|s| !s.is_empty())
+        && st.trace_since.as_deref().is_none_or(|cur| ts > cur)
+    {
+        st.trace_since = Some(ts.to_owned());
+    }
+}
+
 fn mark_seen(st: &mut Shared, key: (String, String)) {
     if st.seen.insert(key.clone()) {
         st.seen_order.push_back(key);
@@ -629,7 +714,7 @@ pub async fn run(args: BridgeArgs) -> anyhow::Result<()> {
                 Ok(())
             }
             Ok(r) => {
-                eprintln!("synced: {} turns, {} requests", r.turns_sent, r.requests);
+                eprintln!("synced: {} turns, {} traces, {} requests", r.turns_sent, r.traces_sent, r.requests);
                 Ok(())
             }
             Err(e) => Err(anyhow::anyhow!("{e}")),

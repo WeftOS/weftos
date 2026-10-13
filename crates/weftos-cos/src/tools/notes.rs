@@ -37,6 +37,7 @@ impl Tool for NotesRecord {
                 "properties": {
                     "text": {"type": "string", "minLength": 3, "maxLength": 4000},
                     "ticket": {"type": "string", "description": "WEFT-N, source id or UUID of the card the note is about."},
+                    "subject": {"type": "string", "description": "Whose note this is. Only the owner is accepted (omit it, or say owner); a note on behalf of or about another person's data is refused."},
                     "project": {"type": "string", "description": "Project UUID when the note is about a project other than the ticket's or the default."},
                     "kind": {"type": "string", "enum": ["decision", "finding", "note", "handoff", "learning"], "description": "Brain entry kind; default note."},
                     "why": {"type": "string", "description": "The reason, so a later reader can tell whether it still holds."},
@@ -51,6 +52,11 @@ impl Tool for NotesRecord {
         let text = need_str(NOTES, &args, "text")?;
         if text.chars().count() > 4000 {
             return Err(tool_err(NOTES, "note is longer than 4000 characters"));
+        }
+        if let Some(subject) = arg_str(&args, "subject")
+            && !crate::guard::subject_is_owner(&subject)
+        {
+            return Err(tool_err(NOTES, "I only have the owner's notes; a note on another person's behalf is refused"));
         }
         let at = chrono::Utc::now().to_rfc3339();
         let mut project = arg_str(&args, "project");

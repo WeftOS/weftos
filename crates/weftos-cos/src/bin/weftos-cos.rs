@@ -16,6 +16,8 @@ enum Cmd {
     Serve(ServeArgs),
     /// Relay the hosted dashboard's phone page to this agent (and its turns back).
     Bridge(weftos_cos::bridge::BridgeArgs),
+    /// Serve the chief of staff as an MCP server on stdio (drives a running agent over cos.v1).
+    Mcp(weftos_cos::mcp_server::McpArgs),
     /// Check, start or stop the local model server.
     #[command(subcommand)]
     Model(weftos_cos::cli::ModelCmd),
@@ -41,6 +43,7 @@ async fn main() -> anyhow::Result<()> {
     match Cli::parse().cmd {
         Cmd::Serve(args) => weftos_cos::cli::serve(args).await,
         Cmd::Bridge(args) => weftos_cos::bridge::run(args).await,
+        Cmd::Mcp(args) => weftos_cos::mcp_server::run(args).await,
         Cmd::Model(cmd) => weftos_cos::cli::model(cmd).await,
         Cmd::Endpoint(cmd) => weftos_cos::cli::endpoint(cmd),
         Cmd::GlanceSerial(args) => weftos_cos::glance::run(args).await,
