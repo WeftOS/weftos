@@ -1,0 +1,46 @@
+[package]
+name = "weftos-node-core"
+version.workspace = true
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = """
+Sans-IO core of the WeftOS phone parent node (docs/plans/phone-parent-node.md, P0):
+node identity, glasses.v1 control/status envelopes, the realtime audio frame header,
+the indicator state machine, led.set, and the leaf-parent pairing state machine.
+UniFFI surface for the Android shell; plain Rust for tests and the iOS shell later.
+"""
+
+[lib]
+name = "weftos_node_core"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[features]
+default = ["uniffi"]
+uniffi = ["dep:uniffi"]
+# Host-only: builds the `uniffi-bindgen` binary used to generate Kotlin/Swift bindings.
+bindgen-cli = ["uniffi", "uniffi/cli"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["bindgen-cli"]
+
+[dependencies]
+ed25519-dalek = { workspace = true }
+rand = { workspace = true }
+sha2 = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+ciborium = { workspace = true }
+thiserror = { workspace = true }
+zeroize = { workspace = true }
+uniffi = { version = "0.29", optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+# Cross-check: both crates must derive the same node id from the same identity file.
+clawft-android-edge = { path = "../clawft-android-edge", default-features = false }

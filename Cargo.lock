@@ -10020,7 +10020,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3291800a6b06569f7d3e15bdb6dc235e0f0c8bd3eb07177f430057feb076415f"
 dependencies = [
  "anyhow",
+ "camino",
  "cargo_metadata",
+ "clap",
  "uniffi_bindgen",
  "uniffi_core",
  "uniffi_macros",
@@ -11447,6 +11449,23 @@ dependencies = [
  "ed25519-dalek",
  "serde",
  "sha2",
+]
+
+[[package]]
+name = "weftos-node-core"
+version = "0.8.4-rc.14"
+dependencies = [
+ "ciborium",
+ "clawft-android-edge",
+ "ed25519-dalek",
+ "rand 0.8.7",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "uniffi",
+ "zeroize",
 ]
 
 [[package]]

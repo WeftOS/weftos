@@ -141,6 +141,8 @@ members = [
     "crates/clawft-bench-voice",
     # WEFT-707 / ADR-077 A3: Android edge core (Ed25519 identity + pair store + splatd upload).
     "crates/clawft-android-edge",
+    # Phone parent-node P0: sans-IO core (identity, glasses.v1, indicator, pairing) + UniFFI.
+    "crates/weftos-node-core",
     # ADR-118 C3: chief-of-staff agent host (conversation API, tools, push-to-talk).
     "crates/weftos-cos",
 ]
