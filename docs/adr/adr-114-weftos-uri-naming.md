@@ -111,8 +111,14 @@ the user key in the genesis-pin slot), and writes a record at `<runtime>/mesh/me
 the user key and the primary's node key. It refuses if any MeshId already exists (licence or
 record). Members learn it when they pair: the pair payload carries the record, checked against the
 key the pairing pins; a tampered or foreign-signed record fails the pair. A licence id always wins
-over a record, and a disagreeing record is reported, not obeyed. `weaver mesh id` prints the id
-and its source (licence, genesis, learned from a node); the heartbeat carries `report.mesh_id`;
+over a record, and a disagreeing record is reported, not obeyed. A node that cannot pair with the
+creator (no ADR-108 pairing, no user key) takes the record by import: `weaver mesh export [--out
+FILE]` on the creator writes the signed record (it holds no secret), `weaver mesh import <FILE|->`
+verifies it as pairing does and accepts it only when its signer node key is already trusted here
+(`workload-peers.json` at pinned/paired, a `workload-host.json` controller, or a mesh pairing);
+never trust-on-first-use. It refuses a different licence id or record, is a no-op for the same
+record, and writes it with origin `imported`. `weaver mesh id` prints the id
+and its source (licence, genesis, learned from a node, imported from a node); the heartbeat carries `report.mesh_id`;
 `weaver project add` refuses a name whose authority is not this node's MeshId. Code:
 `mesh_genesis.rs`.
 

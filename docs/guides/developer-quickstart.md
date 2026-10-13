@@ -18,7 +18,12 @@ project runs, install its router route, remember what was created.
   where it came from. With a Seed licence it is the licence's. Without one,
   create it once, on the mesh's primary: `weaver mesh create`, then restart
   that daemon. Other nodes learn it when they pair with the primary (the
-  dashboard hands them the primary's signed record). A node with no mesh id
+  dashboard hands them the primary's signed record). A node that cannot pair
+  with the primary imports it instead: `weaver mesh export --out mesh.json`
+  there, copy the file, `weaver mesh import mesh.json` here (the record's
+  signer must already be trusted on this node: `workload-peers.json` at
+  pinned/paired, or a `workload-host.json` controller), then restart the
+  daemon. A node with no mesh id
   refuses `weaver project add weftos://...` and says so.
 - Optional: the tailnet router (`[router] enabled = true`, then
   `weaver route serve --apply`) so the project is reachable at
