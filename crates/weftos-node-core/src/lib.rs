@@ -14,10 +14,12 @@
 //! | `led.set` and BES serial lines (3.6) | [`led`] |
 //! | leaf-parent pairing (4.3) | [`pairing`] |
 //! | lanes, framing, fake transport | [`transport`] |
-//! | UniFFI facade for Kotlin/Swift | [`ffi`] |
+//! | glasses (leaf) side: stream reassembly, commands, indicator | [`glasses`] |
+//! | UniFFI facades for Kotlin/Swift (phone, glasses) | [`ffi`], [`ffi_glasses`] |
 
 pub mod audio;
 pub mod error;
+pub mod glasses;
 pub mod identity;
 pub mod indicator;
 pub mod led;
@@ -27,6 +29,8 @@ pub mod transport;
 
 #[cfg(feature = "uniffi")]
 pub mod ffi;
+#[cfg(feature = "uniffi")]
+pub mod ffi_glasses;
 
 pub use error::NodeError;
 
