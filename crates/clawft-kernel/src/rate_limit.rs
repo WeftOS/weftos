@@ -74,7 +74,14 @@ pub struct KeyedRateLimiter {
     config: Mutex<RateLimitConfig>,
     /// Per-key timestamps of recent allowed events (oldest first).
     windows: Mutex<HashMap<String, Vec<Instant>>>,
+    /// Calls so far, to pace the idle-key sweep.
+    calls: std::sync::atomic::AtomicU64,
 }
+
+/// Sweep idle keys every this many `check` calls.
+const SWEEP_EVERY: u64 = 1024;
+/// ...or on any call once the map holds more keys than this.
+const SWEEP_OVER_KEYS: usize = 4096;
 
 impl KeyedRateLimiter {
     /// Create a limiter with the given config.
@@ -82,6 +89,7 @@ impl KeyedRateLimiter {
         Self {
             config: Mutex::new(config),
             windows: Mutex::new(HashMap::new()),
+            calls: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -129,6 +137,13 @@ impl KeyedRateLimiter {
             Err(_) => return true,
         };
 
+        // Amortized sweep: every SWEEP_EVERY calls, or when the map is large,
+        // drop keys whose events have all aged out of the window.
+        let calls = self.calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if calls % SWEEP_EVERY == SWEEP_EVERY - 1 || map.len() > SWEEP_OVER_KEYS {
+            map.retain(|_, v| v.last().is_some_and(|ts| now.duration_since(*ts) < config.window));
+        }
+
         let entry = map.entry(key.to_owned()).or_default();
         entry.retain(|ts| now.duration_since(*ts) < config.window);
 
@@ -165,6 +180,28 @@ impl Default for KeyedRateLimiter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn idle_keys_are_pruned_and_a_recreated_key_still_enforces() {
+        let lim = KeyedRateLimiter::new(RateLimitConfig {
+            max_per_window: 2,
+            window: Duration::from_millis(20),
+        });
+        for i in 0..100 {
+            assert!(lim.check(&format!("k{i}")));
+        }
+        assert_eq!(lim.tracked_keys(), 100);
+        std::thread::sleep(Duration::from_millis(40));
+        // Drive the sweep with a single hot key.
+        for _ in 0..SWEEP_EVERY {
+            lim.check("hot");
+        }
+        assert!(lim.tracked_keys() <= 2, "idle keys were removed, got {}", lim.tracked_keys());
+        // A pruned key comes back with a fresh, still-enforced window.
+        assert!(lim.check("k1"));
+        assert!(lim.check("k1"));
+        assert!(!lim.check("k1"));
+    }
 
     #[test]
     fn unlimited_always_allows() {

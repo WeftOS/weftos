@@ -1047,6 +1047,10 @@ pub struct GovernanceResult {
     pub principal: Option<GatePrincipal>,
 }
 
+/// Context key a kernel-originated request uses to pick its rate-limit
+/// bucket (see [`GovernanceEngine::eval_quota_key`]).
+pub const QUOTA_KEY_CONTEXT: &str = "quota_key";
+
 /// Governance engine.
 ///
 /// Evaluates actions against governance rules and the environment's
@@ -1143,6 +1147,24 @@ impl GovernanceEngine {
         request.node_id.as_deref().unwrap_or("")
     }
 
+    /// The rate-limit bucket for `request`: the principal key, except that
+    /// the kernel itself (principal `0`) may subdivide its quota with a
+    /// `quota_key` context entry of the form `0:<suffix>` (one bucket per
+    /// topic for daemon-originated publishes). Any other principal, or a
+    /// `quota_key` that does not start with `0:`, is ignored, so a caller
+    /// cannot pick its own bucket. Only the bucket changes: deny messages,
+    /// rules and audit still name the principal.
+    pub fn eval_quota_key(request: &GovernanceRequest) -> &str {
+        let principal = Self::eval_principal_key(request);
+        if principal == "0"
+            && let Some(k) = request.context.get(QUOTA_KEY_CONTEXT)
+            && k.starts_with("0:")
+        {
+            return k.as_str();
+        }
+        principal
+    }
+
     /// Install a learned [`GovernanceScorerModel`](crate::eml_kernel::GovernanceScorerModel).
     ///
     /// With a scorer installed, [`evaluate`](Self::evaluate) uses
@@ -1235,7 +1257,7 @@ impl GovernanceEngine {
         let attributed = request.resolved_principal();
         // WEFT-148: per-principal evaluation rate limit.
         let principal = Self::eval_principal_key(request);
-        if !self.eval_limiter.check(principal) {
+        if !self.eval_limiter.check(Self::eval_quota_key(request)) {
             debug!(
                 principal = %principal,
                 action = %request.action,
@@ -1932,6 +1954,72 @@ mod tests {
         for _ in 0..20 {
             assert_eq!(engine.evaluate(&req).decision, GovernanceDecision::Permit);
         }
+    }
+
+    fn topic_req(agent: &str, quota: &str) -> GovernanceRequest {
+        let mut r = GovernanceRequest::new(agent, "ipc.send");
+        r.context.insert(QUOTA_KEY_CONTEXT.into(), quota.into());
+        r
+    }
+
+    fn two_per_window() -> GovernanceEngine {
+        GovernanceEngine::open().with_eval_rate_limit(crate::rate_limit::RateLimitConfig {
+            max_per_window: 2,
+            window: std::time::Duration::from_secs(60),
+        })
+    }
+
+    #[test]
+    fn kernel_topic_buckets_do_not_starve_each_other() {
+        let engine = two_per_window();
+        let a = topic_req("0", "0:mesh.leaf.a.push");
+        let b = topic_req("0", "0:mesh.leaf.b.push");
+        assert_eq!(engine.evaluate(&a).decision, GovernanceDecision::Permit);
+        assert_eq!(engine.evaluate(&a).decision, GovernanceDecision::Permit);
+        assert!(matches!(engine.evaluate(&a).decision, GovernanceDecision::Deny(_)));
+        // The other topic still has its whole quota.
+        assert_eq!(engine.evaluate(&b).decision, GovernanceDecision::Permit);
+        assert_eq!(engine.evaluate(&b).decision, GovernanceDecision::Permit);
+        assert!(matches!(engine.evaluate(&b).decision, GovernanceDecision::Deny(_)));
+    }
+
+    #[test]
+    fn topic_bucket_deny_still_names_the_principal() {
+        let engine = two_per_window();
+        let a = topic_req("0", "0:mesh.leaf.a.push");
+        engine.evaluate(&a);
+        engine.evaluate(&a);
+        match engine.evaluate(&a).decision {
+            GovernanceDecision::Deny(msg) => {
+                assert!(msg.contains("rate limited"), "{msg}");
+                assert!(msg.contains("principal '0'"), "{msg}");
+            }
+            other => panic!("expected Deny, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn only_the_kernel_can_pick_a_quota_bucket() {
+        let engine = two_per_window();
+        // Another principal naming fresh buckets stays on its own bucket.
+        for i in 0..2 {
+            let r = topic_req("agent-x", &format!("0:t{i}"));
+            assert_eq!(engine.evaluate(&r).decision, GovernanceDecision::Permit);
+        }
+        assert!(matches!(
+            engine.evaluate(&topic_req("agent-x", "0:t9")).decision,
+            GovernanceDecision::Deny(_)
+        ));
+        // Principal 0 with a key outside the `0:` namespace is not honoured.
+        let engine = two_per_window();
+        for i in 0..2 {
+            let r = topic_req("0", &format!("other:{i}"));
+            assert_eq!(engine.evaluate(&r).decision, GovernanceDecision::Permit);
+        }
+        assert!(matches!(
+            engine.evaluate(&topic_req("0", "other:9")).decision,
+            GovernanceDecision::Deny(_)
+        ));
     }
 
     #[test]
