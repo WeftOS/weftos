@@ -75,6 +75,8 @@ pub struct SignedMeshRecord {
 pub enum Origin {
     Genesis,
     Learned { node: String },
+    /// Imported with `weaver mesh import` from a signer this node trusts.
+    Imported { node: String },
 }
 
 /// The file's content.
@@ -91,6 +93,7 @@ pub enum IdSource {
     Licence,
     Genesis,
     Learned { node: String },
+    Imported { node: String },
 }
 
 impl IdSource {
@@ -99,6 +102,7 @@ impl IdSource {
             Self::Licence => "licence".into(),
             Self::Genesis => "genesis".into(),
             Self::Learned { node } => format!("learned from {node}"),
+            Self::Imported { node } => format!("imported from {node}"),
         }
     }
 }
@@ -183,7 +187,7 @@ pub fn load(dir: &Path) -> Result<Option<StoredRecord>, String> {
 }
 
 /// Publish `stored` at the record path, failing if a file is already there.
-fn publish(dir: &Path, stored: &StoredRecord) -> Result<(), String> {
+pub(crate) fn publish(dir: &Path, stored: &StoredRecord) -> Result<(), String> {
     use std::io::Write;
     #[cfg(unix)]
     use std::os::unix::fs::OpenOptionsExt;
@@ -299,6 +303,7 @@ fn origin_text(o: &Origin) -> String {
     match o {
         Origin::Genesis => IdSource::Genesis.describe(),
         Origin::Learned { node } => IdSource::Learned { node: node.clone() }.describe(),
+        Origin::Imported { node } => IdSource::Imported { node: node.clone() }.describe(),
     }
 }
 
@@ -319,6 +324,7 @@ pub fn resolve(dir: &Path, licence: Option<MeshId>) -> Result<Option<Resolved>, 
         source: match s.origin {
             Origin::Genesis => IdSource::Genesis,
             Origin::Learned { node } => IdSource::Learned { node },
+            Origin::Imported { node } => IdSource::Imported { node },
         },
         conflicting_record: None,
     }))
@@ -375,6 +381,10 @@ pub fn adopt_licence(dir: &Path, licence: Option<MeshId>) -> Result<MeshId, Stri
     }
     Ok(id)
 }
+
+#[cfg(test)]
+#[path = "mesh_import_tests.rs"]
+mod import_tests;
 
 #[cfg(test)]
 #[path = "mesh_genesis_tests.rs"]

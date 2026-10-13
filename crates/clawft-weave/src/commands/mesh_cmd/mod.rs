@@ -125,8 +125,15 @@ pub enum MeshCmd {
     Create,
     /// Confirm this node uses its Seed licence's MeshId; refuses a conflicting record.
     AdoptLicence,
-    /// Print this node's MeshId and where it came from (licence, genesis, learned).
+    /// Print this node's MeshId and where it came from (licence, genesis, learned, imported).
     Id(crate::commands::mesh_id_cmd::IdArgs),
+    /// Write this node's signed mesh record as JSON (no secrets in it) so a
+    /// node that cannot pair with this one can `weaver mesh import` it.
+    Export(crate::commands::mesh_id_cmd::ExportArgs),
+    /// Import a mesh record exported elsewhere. Accepted only when it is
+    /// signed by a node this node already trusts (workload-peers.json at
+    /// pinned/paired, a workload-host.json controller, or a pairing).
+    Import(crate::commands::mesh_id_cmd::ImportArgs),
     /// Mesh nonce for the Seed licence mesh id (ADR-106); runs locally.
     Nonce {
         #[command(subcommand)]
@@ -272,6 +279,8 @@ pub async fn execute(cmd: MeshCmd, w: &mut dyn Write) -> Result<()> {
         MeshCmd::Create => crate::commands::mesh_id_cmd::create(w).await,
         MeshCmd::AdoptLicence => crate::commands::mesh_id_cmd::adopt_licence(w).await,
         MeshCmd::Id(a) => crate::commands::mesh_id_cmd::id(w, &a).await,
+        MeshCmd::Export(a) => crate::commands::mesh_id_cmd::export(w, &a).await,
+        MeshCmd::Import(a) => crate::commands::mesh_id_cmd::import(w, &a).await,
         MeshCmd::Nonce { cmd } => crate::commands::mesh_nonce::run(cmd, w),
         #[cfg(feature = "placement")]
         MeshCmd::Pair { cmd } => crate::commands::mesh_pair_cmd::run(cmd, w).await,
