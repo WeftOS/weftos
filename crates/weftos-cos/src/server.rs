@@ -7,6 +7,8 @@
 //! GET  /v1/cos/events                          -> text/event-stream of Event
 //! GET  /v1/cos/turns?limit=N                   -> 200 {turns: [{turn_id, role, endpoint, text, ts}]}
 //!                                                 (oldest first; limit 1..=100, default 20)
+//! GET  /v1/cos/status                          -> 200 {state, reason, task, model, lanes_running}
+//!                                                 (latest state/status events; read-only)
 //! GET  /healthz                                -> 200 {ok: true, api: "cos.v1"}
 //! ```
 //!
@@ -101,6 +103,7 @@ pub fn router_auth(conv: Shared, ptt: SharedPtt, tokens: Option<Arc<TokenStore>>
         .route("/v1/cos/ptt", post(ptt_edge))
         .route("/v1/cos/events", get(events))
         .route("/v1/cos/turns", get(turns))
+        .route("/v1/cos/status", get(status))
         .route("/healthz", get(|_caller: Authed| async { Json(json!({"ok": true, "api": API_VERSION})) }))
         .with_state(Api { conv, ptt, tokens })
 }
@@ -254,6 +257,11 @@ async fn turns(State(api): State<Api>, _caller: Authed, RawQuery(query): RawQuer
         Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({"error": e}))),
     };
     (StatusCode::OK, Json(json!({"turns": api.conv.recent_turns(limit)})))
+}
+
+/// `GET /v1/cos/status`: the agent's latest state, task and model.
+async fn status(State(api): State<Api>, _caller: Authed) -> Json<Value> {
+    Json(api.conv.status())
 }
 
 async fn events(State(api): State<Api>, _caller: Authed) -> Sse<impl Stream<Item = Result<SseEvent, Infallible>>> {

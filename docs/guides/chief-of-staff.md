@@ -112,6 +112,35 @@ Reaching the Mac from another machine, two ways:
 
 A remote endpoint sees the whole event stream, not just its own turns.
 
+## Dashboard bridge (the phone page)
+
+The hosted dashboard cannot reach the Mac's loopback API and holds no endpoint
+bearer, so `weftos-cos bridge` relays through the dashboard with the node's
+existing credential (contract: `docs/plans/cos-dashboard-bridge.md`). Every 2 s
+it POSTs `/api/nodes/cos/sync` with the new final turns (at most 50 per call, each
+sent once), a status snapshot (the agent's state, task and model from
+`GET /v1/cos/status`, plus the glasses `listen.status.json` and `speak.status.json`
+under `~/.weftos/run/mentra/`; a missing file is `null`, an unreadable one is
+`{"error": ...}`) and the outcomes of earlier requests. Each queued request the
+dashboard returns is posted to `POST /v1/cos/utterance` as a `typed` turn over
+loopback, and reported `accepted` (with its `turn_id`) or `failed` (with the
+error) in the next sync. It never calls `/v1/cos/ptt`.
+
+It reads `url` and `token_file` from `[dashboard]` in `~/.weftos/weave.toml`, the
+same section the weaver reporter uses (https, or http to loopback; the token file
+must be a regular 0600 file). The token is read on each sync and never logged.
+
+```bash
+scripts/build.sh cos-bridge                     # weftos-cos bridge, from ~/.weftos/bin/weftos-cos
+weftos-cos bridge --dry-run                     # print the sync body (text cut to 80 chars, no token), post nothing
+weftos-cos bridge --once                        # a single sync, exit non-zero if it failed
+weftos-cos bridge --agent http://127.0.0.1:18300 --interval-ms 2000
+```
+
+On a dashboard error it backs off to 30 s and logs one line per state change; a
+401 or 403 logs "node token rejected". The agent must be running (`serve`); with
+it down, turns are not sent and the status shows `healthy: false`.
+
 ## Tools
 
 Read: `projects.activity`, `board.read`, `card.current`, `nodes.health`, `mesh.routes`.

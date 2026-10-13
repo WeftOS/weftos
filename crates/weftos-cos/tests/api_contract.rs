@@ -89,3 +89,26 @@ async fn planning_turns_route_to_the_plan_model() {
     assert_eq!(plan.models.lock().unwrap().as_slice(), ["big-model"], "adapter gets the bare model");
     assert!(quick.models.lock().unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn status_route_reports_the_latest_state_task_and_model() {
+    let t = common::build_agent(common::ScriptedLlm::new(vec![common::ScriptedLlm::text("ok")]), None, None).await;
+    let conv: std::sync::Arc<dyn weftos_cos::conversation::Conversation> = std::sync::Arc::new(t.agent.clone());
+    let (addr, server) = weftos_cos::server::bind(conv.clone(), "127.0.0.1:0".parse().unwrap()).await.unwrap();
+    tokio::spawn(server);
+    let url = format!("http://{addr}/v1/cos/status");
+    let first = reqwest::get(&url).await.unwrap();
+    assert_eq!(first.status(), 200);
+    assert_eq!(first.json::<serde_json::Value>().await.unwrap()["state"], serde_json::Value::Null);
+
+    conv.utter(weftos_cos::UserUtterance::typed("hello")).await.unwrap();
+    for _ in 0..100 {
+        let v = reqwest::get(&url).await.unwrap().json::<serde_json::Value>().await.unwrap();
+        if v["state"] == "idle" {
+            assert!(v["lanes_running"].is_number());
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    panic!("state never became idle");
+}
