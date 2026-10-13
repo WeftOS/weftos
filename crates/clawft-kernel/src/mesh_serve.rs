@@ -108,24 +108,23 @@ pub async fn serve_listener_with(
     let mut conns = tokio::task::JoinSet::new();
     if let Some(ingress) = runtime.leaf_ingress().cloned()
         && let Ok(mesh_addr) = bind.parse::<std::net::SocketAddr>() {
-            match crate::mesh_leaf_bind::LeafBindSpec::resolve(runtime.leaf_bind_spec(), mesh_addr) {
-                Err(e) => tracing::error!(error = %e, "certified leaf listener unavailable; no leaf discovery started"),
-                Ok(plan) => match crate::mesh_tcp::TcpTransport.listen(&plan.tcp.to_string()).await {
-                    Ok(leaf_listener) => {
-                        let tcp = leaf_listener.local_addr().unwrap_or(plan.tcp);
-                        let discovery = plan.discovery;
-                        runtime.note_leaf_bound(crate::mesh_leaf_bind::LeafBind { tcp, discovery });
-                        let leaf_rt = Arc::clone(&runtime);
-                        conns.spawn(async move { serve_signed_leaf_listener(leaf_rt, leaf_listener, limits).await });
-                        conns.spawn(async move {
-                            if let Err(e) = ingress.serve_discovery(discovery, tcp.port()).await {
-                                tracing::error!(error = %e, "leaf discovery stopped");
-                            }
-                        });
-                        tracing::info!(addr = %tcp, discovery = %discovery, "dedicated certified leaf listener started");
+            // One endpoint per configured address, all sharing this runtime's
+            // single LeafIngress (one registry, keys, replay and ACK state).
+            let specs = runtime.leaf_bind_specs();
+            let plans: Vec<_> = if specs.is_empty() {
+                vec![crate::mesh_leaf_bind::LeafBindSpec::resolve(None, mesh_addr)]
+            } else {
+                specs.iter().map(|s| crate::mesh_leaf_bind::LeafBindSpec::resolve(Some(s), mesh_addr)).collect()
+            };
+            for plan in plans {
+                match plan {
+                    Err(e) => tracing::error!(error = %e, "certified leaf listener unavailable; no leaf discovery started"),
+                    Ok(plan) => {
+                        let rt = Arc::clone(&runtime);
+                        let ingress = Arc::clone(&ingress);
+                        conns.spawn(async move { run_leaf_endpoint(rt, ingress, plan, limits).await });
                     }
-                    Err(e) => tracing::error!(addr = %plan.tcp, error = %e, "certified leaf listener unavailable; no leaf discovery started"),
-                },
+                }
             }
     }
     let slots = Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
@@ -160,6 +159,40 @@ pub async fn serve_listener_with(
             }
         }
     }
+}
+
+/// One certified-leaf address: bind its TCP listener, then serve it and its
+/// discovery socket. A failed bind (for example a tailnet interface that is
+/// not up yet) is logged and retried, and never affects the other addresses.
+async fn run_leaf_endpoint(
+    runtime: Arc<MeshRuntime>,
+    ingress: Arc<crate::mesh_leaf::LeafIngress>,
+    plan: crate::mesh_leaf_bind::LeafBind,
+    limits: Limits,
+) {
+    let mut warned = false;
+    let leaf_listener = loop {
+        match crate::mesh_tcp::TcpTransport.listen(&plan.tcp.to_string()).await {
+            Ok(l) => break l,
+            Err(e) => {
+                if !warned {
+                    tracing::error!(addr = %plan.tcp, error = %e, "certified leaf listener cannot bind; other leaf addresses continue, retrying");
+                    warned = true;
+                }
+                tokio::time::sleep(runtime.leaf_bind_retry()).await;
+            }
+        }
+    };
+    let tcp = leaf_listener.local_addr().unwrap_or(plan.tcp);
+    let discovery = plan.discovery;
+    runtime.note_leaf_bound(crate::mesh_leaf_bind::LeafBind { tcp, discovery });
+    tracing::info!(addr = %tcp, discovery = %discovery, "dedicated certified leaf listener started");
+    let discover = async move {
+        if let Err(e) = ingress.serve_discovery(discovery, tcp.port()).await {
+            tracing::error!(error = %e, "leaf discovery stopped");
+        }
+    };
+    tokio::join!(serve_signed_leaf_listener(runtime, leaf_listener, limits), discover);
 }
 
 /// Separate bounded TCP ingress for WLF1 only. The ordinary mesh listener

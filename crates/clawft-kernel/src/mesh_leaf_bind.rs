@@ -47,6 +47,24 @@ impl LeafBindSpec {
         Ok(Self { ip, port })
     }
 
+    /// Parse every `leaf_listen_addr` entry. An empty list and duplicate
+    /// entries (same IP and explicit port) are refused; each entry follows
+    /// [`parse`](Self::parse), so the wildcard rule applies per entry.
+    pub fn parse_all(entries: &[&str], any: bool) -> Result<Vec<Self>, String> {
+        if entries.is_empty() {
+            return Err("leaf_listen_addr is an empty list; name at least one address or remove the key".into());
+        }
+        let mut out: Vec<Self> = Vec::with_capacity(entries.len());
+        for e in entries {
+            let spec = Self::parse(e, any)?;
+            if out.contains(&spec) {
+                return Err(format!("leaf_listen_addr lists {} twice", e.trim()));
+            }
+            out.push(spec);
+        }
+        Ok(out)
+    }
+
     /// Resolve against the main listener's bound address.
     pub fn resolve(spec: Option<&Self>, mesh: SocketAddr) -> Result<LeafBind, String> {
         let no_room = || "mesh port leaves no room for the leaf ports above it".to_string();
@@ -102,6 +120,40 @@ mod tests {
         assert!(LeafBindSpec::parse("::", false).is_err());
         assert!(LeafBindSpec::parse("0.0.0.0:9600", true).is_ok());
         assert!(LeafBindSpec::parse("::", true).is_ok());
+    }
+
+    #[test]
+    fn list_parses_each_entry_in_order() {
+        let v = LeafBindSpec::parse_all(&["192.0.2.10", "100.64.0.5:9600"], false).unwrap();
+        assert_eq!(v.len(), 2);
+        assert_eq!(v[0].ip.to_string(), "192.0.2.10");
+        assert_eq!(v[1].port, Some(9600));
+        assert_eq!(LeafBindSpec::parse_all(&["192.0.2.10"], false).unwrap(), vec![LeafBindSpec::parse("192.0.2.10", false).unwrap()]);
+    }
+
+    #[test]
+    fn list_refuses_an_invalid_entry_naming_it() {
+        let e = LeafBindSpec::parse_all(&["192.0.2.10", "lan.example"], false).unwrap_err();
+        assert!(e.contains("lan.example"), "{e}");
+    }
+
+    #[test]
+    fn list_refuses_duplicates_and_empty() {
+        assert!(LeafBindSpec::parse_all(&["192.0.2.10", " 192.0.2.10"], false).unwrap_err().contains("twice"));
+        assert!(LeafBindSpec::parse_all(&["192.0.2.10:9600", "192.0.2.10:9600"], false).is_err());
+        assert!(LeafBindSpec::parse_all(&["192.0.2.10:9600", "192.0.2.10"], false).is_ok());
+        assert!(LeafBindSpec::parse_all(&[], false).unwrap_err().contains("empty"));
+    }
+
+    #[test]
+    fn list_applies_the_wildcard_rule_per_entry() {
+        assert!(LeafBindSpec::parse_all(&["192.0.2.10", "0.0.0.0"], false).unwrap_err().contains("leaf_listen_any"));
+        assert!(LeafBindSpec::parse_all(&["192.0.2.10", "0.0.0.0:9600"], true).is_ok());
+    }
+
+    #[test]
+    fn list_checks_port_room_per_entry() {
+        assert!(LeafBindSpec::parse_all(&["192.0.2.10", "100.64.0.5:1"], false).is_err());
     }
 
     #[test]

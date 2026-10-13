@@ -187,9 +187,11 @@ pub struct MeshRuntime {
     /// Installed ADR-103 leaf certificate and replay gate.
     leaf_ingress: std::sync::OnceLock<Arc<crate::mesh_leaf::LeafIngress>>,
     /// Configured leaf bind (absent: derived from the main listener).
-    leaf_bind_spec: std::sync::OnceLock<crate::mesh_leaf_bind::LeafBindSpec>,
-    /// Where the leaf listeners actually bound, once they have.
-    leaf_bound: std::sync::OnceLock<crate::mesh_leaf_bind::LeafBind>,
+    leaf_bind_specs: std::sync::OnceLock<Vec<crate::mesh_leaf_bind::LeafBindSpec>>,
+    /// Where the leaf listeners actually bound, in the order they came up.
+    leaf_bound: std::sync::Mutex<Vec<crate::mesh_leaf_bind::LeafBind>>,
+    /// Milliseconds between retries of a leaf address that failed to bind.
+    leaf_bind_retry_ms: std::sync::atomic::AtomicU64,
     authentication: std::sync::OnceLock<MeshAuthentication>,
     /// Local node identifier.
     node_id: String,
@@ -249,21 +251,45 @@ impl MeshRuntime {
 
     /// Install the configured leaf bind before the listener starts.
     pub fn set_leaf_bind_spec(&self, spec: crate::mesh_leaf_bind::LeafBindSpec) -> bool {
-        self.leaf_bind_spec.set(spec).is_ok()
+        self.set_leaf_bind_specs(vec![spec])
     }
 
-    pub fn leaf_bind_spec(&self) -> Option<&crate::mesh_leaf_bind::LeafBindSpec> {
-        self.leaf_bind_spec.get()
+    /// Install every configured leaf bind (one listener each).
+    pub fn set_leaf_bind_specs(&self, specs: Vec<crate::mesh_leaf_bind::LeafBindSpec>) -> bool {
+        self.leaf_bind_specs.set(specs).is_ok()
     }
 
-    /// Where the certified-leaf TCP and discovery sockets are bound, or
-    /// `None` when no leaf listener is running.
-    pub fn leaf_bound(&self) -> Option<&crate::mesh_leaf_bind::LeafBind> {
-        self.leaf_bound.get()
+    /// The configured leaf binds; empty means derive from the main listener.
+    pub fn leaf_bind_specs(&self) -> &[crate::mesh_leaf_bind::LeafBindSpec] {
+        self.leaf_bind_specs.get().map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    /// The first bound certified-leaf TCP and discovery pair, or `None`
+    /// when no leaf listener is running.
+    pub fn leaf_bound(&self) -> Option<crate::mesh_leaf_bind::LeafBind> {
+        self.leaf_bounds().into_iter().next()
+    }
+
+    /// Every bound certified-leaf listener.
+    pub fn leaf_bounds(&self) -> Vec<crate::mesh_leaf_bind::LeafBind> {
+        self.leaf_bound.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// How long a leaf address that failed to bind waits before the next try.
+    pub(crate) fn leaf_bind_retry(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(self.leaf_bind_retry_ms.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_leaf_bind_retry(&self, d: std::time::Duration) {
+        self.leaf_bind_retry_ms.store(d.as_millis() as u64, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub(crate) fn note_leaf_bound(&self, bound: crate::mesh_leaf_bind::LeafBind) {
-        let _ = self.leaf_bound.set(bound);
+        let mut v = self.leaf_bound.lock().unwrap_or_else(|e| e.into_inner());
+        if !v.contains(&bound) {
+            v.push(bound);
+        }
     }
     pub fn set_authentication(&self, auth: MeshAuthentication) -> bool {
         self.authentication.set(auth).is_ok()
@@ -307,8 +333,9 @@ impl MeshRuntime {
     pub fn new(node_id: String) -> Self {
         Self {
             leaf_ingress: std::sync::OnceLock::new(),
-            leaf_bind_spec: std::sync::OnceLock::new(),
-            leaf_bound: std::sync::OnceLock::new(),
+            leaf_bind_specs: std::sync::OnceLock::new(),
+            leaf_bound: std::sync::Mutex::new(Vec::new()),
+            leaf_bind_retry_ms: std::sync::atomic::AtomicU64::new(15_000),
             authentication: std::sync::OnceLock::new(),
             node_id,
             peers: DashMap::new(),
@@ -335,8 +362,9 @@ impl MeshRuntime {
     pub fn with_discovery(node_id: String, kademlia_id: [u8; 32]) -> Self {
         Self {
             leaf_ingress: std::sync::OnceLock::new(),
-            leaf_bind_spec: std::sync::OnceLock::new(),
-            leaf_bound: std::sync::OnceLock::new(),
+            leaf_bind_specs: std::sync::OnceLock::new(),
+            leaf_bound: std::sync::Mutex::new(Vec::new()),
+            leaf_bind_retry_ms: std::sync::atomic::AtomicU64::new(15_000),
             authentication: std::sync::OnceLock::new(),
             node_id,
             peers: DashMap::new(),

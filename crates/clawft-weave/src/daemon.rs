@@ -6079,8 +6079,14 @@ async fn dispatch(
                 leaf_listeners: k.a2a_router().mesh_runtime().and_then(|rt| rt.leaf_bound()).map(|b| {
                     crate::protocol::LeafListeners { tcp: b.tcp.to_string(), discovery: b.discovery.to_string() }
                 }),
+                #[cfg(feature = "mesh")]
+                leaf_listener_list: k.a2a_router().mesh_runtime().map(|rt| rt.leaf_bounds()).unwrap_or_default().into_iter().map(|b| {
+                    crate::protocol::LeafListeners { tcp: b.tcp.to_string(), discovery: b.discovery.to_string() }
+                }).collect(),
                 #[cfg(not(feature = "mesh"))]
                 leaf_listeners: None,
+                #[cfg(not(feature = "mesh"))]
+                leaf_listener_list: Vec::new(),
             };
             Response::success(serde_json::to_value(result).unwrap())
         }

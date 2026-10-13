@@ -101,11 +101,20 @@ enabled = true
 listen_addr = "127.0.0.1:9489"      # main mesh: loopback only
 leaf_listen_addr = "192.0.2.10"     # leaf TCP 192.0.2.10:9491, discovery udp 192.0.2.10:9490
 # leaf_listen_addr = "192.0.2.10:9600"   # explicit: TCP 9600, discovery udp 9599
+# LAN and tailnet at once (phone-hotspot glasses over Tailscale, ESP32 on the LAN):
+# leaf_listen_addr = ["192.0.2.10", "100.64.0.5"]
 ```
+
+A list binds one leaf listener plus discovery socket per entry; every entry
+follows the rules here (wildcard needs `leaf_listen_any`, duplicates are
+refused). All addresses feed one certificate registry, one set of keys and
+one replay/ACK state, so a leaf joining over either address is the same
+leaf. An address that cannot bind (a tailnet interface that is not up yet) is
+logged and retried every 15 seconds; the others keep serving.
 
 A wildcard (`0.0.0.0`, `::`) is refused at boot unless
 `leaf_listen_any = true` is also set. `weaver kernel status` prints
-`Leaf bind:  tcp <addr> / discovery udp <addr>` once the listeners are up.
+`Leaf bind:  tcp <addr> / discovery udp <addr>` once the listeners are up, one line per bound address.
 Discovery advertises the leaf bind IP (for a wildcard, the interface that
 answers the asking leaf). This key applies to the in-daemon mesh
 (`[kernel.mesh]`); the machine mesh service reads its own `mesh.toml`.
