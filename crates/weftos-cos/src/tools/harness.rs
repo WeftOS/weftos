@@ -25,6 +25,9 @@ pub enum History {
     BadRequest(String),
     /// Network failure, 5xx or a rejected credential.
     Unavailable(String),
+    /// No project was given and none is configured: nothing was asked for,
+    /// so nothing failed.
+    NotRequested,
 }
 
 impl History {
@@ -34,6 +37,7 @@ impl History {
             Self::NoAccess => json!({"available": false, "reason": "no history access for this project"}),
             Self::BadRequest(m) => json!({"available": false, "reason": format!("history request refused: {m}")}),
             Self::Unavailable(m) => json!({"available": false, "reason": format!("history unavailable right now: {m}")}),
+            Self::NotRequested => json!({"available": false, "requested": false, "reason": "not requested"}),
         }
     }
 }
@@ -236,6 +240,9 @@ impl HarnessClient {
     /// is not accessible, or is unavailable right now. The token is only
     /// ever the Authorization header and appears in no message here.
     pub async fn history(&self, project: Option<&str>, query: &[(&str, String)]) -> History {
+        if project.is_none() && self.events_path.contains("{project_id}") && self.project_id.is_none() {
+            return History::NotRequested;
+        }
         let path = match self.events_path_for(project) {
             Ok(p) => p,
             Err(e) => return History::Unavailable(format!("no project to read history for ({e})")),
@@ -316,6 +323,18 @@ pub(crate) fn bounded_rows(tickets: &[Value], limit: usize) -> (Vec<Value>, Opti
     (rows, (more > 0).then(|| format!("+{more} more; narrow with a status or use board.search")))
 }
 
+/// Drop `done` tickets unless `status` asks for them; the second value is how
+/// many were left out.
+fn hide_done(tickets: Vec<Value>, status: Option<&str>) -> (Vec<Value>, usize) {
+    if status == Some("done") {
+        return (tickets, 0);
+    }
+    let before = tickets.len();
+    let open: Vec<Value> = tickets.into_iter().filter(|t| t["status"] != "done").collect();
+    let hidden = before - open.len();
+    (open, hidden)
+}
+
 /// A goal for the model: the outcome text stays on the board (a goal's
 /// description runs to a kilobyte and buried the tickets in the prompt).
 fn condense_goal(g: &Value) -> Value {
@@ -350,6 +369,9 @@ impl Tool for ProjectsActivity {
         let status = arg_str(&args, "status");
         let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(10).clamp(1, 25) as usize;
         let tickets = self.client.tickets(status.as_deref(), 500).await?;
+        // Done cards are not open work: unless asked for by status, leave them
+        // out so a ranked list of moves cannot propose closing them.
+        let (tickets, done_hidden) = hide_done(tickets, status.as_deref());
         let goals = self
             .client
             .get("/api/harness/goals?limit=100&offset=0")
@@ -381,9 +403,15 @@ impl Tool for ProjectsActivity {
             tickets.len(),
             status.map(|s| format!(" in {s}")).unwrap_or_default(),
             goals.len(),
-            if history["available"] == true { "read" } else { history["reason"].as_str().unwrap_or("unavailable") }
+            if history["available"] == true {
+                "read"
+            } else if history["requested"] == false {
+                "not requested"
+            } else {
+                history["reason"].as_str().unwrap_or("unavailable")
+            }
         );
-        Ok(ToolOutcome { summary, result: json!({"total": tickets.len(), "shown": condensed.len(), "tickets": condensed, "more": more, "goals": goals, "history": history}) })
+        Ok(ToolOutcome { summary, result: json!({"total": tickets.len(), "shown": condensed.len(), "tickets": condensed, "more": more, "done_hidden": done_hidden, "goals": goals, "history": history}) })
     }
 }
 
@@ -396,6 +424,17 @@ mod tests {
     fn t(n: usize) -> Value {
         json!({"id": format!("{n:08x}-0000-0000-0000-000000000000"), "status": "in_progress", "priority": null,
                "title": format!("Real card number {n}"), "source_url": format!("https://x/WEFT-{n}")})
+    }
+
+    #[test]
+    fn done_cards_are_hidden_unless_asked_for() {
+        let mut all: Vec<Value> = (1..=3).map(t).collect();
+        all[1]["status"] = json!("done");
+        let (open, hidden) = hide_done(all.clone(), None);
+        assert_eq!((open.len(), hidden), (2, 1));
+        assert!(open.iter().all(|x| x["status"] != "done"));
+        let (all_back, hidden) = hide_done(all, Some("done"));
+        assert_eq!((all_back.len(), hidden), (3, 0));
     }
 
     #[test]

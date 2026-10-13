@@ -56,6 +56,13 @@ mod tests {
     }
 
     #[test]
+    fn persona_routes_versions_to_node_health_and_ranks_from_one() {
+        let p = persona();
+        assert!(p.contains("version") && p.contains("call `nodes.health` and report the"), "version rule missing");
+        assert!(p.contains("Number it from 1 upward") && p.contains("`done` is finished"));
+    }
+
+    #[test]
     fn persona_has_no_frontmatter() {
         let p = persona();
         assert!(p.starts_with("# Who you are"), "got: {}", &p[..40.min(p.len())]);
