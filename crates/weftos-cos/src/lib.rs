@@ -25,6 +25,7 @@ pub mod endpoints;
 pub mod conversation;
 pub mod events;
 pub mod glance;
+pub mod guard;
 pub mod guide;
 pub mod host;
 pub mod mcp_catalog;

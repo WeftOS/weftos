@@ -415,6 +415,19 @@ impl Inner {
             return self.answer_pending(turn_id, utterance, pending, tb).await;
         }
 
+        // One owner: another person's notes or data are refused outright,
+        // with no model call and no tool.
+        if crate::guard::asks_for_someone_elses_data(&utterance.text) {
+            tb.model = "none".into();
+            tb.role = "refusal".into();
+            self.status("refusing", "none");
+            let text = crate::guard::REFUSAL.to_string();
+            self.history.lock().await.push(json!({"role": "assistant", "content": text}));
+            self.emit(Event::state(AgentState::Speaking));
+            self.emit(Event::Message { turn_id: turn_id.clone(), text, is_final: true, endpoint: None, speak: false });
+            return Ok(());
+        }
+
         let (tier, route) = self.routes.pick(&utterance.text);
         let task = self.task_name(&utterance.text, tier, source);
         self.status(&task, &route.model_id);
