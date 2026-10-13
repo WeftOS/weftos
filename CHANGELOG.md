@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Staging area for changes after the 0.8.4 cut.
 
+## [0.8.4-rc.13] - 2026-10-13
+
+### Fixed
+- Mesh pairing with a primary that did not create the mesh: a node holding an imported or learned
+  MeshId record now countersigns it (separate signing domain) when it sends it to members, and a
+  member accepts a record signed by its pinned primary or countersigned by it. The pin still
+  stops a relay from substituting another mesh's record. Old records are unchanged on disk and on the
+  wire; upgrade members before primaries, then retry the failed pairing.
+
 ## [0.8.4-rc.12] - 2026-10-13
 
 ### Added
