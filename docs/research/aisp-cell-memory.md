@@ -114,3 +114,21 @@ Goal: measure how much of the "recovery" comes from structure we can add cheaply
 - https://github.com/ruvnet/ruvector at 31549f7 (2026-10-11): `crates/ruvector-kge/src/lib.rs`, `npm/packages/kge/docs/adr/`, `docs/research/gnn-v2/14-semantic-holography.md`. Read 2026-10-12.
 - https://github.com/ruvnet/metaharness `docs/adrs/ADR-048-formal-proof-swarm-ruvnet-algo-stack.md` (AISP as swarm-contract notation), via GitHub code search 2026-10-12; not read in full.
 - Local: `docs/adr/adr-114-weftos-uri-naming.md`, `agents/schemas/brain-metadata.schema.json`, `crates/weftos/src/init/digest.rs`, `crates/clawft-core/src/embeddings/hnsw_store.rs`, `crates/clawft-cow-memory/src/lib.rs`.
+
+## Addendum — the "trained AI index (KGE)" baseline (2026-10-13)
+
+The owner pointed at `@ruvector/kge` (npm 0.2.0, MIT; Rust crate `ruvector-kge` 2.4.0 in
+ruvnet/ruvector; its package ADRs 001-006 are all Proposed, dated 2026-09-21). It provides
+holographic knowledge-graph embeddings (HolE and RotatE scorers): link prediction, relation
+similarity and 2-hop composition, with candidate retrieval over HNSW, native via napi-rs with a
+WASM fallback and no network calls (`npm/packages/kge/src/index.ts`,
+`crates/ruvector-kge/Cargo.toml`). This makes it the likely "trained AI index (KGE)" in the
+infographic, which fits the "~5 minutes of training, finds things by similarity" description.
+
+Consequence for the comparison: a KGE model is built to rank likely triples (link prediction),
+not to answer exact lookup questions such as "which parent did this deleted piece belong to" or
+"where did it come from". Scoring it on those questions measures it outside its job, so its
+41.70% (and 4.67% wrong) is a weak baseline rather than evidence that structure beats learned
+indexes in general. The fair comparison remains a plain parent/children index (see the
+experiment above). `@ruvector/kge` is still worth noting for WeftOS as a link-prediction tool over
+brain graphs (suggesting missing relations), which is a different job from integrity recovery.
