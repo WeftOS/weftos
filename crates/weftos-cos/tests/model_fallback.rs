@@ -53,7 +53,7 @@ async fn a_dead_local_model_falls_back_and_the_status_names_the_cloud_model() {
     let events = collect_until_final(&mut rx, Duration::from_secs(2)).await;
     let s = statuses(&events);
     assert_eq!(s[0].1, "local/mlx-qwen", "the first status is the primary: {s:?}");
-    assert_eq!(s.last().unwrap(), &("typed turn (fallback)".to_string(), "anthropic/claude-haiku".to_string()));
+    assert_eq!(s.last().unwrap(), &("Where are we (fallback)".to_string(), "anthropic/claude-haiku".to_string()));
     assert!(events.iter().any(|e| matches!(e, Event::Message { text, .. } if text.contains("Two of three"))));
     assert_eq!(cloud.models.lock().unwrap().as_slice(), ["claude-haiku"]);
 }

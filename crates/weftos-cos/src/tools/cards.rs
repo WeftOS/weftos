@@ -15,11 +15,27 @@ use crate::CosError;
 /// The card the conversation is currently about. Set by reading, claiming or
 /// noting a card; `card.current` reports it.
 #[derive(Clone, Default)]
-pub struct Focus(Arc<Mutex<Option<String>>>);
+pub struct Focus(Arc<Mutex<Option<String>>>, Arc<Mutex<Option<String>>>);
 
 impl Focus {
     pub fn set(&self, reference: &str) {
         *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(reference.to_string());
+        *self.1.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+
+    /// Remember the card's title for the status line.
+    pub fn set_title(&self, title: &str) {
+        *self.1.lock().unwrap_or_else(|e| e.into_inner()) = Some(title.to_string());
+    }
+
+    /// `WEFT-N: title` when both are known, else the reference alone.
+    pub fn get_titled(&self) -> Option<String> {
+        let r = self.get()?;
+        let title = self.1.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        Some(match title {
+            Some(t) => clip(&format!("{r}: {t}"), 48),
+            None => r,
+        })
     }
 
     pub fn get(&self) -> Option<String> {
@@ -64,6 +80,9 @@ impl Tool for BoardRead {
         let reference = need_str(READ, &args, "ticket")?;
         let t = self.client.resolve_ticket(&reference).await?;
         self.focus.set(&reference);
+        if let Some(title) = t["title"].as_str() {
+            self.focus.set_title(title);
+        }
         let card = full_ticket(&t);
         let summary = format!("read {reference}: {}", card["title"].as_str().unwrap_or("(untitled)"));
         Ok(ToolOutcome { summary, result: json!({"card": card}) })
@@ -95,6 +114,9 @@ impl Tool for BoardClaim {
         let id = t["id"].as_str().ok_or_else(|| tool_err(CLAIM, "ticket has no id"))?;
         let res = self.client.post("/api/harness/tickets", &json!({"ticket_id": id, "action": "claim"})).await?;
         self.focus.set(&reference);
+        if let Some(title) = t["title"].as_str() {
+            self.focus.set_title(title);
+        }
         Ok(ToolOutcome { summary: format!("claimed {reference}"), result: json!({"claimed": true, "ticket": reference, "board": res}) })
     }
 }
@@ -129,6 +151,9 @@ impl Tool for BoardNote {
         let id = t["id"].as_str().ok_or_else(|| tool_err(NOTE, "ticket has no id"))?;
         let res = self.client.post("/api/harness/tickets", &json!({"ticket_id": id, "action": "comment", "value": text})).await?;
         self.focus.set(&reference);
+        if let Some(title) = t["title"].as_str() {
+            self.focus.set_title(title);
+        }
         Ok(ToolOutcome { summary: format!("commented on {reference}: {}", clip(&text, 60)), result: json!({"commented": true, "ticket": reference, "board": res}) })
     }
 }
