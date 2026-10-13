@@ -390,7 +390,7 @@ Return shape for both modes **[D]**:
 
 | Concern | Design **[D]** |
 |---|---|
-| **Catalog** | The dashboard lists approved MCP servers (name, purpose, auth type, tools, risk class). Users add from the catalog. A user-supplied URL is allowed only after the owner enables custom servers (Q16) |
+| **Catalog** | A WeaveLogic-signed catalog of authorized servers (section 4b.3a). Users enable entries from it. A user-supplied URL is allowed only after the owner enables custom servers (Q16), and is treated as unvetted |
 | **Connect** | OAuth (authorization code with PKCE, redirect to the dashboard) or BYOK (paste a key). The token is exchanged by the dashboard and handed to the user's DO, sealed with the user's data key (section 3.3). The model never sees it |
 | **Call path** | DO to the MCP server over streamable HTTP with the user's token; tool schemas cached per server with a hash; changed schemas trigger re-review (a "rug pull" guard) |
 | **Allow-list** | Per-tool, default none. The user (or owner policy) enables specific tools, and each tool carries a class |
@@ -408,6 +408,115 @@ Where MCP lives per mode:
 | stdio MCP | No | Yes |
 | MCP on the user's node | Through the device hub as an exposure `mcp.<name>` (ADR-120) | Direct |
 | Secrets | Sealed per user | Keychain or 0600 file |
+
+### 4b.3a The WeaveLogic authorized MCP catalog
+
+**Owner direction (2026-10-13):** the chief of staff "needs to lean in on MCP servers, and we can provide authorized ones." So MCP is the primary extension path, and WeaveLogic curates the default set. The catalog is a first-class, signed artifact, with the same trust model as the cog repository (COG-008).
+
+**Trust model, reused from COG-008 [V]** (`crates/weftos-cog-repo/src/lib.rs`): a repository is a `registry.json` of entries, each signed with an Ed25519 key over the bytes; consumers pin the public key and refuse anything unsigned, signed by another key, or with a digest mismatch; a revoked key never verifies (`revoked.rs`); the private key lives in a CI secret (`WEAVELOGIC_RELEASE_KEY`), never on a laptop. "Signed-only, always" is the existing decision. The MCP catalog follows it, with one change: the signed bytes are the **entry document**, not a binary, because most servers are remote.
+
+#### Catalog entry (signed document) **[D]**
+
+```json
+{
+  "schema": "weftos.mcp-catalog-entry/1",
+  "id": "flights",
+  "version": "1.2.0",
+  "title": "Flights and travel search",
+  "publisher": "weavelogic",
+  "transport": {"kind": "http", "endpoint_ref": "catalog://flights"},
+  "hosting": "weavelogic-cloudflare | vendor | user-node",
+  "auth": {"kind": "oauth2-pkce | byok | none", "scopes": ["search"], "provider": "..."},
+  "tools": [
+    {"name": "search", "class": "read",    "scopes": ["search"],  "schema_sha256": "sha256:...", "pii": ["itinerary"]},
+    {"name": "hold",   "class": "outward", "scopes": ["booking"], "schema_sha256": "sha256:...", "confirm_fields": ["price", "itinerary"]}
+  ],
+  "egress": ["api.flights-vendor.example"],
+  "data_handling": {"retention": "none", "sends": ["tool args only"]},
+  "review": {"reviewed_at": "2026-10-20", "reviewer": "...", "checklist": "sha256:...", "next_review": "2027-01-20"},
+  "requires": {"cos_min": "2.0"},
+  "signature": {"alg": "ed25519", "key_id": "...", "sig": "..."}
+}
+```
+
+The entry pins each tool's schema digest, so a tool whose schema or description changes upstream no longer matches and is disabled until WeaveLogic re-reviews and re-signs the entry (the "rug-pull" guard from 4b.3 becomes a verification failure instead of a heuristic). The class (`read|stage|write|outward`) and the confirm fields are the reviewer's decision, not the server's claim.
+
+#### Publisher, review, signing
+
+| Step | Who | What |
+|---|---|---|
+| Propose | Anyone on the team | Open a request with server URL or package, purpose, tool list, auth type |
+| Review | A reviewer (security-minded lane plus the owner for anything `outward`) | Checklist: publisher identity, terms, data handling, OAuth scopes minimal, egress hosts, tool descriptions free of instructions, every tool classified, schema digests recorded, test against the eval suite (4b.6), abuse cases (injection through results) |
+| Build | CI | Assemble `catalog.json` (the index) from entry documents; validate against the schema |
+| Sign | CI release job only | Sign each entry and the index with the release key held as a CI secret; publish to the catalog store |
+| Publish | CI | Catalog store is object storage behind the dashboard (R2 or Supabase storage); the dashboard serves the signed files read-only |
+| Revoke | Owner | Add the key id or entry id to the revocation list (same list format as `revoked.rs`); clients check on every connect and on a short refresh interval; a revoked entry's tools are removed from the registry immediately and sealed tokens are deleted on next sync |
+| Key rotation | Owner | New key pinned in a new agent release; old key stays valid for verification until retired, then moves to the revoked list |
+
+Clients (the cloud agent and the local Rust host) pin the public key at build time and refuse a catalog or entry they cannot verify. The cloud verifies in the Worker; the Rust host verifies with the same library as the cog repo, so there is one verification implementation to audit.
+
+**What the catalog does not do:** a signature says WeaveLogic reviewed that entry. It does not make the third-party service safe, and it never grants access. The user still connects their own account, and every tool still passes the class gate.
+
+#### Per-user enablement
+
+1. The user opens Tool sources in the dashboard and sees catalog entries with their tools, classes, scopes, data handling and review date.
+2. Enabling is per user (and may be preset per workspace by an admin, Q23). Enabling creates a `tool_sources` row: `entry_id`, `entry_version`, enabled tools (default: all `read`, none of `write` or `outward`), connection state.
+3. **Connect**: OAuth with PKCE through the dashboard, or BYOK for key-based services. Tokens are sealed in the user's DO (section 3.3). The agent never holds a credential in a prompt or an event.
+4. **Per-tool scopes**: each tool maps to the narrowest provider scope (`calendar.read` vs `calendar.write`). The connect screen requests only the scopes for the tools the user enabled; enabling a write tool later triggers an incremental consent.
+5. **Updates**: a new entry version does not auto-enable new tools; the user sees a diff and accepts.
+
+#### Hand-added servers (unvetted)
+
+If the owner allows custom servers (Q16), they are a separate, clearly labeled tier:
+
+| Aspect | Catalog (authorized) | Hand-added (unvetted) |
+|---|---|---|
+| Signature | WeaveLogic-signed entry | None |
+| Default tool class | As reviewed | Every tool is `outward`: confirm on every call |
+| Confirm display | Tool, key arguments | Tool, **all** arguments, server host, a notice that the server is unvetted |
+| Egress | Entry's host list | The one host the user entered; no redirects to other hosts |
+| Data sent | Tool args only | Tool args only; board, brain and device data are never added by the host |
+| Schema changes | Re-review required | Disabled until the user re-approves, with a diff |
+| Tokens | Sealed, per user | Sealed, per user; BYOK only (no OAuth proxying for unvetted servers) |
+| Rate limits | Entry's | Tight global default |
+| Audit | Normal | Normal, plus flagged `unvetted` in the audit view |
+| Availability | All users who enable | Only the user who added it, unless an admin promotes it to a review request |
+
+Promotion path: a hand-added server that proves useful becomes a catalog proposal and goes through the review above.
+
+#### Hosting and proxying
+
+| Mode | What it is | When |
+|---|---|---|
+| **Vendor-hosted remote MCP** (streamable HTTP) | The DO calls the vendor's endpoint with the user's token. WeaveLogic hosts nothing | Default for third parties that already offer remote MCP |
+| **WeaveLogic-hosted on Cloudflare** (first class) | A Worker per server (or one Worker with several routes) built with the Cloudflare MCP tooling (the estate already has a Worker with D1 and R2, Hono and `wrangler`, and a `/mcp` endpoint with JSON-RPC and bearer auth, the Sensor Explorer **[V]**). Used for WeftOS-owned servers and for wrapping vendors that lack an MCP. Secrets in Workers secrets; per-user tokens still come from the user's DO per call | WeftOS dashboard/board, Sensor Explorer, project harness, wrappers |
+| **Gateway proxy** | The cloud agent calls catalog servers through one WeaveLogic MCP gateway Worker that enforces the entry's egress list, per-tool scopes and rate limits and writes the audit row. The DO sends the user's sealed token only to the gateway | Recommended for every catalog server, so policy lives in one place; also gives one place for kill switches |
+| **User-node MCP** | A server running on the user's node, exposed through the device hub as an exposure `mcp.<name>` (ADR-120) | Servers that need local files, local devices or a private network |
+| **Local mode** | `[[mcp_servers]]` in `cos.json`: stdio or http, same catalog verification for catalog entries | Offline and owner-only |
+
+Cloudflare-hosted servers use two auth layers: the user's OAuth or key to the underlying service (where one exists), and a **short-lived signed call token** from the DO to the gateway or server (60 s, `sub=user`, `aud=<server>`, `scope=<tools>`), the same pattern as the dashboard service JWT (section 3.2). No static bearer is shared between the DO and any MCP Worker.
+
+#### Per-tool scopes and audit trail
+
+- A call is allowed only if the tool is in the user's enabled list, its entry version is current and unrevoked, the call token's scope names the tool, the class gate is satisfied, and the egress host matches.
+- Audit row per call, written by the gateway and mirrored by the DO: time, user, turn id, entry id and version, tool, class, arguments digest and a redacted summary, confirm id, result status, latency, `unvetted` flag. Arguments are stored in full only for `outward` calls and only for the retention period the user sets; secrets are never stored. The owner has a catalog-wide view and per-user view of the same rows; users can see and export their own.
+- Anomaly rules on the audit stream: spikes in `outward` calls, a server that suddenly returns much larger payloads, repeated schema mismatches. A rule trips the per-server kill switch.
+
+#### Initial catalog candidates
+
+| Priority | Entry | Hosting | Auth | Initial tools (class) | Notes |
+|---|---|---|---|---|---|
+| 1 | **WeftOS dashboard and board** (the dashboard exposed as MCP) | WeaveLogic-hosted (Cloudflare Worker over the dashboard API) | The user's dashboard session via the call token | `board.search/read/list_goals` (read); `board.propose` (stage); `board.claim/note` (write); `roadmap.read` (read) | Makes the board available to every MCP-capable client, and lets the built-in board tools and the MCP version share one implementation. The built-ins can become a thin shim over it later |
+| 2 | **Calendar** | Vendor remote MCP via gateway | OAuth (PKCE) | `list_events`, `find_time` (read); `create_event`, `update_event` (write); `respond` (outward) | The estate already uses a calendar connector in other tools, so the review checklist can reuse that work |
+| 3 | **Email** | Vendor via gateway | OAuth (narrow scopes) | `search`, `read_thread` (read); `create_draft` (stage); `send` (outward, confirm shows recipients and body) | Drafts first; send disabled by default |
+| 4 | **Flights and travel** | Vendor or a wrapper Worker | BYOK or OAuth | `search_flights`, `get_itinerary` (read); `hold` (outward); no pay tool at launch (Q17) | The owner's stated example |
+| 5 | **GitHub** | Vendor remote MCP via gateway, or hosted wrapper | OAuth app, fine-grained | `search_code`, `read_file`, `list_prs`, `list_issues` (read); `comment` (write); `create_issue`, `create_pr` (outward); no merge or push at launch | Complements project work through the device hub; repo content for repos not on a node |
+| 6 | **Sensor Explorer** | WeaveLogic-hosted (already deployed, `/mcp`, JSON-RPC) | Move from a shared bootstrap key to per-user call tokens before listing **[V: it uses a single bearer key today]** | `search_sensors`, `get_part`, `list_tree`, `suggest_for_task`, `search_pool` (read); `promote_from_pool`, `add_part` (write, admin only) | Needs the auth change; the admin-scoped bootstrap key must never be given to a user |
+| 7 | **Project harnesses** | User-node exposure `harness.*` through the device hub, plus a WeaveLogic gateway entry | Exposure grant (ADR-120) | `harness.list`, `harness.status`, `harness.log` (read); `harness.start`, `harness.stop`, `harness.approve` (outward) | The MCP form of `work.*`; the node confirms locally |
+| 8 | Docs and files (drive-style) | Vendor via gateway | OAuth | `search`, `read` (read); `create`, `update` (write) | After the first seven |
+| 9 | Maps and places | Vendor | BYOK | `search_places`, `route` (read) | Supports travel plans |
+
+First ship: 1 (board), 2 (calendar) and 4 (flights, read-only) to prove the catalog, OAuth, gateway, audit and gating end to end, then 3, 5, 6, 7.
 
 ### 4b.4 Tool selection at scale
 
@@ -525,7 +634,9 @@ The Mac runs `weftos-cos serve` only in local mode. Remove the Mac's cloud API k
 | **C1: read tools in the cloud** (with Phase 1) | `devices.*`, `goals.*`, `roadmap.read`, `projects.list/read`, `board.search`, `nodes.facts`; the tool registry, per-turn relevance filter, `tools.find` | E1 to E5, E9, E14, E17, E18 pass; the filter never hides the expected tool in the suite | Disable the filter (full core set); drop the new tools | Q15 |
 | **C2: staged writes and the steward path** (with Phase 2) | `board.propose`, `roadmap.propose`, `board_proposals`, dry-run applies, audit log, write limits | E6, E7, E13, E16 pass; audit rows exist for every write; a replay of a retried write creates nothing twice | `cos_write_tools = off` per user | Q18 |
 | **C3: work in projects** (with Phase 4) | `work.kickoff/status/log/approve` through the device hub and the `harness.kickoff` exposure | E8 passes against a real paired node; switching the exposure off locally refuses the next request | Disable the exposure; fall back to a staged request | Q10 |
-| **C4: MCP sources** (after Phase 2) | MCP catalog, OAuth and BYOK connect flow, allow-lists, egress control, one reference server (read-only first) | E10 to E12, E17 pass; disconnect removes the token; a changed tool schema forces re-review | Disable `tool_sources` per user or globally | Q16, Q17 |
+| **C4a: signed catalog and gateway** (after Phase 2) | Entry schema, signing in CI with the pinned release key, revocation list, catalog store, verification in the Worker and the Rust host, the MCP gateway Worker with per-tool call tokens and the audit stream; first entries: board, calendar, flights (read-only) | A tampered or unsigned entry is refused; a revoked entry's tools vanish within the refresh interval; E10 to E12 and E17 pass; every call has an audit row | Disable the gateway and the catalog per user or globally | Q16, Q21, Q22 |
+| **C4b: connect flows and per-user enablement** | OAuth with PKCE and BYOK connect, incremental consent, sealed tokens, disconnect and revoke, schema-diff acceptance, user and owner audit views | Disconnect deletes the token and the next call fails; a changed schema blocks the tool until re-review; E15 and E16 hold with a connected third party | Turn off `tool_sources` | Q17, Q23 |
+| **C4c: more entries and hand-added servers** | Email (drafts), GitHub, Sensor Explorer (after its auth change), project harnesses; the unvetted tier if the owner allows it | Unvetted tools always confirm with full arguments; promotion to catalog goes through review | Disable the custom tier | Q16, Q24 |
 | **C5: tool-heavy turns at scale** | Tier routing on tool-heavy turns, per-turn tool and cost budgets, tool-use telemetry | Median tokens per tool turn fall; suite pass bar holds on the cheaper tier for read-only turns | Route all tool turns to the plan tier | Q19 |
 
 New risks:
@@ -537,6 +648,10 @@ New risks:
 | 15 | Third-party OAuth tokens leak or outlive consent | Low | High | Sealed storage, per-user scope, revoke on disconnect, expiry and refresh handled by the dashboard |
 | 16 | Local and cloud tool manifests diverge | Med | Med | One shared manifest and the conformance suite |
 | 17 | Users treat a staged proposal as done | Med | Low | The CoS always says "proposed, not applied" and lists pending proposals |
+| 18 | The release signing key is compromised or leaked | Low | Critical | CI-secret-only key (as COG-008), pinned public key in releases, a revocation list checked on every connect, rotation procedure |
+| 19 | A reviewed third party changes behavior after review | Med | High | Schema digests pinned per tool, scheduled re-review dates, anomaly rules and per-server kill switch, gateway egress limits |
+| 20 | The gateway becomes a single point of failure or policy bypass | Low | High | Stateless Workers, per-server fail-closed policy, direct calls disabled for catalog entries |
+| 21 | A hosted MCP Worker (for example Sensor Explorer) is reachable with a shared admin key | Med | High | Move to per-user call tokens before listing; admin tools never in the user catalog |
 
 ### Risk register
 
@@ -581,6 +696,12 @@ New risks:
 | Q18 | Who applies staged proposals: the steward lane, the owner on the phone, or the CoS after a yes? | The CoS applies after the owner's confirm, through the steward route, with the lane able to apply when the owner is away |
 | Q19 | May read-only multi-tool turns run on the quick tier once the suite passes? | Yes, only if the suite pass bar holds on that tier; otherwise plan tier |
 | Q20 | Should the evaluation suite use the owner's real past turns, and are any of them off limits? | Yes, from the owner's own turns only, with client-related turns excluded |
+| Q21 | Who is the catalog reviewer, and does anything `outward` need the owner's sign-off? | A designated reviewer lane for `read` and `write`; owner sign-off for every `outward` tool and for any money-adjacent tool |
+| Q22 | Where does the signed catalog live, and which key signs it: the same release key as cogs, or a separate MCP catalog key? | A separate key in its own CI secret, so a catalog compromise cannot sign binaries; same procedures and library as COG-008 |
+| Q23 | May an admin preset which entries are on for a whole workspace? | Yes, as a default the user can switch off; users always see and consent to their own connections |
+| Q24 | Do hand-added servers exist at all in the first release? | No in phase C4a and C4b; add in C4c once audit and egress controls are proven |
+| Q25 | Are WeaveLogic-hosted MCP Workers a separate Cloudflare account/project from the CoS runtime? | Same account, separate Worker projects and separate secrets, so a catalog server cannot read the CoS's keys |
+| Q26 | Should the built-in board tools become a shim over the dashboard MCP, or stay as direct API tools? | Stay direct until the dashboard MCP has run in the catalog for a release, then converge to remove duplicate code |
 
 ---
 
