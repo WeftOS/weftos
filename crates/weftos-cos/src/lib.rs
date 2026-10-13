@@ -23,6 +23,7 @@ pub mod config;
 pub mod endpoints;
 pub mod conversation;
 pub mod events;
+pub mod glance;
 pub mod guide;
 pub mod host;
 pub mod model;
