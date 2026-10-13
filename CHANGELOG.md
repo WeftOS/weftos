@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Staging area for changes after the 0.8.4 cut.
 
+## [0.8.4-rc.12] - 2026-10-13
+
+### Added
+- Chief of staff: `GET /v1/cos/turns?limit=N` returns recent final messages (same auth as the
+  other cos.v1 routes); the pad console reloads its chat log from it on every connect.
+- Mentra Live mic capture app (`firmware/mentra-mic/`): a shell-started microphone foreground
+  service records 16 kHz WAV takes without root, so speech from the glasses reaches the chief of staff.
+
+### Fixed
+- Cluster membership no longer grows without bound: a daemon's own node is no longer persisted
+  and replayed, peers with no heartbeat for 24 h are dropped on load, a reaper marks silent peers
+  Unreachable after 10 min and removes stale mesh peers after 24 h, and heartbeats reach disk.
+  Operator-added peers are never removed automatically. `weaver cluster status` reports real members.
+- The daemon's leaf pushes get one governance rate-limit bucket per topic rather than sharing
+  principal 0's, and idle limiter keys are pruned. Rules, audit and deny messages are unchanged.
+- Pad console host: rate-limited publishes, a missing leaf route, a daemon restart or an agent
+  restart now back off and reconnect with a full repaint instead of exiting; redraws coalesce.
+- Chief of staff: version and release questions use node health (weaver versions), project
+  activity without a project no longer reports a history error, ranked lists start at 1 and skip
+  done cards.
+
 ## [0.8.4-rc.11] - 2026-10-13
 
 ### Added
