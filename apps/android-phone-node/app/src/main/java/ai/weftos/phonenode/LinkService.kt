@@ -10,10 +10,9 @@ import android.content.pm.ServiceInfo
 import android.os.IBinder
 
 /**
- * Link-and-relay service stub (design 7.1). Foreground type `connectedDevice`, never
- * `dataSync` (six-hour cap). P0 stub: it holds the foreground notification and the
- * lifecycle only. The TCP listener for the glasses, the upstream stream and BLE land in
- * P1; nothing here opens a socket.
+ * Link-and-relay service (design 7.1). Foreground type `connectedDevice`, never `dataSync`
+ * (six-hour cap). It owns the notification and the lifecycle; the glasses listener and the
+ * speech relay live in [LinkEngine]. BLE and the mesh gateway are later phases.
  */
 class LinkService : Service() {
     override fun onCreate() {
@@ -23,6 +22,7 @@ class LinkService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
+            NodeRuntime.stopEngine()
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
             NodeRuntime.setServiceRunning(false)
@@ -34,16 +34,18 @@ class LinkService : Service() {
         )
         val n = Notification.Builder(this, CHANNEL)
             .setContentTitle("Weft phone node")
-            .setContentText("Link service running (P0 stub, no glasses link yet)")
+            .setContentText("Listening for the glasses and relaying speech")
             .setSmallIcon(R.drawable.ic_launcher)
             .setOngoing(true)
             .build()
         startForeground(NOTIFICATION_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
         NodeRuntime.setServiceRunning(true)
+        NodeRuntime.startEngine(this)
         return START_STICKY
     }
 
     override fun onDestroy() {
+        NodeRuntime.stopEngine()
         NodeRuntime.setServiceRunning(false)
         super.onDestroy()
     }
