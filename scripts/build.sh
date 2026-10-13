@@ -173,9 +173,18 @@ cmd_cos() {
     timer_start
     local args=(cargo build -p weftos-cos --bin weftos-cos)
     [ -n "$FEATURES" ] && args+=(--features "$FEATURES")
-    run_cmd "${args[@]}"
+    run_cmd "${args[@]}" || { timer_end; return 1; }
     timer_end
     report_binary_size "target/debug/weftos-cos" "Chief-of-staff host (weftos-cos, debug)"
+    # A featured build is copied out of target/: any later `cargo test` or
+    # gate run rebuilds target/debug/weftos-cos with default features at the
+    # same path, which silently drops mic/onnx (STT) from whatever runs it.
+    if [ -n "$FEATURES" ] && [ "$DRY_RUN" != true ]; then
+        local stable="${WEFTOS_COS_BIN:-$HOME/.weftos/bin/weftos-cos}"
+        mkdir -p "$(dirname "$stable")"
+        install -m 0755 "$ROOT/target/debug/weftos-cos" "$stable.tmp" && mv -f "$stable.tmp" "$stable"
+        printf "  Installed featured build (%s) to %s\n" "$FEATURES" "$stable"
+    fi
 }
 
 # ── Build stamp env ─────────────────────────────────────────────────
@@ -2163,11 +2172,11 @@ cmd_cos_up() {
     cmd_cos || { FEATURES="$saved"; return 1; }
     FEATURES="$saved"
     if [ "$DRY_RUN" = true ]; then
-        printf "  ${YELLOW}DRY${NC}   target/debug/weftos-cos serve --start-model --mic\n"
+        printf "  ${YELLOW}DRY${NC}   ${WEFTOS_COS_BIN:-$HOME/.weftos/bin/weftos-cos} serve --start-model --mic\n"
         return 0
     fi
     printf "  Console window (second terminal): scripts/build.sh cos-host && crates/weftos-cos-console/target/release/cos-console-host --window\n"
-    exec "$ROOT/target/debug/weftos-cos" serve --start-model --mic
+    exec "${WEFTOS_COS_BIN:-$HOME/.weftos/bin/weftos-cos}" serve --start-model --mic
 }
 
 cmd_cos_console() {
