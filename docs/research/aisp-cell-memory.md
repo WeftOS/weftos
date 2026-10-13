@@ -52,6 +52,18 @@ Reading the setup from the image alone:
 
 Net: plausible, even expected, for a redundant parent-pointer structure on random loss. Not evidence of a new technique, and the "structure beats size" slogan is fair but is the claim that indexes beat unindexed data.
 
+### 3a. Second panel: "Three ways to keep knowledge: what happens to a loss" (added 2026-10-12)
+
+Panel text: flat database, "deleted rows leave no trace", 6.35% recovered. Trained AI index (KGE), about five minutes of training, "fills a gap with a look-alike" (similarity guess), 41.70% recovered, 4.67% wrong. AISP Cell, "the gap is known, then refilled", every piece knows its address and its neighbours, 97.75% recovered, zero wrong. The post was shared on WhatsApp; I searched LinkedIn/X/blog phrasings ("the gap is known, then refilled", "Delete a fifth of the memory", "AISP Cell", Bradley Ross) and found nothing indexed. The original post is still unlocated.
+
+What the panel adds:
+
+1. The mechanism claim is detectability: the Cell records that something was there (a neighbour or parent lists the address), so a hole is known before it is filled; KGE has no record of the gap and answers by similarity. This is a real, well-understood property (a dangling reference in a Merkle tree or git fsck) and it is the same index-redundancy effect as in section 3, point 2. It is not specific to the Cell. A flat table with a parent column plus child lists or digests would detect gaps too; the infographic's own "flat database handed the Cell's map" row (91.11%) says as much.
+2. Reconstruction vs relocation: the panel does not say content is rebuilt. "Refilled" is ambiguous. From the four answers (where it belonged, what it was, what it belonged to, where it came from), "recovered" appears to mean re-identifying and relocating the lost piece, which is metadata a surviving neighbour can hold. Whether the Cell regenerates the body of a deleted piece is not stated; with the fingerprint gone and no replica it could only be a similarity guess, which is exactly what the KGE column is criticised for. I cannot verify which it is without the harness. Consequence for comparability: a KGE scoring similarity over entities is asked a lookup question (place, parent, provenance) it is not built for, while the Cell is handed the answer by its own structure. The comparison is not like for like, and neither baseline is a plain parent index.
+3. The error figures leave gaps: KGE is 41.70% recovered plus 4.67% wrong, leaving about 53.6% that is neither (abstentions or partial answers, undefined); the Cell's "zero wrong" leaves 2.25% unaccounted for. "Wrong" and "not recovered" are separate categories with no definition, so "zero wrong answers" cannot yet be interpreted.
+
+Net effect on the verdict: unchanged (pattern-only). The panel sharpens the useful idea (make absence detectable by recording neighbours) and weakens the comparison (different tasks per column).
+
 ## 4. Fit for WeftOS
 
 What we already have:
@@ -96,6 +108,7 @@ Goal: measure how much of the "recovery" comes from structure we can add cheaply
 
 ## Sources
 
+- Second infographic panel (clip3.png, same scratchpad folder), shared on WhatsApp; original post not found.
 - Infographic as supplied by the owner (image, undated), saved at `/private/tmp/claude-501/-Users-mathewbeane-weftos/88b8ff08-5afc-4018-a326-11dcdb5d6d1e/scratchpad/clip2.png`.
 - https://github.com/bar181/aisp-open-core (AISP v5.1, MIT, last commit 2026-06-09), https://github.com/bar181/bar181 (profile). Read 2026-10-12.
 - https://github.com/ruvnet/ruvector at 31549f7 (2026-10-11): `crates/ruvector-kge/src/lib.rs`, `npm/packages/kge/docs/adr/`, `docs/research/gnn-v2/14-semantic-holography.md`. Read 2026-10-12.
