@@ -10,6 +10,32 @@ description: Auto-generated from CHANGELOG.md. Complete WeftOS version history.
 > overwritten on the next docs build. To change a release entry, edit
 > `CHANGELOG.md` and re-run the script.
 
+## v0.8.4-rc.11
+
+*2026-10-13*
+
+### Added
+- `[kernel.mesh] leaf_listen_addr` accepts a list of addresses. Each gets its own leaf listener
+  sharing one ingress, and an address that cannot bind yet (an interface that comes up later)
+  is retried every 15 s.
+- `leaf_discovery_any`: answer leaf discovery on every interface while the TCP leaf listener
+  stays on its configured address.
+- Edge pad: a build-time parent hint (`EDGEPAD_PARENT_HINT`) is probed by unicast before the
+  broadcast fallback.
+- Chief of staff: the e-ink status panel over USB serial (`weftos-cos glance-serial`), and a
+  `board.search` tool that finds cards by topic.
+
+### Fixed
+- Edge pad: read timeouts count as idle rather than errors, and partial frames resume, so the
+  leaf link no longer reconnects in a loop. The boot BLE probe is off by default.
+- E-ink panel: partial updates no longer leave old text overlaid.
+- Chief of staff: a repeated or failing tool call, or reaching the round limit
+  (`models.max_tool_rounds`, default 6), now produces an answer without tools rather than
+  "ran out of tool rounds". Project activity output is compact and bounded, and node health and
+  mesh routes reach the daemon through the same endpoint resolver as `weaver`.
+
+---
+
 ## v0.8.4-rc.10
 
 *2026-10-13*
