@@ -10,6 +10,28 @@ description: Auto-generated from CHANGELOG.md. Complete WeftOS version history.
 > overwritten on the next docs build. To change a release entry, edit
 > `CHANGELOG.md` and re-run the script.
 
+## v0.8.4-rc.14
+
+*2026-10-13*
+
+### Added
+- Chief of staff (`weftos-cos`): `devices.status` (glasses, pad and e-ink verdicts), MCP servers as
+  allow-listed, gated tool sources with a signature-ready authorized catalog (unvetted servers
+  always need confirmation), `weftos-cos mcp` (the CoS as an MCP server), per-turn traces pushed to
+  the dashboard, status reporting the model from startup, an owner-only guard for other people's
+  data, the `cos-eval` runner, and the dashboard bridge (`weftos-cos bridge`) with the listening,
+  push-to-talk and voice-volume controls.
+- `weaver project add --repo <dir>` picks one of a project's repositories.
+
+### Fixed
+- `weaver project add weftos://…` fetched nothing when the primary's project root is not itself a
+  git repository: every call was sent under the bare project name, so the daemon asked for `.`.
+  Calls now name their repository; a sole repository is checked out at the target path and several
+  are checked out side by side.
+- Featured `weftos-cos` builds install to `~/.weftos/bin` so test runs cannot strip speech-to-text.
+
+---
+
 ## v0.8.4-rc.13
 
 *2026-10-13*
