@@ -99,7 +99,11 @@ async fn status_route_reports_the_latest_state_task_and_model() {
     let url = format!("http://{addr}/v1/cos/status");
     let first = reqwest::get(&url).await.unwrap();
     assert_eq!(first.status(), 200);
-    assert_eq!(first.json::<serde_json::Value>().await.unwrap()["state"], serde_json::Value::Null);
+    // Before any turn: idle, with the quick-tier model, not null (card 17cc1aa5).
+    let first: serde_json::Value = first.json().await.unwrap();
+    assert_eq!(first["state"], "idle");
+    assert_eq!(first["model"], "local/fast-model");
+    assert_eq!(first["pending"], serde_json::Value::Null);
 
     conv.utter(weftos_cos::UserUtterance::typed("hello")).await.unwrap();
     for _ in 0..100 {

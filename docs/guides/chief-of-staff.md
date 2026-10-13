@@ -142,6 +142,98 @@ On a dashboard error it backs off to 30 s and logs one line per state change; a
 401 or 403 logs "node token rejected". The agent must be running (`serve`); with
 it down, turns are not sent and the status shows `healthy: false`.
 
+## Traces and status
+
+Every turn that ends leaves one trace (the last 200 are kept): the model that
+answered, the role (`quick`, `plan`, or `confirmation` for the turn that answers a
+held action), the tools offered and called (name, a 16-hex digest of the arguments, ok,
+milliseconds; never the arguments), the gates hit (`work.kickoff:held`, `:confirmed`,
+`:cancelled`), model rounds, latency and cost (0 for the local model; no price table is
+applied to cloud models yet). Routes, with the same auth as the others:
+
+```
+GET /v1/cos/traces?since=<RFC 3339>&limit=N   oldest first; since is inclusive, so dedupe by turn_id
+GET /v1/cos/traces/<turn_id>                  one trace, 404 while the turn runs
+GET /v1/cos/tools                             the bound tools: id, description, gate, schema
+GET /v1/cos/devices                           devices.status without a model turn (read-only)
+```
+
+A malformed `since` or `limit` is a 400, never "no filter". `GET /v1/cos/status` reports
+`state: "idle"` and the quick-tier model from startup (it used to be `null` until the first
+turn), then follows each turn, and carries `pending`: the held action's `turn_id`,
+`endpoint`, `tool` and `summary`, or `null`.
+
+The bridge pushes new traces in each sync as `traces: [...]` (at most 50, each once, only
+the dashboard's `cos_traces` fields, lists cut to its size limits). An agent without the
+route sends an empty list.
+
+## `weftos-cos mcp`: the chief of staff as an MCP server
+
+```bash
+scripts/build.sh cos                         # builds target/debug/weftos-cos, installs nothing
+target/debug/weftos-cos mcp                  # stdio MCP server over the agent on 127.0.0.1:18300
+target/debug/weftos-cos mcp --agent http://127.0.0.1:18320 --endpoint test-run1
+```
+
+Register it with a client the usual way (`claude mcp add cos -- /path/to/weftos-cos mcp`).
+It holds no agent of its own: it talks to a running one over `cos.v1`, so it drives the live
+host or a scratch one. Stdio only; there is no HTTP listener.
+
+| Tool | Does |
+|---|---|
+| `cos.say {text, endpoint?, timeout_s?}` | Posts a typed turn through the same path as a phone turn, waits for it to end, returns `status` (`ok`, `held`, `failed`, `timeout`), the final `message`, the `held` action if any, and the `trace`. Output is marked `data_trust: "untrusted"`. |
+| `cos.confirm {turn_id, decision}` | Answers a held action `yes` or `no`. See the rules below. |
+| `cos.turns {limit?}` | Recent final messages. |
+| `cos.status` | State, task, model, held action, lanes, `healthy`. |
+| `cos.trace {turn_id}` | One finished turn's trace. |
+| `cos.devices.status` | Glasses, pad, e-ink verdicts, no model turn. |
+| `cos.tools.list` | The tools bound on the host. |
+
+`cos.say` speaks only as `mcp` or `test-<run>` (never `host`, `mentra`, `dashboard` or any
+device), so its turns are never spoken on a node, and it cannot name a tool or lift a gate:
+a gated call stays held and `status` says `held`. A call that is refused comes back as an
+error result with `status: "refused"`, the argument or rule (`what`) and the `reason`; an
+unreachable agent is also a refusal, never an empty result.
+
+`cos.confirm` acts only when all of these hold, and refuses with the reason otherwise:
+the server was not started with `--no-confirm`; the agent URL is on this machine
+(`127.0.0.1`, `localhost`, `::1`); a gate is held; its `turn_id` is the one given; and the
+gate was raised by the same programmatic endpoint the call speaks as (default `mcp`). A gate
+the phone, the glasses or the host asked is never lifted from MCP. The agent enforces the
+other half: an `mcp` or `test-*` utterance cannot answer a gate another endpoint raised (it
+runs as an ordinary turn and the gate stays held), while the owner's own endpoints answer
+each other's gates as before.
+
+## `scripts/cos-eval`: the E-cases through MCP
+
+```bash
+scripts/build.sh cos                                  # once, so target/debug/weftos-cos has `mcp`
+node scripts/cos-eval/run.mjs                         # scratch agent on 127.0.0.1:18320
+node scripts/cos-eval/run.mjs --only E1,E13 --report out.json
+node scripts/cos-eval/run.mjs --agent http://127.0.0.1:18300   # the live agent (shared history)
+```
+
+The cases are data in `scripts/cos-eval/cases.json`: E1 to E15 from
+`docs/plans/cos-cloud-migration.md` section 7 plus E16 (pad, no daemon), E17 (release
+version) and E18 (board search by topic), which the plan does not number. E4, E5, E10 and
+E11 need `goals.list`, a calendar or a flights source the Rust host does not have; they are
+marked `pending`, printed as SKIP and left out of the score. Each active case asserts on the
+trace (tools called and forbidden, tools that must succeed, gates, tool and round budgets,
+latency) and on the final message (must and must-not phrases; `re:` prefixes a regex), and
+every case also fails if a credential-shaped string appears in the output. Board writes and
+staged files are counted for the cases that must write nothing. A held gate is cleared with
+`cos.confirm no` after the case, which exercises that path too.
+
+By default it starts its own scratch agent per case (so no case sees another's history) on
+`127.0.0.1:18320`: speech off, no microphone, the model server already on `:8081`, a fake
+harness on `:18321` (tickets, one carrying an injected instruction; every write is recorded),
+a daemon runtime directory with no daemon, glasses status fixtures, and staging and notes
+store under `target/cos-eval/<run>/`. It kills only the pids it started and refuses to start
+if a port is already taken. Pass bar: at least 90 percent of the scored cases, and E6, E7, E8,
+E11, E13 and E15 (those that are scored) at 100 percent. Exit 0 on a pass, 1 below the bar,
+2 when the run could not be set up. The model is non-deterministic: read a failing case's
+printed answer before treating it as a regression.
+
 ## Tools
 
 Read: `projects.activity`, `board.read`, `card.current`, `nodes.health`, `mesh.routes`.

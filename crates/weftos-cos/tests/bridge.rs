@@ -30,6 +30,10 @@ struct Dash {
 #[derive(Default)]
 struct Agent {
     turns: Vec<Value>,
+    /// Traces served at `/v1/cos/traces` (none: the route answers 404, as an
+    /// older agent does), and the raw query strings it saw.
+    traces: Option<Vec<Value>>,
+    trace_queries: Vec<String>,
     utterances: Vec<Value>,
     /// Answer utterances with 500.
     broken: bool,
@@ -76,6 +80,15 @@ async fn fake_agent() -> (SocketAddr, Arc<Mutex<Agent>>) {
     async fn turns(State(st): State<Arc<Mutex<Agent>>>) -> Json<Value> {
         Json(json!({"turns": st.lock().unwrap().turns.clone()}))
     }
+    async fn traces(State(st): State<Arc<Mutex<Agent>>>, axum::extract::RawQuery(q): axum::extract::RawQuery) -> (StatusCode, Json<Value>) {
+        let mut a = st.lock().unwrap();
+        a.trace_queries.push(q.clone().unwrap_or_default());
+        let Some(all) = a.traces.clone() else { return (StatusCode::NOT_FOUND, Json(json!({"error": "no route"}))) };
+        // since is inclusive and arrives percent-encoded.
+        let since = q.unwrap_or_default().split('&').find_map(|p| p.strip_prefix("since=").map(|s| s.replace("%3A", ":")));
+        let out: Vec<Value> = all.into_iter().filter(|t| since.as_deref().is_none_or(|s| t["ts"].as_str().unwrap_or("") >= s)).collect();
+        (StatusCode::OK, Json(json!({"traces": out})))
+    }
     async fn utter(State(st): State<Arc<Mutex<Agent>>>, Json(b): Json<Value>) -> (StatusCode, Json<Value>) {
         let mut a = st.lock().unwrap();
         a.utterances.push(b);
@@ -86,6 +99,7 @@ async fn fake_agent() -> (SocketAddr, Arc<Mutex<Agent>>) {
     }
     let app = Router::new()
         .route("/v1/cos/turns", get(turns))
+        .route("/v1/cos/traces", get(traces))
         .route("/v1/cos/utterance", post(utter))
         .route("/v1/cos/status", get(|| async { Json(json!({"state": "idle", "task": "waiting", "model": "m", "lanes_running": 0})) }))
         .route("/healthz", get(|| async { Json(json!({"ok": true, "api": "cos.v1"})) }))
@@ -441,4 +455,86 @@ async fn an_unknown_kind_is_reported_failed() {
     let r = rig().await;
     let res = result_of(&r, json!({"id": "k1", "kind": "teleport"})).await;
     assert_eq!(res["status"], "failed");
+}
+
+fn trace(id: &str, ts: &str) -> Value {
+    json!({"turn_id": id, "endpoint": "dashboard", "runtime": "local", "model": "local/fast-model", "role": "quick",
+        "tools_offered": ["devices.status", "board.search"], "offered_total": 2,
+        "tools_called": [{"name": "devices.status", "args_digest": "0123456789abcdef", "ok": true, "ms": 12}],
+        "gates": [], "rounds": 2, "latency_ms": 840, "cost_usd": 0.0, "failed": false, "ts": ts})
+}
+
+#[tokio::test]
+async fn sync_pushes_new_traces_once_in_the_contract_shape() {
+    let r = rig().await;
+    r.agent.lock().unwrap().traces = Some(vec![trace("a", "2026-10-13T00:00:01.000Z"), trace("b", "2026-10-13T00:00:02.000Z")]);
+
+    let rep = r.bridge.sync_once(false).await.unwrap();
+    assert_eq!(rep.traces_sent, 2);
+    let sent = r.dash.lock().unwrap().bodies[0]["traces"].clone();
+    let ids: Vec<&str> = sent.as_array().unwrap().iter().map(|t| t["turn_id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["a", "b"]);
+    // Only the dashboard's cos_traces fields go out; the agent's extras stay home.
+    let keys: std::collections::BTreeSet<&str> = sent[0].as_object().unwrap().keys().map(String::as_str).collect();
+    let want: std::collections::BTreeSet<&str> = ["turn_id", "runtime", "model", "role", "tools_offered", "tools_called", "gates", "latency_ms", "cost_usd", "ts"].into();
+    assert_eq!(keys, want);
+    assert_eq!(sent[0]["runtime"], "local");
+    assert_eq!(sent[0]["tools_called"][0]["args_digest"], "0123456789abcdef");
+
+    // Delivered: not sent again, and the next ask starts at the newest stamp.
+    r.agent.lock().unwrap().traces.as_mut().unwrap().push(trace("c", "2026-10-13T00:00:03.000Z"));
+    let rep = r.bridge.sync_once(false).await.unwrap();
+    assert_eq!(rep.traces_sent, 1);
+    let d = r.dash.lock().unwrap();
+    assert_eq!(d.bodies[1]["traces"][0]["turn_id"], "c");
+    assert!(r.agent.lock().unwrap().trace_queries.last().unwrap().contains("since=2026-10-13T00%3A00%3A02.000Z"));
+}
+
+#[tokio::test]
+async fn a_failed_sync_does_not_lose_traces() {
+    let r = rig().await;
+    r.agent.lock().unwrap().traces = Some(vec![trace("a", "2026-10-13T00:00:01.000Z")]);
+    r.dash.lock().unwrap().status = 500;
+    assert!(r.bridge.sync_once(false).await.is_err());
+    r.dash.lock().unwrap().status = 200;
+    let rep = r.bridge.sync_once(false).await.unwrap();
+    assert_eq!(rep.traces_sent, 1, "the failed sync did not mark it delivered");
+}
+
+#[tokio::test]
+async fn traces_are_capped_at_fifty_a_sync_and_the_rest_follow() {
+    let r = rig().await;
+    let all: Vec<Value> = (0..60).map(|i| trace(&format!("t{i:02}"), &format!("2026-10-13T00:01:{i:02}.000Z"))).collect();
+    r.agent.lock().unwrap().traces = Some(all);
+    assert_eq!(r.bridge.sync_once(false).await.unwrap().traces_sent, 50);
+    assert_eq!(r.bridge.sync_once(false).await.unwrap().traces_sent, 10);
+    assert_eq!(r.bridge.sync_once(false).await.unwrap().traces_sent, 0);
+    let d = r.dash.lock().unwrap();
+    assert_eq!(d.bodies[1]["traces"][0]["turn_id"], "t50");
+}
+
+#[tokio::test]
+async fn an_agent_without_the_trace_route_sends_an_empty_list() {
+    let r = rig().await;
+    assert!(r.agent.lock().unwrap().traces.is_none());
+    let rep = r.bridge.sync_once(false).await.unwrap();
+    assert_eq!(rep.traces_sent, 0);
+    assert_eq!(r.dash.lock().unwrap().bodies[0]["traces"], json!([]));
+}
+
+#[tokio::test]
+async fn oversize_trace_lists_are_cut_to_the_dashboard_limit_and_bad_runtime_is_local() {
+    let r = rig().await;
+    let mut t = trace("big", "2026-10-13T00:00:01.000Z");
+    t["tools_called"] = json!((0..400).map(|i| json!({"name": format!("tool.number.{i}"), "args_digest": "0123456789abcdef", "ok": true, "ms": 1})).collect::<Vec<_>>());
+    t["runtime"] = json!("somewhere");
+    t["turn_id"] = json!("big");
+    r.agent.lock().unwrap().traces = Some(vec![t, json!({"turn_id": "", "ts": "x"}), json!("not an object")]);
+    let rep = r.bridge.sync_once(false).await.unwrap();
+    assert_eq!(rep.traces_sent, 1, "traces without a usable turn id are dropped");
+    let d = r.dash.lock().unwrap();
+    let sent = &d.bodies[0]["traces"][0];
+    assert!(serde_json::to_string(&sent["tools_called"]).unwrap().len() <= 7000);
+    assert!(!sent["tools_called"].as_array().unwrap().is_empty());
+    assert_eq!(sent["runtime"], "local");
 }

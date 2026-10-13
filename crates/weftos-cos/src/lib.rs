@@ -28,12 +28,14 @@ pub mod glance;
 pub mod guide;
 pub mod host;
 pub mod mcp_catalog;
+pub mod mcp_server;
 pub mod model;
 pub mod prompt;
 pub mod routing;
 pub mod server;
 pub mod speak;
 pub mod tools;
+pub mod traces;
 pub mod voice;
 
 pub use agent::CosAgent;
