@@ -20,6 +20,8 @@ enum Cmd {
     /// Create or list remote endpoints (tokens for non-loopback clients).
     #[command(subcommand)]
     Endpoint(weftos_cos::cli::EndpointCmd),
+    /// Mirror the agent's state to an e-ink glance panel over USB serial (ADR-119 S4).
+    GlanceSerial(weftos_cos::glance::GlanceSerialArgs),
     /// Transcribe a WAV file with the configured STT (no microphone needed).
     Transcribe {
         wav: std::path::PathBuf,
@@ -38,6 +40,7 @@ async fn main() -> anyhow::Result<()> {
         Cmd::Serve(args) => weftos_cos::cli::serve(args).await,
         Cmd::Model(cmd) => weftos_cos::cli::model(cmd).await,
         Cmd::Endpoint(cmd) => weftos_cos::cli::endpoint(cmd),
+        Cmd::GlanceSerial(args) => weftos_cos::glance::run(args).await,
         Cmd::Transcribe { wav, config } => weftos_cos::cli::transcribe(wav, config).await,
     }
 }
