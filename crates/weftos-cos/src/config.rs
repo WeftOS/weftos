@@ -43,6 +43,11 @@ pub struct CosConfig {
     /// External tool sources: MCP servers whose allow-listed tools become
     /// chief-of-staff tools named `<id>.<tool>`. Empty by default.
     pub mcp_servers: Vec<McpServerConfig>,
+    /// A provided-servers catalog (publisher-supplied MCP servers) and how to
+    /// trust it. Entries are switched on by id in `mcp_enable`.
+    pub mcp_catalog: McpCatalogConfig,
+    /// Catalog servers this user turned on, optionally narrowed.
+    pub mcp_enable: Vec<McpEnable>,
     /// Most MCP tools offered to the model in one turn (1..=40). Past this,
     /// the ones whose name or description best match the request are kept.
     pub mcp_max_tools_per_turn: usize,
@@ -86,6 +91,60 @@ pub struct McpAuth {
     pub bearer_file: Option<PathBuf>,
 }
 
+/// Where a server definition came from. Never read from the config file: a
+/// hand-written entry cannot claim to be authorized.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum McpOrigin {
+    /// Written by hand in `mcp_servers`.
+    #[default]
+    Unvetted,
+    /// From the provided-servers catalog.
+    Catalog { publisher: String, authorized: bool, signed: bool },
+}
+
+impl McpOrigin {
+    pub fn label(&self) -> String {
+        match self {
+            McpOrigin::Unvetted => "unvetted".into(),
+            McpOrigin::Catalog { publisher, authorized, signed } => format!(
+                "{} by {publisher}{}",
+                if *authorized { "authorized" } else { "catalog, not marked authorized" },
+                if *signed { ", signature verified" } else { ", unsigned" }
+            ),
+        }
+    }
+}
+
+/// Provided-servers catalog and the trust applied to it.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct McpCatalogConfig {
+    pub path: Option<PathBuf>,
+    /// Ed25519 public key (hex) a catalog `signature` is checked against. When
+    /// unset, the key built into the host is used (none until the publisher
+    /// has one).
+    pub pinned_key: Option<String>,
+    /// Refuse a catalog without a verified signature. Off for now.
+    pub require_signature: bool,
+}
+
+/// Turn on one catalog server. It can only narrow what the catalog allows
+/// and tighten its gates, never widen either.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpEnable {
+    pub id: String,
+    /// Expose only catalog-allowed tools that also match one of these.
+    #[serde(default)]
+    pub allow: Vec<String>,
+    /// Tool names or globs forced to `confirm` whatever the catalog says.
+    #[serde(default)]
+    pub confirm: Vec<String>,
+    /// Where this user keeps the credential, when the catalog entry needs a
+    /// bearer and the default variable name does not suit.
+    #[serde(default)]
+    pub auth: McpAuth,
+}
+
 /// One MCP server (`mcp_servers` entry in `cos.json`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpServerConfig {
@@ -122,6 +181,15 @@ pub struct McpServerConfig {
     /// (default 30). A tool call always tries to reconnect.
     #[serde(default)]
     pub retry_secs: Option<u64>,
+    /// Set by the host, never read from the file.
+    #[serde(skip)]
+    pub origin: McpOrigin,
+    /// Catalog servers: a tool must also match one of these (when non-empty).
+    #[serde(skip)]
+    pub restrict_to: Vec<String>,
+    /// Catalog servers: tools forced to `confirm`.
+    #[serde(skip)]
+    pub force_confirm: Vec<String>,
 }
 
 fn is_env_name(s: &str) -> bool {
@@ -398,6 +466,8 @@ impl Default for CosConfig {
             serve: ServeConfig::default(),
             endpoints: BTreeMap::new(),
             mcp_servers: Vec::new(),
+            mcp_catalog: McpCatalogConfig::default(),
+            mcp_enable: Vec::new(),
             mcp_max_tools_per_turn: 12,
         }
     }
@@ -505,6 +575,22 @@ impl CosConfig {
             if !seen.insert(srv.id.as_str()) {
                 return Err(CosError::Config(format!("mcp_servers: duplicate id `{}`", srv.id)));
             }
+        }
+        for e in &self.mcp_enable {
+            if self.mcp_servers.iter().any(|s| s.id == e.id) || self.mcp_enable.iter().filter(|o| o.id == e.id).count() > 1 {
+                return Err(CosError::Config(format!("mcp_enable `{}`: the id is also used by another mcp_servers or mcp_enable entry", e.id)));
+            }
+            if e.auth.bearer_env.is_some() && e.auth.bearer_file.is_some() {
+                return Err(CosError::Config(format!("mcp_enable `{}`: auth takes bearer_env or bearer_file, not both", e.id)));
+            }
+        }
+        if !self.mcp_enable.is_empty() && self.mcp_catalog.path.is_none() {
+            return Err(CosError::Config("mcp_enable needs mcp_catalog.path".into()));
+        }
+        if let Some(k) = &self.mcp_catalog.pinned_key
+            && !(k.len() == 64 && k.chars().all(|c| c.is_ascii_hexdigit()))
+        {
+            return Err(CosError::Config("mcp_catalog.pinned_key must be 64 hex characters (an Ed25519 public key)".into()));
         }
         if !self.harness.events_path.starts_with('/') {
             return Err(CosError::Config("harness.events_path must start with '/'".into()));

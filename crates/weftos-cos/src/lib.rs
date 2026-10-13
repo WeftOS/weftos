@@ -26,6 +26,7 @@ pub mod events;
 pub mod glance;
 pub mod guide;
 pub mod host;
+pub mod mcp_catalog;
 pub mod model;
 pub mod prompt;
 pub mod routing;

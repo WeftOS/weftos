@@ -171,6 +171,35 @@ at most `mcp_max_tools_per_turn` (default 12) MCP tools per turn, chosen by keyw
 with your request when there are more; every allowed tool stays callable. Prefer narrow
 `allow` lists: a long tool list hurts the local model.
 
+### Provided servers (the catalog)
+
+A publisher such as WeaveLogic can ship a catalog of vetted servers. You switch entries on
+by id instead of writing them out:
+
+```json
+{
+  "mcp_catalog": {"path": "~/.config/weftos/cos/mcp-catalog.json", "pinned_key": null, "require_signature": false},
+  "mcp_enable": [{"id": "travel", "allow": ["search_*"], "confirm": [], "auth": {"bearer_env": "MY_TRAVEL_TOKEN"}}]
+}
+```
+
+A catalog entry carries `id`, `name`, `publisher`, `authorized`, `transport`, `auth`
+(`{"kind": "none"}`, `{"kind": "bearer_env", "env": "NAME"}`; `oauth` is recognised but cannot
+be enabled yet), a default `allow` list, `gate`, `tool_gates` and `use_for`. In `mcp_enable`,
+`allow` can only **narrow** the catalog's allow-list (a tool must match both), `confirm`
+forces tools to wait for your yes, and `auth` points the credential at your own variable or
+file. Nothing in `mcp_enable` can widen an allow-list or open a gate.
+
+Trust: servers you write in `mcp_servers` are **unvetted** and default to `confirm`; catalog
+servers are reported as `authorized by <publisher>` (or "not marked authorized") at start,
+with `signature verified` or `unsigned`. The origin is set by the host and cannot be claimed
+in `cos.json`. If the catalog has a `signature` (Ed25519, hex, over `weftos-mcp-catalog-v1\n`
+plus the document's canonical JSON without the signature), it is checked against
+`mcp_catalog.pinned_key` (or the host's built-in key, empty until the publisher issues one);
+a signature that does not verify, or a signed catalog with no key to check it, refuses the
+whole catalog. Unsigned catalogs load unless `require_signature` is true, so turn that on
+once your publisher signs.
+
 Templates (not active; fill in the real URL, command and variable names, and keep the
 values in the environment or a 0600 file):
 

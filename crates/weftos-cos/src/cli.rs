@@ -138,6 +138,9 @@ pub async fn report_models(built: &host::Built) {
     for (tool, reason) in &built.unbound {
         eprintln!("not bound: {tool}: {reason}");
     }
+    for line in &built.mcp_sources {
+        eprintln!("mcp server: {line}");
+    }
     if let Some(b) = &built.brain {
         eprintln!("brain: {} ({} entries) at {}", b.installation(), b.len(), b.path().display());
     }

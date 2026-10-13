@@ -348,3 +348,34 @@ async fn a_missing_stdio_command_is_reported_not_fatal() {
     assert!(reg.specs().is_empty());
     assert!(reg.unavailable_sources()[0].1.contains("cannot start"));
 }
+
+#[tokio::test]
+async fn hand_written_servers_are_unvetted_and_catalog_servers_are_labelled_and_narrowed() {
+    use weftos_cos::config::CosConfig;
+    use weftos_cos::mcp_catalog::resolve_servers;
+    let dir = tempfile::tempdir().unwrap();
+    let addr = start(Arc::new(Fake::default())).await;
+    let catalog = json!({"schema": 1, "publisher": "weavelogic", "servers": [{
+        "id": "trip", "name": "Trip", "publisher": "weavelogic", "authorized": true,
+        "transport": {"type": "http", "url": format!("http://{addr}/mcp")},
+        "auth": {"kind": "bearer_env", "env": "COS_TEST_NO_SUCH_TOKEN_VAR"},
+        "allow": ["search_*", "book_flight"], "gate": "open", "tool_gates": {"book_*": "confirm"}}]});
+    std::fs::write(dir.path().join("catalog.json"), catalog.to_string()).unwrap();
+    let file = token_file(dir.path(), TOKEN);
+    let cfg: CosConfig = serde_json::from_value(json!({
+        "mcp_catalog": {"path": dir.path().join("catalog.json")},
+        "mcp_enable": [{"id": "trip", "allow": ["search_*"], "confirm": ["search_flights"], "auth": {"bearer_file": file}}],
+        "mcp_servers": [{"id": "mine", "transport": {"type": "stdio", "command": env!("CARGO_BIN_EXE_weftos-cos-mcp-echo")}, "allow": ["echo"]}]
+    })).unwrap();
+    let servers = resolve_servers(&cfg).unwrap();
+    let src = Arc::new(McpSource::new(&servers).unwrap());
+    src.refresh().await;
+    let labels = src.describe();
+    assert_eq!(labels[0], "mine: unvetted");
+    assert_eq!(labels[1], "trip: authorized by weavelogic, unsigned");
+    let reg = ToolRegistry::new().with_source(src);
+    let ids: Vec<_> = reg.specs().iter().map(|s| s.id).collect();
+    assert_eq!(ids, ["mine.echo", "trip.search_flights"], "book_flight is outside the user's narrowing");
+    assert_eq!(reg.find("mine.echo").unwrap().spec().gate, Gate::Confirm, "hand-written defaults to confirm");
+    assert_eq!(reg.find("trip.search_flights").unwrap().spec().gate, Gate::Confirm, "the user tightened a catalog open gate");
+}

@@ -66,6 +66,10 @@ impl ToolSource for McpSource {
         self.servers.iter().filter_map(|s| s.catalog_line()).collect()
     }
 
+    fn describe(&self) -> Vec<String> {
+        self.servers.iter().map(|s| format!("{}: {}", s.cfg.id, s.cfg.origin.label())).collect()
+    }
+
     fn unavailable(&self) -> Vec<(String, String)> {
         self.servers.iter().filter_map(|s| s.view().down.map(|why| (format!("mcp:{}", s.cfg.id), why))).collect()
     }
@@ -216,6 +220,9 @@ impl McpServer {
             if !self.cfg.allow.iter().any(|p| glob_match(p, &d.name)) {
                 continue;
             }
+            if !self.cfg.restrict_to.is_empty() && !self.cfg.restrict_to.iter().any(|p| glob_match(p, &d.name)) {
+                continue;
+            }
             let local: String = d.name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
             let id = format!("{}.{local}", self.cfg.id);
             if !seen.insert(id.clone()) {
@@ -237,6 +244,9 @@ impl McpServer {
 
     fn gate_for(&self, tool: &str) -> Gate {
         let pick = |g: McpGate| if g == McpGate::Open { Gate::Open } else { Gate::Confirm };
+        if self.cfg.force_confirm.iter().any(|p| glob_match(p, tool)) {
+            return Gate::Confirm;
+        }
         if let Some(g) = self.cfg.tool_gates.get(tool) {
             return pick(*g);
         }

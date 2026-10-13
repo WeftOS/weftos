@@ -123,6 +123,10 @@ pub trait ToolSource: Send + Sync {
     fn tools(&self) -> Vec<Arc<dyn Tool>>;
     /// Short lines for the system prompt: what exists and when to use it.
     fn catalog(&self) -> Vec<String>;
+    /// One line per source: its id and where its definition came from.
+    fn describe(&self) -> Vec<String> {
+        Vec::new()
+    }
     /// `(source, reason)` for each source that cannot be reached right now.
     fn unavailable(&self) -> Vec<(String, String)>;
 }
@@ -211,6 +215,10 @@ impl ToolRegistry {
     /// Prompt lines describing the sources and their state.
     pub fn catalog(&self) -> Vec<String> {
         self.sources.iter().flat_map(|s| s.catalog()).collect()
+    }
+
+    pub fn describe_sources(&self) -> Vec<String> {
+        self.sources.iter().flat_map(|s| s.describe()).collect()
     }
 
     pub fn unavailable_sources(&self) -> Vec<(String, String)> {

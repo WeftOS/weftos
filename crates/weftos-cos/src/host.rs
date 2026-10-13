@@ -35,6 +35,9 @@ pub struct Built {
     /// Tools that could not be bound, with the reason (no harness token, for
     /// example). The agent still runs with the rest.
     pub unbound: Vec<(String, String)>,
+    /// One line per MCP server: its id and where its definition came from
+    /// (unvetted, or authorized by a publisher).
+    pub mcp_sources: Vec<String>,
 }
 
 /// Load the app config the way `weft agent` does: an explicit file, or the
@@ -103,15 +106,18 @@ pub async fn build(cfg: &CosConfig) -> Result<Built, CosError> {
         unbound.push(("notes.record".into(), "no harness credential and no brain".into()));
     }
 
-    if !cfg.mcp_servers.is_empty() {
-        for srv in cfg.mcp_servers.iter().filter(|s| s.allow.is_empty()) {
+    let mcp_servers = crate::mcp_catalog::resolve_servers(cfg)?;
+    let mut mcp_sources = Vec::new();
+    if !mcp_servers.is_empty() {
+        for srv in mcp_servers.iter().filter(|s| s.allow.is_empty()) {
             unbound.push((format!("mcp:{}", srv.id), "allow is empty, so no tool is exposed".into()));
         }
-        let source = Arc::new(crate::tools::mcp::McpSource::new(&cfg.mcp_servers)?);
+        let source = Arc::new(crate::tools::mcp::McpSource::new(&mcp_servers)?);
         // Connect now so the startup report names the servers that are down;
         // they are retried at turn starts.
         crate::tools::ToolSource::refresh(source.as_ref()).await;
         unbound.extend(crate::tools::ToolSource::unavailable(source.as_ref()));
+        mcp_sources = crate::tools::ToolSource::describe(source.as_ref());
         tools = tools.with_source(source).with_dynamic_cap(cfg.mcp_max_tools_per_turn);
     }
 
@@ -125,5 +131,6 @@ pub async fn build(cfg: &CosConfig) -> Result<Built, CosError> {
         local_api_base,
         brain,
         unbound,
+        mcp_sources,
     })
 }

@@ -66,6 +66,10 @@ dirs = { workspace = true }
 hound = { workspace = true }
 clap = { workspace = true }
 cpal = { version = "0.15", optional = true }
+# Catalog signatures: Ed25519 over a domain-separated canonical document, the
+# same primitive weftos-cog-repo uses for signed-only installs.
+ed25519-dalek = { workspace = true }
+hex = "0.4"
 
 [dev-dependencies]
 tempfile = { workspace = true }
