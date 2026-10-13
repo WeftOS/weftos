@@ -24,7 +24,8 @@
 
         <service
             android:name=".MicService"
-            android:exported="false"
+            android:exported="true"
+            android:permission="android.permission.DUMP"
             android:foregroundServiceType="microphone" />
 
         <activity

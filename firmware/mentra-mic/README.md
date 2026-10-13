@@ -77,3 +77,20 @@ adb -s 192.168.10.128:5555 shell am start -n com.weftos.mentramic/.LauncherActiv
 ```
 
 The same form works for `com.weftos.mentramic.LEVEL` and `com.weftos.mentramic.STOP`.
+
+## Shell-started capture (display off, Android 11)
+
+With the display asleep no activity is visible, so a service the app starts
+itself is a background start and is denied the microphone, whatever the
+RECORD_AUDIO app-op mode. A foreground service started directly by the shell
+user is exempt. `MicService` is exported behind `android.permission.DUMP`,
+which the adb shell holds and ordinary apps do not:
+
+```
+adb -s 192.168.10.128:5555 shell am start-foreground-service \
+  -n com.weftos.mentramic/.MicService -a com.weftos.mentramic.RECORD \
+  --ei seconds 6 --es name utt1
+```
+
+`com.weftos.mentramic.LEVEL` and `com.weftos.mentramic.STOP` work the same way
+(STOP through the receiver: the running service ends early).
