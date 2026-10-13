@@ -56,6 +56,11 @@ impl GlassesCore {
         self.node.lock().unwrap().feed(now_ms, input)
     }
 
+    /// The socket was replaced: drop any half-read frame.
+    pub fn reset_stream(&self) {
+        self.node.lock().unwrap().reset_stream();
+    }
+
     pub fn indicator_state(&self) -> IndicatorState {
         self.node.lock().unwrap().indicator_state()
     }

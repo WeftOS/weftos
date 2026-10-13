@@ -145,6 +145,13 @@ impl GlassesNode {
         }
     }
 
+    /// The socket was replaced: drop any half-read frame and the reply-utterance memory so
+    /// the new stream starts clean. Indicator and pairing state are kept.
+    pub fn reset_stream(&mut self) {
+        self.rx.clear();
+        self.reply_utt = None;
+    }
+
     fn next_seq(&mut self) -> u64 {
         self.out_seq += 1;
         self.out_seq
@@ -537,6 +544,17 @@ mod tests {
                 .any(|a| matches!(a, IndicatorAction::PlayCue { .. }))
         );
         assert!(!h.send.is_empty(), "the shown state is still reported");
+    }
+
+    #[test]
+    fn reset_stream_drops_a_partial_frame() {
+        let mut n = node();
+        let f = cmd_bytes(1, Command::Ping);
+        n.on_bytes(&f[..6], 0).unwrap();
+        n.reset_stream();
+        // a fresh, whole frame parses; the stale 6 bytes are gone
+        let h = n.on_bytes(&f, 0).unwrap();
+        assert_eq!(h.send.len(), 1);
     }
 
     #[test]
