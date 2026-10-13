@@ -55,6 +55,7 @@ space bar ── SDL window ──▶ ptt.down/up sensor ──▶ host ──�
                                                   ◀── {posted: {text}} ◀── mic + STT (agent)
 host ◀── GET /v1/cos/events (SSE): state, status, token, message, layout,
          checklist, steps, ask, page
+host ──▶ GET /v1/cos/turns?limit=20 on every (re)connect: recent turns refill the chat log
 tap on a guide view ──▶ host ──▶ POST /v1/cos/answer
 Enter + typing ──▶ host ──▶ POST /v1/cos/utterance {source: typed}
 ```

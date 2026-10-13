@@ -50,6 +50,15 @@ pub struct Posted {
     pub result: Result<Value, String>,
 }
 
+/// One earlier message from `GET /v1/cos/turns`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct HistoryEntry {
+    pub turn_id: String,
+    /// `user` or `assistant`.
+    pub role: String,
+    pub text: String,
+}
+
 /// What the worker threads hand the loop.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Inbound {
@@ -59,6 +68,8 @@ pub enum Inbound {
     /// The stream ended or could not be opened; a retry follows.
     Disconnected { reason: String },
     Posted(Posted),
+    /// The reply to [`AgentLink::fetch_history`]: oldest first, or why it failed.
+    History(Result<Vec<HistoryEntry>, String>),
 }
 
 #[derive(Debug, Clone)]
@@ -74,6 +85,8 @@ pub struct AgentLink {
     inbox: Receiver<Inbound>,
     outbox: Sender<Post>,
     stop: Arc<AtomicBool>,
+    in_tx: Sender<Inbound>,
+    base: String,
 }
 
 impl AgentLink {
@@ -85,6 +98,8 @@ impl AgentLink {
         let cfg = ClientConfig { base: base.clone(), ..cfg };
 
         let tx = in_tx.clone();
+        let hist_tx = in_tx.clone();
+        let hist_base = base.clone();
         let stop_sse = stop.clone();
         thread::Builder::new()
             .name("cos-host-sse".into())
@@ -107,12 +122,26 @@ impl AgentLink {
             })
             .expect("spawn post thread");
 
-        Self { inbox, outbox, stop }
+        Self { inbox, outbox, stop, in_tx: hist_tx, base: hist_base }
     }
 
     /// Queue a request; the reply arrives as [`Inbound::Posted`].
     pub fn post(&self, post: Post) {
         let _ = self.outbox.send(post);
+    }
+
+    /// Ask for the agent's last `limit` turn messages; the reply arrives as
+    /// [`Inbound::History`]. Runs on its own thread with a short timeout so
+    /// a slow agent never stalls the frame loop or the post queue.
+    pub fn fetch_history(&self, limit: usize) {
+        let tx = self.in_tx.clone();
+        let url = format!("{}/v1/cos/turns?limit={limit}", self.base);
+        let spawned = thread::Builder::new().name("cos-host-history".into()).spawn(move || {
+            let _ = tx.send(Inbound::History(get_history(&url)));
+        });
+        if let Err(e) = spawned {
+            let _ = self.in_tx.send(Inbound::History(Err(e.to_string())));
+        }
     }
 
     /// Next message from the threads, if one is waiting.
@@ -124,6 +153,18 @@ impl AgentLink {
 impl Drop for AgentLink {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
+    }
+}
+
+fn get_history(url: &str) -> Result<Vec<HistoryEntry>, String> {
+    let agent = ureq::AgentBuilder::new().timeout_connect(Duration::from_secs(2)).timeout_read(Duration::from_secs(3)).build();
+    match agent.get(url).call() {
+        Ok(resp) => {
+            let v = resp.into_json::<Value>().map_err(|e| format!("unreadable reply: {e}"))?;
+            serde_json::from_value(v["turns"].clone()).map_err(|e| format!("unexpected reply shape: {e}"))
+        }
+        Err(ureq::Error::Status(code, _)) => Err(format!("HTTP {code}")),
+        Err(ureq::Error::Transport(t)) => Err(t.to_string()),
     }
 }
 

@@ -127,7 +127,11 @@ fn run_connection(
         if let Err(e) = host.set_clock(&clock()) {
             return fail(e, true);
         }
-        match host.step(now_ms) {
+        let stepped = host.step(now_ms);
+        for line in host.take_notices() {
+            log(&line);
+        }
+        match stepped {
             Err(e) => return fail(e, true),
             Ok(false) if cfg.reopen_on_close => return fail(DisplayError::Closed, true),
             Ok(false) => return Conn::Done(Ended::Closed),

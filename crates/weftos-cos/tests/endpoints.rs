@@ -208,3 +208,88 @@ async fn a_cos_v1_client_without_endpoint_fields_still_works() {
     let v = serde_json::to_value(&m).unwrap();
     assert!(v.get("endpoint").is_none() && v.get("speak").is_none());
 }
+
+#[tokio::test]
+async fn recent_turns_come_back_oldest_first_with_a_bounded_limit() {
+    let t = agent(3).await;
+    let conv: Arc<dyn Conversation> = Arc::new(t.agent.clone());
+    let app = router_auth(conv, None, None);
+    let mut rx = t.agent.events();
+    for text in ["first question", "second question"] {
+        t.agent.utter(UserUtterance::typed(text)).await.unwrap();
+        final_message(&mut rx).await;
+    }
+    let get = |path: &str| {
+        let app = app.clone();
+        let req = request("GET", path, "127.0.0.1:50000", None, None);
+        async move {
+            let res = app.oneshot(req).await.unwrap();
+            let status = res.status();
+            let bytes = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+            (status, serde_json::from_slice::<Value>(&bytes).unwrap())
+        }
+    };
+
+    let (status, body) = get("/v1/cos/turns").await;
+    assert_eq!(status, StatusCode::OK);
+    let turns = body["turns"].as_array().unwrap();
+    let shape: Vec<(&str, &str, &str)> = turns.iter().map(|m| (m["role"].as_str().unwrap(), m["endpoint"].as_str().unwrap(), m["text"].as_str().unwrap())).collect();
+    assert_eq!(
+        shape,
+        [("user", "host", "first question"), ("assistant", "host", "reply 0"), ("user", "host", "second question"), ("assistant", "host", "reply 1")]
+    );
+    assert_eq!(turns[0]["turn_id"], turns[1]["turn_id"], "a turn's two messages share its id");
+    assert_ne!(turns[0]["turn_id"], turns[2]["turn_id"]);
+    assert!(turns.iter().all(|m| m["ts"].as_str().is_some_and(|ts| ts.ends_with('Z'))));
+
+    // `limit` keeps the newest, still oldest first.
+    let (_, body) = get("/v1/cos/turns?limit=2").await;
+    let texts: Vec<&str> = body["turns"].as_array().unwrap().iter().map(|m| m["text"].as_str().unwrap()).collect();
+    assert_eq!(texts, ["second question", "reply 1"]);
+
+    // A bad limit is refused, never silently emptied or clamped.
+    for bad in ["0", "101", "-1", "abc", ""] {
+        let (status, body) = get(&format!("/v1/cos/turns?limit={bad}")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "limit={bad:?}");
+        assert!(body["error"].as_str().unwrap().contains("limit"));
+    }
+}
+
+#[tokio::test]
+async fn turn_history_is_redacted_bounded_and_attributed() {
+    let t = agent(1).await;
+    let mut rx = t.agent.events();
+    let secret = format!("wfb_{}", "a".repeat(40));
+    t.agent.utter(UserUtterance::voice(format!("use {secret} please")).from_endpoint("mentra")).await.unwrap();
+    final_message(&mut rx).await;
+    let all = t.agent.recent_turns(100);
+    assert_eq!(all.len(), 2);
+    assert!(all.iter().all(|m| m.endpoint == "mentra"));
+    assert_eq!(all[0].text, "use [redacted] please");
+    assert!(!all.iter().any(|m| m.text.contains(&secret)));
+
+    for _ in 0..weftos_cos::conversation::TURN_HISTORY_CAP + 10 {
+        t.agent.utter(UserUtterance::typed("again")).await.unwrap();
+    }
+    assert_eq!(t.agent.recent_turns(100).len(), 100);
+}
+
+#[tokio::test]
+async fn off_loopback_turns_need_a_token() {
+    let t = agent(1).await;
+    let dir = tempfile::tempdir().unwrap();
+    let store = TokenStore::new(dir.path());
+    let token = std::fs::read_to_string(store.add("pad").unwrap()).unwrap();
+    let conv: Arc<dyn Conversation> = Arc::new(t.agent.clone());
+    let app = router_auth(conv, None, Some(Arc::new(store)));
+    let tail = "100.64.0.9:50000";
+    let status = |tok: Option<&str>, peer: &str| {
+        let app = app.clone();
+        let req = request("GET", "/v1/cos/turns", peer, tok, None);
+        async move { app.oneshot(req).await.unwrap().status() }
+    };
+    assert_eq!(status(None, tail).await, StatusCode::UNAUTHORIZED);
+    assert_eq!(status(Some("wfe_wrong"), tail).await, StatusCode::UNAUTHORIZED);
+    assert_eq!(status(Some(&token), tail).await, StatusCode::OK);
+    assert_eq!(status(None, "127.0.0.1:50000").await, StatusCode::OK);
+}

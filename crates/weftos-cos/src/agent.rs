@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use tokio::sync::{Mutex, broadcast};
 
 use crate::CosError;
-use crate::conversation::{Conversation, GuideAnswer, HOST_ENDPOINT, Source, TurnId, UserUtterance, valid_endpoint_name};
+use crate::conversation::{Conversation, GuideAnswer, HOST_ENDPOINT, Source, TURN_HISTORY_CAP, TurnId, TurnMessage, UserUtterance, valid_endpoint_name};
 use crate::events::{AgentState, Event, redact};
 use crate::guide::{Resolution, UiHandle};
 use crate::prompt::system_prompt;
@@ -62,6 +62,8 @@ struct Inner {
     lanes_running: AtomicU32,
     /// The last 64 turns: who they came from and whether they were spoken.
     turns: std::sync::Mutex<std::collections::VecDeque<TurnRecord>>,
+    /// The last [`TURN_HISTORY_CAP`] final messages, for `GET /v1/cos/turns`.
+    messages: std::sync::Mutex<std::collections::VecDeque<TurnMessage>>,
     /// Remote endpoints whose engine is `none`: their replies are never
     /// flagged `speak`. Another endpoint's setting does not touch this.
     silent_endpoints: std::sync::Mutex<std::collections::HashSet<String>>,
@@ -99,6 +101,7 @@ impl CosAgent {
                 focus: std::sync::Mutex::new(None),
                 lanes_running: AtomicU32::new(0),
                 turns: std::sync::Mutex::new(std::collections::VecDeque::new()),
+                messages: std::sync::Mutex::new(std::collections::VecDeque::new()),
                 silent_endpoints: std::sync::Mutex::new(std::collections::HashSet::new()),
             }),
         }
@@ -123,6 +126,10 @@ impl CosAgent {
         while v.len() > 64 {
             v.pop_front();
         }
+    }
+
+    fn remember_user(&self, id: &TurnId, endpoint: &str, text: &str) {
+        self.inner.remember(id.clone(), "user", endpoint, redact(text.trim()));
     }
 
     /// Whether `turn` began as a spoken utterance. Remembers the last 64 turns.
@@ -184,6 +191,7 @@ impl Conversation for CosAgent {
             Some(e) => return Err(CosError::Config(format!("invalid endpoint {e:?}: use 1 to 32 characters of a-z, 0-9, _ or -"))),
         };
         let turn_id = TurnId::new();
+        self.remember_user(&turn_id, &endpoint, &utterance.text);
         self.record_turn(&turn_id, endpoint, utterance.source == Source::Voice);
         let agent = self.clone();
         let id = turn_id.clone();
@@ -195,6 +203,7 @@ impl Conversation for CosAgent {
         let turn_id = TurnId::new();
         match self.inner.ui.apply_answer(&answer)? {
             Resolution::Turn(utterance) => {
+                self.remember_user(&turn_id, HOST_ENDPOINT, &utterance.text);
                 self.record_turn(&turn_id, HOST_ENDPOINT.to_string(), false);
                 let agent = self.clone();
                 let id = turn_id.clone();
@@ -212,6 +221,11 @@ impl Conversation for CosAgent {
     fn events(&self) -> broadcast::Receiver<Event> {
         self.inner.tx.subscribe()
     }
+
+    fn recent_turns(&self, limit: usize) -> Vec<TurnMessage> {
+        let m = self.inner.messages.lock().unwrap_or_else(|e| e.into_inner());
+        m.iter().skip(m.len().saturating_sub(limit)).cloned().collect()
+    }
 }
 
 fn is_yes(text: &str) -> bool {
@@ -221,8 +235,26 @@ fn is_yes(text: &str) -> bool {
 
 impl Inner {
     fn emit(&self, ev: Event) {
-        let ev = self.attribute(ev);
-        let _ = self.tx.send(ev.redacted());
+        let ev = self.attribute(ev).redacted();
+        if let Event::Message { turn_id, text, is_final: true, endpoint, .. } = &ev {
+            self.remember(turn_id.clone(), "assistant", endpoint.as_deref().unwrap_or(HOST_ENDPOINT), text.clone());
+        }
+        let _ = self.tx.send(ev);
+    }
+
+    /// Keep a final message for `GET /v1/cos/turns` (`text` is redacted).
+    fn remember(&self, turn_id: TurnId, role: &str, endpoint: &str, text: String) {
+        let mut m = self.messages.lock().unwrap_or_else(|e| e.into_inner());
+        m.push_back(TurnMessage {
+            turn_id,
+            role: role.into(),
+            endpoint: endpoint.into(),
+            text,
+            ts: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        });
+        while m.len() > TURN_HISTORY_CAP {
+            m.pop_front();
+        }
     }
 
     /// Stamp a `message` with its turn's endpoint, and `speak` when a remote

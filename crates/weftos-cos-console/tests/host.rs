@@ -237,3 +237,96 @@ fn a_stream_drop_mid_turn_finishes_the_line_and_the_next_token_starts_a_new_one(
     assert!(pump(&mut host, &mut now, |h| agent_lines(h).len() == 2));
     assert_eq!(agent_lines(&host), ["Half", "New"]);
 }
+
+fn turn(id: &str, role: &str, text: &str) -> serde_json::Value {
+    json!({"turn_id": id, "role": role, "endpoint": "host", "text": text, "ts": "2026-10-13T09:00:00.000Z"})
+}
+
+fn logged(host: &Host<'_>) -> Vec<(Role, String)> {
+    host.console().chat().entries().map(|e| (e.role, e.text.clone())).collect()
+}
+
+#[test]
+fn recent_turns_fill_the_chat_log_oldest_first_before_live_events() {
+    let agent = FakeAgent::start();
+    agent.set_turns(vec![turn("a", "user", "what is on today"), turn("a", "assistant", "Two meetings."), turn("b", "user", "thanks")]);
+    let (mut s, sim, cfg) = online(&agent);
+    let mut host = Host::open(&mut s, cfg).unwrap();
+    let mut now = 0;
+    assert!(pump(&mut host, &mut now, |h| logged(h).len() == 3));
+    assert_eq!(
+        logged(&host),
+        [(Role::User, "what is on today".to_string()), (Role::Agent, "Two meetings.".to_string()), (Role::User, "thanks".to_string())]
+    );
+    assert!(scene_has(&sim, "Two meetings."), "the history is on the pad, not only in the model");
+    assert_eq!(agent.turns_requests(), ["/v1/cos/turns?limit=20"]);
+
+    // Live events then land below the history.
+    assert!(pump(&mut host, &mut now, |h| h.is_online()));
+    agent.send(json!({"kind": "message", "turn_id": "c", "text": "live reply", "final": true}));
+    assert!(pump(&mut host, &mut now, |h| logged(h).len() == 4));
+    assert_eq!(logged(&host)[3], (Role::Agent, "live reply".to_string()));
+}
+
+#[test]
+fn a_live_event_during_the_fetch_is_not_drawn_twice() {
+    let agent = FakeAgent::start();
+    agent.set_turns(vec![turn("a", "user", "earlier"), turn("a", "assistant", "earlier reply"), turn("b", "user", "just now"), turn("b", "assistant", "racing reply")]);
+    agent.set_turns_delay(Duration::from_millis(600));
+    let (mut s, _sim, cfg) = online(&agent);
+    let mut host = Host::open(&mut s, cfg).unwrap();
+    let mut now = 0;
+    // The stream connects and delivers turn b's final message while the fetch is still out.
+    let deadline = Instant::now() + WAIT;
+    while agent.stream_count() == 0 && Instant::now() < deadline {
+        now += 33;
+        host.step(now).unwrap();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    agent.send(json!({"kind": "message", "turn_id": "b", "text": "racing reply", "final": true}));
+    assert!(pump(&mut host, &mut now, |h| logged(h).len() >= 4));
+    for _ in 0..30 {
+        now += 33;
+        host.step(now).unwrap();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let agents = agent_lines(&host);
+    assert_eq!(agents.iter().filter(|t| *t == "racing reply").count(), 1, "{agents:?}");
+    assert_eq!(user_lines(&host), ["earlier", "just now"]);
+}
+
+#[test]
+fn a_reopened_host_shows_the_same_turns_once() {
+    let agent = FakeAgent::start();
+    agent.set_turns(vec![turn("a", "user", "hello"), turn("a", "assistant", "hi there")]);
+    for _ in 0..2 {
+        let (mut s, _sim, cfg) = online(&agent);
+        let mut host = Host::open(&mut s, cfg).unwrap();
+        let mut now = 0;
+        assert!(pump(&mut host, &mut now, |h| logged(h).len() == 2));
+        for _ in 0..10 {
+            now += 33;
+            host.step(now).unwrap();
+        }
+        assert_eq!(logged(&host), [(Role::User, "hello".to_string()), (Role::Agent, "hi there".to_string())]);
+    }
+    assert_eq!(agent.turns_requests().len(), 2);
+}
+
+#[test]
+fn a_failed_history_fetch_is_noted_once_and_changes_nothing_else() {
+    // An agent without the route answers 404; nothing breaks, live events still land.
+    let agent = FakeAgent::start();
+    let (mut s, _sim, cfg) = online(&agent);
+    let mut host = Host::open(&mut s, cfg).unwrap();
+    let mut now = 0;
+    assert!(pump(&mut host, &mut now, |h| h.is_online()));
+    agent.send(json!({"kind": "message", "turn_id": "x", "text": "still works", "final": true}));
+    assert!(pump(&mut host, &mut now, |h| agent_lines(h) == ["still works"]));
+    let notices = host.take_notices();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert!(notices[0].contains("recent turns") && notices[0].contains("404"));
+    assert!(host.take_notices().is_empty());
+    // One retry follows the first connect, and it stays quiet.
+    assert_eq!(agent.turns_requests().len(), 2);
+}

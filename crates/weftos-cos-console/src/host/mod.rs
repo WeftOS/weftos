@@ -15,6 +15,12 @@
 //! - With the agent unreachable the avatar shows `Blocked("agent
 //!   offline")` and the stream is retried with backoff. A drop mid-stream
 //!   ends any open agent line; the next token starts a new one.
+//! - On open the host fetches the agent's recent turns
+//!   (`GET /v1/cos/turns`) and fills the chat log before any live event is
+//!   applied; events that arrive meanwhile are held, then replayed, and a
+//!   turn already shown (by `turn_id` and role) is never drawn twice. A
+//!   failed fetch is noted once and ignored; one retry follows the first
+//!   stream connect.
 //! - Development typing (Mac window only): Enter opens a typed line in
 //!   the chat area, Enter sends it as a `typed` utterance, Escape closes
 //!   it. While it is open the space bar types a space instead of talking.
@@ -24,7 +30,7 @@ pub mod agent_event;
 pub mod input_line;
 pub mod supervise;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -34,7 +40,7 @@ use weftos_display_client::{
 };
 
 use crate::{AgentState, Console, DisplayError, GuideAnswer, Layout, StatusLine, StepDir};
-use agent_client::{AgentLink, ClientConfig, Inbound, Post, Posted};
+use agent_client::{AgentLink, ClientConfig, HistoryEntry, Inbound, Post, Posted};
 use agent_event::{agent_state, checklist, page_from_markdown, parse_layout, steps, survey, AgentEvent};
 use input_line::InputLine;
 
@@ -65,6 +71,18 @@ impl Default for HostConfig {
     }
 }
 
+/// How many earlier messages the host asks for on open.
+pub const HISTORY_LIMIT: usize = 20;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HistoryState {
+    /// A fetch is out; inbound traffic is held until it answers.
+    Pending,
+    Loaded,
+    /// The fetch failed; `retry` says whether the first connect may try again.
+    Failed { retry: bool },
+}
+
 /// An agent turn with text on screen.
 struct Turn {
     msg_id: u64,
@@ -86,6 +104,16 @@ pub struct Host<'a> {
     ptt_held: bool,
     input: Option<InputLine>,
     clock: String,
+    history: HistoryState,
+    /// A fetch failed once already: the retry stays quiet.
+    history_failed_before: bool,
+    /// Inbound messages held while the history fetch is out.
+    held: Vec<Inbound>,
+    /// Turns whose assistant text / user line are already in the log.
+    shown_assistant: HashSet<String>,
+    shown_user: HashSet<String>,
+    /// Lines for the supervisor's log, drained by [`Host::take_notices`].
+    notices: Vec<String>,
 }
 
 impl<'a> Host<'a> {
@@ -99,6 +127,7 @@ impl<'a> Host<'a> {
             reconnect_min: cfg.reconnect_min,
             reconnect_max: cfg.reconnect_max,
         });
+        link.fetch_history(HISTORY_LIMIT);
         Ok(Self {
             console,
             cfg,
@@ -111,7 +140,18 @@ impl<'a> Host<'a> {
             ptt_held: false,
             input: None,
             clock: String::new(),
+            history: HistoryState::Pending,
+            history_failed_before: false,
+            held: Vec::new(),
+            shown_assistant: HashSet::new(),
+            shown_user: HashSet::new(),
+            notices: Vec::new(),
         })
+    }
+
+    /// Log lines the host wants written (a failed history fetch).
+    pub fn take_notices(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.notices)
     }
 
     pub fn console(&self) -> &Console<'a> {
@@ -262,8 +302,21 @@ impl<'a> Host<'a> {
 
     fn on_inbound(&mut self, msg: Inbound) -> Res {
         match msg {
+            Inbound::History(result) => return self.on_history(result),
+            m if self.history == HistoryState::Pending => {
+                self.held.push(m);
+                return Ok(());
+            }
+            _ => {}
+        }
+        match msg {
+            Inbound::History(_) => Ok(()),
             Inbound::Connected => {
                 self.online = true;
+                if self.history == (HistoryState::Failed { retry: true }) {
+                    self.history = HistoryState::Pending;
+                    self.link.fetch_history(HISTORY_LIMIT);
+                }
                 if self.offline_shown {
                     self.offline_shown = false;
                     self.console.set_agent_state(AgentState::Idle)?;
@@ -289,6 +342,48 @@ impl<'a> Host<'a> {
         }
     }
 
+    /// The history reply: draw the earlier turns, then replay what was held.
+    fn on_history(&mut self, result: Result<Vec<HistoryEntry>, String>) -> Res {
+        let retried = self.history_failed_before;
+        match result {
+            Ok(entries) => {
+                self.history = HistoryState::Loaded;
+                // A turn whose live events are already held is drawn from them.
+                for m in &self.held {
+                    if let Inbound::Event(AgentEvent::Token { turn_id, .. } | AgentEvent::Message { turn_id, .. }) = m {
+                        self.shown_assistant.insert(turn_id.clone());
+                    }
+                    if let Inbound::Posted(p) = m {
+                        if let Some(id) = posted_turn_id(p) {
+                            self.shown_user.insert(id);
+                        }
+                    }
+                }
+                for e in entries {
+                    match e.role.as_str() {
+                        "user" if self.shown_user.insert(e.turn_id.clone()) => self.console.push_user_line(&e.text)?,
+                        "assistant" if self.shown_assistant.insert(e.turn_id.clone()) => {
+                            let id = self.fresh_msg();
+                            self.console.push_agent_text(&e.text, id)?;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Err(e) => {
+                self.history = HistoryState::Failed { retry: !retried };
+                self.history_failed_before = true;
+                if !retried {
+                    self.notices.push(format!("console host: could not load recent turns: {e}"));
+                }
+            }
+        }
+        for m in std::mem::take(&mut self.held) {
+            self.on_inbound(m)?;
+        }
+        Ok(())
+    }
+
     fn apply_event(&mut self, ev: AgentEvent) -> Res {
         let before = self.console.layout();
         let redraws = matches!(ev, AgentEvent::Layout { .. } | AgentEvent::Page { .. } | AgentEvent::Checklist { .. } | AgentEvent::Steps { .. } | AgentEvent::Ask { .. });
@@ -302,6 +397,7 @@ impl<'a> Host<'a> {
                 self.apply_status()?;
             }
             AgentEvent::Token { turn_id, text } => {
+                self.shown_assistant.insert(turn_id.clone());
                 let id = self.turn_msg(&turn_id);
                 if let Some(t) = self.turns.get_mut(&turn_id) {
                     t.streamed.push_str(&text);
@@ -312,6 +408,7 @@ impl<'a> Host<'a> {
                 self.console.push_agent_text(&text, id)?;
             }
             AgentEvent::Message { turn_id, text, is_final } => {
+                self.shown_assistant.insert(turn_id.clone());
                 let id = self.turn_msg(&turn_id);
                 let streamed = self.turns.get(&turn_id).map(|t| t.streamed.clone()).unwrap_or_default();
                 // The final message repeats what the tokens streamed; show
@@ -348,6 +445,9 @@ impl<'a> Host<'a> {
     }
 
     fn on_posted(&mut self, p: Posted) -> Res {
+        if let Some(id) = posted_turn_id(&p) {
+            self.shown_user.insert(id);
+        }
         match (p.post, p.result) {
             (Post::Ptt { down: false }, Ok(v)) => match v["posted"]["text"].as_str() {
                 Some(text) => self.console.push_user_line(text),
@@ -396,6 +496,17 @@ impl<'a> Host<'a> {
         self.turns.insert(turn_id.to_string(), Turn { msg_id: id, streamed: String::new() });
         id
     }
+}
+
+/// The turn id of a user line this host posted (utterance or push-to-talk).
+fn posted_turn_id(p: &Posted) -> Option<String> {
+    let v = p.result.as_ref().ok()?;
+    match p.post {
+        Post::Utterance { .. } => v["turn_id"].as_str(),
+        Post::Ptt { down: false } => v["posted"]["turn_id"].as_str(),
+        _ => None,
+    }
+    .map(str::to_string)
 }
 
 /// A guide touch as the `POST /v1/cos/answer` body (contract §3).
