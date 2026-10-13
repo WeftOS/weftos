@@ -271,6 +271,8 @@ New or changed event kinds: `device.status`, `audio.out{format, chunk}` (TTS chu
 
 ## 4. Voice
 
+> **Update 2026-10-13:** this section describes the cloud speech engine legs. The speech-shaping layer, the streaming spoken-output format and turn-taking are in section 4d; read that first. Nothing here speaks a whole reply any more.
+
 ### 4.1 What Grok has done **[V]**
 
 `~/dev/mentra/scripts/mentra-cos-speak.py` watches the loopback SSE stream; for a final `message` with `endpoint: mentra` and `speak: true` it POSTs the text to the ElevenLabs text-to-speech endpoint with `model_id: eleven_v4`, a fixed voice id, `output_format=pcm_24000`, wraps the PCM as a 24 kHz mono WAV and pushes it to the glasses over adb. The key is read from the environment or the shell profile and is never printed. Replies are cut at 700 characters. STT is unchanged (local Parakeet through `weftos-cos transcribe`).
@@ -671,6 +673,163 @@ These run alongside the capability phases (section 5) and come before the voice 
 
 Voice work (4d) does not start its acceptance tests until P2 passes, because every voice test needs a text-level oracle first.
 
+## 4d. Its voice
+
+**Owner direction (2026-10-13):** "we have something that is parsing it into human speech with the proper amount of info, but in a way that is fast to transfer it, not just read out a line of text but turn it into a conversational tool. This SHOULD USE WEFTOS we have some of these models in there already and we can continue to improve them using this."
+
+**Today (honest baseline) [V].** The CoS reads the final text reply aloud after the whole answer exists, cut at 700 characters (`speak.rs`, `MAX_SPOKEN_CHARS`). The glasses loop renders the whole reply with one ElevenLabs request, wraps it as a WAV, pushes it over adb, then plays it (`mentra-cos-speak.py`). Nothing is chunked, nothing is shaped, there is no way to ask for more, and a barge-in on the glasses cannot stop a clip already pushed. That is a read-out, not a conversation.
+
+### 4d.1 What WeftOS already has (read and cited)
+
+| Piece | What it gives the CoS | Evidence |
+|---|---|---|
+| **ADR-061** conversational voice loop | Full-duplex loop: STT, agent, **dual-layer TTS** (a fast acknowledgement covering a streamed expressive answer, rendered sentence by sentence), semantic endpointing, per-speaker identity, one expressive tag vocabulary with a hard scrub so no tag is read aloud. Measured: warm STT about 0.05 s, model first token 0.2 to 0.3 s, fast TTS 0.3 to 0.7 s, about 0.6 s felt for a fast answer | `docs/adr/adr-061-conversational-voice-agent-loop.md` **[V]** |
+| `policy.rs` spoken-answer policy | The one voice-specific constraint on the agent: spoken replies are short (default 2 sentences, token cap), no markdown, lists or code, "offer to continue" instruction in the prompt; it also clamps the reply it gets | `crates/clawft-channels/src/voice/policy.rs:4,44,90-95,122-128` **[V]** |
+| **ADR-062** ECC graph-walk conversation | A response is a node; **Speculative** (cheap, spoken immediately) then **Committed** (the considered answer) with an **overt-repair** node when the committed answer contradicts what was already said; floor is a scored read; backchannel is a `Continuer`, not a turn | `docs/adr/adr-062-ecc-graph-walk-conversation.md`, `crates/clawft-voice-talk/src/render.rs`, `ecc.rs` **[V]** |
+| **ADR-068** full-duplex floor and dumb edge | Daemon-side `DuplexChannel` state machine (Idle, Listening, Thinking, Speaking, Overlap, Backchannel, Degraded); the edge only streams, plays and holds **three reflexes**: instant mute on command, link-loss safety, relaying the echo-return-loss scalar. Two lanes: media and control. Session-authenticated stream | `docs/adr/adr-068-full-duplex-voice-edge-agent.md`, `crates/clawft-channels/src/voice/edge_reflex.rs` **[V]** |
+| **ADR-053** STT canonical path | `SttBackend` seam; substrate-side whisper canonical, parakeet in the Rust path | `docs/adr/adr-053-voice-stt-canonical-path.md` **[V]** |
+| **ADR-074** interim xAI Grok voice | Voice transport modes `xai_s2s`, `local`, `xai_hybrid`; local stays the offline and fallback path | `docs/adr/adr-074-interim-xai-grok-voice.md` **[V]** |
+| `clawft-voice-talk` | The binding of the above: `render` (render from a node), `ecc` (conversation written onto the causal graph), `forest` and `session` (the assembled loop), `midstream` (partial-transcript diff and stall hooks on the 50 ms tick) | `crates/clawft-voice-talk/src/` **[V]** |
+| `clawft-voice-tts` | Native TTS behind one seam: Kokoro fast tier, Orpheus slow tier with SNAC decode, Chatterbox clone scaffold (inference not yet implemented), Pocket TTS trial | `crates/clawft-voice-tts/src/lib.rs`, `fast_tier.rs` **[V]** |
+| `clawft-voice-onnx` | Parakeet STT, smart-turn semantic endpointing, ECAPA speaker, Silero VAD | `crates/clawft-voice-onnx/src/` **[V]** |
+| `clawft-voice-aec` | Native echo cancellation owning device I/O; flush on barge-in | `crates/clawft-voice-aec/src/` **[V]** |
+| Channels `voice/` | `prosody.rs` (pitch, energy, rate, pauses; arousal floor), `paralinguistics.rs` (laughs, "mm-hmm", fillers as non-lexical, groundwork for backchannel), `ser.rs` (emotion model seam, degraded to DSP), `analysis.rs` (the frozen `VoiceAnalysis` record), `edge_reflex.rs`, `talkmode.rs`, `turn.rs`, `cue.rs` | `crates/clawft-channels/src/voice/` **[V]** |
+| **Cue tones** | Spoken acknowledgements ("One sec") were replaced by short synthesized tones because canned phrases "read as parroting and broke the conversational illusion" | `cue.rs` header **[V]** |
+| `clawft-bench-voice` | Latency, WER and CPU harness with thresholds | `crates/clawft-bench-voice/src/lib.rs` **[V]** |
+| Research | `.planning/voice-ecc-synthesis.md` (50 ms tick, node lifecycle, **Weaver-learned floor and coherence** in its Phase 4, and a training-flywheel section: observe real conversations, learn turn-taking, retrain), `docs/research/weft-617-midstream-eval.md`, `docs/design/talkforest-retirement.md` (voice moving from the in-process forest to the daemon-hosted loop plus thin edge) | **[V]** |
+
+What does **not** exist yet for the CoS: a streaming spoken-output wire format, any shaping from a structured answer into speech, "pending detail" the listener can ask for, and a feedback path from how people react to how replies are shaped.
+
+### 4d.2 The speech-shaping layer
+
+A layer between the agent's answer and any speech engine. It produces a **spoken plan**, not an audio read-out of the display text.
+
+```
+ agent answer (display text + facts) ──> SpeechShaper ──> spoken plan ──> speech engine(s)
+                                          │   ^                │
+                                          │   └ context: device, user prefs, floor state, history
+                                          └──> display text unchanged (pad, phone, e-ink show everything)
+```
+
+**Inputs.** The reply text (the agent's prompt already requires a standalone first sentence, `prompt.rs`), the structured tool facts behind it when available, the endpoint (phone, glasses, pad), user preferences, and the conversation state (floor, whether the user interrupted last time).
+
+**What it does** **[D]**:
+
+1. **Lead.** Take the standalone first sentence as the spoken lead, trimmed to a word budget (default about 25 words, one or two sentences, `policy.rs` default is two). If the model's first sentence is too long, split at a clause boundary.
+2. **Detail on request.** Everything after the lead is **detail**. It is not read. It is kept as a `detail_ref` for 60 seconds (or the conversation) and the speaker may say "go on", "tell me more", "which ones" to hear it, shaped the same way, one chunk at a time.
+3. **Offer.** When detail exists, add at most one short offer ("Want the three tickets?"), spoken as a separate interruptible chunk. No offer when there is no detail (`policy.rs` already pushes the model to "offer to continue").
+4. **Make it sayable.** Strip markdown; never read ids, URLs, hashes or table cells; collapse lists to a count plus the top item ("five open, the first is the display work"); verbalize numbers, dates, times, durations and units ("Thursday at nine fifteen", "about four hundred dollars"); expand abbreviations only when ambiguous in speech. Ids such as WEFT-123 are spoken only when the user asked for the id.
+5. **Chunk for speed.** Emit chunks of one clause or short sentence (about 6 to 18 words, the first as short as 4 to 8). The first chunk is released as soon as the model has produced the first clause, **before the answer is complete**, so the lead starts while the rest is still being written. The shaper works on the token stream.
+6. **Cover tool latency without fake speech.** On a tool turn, play a **cue tone** immediately (the repo's finding, `cue.rs`). If a tool takes longer than a threshold, emit a **Speculative** progress chunk built from real state ("checking the board"), which is superseded by the committed answer; if the committed answer contradicts it, emit an **overt-repair** chunk (ADR-062 D3).
+7. **Prosody hints.** Tag each chunk with a small, engine-neutral set (below). The engine adapter maps hints to what it supports and drops the rest.
+8. **Adapt the amount of information** by context: glasses or earbuds (lead only, one sentence), phone speaker (lead plus offer), pad (lead only, full text on screen), e-ink (no speech). Learned preferences (4d.6) move these budgets per user.
+9. **Turn-taking behavior** (4d.4): stop cleanly on barge-in, keep the unspoken part as detail, and resume or drop it according to what the user said next.
+
+**What it is built from.** A deterministic core (markdown strip, verbalization, clause chunking, budgets, the `policy.rs` clamp), shared between Rust and TypeScript by a single set of fixtures, plus an **optional quick-tier model rewrite** only for long or structured replies, run on the token stream with a hard time limit and the deterministic result as the fallback.
+
+### 4d.3 Streaming wire format: `speech.v1`
+
+The display reply and the spoken plan travel separately. The `message` event (existing shape) carries the display text. Speech uses these events on the same ordered stream (section 3.5), addressed by `utt_id` **[D]**:
+
+```json
+{"t":"speech.start","turn_id":"T1","utt_id":"U1","mode":"lead","commit":"committed","lang":"en","display_ref":"M1"}
+{"t":"speech.chunk","utt_id":"U1","seq":0,"text":"Yes, the glasses mic is picking you up.",
+ "prosody":{"rate":1.0,"pitch":"neutral","emotion":"neutral","emphasis":[[4,8]],"pause_after_ms":160,"tags":[]},
+ "interruptible":true,"last":false}
+{"t":"speech.chunk","utt_id":"U1","seq":1,"text":"The last take was ten seconds ago.","prosody":{"pause_after_ms":120},"last":true}
+{"t":"speech.offer","utt_id":"U1","text":"Want the level details?","detail_ref":"D1","expires_s":60}
+{"t":"speech.end","utt_id":"U1","reason":"done"}
+{"t":"speech.cancel","utt_id":"U1","reason":"barge|superseded|repair","spoken_through_seq":0}
+{"t":"speech.cue","kind":"heard|working|done"}
+```
+
+- `mode`: `lead`, `detail`, `progress`, `repair`, `offer`. `commit`: `speculative` or `committed` (ADR-062 node states).
+- Hints are advisory: `rate` (0.8 to 1.3), `pitch` (`low|neutral|high`), `emotion` (`neutral|warm|apologetic|urgent|playful`), `emphasis` (character ranges), `pause_after_ms`, `tags` (the canonical expressive vocabulary of ADR-061 section 7, scrubbed for engines that cannot perform them).
+- Audio is a separate lane: `audio.out{utt_id, seq, format, frames}` as binary frames (section 3.6), so a device that has its own engine ignores them and renders `speech.chunk` text itself.
+- `spoken_through_seq` on `cancel` records how far the listener actually heard, which feeds both resume ("as I was saying") and learning.
+- A reconnecting client resumes by `since=seq`; stale speech older than a few seconds is dropped, never replayed.
+
+**How engines consume it**
+
+| Engine | Consumption | Notes |
+|---|---|---|
+| **ElevenLabs streaming** (cloud) | One WebSocket per `utt_id`; each `speech.chunk` text is sent as a text message and flushed at chunk boundaries so audio starts after the first clause; `rate` and `emotion` map to voice settings or to model audio tags where the model supports them; `pause_after_ms` is realized as a short silence in the adapter | The WebSocket takes streamed text and returns audio chunks **[V]**; the flush and chunk-length controls and the audio-tag support are **[I]** and must be checked before building |
+| **Local Kokoro** (fast tier) | Render per chunk; speed from `rate`; tags scrubbed | The speculative and lead layer (ADR-061, `fast_tier.rs`) |
+| **Local Orpheus + SNAC** (slow tier) | Render per chunk, gap-free for real-time factor under 1; tags performed literally | Detail and expressive replies |
+| **macOS `say`, `command` engine** | Chunk by chunk, rate only | Existing `speak.rs` seam; the minimum fallback |
+| **xAI voice (ADR-074)** | Optional speech-to-speech mode; **not** the shaped path. When used, the shaper's spoken lead can still be sent as the instruction for the first utterance | Keeps the interim cloud option without dropping the plan |
+| **Glasses** | The Mac loop receives `speech.chunk` and renders per chunk, pushing short clips as they finish; `speech.cancel` stops the current clip and deletes the queue | Removes the whole-reply-then-push step |
+
+**Latency targets** **[D]**, measured end of user speech to first audible sound, using the `clawft-bench-voice` harness plus the trace panel:
+
+| Case | p50 | p90 |
+|---|---|---|
+| Reply with no tool call | 0.9 s | 1.5 s |
+| Reply after tools: cue tone | 0.15 s | 0.3 s |
+| Reply after one tool round: first spoken chunk | 1.8 s | 3 s |
+| Barge-in: speaker silent after the user starts | 120 ms | 250 ms |
+| Gap between chunks | under 150 ms | under 300 ms |
+| Lead chunk length | 4 to 12 words | 18 words |
+
+The ADR-061 budget (warm STT 0.05 s, model first token 0.2 to 0.3 s, fast TTS 0.3 to 0.7 s) supports the first row locally; the cloud path adds the network legs of section 4.4.
+
+### 4d.4 Turn-taking: reuse, and where each part runs
+
+| Behavior | Source in WeftOS | Local mode | Cloud mode |
+|---|---|---|---|
+| Echo cancellation | `clawft-voice-aec` | On the device or Mac | Browser built-in echo cancellation for phone audio **[I]**; the device AEC for glasses and pad |
+| Instant mute, link-loss safety, ERL relay | `edge_reflex.rs` (ADR-068 D5): the **only** edge-local logic | On the device | On the device, same three reflexes; the cloud sends `mute` on `speech.cancel` |
+| Voice activity, semantic endpointing | Silero VAD and smart-turn (`clawft-voice-onnx`) | On the host | The speech vendor's streaming recognizer with turn-prediction commit **[V]** for the phone; smart-turn on the host for devices that stream to a node |
+| Floor decisions, barge judgment, backchannel classification | ADR-062 and ADR-068: daemon-side, ECC-driven | Daemon on the Mac | A **reduced floor** state machine (the ADR-068 D1 table) in the runtime, driven by vendor events; the **full ECC walk** where a daemon is reachable (see 4d.5) |
+| Backchannel from the user ("mm-hmm", "yeah") | `paralinguistics.rs` marks these as non-lexical or backchannel; ADR-062 treats them as `Continuer` | Do not start a turn; keep speaking | Same rule on the transcript and the vendor's partials |
+| Barge-in | ADR-061/068 | Cancel stream, flush AEC, record `spoken_through_seq`, node pruned and `Contradicts` the in-flight reply | Same, plus the runtime cancels the TTS socket |
+| Agent backchannels | Deferred in ADR-061 ("VAP backchannels") | Not in v1 | Not in v1: only cue tones (Q35) |
+| Follow-up offers | New (4d.2) | Shaper | Shaper |
+
+### 4d.5 Where the conversation graph lives (the three layers)
+
+The ECC conversation graph and the walk that builds a response are Rust, in the kernel; they cannot run inside a Worker or a Vercel function. Owner direction (memory, 2026-10-13) frames the cloud CoS as a thin runtime that calls **MCP layers**: one for conversation graphing and responses (WeftOS ECC), one for fact gathering, one for tools (the curated catalog of 4b.3a). The same split solves the voice problem **[D]**:
+
+| Layer | What it holds | How the runtime reaches it |
+|---|---|---|
+| **Conversation layer (WeftOS ECC)** | Turn nodes and their lifecycle (speculative, committed, stale, pruned), per-speaker nodes, floor reads, partial-transcript hooks, the causal record that makes barge-ins labeled data | An MCP server on a WeftOS node (`conv.record_turn`, `conv.floor`, `conv.walk`, `conv.mark{utt, state}`, `conv.recall{query}`), authenticated by the node credential and scoped per user. **Hot-path shaping does not wait on it** |
+| **Fact layer** | Board, projects, devices, nodes, brain | Built-ins and the dashboard MCP (4b.2) |
+| **Tool layer** | Outward and write tools | The catalog (4b.3a) |
+
+So: the **hot path** (chunking, verbalization, cue tones, TTS streaming, barge cancel) is in the runtime and deterministic; the **cognitive path** (graph walk, floor scoring, learned thresholds, repair decisions) is a call to the conversation layer that must complete within one turn and degrades to the reduced floor when it does not. A user with no WeftOS node gets the reduced floor and still gets lead, detail, offers and barge-in; a user with a node (or a hosted conversation node) gets the full ECC behavior.
+
+### 4d.6 Improving it using WeftOS
+
+The CoS must feed the same improvement loops the voice stack already plans, instead of becoming a second silo.
+
+1. **Trace.** The existing `voice.trace` watch feed (model, timings, reasoning) is extended with shaping fields: lead length, chunk count, offers made and accepted, `spoken_through_seq` at cancel, time to first sound **[V: the feed exists in `clawft-cli/src/commands/voice_watch`]**.
+2. **Feedback signals** (implicit unless noted): barge-in point (cut at word k of chunk n suggests too long or already known); "shorter", "more", "what?", "say that again"; an offer accepted or ignored; "go on" rate; replay requests; explicit thumbs on the phone page (explicit); a correction by voice ("no, I meant...").
+3. **The graph as the label store.** Because each chunk is a node with a state, a barge-in is a pruned node that `Contradicts` the reply: the data says exactly what was heard and what was cut. This is the dataset for learned shaping and for the "Weaver-learned floor and coherence" of the voice-ECC plan (Phase 4).
+4. **Learning, in order of cost:**
+   - hand-tuned budgets and rules (v1);
+   - per-user adaptation of budgets and offer policy from the signals above (a small bandit or preference update, stored in the user's own state);
+   - a **trained shaper**: a small model that rewrites reply plus facts into a spoken plan, trained on logged (display text, plan, outcome) triples, then compared with the rules in the shaping eval;
+   - learned floor and coherence thresholds in the conversation layer, as in the voice-ECC plan;
+   - SER and prosody (`ser.rs`, `prosody.rs`) used only locally and only with consent, to pick a calmer or briefer style when the listener sounds rushed or stressed.
+5. **Evaluation.** `clawft-bench-voice` covers latency, WER and CPU. A **shaping eval** is added: cases with the reference properties (lead within budget, no raw ids, numbers verbalized, an offer iff detail exists, no tag read aloud, nothing spoken from a lost tool result) and a human-listen panel before any trained shaper replaces the rules. It runs through the MCP surface text-first (4c.5) and through audio last.
+6. **Privacy.** Audio is not stored by default. Learning data is per user, opt-in (Q34), text and signals only, deletable, and never promoted to another user or project (ADR-121 decision 9 applies to brains and applies here).
+
+### 4d.7 Voice phases
+
+These follow the control-plane phases (4c.6): text-level oracles first, audio last.
+
+| Phase | Delivers | Acceptance | Rollback | Owner decisions |
+|---|---|---|---|---|
+| **V0: spoken plan, text only** | `SpeechShaper` deterministic core and fixtures; `speech.v1` events emitted beside `message`; the trace panel shows the plan; MCP `cos.say` returns the plan | Shaping eval passes on E1 to E18 (lead within budget, no ids, numbers verbalized, offer iff detail); display text unchanged | Stop emitting `speech.*`; clients keep the old read-out | Q31, Q36 |
+| **V1: streaming consumers, local** | Per-chunk rendering for `say`, Kokoro and Orpheus; cue tones on tool turns; the glasses loop plays chunks as they finish; cancel on barge | First-sound p50 and chunk-gap targets met on the Mac; barge-in silences in under 250 ms at p90 | Switch the loops back to whole-reply mode | Q33 |
+| **V2: cloud streaming** | ElevenLabs streaming adapter in the runtime; phone page plays the audio lane; vendor STT with turn-prediction; reduced floor | Phone first-sound p50 under 1.5 s with no tool; reconnect resumes without replaying stale speech | Fall back to V1 local engines or text only | Q33, Q34 |
+| **V3: conversation behavior** | Detail on request, offers, resume ("as I was saying"), backchannel handling, overt repair, speculative progress chunks | Scripted dialogues pass in the voice rung; a user "go on" delivers the held detail; a barge-in never leaves a half-spoken contradiction | Disable offers and detail; lead only | Q35 |
+| **V4: conversation layer and learning** | The conversation-layer MCP (4d.5) on a node; feedback signals into the trace and graph; per-user adaptation; a first trained shaper behind a flag | Barge-in rate and "shorter/more" requests fall over a measured window versus the rules; the trained shaper beats the rules on the shaping eval and a listen panel before it is enabled | Turn the flag off; the rules remain | Q32, Q34, Q37 |
+
+### 4d.8 Effect on section 4
+
+Section 4 describes the ElevenLabs legs. Read it as the **cloud engine adapter** under this layer: models, pricing and latency there still hold, but nothing speaks a whole reply any more, and Grok's glasses script becomes the first consumer of `speech.chunk`. The xAI mode of ADR-074 stays an optional transport, not the default shaped path.
+
 ## 5. Migration plan
 
 Each phase is reversible by a setting, not a redeploy. Before Phase 1 the owner's Mac setup is untouched.
@@ -798,6 +957,13 @@ New risks:
 | Q28 | Does the local `weftos-cos mcp` listen only on loopback? | Yes; loopback only, stdio or HTTP, no remote listener (the cloud route is the remote path) |
 | Q29 | May a person's external agent use the production CoS over MCP at all? | Yes for read and say with their own token; confirm needs the phone tap |
 | Q30 | May a model judge be part of the eval suite? | Advisory only, versioned with the suite; rule-based checks and the tool-trace assertions are the gates |
+| Q31 | What are the default spoken-length budgets? | Lead of at most 25 words and two sentences (the `policy.rs` default); glasses one sentence; pad lead only; per-user override through the learned preference |
+| Q32 | Does the full ECC conversation walk run in the cloud for users with no node? | No: the reduced floor in the runtime. Offer a hosted conversation node later; users with a node get the full walk |
+| Q33 | Speech engine order? | Phone live: ElevenLabs turbo over the streaming socket. Glasses and pad: cached higher-quality render for long replies. Offline: Kokoro fast tier, Orpheus slow tier, `say` last. xAI voice stays an optional transport |
+| Q34 | Consent and retention for voice-learning data? | Per-user opt-in; store text and signals, not audio; delete on request; never shared across users |
+| Q35 | Do agent backchannels ("mm-hmm") ship in v1? | No: cue tones only, matching ADR-061's deferral and the finding that canned phrases read as parroting |
+| Q36 | Rules only, or a model rewrite pass too? | Rules first; a quick-tier rewrite only for long or structured replies, with the rules as the fallback |
+| Q37 | Who owns the shaping spec and fixtures? | The voice lane, as a module the CoS consumes in both Rust and TypeScript, so there is one definition of "speakable" |
 
 ---
 
