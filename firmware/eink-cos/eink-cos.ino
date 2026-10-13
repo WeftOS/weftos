@@ -18,7 +18,7 @@ GxEPD2_BW<GxEPD2_213_GDEY0213B74, GxEPD2_213_GDEY0213B74::HEIGHT> display(
     GxEPD2_213_GDEY0213B74(EPD_CS, EPD_DC, EPD_RST, EPD_BUSY));
 
 static const int W = 250, H = 122;
-static const int FULL_EVERY = 12;                    // partials between full refreshes
+static const int FULL_EVERY = 6;                     // partials between full refreshes
 static const uint32_t FULL_MS = 30UL * 60 * 1000;    // or this long since the last one
 static const uint32_t NOLINK_MS = 5UL * 60 * 1000;   // no valid line for this long
 static const size_t RX_MAX = 640;
@@ -27,7 +27,7 @@ struct Glance {
   char state[16], task[128], next[128], alert[128], model[48], ts[8];
 };
 static Glance cur, shown;
-static bool haveShown = false, noLink = false;
+static bool haveShown = false, noLink = false, shownNoLink = false;
 static int partials = 0;
 static uint32_t lastFull = 0, lastValid = 0;
 static char line[RX_MAX + 1];
@@ -192,13 +192,18 @@ static void render(const Glance& g, bool noLinkMode) {
 
 static void draw(const Glance& g, bool noLinkMode) {
   uint32_t now = millis();
-  bool full = !haveShown || partials >= FULL_EVERY || now - lastFull >= FULL_MS;
-  display.init(0, false, 2, false);  // wake from hibernate; keep panel RAM
+  int dl = (int)strlen(g.next) - (int)strlen(shown.next);
+  bool bigChange = noLinkMode != shownNoLink || abs(dl) > 40;
+  bool full = !haveShown || bigChange || partials >= FULL_EVERY || now - lastFull >= FULL_MS;
+  // No hibernate/re-init between updates: the hardware reset on wake loses
+  // the controller's previous-image RAM, which made partial updates overlay
+  // the old text. powerOff() keeps RAM; the panel is bistable so it costs nothing.
   display.setRotation(1);
   if (full) display.setFullWindow(); else display.setPartialWindow(0, 0, W, H);
   display.firstPage();
   do { render(g, noLinkMode); } while (display.nextPage());
-  display.hibernate();
+  display.powerOff();
+  shownNoLink = noLinkMode;
   if (full) { partials = 0; lastFull = now; } else partials++;
   shown = g; haveShown = true;
 }
