@@ -31,6 +31,8 @@ public class MicService extends Service {
 
     private static volatile boolean stopRequested = false;
     private static volatile boolean busy = false;
+    /** Set once a capture is recording or has failed; the launcher waits on it. */
+    static volatile boolean started = false;
 
     static void requestStop() {
         stopRequested = true;
@@ -72,6 +74,7 @@ public class MicService extends Service {
                     capture(name, seconds, false);
                 }
             } finally {
+                started = true;
                 busy = false;
                 stopForeground(STOP_FOREGROUND_REMOVE);
                 stopSelf();
@@ -123,6 +126,7 @@ public class MicService extends Service {
             ByteArrayOutputStream pcm = new ByteArrayOutputStream(wantBytes);
             byte[] buf = new byte[4096];
             rec.startRecording();
+            started = true;
             if (rec.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING) {
                 throw new IOException("startRecording refused (mic busy or permission missing)");
             }
