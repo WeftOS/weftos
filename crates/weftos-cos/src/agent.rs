@@ -64,9 +64,19 @@ struct Inner {
     turns: std::sync::Mutex<std::collections::VecDeque<TurnRecord>>,
     /// The last [`TURN_HISTORY_CAP`] final messages, for `GET /v1/cos/turns`.
     messages: std::sync::Mutex<std::collections::VecDeque<TurnMessage>>,
+    /// The latest `state` and `status` events, for `GET /v1/cos/status`.
+    snapshot: std::sync::Mutex<Snapshot>,
     /// Remote endpoints whose engine is `none`: their replies are never
     /// flagged `speak`. Another endpoint's setting does not touch this.
     silent_endpoints: std::sync::Mutex<std::collections::HashSet<String>>,
+}
+
+#[derive(Default)]
+struct Snapshot {
+    state: Option<AgentState>,
+    reason: Option<String>,
+    task: Option<String>,
+    model: Option<String>,
 }
 
 struct TurnRecord {
@@ -102,6 +112,7 @@ impl CosAgent {
                 lanes_running: AtomicU32::new(0),
                 turns: std::sync::Mutex::new(std::collections::VecDeque::new()),
                 messages: std::sync::Mutex::new(std::collections::VecDeque::new()),
+                snapshot: std::sync::Mutex::new(Snapshot::default()),
                 silent_endpoints: std::sync::Mutex::new(std::collections::HashSet::new()),
             }),
         }
@@ -226,6 +237,17 @@ impl Conversation for CosAgent {
         let m = self.inner.messages.lock().unwrap_or_else(|e| e.into_inner());
         m.iter().skip(m.len().saturating_sub(limit)).cloned().collect()
     }
+
+    fn status(&self) -> serde_json::Value {
+        let s = self.inner.snapshot.lock().unwrap_or_else(|e| e.into_inner());
+        json!({
+            "state": s.state,
+            "reason": s.reason,
+            "task": s.task,
+            "model": s.model,
+            "lanes_running": self.inner.lanes_running.load(Ordering::Relaxed),
+        })
+    }
 }
 
 fn is_yes(text: &str) -> bool {
@@ -236,10 +258,27 @@ fn is_yes(text: &str) -> bool {
 impl Inner {
     fn emit(&self, ev: Event) {
         let ev = self.attribute(ev).redacted();
+        self.note_snapshot(&ev);
         if let Event::Message { turn_id, text, is_final: true, endpoint, .. } = &ev {
             self.remember(turn_id.clone(), "assistant", endpoint.as_deref().unwrap_or(HOST_ENDPOINT), text.clone());
         }
         let _ = self.tx.send(ev);
+    }
+
+    /// Remember the latest `state` and `status` events (already redacted).
+    fn note_snapshot(&self, ev: &Event) {
+        let mut s = self.snapshot.lock().unwrap_or_else(|e| e.into_inner());
+        match ev {
+            Event::State { state, reason } => {
+                s.state = Some(state.clone());
+                s.reason = reason.clone();
+            }
+            Event::Status { task, model, .. } => {
+                s.task = Some(task.clone());
+                s.model = Some(model.clone());
+            }
+            _ => {}
+        }
     }
 
     /// Keep a final message for `GET /v1/cos/turns` (`text` is redacted).

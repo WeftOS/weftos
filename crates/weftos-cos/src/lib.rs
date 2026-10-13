@@ -18,6 +18,7 @@
 
 pub mod agent;
 pub mod brain;
+pub mod bridge;
 pub mod cli;
 pub mod config;
 pub mod endpoints;

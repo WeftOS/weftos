@@ -2159,6 +2159,20 @@ cmd_edgepad_fw() {
     timer_end
 }
 
+# Relay the hosted dashboard's phone page to the local chief of staff. Runs the
+# installed featured binary (scripts/build.sh cos --features mic,onnx installs it);
+# override with WEFTOS_COS_BIN. Extra arguments (--once, --dry-run, ...) pass through.
+cmd_cos_bridge() {
+    header "weftos-cos bridge: dashboard relay for the chief of staff"
+    local bin="${WEFTOS_COS_BIN:-$HOME/.weftos/bin/weftos-cos}"
+    if [ "$DRY_RUN" = true ]; then
+        printf "  ${YELLOW}DRY${NC}   %s bridge\n" "$bin"
+        return 0
+    fi
+    [ -x "$bin" ] || { printf "  ${RED}FAIL${NC}  %s not found; run scripts/build.sh cos --features mic,onnx or set WEFTOS_COS_BIN\n" "$bin"; return 1; }
+    exec "$bin" bridge
+}
+
 # ── Chief-of-staff console, ADR-118 C2 (standalone crate) ─────────────
 # ADR-118 C3: the owner's one command for the chief of staff. Builds the agent
 # host with push-to-talk and local STT (mic,onnx), then runs it in the
@@ -2766,6 +2780,9 @@ ${BOLD}Commands:${NC}
   cos-up          One command for the chief of staff: build weftos-cos (mic,onnx),
                   start the local model if it is down, serve with push-to-talk and
                   spoken replies (stops the model it started on exit).
+  cos-bridge      Relay the dashboard phone page to the local chief of staff: runs
+                  \${WEFTOS_COS_BIN:-~/.weftos/bin/weftos-cos} bridge (needs [dashboard]
+                  in ~/.weftos/weave.toml; see docs/plans/cos-dashboard-bridge.md).
   install         Build weft + weaver and install both to ~/.cargo/bin
                   (atomic replace, ad-hoc re-sign on macOS, fresh git build
                   stamp, prints versions). Release by default; --debug for
@@ -3170,6 +3187,7 @@ main() {
         native-debug) cmd_native_debug ;;
         cos)          cmd_cos ;;
         cos-up)       cmd_cos_up ;;
+        cos-bridge)   cmd_cos_bridge ;;
         install)      cmd_install ;;
         gui-egui)     cmd_gui_egui ;;
         wasi)         cmd_wasi ;;

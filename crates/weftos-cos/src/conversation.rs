@@ -146,4 +146,11 @@ pub trait Conversation: Send + Sync {
     /// The most recent final user and assistant messages, oldest first.
     /// `limit` is already validated (1..=[`TURNS_MAX_LIMIT`]).
     fn recent_turns(&self, limit: usize) -> Vec<TurnMessage>;
+
+    /// A read-only snapshot for `GET /v1/cos/status`: `state` (the latest
+    /// state event, null before the first), `reason`, `task`, `model` and
+    /// `lanes_running`. An implementation without a snapshot says so.
+    fn status(&self) -> serde_json::Value {
+        serde_json::json!({"state": null, "unsupported": true})
+    }
 }
