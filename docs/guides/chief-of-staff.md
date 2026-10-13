@@ -61,7 +61,8 @@ for you so the first spoken turn is not the slow one.
   "voice": {"tts": {"engine": "auto", "voice": null, "rate": 200}, "device": null},
   "brain": {"installation": "weftos://local/installations/<id>"},
   "serve": {"bind": null},
-  "endpoints": {"mentra": {"speak": true}}
+  "endpoints": {"mentra": {"speak": true}},
+  "mcp_servers": []
 }
 ```
 
@@ -117,7 +118,76 @@ A remote endpoint sees the whole event stream, not just its own turns.
 Read: `projects.activity`, `board.read`, `card.current`, `nodes.health`, `mesh.routes`.
 Keep: `notes.record` (project history, the card, and the brain), `board.propose` (a staged
 manifest for the steward). Change shared state, so each waits for the owner's "yes":
-`board.claim`, `board.note`, `work.kickoff`. Screen: the `ui.*` tools.
+`board.claim`, `board.note`, `work.kickoff`. Screen: the `ui.*` tools. Anything else comes from
+the configured MCP servers (below), gated as configured.
+
+## Adding capabilities with MCP servers
+
+New abilities (flights, travel, code hosting, mail, a project's own tools) come from
+configuring MCP servers, not from new Rust. Each `mcp_servers` entry in `cos.json` is one
+server; its allow-listed tools appear to the model as `<id>.<tool>` (on the wire
+`<id>_<tool>`) with the server's own JSON schema. The same shape is what the planned cloud
+chief of staff keeps per user.
+
+```json
+{
+  "mcp_servers": [
+    {
+      "id": "local",
+      "transport": {"type": "stdio", "command": "target/debug/weftos-cos-mcp-echo"},
+      "allow": ["echo", "time.*"],
+      "gate": "open",
+      "use_for": "checking the time"
+    }
+  ]
+}
+```
+
+That server is the one to try first: `weftos-cos-mcp-echo` is built with the crate, needs no
+account, and offers `echo`, `time.now`, `note.append` and `big`. Allow `note.append` too
+(leave its gate at the default) to watch a write wait for your "yes".
+
+Fields:
+
+- `id`: lowercase letters, digits, `-`, `_`. The tool namespace.
+- `transport`: `{"type": "stdio", "command", "args", "env"}` or `{"type": "http", "url"}`
+  (streamable HTTP; answers as JSON or SSE). `env` lists variable **names** to pass to a
+  stdio server; the values come from the environment, never from this file.
+- `auth` (http only): `{"bearer_env": "NAME"}` or `{"bearer_file": "/path"}`, a variable
+  name or a mode-0600 file. A token is never inline, never logged and scrubbed from
+  errors and results. A bearer is refused over plain `http://` except to localhost.
+- `allow`: tool names or `*` globs to expose. **Empty (the default) exposes nothing**, so a
+  new server does nothing until you pick its tools.
+- `gate`: `confirm` (the default; the call waits for the owner's "yes") or `open`
+  (read-only tools). `tool_gates` overrides per tool or glob; an exact name beats a glob.
+- `use_for`: one sentence telling the model when to use the server.
+- `connect_timeout_secs` (8), `call_timeout_secs` (30), `max_output_bytes` (8000, longer
+  results are cut with a "+N more bytes" note), `retry_secs` (30).
+
+Behaviour: the host connects at start and lists tools. A server that is down is reported
+(`not bound: mcp:<id>: ...` at start, "unavailable" in the model's notes) and retried at
+turn starts and whenever one of its tools is called; it never stops the host. The model sees
+at most `mcp_max_tools_per_turn` (default 12) MCP tools per turn, chosen by keyword match
+with your request when there are more; every allowed tool stays callable. Prefer narrow
+`allow` lists: a long tool list hurts the local model.
+
+Templates (not active; fill in the real URL, command and variable names, and keep the
+values in the environment or a 0600 file):
+
+```json
+{"id": "travel", "transport": {"type": "http", "url": "https://<travel-mcp-host>/mcp"},
+ "auth": {"bearer_env": "TRAVEL_MCP_TOKEN"}, "allow": ["search_*"], "gate": "open",
+ "tool_gates": {"book_*": "confirm"}, "use_for": "flights, hotels and trip plans"}
+
+{"id": "github", "transport": {"type": "stdio", "command": "<github-mcp-server>", "args": ["stdio"], "env": ["GITHUB_TOKEN"]},
+ "allow": ["get_*", "list_*", "search_*", "add_issue_comment"], "gate": "open",
+ "tool_gates": {"add_*": "confirm"}, "use_for": "issues, pull requests and code in our repositories"}
+```
+
+To add a flights server: get an MCP endpoint and an API token from the flights provider,
+store the token in a 0600 file or an environment variable the host runs with, add an entry
+like the `travel` template with `allow` limited to the search tools, restart `weftos-cos
+serve`, and check the start report for `mcp:travel`.
 
 ## Brain and notes (ADR-121 decision 9)
 

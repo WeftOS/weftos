@@ -40,6 +40,140 @@ pub struct CosConfig {
     /// Remote endpoints by id (for example `mentra`). The `host` endpoint's
     /// speech is `voice.tts`.
     pub endpoints: BTreeMap<String, EndpointConfig>,
+    /// External tool sources: MCP servers whose allow-listed tools become
+    /// chief-of-staff tools named `<id>.<tool>`. Empty by default.
+    pub mcp_servers: Vec<McpServerConfig>,
+    /// Most MCP tools offered to the model in one turn (1..=40). Past this,
+    /// the ones whose name or description best match the request are kept.
+    pub mcp_max_tools_per_turn: usize,
+}
+
+/// Whether a tool runs on the model's say-so or waits for the owner's yes.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum McpGate {
+    /// Read-only: runs when the model asks.
+    Open,
+    /// Writes or anything outward-facing: held for a confirmation turn.
+    #[default]
+    Confirm,
+}
+
+/// How a server is reached. Secrets are never inline: a stdio server gets
+/// environment variables by name, an HTTP server a bearer via [`McpAuth`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum McpTransportConfig {
+    Stdio {
+        command: String,
+        #[serde(default)]
+        args: Vec<String>,
+        /// Names of environment variables to pass to the child. Their values
+        /// come from the host's environment, never from this file.
+        #[serde(default)]
+        env: Vec<String>,
+    },
+    /// Streamable HTTP: JSON-RPC over POST, answers as JSON or SSE.
+    Http { url: String },
+}
+
+/// Bearer credential for an HTTP server: the name of an environment variable
+/// or the path of a mode-0600 file. Exactly one.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct McpAuth {
+    pub bearer_env: Option<String>,
+    pub bearer_file: Option<PathBuf>,
+}
+
+/// One MCP server (`mcp_servers` entry in `cos.json`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpServerConfig {
+    /// Namespace for its tools: `<id>.<tool>`. Lowercase letters, digits,
+    /// `-` and `_`.
+    pub id: String,
+    pub transport: McpTransportConfig,
+    #[serde(default)]
+    pub auth: McpAuth,
+    /// Tool names or globs (`*`) to expose. Empty (the default) exposes none.
+    #[serde(default)]
+    pub allow: Vec<String>,
+    /// Gate for tools without an override. Default `confirm`; set `open`
+    /// only for a server whose allowed tools are read-only.
+    #[serde(default)]
+    pub gate: McpGate,
+    /// Per-tool gate overrides: tool name or glob to gate. An exact name beats
+    /// a glob.
+    #[serde(default)]
+    pub tool_gates: BTreeMap<String, McpGate>,
+    /// When to use this server, in a sentence; shown to the model.
+    #[serde(default)]
+    pub use_for: Option<String>,
+    /// Seconds to connect and list tools (default 8).
+    #[serde(default)]
+    pub connect_timeout_secs: Option<u64>,
+    /// Seconds for one tool call (default 30).
+    #[serde(default)]
+    pub call_timeout_secs: Option<u64>,
+    /// Largest tool result kept, in bytes (default 8000).
+    #[serde(default)]
+    pub max_output_bytes: Option<usize>,
+    /// Seconds before a server that failed is tried again at a turn start
+    /// (default 30). A tool call always tries to reconnect.
+    #[serde(default)]
+    pub retry_secs: Option<u64>,
+}
+
+fn is_env_name(s: &str) -> bool {
+    !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !s.starts_with(|c: char| c.is_ascii_digit())
+}
+
+impl McpServerConfig {
+    pub(crate) fn validate(&self) -> Result<(), CosError> {
+        let id = &self.id;
+        let bad = |why: &str| Err(CosError::Config(format!("mcp_servers `{id}`: {why}")));
+        if id.is_empty() || !id.chars().all(|c| matches!(c, 'a'..='z' | '0'..='9' | '-' | '_')) || id.starts_with(['-', '_']) {
+            return Err(CosError::Config(format!("mcp_servers id {id:?} must be lowercase letters, digits, - or _")));
+        }
+        match &self.transport {
+            McpTransportConfig::Stdio { command, env, .. } => {
+                if command.trim().is_empty() {
+                    return bad("stdio transport needs a command");
+                }
+                if let Some(n) = env.iter().find(|n| !is_env_name(n)) {
+                    return bad(&format!("env entry {n:?} is not a variable name (list names only; values come from the environment)"));
+                }
+                if self.auth.bearer_env.is_some() || self.auth.bearer_file.is_some() {
+                    return bad("auth applies to http servers; pass a stdio server's secret through env");
+                }
+            }
+            McpTransportConfig::Http { url } => {
+                let rest = url.strip_prefix("https://").map(|r| (r, true)).or_else(|| url.strip_prefix("http://").map(|r| (r, false)));
+                let Some((rest, tls)) = rest else { return bad("http url must start with https:// or http://") };
+                let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+                if authority.is_empty() || authority.contains('@') {
+                    return bad("http url must name a host and carry no user:password (use auth.bearer_env or auth.bearer_file)");
+                }
+                let host = authority.rsplit_once(':').map(|(h, p)| if p.chars().all(|c| c.is_ascii_digit()) { h } else { authority }).unwrap_or(authority);
+                let loopback = matches!(host, "localhost" | "127.0.0.1" | "[::1]");
+                let has_auth = self.auth.bearer_env.is_some() || self.auth.bearer_file.is_some();
+                if !tls && !loopback && has_auth {
+                    return bad("a bearer token is never sent over plain http except to localhost; use https");
+                }
+            }
+        }
+        match (&self.auth.bearer_env, &self.auth.bearer_file) {
+            (Some(_), Some(_)) => return bad("auth takes bearer_env or bearer_file, not both"),
+            (Some(n), None) if !is_env_name(n) => return bad("auth.bearer_env must be a variable name, not the token"),
+            _ => {}
+        }
+        for pat in self.allow.iter().chain(self.tool_gates.keys()) {
+            if pat.trim().is_empty() {
+                return bad("allow and tool_gates entries must not be empty");
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Remote listening. The loopback listener at `bind` always runs; this adds
@@ -263,6 +397,8 @@ impl Default for CosConfig {
             brain: BrainConfig::default(),
             serve: ServeConfig::default(),
             endpoints: BTreeMap::new(),
+            mcp_servers: Vec::new(),
+            mcp_max_tools_per_turn: 12,
         }
     }
 }
@@ -360,6 +496,16 @@ impl CosConfig {
         if !(1..=12).contains(&self.models.max_tool_rounds) {
             return Err(CosError::Config("models.max_tool_rounds must be within 1..=12".into()));
         }
+        if !(1..=40).contains(&self.mcp_max_tools_per_turn) {
+            return Err(CosError::Config("mcp_max_tools_per_turn must be within 1..=40".into()));
+        }
+        let mut seen = std::collections::HashSet::new();
+        for srv in &self.mcp_servers {
+            srv.validate()?;
+            if !seen.insert(srv.id.as_str()) {
+                return Err(CosError::Config(format!("mcp_servers: duplicate id `{}`", srv.id)));
+            }
+        }
         if !self.harness.events_path.starts_with('/') {
             return Err(CosError::Config("harness.events_path must start with '/'".into()));
         }
@@ -432,6 +578,43 @@ mod tests {
         let cfg: CosConfig = serde_json::from_str(r#"{"endpoints": {"x": {"tts": {"engine": "festival"}}}}"#).unwrap();
         assert!(cfg.validate().unwrap_err().to_string().contains("speak: true or false"));
         assert!(serde_json::from_str::<CosConfig>(r#"{"endpoints": {"x": {"speak": "no"}}}"#).is_err());
+    }
+
+    fn mcp(v: &str) -> Result<(), CosError> {
+        let cfg: CosConfig = serde_json::from_str(&format!(r#"{{"mcp_servers": [{v}]}}"#)).unwrap();
+        cfg.validate()
+    }
+
+    #[test]
+    fn mcp_servers_default_to_none_and_gate_confirm() {
+        assert!(CosConfig::default().mcp_servers.is_empty());
+        let cfg: CosConfig = serde_json::from_str(r#"{"mcp_servers": [{"id": "trip", "transport": {"type": "http", "url": "https://x.example/mcp"}}]}"#).unwrap();
+        cfg.validate().unwrap();
+        assert!(cfg.mcp_servers[0].allow.is_empty());
+        assert_eq!(cfg.mcp_servers[0].gate, McpGate::Confirm);
+    }
+
+    #[test]
+    fn mcp_servers_refuse_inline_secrets_and_unsafe_shapes() {
+        for bad in [
+            r#"{"id": "Bad Id", "transport": {"type": "stdio", "command": "x"}}"#,
+            r#"{"id": "a", "transport": {"type": "stdio", "command": " "}}"#,
+            r#"{"id": "a", "transport": {"type": "stdio", "command": "x", "env": ["KEY=abc123"]}}"#,
+            r#"{"id": "a", "transport": {"type": "stdio", "command": "x"}, "auth": {"bearer_env": "T"}}"#,
+            r#"{"id": "a", "transport": {"type": "http", "url": "https://user:pw@x.example/mcp"}}"#,
+            r#"{"id": "a", "transport": {"type": "http", "url": "ftp://x.example"}}"#,
+            r#"{"id": "a", "transport": {"type": "http", "url": "http://x.example/mcp"}, "auth": {"bearer_env": "T"}}"#,
+            r#"{"id": "a", "transport": {"type": "http", "url": "https://x.example"}, "auth": {"bearer_env": "sk-abc-123"}}"#,
+            r#"{"id": "a", "transport": {"type": "http", "url": "https://x.example"}, "auth": {"bearer_env": "T", "bearer_file": "/p"}}"#,
+            r#"{"id": "a", "transport": {"type": "http", "url": "https://x.example"}, "allow": [""]}"#,
+        ] {
+            assert!(matches!(mcp(bad), Err(CosError::Config(_))), "{bad}");
+        }
+        mcp(r#"{"id": "a", "transport": {"type": "http", "url": "http://localhost:8080/mcp"}, "auth": {"bearer_env": "T"}}"#).unwrap();
+        let dup: CosConfig = serde_json::from_str(r#"{"mcp_servers": [{"id": "a", "transport": {"type": "stdio", "command": "x"}}, {"id": "a", "transport": {"type": "stdio", "command": "y"}}]}"#).unwrap();
+        assert!(dup.validate().unwrap_err().to_string().contains("duplicate id"));
+        let cap = CosConfig { mcp_max_tools_per_turn: 0, ..Default::default() };
+        assert!(cap.validate().is_err());
     }
 
     #[test]

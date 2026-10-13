@@ -15,6 +15,12 @@ description = "Chief-of-staff agent host: loopback conversation API (HTTP/SSE), 
 name = "weftos-cos"
 path = "src/bin/weftos-cos.rs"
 
+# A tiny stdio MCP server (echo, time.now, a gated note tool) used by the
+# tests and as the documented first server to try; it touches nothing.
+[[bin]]
+name = "weftos-cos-mcp-echo"
+path = "src/bin/weftos-cos-mcp-echo.rs"
+
 [features]
 default = []
 # cpal capture from the Mac's default input while the push-to-talk button is
@@ -34,6 +40,9 @@ clawft-platform = { workspace = true, features = ["native"] }
 clawft-llm = { workspace = true, features = ["native"] }
 # Read-only daemon RPC (`cluster.status`, `cluster.nodes`) for nodes.health.
 clawft-rpc = { workspace = true }
+# MCP client (McpSession, stdio and HTTP transports) for `mcp_servers` tool
+# sources. Default features only: no axum, no kernel.
+clawft-services = { workspace = true }
 # The voice seams: SttBackend, Utterance (zeroized on drop), VoiceError.
 clawft-channels = { workspace = true, features = ["voice"] }
 # Native parakeet STT; weights-free without `onnx`.

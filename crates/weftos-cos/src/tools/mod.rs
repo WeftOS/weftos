@@ -8,6 +8,7 @@ pub mod board;
 pub mod cards;
 pub mod harness;
 pub mod kickoff;
+pub mod mcp;
 pub mod nodes;
 pub mod notes;
 pub mod ui;
@@ -111,11 +112,29 @@ impl ToolLog {
     }
 }
 
+/// A set of tools that can change while the host runs: MCP servers that come
+/// up late, go down and come back. The registry asks it for a snapshot.
+#[async_trait]
+pub trait ToolSource: Send + Sync {
+    /// Retry whatever is not connected. Cheap when everything is up and
+    /// bounded in time; never fails the caller.
+    async fn refresh(&self);
+    /// The tools known right now.
+    fn tools(&self) -> Vec<Arc<dyn Tool>>;
+    /// Short lines for the system prompt: what exists and when to use it.
+    fn catalog(&self) -> Vec<String>;
+    /// `(source, reason)` for each source that cannot be reached right now.
+    fn unavailable(&self) -> Vec<(String, String)>;
+}
+
 /// The tools the agent may call, looked up by dotted id or wire name.
 #[derive(Clone, Default)]
 pub struct ToolRegistry {
     tools: Vec<Arc<dyn Tool>>,
     by_wire: HashMap<String, usize>,
+    sources: Vec<Arc<dyn ToolSource>>,
+    /// Most source-provided tools offered to the model per turn.
+    dynamic_cap: Option<usize>,
 }
 
 impl ToolRegistry {
@@ -131,20 +150,75 @@ impl ToolRegistry {
         self
     }
 
-    pub fn find(&self, name: &str) -> Option<&Arc<dyn Tool>> {
-        self.by_wire.get(name).map(|i| &self.tools[*i])
+    /// Add a changing set of tools. Built-in tools always win a name clash.
+    pub fn with_source(mut self, source: Arc<dyn ToolSource>) -> Self {
+        self.sources.push(source);
+        self
+    }
+
+    /// Cap how many source-provided tools one turn offers the model.
+    pub fn with_dynamic_cap(mut self, cap: usize) -> Self {
+        self.dynamic_cap = Some(cap.max(1));
+        self
+    }
+
+    /// Reconnect sources that are down. Called at the start of a turn.
+    pub async fn refresh(&self) {
+        for s in &self.sources {
+            s.refresh().await;
+        }
+    }
+
+    pub fn find(&self, name: &str) -> Option<Arc<dyn Tool>> {
+        if let Some(i) = self.by_wire.get(name) {
+            return Some(self.tools[*i].clone());
+        }
+        self.sources.iter().flat_map(|s| s.tools()).find(|t| {
+            let spec = t.spec();
+            spec.id == name || spec.wire_name() == name
+        })
+    }
+
+    /// Tools from sources that do not shadow a built-in.
+    fn dynamic_tools(&self) -> Vec<Arc<dyn Tool>> {
+        self.sources
+            .iter()
+            .flat_map(|s| s.tools())
+            .filter(|t| !self.by_wire.contains_key(&t.spec().wire_name()))
+            .collect()
     }
 
     pub fn specs(&self) -> Vec<ToolSpec> {
-        self.tools.iter().map(|t| t.spec()).collect()
+        let mut v: Vec<ToolSpec> = self.tools.iter().map(|t| t.spec()).collect();
+        v.extend(self.dynamic_tools().iter().map(|t| t.spec()));
+        v
+    }
+
+    /// What one turn offers the model: every built-in, plus at most the cap
+    /// of source tools, the best keyword matches for `request` when there
+    /// are more than fit.
+    pub fn specs_for(&self, request: &str) -> Vec<ToolSpec> {
+        let mut v: Vec<ToolSpec> = self.tools.iter().map(|t| t.spec()).collect();
+        let dynamic: Vec<ToolSpec> = self.dynamic_tools().iter().map(|t| t.spec()).collect();
+        v.extend(mcp::select_relevant(dynamic, request, self.dynamic_cap.unwrap_or(usize::MAX)));
+        v
     }
 
     pub fn openai_specs(&self) -> Vec<Value> {
-        self.tools.iter().map(|t| t.spec().openai_spec()).collect()
+        self.specs().iter().map(ToolSpec::openai_spec).collect()
+    }
+
+    /// Prompt lines describing the sources and their state.
+    pub fn catalog(&self) -> Vec<String> {
+        self.sources.iter().flat_map(|s| s.catalog()).collect()
+    }
+
+    pub fn unavailable_sources(&self) -> Vec<(String, String)> {
+        self.sources.iter().flat_map(|s| s.unavailable()).collect()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.tools.is_empty()
+        self.tools.is_empty() && self.sources.is_empty()
     }
 }
 

@@ -11160,6 +11160,7 @@ dependencies = [
  "clawft-llm",
  "clawft-platform",
  "clawft-rpc",
+ "clawft-services",
  "clawft-types",
  "clawft-voice-onnx",
  "cpal",

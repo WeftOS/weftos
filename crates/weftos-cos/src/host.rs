@@ -103,6 +103,18 @@ pub async fn build(cfg: &CosConfig) -> Result<Built, CosError> {
         unbound.push(("notes.record".into(), "no harness credential and no brain".into()));
     }
 
+    if !cfg.mcp_servers.is_empty() {
+        for srv in cfg.mcp_servers.iter().filter(|s| s.allow.is_empty()) {
+            unbound.push((format!("mcp:{}", srv.id), "allow is empty, so no tool is exposed".into()));
+        }
+        let source = Arc::new(crate::tools::mcp::McpSource::new(&cfg.mcp_servers)?);
+        // Connect now so the startup report names the servers that are down;
+        // they are retried at turn starts.
+        crate::tools::ToolSource::refresh(source.as_ref()).await;
+        unbound.extend(crate::tools::ToolSource::unavailable(source.as_ref()));
+        tools = tools.with_source(source).with_dynamic_cap(cfg.mcp_max_tools_per_turn);
+    }
+
     let agent = CosAgent::new(routes, tools, ToolLog::new(cfg.tool_log.clone())).with_max_tool_rounds(cfg.models.max_tool_rounds).with_focus(focus.clone());
     Ok(Built {
         agent,

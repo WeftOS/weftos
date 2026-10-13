@@ -466,3 +466,39 @@ async fn factory_allows_localhost_http_when_lenient() {
     assert!(t.is_ok());
     let _unused_env: HashMap<String, String> = HashMap::new();
 }
+
+// ── bearer auth and event-stream answers ───────────────────────────────
+
+async fn bearer_sse_handler(headers: axum::http::HeaderMap, body: Bytes) -> axum::response::Response {
+    let authed = headers.get("authorization").and_then(|v| v.to_str().ok()) == Some("Bearer s3cret-token");
+    if !authed {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let req: JsonRpcRequest = serde_json::from_slice(&body).unwrap();
+    let event = format!(
+        "event: message\ndata: {}\n\n",
+        serde_json::json!({"jsonrpc": "2.0", "id": req.id, "result": {"ok": true}})
+    );
+    ([(axum::http::header::CONTENT_TYPE, "text/event-stream"), (axum::http::HeaderName::from_static("mcp-session-id"), "sess-1")], event).into_response()
+}
+
+#[tokio::test]
+async fn bearer_header_is_sent_and_event_stream_answers_are_parsed() {
+    let app = Router::new().route("/", post(bearer_sse_handler));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let url = format!("http://{addr}/");
+    let timeout = std::time::Duration::from_secs(5);
+
+    let ok = HttpTransport::with_bearer(url.clone(), Some("s3cret-token"), timeout).unwrap();
+    let resp = ok.send_request(JsonRpcRequest::new(7, "ping", serde_json::json!({}))).await.unwrap();
+    assert_eq!(resp.id, 7);
+    assert_eq!(resp.result.unwrap()["ok"], true);
+
+    let anon = HttpTransport::with_bearer(url.clone(), None, timeout).unwrap();
+    let err = anon.send_request(JsonRpcRequest::new(8, "ping", serde_json::json!({}))).await.unwrap_err();
+    assert!(err.to_string().contains("401"), "{err}");
+
+    assert!(HttpTransport::with_bearer(url, Some("bad\ntoken"), timeout).is_err());
+}
