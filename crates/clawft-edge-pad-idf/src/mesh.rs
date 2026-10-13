@@ -363,6 +363,7 @@ pub fn run(
             boot_screen(&mut compositor, &mut surface, "leaf journal unavailable");
             loop { std::thread::sleep(Duration::from_secs(30)); }
         }
+        info!("[mesh] starting parent discovery (hint {})", if PARENT_HINT.trim().is_empty() { "none" } else { PARENT_HINT });
         let addr = match leaf.discover() {
             Ok(addr) => addr,
             Err(e) => {

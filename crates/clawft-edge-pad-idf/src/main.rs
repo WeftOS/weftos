@@ -228,9 +228,17 @@ fn main() -> anyhow::Result<()> {
             Err(e) => warn!("[inventory] Wi-Fi RSSI unavailable: {e}"),
         }
     }
-    // BLE 5 probe (the S3 has no Classic BT): advertise + 5 s active scan,
-    // logged only. Runs after Wi-Fi so coexistence is already up.
-    inventory::ble_probe(5);
+    // BLE 5 probe (the S3 has no Classic BT): advertise + 3 s active scan,
+    // logged only. It runs on its own thread so a BLE host that never
+    // finishes (seen on hardware 2026-10-13: serial silent after "BLE host
+    // starts") cannot hold up the mesh client; the outcome is logged either way.
+    match thread::Builder::new().name("ble-probe".into()).stack_size(16384).spawn(|| {
+        info!("[inventory] BLE probe starting (3 s, off the boot path)");
+        inventory::ble_probe(3);
+    }) {
+        Ok(_) => {}
+        Err(e) => warn!("[inventory] BLE probe thread not started: {e}; skipped"),
+    }
 
     // ── Step 10b: touch task on a dedicated thread. ────────────────
     //
