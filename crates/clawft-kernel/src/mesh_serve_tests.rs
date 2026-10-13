@@ -711,7 +711,7 @@ async fn leaf_listeners_bind_where_leaf_listen_addr_says_not_on_the_main_ip() {
     assert!(rt.set_leaf_bind_spec(spec));
     let (main, task) = listen(&rt, None).await;
     let bound = loop {
-        if let Some(b) = rt.leaf_bound() { break b.clone(); }
+        if let Some(b) = rt.leaf_bound() { break b; }
         tokio::time::sleep(Duration::from_millis(20)).await;
     };
     assert_eq!(bound.tcp.to_string(), format!("127.0.0.1:{tcp_port}"));
@@ -740,5 +740,115 @@ async fn leaf_listeners_without_a_spec_follow_the_main_listener() {
         assert_eq!(b.tcp.to_string(), format!("127.0.0.1:{}", main_port + 2));
         assert_eq!(b.discovery.to_string(), format!("127.0.0.1:{}", main_port + 1));
     }
+    task.abort();
+}
+
+fn free_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+}
+
+fn leaf_dir() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    #[cfg(unix)] { use std::os::unix::fs::PermissionsExt; std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap(); }
+    dir
+}
+
+async fn wait_bound(rt: &Arc<MeshRuntime>, n: usize) -> Vec<crate::mesh_leaf_bind::LeafBind> {
+    assert!(until(|| rt.leaf_bounds().len() >= n).await, "expected {n} leaf listeners, got {:?}", rt.leaf_bounds());
+    rt.leaf_bounds()
+}
+
+#[tokio::test]
+async fn a_list_binds_one_leaf_listener_per_address() {
+    let dir = leaf_dir();
+    let (p1, p2) = (free_port(), free_port());
+    let (rt, _) = runtime("srv");
+    rt.set_leaf_ingress(Arc::new(crate::mesh_leaf::LeafIngress::open(dir.path(), SigningKey::from_bytes(&[71; 32])).unwrap())).ok().unwrap();
+    let specs = crate::mesh_leaf_bind::LeafBindSpec::parse_all(
+        &[&format!("127.0.0.1:{p1}"), &format!("127.0.0.1:{p2}")], false).unwrap();
+    assert!(rt.set_leaf_bind_specs(specs));
+    let (_main, task) = listen(&rt, None).await;
+    let bound = wait_bound(&rt, 2).await;
+    let mut tcps: Vec<_> = bound.iter().map(|b| b.tcp.port()).collect();
+    tcps.sort();
+    let mut want = vec![p1, p2];
+    want.sort();
+    assert_eq!(tcps, want);
+    for b in &bound {
+        assert!(tokio::net::TcpStream::connect(b.tcp).await.is_ok());
+    }
+    task.abort();
+}
+
+#[tokio::test]
+async fn one_bind_failing_keeps_the_others_and_is_retried() {
+    let dir = leaf_dir();
+    let (p_ok, p_busy) = (free_port(), free_port());
+    let hold = std::net::TcpListener::bind(("127.0.0.1", p_busy)).unwrap();
+    let (rt, _) = runtime("srv");
+    rt.set_leaf_bind_retry(Duration::from_millis(50));
+    rt.set_leaf_ingress(Arc::new(crate::mesh_leaf::LeafIngress::open(dir.path(), SigningKey::from_bytes(&[72; 32])).unwrap())).ok().unwrap();
+    let specs = crate::mesh_leaf_bind::LeafBindSpec::parse_all(
+        &[&format!("127.0.0.1:{p_busy}"), &format!("127.0.0.1:{p_ok}")], false).unwrap();
+    rt.set_leaf_bind_specs(specs);
+    let (_main, task) = listen(&rt, None).await;
+    let bound = wait_bound(&rt, 1).await;
+    assert_eq!(bound.len(), 1);
+    assert_eq!(bound[0].tcp.port(), p_ok, "the free address bound despite the busy one");
+    // The interface comes up later: the missing address binds without a restart.
+    drop(hold);
+    let bound = wait_bound(&rt, 2).await;
+    assert!(bound.iter().any(|b| b.tcp.port() == p_busy));
+    task.abort();
+}
+
+#[tokio::test]
+async fn a_leaf_admitted_over_the_second_address_is_the_same_identity() {
+    let dir = leaf_dir();
+    let (p1, p2) = (free_port(), free_port());
+    let parent = SigningKey::from_bytes(&[73; 32]);
+    let user_id = clawft_types::project::cert::key_id(&parent.verifying_key().to_bytes());
+    let machine = SigningKey::from_bytes(&[74; 32]);
+    let leaf = SigningKey::from_bytes(&[75; 32]);
+    let cert = LeafCertificate::issue(&parent, format!("user:{user_id}"), machine.verifying_key().to_bytes(), leaf.verifying_key().to_bytes(), 1, 1, u64::MAX, vec!["input.publish".into()]).unwrap();
+    let id = cert.leaf_id();
+    let topic = format!("mesh.leaf.{id}.input");
+    let msg = KernelMessage::new(0, MessageTarget::Topic("ipc.publish".into()),
+        crate::ipc::MessagePayload::Json(serde_json::json!({"topic": topic, "message": "touch"})));
+    let mut inner = MeshIpcEnvelope::new(id.clone(), "srv".into(), msg);
+    inner.src_scope = Some(Scope { user_id: "a".repeat(32), project_id: None });
+    inner.dest_scope = Some(Scope { user_id: "b".repeat(32), project_id: None });
+    let publish = SignedPublish::sign(cert.clone(), &leaf, 1, topic.clone(), inner.to_bytes().unwrap()).unwrap();
+    let ingress = crate::mesh_leaf::LeafIngress::open(dir.path(), machine.clone()).unwrap();
+    std::fs::write(dir.path().join("registry").join(format!("{id}.json")), serde_json::json!({"node_id":id,"cert":cert}).to_string()).unwrap();
+    let (rt, rec) = runtime("srv");
+    rt.set_leaf_ingress(Arc::new(ingress)).ok().unwrap();
+    rt.set_leaf_bind_specs(crate::mesh_leaf_bind::LeafBindSpec::parse_all(
+        &[&format!("127.0.0.1:{p1}"), &format!("127.0.0.1:{p2}")], false).unwrap());
+    let (_main, task) = listen(&rt, None).await;
+    wait_bound(&rt, 2).await;
+
+    let mut wire = FRAME_MAGIC.to_vec();
+    wire.extend_from_slice(&weftos_leaf_types::encode(&publish).unwrap());
+    let send_over = |port: u16| {
+        let wire = wire.clone();
+        async move {
+            let mut s = crate::mesh_tcp::TcpTransport.connect(&format!("127.0.0.1:{port}")).await.unwrap();
+            s.send(&wire).await.unwrap();
+            tokio::time::timeout(Duration::from_secs(5), s.recv()).await.unwrap().unwrap()
+        }
+    };
+    // First over the second address: admitted, ACK signed by the one machine key.
+    let reply = send_over(p2).await;
+    assert!(reply.starts_with(ACK_MAGIC));
+    let ack: PublishAck = weftos_leaf_types::decode(&reply[ACK_MAGIC.len()..]).unwrap();
+    ack.verify(&machine.verifying_key().to_bytes(), &publish).unwrap();
+    assert!(seen(&rec, &topic).await);
+    // The exact replay over the first address gets its ACK but no second
+    // effect: both listeners share one registry and replay floor.
+    let reply = send_over(p1).await;
+    assert!(reply.starts_with(ACK_MAGIC));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(rec.0.lock().unwrap().len(), 1);
     task.abort();
 }

@@ -609,10 +609,10 @@ impl<P: Platform> Kernel<P> {
 
                 let runtime = Arc::new(runtime);
                 // A bad or wildcard-without-opt-in leaf bind aborts boot.
-                if let Some(addr) = mesh_config.leaf_listen_addr.as_deref() {
-                    let spec = crate::mesh_leaf_bind::LeafBindSpec::parse(addr, mesh_config.leaf_listen_any)
+                if let Some(addrs) = mesh_config.leaf_listen_addr.as_ref() {
+                    let specs = crate::mesh_leaf_bind::LeafBindSpec::parse_all(&addrs.entries(), mesh_config.leaf_listen_any)
                         .map_err(|e| KernelError::Boot(format!("kernel.mesh: {e}")))?;
-                    runtime.set_leaf_bind_spec(spec);
+                    runtime.set_leaf_bind_specs(specs);
                 }
                 // ADR-103 leaf admission is opt-in until a service-owned
                 // registry exists. An ephemeral node key cannot sign durable
@@ -3004,6 +3004,32 @@ mod tests {
             .err()
             .expect("wildcard leaf bind must be refused");
         assert!(err.to_string().contains("leaf_listen_any"), "{err}");
+    }
+
+    /// A list entry that is a wildcard, or a repeated entry, fails boot.
+    #[cfg(all(feature = "native", feature = "mesh"))]
+    #[tokio::test]
+    async fn boot_refuses_bad_leaf_bind_list_entries() {
+        use clawft_types::config::{LeafListenAddr, MeshConfig};
+
+        for (list, needle) in [
+            (vec!["192.0.2.10", "0.0.0.0"], "leaf_listen_any"),
+            (vec!["192.0.2.10", "192.0.2.10"], "twice"),
+            (vec![], "empty"),
+        ] {
+            let mut kconfig = test_kernel_config();
+            kconfig.mesh = Some(MeshConfig {
+                enabled: true,
+                listen_addr: "127.0.0.1:0".into(),
+                leaf_listen_addr: Some(LeafListenAddr::Many(list.iter().map(|s| s.to_string()).collect())),
+                ..MeshConfig::default()
+            });
+            let err = Kernel::boot(test_config(), kconfig, Arc::new(NativePlatform::new()))
+                .await
+                .err()
+                .expect("bad leaf bind list must be refused");
+            assert!(err.to_string().contains(needle), "{err}");
+        }
     }
 
     /// P3-U: a symlinked or loose `~/.weftos/user.key` is refused as the chain

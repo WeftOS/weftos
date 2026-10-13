@@ -60,6 +60,10 @@ pub struct KernelStatusResult {
     /// when no leaf listener is running.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub leaf_listeners: Option<LeafListeners>,
+    /// Every bound certified-leaf listener when `leaf_listen_addr` names
+    /// several; `leaf_listeners` is the first of these.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub leaf_listener_list: Vec<LeafListeners>,
 }
 
 /// Bound addresses of the certified-leaf listeners (separate from the main

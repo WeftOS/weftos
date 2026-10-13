@@ -876,6 +876,36 @@ impl Default for AnchorConfig {
 
 // ── Mesh networking configuration ──────────────────────────────────────
 
+/// `kernel.mesh.leaf_listen_addr`: one address string, or a list of them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum LeafListenAddr {
+    One(String),
+    Many(Vec<String>),
+}
+
+impl LeafListenAddr {
+    /// The configured entries, in order. A list may be empty; callers refuse that.
+    pub fn entries(&self) -> Vec<&str> {
+        match self {
+            Self::One(s) => vec![s.as_str()],
+            Self::Many(v) => v.iter().map(String::as_str).collect(),
+        }
+    }
+}
+
+impl From<&str> for LeafListenAddr {
+    fn from(s: &str) -> Self {
+        Self::One(s.to_owned())
+    }
+}
+
+impl From<String> for LeafListenAddr {
+    fn from(s: String) -> Self {
+        Self::One(s)
+    }
+}
+
 /// Configuration for the K6 mesh transport layer.
 ///
 /// Controls whether the mesh listener is started, what transport to use,
@@ -1005,8 +1035,12 @@ pub struct MeshConfig {
     /// listener's IP. A wildcard (`0.0.0.0`, `::`) needs
     /// `leaf_listen_any = true`. Binding wider never changes who is
     /// admitted: every leaf still needs its certificate and signatures.
+    ///
+    /// A list (`["192.0.2.10", "100.64.0.5"]`) binds one leaf listener and
+    /// discovery socket per entry, all feeding the same admission. Each
+    /// entry follows the rules above; duplicates are refused.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub leaf_listen_addr: Option<String>,
+    pub leaf_listen_addr: Option<LeafListenAddr>,
 
     /// Opt-in that allows a wildcard `leaf_listen_addr`. Default: false.
     #[serde(default)]
@@ -1798,13 +1832,20 @@ mod tests {
         assert_eq!(none.leaf_listen_addr, None);
         assert!(!none.leaf_listen_any);
         let ip: super::MeshConfig = serde_json::from_str(r#"{"leaf_listen_addr": "192.0.2.10"}"#).unwrap();
-        assert_eq!(ip.leaf_listen_addr.as_deref(), Some("192.0.2.10"));
+        assert_eq!(ip.leaf_listen_addr, Some("192.0.2.10".into()));
         let both: super::MeshConfig =
             serde_json::from_str(r#"{"leaf_listen_addr": "192.0.2.10:9600", "leaf_listen_any": true}"#).unwrap();
-        assert_eq!(both.leaf_listen_addr.as_deref(), Some("192.0.2.10:9600"));
+        assert_eq!(both.leaf_listen_addr, Some("192.0.2.10:9600".into()));
         assert!(both.leaf_listen_any);
         let toml_cfg: super::MeshConfig = toml::from_str("leaf_listen_addr = \"192.0.2.10\"").unwrap();
-        assert_eq!(toml_cfg.leaf_listen_addr.as_deref(), Some("192.0.2.10"));
+        assert_eq!(toml_cfg.leaf_listen_addr, Some("192.0.2.10".into()));
+        let list: super::MeshConfig =
+            toml::from_str("leaf_listen_addr = [\"192.0.2.10\", \"100.64.0.5\"]").unwrap();
+        let l = list.leaf_listen_addr.unwrap();
+        assert_eq!(l.entries(), vec!["192.0.2.10", "100.64.0.5"]);
+        let j: super::MeshConfig = serde_json::from_str(r#"{"leaf_listen_addr": ["192.0.2.10"]}"#).unwrap();
+        assert_eq!(j.leaf_listen_addr.unwrap().entries(), vec!["192.0.2.10"]);
+        assert!(toml::from_str::<super::MeshConfig>("leaf_listen_addr = 5").is_err());
     }
 
     #[test]

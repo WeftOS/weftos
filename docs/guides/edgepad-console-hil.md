@@ -50,7 +50,11 @@ It never flashes anything and never touches USB.
 
    Restart the daemon (`weaver kernel restart`). `weaver kernel status` must print
    `Leaf bind:  tcp <LAN ip>:9491 / discovery udp <LAN ip>:9490`. A wildcard
-   address needs `leaf_listen_any = true` and is refused otherwise.
+   address needs `leaf_listen_any = true` and is refused otherwise. To also
+   reach the daemon over Tailscale (for example glasses on a phone hotspot)
+   while the pad keeps the LAN address, use a list:
+   `leaf_listen_addr = ["192.0.2.10", "100.64.0.5"]`; status then prints one
+   `Leaf bind:` line per address.
 
 3. **Rehearse without the pad** (optional, recommended once):
 
