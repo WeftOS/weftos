@@ -17,14 +17,53 @@ pub trait NodeHealthSource: Send + Sync {
     async fn snapshot(&self) -> Result<Value, CosError>;
 }
 
+/// Why the daemon could not be dialed: `Unreachable` means no daemon answered
+/// at the endpoint the resolver picked (the owner may well be fine);
+/// `Refused` means one answered but the connection was not accepted.
+pub(crate) enum Dial {
+    Unreachable(String),
+    Refused(String),
+}
+
+/// Dial the daemon the way the `weaver` CLI does: through the endpoint
+/// resolver (`WEFTOS_RUNTIME_DIR`, the project manifest, then the user
+/// daemon's `~/.weftos/run`), not the legacy `~/.clawft` socket alone.
+pub(crate) async fn dial_resolved(res: &clawft_rpc::resolve::Resolution) -> Result<clawft_rpc::DaemonClient, Dial> {
+    match clawft_rpc::DaemonClient::connect_resolved(res).await {
+        Ok(c) => Ok(c.client),
+        Err(clawft_rpc::ConnectError::Unreachable { resolution, .. }) => {
+            Err(Dial::Unreachable(format!("no daemon is answering at {}", resolution.socket.display())))
+        }
+        Err(e) => Err(Dial::Refused(e.to_string())),
+    }
+}
+
+pub(crate) async fn dial() -> Result<clawft_rpc::DaemonClient, Dial> {
+    match clawft_rpc::resolve::resolve(&clawft_rpc::resolve::ResolveFlags::default()) {
+        Ok(res) => dial_resolved(&res).await,
+        Err(e) => Err(Dial::Refused(e.to_string())),
+    }
+}
+
+/// The honest wording: not being able to reach the daemon says nothing
+/// about the nodes.
+fn not_checked(why: &str) -> Value {
+    json!({
+        "reachable": false,
+        "health_known": false,
+        "reason": format!("I can't reach the weaver daemon to check ({why}); that says nothing about whether the nodes are healthy"),
+    })
+}
+
 /// Reads the local daemon over RPC. Read-only methods only.
 pub struct DaemonHealthSource;
 
 #[async_trait]
 impl NodeHealthSource for DaemonHealthSource {
     async fn snapshot(&self) -> Result<Value, CosError> {
-        let Some(mut client) = clawft_rpc::DaemonClient::connect().await else {
-            return Ok(json!({"reachable": false, "reason": "weaver daemon not reachable on this machine"}));
+        let mut client = match dial().await {
+            Ok(c) => c,
+            Err(Dial::Unreachable(why) | Dial::Refused(why)) => return Ok(not_checked(&why)),
         };
         let status = client.simple_call("cluster.status").await.map_err(|e| CosError::Tool {
             name: "nodes.health".into(),
@@ -62,7 +101,7 @@ impl Tool for NodesHealth {
             let total = snap["summary"]["total_nodes"].as_u64().unwrap_or(n as u64);
             format!("{healthy}/{total} nodes healthy")
         } else {
-            "daemon unreachable; no node state".into()
+            "can't reach the daemon to check; node health unknown".into()
         };
         Ok(ToolOutcome { summary, result: snap })
     }
@@ -94,7 +133,11 @@ impl MeshRpc for DaemonRpc {
         if !clawft_rpc::handshake::is_read_only_method(method) {
             return Err(CosError::Tool { name: "mesh.routes".into(), reason: format!("{method} is not a read-only method") });
         }
-        let Some(mut client) = clawft_rpc::DaemonClient::connect().await else { return Ok(None) };
+        let mut client = match dial().await {
+            Ok(c) => c,
+            Err(Dial::Unreachable(_)) => return Ok(None),
+            Err(Dial::Refused(why)) => return Err(CosError::Tool { name: "mesh.routes".into(), reason: why }),
+        };
         let resp = client.simple_call(method).await.map_err(|e| CosError::Tool { name: "mesh.routes".into(), reason: e.to_string() })?;
         if let Some(err) = resp.error {
             return Err(CosError::Tool { name: "mesh.routes".into(), reason: format!("{method}: {err}") });
@@ -123,8 +166,8 @@ impl Tool for MeshRoutes {
     async fn call(&self, _args: Value) -> Result<ToolOutcome, CosError> {
         let Some(topics) = self.rpc.call("ipc.topics").await? else {
             return Ok(ToolOutcome {
-                summary: "daemon unreachable; no route state".into(),
-                result: json!({"reachable": false, "reason": "weaver daemon not reachable on this machine"}),
+                summary: "can't reach the daemon to check; route state unknown".into(),
+                result: not_checked("no daemon answered at the resolved endpoint"),
             });
         };
         // Facts are optional: an older daemon may not serve them.
@@ -134,5 +177,29 @@ impl Tool for MeshRoutes {
             summary: format!("{n} route(s) on the daemon"),
             result: json!({"reachable": true, "topics": topics, "facts": facts}),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn unreachable_daemon_is_not_reported_as_unhealthy() {
+        let dir = tempfile::tempdir().unwrap();
+        let res = clawft_rpc::resolve::resolve_with(&clawft_rpc::resolve::ResolveInputs {
+            env_runtime: Some(dir.path().to_string_lossy().into_owned()),
+            ..Default::default()
+        })
+        .unwrap();
+        let Err(Dial::Unreachable(why)) = dial_resolved(&res).await else { panic!("expected unreachable") };
+        assert!(why.contains(&dir.path().to_string_lossy().into_owned()) || why.contains("kernel.sock"), "{why}");
+        let snap = not_checked(&why);
+        assert_eq!(snap["reachable"], false);
+        assert_eq!(snap["health_known"], false);
+        let tool = NodesHealth { source: Arc::new(StaticHealth(snap)) };
+        let out = tool.call(json!({})).await.unwrap();
+        assert!(out.summary.contains("can't reach") && !out.summary.contains("unhealthy"), "{}", out.summary);
+        assert!(out.result["reason"].as_str().unwrap().contains("I can't reach the weaver daemon to check"));
     }
 }

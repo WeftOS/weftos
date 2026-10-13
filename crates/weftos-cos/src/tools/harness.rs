@@ -295,6 +295,27 @@ pub(crate) fn condense_ticket(t: &Value) -> Value {
     })
 }
 
+/// One short list row: real ref, status and a clipped title. No nulls, no
+/// timestamps; a list of these stays small enough for a local model to copy
+/// faithfully instead of continuing the pattern with filler.
+pub(crate) fn row_ticket(t: &Value) -> Value {
+    let c = condense_ticket(t);
+    let full = c["title"].as_str().unwrap_or("");
+    let title = if full.chars().count() > 90 { format!("{}…", full.chars().take(89).collect::<String>()) } else { full.to_string() };
+    let mut row = json!({"ref": c["ref"], "status": c["status"], "title": title});
+    if !c["priority"].is_null() {
+        row["priority"] = c["priority"].clone();
+    }
+    row
+}
+
+/// The first `limit` rows plus an honest count of the rest.
+pub(crate) fn bounded_rows(tickets: &[Value], limit: usize) -> (Vec<Value>, Option<String>) {
+    let rows = tickets.iter().take(limit).map(row_ticket).collect();
+    let more = tickets.len().saturating_sub(limit);
+    (rows, (more > 0).then(|| format!("+{more} more; narrow with a status or use board.search")))
+}
+
 /// A goal for the model: the outcome text stays on the board (a goal's
 /// description runs to a kilobyte and buried the tickets in the prompt).
 fn condense_goal(g: &Value) -> Value {
@@ -312,7 +333,7 @@ impl Tool for ProjectsActivity {
                 "properties": {
                     "status": {"type": "string", "enum": ["todo", "in_progress", "review", "done"],
                                "description": "Only tickets in this status; all when omitted."},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 25},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 25, "default": 10},
                     "project": {"type": "string", "description": "Project UUID for history; the configured default when omitted."},
                     "history_limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 10,
                                       "description": "History entries to read, newest first."},
@@ -327,8 +348,8 @@ impl Tool for ProjectsActivity {
 
     async fn call(&self, args: Value) -> Result<ToolOutcome, CosError> {
         let status = arg_str(&args, "status");
-        let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(25).clamp(1, 100) as usize;
-        let tickets = self.client.tickets(status.as_deref(), limit).await?;
+        let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(10).clamp(1, 25) as usize;
+        let tickets = self.client.tickets(status.as_deref(), 500).await?;
         let goals = self
             .client
             .get("/api/harness/goals?limit=100&offset=0")
@@ -353,16 +374,47 @@ impl Tool for ProjectsActivity {
             }
         }
         let history = self.client.history(project.as_deref(), &query).await.to_json();
-        let condensed: Vec<Value> = tickets.iter().map(condense_ticket).collect();
+        let (condensed, more) = bounded_rows(&tickets, limit);
         let summary = format!(
-            "read {} ticket(s){} and {} goal(s); history {}",
+            "read {} of {} ticket(s){} and {} goal(s); history {}",
             condensed.len(),
+            tickets.len(),
             status.map(|s| format!(" in {s}")).unwrap_or_default(),
             goals.len(),
             if history["available"] == true { "read" } else { history["reason"].as_str().unwrap_or("unavailable") }
         );
-        Ok(ToolOutcome { summary, result: json!({"tickets": condensed, "goals": goals, "history": history}) })
+        Ok(ToolOutcome { summary, result: json!({"total": tickets.len(), "shown": condensed.len(), "tickets": condensed, "more": more, "goals": goals, "history": history}) })
     }
 }
 
 pub use super::notes::NotesRecord;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn t(n: usize) -> Value {
+        json!({"id": format!("{n:08x}-0000-0000-0000-000000000000"), "status": "in_progress", "priority": null,
+               "title": format!("Real card number {n}"), "source_url": format!("https://x/WEFT-{n}")})
+    }
+
+    #[test]
+    fn rows_are_bounded_real_and_counted() {
+        let all: Vec<Value> = (1..=26).map(t).collect();
+        let (rows, more) = bounded_rows(&all, 10);
+        assert_eq!(rows.len(), 10);
+        assert_eq!(rows[0]["ref"], "WEFT-1");
+        assert_eq!(rows[0]["title"], "Real card number 1");
+        assert!(rows[0].get("priority").is_none() && rows[0].get("updated_at").is_none());
+        assert_eq!(more.as_deref(), Some("+16 more; narrow with a status or use board.search"));
+        let (rows, more) = bounded_rows(&all[..3], 10);
+        assert_eq!((rows.len(), more), (3, None));
+    }
+
+    #[test]
+    fn long_titles_are_clipped() {
+        let mut c = t(1);
+        c["title"] = json!("x".repeat(400));
+        assert_eq!(row_ticket(&c)["title"].as_str().unwrap().chars().count(), 90);
+    }
+}

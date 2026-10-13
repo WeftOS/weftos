@@ -14,7 +14,7 @@ use crate::brain::Brain;
 use crate::model::{self, ModelPlan};
 use crate::routing::ModelRoutes;
 use crate::tools::board::BoardPropose;
-use crate::tools::cards::{BoardClaim, BoardNote, BoardRead, CardCurrent, Focus};
+use crate::tools::cards::{BoardClaim, BoardNote, BoardRead, BoardSearch, CardCurrent, Focus};
 use crate::tools::harness::{HarnessClient, NotesRecord, ProjectsActivity};
 use crate::tools::kickoff::WorkKickoff;
 use crate::tools::nodes::{DaemonHealthSource, DaemonRpc, MeshRoutes, NodesHealth};
@@ -82,7 +82,7 @@ pub async fn build(cfg: &CosConfig) -> Result<Built, CosError> {
         Ok(client) => Some(Arc::new(client)),
         Err(e) => {
             let reason = e.to_string();
-            for t in ["projects.activity", "board.read", "board.claim", "board.note", "card.current"] {
+            for t in ["projects.activity", "board.read", "board.search", "board.claim", "board.note", "card.current"] {
                 unbound.push((t.into(), reason.clone()));
             }
             None
@@ -91,6 +91,7 @@ pub async fn build(cfg: &CosConfig) -> Result<Built, CosError> {
     if let Some(client) = &client {
         tools = tools
             .with(Arc::new(ProjectsActivity { client: client.clone() }))
+            .with(Arc::new(BoardSearch { client: client.clone() }))
             .with(Arc::new(BoardRead { client: client.clone(), focus: focus.clone() }))
             .with(Arc::new(BoardClaim { client: client.clone(), focus: focus.clone() }))
             .with(Arc::new(BoardNote { client: client.clone(), focus: focus.clone() }))
