@@ -17,7 +17,7 @@
 //! publishes through the same durable journal.
 
 use std::io::{Read, Write};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, UdpSocket};
+use std::net::{SocketAddr, TcpStream, UdpSocket};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::Duration;
 
@@ -39,7 +39,6 @@ use crate::session::PadSession;
 // build time. An image built without them boots the display but never
 // connects to the mesh or emits unsigned traffic.
 include!(concat!(env!("OUT_DIR"), "/leaf_provision.rs"));
-const DISCOVERY_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::BROADCAST), 9490);
 const MAX_NVS_JOURNAL: usize = 4096;
 
 const RX_BUF: usize = 8192;
@@ -235,28 +234,50 @@ impl LeafLink {
         }
     }
 
+    /// Probe the parent: the build-time hint first (unicast, retried), then
+    /// broadcast. Only a machine-signed, nonce-bound advertisement is accepted,
+    /// and its advertised endpoint is what the caller connects to.
     fn discover(&self) -> anyhow::Result<SocketAddr> {
+        let hint = match weftos_leaf_types::discovery::parse_parent_hint(PARENT_HINT) {
+            Ok(h) => h,
+            Err(e) => {
+                warn!("[mesh] ignoring parent hint {PARENT_HINT:?}: {e}; broadcast only");
+                None
+            }
+        };
         let socket = UdpSocket::bind("0.0.0.0:0")?;
         socket.set_broadcast(true)?;
         socket.set_read_timeout(Some(Duration::from_secs(3)))?;
-        let mut nonce = [0u8; 16];
-        unsafe { esp_idf_svc::sys::esp_fill_random(nonce.as_mut_ptr().cast(), nonce.len()) };
-        let mut request = Vec::with_capacity(52);
-        request.extend_from_slice(b"WLD1");
-        request.extend_from_slice(self.cert.leaf_id().as_bytes());
-        request.extend_from_slice(&nonce);
-        socket.send_to(&request, DISCOVERY_ADDR)?;
-        let mut response = [0u8; 1024];
-        loop {
-            let (n, _) = socket.recv_from(&mut response)?;
-            let Ok(ad) = weftos_leaf_types::decode::<ParentAdvertisement>(&response[..n]) else { continue };
-            // The fresh random nonce prevents replay even before this
-            // device's wall clock has been synchronized.
-            let wall = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-            if ad.verify_for(&self.cert.mesh_pubkey, &self.cert.parent_scope, wall, &nonce).is_ok() {
-                return ad.endpoint.parse().map_err(Into::into);
+        let mut last = anyhow::anyhow!("no discovery target");
+        for target in weftos_leaf_types::discovery::probe_plan(hint) {
+            let mut nonce = [0u8; 16];
+            unsafe { esp_idf_svc::sys::esp_fill_random(nonce.as_mut_ptr().cast(), nonce.len()) };
+            let mut request = Vec::with_capacity(52);
+            request.extend_from_slice(b"WLD1");
+            request.extend_from_slice(self.cert.leaf_id().as_bytes());
+            request.extend_from_slice(&nonce);
+            info!("[mesh] discovery probe -> {target}");
+            if let Err(e) = socket.send_to(&request, target) {
+                last = e.into();
+                continue;
+            }
+            let deadline = std::time::Instant::now() + Duration::from_secs(3);
+            let mut response = [0u8; 1024];
+            while std::time::Instant::now() < deadline {
+                let n = match socket.recv_from(&mut response) {
+                    Ok((n, _)) => n,
+                    Err(e) => { last = e.into(); break; }
+                };
+                let Ok(ad) = weftos_leaf_types::decode::<ParentAdvertisement>(&response[..n]) else { continue };
+                // The fresh random nonce prevents replay even before this
+                // device's wall clock has been synchronized.
+                let wall = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+                if ad.verify_for(&self.cert.mesh_pubkey, &self.cert.parent_scope, wall, &nonce).is_ok() {
+                    return ad.endpoint.parse().map_err(Into::into);
+                }
             }
         }
+        Err(last)
     }
 
     fn replay(&mut self, sock: &mut TcpStream, mut on_push: impl FnMut(&[u8])) -> anyhow::Result<()> {

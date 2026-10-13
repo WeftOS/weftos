@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 /// BVH spatial tag registry + narrow-phase payload schemas (ADR-056 / WEFT-717).
 pub mod spatial;
 pub mod link;
+pub mod discovery;
 
 // ── Topic layout ──────────────────────────────────────────────────
 

@@ -191,7 +191,7 @@ module doc in `src/ptt.rs`).
   unit.
 - WiFi credentials: copy `wifi_secrets.rs.example` → `wifi_secrets.rs`
   and fill before building; the file is gitignored.
-- Mesh: certified-leaf discovery (UDP broadcast :9490) + WLF1; the image
+- Mesh: certified-leaf discovery (UDP :9490: optional build-time parent hint (unicast, `EDGEPAD_PARENT_HINT`) then broadcast) + WLF1; the image
   needs `WEFTOS_LEAF_SEED_FILE` / `WEFTOS_LEAF_CERT_FILE` at build time
   (`weaver leaf provision`, `weaver mesh identity [--user] --out` for the
   pins). An unprovisioned image stays offline on the touch-target screen.

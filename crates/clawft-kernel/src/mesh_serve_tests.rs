@@ -852,3 +852,52 @@ async fn a_leaf_admitted_over_the_second_address_is_the_same_identity() {
     assert_eq!(rec.0.lock().unwrap().len(), 1);
     task.abort();
 }
+
+#[tokio::test]
+async fn wildcard_discovery_answers_a_unicast_probe_and_advertises_the_specific_tcp_address() {
+    let dir = leaf_dir();
+    let tcp_port = loop {
+        let p = free_port();
+        if p > 2 && std::net::UdpSocket::bind(("0.0.0.0", p - 1)).is_ok() { break p; }
+    };
+    let parent = SigningKey::from_bytes(&[81; 32]);
+    let user_id = clawft_types::project::cert::key_id(&parent.verifying_key().to_bytes());
+    let machine = SigningKey::from_bytes(&[82; 32]);
+    let leaf = SigningKey::from_bytes(&[83; 32]);
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    let cert = LeafCertificate::issue(&parent, format!("user:{user_id}"), machine.verifying_key().to_bytes(), leaf.verifying_key().to_bytes(), 1, now - 1, now + 600, vec!["input.publish".into()]).unwrap();
+    let id = cert.leaf_id();
+    let ingress = crate::mesh_leaf::LeafIngress::open(dir.path(), machine.clone()).unwrap();
+    std::fs::write(dir.path().join("registry").join(format!("{id}.json")), serde_json::json!({"node_id":id,"cert":cert}).to_string()).unwrap();
+    let (rt, _) = runtime("srv");
+    rt.set_leaf_ingress(Arc::new(ingress)).ok().unwrap();
+    rt.set_leaf_discovery_any(true);
+    rt.set_leaf_bind_specs(crate::mesh_leaf_bind::LeafBindSpec::parse_all(&[&format!("127.0.0.1:{tcp_port}")], false).unwrap());
+    let (_main, task) = listen(&rt, None).await;
+    wait_bound(&rt, 1).await;
+
+    let sock = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let nonce = [5u8; 16];
+    let mut probe = b"WLD1".to_vec();
+    probe.extend_from_slice(id.as_bytes());
+    probe.extend_from_slice(&nonce);
+    let target = format!("127.0.0.1:{}", tcp_port - 1);
+    let mut buf = [0u8; 1024];
+    let mut reply = None;
+    // The wildcard socket binds asynchronously; probe until it answers.
+    for _ in 0..50 {
+        sock.send_to(&probe, &target).await.unwrap();
+        if let Ok(Ok((n, _))) = tokio::time::timeout(Duration::from_millis(100), sock.recv_from(&mut buf)).await { reply = Some(n); break; }
+    }
+    let n = reply.expect("wildcard discovery answered");
+    let ad: weftos_leaf_types::link::ParentAdvertisement = weftos_leaf_types::decode(&buf[..n]).unwrap();
+    ad.verify_for(&machine.verifying_key().to_bytes(), &cert.parent_scope, now, &nonce).unwrap();
+    assert_eq!(ad.endpoint, format!("127.0.0.1:{tcp_port}"));
+    // An unenrolled leaf still gets silence.
+    let mut other = b"WLD1".to_vec();
+    other.extend_from_slice("f".repeat(32).as_bytes());
+    other.extend_from_slice(&nonce);
+    sock.send_to(&other, &target).await.unwrap();
+    assert!(tokio::time::timeout(Duration::from_millis(300), sock.recv_from(&mut buf)).await.is_err());
+    task.abort();
+}

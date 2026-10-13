@@ -192,6 +192,7 @@ pub struct MeshRuntime {
     leaf_bound: std::sync::Mutex<Vec<crate::mesh_leaf_bind::LeafBind>>,
     /// Milliseconds between retries of a leaf address that failed to bind.
     leaf_bind_retry_ms: std::sync::atomic::AtomicU64,
+    leaf_discovery_any: std::sync::atomic::AtomicBool,
     authentication: std::sync::OnceLock<MeshAuthentication>,
     /// Local node identifier.
     node_id: String,
@@ -275,6 +276,15 @@ impl MeshRuntime {
         self.leaf_bound.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
+    /// Bind leaf discovery UDP on the wildcard address (`kernel.mesh.leaf_discovery_any`).
+    pub fn set_leaf_discovery_any(&self, any: bool) {
+        self.leaf_discovery_any.store(any, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn leaf_discovery_any(&self) -> bool {
+        self.leaf_discovery_any.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     /// How long a leaf address that failed to bind waits before the next try.
     pub(crate) fn leaf_bind_retry(&self) -> std::time::Duration {
         std::time::Duration::from_millis(self.leaf_bind_retry_ms.load(std::sync::atomic::Ordering::Relaxed))
@@ -336,6 +346,7 @@ impl MeshRuntime {
             leaf_bind_specs: std::sync::OnceLock::new(),
             leaf_bound: std::sync::Mutex::new(Vec::new()),
             leaf_bind_retry_ms: std::sync::atomic::AtomicU64::new(15_000),
+            leaf_discovery_any: std::sync::atomic::AtomicBool::new(false),
             authentication: std::sync::OnceLock::new(),
             node_id,
             peers: DashMap::new(),
@@ -365,6 +376,7 @@ impl MeshRuntime {
             leaf_bind_specs: std::sync::OnceLock::new(),
             leaf_bound: std::sync::Mutex::new(Vec::new()),
             leaf_bind_retry_ms: std::sync::atomic::AtomicU64::new(15_000),
+            leaf_discovery_any: std::sync::atomic::AtomicBool::new(false),
             authentication: std::sync::OnceLock::new(),
             node_id,
             peers: DashMap::new(),
