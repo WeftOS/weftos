@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.weftos.mentramic">
+
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <application
+        android:label="WeftOS Mentra Mic"
+        android:allowBackup="false">
+
+        <!-- Explicit-component broadcasts only; see README. -->
+        <receiver
+            android:name=".MicReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.weftos.mentramic.RECORD" />
+                <action android:name="com.weftos.mentramic.STOP" />
+                <action android:name="com.weftos.mentramic.LEVEL" />
+            </intent-filter>
+        </receiver>
+
+        <service
+            android:name=".MicService"
+            android:exported="true"
+            android:permission="android.permission.DUMP"
+            android:foregroundServiceType="microphone" />
+
+        <activity
+            android:name=".LauncherActivity"
+            android:exported="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
