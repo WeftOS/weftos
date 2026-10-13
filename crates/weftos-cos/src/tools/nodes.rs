@@ -70,8 +70,17 @@ impl NodeHealthSource for DaemonHealthSource {
             reason: e.to_string(),
         })?;
         let nodes = client.simple_call("cluster.nodes").await.ok();
+        // The local daemon's own build (`kernel.status`); optional, an older
+        // daemon may not report it.
+        let local_version = client
+            .simple_call("kernel.status")
+            .await
+            .ok()
+            .and_then(|r| r.result)
+            .and_then(|r| r["build"]["version"].as_str().map(str::to_string));
         Ok(json!({
             "reachable": true,
+            "local_weaver_version": local_version,
             "summary": status.result.unwrap_or(Value::Null),
             "nodes": nodes.and_then(|r| r.result).unwrap_or(Value::Array(vec![])),
         }))
@@ -94,17 +103,53 @@ impl Tool for NodesHealth {
     }
 
     async fn call(&self, _args: Value) -> Result<ToolOutcome, CosError> {
-        let snap = self.source.snapshot().await?;
+        let mut snap = self.source.snapshot().await?;
         let summary = if snap["reachable"] == true {
             let n = snap["nodes"].as_array().map_or(0, Vec::len);
             let healthy = snap["summary"]["healthy_nodes"].as_u64().unwrap_or(0);
             let total = snap["summary"]["total_nodes"].as_u64().unwrap_or(n as u64);
-            format!("{healthy}/{total} nodes healthy")
+            let versions = version_report(&snap);
+            let line = versions["line"].as_str().unwrap_or_default().to_string();
+            snap["versions"] = versions;
+            format!("{healthy}/{total} nodes healthy; {line}")
         } else {
             "can't reach the daemon to check; node health unknown".into()
         };
         Ok(ToolOutcome { summary, result: snap })
     }
+}
+
+/// The weaver version of each node, compact. The local daemon reports its own
+/// build; a peer row carries one only when the daemon supplies it, and the
+/// report says so plainly when it does not, rather than leaving it to guess.
+fn version_report(snap: &Value) -> Value {
+    let mut by_node: Vec<Value> = Vec::new();
+    if let Some(v) = snap["local_weaver_version"].as_str() {
+        by_node.push(json!({"node": "local daemon", "weaver_version": v}));
+    }
+    for row in snap["nodes"].as_array().into_iter().flatten() {
+        let v = row["weaver_version"].as_str().or_else(|| row["version"].as_str());
+        if let Some(v) = v {
+            let name = row["name"].as_str().or_else(|| row["node_id"].as_str()).unwrap_or("node");
+            by_node.push(json!({"node": name, "weaver_version": v}));
+        }
+    }
+    let total = snap["nodes"].as_array().map_or(0, Vec::len);
+    let mut distinct: Vec<&str> = by_node.iter().filter_map(|e| e["weaver_version"].as_str()).collect();
+    distinct.sort_unstable();
+    distinct.dedup();
+    let line = match (by_node.len(), distinct.as_slice()) {
+        (0, _) => "weaver version not reported by the daemon".to_string(),
+        (n, [one]) if n >= total.max(1) => format!("all {n} reporting node(s) run {one}"),
+        _ => format!("weaver versions: {}", distinct.join(", ")),
+    };
+    let complete = !by_node.is_empty() && by_node.len() >= total.max(1);
+    json!({
+        "line": line,
+        "by_node": by_node,
+        "complete": complete,
+        "note": if complete { Value::Null } else { json!("only the nodes listed in by_node reported a version; do not guess the others") },
+    })
 }
 
 /// A fixed snapshot for tests and the typed dev mode.
@@ -183,6 +228,30 @@ impl Tool for MeshRoutes {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn health_reports_weaver_versions() {
+        let snap = json!({"reachable": true, "local_weaver_version": "0.8.4-rc.11",
+            "summary": {"healthy_nodes": 2, "total_nodes": 2},
+            "nodes": [{"name": "a", "weaver_version": "0.8.4-rc.11"}, {"name": "b", "version": "0.8.4-rc.11"}]});
+        let out = NodesHealth { source: Arc::new(StaticHealth(snap)) }.call(json!({})).await.unwrap();
+        assert!(out.summary.contains("2/2 nodes healthy") && out.summary.contains("0.8.4-rc.11"), "{}", out.summary);
+        assert_eq!(out.result["versions"]["by_node"].as_array().unwrap().len(), 3);
+        assert_eq!(out.result["versions"]["complete"], true);
+    }
+
+    #[tokio::test]
+    async fn missing_peer_versions_are_said_not_guessed() {
+        let snap = json!({"reachable": true, "local_weaver_version": "0.8.4-rc.11",
+            "summary": {"healthy_nodes": 3, "total_nodes": 3},
+            "nodes": [{"name": "a"}, {"name": "b"}, {"name": "c"}]});
+        let out = NodesHealth { source: Arc::new(StaticHealth(snap)) }.call(json!({})).await.unwrap();
+        assert_eq!(out.result["versions"]["complete"], false);
+        assert!(out.result["versions"]["note"].as_str().unwrap().contains("do not guess"));
+        let none = json!({"reachable": true, "summary": {}, "nodes": []});
+        let out = NodesHealth { source: Arc::new(StaticHealth(none)) }.call(json!({})).await.unwrap();
+        assert!(out.summary.contains("not reported"), "{}", out.summary);
+    }
 
     #[tokio::test]
     async fn unreachable_daemon_is_not_reported_as_unhealthy() {

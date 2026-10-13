@@ -28,7 +28,7 @@
 {"kind":"state","state":"thinking"}
 {"kind":"status","lanes_running":0,"model":"local/mlx-community/GLM-4.7-Flash-4bit","task":"Is the mesh healthy"}
 {"kind":"tool","name":"nodes.health","status":"running","summary":"running"}
-{"kind":"tool","name":"nodes.health","status":"ok","summary":"2/3 nodes healthy"}
+{"kind":"tool","name":"nodes.health","status":"ok","summary":"2/3 nodes healthy; weaver version not reported by the daemon"}
 {"kind":"token","text":"Two of three nodes are healthy.","turn_id":"t5"}
 {"kind":"state","state":"speaking"}
 {"endpoint":"host","final":true,"kind":"message","text":"Two of three nodes are healthy.","turn_id":"t5"}

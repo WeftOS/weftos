@@ -66,3 +66,17 @@ async fn unreachable_dashboard_is_unavailable_not_an_error() {
     let h = harness_client(addr, Some(TEST_PROJECT)).history(None, &[]).await;
     assert!(matches!(h, weftos_cos::tools::harness::History::Unavailable(_)));
 }
+
+#[tokio::test]
+async fn no_project_is_not_requested_not_an_error() {
+    let (addr, _posts) = FakeHarness { with_events_route: true, ..Default::default() }.start().await;
+    let tool = ProjectsActivity { client: harness_client(addr, None) };
+    let out = tool.call(json!({})).await.expect("the turn never fails on history");
+    assert_eq!(out.result["history"]["available"], false);
+    assert_eq!(out.result["history"]["reason"], "not requested");
+    let text = out.result.to_string() + &out.summary;
+    assert!(!text.contains("no project to") && !text.contains("unavailable"), "{text}");
+    assert!(out.summary.ends_with("history not requested"), "{}", out.summary);
+    // A malformed project still refuses rather than going quiet.
+    assert!(tool.call(json!({"project": "nope"})).await.is_err());
+}
