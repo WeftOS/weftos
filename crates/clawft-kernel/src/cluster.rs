@@ -467,6 +467,9 @@ pub struct ClusterMembership {
     /// so the cluster survives kernel restarts. A `Mutex` serialises writers;
     /// the lock is held only for the JSON encode + atomic rename.
     persist_path: std::sync::Mutex<Option<PathBuf>>,
+    /// Set by [`Self::heartbeat`] (in-memory only); flushed by the reaper tick so
+    /// a restart sees recent liveness without a disk write per heartbeat.
+    heartbeat_dirty: std::sync::atomic::AtomicBool,
     /// Optional chain manager for exochain audit logging.
     #[cfg(feature = "exochain")]
     chain: Option<Arc<crate::chain::ChainManager>>,
@@ -492,6 +495,7 @@ impl ClusterMembership {
             peers: DashMap::new(),
             peer_add_limiter,
             persist_path: std::sync::Mutex::new(None),
+            heartbeat_dirty: std::sync::atomic::AtomicBool::new(false),
             #[cfg(feature = "exochain")]
             chain: None,
             #[cfg(feature = "exochain")]
@@ -880,6 +884,7 @@ impl ClusterMembership {
         if entry.state == NodeState::Suspect {
             entry.state = NodeState::Active;
         }
+        self.heartbeat_dirty.store(true, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
 
@@ -1015,7 +1020,11 @@ impl ClusterMembership {
         for id in &demote {
             let _ = self.update_state(id, NodeState::Unreachable);
         }
-        remove.iter().filter(|id| self.remove_peer(id).is_ok()).count()
+        let removed = remove.iter().filter(|id| self.remove_peer(id).is_ok()).count();
+        if self.heartbeat_dirty.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            self.persist();
+        }
+        removed
     }
 
     /// Apply a live mesh peer event to membership **atomically** (WEFT-120).
@@ -2465,6 +2474,21 @@ mod tests {
         assert_eq!(c.expire_stale_at(at(chrono::Duration::hours(25)), un, rm), 1);
         assert!(c.get_peer("member").is_none());
         assert!(c.get_peer("me").is_some(), "the local node is never reaped");
+    }
+
+    #[test]
+    fn heartbeats_reach_disk_on_the_reaper_tick() {
+        let path = persist_tmp_path("hb-flush");
+        let c = ClusterMembership::new(cfg_with_id("me"))
+            .with_min_peer_interval(std::time::Duration::ZERO)
+            .with_persist_path(&path);
+        c.add_peer(aged_peer("member", chrono::Duration::hours(2))).unwrap();
+        c.heartbeat("member").unwrap();
+        c.expire_stale(STALE_UNREACHABLE_AFTER, STALE_REMOVE_AFTER);
+        let restored = ClusterMembership::new(cfg_with_id("me")).with_persist_path(&path);
+        let hb = restored.get_peer("member").unwrap().last_heartbeat;
+        assert!(Utc::now().signed_duration_since(hb) < chrono::Duration::minutes(1));
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]
