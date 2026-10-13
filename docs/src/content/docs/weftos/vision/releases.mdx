@@ -29,6 +29,11 @@ description: Auto-generated from CHANGELOG.md. Complete WeftOS version history.
   Calls now name their repository; a sole repository is checked out at the target path and several
   are checked out side by side.
 - Featured `weftos-cos` builds install to `~/.weftos/bin` so test runs cannot strip speech-to-text.
+- Chief of staff: an answer that claims a board change was applied, done or created with no
+  successful write in that turn is rewritten to the true staged state (gate `claim:unbacked-write`).
+- `weftos-cos bridge` no longer stalls when the dashboard rejects a sync: the batch is split to
+  isolate bad rows, a row rejected twice is skipped, and status and results always get through.
+- `weftos-cos` builds for Windows again (token-file permission checks are Unix-only).
 
 ---
 
