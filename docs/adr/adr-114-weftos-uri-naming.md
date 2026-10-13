@@ -118,7 +118,18 @@ verifies it as pairing does and accepts it only when its signer node key is alre
 (`workload-peers.json` at pinned/paired, a `workload-host.json` controller, or a mesh pairing);
 never trust-on-first-use. It refuses a different licence id or record, is a no-op for the same
 record, and writes it with origin `imported`. `weaver mesh id` prints the id
-and its source (licence, genesis, learned from a node, imported from a node); the heartbeat carries `report.mesh_id`;
+and its source (licence, genesis, learned from a node, imported from a node).
+**Forwarding (updated 2026-10-13).** A member pins its primary's node key, but a primary that
+imported or learned the record did not sign it. Such a primary attaches a countersignature when it
+publishes the record (heartbeat `report.mesh_record`): optional `forwarder` (its node key) and
+`forward_signature`, an Ed25519 signature under the separate domain
+`weftos-mesh-record-forward-v1\n` over the canonical record plus the original signer, so it cannot
+be replayed as a creator signature or the reverse. The member accepts a record whose `signer` or
+valid `forwarder` is the pinned key; the creator's signatures must still verify, so an intermediary
+cannot substitute another mesh's record. The fields are not stored (the stored record is the
+creator's), and a member forwards onward with its own countersignature. Old records parse
+unchanged; old members reject a forwarded record (unknown fields), so upgrade members before
+primaries. The heartbeat carries `report.mesh_id`;
 `weaver project add` refuses a name whose authority is not this node's MeshId. Code:
 `mesh_genesis.rs`.
 

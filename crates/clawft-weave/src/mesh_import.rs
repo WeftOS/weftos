@@ -104,7 +104,7 @@ pub fn import(dir: &Path, signed: &SignedMeshRecord, local: Option<MeshId>) -> R
         Ok(None) => {}
     }
     let node = clawft_kernel::node_id_from_pubkey(&signer);
-    mesh_genesis::publish(dir, &StoredRecord { signed: signed.clone(), origin: Origin::Imported { node } })?;
+    mesh_genesis::publish(dir, &StoredRecord { signed: signed.without_forward(), origin: Origin::Imported { node } })?;
     Ok(Imported::Written(id))
 }
 

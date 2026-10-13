@@ -39,6 +39,10 @@ pub const RECORD_FILE: &str = "mesh.json";
 pub const RECORD_DOMAIN: &str = "weftos.mesh.record.v1";
 /// Domain tag of the user-key signature.
 pub const RECORD_USER_DOMAIN: &str = "weftos.mesh.record.user.v1";
+/// Domain tag of a forwarding countersignature. Distinct from the two creator
+/// domains, so a countersignature can never stand in as a creator signature
+/// (or the other way round).
+pub const RECORD_FORWARD_DOMAIN: &str = "weftos-mesh-record-forward-v1\n";
 const MAX_RECORD_BYTES: u64 = 16 * 1024;
 
 /// What the signatures cover. Field order is the canonical order.
@@ -67,6 +71,13 @@ pub struct SignedMeshRecord {
     pub signature: String,
     /// User-key signature, 128 hex.
     pub user_signature: String,
+    /// A node that did not create the record but hands it on (it imported or
+    /// learned it): its public key, 64 hex. Set only on the wire, at send time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forwarder: Option<String>,
+    /// The forwarder's countersignature over [`forward_bytes`], 128 hex.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forward_signature: Option<String>,
 }
 
 /// Where this node's record came from (local metadata, not signed).
@@ -139,7 +150,34 @@ fn signed_bytes(domain: &str, r: &MeshRecord) -> Result<Vec<u8>, String> {
     Ok(format!("{domain}\n{json}").into_bytes())
 }
 
+/// What a forwarder signs: the forward domain, the canonical record, and the
+/// original signer, so the countersignature is bound to this exact record.
+fn forward_bytes(r: &MeshRecord, signer: &str) -> Result<Vec<u8>, String> {
+    let json = serde_json::to_string(r).map_err(|e| e.to_string())?;
+    Ok(format!("{RECORD_FORWARD_DOMAIN}{json}\n{signer}").into_bytes())
+}
+
 impl SignedMeshRecord {
+    /// The record as stored: without any forwarding countersignature.
+    pub fn without_forward(&self) -> Self {
+        Self { forwarder: None, forward_signature: None, ..self.clone() }
+    }
+
+    /// This record as `node_key` would send it to a member. The creator's own
+    /// signature needs no help, so a record `node_key` signed goes as is;
+    /// otherwise it carries `node_key`'s countersignature.
+    pub fn forwarded_by(&self, node_key: &SigningKey) -> Result<Self, String> {
+        let me = hex::encode(node_key.verifying_key().to_bytes());
+        let mut out = self.without_forward();
+        if out.signer == me {
+            return Ok(out);
+        }
+        let sig = node_key.sign(&forward_bytes(&out.record, &out.signer)?);
+        out.forwarder = Some(me);
+        out.forward_signature = Some(hex::encode(sig.to_bytes()));
+        Ok(out)
+    }
+
     /// Check shape, the id derivation and both signatures. Returns the id.
     pub fn verify(&self) -> Result<MeshId, String> {
         let r = &self.record;
@@ -165,6 +203,17 @@ impl SignedMeshRecord {
         user_vk
             .verify_strict(&signed_bytes(RECORD_USER_DOMAIN, r)?, &usig)
             .map_err(|_| "mesh record refused: the creator's signature does not verify")?;
+        match (&self.forwarder, &self.forward_signature) {
+            (None, None) => {}
+            (Some(f), Some(fs)) => {
+                let fk = hex32(f).ok_or("mesh record: forwarder must be 64 lowercase hex")?;
+                let fvk = VerifyingKey::from_bytes(&fk).map_err(|_| "mesh record: forwarder is not an Ed25519 key")?;
+                let fsig = sig_of(fs).ok_or("mesh record: forward_signature must be 128 lowercase hex")?;
+                fvk.verify_strict(&forward_bytes(r, &self.signer)?, &fsig)
+                    .map_err(|_| "mesh record refused: the forwarder's countersignature does not verify")?;
+            }
+            _ => return Err("mesh record: forwarder and forward_signature must come together".into()),
+        }
         Ok(id)
     }
 }
@@ -254,6 +303,8 @@ pub fn create(
         signature: hex::encode(node_key.sign(&signed_bytes(RECORD_DOMAIN, &record)?).to_bytes()),
         user_signature: hex::encode(user_key.sign(&signed_bytes(RECORD_USER_DOMAIN, &record)?).to_bytes()),
         signer: hex::encode(node_key.verifying_key().to_bytes()),
+        forwarder: None,
+        forward_signature: None,
         record,
     };
     publish(dir, &StoredRecord { signed: signed.clone(), origin: Origin::Genesis })?;
@@ -261,7 +312,8 @@ pub fn create(
 }
 
 /// A member accepts the primary's record. It must verify, be signed by
-/// `pinned` (the key the pairing pins), and not disagree with an id this node
+/// `pinned` (the key the pairing pins) or carry `pinned`'s forwarding
+/// countersignature (the primary imported it from the creator), and not disagree with an id this node
 /// already has (`local`, or a record on disk). Learning the same id twice is
 /// a no-op.
 pub fn learn(
@@ -272,8 +324,11 @@ pub fn learn(
     local: Option<MeshId>,
 ) -> Result<MeshId, String> {
     let id = signed.verify()?;
-    if signed.signer != hex::encode(pinned) {
-        return Err("mesh record refused: it is not signed by the primary this pairing pins".into());
+    let pinned_hex = hex::encode(pinned);
+    // `verify` already checked the countersignature under `forwarder`.
+    if signed.signer != pinned_hex && signed.forwarder.as_deref() != Some(pinned_hex.as_str()) {
+        let by = signed.forwarder.as_ref().map(|f| format!(" (forwarded by {f})")).unwrap_or_default();
+        return Err(format!("mesh record refused: it is not signed by the primary this pairing pins{by}"));
     }
     if let Some(have) = local
         && have != id
@@ -295,7 +350,7 @@ pub fn learn(
         Err(e) => return Err(format!("mesh record refused: the one on disk cannot be used ({e})")),
         Ok(None) => {}
     }
-    publish(dir, &StoredRecord { signed: signed.clone(), origin: Origin::Learned { node: node.to_owned() } })?;
+    publish(dir, &StoredRecord { signed: signed.without_forward(), origin: Origin::Learned { node: node.to_owned() } })?;
     Ok(id)
 }
 
@@ -334,13 +389,20 @@ pub fn resolve(dir: &Path, licence: Option<MeshId>) -> Result<Option<Resolved>, 
 /// holds a usable record, `mesh_record` (the signed record, for a dashboard
 /// to hand a pairing member) into a heartbeat `report`. Neither is ever
 /// trimmed by the budget. An unusable record is left out, not guessed at.
+/// A record this node did not create goes out with this node's forwarding
+/// countersignature (key at `<dir>/node.key`); with no readable key it goes
+/// as stored, and a member that pins this node will refuse it.
 pub fn attach(report: &mut serde_json::Value, id: Option<MeshId>, dir: Option<&Path>) {
     let Some(id) = id else { return };
     report["mesh_id"] = serde_json::json!(id.to_hex());
     if let Some(Ok(Some(s))) = dir.map(load)
         && s.signed.record.mesh_id == id.to_hex()
     {
-        report["mesh_record"] = serde_json::json!(s.signed);
+        let out = match crate::user_key::read_seed(&dir.map(|d| d.join("node.key")).unwrap_or_default()) {
+            Ok(seed) => s.signed.forwarded_by(&SigningKey::from_bytes(&seed)).unwrap_or(s.signed),
+            Err(_) => s.signed,
+        };
+        report["mesh_record"] = serde_json::json!(out);
     }
 }
 
