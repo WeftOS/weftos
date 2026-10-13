@@ -203,6 +203,29 @@ pub struct GlanceSerialArgs {
     /// Base URL of the local cos agent.
     #[arg(long, default_value = "http://127.0.0.1:18300")]
     pub url: String,
+    /// Status file `devices.status` reads; defaults to the CoS config's
+    /// `devices.glance_status`.
+    #[arg(long)]
+    pub status_file: Option<PathBuf>,
+}
+
+/// What `devices.status` learns about this process: best effort, never fatal.
+fn write_status(path: &Path, port: &Path, port_open: bool, last_write: Option<&str>, last_error: Option<&str>) {
+    let body = serde_json::json!({
+        "pid": std::process::id(),
+        "port": port.display().to_string(),
+        "port_open": port_open,
+        "updated_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        "last_write_at": last_write,
+        "last_error": last_error,
+    });
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let tmp = path.with_extension("tmp");
+    if std::fs::write(&tmp, body.to_string()).is_ok() {
+        let _ = std::fs::rename(&tmp, path);
+    }
 }
 
 fn open_port(port: &Path) -> std::io::Result<std::fs::File> {
@@ -259,7 +282,11 @@ pub async fn run(args: GlanceSerialArgs) -> anyhow::Result<()> {
     let mut dirty = true;
     let mut deadline = Instant::now() + DEBOUNCE;
     let mut last_write = Instant::now() - HEARTBEAT;
+    let status_path = args.status_file.clone().unwrap_or_else(|| crate::config::DevicesConfig::default().glance_status);
+    let mut last_write_at: Option<String> = None;
+    let mut last_error: Option<String> = None;
     loop {
+        write_status(&status_path, &args.port, port.is_some(), last_write_at.as_deref(), last_error.as_deref());
         tokio::select! {
             msg = rx.recv() => match msg {
                 Some(Some(ev)) => { g.apply(&ev); dirty = true; deadline = Instant::now() + DEBOUNCE; }
@@ -289,6 +316,7 @@ pub async fn run(args: GlanceSerialArgs) -> anyhow::Result<()> {
                 Ok(f) => port = Some(f),
                 Err(e) => {
                     tracing::warn!("serial {}: {e}", args.port.display());
+                    last_error = Some(e.to_string());
                     last_write = now - HEARTBEAT + Duration::from_secs(5);
                     deadline = now + Duration::from_secs(3);
                     continue;
@@ -299,6 +327,7 @@ pub async fn run(args: GlanceSerialArgs) -> anyhow::Result<()> {
         let f = port.as_mut().expect("opened above");
         if let Err(e) = f.write_all(line.as_bytes()).and_then(|_| f.flush()) {
             tracing::warn!("serial write: {e}; reopening");
+            last_error = Some(e.to_string());
             port = None;
             sent = None;
             deadline = now + Duration::from_secs(3);
@@ -308,6 +337,8 @@ pub async fn run(args: GlanceSerialArgs) -> anyhow::Result<()> {
         sent = Some(g.clone());
         dirty = false;
         last_write = now;
+        last_write_at = Some(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+        last_error = None;
     }
 }
 
