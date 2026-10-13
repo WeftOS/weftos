@@ -156,3 +156,147 @@ fn a_member_refuses_a_second_mesh() {
     assert!(learn(fresh.path(), &a, &pk(1), "n1", Some(licence)).unwrap_err().contains("already in mesh"));
     assert!(load(fresh.path()).unwrap().is_none());
 }
+
+// Forwarding countersignatures: A (seed 1) creates, P (seed 3) forwards to M,
+// M (seed 4) forwards to N.
+
+#[test]
+fn a_creator_forwards_its_own_record_unchanged() {
+    let s = make(tempfile::tempdir().unwrap().path());
+    let sent = s.forwarded_by(&key(1)).unwrap();
+    assert_eq!(sent, s);
+    assert!(sent.forwarder.is_none() && sent.forward_signature.is_none());
+    let json = serde_json::to_string(&sent).unwrap();
+    assert!(!json.contains("forwarder") && !json.contains("forward_signature"));
+}
+
+#[test]
+fn a_forwarded_record_is_accepted_from_the_pinned_forwarder() {
+    let s = make(tempfile::tempdir().unwrap().path());
+    let sent = s.forwarded_by(&key(3)).unwrap();
+    assert_eq!(sent.forwarder.as_deref(), Some(hex::encode(pk(3)).as_str()));
+    assert_eq!(sent.verify().unwrap().to_hex(), s.record.mesh_id);
+    let m = tempfile::tempdir().unwrap();
+    let id = learn(m.path(), &sent, &pk(3), "pp", None).unwrap();
+    assert_eq!(id.to_hex(), s.record.mesh_id);
+    let stored = load(m.path()).unwrap().unwrap();
+    assert_eq!(stored.origin, Origin::Learned { node: "pp".into() });
+    assert_eq!(stored.signed, s, "forward fields are not stored");
+    // The creator's key still works as the pin for the plain record.
+    assert!(learn(tempfile::tempdir().unwrap().path(), &s, &pk(1), "a", None).is_ok());
+}
+
+#[test]
+fn a_forwarded_record_from_an_unpinned_forwarder_is_refused() {
+    let s = make(tempfile::tempdir().unwrap().path());
+    let sent = s.forwarded_by(&key(3)).unwrap();
+    let m = tempfile::tempdir().unwrap();
+    let e = learn(m.path(), &sent, &pk(5), "n", None).unwrap_err();
+    assert!(e.contains("pins") && e.contains(&format!("forwarded by {}", hex::encode(pk(3)))), "{e}");
+    assert!(load(m.path()).unwrap().is_none());
+}
+
+#[test]
+fn a_tampered_or_lone_countersignature_is_refused() {
+    let s = make(tempfile::tempdir().unwrap().path());
+    let sent = s.forwarded_by(&key(3)).unwrap();
+    let m = tempfile::tempdir().unwrap();
+    let mut t = sent.clone();
+    let mut sig = t.forward_signature.clone().unwrap().into_bytes();
+    sig[0] = if sig[0] == b'0' { b'1' } else { b'0' };
+    t.forward_signature = Some(String::from_utf8(sig).unwrap());
+    assert!(learn(m.path(), &t, &pk(3), "n", None).unwrap_err().contains("countersignature"));
+    // Claiming a different forwarder with P's signature.
+    let mut t = sent.clone();
+    t.forwarder = Some(hex::encode(pk(5)));
+    assert!(learn(m.path(), &t, &pk(5), "n", None).is_err());
+    // One field without the other.
+    let mut t = sent.clone();
+    t.forward_signature = None;
+    assert!(learn(m.path(), &t, &pk(3), "n", None).is_err());
+    assert!(load(m.path()).unwrap().is_none());
+}
+
+#[test]
+fn creator_and_forward_signatures_are_not_interchangeable() {
+    let s = make(tempfile::tempdir().unwrap().path());
+    // A forwarder tries to pass the creator's node signature as its countersignature.
+    let mut t = s.clone();
+    t.forwarder = Some(s.signer.clone());
+    t.forward_signature = Some(s.signature.clone());
+    assert!(t.verify().unwrap_err().contains("countersignature"));
+    // P countersigns; P's countersignature offered as the creator's node signature.
+    let sent = s.forwarded_by(&key(3)).unwrap();
+    let mut t = s.clone();
+    t.signer = hex::encode(pk(3));
+    t.signature = sent.forward_signature.clone().unwrap();
+    assert!(t.verify().unwrap_err().contains("signer's signature"));
+    // ... or as the user signature.
+    let mut t = s.clone();
+    t.user_signature = sent.forward_signature.unwrap();
+    assert!(t.verify().unwrap_err().contains("creator's signature"));
+}
+
+#[test]
+fn old_records_without_forward_fields_parse_and_verify() {
+    let s = make(tempfile::tempdir().unwrap().path());
+    let mut v = serde_json::to_value(&s).unwrap();
+    assert!(v.get("forwarder").is_none());
+    let old: SignedMeshRecord = serde_json::from_value(v.clone()).unwrap();
+    assert!(old.verify().is_ok());
+    v["forwarder"] = serde_json::Value::Null;
+    assert!(serde_json::from_value::<SignedMeshRecord>(v).is_ok());
+}
+
+#[test]
+fn a_two_hop_chain_pins_each_hop() {
+    let (a, p, m, n) = (
+        tempfile::tempdir().unwrap(),
+        tempfile::tempdir().unwrap(),
+        tempfile::tempdir().unwrap(),
+        tempfile::tempdir().unwrap(),
+    );
+    let s = make(a.path());
+    // P imports the creator's record (stored without forward fields).
+    publish(p.path(), &StoredRecord { signed: s.clone(), origin: Origin::Imported { node: "a".into() } }).unwrap();
+    // P -> M, pinned to P.
+    let mut report = serde_json::json!({});
+    let id = MeshId::from_hex(&s.record.mesh_id).unwrap();
+    let to_m = load(p.path()).unwrap().unwrap().signed.forwarded_by(&key(3)).unwrap();
+    report["mesh_record"] = serde_json::json!(to_m);
+    let got: SignedMeshRecord = serde_json::from_value(report["mesh_record"].clone()).unwrap();
+    learn(m.path(), &got, &pk(3), "p", None).unwrap();
+    // M -> N, pinned to M; M countersigns with its own key.
+    let to_n = load(m.path()).unwrap().unwrap().signed.forwarded_by(&key(4)).unwrap();
+    assert_eq!(to_n.forwarder.as_deref(), Some(hex::encode(pk(4)).as_str()));
+    learn(n.path(), &to_n, &pk(4), "m", None).unwrap();
+    assert_eq!(resolve(n.path(), None).unwrap().unwrap().id, id);
+    // N pinning P (the wrong hop) refuses M's forward.
+    assert!(learn(tempfile::tempdir().unwrap().path(), &to_n, &pk(3), "x", None).is_err());
+}
+
+#[test]
+fn attach_countersigns_a_record_the_node_did_not_create() {
+    use std::os::unix::fs::PermissionsExt;
+    let p = tempfile::tempdir().unwrap();
+    let s = make(tempfile::tempdir().unwrap().path());
+    publish(p.path(), &StoredRecord { signed: s.clone(), origin: Origin::Imported { node: "a".into() } }).unwrap();
+    let id = MeshId::from_hex(&s.record.mesh_id).unwrap();
+    let kp = p.path().join("node.key");
+    std::fs::write(&kp, [3u8; 32]).unwrap();
+    std::fs::set_permissions(&kp, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let mut report = serde_json::json!({});
+    attach(&mut report, Some(id), Some(p.path()));
+    let sent: SignedMeshRecord = serde_json::from_value(report["mesh_record"].clone()).unwrap();
+    assert_eq!(sent.forwarder.as_deref(), Some(hex::encode(pk(3)).as_str()));
+    learn(tempfile::tempdir().unwrap().path(), &sent, &pk(3), "p", None).unwrap();
+    // The creator's own node sends the record as is.
+    let c = tempfile::tempdir().unwrap();
+    let own = make(c.path());
+    let ck = c.path().join("node.key");
+    std::fs::write(&ck, [1u8; 32]).unwrap();
+    std::fs::set_permissions(&ck, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let mut r2 = serde_json::json!({});
+    attach(&mut r2, Some(MeshId::from_hex(&own.record.mesh_id).unwrap()), Some(c.path()));
+    assert!(r2["mesh_record"].get("forwarder").is_none());
+}
