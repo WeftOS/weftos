@@ -125,19 +125,23 @@ fn base_url(raw: &str) -> Result<String, String> {
 /// Read the node token: a regular 0600 file in a directory others cannot
 /// write; printable ASCII, no whitespace. Errors never contain the token.
 fn read_token(path: &Path) -> Result<String, String> {
-    use std::os::unix::fs::PermissionsExt;
     let meta = std::fs::symlink_metadata(path).map_err(|e| format!("token file {}: {e}", path.display()))?;
     if !meta.file_type().is_file() {
         return Err(format!("token file {} is not a regular file (symlinks are refused)", path.display()));
     }
-    let mode = meta.permissions().mode() & 0o777;
-    if mode != 0o600 {
-        return Err(format!("token file {} has mode {mode:03o}; it must be 600", path.display()));
-    }
-    if let Some(dir) = path.parent() {
-        let d = std::fs::metadata(dir).map_err(|e| format!("token directory {}: {e}", dir.display()))?;
-        if d.permissions().mode() & 0o022 != 0 {
-            return Err(format!("token directory {} is writable by group or others", dir.display()));
+    // Mode bits exist only on Unix; on Windows the file's ACL governs access.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = meta.permissions().mode() & 0o777;
+        if mode != 0o600 {
+            return Err(format!("token file {} has mode {mode:03o}; it must be 600", path.display()));
+        }
+        if let Some(dir) = path.parent() {
+            let d = std::fs::metadata(dir).map_err(|e| format!("token directory {}: {e}", dir.display()))?;
+            if d.permissions().mode() & 0o022 != 0 {
+                return Err(format!("token directory {} is writable by group or others", dir.display()));
+            }
         }
     }
     let raw = std::fs::read_to_string(path).map_err(|e| format!("token file {}: {e}", path.display()))?;
