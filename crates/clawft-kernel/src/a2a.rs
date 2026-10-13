@@ -281,12 +281,20 @@ impl A2ARouter {
                 _ => "ipc.send".to_string(),
             };
             use crate::governance::{GateEffectKind, with_effect_context};
+            let mut base = serde_json::json!({
+                "from": from,
+                "target": format!("{:?}", msg.target),
+                "layer": "routing",
+            });
+            // The kernel's own topic publishes (daemon leaf pushes) get one
+            // quota bucket per topic instead of sharing principal 0's.
+            if from == 0
+                && let MessageTarget::Topic(t) = &msg.target
+            {
+                base["quota_key"] = serde_json::Value::String(format!("0:{t}"));
+            }
             let context = with_effect_context(
-                serde_json::json!({
-                    "from": from,
-                    "target": format!("{:?}", msg.target),
-                    "layer": "routing",
-                }),
+                base,
                 &GateEffectKind::A2aRouting.effect_vector(),
             );
             match gate.check(&from.to_string(), &action, &context) {
@@ -1708,6 +1716,56 @@ mod tests {
             err_msg.contains("routing gate denied"),
             "expected 'routing gate denied', got: {err_msg}"
         );
+    }
+
+    #[cfg(feature = "exochain")]
+    #[tokio::test]
+    async fn routing_gate_quota_key_is_per_topic_for_kernel_sender_only() {
+        use std::sync::Mutex;
+        #[derive(Default)]
+        struct Rec {
+            seen: Mutex<Vec<(String, Option<String>)>>,
+        }
+        struct RecGate(Arc<Rec>);
+        impl crate::gate::GateBackend for RecGate {
+            fn check(
+                &self,
+                agent: &str,
+                _action: &str,
+                ctx: &serde_json::Value,
+            ) -> crate::gate::GateDecision {
+                let q = ctx.get("quota_key").and_then(|v| v.as_str()).map(str::to_owned);
+                self.0.seen.lock().unwrap().push((agent.to_owned(), q));
+                crate::gate::GateDecision::Permit { token: None }
+            }
+        }
+
+        let (router, pids, _rx) = setup_router(1);
+        let rec = Arc::new(Rec::default());
+        let router = router.with_gate(Arc::new(RecGate(rec.clone())));
+        // The kernel's own entry, as the daemon has it.
+        router
+            .process_table
+            .insert_with_pid(ProcessEntry {
+                pid: 0,
+                agent_id: "kernel".into(),
+                state: ProcessState::Running,
+                capabilities: AgentCapabilities::default(),
+                resource_usage: ResourceUsage::default(),
+                cancel_token: CancellationToken::new(),
+                parent_pid: None,
+            })
+            .unwrap();
+
+        let _ = router.send(KernelMessage::text(0, MessageTarget::Topic("mesh.leaf.a.push".into()), "x")).await;
+        let _ = router.send(KernelMessage::text(0, MessageTarget::Process(pids[0]), "x")).await;
+        let _ = router.send(KernelMessage::text(pids[0], MessageTarget::Topic("t".into()), "x")).await;
+
+        let got = rec.seen.lock().unwrap().clone();
+        assert_eq!(got.len(), 3, "{got:?}");
+        assert_eq!(got[0], ("0".to_string(), Some("0:mesh.leaf.a.push".to_string())));
+        assert_eq!(got[1], ("0".to_string(), None), "kernel to a process keeps the shared key");
+        assert_eq!(got[2].1, None, "other senders keep their own key");
     }
 
     #[cfg(feature = "exochain")]
