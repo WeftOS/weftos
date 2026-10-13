@@ -38,6 +38,11 @@ pub struct AddOpts {
     /// project ULID instead of as a project of its own.
     #[arg(long, value_name = "ULID")]
     pub project: Option<String>,
+    /// For a weftos:// name: the project's repository to check out at the target
+    /// path, when its root is not itself one (`.` names the root). Without it a
+    /// sole repository is chosen; several are checked out side by side.
+    #[arg(long, value_name = "DIR")]
+    pub repo: Option<String>,
     /// Print the report as JSON.
     #[arg(long)]
     pub json: bool,
@@ -64,6 +69,14 @@ pub async fn add(o: AddOpts) -> anyhow::Result<()> {
         clawft_types::project::validate_id(p).map_err(|_| anyhow::anyhow!("--project is not a ULID"))?;
         plan.request.project_ulid = p.clone();
     }
+    if let Some(r) = &o.repo {
+        if !matches!(plan.spec, SourceSpec::Mesh { .. }) {
+            bail!("--repo only applies to a weftos:// name; a git URL names its repository");
+        }
+        if !crate::project_install::dir_ok(r) {
+            bail!("--repo must be `.` or one plain directory name");
+        }
+    }
     if let SourceSpec::Mesh { mesh, .. } = &plan.spec {
         let local = super::mesh_id_cmd::local_mesh_id().await?;
         crate::mesh_genesis::check_authority(local, mesh).map_err(anyhow::Error::msg)?;
@@ -76,7 +89,7 @@ pub async fn add(o: AddOpts) -> anyhow::Result<()> {
         FetchPlan::Git => "from its git remote, with your own git credentials",
     });
     let fetched: Result<FetchReport, String> = match (&plan.spec, plan.fetch) {
-        (SourceSpec::Mesh { uri, mesh, ulid }, FetchPlan::Mesh) => fetch_via_daemon(uri, *mesh, ulid, &plan.request, &plan.target).await,
+        (SourceSpec::Mesh { uri, mesh, ulid }, FetchPlan::Mesh) => fetch_via_daemon(uri, *mesh, ulid, &plan.request, &plan.target, o.repo.as_deref()).await,
         (_, FetchPlan::Git) => GitRemoteFetcher::new().fetch(&plan.request, &plan.target).await,
         _ => Err("this source cannot be fetched".into()),
     };

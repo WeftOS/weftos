@@ -50,18 +50,26 @@ pub struct MeshFetcher {
     names: Option<MeshNames>,
     /// Fetch very large unmarked non-git content instead of warning (D-C).
     pub fetch_large: bool,
+    /// Only this repository (`project add --repo`), checked out at the target.
+    only_repo: Option<String>,
 }
 
 impl MeshFetcher {
     /// With an explicit control plane (tests, embedded use).
     pub fn with_plane(plane: Arc<PlacementControlPlane>, chain: Option<Arc<ChainManager>>) -> Self {
-        Self { source: PlaneSource::Fixed(plane), chain, names: None, fetch_large: false }
+        Self { source: PlaneSource::Fixed(plane), chain, names: None, fetch_large: false, only_repo: None }
     }
 
     /// The daemon's: resolves the control plane per call. With `None` the
     /// chain is the one placement gave the fetch server, once it is built.
     pub fn daemon(chain: Option<Arc<ChainManager>>) -> Self {
-        Self { source: PlaneSource::Daemon, chain, names: None, fetch_large: false }
+        Self { source: PlaneSource::Daemon, chain, names: None, fetch_large: false, only_repo: None }
+    }
+
+    /// Fetch only repository `dir` of the project, into the target path itself.
+    pub fn with_repo(mut self, dir: Option<&str>) -> Self {
+        self.only_repo = dir.map(str::to_owned);
+        self
     }
 
     /// Name clones on this mesh (tests; the daemon uses its own).
@@ -155,9 +163,26 @@ impl MeshFetcher {
             .filter(|(d, _)| crate::project_install::dir_ok(d))
             .collect();
         let has_root = repos.iter().any(|(d, _)| d == ".");
+        let names = || if repos.is_empty() { "none".to_owned() } else { repos.iter().map(|(d, _)| d.as_str()).collect::<Vec<_>>().join(", ") };
+        // The project's root need not be a repository (the primary's project user's
+        // home holds it one level down): a chosen or sole repository is the checkout.
+        let (repos, into_target): (Vec<_>, bool) = match &self.only_repo {
+            Some(want) => match repos.iter().find(|(d, _)| d == want) {
+                Some(r) => (vec![r.clone()], true),
+                None => return Err(format!("the project has no repository `{want}` (it has: {})", names())),
+            },
+            None if !has_root && repos.len() == 1 => (repos.clone(), true),
+            None => (repos.clone(), false),
+        };
         let mut report = FetchReport { fetcher: "mesh", ..Default::default() };
+        if into_target && repos.first().is_some_and(|(d, _)| d != ".") {
+            let d = &repos[0].0;
+            report.warnings.push(format!("the project's repository is `{d}` (its root is not one); it is checked out at {}", dest.display()));
+        } else if !has_root && repos.len() > 1 {
+            report.warnings.push(format!("the project's root is not a repository; its repositories ({}) are checked out side by side under {}", names(), dest.display()));
+        }
         for (dir, branch) in &repos {
-            let path = layout(dest, has_root, dir);
+            let path = if into_target { dest.to_path_buf() } else { layout(dest, has_root, dir) };
             if !empty_or_absent(&path) {
                 return Err(format!("{} exists and is not empty", path.display()));
             }
@@ -170,7 +195,7 @@ impl MeshFetcher {
             if !want.is_empty() {
                 let specs = REFSPECS.iter().map(|s| s.to_string()).collect();
                 client::fetch_bundle(ch, project, dir, &want, &[], &path, BundleMode::Fetch(specs)).await?;
-                let wanted = req.sources.iter().find(|s| &s.dir == dir).and_then(|s| s.branch.clone());
+                let wanted = req.sources.iter().find(|s| &s.dir == dir || (into_target && s.dir == ".")).and_then(|s| s.branch.clone());
                 let head = refs.head.as_deref().and_then(|h| h.strip_prefix("refs/heads/")).map(str::to_owned);
                 if let Some(b) = wanted.or(head).or_else(|| branch.clone()) {
                     checkout(&path, &b);
@@ -216,9 +241,9 @@ impl MeshFetcher {
 
 /// From a CLI process: fetch `ulid` over the mesh through the local user daemon,
 /// which resolves `uri` to the project's paired primary (the helper's route).
-pub async fn fetch_via_daemon(uri: &str, mesh: Authority, ulid: &str, req: &InstallRequest, dest: &Path) -> Result<FetchReport, String> {
+pub async fn fetch_via_daemon(uri: &str, mesh: Authority, ulid: &str, req: &InstallRequest, dest: &Path, repo: Option<&str>) -> Result<FetchReport, String> {
     let ch = client::DaemonChannel::new(uri.to_owned(), None);
-    MeshFetcher::daemon(None).fetch_over(&ch, mesh, req, ulid, dest).await
+    MeshFetcher::daemon(None).with_repo(repo).fetch_over(&ch, mesh, req, ulid, dest).await
 }
 
 /// Check out `branch` tracking `origin/<branch>` when the fetch brought it.
@@ -234,3 +259,7 @@ fn checkout(repo: &Path, branch: &str) {
 #[cfg(test)]
 #[path = "project_fetch_tests.rs"]
 pub(crate) mod tests;
+
+#[cfg(test)]
+#[path = "project_fetch_pick_tests.rs"]
+mod pick_tests;

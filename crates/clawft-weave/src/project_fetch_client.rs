@@ -164,6 +164,16 @@ impl DaemonChannel {
         Self { uri, socket, client: tokio::sync::Mutex::new(None) }
     }
 
+    /// The daemon takes the repository from the name, not the body, so a call
+    /// that names a `dir` goes under that repository's name.
+    pub(crate) fn uri_for(&self, body: &Value) -> String {
+        let Some(dir) = body["dir"].as_str().filter(|d| !d.is_empty()) else { return self.uri.clone() };
+        match crate::weftos_uri::WeftosUri::parse(&self.uri) {
+            Ok(u) if u.project_repo().is_some() => crate::weftos_uri::WeftosUri::for_project_repo(u.authority, &u.id, dir).to_string(),
+            _ => self.uri.clone(),
+        }
+    }
+
     async fn call_once(&self, body: Value) -> Result<Value, String> {
         let mut guard = self.client.lock().await;
         if guard.is_none() {
@@ -173,7 +183,7 @@ impl DaemonChannel {
             };
             *guard = Some(c.ok_or("the WeftOS user daemon is not running (weaver kernel boot)")?);
         }
-        let req = clawft_rpc::Request::with_params(LOCAL_RPC, json!({ "uri": self.uri, "body": body }));
+        let req = clawft_rpc::Request::with_params(LOCAL_RPC, json!({ "uri": self.uri_for(&body), "body": body }));
         let resp = match guard.as_mut().expect("connected above").call(req).await {
             Ok(r) => r,
             Err(e) => {
