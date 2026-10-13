@@ -2006,7 +2006,7 @@ cmd_android() {
     if [ "$DRY_RUN" = true ]; then
         printf "  ${YELLOW}DRY${NC}   cargo build -p weftos-node-core --features bindgen-cli; uniffi-bindgen generate --library ... --language kotlin\n"
         printf "  ${YELLOW}DRY${NC}   cargo ndk -t arm64-v8a -o apps/android-phone-node/app/src/main/jniLibs build --release -p weftos-node-core\n"
-        printf "  ${YELLOW}DRY${NC}   gradle -p apps/android-phone-node :app:assembleDebug\n"
+        printf "  ${YELLOW}DRY${NC}   gradle -p apps/android-phone-node :app:testDebugUnitTest :app:assembleDebug\n"
         for m in ${missing[@]+"${missing[@]}"}; do info "missing: $m"; done
         return 0
     fi
@@ -2035,7 +2035,9 @@ cmd_android() {
     pass "libweftos_node_core.so (arm64-v8a)"
 
     # 3. Debug APK.
-    "$gradle_cmd" -p "$app" :app:assembleDebug || { fail "gradle assembleDebug failed"; return 1; }
+    "$gradle_cmd" -p "$app" :app:testDebugUnitTest :app:assembleDebug \
+        || { fail "gradle testDebugUnitTest/assembleDebug failed"; return 1; }
+    pass "JVM unit tests"
     local apk
     apk="$(ls "$app"/app/build/outputs/apk/debug/*.apk 2>/dev/null | head -1 || true)"
     [ -n "$apk" ] || { fail "no APK produced"; return 1; }

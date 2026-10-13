@@ -35,6 +35,7 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }
+    testOptions { unitTests.isReturnDefaultValues = true }
 
     // `scripts/build.sh android` writes the cargo-ndk .so files and the UniFFI Kotlin here.
     sourceSets["main"].kotlin.srcDir("src/main/generated-uniffi")
@@ -55,4 +56,11 @@ dependencies {
 
     // UniFFI's generated Kotlin loads the Rust library through JNA.
     implementation("net.java.dev.jna:jna:5.14.0@aar")
+
+    // QR scan for the node token (Google code scanner module: no camera permission needed).
+    implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
+
+    testImplementation("junit:junit:4.13.2")
+    // android.jar's org.json is a stub in JVM unit tests; the real one comes first on the classpath.
+    testImplementation("org.json:json:20240303")
 }
