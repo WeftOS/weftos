@@ -10,6 +10,18 @@ description: Auto-generated from CHANGELOG.md. Complete WeftOS version history.
 > overwritten on the next docs build. To change a release entry, edit
 > `CHANGELOG.md` and re-run the script.
 
+## v0.8.4-rc.10
+
+*2026-10-13*
+
+### Added
+- `weaver mesh export` and `weaver mesh import`: copy a mesh's signed MeshId record to a node
+  that cannot pair with the node that created it. Import verifies the record as pairing does and
+  accepts it only from a signer this node already trusts (a pinned or paired peer, a
+  workload-host controller, or a mesh pairing); `weaver mesh id` shows "imported from &lt;node>".
+
+---
+
 ## v0.8.4-rc.9
 
 *2026-10-12*

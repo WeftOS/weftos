@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Staging area for changes after the 0.8.4 cut.
 
+## [0.8.4-rc.10] - 2026-10-13
+
+### Added
+- `weaver mesh export` and `weaver mesh import`: copy a mesh's signed MeshId record to a node
+  that cannot pair with the node that created it. Import verifies the record as pairing does and
+  accepts it only from a signer this node already trusts (a pinned or paired peer, a
+  workload-host controller, or a mesh pairing); `weaver mesh id` shows "imported from <node>".
+
 ## [0.8.4-rc.9] - 2026-10-12
 
 ### Added

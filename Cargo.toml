@@ -195,7 +195,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "0.8.4-rc.9"
+version = "0.8.4-rc.10"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT OR Apache-2.0"
@@ -379,52 +379,52 @@ futures = "0.3"
 # Internal crates (version + path: version for crates.io, path for workspace).
 # Versions MUST track `workspace.package.version` so that bumping the workspace
 # version atomically updates all path-dep version constraints (WEFT-8).
-clawft-rpc = { version = "0.8.4-rc.9", path = "crates/clawft-rpc" }
-clawft-mesh-local = { version = "0.8.4-rc.9", path = "crates/clawft-mesh-local" }
-clawft-mesh-service = { version = "0.8.4-rc.9", path = "crates/clawft-mesh-service" }
-clawft-types = { version = "0.8.4-rc.9", path = "crates/clawft-types", default-features = false }
-clawft-platform = { version = "0.8.4-rc.9", path = "crates/clawft-platform", default-features = false }
-clawft-core = { version = "0.8.4-rc.9", path = "crates/clawft-core", default-features = false }
-clawft-tools = { version = "0.8.4-rc.9", path = "crates/clawft-tools", default-features = false }
-clawft-channels = { version = "0.8.4-rc.9", path = "crates/clawft-channels" }
-clawft-llm = { version = "0.8.4-rc.9", path = "crates/clawft-llm", default-features = false }
-clawft-services = { version = "0.8.4-rc.9", path = "crates/clawft-services" }
-clawft-plugin = { version = "0.8.4-rc.9", path = "crates/clawft-plugin", default-features = false }
+clawft-rpc = { version = "0.8.4-rc.10", path = "crates/clawft-rpc" }
+clawft-mesh-local = { version = "0.8.4-rc.10", path = "crates/clawft-mesh-local" }
+clawft-mesh-service = { version = "0.8.4-rc.10", path = "crates/clawft-mesh-service" }
+clawft-types = { version = "0.8.4-rc.10", path = "crates/clawft-types", default-features = false }
+clawft-platform = { version = "0.8.4-rc.10", path = "crates/clawft-platform", default-features = false }
+clawft-core = { version = "0.8.4-rc.10", path = "crates/clawft-core", default-features = false }
+clawft-tools = { version = "0.8.4-rc.10", path = "crates/clawft-tools", default-features = false }
+clawft-channels = { version = "0.8.4-rc.10", path = "crates/clawft-channels" }
+clawft-llm = { version = "0.8.4-rc.10", path = "crates/clawft-llm", default-features = false }
+clawft-services = { version = "0.8.4-rc.10", path = "crates/clawft-services" }
+clawft-plugin = { version = "0.8.4-rc.10", path = "crates/clawft-plugin", default-features = false }
 # WEFT-398: native wasmtime plugin host (not the browser cdylib).
-clawft-wasm-host = { version = "0.8.4-rc.9", path = "crates/clawft-wasm-host" }
+clawft-wasm-host = { version = "0.8.4-rc.10", path = "crates/clawft-wasm-host" }
 # Only the treesitter plugin retains a workspace dependency entry --
 # it is the sole orphan-survivor (ADR-051) and is wired into
 # `clawft-kernel` via the `treesitter` feature. The other eight
 # `clawft-plugin-*` crates live under `crates/archive/` and are not
 # referenced by the active workspace build.
-clawft-plugin-treesitter = { version = "0.8.4-rc.9", path = "crates/clawft-plugin-treesitter" }
-weftos-worldmodel-core = { version = "0.8.4-rc.9", path = "crates/weftos-worldmodel-core", default-features = false }
-weftos-worldmodel-impls = { version = "0.8.4-rc.9", path = "crates/weftos-worldmodel-impls", default-features = false }
-weftos-worldmodel = { version = "0.8.4-rc.9", path = "crates/weftos-worldmodel", default-features = false }
-weftos-sensor-pipeline-wire = { version = "0.8.4-rc.9", path = "crates/weftos-sensor-pipeline-wire" }
-weftos-sensor-pipeline = { version = "0.8.4-rc.9", path = "crates/weftos-sensor-pipeline" }
-clawft-delegation = { version = "0.8.4-rc.9", path = "crates/clawft-delegation" }
-clawft-graphify = { version = "0.8.4-rc.9", path = "crates/clawft-graphify", default-features = false }
-clawft-security = { version = "0.8.4-rc.9", path = "crates/clawft-security" }
-clawft-kernel = { version = "0.8.4-rc.9", path = "crates/clawft-kernel", default-features = false }
-exo-resource-tree = { version = "0.8.4-rc.9", path = "crates/exo-resource-tree" }
-exo-core = { version = "0.8.4-rc.9", path = "crates/exo-core" }
-exo-dag = { version = "0.8.4-rc.9", path = "crates/exo-dag" }
-weftos = { version = "0.8.4-rc.9", path = "crates/weftos", default-features = false }
-clawft-substrate = { version = "0.8.4-rc.9", path = "crates/clawft-substrate" }
+clawft-plugin-treesitter = { version = "0.8.4-rc.10", path = "crates/clawft-plugin-treesitter" }
+weftos-worldmodel-core = { version = "0.8.4-rc.10", path = "crates/weftos-worldmodel-core", default-features = false }
+weftos-worldmodel-impls = { version = "0.8.4-rc.10", path = "crates/weftos-worldmodel-impls", default-features = false }
+weftos-worldmodel = { version = "0.8.4-rc.10", path = "crates/weftos-worldmodel", default-features = false }
+weftos-sensor-pipeline-wire = { version = "0.8.4-rc.10", path = "crates/weftos-sensor-pipeline-wire" }
+weftos-sensor-pipeline = { version = "0.8.4-rc.10", path = "crates/weftos-sensor-pipeline" }
+clawft-delegation = { version = "0.8.4-rc.10", path = "crates/clawft-delegation" }
+clawft-graphify = { version = "0.8.4-rc.10", path = "crates/clawft-graphify", default-features = false }
+clawft-security = { version = "0.8.4-rc.10", path = "crates/clawft-security" }
+clawft-kernel = { version = "0.8.4-rc.10", path = "crates/clawft-kernel", default-features = false }
+exo-resource-tree = { version = "0.8.4-rc.10", path = "crates/exo-resource-tree" }
+exo-core = { version = "0.8.4-rc.10", path = "crates/exo-core" }
+exo-dag = { version = "0.8.4-rc.10", path = "crates/exo-dag" }
+weftos = { version = "0.8.4-rc.10", path = "crates/weftos", default-features = false }
+clawft-substrate = { version = "0.8.4-rc.10", path = "crates/clawft-substrate" }
 # ADR-056 / WEFT-718: BVH broad-phase (kernel SpatialBackend behind `ecc`).
-clawft-bvh = { version = "0.8.4-rc.9", path = "crates/clawft-bvh" }
-clawft-sonobuoy-ranging = { version = "0.8.4-rc.9", path = "crates/clawft-sonobuoy-ranging" }
-clawft-app = { version = "0.8.4-rc.9", path = "crates/clawft-app" }
-clawft-surface = { version = "0.8.4-rc.9", path = "crates/clawft-surface" }
-clawft-canon = { version = "0.8.4-rc.9", path = "crates/clawft-canon" }
-clawft-service-whisper = { version = "0.8.4-rc.9", path = "crates/clawft-service-whisper" }
-clawft-service-llm = { version = "0.8.4-rc.9", path = "crates/clawft-service-llm" }
-clawft-service-terminal = { version = "0.8.4-rc.9", path = "crates/clawft-service-terminal" }
-clawft-service-classify = { version = "0.8.4-rc.9", path = "crates/clawft-service-classify" }
-clawft-service-agent = { version = "0.8.4-rc.9", path = "crates/clawft-service-agent" }
-clawft-cow-memory = { version = "0.8.4-rc.9", path = "crates/clawft-cow-memory" }
-clawft-versions = { version = "0.8.4-rc.9", path = "crates/clawft-versions" }
+clawft-bvh = { version = "0.8.4-rc.10", path = "crates/clawft-bvh" }
+clawft-sonobuoy-ranging = { version = "0.8.4-rc.10", path = "crates/clawft-sonobuoy-ranging" }
+clawft-app = { version = "0.8.4-rc.10", path = "crates/clawft-app" }
+clawft-surface = { version = "0.8.4-rc.10", path = "crates/clawft-surface" }
+clawft-canon = { version = "0.8.4-rc.10", path = "crates/clawft-canon" }
+clawft-service-whisper = { version = "0.8.4-rc.10", path = "crates/clawft-service-whisper" }
+clawft-service-llm = { version = "0.8.4-rc.10", path = "crates/clawft-service-llm" }
+clawft-service-terminal = { version = "0.8.4-rc.10", path = "crates/clawft-service-terminal" }
+clawft-service-classify = { version = "0.8.4-rc.10", path = "crates/clawft-service-classify" }
+clawft-service-agent = { version = "0.8.4-rc.10", path = "crates/clawft-service-agent" }
+clawft-cow-memory = { version = "0.8.4-rc.10", path = "crates/clawft-cow-memory" }
+clawft-versions = { version = "0.8.4-rc.10", path = "crates/clawft-versions" }
 
 # EML (exp-ln) function approximation
 eml-core = { version = "0.1.0", path = "crates/eml-core" }
