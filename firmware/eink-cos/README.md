@@ -15,7 +15,7 @@ Newline-delimited JSON at 115200 over USB serial, one object per line:
 Malformed lines, unknown states and `v` other than 1 are ignored. Strings are
 ASCII (anything else is shown as `?`) and truncated with `...`. The panel
 redraws when state/task/next/alert/model change (partial refresh), does a full
-refresh every 12 partials or 30 minutes, and hibernates between updates. With
+refresh every 6 partials, on a large text change or after 30 minutes, and powers the booster off (no hibernate: a wake-up reset drops the previous-image RAM and partial updates then overlay old text). With
 no valid line for 5 minutes it shows "NO LINK". The clock only repaints on the
 next real change; the bridge sends a heartbeat every 60 s so the link stays up.
 
