@@ -31,7 +31,7 @@ Evidence marks: **[V]** verified this session by reading the file or doc named; 
  |    ^        ^        ^          ^            ^               |  |   pending,audio/<id>}       |
  |  bridge  cos-console glance  mentra-cos-   mentra-cos-       |  | Supabase: cos_requests,     |
  |  (relay) -host (pad) (e-ink) listen.py     speak.py          |  |  cos_turns, cos_status,     |
- |    |        | leaf    serial  adb mic      adb speaker        |  |  cos-audio, board, nodes,   |
+ |    |        | leaf    serial  adb mic      adb speaker        |  |  cos_audio, board, nodes,   |
  |    +--------+--- weaver daemon socket (RPC)                   |  |  node_actions               |
  +--------------------------------------------------------------+  +--------------^--------------+
                                     outbound only, node bearer ───────────────────┘
@@ -47,7 +47,7 @@ Evidence marks: **[V]** verified this session by reading the file or doc named; 
 | Prompt | `agents/chief-of-staff/AGENT.md` (131 lines), compiled in | `prompt.rs:8` | No |
 | Brain | RVF file per installation, entries with `weftos.brain-metadata/1` | `brain.rs:1-40` | File on disk |
 | Voice | Parakeet STT via `weftos-cos transcribe`; reply read aloud after it is complete, cut at 700 chars; `say` or a command engine | `voice.rs`, `speak.rs:30` | Mic, ONNX, `say` |
-| Bridge and relay | `weftos-cos bridge` syncs turns and status every 2 s, long-polls 25 s for page requests, relays phone push-to-talk audio; relay tables keyed by **node**, not user | `wt/cosbridge`: `bridge.rs`; PR #29 | Runs on the Mac |
+| Bridge and relay | `weftos-cos bridge` syncs turns and status every 2 s, long-polls 25 s for page requests, relays phone push-to-talk audio; relay tables already **user-scoped** (`owner_user_id`, RLS `owner_user_id = auth.uid()`, owner-only request RPCs; `nodes.owner_user_id` set by trigger; audio in a `cos_audio` bytea table with no client grants) | `wt/cosbridge`: `bridge.rs`; PR #29 | Runs on the Mac |
 | Pad console | `cos-console-host` turns the event stream into a scene on the pad through the daemon's `display.*` RPC and the certified-leaf channel | `crates/weftos-cos-console/src/bin/cos_console_host.rs:6-12` | Needs a node with the leaf channel |
 | E-ink | Five-field status line to a serial panel | `glance.rs:1-40` | Serial port |
 | Glasses | adb recording loop with RMS and voiced gates; local transcribe; speak loop renders the **whole** reply with ElevenLabs `eleven_v4` and pushes a WAV over adb | `~/dev/mentra/scripts/mentra-cos-{listen,speak}.py` | adb |
@@ -138,7 +138,7 @@ Rules: a node credential only reaches its owner's data; the user id comes from t
 
 ### 3.6 Data
 
-Supabase stays the state store. The relay tables are live (`cos_requests`, `cos_turns`, `cos_status`, `cos-audio`) and are **node-scoped**; the multitenant design adds user-scoped rows and treats nodes as surfaces. New tables **[D]**: `cos_events` (user, seq, kind, payload, TTL), `cos_turn_state`, `cos_pending` (held confirmations), `cos_node_commands` (4.4), `cos_secrets`, `cos_ledger`, `cos_audit`, `tool_sources`, `board_proposals` (the cloud replacement for the local staging directory). RLS: a user sees only their rows; the orchestrator uses the service role with explicit user filters.
+Supabase stays the state store. The relay tables are live and already user-scoped **[V: migration `202610130004`, PR #29]**: `cos_requests`, `cos_turns`, `cos_status` and `cos_audio` carry `owner_user_id`, RLS is `owner_user_id = auth.uid()`, the request RPCs are owner-only, `nodes.owner_user_id` is set by a trigger, and `cos_audio` is a bytea table with no client grants (no Storage bucket, no service role). Turns accept any well-formed endpoint, so surfaces need no schema change. The orchestrator reuses these tables and adds the ones below, with the same owner-scoped RLS. New tables **[D]**: `cos_events` (user, seq, kind, payload, TTL), `cos_turn_state`, `cos_pending` (held confirmations), `cos_node_commands` (4.4), `cos_secrets`, `cos_ledger`, `cos_audit`, `tool_sources`, `board_proposals` (the cloud replacement for the local staging directory). RLS: a user sees only their rows. The orchestrator writes through owner-scoped RPCs where they exist and uses the service role with explicit user filters only for the new tables.
 
 ### 3.7 API contract: `cos.v2`
 
