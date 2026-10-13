@@ -536,3 +536,34 @@ fn an_overlong_utterance_is_cut_to_fifteen_seconds() {
         }
     )));
 }
+
+#[test]
+fn a_restarted_glasses_agent_pairs_again_without_a_code_once_confirmed() {
+    let mut r = Rig::new(None);
+    r.pair();
+    let key = Identity::from_seed([6; 32]).public_key();
+    r.p.set_trusted(Some(key));
+    // the glasses agent restarts: same identity, fresh memory, new socket
+    r.p.on_connect(false);
+    r.g = GlassesNode::new(Identity::from_seed([6; 32]));
+    r.events.clear();
+    let hello = r.g.pair_hello().unwrap();
+    r.pump(vec![hello]);
+    assert!(
+        !r.events
+            .iter()
+            .any(|e| matches!(e, PhoneEvent::PairingCode { .. }))
+    );
+    assert!(r.p.is_authorized());
+    assert!(matches!(
+        r.g.pairing_state(),
+        GlassesPairingState::Paired { .. }
+    ));
+    // an unknown key still needs the owner
+    r.p.on_connect(false);
+    r.g = GlassesNode::new(Identity::from_seed([7; 32]));
+    let hello = r.g.pair_hello().unwrap();
+    r.pump(vec![hello]);
+    assert!(!r.p.is_authorized());
+    assert!(r.p.pairing_code().is_some());
+}

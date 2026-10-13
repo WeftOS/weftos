@@ -190,6 +190,8 @@ class LinkEngine(
             is PhoneEvent.Paired -> {
                 pairedAddress = c?.addr
                 settings.trustedGlasses = e.glassesKeyHex
+                // A glasses agent restart re-sends hello; the confirmed key then pairs without a code.
+                try { core.setTrusted(e.glassesKeyHex) } catch (_: Exception) { }
                 NodeRuntime.update { copy(pairingCode = null, pairing = "paired") }
             }
             is PhoneEvent.PairingRefused -> NodeRuntime.update {

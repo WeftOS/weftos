@@ -53,6 +53,21 @@ impl PhoneLink {
         self.public_key_hex.clone()
     }
 
+    /// Remember the glasses key the owner confirmed (hex); empty forgets it.
+    pub fn set_trusted(&self, glasses_key_hex: String) -> Result<(), NodeError> {
+        let key = if glasses_key_hex.is_empty() {
+            None
+        } else {
+            Some(
+                hex_to_bytes(&glasses_key_hex)?
+                    .try_into()
+                    .map_err(|_| NodeError::Pairing("glasses key must be 32 bytes".into()))?,
+            )
+        };
+        self.session.lock().unwrap().set_trusted(key);
+        Ok(())
+    }
+
     /// A glasses socket was accepted. `resumed`: same address as an already paired peer.
     pub fn on_connect(&self, resumed: bool) {
         self.session.lock().unwrap().on_connect(resumed);

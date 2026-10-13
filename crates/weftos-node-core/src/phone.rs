@@ -174,6 +174,11 @@ impl PhoneSession {
         }
     }
 
+    /// Remember (or forget) the glasses key the owner confirmed, for later connections.
+    pub fn set_trusted(&mut self, key: Option<[u8; 32]>) {
+        self.trusted = key;
+    }
+
     /// A glasses socket was accepted. `resumed`: same address as an already paired peer.
     pub fn on_connect(&mut self, resumed: bool) {
         self.rx.clear();
