@@ -1,6 +1,6 @@
 # WeftOS phone app as the glasses' parent node
 
-Status: Proposed design, 2026-10-13. Research and design only; nothing here is built. Owner: the WeftOS owner. Companion plans: `docs/plans/cos-cloud-migration.md` (M4, "every surface is a node"), `docs/plans/cos-dashboard-bridge.md` (relay and control files), `docs/leaf-push-protocol.md` and `docs/plans/adr-103-leaf-implementation.md` (leaf and certified leaf), ADR-114 (`weftos://` names), ADR-120 (exposures).
+Status: Proposed design, revision 2, 2026-10-13. Research and design only; nothing here is built. Owner: the WeftOS owner. Companion plans: `docs/plans/cos-cloud-migration.md` (M4, "every surface is a node"), `docs/plans/cos-dashboard-bridge.md` (relay and control files), `docs/leaf-push-protocol.md` and `docs/plans/adr-103-leaf-implementation.md` (leaf and certified leaf), ADR-114 (`weftos://` names), ADR-120 (exposures).
 
 **Owner direction (2026-10-13), verbatim:**
 
@@ -13,13 +13,15 @@ Status: Proposed design, 2026-10-13. Research and design only; nothing here is b
 
 ## 1. Summary and decisions
 
+Revision 2 (2026-10-13): the owner corrected the speech design. **The phone app does no STT, TTS or other speech processing.** It moves audio and text between the glasses node and the mesh; STT, speech shaping and TTS run in a durable workflow on the weaver side, reached over the mesh. Sections 1, 2, 5, 7, 8, 9 and 12 reflect that. Section 6.4 (the existing `clawft-android-edge` crate) and section 10 (the actual glasses Wi-Fi chip) were added in the same revision.
+
 1. The phone runs a **WeftOS node** (a Rust core in a native Android shell now, an iOS shell later). It is the **parent** of the glasses node. The glasses run a small agent that holds a leaf identity, streams the microphone to the phone, plays what the phone sends, and takes control commands.
-2. **Nothing goes through Mentra cloud.** The glasses keep their stock firmware and the stock Mentra client app only as the hardware owner (launcher, camera HAL, LED, speaker MCU). We never talk to Mentra servers and never need the Mentra phone app.
+2. **Nothing goes through Mentra cloud.** The glasses keep their stock firmware and the stock Mentra client app only as the hardware owner (launcher, camera HAL, LED, speaker path). We never talk to Mentra servers and never need the Mentra phone app.
 3. The **glasses dial the phone**, over the phone's hotspot or a shared Wi-Fi. BLE is the doorbell, the provisioning channel and the low-rate fallback; it is not the audio path.
-4. Speech: **ElevenLabs by default** (STT and TTS through single-use tokens the phone node receives from the cloud CoS), an **on-device recognizer as the offline fallback**. Audio between phone and ElevenLabs never touches Vercel; audio between glasses and phone never leaves the local link.
-5. Cross-platform: **one Rust core with UniFFI bindings and thin native shells** (Kotlin/Compose now, Swift/SwiftUI later). Kotlin Multiplatform, Flutter and React Native are compared in section 6; none removes the hard, OS-specific work.
-6. Biggest risks, in order: (a) the glasses cannot hold the microphone or the speaker path from an ordinary app without a foreground launch or privileges ([U], section 3.4); (b) iOS cannot keep a listening process alive in the background the way Android can ([V] section 7); (c) the audio route to the glasses speaker depends on a serial command to a co-processor that the current AudioBridge issues ([R], section 3.5).
-7. **P0 is a spike** that proves the loop without the Mac, on Android, in two to three weeks. It also answers the three unknowns above, because they decide whether P1 is a plan or a rewrite.
+4. Speech: the phone is a **thin byte mover**. Glasses audio goes up the mesh to a **per-user durable speech workflow** (STT, the CoS turn, speech shaping, ElevenLabs TTS, all server side); rendered reply audio comes back down and the phone forwards it to the glasses speaker. Audio is Opus end to end so the cellular leg stays small (about 3 kB/s per direction). Echo cancellation and the cheap energy gate live on the glasses, because the glasses own both the microphone and the speaker.
+5. Cross-platform: **one Rust core with UniFFI bindings and thin native shells** (Kotlin/Compose now, Swift/SwiftUI later). The repo already has a seed for the core, `crates/clawft-android-edge` (identity, pair store, UniFFI plumbing, 967 lines), which is a good start and not yet a node (section 6.4).
+6. Biggest risks, in order: (a) the glasses cannot hold the microphone or the speaker path from an ordinary app without a foreground launch or privileges ([U], section 3.4); (b) **where the audio ingress lives**: the cloud plan assumed audio never passes through Vercel, and a durable workflow is not a low-latency audio pipe (section 5.2); (c) iOS cannot keep a process alive in the background the way Android can (section 7.2); (d) the audio route to the glasses speaker depends on a serial command to a co-processor (section 3.5).
+7. **P0 is a spike** that proves the loop without the Mac, on Android, in two to three weeks, and answers the unknowns above, because they decide whether P1 is a plan or a rewrite.
 
 What changes for existing pieces: the Mac adb loops (`mentra-cos-listen`, `mentra-cos-speak`) become a development fallback; `mentramic` and AudioBridge merge into one glasses agent; the `mentra-leaf` bring-up process (Noise XX, signed admission hello, status envelope [R]) becomes the glasses agent's link layer; the `/phone` page's Mentra tab reads node status instead of Mac-written status files.
 
@@ -30,31 +32,37 @@ What changes for existing pieces: the Mac adb loops (`mentra-cos-listen`, `mentr
 ### 2.1 The picture
 
 ```
-                     cloud CoS (Vercel, AI Gateway, Supabase)           ElevenLabs
-                        ^   cos.v2 commands/events (HTTPS, SSE,           ^   single-use-token
-                        |   Realtime, long-poll)                          |   WebSocket (TTS, STT)
-                        |                                                 |
-                  +-----+-------------------------------------------------+-----+
-                  |                   PHONE NODE  (weftos://<mesh>/nodes/<phone>)  |
-                  |  Rust core: identity, Noise, leaf-parent, cos client, speech   |
-                  |  glue, VAD/AEC, cache.   Native shell: service, BLE, sockets   |
-                  +-----+---------------------+---------------------+-------------+
-                        | local Wi-Fi link     | BLE (doorbell,      | mesh, when
-                        | (TCP, Noise)         |  provisioning,      | reachable
-                        v                      |  fallback)          v
-          +-------------------------+          |             PG mesh hub / other nodes
-          |  GLASSES NODE (child)   |<---------+
-          |  agent APK: mic, speaker|
-          |  LED, camera, status    |
+        durable speech workflow (per user, weaver side / cloud CoS)
+        STT -> CoS turn -> speech shaping (speech.v1) -> ElevenLabs TTS
+                       ^                         |
+                       | mesh messages:          | mesh messages:
+                       | utterance chunks        | reply audio chunks, text, events
+                       | (Opus, ordered, resumable)
+                  +----+-------------------------v----+
+                  |       PHONE NODE (thin)           |   weftos://<mesh>/nodes/<phone>
+                  |  Rust core: identity, Noise,      |
+                  |  leaf-parent, mesh client, relay. |
+                  |  Native shell: service, BLE, IO.  |
+                  |  NO STT / TTS / VAD / AEC.        |
+                  +----+---------------------+--------+
+                       | local Wi-Fi link     | BLE (doorbell,
+                       | (TCP, Noise)         |  provisioning, fallback)
+                       v                      |
+          +-------------------------+         |
+          |  GLASSES NODE (child)   |<--------+
+          |  agent APK: mic gate +  |
+          |  Opus enc/dec + AEC,    |
+          |  speaker, LED, camera   |
           +-------------------------+
 ```
 
-- **Phone node.** A node with its own keypair, enrolled to the user in the dashboard, named `weftos://<mesh>/nodes/<phone id>` (ADR-114). It is credentialed to the user and speaks the `cos.v2` surface protocol of the cloud plan (plan section 4): announce `status` and capabilities, subscribe to commands, post results and committed utterance text. It is a surface in its own right (display, touch, location, its own mic) and the parent of the glasses.
-- **Glasses node.** A child node. It has its own Ed25519 key and a certificate issued by the parent chain (section 4.3). It announces what it can do (`surface.mic`, `surface.speaker`, `surface.led`, optionally `surface.camera`) to its parent only; the parent republishes them upward as exposures. The cloud CoS addresses "speak on node N" and never learns that the phone is a hop [D].
-- **Why the glasses dial the phone.** The phone is the access point when it shares its hotspot, so its address on that link is the default gateway the glasses already know; no discovery is needed. On a shared Wi-Fi the glasses use signed discovery (the certified-leaf pattern: a nonce-bound, short-lived UDP advertisement, `docs/plans/adr-103-leaf-implementation.md`) or mDNS. The direction also fits iOS: accepting inbound TCP connections and receiving UDP unicast need no Local Network permission, while outgoing connections to local addresses do **[V]** (Apple TN3179, section 12). Dialing in lets an iPhone app avoid the prompt for the main path.
-- **Transport ladder** for phone to glasses: (1) Wi-Fi TCP over the hotspot or shared network; (2) the same over a Tailscale-style overlay if both are on it [I]; (3) BLE for control and a reduced-rate audio fallback (section 4.4). If the user's router isolates clients and there is no hotspot, only BLE remains; that case is called out in the P1 acceptance tests.
-- **Phone to cloud**: the transports of plan 4.4 in order (Supabase Realtime, SSE, long-poll). Uplink is always HTTPS with a short-lived node token. The phone is the only component that holds a route to the cloud; the glasses hold no cloud credential at all [D].
-- **Phone to mesh**: when the phone sees a mesh member (home or lab Wi-Fi, or an overlay), its core dials the certified-leaf listener of the mesh hub (the `leaf_listen_addr` list already supports "LAN and tailnet at once" [R]). Off-network it is cloud-only. Mesh membership adds placement (a stronger local STT or a local model) but is never required.
+- **Phone node.** A node with its own keypair, enrolled to the user in the dashboard, named `weftos://<mesh>/nodes/<phone id>` (ADR-114). It is credentialed to the user. Its jobs: parent of the glasses (certificates, link, policy), and relay between the glasses link and the mesh. It does no speech processing; it may show a message or play a notification sound as a surface, but the speech path never decodes audio.
+- **Glasses node.** A child node with its own Ed25519 key and a certificate issued by the parent chain (section 4.3). It announces `surface.mic`, `surface.speaker`, `surface.led` and optionally `surface.camera` to its parent, which republishes them upward as exposures. The cloud CoS addresses "speak on node N" and never learns that the phone is a hop [D].
+- **Speech workflow.** The owner's design: the phone "uses the mesh to send it off to durable workflow". A durable workflow is a per-user run (the cloud plan's Workflow runner, or a speech child workflow of the per-user CoS) that owns STT, the CoS turn, speech shaping and TTS. It is named as a mesh service (`speech.v1` exposure on the user's mesh), so *placement* decides where it runs: the cloud by default, a LAN node with a GPU when the phone can reach one, a local fallback. The phone does not know or care which (section 5).
+- **Why the glasses dial the phone.** On the phone's hotspot the phone is the default gateway the glasses already know; no discovery is needed. On a shared Wi-Fi the glasses use signed discovery (the certified-leaf pattern) or mDNS. The direction also fits iOS: accepting inbound TCP and receiving UDP unicast need no Local Network permission, while outgoing connections to local addresses do **[V]** (Apple TN3179).
+- **Transport ladder** for phone to glasses: (1) Wi-Fi TCP over the hotspot or shared network; (2) the same over an overlay network if both are on it [I]; (3) BLE for control and a reduced audio fallback (section 4.4). Under client isolation with no hotspot, only BLE remains.
+- **Phone to mesh/cloud**: control and text use the cloud plan's transports in order (Supabase Realtime, SSE, long-poll). **Audio uses a dedicated streaming leg**, because Vercel functions cannot take inbound WebSockets and the plan capped payloads at 4.5 MB (section 5.2). The glasses hold no cloud credential [D].
+- **Phone to the rest of the mesh**: when the phone sees a mesh member (home or lab Wi-Fi, or an overlay), its core dials that hub's certified-leaf listener (the `leaf_listen_addr` list supports several addresses at once **[R]**). Off-network it is cloud-only.
 
 ### 2.2 What the phone is not
 
@@ -106,7 +114,7 @@ A display-less device has no user to bring an activity forward. Candidate answer
 
 AudioBridge, as it exists on disk [R], does not run an HTTP server. It is a broadcast receiver driving `MediaPlayer` over a file queue (`PLAY`, `QUEUE`, `STOP`, `VOLUME` actions) on the notification stream, and it also opens a serial path to the audio co-processor and sends JSON "start I2S" and "stop I2S" commands around each playback (`mh_starti2s`, `mh_stopi2s`). The source I read contains no network listener, so the "HTTP service for a Rust daemon" described in the brief either lives elsewhere or has not been built; treat any HTTP playback path as new work **[U]**.
 
-Two consequences. First, streaming playback needs `AudioTrack` (PCM in, low latency, flush on barge-in), not `MediaPlayer` on files; a streaming path has to keep the I2S path open for the length of an utterance and close it after silence. Second, whether an unprivileged app can open that serial node depends on file permissions and on SELinux being permissive on this build **[U]**; permissive SELinux is "unusual and helpful" per the device profile [R], and a stock-hardened Mentra release would break it. If the node is root-only, the agent cannot play audio at all without help from asg_client; the fallback is to ask asg_client to play through the path it already owns (an exported intent or its own audio API), or to use classic Bluetooth audio if the glasses present a sink, which is not known [U]. This is the second gate: **G1 passes if the agent plays a 10-second PCM stream through the speaker with no adb session attached, with under 150 ms from the first frame to sound and clean stop on `flush`.**
+The serial node it opens is probably the link to the BES2700 co-processor that the probe found beside the CONNSYS **[I]** (section 10.1). Two consequences. First, streaming playback needs `AudioTrack` (PCM in, low latency, flush on barge-in), not `MediaPlayer` on files; a streaming path has to keep the I2S path open for the length of an utterance and close it after silence. Second, whether an unprivileged app can open that serial node depends on file permissions and on SELinux being permissive on this build **[U]**; permissive SELinux is "unusual and helpful" per the device profile [R], and a stock-hardened Mentra release would break it. If the node is root-only, the agent cannot play audio at all without help from asg_client; the fallback is to ask asg_client to play through the path it already owns (an exported intent or its own audio API), or to use classic Bluetooth audio if the glasses present a sink, which is not known [U]. This is the second gate: **G1 passes if the agent plays a 10-second Opus stream (decoded on the glasses) through the speaker with no adb session attached, with under 150 ms from the first frame to sound and clean stop on `flush`.**
 
 ### 3.6 Control, status, events
 
@@ -143,13 +151,13 @@ evt:   {t:"evt", seq, k:"mic.gate", p:{open:true, rms:812, voiced:0.42}}
 Realtime lane:
 
 ```
-audio.up:   {stream:1, seq, ts_ms, codec:"pcm16"|"opus", payload}   glasses to phone
-audio.down: {stream:2, utt, seq, ts_ms, codec, payload}             phone to glasses
+audio.up:   {stream:1, utt, seq, ts_ms, codec:"opus", payload}   glasses to phone
+audio.down: {stream:2, utt, seq, ts_ms, codec:"opus", payload}   phone to glasses
 ```
 
-Mic: 16 kHz mono (what `mentramic` captures now **[R]**), 20 ms frames, 640 bytes of PCM16 each, 256 kbit/s, trivial on Wi-Fi. **P0 ships PCM16**; Opus (about 24 kbit/s) arrives in P1 for BLE fallback and radio duty cycle. Speaker: 24 kHz or 16 kHz PCM16 (ElevenLabs output is converted by the phone), also 20 ms frames, 60 to 120 ms jitter buffer on the glasses, `flush` drops the buffer at once.
+**Opus from P0, encoded on the glasses.** With the phone doing no processing, the codec on the glasses link is also the codec on the cellular leg. Raw 16 kHz PCM16 is 256 kbit/s, about 115 MB per hour of open gate, which is not acceptable on a metered hotspot uplink; Opus at about 24 kbit/s is 3 kB/s and 10.8 MB per hour. The glasses encode (the platform `MediaCodec` Opus encoder exists from API 29 **[I]**, or libopus in the Rust agent) and decode reply audio the same way. The phone forwards frames unchanged, which also makes the iOS relay trivial. Frames are 20 ms; the phone batches about 100 ms into one upstream message to cut per-message overhead. PCM16 remains useful as a debug codec on the local link only.
 
-**Gating split.** The glasses run only the cheap part: an energy floor with calibration and a pre-roll ring buffer (about 400 ms) so the start of a word is never clipped, and a watchdog. The spectral voiceness gate, endpointing and everything else run on the phone (the two-stage VAD design from the project's own notes). While no gate is open the glasses send nothing but status, which is what keeps the radio and battery cheap [D].
+**Gating and echo.** The glasses run the cheap parts: an energy floor with calibration, a pre-roll ring buffer (about 400 ms, so word starts are never clipped), a watchdog, and **acoustic echo cancellation**, because the glasses are the only place that has both the microphone signal and the exact speaker reference at a known delay (Android's `AcousticEchoCanceler` effect, if the audio HAL honors it **[U]**, or the WeftOS AEC crate in the agent). The spectral voiceness gate and endpointing move to the workflow, so some non-speech audio reaches it. A hard cap (max open-gate seconds per minute, adjustable) limits cost and bandwidth. While no gate is open the glasses send only status.
 
 ### 4.3 Pairing, keys, no shared bearer
 
@@ -160,58 +168,82 @@ Requirements: no static shared secret, a lost phone or glasses can be revoked, a
 3. The phone signs a **leaf certificate** for the glasses key: scope (parent tenant), capabilities (mic, speaker, led, camera), issuer chain up to the user's identity, short expiry (days) with renewal on every successful connection. This is the certified-leaf shape (certificate, sequence floor, signed ACK **[R]**) with a phone as the immediate issuer instead of the daemon.
 4. Over the now-encrypted BLE channel the phone passes the Wi-Fi credentials (section 3.3) and the glasses store the parent's public key. From then on the Wi-Fi link starts with a Noise IK-style handshake against that pinned key.
 5. **Revoke**: the user removes the glasses in the dashboard or the phone app; the phone stops renewing, drops the key from its registry, and tells the cloud, so even a compromised glasses agent cannot rejoin. The glasses forget their parent on a factory reset of the agent.
-6. **Phone's own identity**: an Ed25519 key enrolled in the dashboard by the request and approval flow of plan 4.3, exchanged for short-lived node tokens by signing a server challenge. Hardware-backed storage: Android Keystore and the iOS Secure Enclave primarily support P-256, not Ed25519 **[I]**, so the practical pattern is to wrap the Ed25519 seed with a hardware-backed AES key and keep the plaintext seed in memory only. Single-use ElevenLabs tokens never persist.
+6. **Phone's own identity**: an Ed25519 key enrolled in the dashboard by the request and approval flow of plan 4.3, exchanged for short-lived node tokens by signing a server challenge. Hardware-backed storage: Android Keystore and the iOS Secure Enclave primarily support P-256, not Ed25519 **[I]**, so the practical pattern is to wrap the Ed25519 seed with a hardware-backed AES key and keep the plaintext seed in memory only.  The phone holds no speech-vendor credential at all (section 5).
 
 What flows nowhere: no Mentra account, no Mentra token, no bearer on the glasses, no long-lived secret on a device that a user can lose in a taxi.
 
 ### 4.4 BLE: what it is for and what it cannot do
 
-BLE has three jobs: discovery and pairing (section 4.3); the **doorbell** (a wake notification, essential on iOS, section 7); and a **fallback control and reduced-rate audio path** when there is no usable Wi-Fi. Typical BLE 1M throughput of a few hundred kbit/s [I] would carry 24 kbit/s Opus in each direction on an L2CAP connection-oriented channel, with noticeably worse latency; that is a degraded mode ("it still hears me, answers are slower"), not the design center. A BLE connection also needs the glasses to keep their BLE peripheral role free of the stock client [U].
+BLE has three jobs: discovery and pairing (section 4.3); the **doorbell** (a wake notification, essential on iOS, section 7); and a **fallback control and reduced-rate audio path** when there is no usable Wi-Fi. Typical BLE 1M throughput of a few hundred kbit/s [I] would carry 24 kbit/s Opus in each direction on an L2CAP connection-oriented channel, with noticeably worse latency; that is a degraded mode ("it still hears me, answers are slower"), not the design center. Our BLE radio is the Android CONNSYS one; the stock phone link runs on a separate co-processor (the BES2700, section 10.1), so a conflict with the stock client is less likely than first assumed **[I]**, but unproven [U].
 
 ---
 
-## 5. Speech
+## 5. Speech: the phone relays, the workflow speaks
 
-### 5.1 STT options
+### 5.1 Division of labor
 
-| Option | Where | Latency | Notes |
-|---|---|---|---|
-| ElevenLabs realtime STT (`scribe_v2_realtime`) | Cloud, direct from the phone | about 150 ms to commit per vendor figure in the plan **[V in plan]** | Default. Single-use token minted by the cloud CoS; only the committed text goes to the CoS |
-| Android on-device `SpeechRecognizer` (`createOnDeviceSpeechRecognizer`, API 31+; check `isOnDeviceRecognitionAvailable()`; custom audio can be supplied through `EXTRA_AUDIO_SOURCE`) | Phone | device-dependent | **[V]** API facts. Free, offline fallback. Whether it accepts a live stream rather than a file descriptor of a finished clip is [U]; plan on feeding it per-utterance after the gate closes |
-| Local model in the Rust core (whisper-class, or Parakeet via ONNX, both already used elsewhere in WeftOS) | Phone, or a mesh GPU node | 0.1 to 1 s, size dependent | Second fallback and the privacy mode; cost is app size, battery and thermals [I]. A mesh GPU node (placement layer) can take it when reachable |
-| Apple `SFSpeechRecognizer` on-device | iPhone | device-dependent | iOS equivalent of the Android fallback [I] |
+| Step | Where | Notes |
+|---|---|---|
+| Capture, energy gate, pre-roll, Opus encode, AEC | Glasses agent | Cheap DSP; owns mic and speaker |
+| Link security, buffering, relay, retry, bandwidth policy | Phone node | No decode, no recognition, no synthesis |
+| Endpointing, STT (ElevenLabs realtime by default), CoS turn | Durable speech workflow | The plan's STT facts apply server side (`scribe_v2_realtime`, about 150 ms to commit, per the plan **[V in plan]**) |
+| Speech shaping (`speech.v1`: lead, offers, clause chunks, cues) | Same workflow, via the conversation MCP | Unchanged from plan section 5.4 |
+| TTS (ElevenLabs, single key held server side) | Same workflow | The platform key never leaves the server; no per-device tokens are needed for speech anymore |
+| Playout, jitter buffer, flush on barge-in | Glasses agent | Phone forwards `play.flush` and `spoken_through_seq` |
 
-Decision [D]: the phone node uses an `SttBackend` trait (ADR-053) with four implementations and a policy: cloud when online and the user allows it, otherwise on-device. The choice and its reason are shown in `status`, so the CoS can say why it heard worse.
+This simplifies the earlier design: no single-use token to the phone, no ElevenLabs socket on the phone, no on-device recognizer, no TTS cache or AEC on the phone. It also removes the main iOS risk of keeping a vendor WebSocket alive in the background (section 7.2). The cost: every utterance and every reply crosses the phone's cellular link, and the ElevenLabs concurrency limits (4 to 40 by plan, per the cloud plan) now apply to the whole user base at the workflow, not per device.
 
-### 5.2 TTS and caching
+### 5.2 The mesh leg: what the phone sends and where it lands
 
-ElevenLabs TTS is the default (plan section 5: WebSocket with streamed text in and audio chunks out, token single-use). The phone node receives `speech.chunk` events, forwards text to the TTS socket and relays the audio frames to the glasses as `audio.down`. `speech.cancel` closes the socket and sends `play.flush` with the `spoken_through_seq` back to the CoS (plan 5.4). Model choice follows the plan (`eleven_v4_turbo` or flash for conversation). Voice and prosody hints are advisory and mapped by the phone's engine adapter.
+Owner wording: the phone "sends the captured audio, or a reference to it, as a mesh message" to the workflow and "gets the rendered reply audio back over the mesh". Three concrete shapes, one per phase:
 
-**Cache** [D]: key = hash of (voice, model, settings, normalized text). Only short, stock phrases are cached by default (cue words, "I didn't catch that", "one moment", pairing codes, error lines); a phrase becomes eligible after its second use. Full replies are not cached unless the user turns the setting on, because the hit rate is low and a transcript of what the assistant said is personal data. Encrypted at rest, LRU, 50 MB cap. Cached stock audio is pre-pushed to the glasses so cues play with zero network, which is what a 150 ms cue tone needs.
+| Mode | How | Fit |
+|---|---|---|
+| **A. Utterance upload** | After the gate closes, the phone uploads the whole Opus clip (a 5 s utterance is about 15 kB, 30 s about 90 kB, far below any payload limit) as a few chunked, sequence-numbered mesh messages, or as a blob with a short-lived upload URL and a mesh message carrying the reference. The workflow starts when the last chunk lands | Simplest; P0. Adds the whole utterance duration to latency, because STT starts after the upload |
+| **B. Chunked live upload** | The phone forwards 100 ms batches as they arrive, ordered, resumable, over a persistent stream (HTTP/2 or WebSocket to a streaming ingress). `utterance.open` is sent when the gate opens so the workflow is armed before the speech ends; the ingress feeds ElevenLabs realtime STT as chunks arrive | P1 target. Removes the utterance duration from the critical path |
+| **C. Streamed reply** | Reply audio returns as ordered Opus chunks (SSE or Realtime), the first as soon as TTS yields audio | Always; P0 may start with whole-reply download |
 
-**Offline TTS**: the platform engine (Android `TextToSpeech`, iOS `AVSpeechSynthesizer`) for a short offline notice only; WeftOS local engines (Kokoro, Orpheus) are mesh-placed fallbacks, not phone-resident [I].
+**The ingress problem (the real design question).** The cloud plan stated "audio never passes through Vercel" for two reasons: the 4.5 MB request cap and no inbound WebSockets on functions. The owner's design now routes audio through the weaver side. A durable workflow is also not a low-latency pipe: it orchestrates steps, with queue dispatch time that the cloud plan lists as unverified. So the audio data plane and the workflow control plane must be separated [D]:
 
-### 5.3 The CoS "its voice" stream on the phone
+1. **Control plane (durable workflow)**: owns the turn: arm on `utterance.open`, wait for the end-of-speech event, run the CoS turn, shape, synthesize, hand reply chunks to the output, record the ledger entry, resume after a crash. The hot path (STT stream, model call, first TTS chunk) should run inside **one streaming step** so step-boundary latency is not paid per stage.
+2. **Data plane (streaming ingress/egress)**: a small service that accepts the ordered chunk stream and forwards it into the workflow's STT step, and carries reply chunks back. Candidates, none verified: (i) many small POSTs (about ten per second, 300 B to 2 kB each) to a function route that appends to the workflow's hook, which works on functions but costs an invocation per chunk (about $0.02 per user-hour at the plan's invocation price, **[I]**) and adds per-request latency; (ii) Supabase Realtime or Storage as the chunk carrier; (iii) a small always-on streaming service next to the mesh hub, reachable over HTTPS/WebSocket, with the workflow subscribing to it. Recommendation: **P0 on mode A with chunked POSTs; P1 builds mode B on (iii) if (i) misses the latency budget**, decided by the P0 measurements.
+3. **Mesh naming**: the workflow is `weftos://<mesh>/services/speech`, an ADR-120 exposure with `audience` = the user's own nodes. The phone addresses messages to that name. How a Rust-mesh message becomes an HTTPS call to a workflow is a **mesh-to-cloud gateway** that the cloud plan describes only for commands (`cos_node_commands`), not for streams. Whether the mesh itself (TCP plus Noise to a listener) is the transport, or the mesh envelope rides inside HTTPS, is [U] and an owner decision (Q16). Default: the mesh envelope rides inside HTTPS/WebSocket to a gateway, because a phone on cellular cannot assume a reachable mesh listener.
 
-The phone consumes `speech.v1` exactly as the plan defines it: `speech.start`, `speech.chunk` (with advisory prosody and `interruptible`), `speech.offer`, `speech.cancel`, `speech.cue` (plan 5.4). It also posts upward `VoiceAnalysis` records (pure DSP, no model; consent-gated) and the barge-in point. The phone does not shape speech; it only plays the spoken plan. **Barge-in** needs echo handling because the glasses' mic and speaker are inches apart. The phone knows exactly what it sent to the speaker and when, so it can run the WeftOS AEC with that reference and a measured delay, and the glasses report playout timestamps to keep the delay estimate honest **[D, I]**. Until AEC is proven, barge-in is by a push-to-talk gesture or by pausing the speaker while the gate is open.
+**Phone-side trade-offs the owner asked about:**
+
+- **Upload size and bandwidth**: Opus at about 24 kbit/s is 3 kB/s up and about the same down; a day with 20 minutes of open gate is about 3.6 MB up. PCM would be 20 to 40 times more. Protocol overhead of chunked POSTs at ten per second is more than the payload (about 10 kB/s with headers over HTTP/2 **[I]**), so batch to 200 to 300 ms where latency allows, or use a persistent stream.
+- **Radio and battery**: continuous streaming keeps the cellular radio in a high-power state for the length of a turn and the tail after it. Streaming only while the gate is open, with a pre-armed connection, is the lever. Wi-Fi hotspot use means the phone's data plan carries the audio.
+- **Loss and ordering**: the phone buffers up to a bounded window (default 10 s of Opus, 30 kB) while the uplink is down; beyond that it drops with an `audio.gap` marker the workflow can speak about ("I lost you for a second"). Chunks carry `utt`, `seq`, `ts_ms`; the workflow reassembles and ignores duplicates (idempotent by `(utt, seq)`).
+- **Resumability**: an interrupted utterance can resume by sequence number; a reply stream resumes from the last acknowledged `seq`.
+- **Privacy**: audio now passes the server side. It is processed in memory and never stored by default; the ledger records durations, not content (section 11).
+- **Offline**: with no uplink, the phone cannot do speech at all. The glasses play a cached "offline" cue (pushed once). When the phone can reach a LAN mesh member that exposes `speech.v1` (placement picks it), the same messages go there; that is the offline-capable path, and it needs no code change on the phone. An on-device recognizer or platform TTS on the phone is deliberately not built (Q6).
+
+### 5.3 Speech and barge-in
+
+The workflow produces `speech.v1` (plan 5.4) and renders it to Opus chunks; the phone forwards `speech.start/chunk/cancel` effects as `play.begin`, audio frames and `play.flush`. Barge-in has three parts, none on the phone: the glasses' AEC keeps the speaker out of the microphone path; the glasses' gate opening during playback sends `evt{mic.gate}` and starts `audio.up` immediately; the workflow decides the floor and issues `speech.cancel` with `spoken_through_seq` from the glasses' last playout report. Until AEC is proven on this hardware (G3), barge-in is by the push-to-talk gesture or by ducking the speaker while the gate is open.
 
 ### 5.4 Latency budget (glasses to glasses, no tool call)
 
-The plan targets 0.9 s p50 / 1.5 s p90 from end of speech to first sound for the browser node. The glasses add two local hops and a jitter buffer. Proposed budget:
+The plan targets 0.9 s p50 / 1.5 s p90 from end of speech to first sound for the browser node. Here the cellular round trip appears twice, ElevenLabs is in a data center near the workflow, and the workflow adds step boundaries.
 
 | Stage | p50 (ms) | p90 (ms) | Note |
 |---|---|---|---|
-| Capture frame + radio to phone | 25 | 60 | 20 ms frame, Wi-Fi unicast |
-| End-of-speech commit (STT turn prediction) | 150 | 300 | vendor figure from the plan, not measured here |
-| Cue tone triggered locally | 40 | 100 | parallel, not additive; heard cue by about 200 ms |
-| Phone uplink of text to CoS | 80 | 250 | cellular, kept-alive connection |
-| CoS: first spoken clause (fast model, no tool) | 450 | 900 | the plan's own target class |
-| Downlink of chunk to phone | 60 | 150 | Realtime push |
-| TTS first audio (turbo/flash) | 100 | 250 | vendor "about 100 ms" figure |
-| Phone to glasses + jitter buffer + playout | 120 | 220 | 20 ms frame, 80 ms buffer, 20 ms driver |
-| **Total** | **about 985** | **about 2,000** | |
+| Glasses capture frame + Wi-Fi to phone | 25 | 60 | 20 ms frame |
+| Phone relay (no decode) | 5 | 20 | forward only |
+| Last chunk, phone to ingress (cellular, mode B) | 50 | 150 | earlier chunks overlap speech; mode A adds the whole utterance |
+| Ingress to the STT step | 20 | 80 | **[U]** depends on the ingress choice |
+| End-of-speech commit (STT turn prediction) | 150 | 300 | vendor figure from the plan |
+| Cue tone from the glasses (parallel, not additive) | 40 | 100 | triggered by the glasses' own gate close; heard by about 200 ms |
+| CoS first spoken clause (fast model, no tool) | 450 | 900 | plan's target class |
+| TTS first audio (turbo/flash) | 100 | 250 | vendor "about 100 ms" |
+| Workflow step boundaries on the hot path | 100 | 400 | **[U]** queue dispatch time unverified; target 0 with a single streaming step |
+| First reply chunk, ingress to phone (cellular) | 60 | 160 | |
+| Phone relay + Wi-Fi to glasses | 25 | 60 | |
+| Jitter buffer + driver + playout | 100 | 160 | on the glasses |
+| **Total** | **about 1,085** | **about 2,520** | mode B, hot path in many steps |
+| Total with a single streaming step | about 985 | about 2,120 | the design target |
 
-That is roughly 0.1 s worse than the browser node at p50 and exceeds the plan's p90 by 0.5 s; the levers are a shorter jitter buffer once the link is measured, a speculative first chunk, and the cue tone masking the wait. The P0 spike measures every row; the table is a target, not a result. With a tool turn, the plan's targets apply (cue tone 0.15 s, first chunk after a tool 1.8 s / 3 s, barge-in silence 120 / 250 ms).
+That is about 0.1 to 0.2 s worse than the browser node at p50. Mode A (utterance upload) adds the utterance length (typically 1 to 5 s) and is a spike-only budget. The P0 spike measures every row; the table is a target, not a result. With a tool turn, the plan's targets apply (cue tone 0.15 s, first chunk after a tool 1.8 s / 3 s, barge-in silence 120 / 250 ms).
 
 ---
 
@@ -219,7 +251,7 @@ That is roughly 0.1 s worse than the browser node at p50 and exceeds the plan's 
 
 ### 6.1 What the workload actually needs
 
-A long-lived background service; a local TCP listener and client; BLE central (and maybe peripheral); low-latency audio I/O only on the glasses side (the phone itself mostly moves bytes); Noise, Ed25519, CBOR and certificate logic; a WebSocket to ElevenLabs; HTTPS and SSE to the cloud; a small UI (pair, status, switches, settings), with rich screens already existing as the web dashboard. The hard, OS-specific parts are the background execution model, BLE and permissions. No cross-platform UI toolkit removes those.
+A long-lived background service; a local TCP listener and client; BLE central (and maybe peripheral); audio I/O only on the glasses side (the phone moves Opus bytes and does no speech work); Noise, Ed25519, CBOR and certificate logic; a persistent chunked stream and HTTPS/SSE to the mesh gateway; a small UI (pair, status, switches, settings), with rich screens already existing as the web dashboard. The hard, OS-specific parts are the background execution model, BLE and permissions. No cross-platform UI toolkit removes those.
 
 ### 6.2 Options
 
@@ -239,7 +271,32 @@ Do not reuse the browser node inside a WebView as the phone node: a WebView's Ja
 
 ### 6.3 Core layout (indicative)
 
-`weftos-node-core` (identity, enrollment, token exchange, `cos.v2` client state machine, command routing), `weftos-leaf-parent` (certificate chain, replay floor, framing, ACK), `weftos-glasses-proto` (`glasses.v1` frames), `weftos-speech-glue` (STT/TTS traits, gate, AEC hookup, cache), `weftos-mobile-ffi` (the UniFFI surface). Targets: `aarch64-linux-android`, `aarch64-apple-ios`, `aarch64-apple-ios-sim`, host. The glasses agent reuses the same crates (arm64 Android) for its leaf end. All builds through `scripts/build.sh` lanes; the script gains an Android lane and an iOS lane when the work starts [D]. Binary size and the avoidance of the full kernel are [U] until the extraction is attempted.
+`weftos-node-core` (identity, enrollment, token exchange, mesh/`cos.v2` client state machine, command routing), `weftos-leaf-parent` (certificate chain, replay floor, framing, ACK), `weftos-glasses-proto` (`glasses.v1` frames and Opus relay), `weftos-relay` (chunking, resume, bounded buffers, bandwidth policy), `weftos-mobile-ffi` (the UniFFI surface). There is no speech crate on the phone. Targets: `aarch64-linux-android`, `aarch64-apple-ios`, `aarch64-apple-ios-sim`, host. The glasses agent reuses the same crates (arm64 Android) for its leaf end, plus Opus and the AEC. All builds through `scripts/build.sh` lanes; the script has no Android lane today (a search found none), so P0 adds one [D]. Binary size and avoiding the full kernel are [U] until the extraction is attempted.
+
+### 6.4 The existing `clawft-android-edge` crate: is it the seed?
+
+I read the crate, its guide (`docs/guides/android-splat-capture-edge.md`), ADR-077 and the companion app `apps/android-splat-capture` **[R]**.
+
+**What it provides** (967 lines, six modules, `lib` + `cdylib` + `staticlib`, UniFFI 0.29 proc-macro surface behind a default `uniffi` feature, no dependency on the kernel):
+
+- `identity`: a persisted Ed25519 node identity (`node_identity.json`, seed and public key as hex, mode 0600), `node_id = hex(SHA-256(pubkey)[..16])`, kept equal to the kernel's `node_id_from_pubkey` (ADR-103 D11), and `edge_sign` for signing with the node key. Seed handling uses `zeroize`.
+- `pair_store`: a host URL plus a capability token, parsed from a QR or URL, saved to `host_pair.json`.
+- `upload`: a blocking `reqwest` multipart upload of a capture ZIP to `splatd`, job status polling, and a health check.
+- A UniFFI free-function facade (`edge_*`) for Kotlin.
+
+**What the app side has**: a Gradle/Kotlin Compose project (compile SDK 35, min SDK 29, JDK 17) with a pairing screen, navigation, a `network_security_config`, session storage and a WebView screen. The Rust crate is **not yet packaged in it**: there is no NDK or `cargo-ndk` step in the Gradle file, the bindgen steps in the guide are commented examples, and the app falls back to a Kotlin `EdgeCore` whose node id is derived differently (an HMAC key handle) from the Rust one. `scripts/build.sh` has no Android lane. ADR-077's A4 step (QUIC/Noise session to the host) is marked later. I did not build it for Android this session [U: it may need target and linker setup].
+
+**Assessment**
+
+| Question | Answer |
+|---|---|
+| Right seed for the **Rust core**? | **Yes, as a seed, not as it stands.** It already settles the hard-to-reverse choices: Ed25519, the node-id derivation shared with the kernel, UniFFI 0.29 over a crate that builds as `cdylib` and `staticlib` (iOS-usable), no kernel dependency. It lacks everything that makes a node: Noise sessions, certificates, a persistent connection, async and streaming I/O, a mesh or cloud client, BLE, chunked relay. |
+| Right seed for the **Android shell**? | **Partly.** The Gradle project, Compose navigation, pairing flow and WebView pattern are reusable as templates, but it is a camera and IMU capture app. Make a sibling app (`apps/android-phone-node`) for the phone node; do not grow the splat app into it. Keep the splat app as a second consumer of the same crate. |
+| What to change in the crate | (1) Move `identity` and `pair_store` into `weftos-node-core` and have `clawft-android-edge` depend on it, so the splat app and the phone node share one identity and the Kotlin fallback can be deleted; (2) replace the blocking client with async, streaming and WebSocket/SSE; (3) swap the plain JSON seed for a Keystore-wrapped seed in P1 (the 0600 file is fine for the spike); (4) rename the UniFFI surface (it is not Android specific, and iOS will use it) or leave `clawft-android-edge` as the splat-specific facade; (5) keep the capability-token pair store for `splatd`, but do **not** reuse it for the cloud or glasses paths, which use signed challenges and short-lived tokens (no standing bearer, section 4.3). |
+| Build targets and NDK setup it gives us | Only the crate types and the written (unexecuted) `cargo ndk -t arm64-v8a ... jniLibs` recipe. P0 must add the Rust Android targets, an NDK path, a `scripts/build.sh android` lane, and the Gradle step that copies the `.so` and generated bindings. |
+| Does it carry node pieces? | Identity and signing only. Mesh membership, leaf-parent, relay and the glasses protocol are all new. |
+
+Net: adopt it as the starting commit of `weftos-node-core`, not as the app.
 
 ---
 
@@ -249,22 +306,22 @@ Do not reuse the browser node inside a WebView as the phone node: a WebView's Ja
 
 Verified against the current Android documentation:
 
-- **Foreground service types** [V]: since Android 14 every foreground service declares a type in the manifest and in `startForeground()`. `microphone` needs `FOREGROUND_SERVICE_MICROPHONE` and `RECORD_AUDIO`, is subject to while-in-use rules, and cannot start from `BOOT_COMPLETED`. `connectedDevice` needs `FOREGROUND_SERVICE_CONNECTED_DEVICE` plus at least one of the Bluetooth, Wi-Fi-state, NFC, IR or UWB permissions (or a USB permission callback); the documentation names "Bluetooth, NFC, IR, USB, or network connections to external devices" as its use. `dataSync` is for uploads and downloads; on Android 15 it has a roughly six-hour timeout (with `Service.onTimeout`) and cannot start from boot **[V]** (Android 15 beta blog), so **do not use `dataSync` for the link**. Foreground service types must also be declared in the Play Console for apps targeting Android 14+ **[V]**.
-- **Plan** [D]: the link service is `connectedDevice` (it holds the Wi-Fi listener and the BLE link); the phone's own microphone for push-to-talk is a separate short `microphone` service started from a visible activity or notification action; `mediaPlayback` is needed only if the phone plays audio itself. The service posts an honest persistent notification ("Glasses connected, listening").
-- **Background starts** [V]: apps targeting Android 12+ cannot start foreground services from the background except under listed exemptions; on Android 14+ services needing a while-in-use permission cannot be created from the background at all. A **Companion Device Manager** association is a listed exemption, and `CompanionDeviceService` with `REQUEST_COMPANION_START_FOREGROUND_SERVICES_FROM_BACKGROUND` is the documented way to wake an app when an associated device appears **[V]**. We therefore associate the glasses through CDM at pairing, so a glasses reboot or return into range can restart the link service without the user opening the app. Disabling battery optimization is also an exemption **[V]** and is requested at onboarding with an explanation.
-- **Doze and battery optimization** [I]: a running foreground service keeps network and CPU for its app; keep a partial wake lock only while a turn is active, and a Wi-Fi lock while the link is up. OEM task killers are the real enemy (aggressive vendors kill foreground services); the onboarding screen links to per-OEM instructions and the app detects an unexpected service restart and records it in the diagnostics.
-- **Hotspot** [I]: the user starts the hotspot in system settings; apps cannot configure the main hotspot, only a local-only hotspot with a random SSID. Our app listens on all interfaces and reports which one the glasses came in on. Whether Doze or the vendor's hotspot manager drops the hotspot with the screen off differs by device and is a P0 test.
-- **Permissions UX and Play policy**: microphone and nearby-devices permissions with prominent disclosure; Play's user-data and sensitive-permission declarations for an "always listening" feature [I]. The glasses record bystanders; the privacy section (11) covers the indicator and consent stance.
+- **Foreground service types** [V]: since Android 14 every foreground service declares a type in the manifest and in `startForeground()`. `microphone` needs `FOREGROUND_SERVICE_MICROPHONE` and `RECORD_AUDIO`, is subject to while-in-use rules, and cannot start from `BOOT_COMPLETED`. `connectedDevice` needs `FOREGROUND_SERVICE_CONNECTED_DEVICE` plus at least one of the Bluetooth, Wi-Fi-state, NFC, IR or UWB permissions (or a USB permission callback); its documented use is "Bluetooth, NFC, IR, USB, or network connections to external devices". `dataSync` is for uploads and downloads; on Android 15 it has a roughly six-hour timeout (with `Service.onTimeout`) and cannot start from boot **[V]** (Android 15 beta blog). Audio relay to the cloud looks like a data sync, but a six-hour cap and a boot restriction make it the wrong type for an always-on link: **do not use `dataSync` for the link**. Foreground service types must also be declared in the Play Console for apps targeting Android 14+ **[V]**.
+- **Plan** [D]: the link-and-relay service is `connectedDevice` (it holds the Wi-Fi listener, the BLE link and the upstream stream). Because the phone does no speech, it never needs the `microphone` type except for an optional push-to-talk on the phone's own mic, a short service started from a visible activity or notification action. The persistent notification is honest ("Glasses connected, listening").
+- **Background starts** [V]: apps targeting Android 12+ cannot start foreground services from the background except under listed exemptions; on Android 14+ services needing a while-in-use permission cannot be created from the background at all. A **Companion Device Manager** association is a listed exemption, and `CompanionDeviceService` with `REQUEST_COMPANION_START_FOREGROUND_SERVICES_FROM_BACKGROUND` is the documented way to wake an app when an associated device appears **[V]**. We associate the glasses through CDM at pairing, so a glasses reboot or return into range restarts the link service without opening the app. Disabling battery optimization is also an exemption **[V]**, requested at onboarding with an explanation.
+- **Doze and battery** [I]: a running foreground service keeps network and CPU for its app; hold a partial wake lock only while a turn is active and a Wi-Fi lock while the link is up. Because the phone only relays Opus, CPU and thermals are light; the radio is the cost. OEM task killers are the real enemy; onboarding links to per-OEM instructions, and the app records unexpected restarts in diagnostics.
+- **Hotspot** [I]: the user starts the hotspot in system settings; apps cannot configure the main hotspot, only a local-only hotspot with a random SSID. The app listens on all interfaces and reports which one the glasses came in on. Whether Doze or a vendor hotspot manager drops the hotspot with the screen off differs by device and is a P0 test. The glasses' audio uses the phone's data plan.
+- **Permissions UX and Play policy**: nearby-devices and notification permissions, prominent disclosure, and Play's sensitive-permission declarations [I]. The glasses record bystanders; section 11 covers the indicator and consent stance.
 
 ### 7.2 iOS (phone)
 
 Verified where marked:
 
-- **Local Network privacy** [V] (TN3179): iOS 14+; the first local-network operation prompts; user control in Settings; no MDM override; no API to query the state (use `NWConnection`'s `waiting` state with unsatisfied reason `localNetworkDenied`, or Bonjour policy-denied errors). **Listening for and accepting incoming TCP and receiving UDP unicast do not require the permission; outgoing TCP, UDP unicast send, multicast, broadcast and all Bonjour operations do.** Multicast and broadcast also need the multicast entitlement, and Bonjour browsing needs `NSBonjourServices` entries. If the app is in the background with the state undetermined, the system denies the operation silently and does not record the denial; the prompt then appears at the next foreground operation. So the design [D]: the glasses dial in (no prompt on the main path), the pairing screen deliberately performs one local-network operation in the foreground to prompt at a good moment, and the app handles `waiting` states.
-- **Personal Hotspot** [V]: it must be enabled manually in Settings; an app cannot start or configure it (Apple DTS, "No"). STA-to-STA forwarding currently works but Apple describes it as behavior, not an API contract that they might change **[V]**. A forum answer I could not verify this session says IPv4 client-to-client traffic changed in iOS 18 and IPv6 link-local is the dependable path **[U]**; the P2 spike must test an iPhone hotspot with a real glasses unit and keep an IPv6 link-local option. Hotspot idle shutdown and the "maximize compatibility" (2.4 GHz) toggle are known behaviors I have not verified **[I]** and affect the glasses' 5 GHz link.
-- **Background execution** [V for the mechanism, I for the strategy]: `UIBackgroundModes` with `audio` keeps an app running only while it is actually playing or recording audio; when that stops the system suspends the app. `bluetooth-central` allows discovery, connection and delegate callbacks in the background, with limited scanning (service UUIDs required, duplicates coalesced, slower intervals) and about ten seconds of processing per event, plus state preservation and restoration after termination. A held TCP socket does not keep an app alive, and App Review limits background services to their intended purposes (guideline 2.5.4) and requires explicit consent and a clear visible or audible indication when recording (2.5.14) **[V]**.
-- **Consequence for this app** [D, I]: the iPhone does not record or play audio itself in the normal flow; it moves bytes between glasses, ElevenLabs and the CoS. Nothing in that flow is a legitimate reason for a long-lived background process other than the BLE link. So on iOS the **BLE connection is the keep-alive and the doorbell**: the glasses write a characteristic ("wake, utterance starting"), iOS wakes the app via `bluetooth-central`, the app starts a background task for the duration of the turn, tells the glasses over BLE that it is ready, and the glasses dial the TCP/Wi-Fi session. Whether the wake-to-ready time fits the latency budget (add 200 to 600 ms) and whether iOS honors the pattern after hours of suspension are P2's central questions. Do **not** use a silent audio loop, a fake VoIP or a location mode to stay awake: those are the standard reasons an app is rejected under 2.5.4 [I] and break when Apple tightens enforcement.
-- **App Store risk, honestly** [I]: an always-listening wearable companion that streams a microphone raises privacy review (2.5.14, data collection disclosures); BLE and Wi-Fi accessories are common and acceptable; the background strategy above is legitimate (Bluetooth accessory communication) but must be explained in review notes. TestFlight and the enterprise or ad-hoc route remain available while the owner decides on public release (Q9).
+- **Local Network privacy** [V] (TN3179): iOS 14+; the first local-network operation prompts; user control in Settings; no MDM override; no API to query the state (use `NWConnection`'s `waiting` state with unsatisfied reason `localNetworkDenied`, or Bonjour policy-denied errors). **Listening for and accepting incoming TCP and receiving UDP unicast do not require the permission; outgoing TCP, UDP unicast send, multicast, broadcast and all Bonjour operations do.** Multicast and broadcast also need the multicast entitlement; Bonjour browsing needs `NSBonjourServices`. A background app with an undetermined state is denied silently and the denial is not recorded; the prompt appears at the next foreground operation. So the glasses dial in (no prompt on the main path), the pairing screen performs one local-network operation in the foreground to prompt at a good moment, and the app handles `waiting` states.
+- **Personal Hotspot** [V]: it must be enabled manually in Settings; an app cannot start or configure it (Apple DTS, "No"). Station-to-station forwarding works today but Apple describes it as behavior, not a contract **[V]**. A forum answer I could not verify says IPv4 client-to-client traffic changed in iOS 18 and IPv6 link-local is the dependable path **[U]**; the P2 spike tests a real iPhone hotspot with a real glasses unit and keeps an IPv6 link-local option.
+- **Background execution** [V for the mechanism, I for the strategy]: `UIBackgroundModes` `audio` keeps an app running only while it is playing or recording audio; the iPhone in this design does neither (the audio is bytes, not sound), so `audio` mode does not legitimately apply. `bluetooth-central` allows discovery, connection and delegate callbacks in the background, with limited scanning and about ten seconds of processing per event, and state preservation and restoration after termination. A held TCP socket does not keep an app alive; App Review limits background services to their intended purposes (2.5.4) and requires consent and an indication when recording (2.5.14) **[V]**.
+- **What the thin design changes**: the earlier plan needed the iPhone to hold an ElevenLabs socket for the whole turn. Now the iPhone holds only the upstream and downstream byte streams to the mesh gateway and the local glasses link, a smaller and more defensible workload. But the keep-alive problem is the same and sharper: the relay must run for the whole turn (seconds to tens of seconds), upstream and downstream, with the app otherwise suspended. The only legitimate wake path is the **BLE doorbell**: the glasses write a characteristic ("utterance starting"), iOS wakes the app via `bluetooth-central`, the app opens a background task for the turn, tells the glasses over BLE that it is ready, and the glasses dial the TCP session. Whether wake-to-ready fits the budget (add 200 to 600 ms) and whether iOS honors the pattern after hours of suspension are P2's central questions. `URLSession` background transfers are discretionary and unsuitable for live turns [I]. Do **not** use a silent audio loop, a fake VoIP registration or a location mode to stay awake; these are the standard reasons for rejection under 2.5.4 [I].
+- **App Store risk, honestly** [I]: an always-listening wearable companion raises privacy review (2.5.14, data collection disclosures); BLE and Wi-Fi accessories are common; the background strategy is legitimate (Bluetooth accessory communication) but must be explained in review notes. TestFlight and ad-hoc remain available while the owner decides on public release (Q9).
 
 ### 7.3 What goes wrong in each case
 
@@ -282,11 +339,12 @@ Verified where marked:
 
 ### 8.1 Cloud CoS and `weftos-weaver`
 
-- The phone node enrolls as a surface (plan 4.3): keypair, dashboard approval, short-lived node tokens. Commands from the cloud arrive over the plan's transports and are translated: `speak{utt_id,...}` to `audio.down` frames; `show{scene|glance}` to a notification or screen on the phone (the glasses have no display); `capture{mode,max_s}` to `capture.start`; `stop` to `play.flush` and `capture.stop`; `probe{kind}` to a bounded `probe` on the glasses; `status{}` returns the merged phone plus glasses status. The glasses are addressable as their own node so `devices.status{node}` can answer "is the glasses mic working?" from the agent's real mic state and last-gate time, which is what the owner asked for in the capability notes [R].
-- **Which transport carries what**: control and text by Realtime/SSE/long-poll; ElevenLabs audio by direct WebSocket; glasses audio by the local link. Nothing audio-sized passes the Vercel limit (plan 5.3). The legacy bridge (`/api/nodes/cos/sync`, `pending?wait=25`) stays valid during the transition: in P0 the phone can speak the long-poll floor so the spike does not wait for the new command channel.
-- **Relay versus direct**: the phone node always talks to the cloud (relay model) and to the glasses directly. The cloud never reaches the glasses by itself, and the glasses never open an internet connection of their own [D].
+- The phone node enrolls as a surface (plan 4.3): keypair, dashboard approval, short-lived node tokens. Commands from the cloud arrive over the plan's transports and are translated: `speak{utt_id,...}` is no longer a text-to-speech request to the phone but a **workflow-rendered audio stream** the phone relays as `audio.down` and `play.*`; `show{scene|glance}` becomes a notification or phone screen (the glasses have no display); `capture{mode,max_s}` becomes `capture.start`; `stop` becomes `play.flush` and `capture.stop`; `probe{kind}` becomes a bounded `probe` on the glasses; `status{}` returns merged phone plus glasses status. The glasses are addressable as their own node so `devices.status{node}` can answer "is the glasses mic working?" from the agent's real mic state and last-gate time **[R]**.
+- **Speech is a workflow, not a surface feature**: a captured utterance starts or feeds a per-user speech workflow run (section 5), and the CoS turn runs inside it. The plan's separate steps (`cos_turn_state`, ledger, lease) apply; the lease already serializes two surfaces speaking at once.
+- **Transport split**: control and text by Realtime/SSE/long-poll; audio by the dedicated streaming leg (section 5.2); glasses audio on the local link. The legacy bridge (`/api/nodes/cos/sync`, `pending?wait=25`) stays valid during the transition so P0 does not wait for the new command channel.
+- **Relay versus direct**: the phone always talks to the mesh/cloud gateway (relay model) and to the glasses directly. The cloud never reaches the glasses by itself, and the glasses never open an internet connection of their own [D].
 - **Mesh**: the phone node announces itself on the mesh when a path exists and receives mesh traffic addressed to `weftos://<mesh>/nodes/<phone>`. Phone-only users get the dashboard-minted workspace mesh authority (plan Q3) until a real mesh pairs.
-- **Parent relation in names**: the glasses node record carries `parent=<phone node id>` in its facts. Whether ADR-114 needs a nested form for a node whose parent is a node (it so far names meshes, nodes, projects and exposures) is [U] and goes to the ADR owner.
+- **Parent relation in names**: the glasses node record carries `parent=<phone node id>` in its facts. Whether ADR-114 needs a nested form is [U] and goes to the ADR owner.
 
 ### 8.2 The `/phone` dashboard page
 
@@ -306,33 +364,42 @@ Offer, each as an ADR-120 exposure, default off, user switch on the phone, batte
 
 ### P0: spike (Android, 2 to 3 weeks)
 
-**Goal**: with the Mac off and the lab network absent, say a sentence to the glasses and hear the CoS answer in them, using only the phone.
+**Goal**: with the Mac off and the lab network absent, say a sentence to the glasses and hear the CoS answer in them, using only the phone as a relay.
 
-Scope: (a) glasses agent APK v0 (capture to socket; socket to `AudioTrack`; PCM16; no Opus; no camera; no LED); provisioned over USB. (b) Phone app v0 (Kotlin; the Rust core only where it already exists: Noise and framing from `mentra-leaf`); one foreground service; a TCP listener; ElevenLabs STT via a single-use token, with a dev-only stored key allowed if the token route is not ready, labeled spike-only; text to the CoS by the existing long-poll relay; ElevenLabs TTS (fixed voice) streamed to the glasses; cue tones cached on the glasses. (c) Pairing by the speak-the-code flow over BLE if BLE coexistence (G2) holds, else by USB-provisioned key exchange. (d) Measurement harness: timestamps at every stage of the section 5.4 table, logged on the phone.
+Scope:
+
+- (a) **Glasses agent APK v0**: `AudioRecord`, energy gate with pre-roll, Opus encode (`MediaCodec`), socket to the phone; socket to Opus decode to `AudioTrack`; provisioned over USB.
+- (b) **Phone app v0** (Kotlin Compose shell in a new `apps/android-phone-node`, Rust core seeded from `clawft-android-edge`, section 6.4): one `connectedDevice` foreground service, a TCP listener, a chunked upload client and a reply stream client. **No STT, TTS, VAD, AEC or ElevenLabs code or key on the phone.**
+- (c) **Speech workflow stub** (server side, a dependency owned by the cloud-plan lane unless the owner assigns it here): accepts the chunked Opus utterance (mode A), runs ElevenLabs STT, posts the text through the existing CoS relay path (`cos_requests` and the sync route), waits for the reply text, runs ElevenLabs TTS to Opus, and returns it as ordered chunks (mode C). It runs as a durable workflow run if Vercel Workflow is ready, otherwise as a function pair; either way the phone's contract is the same mesh messages.
+- (d) **Pairing** by the speak-the-code flow over BLE if G2 holds, else a USB-provisioned key exchange.
+- (e) **Measurement harness**: timestamps at every row of the section 5.4 table, logged on the phone and the workflow.
 
 Gates and acceptance tests:
 
 | # | Test | Pass |
 |---|---|---|
-| G0 | Mic after foreground launch, glasses idle | Non-silent audio 30 min after last foreground launch, process never visible; record the result after a Wi-Fi change and after a glasses reboot (even a fail is a result) |
-| G1 | Speaker streaming without adb | 10 s PCM stream plays; first frame to sound under 150 ms; `flush` stops within 100 ms |
+| G0 | Mic after foreground launch, glasses idle | Non-silent audio 30 min after last foreground launch, process never visible; also record the result after a Wi-Fi change and a glasses reboot (a fail is a result) |
+| G1 | Speaker streaming without adb | A 10 s Opus stream decodes and plays; first frame to sound under 150 ms; `flush` stops within 100 ms |
 | G2 | Coexistence | Our BLE advertise/connect works while the stock client is present; concurrent mic does not silence either; camera question answered |
-| A1 | End-to-end loop | Glasses on the phone hotspot, Mac powered down, say "what is on my board" and hear the answer; p50 end-of-speech to first sound at most 2.5 s over 20 trials (the 1.0 s target is P1) |
-| A2 | Soak | 30 min of intermittent speech, no drop, no crash, no growth in memory |
-| A3 | Screen-off | Phone locked for 10 min, then a turn works, with battery optimization allow-listed |
-| A4 | Reconnect | Toggle hotspot off for 30 s and on; link re-forms in under 15 s without touching the app |
-| A5 | Wrong peer | A second device attempting to connect, or the wrong key, is refused and logged |
-| A6 | No Mentra | Block Mentra domains at the router or by inspecting traffic; the loop still works and the phone/glasses emit no traffic to them from our app |
+| G3 | AEC feasibility (measured, may fail) | Reply played at normal volume leaves under a set residual in the mic path with the platform echo canceller or the agent's AEC |
+| A1 | End-to-end loop | Glasses on the phone hotspot, Mac powered down, say "what is on my board" and hear the answer; p50 end-of-speech to first sound at most 4 s over 20 trials (spike budget for mode A; the 1.0 s target is P1) |
+| A2 | Soak | 30 min of intermittent speech, no drop, no crash, no memory growth |
+| A3 | Screen-off | Phone locked 10 min, then a turn works, with battery optimization allow-listed |
+| A4 | Reconnect | Toggle the hotspot off for 30 s; the link re-forms in under 15 s without touching the app |
+| A5 | Wrong peer | A second device or wrong key is refused and logged |
+| A6 | No Mentra, no speech vendor on the phone | Traffic inspection shows the phone and glasses talk only to each other and to the mesh gateway; none to Mentra, none to ElevenLabs |
+| B1 | Bandwidth | A 5 s utterance and a 10 s reply each cost at most 25 kB over the cellular leg including headers; a day's budget extrapolated |
+| B2 | Uplink loss | Drop the phone's uplink for 5 s mid-utterance: the stream resumes by sequence or the workflow receives an `audio.gap` and answers sensibly; no crash, no duplicate speech |
 
-Risks: G0/G1/G2 failing (the plan changes: ask asg_client for help, or an owner decision on privileges). Hotspot vendor quirks. Token minting not ready (use the dev key). **Owner decisions**: Q1 (spike-only key), Q2 (which Android phone), Q7 (updates).
+Risks: G0/G1/G2 failing (ask asg_client for help, or an owner decision on privileges); hotspot vendor quirks; the ingress choice (section 5.2) missing the budget; workflow dispatch latency higher than assumed. **Owner decisions**: Q2 (reference phone), Q7 (updates), Q16 (mesh gateway shape), Q17 (who builds the workflow stub).
 
 ### P1: production Android (6 to 10 weeks after P0 passes)
 
-Scope: Rust core extracted (`weftos-leaf-parent`, `weftos-glasses-proto`, `weftos-node-core`) with UniFFI; glasses agent as a signed release APK and a recovery path; WLF1 certificate flow, enrollment in the dashboard, revocation; command channel (`cos_node_commands` with Realtime/SSE/long-poll); `speech.v1` including offers, cancel and barge-in with AEC; Opus; STT fallback chain; TTS cache; BLE fallback mode; CDM presence; honest notifications; diagnostics screen; the dashboard WebView with the JS bridge; camera stills and `probe`; `cos_ledger` accounting for speech; Play internal then closed testing.
+Scope: the Rust core extracted (`weftos-node-core`, `weftos-leaf-parent`, `weftos-glasses-proto`, `weftos-relay`) with UniFFI, built from the `clawft-android-edge` seed; an Android build lane in `scripts/build.sh`; glasses agent as a signed release APK with a recovery path; the WLF1 certificate flow, enrollment in the dashboard, revocation; mode B live chunk upload with `utterance.open` pre-arming and the chosen streaming ingress; streamed reply (mode C) with `speech.v1` including offers, cancel and barge-in; the glasses' AEC; BLE fallback; CDM presence; bandwidth policy and bounded buffers; mesh placement so a LAN `speech.v1` service can answer when reachable; honest notifications; diagnostics; the dashboard WebView with the JS bridge; camera stills and `probe`; Play internal then closed testing.
 
-Acceptance: the plan's M3/M4 criteria for a phone and a glasses surface; first-sound p50 at most 1.2 s and p90 at most 2.2 s without a tool, on the hotspot; ten-hour overnight soak with no manual restart (the link service survives at least one forced kill via CDM relaunch); revocation takes effect on the next connection and the glasses cannot rejoin; switching the glasses mic exposure off locally refuses the next `capture`; a log of every use without bodies; two users on two phones see only their own devices; no audio stored by default.
+Acceptance: the plan's M3/M4 criteria for a phone and a glasses surface; first-sound p50 at most 1.2 s and p90 at most 2.5 s without a tool, on the hotspot, over cellular uplink; a ten-hour overnight soak with no manual restart (the link service survives at least one forced kill via CDM relaunch); revocation takes effect on the next connection and the glasses cannot rejoin; switching the glasses mic exposure off locally refuses the next `capture`; a log of every use without bodies; two users on two phones see only their own devices and workflows; no audio stored by default; the phone APK still contains no STT/TTS code.
 
-Risks: glasses OTA changes the environment; Play review of a foreground microphone listener; the `weftos-leaf-parent` extraction is larger than expected; battery on the glasses. **Owner decisions**: Q3 (Play listing vs sideload), Q4 (camera in scope), Q5 (cache policy), Q8 (iOS timing).
+Risks: glasses OTA changes the environment; Play review of a foreground listener; the `weftos-leaf-parent` extraction is larger than expected; glasses battery; the workflow's concurrency and ElevenLabs limits at scale. **Owner decisions**: Q3 (Play vs sideload), Q4 (camera), Q8 (iOS timing), Q16, Q18 (cost caps).
 
 ### P2: iOS (4 to 8 weeks, after P1 stabilizes)
 
@@ -344,49 +411,68 @@ Risks: iOS may not allow the always-available behavior at all (decision: foregro
 
 ### P3: CSI research (parallel, research only)
 
-See section 10. Acceptance: a written feasibility memo with a go/no-go per tier, the chip identified, the driver and firmware sources located or declared unavailable, and a bench capture on a sacrificial unit if the owner agrees. Owner decisions: Q11 (a second glasses unit to risk), Q12 (RuView priority).
+See section 10. Acceptance: the read-only module and firmware inspection done and written up (CSI symbols and commands present or absent); vendor kernel source requested or declared unavailable; a T0 capture; a T4 bench capture with one ESP32-C5 receiver; a feasibility memo with go or no-go on T1 and T2. Any device modification only on a sacrificial unit. Owner decisions: Q11 (a second glasses unit to risk), Q12 (RuView priority), Q19 (T4 receiver placement).
 
 ---
 
 ## 10. CSI from the glasses' Wi-Fi: feasibility research
 
-### 10.1 What we know and what we do not
+### 10.1 What the probe established (Grok, read-only)
 
-- Wi-Fi 5 (802.11ac) at 5 GHz, 390 Mbps link rate, driver named `wmtWifi`, Bluetooth on a MediaTek combo radio called "Cervino" in the profile, SoC MT6761 **[R]**. 390 Mbps at 80 MHz is the single-stream rate, so one receive chain [I]. One chain means no angle of arrival; CSI is still a per-subcarrier amplitude and phase stream usable for presence, motion and breathing.
-- **Chip ID: [CHIP-ID: pending, being gathered separately by Grok].** Method to confirm it [D]: `adb shell` reads of the kernel log lines from the WMT/combo driver (chip ID and firmware load lines), the module and firmware file names under the vendor partition (the Wi-Fi RAM-code file names normally embed the chip number), `lsmod`/module paths for the Wi-Fi driver, `getprop` for `ro.vendor.connsys.*`, `cat /sys/class/net/wlan0/...`, and a read of the `connsys`-related kernel config from `/proc/config.gz` if present. A candidate by pairing (not verified here) is the MT6631 combo (Wi-Fi 5 1x1, Bluetooth, FM, GPS) that commonly sits next to an MT6761-class SoC **[I]**; the public sources I searched confirmed that MT6631 exists as a Wi-Fi, Bluetooth, GPS and FM part but did not confirm the pairing **[V partial]**. Do not act on the candidate until the ID is read from the device.
+**[R]** unless noted:
 
-### 10.2 CSI tooling by chip family
+- **Not a discrete radio.** The Wi-Fi is the MT6761 SoC's own CONNSYS (connectivity subsystem) on the `k61v1_64_bsp` board. Driver `wlan_drv_gen4m` (`ro.vendor.wlan.gen=gen4m`) with `wmt_drv` and `wmt_chrdev_wifi`; platform node `mediatek,wifi`; host path HIF-SDIO.
+- **Firmware** `/vendor/firmware/WIFI_RAM_CODE_soc1_0_1_1.bin`, version string `t-neptune-mp-soc1_0e1-2015-CERVINO_SOC1_0_E1_ASIC-20210616102108` (SOC1_0, built 2021-06-16), with `soc1_0_ram_wifi/bt/mcu` header images, `WMT_SOC.cfg` and `BT_FW.cfg`.
+- **Link configuration**: VHT on, Nss 1, DBDC off, associated on 2.4 GHz at probe time; interfaces `wlan0`, `p2p0`, `ap0`.
+- **Bluetooth**: Android's Bluetooth is the same CONNSYS. A **separate BES2700** handles the phone link (to Mentra's own app); the serial path that AudioBridge writes I2S start/stop JSON to is probably the link to that MCU **[I]**.
+- **No numeric chip id was readable.** The earlier candidate in revision 1 (an external MT6631) is **withdrawn**: the firmware naming and the SoC-integrated CONNSYS contradict it, and the SDIO host path alone does not distinguish an on-die from an external connectivity block.
+
+### 10.2 Known CSI tooling, and where this chip sits
 
 | Family | Public tooling | State |
 |---|---|---|
 | Intel 5300 / AX200 / AX210 | Linux 802.11n CSI Tool; PicoScenes | Mature on PCIe cards [I] |
-| Atheros / Qualcomm (AR9xxx, some QCA9xxx/ath10k) | Atheros CSI Tool; PicoScenes | Mature on cards and some routers [I] |
-| Broadcom/Cypress (BCM43455c0, BCM4339 and relatives) | Nexmon CSI (firmware patching) | Works on specific chips and specific firmware builds, including some phones [I] |
-| Espressif ESP32 family | `esp-csi` in ESP-IDF | Official, in this project's hands (the C5 port in `RuView`) [R/I] |
-| MediaTek mt76 (Filogic, MT7915 and similar router/PCIe chips) | A reverse-engineered netlink vendor interface and patches for mt76 on OpenWrt, exposing I/Q plus metadata (source MAC, RSSI, SNR, sequence) | Real, community-maintained; tested on a Filogic router; not a mobile combo chip **[V]** |
-| MediaTek mobile combo (MT663x with `wmtWifi`/gen4m driver) | None found | **[U]** This is our case. The out-of-tree Android Wi-Fi driver for Connac-generation parts has a CSI-related build option on some generations **[I, from memory]**; whether this chip generation and this device's driver have it, and whether the firmware supports it, is the first thing to read in the vendor kernel source drop |
+| Atheros / Qualcomm (AR9xxx, some QCA9xxx) | Atheros CSI Tool; PicoScenes | Mature on cards and some routers [I] |
+| Broadcom/Cypress (BCM43455c0 and relatives) | Nexmon CSI (firmware patching), including some phones | Works on specific chips and firmware builds **[V]** (project page surfaced by search) |
+| Espressif ESP32 family | `esp-csi` in ESP-IDF | Official; this project's ESP32-C5 RuView port is the in-house path [R/I] |
+| MediaTek mt76 (Filogic routers, MT7915 and similar) | MtkCSIdump and a mt76 vendor netlink patch, reverse engineered, on OpenWrt; the `ekstra-csi` project exposes I/Q plus metadata | Real and community-maintained on router parts; no firmware modification needed there **[V, secondary]** |
+| MediaTek out-of-tree Wi-Fi driver, older MT7668 module | A vendor commit "Add CSI data retrieving function": `iwpriv wlan0 driver "set_csi 1 <antenna> <trigger> <source>"` then `get_csi`; CSI taken from received beacon frames; **requires firmware support for a CSI event** | **[V]** commit page. Shows the MediaTek driver family has had CSI plumbing where the firmware supports it |
+| RuView's MediaTek work | A Filogic MIMO CSI transport validated against **simulated** profiles; its release notes say upstream mt76 and public MediaTek SDK material do not currently expose a supported raw complex CSI API, and that physical capture waits on hardware and vendor access | **[V]** release page. Not applicable to mobile combo parts |
+| **MediaTek `gen4m` / CONNSYS SOC1_0 (our case)** | **None found.** Searches for `gen4m` CSI hooks and Android-phone MediaTek CSI returned nothing specific | **[U]**. I believe newer `gen4m` trees carry a CSI build option on some generations **[I, from memory, unverified]**; whether this driver build and this 2021 firmware implement it is the first thing to read |
 
-### 10.3 Paths and their risk
+### 10.3 Assessment for gen4m CONNSYS SOC1_0
+
+1. **Does the driver expose CSI? Unknown, and cheaply answerable without changing the device.** Pull `wlan_drv_gen4m.ko` and the firmware (read-only `adb pull`), then search the module for CSI symbols and `iwpriv`/driver-command strings, and look for the same `set_csi`/`get_csi` style commands. Also request the kernel source for this build from the ODM; the Wi-Fi driver is GPL kernel code, so the vendor owes it **[I, legal position not checked]**. Output of this step decides everything below.
+2. **Can the firmware produce CSI?** CSI exists inside any OFDM receiver; exposing it needs a firmware event and a driver handler (the MT7668 commit says exactly that). The RAM code is a 2021 binary for the connectivity MCU (likely an ARM Cortex-M core **[I]**). If the driver has a CSI command but the firmware ignores it, only a firmware patch (Nexmon-style) helps.
+3. **Replacement and signing risk.** The RAM code is loaded from the vendor partition at Wi-Fi power-up. The vendor partition is a read-only, verity-protected mount on a verified-boot-green device **[R]**. Whether MediaTek signs or checks the RAM code image is **[U]**. On this debuggable build, `adb root` already works **[R]**; whether `disable-verity` and `remount` can make `/vendor` writable without unlocking the bootloader is **[U]** and is the difference between a reversible experiment and a flash job. A bad firmware or module takes the Wi-Fi down, which takes the parent link down; keep BLE and USB adb as the recovery path, and use a sacrificial unit.
+4. **Kernel module path.** A rebuilt `.ko` must match the kernel's version magic and may be subject to module signature enforcement **[U]**.
+5. **Signal limits even if it works**: one spatial stream (Nss 1), so no angle of arrival; at probe time the link was 2.4 GHz, giving a narrow bandwidth and few subcarriers, whereas VHT80 on 5 GHz gives about 234 usable subcarriers **[I]**; DBDC off; the frame cadence is set by the AP's traffic and by the glasses' Wi-Fi power saving; phase offsets need sanitizing as on any commodity CSI.
+
+**Verdict.** Not ruled out, not cheap, and entirely hostage to step 1. Ranking by cost and risk: T0 (no change) first; T1 only if the driver already has the hook; T2 (firmware patching) only if the owner wants it badly enough to fund a reverse-engineering effort.
+
+### 10.4 Paths
 
 | Tier | What | Needs | Risk |
 |---|---|---|---|
-| **T0: no firmware change** | RSSI/RTT-style sensing: link RSSI and beacon-level statistics at 10 Hz from the agent; a phone transmitting a controlled packet stream to the glasses to raise the sample rate | The agent only | Zero risk; coarse. A useful baseline and a way to measure what the signal carries |
-| **T1: driver/kernel** | Build the vendor kernel module with CSI enabled if the driver supports it, flash it | Kernel source for this exact build (or a reconstruction), a bootloader unlock path (the profile notes MediaTek BROM/preloader tooling for dumps **[R]**), a boot/vendor image re-sign or verified boot off | Medium to high: voids the stock state, A/B and verified boot ("green" now **[R]**), OTA breaks, brick risk with BROM recovery as the safety net. Needs a sacrificial unit |
-| **T2: chip firmware** | Patch or replace the combo chip's RAM code (Nexmon-style) | The firmware blob, an architecture for the chip's embedded core, a way to load it, signature behavior | High and unknown: not ruled out; the firmware may be signed or encrypted; weeks to months of reverse engineering [I] |
-| **T3: alternative hardware** | A glasses variant that carries an ESP32-class radio, or an add-on sensor | Hardware work | Out of scope here; the existing ESP32-C5 CSI path is the reference |
+| **T0: no change** | Link RSSI and beacon statistics at 10 Hz from the agent; the phone sends controlled UDP at 50 to 100 Hz to raise the sample rate | The agent only | None; coarse, and tells us what the signal carries |
+| **T1: driver or module** | Enable or add the CSI command in `wlan_drv_gen4m` and load it | Kernel or module source (or a binary patch of the module), a way to make the vendor image writable or to flash | Medium to high: verified boot, OTA continuity, brick risk with the MediaTek boot-ROM tooling as the safety net |
+| **T2: chip firmware** | Patch or replace `WIFI_RAM_CODE_soc1_0_1_1.bin` so it emits CSI events | Reverse engineering of an unsigned or signed-unknown 2021 binary, a toolchain for the connectivity MCU | High and unbounded; weeks to months |
+| **T3: the BES2700** | Use the audio/BT co-processor | None realistic | The BES2700 is a Bluetooth audio and wearable SoC (the family is Cortex-M55 with Bluetooth 5.3 or 5.4; Wi-Fi is optional in the wider series per vendor summaries, with no evidence this unit has any); it has no Wi-Fi CSI to expose and no BLE channel-sounding support at those Bluetooth versions **[V partial, I]**; its firmware is closed too. Not a candidate |
+| **T4: glasses as transmitter, ESP32 as receiver** | The glasses' normal traffic (the Opus stream, or controlled UDP from the phone) is received by a fixed **ESP32-C5 RuView node** in promiscuous CSI mode near the phone or AP; CSI is computed on the ESP32 for frames sourced from the glasses | One or more ESP32-C5 nodes (the C5 port builds and boots **[R]**), a filter on the glasses' MAC; **no change to the glasses** | None to the glasses. Measures the room and the body between the wearer and the receiver; position-dependent (it works where the receivers are); needs sufficient frame cadence, which the phone can force with controlled traffic |
+| **T5: companion node in the glasses case or dock** | An ESP32-C5 RuView node permanently in the case or charging dock | Hardware work, small | Zero risk to the glasses; senses the room whenever the glasses are docked; the glasses themselves are not the sensor |
 
-"Redo the wifi firmware" in the owner's words most plausibly means T1 first, T2 only if T1's driver lacks the hooks. Both break Mentra OTA continuity: an updated Mentra build would overwrite or conflict with a custom image [I]. A replaced image must still keep the Wi-Fi stack usable for the ordinary path (the phone link), or the glasses lose their parent link.
+"Redo the wifi firmware" in the owner's words maps to T2, or T1 if the driver turns out to have the hook. **My recommendation: do step 1 (read-only module and firmware inspection) and T0 in P1; build T4 as the first real CSI use, because it needs no risk to the glasses and reuses the ESP32-C5 work; treat T1/T2 as optional and only on a second unit.**
 
-### 10.4 What it would give RuView
+### 10.5 What it would give RuView
 
-- A **wearable CSI source**. Worn: the receiver moves with the head, so CSI reflects the wearer's own motion and the environment around their head; useful for head-motion and coarse proximity, not for a fixed room map. At rest (on a desk or charging case): a fixed single-chain, 80 MHz receiver, usable as one more sensing node beside the ESP32-C5 nodes.
-- The **phone is the natural transmitter**: it is the AP in hotspot mode and can address controlled UDP packets to the glasses at 50 to 100 Hz, giving a known cadence without extra hardware [D]. Power saving on the glasses' Wi-Fi (DTIM) will reduce the usable frame rate unless the radio is kept awake, which costs battery [I].
-- **Limits**: one chain, phase offsets from carrier and sampling frequency drift that the pipeline must sanitize, AGC jumps, and the frame cadence being set by the AP's own traffic. These are the same issues the ESP32 CSI pipeline already faces.
-- **Privacy and law**: sensing people near the wearer without their consent is a different act from recording the wearer's own voice; this needs the same consent and indicator stance as the camera and microphone, and an owner decision on whether it is ever on outside the owner's own spaces.
+- A **wearable CSI source** (T1/T2): the receiver moves with the head, so CSI reflects the wearer's motion and nearby environment; useful for head motion and coarse proximity, not for mapping a fixed room. At rest on a desk, a fixed single-chain receiver, one more node beside the ESP32-C5 nodes.
+- A **mobile transmitter** (T4): the glasses as the thing being sensed, tracked by fixed receivers through the room's channel, which is the more natural fit for RuView's fixed-node pipeline.
+- The **phone is the natural traffic source** in every tier: it is the AP in hotspot mode and can address controlled UDP to the glasses at a known cadence **[D]**. Power saving on the glasses' Wi-Fi reduces the usable frame rate unless it is kept awake, which costs battery **[I]**.
+- **Privacy and law**: sensing people near the wearer without their consent is a different act from recording the wearer's own voice; it needs the same indicator and consent stance as the camera and microphone, and an owner decision on whether it is ever on outside the owner's own spaces.
 
-### 10.5 What P3 does
+### 10.6 What P3 does
 
-Read the chip ID; locate the vendor kernel and driver source (for this exact Mentra build, or declare it unavailable); read the driver for CSI hooks and the firmware for sections; build a T0 capture in P1 so we know what the signal carries before touching firmware; write the memo; bench T1 on a sacrificial unit only with the owner's approval.
+(1) Read-only: pull and inspect the module, firmware and configs for CSI symbols and commands; request the vendor kernel source; record the chip's real identifiers if any appear in the module or `WMT_SOC.cfg`. (2) T0 capture in P1. (3) T4 on a bench with one ESP32-C5 receiver. (4) A written memo with go or no-go on T1 and T2; any device modification only on a sacrificial unit with the owner's approval.
 
 ---
 
@@ -394,8 +480,8 @@ Read the chip ID; locate the vendor kernel and driver source (for this exact Men
 
 - The glasses record other people. The design keeps an indicator and a switch on every capture path: the cue tone when the gate opens or listening starts, the LED if one is controllable, and a persistent phone notification. Nothing is stored by default: audio is processed in memory; transcripts go to the user's own CoS data; the TTS cache is stock phrases only.
 - Local control wins (ADR-120): the phone UI switch refuses the next command; a hardware gesture on the glasses if the agent can read one [U].
-- No bearer on the glasses, no long-lived secret on the phone beyond the wrapped seed, single-use speech tokens, short-lived node tokens.
-- Third-party processing: ElevenLabs sees audio when the cloud STT/TTS path is used. The settings show the active path; a "local only" mode uses the on-device recognizer and platform TTS with degraded quality.
+- No bearer on the glasses, no long-lived secret on the phone beyond the wrapped seed, short-lived node tokens; the speech vendor key stays on the server.
+- Third-party processing: the speech workflow sends audio to ElevenLabs when the cloud path is active. Audio is processed in memory and not stored by default; the ledger records durations, not content. The settings show the active path (cloud or a LAN speech service chosen by placement). A strictly local mode is possible only when a LAN `speech.v1` service is reachable.
 - No hostnames, tailnet addresses, tokens or client names belong in this repository's docs; the implementation keeps them in secrets and per-user config.
 
 ---
@@ -404,23 +490,26 @@ Read the chip ID; locate the vendor kernel and driver source (for this exact Men
 
 | # | Question | Default |
 |---|---|---|
-| Q1 | May the spike store a dev ElevenLabs key on the phone, labeled spike-only, if the token route is not ready? | Yes, for P0 only; never in P1 |
+| Q1 | Does the P0 spike need any speech credential on the phone? | No. Never on the phone, at any phase |
 | Q2 | Which Android phone and OS version is the reference device? | The owner's daily phone, plus one older mid-range device for OEM battery behavior |
 | Q3 | Distribute through Play (internal then closed testing) or sideload only? | Play internal testing in P1; public decision later |
 | Q4 | Is the camera in scope for P1 (stills on command)? | Stills yes, clips and streaming later |
-| Q5 | TTS cache: stock phrases only, or full replies opt-in? | Stock phrases only; opt-in for full replies |
-| Q6 | Does the phone run STT on-device when online? | No; cloud when allowed, on-device when offline or "local only" |
+| Q5 | Cached stock phrases: server side per user, pushed to the glasses? | Yes; the phone caches nothing |
+| Q6 | Should the phone ever do speech on-device (offline mode)? | No. Offline means a reachable LAN `speech.v1` service by placement, or a cached "offline" cue |
 | Q7 | How are glasses agent updates delivered? | USB or a phone-started Wi-Fi adb session the user approves each time; no standing adb |
-| Q8 | When does iOS start? | After P1 acceptance; start a one-week iOS feasibility spike (doorbell and hotspot only) during P1 |
+| Q8 | When does iOS start? | After P1 acceptance; run a one-week iOS feasibility spike (BLE doorbell and hotspot only) during P1 |
 | Q9 | Public App Store release, or TestFlight only? | TestFlight until the background behavior is proven |
 | Q10 | If iOS cannot be always-on, is "foreground or wake-by-gesture" acceptable? | Yes, documented as a platform limit |
 | Q11 | May we buy a second glasses unit for firmware risk? | Yes; no firmware work on the daily unit |
-| Q12 | CSI priority against P1/P2? | Research only (T0 capture in P1); T1 after P1 |
-| Q13 | Where does the leaf-parent code live: the kernel crates or a new small crate? | A new small crate, adopted by the kernel |
-| Q14 | Is the parent relation expressed in ADR-114 names or in node facts? | Node facts for now; ADR owner decides |
-| Q15 | Does the glasses agent accept being managed by a hardware button gesture (mute)? | Yes if the stock client exposes the event; otherwise no |
-
----
+| Q12 | CSI priority against P1/P2? | Read-only inspection and T0 in P1; T4 next; T1/T2 optional |
+| Q13 | Where does the leaf-parent code live? | A new small crate, adopted by the kernel |
+| Q14 | Parent relation in ADR-114 names or in node facts? | Node facts for now; ADR owner decides |
+| Q15 | Does the agent accept a hardware gesture for mute? | Yes if the stock client exposes the event; otherwise no |
+| Q16 | How does a mesh message reach the speech workflow from a phone on cellular? | The mesh envelope rides inside HTTPS/WebSocket to a gateway; the rest of the mesh is an optional extra path |
+| Q17 | Who builds the P0 speech workflow stub? | The cloud-plan (M2/M3) lane, with the P0 team consuming it; if it is not ready, a function pair for the spike |
+| Q18 | Per-user caps on open-gate seconds and speech spend? | Yes, enforced in the workflow ledger and by the glasses' gate cap |
+| Q19 | T4 receiver placement and count? | One ESP32-C5 near the usual AP or phone position for the bench |
+| Q20 | The cloud plan said audio never passes through Vercel; does the owner accept an audio ingress outside Vercel (or a revised statement)? | Yes: a small streaming service, with the durable workflow as the control plane only |
 
 ## 13. Sources
 
@@ -429,7 +518,6 @@ Verified this session (primary):
 - Android foreground service types and requirements: https://developer.android.com/develop/background-work/services/fgs/service-types
 - Android restrictions on starting foreground services from the background, including the while-in-use rules and exemptions: https://developer.android.com/develop/background-work/services/fgs/restrictions-bg-start
 - Android BLE in the background, `CompanionDeviceManager` presence and `CompanionDeviceService` permissions: https://developer.android.com/develop/connectivity/bluetooth/ble/background
-- Android `SpeechRecognizer` (on-device recognizer, API 31, `EXTRA_AUDIO_SOURCE`): https://developer.android.com/reference/android/speech/SpeechRecognizer
 - Android 15 `dataSync` and `mediaProcessing` roughly six-hour timeout (beta announcement): https://android-developers.googleblog.com/2024/05/the-second-beta-of-android-15.html
 - Apple TN3179, Understanding local network privacy: https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy
 - Apple Core Bluetooth background processing (bluetooth-central, scanning limits, state restoration): https://developer.apple.com/library/archive/documentation/NetworkingInternetWeb/Conceptual/CoreBluetooth_concepts/CoreBluetoothBackgroundProcessingForIOSApps/PerformingTasksWhileYourAppIsInTheBackground.html
@@ -442,6 +530,14 @@ Verified only through secondary summaries (treat as [I]):
 
 - iOS `audio` background mode keeps an app running only while recording or playing (Apple forum posts surfaced by search): https://developer.apple.com/forums/thread/106415
 - MediaTek mt76 CSI extraction on OpenWrt: https://forum.openwrt.org/t/ekstra-csi-full-metadata-csi-extraction-for-mt76-on-openwrt/247100
-- MT6631 as a Wi-Fi, Bluetooth, GPS and FM part: https://www.mediatek.com/press-room/mediatek-announces-worlds-smallest-4-in-1-combo-chip-wi-fi-bluetooth-gps-fm-solution (the page concerns an older combo chip; MT6631 appeared in search snippets only)
 
 Repo and workspace material read: `docs/plans/cos-cloud-migration.md` (sections 4, 5, 8), `docs/plans/cos-dashboard-bridge.md`, `docs/leaf-push-protocol.md`, `docs/plans/adr-103-leaf-implementation.md`, `docs/adr/adr-120-mesh-resources-and-exposures.md`, `firmware/mentra-mic/` (README and manifest), the AudioBridge source and the Mentra Live device profile in the glasses workspace, and the `mentra-leaf` bring-up source.
+
+Added in revision 2:
+
+- Vendor MediaTek Wi-Fi driver commit adding CSI retrieval (`set_csi`/`get_csi`, firmware support required), MT7668 module: https://coral.googlesource.com/mt7668-wifi-mod/+/2eee9bfe00c110c0b71f53c656ad11863ebe2878 **[V]**
+- RuView MediaTek beta release notes (Filogic simulator; upstream mt76 and public SDK expose no supported raw complex CSI API): https://newreleases.io/project/github/ruvnet/RuView/release/v0.9.1-mediatek-beta.1 **[V]**
+- MtkCSIdump and mt76 CSI context, Nexmon CSI: https://forum.openwrt.org/t/csi-extraction-for-mediatek-based-wi-fi-chipsets/244703 and https://github.com/seemoo-lab/nexmon_csi (via search summaries, **[I]**)
+- BES2700 family overview (Cortex-M55 Bluetooth audio and wearable SoC): https://www.cnx-software.com/2025/06/02/bestechnic-bes2700yp-arm-cortex-m55-bluetooth-audio-soc-targets-headphones-earbuds-portable-speakers/ (**[V partial]**)
+- Not found despite searching: public documentation or source of `gen4m` CSI hooks; treat that gap as an open unknown.
+- Repo material read for revision 2: `crates/clawft-android-edge/` (all six modules), `docs/guides/android-splat-capture-edge.md`, `docs/adr/adr-077-android-splat-capture-edge-node.md`, `apps/android-splat-capture/` (Gradle files, `EdgeCore.kt`), and the glasses probe results relayed by the lead.
