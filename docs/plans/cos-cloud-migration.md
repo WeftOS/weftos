@@ -579,6 +579,98 @@ Build a fixed set of real owner questions with the expected tool use and a "usef
 
 Pass bar for promoting a phase: at least 90 percent of cases meet criteria 1 to 5 on the chosen model tier, and E6, E7, E8, E11, E16 and E18 pass 100 percent.
 
+## 4c. Control plane first, and testability
+
+**Owner direction (2026-10-13):** "this all needs to be controlled via that interface in the control plane, this should make it easy to test too because it can work through the web tools, mcp calls, then add voice interface."
+
+### 4c.1 Rule: no capability exists only on a device or in a config file
+
+Every chief-of-staff capability has three faces, built together **[D]**:
+
+| Face | What | Example (device status) |
+|---|---|---|
+| **Control plane UI** | A control or readout on the dashboard `/phone` tabs and the settings pages | The Mentra tab shows listening state, last take, level against the floor, failures |
+| **API** | A `cos.v2` endpoint (section 3.6), or the relay tables and RPCs while the relay is the transport | `GET /v2/me/devices/{id}`; today `cos_status` rows from the sync route |
+| **MCP tool** | A tool on the CoS's own MCP server (4c.3) | `devices.status{device}` |
+
+If one face is missing, the capability is not done. Things that today live only on the Mac and must gain faces: the listening toggle and push-to-talk (relay addendum, done), endpoint `speak` flags (`config.rs`), model tier and fallback settings (`cos.json`), tool sources and their enablement (4b), confirm decisions, and the tool log (`tool_log` JSONL, `config.rs`). Settings move to `GET/PATCH /v2/me/settings`; the JSON file remains for local mode only.
+
+**A trace panel** is added to the `/phone` Weaver tab (collapsed by default): for each turn, the tools offered and called, gates held and released, model and tier, rounds, tokens, latency per stage, and (from 4d) the spoken plan. It reads the same event stream as everything else; it is both a debugging aid for the owner and the surface that browser tests assert against.
+
+### 4c.2 The test ladder
+
+Each rung is cheaper and more deterministic than the next. A capability must pass a rung before work starts on the one above.
+
+| Rung | Driver | What it proves | What it cannot prove |
+|---|---|---|---|
+| **1. Web tools** | A browser driven by Claude-in-Chrome or Playwright against `/phone` (the dashboard already has `scripts/test-browser.mjs` with a `/phone` section and `scripts/test-cos.mjs` **[V: named in `docs/cos-relay.md`]**) | The control plane renders state correctly; typing a turn produces a reply; a held action shows a confirm control; toggles round-trip; the trace panel shows the expected tools | Real audio, device hardware |
+| **2. MCP calls** | An MCP client (an agent, a CI script) talking to the CoS's own MCP server | Full conversations without a browser or voice: assert tool use, gating, answer content, latency, secrets hygiene, tenancy; the eval suite (4b.6) runs here | Browser-only UI bugs, audio |
+| **3. Voice** | Recorded audio fixtures into the STT leg; synthesized replies measured at the TTS leg; a real device in a manual round for acceptance | Speech recognition on real audio, the spoken-reply shaping (4d), barge-in, turn-taking, time to first sound | Judgment of taste: a human listens |
+
+Test mode needs a **hermetic tenant** **[D]**: a synthetic user and workspace with a seeded board and roadmap, simulated devices (a simulator that publishes the same listen and speak status files the Mac loops write), fixture MCP servers that replay recorded tool results (so flight, calendar and email tools are deterministic and never touch a real account), a fixed clock, and a pinned model route. Outward tools in the test tenant are stubbed and recorded, never executed.
+
+### 4c.3 The CoS as an MCP server
+
+The chief of staff is itself a first-class MCP server. Agents (Claude, Codex, Grok, CI) can hold a conversation with a specific person's chief of staff, with the same gates a human gets.
+
+Hosting **[D]**: a `/mcp` route on the `cos-edge` Worker (streamable HTTP), routed to the user's Durable Object. The same tool set is available locally as `weftos-cos mcp` (loopback HTTP, or stdio) in front of the Rust host, so the same suite runs against both implementations.
+
+| Tool | Class | Purpose |
+|---|---|---|
+| `cos.say{text, endpoint?, wait?, timeout_s?, conversation?}` | write (it makes the agent act) | Send a turn as endpoint `mcp` (or `test:<run id>`). With `wait: true` returns `{turn_id, reply: {text, spoken?}, trace: {tools_offered, tools_called, gates_held, rounds, model, tier, tokens, latency_ms}, held: [{action_id, tool, summary}]}` |
+| `cos.confirm{action_id, decision}` | write | Release or refuse a held action. **Refused outside a test tenant unless the token has the `cos:confirm` scope** (4c.4) |
+| `cos.events{since?, wait_s?}` | read | Events after a sequence number, long-polled; same shapes as `cos.v1` plus `seq` |
+| `cos.turns{limit?, before?}` | read | History (the `GET /turns` contract) |
+| `cos.status{}` | read | State, current task, model, devices, quota (the `GET /status` contract) |
+| `cos.trace{turn_id}` | read | The full trace for one turn, for assertions |
+| `cos.devices.status{device?}` | read | The same body as the built-in `devices.status` (4b.2) |
+| `cos.tools.list{}` | read | The tools visible to this user now, with class, source, enabled state and why a tool is hidden |
+| `cos.settings.get{}` / `cos.settings.patch{...}` | read / write | Voice, speak flags, model tier, tool-source enablement; `patch` is gated |
+| `cos.reset{scope}` | write | Test tenants only: clear history, pending actions, or the whole conversation |
+| `cos.eval.run{suite, cases?}` | write (admin) | Run cases server-side and return per-case results (used by CI) |
+
+Rules:
+
+1. **`cos.say` is not a back door.** It enters the agent through the same `utter` path as a phone turn. It cannot lift a gate, skip a confirmation, or name a tool to call. It cannot read another user's data.
+2. **Output is data.** A reply returned to an MCP client is wrapped as tool output with its source; a calling agent should treat it as untrusted. Tool results from the CoS's own sources are redacted by `redact` before they enter `trace`.
+3. **Endpoint isolation.** MCP-originated turns carry endpoint `mcp` or `test:<run>`; they are never spoken on a device and never appear on a pad or glasses unless the user turned that on. Test turns are deleted on a timer.
+4. **Rate limits** per token and per user, and a hard cap on turns per eval run.
+
+### 4c.4 Auth for the MCP surface: per user, no shared bearer
+
+| Principal | Credential | Scopes | Lifetime |
+|---|---|---|---|
+| **A person's own agent** (their Claude or Codex talking to their CoS) | An **agent token** the person mints in the dashboard (Settings, Tool access) or by OAuth 2.1 with PKCE when the client supports it. The token is bound to that user, audience `cos-mcp`, shown once, stored hashed | `cos:read`, `cos:say`; `cos:confirm` and `cos:settings` only if the person adds them | Up to 90 days, revocable, listed with last use |
+| **CI** | A short-lived token obtained by exchanging the CI platform's OIDC identity for a token of a **synthetic test user** in the hermetic tenant (no stored secret in CI) | `cos:read`, `cos:say`, `cos:confirm` (test tenant only), `cos:eval` | 15 minutes |
+| **The owner's operations** | The owner's session | All | Session |
+| **A node** | Not applicable; nodes use the device hub, not MCP | | |
+
+No token is shared between users, tenants, or the device hub. `cos:confirm` in a production tenant requires a second factor on the phone page (a tap), so an agent token alone cannot release an outward action. Token mint, use, scope change and revoke all land in the audit trail (4b.5).
+
+### 4c.5 How the evaluation suite runs through it
+
+1. `scripts/cos-eval` (a script in the repo) obtains a CI token, creates a fresh hermetic tenant, and seeds the board, goals, devices (simulated) and fixture MCP servers.
+2. For each case in E1 to E18 (4b.6) it calls `cos.reset`, then `cos.say{wait: true}` with the question, and reads `cos.trace`.
+3. **Assertions**: expected tools called, forbidden tools not called, holds present where required, no write executed without `cos.confirm`, within the round and tool budgets, secrets scan clean, tenant isolation (a second synthetic user's data never appears).
+4. **Answer criteria** (the six in 4b.6): the first four and the sixth are checked by rules where possible (a standalone first sentence under a length limit, every number and id in the answer present in a tool result, a statement of what could not be checked when a tool errored). A model judge may score the rest; it is advisory, versioned with the suite, and never the only gate (Q30).
+5. The same script runs against the Rust host (`weftos-cos mcp`) and the cloud agent, and compares: tool choice agreement and criteria scores must match within a tolerance.
+6. A browser smoke subset (rung 1) runs the same questions through `/phone` for E1, E3, E6, E7 and E15 and asserts what the page shows, not only what the API returns.
+7. Voice (rung 3) reuses the same cases with recorded audio for the question and a measured spoken reply (4d), run last.
+
+### 4c.6 Control plane and testability phases
+
+These run alongside the capability phases (section 5) and come before the voice phases in 4d.
+
+| Phase | Delivers | Acceptance | Rollback | Owner decisions |
+|---|---|---|---|---|
+| **P0: parity inventory and trace panel** | A list of every capability and setting with its three faces; trace panel on the Weaver tab; settings read and write through the API | Every row in the inventory has all three faces or a ticket; a turn's tools and gates appear in the trace panel | Hide the panel | Q27 |
+| **P1: browser rung** | `/phone` test ids; a hermetic tenant seed; simulated devices; browser smoke for E1, E3, E6, E7, E15 | Smoke passes in CI on every dashboard change that touches `/phone` | Skip the job | None |
+| **P2: CoS as MCP, local first** | `weftos-cos mcp` in front of the Rust host with the tool table in 4c.3 | `cos.say` returns reply and trace for E1 to E5 on the local host | Do not start the server | Q28 |
+| **P3: CoS as MCP, cloud** | `/mcp` on `cos-edge`; agent tokens and the OIDC exchange; `cos.confirm` second factor; token audit | Cross-tenant tests pass; the full suite runs in CI against both implementations | Revoke all tokens; disable the route | Q29, Q30 |
+| **P4: suite in CI as a gate** | `scripts/cos-eval` on every change to the agent, prompt, tools or catalog | The pass bar in 4b.6 holds; regressions block the merge | Make the job advisory | None |
+
+Voice work (4d) does not start its acceptance tests until P2 passes, because every voice test needs a text-level oracle first.
+
 ## 5. Migration plan
 
 Each phase is reversible by a setting, not a redeploy. Before Phase 1 the owner's Mac setup is untouched.
@@ -702,6 +794,10 @@ New risks:
 | Q24 | Do hand-added servers exist at all in the first release? | No in phase C4a and C4b; add in C4c once audit and egress controls are proven |
 | Q25 | Are WeaveLogic-hosted MCP Workers a separate Cloudflare account/project from the CoS runtime? | Same account, separate Worker projects and separate secrets, so a catalog server cannot read the CoS's keys |
 | Q26 | Should the built-in board tools become a shim over the dashboard MCP, or stay as direct API tools? | Stay direct until the dashboard MCP has run in the catalog for a release, then converge to remove duplicate code |
+| Q27 | Who mints agent tokens for a person's own agents? | The person, in the dashboard; scopes default to read and say; confirm and settings are opt-in |
+| Q28 | Does the local `weftos-cos mcp` listen only on loopback? | Yes; loopback only, stdio or HTTP, no remote listener (the cloud route is the remote path) |
+| Q29 | May a person's external agent use the production CoS over MCP at all? | Yes for read and say with their own token; confirm needs the phone tap |
+| Q30 | May a model judge be part of the eval suite? | Advisory only, versioned with the suite; rule-based checks and the tool-trace assertions are the gates |
 
 ---
 
