@@ -450,7 +450,7 @@ Each phase is reversible by a setting. The Mac setup is untouched until M7.
 
 | Phase | Delivers | Acceptance | Rollback | Owner decisions |
 |---|---|---|---|---|
-| **M0** Today | Mac host, bridge, relay in production, Grok's ElevenLabs speak loop | PR #29 and the bridge branch merged; Q-defaults answered | n/a | Q3, Q4 |
+| **M0** Today | Mac host, bridge, relay in production, Grok's ElevenLabs speak loop | PR #29 and the bridge branch merged; Q-defaults answered | n/a | Q3, Q4 decided |
 | **M1** Control plane and test rungs | Parity inventory; trace panel; hermetic tenant; browser smoke (E1, E3, E6, E7); the local host as MCP (`weftos-cos mcp`); `devices.status` and `[[mcp_servers]]` on the local host; eval suite on the Rust host | Smoke green in CI; E1 to E5 pass locally through MCP | Skip the jobs | Q14, Q27, Q28 |
 | **M2** Thin orchestrator, owner only, text | Vercel project; AI SDK loop; Gateway quick and plan tiers; per-user lease; fact layer (dashboard MCP, brain); `cos_runtime = shadow`; relay tables as transport | Rust conformance fixtures pass against TS; a recorded week of owner turns matches tool choice at least 90 percent on the chosen quick model; no secret in events or logs; the cost ledger records every call | `cos_runtime = local` | Q5, Q41, Q42 |
 | **M3** Conversation layer v0 and ElevenLabs on the phone | Conversation MCP with the deterministic shaper and `speech.v1`; single-use tokens; phone node plays ElevenLabs audio and sends ElevenLabs STT text; phone-only users onboarded (workspace mesh) | First-sound p50 under 1.5 s with no tool; shaping eval passes; two users cannot see each other's data (API, Realtime, secrets) | Fall back to typed turns and text replies | Q3, Q6, Q31, Q43 |
@@ -504,8 +504,8 @@ Numbers are stable across drafts. "Decided" rows are settled by the 2026-10-13 d
 |---|---|---|
 | Q1 | Runtime platform | **Decided: Vercel + AI Gateway.** Cloudflare only as an MCP-server host |
 | Q2 | Orchestrator language | **Decided: TypeScript**, Rust stays as MCP services and local mode |
-| Q3 | Phone-only users' `weftos://` authority (ADR-114 makes the mesh the authority) | A dashboard-minted workspace mesh record, upgraded when a real mesh pairs |
-| Q4 | Who pays for models and speech; BYOK? | Platform keys with a per-user monthly cap; BYOK as direct provider calls, only if asked |
+| Q3 | Phone-only users' `weftos://` authority (ADR-114 makes the mesh the authority) | **Decided 2026-10-13 (owner): workspace mesh.** A dashboard-minted workspace mesh record, upgraded when a real mesh pairs |
+| Q4 | Who pays for models and speech; BYOK? | **Decided 2026-10-13 (owner): platform keys with budgets.** Platform keys with a per-user monthly cap enforced from `cos_ledger`; BYOK as direct provider calls, only if asked |
 | Q5 | Cloud quick model | Start with a Haiku-class model; evaluate others through the Gateway against the tool-call eval |
 | Q6 | Speech vendor policy | ElevenLabs default; vendor-neutral interface; local engines as fallback only |
 | Q7 | Voice and model | Same voice; `eleven_v4_turbo` live, `eleven_v4` for cached long replies |
