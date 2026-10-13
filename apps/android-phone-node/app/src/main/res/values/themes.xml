@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.WeftPhoneNode" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">#FF0B1020</item>
+        <item name="android:navigationBarColor">#FF0B1020</item>
+        <item name="android:windowBackground">#FF0B1020</item>
+    </style>
+</resources>
