@@ -58,6 +58,14 @@ pub const UNVERIFIED_TTL: std::time::Duration = std::time::Duration::from_secs(3
 /// How often the mesh listeners look for expired `Unverified` peers.
 pub const UNVERIFIED_REAP_EVERY: std::time::Duration = std::time::Duration::from_secs(60);
 
+/// How long a peer may go without a heartbeat before it is marked
+/// `Unreachable` (see [`ClusterMembership::expire_stale`]).
+pub const STALE_UNREACHABLE_AFTER: std::time::Duration = std::time::Duration::from_secs(600);
+/// How long a peer may go without a heartbeat before membership removes it
+/// (and before a persisted entry is dropped on load). A real mesh member that
+/// comes back re-joins through the mesh peer-event path.
+pub const STALE_REMOVE_AFTER: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
+
 /// Node health state.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -570,7 +578,19 @@ impl ClusterMembership {
                 Ok(data) => match serde_json::from_str::<ClusterPeersFile>(&data) {
                     Ok(file) => {
                         let mut legacy = Vec::new();
+                        let now = Utc::now();
+                        let mut stale = 0usize;
                         for peer in file.peers {
+                            // The local node is re-registered at every boot; a persisted
+                            // copy is an earlier boot's (possibly ephemeral) id.
+                            if peer.id == self.config.node_id {
+                                continue;
+                            }
+                            // Persisted junk: no heartbeat within the removal TTL.
+                            if Self::is_stale_at(&peer, now, STALE_REMOVE_AFTER) {
+                                stale += 1;
+                                continue;
+                            }
                             // Pre-0.8 daemons keyed peers by UUID; node ids are now
                             // 32-hex from the node key, so a UUID entry can never match a
                             // live peer again (phase-0 review R8).
@@ -586,6 +606,14 @@ impl ClusterMembership {
                             path = %path.display(),
                             "rehydrated cluster peers from disk"
                         );
+                        if stale > 0 {
+                            warn!(
+                                dropped = stale,
+                                path = %path.display(),
+                                "dropped stale peers from the cluster peers file"
+                            );
+                            prune_file = true;
+                        }
                         if !legacy.is_empty() {
                             warn!(
                                 dropped = legacy.len(),
@@ -639,7 +667,14 @@ impl ClusterMembership {
             return;
         };
 
-        let peers: Vec<PeerNode> = self.peers.iter().map(|e| e.value().clone()).collect();
+        // The local node is re-registered at boot, never persisted: otherwise every
+        // boot with a fresh node id would leave a permanent entry behind.
+        let peers: Vec<PeerNode> = self
+            .peers
+            .iter()
+            .filter(|e| e.key() != &self.config.node_id)
+            .map(|e| e.value().clone())
+            .collect();
         let file = ClusterPeersFile {
             version: default_peers_file_version(),
             peers,
@@ -939,6 +974,50 @@ impl ClusterMembership {
         stale.iter().filter(|id| self.remove_peer(id).is_ok()).count()
     }
 
+    fn is_stale_at(peer: &PeerNode, now: DateTime<Utc>, max_age: std::time::Duration) -> bool {
+        let age = chrono::Duration::from_std(max_age).unwrap_or(chrono::Duration::MAX);
+        now.signed_duration_since(peer.last_heartbeat) > age
+    }
+
+    /// Reap peers that stopped heartbeating: past `unreachable_after` a live peer
+    /// becomes `Unreachable`; past `remove_after` any non-local peer is removed.
+    /// The local node is never reaped. Returns the number of peers removed.
+    pub fn expire_stale(
+        &self,
+        unreachable_after: std::time::Duration,
+        remove_after: std::time::Duration,
+    ) -> usize {
+        self.expire_stale_at(Utc::now(), unreachable_after, remove_after)
+    }
+
+    /// [`Self::expire_stale`] against an explicit clock.
+    pub fn expire_stale_at(
+        &self,
+        now: DateTime<Utc>,
+        unreachable_after: std::time::Duration,
+        remove_after: std::time::Duration,
+    ) -> usize {
+        let local = self.config.node_id.as_str();
+        let mut remove = Vec::new();
+        let mut demote = Vec::new();
+        for e in self.peers.iter() {
+            if e.key() == local {
+                continue;
+            }
+            if Self::is_stale_at(&e, now, remove_after) {
+                remove.push(e.key().clone());
+            } else if Self::is_stale_at(&e, now, unreachable_after)
+                && matches!(e.state, NodeState::Active | NodeState::Suspect | NodeState::Joining)
+            {
+                demote.push(e.key().clone());
+            }
+        }
+        for id in &demote {
+            let _ = self.update_state(id, NodeState::Unreachable);
+        }
+        remove.iter().filter(|id| self.remove_peer(id).is_ok()).count()
+    }
+
     /// Apply a live mesh peer event to membership **atomically** (WEFT-120).
     ///
     /// Mesh is the authority for connect/health; this path upserts peers
@@ -1132,6 +1211,7 @@ impl ClusterMembership {
                 let received = tokio::select! {
                     _ = reap.tick() => {
                         membership.expire_unverified(UNVERIFIED_TTL);
+                        membership.expire_stale(STALE_UNREACHABLE_AFTER, STALE_REMOVE_AFTER);
                         continue;
                     }
                     r = rx.recv() => r,
@@ -1583,6 +1663,10 @@ mod cluster_service {
                     let received = tokio::select! {
                         _ = reap.tick() => {
                             svc.membership.expire_unverified(super::UNVERIFIED_TTL);
+                            svc.membership.expire_stale(
+                                super::STALE_UNREACHABLE_AFTER,
+                                super::STALE_REMOVE_AFTER,
+                            );
                             continue;
                         }
                         r = rx.recv() => r,
@@ -2312,6 +2396,85 @@ mod tests {
         assert!(is_legacy_uuid_id(uuid) && !is_legacy_uuid_id(hex) && !is_legacy_uuid_id("node-1"));
         assert!(!is_legacy_uuid_id("e6182c9e-2dc9-45c3-a93f-e93d978e3dcz"), "non-hex is not a UUID");
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    fn aged_peer(id: &str, age: chrono::Duration) -> PeerNode {
+        let mut p = make_peer(id, id);
+        p.last_heartbeat = Utc::now() - age;
+        p
+    }
+
+    fn cfg_with_id(id: &str) -> ClusterConfig {
+        ClusterConfig { node_id: id.into(), ..ClusterConfig::default() }
+    }
+
+    #[test]
+    fn repeated_boots_with_fresh_node_ids_do_not_accumulate() {
+        let path = persist_tmp_path("boots");
+        for i in 0..20 {
+            let id = format!("ephemeral-{i}");
+            let c = ClusterMembership::new(cfg_with_id(&id))
+                .with_min_peer_interval(std::time::Duration::ZERO)
+                .with_persist_path(&path);
+            c.add_peer(make_peer("real-peer", "real")).ok();
+            // What ClusterService::start / sync_to_membership does for the local node.
+            c.add_peer(make_peer(&id, &id)).unwrap();
+        }
+        let last = ClusterMembership::new(cfg_with_id("ephemeral-final")).with_persist_path(&path);
+        assert_eq!(last.len(), 1, "only the real peer persists");
+        assert!(last.get_peer("real-peer").is_some());
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn stale_persisted_peers_are_dropped_on_load_tolerantly() {
+        let path = persist_tmp_path("stale-load");
+        let file = ClusterPeersFile {
+            version: 1,
+            peers: vec![
+                aged_peer("old-junk", chrono::Duration::days(11)),
+                aged_peer("recent", chrono::Duration::minutes(5)),
+            ],
+        };
+        std::fs::write(&path, serde_json::to_string(&file).unwrap()).unwrap();
+        let c = ClusterMembership::new(cfg_with_id("me")).with_persist_path(&path);
+        assert!(c.get_peer("old-junk").is_none());
+        assert!(c.get_peer("recent").is_some());
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert!(!on_disk.contains("old-junk"), "pruned from the file too");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn expire_stale_walks_active_to_unreachable_to_removed() {
+        let c = ClusterMembership::new(cfg_with_id("me"))
+            .with_min_peer_interval(std::time::Duration::ZERO);
+        c.add_peer(make_peer("me", "me")).unwrap();
+        c.add_peer(make_peer("member", "member")).unwrap();
+        let t0 = Utc::now();
+        let at = |d: chrono::Duration| t0 + d;
+        let (un, rm) = (STALE_UNREACHABLE_AFTER, STALE_REMOVE_AFTER);
+
+        assert_eq!(c.expire_stale_at(at(chrono::Duration::seconds(30)), un, rm), 0);
+        assert_eq!(c.get_peer("member").unwrap().state, NodeState::Active);
+
+        assert_eq!(c.expire_stale_at(at(chrono::Duration::hours(1)), un, rm), 0);
+        assert_eq!(c.get_peer("member").unwrap().state, NodeState::Unreachable);
+
+        // A heartbeat revives it through the mesh path; here just check the removal step.
+        assert_eq!(c.expire_stale_at(at(chrono::Duration::hours(25)), un, rm), 1);
+        assert!(c.get_peer("member").is_none());
+        assert!(c.get_peer("me").is_some(), "the local node is never reaped");
+    }
+
+    #[test]
+    fn a_heartbeating_peer_survives_the_reaper() {
+        let c = ClusterMembership::new(cfg_with_id("me"))
+            .with_min_peer_interval(std::time::Duration::ZERO);
+        c.add_peer(aged_peer("member", chrono::Duration::hours(2))).unwrap();
+        c.heartbeat("member").unwrap();
+        assert_eq!(c.expire_stale(STALE_UNREACHABLE_AFTER, STALE_REMOVE_AFTER), 0);
+        assert_eq!(c.get_peer("member").unwrap().state, NodeState::Active);
     }
 
     #[test]
