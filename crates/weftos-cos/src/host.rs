@@ -102,7 +102,7 @@ pub async fn build(cfg: &CosConfig) -> Result<Built, CosError> {
         unbound.push(("notes.record".into(), "no harness credential and no brain".into()));
     }
 
-    let agent = CosAgent::new(routes, tools, ToolLog::new(cfg.tool_log.clone()));
+    let agent = CosAgent::new(routes, tools, ToolLog::new(cfg.tool_log.clone())).with_max_tool_rounds(cfg.models.max_tool_rounds).with_focus(focus.clone());
     Ok(Built {
         agent,
         quick_model: plan.quick,

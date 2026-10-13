@@ -72,7 +72,7 @@ async fn wav_fixture_through_stt_posts_a_voice_utterance() {
     assert_eq!(msg.0, turn_id);
     assert_eq!(msg.1, "Noted.");
     let status = events.iter().find_map(|e| match e { Event::Status { task, .. } => Some(task.clone()), _ => None }).unwrap();
-    assert!(status.contains("voice"), "{status}");
+    assert_eq!(status, "Note we move the agent", "a spoken turn is named by its words");
 
     // No audio left behind: retention is off by default.
     let leftovers: Vec<_> = std::fs::read_dir(t.dir.path()).unwrap().filter_map(Result::ok).filter(|e| e.file_name().to_string_lossy().starts_with("ptt-2")).collect();

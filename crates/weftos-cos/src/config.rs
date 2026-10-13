@@ -123,6 +123,9 @@ pub struct ModelsConfig {
     /// Complexity score at or above which a turn is a planning turn (ADR-026
     /// uses 30%).
     pub plan_threshold: f32,
+    /// Tool rounds per turn before the agent must answer without tools
+    /// (1..=12). Default 6.
+    pub max_tool_rounds: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -227,6 +230,7 @@ impl Default for ModelsConfig {
             reasoning: "auto".into(),
             serve_command: None,
             plan_threshold: 0.3,
+            max_tool_rounds: crate::agent::DEFAULT_MAX_TOOL_ROUNDS,
         }
     }
 }
@@ -352,6 +356,9 @@ impl CosConfig {
         }
         if !(0.0..=1.0).contains(&self.models.plan_threshold) {
             return Err(CosError::Config("models.plan_threshold must be within 0..=1".into()));
+        }
+        if !(1..=12).contains(&self.models.max_tool_rounds) {
+            return Err(CosError::Config("models.max_tool_rounds must be within 1..=12".into()));
         }
         if !self.harness.events_path.starts_with('/') {
             return Err(CosError::Config("harness.events_path must start with '/'".into()));

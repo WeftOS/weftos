@@ -3,8 +3,9 @@
 //! received. A `Confirm`-gated tool call is held as a pending action and
 //! asked about; the next utterance answers it.
 
+use std::collections::HashSet;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -16,10 +17,14 @@ use crate::events::{AgentState, Event, redact};
 use crate::guide::{Resolution, UiHandle};
 use crate::prompt::system_prompt;
 use crate::routing::{ModelRoutes, Route, Tier};
+use crate::tools::cards::Focus;
 use crate::tools::{Gate, ToolLog, ToolRegistry};
 
-/// Tool rounds per turn before the agent answers with what it has.
-const MAX_ROUNDS: usize = 4;
+/// Default tool rounds per turn (`models.max_tool_rounds`) before the agent
+/// is made to answer with what it has.
+pub const DEFAULT_MAX_TOOL_ROUNDS: usize = 6;
+/// Appended (never stored) to the request that forces a final answer.
+const ANSWER_NOW: &str = "[host] No more tool calls are available this turn. Answer the owner's question now in plain language, using only the tool results above. Lead with the answer in one sentence. If something could not be read, say so.";
 /// Messages kept in the rolling history (system prompt excluded).
 const HISTORY_LIMIT: usize = 40;
 const MAX_TOKENS: i32 = 2400;
@@ -29,6 +34,8 @@ enum Flow {
     Continue,
     /// Held for a confirmation turn.
     Held,
+    /// The call failed; its error went back to the model.
+    Failed,
     /// A survey question is on screen; the turn ends with it spoken.
     Asked(String),
 }
@@ -50,6 +57,8 @@ struct Inner {
     history: Mutex<Vec<Value>>,
     pending: Mutex<Option<PendingAction>>,
     turn_gate: Mutex<()>,
+    max_rounds: AtomicUsize,
+    focus: std::sync::Mutex<Option<Focus>>,
     lanes_running: AtomicU32,
     /// The last 64 turns: who they came from and whether they were spoken.
     turns: std::sync::Mutex<std::collections::VecDeque<TurnRecord>>,
@@ -86,11 +95,26 @@ impl CosAgent {
                 history: Mutex::new(Vec::new()),
                 pending: Mutex::new(None),
                 turn_gate: Mutex::new(()),
+                max_rounds: AtomicUsize::new(DEFAULT_MAX_TOOL_ROUNDS),
+                focus: std::sync::Mutex::new(None),
                 lanes_running: AtomicU32::new(0),
                 turns: std::sync::Mutex::new(std::collections::VecDeque::new()),
                 silent_endpoints: std::sync::Mutex::new(std::collections::HashSet::new()),
             }),
         }
+    }
+
+    /// Tool rounds per turn before a tool-free answer is forced (min 1).
+    pub fn with_max_tool_rounds(self, rounds: usize) -> Self {
+        self.inner.max_rounds.store(rounds.max(1), Ordering::Relaxed);
+        self
+    }
+
+    /// The card focus the `card.*` tools share, so the status line can name
+    /// the card in play.
+    pub fn with_focus(self, focus: Focus) -> Self {
+        *self.inner.focus.lock().unwrap_or_else(|e| e.into_inner()) = Some(focus);
+        self
     }
 
     fn record_turn(&self, id: &TurnId, endpoint: String, voice: bool) {
@@ -243,10 +267,7 @@ impl Inner {
         }
 
         let (tier, route) = self.routes.pick(&utterance.text);
-        let task = match tier {
-            Tier::Quick => format!("{source} turn"),
-            Tier::Plan => format!("planning ({source})"),
-        };
+        let task = self.task_name(&utterance.text, tier, source);
         self.status(&task, &route.model_id);
         tracing::info!(turn = %turn_id, tier = tier.label(), model = %route.model_id, "routed");
 
@@ -255,17 +276,32 @@ impl Inner {
         let specs = self.tools.openai_specs();
 
         let chain = self.routes.chain(route);
+        let max_rounds = self.max_rounds.load(Ordering::Relaxed);
         let mut at = 0;
-        for _round in 0..MAX_ROUNDS {
-            let messages: Vec<Value> = {
+        let mut seen_calls: HashSet<String> = HashSet::new();
+        let mut errors = 0usize;
+        let mut force_final = false;
+        let mut round = 0usize;
+        loop {
+            // The last round, a repeated call, or repeated errors: the model
+            // gets no tools and an instruction to answer, so a model that
+            // would otherwise keep calling tools must write its answer.
+            let final_round = force_final || round >= max_rounds;
+            let mut messages: Vec<Value> = {
                 let h = self.history.lock().await;
                 std::iter::once(system.clone()).chain(h.iter().cloned()).collect()
             };
+            if final_round {
+                messages.push(json!({"role": "user", "content": ANSWER_NOW}));
+            }
+            let no_specs: Vec<Value> = Vec::new();
+            let none_choice = json!("none");
+            let (call_specs, choice) = if final_round { (&no_specs, Some(&none_choice)) } else { (&specs, None) };
             // The primary model cannot answer: move down the chain and say so
             // on the status line, which always names the model actually
             // answering.
             let response = loop {
-                match self.call_model(turn_id, chain[at], &messages, &specs).await {
+                match self.call_model(turn_id, chain[at], &messages, call_specs, choice).await {
                     Ok(r) => break r,
                     Err(e) if at + 1 < chain.len() => {
                         tracing::warn!(turn = %turn_id, from = %chain[at].model_id, to = %chain[at + 1].model_id, error = %redact(&e.to_string()), "model failed; falling back");
@@ -277,10 +313,16 @@ impl Inner {
             };
             let msg = &response["choices"][0]["message"];
             let content = msg["content"].as_str().unwrap_or("").trim().to_string();
-            let calls = msg["tool_calls"].as_array().cloned().unwrap_or_default();
+            let calls = if final_round { Vec::new() } else { msg["tool_calls"].as_array().cloned().unwrap_or_default() };
 
             if calls.is_empty() {
-                let text = if content.is_empty() { "(no answer)".to_string() } else { content };
+                let text = if !content.is_empty() {
+                    content
+                } else if final_round {
+                    self.summary_without_model().await
+                } else {
+                    "(no answer)".to_string()
+                };
                 self.history.lock().await.push(json!({"role": "assistant", "content": text}));
                 self.emit(Event::state(AgentState::Speaking));
                 self.emit(Event::Message { turn_id: turn_id.clone(), text, is_final: true, endpoint: None, speak: false });
@@ -293,8 +335,24 @@ impl Inner {
                 "tool_calls": calls,
             }));
             for call in &calls {
+                // The same call with the same arguments twice in a turn adds
+                // nothing: do not run it again, tell the model, and make the
+                // next request the answer.
+                let key = format!("{}|{}", call["function"]["name"], call["function"]["arguments"]);
+                if !seen_calls.insert(key) {
+                    let call_id = call["id"].as_str().unwrap_or("call");
+                    self.push_tool_result(call_id, &json!({"error": "you already made this exact call this turn; its result is above. Answer now."})).await;
+                    force_final = true;
+                    continue;
+                }
                 match self.run_tool_call(turn_id, call).await? {
                     Flow::Continue => {}
+                    Flow::Failed => {
+                        errors += 1;
+                        if errors >= 2 {
+                            force_final = true;
+                        }
+                    }
                     // A confirmation question was asked; the turn ends here.
                     Flow::Held => return Ok(()),
                     // A survey question is on screen: speak it and end the
@@ -308,22 +366,50 @@ impl Inner {
                     }
                 }
             }
+            round += 1;
         }
+    }
 
-        let text = "I ran out of tool rounds for this turn; here is what I have so far. Ask again to continue.".to_string();
-        self.history.lock().await.push(json!({"role": "assistant", "content": text}));
-        self.emit(Event::Message { turn_id: turn_id.clone(), text, is_final: true, endpoint: None, speak: false });
-        Ok(())
+    /// The reply when even the tool-free request produced no text: say what
+    /// happened rather than nothing.
+    async fn summary_without_model(&self) -> String {
+        let h = self.history.lock().await;
+        let n = h.iter().rev().take_while(|m| m["role"] != "user").filter(|m| m["role"] == "tool").count();
+        format!("I read {n} tool result(s) but could not turn them into an answer; ask again, or narrow the question.")
+    }
+
+    /// A short real name for what the turn is about: the guide on screen,
+    /// else the card in play, else the first words of the question. Falls
+    /// back to the source (`typed turn`) only for an empty question.
+    fn task_name(&self, text: &str, tier: Tier, source: &str) -> String {
+        let guide = {
+            let g = self.ui.lock();
+            g.steps.values().map(|s| s.title.clone()).chain(g.checklists.values().map(|c| c.title.clone())).find(|t| !t.trim().is_empty())
+        };
+        let card = self.focus.lock().unwrap_or_else(|e| e.into_inner()).as_ref().and_then(|f| f.get_titled());
+        // A survey answer is host-written text, not words worth showing.
+        let spoken = if text.starts_with("Answer to Q") { String::new() } else { summarize_question(text) };
+        let name = if spoken.is_empty() { guide.or(card).unwrap_or_default() } else { guide.or(card).unwrap_or(spoken) };
+        if name.is_empty() {
+            return match tier {
+                Tier::Quick => format!("{source} turn"),
+                Tier::Plan => format!("planning ({source})"),
+            };
+        }
+        match tier {
+            Tier::Quick => name,
+            Tier::Plan => format!("planning: {name}"),
+        }
     }
 
     /// One model call, streamed. Token chunks are emitted as the provider
     /// sends them; tool calls arrive assembled in the returned response, and
     /// a provider error (also mid-stream) fails the call.
-    async fn call_model(&self, turn_id: &TurnId, route: &Route, messages: &[Value], specs: &[Value]) -> Result<Value, CosError> {
+    async fn call_model(&self, turn_id: &TurnId, route: &Route, messages: &[Value], specs: &[Value], tool_choice: Option<&Value>) -> Result<Value, CosError> {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(64);
         let call = route
             .provider
-            .complete_stream(&route.bare_model, messages, specs, Some(MAX_TOKENS), Some(0.3), None, tx);
+            .complete_stream(&route.bare_model, messages, specs, Some(MAX_TOKENS), Some(0.3), tool_choice, tx);
         let forward = async {
             while let Some(text) = rx.recv().await {
                 self.emit(Event::Token { turn_id: turn_id.clone(), text });
@@ -352,7 +438,7 @@ impl Inner {
             self.log.record(turn_id, &name, &text, "refused");
             self.emit(Event::Tool { name: name.clone(), summary: text.clone(), status: "refused".into() });
             self.push_tool_result(&call_id, &json!({"error": text})).await;
-            return Ok(Flow::Continue);
+            return Ok(Flow::Failed);
         };
         let spec = tool.spec();
         let id = spec.id.to_string();
@@ -386,6 +472,7 @@ impl Inner {
                 self.log.record(turn_id, &id, &reason, "error");
                 self.emit(Event::Tool { name: id, summary: reason.clone(), status: "error".into() });
                 self.push_tool_result(&call_id, &json!({"error": reason})).await;
+                return Ok(Flow::Failed);
             }
         }
         Ok(Flow::Continue)
@@ -456,6 +543,22 @@ fn describe_action(tool: &str, args: &Value) -> String {
     }
 }
 
+/// The first six words of the question, trimmed of punctuation and capitalised.
+fn summarize_question(text: &str) -> String {
+    let joined = text.split_whitespace().take(6).collect::<Vec<_>>().join(" ");
+    let mut words: Vec<&str> = joined.trim_matches(|c: char| !c.is_alphanumeric()).split(' ').collect();
+    // Do not end on a dangling article or preposition.
+    while words.len() > 2 && matches!(words.last().map(|w| w.to_lowercase()).as_deref(), Some("the" | "a" | "an" | "of" | "on" | "in" | "to" | "and" | "for" | "is" | "are")) {
+        words.pop();
+    }
+    let joined = words.join(" ");
+    let mut chars = joined.chars();
+    match chars.next() {
+        Some(f) => f.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
 fn trim_history(h: &mut Vec<Value>) {
     while h.len() > HISTORY_LIMIT {
         h.remove(0);
@@ -469,6 +572,13 @@ fn trim_history(h: &mut Vec<Value>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn question_becomes_a_short_task_name() {
+        assert_eq!(summarize_question("where are we on the pad? and also the glasses"), "Where are we on the pad");
+        assert_eq!(summarize_question("  ?! "), "");
+        assert_eq!(summarize_question("what is in progress on the board"), "What is in progress");
+    }
 
     #[test]
     fn yes_words() {
