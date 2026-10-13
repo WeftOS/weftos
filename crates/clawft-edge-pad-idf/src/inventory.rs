@@ -8,6 +8,7 @@
 //! pairing), and a level watcher on IO38_D, the one free GPIO on the J7
 //! "GPIO D" header. Schematic: `CrowPanel ESP32 Display-7.0-inch-V3.0-20240420.pdf`.
 
+#[cfg(feature = "ble-probe")]
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use esp_idf_hal::i2c::I2cDriver;
@@ -130,11 +131,13 @@ pub fn chip_temperature(sensor: TempSensor<'static>) {
     }
 }
 
+#[cfg(feature = "ble-probe")]
 static BLE_SEEN: AtomicU32 = AtomicU32::new(0);
 
 /// Advertise as `clawft-edge-pad` and run an active scan for `secs`,
 /// logging every advertiser (address, RSSI, name). No connections, no
 /// pairing. Runs on the caller's thread via `block_on`.
+#[cfg(feature = "ble-probe")]
 pub fn ble_probe(secs: u32) {
     use esp32_nimble::{BLEAdvertisementData, BLEDevice, BLEScan};
     esp_idf_hal::task::block_on(async {

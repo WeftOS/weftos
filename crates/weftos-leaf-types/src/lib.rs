@@ -25,6 +25,7 @@ use serde::{Deserialize, Serialize};
 pub mod spatial;
 pub mod link;
 pub mod discovery;
+pub mod frame_reader;
 
 // ── Topic layout ──────────────────────────────────────────────────
 
