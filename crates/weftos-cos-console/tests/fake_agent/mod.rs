@@ -23,6 +23,10 @@ struct Shared {
     posts: Vec<(String, Value)>,
     streams: Vec<Sender<Msg>>,
     ptt_up_reply: Option<Value>,
+    /// What `GET /v1/cos/turns` answers; `None` answers 404 (an older agent).
+    turns: Option<Vec<Value>>,
+    turns_delay: std::time::Duration,
+    turns_requests: Vec<String>,
 }
 
 pub struct FakeAgent {
@@ -90,6 +94,21 @@ impl FakeAgent {
         self.posts().into_iter().filter(|(p, _)| p == path).map(|(_, v)| v).collect()
     }
 
+    /// Serve these turns (oldest first) on `GET /v1/cos/turns`.
+    pub fn set_turns(&self, turns: Vec<Value>) {
+        self.lock().turns = Some(turns);
+    }
+
+    /// Hold each `GET /v1/cos/turns` reply back this long.
+    pub fn set_turns_delay(&self, d: std::time::Duration) {
+        self.lock().turns_delay = d;
+    }
+
+    /// The request targets of every `GET /v1/cos/turns` so far.
+    pub fn turns_requests(&self) -> Vec<String> {
+        self.lock().turns_requests.clone()
+    }
+
     /// What `POST /v1/cos/ptt {down:false}` answers.
     pub fn set_ptt_up_reply(&self, v: Value) {
         self.lock().ptt_up_reply = Some(v);
@@ -120,6 +139,18 @@ fn handle(mut conn: TcpStream, shared: Arc<Mutex<Shared>>) {
     let path = parts.next().unwrap_or("").to_string();
     match (method.as_str(), path.as_str()) {
         ("GET", "/v1/cos/events") => stream_events(conn, shared),
+        ("GET", p) if p.starts_with("/v1/cos/turns") => {
+            let (turns, delay) = {
+                let mut s = shared.lock().unwrap_or_else(|e| e.into_inner());
+                s.turns_requests.push(p.to_string());
+                (s.turns.clone(), s.turns_delay)
+            };
+            thread::sleep(delay);
+            match turns {
+                Some(t) => respond_json(&mut conn, 200, &json!({"turns": t})),
+                None => respond_json(&mut conn, 404, &json!({"error": "no route"})),
+            }
+        }
         ("GET", "/healthz") => respond_json(&mut conn, 200, &json!({"ok": true})),
         ("POST", _) => {
             let mut body = vec![0u8; content_length];

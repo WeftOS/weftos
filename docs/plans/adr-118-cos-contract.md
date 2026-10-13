@@ -84,6 +84,7 @@ code disagree.
 | `POST /v1/cos/answer` | `{"kind": "answer"\|"toggle"\|"step"\|"skip"\|"back", "id": string, "value": any}`; `value` defaults to `null` | `202 {"turn_id": string}` | `400` unknown or stale `id`, a `value` the kind cannot use, malformed JSON |
 | `POST /v1/cos/ptt` | `{"down": bool, "endpoint": "host"}`; `endpoint` is optional and may only be `host` | down: `202 {"active": true}`; up: `202 {"active": false, "posted": {"text": string, "turn_id": string}}` or `202 {"active": false, "nothing": "<reason>"}` | `503` the agent runs without `--mic`; `500` capture or STT failed; `400` malformed JSON or an `endpoint` other than `host`; `403` a remote endpoint's token (the microphone is the host's) |
 | `GET /v1/cos/events` | none | `200 text/event-stream` (see 3.2) | none |
+| `GET /v1/cos/turns?limit=N` | none; `limit` is 1 to 100, default 20 | `200 {"turns": [{"turn_id": string, "role": "user"\|"assistant", "endpoint": string, "text": string, "ts": RFC 3339}]}`, oldest first: the most recent final user and assistant messages (the agent keeps the last 200; `text` is redacted as on the event stream) | `400` a `limit` that is not a whole number from 1 to 100; `401` off loopback without a valid token (3.3) |
 | `GET /healthz` | none | `200 {"ok": true, "api": "cos.v1"}` | none |
 
 - **`turn_id`** is an opaque string (32 hex characters today). The events of the turn carry it.

@@ -107,6 +107,26 @@ impl UserUtterance {
     }
 }
 
+/// Turn messages kept for `GET /v1/cos/turns`.
+pub const TURN_HISTORY_CAP: usize = 200;
+/// Default and maximum `limit` of `GET /v1/cos/turns`.
+pub const TURNS_DEFAULT_LIMIT: usize = 20;
+pub const TURNS_MAX_LIMIT: usize = 100;
+
+/// One final message of a turn, as `GET /v1/cos/turns` returns it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TurnMessage {
+    pub turn_id: TurnId,
+    /// `user` or `assistant`.
+    pub role: String,
+    /// The endpoint the turn belongs to.
+    pub endpoint: String,
+    /// Redacted, as on the event stream.
+    pub text: String,
+    /// RFC 3339, UTC.
+    pub ts: String,
+}
+
 /// The agent as the console sees it: utterances in, events out.
 #[async_trait]
 pub trait Conversation: Send + Sync {
@@ -122,4 +142,8 @@ pub trait Conversation: Send + Sync {
     /// Subscribe to the event stream. Each subscriber sees events emitted
     /// after it subscribed.
     fn events(&self) -> broadcast::Receiver<Event>;
+
+    /// The most recent final user and assistant messages, oldest first.
+    /// `limit` is already validated (1..=[`TURNS_MAX_LIMIT`]).
+    fn recent_turns(&self, limit: usize) -> Vec<TurnMessage>;
 }

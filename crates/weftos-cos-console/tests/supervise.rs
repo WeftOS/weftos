@@ -197,3 +197,42 @@ fn the_agent_stream_closing_resubscribes_and_events_land_again() {
         assert_eq!(count(log, "disconnected"), 0, "an agent outage is not a display outage");
     });
 }
+
+#[test]
+fn history_is_reloaded_on_every_reconnect_and_a_failed_fetch_is_logged_once() {
+    let agent = FakeAgent::start();
+    agent.set_turns(vec![
+        json!({"turn_id": "a", "role": "user", "endpoint": "host", "text": "earlier question", "ts": "2026-10-13T09:00:00.000Z"}),
+        json!({"turn_id": "a", "role": "assistant", "endpoint": "host", "text": "earlier answer", "ts": "2026-10-13T09:00:01.000Z"}),
+    ]);
+    let pad = Pad::default();
+    with_supervisor(&agent, &pad, |log, _| {
+        assert!(wait(|| pad.shows("earlier answer")), "a fresh pad shows the history");
+        assert_eq!(pad.opens.load(Ordering::SeqCst), 1);
+
+        // The display drops; the reopened pad is repainted with the history.
+        pad.refuse_publish.store(true, Ordering::SeqCst);
+        assert!(wait(|| agent.stream_count() > 0));
+        agent.send(json!({"kind": "token", "turn_id": "t1", "text": "lost in the outage"}));
+        assert!(wait(|| count(log, "disconnected") == 1));
+        pad.refuse_publish.store(false, Ordering::SeqCst);
+        assert!(wait(|| count(log, "reconnected") == 1));
+        assert!(wait(|| pad.opens.load(Ordering::SeqCst) >= 2 && pad.shows("earlier answer")));
+        assert_eq!(count(log, "recent turns"), 0, "a good fetch logs nothing");
+    });
+}
+
+#[test]
+fn a_failing_history_fetch_never_breaks_the_connection() {
+    let agent = FakeAgent::start(); // no /v1/cos/turns route: 404
+    let pad = Pad::default();
+    with_supervisor(&agent, &pad, |log, h| {
+        assert!(wait(|| pad.shows("chief of staff") && agent.stream_count() > 0));
+        assert!(wait(|| count(log, "recent turns") == 1));
+        agent.send(json!({"kind": "token", "turn_id": "t", "text": "live anyway"}));
+        assert!(wait(|| pad.shows("live anyway")));
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(count(log, "recent turns"), 1, "logged once");
+        assert!(!h.is_finished());
+    });
+}

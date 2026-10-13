@@ -5,6 +5,8 @@
 //! POST /v1/cos/answer {kind, id, value}        -> 202 {turn_id}   (guide touch)
 //! POST /v1/cos/ptt {down}                      -> 202 {active, posted?|nothing?}
 //! GET  /v1/cos/events                          -> text/event-stream of Event
+//! GET  /v1/cos/turns?limit=N                   -> 200 {turns: [{turn_id, role, endpoint, text, ts}]}
+//!                                                 (oldest first; limit 1..=100, default 20)
 //! GET  /healthz                                -> 200 {ok: true, api: "cos.v1"}
 //! ```
 //!
@@ -21,7 +23,7 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{ConnectInfo, FromRequestParts, State};
+use axum::extract::{ConnectInfo, FromRequestParts, RawQuery, State};
 use axum::http::StatusCode;
 use axum::http::request::Parts;
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
@@ -34,7 +36,7 @@ use tokio::net::TcpListener;
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::CosError;
-use crate::conversation::{Conversation, GuideAnswer, HOST_ENDPOINT, UserUtterance};
+use crate::conversation::{Conversation, GuideAnswer, HOST_ENDPOINT, TURNS_DEFAULT_LIMIT, TURNS_MAX_LIMIT, UserUtterance};
 use crate::endpoints::{AuthError, Caller, TokenStore, authorize, is_tailnet_ip};
 use crate::voice::{PttControl, PttEdge, PttOutcome};
 
@@ -98,6 +100,7 @@ pub fn router_auth(conv: Shared, ptt: SharedPtt, tokens: Option<Arc<TokenStore>>
         .route("/v1/cos/answer", post(answer))
         .route("/v1/cos/ptt", post(ptt_edge))
         .route("/v1/cos/events", get(events))
+        .route("/v1/cos/turns", get(turns))
         .route("/healthz", get(|_caller: Authed| async { Json(json!({"ok": true, "api": API_VERSION})) }))
         .with_state(Api { conv, ptt, tokens })
 }
@@ -227,6 +230,30 @@ async fn ptt_edge(State(api): State<Api>, Authed(caller): Authed, body: Result<J
         Ok(Some(PttOutcome::Nothing { reason })) => (StatusCode::ACCEPTED, Json(json!({"active": false, "nothing": reason}))),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))),
     }
+}
+
+/// The `limit` of a `GET /v1/cos/turns` query string: absent is the default,
+/// anything but a whole number in 1..=[`TURNS_MAX_LIMIT`] is refused.
+fn turns_limit(query: Option<&str>) -> Result<usize, String> {
+    let bad = || format!("limit must be a whole number from 1 to {TURNS_MAX_LIMIT}");
+    let mut limit = None;
+    for pair in query.unwrap_or("").split('&').filter(|p| !p.is_empty()) {
+        match pair.split_once('=') {
+            Some(("limit", raw)) => limit = Some(raw.parse::<usize>().ok().filter(|n| (1..=TURNS_MAX_LIMIT).contains(n)).ok_or_else(bad)?),
+            None if pair == "limit" => return Err(bad()),
+            _ => {}
+        }
+    }
+    Ok(limit.unwrap_or(TURNS_DEFAULT_LIMIT))
+}
+
+/// `GET /v1/cos/turns`: the most recent final messages, oldest first.
+async fn turns(State(api): State<Api>, _caller: Authed, RawQuery(query): RawQuery) -> (StatusCode, Json<Value>) {
+    let limit = match turns_limit(query.as_deref()) {
+        Ok(n) => n,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({"error": e}))),
+    };
+    (StatusCode::OK, Json(json!({"turns": api.conv.recent_turns(limit)})))
 }
 
 async fn events(State(api): State<Api>, _caller: Authed) -> Sse<impl Stream<Item = Result<SseEvent, Infallible>>> {
