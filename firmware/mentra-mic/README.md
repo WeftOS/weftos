@@ -65,3 +65,15 @@ hold the mic, or the audio route is muted).
     weftos-cos transcribe utt1.wav
 
 then POST the transcript to `/v1/cos/utterance` as endpoint `mentra`.
+
+## Foreground start (preferred on Android 14)
+
+A broadcast from the background may be refused the microphone. Starting the
+capture through the launcher activity runs it from the foreground:
+
+```
+adb -s 192.168.10.128:5555 shell am start -n com.weftos.mentramic/.LauncherActivity \
+  -a com.weftos.mentramic.RECORD --ei seconds 6 --es name utt1
+```
+
+The same form works for `com.weftos.mentramic.LEVEL` and `com.weftos.mentramic.STOP`.
