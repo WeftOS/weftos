@@ -16,7 +16,12 @@
 use std::path::Path;
 
 use clawft_kernel::licence::MeshId;
+#[cfg(all(feature = "placement", unix))]
 use clawft_types::placement::TrustTier;
+
+/// The placement peers file (`workload_place_policy::PEERS_FILE`), named here so
+/// the refusal message builds on every target.
+const PEERS_FILE_NAME: &str = "workload-peers.json";
 
 use crate::mesh_genesis::{self, Origin, SignedMeshRecord, StoredRecord};
 
@@ -24,14 +29,19 @@ use crate::mesh_genesis::{self, Origin, SignedMeshRecord, StoredRecord};
 pub fn signer_trust(dir: &Path, signer: &[u8; 32]) -> Result<&'static str, String> {
     let node = clawft_kernel::node_id_from_pubkey(signer);
     let hex = hex::encode(signer);
-    let peers = crate::workload_place_policy::load_peer_keys(dir)?;
-    if peers.iter().any(|(t, k)| k == signer && matches!(t, TrustTier::Pinned | TrustTier::Paired)) {
-        return Ok("workload-peers.json (pinned or paired)");
-    }
-    if let Some(cfg) = crate::workload_host_serve::load_host_config(dir)?
-        && cfg.controllers.contains(&hex)
+    // The placement trust files exist only on Unix builds with `placement`;
+    // elsewhere a mesh pairing is the only way to trust a signer.
+    #[cfg(all(feature = "placement", unix))]
     {
-        return Ok("workload-host.json controllers");
+        let peers = crate::workload_place_policy::load_peer_keys(dir)?;
+        if peers.iter().any(|(t, k)| k == signer && matches!(t, TrustTier::Pinned | TrustTier::Paired)) {
+            return Ok("workload-peers.json (pinned or paired)");
+        }
+        if let Some(cfg) = crate::workload_host_serve::load_host_config(dir)?
+            && cfg.controllers.contains(&hex)
+        {
+            return Ok("workload-host.json controllers");
+        }
     }
     if mesh_pairings_has(dir, &node)? {
         return Ok("mesh-pairings.json");
@@ -41,7 +51,7 @@ pub fn signer_trust(dir: &Path, signer: &[u8; 32]) -> Result<&'static str, Strin
          Trust it first: add {{\"key\": \"{hex}\", \"tier\": \"paired\"}} to {} in the runtime dir, \
          list the key under `controllers` in workload-host.json, or pair with that node. \
          Nothing was imported",
-        crate::workload_place_policy::PEERS_FILE
+        PEERS_FILE_NAME
     ))
 }
 
