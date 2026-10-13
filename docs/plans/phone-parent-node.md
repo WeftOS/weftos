@@ -454,7 +454,7 @@ Moved by the owner's direction (2026-10-13). The CSI research lives in `~/dev/me
 | # | Question | Default |
 |---|---|---|
 | Q1 | Does the P0 spike need any speech credential on the phone? | No. Never on the phone, at any phase |
-| Q2 | Which Android phone and OS version is the reference device? | The owner's daily phone, plus one older mid-range device for OEM battery behavior |
+| Q2 | Which Android phone and OS version is the reference device? | **Decided 2026-10-13 (owner):** the owner's daily Samsung Galaxy S24 Ultra only. No second test device. |
 | Q3 | Distribute through Play (internal then closed testing) or sideload only? | Play internal testing in P1; public decision later |
 | Q4 | Is the camera in scope for P1 (stills on command)? | Stills yes, clips and streaming later |
 | Q5 | Cached stock phrases: server side per user, pushed to the glasses? | Yes; the phone caches nothing |
@@ -463,8 +463,8 @@ Moved by the owner's direction (2026-10-13). The CSI research lives in `~/dev/me
 | Q8 | When does iOS start? | After P1 acceptance; run a one-week iOS feasibility spike (BLE doorbell and hotspot only) during P1 |
 | Q9 | Public App Store release, or TestFlight only? | TestFlight until the background behavior is proven |
 | Q10 | If iOS cannot be always-on, is "foreground or wake-by-gesture" acceptable? | Yes, documented as a platform limit |
-| Q11 | May we buy a second glasses unit for firmware risk? | Yes; no firmware work on the daily unit |
-| Q12 | CSI priority against P1/P2? | Read-only inspection and T0 in P1; T4 next; T1/T2 optional |
+| Q11 | May we buy a second glasses unit for firmware risk? | **Decided 2026-10-13 (owner):** there is only one glasses unit, so no firmware work on it. Firmware-risk items wait until a second unit exists. |
+| Q12 | CSI priority against P1/P2? | **Decided 2026-10-13 (owner):** CSI is delegated to the RuView work for later (see ~/dev/mentra/docs/MentraGlasses_RuView.md). Not part of P0–P2. |
 | Q13 | Where does the leaf-parent code live? | A new small crate, adopted by the kernel |
 | Q14 | Parent relation in ADR-114 names or in node facts? | Node facts for now; ADR owner decides |
 | Q15 | Does the agent accept a hardware gesture for mute? | Yes if the stock client exposes the event; otherwise no |
@@ -472,7 +472,7 @@ Moved by the owner's direction (2026-10-13). The CSI research lives in `~/dev/me
 | Q17 | Who builds the P0 speech workflow stub? | The cloud-plan (M2/M3) lane, with the P0 team consuming it; if it is not ready, a function pair for the spike |
 | Q18 | Per-user caps on open-gate seconds and speech spend? | Yes, enforced in the workflow ledger and by the glasses' gate cap |
 | Q19 | T4 receiver placement and count? | One ESP32-C5 near the usual AP or phone position for the bench |
-| Q20 | The cloud plan said audio never passes through Vercel; does the owner accept an audio ingress outside Vercel (or a revised statement)? | Yes: a small streaming service, with the durable workflow as the control plane only |
+| Q20 | The cloud plan said audio never passes through Vercel; does the owner accept an audio ingress outside Vercel (or a revised statement)? | **Decided 2026-10-13 (owner):** yes, a small streaming audio ingress outside Vercel, with the durable workflow as control plane. Exception: anything that must go through the AI Gateway goes through Vercel, i.e. our API on Vercel. Long term we take control of the whole speech path (self-hosted); ElevenLabs is fine for now. |
 | Q21 | May the LED be the mic-open indicator, with the semantics in section 3.7 after an eyes-on check? | Yes |
 | Q22 | Does the `done_ok` chime play after a spoken reply? | Yes by default; `cue_done_after_speech=false` drops it |
 | Q23 | Thinking timeout before `done_error`? | 20 s, extendable to 60 s by the workflow |
