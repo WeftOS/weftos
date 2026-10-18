@@ -1,5 +1,5 @@
 [package]
-name = "exo-dag"
+name = "weftos-exo-dag"
 version.workspace = true
 publish = true
 edition.workspace = true
@@ -11,12 +11,15 @@ description = "K6 substrate DAG: in-memory DagStore + MMR + Sparse Merkle Tree (
 keywords = ["dag", "mmr", "smt", "exochain", "k6"]
 categories = ["data-structures", "cryptography"]
 
+[lib]
+name = "exo_dag"
+
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
-exo-core = { version = "0.8.4-rc.14", path = "../exo-core" }
+exo-core = { package = "weftos-exo-core", version = "0.8.4-rc.14", path = "../exo-core" }
 serde = { workspace = true }
 thiserror = { workspace = true }
 parking_lot = { workspace = true }

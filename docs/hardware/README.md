@@ -48,3 +48,4 @@ crate tests) checks the link shape.
 - Firmware substrate: `crates/clawft-edge-pad*` (no_std/std ESP32).
 - Placement direction: WeftOS ADR-099 (placement), the mesh-workload-placement memory.
 - Vendor writeups: [sipeed.md](sipeed.md), [pololu.md](pololu.md), [toradex.md](toradex.md), [debix.md](debix.md).
+- ESP32-P4 Linux reference: [esp32-p4-nommu-linux.md](esp32-p4-nommu-linux.md) (NOMMU Linux on Stamp-P4 + C6; patterns, not a runtime target).

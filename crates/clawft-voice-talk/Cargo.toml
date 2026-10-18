@@ -5,7 +5,8 @@ version.workspace = true
 # voice controller to the concrete local stack (Hermes LLM, WebRTC-AEC, kernel
 # ECC). Kept separate so clawft-channels stays free of clawft-llm / clawft-kernel
 # / cpal — the dependency-inversion seam (ADR-061 §7).
-publish = true
+# Not published while clawft-voice-aec/-onnx/-tts stay publish = false.
+publish = false
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

@@ -402,8 +402,8 @@ clawft-graphify = { version = "0.8.4-rc.14", path = "crates/clawft-graphify", de
 clawft-security = { version = "0.8.4-rc.14", path = "crates/clawft-security" }
 clawft-kernel = { version = "0.8.4-rc.14", path = "crates/clawft-kernel", default-features = false }
 exo-resource-tree = { version = "0.8.4-rc.14", path = "crates/exo-resource-tree" }
-exo-core = { version = "0.8.4-rc.14", path = "crates/exo-core" }
-exo-dag = { version = "0.8.4-rc.14", path = "crates/exo-dag" }
+exo-core = { package = "weftos-exo-core", version = "0.8.4-rc.14", path = "crates/exo-core" }
+exo-dag = { package = "weftos-exo-dag", version = "0.8.4-rc.14", path = "crates/exo-dag" }
 weftos = { version = "0.8.4-rc.14", path = "crates/weftos", default-features = false }
 clawft-substrate = { version = "0.8.4-rc.14", path = "crates/clawft-substrate" }
 # ADR-056 / WEFT-718: BVH broad-phase (kernel SpatialBackend behind `ecc`).
