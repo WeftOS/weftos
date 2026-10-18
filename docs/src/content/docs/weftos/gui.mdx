@@ -1,105 +1,26 @@
 ---
 title: "K8 GUI"
-description: "React 19 + TypeScript + Tailwind GUI layer shipped as a Tauri 2.0 desktop app: Dashboard, Admin Forms, Knowledge Graph visualization, Component Generator, and WebSocket kernel bridge."
+description: "The WeftOS desktop GUI is the egui/eframe shell in crates/clawft-gui-egui, shipped as the native weft-gui-egui binary and as a WASM build hosted by the VS Code panel."
 ---
 
-K8 is the human interface layer of WeftOS — a web-based GUI that provides real-time visibility into kernel state and interactive administration.
+K8 is the human interface layer of WeftOS: real-time visibility into kernel state and
+interactive administration.
 
-**Source**: `gui/`
-**Stack**: React 19, TypeScript, Vite, Tailwind CSS, Cytoscape.js
-**Phase**: K8
+**Source**: `crates/clawft-gui-egui/`
+**Stack**: Rust, egui/eframe (native and WASM)
+**Decision**: ADR-038 (Tauri) is superseded by the egui shell (2026-04-28, WEFT-242).
 
-## Views
+## Surfaces
 
-### Dashboard
+- **Native**: the `weft-gui-egui` binary. Build it with `scripts/build.sh gui-egui`.
+- **Editor panel**: a WASM build of the same crate, hosted inside VS Code and Cursor by
+  `extensions/vscode-weft-panel/`.
 
-Read-only overview of kernel state:
+The shell talks to the kernel through substrate RPCs (`read`, `subscribe`, `publish`,
+`notify`) rather than Tauri `invoke` commands and events.
 
-- **Metrics grid**: process count, chain height, uptime, message rates
-- **Process table**: active agents with PID, state, CPU/memory
-- **Chain events**: recent ExoChain commits with hash, type, timestamp
-- **Health indicators**: service status badges
+## History
 
-### Admin Forms
-
-Five CRUD forms testing the full TypeScript → Rust round-trip:
-
-1. **Spawn Agent** — name, capabilities, restart strategy
-2. **Stop Agent** — select by PID, graceful/force
-3. **Set Config** — namespace, key, value (typed)
-4. **Query Chain** — hash or height lookup
-5. **Register Service** — name, port, health endpoint
-
-### Knowledge Graph
-
-Interactive causal graph visualization using Cytoscape.js:
-
-- **8 edge type colors**: Causes (red), Enables (green), Correlates (blue), etc.
-- **Node sizing**: scales with degree (more connections = larger node)
-- **Community coloring**: background tint by detected community
-- **Click-to-inspect**: NodeDetail panel showing edges, metadata, community ID
-- **Search**: highlight/dim filtering with search bar
-- **Coherence gauge**: displays lambda_2 (algebraic connectivity)
-- **Layout**: force-directed (cose) with configurable parameters
-
-## Architecture
-
-```
-┌──────────────┐     WebSocket      ┌──────────────┐
-│   React GUI  │ ◄─────────────────► │  Kernel API  │
-│  (Vite dev)  │     JSON messages   │  (Rust)      │
-└──────────────┘                     └──────────────┘
-```
-
-### TypeScript Types
-
-TypeScript interfaces mirror Rust kernel structs:
-- `ProcessEntry`, `ProcessState`, `ResourceUsage`
-- `ChainEvent`, `KernelMetrics`
-- `CausalNode`, `CausalEdge`, `SpectralResult`
-
-### WebSocket Hook
-
-`useKernelWebSocket` hook manages the connection lifecycle:
-- Auto-reconnect with exponential backoff
-- Mock data mode for development (no kernel required)
-- Message type routing to React state
-
-## Development
-
-```bash
-cd gui
-npm install
-npm run dev     # Vite dev server at localhost:5173
-npm run build   # Production build (204KB JS, 17KB CSS)
-```
-
-## Build Output
-
-Production build: **204KB** JavaScript, **17KB** CSS. No external CDN dependencies.
-
-## Tauri 2.0 Desktop App
-
-The GUI ships as a native desktop application via Tauri 2.0. The Rust backend exposes four IPC commands:
-
-| Command | Description |
-|---------|-------------|
-| `kernel_status` | Returns kernel version, uptime, health, state |
-| `spawn_agent` | Spawns a new agent by name with capabilities |
-| `stop_agent` | Stops a running agent by PID |
-| `set_config` | Sets a kernel configuration key/value pair |
-
-**Source**: `gui/src-tauri/src/lib.rs`
-
-### Build
-
-```bash
-cd gui
-npm install
-npm run tauri dev     # Dev mode with hot reload
-npm run tauri build   # Production binary
-```
-
-## Component Generator
-
-The `ComponentGenerator` view (`gui/src/views/ComponentGenerator.tsx`) allows agents to dynamically generate React components at runtime. The Weaver or other authorized agents submit TSX source code, which is validated, rendered, and optionally persisted as a new block in the block registry.
+The first K8 GUI was a React 19 + Vite app in `gui/` wrapped in a Tauri 2.0 shell
+(`gui/src-tauri`), with a second Tauri shell around the dashboard in `clawft-ui/src-tauri`.
+Neither was released, and both were removed on 2026-10-18.

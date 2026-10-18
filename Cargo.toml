@@ -142,12 +142,6 @@ members = [
     "crates/weftos-cos",
 ]
 exclude = [
-    "gui/src-tauri",
-    # WEFT-313: Tauri 2.0 desktop shell wrapping the clawft-ui dashboard.
-    # Excluded from the workspace so kernel developers do not need the
-    # platform WebView SDKs (libwebkit2gtk-4.1-dev on Linux, WebView2 on
-    # Windows) to build the core crates.
-    "clawft-ui/src-tauri",
     # Archived per ADR-051 (clawft-plugin-* fate). These crates are
     # preserved in-tree for git-history continuity and possible future
     # revival, but are not part of the active workspace build.

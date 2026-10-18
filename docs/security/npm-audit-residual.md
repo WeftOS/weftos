@@ -1,5 +1,7 @@
 # npm audit residual risk (WEFT-598)
 
+> 2026-10-18: `gui/` was removed with the Tauri shells (ADR-038). Its rows below are historical.
+
 Last triage: 2026-10-05 on `target-0.8.3` (v0.8.3 release gate): new critical/high
 cleared without breaking upgrades — root `proxy-addr` 2.0.7→2.0.8 (override; critical
 GHSA-jqcg-44mw-7w3h via the pinned `@claude-flow/cli` → express), `clawft-ui` `seroval`
