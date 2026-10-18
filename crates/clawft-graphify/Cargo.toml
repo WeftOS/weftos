@@ -6,6 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+description = "Knowledge graph builder for WeftOS: extracts entities and relationships from code (tree-sitter) and documents, clusters and exports them."
 
 [features]
 default = ["code-domain", "rdf-ingest"]

@@ -1,5 +1,5 @@
 [package]
-name = "exo-core"
+name = "weftos-exo-core"
 version.workspace = true
 publish = true
 edition.workspace = true
@@ -10,6 +10,9 @@ homepage.workspace = true
 description = "K6 substrate primitives: BLAKE3 content addressing + Hybrid Logical Clock (ADR-043). In-tree stub of the exo-core contract (WEFT-619)."
 keywords = ["blake3", "hlc", "exochain", "k6", "weftos"]
 categories = ["cryptography", "data-structures"]
+
+[lib]
+name = "exo_core"
 
 [package.metadata.docs.rs]
 all-features = true

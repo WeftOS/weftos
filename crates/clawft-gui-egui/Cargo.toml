@@ -1,7 +1,8 @@
 [package]
 name = "clawft-gui-egui"
 version.workspace = true
-publish = true
+# Not published: include_str! reads clawft-surface fixtures outside the crate.
+publish = false
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

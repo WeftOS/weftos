@@ -3663,27 +3663,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "exo-core"
-version = "0.8.4-rc.14"
-dependencies = [
- "blake3",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "exo-dag"
-version = "0.8.4-rc.14"
-dependencies = [
- "exo-core",
- "parking_lot",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
-]
-
-[[package]]
 name = "exo-resource-tree"
 version = "0.8.4-rc.14"
 dependencies = [
@@ -11225,6 +11204,27 @@ dependencies = [
  "wasm-bindgen-futures",
  "web-time",
  "weftos-cog-companion",
+]
+
+[[package]]
+name = "weftos-exo-core"
+version = "0.8.4-rc.14"
+dependencies = [
+ "blake3",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "weftos-exo-dag"
+version = "0.8.4-rc.14"
+dependencies = [
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "weftos-exo-core",
 ]
 
 [[package]]
