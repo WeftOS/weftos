@@ -1556,7 +1556,7 @@ cmd_audit() {
 # and do not fail the gate. See docs/security/npm-audit-residual.md.
 #
 # Directories audited when present with package-lock.json:
-#   clawft-ui, . (root), docs/src, gui
+#   clawft-ui, . (root), docs/src
 #
 # Env:
 #   NPM_AUDIT_LEVEL  severity floor for fail (default: high)
@@ -1688,7 +1688,7 @@ cmd_npm_audit() {
     local failed=0
 
     if [ "$DRY_RUN" = true ]; then
-        printf "  ${YELLOW}DRY${NC}   npm audit --audit-level=%s (clawft-ui, root, docs/src, gui)\n" "$level"
+        printf "  ${YELLOW}DRY${NC}   npm audit --audit-level=%s (clawft-ui, root, docs/src)\n" "$level"
         timer_end
         return 0
     fi
@@ -1711,7 +1711,6 @@ cmd_npm_audit() {
     npm_audit_one "$ROOT" "root" || failed=$((failed + 1))
     # Secondary product/docs surfaces when present
     npm_audit_one "$ROOT/docs/src" "docs/src" || failed=$((failed + 1))
-    npm_audit_one "$ROOT/gui" "gui" || failed=$((failed + 1))
 
     timer_end
     if [ "$failed" -gt 0 ]; then
@@ -2886,7 +2885,7 @@ ${BOLD}Commands:${NC}
                   Requires: cargo install --locked cargo-audit
                   Followups: WEFT-551/552 DONE; WEFT-553 residual paste+bincode
                   (see docs/plans/wave-0i-WEFT-553-result.md).
-  npm-audit       Run npm audit on clawft-ui, root, docs/src, gui lockfiles
+  npm-audit       Run npm audit on clawft-ui, root, docs/src lockfiles
                   (WEFT-598). Fails on critical/high by default
                   (NPM_AUDIT_LEVEL=high). Set NPM_AUDIT_SOFT=1 to report only.
                   Residual moderates under ruflo pin: docs/security/npm-audit-residual.md

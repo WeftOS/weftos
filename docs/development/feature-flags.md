@@ -396,7 +396,6 @@ add `voice-real-audio` for cpal.
 | `lgfx-bus-rgb-rs` | `double-buffer` (**default**) — dual PSRAM framebuffers |
 | `eml-core` | `experimental-attention` |
 | `clawft-treecalc` | `serde` |
-| Tauri shells (`gui/src-tauri`, `clawft-ui/src-tauri`) | `custom-protocol` (**default**) |
 
 Archive plugins under `crates/archive/*` declare empty `default = []`
 only and are not part of the active product surface.

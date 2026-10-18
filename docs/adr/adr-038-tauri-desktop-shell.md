@@ -2,6 +2,7 @@
 
 **Date**: 2026-04-03
 **Status**: Superseded by egui shell (2026-04-28)
+**Updated**: 2026-10-18 — both Tauri shells (`gui/` with `gui/src-tauri`, and `clawft-ui/src-tauri`) were removed from the tree; they were unbuilt stubs carrying four Dependabot alerts (see `docs/security/dependabot-triage-2026-10-18.md`). Paths below refer to the removed code.
 **Deciders**: K8 GUI prototype decision, Sprint 11 Symposium Track 4 (UI/UX Design)
 
 > **Superseded note (2026-04-28, WEFT-242)**: Tauri 2.0 is no longer the desktop shell. The canon GUI is `clawft-gui-egui` (egui/eframe), shipped as both a native binary (`weft-gui-egui`) and a WASM build that the VSCode panel (`extensions/vscode-weft-panel/`) hosts inside Cursor / VS Code. The dual-channel Tauri `invoke` + `kernel://snapshot` event model has been replaced by substrate RPCs (`read`, `subscribe`, `publish`, `notify`) flowing through the egui shell. ADR-005 (xterm.js console), ADR-007 (Zustand + Tauri events), and ADR-013 (JSON block descriptor) are all superseded together as one stack. This ADR is retained for historical context only.

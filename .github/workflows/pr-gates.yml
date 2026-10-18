@@ -750,7 +750,7 @@ jobs:
         with:
           node-version: '20'
 
-      - name: npm audit (clawft-ui, root, docs/src, gui)
+      - name: npm audit (clawft-ui, root, docs/src)
         run: scripts/build.sh npm-audit
 
   # -------------------------------------------------------------------
