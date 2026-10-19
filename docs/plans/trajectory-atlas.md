@@ -1,7 +1,7 @@
 # Trajectory Atlas — corpus-scale agent-run visualization
 
 **Date**: 2026-10-18
-**Status**: Plan (no code yet). Needs an ADR before T2 is claimed (see "Decisions").
+**Status**: Plan (no code yet). Shard format, projection and scope decided 2026-10-18; render path measured (egui; GPU callback for 3-D).
 **Source**: Ian Johnson (@enjalot), posts of 2026-10-18 —
 [overview video](https://x.com/enjalot/status/2111813743302582519),
 [classifier disagreement](https://x.com/enjalot/status/2111813744942588064),
@@ -70,7 +70,7 @@ the view for causal structure within a conversation.
 ## Architecture
 
 ```
- sources ──► ingest (backend) ──► catalog shards (Parquet / Arrow IPC) ──► clients
+ sources ──► ingest (backend) ──► catalog shards (RVF segments)     ──► clients
   Claude Code jsonl      normalize to RunRecord + MessageRecord        egui atlas (desktop + wasm)
   weft chain turns       computed columns: outcome, length,            clawft-ui route (optional)
   voice.trace            classifier labels, cluster id, embedding,
@@ -117,22 +117,47 @@ Order: T1 → T2/T3 in parallel → T4 → T6 → T5/T7 → T8. T1 + T4 + T6 is 
 usable slice: browse every Claude Code session we have, colored by outcome, and
 open any one instantly.
 
-## Decisions to make (ADR before T2)
+## Decisions
 
-1. **Shard format.** Parquet (his choice: columnar, range-readable, with an `arrow`/`parquet`
-   crate dependency) or RVF segments (rUv-native, already in the stack). Recommendation:
-   RVF for embeddings and search, which is where it's already used, and Arrow IPC or Parquet
-   for the catalog and headers, because columnar range reads are exactly the need. Settle it in the ADR.
-2. **Projection algorithm.** UMAP has no mature pure-Rust crate that also builds for WASM.
-   Options: compute on the backend in Rust (port or crate, to be evaluated), or
-   use PaCMAP/t-SNE, or use a random-projection baseline. The client only ever reads coordinates.
-3. **Render path for 10k+ instanced dots in egui.** The egui `Painter` with a mesh batch
-   may be enough. If not, use an `egui_glow` paint callback with an instanced shader. 3-D needs
-   the callback path either way. Measure this in T4 before committing to it.
+Owner decisions of 2026-10-18 are marked **Decided**.
+
+1. **Shard format: Decided, RVF.** Catalog, header and body shards are RVF files, the
+   same format as embeddings and search. RVF already supports the access pattern we need.
+   A file is 64-byte-header segments plus a `MANIFEST_SEG` directory, written last, giving each
+   segment's offset and length. So a reader range-reads the tail, then fetches only the
+   segments it needs. Per-row ids and metadata travel in a `PROFILE_SEG` sidecar placed before
+   each `VEC_SEG`. Sources: `ruvector/crates/ruvector-edge-snapshot/src/rvf_format.rs`,
+   `ruvector/crates/ruvector-edge-snapshot/src/rvf_import.rs`, `ruvector/crates/rvf/rvf-manifest/README.md`.
+   Catalog and header rows are packed columns inside segments. Bodies are one segment per run
+   chunk, so the 24 MiB whole-file versus range-read cutoff still applies.
+2. **Projection: Decided, [umap-rs](https://github.com/wilsonzlin/umap-rs)** (BSD-3-Clause,
+   0.4.5). It runs on the backend only; the client reads coordinates. Why it fits:
+   - It is pure Rust, uses rayon, and is reported at 264M points in 2 h on 126 cores.
+   - It takes precomputed KNN (`knn_indices` and `knn_dists`). We already have HNSW, so the
+     neighbour graph comes from our own index.
+   - Its dependencies are ndarray 0.17 (already in our lockfile), sprs, dashmap, rayon and
+     indicatif. It uses edition 2024, which the 1.95 pin covers.
+
+   Things to handle, none of them a blocker:
+   - **No `transform`.** New runs can't be placed into an existing layout, so ingest either
+     refits in batches or places a new run at the mean of its KNN neighbours until the next refit.
+   - **Single maintainer.** The last push was 2025-12, and it has about 26 stars and 5k downloads. Pin the exact version.
+   - **Initialisation is ours to supply.** Use PCA or a seeded random start, so the same input gives the same layout.
+
+   The 3-D forest uses `n_components: 3`, or the 2-D layout with run length as height.
+3. **Render path: Measured 2026-10-18.** See [the egui stress test](../research/trajectory-atlas-egui-bench.md).
+   - **2-D views and the timeline:** egui's mesh painter, which handled 100k dots at 8 ms
+     and a 5k-message timeline at 0.5 ms.
+   - **3-D forest (anything past about 150k points):** an `egui_glow` paint callback with an
+     instanced shader. The CPU painter ran 575k points at 19 fps.
+   - **Fallback:** three.js or Babylon.js, only if that GPU callback misses 60 fps at 1M+ points.
 4. **Where it lives.** A new Explorer app in `clawft-gui-egui`. The React `clawft-ui`
    route stays optional.
-5. **Corpus scope.** Which sources are on by default, and the opt-in rule for
-   client-confidential projects.
+5. **Corpus scope: Decided, internal first.** v1 is internal and uses our real sources
+   (Claude Code sessions, weft chain turns, voice.trace, Codex/Grok). If the atlas is ever
+   published, it ships with a demo data source (a synthetic or public corpus) and none of
+   ours. That means sources sit behind a `TrajectorySource` trait from T1 on, and the demo
+   source is a separate, publishable crate.
 
 ## Uses beyond browsing
 
