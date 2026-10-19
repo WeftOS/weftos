@@ -3,6 +3,8 @@ name: weftos-design
 description: Authoritative design discipline for WeftOS surfaces — tokens, composer-primitive usage, surface archetypes, empty/loading/offline contract, a11y floor, and OOB stock-desktop manifest. Use whenever creating, reviewing, or modifying a TOML surface fixture, the egui theming layer, or any user-visible WeftOS pane. Codifies docs/DESIGN.md and provides scaffold + audit scripts.
 ---
 
+> Scope: native egui/TOML surfaces only. Web pages and web dashboards use `design-taste-frontend`; this skill's tokens (including the monospace offline hint) do not apply there, and taste's bans do not apply here.
+
 # WeftOS Design — Operational Skill
 
 This skill is the *enforcement + scaffolding* arm of `docs/DESIGN.md`.
