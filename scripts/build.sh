@@ -422,6 +422,17 @@ cmd_gui_egui() {
     fi
 }
 
+# Trajectory Atlas egui render stress test (docs/plans/trajectory-atlas.md).
+# Opens a window, runs scripted scenes on synthetic data with vsync off, writes
+# a Markdown frame-time report (ATLAS_BENCH_OUT, default target/atlas-bench.md)
+# and exits. ATLAS_BENCH_FRAMES sets timed frames per scene (default 300).
+cmd_atlas_bench() {
+    header "Trajectory Atlas egui stress test"
+    timer_start
+    run_cmd cargo run --release -p clawft-gui-egui --example atlas_stress --features native
+    timer_end
+}
+
 cmd_wasi() {
     local profile="${PROFILE:-release-wasm}"
     header "Building WASM for WASI (wasm32-wasip2, profile: $profile)"
@@ -2851,6 +2862,7 @@ ${BOLD}Commands:${NC}
   bundle-size     Gate browser WASM bundle (raw + gzip) against the
                   documented budget (WEFT-389 / M5-A).
                   See docs/architecture/wasm-bundle-size.md
+  atlas-bench     egui render stress test for the Trajectory Atlas (writes target/atlas-bench.md)
   wasm-panel      Build the VSCode dev-panel wasm bundle (clawft-gui-egui)
                   via wasm-pack / cargo + wasm-bindgen + wasm-opt -Oz, then
                   gate against the panel size budget. (WEFT-484 / M6-B)
@@ -3189,6 +3201,7 @@ main() {
         cos-bridge)   cmd_cos_bridge ;;
         install)      cmd_install ;;
         gui-egui)     cmd_gui_egui ;;
+        atlas-bench)  cmd_atlas_bench ;;
         wasi)         cmd_wasi ;;
         browser)      cmd_browser ;;
         scope)        cmd_scope "$SCOPE_NAME" ;;

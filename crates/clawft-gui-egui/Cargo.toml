@@ -81,6 +81,11 @@ required-features = ["native", "demo-lab"]
 # RwLock-reentrancy deadlock (fixed in this commit). Native-only — the
 # wasm target excludes eframe's native window loop.
 [[example]]
+name = "atlas_stress"
+path = "examples/atlas_stress.rs"
+required-features = ["native"]
+
+[[example]]
 name = "canon_slider_windows_deadlock_repro"
 path = "examples/canon_slider_windows_deadlock_repro.rs"
 required-features = ["native"]
