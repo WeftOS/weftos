@@ -875,6 +875,23 @@ run_standalone() {
     return 0
 }
 
+# Doctest scope: `cargo test --doc` errors ("no library targets found") for a
+# bin-only package, so a scoped run keeps only packages with a lib-like target.
+# Prints the `-p <pkg>` args; prints nothing when no named package qualifies.
+# Refuses (non-zero) if cargo metadata cannot be read, rather than guessing.
+doc_scope_args() {
+    local meta
+    meta=$(cargo metadata --no-deps --format-version 1 2>/dev/null) || return 1
+    printf '%s' "$meta" | python3 -c '
+import json, sys
+want = set(sys.argv[1:])
+libs = {"lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro"}
+for p in json.load(sys.stdin)["packages"]:
+    if p["name"] in want and any(set(t["kind"]) & libs for t in p["targets"]):
+        print("-p"); print(p["name"])
+' "$@"
+}
+
 workspace_test() {
     isolate_test_runtime
     local extra=()
@@ -900,9 +917,24 @@ workspace_test() {
     fi
     # ${arr[@]+…} guard: macOS bash 3.2 + `set -u` errors on expanding an
     # empty array without it.
+    run_doctests() {
+        if [ ${#TEST_PACKAGES[@]} -eq 0 ]; then
+            doctest_runtime cargo test "${scope[@]}" --doc ${extra[@]+"${extra[@]}"}
+            return
+        fi
+        local doc=() line
+        local out
+        out=$(doc_scope_args "${TEST_PACKAGES[@]}") || { echo "cannot read cargo metadata for doctest scope" >&2; return 1; }
+        while IFS= read -r line; do [ -n "$line" ] && doc+=("$line"); done <<< "$out"
+        if [ ${#doc[@]} -eq 0 ]; then
+            echo "no library targets in ${TEST_PACKAGES[*]}; skipping doctests"
+            return 0
+        fi
+        doctest_runtime cargo test "${doc[@]}" --doc ${extra[@]+"${extra[@]}"}
+    }
     if command -v cargo-nextest >/dev/null 2>&1; then
         env -u "$(cargo_runner_var)" cargo nextest run ${NEXTEST_CONFIG[@]+"${NEXTEST_CONFIG[@]}"} "${scope[@]}" ${extra[@]+"${extra[@]}"} ${filter[@]+"${filter[@]}"} \
-            && { [ ${#filter[@]} -gt 0 ] || doctest_runtime cargo test "${scope[@]}" --doc ${extra[@]+"${extra[@]}"}; }
+            && { [ ${#filter[@]} -gt 0 ] || run_doctests; }
     else
         cargo test "${scope[@]}" ${extra[@]+"${extra[@]}"} ${cfilter[@]+"${cfilter[@]}"}
     fi
