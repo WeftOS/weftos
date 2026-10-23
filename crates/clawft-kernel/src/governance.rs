@@ -1288,7 +1288,13 @@ impl GovernanceEngine {
         // A blocking rule that is not an overlay approval matched: its verdict
         // stands and an approval rule may not soften it into an escalation.
         let mut other_blocking = false;
+        // Deliberate rule: the first blocking rule in evaluation order supplies
+        // the decision text; later blocking matches still set flags but never
+        // overwrite it (see `note_blocking_reason`). The one exception is a
+        // binding-thread block, whose canonical reason
+        // (`BINDING_THREAD_MISMATCH_REASON`) outranks every other rule's.
         let mut blocking_reason = String::new();
+        let mut binding_reason_set = false;
 
         for rule in self.active_rules() {
             // WEFT-634: selector filter (applies to all rule types that
@@ -1303,19 +1309,18 @@ impl GovernanceEngine {
             // of effect magnitude (S7 / WEFT-108).
             if rule.rule_type == GovernanceRuleType::BrowserPolicy {
                 if let Some(reason) = apply_browser_policy_rule(rule, request) {
-                    has_blocking = true;
-                    other_blocking = true;
-                    hard_deny |= rule.sop_category.as_deref() == Some(OVERLAY_DENY_TAG);
-                    blocking_reason = reason;
-                    // Keep scanning so evaluated_rules is complete, but the
-                    // first denial reason is retained for the decision text.
-                    if !matches!(
+                    if matches!(
                         rule.severity,
                         RuleSeverity::Blocking | RuleSeverity::Critical
                     ) {
-                        // Non-blocking browser_policy still records the hit as warning.
+                        has_blocking = true;
+                        other_blocking = true;
+                        hard_deny |= rule.sop_category.as_deref() == Some(OVERLAY_DENY_TAG);
+                        note_blocking_reason(&mut blocking_reason, reason);
+                    } else {
+                        // Non-blocking browser_policy only records a warning;
+                        // it never touches another rule's flags.
                         has_warning = true;
-                        has_blocking = false;
                     }
                 }
                 continue;
@@ -1329,10 +1334,13 @@ impl GovernanceEngine {
                             has_blocking = true;
                             other_blocking = true;
                             hard_deny |= rule.sop_category.as_deref() == Some(OVERLAY_DENY_TAG);
-                            // Canonical reason wins for the deny path AC
-                            // (`Deny { reason: "binding-thread mismatch" }`),
-                            // even if a later magnitude rule would overwrite.
-                            blocking_reason = reason;
+                            // Canonical reason: a binding-thread block always
+                            // supplies the decision text (first one wins among
+                            // binding-thread rules), regardless of rule order.
+                            if !binding_reason_set {
+                                blocking_reason = reason;
+                                binding_reason_set = true;
+                            }
                         }
                         RuleSeverity::Warning => {
                             has_warning = true;
@@ -1354,7 +1362,7 @@ impl GovernanceEngine {
                             Some(OVERLAY_APPROVAL_TAG) => needs_approval = true,
                             _ => other_blocking = true,
                         }
-                        blocking_reason = if rule.force_on_match && !threshold_exceeded {
+                        let reason = if rule.force_on_match && !threshold_exceeded {
                             format!(
                                 "rule '{}': selector force-match on action '{}' / tool",
                                 rule.id, request.action
@@ -1365,6 +1373,7 @@ impl GovernanceEngine {
                                 rule.id, self.risk_threshold
                             )
                         };
+                        note_blocking_reason(&mut blocking_reason, reason);
                     }
                 }
                 RuleSeverity::Warning => {
@@ -1716,6 +1725,14 @@ impl GovernanceEngine {
     }
 }
 
+/// Record a blocking reason; the first one recorded wins. Binding-thread
+/// reasons bypass this and are written directly (they outrank all others).
+fn note_blocking_reason(slot: &mut String, reason: String) {
+    if slot.is_empty() {
+        *slot = reason;
+    }
+}
+
 #[cfg(feature = "exochain")]
 impl GovernanceResult {
     /// Map the decision to an RVF TaskOutcome.
@@ -1736,6 +1753,111 @@ impl GovernanceResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Probe (ISOP spike): a later Warning-severity browser_policy match must
+    /// not clear a block set by an earlier rule. Rule order must not change
+    /// the decision.
+    #[test]
+    fn isop_probe_warning_browser_rule_does_not_clear_earlier_block() {
+        let mut warn_bp = GovernanceRule::browser_policy(
+            "BP-002",
+            "Browser nodes cannot spawn child agents without capability elevation",
+        );
+        warn_bp.severity = RuleSeverity::Warning;
+
+        let mut req = GovernanceRequest::new("agent-1", "tool.agent_spawn");
+        req.context.insert("tool".into(), "agent_spawn".into());
+        req.context.insert("platform".into(), "browser".into());
+
+        let mut block_then_warn = GovernanceEngine::new(0.7, false);
+        block_then_warn.add_rule(GovernanceRule::spawn_requires_approval());
+        block_then_warn.add_rule(warn_bp.clone());
+
+        let mut warn_then_block = GovernanceEngine::new(0.7, false);
+        warn_then_block.add_rule(warn_bp);
+        warn_then_block.add_rule(GovernanceRule::spawn_requires_approval());
+
+        let a = block_then_warn.evaluate(&req).decision;
+        let b = warn_then_block.evaluate(&req).decision;
+        assert!(
+            matches!(b, GovernanceDecision::Deny(_)),
+            "warn-then-block should deny, got {b:?}"
+        );
+        assert!(
+            matches!(a, GovernanceDecision::Deny(_)),
+            "block-then-warn should deny, got {a:?}"
+        );
+    }
+
+    /// Rule order must never change the decision: every permutation of the
+    /// genesis rules plus one Warning browser rule yields the same verdict.
+    #[test]
+    fn rule_order_does_not_change_decision() {
+        fn permute(items: &mut Vec<GovernanceRule>, k: usize, out: &mut Vec<Vec<GovernanceRule>>) {
+            if k == items.len() {
+                out.push(items.clone());
+                return;
+            }
+            for i in k..items.len() {
+                items.swap(k, i);
+                permute(items, k + 1, out);
+                items.swap(k, i);
+            }
+        }
+
+        let mut warn_bp = GovernanceRule::browser_policy("BP-002W", "warning-severity spawn rule");
+        warn_bp.severity = RuleSeverity::Warning;
+
+        let mut rules = browser_policy_default_rules();
+        rules.extend(binding_thread_default_rules());
+        rules.push(GovernanceRule::spawn_requires_approval());
+        rules.push(warn_bp);
+
+        let mut req = GovernanceRequest::new("agent-1", "tool.agent_spawn");
+        req.context.insert("tool".into(), "agent_spawn".into());
+        req.context.insert("platform".into(), "browser".into());
+
+        let mut perms = Vec::new();
+        permute(&mut rules, 0, &mut perms);
+        assert_eq!(perms.len(), 720);
+
+        let mut seen = std::collections::HashSet::new();
+        for perm in perms {
+            let mut engine = GovernanceEngine::new(0.7, false);
+            for r in perm {
+                engine.add_rule(r);
+            }
+            let d = engine.evaluate(&req).decision;
+            assert!(
+                matches!(d, GovernanceDecision::Deny(_)),
+                "expected Deny, got {d:?}"
+            );
+            seen.insert(std::mem::discriminant(&d));
+        }
+        assert_eq!(seen.len(), 1);
+    }
+
+    /// Documented rule: the first blocking rule in evaluation order supplies
+    /// the decision reason; later blocking matches do not overwrite it.
+    #[test]
+    fn first_blocking_reason_wins() {
+        let mut req = GovernanceRequest::new("agent-1", "tool.agent_spawn");
+        req.context.insert("tool".into(), "agent_spawn".into());
+        req.context.insert("platform".into(), "browser".into());
+
+        for (first, second) in [("BP-A", "BP-B"), ("BP-B", "BP-A")] {
+            let mut engine = GovernanceEngine::new(0.7, false);
+            engine.add_rule(GovernanceRule::browser_policy(first, "spawn"));
+            engine.add_rule(GovernanceRule::browser_policy(second, "spawn"));
+            match engine.evaluate(&req).decision {
+                GovernanceDecision::Deny(reason) => {
+                    assert!(reason.contains(first), "{reason} should name {first}");
+                    assert!(!reason.contains(second), "{reason} should not name {second}");
+                }
+                other => panic!("expected Deny, got {other:?}"),
+            }
+        }
+    }
 
     fn make_rule(id: &str, severity: RuleSeverity, branch: GovernanceBranch) -> GovernanceRule {
         GovernanceRule {
