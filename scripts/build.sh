@@ -1163,6 +1163,24 @@ cmd_check_launcher() {
     timer_end
 }
 
+# build-kb: the docs knowledge-base generator (tools/build-kb, its own
+# workspace and lockfile; used by .github/workflows/docs-assets.yml).
+cmd_kb() {
+    header "Building tools/build-kb (release, --locked)"
+    timer_start
+    run_cmd cargo build --release --locked --manifest-path tools/build-kb/Cargo.toml
+    timer_end
+}
+
+# fuzz-check: the clawft-core fuzz crate is outside the workspace and has its
+# own lockfile; --locked fails when that lock goes stale.
+cmd_fuzz_check() {
+    header "Running cargo check --locked for crates/clawft-core/fuzz"
+    timer_start
+    run_cmd cargo check --locked --manifest-path crates/clawft-core/fuzz/Cargo.toml
+    timer_end
+}
+
 # Doc drift: the weaver/weft commands and [kernel.mesh] keys in the verified
 # deployment docs must exist in target/debug/{weaver,weft}
 # (scripts/check-doc-commands.sh). Not part of `gate`.
@@ -2886,6 +2904,8 @@ ${BOLD}Commands:${NC}
                   gate against the panel size budget. (WEFT-484 / M6-B)
                   Override budget: scripts/build.sh wasm-panel <max-raw-kb> <max-gz-kb>
   check-mesh-only Run cargo check -p clawft-kernel --no-default-features --features native,mesh
+  kb              Build tools/build-kb (docs knowledge-base generator, --locked)
+  fuzz-check      cargo check --locked for crates/clawft-core/fuzz (own lockfile)
   check-launcher  Check clawft-kernel under the cog_adapter_run launcher's features
                   (workload-runtime only; also part of whole-workspace check)
   check-doc-commands
@@ -3243,6 +3263,8 @@ main() {
         wasm-panel)   cmd_wasm_panel "${WASM_PANEL_MAX_RAW_KB:-}" "${WASM_PANEL_MAX_GZ_KB:-}" ;;
         check)        cmd_check ;;
         check-mesh-only) cmd_check_mesh_only ;;
+        kb)           cmd_kb ;;
+        fuzz-check)   cmd_fuzz_check ;;
         check-launcher) cmd_check_launcher ;;
         check-doc-commands) cmd_check_doc_commands ;;
         test-mesh-service) cmd_test_mesh_service ;;
