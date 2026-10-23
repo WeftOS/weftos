@@ -203,8 +203,8 @@ not part of the spike.
 - **AclPolicy has its own semantics.** It is first match from the leaf
   upward, which is ordered. Its function is still finite, but it needs a
   separate compiler. It is not in the first spike.
-- **Reason text is not covered.** `blocking_reason` is last-assignment-wins
-  and depends on order. The compiled function covers the decision only. The
+- **Reason text is not covered.** `blocking_reason` is first-blocking-wins
+  (finding 2) and so depends on rule order. The compiled function covers the decision only. The
   explanation work (item 4) is what would replace the reason text.
 
 ## Findings
@@ -218,12 +218,21 @@ These came from reading the code for this note.
    into a permit. In the reverse order, the request is denied.
    Probe test: `isop_probe_warning_browser_rule_does_not_clear_earlier_block`.
    **Confirmed by test**; see the [probe result](#probe-result).
+   **Fixed in the "fix(governance): G0" commit (card 85f29f99):** a non-blocking browser match now sets `has_warning`
+   only and never touches another rule's flags. The probe test is committed,
+   and `rule_order_does_not_change_decision` checks all 720 orderings of the
+   genesis rules plus one Warning browser rule.
 2. **Reason-text comments don't match the code.** The browser branch says
    "the first denial reason is retained". The binding-thread branch says its
    canonical reason wins "even if a later magnitude rule would overwrite".
    But every blocking match, including later General rules, assigns
    `blocking_reason`. The last match wins. This was found by reading the
    code and has not been tested.
+   **Resolved in the "fix(governance): G0" commit (card 85f29f99)** by making the behaviour match a documented rule:
+   the first blocking rule in evaluation order supplies the decision reason,
+   and later blocking matches set flags but never overwrite it
+   (`note_blocking_reason`). The comments were rewritten to say so, and
+   `first_blocking_reason_wins` tests it.
 3. **`exo_resource_tree::check_permission` is still the K0 stub.** It always
    returns `Allow` (`permission.rs:73`) and is re-exported from `lib.rs`. A
    search of `crates/` on 2026-10-19 found no caller other than the
@@ -255,8 +264,8 @@ Setup: `GovernanceEngine::new(0.7, false)` with two rules, then one request.
 The default genesis browser rules are all `Blocking`, so the default set
 can't trigger this. Any rule set that contains a non-blocking browser rule
 can. That includes operator rules, ADR-103 overlays and rules gossiped under
-ADR-092, where insertion order depends on merge order. The test is attached
-to card G0 and is not committed, because it fails until the fix lands.
+ADR-092, where insertion order depends on merge order. The test is now committed
+and passes with the fix.
 
 ## Sources
 
