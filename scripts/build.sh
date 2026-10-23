@@ -677,6 +677,23 @@ cmd_ui_docker() {
     timer_end
 }
 
+cmd_docker_smoke() {
+    header "Docker release smoke (build root Dockerfile, run gateway, probe /api/health)"
+    if ! command -v docker >/dev/null 2>&1; then
+        fail "docker not installed"
+        return 1
+    fi
+    local tag="${WEFT_DOCKER_TAG:-weft:smoke}"
+    timer_start
+    if [ "$DRY_RUN" = true ]; then
+        printf "  ${YELLOW}DRY${NC}   docker build -t %s . && scripts/release/docker-smoke.sh %s\n" "$tag" "$tag"
+    else
+        (cd "$ROOT" && docker build -t "$tag" .) || return 1
+        "$ROOT/scripts/release/docker-smoke.sh" "$tag" "${WEFT_SMOKE_PORT:-8080}" || return 1
+    fi
+    timer_end
+}
+
 cmd_ui_e2e() {
     header "Running clawft-ui Playwright E2E suite"
     if [ ! -d "$ROOT/clawft-ui/tests" ]; then
@@ -2809,6 +2826,7 @@ ${BOLD}Commands:${NC}
   guide-web       Browser popup for one sensor guide (wasm into crates/weftos-guide-view/www/pkg)
   ecg-scope[-web] Aliases for scope ecg / scope-web ecg
   ui              Build React frontend (tsc + vite)
+  docker-smoke    Build the root Dockerfile image and run the release health smoke.
   ui-docker       Build the clawft-ui multi-stage Docker image (WEFT-317).
                   Override tag with CLAWFT_UI_DOCKER_TAG=...
   ui-e2e          Run the clawft-ui Playwright E2E suite (WEFT-314).
@@ -3215,6 +3233,7 @@ main() {
         manager-web)  cmd_manager_web ;;
         ui)           cmd_ui ;;
         ui-docker)    cmd_ui_docker ;;
+        docker-smoke) cmd_docker_smoke ;;
         ui-e2e)       cmd_ui_e2e ;;
         releases-mdx) cmd_releases_mdx ;;
         all)          cmd_all ;;
