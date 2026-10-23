@@ -9,6 +9,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Staging area for changes after the 0.8.4 cut.
 
+## [0.8.4-rc.15] - 2026-10-23
+
+Release candidate for v0.8.4 stable. The scope is in `docs/plans/release-0.8.4-cut.md`.
+
+### Added
+- **Phone and glasses P0**: `weftos-node-core`, a sans-IO core for the phone parent node with a
+  UniFFI facade; the Android phone node app; the `com.weftos.glasses` agent app; and
+  `scripts/build.sh android` / `glasses` lanes.
+- `weft-room-scope`: an egui viewer for overhead camera, track and CSI overlays.
+- Cog protocol boundary (`weftos.cog.v1`):
+  - check-run types;
+  - the Cog Host asks the daemon before it starts a cog;
+  - licence import, status, claims and revoked.
+- `weaver kernel liveness [--json]` and the `kernel.liveness` RPC. They report whether the daemon's
+  runtime, locks and socket are making progress, and exit 1 when it is unhealthy or silent.
+- Liveness watchdog for the generated systemd units (`WatchdogSec=60`, `NotifyAccess=main`), so a
+  wedged daemon is restarted instead of staying dead.
+- Build lanes `docker-smoke`, `kb` and `fuzz-check`.
+
+### Fixed
+- **Daemon deadlock.** A mesh peer that stopped reading could freeze the daemon. The peer table's
+  lock was held while waiting on that peer's full send queue, so every registration, reconnect and
+  disconnect blocked a runtime thread.
+  - Sends no longer hold the lock and give up after 5 s.
+  - A connection whose write stalls for 30 s is closed.
+  - Service start, stop and health run from a snapshot, and stops are time-limited.
+  - A clippy rule now rejects map locks held across `.await`.
+- **Bounded shutdown.** Each shutdown step is time-limited and logged, and a guard thread ends the
+  process when the runtime is blocked. `kernel.pid` is removed only at exit. `weaver kernel stop`
+  now fails (exit 1) and keeps the pid file when the daemon does not exit. `stop --force` finds the
+  daemon through `kernel.lock` and escalates from TERM to KILL.
+- **Governance.** A non-blocking browser_policy match no longer clears a block set by an earlier
+  rule, so the decision no longer depends on rule order. The first blocking rule supplies the
+  reason text.
+- **Teams webhook.** Bot Framework JWTs are now verified: RS256 only, keys from the cached JWKS,
+  plus issuer, audience, expiry and not-before checks. Anything else gets a 401.
+- **Release Docker image.** The gateway now starts its own kernel and listens on all interfaces
+  inside the container. Before this, the published images answered nothing.
+- **Release KB and SBOM workflows** now follow the Release run for the same commit instead of a
+  60-minute timer.
+- `weaver` advertises models only after checking them against the daemon's trust.
+
+### Security
+- wasmtime / wasmtime-wasi 48.0.7, which includes a fix for a WASI filesystem sandbox escape via
+  symlink rename.
+- Other Rust dependency updates: rustls 0.23.46, rustls-webpki 0.103.16, webpki roots 1.0.10,
+  tokio 1.54.1.
+- The splat importer moves to zip 9 and refuses symlink entries.
+- jsonwebtoken 10.3 and rpassword 7.5.
+- The unpatched `failure` crate is gone: webrtc-audio-processing 2.1, ported.
+- Docs site: Next.js 16.4.3, which fixes a critical unauthenticated RCE in image optimisation.
+  clawft-ui: vite 7.3.7.
+- Residual advisories are documented in `docs/security/cargo-audit-residual.md` and
+  `npm-audit-residual.md`.
+
+### Removed
+- The Tauri desktop shells. egui is the native GUI.
+
 ## [0.8.4-rc.14] - 2026-10-13
 
 ### Added

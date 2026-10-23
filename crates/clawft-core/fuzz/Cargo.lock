@@ -130,7 +130,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-core"
-version = "0.8.4-rc.14"
+version = "0.8.4-rc.15"
 dependencies = [
  "async-trait",
  "chrono",
@@ -167,7 +167,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-llm"
-version = "0.8.4-rc.14"
+version = "0.8.4-rc.15"
 dependencies = [
  "async-trait",
  "clawft-types",
@@ -183,7 +183,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-platform"
-version = "0.8.4-rc.14"
+version = "0.8.4-rc.15"
 dependencies = [
  "async-trait",
  "clawft-types",
@@ -196,7 +196,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-plugin"
-version = "0.8.4-rc.14"
+version = "0.8.4-rc.15"
 dependencies = [
  "async-trait",
  "chrono",
@@ -215,7 +215,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-types"
-version = "0.8.4-rc.14"
+version = "0.8.4-rc.15"
 dependencies = [
  "chrono",
  "libc",
