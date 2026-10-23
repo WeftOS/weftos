@@ -258,3 +258,23 @@ scripts/build.sh ui
   `scripts/metaharness/crosscut.mjs`, ignore-file comments, and research/planning docs.
   Removing it would also clear the `braces` residual above, but it is left in place pending
   an owner decision.
+
+## 2026-10-23: toml <= 5.0.0 via pinned ruflo tooling (allowlisted residual)
+
+New high advisories in `toml` (quadratic and CPU DoS in `toml.parse()`):
+GHSA-4qx8-w7c3-pj3p, GHSA-9j65-hcg3-gc64 and GHSA-9qmh-m7c6-f92p. They reach the root
+lockfile only through `ruflo` / `@claude-flow/cli` 3.42.4, which is pinned on purpose
+(`package.json` `weftos.rufloPin`, WEFT-684: never `@latest`). It is developer
+orchestration tooling, not shipped in any WeftOS artifact, and it parses only local,
+trusted config files.
+
+The fix requires `@claude-flow/cli` 3.60.0, which means moving the pin. That is an
+owner decision, because the pin tracks a local branch with `team_*` support that the
+published packages lack. Until then, the three advisories are allowlisted in
+`NPM_AUDIT_ALLOW` (scripts/build.sh), with expiry 2026-12-31.
+
+**Revisit when:** the ruflo pin moves, or by the expiry date.
+
+Fixed in the same pass, with no allowlist needed:
+- `npm audit fix` in the root (follow-redirects, qs, ip-address);
+- clawft-ui vite 7.3.6 to 7.3.7 (launch-editor advisories).

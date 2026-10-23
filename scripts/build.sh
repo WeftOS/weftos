@@ -1654,6 +1654,11 @@ NPM_AUDIT_ALLOW=(
     # braces <=3.0.3 stack-exhaustion DoS; no patched release exists (latest is
     # 3.0.3). Dev tooling only: agentic-flow -> http-proxy-middleware -> micromatch.
     "root GHSA-vfj7-8cjw-p6xm 2026-12-31"
+    # toml <=5.0.0 parse DoS, only via the pinned ruflo / @claude-flow/cli 3.42.4
+    # dev tooling (weftos.rufloPin; WEFT-684). Not shipped; clears when the pin moves.
+    "root GHSA-4qx8-w7c3-pj3p 2026-12-31"
+    "root GHSA-9j65-hcg3-gc64 2026-12-31"
+    "root GHSA-9qmh-m7c6-f92p 2026-12-31"
 )
 
 # Print the >=level advisories in an `npm audit --json` document that are not
