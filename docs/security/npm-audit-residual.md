@@ -239,3 +239,22 @@ scripts/build.sh ui
 - The advisories listed on the earlier "new highs" card (undici, hono, qs, ip-address,
   @opentelemetry/core) no longer report as high in the root lockfile; hono and qs are
   moderate residual as above.
+
+## 2026-10-23: sprintf-js <= 1.1.3 (Dependabot #340, tolerable_risk)
+
+- Advisory: `sprintf-js` <= 1.1.3, DoS. No patched release exists; 1.1.3 is the latest
+  published version, so no `overrides` entry can fix it.
+- Reach: root `package-lock.json` only, dev-only chain `agentic-flow` (root devDependency)
+  -> `@huggingface/transformers` -> `global-agent` -> `roarr` -> `sprintf-js`. Not in the
+  shipped daemon, clawft-ui, or docs bundles.
+- Disposition: `tolerable_risk`. The dismissal on GitHub is made by the lead or owner, not
+  recorded here as done.
+- Revisit when: a patched `sprintf-js` is published (then `npm update sprintf-js`), when
+  `roarr` or `global-agent` drops the dependency, or when the root `agentic-flow`
+  devDependency is removed or re-pinned (see the usage check below).
+- Usage check of the `agentic-flow` devDependency (2026-10-23): no `import`, `require` or
+  `npx` use anywhere in tracked code, scripts, workflows or `.claude` / `.mcp.json`. The only
+  tracked mentions are `package.json`, comments in `scripts/build.sh` and
+  `scripts/metaharness/crosscut.mjs`, ignore-file comments, and research/planning docs.
+  Removing it would also clear the `braces` residual above, but it is left in place pending
+  an owner decision.
