@@ -13,9 +13,9 @@
 //!    returned to the caller.
 //! 3. **Inbound webhook** -- an axum HTTP listener bound to
 //!    `webhook_bind` accepts Bot Framework activity POSTs, decodes the
-//!    JWT presented in `Authorization: Bearer ...` (header inspection;
-//!    full JWKS signature verification is tracked as a 0.8.x followup),
-//!    and publishes message-typed activities on the
+//!    JWT presented in `Authorization: Bearer ...` (RS256 signature,
+//!    issuer, audience and expiry verified against the Bot Framework
+//!    JWKS, see [`super::jwt`]), and publishes message-typed activities on the
 //!    [`ChannelAdapterHost`] message bus.
 
 use std::collections::HashMap;
@@ -32,6 +32,7 @@ use clawft_plugin::error::PluginError;
 use clawft_plugin::message::MessagePayload;
 use clawft_plugin::traits::{ChannelAdapter, ChannelAdapterHost};
 
+use super::jwt::{HttpJwksSource, TeamsJwtVerifier};
 use super::types::TeamsAdapterConfig;
 
 /// Cached OAuth2 access token entry.
@@ -129,10 +130,10 @@ impl TeamsChannelAdapter {
         let now = Instant::now();
         {
             let cache = self.token.lock().await;
-            if let Some(t) = cache.as_ref() {
-                if now < t.refresh_after {
-                    return Ok(t.access_token.clone());
-                }
+            if let Some(t) = cache.as_ref()
+                && now < t.refresh_after
+            {
+                return Ok(t.access_token.clone());
             }
         }
 
@@ -229,28 +230,6 @@ impl TeamsChannelAdapter {
         })?;
         Ok(parsed.id)
     }
-
-    /// Best-effort inspection of the JWT presented on inbound activity
-    /// POSTs. We decode the header and claim payload but **do not**
-    /// verify the signature -- full JWKS-based verification against
-    /// Microsoft's rotating public keys is tracked as a 0.8.x followup.
-    /// We do reject obviously malformed tokens (missing dots, invalid
-    /// base64) so a request without `Authorization` cannot trivially
-    /// forge an activity past the listener.
-    pub(crate) fn validate_jwt(token: &str) -> Result<(), String> {
-        if token.is_empty() {
-            return Err("missing bearer token".into());
-        }
-        // jsonwebtoken::decode_header validates the JWT shape and
-        // ensures the alg/typ header is parseable.
-        let _header = jsonwebtoken::decode_header(token)
-            .map_err(|e| format!("teams: malformed JWT header: {e}"))?;
-        // Splitting confirms claim payload is present (header.claims.sig).
-        if token.matches('.').count() != 2 {
-            return Err("teams: JWT must have exactly two '.' separators".into());
-        }
-        Ok(())
-    }
 }
 
 #[async_trait]
@@ -315,9 +294,16 @@ impl ChannelAdapter for TeamsChannelAdapter {
             ))
         })?;
 
+        // Fails (rather than accepting every token) if app_id is unusable.
+        let verifier = TeamsJwtVerifier::new(
+            &self.config.app_id,
+            Box::new(HttpJwksSource::new(self.http.clone())),
+        )
+        .map_err(|e| PluginError::LoadFailed(format!("teams adapter: {e}")))?;
+
         let allowed = self.config.allowed_users.clone();
         let host_for_handler = host.clone();
-        let app = build_router(host_for_handler, allowed);
+        let app = build_router(host_for_handler, allowed, Arc::new(verifier));
 
         let listener = tokio::net::TcpListener::bind(bind_addr)
             .await
@@ -375,14 +361,20 @@ impl ChannelAdapter for TeamsChannelAdapter {
 struct WebhookState {
     host: Arc<dyn ChannelAdapterHost>,
     allowed_users: Vec<String>,
+    verifier: Arc<TeamsJwtVerifier>,
 }
 
 /// Build the axum router that handles inbound Bot Framework activities.
-fn build_router(host: Arc<dyn ChannelAdapterHost>, allowed_users: Vec<String>) -> axum::Router {
+fn build_router(
+    host: Arc<dyn ChannelAdapterHost>,
+    allowed_users: Vec<String>,
+    verifier: Arc<TeamsJwtVerifier>,
+) -> axum::Router {
     use axum::routing::post;
     let state = WebhookState {
         host,
         allowed_users,
+        verifier,
     };
     axum::Router::new()
         .route("/api/messages", post(handle_activity))
@@ -407,7 +399,7 @@ async fn handle_activity(
         }
     };
     let token = auth.strip_prefix("Bearer ").unwrap_or(auth);
-    if let Err(e) = TeamsChannelAdapter::validate_jwt(token) {
+    if let Err(e) = state.verifier.verify(token).await {
         warn!(error = %e, "teams webhook: rejected activity with invalid JWT");
         return axum::http::StatusCode::UNAUTHORIZED;
     }
@@ -469,6 +461,8 @@ mod tests {
 
     use clawft_types::secret::SecretString;
 
+    use super::super::jwt_tests::fixture_verifier_and_token;
+
     fn make_config() -> TeamsAdapterConfig {
         TeamsAdapterConfig {
             tenant_id: "test-tenant".into(),
@@ -517,26 +511,6 @@ mod tests {
     fn empty_allow_list_allows_all() {
         let adapter = TeamsChannelAdapter::new(make_config());
         assert!(adapter.is_user_allowed("anyone@company.com"));
-    }
-
-    #[test]
-    fn validate_jwt_rejects_empty() {
-        assert!(TeamsChannelAdapter::validate_jwt("").is_err());
-    }
-
-    #[test]
-    fn validate_jwt_rejects_malformed() {
-        assert!(TeamsChannelAdapter::validate_jwt("not-a-jwt").is_err());
-        assert!(TeamsChannelAdapter::validate_jwt("a.b").is_err());
-    }
-
-    #[test]
-    fn validate_jwt_rejects_alg_none() {
-        // Header `{"alg":"none","typ":"JWT"}` base64url encoded.
-        // Bot Framework requires RS256-signed tokens; `alg=none`
-        // tokens are unsigned and MUST be rejected.
-        let tok = "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiIxIn0.";
-        assert!(TeamsChannelAdapter::validate_jwt(tok).is_err());
     }
 
     #[tokio::test]
@@ -692,7 +666,8 @@ mod tests {
     #[tokio::test]
     async fn inbound_activity_publishes_on_message_bus() {
         let host = Arc::new(MockHost::default());
-        let app = build_router(host.clone(), Vec::new());
+        let (verifier, jwt) = fixture_verifier_and_token();
+        let app = build_router(host.clone(), Vec::new(), Arc::new(verifier));
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -700,11 +675,7 @@ mod tests {
             axum::serve(listener, app).await.unwrap();
         });
 
-        // Header `{"alg":"HS256","typ":"JWT"}` + claim `{"sub":"x"}` +
-        // empty signature -> structurally valid JWT for our header
-        // decoder. wiremock isn't needed for the inbound path; we hit
-        // the local bound listener directly.
-        let jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ4In0.";
+        // A real RS256 token verified against a stubbed JWKS.
 
         let activity = serde_json::json!({
             "type": "message",
@@ -740,7 +711,8 @@ mod tests {
     #[tokio::test]
     async fn inbound_activity_rejects_missing_authorization() {
         let host = Arc::new(MockHost::default());
-        let app = build_router(host.clone(), Vec::new());
+        let (verifier, _) = fixture_verifier_and_token();
+        let app = build_router(host.clone(), Vec::new(), Arc::new(verifier));
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -758,6 +730,38 @@ mod tests {
         assert_eq!(resp.status().as_u16(), 401);
         assert!(host.delivered.lock().unwrap().is_empty());
 
+        server_handle.abort();
+    }
+
+    /// An unsigned / HS256 / garbage bearer token must be refused with 401
+    /// and nothing may reach the message bus.
+    #[tokio::test]
+    async fn inbound_activity_rejects_unverifiable_tokens() {
+        let host = Arc::new(MockHost::default());
+        let (verifier, _) = fixture_verifier_and_token();
+        let app = build_router(host.clone(), Vec::new(), Arc::new(verifier));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server_handle = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let client = reqwest::Client::new();
+        for bad in [
+            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ4In0.",
+            "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiIxIn0.",
+            "not-a-jwt",
+        ] {
+            let resp = client
+                .post(format!("http://{addr}/api/messages"))
+                .header("authorization", format!("Bearer {bad}"))
+                .json(&serde_json::json!({"type":"message","text":"x"}))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(resp.status().as_u16(), 401, "token {bad:?}");
+        }
+        assert!(host.delivered.lock().unwrap().is_empty());
         server_handle.abort();
     }
 

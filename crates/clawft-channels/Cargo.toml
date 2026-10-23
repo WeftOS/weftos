@@ -108,6 +108,10 @@ tokio = { workspace = true }
 # wiremock + mockito back HTTP-level adapter tests across adapters
 # (Google Chat, Teams, WhatsApp, Matrix, Voice substrate).
 wiremock = "0.6"
+# teams JWT verifier tests generate a throwaway RSA key per run.
+rsa = "0.9"
+rand = "0.8.7"
+base64 = "0.22"
 mockito = "1"
 # Used by `whatsapp` webhook unit tests to drive the axum router
 # in-process via `ServiceExt::oneshot`.
