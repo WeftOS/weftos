@@ -1,6 +1,6 @@
 # Cog protocol boundary
 
-Branch `feat/cog-protocol-boundary`, parent `v0.8.3` (`fafd6168f8f97280ee24e5c2d2813b6e34918e15`). Worktree `/Users/mathewbeane/weftos-cog-protocol`. This note records the boundary. The kernel link stays for mesh, ECC, revocation import, trust anchors, claims, and the revoked-hash poll.
+Branch `feat/cog-protocol-boundary`, parent `v0.8.3` (`fafd6168f8f97280ee24e5c2d2813b6e34918e15`). This note records the boundary. The kernel link stays for mesh, ECC, revocation import, trust anchors, claims, and the revoked-hash poll.
 
 ## What stays coupled
 
