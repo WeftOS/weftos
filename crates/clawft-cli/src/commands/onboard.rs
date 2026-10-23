@@ -3,7 +3,7 @@
 //! Creates the `~/.clawft/` directory structure, generates a config template,
 //! and optionally prompts for API key configuration.
 
-use std::io::{self, BufRead, Write as IoWrite};
+use std::io::{self, BufRead, IsTerminal, Write as IoWrite};
 use std::path::{Path, PathBuf};
 
 use clap::Args;
@@ -156,13 +156,11 @@ fn prompt_provider_config() -> anyhow::Result<ProviderSelection> {
             env_var
         );
         // Use rpassword to suppress echo so the key is not visible in terminal
-        // scrollback or screen recordings. Falls back to regular stdin on non-TTY.
+        // scrollback or screen recordings. rpassword 7 reads the controlling
+        // TTY, so piped stdin is read explicitly via read_secret.
         print!("API key (leave blank to skip): ");
         io::stdout().flush()?;
-        let key = rpassword::read_password()
-            .unwrap_or_default()
-            .trim()
-            .to_owned();
+        let key = read_secret().unwrap_or_default().trim().to_owned();
 
         if key.is_empty() {
             return Ok(selection);
@@ -175,6 +173,15 @@ fn prompt_provider_config() -> anyhow::Result<ProviderSelection> {
     }
 
     Ok(selection)
+}
+
+/// Read a secret: no-echo from the TTY, or one line from piped stdin.
+fn read_secret() -> io::Result<String> {
+    if io::stdin().is_terminal() {
+        rpassword::read_password()
+    } else {
+        rpassword::read_password_from_bufread(&mut io::stdin().lock())
+    }
 }
 
 /// Prompt for a custom provider endpoint.
@@ -314,6 +321,23 @@ impl ProviderSelection {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn piped_secret_reads_one_line_without_newline() {
+        let mut input = io::Cursor::new(b"sk-test-key\nnext line\n".to_vec());
+        let key = rpassword::read_password_from_bufread(&mut input).unwrap();
+        assert_eq!(key, "sk-test-key");
+    }
+
+    #[test]
+    fn piped_secret_eof_is_an_error_and_blank_line_is_empty() {
+        // EOF is an error (the caller maps it to "skip"); a blank line is "".
+        let mut eof = io::Cursor::new(Vec::<u8>::new());
+        let err = rpassword::read_password_from_bufread(&mut eof).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+        let mut blank = io::Cursor::new(b"\n".to_vec());
+        assert_eq!(rpassword::read_password_from_bufread(&mut blank).unwrap(), "");
+    }
 
     #[test]
     fn resolve_config_dir_override() {
