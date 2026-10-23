@@ -180,8 +180,17 @@ fn read_secret() -> io::Result<String> {
     if io::stdin().is_terminal() {
         rpassword::read_password()
     } else {
-        rpassword::read_password_from_bufread(&mut io::stdin().lock())
+        read_secret_from(io::stdin())
     }
+}
+
+/// Read one line from `reader` as a secret, with no prompt output.
+fn read_secret_from(reader: impl io::Read + 'static) -> io::Result<String> {
+    let config = rpassword::ConfigBuilder::new()
+        .input_reader(reader)
+        .output_discard()
+        .build();
+    rpassword::read_password_with_config(config)
 }
 
 /// Prompt for a custom provider endpoint.
@@ -324,19 +333,18 @@ mod tests {
 
     #[test]
     fn piped_secret_reads_one_line_without_newline() {
-        let mut input = io::Cursor::new(b"sk-test-key\nnext line\n".to_vec());
-        let key = rpassword::read_password_from_bufread(&mut input).unwrap();
+        let input = io::Cursor::new(b"sk-test-key\nnext line\n".to_vec());
+        let key = read_secret_from(input).unwrap();
         assert_eq!(key, "sk-test-key");
     }
 
     #[test]
-    fn piped_secret_eof_is_an_error_and_blank_line_is_empty() {
-        // EOF is an error (the caller maps it to "skip"); a blank line is "".
-        let mut eof = io::Cursor::new(Vec::<u8>::new());
-        let err = rpassword::read_password_from_bufread(&mut eof).unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
-        let mut blank = io::Cursor::new(b"\n".to_vec());
-        assert_eq!(rpassword::read_password_from_bufread(&mut blank).unwrap(), "");
+    fn piped_secret_eof_and_blank_line_are_empty() {
+        // Both mean "skip" to the caller (blank key leaves the env var unset).
+        let eof = io::Cursor::new(Vec::<u8>::new());
+        assert_eq!(read_secret_from(eof).unwrap(), "");
+        let blank = io::Cursor::new(b"\n".to_vec());
+        assert_eq!(read_secret_from(blank).unwrap(), "");
     }
 
     #[test]
