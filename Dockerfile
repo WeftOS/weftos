@@ -19,7 +19,9 @@ COPY . .
 # Default features = channels + services + delegate + api (gateway-capable).
 # The workspace reqwest uses rustls-tls, so this links fully static with
 # no openssl — runs on a bare alpine runtime.
-RUN cargo build --release -p clawft-cli --bin weft
+# `weaver` is the kernel daemon the gateway's /api/health reports on; the
+# image runs one beside the gateway (scripts/docker/entrypoint.sh).
+RUN cargo build --release -p clawft-cli --bin weft -p clawft-weave --bin weaver
 
 # ── Stage 2: minimal runtime ──────────────────────────────────────────
 FROM alpine:3.21
@@ -33,6 +35,8 @@ RUN apk add --no-cache ca-certificates tzdata \
     && adduser -D -h /home/weft weft
 
 COPY --from=builder /build/target/release/weft /usr/local/bin/weft
+COPY --from=builder /build/target/release/weaver /usr/local/bin/weaver
+COPY scripts/docker/entrypoint.sh /usr/local/bin/weft-entrypoint
 
 # Pre-create .clawft weft-owned BEFORE the VOLUME — Docker would otherwise
 # create the unmounted mountpoint root-owned and `weft gateway` (uid 1000)
@@ -40,21 +44,25 @@ COPY --from=builder /build/target/release/weft /usr/local/bin/weft
 # default config enabling the auth-gated REST/WS API on the exposed port
 # 8080 so `weft gateway` runs out-of-the-box (it refuses to start with no
 # channel and the API off). The API stays Bearer-token gated; only
-# /api/health and the token-bootstrap path are public.
-RUN mkdir -p /home/weft/.clawft \
-    && printf '{"gateway":{"api_enabled":true,"api_port":8080}}\n' \
+# /api/health and the token-bootstrap path are public. The bind is 0.0.0.0
+# because the gateway default is loopback (ADR-102), which a published
+# container port cannot reach; plain HTTP is acknowledged because the
+# container boundary is the TLS-termination point (publish with
+# `-p 127.0.0.1:8080:8080` or front it with a TLS proxy).
+RUN mkdir -p /home/weft/.clawft /home/weft/.weftos \
+    && printf '{"gateway":{"host":"0.0.0.0","api_enabled":true,"api_port":8080,"dangerously_plain_http":true}}\n' \
        > /home/weft/.clawft/config.json \
-    && chown -R weft:weft /home/weft/.clawft
+    && chown -R weft:weft /home/weft/.clawft /home/weft/.weftos
 
 USER weft
 WORKDIR /home/weft
 
-VOLUME ["/home/weft/.clawft"]
+VOLUME ["/home/weft/.clawft", "/home/weft/.weftos"]
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD ["/usr/local/bin/weft", "status"]
 
 EXPOSE 8080
 
-ENTRYPOINT ["/usr/local/bin/weft"]
+ENTRYPOINT ["/usr/local/bin/weft-entrypoint"]
 CMD ["gateway"]
