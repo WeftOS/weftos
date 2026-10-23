@@ -8,6 +8,7 @@ name: Release (Knowledge Base)
 
 permissions:
   contents: write
+  actions: read
 
 on:
   push:
@@ -21,6 +22,7 @@ jobs:
   build-kb:
     name: Build & upload RVF knowledge base
     runs-on: ubuntu-latest
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
 
@@ -74,21 +76,9 @@ jobs:
           TAG="${GITHUB_REF_NAME}"
           ASSET="${{ steps.rename.outputs.asset }}"
 
-          # Wait for the release to exist (created by release.yml).
-          # cargo-dist multi-platform builds often exceed 30m (Intel macOS ~35m).
-          for i in $(seq 1 180); do
-            if gh release view "$TAG" >/dev/null 2>&1; then
-              echo "Release $TAG found"
-              break
-            fi
-            echo "Waiting for release $TAG to be created... ($i/180)"
-            sleep 20
-          done
-
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
-            echo "::error::Release $TAG not found after 60 minutes"
-            exit 1
-          fi
+          # Wait for release.yml (cargo-dist matrix, ~1h+) to create the
+          # release; follows that run rather than a fixed clock (0eff3101).
+          scripts/release/wait-for-release.sh "$TAG" "$GITHUB_SHA"
 
           gh release upload "$TAG" "$ASSET" --clobber
           echo "Uploaded $ASSET to release $TAG"
