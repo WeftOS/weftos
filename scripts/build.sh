@@ -1573,6 +1573,12 @@ CARGO_AUDIT_IGNORES=(
     --ignore RUSTSEC-2026-0221   # event-listener unsound (transitive async stack)
     --ignore RUSTSEC-2023-0086   # lexical-core unsound (transitive)
     --ignore RUSTSEC-2024-0449   # unsafe-libyaml unmaintained, via deprecated serde_yaml (board card: migrate off serde_yaml)
+    # 2026-10 residuals, justified in docs/security/cargo-audit-residual.md
+    --ignore RUSTSEC-2023-0071   # rsa Marvin timing: no fix; jsonwebtoken rust_crypto only verifies RS256 with public keys
+    --ignore RUSTSEC-2026-0367   # zip 1.1.4 via candle-core (optional `candle` feature): extract() never called
+    --ignore RUSTSEC-2026-0368   # zip 1.1.4 (same)
+    --ignore RUSTSEC-2026-0369   # zip 1.1.4 (same)
+    --ignore RUSTSEC-2026-0374   # basic-toml unmaintained via askama_derive <- uniffi_bindgen (build-time, trusted input)
     # spin 0.9.8 yanked via multer→axum; no non-yanked path without multer bump —
     # skip yanked check for 0.8.0 cut (still report via separate note)
     --no-yanked
