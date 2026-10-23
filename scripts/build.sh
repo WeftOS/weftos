@@ -641,7 +641,8 @@ cmd_ui() {
     if [ "$DRY_RUN" = true ]; then
         printf "  ${YELLOW}DRY${NC}   cd clawft-ui && npm run build\n"
     else
-        (cd "$ROOT/clawft-ui" && npm run build)
+        # A fresh worktree has no node_modules; install from the lockfile first.
+        (cd "$ROOT/clawft-ui" && { [ -d node_modules ] || npm ci --no-audit --no-fund; } && npm run build)
     fi
     timer_end
     if [ -d "$ROOT/clawft-ui/dist" ]; then
@@ -2802,7 +2803,7 @@ cmd_gate() {
         if [ "$DRY_RUN" = true ]; then
             printf "  ${YELLOW}DRY${NC}   cd clawft-ui && npm run build\n"
             passed=$((passed + 1))
-        elif (cd "$ROOT/clawft-ui" && npm run build) >/dev/null 2>&1; then
+        elif (cd "$ROOT/clawft-ui" && { [ -d node_modules ] || npm ci --no-audit --no-fund; } && npm run build) >/dev/null 2>&1; then
             pass "UI build"
             passed=$((passed + 1))
         else
