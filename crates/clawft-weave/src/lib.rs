@@ -316,6 +316,12 @@ pub mod licence_steward;
 /// `workload.cog.checkout | approve | status` (ADR-106 phase 3).
 #[cfg(all(feature = "placement", unix))]
 pub mod licence_checkout_rpc;
+/// `cog.check_run` (weftos.cog.v1). Cog Host asks this instead of calling the kernel in-process.
+#[cfg(all(feature = "placement", unix))]
+pub mod cog_check_rpc;
+/// `cog.licence.import | status | claims | revoked` (weftos.cog.v1).
+#[cfg(all(feature = "placement", unix))]
+pub mod cog_licence_rpc;
 /// `workload.cog.checkout.release | renew | list` (ADR-106 phase 3).
 #[cfg(all(feature = "placement", unix))]
 pub mod licence_checkout_verbs;

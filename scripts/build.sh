@@ -1983,6 +1983,135 @@ cross_build_bin() {
     return $rc
 }
 
+# Phone parent-node app (docs/plans/phone-parent-node.md, P0): UniFFI Kotlin bindings from
+# weftos-node-core, the Rust core for arm64-v8a via cargo-ndk, then a debug APK.
+# Installs nothing: it lists exactly what is missing. Output: the APK path and size.
+cmd_android() {
+    header "Android phone node (weftos-node-core + apps/android-phone-node)"
+    local app="$ROOT/apps/android-phone-node" tdir="${CARGO_TARGET_DIR:-$ROOT/target}"
+    local sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Library/Android/sdk}}"
+    local ndk="${ANDROID_NDK_HOME:-}" jhome="${JAVA_HOME:-}" gradle_cmd=""
+    [ -n "$ndk" ] || ndk="$(ls -d "$sdk"/ndk/* 2>/dev/null | sort -V | tail -1 || true)"
+    [ -n "$jhome" ] || jhome="$(/usr/libexec/java_home -v 17 2>/dev/null || true)"
+    if [ -x "$app/gradlew" ]; then gradle_cmd="$app/gradlew"; elif command -v gradle >/dev/null 2>&1; then gradle_cmd="gradle"; fi
+
+    local missing=()
+    [ -d "$sdk/platforms/android-35" ] || missing+=("Android SDK platform 35 under $sdk (Android Studio > SDK Manager > SDK Platforms)")
+    [ -n "$ndk" ] && [ -d "$ndk" ] || missing+=("Android NDK (side by side) under $sdk/ndk (SDK Manager > SDK Tools > NDK (Side by side)), or set ANDROID_NDK_HOME")
+    command -v cargo-ndk >/dev/null 2>&1 || missing+=("cargo-ndk: cargo install cargo-ndk --locked")
+    rustup target list --installed 2>/dev/null | grep -qx aarch64-linux-android || missing+=("Rust target: rustup target add aarch64-linux-android")
+    [ -n "$jhome" ] && [ -x "$jhome/bin/java" ] || missing+=("JDK 17 (e.g. brew install --cask temurin@17), or set JAVA_HOME")
+    [ -n "$gradle_cmd" ] || missing+=("Gradle 8.9 (brew install gradle; the app has no wrapper jar yet), or add a gradlew to apps/android-phone-node")
+
+    if [ "$DRY_RUN" = true ]; then
+        printf "  ${YELLOW}DRY${NC}   cargo build -p weftos-node-core --features bindgen-cli; uniffi-bindgen generate --library ... --language kotlin\n"
+        printf "  ${YELLOW}DRY${NC}   cargo ndk -t arm64-v8a -o apps/android-phone-node/app/src/main/jniLibs build --release -p weftos-node-core\n"
+        printf "  ${YELLOW}DRY${NC}   gradle -p apps/android-phone-node :app:testDebugUnitTest :app:assembleDebug\n"
+        for m in ${missing[@]+"${missing[@]}"}; do info "missing: $m"; done
+        return 0
+    fi
+
+    timer_start
+    # 1. Kotlin bindings from the host build (library mode; no NDK needed).
+    local ext="so"; [ "$(uname -s)" = Darwin ] && ext="dylib"
+    cargo build -p weftos-node-core --features bindgen-cli || { fail "host build of weftos-node-core failed"; return 1; }
+    rm -rf "$app/app/src/main/generated-uniffi"
+    cargo run -q -p weftos-node-core --features bindgen-cli --bin uniffi-bindgen -- generate \
+        --library "$tdir/debug/libweftos_node_core.$ext" --language kotlin \
+        --out-dir "$app/app/src/main/generated-uniffi" \
+        || { fail "uniffi Kotlin binding generation failed"; return 1; }
+    pass "Kotlin bindings: apps/android-phone-node/app/src/main/generated-uniffi"
+
+    if [ ${#missing[@]} -gt 0 ]; then
+        fail "cannot build the APK; missing (nothing was installed):"
+        for m in "${missing[@]}"; do printf "         - %s\n" "$m"; done
+        return 1
+    fi
+
+    # 2. Rust core for arm64-v8a.
+    export ANDROID_HOME="$sdk" ANDROID_NDK_HOME="$ndk" JAVA_HOME="$jhome"
+    cargo ndk -t arm64-v8a -o "$app/app/src/main/jniLibs" build --release -p weftos-node-core \
+        || { fail "cargo-ndk build failed"; return 1; }
+    pass "libweftos_node_core.so (arm64-v8a)"
+
+    # 3. Debug APK.
+    "$gradle_cmd" -p "$app" :app:testDebugUnitTest :app:assembleDebug \
+        || { fail "gradle testDebugUnitTest/assembleDebug failed"; return 1; }
+    pass "JVM unit tests"
+    local apk
+    apk="$(ls "$app"/app/build/outputs/apk/debug/*.apk 2>/dev/null | head -1 || true)"
+    [ -n "$apk" ] || { fail "no APK produced"; return 1; }
+    pass "APK: $apk ($(wc -c < "$apk" | tr -d ' ') bytes)"
+    timer_end
+}
+
+# Glasses agent (docs/plans/phone-parent-node.md, P0): com.weftos.glasses for the Mentra Live
+# (Android 11, arm64). Same shape as `android`: UniFFI Kotlin bindings, the Rust core via
+# cargo-ndk, then Gradle. Also checks the committed cue WAVs against scripts/gen_cues.py and runs
+# the JVM unit tests. Installs nothing (no adb): hand the APK to whoever owns the glasses.
+cmd_glasses() {
+    header "Glasses agent (weftos-node-core + apps/android-glasses-node)"
+    local app="$ROOT/apps/android-glasses-node" tdir="${CARGO_TARGET_DIR:-$ROOT/target}"
+    local sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Library/Android/sdk}}"
+    local ndk="${ANDROID_NDK_HOME:-}" jhome="${JAVA_HOME:-}" gradle_cmd=""
+    [ -n "$ndk" ] || ndk="$(ls -d "$sdk"/ndk/* 2>/dev/null | sort -V | tail -1 || true)"
+    [ -n "$jhome" ] || jhome="$(/usr/libexec/java_home -v 17 2>/dev/null || true)"
+    [ -n "$jhome" ] && [ -x "$jhome/bin/java" ] || jhome="/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home"
+    if [ -x "$app/gradlew" ]; then gradle_cmd="$app/gradlew"; elif command -v gradle >/dev/null 2>&1; then gradle_cmd="gradle"; fi
+
+    local missing=()
+    [ -d "$sdk/platforms/android-35" ] || missing+=("Android SDK platform 35 under $sdk (Android Studio > SDK Manager > SDK Platforms)")
+    [ -n "$ndk" ] && [ -d "$ndk" ] || missing+=("Android NDK (side by side) under $sdk/ndk, or set ANDROID_NDK_HOME")
+    command -v cargo-ndk >/dev/null 2>&1 || missing+=("cargo-ndk: cargo install cargo-ndk --locked")
+    rustup target list --installed 2>/dev/null | grep -qx aarch64-linux-android || missing+=("Rust target: rustup target add aarch64-linux-android")
+    [ -n "$jhome" ] && [ -x "$jhome/bin/java" ] || missing+=("JDK 17 (e.g. brew install --cask temurin@17), or set JAVA_HOME")
+    [ -n "$gradle_cmd" ] || missing+=("Gradle (brew install gradle; the app has no wrapper jar), or add a gradlew to apps/android-glasses-node")
+    command -v python3 >/dev/null 2>&1 || missing+=("python3 (cue asset check)")
+
+    if [ "$DRY_RUN" = true ]; then
+        printf "  ${YELLOW}DRY${NC}   python3 apps/android-glasses-node/scripts/gen_cues.py --check\n"
+        printf "  ${YELLOW}DRY${NC}   cargo build -p weftos-node-core --features bindgen-cli; uniffi-bindgen generate --library ... --language kotlin\n"
+        printf "  ${YELLOW}DRY${NC}   cargo ndk -t arm64-v8a -o apps/android-glasses-node/app/src/main/jniLibs build --release -p weftos-node-core\n"
+        printf "  ${YELLOW}DRY${NC}   gradle -p apps/android-glasses-node :app:testDebugUnitTest :app:assembleDebug\n"
+        for m in ${missing[@]+"${missing[@]}"}; do info "missing: $m"; done
+        return 0
+    fi
+
+    timer_start
+    if command -v python3 >/dev/null 2>&1; then
+        python3 "$app/scripts/gen_cues.py" --check || { fail "cue assets are stale; run python3 apps/android-glasses-node/scripts/gen_cues.py"; return 1; }
+        pass "cue assets match the tone definitions"
+    fi
+    local ext="so"; [ "$(uname -s)" = Darwin ] && ext="dylib"
+    cargo build -p weftos-node-core --features bindgen-cli || { fail "host build of weftos-node-core failed"; return 1; }
+    rm -rf "$app/app/src/main/generated-uniffi"
+    cargo run -q -p weftos-node-core --features bindgen-cli --bin uniffi-bindgen -- generate \
+        --library "$tdir/debug/libweftos_node_core.$ext" --language kotlin \
+        --out-dir "$app/app/src/main/generated-uniffi" \
+        || { fail "uniffi Kotlin binding generation failed"; return 1; }
+    pass "Kotlin bindings: apps/android-glasses-node/app/src/main/generated-uniffi"
+
+    if [ ${#missing[@]} -gt 0 ]; then
+        fail "cannot build the APK; missing (nothing was installed):"
+        for m in "${missing[@]}"; do printf "         - %s\n" "$m"; done
+        return 1
+    fi
+
+    export ANDROID_HOME="$sdk" ANDROID_NDK_HOME="$ndk" JAVA_HOME="$jhome"
+    cargo ndk -t arm64-v8a -o "$app/app/src/main/jniLibs" build --release -p weftos-node-core \
+        || { fail "cargo-ndk build failed"; return 1; }
+    pass "libweftos_node_core.so (arm64-v8a)"
+
+    "$gradle_cmd" -p "$app" :app:testDebugUnitTest :app:assembleDebug \
+        || { fail "gradle testDebugUnitTest/assembleDebug failed"; return 1; }
+    pass "JVM unit tests"
+    local apk
+    apk="$(ls "$app"/app/build/outputs/apk/debug/*.apk 2>/dev/null | head -1 || true)"
+    [ -n "$apk" ] || { fail "no APK produced"; return 1; }
+    pass "APK: $apk ($(wc -c < "$apk" | tr -d ' ') bytes)"
+    timer_end
+}
+
 # Builds weft-cog-host natively for x86_64 Linux servers (e.g. photo-gallery) inside the
 # pinned rust image under linux/amd64 emulation, offline from the host cargo cache.
 # Output: target/cog-host-x86/release/weft-cog-host(.stripped).
@@ -3001,6 +3130,11 @@ ${BOLD}Commands:${NC}
                   arm64 Rust container (COG_LAUNCHER_BUILDER, default rust:1-bookworm).
   windows-check   Compile the cargo-dist apps for x86_64-pc-windows-gnu (mingw-w64) to catch
                   unix-only code before a release tag. Also gate check 23.
+  android         Phone parent node: UniFFI Kotlin bindings + weftos-node-core for arm64-v8a (cargo-ndk)
+                  + debug APK of apps/android-phone-node. Installs nothing; lists missing NDK/JDK/etc.
+  glasses         Glasses agent (com.weftos.glasses, Mentra Live / Android 11): cue-asset check, UniFFI
+                  Kotlin bindings, weftos-node-core for arm64-v8a (cargo-ndk), JVM unit tests, debug APK
+                  of apps/android-glasses-node. Installs nothing; lists missing NDK/JDK/etc.
   cog-host-x86    Build weft-cog-host for x86_64 Linux servers (photo-gallery) in the pinned
                   rust image under linux/amd64, offline. Output under target/cog-host-x86/.
   cog-host-cross [armv7-unknown-linux-gnueabihf|aarch64-unknown-linux-gnu]...
@@ -3319,6 +3453,8 @@ main() {
         licence-cross)      cmd_licence_cross ;;
         cog-host-cross)     cmd_cog_host_cross ;;
         cog-host-x86)       cmd_cog_host_x86 ;;
+        android)            cmd_android ;;
+        glasses)            cmd_glasses ;;
         wasm-project)       cmd_wasm_project ;;
         test-wasm-project)  cmd_test_wasm_project ;;
         windows-check)      cmd_windows_check ;;

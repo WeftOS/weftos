@@ -69,6 +69,7 @@ members = [
     "crates/weftos-guide-view",
     "crates/weftos-cog-companion",
     "crates/weftos-tof-scope",
+    "crates/weftos-room-scope",
     "crates/weftos-sound-scope",
     "crates/weftos-bridge-send",
     # COG-008: off-device WeaveLogic cog repository tooling (sign/verify/install,
@@ -80,6 +81,8 @@ members = [
     "crates/weftos-cog-sources",
     # COG-009: on-appliance cog supervisor + lifecycle API (no agent cap).
     "crates/weftos-cog-host",
+    # weftos.cog.v1: Cog Host to daemon wire types. No kernel dependency.
+    "crates/weftos-cog-protocol",
     # ADR-106: wire types of the Seed licence proxy (shared by kernel + weft-licence).
     "crates/weft-licence-wire",
     # ADR-106 phase 2: the Seed-side licence proxy (own binary, user and unit).
@@ -138,6 +141,8 @@ members = [
     "crates/clawft-bench-voice",
     # WEFT-707 / ADR-077 A3: Android edge core (Ed25519 identity + pair store + splatd upload).
     "crates/clawft-android-edge",
+    # Phone parent-node P0: sans-IO core (identity, glasses.v1, indicator, pairing) + UniFFI.
+    "crates/weftos-node-core",
     # ADR-118 C3: chief-of-staff agent host (conversation API, tools, push-to-talk).
     "crates/weftos-cos",
 ]

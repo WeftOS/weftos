@@ -18,6 +18,8 @@ serde_json = { workspace = true }
 # Install-time verification: Ed25519 (pinned WeaveLogic key) + sha256, reused from the repo lib
 # (no `cli` feature → no reqwest/TLS pulled into the appliance host).
 weftos-cog-repo = { path = "../weftos-cog-repo", default-features = false }
+# weftos.cog.v1 Unix client. That crate does not link clawft-kernel.
+weftos-cog-protocol = { path = "../weftos-cog-protocol" }
 base64 = "0.22"
 # USB id table for /hw/usb (pure data, wasm-safe; no new third-party deps).
 weftos-cog-market = { path = "../weftos-cog-market" }

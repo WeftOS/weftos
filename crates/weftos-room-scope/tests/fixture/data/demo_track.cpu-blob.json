@@ -1,0 +1,4 @@
+{"schema": "room-scope.track.v1", "backend": "cpu-blob", "present_frac": 0.5, "notes": ["synthetic"],
+ "track": [{"t": 0.0, "present": false, "src": "cpu-blob"},
+           {"t": 0.1, "present": true, "src": "cpu-blob", "conf": 0.9, "xy": [1.0, 1.0], "floor_px": [320, 180],
+            "ellipse_px": {"cx": 320, "cy": 180, "a": 40, "b": 20, "ang": 0.5}, "heading_rad": 1.57, "heading_source": "motion"}]}

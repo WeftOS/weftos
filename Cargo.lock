@@ -2165,6 +2165,7 @@ dependencies = [
  "uuid",
  "weft-licence",
  "weftos",
+ "weftos-cog-protocol",
  "weftos-cog-repo",
  "weftos-cog-sources",
  "weftos-cos-console",
@@ -10019,7 +10020,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3291800a6b06569f7d3e15bdb6dc235e0f0c8bd3eb07177f430057feb076415f"
 dependencies = [
  "anyhow",
+ "camino",
  "cargo_metadata",
+ "clap",
  "uniffi_bindgen",
  "uniffi_core",
  "uniffi_macros",
@@ -11214,6 +11217,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "weftos-cog-market",
+ "weftos-cog-protocol",
  "weftos-cog-repo",
 ]
 
@@ -11246,6 +11250,16 @@ dependencies = [
  "serde_json",
  "weftos-cog-market",
  "weftos-cog-repo",
+]
+
+[[package]]
+name = "weftos-cog-protocol"
+version = "0.8.4-rc.14"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -11435,6 +11449,36 @@ dependencies = [
  "ed25519-dalek",
  "serde",
  "sha2",
+]
+
+[[package]]
+name = "weftos-node-core"
+version = "0.8.4-rc.14"
+dependencies = [
+ "base64 0.22.1",
+ "ciborium",
+ "clawft-android-edge",
+ "ed25519-dalek",
+ "rand 0.8.7",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "uniffi",
+ "zeroize",
+]
+
+[[package]]
+name = "weftos-room-scope"
+version = "0.8.4-rc.14"
+dependencies = [
+ "eframe",
+ "egui_plot",
+ "image",
+ "serde",
+ "serde_json",
+ "weftos-cog-companion",
 ]
 
 [[package]]

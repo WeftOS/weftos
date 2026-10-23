@@ -9,7 +9,7 @@
 
 pub mod client;
 #[cfg(not(target_arch = "wasm32"))]
-mod shot;
+pub mod shot;
 pub mod widgets;
 
 pub use client::{CogClient, CogState, Settings};

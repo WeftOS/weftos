@@ -60,6 +60,8 @@ clawft-versions = { workspace = true }
 clawft-types = { workspace = true }
 # ADR-105: `weaver cog ...` project cog sources, licences, install, catalog.
 weftos-cog-sources = { path = "../weftos-cog-sources", features = ["net"] }
+# weftos.cog.v1 request and verdict types. That crate does not link the kernel.
+weftos-cog-protocol = { path = "../weftos-cog-protocol" }
 clap = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
