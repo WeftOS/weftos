@@ -112,6 +112,13 @@ pub enum KernelAction {
 
     /// Show kernel state, uptime, process count, service count.
     Status,
+    /// Liveness self-check: exit 0 only when the daemon answers within 10 s
+    /// and its last probe round (runtime, locks, RPC) passed recently.
+    Liveness {
+        /// Print the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
 
     /// List registered services with name, type, health status.
     Services,
@@ -263,6 +270,9 @@ pub async fn run(mut args: KernelArgs) -> anyhow::Result<()> {
                 let kernel_config = loaded.config.kernel.clone();
                 clawft_kernel::chain_storage::request_new_chain(new_chain);
                 clawft_kernel::chain_storage::request_adopt_legacy_chain(adopt_legacy_chain);
+                if let Some(s) = &refused_sentinel {
+                    crate::shutdown_guard::set_stop_sentinel(s.clone());
+                }
                 if let Err(e) = crate::daemon::run(
                     loaded.config,
                     kernel_config,
@@ -293,6 +303,9 @@ pub async fn run(mut args: KernelArgs) -> anyhow::Result<()> {
                         "stopped cleanly",
                     );
                 }
+                // The pid file goes only now, and the process with it: nothing
+                // left to wait on may keep a daemon alive without one.
+                exit_stopped();
             } else {
                 // Background (default) — spawn detached child
                 crate::daemon::daemonize(args.config.as_deref(), new_chain, adopt_legacy_chain)?;
@@ -319,27 +332,7 @@ pub async fn run(mut args: KernelArgs) -> anyhow::Result<()> {
             if user_profile {
                 super::kernel_children::cascade_before_user_stop(keep_children).await;
             }
-            let pid = read_daemon_pid()?;
-            let nix_pid = nix::unistd::Pid::from_raw(pid);
-
-            // Send SIGTERM for graceful shutdown
-            nix::sys::signal::kill(nix_pid, nix::sys::signal::Signal::SIGTERM)
-                .map_err(|e| anyhow::anyhow!("failed to send SIGTERM to PID {pid}: {e}"))?;
-            println!("SIGTERM sent to PID {pid}, waiting for exit...");
-
-            if wait_for_exit(pid, std::time::Duration::from_secs(10)) {
-                println!("Daemon stopped.");
-            } else if force {
-                println!("Graceful shutdown timed out — sending SIGKILL.");
-                let _ = nix::sys::signal::kill(nix_pid, nix::sys::signal::Signal::SIGKILL);
-                std::thread::sleep(std::time::Duration::from_millis(500));
-                println!("Daemon killed.");
-            } else {
-                eprintln!("Daemon still running after 10s. Use --force to SIGKILL.");
-            }
-
-            // Clean up stale files
-            cleanup_runtime_files();
+            stop_daemon(force)?;
         }
         // Windows: prefer RPC `kernel.shutdown` over named pipe; fall back
         // to taskkill using the PID file (WEFT-559).
@@ -370,6 +363,10 @@ pub async fn run(mut args: KernelArgs) -> anyhow::Result<()> {
         KernelAction::Start { .. } | KernelAction::Stop { .. } | KernelAction::Restart { .. } => {
             unreachable!("handled above");
         }
+        #[cfg(any(unix, windows))]
+        KernelAction::Liveness { json } => crate::liveness::cli(json).await?,
+        #[cfg(not(any(unix, windows)))]
+        KernelAction::Liveness { .. } => anyhow::bail!("no daemon on this platform"),
         KernelAction::Status => {
             if let Some(mut client) = DaemonClient::connect().await {
                 let resp = client.simple_call("kernel.status").await?;
@@ -1025,6 +1022,74 @@ fn read_daemon_pid() -> anyhow::Result<i32> {
         .map_err(|_| anyhow::anyhow!("PID {pid} is not running (stale PID file)"))?;
 
     Ok(pid)
+}
+
+/// How long `kernel stop` waits after TERM (the daemon's own shutdown is
+/// bounded inside this; see `shutdown_guard`), and after KILL.
+#[cfg(unix)]
+const STOP_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+#[cfg(unix)]
+const KILL_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The daemon to stop: `kernel.pid`, else whoever holds `kernel.lock` (a
+/// daemon wedged after its pid file went, card 1a919ae6).
+#[cfg(unix)]
+fn resolve_daemon_pid() -> anyhow::Result<i32> {
+    let by_file = match read_daemon_pid() {
+        Ok(pid) => return Ok(pid),
+        Err(e) => e,
+    };
+    match crate::instance_lock::holder(&protocol::runtime_paths()) {
+        Ok(pid) => {
+            println!("No usable PID file ({by_file}); PID {pid} holds the run-dir lock.");
+            i32::try_from(pid).map_err(|_| anyhow::anyhow!("lock holder pid {pid} out of range"))
+        }
+        Err(why) => anyhow::bail!("{by_file}; and {why}"),
+    }
+}
+
+/// TERM, wait; with `force`, KILL and wait. Runtime files are removed only
+/// once the process is gone: a live daemon keeps its pid file.
+#[cfg(unix)]
+fn stop_daemon(force: bool) -> anyhow::Result<()> {
+    use nix::sys::signal::{Signal, kill};
+    let pid = resolve_daemon_pid()?;
+    let nix_pid = nix::unistd::Pid::from_raw(pid);
+    kill(nix_pid, Signal::SIGTERM)
+        .map_err(|e| anyhow::anyhow!("failed to send SIGTERM to PID {pid}: {e}"))?;
+    println!("SIGTERM sent to PID {pid}, waiting for exit...");
+    if wait_for_exit(pid, STOP_WAIT) {
+        println!("Daemon stopped.");
+        cleanup_runtime_files();
+        return Ok(());
+    }
+    if !force {
+        anyhow::bail!(
+            "daemon (PID {pid}) still running after {}s; its pid file is left in place. \
+             Use --force to SIGKILL.",
+            STOP_WAIT.as_secs()
+        );
+    }
+    println!("Graceful shutdown timed out — sending SIGKILL.");
+    let _ = kill(nix_pid, Signal::SIGKILL);
+    if !wait_for_exit(pid, KILL_WAIT) {
+        anyhow::bail!("PID {pid} still running {}s after SIGKILL", KILL_WAIT.as_secs());
+    }
+    println!("Daemon killed.");
+    cleanup_runtime_files();
+    Ok(())
+}
+
+/// End a foreground daemon that returned from a clean shutdown: remove
+/// `kernel.pid` and exit now, without waiting on anything the runtime still
+/// holds (a wedged blocking task would otherwise keep the process alive with
+/// no pid file, the 2026-10-13 incident).
+fn exit_stopped() -> ! {
+    use std::io::Write;
+    let _ = std::fs::remove_file(protocol::pid_path());
+    let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().flush();
+    std::process::exit(0)
 }
 
 #[cfg(unix)]

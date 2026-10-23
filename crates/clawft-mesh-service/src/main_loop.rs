@@ -474,7 +474,8 @@ pub async fn run(cfg: MeshServiceConfig) -> Result<(), StartError> {
     Ok(())
 }
 
-async fn wait_for_signal() {
+/// Wait for `SIGINT` or `SIGTERM` (what [`run`] stops on).
+pub async fn wait_for_signal() {
     use tokio::signal::unix::{signal, SignalKind};
     let mut term = signal(SignalKind::terminate()).ok();
     tokio::select! {

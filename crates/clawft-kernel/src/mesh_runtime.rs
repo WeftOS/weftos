@@ -1099,6 +1099,20 @@ impl MeshRuntime {
         Some((self.conn_id(&p.sender), p.verified))
     }
 
+    /// Take, briefly, every lock a peer registration or a send takes: each
+    /// `peers` shard for writing, the connection-id table, the discovery and
+    /// clock locks. Blocks while any of them is held, so a liveness check
+    /// runs it on a blocking thread under a timeout (card 1a919ae6).
+    pub fn lock_probe(&self) {
+        self.peers.retain(|_, _| true);
+        drop(self.conn_ids.lock().unwrap_or_else(|p| p.into_inner()));
+        if let Some(d) = &self.discovery {
+            drop(d.heartbeat.lock().unwrap_or_else(|p| p.into_inner()));
+            drop(d.kademlia.lock().unwrap_or_else(|p| p.into_inner()));
+        }
+        drop(self.clock.lock().unwrap_or_else(|p| p.into_inner()));
+    }
+
     /// Number of currently connected peers.
     pub fn peer_count(&self) -> usize {
         self.peers.len()

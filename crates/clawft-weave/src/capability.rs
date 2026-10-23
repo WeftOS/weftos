@@ -179,6 +179,8 @@ pub fn required_capability(method: &str) -> Capability {
 
         // ── Read: everything else explicitly classified ─────────────
         "kernel.status"
+        // Card 1a919ae6: the liveness self-check report.
+        | "kernel.liveness"
         | "kernel.ps"
         | "kernel.services"
         | "kernel.logs"

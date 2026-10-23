@@ -645,9 +645,86 @@ weaver agent restart <pid>         # supervised restart, chain-logged
 weaver kernel start                # bring the kernel up
 weaver kernel stop                 # graceful shutdown (drains agents)
 weaver kernel status               # boot state + uptime
+weaver kernel liveness             # self-check; exit 1 when wedged or stale
 weaver health                      # aggregated health across services
 weaver kernel logs                 # last N boot/runtime events
 ```
+
+#### Bounded stop
+
+`weaver kernel stop` sends SIGTERM and waits 10 s. The daemon's own
+shutdown fits inside that wait:
+
+- The shutdown runs as named steps: RPC accept loop (2 s), child endpoint
+  (1 s), agent service (5 s), nested quiesce (3 s), nested project kernels
+  (10 s), project hooks (2 s), agent supervisor (5 s), then the kernel.
+  Each step logs when it starts and how long it took, or that it timed out
+  and was abandoned. Early steps never use the last 3 s, which the kernel
+  step keeps for itself (service stops, then the chain checkpoint). Inside
+  the kernel step every service's `stop()` runs concurrently, with 3 s
+  each.
+- The whole shutdown has a budget of 7 s, or 13 s for a nested instance
+  (its owner allows 15 s). A guard on its own OS thread ends the process
+  1 s after the budget. It needs no async runtime, so it fires even when
+  every runtime thread is blocked. It logs `shutdown exceeded its budget`,
+  removes `kernel.pid`, and exits 0 on a stop (so `Restart=on-failure`
+  does not bring back what was stopped) or 1 on a restart.
+- `kernel.pid` is removed only when the process is about to exit. A live
+  daemon always has its pid file.
+
+When the daemon does not exit:
+
+- `weaver kernel stop` fails (exit 1), says so, and leaves the pid file
+  in place. Earlier versions deleted the pid file and socket anyway. That
+  left a running daemon that nothing could find.
+- `weaver kernel stop --force` sends SIGKILL after the 10 s and waits up
+  to 5 s more for the process to exit.
+- Without a usable pid file, both forms find the daemon through the
+  run-dir lock: the daemon is the process holding `kernel.lock`, and the
+  lock file names its pid.
+
+#### Liveness and the watchdog
+
+Every 10 s the daemon runs a round of probes, each with a 5 s limit:
+
+- scheduler lag;
+- a blocking-pool round trip;
+- the kernel lock;
+- every mesh peer-table lock (`MeshRuntime::lock_probe`);
+- a `kernel.liveness` call over the daemon's own socket (accept loop, gates and dispatch).
+
+`kernel.liveness` returns the last round. `weaver kernel liveness [--json]`
+exits 0 only when all of these hold:
+
+- the daemon answers within 10 s;
+- the last round passed;
+- that round is less than three intervals old.
+
+The generated systemd units set `WatchdogSec=60` and `NotifyAccess=main`.
+These are the user daemon unit (`weaver service unit --kind systemd`) and
+`weftos-mesh` (`weaver mesh install-service`). The process sends
+`WATCHDOG=1` after every round that passes. Rounds run every 10 s at most,
+and at least three times per watchdog interval. A wedged process stops
+sending it, so systemd kills it after 60 s and `Restart=` starts it again.
+
+- **Boot:** while the daemon boots, a keepalive feeds the watchdog for up
+  to 5 minutes.
+- **Child processes:** children inherit the variables but send nothing,
+  because `WATCHDOG_PID` names the parent.
+- **No systemd:** without `NOTIFY_SOCKET` and `WATCHDOG_USEC` (macOS, or
+  a manual start) nothing is sent, and only the self-check runs.
+
+launchd has no watchdog. `KeepAlive` restarts a process that exits, not
+one that hangs. On macOS, run the self-check from a periodic job and kill a
+daemon that fails it. `KeepAlive` then relaunches it, because a SIGKILL
+leaves no `REFUSED` sentinel:
+
+```bash
+weaver kernel liveness --profile user || weaver kernel stop --profile user --force
+```
+
+Run it every few minutes, for example from a LaunchAgent with
+`StartInterval`.
 
 ### Windows transport (WEFT-11 + WEFT-559)
 

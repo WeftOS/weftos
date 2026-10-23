@@ -80,6 +80,8 @@ pub const READ_ONLY_ALLOW: &[&str] = &[
     "kernel.ps",
     "kernel.services",
     "kernel.logs",
+    // Card 1a919ae6: the daemon's own liveness report (read-only).
+    "kernel.liveness",
     "ping",
     "cluster.status",
     "cluster.nodes",
@@ -212,6 +214,7 @@ pub const USER_LEVEL_ALLOW: &[&str] = &[
 pub const DENY_ALL_ALLOW: &[&str] = &[
     "kernel.handshake",
     "kernel.status",
+    "kernel.liveness",
     "project.list",
     "project.show",
 ];

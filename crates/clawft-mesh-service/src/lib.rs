@@ -62,7 +62,7 @@ pub use lost::LostInfo;
 pub use config::{BindPolicy, ConfigError, MeshServiceConfig, Overrides};
 pub use state::ServiceState;
 #[cfg(unix)]
-pub use main_loop::{run, start, RunningService, StartError};
+pub use main_loop::{run, start, wait_for_signal, RunningService, StartError};
 #[cfg(all(unix, feature = "testing"))]
 pub use main_loop::start_with;
 

@@ -26,6 +26,12 @@ pub mod boot_refusal;
 /// Single-instance advisory lock on `<runtime>/kernel.lock` (ADR-103 P0b).
 #[cfg(any(unix, windows))]
 pub mod instance_lock;
+/// Bounded daemon shutdown: per-step limits and a hard-exit guard (card 1a919ae6).
+#[cfg(any(unix, windows))]
+pub mod shutdown_guard;
+/// Liveness self-check (`kernel.liveness`) and the systemd watchdog (card 1a919ae6).
+#[cfg(any(unix, windows))]
+pub mod liveness;
 #[cfg(any(unix, windows))]
 pub mod llm_service;
 /// `kernel.handshake` and the request-envelope gate (ADR-103 D14).

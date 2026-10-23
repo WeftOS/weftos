@@ -154,3 +154,19 @@ fn many_peers_register_while_a_facts_send_is_stuck_on_a_stalled_peer() {
         "peer registrations wedged behind a send to a stalled peer"
     );
 }
+
+#[test]
+fn the_lock_probe_returns_on_an_idle_runtime_and_blocks_on_a_held_shard() {
+    let rt = Arc::new(MeshRuntime::new("local".into()));
+    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+    rt.add_peer("p".into(), tx);
+    rt.lock_probe();
+    // A guard held elsewhere (what the old send_to_peer did across its
+    // await): the probe waits, which is what lets liveness report it.
+    let held = rt.peers.get("p").unwrap();
+    let probe_rt = rt.clone();
+    let probe = on_thread(move || probe_rt.lock_probe());
+    assert!(probe.recv_timeout(Duration::from_millis(300)).is_err(), "probe passed a held shard");
+    drop(held);
+    assert!(probe.recv_timeout(MUST_RETURN_WITHIN).is_ok(), "probe never returned");
+}
