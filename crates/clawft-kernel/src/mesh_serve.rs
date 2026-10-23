@@ -650,7 +650,7 @@ async fn pump(
                         let mut wire = Vec::with_capacity(ACK_MAGIC.len() + ack_bytes.len());
                         wire.extend_from_slice(ACK_MAGIC);
                         wire.append(&mut ack_bytes);
-                        if channel.send_encrypted(&wire).await.is_err() { break; }
+                        if !write_frame(&mut *channel, &wire, limits.write_stall, peer_addr).await { break; }
                         continue;
                     }
                     if active.as_ref().is_some_and(|a| a.signed_leaf) {
@@ -684,7 +684,7 @@ async fn pump(
                                     let Some(hash) = channel.handshake_hash() else { break };
                                     if !act.admitted { break; }
                                     let reply = auth.identity.hello(hash, &auth.noise_static, unix_now());
-                                    if channel.send_encrypted(&reply.to_bytes()).await.is_err() { break; }
+                                    if !write_frame(&mut *channel, &reply.to_bytes(), limits.write_stall, peer_addr).await { break; }
                                 }
                                 active = Some(act);
                                 rest
@@ -764,12 +764,27 @@ async fn pump(
                     if !dialled {
                         last_activity = tokio::time::Instant::now();
                     }
-                    if channel.send_encrypted(&data).await.is_err() {
+                    if !write_frame(&mut *channel, &data, limits.write_stall, peer_addr).await {
                         break;
                     }
                 }
                 None => break,
             },
+        }
+    }
+}
+
+/// Write one frame, giving up after `limit`. False: close the connection
+/// (the write failed, or the peer stopped reading and the frame never left).
+/// A cancelled write can leave a partial frame on the wire; the connection
+/// is closed right after, so the stream is never reused out of sync.
+async fn write_frame(channel: &mut dyn EncryptedChannel, data: &[u8], limit: std::time::Duration, peer: &str) -> bool {
+    match tokio::time::timeout(limit, channel.send_encrypted(data)).await {
+        Ok(Ok(())) => true,
+        Ok(Err(_)) => false,
+        Err(_) => {
+            tracing::warn!(peer, timeout_s = limit.as_secs(), "mesh peer stopped reading; closing stalled connection");
+            false
         }
     }
 }
@@ -1155,3 +1170,7 @@ mod serve_tests;
 #[cfg(test)]
 #[path = "mesh_nested_dial_tests.rs"]
 mod nested_dial_tests;
+
+#[cfg(test)]
+#[path = "mesh_serve_stall_tests.rs"]
+mod stall_tests;

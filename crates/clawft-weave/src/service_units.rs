@@ -37,6 +37,12 @@ pub const SYSTEMD_UNIT: &str = "weftos";
 /// its plist watches the `REFUSED` sentinel instead (see `boot_refusal`).
 pub const REFUSED_EXIT: i32 = 78;
 
+/// systemd `WatchdogSec=` for the generated units (card 1a919ae6). The
+/// process feeds it from its liveness loop (`crate::liveness`) every third of
+/// this, and only after a round where its runtime, locks and RPC answered; a
+/// wedged daemon is killed and restarted (`Restart=`) after it lapses.
+pub const WATCHDOG_SECS: u32 = 60;
+
 /// launchd `ThrottleInterval`, seconds between restarts.
 const LAUNCHD_THROTTLE_SECS: u32 = 30;
 
@@ -194,6 +200,8 @@ KillMode=process\n\
 Restart=on-failure\n\
 RestartSec=3\n\
 RestartPreventExitStatus={REFUSED_EXIT}\n\
+NotifyAccess=main\n\
+WatchdogSec={WATCHDOG_SECS}\n\
 \n\
 [Install]\n\
 WantedBy=default.target\n"

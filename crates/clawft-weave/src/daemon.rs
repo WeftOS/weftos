@@ -1047,6 +1047,8 @@ pub async fn run(
     crate::project_hooks::adjust_services(&mut config, &mut kernel_config);
     let paths = protocol::runtime_paths();
     let socket_path = paths.socket();
+    // A systemd watchdog runs from unit start; keep it fed while booting.
+    crate::liveness::boot_keepalive();
 
     // ADR-103 P0b: one kernel per runtime dir. Hold the advisory lock for
     // the daemon's whole lifetime; with it held nobody else is serving the
@@ -3514,6 +3516,17 @@ pub async fn run(
         })
     };
 
+    // Liveness self-check and the systemd watchdog (card 1a919ae6): needs
+    // the accept loop above to answer its `ping`.
+    crate::liveness::start(
+        crate::liveness::Targets {
+            kernel: Some(Arc::clone(&kernel)),
+            socket: Some(protocol::socket_path()),
+            ..Default::default()
+        },
+        shutdown_rx.clone(),
+    );
+
     // Optional TCP relay (Unix only). When `[kernel.ipc_tcp]` is enabled,
     // every accepted TCP connection is relayed to a fresh connection on
     // the unix socket, with self-asserted literal scope strings stripped
@@ -3699,14 +3712,39 @@ pub async fn run(
         }
     };
 
+    // Every step below is bounded and logged, and a guard thread ends the
+    // process if the whole shutdown overruns (card 1a919ae6): a wedged task
+    // must not leave a daemon that took TERM still holding the run dir.
+    #[cfg(unix)]
+    let nested_instance = crate::nested_boot::active().is_some();
+    #[cfg(not(unix))]
+    let nested_instance = false;
+    let shutdown = crate::shutdown_guard::Shutdown::begin(
+        if nested_instance {
+            crate::shutdown_guard::NESTED_SHUTDOWN_BUDGET
+        } else {
+            crate::shutdown_guard::SHUTDOWN_BUDGET
+        },
+        crate::shutdown_guard::HardExit {
+            pid_file: protocol::pid_path(),
+            code: if restart_requested { crate::shutdown_guard::HARD_EXIT_RESTART } else { 0 },
+        },
+    );
+    crate::shutdown_guard::test_wedge();
+    let secs = std::time::Duration::from_secs;
+
     // If a signal triggered shutdown, wait for the accept loop to finish.
-    if restart_requested || !accept_handle.is_finished() {
-        let _ = accept_handle.await;
+    if (restart_requested || !accept_handle.is_finished())
+        && shutdown.step("rpc accept loop", secs(2), &mut accept_handle).await.is_none()
+    {
+        accept_handle.abort();
     }
     #[cfg(unix)]
-    if let Some(handle) = child_accept_handle.take() {
+    if let Some(mut handle) = child_accept_handle.take() {
         let _ = shutdown_tx.send(true);
-        let _ = handle.await;
+        if shutdown.step("child accept loop", secs(1), &mut handle).await.is_none() {
+            handle.abort();
+        }
     }
 
     // Stop stream-window anchors so they flush their final windows
@@ -3724,54 +3762,66 @@ pub async fn run(
     // counter to hit zero. After D3 every dispatch flows through this
     // service, so the drain is the single chokepoint for graceful
     // chat shutdown.
-    if let Some(agent) = DAEMON_AGENT.get() {
-        let drained = agent.shutdown(std::time::Duration::from_secs(5)).await;
+    if let Some(agent) = DAEMON_AGENT.get()
+        && let Some(drained) = shutdown
+            .step("agent service", secs(5), agent.shutdown(secs(5)))
+            .await
+    {
         info!(drained, "agent service shutdown");
     }
 
     // Project kernel: final anchor and unregister, before the chain is saved.
     #[cfg(all(unix, feature = "exochain"))]
-    crate::nested_rpc::quiesce().await?;
+    if let Some(r) = shutdown.step("nested quiesce", secs(3), crate::nested_rpc::quiesce()).await {
+        r?;
+    }
     // A nested user instance (ADR-103 Phase 4, D10) owns its projects: they stop with it,
     // whether shutdown came by RPC or by the owner closing the liveness pipe (deny_all). A
     // top-level user daemon keeps its children running for re-adoption on the next boot;
     // `weaver kernel stop` cascades explicitly there. Bounded inside the owner's 15 s
     // graceful window.
     #[cfg(unix)]
-    if crate::nested_boot::active().is_some()
+    if nested_instance
         && let Some(sup) = crate::project_supervisor::global()
+        && let Some(stopped) = shutdown.step("nested project kernels", secs(10), sup.stop_all()).await
     {
-        match tokio::time::timeout(std::time::Duration::from_secs(10), sup.stop_all()).await {
-            Ok(stopped) => info!(count = stopped.len(), "nested instance: stopped its project kernels"),
-            Err(_) => warn!("nested instance: project kernels did not stop within 10 s"),
-        }
+        info!(count = stopped.len(), "nested instance: stopped its project kernels");
     }
-    crate::project_hooks::pre_shutdown().await;
+    shutdown
+        .step("project hooks", secs(2), crate::project_hooks::pre_shutdown())
+        .await;
 
     // Gracefully shut down running agents before kernel shutdown
-    {
-        let k = kernel.read().await;
-        let results = k
-            .supervisor()
-            .shutdown_all(std::time::Duration::from_secs(5))
-            .await;
-        for (pid, code) in &results {
-            k.event_log().info(
-                "shutdown",
-                format!("agent PID {pid} exited with code {code}"),
-            );
-        }
-    }
+    shutdown
+        .step("agent supervisor", secs(5), async {
+            let k = kernel.read().await;
+            let results = k
+                .supervisor()
+                .shutdown_all(std::time::Duration::from_secs(5))
+                .await;
+            for (pid, code) in &results {
+                k.event_log().info(
+                    "shutdown",
+                    format!("agent PID {pid} exited with code {code}"),
+                );
+            }
+        })
+        .await;
 
-    // Shut down kernel
-    {
-        let mut k = kernel.write().await;
-        if let Err(e) = k.shutdown().await {
-            warn!("kernel shutdown error: {e}");
-        }
-    }
+    // Shut down kernel (services, then the chain checkpoint).
+    shutdown
+        .final_step("kernel", async {
+            let mut k = kernel.write().await;
+            if let Err(e) = k.shutdown().await {
+                warn!("kernel shutdown error: {e}");
+            }
+        })
+        .await;
 
-    // Clean up transport endpoint artefacts and PID file
+    // Clean up transport endpoint artefacts. `kernel.pid` stays until the
+    // process is about to exit (the caller removes it; see
+    // `commands::kernel_cmd`), so `kernel stop` can always find a live
+    // daemon by it.
     #[cfg(unix)]
     if socket_path.exists() {
         let _ = std::fs::remove_file(&socket_path);
@@ -3779,10 +3829,6 @@ pub async fn run(
     #[cfg(unix)]
     if let Some(path) = child_socket_cleanup {
         let _ = std::fs::remove_file(path);
-    }
-    let pid_path = protocol::pid_path();
-    if pid_path.exists() {
-        let _ = std::fs::remove_file(&pid_path);
     }
 
     println!("Daemon stopped.");
@@ -3809,6 +3855,7 @@ pub async fn run(
         }
         let err = cmd.exec(); // replaces process; only reached on error
         eprintln!("re-exec failed: {err}");
+        let _ = std::fs::remove_file(protocol::pid_path());
         std::process::exit(1);
     }
     #[cfg(windows)]
@@ -8775,6 +8822,7 @@ async fn dispatch(
         }
 
         "ping" => Response::success(serde_json::json!("pong")),
+        "kernel.liveness" => crate::liveness::rpc(),
 
         // ── Workspace methods ─────────────────────────────────────────
         "workspace.create" => {

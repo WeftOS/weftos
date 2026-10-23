@@ -206,6 +206,39 @@ fn held(paths: &RuntimePaths, lock: &Path) -> LockError {
     }
 }
 
+/// The pid of the process holding `<root>/kernel.lock`, read without a pid
+/// file (`weaver kernel stop` when `kernel.pid` is gone but a daemon is not).
+///
+/// Only a held lock names its holder: the file is rewritten by each holder
+/// on acquisition, so a leftover one names a dead (or reused) pid. Whether it
+/// is held is probed with a non-blocking shared lock, released at once; a
+/// kernel taking the lock in that same instant would see it held and refuse
+/// to boot (exit 78), which only a concurrent start and stop can cause.
+/// `Err` says why there is no holder.
+#[cfg(unix)]
+pub fn holder(paths: &RuntimePaths) -> Result<u32, String> {
+    use nix::errno::Errno;
+    use nix::fcntl::{Flock, FlockArg};
+    let path = paths.lock();
+    let mut file = match File::open(&path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(format!("no lock file at {}", path.display()));
+        }
+        Err(e) => return Err(format!("cannot read {}: {e}", path.display())),
+    };
+    let mut text = String::new();
+    file.read_to_string(&mut text)
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    match Flock::lock(file, FlockArg::LockSharedNonblock) {
+        Ok(_free) => Err(format!("{} is not held by any process", path.display())),
+        Err((_, Errno::EWOULDBLOCK)) => text.trim().parse::<u32>().map_err(|_| {
+            format!("{} is held but names no pid ({:?})", path.display(), text.trim())
+        }),
+        Err((_, errno)) => Err(format!("cannot probe {}: {errno}", path.display())),
+    }
+}
+
 /// With the instance lock held, make the socket path bindable.
 ///
 /// A socket file that refuses connections (or vanished) is stale: nobody
@@ -321,6 +354,25 @@ mod tests {
         assert!(err.to_string().contains("already running"), "{err}");
         assert_eq!(crate::boot_refusal::exit_code(&err), 78, "a live daemon is a refusal");
         assert!(paths.socket().exists());
+    }
+
+    #[test]
+    fn holder_names_the_live_lock_owner_and_refuses_otherwise() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = RuntimePaths::at(dir.path());
+        let none = holder(&paths).unwrap_err();
+        assert!(none.contains("no lock file"), "{none}");
+
+        let lock = InstanceLock::acquire(&paths).unwrap();
+        assert_eq!(holder(&paths), Ok(std::process::id()));
+        // Probing does not take the lock away from its owner.
+        assert!(InstanceLock::acquire(&paths).is_err());
+        drop(lock);
+
+        // A leftover file names a pid, but nobody holds it.
+        let free = holder(&paths).unwrap_err();
+        assert!(free.contains("not held"), "{free}");
+        InstanceLock::acquire(&paths).expect("the probe left the lock free");
     }
 
     #[test]

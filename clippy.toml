@@ -1,0 +1,8 @@
+await-holding-invalid-types = [
+    { path = "dashmap::mapref::one::Ref", reason = "a DashMap shard guard held across .await blocks every writer to that shard on a runtime thread" },
+    { path = "dashmap::mapref::one::RefMut", reason = "a DashMap shard guard held across .await blocks every reader and writer of that shard on a runtime thread" },
+    { path = "dashmap::mapref::multiple::RefMulti", reason = "a DashMap iterator guard held across .await blocks every writer to that shard on a runtime thread" },
+    { path = "dashmap::mapref::multiple::RefMutMulti", reason = "a DashMap iterator guard held across .await blocks the shard on a runtime thread" },
+    { path = "dashmap::iter::Iter", reason = "a DashMap iterator held across .await holds a shard read lock" },
+    { path = "dashmap::iter::IterMut", reason = "a DashMap iterator held across .await holds a shard write lock" },
+]

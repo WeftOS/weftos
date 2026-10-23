@@ -157,6 +157,33 @@ impl Drop for RouteGuard {
     }
 }
 
+/// Longest a send waits for room in a peer's outbound channel. A peer that
+/// stops draining (a stalled handshake, a socket nobody reads) gets this
+/// long, then the send fails: nothing waits on one peer forever.
+pub const PEER_SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Push `bytes` into a peer's outbound channel, waiting at most
+/// [`PEER_SEND_TIMEOUT`] for room.
+///
+/// Callers clone the sender out of `peers` first: a DashMap guard must never
+/// be held across this await, or every writer to its shard (a peer joining,
+/// reconnecting or leaving) blocks a runtime thread until the peer drains
+/// (card 1a919ae6; `clippy.toml` refuses the pattern).
+async fn send_bounded(
+    sender: &tokio::sync::mpsc::Sender<Vec<u8>>,
+    bytes: Vec<u8>,
+    node_id: &str,
+) -> KernelResult<()> {
+    use tokio::sync::mpsc::error::SendTimeoutError;
+    sender.send_timeout(bytes, PEER_SEND_TIMEOUT).await.map_err(|e| match e {
+        SendTimeoutError::Closed(_) => KernelError::Mesh(format!("send channel closed for peer {node_id}")),
+        SendTimeoutError::Timeout(_) => KernelError::Mesh(format!(
+            "peer {node_id} stalled: outbound channel full for {}s",
+            PEER_SEND_TIMEOUT.as_secs()
+        )),
+    })
+}
+
 /// Discovery state for mesh peer lookup and health tracking.
 pub struct DiscoveryState {
     /// Kademlia routing table for peer lookup.
@@ -454,15 +481,17 @@ impl MeshRuntime {
     /// Used by the assessment gossip/diff push loop. Failures on individual
     /// peers are logged and skipped (best-effort fan-out).
     pub async fn broadcast_raw(&self, data: &[u8]) -> usize {
+        // Snapshot first: no shard guard may be held across the sends.
+        let targets: Vec<_> = self
+            .peers
+            .iter()
+            .map(|e| (e.key().clone(), e.sender.clone()))
+            .collect();
         let mut sent = 0usize;
-        for entry in self.peers.iter() {
-            let peer_id = entry.key().clone();
-            let sender = entry.sender.clone();
-            match sender.send(data.to_vec()).await {
+        for (peer_id, sender) in targets {
+            match send_bounded(&sender, data.to_vec(), &peer_id).await {
                 Ok(()) => sent += 1,
-                Err(_) => {
-                    warn!(peer = %peer_id, "assessment broadcast: peer send channel closed");
-                }
+                Err(e) => warn!(peer = %peer_id, error = %e, "assessment broadcast: peer skipped"),
             }
         }
         sent
@@ -753,21 +782,21 @@ impl MeshRuntime {
     ///
     /// Serializes the envelope to JSON bytes and pushes them into the
     /// peer's outbound channel. Returns an error if the peer is not
-    /// connected or the channel is closed/full.
+    /// connected, the channel is closed, or it stayed full for
+    /// [`PEER_SEND_TIMEOUT`].
     pub async fn send_to_peer(&self, node_id: &str, envelope: MeshIpcEnvelope) -> KernelResult<()> {
-        let peer = self
+        // Clone the sender and let the shard guard go before awaiting.
+        let sender = self
             .peers
             .get(node_id)
+            .map(|p| p.sender.clone())
             .ok_or_else(|| KernelError::Mesh(format!("peer not connected: {node_id}")))?;
 
         let bytes = envelope
             .to_bytes()
             .map_err(|e| KernelError::Mesh(format!("serialization error: {e}")))?;
 
-        peer.sender
-            .send(bytes)
-            .await
-            .map_err(|_| KernelError::Mesh(format!("send channel closed for peer {node_id}")))?;
+        send_bounded(&sender, bytes, node_id).await?;
 
         debug!(peer = %node_id, "sent envelope to peer");
         Ok(())
@@ -920,7 +949,7 @@ impl MeshRuntime {
             Some(maybe_reply) => {
                 if let Some(reply) = maybe_reply {
                     if let Some(tx) = reply_tx {
-                        let _ = tx.send(reply).await;
+                        let _ = send_bounded(&tx, reply, "assessment reply").await;
                     } else if let Some(source) = AssessmentTransport::try_extract_payload(data)
                         .ok()
                         .flatten()
@@ -931,8 +960,9 @@ impl MeshRuntime {
                         })
                     {
                         // Prefer routing the reply to the known peer by source_node.
-                        if let Some(peer) = self.peers.get(&source) {
-                            let _ = peer.sender.send(reply).await;
+                        let sender = self.peers.get(&source).map(|p| p.sender.clone());
+                        if let Some(sender) = sender {
+                            let _ = send_bounded(&sender, reply, &source).await;
                         }
                     }
                 }
@@ -1067,6 +1097,20 @@ impl MeshRuntime {
     pub fn peer_route(&self, node_id: &str) -> Option<(u64, bool)> {
         let p = self.peers.get(node_id)?;
         Some((self.conn_id(&p.sender), p.verified))
+    }
+
+    /// Take, briefly, every lock a peer registration or a send takes: each
+    /// `peers` shard for writing, the connection-id table, the discovery and
+    /// clock locks. Blocks while any of them is held, so a liveness check
+    /// runs it on a blocking thread under a timeout (card 1a919ae6).
+    pub fn lock_probe(&self) {
+        self.peers.retain(|_, _| true);
+        drop(self.conn_ids.lock().unwrap_or_else(|p| p.into_inner()));
+        if let Some(d) = &self.discovery {
+            drop(d.heartbeat.lock().unwrap_or_else(|p| p.into_inner()));
+            drop(d.kademlia.lock().unwrap_or_else(|p| p.into_inner()));
+        }
+        drop(self.clock.lock().unwrap_or_else(|p| p.into_inner()));
     }
 
     /// Number of currently connected peers.
@@ -2436,3 +2480,7 @@ mod tests {
 #[cfg(test)]
 #[path = "mesh_runtime_bind_tests.rs"]
 mod bind_tests;
+
+#[cfg(test)]
+#[path = "mesh_runtime_stall_tests.rs"]
+mod stall_tests;

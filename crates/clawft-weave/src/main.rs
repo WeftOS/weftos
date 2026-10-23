@@ -156,10 +156,14 @@ fn main() -> anyhow::Result<()> {
             anyhow::bail!("{error}");
         }
     }
-    tokio::runtime::Builder::new_multi_thread()
+    let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
-        .build()?
-        .block_on(async_main())
+        .build()?;
+    let result = rt.block_on(async_main());
+    // Dropping the runtime waits for every blocking task without limit; a
+    // wedged one would keep an exiting daemon alive (card 1a919ae6).
+    rt.shutdown_timeout(std::time::Duration::from_secs(2));
+    result
 }
 
 async fn async_main() -> anyhow::Result<()> {

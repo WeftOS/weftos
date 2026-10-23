@@ -14,7 +14,7 @@
 
 use std::path::Path;
 
-use crate::service_units::sh_quote;
+use crate::service_units::{WATCHDOG_SECS, sh_quote};
 
 /// launchd label of the machine mesh service.
 pub const MESH_LAUNCHD_LABEL: &str = "ai.weftos.mesh";
@@ -185,6 +185,8 @@ Group={LINUX_ACCOUNT}\n\
 ExecStart={exec} mesh serve --config {MESH_TOML}\n\
 Restart=always\n\
 RestartSec=3\n\
+NotifyAccess=main\n\
+WatchdogSec={WATCHDOG_SECS}\n\
 StateDirectory=weftos/mesh\n\
 StateDirectoryMode=0700\n\
 RuntimeDirectory=weftos\n\

@@ -297,7 +297,18 @@ async fn serve(a: ServeArgs) -> Result<()> {
         cfg.health_listen = if h == "off" { None } else { Some(h) };
         cfg.validate()?;
     }
-    clawft_mesh_service::run(cfg).await.map_err(|e| anyhow!(e))
+    // The installed unit's watchdog (card 1a919ae6): `run` would start and
+    // block in one call, so start, attach the liveness loop, then wait.
+    let svc = clawft_mesh_service::start(cfg).await.map_err(|e| anyhow!(e))?;
+    let (_keep, rx) = tokio::sync::watch::channel(false);
+    crate::liveness::start(
+        crate::liveness::Targets { mesh: Some(svc.runtime().clone()), ..Default::default() },
+        rx,
+    );
+    clawft_mesh_service::wait_for_signal().await;
+    tracing::info!("mesh service stopping");
+    svc.shutdown().await;
+    Ok(())
 }
 
 #[cfg(test)]
