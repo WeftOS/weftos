@@ -169,6 +169,7 @@ fn short(first: u64, per_ip: usize) -> Limits {
         first_frame: Duration::from_millis(first),
         idle: Duration::from_secs(30),
         per_ip,
+        ..Limits::default()
     }
 }
 

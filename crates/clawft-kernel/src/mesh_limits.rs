@@ -21,6 +21,11 @@ pub const FIRST_FRAME_TIMEOUT: std::time::Duration = std::time::Duration::from_s
 /// Close an admitted connection idle this long (strict gates only).
 pub const IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(900);
 
+/// Longest one outbound frame may take to write. A peer that stops reading
+/// fills the socket, then the connection's outbound channel; past this the
+/// connection is closed so senders fail fast instead of queueing behind it.
+pub const WRITE_STALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Releases a per-IP slot on drop.
 pub(crate) struct IpSlot {
     ip: std::net::IpAddr,
@@ -83,6 +88,9 @@ pub struct Limits {
     pub idle: std::time::Duration,
     /// Concurrent connections per source IP.
     pub per_ip: usize,
+    /// Longest one outbound frame may take to write before the connection
+    /// is closed as stalled (every gate).
+    pub write_stall: std::time::Duration,
 }
 
 impl Default for Limits {
@@ -91,6 +99,7 @@ impl Default for Limits {
             first_frame: FIRST_FRAME_TIMEOUT,
             idle: IDLE_TIMEOUT,
             per_ip: MAX_CONNECTIONS_PER_IP,
+            write_stall: WRITE_STALL_TIMEOUT,
         }
     }
 }

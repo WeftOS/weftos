@@ -149,6 +149,35 @@ pub trait SystemService: Send + Sync {
     }
 }
 
+/// Longest one service's `stop()` may take during [`ServiceRegistry::stop_all`].
+pub const SERVICE_STOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// `Some(result)` when `stop()` finished in time, `None` when abandoned.
+#[cfg(feature = "native")]
+async fn bounded_stop(
+    service: Arc<dyn SystemService>,
+) -> Option<Result<(), Box<dyn std::error::Error + Send + Sync>>> {
+    tokio::time::timeout(SERVICE_STOP_TIMEOUT, service.stop()).await.ok()
+}
+
+#[cfg(not(feature = "native"))]
+async fn bounded_stop(
+    service: Arc<dyn SystemService>,
+) -> Option<Result<(), Box<dyn std::error::Error + Send + Sync>>> {
+    Some(service.stop().await)
+}
+
+#[cfg(feature = "native")]
+use futures::future::join_all;
+
+/// Without `native` (no `futures`): the same contract, one at a time.
+#[cfg(not(feature = "native"))]
+async fn join_all<F: std::future::Future<Output = ()>>(futs: impl IntoIterator<Item = F>) {
+    for f in futs {
+        f.await;
+    }
+}
+
 /// Registry of system services with lifecycle management.
 ///
 /// Uses [`DashMap`] for concurrent access from multiple kernel
@@ -213,10 +242,10 @@ impl ServiceRegistry {
     /// Individual service failures are logged as warnings but do not
     /// prevent other services from starting.
     pub async fn start_all(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        for entry in self.services.iter() {
-            let name = entry.key().clone();
+        // A snapshot, never a live iterator: no DashMap guard across an await.
+        for (name, service) in self.snapshot() {
             info!(service = %name, "starting service");
-            if let Err(e) = entry.value().start().await {
+            if let Err(e) = service.start().await {
                 warn!(service = %name, error = %e, "service failed to start");
             }
         }
@@ -225,15 +254,24 @@ impl ServiceRegistry {
 
     /// Stop all registered services.
     ///
-    /// Individual service failures are logged as warnings.
+    /// Services stop concurrently (registry order was never defined), each
+    /// bounded by [`SERVICE_STOP_TIMEOUT`] on native builds, so one stuck
+    /// service cannot hold up kernel shutdown. Failures and timeouts are
+    /// logged as warnings.
     pub async fn stop_all(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        for entry in self.services.iter() {
-            let name = entry.key().clone();
+        let stops = self.snapshot().into_iter().map(|(name, service)| async move {
             info!(service = %name, "stopping service");
-            if let Err(e) = entry.value().stop().await {
-                warn!(service = %name, error = %e, "service failed to stop");
+            match bounded_stop(service).await {
+                Some(Ok(())) => info!(service = %name, "service stopped"),
+                Some(Err(e)) => warn!(service = %name, error = %e, "service failed to stop"),
+                None => warn!(
+                    service = %name,
+                    timeout_s = SERVICE_STOP_TIMEOUT.as_secs(),
+                    "service did not stop in time; abandoned"
+                ),
             }
-        }
+        });
+        join_all(stops).await;
         Ok(())
     }
 
@@ -252,9 +290,8 @@ impl ServiceRegistry {
     /// Run health checks on all registered services.
     pub async fn health_all(&self) -> Vec<(String, HealthStatus)> {
         let mut results = Vec::new();
-        for entry in self.services.iter() {
-            let name = entry.key().clone();
-            let status = entry.value().health_check().await;
+        for (name, service) in self.snapshot() {
+            let status = service.health_check().await;
             results.push((name, status));
         }
         results
@@ -756,6 +793,69 @@ mod tests {
 
         registry.start_all().await.unwrap();
         registry.stop_all().await.unwrap();
+    }
+
+    /// `stop()` never returns, or unregisters itself from `registry` first.
+    struct StuckService {
+        name: String,
+        registry: Option<Arc<ServiceRegistry>>,
+    }
+
+    #[async_trait]
+    impl SystemService for StuckService {
+        fn name(&self) -> &str {
+            &self.name
+        }
+        fn service_type(&self) -> ServiceType {
+            ServiceType::Core
+        }
+        async fn start(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+            Ok(())
+        }
+        async fn stop(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+            match &self.registry {
+                Some(r) => {
+                    r.unregister(&self.name);
+                    Ok(())
+                }
+                None => std::future::pending().await,
+            }
+        }
+        async fn health_check(&self) -> HealthStatus {
+            HealthStatus::Healthy
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn stop_all_abandons_a_service_that_never_stops() {
+        let registry = ServiceRegistry::new();
+        registry
+            .register(Arc::new(StuckService { name: "stuck".into(), registry: None }))
+            .unwrap();
+        registry
+            .register(Arc::new(MockService::new("fine", ServiceType::Core)))
+            .unwrap();
+        let t = tokio::time::Instant::now();
+        registry.stop_all().await.unwrap();
+        assert!(t.elapsed() <= SERVICE_STOP_TIMEOUT + std::time::Duration::from_millis(100));
+    }
+
+    #[test]
+    fn a_service_may_unregister_itself_while_stop_all_runs() {
+        // The old loop held the registry's iterator guard across `stop()`, so
+        // this write to the same map deadlocked the thread.
+        let registry = Arc::new(ServiceRegistry::new());
+        registry
+            .register(Arc::new(StuckService { name: "self-rm".into(), registry: Some(registry.clone()) }))
+            .unwrap();
+        let (done, rx) = std::sync::mpsc::channel();
+        let r = registry.clone();
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            let _ = done.send(rt.block_on(r.stop_all()).is_ok());
+        });
+        assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(10)).ok(), Some(true));
+        assert!(registry.get("self-rm").is_none());
     }
 
     #[tokio::test]
