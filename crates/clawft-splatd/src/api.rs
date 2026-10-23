@@ -363,9 +363,13 @@ fn extract_session_zip(zip_path: &std::path::Path, dest: &std::path::Path) -> Re
     let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
+        // Symlink entries are refused: extraction only writes regular files.
+        if entry.is_symlink() {
+            return Err(format!("zip symlink entry refused: {:?}", entry.name()));
+        }
         let name = entry
             .enclosed_name()
-            .ok_or_else(|| format!("unsafe zip path: {}", entry.name()))?
+            .ok_or_else(|| format!("unsafe zip path: {:?}", entry.name()))?
             .to_path_buf();
         // Skip macOS resource forks / junk.
         if name.components().any(|c| {
@@ -486,6 +490,42 @@ mod tests {
         let dest = tmp.join("out");
         extract_session_zip(&zip_path, &dest).unwrap();
         assert!(is_session_dir(&dest), "expected peeled session at {dest:?}");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn extract_zip_refuses_symlink_and_traversal() {
+        let tmp = std::env::temp_dir().join(format!(
+            "splatd-zip-refuse-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+
+        let link_zip = tmp.join("link.zip");
+        {
+            let mut zip = zip::ZipWriter::new(std::fs::File::create(&link_zip).unwrap());
+            zip.add_symlink("session/evil", "/etc/passwd", opts).unwrap();
+            zip.finish().unwrap();
+        }
+        let err = extract_session_zip(&link_zip, &tmp.join("out-link")).unwrap_err();
+        assert!(err.contains("symlink"), "unexpected error: {err}");
+        assert!(!tmp.join("out-link/session/evil").exists());
+
+        let trav_zip = tmp.join("trav.zip");
+        {
+            let mut zip = zip::ZipWriter::new(std::fs::File::create(&trav_zip).unwrap());
+            zip.start_file("../escape.txt", opts).unwrap();
+            zip.write_all(b"x").unwrap();
+            zip.finish().unwrap();
+        }
+        let err = extract_session_zip(&trav_zip, &tmp.join("out-trav")).unwrap_err();
+        assert!(err.contains("unsafe zip path"), "unexpected error: {err}");
+        assert!(!tmp.join("escape.txt").exists());
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }

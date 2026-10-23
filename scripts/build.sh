@@ -875,6 +875,23 @@ run_standalone() {
     return 0
 }
 
+# Doctest scope: `cargo test --doc` errors ("no library targets found") for a
+# bin-only package, so a scoped run keeps only packages with a lib-like target.
+# Prints the `-p <pkg>` args; prints nothing when no named package qualifies.
+# Refuses (non-zero) if cargo metadata cannot be read, rather than guessing.
+doc_scope_args() {
+    local meta
+    meta=$(cargo metadata --no-deps --format-version 1 2>/dev/null) || return 1
+    printf '%s' "$meta" | python3 -c '
+import json, sys
+want = set(sys.argv[1:])
+libs = {"lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro"}
+for p in json.load(sys.stdin)["packages"]:
+    if p["name"] in want and any(set(t["kind"]) & libs for t in p["targets"]):
+        print("-p"); print(p["name"])
+' "$@"
+}
+
 workspace_test() {
     isolate_test_runtime
     local extra=()
@@ -900,9 +917,24 @@ workspace_test() {
     fi
     # ${arr[@]+…} guard: macOS bash 3.2 + `set -u` errors on expanding an
     # empty array without it.
+    run_doctests() {
+        if [ ${#TEST_PACKAGES[@]} -eq 0 ]; then
+            doctest_runtime cargo test "${scope[@]}" --doc ${extra[@]+"${extra[@]}"}
+            return
+        fi
+        local doc=() line
+        local out
+        out=$(doc_scope_args "${TEST_PACKAGES[@]}") || { echo "cannot read cargo metadata for doctest scope" >&2; return 1; }
+        while IFS= read -r line; do [ -n "$line" ] && doc+=("$line"); done <<< "$out"
+        if [ ${#doc[@]} -eq 0 ]; then
+            echo "no library targets in ${TEST_PACKAGES[*]}; skipping doctests"
+            return 0
+        fi
+        doctest_runtime cargo test "${doc[@]}" --doc ${extra[@]+"${extra[@]}"}
+    }
     if command -v cargo-nextest >/dev/null 2>&1; then
         env -u "$(cargo_runner_var)" cargo nextest run ${NEXTEST_CONFIG[@]+"${NEXTEST_CONFIG[@]}"} "${scope[@]}" ${extra[@]+"${extra[@]}"} ${filter[@]+"${filter[@]}"} \
-            && { [ ${#filter[@]} -gt 0 ] || doctest_runtime cargo test "${scope[@]}" --doc ${extra[@]+"${extra[@]}"}; }
+            && { [ ${#filter[@]} -gt 0 ] || run_doctests; }
     else
         cargo test "${scope[@]}" ${extra[@]+"${extra[@]}"} ${cfilter[@]+"${cfilter[@]}"}
     fi
@@ -1160,6 +1192,24 @@ cmd_check_launcher() {
     header "Running cargo check -p clawft-kernel --no-default-features --features workload-runtime --example cog_adapter_run"
     timer_start
     run_cmd cargo check -p clawft-kernel --no-default-features --features workload-runtime --example cog_adapter_run
+    timer_end
+}
+
+# build-kb: the docs knowledge-base generator (tools/build-kb, its own
+# workspace and lockfile; used by .github/workflows/docs-assets.yml).
+cmd_kb() {
+    header "Building tools/build-kb (release, --locked)"
+    timer_start
+    run_cmd cargo build --release --locked --manifest-path tools/build-kb/Cargo.toml
+    timer_end
+}
+
+# fuzz-check: the clawft-core fuzz crate is outside the workspace and has its
+# own lockfile; --locked fails when that lock goes stale.
+cmd_fuzz_check() {
+    header "Running cargo check --locked for crates/clawft-core/fuzz"
+    timer_start
+    run_cmd cargo check --locked --manifest-path crates/clawft-core/fuzz/Cargo.toml
     timer_end
 }
 
@@ -1552,11 +1602,15 @@ CARGO_AUDIT_IGNORES=(
     # 0.8.0 residual — tracked post-tag; do not expand silently without Plane note
     --ignore RUSTSEC-2026-0194   # quick-xml quadratic attrs (transitive); need >=0.41
     --ignore RUSTSEC-2026-0195   # quick-xml NsReader DoS (transitive); need >=0.41
-    --ignore RUSTSEC-2020-0036   # failure unmaintained (transitive)
-    --ignore RUSTSEC-2019-0036   # failure unsound (transitive)
     --ignore RUSTSEC-2026-0221   # event-listener unsound (transitive async stack)
     --ignore RUSTSEC-2023-0086   # lexical-core unsound (transitive)
     --ignore RUSTSEC-2024-0449   # unsafe-libyaml unmaintained, via deprecated serde_yaml (board card: migrate off serde_yaml)
+    # 2026-10 residuals, justified in docs/security/cargo-audit-residual.md
+    --ignore RUSTSEC-2023-0071   # rsa Marvin timing: no fix; jsonwebtoken rust_crypto only verifies RS256 with public keys
+    --ignore RUSTSEC-2026-0367   # zip 1.1.4 via candle-core (optional `candle` feature): extract() never called
+    --ignore RUSTSEC-2026-0368   # zip 1.1.4 (same)
+    --ignore RUSTSEC-2026-0369   # zip 1.1.4 (same)
+    --ignore RUSTSEC-2026-0374   # basic-toml unmaintained via askama_derive <- uniffi_bindgen (build-time, trusted input)
     # spin 0.9.8 yanked via multer→axum; no non-yanked path without multer bump —
     # skip yanked check for 0.8.0 cut (still report via separate note)
     --no-yanked
@@ -2886,6 +2940,8 @@ ${BOLD}Commands:${NC}
                   gate against the panel size budget. (WEFT-484 / M6-B)
                   Override budget: scripts/build.sh wasm-panel <max-raw-kb> <max-gz-kb>
   check-mesh-only Run cargo check -p clawft-kernel --no-default-features --features native,mesh
+  kb              Build tools/build-kb (docs knowledge-base generator, --locked)
+  fuzz-check      cargo check --locked for crates/clawft-core/fuzz (own lockfile)
   check-launcher  Check clawft-kernel under the cog_adapter_run launcher's features
                   (workload-runtime only; also part of whole-workspace check)
   check-doc-commands
@@ -3243,6 +3299,8 @@ main() {
         wasm-panel)   cmd_wasm_panel "${WASM_PANEL_MAX_RAW_KB:-}" "${WASM_PANEL_MAX_GZ_KB:-}" ;;
         check)        cmd_check ;;
         check-mesh-only) cmd_check_mesh_only ;;
+        kb)           cmd_kb ;;
+        fuzz-check)   cmd_fuzz_check ;;
         check-launcher) cmd_check_launcher ;;
         check-doc-commands) cmd_check_doc_commands ;;
         test-mesh-service) cmd_test_mesh_service ;;

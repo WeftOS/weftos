@@ -338,6 +338,8 @@ impl InferRuntime {
         h: &InstanceHandle,
         grace: Duration,
     ) -> Result<RunEvidence, RuntimeError> {
+        // Short-lived, built and matched once; boxing would only add an allocation.
+        #[allow(clippy::large_enum_variant)]
         enum Todo {
             Proc(Supervised),
             Ollama(ServerClient, String, bool),

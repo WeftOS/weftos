@@ -96,10 +96,14 @@ impl Aec for Passthrough {
 #[cfg(feature = "webrtc-aec")]
 mod webrtc {
     use super::Aec;
-    use webrtc_audio_processing::{
-        Config as ApmConfig, EchoCancellation, EchoCancellationSuppressionLevel, GainControl,
-        GainControlMode, InitializationConfig, NoiseSuppression, NoiseSuppressionLevel, Processor,
+    use webrtc_audio_processing::config::{
+        EchoCanceller, GainController, GainController1, GainControllerMode, HighPassFilter,
+        NoiseSuppression, NoiseSuppressionLevel,
     };
+    use webrtc_audio_processing::{Config as ApmConfig, Processor};
+
+    /// The APM's native rate: this module works on 48 kHz mono 10 ms frames.
+    const APM_SAMPLE_RATE_HZ: u32 = 48_000;
 
     pub struct WebrtcAec {
         proc: Processor,
@@ -107,30 +111,24 @@ mod webrtc {
 
     impl WebrtcAec {
         pub fn new() -> Result<Self, String> {
-            let mut proc = Processor::new(&InitializationConfig {
-                num_capture_channels: 1,
-                num_render_channels: 1,
-                ..InitializationConfig::default()
-            })
-            .map_err(|e| format!("APM init: {e}"))?;
+            let proc = Processor::new(APM_SAMPLE_RATE_HZ).map_err(|e| format!("APM init: {e}"))?;
 
             let config = ApmConfig {
-                echo_cancellation: Some(EchoCancellation {
-                    suppression_level: EchoCancellationSuppressionLevel::High,
+                echo_canceller: Some(EchoCanceller::Full {
                     stream_delay_ms: None,
-                    enable_delay_agnostic: true,
-                    enable_extended_filter: true,
                 }),
-                enable_high_pass_filter: true,
+                high_pass_filter: Some(HighPassFilter::default()),
                 noise_suppression: Some(NoiseSuppression {
-                    suppression_level: NoiseSuppressionLevel::Moderate,
+                    level: NoiseSuppressionLevel::Moderate,
+                    analyze_linear_aec_output: false,
                 }),
-                gain_control: Some(GainControl {
-                    mode: GainControlMode::AdaptiveDigital,
+                gain_controller: Some(GainController::GainController1(GainController1 {
+                    mode: GainControllerMode::AdaptiveDigital,
                     target_level_dbfs: 3,
                     compression_gain_db: 9,
                     enable_limiter: true,
-                }),
+                    analog_gain_controller: None,
+                })),
                 ..ApmConfig::default()
             };
             proc.set_config(config);
@@ -142,10 +140,10 @@ mod webrtc {
         fn render(&mut self, frame: &[f32]) {
             // APM mutates the render frame in place; clone our reference.
             let mut buf = frame.to_vec();
-            let _ = self.proc.process_render_frame(&mut buf);
+            let _ = self.proc.process_render_frame([&mut buf[..]]);
         }
         fn capture(&mut self, frame: &mut [f32]) {
-            let _ = self.proc.process_capture_frame(frame);
+            let _ = self.proc.process_capture_frame([frame]);
         }
         fn label(&self) -> &'static str {
             "WebRTC AEC3 (echo cancel + NS + AGC)"
@@ -375,6 +373,40 @@ mod tests {
     fn is_active_matches_feature() {
         let p = AecProcessor::new();
         assert_eq!(p.is_active(), cfg!(feature = "webrtc-aec"));
+    }
+
+    /// With the real canceller the pure-echo mic signal (render reference
+    /// played straight back, no near-end speech) must be attenuated once AEC3
+    /// has converged. Guards the webrtc-audio-processing 2.x port.
+    #[cfg(feature = "webrtc-aec")]
+    #[test]
+    fn real_aec_attenuates_pure_echo() {
+        let mut p = AecProcessor::new();
+        assert!(p.is_active());
+        let chunk = 160; // 10 ms @ 16 kHz
+        let mut n = 0usize;
+        let (mut in_e, mut out_e) = (0f64, 0f64);
+        for block in 0..300 {
+            // Broadband-ish reference: two incommensurate tones plus a slow AM.
+            let sig: Vec<i16> = (0..chunk)
+                .map(|_| {
+                    let t = n as f32;
+                    n += 1;
+                    let am = 0.6 + 0.4 * (t * 0.0007).sin();
+                    (((t * 0.11).sin() + 0.7 * (t * 0.37).sin()) * 5_000.0 * am) as i16
+                })
+                .collect();
+            p.push_render(&sig);
+            let cleaned = p.process_capture(&sig);
+            if block >= 200 {
+                in_e += sig.iter().map(|&s| f64::from(s).powi(2)).sum::<f64>();
+                out_e += cleaned.iter().map(|&s| f64::from(s).powi(2)).sum::<f64>();
+            }
+        }
+        assert!(
+            out_e < in_e * 0.5,
+            "echo not attenuated: in={in_e:.0} out={out_e:.0}"
+        );
     }
 
     #[test]
