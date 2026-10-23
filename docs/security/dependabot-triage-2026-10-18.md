@@ -50,3 +50,16 @@ and never verified the signature.
 
 Raw per-alert notes from the triage passes are summarised here; the evidence lines (file:line
 and commands) are carried in each card's description.
+
+## Status, 2026-10-23 (branch `wt/lane-deps`, not yet merged)
+
+| Card | Status | Commit |
+|---|---|---|
+| `923ac3d6` rpassword 7.5 | Done: lock at 7.5.4; non-TTY stdin read via `read_password_from_bufread`; two tests | `c9a77d10e` |
+| `c6920f2b` lockfile refresh | Done: xxhash-rust 0.8.19 (root and build-kb), fuzz lock regenerated (rustls 0.23.46, clawft-core current); `build.sh kb` and `fuzz-check` pass | `54265af3f` |
+| `0623d6a7` drop `failure` | Done: webrtc-audio-processing 2.1 port; `failure` gone from the lock; ignores removed; AEC tests pass with `webrtc-aec` | `d6cd7c079` |
+| `5e907457` residual docs | Done (docs only; no GitHub dismissals made) | `d7a4ea472` |
+
+`scripts/build.sh audit` is not green on this branch for reasons unrelated to these cards:
+it reports advisories published after the lockfile was last refreshed (wasmtime, zip, rustls,
+tokio, webpki and others). None mention `failure` or `webrtc`.
