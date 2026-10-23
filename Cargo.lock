@@ -11252,7 +11252,7 @@ dependencies = [
 
 [[package]]
 name = "weftos-cog-protocol"
-version = "0.8.3"
+version = "0.8.4-rc.14"
 dependencies = [
  "serde",
  "serde_json",
