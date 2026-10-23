@@ -11439,7 +11439,7 @@ dependencies = [
 
 [[package]]
 name = "weftos-room-scope"
-version = "0.8.3-rc.1"
+version = "0.8.4-rc.14"
 dependencies = [
  "eframe",
  "egui_plot",
