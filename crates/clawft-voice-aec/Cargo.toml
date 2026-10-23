@@ -45,13 +45,13 @@ clawft-channels = { workspace = true, features = ["voice"], optional = true }
 async-trait = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }
-# WebRTC Audio Processing Module (AEC3 + NS + AGC). The 0.3.x line builds
+# WebRTC Audio Processing Module (AEC3 + NS + AGC). The 2.x line builds
 # the bundled libwebrtc APM via cmake. Feature-gated so it never bloats
 # the default workspace build.
 # `bundled` builds the vendored libwebrtc APM from source (autotools +
 # cmake) so no system `webrtc-audio-processing` install / pkg-config lib
 # is required.
-webrtc-audio-processing = { version = "0.3", optional = true, features = ["bundled"] }
+webrtc-audio-processing = { version = "2.1", optional = true, features = ["bundled"] }
 
 # The runnable bridge binary. Only built when `bridge` is enabled, so the
 # default workspace build never compiles cpal/libwebrtc.

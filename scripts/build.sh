@@ -1570,8 +1570,6 @@ CARGO_AUDIT_IGNORES=(
     # 0.8.0 residual — tracked post-tag; do not expand silently without Plane note
     --ignore RUSTSEC-2026-0194   # quick-xml quadratic attrs (transitive); need >=0.41
     --ignore RUSTSEC-2026-0195   # quick-xml NsReader DoS (transitive); need >=0.41
-    --ignore RUSTSEC-2020-0036   # failure unmaintained (transitive)
-    --ignore RUSTSEC-2019-0036   # failure unsound (transitive)
     --ignore RUSTSEC-2026-0221   # event-listener unsound (transitive async stack)
     --ignore RUSTSEC-2023-0086   # lexical-core unsound (transitive)
     --ignore RUSTSEC-2024-0449   # unsafe-libyaml unmaintained, via deprecated serde_yaml (board card: migrate off serde_yaml)
