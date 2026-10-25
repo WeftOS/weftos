@@ -1660,6 +1660,12 @@ NPM_AUDIT_ALLOW=(
     "root GHSA-4qx8-w7c3-pj3p 2026-12-31"
     "root GHSA-9j65-hcg3-gc64 2026-12-31"
     "root GHSA-9qmh-m7c6-f92p 2026-12-31"
+    # 2026-10-25, dev tooling only (agentic-flow / pinned @claude-flow/cli; not shipped).
+    # zod 3.x has no fix (patched only in 4.6.6, a major move for its consumers);
+    # body-parser 2.4.0 changes its dependency ranges and npm 12 will not re-resolve
+    # the pinned ruflo tarball, so the lock cannot be regenerated until the pin moves.
+    "root GHSA-mrhx-c7xc-m3w5 2026-12-31"
+    "root GHSA-27r3-jxmh-p828 2026-12-31"
 )
 
 # Print the >=level advisories in an `npm audit --json` document that are not
