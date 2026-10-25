@@ -71,9 +71,12 @@ async fn place(bus: Arc<FakeBus>, seed: u8, port: u16) -> (HostNode, super::plan
     let addr = conn.register_local("host", host.svc.clone());
     let (plane, _chain) = controller(&ctl, conn);
     plane.add_target(&addr, TrustTier::Paired).await.unwrap();
-    let mut order = mode_order(&pkg, RunMode::Listener, None);
+    let base = mode_order(&pkg, RunMode::Listener, None);
+    let mut order = super::plane_place::PlaceOrder {
+        project_id: Some(PROJECT.into()),
+        ..base
+    };
     order.config.csi_port = port;
-    order.project_id = Some(PROJECT.into());
     let report = plane.place(&order).await.unwrap();
     let iid = report.placed.expect("placed").instance_id;
     (host, plane, iid, tmp)
