@@ -39,6 +39,8 @@ pub mod verify;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_decl;
 
 pub use manifest::{
     AttestationRef, CogPackageBody, FileRef, KIND_COG, MANIFEST_FILE, MANIFEST_SCHEMA,

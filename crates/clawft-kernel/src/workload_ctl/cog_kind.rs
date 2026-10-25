@@ -9,6 +9,10 @@
 //! - `<arch>-emulated`: a `runtime.container.*` emulating the arch
 //!   (placed only when the operator sets `allow_emulated`).
 //!
+//! `[cog].interfaces` become common requirements (`i2c` needs `bus.i2c`,
+//! `camera` anything under `media.camera`, ...); the legacy
+//! `hardware_requirement` board list is not used.
+//!
 //! Memory is `[resources].ram_mb`; the policy needs a paired node (native
 //! isolation is weak until landlock / seccomp, ADR-100 section 3) and lists
 //! the package id, signer keys and artifact hashes as revocable refs.
@@ -20,6 +24,7 @@ use clawft_types::placement::{
     AttrPredicate, CapabilityId, MemoryDemand, PlacementTypeError, Requirement,
 };
 
+use crate::workload_runtime::cog_decl::{InterfaceNeed, interface_need};
 use crate::workload_runtime::VerifiedWorkload;
 
 /// Arch preference order when a package ships several binaries.
@@ -69,6 +74,21 @@ pub fn arch_of(variant: &str) -> &str {
     variant.split('-').next().unwrap_or(variant)
 }
 
+/// The common requirements a cog's `[cog].interfaces` add: one per
+/// interface, `none` adds nothing.
+fn interface_requirements(names: &[String]) -> Result<Vec<Requirement>, String> {
+    let mut out = Vec::new();
+    for n in names {
+        let req = match interface_need(n).map_err(|e| e.to_string())? {
+            None => continue,
+            Some(InterfaceNeed::Exact(id)) => exact(id),
+            Some(InterfaceNeed::Prefix(p)) => Requirement::prefix(p),
+        };
+        out.push(req.map_err(|e| e.to_string())?);
+    }
+    Ok(out)
+}
+
 /// Placement spec for a verified cog package (signed packages only; store
 /// pins are placed on an operator-assigned Seed node id, not by requirements).
 pub fn cog_workload_spec(w: &VerifiedWorkload) -> Result<WorkloadSpec, String> {
@@ -101,7 +121,7 @@ pub fn cog_workload_spec(w: &VerifiedWorkload) -> Result<WorkloadSpec, String> {
         kind: w.kind.clone(),
         name: w.id.clone(),
         requirements: WorkloadRequirements {
-            common: Vec::new(),
+            common: interface_requirements(&p.spec.interfaces)?,
             variants,
             memory: MemoryDemand {
                 host_bytes: u64::from(p.spec.resources.ram_mb) << 20,

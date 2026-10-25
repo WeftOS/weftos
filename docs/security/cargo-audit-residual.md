@@ -55,3 +55,16 @@ New ignores in `CARGO_AUDIT_IGNORES`:
   `uniffi_bindgen`, a build-time template macro reading its own config; not resolved in
   any host-target build (`cargo tree -i basic-toml` is empty). All askama_derive releases
   through 0.16.1 still depend on basic-toml. Revisit when askama drops it.
+
+## 2026-10-25: advisories published after rc.15
+
+- **RUSTSEC-2026-0387, crypto-bigint 0.5.5** (timing variability in constant-time
+  operations; fixed only in 0.7.6+). Reach: `jsonwebtoken` 10 with `rust_crypto` pulls
+  `p256`/`p384` -> `elliptic-curve` 0.13 -> `crypto-bigint` 0.5, behind the `teams` feature
+  of `clawft-channels`. The Teams verifier rejects every algorithm except RS256 before
+  decoding (`crates/clawft-channels/src/teams/jwt.rs`, the `header.alg != Algorithm::RS256`
+  check), so no ECDSA or big-integer elliptic-curve code runs, and verification only
+  touches public keys and public tokens. Ignored in `CARGO_AUDIT_IGNORES`.
+  Revisit when `jsonwebtoken` ships on `elliptic-curve` 0.14 / `crypto-bigint` 0.7, or if
+  any ES* algorithm is accepted.
+- **clipboard-win 5.4.1 yanked**: lockfile bump to a non-yanked release (no ignore).

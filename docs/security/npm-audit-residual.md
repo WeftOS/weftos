@@ -2,7 +2,14 @@
 
 > 2026-10-18: `gui/` was removed with the Tauri shells (ADR-038). Its rows below are historical.
 
-Last triage: 2026-10-05 on `target-0.8.3` (v0.8.3 release gate): new critical/high
+Last triage: 2026-10-25 on `target-0.8.4` (after rc.15): `clawft-ui` and `docs/src`
+zod -> 4.6.x (GHSA-mrhx-c7xc-m3w5) by `npm audit fix` / install; root undici override
+7.30.0 -> 7.30.1 (GHSA-4qv8-2p9j-2685, GHSA-f72v-6w45-q472, GHSA-xjj6-f33q-929c). Root zod
+3.25.76 (no 3.x fix) and body-parser 2.3.0 (GHSA-27r3-jxmh-p828; 2.4.0 changes its ranges
+and npm 12 refuses to re-resolve the pinned `@claude-flow/cli` tarball) are allowlisted to
+2026-12-31: both are dev tooling under agentic-flow and the ruflo pin, never shipped.
+
+Previous triage: 2026-10-05 on `target-0.8.3` (v0.8.3 release gate): new critical/high
 cleared without breaking upgrades — root `proxy-addr` 2.0.7→2.0.8 (override; critical
 GHSA-jqcg-44mw-7w3h via the pinned `@claude-flow/cli` → express), `clawft-ui` `seroval`
 (critical GHSA-p6vx-979v-rg4c, high GHSA-jp82-f5mq-hwhp) and `source-map-js` <1.2.2

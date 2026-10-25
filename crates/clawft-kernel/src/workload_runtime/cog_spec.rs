@@ -7,6 +7,9 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 
+use super::cog_decl::{
+    InputDecl, OutputDecl, RawInput, RawOutput, parse_inputs, parse_interfaces, parse_outputs,
+};
 use super::types::{Binary, RuntimeError, SignedPayload, VerifiedWorkload, WorkloadSource};
 use crate::workload_pkg::manifest::valid_cog_id;
 use crate::workload_pkg::verify::check_file;
@@ -64,6 +67,12 @@ pub struct CogSpec {
     pub value_args: BTreeSet<String>,
     /// `cli_arg` flags of boolean options (no value).
     pub flag_args: BTreeSet<String>,
+    /// `[cog].interfaces`: what the native half opens (empty when absent).
+    pub interfaces: Vec<String>,
+    /// `[[outputs]]` topic declarations.
+    pub outputs: Vec<OutputDecl>,
+    /// `[[inputs]]` topic declarations.
+    pub inputs: Vec<InputDecl>,
 }
 
 #[derive(Deserialize)]
@@ -75,12 +84,17 @@ struct RawToml {
     resources: Option<RawResources>,
     #[serde(default)]
     config: BTreeMap<String, toml::Value>,
+    #[serde(default)]
+    outputs: Vec<RawOutput>,
+    #[serde(default)]
+    inputs: Vec<RawInput>,
 }
 
 #[derive(Deserialize)]
 struct RawCog {
     id: String,
     version: String,
+    interfaces: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -169,6 +183,9 @@ impl CogSpec {
                 value_args.insert(arg.to_string());
             }
         }
+        let interfaces = parse_interfaces(raw.cog.interfaces)?;
+        let outputs = parse_outputs(raw.outputs)?;
+        let inputs = parse_inputs(raw.inputs)?;
         let spec = Self {
             id: raw.cog.id,
             version: raw.cog.version,
@@ -180,6 +197,9 @@ impl CogSpec {
             resources: Resources { ram_mb, cpu_pct },
             value_args,
             flag_args,
+            interfaces,
+            outputs,
+            inputs,
         };
         for c in &spec.console.allowed_commands {
             spec.split_command(c)?;

@@ -47,7 +47,7 @@
   "overrides": {
     "@claude-flow/cli": "3.42.4",
     "protobufjs": "7.6.5",
-    "undici": "7.30.0",
+    "undici": "7.30.1",
     "adm-zip": "0.6.1",
     "sharp": "0.35.5",
     "@opentelemetry/propagator-jaeger": "2.9.0",

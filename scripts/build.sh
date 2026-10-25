@@ -1608,6 +1608,7 @@ CARGO_AUDIT_IGNORES=(
     --ignore RUSTSEC-2024-0449   # unsafe-libyaml unmaintained, via deprecated serde_yaml (board card: migrate off serde_yaml)
     # 2026-10 residuals, justified in docs/security/cargo-audit-residual.md
     --ignore RUSTSEC-2023-0071   # rsa Marvin timing: no fix; jsonwebtoken rust_crypto only verifies RS256 with public keys
+    --ignore RUSTSEC-2026-0387   # crypto-bigint 0.5 timing via jsonwebtoken rust_crypto -> p256/p384; ECDSA never runs (Teams JWT accepts RS256 only)
     --ignore RUSTSEC-2026-0367   # zip 1.1.4 via candle-core (optional `candle` feature): extract() never called
     --ignore RUSTSEC-2026-0368   # zip 1.1.4 (same)
     --ignore RUSTSEC-2026-0369   # zip 1.1.4 (same)
@@ -1659,6 +1660,12 @@ NPM_AUDIT_ALLOW=(
     "root GHSA-4qx8-w7c3-pj3p 2026-12-31"
     "root GHSA-9j65-hcg3-gc64 2026-12-31"
     "root GHSA-9qmh-m7c6-f92p 2026-12-31"
+    # 2026-10-25, dev tooling only (agentic-flow / pinned @claude-flow/cli; not shipped).
+    # zod 3.x has no fix (patched only in 4.6.6, a major move for its consumers);
+    # body-parser 2.4.0 changes its dependency ranges and npm 12 will not re-resolve
+    # the pinned ruflo tarball, so the lock cannot be regenerated until the pin moves.
+    "root GHSA-mrhx-c7xc-m3w5 2026-12-31"
+    "root GHSA-27r3-jxmh-p828 2026-12-31"
 )
 
 # Print the >=level advisories in an `npm audit --json` document that are not

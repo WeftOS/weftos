@@ -9,6 +9,8 @@
 //!   llama-server, mlx_lm, ollama.
 //! - `accel`: vendor accelerators, only when their tool or device exists
 //!   (nvidia-smi, hailortcli, Coral `/dev/apex_*` or USB id).
+//! - `media` / `devices` (Linux): cameras, codec, ALSA; buses, MCU bridge,
+//!   USB SDRs, power monitors (Ventuno cog plan, section 4.6).
 //! - `libs`: library/toolchain versions (`x.lib.*`: CUDA, ROCm, Core ML, MLX,
 //!   PyTorch build, ONNX Runtime providers; ADR-120).
 //! - [`measured`]: `perf.*` results from the conformance harness.
@@ -19,10 +21,12 @@
 //! coarse `SignedCapabilityAdvertisement`.
 
 mod accel;
+pub mod devices;
 pub mod host;
 pub mod libs;
 pub mod linux;
 pub mod macos;
+pub mod media;
 pub mod measured;
 pub mod probe;
 pub mod runtimes;
@@ -38,6 +42,8 @@ mod tests_libs;
 mod tests_linux;
 #[cfg(test)]
 mod tests_mac;
+#[cfg(test)]
+mod tests_ventuno;
 
 pub use host::{ProbeHost, SystemHost};
 pub use probe::{

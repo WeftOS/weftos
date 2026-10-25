@@ -1,0 +1,11 @@
+{
+  "source_id": "venq-cam-0",
+  "node_id": "0123456789abcdef0123456789abcdef",
+  "t_ns": 1759500000000000000,
+  "seq": 1,
+  "hash": "abc",
+  "width": 1920,
+  "height": 1080,
+  "pixel_format": "nv12",
+  "ttl_ms": 5000
+}

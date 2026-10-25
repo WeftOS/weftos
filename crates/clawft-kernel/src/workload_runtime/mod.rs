@@ -24,6 +24,7 @@
 //! WASM adapters, when built, use `clawft-wasm-host` (ADR-099 decision 4);
 //! the kernel `wasm_runner` is not used for cogs.
 
+pub mod cog_decl;
 pub mod cog_spec;
 pub mod container;
 pub mod container_cmd;
@@ -50,6 +51,8 @@ pub mod types;
 
 #[cfg(test)]
 mod test_support;
+#[cfg(test)]
+mod tests_cog_decl;
 #[cfg(test)]
 mod tests_container;
 #[cfg(test)]
