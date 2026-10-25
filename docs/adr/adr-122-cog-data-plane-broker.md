@@ -1,7 +1,8 @@
 # ADR-122: Cog data plane: a broker in the node daemon
 
-- **Status**: Proposed (2026-10-25). Card `venq-cog-broker-adr`; code waits for owner
-  acceptance (card `venq-cog-p2-broker`).
+- **Status**: Accepted (2026-10-25: the owner asked to start B1, taking the recommended
+  answer to each open question; see "Decisions on the open questions"). Card
+  `venq-cog-broker-adr`; implementation on cards `venq-cogbus-b1` .. `b6`.
 - **Deciders**: owner
 - **Builds on**: ADR-099 (governed placement, node facts), ADR-100 (cog workload kind),
   ADR-120 (exposures: announce, see, switch off, log), ADR-114 (`weftos://` names),
@@ -196,12 +197,12 @@ choice is the B2 result.
 
 B1–B4 are the plan's P2. B5–B6 are P6.
 
-## Open questions for the owner
+## Decisions on the open questions (2026-10-25)
 
-1. **Stream rings**: evaluate iceoryx2 first (recommended) or write our own `memfd` ring.
-2. **Reading encoding on the socket**: JSON to match the mesh today (recommended), or CBOR
-   now for size.
-3. **Audit depth**: governance decisions and the activity log for subscribe/refuse
-   (recommended), or chain events for every subscription as well.
-4. **Default ring size and blob quota**: 4 MiB per stream and 2 GiB per node as above, or
-   other numbers.
+The owner took the recommended option for each:
+
+1. **Stream rings**: evaluate iceoryx2 first in B2; write our own `memfd` ring only if it does not fit.
+2. **Reading encoding on the socket**: length-prefixed JSON, matching the mesh today.
+3. **Audit depth**: governance decisions and the activity log for declare, subscribe and
+   refuse; no chain event per subscription.
+4. **Defaults**: 4 MiB per stream ring and 2 GiB of blobs per node.
