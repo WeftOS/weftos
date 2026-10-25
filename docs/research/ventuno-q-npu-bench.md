@@ -1,7 +1,7 @@
-# Ventuno Q NPU benchmark (Gemma 4 E2B)
+# Ventuno Q NPU benchmark
 
 **Date**: 2026-10-23
-**Status**: Measured. One model, one prompt. Results are indicative, not a full sweep.
+**Status**: Measured. The first section is a single-model speed comparison (2026-10-23). The model suite below (2026-10-25) covers LLMs, vision and speech. Packs are small, so treat scores as indicative.
 
 ## Summary
 
@@ -42,16 +42,86 @@ The board's thermal zones read 35–37 °C after the runs, with the active coole
 - **Not measured:**
   - power draw;
   - sustained throughput over long runs (throttling);
-  - larger models such as Qwen3-4B, Qwen3-VL-4B or Qwen2.5-VL-7B, which App Lab lists as Genie bundles;
   - concurrent requests;
   - prompt-processing speed on the board.
-- **Storage.** The model cache lives in `~/.cache/geniex` on the board's 59 GB eMMC. Move it to the M.2 drive when that arrives.
+- **Storage.** For this first run the model cache was on the 59 GB eMMC. It now lives on the M.2 NVMe (`/data/models/geniex`), where Gemma 4 E2B generated at 18.7 tok/s.
+
+## Model suite (2026-10-25)
+
+Run with the board on its M.2 NVMe (`/data`), GenieX v0.9.3 on the NPU, and speech on the 8 CPU cores. The scripts are in `scripts/bench/ventuno/` (see *Re-running* below). Board thermal zones stayed between 39 and 46 °C.
+
+### LLMs (NPU, `~/llm` eval packs over `geniex serve`)
+
+| Model | instruct | math | code | tool_use | Generation |
+|---|---|---|---|---|---|
+| Qwen3.5-0.8B Q4_0 | 4/5 | 5/6 | 4/6 | 8/12 | 33.0 tok/s |
+| Gemma 4 E2B Q4_0 | 5/5 | 6/6 | 6/6 | 5/12 | 19.4 tok/s |
+| Qwen3-4B-Instruct-2507, Qualcomm AI Hub W4A16 | 5/5 | 6/6 | 5/6 | 11/12 | 15.0 tok/s |
+
+- **Gemma 4 E4B does not fit.** It is OOM-killed even at 8k context on the 14 GiB board.
+- **The NPU needs pure Q4_0 GGUF.** The unsloth Qwen3-4B "Q4_0" file mixes in q4_1/q6_K tensors and fails to load. Use the Qualcomm AI Hub W4A16 bundle instead.
+- **Context.** The largest `--nctx` that loads is 16384; 20480 fails. In a needle test, Qwen3.5-0.8B and Gemma 4 E2B found the needle at about 3k and 12.5k real tokens, and the server rejected about 21k with `context_length_exceeded`. Prefill is about 790 tok/s (0.8B) and about 510 tok/s (E2B). The AI Hub Qwen3-4B bundle has a short fixed context: it passed at 2.8k tokens and rejected 12k.
+- **Memory.** Run `geniex serve` with `--keepalive 30`. Without it, earlier models stay resident and the next load is OOM-killed.
+
+### Vision (NPU, 8-item objective pack, `geniex infer`)
+
+The pack covers OCR, counting, colour, shape, arithmetic, left/right, a zero-count negative control and reading a room sign. The images are synthetic, 384×256, in `scripts/bench/ventuno/vlm-pack/`.
+
+| Model | Score | Generation | First token | Wall per item (incl. load) |
+|---|---|---|---|---|
+| Qwen3-VL-4B, AI Hub W4A16 | **8/8** | 14–26 tok/s | 0.5 s | 12 s |
+| Qwen2.5-VL-7B, AI Hub W4A16 | **8/8** | 10–19 tok/s | 0.6 s | 15 s |
+| Gemma 4 E2B Q4_0 + mmproj | 7/8 (counted 5 circles, not 4) | 18–20 tok/s | **46 s** | 56 s |
+
+Gemma's 46 s to first token is the image encoder; text generation is as fast as text-only. The AI Hub bundles encode on the NPU. Every item reloads the model, so a resident server would cut the wall time to about the first-token time plus generation.
+
+### Speech to text (CPU, 8 threads)
+
+GenieX rejects audio models (`unsupported domain MODEL_DOMAIN_AUDIO`), so speech runs on the CPU: Parakeet TDT 0.6B v2 int8 via sherpa-onnx 2.0.0, and Whisper via whisper.cpp. The datasets are the `~/llm` voicelab sets: LibriSpeech clean and other (40 clips each) and FLEURS (30 clips: 6 each of en, es, fr, de, hi). WER is the per-clip mean from `voicelab.metrics.wer`, the same metric as the lab's Mac baselines. RTFx is seconds of audio per second of compute.
+
+| Engine | LS-clean WER | LS-other WER | FLEURS-en WER | RTFx |
+|---|---|---|---|---|
+| Parakeet TDT 0.6B v2 int8 | 2.7% | **1.8%** | 4.4% | **7.0–8.1×** |
+| Whisper base.en | 4.1% | 7.3% | 7.1% | 1.1–1.6× |
+| Whisper small.en | 3.6% | 6.9% | 4.6% | 0.3–0.5× (slower than real time) |
+| Whisper large-v3-turbo q5_0 | 2.6% | 3.0% | 4.6% | 0.1–0.2× |
+
+- **Multilingual.** Whisper large-v3-turbo with `-l auto` scores 6.9% across all five FLEURS languages (en 4.6, es 2.4, fr 10.5, de 1.8, hi 15.2) at 0.1× real time. The English-only engines score 63–86% on the full FLEURS set because 24 of the 30 clips are not English, so only their English subset is in the table.
+- **Against the Mac.** Accuracy is the same as on the Mac. Speed is about 10–15× lower: Parakeet runs at about 80–123× real time on the M5 Max and 7–8× here.
+- **Pick for the board: Parakeet.** It is the only engine that is both accurate and comfortably faster than real time. Whisper beyond base.en cannot keep up with live audio on this CPU.
+
+### Text to speech (CPU, 8 threads)
+
+There are ten test sentences with times, numbers, names and units. Each wav is transcribed back with Parakeet as an intelligibility check.
+
+| Engine | RTF (lower is faster) | Median per sentence | Round-trip WER | Real word errors |
+|---|---|---|---|---|
+| Piper en_US amy medium (sherpa-onnx 1.13.8) | **0.12 (8.4× real time)** | 0.5 s | 15.2% | 3 (Akonquo, NTU, Piber) |
+| Kokoro en v0.19 (sherpa-onnx 1.13.8) | 1.15 (slower than real time) | 4.3 s | 14.8% | 1 (Akonkwo) |
+| Phonon 31m-en q8 (`ptts`) | 0.61 (1.6× real time) | 2.6 s | 17.3% | 2 (Weftdoes, Cocoro) |
+
+- **Most round-trip WER is number formatting, not speech errors.** For example, "4471" comes back as "four thousand four hundred seventy one", and "3:45 PM" as "3.45 p.m.". The *Real word errors* column counts only misheard words.
+- **sherpa-onnx 2.0.0 cannot run Piper or Kokoro.** It has no built-in espeak frontend ("no lexicon, and no frontend available"), so TTS uses a separate venv with 1.13.8.
+- **Pick for the board: Piper for speed, Phonon for a better voice.** Kokoro is too slow on this CPU for interactive use.
+
+### Re-running
+
+On the board, `/data/bench` holds a venv with `sherpa-onnx` 2.0.0 (ASR) and `venv-tts` with 1.13.8 (TTS). It also holds the models under `models/`, a `whisper.cpp` build with ggml models, `ptts` under `ptts/bin`, and the voicelab audio under `asr/`.
+
+- **LLM packs** run from the Mac with an SSH tunnel to `:18181`: `scripts/bench/ventuno/serve.sh 16384`, then `MODELS_LIST="..." scripts/bench/ventuno/suite.sh <log>`.
+- **Speech** runs on the board:
+  - `asr.py <impl> <dataset> <out.json>` (set `WHISPER_LANG=auto` for multilingual).
+  - `tts.py <engine> <outdir>`, then `tts-roundtrip.py <outdir>/<engine>.json` followed by `asr.py parakeet tts-<engine> ...`.
+- **Vision** runs from the Mac: `VENQ_HOST=user@board scripts/bench/ventuno/vlm.py <model> <out.json>`, with the pack copied to `/data/bench/vlm`.
 
 ## What it means for placement
 
 For the governed workload placement layer (ADR-099), treat the Ventuno as an `npu` class host:
 
-- Good for: small models up to about 4B at interactive speed (about 20 tok/s, 0.1 s to first token).
+- Good for:
+  - small models up to about 4B at interactive speed (15–33 tok/s, under 1 s to first token);
+  - 4–7B vision models (Qwen3-VL-4B, Qwen2.5-VL-7B);
+  - a CPU speech loop, with Parakeet in and Piper or Phonon out.
 - Not a fit: anything where throughput matters, which belongs on the 4070 or the Mac.
 - Serving: GenieX has an OpenAI-compatible server (`geniex serve`, :18181, **no authentication**). Expose it only behind the WeftOS router or over loopback, never bound to all interfaces.
 

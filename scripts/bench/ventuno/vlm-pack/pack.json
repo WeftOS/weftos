@@ -1,0 +1,85 @@
+[
+ {
+  "id": "ocr-code",
+  "image": "ocr-code.png",
+  "prompt": "What text is written in the image? Reply with only the text.",
+  "check": {
+   "type": "contains",
+   "all": [
+    "WEFTOS",
+    "8472"
+   ]
+  }
+ },
+ {
+  "id": "count-circles",
+  "image": "count-circles.png",
+  "prompt": "How many red circles are in the image? Reply with only a number.",
+  "check": {
+   "type": "numeric",
+   "answer": 4
+  }
+ },
+ {
+  "id": "colour-square",
+  "image": "colour-square.png",
+  "prompt": "What colour is the square? Reply with one word.",
+  "check": {
+   "type": "contains",
+   "any": [
+    "blue"
+   ]
+  }
+ },
+ {
+  "id": "shape-triangle",
+  "image": "shape-triangle.png",
+  "prompt": "What shape is shown? Reply with one word.",
+  "check": {
+   "type": "contains",
+   "any": [
+    "triangle"
+   ]
+  }
+ },
+ {
+  "id": "math-sum",
+  "image": "math-sum.png",
+  "prompt": "Solve the sum written in the image. Reply with only the number.",
+  "check": {
+   "type": "numeric",
+   "answer": 12
+  }
+ },
+ {
+  "id": "spatial-left",
+  "image": "spatial-left.png",
+  "prompt": "Is the black square on the left or the right of the orange circle? Reply with one word.",
+  "check": {
+   "type": "contains",
+   "any": [
+    "left"
+   ]
+  }
+ },
+ {
+  "id": "count-none",
+  "image": "count-none.png",
+  "prompt": "How many red circles are in the image? Reply with only a number.",
+  "check": {
+   "type": "numeric",
+   "answer": 0
+  }
+ },
+ {
+  "id": "sign-room",
+  "image": "sign-room.png",
+  "prompt": "What room is on the sign? Reply with only the room number.",
+  "check": {
+   "type": "contains",
+   "all": [
+    "12B"
+   ]
+  }
+ }
+]
