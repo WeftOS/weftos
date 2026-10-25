@@ -139,6 +139,15 @@ published as a reading on `store.vector/<cog_id>`, and a built-in store sink sub
 optional (`bridge.bind`), and new cogs never need it. The bridge cog's signed cross-node
 `POST /ingest` stays until mesh topics (§8) replace it.
 
+B4 as built (2026-10-25, `crates/clawft-weave/src/cogbus_ingest.rs`): the topic is
+`store.vector/<instance_id>` rather than `<cog_id>`, because the store keys vectors by
+instance and two placements of one cog in two projects on one node would otherwise contend
+for one topic (an instance id that is not a valid source id becomes `i-<16 hex>` of its
+BLAKE3). The schema is `store.vector.v1`. The bridge publishes as the broker-internal writer
+`@ingest-bridge` and waits for the store sink's answer, so the HTTP reply still carries the
+store's counts. `bridge.bind` may be `"off"`, and `bridge.fallback_bind` names a loopback
+listener used when the primary bind fails.
+
 ### 10. What can be seen
 
 - `weaver cogbus list` shows topics, schema, class, writer, readers, rates and drop counts.

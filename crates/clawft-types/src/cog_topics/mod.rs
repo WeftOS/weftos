@@ -18,12 +18,13 @@ mod tests;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-pub use data::{CanFrame, Telemetry, TelemetryItem, Transcript};
+pub use data::{CanFrame, MAX_STORE_VECTORS, StoreVector, Telemetry, TelemetryItem, Transcript};
 pub use data::{SenmlMsg, SenmlRecord};
 pub use media::{Detection, Detections, FrameRef, IqCs16, PcmS16le, SpectrumPsd};
 
-/// Registered schema ids, in the order the plan lists them.
-pub const SCHEMA_IDS: [&str; 10] = [
+/// Registered schema ids, in the order the plan lists them, then
+/// `store.vector.v1` (ADR-122 section 9).
+pub const SCHEMA_IDS: [&str; 11] = [
     "senml.v1",
     "spatial.evidence.v1",
     "pcm.s16le.v1",
@@ -34,6 +35,7 @@ pub const SCHEMA_IDS: [&str; 10] = [
     "spectrum.psd.v1",
     "transcript.v1",
     "telemetry.v1",
+    "store.vector.v1",
 ];
 
 /// True if `id` is a registered schema id.
@@ -207,6 +209,7 @@ pub fn check_message(
         "spectrum.psd.v1" => parse::<SpectrumPsd>(msg, SpectrumPsd::validate),
         "transcript.v1" => parse::<Transcript>(msg, Transcript::validate),
         "telemetry.v1" => parse::<Telemetry>(msg, Telemetry::validate),
+        "store.vector.v1" => parse::<StoreVector>(msg, StoreVector::validate),
         "spatial.evidence.v1" => Err(CogTopicError(
             "spatial.evidence.v1 is validated by weftos-spatial-core".into(),
         )),

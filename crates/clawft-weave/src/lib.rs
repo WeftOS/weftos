@@ -337,6 +337,9 @@ pub mod cog_ingest_serve;
 /// This node's cogbus: the cog data plane broker and `cogbus.list` (ADR-122).
 #[cfg(all(feature = "placement", unix))]
 pub mod cogbus_serve;
+/// The ingest bridge as a cogbus consumer: the store sink (ADR-122 section 9).
+#[cfg(all(feature = "placement", unix))]
+pub mod cogbus_ingest;
 /// This node's `workload-host`, served to other controllers (mesh-placement-12).
 #[cfg(all(feature = "placement", unix))]
 pub mod workload_host_serve;

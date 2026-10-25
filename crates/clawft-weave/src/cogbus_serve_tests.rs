@@ -35,6 +35,7 @@ fn registration(contract: &HostContract, uid: Option<u32>) -> CogbusRegistration
         instance_id: "board-telemetry-1".into(),
         cog_id: spec.id,
         project_id: Some(PROJECT.into()),
+        controller_node: "ctl".into(),
         token: contract.token.clone(),
         uid,
         outputs: spec.outputs,
