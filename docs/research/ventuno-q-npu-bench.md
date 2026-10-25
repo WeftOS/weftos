@@ -57,7 +57,9 @@ Run with the board on its M.2 NVMe (`/data`), GenieX v0.9.3 on the NPU, and spee
 | Qwen3.5-0.8B Q4_0 | 4/5 | 5/6 | 4/6 | 8/12 | 33.0 tok/s |
 | Gemma 4 E2B Q4_0 | 5/5 | 6/6 | 6/6 | 5/12 | 19.4 tok/s |
 | Qwen3-4B-Instruct-2507, Qualcomm AI Hub W4A16 | 5/5 | 6/6 | 5/6 | 11/12 | 15.0 tok/s |
+| Gemma 3 1B it Q4_0 (unsloth) | 4/5 | 6/6 | 5/6 | 4/12 | 32.5 tok/s |
 
+- **Gemma 3 1B** (added 2026-10-25, Hugging Face token now on the board) is as fast as Qwen3.5-0.8B with better math and code, and the weakest at tool calls.
 - **Gemma 4 E4B does not fit.** It is OOM-killed even at 8k context on the 14 GiB board.
 - **The NPU needs pure Q4_0 GGUF.** The unsloth Qwen3-4B "Q4_0" file mixes in q4_1/q6_K tensors and fails to load. Use the Qualcomm AI Hub W4A16 bundle instead.
 - **Context.** The largest `--nctx` that loads is 16384; 20480 fails. In a needle test, Qwen3.5-0.8B and Gemma 4 E2B found the needle at about 3k and 12.5k real tokens, and the server rejected about 21k with `context_length_exceeded`. Prefill is about 790 tok/s (0.8B) and about 510 tok/s (E2B). The AI Hub Qwen3-4B bundle has a short fixed context: it passed at 2.8k tokens and rejected 12k.
@@ -103,6 +105,18 @@ There are ten test sentences with times, numbers, names and units. Each wav is t
 - **Most round-trip WER is number formatting, not speech errors.** For example, "4471" comes back as "four thousand four hundred seventy one", and "3:45 PM" as "3.45 p.m.". The *Real word errors* column counts only misheard words.
 - **sherpa-onnx 2.0.0 cannot run Piper or Kokoro.** It has no built-in espeak frontend ("no lexicon, and no frontend available"), so TTS uses a separate venv with 1.13.8.
 - **Pick for the board: Piper for speed, Phonon for a better voice.** Kokoro is too slow on this CPU for interactive use.
+
+### Camera, vision and audio on live input (USB camera, 2026-10-25)
+
+Innomaker U20CAM (UVC, 1080p) with its built-in microphone; test speech played from the
+Mac's speaker. Details in [the brick spike](ventuno-q-app-lab-brick-spike.md).
+
+| Test | Result |
+|---|---|
+| Object detection, YOLOX-nano QNN (App Lab's EI runner, run directly) | person in 60/60 live frames; NPU 7 ms per frame; 7.6 frames/s with one `curl` per frame |
+| Wake word "Hey Arduino" (EI, NPU) | 3/3 caught but 3 false triggers on other speech; usable only as a first stage confirmed by ASR |
+| Parakeet on the camera microphone | word for word on eight phrases; 8.3× real time |
+| H.264 encode, 720p30, 300 frames | hardware (`v4l2h264enc` via GStreamer): real time at 10% of 8 cores; software libx264 veryfast: real time at 35%; `ffmpeg h264_v4l2m2m` crashed, so use the GStreamer path |
 
 ### Re-running
 
