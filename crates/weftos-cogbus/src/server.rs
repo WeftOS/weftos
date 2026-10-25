@@ -158,8 +158,10 @@ async fn connection(broker: Arc<Broker>, stream: UnixStream) {
     let read_task = tokio::spawn(reader(r, tx));
     let session = hello(&broker, &mut rx, &mut w, peer_uid).await;
     if let Some(mut s) = session {
-        serve_session(&broker, &mut s, &mut rx, &mut w).await;
+        let mut ss = crate::stream::SessionStream::default();
+        serve_session(&broker, &mut s, &mut ss, &mut rx, &mut w).await;
         broker.close(&s);
+        crate::stream::serve::close(&broker, &ss);
     }
     read_task.abort();
 }
@@ -203,23 +205,33 @@ async fn hello(
 async fn serve_session(
     broker: &Broker,
     s: &mut Session,
+    ss: &mut crate::stream::SessionStream,
     rx: &mut mpsc::Receiver<Incoming>,
     w: &mut OwnedWriteHalf,
 ) {
     let wake = s.wake();
     let mut revoked = s.revoked();
+    let mut pushed = ss.take_events();
     loop {
         tokio::select! {
             item = rx.recv() => {
-                let ev = match item {
+                let (ev, fds) = match item {
                     None => return,
                     Some(Incoming::Bad(code, m)) => {
                         send(w, &error(0, BusError::new(code, m))).await;
                         return;
                     }
-                    Some(Incoming::Req(req)) => handle(broker, s, req),
+                    Some(Incoming::Req(req)) => match crate::stream::serve::handle(broker, s, ss, req) {
+                        Ok(answer) => answer,
+                        Err(req) => (handle(broker, s, req), Vec::new()),
+                    },
                 };
-                if !send(w, &ev).await {
+                if !crate::stream::serve::send_with(w, &ev, &fds).await {
+                    return;
+                }
+            }
+            Some(out) = async { match pushed.as_mut() { Some(p) => p.recv().await, None => None } } => {
+                if !crate::stream::serve::send_with(w, &out.ev, &out.fds).await {
                     return;
                 }
             }
@@ -261,6 +273,9 @@ fn handle(broker: &Broker, s: &mut Session, req: Request) -> Event {
             .map(|sub| json!({ "sub": sub })),
         Request::Unsubscribe { sub, .. } => broker.unsubscribe(s, sub).map(|_| json!({})),
         Request::List { .. } => Ok(json!({ "topics": broker.list_for(s) })),
+        Request::StreamOpen { .. }
+        | Request::StreamSubscribe { .. }
+        | Request::StreamDemote { .. } => Err(BusError::new(ErrorCode::BadRequest, "stream request outside the stream handler")),
     };
     match r {
         Ok(result) => Event::Ok { id, result },

@@ -10,8 +10,9 @@
 //!   per-subscriber queues, and the publish/subscribe rules.
 //! - [`server`]: the Unix socket listener (peer uid check, hello first).
 //! - [`client`]: the async client a cog links.
+//! - [`stream`]: `stream` topics as shared-memory rings (phase B2).
 //!
-//! Phase B1 carries `reading` topics only. Stream rings (B2), governance
+//! Phases B1 and B2 carry `reading` and `stream` topics. Governance
 //! actions and the activity log (B3), the ingest compatibility listener
 //! (B4), blobs (B5) and mesh topics (B6) are later phases.
 
@@ -21,6 +22,7 @@ pub mod client;
 pub mod proto;
 #[cfg(unix)]
 pub mod server;
+pub mod stream;
 
 mod queue;
 mod types;
@@ -33,6 +35,9 @@ pub use broker::{Broker, BrokerConfig, BusError, InstanceSpec, Session, TopicRow
 #[cfg(unix)]
 pub use client::{Client, ClientError, Subscription};
 pub use proto::{Delivery, ErrorCode, Event, InputSpec, OutputSpec, Request};
+pub use stream::{StreamConfig, StreamNotice, StreamRecord};
+#[cfg(unix)]
+pub use stream::{StreamOptions, StreamReader, StreamWriter};
 
 /// Env var: path of the broker socket.
 pub const ENV_SOCKET: &str = "WEFTOS_COGBUS";

@@ -28,7 +28,6 @@ use crate::queue::SubQueue;
 use crate::types::token_hash;
 pub use crate::types::{BrokerConfig, BusError, InstanceSpec, Session, TopicRow, refuse, valid_source_id};
 
-
 struct Instance {
     spec: InstanceSpec,
     hash: [u8; 32],
@@ -72,7 +71,6 @@ struct State {
     next_sub: u64,
 }
 
-
 fn now_ns() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -88,6 +86,7 @@ fn bad(code: ErrorCode, m: impl Into<String>) -> BusError {
 pub struct Broker {
     cfg: BrokerConfig,
     state: Mutex<State>,
+    pub(crate) streams: crate::stream::Streams,
 }
 
 impl Broker {
@@ -96,6 +95,7 @@ impl Broker {
         Self {
             cfg,
             state: Mutex::new(State::default()),
+            streams: crate::stream::Streams::new(Default::default()),
         }
     }
 
@@ -304,7 +304,7 @@ impl Broker {
             return Err(no(bad(ErrorCode::SchemaMismatch, m)));
         }
         if decl.class != TopicClass::Reading {
-            let m = format!("class {:?} is not in B1 (readings only)", decl.class);
+            let m = format!("class {:?} is not in B1 readings; streams use stream_open", decl.class);
             return Err(no(bad(ErrorCode::Unsupported, m)));
         }
         let project = spec.project_id.clone();
@@ -460,12 +460,13 @@ impl Broker {
 
     /// Every topic (the operator view).
     pub fn snapshot(&self) -> Vec<TopicRow> {
-        self.rows(|_| true)
+        [self.rows(|_| true), self.stream_rows(&|_| true)].concat()
     }
 
     /// Topics of the session's project.
     pub fn list_for(&self, s: &Session) -> Vec<TopicRow> {
-        self.rows(|p| p == s.project_id.as_ref())
+        let mine = |p: Option<&String>| p == s.project_id.as_ref();
+        [self.rows(mine), self.stream_rows(&mine)].concat()
     }
 
     fn rows(&self, keep: impl Fn(Option<&String>) -> bool) -> Vec<TopicRow> {

@@ -15,6 +15,7 @@
 //! the reader sees the gap in `seq`.
 
 use std::collections::HashMap;
+use std::os::fd::OwnedFd;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -59,22 +60,27 @@ pub enum ClientError {
 
 type Answer = Result<Value, ClientError>;
 
+/// Runs in the reader task on the answer (and its descriptors).
+type Hook = Box<dyn FnOnce(Result<(Value, Vec<OwnedFd>), ClientError>) + Send>;
+
 enum Pending {
     Call(oneshot::Sender<Answer>),
     Subscribe(oneshot::Sender<Result<Subscription, ClientError>>),
+    Hook(Hook),
 }
 
 #[derive(Default)]
-struct Shared {
+pub(crate) struct Shared {
     closed: std::sync::atomic::AtomicBool,
     pending: Mutex<HashMap<u64, Pending>>,
     subs: Mutex<HashMap<u64, mpsc::Sender<Delivery>>>,
+    pub(crate) streams: Arc<crate::stream::Routes>,
 }
 
 /// A connection to the node's broker.
 pub struct Client {
-    writer: tokio::sync::Mutex<OwnedWriteHalf>,
-    shared: Arc<Shared>,
+    pub(crate) writer: Arc<tokio::sync::Mutex<OwnedWriteHalf>>,
+    pub(crate) shared: Arc<Shared>,
     next: AtomicU64,
     reader: JoinHandle<()>,
     instance_id: String,
@@ -121,13 +127,17 @@ impl Client {
 
     /// Connect to `path` and say hello with `token`.
     pub async fn connect(path: &Path, token: &str) -> Result<Self, ClientError> {
-        let (mut r, w) = UnixStream::connect(path).await?.into_split();
+        let (r, w) = UnixStream::connect(path).await?.into_split();
         let shared = Arc::new(Shared::default());
         let sh = shared.clone();
         let reader = tokio::spawn(async move {
+            let mut r = tokio::io::BufReader::new(crate::stream::fdpass::FdReader::new(r));
             while let Ok(Some(frame)) = read_frame(&mut r).await {
                 match serde_json::from_slice::<Event>(&frame) {
-                    Ok(ev) => route(&sh, ev),
+                    Ok(ev) => {
+                        let fds = r.get_mut().take(fd_count(&ev));
+                        route(&sh, ev, fds)
+                    }
                     Err(e) => {
                         tracing::debug!(target: "cogbus", error = %e, "unreadable broker frame")
                     }
@@ -137,9 +147,10 @@ impl Client {
             sh.closed.store(true, Ordering::SeqCst);
             sh.pending.lock().map(|mut p| p.clear()).ok();
             sh.subs.lock().map(|mut s| s.clear()).ok();
+            sh.streams.close_all();
         });
         let mut c = Self {
-            writer: tokio::sync::Mutex::new(w),
+            writer: Arc::new(tokio::sync::Mutex::new(w)),
             shared,
             next: AtomicU64::new(1),
             reader,
@@ -183,6 +194,25 @@ impl Client {
             return Err(ClientError::Closed);
         }
         Ok(())
+    }
+
+    /// A call whose answer (with its descriptors) `hook` turns into `T`
+    /// inside the reader task, before any later frame is read.
+    pub(crate) async fn call_hook<T: Send + 'static>(
+        &self,
+        make: impl FnOnce(u64) -> Request,
+        hook: impl FnOnce(Result<(Value, Vec<OwnedFd>), ClientError>) -> Result<T, ClientError>
+        + Send
+        + 'static,
+    ) -> Result<T, ClientError> {
+        let id = self.next.fetch_add(1, Ordering::Relaxed);
+        let (tx, rx) = oneshot::channel();
+        let f: Hook = Box::new(move |r| {
+            let _ = tx.send(hook(r));
+        });
+        self.park(id, Pending::Hook(f))?;
+        self.send(&make(id)).await?;
+        rx.await.map_err(|_| ClientError::Closed)?
     }
 
     async fn call(&self, make: impl FnOnce(u64) -> Request) -> Answer {
@@ -241,7 +271,7 @@ impl Client {
         rx.await.map_err(|_| ClientError::Closed)?
     }
 
-    /// Drop a subscription.
+    /// Drop a subscription (reading or stream).
     pub async fn unsubscribe(&self, sub: u64) -> Result<(), ClientError> {
         self.call(|id| Request::Unsubscribe { id, sub }).await?;
         self.shared.subs.lock().map(|mut s| s.remove(&sub)).ok();
@@ -254,11 +284,21 @@ impl Client {
     }
 }
 
+/// Descriptors the broker attached to `ev`.
+fn fd_count(ev: &Event) -> usize {
+    match ev {
+        Event::Ok { result, .. } => result["fds"].as_u64().unwrap_or(0) as usize,
+        Event::Stream(n) => n.fds(),
+        _ => 0,
+    }
+}
+
 /// Route one broker frame. A subscribe answer opens the subscription's
 /// channel here, before any later frame is read, so no delivery for it can
 /// arrive ahead of its channel.
-fn route(sh: &Shared, ev: Event) {
+fn route(sh: &Shared, ev: Event, fds: Vec<OwnedFd>) {
     match ev {
+        Event::Stream(n) => sh.streams.notice(n, fds),
         Event::Msg(d) => {
             if let Ok(subs) = sh.subs.lock()
                 && let Some(tx) = subs.get(&d.sub)
@@ -270,6 +310,7 @@ fn route(sh: &Shared, ev: Event) {
             Some(Pending::Call(tx)) => {
                 let _ = tx.send(Ok(result));
             }
+            Some(Pending::Hook(f)) => f(Ok((result, fds))),
             Some(Pending::Subscribe(tx)) => {
                 let Some(sub) = result["sub"].as_u64() else {
                     let _ = tx.send(Err(ClientError::Protocol(
@@ -295,6 +336,7 @@ fn route(sh: &Shared, ev: Event) {
                 Some(Pending::Subscribe(tx)) => {
                     let _ = tx.send(Err(err()));
                 }
+                Some(Pending::Hook(f)) => f(Err(err())),
                 None => tracing::debug!(target: "cogbus", ?code, %message, "broker error"),
             }
         }
