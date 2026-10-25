@@ -331,6 +331,9 @@ pub fn pack_cog(input: &CogPackInput, out_dir: &Path) -> Result<ManifestEnvelope
     let toml_text = std::str::from_utf8(&toml_bytes)
         .map_err(|_| PackError::Input("cog.toml is not UTF-8".into()))?;
     let (id, version) = cog_identity(toml_text)?;
+    // Same parser admission uses, so a bad declaration fails here too.
+    crate::workload_runtime::cog_spec::CogSpec::parse(&toml_bytes)
+        .map_err(|e| PackError::Input(e.to_string()))?;
     let cog_toml = place(out_dir, "cog.toml", &toml_bytes, false)?;
 
     let mut binaries = BTreeMap::new();

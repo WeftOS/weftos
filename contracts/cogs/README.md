@@ -1,0 +1,135 @@
+# Cog topic schemas
+
+Registered schema ids for `[[outputs]]` and `[[inputs]]` in a cog's `cog.toml`
+(Ventuno cog plan, section 4.2). The id list and typed messages live in
+`clawft-types` (`cog_topics`); `weaver workload pack` rejects a declaration that
+names an id not listed here.
+
+| Path | What it is |
+|------|------------|
+| `vectors/<schema>/valid-*.json` | Messages a validator must accept. Each must also round-trip through the typed message unchanged |
+| `vectors/<schema>/invalid-*.json` | Messages a validator must reject |
+
+`spatial.evidence.v1` is defined by [`contracts/sensors`](../sensors/README.md)
+(ADR-111) and has no vectors here.
+
+## Common fields
+
+Every message is one JSON object carrying these, beside the schema's own fields.
+Unknown fields are ignored, so new optional fields stay in `v1`; changing the
+meaning of a field needs `v2`.
+
+| Field | Type | Rule |
+|-------|------|------|
+| `source_id` | string | The installed sensor, `[a-z0-9][a-z0-9._-]*`, at most 64 chars. Stable if the part moves node |
+| `node_id` | string | `hex(SHA-256(pubkey)[..16])`, 32 lower-case hex chars |
+| `t_ns` | u64 | Capture clock, nanoseconds. Values above 2^53 lose precision in JavaScript consumers |
+| `seq` | u64 | Per-source counter |
+
+Floats are JSON numbers read as 64-bit. Where a table says "f32", the producer
+holds that precision; the JSON is not rounded.
+
+## Schemas
+
+Size classes: **reading** (at most 4 KB, one broker message), **stream** (sustained
+ordered chunks, each chunk is one message with a header and base64 payload),
+**blob** (bytes in the content store, the message is a handle).
+
+### `senml.v1` (reading)
+
+A SenML pack inside the cog envelope. Units and ranges per name come from
+`contracts/sensors/quantities.v1.json`.
+
+| Field | Type | Rule |
+|-------|------|------|
+| `pack` | array | 1..=64 records |
+| `pack[].n` | string | name, 1..=64 chars |
+| `pack[].u` | string | optional unit |
+| `pack[].v` / `vs` / `vb` | number / string / bool | exactly one per record |
+
+### `spatial.evidence.v1`
+
+Registered, defined in `contracts/sensors`. See ADR-111.
+
+### `pcm.s16le.v1` (stream)
+
+| Field | Type | Rule |
+|-------|------|------|
+| `rate_hz` | u32 | 8000..=192000 |
+| `channels` | u8 | 1..=8, interleaved |
+| `frames` | u32 | samples per channel, 1..=1048576 |
+| `data_b64` | string | standard padded base64 of `frames * channels * 2` bytes, signed 16-bit little-endian |
+
+### `video.frame-ref.v1` (blob handle)
+
+Raw frames stay on the node. The handle names bytes in its content store.
+
+| Field | Type | Rule |
+|-------|------|------|
+| `hash` | string | BLAKE3 of the frame, 64 lower-case hex |
+| `width`, `height` | u32 | 1..=16384 |
+| `pixel_format` | string | `nv12`, `yuyv`, `rgb24`, `bgr24`, `gray8`, `mjpeg` |
+| `ttl_ms` | u32 | 1..=3600000, how long the owner keeps the bytes |
+
+### `detections.v1` (reading)
+
+| Field | Type | Rule |
+|-------|------|------|
+| `frame_hash` | string | BLAKE3 hex of the `video.frame-ref.v1` frame |
+| `model` | string | optional |
+| `boxes` | array | at most 256 |
+| `boxes[].label` | string | 1..=64 chars |
+| `boxes[].score` | f64 | 0..=1 |
+| `boxes[].bbox` | `[x, y, w, h]` | normalized to the frame, top-left origin; the box stays inside it |
+
+### `can.frame.v1` (reading)
+
+| Field | Type | Rule |
+|-------|------|------|
+| `id` | u32 | at most 0x7FF, or 0x1FFFFFFF when `ext` |
+| `ext` | bool | 29-bit id |
+| `fd` | bool | CAN FD frame |
+| `dlc` | u8 | 0..=8 classic; 0..=15 FD (9..=15 map to 12, 16, 20, 24, 32, 48, 64 bytes) |
+| `data` | string | lower-case hex, exactly the length `dlc` implies |
+
+### `iq.cs16.v1` (stream)
+
+| Field | Type | Rule |
+|-------|------|------|
+| `center_hz` | u64 | tuned frequency |
+| `sample_rate_hz` | u32 | complex samples per second |
+| `samples` | u32 | complex samples in the chunk, 1..=4194304 |
+| `data_b64` | string | base64 of `samples * 4` bytes: I then Q, signed 16-bit little-endian |
+
+### `spectrum.psd.v1` (reading)
+
+| Field | Type | Rule |
+|-------|------|------|
+| `center_hz` | u64 | centre of the sweep |
+| `span_hz` | u64 | total span the bins cover, above 0 |
+| `bins` | array of f32 dB | 1..=4096 values, each -300..=100, low frequency first |
+
+### `transcript.v1` (reading)
+
+| Field | Type | Rule |
+|-------|------|------|
+| `text` | string | 1..=4096 chars |
+| `lang` | string | `en`, `en-US` style, at most 16 chars |
+| `start_ns`, `end_ns` | u64 | capture clock; `end_ns >= start_ns` |
+| `confidence` | f64 | 0..=1 |
+
+### `telemetry.v1` (reading)
+
+| Field | Type | Rule |
+|-------|------|------|
+| `items` | array | 1..=64 |
+| `items[].name` | string | `[a-z][a-z0-9_.]*`, at most 64 chars |
+| `items[].value` | f64 | finite |
+| `items[].unit` | string | at most 16 chars, empty for a bare count |
+
+## Using it
+
+- **Producers**: emit messages that pass every `valid-*` vector's rules and fail the
+  `invalid-*` ones in your own tests, so no hardware is needed.
+- **Adding a schema**: add the id to `SCHEMA_IDS`, a typed message with `validate()`,
+  a section above and vectors, in one commit.

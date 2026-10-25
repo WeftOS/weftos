@@ -1,0 +1,30 @@
+{
+  "source_id": "venq-detect-0",
+  "node_id": "0123456789abcdef0123456789abcdef",
+  "t_ns": 1759500000000000000,
+  "seq": 1,
+  "frame_hash": "XYZ",
+  "model": "yolo-nano",
+  "boxes": [
+    {
+      "label": "person",
+      "score": 0.91,
+      "bbox": [
+        0.1,
+        0.2,
+        0.3,
+        0.5
+      ]
+    },
+    {
+      "label": "chair",
+      "score": 0.55,
+      "bbox": [
+        0.6,
+        0.6,
+        0.2,
+        0.3
+      ]
+    }
+  ]
+}
