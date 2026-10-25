@@ -64,12 +64,17 @@ pub fn package_from(root: &Path, id: &str, script: &str, arches: &[&str], releas
 
 /// [`package_from`] with its own bytes per arch.
 pub fn package_bins(root: &Path, id: &str, bins_in: &[(&str, &str)], release_url: Option<&str>) -> PathBuf {
+    package_toml(root, id, bins_in, release_url, "")
+}
+
+/// [`package_bins`] with `extra` appended to `cog.toml` (`[[outputs]]`, ...).
+pub fn package_toml(root: &Path, id: &str, bins_in: &[(&str, &str)], release_url: Option<&str>, extra: &str) -> PathBuf {
     let same = bins_in.windows(2).all(|w| w[0].1 == w[1].1);
     let src = root.join("src");
     std::fs::create_dir_all(&src).unwrap();
     std::fs::write(
         src.join("cog.toml"),
-        format!("[cog]\nid = \"{id}\"\nname = \"T\"\nversion = \"0.1.0\"\n"),
+        format!("[cog]\nid = \"{id}\"\nname = \"T\"\nversion = \"0.1.0\"\n{extra}"),
     )
     .unwrap();
     let mut bins = Vec::new();

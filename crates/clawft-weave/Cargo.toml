@@ -62,6 +62,8 @@ clawft-types = { workspace = true }
 weftos-cog-sources = { path = "../weftos-cog-sources", features = ["net"] }
 # weftos.cog.v1 request and verdict types. That crate does not link the kernel.
 weftos-cog-protocol = { path = "../weftos-cog-protocol" }
+# ADR-122: the cog data plane broker the daemon runs (cogbus).
+weftos-cogbus = { path = "../weftos-cogbus" }
 clap = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }

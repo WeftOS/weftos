@@ -1,6 +1,14 @@
 //! Host contract common to every cog runtime (ADR-100 section 4):
 //! `COG_CSI_BIND`, `COG_SENSOR_URL`, a per-instance `COGNITUM_COG_TOKEN`
-//! and `COGNITUM_COG_DATA_DIR`.
+//! and `COGNITUM_COG_DATA_DIR`; with the node's cogbus up, also
+//! `WEFTOS_COGBUS` and `WEFTOS_COGBUS_TOKEN` (ADR-122 section 4).
+//!
+//! `WEFTOS_COGBUS_TOKEN` carries the same per-instance token value as
+//! `COGNITUM_COG_TOKEN`: one secret names the instance to both the ingest
+//! bridge and the broker, each keeps only its hash, and both are revoked at
+//! the same stop and unload. It is a separate variable so a cog never needs
+//! to know that, and so a node whose ingest bridge is down (no ingest token)
+//! still hands its cogs a broker token.
 //!
 //! The token is a secret: it is handed to the instance's environment only,
 //! and anything written to the chain carries [`HostContract::token_hash`].
@@ -23,6 +31,10 @@ pub const ENV_TOKEN: &str = "COGNITUM_COG_TOKEN";
 pub const ENV_INGEST_URL: &str = "COGNITUM_INGEST_URL";
 /// Env var: writable data directory.
 pub const ENV_DATA_DIR: &str = "COGNITUM_COG_DATA_DIR";
+/// Env var: path of the node's cogbus socket (ADR-122).
+pub const ENV_COGBUS: &str = "WEFTOS_COGBUS";
+/// Env var: the instance's cogbus token (the instance token, see above).
+pub const ENV_COGBUS_TOKEN: &str = "WEFTOS_COGBUS_TOKEN";
 /// Default CSI feed port (ADR-069).
 pub const DEFAULT_CSI_PORT: u16 = 5006;
 
@@ -46,6 +58,10 @@ pub struct HostContract {
     /// when the node's ingest bridge is down, so a cog never carries a
     /// credential for a bridge that is not there.
     pub expose_token: bool,
+    /// The node's cogbus socket, injected as [`ENV_COGBUS`] with
+    /// [`ENV_COGBUS_TOKEN`]. `None`: no broker for this instance (it is
+    /// down, or the route cannot reach a host socket).
+    pub cogbus: Option<String>,
 }
 
 impl HostContract {
@@ -58,6 +74,7 @@ impl HostContract {
             ingest_upstream: None,
             ingest_url: None,
             expose_token: true,
+            cogbus: None,
         }
     }
 
@@ -81,6 +98,12 @@ impl HostContract {
     /// Builder: bridge URL handed to the cog as [`ENV_INGEST_URL`].
     pub fn with_ingest_url(mut self, url: impl Into<String>) -> Self {
         self.ingest_url = Some(url.into());
+        self
+    }
+
+    /// Builder: the cogbus socket handed to the instance.
+    pub fn with_cogbus(mut self, socket: impl Into<String>) -> Self {
+        self.cogbus = Some(socket.into());
         self
     }
 
@@ -133,6 +156,10 @@ impl HostContract {
         if let Some(u) = &self.ingest_url {
             env.push((ENV_INGEST_URL.to_string(), u.clone()));
         }
+        if let Some(p) = &self.cogbus {
+            env.push((ENV_COGBUS.to_string(), p.clone()));
+            env.push((ENV_COGBUS_TOKEN.to_string(), self.token.expose().to_string()));
+        }
         env
     }
 
@@ -144,6 +171,7 @@ impl HostContract {
             "token_hash": self.token_hash(),
             "ingest_upstream": self.ingest_upstream.map(|s| s.to_string()),
             "ingest_url": self.ingest_url,
+            "cogbus": self.cogbus,
         })
     }
 }

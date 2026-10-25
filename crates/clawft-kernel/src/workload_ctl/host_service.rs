@@ -117,6 +117,9 @@ pub(super) struct Placed {
     pub(super) last: Option<RunEvidence>,
     /// The instance's ingest registration (cogs, when ingest is wired).
     pub(super) ingest: Option<IngestLease>,
+    /// The instance's cogbus registration (cogs, when the broker is up and
+    /// the route reaches it; see `host_cogbus`).
+    pub(super) cogbus: Option<super::host_cogbus::CogbusRegistration>,
     /// `enabled`, `disabled` (bridge down, no token issued) or `none`.
     pub(super) ingest_state: &'static str,
     /// State machine, health misses and restart history (see `host_supervise`).
@@ -186,6 +189,8 @@ pub struct WorkloadHostService {
     pub(super) licence_gate: std::sync::OnceLock<Arc<dyn crate::licence::CognitumRunGate>>,
     /// Answers the node-admin methods (`dashboard.*`); unset: they are refused.
     pub(super) node_admin: std::sync::OnceLock<Arc<dyn super::host_node_admin::NodeAdmin>>,
+    /// The node's cogbus (ADR-122); unset: cogs get no broker socket.
+    pub(super) cogbus: std::sync::OnceLock<Arc<dyn super::host_cogbus::CogbusRegistrar>>,
 }
 
 fn now_ms() -> u64 {
@@ -241,6 +246,7 @@ impl WorkloadHostService {
             last_contact_ms: std::sync::atomic::AtomicU64::new(now_ms()),
             licence_gate: std::sync::OnceLock::new(),
             node_admin: std::sync::OnceLock::new(),
+            cogbus: std::sync::OnceLock::new(),
         }
     }
 
@@ -625,6 +631,7 @@ impl WorkloadHostService {
                 .await
                 .map_err(|e| refuse(RefusalCode::Runtime, format!("ingest bridge: {e}")))?;
         }
+        let (contract, bus) = self.bus_prepare(&route, &w, contract);
         let cfg = WorkloadConfig {
             mode: b.config.mode.clone(),
             args: b.config.args.clone(),
@@ -633,12 +640,22 @@ impl WorkloadHostService {
         };
         let h = host.load(&w, &cfg).await.map_err(|e| runtime_refusal(&e))?;
         let iid = h.instance_id.clone();
+        let bus = match self.bus_lease(bus, &iid, &w.id, b.project_id.clone(), &contract) {
+            Ok(r) => r,
+            Err(mut r) => {
+                if let Err(u) = host.unload(h.clone()).await {
+                    r.reason = format!("{}; unload of {iid} failed too ({u})", r.reason);
+                }
+                return Err(r);
+            }
+        };
         let lease = match hooks {
             Some(hk) => {
                 let binding = InstanceBinding::new(&iid, b.project_id.clone(), &req.requester);
                 match hk.lease(binding, contract, listener) {
                     Ok(l) => Some(l),
                     Err(e) => {
+                        self.bus_off(bus.as_ref());
                         let mut r = refuse(RefusalCode::Runtime, format!("ingest bridge: {e}"));
                         if let Err(u) = host.unload(h.clone()).await {
                             r.reason = format!("{}; unload of {iid} failed too ({u})", r.reason);
@@ -673,6 +690,7 @@ impl WorkloadHostService {
                 decision_id: req.decision_id.clone(),
                 last: None,
                 ingest: lease,
+                cogbus: bus,
                 ingest_state,
                 life,
                 continuous,
@@ -737,10 +755,11 @@ impl WorkloadHostService {
     ) -> Refusal {
         let mut r = runtime_refusal(e);
         let iid = h.instance_id.clone();
-        if let (Some(hk), Some(p)) = (&self.ingest, self.instances.lock().await.get(&iid))
-            && let Some(l) = &p.ingest
-        {
-            hk.deactivate(l);
+        if let Some(p) = self.instances.lock().await.get(&iid) {
+            if let (Some(hk), Some(l)) = (&self.ingest, &p.ingest) {
+                hk.deactivate(l);
+            }
+            self.bus_off(p.cogbus.as_ref());
         }
         let unloaded = match &revoked {
             Some(subject) => {

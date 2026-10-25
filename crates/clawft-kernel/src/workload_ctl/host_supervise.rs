@@ -119,6 +119,7 @@ impl WorkloadHostService {
                 if let (Some(hk), Some(l)) = (&self.ingest, &p.ingest) {
                     hk.deactivate(l);
                 }
+                self.bus_off(p.cogbus.as_ref());
                 p.desired_running = false;
                 targets.push((id.clone(), p.handle.clone(), host, p.life.state));
             }

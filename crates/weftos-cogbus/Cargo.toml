@@ -1,0 +1,21 @@
+[package]
+name = "weftos-cogbus"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "cogbus (ADR-122): the node daemon's cog data plane broker, its wire protocol and the cog-side client. No kernel dependency."
+
+[dependencies]
+clawft-types = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+blake3 = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
