@@ -13,13 +13,33 @@ use crate::proto::{Delivery, ErrorCode, InputSpec, OutputSpec};
 use crate::queue::SubQueue;
 
 /// A refused request.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 #[error("{code:?}: {message}")]
 pub struct BusError {
     /// Machine code sent to the client.
     pub code: ErrorCode,
     /// Human reason sent to the client.
     pub message: String,
+    /// Who was refused what, set by [`refuse`]; read by
+    /// [`Broker::record_refusal`](crate::Broker::record_refusal).
+    pub(crate) ctx: Option<Box<RefusalCtx>>,
+}
+
+/// Equal when code and message are; the refusal context is not compared.
+impl PartialEq for BusError {
+    fn eq(&self, o: &Self) -> bool {
+        self.code == o.code && self.message == o.message
+    }
+}
+
+impl Eq for BusError {}
+
+/// The instance, action and topic a refusal was about.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RefusalCtx {
+    pub instance: String,
+    pub action: String,
+    pub topic: String,
 }
 
 impl BusError {
@@ -28,14 +48,22 @@ impl BusError {
         Self {
             code,
             message: message.into(),
+            ctx: None,
         }
     }
 }
 
-/// Log a refusal and hand it back. B3 turns this into a governance decision
-/// and an activity-log record; nothing else in the broker logs refusals.
-pub fn refuse(instance: &str, action: &str, topic: &str, e: BusError) -> BusError {
-    tracing::warn!(target: "cogbus", instance, action, topic, code = ?e.code, reason = %e.message, "cogbus refusal");
+/// Mark `e` as a refusal of `action` on `topic` by `instance` and hand it
+/// back. The connection that carried the request records it
+/// ([`Broker::record_refusal`](crate::Broker::record_refusal)): governance
+/// counts, the activity log, the rate limit and repeated-refusal stop.
+pub fn refuse(instance: &str, action: &str, topic: &str, mut e: BusError) -> BusError {
+    tracing::debug!(target: "cogbus", instance, action, topic, code = ?e.code, reason = %e.message, "cogbus refusal");
+    e.ctx = Some(Box::new(RefusalCtx {
+        instance: instance.to_string(),
+        action: action.to_string(),
+        topic: topic.to_string(),
+    }));
     e
 }
 

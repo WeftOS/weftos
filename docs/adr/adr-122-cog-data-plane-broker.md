@@ -3,6 +3,7 @@
 - **Status**: Accepted (2026-10-25: the owner asked to start B1, taking the recommended
   answer to each open question; see "Decisions on the open questions"). Card
   `venq-cog-broker-adr`; implementation on cards `venq-cogbus-b1` .. `b6`.
+- **Updated**: 2026-10-25 (B1 and B4 shipped; known gaps recorded with closing cards)
 - **Deciders**: owner
 - **Builds on**: ADR-099 (governed placement, node facts), ADR-100 (cog workload kind),
   ADR-120 (exposures: announce, see, switch off, log), ADR-114 (`weftos://` names),
@@ -139,6 +140,15 @@ published as a reading on `store.vector/<cog_id>`, and a built-in store sink sub
 optional (`bridge.bind`), and new cogs never need it. The bridge cog's signed cross-node
 `POST /ingest` stays until mesh topics (§8) replace it.
 
+B4 as built (2026-10-25, `crates/clawft-weave/src/cogbus_ingest.rs`): the topic is
+`store.vector/<instance_id>` rather than `<cog_id>`, because the store keys vectors by
+instance and two placements of one cog in two projects on one node would otherwise contend
+for one topic (an instance id that is not a valid source id becomes `i-<16 hex>` of its
+BLAKE3). The schema is `store.vector.v1`. The bridge publishes as the broker-internal writer
+`@ingest-bridge` and waits for the store sink's answer, so the HTTP reply still carries the
+store's counts. `bridge.bind` may be `"off"`, and `bridge.fallback_bind` names a loopback
+listener used when the primary bind fails.
+
 ### 10. What can be seen
 
 - `weaver cogbus list` shows topics, schema, class, writer, readers, rates and drop counts.
@@ -155,6 +165,23 @@ optional (`bridge.bind`), and new cogs never need it. The bridge cog's signed cr
   declares.
 - A cog that publishes undeclared topics or exceeds its declared rate is refused and
   logged; repeated refusals stop the cog through the workload runtime.
+
+## Known gaps (2026-10-25, after B1 and B4)
+
+What the shipped broker does not do yet, what closes each gap, and where it is tracked.
+None of these may be dropped silently: a gap leaves this table only when its card's
+acceptance test passes, and the row is then marked closed with the commit.
+
+| # | Gap | Risk today | Closes with | Card |
+|---|---|---|---|---|
+| 1 | Only native cogs get the socket; container and VM cogs cannot reach the broker | such cogs fall back to the ingest HTTP path only | socket bind-mounted into containers, uid recorded per route; VM routes via an authenticated relay or declared unsupported | `cogbus-gap-containers` (after gap 2) |
+| 2 | The uid check proves only "same user as the daemon", because native cogs run as the daemon's user | one cog that steals another's token can act as it | each native cog runs as its own uid; the broker registers that uid | `cogbus-gap-uid` |
+| 3 | The socket is 0660 owned by the daemon user; no `cogbus` group | any process running as the daemon's user can connect (it still needs a valid token) | `cogbus` group, socket `root:cogbus 0660`, cog uids in the group | `cogbus-gap-uid` |
+| 4 | After `hello`, a silent connection is kept forever | leaked connections and queues | ping on silence, close without pong; per-connection subscription and per-instance connection caps | `cogbus-gap-idle` |
+| 5 | No publish rate limit; nothing stops a misbehaving cog (B3 rate-limits refusal logging and disconnects after repeated refusals) | a cog can flood readers within its declared topics | per-topic budget from `[[outputs]].rate`; broker asks the workload runtime to stop the instance, governed and chained | `cogbus-gap-rate-stop` |
+
+Gaps 2 and 3 also block the plan's P3 device-owner cogs, whose per-device allowlists
+need per-cog uids.
 
 ## Alternatives considered
 

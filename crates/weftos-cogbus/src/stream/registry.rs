@@ -16,6 +16,8 @@ use super::ring;
 use super::shm::{self, Mapping, Shm};
 use super::wire::{Geometry, StreamNotice};
 use super::{Outgoing, STREAM_SUB_BASE, SessionStream, StreamConfig};
+use crate::audit::granted;
+use crate::policy::Grant;
 use crate::proto::{ErrorCode, Event};
 use crate::types::{BusError, InstanceSpec, Session, TopicRow, refuse, valid_source_id};
 
@@ -24,6 +26,11 @@ mod open;
 type Key = (String, String);
 /// Is this instance still registered with the broker?
 pub(crate) type Alive<'a> = &'a dyn Fn(&str) -> bool;
+/// Governance for an open, given the live topic's project when it is not
+/// the instance's (B3's gate, after the manifest rules).
+pub(crate) type Gate<'a> = &'a dyn Fn(Option<&str>) -> Result<(), BusError>;
+/// Governance for a subscribe: the grants it may use, or the refusal.
+pub(crate) type Gov<'a> = &'a dyn Fn(Option<&str>) -> Result<Vec<Grant>, BusError>;
 
 struct Ring {
     schema: String,
@@ -45,6 +52,14 @@ struct Sub {
     schema: String,
     policy: InputPolicy,
     cursor: Option<Shm>,
+    also: Vec<Grant>,
+}
+
+impl Sub {
+    /// May this subscription read a ring of `project`?
+    fn reads(&self, project: &Option<String>) -> bool {
+        project == &self.project_id || granted(&self.also, project, &self.key.1)
+    }
 }
 
 #[derive(Default)]
@@ -148,6 +163,10 @@ impl Streams {
         }
     }
 
+    pub(crate) fn deadline_ms(&self) -> u64 {
+        self.cfg.block_deadline.as_millis() as u64
+    }
+
     fn lock(&self) -> MutexGuard<'_, State> {
         self.st.lock().unwrap_or_else(|p| p.into_inner())
     }
@@ -160,6 +179,7 @@ impl Streams {
         ss: &SessionStream,
         topic: &str,
         schema: &str,
+        gov: Gov<'_>,
     ) -> Result<Answer, BusError> {
         let me = s.instance_id.as_str();
         let no = |e| refuse(me, "stream_subscribe", topic, e);
@@ -198,10 +218,13 @@ impl Streams {
         let key = (kind.to_string(), source.to_string());
         let mut st = self.lock();
         st.conns.insert(ss.conn, ss.tx.clone());
+        let foreign = st.rings.get(&key).and_then(|r| r.project_id.clone());
+        let foreign = foreign.filter(|p| Some(p) != s.project_id.as_ref());
+        let also = gov(foreign.as_deref())?;
         let mut fds = Vec::new();
         let mut ring_info = Value::Null;
         if let Some(r) = st.rings.get(&key) {
-            if r.project_id != s.project_id {
+            if r.project_id != s.project_id && !granted(&also, &r.project_id, source) {
                 return Err(no(bad(
                     ErrorCode::CrossProject,
                     format!("{topic} belongs to another project"),
@@ -247,6 +270,7 @@ impl Streams {
                 schema: schema.to_string(),
                 policy: decl.policy,
                 cursor,
+                also,
             },
         );
         let result = json!({
@@ -289,7 +313,7 @@ impl Streams {
             return Ok(json!({ "policy": x.policy }));
         }
         x.policy = InputPolicy::DropOldest;
-        let (reader, conn) = (x.instance.clone(), x.conn);
+        let (reader, conn, project) = (x.instance.clone(), x.conn, x.project_id.clone());
         if let Some(r) = st.rings.get_mut(&key) {
             r.demotions += 1;
         }
@@ -305,7 +329,9 @@ impl Streams {
             },
             Vec::new(),
         );
-        Ok(json!({ "policy": InputPolicy::DropOldest }))
+        Ok(json!({
+            "policy": InputPolicy::DropOldest, "reader": reader, "project": project, "topic": topic,
+        }))
     }
 
     /// True if `sub` is a stream subscription of this connection.
@@ -324,7 +350,7 @@ impl Streams {
         ss: &SessionStream,
         sub: u64,
         alive: Alive<'_>,
-    ) -> Result<(), BusError> {
+    ) -> Result<String, BusError> {
         if !self.owns(ss, sub) {
             let e = bad(
                 ErrorCode::UnknownSubscription,
@@ -333,9 +359,13 @@ impl Streams {
             return Err(refuse(&s.instance_id, "unsubscribe", "-", e));
         }
         let mut st = self.lock();
+        let topic = st
+            .subs
+            .get(&sub)
+            .map(|x| format!("{}/{}", x.key.0, x.key.1));
         st.drop_sub(sub);
         st.gc(alive);
-        Ok(())
+        Ok(topic.unwrap_or_else(|| "-".into()))
     }
 
     /// The connection closed: its readers go, its rings lose their writer

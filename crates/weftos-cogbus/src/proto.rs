@@ -190,7 +190,7 @@ pub enum ErrorCode {
     SchemaMismatch,
     /// A class or policy this phase does not carry.
     Unsupported,
-    /// The topic belongs to another project (grants are not in B1).
+    /// The topic belongs to another project and no grant covers it.
     CrossProject,
     /// Another instance writes this topic.
     WriterConflict,
@@ -200,6 +200,9 @@ pub enum ErrorCode {
     UnknownSubscription,
     /// The instance was unloaded or stopped.
     Revoked,
+    /// Governance refused the action (`cogbus.declare` / `.publish` /
+    /// `.subscribe`).
+    Denied,
     /// A code this client does not know.
     #[serde(other)]
     Unknown,

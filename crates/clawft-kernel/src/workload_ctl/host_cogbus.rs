@@ -42,6 +42,9 @@ pub struct CogbusRegistration {
     pub cog_id: String,
     /// Project that placed it.
     pub project_id: Option<String>,
+    /// Node id of the placing controller (whose store takes a project-less
+    /// instance's `store.vector` readings, as with the ingest bridge).
+    pub controller_node: String,
     /// The instance token (the contract's, see `host_contract`).
     pub token: SecretString,
     /// Uid it runs as, if known.
@@ -111,7 +114,7 @@ impl WorkloadHostService {
         pending: Option<CogbusPending>,
         instance_id: &str,
         cog_id: &str,
-        project_id: Option<String>,
+        (project_id, controller_node): (Option<String>, &str),
         contract: &HostContract,
     ) -> Result<Option<CogbusRegistration>, Refusal> {
         let (Some(p), Some(bus)) = (pending, self.cogbus.get()) else {
@@ -121,6 +124,7 @@ impl WorkloadHostService {
             instance_id: instance_id.to_string(),
             cog_id: cog_id.to_string(),
             project_id,
+            controller_node: controller_node.to_string(),
             token: contract.token.clone(),
             uid: p.uid,
             outputs: p.outputs,

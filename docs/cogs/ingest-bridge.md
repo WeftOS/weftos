@@ -33,6 +33,37 @@ controller_node }` together with the instance's token
 
 The owner may be this node (`LocalForwarder`) or another (`MeshForwarder`).
 
+## Through the cogbus (ADR-122 section 9, B4)
+
+When the node's cogbus broker runs (`crates/clawft-weave/src/cogbus_ingest.rs`),
+the bridge is a compatibility listener in front of it:
+
+```
+released cog --HTTP + token--> bridge --publish store.vector/<instance>--> broker
+                                  |                                          |
+                                  +--- same batch, awaited ---> store sink <-+-- cogs publishing
+                                                                 |             store.vector
+                                                                 v             themselves
+                                                    router -> store owner (as above)
+```
+
+- Each accepted post is published as a `store.vector.v1` reading on
+  `store.vector/<instance id>` by the broker-internal writer `@ingest-bridge`,
+  in the topic bucket of the placing project, then handed to the broker's
+  store sink. The HTTP request, auth, rate limits and answers are unchanged;
+  the answer is the store's counts as before. The sink writes the batch the
+  bridge parsed, so the floats stored are the ones the bridge read.
+- The topic's source id is the **instance id** (or `i-<16 hex>` of it when
+  the id is not a valid source id): the store keys vectors by instance, and two
+  placements of the same cog in two projects would otherwise share one topic.
+- The store sink is the broker's built-in subscriber to `store.vector/*`. It
+  routes through the same router, forwarders and vector store dir, and writes
+  to the store of the project that placed the publishing instance only.
+- A cog run with `WEFTOS_COGBUS` that declares
+  `[[outputs]] topic = "store.vector", schema = "store.vector.v1", class = "reading"`
+  can publish its own readings; they go through the same sink and the same
+  per-instance budgets, and need no HTTP port.
+
 ## Wiring into placement
 
 The project id travels with the placement:
@@ -100,8 +131,9 @@ Everything is optional; `<runtime>/cog-ingest.json` overrides the defaults:
 
 ```json
 {
-  "bridge": { "bind": "127.0.0.1:80", "requests_per_sec": 20,
-              "vectors_per_sec": 2048, "container_bind": "192.168.64.1" },
+  "bridge": { "bind": "127.0.0.1:80", "fallback_bind": "127.0.0.1:18080",
+              "requests_per_sec": 20, "vectors_per_sec": 2048,
+              "container_bind": "192.168.64.1" },
   "routes": [
     { "project": "<project id>", "owner": "local", "controllers": ["<node id>"] },
     { "project": "<project id>",
@@ -118,6 +150,8 @@ Everything is optional; `<runtime>/cog-ingest.json` overrides the defaults:
 | Knob | Default | Meaning |
 |---|---|---|
 | `bridge.bind` | `127.0.0.1:80` | Shared listener; must be loopback. Released cogs post to this address. If it cannot bind (taken, or unprivileged on Linux) the daemon logs it and places cogs degraded (`ingest: disabled`, see above). The user daemon and each project daemon all default to this port and only the first to bind wins; give the others a distinct loopback port in their own runtime dir's `cog-ingest.json` (cogs that honour `COGNITUM_INGEST_URL` follow it; a released cog that posts to the fixed port 80 can be served by one daemon per host). |
+| `bridge.bind` = `"off"` | | No HTTP listener (cogs are placed `ingest: disabled`, with no `COGNITUM_COG_TOKEN`). Cogs publishing `store.vector` on the cogbus still reach the store. |
+| `bridge.fallback_bind` | none | Loopback listener used when `bridge.bind` cannot be bound (for example an unprivileged daemon and port 80). Native cogs then get this address as `COGNITUM_INGEST_URL`; released cogs that post to the fixed port 80 are not served by this daemon. Not allowed with `bind: "off"`. |
 | `bridge.requests_per_sec`, `vectors_per_sec` | 20, 2048 | Per-instance budgets. |
 | `bridge.container_bind` | none | One gateway address for token-scoped container listeners (the engine or VM gateway); unspecified (`0.0.0.0`) and multicast addresses are refused. Unset: containers get no scoped listener. |
 | `routes` | one route: project-less placements by this node's key go to this node's store | A `project` route sends that project's batches to its owner and may list `controllers` (node ids besides this node that may place for it; default none); a `controller` route takes project-less batches placed by that node. `owner` is `"local"` or a remote node pinned by `key`. A project or controller with no route is refused at place time. |
@@ -286,8 +320,17 @@ made.
 
 ## Tests
 
-`cargo test -p clawft-kernel --lib cog_ingest workload_ctl::tests_ingest`
-and `cargo test -p clawft-weave --lib cog_ingest_serve`:
+`cargo test -p clawft-kernel --lib cog_ingest workload_ctl::tests_ingest`,
+`cargo test -p clawft-weave --lib cog_ingest cogbus` and
+`cargo test -p weftos-cogbus`:
+
+- through the cogbus: a released-cog post answered byte for byte as by the
+  plain bridge (accepted, 401, 400, 429) while published on the broker and
+  stored for the right project; two projects' posts reach only their own
+  store; a broker-native cog's `store.vector` reaches its project's store
+  and a reading naming another project, a revoked instance or a bad body is
+  refused; with the primary bind taken the fallback serves HTTP and the
+  broker path still stores; with `bind: "off"` the broker path still stores;
 
 - a stub cog placed through the real placement path (controller, signed
   `workload.ctl`, fetch-before-load, native adapter) posts with its injected

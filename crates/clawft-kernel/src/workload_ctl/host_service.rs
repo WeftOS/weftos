@@ -640,7 +640,7 @@ impl WorkloadHostService {
         };
         let h = host.load(&w, &cfg).await.map_err(|e| runtime_refusal(&e))?;
         let iid = h.instance_id.clone();
-        let bus = match self.bus_lease(bus, &iid, &w.id, b.project_id.clone(), &contract) {
+        let bus = match self.bus_lease(bus, &iid, &w.id, (b.project_id.clone(), &req.requester), &contract) {
             Ok(r) => r,
             Err(mut r) => {
                 if let Err(u) = host.unload(h.clone()).await {

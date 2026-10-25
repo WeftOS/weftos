@@ -10,7 +10,9 @@
 //!   or unparseable JSON gets an error frame (when it can) and the
 //!   connection is closed;
 //! - a write to the cog that does not finish in [`FRAME_TIMEOUT`] closes it;
-//! - revoking the instance closes it with a `revoked` error.
+//! - revoking the instance closes it with a `revoked` error;
+//! - every refusal is recorded ([`Broker::record_refusal`]): the activity
+//!   log, and too many in a window stop the instance (which closes it).
 //!
 //! A connection that has said hello may then stay idle: a subscriber can
 //! wait as long as its writer is quiet.
@@ -196,6 +198,7 @@ async fn hello(
             send(w, &Event::Ok { id, result }).await.then_some(s)
         }
         Err(e) => {
+            broker.record_refusal(&e, "-");
             send(w, &error(id, e)).await;
             None
         }
@@ -218,7 +221,9 @@ async fn serve_session(
                 let (ev, fds) = match item {
                     None => return,
                     Some(Incoming::Bad(code, m)) => {
-                        send(w, &error(0, BusError::new(code, m))).await;
+                        let e = BusError::new(code, m);
+                        broker.record_refusal(&e, s.instance_id());
+                        send(w, &error(0, e)).await;
                         return;
                     }
                     Some(Incoming::Req(req)) => match crate::stream::serve::handle(broker, s, ss, req) {
@@ -279,6 +284,9 @@ fn handle(broker: &Broker, s: &mut Session, req: Request) -> Event {
     };
     match r {
         Ok(result) => Event::Ok { id, result },
-        Err(e) => error(id, e),
+        Err(e) => {
+            broker.record_refusal(&e, s.instance_id());
+            error(id, e)
+        }
     }
 }

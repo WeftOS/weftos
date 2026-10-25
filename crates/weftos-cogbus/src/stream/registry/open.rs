@@ -6,7 +6,7 @@ use std::os::fd::AsFd;
 use clawft_types::cog_topics::{InputPolicy, TopicClass, valid_topic_kind};
 use serde_json::json;
 
-use super::{Alive, Answer, Key, Ring, State, Streams, bad, dup, ring_id, shm_err};
+use super::{Alive, Answer, Gate, Key, Ring, State, Streams, bad, dup, ring_id, shm_err};
 use crate::proto::ErrorCode;
 use crate::stream::SessionStream;
 use crate::stream::ring;
@@ -52,6 +52,7 @@ impl Streams {
         ring_bytes: Option<u64>,
         seq_base: Option<u64>,
         alive: Alive<'_>,
+        gate: Gate<'_>,
     ) -> Result<Answer, BusError> {
         let topic = format!("{kind}/{source_id}");
         let me = s.instance_id.as_str();
@@ -95,6 +96,12 @@ impl Streams {
         let key = (kind.to_string(), source_id.to_string());
         let mut st = self.lock();
         st.conns.insert(conn, ss.tx.clone());
+        let foreign = st.rings.get(&key).and_then(|r| r.project_id.clone());
+        gate(
+            foreign
+                .filter(|p| Some(p) != s.project_id.as_ref())
+                .as_deref(),
+        )?;
         let base = seq_base.unwrap_or(0);
         let replaced = match st.rings.get(&key) {
             Some(r) => {
@@ -195,7 +202,7 @@ impl Streams {
     fn announce_ring(&self, st: &State, key: &Key) {
         let Some(r) = st.rings.get(key) else { return };
         for (id, sub) in &st.subs {
-            if &sub.key != key || sub.schema != r.schema || sub.project_id != r.project_id {
+            if &sub.key != key || sub.schema != r.schema || !sub.reads(&r.project_id) {
                 continue;
             }
             let Ok(fd) = r.shm.ro.try_clone() else {

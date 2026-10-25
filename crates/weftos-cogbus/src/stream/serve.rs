@@ -2,12 +2,14 @@
 
 use std::os::fd::OwnedFd;
 
-use serde_json::json;
+use serde_json::{Value, json};
 use tokio::net::unix::OwnedWriteHalf;
 use tokio::time::timeout;
 
+use super::registry::Answer;
 use super::{STREAM_SUB_BASE, SessionStream, fdpass};
 use crate::broker::{Broker, BusError, InstanceSpec, Session, refuse};
+use crate::policy::{BusAction, BusActivity, BusRequest, Outcome};
 use crate::proto::{ErrorCode, Event, Request, encode};
 use crate::server::FRAME_TIMEOUT;
 
@@ -20,7 +22,10 @@ fn error(id: u64, e: BusError) -> Event {
 }
 
 /// Answer `req` if it is a stream request (or the unsubscribe of a stream
-/// subscription); otherwise hand it back.
+/// subscription); otherwise hand it back. Opens and subscribes go through
+/// the broker's governance gate (B3) as `cogbus.publish` and
+/// `cogbus.subscribe`; refusals, allowed actions and demotions go to the
+/// activity log the same way readings' do.
 pub(crate) fn handle(
     broker: &Broker,
     s: &mut Session,
@@ -39,9 +44,16 @@ pub(crate) fn handle(
             seq_base,
             ..
         } => manifest(broker, s, "stream_open").and_then(|spec| {
+            let topic = format!("{topic_kind}/{source_id}");
+            let gate = |foreign: Option<&str>| {
+                let pid = s.project_id.as_deref();
+                let mut req =
+                    BusRequest::new(BusAction::Publish, s.instance_id(), &spec.cog_id, pid);
+                req.topic_project = foreign;
+                broker.ext.gate(&req.on(&topic, &schema))
+            };
             let (src, sch) = (&source_id, &schema);
-            let o = &broker.streams;
-            o.open(
+            let a = broker.streams.open(
                 &spec,
                 s,
                 ss,
@@ -52,25 +64,47 @@ pub(crate) fn handle(
                 ring_bytes,
                 seq_base,
                 &alive,
-            )
+                &gate,
+            )?;
+            broker.ext.noted(s, BusAction::Publish, &topic);
+            Ok(a)
         }),
         Request::StreamSubscribe { topic, schema, .. } => manifest(broker, s, "stream_subscribe")
-            .and_then(|spec| broker.streams.subscribe(&spec, s, ss, &topic, &schema)),
-        Request::StreamDemote { sub, .. } => {
-            return Ok(match broker.streams.demote(s, ss, sub) {
-                Ok(result) => (Event::Ok { id, result }, Vec::new()),
-                Err(e) => (error(id, e), Vec::new()),
-            });
-        }
+            .and_then(|spec| {
+                let source = topic.split_once('/').map(|(_, src)| src);
+                let gov = |foreign: Option<&str>| {
+                    let pid = s.project_id.as_deref();
+                    let req =
+                        BusRequest::new(BusAction::Subscribe, s.instance_id(), &spec.cog_id, pid)
+                            .on(&topic, &schema);
+                    let also = broker.ext.grants(&req, source);
+                    broker.ext.gate(&BusRequest {
+                        topic_project: foreign,
+                        ..req
+                    })?;
+                    Ok(also)
+                };
+                let a = broker
+                    .streams
+                    .subscribe(&spec, s, ss, &topic, &schema, &gov)?;
+                broker.ext.noted(s, BusAction::Subscribe, &topic);
+                Ok(a)
+            }),
+        Request::StreamDemote { sub, .. } => broker.streams.demote(s, ss, sub).map(|result| {
+            demoted(broker, &result);
+            Answer {
+                result,
+                fds: Vec::new(),
+            }
+        }),
         Request::Unsubscribe { sub, .. } if sub > STREAM_SUB_BASE => {
-            let ev = match broker.streams.unsubscribe(s, ss, sub, &alive) {
-                Ok(()) => Event::Ok {
-                    id,
+            broker.streams.unsubscribe(s, ss, sub, &alive).map(|topic| {
+                broker.ext.noted(s, BusAction::Unsubscribe, &topic);
+                Answer {
                     result: json!({}),
-                },
-                Err(e) => error(id, e),
-            };
-            return Ok((ev, Vec::new()));
+                    fds: Vec::new(),
+                }
+            })
         }
         other => return Err(other),
     };
@@ -82,8 +116,32 @@ pub(crate) fn handle(
             },
             a.fds,
         ),
-        Err(e) => (error(id, e), Vec::new()),
+        Err(e) => {
+            broker.record_refusal(&e, s.instance_id());
+            (error(id, e), Vec::new())
+        }
     })
+}
+
+/// A `block` reader was demoted: an activity record for the reader.
+fn demoted(broker: &Broker, r: &Value) {
+    let Some(reader) = r["reader"].as_str() else {
+        return;
+    };
+    broker.ext.hooks.sink.record(&BusActivity {
+        ts_ms: crate::audit::now_ms(),
+        action: "cogbus.stream_demote".into(),
+        instance: reader.into(),
+        project: r["project"].as_str().map(String::from),
+        topic: r["topic"].as_str().unwrap_or("-").into(),
+        outcome: Outcome::Demoted {
+            policy: "drop-oldest".into(),
+            reason: format!(
+                "held the writer past the {} ms block deadline",
+                broker.streams.deadline_ms()
+            ),
+        },
+    });
 }
 
 /// The instance's manifest, or `revoked`.

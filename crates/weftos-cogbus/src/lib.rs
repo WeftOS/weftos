@@ -10,15 +10,25 @@
 //!   per-subscriber queues, and the publish/subscribe rules.
 //! - [`server`]: the Unix socket listener (peer uid check, hello first).
 //! - [`client`]: the async client a cog links.
-//! - [`stream`]: `stream` topics as shared-memory rings (phase B2).
+//! - [`policy`]: what the daemon plugs in (B3): governance on top of the
+//!   manifest rules, cross-project grants, the activity sink.
+//! - [`audit`]: governance calls, the refusal rate limit and the
+//!   repeated-refusal stop.
+//! - [`stream`]: `stream` topics as shared-memory rings with reader
+//!   policies (B2).
 //!
-//! Phases B1 and B2 carry `reading` and `stream` topics. Governance
-//! actions and the activity log (B3), the ingest compatibility listener
-//! (B4), blobs (B5) and mesh topics (B6) are later phases.
+//! The broker carries `reading` topics (B1), the daemon's built-in sinks
+//! and internal publishers (B4: the ingest compatibility listener publishes
+//! `store.vector`, the store sink takes `store.vector/*`; see
+//! [`Broker::add_sink`] and [`Broker::publish_internal`]), and governance,
+//! grants and the activity log (B3), and stream rings (B2). Blobs (B5) and
+//! mesh topics (B6) are other phases.
 
+pub mod audit;
 pub mod broker;
 #[cfg(unix)]
 pub mod client;
+pub mod policy;
 pub mod proto;
 #[cfg(unix)]
 pub mod server;
@@ -29,11 +39,20 @@ mod types;
 #[cfg(test)]
 mod tests_broker;
 #[cfg(test)]
+mod tests_policy;
+#[cfg(test)]
 mod tests_proto;
+#[cfg(test)]
+mod tests_sink;
 
-pub use broker::{Broker, BrokerConfig, BusError, InstanceSpec, Session, TopicRow};
+pub use broker::{
+    Broker, BrokerConfig, BusError, InstanceSpec, Reading, Session, SinkReading, TopicRow,
+};
 #[cfg(unix)]
 pub use client::{Client, ClientError, Subscription};
+pub use policy::{
+    BusAction, BusActivity, BusHooks, BusPolicy, BusRequest, BusSink, Grant, Outcome, RefusalLimits,
+};
 pub use proto::{Delivery, ErrorCode, Event, InputSpec, OutputSpec, Request};
 pub use stream::{StreamConfig, StreamNotice, StreamRecord};
 #[cfg(unix)]

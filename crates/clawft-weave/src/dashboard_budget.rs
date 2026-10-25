@@ -4,7 +4,8 @@
 //! to [`REPORT_BUDGET_BYTES`] first, dropping the lowest-value sections
 //! before the higher-value ones. `resources` and `exposures` (ADR-120) are
 //! cut late, after `routes`: the library versions first, then the exposure
-//! rows. Identity (`host`, `weaver_version`),
+//! rows. cogbus `topics` (ADR-122) go just before `resources`, row by row
+//! (the total survives). Identity (`host`, `weaver_version`),
 //! `mesh_identity` and `health` are never trimmed.
 
 use serde_json::{Value, json};
@@ -13,8 +14,8 @@ use serde_json::{Value, json};
 pub const REPORT_BUDGET_BYTES: usize = 60 * 1024;
 
 /// Sections trimmed, lowest value first.
-const TRIM_ORDER: [&str; 8] =
-    ["workspaces", "instances", "observed", "services", "routes", "resources", "exposures", "pair_requests"];
+const TRIM_ORDER: [&str; 9] =
+    ["workspaces", "instances", "observed", "services", "routes", "topics", "resources", "exposures", "pair_requests"];
 
 /// Serialized byte length of `report` (what the dashboard measures).
 pub fn report_len(report: &Value) -> usize {
@@ -45,7 +46,7 @@ fn target<'a>(section: &'a mut Value, key: &str) -> Option<&'a mut Value> {
     let pick = match key {
         "instances" if live(section.get("recent")) => "recent",
         "instances" => "drift",
-        "exposures" => "items",
+        "exposures" | "topics" => "items",
         "resources" if live(section.get("libs")) => "libs",
         "resources" => "gpus",
         _ => return Some(section),
@@ -61,15 +62,12 @@ pub fn fit(report: &mut Value, budget: usize) -> bool {
         if report_len(report) <= budget {
             return true;
         }
-        let mut cut = false;
         while report_len(report) > budget {
             let Some(section) = report.get_mut(key).and_then(|s| target(s, key)) else { break };
             if !shrink_one(section) {
                 break;
             }
-            cut = true;
-        }
-        if cut {
+            // Set before measuring again, so the flag itself is in budget.
             report[format!("{key}_truncated")] = json!(true);
         }
     }

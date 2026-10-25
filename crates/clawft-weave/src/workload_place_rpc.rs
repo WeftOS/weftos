@@ -419,6 +419,10 @@ async fn build(
         Arc::new(move || p) as clawft_kernel::licence::PostureFn
     };
     let kgate = k.governance_gate().cloned();
+    // ADR-122 B3: the broker decides with the same rules (no chain event).
+    let bus_rules = effective.clone().or_else(|| {
+        kgate.as_ref().and_then(|g| g.governance_snapshot()).map(|s| (s.rules, s.risk_threshold, s.human_approval_required))
+    });
     drop(k);
     let pk = boot.key.verifying_key().to_bytes();
     let id = clawft_kernel::node_id_from_pubkey(&pk);
@@ -489,12 +493,16 @@ async fn build(
     });
     let identity: Arc<dyn clawft_kernel::cog_ingest::ProjectDirectory> =
         Arc::new(crate::cog_ingest_serve::IdentityDirectory);
+    // ADR-122 section 9: the broker exists first, so the bridge publishes on
+    // it and its store sink serves cogs that never touch the HTTP port.
+    let broker = crate::cogbus_serve::broker_with(&id, crate::cogbus_serve::hooks(dir, bus_rules));
     let ingest = match crate::cog_ingest_serve::load_config(dir) {
-        Ok(cfg) => match crate::cog_ingest_serve::start_in(
+        Ok(cfg) => match crate::cog_ingest_serve::start_on_bus(
             &cfg,
             &boot.key,
             Some(identity),
             Some(dir.join(crate::cog_ingest_serve::VECTOR_STORE_DIR)),
+            Some(broker.clone()),
         )
         .await
         {
@@ -510,6 +518,7 @@ async fn build(
         }
     };
     let hooks = ingest.as_ref().map(|r| r.hooks.clone());
+    let store_sink = ingest.as_ref().and_then(|r| r.store_sink.clone());
     if let Some(rt) = ingest {
         tracing::info!(bridge = ?rt.bridge_addr, disabled = ?rt.bridge_error, store_owner = ?rt.owner_addr, "cog ingest");
         let _ = INGEST.set(rt);
@@ -533,7 +542,7 @@ async fn build(
     local.set_node_admin(Arc::new(crate::dashboard_rpc::MeshAdmin));
     // ADR-122: the cog data plane broker beside the ingest bridge; down, cogs
     // are placed without WEFTOS_COGBUS.
-    if let Some(bus) = crate::cogbus_serve::install(dir, &id).await {
+    if let Some(bus) = crate::cogbus_serve::install(broker, dir, store_sink).await {
         local.set_cogbus(bus);
     }
     let _ = HOST.set(local.clone());

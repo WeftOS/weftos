@@ -354,6 +354,8 @@ impl Dashboard {
         if let Some(reg) = self.exposures.get() {
             report["exposures"] = reg.report(clawft_kernel::exposure::registry::now_ms());
         }
+        #[cfg(all(feature = "placement", unix))]
+        crate::cogbus_serve::attach_report(&mut report); // ADR-122 B3: `topics`
         // Routes go in before workspaces, whose size trimming measures the whole report.
         if let Some(src) = self.routes.get()
             && let Some(routes) = src.routes().await

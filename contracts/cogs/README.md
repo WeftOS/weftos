@@ -127,6 +127,21 @@ Raw frames stay on the node. The handle names bytes in its content store.
 | `items[].value` | f64 | finite |
 | `items[].unit` | string | at most 16 chars, empty for a bare count |
 
+### `store.vector.v1` (reading)
+
+Feature vectors for the placing project's store (ADR-122 section 9). The body is
+the ingest bridge's `POST /api/v1/store/ingest` body; the broker's built-in store
+sink takes every `store.vector/*` topic and writes it to the project that placed
+the publishing cog, never another project's store.
+
+| Field | Type | Rule |
+|-------|------|------|
+| `vectors` | array | 1..=256 `[id, [8 values]]` pairs |
+| `vectors[][0]` | u64 | caller-chosen id, unique per instance |
+| `vectors[][1]` | 8 x f32 | finite, within the f32 range |
+| `dedup` | bool | optional, default false: skip ids or bit-identical values the instance already stored |
+| `metrics` | object | optional, at most 32 `name: number` entries (`[a-z][a-z0-9_.]*`), carried to subscribers, not stored |
+
 ## Using it
 
 - **Producers**: emit messages that pass every `valid-*` vector's rules and fail the
