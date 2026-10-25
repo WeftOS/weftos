@@ -9,12 +9,14 @@
 //!   schema and class `reading` (`stream` and `blob` are later phases); one
 //!   instance writes a topic;
 //! - it subscribes only to input kinds of its manifest with the declared
-//!   schema, and only to topics of its own project (cross-project grants are
-//!   phase B3). A project-less instance shares the node's own bucket with
-//!   other project-less instances.
+//!   schema, and only to topics of its own project unless the policy grants
+//!   another project's ([`crate::policy::BusPolicy::grants`]). A
+//!   project-less instance shares the node's own bucket with other
+//!   project-less instances.
 //!
-//! Every refusal goes through [`refuse`], the one place B3 routes to the
-//! governance gate and the activity log.
+//! On top of these, declare, the first publish on a topic and subscribe ask
+//! the governance policy ([`crate::audit`]). Every refusal goes through
+//! [`refuse`], which marks it for [`Broker::record_refusal`].
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -23,6 +25,8 @@ use clawft_types::cog_topics::{InputPolicy, TopicClass, is_registered, valid_top
 use serde_json::Value;
 use tokio::sync::{Notify, watch};
 
+use crate::audit::{Ext, granted};
+use crate::policy::{BusAction, BusRequest, Grant};
 use crate::proto::{Delivery, ErrorCode, InputSpec, MAX_BODY, OutputSpec};
 use crate::queue::SubQueue;
 use crate::types::token_hash;
@@ -52,6 +56,8 @@ struct Sub {
     source: Option<String>,
     schema: String,
     queue: Arc<SubQueue>,
+    /// Other projects' topics granted at subscribe.
+    also: Vec<Grant>,
 }
 
 impl Sub {
@@ -59,7 +65,7 @@ impl Sub {
         self.kind == kind
             && self.source.as_deref().is_none_or(|s| s == source)
             && self.schema == t.schema
-            && self.project_id == t.project_id
+            && (self.project_id == t.project_id || granted(&self.also, &t.project_id, source))
     }
 }
 
@@ -88,6 +94,7 @@ fn bad(code: ErrorCode, m: impl Into<String>) -> BusError {
 pub struct Broker {
     cfg: BrokerConfig,
     state: Mutex<State>,
+    pub(crate) ext: Ext,
 }
 
 impl Broker {
@@ -96,6 +103,7 @@ impl Broker {
         Self {
             cfg,
             state: Mutex::new(State::default()),
+            ext: Ext::default(),
         }
     }
 
@@ -253,7 +261,9 @@ impl Broker {
                 ));
             }
         }
+        let spec = spec.clone();
         drop(g);
+        self.ext.declare(&spec, &outputs, &inputs)?;
         let v = serde_json::json!({ "outputs": outputs.len(), "inputs": inputs.len() });
         s.declared = Some((outputs, inputs));
         Ok(v)
@@ -308,8 +318,15 @@ impl Broker {
             return Err(no(bad(ErrorCode::Unsupported, m)));
         }
         let project = spec.project_id.clone();
+        let cog = spec.cog_id.clone();
         let st = &mut *g;
         let key = (kind.to_string(), source_id.to_string());
+        let mine = st.topics.get(&key).and_then(|t| t.writer.as_deref()) == Some(me);
+        if !mine {
+            let mut req = BusRequest::new(BusAction::Publish, me, &cog, project.as_deref());
+            req.topic_project = st.topics.get(&key).and_then(|t| t.project_id.as_deref());
+            self.ext.gate(&req.on(&topic, schema))?;
+        }
         let t = st.topics.entry(key).or_insert_with(|| Topic {
             schema: schema.to_string(),
             class: TopicClass::Reading,
@@ -395,10 +412,17 @@ impl Broker {
             return Err(no(bad(ErrorCode::SchemaMismatch, m)));
         }
         let source = (source != "*").then(|| source.to_string());
+        let pid = s.project_id.as_deref();
+        let mut req =
+            BusRequest::new(BusAction::Subscribe, &me, &spec.cog_id, pid).on(topic, schema);
+        let also = self.ext.grants(&req, source.as_deref());
         if let Some(src) = &source
             && let Some(t) = g.topics.get(&(kind.to_string(), src.clone()))
         {
             if t.project_id != s.project_id {
+                req.topic_project = t.project_id.as_deref();
+            }
+            if t.project_id != s.project_id && !granted(&also, &t.project_id, src) {
                 return Err(no(bad(
                     ErrorCode::CrossProject,
                     format!("{topic} belongs to another project"),
@@ -411,6 +435,7 @@ impl Broker {
                 )));
             }
         }
+        self.ext.gate(&req)?;
         let cap = match decl.policy {
             InputPolicy::Sample => 1,
             InputPolicy::DropOldest => self.cfg.queue_len,
@@ -431,9 +456,12 @@ impl Broker {
                 source,
                 schema: schema.to_string(),
                 queue: queue.clone(),
+                also,
             },
         );
+        drop(g);
         s.subs.insert(id, queue);
+        self.ext.noted(s, BusAction::Subscribe, topic);
         Ok(id)
     }
 
@@ -446,7 +474,12 @@ impl Broker {
             );
             return Err(refuse(&s.instance_id, "unsubscribe", "-", e));
         }
-        self.lock().subs.remove(&sub);
+        let topic = self.lock().subs.remove(&sub).map(|x| match &x.source {
+            Some(src) => format!("{}/{src}", x.kind),
+            None => format!("{}/*", x.kind),
+        });
+        let topic = topic.unwrap_or_else(|| "-".into());
+        self.ext.noted(s, BusAction::Unsubscribe, &topic);
         Ok(())
     }
 

@@ -337,6 +337,12 @@ pub mod cog_ingest_serve;
 /// This node's cogbus: the cog data plane broker and `cogbus.list` (ADR-122).
 #[cfg(all(feature = "placement", unix))]
 pub mod cogbus_serve;
+/// cogbus governance: kernel rules plus `cogbus-policy.json` grants and denies (ADR-122 B3).
+#[cfg(all(feature = "placement", unix))]
+pub mod cogbus_policy;
+/// cogbus activity log, `cogbus-activity.jsonl` (ADR-122 B3).
+#[cfg(all(feature = "placement", unix))]
+pub mod cogbus_activity;
 /// This node's `workload-host`, served to other controllers (mesh-placement-12).
 #[cfg(all(feature = "placement", unix))]
 pub mod workload_host_serve;

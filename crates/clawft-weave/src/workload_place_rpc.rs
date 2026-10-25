@@ -419,6 +419,10 @@ async fn build(
         Arc::new(move || p) as clawft_kernel::licence::PostureFn
     };
     let kgate = k.governance_gate().cloned();
+    // ADR-122 B3: the broker decides with the same rules (no chain event).
+    let bus_rules = effective.clone().or_else(|| {
+        kgate.as_ref().and_then(|g| g.governance_snapshot()).map(|s| (s.rules, s.risk_threshold, s.human_approval_required))
+    });
     drop(k);
     let pk = boot.key.verifying_key().to_bytes();
     let id = clawft_kernel::node_id_from_pubkey(&pk);
@@ -533,7 +537,7 @@ async fn build(
     local.set_node_admin(Arc::new(crate::dashboard_rpc::MeshAdmin));
     // ADR-122: the cog data plane broker beside the ingest bridge; down, cogs
     // are placed without WEFTOS_COGBUS.
-    if let Some(bus) = crate::cogbus_serve::install(dir, &id).await {
+    if let Some(bus) = crate::cogbus_serve::install(dir, &id, bus_rules).await {
         local.set_cogbus(bus);
     }
     let _ = HOST.set(local.clone());

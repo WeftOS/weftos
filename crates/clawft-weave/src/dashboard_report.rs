@@ -354,6 +354,10 @@ impl Dashboard {
         if let Some(reg) = self.exposures.get() {
             report["exposures"] = reg.report(clawft_kernel::exposure::registry::now_ms());
         }
+        #[cfg(all(feature = "placement", unix))]
+        if let Some(topics) = crate::cogbus_serve::report_json() {
+            report["topics"] = topics; // ADR-122 B3: cogbus topics beside exposures
+        }
         // Routes go in before workspaces, whose size trimming measures the whole report.
         if let Some(src) = self.routes.get()
             && let Some(routes) = src.routes().await
