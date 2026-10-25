@@ -233,6 +233,8 @@ pub fn required_capability(method: &str) -> Capability {
         | "cog.licence.revoked"
         | "infer.status"
         | "expose.list"
+        // ADR-122: topics, writers and counters; no payloads, no tokens.
+        | "cogbus.list"
         // Fleet manager: one read-only document composed from sources the
         // daemon already holds; contacts no peer and no device.
         | "fleet.snapshot"
@@ -262,6 +264,9 @@ pub fn required_capability(method: &str) -> Capability {
 
         // ADR-120: likewise for an unclassified `expose.*` verb.
         m if m.starts_with("expose.") => Capability::Admin,
+
+        // ADR-122: an unclassified `cogbus.*` verb is a mutation.
+        m if m.starts_with("cogbus.") => Capability::Admin,
 
         // ADR-099 default-deny posture: an unclassified `workload.*` verb
         // is treated as a mutation, never as anonymous-callable Read.
@@ -538,6 +543,15 @@ mod tests {
             assert!(!write.allows_method(m), "{m}");
             assert!(admin.allows_method(m), "{m}");
         }
+    }
+
+    #[test]
+    fn cogbus_list_is_read_and_other_cogbus_verbs_admin() {
+        let anon = CallerCapabilities::anonymous();
+        let admin = CallerCapabilities::from_scopes(["admin"]);
+        assert!(anon.allows_method("cogbus.list"));
+        assert!(!anon.allows_method("cogbus.revoke"));
+        assert!(admin.allows_method("cogbus.revoke"));
     }
 
     #[test]

@@ -2168,6 +2168,7 @@ dependencies = [
  "weftos-cog-protocol",
  "weftos-cog-repo",
  "weftos-cog-sources",
+ "weftos-cogbus",
  "weftos-cos-console",
  "weftos-display-client",
  "weftos-leaf-scene",
@@ -11294,6 +11295,20 @@ dependencies = [
  "weftos-cog-host",
  "weftos-cog-market",
  "weftos-cog-repo",
+]
+
+[[package]]
+name = "weftos-cogbus"
+version = "0.8.4-rc.15"
+dependencies = [
+ "blake3",
+ "clawft-types",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

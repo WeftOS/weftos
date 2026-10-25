@@ -1,0 +1,153 @@
+//! Broker types shared with the server and the daemon: refusals, the
+//! registration of an instance, `cogbus list` rows and the per-connection
+//! [`Session`].
+
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
+use clawft_types::cog_topics::TopicClass;
+use serde::Serialize;
+use tokio::sync::{Notify, watch};
+
+use crate::proto::{Delivery, ErrorCode, InputSpec, OutputSpec};
+use crate::queue::SubQueue;
+
+/// A refused request.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{code:?}: {message}")]
+pub struct BusError {
+    /// Machine code sent to the client.
+    pub code: ErrorCode,
+    /// Human reason sent to the client.
+    pub message: String,
+}
+
+impl BusError {
+    /// Error with `code`.
+    pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
+}
+
+/// Log a refusal and hand it back. B3 turns this into a governance decision
+/// and an activity-log record; nothing else in the broker logs refusals.
+pub fn refuse(instance: &str, action: &str, topic: &str, e: BusError) -> BusError {
+    tracing::warn!(target: "cogbus", instance, action, topic, code = ?e.code, reason = %e.message, "cogbus refusal");
+    e
+}
+
+/// What the placement told the broker about one instance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstanceSpec {
+    /// Instance id on this node.
+    pub instance_id: String,
+    /// Cog id.
+    pub cog_id: String,
+    /// Project that placed it; `None` is the node's own bucket.
+    pub project_id: Option<String>,
+    /// Uid the runtime started it as; `None` skips the peer check.
+    pub uid: Option<u32>,
+    /// Manifest `[[outputs]]`.
+    pub outputs: Vec<OutputSpec>,
+    /// Manifest `[[inputs]]`.
+    pub inputs: Vec<InputSpec>,
+}
+
+/// Broker tunables.
+#[derive(Debug, Clone)]
+pub struct BrokerConfig {
+    /// Node id stamped on every delivery.
+    pub node_id: String,
+    /// Messages a `drop-oldest` reading subscriber may have pending.
+    pub queue_len: usize,
+}
+
+impl BrokerConfig {
+    /// Defaults (256 pending readings) for `node_id`.
+    pub fn new(node_id: impl Into<String>) -> Self {
+        Self {
+            node_id: node_id.into(),
+            queue_len: 256,
+        }
+    }
+}
+
+/// One row of `cogbus list`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TopicRow {
+    /// `<kind>/<source_id>`.
+    pub topic: String,
+    /// Schema id.
+    pub schema: String,
+    /// Size class.
+    pub class: TopicClass,
+    /// Instance writing it (`None` once that instance is gone).
+    pub writer: Option<String>,
+    /// Project the topic belongs to.
+    pub project_id: Option<String>,
+    /// Live subscriptions matching it.
+    pub subscribers: usize,
+    /// Messages published.
+    pub messages: u64,
+    /// Messages dropped across its subscribers.
+    pub drops: u64,
+}
+
+/// An authenticated connection's view of the broker.
+pub struct Session {
+    pub(crate) instance_id: String,
+    pub(crate) project_id: Option<String>,
+    pub(crate) declared: Option<(Vec<OutputSpec>, Vec<InputSpec>)>,
+    pub(crate) subs: BTreeMap<u64, Arc<SubQueue>>,
+    pub(crate) wake: Arc<Notify>,
+    pub(crate) revoked: watch::Receiver<bool>,
+}
+
+impl std::fmt::Debug for Session {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Session")
+            .field("instance_id", &self.instance_id)
+            .field("project_id", &self.project_id)
+            .field("subs", &self.subs.keys().collect::<Vec<_>>())
+            .finish_non_exhaustive()
+    }
+}
+
+impl Session {
+    /// The instance this connection speaks for.
+    pub fn instance_id(&self) -> &str {
+        &self.instance_id
+    }
+
+    /// Woken when any of this session's subscriptions has messages.
+    pub fn wake(&self) -> Arc<Notify> {
+        self.wake.clone()
+    }
+
+    /// Changes (or closes) when the instance is revoked.
+    pub fn revoked(&self) -> watch::Receiver<bool> {
+        self.revoked.clone()
+    }
+
+    /// Pending deliveries of every subscription, per subscription in order.
+    pub fn drain(&self) -> Vec<Delivery> {
+        self.subs.values().flat_map(|q| q.drain()).collect()
+    }
+}
+
+pub(crate) fn token_hash(token: &str) -> [u8; 32] {
+    *blake3::hash(token.as_bytes()).as_bytes()
+}
+
+/// `[a-z0-9][a-z0-9._-]*`, at most 64 chars (the envelope's `source_id`).
+pub fn valid_source_id(s: &str) -> bool {
+    let b = s.as_bytes();
+    !b.is_empty()
+        && b.len() <= 64
+        && (b[0].is_ascii_lowercase() || b[0].is_ascii_digit())
+        && b.iter()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || b"._-".contains(c))
+}

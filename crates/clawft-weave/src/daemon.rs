@@ -6540,6 +6540,9 @@ async fn dispatch(
         "expose.list" | "expose.set" | "expose.off_all" | "expose.log" => {
             crate::expose_rpc::handle(method.as_str(), params).await
         }
+        // ADR-122: the cog data plane broker's topics.
+        #[cfg(all(feature = "placement", unix))]
+        "cogbus.list" => crate::cogbus_serve::handle(method.as_str(), params).await,
         // mesh-placement-19: inference placement (off unless inference.json exists).
         #[cfg(all(feature = "placement", unix))]
         "infer.status" | "infer.expose" | "infer.allow" | "infer.start" | "infer.stop" => {

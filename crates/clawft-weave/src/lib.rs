@@ -334,6 +334,9 @@ pub mod licence_checkout_verbs;
 /// This node's cog ingest bridge and store owner (mesh-placement-10).
 #[cfg(all(feature = "placement", unix))]
 pub mod cog_ingest_serve;
+/// This node's cogbus: the cog data plane broker and `cogbus.list` (ADR-122).
+#[cfg(all(feature = "placement", unix))]
+pub mod cogbus_serve;
 /// This node's `workload-host`, served to other controllers (mesh-placement-12).
 #[cfg(all(feature = "placement", unix))]
 pub mod workload_host_serve;

@@ -91,6 +91,7 @@ impl WorkloadHostService {
                         refuse(RefusalCode::Runtime, format!("ingest bridge: {e}"))
                     })?;
                 }
+                self.bus_on(p.cogbus.as_ref())?;
                 let r = host.start(&p.handle).await.map(|_| json!({"started": iid}));
                 if r.is_ok() {
                     p.desired_running = true;
@@ -108,6 +109,7 @@ impl WorkloadHostService {
                 if let (Some(hk), Some(l)) = (&self.ingest, &p.ingest) {
                     hk.deactivate(l);
                 }
+                self.bus_off(p.cogbus.as_ref());
                 let grace = Duration::from_millis(b.grace_ms.unwrap_or(2_000).min(60_000));
                 p.desired_running = false;
                 // An operator stop is final: the lease never restarts it.
@@ -123,6 +125,7 @@ impl WorkloadHostService {
                 if let (Some(hk), Some(l)) = (&self.ingest, &p.ingest) {
                     hk.deactivate(l);
                 }
+                self.bus_off(p.cogbus.as_ref());
                 let h = p.handle.clone();
                 let r = host.unload(h).await.map(|_| json!({ "unloaded": iid }));
                 if r.is_ok() {

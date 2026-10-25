@@ -21,6 +21,7 @@
 //! [`NodeFacts`]: clawft_types::placement::NodeFacts
 
 pub mod cog_kind;
+pub mod host_cogbus;
 pub mod facts;
 mod host_instances;
 pub mod host_licence;
@@ -51,6 +52,8 @@ mod test_support;
 mod tests_facts;
 #[cfg(test)]
 mod tests_flood;
+#[cfg(test)]
+mod tests_cogbus;
 #[cfg(test)]
 mod tests_ingest;
 #[cfg(test)]

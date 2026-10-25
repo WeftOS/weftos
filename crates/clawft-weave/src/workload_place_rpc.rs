@@ -531,6 +531,11 @@ async fn build(
     local.set_licence_gate(crate::licence_steward::run_gate(policy.store()));
     // Mesh-routed `dashboard.*` calls from an authorised controller key.
     local.set_node_admin(Arc::new(crate::dashboard_rpc::MeshAdmin));
+    // ADR-122: the cog data plane broker beside the ingest bridge; down, cogs
+    // are placed without WEFTOS_COGBUS.
+    if let Some(bus) = crate::cogbus_serve::install(dir, &id).await {
+        local.set_cogbus(bus);
+    }
     let _ = HOST.set(local.clone());
     // ADR-108 P3b: serve `project.fetch` for the projects registered here.
     match clawft_types::runtime_paths::home_dir() {
