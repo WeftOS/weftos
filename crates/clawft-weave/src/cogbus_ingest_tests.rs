@@ -212,7 +212,7 @@ async fn a_broker_native_cog_reaches_its_projects_store_through_the_sink() {
 
     // A reading naming another project than the instance's placement, a
     // revoked instance and a malformed body are refused by the sink.
-    let mut r = SinkReading {
+    let r = SinkReading {
         project_id: Some(P2.into()),
         instance_id: "radar-1".into(),
         delivery: weftos_cogbus::Delivery {
@@ -221,7 +221,7 @@ async fn a_broker_native_cog_reaches_its_projects_store_through_the_sink() {
         },
     };
     assert_eq!(sink.take(&r).await.unwrap_err(), IngestError::Forbidden);
-    r.project_id = Some(P1.into());
+    let mut r = SinkReading { project_id: Some(P1.into()), ..r };
     r.delivery.body = json!({"vectors": [[1, [0.0]]]});
     assert!(matches!(sink.take(&r).await.unwrap_err(), IngestError::Malformed(_)));
     reg.revoke("radar-1");
