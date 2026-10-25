@@ -1,7 +1,8 @@
 //! `weaver cogbus` (ADR-122): the node's cog data plane broker.
 //!
 //! - `weaver cogbus list [--json]`: every topic with schema, class, writer
-//!   instance, subscriber count, messages and drops. Read.
+//!   instance, subscriber count, messages and drops, then the recent
+//!   refusals (time, action, instance, topic, outcome). Read.
 
 use clap::{Parser, Subcommand};
 use serde_json::{Value, json};
@@ -44,6 +45,7 @@ pub fn render_list(v: &Value) -> String {
     let topics = v["topics"].as_array().cloned().unwrap_or_default();
     if topics.is_empty() {
         out += "no topics published yet\n";
+        out += &render_refusals(v);
         return out;
     }
     out += &format!("{:<36} {:<16} {:<8} {:<28} {:>5} {:>9} {:>7}\n", "TOPIC", "SCHEMA", "CLASS", "WRITER", "SUBS", "MESSAGES", "DROPS");
@@ -58,6 +60,36 @@ pub fn render_list(v: &Value) -> String {
             cell(&t, "messages"),
             cell(&t, "drops")
         );
+    }
+    out += &render_refusals(v);
+    out
+}
+
+fn outcome(r: &Value) -> String {
+    match r["outcome"].as_str() {
+        Some("refused") => {
+            let n = r["suppressed"].as_u64().unwrap_or(0);
+            let more = if n > 0 { format!(" (+{n} more)") } else { String::new() };
+            format!("{}{more}: {}", cell(r, "code"), cell(r, "reason"))
+        }
+        Some("stopped") => format!("STOPPED after {} refusals", cell(r, "refusals")),
+        _ => cell(r, "outcome"),
+    }
+}
+
+/// The recent refusals of a `cogbus.list` document, newest last.
+pub fn render_refusals(v: &Value) -> String {
+    let rows = v["refusals"].as_array().cloned().unwrap_or_default();
+    if rows.is_empty() {
+        return "no recent refusals\n".into();
+    }
+    let mut out = format!("\nrecent refusals:\n{:<20} {:<18} {:<28} {:<32} OUTCOME\n", "TIME", "ACTION", "INSTANCE", "TOPIC");
+    for r in rows {
+        let when = r["ts_ms"]
+            .as_i64()
+            .and_then(chrono::DateTime::from_timestamp_millis)
+            .map_or_else(|| "-".into(), |t| t.format("%Y-%m-%d %H:%M:%S").to_string());
+        out += &format!("{when:<20} {:<18} {:<28} {:<32} {}\n", cell(&r, "action"), cell(&r, "instance"), cell(&r, "topic"), outcome(&r));
     }
     out
 }
@@ -96,6 +128,21 @@ mod tests {
         assert!(t.contains("100") && t.contains("reading"), "{t}");
         assert!(render_list(&json!({"running": true, "socket": "s", "topics": []})).contains("no topics"));
         assert!(render_list(&json!({"running": false})).contains("not running"));
+    }
+
+    #[test]
+    fn list_shows_recent_refusals_with_folded_counts_and_stops() {
+        let v = json!({"running": true, "socket": "s", "topics": [], "refusals": [
+            {"ts_ms": 1_700_000_000_000_i64, "action": "cogbus.subscribe", "instance": "reader-1",
+             "project": null, "topic": "audio.pcm/mic0", "outcome": "refused", "code": "denied",
+             "reason": "cogbus.subscribe denied by governance: no audio", "suppressed": 7},
+            {"ts_ms": 1_700_000_001_000_i64, "action": "cogbus.stop", "instance": "reader-1",
+             "project": null, "topic": "-", "outcome": "stopped", "refusals": 20}]});
+        let t = render_list(&v);
+        assert!(t.contains("recent refusals") && t.contains("audio.pcm/mic0"), "{t}");
+        assert!(t.contains("denied (+7 more): cogbus.subscribe denied"), "{t}");
+        assert!(t.contains("STOPPED after 20 refusals"), "{t}");
+        assert!(render_list(&json!({"running": true, "socket": "s", "topics": []})).contains("no recent refusals"));
     }
 
     #[test]

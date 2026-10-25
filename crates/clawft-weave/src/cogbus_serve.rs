@@ -18,6 +18,11 @@
 //! daemon's native adapter has no `run_as`), which is the uid the broker
 //! checks the peer against. Container and VM routes have no view of a host
 //! socket yet, so they get no broker in B1.
+//!
+//! B3: the broker runs with [`crate::cogbus_policy`] (kernel governance and
+//! `cogbus-policy.json` grants and denies) and writes
+//! [`crate::cogbus_activity`]; `cogbus.list` carries the recent refusals and
+//! [`report_json`] is the dashboard report's `topics` section.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
@@ -27,9 +32,16 @@ use clawft_kernel::workload_ctl::host_cogbus::{CogbusAttach, CogbusRegistrar, Co
 use clawft_rpc::Response;
 use serde_json::{Value, json};
 use weftos_cogbus::server::{ServerHandle, serve};
-use weftos_cogbus::{Broker, BrokerConfig, InputSpec, InstanceSpec, OutputSpec, SOCKET_NAME};
+use weftos_cogbus::{
+    Broker, BrokerConfig, BusHooks, InputSpec, InstanceSpec, OutputSpec, SOCKET_NAME,
+};
 
+use crate::cogbus_activity::CogbusActivity;
 use crate::cogbus_ingest::StoreSink;
+use crate::cogbus_policy::{CogbusPolicy, Rules};
+
+/// Topic rows in the dashboard report, busiest first.
+pub const REPORT_TOPICS: usize = 64;
 
 /// Keeps the broker listening for the daemon's life.
 static RUNTIME: OnceLock<CogbusRuntime> = OnceLock::new();
@@ -48,9 +60,25 @@ impl CogbusRuntime {
     }
 }
 
-/// A broker for node `node_id`, not yet listening.
+/// A broker for node `node_id` with the default hooks (allow what the
+/// manifest allows, `tracing` only), not yet listening.
 pub fn broker(node_id: &str) -> Arc<Broker> {
-    Arc::new(Broker::new(BrokerConfig::new(node_id)))
+    broker_with(node_id, BusHooks::default())
+}
+
+/// A broker for node `node_id` with `hooks`, not yet listening.
+pub fn broker_with(node_id: &str, hooks: BusHooks) -> Arc<Broker> {
+    Arc::new(Broker::new(BrokerConfig::new(node_id)).with_hooks(hooks))
+}
+
+/// The daemon's hooks: governance over `rules` and `dir`'s policy file, the
+/// activity log in `dir`.
+pub fn hooks(dir: &Path, rules: Option<Rules>) -> BusHooks {
+    BusHooks {
+        policy: Arc::new(CogbusPolicy::new(dir, rules)),
+        sink: Arc::new(CogbusActivity::open(dir)),
+        ..BusHooks::default()
+    }
 }
 
 /// Start the broker for node `node_id` in `dir`.
@@ -164,8 +192,58 @@ pub fn list_json(rt: Option<&CogbusRuntime>) -> Value {
             "running": true,
             "socket": rt.socket().to_string_lossy(),
             "topics": rt.broker.snapshot(),
+            "refusals": rt.broker.recent_refusals(),
         }),
-        None => json!({ "running": false, "topics": [] }),
+        None => json!({ "running": false, "topics": [], "refusals": [] }),
+    }
+}
+
+fn clip(s: &str) -> String {
+    s.chars().take(64).collect()
+}
+
+/// The report's `topics` section for `broker`: at most [`REPORT_TOPICS`]
+/// rows, busiest first, the total, and how many of the retained recent
+/// refusals (at most 32) fell in the last hour. No socket paths, no bodies.
+pub fn report_of(broker: &Broker, now_ms: u64) -> Value {
+    let mut rows = broker.snapshot();
+    let total = rows.len();
+    rows.sort_by(|a, b| {
+        b.messages
+            .cmp(&a.messages)
+            .then_with(|| a.topic.cmp(&b.topic))
+    });
+    let items: Vec<Value> = rows
+        .iter()
+        .take(REPORT_TOPICS)
+        .map(|t| {
+            json!({
+                "topic": clip(&t.topic), "schema": clip(&t.schema), "class": t.class,
+                "writer": t.writer.as_deref().map(clip), "project": t.project_id,
+                "subs": t.subscribers, "msgs": t.messages, "drops": t.drops,
+            })
+        })
+        .collect();
+    let hour = now_ms.saturating_sub(3_600_000);
+    let refused = broker
+        .recent_refusals()
+        .iter()
+        .filter(|a| a.ts_ms >= hour)
+        .count();
+    json!({ "total": total, "items": items, "refusals_1h": refused })
+}
+
+/// `topics` for the heartbeat report, when the broker is running.
+pub fn report_json() -> Option<Value> {
+    RUNTIME
+        .get()
+        .map(|rt| report_of(&rt.broker, clawft_kernel::exposure::registry::now_ms()))
+}
+
+/// Put [`report_json`] into `report` as `topics`, beside `exposures`.
+pub fn attach_report(report: &mut Value) {
+    if let Some(topics) = report_json() {
+        report["topics"] = topics;
     }
 }
 

@@ -340,6 +340,15 @@ pub mod cogbus_serve;
 /// The ingest bridge as a cogbus consumer: the store sink (ADR-122 section 9).
 #[cfg(all(feature = "placement", unix))]
 pub mod cogbus_ingest;
+/// cogbus governance: kernel rules plus `cogbus-policy.json` grants and denies (ADR-122 B3).
+#[cfg(all(feature = "placement", unix))]
+pub mod cogbus_policy;
+/// The cogbus `GovernanceRequest` site, attributed from the kernel attestation (ADR-122 B3).
+#[cfg(all(feature = "placement", unix))]
+pub mod cogbus_governance;
+/// cogbus activity log, `cogbus-activity.jsonl` (ADR-122 B3).
+#[cfg(all(feature = "placement", unix))]
+pub mod cogbus_activity;
 /// This node's `workload-host`, served to other controllers (mesh-placement-12).
 #[cfg(all(feature = "placement", unix))]
 pub mod workload_host_serve;

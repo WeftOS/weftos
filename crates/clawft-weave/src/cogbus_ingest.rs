@@ -198,6 +198,8 @@ impl Forwarder for BusForwarder {
             body: body_of(batch),
         };
         if let Err(e) = self.broker.publish_internal(BRIDGE_WRITER, &b.instance_id, b.project_id.clone(), r) {
+            // ADR-122 B3: into the activity log (rate limited); never a stop.
+            self.broker.record_refusal(&e, BRIDGE_WRITER);
             tracing::warn!(target: "cogbus", instance = %b.instance_id, error = %e,
                 "ingest post not published on cogbus; delivered to the store directly");
         }
