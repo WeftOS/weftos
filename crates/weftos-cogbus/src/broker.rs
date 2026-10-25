@@ -13,6 +13,9 @@
 //!   phase B3). A project-less instance shares the node's own bucket with
 //!   other project-less instances.
 //!
+//! The daemon's own services use [`sink`] (built-in subscribers across
+//! projects, internal publishers with no manifest) instead of a connection.
+//!
 //! Every refusal goes through [`refuse`], the one place B3 routes to the
 //! governance gate and the activity log.
 
@@ -23,11 +26,15 @@ use clawft_types::cog_topics::{InputPolicy, TopicClass, is_registered, valid_top
 use serde_json::Value;
 use tokio::sync::{Notify, watch};
 
-use crate::proto::{Delivery, ErrorCode, InputSpec, MAX_BODY, OutputSpec};
+use crate::proto::{ErrorCode, InputSpec, MAX_BODY, OutputSpec};
 use crate::queue::SubQueue;
 use crate::types::token_hash;
 pub use crate::types::{BrokerConfig, BusError, InstanceSpec, Session, TopicRow, refuse, valid_source_id};
+pub use sink::{Reading, SinkReading};
+use sink::{Put, SinkSlot};
 
+#[path = "sink.rs"]
+mod sink;
 
 struct Instance {
     spec: InstanceSpec,
@@ -70,6 +77,7 @@ struct State {
     topics: BTreeMap<(String, String), Topic>,
     subs: BTreeMap<u64, Sub>,
     next_sub: u64,
+    sinks: HashMap<String, SinkSlot>,
 }
 
 
@@ -308,60 +316,21 @@ impl Broker {
             return Err(no(bad(ErrorCode::Unsupported, m)));
         }
         let project = spec.project_id.clone();
-        let st = &mut *g;
-        let key = (kind.to_string(), source_id.to_string());
-        let t = st.topics.entry(key).or_insert_with(|| Topic {
-            schema: schema.to_string(),
-            class: TopicClass::Reading,
-            writer: None,
-            project_id: project.clone(),
-            seq: 0,
-            messages: 0,
-            drops: 0,
-        });
-        if t.writer.as_deref().is_some_and(|w| w != me) {
-            return Err(no(bad(
-                ErrorCode::WriterConflict,
-                format!("{topic} is written by another instance"),
-            )));
-        }
-        if t.project_id != project {
-            return Err(no(bad(
-                ErrorCode::CrossProject,
-                format!("{topic} belongs to another project"),
-            )));
-        }
-        if t.schema != schema {
-            return Err(no(bad(
-                ErrorCode::SchemaMismatch,
-                format!("{topic} carries {}", t.schema),
-            )));
-        }
-        t.writer = Some(me.to_string());
-        t.seq += 1;
-        t.messages += 1;
-        let d = Delivery {
-            sub: 0,
-            topic: topic.clone(),
-            schema: schema.to_string(),
+        let r = Reading {
+            kind: kind.to_string(),
             source_id: source_id.to_string(),
-            node_id: self.cfg.node_id.clone(),
+            schema: schema.to_string(),
             t_ns,
-            seq: t.seq,
-            recv_ns: now_ns(),
             body,
         };
-        for (id, sub) in &st.subs {
-            if sub.matches(kind, source_id, t)
-                && sub.queue.push(Delivery {
-                    sub: *id,
-                    ..d.clone()
-                })
-            {
-                t.drops += 1;
-            }
-        }
-        Ok(t.seq)
+        let put = Put {
+            writer: me,
+            instance: me,
+            project,
+            r,
+            to_sink: true,
+        };
+        self.put(&mut g, put).map(|d| d.seq)
     }
 
     /// Subscribe to `topic` (`<kind>/<source_id>` or `<kind>/*`); returns
@@ -479,7 +448,8 @@ impl Broker {
                 class: t.class,
                 writer: t.writer.clone(),
                 project_id: t.project_id.clone(),
-                subscribers: g.subs.values().filter(|s| s.matches(kind, src, t)).count(),
+                subscribers: g.subs.values().filter(|s| s.matches(kind, src, t)).count()
+                    + usize::from(g.sinks.get(kind).is_some_and(|s| s.schema == t.schema)),
                 messages: t.messages,
                 drops: t.drops,
             })

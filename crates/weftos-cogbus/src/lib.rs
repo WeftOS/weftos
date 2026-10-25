@@ -11,9 +11,12 @@
 //! - [`server`]: the Unix socket listener (peer uid check, hello first).
 //! - [`client`]: the async client a cog links.
 //!
-//! Phase B1 carries `reading` topics only. Stream rings (B2), governance
-//! actions and the activity log (B3), the ingest compatibility listener
-//! (B4), blobs (B5) and mesh topics (B6) are later phases.
+//! The broker carries `reading` topics (B1) and the daemon's built-in sinks
+//! and internal publishers (B4: the ingest compatibility listener publishes
+//! `store.vector`, the store sink takes `store.vector/*`; see
+//! [`Broker::add_sink`] and [`Broker::publish_internal`]). Stream rings
+//! (B2), governance actions and the activity log (B3), blobs (B5) and mesh
+//! topics (B6) are later phases.
 
 pub mod broker;
 #[cfg(unix)]
@@ -28,8 +31,12 @@ mod types;
 mod tests_broker;
 #[cfg(test)]
 mod tests_proto;
+#[cfg(test)]
+mod tests_sink;
 
-pub use broker::{Broker, BrokerConfig, BusError, InstanceSpec, Session, TopicRow};
+pub use broker::{
+    Broker, BrokerConfig, BusError, InstanceSpec, Reading, Session, SinkReading, TopicRow,
+};
 #[cfg(unix)]
 pub use client::{Client, ClientError, Subscription};
 pub use proto::{Delivery, ErrorCode, Event, InputSpec, OutputSpec, Request};
