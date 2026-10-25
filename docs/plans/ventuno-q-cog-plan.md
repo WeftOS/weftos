@@ -1,7 +1,7 @@
 # Ventuno Q cog plan, and how cogs pass data
 
-Status: Accepted, 2026-10-25. The owner took every recommendation in section 7, with
-decision 3 conditional on the brick test in decision 4. P0 and P1 are in progress.
+Status: Accepted, 2026-10-25. The owner took every recommendation in section 7.
+P0 and P1 shipped (f854f9611); the brick spike confirmed decision 3 (own the MCU).
 
 Scope: every cog the Arduino Ventuno Q (ABX00181) could run, and the changes
 WeftOS needs so cogs can hand data to each other on one board and across the
@@ -185,8 +185,11 @@ need a privileged port.
 
 Some hardware is called, not streamed. The NPU is the main case.
 
-- **NPU inference service** (ADR-101 `inference` kind). It owns GenieX and the
-  QNN runtime. Other cogs call `infer` on a topic-like service address
+- **NPU inference service** (ADR-101 `inference` kind). It owns GenieX and is
+  the only thing that starts the Edge Impulse model servers (App Lab brick
+  runners), which open `/dev/fastrpc-cdsp` themselves: one scheduler for the
+  NPU rather than one process holding it (brick spike, 2026-10-25). It restarts
+  GenieX through its wrapper when a model load fails. Other cogs call `infer` on a topic-like service address
   (`svc.infer/venq-npu`) with a model id and an input handle (blob or stream
   cursor). It queues by priority, keeps hot models resident within a memory
   budget (Gemma 4 E4B already does not fit next to others; the bench showed an
@@ -333,11 +336,10 @@ things around" and is worth an ADR of its own before code.
 1. **Broker placement**: in the weaver daemon (section 4.4).
 2. **Raw-frame policy**: raw frames and IQ stay on the producing node by
    default, with an explicit per-subscription opt-in.
-3. **MCU sketch**: WeftOS owns the MCU with one generic sketch, **conditional on
-   decision 4**. If App Lab bricks we want cannot run while the WeftOS sketch
-   owns the MCU, WeftOS shares the MCU instead: the WeftOS methods are added
-   to the sketch an App Lab app ships, or registered beside it, and nothing
-   assumes exclusive ownership of the router.
+3. **MCU sketch**: WeftOS owns the MCU with one generic sketch. **Confirmed by
+   the brick spike** ([result](../research/ventuno-q-app-lab-brick-spike.md)):
+   bricks never touch the MCU or router; only App Lab apps that ship a sketch
+   reflash it, so WeftOS does not run those where it owns the MCU.
 4. **App Lab bricks**: wrap two bricks (object detection, keyword spotting) as
    a careful spike, then go native for anything we ship. The spike must answer,
    with evidence: does each brick run while a non-App-Lab sketch is on the
