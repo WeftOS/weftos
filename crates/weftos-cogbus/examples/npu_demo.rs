@@ -150,6 +150,21 @@ async fn main() {
     for t in tasks {
         t.await.unwrap();
     }
+    // IMAGE_B64_FILE: one inline-image call to a vision model (IMAGE_MODEL).
+    if let Ok(f) = std::env::var("IMAGE_B64_FILE") {
+        let b64 = std::fs::read_to_string(f).expect("image file").trim().to_string();
+        let model = env("IMAGE_MODEL", "qwen3-vl-4b");
+        let started = Instant::now();
+        let body = json!({"model": model, "priority": 6, "max_tokens": 48, "image_b64": b64, "image_mime": "image/png",
+            "text": "Describe this image in one sentence."});
+        match a.invoke(TOPIC, "infer.v1", body, Duration::from_secs(180)).await {
+            Ok(v) => println!(
+                "[{:6.1}s] image call {model}: {} ms (load {} run {}) -> {:?}",
+                t0.elapsed().as_secs_f64(), started.elapsed().as_millis(), v["load_ms"], v["run_ms"], v["text"]
+            ),
+            Err(e) => println!("[{:6.1}s] image call {model}: FAILED {e}", t0.elapsed().as_secs_f64()),
+        }
+    }
     tokio::time::sleep(Duration::from_secs(env("TAIL_SECS", "7").parse().unwrap())).await;
     println!("done");
 }
