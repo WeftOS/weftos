@@ -93,3 +93,14 @@ fn card_text_goes_out_as_bounded_ascii() {
     assert!(task.starts_with("NEEDS YOU: caf? \"ship\"? zzz") && task.len() <= 120 && task.ends_with("..."));
     assert_eq!(v["next"], "A - B");
 }
+
+#[test]
+fn redraw_flag_is_sent_only_when_set_and_is_not_content() {
+    let mut g = Glance::default();
+    let plain = g.to_line("09:00");
+    assert!(!plain.contains("redraw"));
+    let before = g.clone();
+    g.redraw = true;
+    assert!(g.to_line("09:00").contains("\"redraw\":true"));
+    assert_eq!(before.content(), g.content());
+}

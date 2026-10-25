@@ -62,6 +62,9 @@ async-trait = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 chrono = { workspace = true }
+# Idle art card: decode the generated PNG, ship the dithered bitmap as base64.
+png = "0.18"
+base64 = "0.22"
 uuid = { workspace = true }
 dirs = { workspace = true }
 hound = { workspace = true }

@@ -25,6 +25,8 @@ pub mod endpoints;
 pub mod conversation;
 pub mod events;
 pub mod glance;
+pub mod glance_art;
+mod glance_bridge;
 pub mod guard;
 pub mod guide;
 pub mod host;

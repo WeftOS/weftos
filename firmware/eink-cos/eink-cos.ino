@@ -3,13 +3,16 @@
 // Reads newline-delimited JSON on USB serial (115200):
 //   {"v":1,"state":"idle|listening|thinking|speaking|blocked","task":"...",
 //    "next":"...","alert":"...","model":"...","ts":"HH:MM"}
-// and draws it. See README.md.
+// and draws it. An image line draws idle art (250x122 1-bit, base64):
+//   {"v":1,"img":"<base64 3904 bytes>","w":250,"h":122,"caption":"...","ts":"HH:MM"}
+// See README.md.
 #include <SPI.h>
 #include <GxEPD2_BW.h>
 #include <gdey/GxEPD2_213_GDEY0213B74.h>
 #include <Fonts/FreeSans9pt7b.h>
 #include <Fonts/FreeSansBold9pt7b.h>
 #include <Fonts/FreeSansBold12pt7b.h>
+#include <mbedtls/base64.h>
 
 static const int EPD_CS = 10, EPD_DC = 9, EPD_RST = 8, EPD_BUSY = 13;
 static const int EPD_SCK = 12, EPD_MOSI = 11;  // MISO unused: GPIO13 is BUSY
@@ -21,7 +24,11 @@ static const int W = 250, H = 122;
 static const int FULL_EVERY = 6;                     // partials between full refreshes
 static const uint32_t FULL_MS = 30UL * 60 * 1000;    // or this long since the last one
 static const uint32_t NOLINK_MS = 5UL * 60 * 1000;   // no valid line for this long
-static const size_t RX_MAX = 640;
+static const size_t TEXT_MAX = 640;                  // longest valid text line
+static const int ROW_BYTES = (W + 7) / 8;            // 32
+static const size_t IMG_BYTES = (size_t)ROW_BYTES * H;      // 3904
+static const size_t IMG_B64 = ((IMG_BYTES + 2) / 3) * 4;    // 5208
+static const size_t RX_MAX = IMG_B64 + 256;          // image line + JSON around it
 
 struct Glance {
   char state[16], task[128], next[128], alert[128], model[48], ts[8];
@@ -30,9 +37,12 @@ static Glance cur, shown;
 static bool haveShown = false, noLink = false, shownNoLink = false;
 static int partials = 0;
 static uint32_t lastFull = 0, lastValid = 0;
-static char line[RX_MAX + 1];
+static char* line;      // heap, RX_MAX + 1
+static uint8_t* img;    // heap, IMG_BYTES
 static size_t len = 0;
 static bool overflow = false;
+static bool showingImage = false, wantRedraw = false;
+static char imgCaption[32], imgTs[8];
 
 // Extract a flat string field. Handles \" \\ \n \/ and drops \uXXXX to '?'.
 // Returns false when the key is absent or not a string.
@@ -72,6 +82,7 @@ static bool validState(const char* s) {
 static bool parseLine(const char* js, Glance& g) {
   if (js[0] != '{') return false;
   if (!strstr(js, "\"v\":1") && !strstr(js, "\"v\": 1")) return false;
+  wantRedraw = strstr(js, "\"redraw\":true") != nullptr;
   Glance t = {};
   if (!jstr(js, "state", t.state, sizeof t.state) || !validState(t.state)) return false;
   jstr(js, "task", t.task, sizeof t.task);
@@ -194,7 +205,7 @@ static void draw(const Glance& g, bool noLinkMode) {
   uint32_t now = millis();
   int dl = (int)strlen(g.next) - (int)strlen(shown.next);
   bool bigChange = noLinkMode != shownNoLink || abs(dl) > 40;
-  bool full = !haveShown || bigChange || partials >= FULL_EVERY || now - lastFull >= FULL_MS;
+  bool full = !haveShown || bigChange || showingImage || partials >= FULL_EVERY || now - lastFull >= FULL_MS;
   // No hibernate/re-init between updates: the hardware reset on wake loses
   // the controller's previous-image RAM, which made partial updates overlay
   // the old text. powerOff() keeps RAM; the panel is bistable so it costs nothing.
@@ -204,8 +215,59 @@ static void draw(const Glance& g, bool noLinkMode) {
   do { render(g, noLinkMode); } while (display.nextPage());
   display.powerOff();
   shownNoLink = noLinkMode;
+  showingImage = false;
   if (full) { partials = 0; lastFull = now; } else partials++;
   shown = g; haveShown = true;
+}
+
+// Decode and validate an image line into `img`. The value is plain base64
+// (no escapes), so it is decoded in place from the line.
+static bool parseImage(const char* js) {
+  if (js[0] != '{') return false;
+  if (!strstr(js, "\"v\":1") && !strstr(js, "\"v\": 1")) return false;
+  const char* wp = strstr(js, "\"w\":");
+  const char* hp = strstr(js, "\"h\":");
+  if (!wp || !hp || atoi(wp + 4) != W || atoi(hp + 4) != H) return false;
+  const char* p = strstr(js, "\"img\":\"");
+  if (!p) return false;
+  p += 7;
+  const char* e = strchr(p, '"');
+  if (!e || (size_t)(e - p) != IMG_B64) return false;
+  size_t outLen = 0;
+  if (mbedtls_base64_decode(img, IMG_BYTES, &outLen, (const unsigned char*)p, IMG_B64) != 0 || outLen != IMG_BYTES) return false;
+  imgCaption[0] = imgTs[0] = 0;
+  jstr(js, "caption", imgCaption, sizeof imgCaption);
+  jstr(js, "ts", imgTs, sizeof imgTs);
+  return true;
+}
+
+// Full refresh with the art; the bottom 12 px become a caption strip with the clock.
+static void drawImage() {
+  display.setRotation(1);
+  display.setFullWindow();
+  display.firstPage();
+  do {
+    display.fillScreen(GxEPD_WHITE);
+    display.drawBitmap(0, 0, img, W, H, GxEPD_BLACK);
+    display.fillRect(0, H - 12, W, 12, GxEPD_WHITE);
+    display.drawFastHLine(0, H - 12, W, GxEPD_BLACK);
+    display.setFont();
+    display.setTextSize(1);
+    display.setTextColor(GxEPD_BLACK);
+    display.setCursor(3, H - 10);
+    display.print(imgCaption);
+    int16_t x1, y1; uint16_t w, h;
+    display.getTextBounds(imgTs, 0, 0, &x1, &y1, &w, &h);
+    display.setCursor(W - 3 - w, H - 10);
+    display.print(imgTs);
+  } while (display.nextPage());
+  display.powerOff();
+  showingImage = true;
+  noLink = false;
+  shownNoLink = false;
+  partials = 0;
+  lastFull = millis();
+  haveShown = true;  // the text under the art is still `shown`; a text change redraws it
 }
 
 // What forces a redraw: everything but the clock (the bridge sends a
@@ -218,6 +280,8 @@ static bool differs(const Glance& a, const Glance& b) {
 void setup() {
   rgbLedWrite(RGB_BUILTIN, 0, 0, 120);
   Serial.begin(115200);
+  line = (char*)malloc(RX_MAX + 1);
+  img = (uint8_t*)malloc(IMG_BYTES);
   SPI.begin(EPD_SCK, -1, EPD_MOSI, EPD_CS);
   display.init(115200, true, 2, false);
   memset(&cur, 0, sizeof cur);
@@ -234,10 +298,16 @@ void loop() {
     if (c == '\n') {
       line[len] = 0;
       Glance g;
-      if (!overflow && len > 0 && parseLine(line, g)) {
+      if (!overflow && len > 0 && strstr(line, "\"img\":\"")) {
+        if (line && img && parseImage(line)) {
+          lastValid = millis();
+          drawImage();
+          rgbLedWrite(RGB_BUILTIN, 0, 20, 0); delay(30); rgbLedWrite(RGB_BUILTIN, 0, 0, 0);
+        }
+      } else if (!overflow && len > 0 && len <= TEXT_MAX && parseLine(line, g)) {
         cur = g;
         lastValid = millis();
-        if (noLink || differs(cur, shown)) { noLink = false; draw(cur, false); }
+        if (noLink || (showingImage && wantRedraw) || differs(cur, shown)) { noLink = false; draw(cur, false); }
         rgbLedWrite(RGB_BUILTIN, 0, 20, 0); delay(30); rgbLedWrite(RGB_BUILTIN, 0, 0, 0);
       }
       len = 0; overflow = false;
