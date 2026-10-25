@@ -10,7 +10,7 @@ use clawft_types::placement::{
 };
 
 use super::host::ProbeHost;
-use super::{accel, libs, linux, macos, runtimes};
+use super::{accel, devices, libs, linux, macos, media, runtimes};
 
 /// Default TTL for self-probed facts (ten minutes).
 pub const DEFAULT_FACTS_TTL_SECS: u64 = 600;
@@ -194,7 +194,11 @@ pub fn probe_capabilities(host: &dyn ProbeHost, cfg: &ProbeConfig) -> Collected 
     let arch = normalize_arch(&host.arch());
     match host.os().as_str() {
         "macos" => macos::probe(host, &arch, &mut c),
-        "linux" => linux::probe(host, &arch, &mut c),
+        "linux" => {
+            linux::probe(host, &arch, &mut c);
+            media::probe(host, &mut c);
+            devices::probe(host, &mut c);
+        }
         other => {
             if let Some(cp) = cap(&format!("cpu.arch.{arch}"), Provenance::Probed) {
                 c.push(cp);

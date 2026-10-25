@@ -301,6 +301,7 @@ fn inference(host: &dyn ProbeHost, arch: &str, c: &mut Collected) {
             "mlx_lm entry point on PATH; version not probed (python import is slow)",
         );
     }
+    geniex(host, arch, c);
     if host.which("ollama").is_some()
         && let Some(mut o) = cap("runtime.infer.ollama", Provenance::Probed)
     {
@@ -314,6 +315,53 @@ fn inference(host: &dyn ProbeHost, arch: &str, c: &mut Collected) {
         c.push(
             o.with_attr("formats", str_list(&["gguf"]))
                 .with_attr("arches_native", str_list(&[arch])),
+        );
+    }
+}
+
+/// Loopback address `geniex serve` is run on (Ventuno bench and plan).
+pub const GENIEX_ADDR: &str = "127.0.0.1:18181";
+/// Most model ids advertised from a GenieX server.
+const MAX_GENIEX_MODELS: usize = 32;
+
+/// Model ids from an OpenAI-style `/v1/models` body.
+pub fn openai_model_ids(body: &str) -> Option<Vec<String>> {
+    let v: serde_json::Value = serde_json::from_str(body).ok()?;
+    let ids = v
+        .get("data")?
+        .as_array()?
+        .iter()
+        .filter_map(|m| m.get("id")?.as_str().map(str::to_string))
+        .take(MAX_GENIEX_MODELS)
+        .collect();
+    Some(ids)
+}
+
+/// Qualcomm GenieX: the binary lives outside `PATH`, so the evidence is a
+/// server answering on its loopback address. Only the model ids are read.
+fn geniex(host: &dyn ProbeHost, arch: &str, c: &mut Collected) {
+    if host.which("curl").is_none() {
+        return;
+    }
+    let url = format!("http://{GENIEX_ADDR}/v1/models");
+    let Some(ids) = host
+        .run("curl", &["-sf", "-m", "2", url.as_str()])
+        .as_deref()
+        .and_then(openai_model_ids)
+    else {
+        return;
+    };
+    if let Some(g) = cap("runtime.infer.geniex", Provenance::Probed) {
+        c.push(
+            g.with_attr("endpoint", GENIEX_ADDR)
+                .with_attr("compute", "npu")
+                .with_attr("formats", str_list(&["gguf", "qnn"]))
+                .with_attr("models", str_list(&ids))
+                .with_attr("arches_native", str_list(&[arch])),
+        );
+        c.note(
+            "runtime.infer.geniex",
+            "GenieX answered on loopback; models are those it can serve, not those resident",
         );
     }
 }

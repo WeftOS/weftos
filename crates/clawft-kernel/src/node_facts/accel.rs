@@ -1,7 +1,8 @@
 //! Vendor accelerator probes, run only when the vendor's tool or device
 //! node is present: NVIDIA (`nvidia-smi`), Hailo (`hailortcli`) and the
 //! Coral Edge TPU (`/dev/apex_*` PCIe device nodes, or a USB id seen by
-//! `lsusb`). Apple Metal and the ANE are probed in `macos`.
+//! `lsusb`) and the Qualcomm Hexagon NPU (`/dev/fastrpc-cdsp*`). Apple Metal
+//! and the ANE are probed in `macos`.
 
 use clawft_types::placement::Provenance;
 
@@ -16,6 +17,7 @@ pub fn probe(host: &dyn ProbeHost, c: &mut Collected) {
     cuda(host, c);
     hailo(host, c);
     coral(host, c);
+    qualcomm(host, c);
 }
 
 fn cuda(host: &dyn ProbeHost, c: &mut Collected) {
@@ -119,5 +121,40 @@ fn coral(host: &dyn ProbeHost, c: &mut Collected) {
                 format!("{dev}: Edge TPU device seen; single client, so exclusive"),
             );
         }
+    }
+}
+
+/// The SoC name from the device tree (`qcom,qcs8300` -> `qcs8300`).
+fn qcom_soc(host: &dyn ProbeHost) -> Option<String> {
+    host.read_file("/proc/device-tree/compatible")?
+        .split('\0')
+        .filter_map(|e| e.strip_prefix("qcom,"))
+        .last()
+        .map(str::to_string)
+}
+
+/// Hexagon NPU reached through FastRPC: the compute DSP device node is the
+/// evidence. Not exclusive: the runtime in front of it (GenieX, QNN) serves
+/// several clients, and the plan puts one service cog in front of it.
+fn qualcomm(host: &dyn ProbeHost, c: &mut Collected) {
+    let nodes: Vec<String> = host
+        .list_dir("/dev")
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|n| n.starts_with("fastrpc-"))
+        .collect();
+    if !nodes.iter().any(|n| n == "fastrpc-cdsp") {
+        return;
+    }
+    if let Some(mut q) = cap("accel.npu.qualcomm", Provenance::Probed) {
+        q = q
+            .with_attr("vendor", "qualcomm")
+            .with_attr("device", "fastrpc-cdsp")
+            .with_attr("domains", str_list(&nodes))
+            .with_attr("formats", str_list(&["qnn"]));
+        if let Some(soc) = qcom_soc(host) {
+            q = q.with_attr("soc", soc.as_str());
+        }
+        c.push(q);
     }
 }
