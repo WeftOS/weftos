@@ -67,6 +67,21 @@ fn a_kernel_rule_denies_an_action_or_one_topic() {
 }
 
 #[test]
+fn service_calls_are_governed_by_kernel_rules_and_file_denies() {
+    let tmp = tempfile::tempdir().unwrap();
+    let rules = vec![rule("no-infer-calls", "cogbus.call", Some("svc.infer/*"))];
+    let p = CogbusPolicy::new(tmp.path(), Some((rules, 0.9, false)));
+    let e = p.decide(&req(BusAction::Call, "c", Some(P1), "svc.infer/venq-npu")).unwrap_err();
+    assert!(e.contains("no-infer-calls"), "{e}");
+    assert_eq!(p.decide(&req(BusAction::Serve, "c", Some(P1), "svc.infer/venq-npu")), Ok(()));
+    write(tmp.path(), json!({"deny": [{"actions": ["cogbus.serve"], "cogs": ["rogue"], "reason": "not the NPU service"}]}));
+    let p = CogbusPolicy::new(tmp.path(), None);
+    let e = p.decide(&req(BusAction::Serve, "rogue", Some(P1), "svc.infer/venq-npu")).unwrap_err();
+    assert!(e.contains("not the NPU service"), "{e}");
+    assert_eq!(p.decide(&req(BusAction::Serve, "npu-infer", Some(P1), "svc.infer/venq-npu")), Ok(()));
+}
+
+#[test]
 fn file_denies_match_on_every_field_they_set() {
     let tmp = tempfile::tempdir().unwrap();
     write(tmp.path(), json!({"deny": [

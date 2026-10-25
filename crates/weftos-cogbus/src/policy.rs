@@ -23,6 +23,10 @@ pub enum BusAction {
     Subscribe,
     /// An unsubscribe (recorded, never refused: it only narrows access).
     Unsubscribe,
+    /// Becoming the provider of a service (`svc.*` topic).
+    Serve,
+    /// One call of a service.
+    Call,
 }
 
 impl BusAction {
@@ -33,6 +37,8 @@ impl BusAction {
             Self::Publish => "cogbus.publish",
             Self::Subscribe => "cogbus.subscribe",
             Self::Unsubscribe => "cogbus.unsubscribe",
+            Self::Serve => "cogbus.serve",
+            Self::Call => "cogbus.call",
         }
     }
 }

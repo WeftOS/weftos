@@ -1,0 +1,7 @@
+{
+  "model": "qwen3-4b",
+  "priority": 7,
+  "text": "Summarise the sensor log in one sentence.",
+  "system": "You are terse.",
+  "max_tokens": 128
+}
