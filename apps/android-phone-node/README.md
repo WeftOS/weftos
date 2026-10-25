@@ -25,7 +25,8 @@ reply and the indicator states back. Sibling of `apps/android-splat-capture`.
   - `Sse`, `CosGlance`, `CosGlanceClient`: pure JVM. The SSE parser, the chief-of-staff
     `card` event and `GET /v1/cos/glance` shapes, the answer body, and the client (event
     stream with reconnect backoff, glance on every connect, `art.png`, `POST /v1/cos/answer`,
-    400 shown as "card already resolved"). HTTP is injected (`CosHttp`).
+    a 400 keeps the card up and refetches; free-text replies to optionless cards). HTTP is
+    injected (`CosHttp`).
   - `CosLink`, `CosCardView`: the card link inside `LinkService` (no second service), the
     needs-you notification (tap opens the app; each option is an action), and the card or
     idle art on the home screen. The CoS URL and its endpoint token (`weftos-cos endpoint

@@ -16,7 +16,8 @@ import org.json.JSONObject
  * - `GET /v1/cos/glance`: `{"card": {id, kind, title, detail, alert, options, reason,
  *   expires_at}|null, "fields": {state, task, next, alert, model, ts}, "art": {caption, at,
  *   png_url}|null}`.
- * - `POST /v1/cos/answer`: `{"kind":"answer","id":"<card id>","value":"<option text>"}`.
+ * - `POST /v1/cos/answer`: `{"kind":"answer","id":"<card id>","value":"<option text>"}`; a
+ *   card with no options takes free text up to [MAX_REPLY] characters. 400 leaves the card up.
  */
 enum class CardKind(val wire: String, val label: String) {
     NeedsYou("needs_you", "Needs you"),
@@ -68,6 +69,24 @@ object CosGlanceWire {
     /** The card event's lifetime is at most a day longer than the longest kind (EOD, 12 h). */
     private const val MAX_TTL_MINUTES = 36 * 60L
     const val MAX_OPTIONS = 2
+    /** A card with no options takes free text up to this many characters. */
+    const val MAX_REPLY = 200
+
+    /** The card shown after `update`. A clear removes only the card whose id it names. */
+    fun reduce(current: CosCard?, update: CardUpdate): CosCard? = when (update) {
+        is CardUpdate.Show -> update.card
+        is CardUpdate.Clear -> if (current != null && update.id == current.id) null else current
+    }
+
+    /** Null when `value` can be sent as an answer, otherwise what to tell the owner. */
+    fun replyProblem(value: String): String? {
+        val n = value.trim().codePointCount(0, value.trim().length)
+        return when {
+            n == 0 -> "Type a reply first."
+            n > MAX_REPLY -> "Replies are at most $MAX_REPLY characters ($n now)."
+            else -> null
+        }
+    }
 
     /**
      * Parse one SSE `data` payload. Null for any other event kind, a card kind this build does
@@ -111,7 +130,7 @@ object CosGlanceWire {
 
     /** The answer body. `value` is the option text, which the CoS matches case-insensitively. */
     fun answerBody(cardId: String, value: String): String =
-        JSONObject().put("kind", "answer").put("id", cardId).put("value", value).toString()
+        JSONObject().put("kind", "answer").put("id", cardId).put("value", value.trim()).toString()
 
     /** The `turn_id` of a 202, or the `error` text of a refusal; empty when absent. */
     fun field(body: String, name: String): String = obj(body)?.let { str(it, name) }.orEmpty()

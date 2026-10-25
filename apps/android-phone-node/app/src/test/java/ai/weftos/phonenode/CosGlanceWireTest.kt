@@ -3,6 +3,7 @@ package ai.weftos.phonenode
 import java.time.Instant
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -89,6 +90,28 @@ class CosGlanceWireTest {
     fun artWithoutUrlFallsBackToTheRoute() {
         val g = CosGlanceWire.glance("""{"card":null,"fields":{},"art":{"caption":"c","at":null}}""")!!
         assertEquals(GlanceArt("c", "", "/v1/cos/glance/art.png"), g.art)
+    }
+
+    @Test
+    fun clearRemovesOnlyTheCardItNames() {
+        val c = CosCard(CardKind.NeedsYou, "3fa81c0d", "Ship rc.16?")
+        assertNull(CosGlanceWire.reduce(c, CardUpdate.Clear("3fa81c0d", "answered")))
+        assertEquals(c, CosGlanceWire.reduce(c, CardUpdate.Clear("00000000", "answered")))
+        assertEquals(c, CosGlanceWire.reduce(c, CardUpdate.Clear("", "")))
+        assertNull(CosGlanceWire.reduce(null, CardUpdate.Clear("3fa81c0d", "")))
+        val d = c.copy(id = "11111111")
+        assertEquals(d, CosGlanceWire.reduce(c, CardUpdate.Show(d)))
+    }
+
+    @Test
+    fun freeTextReplyLimits() {
+        assertNull(CosGlanceWire.replyProblem("soak it"))
+        assertNull(CosGlanceWire.replyProblem("x".repeat(200)))
+        // Counted as the CoS counts: code points of the trimmed text.
+        assertNull(CosGlanceWire.replyProblem("  " + "\uD83D\uDE00".repeat(200) + "  "))
+        assertNotNull(CosGlanceWire.replyProblem("x".repeat(201)))
+        assertNotNull(CosGlanceWire.replyProblem("   "))
+        assertEquals("ok", JSONObject(CosGlanceWire.answerBody("3fa81c0d", "  ok \n")).getString("value"))
     }
 
     @Test

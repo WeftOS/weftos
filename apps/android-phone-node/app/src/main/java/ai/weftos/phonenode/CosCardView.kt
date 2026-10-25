@@ -52,6 +52,8 @@ fun CosCardView(s: NodeUiState) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         for (o in card.options) Button(onClick = { NodeRuntime.answerCard(card.id, o) }) { Text(o) }
                     }
+                } else {
+                    FreeReply(card)
                 }
             } else {
                 IdleArt(s)
@@ -60,6 +62,22 @@ fun CosCardView(s: NodeUiState) {
             Text("CoS link: ${s.cosLink}", style = MaterialTheme.typography.bodySmall)
         }
     }
+}
+
+/** A card with no options takes a short free-text answer. */
+@Composable
+private fun FreeReply(card: CosCard) {
+    var reply by remember(card.id) { mutableStateOf("") }
+    OutlinedTextField(
+        value = reply,
+        onValueChange = { reply = it },
+        label = { Text("Reply (up to ${CosGlanceWire.MAX_REPLY} characters)") },
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Button(
+        onClick = { NodeRuntime.answerCard(card.id, reply) },
+        enabled = CosGlanceWire.replyProblem(reply) == null,
+    ) { Text("Send reply") }
 }
 
 @Composable

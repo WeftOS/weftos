@@ -40,7 +40,7 @@ class CosLink(context: Context, base: String, token: String) {
                 is CardUpdate.Show -> show(update.card)
                 is CardUpdate.Clear -> {
                     val cur = NodeRuntime.state.value.cosCard
-                    if (cur != null && (update.id.isEmpty() || update.id == cur.id)) show(null)
+                    if (CosGlanceWire.reduce(cur, update) == null && cur != null) show(null)
                     // Back to idle: the art may have changed while the card was up.
                     work.execute { client.fetchGlance()?.let(::applyGlance) }
                 }
@@ -68,6 +68,10 @@ class CosLink(context: Context, base: String, token: String) {
 
     /** Answer a card with one of its options, from the screen or the notification. */
     fun answer(cardId: String, value: String) {
+        CosGlanceWire.replyProblem(value)?.let { problem ->
+            NodeRuntime.update { copy(cosMessage = problem) }
+            return
+        }
         NodeRuntime.update { copy(cosMessage = "Sending \"$value\"...") }
         work.execute {
             when (val r = client.answer(cardId, value)) {
@@ -76,10 +80,13 @@ class CosLink(context: Context, base: String, token: String) {
                     NodeRuntime.update { copy(cosMessage = "Answered: $value") }
                 }
                 is AnswerResult.Stale -> {
-                    Log.i(TAG, "answer refused as stale")
-                    if (NodeRuntime.state.value.cosCard?.id == cardId) show(null)
-                    NodeRuntime.update { copy(cosMessage = "Card already resolved.") }
+                    // 400: unknown, stale, expired or invalid. The CoS leaves its card up, so the
+                    // phone shows whatever the glance says is live now (often the same card).
+                    Log.i(TAG, "answer refused (400)")
+                    val why = r.message.ifEmpty { "refused" }
+                    NodeRuntime.update { copy(cosMessage = "Card already resolved or answer refused: $why") }
                     client.fetchGlance()?.let(::applyGlance)
+                    NodeRuntime.state.value.cosCard?.takeIf { it.kind == CardKind.NeedsYou }?.let { CosNotifier.post(app, it) }
                 }
                 is AnswerResult.Failed -> NodeRuntime.update { copy(cosMessage = "Answer failed: ${r.code}") }
             }

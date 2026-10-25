@@ -33,10 +33,11 @@ class LinkService : Service() {
             // A notification action: the service is already in the foreground holding the link.
             val id = intent.getStringExtra(CosNotifier.EXTRA_CARD_ID)
             val value = intent.getStringExtra(CosNotifier.EXTRA_VALUE)
+            // The notification goes when the answer is accepted; a refused one leaves it up.
             if (id != null && value != null) NodeRuntime.answerCard(id, value)
-            CosNotifier.cancel(this)
             // Created only for this action (the link was stopped): do not linger unforegrounded.
             if (!NodeRuntime.state.value.serviceRunning) {
+                CosNotifier.cancel(this)
                 stopSelf(startId)
                 return START_NOT_STICKY
             }
