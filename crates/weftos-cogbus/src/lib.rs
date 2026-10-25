@@ -14,13 +14,15 @@
 //!   manifest rules, cross-project grants, the activity sink.
 //! - [`audit`]: governance calls, the refusal rate limit and the
 //!   repeated-refusal stop.
+//! - [`stream`]: `stream` topics as shared-memory rings with reader
+//!   policies (B2).
 //!
 //! The broker carries `reading` topics (B1), the daemon's built-in sinks
 //! and internal publishers (B4: the ingest compatibility listener publishes
 //! `store.vector`, the store sink takes `store.vector/*`; see
 //! [`Broker::add_sink`] and [`Broker::publish_internal`]), and governance,
-//! grants and the activity log (B3). Stream rings (B2), blobs (B5) and mesh
-//! topics (B6) are other phases.
+//! grants and the activity log (B3), and stream rings (B2). Blobs (B5) and
+//! mesh topics (B6) are other phases.
 
 pub mod audit;
 pub mod broker;
@@ -30,6 +32,7 @@ pub mod policy;
 pub mod proto;
 #[cfg(unix)]
 pub mod server;
+pub mod stream;
 
 mod queue;
 mod types;
@@ -51,6 +54,9 @@ pub use policy::{
     BusAction, BusActivity, BusHooks, BusPolicy, BusRequest, BusSink, Grant, Outcome, RefusalLimits,
 };
 pub use proto::{Delivery, ErrorCode, Event, InputSpec, OutputSpec, Request};
+pub use stream::{StreamConfig, StreamNotice, StreamRecord};
+#[cfg(unix)]
+pub use stream::{StreamOptions, StreamReader, StreamWriter};
 
 /// Env var: path of the broker socket.
 pub const ENV_SOCKET: &str = "WEFTOS_COGBUS";

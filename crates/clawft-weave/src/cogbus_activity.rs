@@ -39,6 +39,7 @@ pub fn outcome_text(o: &Outcome) -> String {
         Outcome::Refused { code, reason, suppressed: 0 } => format!("refused:{code} {reason}"),
         Outcome::Refused { code, reason, suppressed } => format!("refused:{code} +{suppressed} {reason}"),
         Outcome::Stopped { refusals } => format!("stopped:{refusals} refusals"),
+        Outcome::Demoted { policy, reason } => format!("demoted:{policy} {reason}"),
     }
 }
 

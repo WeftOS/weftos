@@ -6,12 +6,13 @@ use super::{Broker, Session, TopicRow};
 impl Broker {
     /// Every topic (the operator view).
     pub fn snapshot(&self) -> Vec<TopicRow> {
-        self.rows(|_| true)
+        [self.rows(|_| true), self.stream_rows(&|_| true)].concat()
     }
 
     /// Topics of the session's project.
     pub fn list_for(&self, s: &Session) -> Vec<TopicRow> {
-        self.rows(|p| p == s.project_id.as_ref())
+        let mine = |p: Option<&String>| p == s.project_id.as_ref();
+        [self.rows(mine), self.stream_rows(&mine)].concat()
     }
 
     fn rows(&self, keep: impl Fn(Option<&String>) -> bool) -> Vec<TopicRow> {

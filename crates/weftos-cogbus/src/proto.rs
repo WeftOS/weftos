@@ -11,7 +11,12 @@
 //! {"op":"subscribe","id":4,"topic":"telemetry/*","schema":"telemetry.v1"}
 //! {"op":"unsubscribe","id":5,"sub":1}
 //! {"op":"list","id":6}
+//! {"op":"stream_open","id":7,"topic_kind":"audio.pcm","source_id":"venq-mic-0","schema":"pcm.s16le.v1","max_record":640}
+//! {"op":"stream_subscribe","id":8,"topic":"audio.pcm/venq-mic-0","schema":"pcm.s16le.v1"}
 //! ```
+//!
+//! Stream answers and `{"type":"stream",...}` notices carry descriptors
+//! (`SCM_RIGHTS`) and say how many in their `fds` field ([`crate::stream`]).
 //!
 //! The broker answers each with `{"type":"ok","id":..,"result":..}` or
 //! `{"type":"error","id":..,"code":..,"message":..}` (`id` 0 for a frame it
@@ -113,6 +118,43 @@ pub enum Request {
         /// Correlation id.
         id: u64,
     },
+    /// Open a declared `stream` output as its writer; the answer carries
+    /// the ring, read-write (B2).
+    StreamOpen {
+        /// Correlation id.
+        id: u64,
+        /// Declared output kind.
+        topic_kind: String,
+        /// Installed sensor or source.
+        source_id: String,
+        /// The declared schema id.
+        schema: String,
+        /// Largest record payload this writer writes.
+        max_record: u64,
+        /// Ring size; the broker's default when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ring_bytes: Option<u64>,
+        /// Seq to continue after on a new ring.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seq_base: Option<u64>,
+    },
+    /// Read stream `<kind>/<source_id>`; the answer carries the ring
+    /// (read-only, once a writer opened it) and a `block` reader's cursor.
+    StreamSubscribe {
+        /// Correlation id.
+        id: u64,
+        /// One topic (no wildcard).
+        topic: String,
+        /// The declared input schema.
+        schema: String,
+    },
+    /// From a writer: `block` reader `sub` held it past the deadline.
+    StreamDemote {
+        /// Correlation id.
+        id: u64,
+        /// The reader's subscription id.
+        sub: u64,
+    },
 }
 
 impl Request {
@@ -124,7 +166,10 @@ impl Request {
             | Self::Publish { id, .. }
             | Self::Subscribe { id, .. }
             | Self::Unsubscribe { id, .. }
-            | Self::List { id } => *id,
+            | Self::List { id }
+            | Self::StreamOpen { id, .. }
+            | Self::StreamSubscribe { id, .. }
+            | Self::StreamDemote { id, .. } => *id,
         }
     }
 }
@@ -209,6 +254,8 @@ pub enum Event {
     },
     /// A subscribed message.
     Msg(Delivery),
+    /// A stream event for a writer or reader (B2).
+    Stream(crate::stream::StreamNotice),
 }
 
 /// A frame could not be read or written.

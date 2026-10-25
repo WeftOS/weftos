@@ -135,6 +135,14 @@ pub enum Outcome {
         /// Identical refusals folded into this record.
         suppressed: u64,
     },
+    /// A `block` stream reader held its writer past the deadline and now
+    /// reads under another policy (B2).
+    Demoted {
+        /// The policy from now on.
+        policy: String,
+        /// Why.
+        reason: String,
+    },
     /// Too many refusals: the instance was stopped on the bus.
     Stopped {
         /// Refusals counted in the window.

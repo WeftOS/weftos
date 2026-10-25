@@ -89,7 +89,6 @@ struct State {
     sinks: HashMap<String, SinkSlot>,
 }
 
-
 fn now_ns() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -105,6 +104,7 @@ fn bad(code: ErrorCode, m: impl Into<String>) -> BusError {
 pub struct Broker {
     cfg: BrokerConfig,
     state: Mutex<State>,
+    pub(crate) streams: crate::stream::Streams,
     pub(crate) ext: Ext,
 }
 
@@ -114,6 +114,7 @@ impl Broker {
         Self {
             cfg,
             state: Mutex::new(State::default()),
+            streams: crate::stream::Streams::new(Default::default()),
             ext: Ext::default(),
         }
     }
@@ -325,7 +326,7 @@ impl Broker {
             return Err(no(bad(ErrorCode::SchemaMismatch, m)));
         }
         if decl.class != TopicClass::Reading {
-            let m = format!("class {:?} is not in B1 (readings only)", decl.class);
+            let m = format!("class {:?} is not in B1 readings; streams use stream_open", decl.class);
             return Err(no(bad(ErrorCode::Unsupported, m)));
         }
         let project = spec.project_id.clone();

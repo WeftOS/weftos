@@ -11303,6 +11303,7 @@ version = "0.8.4-rc.15"
 dependencies = [
  "blake3",
  "clawft-types",
+ "libc",
  "serde",
  "serde_json",
  "tempfile",
