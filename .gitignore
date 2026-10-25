@@ -3,6 +3,7 @@
 .claude/skills/*
 !.claude/skills/plane-workflow/
 !.claude/skills/weftos-design/
+!.claude/skills/urth-spatial-checks/
 !.claude/agents/
 .claude/agents/*
 !.claude/agents/ruv-researcher/
