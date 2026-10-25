@@ -343,6 +343,9 @@ pub mod cogbus_ingest;
 /// cogbus governance: kernel rules plus `cogbus-policy.json` grants and denies (ADR-122 B3).
 #[cfg(all(feature = "placement", unix))]
 pub mod cogbus_policy;
+/// The cogbus `GovernanceRequest` site, attributed from the kernel attestation (ADR-122 B3).
+#[cfg(all(feature = "placement", unix))]
+pub mod cogbus_governance;
 /// cogbus activity log, `cogbus-activity.jsonl` (ADR-122 B3).
 #[cfg(all(feature = "placement", unix))]
 pub mod cogbus_activity;

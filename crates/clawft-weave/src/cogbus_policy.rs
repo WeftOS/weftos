@@ -7,10 +7,11 @@
 //! and no other project's topic is granted.
 //!
 //! - **Kernel rules.** Each request is evaluated as a `GovernanceRequest`:
-//!   agent and principal the instance id, action `cogbus.declare`,
-//!   `cogbus.publish` or `cogbus.subscribe`, context `tool` = the topic (so
-//!   a rule's `tool_selector` can name one, e.g. `telemetry/*`), `cog_id`,
-//!   `schema`, `cog_project` and `topic_project`. The rules are the project
+//!   agent the instance id, action `cogbus.declare`, `cogbus.publish` or
+//!   `cogbus.subscribe`, context `tool` = the topic (so a rule's
+//!   `tool_selector` can name one, e.g. `telemetry/*`), `cog_id` and
+//!   `schema`; project attribution is the kernel's own
+//!   ([`crate::cogbus_governance`]). The rules are the project
 //!   kernel's effective set (parent policy plus overlay, so an overlay deny
 //!   on `cogbus.*` applies) or the user daemon's gate rules, as of daemon
 //!   start. Decisions are not chained (ADR-122: no chain event per
@@ -45,7 +46,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::SystemTime;
 
-use clawft_kernel::governance::{GovernanceDecision, GovernanceEngine, GovernanceRequest, GovernanceRule};
+use clawft_kernel::governance::{GovernanceEngine, GovernanceRule};
+
+use crate::cogbus_governance::BusAsk;
 use serde::Deserialize;
 use weftos_cogbus::{BusAction, BusPolicy, BusRequest, Grant};
 
@@ -254,23 +257,8 @@ impl CogbusPolicy {
 
     fn kernel(&self, r: &BusRequest<'_>) -> Result<(), String> {
         let Some(engine) = &self.engine else { return Ok(()) };
-        let mut req = GovernanceRequest::new(r.instance_id, r.action.as_str())
-            .with_context_entry("tool", r.topic)
-            .with_context_entry("cog_id", r.cog_id)
-            .with_context_entry("schema", r.schema);
-        if let Some(p) = r.project_id {
-            req = req.with_context_entry("cog_project", p);
-        }
-        if let Some(p) = r.topic_project {
-            req = req.with_context_entry("topic_project", p);
-        }
-        match engine.evaluate(&req).decision {
-            GovernanceDecision::Permit | GovernanceDecision::PermitWithWarning(_) => Ok(()),
-            GovernanceDecision::Deny(why) => Err(why),
-            // Nobody answers an approval on a socket: refused.
-            GovernanceDecision::EscalateToHuman(why) => Err(format!("needs approval: {why}")),
-            other => Err(format!("governance answered {other:?}")),
-        }
+        let ask = BusAsk { instance: r.instance_id, action: r.action.as_str(), topic: r.topic, cog_id: r.cog_id, schema: r.schema };
+        crate::cogbus_governance::evaluate(engine, ask)
     }
 }
 

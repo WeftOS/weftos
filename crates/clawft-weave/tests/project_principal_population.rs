@@ -351,6 +351,10 @@ const NEW_SITES: &[&str] = &[
     "clawft-kernel/src/hnsw_service.rs",
     "clawft-kernel/src/causal.rs",
     "clawft-kernel/src/wasm_runner/runner.rs",
+    // cogbus (ADR-122 B3): agent = the token-authenticated cog instance;
+    // project and instance principal from `new`'s `attributed()` (the
+    // kernel attestation); context is topic, cog id and schema only.
+    "clawft-weave/src/cogbus_governance.rs",
 ];
 /// Production `GovernanceRequest { .. }` literal sites.
 const LITERAL_SITES: &[&str] = &["clawft-kernel/src/gate.rs", "clawft-kernel/src/workload_governance/gate.rs"];
