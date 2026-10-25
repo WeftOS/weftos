@@ -1,0 +1,18 @@
+{
+  "source_id": "venq-bme-0",
+  "node_id": "0123456789abcdef0123456789abcdef",
+  "t_ns": 1759500000000000000,
+  "seq": 1,
+  "pack": [
+    {
+      "n": "temperature",
+      "u": "Cel",
+      "v": 21.5
+    },
+    {
+      "n": "humidity",
+      "u": "%RH",
+      "v": 40.2
+    }
+  ]
+}

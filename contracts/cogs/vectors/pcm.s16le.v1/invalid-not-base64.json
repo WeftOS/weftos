@@ -1,0 +1,10 @@
+{
+  "source_id": "venq-mic-0",
+  "node_id": "0123456789abcdef0123456789abcdef",
+  "t_ns": 1759500000000000000,
+  "seq": 1,
+  "rate_hz": 16000,
+  "channels": 1,
+  "frames": 320,
+  "data_b64": "***"
+}

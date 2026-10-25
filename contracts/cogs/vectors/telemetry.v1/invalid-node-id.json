@@ -1,0 +1,23 @@
+{
+  "source_id": "venq-board-0",
+  "node_id": "not-hex",
+  "t_ns": 1759500000000000000,
+  "seq": 1,
+  "items": [
+    {
+      "name": "power.draw",
+      "value": 9.4,
+      "unit": "W"
+    },
+    {
+      "name": "soc.temp",
+      "value": 61.0,
+      "unit": "Cel"
+    },
+    {
+      "name": "queue.depth",
+      "value": 0,
+      "unit": ""
+    }
+  ]
+}

@@ -44,6 +44,7 @@ pub mod audio_buffer;
 /// Multimodal turn content + voice chat metadata keys (WEFT-350).
 pub mod turn_content;
 pub mod canvas;
+pub mod cog_topics;
 pub mod company;
 pub mod config;
 pub mod cron;
