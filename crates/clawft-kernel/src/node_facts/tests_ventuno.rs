@@ -23,9 +23,11 @@ fn ventuno() -> FakeHost {
             &[
                 "null", "fastrpc-adsp-secure", "fastrpc-cdsp", "fastrpc-cdsp-secure", "fastrpc-gdsp0",
                 "gpiochip0", "gpiochip1", "gpiochip2", "gpiochip3", "i2c-12", "i2c-13", "i2c-14",
-                "ttyS0", "ttyS1", "ttySTM0", "ttyGS0",
+                "ttyS0", "ttyS1", "ttySTM0", "ttyGS0", "ttyMSM0", "ttyUSB0",
             ],
         )
+        .file("/sys/class/tty/console/active", "ttyMSM0\n")
+        .file("/proc/cmdline", "root=/dev/mmcblk0p71 console=ttyMSM0,115200n8 quiet\n")
         .dir(V4L, &["video32", "video33"])
         .file(&format!("{V4L}/video32/device/uevent"), "DRIVER=msm_vidc_v4l2\nOF_NAME=video-codec\n")
         .file(&format!("{V4L}/video33/device/uevent"), "DRIVER=msm_vidc_v4l2\n")
@@ -117,7 +119,12 @@ fn ventuno_npu_codec_audio_buses_mcu_power() {
 
     assert_eq!(strs(get(caps, "bus.i2c").unwrap(), "devices"), ["i2c-12", "i2c-13", "i2c-14"]);
     assert_eq!(strs(get(caps, "bus.gpio").unwrap(), "devices").len(), 4);
-    assert!(get(caps, "bus.uart").is_none(), "ttyS*, ttySTM0 and ttyGS0 are not advertised");
+    assert_eq!(
+        strs(get(caps, "bus.uart").unwrap(), "devices"),
+        ["ttyUSB0"],
+        "ttyS*, ttySTM0 (MCU link), ttyGS0 and the console ttyMSM0 are not advertised"
+    );
+    assert!(c.notes.iter().any(|n| n.probe == "bus.uart" && n.note.contains("ttyMSM0")));
     assert!(get(caps, "bus.spi").is_none() && get(caps, "bus.can").is_none());
     assert_eq!(get(caps, "bus.mcu").unwrap().attrs.get("bridge"), Some(&AttrValue::Str("arduino-router".into())));
     assert_eq!(strs(get(caps, "power.monitor").unwrap(), "sensors"), ["ina232"]);

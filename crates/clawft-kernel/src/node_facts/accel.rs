@@ -128,8 +128,8 @@ fn coral(host: &dyn ProbeHost, c: &mut Collected) {
 fn qcom_soc(host: &dyn ProbeHost) -> Option<String> {
     host.read_file("/proc/device-tree/compatible")?
         .split('\0')
-        .filter_map(|e| e.strip_prefix("qcom,"))
-        .last()
+        .rev()
+        .find_map(|e| e.strip_prefix("qcom,"))
         .map(str::to_string)
 }
 

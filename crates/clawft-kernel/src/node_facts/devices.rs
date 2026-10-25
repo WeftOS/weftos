@@ -13,6 +13,7 @@ use super::probe::{Collected, cap, str_list};
 
 /// UART name prefixes worth advertising. `ttyS*` is left out (the 8250 driver
 /// registers dozens of placeholder ports) and so is `ttySTM*`, the MCU link.
+/// Kernel console ports are removed by [`console_ttys`].
 const UART_PREFIXES: &[&str] = &["ttyUSB", "ttyACM", "ttyAMA", "ttyHS", "ttyMSM"];
 
 /// MCU bridge sockets: `(path, bridge name)`.
@@ -62,11 +63,15 @@ fn buses(host: &dyn ProbeHost, c: &mut Collected) {
     push_bus(c, "bus.i2c", &pick(&|n| n.starts_with("i2c-")));
     push_bus(c, "bus.spi", &pick(&|n| n.starts_with("spidev")));
     push_bus(c, "bus.gpio", &pick(&|n| n.starts_with("gpiochip")));
+    let consoles = console_ttys(host);
     push_bus(
         c,
         "bus.uart",
-        &pick(&|n| UART_PREFIXES.iter().any(|p| n.starts_with(p))),
+        &pick(&|n| UART_PREFIXES.iter().any(|p| n.starts_with(p)) && !consoles.iter().any(|t| t == n)),
     );
+    if !consoles.is_empty() {
+        c.note("bus.uart", format!("kernel console port(s) not advertised: {}", consoles.join(", ")));
+    }
     let can: Vec<String> = host
         .list_dir("/sys/class/net")
         .unwrap_or_default()
@@ -77,6 +82,26 @@ fn buses(host: &dyn ProbeHost, c: &mut Collected) {
         })
         .collect();
     push_bus(c, "bus.can", &can);
+}
+
+/// TTYs the kernel uses as its console (`/sys/class/tty/console/active` and
+/// `console=` on the command line); a cog must not open them.
+pub fn console_ttys(host: &dyn ProbeHost) -> Vec<String> {
+    let mut out: Vec<String> = host
+        .read_file("/sys/class/tty/console/active")
+        .unwrap_or_default()
+        .split_whitespace()
+        .map(str::to_string)
+        .collect();
+    for arg in host.read_file("/proc/cmdline").unwrap_or_default().split_whitespace() {
+        if let Some(v) = arg.strip_prefix("console=") {
+            let tty = v.split(',').next().unwrap_or("").to_string();
+            if !tty.is_empty() && !out.contains(&tty) {
+                out.push(tty);
+            }
+        }
+    }
+    out
 }
 
 fn mcu(host: &dyn ProbeHost, c: &mut Collected) {
