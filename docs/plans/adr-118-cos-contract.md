@@ -120,6 +120,7 @@ every block below and requires it to round-trip through the code's event type):
 | `checklist` | `id`; `title`; `items`: `[{id, text, done}]` | sent whole on every change |
 | `steps` | `id`; `title`; `steps`: `[string]`; `current`: 0-based number | numbered instructions |
 | `ask` | `id`; `question`; `explain`; `choices`: `[{n, caption}]` (2 to 6, `n` from 1); `index`; `total` | one survey question |
+| `card` | `card`: `needs_you`\|`now`\|`waiting_on`\|`eod`\|`clear`; `title`, `detail`, `alert`, `reason`: strings, each omitted when empty; `ttl_minutes`: number, omitted when 0 | a card the chief of staff put on the e-ink glance panel on purpose (additive). It stays up for `ttl_minutes` or until a `clear`; consoles may ignore it |
 
 ```json cos-event
 {"kind": "state", "state": "thinking"}
@@ -153,6 +154,9 @@ every block below and requires it to round-trip through the code's event type):
 ```
 ```json cos-event
 {"kind": "steps", "id": "flash", "title": "Flash the pad", "steps": ["Plug it in", "Run the flasher"], "current": 0}
+```
+```json cos-event
+{"kind": "card", "card": "needs_you", "title": "Ship rc.16?", "detail": "A: ship / B: soak a day", "ttl_minutes": 240, "reason": "release blocks on this"}
 ```
 ```json cos-event
 {"kind": "ask", "id": "q1", "question": "Which first?", "explain": "Pick one.", "choices": [{"n": 1, "caption": "Pad"}, {"n": 2, "caption": "Glasses"}], "index": 1, "total": 2}

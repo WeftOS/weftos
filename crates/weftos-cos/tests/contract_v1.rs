@@ -33,7 +33,7 @@ fn blocks(tag: &str) -> Vec<Value> {
 
 /// Every `kind` the event type can serialize. Adding a variant without
 /// documenting it fails `every_event_kind_is_documented`.
-const KINDS: &[&str] = &["state", "status", "token", "message", "tool", "page", "layout", "checklist", "steps", "ask"];
+const KINDS: &[&str] = &["state", "status", "token", "message", "tool", "page", "layout", "checklist", "steps", "ask", "card"];
 
 /// Exhaustive on purpose: a new `Event` variant fails to compile here until
 /// it is added to `KINDS` and documented in §3.2.
@@ -49,6 +49,7 @@ fn kind_of(e: &Event) -> &'static str {
         Event::Checklist { .. } => "checklist",
         Event::Steps { .. } => "steps",
         Event::Ask { .. } => "ask",
+        Event::Card { .. } => "card",
     }
 }
 

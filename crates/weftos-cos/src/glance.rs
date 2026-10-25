@@ -9,11 +9,12 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 
-use crate::events::{AgentState, Event};
+use crate::events::{AgentState, CardKind, Event};
 
 /// Longest string the bridge sends for any free-text field; the firmware
 /// truncates again to what fits.
@@ -36,6 +37,22 @@ pub struct Glance {
     blocked_reason: String,
     #[serde(skip)]
     tool_alert: String,
+    #[serde(skip)]
+    base_task: String,
+    #[serde(skip)]
+    base_next: String,
+    #[serde(skip)]
+    card: Option<LiveCard>,
+}
+
+/// A `glance.card` card: owns `task`/`next`/`alert` until it expires.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LiveCard {
+    kind: CardKind,
+    title: String,
+    detail: String,
+    alert: String,
+    expires: DateTime<Utc>,
 }
 
 impl Default for Glance {
@@ -51,6 +68,9 @@ impl Default for Glance {
             guide_active: false,
             blocked_reason: String::new(),
             tool_alert: String::new(),
+            base_task: String::new(),
+            base_next: String::new(),
+            card: None,
         }
     }
 }
@@ -59,6 +79,11 @@ impl Glance {
     /// Fold one event into the glance. Unknown shapes never reach here
     /// (the stream parser drops them), so every arm is a deliberate rule.
     pub fn apply(&mut self, ev: &Event) {
+        self.apply_at(ev, Utc::now());
+    }
+
+    /// [`Glance::apply`] with an explicit clock, for tests and replays.
+    pub fn apply_at(&mut self, ev: &Event, now: DateTime<Utc>) {
         match ev {
             Event::State { state, reason } => {
                 self.state = match state {
@@ -81,7 +106,7 @@ impl Glance {
             }
             Event::Status { task, model, .. } => {
                 if !self.guide_active {
-                    self.task = task.clone();
+                    self.base_task = task.clone();
                 }
                 self.model = model.clone();
             }
@@ -92,13 +117,13 @@ impl Glance {
             },
             Event::Steps { title, steps, current, .. } => {
                 self.guide_active = true;
-                self.task = title.clone();
-                self.next = steps.get(*current).cloned().unwrap_or_else(|| "done".into());
+                self.base_task = title.clone();
+                self.base_next = steps.get(*current).cloned().unwrap_or_else(|| "done".into());
             }
             Event::Checklist { title, items, .. } => {
                 self.guide_active = true;
-                self.task = title.clone();
-                self.next = items
+                self.base_task = title.clone();
+                self.base_next = items
                     .iter()
                     .find(|i| !i.done)
                     .map(|i| i.text.clone())
@@ -106,17 +131,53 @@ impl Glance {
             }
             Event::Ask { question, .. } => {
                 self.guide_active = true;
-                self.next = question.clone();
+                self.base_next = question.clone();
             }
             Event::Message { text, is_final: true, .. } if !self.guide_active => {
-                self.next = text.clone();
+                self.base_next = text.clone();
+            }
+            Event::Card { card: CardKind::Clear, .. } => self.card = None,
+            Event::Card { card, title, detail, alert, ttl_minutes, .. } => {
+                let ttl = if *ttl_minutes == 0 { card.default_ttl_minutes() } else { *ttl_minutes };
+                self.card = Some(LiveCard {
+                    kind: *card,
+                    title: title.clone(),
+                    detail: detail.clone(),
+                    alert: alert.clone(),
+                    expires: now + chrono::Duration::minutes(i64::from(ttl)),
+                });
             }
             _ => {}
         }
+        self.render(now);
+    }
+
+    /// Expire a card whose time is up. Returns true when it just went, so
+    /// the bridge can redraw: expiry has no event of its own.
+    pub fn tick(&mut self, now: DateTime<Utc>) -> bool {
+        let expired = self.card.as_ref().is_some_and(|c| now >= c.expires);
+        if expired {
+            self.render(now);
+        }
+        expired
+    }
+
+    /// Recompute the displayed `task`/`next`/`alert` from the base fields,
+    /// the live card (if any) and the alerts. Agent state is never touched.
+    fn render(&mut self, now: DateTime<Utc>) {
+        if self.card.as_ref().is_some_and(|c| now >= c.expires) {
+            self.card = None;
+        }
+        let (task, next, card_alert) = match &self.card {
+            Some(c) => (format!("{}: {}", c.kind.prefix(), c.title), c.detail.clone(), Some(c.alert.clone())),
+            None => (self.base_task.clone(), self.base_next.clone(), None),
+        };
+        self.task = task;
+        self.next = next;
         self.alert = if !self.blocked_reason.is_empty() {
             self.blocked_reason.clone()
         } else {
-            self.tool_alert.clone()
+            card_alert.unwrap_or_else(|| self.tool_alert.clone())
         };
     }
 
@@ -293,7 +354,7 @@ pub async fn run(args: GlanceSerialArgs) -> anyhow::Result<()> {
                 Some(None) => {
                     g.state = "blocked".into();
                     g.blocked_reason = "agent link down".into();
-                    g.alert = g.blocked_reason.clone();
+                    g.render(Utc::now());
                     dirty = true;
                     deadline = Instant::now() + DEBOUNCE;
                 }
@@ -301,6 +362,10 @@ pub async fn run(args: GlanceSerialArgs) -> anyhow::Result<()> {
             },
             _ = tokio::time::sleep_until(deadline.max(Instant::now())), if dirty => {}
             _ = tokio::time::sleep(Duration::from_secs(5)) => {}
+        }
+        if g.tick(Utc::now()) {
+            dirty = true;
+            deadline = Instant::now() + DEBOUNCE;
         }
         let now = Instant::now();
         let changed = sent.as_ref().map(|s| s.content() != g.content()).unwrap_or(true);

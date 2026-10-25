@@ -105,6 +105,7 @@ impl CosAgent {
         let quick_model = routes.quick().model_id.clone();
         let ui = UiHandle::new(tx.clone());
         let tools = crate::tools::ui::register(tools, &ui);
+        let tools = crate::tools::glance::register(tools, &ui);
         Self {
             inner: Arc::new(Inner {
                 routes,
