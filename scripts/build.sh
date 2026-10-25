@@ -1608,6 +1608,7 @@ CARGO_AUDIT_IGNORES=(
     --ignore RUSTSEC-2024-0449   # unsafe-libyaml unmaintained, via deprecated serde_yaml (board card: migrate off serde_yaml)
     # 2026-10 residuals, justified in docs/security/cargo-audit-residual.md
     --ignore RUSTSEC-2023-0071   # rsa Marvin timing: no fix; jsonwebtoken rust_crypto only verifies RS256 with public keys
+    --ignore RUSTSEC-2026-0387   # crypto-bigint 0.5 timing via jsonwebtoken rust_crypto -> p256/p384; ECDSA never runs (Teams JWT accepts RS256 only)
     --ignore RUSTSEC-2026-0367   # zip 1.1.4 via candle-core (optional `candle` feature): extract() never called
     --ignore RUSTSEC-2026-0368   # zip 1.1.4 (same)
     --ignore RUSTSEC-2026-0369   # zip 1.1.4 (same)
