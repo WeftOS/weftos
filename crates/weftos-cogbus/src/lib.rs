@@ -15,9 +15,12 @@
 //! - [`audit`]: governance calls, the refusal rate limit and the
 //!   repeated-refusal stop.
 //!
-//! Phase B1 carries `reading` topics only. Stream rings (B2), the ingest
-//! compatibility listener (B4), blobs (B5) and mesh topics (B6) are other
-//! phases.
+//! The broker carries `reading` topics (B1), the daemon's built-in sinks
+//! and internal publishers (B4: the ingest compatibility listener publishes
+//! `store.vector`, the store sink takes `store.vector/*`; see
+//! [`Broker::add_sink`] and [`Broker::publish_internal`]), and governance,
+//! grants and the activity log (B3). Stream rings (B2), blobs (B5) and mesh
+//! topics (B6) are other phases.
 
 pub mod audit;
 pub mod broker;
@@ -36,8 +39,12 @@ mod tests_broker;
 mod tests_policy;
 #[cfg(test)]
 mod tests_proto;
+#[cfg(test)]
+mod tests_sink;
 
-pub use broker::{Broker, BrokerConfig, BusError, InstanceSpec, Session, TopicRow};
+pub use broker::{
+    Broker, BrokerConfig, BusError, InstanceSpec, Reading, Session, SinkReading, TopicRow,
+};
 #[cfg(unix)]
 pub use client::{Client, ClientError, Subscription};
 pub use policy::{

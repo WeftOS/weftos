@@ -103,6 +103,8 @@ async fn a_placed_cog_is_registered_with_its_topics_and_handed_the_socket() {
     let r = bus.log.lock().unwrap()[0].clone();
     assert_eq!((r.instance_id.as_str(), r.cog_id.as_str()), (iid.as_str(), "bus-cog"));
     assert_eq!((r.project_id.as_deref(), r.uid), (Some(PROJECT), Some(4242)));
+    let ctl = SigningKey::from_bytes(&[62; 32]);
+    assert_eq!(r.controller_node, crate::node_id_from_pubkey(&ctl.verifying_key().to_bytes()), "the placing controller");
     assert_eq!(r.outputs.len(), 1);
     assert_eq!((r.outputs[0].topic.as_str(), r.outputs[0].schema.as_str(), r.outputs[0].class),
         ("telemetry", "telemetry.v1", TopicClass::Reading));

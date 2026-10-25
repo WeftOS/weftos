@@ -14,9 +14,13 @@
 //!   project-less instance shares the node's own bucket with other
 //!   project-less instances.
 //!
-//! On top of these, declare, the first publish on a topic and subscribe ask
-//! the governance policy ([`crate::audit`]). Every refusal goes through
-//! [`refuse`], which marks it for [`Broker::record_refusal`].
+//! The daemon's own services use [`sink`] (built-in subscribers across
+//! projects, internal publishers with no manifest) instead of a connection.
+//!
+//! On top of these, declare, a cog's first publish on a topic and subscribe
+//! ask the governance policy ([`crate::audit`]); internal publishers (`@...`)
+//! are not asked. Every refusal goes through [`refuse`], which marks it for
+//! [`Broker::record_refusal`].
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -27,11 +31,17 @@ use tokio::sync::{Notify, watch};
 
 use crate::audit::{Ext, granted};
 use crate::policy::{BusAction, BusRequest, Grant};
-use crate::proto::{Delivery, ErrorCode, InputSpec, MAX_BODY, OutputSpec};
+use crate::proto::{ErrorCode, InputSpec, MAX_BODY, OutputSpec};
 use crate::queue::SubQueue;
 use crate::types::token_hash;
 pub use crate::types::{BrokerConfig, BusError, InstanceSpec, Session, TopicRow, refuse, valid_source_id};
+pub use sink::{Reading, SinkReading};
+use sink::{Put, SinkSlot};
 
+#[path = "sink.rs"]
+mod sink;
+#[path = "rows.rs"]
+mod rows;
 
 struct Instance {
     spec: InstanceSpec,
@@ -76,6 +86,7 @@ struct State {
     topics: BTreeMap<(String, String), Topic>,
     subs: BTreeMap<u64, Sub>,
     next_sub: u64,
+    sinks: HashMap<String, SinkSlot>,
 }
 
 
@@ -319,66 +330,28 @@ impl Broker {
         }
         let project = spec.project_id.clone();
         let cog = spec.cog_id.clone();
-        let st = &mut *g;
         let key = (kind.to_string(), source_id.to_string());
-        let mine = st.topics.get(&key).and_then(|t| t.writer.as_deref()) == Some(me);
+        let mine = g.topics.get(&key).and_then(|t| t.writer.as_deref()) == Some(me);
         if !mine {
             let mut req = BusRequest::new(BusAction::Publish, me, &cog, project.as_deref());
-            req.topic_project = st.topics.get(&key).and_then(|t| t.project_id.as_deref());
+            req.topic_project = g.topics.get(&key).and_then(|t| t.project_id.as_deref());
             self.ext.gate(&req.on(&topic, schema))?;
         }
-        let t = st.topics.entry(key).or_insert_with(|| Topic {
-            schema: schema.to_string(),
-            class: TopicClass::Reading,
-            writer: None,
-            project_id: project.clone(),
-            seq: 0,
-            messages: 0,
-            drops: 0,
-        });
-        if t.writer.as_deref().is_some_and(|w| w != me) {
-            return Err(no(bad(
-                ErrorCode::WriterConflict,
-                format!("{topic} is written by another instance"),
-            )));
-        }
-        if t.project_id != project {
-            return Err(no(bad(
-                ErrorCode::CrossProject,
-                format!("{topic} belongs to another project"),
-            )));
-        }
-        if t.schema != schema {
-            return Err(no(bad(
-                ErrorCode::SchemaMismatch,
-                format!("{topic} carries {}", t.schema),
-            )));
-        }
-        t.writer = Some(me.to_string());
-        t.seq += 1;
-        t.messages += 1;
-        let d = Delivery {
-            sub: 0,
-            topic: topic.clone(),
-            schema: schema.to_string(),
+        let r = Reading {
+            kind: kind.to_string(),
             source_id: source_id.to_string(),
-            node_id: self.cfg.node_id.clone(),
+            schema: schema.to_string(),
             t_ns,
-            seq: t.seq,
-            recv_ns: now_ns(),
             body,
         };
-        for (id, sub) in &st.subs {
-            if sub.matches(kind, source_id, t)
-                && sub.queue.push(Delivery {
-                    sub: *id,
-                    ..d.clone()
-                })
-            {
-                t.drops += 1;
-            }
-        }
-        Ok(t.seq)
+        let put = Put {
+            writer: me,
+            instance: me,
+            project,
+            r,
+            to_sink: true,
+        };
+        self.put(&mut g, put).map(|d| d.seq)
     }
 
     /// Subscribe to `topic` (`<kind>/<source_id>` or `<kind>/*`); returns
@@ -489,34 +462,6 @@ impl Broker {
         for id in s.subs.keys() {
             g.subs.remove(id);
         }
-    }
-
-    /// Every topic (the operator view).
-    pub fn snapshot(&self) -> Vec<TopicRow> {
-        self.rows(|_| true)
-    }
-
-    /// Topics of the session's project.
-    pub fn list_for(&self, s: &Session) -> Vec<TopicRow> {
-        self.rows(|p| p == s.project_id.as_ref())
-    }
-
-    fn rows(&self, keep: impl Fn(Option<&String>) -> bool) -> Vec<TopicRow> {
-        let g = self.lock();
-        g.topics
-            .iter()
-            .filter(|(_, t)| keep(t.project_id.as_ref()))
-            .map(|((kind, src), t)| TopicRow {
-                topic: format!("{kind}/{src}"),
-                schema: t.schema.clone(),
-                class: t.class,
-                writer: t.writer.clone(),
-                project_id: t.project_id.clone(),
-                subscribers: g.subs.values().filter(|s| s.matches(kind, src, t)).count(),
-                messages: t.messages,
-                drops: t.drops,
-            })
-            .collect()
     }
 }
 

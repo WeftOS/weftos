@@ -107,9 +107,10 @@ impl Tracker {
                 Some(0)
             }
         };
-        // An unknown token has no instance to stop.
+        // An unknown token, or an internal publisher (`@...`), has no
+        // instance to stop.
         let mut stop = None;
-        if instance != "-" && lim.stop_after > 0 {
+        if instance != "-" && !instance.starts_with('@') && lim.stop_after > 0 {
             let q = self.strikes.entry(instance.to_string()).or_default();
             q.push_back(now);
             while q

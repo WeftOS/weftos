@@ -76,11 +76,11 @@ fn readme_names_every_schema() {
 }
 
 #[test]
-fn registry_has_ten_unique_ids() {
+fn registry_has_eleven_unique_ids() {
     let mut ids = SCHEMA_IDS.to_vec();
     ids.sort_unstable();
     ids.dedup();
-    assert_eq!(ids.len(), 10);
+    assert_eq!(ids.len(), 11);
     assert!(is_registered("senml.v1") && !is_registered("senml.v2"));
 }
 
@@ -109,4 +109,14 @@ fn class_and_policy_parse() {
     assert_eq!(InputPolicy::parse("drop-oldest"), Some(InputPolicy::DropOldest));
     assert_eq!(InputPolicy::default(), InputPolicy::DropOldest);
     assert_eq!(InputPolicy::parse("drop"), None);
+}
+
+#[test]
+fn store_vector_is_the_ingest_body_with_an_envelope() {
+    let mut msg = load(&vector_files("store.vector.v1", "valid-one")[0]);
+    let back = check_message("store.vector.v1", &msg).unwrap();
+    assert_eq!(back["vectors"][0][1].as_array().unwrap().len(), 8);
+    // One value past f32 is refused even though it is a finite f64.
+    msg["vectors"][0][1][0] = json!(1.0e39);
+    assert!(check_message("store.vector.v1", &msg).is_err());
 }

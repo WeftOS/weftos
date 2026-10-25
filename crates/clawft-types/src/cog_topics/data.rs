@@ -1,5 +1,7 @@
-//! Reading-shaped cog schemas: SenML packs, CAN frames, transcripts and
-//! telemetry lists.
+//! Reading-shaped cog schemas: SenML packs, CAN frames, transcripts,
+//! telemetry lists and store vectors.
+
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
@@ -182,6 +184,61 @@ impl Telemetry {
             if it.unit.chars().count() > 16 {
                 return fail(format!("items[{i}].unit longer than 16 chars"));
             }
+        }
+        Ok(())
+    }
+}
+
+/// Most vectors in one `store.vector.v1` reading (the ingest bridge's batch limit).
+pub const MAX_STORE_VECTORS: usize = 256;
+
+/// `store.vector.v1`: 8-float feature vectors for the placing project's store
+/// (ADR-122 section 9). The body is the ingest bridge's request body with the
+/// envelope beside it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StoreVector {
+    /// Common fields.
+    #[serde(flatten)]
+    pub env: Envelope,
+    /// 1..=256 `[id, [8 values]]` pairs; values are f32 held as JSON numbers.
+    pub vectors: Vec<(u64, [f64; 8])>,
+    /// Skip vectors the store already holds (absent: false).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dedup: Option<bool>,
+    /// Named values the producer computed beside the vectors, at most 32;
+    /// carried to subscribers, not written to the store.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metrics: Option<BTreeMap<String, f64>>,
+}
+
+impl StoreVector {
+    /// Check the batch size, that every value is a finite f32, and the metrics.
+    pub fn validate(&self) -> Check {
+        self.env.validate()?;
+        if self.vectors.is_empty() || self.vectors.len() > MAX_STORE_VECTORS {
+            return fail(format!("vectors must hold 1..={MAX_STORE_VECTORS} entries"));
+        }
+        let lim = f64::from(f32::MAX);
+        for (i, (_, vals)) in self.vectors.iter().enumerate() {
+            if vals.iter().any(|v| !v.is_finite() || v.abs() > lim) {
+                return fail(format!("vectors[{i}] values must be finite f32"));
+            }
+        }
+        let metrics = self.metrics.iter().flatten();
+        if metrics.clone().count() > 32 {
+            return fail("metrics must hold at most 32 entries");
+        }
+        for (name, v) in metrics {
+            let b = name.as_bytes();
+            let name_ok = !b.is_empty()
+                && b.len() <= 64
+                && b[0].is_ascii_lowercase()
+                && b.iter()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || b"_.".contains(c));
+            if !name_ok {
+                return fail(format!("metric name {name:?} is not valid"));
+            }
+            in_range(&format!("metrics.{name}"), *v, -1.0e18, 1.0e18)?;
         }
         Ok(())
     }

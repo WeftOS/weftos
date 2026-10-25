@@ -375,4 +375,7 @@ fn refusals_outside_the_window_do_not_add_up() {
     );
     assert_eq!(t.note(&lim, "i1", "x", "t", 1_890).stop, Some(3));
     assert_eq!(t.note(&lim, "-", "x", "t", 1_895).stop, None);
+    for ms in 0..10 {
+        assert_eq!(t.note(&lim, "@ingest-bridge", "x", "t", 2_000 + ms).stop, None);
+    }
 }
