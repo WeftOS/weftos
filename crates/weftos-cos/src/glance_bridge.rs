@@ -70,6 +70,33 @@ fn open_port(port: &Path) -> std::io::Result<std::fs::File> {
     std::fs::OpenOptions::new().write(true).open(port)
 }
 
+/// The live card from `GET /v1/cos/glance`, as an event with its remaining time.
+async fn fetch_card(http: &reqwest::Client, url: &str) -> Option<Event> {
+    let snap: serde_json::Value = http.get(format!("{url}/v1/cos/glance")).timeout(Duration::from_secs(5)).send().await.ok()?.json().await.ok()?;
+    card_from_snapshot(&snap, Utc::now())
+}
+
+/// Build the `card` event for the snapshot's card, if it is still live.
+pub(crate) fn card_from_snapshot(snap: &serde_json::Value, now: chrono::DateTime<Utc>) -> Option<Event> {
+    let c = snap.get("card").filter(|c| c.is_object())?;
+    let expires = chrono::DateTime::parse_from_rfc3339(c["expires_at"].as_str()?).ok()?.with_timezone(&Utc);
+    let left = (expires - now).num_seconds();
+    if left <= 0 {
+        return None;
+    }
+    let s = |k: &str| c[k].as_str().unwrap_or_default().to_string();
+    Some(Event::Card {
+        card: crate::events::CardKind::parse(c["kind"].as_str()?)?,
+        id: s("id"),
+        title: s("title"),
+        detail: s("detail"),
+        alert: s("alert"),
+        options: c["options"].as_array().map(|a| a.iter().filter_map(|o| o.as_str().map(String::from)).collect()).unwrap_or_default(),
+        ttl_minutes: ((left + 59) / 60) as u32,
+        reason: s("reason"),
+    })
+}
+
 /// SSE reader task: pushes events, and `None` whenever the link drops.
 async fn read_events(url: String, tx: mpsc::Sender<Option<Event>>) {
     let http = reqwest::Client::new();
@@ -79,7 +106,11 @@ async fn read_events(url: String, tx: mpsc::Sender<Option<Event>>) {
         {
             {
                 let mut parser = SseParser::default();
-                // Connected: clear a stale "link down" alert.
+                // Connected: restore a live card the agent kept, then clear a
+                // stale "link down" alert.
+                if let Some(card) = fetch_card(&http, &url).await {
+                    let _ = tx.send(Some(card)).await;
+                }
                 let _ = tx.send(Some(Event::state(AgentState::Idle))).await;
                 while let Ok(Some(chunk)) = resp.chunk().await {
                     for ev in parser.feed(&String::from_utf8_lossy(&chunk)) {
@@ -125,7 +156,8 @@ pub async fn run(args: GlanceSerialArgs) -> anyhow::Result<()> {
     let art_cfg = cfg.art.clone();
     let art_on = art_cfg.url.is_some();
     let status_path = args.status_file.clone().unwrap_or_else(|| cfg.devices.glance_status.clone());
-    let art_state_path = status_path.with_file_name("glance.art.json");
+    let art_state_path = status_path.with_file_name(crate::glance_store::ART_META_FILE);
+    let art_png_path = status_path.with_file_name(crate::glance_store::ART_PNG_FILE);
     let mut sched = ArtSchedule::new(Utc::now(), glance_art::load_last_art(&art_state_path));
     let (art_tx, mut art_rx) = mpsc::channel::<(u64, Result<ArtImage, String>)>(2);
     let mut pending_art: Option<ArtImage> = None;
@@ -231,7 +263,10 @@ pub async fn run(args: GlanceSerialArgs) -> anyhow::Result<()> {
         if let Some(img) = art_img {
             tracing::info!("glance art: {}", img.caption);
             sched.shown(Utc::now());
-            glance_art::save_last_art(&art_state_path, Utc::now());
+            // The phone reads these from the agent: png first, then the meta
+            // that says it exists.
+            let _ = crate::glance_store::write_private(&art_png_path, &img.png);
+            glance_art::save_last_art(&art_state_path, Utc::now(), &img.caption);
             art_caption = Some(img.caption);
             art_error = None;
             // Whatever status goes out next must be sent in full.
@@ -250,5 +285,37 @@ pub async fn run(args: GlanceSerialArgs) -> anyhow::Result<()> {
 fn preempt_art(sched: &mut ArtSchedule, g: &mut Glance) {
     if sched.activity(Utc::now()) {
         g.redraw = true;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn now() -> chrono::DateTime<Utc> {
+        chrono::DateTime::parse_from_rfc3339("2026-10-25T09:00:00Z").unwrap().with_timezone(&Utc)
+    }
+
+    #[test]
+    fn a_live_snapshot_card_becomes_an_event_with_its_remaining_time() {
+        let snap = json!({"card": {"id": "ab12cd34", "kind": "needs_you", "title": "Ship?", "detail": "", "alert": "", "options": ["ship", "wait"],
+            "reason": "r", "expires_at": "2026-10-25T09:30:30Z"}, "fields": {}, "art": null});
+        match card_from_snapshot(&snap, now()).unwrap() {
+            Event::Card { id, options, ttl_minutes, title, .. } => assert_eq!((id.as_str(), options, ttl_minutes, title.as_str()), ("ab12cd34", vec!["ship".to_string(), "wait".into()], 31, "Ship?")),
+            e => panic!("{e:?}"),
+        }
+        // The restored card shows up on the panel with its options.
+        let mut g = Glance::default();
+        g.apply_at(&card_from_snapshot(&snap, now()).unwrap(), now());
+        assert_eq!((g.task.as_str(), g.next.as_str()), ("NEEDS YOU: Ship?", "A: ship / B: wait"));
+    }
+
+    #[test]
+    fn no_card_or_an_expired_one_restores_nothing() {
+        assert!(card_from_snapshot(&json!({"card": null}), now()).is_none());
+        assert!(card_from_snapshot(&json!({}), now()).is_none());
+        let old = json!({"card": {"id": "x", "kind": "now", "title": "t", "expires_at": "2026-10-25T08:59:00Z"}});
+        assert!(card_from_snapshot(&old, now()).is_none());
     }
 }

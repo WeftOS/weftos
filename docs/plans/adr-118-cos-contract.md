@@ -81,10 +81,12 @@ code disagree.
 | Route | Request body | Success | Refusals |
 |---|---|---|---|
 | `POST /v1/cos/utterance` | `{"text": string, "source": "voice"\|"typed"\|"touch", "endpoint": string}`; `text` is 1 to 8000 characters after trimming; `endpoint` is optional (v1.1, default `host`) | `202 {"turn_id": string}` | `400` empty or longer text, unknown `source`, invalid `endpoint`, malformed JSON; `401`, `403` off loopback (3.3) |
-| `POST /v1/cos/answer` | `{"kind": "answer"\|"toggle"\|"step"\|"skip"\|"back", "id": string, "value": any}`; `value` defaults to `null` | `202 {"turn_id": string}` | `400` unknown or stale `id`, a `value` the kind cannot use, malformed JSON |
+| `POST /v1/cos/answer` | `{"kind": "answer"\|"toggle"\|"step"\|"skip"\|"back", "id": string, "value": any}`; `value` defaults to `null`; `id` may also be a glance card id (3.2): `value` is then the 1-based option number or the option text (any non-empty text up to 200 characters when the card has no options), the card is cleared, and the agent runs the turn `Answer to card "<title>": <option>` attributed to the caller's endpoint (additive) | `202 {"turn_id": string}` | `400` unknown or stale `id`, a `value` the kind cannot use, malformed JSON |
 | `POST /v1/cos/ptt` | `{"down": bool, "endpoint": "host"}`; `endpoint` is optional and may only be `host` | down: `202 {"active": true}`; up: `202 {"active": false, "posted": {"text": string, "turn_id": string}}` or `202 {"active": false, "nothing": "<reason>"}` | `503` the agent runs without `--mic`; `500` capture or STT failed; `400` malformed JSON or an `endpoint` other than `host`; `403` a remote endpoint's token (the microphone is the host's) |
 | `GET /v1/cos/events` | none | `200 text/event-stream` (see 3.2) | none |
 | `GET /v1/cos/turns?limit=N` | none; `limit` is 1 to 100, default 20 | `200 {"turns": [{"turn_id": string, "role": "user"\|"assistant", "endpoint": string, "text": string, "ts": RFC 3339}]}`, oldest first: the most recent final user and assistant messages (the agent keeps the last 200; `text` is redacted as on the event stream) | `400` a `limit` that is not a whole number from 1 to 100; `401` off loopback without a valid token (3.3) |
+| `GET /v1/cos/glance` | none | `200 {"card": {id, kind, title, detail, alert, options, reason, expires_at: RFC 3339}\|null, "fields": {state, task, next, alert, model, ts}, "art": {"caption": string, "at": RFC 3339, "png_url": string}\|null}`: the live glance card, what the e-ink panel shows, and the latest idle art. The card and art survive an agent restart (additive) | `401` as the other routes |
+| `GET /v1/cos/glance/art.png` | none | `200 image/png`, the latest art (additive) | `404` no art yet; `401` |
 | `GET /healthz` | none | `200 {"ok": true, "api": "cos.v1"}` | none |
 
 - **`turn_id`** is an opaque string (32 hex characters today). The events of the turn carry it.
@@ -120,7 +122,7 @@ every block below and requires it to round-trip through the code's event type):
 | `checklist` | `id`; `title`; `items`: `[{id, text, done}]` | sent whole on every change |
 | `steps` | `id`; `title`; `steps`: `[string]`; `current`: 0-based number | numbered instructions |
 | `ask` | `id`; `question`; `explain`; `choices`: `[{n, caption}]` (2 to 6, `n` from 1); `index`; `total` | one survey question |
-| `card` | `card`: `needs_you`\|`now`\|`waiting_on`\|`eod`\|`clear`; `title`, `detail`, `alert`, `reason`: strings, each omitted when empty; `ttl_minutes`: number, omitted when 0 | a card the chief of staff put on the e-ink glance panel on purpose (additive). It stays up for `ttl_minutes` or until a `clear`; consoles may ignore it |
+| `card` | `card`: `needs_you`\|`now`\|`waiting_on`\|`eod`\|`clear`; `id`: short hex naming the card (a `clear` carries the id it removes); `title`, `detail`, `alert`, `reason`: strings, each omitted when empty; `options`: up to 2 strings of at most 24 ASCII characters, omitted when empty; `ttl_minutes`: number, omitted when 0 | a card the chief of staff put on the e-ink glance panel on purpose (additive). It stays up for `ttl_minutes` or until a `clear`; consoles may ignore it |
 
 ```json cos-event
 {"kind": "state", "state": "thinking"}
@@ -156,7 +158,7 @@ every block below and requires it to round-trip through the code's event type):
 {"kind": "steps", "id": "flash", "title": "Flash the pad", "steps": ["Plug it in", "Run the flasher"], "current": 0}
 ```
 ```json cos-event
-{"kind": "card", "card": "needs_you", "title": "Ship rc.16?", "detail": "A: ship / B: soak a day", "ttl_minutes": 240, "reason": "release blocks on this"}
+{"kind": "card", "card": "needs_you", "id": "3fa81c0d", "title": "Ship rc.16?", "options": ["ship", "soak a day"], "ttl_minutes": 240, "reason": "release blocks on this"}
 ```
 ```json cos-event
 {"kind": "ask", "id": "q1", "question": "Which first?", "explain": "Pick one.", "choices": [{"n": 1, "caption": "Pad"}, {"n": 2, "caption": "Glasses"}], "index": 1, "total": 2}

@@ -180,3 +180,21 @@ async fn a_turn_streams_in_the_documented_order() {
     });
     assert_eq!(compact, ["state:thinking", "status", "token", "state:speaking", "message:true", "state:idle"]);
 }
+
+#[tokio::test]
+async fn glance_routes_answer_as_documented() {
+    assert!(DOC.contains("`GET /v1/cos/glance`") && DOC.contains("`GET /v1/cos/glance/art.png`") && DOC.contains("Answer to card"));
+    let (addr, _t) = serve().await;
+    let c = reqwest::Client::new();
+    let snap: Value = c.get(format!("http://{addr}/v1/cos/glance")).send().await.unwrap().json().await.unwrap();
+    for k in ["card", "fields", "art"] {
+        assert!(snap.get(k).is_some(), "{k}");
+    }
+    assert!(snap["card"].is_null() && snap["art"].is_null());
+    for k in ["state", "task", "next", "alert", "model", "ts"] {
+        assert!(snap["fields"].get(k).is_some(), "fields.{k}");
+    }
+    assert_eq!(c.get(format!("http://{addr}/v1/cos/glance/art.png")).send().await.unwrap().status(), 404);
+    let stale = c.post(format!("http://{addr}/v1/cos/answer")).json(&json!({"kind": "answer", "id": "deadbeef", "value": "ship"})).send().await.unwrap();
+    assert_eq!(stale.status(), 400);
+}

@@ -14,6 +14,7 @@ use super::{Gate, Tool, ToolOutcome, ToolRegistry, ToolSpec, arg_str, tool_err};
 use crate::CosError;
 use crate::events::{CardKind, Event};
 use crate::glance::ascii_clip;
+use crate::glance_store::{GlanceStore, StoredCard, new_card_id};
 use crate::guide::UiHandle;
 
 /// At most one non-clear card change this often.
@@ -24,15 +25,15 @@ pub const MAX_TTL_MINUTES: u32 = 1440;
 const MAX_TITLE: usize = 60;
 const MAX_DETAIL: usize = 60;
 const MAX_ALERT: usize = 40;
+const MAX_OPTIONS: usize = 2;
+const MAX_OPTION: usize = 24;
 
-pub fn register(reg: ToolRegistry, ui: &UiHandle) -> ToolRegistry {
-    reg.with(Arc::new(GlanceCard::new(ui.clone())))
+pub fn register(reg: ToolRegistry, ui: &UiHandle, store: &GlanceStore) -> ToolRegistry {
+    reg.with(Arc::new(GlanceCard::new(ui.clone(), store.clone())))
 }
 
 #[derive(Default)]
 struct Posted {
-    /// The live (last non-clear) card: kind, title, detail, alert, expiry.
-    current: Option<(CardKind, String, String, String, DateTime<Utc>)>,
     last_change: Option<DateTime<Utc>>,
     /// When each accepted card was posted, oldest first, last 24 h only.
     day: VecDeque<DateTime<Utc>>,
@@ -40,12 +41,13 @@ struct Posted {
 
 pub struct GlanceCard {
     ui: UiHandle,
+    store: GlanceStore,
     posted: Mutex<Posted>,
 }
 
 impl GlanceCard {
-    pub fn new(ui: UiHandle) -> Self {
-        Self { ui, posted: Mutex::new(Posted::default()) }
+    pub fn new(ui: UiHandle, store: GlanceStore) -> Self {
+        Self { ui, store, posted: Mutex::new(Posted::default()) }
     }
 
     /// Validate, rate limit and emit one card at `now`.
@@ -57,15 +59,16 @@ impl GlanceCard {
         let mut p = self.posted.lock().unwrap_or_else(|e| e.into_inner());
 
         if kind == CardKind::Clear {
-            p.current = None;
             drop(p);
-            self.ui.emit(Event::Card { card: kind, title: String::new(), detail: String::new(), alert: String::new(), ttl_minutes: 0, reason: reason.clone() });
+            let id = self.store.clear().map(|c| c.id).unwrap_or_default();
+            self.ui.emit(Event::Card { card: kind, id, title: String::new(), detail: String::new(), alert: String::new(), options: Vec::new(), ttl_minutes: 0, reason: reason.clone() });
             return Ok(ToolOutcome { summary: format!("card cleared ({})", ascii_clip(&reason, 80)), result: json!({"status": "cleared"}) });
         }
 
         let title = arg_str(args, "title").ok_or_else(|| tool_err(ID, "missing argument `title`"))?;
         let detail = arg_str(args, "detail").unwrap_or_default();
         let alert = arg_str(args, "alert").unwrap_or_default();
+        let options = options_arg(args)?;
         for (name, v, max) in [("title", &title, MAX_TITLE), ("detail", &detail, MAX_DETAIL), ("alert", &alert, MAX_ALERT)] {
             if v.chars().count() > max {
                 return Err(tool_err(ID, format!("`{name}` is {} chars; the panel shows about 26, keep it under {max}", v.chars().count())));
@@ -79,9 +82,8 @@ impl GlanceCard {
             },
         };
 
-        let same = |c: &(CardKind, String, String, String, DateTime<Utc>)| c.0 == kind && c.1 == title && c.2 == detail && c.3 == alert && now < c.4;
-        if p.current.as_ref().is_some_and(same) {
-            return Ok(ToolOutcome { summary: format!("card {} unchanged", kind.as_str()), result: json!({"status": "unchanged"}) });
+        if let Some(c) = self.store.live(now).filter(|c| c.kind == kind && c.title == title && c.detail == detail && c.alert == alert && c.options == options) {
+            return Ok(ToolOutcome { summary: format!("card {} unchanged", kind.as_str()), result: json!({"status": "unchanged", "id": c.id}) });
         }
         if let Some(last) = p.last_change
             && now - last < MIN_GAP
@@ -97,13 +99,42 @@ impl GlanceCard {
         }
         p.day.push_back(now);
         p.last_change = Some(now);
-        p.current = Some((kind, title.clone(), detail.clone(), alert.clone(), now + Duration::minutes(i64::from(ttl))));
         drop(p);
+        let id = new_card_id();
+        self.store.put(StoredCard {
+            id: id.clone(),
+            kind,
+            title: title.clone(),
+            detail: detail.clone(),
+            alert: alert.clone(),
+            options: options.clone(),
+            reason: reason.clone(),
+            expires_at: now + Duration::minutes(i64::from(ttl)),
+        });
 
         let summary = format!("card {}: {} (why: {}; ttl {ttl}m)", kind.as_str(), ascii_clip(&title, 60), ascii_clip(&reason, 100));
-        self.ui.emit(Event::Card { card: kind, title, detail, alert, ttl_minutes: ttl, reason });
-        Ok(ToolOutcome { summary, result: json!({"status": "shown", "kind": kind.as_str(), "ttl_minutes": ttl}) })
+        self.ui.emit(Event::Card { card: kind, id: id.clone(), title, detail, alert, options, ttl_minutes: ttl, reason });
+        Ok(ToolOutcome { summary, result: json!({"status": "shown", "id": id, "kind": kind.as_str(), "ttl_minutes": ttl}) })
     }
+}
+
+/// Up to [`MAX_OPTIONS`] short ASCII strings the owner can tap.
+fn options_arg(args: &Value) -> Result<Vec<String>, CosError> {
+    const ID: &str = "glance.card";
+    let Some(v) = args.get("options").filter(|v| !v.is_null()) else { return Ok(Vec::new()) };
+    let arr = v.as_array().ok_or_else(|| tool_err(ID, "`options` must be a list of strings"))?;
+    if arr.len() > MAX_OPTIONS {
+        return Err(tool_err(ID, format!("at most {MAX_OPTIONS} options")));
+    }
+    arr.iter()
+        .map(|o| {
+            let o = o.as_str().map(str::trim).filter(|o| !o.is_empty()).ok_or_else(|| tool_err(ID, "each option must be a non-empty string"))?;
+            if !o.is_ascii() || o.chars().count() > MAX_OPTION {
+                return Err(tool_err(ID, format!("option `{o}` must be ASCII and at most {MAX_OPTION} chars")));
+            }
+            Ok(o.to_string())
+        })
+        .collect()
 }
 
 #[async_trait]
@@ -118,6 +149,8 @@ impl Tool for GlanceCard {
                 "title": {"type": "string", "maxLength": MAX_TITLE, "description": "The decision or focus item. Required unless kind is clear."},
                 "detail": {"type": "string", "maxLength": MAX_DETAIL, "description": "Optional second line, e.g. \"A: ship rc.16 / B: soak 1 more day\"."},
                 "alert": {"type": "string", "maxLength": MAX_ALERT, "description": "Optional short alert line."},
+                "options": {"type": "array", "maxItems": MAX_OPTIONS, "items": {"type": "string", "maxLength": MAX_OPTION},
+                    "description": "Up to two short answers the owner can tap on the phone; shown on the panel as \"A: x / B: y\" when detail is empty. needs_you should normally carry two. The owner's pick comes back to you as a turn: Answer to card \"<title>\": <option>."},
                 "ttl_minutes": {"type": "integer", "minimum": 1, "maximum": MAX_TTL_MINUTES, "description": "How long the card stays. Default: needs_you 240, now 120, waiting_on 480, eod 720."},
                 "reason": {"type": "string", "description": "Why you are showing this; kept in the tool log for the owner."}}}),
             gate: Gate::Open,
@@ -136,7 +169,7 @@ mod tests {
 
     fn tool() -> (GlanceCard, broadcast::Receiver<Event>) {
         let (tx, rx) = broadcast::channel(16);
-        (GlanceCard::new(UiHandle::new(tx)), rx)
+        (GlanceCard::new(UiHandle::new(tx), GlanceStore::default()), rx)
     }
 
     fn t0() -> DateTime<Utc> {
@@ -172,6 +205,10 @@ mod tests {
             let out = t.post(&card(kind, "T"), t0()).unwrap();
             assert_eq!(out.result["ttl_minutes"], ttl);
             let v = serde_json::to_value(rx.try_recv().unwrap()).unwrap();
+            assert_eq!(v["id"].as_str().unwrap(), out.result["id"].as_str().unwrap());
+            assert_eq!(v["id"].as_str().unwrap().len(), 8);
+            let mut v = v;
+            v.as_object_mut().unwrap().remove("id");
             assert_eq!(v, json!({"kind": "card", "card": kind, "title": "T", "ttl_minutes": ttl, "reason": "because"}));
         }
         let (t, mut rx) = tool();
@@ -226,5 +263,26 @@ mod tests {
             Event::Card { title, .. } => assert!(!title.contains(&tok) && title.contains("[redacted]")),
             e => panic!("{e:?}"),
         }
+    }
+
+    #[test]
+    fn options_are_validated_and_ride_the_event() {
+        let (t, mut rx) = tool();
+        for (opts, needle) in [(json!(["a", "b", "c"]), "at most 2"), (json!(["x".repeat(25)]), "24 chars"), (json!(["caf\u{e9}"]), "ASCII"), (json!([""]), "non-empty"), (json!("ship"), "list")] {
+            let e = t.post(&json!({"kind": "needs_you", "title": "T", "options": opts, "reason": "r"}), t0()).unwrap_err().to_string();
+            assert!(e.contains(needle), "{opts}: {e}");
+        }
+        t.post(&json!({"kind": "needs_you", "title": "T", "options": ["ship", "soak"], "reason": "r"}), t0()).unwrap();
+        assert!(matches!(rx.try_recv().unwrap(), Event::Card { options, .. } if options == ["ship", "soak"]));
+    }
+
+    #[test]
+    fn repost_with_other_options_is_a_change_and_keeps_the_id_when_identical() {
+        let (t, _rx) = tool();
+        let a = t.post(&json!({"kind": "needs_you", "title": "T", "options": ["x"], "reason": "r"}), t0()).unwrap();
+        let same = t.post(&json!({"kind": "needs_you", "title": "T", "options": ["x"], "reason": "r"}), t0() + Duration::seconds(3)).unwrap();
+        assert_eq!((same.result["status"].as_str(), &same.result["id"]), (Some("unchanged"), &a.result["id"]));
+        let changed = t.post(&json!({"kind": "needs_you", "title": "T", "options": ["y"], "reason": "r"}), t0() + Duration::minutes(3)).unwrap();
+        assert_ne!(changed.result["id"], a.result["id"]);
     }
 }

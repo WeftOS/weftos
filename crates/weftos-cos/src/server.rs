@@ -113,6 +113,8 @@ pub fn router_auth(conv: Shared, ptt: SharedPtt, tokens: Option<Arc<TokenStore>>
         .route("/v1/cos/traces/{turn_id}", get(trace))
         .route("/v1/cos/tools", get(tools))
         .route("/v1/cos/devices", get(devices))
+        .route("/v1/cos/glance", get(glance))
+        .route("/v1/cos/glance/art.png", get(glance_art))
         .route("/healthz", get(|_caller: Authed| async { Json(json!({"ok": true, "api": API_VERSION})) }))
         .with_state(Api { conv, ptt, tokens })
 }
@@ -207,14 +209,32 @@ async fn utterance(State(api): State<Api>, Authed(caller): Authed, body: Result<
 }
 
 /// `POST /v1/cos/answer`: a touch interaction with a guide view.
-async fn answer(State(api): State<Api>, _caller: Authed, body: Result<Json<GuideAnswer>, JsonRejection>) -> (StatusCode, Json<Value>) {
+async fn answer(State(api): State<Api>, Authed(caller): Authed, body: Result<Json<GuideAnswer>, JsonRejection>) -> (StatusCode, Json<Value>) {
     let Json(ans) = match body {
         Ok(b) => b,
         Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({"error": format!("invalid answer: {e}")}))),
     };
-    match api.conv.answer(ans).await {
+    let endpoint = match caller {
+        Caller::Endpoint(name) => Some(name),
+        _ => None,
+    };
+    match api.conv.answer_from(ans, endpoint).await {
         Ok(turn_id) => (StatusCode::ACCEPTED, Json(json!({"turn_id": turn_id}))),
         Err(e) => failure(e),
+    }
+}
+
+/// `GET /v1/cos/glance`: the live card, the panel's fields and the latest art.
+async fn glance(State(api): State<Api>, _caller: Authed) -> Json<Value> {
+    Json(api.conv.glance())
+}
+
+/// `GET /v1/cos/glance/art.png`: the latest art, 404 when there is none.
+async fn glance_art(State(api): State<Api>, _caller: Authed) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    match api.conv.glance_art_png() {
+        Some(png) => ([(axum::http::header::CONTENT_TYPE, "image/png")], png).into_response(),
+        None => (StatusCode::NOT_FOUND, Json(json!({"error": "no art yet"}))).into_response(),
     }
 }
 

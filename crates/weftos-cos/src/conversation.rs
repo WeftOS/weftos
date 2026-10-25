@@ -140,6 +140,22 @@ pub trait Conversation: Send + Sync {
     /// and re-emits it without a model turn. Returns a turn id either way.
     async fn answer(&self, answer: GuideAnswer) -> Result<TurnId, CosError>;
 
+    /// [`Conversation::answer`] from a named remote endpoint (`None` is the
+    /// host). A card answer's turn is attributed to it.
+    async fn answer_from(&self, answer: GuideAnswer, _endpoint: Option<String>) -> Result<TurnId, CosError> {
+        self.answer(answer).await
+    }
+
+    /// `GET /v1/cos/glance`: the live card, the panel fields and the art.
+    fn glance(&self) -> serde_json::Value {
+        serde_json::json!({"card": null, "fields": null, "art": null})
+    }
+
+    /// `GET /v1/cos/glance/art.png`.
+    fn glance_art_png(&self) -> Option<Vec<u8>> {
+        None
+    }
+
     /// Subscribe to the event stream. Each subscriber sees events emitted
     /// after it subscribed.
     fn events(&self) -> broadcast::Receiver<Event>;

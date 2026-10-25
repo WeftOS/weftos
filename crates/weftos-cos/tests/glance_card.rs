@@ -84,7 +84,7 @@ fn blocked_reason_beats_the_card_alert() {
 fn card_text_goes_out_as_bounded_ascii() {
     let mut g = Glance::default();
     let title = format!("caf\u{e9} \u{201c}ship\u{201d}? {}", "z".repeat(200));
-    let ev = Event::Card { card: weftos_cos::events::CardKind::NeedsYou, title, detail: "A \u{2014} B".into(), alert: String::new(), ttl_minutes: 5, reason: String::new() };
+    let ev = Event::Card { card: weftos_cos::events::CardKind::NeedsYou, title, detail: "A \u{2014} B".into(), alert: String::new(), id: String::new(), options: vec![], ttl_minutes: 5, reason: String::new() };
     g.apply_at(&ev, t0());
     let line = g.to_line("09:00");
     assert!(line.is_ascii() && line.matches('\n').count() == 1);

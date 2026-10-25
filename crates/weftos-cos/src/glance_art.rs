@@ -175,6 +175,8 @@ pub fn png_to_bitmap(png_bytes: &[u8]) -> Result<Vec<u8>, String> {
 pub struct ArtImage {
     pub bitmap: Vec<u8>,
     pub caption: String,
+    /// The service's PNG, kept for the phone (`GET /v1/cos/glance/art.png`).
+    pub png: Vec<u8>,
 }
 
 impl ArtImage {
@@ -246,7 +248,7 @@ pub async fn generate(cfg: &ArtConfig, scene: &Scene, seed: u64) -> Result<ArtIm
     if bytes.len() > 8 << 20 {
         return Err("art image too large".into());
     }
-    Ok(ArtImage { bitmap: png_to_bitmap(&bytes)?, caption: scene.caption.clone() })
+    Ok(ArtImage { bitmap: png_to_bitmap(&bytes)?, caption: scene.caption.clone(), png: bytes.to_vec() })
 }
 
 // ---- scheduling ------------------------------------------------------------
@@ -321,11 +323,12 @@ pub fn load_last_art(path: &Path) -> Option<DateTime<Utc>> {
     DateTime::from_timestamp(v["last_art_at"].as_i64()?, 0)
 }
 
-pub fn save_last_art(path: &Path, at: DateTime<Utc>) {
+/// Remember when art last went up (and its caption, for the phone). Owner-only.
+pub fn save_last_art(path: &Path, at: DateTime<Utc>, caption: &str) {
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    let _ = std::fs::write(path, json!({"last_art_at": at.timestamp()}).to_string());
+    let _ = crate::glance_store::write_private(path, json!({"last_art_at": at.timestamp(), "caption": caption}).to_string().as_bytes());
 }
 
 #[cfg(test)]
@@ -419,7 +422,7 @@ mod tests {
 
     #[test]
     fn image_line_validates_and_bad_ones_do_not() {
-        let img = ArtImage { bitmap: vec![0xAA; IMG_BYTES], caption: "the loom at dusk".into() };
+        let img = ArtImage { bitmap: vec![0xAA; IMG_BYTES], caption: "the loom at dusk".into(), png: vec![] };
         let line = img.to_line("09:15");
         assert!(line.is_ascii() && line.ends_with('\n') && line.matches('\n').count() == 1);
         validate_line(&line).unwrap();
@@ -440,7 +443,7 @@ mod tests {
         assert!(validate_line(&ver.to_string()).is_err());
         assert!(validate_line("{nope").is_err());
         // The caption is clipped to ASCII <= 24 when the line is built.
-        let long = ArtImage { bitmap: vec![0; IMG_BYTES], caption: format!("caf\u{e9} {}", "z".repeat(40)) };
+        let long = ArtImage { bitmap: vec![0; IMG_BYTES], caption: format!("caf\u{e9} {}", "z".repeat(40)), png: vec![] };
         validate_line(&long.to_line("09:15")).unwrap();
     }
 
@@ -481,7 +484,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("sub/art.json");
         assert_eq!(load_last_art(&p), None);
-        save_last_art(&p, t0());
+        save_last_art(&p, t0(), "the loom");
         let restarted = ArtSchedule::new(t0() + Duration::minutes(1), load_last_art(&p));
         assert!(!restarted.due(t0() + Duration::minutes(30), true), "restart does not reset the hour");
         assert!(restarted.due(t0() + Duration::minutes(61), true));

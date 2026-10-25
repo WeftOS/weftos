@@ -91,12 +91,18 @@ pub enum Event {
     /// the resolved lifetime; `reason` is why it was shown.
     Card {
         card: CardKind,
+        /// Short random hex naming this card; answers refer to it.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        id: String,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         title: String,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         detail: String,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         alert: String,
+        /// Up to two short answers the owner can tap.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        options: Vec<String>,
         #[serde(default, skip_serializing_if = "is_zero")]
         ttl_minutes: u32,
         #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -232,8 +238,8 @@ impl Event {
                     *s = redact(s);
                 }
             }
-            Event::Card { title, detail, alert, reason, .. } => {
-                for f in [title, detail, alert, reason] {
+            Event::Card { title, detail, alert, reason, options, .. } => {
+                for f in [title, detail, alert, reason].into_iter().chain(options.iter_mut()) {
                     *f = redact(f);
                 }
             }

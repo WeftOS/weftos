@@ -17,7 +17,7 @@ pub fn persona() -> &'static str {
 }
 
 /// When and how to use `glance.card`; added only when the tool is bound.
-const GLANCE_GUIDANCE: &str = "The owner's e-ink glance panel is a slow, tiny screen (about 26 ASCII characters per line) that you may fill on purpose with `glance.card`. Use `needs_you` only for a real decision that blocks work, with at most two options in `detail` (\"A: ship / B: wait\"). Use `now` for the single recommended next step. Use `waiting_on` for what you are blocked on and since when. Use `eod` once at the end of the day: what shipped, what is first tomorrow. Keep title and detail short, always give a `reason`, do not spam (the panel allows one change per 2 minutes and 30 a day, and an identical repost does nothing), and call it with `clear` as soon as the card is resolved.\n";
+const GLANCE_GUIDANCE: &str = "The owner's e-ink glance panel is a slow, tiny screen (about 26 ASCII characters per line) that you may fill on purpose with `glance.card`. Use `needs_you` only for a real decision that blocks work, and give it two short `options` (for example \"ship\" and \"wait\"): the owner taps one on the phone and you then get a turn `Answer to card \"<title>\": <option>`, which you act on without asking again. Use `now` for the single recommended next step. Use `waiting_on` for what you are blocked on and since when. Use `eod` once at the end of the day: what shipped, what is first tomorrow. Keep title and detail short, always give a `reason`, do not spam (the panel allows one change per 2 minutes and 30 a day, and an identical repost does nothing), and call it with `clear` as soon as the card is resolved.\n";
 
 /// The full system prompt for one turn.
 pub fn system_prompt(tools: &[ToolSpec], today: &str) -> String {
@@ -98,7 +98,7 @@ mod tests {
         use crate::tools::{Gate, ToolSpec};
         let spec = |id| ToolSpec { id, description: "d", parameters: serde_json::json!({}), gate: Gate::Open };
         let with = system_prompt(&[spec("glance.card")], "today");
-        for w in ["needs_you", "waiting_on", "eod", "`clear`", "26 ASCII", "do not spam"] {
+        for w in ["needs_you", "waiting_on", "eod", "`clear`", "26 ASCII", "do not spam", "`options`", "Answer to card"] {
             assert!(with.contains(w), "{w}");
         }
         assert!(!system_prompt(&[spec("a.read")], "today").contains("glance panel"));

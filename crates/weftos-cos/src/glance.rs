@@ -51,6 +51,7 @@ struct LiveCard {
     title: String,
     detail: String,
     alert: String,
+    options: Vec<String>,
     expires: DateTime<Utc>,
 }
 
@@ -72,6 +73,17 @@ impl Default for Glance {
             base_next: String::new(),
             card: None,
         }
+    }
+}
+
+impl LiveCard {
+    /// The detail, or the options as `A: x / B: y` when there is none.
+    fn next_line(&self) -> String {
+        if !self.detail.is_empty() {
+            return self.detail.clone();
+        }
+        let letters = ['A', 'B'];
+        self.options.iter().zip(letters).map(|(o, l)| format!("{l}: {o}")).collect::<Vec<_>>().join(" / ")
     }
 }
 
@@ -137,13 +149,14 @@ impl Glance {
                 self.base_next = text.clone();
             }
             Event::Card { card: CardKind::Clear, .. } => self.card = None,
-            Event::Card { card, title, detail, alert, ttl_minutes, .. } => {
+            Event::Card { card, title, detail, alert, options, ttl_minutes, .. } => {
                 let ttl = if *ttl_minutes == 0 { card.default_ttl_minutes() } else { *ttl_minutes };
                 self.card = Some(LiveCard {
                     kind: *card,
                     title: title.clone(),
                     detail: detail.clone(),
                     alert: alert.clone(),
+                    options: options.clone(),
                     expires: now + chrono::Duration::minutes(i64::from(ttl)),
                 });
             }
@@ -174,7 +187,7 @@ impl Glance {
             self.card = None;
         }
         let (task, next, card_alert) = match &self.card {
-            Some(c) => (format!("{}: {}", c.kind.prefix(), c.title), c.detail.clone(), Some(c.alert.clone())),
+            Some(c) => (format!("{}: {}", c.kind.prefix(), c.title), c.next_line(), Some(c.alert.clone())),
             None => (self.base_task.clone(), self.base_next.clone(), None),
         };
         self.task = task;
