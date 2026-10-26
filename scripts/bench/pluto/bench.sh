@@ -2,6 +2,8 @@
 # Pluto extended bench: LO sweep, rate/throughput, health, digital-loopback TX.
 # Usage: scripts/bench/pluto/bench.sh [out-dir]. PLUTO_URI defaults to usb:; libiio tools must be on PATH.
 # TX stays at max attenuation (-89.75 dB) and loopback is digital (no RF path).
+# macOS strips DYLD_* for /bin/bash, so a source-built libiio is found here (LIBIIO_PREFIX).
+P=${LIBIIO_PREFIX:-$HOME/.local/libiio}; [ -d "$P/lib" ] && export PATH="$P/bin:$PATH" DYLD_LIBRARY_PATH="$P/lib" LD_LIBRARY_PATH="$P/lib"
 U=${PLUTO_URI:-usb:}; D=${1:-${TMPDIR:-/tmp}/pluto-bench}; mkdir -p "$D"
 a() { iio_attr -u $U "$@" 2>&1; }
 pw() { python3 -I -c "

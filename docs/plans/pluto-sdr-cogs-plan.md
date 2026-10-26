@@ -23,13 +23,14 @@ What the board reports over libiio (2026-10-26):
 | Firmware | `v0.39-dirty`: a vendor build of ADI's plutosdr-fw, kernel `6.1.0-…-dirty` built 2025-10-09; provenance unknown |
 | Front end | `ad9363a` mode, reference 40 MHz (`xo_correction` 40000000) |
 | IIO devices | `ad9361-phy`, `xadc`, `cf-ad9361-lpc` (RX), `cf-ad9361-dds-core-lpc` (TX) |
-| LO range (RX and TX) | 325–3800 MHz; requests outside are refused with `EINVAL` |
+| LO range (RX and TX) | 325–3800 MHz as shipped (refused outside with `EINVAL`); 70–6000 MHz after the AD9364 change (2.1) |
 | Sample rate | 2.083–61.44 MS/s advertised; a request for 2.083 MS/s was refused and the rate stayed at 4 MS/s, because rates near the floor need the RX FIR enabled |
 | RF bandwidth | RX 0.2–56 MHz, TX 0.2–40 MHz |
 | RX gain | −3 to 71 dB; manual, fast attack, slow attack, hybrid |
 | TX attenuation | 0 to −89.75 dB in 0.25 dB steps |
 | RX ports | A, B, C (balanced and single-ended), plus TX monitor 1/2 |
 | ENSM modes | sleep, wait, alert, fdd, pinctrl, pinctrl_fdd_indep |
+| CPU | the vendor image set `maxcpus=1` (one A9 core); unset on 2026-10-26 so both run |
 
 ### Plugging it in
 
@@ -64,30 +65,38 @@ What this settles:
 - **Low rates need the FIR.** The owner cog loads and enables the RX FIR before asking for a rate
   near the 2.083 MS/s floor.
 
-### 2.1 Beyond the rated range (not yet run)
+### 2.1 Beyond the rated range (AD9364 mode, 2026-10-26)
 
 The AD9363 is rated 325–3800 MHz and 20 MHz bandwidth. Pluto firmware can drive it as an AD9364
-(70–6000 MHz, 56 MHz). Units often work there, with sensitivity outside the rated range
-unspecified. The change is persistent and reversible, but it needs a root login on the Pluto's
-console, so the **owner runs it**:
+(70–6000 MHz, 56 MHz). Before the change the owner took a full flash backup over DFU
+(`dfu-util -U` of all five partitions, kept outside the repo with SHA256 sums), then applied it
+from a root login on the console (the owner's step):
 
 ```
-# on the Pluto console (/dev/cu.usbmodem* on the Mac, or ssh over the USB network on Linux)
 fw_setenv attr_name compatible
 fw_setenv attr_val ad9364
+fw_setenv maxcpus          # unset: Linux uses both A9 cores (the vendor image had maxcpus=1)
 reboot
-# undo:
-fw_setenv attr_val ad9363a; reboot
+# undo: fw_setenv attr_val ad9363a; fw_setenv maxcpus 1; reboot
 ```
 
-Once it is set, rerun the bench with the sweep extended to 70–6000 MHz, and add per-band noise
-floor and a known-source check:
+After the reboot the phy reports `ad9364`, LO 70–6000 MHz, RX bandwidth up to 56 MHz and TX up
+to 40 MHz. [`scripts/bench/pluto/bench-wide.sh`](../../scripts/bench/pluto/bench-wide.sh)
+(receive only, plus digital loopback) measured, on the Mac with the stock antennas indoors:
 
-- FM broadcast 88–108 MHz;
-- ADS-B at 1090 MHz, already in range;
-- 5.8 GHz Wi-Fi.
+| Test | Result |
+|---|---|
+| LO sweep, 25 points 70–6000 MHz (4 MS/s, manual 50 dB) | every point locks within 2 Hz; 60 and 6100 MHz are refused with `EINVAL` |
+| Noise floor (median FFT bin, same gain) | about −90 to −96 dB/bin inside 325–3800 MHz; −83 to −89 dB/bin at 150–250 MHz and at 4.2–6.0 GHz, so about 5 dB worse outside the rated range, with a few spurs (+20 to +24 dB, 3–5 bins) above 4 GHz |
+| FM broadcast, 93 and 103 MHz centres (10 MS/s) | stations clearly visible: peaks +32 and +39 dB, 60 and 320 bins above floor+15 dB |
+| ADS-B, 1090 MHz (2.5 MS/s, 2 s, manual 60 dB) | 2112 pulse edges above 6× the median magnitude, against 135 at 1030 MHz: aircraft traffic is detectable |
+| Wi-Fi, 20 MS/s bursts | 2.4 GHz and 5.2 GHz (channels 36–48) busy, raising the floor 25–30 dB; 5.8 GHz quiet |
+| TX at 5.8 GHz through digital loopback (max attenuation) | tone 98.9 dB above the floor: the TX path works across the extended range |
+| Temperatures | AD9364 about 41 °C, Zynq XADC about 62 °C, unchanged by the change |
 
-Record which bands lock and what the floor is. Until that run, the cogs declare 325–3800 MHz.
+Outside 325–3800 MHz the part is out of spec, so the cogs declare the measured range
+(70–6000 MHz) together with a `rated: 325–3800 MHz` field. Consumers that need calibrated levels
+outside the rated band must treat them as uncalibrated.
 
 ## 3. How it attaches to the Ventuno
 
@@ -217,7 +226,7 @@ off unless granted, every request is checked and chained, and a fault means sile
 | Phase | Scope | Done when |
 |---|---|---|
 | R0 Bench | done on the Mac (section 2); repeat on the Ventuno over USB 3 host and over `iiod`/USB network | the same table filled in on the Ventuno, including throughput through `iiod` and power draw seen by `board-telemetry` |
-| R1 Extended range | owner applies the AD9364 change (2.1); bench 70–6000 MHz | per-band lock and noise floor recorded; cogs declare the measured range |
+| R1 Extended range | done 2026-10-26: owner applied the AD9364 change after a DFU backup (2.1); bench 70–6000 MHz | per-band lock and noise floor recorded (2.1); cogs declare the measured range |
 | R2 `sdr-pluto-rx` | owner cog, stream ring, `svc.sdr`, status, guide, `--simulate`/`--replay` | an hour of 2.4 GHz capture at 5 MS/s with every gap counted; two consumers share the tuner by band plan |
 | R3 `spectrum` + `rf-census` | consumers on the Ventuno | a 2.4 GHz occupancy reading per minute (the ventuno plan's P7 acceptance), loss reported |
 | R4 Headers | pinout found and measured; UART console wired to the Ventuno as management; one GPIO TX-inhibit line from the MCU | the Ventuno reads the Pluto boot log over its UART; toggling the inhibit line stops a loopback TX within 1 ms |
