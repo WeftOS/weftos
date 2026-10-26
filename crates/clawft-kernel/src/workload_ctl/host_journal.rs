@@ -11,18 +11,24 @@
 //! `place`: a new instance id is never invented, a new cogbus token and
 //! ingest lease are issued, and a cog that was running is started.
 //!
-//! The file holds no secrets: no token, no key, only the request body.
+//! The file holds no secrets: no token, no key, only the request body. Each
+//! entry is signed with the node key over the node id and the entry, so a file
+//! edited by anything but this node (a changed requester or project, a stopped
+//! instance flipped to running, an entry pasted from another node) is refused
+//! at restore and reported, never trusted.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::host_service::{PlaceBody, WorkloadHostService};
 use super::msg::{CTL_VERSION, CtlRequest, method};
 use crate::mesh_artifact_transfer::PeerSet;
+use crate::workload_pkg::codec::{hex_decode_exact, hex_encode};
 
 /// Journal file version.
 const VERSION: u32 = 1;
@@ -42,34 +48,67 @@ pub struct JournalEntry {
     pub desired_running: bool,
 }
 
+/// An entry and its signature (hex), as stored.
+#[derive(Serialize, Deserialize)]
+struct Stored {
+    entry: JournalEntry,
+    sig: String,
+}
+
 #[derive(Serialize, Deserialize)]
 struct File {
     version: u32,
-    entries: Vec<JournalEntry>,
+    entries: Vec<Stored>,
+}
+
+/// What is signed: a domain tag, the node id and the entry's canonical JSON.
+fn signed_bytes(node_id: &str, e: &JournalEntry) -> Vec<u8> {
+    let mut m = format!("weftos.workload-host.journal.v1\n{node_id}\n").into_bytes();
+    m.extend(serde_json::to_vec(e).unwrap_or_default());
+    m
 }
 
 pub(super) struct Journal {
     path: PathBuf,
+    node_id: String,
+    key: SigningKey,
     entries: Mutex<BTreeMap<String, JournalEntry>>,
+    /// Stored entries that did not verify, with why; reported by the restore.
+    rejected: Mutex<Vec<(String, String)>>,
 }
 
 impl Journal {
-    /// Open the journal at `path`. A missing file is empty; one that does
-    /// not parse is set aside (`.bad`) and the journal starts empty, so a
-    /// damaged file never blocks the daemon.
-    pub(super) fn open(path: &Path) -> Self {
-        let entries = match read(path) {
-            Ok(e) => e,
+    /// Open the journal at `path` for the node owning `key`. A missing file is
+    /// empty. A file that does not parse is set aside (`.bad`) and the journal
+    /// starts empty, so a damaged file never blocks the daemon. An entry whose
+    /// signature is missing, malformed or does not verify under this node's key
+    /// is dropped and remembered in [`Self::take_rejected`].
+    pub(super) fn open(path: &Path, node_id: &str, key: &SigningKey) -> Self {
+        let vk = key.verifying_key();
+        let (entries, rejected) = match read(path, node_id, &vk) {
+            Ok(r) => r,
             Err(e) => {
                 tracing::warn!(path = %path.display(), error = %e, "instance journal unreadable; starting empty");
                 let _ = std::fs::rename(path, path.with_extension("json.bad"));
-                BTreeMap::new()
+                (BTreeMap::new(), Vec::new())
             }
         };
-        Self {
+        let j = Self {
             path: path.to_path_buf(),
+            node_id: node_id.to_string(),
+            key: key.clone(),
             entries: Mutex::new(entries),
+            rejected: Mutex::new(rejected),
+        };
+        if !j.rejected.lock().unwrap_or_else(|p| p.into_inner()).is_empty() {
+            for (id, why) in j.rejected.lock().unwrap_or_else(|p| p.into_inner()).iter() {
+                tracing::warn!(instance = %id, reason = %why, "journal entry refused");
+            }
+            // The refused entries do not stay in the file.
+            let g = j.lock();
+            j.save(&g);
         }
+        j
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, JournalEntry>> {
@@ -78,6 +117,11 @@ impl Journal {
 
     pub(super) fn entries(&self) -> Vec<JournalEntry> {
         self.lock().values().cloned().collect()
+    }
+
+    /// Entries refused at open (instance id, reason); each is returned once.
+    pub(super) fn take_rejected(&self) -> Vec<(String, String)> {
+        std::mem::take(&mut *self.rejected.lock().unwrap_or_else(|p| p.into_inner()))
     }
 
     pub(super) fn record(&self, e: JournalEntry) {
@@ -106,7 +150,13 @@ impl Journal {
     fn save(&self, g: &BTreeMap<String, JournalEntry>) {
         let file = File {
             version: VERSION,
-            entries: g.values().cloned().collect(),
+            entries: g
+                .values()
+                .map(|e| Stored {
+                    sig: hex_encode(&self.key.sign(&signed_bytes(&self.node_id, e)).to_bytes()),
+                    entry: e.clone(),
+                })
+                .collect(),
         };
         let tmp = self.path.with_extension("json.tmp");
         let write = || -> std::io::Result<()> {
@@ -122,10 +172,12 @@ impl Journal {
     }
 }
 
-fn read(path: &Path) -> Result<BTreeMap<String, JournalEntry>, String> {
+type Loaded = (BTreeMap<String, JournalEntry>, Vec<(String, String)>);
+
+fn read(path: &Path, node_id: &str, vk: &VerifyingKey) -> Result<Loaded, String> {
     let meta = match std::fs::metadata(path) {
         Ok(m) => m,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Default::default()),
         Err(e) => return Err(e.to_string()),
     };
     if meta.len() > MAX_BYTES {
@@ -136,7 +188,24 @@ fn read(path: &Path) -> Result<BTreeMap<String, JournalEntry>, String> {
     if f.version != VERSION {
         return Err(format!("journal version {}", f.version));
     }
-    Ok(f.entries.into_iter().map(|e| (e.instance_id.clone(), e)).collect())
+    let (mut ok, mut bad) = (BTreeMap::new(), Vec::new());
+    for s in f.entries {
+        let id = s.entry.instance_id.clone();
+        let verified = hex_decode_exact::<64>(&s.sig)
+            .map(|b| Signature::from_bytes(&b))
+            .ok_or("signature missing or malformed")
+            .and_then(|sig| {
+                vk.verify(&signed_bytes(node_id, &s.entry), &sig)
+                    .map_err(|_| "signature does not match: the entry was changed or is not this node's")
+            });
+        match verified {
+            Ok(()) => {
+                ok.insert(id, s.entry);
+            }
+            Err(why) => bad.push((id, why.to_string())),
+        }
+    }
+    Ok((ok, bad))
 }
 
 /// What a restore did.
@@ -152,7 +221,7 @@ impl WorkloadHostService {
     /// Journal placed instances at `path`, so [`Self::restore_instances`]
     /// can put them back after a restart.
     pub fn with_journal(mut self, path: &Path) -> Self {
-        self.journal = Some(Journal::open(path));
+        self.journal = Some(Journal::open(path, &self.node_id, &self.key));
         self
     }
 
@@ -164,6 +233,7 @@ impl WorkloadHostService {
     pub async fn restore_instances(&self) -> RestoreReport {
         let mut report = RestoreReport::default();
         let Some(j) = &self.journal else { return report };
+        report.failed.extend(j.take_rejected());
         for e in j.entries() {
             let mut body = e.body.clone();
             body.start = e.desired_running;

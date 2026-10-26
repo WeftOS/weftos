@@ -11,7 +11,7 @@ use std::time::Duration;
 use clawft_types::placement::{NodeFacts, TrustTier};
 use ed25519_dalek::SigningKey;
 
-use super::host_journal::Journal;
+use super::host_journal::{Journal, JournalEntry};
 use super::host_service::WorkloadHostService;
 use super::msg::method;
 use super::plane::PlacementControlPlane;
@@ -75,7 +75,11 @@ impl Rig {
         let tmp = tempfile::tempdir().unwrap();
         let runs = tmp.path().join("runs");
         // Each launch appends a line, so a restart shows as a second one.
-        let script = format!("#!/bin/sh\necho started >> '{}'\nexec sleep 60\n", runs.display());
+        // The cog also keeps state in its data directory: each launch appends to it.
+        let script = format!(
+            "#!/bin/sh\necho started >> '{}'\necho launch >> \"$COGNITUM_COG_DATA_DIR/state\"\nexec sleep 60\n",
+            runs.display()
+        );
         let pkg = package(tmp.path(), "restart-cog", &script, &[arch()]);
         let chain = Arc::new(ChainManager::new(0, 1000));
         let id = node_id_from_pubkey(&SigningKey::from_bytes(&[NODE_SEED; 32]).verifying_key().to_bytes());
@@ -97,6 +101,13 @@ impl Rig {
 
     fn launches(&self) -> usize {
         std::fs::read_to_string(&self.runs).map(|t| t.lines().count()).unwrap_or(0)
+    }
+
+    /// Change the journal file's JSON as a local attacker with write access would.
+    fn edit_journal(&self, f: impl FnOnce(&mut serde_json::Value)) {
+        let mut v: serde_json::Value = serde_json::from_slice(&std::fs::read(self.journal()).unwrap()).unwrap();
+        f(&mut v);
+        std::fs::write(self.journal(), serde_json::to_vec_pretty(&v).unwrap()).unwrap();
     }
 
     async fn wait_launches(&self, n: usize) {
@@ -193,7 +204,7 @@ async fn an_instance_whose_package_is_gone_is_reported_and_dropped_not_retried_f
     assert!(report.restored.is_empty());
     assert_eq!(report.failed.len(), 1, "{report:?}");
     assert_eq!(report.failed[0].0, iid);
-    assert!(Journal::open(&rig.journal()).entries().is_empty(), "dropped, so the next start is clean");
+    assert!(Journal::open(&rig.journal(), &b.node_id, &b.key).entries().is_empty(), "dropped, so the next start is clean");
 }
 
 #[tokio::test]
@@ -219,7 +230,124 @@ fn a_damaged_journal_is_set_aside_and_the_host_starts_empty() {
     let tmp = tempfile::tempdir().unwrap();
     let p = tmp.path().join("journal.json");
     std::fs::write(&p, b"{ not json").unwrap();
-    let j = Journal::open(&p);
+    let k = SigningKey::from_bytes(&[5; 32]);
+    let j = Journal::open(&p, "node", &k);
     assert!(j.entries().is_empty());
     assert!(!p.exists() && p.with_extension("json.bad").exists());
+}
+
+#[tokio::test]
+async fn a_cogs_own_data_survives_a_restart_and_a_re_place() {
+    let rig = Rig::new();
+    let iid = {
+        let a = rig.host();
+        let (iid, _plane) = place(&rig, &a).await;
+        rig.wait_launches(1).await;
+        // state the cog wrote, and a file an operator put there
+        std::fs::write(rig.root().join(&iid).join("data/note"), b"keep me").unwrap();
+        iid
+    };
+    let data = rig.root().join(&iid).join("data");
+    assert_eq!(std::fs::read_to_string(data.join("state")).unwrap(), "launch\n");
+
+    let b = rig.host();
+    assert_eq!(b.restore_instances().await.restored, std::slice::from_ref(&iid));
+    rig.wait_launches(2).await;
+    assert_eq!(std::fs::read(data.join("note")).unwrap(), b"keep me", "restore keeps data/");
+    for _ in 0..200 {
+        if std::fs::read_to_string(data.join("state")).is_ok_and(|t| t.lines().count() == 2) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(std::fs::read_to_string(data.join("state")).unwrap(), "launch\nlaunch\n");
+
+    // and a fresh placement over the same directory, with no journal
+    drop(b);
+    std::fs::remove_file(rig.journal()).unwrap();
+    let c = rig.host();
+    let (again, _plane) = place(&rig, &c).await;
+    assert_eq!(again, iid);
+    assert_eq!(std::fs::read(data.join("note")).unwrap(), b"keep me", "so does a re-place");
+}
+
+#[tokio::test]
+async fn an_entry_with_a_changed_requester_is_refused() {
+    let rig = Rig::new();
+    let iid = {
+        let a = rig.host();
+        place(&rig, &a).await.0
+    };
+    rig.edit_journal(|v| v["entries"][0]["entry"]["requester"] = "someone-else".into());
+    let b = rig.host();
+    let report = b.restore_instances().await;
+    assert!(report.restored.is_empty(), "{report:?}");
+    assert_eq!(report.failed.len(), 1, "{report:?}");
+    assert_eq!(report.failed[0].0, iid);
+    assert!(report.failed[0].1.contains("signature"), "{report:?}");
+    assert!(b.held().await.is_empty());
+    assert!(Journal::open(&rig.journal(), &b.node_id, &b.key).entries().is_empty(), "the refused entry is not kept");
+}
+
+#[tokio::test]
+async fn a_stopped_instance_cannot_be_flipped_to_running_by_editing_the_file() {
+    let rig = Rig::new();
+    {
+        let a = rig.host();
+        let (iid, plane) = place(&rig, &a).await;
+        rig.wait_launches(1).await;
+        plane.instance(method::STOP, &iid).await.unwrap();
+    }
+    rig.edit_journal(|v| {
+        assert_eq!(v["entries"][0]["entry"]["desired_running"], false);
+        v["entries"][0]["entry"]["desired_running"] = true.into();
+    });
+    let b = rig.host();
+    let report = b.restore_instances().await;
+    assert!(report.restored.is_empty(), "{report:?}");
+    assert!(report.failed[0].1.contains("signature"), "{report:?}");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(rig.launches(), 1, "nothing was started");
+    assert!(b.held().await.is_empty());
+}
+
+#[tokio::test]
+async fn unsigned_entries_and_entries_from_another_node_or_key_are_refused() {
+    let rig = Rig::new();
+    {
+        let a = rig.host();
+        place(&rig, &a).await;
+    }
+    // the signature removed
+    rig.edit_journal(|v| v["entries"][0]["sig"] = "".into());
+    let report = rig.host().restore_instances().await;
+    assert!(report.restored.is_empty() && report.failed.len() == 1, "{report:?}");
+
+    // a journal signed for another node id, or by another key, is not this node's
+    let tmp = tempfile::tempdir().unwrap();
+    let p = tmp.path().join("j.json");
+    let (k1, k2) = (SigningKey::from_bytes(&[1; 32]), SigningKey::from_bytes(&[2; 32]));
+    let rig2 = Rig::new();
+    let body = {
+        let a = rig2.host();
+        place(&rig2, &a).await;
+        let j = Journal::open(&rig2.journal(), &a.node_id, &a.key);
+        j.entries()[0].body.clone()
+    };
+    let entry = |id: &str| JournalEntry {
+        instance_id: id.into(),
+        decision_id: None,
+        requester: "ctl".into(),
+        body: body.clone(),
+        desired_running: true,
+    };
+    Journal::open(&p, "node-a", &k1).record(entry("i1"));
+    assert_eq!(Journal::open(&p, "node-a", &k1).entries().len(), 1, "same node, same key: accepted");
+    let other_node = Journal::open(&p, "node-b", &k1);
+    assert!(other_node.entries().is_empty());
+    assert_eq!(other_node.take_rejected().len(), 1);
+    Journal::open(&p, "node-a", &k1).record(entry("i1"));
+    let other_key = Journal::open(&p, "node-a", &k2);
+    assert!(other_key.entries().is_empty());
+    assert_eq!(other_key.take_rejected()[0].0, "i1");
 }

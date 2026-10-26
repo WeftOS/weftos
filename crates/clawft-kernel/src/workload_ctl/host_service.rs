@@ -148,7 +148,7 @@ pub type FactsSource = Arc<dyn Fn() -> Option<SignedNodeFacts> + Send + Sync>;
 /// A node's `workload-host`.
 pub struct WorkloadHostService {
     pub(super) node_id: String,
-    key: SigningKey,
+    pub(super) key: SigningKey,
     anchors: TrustAnchors,
     controllers: Box<dyn ControllerPolicy>,
     nonces: NonceGuard,
