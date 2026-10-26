@@ -316,6 +316,11 @@ before any `serve` or `call` is read.
 
 ### 13. Blobs (B5)
 
+*(Service use, 2026-10-26: `infer.v1` takes an image as a handle, `image_blob`, beside the
+small inline `image_b64`. The NPU service reads it with `blob_get` when the call runs, so a
+queue holds handles. A caller that is a camera cog or `vision-detect` puts the frame with
+`put_blob`, then calls with the handle.)*
+
 A payload over the 64 KiB body limit is a blob: bytes in the node's content store, addressed
 by BLAKE3, and a `blob.v1` handle (`hash`, `size`, `media_type`, `expires_ms`) in the message.
 
