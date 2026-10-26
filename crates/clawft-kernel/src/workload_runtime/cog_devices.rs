@@ -26,6 +26,55 @@ use super::types::RuntimeError;
 pub const MAX_DEVICES: usize = 8;
 const MAX_PATH: usize = 108;
 
+/// True if `s` holds a glob character.
+pub fn wild(s: &str) -> bool {
+    s.contains(['*', '?'])
+}
+
+/// True if glob `pattern` (`*` any run, `?` one char) matches all of `text`.
+pub fn glob_match(pattern: &str, text: &str) -> bool {
+    let (p, t) = (pattern.as_bytes(), text.as_bytes());
+    let (mut i, mut j, mut star, mut mark) = (0, 0, None, 0);
+    while j < t.len() {
+        if i < p.len() && (p[i] == b'?' || p[i] == t[j]) {
+            i += 1;
+            j += 1;
+        } else if i < p.len() && p[i] == b'*' {
+            star = Some(i);
+            mark = j;
+            i += 1;
+        } else if let Some(s) = star {
+            i = s + 1;
+            mark += 1;
+            j = mark;
+        } else {
+            return false;
+        }
+    }
+    p[i..].iter().all(|c| *c == b'*')
+}
+
+/// True if some string matches both globs.
+pub fn globs_intersect(a: &str, b: &str) -> bool {
+    fn go(a: &[u8], b: &[u8], seen: &mut Vec<Vec<Option<bool>>>, i: usize, j: usize) -> bool {
+        if let Some(r) = seen[i][j] {
+            return r;
+        }
+        let r = match (a.get(i), b.get(j)) {
+            (None, None) => true,
+            (Some(b'*'), _) => go(a, b, seen, i + 1, j) || (j < b.len() && go(a, b, seen, i, j + 1)),
+            (_, Some(b'*')) => go(a, b, seen, i, j + 1) || (i < a.len() && go(a, b, seen, i + 1, j)),
+            (Some(x), Some(y)) => (*x == b'?' || *y == b'?' || x == y) && go(a, b, seen, i + 1, j + 1),
+            _ => false,
+        };
+        seen[i][j] = Some(r);
+        r
+    }
+    let mut seen = vec![vec![None; b.len() + 1]; a.len() + 1];
+    go(a.as_bytes(), b.as_bytes(), &mut seen, 0, 0)
+}
+
+
 /// What a `[[devices]]` table selects.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DeviceSel {
@@ -79,6 +128,43 @@ fn bad(msg: impl Into<String>) -> RuntimeError {
     RuntimeError::InvalidConfig(msg.into())
 }
 
+/// `/dev` nodes a cog may never own: raw memory and ports, disks and block devices, consoles and
+/// terminals, loop and device-mapper control, the watchdog and the CPU MSRs. A selector that
+/// can name any of them (a glob that intersects one) is refused when `cog.toml` is parsed.
+pub const DENIED_DEV: &[&str] = &[
+    "/dev/mem", "/dev/kmem", "/dev/port", "/dev/kcore", "/dev/nvram", "/dev/cpu/*", "/dev/cpu_dma_latency",
+    "/dev/sd*", "/dev/hd*", "/dev/vd*", "/dev/xvd*", "/dev/nvme*", "/dev/mmcblk*", "/dev/dm-*", "/dev/md*",
+    "/dev/loop*", "/dev/ram*", "/dev/zram*", "/dev/disk/*", "/dev/block/*", "/dev/mapper/*",
+    "/dev/tty", "/dev/console", "/dev/ptmx", "/dev/pts/*", "/dev/vcs*", "/dev/tty?", "/dev/tty1?",
+    "/dev/tty2?", "/dev/tty3?", "/dev/tty4?", "/dev/tty5?", "/dev/tty6?", "/dev/watchdog*", "/dev/kmsg",
+];
+
+/// Where a socket may live: the system runtime directories. Sockets of the container runtimes
+/// and of systemd and D-Bus are refused inside them.
+pub const SOCKET_DIRS: &[&str] = &["/run/", "/var/run/"];
+const DENIED_SOCKET: &[&str] = &[
+    "/run/docker*", "/var/run/docker*", "/run/containerd*", "/var/run/containerd*", "/run/podman*", "/var/run/podman*",
+    "/run/systemd/*", "/var/run/systemd/*", "/run/dbus/*", "/var/run/dbus/*", "/run/user/*", "/var/run/user/*",
+    "/run/crio*", "/run/snapd*",
+];
+
+fn denied(i: usize, key: &str, p: &str, list: &[&str]) -> Result<(), RuntimeError> {
+    match list.iter().find(|d| globs_intersect(p, d)) {
+        Some(d) => Err(bad(format!("devices[{i}]: {key} {p:?} can name {d}, which no cog may own"))),
+        None => Ok(()),
+    }
+}
+
+/// A glob in the last component needs at least three literal characters, so `/dev/*` and
+/// `/dev/s*` are not selectors.
+fn enough_literal(i: usize, p: &str) -> Result<(), RuntimeError> {
+    let last = p.rsplit('/').next().unwrap_or_default();
+    if wild(last) && last.chars().filter(|c| !matches!(c, '*' | '?')).count() < 3 {
+        return Err(bad(format!("devices[{i}]: path {p:?} needs at least three literal characters in its last component")));
+    }
+    Ok(())
+}
+
 fn plain_path(i: usize, key: &str, p: &str, globs: bool) -> Result<(), RuntimeError> {
     let chars_ok = p.bytes().all(|b| {
         b.is_ascii_alphanumeric() || b"/_.-".contains(&b) || (globs && b"*?".contains(&b))
@@ -115,6 +201,8 @@ pub(super) fn parse_devices(raw: Vec<RawDevice>) -> Result<Vec<DeviceDecl>, Runt
                 if !p.starts_with("/dev/") {
                     return Err(bad(format!("devices[{i}]: path {p:?} must be under /dev/")));
                 }
+                enough_literal(i, &p)?;
+                denied(i, "path", &p, DENIED_DEV)?;
                 DeviceSel::Path(p)
             }
             (None, Some(u), None, None) => {
@@ -126,6 +214,10 @@ pub(super) fn parse_devices(raw: Vec<RawDevice>) -> Result<Vec<DeviceDecl>, Runt
             }
             (None, None, Some(s), None) => {
                 plain_path(i, "socket", &s, false)?;
+                if !SOCKET_DIRS.iter().any(|d| s.starts_with(d) && s.len() > d.len()) {
+                    return Err(bad(format!("devices[{i}]: socket {s:?} must be under /run/ or /var/run/")));
+                }
+                denied(i, "socket", &s, DENIED_SOCKET)?;
                 DeviceSel::Socket(s)
             }
             (None, None, None, Some(n)) => {

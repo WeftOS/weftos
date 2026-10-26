@@ -157,6 +157,23 @@ Exactly one of `path`, `usb`, `socket`, `netdev` per table, at most 8 tables, va
   names without a leading slash (`can0:can1:can2`). Interfaces have no file owner to change, so
   the privileged chown plan skips them, and the argument check (which looks for absolute paths)
   does not apply to them. Updated 2026-10-26 for the `can-fd` cog.
+- **What may be owned (review fixes, 2026-10-26).** A `path` is a character device under
+  `/dev` and a `socket` a Unix socket under `/run/` or `/var/run/`; a wildcard needs three literal
+  characters in its last component. At parse, a selector that can name raw memory or ports,
+  a disk or block device, a terminal or console, a loop or device-mapper node, the watchdog or a
+  container-runtime, systemd or D-Bus socket is refused. At admission the ledger resolves each
+  selector with `realpath` and looks at what the node is: the wrong kind (a socket selector that
+  is a symlink to `/etc/passwd`, a regular file) or a sensitive device by major:minor is refused,
+  whatever its name. The grant opens the node `O_PATH|O_NOFOLLOW`, checks it is still the node
+  that was planned (kind and identity), and changes it through `/proc/self/fd`, so a symlink
+  swapped in afterwards is refused, not followed.
+- **Aliases.** A claim is the real path plus, for a device, its major:minor. A
+  `/dev/v4l/by-id/...` link, a second node with the same major:minor and the node itself are one
+  device and clash both ways, and an argument is compared the same way: after `=`, after a
+  short flag (`-d/dev/video0`), inside `a:/dev/video0` or a comma list, or as a symlink to it.
+  The owner's claim is resolved again when it starts (`refresh`): a replugged USB device or a
+  glob that now matches more is refused if the nodes belong to another owner, and any new node
+  is granted.
 - **Hand-out.** The owner's `WEFTOS_DEVICES` (`:`-separated absolute paths: the literal paths
   it declared and the nodes its globs and `usb` ids resolved to) comes only from its
   reservation (`HostContract::with_devices`), so no other contract carries a device path. A
@@ -170,7 +187,9 @@ Exactly one of `path`, `usb`, `socket`, `netdev` per table, at most 8 tables, va
     `DeviceApplier` the daemon wires (`SystemApplier`, libc `chown`/`chmod`) runs it before the
     cog starts, and the restore plan runs at unload. A node that does not exist yet is skipped,
     not guessed. A failed grant refuses the placement.
-  - `advisory`: every cog shares the daemon's uid (a user daemon, as on the Ventuno today).
+  - `advisory`: a claim on a network interface is always advisory (an interface has no owner to
+    change; the report says so in `isolation_note`), and so is a claim whose nodes could not
+    all be handed to the owner. Otherwise it is every cog sharing the daemon's uid (a user daemon, as on the Ventuno today).
     File permissions cannot tell cogs apart, so the claim table and the two refusals above are
     the whole guard: a cog that opens a node it never declared, or names an ALSA device such
     as `plughw:1,0` rather than a path, is not stopped. `cogbus.list` shows `device_isolation`

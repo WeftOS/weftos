@@ -21,6 +21,7 @@
 //! [`NodeFacts`]: clawft_types::placement::NodeFacts
 
 pub mod cog_kind;
+mod device_node;
 pub mod device_owner;
 mod device_sys;
 pub mod host_cogbus;

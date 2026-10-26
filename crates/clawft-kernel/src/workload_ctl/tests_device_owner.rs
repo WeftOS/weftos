@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use clawft_types::placement::TrustTier;
 use ed25519_dalek::SigningKey;
 
+use super::device_node::{NodeId, NodeKind};
 use super::device_owner::*;
 use super::msg::method;
 use super::test_support::*;
@@ -18,9 +19,20 @@ use crate::workload_runtime::{CogIdentity, RunMode};
 /// A node with a camera, a mic and an MCU router, no filesystem involved.
 struct FakeNode {
     nodes: Vec<&'static str>,
+    /// Symlinks: name -> target.
+    links: BTreeMap<&'static str, &'static str>,
+    ids: BTreeMap<&'static str, NodeId>,
     usb: BTreeMap<(u16, u16), Vec<&'static str>>,
     owners: BTreeMap<&'static str, (u32, u32, u32)>,
     nets: Vec<&'static str>,
+}
+
+fn sock(n: u64) -> NodeId {
+    NodeId { kind: NodeKind::Socket, a: 1, b: n }
+}
+
+fn file(n: u64) -> NodeId {
+    NodeId { kind: NodeKind::File, a: 1, b: n }
 }
 
 impl FakeNode {
@@ -28,8 +40,28 @@ impl FakeNode {
         Box::new(Self {
             nodes: vec![
                 "/dev/video0", "/dev/video1", "/dev/snd/controlC1", "/dev/snd/pcmC1D0c", "/dev/snd/pcmC1D0p",
-                "/run/arduino-router.sock",
+                "/run/arduino-router.sock", "/dev/v4l/by-id/usb-cam-video-index0", "/dev/vid-copy", "/dev/mem",
+                "/dev/sda", "/dev/tty", "/etc/passwd", "/run/link.sock", "/dev/snd",
             ],
+            links: BTreeMap::from([
+                ("/dev/v4l/by-id/usb-cam-video-index0", "/dev/video0"),
+                ("/run/link.sock", "/etc/passwd"),
+            ]),
+            ids: BTreeMap::from([
+                ("/dev/video0", NodeId::char_dev(81, 0)),
+                ("/dev/video1", NodeId::char_dev(81, 1)),
+                // A second name for video0 (mknod copy): same major:minor.
+                ("/dev/vid-copy", NodeId::char_dev(81, 0)),
+                ("/dev/snd/controlC1", NodeId::char_dev(116, 0)),
+                ("/dev/snd/pcmC1D0c", NodeId::char_dev(116, 24)),
+                ("/dev/snd/pcmC1D0p", NodeId::char_dev(116, 16)),
+                ("/run/arduino-router.sock", sock(7)),
+                ("/dev/mem", NodeId::char_dev(1, 1)),
+                ("/dev/sda", NodeId { kind: NodeKind::Block, a: 8, b: 0 }),
+                ("/dev/tty", NodeId::char_dev(5, 0)),
+                ("/etc/passwd", file(9)),
+                ("/dev/snd", NodeId { kind: NodeKind::Dir, a: 1, b: 3 }),
+            ]),
             usb: BTreeMap::from([((0x1bcf, 0x0b15), vec!["/dev/video0", "/dev/video1", "/dev/snd/pcmC1D0c"])]),
             nets: vec!["can0", "can1", "can2", "eth0", "wlan0"],
             owners: BTreeMap::from([
@@ -54,6 +86,12 @@ impl DeviceResolver for FakeNode {
     }
     fn netdevs(&self, pattern: &str) -> Vec<String> {
         self.nets.iter().filter(|n| glob_match(pattern, n)).map(|n| n.to_string()).collect()
+    }
+    fn canonical(&self, path: &str) -> String {
+        self.links.get(path).map_or_else(|| path.to_string(), |t| t.to_string())
+    }
+    fn node_id(&self, path: &str) -> Option<NodeId> {
+        self.ids.get(path).copied()
     }
 }
 
@@ -95,7 +133,7 @@ fn a_second_claim_on_the_same_device_is_refused() {
     cam.bind("i-cam");
 
     for other in [path("/dev/video0"), path("/dev/video*"), usb(0x1bcf, 0x0b15), path("/dev/vid?o1")] {
-        let e = l.admit("intruder", &[other.clone()], &[], None).err().unwrap_or_else(|| panic!("{other:?} was admitted"));
+        let e = l.admit("intruder", std::slice::from_ref(&other), &[], None).err().unwrap_or_else(|| panic!("{other:?} was admitted"));
         assert!(e.0.contains("owned by camera (i-cam)"), "{e}");
     }
     // Disjoint devices are fine, and the playback node does not clash with capture.
@@ -172,16 +210,16 @@ fn a_privileged_node_plans_a_chown_to_the_owner_and_the_way_back() {
     assert_eq!(
         r.plan().apply,
         vec![
-            GrantOp::Chown { path: "/dev/video0".into(), uid: 60002, gid: 44, mode: 0o600 },
-            GrantOp::Chown { path: "/dev/video1".into(), uid: 60002, gid: 44, mode: 0o600 },
+            GrantOp::Chown { path: "/dev/video0".into(), uid: 60002, gid: 44, mode: 0o600, expect: Some(NodeId::char_dev(81, 0)) },
+            GrantOp::Chown { path: "/dev/video1".into(), uid: 60002, gid: 44, mode: 0o600, expect: Some(NodeId::char_dev(81, 1)) },
         ],
         "the owner's uid, the node's own group, owner-only mode"
     );
-    assert_eq!(r.plan().restore[0], GrantOp::Chown { path: "/dev/video0".into(), uid: 0, gid: 44, mode: 0o660 });
+    assert_eq!(r.plan().restore[0], GrantOp::Chown { path: "/dev/video0".into(), uid: 0, gid: 44, mode: 0o660, expect: Some(NodeId::char_dev(81, 0)) });
     r.bind("i-cam");
     assert_eq!(l.release("i-cam"), vec![
-        GrantOp::Chown { path: "/dev/video0".into(), uid: 0, gid: 44, mode: 0o660 },
-        GrantOp::Chown { path: "/dev/video1".into(), uid: 0, gid: 44, mode: 0o660 },
+        GrantOp::Chown { path: "/dev/video0".into(), uid: 0, gid: 44, mode: 0o660, expect: Some(NodeId::char_dev(81, 0)) },
+        GrantOp::Chown { path: "/dev/video1".into(), uid: 0, gid: 44, mode: 0o660, expect: Some(NodeId::char_dev(81, 1)) },
     ], "unload hands the original owners back");
 }
 
@@ -191,7 +229,7 @@ fn a_read_only_claim_is_granted_read_only_and_missing_nodes_are_skipped() {
     let ro = DeviceDecl { sel: DeviceSel::Path("/dev/video0".into()), write: false };
     let r = l.admit("viewer", &[ro, path("/dev/snd/controlC*")], &[], Some(&ident(60003))).unwrap().unwrap();
     // controlC1 has no recorded owner in the fake, so it is skipped, not guessed.
-    assert_eq!(r.plan().apply, vec![GrantOp::Chown { path: "/dev/video0".into(), uid: 60003, gid: 44, mode: 0o400 }]);
+    assert_eq!(r.plan().apply, vec![GrantOp::Chown { path: "/dev/video0".into(), uid: 60003, gid: 44, mode: 0o400, expect: Some(NodeId::char_dev(81, 0)) }]);
 }
 
 #[test]
@@ -201,13 +239,146 @@ fn network_interfaces_are_owned_by_name_in_their_own_namespace() {
     assert_eq!(r.paths(), ["can0", "can1", "can2"], "the owner is handed interface names, not paths");
     r.bind("i-can");
     for other in [net("can1"), net("can*"), net("c?n2")] {
-        let e = l.admit("rival", &[other.clone()], &[], None).err().unwrap_or_else(|| panic!("{other:?} was admitted"));
+        let e = l.admit("rival", std::slice::from_ref(&other), &[], None).err().unwrap_or_else(|| panic!("{other:?} was admitted"));
         assert!(e.0.contains("owned by can-fd (i-can)"), "{e}");
     }
     // Other interfaces, and paths that happen to look alike, do not clash.
     l.admit("wifi", &[net("wlan0")], &[], None).unwrap().unwrap().bind("i-wifi");
     l.admit("path", &[path("/dev/can0")], &[], None).unwrap().unwrap().bind("i-path");
     assert_eq!(l.claim_of("i-can").unwrap().0, ["net:can*"]);
+}
+
+fn socket(p: &str) -> DeviceDecl {
+    DeviceDecl { sel: DeviceSel::Socket(p.into()), write: true }
+}
+
+// ---- review findings: no cog may own a node it should not, and a name is not the device ----
+
+#[test]
+fn a_selector_that_resolves_to_the_wrong_kind_or_a_sensitive_node_is_refused() {
+    let l = ledger();
+    // A socket selector must be a socket: /run/link.sock is a symlink to /etc/passwd, a regular file.
+    let e = l.admit("evil", &[socket("/run/link.sock")], &[], Some(&ident(60010))).err().expect("refused");
+    assert!(e.0.contains("/etc/passwd") && e.0.contains("socket"), "{e}");
+    // A path selector must be a character device: not a file, not a directory.
+    for p in ["/etc/passwd", "/dev/snd"] {
+        assert!(l.admit("evil", &[path(p)], &[], None).is_err(), "{p} was admitted");
+    }
+    // Memory, a terminal and a block device are never owned, by name or through a glob.
+    for p in ["/dev/mem", "/dev/tty", "/dev/sda"] {
+        let e = l.admit("evil", &[path(p)], &[], None).err().unwrap_or_else(|| panic!("{p} was admitted"));
+        assert!(e.0.contains("no cog may own it"), "{e}");
+    }
+    // A device behind a by-id link is judged by what it is, not by its name.
+    assert!(l.admit("ok", &[path("/dev/v4l/by-id/usb-cam-video-index0")], &[], None).is_ok());
+    // A wildcard skips the other kinds instead of failing on them.
+    assert!(l.admit("snd", &[path("/dev/snd/*")], &[], None).is_ok());
+}
+
+#[test]
+fn another_name_for_a_claimed_device_clashes() {
+    let l = ledger();
+    l.admit("camera", &[path("/dev/video0")], &[], None).unwrap().unwrap().bind("i-cam");
+    // A symlink to it, and a second node with the same major:minor.
+    for alias in ["/dev/v4l/by-id/usb-cam-video-index0", "/dev/vid-copy"] {
+        let e = l.admit("intruder", &[path(alias)], &[], None).err().unwrap_or_else(|| panic!("{alias} was admitted"));
+        assert!(e.0.contains("one owner per device"), "{e}");
+    }
+    // The reverse order: the alias is claimed first, the real name second.
+    let l = ledger();
+    l.admit("a", &[path("/dev/v4l/by-id/usb-cam-video-index0")], &[], None).unwrap().unwrap().bind("i-a");
+    assert!(l.admit("b", &[path("/dev/video0")], &[], None).is_err());
+    assert!(l.admit("c", &[path("/dev/vid-copy")], &[], None).is_err());
+}
+
+#[test]
+fn an_argument_may_not_name_a_claimed_device_in_any_form() {
+    let l = ledger();
+    l.admit("camera", &[path("/dev/video0")], &[], None).unwrap().unwrap().bind("i-cam");
+    for a in [
+        "-d/dev/video0",
+        "--device=/dev/video0",
+        "--src=v4l2:/dev/video0",
+        "--opt=x,/dev/video0,y",
+        "/dev/v4l/by-id/usb-cam-video-index0",
+        "--device=/dev/v4l/by-id/usb-cam-video-index0",
+        "-i/dev/vid-copy",
+    ] {
+        let args = vec![a.to_string()];
+        let e = l.admit("reader", &[], &args, None).err().unwrap_or_else(|| panic!("{a} was admitted"));
+        assert!(e.0.contains("only its owner may open it"), "{a}: {e}");
+    }
+    let ok = vec!["-d/data/frames".to_string(), "--device=/dev/video1".to_string()];
+    assert!(l.admit("reader", &[], &ok, None).unwrap().is_none(), "an unclaimed device is fine");
+}
+
+#[test]
+fn a_replugged_usb_device_is_resolved_again_when_the_owner_starts() {
+    use std::sync::atomic::{AtomicU8, Ordering};
+    // The camera comes back as video4 after a replug; another cog already owns video4.
+    struct Replug(AtomicU8, Box<FakeNode>);
+    impl DeviceResolver for Replug {
+        fn expand(&self, p: &str) -> Vec<String> {
+            self.1.expand(p)
+        }
+        fn usb_nodes(&self, _: u16, _: u16) -> Vec<String> {
+            if self.0.load(Ordering::SeqCst) == 0 { vec!["/dev/video1".into()] } else { vec!["/dev/video0".into()] }
+        }
+        fn stat(&self, p: &str) -> Option<(u32, u32, u32)> {
+            self.1.stat(p)
+        }
+        fn canonical(&self, p: &str) -> String {
+            self.1.canonical(p)
+        }
+        fn node_id(&self, p: &str) -> Option<NodeId> {
+            self.1.node_id(p)
+        }
+    }
+    let flip = Arc::new(Replug(AtomicU8::new(0), FakeNode::ventuno()));
+    struct Shared(Arc<Replug>);
+    impl DeviceResolver for Shared {
+        fn expand(&self, p: &str) -> Vec<String> {
+            self.0.expand(p)
+        }
+        fn usb_nodes(&self, v: u16, p: u16) -> Vec<String> {
+            self.0.usb_nodes(v, p)
+        }
+        fn stat(&self, p: &str) -> Option<(u32, u32, u32)> {
+            self.0.stat(p)
+        }
+        fn canonical(&self, p: &str) -> String {
+            self.0.canonical(p)
+        }
+        fn node_id(&self, p: &str) -> Option<NodeId> {
+            self.0.node_id(p)
+        }
+    }
+    let l = DeviceLedger::new(Box::new(Shared(flip.clone())));
+    let r = l.admit("usbcam", &[usb(0x1bcf, 0x0b15)], &[], None).unwrap().unwrap();
+    assert_eq!(r.paths(), ["/dev/video1"]);
+    r.bind("i-usb");
+    l.admit("other", &[path("/dev/video0")], &[], None).unwrap().unwrap().bind("i-other");
+    flip.0.store(1, Ordering::SeqCst);
+    let e = l.refresh("i-usb").expect_err("the new node is owned by another cog");
+    assert!(e.0.contains("now belongs to other"), "{e}");
+    // Once it is free the owner is handed the new node.
+    l.release("i-other");
+    let (paths, _) = l.refresh("i-usb").unwrap();
+    assert_eq!(paths, ["/dev/video0"]);
+}
+
+#[test]
+fn a_network_interface_claim_is_advisory_even_with_its_own_uid() {
+    let l = ledger();
+    l.admit("can-fd", &[net("can*")], &[], Some(&ident(60020))).unwrap().unwrap().bind("i-can");
+    assert_eq!(l.claim_of("i-can").unwrap().1, DeviceIsolation::Advisory);
+    let rep = l.report();
+    let row = &rep["owners"][0];
+    assert_eq!(row["device_isolation"], "advisory");
+    assert!(row["isolation_note"].as_str().unwrap().contains("network interface"), "{row}");
+    // A device owned with its own uid next to it is still enforced.
+    l.admit("cam", &[path("/dev/video0")], &[], Some(&ident(60021))).unwrap().unwrap().bind("i-cam");
+    assert_eq!(l.claim_of("i-cam").unwrap().1, DeviceIsolation::Enforced);
 }
 
 // ---- through the real placement path ----

@@ -60,6 +60,22 @@ impl WorkloadHostService {
         Ok(())
     }
 
+    /// The owner is about to (re)start: a USB device that was replugged has new nodes, a glob may
+    /// match more, and a name may now point at a device another cog owns. Resolve the claim again;
+    /// refuse the start if it now overlaps another owner, and give the owner's uid any new node.
+    pub(super) fn device_recheck(&self, instance: &str) -> Result<(), Refusal> {
+        let (_, fresh) = self
+            .devices
+            .refresh(instance)
+            .map_err(|e| Refusal::new(RefusalCode::Admission, e.0))?;
+        if let (false, Some(a)) = (fresh.is_empty(), self.device_applier.get())
+            && let Err(e) = a.apply(&fresh)
+        {
+            return Err(Refusal::new(RefusalCode::Runtime, format!("devices: cannot give the new nodes to the cog's uid: {e}")));
+        }
+        Ok(())
+    }
+
     /// The instance is gone for good: drop its claim and restore the nodes.
     pub(super) fn device_forget(&self, instance: &str) {
         let restore = self.devices.release(instance);
