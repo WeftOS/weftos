@@ -127,6 +127,73 @@ What changes in the plan:
   The RX cog resets `loopback`, the DDS and the TX attenuation when it takes ownership, and its
   health check fails on an all-zero buffer.
 
+### 2.3 The receive cog and the soak (R2 and R3, 2026-10-26, on the Ventuno)
+
+`sdr-pluto-rx` and `spectrum` (public cogs repo, branch `wt/sdr-pluto`, ADR-176 and ADR-177) were
+run on the Ventuno against the Pluto through a throwaway broker (`pluto_demo`, in the style of
+`npu_demo`; the broker there has no service calls yet). Raw results: `/data/build/pluto-soak/`
+on the board (`run-20261026-022534/` the first hour, `run-20261026-033259/` the clean hour and the
+band-plan phase, `free-window/` the short tests). Receive only throughout; the one loopback test
+set the chip's digital loopback at -89.75 dB TX attenuation.
+
+**What the bench settled**
+
+| Test | Result |
+|---|---|
+| Backend measured at start (`--backend auto`) | `ip:192.168.2.1` 5.8 MS/s against `usb:` 4.4 MS/s; the cog chose `ip:` and says so in `backend` |
+| Read size over `ip:` | 8192-sample libiio reads cannot hold 5 MS/s (3.2 MS/s, 30 percent lost); 32768 to 524288 samples were gap-free. The cog reads 65536 and cuts the read into 8192-sample ring records |
+| Rate limit | 7.5 MS/s delivered 76 percent and 10 MS/s 57 percent of the expected samples; the lost count tracked `expected - delivered` to within the part not yet confirmed (the cog confirms a loss 0.25 s after it happens) |
+| `usb:` at 5 MS/s | 11 percent counted lost, as the 4.4 MS/s ceiling predicts |
+| FIR for low rates | rates down to 600 kS/s through the 64-tap decimating FIR (2 and 4), gap-free; above 2.083 MS/s the FIR is switched off again. The chip wants `filter_fir_en` written on both the input and the output `voltage0` |
+| Loopback left on by a crashed client | set to 1, the cog logged `loopback_was: 1`, reset it to 0, and the receive path read normally |
+| Safe state on taking the radio | loopback 0, four DDS tones off, TX attenuation -89.75 dB, recorded in `safe_state` of every status |
+| Services through the broker | `tune`, `set_rate`, `lease` (another caller refused for the lease's length), `plan`, `status` answered; `tx_config` refused with its reason. Two consumers (the spectrum cog asking for 433.92 MHz, a caller asking for 1090 MHz) took turns on the one tuner, 0 samples lost, with the simulated radio |
+
+**R2: an hour of 2.4 GHz at 5 MS/s, every gap counted**
+
+| | Clean hour (camera idle) | First hour (camera on the same hub) |
+|---|---|---|
+| Duration | 3595 s | 3593 s |
+| Delivered | 17,972,396,032 samples | 15,853,158,400 |
+| Expected from the clock | 17,972,686,182 | 17,960,148,748 |
+| Counted lost | **0** (290,150 pending, 0.0016 percent, which is the clock's drift and read granularity) | 2,035,460,316 (11.3 percent), 7567 gap events of about 53 ms |
+| Overflows, all-zero reads, disconnects, apply errors | 0, 0, 0, 0 | 0, 0, 0, 0 |
+| An independent reader of the ring (the sink) | 2,195,449 records, 0 ring skips, 0 gap records | agreed with the cog's count |
+| AD9364 / Zynq temperature | 40.4 to 43.0 / 61.2 to 65.9 C | 40.4 to 43.9 / 61.0 to 65.8 C |
+| Board power (INA232) | mean 12.77 W, 12.0 to 16.8 | mean 13.19 W |
+| Cog CPU, memory | about 47 to 58 percent of a core, 25 MB | the same |
+
+The first hour started clean: 5.00 MS/s with nothing lost for 6.5 minutes. Then the delivered rate
+stepped down to 4.33 MS/s and stayed there. Cause: **the Pluto and the board's UVC camera and USB
+audio share one 480 Mb/s root hub** (`lsusb -t`: Bus 001, ports 2 and 4), and the P3 lane started a
+`gst-launch v4l2src` MJPEG 1280x720 stream at that moment, whose isochronous reservation takes the
+bulk bandwidth the Pluto's samples need. CPU, load and temperatures were unremarkable. **5 MS/s is
+safe only while nothing else streams on that hub; with the camera on, about 4 MS/s is.** The
+camera was off for the clean hour (`camera_procs` is logged beside every power sample in
+`env.csv`). If the camera and the Pluto must run together, move one of them to the other
+controller or lower the Pluto's rate.
+
+What the loss count can and cannot resolve (it is counted from the host clock because the AD9363
+stream has no hardware timestamps): a loss under 20 ms, or a loss rate under about 0.1 percent, is
+not told apart from USB jitter and crystal drift; a gap is declared 0.25 s after it happened.
+`samples.expected` against `samples.delivered` is always shown, so a slow drift is visible even when
+`lost` stays 0.
+
+**R3: the 2.4 GHz occupancy reading per minute, with loss reported.** `spectrum` ran beside the
+owner for the clean hour: 51 `band.occupancy` readings (one a minute) and a `spectrum.psd.v1`
+every 2 s. At 2437 MHz in the room: occupancy 1.4 to 2.5 percent of cells more than 10 dB above
+each frame's median (mean 1.9), floor -57.0 to -55.5 dBFS, peak up to -0.5 dBFS (a strong nearby
+transmitter). The first two readings carry `loss.fraction` 0.020 and 0.033: that was the first
+build of the cog, which used a whole core and missed 1.6 to 3 percent of the stream because its
+base64 decode searched a table; it reported the miss, as designed. With the lookup table it uses
+about half a core and has missed nothing (every later reading 0).
+
+**Multi-hour band-plan phase.** `2437e6:5e6:8000, 1090e6:2.4e6:6000, 433.92e6:2e6:5000,
+915e6:2e6:5000` (a 24 s cycle: 2.4 GHz, 1090 MHz, 433 and 915 MHz, the FIR on the last two) with
+the spectrum cog reading it, started 04:33 board time for 6 hours. Results: see "Overnight" below.
+
+Overnight: (pending; filled in when the run ends).
+
 ## 3. How it attaches to the Ventuno
 
 The Pluto goes on the Ventuno's USB 3 host port, where the board's Linux sees it the way the Mac
