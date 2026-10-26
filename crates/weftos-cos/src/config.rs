@@ -42,6 +42,8 @@ pub struct CosConfig {
     pub endpoints: BTreeMap<String, EndpointConfig>,
     /// Where `devices.status` looks for the owner's devices.
     pub devices: DevicesConfig,
+    /// Idle art cards for the e-ink glance panel (`glance-serial`).
+    pub art: ArtConfig,
     /// External tool sources: MCP servers whose allow-listed tools become
     /// chief-of-staff tools named `<id>.<tool>`. Empty by default.
     pub mcp_servers: Vec<McpServerConfig>,
@@ -272,6 +274,24 @@ impl Default for DevicesConfig {
     }
 }
 
+/// The image service behind the glance panel's idle art. Off without `url`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ArtConfig {
+    /// Base URL of the image service, for example `http://host:18700`.
+    pub url: Option<String>,
+    /// File holding the bearer token. Refused unless only the owner can read
+    /// it (mode 600). The token is never logged.
+    pub token_file: PathBuf,
+}
+
+impl Default for ArtConfig {
+    fn default() -> Self {
+        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+        Self { url: None, token_file: home.join(".config/weftos/sd-art.token") }
+    }
+}
+
 /// Remote listening. The loopback listener at `bind` always runs; this adds
 /// a second one on the machine's Tailscale address, token-protected.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -494,6 +514,7 @@ impl Default for CosConfig {
             serve: ServeConfig::default(),
             endpoints: BTreeMap::new(),
             devices: DevicesConfig::default(),
+            art: ArtConfig::default(),
             mcp_servers: Vec::new(),
             mcp_catalog: McpCatalogConfig::default(),
             mcp_enable: Vec::new(),

@@ -12,8 +12,9 @@ use serde_json::{Value, json};
 use tokio::sync::{Mutex, broadcast};
 
 use crate::CosError;
-use crate::conversation::{Conversation, GuideAnswer, HOST_ENDPOINT, Source, TURN_HISTORY_CAP, TurnId, TurnMessage, UserUtterance, valid_endpoint_name};
-use crate::events::{AgentState, Event, redact};
+use crate::conversation::{AnswerKind, Conversation, GuideAnswer, HOST_ENDPOINT, Source, TURN_HISTORY_CAP, TurnId, TurnMessage, UserUtterance, valid_endpoint_name};
+use crate::events::{AgentState, CardKind, Event, redact};
+use crate::glance_store::GlanceStore;
 use crate::guide::{Resolution, UiHandle};
 use crate::prompt::system_prompt_with;
 use crate::routing::{ModelRoutes, Route, Tier};
@@ -76,6 +77,8 @@ struct Inner {
     /// Remote endpoints whose engine is `none`: their replies are never
     /// flagged `speak`. Another endpoint's setting does not touch this.
     silent_endpoints: std::sync::Mutex<std::collections::HashSet<String>>,
+    /// The glance card and art, and the panel mirror (`GET /v1/cos/glance`).
+    glance: GlanceStore,
 }
 
 #[derive(Default)]
@@ -105,6 +108,21 @@ impl CosAgent {
         let quick_model = routes.quick().model_id.clone();
         let ui = UiHandle::new(tx.clone());
         let tools = crate::tools::ui::register(tools, &ui);
+        let glance = GlanceStore::default();
+        let tools = crate::tools::glance::register(tools, &ui, &glance);
+        if let Ok(rt) = tokio::runtime::Handle::try_current() {
+            // Mirror the panel from the agent's own events.
+            let (mut rx, mirror) = (tx.subscribe(), glance.clone());
+            rt.spawn(async move {
+                loop {
+                    match rx.recv().await {
+                        Ok(ev) => mirror.observe(&ev),
+                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(_) => break,
+                    }
+                }
+            });
+        }
         Self {
             inner: Arc::new(Inner {
                 routes,
@@ -125,6 +143,7 @@ impl CosAgent {
                 // read before the first turn is not null.
                 snapshot: std::sync::Mutex::new(Snapshot { state: Some(AgentState::Idle), model: Some(quick_model), ..Snapshot::default() }),
                 silent_endpoints: std::sync::Mutex::new(std::collections::HashSet::new()),
+                glance,
             }),
         }
     }
@@ -140,6 +159,17 @@ impl CosAgent {
     pub fn with_focus(self, focus: Focus) -> Self {
         *self.inner.focus.lock().unwrap_or_else(|e| e.into_inner()) = Some(focus);
         self
+    }
+
+    /// Keep the glance card and art under `dir` (owner-only files), and
+    /// restore a card that is still live.
+    pub fn with_glance_dir(self, dir: std::path::PathBuf) -> Self {
+        self.inner.glance.set_dir(dir);
+        self
+    }
+
+    pub fn glance_store(&self) -> &GlanceStore {
+        &self.inner.glance
     }
 
     fn record_turn(&self, id: &TurnId, endpoint: String, voice: bool) {
@@ -231,7 +261,25 @@ impl Conversation for CosAgent {
     }
 
     async fn answer(&self, answer: GuideAnswer) -> Result<TurnId, CosError> {
+        self.answer_from(answer, None).await
+    }
+
+    async fn answer_from(&self, answer: GuideAnswer, endpoint: Option<String>) -> Result<TurnId, CosError> {
         let turn_id = TurnId::new();
+        if answer.kind == AnswerKind::Answer
+            && let Some(card) = self.inner.glance.live(chrono::Utc::now()).filter(|c| c.id == answer.id)
+        {
+            let (card, choice) = self.inner.glance.answer(&card.id, &answer.value, chrono::Utc::now())?;
+            self.inner.ui.emit(Event::Card { card: CardKind::Clear, id: card.id, title: String::new(), detail: String::new(), alert: String::new(), options: Vec::new(), ttl_minutes: 0, reason: "answered".into() });
+            let endpoint = endpoint.filter(|e| valid_endpoint_name(e)).unwrap_or_else(|| HOST_ENDPOINT.to_string());
+            let utterance = UserUtterance::touch(format!("Answer to card \"{}\": {}", card.title, choice)).from_endpoint(endpoint.clone());
+            self.remember_user(&turn_id, &endpoint, &utterance.text);
+            self.record_turn(&turn_id, endpoint, false);
+            let agent = self.clone();
+            let id = turn_id.clone();
+            tokio::spawn(async move { agent.run_turn(id, utterance).await });
+            return Ok(turn_id);
+        }
         match self.inner.ui.apply_answer(&answer)? {
             Resolution::Turn(utterance) => {
                 self.remember_user(&turn_id, HOST_ENDPOINT, &utterance.text);
@@ -247,6 +295,14 @@ impl Conversation for CosAgent {
             }
         }
         Ok(turn_id)
+    }
+
+    fn glance(&self) -> serde_json::Value {
+        self.inner.glance.snapshot(chrono::Utc::now())
+    }
+
+    fn glance_art_png(&self) -> Option<Vec<u8>> {
+        self.inner.glance.art_png()
     }
 
     fn events(&self) -> broadcast::Receiver<Event> {

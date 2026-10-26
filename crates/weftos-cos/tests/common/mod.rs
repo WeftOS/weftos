@@ -246,6 +246,7 @@ pub fn kinds(events: &[Event]) -> Vec<&'static str> {
             Event::Checklist { .. } => "checklist",
             Event::Steps { .. } => "steps",
             Event::Ask { .. } => "ask",
+            Event::Card { .. } => "card",
         })
         .collect()
 }

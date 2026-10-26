@@ -4,22 +4,18 @@
 //! `Glance::apply` is pure (events in, fields out) so the derivation is unit
 //! tested from a recorded stream. `run` is the bridge: SSE in, one JSON line
 //! out per change (debounced), heartbeat so the panel can tell "idle" from
-//! "no link".
+//! "no link". The serial bridge lives in `glance_bridge`.
 
-use std::path::{Path, PathBuf};
-use std::time::Duration;
-
+use chrono::{DateTime, Utc};
 use serde::Serialize;
-use tokio::sync::mpsc;
-use tokio::time::Instant;
 
-use crate::events::{AgentState, Event};
+use crate::events::{AgentState, CardKind, Event};
 
 /// Longest string the bridge sends for any free-text field; the firmware
 /// truncates again to what fits.
 const MAX_FIELD: usize = 120;
-const DEBOUNCE: Duration = Duration::from_secs(2);
-const HEARTBEAT: Duration = Duration::from_secs(60);
+
+pub use crate::glance_bridge::{GlanceSerialArgs, run};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Glance {
@@ -30,12 +26,33 @@ pub struct Glance {
     pub alert: String,
     pub model: String,
     pub ts: String,
+    /// Set by the bridge when the panel shows art and must go back to status
+    /// even if the text did not change. Sent only when true.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub redraw: bool,
     #[serde(skip)]
     guide_active: bool,
     #[serde(skip)]
-    blocked_reason: String,
+    pub(crate) blocked_reason: String,
     #[serde(skip)]
     tool_alert: String,
+    #[serde(skip)]
+    base_task: String,
+    #[serde(skip)]
+    base_next: String,
+    #[serde(skip)]
+    card: Option<LiveCard>,
+}
+
+/// A `glance.card` card: owns `task`/`next`/`alert` until it expires.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LiveCard {
+    kind: CardKind,
+    title: String,
+    detail: String,
+    alert: String,
+    options: Vec<String>,
+    expires: DateTime<Utc>,
 }
 
 impl Default for Glance {
@@ -48,10 +65,25 @@ impl Default for Glance {
             alert: String::new(),
             model: String::new(),
             ts: String::new(),
+            redraw: false,
             guide_active: false,
             blocked_reason: String::new(),
             tool_alert: String::new(),
+            base_task: String::new(),
+            base_next: String::new(),
+            card: None,
         }
+    }
+}
+
+impl LiveCard {
+    /// The detail, or the options as `A: x / B: y` when there is none.
+    fn next_line(&self) -> String {
+        if !self.detail.is_empty() {
+            return self.detail.clone();
+        }
+        let letters = ['A', 'B'];
+        self.options.iter().zip(letters).map(|(o, l)| format!("{l}: {o}")).collect::<Vec<_>>().join(" / ")
     }
 }
 
@@ -59,6 +91,11 @@ impl Glance {
     /// Fold one event into the glance. Unknown shapes never reach here
     /// (the stream parser drops them), so every arm is a deliberate rule.
     pub fn apply(&mut self, ev: &Event) {
+        self.apply_at(ev, Utc::now());
+    }
+
+    /// [`Glance::apply`] with an explicit clock, for tests and replays.
+    pub fn apply_at(&mut self, ev: &Event, now: DateTime<Utc>) {
         match ev {
             Event::State { state, reason } => {
                 self.state = match state {
@@ -81,7 +118,7 @@ impl Glance {
             }
             Event::Status { task, model, .. } => {
                 if !self.guide_active {
-                    self.task = task.clone();
+                    self.base_task = task.clone();
                 }
                 self.model = model.clone();
             }
@@ -92,13 +129,13 @@ impl Glance {
             },
             Event::Steps { title, steps, current, .. } => {
                 self.guide_active = true;
-                self.task = title.clone();
-                self.next = steps.get(*current).cloned().unwrap_or_else(|| "done".into());
+                self.base_task = title.clone();
+                self.base_next = steps.get(*current).cloned().unwrap_or_else(|| "done".into());
             }
             Event::Checklist { title, items, .. } => {
                 self.guide_active = true;
-                self.task = title.clone();
-                self.next = items
+                self.base_task = title.clone();
+                self.base_next = items
                     .iter()
                     .find(|i| !i.done)
                     .map(|i| i.text.clone())
@@ -106,17 +143,59 @@ impl Glance {
             }
             Event::Ask { question, .. } => {
                 self.guide_active = true;
-                self.next = question.clone();
+                self.base_next = question.clone();
             }
             Event::Message { text, is_final: true, .. } if !self.guide_active => {
-                self.next = text.clone();
+                self.base_next = text.clone();
+            }
+            Event::Card { card: CardKind::Clear, .. } => self.card = None,
+            Event::Card { card, title, detail, alert, options, ttl_minutes, .. } => {
+                let ttl = if *ttl_minutes == 0 { card.default_ttl_minutes() } else { *ttl_minutes };
+                self.card = Some(LiveCard {
+                    kind: *card,
+                    title: title.clone(),
+                    detail: detail.clone(),
+                    alert: alert.clone(),
+                    options: options.clone(),
+                    expires: now + chrono::Duration::minutes(i64::from(ttl)),
+                });
             }
             _ => {}
         }
+        self.render(now);
+    }
+
+    /// True while a `glance.card` card is up.
+    pub fn has_card(&self) -> bool {
+        self.card.is_some()
+    }
+
+    /// Expire a card whose time is up. Returns true when it just went, so
+    /// the bridge can redraw: expiry has no event of its own.
+    pub fn tick(&mut self, now: DateTime<Utc>) -> bool {
+        let expired = self.card.as_ref().is_some_and(|c| now >= c.expires);
+        if expired {
+            self.render(now);
+        }
+        expired
+    }
+
+    /// Recompute the displayed `task`/`next`/`alert` from the base fields,
+    /// the live card (if any) and the alerts. Agent state is never touched.
+    pub(crate) fn render(&mut self, now: DateTime<Utc>) {
+        if self.card.as_ref().is_some_and(|c| now >= c.expires) {
+            self.card = None;
+        }
+        let (task, next, card_alert) = match &self.card {
+            Some(c) => (format!("{}: {}", c.kind.prefix(), c.title), c.next_line(), Some(c.alert.clone())),
+            None => (self.base_task.clone(), self.base_next.clone(), None),
+        };
+        self.task = task;
+        self.next = next;
         self.alert = if !self.blocked_reason.is_empty() {
             self.blocked_reason.clone()
         } else {
-            self.tool_alert.clone()
+            card_alert.unwrap_or_else(|| self.tool_alert.clone())
         };
     }
 
@@ -133,7 +212,7 @@ impl Glance {
     }
 
     /// Everything but the clock: what decides whether the panel must redraw.
-    fn content(&self) -> (&str, &str, &str, &str, &str) {
+    pub fn content(&self) -> (&str, &str, &str, &str, &str) {
         (&self.state, &self.task, &self.next, &self.alert, &self.model)
     }
 }
@@ -192,153 +271,6 @@ impl SseParser {
             }
         }
         out
-    }
-}
-
-#[derive(clap::Args, Clone, Debug)]
-pub struct GlanceSerialArgs {
-    /// Serial port of the e-ink board, e.g. /dev/cu.usbmodem214301.
-    #[arg(long)]
-    pub port: PathBuf,
-    /// Base URL of the local cos agent.
-    #[arg(long, default_value = "http://127.0.0.1:18300")]
-    pub url: String,
-    /// Status file `devices.status` reads; defaults to the CoS config's
-    /// `devices.glance_status`.
-    #[arg(long)]
-    pub status_file: Option<PathBuf>,
-}
-
-/// What `devices.status` learns about this process: best effort, never fatal.
-fn write_status(path: &Path, port: &Path, port_open: bool, last_write: Option<&str>, last_error: Option<&str>) {
-    let body = serde_json::json!({
-        "pid": std::process::id(),
-        "port": port.display().to_string(),
-        "port_open": port_open,
-        "updated_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        "last_write_at": last_write,
-        "last_error": last_error,
-    });
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    let tmp = path.with_extension("tmp");
-    if std::fs::write(&tmp, body.to_string()).is_ok() {
-        let _ = std::fs::rename(&tmp, path);
-    }
-}
-
-fn open_port(port: &Path) -> std::io::Result<std::fs::File> {
-    // No serial crate in the workspace: configure raw 115200 with stty (the
-    // board's USB CDC ignores the rate, the tty layer must not cook bytes).
-    let ok = std::process::Command::new("stty")
-        .args(["-f"])
-        .arg(port)
-        .args(["115200", "raw", "-echo", "-hupcl"])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-    if !ok {
-        return Err(std::io::Error::other("stty failed"));
-    }
-    std::fs::OpenOptions::new().write(true).open(port)
-}
-
-/// SSE reader task: pushes events, and `None` whenever the link drops.
-async fn read_events(url: String, tx: mpsc::Sender<Option<Event>>) {
-    let http = reqwest::Client::new();
-    loop {
-        if let Ok(mut resp) = http.get(format!("{url}/v1/cos/events")).send().await
-            && resp.status().is_success()
-        {
-            {
-                let mut parser = SseParser::default();
-                // Connected: clear a stale "link down" alert.
-                let _ = tx.send(Some(Event::state(AgentState::Idle))).await;
-                while let Ok(Some(chunk)) = resp.chunk().await {
-                    for ev in parser.feed(&String::from_utf8_lossy(&chunk)) {
-                        if tx.send(Some(ev)).await.is_err() {
-                            return;
-                        }
-                    }
-                }
-            }
-        }
-        if tx.send(None).await.is_err() {
-            return;
-        }
-        tokio::time::sleep(Duration::from_secs(3)).await;
-    }
-}
-
-pub async fn run(args: GlanceSerialArgs) -> anyhow::Result<()> {
-    use std::io::Write;
-    let (tx, mut rx) = mpsc::channel(256);
-    tokio::spawn(read_events(args.url.trim_end_matches('/').to_string(), tx));
-
-    let mut g = Glance::default();
-    let mut port: Option<std::fs::File> = None;
-    let mut sent: Option<Glance> = None;
-    let mut dirty = true;
-    let mut deadline = Instant::now() + DEBOUNCE;
-    let mut last_write = Instant::now() - HEARTBEAT;
-    let status_path = args.status_file.clone().unwrap_or_else(|| crate::config::DevicesConfig::default().glance_status);
-    let mut last_write_at: Option<String> = None;
-    let mut last_error: Option<String> = None;
-    loop {
-        write_status(&status_path, &args.port, port.is_some(), last_write_at.as_deref(), last_error.as_deref());
-        tokio::select! {
-            msg = rx.recv() => match msg {
-                Some(Some(ev)) => { g.apply(&ev); dirty = true; deadline = Instant::now() + DEBOUNCE; }
-                Some(None) => {
-                    g.state = "blocked".into();
-                    g.blocked_reason = "agent link down".into();
-                    g.alert = g.blocked_reason.clone();
-                    dirty = true;
-                    deadline = Instant::now() + DEBOUNCE;
-                }
-                None => return Ok(()),
-            },
-            _ = tokio::time::sleep_until(deadline.max(Instant::now())), if dirty => {}
-            _ = tokio::time::sleep(Duration::from_secs(5)) => {}
-        }
-        let now = Instant::now();
-        let changed = sent.as_ref().map(|s| s.content() != g.content()).unwrap_or(true);
-        let due = (dirty && changed && now >= deadline) || now.duration_since(last_write) >= HEARTBEAT;
-        if dirty && !changed {
-            dirty = false;
-        }
-        if !due {
-            continue;
-        }
-        if port.is_none() {
-            match open_port(&args.port) {
-                Ok(f) => port = Some(f),
-                Err(e) => {
-                    tracing::warn!("serial {}: {e}", args.port.display());
-                    last_error = Some(e.to_string());
-                    last_write = now - HEARTBEAT + Duration::from_secs(5);
-                    deadline = now + Duration::from_secs(3);
-                    continue;
-                }
-            }
-        }
-        let line = g.to_line(&chrono::Local::now().format("%H:%M").to_string());
-        let f = port.as_mut().expect("opened above");
-        if let Err(e) = f.write_all(line.as_bytes()).and_then(|_| f.flush()) {
-            tracing::warn!("serial write: {e}; reopening");
-            last_error = Some(e.to_string());
-            port = None;
-            sent = None;
-            deadline = now + Duration::from_secs(3);
-            continue;
-        }
-        tracing::info!("glance: {}", line.trim_end());
-        sent = Some(g.clone());
-        dirty = false;
-        last_write = now;
-        last_write_at = Some(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
-        last_error = None;
     }
 }
 

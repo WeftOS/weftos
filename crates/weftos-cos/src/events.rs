@@ -86,6 +86,88 @@ pub enum Event {
         index: usize,
         total: usize,
     },
+    /// A card the chief of staff put on the e-ink glance panel on purpose
+    /// (additive; consumers that do not know it ignore it). `ttl_minutes` is
+    /// the resolved lifetime; `reason` is why it was shown.
+    Card {
+        card: CardKind,
+        /// Short random hex naming this card; answers refer to it.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        id: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        title: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        detail: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        alert: String,
+        /// Up to two short answers the owner can tap.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        options: Vec<String>,
+        #[serde(default, skip_serializing_if = "is_zero")]
+        ttl_minutes: u32,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        reason: String,
+    },
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
+}
+
+/// What a glance card is for. `Clear` takes the current card down.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CardKind {
+    NeedsYou,
+    Now,
+    WaitingOn,
+    Eod,
+    Clear,
+}
+
+impl CardKind {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "needs_you" => Some(Self::NeedsYou),
+            "now" => Some(Self::Now),
+            "waiting_on" => Some(Self::WaitingOn),
+            "eod" => Some(Self::Eod),
+            "clear" => Some(Self::Clear),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NeedsYou => "needs_you",
+            Self::Now => "now",
+            Self::WaitingOn => "waiting_on",
+            Self::Eod => "eod",
+            Self::Clear => "clear",
+        }
+    }
+
+    /// How long a card of this kind stays up when the caller names no ttl.
+    pub fn default_ttl_minutes(self) -> u32 {
+        match self {
+            Self::NeedsYou => 240,
+            Self::Now => 120,
+            Self::WaitingOn => 480,
+            Self::Eod => 720,
+            Self::Clear => 0,
+        }
+    }
+
+    /// Short label the panel shows before the title.
+    pub fn prefix(self) -> &'static str {
+        match self {
+            Self::NeedsYou => "NEEDS YOU",
+            Self::Now => "NOW",
+            Self::WaitingOn => "WAITING",
+            Self::Eod => "EOD",
+            Self::Clear => "",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -154,6 +236,11 @@ impl Event {
                 *title = redact(title);
                 for s in steps {
                     *s = redact(s);
+                }
+            }
+            Event::Card { title, detail, alert, reason, options, .. } => {
+                for f in [title, detail, alert, reason].into_iter().chain(options.iter_mut()) {
+                    *f = redact(f);
                 }
             }
             Event::Ask { question, explain, choices, .. } => {

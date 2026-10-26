@@ -33,7 +33,7 @@ fn blocks(tag: &str) -> Vec<Value> {
 
 /// Every `kind` the event type can serialize. Adding a variant without
 /// documenting it fails `every_event_kind_is_documented`.
-const KINDS: &[&str] = &["state", "status", "token", "message", "tool", "page", "layout", "checklist", "steps", "ask"];
+const KINDS: &[&str] = &["state", "status", "token", "message", "tool", "page", "layout", "checklist", "steps", "ask", "card"];
 
 /// Exhaustive on purpose: a new `Event` variant fails to compile here until
 /// it is added to `KINDS` and documented in §3.2.
@@ -49,6 +49,7 @@ fn kind_of(e: &Event) -> &'static str {
         Event::Checklist { .. } => "checklist",
         Event::Steps { .. } => "steps",
         Event::Ask { .. } => "ask",
+        Event::Card { .. } => "card",
     }
 }
 
@@ -178,4 +179,22 @@ async fn a_turn_streams_in_the_documented_order() {
         v
     });
     assert_eq!(compact, ["state:thinking", "status", "token", "state:speaking", "message:true", "state:idle"]);
+}
+
+#[tokio::test]
+async fn glance_routes_answer_as_documented() {
+    assert!(DOC.contains("`GET /v1/cos/glance`") && DOC.contains("`GET /v1/cos/glance/art.png`") && DOC.contains("Answer to card"));
+    let (addr, _t) = serve().await;
+    let c = reqwest::Client::new();
+    let snap: Value = c.get(format!("http://{addr}/v1/cos/glance")).send().await.unwrap().json().await.unwrap();
+    for k in ["card", "fields", "art"] {
+        assert!(snap.get(k).is_some(), "{k}");
+    }
+    assert!(snap["card"].is_null() && snap["art"].is_null());
+    for k in ["state", "task", "next", "alert", "model", "ts"] {
+        assert!(snap["fields"].get(k).is_some(), "fields.{k}");
+    }
+    assert_eq!(c.get(format!("http://{addr}/v1/cos/glance/art.png")).send().await.unwrap().status(), 404);
+    let stale = c.post(format!("http://{addr}/v1/cos/answer")).json(&json!({"kind": "answer", "id": "deadbeef", "value": "ship"})).send().await.unwrap();
+    assert_eq!(stale.status(), 400);
 }

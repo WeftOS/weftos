@@ -283,6 +283,7 @@ async fn print_events(mut rx: tokio::sync::broadcast::Receiver<Event>) {
             Ok(Event::Layout { layout }) => eprintln!("[layout] {layout:?}"),
             Ok(Event::Checklist { title, items, .. }) => eprintln!("[checklist] {title}: {}/{}", items.iter().filter(|i| i.done).count(), items.len()),
             Ok(Event::Steps { title, current, steps, .. }) => eprintln!("[steps] {title}: {}/{}", current + 1, steps.len()),
+            Ok(Event::Card { card, title, .. }) => eprintln!("[card] {}: {title}", card.as_str()),
             Ok(Event::Ask { question, choices, index, total, .. }) => {
                 eprintln!("[ask] Q{index}/{total} {question}");
                 for c in choices {

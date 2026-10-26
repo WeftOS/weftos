@@ -123,6 +123,11 @@ pub async fn build(cfg: &CosConfig) -> Result<Built, CosError> {
     }
 
     let agent = CosAgent::new(routes, tools, ToolLog::new(cfg.tool_log.clone())).with_max_tool_rounds(cfg.models.max_tool_rounds).with_focus(focus.clone());
+    // Glance card and art persist beside the glance status file.
+    let agent = match cfg.devices.glance_status.parent() {
+        Some(dir) => agent.with_glance_dir(dir.to_path_buf()),
+        None => agent,
+    };
     Ok(Built {
         agent,
         quick_model: plan.quick,

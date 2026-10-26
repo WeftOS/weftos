@@ -7,6 +7,7 @@
 pub mod board;
 pub mod cards;
 pub mod devices;
+pub mod glance;
 pub mod harness;
 pub mod kickoff;
 pub mod mcp;
