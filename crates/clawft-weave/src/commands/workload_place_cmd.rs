@@ -128,6 +128,10 @@ pub struct PlaceArgs {
     /// UDP port the cog binds for the sensor feed.
     #[arg(long, default_value_t = 5006)]
     pub csi_port: u16,
+    /// Extra cog argument (repeat, e.g. `--arg=--state-dir --arg=/data/x`). The host checks
+    /// each against the cog's `[config]` cli_args; `--once`/`--interval` come from `--mode`.
+    #[arg(long = "arg", value_name = "ARG", allow_hyphen_values = true)]
+    pub args: Vec<String>,
     /// Load without starting.
     #[arg(long)]
     pub no_start: bool,
@@ -171,6 +175,9 @@ pub fn request(cmd: &WorkloadPlaceCmd, cwd: &Path) -> Result<(&'static str, Valu
                 "allow_emulated": a.allow_emulated, "mode": a.mode, "interval": a.interval,
                 "csi_port": a.csi_port, "start": !a.no_start,
             });
+            if !a.args.is_empty() {
+                p["args"] = json!(a.args);
+            }
             if a.no_migrate {
                 p["migratable"] = json!(false);
             }
@@ -372,6 +379,7 @@ mod tests {
             mode: "interval".into(),
             interval: 1,
             csi_port: 5006,
+            args: vec![],
             no_start: false,
             explain: true,
             json: false,
@@ -404,6 +412,18 @@ mod tests {
     fn parse(argv: &[&str]) -> Result<WorkloadPlaceCmd, clap::Error> {
         use clap::Parser;
         Cli::try_parse_from(std::iter::once("weaver").chain(argv.iter().copied())).map(|c| c.cmd)
+    }
+
+    #[test]
+    fn place_sends_repeated_arg_flags_as_args_and_omits_them_when_absent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pkg = tmp.path().to_str().unwrap();
+        let cmd = parse(&["place", pkg, "--arg=--state-dir", "--arg", "/data/s", "--arg=--watch"]).unwrap();
+        let (m, p) = req(&cmd);
+        assert_eq!(m, "workload.place");
+        assert_eq!(p["args"], json!(["--state-dir", "/data/s", "--watch"]));
+        let (_, p) = req(&parse(&["place", pkg]).unwrap());
+        assert!(p.get("args").is_none(), "{p}");
     }
 
     #[test]
