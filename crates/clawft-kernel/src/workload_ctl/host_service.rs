@@ -150,12 +150,12 @@ pub struct WorkloadHostService {
     pub(super) node_id: String,
     pub(super) key: SigningKey,
     anchors: TrustAnchors,
-    controllers: Box<dyn ControllerPolicy>,
+    pub(super) controllers: Box<dyn ControllerPolicy>,
     nonces: NonceGuard,
     pub(super) routes: BTreeMap<String, Arc<WorkloadHost>>,
     exchange: Arc<ArtifactExchange>,
     gate: Arc<dyn GateBackend>,
-    chain: Option<Arc<ChainManager>>,
+    pub(super) chain: Option<Arc<ChainManager>>,
     facts: Mutex<Option<SignedNodeFacts>>,
     facts_source: Option<FactsSource>,
     address: Option<String>,
@@ -309,6 +309,9 @@ impl WorkloadHostService {
 
     /// Chain for placement and refusal records.
     pub fn with_chain(mut self, cm: Arc<ChainManager>) -> Self {
+        if let Some(j) = &self.journal {
+            j.set_chain(cm.clone());
+        }
         self.chain = Some(cm);
         self
     }
@@ -739,6 +742,7 @@ impl WorkloadHostService {
                 requester: req.requester.clone(),
                 body: b.clone(),
                 desired_running: started,
+                failures: 0,
             });
         }
         let status = host.status(&h).await;

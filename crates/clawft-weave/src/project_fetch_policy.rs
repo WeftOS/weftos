@@ -96,6 +96,12 @@ impl ControllerPolicy for FetchPeerPolicy {
         self.allows(public_key)
             || (matches!(m, method::DESCRIBE | method::PROJECT_FETCH) && self.fetch_peer(public_key))
     }
+
+    fn allows_node(&self, node_id: &str) -> bool {
+        self.controllers
+            .iter()
+            .any(|k| clawft_kernel::node_id_from_pubkey(k) == node_id)
+    }
 }
 
 #[cfg(test)]

@@ -32,6 +32,20 @@ fn ctl_key() -> SigningKey {
 /// The node `NODE_SEED` over `root` (instance dir), `ex` (artifact store) and
 /// `journal`: what the daemon builds at every start.
 fn host(root: &Path, ex: &Arc<ArtifactExchange>, chain: &Arc<ChainManager>, journal: &Path) -> Arc<WorkloadHostService> {
+    host_with(root, ex, Some(chain), journal, &ctl_key())
+}
+
+/// [`host`] with its own controller key, and optionally no chain.
+fn host_with(
+    root: &Path,
+    ex: &Arc<ArtifactExchange>,
+    chain: Option<&Arc<ChainManager>>,
+    journal: &Path,
+    controller: &SigningKey,
+) -> Arc<WorkloadHostService> {
+    let chain_given = chain.is_some();
+    let own = Arc::new(ChainManager::new(0, 1000));
+    let chain = chain.unwrap_or(&own);
     let key = SigningKey::from_bytes(&[NODE_SEED; 32]);
     let id = node_id_from_pubkey(&key.verifying_key().to_bytes());
     let gate = gate(chain);
@@ -53,11 +67,14 @@ fn host(root: &Path, ex: &Arc<ArtifactExchange>, chain: &Arc<ChainManager>, jour
     let mut facts = NodeFacts::new(id.clone(), now, 600, 1);
     facts.capabilities = board_caps("pi5");
     let signed = sign_node_facts(&facts, &key).unwrap();
-    let svc = WorkloadHostService::new(key, ex.clone(), anchors(), gate)
+    let mut svc = WorkloadHostService::new(key, ex.clone(), anchors(), gate)
         .with_route("native", wh)
-        .with_controllers(vec![ctl_key().verifying_key().to_bytes()])
-        .with_chain(chain.clone())
-        .with_journal(journal);
+        .with_controllers(vec![controller.verifying_key().to_bytes()]);
+    // No chain on the service when the test asks for none (its host adapter keeps its own).
+    if chain_given {
+        svc = svc.with_chain(chain.clone());
+    }
+    let svc = svc.with_journal(journal);
     svc.set_facts(signed);
     Arc::new(svc)
 }
@@ -189,22 +206,183 @@ async fn an_unloaded_cog_is_not_restored() {
     assert!(b.held().await.is_empty());
 }
 
+/// An empty artifact store for the rig's node, as if the real one did not come up.
+fn empty_store(rig: &Rig) -> Arc<ArtifactExchange> {
+    let id = node_id_from_pubkey(&SigningKey::from_bytes(&[NODE_SEED; 32]).verifying_key().to_bytes());
+    exchange(&id, &rig.chain)
+}
+
+fn entries_of(rig: &Rig) -> Vec<JournalEntry> {
+    let k = SigningKey::from_bytes(&[NODE_SEED; 32]);
+    let id = node_id_from_pubkey(&k.verifying_key().to_bytes());
+    Journal::open(&rig.journal(), &id, &k).entries()
+}
+
 #[tokio::test]
-async fn an_instance_whose_package_is_gone_is_reported_and_dropped_not_retried_forever() {
+async fn a_restore_that_fails_for_a_transient_reason_is_kept_and_retried_at_the_next_start() {
+    let rig = Rig::new();
+    let iid = {
+        let a = rig.host();
+        let (iid, _plane) = place(&rig, &a).await;
+        rig.wait_launches(1).await;
+        iid
+    };
+    // First start: the artifact store is not there yet (no peers to fetch from).
+    let empty = empty_store(&rig);
+    let b = host(&rig.root(), &empty, &rig.chain, &rig.journal());
+    let report = b.restore_instances().await;
+    assert!(report.restored.is_empty(), "{report:?}");
+    assert_eq!(report.failed.len(), 1, "{report:?}");
+    assert!(report.failed[0].1.contains("will retry at the next start (1 of 5)"), "{report:?}");
+    let kept = entries_of(&rig);
+    assert_eq!((kept.len(), kept[0].failures, kept[0].desired_running), (1, 1, true), "kept, counted, intent unchanged");
+
+    // Next start: the store is back, and the same instance comes up and its count resets.
+    drop(b);
+    let c = rig.host();
+    let report = c.restore_instances().await;
+    assert_eq!(report.restored, std::slice::from_ref(&iid), "{report:?}");
+    assert_eq!(entries_of(&rig)[0].failures, 0);
+    rig.wait_launches(2).await;
+}
+
+#[tokio::test]
+async fn a_restore_that_keeps_failing_is_given_up_after_five_starts() {
+    let rig = Rig::new();
+    {
+        let a = rig.host();
+        place(&rig, &a).await;
+    }
+    let empty = empty_store(&rig);
+    for n in 1..=5u32 {
+        let b = host(&rig.root(), &empty, &rig.chain, &rig.journal());
+        let report = b.restore_instances().await;
+        assert_eq!(report.failed.len(), 1, "start {n}: {report:?}");
+        assert_eq!(entries_of(&rig).len(), usize::from(n < 5), "start {n}");
+    }
+}
+
+#[tokio::test]
+async fn an_older_copy_of_the_journal_is_refused_even_though_it_is_validly_signed() {
+    let rig = Rig::new();
+    let (iid, stale) = {
+        let a = rig.host();
+        let (iid, plane) = place(&rig, &a).await;
+        rig.wait_launches(1).await;
+        // the journal as it was while the cog was meant to be running
+        let stale = std::fs::read(rig.journal()).unwrap();
+        plane.instance(method::STOP, &iid).await.unwrap();
+        (iid, stale)
+    };
+    // an attacker puts the old file back
+    std::fs::write(rig.journal(), &stale).unwrap();
+    let b = rig.host();
+    let report = b.restore_instances().await;
+    assert!(report.restored.is_empty(), "{report:?}");
+    assert_eq!(report.failed[0].0, iid);
+    assert!(report.failed[0].1.contains("older copy"), "{report:?}");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(rig.launches(), 1, "the stopped cog was not started");
+    assert!(b.held().await.is_empty());
+}
+
+#[tokio::test]
+async fn the_generation_goes_on_the_chain_and_survives_a_deleted_journal() {
+    let rig = Rig::new();
+    let gens = |rig: &Rig| -> Vec<u64> {
+        rig.chain
+            .tail(0)
+            .iter()
+            .filter(|e| e.kind == crate::chain::EVENT_KIND_WORKLOAD_JOURNAL)
+            .filter_map(|e| e.payload.as_ref()?["generation"].as_u64())
+            .collect()
+    };
+    {
+        let a = rig.host();
+        let (iid, plane) = place(&rig, &a).await;
+        plane.instance(method::STOP, &iid).await.unwrap();
+    }
+    let g = gens(&rig);
+    assert!(g.len() >= 2 && g.windows(2).all(|w| w[0] < w[1]), "one rising generation per save: {g:?}");
+    // The file is deleted and a new instance journaled: the generation continues above the chain.
+    std::fs::remove_file(rig.journal()).unwrap();
+    let before = *g.last().unwrap();
+    {
+        let b = rig.host();
+        place(&rig, &b).await;
+    }
+    assert!(*gens(&rig).last().unwrap() > before);
+    // so the next start does not take the fresh file for a replay
+    let c = rig.host();
+    assert_eq!(c.restore_instances().await.restored.len(), 1);
+}
+
+#[tokio::test]
+async fn without_a_chain_instances_are_restored_loaded_and_nothing_is_started() {
+    let rig = Rig::new();
+    let iid = {
+        let a = rig.host();
+        let (iid, _plane) = place(&rig, &a).await;
+        rig.wait_launches(1).await;
+        iid
+    };
+    let b = host_with(&rig.root(), &rig.ex, None, &rig.journal(), &ctl_key());
+    let report = b.restore_instances().await;
+    assert_eq!(report.restored, std::slice::from_ref(&iid), "{report:?}");
+    assert!(report.note.as_deref().is_some_and(|n| n.contains("no chain")), "{report:?}");
+    assert_eq!(b.held().await, [(iid.clone(), false)]);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(rig.launches(), 1, "nothing was started");
+    assert!(entries_of(&rig)[0].desired_running, "the operator's intent is not rewritten");
+}
+
+#[tokio::test]
+async fn a_requester_the_policy_no_longer_allows_is_refused_and_dropped() {
     let rig = Rig::new();
     let iid = {
         let a = rig.host();
         place(&rig, &a).await.0
     };
-    // The artifact store did not survive: an empty one, and no peers to fetch from.
-    let id = node_id_from_pubkey(&SigningKey::from_bytes(&[NODE_SEED; 32]).verifying_key().to_bytes());
-    let empty = exchange(&id, &rig.chain);
-    let b = host(&rig.root(), &empty, &rig.chain, &rig.journal());
+    // The same node, now configured with a different controller.
+    let other = SigningKey::from_bytes(&[77; 32]);
+    let b = host_with(&rig.root(), &rig.ex, Some(&rig.chain), &rig.journal(), &other);
     let report = b.restore_instances().await;
-    assert!(report.restored.is_empty());
-    assert_eq!(report.failed.len(), 1, "{report:?}");
+    assert!(report.restored.is_empty(), "{report:?}");
     assert_eq!(report.failed[0].0, iid);
-    assert!(Journal::open(&rig.journal(), &b.node_id, &b.key).entries().is_empty(), "dropped, so the next start is clean");
+    assert!(report.failed[0].1.contains("no longer a controller"), "{report:?}");
+    assert!(entries_of(&rig).is_empty());
+    assert!(b.held().await.is_empty());
+}
+
+#[test]
+fn the_journal_file_is_created_private_even_over_a_wide_leftover_temp_file() {
+    use super::host_service::{CtlConfig, PlaceBody};
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let p = tmp.path().join("journal.json");
+    // a leftover temp file with a wide mode, as a crashed earlier save could leave
+    let leftover = p.with_extension("json.tmp");
+    std::fs::write(&leftover, b"old").unwrap();
+    std::fs::set_permissions(&leftover, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let k = SigningKey::from_bytes(&[5; 32]);
+    Journal::open(&p, "node", &k).record(JournalEntry {
+        instance_id: "i1".into(),
+        decision_id: None,
+        requester: "ctl".into(),
+        body: PlaceBody {
+            name: "c".into(),
+            manifest_hash: "0".repeat(64),
+            variant: "v".into(),
+            config: CtlConfig { mode: crate::workload_runtime::RunMode::Listener, args: vec![], csi_port: 1 },
+            start: true,
+            project_id: None,
+        },
+        desired_running: true,
+        failures: 0,
+    });
+    let mode = std::fs::metadata(&p).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600, "the saved file is owner-only");
+    assert!(!leftover.exists(), "the wide temp file was replaced, not written into");
 }
 
 #[tokio::test]
@@ -278,7 +456,7 @@ async fn an_entry_with_a_changed_requester_is_refused() {
         let a = rig.host();
         place(&rig, &a).await.0
     };
-    rig.edit_journal(|v| v["entries"][0]["entry"]["requester"] = "someone-else".into());
+    rig.edit_journal(|v| v["entries"][0]["requester"] = "someone-else".into());
     let b = rig.host();
     let report = b.restore_instances().await;
     assert!(report.restored.is_empty(), "{report:?}");
@@ -299,8 +477,8 @@ async fn a_stopped_instance_cannot_be_flipped_to_running_by_editing_the_file() {
         plane.instance(method::STOP, &iid).await.unwrap();
     }
     rig.edit_journal(|v| {
-        assert_eq!(v["entries"][0]["entry"]["desired_running"], false);
-        v["entries"][0]["entry"]["desired_running"] = true.into();
+        assert_eq!(v["entries"][0]["desired_running"], false);
+        v["entries"][0]["desired_running"] = true.into();
     });
     let b = rig.host();
     let report = b.restore_instances().await;
@@ -319,7 +497,7 @@ async fn unsigned_entries_and_entries_from_another_node_or_key_are_refused() {
         place(&rig, &a).await;
     }
     // the signature removed
-    rig.edit_journal(|v| v["entries"][0]["sig"] = "".into());
+    rig.edit_journal(|v| v["sig"] = "".into());
     let report = rig.host().restore_instances().await;
     assert!(report.restored.is_empty() && report.failed.len() == 1, "{report:?}");
 
@@ -340,6 +518,7 @@ async fn unsigned_entries_and_entries_from_another_node_or_key_are_refused() {
         requester: "ctl".into(),
         body: body.clone(),
         desired_running: true,
+        failures: 0,
     };
     Journal::open(&p, "node-a", &k1).record(entry("i1"));
     assert_eq!(Journal::open(&p, "node-a", &k1).entries().len(), 1, "same node, same key: accepted");
