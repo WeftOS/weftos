@@ -471,3 +471,54 @@ not project-scoped; worth a line in the ADR.
 Verdict: the leak I found (same package, another project, inherited `data/`) is fixed for the native and
 container adapters and nobody can choose the owner key; the residual is the truncated id (C1), which an
 authorised controller can grind into a collision when the victim's instance is not loaded.
+
+---
+
+## Re-check: journal round 3, `wt/native-restart` f1e051690 (2026-10-26)
+
+Tests run (foreground): `tests_restart` 26 of 26 pass, including the new
+`a_journal_the_chain_has_never_heard_of_is_restored_loaded_and_not_started`,
+`a_peer_cannot_put_a_journal_generation_on_the_chain_and_foreign_events_do_not_count`,
+`a_generation_at_the_end_of_its_range_is_not_wrapped_and_nothing_is_saved`,
+`the_directory_is_flushed_after_the_journal_rename`,
+`a_deleted_journal_is_reported_as_missing_not_as_an_empty_node`,
+`an_unreadable_journal_is_reported_too_when_the_chain_says_there_was_one` and
+`an_unreadable_revocation_list_is_transient_but_a_governance_denial_is_permanent`.
+
+| Case | Verdict |
+|---|---|
+| A2: a chain with no journal events was authoritative | **Fixed.** `Some(0)` with a file above generation 0 now gives `unverified`: restored loaded, nothing started, noted in the report and in `JournalStatus`. Deleting the chain checkpoint then pasting an old journal no longer starts anything. |
+| A4: forged or overflowing generation event | **Fixed on the doors I could find.** `workload.journal` is in `RESERVED_KINDS`, so `append_signed` (replication, line 1628) refuses it; the `chain.append` RPC and the tracing bridge now refuse it (`is_caller_reserved_kind`); `chain_generation` counts only events whose payload `node` is this node; `save()` uses `checked_add` and writes nothing at the end of the range. I did not trace every in-process `ChainManager::append` caller; the remaining ones I looked at (`substrate-acl` denials, `mesh.link`) set their own fixed kinds. |
+| A5: no directory fsync | **Fixed.** `sync_dir` after the rename. If it fails the file is already in place but the chain event is skipped (file ahead of chain, which restore accepts); the log says "not saved", which is slightly off. Cosmetic. |
+| A6: deleting the journal was silent | **Fixed.** A missing or unreadable file while the chain records generation above 0 restores nothing and says so in the report, the log and `JournalStatus` (also in the `include_departed` status listing). Fresh nodes (chain with no journal events) are not flagged. |
+| B1: unreadable revocation list dropped instances | **Fixed.** `permanent()` now checks the reason for `REVOCATION_UNREADABLE`; other governance denials stay permanent. Text a package author controls cannot do harm here: matching the substring only makes a denial retry up to 5 times and then drop. |
+| A1: chain durable only at shutdown | **Documented, not fixed (as agreed).** ADR-099 now says the generation is tamper-evidence only up to the chain's durability and that a rollback of both file and chain defeats it. Unchanged: replaying a copy between the last checkpointed generation and the real one is accepted after a crash. |
+
+### Consequences of the round-3 changes
+
+**D1 (medium, availability): the A2 rule disables auto-start after the first crash of a node that has never shut down cleanly.**
+The chain reaches the disk only at shutdown. A node that has run since the journal was introduced, saved
+generations 1 to k, and then crashed has an on-disk chain with *no* `workload.journal` event: `Some(0)`
+with file generation k > 0. Restore now brings every instance back loaded and starts none, which is
+the crash recovery the journal exists for. It is safe, loudly reported (`unverified`), but the operator
+must start each instance by hand until one clean shutdown has written a journal event to the chain. It
+goes away with the durable chain (card a93f7abe); until then say so in the release notes.
+
+**D2 (low): a read error sets the journal aside.** `read()` returns `Err` for any I/O error (permission
+denied after a uid change, EMFILE, a short read), and `open()` then renames the file to `.json.bad`,
+overwriting an earlier `.bad`. With the new rule this is reported and restores nothing instead of
+starting empty, which is right, but the evidence of an earlier tamper in `.bad` is lost on the next
+failure. Keep numbered copies, and retry a read error once before renaming.
+
+**D3 (low): a refused file is labelled `replayed`.** A file that fails its signature comes back as
+generation 0, so against a chain above 0 the status reads "replayed ... older copy" instead of
+"refused". The entries are listed as refused in the report; only the state word is off.
+
+**D4 (low, information): the journal state reaches the status listing.** `include_departed` now carries
+generation numbers and counts to any caller allowed to list instances. Not sensitive on its own; note it
+if the listing is ever exposed beyond controllers.
+
+C1 (the owner marker, or a longer id) is still open and is not part of this commit.
+
+Verdict: A2, A4, A5, A6 and B1 are fixed against my cases; A1 is documented as a known limit. D1 is a
+real regression in crash recovery that the durable chain removes; the others are minor.
