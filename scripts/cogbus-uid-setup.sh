@@ -95,6 +95,8 @@ do_apply() {
         run groupadd --system "$GROUP"
         created_group=yes
     fi
+    created_dir=no
+    [ -d "$(dirname "$MANIFEST")" ] || created_dir=yes
     run mkdir -p "$(dirname "$MANIFEST")"
     tmp=$(mktemp)
     printf '{\n  "require_cog_uid": %s,\n  "uid_range": [%s, %s],\n  "group": "%s"\n}\n' "$REQUIRE" "$FIRST" "$LAST" "$GROUP" > "$tmp"
@@ -103,6 +105,7 @@ do_apply() {
     if $YES; then
         {
             echo "created_group=$created_group"
+            echo "created_dir=$created_dir"
             echo "group=$GROUP"
             echo "config=$CONF"
             echo "uid_range=$FIRST-$LAST"
@@ -120,6 +123,7 @@ do_undo() {
     created_group=$(sed -n 's/^created_group=//p' "$MANIFEST")
     group=$(sed -n 's/^group=//p' "$MANIFEST")
     config=$(sed -n 's/^config=//p' "$MANIFEST")
+    created_dir=$(sed -n 's/^created_dir=//p' "$MANIFEST")
     [ -z "$config" ] || run rm -f "$config"
     if [ "$created_group" = "yes" ] && getent group "$group" >/dev/null; then
         members=$(getent group "$group" | cut -d: -f4)
@@ -130,6 +134,7 @@ do_undo() {
         fi
     fi
     run rm -f "$MANIFEST"
+    if [ "$created_dir" = "yes" ]; then run rmdir "$(dirname "$MANIFEST")"; fi
     say "restart the machine service: cogs return to the shared uid"
 }
 

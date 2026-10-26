@@ -303,3 +303,7 @@ impl Isolator {
 #[cfg(test)]
 #[path = "cogbus_isolation_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "cogbus_isolation_root_tests.rs"]
+mod root_tests;
