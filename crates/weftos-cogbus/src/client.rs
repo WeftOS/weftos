@@ -27,7 +27,8 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
 use crate::proto::{
-    Delivery, ErrorCode, Event, InputSpec, OutputSpec, Request, read_frame, write_frame,
+    CallDelivery, Delivery, ErrorCode, Event, InputSpec, OutputSpec, Request, read_frame,
+    write_frame,
 };
 
 /// Messages a subscription holds before it drops.
@@ -74,6 +75,8 @@ pub(crate) struct Shared {
     closed: std::sync::atomic::AtomicBool,
     pending: Mutex<HashMap<u64, Pending>>,
     subs: Mutex<HashMap<u64, mpsc::Sender<Delivery>>>,
+    /// Calls for the services this connection serves, by topic.
+    services: Mutex<HashMap<String, mpsc::Sender<CallDelivery>>>,
     pub(crate) streams: Arc<crate::stream::Routes>,
 }
 
@@ -85,6 +88,29 @@ pub struct Client {
     reader: JoinHandle<()>,
     instance_id: String,
 }
+
+/// The calls of one service this connection provides.
+#[derive(Debug)]
+pub struct Service {
+    topic: String,
+    rx: mpsc::Receiver<CallDelivery>,
+}
+
+impl Service {
+    /// `<kind>/<source_id>` of the service.
+    pub fn topic(&self) -> &str {
+        &self.topic
+    }
+
+    /// Next call; `None` once the connection is gone. Answer it with
+    /// [`Client::reply`] before its `timeout_ms` passes.
+    pub async fn recv(&mut self) -> Option<CallDelivery> {
+        self.rx.recv().await
+    }
+}
+
+/// Calls a provider holds before the broker's own limits apply.
+const SERVICE_BUFFER: usize = 128;
 
 /// Messages of one subscription.
 #[derive(Debug)]
@@ -147,6 +173,7 @@ impl Client {
             sh.closed.store(true, Ordering::SeqCst);
             sh.pending.lock().map(|mut p| p.clear()).ok();
             sh.subs.lock().map(|mut s| s.clear()).ok();
+            sh.services.lock().map(|mut s| s.clear()).ok();
             sh.streams.close_all();
         });
         let mut c = Self {
@@ -282,6 +309,75 @@ impl Client {
     pub async fn list(&self) -> Answer {
         self.call(|id| Request::List { id }).await
     }
+
+    /// Become the provider of service `<kind>/<source_id>`.
+    pub async fn serve(
+        &self,
+        kind: &str,
+        source_id: &str,
+        schema: &str,
+    ) -> Result<Service, ClientError> {
+        let topic = format!("{kind}/{source_id}");
+        let (tx, rx) = mpsc::channel(SERVICE_BUFFER);
+        // Registered first: a call can arrive right behind the answer.
+        self.shared
+            .services
+            .lock()
+            .map_err(|_| ClientError::Closed)?
+            .insert(topic.clone(), tx);
+        let r = self
+            .call(|id| Request::Serve {
+                id,
+                topic_kind: kind.into(),
+                source_id: source_id.into(),
+                schema: schema.into(),
+            })
+            .await;
+        if let Err(e) = r {
+            self.shared.services.lock().map(|mut s| s.remove(&topic)).ok();
+            return Err(e);
+        }
+        Ok(Service { topic, rx })
+    }
+
+    /// Answer call `call` of a service this connection provides; `Err`
+    /// fails the caller's request with [`ErrorCode::ServiceError`].
+    pub async fn reply(&self, call: u64, result: Result<Value, String>) -> Result<(), ClientError> {
+        let (body, error) = match result {
+            Ok(b) => (b, None),
+            Err(m) => (Value::Null, Some(m)),
+        };
+        self.call(|id| Request::Reply {
+            id,
+            call,
+            body,
+            error,
+        })
+        .await
+        .map(|_| ())
+    }
+
+    /// Call service `topic` (`svc.<name>/<source_id>`) and wait for the
+    /// provider's reply body. `timeout` is the whole call, queueing
+    /// included; the broker answers [`ErrorCode::Timeout`] when it passes.
+    pub async fn invoke(
+        &self,
+        topic: &str,
+        schema: &str,
+        body: Value,
+        timeout: std::time::Duration,
+    ) -> Result<Value, ClientError> {
+        let v = self
+            .call(|id| Request::Call {
+                id,
+                topic: topic.into(),
+                schema: schema.into(),
+                body,
+                timeout_ms: Some(timeout.as_millis().min(u64::MAX as u128) as u64),
+            })
+            .await?;
+        Ok(v["body"].clone())
+    }
 }
 
 /// Descriptors the broker attached to `ev`.
@@ -299,6 +395,13 @@ fn fd_count(ev: &Event) -> usize {
 fn route(sh: &Shared, ev: Event, fds: Vec<OwnedFd>) {
     match ev {
         Event::Stream(n) => sh.streams.notice(n, fds),
+        Event::Call(c) => {
+            let tx = sh.services.lock().ok().and_then(|s| s.get(&c.topic).cloned());
+            if let Some(tx) = tx {
+                // Full or gone: the broker times the call out.
+                let _ = tx.try_send(c);
+            }
+        }
         Event::Msg(d) => {
             if let Ok(subs) = sh.subs.lock()
                 && let Some(tx) = subs.get(&d.sub)

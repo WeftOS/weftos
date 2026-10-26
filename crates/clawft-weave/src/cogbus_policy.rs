@@ -7,8 +7,9 @@
 //! and no other project's topic is granted.
 //!
 //! - **Kernel rules.** Each request is evaluated as a `GovernanceRequest`:
-//!   agent the instance id, action `cogbus.declare`, `cogbus.publish` or
-//!   `cogbus.subscribe`, context `tool` = the topic (so a rule's
+//!   agent the instance id, action `cogbus.declare`, `cogbus.publish`,
+//!   `cogbus.subscribe`, `cogbus.serve` or `cogbus.call` (the last two are
+//!   service calls, ADR-122 section 12), context `tool` = the topic (so a rule's
 //!   `tool_selector` can name one, e.g. `telemetry/*`), `cog_id` and
 //!   `schema`; project attribution is the kernel's own
 //!   ([`crate::cogbus_governance`]). The rules are the project
@@ -55,7 +56,13 @@ use weftos_cogbus::{BusAction, BusPolicy, BusRequest, Grant};
 /// The operator file under the runtime dir.
 pub const POLICY_FILE: &str = "cogbus-policy.json";
 const MAX_ENTRIES: usize = 256;
-const ACTIONS: [&str; 3] = ["cogbus.declare", "cogbus.publish", "cogbus.subscribe"];
+const ACTIONS: [&str; 5] = [
+    "cogbus.declare",
+    "cogbus.publish",
+    "cogbus.subscribe",
+    "cogbus.serve",
+    "cogbus.call",
+];
 
 /// One cross-project grant.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -76,7 +83,7 @@ pub struct GrantEntry {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DenyEntry {
-    /// `cogbus.declare` / `.publish` / `.subscribe`; empty is all three.
+    /// `cogbus.declare` / `.publish` / `.subscribe` / `.serve` / `.call`; empty is all five.
     #[serde(default)]
     pub actions: Vec<String>,
     /// Topic patterns; empty is every topic.

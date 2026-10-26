@@ -3,7 +3,7 @@
 - **Status**: Accepted (2026-10-25: the owner asked to start B1, taking the recommended
   answer to each open question; see "Decisions on the open questions"). Card
   `venq-cog-broker-adr`; implementation on cards `venq-cogbus-b1` .. `b6`.
-- **Updated**: 2026-10-25 (B1 and B4 shipped; known gaps recorded with closing cards)
+- **Updated**: 2026-10-25 (B1 and B4 shipped; known gaps recorded with closing cards; section 12 adds service calls for the NPU service, card `d9272837`)
 - **Deciders**: owner
 - **Builds on**: ADR-099 (governed placement, node facts), ADR-100 (cog workload kind),
   ADR-120 (exposures: announce, see, switch off, log), ADR-114 (`weftos://` names),
@@ -166,6 +166,45 @@ listener used when the primary bind fails.
 - A cog that publishes undeclared topics or exceeds its declared rate is refused and
   logged; repeated refusals stop the cog through the workload runtime.
 
+### 12. Service calls
+
+Some hardware is called, not streamed (plan 4.5: the NPU). The broker carries one
+request/reply primitive, with the same checks as a reading and nothing else added.
+
+- **Name.** A service is a topic whose kind starts with `svc.`: `svc.infer/<node>`. Over
+  the mesh it is `weftos://<mesh>/services/<name>/topics/<kind>` (section 2).
+- **Declaration.** The provider lists the kind in `[[outputs]]` (class `reading`), each
+  caller in `[[inputs]]`, both with the same registered schema (`infer.v1` for the NPU
+  service). Placement, the manifest check and the project rule therefore already apply.
+  `publish` and `subscribe` on a `svc.*` kind are refused (`unsupported`).
+- **Wire.** `serve {topic_kind, source_id, schema}` makes the connection the provider of
+  the topic (one instance per topic; a second is `writer_conflict`; the same instance
+  reconnecting replaces its own connection). `call {topic, schema, body, timeout_ms}` is
+  routed to it as a pushed `{"type":"call", call, from, timeout_ms, body, ...}` frame;
+  `reply {call, body | error}` answers it. The caller's `call` request gets its answer
+  (`result.body`) only then, so the client's request id is the call id on the caller's
+  side and the broker-assigned `call` is the one on the provider's side.
+- **Deadlines.** Every call has a deadline (`timeout_ms`, default 30 s, at most 10 min;
+  queueing in the provider counts). At the deadline the broker answers the caller
+  `timeout` and forgets the call; a later `reply` is refused (`bad_request`). The provider
+  sees the remaining time in `timeout_ms` and should drop what it has not started.
+  The server sweeps deadlines every 50 ms.
+- **Failure.** A provider connection that closes, or an instance that is revoked, fails
+  its pending calls with `unavailable`; a call to a topic nobody serves is `unavailable`
+  at once. A provider `error` reaches the caller as `service_error` with the provider's
+  message. A body over 64 KiB, either way, is `too_large` (larger input is a blob, B5).
+- **Limits.** 16 calls pending per caller instance and 64 per service (`busy`), so one
+  caller cannot fill the provider's queue. The provider's own queue and priorities are its
+  business; the call body carries them (`infer.v1` has `priority`).
+- **Governance.** `serve` asks `cogbus.serve` once; every `call` asks `cogbus.call` with
+  the topic as `tool`, through the same single attributed `GovernanceRequest` site as the
+  other actions (section 5). Refusals count toward the repeated-refusal stop; replies do
+  not ask governance, since the call they answer was permitted. `cogbus-policy.json`
+  deny rules and cross-project grants name the two actions like the others.
+- **Not carried.** Streaming replies (a long generation) and cancellation. A reply is
+  one body; the caller picks a `max_tokens` that fits. Both belong with B5 (a blob or
+  stream handle in the reply) and are recorded in the NPU service's card.
+
 ## Known gaps (2026-10-25, after B1 and B4)
 
 What the shipped broker does not do yet, what closes each gap, and where it is tracked.
@@ -221,8 +260,9 @@ choice is the B2 result.
 | B4 | ingest compatibility listener and store sink | released cogs posting to the bridge reach the store unchanged; the Ventuno's `board-telemetry` reaches the store without port 80 |
 | B5 | blob store by hash, TTL and quota | a frame handle resolves locally and expires on TTL |
 | B6 | mesh topics as ADR-120 exposures, credits, raw-data refusal | a PG cog subscribes to a Ventuno reading topic; a raw IQ subscription from PG is refused unless exposed and requested |
+| S1 | service calls (section 12): `serve`, `call`, `reply`, deadlines, governance | two callers share one provider; an unknown topic, an undeclared caller, a cross-project caller and a late reply are refused; governance sees `cogbus.serve` and `cogbus.call` |
 
-B1–B4 are the plan's P2. B5–B6 are P6.
+B1–B4 are the plan's P2. B5–B6 are P6. S1 is the primitive the plan's P4 (`npu-infer`) needs.
 
 ## Decisions on the open questions (2026-10-25)
 

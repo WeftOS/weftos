@@ -7,9 +7,9 @@ use std::sync::Arc;
 
 use clawft_types::cog_topics::TopicClass;
 use serde::Serialize;
-use tokio::sync::{Notify, watch};
+use tokio::sync::{Notify, mpsc, watch};
 
-use crate::proto::{Delivery, ErrorCode, InputSpec, OutputSpec};
+use crate::proto::{Delivery, ErrorCode, Event, InputSpec, OutputSpec};
 use crate::queue::SubQueue;
 
 /// A refused request.
@@ -132,6 +132,12 @@ pub struct Session {
     pub(crate) subs: BTreeMap<u64, Arc<SubQueue>>,
     pub(crate) wake: Arc<Notify>,
     pub(crate) revoked: watch::Receiver<bool>,
+    /// Unique per connection; service providers and callers are tracked by it.
+    pub(crate) conn: u64,
+    /// Frames the broker pushes to this connection outside a request/answer
+    /// (calls for a provider, late answers for a caller).
+    pub(crate) push: mpsc::UnboundedSender<Event>,
+    pub(crate) pushed: Option<mpsc::UnboundedReceiver<Event>>,
 }
 
 impl std::fmt::Debug for Session {
@@ -158,6 +164,12 @@ impl Session {
     /// Changes (or closes) when the instance is revoked.
     pub fn revoked(&self) -> watch::Receiver<bool> {
         self.revoked.clone()
+    }
+
+    /// The receiver of frames pushed outside request/answer (once); the
+    /// connection sends each as it arrives.
+    pub fn take_pushed(&mut self) -> Option<mpsc::UnboundedReceiver<Event>> {
+        self.pushed.take()
     }
 
     /// Pending deliveries of every subscription, per subscription in order.
