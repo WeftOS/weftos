@@ -12,7 +12,7 @@ import android.os.IBinder
 /**
  * Link-and-relay service (design 7.1). Foreground type `connectedDevice`, never `dataSync`
  * (six-hour cap). It owns the notification and the lifecycle; the glasses listener and the
- * speech relay live in [LinkEngine]. BLE and the mesh gateway are later phases.
+ * speech relay live in [LinkEngine], the CoS card stream in [CosLink]. BLE and the mesh gateway are later phases.
  */
 class LinkService : Service() {
     override fun onCreate() {
@@ -22,11 +22,26 @@ class LinkService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
+            NodeRuntime.stopCos()
             NodeRuntime.stopEngine()
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
             NodeRuntime.setServiceRunning(false)
             return START_NOT_STICKY
+        }
+        if (intent?.action == ACTION_ANSWER) {
+            // A notification action: the service is already in the foreground holding the link.
+            val id = intent.getStringExtra(CosNotifier.EXTRA_CARD_ID)
+            val value = intent.getStringExtra(CosNotifier.EXTRA_VALUE)
+            // The notification goes when the answer is accepted; a refused one leaves it up.
+            if (id != null && value != null) NodeRuntime.answerCard(id, value)
+            // Created only for this action (the link was stopped): do not linger unforegrounded.
+            if (!NodeRuntime.state.value.serviceRunning) {
+                CosNotifier.cancel(this)
+                stopSelf(startId)
+                return START_NOT_STICKY
+            }
+            return START_STICKY
         }
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.createNotificationChannel(
@@ -41,10 +56,12 @@ class LinkService : Service() {
         startForeground(NOTIFICATION_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
         NodeRuntime.setServiceRunning(true)
         NodeRuntime.startEngine(this)
+        NodeRuntime.startCos(this)
         return START_STICKY
     }
 
     override fun onDestroy() {
+        NodeRuntime.stopCos()
         NodeRuntime.stopEngine()
         NodeRuntime.setServiceRunning(false)
         super.onDestroy()
@@ -54,6 +71,7 @@ class LinkService : Service() {
 
     companion object {
         const val ACTION_STOP = "ai.weftos.phonenode.STOP"
+        const val ACTION_ANSWER = "ai.weftos.phonenode.ANSWER"
         private const val CHANNEL = "link"
         private const val NOTIFICATION_ID = 1
     }

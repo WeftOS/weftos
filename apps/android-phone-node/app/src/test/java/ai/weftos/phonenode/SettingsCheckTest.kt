@@ -29,4 +29,18 @@ class SettingsCheckTest {
         assertNotNull(SettingsCheck.portProblem("70000"))
         assertNotNull(SettingsCheck.portProblem("abc"))
     }
+
+    @Test
+    fun cosBaseIsHttpsOrPlainHttpOnlyToATailnetName() {
+        assertNull(SettingsCheck.cosBaseProblem(""))
+        assertNull(SettingsCheck.cosBaseProblem("https://cos.example.invalid/"))
+        assertNull(SettingsCheck.cosBaseProblem("https://router.example.invalid/cos"))
+        assertNull(SettingsCheck.cosBaseProblem("http://mac.tail0000.ts.net:18300"))
+        assertNotNull(SettingsCheck.cosBaseProblem("http://cos.example.invalid:18300"))
+        assertNotNull(SettingsCheck.cosBaseProblem("http://evilts.net.example.invalid"))
+        assertNotNull(SettingsCheck.cosBaseProblem("https://user:pw@cos.example.invalid"))
+        assertNotNull(SettingsCheck.cosBaseProblem("https://cos.example.invalid/?token=x"))
+        assertNotNull(SettingsCheck.cosBaseProblem("ftp://cos.example.invalid"))
+        assertNotNull(SettingsCheck.cosBaseProblem("https:///no-host"))
+    }
 }

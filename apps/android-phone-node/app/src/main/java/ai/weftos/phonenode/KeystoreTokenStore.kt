@@ -66,3 +66,7 @@ class PrefsBlobStore(context: Context, private val name: String = "token") : Blo
 
 fun keystoreTokenStore(context: Context): TokenStore =
     SealedTokenStore(KeystoreSecretBox(), PrefsBlobStore(context))
+
+/** The CoS endpoint token (`weftos-cos endpoint add`), sealed under its own Keystore key. */
+fun cosTokenStore(context: Context): TokenStore =
+    SealedTokenStore(KeystoreSecretBox("weft-cos-token"), PrefsBlobStore(context, "cos_token"))

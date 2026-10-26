@@ -35,6 +35,13 @@ data class NodeUiState(
     val lastError: String = "",
     val tokenState: String = "not set",
     val addresses: String = "",
+    val cosTokenState: String = "not set",
+    val cosLink: String = "off",
+    val cosCard: CosCard? = null,
+    val cosFields: GlanceFields? = null,
+    val cosArt: ByteArray? = null,
+    val cosArtCaption: String = "",
+    val cosMessage: String = "",
 )
 
 /**
@@ -45,6 +52,7 @@ data class NodeUiState(
 object NodeRuntime {
     private var link: PhoneLink? = null
     private var engine: LinkEngine? = null
+    private var cos: CosLink? = null
     private val _state = MutableStateFlow(NodeUiState())
     val state: StateFlow<NodeUiState> = _state.asStateFlow()
 
@@ -69,8 +77,15 @@ object NodeRuntime {
 
     /** Token state and the phone's own addresses (the hotspot gateway the glasses are told). */
     fun refreshStatic(context: Context) {
-        val tokens = keystoreTokenStore(context.applicationContext)
-        update { copy(tokenState = TokenFormat.describe(tokens.get()), addresses = localAddresses()) }
+        val app = context.applicationContext
+        val tokens = keystoreTokenStore(app)
+        update {
+            copy(
+                tokenState = TokenFormat.describe(tokens.get()),
+                cosTokenState = TokenFormat.describe(cosTokenStore(app).get()),
+                addresses = localAddresses(),
+            )
+        }
     }
 
     @Synchronized
@@ -88,6 +103,31 @@ object NodeRuntime {
         engine?.stop()
         engine = null
         update { copy(linkState = "stopped", peer = "", listenPort = 0, indicator = "idle") }
+    }
+
+    /** The CoS card link rides in [LinkService] beside the engine; off without a base URL or token. */
+    @Synchronized
+    fun startCos(context: Context) {
+        if (cos != null) return
+        val app = context.applicationContext
+        val base = SettingsStore(app).load().cosBase
+        val token = cosTokenStore(app).get()
+        when {
+            base.isEmpty() -> update { copy(cosLink = "off (no CoS URL)") }
+            token == null -> update { copy(cosLink = "off (no CoS token)") }
+            else -> cos = CosLink(app, base, token).also { it.start() }
+        }
+    }
+
+    @Synchronized
+    fun stopCos() {
+        cos?.stop()
+        cos = null
+    }
+
+    fun answerCard(cardId: String, value: String) {
+        val c = cos
+        if (c == null) update { copy(cosMessage = "Start the link to answer.") } else c.answer(cardId, value)
     }
 
     fun confirmPairing() = engine?.confirmPairing()

@@ -45,15 +45,17 @@ fun HomeScreen(onStart: () -> Unit, onStop: () -> Unit) {
             Button(onClick = onStart) { Text("Start link") }
             OutlinedButton(onClick = onStop) { Text("Stop") }
         }
+        CosCardView(s)
         StatusCard(s)
         PairingCard(s)
         SettingsCard()
+        CosSettingsCard()
         Text("Stubbed in P0: BLE, Noise channel, mesh gateway, on-phone STT. See README.", style = MaterialTheme.typography.bodySmall)
     }
 }
 
 @Composable
-private fun Line(label: String, value: String) {
+internal fun Line(label: String, value: String) {
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         Text("$label:", style = MaterialTheme.typography.labelLarge)
         Text(value.ifEmpty { "-" })
@@ -141,7 +143,7 @@ private fun SettingsCard() {
         if (problem != null) {
             message = problem
         } else {
-            store.save(PhoneSettings(endpoint.trim(), port.trim().toInt()))
+            store.save(store.load().copy(endpoint = endpoint.trim(), port = port.trim().toInt()))
             message = "Saved. Stop and start the link to apply the port."
         }
     }) { Text("Save settings") }
