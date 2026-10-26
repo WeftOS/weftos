@@ -33,6 +33,7 @@ use clawft_kernel::cog_ingest::InstanceBinding;
 use clawft_kernel::workload_ctl::host_cogbus::{CogbusAttach, CogbusRegistrar, CogbusRegistration};
 use clawft_rpc::Response;
 use serde_json::{Value, json};
+use weftos_cogbus::blob::{BlobConfig, BlobStore};
 use weftos_cogbus::server::{ServeOptions, ServerHandle, SocketReport, serve_with};
 use weftos_cogbus::{
     Broker, BrokerConfig, BusHooks, InputSpec, InstanceSpec, OutputSpec, SOCKET_NAME,
@@ -42,6 +43,9 @@ use crate::cogbus_activity::CogbusActivity;
 use crate::cogbus_isolation::Isolator;
 use crate::cogbus_ingest::StoreSink;
 use crate::cogbus_policy::{CogbusPolicy, Rules};
+
+/// The content store's directory under the runtime dir.
+pub const BLOB_DIR: &str = "cogbus-blobs";
 
 /// Topic rows in the dashboard report, busiest first.
 pub const REPORT_TOPICS: usize = 64;
@@ -79,6 +83,19 @@ pub fn broker(node_id: &str) -> Arc<Broker> {
 /// A broker for node `node_id` with `hooks`, not yet listening.
 pub fn broker_with(node_id: &str, hooks: BusHooks) -> Arc<Broker> {
     Arc::new(Broker::new(BrokerConfig::new(node_id)).with_hooks(hooks))
+}
+
+/// The daemon's broker: `hooks`, and the content store in
+/// `<dir>/cogbus-blobs` (default quota 2 GiB, TTL-evicted). A store that
+/// cannot be opened is logged and blob requests are `unsupported`.
+pub fn broker_in(node_id: &str, hooks: BusHooks, dir: &Path) -> Arc<Broker> {
+    let now = clawft_kernel::exposure::registry::now_ms();
+    let mut b = Broker::new(BrokerConfig::new(node_id)).with_hooks(hooks);
+    match BlobStore::open(&dir.join(BLOB_DIR), BlobConfig::default(), now) {
+        Ok(store) => b = b.with_blobs(Arc::new(store)),
+        Err(e) => tracing::warn!(error = %e, "cogbus content store not opened; blob requests are unsupported"),
+    }
+    Arc::new(b)
 }
 
 /// The daemon's hooks: governance over `rules` and `dir`'s policy file, the
@@ -264,6 +281,7 @@ pub fn list_json(rt: Option<&CogbusRuntime>) -> Value {
             "socket_group_applied": rt.socket_report().group_applied,
             "socket_note": rt.socket_report().note,
             "isolation": rt.isolator.report(),
+            "blobs": rt.broker.blob_store().map(|b| b.stats()),
             "topics": rt.broker.snapshot(),
             "refusals": rt.broker.recent_refusals(),
         }),

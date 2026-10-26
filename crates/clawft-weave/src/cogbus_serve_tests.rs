@@ -100,3 +100,15 @@ async fn a_socket_path_that_cannot_be_bound_is_an_error_not_a_panic() {
     std::fs::write(tmp.path().join("cogbus.sock"), "not a socket").unwrap();
     assert!(start(tmp.path(), "n").await.is_err());
 }
+
+#[tokio::test]
+async fn the_daemons_broker_has_a_content_store_under_the_runtime_dir() {
+    let tmp = tempfile::tempdir().unwrap();
+    let broker = broker_in("n", BusHooks::default(), tmp.path());
+    assert!(broker.blob_store().is_some());
+    assert!(tmp.path().join(BLOB_DIR).is_dir());
+    let rt = start_on(broker, tmp.path()).await.unwrap();
+    let doc = list_json(Some(&rt));
+    assert_eq!(doc["blobs"]["quota"], 2u64 << 30);
+    assert_eq!(doc["blobs"]["blobs"], 0);
+}

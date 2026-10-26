@@ -8,8 +8,9 @@
 //!
 //! - **Kernel rules.** Each request is evaluated as a `GovernanceRequest`:
 //!   agent the instance id, action `cogbus.declare`, `cogbus.publish`,
-//!   `cogbus.subscribe`, `cogbus.serve` or `cogbus.call` (the last two are
-//!   service calls, ADR-122 section 12), context `tool` = the topic (so a rule's
+//!   `cogbus.subscribe`, `cogbus.serve`, `cogbus.call` (service calls,
+//!   ADR-122 section 12), `cogbus.blob.put` or `cogbus.blob.get` (the content
+//!   store, topic `blob/<media type>` and `blob/<hash>`), context `tool` = the topic (so a rule's
 //!   `tool_selector` can name one, e.g. `telemetry/*`), `cog_id` and
 //!   `schema`; project attribution is the kernel's own
 //!   ([`crate::cogbus_governance`]). The rules are the project
@@ -56,12 +57,14 @@ use weftos_cogbus::{BusAction, BusPolicy, BusRequest, Grant};
 /// The operator file under the runtime dir.
 pub const POLICY_FILE: &str = "cogbus-policy.json";
 const MAX_ENTRIES: usize = 256;
-const ACTIONS: [&str; 5] = [
+const ACTIONS: [&str; 7] = [
     "cogbus.declare",
     "cogbus.publish",
     "cogbus.subscribe",
     "cogbus.serve",
     "cogbus.call",
+    "cogbus.blob.put",
+    "cogbus.blob.get",
 ];
 
 /// One cross-project grant.

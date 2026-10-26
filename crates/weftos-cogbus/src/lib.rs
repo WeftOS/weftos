@@ -24,10 +24,12 @@
 //! and internal publishers (B4: the ingest compatibility listener publishes
 //! `store.vector`, the store sink takes `store.vector/*`; see
 //! [`Broker::add_sink`] and [`Broker::publish_internal`]), and governance,
-//! grants and the activity log (B3), and stream rings (B2). Blobs (B5) and
-//! mesh topics (B6) are other phases.
+//! grants and the activity log (B3), and stream rings (B2). Blobs (B5): [`blob::BlobStore`] and the `blob_begin` / `blob_chunk` /
+//! `blob_get` requests, with `blob.v1` handles that ride in readings, calls
+//! and replies. Mesh topics (B6) are another phase.
 
 pub mod audit;
+pub mod blob;
 pub mod broker;
 #[cfg(unix)]
 pub mod client;
