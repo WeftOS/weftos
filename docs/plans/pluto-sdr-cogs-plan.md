@@ -237,14 +237,12 @@ readings per band, with `coverage` showing each band's share of its minute:
 Its totals: 73.2 G samples used, 2.268 G counted lost (the owner's), 2.5 M missed by the reader
 itself (0.003 percent: the reader fell behind), 0 dead.
 
-**Band plan with camera concurrent** (every band at 3 MS/s or less, 10:49 board time, 4 h run, read at 2700 s):
-`2437e6:3e6:8000, 1090e6:2.4e6:6000, 433.92e6:2e6:5000, 915e6:2e6:5000`. The P3 camera soak ran for
-the first 692 s of it. Camera on: 1,496,776,704 samples, 103 retunes, **0 lost**. Camera off: 1998 s,
-4,343,005,184 samples, 296 retunes, 0 lost. Whole read: 5,866,323,968 delivered against
-5,865,854,454 expected, 0 gap events, 0 disconnects, 0 apply errors. With the camera on, 5 MS/s lost
-6.3 to 11.3 percent and 3 MS/s lost nothing, which matches the measured 4.33 MS/s headroom. The run
-continues to 14:49; the final figures are `summarize.py` and `camera_corr.py` on
-`/data/build/pluto-soak/run-20261026-104857/`.
+**Band plan with camera concurrent** (every band at 3 MS/s or less, started 10:49 board time, stopped by request at 2760 s once the camera soak had ended at 11:00:40):
+`2437e6:3e6:8000, 1090e6:2.4e6:6000, 433.92e6:2e6:5000, 915e6:2e6:5000`. Camera on (692 s):
+1,496,776,704 samples, 103 retunes, **0 lost**. Camera off (2059 s): 4,478,205,952 samples, 305
+retunes, 0 lost. Whole run: 6,001,524,736 delivered against 6,001,049,903 expected, 0 gap events,
+0 disconnects, 0 apply errors. With the camera on, 5 MS/s lost 6.3 to 11.3 percent and 3 MS/s
+nothing, which matches the 4.33 MS/s headroom. Raw: `/data/build/pluto-soak/run-20261026-104857/`.
 
 **Bus topology and the sharing report.** `lsusb -t`: Bus 001 (xhci root hub, 480M) carries the
 Pluto (port 2, RNDIS, mass storage, two ACM) and the UVC camera with its USB audio (port 4);
