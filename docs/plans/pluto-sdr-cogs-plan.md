@@ -191,7 +191,7 @@ about half a core and has missed nothing (every later reading 0).
 **Multi-hour band-plan phase (6 h, 04:33 to 10:33 board time).** `2437e6:5e6:8000,
 1090e6:2.4e6:6000, 433.92e6:2e6:5000, 915e6:2e6:5000` (a 24 s cycle: 2.4 GHz at 5 MS/s, 1090 MHz,
 then 433.92 and 915 MHz at 2 MS/s through the FIR), the spectrum cog reading it. The P3 lane's
-camera ran for 3 h 40 min of it (`camera_procs` in `env.csv`).
+camera ran for 3 h 43 min of it (`camera_procs` in `env.csv`).
 
 | | Whole phase | Camera off | Camera on |
 |---|---|---|---|
@@ -201,12 +201,13 @@ camera ran for 3 h 40 min of it (`camera_procs` in `env.csv`).
 | Counted lost | 2,260,993,417 (3.84 percent) | **0** | 2,260,993,417 (6.27 percent) |
 | Gap events | 8422 | 0 | 8422 |
 | Overflows, all-zero reads, apply errors | 0, 0, 0 | | |
-| Retunes | 3153 | | |
+| Retunes | 3153 | 1208 | 1943 |
 
 Every lost sample sits in the camera-on time. With the camera idle the band-plan cycle ran 2 h 17
-min without losing one, through 457 retunes, the FIR bands included. The independent ring sink read
+min without losing one, through 1208 retunes, the FIR bands included. The independent ring sink read
 9,076,119 records over the whole run (both phases), 0 ring skips, and counted 8404 gap records
-(2,256,154,059 samples), the last 18 of the cog's 8422 not yet printed when the run ended.
+(2,256,154,059 samples) at its last print, 44 s before the end, which fits the 18 gap events the
+cog logged after it.
 
 **The Pluto dropped off the bus twice** (08:13:54 and 08:16:45), both times with the camera and the
 board's video encoder busy; the kernel log has `msm_vidc ... Failed to switch GDSC into HW control`
@@ -223,7 +224,7 @@ valid readings span 32.5 to 64.0 C (mean 40.2), the Zynq 59.8 to 64.7 C (mean 62
 (INA232) averaged 14.45 W, 10.5 to 23.2 W, the high end with the camera and the encoder running.
 The rx cog used 47 to 58 percent of a core and 25 MB, the spectrum cog 52 percent and 19 MB.
 
-**The spectrum cog over the same phase** published 12,208 spectrum windows and 359 occupancy
+**The spectrum cog over the same phase** published 12,208 spectrum windows and about 360 occupancy
 readings per band, with `coverage` showing each band's share of its minute:
 
 | Band | Occupancy mean (max) | Coverage mean | Worst minute's loss |
@@ -234,10 +235,10 @@ readings per band, with `coverage` showing each band's share of its minute:
 | 2437 MHz | 1.36 percent (1.71) | 0.31 | 13.6 percent (camera on) |
 
 Its totals: 73.2 G samples used, 2.268 G counted lost (the owner's), 2.5 M missed by the reader
-itself (0.003 percent: the reader fell behind while the board was loaded), 0 dead.
+itself (0.003 percent: the reader fell behind), 0 dead.
 
 What this settles for the plan: R2's done-when holds for an hour with the radio to itself, and for
-2 h 17 min of band-plan cycling; two consumers sharing the tuner by band plan work (simulated radio
+2 h 17 min of band-plan cycling with 1208 retunes; two consumers sharing the tuner by band plan work (simulated radio
 through the real broker, then the spectrum cog read the cycling plan live). The shared USB hub is
 the binding constraint: **the Pluto should not share a root hub with the camera**, or the rate
 should drop to 4 MS/s while the camera streams. The soak scripts, the broker harness and the
