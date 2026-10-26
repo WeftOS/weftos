@@ -16,6 +16,9 @@
 //!   repeated-refusal stop.
 //! - [`stream`]: `stream` topics as shared-memory rings with reader
 //!   policies (B2).
+//! - service calls: request/reply on `svc.<name>/<source_id>` topics
+//!   ([`Broker::serve_topic`], [`Broker::call_service`], `Client::serve`,
+//!   `Client::invoke`; ADR-122 section 12).
 //!
 //! The broker carries `reading` topics (B1), the daemon's built-in sinks
 //! and internal publishers (B4: the ingest compatibility listener publishes
@@ -49,11 +52,11 @@ pub use broker::{
     Broker, BrokerConfig, BusError, InstanceSpec, Reading, Session, SinkReading, TopicRow,
 };
 #[cfg(unix)]
-pub use client::{Client, ClientError, Subscription};
+pub use client::{Client, ClientError, Service, Subscription};
 pub use policy::{
     BusAction, BusActivity, BusHooks, BusPolicy, BusRequest, BusSink, Grant, Outcome, RefusalLimits,
 };
-pub use proto::{Delivery, ErrorCode, Event, InputSpec, OutputSpec, Request};
+pub use proto::{CallDelivery, Delivery, ErrorCode, Event, InputSpec, OutputSpec, Request};
 pub use stream::{StreamConfig, StreamNotice, StreamRecord};
 #[cfg(unix)]
 pub use stream::{StreamOptions, StreamReader, StreamWriter};

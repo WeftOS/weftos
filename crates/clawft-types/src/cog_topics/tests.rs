@@ -76,11 +76,11 @@ fn readme_names_every_schema() {
 }
 
 #[test]
-fn registry_has_eleven_unique_ids() {
+fn registry_has_twelve_unique_ids() {
     let mut ids = SCHEMA_IDS.to_vec();
     ids.sort_unstable();
     ids.dedup();
-    assert_eq!(ids.len(), 11);
+    assert_eq!(ids.len(), 12);
     assert!(is_registered("senml.v1") && !is_registered("senml.v2"));
 }
 

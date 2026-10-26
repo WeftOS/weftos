@@ -17,7 +17,7 @@ use clawft_kernel::governance::{GovernanceDecision, GovernanceEngine, Governance
 pub struct BusAsk<'a> {
     /// Authenticated instance id (the agent).
     pub instance: &'a str,
-    /// `cogbus.declare` / `.publish` / `.subscribe`.
+    /// `cogbus.declare` / `.publish` / `.subscribe` / `.serve` / `.call`.
     pub action: &'a str,
     /// Topic, wildcard or kind.
     pub topic: &'a str,

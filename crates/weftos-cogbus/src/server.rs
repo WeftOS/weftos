@@ -37,6 +37,9 @@ pub const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 /// Time a started frame (read or write) has to complete.
 pub const FRAME_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// How often calls past their deadline are answered with a timeout.
+pub const CALL_SWEEP: Duration = Duration::from_millis(50);
+
 /// The listening socket. Dropping it stops accepting and removes the file.
 pub struct ServerHandle {
     path: PathBuf,
@@ -72,16 +75,23 @@ pub async fn serve(broker: Arc<Broker>, path: &Path) -> std::io::Result<ServerHa
     let listener = UnixListener::bind(path)?;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o660))?;
     let task = tokio::spawn(async move {
+        let mut sweep = tokio::time::interval(CALL_SWEEP);
+        sweep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
-            match listener.accept().await {
-                Ok((stream, _)) => {
-                    let b = broker.clone();
-                    tokio::spawn(async move { connection(b, stream).await });
+            tokio::select! {
+                _ = sweep.tick() => {
+                    broker.expire_calls();
                 }
-                Err(e) => {
-                    tracing::warn!(target: "cogbus", error = %e, "accept failed");
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                }
+                accepted = listener.accept() => match accepted {
+                    Ok((stream, _)) => {
+                        let b = broker.clone();
+                        tokio::spawn(async move { connection(b, stream).await });
+                    }
+                    Err(e) => {
+                        tracing::warn!(target: "cogbus", error = %e, "accept failed");
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
+                },
             }
         }
     });
@@ -215,6 +225,7 @@ async fn serve_session(
     let wake = s.wake();
     let mut revoked = s.revoked();
     let mut pushed = ss.take_events();
+    let mut frames = s.take_pushed();
     loop {
         tokio::select! {
             item = rx.recv() => {
@@ -228,7 +239,11 @@ async fn serve_session(
                     }
                     Some(Incoming::Req(req)) => match crate::stream::serve::handle(broker, s, ss, req) {
                         Ok(answer) => answer,
-                        Err(req) => (handle(broker, s, req), Vec::new()),
+                        Err(req) => match handle(broker, s, req) {
+                            Some(ev) => (ev, Vec::new()),
+                            // A call: answered when the provider replies.
+                            None => continue,
+                        },
                     },
                 };
                 if !crate::stream::serve::send_with(w, &ev, &fds).await {
@@ -237,6 +252,11 @@ async fn serve_session(
             }
             Some(out) = async { match pushed.as_mut() { Some(p) => p.recv().await, None => None } } => {
                 if !crate::stream::serve::send_with(w, &out.ev, &out.fds).await {
+                    return;
+                }
+            }
+            Some(ev) = async { match frames.as_mut() { Some(f) => f.recv().await, None => None } } => {
+                if !send(w, &ev).await {
                     return;
                 }
             }
@@ -256,7 +276,8 @@ async fn serve_session(
     }
 }
 
-fn handle(broker: &Broker, s: &mut Session, req: Request) -> Event {
+/// Answer `req`; `None` for a call, which is answered later.
+fn handle(broker: &Broker, s: &mut Session, req: Request) -> Option<Event> {
     let id = req.id();
     let r = match req {
         Request::Hello { .. } => Err(BusError::new(ErrorCode::BadRequest, "already said hello")),
@@ -278,15 +299,36 @@ fn handle(broker: &Broker, s: &mut Session, req: Request) -> Event {
             .map(|sub| json!({ "sub": sub })),
         Request::Unsubscribe { sub, .. } => broker.unsubscribe(s, sub).map(|_| json!({})),
         Request::List { .. } => Ok(json!({ "topics": broker.list_for(s) })),
+        Request::Serve {
+            topic_kind,
+            source_id,
+            schema,
+            ..
+        } => broker.serve_topic(s, &topic_kind, &source_id, &schema),
+        Request::Call {
+            topic,
+            schema,
+            body,
+            timeout_ms,
+            ..
+        } => match broker.call_service(s, id, &topic, &schema, body, timeout_ms) {
+            Ok(()) => return None,
+            Err(e) => Err(e),
+        },
+        Request::Reply {
+            call, body, error, ..
+        } => broker
+            .reply_call(s, call, error.map_or(Ok(body), Err))
+            .map(|_| json!({})),
         Request::StreamOpen { .. }
         | Request::StreamSubscribe { .. }
         | Request::StreamDemote { .. } => Err(BusError::new(ErrorCode::BadRequest, "stream request outside the stream handler")),
     };
-    match r {
+    Some(match r {
         Ok(result) => Event::Ok { id, result },
         Err(e) => {
             broker.record_refusal(&e, s.instance_id());
             error(id, e)
         }
-    }
+    })
 }

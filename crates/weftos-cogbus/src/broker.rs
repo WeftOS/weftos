@@ -42,6 +42,8 @@ use sink::{Put, SinkSlot};
 mod sink;
 #[path = "rows.rs"]
 mod rows;
+#[path = "svc.rs"]
+mod svc;
 
 struct Instance {
     spec: InstanceSpec,
@@ -87,6 +89,7 @@ struct State {
     subs: BTreeMap<u64, Sub>,
     next_sub: u64,
     sinks: HashMap<String, SinkSlot>,
+    svc: svc::Svc,
 }
 
 fn now_ns() -> u64 {
@@ -175,6 +178,7 @@ impl Broker {
                 t.writer = None;
             }
         }
+        g.svc.drop_instance(instance_id);
         let _ = inst.revoked.send(true);
         true
     }
@@ -209,7 +213,11 @@ impl Broker {
             let m = format!("peer uid {peer_uid:?} is not the instance's uid {want}");
             return Err(refuse(id, "hello", "-", bad(ErrorCode::UidMismatch, m)));
         }
+        let (push, pushed) = tokio::sync::mpsc::unbounded_channel();
         Ok(Session {
+            conn: svc::next_conn(),
+            push,
+            pushed: Some(pushed),
             instance_id: id.clone(),
             project_id: inst.spec.project_id.clone(),
             declared: None,
@@ -309,6 +317,12 @@ impl Broker {
                 format!("body of {size} bytes exceeds {MAX_BODY}; larger is a blob"),
             )));
         }
+        if kind.starts_with(svc::KIND_PREFIX) {
+            return Err(no(bad(
+                ErrorCode::Unsupported,
+                format!("{kind} is a service; use serve and call"),
+            )));
+        }
         let mut g = self.lock();
         let spec = self.spec_of(&g, s, "publish")?;
         let outputs = s.declared.as_ref().map_or(&spec.outputs, |d| &d.0);
@@ -369,6 +383,12 @@ impl Broker {
                     "topic must be <kind>/<source_id> or <kind>/*",
                 ))
             })?;
+        if kind.starts_with(svc::KIND_PREFIX) {
+            return Err(no(bad(
+                ErrorCode::Unsupported,
+                format!("{kind} is a service; use serve and call"),
+            )));
+        }
         let mut g = self.lock();
         let spec = self.spec_of(&g, s, "subscribe")?;
         let inputs = s.declared.as_ref().map_or(&spec.inputs, |d| &d.1);
@@ -463,6 +483,7 @@ impl Broker {
         for id in s.subs.keys() {
             g.subs.remove(id);
         }
+        g.svc.drop_conn(s.conn);
     }
 }
 

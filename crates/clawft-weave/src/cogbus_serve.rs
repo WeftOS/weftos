@@ -102,6 +102,10 @@ pub async fn install(broker: Arc<Broker>, dir: &Path, sink: Option<Arc<StoreSink
     match start_on(broker, dir).await {
         Ok(rt) => {
             tracing::info!(socket = %rt.socket().display(), store_sink = sink.is_some(), "cogbus");
+            // The NPU service's telemetry feeds node facts (cogbus_npu_facts).
+            if let Err(e) = crate::cogbus_npu_facts::attach(&rt.broker) {
+                tracing::warn!(error = %e, "npu service state will not appear in node facts");
+            }
             let mut reg = Registrar::new(rt.broker.clone(), rt.socket());
             if let Some(s) = sink {
                 reg = reg.with_store_sink(s);

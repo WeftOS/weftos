@@ -13,7 +13,16 @@
 //! {"op":"list","id":6}
 //! {"op":"stream_open","id":7,"topic_kind":"audio.pcm","source_id":"venq-mic-0","schema":"pcm.s16le.v1","max_record":640}
 //! {"op":"stream_subscribe","id":8,"topic":"audio.pcm/venq-mic-0","schema":"pcm.s16le.v1"}
+//! {"op":"serve","id":9,"topic_kind":"svc.infer","source_id":"venq-npu","schema":"infer.v1"}
+//! {"op":"call","id":10,"topic":"svc.infer/venq-npu","schema":"infer.v1","body":{},"timeout_ms":30000}
+//! {"op":"reply","id":11,"call":1,"body":{}}
 //! ```
+//!
+//! A service call (section 12 of the ADR) is `call` from the caller, a
+//! `{"type":"call",...}` [`CallDelivery`] pushed to the one `serve`
+//! connection of that topic, and `reply` from it; the caller's `call`
+//! request is answered then (or with an error at its deadline), not when
+//! the broker takes it.
 //!
 //! Stream answers and `{"type":"stream",...}` notices carry descriptors
 //! (`SCM_RIGHTS`) and say how many in their `fds` field ([`crate::stream`]).
@@ -155,7 +164,55 @@ pub enum Request {
         /// The reader's subscription id.
         sub: u64,
     },
+    /// Become the one provider of service `<topic_kind>/<source_id>` (a
+    /// `svc.*` kind declared as an output); calls arrive as
+    /// [`Event::Call`].
+    Serve {
+        /// Correlation id.
+        id: u64,
+        /// Declared output kind, `svc.<name>`.
+        topic_kind: String,
+        /// The service's name on this node.
+        source_id: String,
+        /// The declared schema id.
+        schema: String,
+    },
+    /// Call service `<kind>/<source_id>` (a `svc.*` kind declared as an
+    /// input). The answer carries the provider's reply body as `body`.
+    Call {
+        /// Correlation id.
+        id: u64,
+        /// One topic, no wildcard.
+        topic: String,
+        /// The declared input schema.
+        schema: String,
+        /// The request, at most [`MAX_BODY`] bytes serialized.
+        body: Value,
+        /// Time the call may take, queueing included; the broker's
+        /// default when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timeout_ms: Option<u64>,
+    },
+    /// From the provider: answer call `call`, with `error` set to refuse it.
+    Reply {
+        /// Correlation id.
+        id: u64,
+        /// The call id from the [`CallDelivery`].
+        call: u64,
+        /// The reply, at most [`MAX_BODY`] bytes serialized.
+        #[serde(default)]
+        body: Value,
+        /// The service failed the call; sent to the caller as
+        /// [`ErrorCode::ServiceError`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
 }
+
+/// Longest time a call may be given.
+pub const MAX_CALL_MS: u64 = 600_000;
+/// Time a call is given when it names none.
+pub const DEFAULT_CALL_MS: u64 = 30_000;
 
 impl Request {
     /// The correlation id.
@@ -169,7 +226,10 @@ impl Request {
             | Self::List { id }
             | Self::StreamOpen { id, .. }
             | Self::StreamSubscribe { id, .. }
-            | Self::StreamDemote { id, .. } => *id,
+            | Self::StreamDemote { id, .. }
+            | Self::Serve { id, .. }
+            | Self::Call { id, .. }
+            | Self::Reply { id, .. } => *id,
         }
     }
 }
@@ -201,8 +261,16 @@ pub enum ErrorCode {
     /// The instance was unloaded or stopped.
     Revoked,
     /// Governance refused the action (`cogbus.declare` / `.publish` /
-    /// `.subscribe`).
+    /// `.subscribe` / `.serve` / `.call`).
     Denied,
+    /// No provider serves the topic, or it went away during the call.
+    Unavailable,
+    /// The call's deadline passed before the provider replied.
+    Timeout,
+    /// Too many calls pending on the service or from the caller.
+    Busy,
+    /// The provider answered the call with an error.
+    ServiceError,
     /// A code this client does not know.
     #[serde(other)]
     Unknown,
@@ -231,6 +299,28 @@ pub struct Delivery {
     pub body: Value,
 }
 
+/// A service call pushed to the provider (section 12 of the ADR).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CallDelivery {
+    /// Broker-assigned id the provider echoes in its `reply`.
+    pub call: u64,
+    /// `<kind>/<source_id>` of the service.
+    pub topic: String,
+    /// Schema id of the service.
+    pub schema: String,
+    /// Instance that called, set by the broker.
+    pub from: String,
+    /// Node whose broker took the call.
+    pub node_id: String,
+    /// Broker receive time (Unix nanoseconds).
+    pub recv_ns: u64,
+    /// Milliseconds the call had when it was taken; the broker answers the
+    /// caller with a timeout at that deadline, so a later reply is refused.
+    pub timeout_ms: u64,
+    /// The request.
+    pub body: Value,
+}
+
 /// A frame from the broker.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -256,6 +346,8 @@ pub enum Event {
     Msg(Delivery),
     /// A stream event for a writer or reader (B2).
     Stream(crate::stream::StreamNotice),
+    /// A call for the provider of a service.
+    Call(CallDelivery),
 }
 
 /// A frame could not be read or written.

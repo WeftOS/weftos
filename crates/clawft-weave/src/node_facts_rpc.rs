@@ -296,6 +296,8 @@ fn probe_blocking(signer: &LocalSigner) -> clawft_types::placement::NodeFacts {
     );
     *signer.last_full.lock().unwrap_or_else(|p| p.into_inner()) =
         Some((std::time::Instant::now(), facts.clone()));
+    let mut facts = facts;
+    crate::cogbus_npu_facts::apply(&mut facts, now_secs());
     facts
 }
 
@@ -309,7 +311,12 @@ fn facts_blocking(signer: &LocalSigner, full: bool) -> clawft_types::placement::
         .clone()
         .filter(|(at, _)| at.elapsed() < Duration::from_secs(FULL_PROBE_SECS));
     match base {
-        Some((_, base)) if !full => refresh_live(&SystemHost::default(), &base, now_secs()),
+        Some((_, base)) if !full => {
+            let mut f = refresh_live(&SystemHost::default(), &base, now_secs());
+            // The queue changes between full probes: re-read the service's state.
+            crate::cogbus_npu_facts::apply(&mut f, now_secs());
+            f
+        }
         _ => probe_blocking(signer),
     }
 }
