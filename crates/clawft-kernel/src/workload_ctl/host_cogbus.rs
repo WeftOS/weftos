@@ -249,3 +249,60 @@ impl WorkloadHostService {
         }
     }
 }
+
+/// Grace given to a cog the broker asked to stop.
+const BUS_STOP_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+
+impl WorkloadHostService {
+    /// The broker stopped instance `instance_id` on the bus (repeated
+    /// refusals, ADR-122 gaps 4 and 5) and, after its governance check,
+    /// asks the workload to stop too. The stop is the host's own gated
+    /// `workload.stop` (teardown check, chained with the cause), the
+    /// lifecycle change is chained as `workload.lifecycle`, and the instance
+    /// stays stopped until an operator starts it (no lease restart, no
+    /// supervisor restart). `Ok(None)`: no such live instance here.
+    pub async fn stop_for_bus(
+        &self,
+        instance_id: &str,
+        reason: &str,
+    ) -> Result<Option<super::host_supervise::Supervised>, String> {
+        use super::lifecycle::LifecycleState;
+        let (host, handle, from) = {
+            let mut map = self.instances.lock().await;
+            let Some(p) = map.get_mut(instance_id) else {
+                return Ok(None);
+            };
+            if !p.life.state.is_live() {
+                return Ok(None);
+            }
+            if let (Some(hk), Some(l)) = (&self.ingest, &p.ingest) {
+                hk.deactivate(l);
+            }
+            self.bus_off(p.cogbus.as_ref());
+            p.desired_running = false;
+            p.lease_stopped = false;
+            (self.routes[&p.route].clone(), p.handle.clone(), p.life.state)
+        };
+        let name = host.workload_for(&handle).await.map(|w| w.id).unwrap_or_default();
+        let cause = serde_json::json!({ "source": "cogbus", "reason": reason });
+        let r = host.stop_because(&handle, BUS_STOP_GRACE, Some(cause)).await;
+        {
+            let mut map = self.instances.lock().await;
+            if let Some(p) = map.get_mut(instance_id) {
+                if let Ok(ev) = &r {
+                    p.last = Some(ev.clone());
+                }
+                super::host_supervise::enter(&mut p.life, LifecycleState::Stopped);
+            }
+        }
+        let s = super::host_supervise::Supervised {
+            instance_id: instance_id.to_string(),
+            workload: name,
+            from,
+            to: LifecycleState::Stopped,
+            reason: format!("cogbus: {reason}"),
+        };
+        self.chain_life(&s, &self.node_id, serde_json::json!({ "phase": "cogbus", "stopped": r.is_ok() }));
+        r.map(|_| Some(s)).map_err(|e| e.to_string())
+    }
+}

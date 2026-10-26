@@ -495,7 +495,8 @@ async fn build(
         Arc::new(crate::cog_ingest_serve::IdentityDirectory);
     // ADR-122 section 9: the broker exists first, so the bridge publishes on
     // it and its store sink serves cogs that never touch the HTTP port.
-    let broker = crate::cogbus_serve::broker_in(&id, crate::cogbus_serve::hooks(dir, bus_rules), dir);
+    let (bus_hooks, bus_activity) = crate::cogbus_serve::hooks_with_activity(dir, bus_rules);
+    let broker = crate::cogbus_serve::broker_in(&id, bus_hooks, dir);
     let ingest = match crate::cog_ingest_serve::load_config(dir) {
         Ok(cfg) => match crate::cog_ingest_serve::start_on_bus(
             &cfg,
@@ -545,6 +546,8 @@ async fn build(
     if let Some(bus) = crate::cogbus_serve::install(broker, dir, store_sink).await {
         local.set_cogbus(bus);
     }
+    // ADR-122 gap 5: a cog the broker stopped on the bus is stopped here too.
+    bus_activity.set_stop_hook(crate::cogbus_serve::stop_hook(Arc::downgrade(&local)));
     let _ = HOST.set(local.clone());
     // ADR-108 P3b: serve `project.fetch` for the projects registered here.
     match clawft_types::runtime_paths::home_dir() {

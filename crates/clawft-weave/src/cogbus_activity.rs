@@ -19,6 +19,7 @@
 //! Byte counts and duration are 0.
 
 use std::path::Path;
+use std::sync::{Arc, OnceLock};
 
 use clawft_kernel::exposure::registry::now_ms;
 use clawft_kernel::exposure::{ActivityLog, NewActivity, Retention};
@@ -27,9 +28,13 @@ use weftos_cogbus::{BusActivity, BusSink, Outcome};
 /// Log file under the runtime dir.
 pub const LOG_FILE: &str = "cogbus-activity.jsonl";
 
+/// What the daemon does when the broker asks for a cog to be stopped.
+pub type StopHook = Arc<dyn Fn(&str, &str) + Send + Sync>;
+
 /// The sink the broker writes to.
 pub struct CogbusActivity {
     log: ActivityLog,
+    stop: OnceLock<StopHook>,
 }
 
 /// `outcome` text of one record.
@@ -56,12 +61,19 @@ impl CogbusActivity {
                 ActivityLog::memory(Retention::default())
             })
         });
-        Self { log }
+        Self { log, stop: OnceLock::new() }
     }
 
     /// In memory (tests).
     pub fn memory() -> Self {
-        Self { log: ActivityLog::memory(Retention::default()) }
+        Self { log: ActivityLog::memory(Retention::default()), stop: OnceLock::new() }
+    }
+
+    /// What to run for [`BusSink::stop_requested`] (first call wins). The
+    /// workload host does not exist yet when the broker is built, so the
+    /// daemon sets this once it does.
+    pub fn set_stop_hook(&self, f: StopHook) -> bool {
+        self.stop.set(f).is_ok()
     }
 
     /// The log.
@@ -87,9 +99,13 @@ impl BusSink for CogbusActivity {
     }
 
     fn stopped(&self, instance_id: &str, refusals: u32) {
-        // TODO(ADR-122 §11): the workload host has no local stop verb to
-        // call here (stops are signed `workload.ctl` requests); the cog
-        // keeps running without the bus until it is stopped or restarted.
-        tracing::warn!(target: "cogbus", instance = instance_id, refusals, "cog stopped on the bus after repeated refusals; the workload itself was not stopped (no stop hook)");
+        tracing::warn!(target: "cogbus", instance = instance_id, refusals, "cog stopped on the bus after repeated refusals");
+    }
+
+    fn stop_requested(&self, instance_id: &str, reason: &str) {
+        match self.stop.get() {
+            Some(f) => f(instance_id, reason),
+            None => tracing::warn!(target: "cogbus", instance = instance_id, reason, "no workload stop hook: the cog keeps running without the bus"),
+        }
     }
 }

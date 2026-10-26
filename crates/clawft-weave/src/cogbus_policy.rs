@@ -9,8 +9,10 @@
 //! - **Kernel rules.** Each request is evaluated as a `GovernanceRequest`:
 //!   agent the instance id, action `cogbus.declare`, `cogbus.publish`,
 //!   `cogbus.subscribe`, `cogbus.serve`, `cogbus.call` (service calls,
-//!   ADR-122 section 12), `cogbus.blob.put` or `cogbus.blob.get` (the content
-//!   store, topic `blob/<media type>` and `blob/<hash>`), context `tool` = the topic (so a rule's
+//!   ADR-122 section 12), `cogbus.blob.put`, `cogbus.blob.get` (the content
+//!   store, topic `blob/<media type>` and `blob/<hash>`) or `cogbus.stop` (the
+//!   broker asking the workload runtime to stop an instance it stopped on the
+//!   bus; topic `-`), context `tool` = the topic (so a rule's
 //!   `tool_selector` can name one, e.g. `telemetry/*`), `cog_id` and
 //!   `schema`; project attribution is the kernel's own
 //!   ([`crate::cogbus_governance`]). The rules are the project
@@ -57,7 +59,7 @@ use weftos_cogbus::{BusAction, BusPolicy, BusRequest, Grant};
 /// The operator file under the runtime dir.
 pub const POLICY_FILE: &str = "cogbus-policy.json";
 const MAX_ENTRIES: usize = 256;
-const ACTIONS: [&str; 7] = [
+const ACTIONS: [&str; 8] = [
     "cogbus.declare",
     "cogbus.publish",
     "cogbus.subscribe",
@@ -65,6 +67,7 @@ const ACTIONS: [&str; 7] = [
     "cogbus.call",
     "cogbus.blob.put",
     "cogbus.blob.get",
+    "cogbus.stop",
 ];
 
 /// One cross-project grant.
@@ -276,6 +279,14 @@ impl BusPolicy for CogbusPolicy {
     fn decide(&self, r: &BusRequest<'_>) -> Result<(), String> {
         if r.action == BusAction::Unsubscribe {
             return Ok(());
+        }
+        // A stop makes the node safer: an unreadable policy file does not
+        // block it (explicit deny rules and the kernel rules still apply).
+        if r.action == BusAction::Stop {
+            if let Some(why) = self.file().ok().and_then(|f| f.denied(r)) {
+                return Err(why);
+            }
+            return self.kernel(r);
         }
         let file = self.file()?;
         if let Some(why) = file.denied(r) {

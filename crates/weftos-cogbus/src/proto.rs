@@ -324,6 +324,8 @@ pub enum ErrorCode {
     Busy,
     /// The provider answered the call with an error.
     ServiceError,
+    /// The topic's declared publish rate (with its slack) is spent.
+    RateLimited,
     /// No such blob (never stored, expired, or not visible to you).
     NotFound,
     /// The content store is full for this node or this instance.

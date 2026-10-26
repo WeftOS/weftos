@@ -94,6 +94,10 @@ struct State {
     svc: svc::Svc,
     /// Open connections per instance (by connection id).
     conns: HashMap<String, HashSet<u64>>,
+    /// Declared message rate per (instance, kind), msgs/s.
+    rates: HashMap<(String, String), f64>,
+    /// Publish budgets per (instance, kind, source).
+    buckets: HashMap<(String, String, String), crate::rate::Bucket>,
 }
 
 fn now_ns() -> u64 {
@@ -138,6 +142,16 @@ impl Broker {
     /// The content store, if the node has one.
     pub fn blob_store(&self) -> Option<&Arc<crate::blob::BlobStore>> {
         self.blobs.as_ref()
+    }
+
+    /// Declare the message rate (per second) of `instance`'s output `kind`;
+    /// publishes beyond it (with [`crate::rate::SLACK`]) are `rate_limited`.
+    /// Call after `register`; revoke forgets it, so a restart registers
+    /// again.
+    pub fn set_output_rate(&self, instance: &str, kind: &str, per_sec: f64) {
+        if per_sec.is_finite() && per_sec > 0.0 {
+            self.lock().rates.insert((instance.to_string(), kind.to_string()), per_sec);
+        }
     }
 
     /// The broker's tunables.
@@ -203,6 +217,8 @@ impl Broker {
         }
         g.svc.drop_instance(instance_id);
         g.conns.remove(instance_id);
+        g.rates.retain(|(i, _), _| i != instance_id);
+        g.buckets.retain(|(i, _, _), _| i != instance_id);
         if let Some(b) = &self.blobs {
             b.drop_uploads(instance_id);
         }
@@ -381,6 +397,17 @@ impl Broker {
         let project = spec.project_id.clone();
         let cog = spec.cog_id.clone();
         let key = (kind.to_string(), source_id.to_string());
+        if let Some(per_sec) = g.rates.get(&(me.to_string(), kind.to_string())).copied() {
+            let now = std::time::Instant::now();
+            let bucket = g
+                .buckets
+                .entry((me.to_string(), kind.to_string(), source_id.to_string()))
+                .or_insert_with(|| crate::rate::Bucket::new(per_sec, now));
+            if !bucket.take(now) {
+                let m = format!("{topic} is declared at {per_sec} msg/s (up to {} allowed)", per_sec * crate::rate::SLACK);
+                return Err(no(bad(ErrorCode::RateLimited, m)));
+            }
+        }
         let mine = g.topics.get(&key).and_then(|t| t.writer.as_deref()) == Some(me);
         if !mine {
             let mut req = BusRequest::new(BusAction::Publish, me, &cog, project.as_deref());

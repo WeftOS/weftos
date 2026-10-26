@@ -237,3 +237,40 @@ async fn require_cog_uid_lets_an_isolated_cog_through() {
     let iid = report.placed.expect("an isolated cog is not refused").instance_id;
     plane.instance(method::UNLOAD, &iid).await.unwrap();
 }
+
+#[tokio::test]
+async fn the_broker_can_stop_a_running_cog_and_it_stays_stopped_with_the_cause_chained() {
+    let bus = Arc::new(FakeBus { reachable: true, ..Default::default() });
+    let (host, plane, iid, _tmp) = place(bus.clone(), 77, 15077).await;
+    assert!(bus.live.lock().unwrap().contains(&iid));
+    bus_file(&host, &iid).await;
+
+    let s = host.svc.stop_for_bus(&iid, "21 refusals in 60 s, last rate_limited").await.unwrap().expect("a live instance");
+    assert_eq!(s.to, super::lifecycle::LifecycleState::Stopped);
+    assert!(s.reason.starts_with("cogbus: "), "{}", s.reason);
+    assert!(!bus.live.lock().unwrap().contains(&iid), "revoked on the bus");
+    assert_eq!(host.svc.lifecycle_of(&iid).await, Some(super::lifecycle::LifecycleState::Stopped));
+
+    // Chained: the host's gated workload.stop carries the cause, and the
+    // lifecycle event says cogbus.
+    let events = host.chain.tail(50);
+    // (The gate chains its own workload.stop decision first; the runtime outcome carries the cause.)
+    let stop = events
+        .iter()
+        .filter(|e| e.kind == crate::chain::EVENT_KIND_WORKLOAD_STOP)
+        .find(|e| e.payload.as_ref().is_some_and(|p| p.get("cause").is_some()))
+        .expect("workload.stop with a cause chained");
+    let payload = stop.payload.clone().unwrap_or_default();
+    assert_eq!(payload["cause"]["source"], "cogbus");
+    assert!(payload["cause"]["reason"].as_str().unwrap().contains("rate_limited"));
+    let life = events.iter().rfind(|e| e.kind == crate::chain::EVENT_KIND_WORKLOAD_LIFECYCLE).expect("lifecycle chained");
+    assert_eq!(life.payload.clone().unwrap_or_default()["phase"], "cogbus");
+
+    // Not an instance this host runs, or one already stopped: nothing to do.
+    assert!(host.svc.stop_for_bus("nope", "x").await.unwrap().is_none());
+    assert!(host.svc.stop_for_bus(&iid, "again").await.unwrap().is_none());
+    // The supervisor does not bring it back (an operator start would).
+    host.svc.supervise(u64::MAX / 2).await;
+    assert_eq!(host.svc.lifecycle_of(&iid).await, Some(super::lifecycle::LifecycleState::Stopped));
+    plane.instance(method::UNLOAD, &iid).await.unwrap();
+}

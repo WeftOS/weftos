@@ -35,6 +35,7 @@ pub mod broker;
 pub mod client;
 pub mod policy;
 pub mod proto;
+pub mod rate;
 #[cfg(unix)]
 pub mod server;
 pub mod stream;

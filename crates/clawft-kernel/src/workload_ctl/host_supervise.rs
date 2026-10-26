@@ -164,7 +164,7 @@ impl WorkloadHostService {
         self.instances.lock().await.get(instance_id).map(|p| p.life.state)
     }
 
-    fn chain_life(&self, s: &Supervised, node: &str, extra: serde_json::Value) {
+    pub(super) fn chain_life(&self, s: &Supervised, node: &str, extra: serde_json::Value) {
         let mut payload = json!({
             "node": node, "instance_id": s.instance_id, "workload": s.workload,
             "from": s.from, "to": s.to, "reason": s.reason,

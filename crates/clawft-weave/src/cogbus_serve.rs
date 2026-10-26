@@ -101,11 +101,39 @@ pub fn broker_in(node_id: &str, hooks: BusHooks, dir: &Path) -> Arc<Broker> {
 /// The daemon's hooks: governance over `rules` and `dir`'s policy file, the
 /// activity log in `dir`.
 pub fn hooks(dir: &Path, rules: Option<Rules>) -> BusHooks {
-    BusHooks {
+    hooks_with_activity(dir, rules).0
+}
+
+/// [`hooks`], and the activity sink, so the daemon can give it the workload
+/// stop hook once the host exists.
+pub fn hooks_with_activity(dir: &Path, rules: Option<Rules>) -> (BusHooks, Arc<CogbusActivity>) {
+    let activity = Arc::new(CogbusActivity::open(dir));
+    let hooks = BusHooks {
         policy: Arc::new(CogbusPolicy::new(dir, rules)),
-        sink: Arc::new(CogbusActivity::open(dir)),
+        sink: activity.clone(),
         ..BusHooks::default()
-    }
+    };
+    (hooks, activity)
+}
+
+/// The stop hook for `host`: when the broker stopped a cog on the bus and
+/// governance agreed, stop the workload through the host (its gated
+/// `workload.stop`, chained with the cause) and leave it stopped.
+pub fn stop_hook(host: std::sync::Weak<clawft_kernel::workload_ctl::host_service::WorkloadHostService>) -> crate::cogbus_activity::StopHook {
+    Arc::new(move |instance: &str, reason: &str| {
+        let (Some(host), Ok(rt)) = (host.upgrade(), tokio::runtime::Handle::try_current()) else {
+            tracing::warn!(target: "cogbus", instance, reason, "cannot stop the workload (no host or runtime)");
+            return;
+        };
+        let (instance, reason) = (instance.to_string(), reason.to_string());
+        rt.spawn(async move {
+            match host.stop_for_bus(&instance, &reason).await {
+                Ok(Some(s)) => tracing::warn!(target: "cogbus", instance = %s.instance_id, workload = %s.workload, reason = %s.reason, "workload stopped by the cogbus"),
+                Ok(None) => tracing::info!(target: "cogbus", %instance, "no live workload instance to stop"),
+                Err(e) => tracing::error!(target: "cogbus", %instance, error = %e, "workload stop failed; the cog keeps running without the bus"),
+            }
+        });
+    })
 }
 
 /// Start the broker for node `node_id` in `dir`.
@@ -246,6 +274,12 @@ impl CogbusRegistrar for Registrar {
             .register(spec_of(r), r.token.expose())
             .map_err(|e| e.message)?;
         self.isolator.bind(&r.instance_id, &r.cog_id, r.uid, r.isolation);
+        // Declared message rates become publish budgets (ADR-122 gap 5).
+        for o in &r.outputs {
+            if let Some(per_sec) = o.rate.as_deref().and_then(weftos_cogbus::rate::parse_rate) {
+                self.broker.set_output_rate(&r.instance_id, &o.topic, per_sec);
+            }
+        }
         if let Some(s) = &self.sink {
             s.bind(InstanceBinding::new(&r.instance_id, r.project_id.clone(), &r.controller_node));
         }
