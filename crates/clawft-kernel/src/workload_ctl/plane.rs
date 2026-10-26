@@ -522,6 +522,16 @@ impl PlacementControlPlane {
         }
     }
 
+    /// Re-describe one known node and cache its fresh signed facts. A stop or
+    /// unload changes what the node has free; without this the next placement
+    /// is judged on the figure from before it (card b71cd973). Best effort: an
+    /// unreachable node keeps its held facts, which expire on their own.
+    pub(super) async fn refresh_node_facts(&self, node_id: &str) {
+        if let Ok((t, pk)) = self.target(node_id) {
+            let _ = self.add_target_expecting(&t.addr, t.tier, Some(pk)).await;
+        }
+    }
+
     pub(super) fn target(&self, node_id: &str) -> Result<(TargetInfo, [u8; 32]), PlaneError> {
         let t = self
             .targets

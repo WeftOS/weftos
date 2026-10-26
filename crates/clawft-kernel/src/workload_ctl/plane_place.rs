@@ -520,6 +520,9 @@ impl PlacementControlPlane {
             self.drop_life(instance_id);
             self.persist();
         }
+        if method::is_teardown(m) {
+            self.refresh_node_facts(&rec.node_id).await;
+        }
         Ok(out)
     }
 }
