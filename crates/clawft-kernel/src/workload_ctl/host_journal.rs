@@ -26,6 +26,18 @@
 //! - **Controller.** The journaled requester must still be a controller
 //!   under the node's current policy, or the instance is refused.
 //!
+//! - **What the chain proves.** The generation is tamper-evidence only up to
+//!   the chain's own durability: the chain is written out at a clean shutdown,
+//!   so after a crash it can be older than the journal, and an attacker who can
+//!   roll the chain back as well as the file defeats the check (owner card
+//!   a93f7abe makes the chain durable per event). `workload.journal` is a
+//!   reserved event kind: peers cannot replicate it and the `chain.append` door
+//!   refuses it, so only this node's own saves count.
+//! - **A missing file.** If the chain records journal generations for this node
+//!   but the file is gone (deleted, or set aside as unreadable), nothing is
+//!   restored and the restore report, the log and the host's status say
+//!   "journal missing", rather than silently starting an empty node.
+//!
 //! A restore that fails for a reason that may pass (the package not in the
 //! store yet, the runtime failing) keeps the entry and counts the failure;
 //! only a permanent refusal (verification, governance, authorisation, a bad
@@ -40,7 +52,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::host_service::{HOST_CHAIN_SOURCE, PlaceBody, WorkloadHostService};
-use super::msg::{CTL_VERSION, CtlRequest, RefusalCode, method};
+use super::msg::{CTL_VERSION, CtlRequest, Refusal, RefusalCode, method};
+use crate::workload_governance::gate::REVOCATION_UNREADABLE;
 use crate::chain::{ChainManager, EVENT_KIND_WORKLOAD_JOURNAL};
 use crate::mesh_artifact_transfer::PeerSet;
 use crate::workload_pkg::codec::{hex_decode_exact, hex_encode};
@@ -85,7 +98,9 @@ fn signed_bytes(node_id: &str, generation: u64, entries: &[JournalEntry]) -> Vec
     m
 }
 
-/// The newest journal generation the chain holds for this node.
+/// The newest journal generation the chain holds for this node. Only events
+/// this node appended count: `workload.journal` is a reserved kind, refused
+/// from replication and from the `chain.append` and bridge doors.
 fn chain_generation(chain: &ChainManager, node_id: &str) -> u64 {
     chain
         .tail(0)
@@ -118,9 +133,32 @@ fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     f.sync_all()
 }
 
+/// Flush a directory's entries to disk (after a rename into it).
+fn sync_dir(dir: &Path) -> std::io::Result<()> {
+    std::fs::File::open(dir)?.sync_all()
+}
+
+#[cfg(test)]
+pub(super) fn sync_dir_for_test(dir: &Path) -> std::io::Result<()> {
+    sync_dir(dir)
+}
+
 struct State {
     entries: BTreeMap<String, JournalEntry>,
     generation: u64,
+}
+
+/// What opening the file found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum OpenState {
+    /// No file.
+    Missing,
+    /// A file that verified.
+    Loaded,
+    /// A file that did not parse (set aside as `.bad`).
+    Unreadable,
+    /// A file whose signature did not verify.
+    Refused,
 }
 
 pub(super) struct Journal {
@@ -131,6 +169,7 @@ pub(super) struct Journal {
     chain: Mutex<Option<Arc<ChainManager>>>,
     /// The generation the file on disk had when opened.
     loaded_generation: u64,
+    open_state: OpenState,
     /// Entries refused at open (instance id, reason); each is returned once.
     rejected: Mutex<Vec<(String, String)>>,
 }
@@ -142,12 +181,15 @@ impl Journal {
     /// signature does not verify under this node's key and id is refused whole.
     pub(super) fn open(path: &Path, node_id: &str, key: &SigningKey) -> Self {
         let vk = key.verifying_key();
-        let (entries, generation, rejected) = match read(path, node_id, &vk) {
-            Ok(r) => r,
+        let existed = std::fs::symlink_metadata(path).is_ok();
+        let (entries, generation, rejected, open_state) = match read(path, node_id, &vk) {
+            Ok((e, g, r)) if !existed => (e, g, r, OpenState::Missing),
+            Ok((e, g, r)) if !r.is_empty() => (e, g, r, OpenState::Refused),
+            Ok((e, g, r)) => (e, g, r, OpenState::Loaded),
             Err(e) => {
                 tracing::warn!(path = %path.display(), error = %e, "instance journal unreadable; starting empty");
                 let _ = std::fs::rename(path, path.with_extension("json.bad"));
-                (BTreeMap::new(), 0, Vec::new())
+                (BTreeMap::new(), 0, Vec::new(), OpenState::Unreadable)
             }
         };
         for (id, why) in &rejected {
@@ -160,6 +202,7 @@ impl Journal {
             state: Mutex::new(State { entries, generation }),
             chain: Mutex::new(None),
             loaded_generation: generation,
+            open_state,
             rejected: Mutex::new(rejected),
         }
     }
@@ -188,6 +231,16 @@ impl Journal {
 
     pub(super) fn loaded_generation(&self) -> u64 {
         self.loaded_generation
+    }
+
+    pub(super) fn open_state(&self) -> OpenState {
+        self.open_state
+    }
+
+    /// Test hook: pretend the journal has reached `generation`.
+    #[cfg(test)]
+    pub(super) fn set_generation(&self, generation: u64) {
+        self.lock().generation = generation;
     }
 
     pub(super) fn entries(&self) -> Vec<JournalEntry> {
@@ -242,7 +295,11 @@ impl Journal {
     /// between the two leaves the file ahead of the chain, which is accepted;
     /// the other order would leave it behind and look like a replay.
     fn save(&self, g: &mut State) {
-        g.generation += 1;
+        let Some(next) = g.generation.checked_add(1) else {
+            tracing::error!(path = %self.path.display(), "instance journal generation overflowed; not saved");
+            return;
+        };
+        g.generation = next;
         let entries: Vec<JournalEntry> = g.entries.values().cloned().collect();
         let sig = hex_encode(&self.key.sign(&signed_bytes(&self.node_id, g.generation, &entries)).to_bytes());
         let file = File {
@@ -255,7 +312,9 @@ impl Journal {
         let write = || -> std::io::Result<()> {
             let text = serde_json::to_vec_pretty(&file).map_err(std::io::Error::other)?;
             write_private(&tmp, &text)?;
-            std::fs::rename(&tmp, &self.path)
+            std::fs::rename(&tmp, &self.path)?;
+            // The rename is only durable once the directory entry is.
+            sync_dir(self.path.parent().unwrap_or(Path::new(".")))
         };
         if let Err(e) = write() {
             tracing::warn!(path = %self.path.display(), error = %e, "instance journal not saved");
@@ -305,6 +364,21 @@ fn read(path: &Path, node_id: &str, vk: &VerifyingKey) -> Result<Loaded, String>
     ))
 }
 
+/// How the journal stands, for the host's status and the restore report.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct JournalStatus {
+    /// `fresh`, `ok`, `unverified` (no chain to check against, or none of this
+    /// journal on it), `replayed`, `missing`, `unreadable` or `refused`.
+    pub state: String,
+    /// The generation of the file when the node started.
+    pub file_generation: u64,
+    /// The newest generation on the chain; `None` with no chain.
+    pub chain_generation: Option<u64>,
+    /// Instances restored, and not restored.
+    pub restored: usize,
+    pub failed: usize,
+}
+
 /// What a restore did.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RestoreReport {
@@ -318,17 +392,19 @@ pub struct RestoreReport {
     pub note: Option<String>,
 }
 
-/// A refusal that retrying cannot change.
-fn permanent(code: RefusalCode) -> bool {
-    matches!(
-        code,
+/// A refusal that retrying cannot change. A governance denial caused by the
+/// revocation list being unreadable is the exception: that is the node's file
+/// being bad now, not a verdict, so it is retried at the next start.
+fn permanent(r: &Refusal) -> bool {
+    match r.code {
+        RefusalCode::Governance => !r.reason.contains(REVOCATION_UNREADABLE),
         RefusalCode::Signature
-            | RefusalCode::Unauthorized
-            | RefusalCode::InvalidRequest
-            | RefusalCode::Governance
-            | RefusalCode::Verify
-            | RefusalCode::UnknownMethod
-    )
+        | RefusalCode::Unauthorized
+        | RefusalCode::InvalidRequest
+        | RefusalCode::Verify
+        | RefusalCode::UnknownMethod => true,
+        _ => false,
+    }
 }
 
 impl WorkloadHostService {
@@ -351,29 +427,73 @@ impl WorkloadHostService {
         let Some(j) = &self.journal else { return report };
         report.failed.extend(j.take_rejected());
 
+        let file_generation = j.loaded_generation();
+        let chain_latest = j.chain_latest();
+        let status = |state: &str, report: &RestoreReport| JournalStatus {
+            state: state.into(),
+            file_generation,
+            chain_generation: chain_latest,
+            restored: report.restored.len(),
+            failed: report.failed.len(),
+        };
+
+        // A file that is gone, or unusable, while the chain says this node kept one:
+        // nothing to restore, and that must be loud, not an empty node.
+        let gone = matches!(j.open_state(), OpenState::Missing | OpenState::Unreadable);
+        if gone && chain_latest.is_some_and(|n| n > 0) {
+            let state = if j.open_state() == OpenState::Missing { "missing" } else { "unreadable" };
+            let why = format!(
+                "journal {state}: the chain records generation {} but the file is {}; no placed instance was restored",
+                chain_latest.unwrap_or(0),
+                if state == "missing" { "absent" } else { "unreadable (set aside as .bad)" }
+            );
+            tracing::error!(path = %j.path.display(), "{why}");
+            report.note = Some(why);
+            self.set_journal_status(status(state, &report));
+            return report;
+        }
+
         // Replay: a file older than what the chain says was saved last.
         let mut may_start = true;
-        match j.chain_latest() {
-            Some(latest) if j.loaded_generation() < latest => {
+        let mut state = if matches!(j.open_state(), OpenState::Missing) { "fresh" } else { "ok" };
+        match chain_latest {
+            Some(latest) if file_generation < latest => {
                 let why = format!(
-                    "the journal is generation {} but the chain records {latest}: an older copy of the file; refused",
-                    j.loaded_generation()
+                    "the journal is generation {file_generation} but the chain records {latest}: an older copy of the file; refused"
                 );
                 for e in j.entries() {
                     report.failed.push((e.instance_id, why.clone()));
                 }
                 j.clear_in_memory();
+                tracing::error!("{why}");
+                report.note = Some(why);
+                self.set_journal_status(status("replayed", &report));
                 return report;
+            }
+            // A file claiming generations the chain has never heard of cannot be
+            // told from a replayed or forged one: same as having no chain.
+            Some(0) if file_generation > 0 => {
+                may_start = false;
+                state = "unverified";
+                report.note = Some(
+                    "the chain has no record of this journal (generation above 0, no workload.journal events): \
+                     instances were restored loaded and none was started"
+                        .into(),
+                );
             }
             Some(_) => {}
             None => {
                 may_start = false;
+                state = "unverified";
                 report.note = Some(
                     "no chain to check the journal against (a replayed copy could not be told from the real one): \
                      instances were restored loaded and none was started"
                         .into(),
                 );
             }
+        }
+        if j.open_state() == OpenState::Refused {
+            state = "refused";
         }
 
         for e in j.entries() {
@@ -412,7 +532,7 @@ impl WorkloadHostService {
                     tracing::info!(instance = %e.instance_id, running = body.start, "placed instance restored");
                     report.restored.push(e.instance_id);
                 }
-                Err(r) if permanent(r.code) => {
+                Err(r) if permanent(&r) => {
                     tracing::warn!(instance = %e.instance_id, reason = %r.reason, "placed instance refused; dropped from the journal");
                     j.remove(&e.instance_id);
                     report.failed.push((e.instance_id, r.reason));
@@ -431,7 +551,18 @@ impl WorkloadHostService {
                 }
             }
         }
+        self.set_journal_status(status(state, &report));
         report
+    }
+
+    fn set_journal_status(&self, s: JournalStatus) {
+        *self.journal_status.lock().unwrap_or_else(|p| p.into_inner()) = Some(s);
+    }
+
+    /// How the journal stood at the last restore; `None` before one ran, or
+    /// with no journal.
+    pub fn journal_status(&self) -> Option<JournalStatus> {
+        self.journal_status.lock().unwrap_or_else(|p| p.into_inner()).clone()
     }
 
     /// Instances the host holds: `(id, desired_running)`.

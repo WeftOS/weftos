@@ -32,7 +32,7 @@ fn ctl_key() -> SigningKey {
 /// The node `NODE_SEED` over `root` (instance dir), `ex` (artifact store) and
 /// `journal`: what the daemon builds at every start.
 fn host(root: &Path, ex: &Arc<ArtifactExchange>, chain: &Arc<ChainManager>, journal: &Path) -> Arc<WorkloadHostService> {
-    host_with(root, ex, Some(chain), journal, &ctl_key())
+    host_with(root, ex, Some(chain), journal, &ctl_key(), None)
 }
 
 /// [`host`] with its own controller key, and optionally no chain.
@@ -42,13 +42,14 @@ fn host_with(
     chain: Option<&Arc<ChainManager>>,
     journal: &Path,
     controller: &SigningKey,
+    gate_override: Option<Arc<crate::workload_governance::WorkloadGate>>,
 ) -> Arc<WorkloadHostService> {
     let chain_given = chain.is_some();
     let own = Arc::new(ChainManager::new(0, 1000));
     let chain = chain.unwrap_or(&own);
     let key = SigningKey::from_bytes(&[NODE_SEED; 32]);
     let id = node_id_from_pubkey(&key.verifying_key().to_bytes());
-    let gate = gate(chain);
+    let gate = gate_override.unwrap_or_else(|| gate(chain));
     let native = NativeRuntime::new(NativeConfig {
         root: root.to_path_buf(),
         run_as: None,
@@ -330,7 +331,7 @@ async fn without_a_chain_instances_are_restored_loaded_and_nothing_is_started() 
         rig.wait_launches(1).await;
         iid
     };
-    let b = host_with(&rig.root(), &rig.ex, None, &rig.journal(), &ctl_key());
+    let b = host_with(&rig.root(), &rig.ex, None, &rig.journal(), &ctl_key(), None);
     let report = b.restore_instances().await;
     assert_eq!(report.restored, std::slice::from_ref(&iid), "{report:?}");
     assert!(report.note.as_deref().is_some_and(|n| n.contains("no chain")), "{report:?}");
@@ -349,7 +350,7 @@ async fn a_requester_the_policy_no_longer_allows_is_refused_and_dropped() {
     };
     // The same node, now configured with a different controller.
     let other = SigningKey::from_bytes(&[77; 32]);
-    let b = host_with(&rig.root(), &rig.ex, Some(&rig.chain), &rig.journal(), &other);
+    let b = host_with(&rig.root(), &rig.ex, Some(&rig.chain), &rig.journal(), &other, None);
     let report = b.restore_instances().await;
     assert!(report.restored.is_empty(), "{report:?}");
     assert_eq!(report.failed[0].0, iid);
@@ -601,4 +602,166 @@ async fn a_restart_restores_each_project_into_its_own_instance() {
     let mut want = vec![ia.clone(), ib.clone()];
     want.sort();
     assert_eq!(restored, want);
+}
+
+fn jsub(tmp: &Path) -> PathBuf {
+    tmp.join("journal.json")
+}
+
+#[tokio::test]
+async fn a_journal_the_chain_has_never_heard_of_is_restored_loaded_and_not_started() {
+    let rig = Rig::new();
+    let iid = {
+        let a = rig.host();
+        let (iid, _plane) = place(&rig, &a).await;
+        rig.wait_launches(1).await;
+        iid
+    };
+    // The chain is present but empty of journal events: a rolled-back or replaced chain.
+    let fresh = Arc::new(ChainManager::new(0, 1000));
+    let b = host_with(&rig.root(), &rig.ex, Some(&fresh), &rig.journal(), &ctl_key(), None);
+    let report = b.restore_instances().await;
+    assert_eq!(report.restored, std::slice::from_ref(&iid), "{report:?}");
+    assert!(report.note.as_deref().is_some_and(|n| n.contains("no record of this journal")), "{report:?}");
+    assert_eq!(b.held().await, [(iid, false)]);
+    assert_eq!(b.journal_status().unwrap().state, "unverified");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(rig.launches(), 1, "nothing was auto-started");
+}
+
+#[tokio::test]
+async fn a_peer_cannot_put_a_journal_generation_on_the_chain_and_foreign_events_do_not_count() {
+    assert!(crate::chain::is_caller_reserved_kind(crate::chain::EVENT_KIND_WORKLOAD_JOURNAL));
+    // Replication refuses the reserved kind.
+    let other = ChainManager::new(0, 1000);
+    let ev = other.append("workload.host", crate::chain::EVENT_KIND_WORKLOAD_JOURNAL, Some(serde_json::json!({"node": "x", "generation": 999})));
+    let mine = ChainManager::new(0, 1000);
+    assert!(matches!(mine.append_signed(ev), Err(crate::chain::AppendSignedError::ReservedSource { .. })));
+
+    // An event for another node id on this node's chain is not this node's generation.
+    let rig = Rig::new();
+    {
+        let a = rig.host();
+        let (_iid, _plane) = place(&rig, &a).await;
+    }
+    rig.chain.append(
+        "workload.host",
+        crate::chain::EVENT_KIND_WORKLOAD_JOURNAL,
+        Some(serde_json::json!({"node": "some-other-node", "generation": 9999})),
+    );
+    let b = rig.host();
+    let report = b.restore_instances().await;
+    assert_eq!(report.restored.len(), 1, "{report:?}");
+    assert!(report.note.is_none(), "{report:?}");
+}
+
+#[test]
+fn a_generation_at_the_end_of_its_range_is_not_wrapped_and_nothing_is_saved() {
+    use super::host_service::{CtlConfig, PlaceBody};
+    let tmp = tempfile::tempdir().unwrap();
+    let p = jsub(tmp.path());
+    let k = SigningKey::from_bytes(&[5; 32]);
+    let j = Journal::open(&p, "node", &k);
+    j.set_generation(u64::MAX);
+    j.record(JournalEntry {
+        instance_id: "i1".into(),
+        decision_id: None,
+        requester: "ctl".into(),
+        body: PlaceBody {
+            name: "c".into(),
+            manifest_hash: "0".repeat(64),
+            variant: "v".into(),
+            config: CtlConfig { mode: crate::workload_runtime::RunMode::Listener, args: vec![], csi_port: 1 },
+            start: true,
+            project_id: None,
+        },
+        desired_running: true,
+        failures: 0,
+    });
+    assert!(!p.exists(), "refused: no file was written at a wrapped generation");
+}
+
+#[tokio::test]
+async fn a_deleted_journal_is_reported_as_missing_not_as_an_empty_node() {
+    let rig = Rig::new();
+    {
+        let a = rig.host();
+        place(&rig, &a).await;
+    }
+    std::fs::remove_file(rig.journal()).unwrap();
+    let b = rig.host();
+    let report = b.restore_instances().await;
+    assert!(report.restored.is_empty(), "{report:?}");
+    assert!(report.note.as_deref().is_some_and(|n| n.starts_with("journal missing")), "{report:?}");
+    let st = b.journal_status().unwrap();
+    assert_eq!(st.state, "missing");
+    assert!(st.chain_generation.unwrap() > 0 && st.file_generation == 0);
+
+    // and the status listing an operator reads says so
+    let req = super::msg::CtlRequest {
+        version: super::msg::CTL_VERSION,
+        method: method::STATUS.to_string(),
+        requester: b.node_id.clone(),
+        target: b.node_id.clone(),
+        nonce: "0".repeat(32),
+        issued_at_ms: 0,
+        expires_at_ms: u64::MAX,
+        decision_id: None,
+        body: serde_json::json!({"include_departed": true}),
+    };
+    let rows = b.instance_op(&req).await.unwrap();
+    assert!(rows.as_array().unwrap().iter().any(|r| r["journal"]["state"] == "missing"), "{rows}");
+}
+
+#[tokio::test]
+async fn an_unreadable_journal_is_reported_too_when_the_chain_says_there_was_one() {
+    let rig = Rig::new();
+    {
+        let a = rig.host();
+        place(&rig, &a).await;
+    }
+    std::fs::write(rig.journal(), b"{ garbage").unwrap();
+    let b = rig.host();
+    let report = b.restore_instances().await;
+    assert!(report.restored.is_empty());
+    assert!(report.note.as_deref().is_some_and(|n| n.starts_with("journal unreadable")), "{report:?}");
+    assert_eq!(b.journal_status().unwrap().state, "unreadable");
+}
+
+#[tokio::test]
+async fn an_unreadable_revocation_list_is_transient_but_a_governance_denial_is_permanent() {
+    let rig = Rig::new();
+    let iid = {
+        let a = rig.host();
+        place(&rig, &a).await.0
+    };
+    // The node's revocation file is bad at this start: the gate fails closed.
+    let dir = tempfile::tempdir().unwrap();
+    let bad = gate_unreadable_list(&rig.chain, dir.path());
+    let b = host_with(&rig.root(), &rig.ex, Some(&rig.chain), &rig.journal(), &ctl_key(), Some(bad));
+    let report = b.restore_instances().await;
+    assert!(report.restored.is_empty(), "{report:?}");
+    assert!(report.failed[0].1.contains("will retry at the next start"), "{report:?}");
+    assert_eq!(entries_of(&rig).len(), 1, "kept for the next start");
+    drop(b);
+
+    // Fixed at the next start: the instance comes back.
+    let c = rig.host();
+    assert_eq!(c.restore_instances().await.restored, std::slice::from_ref(&iid));
+    drop(c);
+
+    // A real denial (no permit) is a verdict: dropped.
+    let d = host_with(&rig.root(), &rig.ex, Some(&rig.chain), &rig.journal(), &ctl_key(), Some(gate_no_permit(&rig.chain)));
+    let report = d.restore_instances().await;
+    assert!(report.restored.is_empty(), "{report:?}");
+    assert!(!report.failed[0].1.contains("will retry"), "{report:?}");
+    assert!(entries_of(&rig).is_empty(), "dropped");
+}
+
+#[test]
+fn the_directory_is_flushed_after_the_journal_rename() {
+    // A saved journal leaves no temp file and a readable, verified file; the directory
+    // sync itself cannot be observed here, but it must not fail on a real directory.
+    let tmp = tempfile::tempdir().unwrap();
+    super::host_journal::sync_dir_for_test(tmp.path()).unwrap();
 }

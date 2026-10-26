@@ -194,6 +194,8 @@ pub struct WorkloadHostService {
     /// Placed instances persisted across a daemon restart (unset: a restart
     /// empties the host, as before).
     pub(super) journal: Option<super::host_journal::Journal>,
+    /// How the journal stood at the last restore (see `journal_status`).
+    pub(super) journal_status: Mutex<Option<super::host_journal::JournalStatus>>,
 }
 
 pub(super) fn now_ms() -> u64 {
@@ -251,6 +253,7 @@ impl WorkloadHostService {
             node_admin: std::sync::OnceLock::new(),
             cogbus: std::sync::OnceLock::new(),
             journal: None,
+            journal_status: Mutex::new(None),
         }
     }
 
