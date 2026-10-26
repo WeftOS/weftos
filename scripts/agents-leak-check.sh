@@ -56,6 +56,17 @@ declare -a RULES=(
   "credential shape (private key block)|-----BEGIN[ A-Z]*PRIVATE KEY-----|an embedded private key"
 )
 
+# Extra terms that must not be named in this public script (one extended regex per line,
+# '#' comments allowed) are read from a private file outside the repo:
+# $WEFTOS_LEAK_TERMS, default ~/.config/weftos/leak-terms.txt. Missing file: built-in rules only.
+LEAK_TERMS_FILE="${WEFTOS_LEAK_TERMS:-$HOME/.config/weftos/leak-terms.txt}"
+if [[ -r "$LEAK_TERMS_FILE" ]]; then
+  while IFS= read -r term || [[ -n "$term" ]]; do
+    [[ -z "${term// }" || "$term" == \#* ]] && continue
+    RULES+=("private term|$term|a name from the private leak-terms file")
+  done < "$LEAK_TERMS_FILE"
+fi
+
 echo "agents-leak-check: scanning $TARGET_DIR"
 echo
 
