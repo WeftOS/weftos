@@ -188,6 +188,12 @@ pub fn instance_id(w: &VerifiedWorkload, cfg: &WorkloadConfig) -> Result<String,
     );
     h.update(cfg.args.join("\u{1f}").as_bytes());
     h.update(cfg.host.csi_bind.to_string().as_bytes());
+    // Another project (or controller) placing the same package must not land in
+    // this instance's directory and inherit its data/. Unowned ids are unchanged.
+    if let Some(owner) = &cfg.host.owner {
+        h.update(b"\x1fowner\x1f");
+        h.update(owner.as_bytes());
+    }
     Ok(format!(
         "{}-{}-{}",
         w.id,
@@ -417,16 +423,51 @@ fn stage(
 ) -> Result<(), RuntimeError> {
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
     let io = |e: std::io::Error| RuntimeError::Backend(format!("stage {}: {e}", dir.display()));
+    // `load` calls this only for an instance this adapter does not hold, so what
+    // is already here is left over from an earlier run (a daemon that restarted,
+    // a crash mid-stage). Instance ids are deterministic, so it is the same
+    // instance's directory: its `data/` is the cog's own state and is kept. The
+    // rest (the read-only binary, anything else) is replaced. Nothing is followed
+    // through a symlink: a link in the way is removed, not entered.
+    match std::fs::symlink_metadata(dir) {
+        Ok(m) if m.is_dir() => {
+            for entry in std::fs::read_dir(dir).map_err(io)? {
+                let entry = entry.map_err(io)?;
+                let path = entry.path();
+                if entry.file_name() == "data" {
+                    continue;
+                }
+                let kind = entry.file_type().map_err(io)?;
+                if kind.is_dir() {
+                    std::fs::remove_dir_all(&path).map_err(io)?;
+                } else {
+                    std::fs::remove_file(&path).map_err(io)?;
+                }
+            }
+        }
+        Ok(_) => std::fs::remove_file(dir).map_err(io)?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(io(e)),
+    }
     std::fs::DirBuilder::new()
         .recursive(true)
         .mode(0o755)
         .create(dir)
         .map_err(io)?;
     let data = dir.join("data");
-    std::fs::DirBuilder::new()
-        .mode(0o700)
-        .create(&data)
-        .map_err(io)?;
+    // `data/` is kept only if it is a real directory; a link or file there is replaced.
+    match std::fs::symlink_metadata(&data) {
+        Ok(m) if m.is_dir() => {}
+        Ok(_) => {
+            std::fs::remove_file(&data).map_err(io)?;
+            std::fs::DirBuilder::new().mode(0o700).create(&data).map_err(io)?;
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::DirBuilder::new().mode(0o700).create(&data).map_err(io)?;
+        }
+        Err(e) => return Err(io(e)),
+    }
+    std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o700)).map_err(io)?;
     std::fs::write(program, bytes).map_err(io)?;
     std::fs::set_permissions(program, std::fs::Permissions::from_mode(0o555)).map_err(io)?;
     if let Some((uid, gid)) = run_as {

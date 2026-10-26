@@ -148,14 +148,14 @@ pub type FactsSource = Arc<dyn Fn() -> Option<SignedNodeFacts> + Send + Sync>;
 /// A node's `workload-host`.
 pub struct WorkloadHostService {
     pub(super) node_id: String,
-    key: SigningKey,
+    pub(super) key: SigningKey,
     anchors: TrustAnchors,
-    controllers: Box<dyn ControllerPolicy>,
+    pub(super) controllers: Box<dyn ControllerPolicy>,
     nonces: NonceGuard,
     pub(super) routes: BTreeMap<String, Arc<WorkloadHost>>,
     exchange: Arc<ArtifactExchange>,
     gate: Arc<dyn GateBackend>,
-    chain: Option<Arc<ChainManager>>,
+    pub(super) chain: Option<Arc<ChainManager>>,
     facts: Mutex<Option<SignedNodeFacts>>,
     facts_source: Option<FactsSource>,
     address: Option<String>,
@@ -191,9 +191,12 @@ pub struct WorkloadHostService {
     pub(super) node_admin: std::sync::OnceLock<Arc<dyn super::host_node_admin::NodeAdmin>>,
     /// The node's cogbus (ADR-122); unset: cogs get no broker socket.
     pub(super) cogbus: std::sync::OnceLock<Arc<dyn super::host_cogbus::CogbusRegistrar>>,
+    /// Placed instances persisted across a daemon restart (unset: a restart
+    /// empties the host, as before).
+    pub(super) journal: Option<super::host_journal::Journal>,
 }
 
-fn now_ms() -> u64 {
+pub(super) fn now_ms() -> u64 {
     chrono::Utc::now().timestamp_millis().max(0) as u64
 }
 
@@ -247,6 +250,7 @@ impl WorkloadHostService {
             licence_gate: std::sync::OnceLock::new(),
             node_admin: std::sync::OnceLock::new(),
             cogbus: std::sync::OnceLock::new(),
+            journal: None,
         }
     }
 
@@ -305,6 +309,9 @@ impl WorkloadHostService {
 
     /// Chain for placement and refusal records.
     pub fn with_chain(mut self, cm: Arc<ChainManager>) -> Self {
+        if let Some(j) = &self.journal {
+            j.set_chain(cm.clone());
+        }
         self.chain = Some(cm);
         self
     }
@@ -368,6 +375,9 @@ impl WorkloadHostService {
     /// Remember that `instance_id` was taken down on purpose (`why`:
     /// `revoked` or `unloaded`); the last 256 are reported by `status`.
     pub(super) fn note_departed(&self, instance_id: &str, why: &'static str) {
+        if let Some(j) = &self.journal {
+            j.remove(instance_id);
+        }
         if let Ok(mut d) = self.departed.lock() {
             if d.len() >= 256 {
                 d.pop_front();
@@ -549,7 +559,7 @@ impl WorkloadHostService {
         }
     }
 
-    async fn place(&self, req: &CtlRequest, fetch: Option<&mut PeerSet>) -> Result<Value, Refusal> {
+    pub(super) async fn place(&self, req: &CtlRequest, fetch: Option<&mut PeerSet>) -> Result<Value, Refusal> {
         let _in_flight = InFlight::enter(&self.in_flight, req.decision_id.clone());
         // A revocation that lands after the gate looked at the list but
         // before the instance is listed would be swept past: remember where
@@ -600,7 +610,10 @@ impl WorkloadHostService {
                 "project_id must be a 26-character project id",
             ));
         }
-        let mut contract = HostContract::new(SocketAddr::from(([0, 0, 0, 0], b.config.csi_port)));
+        // The owner is the project and the controller that placed it, so the same
+        // package placed for another project is another instance with its own data/.
+        let owner = format!("project={}\ncontroller={}", b.project_id.as_deref().unwrap_or("-"), req.requester);
+        let mut contract = HostContract::new(SocketAddr::from(([0, 0, 0, 0], b.config.csi_port))).with_owner(owner);
         let mut listener = None;
         let hooks = self.ingest.as_ref().filter(|_| w.kind == "cog");
         // `none`: no ingest wiring on this node. `disabled`: wired, but the
@@ -724,6 +737,16 @@ impl WorkloadHostService {
                 _ => None,
             };
             return Err(self.roll_back(&host, &h, &e, revoked).await);
+        }
+        if let Some(j) = &self.journal {
+            j.record(super::host_journal::JournalEntry {
+                instance_id: iid.clone(),
+                decision_id: req.decision_id.clone(),
+                requester: req.requester.clone(),
+                body: b.clone(),
+                desired_running: started,
+                failures: 0,
+            });
         }
         let status = host.status(&h).await;
         self.record(

@@ -582,6 +582,9 @@ pub const EVENT_KIND_WORKLOAD_LIFECYCLE: &str = "workload.lifecycle";
 pub const EVENT_KIND_WORKLOAD_NODE_BIND: &str = "workload.node.bind";
 /// Fleet identity binding withdrawn (operator-signed `unbound` record).
 pub const EVENT_KIND_WORKLOAD_NODE_UNBIND: &str = "workload.node.unbind";
+/// A host saved its instance journal: carries the journal's generation, so a
+/// restart can refuse an older copy of the file (replay).
+pub const EVENT_KIND_WORKLOAD_JOURNAL: &str = "workload.journal";
 
 // ── Artifact transfer outcomes (ADR-099 section 6, mesh-placement-11) ──
 //

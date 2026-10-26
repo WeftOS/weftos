@@ -30,22 +30,28 @@ use crate::workload_runtime::types::{
 /// Asking the OS for port 0 and dropping the listener races: the OS may
 /// give the same ephemeral port to another test (each test is its own
 /// process under nextest) before this one binds it. Ports here come from
-/// below the OS ephemeral range, in a slice owned by this process
-/// (`pid % 1000`, 16 ports each) and are checked to be bindable, so two
-/// processes only share a port if their pids collide mod 1000, and then
-/// the bind check skips what the other already holds.
+/// below the OS ephemeral range, walking up from a start owned by this
+/// process (`pid % 1000`, 16 ports apart) and are checked to be bindable,
+/// so two processes only share a port if their pids collide mod 1000, and
+/// then the bind check skips what the other already holds. Within one
+/// process (plain `cargo test` runs every test as a thread of it) a port is
+/// handed out once and not again until the walk has covered the whole
+/// 20 000-port range: a test that has not yet started its fake server on the
+/// port it was given must not see the same port given to another test.
 pub fn free_port() -> u16 {
-    use std::sync::atomic::{AtomicU16, Ordering};
-    static NEXT: AtomicU16 = AtomicU16::new(0);
-    let base = 10_000 + (std::process::id() % 1000) as u16 * 16;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    const LOW: u32 = 10_000;
+    const SPAN: u32 = 20_000;
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    let start = (std::process::id() % 1000) * 16;
     loop {
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
-        let port = base + n % 16;
+        let port = (LOW + (start + n) % SPAN) as u16;
         if TcpListener::bind(("127.0.0.1", port)).is_ok() {
             return port;
         }
-        if n > 4096 {
-            // This slice is exhausted or held: fall back to the OS.
+        if n > SPAN {
+            // The whole range is held: fall back to the OS.
             return TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
         }
     }

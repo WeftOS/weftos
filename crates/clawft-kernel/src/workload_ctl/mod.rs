@@ -24,6 +24,7 @@ pub mod cog_kind;
 pub mod host_cogbus;
 pub mod facts;
 mod host_instances;
+mod host_journal;
 pub mod host_licence;
 pub mod host_node_admin;
 pub mod host_revoke;
@@ -43,6 +44,7 @@ mod plane_reconcile;
 pub mod plane_seed;
 mod plane_state;
 pub use crate::refusal_budget;
+pub use host_journal::{JournalEntry, RestoreReport};
 pub mod session;
 pub mod transport;
 
@@ -78,6 +80,8 @@ mod tests_link;
 mod tests_peers;
 #[cfg(test)]
 mod tests_reconcile;
+#[cfg(test)]
+mod tests_restart;
 #[cfg(test)]
 mod tests_revoke;
 #[cfg(test)]

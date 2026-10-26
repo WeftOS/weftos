@@ -375,11 +375,24 @@ pub trait ControllerPolicy: Send + Sync {
         let _ = method;
         self.allows(public_key)
     }
+
+    /// True if the controller with node id `node_id` (derived from its key)
+    /// may still control this node. A restart asks this of the requester an
+    /// instance was journaled with: the policy as it is now, not as it was.
+    /// The default refuses, so a policy that cannot answer restores nothing.
+    fn allows_node(&self, node_id: &str) -> bool {
+        let _ = node_id;
+        false
+    }
 }
 
 impl ControllerPolicy for Vec<[u8; 32]> {
     fn allows(&self, public_key: &[u8; 32]) -> bool {
         self.contains(public_key)
+    }
+
+    fn allows_node(&self, node_id: &str) -> bool {
+        self.iter().any(|k| crate::node_registry::node_id_from_pubkey(k) == node_id)
     }
 }
 

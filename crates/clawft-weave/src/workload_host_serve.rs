@@ -108,6 +108,10 @@ impl HostConfig {
     }
 }
 
+/// The host's instance journal under the runtime dir: what was placed here
+/// and whether it was running, so a daemon restart puts it back.
+pub const JOURNAL_FILE: &str = "workload-host-journal.json";
+
 /// The serving config, if the operator enabled serving.
 pub fn load_host_config(dir: &Path) -> Result<Option<HostConfig>, String> {
     let path = dir.join(HOST_FILE);
@@ -186,7 +190,9 @@ pub fn local_host(p: HostParts<'_>) -> Result<WorkloadHostService, String> {
         .with_route("native", Arc::new(host))
         .with_controllers(policy)
         .with_chain(p.chain.clone())
-        .with_facts_source(p.facts);
+        .with_facts_source(p.facts)
+        // Placed instances survive a daemon restart (restored in workload_place_rpc).
+        .with_journal(&p.dir.join(JOURNAL_FILE));
     svc.set_revocations(p.revocations);
     if let Some(h) = p.ingest {
         svc = svc.with_ingest(h);

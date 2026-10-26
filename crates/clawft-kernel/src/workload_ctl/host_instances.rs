@@ -94,6 +94,9 @@ impl WorkloadHostService {
                 self.bus_on(p.cogbus.as_ref())?;
                 let r = host.start(&p.handle).await.map(|_| json!({"started": iid}));
                 if r.is_ok() {
+                    if let Some(j) = &self.journal {
+                        j.set_desired(&iid, true);
+                    }
                     p.desired_running = true;
                     p.lease_stopped = false;
                     p.life.misses = 0;
@@ -112,6 +115,9 @@ impl WorkloadHostService {
                 self.bus_off(p.cogbus.as_ref());
                 let grace = Duration::from_millis(b.grace_ms.unwrap_or(2_000).min(60_000));
                 p.desired_running = false;
+                if let Some(j) = &self.journal {
+                    j.set_desired(&iid, false);
+                }
                 // An operator stop is final: the lease never restarts it.
                 p.lease_stopped = false;
                 host.stop(&p.handle, grace).await.map(|ev| {

@@ -545,6 +545,12 @@ async fn build(
     if let Some(bus) = crate::cogbus_serve::install(broker, dir, store_sink).await {
         local.set_cogbus(bus);
     }
+    // Put back what was placed here before the daemon restarted: after the
+    // cogbus and ingest wiring, so each gets a fresh token like a new placement.
+    let restored = local.restore_instances().await;
+    if !restored.restored.is_empty() || !restored.failed.is_empty() {
+        tracing::info!(restored = restored.restored.len(), failed = restored.failed.len(), "placed instances restored after restart");
+    }
     let _ = HOST.set(local.clone());
     // ADR-108 P3b: serve `project.fetch` for the projects registered here.
     match clawft_types::runtime_paths::home_dir() {

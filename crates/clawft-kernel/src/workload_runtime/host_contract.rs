@@ -62,6 +62,11 @@ pub struct HostContract {
     /// [`ENV_COGBUS_TOKEN`]. `None`: no broker for this instance (it is
     /// down, or the route cannot reach a host socket).
     pub cogbus: Option<String>,
+    /// Who the instance belongs to: the placing project and controller, as one
+    /// opaque key. Adapters that keep per-instance state on disk fold it into
+    /// the instance id, so another owner never gets this instance's directory
+    /// (and the `data/` in it). `None`: unowned (tests, `weaver run`).
+    pub owner: Option<String>,
 }
 
 impl HostContract {
@@ -75,7 +80,14 @@ impl HostContract {
             ingest_url: None,
             expose_token: true,
             cogbus: None,
+            owner: None,
         }
+    }
+
+    /// Builder: the owner key (see [`Self::owner`]).
+    pub fn with_owner(mut self, owner: impl Into<String>) -> Self {
+        self.owner = Some(owner.into());
+        self
     }
 
     /// Default: feed on `0.0.0.0:5006`.
