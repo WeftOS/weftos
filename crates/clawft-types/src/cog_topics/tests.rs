@@ -76,11 +76,11 @@ fn readme_names_every_schema() {
 }
 
 #[test]
-fn registry_has_eleven_unique_ids() {
+fn registry_has_twelve_unique_ids() {
     let mut ids = SCHEMA_IDS.to_vec();
     ids.sort_unstable();
     ids.dedup();
-    assert_eq!(ids.len(), 11);
+    assert_eq!(ids.len(), 12);
     assert!(is_registered("senml.v1") && !is_registered("senml.v2"));
 }
 
@@ -119,4 +119,24 @@ fn store_vector_is_the_ingest_body_with_an_envelope() {
     // One value past f32 is refused even though it is a finite f64.
     msg["vectors"][0][1][0] = json!(1.0e39);
     assert!(check_message("store.vector.v1", &msg).is_err());
+}
+
+#[test]
+fn sdr_replies_validate_and_round_trip() {
+    for f in vector_files("sdr.v1", "reply-valid-") {
+        let v = load(&f);
+        let r: SdrReply = serde_json::from_value(v.clone()).unwrap_or_else(|e| panic!("{}: {e}", f.display()));
+        r.validate().unwrap();
+        assert_eq!(serde_json::to_value(&r).unwrap(), v, "{}", f.display());
+    }
+    let bad: SdrReply = serde_json::from_value(json!({"ok": false})).unwrap();
+    assert!(bad.validate().is_err());
+}
+
+#[test]
+fn iq_gap_record_is_not_a_chunk_but_is_recognised() {
+    let gap = load(&vectors_root().join("iq.cs16.v1/gap-record.json"));
+    assert!(is_gap_record(&gap));
+    assert!(check_message("iq.cs16.v1", &gap).is_err());
+    assert!(!is_gap_record(&load(&vectors_root().join("iq.cs16.v1/valid-single-sample.json"))));
 }

@@ -1,0 +1,8 @@
+{
+  "method": "tune",
+  "centre_hz": 2437000000,
+  "rate_sps": 5000000,
+  "bw_hz": 4000000,
+  "gain_db": 38.5,
+  "dwell_ms": 500
+}

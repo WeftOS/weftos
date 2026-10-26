@@ -101,6 +101,19 @@ Raw frames stay on the node. The handle names bytes in its content store.
 | `samples` | u32 | complex samples in the chunk, 1..=4194304 |
 | `data_b64` | string | base64 of `samples * 4` bytes: I then Q, signed 16-bit little-endian |
 
+Optional `v1` extension fields (readers ignore what they do not know; a producer that tracks loss sets them):
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `bandwidth_hz` | u32 | analog bandwidth |
+| `segment` | u32 | counts dwells; a new segment starts at every retune |
+| `sample_index` | u64 | index of the first sample on the segment's sample clock; lost samples are counted in it, so a gap is a jump |
+| `lost` | u32 | samples lost immediately before this chunk |
+| `discontinuity`, `band_changed`, `all_zero` | bool | present and true when set: samples were lost just before; the tuning changed; every sample is zero (a dead receive path) |
+| `gap_samples` | u64 | gap records only |
+
+A **gap record** is a message with `samples` 0, an empty `data_b64` and `gap_samples` set to the number lost. It is not a sample chunk, so the validator rejects it (`is_gap_record` recognises it) and a reader that validates chunks skips it; the next chunk's `lost` carries the same number.
+
 ### `spectrum.psd.v1` (reading)
 
 | Field | Type | Rule |
@@ -148,3 +161,20 @@ the publishing cog, never another project's store.
   `invalid-*` ones in your own tests, so no hardware is needed.
 - **Adding a schema**: add the id to `SCHEMA_IDS`, a typed message with `validate()`,
   a section above and vectors, in one commit.
+
+### `sdr.v1` (service call on `svc.sdr/<node>`)
+
+Request body, no envelope (the broker stamps caller, call id and clock): `{"method": "...", ...fields}`. A band is `centre_hz` 70 MHz..=6 GHz, `rate_sps` 520833..=61440000, `bw_hz` 200 kHz..=56 MHz, `gain_db` a number or `"auto"`.
+
+| `method` | Fields | Effect |
+|----------|--------|--------|
+| `tune` | `centre_hz`; `rate_sps`, `bw_hz`, `gain_db`, `dwell_ms` optional | the caller's own single-band plan; replaces its previous `tune` |
+| `set_rate`, `set_bw`, `set_gain` | `rate_sps` / `bw_hz` / `gain_db` | change that field of the caller's `tune` band |
+| `plan` | `id` (1..=48 chars; `default`, `tune:*`, `lease:*` reserved), `bands` (1..=32 of `centre_hz`, `rate_sps`, `dwell_ms`, optional `bw_hz`, `gain_db`) | a band plan that takes turns with the others |
+| `plan_remove` | `id` | remove one of the caller's plans |
+| `lease` | `centre_hz`, `secs` 1..=3600; `rate_sps`, `bw_hz`, `gain_db` optional | exclusive use of the tuner; other callers' tuning is refused |
+| `release` | none | give the lease back |
+| `status` | none | the service's status document (free-form JSON) |
+| `tx_config` | `attenuation_db` (at most 0), `centre_hz`, `rate_sps`, all optional | transmit setup; a receive-only service always refuses it |
+
+Reply body on success: `{"ok": true}` plus, by method, `plan` (string), `bands` (u32), `lease` (u64), `secs` (u64) and `uncalibrated` (bool, `tune`: the band is outside the part's rated range). `status` replies with the status document. A failed call fails with a message instead of an `ok: false` body. Reply vectors are the `reply-valid-*.json` files.

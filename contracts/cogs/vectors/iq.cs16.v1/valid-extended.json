@@ -1,0 +1,16 @@
+{
+  "source_id": "venq-sdr-0",
+  "node_id": "0123456789abcdef0123456789abcdef",
+  "t_ns": 1759500000000000000,
+  "seq": 2,
+  "center_hz": 2437000000,
+  "sample_rate_hz": 4000000,
+  "samples": 4,
+  "data_b64": "AAECAwQFBgcICQoLDA0ODw==",
+  "bandwidth_hz": 3200000,
+  "segment": 7,
+  "sample_index": 8589934592,
+  "lost": 777,
+  "discontinuity": true,
+  "band_changed": true
+}

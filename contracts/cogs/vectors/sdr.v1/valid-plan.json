@@ -1,0 +1,17 @@
+{
+  "method": "plan",
+  "id": "wifi-scan",
+  "bands": [
+    {
+      "centre_hz": 2412000000,
+      "rate_sps": 2000000,
+      "dwell_ms": 200
+    },
+    {
+      "centre_hz": 2437000000,
+      "rate_sps": 2000000,
+      "dwell_ms": 200,
+      "gain_db": "auto"
+    }
+  ]
+}

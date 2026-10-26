@@ -1,0 +1,5 @@
+{
+  "method": "lease",
+  "centre_hz": 2400000000,
+  "secs": 7200
+}

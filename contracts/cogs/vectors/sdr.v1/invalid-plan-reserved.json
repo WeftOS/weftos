@@ -1,0 +1,11 @@
+{
+  "method": "plan",
+  "id": "default",
+  "bands": [
+    {
+      "centre_hz": 1000000000,
+      "rate_sps": 2000000,
+      "dwell_ms": 200
+    }
+  ]
+}
