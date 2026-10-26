@@ -141,14 +141,18 @@ impl Rig {
 /// Place the rig's cog on `svc` through a controller; returns the instance
 /// id and the controller (drop it to drop the connection to `svc`).
 async fn place(rig: &Rig, svc: &Arc<WorkloadHostService>) -> (String, PlacementControlPlane) {
+    place_for(rig, svc, None).await
+}
+
+/// [`place`] for `project`.
+async fn place_for(rig: &Rig, svc: &Arc<WorkloadHostService>, project: Option<&str>) -> (String, PlacementControlPlane) {
     let conn = Arc::new(MeshConnector::new(false));
     let addr = conn.register_local("restart-node", svc.clone());
     let (plane, _) = controller(&ctl_key(), conn);
     plane.add_target(&addr, TrustTier::Pinned).await.unwrap();
-    let r = plane
-        .place(&mode_order(&rig.pkg, crate::workload_runtime::RunMode::Listener, None))
-        .await
-        .unwrap();
+    let mut order = mode_order(&rig.pkg, crate::workload_runtime::RunMode::Listener, None);
+    order.project_id = project.map(String::from);
+    let r = plane.place(&order).await.unwrap();
     let iid = r.placed.expect(&r.explain).instance_id;
     (iid, plane)
 }
@@ -529,4 +533,72 @@ async fn unsigned_entries_and_entries_from_another_node_or_key_are_refused() {
     let other_key = Journal::open(&p, "node-a", &k2);
     assert!(other_key.entries().is_empty());
     assert_eq!(other_key.take_rejected()[0].0, "i1");
+}
+
+const PROJECT_A: &str = "01J9ZXW0PRJCTAAAAAAAAAAAAA";
+const PROJECT_B: &str = "01J9ZXW0PRJCTBBBBBBBBBBBBB";
+
+#[tokio::test]
+async fn the_same_package_placed_for_another_project_does_not_see_the_first_projects_data() {
+    let rig = Rig::new();
+    let a_iid = {
+        let a = rig.host();
+        let (iid, _plane) = place_for(&rig, &a, Some(PROJECT_A)).await;
+        rig.wait_launches(1).await;
+        std::fs::write(rig.root().join(&iid).join("data/secret"), b"project A only").unwrap();
+        iid
+    };
+    // The daemon restarted, and the same package and config are now placed for project B
+    // (no unload in between: A's directory is still on disk).
+    let b = rig.host();
+    let (b_iid, _plane) = place_for(&rig, &b, Some(PROJECT_B)).await;
+    assert_ne!(a_iid, b_iid, "the project is part of the instance id");
+    assert!(
+        !rig.root().join(&b_iid).join("data/secret").exists(),
+        "B's data/ is its own, without A's files"
+    );
+    assert_eq!(
+        std::fs::read(rig.root().join(&a_iid).join("data/secret")).unwrap(),
+        b"project A only",
+        "and A's directory was not touched"
+    );
+    // The same project placed again lands in its own directory and keeps its data.
+    drop((b, _plane));
+    let c = rig.host();
+    let (again, _plane) = place_for(&rig, &c, Some(PROJECT_A)).await;
+    assert_eq!(again, a_iid);
+    assert_eq!(std::fs::read(rig.root().join(&a_iid).join("data/secret")).unwrap(), b"project A only");
+}
+
+#[tokio::test]
+async fn unloading_for_one_project_then_placing_for_another_starts_with_no_data() {
+    let rig = Rig::new();
+    let a = rig.host();
+    let (a_iid, plane) = place_for(&rig, &a, Some(PROJECT_A)).await;
+    rig.wait_launches(1).await;
+    std::fs::write(rig.root().join(&a_iid).join("data/secret"), b"project A only").unwrap();
+    plane.instance(method::UNLOAD, &a_iid).await.unwrap();
+    let (b_iid, _plane) = place_for(&rig, &a, Some(PROJECT_B)).await;
+    let data = rig.root().join(&b_iid).join("data");
+    assert!(data.is_dir() && !data.join("secret").exists());
+    assert!(std::fs::read_dir(&data).unwrap().all(|e| e.unwrap().file_name() != "secret"));
+}
+
+#[tokio::test]
+async fn a_restart_restores_each_project_into_its_own_instance() {
+    let rig = Rig::new();
+    let (ia, ib) = {
+        let h = rig.host();
+        let (ia, _pa) = place_for(&rig, &h, Some(PROJECT_A)).await;
+        let (ib, _pb) = place_for(&rig, &h, Some(PROJECT_B)).await;
+        rig.wait_launches(2).await;
+        (ia, ib)
+    };
+    assert_ne!(ia, ib);
+    let h = rig.host();
+    let mut restored = h.restore_instances().await.restored;
+    restored.sort();
+    let mut want = vec![ia.clone(), ib.clone()];
+    want.sort();
+    assert_eq!(restored, want);
 }

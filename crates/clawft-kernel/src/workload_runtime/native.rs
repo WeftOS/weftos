@@ -188,6 +188,12 @@ pub fn instance_id(w: &VerifiedWorkload, cfg: &WorkloadConfig) -> Result<String,
     );
     h.update(cfg.args.join("\u{1f}").as_bytes());
     h.update(cfg.host.csi_bind.to_string().as_bytes());
+    // Another project (or controller) placing the same package must not land in
+    // this instance's directory and inherit its data/. Unowned ids are unchanged.
+    if let Some(owner) = &cfg.host.owner {
+        h.update(b"\x1fowner\x1f");
+        h.update(owner.as_bytes());
+    }
     Ok(format!(
         "{}-{}-{}",
         w.id,

@@ -610,7 +610,10 @@ impl WorkloadHostService {
                 "project_id must be a 26-character project id",
             ));
         }
-        let mut contract = HostContract::new(SocketAddr::from(([0, 0, 0, 0], b.config.csi_port)));
+        // The owner is the project and the controller that placed it, so the same
+        // package placed for another project is another instance with its own data/.
+        let owner = format!("project={}\ncontroller={}", b.project_id.as_deref().unwrap_or("-"), req.requester);
+        let mut contract = HostContract::new(SocketAddr::from(([0, 0, 0, 0], b.config.csi_port))).with_owner(owner);
         let mut listener = None;
         let hooks = self.ingest.as_ref().filter(|_| w.kind == "cog");
         // `none`: no ingest wiring on this node. `disabled`: wired, but the
