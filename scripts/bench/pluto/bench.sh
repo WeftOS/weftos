@@ -20,6 +20,8 @@ s=n.abs(n.fft.fftshift(n.fft.fft(z*n.hanning(z.size))))**2
 f=n.fft.fftshift(n.fft.fftfreq(z.size,1/fs)); k=s.argmax()
 print('peak %.1f kHz, %.1f dB above median' % (f[k]/1e3, 10*n.log10(s[k]/n.median(s))))" "$1" "$2"; }
 
+# A run that died mid-test can leave digital loopback on and the DDS running; start clean.
+a -D ad9361-phy loopback 0 >/dev/null; a -c cf-ad9361-dds-core-lpc altvoltage0 raw 0 >/dev/null
 echo "== health"
 for c in temp0; do echo "xadc $c raw=$(a -c xadc $c raw) scale=$(a -c xadc $c scale) offset=$(a -c xadc $c offset)"; done
 echo "ad9361 temp0 input=$(a -i -c ad9361-phy temp0 input)"

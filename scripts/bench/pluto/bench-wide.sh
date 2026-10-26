@@ -23,6 +23,8 @@ edges=int(n.sum(hi[1:]&~hi[:-1])); print('pulse edges >6x median: %d in %.2f s' 
 setrx() { a -i -c ad9361-phy voltage0 sampling_frequency $1 >/dev/null; a -i -c ad9361-phy voltage0 rf_bandwidth $2 >/dev/null; }
 tune() { a -c ad9361-phy altvoltage0 frequency $1 >/dev/null; sleep 0.05; a -c ad9361-phy altvoltage0 frequency; }
 
+# A run that died mid-test can leave digital loopback on and the DDS running; start clean.
+a -D ad9361-phy loopback 0 >/dev/null; a -c cf-ad9361-dds-core-lpc altvoltage0 raw 0 >/dev/null
 echo "== mode: $(iio_info -u $U 2>/dev/null | grep -o 'ad9361-phy,model: .*'), LO range $(a -o -c ad9361-phy altvoltage0 frequency_available)"
 a -i -c ad9361-phy voltage0 gain_control_mode manual >/dev/null
 a -i -c ad9361-phy voltage0 hardwaregain 50 >/dev/null

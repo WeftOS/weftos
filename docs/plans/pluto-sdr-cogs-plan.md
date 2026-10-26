@@ -98,6 +98,35 @@ Outside 325–3800 MHz the part is out of spec, so the cogs declare the measured
 (70–6000 MHz) together with a `rated: 325–3800 MHz` field. Consumers that need calibrated levels
 outside the rated band must treat them as uncalibrated.
 
+### 2.2 On the Ventuno (R0, 2026-10-26)
+
+The Pluto's Zynq port on a Ventuno USB-A port (enumerates at 480M on the xHCI root hub, with
+RNDIS, mass storage and the ACM console), its charger on the other port. libiio 0.25 from Ubuntu.
+The packaged `90-libiio0.rules` calls an `iio_info -S` option this version removed, so a narrow
+rule (`/etc/udev/rules.d/53-weftos-plutosdr.rules`, group `dialout`) grants `usb:` access.
+
+| Test | Ventuno result (Mac for comparison) |
+|---|---|
+| LO sweep and limits, standard and wide | identical behaviour: 325–3800 and 70–6000 MHz points all lock; floor within 1–3 dB of the Mac |
+| FM 93/103 MHz | stations visible (+28/+38 dB) |
+| ADS-B 1090 MHz | 9342 pulse edges in 2 s against 1404 at 1030 MHz (Mac: 2112 vs 135) |
+| TX digital loopback, 2437 and 5800 MHz | tone 117.6 and 99.0 dB above the floor |
+| Throughput, `usb:` backend, buffers 256 Ki–4 Mi samples | **4.3–4.7 MS/s** whatever the requested rate (Mac 7.6); bigger buffers are slightly worse |
+| Throughput, `ip:192.168.2.1` (iiod over RNDIS) | **5.5–5.9 MS/s** at 256 Ki buffers, better than `usb:` here; one run at 30.72 MS/s timed out the iiod context and recovered on the next run |
+| Pluto power seen by the Ventuno's INA232 | 11.34 W with the Pluto streaming, 11.42 W with it unplugged: none (its own charger powers it) |
+| Temperatures | AD9364 37–39 °C, Zynq about 58 °C |
+
+What changes in the plan:
+
+- **On the Ventuno `ip:` is the faster backend** (about 5.9 against 4.7 MS/s), so `sdr-pluto-rx`
+  defaults to `ip:` on Linux hosts and `usb:` on macOS, and measures both at start. 5 MS/s is the
+  safe continuous rate on this board; 20 MHz work stays decimation, on-device compute (R6) or
+  bursts.
+- **A crashed client can leave the chip in digital loopback** (the receive path then reads zeros
+  while TX loopback still works), because the Pluto keeps power and state across host restarts.
+  The RX cog resets `loopback`, the DDS and the TX attenuation when it takes ownership, and its
+  health check fails on an all-zero buffer.
+
 ## 3. How it attaches to the Ventuno
 
 The Pluto goes on the Ventuno's USB 3 host port, where the board's Linux sees it the way the Mac
@@ -225,7 +254,7 @@ off unless granted, every request is checked and chained, and a fault means sile
 
 | Phase | Scope | Done when |
 |---|---|---|
-| R0 Bench | done on the Mac (section 2); repeat on the Ventuno over USB 3 host and over `iiod`/USB network | the same table filled in on the Ventuno, including throughput through `iiod` and power draw seen by `board-telemetry` |
+| R0 Bench | done 2026-10-26 on the Mac (2) and on the Ventuno over `usb:` and `iiod` (2.2) | the same table filled in on the Ventuno, including throughput through `iiod` and power draw seen by the board's power monitor |
 | R1 Extended range | done 2026-10-26: owner applied the AD9364 change after a DFU backup (2.1); bench 70–6000 MHz | per-band lock and noise floor recorded (2.1); cogs declare the measured range |
 | R2 `sdr-pluto-rx` | owner cog, stream ring, `svc.sdr`, status, guide, `--simulate`/`--replay` | an hour of 2.4 GHz capture at 5 MS/s with every gap counted; two consumers share the tuner by band plan |
 | R3 `spectrum` + `rf-census` | consumers on the Ventuno | a 2.4 GHz occupancy reading per minute (the ventuno plan's P7 acceptance), loss reported |
