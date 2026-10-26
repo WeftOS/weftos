@@ -127,7 +127,7 @@ impl Manager {
         style::caption(
             ui,
             format!(
-                "{} projects · {} modules · {} chips — Projects → Modules → Chips (explored across weftos, mentra, whitsentry)",
+                "{} projects · {} modules · {} chips — Projects → Modules → Chips (explored across several projects)",
                 self.catalog.projects.len(),
                 self.catalog.modules.len(),
                 self.catalog.chips.len()

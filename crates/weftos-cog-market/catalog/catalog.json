@@ -665,7 +665,7 @@
       "spec": {
         "csi": "full CSI 3x3",
         "platform": "Linux / OpenWRT research",
-        "source": "reference/whitsentry/docs/research/ruview-primer.md"
+        "source": "reference/project/docs/research/ruview-primer.md"
       },
       "pins": [],
       "chips": [],
@@ -674,7 +674,7 @@
       "mouser_query": "Atheros AR9580",
       "buy": [],
       "seen_in": [
-        "reference/whitsentry/docs/research/ruview-primer.md",
+        "reference/project/docs/research/ruview-primer.md",
         "ruview/archive/v1/docs/user-guide/getting-started.md"
       ],
       "hash": "wh_a18300909773d411"
@@ -1442,7 +1442,7 @@
         "mcu": "ESP32-S3, 8 MB PSRAM",
         "panel": "7\" 800x480 RGB TFT",
         "touch": "GT911 capacitive multi-touch",
-        "source": "docs/whitsentry-synergy-report.md"
+        "source": "docs/synergy-report.md"
       },
       "pins": [
         "RGB parallel",
@@ -1465,7 +1465,7 @@
         }
       ],
       "seen_in": [
-        "docs/whitsentry-synergy-report.md"
+        "docs/synergy-report.md"
       ],
       "hash": "wh_25096ed02e76c6ad"
     },
@@ -1567,7 +1567,7 @@
         "flash": "16 MB",
         "psram": "8 MB",
         "csi": "64-subcarrier",
-        "source": "docs/research/hardware-cost-matrix.md; reference/whitsentry/docs/hardware/phase0-parts-list.md"
+        "source": "docs/research/hardware-cost-matrix.md; reference/project/docs/hardware/phase0-parts-list.md"
       },
       "pins": [
         "multi-UART",
@@ -1590,7 +1590,7 @@
       ],
       "seen_in": [
         "docs/research/hardware-cost-matrix.md",
-        "reference/whitsentry/docs/hardware/phase0-parts-list.md",
+        "reference/project/docs/hardware/phase0-parts-list.md",
         "docs/planning/sensing-roadmap-and-sku.md"
       ],
       "hash": "wh_83f4817ea454cec4"
@@ -2676,7 +2676,7 @@
         "docs/EMBODIED_COACHING.md",
         "docs/research/hardware-cost-matrix.md",
         "docs/research/hardware-alternatives-and-life-detection.md",
-        "reference/whitsentry/docs/hardware/phase0-parts-list.md",
+        "reference/project/docs/hardware/phase0-parts-list.md",
         "docs/planning/sensing-roadmap-and-sku.md"
       ],
       "hash": "wh_a65938c040927ff4"
@@ -2951,7 +2951,7 @@
       "spec": {
         "csi": "full CSI 3x3",
         "platform": "Linux research",
-        "source": "reference/whitsentry/docs/research/ruview-primer.md"
+        "source": "reference/project/docs/research/ruview-primer.md"
       },
       "pins": [],
       "chips": [],
@@ -2960,7 +2960,7 @@
       "mouser_query": "Intel 5300 CSI NIC",
       "buy": [],
       "seen_in": [
-        "reference/whitsentry/docs/research/ruview-primer.md",
+        "reference/project/docs/research/ruview-primer.md",
         "ruview/archive/v1/docs/user-guide/getting-started.md"
       ],
       "hash": "wh_1d562e3f55c75dfb"
@@ -4589,7 +4589,7 @@
         }
       ],
       "seen_in": [
-        "reference/whitsentry/docs/hardware/phase0-parts-list.md"
+        "reference/project/docs/hardware/phase0-parts-list.md"
       ],
       "hash": "wh_e2ed5480839872ec"
     },
@@ -4991,8 +4991,8 @@
       ],
       "seen_in": [
         "docs/MODULES.md",
-        "reference/whitsentry/docs/hardware/phase0-parts-list.md",
-        "reference/whitsentry/docs/research/ruview-primer.md"
+        "reference/project/docs/hardware/phase0-parts-list.md",
+        "reference/project/docs/research/ruview-primer.md"
       ],
       "hash": "wh_7d60fae708b6418c"
     },
@@ -5755,7 +5755,7 @@
         "accuracy_vendor": "90% breath / 90% heartbeat (vendor, Beta datasheet)",
         "size": "25x31.5 mm",
         "price_ref": "$24.99-26.99 kit",
-        "source": ".metaharness/ingest/findings/hardware/hw-seeed-mr60bha2-60ghz-vitals.json; reference/whitsentry/docs/hardware/phase0-parts-list.md"
+        "source": ".metaharness/ingest/findings/hardware/hw-seeed-mr60bha2-60ghz-vitals.json; reference/project/docs/hardware/phase0-parts-list.md"
       },
       "pins": [
         "XIAO D6/D7 UART tap",
@@ -5775,7 +5775,7 @@
         ".metaharness/ingest/findings/hardware/hw-seeed-mr60bha2-60ghz-vitals.json",
         "docs/research/hardware/mr60bha2-board-teardown-2026-08-24.md",
         "docs/research/hardware/dual-radar-baseline-2026-08-24.md",
-        "reference/whitsentry/docs/hardware/phase0-parts-list.md",
+        "reference/project/docs/hardware/phase0-parts-list.md",
         "firmware-backups/xiao-c6-mr60bha2-factory-esphome-4mb.bin"
       ],
       "hash": "wh_f784fdf284501536"
@@ -5877,7 +5877,7 @@
         "soc": "ESP32-C6 (WiFi6 + 802.15.4)",
         "csi": "WiFi6 HE-LTF 242 subcarriers (needs 802.11ax on 2.4 GHz, ESP-IDF >= 5.5.2)",
         "interface": "USB-Serial-JTAG, UART, SPI, U.FL antenna",
-        "source": "reference/whitsentry/docs/hardware/phase0-parts-list.md; docs/planning/ruview-wavlink/03-esp32-node-runbook.md"
+        "source": "reference/project/docs/hardware/phase0-parts-list.md; docs/planning/ruview-wavlink/03-esp32-node-runbook.md"
       },
       "pins": [
         "D0-D10",
@@ -5902,7 +5902,7 @@
         }
       ],
       "seen_in": [
-        "reference/whitsentry/docs/hardware/phase0-parts-list.md",
+        "reference/project/docs/hardware/phase0-parts-list.md",
         "docs/research/hardware/mr60bha2-board-teardown-2026-08-24.md",
         "docs/planning/ruview-wavlink/03-esp32-node-runbook.md",
         ".metaharness/ingest/findings/hardware/hw-espressif-esp-csi-wifi-sensing.json"
@@ -36269,7 +36269,7 @@
       "summary": "Broadcom WiFi chip (BCM43455c0) on Raspberry Pi; patched with Nexmon to extract WiFi CSI for RF sensing.",
       "spec": {
         "role": "WiFi CSI capture via Nexmon",
-        "source": "reference/whitsentry/docs/research/ruview-primer.md"
+        "source": "reference/project/docs/research/ruview-primer.md"
       },
       "mouser_query": "BCM43455",
       "datasheet": "",
@@ -36476,7 +36476,7 @@
       "spec": {
         "radio": "WiFi6 (802.11ax) + 802.15.4 + BLE",
         "csi": "242-subcarrier HE-LTF",
-        "source": ".metaharness/ingest/findings/hardware/hw-espressif-esp-csi-wifi-sensing.json; reference/whitsentry/docs/hardware/phase0-parts-list.md"
+        "source": ".metaharness/ingest/findings/hardware/hw-espressif-esp-csi-wifi-sensing.json; reference/project/docs/hardware/phase0-parts-list.md"
       },
       "mouser_query": "ESP32-C6",
       "datasheet": "https://www.mouser.com/datasheet/3/1574/1/esp32-c6_datasheet_en.pdf",
@@ -36537,7 +36537,7 @@
       "spec": {
         "radio": "WiFi4 + BLE",
         "csi": "64-subcarrier",
-        "source": "docs/research/hardware-cost-matrix.md; reference/whitsentry/docs/hardware/phase0-parts-list.md"
+        "source": "docs/research/hardware-cost-matrix.md; reference/project/docs/hardware/phase0-parts-list.md"
       },
       "mouser_query": "ESP32-S3",
       "datasheet": "https://www.mouser.com/datasheet/3/1574/1/esp32-s3_datasheet_en.pdf",

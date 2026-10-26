@@ -143,7 +143,7 @@ data is labelled with the subject's consent and never published.
 | 0 | Start the WeftOS side now; the sensors are being hooked up soon. RuView ADR-384 steps proceed alongside. |
 | 1 | **Training hold lifted for the sensor world model** ("we have disk space, let's get the training we need"). Skill-3D training stays on hold. |
 | 2 | Training stack as recommended in §5 (PyTorch on the Mac → safetensors → candle). |
-| 3 | **Camera ground truth is allowed, except in Whitsentry work.** The §7 handling rule applies. |
+| 3 | **Camera ground truth is allowed, except in one client engagement's work.** The §7 handling rule applies. |
 | 4 | **Test room: the 12 × 12 ft room (3.66 × 3.66 m) with its own Wi-Fi router.** The 6.40 × 3.66 m room in the spatial ADR is not the training room. |
 | 5 | Producers: the LD2450 cog already running on cog0 (armv7), rebuilt with the `spatial-evidence` feature and pulled by RuView; no Mac build needed. |
 | 6 | The shared contracts (`spatial.evidence.v1` with the three new record types, and the SenML quantity vocabulary) are **published in WeftOS** as ADR-111 and `contracts/sensors/`. |
