@@ -589,3 +589,49 @@ the per-project guarantee holds for staging, not for a cog that goes looking.
 Verdict: C1 fixed as specified, with no TOCTOU or marker-forgery route I could establish. D5 should be
 fixed before release, because a crash window turns the safety marker into a wedge that invites deleting
 the data.
+
+---
+
+## Final check: D5 to D8, `wt/native-restart` 6a47281f6 (2026-10-26)
+
+Tests run (foreground): `tests_native` 16 of 16 and `tests_restart` 27 of 27 pass, including
+`a_crash_after_the_directory_was_cleared_leaves_a_marker_and_the_next_stage_keeps_the_data`,
+`an_empty_or_torn_marker_is_missing_not_another_owner`, `the_instance_id_carries_128_bits_of_the_owner_hash`,
+`a_colliding_instance_id_does_not_inherit_another_owners_data` and
+`data_is_private_to_the_instance_uid_even_when_the_files_were_kept_from_an_earlier_run`.
+
+| Item | Verdict |
+|---|---|
+| D5: marker deleted and rewritten, crash wedges the instance | **Fixed.** In order now: the directory is created, a missing or non-matching marker is written (temp file, `sync_all`, `rename`, directory fsync), and only then is anything cleared; the clearing loop skips `.owner` and `data`, so a matching marker is never deleted. A crash at any point leaves either an empty directory (adopted) or one that names its owner (reused). An empty or torn marker reads as "missing", not as another owner. I walked the crash points: after `create` (no marker, no data: adopted); after the marker (marker only: reused); after the clear and before `data/` (marker, kept `data/`: reused). |
+| D6: id squatting | **Fixed.** The id keeps 32 hex characters (128 bits) of the config and owner hash, out of reach of grinding. The instance-map key and the directory name are the same string, so a squat by id no longer works. |
+| D7: directories with data and no marker | **Accepted as documented.** They are refused with an instruction to remove them by hand; ADR-099 states that only dev branches ran those commits, so no node holds one. |
+| D8: file permissions | **Fixed for what it claimed.** `data/` is set to 0700 and, with a `run_as` uid, `chown_tree` brings it and the kept files to that uid with `lchown`, never following a link or entering a symlinked directory. ADR-099 states the real limit: the per-project guarantee on disk holds only where each cog has its own uid. |
+
+No new route found for: a symlinked or swapped `.owner` or `.owner.tmp` (only a daemon-uid process can
+plant either; `.owner.tmp` is removed before it is created), a window between the marker check and the
+data reuse (the adapter's map lock is held across `stage()`), a different owner writing the marker first
+on an existing directory (the comparison refuses first), or the unowned path (refuses a marked directory,
+and an owned load refuses an unmarked directory that holds data).
+
+### Residuals I would accept
+
+1. **A1 and D1: the chain's durability** (card a93f7abe). The generation is tamper-evidence up to the
+   chain's durability, and a crash before the first clean shutdown restores everything loaded and starts
+   nothing. Both are stated in ADR-099 and in the fleet-manager guide.
+2. **`chown_tree` runs while the adapter's instance-map lock is held.** A cog that fills its own `data/`
+   with millions of files, or a tree deep enough to exhaust the open-directory limit, makes its own restore
+   slow or fail, and holds up every other load and status call on that adapter while it runs. It can only
+   hurt the instance that owns the directory plus a stall, and `data/` is private to its uid. Worth a
+   follow-up (chown outside the lock, cap the walk); not a blocker.
+3. **D4** (journal generation numbers in the status listing) and **C5** (the Seed adapter's ids have no owner,
+   by design, one Seed one mesh).
+4. **Longer ids**: an id can now reach 162 characters (64 + 32 + 64 plus separators). I found no length limit
+   on instance ids in the broker, the ingest registry or the journal; container engines' name limits were
+   not checked.
+5. **Shared uid between projects**: while cogs share a uid, a running cog can open a sibling instance's
+   `data/` by path. Closed only by per-cog uids; documented.
+
+### Verdict
+
+All the findings on `wt/native-restart` that I raised are either fixed and verified by a test I ran or
+accepted above with a reason. **native-restart: clear to land.**
