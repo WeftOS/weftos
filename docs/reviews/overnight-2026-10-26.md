@@ -305,3 +305,98 @@ Residual items from my original finding 3 that this commit does not change:
 - Any restore error, including a transient one, still removes the entry for good.
 
 Verdict: finding 1 fixed and verified; finding 3 fixed for tampering, open for rollback and replay.
+
+---
+
+## Re-check: the four follow-ups on `wt/native-restart` b97a41e98 (2026-10-26)
+
+Tests run (foreground): `tests_restart` 19 of 19 pass, including
+`an_older_copy_of_the_journal_is_refused_even_though_it_is_validly_signed`,
+`the_generation_goes_on_the_chain_and_survives_a_deleted_journal`,
+`without_a_chain_instances_are_restored_loaded_and_nothing_is_started`,
+`a_requester_the_policy_no_longer_allows_is_refused_and_dropped`,
+`the_journal_file_is_created_private_even_over_a_wide_leftover_temp_file`,
+`a_restore_that_fails_for_a_transient_reason_is_kept_and_retried_at_the_next_start` and
+`a_restore_that_keeps_failing_is_given_up_after_five_starts`.
+
+### My four cases
+
+| Case | Verdict |
+|---|---|
+| Replay of an older validly signed entry (stale `desired_running`, resurrected unload) | **Fixed against a rollback of the file alone.** The signature now covers node id, generation and all entries, and a file below the chain's latest `workload.journal` generation is refused whole. Two ways round it remain, below (A1, A2). |
+| Restore did not re-check the requester | **Fixed.** `allows_node(requester)` is asked of the live `ControllerPolicy`; the trait default is `false`, so a policy that cannot answer restores nothing; the node's own id is always allowed (the field is signed, so it cannot be forged to be it). |
+| Journal temp file written at default mode, then chmod | **Fixed.** `write_private` removes any leftover, then `create_new` with mode 0600, `sync_all`, rename. `create_new` does not follow a planted symlink. |
+| Any restore error dropped the entry | **Fixed for transient causes, with one wrong class (B1).** Fetch, runtime and admission failures keep the entry and count up to 5 in the signed `failures` field. |
+
+Canonicalisation is still sound: `signed_bytes` is a domain tag, node id, generation and
+`serde_json::to_vec(entries)` over plain structs, and `failures` is `#[serde(default)]`, so it is part of
+what is signed.
+
+### New problems the generation and chain ordering open
+
+**A1. The chain is only durable at clean shutdown, so the replay window is "everything since the last
+checkpoint" (known, card a93f7abe).** `workload.journal` events are appended to the in-memory chain on
+every save; the chain file is written only at `Kernel::shutdown`. After a crash or kill, the chain on disk
+holds the generations up to the last clean stop, while the journal file holds the newer ones. Concrete
+case: chain at generation 10 from the last clean shutdown; the operator stops X (generations 11 to 15; the
+daemon is then killed); an attacker puts back a copy of generation 12 with X running. `12 >= 10`, so it is
+accepted and X starts. The new test shares one in-memory `ChainManager` across the simulated restart, so it
+cannot see this. This closes properly only with the chain-durability fix.
+
+**A2. A chain that has no journal events is treated as authoritative.** `chain_generation` returns 0 when
+it finds none, and `restore_instances` only holds back starts when there is *no chain object*
+(`chain_latest() == None`). A chain with zero journal events gives `Some(0)`: nothing is "below" it and
+`may_start` stays true. Concrete case: an attacker with write access to the runtime directory removes the
+chain checkpoint (or the daemon is started with a fresh chain), then restores an old signed journal; it is
+accepted and its instances start. Fix direction: when the file's generation is above 0 and the chain holds
+no `workload.journal` event at all, treat it like the no-chain case (restore loaded, start nothing).
+Rolling back both the chain checkpoint and the journal to an older consistent pair is not detectable
+without an anchor outside the directory (a mesh peer or a signed external record); that is inherent and
+worth saying in the ADR.
+
+**A3. One-step ambiguity from the write order (accepted by the author, agreed).** File first, chain second:
+a crash between them leaves file generation N+1 and chain N. An attacker who then substitutes the
+generation-N file (equal to the chain's latest) is accepted. Writing the chain first would turn the same
+crash into a false "older copy" refusal and drop everything, so the chosen order is the right one; the
+residue is one generation. Low. Recording the file's hash in the chain event would not remove it, only
+shrink the ambiguity to a crash.
+
+**A4. A forged chain event can brick restore, if replication accepts it.** `chain_generation` takes the
+maximum `generation` over every event with source `workload.host` and kind `workload.journal` whose
+payload `node` equals this node, without checking who produced it. The `chain.append` RPC cannot forge it
+(its payload is a fixed `WitnessRecord` with no `node` or `generation`). But `workload.host` is neither a
+reserved source nor is `workload.journal` a reserved kind (`RESERVED_KINDS` has only
+`governance.overlay.applied`, and the comment there names the same hazard: a replicated
+`parent_version = u64::MAX` bricking boot). Concrete case, by reading: a cluster peer replicates an event
+with that source and kind and payload `{node: <this node>, generation: 18446744073709551615}`. Then
+every restart sees a file "older than the chain" and refuses the whole journal; and `set_chain` raises the
+in-memory generation to the maximum, so the next `save` does `g.generation += 1`, which wraps to 0 in a
+release build (panics with overflow checks). I did not verify that replication accepts this event, so it is
+"not established"; the cheap fix is to add `workload.journal` to `RESERVED_KINDS`, use `checked_add`, and
+ignore events not appended locally.
+
+**A5. The journal's rename is not followed by a directory fsync.** The file is `sync_all`ed but its parent
+directory is not. Once the chain becomes durable on append (the planned fix for A1), a power loss can
+leave the directory pointing at the previous generation while the chain has the next, and the next start
+would refuse the genuine journal as a replay and drop every instance. Fsync the directory after the
+rename.
+
+**A6. Deleting the journal is silent.** A missing file reads as an empty journal at generation 0; the chain
+event records the entry count, but restore does not compare, so removing the file unloads everything with
+no report. A denial of service only. Low.
+
+### Smaller issue in the retry change
+
+**B1. `Governance` is classed permanent, but the gate also denies "revocation list unreadable (fail
+closed)" with that code.** `runtime_refusal` maps `RuntimeError::Governance` to `RefusalCode::Governance`,
+and `permanent()` includes it, so a revocation list that is momentarily unreadable at boot drops every
+instance for good. Treat that denial as transient (or retry `Governance` once with a note). Also, the 5
+tries are counted per start, so a daemon in an unrelated crash loop burns them quickly when a restore fails
+transiently each time.
+
+### Verdict
+
+The four follow-ups are fixed as described. The replay protection is real against a rollback of the file
+alone, and its limits are those of the chain's own durability and rollback resistance (A1, A2). The
+transient and retry change is correct except for the gate's fail-closed denial (B1). A1 and A2 are the
+ones I would close before relying on the generation as a security control; A4 and A5 are cheap hardening.
