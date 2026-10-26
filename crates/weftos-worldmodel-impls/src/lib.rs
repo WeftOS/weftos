@@ -30,6 +30,7 @@ extern crate alloc;
 
 pub mod action_encoder;
 pub mod encoder;
+pub mod eval_harness;
 pub mod lattice;
 mod math_no_std;
 pub mod planner;
