@@ -417,6 +417,17 @@ fn stage(
 ) -> Result<(), RuntimeError> {
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
     let io = |e: std::io::Error| RuntimeError::Backend(format!("stage {}: {e}", dir.display()));
+    // `load` calls this only for an instance this adapter does not hold, so a
+    // directory already here is left over from an earlier run (a daemon that
+    // restarted, a crash mid-stage): clear it rather than fail on it. The
+    // binary in it is read-only and `data/` exists, so neither rewriting nor
+    // creating over it would work.
+    match std::fs::symlink_metadata(dir) {
+        Ok(m) if m.is_dir() => std::fs::remove_dir_all(dir).map_err(io)?,
+        Ok(_) => std::fs::remove_file(dir).map_err(io)?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(io(e)),
+    }
     std::fs::DirBuilder::new()
         .recursive(true)
         .mode(0o755)

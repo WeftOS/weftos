@@ -247,3 +247,47 @@ async fn interval_lifecycle_start_status_stop_unload() {
     assert!(!root.join(&h.instance_id).exists());
     assert_eq!(rt.status(&h).await.state, InstanceState::Unknown);
 }
+
+#[tokio::test]
+async fn staging_over_a_directory_left_by_an_earlier_run_replaces_it() {
+    use std::os::unix::fs::PermissionsExt;
+    let fx = signed_workload(&toml(15, 4096), &[(arch(), SCRIPT.as_bytes())]);
+    let rt = runtime(&fx.root.join("rt"), true);
+    let c = cfg(RunMode::Listener);
+    // What a daemon that restarted leaves behind: the instance directory with
+    // a read-only binary, a populated `data/` and a stray file in it.
+    let iid = super::native::instance_id(&fx.workload, &c).unwrap();
+    let dir = fx.root.join("rt").join(&iid);
+    std::fs::create_dir_all(dir.join("data")).unwrap();
+    std::fs::write(dir.join("data/old-state"), b"x").unwrap();
+    std::fs::write(dir.join("cog-script-cog"), b"#!/bin/sh\nexit 9\n").unwrap();
+    std::fs::set_permissions(dir.join("cog-script-cog"), std::fs::Permissions::from_mode(0o555)).unwrap();
+    std::fs::set_permissions(dir.join("data"), std::fs::Permissions::from_mode(0o700)).unwrap();
+
+    let h = rt.load(&fx.workload, &c).await.expect("load over stale staging");
+    assert_eq!(h.instance_id, iid);
+    assert!(!dir.join("data/old-state").exists(), "old data is cleared");
+    let staged = std::fs::read(dir.join("cog-script-cog")).unwrap();
+    assert_eq!(staged, SCRIPT.as_bytes(), "the new binary is staged");
+    rt.start(&h).await.unwrap();
+    assert_eq!(rt.status(&h).await.state, InstanceState::Running);
+    rt.unload(h).await.unwrap();
+    assert!(!dir.exists());
+}
+
+#[tokio::test]
+async fn a_file_or_symlink_where_the_directory_goes_is_replaced_not_followed() {
+    let fx = signed_workload(&toml(15, 4096), &[(arch(), SCRIPT.as_bytes())]);
+    let rt = runtime(&fx.root.join("rt"), true);
+    let c = cfg(RunMode::Listener);
+    let iid = super::native::instance_id(&fx.workload, &c).unwrap();
+    std::fs::create_dir_all(fx.root.join("rt")).unwrap();
+    let victim = fx.root.join("victim");
+    std::fs::create_dir_all(&victim).unwrap();
+    std::fs::write(victim.join("keep"), b"k").unwrap();
+    std::os::unix::fs::symlink(&victim, fx.root.join("rt").join(&iid)).unwrap();
+    let h = rt.load(&fx.workload, &c).await.expect("load over a symlink");
+    assert!(victim.join("keep").exists(), "the symlink target is untouched");
+    assert!(!std::fs::symlink_metadata(fx.root.join("rt").join(&iid)).unwrap().file_type().is_symlink());
+    rt.unload(h).await.unwrap();
+}
