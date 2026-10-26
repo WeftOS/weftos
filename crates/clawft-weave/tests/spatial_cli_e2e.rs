@@ -105,6 +105,20 @@ async fn rpc(
     method: &str,
     params: serde_json::Value,
 ) -> serde_json::Value {
+    let v = rpc_raw(socket, method, params).await;
+    assert!(
+        v.get("ok").and_then(|x| x.as_bool()).unwrap_or(false),
+        "RPC {method} failed: {v}"
+    );
+    v.get("result").cloned().unwrap_or(serde_json::json!({}))
+}
+
+/// Full response envelope, success or not.
+async fn rpc_raw(
+    socket: &std::path::Path,
+    method: &str,
+    params: serde_json::Value,
+) -> serde_json::Value {
     let stream = UnixStream::connect(socket).await.expect("connect");
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
@@ -119,12 +133,7 @@ async fn rpc(
     writer.write_all(line.as_bytes()).await.unwrap();
     let mut resp_line = String::new();
     reader.read_line(&mut resp_line).await.unwrap();
-    let v: serde_json::Value = serde_json::from_str(resp_line.trim()).expect("json");
-    assert!(
-        v.get("ok").and_then(|x| x.as_bool()).unwrap_or(false),
-        "RPC {method} failed: {v}"
-    );
-    v.get("result").cloned().unwrap_or(serde_json::json!({}))
+    serde_json::from_str(resp_line.trim()).expect("json")
 }
 
 #[tokio::test]
@@ -263,6 +272,73 @@ async fn spatial_insert_query_branch_diff_replay() {
     )
     .await;
     assert_eq!(q2["hits"].as_array().unwrap().len(), 1);
+
+    let _ = shutdown.send(true);
+}
+
+/// R1/R2: publish a measured room shell as a region leaf through the live `ecc.spatial.*` path,
+/// fetch it by region id, and answer spatial queries with its provenance. The evidence line is
+/// the ADR-111 contract vector (tape-measured 6.40 x 3.66 x 2.44 m shell, proof MEASURED).
+#[tokio::test]
+async fn region_publish_get_and_spatial_query_carry_provenance() {
+    let (_tmp, sock, shutdown) = spawn_test_daemon().await;
+    let line = include_str!("../../../contracts/sensors/vectors/evidence/valid/shell_measure.jsonl");
+    let evidence: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+    let region = "region/urth/meso/test-room";
+
+    let pubd = rpc(&sock, "ecc.spatial.region.publish", serde_json::json!({ "evidence": evidence })).await;
+    assert_eq!(pubd["region_id"], region);
+    let leaf_id = pubd["leaf_id"].as_u64().unwrap();
+
+    // Retrieve by region id.
+    let got = rpc(&sock, "ecc.spatial.region.get", serde_json::json!({ "region_id": region })).await;
+    assert_eq!(got["leaf"]["leaf_id"], leaf_id);
+    // The BVH bound is f32 (broad phase); the exact measured extent stays in the payload as f64.
+    let want = [0.0, 0.0, 0.0, 6.4, 3.66, 2.44];
+    for (got_v, w) in got["leaf"]["aabb"].as_array().unwrap().iter().zip(want) {
+        assert!((got_v.as_f64().unwrap() - w).abs() < 1e-5);
+    }
+    assert_eq!(got["leaf"]["payload"]["extent"]["max"], serde_json::json!([6.4, 3.66, 2.44]));
+    let prov = &got["leaf"]["payload"]["provenance"];
+    assert_eq!(prov["proof"], "MEASURED");
+    assert_eq!(prov["receipt"], "shell-2026-10-03-a");
+    assert_eq!(prov["uncertainty_m"], 0.01);
+    assert_eq!(got["leaf"]["payload"]["anchor"]["status"], "unanchored");
+    assert_eq!(got["leaf"]["payload"]["appearance_is_metric"], false);
+
+    // Spatial query inside the shell returns the region with provenance.
+    let q = rpc(
+        &sock,
+        "ecc.spatial.query",
+        serde_json::json!({ "kind": "point", "at": "3.2,1.8,1.0", "with_payload": true }),
+    )
+    .await;
+    let hits = q["hits"].as_array().unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0]["leaf_id"], leaf_id);
+    assert_eq!(hits[0]["leaf"]["payload"]["region_id"], region);
+    assert_eq!(hits[0]["leaf"]["payload"]["provenance"]["proof"], "MEASURED");
+
+    // Outside the shell nothing is claimed: no hit, no fill leaf.
+    for at in ["7.0,1.8,1.0", "3.2,-0.5,1.0", "3.2,1.8,3.0"] {
+        let q = rpc(&sock, "ecc.spatial.query", serde_json::json!({ "kind": "point", "at": at })).await;
+        assert!(q["hits"].as_array().unwrap().is_empty(), "{at} must stay unobserved");
+    }
+    let st = rpc(&sock, "ecc.spatial.status", serde_json::json!({})).await;
+    assert_eq!(st["len"], 1, "publishing must add exactly the one measured leaf");
+
+    // Publishing the same region twice is refused; an unknown region is not invented.
+    let again = rpc_raw(&sock, "ecc.spatial.region.publish", serde_json::json!({ "evidence": evidence })).await;
+    assert_eq!(again["ok"], false);
+    let none = rpc_raw(&sock, "ecc.spatial.region.get", serde_json::json!({ "region_id": "region/urth/meso/nowhere" })).await;
+    assert_eq!(none["ok"], false);
+
+    // Bad frame is refused rather than guessed.
+    let mut bad = evidence.clone();
+    bad["frame"] = "ecef".into();
+    bad["region"] = "region/urth/meso/other".into();
+    let r = rpc_raw(&sock, "ecc.spatial.region.publish", serde_json::json!({ "evidence": bad })).await;
+    assert_eq!(r["ok"], false);
 
     let _ = shutdown.send(true);
 }
