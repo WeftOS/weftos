@@ -240,6 +240,7 @@ pub async fn run(mut args: KernelArgs) -> anyhow::Result<()> {
             if let Some(s) = &refused_sentinel
                 && s.exists()
                 && !crate::boot_refusal::service_managed()
+                && crate::boot_refusal::parked_hint_applies()
             {
                 eprintln!("{}", crate::boot_refusal::parked_hint(s));
             }

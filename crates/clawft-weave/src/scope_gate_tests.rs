@@ -171,7 +171,11 @@ const INTERCEPTS: &[&str] = &["ipc.subscribe_stream", "substrate.subscribe", "ke
 
 /// Allow-listed methods whose handler is not a legacy arm (ext routes or
 /// owned by other Phase 1 packages).
-const NOT_LEGACY_ARMS: &[&str] = &["kernel.handshake", "project.list", "project.show", "auth.token.validate", "chain.subscribe", "fleet.snapshot", "route.list", "versions.list", "versions.tree", "versions.deps", "display.status"];
+const NOT_LEGACY_ARMS: &[&str] = &["kernel.handshake", "project.list", "project.show", "auth.token.validate", "chain.subscribe", "fleet.snapshot", "route.list", "versions.list", "versions.tree", "versions.deps", "display.status", "cogbus.list", "workload.list"];
+
+/// Allow-listed verbs that sit under a guard-prefix arm but were reviewed one by one
+/// (`workload_rpc::dispatch` lists registry state only for `workload.list`).
+const PREFIX_REVIEWED: &[&str] = &["workload.list"];
 
 fn all_methods() -> Vec<String> {
     let (mut arms, _) = dispatch_arms();
@@ -231,7 +235,7 @@ fn population_allow_list_is_read_only_and_real() {
             "{m} is on the allow-list but is not a dispatched method"
         );
         assert!(
-            !prefixes.iter().any(|p| m.starts_with(p.as_str())),
+            PREFIX_REVIEWED.contains(m) || !prefixes.iter().any(|p| m.starts_with(p.as_str())),
             "{m} falls under a guard-prefix arm whose verbs are not individually reviewed"
         );
     }
@@ -252,6 +256,18 @@ fn allow_list_excludes_known_sensitive_reads() {
     }
     for m in ["chain.local", "chain.export", "agent.chat", "ipc.subscribe_stream"] {
         assert!(!READ_ONLY_ALLOW.contains(&m), "{m}");
+    }
+}
+
+/// Node-level broker topics and hosted instances list on a project-less user
+/// daemon; their mutating siblings stay denied.
+#[test]
+fn cogbus_and_workload_list_pass_outside_a_project() {
+    for m in ["cogbus.list", "workload.list"] {
+        assert!(decide(OutsideProjectPolicy::ReadOnly, m, false, || false).is_ok(), "{m}");
+    }
+    for m in ["workload.start", "workload.stop", "workload.place"] {
+        assert_eq!(decide(OutsideProjectPolicy::ReadOnly, m, false, || false).unwrap_err().kind, "project_required", "{m}");
     }
 }
 

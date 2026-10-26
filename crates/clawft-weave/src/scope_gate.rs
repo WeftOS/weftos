@@ -131,6 +131,10 @@ pub const READ_ONLY_ALLOW: &[&str] = &[
     "route.list",
     // ADR-117: whether a named leaf is connected and who holds its screen.
     "display.status",
+    // ADR-122: node-level broker topics and hosted instances are listable on a
+    // project-less user daemon (read-only registry snapshots).
+    "cogbus.list",
+    "workload.list",
 ];
 
 /// User-level operations: callable outside a project, but only by a caller

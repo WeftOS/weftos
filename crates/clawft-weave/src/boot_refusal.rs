@@ -130,6 +130,11 @@ pub fn lift_refused_on_boot(sentinel: &Path, managed: bool) -> RefusedLift {
     }
 }
 
+/// The launchd hint only makes sense where launchd exists.
+pub fn parked_hint_applies() -> bool {
+    cfg!(target_os = "macos")
+}
+
 /// Printed by a manual `kernel start --profile user` when the launchd job is
 /// parked by the sentinel.
 pub fn parked_hint(sentinel: &Path) -> String {
@@ -364,6 +369,7 @@ mod tests {
         assert_eq!(lift_refused_on_boot(&s, false), RefusedLift::LeftParked);
         assert!(s.exists());
         assert!(parked_hint(&s).contains("launchctl kickstart gui/$(id -u)/ai.weftos.user"));
+        assert_eq!(parked_hint_applies(), cfg!(target_os = "macos"));
         // The launchd-started instance (marker set) clears it.
         assert_eq!(lift_refused_on_boot(&s, true), RefusedLift::Cleared);
         assert!(!s.exists());
