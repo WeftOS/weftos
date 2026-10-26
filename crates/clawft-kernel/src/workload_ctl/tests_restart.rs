@@ -416,7 +416,35 @@ fn a_damaged_journal_is_set_aside_and_the_host_starts_empty() {
     let k = SigningKey::from_bytes(&[5; 32]);
     let j = Journal::open(&p, "node", &k);
     assert!(j.entries().is_empty());
-    assert!(!p.exists() && p.with_extension("json.bad").exists());
+    assert!(!p.exists());
+    assert_eq!(bad_files(tmp.path()).len(), 1, "set aside under a timestamped name");
+}
+
+fn bad_files(dir: &Path) -> Vec<PathBuf> {
+    let mut v: Vec<PathBuf> = std::fs::read_dir(dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.file_name().unwrap().to_string_lossy().starts_with("journal.json.bad."))
+        .collect();
+    v.sort();
+    v
+}
+
+#[test]
+fn unreadable_journals_are_set_aside_without_overwriting_and_only_the_newest_few_are_kept() {
+    let tmp = tempfile::tempdir().unwrap();
+    let p = tmp.path().join("journal.json");
+    let k = SigningKey::from_bytes(&[5; 32]);
+    for n in 0..5 {
+        std::fs::write(&p, format!("{{ damaged {n}").as_bytes()).unwrap();
+        Journal::open(&p, "node", &k);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let kept = bad_files(tmp.path());
+    assert_eq!(kept.len(), 3, "{kept:?}");
+    let texts: Vec<String> = kept.iter().map(|f| std::fs::read_to_string(f).unwrap()).collect();
+    assert_eq!(texts, ["{ damaged 2", "{ damaged 3", "{ damaged 4"], "the newest three, none overwritten");
 }
 
 #[tokio::test]
@@ -468,6 +496,9 @@ async fn an_entry_with_a_changed_requester_is_refused() {
     assert_eq!(report.failed.len(), 1, "{report:?}");
     assert_eq!(report.failed[0].0, iid);
     assert!(report.failed[0].1.contains("signature"), "{report:?}");
+    // labelled for what it is, not as a replay of an older file
+    assert_eq!(b.journal_status().unwrap().state, "refused (signature)");
+    assert!(report.note.as_deref().is_some_and(|n| n.contains("refused (signature)") && !n.contains("older copy")), "{report:?}");
     assert!(b.held().await.is_empty());
     assert!(Journal::open(&rig.journal(), &b.node_id, &b.key).entries().is_empty(), "the refused entry is not kept");
 }

@@ -133,6 +133,33 @@ fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     f.sync_all()
 }
 
+/// Unreadable journals kept (`journal.json.bad.<unix ms>`); older ones go.
+const KEEP_BAD: usize = 3;
+
+/// Move an unreadable journal out of the way under a timestamped name, so an
+/// earlier one is never overwritten, and keep only the newest few.
+fn set_aside(path: &Path) {
+    let ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis());
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let target = path.with_file_name(format!("{name}.bad.{ms:020}"));
+    let _ = std::fs::rename(path, &target);
+    let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()).or(Some(Path::new("."))) else { return };
+    let prefix = format!("{name}.bad.");
+    let mut bad: Vec<PathBuf> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with(&prefix)))
+        .collect();
+    bad.sort();
+    while bad.len() > KEEP_BAD {
+        let _ = std::fs::remove_file(bad.remove(0));
+    }
+}
+
 /// Flush a directory's entries to disk (after a rename into it).
 fn sync_dir(dir: &Path) -> std::io::Result<()> {
     std::fs::File::open(dir)?.sync_all()
@@ -176,7 +203,7 @@ pub(super) struct Journal {
 
 impl Journal {
     /// Open the journal at `path` for the node owning `key`. A missing file is
-    /// empty. A file that does not parse is set aside (`.bad`) and the journal
+    /// empty. A file that does not parse is set aside (`.bad.<time>`, newest three kept) and the journal
     /// starts empty, so a damaged file never blocks the daemon. A file whose
     /// signature does not verify under this node's key and id is refused whole.
     pub(super) fn open(path: &Path, node_id: &str, key: &SigningKey) -> Self {
@@ -188,7 +215,7 @@ impl Journal {
             Ok((e, g, r)) => (e, g, r, OpenState::Loaded),
             Err(e) => {
                 tracing::warn!(path = %path.display(), error = %e, "instance journal unreadable; starting empty");
-                let _ = std::fs::rename(path, path.with_extension("json.bad"));
+                set_aside(path);
                 (BTreeMap::new(), 0, Vec::new(), OpenState::Unreadable)
             }
         };
@@ -453,6 +480,16 @@ impl WorkloadHostService {
             return report;
         }
 
+        // A file that failed its signature says so; its generation is not meaningful
+        // (it was not trusted), so it must not be mistaken for a replay below.
+        if j.open_state() == OpenState::Refused {
+            let why = "journal refused (signature): the file was changed or is not this node's; no placed instance was restored".to_string();
+            tracing::error!(path = %j.path.display(), "{why}");
+            report.note = Some(why);
+            self.set_journal_status(status("refused (signature)", &report));
+            return report;
+        }
+
         // Replay: a file older than what the chain says was saved last.
         let mut may_start = true;
         let mut state = if matches!(j.open_state(), OpenState::Missing) { "fresh" } else { "ok" };
@@ -491,9 +528,6 @@ impl WorkloadHostService {
                         .into(),
                 );
             }
-        }
-        if j.open_state() == OpenState::Refused {
-            state = "refused";
         }
 
         for e in j.entries() {
