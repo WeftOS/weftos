@@ -1,0 +1,9 @@
+{
+  "model": "qwen3-vl-4b",
+  "image_blob": {
+    "hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "size": 9999999,
+    "media_type": "image/png",
+    "expires_ms": 1761500000000
+  }
+}

@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 pub use blob::{BlobHandle, MAX_MEDIA_TYPE, find_handles, valid_media_type};
 pub use data::{CanFrame, MAX_STORE_VECTORS, StoreVector, Telemetry, TelemetryItem, Transcript};
 pub use data::{SenmlMsg, SenmlRecord};
-pub use infer::{DEFAULT_PRIORITY, InferRequest, MAX_IMAGE_B64, MAX_PRIORITY, MAX_TEXT, MIN_PRIORITY};
+pub use infer::{DEFAULT_PRIORITY, InferRequest, MAX_IMAGE_B64, MAX_IMAGE_BLOB, MAX_PRIORITY, MAX_TEXT, MIN_PRIORITY};
 pub use media::{Detection, Detections, FrameRef, IqCs16, PcmS16le, SpectrumPsd};
 
 /// Registered schema ids, in the order the plan lists them, then
