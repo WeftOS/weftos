@@ -122,6 +122,11 @@ pub struct FrameRef {
     pub pixel_format: String,
     /// How long the owner keeps the bytes, milliseconds.
     pub ttl_ms: u32,
+    /// The frame in the node's blob store (B5), when the owner put it there. Its hash is
+    /// `hash`. Carrying it in the reading hands read access to the readers, who can pass it
+    /// on in a service call (a vision model reads the frame without the reader copying it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blob: Option<super::BlobHandle>,
 }
 
 impl FrameRef {
@@ -136,7 +141,14 @@ impl FrameRef {
         if !PIXEL_FORMATS.contains(&self.pixel_format.as_str()) {
             return fail(format!("unknown pixel_format {:?}", self.pixel_format));
         }
-        in_range("ttl_ms", f64::from(self.ttl_ms), 1.0, 3_600_000.0)
+        in_range("ttl_ms", f64::from(self.ttl_ms), 1.0, 3_600_000.0)?;
+        if let Some(b) = &self.blob {
+            b.validate()?;
+            if b.hash != self.hash {
+                return fail("blob.hash must equal hash");
+            }
+        }
+        Ok(())
     }
 }
 

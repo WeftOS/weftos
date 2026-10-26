@@ -87,6 +87,7 @@ impl WorkloadHostService {
             if gone {
                 let removed = self.instances.lock().await.remove(&id);
                 self.bus_forget(removed.as_ref().and_then(|p| p.cogbus.as_ref()));
+                self.device_forget(&id);
                 self.note_departed(&id, "revoked");
             }
             out.push(ForcedTeardown {

@@ -194,6 +194,10 @@ pub struct WorkloadHostService {
     /// Placed instances persisted across a daemon restart (unset: a restart
     /// empties the host, as before).
     pub(super) journal: Option<super::host_journal::Journal>,
+    /// Who owns which device on this node (`device_owner`).
+    pub(super) devices: Arc<super::device_owner::DeviceLedger>,
+    /// Re-owns device nodes for a cog with its own uid; unset: nodes untouched.
+    pub(super) device_applier: std::sync::OnceLock<Arc<dyn super::device_owner::DeviceApplier>>,
 }
 
 pub(super) fn now_ms() -> u64 {
@@ -251,6 +255,8 @@ impl WorkloadHostService {
             node_admin: std::sync::OnceLock::new(),
             cogbus: std::sync::OnceLock::new(),
             journal: None,
+            devices: super::device_owner::DeviceLedger::system(),
+            device_applier: std::sync::OnceLock::new(),
         }
     }
 
@@ -645,6 +651,7 @@ impl WorkloadHostService {
                 .map_err(|e| refuse(RefusalCode::Runtime, format!("ingest bridge: {e}")))?;
         }
         let (contract, bus) = self.bus_prepare(&route, &w, contract)?;
+        let (contract, devs) = self.device_prepare(&w, &b.config.args, contract)?;
         let cfg = WorkloadConfig {
             mode: b.config.mode.clone(),
             args: b.config.args.clone(),
@@ -653,9 +660,16 @@ impl WorkloadHostService {
         };
         let h = host.load(&w, &cfg).await.map_err(|e| runtime_refusal(&e))?;
         let iid = h.instance_id.clone();
+        if let Err(mut r) = self.device_bind(devs, &iid) {
+            if let Err(u) = host.unload(h.clone()).await {
+                r.reason = format!("{}; unload of {iid} failed too ({u})", r.reason);
+            }
+            return Err(r);
+        }
         let bus = match self.bus_lease(bus, &iid, &w.id, (b.project_id.clone(), &req.requester), &contract) {
             Ok(r) => r,
             Err(mut r) => {
+                self.device_forget(&iid);
                 if let Err(u) = host.unload(h.clone()).await {
                     r.reason = format!("{}; unload of {iid} failed too ({u})", r.reason);
                 }
@@ -670,6 +684,7 @@ impl WorkloadHostService {
                     Err(e) => {
                         self.bus_off(bus.as_ref());
                         self.bus_forget(bus.as_ref());
+                        self.device_forget(&iid);
                         let mut r = refuse(RefusalCode::Runtime, format!("ingest bridge: {e}"));
                         if let Err(u) = host.unload(h.clone()).await {
                             r.reason = format!("{}; unload of {iid} failed too ({u})", r.reason);
@@ -763,6 +778,7 @@ impl WorkloadHostService {
             "instance_id": iid, "runtime": h.runtime, "variant": b.variant,
             "package_id": pkg.package_id, "status": status, "node": self.node_id,
             "ingest": ingest_state,
+            "devices": self.device_row(&iid),
         }))
     }
 
@@ -796,6 +812,7 @@ impl WorkloadHostService {
             Ok(()) => {
                 let gone = self.instances.lock().await.remove(&iid);
                 self.bus_forget(gone.as_ref().and_then(|p| p.cogbus.as_ref()));
+                self.device_forget(&iid);
                 r.reason = format!("start failed: {}; loaded instance {iid} unloaded", r.reason);
             }
             Err(u) => {

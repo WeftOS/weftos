@@ -70,6 +70,7 @@ Raw frames stay on the node. The handle names bytes in its content store.
 | `width`, `height` | u32 | 1..=16384 |
 | `pixel_format` | string | `nv12`, `yuyv`, `rgb24`, `bgr24`, `gray8`, `mjpeg` |
 | `ttl_ms` | u32 | 1..=3600000, how long the owner keeps the bytes |
+| `blob` | `blob.v1` | optional: the frame in the node's blob store; its `hash` must equal `hash`. Carried in the reading, it hands read access to the readers |
 
 ### `detections.v1` (reading)
 
@@ -171,6 +172,17 @@ the service's own (the NPU service returns `text`, `usage` and timings).
 | `image_blob` | `blob.v1` | optional, instead of `image_b64`: a PNG or JPEG of at most 4 MiB held by the broker (ADR-122 section 13). The handle travelling in the call lets the service read it |
 | `max_tokens` | u32 | optional, 1..=4096 |
 
+### `mcu.call.v1` (service call request)
+
+The body of a call on `svc.mcu/<node>` (ADR-122 section 12). It carries no common fields.
+The `mcu-bridge` cog forwards it to the WeftOS sketch on the MCU and answers with the
+sketch's return value (`{"result": ...}`) or an error.
+
+| Field | Type | Rule |
+|-------|------|------|
+| `method` | string | a method the sketch provides, `[a-z][a-z0-9_.]*`, at most 64 chars |
+| `params` | array | positional numbers, booleans and strings, at most 8; default empty |
+
 ### `blob.v1` (handle)
 
 A handle to bytes in the node's content store (ADR-122 section 3, B5). It is a reading body
@@ -184,6 +196,19 @@ broker (`blob_get`). It carries no common fields.
 | `size` | u64 | at least 1 |
 | `media_type` | string | `type/subtype`, lower-case, e.g. `image/png` |
 | `expires_ms` | u64 | Unix milliseconds after which the store may drop the bytes |
+
+### `event.v1` (reading)
+
+Something a cog noticed that a person or another cog should hear about: not a stream of values
+(`telemetry.v1`) and not a decision.
+
+| Field | Type | Rule |
+|-------|------|------|
+| `kind` | string | `[a-z][a-z0-9_.]*`, at most 64 chars, for example `can.new_id` |
+| `severity` | string | `info`, `warn` or `alert` |
+| `subject` | string | what it is about, 1..=64 chars (`0x1a4`, `can0`) |
+| `detail` | string | one line, at most 256 chars |
+| `value` | f64 | optional number that goes with it (a rate, a count) |
 
 ## Using it
 

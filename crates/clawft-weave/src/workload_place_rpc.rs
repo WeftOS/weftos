@@ -90,6 +90,12 @@ fn revoker_for(
 /// This node's `workload-host` (in-process target and, when configured,
 /// served to other nodes).
 static HOST: OnceLock<Arc<WorkloadHostService>> = OnceLock::new();
+
+/// Who owns which device on this node (`cogbus.list` shows it): the host's
+/// device ledger, or an empty table before the host is up.
+pub fn device_owners() -> serde_json::Value {
+    HOST.get().map_or_else(|| serde_json::json!({ "owners": [] }), |h| h.devices().report())
+}
 /// Keeps the cog ingest bridge listening for the daemon's life.
 static INGEST: OnceLock<crate::cog_ingest_serve::IngestRuntime> = OnceLock::new();
 /// Where it is served, once serving started.
@@ -555,6 +561,9 @@ async fn build(
     }
     // ADR-122 gap 5: a cog the broker stopped on the bus is stopped here too.
     bus_activity.set_stop_hook(crate::cogbus_serve::stop_hook(Arc::downgrade(&local)));
+    // One owner per device: a cog with its own uid gets its device nodes
+    // chowned to it (no-op on a shared-uid node, where the ledger is advisory).
+    local.set_device_applier(Arc::new(clawft_kernel::workload_ctl::device_owner::SystemApplier));
     let _ = HOST.set(local.clone());
     // ADR-108 P3b: serve `project.fetch` for the projects registered here.
     match clawft_types::runtime_paths::home_dir() {

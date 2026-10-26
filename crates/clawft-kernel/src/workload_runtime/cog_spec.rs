@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 
+use super::cog_devices::{DeviceDecl, RawDevice, parse_devices};
 use super::cog_decl::{
     InputDecl, OutputDecl, RawInput, RawOutput, parse_inputs, parse_interfaces, parse_outputs,
 };
@@ -73,6 +74,8 @@ pub struct CogSpec {
     pub outputs: Vec<OutputDecl>,
     /// `[[inputs]]` topic declarations.
     pub inputs: Vec<InputDecl>,
+    /// `[[devices]]`: the devices this cog owns (see `cog_devices`).
+    pub devices: Vec<DeviceDecl>,
 }
 
 #[derive(Deserialize)]
@@ -88,6 +91,8 @@ struct RawToml {
     outputs: Vec<RawOutput>,
     #[serde(default)]
     inputs: Vec<RawInput>,
+    #[serde(default)]
+    devices: Vec<RawDevice>,
 }
 
 #[derive(Deserialize)]
@@ -186,6 +191,7 @@ impl CogSpec {
         let interfaces = parse_interfaces(raw.cog.interfaces)?;
         let outputs = parse_outputs(raw.outputs)?;
         let inputs = parse_inputs(raw.inputs)?;
+        let devices = parse_devices(raw.devices)?;
         let spec = Self {
             id: raw.cog.id,
             version: raw.cog.version,
@@ -200,6 +206,7 @@ impl CogSpec {
             interfaces,
             outputs,
             inputs,
+            devices,
         };
         for c in &spec.console.allowed_commands {
             spec.split_command(c)?;

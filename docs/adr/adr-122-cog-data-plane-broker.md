@@ -124,7 +124,66 @@ in `weaver cogbus list`, never implied.
 file that does not parse or is group- or world-writable is ignored with a warning and cogs
 run shared.
 
-### 4b. Containers and VMs (gap 1)
+### 4b. One owner per device (P3)
+
+Updated: 2026-10-26 (card `41b3f9b6`, Ventuno cogs P3).
+
+Plan 4.1 says exactly one cog opens a device. A device-owner cog declares what it owns in
+`cog.toml`, and the node's **device ledger** (`clawft-kernel` `workload_ctl/device_owner.rs`)
+records the owner of each device and refuses anyone else.
+
+```toml
+[[devices]]
+path = "/dev/video*"            # a node under /dev; * and ? only in the last component
+[[devices]]
+usb = "1bcf:0b15"               # a USB vid:pid, resolved to its nodes at placement (sysfs)
+[[devices]]
+socket = "/run/arduino-router.sock"
+access = "ro"                   # rw (default) or ro
+[[devices]]
+netdev = "can*"                 # a network interface (SocketCAN) by name or glob
+```
+
+Exactly one of `path`, `usb`, `socket`, `netdev` per table, at most 8 tables, validated at `CogSpec::parse`.
+
+- **Claims.** At place, before anything is loaded, the host admits the cog's `[[devices]]`. A
+  claim that overlaps another instance's is refused (`admission`: "<device> is owned by <cog>
+  (<instance>); one owner per device"). Overlap is exact: two globs overlap if some path
+  matches both (`/dev/snd/pcmC*D*c` and `/dev/snd/pcmC*D*p` do not), a `usb` claim overlaps
+  the nodes it resolves to, and a claim in flight (not yet bound to an instance) blocks a
+  concurrent one. Unload, teardown, revocation and a failed placement release the claim.
+- **Interfaces.** A `netdev` claim lives in its own namespace (`net:<glob>`), so `can*` never
+  overlaps a path, and it resolves against `/sys/class/net`. The owner is handed the interface
+  names without a leading slash (`can0:can1:can2`). Interfaces have no file owner to change, so
+  the privileged chown plan skips them, and the argument check (which looks for absolute paths)
+  does not apply to them. Updated 2026-10-26 for the `can-fd` cog.
+- **Hand-out.** The owner's `WEFTOS_DEVICES` (`:`-separated absolute paths: the literal paths
+  it declared and the nodes its globs and `usb` ids resolved to) comes only from its
+  reservation (`HostContract::with_devices`), so no other contract carries a device path. A
+  place whose arguments name a path owned by another instance (`--device /dev/video0`,
+  `--src=/dev/video1`) is refused: "only its owner may open it". A cog that owns nothing and
+  names nothing gets nothing.
+- **Isolation, shown never implied.** Each claim has `device_isolation`:
+  - `enforced`: the cog has its own uid (per-cog-uid, 4a). The ledger plans a `chown` of each
+    owned node to that uid, keeping the node's group, mode `0600` (`0400` for `access = "ro"`),
+    and records the node's original owner, group and mode. `GrantPlan` is data; the
+    `DeviceApplier` the daemon wires (`SystemApplier`, libc `chown`/`chmod`) runs it before the
+    cog starts, and the restore plan runs at unload. A node that does not exist yet is skipped,
+    not guessed. A failed grant refuses the placement.
+  - `advisory`: every cog shares the daemon's uid (a user daemon, as on the Ventuno today).
+    File permissions cannot tell cogs apart, so the claim table and the two refusals above are
+    the whole guard: a cog that opens a node it never declared, or names an ALSA device such
+    as `plughw:1,0` rather than a path, is not stopped. `cogbus.list` shows `device_isolation`
+    per owner under `devices`, and the instance `status` rows carry `devices` and
+    `device_isolation`.
+- **Owner decision (2026-10-26): shared uid for now.** The allowlist is implemented and tested
+  at the WeftOS level; file-permission enforcement arrives with the machine service's per-cog
+  uids (4a), and the chown plan is unit-tested as data like the uid lane was.
+- **Limits.** The ledger is per node and in memory; a daemon restart forgets instances, so a
+  reconciled instance claims again at its next place. Containers and VMs (gap 1) get no
+  device ledger path: their device passthrough is the container adapter's own.
+
+### 4c. Containers and VMs (gap 1)
 
 The socket is a host file, so who can reach it depends on the route:
 
@@ -454,15 +513,15 @@ acceptance test passes, and the row is then marked closed with the commit.
 
 | # | Gap | Risk today | Closes with | Card |
 |---|---|---|---|---|
-| 1 | **Closed for the code** (`cogbus-gap-containers`, §4b). Containers on a Linux Docker or Podman engine get the bind-mounted socket and run as a recorded `uid:gid`; containers on macOS/Windows engines and Apple `container`, and VM or device routes, are declared unsupported with the reason in `cogbus list` | a container cog shares `container_uid` unless the daemon can allocate per-cog uids; a rootless or remapped engine needs `container_uid` set to the uid it presents; not exercised against a real engine in CI (the run line, image and identity are tested with a recording runner) | run one container cog on a Linux host with Docker (owner) | `cogbus-gap-containers` |
+| 1 | **Closed for the code** (`cogbus-gap-containers`, §4c). Containers on a Linux Docker or Podman engine get the bind-mounted socket and run as a recorded `uid:gid`; containers on macOS/Windows engines and Apple `container`, and VM or device routes, are declared unsupported with the reason in `cogbus list` | a container cog shares `container_uid` unless the daemon can allocate per-cog uids; a rootless or remapped engine needs `container_uid` set to the uid it presents; not exercised against a real engine in CI (the run line, image and identity are tested with a recording runner) | run one container cog on a Linux host with Docker (owner) | `cogbus-gap-containers` |
 | 2 | **Closed for the code** (`cogbus-gap-uid`, 0865db260 and the root-path proof below; §4a). A privileged daemon with a uid range runs each native cog as its own uid and the broker registers it. Proven as root on the aarch64 VM: a cog launched via setgroups/setgid/setuid as range uid 61000 was accepted, the same token from uid 61001 was refused `uid_mismatch` and logged. A user daemon cannot switch uids, so its cogs are marked `shared-uid` and `require_cog_uid` can refuse them | on a user daemon one cog that steals another's token can still act as it; that is the user daemon's limit, not a defect | the machine service runs privileged with `cogbus-isolation.json` (owner runs `scripts/cogbus-uid-setup.sh apply --yes`) | `cogbus-gap-uid` |
 | 3 | **Closed for the code** (same card). Proven as root on the VM: the socket came up `root:cogbus 0660`, cogs get `cogbus` as their only supplementary group, and a uid outside the group got `PermissionError` on connect | until the owner applies the setup on a real host the socket keeps the daemon's group (reported in `cogbus list`) | the same owner-run setup | `cogbus-gap-uid` |
 | 4 | **Closed** (`cogbus-gap-idle`, §11 "Idle connections and caps"). Ping after 60 s of silence, close 15 s later without any frame; 64 subscriptions per connection; 8 connections per instance. Tested with 120 ms timers on a real socket | none known; an old client without ping handling is closed after silence | n/a | `cogbus-gap-idle` |
 | 5 | **Closed** (`cogbus-gap-rate-stop`, §11 "Publish budgets" and "Stopping the cog"). Per-topic token bucket from `[[outputs]].rate`; `rate_limited` refusals; the repeated-refusal stop now asks governance (`cogbus.stop`) and stops the workload through the host, chained with the cause | rates the manifest writes as free text with no message rate are not metered; streams are not metered | n/a | `cogbus-gap-rate-stop` |
 | 6 | Blob store, review leftovers (low): `get` answers `cross_project` for a blob another project holds and `not_found` for one that does not exist, an oracle for "does the node hold exactly these bytes" to someone who already has them; governance is asked on the first slice of a get only; a re-placed cog under another project reuses the instance id (workload, version, args, csi bind, node: no project) and so can read the old instance's unexpired blobs if it knows the hash; handles passed to other instances are forgotten at restart (fails closed) | an instance can confirm content it already holds; a mid-download governance change does not cut a get off; a project swap within 24 h exposes blobs to a cog that knows a hash | answer `not_found` for both refusals; ask governance per slice or per N bytes; add the project to the native instance id | `cogbus-blob-review` |
 
-Gaps 2 and 3 also block the plan's P3 device-owner cogs, whose per-device allowlists
-need per-cog uids. After `cogbus-gap-uid` P3 can rely on per-cog uids only where the
+Gaps 2 and 3 also block file-permission enforcement of the plan's P3 device-owner cogs'
+allowlists (section 4b records the owner decision to ship the ledger first). After `cogbus-gap-uid` P3 can rely on per-cog uids only where the
 machine service is privileged and set up; on a user daemon a device-owner cog shares the
 daemon's uid, so a per-device allowlist is not enforceable there and must refuse or warn
 (`require_cog_uid` is the lever).

@@ -12,7 +12,9 @@
 
 mod blob;
 mod data;
+mod event;
 mod infer;
+mod mcu;
 mod media;
 mod sdr;
 #[cfg(test)]
@@ -23,15 +25,17 @@ use serde::{Deserialize, Serialize};
 
 pub use blob::{BlobHandle, MAX_MEDIA_TYPE, find_handles, valid_media_type};
 pub use data::{CanFrame, MAX_STORE_VECTORS, StoreVector, Telemetry, TelemetryItem, Transcript};
+pub use event::{EventMsg, MAX_DETAIL, MAX_KIND};
 pub use data::{SenmlMsg, SenmlRecord};
+pub use mcu::{MAX_METHOD, MAX_PARAMS, McuCall};
 pub use infer::{DEFAULT_PRIORITY, InferRequest, MAX_IMAGE_B64, MAX_IMAGE_BLOB, MAX_PRIORITY, MAX_TEXT, MIN_PRIORITY};
 pub use media::{Detection, Detections, FrameRef, IqCs16, PcmS16le, SpectrumPsd, is_gap_record};
 pub use sdr::{AutoGain, Gain, SdrBand, SdrReply, SdrRequest};
 
 /// Registered schema ids, in the order the plan lists them, then
-/// `store.vector.v1` (ADR-122 section 9), `infer.v1` (section 12) and
-/// `sdr.v1` (service calls) and `blob.v1` (section 3, B5).
-pub const SCHEMA_IDS: [&str; 14] = [
+/// `store.vector.v1` (ADR-122 section 9), `infer.v1` and `mcu.call.v1` (section 12), `sdr.v1`
+/// (service calls), `blob.v1` (section 3, B5), then `event.v1` (plan 5.1).
+pub const SCHEMA_IDS: [&str; 16] = [
     "senml.v1",
     "spatial.evidence.v1",
     "pcm.s16le.v1",
@@ -45,7 +49,9 @@ pub const SCHEMA_IDS: [&str; 14] = [
     "store.vector.v1",
     "infer.v1",
     "sdr.v1",
+    "mcu.call.v1",
     "blob.v1",
+    "event.v1",
 ];
 
 /// True if `id` is a registered schema id.
@@ -222,7 +228,9 @@ pub fn check_message(
         "store.vector.v1" => parse::<StoreVector>(msg, StoreVector::validate),
         "infer.v1" => parse::<InferRequest>(msg, InferRequest::validate),
         "sdr.v1" => parse::<SdrRequest>(msg, SdrRequest::validate),
+        "mcu.call.v1" => parse::<McuCall>(msg, McuCall::validate),
         "blob.v1" => parse::<BlobHandle>(msg, BlobHandle::validate),
+        "event.v1" => parse::<EventMsg>(msg, EventMsg::validate),
         "spatial.evidence.v1" => Err(CogTopicError(
             "spatial.evidence.v1 is validated by weftos-spatial-core".into(),
         )),

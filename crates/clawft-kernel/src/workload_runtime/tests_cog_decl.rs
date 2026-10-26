@@ -79,3 +79,15 @@ fn input_errors_and_limits() {
     // Duplicate input topics are allowed (only outputs are unique); 16 is the cap.
     assert!(parse(&inp.repeat(16)).is_ok());
 }
+
+#[test]
+fn netdev_devices_parse_and_are_checked() {
+    use super::cog_devices::DeviceSel;
+    let s = parse("[[devices]]\nnetdev = \"can*\"\n[[devices]]\npath = \"/dev/video0\"\n").unwrap();
+    assert_eq!(s.devices[0].sel, DeviceSel::Netdev("can*".into()));
+    assert_eq!(s.devices[0].sel.label(), "net:can*");
+    assert!(err("[[devices]]\nnetdev = \"CAN0\"\n").contains("netdev"));
+    assert!(err("[[devices]]\nnetdev = \"a/b\"\n").contains("netdev"));
+    assert!(err("[[devices]]\nnetdev = \"averyveryverylongname\"\n").contains("netdev"));
+    assert!(err("[[devices]]\nnetdev = \"can0\"\npath = \"/dev/x\"\n").contains("exactly one"));
+}

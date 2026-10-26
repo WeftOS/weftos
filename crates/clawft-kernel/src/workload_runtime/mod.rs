@@ -25,6 +25,7 @@
 //! the kernel `wasm_runner` is not used for cogs.
 
 pub mod cog_decl;
+pub mod cog_devices;
 pub mod cog_spec;
 pub mod container;
 pub mod container_cmd;

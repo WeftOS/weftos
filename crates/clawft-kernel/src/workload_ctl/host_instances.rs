@@ -67,6 +67,7 @@ impl WorkloadHostService {
                     "decision_id": p.decision_id, "status": host.status(&p.handle).await,
                     "ingest": p.ingest_state, "lifecycle": p.life.state,
                     "restarts": p.life.restarts.len(), "lease_stopped": p.lease_stopped,
+                    "devices": self.device_row(id),
                 }));
             }
             if b.include_departed
@@ -137,13 +138,15 @@ impl WorkloadHostService {
                 if r.is_ok() {
                     let removed = map.remove(&iid);
                     self.bus_forget(removed.as_ref().and_then(|p| p.cogbus.as_ref()));
+                    self.device_forget(&iid);
                     self.note_departed(&iid, "unloaded");
                 }
                 r
             }
             method::STATUS => {
                 Ok(json!({ "instance_id": iid, "status": host.status(&p.handle).await,
-                           "ingest": p.ingest_state, "lifecycle": p.life.state }))
+                           "ingest": p.ingest_state, "lifecycle": p.life.state,
+                           "devices": self.device_row(&iid) }))
             }
             _ => Ok(match &p.last {
                 Some(ev) => json!({
