@@ -353,7 +353,7 @@ by BLAKE3, and a `blob.v1` handle (`hash`, `size`, `media_type`, `expires_ms`) i
   instance id: the same id re-placed under another project is a different principal and cannot
   read, extend or inherit the old one's blobs or handed-on handles. Native instance ids now also
   hash the owner (project and requesting controller, venq-p4 `a8ab9ad35`), so the separation
-  holds twice. Container adapters derive their own instance ids and still need the same check.
+  holds twice. The container adapter calls the same `instance_id` with the owner key (checked in the review, `wt/urth-r1r2` `5e0550778`), and its `/data` is a tmpfs, so there is no host data directory to inherit.
 - **Not carried.** Mesh-wide handles (B6: a handle resolves on the node that stores it), blob
   streaming without the 32 KiB slices, and a per-project quota.
 
