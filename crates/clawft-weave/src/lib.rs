@@ -271,6 +271,8 @@ pub mod fleet_rpc;
 pub mod versions_rpc;
 #[cfg(feature = "ecc")]
 pub mod spatial_rpc;
+/// Spatial gates for Urth ingest (urth-spatial-checks skill).
+pub mod urth_gates;
 pub mod protocol;
 pub mod service_units;
 pub mod service_units_system;
