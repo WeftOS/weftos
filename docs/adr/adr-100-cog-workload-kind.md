@@ -146,3 +146,25 @@ container instances.
 The cog manifest body has an optional field `redistributable` (default false, omitted from the signed statement when false, so existing manifests and package ids are unchanged). A cog package is seeded, advertised and served over the swarm (ADR-099 section 6) only when its signer wrote `redistributable = true` and it has no Cognitum provenance (a `cognitum.*` attestation, or a release URL containing `cognitum` as a fail-closed backstop), which stays licence-gated whatever the flag says. `weaver workload pack` stamps such an attestation (`cognitum.install.provenance.v1`) when the cog dir's `provenance.json` says `trust = "cognitum-sha256"`, and refuses `--redistributable` for it. It finds `provenance.json` via `--provenance`, the cog dir, or beside a `--bin`. `--redistributable` also needs a provenance with a non-Cognitum trust whose sha256 matches a packed binary, unless the operator passes `--no-provenance-ok`. `weaver workload pack --redistributable` sets the flag. Our own weftos cogs need the flag to be shared.
 
 **Compatibility.** `CogPackageBody` rejects unknown fields, so a verifier built before this change (v0.8.1 nodes, the cog repository, Seed tooling) rejects a manifest signed with `redistributable = true`. In a mixed-version mesh, upgrade every verifier before packing with the flag. Manifests without it verify everywhere as before.
+
+## Amendment (2026-10-26, Proposed): memory is a reservation, enforced as resident memory
+
+Card 7306a144. `[resources].ram_mb` does two jobs today. The planner reserves it (`mem.system` free must cover it, section 2), and the native adapter also applies it as `RLIMIT_AS` to the cog and every child (`ProcLimits::for_ram_mb`, `workload_runtime/supervise.rs`). The second use is wrong for runtimes that reserve address space they never touch. GenieX (Go) dies at start under 256 MiB of address space ("failed to reserve page summary memory") while needing far less resident memory; any `mmap`-heavy or JIT child does the same. The workaround so far is to declare `ram_mb = 65536`, which makes the scheduling reservation absurd.
+
+**Proposal.** Split the one number by purpose.
+
+1. **Scheduling reservation.** `ram_mb` stays what the cog expects to hold resident (expected RSS). It is the planner's `MemoryDemand` and nothing else. No manifest change.
+2. **Enforcement, in order of preference per node:**
+   - cgroup v2 `memory.max` on a per-instance cgroup, where the host has a delegated cgroup subtree (systemd user or service units with `Delegate=yes`). The kernel counts resident and page-cache memory, kills the cog's group on excess, and reports it in `memory.events`.
+   - Otherwise an RSS watchdog in the supervisor: sample the process group's resident memory about once a second (`/proc/<pid>/status` `VmRSS` on Linux, `ps -o rss=` on macOS) and, above `ram_mb`, terminate the group and record `killed_for_memory` in the run evidence, which `weaver workload status` and the chain show as the stop reason.
+   - On Linux, `RLIMIT_DATA` at `ram_mb` as a backstop under the watchdog, with the caveat that it counts private writable mappings (reserved but untouched read-write arenas count; `PROT_NONE` reservations, which Go and most allocators use, do not).
+3. **`RLIMIT_AS` is opt-in only**, as a new optional manifest field `[resources] address_space_mb`, absent by default and omitted from the signed statement when absent (the same compatibility rule as `redistributable` above: verifiers built before it reject a manifest that sets it).
+4. **`HOME`.** Placed cogs get no `HOME` today (only `COGNITUM_*`, `COG_CSI_BIND`, `PATH`, `WEFTOS_COGBUS*`). Recommend the host sets `HOME` and `TMPDIR` to the instance data directory, which is already the working directory and `COGNITUM_DATA_DIR`. Runtimes that write caches under `$HOME` then stay inside the instance directory and are removed with it.
+
+**Acceptance (card).** A test cog that maps 4 GiB (`PROT_NONE`) but holds 50 MiB resident runs under `ram_mb = 256`; a cog that touches more than `ram_mb` resident is stopped and the stop is reported as a memory stop.
+
+**Needs an owner decision before it is built.**
+- Whether the watchdog kills (recommended) or only reports; a kill is a new way for a running cog to die.
+- The new optional manifest field changes the signed manifest schema and the mixed-version rule above.
+- cgroup v2 needs a delegated subtree on the node, so the unit files and the Terraform inventory that create the host service are part of the change, and Pi Zero and macOS nodes fall back to the watchdog.
+- The test for the 4 GiB mapping only exercises the kernel path on Linux. macOS never enforced `RLIMIT_AS`, so it would pass there for the wrong reason; it has to run on the arm64 VM or a Linux host.
