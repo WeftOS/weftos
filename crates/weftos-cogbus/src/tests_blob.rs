@@ -244,6 +244,7 @@ fn several_instances_of_one_project_share_its_quota() {
     assert!(s.begin(0, "y", None, "image/png", 100, None).is_ok(), "nor the node bucket");
 }
 
+#[cfg(unix)]
 #[test]
 fn an_existing_blob_directory_is_made_private() {
     use std::os::unix::fs::PermissionsExt;

@@ -153,6 +153,11 @@ impl Streams {
     pub(crate) fn new(_cfg: StreamConfig) -> Self {
         Self
     }
+
+    /// Stream readers held by a connection (none without rings).
+    pub(crate) fn reader_count(&self, _conn: u64) -> usize {
+        0
+    }
 }
 
 #[cfg(not(unix))]

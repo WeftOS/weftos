@@ -157,18 +157,27 @@ fn meta_path(dir: &Path, hash: &str) -> PathBuf {
     dir.join(format!("{hash}.meta"))
 }
 
+/// Create `dir` readable by this user only. A directory that already existed
+/// keeps its mode otherwise, and the blobs inside must not be readable by
+/// other cog uids. Without unix permissions (Windows) the user profile's own
+/// access rules apply.
+#[cfg(unix)]
+fn private_dir(dir: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+}
+
+#[cfg(not(unix))]
+fn private_dir(dir: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)
+}
+
 impl BlobStore {
     /// Open (creating) the store in `dir`: blobs still alive at `now_ms` are
     /// found again, expired or damaged ones and stale uploads are removed.
     pub fn open(dir: &Path, cfg: BlobConfig, now_ms: u64) -> std::io::Result<Self> {
-        use std::os::unix::fs::DirBuilderExt;
-        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
-        // A directory that already existed keeps its mode; the blobs inside
-        // must not be readable by other cog uids.
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
-        }
+        private_dir(dir)?;
         let mut inner = Inner::default();
         for e in std::fs::read_dir(dir)? {
             let p = e?.path();
