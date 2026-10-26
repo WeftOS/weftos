@@ -1,7 +1,8 @@
 # ADR-079: Urth — multi-scale digital twin, sparse-first (Snow Crash north star)
 
 **Date**: 2026-07-30  
-**Status**: Accepted (vision / direction)  
+**Status**: Accepted (vision / direction); R1/R2 first live region published (2026-10-25)  
+**Updated**: 2026-10-25  
 **Deciders**: product + spatial (owner: WeftOS world is not only rooms — we build toward a shared, navigable **Urth** that densifies where sensors and people care)  
 **Depends-On**: ADR-056 (BVH), ADR-078 (structure from capture), free-form quilt, multi-cam  
 **Relates-To**: ADR-077 (edge capture), LeWM latent world models (compose later), mesh (ADR-026), **ADR-095** / **Graph Views** (multi-scale association is purpose-scoped fusion Views per region/LOD — not one planet-wide unbounded graph; DiskANN for embedding volume)
@@ -131,7 +132,7 @@ Definition: `.grok/agents/world-builder.md` (and Claude-compatible twin as neede
 | Phase | Plane | Work |
 |-------|-------|------|
 | **E0** | **WEFT-713** | This ADR + urth-digital-twin.md + world-builder agent |
-| **E1** | *(later)* | Region hierarchy: urth → site → room IDs + ECEF↔ENU |
+| **E1** | *(later)* | Region hierarchy: urth → site → room IDs + ECEF↔ENU. **Slice landed 2026-10-25 (R1/R2):** one room-level region leaf (`region/urth/meso/test-room`, a tape-measured `shell_measure`, proof `MEASURED`) publishes through `ecc.spatial.region.publish`, is fetched by region id with `ecc.spatial.region.get`, and answers `ecc.spatial.query` (`with_payload`) with its provenance. Still open: the site anchor / `T_ecef_local` (the leaf says `unanchored`), the urth → site hierarchy, and chain checkpointing between clean shutdowns. **Restart (2026-10-26):** at boot the kernel rebuilds the BVH from the `spatial_bvh` events on the loaded chain (`SpatialService::restore_from_chain`, before the chain sink attaches so nothing is appended twice); the region comes back by id with its provenance (`published_region_survives_daemon_restart`). The chain is written at clean shutdown, so a crash loses events since the last checkpoint. Test: `clawft-weave/tests/spatial_cli_e2e.rs`. |
 | **E2** | *(later)* | OSM/DEM basemap ingest → coarse WM_* leaves for one pilot city/site |
 | **E3** | *(later)* | Attach free-form quilts under site regions |
 | **E4** | *(later)* | Multi-node contribution + governance |

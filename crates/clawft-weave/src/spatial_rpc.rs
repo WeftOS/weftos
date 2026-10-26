@@ -160,6 +160,38 @@ pub async fn handle(method: &str, params: &Value, kernel: &KernelRef) -> Respons
             })
         }
         "ecc.spatial.query" => query(params, bvh),
+        "ecc.spatial.region.publish" => {
+            let (leaf, region_id) = match region_leaf(params) {
+                Ok(v) => v,
+                Err(e) => return Response::error(e),
+            };
+            let b = branch(params, "branch");
+            bvh.with_store(|s| {
+                match find_region(s, b, &region_id) {
+                    Ok(Some(id)) => return Response::error(format!("region {region_id} already published as leaf {}", id.0)),
+                    Ok(None) => {}
+                    Err(e) => return Response::error(e),
+                }
+                match s.insert_on(b, leaf) {
+                    Ok(id) => Response::success(json!({ "region_id": region_id, "leaf_id": id.0, "branch": b.0, "epoch": s.epoch() })),
+                    Err(e) => Response::error(e.to_string()),
+                }
+            })
+        }
+        "ecc.spatial.region.get" => {
+            let Some(region_id) = str_param(params, "region_id") else {
+                return Response::error("missing region_id");
+            };
+            let b = branch(params, "branch");
+            bvh.with_store(|s| match find_region(s, b, region_id) {
+                Ok(Some(id)) => match s.get_on(b, id) {
+                    Some(leaf) => Response::success(json!({ "branch": b.0, "leaf": leaf_json(id, leaf) })),
+                    None => Response::error(format!("no region {region_id} on branch {}", b.0)),
+                },
+                Ok(None) => Response::error(format!("no region {region_id} on branch {}", b.0)),
+                Err(e) => Response::error(e),
+            })
+        }
         "ecc.spatial.branch.derive" => {
             let parent = branch(params, "parent");
             let meta = BranchMeta {
@@ -238,6 +270,88 @@ fn build_leaf(p: &Value) -> Result<Leaf, String> {
     Ok(Leaf::new(bound, identity, tag, payload))
 }
 
+/// Region id shape: `region/urth/...`, the ids the evidence contract allows (ADR-111 §1.1).
+fn valid_region_id(id: &str) -> bool {
+    id.starts_with("region/urth/")
+        && id.len() <= 128
+        && id.bytes().all(|c| c.is_ascii_alphanumeric() || b"._:/-@".contains(&c))
+}
+
+fn finite_vec3(v: &Value, what: &str) -> Result<[f64; 3], String> {
+    let a = v.as_array().filter(|a| a.len() == 3).ok_or_else(|| format!("{what}: expected [x,y,z]"))?;
+    let mut out = [0.0; 3];
+    for (o, x) in out.iter_mut().zip(a) {
+        let n = x.as_f64().filter(|n| n.is_finite() && n.abs() <= 1000.0).ok_or_else(|| format!("{what}: need finite numbers within 1000 m"))?;
+        *o = n;
+    }
+    Ok(out)
+}
+
+/// Build the region leaf from a `spatial.evidence.v1` `shell_measure` record (ADR-111).
+///
+/// Only the measured interior box is claimed. The payload says in so many words that everything
+/// else (contents of the room, anything outside it) is unobserved, that the region has no site
+/// anchor yet, and that appearance is never metric truth (ADR-079 §2).
+fn region_leaf(p: &Value) -> Result<(Leaf, String), String> {
+    let ev = p.get("evidence").ok_or("missing evidence (a shell_measure record)")?;
+    let text = |k: &str| ev.get(k).and_then(Value::as_str).ok_or_else(|| format!("evidence.{k} missing"));
+    if text("schema")? != "spatial.evidence.v1" || text("type")? != "shell_measure" {
+        return Err("evidence must be a spatial.evidence.v1 shell_measure".into());
+    }
+    if text("frame")? != "room_enu" {
+        return Err("evidence.frame must be room_enu; refusing to guess another frame".into());
+    }
+    let region_id = text("region")?.to_owned();
+    if !valid_region_id(&region_id) {
+        return Err(format!("evidence.region {region_id:?} is not a region/urth/... id"));
+    }
+    let unc = ev.get("uncertainty_m").and_then(Value::as_f64).filter(|u| *u > 0.0 && *u <= 100.0);
+    let unc = unc.ok_or("evidence.uncertainty_m must be in (0, 100]")?;
+    let prov = ev.get("provenance").ok_or("evidence.provenance missing")?;
+    let proof = prov.get("proof").and_then(Value::as_str).unwrap_or("");
+    if !matches!(proof, "MEASURED" | "CODE" | "SYNTHETIC") {
+        return Err(format!("provenance.proof must be MEASURED, CODE or SYNTHETIC, got {proof:?}"));
+    }
+    let (lo, hi) = (finite_vec3(ev.get("min").unwrap_or(&Value::Null), "min")?, finite_vec3(ev.get("max").unwrap_or(&Value::Null), "max")?);
+    if (0..3).any(|i| lo[i] >= hi[i]) {
+        return Err("shell min must be below max on every axis".into());
+    }
+    let bound = Aabb::from_min_max(Vec3::new(lo[0] as f32, lo[1] as f32, lo[2] as f32), Vec3::new(hi[0] as f32, hi[1] as f32, hi[2] as f32));
+    let payload = json!({
+        "kind": "urth.region.v1",
+        "region_id": region_id,
+        "frame": "room_enu",
+        "frame_def": "right-handed ENU, origin at the south-west floor corner, x east, y north, z up, metres",
+        "extent": { "min": lo, "max": hi, "what": "measured interior box of the room shell" },
+        "observed": ["room_shell_interior_box"],
+        "unobserved": "everything outside the box, and every object, surface and occupancy inside it",
+        "anchor": { "status": "unanchored", "t_ecef_local": null },
+        "metric_truth": proof == "MEASURED",
+        "appearance_is_metric": false,
+        "provenance": {
+            "schema": "spatial.evidence.v1",
+            "type": "shell_measure",
+            "proof": proof,
+            "uncertainty_m": unc,
+            "receipt": prov.get("receipt"),
+            "producer": prov.get("producer"),
+            "source_id": ev.get("source_id"),
+            "t_ns": ev.get("t_ns"),
+        },
+    });
+    let bytes = serde_json::to_vec(&payload).map_err(|e| format!("payload: {e}"))?;
+    Ok((Leaf::new(bound, IdentityKind::Object, tags::WM_VOLUME, bytes), region_id))
+}
+
+/// Leaf id of the region record with this id on `b`, if any.
+fn find_region(s: &BvhStore, b: BranchId, region_id: &str) -> Result<Option<LeafId>, String> {
+    let leaves = s.snapshot_leaves(b).map_err(|e| e.to_string())?;
+    Ok(leaves.into_iter().find_map(|(id, l)| {
+        let v: Value = serde_json::from_slice(&l.payload).ok()?;
+        (v.get("kind")?.as_str()? == "urth.region.v1" && v.get("region_id")?.as_str()? == region_id).then_some(id)
+    }))
+}
+
 fn query(p: &Value, bvh: &clawft_kernel::spatial_bvh::BvhBackend) -> Response {
     let kind = str_param(p, "kind").unwrap_or("aabb");
     let b = branch(p, "branch");
@@ -246,6 +360,7 @@ fn query(p: &Value, bvh: &clawft_kernel::spatial_bvh::BvhBackend) -> Response {
         Err(e) => return Response::error(e),
     };
     let limit = p.get("limit").and_then(Value::as_u64).unwrap_or(0) as usize;
+    let with_payload = p.get("with_payload").and_then(Value::as_bool).unwrap_or(false);
     let want = |k: &str| str_param(p, k).ok_or_else(|| format!("missing {k}"));
     let point = |k: &str| want(k).and_then(parse_vec3);
     bvh.with_store(|s: &mut BvhStore| {
@@ -285,6 +400,9 @@ fn query(p: &Value, bvh: &clawft_kernel::spatial_bvh::BvhBackend) -> Response {
                 }
                 if let Some(l) = s.get_on(b, id) {
                     h["tag"] = json!(tag_name(l.tag));
+                    if with_payload {
+                        h["leaf"] = leaf_json(id, l);
+                    }
                 }
                 h
             })
