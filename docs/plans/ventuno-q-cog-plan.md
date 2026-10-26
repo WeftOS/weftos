@@ -279,6 +279,9 @@ guide (ADR-104), because it replaces whatever App Lab app is on the MCU.
 | `rf-census` | consumer | — | device-census readings (the SDR sensing flagship) |
 | `display` | consumer (outward) | — | renders a dashboard on HDMI |
 
+The SDR side (Pluto bench results, the separate receive and transmit cogs, header wiring to the
+MCU) is planned in [`pluto-sdr-cogs-plan.md`](pluto-sdr-cogs-plan.md) (2026-10-26).
+
 ### 5.3 Inference (through the NPU service, or CPU where measured better)
 
 | Cog | Input | Output | Runs on | Measured |
@@ -362,7 +365,7 @@ things around" and is worth an ADR of its own before code.
 - NPU memory: large models cannot co-reside (E4B already OOMs); residency
   policy has to be explicit.
 - Power: camera + SDR + NPU on the 7 V input can exceed the connector rating.
-- Pluto over USB 2.0 sustains roughly 4–6 MS/s; full 20 MHz channels need
+- Pluto over USB 2.0 sustains about 7.5 MS/s (measured 2026-10-26); full 20 MHz channels need
   decimation or burst capture.
 - Model and brick licences are unchecked; nothing is redistributed until each
   is cleared.
