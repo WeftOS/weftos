@@ -151,8 +151,10 @@ async fn place_for(rig: &Rig, svc: &Arc<WorkloadHostService>, project: Option<&s
     let addr = conn.register_local("restart-node", svc.clone());
     let (plane, _) = controller(&ctl_key(), conn);
     plane.add_target(&addr, TrustTier::Pinned).await.unwrap();
-    let mut order = mode_order(&rig.pkg, crate::workload_runtime::RunMode::Listener, None);
-    order.project_id = project.map(String::from);
+    let order = super::plane_place::PlaceOrder {
+        project_id: project.map(String::from),
+        ..mode_order(&rig.pkg, crate::workload_runtime::RunMode::Listener, None)
+    };
     let r = plane.place(&order).await.unwrap();
     let iid = r.placed.expect(&r.explain).instance_id;
     (iid, plane)
