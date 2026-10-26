@@ -243,3 +243,47 @@ async fn a_fresh_placement_clears_its_id_from_the_departed_list() {
     let rows = r.plane.call(&r.a.id, super::msg::method::STATUS, None, body()).await.unwrap();
     assert!(!departed(&rows, &again.instance_id), "placed again: no longer departed");
 }
+
+/// Card b71cd973: the controller judged a placement on the node's facts from before an
+/// unload, so an equal-size workload was refused until the facts aged out.
+#[tokio::test]
+async fn an_unload_refreshes_the_nodes_memory_so_an_equal_workload_places_at_once() {
+    use crate::node_facts_advert::sign_node_facts;
+    use crate::node_registry::node_id_from_pubkey;
+    use clawft_types::placement::NodeFacts;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let pkg = package_toml(tmp.path(), "mem-cog", &[(arch(), "#!/bin/sh\nexec sleep 60\n")], None, "\n[resources]\nram_mb = 600\n");
+    let key = SigningKey::from_bytes(&[10; 32]);
+    let mem = |free: i64| {
+        let mut caps = board_caps("pi5");
+        caps.retain(|c| c.id.as_str() != "mem.system");
+        caps.push(cap("mem.system").with_attr("free", free << 20));
+        caps
+    };
+    // Only 300 MiB free when the controller first looks (another workload held the rest).
+    let a = host_node(31, mem(300), true, &key);
+    let node_key = SigningKey::from_bytes(&[31; 32]);
+    let net = Killable::new();
+    let addr = net.serve("a", a.svc.clone());
+    let (plane, _chain) = controller(&key, net.clone());
+    plane.add_target(&addr, TrustTier::Paired).await.unwrap();
+
+    let order = mode_order(&pkg, RunMode::Listener, Some(&a.id));
+    // A small workload is the one we place and unload; it needs a package of its own.
+    let small = package_toml(tmp.path().join("small").as_path(), "small-cog", &[(arch(), "#!/bin/sh\nexec sleep 60\n")], None, "\n[resources]\nram_mb = 100\n");
+    let placed = plane.place(&mode_order(&small, RunMode::Listener, Some(&a.id))).await.unwrap().placed.unwrap();
+    // Refused on the stale 300 MiB.
+    assert!(plane.place(&order).await.unwrap().placed.is_none(), "600 MiB does not fit 300 MiB free");
+
+    // The node now has 1000 MiB free (the host published new facts, seq 2).
+    let now = chrono::Utc::now().timestamp() as u64;
+    let id = node_id_from_pubkey(&node_key.verifying_key().to_bytes());
+    let mut f = NodeFacts::new(id, now, 600, 2);
+    f.capabilities = mem(1000);
+    a.svc.set_facts(sign_node_facts(&f, &node_key).unwrap());
+
+    plane.instance(crate::workload_ctl::msg::method::UNLOAD, &placed.instance_id).await.unwrap();
+    let again = plane.place(&order).await.unwrap();
+    assert!(again.placed.is_some(), "{}", again.explain);
+}
