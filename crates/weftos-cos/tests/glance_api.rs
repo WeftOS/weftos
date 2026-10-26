@@ -156,5 +156,5 @@ async fn unknown_card_id_says_no_such_card() {
     let r = reqwest::Client::new().post(format!("{base}/v1/cos/answer")).json(&json!({"kind": "answer", "id": "0123abcd", "value": "works"})).send().await.unwrap();
     assert_eq!(r.status(), 400);
     let body: Value = r.json().await.unwrap();
-    assert_eq!(body["error"].as_str().unwrap_or_default().contains("no such card (already resolved or expired)"), true, "{body}");
+    assert!(body["error"].as_str().unwrap_or_default().contains("no such card (already resolved or expired)"), "{body}");
 }
