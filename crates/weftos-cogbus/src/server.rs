@@ -1,7 +1,10 @@
 //! The broker's Unix socket (ADR-122 section 4).
 //!
-//! The socket is created mode 0660 (owner and group; assigning the `cogbus`
-//! group is the installer's job, not done here). One task per connection:
+//! The socket is created mode 0660 (owner and group), never wider. When the
+//! caller names a group gid ([`ServeOptions::group`]) it is made the socket's
+//! group if the process may (`root:cogbus 0660`); otherwise the group stays the
+//! daemon's own and [`SocketReport`] says so. Creating the group and putting
+//! cog uids in it is the owner-run installer's job. One task per connection:
 //!
 //! - the first frame must be `hello` with a registered token, within
 //!   [`HELLO_TIMEOUT`]; when the instance was registered with a uid, the
@@ -37,9 +40,32 @@ pub const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 /// Time a started frame (read or write) has to complete.
 pub const FRAME_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// How the socket is bound.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ServeOptions {
+    /// Group to give the socket (gid of `cogbus`), when it exists.
+    pub group: Option<u32>,
+}
+
+/// What the bound socket ended up as, as `stat` sees it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SocketReport {
+    /// Permission bits (always 0o660).
+    pub mode: u32,
+    /// Owner uid.
+    pub uid: u32,
+    /// Group gid.
+    pub gid: u32,
+    /// The requested group is now the socket's group.
+    pub group_applied: bool,
+    /// Why the group was not applied (none requested, or the chown failed).
+    pub note: Option<String>,
+}
+
 /// The listening socket. Dropping it stops accepting and removes the file.
 pub struct ServerHandle {
     path: PathBuf,
+    report: SocketReport,
     task: JoinHandle<()>,
 }
 
@@ -47,6 +73,11 @@ impl ServerHandle {
     /// Socket path.
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Mode, owner and group of the socket file.
+    pub fn report(&self) -> &SocketReport {
+        &self.report
     }
 }
 
@@ -60,6 +91,15 @@ impl Drop for ServerHandle {
 /// Bind `path` (replacing a stale socket file, never another kind of file)
 /// and serve `broker` on it.
 pub async fn serve(broker: Arc<Broker>, path: &Path) -> std::io::Result<ServerHandle> {
+    serve_with(broker, path, ServeOptions::default()).await
+}
+
+/// [`serve`] with the socket's group.
+pub async fn serve_with(
+    broker: Arc<Broker>,
+    path: &Path,
+    opts: ServeOptions,
+) -> std::io::Result<ServerHandle> {
     if let Ok(m) = std::fs::symlink_metadata(path) {
         if !m.file_type().is_socket() {
             return Err(std::io::Error::new(
@@ -71,6 +111,29 @@ pub async fn serve(broker: Arc<Broker>, path: &Path) -> std::io::Result<ServerHa
     }
     let listener = UnixListener::bind(path)?;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o660))?;
+    let note = match opts.group {
+        None => Some("no cogbus group requested".to_string()),
+        Some(gid) => match std::os::unix::fs::chown(path, None, Some(gid)) {
+            Ok(()) => None,
+            Err(e) => Some(format!("cannot give the socket to gid {gid}: {e}")),
+        },
+    };
+    // Re-assert the mode after the chown: it never widens.
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o660))?;
+    let report = {
+        use std::os::unix::fs::MetadataExt;
+        let m = std::fs::symlink_metadata(path)?;
+        SocketReport {
+            mode: m.mode() & 0o7777,
+            uid: m.uid(),
+            gid: m.gid(),
+            group_applied: opts.group.is_some_and(|g| g == m.gid()),
+            note,
+        }
+    };
+    if let (Some(n), Some(_)) = (&report.note, opts.group) {
+        tracing::warn!(target: "cogbus", reason = %n, "cogbus socket keeps the daemon's group");
+    }
     let task = tokio::spawn(async move {
         loop {
             match listener.accept().await {
@@ -87,6 +150,7 @@ pub async fn serve(broker: Arc<Broker>, path: &Path) -> std::io::Result<ServerHa
     });
     Ok(ServerHandle {
         path: path.to_path_buf(),
+        report,
         task,
     })
 }

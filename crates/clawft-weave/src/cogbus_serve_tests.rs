@@ -38,6 +38,7 @@ fn registration(contract: &HostContract, uid: Option<u32>) -> CogbusRegistration
         controller_node: "ctl".into(),
         token: contract.token.clone(),
         uid,
+        isolation: clawft_kernel::workload_ctl::host_cogbus::Isolation::SharedUid,
         outputs: spec.outputs,
         inputs: spec.inputs,
     }

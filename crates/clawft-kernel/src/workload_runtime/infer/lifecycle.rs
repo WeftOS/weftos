@@ -98,6 +98,7 @@ fn spawn(rt: &InferRuntime, inst: &mut Instance) -> Result<(), RuntimeError> {
         limits: unlimited(),
         output_limit: OUTPUT_LIMIT,
         run_as,
+        groups: Vec::new(),
     })?);
     *wanted = true;
     *exited_at = None;

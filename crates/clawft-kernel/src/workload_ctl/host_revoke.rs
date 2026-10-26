@@ -85,7 +85,8 @@ impl WorkloadHostService {
             // what was asked for.
             let gone = matches!(r, Ok(()) | Err(RuntimeError::UnknownInstance(_)));
             if gone {
-                self.instances.lock().await.remove(&id);
+                let removed = self.instances.lock().await.remove(&id);
+                self.bus_forget(removed.as_ref().and_then(|p| p.cogbus.as_ref()));
                 self.note_departed(&id, "revoked");
             }
             out.push(ForcedTeardown {

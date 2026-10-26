@@ -129,7 +129,8 @@ impl WorkloadHostService {
                 let h = p.handle.clone();
                 let r = host.unload(h).await.map(|_| json!({ "unloaded": iid }));
                 if r.is_ok() {
-                    map.remove(&iid);
+                    let removed = map.remove(&iid);
+                    self.bus_forget(removed.as_ref().and_then(|p| p.cogbus.as_ref()));
                     self.note_departed(&iid, "unloaded");
                 }
                 r

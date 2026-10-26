@@ -22,7 +22,30 @@ use clawft_types::secret::SecretString;
 use super::host_service::WorkloadHostService;
 use super::msg::{Refusal, RefusalCode};
 use crate::workload_runtime::cog_decl::{InputDecl, OutputDecl};
-use crate::workload_runtime::{HostContract, VerifiedWorkload, WorkloadSource};
+use crate::workload_runtime::{CogIdentity, HostContract, VerifiedWorkload, WorkloadSource};
+
+/// Whether a cog's uid is its own (ADR-122 gap 2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Isolation {
+    /// The cog runs under a uid no other cog and not the daemon has: the
+    /// broker's peer check tells it apart from every other cog.
+    PerCogUid,
+    /// The cog runs under the daemon's (or the adapter's) uid, shared with
+    /// every other cog on that route. The peer check proves only "a process
+    /// of that user".
+    SharedUid,
+}
+
+impl Isolation {
+    /// The word shown in `cogbus list` and the report.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Isolation::PerCogUid => "per-cog-uid",
+            Isolation::SharedUid => "shared-uid",
+        }
+    }
+}
 
 /// How an instance on one route reaches the broker.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,6 +54,28 @@ pub struct CogbusAttach {
     pub socket: String,
     /// Uid the route starts cogs as; the broker checks the peer against it.
     pub uid: Option<u32>,
+    /// The identity allocated for this instance; `None` keeps the adapter's.
+    pub identity: Option<CogIdentity>,
+    /// Whether `uid` is the instance's own.
+    pub isolation: Isolation,
+    /// `require_cog_uid` is on: a cog that uses the bus must not share a uid.
+    pub refuse_shared: bool,
+    /// Why the instance is not isolated, when it is not (shown, not parsed).
+    pub note: Option<String>,
+}
+
+impl CogbusAttach {
+    /// A route whose cogs all run as `uid`.
+    pub fn shared(socket: impl Into<String>, uid: u32) -> Self {
+        Self {
+            socket: socket.into(),
+            uid: Some(uid),
+            identity: None,
+            isolation: Isolation::SharedUid,
+            refuse_shared: false,
+            note: None,
+        }
+    }
 }
 
 /// What the broker is told about one placed instance.
@@ -49,6 +94,8 @@ pub struct CogbusRegistration {
     pub token: SecretString,
     /// Uid it runs as, if known.
     pub uid: Option<u32>,
+    /// Whether that uid is the instance's own.
+    pub isolation: Isolation,
     /// Manifest `[[outputs]]`.
     pub outputs: Vec<OutputDecl>,
     /// Manifest `[[inputs]]`.
@@ -64,13 +111,32 @@ pub trait CogbusRegistrar: Send + Sync {
     fn register(&self, r: &CogbusRegistration) -> Result<(), String>;
     /// Stop accepting it and close its connections.
     fn revoke(&self, instance_id: &str);
+    /// The instance is gone for good (unloaded, torn down): free whatever
+    /// `attach` allocated for it. A stop is not this; the instance may start
+    /// again under the same uid.
+    fn release(&self, _instance_id: &str) {}
+    /// A placement that took an identity from `attach` never registered:
+    /// give it back.
+    fn abandon(&self, _uid: u32) {}
 }
 
-/// Attached at place, before the instance id is known.
+/// Attached at place, before the instance id is known. Dropped unconsumed
+/// (a load that failed), it gives the allocated identity back.
 pub(super) struct CogbusPending {
     uid: Option<u32>,
+    isolation: Isolation,
     outputs: Vec<OutputDecl>,
     inputs: Vec<InputDecl>,
+    bus: Arc<dyn CogbusRegistrar>,
+    owns_identity: bool,
+}
+
+impl Drop for CogbusPending {
+    fn drop(&mut self) {
+        if let (true, Some(uid)) = (self.owns_identity, self.uid) {
+            self.bus.abandon(uid);
+        }
+    }
 }
 
 impl WorkloadHostService {
@@ -90,22 +156,42 @@ impl WorkloadHostService {
         route: &str,
         w: &VerifiedWorkload,
         contract: HostContract,
-    ) -> (HostContract, Option<CogbusPending>) {
+    ) -> Result<(HostContract, Option<CogbusPending>), Refusal> {
         let (Some(bus), WorkloadSource::SignedPackage(p)) = (self.cogbus.get(), &w.source) else {
-            return (contract, None);
+            return Ok((contract, None));
         };
         if w.kind != crate::workload_pkg::KIND_COG {
-            return (contract, None);
+            return Ok((contract, None));
         }
         let Some(a) = bus.attach(route) else {
-            return (contract, None);
+            return Ok((contract, None));
         };
+        let owns_identity = a.identity.is_some();
+        // From here the pending guard owns the identity: every return below
+        // (and a failed load later) hands it back.
         let pending = CogbusPending {
             uid: a.uid,
+            isolation: a.isolation,
             outputs: p.spec.outputs.clone(),
             inputs: p.spec.inputs.clone(),
+            bus: bus.clone(),
+            owns_identity,
         };
-        (contract.with_cogbus(a.socket), Some(pending))
+        let uses_bus = !pending.outputs.is_empty() || !pending.inputs.is_empty();
+        if a.isolation == Isolation::SharedUid && a.refuse_shared && uses_bus {
+            return Err(Refusal::new(
+                RefusalCode::Admission,
+                format!(
+                    "cogbus: require_cog_uid is on and this cog would share a uid ({})",
+                    a.note.as_deref().unwrap_or("no per-cog uid on this daemon")
+                ),
+            ));
+        }
+        let mut contract = contract.with_cogbus(a.socket);
+        if let Some(id) = a.identity {
+            contract = contract.with_run_as(id);
+        }
+        Ok((contract, Some(pending)))
     }
 
     /// Register a loaded instance.
@@ -117,7 +203,7 @@ impl WorkloadHostService {
         (project_id, controller_node): (Option<String>, &str),
         contract: &HostContract,
     ) -> Result<Option<CogbusRegistration>, Refusal> {
-        let (Some(p), Some(bus)) = (pending, self.cogbus.get()) else {
+        let (Some(mut p), Some(bus)) = (pending, self.cogbus.get()) else {
             return Ok(None);
         };
         let r = CogbusRegistration {
@@ -127,12 +213,22 @@ impl WorkloadHostService {
             controller_node: controller_node.to_string(),
             token: contract.token.clone(),
             uid: p.uid,
-            outputs: p.outputs,
-            inputs: p.inputs,
+            isolation: p.isolation,
+            outputs: std::mem::take(&mut p.outputs),
+            inputs: std::mem::take(&mut p.inputs),
         };
+        // A refused registration drops `p` armed: the identity goes back.
         bus.register(&r)
             .map_err(|e| Refusal::new(RefusalCode::Runtime, format!("cogbus: {e}")))?;
+        p.owns_identity = false;
         Ok(Some(r))
+    }
+
+    /// The instance is gone for good: free its uid.
+    pub(super) fn bus_forget(&self, r: Option<&CogbusRegistration>) {
+        if let (Some(r), Some(bus)) = (r, self.cogbus.get()) {
+            bus.release(&r.instance_id);
+        }
     }
 
     /// Accept the instance again (start after stop). Registering an already
