@@ -299,6 +299,11 @@ async fn region_publish_get_and_spatial_query_carry_provenance() {
     let pubd = rpc(&sock, "ecc.spatial.region.publish", serde_json::json!({ "evidence": evidence })).await;
     assert_eq!(pubd["region_id"], region);
     let leaf_id = pubd["leaf_id"].as_u64().unwrap();
+    // Gates ran: nothing refused; the only finding is the draft "no site anchor" warning.
+    assert_eq!(pubd["gates"]["refused"], false);
+    let f = pubd["gates"]["findings"].as_array().unwrap();
+    assert_eq!(f.len(), 1);
+    assert_eq!((f[0]["gate"].as_str(), f[0]["severity"].as_str(), f[0]["draft_policy"].as_bool()), (Some("anchor"), Some("warn"), Some(true)));
 
     // Retrieve by region id.
     let got = rpc(&sock, "ecc.spatial.region.get", serde_json::json!({ "region_id": region })).await;

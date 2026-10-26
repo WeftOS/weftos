@@ -161,7 +161,7 @@ pub async fn handle(method: &str, params: &Value, kernel: &KernelRef) -> Respons
         }
         "ecc.spatial.query" => query(params, bvh),
         "ecc.spatial.region.publish" => {
-            let (leaf, region_id) = match region_leaf(params) {
+            let (leaf, region_id, gates) = match region_leaf(params) {
                 Ok(v) => v,
                 Err(e) => return Response::error(e),
             };
@@ -173,7 +173,7 @@ pub async fn handle(method: &str, params: &Value, kernel: &KernelRef) -> Respons
                     Err(e) => return Response::error(e),
                 }
                 match s.insert_on(b, leaf) {
-                    Ok(id) => Response::success(json!({ "region_id": region_id, "leaf_id": id.0, "branch": b.0, "epoch": s.epoch() })),
+                    Ok(id) => Response::success(json!({ "region_id": region_id, "leaf_id": id.0, "branch": b.0, "epoch": s.epoch(), "gates": gates })),
                     Err(e) => Response::error(e.to_string()),
                 }
             })
@@ -292,7 +292,7 @@ fn finite_vec3(v: &Value, what: &str) -> Result<[f64; 3], String> {
 /// Only the measured interior box is claimed. The payload says in so many words that everything
 /// else (contents of the room, anything outside it) is unobserved, that the region has no site
 /// anchor yet, and that appearance is never metric truth (ADR-079 §2).
-fn region_leaf(p: &Value) -> Result<(Leaf, String), String> {
+fn region_leaf(p: &Value) -> Result<(Leaf, String, Value), String> {
     let ev = p.get("evidence").ok_or("missing evidence (a shell_measure record)")?;
     let text = |k: &str| ev.get(k).and_then(Value::as_str).ok_or_else(|| format!("evidence.{k} missing"));
     if text("schema")? != "spatial.evidence.v1" || text("type")? != "shell_measure" {
@@ -315,6 +315,22 @@ fn region_leaf(p: &Value) -> Result<(Leaf, String), String> {
     let (lo, hi) = (finite_vec3(ev.get("min").unwrap_or(&Value::Null), "min")?, finite_vec3(ev.get("max").unwrap_or(&Value::Null), "max")?);
     if (0..3).any(|i| lo[i] >= hi[i]) {
         return Err("shell min must be below max on every axis".into());
+    }
+    // Urth spatial gates (urth-spatial-checks): the shell is a room (L4) in room_enu with no anchor yet.
+    let corners = [lo, hi];
+    let report = crate::urth_gates::check_layer(&crate::urth_gates::Layer {
+        name: &region_id,
+        frame: crate::urth_gates::Frame::EnuLocal,
+        lod: crate::urth_gates::Lod::L4,
+        points: &corners,
+        declared_bounds: Some([lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]]),
+        anchor: None,
+        nulls: 0,
+        invalid: 0,
+        nulls_handled: false,
+    });
+    if report.refused() {
+        return Err(report.refusal_text());
     }
     let bound = Aabb::from_min_max(Vec3::new(lo[0] as f32, lo[1] as f32, lo[2] as f32), Vec3::new(hi[0] as f32, hi[1] as f32, hi[2] as f32));
     let payload = json!({
@@ -340,7 +356,7 @@ fn region_leaf(p: &Value) -> Result<(Leaf, String), String> {
         },
     });
     let bytes = serde_json::to_vec(&payload).map_err(|e| format!("payload: {e}"))?;
-    Ok((Leaf::new(bound, IdentityKind::Object, tags::WM_VOLUME, bytes), region_id))
+    Ok((Leaf::new(bound, IdentityKind::Object, tags::WM_VOLUME, bytes), region_id, report.to_json()))
 }
 
 /// Leaf id of the region record with this id on `b`, if any.
