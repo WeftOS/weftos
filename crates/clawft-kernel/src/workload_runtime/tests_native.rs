@@ -358,7 +358,7 @@ async fn a_directory_with_data_and_no_marker_is_refused_for_an_owned_instance() 
     std::fs::create_dir_all(dir.join("data")).unwrap();
     std::fs::write(dir.join("data/old"), b"x").unwrap();
     let err = rt.load(&fx.workload, &c).await.unwrap_err();
-    assert!(matches!(&err, RuntimeError::Backend(m) if m.contains("no owner marker")), "{err}");
+    assert!(matches!(&err, RuntimeError::Backend(m) if m.contains("owner marker")), "{err}");
     assert!(dir.join("data/old").exists());
     // a directory with no data at all (a stage that stopped early) is simply taken
     std::fs::remove_dir_all(dir.join("data")).unwrap();
@@ -384,4 +384,87 @@ async fn the_same_owner_keeps_its_data_and_the_marker_names_it_in_full() {
     let h2 = rt2.load(&fx.workload, &c).await.unwrap();
     assert_eq!(std::fs::read(dir.join("data/mine")).unwrap(), b"kept");
     rt2.unload(h2).await.unwrap();
+}
+
+#[test]
+fn a_crash_after_the_directory_was_cleared_leaves_a_marker_and_the_next_stage_keeps_the_data() {
+    use super::native::{CRASH_AFTER_CLEAR, OWNER_MARKER, owner_hash, stage};
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("inst");
+    let prog = dir.join("cog-x");
+    let owner = "project=A\ncontroller=ctl";
+    stage(&dir, &prog, b"#!/bin/sh\n", None, Some(owner)).unwrap();
+    std::fs::write(dir.join("data/state"), b"kept").unwrap();
+
+    // The daemon dies right after the old contents were cleared.
+    CRASH_AFTER_CLEAR.with(|c| c.set(true));
+    assert!(stage(&dir, &prog, b"#!/bin/sh\n", None, Some(owner)).is_err());
+    assert_eq!(
+        std::fs::read_to_string(dir.join(OWNER_MARKER)).unwrap().trim(),
+        owner_hash(owner),
+        "the matching marker was not deleted"
+    );
+    assert!(!prog.exists(), "the binary was cleared");
+    assert_eq!(std::fs::read(dir.join("data/state")).unwrap(), b"kept");
+
+    // After the crash the same owner stages again and finds its data.
+    stage(&dir, &prog, b"#!/bin/sh\n", None, Some(owner)).unwrap();
+    assert_eq!(std::fs::read(dir.join("data/state")).unwrap(), b"kept");
+    assert!(prog.exists());
+}
+
+#[test]
+fn an_empty_or_torn_marker_is_missing_not_another_owner() {
+    use super::native::{OWNER_MARKER, owner_hash, stage};
+    let tmp = tempfile::tempdir().unwrap();
+    let owner = "project=A\ncontroller=ctl";
+    for torn in ["", "\n", "abc12", "not hex at all, not hex at all, not hex at all, not hex at all!!"] {
+        // no data yet: the torn marker is replaced and the directory adopted
+        let dir = tmp.path().join(format!("empty-{}", torn.len()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(OWNER_MARKER), torn).unwrap();
+        stage(&dir, &dir.join("cog-x"), b"#!/bin/sh\n", None, Some(owner)).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join(OWNER_MARKER)).unwrap().trim(), owner_hash(owner));
+        // with data: refused as unmarked, and never reported as another owner's
+        let dir = tmp.path().join(format!("data-{}", torn.len()));
+        std::fs::create_dir_all(dir.join("data")).unwrap();
+        std::fs::write(dir.join(OWNER_MARKER), torn).unwrap();
+        let err = stage(&dir, &dir.join("cog-x"), b"#!/bin/sh\n", None, Some(owner)).unwrap_err().to_string();
+        assert!(err.contains("no valid owner marker") && !err.contains("another owner"), "{err}");
+    }
+    // a well-formed marker of someone else is another owner
+    let dir = tmp.path().join("other");
+    std::fs::create_dir_all(dir.join("data")).unwrap();
+    std::fs::write(dir.join(OWNER_MARKER), format!("{}\n", owner_hash("someone else"))).unwrap();
+    let err = stage(&dir, &dir.join("cog-x"), b"x", None, Some(owner)).unwrap_err().to_string();
+    assert!(err.contains("another owner"), "{err}");
+}
+
+#[tokio::test]
+async fn the_instance_id_carries_128_bits_of_the_owner_hash() {
+    let fx = signed_workload(&toml(15, 4096), &[(arch(), SCRIPT.as_bytes())]);
+    let iid = super::native::instance_id(&fx.workload, &owned("project=A\ncontroller=ctl")).unwrap();
+    let hash = iid.strip_prefix("script-cog-").unwrap().strip_suffix("-node-a").unwrap();
+    assert_eq!(hash.len(), 32, "{iid}");
+    assert!(hash.bytes().all(|c| c.is_ascii_hexdigit()));
+}
+
+#[test]
+fn data_is_private_to_the_instance_uid_even_when_the_files_were_kept_from_an_earlier_run() {
+    use super::native::stage;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("inst");
+    // kept data that is wide open
+    std::fs::create_dir_all(dir.join("data/sub")).unwrap();
+    std::fs::write(dir.join("data/sub/f"), b"x").unwrap();
+    std::fs::set_permissions(dir.join("data"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let me = std::fs::metadata(tmp.path()).unwrap();
+    let (uid, gid) = (me.uid(), me.gid());
+    stage(&dir, &dir.join("cog-x"), b"#!/bin/sh\n", Some((uid, gid)), None).unwrap();
+    let m = std::fs::metadata(dir.join("data")).unwrap();
+    assert_eq!(m.permissions().mode() & 0o777, 0o700);
+    assert_eq!((m.uid(), m.gid()), (uid, gid));
+    let f = std::fs::metadata(dir.join("data/sub/f")).unwrap();
+    assert_eq!((f.uid(), f.gid()), (uid, gid), "kept files are brought to the instance uid");
 }
