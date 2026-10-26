@@ -4,6 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::blob::BlobHandle;
 use super::{Check, fail};
 
 /// Lowest priority.
@@ -16,6 +17,8 @@ pub const DEFAULT_PRIORITY: u8 = 4;
 pub const MAX_TEXT: usize = 32 * 1024;
 /// Longest inline image, base64 characters. Bigger images are blobs (B5).
 pub const MAX_IMAGE_B64: usize = 40 * 1024;
+/// Largest image the service reads from a blob, bytes.
+pub const MAX_IMAGE_BLOB: u64 = 4 * 1024 * 1024;
 
 fn default_priority() -> u8 {
     DEFAULT_PRIORITY
@@ -41,6 +44,12 @@ pub struct InferRequest {
     /// `image/png` or `image/jpeg`; required with `image_b64`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_mime: Option<String>,
+    /// One image held by the broker as a blob (ADR-122 section 13): a PNG or
+    /// JPEG of at most [`MAX_IMAGE_BLOB`] bytes, for a vision model. Not with
+    /// `image_b64`. The handle travelling in the call is what lets the service
+    /// read the blob.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_blob: Option<BlobHandle>,
     /// Most tokens to generate, 1..=4096.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
@@ -55,8 +64,20 @@ impl InferRequest {
         if self.priority > MAX_PRIORITY {
             return fail(format!("priority must be {MIN_PRIORITY}..={MAX_PRIORITY}"));
         }
-        if self.text.is_none() && self.image_b64.is_none() {
-            return fail("text or image_b64 is required");
+        if self.text.is_none() && self.image_b64.is_none() && self.image_blob.is_none() {
+            return fail("text, image_b64 or image_blob is required");
+        }
+        if let Some(b) = &self.image_blob {
+            if self.image_b64.is_some() {
+                return fail("give an image as image_b64 or image_blob, not both");
+            }
+            b.validate()?;
+            if b.media_type != "image/png" && b.media_type != "image/jpeg" {
+                return fail("image_blob.media_type must be image/png or image/jpeg");
+            }
+            if b.size > MAX_IMAGE_BLOB {
+                return fail(format!("image_blob is larger than {MAX_IMAGE_BLOB} bytes"));
+            }
         }
         for (name, v) in [("text", &self.text), ("system", &self.system)] {
             if v.as_ref().is_some_and(|s| s.len() > MAX_TEXT) {

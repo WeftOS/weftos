@@ -153,9 +153,10 @@ the service's own (the NPU service returns `text`, `usage` and timings).
 |-------|------|------|
 | `model` | string | a model id of the service's catalog, 1..=128 chars |
 | `priority` | u8 | 0 (background) ..= 9 (interactive), default 4 |
-| `text` | string | the prompt, at most 32 KiB; `text` or `image_b64` is required |
+| `text` | string | the prompt, at most 32 KiB; one of `text`, `image_b64` or `image_blob` is required |
 | `system` | string | optional system prompt, at most 32 KiB |
 | `image_b64`, `image_mime` | string | one small inline image (at most 40 K chars of base64), `image/png` or `image/jpeg`; both or neither |
+| `image_blob` | `blob.v1` | optional, instead of `image_b64`: a PNG or JPEG of at most 4 MiB held by the broker (ADR-122 section 13). The handle travelling in the call lets the service read it |
 | `max_tokens` | u32 | optional, 1..=4096 |
 
 ### `mcu.call.v1` (service call request)
