@@ -42,5 +42,7 @@ android {
 dependencies {
     // UniFFI's generated Kotlin loads the Rust library through JNA.
     implementation("net.java.dev.jna:jna:5.14.0@aar")
+    // The generated bindings annotate their API 34 cleaner with @RequiresApi.
+    implementation("androidx.annotation:annotation:1.8.2")
     testImplementation("junit:junit:4.13.2")
 }
