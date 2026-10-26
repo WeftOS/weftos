@@ -11301,6 +11301,7 @@ dependencies = [
 name = "weftos-cogbus"
 version = "0.8.4-rc.15"
 dependencies = [
+ "base64 0.22.1",
  "blake3",
  "clawft-types",
  "libc",
