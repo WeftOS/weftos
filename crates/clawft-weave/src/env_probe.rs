@@ -9,7 +9,6 @@
 //! on its pid and assert with [`leaked`] that no secret appears.
 
 use std::io;
-use std::process::Command;
 
 /// The environment `pid` was started with, as text (`KEY=VALUE` per line on
 /// Linux; the `ps eww` command-plus-environment line on macOS). Both are for
@@ -26,6 +25,7 @@ pub fn process_environment(pid: u32) -> io::Result<String> {
     }
     #[cfg(not(target_os = "linux"))]
     {
+        use std::process::Command;
         let out = Command::new("ps")
             .args(["eww", "-o", "command=", "-p", &pid.to_string()])
             .output()?;
@@ -43,7 +43,7 @@ pub fn leaked<'a>(env: &str, needles: &[&'a str]) -> Vec<&'a str> {
 
 #[cfg(test)]
 mod tests {
-    use std::process::Stdio;
+    use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
 
     use super::*;
