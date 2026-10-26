@@ -280,6 +280,9 @@ impl Conversation for CosAgent {
             tokio::spawn(async move { agent.run_turn(id, utterance).await });
             return Ok(turn_id);
         }
+        if answer.kind == AnswerKind::Answer && crate::glance_store::is_card_id(&answer.id) && !self.inner.ui.is_pending_ask(&answer.id) {
+            return Err(CosError::Config("no such card (already resolved or expired)".into()));
+        }
         match self.inner.ui.apply_answer(&answer)? {
             Resolution::Turn(utterance) => {
                 self.remember_user(&turn_id, HOST_ENDPOINT, &utterance.text);

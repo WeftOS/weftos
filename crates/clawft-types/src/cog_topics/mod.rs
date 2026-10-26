@@ -13,6 +13,7 @@
 mod data;
 mod infer;
 mod media;
+mod sdr;
 #[cfg(test)]
 mod tests;
 
@@ -22,11 +23,13 @@ use serde::{Deserialize, Serialize};
 pub use data::{CanFrame, MAX_STORE_VECTORS, StoreVector, Telemetry, TelemetryItem, Transcript};
 pub use data::{SenmlMsg, SenmlRecord};
 pub use infer::{DEFAULT_PRIORITY, InferRequest, MAX_IMAGE_B64, MAX_PRIORITY, MAX_TEXT, MIN_PRIORITY};
-pub use media::{Detection, Detections, FrameRef, IqCs16, PcmS16le, SpectrumPsd};
+pub use media::{Detection, Detections, FrameRef, IqCs16, PcmS16le, SpectrumPsd, is_gap_record};
+pub use sdr::{AutoGain, Gain, SdrBand, SdrReply, SdrRequest};
 
 /// Registered schema ids, in the order the plan lists them, then
-/// `store.vector.v1` (ADR-122 section 9) and `infer.v1` (section 12).
-pub const SCHEMA_IDS: [&str; 12] = [
+/// `store.vector.v1` (ADR-122 section 9), `infer.v1` (section 12) and
+/// `sdr.v1` (service calls).
+pub const SCHEMA_IDS: [&str; 13] = [
     "senml.v1",
     "spatial.evidence.v1",
     "pcm.s16le.v1",
@@ -39,6 +42,7 @@ pub const SCHEMA_IDS: [&str; 12] = [
     "telemetry.v1",
     "store.vector.v1",
     "infer.v1",
+    "sdr.v1",
 ];
 
 /// True if `id` is a registered schema id.
@@ -214,6 +218,7 @@ pub fn check_message(
         "telemetry.v1" => parse::<Telemetry>(msg, Telemetry::validate),
         "store.vector.v1" => parse::<StoreVector>(msg, StoreVector::validate),
         "infer.v1" => parse::<InferRequest>(msg, InferRequest::validate),
+        "sdr.v1" => parse::<SdrRequest>(msg, SdrRequest::validate),
         "spatial.evidence.v1" => Err(CogTopicError(
             "spatial.evidence.v1 is validated by weftos-spatial-core".into(),
         )),

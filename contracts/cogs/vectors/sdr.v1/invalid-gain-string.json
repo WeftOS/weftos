@@ -1,0 +1,4 @@
+{
+  "method": "set_gain",
+  "gain_db": "loud"
+}

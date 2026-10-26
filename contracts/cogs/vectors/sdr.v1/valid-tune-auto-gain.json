@@ -1,0 +1,5 @@
+{
+  "method": "tune",
+  "centre_hz": 1090000000,
+  "gain_db": "auto"
+}

@@ -1,0 +1,4 @@
+{
+  "method": "tx_config",
+  "attenuation_db": 3.0
+}

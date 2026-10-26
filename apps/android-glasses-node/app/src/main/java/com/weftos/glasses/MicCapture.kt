@@ -51,6 +51,10 @@ class MicCapture(
             AudioFormat.ENCODING_PCM_16BIT, bufBytes,
         )
         if (r.state == AudioRecord.STATE_INITIALIZED) r else { r.release(); null }
+    } catch (e: SecurityException) {
+        // RECORD_AUDIO not granted: the caller treats a null source as "no mic".
+        Log.w(TAG, "open source $sourceId: RECORD_AUDIO not granted", e)
+        null
     } catch (e: Exception) {
         Log.w(TAG, "open source $sourceId failed", e)
         null

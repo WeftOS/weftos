@@ -1,0 +1,5 @@
+# Kotlin bindings for the Android apps (minSdk 29). `android` makes the
+# generated code pick java.lang.ref.Cleaner only on API 34+ (guarded by a
+# SDK_INT check and @RequiresApi) and the JNA cleaner below that.
+[bindings.kotlin]
+android = true

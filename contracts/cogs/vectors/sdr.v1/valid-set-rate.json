@@ -1,0 +1,4 @@
+{
+  "method": "set_rate",
+  "rate_sps": 2000000
+}

@@ -51,6 +51,40 @@ pub struct IqCs16 {
     pub samples: u32,
     /// Chunk bytes, standard base64 (`samples * 4` bytes).
     pub data_b64: String,
+    /// Optional extension: the analog bandwidth, Hz.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bandwidth_hz: Option<u32>,
+    /// Optional extension: counts dwells; a new segment starts at every retune.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub segment: Option<u32>,
+    /// Optional extension: index of the first sample on the segment's sample
+    /// clock. Lost samples are counted in it, so a gap is a jump.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample_index: Option<u64>,
+    /// Optional extension: samples lost immediately before this chunk.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lost: Option<u32>,
+    /// Optional extension: true when samples were lost just before this chunk.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discontinuity: Option<bool>,
+    /// Optional extension: true when the tuning changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub band_changed: Option<bool>,
+    /// Optional extension: true when every sample is zero (a dead receive path).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub all_zero: Option<bool>,
+    /// Optional extension, gap records only: samples lost. A gap record has
+    /// `samples` 0 and an empty `data_b64`; it is not a sample chunk, so
+    /// [`IqCs16::validate`] rejects it and a reader skips it (see
+    /// [`is_gap_record`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gap_samples: Option<u64>,
+}
+
+/// True when `msg` is an `iq.cs16.v1` gap record: no samples, `gap_samples` set.
+pub fn is_gap_record(msg: &serde_json::Value) -> bool {
+    msg.get("samples").and_then(serde_json::Value::as_u64) == Some(0)
+        && msg.get("gap_samples").is_some_and(serde_json::Value::is_u64)
 }
 
 impl IqCs16 {

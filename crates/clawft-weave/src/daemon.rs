@@ -1194,6 +1194,7 @@ pub async fn run(
     // refused, instance beside this one every throttle interval.
     if crate::boot_refusal::lift_refused_on_boot(&paths.refused(), crate::boot_refusal::service_managed())
         == crate::boot_refusal::RefusedLift::LeftParked
+        && crate::boot_refusal::parked_hint_applies()
     {
         tracing::warn!("{}", crate::boot_refusal::parked_hint(&paths.refused()));
     }

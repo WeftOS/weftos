@@ -148,3 +148,13 @@ async fn a_live_card_survives_a_restart_and_an_expired_one_does_not() {
     third.set_dir(dir.path().to_path_buf());
     assert!(third.snapshot(chrono::Utc::now())["card"].is_null());
 }
+
+#[tokio::test]
+async fn unknown_card_id_says_no_such_card() {
+    let t = build_agent(ScriptedLlm::new(script()), None, None).await;
+    let base = serve(&t).await;
+    let r = reqwest::Client::new().post(format!("{base}/v1/cos/answer")).json(&json!({"kind": "answer", "id": "0123abcd", "value": "works"})).send().await.unwrap();
+    assert_eq!(r.status(), 400);
+    let body: Value = r.json().await.unwrap();
+    assert!(body["error"].as_str().unwrap_or_default().contains("no such card (already resolved or expired)"), "{body}");
+}

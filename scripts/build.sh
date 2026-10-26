@@ -2048,9 +2048,10 @@ cmd_android() {
     pass "libweftos_node_core.so (arm64-v8a)"
 
     # 3. Debug APK.
-    "$gradle_cmd" -p "$app" :app:testDebugUnitTest :app:assembleDebug \
-        || { fail "gradle testDebugUnitTest/assembleDebug failed"; return 1; }
+    "$gradle_cmd" -p "$app" :app:testDebugUnitTest :app:lintDebug :app:assembleDebug \
+        || { fail "gradle testDebugUnitTest/lintDebug/assembleDebug failed"; return 1; }
     pass "JVM unit tests"
+    pass "lintDebug (no errors)"
     local apk
     apk="$(ls "$app"/app/build/outputs/apk/debug/*.apk 2>/dev/null | head -1 || true)"
     [ -n "$apk" ] || { fail "no APK produced"; return 1; }
@@ -2115,9 +2116,10 @@ cmd_glasses() {
         || { fail "cargo-ndk build failed"; return 1; }
     pass "libweftos_node_core.so (arm64-v8a)"
 
-    "$gradle_cmd" -p "$app" :app:testDebugUnitTest :app:assembleDebug \
-        || { fail "gradle testDebugUnitTest/assembleDebug failed"; return 1; }
+    "$gradle_cmd" -p "$app" :app:testDebugUnitTest :app:lintDebug :app:assembleDebug \
+        || { fail "gradle testDebugUnitTest/lintDebug/assembleDebug failed"; return 1; }
     pass "JVM unit tests"
+    pass "lintDebug (no errors)"
     local apk
     apk="$(ls "$app"/app/build/outputs/apk/debug/*.apk 2>/dev/null | head -1 || true)"
     [ -n "$apk" ] || { fail "no APK produced"; return 1; }
