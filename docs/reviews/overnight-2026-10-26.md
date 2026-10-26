@@ -244,3 +244,64 @@ that closes the socket between hello and the ok reply 8 times and then connects;
 `socket="/tmp/<name>"` under a fake applier that records the `GrantOp`s (the plan already shows the
 path), and the same with `socket="/etc/passwd"`; a restart test that writes a file under the cog's
 `data/` before the restart and reads it after.
+
+---
+
+## Re-check: findings 1 and 3 on `wt/native-restart` 291aa4309 (2026-10-26)
+
+Tests run (foreground, `scripts/build.sh test clawft-kernel --filter ...`): `tests_restart` 10 of 10
+pass; `links_inside_the_stage_directory_are_removed_not_followed` passes.
+
+**Finding 1 (restore wipes `data/`): fixed.** `stage()` now clears everything in the instance
+directory except an entry named `data`, keeps `data/` when it is a real directory (checked with
+`symlink_metadata`), replaces a link or file where `data/` should be, and removes links with
+`remove_file` rather than entering them. My failing case (state written to `data/`, restart, restore)
+is covered by `a_cogs_own_data_survives_a_restart_and_a_re_place`. I traced two further cases and found
+no problem: a symlink named `data` is skipped by the clearing loop and then replaced by the later step;
+a subdirectory is removed with `remove_dir_all`, which does not follow links. The directory above `data/`
+is daemon-owned and not writable by the cog uid, so the cog cannot swap `data` between the check and the
+`chown` or `chmod`.
+
+**Finding 3 (unauthenticated journal): the editing attack is fixed; replay is not.**
+
+What holds:
+- Canonicalisation is sound. The signed bytes are `"weftos.workload-host.journal.v1\n" + node_id + "\n" +
+  serde_json::to_vec(entry)`. The entry and everything under it (`PlaceBody`, `CtlConfig`, `RunMode`) are
+  plain structs, enums and vectors, so the field order is fixed by declaration and there is no
+  `HashMap` whose order could differ between save and verify. The node id sits in the signature, so an
+  entry copied from another node fails. The domain tag starts with letters while the node's control
+  responses are signed over JSON starting with `{`, so the node's own signing key cannot be made to
+  produce a valid journal signature through another protocol. `node_id` is a plain token, so it cannot
+  blur the boundary with the entry.
+- A changed `requester`, `project_id`, `decision_id`, `config` or `desired_running`, a missing or
+  malformed signature, and another node's or key's entry are all refused (tests in `tests_restart`).
+  Verification re-serialises the parsed entry, so unknown or defaulted fields that are dropped do not
+  change meaning.
+
+What does not hold, concrete failing case (replay of an older, validly signed entry):
+- The signature covers the entry's content only. There is no sequence number, generation, timestamp or
+  per-file signature, and nothing anchors the journal's state elsewhere. Any (entry, signature) pair that
+  this node ever wrote stays valid forever.
+- Case A (stale `desired_running`): the operator stops instance X (the journal now holds X with
+  `desired_running=false`). An attacker who holds an earlier copy of the file from when X was running
+  (a backup, a snapshot, or a copy taken in the brief window below) writes that older entry for X into the
+  current file. It verifies. After the next restart X is restored and started: "an operator stop is final"
+  is defeated, with no key needed.
+- Case B (resurrection): X is unloaded or revoked, so its entry is removed. Pasting the old signed entry
+  back restores X. The workload gate still refuses a revoked package, so revocation holds, but an
+  operator unload does not.
+- The new tests do not cover this; each one edits or forges an entry.
+- Needs write access to the runtime directory plus an older copy of the file, so it is the same class of
+  condition as before, narrower than the original bug.
+- Fix direction: sign the whole file (sorted entries plus a generation number) instead of each entry, and
+  record the generation in the node's chain at every save so that a rollback is visible at startup; or
+  put a monotonic `seq` in each entry and a high-water mark in the chain. Per-entry signatures cannot
+  detect rollback by themselves.
+
+Residual items from my original finding 3 that this commit does not change:
+- Restore does not re-check the journaled `requester` against the live controller policy, so an instance
+  placed by a controller that has since been removed is restored.
+- `save()` still writes the temporary file at default permissions and only then `chmod`s it to 0600.
+- Any restore error, including a transient one, still removes the entry for good.
+
+Verdict: finding 1 fixed and verified; finding 3 fixed for tampering, open for rollback and replay.
