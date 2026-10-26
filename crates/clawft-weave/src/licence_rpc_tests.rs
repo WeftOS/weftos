@@ -399,7 +399,12 @@ async fn the_tick_runs_repeatedly_and_survives_a_panic() {
             }
         }),
     );
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    // Wait on the count, not on a fixed sleep: under load the 10 ms ticks and
+    // their blocking calls can be late by any amount, but they do arrive.
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while n.load(std::sync::atomic::Ordering::SeqCst) < 3 && std::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
     h.abort();
     assert!(n.load(std::sync::atomic::Ordering::SeqCst) >= 3, "kept ticking after the panic");
 }
