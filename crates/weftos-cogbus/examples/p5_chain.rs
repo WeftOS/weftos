@@ -84,11 +84,25 @@ async fn main() {
         vec![out("detections", "detections.v1", TopicClass::Reading), tel()],
         vec![inp("video.frame-ref", "video.frame-ref.v1", InputPolicy::Sample), infer_in()],
     );
+    reg(&broker, "can-fd", vec![out("can.frame", "can.frame.v1", TopicClass::Stream), tel()], vec![]);
+    reg(
+        &broker,
+        "can-anomaly",
+        vec![out("event", "event.v1", TopicClass::Reading), tel()],
+        vec![inp("can.frame", "can.frame.v1", InputPolicy::DropOldest)],
+    );
     reg(
         &broker,
         "watcher",
         vec![],
-        vec![tr_in(), pcm_in(), inp("telemetry", "telemetry.v1", InputPolicy::DropOldest), inp("detections", "detections.v1", InputPolicy::DropOldest)],
+        vec![
+            tr_in(),
+            pcm_in(),
+            inp("telemetry", "telemetry.v1", InputPolicy::DropOldest),
+            inp("detections", "detections.v1", InputPolicy::DropOldest),
+            inp("can.frame", "can.frame.v1", InputPolicy::DropOldest),
+            inp("event", "event.v1", InputPolicy::DropOldest),
+        ],
     );
     let _server = serve(broker.clone(), std::path::Path::new(&sock)).await.expect("serve");
     say(json!({"ready": sock}));
@@ -140,6 +154,40 @@ async fn main() {
         while let Some(m) = tsub.recv().await {
             say(json!({"transcript": m.topic, "text": m.body["text"], "seq": m.seq}));
         }
+    });
+    let mut vsub = w.subscribe("event/*", "event.v1").await.unwrap();
+    tokio::spawn(async move {
+        while let Some(m) = vsub.recv().await {
+            let valid = clawft_types::cog_topics::check_message("event.v1", &m.body).is_ok();
+            say(json!({"can_event": m.body["kind"], "subject": m.body["subject"], "severity": m.body["severity"], "value": m.body["value"], "detail": m.body["detail"], "schema_valid": valid}));
+        }
+    });
+    // The CAN frame stream: count records and check each against the registered schema.
+    let can_src = std::env::var("CAN_SOURCE").unwrap_or_else(|_| "vcan0".into());
+    let wc = w.clone();
+    let can = tokio::spawn(async move {
+        let mut r = loop {
+            match wc.subscribe_stream(&format!("can.frame/{can_src}"), "can.frame.v1").await {
+                Ok(r) => break r,
+                Err(_) => tokio::time::sleep(Duration::from_millis(300)).await,
+            }
+        };
+        let (mut n, mut invalid, mut ext, mut fd, mut last_t, mut mono) = (0u64, 0u64, 0u64, 0u64, 0u64, true);
+        while Instant::now() < end {
+            if let Ok(Some(rec)) = tokio::time::timeout(Duration::from_millis(500), r.next()).await {
+                n += 1;
+                match serde_json::from_slice::<Value>(&rec.data) {
+                    Ok(v) if clawft_types::cog_topics::check_message("can.frame.v1", &v).is_ok() => {
+                        ext += v["ext"].as_bool().unwrap_or(false) as u64;
+                        fd += v["fd"].as_bool().unwrap_or(false) as u64;
+                    }
+                    _ => invalid += 1,
+                }
+                mono &= rec.t_ns >= last_t;
+                last_t = rec.t_ns;
+            }
+        }
+        say(json!({"can_stream": {"records": n, "schema_invalid": invalid, "extended": ext, "fd": fd, "skipped": r.skipped(), "t_ns_monotonic": mono}}));
     });
     let mut dsub = w.subscribe("detections/*", "detections.v1").await.unwrap();
     tokio::spawn(async move {
@@ -198,6 +246,6 @@ async fn main() {
             say(json!({"mic_stream": {"records": n, "skipped": r.skipped()}}));
         }
     });
-    let _ = tokio::join!(tts, mic);
+    let _ = tokio::join!(tts, mic, can);
     say(json!({"done": true}));
 }

@@ -1,0 +1,10 @@
+{
+  "source_id": "can-anomaly0",
+  "node_id": "0123456789abcdef0123456789abcdef",
+  "t_ns": 1759500000000000000,
+  "seq": 3,
+  "kind": "can.bus_off",
+  "severity": "alert",
+  "subject": "can0",
+  "detail": "the controller went bus-off"
+}

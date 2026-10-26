@@ -20,6 +20,7 @@ struct FakeNode {
     nodes: Vec<&'static str>,
     usb: BTreeMap<(u16, u16), Vec<&'static str>>,
     owners: BTreeMap<&'static str, (u32, u32, u32)>,
+    nets: Vec<&'static str>,
 }
 
 impl FakeNode {
@@ -30,6 +31,7 @@ impl FakeNode {
                 "/run/arduino-router.sock",
             ],
             usb: BTreeMap::from([((0x1bcf, 0x0b15), vec!["/dev/video0", "/dev/video1", "/dev/snd/pcmC1D0c"])]),
+            nets: vec!["can0", "can1", "can2", "eth0", "wlan0"],
             owners: BTreeMap::from([
                 ("/dev/video0", (0, 44, 0o660)),
                 ("/dev/video1", (0, 44, 0o660)),
@@ -50,10 +52,17 @@ impl DeviceResolver for FakeNode {
     fn stat(&self, path: &str) -> Option<(u32, u32, u32)> {
         self.owners.get(path).copied()
     }
+    fn netdevs(&self, pattern: &str) -> Vec<String> {
+        self.nets.iter().filter(|n| glob_match(pattern, n)).map(|n| n.to_string()).collect()
+    }
 }
 
 fn path(p: &str) -> DeviceDecl {
     DeviceDecl { sel: DeviceSel::Path(p.into()), write: true }
+}
+
+fn net(n: &str) -> DeviceDecl {
+    DeviceDecl { sel: DeviceSel::Netdev(n.into()), write: true }
 }
 
 fn usb(vid: u16, pid: u16) -> DeviceDecl {
@@ -183,6 +192,22 @@ fn a_read_only_claim_is_granted_read_only_and_missing_nodes_are_skipped() {
     let r = l.admit("viewer", &[ro, path("/dev/snd/controlC*")], &[], Some(&ident(60003))).unwrap().unwrap();
     // controlC1 has no recorded owner in the fake, so it is skipped, not guessed.
     assert_eq!(r.plan().apply, vec![GrantOp::Chown { path: "/dev/video0".into(), uid: 60003, gid: 44, mode: 0o400 }]);
+}
+
+#[test]
+fn network_interfaces_are_owned_by_name_in_their_own_namespace() {
+    let l = ledger();
+    let r = l.admit("can-fd", &[net("can*")], &[], None).unwrap().unwrap();
+    assert_eq!(r.paths(), ["can0", "can1", "can2"], "the owner is handed interface names, not paths");
+    r.bind("i-can");
+    for other in [net("can1"), net("can*"), net("c?n2")] {
+        let e = l.admit("rival", &[other.clone()], &[], None).err().unwrap_or_else(|| panic!("{other:?} was admitted"));
+        assert!(e.0.contains("owned by can-fd (i-can)"), "{e}");
+    }
+    // Other interfaces, and paths that happen to look alike, do not clash.
+    l.admit("wifi", &[net("wlan0")], &[], None).unwrap().unwrap().bind("i-wifi");
+    l.admit("path", &[path("/dev/can0")], &[], None).unwrap().unwrap().bind("i-path");
+    assert_eq!(l.claim_of("i-can").unwrap().0, ["net:can*"]);
 }
 
 // ---- through the real placement path ----

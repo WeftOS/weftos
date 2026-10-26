@@ -140,9 +140,11 @@ usb = "1bcf:0b15"               # a USB vid:pid, resolved to its nodes at placem
 [[devices]]
 socket = "/run/arduino-router.sock"
 access = "ro"                   # rw (default) or ro
+[[devices]]
+netdev = "can*"                 # a network interface (SocketCAN) by name or glob
 ```
 
-Exactly one of `path`, `usb`, `socket` per table, at most 8 tables, validated at `CogSpec::parse`.
+Exactly one of `path`, `usb`, `socket`, `netdev` per table, at most 8 tables, validated at `CogSpec::parse`.
 
 - **Claims.** At place, before anything is loaded, the host admits the cog's `[[devices]]`. A
   claim that overlaps another instance's is refused (`admission`: "<device> is owned by <cog>
@@ -150,6 +152,11 @@ Exactly one of `path`, `usb`, `socket` per table, at most 8 tables, validated at
   matches both (`/dev/snd/pcmC*D*c` and `/dev/snd/pcmC*D*p` do not), a `usb` claim overlaps
   the nodes it resolves to, and a claim in flight (not yet bound to an instance) blocks a
   concurrent one. Unload, teardown, revocation and a failed placement release the claim.
+- **Interfaces.** A `netdev` claim lives in its own namespace (`net:<glob>`), so `can*` never
+  overlaps a path, and it resolves against `/sys/class/net`. The owner is handed the interface
+  names without a leading slash (`can0:can1:can2`). Interfaces have no file owner to change, so
+  the privileged chown plan skips them, and the argument check (which looks for absolute paths)
+  does not apply to them. Updated 2026-10-26 for the `can-fd` cog.
 - **Hand-out.** The owner's `WEFTOS_DEVICES` (`:`-separated absolute paths: the literal paths
   it declared and the nodes its globs and `usb` ids resolved to) comes only from its
   reservation (`HostContract::with_devices`), so no other contract carries a device path. A

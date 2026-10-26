@@ -61,6 +61,18 @@ impl DeviceResolver for SysResolver {
         stat_owner(path)
     }
 
+    fn netdevs(&self, pattern: &str) -> Vec<String> {
+        let mut out: Vec<String> = std::fs::read_dir("/sys/class/net")
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|e| e.file_name().into_string().ok())
+            .filter(|n| glob_match(pattern, n))
+            .collect();
+        out.sort();
+        out
+    }
+
     fn expand(&self, pattern: &str) -> Vec<String> {
         if !wild(pattern) {
             return Path::new(pattern).exists().then(|| pattern.to_string()).into_iter().collect();

@@ -146,9 +146,21 @@ async fn main() {
             let mut sub = reader.subscribe("video.frame-ref/*", "video.frame-ref.v1").await.unwrap();
             let dir = std::env::var("FRAMES_DIR").unwrap_or_else(|_| "frames".into());
             let (mut n, mut ok, mut missing, mut dims) = (0u64, 0u64, 0u64, Value::Null);
+            // PROGRESS_SECS=60 prints one line per minute, for soaks; frames per second since
+            // the start are what a reader saw, not what the camera made.
+            let progress = std::env::var("PROGRESS_SECS").ok().and_then(|v| v.parse::<u64>().ok());
+            let (started, mut next_line, mut gaps, mut last_seq) = (Instant::now(), Instant::now(), 0u64, 0u64);
             while Instant::now() < end {
+                if let Some(p) = progress.filter(|_| Instant::now() >= next_line) {
+                    next_line = Instant::now() + Duration::from_secs(p);
+                    println!("{}", json!({"progress": {"at_s": started.elapsed().as_secs(), "refs": n, "hash_ok": ok, "missing_or_mismatch": missing, "seq_gaps": gaps, "fps": n as f64 / started.elapsed().as_secs_f64()}}));
+                }
                 if let Ok(Some(m)) = tokio::time::timeout(Duration::from_millis(500), sub.recv()).await {
                     n += 1;
+                    if last_seq != 0 && m.seq > last_seq + 1 {
+                        gaps += m.seq - last_seq - 1;
+                    }
+                    last_seq = m.seq;
                     let h = m.body["hash"].as_str().unwrap_or("").to_string();
                     dims = json!([m.body["width"], m.body["height"]]);
                     match std::fs::read(format!("{dir}/{h}.jpg")) {
@@ -157,7 +169,7 @@ async fn main() {
                     }
                 }
             }
-            json!({"scenario": "camera", "refs": n, "hash_matches_bytes_on_disk": ok, "missing_or_mismatch": missing, "dims": dims})
+            json!({"scenario": "camera", "refs": n, "hash_matches_bytes_on_disk": ok, "missing_or_mismatch": missing, "seq_gaps": gaps, "seconds": started.elapsed().as_secs(), "dims": dims})
         }
         "mcu" => {
             let mut results = Vec::new();

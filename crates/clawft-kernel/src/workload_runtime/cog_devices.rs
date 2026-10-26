@@ -13,6 +13,9 @@
 //! [[devices]]
 //! socket = "/run/arduino-router.sock"
 //! access = "rw"                # rw (default) or ro
+//!
+//! [[devices]]
+//! netdev = "can*"              # a network interface (SocketCAN), by name or glob
 //! ```
 
 use serde::Deserialize;
@@ -37,6 +40,9 @@ pub enum DeviceSel {
     },
     /// A Unix socket owned by a system service (the MCU router).
     Socket(String),
+    /// A network interface by name or glob (`can0`, `can*`), at most 15 characters. The host
+    /// hands the owner the interface names (no leading `/`) in `WEFTOS_DEVICES`.
+    Netdev(String),
 }
 
 impl DeviceSel {
@@ -44,6 +50,7 @@ impl DeviceSel {
     pub fn label(&self) -> String {
         match self {
             DeviceSel::Path(p) | DeviceSel::Socket(p) => p.clone(),
+            DeviceSel::Netdev(n) => format!("net:{n}"),
             DeviceSel::Usb { vid, pid } => format!("usb:{vid:04x}:{pid:04x}"),
         }
     }
@@ -64,6 +71,7 @@ pub(super) struct RawDevice {
     path: Option<String>,
     usb: Option<String>,
     socket: Option<String>,
+    netdev: Option<String>,
     access: Option<String>,
 }
 
@@ -101,26 +109,35 @@ pub(super) fn parse_devices(raw: Vec<RawDevice>) -> Result<Vec<DeviceDecl>, Runt
     }
     let mut out: Vec<DeviceDecl> = Vec::with_capacity(raw.len());
     for (i, r) in raw.into_iter().enumerate() {
-        let sel = match (r.path, r.usb, r.socket) {
-            (Some(p), None, None) => {
+        let sel = match (r.path, r.usb, r.socket, r.netdev) {
+            (Some(p), None, None, None) => {
                 plain_path(i, "path", &p, true)?;
                 if !p.starts_with("/dev/") {
                     return Err(bad(format!("devices[{i}]: path {p:?} must be under /dev/")));
                 }
                 DeviceSel::Path(p)
             }
-            (None, Some(u), None) => {
+            (None, Some(u), None, None) => {
                 let (v, p) = u.split_once(':').unwrap_or_default();
                 match (hex4(v), hex4(p)) {
                     (Some(vid), Some(pid)) => DeviceSel::Usb { vid, pid },
                     _ => return Err(bad(format!("devices[{i}]: usb {u:?} must be vid:pid, 4 hex digits each"))),
                 }
             }
-            (None, None, Some(s)) => {
+            (None, None, Some(s), None) => {
                 plain_path(i, "socket", &s, false)?;
                 DeviceSel::Socket(s)
             }
-            _ => return Err(bad(format!("devices[{i}]: give exactly one of path, usb, socket"))),
+            (None, None, None, Some(n)) => {
+                let ok = !n.is_empty()
+                    && n.len() <= 15
+                    && n.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"_-*?".contains(&b));
+                if !ok {
+                    return Err(bad(format!("devices[{i}]: netdev {n:?} must be 1..=15 chars of [a-z0-9_-] with * or ?")));
+                }
+                DeviceSel::Netdev(n)
+            }
+            _ => return Err(bad(format!("devices[{i}]: give exactly one of path, usb, socket, netdev"))),
         };
         let write = match r.access.as_deref() {
             None | Some("rw") => true,

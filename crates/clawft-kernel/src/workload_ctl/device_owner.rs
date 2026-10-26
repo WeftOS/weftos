@@ -66,6 +66,10 @@ pub trait DeviceResolver: Send + Sync {
     fn usb_nodes(&self, vid: u16, pid: u16) -> Vec<String>;
     /// `(uid, gid, mode)` of `path`; `None` if it does not exist.
     fn stat(&self, path: &str) -> Option<(u32, u32, u32)>;
+    /// Existing network interfaces matching `pattern`, sorted.
+    fn netdevs(&self, _pattern: &str) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 /// One step of a privileged grant.
@@ -142,9 +146,12 @@ impl std::fmt::Display for DeviceRefusal {
     }
 }
 
-fn sel_pattern(s: &DeviceSel) -> Option<&str> {
+/// The glob a selector claims, in its own namespace: paths start with `/`, interfaces with
+/// `net:`, so a `*` interface never overlaps a path.
+fn sel_pattern(s: &DeviceSel) -> Option<String> {
     match s {
-        DeviceSel::Path(p) | DeviceSel::Socket(p) => Some(p),
+        DeviceSel::Path(p) | DeviceSel::Socket(p) => Some(p.clone()),
+        DeviceSel::Netdev(n) => Some(format!("net:{n}")),
         DeviceSel::Usb { .. } => None,
     }
 }
@@ -155,7 +162,7 @@ impl Claim {
         for a in &self.sels {
             for b in &other.sels {
                 let hit = match (sel_pattern(a), sel_pattern(b)) {
-                    (Some(x), Some(y)) => globs_intersect(x, y),
+                    (Some(x), Some(y)) => globs_intersect(&x, &y),
                     _ => a == b,
                 };
                 if hit {
@@ -163,14 +170,14 @@ impl Claim {
                 }
             }
             if let Some(p) = sel_pattern(a)
-                && let Some(n) = other.nodes.iter().find(|n| globs_intersect(p, n))
+                && let Some(n) = other.nodes.iter().find(|n| globs_intersect(&p, n))
             {
                 return Some(n.clone());
             }
         }
         for b in &other.sels {
             if let Some(p) = sel_pattern(b)
-                && let Some(n) = self.nodes.iter().find(|n| globs_intersect(p, n))
+                && let Some(n) = self.nodes.iter().find(|n| globs_intersect(&p, n))
             {
                 return Some(n.clone());
             }
@@ -180,7 +187,7 @@ impl Claim {
 
     /// True if `path` is one of the devices this claim owns.
     fn owns(&self, path: &str) -> bool {
-        self.nodes.iter().any(|n| n == path) || self.sels.iter().any(|s| sel_pattern(s).is_some_and(|p| glob_match(p, path)))
+        self.nodes.iter().any(|n| n == path) || self.sels.iter().any(|s| sel_pattern(s).is_some_and(|p| glob_match(&p, path)))
     }
 
     fn labels(&self) -> Vec<String> {
@@ -234,6 +241,7 @@ impl DeviceLedger {
         for s in &sels {
             match s {
                 DeviceSel::Path(p) | DeviceSel::Socket(p) => nodes.extend(self.resolver.expand(p)),
+                DeviceSel::Netdev(n) => nodes.extend(self.resolver.netdevs(n).into_iter().map(|d| format!("net:{d}"))),
                 DeviceSel::Usb { vid, pid } => nodes.extend(self.resolver.usb_nodes(*vid, *pid)),
             }
         }
@@ -269,7 +277,7 @@ impl DeviceLedger {
         }
         let writable = |p: &str| {
             let named: Vec<&DeviceDecl> =
-                decls.iter().filter(|d| sel_pattern(&d.sel).is_some_and(|g| glob_match(g, p))).collect();
+                decls.iter().filter(|d| sel_pattern(&d.sel).is_some_and(|g| glob_match(&g, p))).collect();
             if named.is_empty() {
                 decls.iter().any(|d| d.write && matches!(d.sel, DeviceSel::Usb { .. }))
             } else {
@@ -327,8 +335,14 @@ fn args_naming(args: &[String]) -> impl Iterator<Item = &str> {
 
 /// What the owner is handed: literal paths and the nodes selectors resolved to.
 fn granted_paths(c: &Claim) -> Vec<String> {
-    let mut out: Vec<String> = c.sels.iter().filter_map(sel_pattern).filter(|p| !wild(p)).map(String::from).collect();
+    let mut out: Vec<String> = c.sels.iter().filter_map(sel_pattern).filter(|p| !wild(p)).collect();
     out.extend(c.nodes.iter().cloned());
+    // Interfaces are handed by their plain names; paths keep their leading `/`.
+    for p in &mut out {
+        if let Some(n) = p.strip_prefix("net:") {
+            *p = n.to_string();
+        }
+    }
     out.sort();
     out.dedup();
     out

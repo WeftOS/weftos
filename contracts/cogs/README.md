@@ -183,6 +183,19 @@ broker (`blob_get`). It carries no common fields.
 | `media_type` | string | `type/subtype`, lower-case, e.g. `image/png` |
 | `expires_ms` | u64 | Unix milliseconds after which the store may drop the bytes |
 
+### `event.v1` (reading)
+
+Something a cog noticed that a person or another cog should hear about: not a stream of values
+(`telemetry.v1`) and not a decision.
+
+| Field | Type | Rule |
+|-------|------|------|
+| `kind` | string | `[a-z][a-z0-9_.]*`, at most 64 chars, for example `can.new_id` |
+| `severity` | string | `info`, `warn` or `alert` |
+| `subject` | string | what it is about, 1..=64 chars (`0x1a4`, `can0`) |
+| `detail` | string | one line, at most 256 chars |
+| `value` | f64 | optional number that goes with it (a rate, a count) |
+
 ## Using it
 
 - **Producers**: emit messages that pass every `valid-*` vector's rules and fail the
