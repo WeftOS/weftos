@@ -197,6 +197,9 @@ export_build_stamp() {
     local sha dirty ts
     sha="$(git rev-parse --short=8 HEAD 2>/dev/null || echo unknown)"
     if [ -n "$(git status --porcelain 2>/dev/null)" ]; then dirty=1; else dirty=0; fi
+    # WEFTOS_BUILD_COMMIT (e.g. a container build outside a git checkout) wins
+    # over git; the stamp then never says -dirty.
+    if [ -n "${WEFTOS_BUILD_COMMIT:-}" ]; then sha="$WEFTOS_BUILD_COMMIT"; dirty=0; fi
     ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     export GIT_SHA="$sha"
     export GIT_DIRTY="$dirty"
@@ -3211,6 +3214,13 @@ ${BOLD}Options:${NC}
   --verbose       Show full cargo output
   --dry-run       Print commands without executing
   --help          Show this help
+
+${BOLD}Environment:${NC}
+  WEFTOS_BUILD_COMMIT=<sha>
+                  Commit baked into weaver --version / the daemon build stamp.
+                  Use it when building outside a git checkout (a container),
+                  where the stamp would otherwise read "unknown". Wins over
+                  git and GIT_SHA; the stamp is never marked -dirty.
 
 ${BOLD}Examples:${NC}
   scripts/build.sh native                          # Release CLI binary

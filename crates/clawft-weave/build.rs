@@ -25,6 +25,7 @@ fn main() {
     // forces a re-stamp).
     println!("cargo:rerun-if-changed=../../.git/HEAD");
     println!("cargo:rerun-if-changed=../../.git/refs");
+    println!("cargo:rerun-if-env-changed=WEFTOS_BUILD_COMMIT");
     println!("cargo:rerun-if-env-changed=GIT_SHA");
     println!("cargo:rerun-if-env-changed=GIT_DIRTY");
     println!("cargo:rerun-if-env-changed=BUILD_TS");
@@ -72,11 +73,14 @@ fn is_truthy(v: &str) -> bool {
 /// `GIT_SHA` / `GIT_DIRTY` env overrides (set by `scripts/build.sh`) win;
 /// otherwise falls back to `git`, and to `unknown` when git is unavailable.
 fn build_git_hash() -> String {
-    let sha = env_override("GIT_SHA")
+    let sha = env_override("WEFTOS_BUILD_COMMIT")
+        .or_else(|| env_override("GIT_SHA"))
         .or_else(git_short_hash)
         .unwrap_or_else(|| "unknown".to_string());
     let dirty = match env_override("GIT_DIRTY") {
         Some(v) => is_truthy(&v),
+        // An explicit commit names a clean source tree.
+        None if env_override("WEFTOS_BUILD_COMMIT").is_some() => false,
         None => git_is_dirty().unwrap_or(false),
     };
     if dirty && sha != "unknown" {
