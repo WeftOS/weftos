@@ -67,6 +67,16 @@ pub(crate) fn handle(
                 &gate,
             )?;
             broker.ext.noted(s, BusAction::Publish, &topic);
+            broker.ext.hooks.sink.topic_opened(&crate::policy::TopicInfo {
+                topic: topic.clone(),
+                kind: topic_kind.clone(),
+                source_id: source_id.clone(),
+                schema: schema.clone(),
+                class: clawft_types::cog_topics::TopicClass::Stream,
+                instance: s.instance_id().to_string(),
+                cog_id: spec.cog_id.clone(),
+                project_id: s.project_id.clone(),
+            });
             Ok(a)
         }),
         Request::StreamSubscribe { topic, schema, .. } => manifest(broker, s, "stream_subscribe")

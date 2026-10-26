@@ -355,7 +355,7 @@ by BLAKE3, and a `blob.v1` handle (`hash`, `size`, `media_type`, `expires_ms`) i
 
 ### 14. Mesh topics as exposures (B6): plan
 
-**Status: planned, not built. Five decisions need the owner before B6b (see the end).** It
+**Status: B6a built (exposure kind, registry, CLI; no wire). B6b onward is planned and waits on five owner decisions (see the end).** It
 builds on sections 3 and 8, ADR-120 (exposures, local-wins, activity log) and the precedent of
 ADR-101's inference proxy (dedicated mesh frame types, a role exposure, peer admission).
 
@@ -405,6 +405,16 @@ mistake. A raw subscribe without them is refused `raw_not_exposed` and logged at
 Blobs travel only by hash (`fetch {hash}` to the node whose store holds it; a handle names its
 node), and the reader's access follows the exposure, not the project rule.
 
+**As built (B6a).** `ExposureKind::Topic` (`topic`, kebab) is in the kernel registry. The broker
+announces a topic to its sink at the first reading and at each stream open
+(`BusSink::topic_opened`, no broker lock held, nothing for refused publishes or internal
+publishers); the daemon's sink registers `topic.<kind>/<source_id>` with resource
+`cog:<cog id>`, api `cogbus.v1`, audience `local`, state `on`, not announced. Registering is
+idempotent and an operator's persisted decision (state, audience) wins, so `weaver expose`
+list, `on --audience`, `off` and `pause` already work on topics, and a restart keeps them;
+`check_serve` refuses a `local` topic, so nothing is served. There is no `--raw` flag and no
+wire yet: both wait on decisions 2 and 4.
+
 **Subscriber side.** A cog subscribes with the topic's `weftos://<mesh>/sensors/<source_id>/topics/<kind>`
 name (section 2) in `subscribe.topic`, declared in `[[inputs]]` by the same kind and schema. The
 broker opens a mesh subscription and delivers each message as a normal `msg` with the origin
@@ -418,7 +428,7 @@ it. ADR-117 display bindings resolve through this path with the leaf as a remote
 
 | Step | Delivers | Done when |
 |---|---|---|
-| B6a | `ExposureKind::Topic`; the broker registers topic exposures; `weaver expose` and the report list them; local-wins on off | `weaver expose list` shows `topic.telemetry/venq-board` audience `local`; `off` and `on` persist |
+| B6a (built) | `ExposureKind::Topic`; the broker registers topic exposures; `weaver expose` and the report list them; local-wins on off | `weaver expose list` shows `topic.telemetry/venq-board` audience `local`; `off` and `on` persist |
 | B6b | frames 0x12/0x13; `MeshTopicHub`; readings with credits; governance and activity | a second in-process node subscribes to a reading topic and receives it; off withdraws; a denied peer is refused and logged |
 | B6c | the subscriber broker: `weftos://` subscribe, proxy topics, resubscribe | a cog on PG reads a Ventuno `telemetry` reading and sees the origin `node_id` |
 | B6d | stream chunks with byte credits; the raw rule | a raw IQ subscribe from PG is refused unless exposed with `--raw` and requested with `raw: true`; with both, chunks flow under credit and drops show as a gap |

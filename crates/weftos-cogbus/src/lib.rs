@@ -57,7 +57,7 @@ pub use broker::{
 #[cfg(unix)]
 pub use client::{Client, ClientError, Service, Subscription};
 pub use policy::{
-    BusAction, BusActivity, BusHooks, BusPolicy, BusRequest, BusSink, Grant, Outcome, RefusalLimits,
+    BusAction, BusActivity, BusHooks, BusPolicy, BusRequest, BusSink, Grant, Outcome, RefusalLimits, TopicInfo,
 };
 pub use proto::{CallDelivery, Delivery, ErrorCode, Event, InputSpec, OutputSpec, Request};
 pub use stream::{StreamConfig, StreamNotice, StreamRecord};

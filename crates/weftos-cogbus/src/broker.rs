@@ -458,7 +458,22 @@ impl Broker {
             r,
             to_sink: true,
         };
-        self.put(&mut g, put).map(|d| d.seq)
+        let sent = self.put(&mut g, put).map(|d| d.seq);
+        drop(g);
+        // The first reading of a topic announces it (no broker lock held).
+        if matches!(sent, Ok(1)) {
+            self.ext.hooks.sink.topic_opened(&crate::policy::TopicInfo {
+                topic: format!("{kind}/{source_id}"),
+                kind: kind.to_string(),
+                source_id: source_id.to_string(),
+                schema: schema.to_string(),
+                class: TopicClass::Reading,
+                instance: me.to_string(),
+                cog_id: cog,
+                project_id: s.project_id.clone(),
+            });
+        }
+        sent
     }
 
     /// Subscribe to `topic` (`<kind>/<source_id>` or `<kind>/*`); returns

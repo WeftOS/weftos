@@ -23,10 +23,25 @@ use std::sync::{Arc, OnceLock};
 
 use clawft_kernel::exposure::registry::now_ms;
 use clawft_kernel::exposure::{ActivityLog, NewActivity, Retention};
-use weftos_cogbus::{BusActivity, BusSink, Outcome};
+use clawft_kernel::exposure::{ExposureKind, ExposureSpec};
+use weftos_cogbus::{BusActivity, BusSink, Outcome, TopicInfo};
 
 /// Log file under the runtime dir.
 pub const LOG_FILE: &str = "cogbus-activity.jsonl";
+
+/// The exposure a topic is registered as (ADR-122 section 14, B6a): id
+/// `topic.<kind>/<source_id>`, audience `local` and nothing announced, so it
+/// is listed and switchable but never served until an operator widens it.
+pub fn topic_exposure(t: &TopicInfo) -> ExposureSpec {
+    let mut spec = ExposureSpec::new(
+        &format!("topic.{}", t.topic),
+        ExposureKind::Topic,
+        &format!("cog:{}", t.cog_id),
+        "cogbus.v1",
+    );
+    spec.state = clawft_kernel::exposure::ExposureState::On;
+    spec
+}
 
 /// What the daemon does when the broker asks for a cog to be stopped.
 pub type StopHook = Arc<dyn Fn(&str, &str) + Send + Sync>;
@@ -35,6 +50,7 @@ pub type StopHook = Arc<dyn Fn(&str, &str) + Send + Sync>;
 pub struct CogbusActivity {
     log: ActivityLog,
     stop: OnceLock<StopHook>,
+    exposures: OnceLock<Arc<clawft_kernel::exposure::ExposureRegistry>>,
 }
 
 /// `outcome` text of one record.
@@ -61,12 +77,12 @@ impl CogbusActivity {
                 ActivityLog::memory(Retention::default())
             })
         });
-        Self { log, stop: OnceLock::new() }
+        Self { log, stop: OnceLock::new(), exposures: OnceLock::new() }
     }
 
     /// In memory (tests).
     pub fn memory() -> Self {
-        Self { log: ActivityLog::memory(Retention::default()), stop: OnceLock::new() }
+        Self { log: ActivityLog::memory(Retention::default()), stop: OnceLock::new(), exposures: OnceLock::new() }
     }
 
     /// What to run for [`BusSink::stop_requested`] (first call wins). The
@@ -74,6 +90,12 @@ impl CogbusActivity {
     /// daemon sets this once it does.
     pub fn set_stop_hook(&self, f: StopHook) -> bool {
         self.stop.set(f).is_ok()
+    }
+
+    /// The registry topics are registered in as exposures (first call wins);
+    /// without one the daemon's global registry is used, if it is running.
+    pub fn set_exposures(&self, r: Arc<clawft_kernel::exposure::ExposureRegistry>) -> bool {
+        self.exposures.set(r).is_ok()
     }
 
     /// The log.
@@ -100,6 +122,13 @@ impl BusSink for CogbusActivity {
 
     fn stopped(&self, instance_id: &str, refusals: u32) {
         tracing::warn!(target: "cogbus", instance = instance_id, refusals, "cog stopped on the bus after repeated refusals");
+    }
+
+    fn topic_opened(&self, t: &TopicInfo) {
+        let Some(reg) = self.exposures.get().cloned().or_else(crate::expose_rt::global) else {
+            return;
+        };
+        reg.register(topic_exposure(t));
     }
 
     fn stop_requested(&self, instance_id: &str, reason: &str) {
