@@ -92,8 +92,6 @@ struct State {
     next_sub: u64,
     sinks: HashMap<String, SinkSlot>,
     svc: svc::Svc,
-    /// Open connections per instance (by connection id).
-    conns: HashMap<String, HashSet<u64>>,
     /// Declared message rate per (instance, kind), msgs/s.
     rates: HashMap<(String, String), f64>,
     /// Publish budgets per (instance, kind, source).
@@ -118,6 +116,9 @@ pub struct Broker {
     pub(crate) streams: crate::stream::Streams,
     pub(crate) ext: Ext,
     pub(crate) blobs: Option<Arc<crate::blob::BlobStore>>,
+    /// Open connections per instance (by connection id); sessions release
+    /// their own slot on drop.
+    conns: Arc<Mutex<HashMap<String, HashSet<u64>>>>,
 }
 
 impl Broker {
@@ -129,6 +130,7 @@ impl Broker {
             streams: crate::stream::Streams::new(Default::default()),
             ext: Ext::default(),
             blobs: None,
+            conns: Arc::default(),
         }
     }
 
@@ -216,7 +218,7 @@ impl Broker {
             }
         }
         g.svc.drop_instance(instance_id);
-        g.conns.remove(instance_id);
+        self.conns.lock().unwrap_or_else(|p| p.into_inner()).remove(instance_id);
         g.rates.retain(|(i, _), _| i != instance_id);
         g.buckets.retain(|(i, _, _), _| i != instance_id);
         if let Some(b) = &self.blobs {
@@ -236,7 +238,7 @@ impl Broker {
 
     /// Open a session for `token` from a peer running as `peer_uid`.
     pub fn authenticate(&self, token: &str, peer_uid: Option<u32>) -> Result<Session, BusError> {
-        let mut g = self.lock();
+        let g = self.lock();
         let inst = g
             .by_hash
             .get(&token_hash(token))
@@ -258,12 +260,20 @@ impl Broker {
         }
         let (id, project_id, revoked) = (id.clone(), inst.spec.project_id.clone(), inst.revoked.subscribe());
         let conn = svc::next_conn();
-        let open = g.conns.entry(id.clone()).or_default();
-        if open.len() >= self.cfg.max_conns_per_instance {
-            let m = format!("{id} already has {} connections open", open.len());
-            return Err(refuse(&id, "hello", "-", bad(ErrorCode::Busy, m)));
-        }
-        open.insert(conn);
+        let slot = {
+            let mut open = self.conns.lock().unwrap_or_else(|p| p.into_inner());
+            let held = open.entry(id.clone()).or_default();
+            if held.len() >= self.cfg.max_conns_per_instance {
+                let m = format!("{id} already has {} connections open", held.len());
+                let none = held.is_empty();
+                if none {
+                    open.remove(&id);
+                }
+                return Err(refuse(&id, "hello", "-", bad(ErrorCode::Busy, m)));
+            }
+            held.insert(conn);
+            crate::types::Slot { conns: self.conns.clone(), instance: id.clone(), conn }
+        };
         let (push, pushed) = tokio::sync::mpsc::unbounded_channel();
         Ok(Session {
             conn,
@@ -275,6 +285,7 @@ impl Broker {
             subs: BTreeMap::new(),
             wake: Arc::new(Notify::new()),
             revoked,
+            _slot: slot,
         })
     }
 
@@ -470,8 +481,9 @@ impl Broker {
                 format!("{kind} is a service; use serve and call"),
             )));
         }
-        if s.subs.len() >= self.cfg.max_subs_per_conn {
-            let m = format!("this connection already holds {} subscriptions", s.subs.len());
+        let held = s.subs.len() + self.streams.reader_count(s.conn);
+        if held >= self.cfg.max_subs_per_conn {
+            let m = format!("this connection already holds {held} subscriptions");
             return Err(no(bad(ErrorCode::Busy, m)));
         }
         let mut g = self.lock();
@@ -569,12 +581,7 @@ impl Broker {
             g.subs.remove(id);
         }
         g.svc.drop_conn(s.conn);
-        if let Some(open) = g.conns.get_mut(&s.instance_id) {
-            open.remove(&s.conn);
-            if open.is_empty() {
-                g.conns.remove(&s.instance_id);
-            }
-        }
+
     }
 }
 

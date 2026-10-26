@@ -23,6 +23,7 @@
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use serde_json::json;
@@ -65,6 +66,63 @@ pub struct SocketReport {
     pub group_applied: bool,
     /// Why the group was not applied (none requested, or the chown failed).
     pub note: Option<String>,
+}
+
+/// A count held for as long as the guard lives.
+struct Held(Arc<AtomicUsize>);
+
+impl Held {
+    /// Take one from `counter` unless it already holds `cap`.
+    fn take(counter: &Arc<AtomicUsize>, cap: usize) -> Option<Held> {
+        if counter.fetch_add(1, Ordering::SeqCst) >= cap {
+            counter.fetch_sub(1, Ordering::SeqCst);
+            return None;
+        }
+        Some(Held(counter.clone()))
+    }
+}
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Unauthenticated connections, counted per peer uid so one cog cannot use
+/// them all up and keep the others from saying hello.
+#[derive(Default)]
+struct PerUid(std::sync::Mutex<std::collections::HashMap<Option<u32>, usize>>);
+
+struct UidHeld(Arc<PerUid>, Option<u32>);
+
+impl PerUid {
+    fn take(this: &Arc<PerUid>, uid: Option<u32>, cap: usize) -> Option<UidHeld> {
+        let mut m = this.0.lock().unwrap_or_else(|p| p.into_inner());
+        let n = m.entry(uid).or_insert(0);
+        if *n >= cap {
+            return None;
+        }
+        *n += 1;
+        Some(UidHeld(this.clone(), uid))
+    }
+}
+
+impl Drop for UidHeld {
+    fn drop(&mut self) {
+        let mut m = self.0.0.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(n) = m.get_mut(&self.1) {
+            *n = n.saturating_sub(1);
+            if *n == 0 {
+                m.remove(&self.1);
+            }
+        }
+    }
+}
+
+/// What a connection holds until it has said hello.
+struct PreHello {
+    _all: Held,
+    _uid: UidHeld,
 }
 
 /// The listening socket. Dropping it stops accepting and removes the file.
@@ -142,6 +200,8 @@ pub async fn serve_with(
     let task = tokio::spawn(async move {
         let mut sweep = tokio::time::interval(CALL_SWEEP);
         sweep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let (total, prehello) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+        let per_uid = Arc::new(PerUid::default());
         let mut blob_sweep = tokio::time::interval(BLOB_SWEEP);
         blob_sweep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
@@ -154,8 +214,24 @@ pub async fn serve_with(
                 }
                 accepted = listener.accept() => match accepted {
                     Ok((stream, _)) => {
+                        // Bounded before anything is read: a flood of idle
+                        // connections cannot use up the node's descriptors.
+                        let cfg = broker.config();
+                        let uid = stream.peer_cred().ok().map(|c| c.uid());
+                        let (Some(all), Some(pre), Some(mine)) = (
+                            Held::take(&total, cfg.max_conns),
+                            Held::take(&prehello, cfg.max_prehello_conns),
+                            PerUid::take(&per_uid, uid, cfg.max_prehello_per_uid),
+                        ) else {
+                            tracing::debug!(target: "cogbus", ?uid, "connection refused: connection cap");
+                            drop(stream);
+                            continue;
+                        };
                         let b = broker.clone();
-                        tokio::spawn(async move { connection(b, stream).await });
+                        tokio::spawn(async move {
+                            let _all = all;
+                            connection(b, stream, PreHello { _all: pre, _uid: mine }).await
+                        });
                     }
                     Err(e) => {
                         tracing::warn!(target: "cogbus", error = %e, "accept failed");
@@ -234,14 +310,16 @@ fn error(id: u64, e: BusError) -> Event {
     }
 }
 
-async fn connection(broker: Arc<Broker>, stream: UnixStream) {
+async fn connection(broker: Arc<Broker>, stream: UnixStream, pre: PreHello) {
     let peer_uid = stream.peer_cred().ok().map(|c| c.uid());
     let (r, mut w) = stream.into_split();
     let (tx, mut rx) = mpsc::channel(16);
     let read_task = tokio::spawn(reader(r, tx));
     let session = hello(&broker, &mut rx, &mut w, peer_uid).await;
+    // Said hello (or did not): either way it no longer counts as unauthenticated.
+    drop(pre);
     if let Some(mut s) = session {
-        let mut ss = crate::stream::SessionStream::default();
+        let mut ss = crate::stream::SessionStream::for_conn(s.conn());
         serve_session(&broker, &mut s, &mut ss, &mut rx, &mut w).await;
         broker.close(&s);
         crate::stream::serve::close(&broker, &ss);
@@ -255,7 +333,7 @@ async fn hello(
     w: &mut OwnedWriteHalf,
     peer_uid: Option<u32>,
 ) -> Option<Session> {
-    let first = match timeout(HELLO_TIMEOUT, rx.recv()).await {
+    let first = match timeout(Duration::from_millis(broker.config().hello_timeout_ms), rx.recv()).await {
         Ok(Some(i)) => i,
         _ => return None,
     };

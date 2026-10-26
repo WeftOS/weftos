@@ -40,6 +40,9 @@ pub struct BlobConfig {
     pub quota_bytes: u64,
     /// Bytes one instance owns at most.
     pub per_instance_bytes: u64,
+    /// Bytes one project (the node bucket counts as one) owns at most, so
+    /// several instances of a project cannot fill the node together.
+    pub per_project_bytes: u64,
     /// TTL when the put names none.
     pub default_ttl_ms: u64,
     /// Longest TTL a put may ask for.
@@ -57,6 +60,7 @@ impl Default for BlobConfig {
         Self {
             quota_bytes: 2 << 30,
             per_instance_bytes: 512 << 20,
+            per_project_bytes: 1 << 30,
             default_ttl_ms: 10 * 60_000,
             max_ttl_ms: 24 * 3_600_000,
             max_blob_bytes: 256 << 20,
@@ -158,6 +162,12 @@ impl BlobStore {
     pub fn open(dir: &Path, cfg: BlobConfig, now_ms: u64) -> std::io::Result<Self> {
         use std::os::unix::fs::DirBuilderExt;
         std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
+        // A directory that already existed keeps its mode; the blobs inside
+        // must not be readable by other cog uids.
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+        }
         let mut inner = Inner::default();
         for e in std::fs::read_dir(dir)? {
             let p = e?.path();
@@ -288,6 +298,14 @@ impl BlobStore {
                 self.cfg.per_instance_bytes
             )));
         }
+        let theirs: u64 = g.blobs.values().filter(|m| m.project_id.as_deref() == project_id).map(|m| m.size).sum::<u64>()
+            + g.uploads.values().filter(|u| u.project_id.as_deref() == project_id).map(|u| u.size).sum::<u64>();
+        if theirs + size > self.cfg.per_project_bytes {
+            return Err(BlobError::Quota(format!(
+                "this project holds {theirs} of its {} bytes",
+                self.cfg.per_project_bytes
+            )));
+        }
         g.next += 1;
         let id = g.next;
         let path = self.dir.join(format!("up-{id}.tmp"));
@@ -324,6 +342,10 @@ impl BlobStore {
         if data.len() > CHUNK {
             return Err(BlobError::BadRequest(format!("a chunk is at most {CHUNK} bytes")));
         }
+        // An empty slice only completes an upload; it never keeps one alive.
+        if data.is_empty() && !last {
+            return Err(BlobError::BadRequest("an empty chunk".into()));
+        }
         let mut g = self.lock();
         let u = g
             .uploads
@@ -359,11 +381,19 @@ impl BlobStore {
             media_type: u.media_type.clone(),
             expires_ms,
         };
+        if g.blobs.get(&hash).is_some_and(|m| m.expires_ms <= now_ms) {
+            // Expired and not yet swept: it is gone, not resurrected.
+            self.drop_blob(&mut g, &hash);
+        }
         if let Some(m) = g.blobs.get_mut(&hash) {
             // Already stored: the new putter holds the bytes, so it may read
-            // them; the expiry only moves out.
+            // them. Only the owner (or a holder it passed the handle to)
+            // moves the expiry out; anyone else gets the existing expiry, so
+            // re-putting known bytes cannot pin another project's blob.
             let _ = std::fs::remove_file(&u.path);
-            m.expires_ms = m.expires_ms.max(expires);
+            if m.owner == owner || m.readers.contains(owner) {
+                m.expires_ms = m.expires_ms.max(expires);
+            }
             m.readers.insert(owner.to_string());
             let meta = m.clone();
             std::fs::write(meta_path(&self.dir, &hash), serde_json::to_vec(&meta).unwrap_or_default()).map_err(io)?;

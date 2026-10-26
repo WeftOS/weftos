@@ -119,7 +119,7 @@ fn uploads_are_sequential_complete_and_owned() {
     // The failed commit left the upload usable.
     let h = s.chunk(0, "a", up, 7, b"hij", true).unwrap().unwrap();
     assert_eq!(h.hash, blake3::hash(b"abcdefghij").to_hex().to_string(), "the short last chunk's bytes were kept");
-    assert!(matches!(s.chunk(0, "a", 99, 0, b"", false), Err(BlobError::NotFound(_))));
+    assert!(matches!(s.chunk(0, "a", 99, 0, b"x", false), Err(BlobError::NotFound(_))));
     let big = vec![0u8; CHUNK + 1];
     let up2 = s.begin(0, "a", None, "image/png", big.len() as u64, None).unwrap();
     assert!(matches!(s.chunk(0, "a", up2, 0, &big, true), Err(BlobError::BadRequest(_))));
@@ -200,4 +200,57 @@ fn a_ranged_read_returns_the_slice_and_eof() {
     assert_eq!((b.as_slice(), eof), (&b"89"[..], true));
     let (_, b, eof) = s.get(1, "a", None, &h.hash, 50, 10).unwrap();
     assert!(b.is_empty() && eof);
+}
+
+#[test]
+fn an_empty_chunk_cannot_keep_an_upload_alive() {
+    let tmp = tempfile::tempdir().unwrap();
+    let s = BlobStore::open(tmp.path(), BlobConfig::default(), 0).unwrap();
+    let up = s.begin(0, "a", None, "image/png", 4, None).unwrap();
+    s.chunk(0, "a", up, 0, b"ab", false).unwrap();
+    assert!(matches!(s.chunk(50_000, "a", up, 2, b"", false), Err(BlobError::BadRequest(_))));
+    // The refused empty chunk did not refresh the idle clock: it times out.
+    assert!(s.begin(61_000, "b", None, "image/png", 1, None).is_ok());
+    assert!(matches!(s.chunk(61_000, "a", up, 2, b"cd", true), Err(BlobError::NotFound(_))));
+}
+
+#[test]
+fn re_putting_known_bytes_cannot_pin_anothers_blob_or_resurrect_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let s = BlobStore::open(tmp.path(), BlobConfig::default(), 0).unwrap();
+    let a = put(&s, 0, "owner", Some(P1), b"payload", Some(10_000)).unwrap();
+    // Another project holding the same bytes asks for a day: it does not move the expiry.
+    let b = put(&s, 1_000, "other", Some(P2), b"payload", Some(86_400_000)).unwrap();
+    assert_eq!(b.expires_ms, a.expires_ms, "{b:?}");
+    assert!(matches!(s.get(10_000, "owner", Some(P1), &a.hash, 0, 1), Err(BlobError::NotFound(_))), "expired on schedule");
+    // An expired blob the sweep has not reached is replaced, not revived with its old readers.
+    let c = put(&s, 20_000, "other", Some(P2), b"payload", Some(5_000)).unwrap();
+    assert_eq!(c.expires_ms, 25_000);
+    assert!(matches!(s.get(21_000, "owner", Some(P1), &c.hash, 0, 1), Err(BlobError::Denied(_))), "the old owner is not a reader of the new blob");
+    // The owner and holders it passed the handle to may extend.
+    let d = put(&s, 21_000, "other", Some(P2), b"payload", Some(60_000)).unwrap();
+    assert_eq!(d.expires_ms, 81_000);
+}
+
+#[test]
+fn several_instances_of_one_project_share_its_quota() {
+    let tmp = tempfile::tempdir().unwrap();
+    let c = BlobConfig { quota_bytes: 1000, per_instance_bytes: 1000, per_project_bytes: 300, ..Default::default() };
+    let s = BlobStore::open(tmp.path(), c, 0).unwrap();
+    put(&s, 0, "i1", Some(P1), &[1u8; 150], None).unwrap();
+    put(&s, 0, "i2", Some(P1), &[2u8; 150], None).unwrap();
+    assert!(matches!(s.begin(0, "i3", Some(P1), "image/png", 1, None), Err(BlobError::Quota(_))), "the project is full");
+    assert!(s.begin(0, "x", Some(P2), "image/png", 100, None).is_ok(), "another project is not");
+    assert!(s.begin(0, "y", None, "image/png", 100, None).is_ok(), "nor the node bucket");
+}
+
+#[test]
+fn an_existing_blob_directory_is_made_private() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let d = tmp.path().join("blobs");
+    std::fs::create_dir(&d).unwrap();
+    std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o755)).unwrap();
+    BlobStore::open(&d, BlobConfig::default(), 0).unwrap();
+    assert_eq!(std::fs::metadata(&d).unwrap().permissions().mode() & 0o777, 0o700);
 }

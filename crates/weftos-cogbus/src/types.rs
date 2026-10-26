@@ -100,6 +100,14 @@ pub struct BrokerConfig {
     pub max_subs_per_conn: usize,
     /// Connections one instance may have open.
     pub max_conns_per_instance: usize,
+    /// Connections the node holds that have not yet said hello.
+    pub max_prehello_conns: usize,
+    /// Of those, how many one peer uid may hold.
+    pub max_prehello_per_uid: usize,
+    /// Connections the node holds in all (descriptor protection).
+    pub max_conns: usize,
+    /// Time a new connection has to say hello.
+    pub hello_timeout_ms: u64,
 }
 
 impl BrokerConfig {
@@ -114,6 +122,10 @@ impl BrokerConfig {
             pong_timeout_ms: 15_000,
             max_subs_per_conn: 64,
             max_conns_per_instance: 8,
+            max_prehello_conns: 64,
+            max_prehello_per_uid: 8,
+            max_conns: 512,
+            hello_timeout_ms: 5_000,
         }
     }
 }
@@ -139,6 +151,27 @@ pub struct TopicRow {
     pub drops: u64,
 }
 
+/// A connection's place in its instance's connection count. Dropping it,
+/// on any path (a failed reply, a cancelled task, a panic), gives the slot
+/// back.
+pub(crate) struct Slot {
+    pub(crate) conns: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, std::collections::HashSet<u64>>>>,
+    pub(crate) instance: String,
+    pub(crate) conn: u64,
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        let mut g = self.conns.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(open) = g.get_mut(&self.instance) {
+            open.remove(&self.conn);
+            if open.is_empty() {
+                g.remove(&self.instance);
+            }
+        }
+    }
+}
+
 /// An authenticated connection's view of the broker.
 pub struct Session {
     pub(crate) instance_id: String,
@@ -153,6 +186,8 @@ pub struct Session {
     /// (calls for a provider, late answers for a caller).
     pub(crate) push: mpsc::UnboundedSender<Event>,
     pub(crate) pushed: Option<mpsc::UnboundedReceiver<Event>>,
+    /// Releases the connection's slot when the session goes.
+    pub(crate) _slot: Slot,
 }
 
 impl std::fmt::Debug for Session {
@@ -166,6 +201,11 @@ impl std::fmt::Debug for Session {
 }
 
 impl Session {
+    /// Unique per connection, shared with the stream registry.
+    pub fn conn(&self) -> u64 {
+        self.conn
+    }
+
     /// The instance this connection speaks for.
     pub fn instance_id(&self) -> &str {
         &self.instance_id

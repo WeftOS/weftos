@@ -241,6 +241,15 @@ listener used when the primary bind fails.
   and streams together, `busy` past that) and one instance at most 8 connections (`busy` at
   `hello`, counted as a refusal of that instance). Revoking an instance forgets its
   connection count; a closed connection frees its slot. All four are `BrokerConfig` fields.
+  The slot belongs to the `Session` and is released when it is dropped, on any path (a hello
+  reply that fails to send, a cancelled task), so a cog that vanishes mid-hello cannot lock its
+  instance out. Readings and stream readers count against the same 64.
+- **Before hello.** The accept loop bounds a connection before reading from it: at most 8
+  unauthenticated connections per peer uid, 64 on the node, and 512 connections in all
+  (descriptor protection); one over its cap is closed at once. A connection that has not said
+  hello within 5 s (`hello_timeout_ms`) is closed. One cog flooding the socket therefore
+  cannot keep another uid from saying hello, though cogs that share a uid (a user daemon, or
+  `container_uid`) share its 8.
 - **Publish budgets (gap 5).** A cog's declared `[[outputs]].rate` is a per-topic budget when
   it names a message rate: `<n> Hz`, `<n>/s`, `<n>/min`, `<n> msg/s`, `every <n> <ms|s|min|h>`,
   or a sample `Hz` with `<m> ms chunks` (one message per `m` ms); `every <n> s per <x>` is not
@@ -335,6 +344,12 @@ by BLAKE3, and a `blob.v1` handle (`hash`, `size`, `media_type`, `expires_ms`) i
 - **Replies.** A reply body is still at most 64 KiB; a reply that carries a handle is small
   and the caller fetches the result. This is how `image.sd15` results and camera frames reach
   their readers, and a caller can pass a large input the same way (a handle in the call).
+- **Review fixes** (`docs/reviews/overnight-2026-10-26.md`). The store also holds at most 1 GiB per
+  project (the node bucket counts as one), so several instances cannot fill the node together.
+  Re-putting bytes that are already stored adds the putter as a reader but only the owner or a
+  holder moves the expiry, and an expired blob is replaced, not revived with its old readers. An
+  empty non-final chunk is refused so it cannot keep an upload alive. The store directory is
+  made `0700` even if it already existed.
 - **Not carried.** Mesh-wide handles (B6: a handle resolves on the node that stores it), blob
   streaming without the 32 KiB slices, and a per-project quota.
 
@@ -439,6 +454,7 @@ acceptance test passes, and the row is then marked closed with the commit.
 | 3 | **Closed for the code** (same card). Proven as root on the VM: the socket came up `root:cogbus 0660`, cogs get `cogbus` as their only supplementary group, and a uid outside the group got `PermissionError` on connect | until the owner applies the setup on a real host the socket keeps the daemon's group (reported in `cogbus list`) | the same owner-run setup | `cogbus-gap-uid` |
 | 4 | **Closed** (`cogbus-gap-idle`, §11 "Idle connections and caps"). Ping after 60 s of silence, close 15 s later without any frame; 64 subscriptions per connection; 8 connections per instance. Tested with 120 ms timers on a real socket | none known; an old client without ping handling is closed after silence | n/a | `cogbus-gap-idle` |
 | 5 | **Closed** (`cogbus-gap-rate-stop`, §11 "Publish budgets" and "Stopping the cog"). Per-topic token bucket from `[[outputs]].rate`; `rate_limited` refusals; the repeated-refusal stop now asks governance (`cogbus.stop`) and stops the workload through the host, chained with the cause | rates the manifest writes as free text with no message rate are not metered; streams are not metered | n/a | `cogbus-gap-rate-stop` |
+| 6 | Blob store, review leftovers (low): `get` answers `cross_project` for a blob another project holds and `not_found` for one that does not exist, an oracle for "does the node hold exactly these bytes" to someone who already has them; governance is asked on the first slice of a get only; a re-placed cog under another project reuses the instance id (workload, version, args, csi bind, node: no project) and so can read the old instance's unexpired blobs if it knows the hash; handles passed to other instances are forgotten at restart (fails closed) | an instance can confirm content it already holds; a mid-download governance change does not cut a get off; a project swap within 24 h exposes blobs to a cog that knows a hash | answer `not_found` for both refusals; ask governance per slice or per N bytes; add the project to the native instance id | `cogbus-blob-review` |
 
 Gaps 2 and 3 also block the plan's P3 device-owner cogs, whose per-device allowlists
 need per-cog uids. After `cogbus-gap-uid` P3 can rely on per-cog uids only where the

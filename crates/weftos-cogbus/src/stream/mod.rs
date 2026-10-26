@@ -112,6 +112,16 @@ pub(crate) struct SessionStream {
 }
 
 #[cfg(unix)]
+impl SessionStream {
+    /// Stream state for the connection whose session has id `conn`, so the
+    /// broker counts a connection's readings and streams together.
+    pub(crate) fn for_conn(conn: u64) -> Self {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        Self { conn, tx, rx: Some(rx) }
+    }
+}
+
+#[cfg(unix)]
 impl Default for SessionStream {
     fn default() -> Self {
         use std::sync::atomic::{AtomicU64, Ordering};
