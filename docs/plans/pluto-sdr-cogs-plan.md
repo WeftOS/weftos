@@ -188,11 +188,60 @@ build of the cog, which used a whole core and missed 1.6 to 3 percent of the str
 base64 decode searched a table; it reported the miss, as designed. With the lookup table it uses
 about half a core and has missed nothing (every later reading 0).
 
-**Multi-hour band-plan phase.** `2437e6:5e6:8000, 1090e6:2.4e6:6000, 433.92e6:2e6:5000,
-915e6:2e6:5000` (a 24 s cycle: 2.4 GHz, 1090 MHz, 433 and 915 MHz, the FIR on the last two) with
-the spectrum cog reading it, started 04:33 board time for 6 hours. Results: see "Overnight" below.
+**Multi-hour band-plan phase (6 h, 04:33 to 10:33 board time).** `2437e6:5e6:8000,
+1090e6:2.4e6:6000, 433.92e6:2e6:5000, 915e6:2e6:5000` (a 24 s cycle: 2.4 GHz at 5 MS/s, 1090 MHz,
+then 433.92 and 915 MHz at 2 MS/s through the FIR), the spectrum cog reading it. The P3 lane's
+camera ran for 3 h 40 min of it (`camera_procs` in `env.csv`).
 
-Overnight: (pending; filled in when the run ends).
+| | Whole phase | Camera off | Camera on |
+|---|---|---|---|
+| Time | 21,600 s | 8212 s | 13,378 s |
+| Delivered | 56,380,293,120 | 22,541,369,344 | 33,796,325,376 |
+| Expected from the clock | 58,840,303,776 | | |
+| Counted lost | 2,260,993,417 (3.84 percent) | **0** | 2,260,993,417 (6.27 percent) |
+| Gap events | 8422 | 0 | 8422 |
+| Overflows, all-zero reads, apply errors | 0, 0, 0 | | |
+| Retunes | 3153 | | |
+
+Every lost sample sits in the camera-on time. With the camera idle the band-plan cycle ran 2 h 17
+min without losing one, through 457 retunes, the FIR bands included. The independent ring sink read
+9,076,119 records over the whole run (both phases), 0 ring skips, and counted 8404 gap records
+(2,256,154,059 samples), the last 18 of the cog's 8422 not yet printed when the run ended.
+
+**The Pluto dropped off the bus twice** (08:13:54 and 08:16:45), both times with the camera and the
+board's video encoder busy; the kernel log has `msm_vidc ... Failed to switch GDSC into HW control`
+at 08:13:30, three seconds before. `usb 1-2: reset high-speed USB device`, `device descriptor read/64,
+error -110`, `USB disconnect`, and the Pluto enumerated again 40 to 60 s later. The cog saw `Broken
+pipe` at a refill, reported `no_source` with the reason, retried with backoff (`Connection timed out`
+while it was away) and streamed again about 80 s after each loss. `disconnects` reads 2. Nothing was
+power-cycled. Why the radio reset is not established: a USB reset from the host side after the
+transfers stalled is as likely as the Pluto rebooting; the P3 lane should look at the codec fault.
+
+Smaller findings: the AD9364 temperature sensor read -80.7, -75.4 and -73.7 C in 9 reports (once
+before the drops, then after the second); the cog now drops a temperature outside -40 to 125 C. The
+valid readings span 32.5 to 64.0 C (mean 40.2), the Zynq 59.8 to 64.7 C (mean 62.2). Board power
+(INA232) averaged 14.45 W, 10.5 to 23.2 W, the high end with the camera and the encoder running.
+The rx cog used 47 to 58 percent of a core and 25 MB, the spectrum cog 52 percent and 19 MB.
+
+**The spectrum cog over the same phase** published 12,208 spectrum windows and 359 occupancy
+readings per band, with `coverage` showing each band's share of its minute:
+
+| Band | Occupancy mean (max) | Coverage mean | Worst minute's loss |
+|---|---|---|---|
+| 433.92 MHz | 0.27 percent (0.69) | 0.19 | 0 |
+| 915 MHz | 0.53 percent (0.82) | 0.22 | 0 |
+| 1090 MHz | 0.85 percent (2.34) | 0.29 | 0 |
+| 2437 MHz | 1.36 percent (1.71) | 0.31 | 13.6 percent (camera on) |
+
+Its totals: 73.2 G samples used, 2.268 G counted lost (the owner's), 2.5 M missed by the reader
+itself (0.003 percent: the reader fell behind while the board was loaded), 0 dead.
+
+What this settles for the plan: R2's done-when holds for an hour with the radio to itself, and for
+2 h 17 min of band-plan cycling; two consumers sharing the tuner by band plan work (simulated radio
+through the real broker, then the spectrum cog read the cycling plan live). The shared USB hub is
+the binding constraint: **the Pluto should not share a root hub with the camera**, or the rate
+should drop to 4 MS/s while the camera streams. The soak scripts, the broker harness and the
+summaries are in [`scripts/bench/pluto/soak/`](../../scripts/bench/pluto/soak/).
 
 ## 3. How it attaches to the Ventuno
 
