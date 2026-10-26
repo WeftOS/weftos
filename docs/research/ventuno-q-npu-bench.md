@@ -128,6 +128,69 @@ On the board, `/data/bench` holds a venv with `sherpa-onnx` 2.0.0 (ASR) and `ven
   - `tts.py <engine> <outdir>`, then `tts-roundtrip.py <outdir>/<engine>.json` followed by `asr.py parakeet tts-<engine> ...`.
 - **Vision** runs from the Mac: `VENQ_HOST=user@board scripts/bench/ventuno/vlm.py <model> <out.json>`, with the pack copied to `/data/bench/vlm`.
 
+## NPU inference service soak (2026-10-26)
+
+`npu-infer` (cog ADR-175) placed on the Ventuno through the real broker, under the host, with two `npu-consumer` cogs (ADR-176) calling it for about five hours. Run by the P4 lane; numbers come from the consumers' JSON-lines logs, the service's `telemetry/venq-npu` readings, and a sampler (`scripts/bench/ventuno/npu-soak-monitor.sh`, every 10 s: MemAvailable, GenieX and cog RSS, INA232 input power, hottest thermal zone, load, the kernel's `oom_kill` counter). `scripts/bench/ventuno/npu-soak-summary.py --from/--to` produces the figures below.
+
+### What ran
+
+| | |
+|---|---|
+| Service | `npu-infer`, `ram_mb = 10240`, GenieX one server per resident model on 127.0.0.1:18181+, `--keepalive 86400`, SD service on :18700 waited for |
+| Consumer a | priority 5, alternates gemma3-1b and gemma4-e2b, 3 s pause, 300 s deadline |
+| Consumer b | priority 4, alternates qwen3.5-0.8b and gemma4-e2b, 3 s pause, 300 s deadline |
+| Other load on the board | the usual: `weftos-sd.service` resident and idle, board-telemetry, the Pluto and camera soaks of other lanes |
+
+Two phases, by the service's memory budget (the consumers did not change):
+
+- **Baseline, `--budget-mib 8000 --slots 3`, 06:23 to 08:29:56 UTC (2.1 h).** All three models fit (gemma3-1b 1.4 GiB, qwen3.5-0.8b 1.5 GiB, gemma4-e2b 5.0 GiB measured: 7996 of 8000 MiB), so after the first loads every call hits a resident model.
+- **Eviction, `--budget-mib 6000 --slots 2`, 08:30:39 to 11:30 UTC (3.0 h).** gemma4-e2b cannot sit beside both small models; the service swaps constantly. The node facts reported `service_models` and `service_queue_depth` throughout.
+
+### Results
+
+| | Baseline | Eviction |
+|---|---|---|
+| Calls (a + b) | 4 240 | 2 246 |
+| Failed, rejected, expired | 0, 0, 0 | 0, 0, 0 |
+| Model loads / evictions | 3 / 1 | 1 684 / 1 681 |
+| Latency p50, consumer a / b | 463 / 496 ms | 6.6 / 6.5 s |
+| Latency p95, consumer a / b | 877 / 757 ms | 10.2 / 7.2 s |
+| Latency max | 192 s (one stall, below) | 16.3 s |
+| Latency without a load, p50 | 463 / 496 ms | 6.5 / 6.3 s |
+| Per model p50 (a) | gemma3-1b 309 ms, gemma4-e2b 602 ms | gemma3-1b 3.2 s, gemma4-e2b 9.8 s |
+| Per model p50 (b) | qwen3.5-0.8b 383 ms, gemma4-e2b 526 ms | qwen3.5-0.8b 6.8 s, gemma4-e2b 6.3 s |
+| Queue wait p50 / p95 | 0 / 292 ms (a), 0 / 0 (b) | 0.8 / 1.5 s (a), 2.9 / 5.9 s (b) |
+| Queue depth, max / mean | 1 / 0.04 | 1 / 0.43 |
+| Calls per minute | 33 | 12.5 |
+| GenieX restarts | 1 (the stall) | 0 |
+| OOM kills | 0 | 0 |
+| MemAvailable, min / median | 3.6 / 3.8 GiB | 6.1 / 10.0 GiB |
+| GenieX RSS, max (sum of servers) | 3.7 GiB | 2.4 GiB |
+| Input power, mean / max | 16.3 / 23.3 W | 16.0 / 23.2 W |
+| Hottest zone, max | 44.8 C | 44.4 C |
+
+The idle board drew 13.6 W (mean of the first hour before any call, with the other lanes' cogs running), so the service adds about 2.4 W over the board on average, 10 W at the peaks.
+
+- **A load costs 6 to 10 s.** In the eviction phase 75% of calls had to load their model first, and a call's total is the load plus 0.3 to 1.0 s of generation. Two consumers that alternate models that do not fit together pay that every time; the `calls.rejected`, `models.loads` and `models.evictions` counters in the telemetry show it.
+- **Priority held.** In the eviction phase consumer a (priority 5) waited a median 0.8 s and consumer b (priority 4) 2.9 s, as the queue's order (and its aging, 30 s per level, which never mattered here) predicts.
+- **Memory budget held.** Resident models never exceeded the budget: 7 996 of 8 000 MiB in the baseline, 2 786 MiB in the eviction phase (one model at a time was admitted beside the small one). A load whose measured cost is above its estimate evicts the older model after loading (seen once, with qwen3-vl-4b, earlier in the day).
+- **One stall.** At 07:17:08 UTC a call to gemma4-e2b got no answer from its GenieX server. The service's HTTP read timeout (180 s) expired, the call was classified dead, the server was killed, restarted through the wrapper and reloaded (9 s), and the call completed: 192 s end to end, `restarts = 1`, one failed-then-recovered call in about 6 500, nothing lost. The 180 s read timeout is far above the cost of any generation here (at most 1.1 s); it should follow the call's own deadline and the expected tokens, a follow-up for the cog.
+- **Replacing the service costs a gap.** Re-placing `npu-infer` (08:29:56 to 08:30:39) refused 16 calls (8 per consumer, `unavailable: nothing serves`), each in under 10 ms; the consumers retried every 5 s and went on by themselves once the new instance served. No call hung.
+
+### Findings about the platform
+
+- **The planner's memory view lags reality by about 20 s.** The replacement placement was first refused because node facts still showed 3.8 GiB free, a figure from before the old instance's GenieX servers had exited. A re-place that follows an unload needs a retry or a fresh probe.
+- **`[resources].ram_mb` is both the address-space cap and the scheduling reservation.** The host applies it as `RLIMIT_AS` to the cog and every child (default 256 MiB), and the planner reserves the same figure from free memory. GenieX is a Go program that reserves address space far beyond its resident size and dies at 256 MiB (`failed to reserve page summary memory`); at 64 GiB the placement is refused. Smallest limit GenieX loaded and answered under (nctx 2048): gemma3-1b 4 GiB, qwen3.5-0.8b 4 GiB, gemma4-e2b 8 GiB, qwen3-4b W4A16 11 GiB (peak 10.65 GiB), qwen3-vl-4b at most 12 GiB. 10 240 serves the first three; qwen3-4b and the vision models need 14 336 or more, which placement accepts only with that much free memory (card 7306a144 separates the two).
+- **A placed cog has no `HOME`.** GenieX exits without it (`$HOME is not defined`) and finds its model cache through it. The cog starts GenieX with a cleared environment holding `HOME` and `PATH` only.
+- **Accept run through the real broker** (before the soak): 6 of 6 calls each for gemma3-1b (p50 761 ms, one load, max 4.9 s) and qwen3.5-0.8b (p50 775 ms, one load, max 6.3 s); node facts showed `service_state="up"`, the resident models, the queue depth and the busy flag on `accel.npu.qualcomm`.
+
+### What the soak did not cover
+
+- qwen3-4b and the vision models (blocked by `ram_mb`, above); the inline and blob image paths were tried once by hand, not soaked.
+- The Stable Diffusion service was idle, so waiting for it was never exercised under load.
+- Calls of at most 24 tokens; long generations and long prompts were tried by hand only.
+- Two consumers; the per-caller limit (16 pending) and the per-service limit (64) were not approached (queue depth never above 1).
+
 ## What it means for placement
 
 For the governed workload placement layer (ADR-099), treat the Ventuno as an `npu` class host:
