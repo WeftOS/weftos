@@ -3,7 +3,7 @@
 - **Status**: Accepted (2026-10-25: the owner asked to start B1, taking the recommended
   answer to each open question; see "Decisions on the open questions"). Card
   `venq-cog-broker-adr`; implementation on cards `venq-cogbus-b1` .. `b6`.
-- **Updated**: 2026-10-25 (B1 and B4 shipped; known gaps recorded with closing cards; section 12 adds service calls for the NPU service, card `d9272837`; gaps 2 and 3 closed in code, pending the owner-run host setup; B5 blob store, section 13)
+- **Updated**: 2026-10-25 (B1 and B4 shipped; known gaps recorded with closing cards; section 12 adds service calls for the NPU service, card `d9272837`; gaps 2 and 3 closed in code, pending the owner-run host setup; B5 blob store, section 13; gap 4 idle and caps, section 11)
 - **Deciders**: owner
 - **Builds on**: ADR-099 (governed placement, node facts), ADR-100 (cog workload kind),
   ADR-120 (exposures: announce, see, switch off, log), ADR-114 (`weftos://` names),
@@ -205,6 +205,15 @@ listener used when the primary bind fails.
   declares.
 - A cog that publishes undeclared topics or exceeds its declared rate is refused and
   logged; repeated refusals stop the cog through the workload runtime.
+- **Idle connections and caps.** After `hello`, a connection that sends no frame for 60 s
+  (`idle_ping_ms`) is sent `{"type":"ping"}`; any frame, or `{"op":"pong"}`, counts as
+  life, and 15 s (`pong_timeout_ms`) of silence after the ping closes it with `timeout`
+  ("idle") and a refusal-log entry. The client library answers pings itself, so a subscriber
+  or provider with nothing to say stays connected; a client that does not know `ping` is
+  closed after about 75 s of silence. One connection holds at most 64 subscriptions (readings
+  and streams together, `busy` past that) and one instance at most 8 connections (`busy` at
+  `hello`, counted as a refusal of that instance). Revoking an instance forgets its
+  connection count; a closed connection frees its slot. All four are `BrokerConfig` fields.
 
 ### 12. Service calls
 
@@ -291,7 +300,7 @@ acceptance test passes, and the row is then marked closed with the commit.
 | 1 | Only native cogs get the socket; container and VM cogs cannot reach the broker | such cogs fall back to the ingest HTTP path only | socket bind-mounted into containers, uid recorded per route; VM routes via an authenticated relay or declared unsupported | `cogbus-gap-containers` (after gap 2) |
 | 2 | **Closed for the code** (`cogbus-gap-uid`, 0865db260 and the root-path proof below; §4a). A privileged daemon with a uid range runs each native cog as its own uid and the broker registers it. Proven as root on the aarch64 VM: a cog launched via setgroups/setgid/setuid as range uid 61000 was accepted, the same token from uid 61001 was refused `uid_mismatch` and logged. A user daemon cannot switch uids, so its cogs are marked `shared-uid` and `require_cog_uid` can refuse them | on a user daemon one cog that steals another's token can still act as it; that is the user daemon's limit, not a defect | the machine service runs privileged with `cogbus-isolation.json` (owner runs `scripts/cogbus-uid-setup.sh apply --yes`) | `cogbus-gap-uid` |
 | 3 | **Closed for the code** (same card). Proven as root on the VM: the socket came up `root:cogbus 0660`, cogs get `cogbus` as their only supplementary group, and a uid outside the group got `PermissionError` on connect | until the owner applies the setup on a real host the socket keeps the daemon's group (reported in `cogbus list`) | the same owner-run setup | `cogbus-gap-uid` |
-| 4 | After `hello`, a silent connection is kept forever | leaked connections and queues | ping on silence, close without pong; per-connection subscription and per-instance connection caps | `cogbus-gap-idle` |
+| 4 | **Closed** (`cogbus-gap-idle`, §11 "Idle connections and caps"). Ping after 60 s of silence, close 15 s later without any frame; 64 subscriptions per connection; 8 connections per instance. Tested with 120 ms timers on a real socket | none known; an old client without ping handling is closed after silence | n/a | `cogbus-gap-idle` |
 | 5 | No publish rate limit; nothing stops a misbehaving cog (B3 rate-limits refusal logging and disconnects after repeated refusals) | a cog can flood readers within its declared topics | per-topic budget from `[[outputs]].rate`; broker asks the workload runtime to stop the instance, governed and chained | `cogbus-gap-rate-stop` |
 
 Gaps 2 and 3 also block the plan's P3 device-owner cogs, whose per-device allowlists

@@ -159,10 +159,21 @@ impl Client {
         let (r, w) = UnixStream::connect(path).await?.into_split();
         let shared = Arc::new(Shared::default());
         let sh = shared.clone();
+        let writer = Arc::new(tokio::sync::Mutex::new(w));
+        let pong_via = writer.clone();
         let reader = tokio::spawn(async move {
             let mut r = tokio::io::BufReader::new(crate::stream::fdpass::FdReader::new(r));
             while let Ok(Some(frame)) = read_frame(&mut r).await {
                 match serde_json::from_slice::<Event>(&frame) {
+                    Ok(Event::Ping) => {
+                        // Liveness: answer off the reader task so a busy
+                        // writer cannot stall reading.
+                        let w = pong_via.clone();
+                        tokio::spawn(async move {
+                            let mut w = w.lock().await;
+                            let _ = write_frame(&mut *w, &Request::Pong { id: 0 }).await;
+                        });
+                    }
                     Ok(ev) => {
                         let fds = r.get_mut().take(fd_count(&ev));
                         route(&sh, ev, fds)
@@ -180,7 +191,7 @@ impl Client {
             sh.streams.close_all();
         });
         let mut c = Self {
-            writer: Arc::new(tokio::sync::Mutex::new(w)),
+            writer,
             shared,
             next: AtomicU64::new(1),
             reader,
@@ -460,6 +471,8 @@ fn fd_count(ev: &Event) -> usize {
 fn route(sh: &Shared, ev: Event, fds: Vec<OwnedFd>) {
     match ev {
         Event::Stream(n) => sh.streams.notice(n, fds),
+        // Answered in the reader task, which owns the writer handle.
+        Event::Ping => {}
         Event::Call(c) => {
             let tx = sh.services.lock().ok().and_then(|s| s.get(&c.topic).cloned());
             if let Some(tx) = tx {

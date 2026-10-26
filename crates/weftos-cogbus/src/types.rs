@@ -91,14 +91,29 @@ pub struct BrokerConfig {
     pub node_id: String,
     /// Messages a `drop-oldest` reading subscriber may have pending.
     pub queue_len: usize,
+    /// Silence on an authenticated connection before the broker pings it.
+    pub idle_ping_ms: u64,
+    /// Time a ping has to be answered (any frame counts) before the
+    /// connection is closed.
+    pub pong_timeout_ms: u64,
+    /// Subscriptions (readings and streams) one connection may hold.
+    pub max_subs_per_conn: usize,
+    /// Connections one instance may have open.
+    pub max_conns_per_instance: usize,
 }
 
 impl BrokerConfig {
-    /// Defaults (256 pending readings) for `node_id`.
+    /// Defaults for `node_id`: 256 pending readings, ping after 60 s of
+    /// silence and close 15 s later, 64 subscriptions per connection and 8
+    /// connections per instance.
     pub fn new(node_id: impl Into<String>) -> Self {
         Self {
             node_id: node_id.into(),
             queue_len: 256,
+            idle_ping_ms: 60_000,
+            pong_timeout_ms: 15_000,
+            max_subs_per_conn: 64,
+            max_conns_per_instance: 8,
         }
     }
 }

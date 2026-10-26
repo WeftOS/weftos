@@ -297,9 +297,36 @@ async fn serve_session(
     let mut revoked = s.revoked();
     let mut pushed = ss.take_events();
     let mut frames = s.take_pushed();
+    // Silence ladder: ping after `idle_ping_ms` without a frame, close
+    // `pong_timeout_ms` later if still nothing. Only the cog's own frames
+    // count; the broker's pushes to it do not.
+    let (idle, grace) = (
+        Duration::from_millis(broker.config().idle_ping_ms.max(1)),
+        Duration::from_millis(broker.config().pong_timeout_ms.max(1)),
+    );
+    let mut pinged = false;
+    let silence = tokio::time::sleep(idle);
+    tokio::pin!(silence);
     loop {
         tokio::select! {
+            _ = &mut silence => {
+                if pinged {
+                    let e = BusError::new(ErrorCode::Timeout, "idle: no answer to ping");
+                    broker.record_refusal(&e, s.instance_id());
+                    send(w, &error(0, e)).await;
+                    return;
+                }
+                if !send(w, &Event::Ping).await {
+                    return;
+                }
+                pinged = true;
+                silence.as_mut().reset(tokio::time::Instant::now() + grace);
+            }
             item = rx.recv() => {
+                if item.is_some() {
+                    pinged = false;
+                    silence.as_mut().reset(tokio::time::Instant::now() + idle);
+                }
                 let (ev, fds) = match item {
                     None => return,
                     Some(Incoming::Bad(code, m)) => {
@@ -352,6 +379,8 @@ fn handle(broker: &Broker, s: &mut Session, req: Request) -> Option<Event> {
     let id = req.id();
     let r = match req {
         Request::Hello { .. } => Err(BusError::new(ErrorCode::BadRequest, "already said hello")),
+        // Liveness only: the frame already reset the silence timer.
+        Request::Pong { .. } => return None,
         Request::Declare {
             outputs, inputs, ..
         } => broker.declare(s, outputs, inputs),

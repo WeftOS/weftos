@@ -207,6 +207,13 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+    /// Answer to [`Event::Ping`]. Any frame counts as life; this one exists
+    /// for a connection with nothing else to say. It gets no answer.
+    Pong {
+        /// Correlation id (ignored).
+        #[serde(default)]
+        id: u64,
+    },
     /// Start a blob upload to the node's content store (ADR-122 B5). The
     /// answer carries the `upload` id and the largest `chunk` size.
     BlobBegin {
@@ -272,6 +279,7 @@ impl Request {
             | Self::Serve { id, .. }
             | Self::Call { id, .. }
             | Self::Reply { id, .. }
+            | Self::Pong { id }
             | Self::BlobBegin { id, .. }
             | Self::BlobChunk { id, .. }
             | Self::BlobGet { id, .. } => *id,
@@ -397,6 +405,9 @@ pub enum Event {
     Stream(crate::stream::StreamNotice),
     /// A call for the provider of a service.
     Call(CallDelivery),
+    /// The connection has been silent; answer with any frame (the client
+    /// library answers with [`Request::Pong`]) or it is closed.
+    Ping,
 }
 
 /// A frame could not be read or written.

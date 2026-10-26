@@ -71,6 +71,15 @@ pub(crate) fn handle(
         }),
         Request::StreamSubscribe { topic, schema, .. } => manifest(broker, s, "stream_subscribe")
             .and_then(|spec| {
+                let held = s.subs.len() + broker.streams.reader_count(ss.conn);
+                if held >= broker.config().max_subs_per_conn {
+                    return Err(refuse(
+                        s.instance_id(),
+                        "stream_subscribe",
+                        &topic,
+                        BusError::new(ErrorCode::Busy, format!("this connection already holds {held} subscriptions")),
+                    ));
+                }
                 let source = topic.split_once('/').map(|(_, src)| src);
                 let gov = |foreign: Option<&str>| {
                     let pid = s.project_id.as_deref();

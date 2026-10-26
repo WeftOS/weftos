@@ -22,7 +22,7 @@
 //! are not asked. Every refusal goes through [`refuse`], which marks it for
 //! [`Broker::record_refusal`].
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use clawft_types::cog_topics::{InputPolicy, TopicClass, is_registered, valid_topic_kind};
@@ -92,6 +92,8 @@ struct State {
     next_sub: u64,
     sinks: HashMap<String, SinkSlot>,
     svc: svc::Svc,
+    /// Open connections per instance (by connection id).
+    conns: HashMap<String, HashSet<u64>>,
 }
 
 fn now_ns() -> u64 {
@@ -136,6 +138,11 @@ impl Broker {
     /// The content store, if the node has one.
     pub fn blob_store(&self) -> Option<&Arc<crate::blob::BlobStore>> {
         self.blobs.as_ref()
+    }
+
+    /// The broker's tunables.
+    pub fn config(&self) -> &BrokerConfig {
+        &self.cfg
     }
 
     /// The node id stamped on deliveries.
@@ -195,6 +202,7 @@ impl Broker {
             }
         }
         g.svc.drop_instance(instance_id);
+        g.conns.remove(instance_id);
         if let Some(b) = &self.blobs {
             b.drop_uploads(instance_id);
         }
@@ -212,7 +220,7 @@ impl Broker {
 
     /// Open a session for `token` from a peer running as `peer_uid`.
     pub fn authenticate(&self, token: &str, peer_uid: Option<u32>) -> Result<Session, BusError> {
-        let g = self.lock();
+        let mut g = self.lock();
         let inst = g
             .by_hash
             .get(&token_hash(token))
@@ -232,17 +240,25 @@ impl Broker {
             let m = format!("peer uid {peer_uid:?} is not the instance's uid {want}");
             return Err(refuse(id, "hello", "-", bad(ErrorCode::UidMismatch, m)));
         }
+        let (id, project_id, revoked) = (id.clone(), inst.spec.project_id.clone(), inst.revoked.subscribe());
+        let conn = svc::next_conn();
+        let open = g.conns.entry(id.clone()).or_default();
+        if open.len() >= self.cfg.max_conns_per_instance {
+            let m = format!("{id} already has {} connections open", open.len());
+            return Err(refuse(&id, "hello", "-", bad(ErrorCode::Busy, m)));
+        }
+        open.insert(conn);
         let (push, pushed) = tokio::sync::mpsc::unbounded_channel();
         Ok(Session {
-            conn: svc::next_conn(),
+            conn,
             push,
             pushed: Some(pushed),
-            instance_id: id.clone(),
-            project_id: inst.spec.project_id.clone(),
+            instance_id: id,
+            project_id,
             declared: None,
             subs: BTreeMap::new(),
             wake: Arc::new(Notify::new()),
-            revoked: inst.revoked.subscribe(),
+            revoked,
         })
     }
 
@@ -427,6 +443,10 @@ impl Broker {
                 format!("{kind} is a service; use serve and call"),
             )));
         }
+        if s.subs.len() >= self.cfg.max_subs_per_conn {
+            let m = format!("this connection already holds {} subscriptions", s.subs.len());
+            return Err(no(bad(ErrorCode::Busy, m)));
+        }
         let mut g = self.lock();
         let spec = self.spec_of(&g, s, "subscribe")?;
         let inputs = s.declared.as_ref().map_or(&spec.inputs, |d| &d.1);
@@ -522,6 +542,12 @@ impl Broker {
             g.subs.remove(id);
         }
         g.svc.drop_conn(s.conn);
+        if let Some(open) = g.conns.get_mut(&s.instance_id) {
+            open.remove(&s.conn);
+            if open.is_empty() {
+                g.conns.remove(&s.instance_id);
+            }
+        }
     }
 }
 
