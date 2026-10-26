@@ -173,6 +173,11 @@ impl UiHandle {
         Ok(Resolution::Updated { note: snapshot.1 })
     }
 
+    /// Whether `id` is the pending question's id.
+    pub fn is_pending_ask(&self, id: &str) -> bool {
+        self.lock().pending_ask.as_ref().is_some_and(|a| a.id == id)
+    }
+
     /// Answer the pending survey question by number (touch or voice).
     pub fn resolve_choice(&self, id: Option<&str>, n: usize) -> Result<Resolution, CosError> {
         let mut s = self.lock();

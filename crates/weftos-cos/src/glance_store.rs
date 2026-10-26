@@ -193,3 +193,8 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 pub fn new_card_id() -> String {
     uuid::Uuid::new_v4().simple().to_string()[..8].to_string()
 }
+
+/// Whether `id` has the shape of a card id from [`new_card_id`].
+pub fn is_card_id(id: &str) -> bool {
+    id.len() == 8 && id.bytes().all(|b| b.is_ascii_hexdigit())
+}
