@@ -33,7 +33,7 @@ fn base_config() -> Config {
     }
 }
 
-fn minimal_kernel_config() -> KernelConfig {
+fn minimal_kernel_config(chain_dir: &std::path::Path) -> KernelConfig {
     KernelConfig {
         governance: Default::default(),
         profile: None,
@@ -44,9 +44,7 @@ fn minimal_kernel_config() -> KernelConfig {
         brand: "WeftOS".to_string(),
         cluster: None,
         // Never the operator chain under ~/.clawft (isolated per boot).
-        chain: Some(clawft_types::config::ChainConfig::isolated_in(
-            &tempfile::tempdir().unwrap().keep(),
-        )),
+        chain: Some(clawft_types::config::ChainConfig::isolated_in(chain_dir)),
         resource_tree: None,
         vector: None,
         profiles: None,
@@ -65,13 +63,25 @@ async fn spawn_test_daemon() -> (
     std::path::PathBuf,
     watch::Sender<bool>,
 ) {
+    let chain_dir = tempfile::tempdir().unwrap().keep();
+    let (tmp, sock, tx, _kernel) = spawn_daemon_on(&chain_dir).await;
+    (tmp, sock, tx)
+}
+
+type KernelHandle = Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>;
+
+/// Boot a daemon whose chain checkpoint lives in `chain_dir` (reuse the dir to restart).
+async fn spawn_daemon_on(
+    chain_dir: &std::path::Path,
+) -> (tempfile::TempDir, std::path::PathBuf, watch::Sender<bool>, KernelHandle) {
     let tmp = tempfile::tempdir().unwrap();
     let socket_path = tmp.path().join("kernel.sock");
     let platform = NativePlatform::new();
-    let kernel = Kernel::boot(base_config(), minimal_kernel_config(), Arc::new(platform))
+    let kernel = Kernel::boot(base_config(), minimal_kernel_config(chain_dir), Arc::new(platform))
         .await
         .expect("kernel boot");
     let kernel = Arc::new(tokio::sync::RwLock::new(kernel));
+    let handle = Arc::clone(&kernel);
 
     let listener = UnixListener::bind(&socket_path).unwrap();
     let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
@@ -97,7 +107,7 @@ async fn spawn_test_daemon() -> (
         }
     });
     tokio::time::sleep(Duration::from_millis(50)).await;
-    (tmp, socket_path, shutdown_tx)
+    (tmp, socket_path, shutdown_tx, handle)
 }
 
 async fn rpc(
@@ -341,4 +351,48 @@ async fn region_publish_get_and_spatial_query_carry_provenance() {
     assert_eq!(r["ok"], false);
 
     let _ = shutdown.send(true);
+}
+
+/// A published region survives a daemon restart: the BVH is rebuilt from the chain at boot and
+/// the region comes back by id with its provenance, and nothing extra appears.
+#[tokio::test]
+async fn published_region_survives_daemon_restart() {
+    let chain_dir = tempfile::tempdir().unwrap();
+    let line = include_str!("../../../contracts/sensors/vectors/evidence/valid/shell_measure.jsonl");
+    let evidence: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+    let region = "region/urth/meso/test-room";
+
+    let (_t1, sock1, down1, kernel1) = spawn_daemon_on(chain_dir.path()).await;
+    let pubd = rpc(&sock1, "ecc.spatial.region.publish", serde_json::json!({ "evidence": evidence })).await;
+    let leaf_id = pubd["leaf_id"].as_u64().unwrap();
+    // Clean shutdown writes the chain checkpoint.
+    kernel1.write().await.shutdown().await.expect("shutdown");
+    let _ = down1.send(true);
+    // The chain lock is released when the last kernel handle drops; wait for the accept loop
+    // to let go of its clone.
+    for _ in 0..100 {
+        if Arc::strong_count(&kernel1) == 1 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(Arc::strong_count(&kernel1), 1, "daemon tasks still hold the kernel");
+    drop(kernel1);
+
+    let (_t2, sock2, down2, _kernel2) = spawn_daemon_on(chain_dir.path()).await;
+    let st = rpc(&sock2, "ecc.spatial.status", serde_json::json!({})).await;
+    assert_eq!(st["len"], 1, "exactly the one published leaf, no duplicates, no fill");
+    let got = rpc(&sock2, "ecc.spatial.region.get", serde_json::json!({ "region_id": region })).await;
+    assert_eq!(got["leaf"]["leaf_id"], leaf_id);
+    let prov = &got["leaf"]["payload"]["provenance"];
+    assert_eq!(prov["proof"], "MEASURED");
+    assert_eq!(prov["receipt"], "shell-2026-10-03-a");
+    assert_eq!(got["leaf"]["payload"]["anchor"]["status"], "unanchored");
+    let out = rpc(&sock2, "ecc.spatial.query", serde_json::json!({ "kind": "point", "at": "7.0,1.8,1.0" })).await;
+    assert!(out["hits"].as_array().unwrap().is_empty());
+
+    // Restart did not re-append the replay: a third boot still holds one leaf.
+    let again = rpc_raw(&sock2, "ecc.spatial.region.publish", serde_json::json!({ "evidence": evidence })).await;
+    assert_eq!(again["ok"], false, "already published, refused after restart too");
+    let _ = down2.send(true);
 }

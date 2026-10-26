@@ -128,6 +128,20 @@ impl SpatialService {
         Self::from_config(SpatialServiceConfig::from_spatial_config(cfg))
     }
 
+    /// Rebuild the BVH from `spatial_bvh` events on `cm` (restart path). Must run before
+    /// [`Self::attach_chain`] so the replay is not appended to the chain again. Returns
+    /// `(applied, skipped)`.
+    #[cfg(feature = "exochain")]
+    pub fn restore_from_chain(&self, cm: &ChainManager) -> (usize, usize) {
+        match self.bvh {
+            Some(ref bvh) => {
+                let r = bvh.restore_from_chain(&cm.tail(0));
+                (r.applied, r.skipped)
+            }
+            None => (0, 0),
+        }
+    }
+
     /// Attach ExoChain sink to the underlying BVH backend.
     #[cfg(feature = "exochain")]
     pub fn attach_chain(&self, cm: Arc<ChainManager>) {

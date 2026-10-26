@@ -145,6 +145,62 @@ fn hex_nibble(c: u8) -> Option<u8> {
     }
 }
 
+/// Outcome of [`BvhBackend::restore_from_chain`].
+#[cfg(feature = "exochain")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ChainRestoreReport {
+    /// Chain events applied to the store.
+    pub applied: usize,
+    /// Chain events that did not decode or did not apply.
+    pub skipped: usize,
+}
+
+/// Inverse of [`KernelBvhChainSink::on_event`]'s payload encoding.
+#[cfg(feature = "exochain")]
+fn decode_chain_event(kind: &str, p: &serde_json::Value) -> Option<BvhChainKind> {
+    use crate::chain::{
+        EVENT_KIND_BVH_DERIVE, EVENT_KIND_BVH_INSERT, EVENT_KIND_BVH_REBALANCE_SEAL, EVENT_KIND_BVH_REMOVE,
+    };
+    let u = |k: &str| p.get(k).and_then(serde_json::Value::as_u64);
+    let vec3 = |v: &serde_json::Value| -> Option<Vec3> {
+        let a = v.as_array().filter(|a| a.len() == 3)?;
+        let f = |i: usize| a[i].as_f64().map(|x| x as f32);
+        Some(Vec3::new(f(0)?, f(1)?, f(2)?))
+    };
+    match kind {
+        EVENT_KIND_BVH_INSERT => {
+            let bound = p.get("bound")?;
+            let identity = match p.get("identity")?.as_str()? {
+                "object" => clawft_bvh::IdentityKind::Object,
+                "event" => clawft_bvh::IdentityKind::Event,
+                _ => return None,
+            };
+            let leaf = Leaf::new(
+                Aabb::from_min_max(vec3(bound.get("min")?)?, vec3(bound.get("max")?)?),
+                identity,
+                u32::try_from(u("tag")?).ok()?,
+                hex_decode(p.get("payload_hex")?.as_str()?)?,
+            );
+            Some(BvhChainKind::Insert { leaf_id: LeafId(u("leaf_id")?), leaf, branch: BranchId(u("branch")?) })
+        }
+        EVENT_KIND_BVH_REMOVE => Some(BvhChainKind::Remove { leaf_id: LeafId(u("leaf_id")?), branch: BranchId(u("branch")?) }),
+        EVENT_KIND_BVH_DERIVE => Some(BvhChainKind::Derive {
+            parent: BranchId(u("parent")?),
+            child: BranchId(u("child")?),
+            meta: BranchMeta {
+                name: p.get("name")?.as_str()?.to_owned(),
+                priority_tier: u8::try_from(u("priority_tier")?).ok()?,
+            },
+        }),
+        EVENT_KIND_BVH_REBALANCE_SEAL => Some(BvhChainKind::RebalanceSeal {
+            branch: BranchId(u("branch")?),
+            leaf_count: usize::try_from(u("leaf_count")?).ok()?,
+            epoch: u("epoch")?,
+        }),
+        _ => None,
+    }
+}
+
 // ── Backend ──────────────────────────────────────────────────────────────
 
 /// BVH spatial backend wrapping [`BvhStore`].
@@ -278,6 +334,27 @@ impl BvhBackend {
         };
         let same = replica.branch_count() == branches && (0..branches as u64).all(|b| ids(&store, b) == ids(&replica, b));
         ReplayReport { events: events.len(), ok: applied && same && !truncated, truncated, branches }
+    }
+
+    /// Rebuild the store from `spatial_bvh` events on a loaded chain (restart path; the chain
+    /// is the source of truth, ADR-056 §chain audit). Call before the chain sink is attached,
+    /// so replayed events are not appended to the chain a second time. Events that do not
+    /// decode or do not apply are counted and skipped, never guessed at.
+    #[cfg(feature = "exochain")]
+    pub fn restore_from_chain(&self, events: &[crate::chain::ChainEvent]) -> ChainRestoreReport {
+        let mut report = ChainRestoreReport::default();
+        let mut store = self.store.lock().expect("BvhStore lock poisoned");
+        for e in events.iter().filter(|e| e.source == "spatial_bvh") {
+            let Some(kind) = e.payload.as_ref().and_then(|p| decode_chain_event(&e.kind, p)) else {
+                report.skipped += 1;
+                continue;
+            };
+            match store.apply_chain_event(&kind) {
+                Ok(()) => report.applied += 1,
+                Err(_) => report.skipped += 1,
+            }
+        }
+        report
     }
 
     /// Snapshot leaves on the main branch (restart equality tests).

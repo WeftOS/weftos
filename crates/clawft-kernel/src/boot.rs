@@ -2296,6 +2296,15 @@ impl<P: Platform> Kernel<P> {
                     let svc = Arc::new(SpatialService::from_spatial_config(&spatial_cfg));
                     #[cfg(feature = "exochain")]
                     if let Some(ref cm) = chain_manager {
+                        // Restore from the loaded chain first; attaching the sink after keeps the
+                        // replay from being appended a second time.
+                        let (applied, skipped) = svc.restore_from_chain(cm);
+                        if applied + skipped > 0 {
+                            boot_log.push(BootEvent::info(
+                                BootPhase::Ecc,
+                                format!("Spatial BVH restored from chain ({applied} events applied, {skipped} skipped)"),
+                            ));
+                        }
                         svc.attach_chain(cm.clone());
                     }
                     if let Err(e) = service_registry.register(svc.clone()) {
