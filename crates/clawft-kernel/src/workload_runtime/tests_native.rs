@@ -319,3 +319,69 @@ async fn links_inside_the_stage_directory_are_removed_not_followed() {
     assert!(m.is_dir() && !m.file_type().is_symlink(), "data/ is a real directory again");
     rt.unload(h).await.unwrap();
 }
+
+fn owned(owner: &str) -> WorkloadConfig {
+    let mut c = cfg(RunMode::Listener);
+    c.host = c.host.with_owner(owner);
+    c
+}
+
+#[tokio::test]
+async fn a_colliding_instance_id_does_not_inherit_another_owners_data() {
+    use super::native::{OWNER_MARKER, owner_hash};
+    let fx = signed_workload(&toml(15, 4096), &[(arch(), SCRIPT.as_bytes())]);
+    let rt = runtime(&fx.root.join("rt"), true);
+    // The id of owner B; owner A's directory sits there, as a ground collision would put it.
+    let b = owned("project=B\ncontroller=ctl");
+    let iid = super::native::instance_id(&fx.workload, &b).unwrap();
+    let dir = fx.root.join("rt").join(&iid);
+    std::fs::create_dir_all(dir.join("data")).unwrap();
+    std::fs::write(dir.join("data/secret"), b"A's data").unwrap();
+    std::fs::write(dir.join(OWNER_MARKER), format!("{}\n", owner_hash("project=A\ncontroller=ctl"))).unwrap();
+
+    let err = rt.load(&fx.workload, &b).await.unwrap_err();
+    assert!(matches!(&err, RuntimeError::Backend(m) if m.contains("another owner")), "{err}");
+    assert_eq!(std::fs::read(dir.join("data/secret")).unwrap(), b"A's data", "A's data is untouched");
+    assert!(std::fs::read_to_string(dir.join(OWNER_MARKER)).unwrap().trim() == owner_hash("project=A\ncontroller=ctl"));
+    // an unowned load does not take it either
+    let unowned = rt.load(&fx.workload, &cfg(RunMode::Listener)).await;
+    assert!(unowned.is_ok(), "an unowned id is another directory");
+}
+
+#[tokio::test]
+async fn a_directory_with_data_and_no_marker_is_refused_for_an_owned_instance() {
+    let fx = signed_workload(&toml(15, 4096), &[(arch(), SCRIPT.as_bytes())]);
+    let rt = runtime(&fx.root.join("rt"), true);
+    let c = owned("project=A\ncontroller=ctl");
+    let iid = super::native::instance_id(&fx.workload, &c).unwrap();
+    let dir = fx.root.join("rt").join(&iid);
+    std::fs::create_dir_all(dir.join("data")).unwrap();
+    std::fs::write(dir.join("data/old"), b"x").unwrap();
+    let err = rt.load(&fx.workload, &c).await.unwrap_err();
+    assert!(matches!(&err, RuntimeError::Backend(m) if m.contains("no owner marker")), "{err}");
+    assert!(dir.join("data/old").exists());
+    // a directory with no data at all (a stage that stopped early) is simply taken
+    std::fs::remove_dir_all(dir.join("data")).unwrap();
+    let h = rt.load(&fx.workload, &c).await.expect("an empty leftover is adopted");
+    rt.unload(h).await.unwrap();
+}
+
+#[tokio::test]
+async fn the_same_owner_keeps_its_data_and_the_marker_names_it_in_full() {
+    use super::native::{OWNER_MARKER, owner_hash};
+    let fx = signed_workload(&toml(15, 4096), &[(arch(), SCRIPT.as_bytes())]);
+    let rt = runtime(&fx.root.join("rt"), true);
+    let c = owned("project=A\ncontroller=ctl");
+    let iid = super::native::instance_id(&fx.workload, &c).unwrap();
+    let dir = fx.root.join("rt").join(&iid);
+    let h = rt.load(&fx.workload, &c).await.unwrap();
+    assert_eq!(std::fs::read_to_string(dir.join(OWNER_MARKER)).unwrap().trim(), owner_hash("project=A\ncontroller=ctl"));
+    assert_eq!(owner_hash("x").len(), 64, "the full hash, not the 32 bits of the id");
+    std::fs::write(dir.join("data/mine"), b"kept").unwrap();
+    // a fresh adapter over the same root (a restart) re-stages the same owner's instance
+    drop(h);
+    let rt2 = runtime(&fx.root.join("rt"), true);
+    let h2 = rt2.load(&fx.workload, &c).await.unwrap();
+    assert_eq!(std::fs::read(dir.join("data/mine")).unwrap(), b"kept");
+    rt2.unload(h2).await.unwrap();
+}

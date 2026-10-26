@@ -277,7 +277,8 @@ impl WorkloadRuntime for NativeRuntime {
         let bytes = p.binaries[&adm.arch].bytes.clone();
         let (d, prog) = (dir.clone(), program.clone());
         let run_as = self.cfg.run_as;
-        tokio::task::spawn_blocking(move || stage(&d, &prog, &bytes, run_as))
+        let owner = cfg.host.owner.clone();
+        tokio::task::spawn_blocking(move || stage(&d, &prog, &bytes, run_as, owner.as_deref()))
             .await
             .map_err(|e| RuntimeError::Backend(e.to_string()))??;
         let mut args = cfg.mode.args();
@@ -415,14 +416,61 @@ impl WorkloadRuntime for NativeRuntime {
     }
 }
 
-fn stage(
+/// File in an instance directory naming its owner (the full BLAKE3 of the
+/// owner key, hex). The instance id carries only 32 bits of that hash, so a
+/// controller that grinds a colliding id would otherwise inherit the kept
+/// `data/` of another project's instance; the marker is compared in full.
+pub(super) const OWNER_MARKER: &str = ".owner";
+
+/// The full owner hash that goes in the marker.
+pub(super) fn owner_hash(owner: &str) -> String {
+    blake3::hash(owner.as_bytes()).to_hex().to_string()
+}
+
+pub(super) fn stage(
     dir: &std::path::Path,
     program: &std::path::Path,
     bytes: &[u8],
     run_as: Option<(u32, u32)>,
+    owner: Option<&str>,
 ) -> Result<(), RuntimeError> {
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
     let io = |e: std::io::Error| RuntimeError::Backend(format!("stage {}: {e}", dir.display()));
+    let want = owner.map(owner_hash);
+    // An owned instance only ever reuses a directory that names the same owner
+    // in full. Another owner's (or an unmarked one that holds data) is refused,
+    // never emptied: it may be a live project's state.
+    if want.is_none()
+        && std::fs::symlink_metadata(dir.join(OWNER_MARKER)).is_ok()
+        && std::fs::symlink_metadata(dir).is_ok_and(|m| m.is_dir())
+    {
+        return Err(RuntimeError::Backend(format!(
+            "stage {}: the instance directory belongs to an owner; an unowned instance does not reuse it",
+            dir.display()
+        )));
+    }
+    if let (Some(want), Ok(m)) = (&want, std::fs::symlink_metadata(dir))
+        && m.is_dir()
+    {
+        let have = std::fs::read_to_string(dir.join(OWNER_MARKER)).ok();
+        let has_state = std::fs::symlink_metadata(dir.join("data")).is_ok();
+        match have.as_deref().map(str::trim) {
+            Some(h) if h == want => {}
+            Some(_) => {
+                return Err(RuntimeError::Backend(format!(
+                    "stage {}: the instance directory belongs to another owner (id collision); not reused",
+                    dir.display()
+                )));
+            }
+            None if has_state => {
+                return Err(RuntimeError::Backend(format!(
+                    "stage {}: the instance directory has data and no owner marker (it predates owner markers); remove it to place this instance",
+                    dir.display()
+                )));
+            }
+            None => {}
+        }
+    }
     // `load` calls this only for an instance this adapter does not hold, so what
     // is already here is left over from an earlier run (a daemon that restarted,
     // a crash mid-stage). Instance ids are deterministic, so it is the same
@@ -468,6 +516,9 @@ fn stage(
         Err(e) => return Err(io(e)),
     }
     std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o700)).map_err(io)?;
+    if let Some(want) = &want {
+        std::fs::write(dir.join(OWNER_MARKER), format!("{want}\n")).map_err(io)?;
+    }
     std::fs::write(program, bytes).map_err(io)?;
     std::fs::set_permissions(program, std::fs::Permissions::from_mode(0o555)).map_err(io)?;
     if let Some((uid, gid)) = run_as {
