@@ -157,6 +157,17 @@ the service's own (the NPU service returns `text`, `usage` and timings).
 | `image_b64`, `image_mime` | string | one small inline image (at most 40 K chars of base64), `image/png` or `image/jpeg`; both or neither |
 | `max_tokens` | u32 | optional, 1..=4096 |
 
+### `mcu.call.v1` (service call request)
+
+The body of a call on `svc.mcu/<node>` (ADR-122 section 12). It carries no common fields.
+The `mcu-bridge` cog forwards it to the WeftOS sketch on the MCU and answers with the
+sketch's return value (`{"result": ...}`) or an error.
+
+| Field | Type | Rule |
+|-------|------|------|
+| `method` | string | a method the sketch provides, `[a-z][a-z0-9_.]*`, at most 64 chars |
+| `params` | array | positional numbers, booleans and strings, at most 8; default empty |
+
 ## Using it
 
 - **Producers**: emit messages that pass every `valid-*` vector's rules and fail the

@@ -228,6 +228,13 @@ nodes at all, only the broker socket. That is the main safety gain of the
 owner rule: the NPU, the router socket and the camera are each reachable by one
 audited process. Landlock and seccomp stay on the existing deferred list.
 
+*Updated 2026-10-26 (P3).* The device allowlist is implemented as the node's device ledger
+(WeftOS ADR-122 section 4b): `[[devices]]` in `cog.toml` names what an owner opens; placement
+refuses a second claim and a foreign device argument; each owner is handed `WEFTOS_DEVICES`;
+with per-cog uids the node chowns the nodes to the owner (planned as data, tested without
+root). On a shared-uid node (the Ventuno's user daemon, owner decision 2026-10-26) listings
+say `device_isolation: advisory`, because file permissions cannot separate cogs there.
+
 ### 4.8 App Lab bricks
 
 The board ships 31 App Lab bricks (object detection, pose, gestures, keyword

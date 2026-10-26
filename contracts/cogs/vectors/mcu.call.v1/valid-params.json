@@ -1,0 +1,8 @@
+{
+  "method": "gpio.write",
+  "params": [
+    13,
+    true,
+    "high"
+  ]
+}

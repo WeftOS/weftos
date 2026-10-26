@@ -264,6 +264,7 @@ pub fn list_json(rt: Option<&CogbusRuntime>) -> Value {
             "socket_group_applied": rt.socket_report().group_applied,
             "socket_note": rt.socket_report().note,
             "isolation": rt.isolator.report(),
+            "devices": crate::workload_place_rpc::device_owners(),
             "topics": rt.broker.snapshot(),
             "refusals": rt.broker.recent_refusals(),
         }),

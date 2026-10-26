@@ -35,6 +35,9 @@ pub const ENV_DATA_DIR: &str = "COGNITUM_COG_DATA_DIR";
 pub const ENV_COGBUS: &str = "WEFTOS_COGBUS";
 /// Env var: the instance's cogbus token (the instance token, see above).
 pub const ENV_COGBUS_TOKEN: &str = "WEFTOS_COGBUS_TOKEN";
+/// Env var: the devices this instance owns (ADR-122 section 4b), `:`-separated
+/// absolute paths. Only the device ledger's owner gets it.
+pub const ENV_DEVICES: &str = "WEFTOS_DEVICES";
 /// Default CSI feed port (ADR-069).
 pub const DEFAULT_CSI_PORT: u16 = 5006;
 
@@ -80,6 +83,10 @@ pub struct HostContract {
     /// allocated one for this instance. `None`: the adapter's own `run_as`,
     /// or the daemon's uid.
     pub run_as: Option<CogIdentity>,
+    /// Device nodes and sockets this instance owns, injected as
+    /// [`ENV_DEVICES`]. Set only through the device ledger's reservation, so
+    /// a non-owner is never handed a device path.
+    pub devices: Vec<String>,
 }
 
 impl HostContract {
@@ -94,6 +101,7 @@ impl HostContract {
             expose_token: true,
             cogbus: None,
             run_as: None,
+            devices: Vec::new(),
         }
     }
 
@@ -129,6 +137,12 @@ impl HostContract {
     /// Builder: the identity the instance runs as.
     pub fn with_run_as(mut self, id: CogIdentity) -> Self {
         self.run_as = Some(id);
+        self
+    }
+
+    /// Builder: the devices the instance owns.
+    pub fn with_devices(mut self, devices: Vec<String>) -> Self {
+        self.devices = devices;
         self
     }
 
@@ -185,6 +199,9 @@ impl HostContract {
             env.push((ENV_COGBUS.to_string(), p.clone()));
             env.push((ENV_COGBUS_TOKEN.to_string(), self.token.expose().to_string()));
         }
+        if !self.devices.is_empty() {
+            env.push((ENV_DEVICES.to_string(), self.devices.join(":")));
+        }
         env
     }
 
@@ -197,6 +214,7 @@ impl HostContract {
             "ingest_upstream": self.ingest_upstream.map(|s| s.to_string()),
             "ingest_url": self.ingest_url,
             "cogbus": self.cogbus,
+            "devices": self.devices,
         })
     }
 }

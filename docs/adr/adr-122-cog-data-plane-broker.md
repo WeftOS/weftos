@@ -124,6 +124,58 @@ in `weaver cogbus list`, never implied.
 file that does not parse or is group- or world-writable is ignored with a warning and cogs
 run shared.
 
+### 4b. One owner per device (P3)
+
+Updated: 2026-10-26 (card `41b3f9b6`, Ventuno cogs P3).
+
+Plan 4.1 says exactly one cog opens a device. A device-owner cog declares what it owns in
+`cog.toml`, and the node's **device ledger** (`clawft-kernel` `workload_ctl/device_owner.rs`)
+records the owner of each device and refuses anyone else.
+
+```toml
+[[devices]]
+path = "/dev/video*"            # a node under /dev; * and ? only in the last component
+[[devices]]
+usb = "1bcf:0b15"               # a USB vid:pid, resolved to its nodes at placement (sysfs)
+[[devices]]
+socket = "/run/arduino-router.sock"
+access = "ro"                   # rw (default) or ro
+```
+
+Exactly one of `path`, `usb`, `socket` per table, at most 8 tables, validated at `CogSpec::parse`.
+
+- **Claims.** At place, before anything is loaded, the host admits the cog's `[[devices]]`. A
+  claim that overlaps another instance's is refused (`admission`: "<device> is owned by <cog>
+  (<instance>); one owner per device"). Overlap is exact: two globs overlap if some path
+  matches both (`/dev/snd/pcmC*D*c` and `/dev/snd/pcmC*D*p` do not), a `usb` claim overlaps
+  the nodes it resolves to, and a claim in flight (not yet bound to an instance) blocks a
+  concurrent one. Unload, teardown, revocation and a failed placement release the claim.
+- **Hand-out.** The owner's `WEFTOS_DEVICES` (`:`-separated absolute paths: the literal paths
+  it declared and the nodes its globs and `usb` ids resolved to) comes only from its
+  reservation (`HostContract::with_devices`), so no other contract carries a device path. A
+  place whose arguments name a path owned by another instance (`--device /dev/video0`,
+  `--src=/dev/video1`) is refused: "only its owner may open it". A cog that owns nothing and
+  names nothing gets nothing.
+- **Isolation, shown never implied.** Each claim has `device_isolation`:
+  - `enforced`: the cog has its own uid (per-cog-uid, 4a). The ledger plans a `chown` of each
+    owned node to that uid, keeping the node's group, mode `0600` (`0400` for `access = "ro"`),
+    and records the node's original owner, group and mode. `GrantPlan` is data; the
+    `DeviceApplier` the daemon wires (`SystemApplier`, libc `chown`/`chmod`) runs it before the
+    cog starts, and the restore plan runs at unload. A node that does not exist yet is skipped,
+    not guessed. A failed grant refuses the placement.
+  - `advisory`: every cog shares the daemon's uid (a user daemon, as on the Ventuno today).
+    File permissions cannot tell cogs apart, so the claim table and the two refusals above are
+    the whole guard: a cog that opens a node it never declared, or names an ALSA device such
+    as `plughw:1,0` rather than a path, is not stopped. `cogbus.list` shows `device_isolation`
+    per owner under `devices`, and the instance `status` rows carry `devices` and
+    `device_isolation`.
+- **Owner decision (2026-10-26): shared uid for now.** The allowlist is implemented and tested
+  at the WeftOS level; file-permission enforcement arrives with the machine service's per-cog
+  uids (4a), and the chown plan is unit-tested as data like the uid lane was.
+- **Limits.** The ledger is per node and in memory; a daemon restart forgets instances, so a
+  reconciled instance claims again at its next place. Containers and VMs (gap 1) get no
+  device ledger path: their device passthrough is the container adapter's own.
+
 ### 5. What a cog may do
 
 - **Publish** only topics in its `[[outputs]]`, with the declared schema and class. The
@@ -262,8 +314,8 @@ acceptance test passes, and the row is then marked closed with the commit.
 | 4 | After `hello`, a silent connection is kept forever | leaked connections and queues | ping on silence, close without pong; per-connection subscription and per-instance connection caps | `cogbus-gap-idle` |
 | 5 | No publish rate limit; nothing stops a misbehaving cog (B3 rate-limits refusal logging and disconnects after repeated refusals) | a cog can flood readers within its declared topics | per-topic budget from `[[outputs]].rate`; broker asks the workload runtime to stop the instance, governed and chained | `cogbus-gap-rate-stop` |
 
-Gaps 2 and 3 also block the plan's P3 device-owner cogs, whose per-device allowlists
-need per-cog uids. After `cogbus-gap-uid` P3 can rely on per-cog uids only where the
+Gaps 2 and 3 also block file-permission enforcement of the plan's P3 device-owner cogs'
+allowlists (section 4b records the owner decision to ship the ledger first). After `cogbus-gap-uid` P3 can rely on per-cog uids only where the
 machine service is privileged and set up; on a user daemon a device-owner cog shares the
 daemon's uid, so a per-device allowlist is not enforceable there and must refuse or warn
 (`require_cog_uid` is the lever).
