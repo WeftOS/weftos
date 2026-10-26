@@ -98,11 +98,18 @@ pub fn validate_base_image(r: &str) -> Result<(), RuntimeError> {
     }
 }
 
-/// Dockerfile for the one-binary layer.
+/// Dockerfile for the one-binary layer. The user is `run --user` when the
+/// instance has its own identity (ADR-122 gap 1), so one image serves every
+/// instance of a cog.
 pub fn dockerfile(base_image: &str) -> String {
     format!(
         "FROM {base_image}\nCOPY cog {COG_PATH}\nUSER {CONTAINER_USER}\nWORKDIR /\nENTRYPOINT [\"{COG_PATH}\"]\n"
     )
+}
+
+/// `uid:gid` of an instance with an allocated identity.
+pub fn user_of(id: &super::host_contract::CogIdentity) -> String {
+    format!("{}:{}", id.uid, id.gid)
 }
 
 /// Image tag for a binary: `weftos-cog/<id>:<16 hex of its BLAKE3>`.
@@ -159,6 +166,12 @@ pub struct RunSpec<'a> {
     /// only [`super::container_relay::RELAY_CAPS`]; the cog drops to
     /// `nobody`).
     pub ingest_relay: bool,
+    /// `uid:gid` to run the cog as, instead of the image's user (a
+    /// non-relay image only: a relay image bakes its drop target in).
+    pub user: Option<&'a str>,
+    /// Host path of the broker socket, bind-mounted at
+    /// [`super::host_contract::COGBUS_IN_CONTAINER`].
+    pub cogbus_mount: Option<&'a Path>,
     /// Cog arguments.
     pub args: &'a [String],
 }
@@ -222,6 +235,19 @@ pub fn run_cmd(engine: Engine, s: &RunSpec<'_>) -> Result<Vec<String>, RuntimeEr
     }
     if let Some(n) = s.network {
         v.extend(["--network".into(), n.into()]);
+    }
+    if let Some(u) = s.user {
+        v.extend(["--user".into(), u.into()]);
+    }
+    if let Some(sock) = s.cogbus_mount {
+        v.extend([
+            "--mount".into(),
+            format!(
+                "type=bind,src={},dst={}",
+                sock.to_string_lossy(),
+                super::host_contract::COGBUS_IN_CONTAINER
+            ),
+        ]);
     }
     v.push(s.tag.into());
     v.extend(s.args.iter().cloned());

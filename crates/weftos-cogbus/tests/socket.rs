@@ -168,6 +168,21 @@ async fn a_bad_token_a_wrong_uid_and_garbage_are_refused() {
         ErrorCode::UidMismatch
     );
 
+    // A service call or serve on a connection whose hello was refused for its
+    // uid gets nothing: the connection is closed, not served (ADR-122 §12).
+    {
+        let mut s = tokio::net::UnixStream::connect(&path).await.unwrap();
+        let hello = br#"{"op":"hello","id":1,"token":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}"#;
+        let serve = br#"{"op":"serve","id":2,"topic_kind":"svc.infer","source_id":"n","schema":"x.v1"}"#;
+        for raw in [&hello[..], &serve[..]] {
+            s.write_all(&(raw.len() as u32).to_be_bytes()).await.unwrap();
+            s.write_all(raw).await.unwrap();
+        }
+        let first: Event = serde_json::from_slice(&read_frame(&mut s).await.unwrap().unwrap()).unwrap();
+        assert!(matches!(first, Event::Error { code: ErrorCode::UidMismatch, .. }), "{first:?}");
+        assert!(read_frame(&mut s).await.unwrap().is_none(), "closed, serve never answered");
+    }
+
     // A frame other than hello first, then garbage, then an oversize length:
     // each gets an error frame and the connection closes.
     for raw in [br#"{"op":"list","id":7}"#.to_vec(), b"not json".to_vec()] {

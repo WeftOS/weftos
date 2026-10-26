@@ -347,6 +347,9 @@ pub mod cogbus_policy;
 /// The cogbus `GovernanceRequest` site, attributed from the kernel attestation (ADR-122 B3).
 #[cfg(all(feature = "placement", unix))]
 pub mod cogbus_governance;
+/// Per-cog uid allocation and the shared-uid marking (ADR-122 gaps 2 and 3).
+#[cfg(all(feature = "placement", unix))]
+pub mod cogbus_isolation;
 /// cogbus activity log, `cogbus-activity.jsonl` (ADR-122 B3).
 #[cfg(all(feature = "placement", unix))]
 pub mod cogbus_activity;

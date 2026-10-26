@@ -35,8 +35,24 @@ pub const ENV_DATA_DIR: &str = "COGNITUM_COG_DATA_DIR";
 pub const ENV_COGBUS: &str = "WEFTOS_COGBUS";
 /// Env var: the instance's cogbus token (the instance token, see above).
 pub const ENV_COGBUS_TOKEN: &str = "WEFTOS_COGBUS_TOKEN";
+/// Where a container sees the broker socket (ADR-122 gap 1).
+pub const COGBUS_IN_CONTAINER: &str = "/run/weftos/cogbus.sock";
 /// Default CSI feed port (ADR-069).
 pub const DEFAULT_CSI_PORT: u16 = 5006;
+
+/// The identity a native instance runs as (ADR-122 gap 2): its own uid and
+/// gid, plus the supplementary groups it is placed in (the `cogbus` group,
+/// which owns the broker socket).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CogIdentity {
+    /// Uid to switch to.
+    pub uid: u32,
+    /// Primary gid.
+    pub gid: u32,
+    /// Supplementary groups (replaces the daemon's; never empty of the
+    /// socket's group when the broker is on).
+    pub groups: Vec<u32>,
+}
 
 /// Host contract for one instance.
 #[derive(Debug, Clone)]
@@ -67,6 +83,14 @@ pub struct HostContract {
     /// the instance id, so another owner never gets this instance's directory
     /// (and the `data/` in it). `None`: unowned (tests, `weaver run`).
     pub owner: Option<String>,
+    /// Identity the native adapter switches to before exec, when the broker
+    /// allocated one for this instance. `None`: the adapter's own `run_as`,
+    /// or the daemon's uid.
+    pub run_as: Option<CogIdentity>,
+    /// Container route: the host path of the broker socket, bind-mounted at
+    /// [`COGBUS_IN_CONTAINER`] (which is what `cogbus` then names). The
+    /// container runs as `run_as` (uid and the socket's gid).
+    pub cogbus_mount: Option<String>,
 }
 
 impl HostContract {
@@ -81,6 +105,8 @@ impl HostContract {
             expose_token: true,
             cogbus: None,
             owner: None,
+            run_as: None,
+            cogbus_mount: None,
         }
     }
 
@@ -116,6 +142,20 @@ impl HostContract {
     /// Builder: the cogbus socket handed to the instance.
     pub fn with_cogbus(mut self, socket: impl Into<String>) -> Self {
         self.cogbus = Some(socket.into());
+        self
+    }
+
+    /// Builder: the broker socket at `host_socket` is bind-mounted into the
+    /// instance's container, where it appears at [`COGBUS_IN_CONTAINER`].
+    pub fn with_cogbus_mount(mut self, host_socket: impl Into<String>) -> Self {
+        self.cogbus_mount = Some(host_socket.into());
+        self.cogbus = Some(COGBUS_IN_CONTAINER.to_string());
+        self
+    }
+
+    /// Builder: the identity the instance runs as.
+    pub fn with_run_as(mut self, id: CogIdentity) -> Self {
+        self.run_as = Some(id);
         self
     }
 
@@ -184,6 +224,7 @@ impl HostContract {
             "ingest_upstream": self.ingest_upstream.map(|s| s.to_string()),
             "ingest_url": self.ingest_url,
             "cogbus": self.cogbus,
+            "cogbus_mount": self.cogbus_mount.is_some(),
         })
     }
 }

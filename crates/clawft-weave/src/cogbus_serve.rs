@@ -14,10 +14,12 @@
 //! the socket could not be bound (ADR-122 section 9, `crate::cogbus_ingest`).
 //! The registrar tells the store sink each instance's placement.
 //!
-//! Only native cogs get the socket: they run as the daemon's own uid (the
-//! daemon's native adapter has no `run_as`), which is the uid the broker
-//! checks the peer against. Container and VM routes have no view of a host
-//! socket yet, so they get no broker in B1.
+//! Only native cogs get the socket. Each runs under its own uid when the
+//! daemon can switch uids and `cogbus-isolation.json` allows it; otherwise
+//! under the daemon's uid, marked `shared-uid` ([`crate::cogbus_isolation`]).
+//! The broker checks the peer against that uid. The socket is `0660`, group
+//! `cogbus` when the group exists and the daemon may assign it. Container and
+//! VM routes have no view of a host socket yet, so they get no broker in B1.
 //!
 //! B3: the broker runs with [`crate::cogbus_policy`] (kernel governance and
 //! `cogbus-policy.json` grants and denies) and writes
@@ -28,17 +30,24 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use clawft_kernel::cog_ingest::InstanceBinding;
-use clawft_kernel::workload_ctl::host_cogbus::{CogbusAttach, CogbusRegistrar, CogbusRegistration};
+use clawft_kernel::workload_ctl::host_cogbus::{CogbusAttach, CogbusRegistrar, CogbusRegistration, Isolation};
+use clawft_kernel::workload_runtime::CogIdentity;
+use clawft_kernel::workload_runtime::host_contract::COGBUS_IN_CONTAINER;
 use clawft_rpc::Response;
 use serde_json::{Value, json};
-use weftos_cogbus::server::{ServerHandle, serve};
+use weftos_cogbus::blob::{BlobConfig, BlobStore};
+use weftos_cogbus::server::{ServeOptions, ServerHandle, SocketReport, serve_with};
 use weftos_cogbus::{
     Broker, BrokerConfig, BusHooks, InputSpec, InstanceSpec, OutputSpec, SOCKET_NAME,
 };
 
 use crate::cogbus_activity::CogbusActivity;
+use crate::cogbus_isolation::Isolator;
 use crate::cogbus_ingest::StoreSink;
 use crate::cogbus_policy::{CogbusPolicy, Rules};
+
+/// The content store's directory under the runtime dir.
+pub const BLOB_DIR: &str = "cogbus-blobs";
 
 /// Topic rows in the dashboard report, busiest first.
 pub const REPORT_TOPICS: usize = 64;
@@ -50,6 +59,8 @@ static RUNTIME: OnceLock<CogbusRuntime> = OnceLock::new();
 pub struct CogbusRuntime {
     /// The broker.
     pub broker: Arc<Broker>,
+    /// Uid allocation and the isolation table.
+    pub isolator: Arc<Isolator>,
     _server: ServerHandle,
 }
 
@@ -57,6 +68,11 @@ impl CogbusRuntime {
     /// Socket path.
     pub fn socket(&self) -> &Path {
         self._server.path()
+    }
+
+    /// Mode, owner and group the socket was bound with.
+    pub fn socket_report(&self) -> &SocketReport {
+        self._server.report()
     }
 }
 
@@ -71,14 +87,55 @@ pub fn broker_with(node_id: &str, hooks: BusHooks) -> Arc<Broker> {
     Arc::new(Broker::new(BrokerConfig::new(node_id)).with_hooks(hooks))
 }
 
+/// The daemon's broker: `hooks`, and the content store in
+/// `<dir>/cogbus-blobs` (default quota 2 GiB, TTL-evicted). A store that
+/// cannot be opened is logged and blob requests are `unsupported`.
+pub fn broker_in(node_id: &str, hooks: BusHooks, dir: &Path) -> Arc<Broker> {
+    let now = clawft_kernel::exposure::registry::now_ms();
+    let mut b = Broker::new(BrokerConfig::new(node_id)).with_hooks(hooks);
+    match BlobStore::open(&dir.join(BLOB_DIR), BlobConfig::default(), now) {
+        Ok(store) => b = b.with_blobs(Arc::new(store)),
+        Err(e) => tracing::warn!(error = %e, "cogbus content store not opened; blob requests are unsupported"),
+    }
+    Arc::new(b)
+}
+
 /// The daemon's hooks: governance over `rules` and `dir`'s policy file, the
 /// activity log in `dir`.
 pub fn hooks(dir: &Path, rules: Option<Rules>) -> BusHooks {
-    BusHooks {
+    hooks_with_activity(dir, rules).0
+}
+
+/// [`hooks`], and the activity sink, so the daemon can give it the workload
+/// stop hook once the host exists.
+pub fn hooks_with_activity(dir: &Path, rules: Option<Rules>) -> (BusHooks, Arc<CogbusActivity>) {
+    let activity = Arc::new(CogbusActivity::open(dir));
+    let hooks = BusHooks {
         policy: Arc::new(CogbusPolicy::new(dir, rules)),
-        sink: Arc::new(CogbusActivity::open(dir)),
+        sink: activity.clone(),
         ..BusHooks::default()
-    }
+    };
+    (hooks, activity)
+}
+
+/// The stop hook for `host`: when the broker stopped a cog on the bus and
+/// governance agreed, stop the workload through the host (its gated
+/// `workload.stop`, chained with the cause) and leave it stopped.
+pub fn stop_hook(host: std::sync::Weak<clawft_kernel::workload_ctl::host_service::WorkloadHostService>) -> crate::cogbus_activity::StopHook {
+    Arc::new(move |instance: &str, reason: &str| {
+        let (Some(host), Ok(rt)) = (host.upgrade(), tokio::runtime::Handle::try_current()) else {
+            tracing::warn!(target: "cogbus", instance, reason, "cannot stop the workload (no host or runtime)");
+            return;
+        };
+        let (instance, reason) = (instance.to_string(), reason.to_string());
+        rt.spawn(async move {
+            match host.stop_for_bus(&instance, &reason).await {
+                Ok(Some(s)) => tracing::warn!(target: "cogbus", instance = %s.instance_id, workload = %s.workload, reason = %s.reason, "workload stopped by the cogbus"),
+                Ok(None) => tracing::info!(target: "cogbus", %instance, "no live workload instance to stop"),
+                Err(e) => tracing::error!(target: "cogbus", %instance, error = %e, "workload stop failed; the cog keeps running without the bus"),
+            }
+        });
+    })
 }
 
 /// Start the broker for node `node_id` in `dir`.
@@ -86,27 +143,58 @@ pub async fn start(dir: &Path, node_id: &str) -> Result<CogbusRuntime, String> {
     start_on(broker(node_id), dir).await
 }
 
-/// Serve `broker` on `dir`'s socket.
+/// Serve `broker` on `dir`'s socket with every cog on the daemon's uid.
 pub async fn start_on(broker: Arc<Broker>, dir: &Path) -> Result<CogbusRuntime, String> {
+    start_with(broker, dir, Arc::new(Isolator::shared()), None).await
+}
+
+/// Serve `broker` on `dir`'s socket, group `group` (its gid) when given.
+pub async fn start_with(
+    broker: Arc<Broker>,
+    dir: &Path,
+    isolator: Arc<Isolator>,
+    group: Option<u32>,
+) -> Result<CogbusRuntime, String> {
     let path: PathBuf = dir.join(SOCKET_NAME);
-    let server = serve(broker.clone(), &path)
+    let server = serve_with(broker.clone(), &path, ServeOptions { group })
         .await
         .map_err(|e| format!("cannot bind {}: {e}", path.display()))?;
-    Ok(CogbusRuntime { broker, _server: server })
+    Ok(CogbusRuntime { broker, isolator, _server: server })
 }
 
 /// Serve `broker` and keep it for the daemon's life; the registrar to hand
 /// the workload host, or `None` (logged) when the socket could not be bound.
 /// `sink` is the ingest bridge's store sink, told of every instance.
 pub async fn install(broker: Arc<Broker>, dir: &Path, sink: Option<Arc<StoreSink>>) -> Option<Arc<dyn CogbusRegistrar>> {
-    match start_on(broker, dir).await {
+    install_with(broker, dir, sink, container_route(None)).await
+}
+
+/// [`install`], with what the container adapter can do about the socket.
+pub async fn install_with(
+    broker: Arc<Broker>,
+    dir: &Path,
+    sink: Option<Arc<StoreSink>>,
+    container: ContainerRoute,
+) -> Option<Arc<dyn CogbusRegistrar>> {
+    let cfg = crate::cogbus_isolation::load(dir).unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "cogbus-isolation.json ignored; cogs share the daemon's uid");
+        Default::default()
+    });
+    let isolator = Arc::new(Isolator::detect(cfg.clone()));
+    let group = crate::cogbus_isolation::group_gid(&cfg.group);
+    match start_with(broker, dir, isolator.clone(), group).await {
         Ok(rt) => {
-            tracing::info!(socket = %rt.socket().display(), store_sink = sink.is_some(), "cogbus");
+            tracing::info!(
+                socket = %rt.socket().display(), store_sink = sink.is_some(),
+                isolation = %isolator.report()["mode"], reason = ?isolator.blocker(),
+                socket_group_applied = rt.socket_report().group_applied, "cogbus"
+            );
             // The NPU service's telemetry feeds node facts (cogbus_npu_facts).
             if let Err(e) = crate::cogbus_npu_facts::attach(&rt.broker) {
                 tracing::warn!(error = %e, "npu service state will not appear in node facts");
             }
-            let mut reg = Registrar::new(rt.broker.clone(), rt.socket());
+            let mut reg = Registrar::for_runtime(&rt);
+            reg = reg.with_container(container, Some(rt.socket_report().gid));
             if let Some(s) = sink {
                 reg = reg.with_store_sink(s);
             }
@@ -121,22 +209,129 @@ pub async fn install(broker: Arc<Broker>, dir: &Path, sink: Option<Arc<StoreSink
 }
 
 /// The broker behind the workload host.
+/// Whether containers can reach the broker, decided from the engine
+/// (ADR-122 gap 1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ContainerRoute {
+    /// A rootful Linux engine: the socket is bind-mounted.
+    Socket,
+    /// No way to share the host socket, and why.
+    Off(String),
+}
+
+/// What the container adapter, if any, can do about the broker socket.
+pub fn container_route(cfg: Option<&clawft_kernel::workload_runtime::ContainerRuntimeConfig>) -> ContainerRoute {
+    use clawft_kernel::workload_runtime::container_cmd::Engine;
+    match cfg {
+        None => ContainerRoute::Off("no container adapter on this node".into()),
+        Some(c) if c.engine == Engine::Apple => ContainerRoute::Off(
+            "Apple container runs each container in its own VM; a host socket cannot cross it".into(),
+        ),
+        Some(_) if !cfg!(target_os = "linux") => ContainerRoute::Off(
+            "the engine runs in a VM on this OS; a host socket cannot be bind-mounted into it".into(),
+        ),
+        Some(_) => ContainerRoute::Socket,
+    }
+}
+
+/// Why a VM or device route has no broker (ADR-122 gap 1): the socket is a
+/// host file and these routes are across a virtualisation or network
+/// boundary. Their cogs keep the ingest HTTP path.
+pub const VM_ROUTE_NOTE: &str = "unsupported: a VM or device has no view of the host socket (ingest HTTP only)";
+
 pub struct Registrar {
     broker: Arc<Broker>,
     socket: String,
+    container: ContainerRoute,
+    socket_gid: Option<u32>,
     uid: u32,
+    isolator: Arc<Isolator>,
     sink: Option<Arc<StoreSink>>,
 }
 
 impl Registrar {
     /// Registrar over `broker` serving `socket`, for cogs run as this uid.
     pub fn new(broker: Arc<Broker>, socket: &Path) -> Self {
+        Self::with_isolator(broker, socket, Arc::new(Isolator::shared()))
+    }
+
+    /// Registrar over a running broker, sharing its isolation table.
+    pub fn for_runtime(rt: &CogbusRuntime) -> Self {
+        let gid = rt.socket_report().gid;
+        Self::with_isolator(rt.broker.clone(), rt.socket(), rt.isolator.clone()).with_container_gid(gid)
+    }
+
+    fn with_container_gid(mut self, gid: u32) -> Self {
+        self.socket_gid = Some(gid);
+        self.with_routes_noted()
+    }
+
+    /// Registrar allocating identities from `isolator`.
+    pub fn with_isolator(broker: Arc<Broker>, socket: &Path, isolator: Arc<Isolator>) -> Self {
         Self {
             broker,
             socket: socket.to_string_lossy().into_owned(),
+            container: ContainerRoute::Off("no container adapter on this node".into()),
+            socket_gid: None,
             uid: nix::unistd::geteuid().as_raw(),
+            isolator,
             sink: None,
         }
+        .with_routes_noted()
+    }
+
+    /// Containers reach the broker per `route`; `socket_gid` is the socket's
+    /// group, which a container cog without its own identity runs under.
+    pub fn with_container(mut self, route: ContainerRoute, socket_gid: Option<u32>) -> Self {
+        self.container = route;
+        self.socket_gid = socket_gid;
+        self.with_routes_noted()
+    }
+
+    fn with_routes_noted(self) -> Self {
+        let how = match (&self.container, self.socket_gid) {
+            (ContainerRoute::Socket, Some(_)) => format!(
+                "bind-mounted socket; {}",
+                if self.isolator.blocker().is_none() {
+                    "per-cog uid".to_string()
+                } else {
+                    format!("shared-uid {} ({})", self.isolator.container_uid(), self.isolator.blocker().unwrap_or_default())
+                }
+            ),
+            (ContainerRoute::Socket, None) => "unsupported: the socket's group is unknown".into(),
+            (ContainerRoute::Off(why), _) => format!("unsupported: {why}"),
+        };
+        self.isolator.set_route("container", how);
+        self.isolator.set_route("vm", VM_ROUTE_NOTE);
+        self.isolator.set_route("seed", VM_ROUTE_NOTE);
+        self
+    }
+
+    /// A container cog: the socket is mounted, the cog runs as a uid the
+    /// broker records and a gid that may open the socket.
+    fn attach_container(&self) -> Option<CogbusAttach> {
+        let (ContainerRoute::Socket, Some(sock_gid)) = (&self.container, self.socket_gid) else {
+            return None;
+        };
+        let plan = self.isolator.plan();
+        let (identity, isolation, note) = match plan.identity {
+            // A rootful engine honours the allocated uid: its own per cog.
+            Some(id) => (CogIdentity { gid: sock_gid, groups: Vec::new(), ..id }, plan.isolation, plan.note),
+            None => (
+                CogIdentity { uid: self.isolator.container_uid(), gid: sock_gid, groups: Vec::new() },
+                Isolation::SharedUid,
+                Some(format!("container cogs share uid {} ({})", self.isolator.container_uid(), plan.note.unwrap_or_default())),
+            ),
+        };
+        Some(CogbusAttach {
+            socket: COGBUS_IN_CONTAINER.to_string(),
+            uid: Some(identity.uid),
+            identity: Some(identity),
+            isolation,
+            refuse_shared: self.isolator.require_cog_uid(),
+            note,
+            mount: Some(self.socket.clone()),
+        })
     }
 
     /// Tell `sink` where each registered instance's `store.vector` goes.
@@ -168,13 +363,35 @@ pub fn spec_of(r: &CogbusRegistration) -> InstanceSpec {
 
 impl CogbusRegistrar for Registrar {
     fn attach(&self, route: &str) -> Option<CogbusAttach> {
-        (route == "native").then(|| CogbusAttach { socket: self.socket.clone(), uid: Some(self.uid) })
+        if route == "container" {
+            return self.attach_container();
+        }
+        if route != "native" {
+            return None;
+        }
+        let plan = self.isolator.plan();
+        Some(CogbusAttach {
+            socket: self.socket.clone(),
+            uid: Some(plan.identity.as_ref().map_or(self.uid, |i| i.uid)),
+            identity: plan.identity,
+            isolation: plan.isolation,
+            refuse_shared: self.isolator.require_cog_uid(),
+            note: plan.note,
+            mount: None,
+        })
     }
 
     fn register(&self, r: &CogbusRegistration) -> Result<(), String> {
         self.broker
             .register(spec_of(r), r.token.expose())
             .map_err(|e| e.message)?;
+        self.isolator.bind(&r.instance_id, &r.cog_id, r.uid, r.isolation);
+        // Declared message rates become publish budgets (ADR-122 gap 5).
+        for o in &r.outputs {
+            if let Some(per_sec) = o.rate.as_deref().and_then(weftos_cogbus::rate::parse_rate) {
+                self.broker.set_output_rate(&r.instance_id, &o.topic, per_sec);
+            }
+        }
         if let Some(s) = &self.sink {
             s.bind(InstanceBinding::new(&r.instance_id, r.project_id.clone(), &r.controller_node));
         }
@@ -183,9 +400,18 @@ impl CogbusRegistrar for Registrar {
 
     fn revoke(&self, instance_id: &str) {
         self.broker.revoke(instance_id);
+        self.isolator.unbind(instance_id);
         if let Some(s) = &self.sink {
             s.unbind(instance_id);
         }
+    }
+
+    fn release(&self, instance_id: &str) {
+        self.isolator.release(instance_id);
+    }
+
+    fn abandon(&self, uid: u32) {
+        self.isolator.abandon(uid);
     }
 }
 
@@ -195,6 +421,13 @@ pub fn list_json(rt: Option<&CogbusRuntime>) -> Value {
         Some(rt) => json!({
             "running": true,
             "socket": rt.socket().to_string_lossy(),
+            "socket_mode": format!("{:04o}", rt.socket_report().mode),
+            "socket_uid": rt.socket_report().uid,
+            "socket_gid": rt.socket_report().gid,
+            "socket_group_applied": rt.socket_report().group_applied,
+            "socket_note": rt.socket_report().note,
+            "isolation": rt.isolator.report(),
+            "blobs": rt.broker.blob_store().map(|b| b.stats()),
             "topics": rt.broker.snapshot(),
             "refusals": rt.broker.recent_refusals(),
         }),

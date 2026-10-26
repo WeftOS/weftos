@@ -237,3 +237,25 @@ fn the_report_section_is_bounded_and_busiest_first() {
     assert_eq!(report["topics_truncated"], true);
     assert_eq!(report["topics"]["total"], 100);
 }
+
+#[test]
+fn a_stop_is_governed_by_kernel_rules_and_deny_entries_and_survives_a_broken_policy_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let stop = || req(BusAction::Stop, "radar", Some(P1), "-");
+    // Unreadable operator file: ordinary requests are refused, a stop is not.
+    let f = tmp.path().join(POLICY_FILE);
+    std::fs::write(&f, "{ not json").unwrap();
+    std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let p = CogbusPolicy::new(tmp.path(), None);
+    assert!(p.decide(&req(BusAction::Publish, "radar", Some(P1), "telemetry/x")).is_err());
+    assert_eq!(p.decide(&stop()), Ok(()));
+    // A kernel rule on cogbus.stop can still keep a cog running.
+    let rules = vec![rule("keep-radar", "cogbus.stop", None)];
+    let p = CogbusPolicy::new(tmp.path(), Some((rules, 0.9, false)));
+    assert!(p.decide(&stop()).unwrap_err().contains("keep-radar"));
+    // So can a deny entry of the policy file.
+    write(tmp.path(), json!({"deny": [{"actions": ["cogbus.stop"], "cogs": ["radar"], "reason": "leave it"}]}));
+    let p = CogbusPolicy::new(tmp.path(), None);
+    assert!(p.decide(&stop()).unwrap_err().contains("leave it"));
+    assert_eq!(p.decide(&req(BusAction::Stop, "other", Some(P1), "-")), Ok(()));
+}

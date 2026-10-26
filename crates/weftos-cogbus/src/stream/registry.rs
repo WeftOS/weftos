@@ -171,6 +171,11 @@ impl Streams {
         self.st.lock().unwrap_or_else(|p| p.into_inner())
     }
 
+    /// Stream readers held by connection `conn`.
+    pub(crate) fn reader_count(&self, conn: u64) -> usize {
+        self.lock().subs.values().filter(|x| x.conn == conn).count()
+    }
+
     /// Read `<kind>/<source_id>`.
     pub(crate) fn subscribe(
         &self,

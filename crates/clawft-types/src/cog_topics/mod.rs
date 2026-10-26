@@ -10,6 +10,7 @@
 //! `spatial.evidence.v1` is registered here but defined by
 //! `contracts/sensors` (ADR-111); it has no typed message in this module.
 
+mod blob;
 mod data;
 mod infer;
 mod media;
@@ -20,6 +21,7 @@ mod tests;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
+pub use blob::{BlobHandle, MAX_MEDIA_TYPE, find_handles, valid_media_type};
 pub use data::{CanFrame, MAX_STORE_VECTORS, StoreVector, Telemetry, TelemetryItem, Transcript};
 pub use data::{SenmlMsg, SenmlRecord};
 pub use infer::{DEFAULT_PRIORITY, InferRequest, MAX_IMAGE_B64, MAX_PRIORITY, MAX_TEXT, MIN_PRIORITY};
@@ -28,8 +30,8 @@ pub use sdr::{AutoGain, Gain, SdrBand, SdrReply, SdrRequest};
 
 /// Registered schema ids, in the order the plan lists them, then
 /// `store.vector.v1` (ADR-122 section 9), `infer.v1` (section 12) and
-/// `sdr.v1` (service calls).
-pub const SCHEMA_IDS: [&str; 13] = [
+/// `sdr.v1` (service calls) and `blob.v1` (section 3, B5).
+pub const SCHEMA_IDS: [&str; 14] = [
     "senml.v1",
     "spatial.evidence.v1",
     "pcm.s16le.v1",
@@ -43,6 +45,7 @@ pub const SCHEMA_IDS: [&str; 13] = [
     "store.vector.v1",
     "infer.v1",
     "sdr.v1",
+    "blob.v1",
 ];
 
 /// True if `id` is a registered schema id.
@@ -219,6 +222,7 @@ pub fn check_message(
         "store.vector.v1" => parse::<StoreVector>(msg, StoreVector::validate),
         "infer.v1" => parse::<InferRequest>(msg, InferRequest::validate),
         "sdr.v1" => parse::<SdrRequest>(msg, SdrRequest::validate),
+        "blob.v1" => parse::<BlobHandle>(msg, BlobHandle::validate),
         "spatial.evidence.v1" => Err(CogTopicError(
             "spatial.evidence.v1 is validated by weftos-spatial-core".into(),
         )),

@@ -27,6 +27,13 @@ pub enum BusAction {
     Serve,
     /// One call of a service.
     Call,
+    /// Starting a blob upload (B5).
+    BlobPut,
+    /// Starting a blob read (B5).
+    BlobGet,
+    /// Asking the workload runtime to stop an instance the broker stopped
+    /// on the bus (repeated refusals or a publish rate overrun).
+    Stop,
 }
 
 impl BusAction {
@@ -39,6 +46,9 @@ impl BusAction {
             Self::Unsubscribe => "cogbus.unsubscribe",
             Self::Serve => "cogbus.serve",
             Self::Call => "cogbus.call",
+            Self::BlobPut => "cogbus.blob.put",
+            Self::BlobGet => "cogbus.blob.get",
+            Self::Stop => "cogbus.stop",
         }
     }
 }
@@ -184,6 +194,12 @@ pub trait BusSink: Send + Sync {
     /// workload runtime registers it again). The hook for stopping the cog
     /// itself; called with no broker lock held.
     fn stopped(&self, _instance_id: &str, _refusals: u32) {}
+
+    /// The broker, having stopped `instance_id` on the bus, asks the
+    /// workload runtime to stop the cog itself, and governance
+    /// (`cogbus.stop`) agreed. `reason` says why (repeated refusals, with
+    /// the last code). Called with no broker lock held; it must not block.
+    fn stop_requested(&self, _instance_id: &str, _reason: &str) {}
 }
 
 /// Logs activity through `tracing` only.

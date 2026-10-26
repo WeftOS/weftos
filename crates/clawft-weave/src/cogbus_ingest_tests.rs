@@ -173,6 +173,7 @@ fn native(reg: &Registrar, broker: &Broker, id: &str, project: &str, n: u8) -> S
         controller_node: "ctl".into(),
         token: clawft_types::secret::SecretString::new(tok(n)),
         uid: None,
+        isolation: clawft_kernel::workload_ctl::host_cogbus::Isolation::SharedUid,
         outputs: spec.outputs,
         inputs: spec.inputs,
     };

@@ -170,6 +170,20 @@ the service's own (the NPU service returns `text`, `usage` and timings).
 | `image_b64`, `image_mime` | string | one small inline image (at most 40 K chars of base64), `image/png` or `image/jpeg`; both or neither |
 | `max_tokens` | u32 | optional, 1..=4096 |
 
+### `blob.v1` (handle)
+
+A handle to bytes in the node's content store (ADR-122 section 3, B5). It is a reading body
+on its own, or nested anywhere in a reading, a service call or a service reply: a payload
+over the 64 KiB body limit travels as a handle and the receiver fetches the bytes from the
+broker (`blob_get`). It carries no common fields.
+
+| Field | Type | Rule |
+|-------|------|------|
+| `hash` | string | BLAKE3 of the bytes, 64 lower-case hex |
+| `size` | u64 | at least 1 |
+| `media_type` | string | `type/subtype`, lower-case, e.g. `image/png` |
+| `expires_ms` | u64 | Unix milliseconds after which the store may drop the bytes |
+
 ## Using it
 
 - **Producers**: emit messages that pass every `valid-*` vector's rules and fail the

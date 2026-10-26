@@ -22,7 +22,7 @@
 //! are not asked. Every refusal goes through [`refuse`], which marks it for
 //! [`Broker::record_refusal`].
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use clawft_types::cog_topics::{InputPolicy, TopicClass, is_registered, valid_topic_kind};
@@ -44,6 +44,8 @@ mod sink;
 mod rows;
 #[path = "svc.rs"]
 mod svc;
+#[path = "blobops.rs"]
+mod blobops;
 
 struct Instance {
     spec: InstanceSpec,
@@ -90,6 +92,10 @@ struct State {
     next_sub: u64,
     sinks: HashMap<String, SinkSlot>,
     svc: svc::Svc,
+    /// Declared message rate per (instance, kind), msgs/s.
+    rates: HashMap<(String, String), f64>,
+    /// Publish budgets per (instance, kind, source).
+    buckets: HashMap<(String, String, String), crate::rate::Bucket>,
 }
 
 fn now_ns() -> u64 {
@@ -109,6 +115,10 @@ pub struct Broker {
     state: Mutex<State>,
     pub(crate) streams: crate::stream::Streams,
     pub(crate) ext: Ext,
+    pub(crate) blobs: Option<Arc<crate::blob::BlobStore>>,
+    /// Open connections per instance (by connection id); sessions release
+    /// their own slot on drop.
+    conns: Arc<Mutex<HashMap<String, HashSet<u64>>>>,
 }
 
 impl Broker {
@@ -119,7 +129,36 @@ impl Broker {
             state: Mutex::new(State::default()),
             streams: crate::stream::Streams::new(Default::default()),
             ext: Ext::default(),
+            blobs: None,
+            conns: Arc::default(),
         }
+    }
+
+    /// Serve blob requests from `store` (B5). Without it they are
+    /// `unsupported`.
+    pub fn with_blobs(mut self, store: Arc<crate::blob::BlobStore>) -> Self {
+        self.blobs = Some(store);
+        self
+    }
+
+    /// The content store, if the node has one.
+    pub fn blob_store(&self) -> Option<&Arc<crate::blob::BlobStore>> {
+        self.blobs.as_ref()
+    }
+
+    /// Declare the message rate (per second) of `instance`'s output `kind`;
+    /// publishes beyond it (with [`crate::rate::SLACK`]) are `rate_limited`.
+    /// Call after `register`; revoke forgets it, so a restart registers
+    /// again.
+    pub fn set_output_rate(&self, instance: &str, kind: &str, per_sec: f64) {
+        if per_sec.is_finite() && per_sec > 0.0 {
+            self.lock().rates.insert((instance.to_string(), kind.to_string()), per_sec);
+        }
+    }
+
+    /// The broker's tunables.
+    pub fn config(&self) -> &BrokerConfig {
+        &self.cfg
     }
 
     /// The node id stamped on deliveries.
@@ -179,6 +218,12 @@ impl Broker {
             }
         }
         g.svc.drop_instance(instance_id);
+        self.conns.lock().unwrap_or_else(|p| p.into_inner()).remove(instance_id);
+        g.rates.retain(|(i, _), _| i != instance_id);
+        g.buckets.retain(|(i, _, _), _| i != instance_id);
+        if let Some(b) = &self.blobs {
+            b.drop_uploads(instance_id);
+        }
         let _ = inst.revoked.send(true);
         true
     }
@@ -213,17 +258,34 @@ impl Broker {
             let m = format!("peer uid {peer_uid:?} is not the instance's uid {want}");
             return Err(refuse(id, "hello", "-", bad(ErrorCode::UidMismatch, m)));
         }
+        let (id, project_id, revoked) = (id.clone(), inst.spec.project_id.clone(), inst.revoked.subscribe());
+        let conn = svc::next_conn();
+        let slot = {
+            let mut open = self.conns.lock().unwrap_or_else(|p| p.into_inner());
+            let held = open.entry(id.clone()).or_default();
+            if held.len() >= self.cfg.max_conns_per_instance {
+                let m = format!("{id} already has {} connections open", held.len());
+                let none = held.is_empty();
+                if none {
+                    open.remove(&id);
+                }
+                return Err(refuse(&id, "hello", "-", bad(ErrorCode::Busy, m)));
+            }
+            held.insert(conn);
+            crate::types::Slot { conns: self.conns.clone(), instance: id.clone(), conn }
+        };
         let (push, pushed) = tokio::sync::mpsc::unbounded_channel();
         Ok(Session {
-            conn: svc::next_conn(),
+            conn,
             push,
             pushed: Some(pushed),
-            instance_id: id.clone(),
-            project_id: inst.spec.project_id.clone(),
+            instance_id: id,
+            project_id,
             declared: None,
             subs: BTreeMap::new(),
             wake: Arc::new(Notify::new()),
-            revoked: inst.revoked.subscribe(),
+            revoked,
+            _slot: slot,
         })
     }
 
@@ -346,11 +408,41 @@ impl Broker {
         let project = spec.project_id.clone();
         let cog = spec.cog_id.clone();
         let key = (kind.to_string(), source_id.to_string());
+        if let Some(per_sec) = g.rates.get(&(me.to_string(), kind.to_string())).copied() {
+            let now = std::time::Instant::now();
+            let bucket = g
+                .buckets
+                .entry((me.to_string(), kind.to_string(), source_id.to_string()))
+                .or_insert_with(|| crate::rate::Bucket::new(per_sec, now));
+            if !bucket.take(now) {
+                let m = format!("{topic} is declared at {per_sec} msg/s (up to {} allowed)", per_sec * crate::rate::SLACK);
+                return Err(no(bad(ErrorCode::RateLimited, m)));
+            }
+        }
         let mine = g.topics.get(&key).and_then(|t| t.writer.as_deref()) == Some(me);
         if !mine {
             let mut req = BusRequest::new(BusAction::Publish, me, &cog, project.as_deref());
             req.topic_project = g.topics.get(&key).and_then(|t| t.project_id.as_deref());
             self.ext.gate(&req.on(&topic, schema))?;
+        }
+        let handles = self.handles_in(&body);
+        if !handles.is_empty() {
+            // A handle published is a handle handed to the readers this
+            // reading will reach.
+            let readers: Vec<String> = g
+                .subs
+                .values()
+                .filter(|x| {
+                    x.kind == kind
+                        && x.source.as_deref().is_none_or(|src| src == source_id)
+                        && x.schema == schema
+                        && (x.project_id == project || granted(&x.also, &project, source_id))
+                })
+                .map(|x| x.instance.clone())
+                .collect();
+            for to in readers {
+                self.grant_handles(&handles, me, &to);
+            }
         }
         let r = Reading {
             kind: kind.to_string(),
@@ -388,6 +480,11 @@ impl Broker {
                 ErrorCode::Unsupported,
                 format!("{kind} is a service; use serve and call"),
             )));
+        }
+        let held = s.subs.len() + self.streams.reader_count(s.conn);
+        if held >= self.cfg.max_subs_per_conn {
+            let m = format!("this connection already holds {held} subscriptions");
+            return Err(no(bad(ErrorCode::Busy, m)));
         }
         let mut g = self.lock();
         let spec = self.spec_of(&g, s, "subscribe")?;
@@ -484,6 +581,7 @@ impl Broker {
             g.subs.remove(id);
         }
         g.svc.drop_conn(s.conn);
+
     }
 }
 

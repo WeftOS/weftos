@@ -485,6 +485,7 @@ async fn build(
     let notices = wire_revocations(&ex, revocations.clone(), &anchors, mesh, dir);
     let serving = load_host_config(dir)?;
     let container = load_container(dir, &dir.join("workload-containers"))?;
+    let bus_container = crate::cogbus_serve::container_route(container.as_ref());
     // `describe` always answers with the facts the daemon re-probes.
     let (fm, fid) = (membership.clone(), id.clone());
     let facts: FactsSource = Arc::new(move || {
@@ -495,7 +496,8 @@ async fn build(
         Arc::new(crate::cog_ingest_serve::IdentityDirectory);
     // ADR-122 section 9: the broker exists first, so the bridge publishes on
     // it and its store sink serves cogs that never touch the HTTP port.
-    let broker = crate::cogbus_serve::broker_with(&id, crate::cogbus_serve::hooks(dir, bus_rules));
+    let (bus_hooks, bus_activity) = crate::cogbus_serve::hooks_with_activity(dir, bus_rules);
+    let broker = crate::cogbus_serve::broker_in(&id, bus_hooks, dir);
     let ingest = match crate::cog_ingest_serve::load_config(dir) {
         Ok(cfg) => match crate::cog_ingest_serve::start_on_bus(
             &cfg,
@@ -542,7 +544,7 @@ async fn build(
     local.set_node_admin(Arc::new(crate::dashboard_rpc::MeshAdmin));
     // ADR-122: the cog data plane broker beside the ingest bridge; down, cogs
     // are placed without WEFTOS_COGBUS.
-    if let Some(bus) = crate::cogbus_serve::install(broker, dir, store_sink).await {
+    if let Some(bus) = crate::cogbus_serve::install_with(broker, dir, store_sink, bus_container).await {
         local.set_cogbus(bus);
     }
     // Put back what was placed here before the daemon restarted: after the
@@ -551,6 +553,8 @@ async fn build(
     if !restored.restored.is_empty() || !restored.failed.is_empty() {
         tracing::info!(restored = restored.restored.len(), failed = restored.failed.len(), "placed instances restored after restart");
     }
+    // ADR-122 gap 5: a cog the broker stopped on the bus is stopped here too.
+    bus_activity.set_stop_hook(crate::cogbus_serve::stop_hook(Arc::downgrade(&local)));
     let _ = HOST.set(local.clone());
     // ADR-108 P3b: serve `project.fetch` for the projects registered here.
     match clawft_types::runtime_paths::home_dir() {

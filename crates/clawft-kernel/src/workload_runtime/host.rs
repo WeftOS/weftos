@@ -437,10 +437,24 @@ impl WorkloadHost {
         h: &InstanceHandle,
         grace: Duration,
     ) -> Result<RunEvidence, RuntimeError> {
+        self.stop_because(h, grace, None).await
+    }
+
+    /// [`stop`](Self::stop), with the chained `workload.stop` event naming
+    /// what asked for it (`cause`, e.g. the cogbus after repeated refusals).
+    pub async fn stop_because(
+        &self,
+        h: &InstanceHandle,
+        grace: Duration,
+        cause: Option<Value>,
+    ) -> Result<RunEvidence, RuntimeError> {
         let (w, emu) = self.workload_of(h).await?;
         self.check_teardown("workload.stop", &w, &w.kind, emu)?;
         let r = self.runtime.stop(h, grace).await;
         let mut payload = self.base(&w, Some(&h.instance_id));
+        if let Some(c) = cause {
+            payload["cause"] = c;
+        }
         if let Ok(ev) = &r {
             payload["evidence"] = ev.audit();
         }

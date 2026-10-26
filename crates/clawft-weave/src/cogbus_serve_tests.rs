@@ -38,6 +38,7 @@ fn registration(contract: &HostContract, uid: Option<u32>) -> CogbusRegistration
         controller_node: "ctl".into(),
         token: contract.token.clone(),
         uid,
+        isolation: clawft_kernel::workload_ctl::host_cogbus::Isolation::SharedUid,
         outputs: spec.outputs,
         inputs: spec.inputs,
     }
@@ -98,4 +99,53 @@ async fn a_socket_path_that_cannot_be_bound_is_an_error_not_a_panic() {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(tmp.path().join("cogbus.sock"), "not a socket").unwrap();
     assert!(start(tmp.path(), "n").await.is_err());
+}
+
+#[tokio::test]
+async fn the_daemons_broker_has_a_content_store_under_the_runtime_dir() {
+    let tmp = tempfile::tempdir().unwrap();
+    let broker = broker_in("n", BusHooks::default(), tmp.path());
+    assert!(broker.blob_store().is_some());
+    assert!(tmp.path().join(BLOB_DIR).is_dir());
+    let rt = start_on(broker, tmp.path()).await.unwrap();
+    let doc = list_json(Some(&rt));
+    assert_eq!(doc["blobs"]["quota"], 2u64 << 30);
+    assert_eq!(doc["blobs"]["blobs"], 0);
+}
+
+#[tokio::test]
+async fn a_declared_rate_becomes_a_budget_and_a_flood_asks_the_host_to_stop_the_cog() {
+    use std::sync::Mutex;
+    use clawft_kernel::workload_ctl::host_cogbus::CogbusRegistrar;
+    let tmp = tempfile::tempdir().unwrap();
+    let (hooks, activity) = hooks_with_activity(tmp.path(), None);
+    let asked: Arc<Mutex<Vec<(String, String)>>> = Arc::default();
+    let sink = asked.clone();
+    assert!(activity.set_stop_hook(Arc::new(move |i, r| sink.lock().unwrap().push((i.into(), r.into())))));
+    let broker = broker_in("n", hooks, tmp.path());
+    let reg = Registrar::new(broker.clone(), &tmp.path().join("cogbus.sock"));
+    let mut r = registration(&HostContract::new(SocketAddr::from(([0, 0, 0, 0], 5006))), None);
+    r.token = clawft_types::secret::SecretString::new("t".repeat(40));
+    assert_eq!(r.outputs[0].rate.as_deref(), Some("1 Hz"));
+    reg.register(&r).unwrap();
+
+    let mut s = broker.authenticate(&"t".repeat(40), None).unwrap();
+    let publish = |i: u64| broker.publish(&s, "telemetry", "venq-board", "telemetry.v1", i, json!({"items": []}));
+    // 1 Hz declared: a burst of 8, then refused.
+    let mut limited = 0;
+    for i in 0..60 {
+        if let Err(e) = publish(i) {
+            assert_eq!(e.code, weftos_cogbus::ErrorCode::RateLimited, "{e:?}");
+            limited += 1;
+            if broker.record_refusal(&e, "board-telemetry-1") {
+                break;
+            }
+        }
+    }
+    assert!(limited >= 20, "{limited}");
+    let asked = asked.lock().unwrap().clone();
+    assert_eq!(asked.len(), 1, "{asked:?}");
+    assert_eq!(asked[0].0, "board-telemetry-1");
+    assert!(asked[0].1.contains("rate_limited"), "{}", asked[0].1);
+    let _ = &mut s;
 }

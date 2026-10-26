@@ -68,6 +68,7 @@ fn broker(queue_len: usize) -> Broker {
     Broker::new(BrokerConfig {
         node_id: "n".into(),
         queue_len,
+        ..BrokerConfig::new("n")
     })
 }
 

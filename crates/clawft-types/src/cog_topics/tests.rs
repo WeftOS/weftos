@@ -140,3 +140,23 @@ fn iq_gap_record_is_not_a_chunk_but_is_recognised() {
     assert!(check_message("iq.cs16.v1", &gap).is_err());
     assert!(!is_gap_record(&load(&vectors_root().join("iq.cs16.v1/valid-single-sample.json"))));
 }
+
+#[test]
+fn handles_are_found_nested_in_bodies() {
+    let h = |c: char| json!({"hash": c.to_string().repeat(64), "size": 9, "media_type": "image/png", "expires_ms": 5});
+    let body = json!({"text": "done", "images": [h('a'), {"deep": h('b')}], "bad": {"hash": "zz", "media_type": "image/png"}});
+    let found = find_handles(&body);
+    assert_eq!(found.len(), 2);
+    assert_eq!(found[0].hash, "a".repeat(64));
+    assert!(find_handles(&json!({"hash": "a".repeat(64), "media_type": "IMAGE"})).is_empty());
+}
+
+#[test]
+fn media_types() {
+    for ok in ["image/png", "application/octet-stream", "audio/l16", "image/svg+xml"] {
+        assert!(valid_media_type(ok), "{ok}");
+    }
+    for bad in ["", "image", "/png", "Image/png", "image/", "image/p ng"] {
+        assert!(!valid_media_type(bad), "{bad}");
+    }
+}

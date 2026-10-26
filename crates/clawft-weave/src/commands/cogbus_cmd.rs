@@ -42,6 +42,7 @@ pub fn render_list(v: &Value) -> String {
         return "cogbus is not running on this daemon: cogs are placed without WEFTOS_COGBUS\n".into();
     }
     let mut out = format!("socket: {}\n", cell(v, "socket"));
+    out += &render_isolation(v);
     let topics = v["topics"].as_array().cloned().unwrap_or_default();
     if topics.is_empty() {
         out += "no topics published yet\n";
@@ -62,6 +63,37 @@ pub fn render_list(v: &Value) -> String {
         );
     }
     out += &render_refusals(v);
+    out
+}
+
+/// The socket's mode and group, the uid mode, and each instance's isolation.
+pub fn render_isolation(v: &Value) -> String {
+    let mut out = String::new();
+    if v["socket_mode"].is_string() {
+        let grp = if v["socket_group_applied"] == true { "group cogbus".to_string() } else { format!("daemon's group ({})", cell(v, "socket_note")) };
+        out += &format!("socket mode {} uid {} gid {}, {grp}\n", cell(v, "socket_mode"), cell(v, "socket_uid"), cell(v, "socket_gid"));
+    }
+    let blobs = &v["blobs"];
+    if blobs.is_object() {
+        out += &format!(
+            "blob store: {} blobs, {} of {} bytes ({} reserved)\n",
+            cell(blobs, "blobs"), cell(blobs, "bytes"), cell(blobs, "quota"), cell(blobs, "reserved")
+        );
+    }
+    let iso = &v["isolation"];
+    if iso.is_object() {
+        out += &format!("cog uids: {}", cell(iso, "mode"));
+        if let Some(why) = iso["reason"].as_str() {
+            out += &format!(" ({why})");
+        }
+        if iso["require_cog_uid"] == true {
+            out += ", require_cog_uid on";
+        }
+        out += "\n";
+        for i in iso["instances"].as_array().into_iter().flatten() {
+            out += &format!("  {:<28} {:<14} uid {}\n", cell(i, "instance"), cell(i, "isolation"), cell(i, "uid"));
+        }
+    }
     out
 }
 
@@ -143,6 +175,22 @@ mod tests {
         assert!(t.contains("denied (+7 more): cogbus.subscribe denied"), "{t}");
         assert!(t.contains("STOPPED after 20 refusals"), "{t}");
         assert!(render_list(&json!({"running": true, "socket": "s", "topics": []})).contains("no recent refusals"));
+    }
+
+    #[test]
+    fn list_marks_shared_uid_instances_and_the_socket_group() {
+        let v = json!({"running": true, "socket": "s", "topics": [],
+            "socket_mode": "0660", "socket_uid": 0, "socket_gid": 990, "socket_group_applied": true, "socket_note": null,
+            "isolation": {"mode": "shared-uid", "reason": "the daemon cannot switch uids (unprivileged user daemon)",
+                "require_cog_uid": false, "group": "cogbus",
+                "instances": [{"instance": "radar-1", "cog": "radar", "uid": 501, "isolation": "shared-uid"}]}});
+        let t = render_list(&v);
+        assert!(t.contains("socket mode 0660 uid 0 gid 990, group cogbus"), "{t}");
+        assert!(t.contains("cog uids: shared-uid (the daemon cannot switch uids"), "{t}");
+        assert!(t.contains("radar-1") && t.contains("shared-uid") && t.contains("uid 501"), "{t}");
+        let keep = json!({"running": true, "socket": "s", "topics": [], "socket_mode": "0660",
+            "socket_uid": 501, "socket_gid": 20, "socket_group_applied": false, "socket_note": "no cogbus group requested"});
+        assert!(render_list(&keep).contains("daemon's group (no cogbus group requested)"));
     }
 
     #[test]

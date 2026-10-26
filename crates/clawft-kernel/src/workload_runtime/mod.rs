@@ -56,6 +56,8 @@ mod tests_cog_decl;
 #[cfg(test)]
 mod tests_container;
 #[cfg(test)]
+mod tests_container_cogbus;
+#[cfg(test)]
 mod tests_container_relay;
 #[cfg(test)]
 mod tests_fleet_inventory;
@@ -93,7 +95,7 @@ pub use fleet_inventory::{
 };
 pub use fleet_mcp::{COGNITUM_MCP_URL, OAuthTokens};
 pub use host::{RUNTIME_CHAIN_SOURCE, WorkloadHost};
-pub use host_contract::HostContract;
+pub use host_contract::{CogIdentity, HostContract};
 pub use infer::{
     InferConfig, InferFlavor, InferMode, InferRuntime, InferenceSpec, ManagedConfig, RestartPolicy,
 };

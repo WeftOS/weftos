@@ -141,6 +141,31 @@ impl NativeRuntime {
         }
     }
 
+    /// Admission with `has_run_as` saying whether an unprivileged identity
+    /// is available (the adapter's, or the instance's own).
+    fn admit_as(&self, w: &VerifiedWorkload, has_run_as: bool) -> Result<Admission, RuntimeError> {
+        let p = w.signed(NATIVE_ID)?;
+        let (arch, bytes, emulated) = self.pick(p)?;
+        let mut notes = vec![self.check_payload(&arch, bytes)?];
+        if super::supervise::running_as_root() && !has_run_as {
+            return Err(RuntimeError::AdmissionRefused(
+                "host runs as root and no unprivileged run_as user is configured".into(),
+            ));
+        }
+        notes.push(format!(
+            "limits: ram {} MiB, console {} s, output {} B",
+            p.spec.resources.ram_mb,
+            p.spec.console.max_runtime_secs,
+            p.spec.console.output_limit_bytes
+        ));
+        Ok(Admission {
+            runtime: NATIVE_ID.into(),
+            arch,
+            emulated,
+            notes,
+        })
+    }
+
     fn launch(
         &self,
         inst: &Instance,
@@ -150,6 +175,7 @@ impl NativeRuntime {
         let data = inst.dir.join("data");
         let mut limits = ProcLimits::for_ram_mb(inst.spec.resources.ram_mb);
         limits.cpu_secs = cpu_secs;
+        let (run_as, groups) = effective_identity(self.cfg.run_as, &inst.host);
         Supervised::spawn(LaunchSpec {
             program: inst.program.clone(),
             args,
@@ -157,7 +183,8 @@ impl NativeRuntime {
             cwd: data,
             limits,
             output_limit: inst.spec.console.output_limit_bytes,
-            run_as: self.cfg.run_as,
+            run_as,
+            groups,
         })
     }
 
@@ -222,26 +249,7 @@ impl WorkloadRuntime for NativeRuntime {
     }
 
     async fn admit(&self, w: &VerifiedWorkload) -> Result<Admission, RuntimeError> {
-        let p = w.signed(NATIVE_ID)?;
-        let (arch, bytes, emulated) = self.pick(p)?;
-        let mut notes = vec![self.check_payload(&arch, bytes)?];
-        if super::supervise::running_as_root() && self.cfg.run_as.is_none() {
-            return Err(RuntimeError::AdmissionRefused(
-                "host runs as root and no unprivileged run_as user is configured".into(),
-            ));
-        }
-        notes.push(format!(
-            "limits: ram {} MiB, console {} s, output {} B",
-            p.spec.resources.ram_mb,
-            p.spec.console.max_runtime_secs,
-            p.spec.console.output_limit_bytes
-        ));
-        Ok(Admission {
-            runtime: NATIVE_ID.into(),
-            arch,
-            emulated,
-            notes,
-        })
+        self.admit_as(w, self.cfg.run_as.is_some())
     }
 
     async fn load(
@@ -260,7 +268,7 @@ impl WorkloadRuntime for NativeRuntime {
                     .into(),
             ));
         }
-        let adm = self.admit(w).await?;
+        let adm = self.admit_as(w, self.cfg.run_as.is_some() || cfg.host.run_as.is_some())?;
         let p = w.signed(NATIVE_ID)?;
         cfg.mode.validate()?;
         cfg.host.validate()?;
@@ -276,7 +284,7 @@ impl WorkloadRuntime for NativeRuntime {
         let program = dir.join(format!("cog-{}", w.id));
         let bytes = p.binaries[&adm.arch].bytes.clone();
         let (d, prog) = (dir.clone(), program.clone());
-        let run_as = self.cfg.run_as;
+        let run_as = effective_identity(self.cfg.run_as, &cfg.host).0;
         tokio::task::spawn_blocking(move || stage(&d, &prog, &bytes, run_as))
             .await
             .map_err(|e| RuntimeError::Backend(e.to_string()))??;
@@ -412,6 +420,18 @@ impl WorkloadRuntime for NativeRuntime {
         };
         let ev = proc.0.wait_for(Duration::from_secs(proc.1)).await;
         Ok(self.stamp(h, ev))
+    }
+}
+
+/// The `(uid, gid)` and supplementary groups an instance launches with: the
+/// identity the broker allocated for it, else the adapter's `run_as`.
+pub fn effective_identity(
+    adapter: Option<(u32, u32)>,
+    host: &HostContract,
+) -> (Option<(u32, u32)>, Vec<u32>) {
+    match &host.run_as {
+        Some(id) => (Some((id.uid, id.gid)), id.groups.clone()),
+        None => (adapter, Vec::new()),
     }
 }
 

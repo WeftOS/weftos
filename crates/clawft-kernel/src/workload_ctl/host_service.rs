@@ -644,7 +644,7 @@ impl WorkloadHostService {
                 .await
                 .map_err(|e| refuse(RefusalCode::Runtime, format!("ingest bridge: {e}")))?;
         }
-        let (contract, bus) = self.bus_prepare(&route, &w, contract);
+        let (contract, bus) = self.bus_prepare(&route, &w, contract)?;
         let cfg = WorkloadConfig {
             mode: b.config.mode.clone(),
             args: b.config.args.clone(),
@@ -669,6 +669,7 @@ impl WorkloadHostService {
                     Ok(l) => Some(l),
                     Err(e) => {
                         self.bus_off(bus.as_ref());
+                        self.bus_forget(bus.as_ref());
                         let mut r = refuse(RefusalCode::Runtime, format!("ingest bridge: {e}"));
                         if let Err(u) = host.unload(h.clone()).await {
                             r.reason = format!("{}; unload of {iid} failed too ({u})", r.reason);
@@ -793,7 +794,8 @@ impl WorkloadHostService {
         };
         match unloaded {
             Ok(()) => {
-                self.instances.lock().await.remove(&iid);
+                let gone = self.instances.lock().await.remove(&iid);
+                self.bus_forget(gone.as_ref().and_then(|p| p.cogbus.as_ref()));
                 r.reason = format!("start failed: {}; loaded instance {iid} unloaded", r.reason);
             }
             Err(u) => {

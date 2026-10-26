@@ -1,7 +1,10 @@
 //! The broker's Unix socket (ADR-122 section 4).
 //!
-//! The socket is created mode 0660 (owner and group; assigning the `cogbus`
-//! group is the installer's job, not done here). One task per connection:
+//! The socket is created mode 0660 (owner and group), never wider. When the
+//! caller names a group gid ([`ServeOptions::group`]) it is made the socket's
+//! group if the process may (`root:cogbus 0660`); otherwise the group stays the
+//! daemon's own and [`SocketReport`] says so. Creating the group and putting
+//! cog uids in it is the owner-run installer's job. One task per connection:
 //!
 //! - the first frame must be `hello` with a registered token, within
 //!   [`HELLO_TIMEOUT`]; when the instance was registered with a uid, the
@@ -20,6 +23,7 @@
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use serde_json::json;
@@ -37,12 +41,94 @@ pub const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 /// Time a started frame (read or write) has to complete.
 pub const FRAME_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// How often expired blobs are dropped.
+pub const BLOB_SWEEP: Duration = Duration::from_secs(30);
 /// How often calls past their deadline are answered with a timeout.
 pub const CALL_SWEEP: Duration = Duration::from_millis(50);
+
+/// How the socket is bound.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ServeOptions {
+    /// Group to give the socket (gid of `cogbus`), when it exists.
+    pub group: Option<u32>,
+}
+
+/// What the bound socket ended up as, as `stat` sees it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SocketReport {
+    /// Permission bits (always 0o660).
+    pub mode: u32,
+    /// Owner uid.
+    pub uid: u32,
+    /// Group gid.
+    pub gid: u32,
+    /// The requested group is now the socket's group.
+    pub group_applied: bool,
+    /// Why the group was not applied (none requested, or the chown failed).
+    pub note: Option<String>,
+}
+
+/// A count held for as long as the guard lives.
+struct Held(Arc<AtomicUsize>);
+
+impl Held {
+    /// Take one from `counter` unless it already holds `cap`.
+    fn take(counter: &Arc<AtomicUsize>, cap: usize) -> Option<Held> {
+        if counter.fetch_add(1, Ordering::SeqCst) >= cap {
+            counter.fetch_sub(1, Ordering::SeqCst);
+            return None;
+        }
+        Some(Held(counter.clone()))
+    }
+}
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Unauthenticated connections, counted per peer uid so one cog cannot use
+/// them all up and keep the others from saying hello.
+#[derive(Default)]
+struct PerUid(std::sync::Mutex<std::collections::HashMap<Option<u32>, usize>>);
+
+struct UidHeld(Arc<PerUid>, Option<u32>);
+
+impl PerUid {
+    fn take(this: &Arc<PerUid>, uid: Option<u32>, cap: usize) -> Option<UidHeld> {
+        let mut m = this.0.lock().unwrap_or_else(|p| p.into_inner());
+        let n = m.entry(uid).or_insert(0);
+        if *n >= cap {
+            return None;
+        }
+        *n += 1;
+        Some(UidHeld(this.clone(), uid))
+    }
+}
+
+impl Drop for UidHeld {
+    fn drop(&mut self) {
+        let mut m = self.0.0.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(n) = m.get_mut(&self.1) {
+            *n = n.saturating_sub(1);
+            if *n == 0 {
+                m.remove(&self.1);
+            }
+        }
+    }
+}
+
+/// What a connection holds until it has said hello.
+struct PreHello {
+    _all: Held,
+    _uid: UidHeld,
+}
 
 /// The listening socket. Dropping it stops accepting and removes the file.
 pub struct ServerHandle {
     path: PathBuf,
+    report: SocketReport,
     task: JoinHandle<()>,
 }
 
@@ -50,6 +136,11 @@ impl ServerHandle {
     /// Socket path.
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Mode, owner and group of the socket file.
+    pub fn report(&self) -> &SocketReport {
+        &self.report
     }
 }
 
@@ -63,6 +154,15 @@ impl Drop for ServerHandle {
 /// Bind `path` (replacing a stale socket file, never another kind of file)
 /// and serve `broker` on it.
 pub async fn serve(broker: Arc<Broker>, path: &Path) -> std::io::Result<ServerHandle> {
+    serve_with(broker, path, ServeOptions::default()).await
+}
+
+/// [`serve`] with the socket's group.
+pub async fn serve_with(
+    broker: Arc<Broker>,
+    path: &Path,
+    opts: ServeOptions,
+) -> std::io::Result<ServerHandle> {
     if let Ok(m) = std::fs::symlink_metadata(path) {
         if !m.file_type().is_socket() {
             return Err(std::io::Error::new(
@@ -74,18 +174,64 @@ pub async fn serve(broker: Arc<Broker>, path: &Path) -> std::io::Result<ServerHa
     }
     let listener = UnixListener::bind(path)?;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o660))?;
+    let note = match opts.group {
+        None => Some("no cogbus group requested".to_string()),
+        Some(gid) => match std::os::unix::fs::chown(path, None, Some(gid)) {
+            Ok(()) => None,
+            Err(e) => Some(format!("cannot give the socket to gid {gid}: {e}")),
+        },
+    };
+    // Re-assert the mode after the chown: it never widens.
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o660))?;
+    let report = {
+        use std::os::unix::fs::MetadataExt;
+        let m = std::fs::symlink_metadata(path)?;
+        SocketReport {
+            mode: m.mode() & 0o7777,
+            uid: m.uid(),
+            gid: m.gid(),
+            group_applied: opts.group.is_some_and(|g| g == m.gid()),
+            note,
+        }
+    };
+    if let (Some(n), Some(_)) = (&report.note, opts.group) {
+        tracing::warn!(target: "cogbus", reason = %n, "cogbus socket keeps the daemon's group");
+    }
     let task = tokio::spawn(async move {
         let mut sweep = tokio::time::interval(CALL_SWEEP);
         sweep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let (total, prehello) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+        let per_uid = Arc::new(PerUid::default());
+        let mut blob_sweep = tokio::time::interval(BLOB_SWEEP);
+        blob_sweep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tokio::select! {
                 _ = sweep.tick() => {
                     broker.expire_calls();
                 }
+                _ = blob_sweep.tick() => {
+                    broker.sweep_blobs();
+                }
                 accepted = listener.accept() => match accepted {
                     Ok((stream, _)) => {
+                        // Bounded before anything is read: a flood of idle
+                        // connections cannot use up the node's descriptors.
+                        let cfg = broker.config();
+                        let uid = stream.peer_cred().ok().map(|c| c.uid());
+                        let (Some(all), Some(pre), Some(mine)) = (
+                            Held::take(&total, cfg.max_conns),
+                            Held::take(&prehello, cfg.max_prehello_conns),
+                            PerUid::take(&per_uid, uid, cfg.max_prehello_per_uid),
+                        ) else {
+                            tracing::debug!(target: "cogbus", ?uid, "connection refused: connection cap");
+                            drop(stream);
+                            continue;
+                        };
                         let b = broker.clone();
-                        tokio::spawn(async move { connection(b, stream).await });
+                        tokio::spawn(async move {
+                            let _all = all;
+                            connection(b, stream, PreHello { _all: pre, _uid: mine }).await
+                        });
                     }
                     Err(e) => {
                         tracing::warn!(target: "cogbus", error = %e, "accept failed");
@@ -97,6 +243,7 @@ pub async fn serve(broker: Arc<Broker>, path: &Path) -> std::io::Result<ServerHa
     });
     Ok(ServerHandle {
         path: path.to_path_buf(),
+        report,
         task,
     })
 }
@@ -163,14 +310,16 @@ fn error(id: u64, e: BusError) -> Event {
     }
 }
 
-async fn connection(broker: Arc<Broker>, stream: UnixStream) {
+async fn connection(broker: Arc<Broker>, stream: UnixStream, pre: PreHello) {
     let peer_uid = stream.peer_cred().ok().map(|c| c.uid());
     let (r, mut w) = stream.into_split();
     let (tx, mut rx) = mpsc::channel(16);
     let read_task = tokio::spawn(reader(r, tx));
     let session = hello(&broker, &mut rx, &mut w, peer_uid).await;
+    // Said hello (or did not): either way it no longer counts as unauthenticated.
+    drop(pre);
     if let Some(mut s) = session {
-        let mut ss = crate::stream::SessionStream::default();
+        let mut ss = crate::stream::SessionStream::for_conn(s.conn());
         serve_session(&broker, &mut s, &mut ss, &mut rx, &mut w).await;
         broker.close(&s);
         crate::stream::serve::close(&broker, &ss);
@@ -184,7 +333,7 @@ async fn hello(
     w: &mut OwnedWriteHalf,
     peer_uid: Option<u32>,
 ) -> Option<Session> {
-    let first = match timeout(HELLO_TIMEOUT, rx.recv()).await {
+    let first = match timeout(Duration::from_millis(broker.config().hello_timeout_ms), rx.recv()).await {
         Ok(Some(i)) => i,
         _ => return None,
     };
@@ -226,9 +375,36 @@ async fn serve_session(
     let mut revoked = s.revoked();
     let mut pushed = ss.take_events();
     let mut frames = s.take_pushed();
+    // Silence ladder: ping after `idle_ping_ms` without a frame, close
+    // `pong_timeout_ms` later if still nothing. Only the cog's own frames
+    // count; the broker's pushes to it do not.
+    let (idle, grace) = (
+        Duration::from_millis(broker.config().idle_ping_ms.max(1)),
+        Duration::from_millis(broker.config().pong_timeout_ms.max(1)),
+    );
+    let mut pinged = false;
+    let silence = tokio::time::sleep(idle);
+    tokio::pin!(silence);
     loop {
         tokio::select! {
+            _ = &mut silence => {
+                if pinged {
+                    let e = BusError::new(ErrorCode::Timeout, "idle: no answer to ping");
+                    broker.record_refusal(&e, s.instance_id());
+                    send(w, &error(0, e)).await;
+                    return;
+                }
+                if !send(w, &Event::Ping).await {
+                    return;
+                }
+                pinged = true;
+                silence.as_mut().reset(tokio::time::Instant::now() + grace);
+            }
             item = rx.recv() => {
+                if item.is_some() {
+                    pinged = false;
+                    silence.as_mut().reset(tokio::time::Instant::now() + idle);
+                }
                 let (ev, fds) = match item {
                     None => return,
                     Some(Incoming::Bad(code, m)) => {
@@ -281,6 +457,8 @@ fn handle(broker: &Broker, s: &mut Session, req: Request) -> Option<Event> {
     let id = req.id();
     let r = match req {
         Request::Hello { .. } => Err(BusError::new(ErrorCode::BadRequest, "already said hello")),
+        // Liveness only: the frame already reset the silence timer.
+        Request::Pong { .. } => return None,
         Request::Declare {
             outputs, inputs, ..
         } => broker.declare(s, outputs, inputs),
@@ -320,6 +498,9 @@ fn handle(broker: &Broker, s: &mut Session, req: Request) -> Option<Event> {
         } => broker
             .reply_call(s, call, error.map_or(Ok(body), Err))
             .map(|_| json!({})),
+        Request::BlobBegin { media_type, size, ttl_ms, .. } => broker.blob_begin(s, &media_type, size, ttl_ms),
+        Request::BlobChunk { upload, offset, data, last, .. } => broker.blob_chunk(s, upload, offset, &data, last),
+        Request::BlobGet { hash, offset, len, .. } => broker.blob_get(s, &hash, offset, len),
         Request::StreamOpen { .. }
         | Request::StreamSubscribe { .. }
         | Request::StreamDemote { .. } => Err(BusError::new(ErrorCode::BadRequest, "stream request outside the stream handler")),

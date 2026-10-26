@@ -35,6 +35,10 @@ pub(crate) fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+fn code_name_of(e: &BusError) -> String {
+    code_name(e.code)
+}
+
 /// Snake-case wire name of a code.
 pub fn code_name(c: ErrorCode) -> String {
     serde_json::to_value(c)
@@ -239,7 +243,9 @@ impl Broker {
         };
         let code = code_name(e.code);
         let now = now_ms();
-        let project = self.instance(instance).and_then(|s| s.project_id);
+        let spec = self.instance(instance);
+        let project = spec.as_ref().and_then(|s| s.project_id.clone());
+        let cog = spec.map(|s| s.cog_id).unwrap_or_default();
         let lim = self.ext.hooks.limits;
         let v = self.ext.tracker().note(&lim, instance, &code, topic, now);
         if let Some(suppressed) = v.log {
@@ -268,14 +274,45 @@ impl Broker {
             ts_ms: now,
             action: "cogbus.stop".into(),
             instance: instance.into(),
-            project,
+            project: project.clone(),
             topic: "-".into(),
             outcome: Outcome::Stopped { refusals },
         };
         self.ext.hooks.sink.record(&a);
         self.ext.tracker().remember(a);
         self.ext.hooks.sink.stopped(instance, refusals);
+        self.ask_stop(instance, &cog, project.as_deref(), refusals, &code_name_of(e));
         true
+    }
+
+    /// The instance was stopped on the bus: governance decides whether the
+    /// workload is stopped too (`cogbus.stop`), and the sink does it. A
+    /// denial is in the activity log; the cog keeps running without the bus.
+    fn ask_stop(&self, instance: &str, cog: &str, project: Option<&str>, refusals: u32, last: &str) {
+        let req = BusRequest::new(BusAction::Stop, instance, cog, project);
+        let now = now_ms();
+        match self.ext.hooks.policy.decide(&req) {
+            Ok(()) => {
+                let reason = format!("{refusals} refusals in {} s, last {last}", self.ext.hooks.limits.window_ms / 1000);
+                self.ext.hooks.sink.stop_requested(instance, &reason);
+            }
+            Err(why) => {
+                let a = BusActivity {
+                    ts_ms: now,
+                    action: BusAction::Stop.as_str().into(),
+                    instance: instance.into(),
+                    project: project.map(String::from),
+                    topic: "-".into(),
+                    outcome: Outcome::Refused {
+                        code: "denied".into(),
+                        reason: format!("cogbus.stop denied by governance: {why}"),
+                        suppressed: 0,
+                    },
+                };
+                self.ext.hooks.sink.record(&a);
+                self.ext.tracker().remember(a);
+            }
+        }
     }
 
     /// The last [`RECENT_REFUSALS`] logged refusals and stops, oldest first.

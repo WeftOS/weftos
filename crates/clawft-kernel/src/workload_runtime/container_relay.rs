@@ -67,8 +67,17 @@ pub fn relay_upstream(
 }
 
 /// Dockerfile for a cog image fronted by the ingest relay.
-pub fn dockerfile(base_image: &str, upstream: SocketAddr) -> String {
-    let (uid, gid) = CONTAINER_USER.split_once(':').unwrap_or(("65534", "65534"));
+///
+/// `user` is the `(uid, gid)` the cog and relay drop to; the image's
+/// `nobody` when `None`.
+pub fn dockerfile(base_image: &str, upstream: SocketAddr, user: Option<(u32, u32)>) -> String {
+    let (uid, gid) = user.map_or_else(
+        || {
+            let (u, g) = CONTAINER_USER.split_once(':').unwrap_or(("65534", "65534"));
+            (u.to_string(), g.to_string())
+        },
+        |(u, g)| (u.to_string(), g.to_string()),
+    );
     format!(
         "FROM {base_image}\n\
          COPY cog {COG_PATH}\n\
