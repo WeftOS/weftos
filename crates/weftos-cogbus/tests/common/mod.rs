@@ -64,6 +64,18 @@ impl Rig {
         }
     }
 
+    /// A rig whose broker runs with `hooks`.
+    pub async fn with_hooks(cfg: StreamConfig, hooks: weftos_cogbus::BusHooks) -> Self {
+        let tmp = tempfile::tempdir().unwrap();
+        let broker = Arc::new(
+            Broker::new(BrokerConfig::new("0".repeat(32)))
+                .with_stream_config(cfg)
+                .with_hooks(hooks),
+        );
+        let server = serve(broker.clone(), &tmp.path().join("cogbus.sock")).await.unwrap();
+        Self { broker, server, tmp }
+    }
+
     /// Register `id` with token `c` x 64.
     pub fn cog(&self, id: &str, c: char, outputs: Vec<OutputSpec>, inputs: Vec<InputSpec>) {
         let spec = InstanceSpec {

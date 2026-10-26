@@ -45,6 +45,8 @@ pub enum ExposureKind {
     Harness,
     /// A cog's API.
     CogApi,
+    /// A cogbus topic (`topic.<kind>/<source_id>`, ADR-122 section 14).
+    Topic,
     /// Anything else.
     Other,
 }

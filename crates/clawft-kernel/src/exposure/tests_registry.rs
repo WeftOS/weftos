@@ -187,3 +187,9 @@ fn report_has_counts_and_last_used_but_no_bodies() {
     assert!(idle["last_used"].is_null() && idle["n24"] == 0);
     assert!(!v.to_string().contains("n-b"), "caller identity stays on the node");
 }
+
+#[test]
+fn the_topic_kind_has_a_cli_spelling() {
+    assert_eq!(ExposureKind::parse("topic"), Ok(ExposureKind::Topic));
+    assert_eq!(serde_json::to_value(ExposureKind::Topic).unwrap(), serde_json::json!("topic"));
+}

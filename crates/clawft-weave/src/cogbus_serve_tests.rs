@@ -149,3 +149,54 @@ async fn a_declared_rate_becomes_a_budget_and_a_flood_asks_the_host_to_stop_the_
     assert!(asked[0].1.contains("rate_limited"), "{}", asked[0].1);
     let _ = &mut s;
 }
+
+#[tokio::test]
+async fn a_published_topic_appears_as_a_local_topic_exposure_the_operator_can_widen_and_switch_off() {
+    use clawft_kernel::exposure::{Audience, ExposureKind, ExposureRegistry, ExposureState, Retention};
+    let tmp = tempfile::tempdir().unwrap();
+    let reg = Arc::new(ExposureRegistry::open("n-test", tmp.path(), Retention::default(), 1).unwrap());
+    let (hooks, activity) = hooks_with_activity(tmp.path(), None);
+    assert!(activity.set_exposures(reg.clone()));
+    let broker = broker_in("n", hooks, tmp.path());
+    let bus = Registrar::new(broker.clone(), &tmp.path().join("cogbus.sock"));
+    let mut r = registration(&HostContract::new(SocketAddr::from(([0, 0, 0, 0], 5006))), None);
+    r.token = clawft_types::secret::SecretString::new("t".repeat(40));
+    r.outputs[0].rate = None;
+    bus.register(&r).unwrap();
+    assert!(reg.list().is_empty(), "nothing before a writer is alive");
+
+    let s = broker.authenticate(&"t".repeat(40), None).unwrap();
+    broker.publish(&s, "telemetry", "venq-board", "telemetry.v1", 1, json!({"items": []})).unwrap();
+    let id = "topic.telemetry/venq-board";
+    let e = reg.get(id).expect("registered at the first reading");
+    assert_eq!((e.kind, e.audience.clone(), e.state, e.announced), (ExposureKind::Topic, Audience::Local, ExposureState::On, false));
+    assert_eq!((e.resource.as_str(), e.api.as_str()), ("cog:board-telemetry", "cogbus.v1"));
+    let refused = reg.check_serve(id).unwrap_err().reason();
+    assert!(refused.contains("local"), "{refused}");
+
+    // The generic CLI verbs work on it: list, widen, switch off.
+    let listed = crate::expose_rpc::list_json(&reg);
+    let row = listed["exposures"].as_array().unwrap().iter().find(|x| x["id"] == id).unwrap().clone();
+    assert_eq!((row["kind"].clone(), row["audience"].clone(), row["served"].clone()), (json!("topic"), json!("local"), json!(false)));
+    let ok = crate::expose_rpc::handle_with(&reg, "expose.set", json!({"id": id, "state": "on", "audience": "nodes:a,b"})).await;
+    assert!(ok.ok, "{:?}", ok.error);
+    assert_eq!(reg.get(id).unwrap().audience, Audience::parse("nodes:a,b").unwrap());
+    let off = crate::expose_rpc::handle_with(&reg, "expose.set", json!({"id": id, "state": "off"})).await;
+    assert!(off.ok, "{:?}", off.error);
+
+    // More readings change nothing; a restart keeps the operator's decision.
+    broker.publish(&s, "telemetry", "venq-board", "telemetry.v1", 2, json!({"items": []})).unwrap();
+    assert_eq!(reg.get(id).unwrap().state, ExposureState::Off);
+    drop(reg);
+    let reg2 = ExposureRegistry::open("n-test", tmp.path(), Retention::default(), 2).unwrap();
+    let (hooks2, activity2) = hooks_with_activity(tmp.path(), None);
+    let reg2 = Arc::new(reg2);
+    activity2.set_exposures(reg2.clone());
+    let broker2 = broker_in("n", hooks2, tmp.path());
+    let bus2 = Registrar::new(broker2.clone(), &tmp.path().join("cogbus.sock"));
+    bus2.register(&r).unwrap();
+    let s2 = broker2.authenticate(&"t".repeat(40), None).unwrap();
+    broker2.publish(&s2, "telemetry", "venq-board", "telemetry.v1", 1, json!({"items": []})).unwrap();
+    let e = reg2.get(id).unwrap();
+    assert_eq!((e.state, e.audience), (ExposureState::Off, Audience::parse("nodes:a,b").unwrap()), "local decisions win over re-registration");
+}

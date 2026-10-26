@@ -184,6 +184,27 @@ pub struct BusActivity {
     pub outcome: Outcome,
 }
 
+/// A topic that has just come alive (its first reading, or its ring opened).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TopicInfo {
+    /// `<kind>/<source_id>`.
+    pub topic: String,
+    /// Topic kind.
+    pub kind: String,
+    /// Source id.
+    pub source_id: String,
+    /// Schema id.
+    pub schema: String,
+    /// `reading` or `stream`.
+    pub class: clawft_types::cog_topics::TopicClass,
+    /// The instance writing it.
+    pub instance: String,
+    /// Its cog id.
+    pub cog_id: String,
+    /// Its project.
+    pub project_id: Option<String>,
+}
+
 /// Where activity goes.
 pub trait BusSink: Send + Sync {
     /// Record one entry. Must not call back into the broker.
@@ -200,6 +221,12 @@ pub trait BusSink: Send + Sync {
     /// (`cogbus.stop`) agreed. `reason` says why (repeated refusals, with
     /// the last code). Called with no broker lock held; it must not block.
     fn stop_requested(&self, _instance_id: &str, _reason: &str) {}
+
+    /// A topic came alive: the daemon registers it as an ADR-120 exposure
+    /// (audience `local`, so nothing is served). Called at a topic's first
+    /// reading and at each stream open (registering is idempotent), with no
+    /// broker lock held; it must not block.
+    fn topic_opened(&self, _topic: &TopicInfo) {}
 }
 
 /// Logs activity through `tracing` only.

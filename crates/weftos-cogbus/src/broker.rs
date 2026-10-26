@@ -429,7 +429,7 @@ impl Broker {
         if !handles.is_empty() {
             // A handle published is a handle handed to the readers this
             // reading will reach.
-            let readers: Vec<String> = g
+            let readers: Vec<(Option<String>, String)> = g
                 .subs
                 .values()
                 .filter(|x| {
@@ -438,10 +438,10 @@ impl Broker {
                         && x.schema == schema
                         && (x.project_id == project || granted(&x.also, &project, source_id))
                 })
-                .map(|x| x.instance.clone())
+                .map(|x| (x.project_id.clone(), x.instance.clone()))
                 .collect();
-            for to in readers {
-                self.grant_handles(&handles, me, &to);
+            for (to_project, to) in readers {
+                self.grant_handles(&handles, (project.as_deref(), me), (to_project.as_deref(), &to));
             }
         }
         let r = Reading {
@@ -458,7 +458,22 @@ impl Broker {
             r,
             to_sink: true,
         };
-        self.put(&mut g, put).map(|d| d.seq)
+        let sent = self.put(&mut g, put).map(|d| d.seq);
+        drop(g);
+        // The first reading of a topic announces it (no broker lock held).
+        if matches!(sent, Ok(1)) {
+            self.ext.hooks.sink.topic_opened(&crate::policy::TopicInfo {
+                topic: format!("{kind}/{source_id}"),
+                kind: kind.to_string(),
+                source_id: source_id.to_string(),
+                schema: schema.to_string(),
+                class: TopicClass::Reading,
+                instance: me.to_string(),
+                cog_id: cog,
+                project_id: s.project_id.clone(),
+            });
+        }
+        sent
     }
 
     /// Subscribe to `topic` (`<kind>/<source_id>` or `<kind>/*`); returns

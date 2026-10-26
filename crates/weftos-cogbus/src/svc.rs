@@ -244,7 +244,7 @@ impl Broker {
         };
         let handles = self.handles_in(&body);
         if !handles.is_empty() {
-            self.grant_handles(&handles, me, &server.instance);
+            self.grant_handles(&handles, (s.project_id.as_deref(), me), (server.project_id.as_deref(), &server.instance));
         }
         let delivery = CallDelivery {
             call,
@@ -310,7 +310,8 @@ impl Broker {
                 // the caller (B5: this is how a result over 64 KiB travels).
                 let handles = self.handles_in(&body);
                 if !handles.is_empty() {
-                    self.grant_handles(&handles, me, &p.caller);
+                    let caller_project = self.instance(&p.caller).and_then(|c| c.project_id);
+                    self.grant_handles(&handles, (s.project_id.as_deref(), me), (caller_project.as_deref(), &p.caller));
                 }
                 Event::Ok {
                     id: p.caller_id,

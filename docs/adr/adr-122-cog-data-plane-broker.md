@@ -413,13 +413,17 @@ by BLAKE3, and a `blob.v1` handle (`hash`, `size`, `media_type`, `expires_ms`) i
   Re-putting bytes that are already stored adds the putter as a reader but only the owner or a
   holder moves the expiry, and an expired blob is replaced, not revived with its old readers. An
   empty non-final chunk is refused so it cannot keep an upload alive. The store directory is
-  made `0700` even if it already existed.
+  made `0700` even if it already existed. Ownership is the pair (project, instance), not the
+  instance id: the same id re-placed under another project is a different principal and cannot
+  read, extend or inherit the old one's blobs or handed-on handles. Native instance ids now also
+  hash the owner (project and requesting controller, venq-p4 `a8ab9ad35`), so the separation
+  holds twice. The container adapter calls the same `instance_id` with the owner key (checked in the review, `wt/urth-r1r2` `5e0550778`), and its `/data` is a tmpfs, so there is no host data directory to inherit.
 - **Not carried.** Mesh-wide handles (B6: a handle resolves on the node that stores it), blob
   streaming without the 32 KiB slices, and a per-project quota.
 
 ### 14. Mesh topics as exposures (B6): plan
 
-**Status: planned, not built. Five decisions need the owner before B6b (see the end).** It
+**Status: B6a built (exposure kind, registry, CLI; no wire). B6b onward is planned and waits on five owner decisions (see the end).** It
 builds on sections 3 and 8, ADR-120 (exposures, local-wins, activity log) and the precedent of
 ADR-101's inference proxy (dedicated mesh frame types, a role exposure, peer admission).
 
@@ -469,6 +473,16 @@ mistake. A raw subscribe without them is refused `raw_not_exposed` and logged at
 Blobs travel only by hash (`fetch {hash}` to the node whose store holds it; a handle names its
 node), and the reader's access follows the exposure, not the project rule.
 
+**As built (B6a).** `ExposureKind::Topic` (`topic`, kebab) is in the kernel registry. The broker
+announces a topic to its sink at the first reading and at each stream open
+(`BusSink::topic_opened`, no broker lock held, nothing for refused publishes or internal
+publishers); the daemon's sink registers `topic.<kind>/<source_id>` with resource
+`cog:<cog id>`, api `cogbus.v1`, audience `local`, state `on`, not announced. Registering is
+idempotent and an operator's persisted decision (state, audience) wins, so `weaver expose`
+list, `on --audience`, `off` and `pause` already work on topics, and a restart keeps them;
+`check_serve` refuses a `local` topic, so nothing is served. There is no `--raw` flag and no
+wire yet: both wait on decisions 2 and 4.
+
 **Subscriber side.** A cog subscribes with the topic's `weftos://<mesh>/sensors/<source_id>/topics/<kind>`
 name (section 2) in `subscribe.topic`, declared in `[[inputs]]` by the same kind and schema. The
 broker opens a mesh subscription and delivers each message as a normal `msg` with the origin
@@ -482,7 +496,7 @@ it. ADR-117 display bindings resolve through this path with the leaf as a remote
 
 | Step | Delivers | Done when |
 |---|---|---|
-| B6a | `ExposureKind::Topic`; the broker registers topic exposures; `weaver expose` and the report list them; local-wins on off | `weaver expose list` shows `topic.telemetry/venq-board` audience `local`; `off` and `on` persist |
+| B6a (built) | `ExposureKind::Topic`; the broker registers topic exposures; `weaver expose` and the report list them; local-wins on off | `weaver expose list` shows `topic.telemetry/venq-board` audience `local`; `off` and `on` persist |
 | B6b | frames 0x12/0x13; `MeshTopicHub`; readings with credits; governance and activity | a second in-process node subscribes to a reading topic and receives it; off withdraws; a denied peer is refused and logged |
 | B6c | the subscriber broker: `weftos://` subscribe, proxy topics, resubscribe | a cog on PG reads a Ventuno `telemetry` reading and sees the origin `node_id` |
 | B6d | stream chunks with byte credits; the raw rule | a raw IQ subscribe from PG is refused unless exposed with `--raw` and requested with `raw: true`; with both, chunks flow under credit and drops show as a gap |
@@ -518,7 +532,7 @@ acceptance test passes, and the row is then marked closed with the commit.
 | 3 | **Closed for the code** (same card). Proven as root on the VM: the socket came up `root:cogbus 0660`, cogs get `cogbus` as their only supplementary group, and a uid outside the group got `PermissionError` on connect | until the owner applies the setup on a real host the socket keeps the daemon's group (reported in `cogbus list`) | the same owner-run setup | `cogbus-gap-uid` |
 | 4 | **Closed** (`cogbus-gap-idle`, §11 "Idle connections and caps"). Ping after 60 s of silence, close 15 s later without any frame; 64 subscriptions per connection; 8 connections per instance. Tested with 120 ms timers on a real socket | none known; an old client without ping handling is closed after silence | n/a | `cogbus-gap-idle` |
 | 5 | **Closed** (`cogbus-gap-rate-stop`, §11 "Publish budgets" and "Stopping the cog"). Per-topic token bucket from `[[outputs]].rate`; `rate_limited` refusals; the repeated-refusal stop now asks governance (`cogbus.stop`) and stops the workload through the host, chained with the cause | rates the manifest writes as free text with no message rate are not metered; streams are not metered | n/a | `cogbus-gap-rate-stop` |
-| 6 | Blob store, review leftovers (low): `get` answers `cross_project` for a blob another project holds and `not_found` for one that does not exist, an oracle for "does the node hold exactly these bytes" to someone who already has them; governance is asked on the first slice of a get only; a re-placed cog under another project reuses the instance id (workload, version, args, csi bind, node: no project) and so can read the old instance's unexpired blobs if it knows the hash; handles passed to other instances are forgotten at restart (fails closed) | an instance can confirm content it already holds; a mid-download governance change does not cut a get off; a project swap within 24 h exposes blobs to a cog that knows a hash | answer `not_found` for both refusals; ask governance per slice or per N bytes; add the project to the native instance id | `cogbus-blob-review` |
+| 6 | Blob store, review leftovers (low): `get` answers `cross_project` for a blob another project holds and `not_found` for one that does not exist, an oracle for "does the node hold exactly these bytes" to someone who already has them; governance is asked on the first slice of a get only;  handles passed to other instances are forgotten at restart (fails closed) | an instance can confirm content it already holds; a mid-download governance change does not cut a get off| answer `not_found` for both refusals; ask governance per slice or per N bytes | `cogbus-blob-review` |
 
 Gaps 2 and 3 also block file-permission enforcement of the plan's P3 device-owner cogs'
 allowlists (section 4b records the owner decision to ship the ledger first). After `cogbus-gap-uid` P3 can rely on per-cog uids only where the
