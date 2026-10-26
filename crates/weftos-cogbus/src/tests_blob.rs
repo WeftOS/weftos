@@ -148,11 +148,11 @@ fn access_is_owner_project_or_a_handle_passed_on() {
     assert!(matches!(s.get(1, "stranger", Some(P2), &h.hash, 0, 1), Err(BlobError::Denied(_))));
     assert!(matches!(s.get(1, "bucket", None, &h.hash, 0, 1), Err(BlobError::Denied(_))), "the node bucket is not project P1");
     // The owner hands the handle on; a non-owner cannot hand on someone else's.
-    s.grant(std::slice::from_ref(&h.hash), "stranger", "thief");
+    s.grant(std::slice::from_ref(&h.hash), (Some(P2), "stranger"), (Some(P2), "thief"));
     assert!(matches!(s.get(1, "thief", Some(P2), &h.hash, 0, 1), Err(BlobError::Denied(_))));
-    s.grant(std::slice::from_ref(&h.hash), "svc", "stranger");
+    s.grant(std::slice::from_ref(&h.hash), (Some(P1), "svc"), (Some(P2), "stranger"));
     assert!(read_all(&s, 1, "stranger", Some(P2), &h).is_ok());
-    s.grant(std::slice::from_ref(&h.hash), "stranger", "friend");
+    s.grant(std::slice::from_ref(&h.hash), (Some(P2), "stranger"), (Some(P2), "friend"));
     assert!(read_all(&s, 1, "friend", Some(P2), &h).is_ok(), "a holder may pass it on");
     assert!(matches!(s.get(1, "x", None, &"0".repeat(64), 0, 1), Err(BlobError::NotFound(_))));
 }
@@ -253,4 +253,24 @@ fn an_existing_blob_directory_is_made_private() {
     std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o755)).unwrap();
     BlobStore::open(&d, BlobConfig::default(), 0).unwrap();
     assert_eq!(std::fs::metadata(&d).unwrap().permissions().mode() & 0o777, 0o700);
+}
+
+#[test]
+fn an_instance_id_re_placed_under_another_project_is_not_the_old_owner() {
+    let tmp = tempfile::tempdir().unwrap();
+    let s = BlobStore::open(tmp.path(), BlobConfig::default(), 0).unwrap();
+    let h = put(&s, 0, "cam-1", Some(P1), b"private frame", None).unwrap();
+    // The same instance id, now placed for P2 (or the node bucket), has no claim.
+    for other in [Some(P2), None] {
+        assert!(matches!(s.get(1, "cam-1", other, &h.hash, 0, 1), Err(BlobError::Denied(_))), "{other:?}");
+    }
+    assert!(read_all(&s, 1, "cam-1", Some(P1), &h).is_ok(), "the real owner still reads");
+    // A handle passed to cam-1 in P1 does not carry over to cam-1 in P2.
+    let h2 = put(&s, 0, "svc", Some(P1), b"passed on", None).unwrap();
+    s.grant(std::slice::from_ref(&h2.hash), (Some(P1), "svc"), (Some(P1), "reader"));
+    assert!(read_all(&s, 1, "reader", Some(P1), &h2).is_ok());
+    assert!(matches!(s.get(1, "reader", Some(P2), &h2.hash, 0, 1), Err(BlobError::Denied(_))));
+    // Nor may the old id re-put the bytes to move the expiry as if it were the owner.
+    let again = put(&s, 5, "cam-1", Some(P2), b"private frame", Some(86_400_000)).unwrap();
+    assert_eq!(again.expires_ms, h.expires_ms);
 }

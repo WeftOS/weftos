@@ -54,7 +54,7 @@ impl Broker {
     }
 
     /// `from` passes `hashes` to instance `to`.
-    pub(super) fn grant_handles(&self, hashes: &[String], from: &str, to: &str) {
+    pub(super) fn grant_handles(&self, hashes: &[String], from: (Option<&str>, &str), to: (Option<&str>, &str)) {
         if let Some(b) = &self.blobs {
             b.grant(hashes, from, to);
         }

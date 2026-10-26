@@ -429,7 +429,7 @@ impl Broker {
         if !handles.is_empty() {
             // A handle published is a handle handed to the readers this
             // reading will reach.
-            let readers: Vec<String> = g
+            let readers: Vec<(Option<String>, String)> = g
                 .subs
                 .values()
                 .filter(|x| {
@@ -438,10 +438,10 @@ impl Broker {
                         && x.schema == schema
                         && (x.project_id == project || granted(&x.also, &project, source_id))
                 })
-                .map(|x| x.instance.clone())
+                .map(|x| (x.project_id.clone(), x.instance.clone()))
                 .collect();
-            for to in readers {
-                self.grant_handles(&handles, me, &to);
+            for (to_project, to) in readers {
+                self.grant_handles(&handles, (project.as_deref(), me), (to_project.as_deref(), &to));
             }
         }
         let r = Reading {

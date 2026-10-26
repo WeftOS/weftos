@@ -105,7 +105,8 @@ struct Meta {
     owner: String,
     project_id: Option<String>,
     #[serde(skip)]
-    readers: HashSet<String>,
+    /// `(project, instance)` pairs the owner's handle was passed to.
+    readers: HashSet<(Option<String>, String)>,
 }
 
 struct Upload {
@@ -391,10 +392,11 @@ impl BlobStore {
             // moves the expiry out; anyone else gets the existing expiry, so
             // re-putting known bytes cannot pin another project's blob.
             let _ = std::fs::remove_file(&u.path);
-            if m.owner == owner || m.readers.contains(owner) {
+            let me = (u.project_id.clone(), owner.to_string());
+            if (m.owner == owner && m.project_id == u.project_id) || m.readers.contains(&me) {
                 m.expires_ms = m.expires_ms.max(expires);
             }
-            m.readers.insert(owner.to_string());
+            m.readers.insert(me);
             let meta = m.clone();
             std::fs::write(meta_path(&self.dir, &hash), serde_json::to_vec(&meta).unwrap_or_default()).map_err(io)?;
             return Ok(Some(BlobHandle {
@@ -420,7 +422,11 @@ impl BlobStore {
     }
 
     fn may_read(m: &Meta, instance: &str, project_id: Option<&str>) -> bool {
-        m.owner == instance || m.readers.contains(instance) || m.project_id.as_deref() == project_id
+        // An instance id alone is not an identity: the same id re-placed
+        // under another project is a different principal.
+        (m.owner == instance && m.project_id.as_deref() == project_id)
+            || m.readers.contains(&(project_id.map(String::from), instance.to_string()))
+            || m.project_id.as_deref() == project_id
     }
 
     /// Read up to [`CHUNK`] bytes of blob `hash` from `offset`; the flag says
@@ -467,13 +473,15 @@ impl BlobStore {
     /// `from` passes its handles to `to`: each blob `from` owns becomes
     /// readable by `to`. Blobs `from` does not own are ignored, so a
     /// service cannot hand on someone else's handle.
-    pub fn grant(&self, hashes: &[String], from: &str, to: &str) {
+    pub fn grant(&self, hashes: &[String], from: (Option<&str>, &str), to: (Option<&str>, &str)) {
+        let key = |p: (Option<&str>, &str)| (p.0.map(String::from), p.1.to_string());
+        let (from, to) = (key(from), key(to));
         let mut g = self.lock();
         for h in hashes {
             if let Some(m) = g.blobs.get_mut(h)
-                && (m.owner == from || m.readers.contains(from))
+                && ((m.owner == from.1 && m.project_id == from.0) || m.readers.contains(&from))
             {
-                m.readers.insert(to.to_string());
+                m.readers.insert(to.clone());
             }
         }
     }
