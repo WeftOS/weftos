@@ -59,6 +59,29 @@ pub struct LaunchSpec {
     pub output_limit: usize,
     /// `(uid, gid)` to drop to; required when the supervisor runs as root.
     pub run_as: Option<(u32, u32)>,
+    /// Supplementary groups set with `run_as` (empty clears them).
+    pub groups: Vec<u32>,
+}
+
+/// What the child does between fork and exec, decided before the fork so it
+/// can be checked without privilege.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChildPlan {
+    /// rlimits.
+    pub limits: ProcLimits,
+    /// `(uid, gid)` and supplementary groups to switch to, in the order
+    /// `setgroups`, `setgid`, `setuid`.
+    pub drop: Option<(u32, u32, Vec<u32>)>,
+}
+
+impl LaunchSpec {
+    /// The fork-to-exec plan for this spec.
+    pub fn child_plan(&self) -> ChildPlan {
+        ChildPlan {
+            limits: self.limits,
+            drop: self.run_as.map(|(u, g)| (u, g, self.groups.clone())),
+        }
+    }
 }
 
 /// A running supervised process.
@@ -94,7 +117,8 @@ fn set_limit(resource: libc::c_int, value: u64) -> std::io::Result<()> {
     }
 }
 
-fn apply_in_child(limits: ProcLimits, run_as: Option<(u32, u32)>) -> std::io::Result<()> {
+fn apply_in_child(plan: &ChildPlan) -> std::io::Result<()> {
+    let limits = plan.limits;
     let as_result = set_limit(libc::RLIMIT_AS as libc::c_int, limits.mem_bytes);
     if cfg!(target_os = "linux") {
         as_result?;
@@ -105,10 +129,13 @@ fn apply_in_child(limits: ProcLimits, run_as: Option<(u32, u32)>) -> std::io::Re
     set_limit(libc::RLIMIT_NOFILE as libc::c_int, limits.nofile)?;
     set_limit(libc::RLIMIT_FSIZE as libc::c_int, limits.fsize_bytes)?;
     set_limit(libc::RLIMIT_CORE as libc::c_int, 0)?;
-    if let Some((uid, gid)) = run_as {
-        // SAFETY: async-signal-safe syscalls between fork and exec.
+    if let Some((uid, gid, groups)) = &plan.drop {
+        let (uid, gid) = (*uid, *gid);
+        let list: Vec<libc::gid_t> = groups.iter().map(|g| *g as libc::gid_t).collect();
+        // SAFETY: async-signal-safe syscalls between fork and exec; `list`
+        // was built before the fork.
         unsafe {
-            if libc::setgroups(0, std::ptr::null()) != 0
+            if libc::setgroups(list.len() as _, list.as_ptr()) != 0
                 || libc::setgid(gid as libc::gid_t) != 0
                 || libc::setuid(uid as libc::uid_t) != 0
             {
@@ -165,10 +192,10 @@ impl Supervised {
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true)
             .process_group(0);
-        let (limits, run_as) = (spec.limits, spec.run_as);
+        let plan = spec.child_plan();
         // SAFETY: the closure only makes async-signal-safe syscalls.
         unsafe {
-            cmd.pre_exec(move || apply_in_child(limits, run_as));
+            cmd.pre_exec(move || apply_in_child(&plan));
         }
         let mut child = cmd
             .spawn()
@@ -290,3 +317,7 @@ impl Drop for Supervised {
         self.signal_group(libc::SIGKILL);
     }
 }
+
+#[cfg(test)]
+#[path = "supervise_identity_tests.rs"]
+mod identity_tests;

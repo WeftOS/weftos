@@ -3,7 +3,7 @@
 - **Status**: Accepted (2026-10-25: the owner asked to start B1, taking the recommended
   answer to each open question; see "Decisions on the open questions"). Card
   `venq-cog-broker-adr`; implementation on cards `venq-cogbus-b1` .. `b6`.
-- **Updated**: 2026-10-25 (B1 and B4 shipped; known gaps recorded with closing cards; section 12 adds service calls for the NPU service, card `d9272837`)
+- **Updated**: 2026-10-25 (B1 and B4 shipped; known gaps recorded with closing cards; section 12 adds service calls for the NPU service, card `d9272837`; gaps 2 and 3 closed in code, pending the owner-run host setup)
 - **Deciders**: owner
 - **Builds on**: ADR-099 (governed placement, node facts), ADR-100 (cog workload kind),
   ADR-120 (exposures: announce, see, switch off, log), ADR-114 (`weftos://` names),
@@ -78,11 +78,51 @@ cog with two environment variables, `WEFTOS_COGBUS` (the socket path) and
 `WEFTOS_COGBUS_TOKEN` (a per-instance token), the same way it hands out
 `COGNITUM_COG_TOKEN` today. The token names the cog instance and its manifest; the broker
 also checks `SO_PEERCRED` against the uid the runtime started it as. A cog can only declare,
-publish and subscribe as itself.
+publish and subscribe as itself. How the uid and the group are real is §4a.
 
 Frames on the socket are length-prefixed JSON, matching the mesh's JSON `KernelMessage`
 (ADR-031). A stream ring is handed to the writer and to each reader as a `memfd` passed over
 the socket (`SCM_RIGHTS`), so no stream byte goes through the socket.
+
+### 4a. Per-cog uid and the `cogbus` group (gaps 2 and 3)
+
+A user daemon cannot switch uids; the machine service (root, or holding `CAP_SETUID` and
+`CAP_SETGID`) can. The runtime therefore has two modes, decided at each placement and shown
+in `weaver cogbus list`, never implied.
+
+| | `per-cog-uid` | `shared-uid` |
+|---|---|---|
+| when | the daemon can switch uids, `cogbus-isolation.json` has a `uid_range`, and the group exists | anything else: a user daemon, no range, no group, range exhausted |
+| the cog runs as | the lowest free uid of the range, gid `cogbus`, supplementary groups exactly `[cogbus]` (the daemon's are dropped) | the daemon's uid, as before |
+| broker check | the instance is registered with that uid; any other peer uid is refused `uid_mismatch` and logged by the activity log (`record_refusal`), with the instance named | the peer must be a process of the daemon's user |
+| `require_cog_uid` | n/a | refuses a placement whose cog declares `[[outputs]]` or `[[inputs]]` (`admission`: "require_cog_uid is on and this cog would share a uid"). Cogs that do not use the bus are not refused. Default off |
+
+- **Allocation.** `attach` takes a uid from the pool; `register` binds it to the instance. A
+  placement that fails between the two gives it back at once (the pending guard drops it). A
+  stop keeps it, because the instance's data directory is owned by that uid and a restart
+  must not meet another cog there. Unload, teardown and revocation free it. The pool is in
+  memory: a daemon restart forgets instances, and so their uids.
+- **Spawn.** The identity travels in `HostContract.run_as` to the native adapter, which
+  stages the data directory as that uid and launches with `setgroups`, `setgid`, `setuid`
+  in that order (`Supervised::spawn`, uid 0 still refused). An adapter-level `run_as` stays
+  the fallback.
+- **Socket.** Created `0660`, never wider. If the `cogbus` group exists the daemon gives
+  the socket to it (`chown :cogbus`); with the machine service that is `root:cogbus 0660`.
+  If the group is absent or the daemon may not assign it, the group stays the daemon's own and
+  the report says why (`socket_note`). The socket's directory and its parents must be `o+x`
+  for the cog uids to reach it; `scripts/cogbus-uid-setup.sh status` reports any that are not.
+- **Host setup is owner-run.** Creating the group, reserving a uid range and writing
+  `cogbus-isolation.json` are `scripts/cogbus-uid-setup.sh apply|undo|status`: a dry run
+  unless `--yes`, a manifest of exactly what it created, and an undo that removes only that.
+  The daemon never edits the host.
+
+```json
+{ "require_cog_uid": false, "uid_range": [60000, 60999], "group": "cogbus" }
+```
+
+`cogbus-isolation.json` lives in the runtime dir, owner-only like `cogbus-policy.json`; a
+file that does not parse or is group- or world-writable is ignored with a warning and cogs
+run shared.
 
 ### 5. What a cog may do
 
@@ -169,7 +209,10 @@ listener used when the primary bind fails.
 ### 12. Service calls
 
 Some hardware is called, not streamed (plan 4.5: the NPU). The broker carries one
-request/reply primitive, with the same checks as a reading and nothing else added.
+request/reply primitive, with the same checks as a reading and nothing else added. Serve,
+call and reply are requests on a session that `hello` authenticated, so the peer-uid check of
+§4a applies to them exactly as to a publish; a connection refused for its uid is closed
+before any `serve` or `call` is read.
 
 - **Name.** A service is a topic whose kind starts with `svc.`: `svc.infer/<node>`. Over
   the mesh it is `weftos://<mesh>/services/<name>/topics/<kind>` (section 2).
@@ -214,13 +257,16 @@ acceptance test passes, and the row is then marked closed with the commit.
 | # | Gap | Risk today | Closes with | Card |
 |---|---|---|---|---|
 | 1 | Only native cogs get the socket; container and VM cogs cannot reach the broker | such cogs fall back to the ingest HTTP path only | socket bind-mounted into containers, uid recorded per route; VM routes via an authenticated relay or declared unsupported | `cogbus-gap-containers` (after gap 2) |
-| 2 | The uid check proves only "same user as the daemon", because native cogs run as the daemon's user | one cog that steals another's token can act as it | each native cog runs as its own uid; the broker registers that uid | `cogbus-gap-uid` |
-| 3 | The socket is 0660 owned by the daemon user; no `cogbus` group | any process running as the daemon's user can connect (it still needs a valid token) | `cogbus` group, socket `root:cogbus 0660`, cog uids in the group | `cogbus-gap-uid` |
+| 2 | **Closed for the code** (`cogbus-gap-uid`, 0865db260 and the root-path proof below; §4a). A privileged daemon with a uid range runs each native cog as its own uid and the broker registers it. Proven as root on the aarch64 VM: a cog launched via setgroups/setgid/setuid as range uid 61000 was accepted, the same token from uid 61001 was refused `uid_mismatch` and logged. A user daemon cannot switch uids, so its cogs are marked `shared-uid` and `require_cog_uid` can refuse them | on a user daemon one cog that steals another's token can still act as it; that is the user daemon's limit, not a defect | the machine service runs privileged with `cogbus-isolation.json` (owner runs `scripts/cogbus-uid-setup.sh apply --yes`) | `cogbus-gap-uid` |
+| 3 | **Closed for the code** (same card). Proven as root on the VM: the socket came up `root:cogbus 0660`, cogs get `cogbus` as their only supplementary group, and a uid outside the group got `PermissionError` on connect | until the owner applies the setup on a real host the socket keeps the daemon's group (reported in `cogbus list`) | the same owner-run setup | `cogbus-gap-uid` |
 | 4 | After `hello`, a silent connection is kept forever | leaked connections and queues | ping on silence, close without pong; per-connection subscription and per-instance connection caps | `cogbus-gap-idle` |
 | 5 | No publish rate limit; nothing stops a misbehaving cog (B3 rate-limits refusal logging and disconnects after repeated refusals) | a cog can flood readers within its declared topics | per-topic budget from `[[outputs]].rate`; broker asks the workload runtime to stop the instance, governed and chained | `cogbus-gap-rate-stop` |
 
 Gaps 2 and 3 also block the plan's P3 device-owner cogs, whose per-device allowlists
-need per-cog uids.
+need per-cog uids. After `cogbus-gap-uid` P3 can rely on per-cog uids only where the
+machine service is privileged and set up; on a user daemon a device-owner cog shares the
+daemon's uid, so a per-device allowlist is not enforceable there and must refuse or warn
+(`require_cog_uid` is the lever).
 
 ## Alternatives considered
 

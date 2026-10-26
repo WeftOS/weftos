@@ -38,6 +38,20 @@ pub const ENV_COGBUS_TOKEN: &str = "WEFTOS_COGBUS_TOKEN";
 /// Default CSI feed port (ADR-069).
 pub const DEFAULT_CSI_PORT: u16 = 5006;
 
+/// The identity a native instance runs as (ADR-122 gap 2): its own uid and
+/// gid, plus the supplementary groups it is placed in (the `cogbus` group,
+/// which owns the broker socket).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CogIdentity {
+    /// Uid to switch to.
+    pub uid: u32,
+    /// Primary gid.
+    pub gid: u32,
+    /// Supplementary groups (replaces the daemon's; never empty of the
+    /// socket's group when the broker is on).
+    pub groups: Vec<u32>,
+}
+
 /// Host contract for one instance.
 #[derive(Debug, Clone)]
 pub struct HostContract {
@@ -62,6 +76,10 @@ pub struct HostContract {
     /// [`ENV_COGBUS_TOKEN`]. `None`: no broker for this instance (it is
     /// down, or the route cannot reach a host socket).
     pub cogbus: Option<String>,
+    /// Identity the native adapter switches to before exec, when the broker
+    /// allocated one for this instance. `None`: the adapter's own `run_as`,
+    /// or the daemon's uid.
+    pub run_as: Option<CogIdentity>,
 }
 
 impl HostContract {
@@ -75,6 +93,7 @@ impl HostContract {
             ingest_url: None,
             expose_token: true,
             cogbus: None,
+            run_as: None,
         }
     }
 
@@ -104,6 +123,12 @@ impl HostContract {
     /// Builder: the cogbus socket handed to the instance.
     pub fn with_cogbus(mut self, socket: impl Into<String>) -> Self {
         self.cogbus = Some(socket.into());
+        self
+    }
+
+    /// Builder: the identity the instance runs as.
+    pub fn with_run_as(mut self, id: CogIdentity) -> Self {
+        self.run_as = Some(id);
         self
     }
 

@@ -14,10 +14,12 @@
 //! the socket could not be bound (ADR-122 section 9, `crate::cogbus_ingest`).
 //! The registrar tells the store sink each instance's placement.
 //!
-//! Only native cogs get the socket: they run as the daemon's own uid (the
-//! daemon's native adapter has no `run_as`), which is the uid the broker
-//! checks the peer against. Container and VM routes have no view of a host
-//! socket yet, so they get no broker in B1.
+//! Only native cogs get the socket. Each runs under its own uid when the
+//! daemon can switch uids and `cogbus-isolation.json` allows it; otherwise
+//! under the daemon's uid, marked `shared-uid` ([`crate::cogbus_isolation`]).
+//! The broker checks the peer against that uid. The socket is `0660`, group
+//! `cogbus` when the group exists and the daemon may assign it. Container and
+//! VM routes have no view of a host socket yet, so they get no broker in B1.
 //!
 //! B3: the broker runs with [`crate::cogbus_policy`] (kernel governance and
 //! `cogbus-policy.json` grants and denies) and writes
@@ -31,12 +33,13 @@ use clawft_kernel::cog_ingest::InstanceBinding;
 use clawft_kernel::workload_ctl::host_cogbus::{CogbusAttach, CogbusRegistrar, CogbusRegistration};
 use clawft_rpc::Response;
 use serde_json::{Value, json};
-use weftos_cogbus::server::{ServerHandle, serve};
+use weftos_cogbus::server::{ServeOptions, ServerHandle, SocketReport, serve_with};
 use weftos_cogbus::{
     Broker, BrokerConfig, BusHooks, InputSpec, InstanceSpec, OutputSpec, SOCKET_NAME,
 };
 
 use crate::cogbus_activity::CogbusActivity;
+use crate::cogbus_isolation::Isolator;
 use crate::cogbus_ingest::StoreSink;
 use crate::cogbus_policy::{CogbusPolicy, Rules};
 
@@ -50,6 +53,8 @@ static RUNTIME: OnceLock<CogbusRuntime> = OnceLock::new();
 pub struct CogbusRuntime {
     /// The broker.
     pub broker: Arc<Broker>,
+    /// Uid allocation and the isolation table.
+    pub isolator: Arc<Isolator>,
     _server: ServerHandle,
 }
 
@@ -57,6 +62,11 @@ impl CogbusRuntime {
     /// Socket path.
     pub fn socket(&self) -> &Path {
         self._server.path()
+    }
+
+    /// Mode, owner and group the socket was bound with.
+    pub fn socket_report(&self) -> &SocketReport {
+        self._server.report()
     }
 }
 
@@ -86,27 +96,47 @@ pub async fn start(dir: &Path, node_id: &str) -> Result<CogbusRuntime, String> {
     start_on(broker(node_id), dir).await
 }
 
-/// Serve `broker` on `dir`'s socket.
+/// Serve `broker` on `dir`'s socket with every cog on the daemon's uid.
 pub async fn start_on(broker: Arc<Broker>, dir: &Path) -> Result<CogbusRuntime, String> {
+    start_with(broker, dir, Arc::new(Isolator::shared()), None).await
+}
+
+/// Serve `broker` on `dir`'s socket, group `group` (its gid) when given.
+pub async fn start_with(
+    broker: Arc<Broker>,
+    dir: &Path,
+    isolator: Arc<Isolator>,
+    group: Option<u32>,
+) -> Result<CogbusRuntime, String> {
     let path: PathBuf = dir.join(SOCKET_NAME);
-    let server = serve(broker.clone(), &path)
+    let server = serve_with(broker.clone(), &path, ServeOptions { group })
         .await
         .map_err(|e| format!("cannot bind {}: {e}", path.display()))?;
-    Ok(CogbusRuntime { broker, _server: server })
+    Ok(CogbusRuntime { broker, isolator, _server: server })
 }
 
 /// Serve `broker` and keep it for the daemon's life; the registrar to hand
 /// the workload host, or `None` (logged) when the socket could not be bound.
 /// `sink` is the ingest bridge's store sink, told of every instance.
 pub async fn install(broker: Arc<Broker>, dir: &Path, sink: Option<Arc<StoreSink>>) -> Option<Arc<dyn CogbusRegistrar>> {
-    match start_on(broker, dir).await {
+    let cfg = crate::cogbus_isolation::load(dir).unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "cogbus-isolation.json ignored; cogs share the daemon's uid");
+        Default::default()
+    });
+    let isolator = Arc::new(Isolator::detect(cfg.clone()));
+    let group = crate::cogbus_isolation::group_gid(&cfg.group);
+    match start_with(broker, dir, isolator.clone(), group).await {
         Ok(rt) => {
-            tracing::info!(socket = %rt.socket().display(), store_sink = sink.is_some(), "cogbus");
+            tracing::info!(
+                socket = %rt.socket().display(), store_sink = sink.is_some(),
+                isolation = %isolator.report()["mode"], reason = ?isolator.blocker(),
+                socket_group_applied = rt.socket_report().group_applied, "cogbus"
+            );
             // The NPU service's telemetry feeds node facts (cogbus_npu_facts).
             if let Err(e) = crate::cogbus_npu_facts::attach(&rt.broker) {
                 tracing::warn!(error = %e, "npu service state will not appear in node facts");
             }
-            let mut reg = Registrar::new(rt.broker.clone(), rt.socket());
+            let mut reg = Registrar::for_runtime(&rt);
             if let Some(s) = sink {
                 reg = reg.with_store_sink(s);
             }
@@ -125,16 +155,28 @@ pub struct Registrar {
     broker: Arc<Broker>,
     socket: String,
     uid: u32,
+    isolator: Arc<Isolator>,
     sink: Option<Arc<StoreSink>>,
 }
 
 impl Registrar {
     /// Registrar over `broker` serving `socket`, for cogs run as this uid.
     pub fn new(broker: Arc<Broker>, socket: &Path) -> Self {
+        Self::with_isolator(broker, socket, Arc::new(Isolator::shared()))
+    }
+
+    /// Registrar over a running broker, sharing its isolation table.
+    pub fn for_runtime(rt: &CogbusRuntime) -> Self {
+        Self::with_isolator(rt.broker.clone(), rt.socket(), rt.isolator.clone())
+    }
+
+    /// Registrar allocating identities from `isolator`.
+    pub fn with_isolator(broker: Arc<Broker>, socket: &Path, isolator: Arc<Isolator>) -> Self {
         Self {
             broker,
             socket: socket.to_string_lossy().into_owned(),
             uid: nix::unistd::geteuid().as_raw(),
+            isolator,
             sink: None,
         }
     }
@@ -168,13 +210,25 @@ pub fn spec_of(r: &CogbusRegistration) -> InstanceSpec {
 
 impl CogbusRegistrar for Registrar {
     fn attach(&self, route: &str) -> Option<CogbusAttach> {
-        (route == "native").then(|| CogbusAttach { socket: self.socket.clone(), uid: Some(self.uid) })
+        if route != "native" {
+            return None;
+        }
+        let plan = self.isolator.plan();
+        Some(CogbusAttach {
+            socket: self.socket.clone(),
+            uid: Some(plan.identity.as_ref().map_or(self.uid, |i| i.uid)),
+            identity: plan.identity,
+            isolation: plan.isolation,
+            refuse_shared: self.isolator.require_cog_uid(),
+            note: plan.note,
+        })
     }
 
     fn register(&self, r: &CogbusRegistration) -> Result<(), String> {
         self.broker
             .register(spec_of(r), r.token.expose())
             .map_err(|e| e.message)?;
+        self.isolator.bind(&r.instance_id, &r.cog_id, r.uid, r.isolation);
         if let Some(s) = &self.sink {
             s.bind(InstanceBinding::new(&r.instance_id, r.project_id.clone(), &r.controller_node));
         }
@@ -183,9 +237,18 @@ impl CogbusRegistrar for Registrar {
 
     fn revoke(&self, instance_id: &str) {
         self.broker.revoke(instance_id);
+        self.isolator.unbind(instance_id);
         if let Some(s) = &self.sink {
             s.unbind(instance_id);
         }
+    }
+
+    fn release(&self, instance_id: &str) {
+        self.isolator.release(instance_id);
+    }
+
+    fn abandon(&self, uid: u32) {
+        self.isolator.abandon(uid);
     }
 }
 
@@ -195,6 +258,12 @@ pub fn list_json(rt: Option<&CogbusRuntime>) -> Value {
         Some(rt) => json!({
             "running": true,
             "socket": rt.socket().to_string_lossy(),
+            "socket_mode": format!("{:04o}", rt.socket_report().mode),
+            "socket_uid": rt.socket_report().uid,
+            "socket_gid": rt.socket_report().gid,
+            "socket_group_applied": rt.socket_report().group_applied,
+            "socket_note": rt.socket_report().note,
+            "isolation": rt.isolator.report(),
             "topics": rt.broker.snapshot(),
             "refusals": rt.broker.recent_refusals(),
         }),

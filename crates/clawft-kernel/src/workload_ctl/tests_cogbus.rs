@@ -12,11 +12,11 @@ use clawft_types::cog_topics::{InputPolicy, TopicClass};
 use clawft_types::placement::TrustTier;
 use ed25519_dalek::SigningKey;
 
-use super::host_cogbus::{CogbusAttach, CogbusRegistrar, CogbusRegistration};
+use super::host_cogbus::{CogbusAttach, CogbusRegistrar, CogbusRegistration, Isolation};
 use super::msg::method;
 use super::test_support::*;
 use super::transport::MeshConnector;
-use crate::workload_runtime::RunMode;
+use crate::workload_runtime::{CogIdentity, RunMode};
 
 const PROJECT: &str = "01J9ZXW0PRJCTAAAAAAAAAAAAA";
 
@@ -37,19 +37,54 @@ schema = "detections.v1"
 policy = "sample"
 "#;
 
+fn me() -> (u32, u32) {
+    // SAFETY: neither call can fail.
+    unsafe { (libc::geteuid(), libc::getegid()) }
+}
+
 #[derive(Default)]
 struct FakeBus {
     reachable: bool,
+    /// Hand each instance an identity (this process's own uid and gid, so
+    /// staging its data directory needs no privilege; the tests only load).
+    own_uid: bool,
+    /// `require_cog_uid` is on.
+    refuse_shared: bool,
+    /// Refuse every registration.
+    fail_register: bool,
     log: Mutex<Vec<CogbusRegistration>>,
     live: Mutex<BTreeSet<String>>,
+    released: Mutex<Vec<String>>,
+    abandoned: Mutex<Vec<u32>>,
 }
 
 impl CogbusRegistrar for FakeBus {
     fn attach(&self, route: &str) -> Option<CogbusAttach> {
-        (self.reachable && route == "native")
-            .then(|| CogbusAttach { socket: "/run/test/cogbus.sock".into(), uid: Some(4242) })
+        if !(self.reachable && route == "native") {
+            return None;
+        }
+        let mut a = CogbusAttach::shared("/run/test/cogbus.sock", 4242);
+        a.refuse_shared = self.refuse_shared;
+        a.note = Some("test bus".into());
+        if self.own_uid {
+            let (uid, gid) = me();
+            a.uid = Some(uid);
+            a.identity = Some(CogIdentity { uid, gid, groups: vec![gid] });
+            a.isolation = Isolation::PerCogUid;
+            a.note = None;
+        }
+        Some(a)
+    }
+    fn release(&self, id: &str) {
+        self.released.lock().unwrap().push(id.to_string());
+    }
+    fn abandon(&self, uid: u32) {
+        self.abandoned.lock().unwrap().push(uid);
     }
     fn register(&self, r: &CogbusRegistration) -> Result<(), String> {
+        if self.fail_register {
+            return Err("registration refused".into());
+        }
         if !self.live.lock().unwrap().insert(r.instance_id.clone()) {
             return Err("already registered".into());
         }
@@ -62,6 +97,17 @@ impl CogbusRegistrar for FakeBus {
 }
 
 async fn place(bus: Arc<FakeBus>, seed: u8, port: u16) -> (HostNode, super::plane::PlacementControlPlane, String, tempfile::TempDir) {
+    let (host, plane, report, tmp) = place_order(bus, seed, port, true).await;
+    (host, plane, report.placed.expect("placed").instance_id, tmp)
+}
+
+/// Place, with or without starting; the report says whether it was accepted.
+async fn place_order(
+    bus: Arc<FakeBus>,
+    seed: u8,
+    port: u16,
+    start: bool,
+) -> (HostNode, super::plane::PlacementControlPlane, super::plane_place::PlaceReport, tempfile::TempDir) {
     let ctl = SigningKey::from_bytes(&[seed + 1; 32]);
     let host = host_node_native_only(seed, board_caps("pi5"), true, &ctl);
     assert!(host.svc.set_cogbus(bus));
@@ -74,12 +120,12 @@ async fn place(bus: Arc<FakeBus>, seed: u8, port: u16) -> (HostNode, super::plan
     let base = mode_order(&pkg, RunMode::Listener, None);
     let mut order = super::plane_place::PlaceOrder {
         project_id: Some(PROJECT.into()),
+        start,
         ..base
     };
     order.config.csi_port = port;
     let report = plane.place(&order).await.unwrap();
-    let iid = report.placed.expect("placed").instance_id;
-    (host, plane, iid, tmp)
+    (host, plane, report, tmp)
 }
 
 async fn bus_file(host: &HostNode, iid: &str) -> String {
@@ -133,5 +179,61 @@ async fn a_route_the_broker_cannot_reach_gets_no_socket_and_no_registration() {
     let env = bus_file(&host, &iid).await;
     assert!(env.starts_with("||"), "no WEFTOS_COGBUS*: {env}");
     assert!(bus.log.lock().unwrap().is_empty());
+    plane.instance(method::UNLOAD, &iid).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_cog_with_its_own_uid_registers_it_and_unload_frees_it() {
+    let bus = Arc::new(FakeBus { reachable: true, own_uid: true, ..Default::default() });
+    // Loaded, not started: this test process cannot switch to uid 60010.
+    let (_host, plane, report, _tmp) = place_order(bus.clone(), 67, 15067, false).await;
+    let iid = report.placed.expect("placed").instance_id;
+
+    let r = bus.log.lock().unwrap()[0].clone();
+    assert_eq!((r.uid, r.isolation), (Some(me().0), Isolation::PerCogUid), "the broker is told the cog's own uid");
+    assert!(bus.abandoned.lock().unwrap().is_empty(), "a registered identity is not given back");
+
+    plane.instance(method::UNLOAD, &iid).await.unwrap();
+    assert_eq!(*bus.released.lock().unwrap(), vec![iid], "unload frees the uid");
+}
+
+#[tokio::test]
+async fn a_stop_keeps_the_uid_reserved() {
+    let bus = Arc::new(FakeBus { reachable: true, own_uid: true, ..Default::default() });
+    let (_host, plane, report, _tmp) = place_order(bus.clone(), 69, 15069, false).await;
+    let iid = report.placed.expect("placed").instance_id;
+    // The never-started instance refuses the stop itself, after the broker
+    // has already been told to stop accepting it.
+    let _ = plane.instance(method::STOP, &iid).await;
+    assert!(!bus.live.lock().unwrap().contains(&iid));
+    assert!(bus.released.lock().unwrap().is_empty(), "a stopped instance may start again as the same uid");
+    plane.instance(method::UNLOAD, &iid).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_registration_that_fails_gives_the_identity_back() {
+    let bus = Arc::new(FakeBus { reachable: true, own_uid: true, fail_register: true, ..Default::default() });
+    let (_host, _plane, report, _tmp) = place_order(bus.clone(), 71, 15071, false).await;
+    assert!(report.placed.is_none(), "{}", report.explain);
+    assert_eq!(*bus.abandoned.lock().unwrap(), vec![me().0]);
+    assert!(bus.released.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn require_cog_uid_refuses_a_bus_cog_that_would_share_a_uid() {
+    let bus = Arc::new(FakeBus { reachable: true, refuse_shared: true, ..Default::default() });
+    let (_host, _plane, report, _tmp) = place_order(bus.clone(), 73, 15073, true).await;
+    assert!(report.placed.is_none(), "{}", report.explain);
+    let a = &report.attempts[0];
+    assert_eq!(a.code.as_deref(), Some("admission"));
+    assert!(a.reason.as_deref().unwrap().contains("require_cog_uid"), "{a:?}");
+    assert!(bus.log.lock().unwrap().is_empty(), "nothing registered");
+}
+
+#[tokio::test]
+async fn require_cog_uid_lets_an_isolated_cog_through() {
+    let bus = Arc::new(FakeBus { reachable: true, own_uid: true, refuse_shared: true, ..Default::default() });
+    let (_host, plane, report, _tmp) = place_order(bus, 75, 15075, false).await;
+    let iid = report.placed.expect("an isolated cog is not refused").instance_id;
     plane.instance(method::UNLOAD, &iid).await.unwrap();
 }
