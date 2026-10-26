@@ -9,7 +9,7 @@ the service's last counters (evictions, restarts), queue depth seen, memory,
 power, temperature and the OOM counter across the run.
 """
 import argparse, csv, json, statistics, sys
-from datetime import datetime
+from datetime import datetime, timezone
 
 def pct(v, p):
     if not v:
@@ -32,12 +32,19 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--logs", nargs="+", required=True)
     ap.add_argument("--monitor")
+    ap.add_argument("--from", dest="t_from", help="only rows at or after this UTC time (ISO, e.g. 2026-10-26T08:30:00Z)")
+    ap.add_argument("--to", dest="t_to", help="only rows before this UTC time")
     a = ap.parse_args()
+    def to_ms(iso):
+        return int(datetime.strptime(iso, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp() * 1000) if iso else None
+    lo, hi = to_ms(a.t_from), to_ms(a.t_to)
+    def inside(ms):
+        return (lo is None or ms >= lo) and (hi is None or ms < hi)
     res = {"consumers": {}}
     tele = []
     t_first, t_last = None, None
     for path in a.logs:
-        rows = load_jsonl(path)
+        rows = [r for r in load_jsonl(path) if inside(r.get("t_ms", 0))]
         calls = [r for r in rows if r.get("kind") == "call"]
         tele += [r for r in rows if r.get("kind") == "telemetry"]
         if not calls:
@@ -80,7 +87,8 @@ def main():
             "mem_resident_mib_max": max([r["mem_resident_mib"] or 0 for r in tele]),
         }
     if a.monitor:
-        rows = list(csv.DictReader(open(a.monitor)))
+        rows = [r for r in csv.DictReader(open(a.monitor))
+                if inside(to_ms(r["ts"]) or 0)]
         def col(n, f=float):
             out = []
             for r in rows:
