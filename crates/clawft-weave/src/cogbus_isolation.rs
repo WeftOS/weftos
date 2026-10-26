@@ -54,6 +54,15 @@ pub struct IsolationConfig {
     /// Group that owns the socket and is every cog's supplementary group.
     #[serde(default = "default_group")]
     pub group: String,
+    /// Uid container cogs share when no per-cog uid can be allocated (the
+    /// image's `nobody`, which the relay and the engine run them as). Set the
+    /// uid the engine really presents (a user-namespace remap changes it).
+    #[serde(default = "default_container_uid")]
+    pub container_uid: u32,
+}
+
+fn default_container_uid() -> u32 {
+    65534
 }
 
 fn default_group() -> String {
@@ -62,7 +71,7 @@ fn default_group() -> String {
 
 impl Default for IsolationConfig {
     fn default() -> Self {
-        Self { require_cog_uid: false, uid_range: None, group: default_group() }
+        Self { require_cog_uid: false, uid_range: None, group: default_group(), container_uid: default_container_uid() }
     }
 }
 
@@ -82,6 +91,14 @@ impl IsolationConfig {
             && self.group.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
         if !ok {
             return Err(format!("group {:?} is not a plain group name", self.group));
+        }
+        if self.container_uid == 0 || self.container_uid == u32::MAX {
+            return Err("container_uid must not be 0".into());
+        }
+        if let Some([a, b]) = self.uid_range
+            && (a..=b).contains(&self.container_uid)
+        {
+            return Err(format!("container_uid {} is inside uid_range", self.container_uid));
         }
         Ok(())
     }
@@ -172,6 +189,7 @@ struct Row {
 /// The decision maker, the uid pool and the table `cogbus list` shows.
 pub struct Isolator {
     cfg: IsolationConfig,
+    routes: Mutex<BTreeMap<String, String>>,
     privileged: bool,
     gid: Option<u32>,
     pool: Mutex<Option<Pool>>,
@@ -182,7 +200,7 @@ impl Isolator {
     /// Decide from `cfg`, the process's privilege and the group lookup.
     pub fn new(cfg: IsolationConfig, privileged: bool, gid: Option<u32>) -> Self {
         let pool = cfg.uid_range.map(|[first, last]| Pool { first, last, taken: BTreeMap::new() });
-        Self { cfg, privileged, gid, pool: Mutex::new(pool), rows: Mutex::new(BTreeMap::new()) }
+        Self { cfg, routes: Mutex::new(BTreeMap::new()), privileged, gid, pool: Mutex::new(pool), rows: Mutex::new(BTreeMap::new()) }
     }
 
     /// No isolation configured: every cog shares the daemon's uid.
@@ -194,6 +212,16 @@ impl Isolator {
     pub fn detect(cfg: IsolationConfig) -> Self {
         let gid = group_gid(&cfg.group);
         Self::new(cfg, can_switch_uid(), gid)
+    }
+
+    /// Uid container cogs share without a per-cog uid.
+    pub fn container_uid(&self) -> u32 {
+        self.cfg.container_uid
+    }
+
+    /// Say how a route reaches the broker (shown by `cogbus list`).
+    pub fn set_route(&self, route: &str, how: impl Into<String>) {
+        self.routes.lock().unwrap_or_else(|p| p.into_inner()).insert(route.into(), how.into());
     }
 
     /// `require_cog_uid`.
@@ -295,6 +323,7 @@ impl Isolator {
             "reason": self.blocker(),
             "require_cog_uid": self.cfg.require_cog_uid,
             "group": self.cfg.group,
+            "routes": self.routes.lock().unwrap_or_else(|p| p.into_inner()).clone(),
             "instances": rows,
         })
     }

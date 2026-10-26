@@ -91,6 +91,11 @@ struct Instance {
     args: Vec<String>,
     csi_port: u16,
     relay: bool,
+    /// `uid:gid` the instance runs as when the broker allocated one and the
+    /// image does not bake it in (no relay).
+    user: Option<String>,
+    /// Host path of the broker socket mounted into the container.
+    cogbus_mount: Option<PathBuf>,
     started: bool,
     last: Option<RunEvidence>,
 }
@@ -168,6 +173,8 @@ impl ContainerRuntime {
             network: self.cfg.network.as_deref(),
             detach,
             ingest_relay: inst.relay,
+            user: inst.user.as_deref(),
+            cogbus_mount: inst.cogbus_mount.as_deref(),
             args,
         }
     }
@@ -273,9 +280,11 @@ impl WorkloadRuntime for ContainerRuntime {
         let ctx = dir.join("ctx");
         let env_file = dir.join("env");
         let env = cfg.host.env(DATA_DIR);
+        // ADR-122 gap 1: the broker's identity for this instance, if any.
+        let ident = cfg.host.run_as.clone();
         let upstream = relay::relay_upstream(&cfg.host, self.cfg.network.as_deref())?;
         let df = match upstream {
-            Some(up) => relay::dockerfile(&self.cfg.base_image, up),
+            Some(up) => relay::dockerfile(&self.cfg.base_image, up, ident.as_ref().map(|i| (i.uid, i.gid))),
             None => cmd::dockerfile(&self.cfg.base_image),
         };
         let (bytes, c2, e2) = (bin.bytes.clone(), ctx.clone(), env_file.clone());
@@ -289,7 +298,13 @@ impl WorkloadRuntime for ContainerRuntime {
         })
         .await
         .map_err(|e| RuntimeError::Backend(e.to_string()))??;
-        let tag = cmd::image_tag(&w.id, &bin.blake3);
+        let mut tag = cmd::image_tag(&w.id, &bin.blake3);
+        if upstream.is_some()
+            && let Some(i) = &ident
+        {
+            // A relay image bakes the identity in, so it is part of the tag.
+            tag = format!("{tag}-u{}g{}", i.uid, i.gid);
+        }
         let built = self
             .call_ok(
                 cmd::build_cmd(self.cfg.engine, &adm.arch, &tag, &ctx)?,
@@ -314,6 +329,8 @@ impl WorkloadRuntime for ContainerRuntime {
                 args,
                 csi_port: cfg.host.csi_bind.port(),
                 relay: upstream.is_some(),
+                user: ident.as_ref().filter(|_| upstream.is_none()).map(cmd::user_of),
+                cogbus_mount: cfg.host.cogbus_mount.as_ref().map(PathBuf::from),
                 started: false,
                 last: None,
             },

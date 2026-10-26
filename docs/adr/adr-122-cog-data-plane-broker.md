@@ -3,7 +3,7 @@
 - **Status**: Accepted (2026-10-25: the owner asked to start B1, taking the recommended
   answer to each open question; see "Decisions on the open questions"). Card
   `venq-cog-broker-adr`; implementation on cards `venq-cogbus-b1` .. `b6`.
-- **Updated**: 2026-10-25 (B1 and B4 shipped; known gaps recorded with closing cards; section 12 adds service calls for the NPU service, card `d9272837`; gaps 2 and 3 closed in code, pending the owner-run host setup; B5 blob store, section 13; gaps 4 and 5, section 11)
+- **Updated**: 2026-10-25 (B1 and B4 shipped; known gaps recorded with closing cards; section 12 adds service calls for the NPU service, card `d9272837`; gaps 2 and 3 closed in code, pending the owner-run host setup; B5 blob store, section 13; gaps 1, 4 and 5, sections 4b and 11)
 - **Deciders**: owner
 - **Builds on**: ADR-099 (governed placement, node facts), ADR-100 (cog workload kind),
   ADR-120 (exposures: announce, see, switch off, log), ADR-114 (`weftos://` names),
@@ -123,6 +123,33 @@ in `weaver cogbus list`, never implied.
 `cogbus-isolation.json` lives in the runtime dir, owner-only like `cogbus-policy.json`; a
 file that does not parse or is group- or world-writable is ignored with a warning and cogs
 run shared.
+
+### 4b. Containers and VMs (gap 1)
+
+The socket is a host file, so who can reach it depends on the route:
+
+| Route | Reaches the broker | How |
+|---|---|---|
+| `native` | yes | the socket path in `WEFTOS_COGBUS` (section 4a) |
+| `container` on a Linux host with Docker or Podman | yes | the socket is bind-mounted at `/run/weftos/cogbus.sock` (`--mount type=bind,...`) and `WEFTOS_COGBUS` names that path; the host path is never in the cog's environment |
+| `container` on macOS or Windows (the engine is a VM), Apple `container` (a VM per container) | no | declared unsupported: a host unix socket cannot cross the VM; such cogs keep the ingest HTTP path. `weaver cogbus list` shows `routes.container: unsupported: <reason>` |
+| VMs and devices (`seed`, any VM route) | no | declared unsupported: the socket is a host file. A relay would be a second authenticated listener with its own token and rate rules; it is not built, and gap 1 does not need it |
+
+For a container the broker still checks the peer uid, so the uid is recorded per route:
+
+- The container runs as `uid:gid`, set at run time (`--user`), so one image serves every
+  instance of a cog. A relay image (the ingest relay is the entrypoint and drops privileges
+  itself) takes the same values in its baked `--uid/--gid`, and the identity is part of its
+  image tag.
+- **gid** is the socket's group (`cogbus` when it was applied, else the daemon's), so the
+  container can open the 0660 socket and nothing more.
+- **uid**: a daemon that can switch uids and has a `uid_range` allocates one per container
+  cog, exactly as for native cogs (`per-cog-uid`; rootful engines honour `--user`). Otherwise
+  every container cog shares `container_uid` (default 65534, the image's `nobody`), marked
+  `shared-uid`, and `require_cog_uid` refuses it like any shared uid. `container_uid` is a key
+  of `cogbus-isolation.json`: set it to the uid the engine really presents when it remaps
+  users (rootless Podman or Docker, user-namespace remap), or the broker will refuse the cog
+  `uid_mismatch`.
 
 ### 5. What a cog may do
 
@@ -311,6 +338,94 @@ by BLAKE3, and a `blob.v1` handle (`hash`, `size`, `media_type`, `expires_ms`) i
 - **Not carried.** Mesh-wide handles (B6: a handle resolves on the node that stores it), blob
   streaming without the 32 KiB slices, and a per-project quota.
 
+### 14. Mesh topics as exposures (B6): plan
+
+**Status: planned, not built. Five decisions need the owner before B6b (see the end).** It
+builds on sections 3 and 8, ADR-120 (exposures, local-wins, activity log) and the precedent of
+ADR-101's inference proxy (dedicated mesh frame types, a role exposure, peer admission).
+
+**What is exposed.** One exposure per topic: id `topic.<kind>/<source_id>`, new
+`ExposureKind::Topic`, `resource` `cog:<cog id>`, `api` `cogbus.v1`. The broker registers it
+when a writer first publishes the topic (or opens its ring), with audience `local` and state
+`on`, so nothing is served until an operator runs `weaver expose on topic.<k>/<s> --audience
+paired|nodes:<a,b>|project:<id>`. `limits.rate_per_min` and `max_request_bytes` become the
+per-subscriber message and byte budget. `weaver expose off` withdraws it at once and ends every
+remote subscription with `refused` (local wins, ADR-120 section 4). A topic with no exposure is
+never served; the check is `ExposureRegistry::check_serve` on both the advert and the serve path.
+
+**Wire.** Two new frame types in `mesh_framing`, in the shape of `InferRequest` and
+`InferResponse`:
+
+| Frame | Direction | Carries |
+|---|---|---|
+| `TopicRequest` 0x12 | subscriber node to source node | JSON head `{op: subscribe, topic, schema, policy, raw, credit}`, `credit {sub, n}`, `unsubscribe {sub}`, `fetch {hash}` |
+| `TopicData` 0x13 | source to subscriber | `reading {sub, seq, t_ns, body}` as JSON; `chunk {sub, seq, bytes}` binary for streams and blobs; `end {sub}`; `error {sub, code, message}` |
+
+Both are served only to admitted, verified peers (the same peer admission as the inference
+proxy and `project.fetch`). Nothing is encoded in a `KernelMessage`, so a stream chunk is raw
+bytes, not base64 in JSON.
+
+**Source side.** A `MeshTopicHub` in the daemon turns each admitted subscribe into a
+broker-internal reader and enforces, in order: the peer is admitted; the exposure exists, is on
+and covers the peer (`check_serve`); governance, as `cogbus.mesh.subscribe` through the same
+single attributed `GovernanceRequest` site with the peer node as the agent (`mesh:<node id>`),
+so kernel rules and `cogbus-policy.json` deny entries apply; then the raw rule below. Every
+request is an exposure activity record (caller node, exposure id, bytes, outcome), chained on
+refusal like any exposure. The reader's policy (`sample`, `drop-oldest`, `block` falling back as
+in section 6) is applied at the source; the hub never queues without bound.
+
+**Credits.** The subscriber grants credit and the source sends only against it: messages for a
+reading, bytes for a stream or blob. At zero the source drops by the reader's policy and counts
+the drops, so the subscriber sees them as a `seq` gap. Credit not renewed for 30 s ends the
+subscription, and a link that goes down ends all of a peer's subscriptions; the subscriber
+broker resubscribes with backoff. A source node never holds more than a configured number of
+remote subscriptions per peer (default 16).
+
+**The raw rule.** Raw frames never cross by accident. A topic is raw when its class is
+`stream` or `blob`, or its schema is `iq.cs16.v1`, `pcm.s16le.v1` or `video.frame-ref.v1`. A
+raw subscribe is served only if all three hold: the exposure's audience is not `local`; the
+operator set `raw` on it (`weaver expose on ... --raw`, audited); and the subscribe itself says
+`raw: true`, so a consumer that wanted a derived reading cannot be handed the microphone by
+mistake. A raw subscribe without them is refused `raw_not_exposed` and logged at the source.
+Blobs travel only by hash (`fetch {hash}` to the node whose store holds it; a handle names its
+node), and the reader's access follows the exposure, not the project rule.
+
+**Subscriber side.** A cog subscribes with the topic's `weftos://<mesh>/sensors/<source_id>/topics/<kind>`
+name (section 2) in `subscribe.topic`, declared in `[[inputs]]` by the same kind and schema. The
+broker opens a mesh subscription and delivers each message as a normal `msg` with the origin
+node in `node_id`; the local topic is a proxy named `<kind>/<source_id>` with writer
+`@mesh:<node>`. A local writer of the same name is a `writer_conflict`. A remote topic belongs
+to the project the exposure's audience names (`project:<id>`), and to the node bucket for
+`paired` or `nodes:` audiences; the existing project and grant rules then decide who may read
+it. ADR-117 display bindings resolve through this path with the leaf as a remote subscriber.
+
+**Phases.**
+
+| Step | Delivers | Done when |
+|---|---|---|
+| B6a | `ExposureKind::Topic`; the broker registers topic exposures; `weaver expose` and the report list them; local-wins on off | `weaver expose list` shows `topic.telemetry/venq-board` audience `local`; `off` and `on` persist |
+| B6b | frames 0x12/0x13; `MeshTopicHub`; readings with credits; governance and activity | a second in-process node subscribes to a reading topic and receives it; off withdraws; a denied peer is refused and logged |
+| B6c | the subscriber broker: `weftos://` subscribe, proxy topics, resubscribe | a cog on PG reads a Ventuno `telemetry` reading and sees the origin `node_id` |
+| B6d | stream chunks with byte credits; the raw rule | a raw IQ subscribe from PG is refused unless exposed with `--raw` and requested with `raw: true`; with both, chunks flow under credit and drops show as a gap |
+| B6e | blob fetch by hash across nodes | a frame handle from the Ventuno resolves on PG once, and a second node without exposure is refused |
+
+**Decisions the owner needs to make before B6b.** Each has a recommendation.
+
+1. **Default audience** (ADR-120 open question 1, still unanswered): recommend `local`, so a
+   topic is served only after an explicit `expose on`. Alternative: `paired` once a project grant
+   exists, which exposes sensor data the moment a peer pairs.
+2. **Raw data**: whether microphone PCM and camera frames may cross the mesh at all. Recommend
+   yes only with `--raw`, only for audience `nodes:<named>` (never `paired` as a blanket), and
+   with the activity record naming the subscriber.
+3. **Remote topics and projects**: recommend the mapping above (an exposure audience `project:<id>`
+   makes the topic that project's; `paired` and `nodes:` make it the node bucket's). Alternative:
+   a dedicated `mesh` bucket readable only with an explicit grant.
+4. **Wire**: recommend dedicated frames 0x12/0x13 (binary chunks, no base64), as for inference.
+   Alternative: JSON `KernelMessage`s only, which caps streams at roughly a quarter of the link
+   and adds the base64 overhead.
+5. **Limits**: recommend defaults of 600 readings per minute and 4 MiB/s per subscriber, 16
+   remote subscriptions per peer, and the 30 s credit timeout above.
+
 ## Known gaps (2026-10-25, after B1 and B4)
 
 What the shipped broker does not do yet, what closes each gap, and where it is tracked.
@@ -319,7 +434,7 @@ acceptance test passes, and the row is then marked closed with the commit.
 
 | # | Gap | Risk today | Closes with | Card |
 |---|---|---|---|---|
-| 1 | Only native cogs get the socket; container and VM cogs cannot reach the broker | such cogs fall back to the ingest HTTP path only | socket bind-mounted into containers, uid recorded per route; VM routes via an authenticated relay or declared unsupported | `cogbus-gap-containers` (after gap 2) |
+| 1 | **Closed for the code** (`cogbus-gap-containers`, §4b). Containers on a Linux Docker or Podman engine get the bind-mounted socket and run as a recorded `uid:gid`; containers on macOS/Windows engines and Apple `container`, and VM or device routes, are declared unsupported with the reason in `cogbus list` | a container cog shares `container_uid` unless the daemon can allocate per-cog uids; a rootless or remapped engine needs `container_uid` set to the uid it presents; not exercised against a real engine in CI (the run line, image and identity are tested with a recording runner) | run one container cog on a Linux host with Docker (owner) | `cogbus-gap-containers` |
 | 2 | **Closed for the code** (`cogbus-gap-uid`, 0865db260 and the root-path proof below; §4a). A privileged daemon with a uid range runs each native cog as its own uid and the broker registers it. Proven as root on the aarch64 VM: a cog launched via setgroups/setgid/setuid as range uid 61000 was accepted, the same token from uid 61001 was refused `uid_mismatch` and logged. A user daemon cannot switch uids, so its cogs are marked `shared-uid` and `require_cog_uid` can refuse them | on a user daemon one cog that steals another's token can still act as it; that is the user daemon's limit, not a defect | the machine service runs privileged with `cogbus-isolation.json` (owner runs `scripts/cogbus-uid-setup.sh apply --yes`) | `cogbus-gap-uid` |
 | 3 | **Closed for the code** (same card). Proven as root on the VM: the socket came up `root:cogbus 0660`, cogs get `cogbus` as their only supplementary group, and a uid outside the group got `PermissionError` on connect | until the owner applies the setup on a real host the socket keeps the daemon's group (reported in `cogbus list`) | the same owner-run setup | `cogbus-gap-uid` |
 | 4 | **Closed** (`cogbus-gap-idle`, §11 "Idle connections and caps"). Ping after 60 s of silence, close 15 s later without any frame; 64 subscriptions per connection; 8 connections per instance. Tested with 120 ms timers on a real socket | none known; an old client without ping handling is closed after silence | n/a | `cogbus-gap-idle` |
@@ -368,7 +483,7 @@ choice is the B2 result.
 | B3 | governance actions, activity log, dashboard section | each subscribe and refusal is visible in the activity log and dashboard |
 | B4 | ingest compatibility listener and store sink | released cogs posting to the bridge reach the store unchanged; the Ventuno's `board-telemetry` reaches the store without port 80 |
 | B5 | blob store by hash, TTL and quota | a frame handle resolves locally and expires on TTL (done: §13) |
-| B6 | mesh topics as ADR-120 exposures, credits, raw-data refusal | a PG cog subscribes to a Ventuno reading topic; a raw IQ subscription from PG is refused unless exposed and requested |
+| B6 | mesh topics as ADR-120 exposures, credits, raw-data refusal | a PG cog subscribes to a Ventuno reading topic; a raw IQ subscription from PG is refused unless exposed and requested (planned in §14; waits on five owner decisions) |
 | S1 | service calls (section 12): `serve`, `call`, `reply`, deadlines, governance | two callers share one provider; an unknown topic, an undeclared caller, a cross-project caller and a late reply are refused; governance sees `cogbus.serve` and `cogbus.call` |
 
 B1–B4 are the plan's P2. B5–B6 are P6. S1 is the primitive the plan's P4 (`npu-infer`) needs.

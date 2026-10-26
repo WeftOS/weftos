@@ -62,6 +62,10 @@ pub struct CogbusAttach {
     pub refuse_shared: bool,
     /// Why the instance is not isolated, when it is not (shown, not parsed).
     pub note: Option<String>,
+    /// Container routes: the instance cannot see the host socket path, so
+    /// the host path is bind-mounted into it ([`HostContract::with_cogbus_mount`])
+    /// and `socket` is ignored.
+    pub mount: Option<String>,
 }
 
 impl CogbusAttach {
@@ -74,6 +78,7 @@ impl CogbusAttach {
             isolation: Isolation::SharedUid,
             refuse_shared: false,
             note: None,
+            mount: None,
         }
     }
 }
@@ -105,7 +110,8 @@ pub struct CogbusRegistration {
 /// The daemon's broker, behind the host.
 pub trait CogbusRegistrar: Send + Sync {
     /// The socket for cogs on `route`, or `None` when that route cannot
-    /// reach it (a container or VM has no view of the host socket in B1).
+    /// reach it (a VM, or a container engine that cannot share a host
+    /// socket: ADR-122 gap 1).
     fn attach(&self, route: &str) -> Option<CogbusAttach>;
     /// Accept the instance's token.
     fn register(&self, r: &CogbusRegistration) -> Result<(), String>;
@@ -187,7 +193,10 @@ impl WorkloadHostService {
                 ),
             ));
         }
-        let mut contract = contract.with_cogbus(a.socket);
+        let mut contract = match a.mount {
+            Some(host) => contract.with_cogbus_mount(host),
+            None => contract.with_cogbus(a.socket),
+        };
         if let Some(id) = a.identity {
             contract = contract.with_run_as(id);
         }

@@ -485,6 +485,7 @@ async fn build(
     let notices = wire_revocations(&ex, revocations.clone(), &anchors, mesh, dir);
     let serving = load_host_config(dir)?;
     let container = load_container(dir, &dir.join("workload-containers"))?;
+    let bus_container = crate::cogbus_serve::container_route(container.as_ref());
     // `describe` always answers with the facts the daemon re-probes.
     let (fm, fid) = (membership.clone(), id.clone());
     let facts: FactsSource = Arc::new(move || {
@@ -543,7 +544,7 @@ async fn build(
     local.set_node_admin(Arc::new(crate::dashboard_rpc::MeshAdmin));
     // ADR-122: the cog data plane broker beside the ingest bridge; down, cogs
     // are placed without WEFTOS_COGBUS.
-    if let Some(bus) = crate::cogbus_serve::install(broker, dir, store_sink).await {
+    if let Some(bus) = crate::cogbus_serve::install_with(broker, dir, store_sink, bus_container).await {
         local.set_cogbus(bus);
     }
     // ADR-122 gap 5: a cog the broker stopped on the bus is stopped here too.

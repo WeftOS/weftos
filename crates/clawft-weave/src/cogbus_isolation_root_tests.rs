@@ -67,7 +67,7 @@ async fn a_native_cog_under_a_range_uid_is_accepted_and_any_other_uid_is_refused
     let tmp = tempfile::tempdir().unwrap();
     std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
     let iso = Arc::new(Isolator::new(
-        IsolationConfig { require_cog_uid: true, uid_range: Some([61000, 61009]), group: DEFAULT_GROUP.into() },
+        IsolationConfig { require_cog_uid: true, uid_range: Some([61000, 61009]), group: DEFAULT_GROUP.into(), ..Default::default() },
         can_switch_uid(),
         Some(gid),
     ));

@@ -56,6 +56,8 @@ mod tests_cog_decl;
 #[cfg(test)]
 mod tests_container;
 #[cfg(test)]
+mod tests_container_cogbus;
+#[cfg(test)]
 mod tests_container_relay;
 #[cfg(test)]
 mod tests_fleet_inventory;

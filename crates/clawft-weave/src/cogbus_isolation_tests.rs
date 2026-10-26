@@ -9,7 +9,7 @@ use super::*;
 const GID: u32 = 4321;
 
 fn cfg(range: Option<[u32; 2]>, require: bool) -> IsolationConfig {
-    IsolationConfig { require_cog_uid: require, uid_range: range, group: "cogbus".into() }
+    IsolationConfig { require_cog_uid: require, uid_range: range, group: "cogbus".into(), ..Default::default() }
 }
 
 #[test]
@@ -185,4 +185,96 @@ async fn cogbus_list_shows_the_socket_and_marks_a_shared_uid_instance() {
     reg.revoke("shared-1");
     let doc = crate::cogbus_serve::list_json(Some(&rt));
     assert_eq!(doc["isolation"]["instances"].as_array().unwrap().len(), 0);
+}
+
+fn registrar(iso: Isolator, route: crate::cogbus_serve::ContainerRoute, gid: Option<u32>) -> crate::cogbus_serve::Registrar {
+    crate::cogbus_serve::Registrar::with_isolator(
+        crate::cogbus_serve::broker("n"),
+        Path::new("/run/weftos/node/cogbus.sock"),
+        Arc::new(iso),
+    )
+    .with_container(route, gid)
+}
+
+#[test]
+fn a_container_cog_gets_the_mounted_socket_the_share_uid_and_the_sockets_gid() {
+    use clawft_kernel::workload_ctl::host_cogbus::CogbusRegistrar;
+    use crate::cogbus_serve::ContainerRoute::Socket;
+    // A user daemon: no per-cog uid, so every container cog shares uid 65534
+    // and runs under the group that opens the socket.
+    let r = registrar(Isolator::new(IsolationConfig::default(), false, None), Socket, Some(20));
+    let a = r.attach("container").unwrap();
+    assert_eq!(a.mount.as_deref(), Some("/run/weftos/node/cogbus.sock"));
+    assert_eq!(a.socket, "/run/weftos/cogbus.sock");
+    assert_eq!((a.uid, a.isolation), (Some(65534), Isolation::SharedUid));
+    let id = a.identity.unwrap();
+    assert_eq!((id.uid, id.gid, id.groups), (65534, 20, vec![]));
+    assert!(a.note.unwrap().contains("share uid 65534"));
+    // The native route is untouched.
+    assert!(r.attach("native").unwrap().mount.is_none());
+}
+
+#[test]
+fn a_privileged_daemon_gives_container_cogs_their_own_uid_too() {
+    use clawft_kernel::workload_ctl::host_cogbus::CogbusRegistrar;
+    use crate::cogbus_serve::ContainerRoute::Socket;
+    let r = registrar(Isolator::new(cfg(Some([60000, 60009]), true), true, Some(GID)), Socket, Some(GID));
+    let (a, b) = (r.attach("container").unwrap(), r.attach("container").unwrap());
+    assert_eq!((a.uid, b.uid), (Some(60000), Some(60001)));
+    assert_eq!(a.isolation, Isolation::PerCogUid);
+    assert_eq!(a.identity.unwrap().gid, GID, "the group that owns the socket");
+    assert!(a.refuse_shared, "require_cog_uid is carried");
+}
+
+#[test]
+fn engines_that_cannot_share_a_host_socket_are_unsupported_and_say_why() {
+    use clawft_kernel::workload_ctl::host_cogbus::CogbusRegistrar;
+    use clawft_kernel::workload_runtime::{ContainerRuntimeConfig, container_cmd::Engine};
+    use crate::cogbus_serve::{ContainerRoute, container_route};
+    let mk = |e| ContainerRuntimeConfig::new(e, format!("debian@sha256:{}", "0".repeat(64)), std::path::PathBuf::from("/tmp/x"));
+    assert!(matches!(container_route(None), ContainerRoute::Off(w) if w.contains("no container adapter")));
+    assert!(matches!(container_route(Some(&mk(Engine::Apple))), ContainerRoute::Off(w) if w.contains("own VM")));
+    let docker = container_route(Some(&mk(Engine::Docker)));
+    if cfg!(target_os = "linux") {
+        assert_eq!(docker, ContainerRoute::Socket);
+    } else {
+        assert!(matches!(docker, ContainerRoute::Off(w) if w.contains("VM")));
+    }
+    // Off, or no known socket group: no attach, and the report says so.
+    let off = registrar(Isolator::shared(), ContainerRoute::Off("because".into()), Some(20));
+    assert!(off.attach("container").is_none());
+    let nogid = registrar(Isolator::shared(), ContainerRoute::Socket, None);
+    assert!(nogid.attach("container").is_none());
+    for r in ["vm", "seed", "nope"] {
+        assert!(off.attach(r).is_none(), "{r}");
+    }
+}
+
+#[test]
+fn the_report_lists_how_each_route_reaches_the_broker() {
+    use crate::cogbus_serve::ContainerRoute;
+    let iso = Isolator::new(IsolationConfig::default(), false, None);
+    let iso = Arc::new(iso);
+    let _ = crate::cogbus_serve::Registrar::with_isolator(crate::cogbus_serve::broker("n"), Path::new("/s"), iso.clone())
+        .with_container(ContainerRoute::Off("no container adapter on this node".into()), None);
+    let routes = iso.report()["routes"].clone();
+    assert!(routes["container"].as_str().unwrap().starts_with("unsupported: no container adapter"));
+    assert!(routes["vm"].as_str().unwrap().contains("ingest HTTP only"));
+    assert!(routes["seed"].as_str().unwrap().starts_with("unsupported"));
+    let on = Arc::new(Isolator::new(IsolationConfig::default(), false, None));
+    let _ = crate::cogbus_serve::Registrar::with_isolator(crate::cogbus_serve::broker("n"), Path::new("/s"), on.clone())
+        .with_container(ContainerRoute::Socket, Some(20));
+    assert!(on.report()["routes"]["container"].as_str().unwrap().contains("shared-uid 65534"));
+}
+
+#[test]
+fn container_uid_is_validated() {
+    for bad in [r#"{"container_uid": 0}"#, r#"{"uid_range": [60000, 60999], "container_uid": 60500}"#] {
+        let tmp = tempfile::tempdir().unwrap();
+        write(tmp.path(), bad, 0o600);
+        assert!(load(tmp.path()).is_err(), "{bad}");
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    write(tmp.path(), r#"{"container_uid": 100000}"#, 0o600);
+    assert_eq!(load(tmp.path()).unwrap().container_uid, 100000);
 }

@@ -30,7 +30,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use clawft_kernel::cog_ingest::InstanceBinding;
-use clawft_kernel::workload_ctl::host_cogbus::{CogbusAttach, CogbusRegistrar, CogbusRegistration};
+use clawft_kernel::workload_ctl::host_cogbus::{CogbusAttach, CogbusRegistrar, CogbusRegistration, Isolation};
+use clawft_kernel::workload_runtime::CogIdentity;
+use clawft_kernel::workload_runtime::host_contract::COGBUS_IN_CONTAINER;
 use clawft_rpc::Response;
 use serde_json::{Value, json};
 use weftos_cogbus::blob::{BlobConfig, BlobStore};
@@ -164,6 +166,16 @@ pub async fn start_with(
 /// the workload host, or `None` (logged) when the socket could not be bound.
 /// `sink` is the ingest bridge's store sink, told of every instance.
 pub async fn install(broker: Arc<Broker>, dir: &Path, sink: Option<Arc<StoreSink>>) -> Option<Arc<dyn CogbusRegistrar>> {
+    install_with(broker, dir, sink, container_route(None)).await
+}
+
+/// [`install`], with what the container adapter can do about the socket.
+pub async fn install_with(
+    broker: Arc<Broker>,
+    dir: &Path,
+    sink: Option<Arc<StoreSink>>,
+    container: ContainerRoute,
+) -> Option<Arc<dyn CogbusRegistrar>> {
     let cfg = crate::cogbus_isolation::load(dir).unwrap_or_else(|e| {
         tracing::warn!(error = %e, "cogbus-isolation.json ignored; cogs share the daemon's uid");
         Default::default()
@@ -182,6 +194,7 @@ pub async fn install(broker: Arc<Broker>, dir: &Path, sink: Option<Arc<StoreSink
                 tracing::warn!(error = %e, "npu service state will not appear in node facts");
             }
             let mut reg = Registrar::for_runtime(&rt);
+            reg = reg.with_container(container, Some(rt.socket_report().gid));
             if let Some(s) = sink {
                 reg = reg.with_store_sink(s);
             }
@@ -196,9 +209,41 @@ pub async fn install(broker: Arc<Broker>, dir: &Path, sink: Option<Arc<StoreSink
 }
 
 /// The broker behind the workload host.
+/// Whether containers can reach the broker, decided from the engine
+/// (ADR-122 gap 1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ContainerRoute {
+    /// A rootful Linux engine: the socket is bind-mounted.
+    Socket,
+    /// No way to share the host socket, and why.
+    Off(String),
+}
+
+/// What the container adapter, if any, can do about the broker socket.
+pub fn container_route(cfg: Option<&clawft_kernel::workload_runtime::ContainerRuntimeConfig>) -> ContainerRoute {
+    use clawft_kernel::workload_runtime::container_cmd::Engine;
+    match cfg {
+        None => ContainerRoute::Off("no container adapter on this node".into()),
+        Some(c) if c.engine == Engine::Apple => ContainerRoute::Off(
+            "Apple container runs each container in its own VM; a host socket cannot cross it".into(),
+        ),
+        Some(_) if !cfg!(target_os = "linux") => ContainerRoute::Off(
+            "the engine runs in a VM on this OS; a host socket cannot be bind-mounted into it".into(),
+        ),
+        Some(_) => ContainerRoute::Socket,
+    }
+}
+
+/// Why a VM or device route has no broker (ADR-122 gap 1): the socket is a
+/// host file and these routes are across a virtualisation or network
+/// boundary. Their cogs keep the ingest HTTP path.
+pub const VM_ROUTE_NOTE: &str = "unsupported: a VM or device has no view of the host socket (ingest HTTP only)";
+
 pub struct Registrar {
     broker: Arc<Broker>,
     socket: String,
+    container: ContainerRoute,
+    socket_gid: Option<u32>,
     uid: u32,
     isolator: Arc<Isolator>,
     sink: Option<Arc<StoreSink>>,
@@ -212,7 +257,13 @@ impl Registrar {
 
     /// Registrar over a running broker, sharing its isolation table.
     pub fn for_runtime(rt: &CogbusRuntime) -> Self {
-        Self::with_isolator(rt.broker.clone(), rt.socket(), rt.isolator.clone())
+        let gid = rt.socket_report().gid;
+        Self::with_isolator(rt.broker.clone(), rt.socket(), rt.isolator.clone()).with_container_gid(gid)
+    }
+
+    fn with_container_gid(mut self, gid: u32) -> Self {
+        self.socket_gid = Some(gid);
+        self.with_routes_noted()
     }
 
     /// Registrar allocating identities from `isolator`.
@@ -220,10 +271,67 @@ impl Registrar {
         Self {
             broker,
             socket: socket.to_string_lossy().into_owned(),
+            container: ContainerRoute::Off("no container adapter on this node".into()),
+            socket_gid: None,
             uid: nix::unistd::geteuid().as_raw(),
             isolator,
             sink: None,
         }
+        .with_routes_noted()
+    }
+
+    /// Containers reach the broker per `route`; `socket_gid` is the socket's
+    /// group, which a container cog without its own identity runs under.
+    pub fn with_container(mut self, route: ContainerRoute, socket_gid: Option<u32>) -> Self {
+        self.container = route;
+        self.socket_gid = socket_gid;
+        self.with_routes_noted()
+    }
+
+    fn with_routes_noted(self) -> Self {
+        let how = match (&self.container, self.socket_gid) {
+            (ContainerRoute::Socket, Some(_)) => format!(
+                "bind-mounted socket; {}",
+                if self.isolator.blocker().is_none() {
+                    "per-cog uid".to_string()
+                } else {
+                    format!("shared-uid {} ({})", self.isolator.container_uid(), self.isolator.blocker().unwrap_or_default())
+                }
+            ),
+            (ContainerRoute::Socket, None) => "unsupported: the socket's group is unknown".into(),
+            (ContainerRoute::Off(why), _) => format!("unsupported: {why}"),
+        };
+        self.isolator.set_route("container", how);
+        self.isolator.set_route("vm", VM_ROUTE_NOTE);
+        self.isolator.set_route("seed", VM_ROUTE_NOTE);
+        self
+    }
+
+    /// A container cog: the socket is mounted, the cog runs as a uid the
+    /// broker records and a gid that may open the socket.
+    fn attach_container(&self) -> Option<CogbusAttach> {
+        let (ContainerRoute::Socket, Some(sock_gid)) = (&self.container, self.socket_gid) else {
+            return None;
+        };
+        let plan = self.isolator.plan();
+        let (identity, isolation, note) = match plan.identity {
+            // A rootful engine honours the allocated uid: its own per cog.
+            Some(id) => (CogIdentity { gid: sock_gid, groups: Vec::new(), ..id }, plan.isolation, plan.note),
+            None => (
+                CogIdentity { uid: self.isolator.container_uid(), gid: sock_gid, groups: Vec::new() },
+                Isolation::SharedUid,
+                Some(format!("container cogs share uid {} ({})", self.isolator.container_uid(), plan.note.unwrap_or_default())),
+            ),
+        };
+        Some(CogbusAttach {
+            socket: COGBUS_IN_CONTAINER.to_string(),
+            uid: Some(identity.uid),
+            identity: Some(identity),
+            isolation,
+            refuse_shared: self.isolator.require_cog_uid(),
+            note,
+            mount: Some(self.socket.clone()),
+        })
     }
 
     /// Tell `sink` where each registered instance's `store.vector` goes.
@@ -255,6 +363,9 @@ pub fn spec_of(r: &CogbusRegistration) -> InstanceSpec {
 
 impl CogbusRegistrar for Registrar {
     fn attach(&self, route: &str) -> Option<CogbusAttach> {
+        if route == "container" {
+            return self.attach_container();
+        }
         if route != "native" {
             return None;
         }
@@ -266,6 +377,7 @@ impl CogbusRegistrar for Registrar {
             isolation: plan.isolation,
             refuse_shared: self.isolator.require_cog_uid(),
             note: plan.note,
+            mount: None,
         })
     }
 
