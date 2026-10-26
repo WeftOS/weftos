@@ -97,6 +97,7 @@ impl WorkloadHostService {
                         refuse(RefusalCode::Runtime, format!("ingest bridge: {e}"))
                     })?;
                 }
+                self.device_recheck(&iid)?;
                 self.bus_on(p.cogbus.as_ref())?;
                 let r = host.start(&p.handle).await.map(|_| json!({"started": iid}));
                 if r.is_ok() {

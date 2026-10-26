@@ -81,6 +81,28 @@ fn input_errors_and_limits() {
 }
 
 #[test]
+fn device_selectors_cannot_name_files_or_nodes_no_cog_may_own() {
+    // A socket must live in a system runtime directory: no /etc/passwd, no relative or traversing path.
+    for p in ["/etc/passwd", "/tmp/x.sock", "/run", "/run/../etc/passwd", "run/x.sock", "/runx/a.sock"] {
+        assert!(err(&format!("[[devices]]\nsocket = \"{p}\"\n")).contains("socket"), "{p}");
+    }
+    // The container runtimes and systemd are not cog devices even under /run.
+    for p in ["/run/docker.sock", "/var/run/docker.sock", "/run/containerd/containerd.sock", "/run/systemd/private", "/run/dbus/system_bus_socket"] {
+        assert!(err(&format!("[[devices]]\nsocket = \"{p}\"\n")).contains("no cog may own"), "{p}");
+    }
+    assert!(parse("[[devices]]\nsocket = \"/run/arduino-router.sock\"\n").is_ok());
+    // Memory, disks, terminals and loop devices, by name or through a glob that could name them.
+    for p in ["/dev/mem", "/dev/kmem", "/dev/port", "/dev/sda", "/dev/sda*", "/dev/nvme0n1", "/dev/mmcblk0", "/dev/tty", "/dev/console", "/dev/loop0", "/dev/loop*", "/dev/dm-0", "/dev/ptmx"] {
+        assert!(err(&format!("[[devices]]\npath = \"{p}\"\n")).contains("no cog may own"), "{p}");
+    }
+    // A wildcard that is too broad to be a selector.
+    for p in ["/dev/*", "/dev/s*", "/dev/??"] {
+        assert!(err(&format!("[[devices]]\npath = \"{p}\"\n")).contains("literal"), "{p}");
+    }
+    assert!(parse("[[devices]]\npath = \"/dev/video*\"\n[[devices]]\npath = \"/dev/snd/pcmC*D*c\"\n").is_ok());
+}
+
+#[test]
 fn netdev_devices_parse_and_are_checked() {
     use super::cog_devices::DeviceSel;
     let s = parse("[[devices]]\nnetdev = \"can*\"\n[[devices]]\npath = \"/dev/video0\"\n").unwrap();

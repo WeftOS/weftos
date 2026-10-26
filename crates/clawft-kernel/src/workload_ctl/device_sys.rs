@@ -3,55 +3,10 @@
 
 use std::path::Path;
 
-use super::device_owner::{DeviceApplier, DeviceResolver, GrantOp};
+pub use crate::workload_runtime::cog_devices::{glob_match, globs_intersect, wild};
 
-/// True if `s` holds a glob character.
-pub(super) fn wild(s: &str) -> bool {
-    s.contains(['*', '?'])
-}
-
-/// True if glob `pattern` (`*` any run, `?` one char) matches all of `text`.
-pub fn glob_match(pattern: &str, text: &str) -> bool {
-    let (p, t) = (pattern.as_bytes(), text.as_bytes());
-    let (mut i, mut j, mut star, mut mark) = (0, 0, None, 0);
-    while j < t.len() {
-        if i < p.len() && (p[i] == b'?' || p[i] == t[j]) {
-            i += 1;
-            j += 1;
-        } else if i < p.len() && p[i] == b'*' {
-            star = Some(i);
-            mark = j;
-            i += 1;
-        } else if let Some(s) = star {
-            i = s + 1;
-            mark += 1;
-            j = mark;
-        } else {
-            return false;
-        }
-    }
-    p[i..].iter().all(|c| *c == b'*')
-}
-
-/// True if some string matches both globs.
-pub fn globs_intersect(a: &str, b: &str) -> bool {
-    fn go(a: &[u8], b: &[u8], seen: &mut Vec<Vec<Option<bool>>>, i: usize, j: usize) -> bool {
-        if let Some(r) = seen[i][j] {
-            return r;
-        }
-        let r = match (a.get(i), b.get(j)) {
-            (None, None) => true,
-            (Some(b'*'), _) => go(a, b, seen, i + 1, j) || (j < b.len() && go(a, b, seen, i, j + 1)),
-            (_, Some(b'*')) => go(a, b, seen, i, j + 1) || (i < a.len() && go(a, b, seen, i + 1, j)),
-            (Some(x), Some(y)) => (*x == b'?' || *y == b'?' || x == y) && go(a, b, seen, i + 1, j + 1),
-            _ => false,
-        };
-        seen[i][j] = Some(r);
-        r
-    }
-    let mut seen = vec![vec![None; b.len() + 1]; a.len() + 1];
-    go(a.as_bytes(), b.as_bytes(), &mut seen, 0, 0)
-}
+use super::device_node::{NodeId, node_id};
+use super::device_owner::DeviceResolver;
 
 /// The real node: the filesystem and sysfs.
 pub struct SysResolver;
@@ -59,6 +14,14 @@ pub struct SysResolver;
 impl DeviceResolver for SysResolver {
     fn stat(&self, path: &str) -> Option<(u32, u32, u32)> {
         stat_owner(path)
+    }
+
+    fn canonical(&self, path: &str) -> String {
+        std::fs::canonicalize(path).ok().and_then(|p| p.to_str().map(String::from)).unwrap_or_else(|| path.to_string())
+    }
+
+    fn node_id(&self, path: &str) -> Option<NodeId> {
+        node_id(path)
     }
 
     fn netdevs(&self, pattern: &str) -> Vec<String> {
@@ -131,23 +94,6 @@ impl DeviceResolver for SysResolver {
         out.sort();
         out.dedup();
         out
-    }
-}
-
-/// `chown` and `chmod` through libc; needs root or `CAP_CHOWN`.
-pub struct SystemApplier;
-
-impl DeviceApplier for SystemApplier {
-    fn apply(&self, ops: &[GrantOp]) -> Result<(), String> {
-        for GrantOp::Chown { path, uid, gid, mode } in ops {
-            let c = std::ffi::CString::new(path.as_str()).map_err(|e| e.to_string())?;
-            // SAFETY: `c` is a NUL-terminated path that outlives both calls.
-            let (a, b) = unsafe { (libc::chown(c.as_ptr(), *uid, *gid), libc::chmod(c.as_ptr(), *mode as libc::mode_t)) };
-            if a != 0 || b != 0 {
-                return Err(format!("{path}: {}", std::io::Error::last_os_error()));
-            }
-        }
-        Ok(())
     }
 }
 

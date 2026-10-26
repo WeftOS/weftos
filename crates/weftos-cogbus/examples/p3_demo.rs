@@ -117,21 +117,18 @@ async fn main() {
             let dump = std::env::var("DUMP_PCM").ok().filter(|f| !f.is_empty());
             let mut pcm = Vec::new();
             while Instant::now() < end {
-                match tokio::time::timeout(Duration::from_millis(500), r.next()).await {
-                    Ok(Some(rec)) => {
-                        n += 1;
-                        first.get_or_insert(rec.seq);
-                        bytes_ok &= rec.data.len() == 640;
-                        let l = (now_ns().saturating_sub(rec.w_ns)) as f64 / 1e6;
-                        lat_sum += l;
-                        lat_max = lat_max.max(l);
-                        mono &= rec.t_ns >= last_t;
-                        last_t = rec.t_ns;
-                        if dump.is_some() {
-                            pcm.extend_from_slice(&rec.data);
-                        }
+                if let Ok(Some(rec)) = tokio::time::timeout(Duration::from_millis(500), r.next()).await {
+                    n += 1;
+                    first.get_or_insert(rec.seq);
+                    bytes_ok &= rec.data.len() == 640;
+                    let l = (now_ns().saturating_sub(rec.w_ns)) as f64 / 1e6;
+                    lat_sum += l;
+                    lat_max = lat_max.max(l);
+                    mono &= rec.t_ns >= last_t;
+                    last_t = rec.t_ns;
+                    if dump.is_some() {
+                        pcm.extend_from_slice(&rec.data);
                     }
-                    _ => {}
                 }
             }
             if let Some(f) = dump {
