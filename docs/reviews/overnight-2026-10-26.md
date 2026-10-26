@@ -400,3 +400,74 @@ The four follow-ups are fixed as described. The replay protection is real agains
 alone, and its limits are those of the chain's own durability and rollback resistance (A1, A2). The
 transient and retry change is correct except for the gate's fail-closed denial (B1). A1 and A2 are the
 ones I would close before relying on the generation as a security control; A4 and A5 are cheap hardening.
+
+---
+
+## Re-check: cross-project instance ids, `wt/native-restart` a8ab9ad35 (2026-10-26)
+
+Tests run (foreground): `tests_restart` 19 of 19 and `tests_native` 9 of 9 pass, including the four new
+project tests (restart then another project starts with no data and leaves the first project's directory
+alone; same project keeps its data; unload for A then place for B starts empty; a restart restores each
+project into its own instance).
+
+**What is fixed.** The owner key is `"project=<project_id or ->\ncontroller=<requester>"`, folded into the
+native `instance_id` hash. The caller does not pick it freely:
+- `requester` is the authenticated controller (signature and allow-list in `handle`), or, on restore, the
+  journal's signed field re-checked against the live policy.
+- `project_id` comes from the body, but a 26-character id is required and, where the ingest bridge is
+  wired, `authorize` ties it to what that controller may place.
+- The encoding is injective: a project id is exactly 26 characters and can never equal `-`, and the
+  requester is a node-id token with no newline, so two different (project, controller) pairs never produce
+  the same bytes.
+- The owner survives the builders (`with_cogbus`, `with_ingest_*`, `prepare` all take `self` and
+  return it), so it reaches `cfg.host` on both a place and a restore.
+- The container adapter calls the same `instance_id` and `--tmpfs /data`, so its container names inherit
+  the owner and there is no host `data/` to leak. `logical` ids are `project-<project_id>` already.
+
+**C1 (low-medium): the id is only 32 bits of hash, so an attacker can grind a collision.** The id is
+`<cog>-<first 8 hex of the blake3>-<node>`. Everything in the hash except the victim's own project and
+controller is known or chosen by an attacker who is an authorised controller: the owner string (their own),
+`args` (a free plain value if the cog declares any `value_args`; otherwise repeats and order of flags),
+`mode`, `csi_port`. Concrete case, by reading: the attacker computes the victim's id offline (the package
+and node are public to a controller, and the victim's project and controller ids are visible in listings),
+then searches over the free fields for an input whose hash has the same 8 hex digits. About 2^32 blake3
+calls, minutes on one core. They place the same cog with those arguments. If the victim's instance is not
+currently loaded in this adapter (unloaded with its directory kept, restore pending or failed), `stage()`
+accepts `root/<iid>` and keeps its `data/`, so the attacker's instance of the same cog reads the victim's
+state and sends it to the attacker's project. While the victim's instance is loaded the adapter answers
+"already loaded", which blocks the case. Cogs with no value argument still leave `csi_port` and the
+interval seconds, which is of the order of the 2^32 needed. Not run.
+Fix direction (either): put the full owner hash in the path (`root/<64-hex owner hash>/<iid>`), or keep the
+id and write an owner marker (full hash) into the instance directory that `stage()` compares, moving the
+old `data/` aside on a mismatch. A 32-hex (128-bit) id would also do. The marker also covers the unowned
+path.
+
+**C2 (low): the unowned path (tests, `weaver run`, `examples/cog_adapter_run`).** `owner = None` leaves the
+id exactly as before, so unowned runs of the same package and arguments share a directory among
+themselves (a local, single-operator path). An unowned id never equals an owned one except by the
+collision in C1, so it cannot reach an owned directory directly. Every production placement goes through
+`WorkloadHostService::place`, which always sets the owner; the other `HostContract::new` / `default_feed`
+callers in `plane_seed`, `infer_wire` and `project_supervisor` build configs for the Seed, inference and
+logical runtimes, not the native adapter.
+
+**C3 (migration, low): ids change for every existing owned placement.** The old directories stay on disk
+under their old names, so a cog's `data/` from before this commit is orphaned (no migration, no cleanup).
+Journal entries written before it are keyed by the old instance id, so after a restore the old key
+lingers beside the new one; on the next starts the stale entry fails with "already loaded" (counted as a
+transient failure) until it is given up after five starts. In `restore_instances`, `set_failures` and
+`set_desired` use the entry's old key, not the new instance id, in that case. Matters only for nodes that
+ran 169e56f20 or b97a41e98; say so in the release notes or add a one-time move of `<old id>/data`.
+
+**C4 (design note): the controller is part of the key.** A controller key rotation gives the project a
+new node id, hence a new instance directory; the old `data/` is not reachable. Acceptable, but it means
+"same project, same data" holds only while the controller is unchanged.
+
+**C5 (Seed adapter, by design, low).** `seed.rs` ids are `<cog>-seed-<node>` with no owner. The device
+holds one installed copy of a cog and its state, and `load` attaches to an installed copy at the same
+pin. A second project placing the same cog on the same Seed after the first unloaded (without
+uninstalling) sees the device's configuration and data. This matches "one Seed, one mesh" (ADR-106) but is
+not project-scoped; worth a line in the ADR.
+
+Verdict: the leak I found (same package, another project, inherited `data/`) is fixed for the native and
+container adapters and nobody can choose the owner key; the residual is the truncated id (C1), which an
+authorised controller can grind into a collision when the victim's instance is not loaded.
