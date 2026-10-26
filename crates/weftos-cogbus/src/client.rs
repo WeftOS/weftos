@@ -19,6 +19,9 @@ use std::os::fd::OwnedFd;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use clawft_types::cog_topics::BlobHandle;
 
 use serde_json::Value;
 use tokio::net::UnixStream;
@@ -377,6 +380,68 @@ impl Client {
             })
             .await?;
         Ok(v["body"].clone())
+    }
+}
+
+impl Client {
+    /// Store `bytes` in the node's content store (B5) and get the `blob.v1`
+    /// handle. The instance needs an output of class `blob` or schema
+    /// `blob.v1`. `ttl` is the store's default when `None`.
+    pub async fn put_blob(
+        &self,
+        media_type: &str,
+        bytes: &[u8],
+        ttl: Option<Duration>,
+    ) -> Result<BlobHandle, ClientError> {
+        use base64::Engine;
+        let begin = self
+            .call(|id| Request::BlobBegin {
+                id,
+                media_type: media_type.into(),
+                size: bytes.len() as u64,
+                ttl_ms: ttl.map(|t| t.as_millis().min(u64::MAX as u128) as u64),
+            })
+            .await?;
+        let upload = begin["upload"].as_u64().ok_or_else(|| ClientError::Protocol("blob_begin without upload".into()))?;
+        let step = begin["chunk"].as_u64().unwrap_or(32 * 1024).clamp(1, 32 * 1024) as usize;
+        let mut offset = 0usize;
+        let mut chunks = bytes.chunks(step).peekable();
+        let mut handle = None;
+        while let Some(c) = chunks.next() {
+            let last = chunks.peek().is_none();
+            let data = base64::engine::general_purpose::STANDARD.encode(c);
+            let ans = self
+                .call(|id| Request::BlobChunk { id, upload, offset: offset as u64, data, last })
+                .await?;
+            offset += c.len();
+            if last {
+                handle = Some(
+                    serde_json::from_value(ans["handle"].clone())
+                        .map_err(|e| ClientError::Protocol(format!("blob handle: {e}")))?,
+                );
+            }
+        }
+        handle.ok_or_else(|| ClientError::Protocol("an empty blob".into()))
+    }
+
+    /// Read the whole blob `handle` names.
+    pub async fn get_blob(&self, handle: &BlobHandle) -> Result<Vec<u8>, ClientError> {
+        use base64::Engine;
+        let mut out = Vec::with_capacity(handle.size.min(1 << 28) as usize);
+        loop {
+            let offset = out.len() as u64;
+            let ans = self
+                .call(|id| Request::BlobGet { id, hash: handle.hash.clone(), offset, len: None })
+                .await?;
+            let data = ans["data"].as_str().unwrap_or_default();
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(data)
+                .map_err(|e| ClientError::Protocol(format!("blob data: {e}")))?;
+            out.extend_from_slice(&bytes);
+            if ans["eof"].as_bool().unwrap_or(true) || bytes.is_empty() {
+                return Ok(out);
+            }
+        }
     }
 }
 

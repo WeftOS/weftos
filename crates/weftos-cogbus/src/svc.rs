@@ -242,6 +242,10 @@ impl Broker {
         let Some(server) = g.svc.servers.get(&key) else {
             return Err(no(bad(ErrorCode::Unavailable, format!("nothing serves {topic}"))));
         };
+        let handles = self.handles_in(&body);
+        if !handles.is_empty() {
+            self.grant_handles(&handles, me, &server.instance);
+        }
         let delivery = CallDelivery {
             call,
             topic: topic.to_string(),
@@ -301,6 +305,12 @@ impl Broker {
                     fail_call(&p, ErrorCode::TooLarge, "the reply is over the body limit");
                     let m = format!("reply of {size} bytes exceeds {MAX_BODY}");
                     return Err(no(bad(ErrorCode::TooLarge, m)));
+                }
+                // A reply that carries the provider's handles hands them to
+                // the caller (B5: this is how a result over 64 KiB travels).
+                let handles = self.handles_in(&body);
+                if !handles.is_empty() {
+                    self.grant_handles(&handles, me, &p.caller);
                 }
                 Event::Ok {
                     id: p.caller_id,

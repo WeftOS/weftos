@@ -73,6 +73,13 @@ pub fn render_isolation(v: &Value) -> String {
         let grp = if v["socket_group_applied"] == true { "group cogbus".to_string() } else { format!("daemon's group ({})", cell(v, "socket_note")) };
         out += &format!("socket mode {} uid {} gid {}, {grp}\n", cell(v, "socket_mode"), cell(v, "socket_uid"), cell(v, "socket_gid"));
     }
+    let blobs = &v["blobs"];
+    if blobs.is_object() {
+        out += &format!(
+            "blob store: {} blobs, {} of {} bytes ({} reserved)\n",
+            cell(blobs, "blobs"), cell(blobs, "bytes"), cell(blobs, "quota"), cell(blobs, "reserved")
+        );
+    }
     let iso = &v["isolation"];
     if iso.is_object() {
         out += &format!("cog uids: {}", cell(iso, "mode"));

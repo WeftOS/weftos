@@ -44,6 +44,8 @@ mod sink;
 mod rows;
 #[path = "svc.rs"]
 mod svc;
+#[path = "blobops.rs"]
+mod blobops;
 
 struct Instance {
     spec: InstanceSpec,
@@ -109,6 +111,7 @@ pub struct Broker {
     state: Mutex<State>,
     pub(crate) streams: crate::stream::Streams,
     pub(crate) ext: Ext,
+    pub(crate) blobs: Option<Arc<crate::blob::BlobStore>>,
 }
 
 impl Broker {
@@ -119,7 +122,20 @@ impl Broker {
             state: Mutex::new(State::default()),
             streams: crate::stream::Streams::new(Default::default()),
             ext: Ext::default(),
+            blobs: None,
         }
+    }
+
+    /// Serve blob requests from `store` (B5). Without it they are
+    /// `unsupported`.
+    pub fn with_blobs(mut self, store: Arc<crate::blob::BlobStore>) -> Self {
+        self.blobs = Some(store);
+        self
+    }
+
+    /// The content store, if the node has one.
+    pub fn blob_store(&self) -> Option<&Arc<crate::blob::BlobStore>> {
+        self.blobs.as_ref()
     }
 
     /// The node id stamped on deliveries.
@@ -179,6 +195,9 @@ impl Broker {
             }
         }
         g.svc.drop_instance(instance_id);
+        if let Some(b) = &self.blobs {
+            b.drop_uploads(instance_id);
+        }
         let _ = inst.revoked.send(true);
         true
     }
@@ -351,6 +370,25 @@ impl Broker {
             let mut req = BusRequest::new(BusAction::Publish, me, &cog, project.as_deref());
             req.topic_project = g.topics.get(&key).and_then(|t| t.project_id.as_deref());
             self.ext.gate(&req.on(&topic, schema))?;
+        }
+        let handles = self.handles_in(&body);
+        if !handles.is_empty() {
+            // A handle published is a handle handed to the readers this
+            // reading will reach.
+            let readers: Vec<String> = g
+                .subs
+                .values()
+                .filter(|x| {
+                    x.kind == kind
+                        && x.source.as_deref().is_none_or(|src| src == source_id)
+                        && x.schema == schema
+                        && (x.project_id == project || granted(&x.also, &project, source_id))
+                })
+                .map(|x| x.instance.clone())
+                .collect();
+            for to in readers {
+                self.grant_handles(&handles, me, &to);
+            }
         }
         let r = Reading {
             kind: kind.to_string(),

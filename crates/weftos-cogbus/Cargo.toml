@@ -15,6 +15,7 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 blake3 = { workspace = true }
+base64 = "0.22"
 tokio = { workspace = true }
 
 [dev-dependencies]

@@ -70,6 +70,7 @@ Raw frames stay on the node. The handle names bytes in its content store.
 | `width`, `height` | u32 | 1..=16384 |
 | `pixel_format` | string | `nv12`, `yuyv`, `rgb24`, `bgr24`, `gray8`, `mjpeg` |
 | `ttl_ms` | u32 | 1..=3600000, how long the owner keeps the bytes |
+| `blob` | `blob.v1` | optional: the frame in the node's blob store; its `hash` must equal `hash`. Carried in the reading, it hands read access to the readers |
 
 ### `detections.v1` (reading)
 
@@ -167,6 +168,20 @@ sketch's return value (`{"result": ...}`) or an error.
 |-------|------|------|
 | `method` | string | a method the sketch provides, `[a-z][a-z0-9_.]*`, at most 64 chars |
 | `params` | array | positional numbers, booleans and strings, at most 8; default empty |
+
+### `blob.v1` (handle)
+
+A handle to bytes in the node's content store (ADR-122 section 3, B5). It is a reading body
+on its own, or nested anywhere in a reading, a service call or a service reply: a payload
+over the 64 KiB body limit travels as a handle and the receiver fetches the bytes from the
+broker (`blob_get`). It carries no common fields.
+
+| Field | Type | Rule |
+|-------|------|------|
+| `hash` | string | BLAKE3 of the bytes, 64 lower-case hex |
+| `size` | u64 | at least 1 |
+| `media_type` | string | `type/subtype`, lower-case, e.g. `image/png` |
+| `expires_ms` | u64 | Unix milliseconds after which the store may drop the bytes |
 
 ## Using it
 

@@ -207,6 +207,48 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+    /// Start a blob upload to the node's content store (ADR-122 B5). The
+    /// answer carries the `upload` id and the largest `chunk` size.
+    BlobBegin {
+        /// Correlation id.
+        id: u64,
+        /// `type/subtype`.
+        media_type: String,
+        /// Total bytes that will follow.
+        size: u64,
+        /// Time to keep it, milliseconds; the store's default when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ttl_ms: Option<u64>,
+    },
+    /// The next slice of an upload, strictly in order. With `last`, the
+    /// upload must be complete and the answer carries the `blob.v1` handle.
+    BlobChunk {
+        /// Correlation id.
+        id: u64,
+        /// Upload id from [`Request::BlobBegin`].
+        upload: u64,
+        /// Bytes already sent.
+        offset: u64,
+        /// The slice, standard base64, at most 32 KiB decoded.
+        data: String,
+        /// This is the final slice.
+        #[serde(default)]
+        last: bool,
+    },
+    /// Read a slice of a blob; the answer carries the handle, `data`
+    /// (base64) and `eof`.
+    BlobGet {
+        /// Correlation id.
+        id: u64,
+        /// BLAKE3 hex from the handle.
+        hash: String,
+        /// First byte wanted.
+        #[serde(default)]
+        offset: u64,
+        /// Most bytes wanted (at most 32 KiB); 32 KiB when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        len: Option<u32>,
+    },
 }
 
 /// Longest time a call may be given.
@@ -229,7 +271,10 @@ impl Request {
             | Self::StreamDemote { id, .. }
             | Self::Serve { id, .. }
             | Self::Call { id, .. }
-            | Self::Reply { id, .. } => *id,
+            | Self::Reply { id, .. }
+            | Self::BlobBegin { id, .. }
+            | Self::BlobChunk { id, .. }
+            | Self::BlobGet { id, .. } => *id,
         }
     }
 }
@@ -271,6 +316,10 @@ pub enum ErrorCode {
     Busy,
     /// The provider answered the call with an error.
     ServiceError,
+    /// No such blob (never stored, expired, or not visible to you).
+    NotFound,
+    /// The content store is full for this node or this instance.
+    QuotaExceeded,
     /// A code this client does not know.
     #[serde(other)]
     Unknown,

@@ -501,7 +501,7 @@ async fn build(
         Arc::new(crate::cog_ingest_serve::IdentityDirectory);
     // ADR-122 section 9: the broker exists first, so the bridge publishes on
     // it and its store sink serves cogs that never touch the HTTP port.
-    let broker = crate::cogbus_serve::broker_with(&id, crate::cogbus_serve::hooks(dir, bus_rules));
+    let broker = crate::cogbus_serve::broker_in(&id, crate::cogbus_serve::hooks(dir, bus_rules), dir);
     let ingest = match crate::cog_ingest_serve::load_config(dir) {
         Ok(cfg) => match crate::cog_ingest_serve::start_on_bus(
             &cfg,

@@ -27,6 +27,10 @@ pub enum BusAction {
     Serve,
     /// One call of a service.
     Call,
+    /// Starting a blob upload (B5).
+    BlobPut,
+    /// Starting a blob read (B5).
+    BlobGet,
 }
 
 impl BusAction {
@@ -39,6 +43,8 @@ impl BusAction {
             Self::Unsubscribe => "cogbus.unsubscribe",
             Self::Serve => "cogbus.serve",
             Self::Call => "cogbus.call",
+            Self::BlobPut => "cogbus.blob.put",
+            Self::BlobGet => "cogbus.blob.get",
         }
     }
 }

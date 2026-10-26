@@ -76,11 +76,11 @@ fn readme_names_every_schema() {
 }
 
 #[test]
-fn registry_has_thirteen_unique_ids() {
+fn registry_has_fourteen_unique_ids() {
     let mut ids = SCHEMA_IDS.to_vec();
     ids.sort_unstable();
     ids.dedup();
-    assert_eq!(ids.len(), 13);
+    assert_eq!(ids.len(), 14);
     assert!(is_registered("senml.v1") && !is_registered("senml.v2"));
 }
 
@@ -119,4 +119,24 @@ fn store_vector_is_the_ingest_body_with_an_envelope() {
     // One value past f32 is refused even though it is a finite f64.
     msg["vectors"][0][1][0] = json!(1.0e39);
     assert!(check_message("store.vector.v1", &msg).is_err());
+}
+
+#[test]
+fn handles_are_found_nested_in_bodies() {
+    let h = |c: char| json!({"hash": c.to_string().repeat(64), "size": 9, "media_type": "image/png", "expires_ms": 5});
+    let body = json!({"text": "done", "images": [h('a'), {"deep": h('b')}], "bad": {"hash": "zz", "media_type": "image/png"}});
+    let found = find_handles(&body);
+    assert_eq!(found.len(), 2);
+    assert_eq!(found[0].hash, "a".repeat(64));
+    assert!(find_handles(&json!({"hash": "a".repeat(64), "media_type": "IMAGE"})).is_empty());
+}
+
+#[test]
+fn media_types() {
+    for ok in ["image/png", "application/octet-stream", "audio/l16", "image/svg+xml"] {
+        assert!(valid_media_type(ok), "{ok}");
+    }
+    for bad in ["", "image", "/png", "Image/png", "image/", "image/p ng"] {
+        assert!(!valid_media_type(bad), "{bad}");
+    }
 }

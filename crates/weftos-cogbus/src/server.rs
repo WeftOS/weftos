@@ -40,6 +40,8 @@ pub const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 /// Time a started frame (read or write) has to complete.
 pub const FRAME_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// How often expired blobs are dropped.
+pub const BLOB_SWEEP: Duration = Duration::from_secs(30);
 /// How often calls past their deadline are answered with a timeout.
 pub const CALL_SWEEP: Duration = Duration::from_millis(50);
 
@@ -140,10 +142,15 @@ pub async fn serve_with(
     let task = tokio::spawn(async move {
         let mut sweep = tokio::time::interval(CALL_SWEEP);
         sweep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut blob_sweep = tokio::time::interval(BLOB_SWEEP);
+        blob_sweep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tokio::select! {
                 _ = sweep.tick() => {
                     broker.expire_calls();
+                }
+                _ = blob_sweep.tick() => {
+                    broker.sweep_blobs();
                 }
                 accepted = listener.accept() => match accepted {
                     Ok((stream, _)) => {
@@ -384,6 +391,9 @@ fn handle(broker: &Broker, s: &mut Session, req: Request) -> Option<Event> {
         } => broker
             .reply_call(s, call, error.map_or(Ok(body), Err))
             .map(|_| json!({})),
+        Request::BlobBegin { media_type, size, ttl_ms, .. } => broker.blob_begin(s, &media_type, size, ttl_ms),
+        Request::BlobChunk { upload, offset, data, last, .. } => broker.blob_chunk(s, upload, offset, &data, last),
+        Request::BlobGet { hash, offset, len, .. } => broker.blob_get(s, &hash, offset, len),
         Request::StreamOpen { .. }
         | Request::StreamSubscribe { .. }
         | Request::StreamDemote { .. } => Err(BusError::new(ErrorCode::BadRequest, "stream request outside the stream handler")),

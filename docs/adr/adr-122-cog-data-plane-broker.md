@@ -3,7 +3,7 @@
 - **Status**: Accepted (2026-10-25: the owner asked to start B1, taking the recommended
   answer to each open question; see "Decisions on the open questions"). Card
   `venq-cog-broker-adr`; implementation on cards `venq-cogbus-b1` .. `b6`.
-- **Updated**: 2026-10-25 (B1 and B4 shipped; known gaps recorded with closing cards; section 12 adds service calls for the NPU service, card `d9272837`; gaps 2 and 3 closed in code, pending the owner-run host setup)
+- **Updated**: 2026-10-25 (B1 and B4 shipped; known gaps recorded with closing cards; section 12 adds service calls for the NPU service, card `d9272837`; gaps 2 and 3 closed in code, pending the owner-run host setup; B5 blob store, section 13)
 - **Deciders**: owner
 - **Builds on**: ADR-099 (governed placement, node facts), ADR-100 (cog workload kind),
   ADR-120 (exposures: announce, see, switch off, log), ADR-114 (`weftos://` names),
@@ -287,7 +287,7 @@ before any `serve` or `call` is read.
 - **Failure.** A provider connection that closes, or an instance that is revoked, fails
   its pending calls with `unavailable`; a call to a topic nobody serves is `unavailable`
   at once. A provider `error` reaches the caller as `service_error` with the provider's
-  message. A body over 64 KiB, either way, is `too_large` (larger input is a blob, B5).
+  message. A body over 64 KiB, either way, is `too_large`; larger input or output is a blob handle (§13).
 - **Limits.** 16 calls pending per caller instance and 64 per service (`busy`), so one
   caller cannot fill the provider's queue. The provider's own queue and priorities are its
   business; the call body carries them (`infer.v1` has `priority`).
@@ -297,8 +297,40 @@ before any `serve` or `call` is read.
   not ask governance, since the call they answer was permitted. `cogbus-policy.json`
   deny rules and cross-project grants name the two actions like the others.
 - **Not carried.** Streaming replies (a long generation) and cancellation. A reply is
-  one body; the caller picks a `max_tokens` that fits. Both belong with B5 (a blob or
-  stream handle in the reply) and are recorded in the NPU service's card.
+  one body; the caller picks a `max_tokens` that fits. A blob handle in the reply (§13) carries a large result.
+
+### 13. Blobs (B5)
+
+A payload over the 64 KiB body limit is a blob: bytes in the node's content store, addressed
+by BLAKE3, and a `blob.v1` handle (`hash`, `size`, `media_type`, `expires_ms`) in the message.
+
+- **Store.** `<runtime dir>/cogbus-blobs/<hash>.blob` plus `<hash>.meta`; a restarted daemon
+  finds what is still alive and drops the rest. Node quota 2 GiB (decision 4), 512 MiB per
+  instance, 256 MiB per blob. Room is made only by dropping expired blobs: a live blob is never
+  evicted for a newer one, so a handle that was handed out stays good until its TTL. Declared
+  upload sizes are reserved when the upload begins, so concurrent uploads cannot overshoot.
+- **TTL.** Default 10 min, at most 24 h. Every read drops an expired blob and a 30 s sweep
+  drops the rest. Putting bytes already stored extends the expiry and never shortens it.
+- **Wire.** Frames stay 64 KiB, so bytes move in slices: `blob_begin {media_type, size,
+  ttl_ms}` returns an `upload` id, `blob_chunk {upload, offset, data (base64, at most 32
+  KiB), last}` is strictly sequential and the last one returns the handle, `blob_get {hash,
+  offset, len}` returns a slice and `eof`. Four uploads per instance may be open; an upload
+  idle for 60 s is dropped. The client library has `put_blob` and `get_blob`.
+- **Checks.** The same as every other op, on the hello-authenticated session (token, peer
+  uid, section 4a). Put needs an `[[outputs]]` entry of class `blob` or schema `blob.v1` in the
+  manifest, and asks governance once per upload (`cogbus.blob.put`, topic `blob/<media type>`).
+  Get asks governance on its first slice (`cogbus.blob.get`, topic `blob/<hash>`). A blob is
+  readable by its owner, by instances of the owner's project (the node bucket for a
+  project-less owner), and by instances it was handed to. A handle is handed on by travelling:
+  in a service call (to the provider), in a reply (to the caller) or in a published reading
+  (to the subscribers that reading reaches, which already passed the project and grant rules).
+  Only the owner's or a holder's handles pass; a service cannot hand on a handle it never held.
+  Refusals count toward the repeated-refusal stop like the others.
+- **Replies.** A reply body is still at most 64 KiB; a reply that carries a handle is small
+  and the caller fetches the result. This is how `image.sd15` results and camera frames reach
+  their readers, and a caller can pass a large input the same way (a handle in the call).
+- **Not carried.** Mesh-wide handles (B6: a handle resolves on the node that stores it), blob
+  streaming without the 32 KiB slices, and a per-project quota.
 
 ## Known gaps (2026-10-25, after B1 and B4)
 
@@ -356,7 +388,7 @@ choice is the B2 result.
 | B2 | stream rings (iceoryx2 evaluated first), reader policies | 16 kHz PCM between two cogs for an hour with no drops; a slow `drop-oldest` reader does not stall the writer; `block` falls back at its deadline |
 | B3 | governance actions, activity log, dashboard section | each subscribe and refusal is visible in the activity log and dashboard |
 | B4 | ingest compatibility listener and store sink | released cogs posting to the bridge reach the store unchanged; the Ventuno's `board-telemetry` reaches the store without port 80 |
-| B5 | blob store by hash, TTL and quota | a frame handle resolves locally and expires on TTL |
+| B5 | blob store by hash, TTL and quota | a frame handle resolves locally and expires on TTL (done: §13) |
 | B6 | mesh topics as ADR-120 exposures, credits, raw-data refusal | a PG cog subscribes to a Ventuno reading topic; a raw IQ subscription from PG is refused unless exposed and requested |
 | S1 | service calls (section 12): `serve`, `call`, `reply`, deadlines, governance | two callers share one provider; an unknown topic, an undeclared caller, a cross-project caller and a late reply are refused; governance sees `cogbus.serve` and `cogbus.call` |
 
