@@ -198,6 +198,8 @@ pub struct WorkloadHostService {
     pub(super) devices: Arc<super::device_owner::DeviceLedger>,
     /// Re-owns device nodes for a cog with its own uid; unset: nodes untouched.
     pub(super) device_applier: std::sync::OnceLock<Arc<dyn super::device_owner::DeviceApplier>>,
+    /// How the journal stood at the last restore (see `journal_status`).
+    pub(super) journal_status: Mutex<Option<super::host_journal::JournalStatus>>,
 }
 
 pub(super) fn now_ms() -> u64 {
@@ -257,6 +259,7 @@ impl WorkloadHostService {
             journal: None,
             devices: super::device_owner::DeviceLedger::system(),
             device_applier: std::sync::OnceLock::new(),
+            journal_status: Mutex::new(None),
         }
     }
 

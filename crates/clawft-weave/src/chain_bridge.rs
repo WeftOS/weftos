@@ -226,6 +226,10 @@ pub fn forward_pending_to_chain(cm: &clawft_kernel::chain::ChainManager) -> usiz
             tracing::warn!(source = %evt.source, kind = %evt.kind, "dropping pending chain event with a reserved source");
             continue;
         }
+        if clawft_kernel::chain::is_caller_reserved_kind(&evt.kind) {
+            tracing::warn!(source = %evt.source, kind = %evt.kind, "dropping pending chain event with a reserved kind");
+            continue;
+        }
         cm.append(&evt.source, &evt.kind, evt.payload);
         n += 1;
     }
@@ -404,5 +408,18 @@ mod tests {
         let events = cm.tail_from(0);
         assert_eq!(events.len(), before + 1);
         assert!(events.iter().all(|e| e.source != "user.projects"));
+    }
+
+    #[cfg(feature = "exochain")]
+    #[test]
+    fn a_reserved_kind_is_not_forwarded_whatever_its_source() {
+        let _guard = buffer_lock();
+        let _ = drain_pending_chain_events();
+        let cm = clawft_kernel::chain::ChainManager::new(0, 1000);
+        // The instance journal's generation is recorded by the host's own code only.
+        clawft_core::chain_event::push_chain_event("workload.host", "workload.journal", None);
+        clawft_core::chain_event::push_chain_event("graphify", "graphify.build", None);
+        assert_eq!(forward_pending_to_chain(&cm), 1);
+        assert!(cm.tail_from(0).iter().all(|e| e.kind != "workload.journal"));
     }
 }

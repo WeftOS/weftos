@@ -6850,6 +6850,12 @@ async fn dispatch(
                          (identity, anchors, governance, project, supervisor)",
                     );
                 }
+                if clawft_kernel::chain::is_caller_reserved_kind(&append_params.record.kind) {
+                    return Response::error_with_kind(
+                        "reserved_kind",
+                        "chain.append: this event kind is reserved for the daemon's own records",
+                    );
+                }
                 let k = kernel.read().await;
                 if let Some(cm) = k.chain_manager() {
                     let payload = match serde_json::to_value(&append_params.record) {

@@ -224,7 +224,7 @@ pub const KERNEL_SOURCES: &[&str] = &["governance", "project", "project.supervis
 /// `governance.overlay.applied`). Refused from replication under any source:
 /// a forged replicated one with `parent_version = u64::MAX` would brick boot
 /// and reload.
-pub const RESERVED_KINDS: &[&str] = &["governance.overlay.applied"];
+pub const RESERVED_KINDS: &[&str] = &["governance.overlay.applied", EVENT_KIND_WORKLOAD_JOURNAL];
 
 /// Is `kind` an authority-folded kind that replication must never carry?
 pub fn is_reserved_kind(kind: &str) -> bool {
@@ -243,6 +243,13 @@ pub const PROJECT_DOMAIN_PREFIX: &[u8] = b"weftos-project-";
 /// message. Callers refuse (return `None`/`Err`) in release builds too.
 pub fn signs_project_domain(data: &[u8]) -> bool {
     data.starts_with(PROJECT_DOMAIN_PREFIX)
+}
+
+/// May a caller (an RPC or a tracing emitter) NOT append an event of `kind`?
+/// Kinds the kernel folds as authority (or, for `workload.journal`, as the
+/// replay floor of the instance journal) are appended by its own code only.
+pub fn is_caller_reserved_kind(kind: &str) -> bool {
+    is_reserved_kind(kind)
 }
 
 /// May a caller (an RPC or a tracing emitter) NOT append under `source`?

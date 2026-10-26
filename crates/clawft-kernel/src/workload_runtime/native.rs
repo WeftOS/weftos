@@ -195,7 +195,7 @@ impl NativeRuntime {
     }
 }
 
-/// Instance id: `<cog>-<8 hex of config hash>-<node>`.
+/// Instance id: `<cog>-<32 hex of the config and owner hash>-<node>`.
 pub fn instance_id(w: &VerifiedWorkload, cfg: &WorkloadConfig) -> Result<String, RuntimeError> {
     if !crate::workload_pkg::manifest::valid_token(&cfg.node_id, 64) {
         return Err(RuntimeError::InvalidConfig(
@@ -224,7 +224,7 @@ pub fn instance_id(w: &VerifiedWorkload, cfg: &WorkloadConfig) -> Result<String,
     Ok(format!(
         "{}-{}-{}",
         w.id,
-        &h.finalize().to_hex()[..8],
+        &h.finalize().to_hex()[..32],
         cfg.node_id
     ))
 }
@@ -285,7 +285,8 @@ impl WorkloadRuntime for NativeRuntime {
         let bytes = p.binaries[&adm.arch].bytes.clone();
         let (d, prog) = (dir.clone(), program.clone());
         let run_as = effective_identity(self.cfg.run_as, &cfg.host).0;
-        tokio::task::spawn_blocking(move || stage(&d, &prog, &bytes, run_as))
+        let owner = cfg.host.owner.clone();
+        tokio::task::spawn_blocking(move || stage(&d, &prog, &bytes, run_as, owner.as_deref()))
             .await
             .map_err(|e| RuntimeError::Backend(e.to_string()))??;
         let mut args = cfg.mode.args();
@@ -435,45 +436,161 @@ pub fn effective_identity(
     }
 }
 
-fn stage(
+/// File in an instance directory naming its owner (the full BLAKE3 of the
+/// owner key, hex). The instance id carries a truncated part of that hash, so
+/// a controller that grinds a colliding id would otherwise inherit the kept
+/// `data/` of another project's instance; the marker is compared in full.
+pub(super) const OWNER_MARKER: &str = ".owner";
+
+/// The full owner hash that goes in the marker.
+pub(super) fn owner_hash(owner: &str) -> String {
+    blake3::hash(owner.as_bytes()).to_hex().to_string()
+}
+
+/// What an instance directory's marker says.
+enum Marker {
+    /// Names this owner.
+    Matches,
+    /// Names another owner.
+    Other,
+    /// Absent, empty or not a full hash (a torn write): no owner is named.
+    Missing,
+}
+
+fn read_marker(dir: &std::path::Path, want: &str) -> Marker {
+    match std::fs::read_to_string(dir.join(OWNER_MARKER)) {
+        Ok(t) => {
+            let t = t.trim();
+            if t == want {
+                Marker::Matches
+            } else if t.len() == 64 && t.bytes().all(|c| c.is_ascii_hexdigit()) {
+                Marker::Other
+            } else {
+                Marker::Missing
+            }
+        }
+        Err(_) => Marker::Missing,
+    }
+}
+
+/// Write the marker so a reader never sees half of it and a crash never leaves
+/// it empty: a temp file, fsynced, renamed over, then the directory fsynced.
+fn write_marker(dir: &std::path::Path, hash: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let tmp = dir.join(".owner.tmp");
+    let _ = std::fs::remove_file(&tmp);
+    let mut f = std::fs::File::create(&tmp)?;
+    f.write_all(format!("{hash}\n").as_bytes())?;
+    f.sync_all()?;
+    std::fs::rename(&tmp, dir.join(OWNER_MARKER))?;
+    std::fs::File::open(dir)?.sync_all()
+}
+
+/// Make `path` (and what is under it, links not followed) belong to `uid:gid`.
+fn chown_tree(path: &std::path::Path, uid: u32, gid: u32) -> std::io::Result<()> {
+    std::os::unix::fs::lchown(path, Some(uid), Some(gid))?;
+    if std::fs::symlink_metadata(path)?.is_dir() {
+        for e in std::fs::read_dir(path)? {
+            chown_tree(&e?.path(), uid, gid)?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test hook: make the next `stage` on this thread fail right after it has
+    /// cleared the old contents, as a crash there would.
+    pub(super) static CRASH_AFTER_CLEAR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+pub(super) fn stage(
     dir: &std::path::Path,
     program: &std::path::Path,
     bytes: &[u8],
     run_as: Option<(u32, u32)>,
+    owner: Option<&str>,
 ) -> Result<(), RuntimeError> {
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
     let io = |e: std::io::Error| RuntimeError::Backend(format!("stage {}: {e}", dir.display()));
+    let want = owner.map(owner_hash);
+    let existing = std::fs::symlink_metadata(dir);
+    let is_dir = existing.as_ref().is_ok_and(|m| m.is_dir());
+    // An owned instance only ever reuses a directory that names the same owner
+    // in full. Another owner's (or an unmarked one that holds data) is refused,
+    // never emptied: it may be a live project's state.
+    if is_dir {
+        let has_marker = std::fs::symlink_metadata(dir.join(OWNER_MARKER)).is_ok();
+        let has_state = std::fs::symlink_metadata(dir.join("data")).is_ok();
+        match &want {
+            None if has_marker => {
+                return Err(RuntimeError::Backend(format!(
+                    "stage {}: the instance directory belongs to an owner; an unowned instance does not reuse it",
+                    dir.display()
+                )));
+            }
+            Some(w) => match read_marker(dir, w) {
+                Marker::Matches => {}
+                Marker::Other => {
+                    return Err(RuntimeError::Backend(format!(
+                        "stage {}: the instance directory belongs to another owner (id collision); not reused",
+                        dir.display()
+                    )));
+                }
+                Marker::Missing if has_state => {
+                    return Err(RuntimeError::Backend(format!(
+                        "stage {}: the instance directory has data and no valid owner marker (it predates owner markers); remove it to place this instance",
+                        dir.display()
+                    )));
+                }
+                Marker::Missing => {}
+            },
+            None => {}
+        }
+    }
     // `load` calls this only for an instance this adapter does not hold, so what
     // is already here is left over from an earlier run (a daemon that restarted,
     // a crash mid-stage). Instance ids are deterministic, so it is the same
     // instance's directory: its `data/` is the cog's own state and is kept. The
     // rest (the read-only binary, anything else) is replaced. Nothing is followed
     // through a symlink: a link in the way is removed, not entered.
-    match std::fs::symlink_metadata(dir) {
-        Ok(m) if m.is_dir() => {
-            for entry in std::fs::read_dir(dir).map_err(io)? {
-                let entry = entry.map_err(io)?;
-                let path = entry.path();
-                if entry.file_name() == "data" {
-                    continue;
-                }
-                let kind = entry.file_type().map_err(io)?;
-                if kind.is_dir() {
-                    std::fs::remove_dir_all(&path).map_err(io)?;
-                } else {
-                    std::fs::remove_file(&path).map_err(io)?;
-                }
-            }
-        }
-        Ok(_) => std::fs::remove_file(dir).map_err(io)?,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(io(e)),
+    if existing.is_ok() && !is_dir {
+        std::fs::remove_file(dir).map_err(io)?;
+    } else if let Err(e) = &existing
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        return Err(io(std::io::Error::new(e.kind(), e.to_string())));
     }
     std::fs::DirBuilder::new()
         .recursive(true)
         .mode(0o755)
         .create(dir)
         .map_err(io)?;
+    // The marker first, atomically, before anything is cleared: a crash from here
+    // on leaves a directory that already names its owner. A matching marker is
+    // never deleted.
+    if let Some(w) = &want
+        && !matches!(read_marker(dir, w), Marker::Matches)
+    {
+        write_marker(dir, w).map_err(io)?;
+    }
+    for entry in std::fs::read_dir(dir).map_err(io)? {
+        let entry = entry.map_err(io)?;
+        let name = entry.file_name();
+        if name == "data" || name == OWNER_MARKER {
+            continue;
+        }
+        let path = entry.path();
+        if entry.file_type().map_err(io)?.is_dir() {
+            std::fs::remove_dir_all(&path).map_err(io)?;
+        } else {
+            std::fs::remove_file(&path).map_err(io)?;
+        }
+    }
+    #[cfg(test)]
+    if CRASH_AFTER_CLEAR.with(|c| c.replace(false)) {
+        return Err(RuntimeError::Backend("injected crash after the directory was cleared".into()));
+    }
     let data = dir.join("data");
     // `data/` is kept only if it is a real directory; a link or file there is replaced.
     match std::fs::symlink_metadata(&data) {
@@ -487,11 +604,13 @@ fn stage(
         }
         Err(e) => return Err(io(e)),
     }
+    // The cog's own state is private to the instance's uid; kept files from an
+    // earlier run are brought to it too (no link is followed).
     std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o700)).map_err(io)?;
+    if let Some((uid, gid)) = run_as {
+        chown_tree(&data, uid, gid).map_err(io)?;
+    }
     std::fs::write(program, bytes).map_err(io)?;
     std::fs::set_permissions(program, std::fs::Permissions::from_mode(0o555)).map_err(io)?;
-    if let Some((uid, gid)) = run_as {
-        std::os::unix::fs::chown(&data, Some(uid), Some(gid)).map_err(io)?;
-    }
     Ok(())
 }

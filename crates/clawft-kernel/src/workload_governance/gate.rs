@@ -38,6 +38,12 @@ pub const CHAIN_SOURCE: &str = "workload";
 /// Default effect-magnitude threshold for workload actions.
 pub const DEFAULT_THRESHOLD: f64 = 0.8;
 
+/// Start of the denial reason when the subject revocation list could not be
+/// read. That is a fault of the node's files, not a verdict on the request, so
+/// a caller that can retry later (a restart restoring placed instances)
+/// treats it as transient, unlike any other governance denial.
+pub const REVOCATION_UNREADABLE: &str = "revocation list unreadable (fail closed)";
+
 /// Chain event kind for a governed action (`None` for unknown actions).
 pub fn event_kind_for(action: &str) -> Option<&'static str> {
     Some(match action {
@@ -244,8 +250,7 @@ impl WorkloadGate {
 
         if let Some(list) = self.revocations.as_ref().filter(|_| !skip_revocation) {
             if let Some(err) = list.subjects_error() {
-                out.decision =
-                    Self::deny(format!("revocation list unreadable (fail closed): {err}"));
+                out.decision = Self::deny(format!("{REVOCATION_UNREADABLE}: {err}"));
                 return out;
             }
             // A request that names nothing cannot be checked, so it cannot be

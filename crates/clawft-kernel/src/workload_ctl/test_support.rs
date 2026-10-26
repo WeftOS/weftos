@@ -153,6 +153,27 @@ pub fn gate(chain: &Arc<ChainManager>) -> Arc<WorkloadGate> {
     )
 }
 
+/// A gate that permits cogs but whose subject revocation list in `dir` is
+/// unreadable, so every request fails closed (a fault of the node's files).
+pub fn gate_unreadable_list(chain: &Arc<ChainManager>, dir: &Path) -> Arc<WorkloadGate> {
+    std::fs::write(dir.join(crate::revocation::SUBJECTS_FILE_NAME), "[{").unwrap();
+    let list = Arc::new(crate::revocation::RevocationList::load(dir.join("revoked_hosts.json")));
+    let mut permit = WorkloadPermitRule::new("test-cog", ["workload.*"], ["cog"]);
+    permit.max_network = NetworkPolicy::Egress;
+    Arc::new(
+        WorkloadGate::exempt(0.95, false, "test")
+            .with_revocations(list)
+            .with_permit(permit)
+            .unwrap()
+            .with_chain(chain.clone()),
+    )
+}
+
+/// A gate with no permit for cogs: every placement is denied (a verdict).
+pub fn gate_no_permit(chain: &Arc<ChainManager>) -> Arc<WorkloadGate> {
+    Arc::new(WorkloadGate::exempt(0.95, false, "test").with_chain(chain.clone()))
+}
+
 pub fn exchange(id: &str, chain: &Arc<ChainManager>) -> Arc<ArtifactExchange> {
     let mut ex = ArtifactExchange::new(
         id,

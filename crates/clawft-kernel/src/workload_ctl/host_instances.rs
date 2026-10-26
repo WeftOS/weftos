@@ -71,6 +71,11 @@ impl WorkloadHostService {
                 }));
             }
             if b.include_departed
+                && let Some(js) = self.journal_status()
+            {
+                all.push(json!({ "journal": js }));
+            }
+            if b.include_departed
                 && let Ok(d) = self.departed.lock()
             {
                 all.extend(d.iter().map(|(id, why)| json!({ "departed_instance": id, "reason": why })));

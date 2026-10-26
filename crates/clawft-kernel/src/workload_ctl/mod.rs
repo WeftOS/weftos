@@ -47,7 +47,7 @@ mod plane_reconcile;
 pub mod plane_seed;
 mod plane_state;
 pub use crate::refusal_budget;
-pub use host_journal::{JournalEntry, RestoreReport};
+pub use host_journal::{JournalEntry, JournalStatus, RestoreReport};
 pub mod session;
 pub mod transport;
 

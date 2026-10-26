@@ -133,3 +133,19 @@ ignored, strings are capped, and unknown fields are skipped. Every roster row in
 `/network` carries `"provenance": "self_reported"`: heartbeats stay
 unauthenticated and display-only until leaf keys are provisioned, so nothing may
 use them for placement or policy, and the console must label them.
+
+## After a daemon restart: placed instances
+
+A node's `workload-host` journals every instance placed on it (`workload-host-journal.json` in the runtime directory) and puts them back when the daemon starts. A cog that was running runs again; one an operator stopped comes back loaded and stopped; one that was unloaded stays gone. The cog's `data/` is kept across restarts and re-places, per project: the same package placed for another project is a separate instance with its own `data/`.
+
+What the node checks before it trusts the journal, and what you see when a check fails:
+
+- **Signature.** The file is signed with the node key. An edited or foreign file is refused whole: the status says `refused (signature)` and no instance is restored.
+- **Generation.** Each save records a generation on the chain. A file older than the chain's record (an old copy put back) is refused: `replayed`. A file the chain has never heard of, or no chain at all, restores every instance loaded and starts none: `unverified`.
+- **Missing file.** If the chain says a journal existed and the file is gone or unreadable, nothing is restored and the status says `journal missing` (or `unreadable`; the damaged file is kept as `workload-host-journal.json.bad.<time>`, newest three). Do not treat an empty node after that as normal: restore the file from a backup, or place the cogs again.
+- **Controller.** The controller that placed an instance must still be one under the node's current policy.
+- **Retries.** A restore that fails for a reason that can pass (the artifact store not up yet, an unreadable revocation list, the runtime failing) keeps the entry and tries again at the next start, five times in all.
+
+Read the state with `status` and `include_departed` (the `journal` row) or the daemon log (`journal missing`, `refused`, `replayed` are logged as errors).
+
+**A crash before the first clean shutdown.** The chain is written out at a clean shutdown today. A node that crashes before its first one comes back with an empty chain record, so the journal reads as `unverified`: every placed instance is restored loaded and none is started until an operator starts it. After a crash later in a node's life the chain can also be older than the journal, which the node accepts. The generation is tamper-evidence only up to the chain's durability; a durable chain (owner card a93f7abe) removes both effects.
