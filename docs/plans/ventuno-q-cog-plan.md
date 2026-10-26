@@ -335,6 +335,30 @@ before starting.
 | P7 RF and CAN | `sdr-pluto`, `spectrum`, `rf-census`; `can-fd`, `can-anomaly` | a 2.4 GHz occupancy reading per minute; decoded CAN signals from a bench bus |
 | P8 Hardening | wasm producers for the small consumers; isolation review; App Lab brick spike result | `modulino`, `analog-io` and `spectrum` run as wasm producers; review signed off |
 
+*P3 camera soak, 2026-10-26.* The `camera` owner ran for 14,753 s (245 one-minute windows),
+06:54:12Z to 11:00:40Z, with a reader on the cogbus checking every frame ref against the
+bytes on disk. 1280x720 MJPEG at 5 fps from the USB camera (1bcf:0b15), no blob.
+
+| Measure | Result |
+|---|---|
+| Frames published and read | 73,764 refs; 0 sequence gaps |
+| Hash against bytes on disk | 73,764 of 73,764 match; 0 missing or mismatched |
+| Frame rate | 5.00 to 5.02 fps per window; one short window (the first, 06:55) |
+| Capture errors | 0 in every window |
+| USB error lines on the hub | 12 at the peak (dmesg window): 6 at 08:14:40 and 6 more at 08:17:41, the two Pluto drops below; 0 at the end |
+| CPU temperature | 41 to 44 C maximum; fan about 2.8 to 2.9 krpm |
+| Power (INA232, bus 19.9 V) | mean 16.0 W, minimum 13.6 W, peak 23.4 W |
+| Memory available | at least 3.56 GB |
+
+The run overlapped the Pluto SDR band plan on the shared USB hub (uncapped 2.4 GHz at 5 MS/s
+until about 10:33Z, then the restarted plan at 3 MS/s or less). The Pluto dropped off the bus
+at about 08:13:54 and 08:16:45, each time back after about 80 s. The kernel logged an
+`msm_vidc` fault at 08:13:30 (`__switch_gdsc_mode_iris3` could not read the core power status,
+then firmware packet dumps). The camera did not use the video encoder (it passes MJPEG straight
+through), and it kept streaming at 5 fps with no errors through both drops. The Pluto side
+measured that the camera costs it 11 to 13 percent of samples at 5 MS/s on the shared hub.
+Raw data: `/data/build/p3/camera-soak/` on the board.
+
 P0 and P1 are small and unblock everything. P2 is the core of "how cogs pass
 things around" and is worth an ADR of its own before code.
 
