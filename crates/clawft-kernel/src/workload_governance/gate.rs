@@ -291,8 +291,19 @@ impl WorkloadGate {
             .find(|p| p.matches_for(action, &req.effect, project_id, Some(agent_id)))
         else {
             out.evaluated_rules = self.default_rule_ids.clone();
+            let why: Vec<String> = self
+                .permits
+                .iter()
+                .filter(|p| p.actions.iter().any(|s| crate::governance::selector_matches(s, action)) && p.kinds.iter().any(|k| k == "*" || k == &req.effect.kind))
+                .map(|p| {
+                    let m = p.mismatches(action, &req.effect);
+                    let m = if m.is_empty() { "project or principal scope does not match".to_owned() } else { m.join("; ") };
+                    format!("permit '{}': {m}", p.id)
+                })
+                .collect();
+            let detail = if why.is_empty() { String::new() } else { format!(" [{}]", why.join(" | ")) };
             out.decision = Self::deny(format!(
-                "default deny: no workload permit rule matches '{action}' for kind '{}' (rule {})",
+                "default deny: no workload permit rule matches '{action}' for kind '{}' (rule {}){detail}",
                 req.effect.kind,
                 self.default_rule_ids.join(", ")
             ));

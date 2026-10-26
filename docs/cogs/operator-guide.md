@@ -91,6 +91,13 @@ The catalog RPCs `workload.install` and `workload.unload` (daemon RPC only, with
   "min_package_trust": "unsigned", "principals": ["catalog"]}]
 ```
 
+**Permits for native cogs need `"max_network": "egress"`.** A native cog runs with the host's network (ADR-100 s4), so placement classes it `egress`, while a permit's `max_network` defaults to `lan`. A `workload.place` permit for kind `cog` written with defaults therefore refuses every native cog. The daemon logs a warning when it reads such a permit, and the refusal names the failing condition, for example `permit 'cog': network Egress exceeds max_network Lan`. A working placement permit:
+
+```json
+[{"id": "cogs", "actions": ["workload.place", "workload.load", "workload.start", "workload.stop"],
+  "kinds": ["cog"], "max_network": "egress"}]
+```
+
 Without a matching permit the verb is refused and the refusal is chained. Policy files in the runtime dir (`workload-permits.json`, `workload-trust.json`, peers, container, seeds) must be owned by the daemon's user (or root) and not group- or world-writable (`chmod 600`); the daemon refuses a file that is not.
 
 **Upgrading: three things now stop the placement plane from building.** When the daemon cannot read its policy files it refuses all placement (`place`, `explain`, `status`, `stop`, `logs`, `unload`) with "placement unavailable: ..." until you fix the file; `weaver workload revoke` still works throughout. The causes, and the fix for each:

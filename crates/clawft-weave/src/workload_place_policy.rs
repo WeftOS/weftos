@@ -113,7 +113,11 @@ pub(crate) fn parse<T: serde::de::DeserializeOwned>(dir: &Path, file: &str) -> R
 
 /// Permits from the runtime dir (none if the file is absent).
 pub fn load_permits(dir: &Path) -> Result<Vec<WorkloadPermitRule>, String> {
-    Ok(parse(dir, PERMITS_FILE)?.unwrap_or_default())
+    let permits: Vec<WorkloadPermitRule> = parse(dir, PERMITS_FILE)?.unwrap_or_default();
+    for w in permits.iter().flat_map(WorkloadPermitRule::warnings) {
+        tracing::warn!("{PERMITS_FILE}: {w}");
+    }
+    Ok(permits)
 }
 
 /// Trust anchors from the runtime dir (WeftOS defaults if absent).

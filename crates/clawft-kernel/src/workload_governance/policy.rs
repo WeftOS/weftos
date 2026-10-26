@@ -264,6 +264,56 @@ impl WorkloadPermitRule {
         Ok(())
     }
 
+    /// Why this rule does not permit `action` with `effect`, one entry per
+    /// failing condition. Empty when only the project or principal scope (which
+    /// the caller knows) keeps it from matching, or when it does match.
+    pub fn mismatches(&self, action: &str, effect: &WorkloadEffect) -> Vec<String> {
+        let mut out = Vec::new();
+        if !self.actions.iter().any(|s| selector_matches(s, action)) {
+            out.push(format!("action '{action}' is not listed"));
+        }
+        if !self.kinds.iter().any(|k| k == "*" || k == &effect.kind) {
+            out.push(format!("kind '{}' is not listed", effect.kind));
+        }
+        if effect.package_trust < self.min_package_trust {
+            out.push(format!("package trust {:?} is below min_package_trust {:?}", effect.package_trust, self.min_package_trust));
+        }
+        if effect.node_tier < self.min_node_tier {
+            out.push(format!("node tier {:?} is below min_node_tier {:?}", effect.node_tier, self.min_node_tier));
+        }
+        if effect.network > self.max_network {
+            out.push(format!("network {:?} exceeds max_network {:?}", effect.network, self.max_network));
+        }
+        if effect.secrets && !self.allow_secrets {
+            out.push("secrets are not allowed (allow_secrets)".into());
+        }
+        if effect.emulated && !self.allow_emulated {
+            out.push("emulated placement is not allowed (allow_emulated)".into());
+        }
+        if effect.resource_cost > self.max_resource_cost {
+            out.push(format!("resource cost {} exceeds max_resource_cost {}", effect.resource_cost, self.max_resource_cost));
+        }
+        out
+    }
+
+    /// Advisory problems with a rule that is valid but can never match what it
+    /// is for. A native cog runs with the host's network (ADR-100 s4), so the
+    /// placement path classes it `egress`; a `cog` permit capped below that
+    /// refuses every native cog.
+    pub fn warnings(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        let places = self.actions.iter().any(|a| selector_matches(a, "workload.place"));
+        if places && self.kinds.iter().any(|k| k == "cog") && self.max_network < NetworkPolicy::Egress {
+            out.push(format!(
+                "permit rule '{}' allows kind 'cog' with max_network {:?}, but a native cog is classed \
+                 network 'egress' (it has the host's network): it will refuse every native cog; set \
+                 max_network to \"egress\"",
+                self.id, self.max_network
+            ));
+        }
+        out
+    }
+
     /// Whether this rule permits `action` with `effect`.
     pub fn matches(&self, action: &str, effect: &WorkloadEffect) -> bool {
         self.matches_in(action, effect, None)

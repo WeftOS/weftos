@@ -707,3 +707,26 @@ fn a_gate_is_built_with_its_list_or_says_why_not() {
     assert!(WorkloadGate::with_rules(0.8, false, Vec::new(), list).exempt_reason().is_none());
     assert_eq!(WorkloadGate::exempt(0.8, false, "why").exempt_reason(), Some("why"));
 }
+
+/// A permit written with defaults (max_network lan) never matches a native cog,
+/// which the placement path classes `egress`. The refusal must say which
+/// condition failed, and the rule must warn.
+#[test]
+fn default_permit_refuses_a_native_cog_and_says_why() {
+    let permit = WorkloadPermitRule::new("COG-DEFAULTS", ["workload.place"], ["cog"]);
+    let warnings = permit.warnings();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].contains("egress"), "{warnings:?}");
+    let gate = WorkloadGate::exempt(0.8, false, "test").with_permit(permit).unwrap();
+    let native = with(cog_ctx(), "network", json!("egress"));
+    match gate.check("a", "workload.place", &native) {
+        crate::gate::GateDecision::Deny { reason, .. } => {
+            assert!(reason.contains("COG-DEFAULTS"), "{reason}");
+            assert!(reason.contains("network Egress exceeds max_network Lan"), "{reason}");
+        }
+        other => panic!("expected deny, got {other:?}"),
+    }
+    let mut ok = WorkloadPermitRule::new("COG-EGRESS", ["workload.place"], ["cog"]);
+    ok.max_network = crate::workload_governance::NetworkPolicy::Egress;
+    assert!(ok.warnings().is_empty());
+}
