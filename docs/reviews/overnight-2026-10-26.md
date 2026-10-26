@@ -522,3 +522,70 @@ C1 (the owner marker, or a longer id) is still open and is not part of this comm
 
 Verdict: A2, A4, A5, A6 and B1 are fixed against my cases; A1 is documented as a known limit. D1 is a
 real regression in crash recovery that the durable chain removes; the others are minor.
+
+---
+
+## Re-check: owner marker for C1, `wt/native-restart` 77ab400c0 (2026-10-26)
+
+Tests run (foreground): `tests_native` 12 of 12 and `tests_restart` 27 of 27 pass, including
+`a_colliding_instance_id_d...` (a forced id collision is refused), `the_same_owner_keeps_its_...` and
+`a_directory_with_data_and...` (no marker).
+
+**C1 is closed for what it targeted.** `stage()` compares the full 64-hex BLAKE3 of the owner key with
+the directory's `.owner` before it touches anything: another owner's directory is refused and left
+alone, an unmarked directory that holds `data/` is refused, an empty one is adopted, and an unowned load
+refuses a marked directory. Grinding the 32-bit id now gets an attacker an error, not the victim's data.
+
+My four questions:
+
+1. **Symlinked or swapped `.owner`.** `.owner` lives in the instance directory (0755, owned by the
+   daemon), not in `data/`, so a cog running under another uid cannot create, replace or link it. A
+   symlink there needs daemon-uid write access. If one is present, the comparison reads through it (it
+   can only pass if the target holds the same hash text), the clearing loop then removes it with
+   `remove_file`, not following it, and the marker is written fresh. Not established as a defect. Where
+   the adapter runs every cog under the daemon's own uid (advisory mode, or no `run_as`), a cog can edit
+   any marker, but in that mode a cog can already read every sibling directory; the marker defends
+   staging, not a running cog.
+2. **TOCTOU between the marker check and the reuse of `data/`.** Not established. `load` holds the
+   adapter's instance-map lock across the whole `stage()` call (the guard lives to the end of the
+   function), so two loads cannot stage concurrently inside this adapter. The only parties that could
+   change the directory in the window are daemon-uid processes.
+3. **Can another owner write `.owner` first.** Yes, on a *fresh* directory, and that squats the id:
+   see D6 below. They cannot overwrite an existing marker (the comparison refuses first).
+4. **Unowned path.** Holds: an unowned load (tests, `weaver run`) refuses a directory that carries a
+   marker, and an owned load refuses an unowned directory that holds data. A directory without data is
+   adopted by whoever comes first.
+
+### New problems
+
+**D5 (medium, availability and data): the marker is deleted and rewritten on every stage, and a failure in
+between wedges the instance.** The clearing loop removes everything but `data/`, which includes `.owner`;
+the marker is written again only near the end (after `data/` is ensured), non-atomically and without a
+sync. A crash, kill, `ENOSPC` or I/O error between those points leaves a directory with `data/` and no
+marker (or a torn, empty one, which counts as "another owner"). From then on the owner's own restore is
+refused ("has data and no owner marker ... remove it"); that error is a `Backend` error, so it is retried
+five starts and dropped, and the only way out the message offers is to remove the directory, which
+destroys the data the marker exists to protect. The same happens on a first placement that dies after
+`data/` is created and before the marker is written (the empty `data/` counts as state). Fix: never delete
+a matching `.owner` in the loop; write a missing one first, with a temporary file, `sync_all` and
+`rename`; treat an empty or malformed marker as missing, not as another owner.
+
+**D6 (low-medium, availability): id squatting is unchanged.** The id still has 32 bits, and the adapter
+also keys its instance map by it. A controller that grinds an id equal to the victim's future id and
+places first holds that id: the victim then gets "already loaded" while the squatter is loaded, and
+"another owner (id collision)" if only the directory remains. The marker protects the data, not the name.
+Lengthen the id (32 hex is enough) so a collision is out of reach.
+
+**D7 (low): upgrade path.** Directories created between a8ab9ad35 and this commit hold `data/` and no marker,
+so every restore of those instances is refused. Offer a one-time adoption (when the id matches the
+owner's full hash, which only the real owner can produce) or say so in the release notes.
+
+**D8 (scope): file permissions still do not separate projects.** In this branch `run_as` is one `(uid,
+gid)` for the adapter; `data/` is chowned to it. With per-cog uids (the gap-uid branch), two projects'
+instances of the same cog share one uid. Either way a running instance of the cog could open a sibling
+instance's `data/` by path; the instance id is derivable from public inputs. Recheck when gap-uid merges:
+the per-project guarantee holds for staging, not for a cog that goes looking.
+
+Verdict: C1 fixed as specified, with no TOCTOU or marker-forgery route I could establish. D5 should be
+fixed before release, because a crash window turns the safety marker into a wedge that invites deleting
+the data.
