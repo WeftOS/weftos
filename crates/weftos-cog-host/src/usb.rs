@@ -8,7 +8,6 @@
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use weftos_cog_market::usb::UsbIdTable;
@@ -191,6 +190,7 @@ pub fn scan_sysfs(sysfs: &Path, dev_root: &Path, salt: &str) -> Scan {
 
 #[cfg(target_os = "macos")]
 fn scan_macos(salt: &str) -> Scan {
+    use std::process::Command;
     let ports = mac_serial_ports(Path::new("/dev"));
     for dt in ["SPUSBHostDataType", "SPUSBDataType"] {
         let Ok(out) = Command::new("system_profiler").args([dt, "-json"]).output() else { continue };
