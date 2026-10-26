@@ -237,6 +237,26 @@ readings per band, with `coverage` showing each band's share of its minute:
 Its totals: 73.2 G samples used, 2.268 G counted lost (the owner's), 2.5 M missed by the reader
 itself (0.003 percent: the reader fell behind), 0 dead.
 
+**Band plan with camera concurrent** (every band at 3 MS/s or less, 10:49 board time, 4 h run, read at 2700 s):
+`2437e6:3e6:8000, 1090e6:2.4e6:6000, 433.92e6:2e6:5000, 915e6:2e6:5000`. The P3 camera soak ran for
+the first 692 s of it. Camera on: 1,496,776,704 samples, 103 retunes, **0 lost**. Camera off: 1998 s,
+4,343,005,184 samples, 296 retunes, 0 lost. Whole read: 5,866,323,968 delivered against
+5,865,854,454 expected, 0 gap events, 0 disconnects, 0 apply errors. With the camera on, 5 MS/s lost
+6.3 to 11.3 percent and 3 MS/s lost nothing, which matches the measured 4.33 MS/s headroom. The run
+continues to 14:49; the final figures are `summarize.py` and `camera_corr.py` on
+`/data/build/pluto-soak/run-20261026-104857/`.
+
+**Bus topology and the sharing report.** `lsusb -t`: Bus 001 (xhci root hub, 480M) carries the
+Pluto (port 2, RNDIS, mass storage, two ACM) and the UVC camera with its USB audio (port 4);
+Bus 003 carries a gs_usb CAN adapter; Bus 002 (5000M) is empty. 5.00 MS/s is clean on its own and
+4.33 MS/s with a 720p 5 fps MJPEG camera streaming. The cog now reports this in `sdr.status`:
+`usb_hub` lists the other devices on the Pluto's root hub, whether one streams isochronously now,
+and `advised_max_rate_sps` (5 MS/s alone, 4 MS/s with one streaming); `rate_over_advice` flags a
+tuned rate above it. Checked live with the camera streaming. **Recommendation for the owner:** put
+the Pluto on a root hub of its own (a port of Bus 003, or a powered USB 2.0 hub on its own
+controller) if the camera must stream at the same time as a 5 MS/s capture; otherwise keep every
+band at 3 to 4 MS/s while the camera runs. Moving cables is the owner's call.
+
 What this settles for the plan: R2's done-when holds for an hour with the radio to itself, and for
 2 h 17 min of band-plan cycling with 1208 retunes; two consumers sharing the tuner by band plan work (simulated radio
 through the real broker, then the spectrum cog read the cycling plan live). The shared USB hub is
