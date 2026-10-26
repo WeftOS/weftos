@@ -215,8 +215,9 @@ listener used when the primary bind fails.
   `hello`, counted as a refusal of that instance). Revoking an instance forgets its
   connection count; a closed connection frees its slot. All four are `BrokerConfig` fields.
 - **Publish budgets (gap 5).** A cog's declared `[[outputs]].rate` is a per-topic budget when
-  it names a message rate: `<n> Hz`, `<n>/s`, `<n>/min`, `<n> msg/s`, or a sample `Hz` with
-  `<m> ms chunks` (one message per `m` ms). Anything else (`on change`, samples with no chunk
+  it names a message rate: `<n> Hz`, `<n>/s`, `<n>/min`, `<n> msg/s`, `every <n> <ms|s|min|h>`,
+  or a sample `Hz` with `<m> ms chunks` (one message per `m` ms); `every <n> s per <x>` is not
+  metered (the count of `<x>` is unknown). Anything else (`on change`, samples with no chunk
   size) has no budget; the manifest check, governance and the refusal stop still apply.
   The budget is a token bucket per (instance, topic): twice the declared rate sustained, a
   burst of at least 8, so a cog that follows its manifest never meets it. A publish over it

@@ -6,6 +6,8 @@
 //! - `<n> Hz` is `n` messages per second, unless the text also says
 //!   `<m> ms chunks` (or `<m> ms frames`, `<m> ms packets`), in which case the
 //!   `Hz` is a sample rate and a message goes out every `m` ms;
+//! - `every <n> <ms|s|min|h>` is one message per period (not with a `per <x>`
+//!   qualifier such as `every 2 s per band`: the count of `<x>` is unknown);
 //! - `<n>/s`, `<n>/sec`, `<n>/min`, `<n>/h` and `<n> msg/s` are what they
 //!   say.
 //!
@@ -45,6 +47,27 @@ pub fn parse_rate(text: &str) -> Option<f64> {
             && let Some(ms) = num_before(at)
         {
             return Some(1000.0 / ms);
+        }
+    }
+    // `every <n> <unit>`: one message per period. A `per <thing>` qualifier
+    // (`every 2 s per band`) multiplies the messages by an unknown count, so
+    // it is not metered.
+    if let Some(at) = t.find("every ") {
+        let rest = &t[at + 6..];
+        let end = rest.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(rest.len());
+        let unit = rest[end..].trim_start().split(|c: char| !c.is_ascii_alphabetic()).next().unwrap_or("");
+        let secs = match unit {
+            "ms" => Some(0.001),
+            "s" | "sec" | "secs" | "second" | "seconds" => Some(1.0),
+            "min" | "mins" | "minute" | "minutes" => Some(60.0),
+            "h" | "hour" | "hours" => Some(3600.0),
+            _ => None,
+        };
+        if let (Ok(n), Some(u)) = (rest[..end].parse::<f64>(), secs)
+            && n > 0.0
+            && !t.contains(" per ")
+        {
+            return Some(1.0 / (n * u));
         }
     }
     for (pat, per) in [("/s", 1.0), ("/sec", 1.0), ("/min", 1.0 / 60.0), ("/h", 1.0 / 3600.0)] {
@@ -108,6 +131,17 @@ mod tests {
             ("30/s", Some(30.0)),
             ("6/min", Some(0.1)),
             ("2 msg/s", Some(2.0)),
+            ("every 5 s", Some(0.2)),
+            ("every 60 s", Some(1.0 / 60.0)),
+            ("every 250 ms", Some(4.0)),
+            ("every 2 s per band", None),
+            ("every probe interval", None),
+            ("every report interval", None),
+            ("one per captured frame", None),
+            ("on demand; one reply per call", None),
+            ("when the bus departs from its baseline", None),
+            ("continuous, up to 5 MS/s (20 MB/s)", None),
+            ("16000 Hz mono, 20 ms chunks, while speaking", Some(50.0)),
             ("on change", None),
             ("16000 samples", None),
             ("Hz", None),
