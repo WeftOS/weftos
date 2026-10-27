@@ -11259,70 +11259,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "weftos-cog-companion"
-version = "0.8.4-rc.15"
-dependencies = [
- "console_error_panic_hook",
- "eframe",
- "ehttp",
- "serde",
- "serde_json",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
- "web-time",
- "weftos-sensor-guide",
-]
-
-[[package]]
-name = "weftos-cog-host"
-version = "0.8.4-rc.15"
-dependencies = [
- "base64 0.22.1",
- "blake3",
- "clawft-kernel",
- "ed25519-dalek",
- "libc",
- "serde",
- "serde_json",
- "tempfile",
- "weftos-cog-market",
- "weftos-cog-protocol",
- "weftos-cog-repo",
-]
-
-[[package]]
-name = "weftos-cog-manager"
-version = "0.8.4-rc.15"
-dependencies = [
- "base64 0.22.1",
- "console_error_panic_hook",
- "ed25519-dalek",
- "eframe",
- "ehttp",
- "serde",
- "serde_json",
- "uuid",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
- "web-time",
- "weftos-cog-market",
- "weftos-cog-repo",
- "weftos-sensor-guide",
-]
-
-[[package]]
-name = "weftos-cog-market"
-version = "0.8.4-rc.15"
-dependencies = [
- "serde",
- "serde_json",
- "weftos-cog-market",
- "weftos-cog-repo",
-]
-
-[[package]]
 name = "weftos-cog-protocol"
 version = "0.8.4-rc.15"
 dependencies = [
@@ -11330,40 +11266,6 @@ dependencies = [
  "serde_json",
  "sha2",
  "thiserror 2.0.18",
-]
-
-[[package]]
-name = "weftos-cog-repo"
-version = "0.8.4-rc.15"
-dependencies = [
- "clawft-types",
- "ed25519-dalek",
- "hex",
- "reqwest",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "toml 0.8.23",
-]
-
-[[package]]
-name = "weftos-cog-sources"
-version = "0.8.4-rc.15"
-dependencies = [
- "chrono",
- "ed25519-dalek",
- "hex",
- "reqwest",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "thiserror 2.0.18",
- "toml 0.8.23",
- "weftos-cog-host",
- "weftos-cog-market",
- "weftos-cog-repo",
 ]
 
 [[package]]
@@ -11453,19 +11355,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "weftos-ecg-scope"
-version = "0.8.4-rc.15"
-dependencies = [
- "eframe",
- "egui_plot",
- "serde_json",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-time",
- "weftos-cog-companion",
-]
-
-[[package]]
 name = "weftos-exo-core"
 version = "0.8.4-rc.15"
 dependencies = [
@@ -11484,19 +11373,6 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "weftos-exo-core",
-]
-
-[[package]]
-name = "weftos-guide-view"
-version = "0.8.4-rc.15"
-dependencies = [
- "console_error_panic_hook",
- "eframe",
- "serde_json",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
- "weftos-sensor-guide",
 ]
 
 [[package]]
@@ -11600,20 +11476,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "weftos-sensor-guide"
-version = "0.8.4-rc.15"
-dependencies = [
- "base64 0.22.1",
- "egui",
- "egui_commonmark",
- "egui_extras",
- "image",
- "serde",
- "serde_json",
- "toml 0.8.23",
-]
-
-[[package]]
 name = "weftos-sensor-pipeline"
 version = "0.8.4-rc.15"
 dependencies = [
@@ -11636,32 +11498,6 @@ dependencies = [
  "serde",
  "thiserror 2.0.18",
  "weftos-worldmodel-core",
-]
-
-[[package]]
-name = "weftos-sound-scope"
-version = "0.8.4-rc.15"
-dependencies = [
- "eframe",
- "egui_plot",
- "serde_json",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-time",
- "weftos-cog-companion",
-]
-
-[[package]]
-name = "weftos-tof-scope"
-version = "0.8.4-rc.15"
-dependencies = [
- "eframe",
- "egui_plot",
- "serde_json",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-time",
- "weftos-cog-companion",
 ]
 
 [[package]]

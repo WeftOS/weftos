@@ -12,6 +12,13 @@ Staging area for changes after the 0.8.4 cut.
 - The `weftos` and `weftos-cogs` repositories moved to the WeftOS GitHub org on 2026-10-27
   (`WeftOS/weftos`, `WeftOS/weftos-cogs`). Container images publish to
   `ghcr.io/weftos/weftos`; images published earlier stay under `ghcr.io/weave-logic-ai/weftos`.
+- Cogs extraction B1: the Cogs product (Cog Host, cog repository tooling, catalog, cog sources,
+  Weave Manager, the guide format and viewer, the ecg/tof/sound companion apps) is no longer in
+  this tree. It ships from `WeftOS/weftos-cogs`; `weaver cog`, `weaver update` and `weft-licence`
+  link its tagged `cog-sources`, `cog-repo` and `cog-market` crates. Removed lanes:
+  `scripts/build.sh cog-host-x86`, `cog-host-cross`, `manager`, `manager-web`, `scope-web`,
+  `guide-web` and the `ecg-scope` / `sound-scope` aliases. `scope room` still builds
+  `weft-room-scope`. Cog Host binaries now come from the signed Cogs release.
 
 ## [0.8.4-rc.15] - 2026-10-23
 
