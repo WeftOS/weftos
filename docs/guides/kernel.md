@@ -655,7 +655,9 @@ weaver kernel logs                 # last N boot/runtime events
 `weaver kernel stop` sends SIGTERM and waits 10 s. The daemon's own
 shutdown fits inside that wait:
 
-- The shutdown runs as named steps: RPC accept loop (2 s), child endpoint
+- The shutdown runs as named steps: listeners (1 s: the router and the
+  mesh peer and leaf UDP/TCP listeners stop accepting first, so a slow
+  later step never leaves a dying daemon holding its ports), RPC accept loop (2 s), child endpoint
   (1 s), agent service (5 s), nested quiesce (3 s), nested project kernels
   (10 s), project hooks (2 s), agent supervisor (5 s), then the kernel.
   Each step logs when it starts and how long it took, or that it timed out
@@ -669,6 +671,13 @@ shutdown fits inside that wait:
   every runtime thread is blocked. It logs `shutdown exceeded its budget`,
   removes `kernel.pid`, and exits 0 on a stop (so `Restart=on-failure`
   does not bring back what was stopped) or 1 on a restart.
+- Signals are also counted outside the async runtime, by a watcher on its
+  own OS thread. If the runtime is too wedged to act on SIGTERM (so the
+  shutdown never starts), the watcher exits the process 9 s after the
+  first signal (15 s nested). A SIGTERM or SIGINT that arrives while a
+  shutdown is already under way, or a second one the runtime never acted
+  on, ends the process at once. Either way it removes `kernel.pid` first
+  and logs why.
 - `kernel.pid` is removed only when the process is about to exit. A live
   daemon always has its pid file.
 

@@ -23,6 +23,8 @@ pub struct RouterHandle {
     stamps: Mutex<Vec<Stamp>>,
     reloaded_at: Mutex<Option<String>>,
     generation: AtomicU64,
+    /// The accept loop, so shutdown can close the listener early.
+    accept: Mutex<Option<tokio::task::AbortHandle>>,
 }
 
 impl RouterHandle {
@@ -38,6 +40,7 @@ impl RouterHandle {
             stamps: Mutex::new(stamps),
             reloaded_at: Mutex::new(Some(now())),
             generation: AtomicU64::new(1),
+            accept: Mutex::new(None),
         }
     }
 
@@ -83,6 +86,14 @@ impl RouterHandle {
     /// RFC 3339 time of the last (re)load.
     pub fn reloaded_at(&self) -> Option<String> {
         self.reloaded_at.lock().ok().and_then(|r| r.clone())
+    }
+
+    /// Stop accepting and close the listener (daemon shutdown). Connections
+    /// already being served finish on their own tasks.
+    pub fn stop_accepting(&self) {
+        if let Some(h) = self.accept.lock().ok().and_then(|mut a| a.take()) {
+            h.abort();
+        }
     }
 
     /// Per-probe deadline from the config.
@@ -139,7 +150,10 @@ pub async fn start_with(cfg: RouterConfig, source: Box<dyn RouteSource>, poll: D
     let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| format!("bind {addr}: {e}"))?;
     let bound = listener.local_addr().map_err(|e| format!("local_addr: {e}"))?;
     let handle = Arc::new(RouterHandle::new(cfg, source, bound));
-    tokio::spawn(crate::router_proxy::accept_loop(listener, handle.clone()));
+    let accept = tokio::spawn(crate::router_proxy::accept_loop(listener, handle.clone()));
+    if let Ok(mut a) = handle.accept.lock() {
+        *a = Some(accept.abort_handle());
+    }
     let poller = Arc::downgrade(&handle);
     tokio::spawn(async move {
         loop {

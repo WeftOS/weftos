@@ -1182,6 +1182,9 @@ pub async fn run(
     clawft_kernel::chain_storage::request_new_chain(false);
     clawft_kernel::chain_storage::request_adopt_legacy_chain(false);
     crate::project_hooks::post_boot(&kernel, &pre_boot)?;
+    // Held outside the kernel lock so shutdown can close the mesh listeners
+    // first, whatever holds that lock.
+    let services = Arc::clone(kernel.services());
     let kernel = Arc::new(tokio::sync::RwLock::new(kernel));
     #[cfg(all(unix, feature = "exochain"))]
     crate::nested_rpc::init(nested_master, &kernel).await?;
@@ -3669,6 +3672,22 @@ pub async fn run(
         }
     }
 
+    #[cfg(unix)]
+    let nested_instance = crate::nested_boot::active().is_some();
+    #[cfg(not(unix))]
+    let nested_instance = false;
+    let shutdown_budget = if nested_instance {
+        crate::shutdown_guard::NESTED_SHUTDOWN_BUDGET
+    } else {
+        crate::shutdown_guard::SHUTDOWN_BUDGET
+    };
+    // Signals are also counted outside tokio, so a runtime too wedged to act
+    // on SIGTERM still exits within the budget, and a SIGTERM during a stuck
+    // shutdown ends it at once (card 1a919ae6).
+    #[cfg(unix)]
+    crate::shutdown_guard::arm_signal_escalation(shutdown_budget, protocol::pid_path());
+    crate::shutdown_guard::test_wedge_before_signals();
+
     // Wait for shutdown signal or RPC shutdown.
     // Unix: SIGINT / SIGTERM / SIGHUP (restart). Windows: Ctrl+C only.
     #[cfg(unix)]
@@ -3716,23 +3735,32 @@ pub async fn run(
     // Every step below is bounded and logged, and a guard thread ends the
     // process if the whole shutdown overruns (card 1a919ae6): a wedged task
     // must not leave a daemon that took TERM still holding the run dir.
-    #[cfg(unix)]
-    let nested_instance = crate::nested_boot::active().is_some();
-    #[cfg(not(unix))]
-    let nested_instance = false;
     let shutdown = crate::shutdown_guard::Shutdown::begin(
-        if nested_instance {
-            crate::shutdown_guard::NESTED_SHUTDOWN_BUDGET
-        } else {
-            crate::shutdown_guard::SHUTDOWN_BUDGET
-        },
+        shutdown_budget,
         crate::shutdown_guard::HardExit {
             pid_file: protocol::pid_path(),
             code: if restart_requested { crate::shutdown_guard::HARD_EXIT_RESTART } else { 0 },
         },
     );
-    crate::shutdown_guard::test_wedge();
     let secs = std::time::Duration::from_secs;
+
+    // Listeners first: the router and the mesh (peer and leaf UDP/TCP) stop
+    // accepting before anything that can wait, so a slow later step never
+    // leaves a dying daemon holding its ports. The kernel step stops the
+    // mesh service again; that is a no-op by then.
+    shutdown
+        .step("listeners", secs(1), async {
+            if let Some(r) = crate::router_state::global() {
+                r.stop_accepting();
+            }
+            if let Some(mesh) = services.get("mesh")
+                && let Err(e) = mesh.stop().await
+            {
+                warn!(error = %e, "mesh listener stop failed");
+            }
+        })
+        .await;
+    crate::shutdown_guard::test_wedge();
 
     // If a signal triggered shutdown, wait for the accept loop to finish.
     if (restart_requested || !accept_handle.is_finished())
