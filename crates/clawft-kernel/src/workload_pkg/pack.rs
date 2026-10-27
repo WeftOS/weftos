@@ -295,6 +295,20 @@ pub fn write_source_build_provenance(cog_dir: &Path, binary: &Path) -> Result<()
     std::fs::write(&path, bytes).map_err(|e| io_err(&path, e))
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Tests: pack as a release before the `[mesh_limits]` rule did.
+    pub(crate) static RELEASED_STYLE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(all(feature = "workload-runtime", unix))]
+fn released_style() -> bool {
+    #[cfg(test)]
+    return RELEASED_STYLE.with(|c| c.get());
+    #[cfg(not(test))]
+    false
+}
+
 /// Build an unsigned cog package in `out_dir` (which must not exist or be
 /// empty) and return its envelope. Sign it with
 /// [`super::sign::sign_envelope`] and persist with [`write_manifest`].
@@ -335,8 +349,11 @@ pub fn pack_cog(input: &CogPackInput, out_dir: &Path) -> Result<ManifestEnvelope
     // runtime (and its parser) only builds on unix; elsewhere admission on
     // the placing node still checks it.
     #[cfg(all(feature = "workload-runtime", unix))]
-    crate::workload_runtime::cog_spec::CogSpec::parse(&toml_bytes)
-        .map_err(|e| PackError::Input(e.to_string()))?;
+    {
+        use crate::workload_runtime::cog_spec::CogSpec;
+        let parsed = if released_style() { CogSpec::parse(&toml_bytes) } else { CogSpec::parse_for_pack(&toml_bytes) };
+        parsed.map_err(|e| PackError::Input(e.to_string()))?;
+    }
     let cog_toml = place(out_dir, "cog.toml", &toml_bytes, false)?;
 
     let mut binaries = BTreeMap::new();

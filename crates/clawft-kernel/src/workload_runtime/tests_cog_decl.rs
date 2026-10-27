@@ -68,18 +68,24 @@ fn output_errors_are_clear() {
 }
 
 #[test]
-fn outputs_need_their_own_mesh_limits() {
+fn outputs_need_their_own_mesh_limits_at_pack_only() {
     let out = "[[outputs]]\ntopic = \"t0\"\nschema = \"telemetry.v1\"\nclass = \"reading\"\n";
-    let e = err(out);
-    assert!(e.contains("[mesh_limits] is required") && e.contains("readings_per_min"), "{e}");
     let limits = "[mesh_limits]\nreadings_per_min = 600\nbytes_per_sec = 4194304\nsubscriptions_per_peer = 16\ncredit_timeout_s = 30\n";
-    assert!(parse(&format!("{out}{limits}")).is_ok());
-    // All four keys are required; a missing or unknown key is named.
+    let full = |extra: &str| format!("{BASE}{extra}");
+    // A released cog (outputs, no table) parses for install and place, with the starting values.
+    let released = parse(out).unwrap();
+    assert!(released.mesh_limits.is_none());
+    assert_eq!(released.mesh_limits_or_default(), clawft_types::cog_topics::MeshLimits::STARTING);
+    // Pack refuses it, naming the table and the keys.
+    let e = CogSpec::parse_for_pack(full(out).as_bytes()).unwrap_err().to_string();
+    assert!(e.contains("[mesh_limits] is required") && e.contains("readings_per_min"), "{e}");
+    assert!(CogSpec::parse_for_pack(full(&format!("{out}{limits}")).as_bytes()).is_ok());
+    // A table that is present is checked everywhere: all four keys, in range, no others.
     assert!(err(&format!("{out}[mesh_limits]\nreadings_per_min = 600\n")).contains("bytes_per_sec"));
     assert!(err(&format!("{out}{limits}burst = 1\n")).contains("burst"));
     assert!(err(&format!("{out}{}", limits.replace("= 30", "= 1"))).contains("credit_timeout_s"));
-    // A cog with no outputs serves nothing and needs no table.
-    assert!(parse("[[inputs]]\ntopic = \"a\"\nschema = \"telemetry.v1\"\n").unwrap().mesh_limits.is_none());
+    // A cog with no outputs serves nothing and needs no table, even at pack.
+    assert!(CogSpec::parse_for_pack(full("[[inputs]]\ntopic = \"a\"\nschema = \"telemetry.v1\"\n").as_bytes()).is_ok());
 }
 
 #[test]

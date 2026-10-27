@@ -103,12 +103,19 @@ pub(crate) fn route_infer(_: &str, _: ExposureState) -> Result<bool, String> {
     Ok(false)
 }
 
-fn set(reg: &ExposureRegistry, p: SetParams) -> Result<Value, String> {
+/// Whether an exposure may be switched on (a topic: its cog declared limits).
+pub type OnCheck<'a> = &'a (dyn Fn(&str) -> Result<(), String> + Sync);
+
+fn set(reg: &ExposureRegistry, p: SetParams, may_on: OnCheck<'_>) -> Result<Value, String> {
     let state = parse_state(&p.state)?;
     let audience = p.audience.as_deref().map(Audience::parse).transpose()?;
     let Some(cur) = reg.get(&p.id) else {
         return Err(format!("unknown exposure {:?}", p.id));
     };
+    // A topic is served only once its cog declared its own limits.
+    if state == ExposureState::On {
+        may_on(&p.id)?;
+    }
     if p.raw == Some(true) {
         if cur.kind != clawft_kernel::exposure::ExposureKind::Topic {
             return Err("--raw applies to topic exposures only".into());
@@ -141,8 +148,23 @@ pub async fn handle(method: &str, params: Value) -> Response {
     handle_with(&reg, method, params).await
 }
 
+fn daemon_check(id: &str) -> Result<(), String> {
+    #[cfg(all(feature = "placement", unix))]
+    return crate::cogbus_mesh::check_expose(id);
+    #[cfg(not(all(feature = "placement", unix)))]
+    {
+        let _ = id;
+        Ok(())
+    }
+}
+
 /// [`handle`] against a given registry.
 pub async fn handle_with(reg: &ExposureRegistry, method: &str, params: Value) -> Response {
+    handle_checked(reg, method, params, &daemon_check).await
+}
+
+/// [`handle_with`] with `may_on` deciding whether an exposure may go on.
+pub async fn handle_checked(reg: &ExposureRegistry, method: &str, params: Value, may_on: OnCheck<'_>) -> Response {
     match method {
         "expose.list" => Response::success(list_json(reg)),
         "expose.set" => {
@@ -150,7 +172,7 @@ pub async fn handle_with(reg: &ExposureRegistry, method: &str, params: Value) ->
                 Ok(p) => p,
                 Err(e) => return Response::error(format!("invalid params: {e}")),
             };
-            match set(reg, p) {
+            match set(reg, p, may_on) {
                 Ok(v) => {
                     flush_withdrawals().await;
                     Response::success(v)

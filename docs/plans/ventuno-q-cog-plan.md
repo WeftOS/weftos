@@ -138,8 +138,9 @@ credit_timeout_s       = 30
 
 `[mesh_limits]` is the cog's own ceiling on what another node may take from its topics; the
 values above are the starting values, to be set per cog (a 1 Hz telemetry cog and a 2 MS/s IQ
-cog need very different numbers). A manifest with outputs and no table is refused at pack,
-install and place.
+cog need very different numbers). A manifest with outputs and no table is refused at pack;
+an already released one still installs and places with the starting values, but its topics
+cannot be exposed to other nodes until a version declares the table.
 
 The live topic name is `<kind>/<source_id>`, for example
 `audio.pcm/venq-mic-0`. `source_id` is the installed sensor and stays the same

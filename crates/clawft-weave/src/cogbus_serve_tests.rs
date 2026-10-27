@@ -188,7 +188,8 @@ async fn a_published_topic_appears_as_a_local_topic_exposure_the_operator_can_wi
     let listed = crate::expose_rpc::list_json(&reg);
     let row = listed["exposures"].as_array().unwrap().iter().find(|x| x["id"] == id).unwrap().clone();
     assert_eq!((row["kind"].clone(), row["audience"].clone(), row["served"].clone()), (json!("topic"), json!("local"), json!(false)));
-    let ok = crate::expose_rpc::handle_with(&reg, "expose.set", json!({"id": id, "state": "on", "audience": "nodes:a,b"})).await;
+    let may_on = |x: &str| crate::cogbus_mesh::check_expose_on(&broker, x);
+    let ok = crate::expose_rpc::handle_checked(&reg, "expose.set", json!({"id": id, "state": "on", "audience": "nodes:a,b"}), &may_on).await;
     assert!(ok.ok, "{:?}", ok.error);
     assert_eq!(reg.get(id).unwrap().audience, Audience::parse("nodes:a,b").unwrap());
     let off = crate::expose_rpc::handle_with(&reg, "expose.set", json!({"id": id, "state": "off"})).await;
@@ -209,4 +210,40 @@ async fn a_published_topic_appears_as_a_local_topic_exposure_the_operator_can_wi
     broker2.publish(&s2, "telemetry", "venq-board", "telemetry.v1", 1, json!({"items": []})).unwrap();
     let e = reg2.get(id).unwrap();
     assert_eq!((e.state, e.audience), (ExposureState::Off, Audience::parse("nodes:a,b").unwrap()), "local decisions win over re-registration");
+}
+
+/// A cog packed before the rule (weftos-cogs v0.1.3: outputs, no
+/// `[mesh_limits]`) registers and publishes with the starting values, but
+/// `weaver expose on` refuses its topic (ADR-122 section 14).
+#[tokio::test]
+async fn a_released_cog_without_limits_publishes_but_its_topic_cannot_be_exposed() {
+    use clawft_kernel::exposure::{ExposureRegistry, ExposureState, Retention};
+    let tmp = tempfile::tempdir().unwrap();
+    let reg = Arc::new(ExposureRegistry::open("n-test", tmp.path(), Retention::default(), 1).unwrap());
+    let (hooks, activity) = hooks_with_activity(tmp.path(), None);
+    assert!(activity.set_exposures(reg.clone()));
+    let broker = broker_in("n", hooks, tmp.path());
+    let bus = Registrar::new(broker.clone(), &tmp.path().join("cogbus.sock"));
+    let released = COG_TOML.split("[mesh_limits]").next().unwrap();
+    let spec = CogSpec::parse(released.as_bytes()).expect("a released manifest still parses for install");
+    let mut r = registration(&HostContract::new(SocketAddr::from(([0, 0, 0, 0], 5006))), None);
+    r.mesh_limits = spec.mesh_limits;
+    assert!(r.mesh_limits.is_none());
+    r.token = clawft_types::secret::SecretString::new("u".repeat(40));
+    r.outputs[0].rate = None;
+    bus.register(&r).unwrap();
+    assert_eq!(broker.mesh_limits(&r.instance_id), Some(clawft_types::cog_topics::MeshLimits::STARTING));
+    assert!(!broker.mesh_limits_declared(&r.instance_id));
+    let s = broker.authenticate(&"u".repeat(40), None).unwrap();
+    broker.publish(&s, "telemetry", "venq-board", "telemetry.v1", 1, json!({"items": []})).unwrap();
+    let id = "topic.telemetry/venq-board";
+    let may_on = |x: &str| crate::cogbus_mesh::check_expose_on(&broker, x);
+    let no = crate::expose_rpc::handle_checked(&reg, "expose.set", json!({"id": id, "state": "on", "audience": "paired"}), &may_on).await;
+    assert!(!no.ok);
+    assert!(no.error.as_deref().unwrap_or("").contains("declares no [mesh_limits]"), "{:?}", no.error);
+    assert_eq!(reg.get(id).unwrap().audience, clawft_kernel::exposure::Audience::Local, "nothing changed");
+    // Switching it off is always allowed.
+    let off = crate::expose_rpc::handle_checked(&reg, "expose.set", json!({"id": id, "state": "off"}), &may_on).await;
+    assert!(off.ok, "{:?}", off.error);
+    assert_eq!(reg.get(id).unwrap().state, ExposureState::Off);
 }

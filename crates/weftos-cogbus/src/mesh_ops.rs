@@ -31,7 +31,7 @@ pub(super) struct Offer {
     expires: Instant,
 }
 
-enum Phase {
+pub(super) enum Phase {
     /// Subscribe at the next pump.
     Want,
     /// Subscribed; readings flow against credit.
@@ -42,28 +42,40 @@ enum Phase {
 
 /// One mesh subscription for one proxy topic.
 pub(super) struct Remote {
-    node: String,
-    kind: String,
-    source: String,
-    schema: String,
+    pub(super) node: String,
+    pub(super) kind: String,
+    pub(super) source: String,
+    pub(super) schema: String,
     policy: InputPolicy,
     raw: bool,
-    phase: Phase,
-    outstanding: u64,
-    renewed: Instant,
-    received: u64,
+    pub(super) phase: Phase,
+    pub(super) outstanding: u64,
+    pub(super) renewed: Instant,
+    pub(super) received: u64,
+    /// A stream topic: records land in a local proxy ring (B6d).
+    pub(super) stream: Option<StreamRemote>,
+}
+
+/// The stream half of a mesh subscription.
+pub(super) struct StreamRemote {
+    /// Project the proxy ring belongs to here.
+    pub(super) project: Option<String>,
+    /// Stream bytes of credit still outstanding.
+    pub(super) out_bytes: u64,
 }
 
 /// Mesh state of the broker.
 pub(super) struct MeshState {
     offers: HashMap<(String, String), Offer>,
-    remote: BTreeMap<u64, Remote>,
+    pub(super) remote: BTreeMap<u64, Remote>,
     next: u64,
-    window: u64,
+    pub(super) window: u64,
+    pub(super) window_bytes: u64,
     renew_every: Duration,
     max_backoff: Duration,
     mesh_name: Option<String>,
-    limits: HashMap<String, MeshLimits>,
+    /// Per instance: its limits, and whether its manifest declared them.
+    limits: HashMap<String, (MeshLimits, bool)>,
     pub(super) blobs: super::mesh_blobs::RemoteBlobs,
     pub(super) wake: Arc<Notify>,
 }
@@ -76,6 +88,7 @@ impl Default for MeshState {
             remote: BTreeMap::new(),
             next: 0,
             window: cfg.window,
+            window_bytes: cfg.window_bytes,
             renew_every: cfg.renew_every,
             max_backoff: cfg.max_backoff,
             mesh_name: None,
@@ -113,7 +126,35 @@ impl Broker {
     /// Declare `instance`'s `[mesh_limits]` (after `register`); without them
     /// no topic it writes is served to another node. Revoke forgets them.
     pub fn set_mesh_limits(&self, instance: &str, limits: MeshLimits) {
-        self.lock().mesh.limits.insert(instance.to_string(), limits);
+        self.lock().mesh.limits.insert(instance.to_string(), (limits, true));
+    }
+
+    /// `instance`'s manifest declared no `[mesh_limits]` (a cog packed before
+    /// the rule): it runs with the starting values, and none of its topics
+    /// is served to another node until a version declares them.
+    pub fn set_default_mesh_limits(&self, instance: &str) {
+        self.lock().mesh.limits.insert(instance.to_string(), (MeshLimits::STARTING, false));
+    }
+
+    /// Whether `instance` declared its own `[mesh_limits]`.
+    pub fn mesh_limits_declared(&self, instance: &str) -> bool {
+        self.lock().mesh.limits.get(instance).is_some_and(|l| l.1)
+    }
+
+    /// Whether the cog writing `<kind>/<source_id>` declared `[mesh_limits]`,
+    /// or why not (the `weaver expose on` check).
+    pub fn topic_limits_declared(&self, topic: &str) -> Result<(), String> {
+        let (kind, source) = topic.split_once('/').ok_or("not a <kind>/<source_id> topic")?;
+        let writer = self
+            .mesh_topic(kind, source)
+            .and_then(|t| t.writer)
+            .filter(|w| !w.starts_with('@'))
+            .ok_or_else(|| format!("no cog on this node writes {topic} now"))?;
+        if self.mesh_limits_declared(&writer) {
+            Ok(())
+        } else {
+            Err(format!("{writer} (the cog writing {topic}) declares no [mesh_limits]; a cog sets its own limits before it is served to other nodes"))
+        }
     }
 
     /// The `<mesh>` this node's `weftos://` names must carry (unset: any).
@@ -128,6 +169,7 @@ impl Broker {
     pub(crate) fn mesh_configure(&self, cfg: &MeshConfig) {
         let mut g = self.lock();
         g.mesh.window = cfg.window.max(2);
+        g.mesh.window_bytes = cfg.window_bytes.max(2);
         g.mesh.renew_every = cfg.renew_every;
         g.mesh.max_backoff = cfg.max_backoff;
     }
@@ -138,23 +180,40 @@ impl Broker {
 
     /// The `[mesh_limits]` `instance` registered, if any.
     pub fn mesh_limits(&self, instance: &str) -> Option<MeshLimits> {
-        self.lock().mesh.limits.get(instance).copied()
+        self.lock().mesh.limits.get(instance).map(|l| l.0)
     }
 
     pub(crate) fn mesh_topic(&self, kind: &str, source: &str) -> Option<TopicView> {
-        let g = self.lock();
-        let t = g.topics.get(&(kind.to_string(), source.to_string()))?;
-        Some(TopicView { schema: t.schema.clone(), class: t.class, writer: t.writer.clone(), project_id: t.project_id.clone() })
+        {
+            let g = self.lock();
+            if let Some(t) = g.topics.get(&(kind.to_string(), source.to_string())) {
+                return Some(TopicView { schema: t.schema.clone(), class: t.class, writer: t.writer.clone(), project_id: t.project_id.clone() });
+            }
+        }
+        let topic = format!("{kind}/{source}");
+        self.stream_rows(&|_| true).into_iter().find(|r| r.topic == topic).map(|r| TopicView {
+            schema: r.schema,
+            class: r.class,
+            // A proxy ring of another node's stream is never served onward.
+            writer: r.writer.map(|w| if w.starts_with("mesh-in-") { format!("@{w}") } else { w }),
+            project_id: r.project_id,
+        })
     }
 
-    /// Topics written by a cog on this node: `(topic, schema, class)`.
+    /// Topics written by a cog on this node (readings and stream rings):
+    /// `(topic, schema, class)`.
     pub(crate) fn mesh_offered(&self) -> Vec<(String, String, TopicClass)> {
-        let g = self.lock();
-        g.topics
-            .iter()
-            .filter(|(_, t)| t.writer.as_deref().is_some_and(|w| !w.starts_with('@')))
-            .map(|((k, s), t)| (format!("{k}/{s}"), t.schema.clone(), t.class))
-            .collect()
+        let cog = |w: &Option<String>| w.as_deref().is_some_and(|w| !w.starts_with('@') && !w.starts_with("mesh-in-"));
+        let mut v: Vec<_> = {
+            let g = self.lock();
+            g.topics
+                .iter()
+                .filter(|(_, t)| cog(&t.writer))
+                .map(|((k, s), t)| (format!("{k}/{s}"), t.schema.clone(), t.class))
+                .collect()
+        };
+        v.extend(self.stream_rows(&|_| true).into_iter().filter(|r| cog(&r.writer)).map(|r| (r.topic, r.schema, r.class)));
+        v
     }
 
     /// A broker-internal reader of exactly one topic, in that topic's
@@ -213,9 +272,10 @@ impl Broker {
         if offer.schema != schema {
             return Err(no(bad(ErrorCode::SchemaMismatch, format!("{name} carries {}", offer.schema))));
         }
-        if class != TopicClass::Reading {
-            return Err(no(bad(ErrorCode::Unsupported, format!("{name} is a {class:?} topic; only readings cross the mesh here"))));
+        if class == TopicClass::Blob {
+            return Err(no(bad(ErrorCode::Unsupported, format!("{name} is a blob topic; blobs travel by handle"))));
         }
+        let stream = class == TopicClass::Stream;
         if is_raw(class, schema) && !raw {
             return Err(no(bad(ErrorCode::RawNotExposed, format!("{name} is raw: subscribe with raw: true"))));
         }
@@ -229,7 +289,7 @@ impl Broker {
             }
         }
         let writer = proxy_writer(&node);
-        if let Some(t) = g.topics.get(&key) {
+        if let Some(t) = g.topics.get(&key).filter(|_| !stream) {
             if t.writer.as_deref().is_some_and(|w| !w.starts_with("@mesh:")) {
                 return Err(no(bad(ErrorCode::WriterConflict, format!("{kind}/{source} is written on this node"))));
             }
@@ -240,16 +300,20 @@ impl Broker {
         drop(g);
         self.ext.gate(&req)?;
         let mut g = self.lock();
-        let t = g.topics.entry(key.clone()).or_insert_with(|| Topic {
-            schema: schema.to_string(),
-            class: TopicClass::Reading,
-            writer: None,
-            project_id: project.clone(),
-            seq: 0,
-            messages: 0,
-            drops: 0,
-        });
-        t.writer = Some(writer);
+        // A stream lands in a proxy ring the hub writes (B6d); the cog reads
+        // it with `stream_subscribe` on `<kind>/<source_id>`.
+        if !stream {
+            let t = g.topics.entry(key.clone()).or_insert_with(|| Topic {
+                schema: schema.to_string(),
+                class: TopicClass::Reading,
+                writer: None,
+                project_id: project.clone(),
+                seq: 0,
+                messages: 0,
+                drops: 0,
+            });
+            t.writer = Some(writer);
+        }
         let cap = if decl.policy == InputPolicy::Sample { 1 } else { self.cfg.queue_len };
         let queue = Arc::new(SubQueue::new(cap, s.wake.clone()));
         g.next_sub += 1;
@@ -261,7 +325,8 @@ impl Broker {
             g.mesh.next += 1;
             let rid = g.mesh.next;
             let policy = if decl.policy == InputPolicy::Sample { InputPolicy::Sample } else { InputPolicy::DropOldest };
-            let r = Remote { node, kind: kind.into(), source: source.into(), schema: schema.into(), policy, raw, phase: Phase::Want, outstanding: 0, renewed: now, received: 0 };
+            let stream = stream.then(|| StreamRemote { project: project.clone(), out_bytes: 0 });
+            let r = Remote { node, kind: kind.into(), source: source.into(), schema: schema.into(), policy, raw, phase: Phase::Want, outstanding: 0, renewed: now, received: 0, stream };
             g.mesh.remote.insert(rid, r);
         }
         let wake = g.mesh.wake.clone();
@@ -388,6 +453,10 @@ impl Broker {
             }
             r.phase = Phase::Open;
             r.outstanding = st.mesh.window;
+            let bytes = r.stream.as_mut().map_or(0, |x| {
+                x.out_bytes = st.mesh.window_bytes;
+                x.out_bytes
+            });
             r.renewed = now;
             let policy = if r.policy == InputPolicy::Sample { "sample" } else { "drop-oldest" };
             let req = TopicReq::Subscribe {
@@ -396,7 +465,7 @@ impl Broker {
                 schema: r.schema.clone(),
                 policy: policy.into(),
                 raw: r.raw,
-                credit: Credit { n: st.mesh.window, bytes: 0 },
+                credit: Credit { n: st.mesh.window, bytes },
             };
             out.push((r.node.clone(), req));
         }

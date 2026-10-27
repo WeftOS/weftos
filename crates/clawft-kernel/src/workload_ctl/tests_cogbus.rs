@@ -114,11 +114,22 @@ async fn place_order(
     port: u16,
     start: bool,
 ) -> (HostNode, super::plane::PlacementControlPlane, super::plane_place::PlaceReport, tempfile::TempDir) {
+    place_toml(bus, seed, port, start, TOPICS).await
+}
+
+/// [`place_order`] of a package whose `cog.toml` extra is `topics`.
+async fn place_toml(
+    bus: Arc<FakeBus>,
+    seed: u8,
+    port: u16,
+    start: bool,
+    topics: &str,
+) -> (HostNode, super::plane::PlacementControlPlane, super::plane_place::PlaceReport, tempfile::TempDir) {
     let ctl = SigningKey::from_bytes(&[seed + 1; 32]);
     let host = host_node_native_only(seed, board_caps("pi5"), true, &ctl);
     assert!(host.svc.set_cogbus(bus));
     let tmp = tempfile::tempdir().unwrap();
-    let pkg = package_toml(tmp.path(), "bus-cog", &[(arch(), COG)], None, TOPICS);
+    let pkg = package_toml(tmp.path(), "bus-cog", &[(arch(), COG)], None, topics);
     let conn = Arc::new(MeshConnector::new(false));
     let addr = conn.register_local("host", host.svc.clone());
     let (plane, _chain) = controller(&ctl, conn);
@@ -279,4 +290,24 @@ async fn the_broker_can_stop_a_running_cog_and_it_stays_stopped_with_the_cause_c
     host.svc.supervise(u64::MAX / 2).await;
     assert_eq!(host.svc.lifecycle_of(&iid).await, Some(super::lifecycle::LifecycleState::Stopped));
     plane.instance(method::UNLOAD, &iid).await.unwrap();
+}
+
+/// A cog released before the `[mesh_limits]` rule (weftos-cogs v0.1.3: outputs,
+/// no table) still installs and places; it registers with no declared limits,
+/// so the broker never serves it to another node (ADR-122 section 14).
+#[tokio::test]
+async fn a_released_cog_without_mesh_limits_installs_and_places() {
+    let released = TOPICS.split("[mesh_limits]").next().unwrap();
+    assert!(released.contains("[[outputs]]") && !released.contains("mesh_limits"));
+    let bus = Arc::new(FakeBus { reachable: true, ..Default::default() });
+    // Packed the way v0.1.3 was, before pack required the table.
+    crate::workload_pkg::pack::RELEASED_STYLE.with(|c| c.set(true));
+    let placed = place_toml(bus.clone(), 79, 15079, false, released).await;
+    crate::workload_pkg::pack::RELEASED_STYLE.with(|c| c.set(false));
+    let (_host, _plane, report, _tmp) = placed;
+    assert!(report.placed.is_some(), "placed: {report:?}");
+    let log = bus.log.lock().unwrap();
+    assert_eq!(log.len(), 1);
+    assert_eq!(log[0].outputs.len(), 1);
+    assert!(log[0].mesh_limits.is_none(), "no declared limits travel to the broker");
 }

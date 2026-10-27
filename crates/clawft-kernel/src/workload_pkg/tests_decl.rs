@@ -35,6 +35,15 @@ fn declared_topics_and_interfaces_pack() {
 }
 
 #[test]
+fn outputs_without_mesh_limits_do_not_pack() {
+    let toml = format!("{HEAD}[[outputs]]\ntopic = \"audio.pcm\"\nschema = \"pcm.s16le.v1\"\nclass = \"stream\"\n");
+    match pack(&toml) {
+        Err(PackError::Input(m)) => assert!(m.contains("[mesh_limits] is required"), "{m}"),
+        other => panic!("expected the mesh_limits refusal, got {other:?}"),
+    }
+}
+
+#[test]
 fn bad_declarations_fail_at_pack_time_with_the_reason() {
     for (extra, want) in [
         ("interfaces = [\"pcie\"]\n", "unknown interface"),

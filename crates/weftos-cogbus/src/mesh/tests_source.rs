@@ -103,6 +103,14 @@ fn a_cog_without_mesh_limits_is_never_served() {
     a.expo.expose(TOPIC, MeshAudience::Paired, false, &["node-b"]);
     send_req(&a, "node-b", true, &subscribe(1, 8));
     assert_eq!(errors(&take_for(&wire, "node-b")), ["unavailable"]);
+    // A released cog with no table runs with the starting values, still unserved.
+    a.broker.set_default_mesh_limits("board");
+    assert_eq!(a.broker.mesh_limits("board"), Some(MeshLimits::STARTING));
+    assert!(a.broker.topic_limits_declared(TOPIC).unwrap_err().contains("declares no [mesh_limits]"));
+    send_req(&a, "node-b", true, &subscribe(2, 8));
+    assert_eq!(errors(&take_for(&wire, "node-b")), ["unavailable"]);
+    a.broker.set_mesh_limits("board", MeshLimits::STARTING);
+    assert!(a.broker.topic_limits_declared(TOPIC).is_ok());
 }
 
 #[test]

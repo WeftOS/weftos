@@ -141,3 +141,20 @@ async fn a_reading_crosses_two_mesh_runtimes_as_raw_frames() {
     hub_a.withdraw(ID);
     assert!(hub_a.served().is_empty());
 }
+
+/// weftos-cogs v0.1.3 cogs carry outputs and no `[mesh_limits]`: they run with
+/// the starting values but `weaver expose on` refuses their topics.
+#[test]
+fn a_released_cog_without_limits_runs_but_cannot_be_exposed() {
+    let broker = Arc::new(Broker::new(BrokerConfig::new("node-a")));
+    let out = OutputSpec { topic: "telemetry".into(), schema: "telemetry.v1".into(), class: TopicClass::Reading };
+    let board = cog(&broker, "board", 'b', vec![out], vec![]);
+    broker.set_default_mesh_limits("board");
+    broker.publish(&board, "telemetry", "venq-board", "telemetry.v1", 1, json!({"n": 1})).unwrap();
+    assert_eq!(broker.mesh_limits("board"), Some(MeshLimits::STARTING));
+    let e = super::check_expose_on(&broker, ID).unwrap_err();
+    assert!(e.contains("declares no [mesh_limits]"), "{e}");
+    assert!(super::check_expose_on(&broker, "infer.chat").is_ok(), "only topics are checked");
+    broker.set_mesh_limits("board", MeshLimits::STARTING);
+    assert!(super::check_expose_on(&broker, ID).is_ok());
+}

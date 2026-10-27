@@ -15,6 +15,10 @@
 //!   operator's `rate_per_min` and `max_request_bytes` (as bytes per second)
 //!   can only lower the cog's own `[mesh_limits]`.
 //! - Every subscribe, refusal and end is an exposure activity record.
+//! - Streams (B6d) need the broker socket: the hub's taps and proxies are
+//!   internal instances that connect to it.
+//! - `weaver expose on topic.*` is refused unless the cog writing it declared
+//!   `[mesh_limits]` ([`check_expose`]).
 //!
 //! Service mode (ADR-103): the daemon does not own the mesh there, so there is
 //! no runtime to hang the frames on and mesh topics are off, as inference
@@ -49,6 +53,27 @@ pub fn withdraw(id: &str) {
     if let Some(h) = hub() {
         h.withdraw(id);
     }
+}
+
+/// May exposure `id` be switched on? A topic only when the cog writing it
+/// declared its own `[mesh_limits]` (ADR-122 section 14); anything else, yes.
+pub fn check_expose_on(broker: &Broker, id: &str) -> Result<(), String> {
+    match id.strip_prefix("topic.") {
+        Some(topic) => broker.topic_limits_declared(topic),
+        None => Ok(()),
+    }
+}
+
+/// [`check_expose_on`] against this daemon's broker.
+pub fn check_expose(id: &str) -> Result<(), String> {
+    if !id.starts_with("topic.") {
+        return Ok(());
+    }
+    let broker = hub()
+        .map(|h| h.broker().clone())
+        .or_else(|| crate::cogbus_serve::runtime().map(|r| r.broker.clone()))
+        .ok_or("the cogbus is not running on this daemon, so no cog's limits are known")?;
+    check_expose_on(&broker, id)
 }
 
 /// After an operator change to `id`: end its remote subscriptions at once if
@@ -182,11 +207,15 @@ pub fn verified_peers(rt: Arc<MeshRuntime>) -> Arc<dyn Fn() -> Vec<PeerInfo> + S
 
 /// Install and run the hub for the daemon's life: pump, adverts to verified
 /// peers, and a peer that leaves ends its subscriptions both ways.
-pub fn start(broker: Arc<Broker>, rt: Arc<MeshRuntime>) {
+pub fn start(broker: Arc<Broker>, rt: Arc<MeshRuntime>, socket: Option<std::path::PathBuf>) {
     if hub().is_some() {
         return;
     }
     let hub = install(broker, rt.clone(), Arc::new(RegistryExposures::new(None, plane_paired())));
+    match socket {
+        Some(p) => hub.set_socket(p),
+        None => tracing::warn!(target: "cogbus", "no broker socket: stream topics do not cross the mesh"),
+    }
     tokio::spawn(hub.clone().run(verified_peers(rt.clone()), ADVERT_EVERY));
     let mut rx = rt.subscribe_peer_events();
     tokio::spawn(async move {

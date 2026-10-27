@@ -51,6 +51,9 @@ pub(crate) struct Served {
     /// The writer and the topic's project (blobs it hands out are theirs).
     pub(crate) owner: String,
     pub(crate) project: Option<String>,
+    /// A stream topic's ring tap (B6d), and its byte budget.
+    pub(crate) tap: Option<super::Tap>,
+    pub(crate) byte_budget: Budget,
     pub(crate) reader: u64,
     pub(crate) queue: Arc<SubQueue>,
     pub(crate) credit: Credit,
@@ -128,6 +131,7 @@ impl MeshTopicHub {
         let declared = self
             .broker
             .mesh_limits(&writer)
+            .filter(|_| self.broker.mesh_limits_declared(&writer))
             .ok_or_else(|| no(ErrorCode::Unavailable, format!("{topic}: its cog declared no [mesh_limits]")))?;
         if t.schema != schema {
             return Err(no(ErrorCode::SchemaMismatch, format!("{topic} carries {}", t.schema)));
@@ -155,8 +159,8 @@ impl MeshTopicHub {
                 return Err(no(ErrorCode::RawNotExposed, format!("{topic} is raw: {why}")));
             }
         }
-        if t.class != TopicClass::Reading {
-            return Err(no(ErrorCode::Unsupported, format!("{topic} is a {:?} topic; only readings cross the mesh here", t.class)));
+        if t.class == TopicClass::Blob {
+            return Err(no(ErrorCode::Unsupported, format!("{topic} is a blob topic; blobs travel by handle")));
         }
         let limits = declared.narrowed(view.rate_per_min, view.bytes_per_sec);
         let mut served = self.src.lock();
@@ -171,15 +175,22 @@ impl MeshTopicHub {
             return Err(no(ErrorCode::BadRequest, format!("subscription {sub} is already open")));
         }
         let cap = if policy == InputPolicy::Sample { 1 } else { self.cfg.queue_len };
-        let (reader, queue) = self
-            .broker
-            .mesh_open_reader(kind, source, cap, self.wake.clone())
-            .ok_or_else(|| no(ErrorCode::NotFound, format!("{topic} went away")))?;
+        let (reader, queue, tap) = if t.class == TopicClass::Stream {
+            let tap = self.open_tap(kind, source, &t.schema, t.project_id.clone()).map_err(|e| no(ErrorCode::Unavailable, e))?;
+            (0, Arc::new(SubQueue::new(1, self.wake.clone())), Some(tap))
+        } else {
+            let (reader, queue) = self
+                .broker
+                .mesh_open_reader(kind, source, cap, self.wake.clone())
+                .ok_or_else(|| no(ErrorCode::NotFound, format!("{topic} went away")))?;
+            (reader, queue, None)
+        };
+        let byte_budget = Budget::new(limits.bytes_per_sec as f64, at);
         let credit = Credit { n: credit.n.min(self.cfg.window * 4), bytes: credit.bytes.min(self.cfg.window_bytes * 4) };
         let readings = Budget::new(f64::from(limits.readings_per_min) / 60.0, at);
         served.insert(
             (peer.to_string(), sub),
-            Served { topic: topic.to_string(), raw: is_raw(t.class, &t.schema), owner: writer.clone(), project: t.project_id.clone(), reader, queue, credit, last_credit: at, limits, readings, sent: 0, bytes: 0, drops: 0, started: at },
+            Served { topic: topic.to_string(), raw: is_raw(t.class, &t.schema), owner: writer.clone(), project: t.project_id.clone(), tap, byte_budget, reader, queue, credit, last_credit: at, limits, readings, sent: 0, bytes: 0, drops: 0, started: at },
         );
         drop(served);
         self.broker.ext.allowed(BusAction::MeshSubscribe, &principal, None, topic);
@@ -231,15 +242,30 @@ impl MeshTopicHub {
                         hands.push((peer.clone(), handles, h));
                     }
                     let len = serde_json::to_vec(&d.body).map_or(0, |b| b.len() as u64);
-                    out.push((peer.clone(), *sub, TopicData::Reading { sub: *sub, seq: d.seq, t_ns: d.t_ns, body: d.body }, len));
+                    out.push((peer.clone(), *sub, TopicData::Reading { sub: *sub, seq: d.seq, t_ns: d.t_ns, body: d.body }, len, Vec::new()));
+                }
+                if let Some(tap) = &s.tap {
+                    let (records, lost) = Self::drain_tap(tap);
+                    s.drops += lost;
+                    for r in records {
+                        let len = r.data.len() as u64;
+                        let fits = s.credit.n > 0 && s.credit.bytes >= len && r.data.len() <= super::wire::MAX_TAIL;
+                        if !fits || !s.byte_budget.take(len as f64, now) {
+                            s.drops += 1;
+                            continue;
+                        }
+                        s.credit.n -= 1;
+                        s.credit.bytes -= len;
+                        out.push((peer.clone(), *sub, TopicData::Chunk { sub: *sub, seq: r.seq, t_ns: r.t_ns }, len, r.data));
+                    }
                 }
             }
         }
         for (peer, handles, h) in hands {
             self.hand(&peer, handles, h);
         }
-        for (peer, sub, d, len) in out {
-            let sent = self.send_data(&peer, &d, &[]);
+        for (peer, sub, d, len, tail) in out {
+            let sent = self.send_data(&peer, &d, &tail);
             if let Some(s) = self.src.lock().get_mut(&(peer, sub)) {
                 if sent {
                     s.sent += 1;
@@ -310,8 +336,11 @@ impl MeshTopicHub {
         v
     }
 
-    fn finish(&self, peer: &str, s: Served, why: &str) {
+    fn finish(&self, peer: &str, mut s: Served, why: &str) {
         self.broker.mesh_close_reader(s.reader);
+        if let Some(tap) = s.tap.take() {
+            self.close_tap(tap);
+        }
         let outcome = format!("ended:{why} sent {} dropped {}", s.sent, s.drops);
         self.note(peer, &s.topic, s.bytes, s.started, outcome, None);
     }
