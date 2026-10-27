@@ -17,12 +17,12 @@
 //! non-fatal. The `--short=8` width and dirty logic match the weaver build
 //! script exactly so the two hashes are directly comparable at runtime.
 
+use std::path::PathBuf;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn main() {
-    println!("cargo:rerun-if-changed=../../.git/HEAD");
-    println!("cargo:rerun-if-changed=../../.git/refs");
+    watch_git_head();
     println!("cargo:rerun-if-env-changed=WEFTOS_BUILD_COMMIT");
     println!("cargo:rerun-if-env-changed=GIT_SHA");
     println!("cargo:rerun-if-env-changed=GIT_DIRTY");
@@ -148,4 +148,43 @@ fn days_to_ymd(days_since_epoch: i64) -> (i32, u32, u32) {
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = if m <= 2 { y + 1 } else { y };
     (year as i32, m as u32, d as u32)
+}
+
+/// Re-run when HEAD, or the branch it points at, moves. Resolved through
+/// git so it also holds in a linked worktree, where `.git` is a file: a
+/// literal `../../.git/HEAD` does not exist there, and cargo re-runs the
+/// script on every build when a watched path is missing. Only paths that
+/// exist are emitted for the same reason.
+fn watch_git_head() {
+    let git = |args: &[&str]| -> Option<String> {
+        let out = Command::new("git").args(args).output().ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let s = String::from_utf8(out.stdout).ok()?.trim().to_string();
+        (!s.is_empty()).then_some(s)
+    };
+    let Some(git_dir) = git(&["rev-parse", "--absolute-git-dir"]) else {
+        return;
+    };
+    let git_dir = PathBuf::from(git_dir);
+    let common = git(&["rev-parse", "--git-common-dir"])
+        .map(PathBuf::from)
+        .map(|c| {
+            if c.is_absolute() {
+                c
+            } else {
+                std::env::current_dir().map(|d| d.join(&c)).unwrap_or(c)
+            }
+        })
+        .unwrap_or_else(|| git_dir.clone());
+    let mut paths = vec![git_dir.join("HEAD"), common.join("packed-refs")];
+    if let Some(head_ref) = git(&["symbolic-ref", "-q", "HEAD"]) {
+        paths.push(common.join(head_ref));
+    }
+    for p in paths {
+        if p.exists() {
+            println!("cargo:rerun-if-changed={}", p.display());
+        }
+    }
 }
