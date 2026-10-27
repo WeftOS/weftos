@@ -668,7 +668,9 @@ The owner took the recommended option for each:
    name, so the broker cannot control who opens a stream. It has no permission mode that
    works with per-cog uids or containers short of opening every stream to everyone. And its
    overflow policy is set per service, not per reader. The `memfd` ring from B2 stays. The
-   reasons and evidence are under "Alternatives considered".
+   reasons and evidence are under "Alternatives considered". Owner decision, 2026-10-27:
+   iceoryx2 is shelved for now. Revisit it if it gains access control or a way to hand a
+   segment to one process by descriptor.
 2. **Reading encoding on the socket**: length-prefixed JSON, matching the mesh today.
 3. **Audit depth**: governance decisions and the activity log for declare, subscribe and
    refuse; no chain event per subscription.
