@@ -20,6 +20,8 @@ mod tests_fetch;
 mod tests_remote;
 #[path = "tests_source.rs"]
 mod tests_source;
+#[path = "tests_stream.rs"]
+mod tests_stream;
 
 pub(super) const P1: &str = "01J9ZXW0PRJCTAAAAAAAAAAAAA";
 pub(super) const TOPIC: &str = "telemetry/venq-board";

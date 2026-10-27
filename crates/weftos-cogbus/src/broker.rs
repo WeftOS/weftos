@@ -50,6 +50,8 @@ mod blobops;
 pub(crate) mod mesh_ops;
 #[path = "mesh_blobs.rs"]
 pub(crate) mod mesh_blobs;
+#[path = "mesh_streams.rs"]
+pub(crate) mod mesh_streams;
 
 struct Instance {
     spec: InstanceSpec,

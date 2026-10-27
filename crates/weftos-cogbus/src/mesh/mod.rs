@@ -21,7 +21,34 @@
 
 mod fetch;
 pub mod source;
+#[cfg(unix)]
+mod stream;
 pub mod wire;
+
+#[cfg(unix)]
+pub(crate) use stream::{Streams, Tap};
+
+/// Streams need the broker socket (unix); elsewhere none crosses the mesh.
+#[cfg(not(unix))]
+#[derive(Default)]
+pub(crate) struct Streams;
+
+/// See the unix `stream` module.
+#[cfg(not(unix))]
+pub(crate) struct Tap;
+
+#[cfg(not(unix))]
+impl MeshTopicHub {
+    pub(crate) fn open_tap(&self, _: &str, _: &str, _: &str, _: Option<String>) -> Result<Tap, String> {
+        Err("stream topics cross the mesh on unix nodes only".into())
+    }
+    pub(crate) fn drain_tap(_: &Tap) -> (Vec<crate::stream::StreamRecord>, u64) {
+        (Vec::new(), 0)
+    }
+    pub(crate) fn close_tap(&self, _: Tap) {}
+    pub(crate) fn on_chunk(&self, _: &str, _: u64, _: u64, _: u64, _: &[u8]) {}
+    pub(crate) fn sync_proxies(&self) {}
+}
 
 #[cfg(test)]
 mod tests;
@@ -163,6 +190,7 @@ pub struct MeshTopicHub {
     pub(crate) cfg: MeshConfig,
     pub(crate) src: source::Source,
     pub(crate) fetches: fetch::Fetches,
+    pub(crate) streams: Streams,
     pub(crate) wake: Arc<Notify>,
 }
 
@@ -177,7 +205,7 @@ impl MeshTopicHub {
     ) -> Arc<Self> {
         let wake = broker.mesh_wake();
         broker.mesh_configure(&cfg);
-        Arc::new(Self { broker, link, exposures, cfg, src: source::Source::default(), fetches: Default::default(), wake })
+        Arc::new(Self { broker, link, exposures, cfg, src: source::Source::default(), fetches: Default::default(), streams: Streams::default(), wake })
     }
 
     /// The broker.
@@ -237,9 +265,7 @@ impl MeshTopicHub {
             }
             TopicData::Blob { req, size, eof } => self.on_blob(node, req, size, eof, tail),
             TopicData::BlobError { req, code, message } => self.on_blob_error(node, req, &code, &message),
-            TopicData::Chunk { .. } => {
-                tracing::debug!(target: "cogbus", peer = node, "stream chunk for a stream this node does not carry yet");
-            }
+            TopicData::Chunk { sub, seq, t_ns } => self.on_chunk(node, sub, seq, t_ns, tail),
         }
     }
 
@@ -250,6 +276,7 @@ impl MeshTopicHub {
             let (node, req) = a;
             self.send_req(&node, &req);
         }
+        self.sync_proxies();
         self.pump_source();
         self.start_fetches();
         self.serve_fetches();

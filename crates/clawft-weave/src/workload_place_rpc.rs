@@ -553,11 +553,14 @@ async fn build(
     // are placed without WEFTOS_COGBUS.
     // ADR-122 section 14: exposed topics to peers and `weftos://` subscribes,
     // over the kernel's own mesh (none in service mode).
-    if let Some(rt) = bus_mesh {
-        crate::cogbus_mesh::start(broker.clone(), rt);
-    }
+    let mesh_broker = broker.clone();
     if let Some(bus) = crate::cogbus_serve::install_with(broker, dir, store_sink, bus_container).await {
         local.set_cogbus(bus);
+    }
+    if let Some(rt) = bus_mesh {
+        // Stream taps and proxies connect to the broker socket, when it is bound.
+        let socket = crate::cogbus_serve::runtime().map(|r| r.socket().to_path_buf());
+        crate::cogbus_mesh::start(mesh_broker, rt, socket);
     }
     // Put back what was placed here before the daemon restarted: after the
     // cogbus and ingest wiring, so each gets a fresh token like a new placement.
