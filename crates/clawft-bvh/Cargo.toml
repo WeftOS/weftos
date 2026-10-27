@@ -12,7 +12,7 @@ description = "BVH broad-phase spatial index (ADR-056 Phase A). No kernel/chain 
 [dependencies]
 serde = { workspace = true }
 # Payload VectorRef decode for Phase F join (WEFT-723 / ADR-093).
-weftos-leaf-types = { version = "0.1.0", path = "../weftos-leaf-types" }
+weftos-leaf-types = { version = "0.1.1", path = "../weftos-leaf-types" }
 
 [dev-dependencies]
 rand = { workspace = true }

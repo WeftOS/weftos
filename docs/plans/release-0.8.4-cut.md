@@ -1,7 +1,7 @@
 # v0.8.4 stable cut
 
 **Date**: 2026-10-23
-**Status**: Scope approved by the owner on 2026-10-23. Work is in progress.
+**Status**: Scope approved by the owner on 2026-10-23. Lanes landed on `target-0.8.4` by 2026-10-27; the execution plan is `release-0.8.4.md`.
 **Base**: `target-0.8.4`. The latest prerelease is v0.8.4-rc.14 (`8282dd5ee`, 2026-10-13), deployed on all mesh nodes.
 
 ## Scope
@@ -12,23 +12,23 @@ v0.8.4 stable is everything in rc.1–rc.14, plus the commits landed since rc.14
 
 | Card | Item | State |
 |---|---|---|
-| `1a919ae6` | Daemon hang. A runtime deadlock (seen on the primary node, 2026-10-15 → 10-23), bounded shutdown, `stop --force` escalation, and a liveness watchdog. | lane |
-| `85f29f99` | Governance: a Warning-level browser_policy match clears an earlier block, so the decision depends on rule order (G0). | lane |
-| `4366dc71` | Teams webhook JWT is never signature-verified. | lane |
-| `dec62889` | The release Docker image pushes, but the post-publish health smoke has failed since 2026-09-28. | lane |
-| `0eff3101` | Release KB and SBOM workflows fail on some rc tags. | lane |
+| `1a919ae6` | Daemon hang. A runtime deadlock (seen on the primary node, 2026-10-15 → 10-23), bounded shutdown, `stop --force` escalation, and a liveness watchdog. | Done in `89fedd4a1` (rc.15) and `14b54403d` (SIGTERM escalation, landed `3b60037e9`). |
+| `85f29f99` | Governance: a Warning-level browser_policy match clears an earlier block, so the decision depends on rule order (G0). | Done in `fe59c46ab` (rc.15). |
+| `4366dc71` | Teams webhook JWT is never signature-verified. | Done in `dd884c0cb` (rc.15). |
+| `dec62889` | The release Docker image pushes, but the post-publish health smoke has failed since 2026-09-28. | Done in `43c5b0d89` and `cb4ce070b`; v0.8.4 is the first tag to exercise it. |
+| `0eff3101` | Release KB and SBOM workflows fail on some rc tags. | Done in `af17a6053` (rc.15). |
 | `ba258d78` | `kernel restart` re-exec refuses its own PID. | Fixed in `edc3ad209` (already in 0.8.4). It was exercised live on 2026-10-23 when a member node re-execed and wrote its `REFUSED` exit marker. |
 
 ### Dependency and security cards
 
 | Card | Item | State |
 |---|---|---|
-| `06eb23e8` | jsonwebtoken 9 → 10.3 (teams feature) | lane |
-| `923ac3d6` | rpassword 5 → 7.5 (weft) | lane |
-| `c6920f2b` | Lockfile refresh: xxhash-rust, rustls in the fuzz lock; `kb` and `fuzz-check` build lanes | lane |
-| `0623d6a7` | Drop the unpatched `failure` crate via webrtc-audio-processing 2.1. Fallback: dismiss as not used. | lane (timeboxed) |
-| `5e907457` | Record residual alerts. The owner dismisses them on GitHub. | lane (docs) |
-| `975e420f` | Next.js/esbuild alerts. They close when 0.8.4 stable merges to master. | release step |
+| `06eb23e8` | jsonwebtoken 9 → 10.3 (teams feature) | Done in `bc18eca50` (rc.15). |
+| `923ac3d6` | rpassword 5 → 7.5 (weft) | Done (rc.15). |
+| `c6920f2b` | Lockfile refresh: xxhash-rust, rustls in the fuzz lock; `kb` and `fuzz-check` build lanes | Done in `6258837e0` (rc.15). |
+| `0623d6a7` | Drop the unpatched `failure` crate via webrtc-audio-processing 2.1. Fallback: dismiss as not used. | Timeboxed; residual recorded under `5e907457`. |
+| `5e907457` | Record residual alerts. The owner dismisses them on GitHub. | Done (docs); the owner dismisses on GitHub. |
+| `975e420f` | Next.js/esbuild alerts. They close when 0.8.4 stable merges to master. | Release step: closes when `master` fast-forwards to v0.8.4. |
 
 ### Finished work brought in (if clean)
 

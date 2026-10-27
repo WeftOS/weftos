@@ -9,9 +9,12 @@ execution plan for that scope; it does not reopen it.
 
 Tiers. Every step names who does it and how it is verified:
 
-- **local model**: `qwen3-coder-cc` (Qwen3-Coder-30B-A3B 8-bit) on Ollama `:11434`, driven with
-  the inputs inlined and the exact output wanted. Narrow, checkable jobs only. A failed job goes
-  to **haiku**, then to Fable. The tier that did each job is recorded in the final report.
+- **local model**: the owner's small models on a member node over the tailnet: Qwen3.5-4B
+  (`:8083`, up to 4 parallel requests) for inlined edits and tables, Qwen3.5-0.8B (`:8082`, up
+  to 8) for classify and fan-out, each prompt plus output under 8k tokens; Qwen3-Coder-Next
+  (`:8081`) for larger drafts when it is up. Driven with the inputs inlined and the exact output
+  wanted. Narrow, checkable jobs only. A failed job goes to **haiku**, then to Fable. The tier
+  that did each job is recorded in the final report.
 - **codemod**: deterministic `sed`/`cargo` edits, no LLM.
 - **haiku**: a Claude Code subagent on `haiku` for read-only checks and escalations.
 - **Fable**: every merge, gate, tag, approval, publish and push. Nothing irreversible is
@@ -30,7 +33,7 @@ stable tag, so G1 is the crates gate. The dry-run evidence goes to "main" before
 | CI secrets | repo: `CRATES_IO_TOKEN`, `TAP_APP_ID`, `TAP_APP_PRIVATE_KEY`; env `weftos-cogs`: `WEAVELOGIC_RELEASE_KEY` (set 2026-10-27) |
 | Toolchain | Rust 1.95 with `aarch64-apple-darwin`, `wasm32-wasip2`, `wasm32-unknown-unknown`, `x86_64-pc-windows-gnu` (no gate skips); cargo-dist 0.31.0 matches `[workspace.metadata.dist]` |
 | Disk | internal 767 GB free; external 1.8 TB free |
-| Local model lane | Ollama restarted (its model symlink was dangling, see `~/llm/USING_LOCAL_MODELS.md` §1); 21 models listed; `qwen3-coder-cc` answers |
+| Local model lane | `:8082` and `:8083` answer a one-line smoke test in ~0.5 s; `:8081` not yet up (owner restart pending) |
 | 0.8.4 blockers | all on `target-0.8.4` since rc.15: `1a919ae6` bounded stop (`89fedd4a1`), G0 `85f29f99` (`fe59c46ab`), Teams JWT `4366dc71` (`dd884c0cb`), KB/SBOM `0eff3101` (`af17a6053`), Docker `dec62889` (`43c5b0d89`, `cb4ce070b`) |
 | rc.15 workflows | Release, SBOM, KB, Browser WASM all green; Publish Crates skipped (rc); 89 assets |
 
@@ -234,9 +237,9 @@ Fable does not run Terraform. The hand-over is a filled-in checklist, not a sket
 | J5 leak sweep of the diff | haiku (read-only, needs tool use) | file list | Fable reads hits |
 | Version bump | codemod | file list | greps + gate check 18 |
 
-Access: the Agent tool cannot run a subagent on a local model, and this agent has no Ruflo
-`agent_execute` tool loaded, so jobs go through Ollama's chat API directly (`lm.sh` in the
-scratchpad, temperature 0.2, no thinking, output to a file that Fable diffs). Ruflo's own path
-(`~/llm/bin/ruflo-local test`) is being checked alongside; the report says which worked.
+Access: the Agent tool cannot run a subagent on a local model, and Ruflo's `agent_execute`
+on the local provider fails before any model call (`policy-ledger-anchor-missing`, raised with
+the `llm` agent), so jobs go through the servers' OpenAI-compatible chat API directly (a
+30-line script, temperature 0.2, thinking off, output to a file that Fable diffs).
 If a job fails twice on the local model it goes to haiku; three failures of a class means the
 class is not workable locally and the report says so with the outputs.

@@ -7,11 +7,89 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Staging area for changes after the 0.8.4 cut.
+Staging area for changes after the 0.8.4 release.
 
-- The `weftos` and `weftos-cogs` repositories moved to the WeftOS GitHub org on 2026-10-27
-  (`WeftOS/weftos`, `WeftOS/weftos-cogs`). Container images publish to
-  `ghcr.io/weftos/weftos`; images published earlier stay under `ghcr.io/weave-logic-ai/weftos`.
+## [0.8.4] - 2026-10-27
+
+The stable release of the 0.8.4 line: everything in rc.1 to rc.15 (the per-rc entries below have
+the detail) plus the work landed since rc.15. This is the first tag that publishes the whole
+workspace to crates.io automatically and the first release built from the `WeftOS` GitHub org.
+
+### Added
+- **Cog data plane broker (ADR-122, Accepted).** Each node daemon runs `cogbus` on a local
+  socket:
+  - B1: readings.
+  - B2: shared-memory stream rings with reader policies.
+  - B3: governed subscriptions, cross-project grants, an activity log, refusal stop and a topics
+    report.
+  - B4: the ingest bridge as a broker consumer with a store sink and an optional fallback port.
+  - B5: a blob store addressed by BLAKE3 handle; `infer.v1` can pass an image by blob handle.
+  - B6: topic exposures (kind, registry, CLI) and `[mesh_limits]`; `cog pack` and `expose`
+    refuse a cog over its declared limits, `install` and `place` warn, so already-released cogs
+    still install.
+  - Service calls (`serve` / `call` / `reply` on `svc.*` topics) with deadlines and per-caller
+    caps; the `infer.v1`, `event.v1` and `sdr.v1` schemas.
+  - Publish budgets, metered `every <n> <unit>` rates, idle ping/close, and subscription and
+    connection caps.
+  - Per-cog uid and a `cogbus` socket group; one owner per device, recorded in the device
+    ledger; netdev device claims.
+  - Containerised cogs reach the broker; VMs are declared unsupported.
+  - Governed, chained cog stop.
+- **Cog declarations (Ventuno plan P0/P1).** `cog.toml` gains `interfaces`, `[[outputs]]` and
+  `[[inputs]]` with registered schemas, and placement can match on interfaces. Node facts now
+  cover Qualcomm NPUs, GenieX, media, buses, MCU, SDR and power monitors, and advertise a model
+  only after it is checked against the daemon's trust.
+- **NPU service (P4).** NPU state appears in node facts from the `npu-infer` cog's telemetry.
+- `weaver workload place --arg` passes cog configuration arguments.
+- **Chief-of-staff glance cards.**
+  - The `glance.card` tool puts a card on the e-ink panel.
+  - Cards carry ids and up to two options and are answered through `POST /v1/cos/answer`.
+  - `GET /v1/cos/glance` is a snapshot, and `/v1/cos/glance/art.png` serves the idle art.
+  - Cards and art persist across restarts.
+  - The e-ink panel firmware shows NPU-diffused weaving art when idle.
+- **Phone app.** It shows the live CoS card with option buttons and a free-text reply, raises a
+  needs-you notification with actions, and shows the idle art.
+- **Urth and the world model.** A measured room region is published through `ecc.spatial` and
+  queried with provenance; spatial-check gates run on region ingest (draft policy rows warn
+  only); the BVH is rebuilt from the chain at daemon boot so published regions survive a
+  restart; the W4 evaluation harness sits on the rollback gate.
+- Build: `WEFTOS_BUILD_COMMIT` overrides the git lookup for the `weaver`/`weft` version stamp;
+  the `android` and `glasses` lanes run `lintDebug`.
+- Agents and skills: the `can-expert` package with the `can-brain` skill; `urth-spatial-checks`.
+- Plans and research: the Ventuno Q cog plan, NPU benchmarks and soaks; the App Lab brick spike;
+  the PlutoSDR Nano bench and the RX/TX cog plan, with `scripts/bench/pluto/`; ADR-124 node
+  clock and reading time (Proposed); the sensor-node spec and module types.
+
+### Changed
+- The repositories moved to the WeftOS GitHub org (`WeftOS/weftos`, `WeftOS/weftos-cogs`).
+  Container images publish to `ghcr.io/weftos/weftos`; earlier images stay under
+  `ghcr.io/weave-logic-ai/weftos`.
+- The Homebrew tap token is minted from a GitHub App at release time.
+- Container cog instances: instance ids are derived from the owner key and carry the project
+  and controller, so a cog's `data/` is never shared across projects; `/data` is a tmpfs; blob
+  ownership is `(project, instance)`.
+- The agents leak check reads extra private terms from a file outside the repository.
+- `weftos-leaf-types` is 0.1.1 on crates.io (leaf discovery and frame reader).
+
+### Fixed
+- `weaver kernel stop` no longer hangs in shutdown, and the daemon honours SIGTERM.
+- Placed native cogs survive a daemon restart, and staging over a stale directory works. The
+  host keeps a cog's `data/` on restore; journal entries are signed and verified on replay,
+  with a controller re-check, bounded retries for transient restores, an owner marker that is
+  written first and compared in full, and a set-aside that keeps the last three journals.
+- Placement: an unloaded cog instance is not placed again by a stale `Lost` record; a node's
+  facts are refreshed after a stop or unload; a refusal names the failing permit condition and
+  warns on cog permits that cannot match.
+- `cogbus`: a connection-slot leak and pre-hello caps; it compiles on Windows;
+  `cogbus.list` and `workload.list` work outside a project.
+- Node facts skip kernel console ports in `bus.uart`.
+- The CoS answers an unknown card id with "no such card"; the phone app follows the landed card
+  contract; the Android Kotlin bindings are generated with the Android cleaner so minSdk 29 has
+  no NewApi errors.
+- Release CI: the Docker digest artifact name no longer contains a slash, so the image build and
+  its post-publish health smoke run; the KB and SBOM uploads wait on the Release run.
+- Advisories published after rc.15: crypto-bigint is ignored with a recorded justification; the
+  npm zod, body-parser and fast-uri advisories are allow-listed; undici is overridden to 7.30.1.
 
 ## [0.8.4-rc.15] - 2026-10-23
 
@@ -2224,7 +2302,11 @@ data structure as an interactive, drillable topology graph.
 - Release profile with LTO, strip, single codegen unit, and abort-on-panic
 - 1,029 tests across the workspace
 
-[Unreleased]: https://github.com/WeftOS/weftos/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/WeftOS/weftos/compare/v0.8.4...HEAD
+[0.8.4]: https://github.com/WeftOS/weftos/compare/v0.8.3...v0.8.4
+[0.8.3]: https://github.com/WeftOS/weftos/compare/v0.8.2...v0.8.3
+[0.8.2]: https://github.com/WeftOS/weftos/compare/v0.8.1...v0.8.2
+[0.8.1]: https://github.com/WeftOS/weftos/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/WeftOS/weftos/compare/v0.6.20...v0.8.0
 [0.6.20]: https://github.com/WeftOS/weftos/compare/v0.6.19...v0.6.20
 [0.6.19]: https://github.com/WeftOS/weftos/compare/v0.6.18...v0.6.19
