@@ -53,6 +53,8 @@ pub struct MdnsDiscovery {
     active: bool,
     /// Known node IDs for deduplication.
     known: HashSet<String>,
+    /// Where announcements are sent: the mDNS group, except in tests.
+    announce_dest: SocketAddrV4,
 }
 
 impl MdnsDiscovery {
@@ -75,6 +77,7 @@ impl MdnsDiscovery {
             },
             pending: Vec::new(),
             socket: None,
+            announce_dest: SocketAddrV4::new(MDNS_MULTICAST_ADDR, MDNS_PORT),
             active: false,
             known: HashSet::new(),
         }
@@ -85,9 +88,8 @@ impl MdnsDiscovery {
         if let Some(ref socket) = self.socket {
             let payload = serde_json::to_vec(&self.local_announcement)
                 .map_err(|e| DiscoveryError::Backend(e.to_string()))?;
-            let dest = SocketAddrV4::new(MDNS_MULTICAST_ADDR, MDNS_PORT);
             socket
-                .send_to(&payload, dest)
+                .send_to(&payload, self.announce_dest)
                 .await
                 .map_err(|e| DiscoveryError::Backend(e.to_string()))?;
         }
@@ -156,8 +158,13 @@ impl DiscoveryBackend for MdnsDiscovery {
         self.socket = Some(socket);
         self.active = true;
 
-        // Send initial announcement.
-        self.announce().await?;
+        // Send the initial announcement. Best effort, like the join above: a host
+        // with no usable multicast route (VPN or bridge interfaces holding the
+        // 224.0.0.0/4 route) returns "No route to host", and discovery should still
+        // run so it can receive and answer peers that do reach it.
+        if let Err(e) = self.announce().await {
+            tracing::warn!(error = %e, "mdns: initial announcement not sent");
+        }
         Ok(())
     }
 
@@ -195,6 +202,31 @@ mod tests {
         let json = serde_json::to_string(&ann).unwrap();
         let back: MdnsAnnouncement = serde_json::from_str(&json).unwrap();
         assert_eq!(ann, back);
+    }
+
+    #[tokio::test]
+    async fn mdns_start_survives_a_failed_announcement() {
+        let mut disc = MdnsDiscovery::new(
+            "node-abc".into(),
+            "127.0.0.1".into(),
+            9489,
+            "test".into(),
+            "deadbeef01234567".into(),
+        );
+        // The limited broadcast address is refused without SO_BROADCAST on every
+        // platform, so the first announcement fails regardless of host routing.
+        disc.announce_dest = SocketAddrV4::new(Ipv4Addr::BROADCAST, MDNS_PORT);
+
+        disc.start().await.unwrap();
+        assert!(disc.active);
+        assert!(disc.socket.is_some());
+        assert!(
+            disc.announce().await.is_err(),
+            "the broadcast send must fail for this test to cover the failure path"
+        );
+
+        disc.stop().await.unwrap();
+        assert!(!disc.active);
     }
 
     #[tokio::test]
