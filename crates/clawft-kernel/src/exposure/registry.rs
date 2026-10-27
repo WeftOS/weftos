@@ -78,6 +78,8 @@ struct Override {
     state: Option<ExposureState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     audience: Option<Audience>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    raw: Option<bool>,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -221,6 +223,7 @@ impl ExposureRegistry {
             limits: spec.limits,
             state: ov.state.unwrap_or(spec.state),
             announced,
+            raw: ov.raw.unwrap_or(false),
         };
         g.map.insert(spec.id, e.clone());
         e
@@ -276,7 +279,7 @@ impl ExposureRegistry {
         drop(g);
         self.audit(
             "exposure.change",
-            json!({"node_id": self.node_id, "id": id, "state": e.state.as_str(), "audience": e.audience.label(), "actor": actor}),
+            json!({"node_id": self.node_id, "id": id, "state": e.state.as_str(), "audience": e.audience.label(), "raw": e.raw, "actor": actor}),
         );
         Ok(e)
     }
@@ -295,6 +298,20 @@ impl ExposureRegistry {
             e.audience = audience.clone();
             ov.audience = Some(audience);
         })
+    }
+
+    /// Operator decision on raw data for `id` (a topic exposure); persisted
+    /// and audited like the others. Turning it off withdraws raw subscribers.
+    pub fn set_raw(&self, id: &str, raw: bool, actor: &str) -> Result<Exposure, String> {
+        let was = self.get(id).is_some_and(|e| e.raw);
+        let e = self.mutate(id, actor, |e, ov| {
+            e.raw = raw;
+            ov.raw = Some(raw);
+        })?;
+        if was && !raw {
+            self.queue_withdrawal(id);
+        }
+        Ok(e)
     }
 
     /// Switch every exposure off. Returns the ids that were not already off.

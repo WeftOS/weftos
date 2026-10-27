@@ -14,6 +14,7 @@ mod blob;
 mod data;
 mod event;
 mod infer;
+mod limits;
 mod mcu;
 mod media;
 mod sdr;
@@ -27,6 +28,10 @@ pub use blob::{BlobHandle, MAX_MEDIA_TYPE, find_handles, valid_media_type};
 pub use data::{CanFrame, MAX_STORE_VECTORS, StoreVector, Telemetry, TelemetryItem, Transcript};
 pub use event::{EventMsg, MAX_DETAIL, MAX_KIND};
 pub use data::{SenmlMsg, SenmlRecord};
+pub use limits::{
+    DEFAULT_BYTES_PER_SEC, DEFAULT_CREDIT_TIMEOUT_S, DEFAULT_READINGS_PER_MIN, DEFAULT_SUBSCRIPTIONS_PER_PEER,
+    MISSING_MESH_LIMITS, MeshLimits,
+};
 pub use mcu::{MAX_METHOD, MAX_PARAMS, McuCall};
 pub use infer::{DEFAULT_PRIORITY, InferRequest, MAX_IMAGE_B64, MAX_IMAGE_BLOB, MAX_PRIORITY, MAX_TEXT, MIN_PRIORITY};
 pub use media::{Detection, Detections, FrameRef, IqCs16, PcmS16le, SpectrumPsd, is_gap_record};

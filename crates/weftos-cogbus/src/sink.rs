@@ -62,6 +62,11 @@ pub(super) struct Put<'a> {
     pub(super) project: Option<String>,
     pub(super) r: Reading,
     pub(super) to_sink: bool,
+    /// The node a remote reading came from (a proxy topic); else this one.
+    pub(super) origin: Option<&'a str>,
+    /// The source topic's `seq` for a remote reading, so a drop at the
+    /// source is a gap here too.
+    pub(super) seq: Option<u64>,
 }
 
 impl Broker {
@@ -117,6 +122,8 @@ impl Broker {
             project: project_id.clone(),
             r,
             to_sink: false,
+            origin: None,
+            seq: None,
         };
         let delivery = self.put(&mut self.lock(), put)?;
         Ok(SinkReading {
@@ -129,7 +136,7 @@ impl Broker {
     /// Write one reading to its topic and fan it out, once the publisher has
     /// passed its own checks.
     pub(super) fn put(&self, st: &mut State, p: Put<'_>) -> Result<Delivery, BusError> {
-        let Put { writer, instance, project, r, to_sink } = p;
+        let Put { writer, instance, project, r, to_sink, origin, seq } = p;
         let topic = format!("{}/{}", r.kind, r.source_id);
         let no = |e| refuse(writer, "publish", &topic, e);
         let key = (r.kind.clone(), r.source_id.clone());
@@ -161,7 +168,7 @@ impl Broker {
             )));
         }
         t.writer = Some(writer.to_string());
-        t.seq += 1;
+        t.seq = seq.unwrap_or(t.seq + 1);
         t.messages += 1;
         let kind = r.kind;
         let d = Delivery {
@@ -169,7 +176,7 @@ impl Broker {
             topic: topic.clone(),
             schema: r.schema,
             source_id: r.source_id,
-            node_id: self.cfg.node_id.clone(),
+            node_id: origin.map_or_else(|| self.cfg.node_id.clone(), str::to_string),
             t_ns: r.t_ns,
             seq: t.seq,
             recv_ns: now_ns(),

@@ -29,9 +29,18 @@ const HEAD: &str = "[cog]\nid = \"decl-test\"\nversion = \"0.1.0\"\n";
 fn declared_topics_and_interfaces_pack() {
     let toml = format!(
         "{HEAD}interfaces = [\"audio-in\"]\n[[outputs]]\ntopic = \"audio.pcm\"\n\
-         schema = \"pcm.s16le.v1\"\nclass = \"stream\"\n"
+         schema = \"pcm.s16le.v1\"\nclass = \"stream\"\n[mesh_limits]\nreadings_per_min = 600\nbytes_per_sec = 4194304\nsubscriptions_per_peer = 16\ncredit_timeout_s = 30\n"
     );
     pack(&toml).unwrap();
+}
+
+#[test]
+fn outputs_without_mesh_limits_do_not_pack() {
+    let toml = format!("{HEAD}[[outputs]]\ntopic = \"audio.pcm\"\nschema = \"pcm.s16le.v1\"\nclass = \"stream\"\n");
+    match pack(&toml) {
+        Err(PackError::Input(m)) => assert!(m.contains("[mesh_limits] is required"), "{m}"),
+        other => panic!("expected the mesh_limits refusal, got {other:?}"),
+    }
 }
 
 #[test]

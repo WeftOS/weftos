@@ -193,3 +193,22 @@ fn the_topic_kind_has_a_cli_spelling() {
     assert_eq!(ExposureKind::parse("topic"), Ok(ExposureKind::Topic));
     assert_eq!(serde_json::to_value(ExposureKind::Topic).unwrap(), serde_json::json!("topic"));
 }
+
+#[test]
+fn raw_is_an_operator_decision_that_persists_and_withdraws_when_cleared() {
+    let tmp = tempfile::tempdir().unwrap();
+    let reg = ExposureRegistry::open("n", tmp.path(), Retention::default(), 0).unwrap();
+    let id = "topic.iq/pluto-0";
+    reg.register(ExposureSpec::new(id, ExposureKind::Topic, "cog:sdr", "cogbus.v1"));
+    assert!(!reg.get(id).unwrap().raw, "never raw by default");
+    reg.set_raw(id, true, "cli").unwrap();
+    // Code re-registering the topic keeps the operator's raw decision.
+    reg.register(ExposureSpec::new(id, ExposureKind::Topic, "cog:sdr", "cogbus.v1"));
+    assert!(reg.get(id).unwrap().raw);
+    let again = ExposureRegistry::open("n", tmp.path(), Retention::default(), 0).unwrap();
+    again.register(ExposureSpec::new(id, ExposureKind::Topic, "cog:sdr", "cogbus.v1"));
+    assert!(again.get(id).unwrap().raw, "persisted across a restart");
+    again.drain_withdrawals();
+    again.set_raw(id, false, "cli").unwrap();
+    assert_eq!(again.drain_withdrawals(), [id.to_string()]);
+}

@@ -76,6 +76,11 @@ impl CogbusRuntime {
     }
 }
 
+/// The running broker and socket, once installed.
+pub fn runtime() -> Option<&'static CogbusRuntime> {
+    RUNTIME.get()
+}
+
 /// A broker for node `node_id` with the default hooks (allow what the
 /// manifest allows, `tracing` only), not yet listening.
 pub fn broker(node_id: &str) -> Arc<Broker> {
@@ -390,6 +395,20 @@ impl CogbusRegistrar for Registrar {
         for o in &r.outputs {
             if let Some(per_sec) = o.rate.as_deref().and_then(weftos_cogbus::rate::parse_rate) {
                 self.broker.set_output_rate(&r.instance_id, &o.topic, per_sec);
+            }
+        }
+        // The cog's own limits on other nodes reading its topics (ADR-122
+        // section 14); without them none of its topics is served remotely.
+        match r.mesh_limits {
+            Some(l) => self.broker.set_mesh_limits(&r.instance_id, l),
+            // A cog released before the rule: starting values, never served
+            // remotely (`weaver expose on` refuses its topics).
+            None => {
+                if !r.outputs.is_empty() {
+                    tracing::warn!(target: "cogbus", cog = %r.cog_id, instance = %r.instance_id,
+                        "no [mesh_limits] in its manifest: starting values apply and its topics cannot be exposed to other nodes");
+                }
+                self.broker.set_default_mesh_limits(&r.instance_id);
             }
         }
         if let Some(s) = &self.sink {

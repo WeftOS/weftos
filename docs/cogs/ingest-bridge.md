@@ -62,7 +62,8 @@ released cog --HTTP + token--> bridge --publish store.vector/<instance>--> broke
 - A cog run with `WEFTOS_COGBUS` that declares
   `[[outputs]] topic = "store.vector", schema = "store.vector.v1", class = "reading"`
   can publish its own readings; they go through the same sink and the same
-  per-instance budgets, and need no HTTP port.
+  per-instance budgets, and need no HTTP port. Like every cog with outputs it
+  also carries a `[mesh_limits]` table (ADR-122 section 14).
 
 ## Wiring into placement
 

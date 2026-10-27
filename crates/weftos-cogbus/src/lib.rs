@@ -26,11 +26,13 @@
 //! [`Broker::add_sink`] and [`Broker::publish_internal`]), and governance,
 //! grants and the activity log (B3), and stream rings (B2). Blobs (B5): [`blob::BlobStore`] and the `blob_begin` / `blob_chunk` /
 //! `blob_get` requests, with `blob.v1` handles that ride in readings, calls
-//! and replies. Mesh topics (B6) are another phase.
+//! and replies. Mesh topics (B6): [`mesh::MeshTopicHub`] serves exposed
+//! topics to admitted peers and feeds proxy topics for `weftos://` subscribes.
 
 pub mod audit;
 pub mod blob;
 pub mod broker;
+pub mod mesh;
 #[cfg(unix)]
 pub mod client;
 pub mod policy;
@@ -51,6 +53,7 @@ mod tests_proto;
 #[cfg(test)]
 mod tests_sink;
 
+pub use broker::mesh_ops::parse_mesh_topic;
 pub use broker::{
     Broker, BrokerConfig, BusError, InstanceSpec, Reading, Session, SinkReading, TopicRow,
 };

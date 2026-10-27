@@ -2,8 +2,10 @@
 //!
 //! - `expose.list` (Read): every exposure with audience, state, announced and
 //!   why it is refused, if it is; plus the master switch.
-//! - `expose.set {id, state: on|off|paused, audience?}` (Admin): a local
+//! - `expose.set {id, state: on|off|paused, audience?, raw?}` (Admin): a local
 //!   decision, persisted. Switching off withdraws the advertisement at once.
+//!   `raw` (topic exposures only, ADR-122 section 14) allows raw data, and
+//!   only for an audience of named nodes; `on` from the CLI always says it.
 //! - `expose.off_all` (Admin): every exposure off.
 //! - `expose.log {id?, limit?}` (Admin): recent activity, newest last, and
 //!   whether the chain verifies. Never request bodies.
@@ -27,6 +29,8 @@ struct SetParams {
     state: String,
     #[serde(default)]
     audience: Option<String>,
+    #[serde(default)]
+    raw: Option<bool>,
 }
 
 #[derive(Deserialize, Default)]
@@ -52,7 +56,7 @@ pub(crate) fn row(reg: &ExposureRegistry, e: &Exposure) -> Value {
     json!({
         "id": e.id, "kind": e.kind, "resource": e.resource, "audience": e.audience.label(),
         "api": e.api, "limits": e.limits, "state": e.state.as_str(), "announced": e.announced,
-        "served": refused.is_none(), "refused": refused,
+        "served": refused.is_none(), "refused": refused, "raw": e.raw,
     })
 }
 
@@ -99,18 +103,39 @@ pub(crate) fn route_infer(_: &str, _: ExposureState) -> Result<bool, String> {
     Ok(false)
 }
 
-fn set(reg: &ExposureRegistry, p: SetParams) -> Result<Value, String> {
+/// Whether an exposure may be switched on (a topic: its cog declared limits).
+pub type OnCheck<'a> = &'a (dyn Fn(&str) -> Result<(), String> + Sync);
+
+fn set(reg: &ExposureRegistry, p: SetParams, may_on: OnCheck<'_>) -> Result<Value, String> {
     let state = parse_state(&p.state)?;
     let audience = p.audience.as_deref().map(Audience::parse).transpose()?;
-    if reg.get(&p.id).is_none() {
+    let Some(cur) = reg.get(&p.id) else {
         return Err(format!("unknown exposure {:?}", p.id));
+    };
+    // A topic is served only once its cog declared its own limits.
+    if state == ExposureState::On {
+        may_on(&p.id)?;
+    }
+    if p.raw == Some(true) {
+        if cur.kind != clawft_kernel::exposure::ExposureKind::Topic {
+            return Err("--raw applies to topic exposures only".into());
+        }
+        if !matches!(audience.as_ref().unwrap_or(&cur.audience), Audience::Nodes(_)) {
+            return Err("raw data is exposed only to named nodes: use --audience nodes:<a,b> with --raw".into());
+        }
     }
     if let Some(a) = audience {
         reg.set_audience(&p.id, a, "cli")?;
     }
+    if let Some(raw) = p.raw.filter(|r| *r != cur.raw) {
+        reg.set_raw(&p.id, raw, "cli")?;
+    }
     if !route_infer(&p.id, state)? {
         reg.set_state(&p.id, state, "cli")?;
     }
+    // Remote subscribers of a topic that is no longer served end now.
+    #[cfg(all(feature = "placement", unix))]
+    crate::cogbus_mesh::withdraw_if_narrowed(&p.id);
     let e = reg.get(&p.id).ok_or("exposure vanished")?;
     Ok(row(reg, &e))
 }
@@ -123,8 +148,23 @@ pub async fn handle(method: &str, params: Value) -> Response {
     handle_with(&reg, method, params).await
 }
 
+fn daemon_check(id: &str) -> Result<(), String> {
+    #[cfg(all(feature = "placement", unix))]
+    return crate::cogbus_mesh::check_expose(id);
+    #[cfg(not(all(feature = "placement", unix)))]
+    {
+        let _ = id;
+        Ok(())
+    }
+}
+
 /// [`handle`] against a given registry.
 pub async fn handle_with(reg: &ExposureRegistry, method: &str, params: Value) -> Response {
+    handle_checked(reg, method, params, &daemon_check).await
+}
+
+/// [`handle_with`] with `may_on` deciding whether an exposure may go on.
+pub async fn handle_checked(reg: &ExposureRegistry, method: &str, params: Value, may_on: OnCheck<'_>) -> Response {
     match method {
         "expose.list" => Response::success(list_json(reg)),
         "expose.set" => {
@@ -132,7 +172,7 @@ pub async fn handle_with(reg: &ExposureRegistry, method: &str, params: Value) ->
                 Ok(p) => p,
                 Err(e) => return Response::error(format!("invalid params: {e}")),
             };
-            match set(reg, p) {
+            match set(reg, p, may_on) {
                 Ok(v) => {
                     flush_withdrawals().await;
                     Response::success(v)

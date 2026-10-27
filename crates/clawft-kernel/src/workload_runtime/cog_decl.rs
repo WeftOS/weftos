@@ -7,7 +7,9 @@
 
 use std::collections::BTreeSet;
 
-use clawft_types::cog_topics::{InputPolicy, TopicClass, is_registered, valid_topic_kind};
+use clawft_types::cog_topics::{
+    InputPolicy, MISSING_MESH_LIMITS, MeshLimits, TopicClass, is_registered, valid_topic_kind,
+};
 use serde::Deserialize;
 
 use super::types::RuntimeError;
@@ -191,4 +193,26 @@ pub(super) fn parse_inputs(raw: Vec<RawInput>) -> Result<Vec<InputDecl>, Runtime
         });
     }
     Ok(out)
+}
+
+/// Validate `[mesh_limits]` when present: every value in range. A missing
+/// table is accepted here (released cogs predate the rule) and refused at
+/// pack ([`require_mesh_limits`]) and at `weaver expose on`.
+pub(super) fn parse_mesh_limits(raw: Option<MeshLimits>) -> Result<Option<MeshLimits>, RuntimeError> {
+    match raw {
+        None => Ok(None),
+        Some(l) => {
+            l.validate().map_err(|e| bad(e.0))?;
+            Ok(Some(l))
+        }
+    }
+}
+
+/// The pack-time rule (ADR-122 section 14, owner rule 2026-10-27): a cog
+/// with outputs declares its own `[mesh_limits]`.
+pub fn require_mesh_limits(outputs: &[OutputDecl], limits: Option<&MeshLimits>) -> Result<(), RuntimeError> {
+    if !outputs.is_empty() && limits.is_none() {
+        return Err(bad(MISSING_MESH_LIMITS));
+    }
+    Ok(())
 }

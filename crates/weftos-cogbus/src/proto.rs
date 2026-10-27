@@ -110,10 +110,13 @@ pub enum Request {
     Subscribe {
         /// Correlation id.
         id: u64,
-        /// Topic or wildcard.
+        /// Topic or wildcard, or a `weftos://` name on another node.
         topic: String,
         /// The declared input schema.
         schema: String,
+        /// Ask for a raw topic of another node (ADR-122 section 14).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        raw: bool,
     },
     /// Drop a subscription.
     Unsubscribe {
@@ -330,6 +333,10 @@ pub enum ErrorCode {
     NotFound,
     /// The content store is full for this node or this instance.
     QuotaExceeded,
+    /// A raw topic (stream, blob, PCM, IQ, frames) asked across nodes
+    /// without `raw: true`, an exposure switched on with `--raw`, and an
+    /// audience of named nodes (ADR-122 section 14).
+    RawNotExposed,
     /// A code this client does not know.
     #[serde(other)]
     Unknown,

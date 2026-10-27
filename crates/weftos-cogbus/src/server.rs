@@ -472,8 +472,8 @@ fn handle(broker: &Broker, s: &mut Session, req: Request) -> Option<Event> {
         } => broker
             .publish(s, &topic_kind, &source_id, &schema, t_ns, body)
             .map(|seq| json!({ "seq": seq })),
-        Request::Subscribe { topic, schema, .. } => broker
-            .subscribe(s, &topic, &schema)
+        Request::Subscribe { topic, schema, raw, .. } => broker
+            .subscribe_with(s, &topic, &schema, raw)
             .map(|sub| json!({ "sub": sub })),
         Request::Unsubscribe { sub, .. } => broker.unsubscribe(s, sub).map(|_| json!({})),
         Request::List { .. } => Ok(json!({ "topics": broker.list_for(s) })),

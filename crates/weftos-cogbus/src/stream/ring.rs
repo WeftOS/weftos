@@ -87,6 +87,14 @@ impl RingWriter {
         self.g
     }
 
+    /// Commit one record as `seq` (at least the next one), skipping the
+    /// seqs in between: readers see them as a gap (ADR-122 section 14, a
+    /// remote stream's drops at its source).
+    pub(crate) fn write_at(&mut self, seq: u64, t_ns: u64, w_ns: u64, data: &[u8]) -> u64 {
+        self.head = seq.max(self.head + 1) - 1;
+        self.write(t_ns, w_ns, data)
+    }
+
     /// Commit one record; returns its seq. `data` must fit `max_record`.
     pub(crate) fn write(&mut self, t_ns: u64, w_ns: u64, data: &[u8]) -> u64 {
         assert!(

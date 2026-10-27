@@ -34,6 +34,11 @@ pub enum BusAction {
     /// Asking the workload runtime to stop an instance the broker stopped
     /// on the bus (repeated refusals or a publish rate overrun).
     Stop,
+    /// Another node subscribing to a topic of this one (B6); the principal
+    /// is `mesh:<node id>`.
+    MeshSubscribe,
+    /// Another node fetching a blob a served reading handed it (B6e).
+    MeshFetch,
 }
 
 impl BusAction {
@@ -49,6 +54,8 @@ impl BusAction {
             Self::BlobPut => "cogbus.blob.put",
             Self::BlobGet => "cogbus.blob.get",
             Self::Stop => "cogbus.stop",
+            Self::MeshSubscribe => "cogbus.mesh.subscribe",
+            Self::MeshFetch => "cogbus.mesh.fetch",
         }
     }
 }

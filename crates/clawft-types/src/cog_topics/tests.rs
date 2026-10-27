@@ -160,3 +160,16 @@ fn media_types() {
         assert!(!valid_media_type(bad), "{bad}");
     }
 }
+
+#[test]
+fn mesh_limits_ranges_and_narrowing() {
+    let s = MeshLimits::STARTING;
+    assert!(s.validate().is_ok());
+    assert_eq!((s.readings_per_min, s.bytes_per_sec, s.subscriptions_per_peer, s.credit_timeout_s), (600, 4 << 20, 16, 30));
+    assert!(MeshLimits { readings_per_min: 0, ..s }.validate().is_err());
+    assert!(MeshLimits { credit_timeout_s: 4, ..s }.validate().is_err());
+    assert!(MeshLimits { subscriptions_per_peer: 257, ..s }.validate().is_err());
+    // An exposure narrows, never widens.
+    let n = s.narrowed(Some(60), Some(u64::MAX));
+    assert_eq!((n.readings_per_min, n.bytes_per_sec), (60, 4 << 20));
+}

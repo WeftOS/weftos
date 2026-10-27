@@ -25,13 +25,13 @@ fn workload(toml_extra: &str) -> VerifiedWorkload {
         kind: "cog".into(),
         id: "probe".into(),
         version: "0.1.0".into(),
-        source: WorkloadSource::SignedPackage(SignedPayload {
+        source: WorkloadSource::SignedPackage(Box::new(SignedPayload {
             package_id: "pkg".into(),
             signer_keys: vec![],
             spec,
             binaries,
             artifact_hashes: vec![],
-        }),
+        })),
     }
 }
 

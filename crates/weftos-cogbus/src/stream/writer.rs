@@ -302,6 +302,15 @@ impl StreamWriter {
         Ok(self.ring.write(t_ns, super::now_ns(), data))
     }
 
+    /// Write one record as `seq` (at least the next): the seqs skipped are a
+    /// gap for readers. For a proxy of another node's stream, whose source
+    /// seq carries its drops (ADR-122 section 14). Never waits for `block`
+    /// readers.
+    pub fn write_at(&mut self, seq: u64, t_ns: u64, data: &[u8]) -> Result<u64, ClientError> {
+        self.check(data)?;
+        Ok(self.ring.write_at(seq, t_ns, super::now_ns(), data))
+    }
+
     /// [`write`](Self::write) that waits for `block` readers without
     /// blocking the executor.
     pub async fn write_async(&mut self, t_ns: u64, data: &[u8]) -> Result<u64, ClientError> {

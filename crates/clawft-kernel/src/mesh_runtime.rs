@@ -20,6 +20,10 @@ use crate::mesh_delivery::{LocalDelivery, PeerCtx};
 use crate::mesh_ipc::MeshIpcEnvelope;
 use crate::mesh_kad::KademliaTable;
 
+#[path = "mesh_topic_frames.rs"]
+mod topic_frames;
+pub use topic_frames::PeerFrameSink;
+
 /// Control topic carrying signed node facts between peers (card
 /// mesh-placement-03). Consumed by the runtime: handed to the installed
 /// [`PeerControlSink`], never routed to local subscribers.
@@ -254,6 +258,8 @@ pub struct MeshRuntime {
     peer_events: MeshPeerEventBus,
     /// Sinks for control topics (`mesh.node_facts`, `mesh.artifact.revoke`).
     control_sinks: DashMap<String, Arc<dyn PeerControlSink>>,
+    /// Sinks for raw frames by type byte (cogbus `TopicRequest` / `TopicData`).
+    frame_sinks: DashMap<u8, Arc<dyn PeerFrameSink>>,
     /// Connection ids for control-topic limits, keyed by outbound channel.
     conn_ids: Mutex<Vec<(tokio::sync::mpsc::WeakSender<Vec<u8>>, u64)>>,
     conn_seq: std::sync::atomic::AtomicU64,
@@ -386,6 +392,7 @@ impl MeshRuntime {
             assessment_transport: std::sync::OnceLock::new(),
             peer_events: MeshPeerEventBus::new(),
             control_sinks: DashMap::new(),
+            frame_sinks: DashMap::new(),
             conn_ids: Mutex::new(Vec::new()),
             conn_seq: std::sync::atomic::AtomicU64::new(0),
             enforcing: std::sync::atomic::AtomicBool::new(false),
@@ -420,6 +427,7 @@ impl MeshRuntime {
             assessment_transport: std::sync::OnceLock::new(),
             peer_events: MeshPeerEventBus::new(),
             control_sinks: DashMap::new(),
+            frame_sinks: DashMap::new(),
             conn_ids: Mutex::new(Vec::new()),
             conn_seq: std::sync::atomic::AtomicU64::new(0),
             enforcing: std::sync::atomic::AtomicBool::new(false),
@@ -887,6 +895,9 @@ impl MeshRuntime {
             .try_handle_assessment(data, Some(outbound.clone()))
             .await?
         {
+            return Ok(());
+        }
+        if self.try_frame_sink(data, peer) {
             return Ok(());
         }
 

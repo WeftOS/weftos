@@ -69,6 +69,13 @@ pub enum FrameType {
     /// Inference response (mesh-placement-19): `head`, body `chunk`s,
     /// `end` or `error`. See `infer_proxy::wire`.
     InferResponse = 0x11,
+    /// cogbus mesh topic request (ADR-122 section 14): subscribe, credit,
+    /// unsubscribe, blob fetch, subscriber node to source node. Sent raw on
+    /// the peer connection; handled only from admitted, verified peers.
+    TopicRequest = 0x12,
+    /// cogbus mesh topic data (ADR-122 section 14): adverts, readings,
+    /// binary stream chunks and blob slices, end and error.
+    TopicData = 0x13,
 }
 
 /// Wire protocol name for [`FrameType`] (WEFT-115).
@@ -97,6 +104,8 @@ impl FrameType {
         Self::SensorObservation,
         Self::InferRequest,
         Self::InferResponse,
+        Self::TopicRequest,
+        Self::TopicData,
     ];
 
     /// Parse a byte into a known frame type, returning `None` for
@@ -120,6 +129,8 @@ impl FrameType {
             0x0F => Some(Self::SensorObservation),
             0x10 => Some(Self::InferRequest),
             0x11 => Some(Self::InferResponse),
+            0x12 => Some(Self::TopicRequest),
+            0x13 => Some(Self::TopicData),
             _ => None,
         }
     }
@@ -236,6 +247,8 @@ mod tests {
             (0x0F, FrameType::SensorObservation),
             (0x10, FrameType::InferRequest),
             (0x11, FrameType::InferResponse),
+            (0x12, FrameType::TopicRequest),
+            (0x13, FrameType::TopicData),
         ];
         for (byte, variant) in expected {
             assert_eq!(FrameType::from_byte(byte), Some(variant));
@@ -273,7 +286,7 @@ mod tests {
     #[test]
     fn frame_type_from_byte_unknown() {
         assert!(FrameType::from_byte(0x00).is_none());
-        assert!(FrameType::from_byte(0x12).is_none());
+        assert!(FrameType::from_byte(0x14).is_none());
         assert!(FrameType::from_byte(0xFF).is_none());
     }
 

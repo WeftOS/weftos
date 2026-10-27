@@ -9,8 +9,10 @@ use serde::Deserialize;
 
 use super::cog_devices::{DeviceDecl, RawDevice, parse_devices};
 use super::cog_decl::{
-    InputDecl, OutputDecl, RawInput, RawOutput, parse_inputs, parse_interfaces, parse_outputs,
+    InputDecl, OutputDecl, RawInput, RawOutput, parse_inputs, parse_interfaces, parse_mesh_limits,
+    parse_outputs,
 };
+use clawft_types::cog_topics::MeshLimits;
 use super::types::{Binary, RuntimeError, SignedPayload, VerifiedWorkload, WorkloadSource};
 use crate::workload_pkg::manifest::valid_cog_id;
 use crate::workload_pkg::verify::check_file;
@@ -76,6 +78,11 @@ pub struct CogSpec {
     pub inputs: Vec<InputDecl>,
     /// `[[devices]]`: the devices this cog owns (see `cog_devices`).
     pub devices: Vec<DeviceDecl>,
+    /// `[mesh_limits]`: what other nodes may take from this cog's topics
+    /// (ADR-122 section 14). Required at pack when `outputs` is not empty;
+    /// a released cog without it installs with the starting values and is
+    /// never exposed until a version declares it.
+    pub mesh_limits: Option<MeshLimits>,
 }
 
 #[derive(Deserialize)]
@@ -93,6 +100,8 @@ struct RawToml {
     inputs: Vec<RawInput>,
     #[serde(default)]
     devices: Vec<RawDevice>,
+    #[serde(default)]
+    mesh_limits: Option<MeshLimits>,
 }
 
 #[derive(Deserialize)]
@@ -192,6 +201,7 @@ impl CogSpec {
         let outputs = parse_outputs(raw.outputs)?;
         let inputs = parse_inputs(raw.inputs)?;
         let devices = parse_devices(raw.devices)?;
+        let mesh_limits = parse_mesh_limits(raw.mesh_limits)?;
         let spec = Self {
             id: raw.cog.id,
             version: raw.cog.version,
@@ -207,11 +217,35 @@ impl CogSpec {
             outputs,
             inputs,
             devices,
+            mesh_limits,
         };
         for c in &spec.console.allowed_commands {
             spec.split_command(c)?;
         }
         Ok(spec)
+    }
+
+    /// [`parse`](Self::parse) plus the authoring rules only `weaver workload
+    /// pack` enforces: outputs need `[mesh_limits]`.
+    pub fn parse_for_pack(bytes: &[u8]) -> Result<Self, RuntimeError> {
+        let spec = Self::parse(bytes)?;
+        super::cog_decl::require_mesh_limits(&spec.outputs, spec.mesh_limits.as_ref())?;
+        Ok(spec)
+    }
+
+    /// Declared `[mesh_limits]`, or the starting values with a warning naming
+    /// the cog when it has outputs and none (a cog packed before the rule).
+    pub fn mesh_limits_or_default(&self) -> MeshLimits {
+        match self.mesh_limits {
+            Some(l) => l,
+            None => {
+                if !self.outputs.is_empty() {
+                    tracing::warn!(cog = %self.id, version = %self.version,
+                        "cog declares [[outputs]] but no [mesh_limits]: running with the starting values (600/min, 4 MiB/s, 16, 30 s); its topics cannot be exposed to other nodes until a version declares them");
+                }
+                MeshLimits::STARTING
+            }
+        }
     }
 
     /// Validate place-time arguments against the `[config]` CLI surface.
@@ -282,6 +316,9 @@ impl VerifiedWorkload {
             Ok::<_, RuntimeError>(bytes)
         };
         let spec = CogSpec::parse(&read(&body.cog_toml)?)?;
+        // Install and place accept a released cog without `[mesh_limits]`;
+        // say so once, by name.
+        let _ = spec.mesh_limits_or_default();
         if spec.id != body.id {
             return Err(RuntimeError::AdmissionRefused(format!(
                 "cog.toml id {:?} does not match package id {:?}",
@@ -312,13 +349,13 @@ impl VerifiedWorkload {
             kind: pkg.envelope.kind.clone(),
             id: body.id.clone(),
             version: body.version.clone(),
-            source: WorkloadSource::SignedPackage(SignedPayload {
+            source: WorkloadSource::SignedPackage(Box::new(SignedPayload {
                 package_id: pkg.package_id.clone(),
                 signer_keys,
                 spec,
                 binaries,
                 artifact_hashes,
-            }),
+            })),
         })
     }
 

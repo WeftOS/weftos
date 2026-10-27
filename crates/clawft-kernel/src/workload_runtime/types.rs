@@ -64,7 +64,7 @@ impl RunMode {
 pub enum WorkloadSource {
     /// Our own signed package, verified against pinned anchors
     /// (native and container adapters).
-    SignedPackage(SignedPayload),
+    SignedPackage(Box<SignedPayload>),
     /// A cog in a device's own store (Seed adapter). Accepted only when the
     /// operator pinned it by id and version.
     StorePin {

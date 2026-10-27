@@ -488,6 +488,7 @@ async fn build(
     // beats the rest of this build is enforced by the sweep at its end.
     let revoker = revoker_for(revocations.clone());
     revoker.set_exchange(ex.clone());
+    let bus_mesh = mesh.clone();
     let notices = wire_revocations(&ex, revocations.clone(), &anchors, mesh, dir);
     let serving = load_host_config(dir)?;
     let container = load_container(dir, &dir.join("workload-containers"))?;
@@ -550,8 +551,16 @@ async fn build(
     local.set_node_admin(Arc::new(crate::dashboard_rpc::MeshAdmin));
     // ADR-122: the cog data plane broker beside the ingest bridge; down, cogs
     // are placed without WEFTOS_COGBUS.
+    // ADR-122 section 14: exposed topics to peers and `weftos://` subscribes,
+    // over the kernel's own mesh (none in service mode).
+    let mesh_broker = broker.clone();
     if let Some(bus) = crate::cogbus_serve::install_with(broker, dir, store_sink, bus_container).await {
         local.set_cogbus(bus);
+    }
+    if let Some(rt) = bus_mesh {
+        // Stream taps and proxies connect to the broker socket, when it is bound.
+        let socket = crate::cogbus_serve::runtime().map(|r| r.socket().to_path_buf());
+        crate::cogbus_mesh::start(mesh_broker, rt, socket);
     }
     // Put back what was placed here before the daemon restarted: after the
     // cogbus and ingest wiring, so each gets a fresh token like a new placement.
