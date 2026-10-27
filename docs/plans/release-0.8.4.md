@@ -123,10 +123,10 @@ The repo is public. Before pushing `target-0.8.4` or the tag:
    `~/.config/weftos/leak-terms.txt`).
 2. **haiku** sweeps `git diff v0.8.4-rc.15..HEAD --stat` plus the full text of every new or
    changed `docs/` and `CHANGELOG.md` file for: `/Users/`, `/home/`, `100.` tailnet addresses,
-   `192.168.`, `10.` private ranges, tokens/keys, client names (the leak-terms list; Whitsentry
-   stays out), and reports file:line hits only.
-3. Fable reads the hits and fixes or drops them. Known-public strings (the photo-gallery name,
-   already in history) are not new exposure but must not appear in new files.
+   `192.168.`, `10.` private ranges, tokens/keys and the private leak-terms list (client and
+   site names), and reports file:line hits only.
+3. Fable reads the hits and fixes or drops them. Node hostnames that already appear in history
+   are not new exposure but must not appear in new files either.
 
 ## 6. crates.io dry-run (Fable) — evidence for G1
 
@@ -211,13 +211,14 @@ Fable does not run Terraform. The hand-over is a filled-in checklist, not a sket
    strip the held weftos-cogs entries for the apply and restore after.
    The local model produces the sed list from the grep; Fable checks it against the files.
 4. **Plan/apply** with the 4 release targets (`pg_weftos_release`, `pg_shared_weftos_bin`,
-   `pg_weftos_console`, `pg_weftos_gateway`), PG first? No: **members first** (aepod-xpc, the
-   Mac by hand from verified archives), then PG, then Shasta
-   (`sudo -u shasta XDG_RUNTIME_DIR=/run/user/2103 systemctl --user restart weftos.service`).
+   `pg_weftos_console`, `pg_weftos_gateway`), **members first** (the member nodes, and the
+   Mac by hand from verified archives), then the primary node, then its project daemon
+   (restarted as the project user with `systemctl --user restart weftos.service`).
 5. **Watchdog units**: the pin swap does not regenerate systemd units. After the apply,
-   regenerate by hand with `weaver service unit --kind systemd --out ... --force` for PG and
-   Shasta (`HOME=/var/lib/weftos/projects/shasta`), `daemon-reload`, restart, confirm
-   `WatchdogUSec=1min`.
+   regenerate by hand with `weaver service unit --kind systemd --out ... --force` for the
+   primary node and the project daemon (with that project's `HOME`), `daemon-reload`,
+   restart, confirm `WatchdogUSec=1min`. The exact hosts, users and paths are in the private
+   Terraform inventory and the lead's memory notes, not here.
 6. **Verify**: `weaver --version` on each node = 0.8.4, `weaver kernel liveness` healthy,
    dashboard heartbeats, mesh peers unchanged, `weaver update --check` reports current.
 7. **Ventuno rehearsal** re-run (main's).
