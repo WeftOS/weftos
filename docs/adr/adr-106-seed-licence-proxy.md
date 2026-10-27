@@ -1,6 +1,7 @@
 # ADR-106: The Cognitum Seed is the licence proxy for its WeftOS mesh
 
 - **Status**: Proposed, review complete (3 rounds). Phases 1a to 2 built and integrated; phase 3 in progress (part B: steward relay, run gate, checkout CLI)
+- **Successor**: [COG-106](https://github.com/WeftOS/weftos-cogs/blob/v0.1.2/docs/decisions/COG-106-host-licence.md) in WeftOS/weftos-cogs (Cogs extraction, 2026-10-27). Cogs owns Cog Host licence enforcement and its operator behaviour. This ADR still owns the licence protocol, mesh identity, governance facts and the run gate. `weftos-cog-host` now lives in that repository (as `cog-host`); `weft-licence` stays in WeftOS. This record stays as written.
 - **Review history**:
   - Round 1: B1–B2, H1–H5, M1–M7, L1–L6.
   - Round 2: N1–N5, decided by the lead.

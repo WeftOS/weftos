@@ -1,6 +1,7 @@
 # ADR-105: Cog sources, a multi-repository cog catalog for projects
 
 - **Status**: Accepted (2026-10-02, owner requirement: "a project can pull from Cognitum (if licensed), WeftOS and their own private cog repo, and we should document how that works")
+- **Successor**: [COG-105](https://github.com/WeftOS/weftos-cogs/blob/v0.1.2/docs/decisions/COG-105-cog-sources.md) in WeftOS/weftos-cogs (Cogs extraction, 2026-10-27). Cogs owns registry formats, source resolution, publishing, catalog merging and private-source tooling. This ADR still owns project configuration and trust enforcement. The Cogs product crates it names now live in that repository without the `weftos-` prefix. This record stays as written.
 - **Date**: 2026-10-02
 - **Deciders**: Owner / platform
 - **Depends-On**: ADR-099 (governed workload placement, section 8 trust), ADR-100 (cog workload kind, sections 1 and 6), ADR-103 (projects, user daemon), COG-008 (signed registry format, in the private cogs repo; implemented in `crates/weftos-cog-repo`)

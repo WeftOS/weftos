@@ -1,6 +1,7 @@
 # ADR-107: The hardware catalog links modules to cogs
 
 - **Status**: Accepted (2026-10-03, owner feedback: "I cannot see how to install this sensor, or if we have a cog installed, or if one is available")
+- **Successor**: [COG-107](https://github.com/WeftOS/weftos-cogs/blob/v0.1.2/docs/decisions/COG-107-catalog-link.md) in WeftOS/weftos-cogs (Cogs extraction, 2026-10-27). Cogs owns catalog joins, Sensor Explorer, the Manager panels and the firmware and docs metadata. The Cogs product crates it names now live in that repository without the `weftos-` prefix. This record stays as written.
 - **Date**: 2026-10-03
 - **Deciders**: Owner / platform
 - **Depends-On**: ADR-104 (sensor guides ship with sensor cogs), ADR-105 (cog sources), COG-009 (appliance console)

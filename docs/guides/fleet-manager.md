@@ -5,6 +5,11 @@ an operator can say where each node physically is. The console reads the
 document through the gateway (ADR-102), never straight from a device and never
 through the cog host. Design brief: `docs/research/fleet-manager/network-tab-brief.md`.
 
+This page covers the WeftOS side: the daemon snapshot, the gateway and the node
+journal. The console itself (Weave Manager, its Network tab) is part of the Cogs
+product and is documented in WeftOS/weftos-cogs
+([docs/guides/fleet-manager.md at v0.1.2](https://github.com/WeftOS/weftos-cogs/blob/v0.1.2/docs/guides/fleet-manager.md)).
+
 ## From the command line
 
 ```
