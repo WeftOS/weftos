@@ -503,7 +503,7 @@ list, `on --audience`, `off` and `pause` already work on topics, and a restart k
 `check_serve` refuses a `local` topic, so nothing is served. There is no `--raw` flag and no
 wire yet: both wait on decisions 2 and 4.
 
-**As built (B6b, B6c, B6e; 2026-10-27).** `weftos-cogbus` `mesh` holds one `MeshTopicHub` per
+**As built (B6b to B6e; 2026-10-27).** `weftos-cogbus` `mesh` holds one `MeshTopicHub` per
 node, with no network of its own; `clawft-weave` `cogbus_mesh` gives it the kernel's mesh.
 
 - *Frames.* `FrameType::TopicRequest` 0x12 and `TopicData` 0x13 go raw on the peer connection
@@ -515,8 +515,9 @@ node, with no network of its own; `clawft-weave` `cogbus_mesh` gives it the kern
 - *Source.* A subscribe is refused (an `error` frame, an exposure activity record, and a
   `cogbus.mesh.subscribe` refusal in the cogbus activity log that never counts toward a cog's
   repeated-refusal stop) unless, in order: a cog on this node writes the topic (proxy topics are
-  never served onward); its writer registered `[mesh_limits]` (`Broker::set_mesh_limits`, from
-  the manifest at register); the schema matches; `TopicExposures::serve` says the exposure covers
+  never served onward); its writer's manifest declared `[mesh_limits]` (`Broker::set_mesh_limits`
+  at register; a released cog without the table runs with the starting values,
+  `set_default_mesh_limits`, and is never served); the schema matches; `TopicExposures::serve` says the exposure covers
   the peer; governance allows `cogbus.mesh.subscribe` for `mesh:<node id>`; the policy is not
   `block`; and the raw rule holds. Readings leave only against credit and the cog's
   `readings_per_min`; past either they are dropped and counted, and the reading that does go
@@ -546,14 +547,30 @@ node, with no network of its own; `clawft-weave` `cogbus_mesh` gives it the kern
   by a reader the reading reached, answers `unavailable` ("being fetched; retry") and starts one
   fetch into the local store as `@mesh:<node>`'s blob, granted to those readers; it is served
   locally from then on. A failed fetch answers `not_found` with the reason.
-- *Not built.* B6d stream chunks: the wire carries `chunk` frames with binary tails and byte
-  credit, but no stream topic crosses yet (a stream subscribe is refused `unsupported` at the
-  source and on the subscriber); it waits on the stream ring rework (iceoryx2), which owns the
-  ring readers and writers this needs. No `mesh` name check unless the daemon sets
-  `Broker::set_mesh_name`; served and remote subscriptions are not yet in `cogbus list`
-  (`MeshTopicHub::served`, `Broker::mesh_remote_rows` exist). Needs a real two-host run: the
-  in-process tests drive two brokers over a frame queue and two kernel `MeshRuntime`s over
-  channels, not two daemons over Noise.
+- *Streams (B6d).* Built on the existing stream API only. On the source each served stream
+  subscription is a tap: an internal instance (`mesh-out-<n>`, the topic's project) that
+  connects to the broker socket and reads the ring drop-oldest into a 256-record buffer; records
+  leave as `chunk` frames with binary tails only against the subscriber's record and byte
+  credit and the cog's `bytes_per_sec`, the rest are dropped and counted. On the subscriber a
+  `weftos://` subscribe of a stream topic (raw, so `raw: true`) holds the mesh subscription,
+  and the hub keeps a proxy writer (`mesh-in-<sub>`, the project the audience names) that
+  writes `<kind>/<source_id>` with `StreamWriter::write_at`, keeping the source seq, so a drop
+  at the source is a gap in the local ring. The cog reads it with `stream_subscribe` on
+  `<kind>/<source_id>`. Credit is 64 records and 1 MiB, topped up at half. Records over 64 KiB
+  do not cross. Without a bound broker socket no stream crosses (logged at start).
+- *Not built.* No `mesh` name check unless the daemon sets `Broker::set_mesh_name`; served and
+  remote subscriptions are not yet in `cogbus list` (`MeshTopicHub::served`,
+  `Broker::mesh_remote_rows` exist). Needs a real two-host run: the in-process tests drive two
+  brokers over a frame queue (with real broker sockets for streams) and two kernel
+  `MeshRuntime`s over channels, not two daemons over Noise.
+- *Decided by implementation, owner may revisit.* (1) `project:<id>` needs a paired peer, since
+  a peer's project membership is not known on a node, so it is never wider than `paired`.
+  (2) `paired` means a placement target at tier `paired` or `pinned`, admitted to the
+  inference proxy's standard. (3) `[mesh_limits]` is one table per cog, required only with
+  `[[outputs]]`. (4) Operator exposure limits only lower the cog's own
+  (`rate_per_min`, `max_request_bytes` as bytes per second). (5) A `blob_get` of a remote handle
+  answers `unavailable` (retry) while its one fetch runs. (6) A topic exposure is announced
+  exactly while it is on for a remote audience.
 
 **Subscriber side.** A cog subscribes with the topic's `weftos://<mesh>/sensors/<source_id>/topics/<kind>`
 name (section 2) in `subscribe.topic`, declared in `[[inputs]]` by the same kind and schema. The
@@ -571,7 +588,7 @@ it. ADR-117 display bindings resolve through this path with the leaf as a remote
 | B6a (built) | `ExposureKind::Topic`; the broker registers topic exposures; `weaver expose` and the report list them; local-wins on off | `weaver expose list` shows `topic.telemetry/venq-board` audience `local`; `off` and `on` persist |
 | B6b (built) | frames 0x12/0x13; `MeshTopicHub`; readings with credits; governance and activity | a second in-process node subscribes to a reading topic and receives it; off withdraws; a denied peer is refused and logged |
 | B6c (built; two-host run pending) | the subscriber broker: `weftos://` subscribe, proxy topics, resubscribe | a cog on PG reads a Ventuno `telemetry` reading and sees the origin `node_id` |
-| B6d (raw rule built for readings and blobs; stream chunks wait on the ring rework) | stream chunks with byte credits; the raw rule | a raw IQ subscribe from PG is refused unless exposed with `--raw` and requested with `raw: true`; with both, chunks flow under credit and drops show as a gap |
+| B6d (built; two-host run pending) | stream chunks with byte credits; the raw rule | a raw IQ subscribe from PG is refused unless exposed with `--raw` and requested with `raw: true`; with both, chunks flow under credit and drops show as a gap |
 | B6e (built; two-host run pending) | blob fetch by hash across nodes | a frame handle from the Ventuno resolves on PG once, and a second node without exposure is refused |
 
 **Owner decisions (2026-10-27).** The owner answered the five questions this plan asked, each
@@ -595,9 +612,19 @@ with the recommended option, and added the per-cog limits rule.
    one node-wide number.
 
 **Per-cog mesh limits (owner rule, 2026-10-27).** A cog with any `[[outputs]]` must carry a
-`[mesh_limits]` table in `cog.toml`; `CogSpec::parse` refuses the manifest without it, at
-install and at place, with an error that names the table and the four keys. The broker
-refuses to serve a topic to another node when its writer registered no limits.
+`[mesh_limits]` table in `cog.toml`. Where it is enforced (revised 2026-10-27, because the 29
+cogs of weftos-cogs v0.1.3 predate the rule and run on nodes today):
+
+- **pack**: `weaver workload pack` (`CogSpec::parse_for_pack`) refuses a manifest with outputs
+  and no table, with an error that names the table and the four keys. This is where authors
+  declare it.
+- **expose**: `weaver expose on topic.<kind>/<source_id>` is refused unless the cog writing the
+  topic declared its table: a cog sets its own limits before it is served to another node.
+- **install and place**: a manifest without the table is accepted. The cog runs with the
+  starting values below, a warning names the cog, and it is never served remotely (the broker
+  records its limits as not declared, so the expose check and the source hub both refuse).
+
+A table that is present is validated everywhere (all four keys, in range, no others).
 
 ```toml
 [mesh_limits]
