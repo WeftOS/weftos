@@ -203,6 +203,7 @@ impl PlacementControlPlane {
                 ..policy
             };
             self.register_life(rec, order, policy);
+            self.supersede_lost(&rec.node_id, &rec.instance_id, order, "placed again as another instance");
         }
         Ok(report)
     }
@@ -517,7 +518,13 @@ impl PlacementControlPlane {
             p.remove(instance_id);
         }
         if m == method::UNLOAD {
+            // An unload is final: no lost record of the same order on that
+            // node may place the instance again (card 82a59d97).
+            let order = self.life_of(instance_id).and_then(|c| c.order);
             self.drop_life(instance_id);
+            if let Some(o) = order {
+                self.supersede_lost(&rec.node_id, instance_id, &o, "its instance was unloaded");
+            }
             self.persist();
         }
         if method::is_teardown(m) {

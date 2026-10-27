@@ -34,6 +34,9 @@
 //!    placed again;
 //! 6. an instance that was `Lost` and is still on its node when it returns
 //!    is adopted back (a lease-stopped one is restarted).
+//! 7. a `Lost` record whose order its node holds under another record (or
+//!    whose instance the operator unloaded) is superseded and dropped, never
+//!    placed again (`plane_reschedule`).
 //!
 //! Every step is chained: `workload.lifecycle` for state changes and alerts,
 //! `workload.migrate` for a reschedule.
@@ -119,8 +122,8 @@ pub struct LifecycleEvent {
     /// That node.
     pub node_id: String,
     /// `lost`, `rescheduled`, `replaced`, `alert`, `reschedule_failed`,
-    /// `orphan_unloaded`, `orphan_unload_failed`, `recovered`, `failed` or
-    /// `gone`.
+    /// `orphan_unloaded`, `orphan_unload_failed`, `recovered`, `failed`,
+    /// `gone` or `superseded`.
     pub action: String,
     /// Human-readable detail.
     pub detail: String,

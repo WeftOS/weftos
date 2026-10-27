@@ -81,6 +81,8 @@ mod tests_life_plane;
 #[cfg(test)]
 mod tests_life_revoke;
 #[cfg(test)]
+mod tests_life_unload;
+#[cfg(test)]
 mod tests_link;
 #[cfg(test)]
 mod tests_peers;

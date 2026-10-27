@@ -3,15 +3,72 @@
 //! reboot). Always through [`PlacementControlPlane::place_timed`], so the
 //! same gate and engine decide: only `Alive`, verified, non-demoted nodes
 //! qualify, and a revoked package is refused.
+//!
+//! A node derives an instance's id from its order (package, config, project,
+//! controller), so on one node two records with the same order name one
+//! instance. A `Lost` record whose order another record on its node now holds
+//! is superseded and dropped, never retried: retrying it would fail with
+//! "already loaded" until that instance is unloaded, and then put the
+//! unloaded instance back (card 82a59d97).
 
 use serde_json::json;
 
 use super::lifecycle::LifecycleState;
 use super::plane::{PlacementControlPlane, PlacementRecord, now_ms};
+use super::plane_place::PlaceOrder;
 use super::plane_lifecycle::{ControllerLife, LifecycleEvent, backoff_ms, event};
 use crate::chain;
 
+/// Whether `a` and `b` would place the same instance on one node: what the
+/// node derives the instance id from (pin, affinity and `start` do not count).
+fn same_instance(a: &PlaceOrder, b: &PlaceOrder) -> bool {
+    a.package_dir == b.package_dir && a.config == b.config && a.project_id == b.project_id
+}
+
 impl PlacementControlPlane {
+    /// Drop every `Lost` record on `node` other than `keep` whose order would
+    /// place the same instance as `order`, chaining each as `superseded`.
+    /// Called when an instance with that order is placed (the new record
+    /// replaces the lost one) and when one is unloaded (the operator took
+    /// that instance down; a lost record must not bring it back).
+    pub(super) fn supersede_lost(&self, node: &str, keep: &str, order: &PlaceOrder, why: &str) -> usize {
+        let stale: Vec<PlacementRecord> = self
+            .placements()
+            .into_iter()
+            .filter(|r| r.node_id == node && r.instance_id != keep)
+            .filter(|r| {
+                self.life_of(&r.instance_id).is_some_and(|c| {
+                    c.life.state == LifecycleState::Lost && c.order.as_ref().is_some_and(|o| same_instance(o, order))
+                })
+            })
+            .collect();
+        for rec in &stale {
+            self.chain_event(
+                chain::EVENT_KIND_WORKLOAD_LIFECYCLE,
+                json!({ "phase": "superseded", "instance_id": rec.instance_id, "node": rec.node_id,
+                        "workload": rec.workload, "by": keep, "reason": why }),
+            );
+        }
+        let ids: Vec<String> = stale.into_iter().map(|r| r.instance_id).collect();
+        self.forget_instances(&ids);
+        ids.len()
+    }
+
+    /// Another record on `rec`'s node, not itself lost or replaced, holding
+    /// the same order: that instance is the one `rec` would place again.
+    fn holder_of(&self, rec: &PlacementRecord, order: &PlaceOrder) -> Option<String> {
+        self.placements()
+            .into_iter()
+            .filter(|r| r.node_id == rec.node_id && r.instance_id != rec.instance_id)
+            .find(|r| {
+                self.life_of(&r.instance_id).is_some_and(|c| {
+                    !matches!(c.life.state, LifecycleState::Lost | LifecycleState::Rescheduled)
+                        && c.order.as_ref().is_some_and(|o| same_instance(o, order))
+                })
+            })
+            .map(|r| r.instance_id)
+    }
+
     /// What stops `rec` being placed again at all (`hard`), and what only
     /// stops it being *moved* (`soft`: pinned, or non-migratable by the
     /// operator, its kind, or because it needs attached hardware).
@@ -58,6 +115,19 @@ impl PlacementControlPlane {
     /// pinned to it.
     pub(super) async fn reschedule(&self, rec: &PlacementRecord, node_dead: bool, out: &mut Vec<LifecycleEvent>) {
         let Some(c) = self.life_of(&rec.instance_id) else { return };
+        // Its order already runs on this node under another record (placed
+        // again by hand, say, from a package rebuilt in place): superseded.
+        if let Some(holder) = c.order.as_ref().and_then(|o| self.holder_of(rec, o)) {
+            self.chain_event(
+                chain::EVENT_KIND_WORKLOAD_LIFECYCLE,
+                json!({ "phase": "superseded", "instance_id": rec.instance_id, "node": rec.node_id,
+                        "workload": rec.workload, "by": holder,
+                        "reason": "its order is placed on this node as another instance" }),
+            );
+            self.forget_instances(std::slice::from_ref(&rec.instance_id));
+            out.push(event(rec, "superseded", format!("its order runs here as {holder}")));
+            return;
+        }
         let now = now_ms();
         if now < c.next_attempt_ms {
             return;
