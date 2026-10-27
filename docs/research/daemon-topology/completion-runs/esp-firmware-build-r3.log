@@ -1,0 +1,7 @@
+error: failed to load manifest for dependency `weftos-leaf-scene`
+
+Caused by:
+  failed to read `/home/esp/build/crates/weftos-leaf-scene/Cargo.toml`
+
+Caused by:
+  No such file or directory (os error 2)

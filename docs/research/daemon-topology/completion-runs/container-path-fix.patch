@@ -1,0 +1,469 @@
+Subject: [PATCH] Separate project-container executable from guest mount tree
+Base: main checkout ~/weftos; HEAD e6662b818be7511c283cc68c8e6df46681f342a2
+Basis: current working files, including imported/uncommitted P4 sources.
+Prepared only; not applied, compiled, tested or engine-executed.
+Preimage SHA-256 (detect concurrent source changes before applying):
+  f80954a59c596d41fdfc2966b9134b36ba0895e7646a546ef3f5150e8a1cce44  crates/clawft-weave/src/project_supervisor/container.rs
+  595db0e1ac2af0e8f895758b7ff400822aee192cceaf7264755e0ecbc8cbb8c5  crates/clawft-weave/src/project_supervisor/container_tests.rs
+  6570613eb5ff03a20ea724dc093be95603cb09c47142541e0865e65e0dd2c637  scripts/p4-container-smoke.sh
+  b69bff032b9fc66ae8e35d5649d219b7a05f93d4d3a5689d2bcff4cace2bcdb2  docs/guides/project-linux-container.md
+  fdef96d3225709d2db5f2f5feea04fcd35ae9656f05a2f1a50569e84b5469deb  scripts/dev/p4-container-lifecycle.py
+  21506758a693b9db01936cdbdc90140ecdd204347a875c3ab583ebc714268366  docs/research/daemon-topology/completion-runs/container-lifecycle-plan.md
+
+diff --git a/crates/clawft-weave/src/project_supervisor/container.rs b/crates/clawft-weave/src/project_supervisor/container.rs
+--- a/crates/clawft-weave/src/project_supervisor/container.rs
++++ b/crates/clawft-weave/src/project_supervisor/container.rs
+@@ -10,6 +10,9 @@
+ 
+ const LIMIT: usize = 64 * 1024;
+ const TIMEOUT: Duration = Duration::from_secs(20);
++/// Executable in every operator-pinned project image. Keep separate from
++/// the /weftos directory tree used by bind mounts.
++pub const GUEST_EXECUTABLE: &str = "/usr/local/bin/weaver";
+ pub const GUEST_PROJECT: &str = "/weftos/project";
+ pub const GUEST_TRUST: &str = "/weftos/trust";
+ pub const GUEST_LINK: &str = "/weftos/parent";
+@@ -17,7 +20,7 @@
+ #[derive(Debug, Clone, Deserialize)]
+ #[serde(deny_unknown_fields)]
+ pub struct OperatorConfig {
+-    /// An image containing `/weftos` and pinned by digest.
++    /// An image containing the real `weaver` at `/usr/local/bin/weaver`, pinned by digest.
+     pub image: String,
+     pub engine: String,
+ }
+@@ -110,6 +113,19 @@
+         || !m.link.is_absolute()
+     {
+         return Err("project container mounts must be absolute".into());
++    }
++    // A file cannot be the parent of a mount directory; an ancestor mount
++    // would also hide the image's executable. Reject both before engine IO.
++    let executable = Path::new(GUEST_EXECUTABLE);
++    for target in [GUEST_PROJECT, m.guest_runtime.as_str(), GUEST_TRUST, GUEST_LINK] {
++        let target = Path::new(target);
++        if !target.is_absolute()
++            || target.components().any(|c| matches!(c, std::path::Component::ParentDir))
++            || target.starts_with(executable)
++            || executable.starts_with(target)
++        {
++            return Err(format!("guest mount {} conflicts with executable {GUEST_EXECUTABLE}", target.display()));
++        }
+     }
+     let mut v = vec![
+         "create".into(),
+@@ -152,7 +168,7 @@
+         "--workdir".into(),
+         GUEST_PROJECT.into(),
+         "--entrypoint".into(),
+-        "/weftos".into(),
++        GUEST_EXECUTABLE.into(),
+     ];
+     if cfg.engine == "podman" {
+         // Rootless Podman otherwise maps the host-owned private trust files
+@@ -202,6 +218,8 @@
+ struct RawConfig {
+     #[serde(rename = "Image")]
+     image: String,
++    #[serde(rename = "Entrypoint")]
++    entrypoint: Vec<String>,
+     #[serde(rename = "User")]
+     user: String,
+     #[serde(rename = "Labels")]
+@@ -255,6 +273,9 @@
+     }
+     if r.config.image != expected_image {
+         return Err("container image differs from the operator pin".into());
++    }
++    if r.config.entrypoint != [GUEST_EXECUTABLE] {
++        return Err("container entrypoint differs from the supervised weaver executable".into());
+     }
+     let h = &r.host_config;
+     if !h.readonly_rootfs
+diff --git a/crates/clawft-weave/src/project_supervisor/container_tests.rs b/crates/clawft-weave/src/project_supervisor/container_tests.rs
+--- a/crates/clawft-weave/src/project_supervisor/container_tests.rs
++++ b/crates/clawft-weave/src/project_supervisor/container_tests.rs
+@@ -28,7 +28,7 @@
+         nix::unistd::getegid().as_raw()
+     );
+     serde_json::json!([{ "Id": id, "State": {"Running": running, "Pid": if running {4242} else {0}, "ExitCode": 0},
+-        "Config": {"Image": cfg().image, "User": user, "Labels": {"weftos.project": PROJECT, "weftos.supervisor": "owner-key"}},
++        "Config": {"Image": cfg().image, "Entrypoint": [GUEST_EXECUTABLE], "User": user, "Labels": {"weftos.project": PROJECT, "weftos.supervisor": "owner-key"}},
+         "HostConfig": {"ReadonlyRootfs":true,"Privileged":false,"CapAdd":null,"CapDrop":["ALL"],
+             "SecurityOpt":["no-new-privileges"],"PidsLimit":64,"NetworkMode":"none"},
+         "NetworkSettings": {"Networks":{}},
+@@ -51,6 +51,7 @@
+         "--pids-limit 64",
+         "--network none",
+         "--user 1000:1000",
++        "--entrypoint /usr/local/bin/weaver",
+         "/run/trust,dst=/weftos/trust,readonly",
+         "/run/guest,dst=/weftos/run/",
+     ] {
+@@ -58,6 +59,42 @@
+     }
+     assert!(!args.contains("--privileged"));
+ }
++#[test]
++fn no_guest_mount_descends_from_or_hides_the_executable() {
++    for engine in ["docker", "podman"] {
++        let mut config = cfg();
++        config.engine = engine.into();
++        let args = create_args(&config, PROJECT, &mounts(), 1000, 1000).unwrap();
++        let executable = args.windows(2).find(|w| w[0] == "--entrypoint").unwrap();
++        assert_eq!(executable[1], "/usr/local/bin/weaver");
++        let binary = Path::new(&executable[1]);
++        let targets: Vec<&str> = args.windows(2)
++            .filter(|w| w[0] == "--mount")
++            .map(|w| w[1].split(',').find_map(|part| part.strip_prefix("dst=")).unwrap())
++            .collect();
++        assert_eq!(targets.len(), 4);
++        for target in &targets {
++            let mount = Path::new(target);
++            assert!(!mount.starts_with(binary), "mount {target} descends from executable {}", binary.display());
++            assert!(!binary.starts_with(mount), "mount {target} hides executable {}", binary.display());
++        }
++        // The old executable really conflicts with these same mount targets.
++        // Changing only the entrypoint back to /weftos makes this test fail.
++        assert!(targets.iter().all(|target| Path::new(target).starts_with("/weftos")));
++        assert_eq!(&args[args.len() - crate::project_supervisor::child::child_args(PROJECT).len()..],
++                   crate::project_supervisor::child::child_args(PROJECT).as_slice());
++    }
++}
++
++#[test]
++fn runtime_mount_must_not_cover_or_descend_from_weaver() {
++    for target in ["/usr/local/bin/weaver", "/usr/local/bin/weaver/run", "/usr/local/bin", "/", "relative/run", "/case/../usr/local/bin"] {
++        let mut m = mounts();
++        m.guest_runtime = target.into();
++        assert!(create_args(&cfg(), PROJECT, &m, 1000, 1000).is_err(), "accepted {target}");
++    }
++}
++
+ #[test]
+ fn forged_id_label_or_mount_is_refused() {
+     assert!(parse_inspect(&inspected(ID, true), ID, PROJECT, &mounts(), &cfg().image).is_ok());
+@@ -102,6 +139,9 @@
+             serde_json::json!({"bridge":{}}),
+         ),
+         ("/0/Config/User", serde_json::json!("999999:999999")),
++        ("/0/Config/Entrypoint", serde_json::json!(["/weftos"])),
++        ("/0/Config/Entrypoint", serde_json::json!(["/usr/local/bin/weft"])),
++        ("/0/Config/Entrypoint", serde_json::json!([GUEST_EXECUTABLE, "--version"])),
+     ] {
+         let mut changed = original.clone();
+         *changed.pointer_mut(pointer).unwrap() = value;
+diff --git a/scripts/p4-container-smoke.sh b/scripts/p4-container-smoke.sh
+--- a/scripts/p4-container-smoke.sh
++++ b/scripts/p4-container-smoke.sh
+@@ -1,9 +1,9 @@
+ #!/usr/bin/env bash
+ # Isolated engine smoke for ADR-103 P4. Requires an operator-built image with
+-# /weftos; does not contact or alter a user daemon or production container.
++# /usr/local/bin/weaver; does not contact or alter a user daemon or production container.
+ set -euo pipefail
+ ENGINE="${WEFTOS_SMOKE_ENGINE:-docker}"
+-IMAGE="${WEFTOS_SMOKE_IMAGE:?set WEFTOS_SMOKE_IMAGE to an operator-pinned image@sha256 digest containing /weftos}"
++IMAGE="${WEFTOS_SMOKE_IMAGE:?set WEFTOS_SMOKE_IMAGE to an operator-pinned image@sha256 digest containing /usr/local/bin/weaver}"
+ [[ "$ENGINE" == docker || "$ENGINE" == podman ]] || { echo 'Docker or Podman required' >&2; exit 2; }
+ [[ "$IMAGE" =~ @sha256:[0-9a-f]{64}$ ]] || { echo 'image must be pinned by digest' >&2; exit 2; }
+ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+@@ -30,7 +30,7 @@
+   --mount "type=bind,src=$RUNTIME,dst=/weftos/run/smoke" \
+   --mount "type=bind,src=$TRUST,dst=/weftos/trust,readonly" \
+   --mount "type=bind,src=$LINK,dst=/weftos/parent,readonly" \
+-  --entrypoint /weftos "$IMAGE" --version)"
++  --entrypoint /usr/local/bin/weaver "$IMAGE" kernel start --help)"
+ [[ "$CID" =~ ^[0-9a-f]{64}$ ]] || { echo "engine returned non-immutable ID: $CID" >&2; exit 1; }
+ [[ "$($ENGINE inspect --format '{{.Id}}' "$CID")" == "$CID" ]]
+ MOUNTS="$($ENGINE inspect --format '{{range .Mounts}}{{.Destination}}={{.RW}} {{end}}' "$CID")"
+@@ -39,4 +39,6 @@
+ "$ENGINE" start -a "$CID" >"$ROOT/target/p4-container-smoke-$ID.log"
+ [[ "$($ENGINE inspect --format '{{.Id}}' "$CID")" == "$CID" ]]
+ [[ "$($ENGINE inspect --format '{{.State.ExitCode}}' "$CID")" == 0 ]]
+-echo "PASS immutable ID $CID; isolated create/start/inspect/exit"
++HELP="$(cat "$ROOT/target/p4-container-smoke-$ID.log")"
++[[ "$HELP" == *'--profile'* && "$HELP" == *'--project'* ]]
++echo "PASS image/CLI preflight only: immutable ID $CID; NOT driver lifecycle acceptance"
+diff --git a/docs/guides/project-linux-container.md b/docs/guides/project-linux-container.md
+--- a/docs/guides/project-linux-container.md
++++ b/docs/guides/project-linux-container.md
+@@ -9,9 +9,13 @@
+ ```
+ 
+ `podman` is also accepted. The image must already be local and contain an
+-executable `/weftos` that accepts `kernel start --foreground --profile project
++real `clawft-weave` executable `/usr/local/bin/weaver` that accepts `kernel start --foreground --profile project
+ --project <id>`. The launcher uses `--pull=never`; it does not build or update
+-the image. It selects no network, drops capabilities, prevents privilege
++the image. `/weftos` is a directory, never the executable: its subdirectories
++remain the mount targets below. Do not substitute the `weft`/weftosCLI binary.
++The launcher rejects mount targets that descend from or hide the executable;
++inspection also checks the exact entrypoint before adoption or mutation.
++It selects no network, drops capabilities, prevents privilege
+ escalation, limits processes, and runs under the host user's UID/GID. Podman
+ uses `keep-id` mapping. Unsupported engine flags fail the launch.
+ 
+@@ -45,8 +49,11 @@
+ ```
+ 
+ The script creates an isolated container and directories under `target/`,
+-checks the immutable ID and mount permissions, runs `/weftos --version`, and
++checks the immutable ID and mount permissions, runs `/usr/local/bin/weaver kernel start --help`, and
+ removes its container. It never uses a production project or daemon.
+-It is an engine-contract smoke only; a supervised registration, readiness,
+-restart and adoption run still requires an isolated Linux daemon and a
+-provisioned operator image.
++It is an image/CLI preflight only, not driver lifecycle acceptance. The
++[fixed driver acceptance plan](../research/daemon-topology/completion-runs/container-lifecycle-plan.md#actual-linux-container-driver-acceptance-fixed-gate)
++requires the real parent with `sandbox=linux-container`, immutable engine IDs,
++signed registration, crash restart, adoption, revocation and cleanup on a
++dedicated disposable Linux engine. Neither this smoke nor the logical-pair
++harness can satisfy that gate.
+diff --git a/scripts/dev/p4-container-lifecycle.py b/scripts/dev/p4-container-lifecycle.py
+--- a/scripts/dev/p4-container-lifecycle.py
++++ b/scripts/dev/p4-container-lifecycle.py
+@@ -24,6 +24,7 @@
+ 
+ LABEL = "weftos.p4-lifecycle"
+ SCOPE = "real-user-and-logical-child-inside-linux-container"
++WEAVER = "/usr/local/bin/weaver"
+ HEX64 = re.compile(r"[0-9a-f]{64}\Z")
+ 
+ 
+@@ -91,9 +92,9 @@
+             "worker requires the isolated Linux fixture container")
+     require(os.path.ismount("/case"), "/case must be the disposable engine volume")
+     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+-    require(Path("/weftos").is_file(), "/weftos must be the weaver executable")
+-    require(hashlib.sha256(Path("/weftos").read_bytes()).hexdigest() == binary_sha,
+-            "/weftos differs from the expected weaver artifact SHA-256")
++    require(Path(WEAVER).is_file(), f"{WEAVER} must be the weaver executable")
++    require(hashlib.sha256(Path(WEAVER).read_bytes()).hexdigest() == binary_sha,
++            f"{WEAVER} differs from the expected weaver artifact SHA-256")
+     base = Path("/case")
+     require(not (base / "started").exists(), "refusing to reuse fixture state")
+     (base / "started").write_text("single use\n")
+@@ -145,7 +146,7 @@
+         log = (base / f"parent-{len(parents)}.log").open("wb")
+         logs.append(log)
+         parent = subprocess.Popen(
+-            ["/weftos", "kernel", "start", "--foreground", "--profile", "user",
++            [WEAVER, "kernel", "start", "--foreground", "--profile", "user",
+              "--config", str(config)], cwd=base, env=env,
+             stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+             start_new_session=True)
+@@ -193,7 +194,7 @@
+         require(h.get("runtime_dir") == str(child_run), "child runtime escaped fixture")
+         require(h.get("mesh", {}).get("mode") == "off", "child mesh is enabled")
+         identity = process_identity(pid)
+-        require(identity and identity[0] == "/weftos", "child is not the pinned real weaver")
++        require(identity and identity[0] == WEAVER, "child is not the pinned real weaver")
+         children[pid] = identity
+         public = Ed25519PublicKey.from_public_bytes(bytes.fromhex(cert["project_pubkey"]))
+         proof = bytes.fromhex(h["project_proof"])
+diff --git a/docs/research/daemon-topology/completion-runs/container-lifecycle-plan.md b/docs/research/daemon-topology/completion-runs/container-lifecycle-plan.md
+--- a/docs/research/daemon-topology/completion-runs/container-lifecycle-plan.md
++++ b/docs/research/daemon-topology/completion-runs/container-lifecycle-plan.md
+@@ -45,22 +45,15 @@
+ - `handshake_rpc.rs`, `mesh_local_rpc.rs`, `clawft-rpc/src/mesh_local.rs`, and
+   `clawft-types/src/project/cert.rs`: actual wire formats/signature domains.
+ 
+-There is a concrete mount-layout conflict in the imported launcher:
+-`--entrypoint /weftos` requires `/weftos` to be an executable file, while
+-`GUEST_PROJECT=/weftos/project`, `GUEST_TRUST=/weftos/trust` and
+-`GUEST_LINK=/weftos/parent` require it to be a directory. A regular Linux
+-filesystem cannot satisfy both. This harness keeps the required `/weftos`
+-executable and uses `/case`; it does not hide or patch that Rust defect.
+-
+-Full driver acceptance remains a separate task. It needs an agreed nonconflicting
+-mount layout, then a Linux parent with access to a dedicated disposable engine
+-whose mount-source paths and inspected host PIDs are meaningful in the parent's
+-namespace. A remotely controlled engine alone does not solve those path/PID
+-requirements. Do not mount the operator's Docker socket into a parent container.
+-A dedicated Linux VM with its own engine and parent in that VM's host namespace
+-is a straightforward future topology. That test must set `sandbox=linux-container`
+-and observe actual engine IDs through restart, adoption and revoke; the present
+-harness cannot supply that evidence.
++The accepted mount-layout correction is `/usr/local/bin/weaver` for the
++executable and `/weftos/{project,run,trust,parent}` for directories. Previously
++`--entrypoint /weftos` conflicted with mounts below that file. The source delta
++updates the launcher, inspect entrypoint contract, regression tests, image/CLI
++smoke, operator guide and this logical harness together. Existing pinned images
++must be rebuilt/re-pinned with the corrected layout; no old-layout fallback.
++
++The actual driver acceptance gate is specified below. The existing logical-pair
++harness remains supplemental and cannot turn `container_driver_accepted` true.
+ 
+ ## Acceptance assertions
+ 
+@@ -68,7 +61,7 @@
+ failures, not skips. Each RPC and lifecycle poll is bounded; the outer container
+ execution has a 900-second timeout.
+ 
+-1. Boot `/weftos kernel start --foreground --profile user` with explicit isolated
++1. Boot `/usr/local/bin/weaver kernel start --foreground --profile user` with explicit isolated
+    JSON config. Require a user-role handshake, the expected PID/runtime, and mesh
+    mode `off`. The worker verifies the executable SHA-256 before starting it.
+ 2. Register one fixture project through real `project.register`; atomically set
+@@ -120,7 +113,7 @@
+   production engine. Only a future invocation with `--run` contacts the engine.
+ - Guest image: **already present** at a `repository@sha256:<64-lowercase-hex>`
+   reference. Every create uses `--pull=never`. No mutable-tag fallback.
+-- `/weftos` must be the regular Linux **`clawft-weave` / `weaver` executable**, not
++- `/usr/local/bin/weaver` must be the regular Linux **`clawft-weave` / `weaver` executable**, not
+   `clawft-cli`'s `weft`, `weftosCLI`, a shell wrapper, or a symlink to a differently
+   named executable. Supply its independently recorded file SHA-256. A digest
+   alone does not prove that the image contains the correct binary.
+@@ -155,7 +148,7 @@
+ compiler/linker toolchain. Native dependency/library availability and a successful
+ build are prerequisites, **not verified results of this task**. Use the target
+ architecture of the chosen Linux engine; do not copy a macOS Mach-O artifact into
+-the image. Package `target/release/weaver` as `/weftos` and record its SHA-256.
++the image. Package `target/release/weaver` as `/usr/local/bin/weaver` and record its SHA-256.
+ 
+ The repository's existing root `Dockerfile` is unsuitable: it builds
+ `clawft-cli --bin weft`, installs `/usr/local/bin/weft`, declares a volume and uses
+@@ -202,3 +195,142 @@
+ checks. Real engine behavior, binary feature completeness, shared-service startup
+ and the end-to-end assertions remain unverified until an authorized run uses the
+ correct pinned image. There is no claim that P4 or D10 is complete.
++
++
++## Actual Linux container driver acceptance: fixed gate
++
++This is the acceptance target for the imported driver, not a new definition of
++success for the logical harness. Run after this patch is applied and both parent
++binary and child image are built from the evaluated source. This section is a
++runbook specification, not an implemented driver runner or execution receipt.
++Failure remains failure; do not substitute `--version`, CLI help, a mocked
++engine, direct engine-started children, or the logical driver.
++
++### Dedicated Docker-in-Docker topology
++
++Use one disposable Linux VM/test host, containing one dedicated, digest-pinned
++Docker-in-Docker fixture container. Provision the actual parent `weaver`, Docker
++CLI, lifecycle controller and `dockerd` in that SAME fixture container; execute
++the parent/controller there using exec, not as sibling containers connected to a
++remote socket. They share its Linux PID and mount namespaces and the same
++`/case` path. `dockerd` creates the project child as a nested container with its
++own PID/mount/network namespaces. Its inspected State.Pid is therefore meaningful
++in the parent's /proc, and engine bind-source paths are the parent's actual paths.
++The child PID from its handshake is guest-local; never equate it to State.Pid.
++
++Use the fixture's OWN `/var/run/docker.sock` created by its own dockerd. Do not
++mount any host Docker/Podman socket, host /proc, device tree, home or project
++checkout; do not use host PID/network namespaces. Put `/case`, dockerd's data
++root and exec root on disposable fixture-owned storage. Use unique ownership
++labels for the outer fixture and storage, retain their immutable IDs, and remove
++only resources created by this run. No API TCP port is published. Clear inherited
++DOCKER_HOST, DOCKER_CONTEXT and CONTAINER_HOST in the parent; resolve `docker`
++from a controlled PATH against this local dedicated socket.
++
++Rootful DinD commonly requires a privileged OUTER fixture for namespaces,
++mounts and cgroups. Authorize that only in a disposable Linux VM, not on a
++production/shared host. That privilege belongs to the test engine fixture, not
++the project child: the driver must still create the child with cap-drop ALL,
++read-only root, no-new-privileges, pids-limit 64 and network none. Do not weaken
++those child flags to make DinD pass. Provision artifacts first; disable fixture
++networking for the acceptance run. Use local Unix RPC throughout. If the chosen
++VM cannot run DinD's storage/cgroup setup, use the VM-host alternative below and
++report the topology actually tested; do not silently change the driver.
++
++Before starting a user daemon, establish these preconditions in evidence:
++
++- Pinned DinD fixture image, dedicated engine ID/version, parent executable hash
++  and source revision/dirty-delta fingerprint; sufficient PID/memory capacity.
++- Correct child image already present in the INNER engine at the exact digest
++  in `project-container.json`, with executable `/usr/local/bin/weaver` and no
++  conflicting image VOLUMEs. Both parent and child hashes identify `weaver`.
++  Preload during isolated provisioning. If archive import loses RepoDigests,
++  restore/verify a resolvable digest using a disposable provisioning registry;
++  do not substitute a tag or assume `docker load` preserved the digest. The
++  acceptance phase must need no registry and still use `--pull=never`.
++- A filesystem sentinel at `/case` observed through a disposable inner-engine
++  bind mount proves shared source-path semantics. Compare parent and dockerd
++  PID/mount namespace IDs; inspect the probe container's State.Pid and show it
++  in the parent's /proc. Verify native UDS exchange through the mounted parent
++  DIRECTORY, not a mount of a stale socket inode. Remove the probe by its ID.
++- Isolated HOME `/case/h`, runtime `/case/r`, project `/case/p`; parent mesh and
++  TCP IPC disabled. Parent owns private `.weftos/project-container.json` with
++  `{"engine":"docker","image":"repository@sha256:<recorded digest>"}`.
++  Parent and child UID/GID must match the inspected driver contract. A fixture
++  root uid is acceptable; no real user home or production chain is present.
++
++Start the real parent inside that fixture namespace:
++`/usr/local/bin/weaver kernel start --foreground --profile user --config /case/config.json`.
++Register `/case/p` over its owner UDS. Set that fixture manifest's `[serve]` to
++`via="child-kernel"`, `sandbox="linux-container"`, with a bounded restart budget.
++Start through `project.start`, NEVER a direct `docker run` of the test child.
++The parent must invoke the real `EngineClient` and `create_args` paths.
++
++### Required observations and failure criteria
++
++1. **Launch/identity:** capture project.start/status, persisted state.json and
++   inner-engine inspect. Require a 64-hex container ID A, pinned image, exact
++   `/usr/local/bin/weaver` entrypoint, project/supervisor labels, UID/GID, all four
++   expected bind sources/targets/permissions and all isolation flags. Record
++   guest PID and inspected host PID separately. Require a signed certificate,
++   fresh project-key handshake proof and a live container-bound registration
++   using the v2 binding (container ID plus parent-selected host socket). Missing
++   proof, stale ID or a refused readiness check is failure, not a timeout waiver.
++2. **Boundary:** the child must reach only the mounted
++   `/weftos/parent/child.sock` parent endpoint. Inspect `/weftos/trust` and parent
++   directory read-only status; attempt writes to user.pub/parent-policy/revoked
++   and require failure. Verify the owner socket, parent private keys and engine
++   socket are not mounted or reachable, project/runtime writes work, root writes
++   fail and no external interface/outer mesh exists. Use a prepared probe helper
++   in the pinned image if needed; never inject host socket mounts for probing.
++3. **Automatic crash restart:** record A's fresh inspected identity, kill only A
++   through the dedicated engine, and let the REAL supervisor restart it. Require
++   old A removed by verified restart, new immutable ID B != A, same project key/
++   certificate, fresh signed registration/proof and bounded restart count. Do
++   not manually create B or accept native-PID-only restart evidence.
++4. **Parent restart/adoption:** stop only the user daemon while dockerd and B
++   stay alive. Restart on the SAME parent state, verify unchanged user key and
++   an adoption receipt, and require the SAME container ID B. Require no duplicate
++   project-labeled container, `ensure_running.started=false`, fresh signed
++   re-registration and working parent UDS after rebind. Signed container proof,
++   not guest PID equality or a cached socket, must establish readiness.
++5. **Revoke:** invoke the real `project.revoke` on the parent; require B stopped,
++   terminal revoked marker, registration gone and all three start/restart/ensure
++   paths refused. Accept the current driver's retained EXITED engine record for
++   re-inspection; do not invent a requirement that revoke itself force-removes
++   that record. A live B or successful re-registration is a failure.
++6. **Cleanup:** shut down the fixture parent; inspect B and its full ownership
++   contract, remove its exited record by immutable ID, and prove no live or
++   exited project-labeled children remain. Export sanitized receipts/logs first,
++   then remove the outer fixture and its labeled data volumes or discard the
++   disposable VM. Check every removal; no global prune. A pass requires both
++   lifecycle success and cleanup success. Abrupt interruption leaves a failed
++   run with resource IDs for explicit recovery, never a success receipt.
++
++The receipt must name `scope=linux-container-driver`, parent and child source/
++artifact hashes, image digest, engine identity, IDs A/B, adoption identity,
++certificate/proof checks, isolation checks, revoke results and cleanup results.
++The pass bit may become true only after ALL six observations succeed. Keep the
++logical harness's existing false driver-pass bit unchanged. This driver test
++establishes D9 container lifecycle, not the separate D10 nested-user-daemon gate.
++
++### Accessible local Linux VM alternative
++
++A newly provisioned dedicated Linux VM can run its own dockerd and real parent
++as ordinary VM-host processes, using the same `/case` paths and native UDS.
++Drive it over SSH/console; no macOS UDS or host engine socket is forwarded. The
++same digest, child flags, six observations and receipt apply unchanged. First
++verify that such a VM is available and disposable; none was discovered or
++accessed in this source-only task. No existing machine is assumed safe to use.
++
++### Deferred validation commands
++
++After source application, the path regression filter is
++`cargo test -p clawft-weave project_supervisor::container::tests --lib` (default
++features). The targeted regression asserts every actual Docker and Podman mount
++target neither descends from nor hides the actual entrypoint and retains all
++four `/weftos` targets. Replacing that entrypoint with the old `/weftos` makes the
++assertion fail; invalid runtime overlaps are rejected before engine calls.
++Inspection tests also reject old/wrong/augmented entrypoints. Run the repo's
++required gates only in the authorized build lane; none were executed to prepare
++this patch. Detach future builds and engine acceptance runs and capture PID/logs.

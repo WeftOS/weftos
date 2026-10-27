@@ -1,0 +1,801 @@
+diff --git a/crates/clawft-weave/src/nested_supervisor.rs b/crates/clawft-weave/src/nested_supervisor.rs
+--- a/crates/clawft-weave/src/nested_supervisor.rs
++++ b/crates/clawft-weave/src/nested_supervisor.rs
+@@ -12,6 +12,7 @@
+ use clawft_types::project::canon::hex_encode;
+ use clawft_types::project::cert::key_id;
+ use ed25519_dalek::SigningKey;
++use nix::libc;
+ use rand::{RngCore, rngs::OsRng};
+ use serde_json::json;
+ use std::collections::BTreeMap;
+@@ -269,6 +270,9 @@
+             }
+         }
+         instance.child = None;
++        // Recovery may have no Child handle even though the old daemon is still
++        // alive. Prove it is gone before rewriting its boot/policy files.
++        Self::terminate(instance).await?;
+         self.persist(instance)?;
+         ensure!(
+             instance
+@@ -344,14 +348,27 @@
+     async fn terminate(instance: &mut Instance) -> anyhow::Result<()> {
+         if let Some(child) = &mut instance.child {
+             if child.try_wait()?.is_none() {
+-                // Graceful shutdown cascades to the inner user's project kernels.
++                // Try RPC briefly, but shutdown policy (including deny_all)
++                // must not prevent the owner's graceful project cascade.
+                 let graceful = async {
+-                    if let Some(mut client) = clawft_rpc::DaemonClient::connect_path(
+-                        instance.contract.runtime.join("kernel.sock"),
+-                    )
+-                    .await
+-                    {
+-                        let _ = client.simple_call("kernel.shutdown").await;
++                    let request_shutdown = async {
++                        let mut client = clawft_rpc::DaemonClient::connect_path(
++                            instance.contract.runtime.join("kernel.sock"),
++                        )
++                        .await?;
++                        let response = client.simple_call("kernel.shutdown").await.ok()?;
++                        response.ok.then_some(())
++                    };
++                    let accepted = matches!(
++                        tokio::time::timeout(std::time::Duration::from_secs(2), request_shutdown)
++                            .await,
++                        Ok(Some(()))
++                    );
++                    if !accepted {
++                        // This pipe belongs to our Child handle. EOF invokes
++                        // the child's existing SIGTERM/cascade watcher; no PID
++                        // lookup or signal to a recovered process is involved.
++                        drop(child.stdin.take());
+                     }
+                     child.wait().await
+                 };
+@@ -367,14 +384,15 @@
+             }
+         }
+         instance.child = None;
+-        // Only after waiting for our owned process: no stale socket can answer
+-        // readiness for the next generation.
+-        let socket = instance.contract.runtime.join("kernel.sock");
+-        match std::fs::remove_file(socket) {
+-            Ok(()) => {}
+-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+-            Err(e) => return Err(e.into()),
+-        }
++        // No handle after registry recovery is NOT evidence of death. The
++        // runtime lock and socket probe jointly prove quiescence. Never signal
++        // a recovered PID, or unlink an unowned endpoint that accepts calls.
++        let paths = clawft_types::runtime_paths::RuntimePaths::at(&instance.contract.runtime);
++        let _lock = crate::instance_lock::InstanceLock::acquire(&paths)
++            .context("nested instance may still be alive; stop/revocation incomplete")?;
++        crate::instance_lock::reclaim_stale_socket(&paths)
++            .await
++            .context("nested endpoint still live or unverifiable; stop/revocation incomplete")?;
+         Ok(())
+     }
+ 
+@@ -416,9 +434,14 @@
+             "policy rollback refused"
+         );
+         let policy = self.capped(&parent, &instance.cap)?;
+-        if policy.rule_hash != instance.contract.policy.rule_hash {
+-            Self::terminate(instance).await?;
+-        }
++        // Metadata (version/time/signature) changes on each export. Compare
++        // the complete effective rules+limits, then keep the LIVE signed bytes
++        // unchanged for a semantic no-op. The overlay runtime pins that exact
++        // signature; rewriting it while running breaks reload availability.
++        if same_effective_policy(&policy, &instance.contract.policy)? {
++            return Ok(());
++        }
++        Self::terminate(instance).await?;
+         instance.contract.policy = policy;
+         self.persist(instance)
+     }
+@@ -459,3 +482,11 @@
+     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+     Ok(())
+ }
++
++fn same_effective_policy(a: &ParentPolicy, b: &ParentPolicy) -> anyhow::Result<bool> {
++    Ok(a.schema == b.schema
++        && a.user_key_id == b.user_key_id
++        && a.limits == b.limits
++        && a.rule_hash == b.rule_hash
++        && serde_json::to_value(&a.rules)? == serde_json::to_value(&b.rules)?)
++}
+diff --git a/crates/clawft-weave/tests/nested_instances.rs b/crates/clawft-weave/tests/nested_instances.rs
+--- a/crates/clawft-weave/tests/nested_instances.rs
++++ b/crates/clawft-weave/tests/nested_instances.rs
+@@ -61,14 +61,17 @@
+     assert!(
+         NestedSupervisor::new(
+             root.path().join("disabled"),
+-            "/bin/true".into(),
++            env!("CARGO_BIN_EXE_weaver").into(),
+             master(),
+             false,
+             0
+         )
+         .is_err()
+     );
+-    let sup = sup(&root.path().join("n"), Path::new("/bin/true"));
++    let sup = sup(
++        &root.path().join("n"),
++        Path::new(env!("CARGO_BIN_EXE_weaver")),
++    );
+     let cap: OverlayFile =
+         serde_json::from_value(json!({"limits": {"max_processes":64, "spawn_budget":2}})).unwrap();
+     let inner = sup
+@@ -176,14 +179,14 @@
+ async fn nested_registry_recovery_preserves_identity_and_revoke() {
+     let root = dir();
+     let path = root.path().join("n");
+-    let first = sup(&path, Path::new("/bin/true"));
++    let first = sup(&path, Path::new(env!("CARGO_BIN_EXE_weaver")));
+     first
+         .register(ID, Config::default(), policy(20), OverlayFile::default())
+         .await
+         .unwrap();
+     let before = contract(&first);
+     drop(first);
+-    let second = sup(&path, Path::new("/bin/true"));
++    let second = sup(&path, Path::new(env!("CARGO_BIN_EXE_weaver")));
+     assert_eq!(contract(&second).inner_pubkey, before.inner_pubkey);
+     let pk = clawft_types::project::canon::hex_decode::<32>(&before.inner_pubkey).unwrap();
+     second
+@@ -201,19 +204,23 @@
+     assert!(contract(&second).generation > before.generation);
+     second.revoke(ID).await.unwrap();
+     drop(second);
+-    let third = sup(&path, Path::new("/bin/true"));
++    let third = sup(&path, Path::new(env!("CARGO_BIN_EXE_weaver")));
+     assert!(third.start(ID).await.is_err());
+     assert!(third.grant(ID, NestedRegistration::Isolated).await.is_err());
+ }
+ 
+ async fn rpc(socket: &Path, method: &str, params: Value) -> Value {
++    rpc_scoped(socket, method, params, None).await
++}
++
++async fn rpc_scoped(socket: &Path, method: &str, params: Value, project: Option<&str>) -> Value {
+     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+     let mut stream = tokio::net::UnixStream::connect(socket).await.unwrap();
+     stream
+         .write_all(
+             format!(
+                 "{}\n",
+-                json!({"proto":1,"id":"d10","auth":"admin","method":method,"params":params})
++                json!({"proto":1,"id":"d10","auth":"admin","method":method,"params":params,"project":project})
+             )
+             .as_bytes(),
+         )
+@@ -257,6 +264,18 @@
+     let h = rpc(&sock, "kernel.handshake", json!({})).await;
+     assert_eq!(h["result"]["profile"], "user");
+     assert_eq!(h["result"]["depth"], 1);
++    let signed_before = std::fs::read(c.runtime.join("parent-policy.json")).unwrap();
++    sup.refresh_policy(ID, policy(31)).await.unwrap();
++    let repeated = sup.start(ID).await.unwrap();
++    assert_eq!(repeated["started"], false);
++    assert_eq!(repeated["pid"], h["result"]["pid"]);
++    assert_eq!(
++        signed_before,
++        std::fs::read(c.runtime.join("parent-policy.json")).unwrap()
++    );
++    let reloaded = rpc(&sock, "governance.reload", json!({})).await;
++    assert_eq!(reloaded["ok"], true, "{reloaded}");
++
+     let started = rpc(&sock, "project.start", json!({"id":manifest.id})).await;
+     assert_eq!(started["ok"], true, "{started}");
+     let child_socket = c.runtime.join(&manifest.id).join("kernel.sock");
+@@ -340,3 +359,138 @@
+     .await
+     .expect("revocation left an existing connection open");
+ }
++
++#[tokio::test]
++async fn nested_policy_noop_preserves_signed_boot_and_policy_bytes() {
++    let root = dir();
++    let sup = sup(root.path(), Path::new(env!("CARGO_BIN_EXE_weaver")));
++    sup.register(ID, Config::default(), policy(50), OverlayFile::default())
++        .await
++        .unwrap();
++    let c = contract(&sup);
++    let paths = [
++        c.config.clone(),
++        c.config.with_file_name("boot.json"),
++        c.runtime.join("parent-policy.json"),
++    ];
++    let before: Vec<_> = paths.iter().map(|p| std::fs::read(p).unwrap()).collect();
++    sup.refresh_policy(ID, policy(51)).await.unwrap();
++    let after: Vec<_> = paths.iter().map(|p| std::fs::read(p).unwrap()).collect();
++    assert_eq!(
++        before, after,
++        "no-op export changed the live contract signature/generation"
++    );
++}
++
++#[tokio::test]
++async fn recovered_nested_stop_and_revoke_refuse_live_unowned_endpoint() {
++    let root = dir();
++    let first = sup(root.path(), Path::new(env!("CARGO_BIN_EXE_weaver")));
++    first
++        .register(ID, Config::default(), policy(60), OverlayFile::default())
++        .await
++        .unwrap();
++    let c = contract(&first);
++    drop(first);
++    let recovered = sup(root.path(), Path::new(env!("CARGO_BIN_EXE_weaver")));
++    let paths = clawft_types::runtime_paths::RuntimePaths::at(&c.runtime);
++    let lock = clawft_weave::instance_lock::InstanceLock::acquire(&paths).unwrap();
++    assert!(
++        recovered.stop(ID).await.is_err(),
++        "held runtime was declared stopped after recovery"
++    );
++    let policy_path = c.runtime.join("parent-policy.json");
++    let before = std::fs::read(&policy_path).unwrap();
++    let tighter = export_rules(
++        Vec::new(),
++        0.6,
++        false,
++        &Limits {
++            max_processes: Some(64),
++            spawn_budget: Some(2),
++            ..Default::default()
++        },
++        &master(),
++        61,
++        chrono::Utc::now(),
++    )
++    .unwrap();
++    assert!(
++        recovered.refresh_policy(ID, tighter).await.is_err(),
++        "rewrote policy before proving recovered child stopped"
++    );
++    assert_eq!(before, std::fs::read(&policy_path).unwrap());
++    assert!(
++        recovered.revoke(ID).await.is_err(),
++        "held runtime was declared revoked complete"
++    );
++    drop(lock);
++    // A process not following the runtime-lock protocol is still not ours to
++    // unlink or signal. Use a short socket root supplied via D10_TEST_ROOT.
++    let listener = tokio::net::UnixListener::bind(paths.socket()).unwrap();
++    assert!(recovered.stop(ID).await.is_err());
++    assert!(recovered.revoke(ID).await.is_err());
++    assert!(
++        tokio::net::UnixStream::connect(paths.socket())
++            .await
++            .is_ok(),
++        "live unowned endpoint was unlinked"
++    );
++    drop(listener);
++    recovered.stop(ID).await.unwrap();
++    assert!(
++        !paths.socket().exists(),
++        "proven-stale socket was not cleaned up"
++    );
++}
++
++#[tokio::test]
++async fn nested_owned_pipe_cascades_when_deny_all_rejects_shutdown_rpc() {
++    let root = dir();
++    let sup = sup(root.path(), Path::new(env!("CARGO_BIN_EXE_weaver")));
++    let config: Config = serde_json::from_value(json!({"kernel": {
++        "governance": {"outside_project":"deny_all"},
++        "llm": {"service_url":"http://127.0.0.1:0", "model":"d10-test"}
++    }}))
++    .unwrap();
++    sup.register(ID, config, policy(70), OverlayFile::default())
++        .await
++        .unwrap();
++    let c = contract(&sup);
++    let project = c.home.join("p");
++    std::fs::create_dir(&project).unwrap();
++    let manifest = clawft_types::project::adopt_or_init(
++        &project,
++        &c.home.join(".weftos/projects"),
++        Some("deny-all-inner-project"),
++    )
++    .unwrap();
++    sup.start(ID).await.unwrap();
++    let socket = c.runtime.join("kernel.sock");
++    // The owner explicitly scopes this lifecycle request to its registered
++    // project. The unscoped shutdown below must still fail under deny_all.
++    let started = rpc_scoped(
++        &socket,
++        "project.start",
++        json!({"id":manifest.id}),
++        Some(&manifest.id),
++    )
++    .await;
++    assert_eq!(started["ok"], true, "{started}");
++    let child_socket = c.runtime.join(&manifest.id).join("kernel.sock");
++    assert!(tokio::net::UnixStream::connect(&child_socket).await.is_ok());
++    let denied = rpc(&socket, "kernel.shutdown", json!({})).await;
++    assert_eq!(denied["ok"], false, "deny_all was weakened: {denied}");
++    assert_eq!(denied["error_kind"], "project_required", "{denied}");
++    tokio::time::timeout(std::time::Duration::from_secs(20), sup.stop(ID))
++        .await
++        .expect("owned shutdown exceeded its bound")
++        .unwrap();
++    assert!(tokio::net::UnixStream::connect(&socket).await.is_err());
++    assert!(
++        tokio::net::UnixStream::connect(&child_socket)
++            .await
++            .is_err(),
++        "inner projects must stop with inner user even when shutdown RPC is denied"
++    );
++}
+diff --git a/crates/clawft-kernel/src/mesh_runtime.rs b/crates/clawft-kernel/src/mesh_runtime.rs
+--- a/crates/clawft-kernel/src/mesh_runtime.rs
++++ b/crates/clawft-kernel/src/mesh_runtime.rs
+@@ -136,6 +136,15 @@
+     pub heartbeat: Mutex<HeartbeatTracker>,
+ }
+ 
++/// Admission material owned by this runtime. Nested seed dials must use this
++/// gate after verifying a reciprocal hello; a configured node-id is not proof.
++pub struct MeshAuthentication {
++    pub gate: Arc<dyn crate::mesh_admit::AdmissionGate>,
++    pub identity: Arc<crate::mesh_admit::DialIdentity>,
++    pub noise_static: [u8; 32],
++    pub require_authenticated_seeds: bool,
++}
++
+ /// The mesh runtime orchestrates transport, connections, and message bridging.
+ ///
+ /// It maintains a set of active peer connections (keyed by node ID) and
+@@ -144,6 +153,7 @@
+ /// 2. Receive an envelope from a peer and inject it into the local
+ ///    [`A2ARouter`].
+ pub struct MeshRuntime {
++    authentication: std::sync::OnceLock<MeshAuthentication>,
+     /// Local node identifier.
+     node_id: String,
+     /// Active peer connections: node_id -> PeerConnection.
+@@ -189,6 +199,14 @@
+ }
+ 
+ impl MeshRuntime {
++    pub fn set_authentication(&self, auth: MeshAuthentication) -> bool {
++        self.authentication.set(auth).is_ok()
++    }
++
++    pub fn authentication(&self) -> Option<&MeshAuthentication> {
++        self.authentication.get()
++    }
++
+     /// Say whether admission is `enforce` (see the field). Takes effect for
+     /// the peer events emitted after the call.
+     pub fn set_enforcing(&self, enforcing: bool) {
+@@ -209,6 +227,7 @@
+     /// Create a new mesh runtime for the given local node.
+     pub fn new(node_id: String) -> Self {
+         Self {
++            authentication: std::sync::OnceLock::new(),
+             node_id,
+             peers: DashMap::new(),
+             local_router: None,
+@@ -232,6 +251,7 @@
+     /// table. Heartbeat tracking starts with default configuration.
+     pub fn with_discovery(node_id: String, kademlia_id: [u8; 32]) -> Self {
+         Self {
++            authentication: std::sync::OnceLock::new(),
+             node_id,
+             peers: DashMap::new(),
+             local_router: None,
+diff --git a/crates/clawft-kernel/src/mesh_serve.rs b/crates/clawft-kernel/src/mesh_serve.rs
+--- a/crates/clawft-kernel/src/mesh_serve.rs
++++ b/crates/clawft-kernel/src/mesh_serve.rs
+@@ -330,7 +330,8 @@
+ /// the first frame has been through admission; a dialled connection starts
+ /// with `active` set (we chose the peer, so there is no admission step; it is
+ /// not *admitted* in the membership sense) and its route already counted in
+-/// `tally`.
++/// `tally`. Nested seed dials instead install `active` only after reciprocal
++/// cryptographic admission, and retain the real gate for live revocation.
+ #[allow(clippy::too_many_arguments)]
+ async fn pump(
+     rt: &Arc<MeshRuntime>,
+@@ -415,6 +416,8 @@
+             inbound = channel.recv_encrypted() => match inbound {
+                 Ok(data) => {
+                     last_activity = tokio::time::Instant::now();
++                    let reciprocal = active.is_none() && serde_json::from_slice::<serde_json::Value>(&data)
++                        .ok().is_some_and(|v| v.get("reciprocal").and_then(|v| v.as_bool()) == Some(true));
+                     let frame = match active {
+                         Some(_) => Some(data),
+                         None => match admit_first_frame(&*channel, kind, gate, data).await {
+@@ -434,6 +437,13 @@
+                                     tracing::warn!(peer = %peer_addr, node = id,
+                                         "route refused for admitted peer, closing");
+                                     break;
++                                }
++                                if reciprocal {
++                                    let Some(auth) = rt.authentication() else { break };
++                                    let Some(hash) = channel.handshake_hash() else { break };
++                                    if !act.admitted { break; }
++                                    let reply = auth.identity.hello(hash, &auth.noise_static, unix_now());
++                                    if channel.send_encrypted(&reply.to_bytes()).await.is_err() { break; }
+                                 }
+                                 active = Some(act);
+                                 rest
+@@ -702,6 +712,14 @@
+     identity: Option<Arc<DialIdentity>>,
+     idle: std::time::Duration,
+ ) {
++    let auth = rt.authentication();
++    let strict_seed = crate::mesh_admit_gate::nested_peer_ceiling_active()
++        || auth.is_some_and(|a| a.require_authenticated_seeds);
++    if strict_seed && (expected.is_none() || nc.is_none() || identity.is_none()
++        || !auth.is_some_and(|a| a.gate.strict())) {
++        tracing::warn!(peer = %addr, "nested seed refused: missing pin, Noise, identity or enforcing gate");
++        return;
++    }
+     let transport = transport_for(transport_name, Some(addr));
+     let stream = match transport.connect(addr).await {
+         Ok(s) => s,
+@@ -739,13 +757,47 @@
+         match noise_static_public(&cfg.local_private_key) {
+             Some(stat) => {
+                 let hello = id.hello(&hash, &stat, unix_now());
+-                if channel.send_encrypted(&hello.to_bytes()).await.is_err() {
++                let hello_bytes = if strict_seed {
++                    // This flag only asks for a response; the response itself is
++                    // signed over this Noise session and goes through admission.
++                    let mut wire = serde_json::to_value(&hello).expect("hello serializes");
++                    wire["reciprocal"] = serde_json::Value::Bool(true);
++                    serde_json::to_vec(&wire).expect("hello serializes")
++                } else { hello.to_bytes() };
++                if channel.send_encrypted(&hello_bytes).await.is_err() {
+                     tracing::warn!(peer = %addr, "failed to send admission hello");
+                     return;
+                 }
+             }
+             None => tracing::warn!(peer = %addr, "cannot derive noise static key"),
+         }
++    }
++
++    if strict_seed {
++        let gate = &*auth.expect("checked above").gate;
++        let admission = async {
++            let frame = channel.recv_encrypted().await.map_err(|e| e.to_string())?;
++            let (active, rest) = admit_first_frame(&*channel, kind, gate, frame).await
++                .map_err(|e| e.detail)?;
++            if !active.admitted || active.bound.as_deref() != expected || rest.is_some() {
++                return Err("seed did not prove the granted identity under admission".to_owned());
++            }
++            Ok(active)
++        };
++        let active = match tokio::time::timeout(HANDSHAKE_TIMEOUT, admission).await {
++            Ok(Ok(active)) => active,
++            _ => { tracing::warn!(peer = %addr, "reciprocal seed admission failed"); return; }
++        };
++        let (out_tx, out_rx) = tokio::sync::mpsc::channel(256);
++        let tally = RouteTally::default();
++        let id = active.bound.as_ref().expect("verified above");
++        if !rt.register_authenticated_as(id.clone(), out_tx.clone(), true, active.class, &tally) { return; }
++        // This address alias is installed only AFTER key/session verification and
++        // admission, so even the first queued outbound payload cannot leak.
++        rt.add_peer_tallied(addr.to_owned(), out_tx.clone(), &tally);
++        pump(rt, channel, kind, addr, gate, Limits { idle, ..Limits::default() },
++            out_tx, out_rx, Some(active), tally, true).await;
++        return;
+     }
+ 
+     let (out_tx, out_rx) = tokio::sync::mpsc::channel(256);
+@@ -851,3 +903,7 @@
+ #[cfg(test)]
+ #[path = "mesh_serve_tests.rs"]
+ mod serve_tests;
++
++#[cfg(test)]
++#[path = "mesh_nested_dial_tests.rs"]
++mod nested_dial_tests;
+diff --git a/crates/clawft-kernel/src/mesh_admit_gate.rs b/crates/clawft-kernel/src/mesh_admit_gate.rs
+--- a/crates/clawft-kernel/src/mesh_admit_gate.rs
++++ b/crates/clawft-kernel/src/mesh_admit_gate.rs
+@@ -388,3 +388,6 @@
+         assert!(!nested_peer_allowed(Some(&[]), "unregistered"));
+     }
+ }
++
++/// Nested instances must never take the legacy unverified outbound-seed path.
++pub fn nested_peer_ceiling_active() -> bool { NESTED_PEERS.get().is_some() }
+diff --git a/crates/clawft-kernel/src/boot.rs b/crates/clawft-kernel/src/boot.rs
+--- a/crates/clawft-kernel/src/boot.rs
++++ b/crates/clawft-kernel/src/boot.rs
+@@ -785,6 +785,17 @@
+                     }
+                 };
+ 
++                let require_authenticated_seeds = crate::mesh_admit_gate::nested_peer_ceiling_active();
++                if let (Some(identity), Some(noise)) = (dial_identity.as_ref(), noise_config.as_ref()) {
++                    let noise_static = crate::mesh_noise::noise_static_public(&noise.local_private_key)
++                        .ok_or_else(|| KernelError::Boot("cannot derive mesh Noise key".into()))?;
++                    runtime.set_authentication(crate::mesh_runtime::MeshAuthentication {
++                        gate: Arc::clone(&admission_gate), identity: Arc::clone(identity),
++                        noise_static, require_authenticated_seeds,
++                    });
++                } else if require_authenticated_seeds {
++                    return Err(KernelError::Boot("nested mesh requires reciprocal authenticated admission".into()));
++                }
+                 let rt = Arc::clone(&runtime);
+                 let conn_limits = crate::mesh_limits::Limits {
+                     first_frame: std::time::Duration::from_secs(
+diff --git a/crates/clawft-kernel/src/mesh_nested_dial_tests.rs b/crates/clawft-kernel/src/mesh_nested_dial_tests.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/clawft-kernel/src/mesh_nested_dial_tests.rs
+@@ -0,0 +1,254 @@
++//! D10 regression probes: a pinned seed address/name is not authenticated identity.
++use super::*;
++use crate::ipc::{KernelMessage, MessageTarget};
++use crate::mesh::MeshTransport;
++use crate::mesh_admit::{CryptoGate, DialIdentity, OpenVerdicts};
++use crate::mesh_delivery::{LocalDelivery, PeerCtx};
++use crate::mesh_ipc::Scope;
++use crate::mesh_noise::NoisePattern;
++use crate::mesh_runtime::MeshAuthentication;
++use clawft_types::config::MeshAdmissionMode;
++use ed25519_dalek::SigningKey;
++use std::sync::Mutex;
++use std::time::Duration;
++
++const GENESIS: [u8; 32] = [44; 32];
++#[derive(Default)]
++struct Received(Mutex<Vec<bool>>);
++#[async_trait::async_trait]
++impl LocalDelivery for Received {
++    async fn deliver(
++        &self,
++        peer: &PeerCtx,
++        _: Option<&Scope>,
++        _: KernelMessage,
++    ) -> crate::error::KernelResult<()> {
++        self.0.lock().unwrap().push(peer.node_verified);
++        Ok(())
++    }
++}
++
++fn scratch() -> tempfile::TempDir {
++    let path = std::env::var_os("D10_TEST_ROOT")
++        .map(std::path::PathBuf::from)
++        .unwrap_or_else(|| {
++            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/test-runs/d10")
++        });
++    std::fs::create_dir_all(&path).unwrap();
++    tempfile::tempdir_in(path).unwrap()
++}
++
++fn identity(seed: u8) -> Arc<DialIdentity> {
++    Arc::new(DialIdentity {
++        key: SigningKey::from_bytes(&[seed; 32]),
++        genesis: GENESIS,
++        platform: "d10-test".into(),
++        capabilities: Vec::new(),
++    })
++}
++fn noise(seed: u8) -> Arc<NoiseConfig> {
++    Arc::new(NoiseConfig {
++        pattern: NoisePattern::XX,
++        local_private_key: [seed; 32],
++        remote_static_key: None,
++    })
++}
++fn id(key: &DialIdentity) -> String {
++    crate::node_id_from_pubkey(&key.key.verifying_key().to_bytes())
++}
++fn gate(path: &std::path::Path) -> Arc<dyn AdmissionGate> {
++    Arc::new(CryptoGate::new(
++        GENESIS,
++        Arc::new(crate::revocation::RevocationList::new(
++            path.join("revocations.json"),
++        )),
++        Arc::new(OpenVerdicts),
++        MeshAdmissionMode::Enforce,
++    ))
++}
++fn runtime(
++    key: &Arc<DialIdentity>,
++    noise: &Arc<NoiseConfig>,
++    gate: Arc<dyn AdmissionGate>,
++    rec: &Arc<Received>,
++) -> Arc<MeshRuntime> {
++    let mut rt = MeshRuntime::new(id(key));
++    rt.set_local_delivery(rec.clone());
++    let rt = Arc::new(rt);
++    rt.set_enforcing(true);
++    assert!(rt.set_authentication(MeshAuthentication {
++        gate,
++        identity: key.clone(),
++        noise_static: noise_static_public(&noise.local_private_key).unwrap(),
++        require_authenticated_seeds: true
++    }));
++    rt
++}
++
++#[tokio::test]
++async fn nested_seed_requires_reciprocal_proof_before_routing() {
++    // Missing hello, another key claiming the configured ID, a valid hello for
++    // another identity, and a copied identity bound to another Noise static key.
++    // Under the old AllowAll dialer the subsequent matching envelope was delivered.
++    for attack in 0..4 {
++        let files = scratch();
++        let a = identity(11);
++        let b = identity(12);
++        let wrong = identity(13);
++        let na = noise(21);
++        let nb = noise(22);
++        let rec = Arc::new(Received::default());
++        let rt = runtime(&a, &na, gate(files.path()), &rec);
++        let expected = id(&b);
++        let mut listener = crate::mesh_tcp::TcpTransport
++            .listen("127.0.0.1:0")
++            .await
++            .unwrap();
++        let addr = listener.local_addr().unwrap().to_string();
++        let expected_server = expected.clone();
++        let local_id = id(&a);
++        let server = tokio::spawn(async move {
++            let (stream, _) = listener.accept().await.unwrap();
++            let mut channel = NoiseChannel::respond(stream, &nb).await.unwrap();
++            let intro = channel.recv_encrypted().await.unwrap();
++            assert!(AdmitHello::parse_frame(&intro).unwrap().is_ok());
++            let envelope = MeshIpcEnvelope::new(
++                expected_server.clone(),
++                local_id,
++                KernelMessage::text(0, MessageTarget::Topic("forged".into()), "must not route"),
++            )
++            .to_bytes()
++            .unwrap();
++            let frame = match attack {
++                0 => envelope.clone(),
++                1 => {
++                    let mut hello = wrong.hello(
++                        channel.handshake_hash().unwrap(),
++                        &noise_static_public(&nb.local_private_key).unwrap(),
++                        unix_now(),
++                    );
++                    hello.node_id = expected_server;
++                    hello.to_bytes()
++                }
++                2 => wrong
++                    .hello(
++                        channel.handshake_hash().unwrap(),
++                        &noise_static_public(&nb.local_private_key).unwrap(),
++                        unix_now(),
++                    )
++                    .to_bytes(),
++                _ => b
++                    .hello(
++                        channel.handshake_hash().unwrap(),
++                        &noise_static_public(&[99; 32]).unwrap(),
++                        unix_now(),
++                    )
++                    .to_bytes(),
++            };
++            channel.send_encrypted(&frame).await.unwrap();
++            if attack != 0 {
++                let _ = channel.send_encrypted(&envelope).await;
++            }
++            // Keep the socket alive long enough to expose the old pump delivery.
++            tokio::time::sleep(Duration::from_millis(100)).await;
++        });
++        tokio::time::timeout(
++            Duration::from_secs(3),
++            dial_seed_once(
++                &rt,
++                &addr,
++                Some(&expected),
++                "tcp",
++                Some(na),
++                Some(a),
++                Duration::from_millis(50),
++            ),
++        )
++        .await
++        .unwrap();
++        server.await.unwrap();
++        assert!(
++            rec.0.lock().unwrap().is_empty(),
++            "attack {attack} delivered an unauthenticated envelope"
++        );
++        assert!(
++            rt.peer_ids().is_empty(),
++            "attack {attack} left an authenticated-looking route"
++        );
++    }
++}
++
++#[tokio::test]
++async fn nested_seed_reciprocal_admission_is_verified_and_bidirectional() {
++    let files_a = scratch();
++    let files_b = scratch();
++    let a = identity(31);
++    let b = identity(32);
++    let na = noise(41);
++    let nb = noise(42);
++    let ra = Arc::new(Received::default());
++    let rb = Arc::new(Received::default());
++    let ga = gate(files_a.path());
++    let gb = gate(files_b.path());
++    let rta = runtime(&a, &na, ga, &ra);
++    let rtb = runtime(&b, &nb, gb.clone(), &rb);
++    let listener = crate::mesh_tcp::TcpTransport
++        .listen("127.0.0.1:0")
++        .await
++        .unwrap();
++    let addr = listener.local_addr().unwrap().to_string();
++    let server = tokio::spawn(serve_listener(
++        rtb.clone(),
++        listener,
++        Some(nb),
++        "tcp",
++        "test",
++        gb,
++    ));
++    let dials = connect_seeds(
++        &rta,
++        &[format!("{addr}#{}", id(&b))],
++        "tcp",
++        Some(na),
++        Some(a.clone()),
++    );
++    let result = tokio::time::timeout(Duration::from_secs(5), async {
++        while !rta.peer_ids().contains(&id(&b)) {
++            tokio::time::sleep(Duration::from_millis(5)).await;
++        }
++        rta.send_to_peer(
++            &id(&b),
++            MeshIpcEnvelope::new(
++                id(&a),
++                id(&b),
++                KernelMessage::text(0, MessageTarget::Topic("forward".into()), "x"),
++            ),
++        )
++        .await
++        .unwrap();
++        while rb.0.lock().unwrap().is_empty() {
++            tokio::time::sleep(Duration::from_millis(5)).await;
++        }
++        rtb.send_to_peer(
++            &id(&a),
++            MeshIpcEnvelope::new(
++                id(&b),
++                id(&a),
++                KernelMessage::text(0, MessageTarget::Topic("return".into()), "x"),
++            ),
++        )
++        .await
++        .unwrap();
++        while ra.0.lock().unwrap().is_empty() {
++            tokio::time::sleep(Duration::from_millis(5)).await;
++        }
++        assert!(ra.0.lock().unwrap().iter().all(|v| *v));
++        assert!(rb.0.lock().unwrap().iter().all(|v| *v));
++    })
++    .await;
++    for dial in dials {
++        dial.abort();
++    }
++    server.abort();
++    result.expect("reciprocal authenticated traffic never became routable");
++}
+diff --git a/crates/clawft-weave/src/nested_boot.rs b/crates/clawft-weave/src/nested_boot.rs
+--- a/crates/clawft-weave/src/nested_boot.rs
++++ b/crates/clawft-weave/src/nested_boot.rs
+@@ -7,6 +7,7 @@
+ use clawft_types::project::canon::{canonical_json, hex_decode, hex_encode};
+ use clawft_types::project::cert::key_id;
+ use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
++use nix::libc;
+ use serde::{Deserialize, Serialize};
+ use sha2::{Digest, Sha256};
+ use std::path::{Path, PathBuf};

@@ -1,0 +1,28 @@
+docker.io/espressif/idf-rust@sha256:4eadb6ba185332e0605b0c89287e8038288c4c7160d43c996da4a69d15cffca3: Pulling from espressif/idf-rust
+a11b8703a84b: Pulling fs layer
+b0e30f5b9825: Pulling fs layer
+ae021cabaf57: Pulling fs layer
+4f4fb700ef54: Pulling fs layer
+a9de38d3e031: Pulling fs layer
+ccc126f65dcc: Pulling fs layer
+a62502d8ee1a: Pulling fs layer
+b1fc280a454f: Pulling fs layer
+4f4fb700ef54: Already exists
+a11b8703a84b: Download complete
+b0e30f5b9825: Download complete
+a62502d8ee1a: Download complete
+a9de38d3e031: Download complete
+ae021cabaf57: Download complete
+b1fc280a454f: Download complete
+ccc126f65dcc: Download complete
+ccc126f65dcc: Pull complete
+4f4fb700ef54: Pull complete
+a62502d8ee1a: Pull complete
+a9de38d3e031: Pull complete
+ae021cabaf57: Pull complete
+b0e30f5b9825: Pull complete
+b1fc280a454f: Pull complete
+a11b8703a84b: Pull complete
+Digest: sha256:4eadb6ba185332e0605b0c89287e8038288c4c7160d43c996da4a69d15cffca3
+Status: Downloaded newer image for espressif/idf-rust@sha256:4eadb6ba185332e0605b0c89287e8038288c4c7160d43c996da4a69d15cffca3
+docker.io/espressif/idf-rust@sha256:4eadb6ba185332e0605b0c89287e8038288c4c7160d43c996da4a69d15cffca3

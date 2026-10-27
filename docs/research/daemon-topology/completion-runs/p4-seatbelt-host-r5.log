@@ -1,0 +1,99 @@
+
+[1m── Running cargo nextest run (clawft-weave) (+ doctests)[0m
+   Compiling clawft-types v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/clawft-types)
+   Compiling eml-core v0.1.0 (~/.codex/worktrees/topology-finish/weftos/crates/eml-core)
+   Compiling clawft-cow-memory v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/clawft-cow-memory)
+   Compiling clawft-service-llm v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/clawft-service-llm)
+   Compiling clawft-app v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/clawft-app)
+   Compiling weftos-leaf-types v0.1.0 (~/.codex/worktrees/topology-finish/weftos/crates/weftos-leaf-types)
+   Compiling weft-licence-wire v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/weft-licence-wire)
+   Compiling clawft-treecalc v0.1.0 (~/.codex/worktrees/topology-finish/weftos/crates/clawft-treecalc)
+   Compiling exo-resource-tree v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/exo-resource-tree)
+   Compiling weftos-leaf-scene v0.1.0 (~/.codex/worktrees/topology-finish/weftos/crates/weftos-leaf-scene)
+   Compiling clawft-mesh-local v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/clawft-mesh-local)
+   Compiling clawft-weave v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/clawft-weave)
+   Compiling clawft-service-terminal v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/clawft-service-terminal)
+   Compiling clawft-graphify v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/clawft-graphify)
+   Compiling weft-licence v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/weft-licence)
+   Compiling clawft-bvh v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/clawft-bvh)
+   Compiling weftos-scene-builder v0.1.0 (~/.codex/worktrees/topology-finish/weftos/crates/weftos-scene-builder)
+   Compiling clawft-plugin v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/clawft-plugin)
+   Compiling clawft-llm v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/clawft-llm)
+   Compiling clawft-platform v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/clawft-platform)
+   Compiling clawft-rpc v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/clawft-rpc)
+   Compiling weftos-cog-repo v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/weftos-cog-repo)
+   Compiling clawft-services v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/clawft-services)
+   Compiling weftos-cog-market v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/weftos-cog-market)
+   Compiling clawft-substrate v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/clawft-substrate)
+   Compiling clawft-core v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/clawft-core)
+   Compiling clawft-kernel v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/clawft-kernel)
+   Compiling clawft-tools v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/clawft-tools)
+   Compiling weftos-cog-host v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/weftos-cog-host)
+   Compiling clawft-service-whisper v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/clawft-service-whisper)
+   Compiling clawft-mesh-service v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/clawft-mesh-service)
+   Compiling clawft-service-agent v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/clawft-service-agent)
+   Compiling clawft-service-classify v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/clawft-service-classify)
+   Compiling weftos-cog-sources v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/weftos-cog-sources)
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9183:44
+     |
+9183 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+     |
+     = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9392:21
+     |
+9392 |             Config, KernelConfig, VectorBackendKind, VectorConfig, VectorHnswConfig,
+     |                     ^^^^^^^^^^^^
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9455:44
+     |
+9455 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9487:44
+     |
+9487 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9516:44
+     |
+9516 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9553:44
+     |
+9553 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9658:44
+     |
+9658 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+
+warning: unused import: `clawft_kernel::NODE_KEY_FILE as KEYFILE_NAME`
+  --> crates/clawft-weave/src/node_identity.rs:28:5
+   |
+28 | use clawft_kernel::NODE_KEY_FILE as KEYFILE_NAME;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `clawft-weave` (lib test) generated 8 warnings (run `cargo fix --lib -p clawft-weave --tests` to apply 8 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 33s
+────────────
+ Nextest run ID 23ca4a46-2517-46ff-ab9c-f7eaabca9747 with nextest profile: default
+    Starting 4 tests across 43 binaries (971 tests skipped)
+        PASS [   0.017s] (1/4) clawft-weave project_supervisor::sandbox::seatbelt::tests::quoted_path_is_escaped_in_profile
+        PASS [   0.017s] (2/4) clawft-weave project_supervisor::sandbox::seatbelt::tests::profile_has_no_global_network_or_home_access
+        PASS [   3.137s] (3/4) clawft-weave::project_supervisor seatbelt_quoted_root_denies_test_home
+        PASS [   3.168s] (4/4) clawft-weave::project_supervisor seatbelt_denies_test_home
+────────────
+     Summary [   3.169s] 4 tests run: 4 passed, 971 skipped
+  [0;36mTIME[0m  1m 48s
+HOST_TEST_EXIT=0

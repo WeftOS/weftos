@@ -1,0 +1,117 @@
+
+[1m── Running cargo check -p weftos-leaf-types -p clawft-kernel -p clawft-mesh-service -p clawft-weave[0m
+    Checking clawft-types v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-types)
+    Checking eml-core v0.1.0 (~/.codex/worktrees/leaf-finish/weftos/crates/eml-core)
+    Checking clawft-cow-memory v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-cow-memory)
+    Checking clawft-service-llm v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-service-llm)
+    Checking clawft-app v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-app)
+    Checking weftos-leaf-types v0.1.0 (~/.codex/worktrees/leaf-finish/weftos/crates/weftos-leaf-types)
+    Checking clawft-treecalc v0.1.0 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-treecalc)
+    Checking exo-resource-tree v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/exo-resource-tree)
+    Checking weft-licence-wire v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/weft-licence-wire)
+    Checking weftos-leaf-scene v0.1.0 (~/.codex/worktrees/leaf-finish/weftos/crates/weftos-leaf-scene)
+    Checking clawft-mesh-local v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-mesh-local)
+   Compiling clawft-weave v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-weave)
+    Checking clawft-service-terminal v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-service-terminal)
+    Checking clawft-graphify v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-graphify)
+    Checking weftos-scene-builder v0.1.0 (~/.codex/worktrees/leaf-finish/weftos/crates/weftos-scene-builder)
+    Checking clawft-bvh v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-bvh)
+    Checking clawft-llm v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-llm)
+    Checking clawft-platform v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-platform)
+    Checking clawft-plugin v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-plugin)
+    Checking clawft-rpc v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-rpc)
+    Checking weftos-cog-repo v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/weftos-cog-repo)
+    Checking clawft-services v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-services)
+    Checking weftos-cog-market v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/weftos-cog-market)
+    Checking clawft-substrate v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-substrate)
+    Checking clawft-core v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-core)
+    Checking clawft-kernel v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-kernel)
+    Checking clawft-tools v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-tools)
+    Checking weftos-cog-host v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/weftos-cog-host)
+    Checking clawft-service-agent v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-service-agent)
+    Checking clawft-service-whisper v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-service-whisper)
+    Checking clawft-service-classify v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-service-classify)
+    Checking clawft-mesh-service v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-mesh-service)
+    Checking weftos-cog-sources v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/weftos-cog-sources)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 31.50s
+  [0;36mTIME[0m  32s
+CHECK_EXIT=0
+
+[1m── Running cargo nextest run (clawft-kernel) (+ doctests)[0m
+info: experimental features enabled: wrapper-scripts
+   Compiling clawft-types v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-types)
+   Compiling eml-core v0.1.0 (~/.codex/worktrees/leaf-finish/weftos/crates/eml-core)
+   Compiling clawft-app v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-app)
+   Compiling weftos-leaf-types v0.1.0 (~/.codex/worktrees/leaf-finish/weftos/crates/weftos-leaf-types)
+   Compiling clawft-service-llm v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-service-llm)
+   Compiling weft-licence-wire v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/weft-licence-wire)
+   Compiling exo-resource-tree v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/exo-resource-tree)
+   Compiling clawft-treecalc v0.1.0 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-treecalc)
+   Compiling weft-licence v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/weft-licence)
+   Compiling clawft-bvh v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-bvh)
+   Compiling clawft-llm v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-llm)
+   Compiling clawft-rpc v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-rpc)
+   Compiling clawft-plugin v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-plugin)
+   Compiling clawft-platform v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-platform)
+   Compiling clawft-substrate v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-substrate)
+   Compiling clawft-core v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-core)
+   Compiling clawft-kernel v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 39.67s
+────────────
+ Nextest run ID 682fa03b-5499-43bd-920b-7c65789e125f with nextest profile: default
+    Starting 3 tests across 10 binaries (3535 tests skipped)
+        PASS [   0.035s] (1/3) clawft-kernel mesh_serve::serve_tests::certified_leaf_listener_rejects_unsigned_first_frame
+        PASS [   0.048s] (2/3) clawft-kernel mesh_serve::serve_tests::certified_leaf_publish_replay_is_suppressed_after_committed_floor
+        PASS [   0.053s] (3/3) clawft-kernel mesh_serve::serve_tests::certified_leaf_duplicate_subscribe_restores_route_after_restart
+────────────
+     Summary [   0.055s] 3 tests run: 3 passed, 3535 skipped
+  [0;36mTIME[0m  41s
+TEST_EXIT=0
+
+[1m── Running cargo nextest run (clawft-kernel) (+ doctests)[0m
+info: experimental features enabled: wrapper-scripts
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s
+────────────
+ Nextest run ID 377e69bd-9a8d-49b7-b070-532b66daf00e with nextest profile: default
+    Starting 1 test across 10 binaries (3537 tests skipped)
+        PASS [   0.035s] (1/1) clawft-kernel mesh_leaf::tests::enrolled_frame_replays_exactly_once_across_restart
+────────────
+     Summary [   0.037s] 1 test run: 1 passed, 3537 skipped
+  [0;36mTIME[0m  1s
+FLOOR_TEST_EXIT=0
+
+[1m── Running clippy (warnings as errors) -p weftos-leaf-types -p clawft-kernel -p clawft-mesh-service -p clawft-weave --no-deps[0m
+    Checking clawft-types v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-types)
+    Checking eml-core v0.1.0 (~/.codex/worktrees/leaf-finish/weftos/crates/eml-core)
+    Checking clawft-cow-memory v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-cow-memory)
+    Checking clawft-service-llm v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-service-llm)
+    Checking clawft-app v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-app)
+    Checking weftos-leaf-types v0.1.0 (~/.codex/worktrees/leaf-finish/weftos/crates/weftos-leaf-types)
+    Checking clawft-treecalc v0.1.0 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-treecalc)
+    Checking exo-resource-tree v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/exo-resource-tree)
+    Checking weft-licence-wire v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/weft-licence-wire)
+    Checking clawft-mesh-local v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-mesh-local)
+   Compiling clawft-weave v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-weave)
+    Checking clawft-service-terminal v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-service-terminal)
+    Checking clawft-graphify v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-graphify)
+    Checking clawft-bvh v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-bvh)
+    Checking clawft-plugin v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-plugin)
+    Checking clawft-platform v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-platform)
+    Checking clawft-llm v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-llm)
+    Checking clawft-rpc v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-rpc)
+    Checking weftos-cog-repo v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/weftos-cog-repo)
+    Checking clawft-services v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-services)
+    Checking weftos-cog-market v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/weftos-cog-market)
+    Checking clawft-substrate v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-substrate)
+    Checking clawft-core v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-core)
+    Checking clawft-kernel v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-kernel)
+    Checking clawft-tools v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-tools)
+    Checking weftos-cog-host v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/weftos-cog-host)
+    Checking clawft-service-agent v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-service-agent)
+    Checking clawft-service-classify v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-service-classify)
+    Checking clawft-mesh-service v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-mesh-service)
+    Checking clawft-service-whisper v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-service-whisper)
+    Checking weftos-cog-sources v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/weftos-cog-sources)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 29.21s
+  [0;36mTIME[0m  29s
+CLIPPY_EXIT=0

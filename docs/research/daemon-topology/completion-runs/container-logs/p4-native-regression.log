@@ -1,0 +1,78 @@
+
+[1m── Running cargo nextest run (clawft-weave) (+ doctests)[0m
+info: experimental features enabled: wrapper-scripts
+   Compiling clawft-weave v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-weave)
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9079:44
+     |
+9079 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+     |
+     = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9288:21
+     |
+9288 |             Config, KernelConfig, VectorBackendKind, VectorConfig, VectorHnswConfig,
+     |                     ^^^^^^^^^^^^
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9351:44
+     |
+9351 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9383:44
+     |
+9383 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9412:44
+     |
+9412 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9449:44
+     |
+9449 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9554:44
+     |
+9554 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+
+warning: unused import: `clawft_kernel::NODE_KEY_FILE as KEYFILE_NAME`
+  --> crates/clawft-weave/src/node_identity.rs:28:5
+   |
+28 | use clawft_kernel::NODE_KEY_FILE as KEYFILE_NAME;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `clawft-weave` (lib test) generated 8 warnings (run `cargo fix --lib -p clawft-weave --tests` to apply 8 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 50.66s
+────────────
+ Nextest run ID 964672b5-e28b-47cb-9dfa-03a451c97d33 with nextest profile: default
+    Starting 16 tests across 43 binaries (956 tests skipped)
+        PASS [   0.043s] ( 1/16) clawft-weave project_supervisor::child::container_bridge_tests::bridge_cannot_promote_a_guest_literal_scope_or_cross_projects
+        PASS [   0.043s] ( 2/16) clawft-weave project_supervisor::idle::tests::any_busy_count_blocks_the_stop
+        PASS [   0.043s] ( 3/16) clawft-weave project_supervisor::restart::tests::backoff_doubles_to_the_cap
+        PASS [   0.043s] ( 4/16) clawft-weave project_supervisor::restart::tests::a_long_healthy_run_resets_the_backoff
+        PASS [   0.043s] ( 5/16) clawft-weave project_supervisor::restart::tests::budget_then_give_up
+        PASS [   0.044s] ( 6/16) clawft-weave project_supervisor::adopt::pid_file_tests::scan_one_adopts_nothing_from_garbage_and_reports_bad_pid_file
+        PASS [   0.044s] ( 7/16) clawft-weave project_supervisor::restart::tests::window_expiry_refills_the_budget
+        PASS [   0.045s] ( 8/16) clawft-weave project_supervisor::idle::tests::the_registry_reports_lost_heartbeats_but_not_adoption_tombstones_or_busy_children
+        PASS [   0.046s] ( 9/16) clawft-weave project_supervisor::container::tests::create_start_stop_reinspect_immutable_id
+        PASS [   0.047s] (10/16) clawft-weave project_supervisor::idle::tests::stops_only_when_quiet_for_long_enough
+        PASS [   0.048s] (11/16) clawft-weave project_supervisor::adopt::pid_file_tests::an_empty_pid_file_with_no_lock_held_fails_at_once
+        PASS [   0.049s] (12/16) clawft-weave project_supervisor::container::tests::forged_id_label_or_mount_is_refused
+        PASS [   0.049s] (13/16) clawft-weave project_supervisor::restart::tests::reset_forgets_everything
+        PASS [   0.151s] (14/16) clawft-weave project_supervisor::adopt::pid_file_tests::bad_content_is_bad_at_once_and_a_forever_empty_file_after_the_grace
+        PASS [   0.218s] (15/16) clawft-weave project_supervisor::adopt::pid_file_tests::an_empty_pid_file_that_fills_in_shortly_is_read
+        PASS [   0.218s] (16/16) clawft-weave project_supervisor::container::tests::flags_pin_isolation_and_parent_mounts
+────────────
+     Summary [   0.219s] 16 tests run: 16 passed, 956 skipped
+  [0;36mTIME[0m  54s

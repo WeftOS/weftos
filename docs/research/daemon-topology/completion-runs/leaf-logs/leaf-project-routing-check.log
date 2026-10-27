@@ -1,0 +1,14 @@
+
+[1m── Running cargo check -p clawft-mesh-local -p clawft-kernel -p clawft-mesh-service -p clawft-weave[0m
+    Checking clawft-kernel v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-kernel)
+    Checking clawft-mesh-local v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-mesh-local)
+   Compiling clawft-weave v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-weave)
+    Checking weftos-cog-host v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/weftos-cog-host)
+    Checking clawft-service-whisper v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-service-whisper)
+    Checking clawft-mesh-service v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-mesh-service)
+    Checking clawft-service-classify v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-service-classify)
+    Checking clawft-service-agent v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-service-agent)
+    Checking weftos-cog-sources v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/weftos-cog-sources)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 18.55s
+  [0;36mTIME[0m  19s
+CHECK_EXIT=0

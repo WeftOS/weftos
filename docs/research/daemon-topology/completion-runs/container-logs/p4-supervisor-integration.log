@@ -1,0 +1,143 @@
+   Compiling clawft-types v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-types)
+   Compiling clawft-weave v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-weave)
+   Compiling clawft-llm v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-llm)
+   Compiling clawft-platform v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-platform)
+   Compiling clawft-plugin v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-plugin)
+   Compiling clawft-rpc v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-rpc)
+   Compiling weftos-cog-repo v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/weftos-cog-repo)
+   Compiling clawft-services v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-services)
+   Compiling weftos-cog-market v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/weftos-cog-market)
+   Compiling clawft-substrate v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-substrate)
+   Compiling clawft-core v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-core)
+   Compiling clawft-kernel v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-kernel)
+   Compiling clawft-tools v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-tools)
+   Compiling weftos-cog-host v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/weftos-cog-host)
+   Compiling clawft-service-agent v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-service-agent)
+   Compiling clawft-service-classify v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-service-classify)
+   Compiling clawft-service-whisper v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-service-whisper)
+   Compiling clawft-mesh-service v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-mesh-service)
+   Compiling weftos-cog-sources v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/weftos-cog-sources)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 58.68s
+     Running tests/project_supervisor.rs (target/debug/deps/project_supervisor-a7b136744d5b9841)
+
+thread 'main' (84299712) panicked at crates/clawft-weave/tests/project_supervisor.rs:154:50:
+called `Result::unwrap()` on an `Err` value: NotReady("the child exited (code Some(101), signal None) before answering; see /private/tmp/wsupSDwTFz/home/.weftos/run/01M4474JRTV9MXVZ81DR412FC4/kernel.log")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test env_allowlist_spawn_contract ... FAILED
+
+thread 'main' (84299712) panicked at crates/clawft-weave/tests/project_supervisor.rs:258:43:
+called `Result::unwrap()` on an `Err` value: NotReady("the child exited (code Some(101), signal None) before answering; see /private/tmp/wsupNuvJO4/home/.weftos/run/01M4474VJFAFT2BTJTAD5J98KF/kernel.log")
+test restart_budget_then_failed ... FAILED
+test backoff_schedule_is_chained ... ok (0.6s)
+test clean_exit_is_not_restarted ... ok (0.5s)
+
+thread 'main' (84299712) panicked at crates/clawft-weave/tests/project_supervisor.rs:307:50:
+called `Result::unwrap()` on an `Err` value: NotReady("the child exited (code Some(101), signal None) before answering; see /private/tmp/wsup2y1Ilv/home/.weftos/run/01M4474X5ET9R706FBCW0E3601/kernel.log")
+test idle_stop_then_restart ... FAILED
+
+thread 'main' (84299712) panicked at crates/clawft-weave/tests/project_supervisor.rs:341:50:
+called `Result::unwrap()` on an `Err` value: NotReady("the child exited (code Some(101), signal None) before answering; see /private/tmp/wsup990Or0/home/.weftos/run/01M4474X7JPS2QEK7AWMX4SSS2/kernel.log")
+test ignored_shutdown_escalates_to_sigterm ... FAILED
+
+thread 'main' (84299712) panicked at crates/clawft-weave/tests/project_supervisor_support/lifecycle_tests.rs:21:42:
+called `Result::unwrap()` on an `Err` value: NotReady("the child exited (code Some(101), signal None) before answering; see /private/tmp/wsup40Yxm2/home/.weftos/run/01M4474X9ZQ0YFXGMBVPXVSPJP/kernel.log")
+test adoption_after_user_daemon_restart ... FAILED
+
+thread 'main' (84299712) panicked at crates/clawft-weave/tests/project_supervisor_support/lifecycle_tests.rs:200:83:
+called `Result::unwrap()` on an `Err` value: NotReady("the child exited (code Some(101), signal None) before answering; see /private/tmp/wsupEySw4j/home/.weftos/run/01M4474XBVY0CC9PTXYK4HRSDJ/kernel.log")
+test revoked_child_is_stopped_at_adoption ... FAILED
+
+thread 'main' (84299712) panicked at crates/clawft-weave/tests/project_supervisor_support/lifecycle_tests.rs:226:83:
+called `Result::unwrap()` on an `Err` value: NotReady("the child exited (code Some(101), signal None) before answering; see /private/tmp/wsupomKHli/home/.weftos/run/01M4474XDN400330EDY9RF2B29/kernel.log")
+test ensure_running_takes_over_a_live_verified_child ... FAILED
+
+thread 'main' (84299712) panicked at crates/clawft-weave/tests/project_supervisor_support/lifecycle_tests.rs:272:50:
+called `Result::unwrap()` on an `Err` value: NotReady("the child exited (code Some(101), signal None) before answering; see /private/tmp/wsuprZ5oHe/home/.weftos/run/01M4474XFJCWBX9YWAK418NQ5K/kernel.log")
+test revoke_stops_the_child_even_when_the_gated_stop_fails ... FAILED
+test a_failed_spawn_leaves_nothing_behind ... ok (0.0s)
+
+thread 'main' (84299712) panicked at crates/clawft-weave/tests/project_supervisor_support/lifecycle_tests.rs:309:42:
+called `Result::unwrap()` on an `Err` value: NotReady("the child exited (code Some(101), signal None) before answering; see /private/tmp/wsupFoZhjD/home/.weftos/run/01M4474XJJW1ANWS2YH0F2HCN8/kernel.log")
+test stop_removes_spawn_json_and_a_foreign_pid_is_not_ready ... FAILED
+test adopted_zombie_counts_as_dead ... ok (0.0s)
+
+thread 'main' (84299712) panicked at crates/clawft-weave/tests/project_supervisor_support/lifecycle_tests.rs:57:9:
+manual kernel did not start
+test pid_reuse_and_unverifiable_leftovers_are_never_adopted ... FAILED
+
+thread 'main' (84299712) panicked at crates/clawft-weave/tests/project_supervisor_support/lifecycle_tests.rs:161:50:
+called `Result::unwrap()` on an `Err` value: NotReady("the child exited (code Some(101), signal None) before answering; see /private/tmp/wsupBFz9Wy/home/.weftos/run/01M44757EX7NATNJVPPB0DS7CS/kernel.log")
+test spawn_refusal_cases ... FAILED
+
+thread 'main' (84299712) panicked at crates/clawft-weave/tests/project_supervisor.rs:365:42:
+called `Result::unwrap()` on an `Err` value: NotReady("the child exited (code Some(101), signal None) before answering; see /private/tmp/wsuplbK4tK/home/.weftos/run/01M44757HMDZHJ7KYY8EX329AB/kernel.log")
+test concurrent_ensure_running_starts_one_child ... FAILED
+
+thread 'main' (84299712) panicked at crates/clawft-weave/tests/project_supervisor.rs:382:50:
+called `Result::unwrap()` on an `Err` value: NotReady("the child exited (code Some(101), signal None) before answering; see /private/tmp/wsup6BFugH/home/.weftos/run/01M44757N0JHV10KNAT06NFXYC/kernel.log")
+test revoked_marker_stops_the_child_and_blocks_a_restart ... FAILED
+
+thread 'main' (84299712) panicked at crates/clawft-weave/tests/project_supervisor.rs:399:42:
+called `Result::unwrap()` on an `Err` value: NotReady("the child exited (code Some(101), signal None) before answering; see /private/tmp/wsupejqkaY/home/.weftos/run/01M44757PR5M8XR1A84DBRJDJ4/kernel.log")
+test token_refresh_rotates_and_refuses_strangers ... FAILED
+
+thread 'main' (84299712) panicked at crates/clawft-weave/tests/project_supervisor.rs:427:50:
+called `Result::unwrap()` on an `Err` value: NotReady("the child exited (code Some(101), signal None) before answering; see /private/tmp/wsupveZFSO/home/.weftos/run/01M44757RH1NSQ92Z53MG3C4DZ/kernel.log")
+test crash_after_ready_restarts_and_recovers ... FAILED
+
+thread 'main' (84299712) panicked at crates/clawft-weave/tests/project_supervisor_support/followup_tests.rs:37:50:
+called `Result::unwrap()` on an `Err` value: NotReady("the child exited (code Some(101), signal None) before answering; see /private/tmp/wsupIULUcU/home/.weftos/run/01M44757T7CBENHYGSQPJ10A6Z/kernel.log")
+test a_child_on_an_older_build_than_the_daemon_is_reported_stale ... FAILED
+
+thread 'main' (84299712) panicked at crates/clawft-weave/tests/project_supervisor_support/followup_tests.rs:71:54:
+called `Result::unwrap()` on an `Err` value: NotReady("the child exited (code Some(101), signal None) before answering; see /private/tmp/wsupkaE4oG/home/.weftos/run/01M44757VY2KM314123AXFRG9S/kernel.log")
+test ensure_running_during_an_automatic_restart_waits_for_the_socket ... FAILED
+
+thread 'main' (84299712) panicked at crates/clawft-weave/tests/project_supervisor_support/followup_tests.rs:135:9:
+assertion `left == right` failed
+  left: [Unverifiable { id: "01M44757XN628TJJ00H53NSEW8", pid: Some(18031), reason: WrongExe { found: "", expected: "project_supervisor-a7b136744d5b9841" } }]
+ right: [Adopted { id: "01M44757XN628TJJ00H53NSEW8", pid: 18031 }]
+test a_child_still_booting_at_adoption_is_adopted_or_found_by_the_stop_cascade ... FAILED
+
+thread 'main' (84299712) panicked at crates/clawft-weave/tests/project_supervisor_support/followup_tests.rs:176:54:
+called `Result::unwrap()` on an `Err` value: NotReady("the child exited (code Some(101), signal None) before answering; see /private/tmp/wsupPae3w1/home/.weftos/run/01M44757YMDA0H7Y67596FRQJM/kernel.log")
+test a_child_that_lost_its_heartbeat_is_restarted_and_then_failed_when_the_budget_is_spent ... FAILED
+
+thread 'main' (84299712) panicked at crates/clawft-weave/tests/project_supervisor_support/followup_tests.rs:261:54:
+called `Result::unwrap()` on an `Err` value: NotReady("the child exited (code Some(101), signal None) before answering; see /private/tmp/wsupSJ21oz/home/.weftos/run/01M447580MP6FN6K4ZJW02QQ0W/kernel.log")
+test a_plain_lost_child_is_restarted_at_the_short_grace_not_the_busy_ceiling ... FAILED
+
+thread 'main' (84299712) panicked at crates/clawft-weave/tests/project_supervisor_support/followup_tests.rs:234:54:
+called `Result::unwrap()` on an `Err` value: NotReady("the child exited (code Some(101), signal None) before answering; see /private/tmp/wsupCWLiF2/home/.weftos/run/01M4475828QPJBQV30JDCA8JMH/kernel.log")
+test a_child_wedged_while_busy_is_restarted_after_the_ceiling ... FAILED
+
+thread 'main' (84299712) panicked at crates/clawft-weave/tests/project_supervisor_support/followup_tests.rs:279:42:
+called `Result::unwrap()` on an `Err` value: NotReady("the child exited (code Some(101), signal None) before answering; see /private/tmp/wsupd525sM/home/.weftos/run/01M4475845QC6V7WKMFPPK6R23/kernel.log")
+test an_adopted_child_that_never_registers_is_reported_in_status ... FAILED
+test a_revoked_project_without_a_marker_is_refused_before_spawning ... ok (0.0s)
+
+thread 'main' (84299712) panicked at crates/clawft-weave/tests/project_supervisor_support/lifecycle_tests.rs:57:9:
+manual kernel did not start
+test an_adopted_pid_recycled_between_sigterm_and_sigkill_is_never_killed ... FAILED
+
+thread 'main' (84299712) panicked at crates/clawft-weave/tests/project_supervisor_support/followup_tests.rs:368:83:
+called `Result::unwrap()` on an `Err` value: NotReady("the child exited (code Some(101), signal None) before answering; see /private/tmp/wsupveoPL3/home/.weftos/run/01M4475J0R5GAQZN7FHYA8B8S4/kernel.log")
+test an_adopted_but_refused_leftover_is_reported_as_unmanaged ... FAILED
+
+thread 'main' (84299712) panicked at crates/clawft-weave/tests/project_supervisor_support/followup_tests.rs:401:9:
+[Unverifiable { id: "01M4475J2E4584JFS9TPWZ8YV3", pid: Some(18410), reason: WrongExe { found: "", expected: "project_supervisor-a7b136744d5b9841" } }]
+test a_wedged_leftover_delays_boot_and_the_stop_cascade_only_briefly ... FAILED
+
+thread 'main' (84299712) panicked at crates/clawft-weave/tests/project_supervisor_support/lifecycle_tests.rs:57:9:
+manual kernel did not start
+test an_empty_pid_file_that_fills_in_is_adopted_not_bad ... FAILED
+
+thread 'main' (84299712) panicked at crates/clawft-types/src/runtime_paths.rs:183:9:
+a test resolved the runtime root ~/.codex/worktrees/project-container/weftos/.weftos/runtime without a WEFTOS_RUNTIME_DIR override; that is a real runtime dir. Run tests through `scripts/build.sh test`, pin the root (WEFTOS_RUNTIME_DIR, set_user_profile_at, or an explicit RuntimePaths), or point HOME at a tempdir. WEFTOS_ALLOW_REAL_HOME_IN_TESTS=1 opts out
+test lifecycle_rpc_end_to_end ... FAILED
+
+project_supervisor: 32 ran, 27 failed
+error: test failed, to rerun pass `-p clawft-weave --test project_supervisor`
+
+Caused by:
+  process didn't exit successfully: `~/.codex/worktrees/project-container/weftos/target/debug/deps/project_supervisor-a7b136744d5b9841 --nocapture` (exit status: 1)

@@ -1,0 +1,155 @@
+
+[1m── Running cargo nextest run (clawft-weave) (+ doctests)[0m
+info: experimental features enabled: wrapper-scripts
+   Compiling clawft-kernel v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-kernel)
+   Compiling clawft-weave v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-weave)
+   Compiling weftos-cog-host v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/weftos-cog-host)
+   Compiling clawft-service-whisper v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-service-whisper)
+   Compiling clawft-service-agent v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-service-agent)
+   Compiling clawft-mesh-service v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-mesh-service)
+   Compiling clawft-service-classify v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-service-classify)
+   Compiling weftos-cog-sources v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/weftos-cog-sources)
+error[E0599]: no method named `unwrap` found for opaque type `impl Future<Output = Result<(String, DateTime<Utc>), String>>` in the current scope
+   --> crates/clawft-weave/tests/project_supervisor.rs:401:65
+    |
+401 |         let (t2, _) = sup.launcher().refresh_token(&fx.id, &t1).unwrap();
+    |                                                                 ^^^^^^ method not found in `impl Future<Output = Result<(String, DateTime<Utc>), String>>`
+    |
+    = note: the full name for the type has been written to '~/.codex/worktrees/project-container/weftos/target/debug/deps/project_supervisor-a7b136744d5b9841.long-type-7007973429150927043.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+help: consider `await`ing on the `Future` and calling the method on its `Output`
+    |
+401 |         let (t2, _) = sup.launcher().refresh_token(&fx.id, &t1).await.unwrap();
+    |                                                                 ++++++
+
+error[E0599]: no method named `unwrap` found for opaque type `impl Future<Output = Result<(String, DateTime<Utc>), String>>` in the current scope
+   --> crates/clawft-weave/tests/project_supervisor.rs:402:65
+    |
+402 |         let (t3, _) = sup.launcher().refresh_token(&fx.id, &t2).unwrap();
+    |                                                                 ^^^^^^ method not found in `impl Future<Output = Result<(String, DateTime<Utc>), String>>`
+    |
+    = note: the full name for the type has been written to '~/.codex/worktrees/project-container/weftos/target/debug/deps/project_supervisor-a7b136744d5b9841.long-type-13201899600073403327.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+help: consider `await`ing on the `Future` and calling the method on its `Output`
+    |
+402 |         let (t3, _) = sup.launcher().refresh_token(&fx.id, &t2).await.unwrap();
+    |                                                                 ++++++
+
+error[E0599]: no method named `is_err` found for opaque type `impl Future<Output = Result<(String, DateTime<Utc>), String>>` in the current scope
+   --> crates/clawft-weave/tests/project_supervisor.rs:408:62
+    |
+408 |         assert!(sup.launcher().refresh_token(&fx.id, &owner).is_err());
+    |                                                              ^^^^^^
+    |
+help: there is a method `inspect_err` with a similar name, but with different arguments
+   --> ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/futures-util-0.3.32/src/future/try_future/mod.rs:493:5
+    |
+493 | /     fn inspect_err<F>(self, f: F) -> InspectErr<Self, F>
+494 | |     where
+495 | |         F: FnOnce(&Self::Error),
+496 | |         Self: Sized,
+    | |____________________^
+    = note: the full name for the type has been written to '~/.codex/worktrees/project-container/weftos/target/debug/deps/project_supervisor-a7b136744d5b9841.long-type-5648293395589547430.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+help: consider `await`ing on the `Future` and calling the method on its `Output`
+    |
+408 |         assert!(sup.launcher().refresh_token(&fx.id, &owner).await.is_err());
+    |                                                              ++++++
+
+error[E0599]: no method named `is_err` found for opaque type `impl Future<Output = Result<(String, DateTime<Utc>), String>>` in the current scope
+   --> crates/clawft-weave/tests/project_supervisor.rs:409:66
+    |
+409 |         assert!(sup.launcher().refresh_token(&fx.id, "wft_nope").is_err());
+    |                                                                  ^^^^^^
+    |
+help: there is a method `inspect_err` with a similar name, but with different arguments
+   --> ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/futures-util-0.3.32/src/future/try_future/mod.rs:493:5
+    |
+493 | /     fn inspect_err<F>(self, f: F) -> InspectErr<Self, F>
+494 | |     where
+495 | |         F: FnOnce(&Self::Error),
+496 | |         Self: Sized,
+    | |____________________^
+    = note: the full name for the type has been written to '~/.codex/worktrees/project-container/weftos/target/debug/deps/project_supervisor-a7b136744d5b9841.long-type-2482468366123460049.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+help: consider `await`ing on the `Future` and calling the method on its `Output`
+    |
+409 |         assert!(sup.launcher().refresh_token(&fx.id, "wft_nope").await.is_err());
+    |                                                                  ++++++
+
+error[E0599]: no method named `is_err` found for opaque type `impl Future<Output = Result<(String, DateTime<Utc>), String>>` in the current scope
+   --> crates/clawft-weave/tests/project_supervisor.rs:415:64
+    |
+415 |         assert!(sup.launcher().refresh_token(&fx.id, &foreign).is_err());
+    |                                                                ^^^^^^
+    |
+help: there is a method `inspect_err` with a similar name, but with different arguments
+   --> ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/futures-util-0.3.32/src/future/try_future/mod.rs:493:5
+    |
+493 | /     fn inspect_err<F>(self, f: F) -> InspectErr<Self, F>
+494 | |     where
+495 | |         F: FnOnce(&Self::Error),
+496 | |         Self: Sized,
+    | |____________________^
+    = note: the full name for the type has been written to '~/.codex/worktrees/project-container/weftos/target/debug/deps/project_supervisor-a7b136744d5b9841.long-type-1530611515208237005.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+help: consider `await`ing on the `Future` and calling the method on its `Output`
+    |
+415 |         assert!(sup.launcher().refresh_token(&fx.id, &foreign).await.is_err());
+    |                                                                ++++++
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `clawft-weave` (test "project_supervisor") due to 5 previous errors
+warning: build failed, waiting for other jobs to finish...
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9079:44
+     |
+9079 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+     |
+     = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9288:21
+     |
+9288 |             Config, KernelConfig, VectorBackendKind, VectorConfig, VectorHnswConfig,
+     |                     ^^^^^^^^^^^^
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9351:44
+     |
+9351 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9383:44
+     |
+9383 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9412:44
+     |
+9412 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9449:44
+     |
+9449 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9554:44
+     |
+9554 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+
+warning: unused import: `clawft_kernel::NODE_KEY_FILE as KEYFILE_NAME`
+  --> crates/clawft-weave/src/node_identity.rs:28:5
+   |
+28 | use clawft_kernel::NODE_KEY_FILE as KEYFILE_NAME;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `clawft-weave` (lib test) generated 8 warnings (run `cargo fix --lib -p clawft-weave --tests` to apply 8 suggestions)
+error: command `~/.rustup/toolchains/1.95-aarch64-apple-darwin/bin/cargo test --no-run --message-format json-render-diagnostics --package clawft-weave` exited with code 101

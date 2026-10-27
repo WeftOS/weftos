@@ -1,0 +1,86 @@
+ing [3mpath[0m[2m=[0m~/weftos/agents/mo [3merror[0m[2m=[0mfailed to load plugin: agent: no agent.yaml/agent.json/agent.toml in ~/weftos/agents/mo
+[2m2026-10-04T20:51:52.391085Z[0m [33m WARN[0m [2mclawft_core::agent::agents[0m[2m:[0m failed to load agent, skipping [3mpath[0m[2m=[0m~/weftos/agents/documenter [3merror[0m[2m=[0mfailed to load plugin: agent: no agent.yaml/agent.json/agent.toml in ~/weftos/agents/documenter
+[2m2026-10-04T20:51:52.391123Z[0m [33m WARN[0m [2mclawft_core::agent::agents[0m[2m:[0m failed to load agent, skipping [3mpath[0m[2m=[0m~/weftos/agents/eikon-specialist [3merror[0m[2m=[0mfailed to load plugin: agent: no agent.yaml/agent.json/agent.toml in ~/weftos/agents/eikon-specialist
+[2m2026-10-04T20:51:52.391188Z[0m [33m WARN[0m [2mclawft_core::agent::agents[0m[2m:[0m failed to load agent, skipping [3mpath[0m[2m=[0m~/weftos/agents/liber [3merror[0m[2m=[0mfailed to load plugin: agent: no agent.yaml/agent.json/agent.toml in ~/weftos/agents/liber
+[2m2026-10-04T20:51:52.392048Z[0m [33m WARN[0m [2mclawft_core::agent::agents[0m[2m:[0m failed to load agent, skipping [3mpath[0m[2m=[0m~/weftos/agents/doc-gardener [3merror[0m[2m=[0mfailed to load plugin: agent: no agent.yaml/agent.json/agent.toml in ~/weftos/agents/doc-gardener
+[2m2026-10-04T20:51:52.392135Z[0m [33m WARN[0m [2mclawft_core::agent::agents[0m[2m:[0m failed to load agent, skipping [3mpath[0m[2m=[0m~/weftos/agents/measurer [3merror[0m[2m=[0mfailed to load plugin: agent: no agent.yaml/agent.json/agent.toml in ~/weftos/agents/measurer
+[2m2026-10-04T20:51:52.392170Z[0m [33m WARN[0m [2mclawft_core::agent::agents[0m[2m:[0m failed to load agent, skipping [3mpath[0m[2m=[0m~/weftos/agents/teams [3merror[0m[2m=[0mfailed to load plugin: agent: no agent.yaml/agent.json/agent.toml in ~/weftos/agents/teams
+[2m2026-10-04T20:51:52.392199Z[0m [33m WARN[0m [2mclawft_core::agent::agents[0m[2m:[0m failed to load agent, skipping [3mpath[0m[2m=[0m~/weftos/agents/clawft [3merror[0m[2m=[0mfailed to load plugin: agent: no agent.yaml/agent.json/agent.toml in ~/weftos/agents/clawft
+[2m2026-10-04T20:51:52.392226Z[0m [33m WARN[0m [2mclawft_core::agent::agents[0m[2m:[0m failed to load agent, skipping [3mpath[0m[2m=[0m~/weftos/agents/tester [3merror[0m[2m=[0mfailed to load plugin: agent: no agent.yaml/agent.json/agent.toml in ~/weftos/agents/tester
+[2m2026-10-04T20:51:52.392319Z[0m [33m WARN[0m [2mclawft_core::agent::agents[0m[2m:[0m failed to load agent, skipping [3mpath[0m[2m=[0m~/weftos/agents/templates [3merror[0m[2m=[0mfailed to load plugin: agent: no agent.yaml/agent.json/agent.toml in ~/weftos/agents/templates
+[2m2026-10-04T20:51:52.393658Z[0m [33m WARN[0m [2mclawft_core::agent::agents[0m[2m:[0m failed to load agent, skipping [3mpath[0m[2m=[0m~/weftos/agents/steward [3merror[0m[2m=[0mfailed to load plugin: agent: no agent.yaml/agent.json/agent.toml in ~/weftos/agents/steward
+[2m2026-10-04T20:51:52.393698Z[0m [33m WARN[0m [2mclawft_core::agent::agents[0m[2m:[0m failed to load agent, skipping [3mpath[0m[2m=[0m~/weftos/agents/catalog.json [3merror[0m[2m=[0msecurity violation: agent file size 37219 bytes exceeds maximum of 10240 bytes
+[2m2026-10-04T20:51:52.393818Z[0m [33m WARN[0m [2mclawft_core::agent::agents[0m[2m:[0m failed to load agent, skipping [3mpath[0m[2m=[0m~/weftos/agents/weftos-ecc [3merror[0m[2m=[0mfailed to load plugin: agent: no agent.yaml/agent.json/agent.toml in ~/weftos/agents/weftos-ecc
+[2m2026-10-04T20:51:52.393848Z[0m [33m WARN[0m [2mclawft_core::agent::agents[0m[2m:[0m failed to load agent, skipping [3mpath[0m[2m=[0m~/weftos/agents/lead-doctrine [3merror[0m[2m=[0mfailed to load plugin: agent: no agent.yaml/agent.json/agent.toml in ~/weftos/agents/lead-doctrine
+[2m2026-10-04T20:51:52.393873Z[0m [33m WARN[0m [2mclawft_core::agent::agents[0m[2m:[0m failed to load agent, skipping [3mpath[0m[2m=[0m~/weftos/agents/weftos-kernel [3merror[0m[2m=[0mfailed to load plugin: agent: no agent.yaml/agent.json/agent.toml in ~/weftos/agents/weftos-kernel
+[2m2026-10-04T20:51:52.393949Z[0m [33m WARN[0m [2mclawft_core::agent::agents[0m[2m:[0m failed to load agent, skipping [3mpath[0m[2m=[0m~/weftos/agents/eikon [3merror[0m[2m=[0mfailed to load plugin: agent: no agent.yaml/agent.json/agent.toml in ~/weftos/agents/eikon
+[2m2026-10-04T20:51:52.394059Z[0m [33m WARN[0m [2mclawft_core::agent::agents[0m[2m:[0m failed to load agent, skipping [3mpath[0m[2m=[0m~/weftos/agents/weftos [3merror[0m[2m=[0mfailed to load plugin: agent: no agent.yaml/agent.json/agent.toml in ~/weftos/agents/weftos
+[2m2026-10-04T20:51:52.394092Z[0m [33m WARN[0m [2mclawft_core::agent::agents[0m[2m:[0m failed to load agent, skipping [3mpath[0m[2m=[0m~/weftos/agents/weftos-mesh [3merror[0m[2m=[0mfailed to load plugin: agent: no agent.yaml/agent.json/agent.toml in ~/weftos/agents/weftos-mesh
+[2m2026-10-04T20:51:52.394126Z[0m [32m INFO[0m [2mclawft_tools::delegate_tool[0m[2m:[0m specialist agent profiles discovered for delegate_task [3mcount[0m[2m=[0m1 [3magents[0m[2m=[0m["code-reviewer"]
+[2m2026-10-04T20:51:52.394413Z[0m [32m INFO[0m [2mchain_event[0m[2m:[0m chain [3msource[0m[2m=[0m"tools" [3mkind[0m[2m=[0m"tool.register" [3mchain_buffered[0m[2m=[0mtrue [3mtool_name[0m[2m=[0mdelegate_task
+[2m2026-10-04T20:51:52.394453Z[0m [32m INFO[0m [2mclawft_tools::delegate_tool[0m[2m:[0m delegation tool registered (specialist profiles + optional Claude) [3mclaude[0m[2m=[0mfalse
+[2m2026-10-04T20:51:52.394793Z[0m [32m INFO[0m [2mclawft_weave::daemon[0m[2m:[0m agent-core: identity hot-reload watcher started (WEFT-329) [3mclawft[0m[2m=[0m~/weftos/target/p4s/run-qbpdl5ii/home/.weftos/.clawft
+[2m2026-10-04T20:51:52.394823Z[0m [32m INFO[0m [2mclawft_weave::daemon[0m[2m:[0m agent-core: journal-aware identity provider attached (substrate soul_journal read-on-every-turn)
+[2m2026-10-04T20:51:52.394959Z[0m [32m INFO[0m [2mclawft_weave::daemon[0m[2m:[0m agent-core: concierge principal registered [3magent_id[0m[2m=[0m38ae5a71-eb2b-4190-9fa1-2fe1b3c2ec82 [3mname[0m[2m=[0mconcierge-bot
+[2m2026-10-04T20:51:52.395010Z[0m [32m INFO[0m [2mclawft_weave::daemon[0m[2m:[0m agent-core: ContextRouter v0 (NullRouter) live [3mrouter[0m[2m=[0m"null"
+[2m2026-10-04T20:51:52.395035Z[0m [32m INFO[0m [2mclawft_weave::daemon[0m[2m:[0m agent-core: soul journal writer attached (substrate + file mirror) [3mnode_id[0m[2m=[0mefd227be9b3c4de8cc09cc0f8816ce85
+[2m2026-10-04T20:51:52.395069Z[0m [32m INFO[0m [2mclawft_weave::daemon[0m[2m:[0m agent-core: router decision log attached (substrate/_derived/agent/routing/recent) [3mnode_id[0m[2m=[0mefd227be9b3c4de8cc09cc0f8816ce85
+[2m2026-10-04T20:51:52.395342Z[0m [32m INFO[0m [2mclawft_kernel::service[0m[2m:[0m registering service [3mservice[0m[2m=[0magent.chat
+[2m2026-10-04T20:51:52.395417Z[0m [32m INFO[0m [2mclawft_kernel::service[0m[2m:[0m registering service contract on chain [3mservice[0m[2m=[0magent.chat [3mversion[0m[2m=[0m1.0.0
+[2m2026-10-04T20:51:52.395653Z[0m [32m INFO[0m [2mclawft_kernel::service[0m[2m:[0m registering service entry [3mservice[0m[2m=[0magent.chat
+[2m2026-10-04T20:51:52.395742Z[0m [32m INFO[0m [2mclawft_weave::daemon[0m[2m:[0m agent.chat SystemService registered (WEFT-333)
+[2m2026-10-04T20:51:52.395759Z[0m [32m INFO[0m [2mclawft_weave::daemon[0m[2m:[0m agent service wired (agent.chat dispatches through clawft-service-agent)
+[2m2026-10-04T20:51:52.395830Z[0m [32m INFO[0m [2mclawft_weave::daemon[0m[2m:[0m subagent spawner wired (agent_spawn dispatches child conversations)
+[2m2026-10-04T20:51:52.395877Z[0m [32m INFO[0m [2mclawft_weave::daemon[0m[2m:[0m terminal service wired (PTY-backed sessions hosted in daemon)
+[2m2026-10-04T20:51:52.395941Z[0m [32m INFO[0m [2mclawft_weave::daemon[0m[2m:[0m voice consumer: disabled by config (voice.consumer.enabled=false)
+weaver 0.8.1 · git e6662b81-dirty · built 2026-10-04T20:41:21Z
+[2m2026-10-04T20:51:52.396563Z[0m [32m INFO[0m [2mclawft_weave::daemon[0m[2m:[0m weaver build identity [3mversion[0m[2m=[0m"0.8.1" [3mgit[0m[2m=[0m"e6662b81-dirty" [3mbuilt[0m[2m=[0m"2026-10-04T20:41:21Z"
+
+  WeftOS v0.8.1
+  ---------------------------------------------
+  WARN  macOS: OS sandbox unavailable (seccomp/landlock are Linux-only); OsSandbox/Combined policies are downgraded to WASM-only isolation
+  [INIT      ] WeftOS v0.8.1 booting...
+  [INIT      ] Chain storage: ~/weftos/target/p4s/run-qbpdl5ii/run/chain.json
+  [INIT      ] Runtime dir: ~/weftos/target/p4s/run-qbpdl5ii/run
+  [INIT      ] PID 0 (kernel)
+  [INIT      ] macOS: OS sandbox unavailable (seccomp/landlock are Linux-only); OsSandbox/Combined policies are downgraded to WASM-only isolation
+  [CONFIG    ] Max processes: 64
+  [CONFIG    ] Health check interval: 30s
+  [SERVICES  ] Service registry ready
+  [SERVICES  ] A2A router ready
+  [SERVICES  ] Cron service registered
+  [SERVICES  ] Assessment service registered
+  [SERVICES  ] Container service registered
+  [NETWORK   ] Mesh transport disabled
+  [NETWORK   ] Cluster membership ready (node efd227be9b3c4de8cc09cc0f8816ce85, 0 peer(s) rehydrated)
+  [SERVICES  ] AppManager ready (0 app(s) rehydrated from ~/weftos/target/p4s/run-qbpdl5ii/run/apps.json)
+  [NETWORK   ] Host revocation list ready (empty)
+  [NETWORK   ] Cluster service registered (ruvector)
+  [SERVICES  ] Ed25519 signing key loaded: ~/weftos/target/p4s/run-qbpdl5ii/run/chain.key
+  [SERVICES  ] Dual signing enabled (Ed25519 + ML-DSA-65)
+  [SERVICES  ] Local chain ready (chain_id=0, seq=1, signed=true)
+  [TREE      ] Resource tree bootstrapped (9 nodes, root=43f47c54eddd...)
+  [ECC       ] ECC resource tree namespaces registered
+  [TREE      ] Registered 36 built-in tools in resource tree
+  [SERVICES  ] Governance genesis anchored (seq=56, 28 rules, threshold=0.7)
+  [ECC       ] Initializing ECC cognitive substrate
+  [ECC       ] Vector backend: HNSW (in-memory)
+  [ECC       ] ECC calibration complete (p50=15283us, p95=29636us, tick=100ms, spectral=false)
+  [ECC       ] DEMOCRITUS two-tier coherence loop spawned
+  [ECC       ] Spatial BVH disabled (set kernel.spatial.enabled = true)
+  [ECC       ] ECC ready (hnsw=0, causal=0 nodes, tick=100ms, vector=hnsw, spatial=off)
+  [READY     ] Boot complete in 0.4s (1 processes, 6 services)
+[2m2026-10-04T20:51:52.396814Z[0m [32m INFO[0m [2mclawft_weave::daemon[0m[2m:[0m daemon listening [3mpath[0m[2m=[0m~/weftos/target/p4s/run-qbpdl5ii/run/kernel.sock
+Daemon listening on ~/weftos/target/p4s/run-qbpdl5ii/run/kernel.sock
+[2m2026-10-04T20:51:52.397200Z[0m [32m INFO[0m [2mclawft_weave::daemon[0m[2m:[0m child-only RPC endpoint listening [3mpath[0m[2m=[0m~/weftos/target/p4s/run-qbpdl5ii/run/child-ipc/child.sock
+[2m2026-10-04T20:51:52.423432Z[0m [33m WARN[0m [2mclawft_weave::daemon[0m[2m:[0m rpc auth: literal scope from a supervised project kernel's process group; treating as anonymous
+
+Traceback (most recent call last):
+  File "~/weftos/scripts/dev/p4-child-endpoint-smoke.py", line 101, in <module>
+    main()
+    ~~~~^^
+  File "~/weftos/scripts/dev/p4-child-endpoint-smoke.py", line 79, in main
+    assert challenge.get("error_kind") == "invalid_params", challenge
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: {'ok': False, 'error': 'not in a project; run `weft project init` or pass `--project`', 'error_kind': 'project_required', 'id': 'smoke'}
+CHILD_SMOKE_EXIT=1

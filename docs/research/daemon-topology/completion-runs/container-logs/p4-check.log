@@ -1,0 +1,7 @@
+
+[1m── Running cargo check -p clawft-weave[0m
+   |
+
+Some errors have detailed explanations: E0004, E0062, E0063.
+For more information about an error, try `rustc --explain E0004`.
+error: could not compile `clawft-weave` (lib) due to 5 previous errors

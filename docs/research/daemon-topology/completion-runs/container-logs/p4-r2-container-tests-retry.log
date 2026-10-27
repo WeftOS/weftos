@@ -1,0 +1,74 @@
+
+[1m── Running cargo nextest run (clawft-weave) (+ doctests)[0m
+info: experimental features enabled: wrapper-scripts
+   Compiling clawft-weave v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-weave)
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9079:44
+     |
+9079 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+     |
+     = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9288:21
+     |
+9288 |             Config, KernelConfig, VectorBackendKind, VectorConfig, VectorHnswConfig,
+     |                     ^^^^^^^^^^^^
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9351:44
+     |
+9351 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9383:44
+     |
+9383 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9412:44
+     |
+9412 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9449:44
+     |
+9449 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9554:44
+     |
+9554 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+
+warning: unused import: `clawft_kernel::NODE_KEY_FILE as KEYFILE_NAME`
+  --> crates/clawft-weave/src/node_identity.rs:28:5
+   |
+28 | use clawft_kernel::NODE_KEY_FILE as KEYFILE_NAME;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `clawft-weave` (lib test) generated 8 warnings (run `cargo fix --lib -p clawft-weave --tests` to apply 8 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 54.12s
+────────────
+ Nextest run ID edb531a7-0cb6-4c24-8bfb-e704757cc0f2 with nextest profile: default
+    Starting 12 tests across 43 binaries (967 tests skipped)
+        PASS [   0.046s] ( 1/12) clawft-weave project_supervisor::child::container_endpoint_tests::engine_failure_never_proves_liveness
+        PASS [   0.046s] ( 2/12) clawft-weave project_supervisor::child::container_endpoint_tests::container_endpoint_cannot_be_owner_socket
+        PASS [   0.051s] ( 3/12) clawft-weave project_supervisor::container::tests::create_returns_id_before_any_inspect
+        PASS [   0.051s] ( 4/12) clawft-weave project_supervisor::container::tests::flags_pin_isolation_and_parent_mounts
+        PASS [   0.051s] ( 5/12) clawft-weave project_supervisor::container::tests::forged_id_label_or_mount_is_refused
+        PASS [   0.051s] ( 6/12) clawft-weave project_supervisor::container::tests::stale_id_never_reaches_a_destructive_engine_call
+        PASS [   0.052s] ( 7/12) clawft-weave project_supervisor::container::tests::weakened_isolation_and_extra_mount_are_refused
+        PASS [   0.052s] ( 8/12) clawft-weave project_supervisor::container::tests::leftover_name_recovers_only_a_verified_immutable_id
+        PASS [   0.052s] ( 9/12) clawft-weave project_supervisor::container::tests::create_start_stop_reinspect_immutable_id
+        PASS [   0.053s] (10/12) clawft-weave project_supervisor::container::tests::forced_stop_preserves_the_id_for_verified_restart_cleanup
+        PASS [   0.056s] (11/12) clawft-weave workload_place_rpc::daemon_tests::container_and_seed_files_are_validated_at_the_boundary
+        PASS [   0.092s] (12/12) clawft-weave project_supervisor::container_path_tests::writable_project_cannot_contain_or_live_inside_parent_runtime
+────────────
+     Summary [   0.093s] 12 tests run: 12 passed, 967 skipped
+  [0;36mTIME[0m  1m 1s

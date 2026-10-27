@@ -1,0 +1,39 @@
+
+[1m── Running cargo nextest run (clawft-kernel) (+ doctests)[0m
+info: experimental features enabled: wrapper-scripts
+   Compiling clawft-kernel v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 33.96s
+────────────
+ Nextest run ID c3d01556-61ee-4d91-8ab3-6b73a3ac33be with nextest profile: default
+    Starting 2 tests across 10 binaries (3535 tests skipped)
+        FAIL [   0.017s] (1/2) clawft-kernel mesh_serve::serve_tests::certified_leaf_duplicate_subscribe_restores_route_after_restart
+  stderr ───
+    test-runtime-wrap: WEFTOS_TEST_RUNTIME_ROOT is unset or not a directory; run tests through scripts/build.sh
+
+    (test failed with exit code 70)
+
+  Cancelling due to test failure: 1 test still running
+        FAIL [   0.017s] (2/2) clawft-kernel mesh_serve::serve_tests::certified_leaf_publish_replay_is_suppressed_after_committed_floor
+  stderr ───
+    test-runtime-wrap: WEFTOS_TEST_RUNTIME_ROOT is unset or not a directory; run tests through scripts/build.sh
+
+    (test failed with exit code 70)
+
+────────────
+     Summary [   0.021s] 2 tests run: 0 passed, 2 failed, 3535 skipped
+        FAIL [   0.017s] (1/2) clawft-kernel mesh_serve::serve_tests::certified_leaf_duplicate_subscribe_restores_route_after_restart
+        FAIL [   0.017s] (2/2) clawft-kernel mesh_serve::serve_tests::certified_leaf_publish_replay_is_suppressed_after_committed_floor
+error: test run failed
+
+[1m── Running clippy (warnings as errors) -p weftos-leaf-types -p clawft-kernel -p clawft-mesh-service -p clawft-weave --no-deps[0m
+    Checking clawft-kernel v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-kernel)
+   Compiling clawft-weave v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-weave)
+    Checking weftos-cog-host v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/weftos-cog-host)
+    Checking clawft-service-agent v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-service-agent)
+    Checking clawft-mesh-service v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-mesh-service)
+    Checking clawft-service-whisper v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-service-whisper)
+    Checking clawft-service-classify v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-service-classify)
+    Checking weftos-cog-sources v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/weftos-cog-sources)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 31.90s
+  [0;36mTIME[0m  32s
+ROUTE_TEST_EXIT=100 CLIPPY_EXIT=0

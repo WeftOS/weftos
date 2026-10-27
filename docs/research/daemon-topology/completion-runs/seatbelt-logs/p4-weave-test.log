@@ -1,0 +1,80 @@
+
+[1m── Running cargo nextest run (clawft-weave) (+ doctests)[0m
+   Compiling clawft-types v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/clawft-types)
+   Compiling clawft-weave v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/clawft-weave)
+   Compiling clawft-plugin v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/clawft-plugin)
+   Compiling clawft-llm v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/clawft-llm)
+   Compiling clawft-platform v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/clawft-platform)
+   Compiling clawft-rpc v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/clawft-rpc)
+   Compiling weftos-cog-repo v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/weftos-cog-repo)
+   Compiling clawft-services v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/clawft-services)
+   Compiling weftos-cog-market v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/weftos-cog-market)
+   Compiling clawft-core v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/clawft-core)
+   Compiling clawft-substrate v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/clawft-substrate)
+   Compiling clawft-kernel v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/clawft-kernel)
+   Compiling clawft-tools v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/clawft-tools)
+   Compiling weftos-cog-host v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/weftos-cog-host)
+   Compiling clawft-service-agent v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/clawft-service-agent)
+   Compiling clawft-mesh-service v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/clawft-mesh-service)
+   Compiling clawft-service-whisper v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/clawft-service-whisper)
+   Compiling clawft-service-classify v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/clawft-service-classify)
+   Compiling weftos-cog-sources v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/weftos-cog-sources)
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9079:44
+     |
+9079 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+     |
+     = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9288:21
+     |
+9288 |             Config, KernelConfig, VectorBackendKind, VectorConfig, VectorHnswConfig,
+     |                     ^^^^^^^^^^^^
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9351:44
+     |
+9351 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9383:44
+     |
+9383 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9412:44
+     |
+9412 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9449:44
+     |
+9449 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9554:44
+     |
+9554 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+
+warning: unused import: `clawft_kernel::NODE_KEY_FILE as KEYFILE_NAME`
+  --> crates/clawft-weave/src/node_identity.rs:28:5
+   |
+28 | use clawft_kernel::NODE_KEY_FILE as KEYFILE_NAME;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `clawft-weave` (lib test) generated 8 warnings (run `cargo fix --lib -p clawft-weave --tests` to apply 8 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 39s
+────────────
+ Nextest run ID 82f4917a-26cc-48dc-8187-bbef54ab9c6b with nextest profile: default
+    Starting 1 test across 43 binaries (973 tests skipped)
+        PASS [   0.096s] (1/1) clawft-weave project_lifecycle_rpc::nested_tests::nested_child_must_be_inside_and_name_its_master
+────────────
+     Summary [   0.097s] 1 test run: 1 passed, 973 skipped
+  [0;36mTIME[0m  2m 11s

@@ -1,0 +1,153 @@
+
+[1m── Running cargo nextest run (clawft-kernel) (+ doctests)[0m
+info: experimental features enabled: wrapper-scripts
+   Compiling clawft-kernel v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 51.80s
+────────────
+ Nextest run ID c8fc6ebb-54a6-455d-99dd-9e3e2fdf01c6 with nextest profile: default
+    Starting 2 tests across 10 binaries (3535 tests skipped)
+        PASS [   0.079s] (1/2) clawft-kernel mesh_serve::serve_tests::certified_leaf_publish_replay_is_suppressed_after_committed_floor
+        PASS [   0.095s] (2/2) clawft-kernel mesh_serve::serve_tests::certified_leaf_duplicate_subscribe_restores_route_after_restart
+────────────
+     Summary [   0.099s] 2 tests run: 2 passed, 3535 skipped
+  [0;36mTIME[0m  1m 2s
+
+[1m── Running cargo nextest run (clawft-kernel) (+ doctests)[0m
+info: experimental features enabled: wrapper-scripts
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.57s
+────────────
+ Nextest run ID 6aaccbcd-a3f7-42ae-a5cb-af321d6ba3ff with nextest profile: default
+    Starting 1 test across 10 binaries (3536 tests skipped)
+        PASS [   0.035s] (1/1) clawft-kernel mesh_leaf::tests::discovery_only_answers_enrolled_leaf_with_signed_endpoint_and_nonce
+────────────
+     Summary [   0.037s] 1 test run: 1 passed, 3536 skipped
+  [0;36mTIME[0m  2s
+
+[1m── Running cargo nextest run (clawft-mesh-service) (+ doctests)[0m
+info: experimental features enabled: wrapper-scripts
+   Compiling libc v0.2.189
+   Compiling subtle v2.6.1
+   Compiling slab v0.4.12
+   Compiling log v0.4.29
+   Compiling ed25519 v2.2.3
+   Compiling num-traits v0.2.19
+   Compiling ciborium-ll v0.2.2
+   Compiling hex v0.4.3
+   Compiling digest v0.10.7
+   Compiling universal-hash v0.5.1
+   Compiling futures-util v0.3.32
+   Compiling ciborium v0.2.2
+   Compiling poly1305 v0.8.0
+   Compiling curve25519-dalek v4.1.3
+   Compiling blake2 v0.10.6
+   Compiling hmac v0.12.1
+   Compiling chacha20poly1305 v0.10.1
+   Compiling getrandom v0.2.17
+   Compiling parking_lot_core v0.9.12
+   Compiling errno v0.3.14
+   Compiling cpufeatures v0.2.17
+   Compiling socket2 v0.6.5
+   Compiling mio v1.2.2
+   Compiling getrandom v0.3.4
+   Compiling getrandom v0.4.1
+   Compiling dirs-sys v0.5.0
+   Compiling fsevent-sys v4.1.0
+   Compiling chrono v0.4.43
+   Compiling dirs v6.0.0
+   Compiling sha2 v0.10.9
+   Compiling polyval v0.6.2
+   Compiling sha1 v0.10.6
+   Compiling aes v0.8.4
+   Compiling rand_core v0.6.4
+   Compiling signal-hook-registry v1.4.8
+   Compiling ring v0.17.14
+   Compiling rand_core v0.9.5
+   Compiling uuid v1.21.0
+   Compiling ahash v0.8.12
+   Compiling notify v8.2.0
+   Compiling rustix v1.1.4
+   Compiling parking_lot v0.12.5
+   Compiling dashmap v6.1.0
+   Compiling ghash v0.5.1
+   Compiling rand_chacha v0.3.1
+   Compiling ed25519-dalek v2.2.0
+   Compiling rand_chacha v0.9.0
+   Compiling tokio v1.53.1
+   Compiling tiktoken-rs v0.6.0
+   Compiling futures-executor v0.3.32
+   Compiling tempfile v3.25.0
+   Compiling rustls-webpki v0.103.15
+   Compiling aes-gcm v0.10.3
+   Compiling futures v0.3.32
+   Compiling rand v0.9.5
+   Compiling rand v0.8.7
+   Compiling weftos-leaf-types v0.1.0 (~/.codex/worktrees/leaf-finish/weftos/crates/weftos-leaf-types)
+   Compiling weft-licence-wire v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/weft-licence-wire)
+   Compiling snow v0.10.0
+   Compiling rustls v0.23.45
+   Compiling ulid v1.2.1
+   Compiling tokenizers v0.21.4
+   Compiling clawft-types v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-types)
+   Compiling hyper v1.8.1
+   Compiling tower v0.5.3
+   Compiling tokio-util v0.7.18
+   Compiling clawft-mesh-local v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-mesh-local)
+   Compiling tower-http v0.6.8
+   Compiling tokio-rustls v0.26.4
+   Compiling tungstenite v0.24.0
+   Compiling hyper-util v0.1.20
+   Compiling tokio-tungstenite v0.24.0
+   Compiling hyper-rustls v0.27.7
+   Compiling reqwest v0.12.28
+   Compiling clawft-platform v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-platform)
+   Compiling clawft-llm v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-llm)
+   Compiling clawft-plugin v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-plugin)
+   Compiling clawft-service-llm v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-service-llm)
+   Compiling clawft-rpc v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-rpc)
+   Compiling clawft-substrate v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-substrate)
+   Compiling clawft-core v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-core)
+   Compiling clawft-kernel v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-kernel)
+warning: unused import: `std::sync::Arc`
+  --> crates/clawft-kernel/src/environment.rs:17:5
+   |
+17 | use std::sync::Arc;
+   |     ^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `std::sync::Arc`
+ --> crates/clawft-kernel/src/auth_service.rs:7:5
+  |
+7 | use std::sync::Arc;
+  |     ^^^^^^^^^^^^^^
+
+warning: unused variable: `cred_type_for_chain`
+   --> crates/clawft-kernel/src/auth_service.rs:300:13
+    |
+300 |         let cred_type_for_chain = credential_type.to_string();
+    |             ^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_cred_type_for_chain`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `inherit_config` is never used
+    --> crates/clawft-kernel/src/governance.rs:1175:19
+     |
+1076 | impl GovernanceEngine {
+     | --------------------- method in this implementation
+...
+1175 |     pub(crate) fn inherit_config(&mut self, old: &GovernanceEngine) {
+     |                   ^^^^^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+   Compiling clawft-mesh-service v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-mesh-service)
+warning: `clawft-kernel` (lib) generated 4 warnings (run `cargo fix --lib -p clawft-kernel` to apply 3 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 51.10s
+────────────
+ Nextest run ID 3c545000-04bc-42b5-a1a0-2ef917627cce with nextest profile: default
+    Starting 1 test across 9 binaries (162 tests skipped)
+        PASS [   0.051s] (1/1) clawft-mesh-service router::tests::certified_leaf_can_reach_only_its_scoped_parent_and_missing_parent_is_error
+────────────
+     Summary [   0.052s] 1 test run: 1 passed, 162 skipped
+  [0;36mTIME[0m  54s
+EXIT=0

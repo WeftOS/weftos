@@ -1,0 +1,9 @@
+Error: failed to parse config: expected value at line 1 column 2
+
+Traceback (most recent call last):
+  File "~/weftos/scripts/dev/p4-child-endpoint-smoke.py", line 94, in <module>
+    main()
+    ~~~~^^
+  File "~/weftos/scripts/dev/p4-child-endpoint-smoke.py", line 63, in main
+    raise AssertionError("daemon did not bind both endpoints")
+AssertionError: daemon did not bind both endpoints

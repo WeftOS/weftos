@@ -1,0 +1,433 @@
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded arrayref v0.3.9
+  Downloaded build-time v0.1.3
+  Downloaded block-buffer v0.10.4
+  Downloaded atomic-waker v1.1.2
+  Downloaded bitflags v1.3.2
+  Downloaded autocfg v1.5.0
+  Downloaded anyhow v1.0.102
+  Downloaded cfg-if v1.0.4
+  Downloaded cargo-platform v0.1.9
+  Downloaded futures-sink v0.3.32
+  Downloaded cfg_aliases v0.2.1
+  Downloaded futures-io v0.3.32
+  Downloaded generic-array v0.14.7
+  Downloaded futures-core v0.3.32
+  Downloaded embedded-io-async v0.7.0
+  Downloaded embedded-can v0.4.1
+  Downloaded float-cmp v0.9.0
+  Downloaded cpufeatures v0.2.17
+  Downloaded ident_case v1.0.1
+  Downloaded fnv v1.0.7
+  Downloaded equivalent v1.0.2
+  Downloaded embedded-io v0.6.1
+  Downloaded defmt-parser v1.0.0
+  Downloaded embassy-futures v0.1.2
+  Downloaded cexpr v0.6.0
+  Downloaded globwalk v0.8.1
+  Downloaded arrayvec v0.7.6
+  Downloaded itoa v1.0.18
+  Downloaded home v0.5.12
+  Downloaded konst_macro_rules v0.2.19
+  Downloaded proc-macro-error2 v2.0.1
+  Downloaded crossbeam-deque v0.8.6
+  Downloaded globset v0.4.18
+  Downloaded constant_time_eq v0.4.2
+  Downloaded libloading v0.8.9
+  Downloaded iana-time-zone v0.1.65
+  Downloaded defmt v1.1.0
+  Downloaded ignore v0.4.25
+  Downloaded subtle v2.6.1
+  Downloaded indexmap v2.14.0
+  Downloaded strum v0.27.2
+  Downloaded itertools v0.13.0
+  Downloaded aho-corasick v1.1.4
+  Downloaded signature v2.2.0
+  Downloaded chrono v0.4.44
+  Downloaded version_check v0.9.5
+  Downloaded bstr v1.12.1
+  Downloaded curve25519-dalek v4.1.3
+  Downloaded bindgen v0.71.1
+  Downloaded blake3 v1.8.5
+  Downloaded void v1.0.2
+  Downloaded unicode-xid v0.2.6
+  Downloaded libc v0.2.186
+  Downloaded uncased v0.9.10
+  Downloaded thiserror-impl v1.0.69
+  Downloaded thiserror v2.0.18
+  Downloaded which v4.4.2
+  Downloaded thiserror v1.0.69
+  Downloaded num_enum v0.7.6
+  Downloaded toml_datetime v1.1.1+spec-1.1.0
+  Downloaded strum_macros v0.24.3
+  Downloaded sha2 v0.10.9
+  Downloaded rand_core v0.6.4
+  Downloaded num_enum_derive v0.7.6
+  Downloaded quote v1.0.45
+  Downloaded normpath v1.5.1
+  Downloaded nb v1.1.0
+  Downloaded thiserror-impl v2.0.18
+  Downloaded serde v1.0.228
+  Downloaded zmij v1.0.21
+  Downloaded remove_dir_all v0.8.4
+  Downloaded embedded-graphics v0.8.2
+  Downloaded toml_parser v1.1.2+spec-1.1.0
+  Downloaded unicode-ident v1.0.24
+  Downloaded toml_edit v0.25.11+spec-1.1.0
+  Downloaded tempfile v3.27.0
+  Downloaded serde_derive v1.0.228
+  Downloaded serde_core v1.0.228
+  Downloaded proc-macro2 v1.0.106
+  Downloaded num-traits v0.2.19
+  Downloaded prettyplease v0.2.37
+  Downloaded minimal-lexical v0.2.1
+  Downloaded log v0.4.29
+  Downloaded konst v0.2.20
+  Downloaded strum_macros v0.27.2
+  Downloaded semver v1.0.28
+  Downloaded once_cell v1.21.4
+  Downloaded walkdir v2.5.0
+  Downloaded shlex v1.3.0
+  Downloaded rustversion v1.0.22
+  Downloaded rustc-hash v2.1.2
+  Downloaded proc-macro-crate v3.5.0
+  Downloaded strum v0.24.1
+  Downloaded rustc_version v0.4.1
+  Downloaded proc-macro-error-attr2 v2.0.0
+  Downloaded stable_deref_trait v1.2.1
+  Downloaded heapless v0.9.3
+  Downloaded hashbrown v0.17.1
+  Downloaded ed25519-dalek v2.2.0
+  Downloaded same-file v1.0.6
+  Downloaded nb v0.1.3
+  Downloaded heapless v0.8.0
+  Downloaded embassy-sync v0.7.2
+  Downloaded darling_core v0.21.3
+  Downloaded const_format v0.2.36
+  Downloaded cc v1.2.62
+  Downloaded half v2.7.1
+  Downloaded getrandom v0.4.2
+  Downloaded embedded-hal v1.0.0
+  Downloaded const_format_proc_macros v0.2.34
+  Downloaded fs_at v0.2.1
+  Downloaded fastrand v2.4.1
+  Downloaded darling v0.21.3
+  Downloaded crossbeam-utils v0.8.21
+  Downloaded crossbeam-epoch v0.9.18
+  Downloaded clang-sys v1.8.1
+  Downloaded az v1.2.1
+  Downloaded hash32 v0.3.1
+  Downloaded embedded-svc v0.29.0
+  Downloaded embedded-graphics-core v0.4.1
+  Downloaded either v1.15.0
+  Downloaded ed25519 v2.2.3
+  Downloaded critical-section v1.2.0
+  Downloaded bitflags v2.11.1
+  Downloaded cmake v0.1.58
+  Downloaded ciborium v0.2.2
+  Downloaded glob v0.3.3
+  Downloaded find-msvc-tools v0.1.9
+  Downloaded errno v0.3.14
+  Downloaded enumset_derive v0.15.0
+  Downloaded embedded-hal-async v1.0.0
+  Downloaded embedded-hal v0.2.7
+  Downloaded zerocopy-derive v0.8.48
+  Downloaded memchr v2.8.0
+  Downloaded typenum v1.20.0
+  Downloaded nom v7.1.3
+  Downloaded enumset v1.1.12
+  Downloaded digest v0.10.7
+  Downloaded defmt-macros v1.1.0
+  Downloaded heck v0.5.0
+  Downloaded filetime v0.2.29
+  Downloaded camino v1.2.2
+  Downloaded heck v0.4.1
+  Downloaded embedded-hal-nb v1.0.0
+  Downloaded ciborium-ll v0.2.2
+  Downloaded cvt v0.1.2
+  Downloaded crypto-common v0.1.7
+  Downloaded embedded-io-async v0.6.1
+  Downloaded embedded-io v0.7.1
+  Downloaded ciborium-io v0.2.2
+  Downloaded cargo_metadata v0.18.1
+  Downloaded envy v0.4.2
+  Downloaded darling_macro v0.21.3
+  Downloaded byteorder v1.5.0
+  Downloaded regex v1.12.3
+  Downloaded esp-idf-sys v0.37.2
+  Downloaded serde_json v1.0.149
+  Downloaded winnow v1.0.3
+  Downloaded micromath v2.1.0
+  Downloaded syn v1.0.109
+  Downloaded esp-idf-svc v0.52.1
+  Downloaded zerocopy v0.8.48
+  Downloaded syn v2.0.117
+  Downloaded nix v0.29.0
+  Downloaded regex-syntax v0.8.10
+  Downloaded rustix v0.38.44
+  Downloaded rustix v1.1.4
+  Downloaded embuild v0.33.1
+  Downloaded esp-idf-hal v0.46.2
+  Downloaded regex-automata v0.4.14
+  Downloaded linux-raw-sys v0.4.15
+  Downloaded linux-raw-sys v0.12.1
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded addr2line v0.25.1
+  Downloaded adler2 v2.0.1
+  Downloaded rustc-literal-escaper v0.0.5
+  Downloaded foldhash v0.2.0
+  Downloaded rustc-demangle v0.1.26
+  Downloaded getopts v0.2.24
+  Downloaded miniz_oxide v0.8.9
+  Downloaded memchr v2.7.6
+  Downloaded hashbrown v0.16.1
+  Downloaded gimli v0.32.3
+  Downloaded object v0.37.3
+  Downloaded libc v0.2.177
+   Compiling compiler_builtins v0.1.160 (/home/esp/.rustup/toolchains/esp/lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins)
+   Compiling core v0.0.0 (/home/esp/.rustup/toolchains/esp/lib/rustlib/src/rust/library/core)
+   Compiling libc v0.2.177
+   Compiling object v0.37.3
+   Compiling std v0.0.0 (/home/esp/.rustup/toolchains/esp/lib/rustlib/src/rust/library/std)
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.45
+   Compiling syn v2.0.117
+   Compiling serde_core v1.0.228
+   Compiling memchr v2.8.0
+   Compiling serde_derive v1.0.228
+   Compiling cfg-if v1.0.4
+   Compiling libc v0.2.186
+   Compiling rustc-std-workspace-core v1.99.0 (/home/esp/.rustup/toolchains/esp/lib/rustlib/src/rust/library/rustc-std-workspace-core)
+   Compiling alloc v0.0.0 (/home/esp/.rustup/toolchains/esp/lib/rustlib/src/rust/library/alloc)
+   Compiling unwind v0.0.0 (/home/esp/.rustup/toolchains/esp/lib/rustlib/src/rust/library/unwind)
+   Compiling memchr v2.7.6
+   Compiling adler2 v2.0.1
+   Compiling rustc-demangle v0.1.26
+   Compiling panic_abort v0.0.0 (/home/esp/.rustup/toolchains/esp/lib/rustlib/src/rust/library/panic_abort)
+   Compiling bitflags v2.11.1
+   Compiling aho-corasick v1.1.4
+   Compiling rustc-std-workspace-alloc v1.99.0 (/home/esp/.rustup/toolchains/esp/lib/rustlib/src/rust/library/rustc-std-workspace-alloc)
+   Compiling gimli v0.32.3
+   Compiling miniz_oxide v0.8.9
+   Compiling hashbrown v0.16.1
+   Compiling std_detect v0.1.5 (/home/esp/.rustup/toolchains/esp/lib/rustlib/src/rust/library/std_detect)
+   Compiling addr2line v0.25.1
+   Compiling panic_unwind v0.0.0 (/home/esp/.rustup/toolchains/esp/lib/rustlib/src/rust/library/panic_unwind)
+   Compiling regex-syntax v0.8.10
+   Compiling rustversion v1.0.22
+   Compiling crossbeam-utils v0.8.21
+   Compiling shlex v1.3.0
+   Compiling regex-automata v0.4.14
+   Compiling rustc-std-workspace-std v1.99.0 (/home/esp/.rustup/toolchains/esp/lib/rustlib/src/rust/library/rustc-std-workspace-std)
+   Compiling rustc-literal-escaper v0.0.5
+   Compiling proc_macro v0.0.0 (/home/esp/.rustup/toolchains/esp/lib/rustlib/src/rust/library/proc_macro)
+   Compiling cfg_aliases v0.2.1
+   Compiling find-msvc-tools v0.1.9
+   Compiling serde v1.0.228
+   Compiling thiserror v1.0.69
+   Compiling glob v0.3.3
+   Compiling clang-sys v1.8.1
+   Compiling cc v1.2.62
+   Compiling nix v0.29.0
+   Compiling semver v1.0.28
+   Compiling zmij v1.0.21
+   Compiling log v0.4.29
+   Compiling anyhow v1.0.102
+   Compiling prettyplease v0.2.37
+   Compiling syn v1.0.109
+   Compiling crossbeam-epoch v0.9.18
+   Compiling bstr v1.12.1
+   Compiling thiserror-impl v1.0.69
+   Compiling getrandom v0.4.2
+   Compiling same-file v1.0.6
+   Compiling version_check v0.9.5
+   Compiling serde_json v1.0.149
+   Compiling either v1.15.0
+   Compiling minimal-lexical v0.2.1
+   Compiling rustix v1.1.4
+   Compiling rustix v0.38.44
+   Compiling nom v7.1.3
+   Compiling walkdir v2.5.0
+   Compiling globset v0.4.18
+   Compiling crossbeam-deque v0.8.6
+   Compiling cvt v0.1.2
+   Compiling libloading v0.8.9
+   Compiling once_cell v1.21.4
+   Compiling linux-raw-sys v0.12.1
+   Compiling heck v0.4.1
+   Compiling linux-raw-sys v0.4.15
+   Compiling bindgen v0.71.1
+   Compiling itoa v1.0.18
+   Compiling strum_macros v0.24.3
+   Compiling fs_at v0.2.1
+   Compiling cexpr v0.6.0
+   Compiling ignore v0.4.25
+   Compiling itertools v0.13.0
+   Compiling regex v1.12.3
+   Compiling normpath v1.5.1
+   Compiling home v0.5.12
+   Compiling fastrand v2.4.1
+   Compiling autocfg v1.5.0
+   Compiling rustc-hash v2.1.2
+   Compiling bitflags v1.3.2
+   Compiling globwalk v0.8.1
+   Compiling num-traits v0.2.19
+   Compiling tempfile v3.27.0
+   Compiling which v4.4.2
+   Compiling remove_dir_all v0.8.4
+   Compiling strum v0.24.1
+   Compiling cmake v0.1.58
+   Compiling filetime v0.2.29
+   Compiling camino v1.2.2
+   Compiling generic-array v0.14.7
+   Compiling byteorder v1.5.0
+   Compiling embuild v0.33.1
+   Compiling cargo-platform v0.1.9
+   Compiling typenum v1.20.0
+   Compiling cargo_metadata v0.18.1
+   Compiling envy v0.4.2
+   Compiling fnv v1.0.7
+   Compiling ident_case v1.0.1
+   Compiling darling_core v0.21.3
+   Compiling esp-idf-sys v0.37.2
+   Compiling winnow v1.0.3
+   Compiling zerocopy v0.8.48
+   Compiling equivalent v1.0.2
+   Compiling hashbrown v0.17.1
+   Compiling indexmap v2.14.0
+   Compiling toml_parser v1.1.2+spec-1.1.0
+   Compiling darling_macro v0.21.3
+   Compiling block-buffer v0.10.4
+   Compiling crypto-common v0.1.7
+   Compiling hash32 v0.3.1
+   Compiling rustc_version v0.4.1
+   Compiling nb v1.1.0
+   Compiling stable_deref_trait v1.2.1
+   Compiling zerocopy-derive v0.8.48
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling toml_edit v0.25.11+spec-1.1.0
+   Compiling curve25519-dalek v4.1.3
+   Compiling digest v0.10.7
+   Compiling darling v0.21.3
+   Compiling esp-idf-hal v0.46.2
+   Compiling konst_macro_rules v0.2.19
+   Compiling iana-time-zone v0.1.65
+   Compiling heapless v0.9.3
+   Compiling az v1.2.1
+   Compiling embedded-io-async v0.6.1
+   Compiling heapless v0.8.0
+   Compiling unicode-xid v0.2.6
+   Compiling const_format_proc_macros v0.2.34
+   Compiling chrono v0.4.44
+   Compiling konst v0.2.20
+   Compiling enumset_derive v0.15.0
+   Compiling half v2.7.1
+   Compiling proc-macro-crate v3.5.0
+   Compiling embedded-io v0.7.1
+   Compiling signature v2.2.0
+   Compiling embedded-hal v1.0.0
+   Compiling ciborium-io v0.2.2
+   Compiling embedded-io v0.6.1
+   Compiling subtle v2.6.1
+   Compiling embedded-hal-async v1.0.0
+   Compiling heck v0.5.0
+   Compiling embassy-sync v0.7.2
+   Compiling strum_macros v0.27.2
+   Compiling ciborium-ll v0.2.2
+   Compiling ed25519 v2.2.3
+   Compiling embedded-io-async v0.7.0
+   Compiling num_enum_derive v0.7.6
+   Compiling enumset v1.1.12
+   Compiling const_format v0.2.36
+   Compiling build-time v0.1.3
+   Compiling sha2 v0.10.9
+   Compiling nb v0.1.3
+   Compiling esp-idf-svc v0.52.1
+   Compiling uncased v0.9.10
+   Compiling futures-core v0.3.32
+   Compiling void v1.0.2
+   Compiling critical-section v1.2.0
+   Compiling rand_core v0.6.4
+   Compiling futures-sink v0.3.32
+   Compiling ed25519-dalek v2.2.0
+   Compiling embedded-hal v0.2.7
+   Compiling embedded-graphics-core v0.4.1
+   Compiling num_enum v0.7.6
+   Compiling float-cmp v0.9.0
+   Compiling ciborium v0.2.2
+   Compiling strum v0.27.2
+   Compiling embedded-hal-nb v1.0.0
+   Compiling embedded-can v0.4.1
+   Compiling blake3 v1.8.5
+   Compiling atomic-waker v1.1.2
+   Compiling micromath v2.1.0
+   Compiling embedded-graphics v0.8.2
+   Compiling embedded-svc v0.29.0
+   Compiling weftos-leaf-types v0.1.0 (/home/esp/build/crates/weftos-leaf-types)
+   Compiling clawft-edge-pad-idf v0.1.0 (/home/esp/build/crates/clawft-edge-pad-idf)
+   Compiling arrayvec v0.7.6
+   Compiling arrayref v0.3.9
+   Compiling embassy-futures v0.1.2
+   Compiling futures-io v0.3.32
+   Compiling constant_time_eq v0.4.2
+   Compiling weftos-leaf-display v0.1.0 (/home/esp/build/crates/weftos-leaf-display)
+error[E0277]: `?` couldn't convert the error: `DecodeError: std::error::Error` is not satisfied
+  --> src/mesh.rs:80:73
+   |
+80 |         let cert: LeafCertificate = weftos_leaf_types::decode(LEAF_CERT)?;
+   |                                     ------------------------------------^ the trait `std::error::Error` is not implemented for `DecodeError`
+   |                                     |
+   |                                     this has type `Result<_, DecodeError>`
+   |
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+   = note: required for `anyhow::Error` to implement `From<DecodeError>`
+
+error[E0277]: `?` couldn't convert the error: `DecodeError: std::error::Error` is not satisfied
+  --> src/mesh.rs:90:49
+   |
+90 |                 weftos_leaf_types::decode(bytes)?
+   |                 --------------------------------^ the trait `std::error::Error` is not implemented for `DecodeError`
+   |                 |
+   |                 this has type `Result<_, DecodeError>`
+   |
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+   = note: required for `anyhow::Error` to implement `From<DecodeError>`
+
+error[E0277]: `?` couldn't convert the error: `EncodeError: std::error::Error` is not satisfied
+  --> src/mesh.rs:98:53
+   |
+98 |         let bytes = weftos_leaf_types::encode(&next)?;
+   |                     --------------------------------^ the trait `std::error::Error` is not implemented for `EncodeError`
+   |                     |
+   |                     this has type `Result<_, EncodeError>`
+   |
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+   = note: required for `anyhow::Error` to implement `From<EncodeError>`
+
+error[E0277]: `?` couldn't convert the error: `EncodeError: std::error::Error` is not satisfied
+   --> src/mesh.rs:145:70
+    |
+145 |             wire.extend_from_slice(&weftos_leaf_types::encode(&frame)?);
+    |                                     ---------------------------------^ the trait `std::error::Error` is not implemented for `EncodeError`
+    |                                     |
+    |                                     this has type `Result<_, EncodeError>`
+    |
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+    = note: required for `anyhow::Error` to implement `From<EncodeError>`
+
+error[E0277]: `?` couldn't convert the error: `DecodeError: std::error::Error` is not satisfied
+   --> src/mesh.rs:155:90
+    |
+155 |             let ack: PublishAck = weftos_leaf_types::decode(&ack_wire[ACK_MAGIC.len()..])?;
+    |                                   -------------------------------------------------------^ the trait `std::error::Error` is not implemented for `DecodeError`
+    |                                   |
+    |                                   this has type `Result<_, DecodeError>`
+    |
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+    = note: required for `anyhow::Error` to implement `From<DecodeError>`
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `clawft-edge-pad-idf` (bin "clawft-edge-pad-idf") due to 5 previous errors

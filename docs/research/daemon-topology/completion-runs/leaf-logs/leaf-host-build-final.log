@@ -1,0 +1,17 @@
+
+[1m── Building native CLI binary (debug)[0m
+   Compiling clawft-kernel v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-kernel)
+   Compiling clawft-weave v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-weave)
+   Compiling clawft-cli v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-cli)
+   Compiling clawft-services v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-services)
+   Compiling weftos-cog-host v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/weftos-cog-host)
+   Compiling clawft-mesh-service v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-mesh-service)
+   Compiling clawft-service-whisper v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-service-whisper)
+   Compiling clawft-service-classify v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-service-classify)
+   Compiling clawft-service-agent v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-service-agent)
+   Compiling weftos-cog-sources v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/weftos-cog-sources)
+   Compiling clawft-tools v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-tools)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 26.57s
+  [0;36mTIME[0m  27s
+  [0;36mSIZE[0m  Native binary (weft, debug): 68.24 MB ( 71564312 bytes)
+  [0;36mSIZE[0m  Native binary (weave, debug): 141.86 MB ( 148757704 bytes)

@@ -1,0 +1,80 @@
+
+[1m── Running cargo check -p clawft-weave -p clawft-kernel -p clawft-types -p clawft-rpc --tests[0m
+    Checking tokio v1.53.1
+    Checking httpdate v1.0.3
+    Checking rand_chacha v0.3.1
+    Checking clawft-types v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-types)
+    Checking weft-licence v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/weft-licence)
+   Compiling clawft-weave v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-weave)
+    Checking assert-json-diff v2.0.2
+    Checking similar v2.7.0
+    Checking deadpool-runtime v0.1.4
+    Checking console v0.16.3
+    Checking colored v3.1.1
+    Checking rand v0.8.7
+    Checking insta v1.47.0
+    Checking rand_distr v0.4.3
+    Checking instant-distance v0.6.1
+    Checking ruvector-diskann v2.3.2
+    Checking tungstenite v0.24.0
+    Checking tokio-util v0.7.18
+    Checking tokio-rustls v0.26.4
+    Checking tower v0.5.3
+    Checking quinn v0.11.9
+    Checking cognitum-gate-tilezero v0.1.1
+    Checking clawft-mesh-local v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-mesh-local)
+    Checking clawft-service-terminal v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-service-terminal)
+    Checking deadpool v0.12.3
+    Checking tokio-tungstenite v0.24.0
+    Checking tower-http v0.6.8
+    Checking h2 v0.4.19
+    Checking hyper v1.8.1
+    Checking weftos-cog-repo v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/weftos-cog-repo)
+    Checking weftos-cog-market v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/weftos-cog-market)
+    Checking hyper-util v0.1.20
+    Checking hyper-rustls v0.27.7
+    Checking wiremock v0.6.5
+    Checking mockito v1.7.2
+    Checking reqwest v0.12.28
+    Checking ruvector-core v2.3.0
+    Checking clawft-service-llm v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-service-llm)
+    Checking clawft-platform v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-platform)
+    Checking clawft-plugin v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-plugin)
+    Checking clawft-llm v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-llm)
+    Checking clawft-rpc v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-rpc)
+    Checking clawft-services v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-services)
+    Checking clawft-graphify v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-graphify)
+warning: variable does not need to be mutable
+   --> crates/clawft-types/src/config/overlay_tests.rs:240:17
+    |
+240 |             let mut pick = |r: &mut Rng, v: u64| r.some().then_some(v);
+    |                 ----^^^^
+    |                 |
+    |                 help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+    Checking clawft-substrate v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-substrate)
+    Checking clawft-core v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-core)
+warning: `clawft-types` (lib test) generated 1 warning (run `cargo fix --lib -p clawft-types --tests` to apply 1 suggestion)
+    Checking ruvector-replication v2.2.3
+    Checking ruvector-raft v2.2.3
+    Checking ruvector-cluster v2.2.3
+    Checking clawft-kernel v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-kernel)
+    Checking clawft-tools v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-tools)
+    Checking weftos-cog-host v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/weftos-cog-host)
+    Checking clawft-mesh-service v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-mesh-service)
+    Checking clawft-service-whisper v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-service-whisper)
+    Checking clawft-service-classify v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-service-classify)
+    Checking clawft-service-agent v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-service-agent)
+    Checking weftos-cog-sources v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/weftos-cog-sources)
+error[E0609]: no field `pid` on type `ChallengeRequest`
+   --> crates/clawft-weave/src/mesh_local_rpc.rs:107:12
+    |
+107 |     if req.pid == 0 {
+    |            ^^^ unknown field
+    |
+    = note: available field is: `project_id`
+
+For more information about this error, try `rustc --explain E0609`.
+error: could not compile `clawft-weave` (lib) due to 1 previous error

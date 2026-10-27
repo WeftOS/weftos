@@ -1,0 +1,16 @@
+
+[1m── Running cargo check -p clawft-weave -p clawft-kernel -p clawft-types -p clawft-mesh-service[0m
+    Checking weftos-leaf-types v0.1.0 (~/weftos/crates/weftos-leaf-types)
+    Checking clawft-mesh-local v0.8.1 (~/weftos/crates/clawft-mesh-local)
+   Compiling clawft-weave v0.8.1 (~/weftos/crates/clawft-weave)
+    Checking clawft-bvh v0.8.1 (~/weftos/crates/clawft-bvh)
+    Checking clawft-kernel v0.8.1 (~/weftos/crates/clawft-kernel)
+    Checking weftos-cog-host v0.8.1 (~/weftos/crates/weftos-cog-host)
+    Checking clawft-service-agent v0.8.1 (~/weftos/crates/clawft-service-agent)
+    Checking clawft-mesh-service v0.8.1 (~/weftos/crates/clawft-mesh-service)
+    Checking clawft-service-whisper v0.8.1 (~/weftos/crates/clawft-service-whisper)
+    Checking clawft-service-classify v0.8.1 (~/weftos/crates/clawft-service-classify)
+    Checking weftos-cog-sources v0.8.1 (~/weftos/crates/weftos-cog-sources)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 39s
+  [0;36mTIME[0m  1m 39s
+COMBINED_CHECK_EXIT=0

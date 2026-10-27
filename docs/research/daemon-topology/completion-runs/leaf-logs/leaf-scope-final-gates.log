@@ -1,0 +1,64 @@
+
+[1m── Running cargo check -p clawft-kernel -p clawft-mesh-service -p clawft-weave[0m
+    Checking clawft-kernel v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-kernel)
+   Compiling clawft-weave v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-weave)
+    Checking weftos-cog-host v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/weftos-cog-host)
+    Checking clawft-service-whisper v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-service-whisper)
+    Checking clawft-service-agent v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-service-agent)
+    Checking clawft-mesh-service v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-mesh-service)
+    Checking clawft-service-classify v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-service-classify)
+    Checking weftos-cog-sources v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/weftos-cog-sources)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 14s
+  [0;36mTIME[0m  1m 15s
+CHECK_EXIT=0
+
+[1m── Running cargo nextest run (clawft-kernel) (+ doctests)[0m
+info: experimental features enabled: wrapper-scripts
+   Compiling clawft-kernel v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 14s
+────────────
+ Nextest run ID d78d98ca-b91b-4970-bbc3-64cb3b5b1e85 with nextest profile: default
+    Starting 1 test across 10 binaries (3538 tests skipped)
+        PASS [   0.046s] (1/1) clawft-kernel mesh_leaf::tests::scope_chain_rejects_another_users_scope_and_requires_project_issuer_proof
+────────────
+     Summary [   0.048s] 1 test run: 1 passed, 3538 skipped
+  [0;36mTIME[0m  1m 18s
+SCOPE_TEST_EXIT=0
+
+[1m── Running cargo nextest run (clawft-kernel) (+ doctests)[0m
+info: experimental features enabled: wrapper-scripts
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.40s
+────────────
+ Nextest run ID 23f1d961-a378-4500-a1a2-14b4c89eaf33 with nextest profile: default
+    Starting 3 tests across 10 binaries (3536 tests skipped)
+        PASS [   0.036s] (1/3) clawft-kernel mesh_serve::serve_tests::certified_leaf_listener_rejects_unsigned_first_frame
+        PASS [   0.059s] (2/3) clawft-kernel mesh_serve::serve_tests::certified_leaf_publish_replay_is_suppressed_after_committed_floor
+        PASS [   0.064s] (3/3) clawft-kernel mesh_serve::serve_tests::certified_leaf_duplicate_subscribe_restores_route_after_restart
+────────────
+     Summary [   0.067s] 3 tests run: 3 passed, 3536 skipped
+  [0;36mTIME[0m  2s
+LEAF_TEST_EXIT=0
+
+[1m── Running clippy (warnings as errors) -p weftos-leaf-types -p clawft-kernel -p clawft-mesh-service -p clawft-weave --no-deps[0m
+    Checking clawft-kernel v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-kernel)
+   Compiling clawft-weave v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-weave)
+error: very complex type used. Consider factoring parts into `type` definitions
+   --> crates/clawft-kernel/src/mesh_leaf.rs:148:22
+    |
+148 |     scope_authority: Option<std::sync::Arc<dyn Fn(&str, &[u8; 32]) -> bool + Send + Sync>>,
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#type_complexity
+    = note: `-D clippy::type-complexity` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::type_complexity)]`
+
+error: very complex type used. Consider factoring parts into `type` definitions
+   --> crates/clawft-kernel/src/mesh_leaf.rs:168:54
+    |
+168 |     pub fn with_scope_authority(mut self, authority: std::sync::Arc<dyn Fn(&str, &[u8; 32]) -> bool + Send + Sync>) -> Self {
+    |                                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#type_complexity
+
+error: could not compile `clawft-kernel` (lib) due to 2 previous errors
+CLIPPY_EXIT=101

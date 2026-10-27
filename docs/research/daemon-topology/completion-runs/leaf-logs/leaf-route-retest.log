@@ -1,0 +1,8 @@
+
+[1m── Running cargo nextest run (clawft-kernel) (+ doctests)[0m
+info: syncing channel updates for 1.95-aarch64-apple-darwin
+error: could not download file from 'https://static.rust-lang.org/dist/channel-rust-1.95.toml.sha256' to '~/.codex/worktrees/leaf-finish/weftos/.leaf-test-home/.rustup/tmp/l_2teecokf7t2gv8_file': error downloading file: error sending request for url (https://static.rust-lang.org/dist/channel-rust-1.95.toml.sha256): client error (Connect): dns error: failed to lookup address information: nodename nor servname provided, or not known
+info: syncing channel updates for 1.95-aarch64-apple-darwin
+error: could not download file from 'https://static.rust-lang.org/dist/channel-rust-1.95.toml.sha256' to '~/.codex/worktrees/leaf-finish/weftos/.leaf-test-home/.rustup/tmp/di73ldg9jcvu0ik4_file': error downloading file: error sending request for url (https://static.rust-lang.org/dist/channel-rust-1.95.toml.sha256): client error (Connect): dns error: failed to lookup address information: nodename nor servname provided, or not known
+info: syncing channel updates for 1.95-aarch64-apple-darwin
+error: could not download file from 'https://static.rust-lang.org/dist/channel-rust-1.95.toml.sha256' to '~/.codex/worktrees/leaf-finish/weftos/.leaf-test-home/.rustup/tmp/3pl4um196ve7tsas_file': error downloading file: error sending request for url (https://static.rust-lang.org/dist/channel-rust-1.95.toml.sha256): client error (Connect): dns error: failed to lookup address information: nodename nor servname provided, or not known

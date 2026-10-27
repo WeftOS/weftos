@@ -1,0 +1,5 @@
+
+[1m── Running cargo check -p clawft-types -p clawft-weave[0m
+   Compiling clawft-weave v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/clawft-weave)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 15.49s
+  [0;36mTIME[0m  15s

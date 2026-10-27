@@ -1,0 +1,109 @@
+
+[1m── Running cargo nextest run (weftos-leaf-types) (+ doctests)[0m
+info: experimental features enabled: wrapper-scripts
+   Compiling cfg-if v1.0.4
+   Compiling libc v0.2.189
+   Compiling serde_core v1.0.228
+   Compiling serde v1.0.228
+   Compiling ciborium-io v0.2.2
+   Compiling subtle v2.6.1
+   Compiling signature v2.2.0
+   Compiling typenum v1.19.0
+   Compiling curve25519-dalek v4.1.3
+   Compiling syn v2.0.116
+   Compiling ed25519 v2.2.3
+   Compiling generic-array v0.14.7
+   Compiling zerocopy-derive v0.8.39
+   Compiling serde_derive v1.0.228
+   Compiling cpufeatures v0.2.17
+   Compiling crypto-common v0.1.7
+   Compiling block-buffer v0.10.4
+   Compiling zerocopy v0.8.39
+   Compiling digest v0.10.7
+   Compiling sha2 v0.10.9
+   Compiling ed25519-dalek v2.2.0
+   Compiling half v2.7.1
+   Compiling ciborium-ll v0.2.2
+   Compiling ciborium v0.2.2
+   Compiling weftos-leaf-types v0.1.0 (~/.codex/worktrees/leaf-finish/weftos/crates/weftos-leaf-types)
+error: cannot find macro `vec` in this scope
+   --> crates/weftos-leaf-types/src/link.rs:371:41
+    |
+371 |         q.enqueue(&cert, &leaf, target, vec![2]).unwrap();
+    |                                         ^^^
+    |
+help: consider importing this macro
+    |
+329 +     use alloc::vec;
+    |
+
+error: cannot find macro `vec` in this scope
+   --> crates/weftos-leaf-types/src/link.rs:370:61
+    |
+370 |         let first = q.enqueue(&cert, &leaf, target.clone(), vec![1]).unwrap().clone();
+    |                                                             ^^^
+    |
+help: consider importing this macro
+    |
+329 +     use alloc::vec;
+    |
+
+error: cannot find macro `vec` in this scope
+   --> crates/weftos-leaf-types/src/link.rs:367:152
+    |
+367 | ...ey().to_bytes(), leaf.verifying_key().to_bytes(), 1, 1, 1000, vec!["input.publish".into()]).unwrap();
+    |                                                                  ^^^
+    |
+help: consider importing this macro
+    |
+329 +     use alloc::vec;
+    |
+
+error: cannot find macro `vec` in this scope
+   --> crates/weftos-leaf-types/src/link.rs:353:85
+    |
+353 |         assert_eq!(SignedPublish::sign(no_cap_cert, &leaf, 1, frame.target.clone(), vec![1]), Err(LinkError::MissingCapability));
+    |                                                                                     ^^^
+    |
+help: consider importing this macro
+    |
+329 +     use alloc::vec;
+    |
+
+error: cannot find macro `vec` in this scope
+   --> crates/weftos-leaf-types/src/link.rs:352:160
+    |
+352 | ...y().to_bytes(), leaf.verifying_key().to_bytes(), 4, 100, 200, vec![]).unwrap();
+    |                                                                  ^^^
+    |
+help: consider importing this macro
+    |
+329 +     use alloc::vec;
+    |
+
+error: cannot find macro `vec` in this scope
+   --> crates/weftos-leaf-types/src/link.rs:335:145
+    |
+335 | ...{}/sensor/touch", node_id(&leaf.verifying_key().to_bytes())), vec![1,2,3]).unwrap();
+    |                                                                  ^^^
+    |
+help: consider importing this macro
+    |
+329 +     use alloc::vec;
+    |
+
+error: cannot find macro `vec` in this scope
+   --> crates/weftos-leaf-types/src/link.rs:334:153
+    |
+334 | ...y().to_bytes(), leaf.verifying_key().to_bytes(), 3, 100, 200, vec!["substrate.publish".into()]).unwrap();
+    |                                                                  ^^^
+    |
+help: consider importing this macro
+    |
+329 +     use alloc::vec;
+    |
+
+error: could not compile `weftos-leaf-types` (lib test) due to 7 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: command `~/.rustup/toolchains/1.95-aarch64-apple-darwin/bin/cargo test --no-run --message-format json-render-diagnostics --package weftos-leaf-types` exited with code 101
+EXIT=101

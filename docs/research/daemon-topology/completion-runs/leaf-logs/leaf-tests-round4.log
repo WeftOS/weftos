@@ -1,0 +1,115 @@
+
+[1m── Running cargo nextest run (weftos-leaf-types) (+ doctests)[0m
+info: experimental features enabled: wrapper-scripts
+   Compiling weftos-leaf-types v0.1.0 (~/.codex/worktrees/leaf-finish/weftos/crates/weftos-leaf-types)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.12s
+────────────
+ Nextest run ID 1decf737-ef8d-4b26-b1dc-d70a9a23b35a with nextest profile: default
+    Starting 42 tests across 1 binary
+        PASS [   0.065s] ( 1/42) weftos-leaf-types spatial::primitives::tests::roundtrip_splat_yardstick
+        PASS [   0.065s] ( 2/42) weftos-leaf-types spatial::primitives::tests::roundtrip_radial_sphere_event
+        PASS [   0.069s] ( 3/42) weftos-leaf-types spatial::primitives::tests::roundtrip_obb
+        PASS [   0.070s] ( 4/42) weftos-leaf-types link::tests::discovery_requires_pin_scope_and_freshness
+        PASS [   0.070s] ( 5/42) weftos-leaf-types link::tests::certified_publish_and_ack_bind_every_field
+        PASS [   0.070s] ( 6/42) weftos-leaf-types link::tests::offline_queue_preserves_sequences_and_accepts_only_signed_oldest_ack
+        PASS [   0.071s] ( 7/42) weftos-leaf-types spatial::primitives::tests::legacy_sphere_without_vector_field_decodes
+        PASS [   0.071s] ( 8/42) weftos-leaf-types spatial::primitives::tests::roundtrip_wm_affordance
+        PASS [   0.075s] ( 9/42) weftos-leaf-types spatial::primitives::tests::roundtrip_aabb
+        PASS [   0.077s] (10/42) weftos-leaf-types spatial::primitives::tests::roundtrip_swept_aabb
+        PASS [   0.076s] (11/42) weftos-leaf-types spatial::primitives::tests::roundtrip_frustum
+        PASS [   0.079s] (12/42) weftos-leaf-types link::tests::parent_scope_requires_canonical_user_and_project_address
+        PASS [   0.079s] (13/42) weftos-leaf-types spatial::primitives::tests::roundtrip_splat_camera
+        PASS [   0.080s] (14/42) weftos-leaf-types spatial::primitives::tests::roundtrip_beam_trace
+        PASS [   0.081s] (15/42) weftos-leaf-types spatial::primitives::tests::roundtrip_splat_scene
+        PASS [   0.082s] (16/42) weftos-leaf-types spatial::primitives::tests::roundtrip_sensor_read_4d
+        PASS [   0.082s] (17/42) weftos-leaf-types spatial::primitives::tests::roundtrip_capsule
+        PASS [   0.084s] (18/42) weftos-leaf-types spatial::primitives::tests::roundtrip_sphere
+        PASS [   0.044s] (19/42) weftos-leaf-types spatial::tags::tests::all_tags_unique_discriminants
+        PASS [   0.046s] (20/42) weftos-leaf-types spatial::primitives::tests::roundtrip_wm_surface
+        PASS [   0.051s] (21/42) weftos-leaf-types spatial::primitives::tests::roundtrip_wm_object
+        PASS [   0.048s] (22/42) weftos-leaf-types spatial::primitives::tests::roundtrip_wm_volume
+        PASS [   0.048s] (23/42) weftos-leaf-types spatial::primitives::tests::roundtrip_wm_sensor_fov
+        PASS [   0.046s] (24/42) weftos-leaf-types spatial::tags::tests::tag_discriminants_stable_snapshot
+        PASS [   0.057s] (25/42) weftos-leaf-types spatial::primitives::tests::roundtrip_wm_segment
+        PASS [   0.054s] (26/42) weftos-leaf-types spatial::tags::tests::tag_cbor_roundtrip_as_u32
+        PASS [   0.057s] (27/42) weftos-leaf-types spatial::primitives::tests::wm_object_vector_ref_roundtrip
+        PASS [   0.046s] (28/42) weftos-leaf-types tests::roundtrip_chord
+        PASS [   0.053s] (29/42) weftos-leaf-types spatial::tags::tests::unknown_tag_rejected
+        PASS [   0.048s] (30/42) weftos-leaf-types tests::roundtrip_brightness
+        PASS [   0.053s] (31/42) weftos-leaf-types spatial::vector_ref::tests::option_none_is_default_serde
+        PASS [   0.049s] (32/42) weftos-leaf-types tests::is_push_and_announce_topic_predicates
+        PASS [   0.051s] (33/42) weftos-leaf-types spatial::vector_ref::tests::vector_ref_roundtrip
+        PASS [   0.044s] (34/42) weftos-leaf-types tests::roundtrip_display_text
+        PASS [   0.049s] (35/42) weftos-leaf-types tests::roundtrip_display_clear
+        PASS [   0.049s] (36/42) weftos-leaf-types tests::roundtrip_display_image
+        PASS [   0.036s] (37/42) weftos-leaf-types tests::roundtrip_layer_effect
+        PASS [   0.035s] (38/42) weftos-leaf-types tests::roundtrip_pcm
+        PASS [   0.033s] (39/42) weftos-leaf-types tests::roundtrip_subscribe
+        PASS [   0.034s] (40/42) weftos-leaf-types tests::roundtrip_scuttle
+        PASS [   0.035s] (41/42) weftos-leaf-types tests::roundtrip_leaf_services
+        PASS [   0.032s] (42/42) weftos-leaf-types tests::topic_construction
+────────────
+     Summary [   0.154s] 42 tests run: 42 passed, 0 skipped
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.29s
+   Doc-tests weftos_leaf_types
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+  [0;36mTIME[0m  4s
+
+[1m── Running cargo nextest run (clawft-kernel) (+ doctests)[0m
+info: experimental features enabled: wrapper-scripts
+   Compiling weftos-leaf-types v0.1.0 (~/.codex/worktrees/leaf-finish/weftos/crates/weftos-leaf-types)
+   Compiling clawft-bvh v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-bvh)
+   Compiling clawft-kernel v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 47.96s
+────────────
+ Nextest run ID ab189713-760b-45db-b489-799f5ef72297 with nextest profile: default
+    Starting 2 tests across 10 binaries (3535 tests skipped)
+        FAIL [   5.443s] (1/2) clawft-kernel mesh_serve::serve_tests::certified_leaf_duplicate_subscribe_restores_route_after_restart
+  stdout ───
+
+    running 1 test
+    test mesh_serve::serve_tests::certified_leaf_duplicate_subscribe_restores_route_after_restart ... FAILED
+
+    failures:
+
+    failures:
+        mesh_serve::serve_tests::certified_leaf_duplicate_subscribe_restores_route_after_restart
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3459 filtered out; finished in 0.01s
+
+  stderr ───
+
+    thread 'mesh_serve::serve_tests::certified_leaf_duplicate_subscribe_restores_route_after_restart' (83537986) panicked at crates/clawft-kernel/src/mesh_serve_tests.rs:87:71:
+    called `Result::unwrap()` on an `Err` value: Io("Operation not permitted (os error 1)")
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+  Cancelling due to test failure: 1 test still running
+        FAIL [   5.449s] (2/2) clawft-kernel mesh_serve::serve_tests::certified_leaf_publish_replay_is_suppressed_after_committed_floor
+  stdout ───
+
+    running 1 test
+    test mesh_serve::serve_tests::certified_leaf_publish_replay_is_suppressed_after_committed_floor ... FAILED
+
+    failures:
+
+    failures:
+        mesh_serve::serve_tests::certified_leaf_publish_replay_is_suppressed_after_committed_floor
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3459 filtered out; finished in 0.01s
+
+  stderr ───
+
+    thread 'mesh_serve::serve_tests::certified_leaf_publish_replay_is_suppressed_after_committed_floor' (83537985) panicked at crates/clawft-kernel/src/mesh_serve_tests.rs:87:71:
+    called `Result::unwrap()` on an `Err` value: Io("Operation not permitted (os error 1)")
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+────────────
+     Summary [   5.454s] 2 tests run: 0 passed, 2 failed, 3535 skipped
+        FAIL [   5.443s] (1/2) clawft-kernel mesh_serve::serve_tests::certified_leaf_duplicate_subscribe_restores_route_after_restart
+        FAIL [   5.449s] (2/2) clawft-kernel mesh_serve::serve_tests::certified_leaf_publish_replay_is_suppressed_after_committed_floor
+error: test run failed
+EXIT=100

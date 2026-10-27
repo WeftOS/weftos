@@ -1,0 +1,10 @@
+
+[1m── Building native CLI binary (debug)[0m
+   Compiling clawft-service-classify v0.8.1 (~/weftos/crates/clawft-service-classify)
+   Compiling clawft-service-whisper v0.8.1 (~/weftos/crates/clawft-service-whisper)
+   Compiling weftos-cog-sources v0.8.1 (~/weftos/crates/weftos-cog-sources)
+   Compiling clawft-tools v0.8.1 (~/weftos/crates/clawft-tools)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2m 09s
+  [0;36mTIME[0m  2m 10s
+  [0;36mSIZE[0m  Native binary (weft, debug): 68.11 MB ( 71422952 bytes)
+  [0;36mSIZE[0m  Native binary (weave, debug): 146.52 MB ( 153638520 bytes)

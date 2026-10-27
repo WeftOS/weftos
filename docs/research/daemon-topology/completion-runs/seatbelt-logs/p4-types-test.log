@@ -1,0 +1,22 @@
+
+[1m── Running cargo nextest run (clawft-types) (+ doctests)[0m
+   Compiling clawft-types v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/clawft-types)
+warning: variable does not need to be mutable
+   --> crates/clawft-types/src/config/overlay_tests.rs:240:17
+    |
+240 |             let mut pick = |r: &mut Rng, v: u64| r.some().then_some(v);
+    |                 ----^^^^
+    |                 |
+    |                 help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `clawft-types` (lib test) generated 1 warning (run `cargo fix --lib -p clawft-types --tests` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.67s
+────────────
+ Nextest run ID 5f7ff30b-9699-457b-b808-cae78d9e23b2 with nextest profile: default
+    Starting 1 test across 4 binaries (629 tests skipped)
+        PASS [   0.088s] (1/1) clawft-types project::tests::nested_registration_rejects_wrong_identity_before_store_write
+────────────
+     Summary [   0.089s] 1 test run: 1 passed, 629 skipped
+  [0;36mTIME[0m  26s

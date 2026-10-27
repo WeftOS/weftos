@@ -1,0 +1,258 @@
+
+[1m── Running cargo check -p weftos-leaf-types -p clawft-kernel -p clawft-mesh-service -p clawft-weave[0m
+    Checking weftos-leaf-types v0.1.0 (~/.codex/worktrees/leaf-finish/weftos/crates/weftos-leaf-types)
+   Compiling clawft-weave v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-weave)
+    Checking clawft-bvh v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-bvh)
+    Checking clawft-kernel v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-kernel)
+    Checking weftos-cog-host v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/weftos-cog-host)
+    Checking clawft-service-whisper v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-service-whisper)
+    Checking clawft-service-classify v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-service-classify)
+    Checking clawft-mesh-service v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-mesh-service)
+    Checking clawft-service-agent v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-service-agent)
+    Checking weftos-cog-sources v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/weftos-cog-sources)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 33.55s
+  [0;36mTIME[0m  34s
+
+[1m── Running clippy (warnings as errors) -p weftos-leaf-types -p clawft-kernel -p clawft-mesh-service -p clawft-weave --no-deps[0m
+    Checking clawft-types v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-types)
+    Checking eml-core v0.1.0 (~/.codex/worktrees/leaf-finish/weftos/crates/eml-core)
+    Checking clawft-cow-memory v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-cow-memory)
+    Checking clawft-service-llm v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-service-llm)
+    Checking clawft-app v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-app)
+    Checking weftos-leaf-types v0.1.0 (~/.codex/worktrees/leaf-finish/weftos/crates/weftos-leaf-types)
+    Checking clawft-treecalc v0.1.0 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-treecalc)
+    Checking exo-resource-tree v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/exo-resource-tree)
+    Checking weft-licence-wire v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/weft-licence-wire)
+    Checking clawft-mesh-local v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-mesh-local)
+   Compiling clawft-weave v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-weave)
+    Checking clawft-service-terminal v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-service-terminal)
+    Checking clawft-graphify v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-graphify)
+error: this function has too many arguments (8/7)
+   --> crates/weftos-leaf-types/src/link.rs:100:5
+    |
+100 | /     pub fn issue(
+101 | |         parent: &SigningKey,
+102 | |         parent_scope: String,
+103 | |         mesh_pubkey: [u8; 32],
+...   |
+108 | |         capabilities: Vec<String>,
+109 | |     ) -> Result<Self, LinkError> {
+    | |________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#too_many_arguments
+    = note: `-D clippy::too-many-arguments` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::too_many_arguments)]`
+
+error: could not compile `weftos-leaf-types` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+    Checking clawft-plugin v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-plugin)
+    Checking clawft-llm v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-llm)
+    Checking clawft-platform v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-platform)
+    Checking clawft-rpc v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-rpc)
+    Checking weftos-cog-repo v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/weftos-cog-repo)
+    Checking clawft-services v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-services)
+    Checking weftos-cog-market v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/weftos-cog-market)
+    Checking clawft-substrate v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-substrate)
+    Checking clawft-core v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-core)
+    Checking clawft-tools v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-tools)
+
+[1m── Building native CLI binary (debug)[0m
+   Compiling serde_core v1.0.228
+   Compiling serde v1.0.228
+   Compiling tracing-core v0.1.36
+   Compiling serde_json v1.0.149
+   Compiling rustls v0.23.45
+   Compiling foldhash v0.2.0
+   Compiling base64ct v1.8.3
+   Compiling const-oid v0.9.6
+   Compiling regex-automata v0.4.14
+   Compiling http-range-header v0.4.2
+   Compiling anstream v0.6.21
+   Compiling num-integer v0.1.46
+   Compiling num-complex v0.4.6
+   Compiling jiff v0.2.24
+   Compiling half v2.7.1
+   Compiling ahash v0.8.12
+   Compiling bytemuck v1.25.0
+   Compiling multer v3.1.0
+   Compiling tungstenite v0.28.0
+   Compiling encoding_rs v0.8.35
+   Compiling oxiri v0.2.11
+   Compiling pem-rfc7468 v0.7.0
+   Compiling spin v0.9.9
+   Compiling tracing v0.1.44
+   Compiling oxilangtag v0.1.6
+   Compiling axum-macros v0.5.0
+   Compiling headers-core v0.3.0
+   Compiling ciborium-ll v0.2.2
+   Compiling rustix v1.1.4
+   Compiling matchit v0.8.4
+   Compiling winnow v0.6.26
+   Compiling unicode-width v0.2.2
+   Compiling quick-xml v0.37.5
+   Compiling oxrdf v0.3.3
+   Compiling der v0.7.10
+   Compiling headers v0.4.1
+   Compiling quinn-udp v0.5.14
+   Compiling axum-core v0.5.6
+   Compiling json-event-parser v0.2.3
+   Compiling clap_lex v1.0.0
+   Compiling ryu-js v1.0.3
+   Compiling tracing-log v0.2.0
+   Compiling regex v1.12.3
+   Compiling bstr v1.12.3
+   Compiling bitflags v2.11.0
+   Compiling hashbrown v0.17.1
+   Compiling uuid v1.21.0
+   Compiling semver v1.0.27
+   Compiling monostate v0.1.18
+   Compiling env_filter v1.0.0
+   Compiling tungstenite v0.24.0
+   Compiling fancy-regex v0.13.0
+   Compiling fancy-regex v0.14.0
+   Compiling quinn-proto v0.11.15
+   Compiling serde_path_to_error v0.1.20
+   Compiling spki v0.7.3
+   Compiling oxrdfxml v0.2.3
+   Compiling oxjsonld v0.2.5
+   Compiling oxttl v0.2.3
+   Compiling clap_builder v4.5.59
+   Compiling pkcs8 v0.10.2
+   Compiling nix v0.30.1
+   Compiling sysctl v0.6.0
+   Compiling env_logger v0.11.9
+   Compiling notify-types v2.1.0
+   Compiling rustix v0.38.44
+   Compiling anndists v0.1.4
+   Compiling smallvec v1.15.1
+   Compiling ed25519 v2.2.3
+   Compiling serde_urlencoded v0.7.1
+   Compiling chrono v0.4.43
+   Compiling serde_spanned v0.6.9
+   Compiling toml_datetime v0.6.11
+   Compiling hex v0.4.3
+   Compiling indexmap v2.14.0
+   Compiling bincode v2.0.1
+   Compiling bincode v1.3.3
+   Compiling rkyv v0.8.18
+   Compiling ndarray v0.16.1
+   Compiling ciborium v0.2.2
+   Compiling ed25519-dalek v2.2.0
+   Compiling eml-core v0.1.0 (~/.codex/worktrees/leaf-finish/weftos/crates/eml-core)
+   Compiling parking_lot_core v0.9.12
+   Compiling icu_normalizer v2.1.1
+   Compiling unicode-normalization-alignments v0.1.12
+   Compiling mmap-rs v0.7.0
+   Compiling compact_str v0.9.1
+   Compiling spm_precompiled v0.1.4
+   Compiling dary_heap v0.3.9
+   Compiling toml_edit v0.22.27
+   Compiling serde_yaml v0.9.34+deprecated
+   Compiling clawft-cow-memory v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-cow-memory)
+   Compiling notify v8.2.0
+   Compiling cron v0.15.0
+   Compiling nix v0.28.0
+   Compiling matchers v0.2.0
+   Compiling parking_lot v0.12.5
+   Compiling dashmap v6.1.0
+   Compiling weftos-leaf-types v0.1.0 (~/.codex/worktrees/leaf-finish/weftos/crates/weftos-leaf-types)
+   Compiling exo-resource-tree v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/exo-resource-tree)
+   Compiling idna_adapter v1.2.1
+   Compiling weftos-rvf-crypto v0.3.0
+   Compiling idna v1.1.0
+   Compiling weft-licence-wire v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/weft-licence-wire)
+   Compiling sharded-slab v0.1.7
+   Compiling tokio v1.53.1
+   Compiling tiktoken-rs v0.6.0
+   Compiling instant-distance v0.6.1
+   Compiling url v2.5.8
+   Compiling hnsw_rs v0.3.4
+   Compiling tokenizers v0.21.4
+   Compiling ruvector-diskann v2.3.2
+   Compiling crossterm v0.28.1
+   Compiling filedescriptor v0.8.3
+   Compiling serial2 v0.2.37
+   Compiling clawft-bvh v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-bvh)
+   Compiling thread_local v1.1.9
+   Compiling toml v0.8.23
+   Compiling adler2 v2.0.1
+   Compiling shell-words v1.1.1
+   Compiling fixedbitset v0.5.7
+   Compiling nu-ansi-term v0.50.3
+   Compiling downcast-rs v1.2.1
+   Compiling strength_reduce v0.2.4
+   Compiling simd-adler32 v0.3.9
+   Compiling clap v4.5.59
+   Compiling petgraph v0.7.1
+   Compiling weftos-leaf-scene v0.1.0 (~/.codex/worktrees/leaf-finish/weftos/crates/weftos-leaf-scene)
+   Compiling oxrdfio v0.2.5
+   Compiling portable-pty v0.9.0
+   Compiling comfy-table v7.1.4
+   Compiling miniz_oxide v0.8.9
+   Compiling transpose v0.2.3
+   Compiling primal-check v0.3.4
+   Compiling filetime v0.2.29
+   Compiling clawft-types v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-types)
+   Compiling clawft-app v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-app)
+   Compiling tracing-subscriber v0.3.22
+   Compiling pulldown-cmark v0.12.2
+   Compiling tempfile v3.25.0
+   Compiling rustfft v6.4.1
+   Compiling clawft-weave v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-weave)
+   Compiling tar v0.4.46
+   Compiling nix v0.29.0
+   Compiling getopts v0.2.24
+   Compiling pulldown-cmark-escape v0.11.0
+   Compiling dotenvy v0.15.7
+   Compiling env_home v0.1.0
+   Compiling clawft-cli v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-cli)
+   Compiling which v7.0.3
+   Compiling clawft-security v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-security)
+   Compiling rpassword v5.0.1
+   Compiling flate2 v1.1.9
+   Compiling weftos-scene-builder v0.1.0 (~/.codex/worktrees/leaf-finish/weftos/crates/weftos-scene-builder)
+   Compiling hyper v1.8.1
+   Compiling tower v0.5.3
+   Compiling tokio-rustls v0.26.4
+   Compiling tokio-util v0.7.18
+   Compiling cognitum-gate-tilezero v0.1.1
+   Compiling quinn v0.11.9
+   Compiling tokio-tungstenite v0.28.0
+   Compiling clawft-mesh-local v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-mesh-local)
+   Compiling clawft-service-terminal v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-service-terminal)
+   Compiling tokio-tungstenite v0.24.0
+   Compiling tower-http v0.6.8
+   Compiling hyper-util v0.1.20
+   Compiling hyper-rustls v0.27.7
+   Compiling axum v0.8.8
+   Compiling reqwest v0.12.28
+   Compiling ruvector-core v2.3.0
+   Compiling clawft-platform v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-platform)
+   Compiling clawft-plugin v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-plugin)
+   Compiling clawft-service-llm v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-service-llm)
+   Compiling clawft-rpc v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-rpc)
+   Compiling clawft-llm v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-llm)
+   Compiling weftos-cog-repo v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/weftos-cog-repo)
+   Compiling clawft-graphify v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-graphify)
+   Compiling weftos-cog-market v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/weftos-cog-market)
+   Compiling clawft-channels v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-channels)
+   Compiling clawft-substrate v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-substrate)
+   Compiling clawft-core v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-core)
+   Compiling axum-extra v0.10.3
+   Compiling ruvector-raft v2.2.3
+   Compiling ruvector-replication v2.2.3
+   Compiling ruvector-cluster v2.2.3
+   Compiling clawft-kernel v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-kernel)
+   Compiling clawft-services v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-services)
+   Compiling weftos-cog-host v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/weftos-cog-host)
+   Compiling clawft-mesh-service v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-mesh-service)
+   Compiling clawft-service-classify v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-service-classify)
+   Compiling clawft-service-agent v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-service-agent)
+   Compiling clawft-service-whisper v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-service-whisper)
+   Compiling weftos-cog-sources v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/weftos-cog-sources)
+   Compiling clawft-tools v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-tools)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3m 00s
+  [0;36mTIME[0m  3m 1s
+  [0;36mSIZE[0m  Native binary (weft, debug): 68.25 MB ( 71565416 bytes)
+  [0;36mSIZE[0m  Native binary (weave, debug): 141.86 MB ( 148756712 bytes)
+CHECK_EXIT=0 CLIPPY_EXIT=101 BUILD_EXIT=0

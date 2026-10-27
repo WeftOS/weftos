@@ -1,0 +1,52 @@
+
+[1m── Running cargo nextest run (clawft-mesh-service) (+ doctests)[0m
+info: experimental features enabled: wrapper-scripts
+warning: unused import: `std::sync::Arc`
+  --> crates/clawft-kernel/src/environment.rs:17:5
+   |
+17 | use std::sync::Arc;
+   |     ^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `std::sync::Arc`
+ --> crates/clawft-kernel/src/auth_service.rs:7:5
+  |
+7 | use std::sync::Arc;
+  |     ^^^^^^^^^^^^^^
+
+warning: unused variable: `cred_type_for_chain`
+   --> crates/clawft-kernel/src/auth_service.rs:300:13
+    |
+300 |         let cred_type_for_chain = credential_type.to_string();
+    |             ^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_cred_type_for_chain`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `inherit_config` is never used
+    --> crates/clawft-kernel/src/governance.rs:1175:19
+     |
+1076 | impl GovernanceEngine {
+     | --------------------- method in this implementation
+...
+1175 |     pub(crate) fn inherit_config(&mut self, old: &GovernanceEngine) {
+     |                   ^^^^^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `clawft-kernel` (lib) generated 4 warnings (run `cargo fix --lib -p clawft-kernel` to apply 3 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s
+────────────
+ Nextest run ID 0a5b18b3-2989-40ef-a697-0ffb94cb6a37 with nextest profile: default
+    Starting 1 test across 9 binaries (165 tests skipped)
+        PASS [   0.026s] (1/1) clawft-mesh-service handlers::project_claim_tests::project_address_claim_binds_user_project_and_key
+────────────
+     Summary [   0.026s] 1 test run: 1 passed, 165 skipped
+  [0;36mTIME[0m  1s
+CLAIM_SIGNATURE_TEST_EXIT=0
+
+[1m── Running clippy (warnings as errors) -p weftos-leaf-types -p clawft-mesh-local -p clawft-kernel -p clawft-mesh-service -p clawft-weave --no-deps[0m
+   Compiling clawft-weave v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-weave)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 17.60s
+  [0;36mTIME[0m  18s
+CLIPPY_EXIT=0

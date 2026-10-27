@@ -1,0 +1,298 @@
+info: experimental features enabled: wrapper-scripts
+   Compiling clawft-types v0.8.1 (~/weftos/crates/clawft-types)
+   Compiling clawft-graphify v0.8.1 (~/weftos/crates/clawft-graphify)
+   Compiling clawft-weave v0.8.1 (~/weftos/crates/clawft-weave)
+   Compiling clawft-platform v0.8.1 (~/weftos/crates/clawft-platform)
+   Compiling clawft-plugin v0.8.1 (~/weftos/crates/clawft-plugin)
+   Compiling clawft-llm v0.8.1 (~/weftos/crates/clawft-llm)
+   Compiling clawft-rpc v0.8.1 (~/weftos/crates/clawft-rpc)
+   Compiling weftos-cog-repo v0.8.1 (~/weftos/crates/weftos-cog-repo)
+   Compiling clawft-services v0.8.1 (~/weftos/crates/clawft-services)
+   Compiling weftos-cog-market v0.8.1 (~/weftos/crates/weftos-cog-market)
+   Compiling clawft-substrate v0.8.1 (~/weftos/crates/clawft-substrate)
+   Compiling clawft-core v0.8.1 (~/weftos/crates/clawft-core)
+   Compiling clawft-kernel v0.8.1 (~/weftos/crates/clawft-kernel)
+   Compiling clawft-tools v0.8.1 (~/weftos/crates/clawft-tools)
+   Compiling weftos-cog-host v0.8.1 (~/weftos/crates/weftos-cog-host)
+   Compiling clawft-service-agent v0.8.1 (~/weftos/crates/clawft-service-agent)
+   Compiling clawft-mesh-service v0.8.1 (~/weftos/crates/clawft-mesh-service)
+   Compiling clawft-service-classify v0.8.1 (~/weftos/crates/clawft-service-classify)
+   Compiling clawft-service-whisper v0.8.1 (~/weftos/crates/clawft-service-whisper)
+   Compiling weftos-cog-sources v0.8.1 (~/weftos/crates/weftos-cog-sources)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3m 39s
+────────────
+ Nextest run ID e13ad8b5-1507-45e2-a4ee-c17874218c29 with nextest profile: default
+    Starting 192 tests across 58 binaries (5026 tests skipped)
+        PASS [   0.051s] (  1/192) clawft-kernel cog_ingest::tests_forward::container_routes_get_a_token_scoped_listener_as_their_upstream
+        PASS [   0.031s] (  2/192) clawft-kernel container::tests::config_serde_roundtrip
+        PASS [   0.189s] (  3/192) clawft-kernel container::tests::configure_multiple_containers_succeeds
+        PASS [   0.027s] (  4/192) clawft-kernel container::tests::container_config_defaults_populated
+        PASS [   0.734s] (  5/192) clawft-kernel boot::tests::boot_registers_container_service
+        PASS [   0.459s] (  6/192) clawft-kernel container::tests::container_config_health_check_interval
+        PASS [   0.033s] (  7/192) clawft-kernel container::tests::container_config_validates
+        PASS [   0.033s] (  8/192) clawft-kernel container::tests::container_error_display
+        PASS [   0.031s] (  9/192) clawft-kernel container::tests::container_health_propagates_to_kernel_health_system
+        PASS [   0.035s] ( 10/192) clawft-kernel container::tests::container_health_report_detail
+        PASS [   2.496s] ( 11/192) clawft-kernel container::tests::container_health_serde_roundtrip
+        PASS [   2.492s] ( 12/192) clawft-kernel container::tests::container_health_with_message_roundtrip
+        PASS [   0.034s] ( 13/192) clawft-kernel container::tests::container_invalid_config_empty_image_rejected
+        PASS [   0.034s] ( 14/192) clawft-kernel container::tests::container_invalid_config_empty_name_rejected
+        PASS [   0.034s] ( 15/192) clawft-kernel container::tests::container_invalid_config_zero_port_rejected
+        PASS [   0.035s] ( 16/192) clawft-kernel container::tests::container_lifecycle_configure_start_stop
+        PASS [   0.035s] ( 17/192) clawft-kernel container::tests::container_service_health_empty_is_healthy
+        PASS [   0.033s] ( 18/192) clawft-kernel container::tests::container_service_health_propagates
+        PASS [   0.032s] ( 19/192) clawft-kernel container::tests::container_service_implements_system_service
+        PASS [   0.035s] ( 20/192) clawft-kernel container::tests::container_service_stop_halts_all
+        PASS [   0.558s] ( 21/192) clawft-kernel container::tests::container_state_display
+        PASS [   0.552s] ( 22/192) clawft-kernel container::tests::container_state_display_all_variants
+        PASS [   0.269s] ( 23/192) clawft-kernel container::tests::container_state_serde_roundtrip_all_variants
+        PASS [   0.270s] ( 24/192) clawft-kernel container::tests::default_config
+        PASS [   0.034s] ( 25/192) clawft-kernel container::tests::engineless_manager_never_marks_any_image_running
+        PASS [   0.032s] ( 26/192) clawft-kernel container::tests::health_check_interval_duration
+        PASS [   0.032s] ( 27/192) clawft-kernel container::tests::health_check_nonexistent
+        PASS [   0.033s] ( 28/192) clawft-kernel container::tests::health_check_running
+        PASS [   0.032s] ( 29/192) clawft-kernel container::tests::health_check_stopped
+        PASS [   0.034s] ( 30/192) clawft-kernel container::tests::managed_container_serde_roundtrip
+        PASS [   0.031s] ( 31/192) clawft-kernel container::tests::managed_container_with_env_and_volumes_roundtrip
+        PASS [   0.032s] ( 32/192) clawft-kernel container::tests::port_mapping_default_protocol
+        PASS [   0.029s] ( 33/192) clawft-kernel container::tests::port_mapping_serde_roundtrip
+        PASS [   0.030s] ( 34/192) clawft-kernel container::tests::register_and_list
+        PASS [   0.028s] ( 35/192) clawft-kernel container::tests::restart_policy_default_is_never
+        PASS [   0.031s] ( 36/192) clawft-kernel container::tests::restart_policy_serde
+        PASS [   0.031s] ( 37/192) clawft-kernel container::tests::restart_policy_serde_roundtrip_all_variants
+        PASS [   0.031s] ( 38/192) clawft-kernel container::tests::simulated_start_refuses_cog_workload_images
+        PASS [   0.029s] ( 39/192) clawft-kernel container::tests::start_already_running_is_idempotent
+        PASS [   0.031s] ( 40/192) clawft-kernel container::tests::start_container_assigns_id
+        PASS [   0.031s] ( 41/192) clawft-kernel container::tests::start_container_transitions_to_running
+        PASS [   0.031s] ( 42/192) clawft-kernel container::tests::stop_all
+        PASS [   0.030s] ( 43/192) clawft-kernel container::tests::stop_container
+        PASS [   0.030s] ( 44/192) clawft-kernel container::tests::volume_mount_default_read_only
+        PASS [   0.031s] ( 45/192) clawft-kernel container::tests::stop_nonexistent_fails
+        PASS [   0.031s] ( 46/192) clawft-kernel container::tests::volume_mount_serde_roundtrip
+        PASS [   0.257s] ( 47/192) clawft-kernel mesh_admit::tests::enforce_limits_leaf_publishes_to_its_substrate_prefix
+        PASS [   0.233s] ( 48/192) clawft-kernel mesh_admit_gate::nested_peer_tests::granted_peer_ceiling_never_becomes_open_membership
+        PASS [   4.450s] ( 49/192) clawft-kernel mesh_serve::nested_dial_tests::nested_seed_requires_reciprocal_proof_before_routing
+        PASS [   4.457s] ( 50/192) clawft-kernel mesh_serve::nested_dial_tests::nested_seed_reciprocal_admission_is_verified_and_bidirectional
+        PASS [   0.033s] ( 51/192) clawft-kernel node_facts::tests_mac::rosetta_adds_x86_64_emulation_to_native_and_apple_container
+        PASS [   0.034s] ( 52/192) clawft-kernel node_facts::tests_mac::unreachable_engine_and_stopped_container_service_are_degraded
+        PASS [   0.143s] ( 53/192) clawft-kernel service::tests::service_entry_container_endpoint_roundtrip
+        PASS [   0.142s] ( 54/192) clawft-kernel supervisor::tests::spawn_backend_container_serde_roundtrip
+        PASS [   0.242s] ( 55/192) clawft-kernel supervisor::tests::spawn_container_returns_not_available
+        PASS [   0.256s] ( 56/192) clawft-kernel workload_ctl::tests_two_node::a_node_without_a_container_adapter_is_not_offered_a_container_variant
+        PASS [   0.513s] ( 57/192) clawft-kernel workload_runtime::tests_container::admission_prefers_native_arches_and_emulates_only_on_opt_in
+        PASS [   0.520s] ( 58/192) clawft-kernel workload_runtime::tests_container::apple_uses_arch_and_whole_cpus
+        PASS [   0.029s] ( 59/192) clawft-kernel workload_runtime::tests_container::base_image_must_be_digest_pinned
+        PASS [   1.172s] ( 60/192) clawft-kernel workload_runtime::tests_container::each_engine_provides_its_capability_id
+        PASS [   1.184s] ( 61/192) clawft-kernel workload_runtime::tests_container::console_runs_in_the_foreground_and_times_out_with_a_kill
+        PASS [   5.311s] ( 62/192) clawft-kernel workload_runtime::tests_container::failed_build_leaves_nothing_behind
+        PASS [   5.310s] ( 63/192) clawft-kernel workload_runtime::tests_container::feed_publish_address_and_network_exposure_follow_the_config
+        PASS [   0.270s] ( 64/192) clawft-kernel workload_runtime::tests_container::inspect_output_parses_for_each_engine_shape
+        PASS [   0.275s] ( 65/192) clawft-kernel workload_runtime::tests_container::load_builds_a_one_binary_image_and_keeps_the_token_off_command_lines
+        PASS [   0.084s] ( 66/192) clawft-kernel workload_runtime::tests_container::stop_collects_logs_and_exit_code_then_removes_the_container
+        PASS [   0.080s] ( 67/192) clawft-kernel workload_runtime::tests_container_relay::an_ingest_upstream_fronts_the_cog_with_the_relay_and_only_its_caps
+        PASS [   0.096s] ( 68/192) clawft-kernel workload_runtime::tests_container_relay::live_relay_drops_privileges_in_a_container
+        FAIL [   1.637s] ( 69/192) clawft-kernel workload_runtime::tests_container_relay::the_relay_forwards_sigterm_to_the_cog
+  stdout ───
+
+    running 1 test
+    test workload_runtime::tests_container_relay::the_relay_forwards_sigterm_to_the_cog ... FAILED
+
+    failures:
+
+    failures:
+        workload_runtime::tests_container_relay::the_relay_forwards_sigterm_to_the_cog
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3481 filtered out; finished in 0.83s
+
+  stderr ───
+
+    thread 'workload_runtime::tests_container_relay::the_relay_forwards_sigterm_to_the_cog' (88415699) panicked at crates/clawft-kernel/src/workload_runtime/tests_container_relay.rs:212:5:
+    assertion `left == right` failed: ExitStatus(unix_wait_status(15))
+      left: None
+     right: Some(143)
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        PASS [   0.035s] ( 70/192) clawft-kernel workload_runtime::tests_container_relay::the_relay_sets_no_new_privs_for_the_cog
+        PASS [   1.871s] ( 71/192) clawft-kernel workload_runtime::tests_container_relay::the_relay_forwards_the_cogs_ingest_post_and_returns_its_exit_status
+        PASS [   0.288s] ( 72/192) clawft-kernel workload_runtime::tests_container_relay::upstreams_the_container_cannot_use_are_refused_before_any_build
+        PASS [   0.034s] ( 73/192) clawft-kernel workload_runtime::tests_live::live_container_anomaly_detect
+        PASS [   0.352s] ( 74/192) clawft-kernel workload_runtime::tests_container_relay::without_an_upstream_the_image_has_no_relay_and_no_added_caps
+        PASS [   0.347s] ( 75/192) clawft-types config::nested::tests::grants_require_identity_ports_and_pinned_peers
+        PASS [   0.034s] ( 76/192) clawft-types config::overlay_tests::nested_unknown_keys_are_parse_errors
+        PASS [   0.033s] ( 77/192) clawft-types project::spawn::tests::container_transport_requires_immutable_id_and_absolute_host_guest_paths
+        PASS [   0.030s] ( 78/192) clawft-types runtime_paths::child::tests::child_at_honours_explicit_run_dir
+        PASS [   0.034s] ( 79/192) clawft-types runtime_paths::child::tests::layout_table
+        PASS [   0.099s] ( 80/192) clawft-types project::tests::nested_registration_rejects_wrong_identity_before_store_write
+        PASS [   0.033s] ( 81/192) clawft-types runtime_paths::child::tests::non_child_roots_keep_their_layout_and_have_no_project_files
+        PASS [   0.034s] ( 82/192) clawft-types runtime_paths::child::tests::one_project_key_is_node_and_chain_key
+        PASS [   0.031s] ( 83/192) clawft-types runtime_paths::child::tests::relative_inputs_are_made_absolute
+        PASS [   0.031s] ( 84/192) clawft-types runtime_paths::child::tests::revoked_marker_is_one_path_for_parent_and_child
+        PASS [   0.032s] ( 85/192) clawft-types runtime_paths::child::tests::unsafe_ids_are_refused
+        PASS [   0.033s] ( 86/192) clawft-types runtime_paths::child::tests::walk_up_never_selects_a_child
+        PASS [   0.032s] ( 87/192) clawft-types runtime_paths::tests::a_test_resolving_a_real_home_root_panics
+        PASS [   0.033s] ( 88/192) clawft-types runtime_paths::tests::accepts_weaver_init_layout
+        PASS [   0.033s] ( 89/192) clawft-types runtime_paths::tests::bare_weftos_dir_without_any_marker_is_not_a_project
+        PASS [   0.031s] ( 90/192) clawft-types runtime_paths::tests::captured_runtime_dir_is_absolute_and_blank_is_unset
+        PASS [   0.029s] ( 91/192) clawft-types runtime_paths::tests::env_wins_and_empty_env_is_unset
+        PASS [   0.032s] ( 92/192) clawft-types runtime_paths::tests::existing_runtime_dir_marks_a_project
+        PASS [   0.031s] ( 93/192) clawft-types runtime_paths::tests::git_worktree_with_tracked_weftos_is_its_own_project
+        PASS [   0.035s] ( 94/192) clawft-types runtime_paths::tests::legacy_chain_notice_only_for_project_roots
+        PASS [   0.039s] ( 95/192) clawft-types runtime_paths::tests::never_resolves_to_home_even_with_markers
+        PASS [   0.031s] ( 96/192) clawft-types runtime_paths::tests::no_home_falls_back_to_temp_legacy
+        PASS [   0.030s] ( 97/192) clawft-types runtime_paths::tests::only_a_deps_or_doctest_executable_is_a_test_process
+        PASS [   0.034s] ( 98/192) clawft-types runtime_paths::tests::project_below_home_still_found
+        PASS [   0.032s] ( 99/192) clawft-types runtime_paths::tests::temp_roots_and_overrides_are_allowed_in_tests
+        PASS [   0.033s] (100/192) clawft-types runtime_paths::tests::user_root_env_override_and_blank_env
+        PASS [   0.032s] (101/192) clawft-types runtime_paths::tests::user_root_env_override_is_made_absolute
+        PASS [   0.033s] (102/192) clawft-types runtime_paths::tests::user_root_is_weftos_run_and_ignores_projects
+        PASS [   0.034s] (103/192) clawft-types runtime_paths::tests::walks_up_to_project_marker
+        PASS [   0.034s] (104/192) clawft-types turn_content::tests::audio_from_metadata_nested_and_flat
+        PASS [   0.032s] (105/192) clawft-types::fuzz_config fuzz_config_deeply_nested_no_panic
+        PASS [   0.035s] (106/192) clawft-weave control::tests::intent_path_for_sensor_with_nested_tail
+        PASS [   0.034s] (107/192) clawft-weave project_cert_rpc::claim_sync_tests::disconnect_gap_is_incomplete_until_successor_installs
+        PASS [   0.036s] (108/192) clawft-weave project_cert_rpc::claim_sync_tests::mutation_barrier_waits_for_machine_ack_and_propagates_failure
+        PASS [   0.036s] (109/192) clawft-weave project_supervisor::child::container_endpoint_tests::container_endpoint_cannot_be_owner_socket
+        PASS [   0.037s] (110/192) clawft-weave project_supervisor::child::container_endpoint_tests::engine_failure_never_proves_liveness
+        PASS [   0.089s] (111/192) clawft-weave project_lifecycle_rpc::nested_tests::nested_child_must_be_inside_and_name_its_master
+        PASS [   2.060s] (112/192) clawft-weave project_supervisor::container::tests::create_returns_id_before_any_inspect
+        PASS [   2.061s] (113/192) clawft-weave project_supervisor::container::tests::create_start_stop_reinspect_immutable_id
+        PASS [   0.269s] (114/192) clawft-weave project_supervisor::container::tests::flags_pin_isolation_and_parent_mounts
+        PASS [   0.273s] (115/192) clawft-weave project_supervisor::container::tests::forced_stop_preserves_the_id_for_verified_restart_cleanup
+        PASS [   0.283s] (116/192) clawft-weave project_supervisor::container::tests::leftover_name_recovers_only_a_verified_immutable_id
+        PASS [   0.288s] (117/192) clawft-weave project_supervisor::container::tests::forged_id_label_or_mount_is_refused
+        PASS [   0.112s] (118/192) clawft-weave project_supervisor::container::tests::no_guest_mount_descends_from_or_hides_the_executable
+        PASS [   0.112s] (119/192) clawft-weave project_supervisor::container::tests::runtime_mount_must_not_cover_or_descend_from_weaver
+        PASS [   0.036s] (120/192) clawft-weave project_supervisor::container::tests::stale_id_never_reaches_a_destructive_engine_call
+        PASS [   0.037s] (121/192) clawft-weave project_supervisor::container::tests::weakened_isolation_and_extra_mount_are_refused
+        PASS [   0.292s] (122/192) clawft-weave scope_gate::tests::allow_all_never_checks_the_project
+        PASS [   0.743s] (123/192) clawft-weave project_supervisor::container_path_tests::writable_project_cannot_contain_or_live_inside_parent_runtime
+        PASS [   0.475s] (124/192) clawft-weave scope_gate::tests::allow_list_excludes_known_sensitive_reads
+        PASS [   0.034s] (125/192) clawft-weave scope_gate::tests::allow_listed_methods_skip_registry_verification
+        PASS [   4.330s] (126/192) clawft-weave scope_gate::tests::corrupt_manifest_does_not_verify
+        PASS [   4.326s] (127/192) clawft-weave scope_gate::tests::deny_all_keeps_only_liveness_and_project_lookup
+        PASS [   0.395s] (128/192) clawft-weave scope_gate::tests::licence_checkout_verbs_are_allowed_alike_outside_a_project
+        PASS [   0.416s] (129/192) clawft-weave scope_gate::tests::inside_project_definition
+        PASS [   0.115s] (130/192) clawft-weave scope_gate::tests::licence_verbs_are_machine_level_not_user_level
+        PASS [   0.114s] (131/192) clawft-weave scope_gate::tests::mesh_local_routes_pass_for_a_child_inside_a_project_and_not_outside
+        PASS [   0.149s] (132/192) clawft-weave scope_gate::tests::owner_shutdown_is_admin_only_outside_a_project
+        PASS [   0.149s] (133/192) clawft-weave scope_gate::tests::population_allow_list_is_read_only_and_real
+        PASS [   1.502s] (134/192) clawft-weave scope_gate::tests::population_every_dispatch_arm_is_allowed_or_denied_outside
+        FAIL [   1.504s] (135/192) clawft-weave scope_gate::tests::population_every_ext_route_is_classified
+  stdout ───
+
+    running 1 test
+    test scope_gate::tests::population_every_ext_route_is_classified ... FAILED
+
+    failures:
+
+    failures:
+        scope_gate::tests::population_every_ext_route_is_classified
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 820 filtered out; finished in 0.00s
+
+  stderr ───
+
+    thread 'scope_gate::tests::population_every_ext_route_is_classified' (88419868) panicked at crates/clawft-weave/src/scope_gate_tests.rs:472:9:
+    ext route "project.nested.register" is not classified in scope_gate
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        PASS [   0.035s] (136/192) clawft-weave scope_gate::tests::population_extraction_finds_the_dispatch_arms
+        PASS [   0.201s] (137/192) clawft-weave scope_gate::tests::read_only_allows_only_the_list_outside
+        PASS [   0.037s] (138/192) clawft-weave scope_gate::tests::unlisted_verbs_under_classified_prefixes_are_denied
+        PASS [   0.742s] (139/192) clawft-weave scope_gate::tests::scope_denial_is_after_capability_check
+        PASS [   0.033s] (140/192) clawft-weave scope_gate::tests::user_level_ops_need_admin_outside_a_project
+        PASS [   0.913s] (141/192) clawft-weave scope_gate::tests::unset_policy_is_allow_all_off_the_user_profile_and_read_only_on_it
+        PASS [   0.354s] (142/192) clawft-weave scope_gate::tests::voice_cannot_mutate_cron_but_can_list_and_spawn
+        PASS [   2.236s] (143/192) clawft-weave scope_gate::tests::voice_principal_is_inside_for_the_scope_gate
+        PASS [   2.236s] (144/192) clawft-weave scope_gate::tests::voice_deny_list_covers_every_cron_mutation
+        PASS [   0.731s] (145/192) clawft-weave scope_gate::tests::wire_bound_daemon_is_inside_and_mismatch_is_outside
+        PASS [   0.753s] (146/192) clawft-weave scope_gate::tests::wire_policies_deny_all_and_allow_all
+        PASS [   0.103s] (147/192) clawft-weave workload_place_rpc::daemon_tests::container_and_seed_files_are_validated_at_the_boundary
+        PASS [   0.522s] (148/192) clawft-weave scope_gate::tests::wire_scope_gate_denies_outside_and_verifies_claims
+        FAIL [  17.369s] (149/192) clawft-weave::nested_instances nested_owned_pipe_cascades_when_deny_all_rejects_shutdown_rpc
+  stdout ───
+
+    running 1 test
+    test nested_owned_pipe_cascades_when_deny_all_rejects_shutdown_rpc ... FAILED
+
+    failures:
+
+    failures:
+        nested_owned_pipe_cascades_when_deny_all_rejects_shutdown_rpc
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; finished in 17.34s
+
+  stderr ───
+
+    thread 'nested_owned_pipe_cascades_when_deny_all_rejects_shutdown_rpc' (88421923) panicked at crates/clawft-weave/tests/nested_instances.rs:490:5:
+    inner projects must stop with inner user even when shutdown RPC is denied
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        PASS [  19.261s] (150/192) clawft-weave::nested_instances nested_granted_listener_refuses_port_collision_and_closes_on_revoke
+        PASS [   1.495s] (151/192) clawft-weave::nested_instances nested_policy_noop_preserves_signed_boot_and_policy_bytes
+        PASS [   0.265s] (152/192) clawft-weave::nested_instances nested_registry_recovery_preserves_identity_and_revoke
+        PASS [   0.265s] (153/192) clawft-weave::nested_instances nested_private_state_env_cap_signature_and_replay
+        PASS [   1.907s] (154/192) clawft-weave::nested_instances recovered_nested_stop_and_revoke_refuse_live_unowned_endpoint
+        FAIL [   7.730s] (155/192) clawft-weave::nested_instances nested_user_supervises_project_and_restarts_with_private_identity
+  stdout ───
+
+    running 1 test
+    test nested_user_supervises_project_and_restarts_with_private_identity ... FAILED
+
+    failures:
+
+    failures:
+        nested_user_supervises_project_and_restarts_with_private_identity
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; finished in 7.70s
+
+  stderr ───
+
+    thread 'nested_user_supervises_project_and_restarts_with_private_identity' (88428990) panicked at crates/clawft-weave/tests/nested_instances.rs:287:5:
+    inner projects must stop with inner user
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        PASS [   4.244s] (156/192) clawft-weave::project_supervisor a_child_on_an_older_build_than_the_daemon_is_reported_stale
+        PASS [  11.227s] (157/192) clawft-weave::project_kernel_e2e project_kernel_end_to_end
+        PASS [   1.602s] (158/192) clawft-weave::project_supervisor a_child_still_booting_at_adoption_is_adopted_or_found_by_the_stop_cascade
+        PASS [   4.236s] (159/192) clawft-weave::project_supervisor a_child_that_lost_its_heartbeat_is_restarted_and_then_failed_when_the_budget_is_spent
+        PASS [   4.151s] (160/192) clawft-weave::project_supervisor a_child_wedged_while_busy_is_restarted_after_the_ceiling
+        PASS [   0.355s] (161/192) clawft-weave::project_supervisor a_failed_spawn_leaves_nothing_behind
+        PASS [   0.161s] (162/192) clawft-weave::project_supervisor a_revoked_project_without_a_marker_is_refused_before_spawning
+        PASS [   4.278s] (163/192) clawft-weave::project_supervisor a_plain_lost_child_is_restarted_at_the_short_grace_not_the_busy_ceiling
+        PASS [   0.089s] (164/192) clawft-weave::project_supervisor adopted_zombie_counts_as_dead
+        PASS [   5.151s] (165/192) clawft-weave::project_supervisor a_wedged_leftover_delays_boot_and_the_stop_cascade_only_briefly
+        PASS [   3.726s] (166/192) clawft-weave::project_supervisor adoption_after_user_daemon_restart
+        PASS [   3.703s] (167/192) clawft-weave::project_supervisor an_adopted_but_refused_leftover_is_reported_as_unmanaged
+        PASS [   2.273s] (168/192) clawft-weave::project_supervisor an_adopted_pid_recycled_between_sigterm_and_sigkill_is_never_killed
+        PASS [   0.440s] (169/192) clawft-weave::project_supervisor an_empty_pid_file_that_fills_in_is_adopted_not_bad
+        PASS [   3.971s] (170/192) clawft-weave::project_supervisor an_adopted_child_that_never_registers_is_reported_in_status
+        PASS [   0.463s] (171/192) clawft-weave::project_supervisor child_endpoint_allowed_methods_in_memory
+        PASS [   4.105s] (172/192) clawft-weave::project_supervisor backoff_schedule_is_chained
+        PASS [   4.083s] (173/192) clawft-weave::project_supervisor clean_exit_is_not_restarted
+        PASS [   5.081s] (174/192) clawft-weave::project_supervisor crash_after_ready_restarts_and_recovers
+        PASS [   7.995s] (175/192) clawft-weave::project_supervisor ensure_running_during_an_automatic_restart_waits_for_the_socket
+        PASS [   6.568s] (176/192) clawft-weave::project_supervisor ensure_running_takes_over_a_live_verified_child
+        PASS [  24.843s] (177/192) clawft-weave::project_supervisor concurrent_ensure_running_starts_one_child
+        PASS [   6.533s] (178/192) clawft-weave::project_supervisor env_allowlist_spawn_contract
+        PASS [   7.757s] (179/192) clawft-weave::project_supervisor idle_stop_then_restart
+        PASS [   6.716s] (180/192) clawft-weave::project_supervisor ignored_shutdown_escalates_to_sigterm
+        PASS [   3.898s] (181/192) clawft-weave::project_supervisor nested_master_must_own_the_child
+        PASS [   5.059s] (182/192) clawft-weave::project_supervisor lifecycle_rpc_end_to_end
+        PASS [   3.124s] (183/192) clawft-weave::project_supervisor pid_reuse_and_unverifiable_leftovers_are_never_adopted
+        PASS [   4.399s] (184/192) clawft-weave::project_supervisor restart_budget_then_failed
+        PASS [   3.740s] (185/192) clawft-weave::project_supervisor revoke_stops_the_child_even_when_the_gated_stop_fails
+        PASS [   3.639s] (186/192) clawft-weave::project_supervisor revoked_child_is_stopped_at_adoption
+        PASS [   3.806s] (187/192) clawft-weave::project_supervisor revoked_marker_stops_the_child_and_blocks_a_restart
+        PASS [   3.937s] (188/192) clawft-weave::project_supervisor seatbelt_denies_test_home
+        PASS [   3.910s] (189/192) clawft-weave::project_supervisor seatbelt_quoted_root_denies_test_home
+        PASS [   3.566s] (190/192) clawft-weave::project_supervisor spawn_refusal_cases
+        PASS [   3.890s] (191/192) clawft-weave::project_supervisor stop_removes_spawn_json_and_a_foreign_pid_is_not_ready
+        PASS [   3.282s] (192/192) clawft-weave::project_supervisor token_refresh_rotates_and_refuses_strangers
+────────────
+     Summary [ 143.972s] 192 tests run: 188 passed, 4 failed, 5026 skipped
+        FAIL [   1.637s] ( 69/192) clawft-kernel workload_runtime::tests_container_relay::the_relay_forwards_sigterm_to_the_cog
+        FAIL [   1.504s] (135/192) clawft-weave scope_gate::tests::population_every_ext_route_is_classified
+        FAIL [  17.369s] (149/192) clawft-weave::nested_instances nested_owned_pipe_cascades_when_deny_all_rejects_shutdown_rpc
+        FAIL [   7.730s] (155/192) clawft-weave::nested_instances nested_user_supervises_project_and_restarts_with_private_identity
+error: test run failed

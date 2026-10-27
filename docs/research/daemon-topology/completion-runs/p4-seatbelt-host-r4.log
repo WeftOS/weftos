@@ -1,0 +1,67 @@
+
+[1m── Running cargo nextest run (clawft-weave) (+ doctests)[0m
+    Blocking waiting for file lock on artifact directory
+   Compiling clawft-weave v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/clawft-weave)
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9079:44
+     |
+9079 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+     |
+     = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9288:21
+     |
+9288 |             Config, KernelConfig, VectorBackendKind, VectorConfig, VectorHnswConfig,
+     |                     ^^^^^^^^^^^^
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9351:44
+     |
+9351 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9383:44
+     |
+9383 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9412:44
+     |
+9412 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9449:44
+     |
+9449 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9554:44
+     |
+9554 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+
+warning: unused import: `clawft_kernel::NODE_KEY_FILE as KEYFILE_NAME`
+  --> crates/clawft-weave/src/node_identity.rs:28:5
+   |
+28 | use clawft_kernel::NODE_KEY_FILE as KEYFILE_NAME;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `clawft-weave` (lib test) generated 8 warnings (run `cargo fix --lib -p clawft-weave --tests` to apply 8 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 07s
+────────────
+ Nextest run ID a985a96a-bff9-45e6-860f-74d0fb0808fd with nextest profile: default
+    Starting 4 tests across 43 binaries (970 tests skipped)
+        PASS [   0.017s] (1/4) clawft-weave project_supervisor::sandbox::seatbelt::tests::profile_has_no_global_network_or_home_access
+        PASS [   0.017s] (2/4) clawft-weave project_supervisor::sandbox::seatbelt::tests::quoted_path_is_escaped_in_profile
+        PASS [   3.092s] (3/4) clawft-weave::project_supervisor seatbelt_denies_test_home
+        PASS [   3.092s] (4/4) clawft-weave::project_supervisor seatbelt_quoted_root_denies_test_home
+────────────
+     Summary [   3.093s] 4 tests run: 4 passed, 970 skipped
+  [0;36mTIME[0m  2m 46s
+HOST_TEST_EXIT=0

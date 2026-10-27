@@ -1,0 +1,95 @@
+
+[1m── Phase Gate — 22 checks[0m
+
+[1m[ 1/22][0m workspace tests (nextest + doctests)
+  [0;32mPASS[0m  workspace tests (nextest + doctests)
+  [0;36mTIME[0m  48m 18s
+
+[1m[ 2/22][0m cargo build --release --bin weft --bin weaver
+  [0;32mPASS[0m  cargo build --release --bin weft --bin weaver
+  [0;36mTIME[0m  6m 41s
+
+[1m[ 3/22][0m WASI WASM (wasm32-wasip2)
+  [0;32mPASS[0m  WASI WASM (wasm32-wasip2)
+  [0;36mTIME[0m  0s
+
+[1m[ 4/22][0m Browser WASM: clawft-types
+  [0;32mPASS[0m  Browser WASM: clawft-types
+  [0;36mTIME[0m  0s
+
+[1m[ 5/22][0m Browser WASM: clawft-platform
+  [0;32mPASS[0m  Browser WASM: clawft-platform
+  [0;36mTIME[0m  1s
+
+[1m[ 6/22][0m Browser WASM: clawft-core
+  [0;32mPASS[0m  Browser WASM: clawft-core
+  [0;36mTIME[0m  0s
+
+[1m[ 7/22][0m Browser WASM: clawft-llm
+  [0;32mPASS[0m  Browser WASM: clawft-llm
+  [0;36mTIME[0m  0s
+
+[1m[ 8/22][0m Browser WASM: clawft-tools
+  [0;32mPASS[0m  Browser WASM: clawft-tools
+  [0;36mTIME[0m  0s
+
+[1m[ 9/22][0m Browser WASM: clawft-wasm
+  [0;32mPASS[0m  Browser WASM: clawft-wasm
+  [0;36mTIME[0m  1s
+
+[1m[10/22][0m UI build (tsc + vite)
+  [0;32mPASS[0m  UI build
+  [0;36mTIME[0m  4s
+
+[1m[11/22][0m Voice feature (clawft-plugin)
+  [0;32mPASS[0m  Voice feature (clawft-plugin)
+  [0;36mTIME[0m  0s
+
+[1m[12/22][0m cargo audit (deny warnings, 0.7.0 ignores)
+  [0;32mPASS[0m  cargo audit (deny warnings, 0.7.0 ignores)
+  [0;36mTIME[0m  1s
+
+[1m[13/22][0m npm audit (critical/high — WEFT-598)
+  [0;32mPASS[0m  npm audit (critical/high — WEFT-598)
+  [0;36mTIME[0m  5s
+
+[1m[14/22][0m diskann + bench feature compile (clawft-kernel)
+  [0;32mPASS[0m  diskann + bench feature compile (clawft-kernel)
+  [0;36mTIME[0m  1m 21s
+
+[1m[15/22][0m kernel WASM no-mesh (wasm32-unknown-unknown)
+  [0;32mPASS[0m  kernel WASM no-mesh (wasm32-unknown-unknown)
+  [0;36mTIME[0m  0s
+
+[1m[16/22][0m pipeline pass (clawft-core test(pipeline))
+  [0;32mPASS[0m  pipeline pass (clawft-core test(pipeline))
+  [0;36mTIME[0m  31s
+
+[1m[17/22][0m agents/ package validation (AD-1)
+  [0;32mPASS[0m  agents/ package validation (AD-1)
+  [0;36mTIME[0m  0s
+
+[1m[18/22][0m agents/catalog.json up to date (AD-1)
+  [0;32mPASS[0m  agents/catalog.json up to date (AD-1)
+  [0;36mTIME[0m  0s
+
+[1m[19/22][0m agents/ confidentiality leak check (AD-2)
+  [0;32mPASS[0m  agents/ confidentiality leak check (AD-2)
+  [0;36mTIME[0m  1s
+
+[1m[20/22][0m mesh service owns no state (check-mesh-no-owned-state)
+  [0;32mPASS[0m  mesh service owns no state (check-mesh-no-owned-state)
+  [0;36mTIME[0m  0s
+
+[1m[21/22][0m daemon does not enable clawft-mesh-local testing (check-daemon-no-mesh-testing)
+  [0;32mPASS[0m  daemon does not enable clawft-mesh-local testing (check-daemon-no-mesh-testing)
+  [0;36mTIME[0m  1s
+
+[1m[22/22][0m workspace clippy (warnings as errors)
+  [0;32mPASS[0m  workspace clippy (warnings as errors)
+  [0;36mTIME[0m  1m 2s
+
+[1m═══════════════════════════════════════[0m
+  [0;32mPASSED[0m: 22  FAILED: 0  SKIPPED: 0  (total: 22)
+[1m═══════════════════════════════════════[0m
+GATE_EXIT=0

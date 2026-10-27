@@ -1,0 +1,1088 @@
+Reading additional input from stdin...
+2026-10-04T18:41:47.968904Z  WARN codex_skills::interface: ignoring interface.icon_small: icon path with '..' must resolve under plugin assets/
+2026-10-04T18:41:47.969261Z  WARN codex_skills::interface: ignoring interface.icon_large: icon path with '..' must resolve under plugin assets/
+2026-10-04T18:41:48.090279Z  WARN codex_mcp::rmcp_client: MCP server startup failed server_name="parts" error=Environment variable PARTS_KEY for MCP server 'parts' is not set
+OpenAI Codex v0.158.0
+--------
+workdir: ~/.codex/worktrees/topology-finish/weftos
+model: gpt-6-sol
+provider: openai
+approval: never
+sandbox: workspace-write [workdir, /tmp, $TMPDIR]
+reasoning effort: medium
+reasoning summaries: none
+session id: 01a10838-dff6-7851-bdeb-88fdd0a19681
+--------
+user
+Complete ADR-103 Phase 4 in this isolated checkout. Claim dashboard ticket 0dc06c23-56a0-4718-b7d5-aefc2f05d98c first. Read AGENTS.md, ADR-103 D9/D10, supervisor source. Implement sandbox drivers and nested weave.master isolation with tests, preserving fail-closed behavior. Write plan and receipt in docs. No live process changes, secrets, real HOME mutations, commits or push. Use scripts/build.sh and detach long builds. Return exact remaining gaps if not finished. User authorized completing all phases. No peer spawning.
+warning: clamping SessionEnd hook timeout to 3s in ~/weftos/.codex/hooks.json
+warning: clamping SessionEnd hook timeout to 3s in ~/.codex/plugins/cache/ruvnet-brain/ruvnet-brain/4.3.40/hooks/codex-hooks.json
+2026-10-04T18:41:48.121660Z  WARN codex_mcp::rmcp_client: MCP server startup failed server_name="media-pipeline" error=handshaking with MCP server failed: connection closed: initialize response: connection closed: initialize response
+2026-10-04T18:41:48.234956Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: "Bearer realm=\"OAuth\", resource_metadata=\"https://mcp.cloudflare.com/.well-known/oauth-protected-resource/mcp\", scope=\"user:read account:read\"" })
+2026-10-04T18:41:48.235240Z  WARN codex_mcp::rmcp_client: MCP server startup failed server_name="cloudflare" error=handshaking with MCP server failed: Send message error Transport [codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>] error: Auth required, when send initialize request: Send message error Transport [codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>] error: Auth required, when send initialize request
+2026-10-04T18:41:48.315762Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: "Bearer error=\"invalid_token\", error_description=\"No authorization provided\", resource_metadata=\"https://mcp.vercel.com/.well-known/oauth-protected-resource\"" })
+2026-10-04T18:41:48.315784Z  WARN codex_mcp::rmcp_client: MCP server startup failed server_name="vercel" error=handshaking with MCP server failed: Send message error Transport [codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>] error: Auth required, when send initialize request: Send message error Transport [codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>] error: Auth required, when send initialize request
+2026-10-04T18:41:48.338424Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: "Bearer resource_metadata=\"https://api.cognitum.one/.well-known/oauth-protected-resource/v1/mcp\"" })
+2026-10-04T18:41:48.338494Z  WARN codex_mcp::rmcp_client: MCP server startup failed server_name="cognitum-fleet" error=handshaking with MCP server failed: Send message error Transport [codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>] error: Auth required, when send initialize request: Send message error Transport [codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>] error: Auth required, when send initialize request
+2026-10-04T18:41:48.479451Z  WARN codex_skills::interface: ignoring interface.icon_small: icon path with '..' must resolve under plugin assets/
+2026-10-04T18:41:48.479495Z  WARN codex_skills::interface: ignoring interface.icon_large: icon path with '..' must resolve under plugin assets/
+2026-10-04T18:41:48.519373Z  WARN codex_mcp::rmcp_client: MCP server startup failed server_name="parts" error=Environment variable PARTS_KEY for MCP server 'parts' is not set
+2026-10-04T18:41:48.544673Z  WARN codex_mcp::rmcp_client: MCP server startup failed server_name="media-pipeline" error=handshaking with MCP server failed: connection closed: initialize response: connection closed: initialize response
+2026-10-04T18:41:48.688207Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: "Bearer realm=\"OAuth\", resource_metadata=\"https://mcp.cloudflare.com/.well-known/oauth-protected-resource/mcp\", scope=\"user:read account:read\"" })
+2026-10-04T18:41:48.688262Z  WARN codex_mcp::rmcp_client: MCP server startup failed server_name="cloudflare" error=handshaking with MCP server failed: Send message error Transport [codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>] error: Auth required, when send initialize request: Send message error Transport [codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>] error: Auth required, when send initialize request
+2026-10-04T18:41:48.764826Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: "Bearer error=\"invalid_token\", error_description=\"No authorization provided\", resource_metadata=\"https://mcp.vercel.com/.well-known/oauth-protected-resource\"" })
+2026-10-04T18:41:48.764983Z  WARN codex_mcp::rmcp_client: MCP server startup failed server_name="vercel" error=handshaking with MCP server failed: Send message error Transport [codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>] error: Auth required, when send initialize request: Send message error Transport [codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>] error: Auth required, when send initialize request
+2026-10-04T18:41:48.767787Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: "Bearer resource_metadata=\"https://api.cognitum.one/.well-known/oauth-protected-resource/v1/mcp\"" })
+2026-10-04T18:41:48.767843Z  WARN codex_mcp::rmcp_client: MCP server startup failed server_name="cognitum-fleet" error=handshaking with MCP server failed: Send message error Transport [codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>] error: Auth required, when send initialize request: Send message error Transport [codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>] error: Auth required, when send initialize request
+Reading additional input from stdin...
+2026-10-04T18:42:47.691345Z  WARN codex_skills::interface: ignoring interface.icon_small: icon path with '..' must resolve under plugin assets/
+2026-10-04T18:42:47.691388Z  WARN codex_skills::interface: ignoring interface.icon_large: icon path with '..' must resolve under plugin assets/
+2026-10-04T18:42:47.798797Z  WARN codex_mcp::rmcp_client: MCP server startup failed server_name="parts" error=Environment variable PARTS_KEY for MCP server 'parts' is not set
+OpenAI Codex v0.158.0
+--------
+workdir: ~/.codex/worktrees/topology-finish/weftos
+model: gpt-6-sol
+provider: openai
+approval: never
+sandbox: workspace-write [workdir, /tmp, $TMPDIR]
+reasoning effort: medium
+reasoning summaries: none
+session id: 01a10839-caf1-77e2-aa6f-27f7c9dfc8b6
+--------
+user
+Implement ADR-103 Phase 4: sandbox drivers and nested weave.master isolation. Read AGENTS.md and ADR-103 and current source. Claim existing board ticket 0dc06c23-56a0-4718-b7d5-aefc2f05d98c first. User authorizes finishing all phases. Work only in this isolated worktree; tests must never touch real HOME/daemon state or hardware. Use scripts/build.sh, detach long jobs. No commits or push. Write plan and exact test evidence in docs. Finish real integration, not stubs; document remaining gaps. Do not spawn peers.
+warning: clamping SessionEnd hook timeout to 3s in ~/weftos/.codex/hooks.json
+warning: clamping SessionEnd hook timeout to 3s in ~/.codex/plugins/cache/ruvnet-brain/ruvnet-brain/4.3.40/hooks/codex-hooks.json
+2026-10-04T18:42:47.840699Z  WARN codex_mcp::rmcp_client: MCP server startup failed server_name="media-pipeline" error=handshaking with MCP server failed: connection closed: initialize response: connection closed: initialize response
+2026-10-04T18:42:49.297361Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: "Bearer error=\"invalid_token\", error_description=\"No authorization provided\", resource_metadata=\"https://mcp.vercel.com/.well-known/oauth-protected-resource\"" })
+2026-10-04T18:42:49.297421Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: "Bearer resource_metadata=\"https://api.cognitum.one/.well-known/oauth-protected-resource/v1/mcp\"" })
+2026-10-04T18:42:49.297471Z  WARN codex_mcp::rmcp_client: MCP server startup failed server_name="cognitum-fleet" error=handshaking with MCP server failed: Send message error Transport [codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>] error: Auth required, when send initialize request: Send message error Transport [codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>] error: Auth required, when send initialize request
+2026-10-04T18:42:49.297474Z  WARN codex_mcp::rmcp_client: MCP server startup failed server_name="vercel" error=handshaking with MCP server failed: Send message error Transport [codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>] error: Auth required, when send initialize request: Send message error Transport [codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>] error: Auth required, when send initialize request
+2026-10-04T18:42:50.116062Z  WARN codex_skills::interface: ignoring interface.icon_small: icon path with '..' must resolve under plugin assets/
+2026-10-04T18:42:50.116090Z  WARN codex_skills::interface: ignoring interface.icon_large: icon path with '..' must resolve under plugin assets/
+2026-10-04T18:42:50.178573Z  WARN codex_mcp::rmcp_client: MCP server startup failed server_name="parts" error=Environment variable PARTS_KEY for MCP server 'parts' is not set
+2026-10-04T18:42:50.202441Z  WARN codex_mcp::rmcp_client: MCP server startup failed server_name="media-pipeline" error=handshaking with MCP server failed: connection closed: initialize response: connection closed: initialize response
+2026-10-04T18:42:50.435773Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: "Bearer realm=\"OAuth\", resource_metadata=\"https://mcp.cloudflare.com/.well-known/oauth-protected-resource/mcp\", scope=\"user:read account:read\"" })
+2026-10-04T18:42:50.435833Z  WARN codex_mcp::rmcp_client: MCP server startup failed server_name="cloudflare" error=handshaking with MCP server failed: Send message error Transport [codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>] error: Auth required, when send initialize request: Send message error Transport [codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>] error: Auth required, when send initialize request
+2026-10-04T18:42:50.526306Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: "Bearer error=\"invalid_token\", error_description=\"No authorization provided\", resource_metadata=\"https://mcp.vercel.com/.well-known/oauth-protected-resource\"" })
+2026-10-04T18:42:50.526373Z  WARN codex_mcp::rmcp_client: MCP server startup failed server_name="vercel" error=handshaking with MCP server failed: Send message error Transport [codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>] error: Auth required, when send initialize request: Send message error Transport [codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>] error: Auth required, when send initialize request
+2026-10-04T18:42:50.526315Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: "Bearer resource_metadata=\"https://api.cognitum.one/.well-known/oauth-protected-resource/v1/mcp\"" })
+2026-10-04T18:42:50.526435Z  WARN codex_mcp::rmcp_client: MCP server startup failed server_name="cognitum-fleet" error=handshaking with MCP server failed: Send message error Transport [codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>] error: Auth required, when send initialize request: Send message error Transport [codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>] error: Auth required, when send initialize request
+warning: Exceeded skills context budget. All skill descriptions were removed and 141 additional skills were not included in the model-visible skills list.
+hook: SessionStart
+hook: SessionStart
+hook: SessionStart
+hook: SessionStart
+hook: SessionStart
+hook: SessionStart
+hook: SessionStart
+hook: SessionStart
+hook: SessionStart Completed
+hook: SessionStart Failed
+hook: SessionStart Failed
+hook: SessionStart Failed
+hook: SessionStart Completed
+hook: SessionStart Completed
+hook: SessionStart Completed
+hook: SessionStart Completed
+hook: UserPromptSubmit
+hook: UserPromptSubmit
+hook: UserPromptSubmit
+hook: UserPromptSubmit Failed
+hook: UserPromptSubmit Completed
+hook: UserPromptSubmit Completed
+codex
+I’ll claim the existing ticket, read ADR-103 and the current topology code, then implement and test Phase 4 in this worktree. I’ll keep tests isolated from HOME, daemon state, and hardware, and record the plan and exact evidence in docs.
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+exec
+/bin/zsh -lc 'cat .agents/project-context.md' in ~/.codex/worktrees/topology-finish/weftos
+ exited 1 in 0ms:
+cat: .agents/project-context.md: No such file or directory
+
+exec
+/bin/zsh -lc "rg --files -g 'AGENTS.md' -g '*ADR-103*' -g 'build.sh' -g '*sandbox*' -g '*weave*' | head -100" in ~/.codex/worktrees/topology-finish/weftos
+ succeeded in 0ms:
+AGENTS.md
+agents/weftos/doc-weaver.md
+agents/weftos/weaver.md
+agents/weftos/sandbox-warden.md
+crates/clawft-plugin/src/sandbox.rs
+crates/clawft-core/src/agent/sandbox.rs
+crates/clawft-wasm-host/src/sandbox.rs
+crates/clawft-wasm-host/src/sandboxed_http.rs
+crates/clawft-wasm-host/src/sandboxed_fs.rs
+crates/clawft-kernel/src/weaver.rs
+scripts/weave-init.sh
+scripts/build.sh
+docs/adr/adr-103-weave-topology-roles-and-instances.md
+docs/cogs/evidence/placement-mac-pi5-weaver-container-2026-09-29.json
+docs/cogs/evidence/placement-mac-pi5-weaver-native-only-2026-09-29.json
+docs/cogs/evidence/placement-mac-pi5-weaver-2026-09-30.json
+docs/skills/clawft/AGENTS.md
+docs/plans/weave-topology-p2-plan.md
+docs/plans/weave-topology-p3-plan.md
+docs/plans/weave-topology-p1-plan.md
+docs/weftos/weaver-analysis-clawft.md
+docs/weftos/weaver-analysis-v2.md
+docs/weftos/09-symposium/03-weaver-review.md
+docs/src/public/weavelogic-logo1.png
+docs/weftos/k3-symposium/03-sandbox-security-review.md
+docs/src/content/docs/weftos/wasm-sandbox.mdx
+docs/src/public/api/clawft_core/agent/sandbox/fn.apply_os_sandbox.html
+
+exec
+/bin/zsh -lc 'node scripts/dashboard-board.mjs ready' in ~/.codex/worktrees/topology-finish/weftos
+ exited 1 in 0ms:
+fetch failed
+
+exec
+/bin/zsh -lc 'git status --short --branch' in ~/.codex/worktrees/topology-finish/weftos
+ succeeded in 0ms:
+## HEAD (no branch)
+
+exec
+/bin/zsh -lc 'node scripts/metaharness/crosscut.mjs' in ~/.codex/worktrees/topology-finish/weftos
+ succeeded in 2197ms:
+{
+  "ok": true,
+  "counts": {
+    "SEE": 19,
+    "WIRE": 0,
+    "BUILD": 0,
+    "UPSTREAM": 2
+  },
+  "outJson": "~/.codex/worktrees/topology-finish/weftos/.metaharness/brain/crosscut-latest.json",
+  "outMd": "~/.codex/worktrees/topology-finish/weftos/docs/research/crosscut-latest.md",
+  "suggestedDarwinGen1": {
+    "lever": "prefer_intervention",
+    "targetMode": "WIRE",
+    "focus": "agentdb",
+    "note": "Mutate harness docs/tasks only — one WIRE node per generation"
+  }
+}
+
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+exec
+/bin/zsh -lc 'cat AGENTS.md' in ~/.codex/worktrees/topology-finish/weftos
+exec
+/bin/zsh -lc 'cat docs/adr/adr-103-weave-topology-roles-and-instances.md' in ~/.codex/worktrees/topology-finish/weftos
+ succeeded in 0ms:
+# AGENTS — WeftOS (master controller)
+
+You are the **lead** for this repo. Incoming work is the WeftOS dashboard board. Jobs and
+local servers are `process-compose.yaml`. Full loop:
+`docs/guides/agent-harness-triple-loop.md`. Decision: ADR-098.
+
+| lane | owns | board |
+|---|---|---|
+| **lead** (you) | routing, score, research receipt, overlay contract | dashboard board |
+| implementers | crates / docs / gui as claimed | same board, `claim` first |
+| MetaHarness | score / genome / flywheel receipts | not a second board |
+
+## Triple loop
+
+| loop | every turn | command |
+|---|---|---|
+| **research** | never skip | `node scripts/metaharness/crosscut.mjs` + `node scripts/dashboard-board.mjs ready` |
+| **development** | when ready exists | `claim` → worktree if needed → `done` with tests |
+| **ops** | when servers/jobs move | this repo's process-compose on **:18090** / **:18091** |
+
+Score is its own subtask: `scripts/metaharness/score.sh`.
+
+```
+          research / ready / score
+   lead ──────────────────────────► dashboard board
+     ▲                               │
+     │ receipts                      │ claim / done
+     │                               ▼
+     └──────── implementers ◄────────┘
+```
+
+Forever flywheel (`node scripts/metaharness/loop-runner.mjs --forever`)
+only if the user asked. It spends tokens on a timer.
+
+## Process-compose
+
+This project: HTTP `127.0.0.1:18090`, MCP `127.0.0.1:18091/sse`.
+**Not** Forge's `:18080` / `:18081`. Kernel is a **shared UDS** at
+`~/.clawft/kernel.sock` (`WEFTOS_RUNTIME_DIR`) so 1v1sion and Forge can
+talk to one WeftOS. One Ruflo **daemon per repo** (not per crate, not MCP stdio).
+
+```bash
+node scripts/pc-enforce.mjs enforce --agent lead --reason "…"
+process-compose process start job_score -p 18090 --address 127.0.0.1
+```
+
+Do not launch a second process-compose via stdio MCP. Do not glob other
+repos' yaml into this instance (ADR-098). `overlay_ready` is **false**.
+
+## Hard rules
+
+- Never commit to `master` / `main`. Branch is `0.8-metaharness` (or a
+  feature branch).
+- MetaHarness is not a `weft` runtime dependency (ADR-096).
+- No silent flywheel promote.
+- Claim on the dashboard board before you edit for a ticket. Use
+  `node scripts/dashboard-board.mjs claim <ticket UUID|WEFT-N>`.
+- Imported Plane IDs are historical references. Do not create or change Plane
+  tickets for WeftOS work after this board cutover.
+- Do not take down Forge `:3333` or Forge `:3000` (v2 frontend).
+
+ succeeded in 0ms:
+# ADR-103: The Weave topology: roles, project kernels, instances and environments
+
+- **Status**: Accepted (2026-09-30; decisions D1–D14 set by the owner 2026-09-30; implementation tracked on cards weave-topology-P0..P4, leaf track, cog-boundary audit)
+- **Updated**: 2026-10-02. Follow-ups merged: A10 bullets, A11 (bind-address defaults), A12 (the two `mesh-local` protocols), A13 (user-key rotation), A14 (anchor reset, child peers, token project scope), A15 (service-stamped delivery origin, mesh-local protocol 2), A16 (licence records through the service). Phase 3 implemented (integrate/p3: packages K0, L, J, K1, S, U, H, X); A9 records what Phase 3 changed or left open, and the known limits are listed under Phases. Phase 2 implemented (integrate/p2: packages A–I and the integration commit, end-to-end test `crates/clawft-weave/tests/project_kernel_e2e.rs`); A7 records the contracts, what was built and the known limits. Phase 1 implemented and reviewed (integrate/p1, `docs/research/daemon-topology/phase-1-review.md`); A8 records what Phase 1 changed or deferred relative to the decisions. Earlier: 2026-09-30. Phase 0 implemented (integrate/p0, Fable phase review `docs/research/daemon-topology/phase-0-review.md`). D11 implemented. Amendments A1–A6 below record what Phase 0 added beyond the original text.
+- **Date**: 2026-09-30
+- **Deciders**: Owner / platform
+- **Depends-On**: ADR-022 (mandatory chain audit), ADR-025 (Ed25519 node identity), ADR-033 (three-branch governance), ADR-057 (substrate read ACLs), ADR-092 (rule distribution), ADR-094 (spawn permission), ADR-098 (process-compose), ADR-099 (governed workload placement), ADR-101 (inference kind), ADR-100 (cog kind)
+- **Amends**: ADR-025 (node id hash, key location), ADR-099 (adds the `project` workload kind; node = machine), ADR-102 (token authority lives in the user role), the kernel guide (mesh port), `docs/plans/install-update-review.md` (restart targets)
+- **Supersedes**: the undocumented per-project runtime rule from commit `0955e5b0` (CWD walk-up to `.weftos/runtime/`)
+- **Analysis**: [`docs/research/daemon-topology/analysis.md`](../research/daemon-topology/analysis.md) rev 3 (sections cited as §N)
+
+## Context
+
+The ADRs assume one daemon ("the daemon", "the chain", "the node"). The code and the ops docs went per-project in April 2026 without an ADR: socket, PID file, `node.key` and `workloads.json` follow a CWD walk-up to `.weftos/`, while `chain.rvf` and `chain.key` resolve from `WEFTOS_RUNTIME_DIR` or `~/.clawft/` (§2). Two project daemons therefore share one chain file and signing key with no lock. The mesh node id is a fresh UUID each boot, three documents disagree on the node-id hash, a lost mesh bind is non-fatal, and because `~/.weftos/` exists for other reasons the walk-up treats `$HOME` as a project. On the owner's Mac there are four `node.key` files and one `chain.key`.
+
+The owner wants projects to run granularly, with their own chains and governance, behind a machine-level mesh service; projects inside a container-like boundary where WeftOS does lifecycle and coordination but not the project's development work; WeftOS runnable inside WeftOS; ESP32 and WASM supported; and a way for an organization to stand up a primary instance that distributes work to subordinates, with development, staging and production instances that are shaped differently.
+
+## Decision
+
+### Roles, not a process count (§3, §4)
+
+WeftOS is four roles. A profile decides which roles one process holds.
+
+| Role | Owns | Must not own |
+|---|---|---|
+| **Machine mesh service** | the box node key, the one mesh listener, Noise sessions, discovery, cryptographic admission and revocation, routing to local tenants, signed machine facts, a small machine journal | user or project chains, secrets, tokens, governance evaluation (it consumes verdicts from the owning user daemon) |
+| **User daemon** | the user key and user chain, the ADR-102 token authority, secrets, the model/accelerator access path (ADR-101 loopback proxy), shared heavy services (embeddings, indexes, voice), the project manifest, supervision of project kernels | the mesh listener when a machine service runs |
+| **Project kernel** | the project key and chain, the tighten-only governance overlay, workspace config, the project's workload catalog, the boundary around the project | a mesh listener; duplicated heavy services |
+| **Leaf / client** | one provisioned identity and one role | a chain; governance (enforced by its parent) |
+
+Profiles: full shared host (service + a user daemon per user + a kernel per active project); personal host (machine and user roles in one `weaver`, project kernels as children); single-tenant host such as a Pi, container or server (one process, all roles); ESP32 leaf; browser client (behind the gateway, ADR-102 token, ephemeral certified key); WASI (leaf or collapsed host).
+
+### Owner decisions
+
+- **D1 Mesh port.** Default **9489**, "the weave". Configurable (`kernel.mesh.listen`). Replaces 9470 in code and 9421 in docs. Bind address defaults: see A11.
+- **D2 Machine mesh service.** Optional, **on by default**. Standalone and single-tenant installs may run it collapsed inside the user daemon; `kernel.mesh.service = off` disables it.
+- **D3 User binding.** A user key is **bound** to the OS uid on first registration over a peer-credential-checked local socket (`getpeereid` / `SO_PEERCRED`). The binding is recorded in the machine journal; an admin can revoke and rebind.
+- **D4 Runtime roots are machine-wide.** Machine role: `/var/lib/weftos` (state) and `/var/run/weftos` (sockets). Per-user state under `~/.weftos/` (`run/`, `projects/`, `chain/`). `~/.clawft/` becomes legacy, read for migration only. `WEFTOS_RUNTIME_DIR` remains the full-isolation override for tests, probes and nested instances.
+- **D5 Project id.** A stable ULID in `<root>/.weftos/project.toml`, mirrored in `~/.weftos/projects/<id>.toml`.
+- **D6 Project chain.** In-tree at `<root>/.weftos/chain/` (gitignored), anchored into the user chain with `project.anchor` events and subscribable by others at `chain/<project-id>/` under ADR-057 ACLs.
+- **D7 Keys.** A **certification chain**: machine key certifies user key; user key certifies project key; project or user certifies actor and leaf keys. No derivation, so projects can move between machines.
+- **D8 Governance overlays** are **tighten-only**: a project (and a nested instance) may add denies and lower limits, never relax the parent's rules. Every chain event records the effective-rule hash.
+  - *D8 limits (Phase 2):* the kernel gate, the `agent.chat` tool gate and the spawned-agent gate follow live parent updates and `governance.reload`; the placement `WorkloadGate` is built from the effective rules when the control plane is built, so a push does not reach it until the kernel restarts. `max_processes` and `spawn_budget` (the concurrent sub-agent spawn cap) apply at boot; a push that changes them reports `restart_required`. The child trusts the user key in `<run>/<id>/user.pub` (written by the supervisor, outside the project tree) and falls back to its own certificate with a warning only while that pin is absent; this assumes nothing inside the project can write the run dir, which Phase 4 sandboxes must keep true.
+- **D9 `project` is an ADR-099 workload kind** with pluggable sandbox drivers: `logical` (no sandbox, Phase 2), OpenShell or containers on Linux, Seatbelt or Apple `container` on macOS, wasmtime for WASM projects. The sandbox is the workload; the project kernel runs inside it as its supervisor; the user daemon supervises from outside (§6). *(Owner did not answer D9 explicitly; recorded as the analysis recommendation, reversible until Phase 4.)*
+- **D10 Nested WeftOS** is isolated by default. A toggle, `weave.master = true`, marks an instance as the master of the WeftOS instances nested under it; the master manages their config (ports, registration level, governance cap). An inner instance never joins the outer mesh unless its master registers it.
+- **D11 Node-id hash: SHA-256**, `node_id = hex(SHA-256(pubkey)[..16])`, as the code (`cluster.rs:323`) and ADR-099 already use. ADR-025 (SHAKE-256) and the ESP32 journal (BLAKE3) are corrected to match. *(Owner was unsure; SHA-256 chosen because it changes the fewest live ids.)* **Implemented in Phase 0**: one `node_id_from_pubkey` (`crates/clawft-kernel/src/node_id.rs`) used by mesh, cluster, registry and substrate; the substrate ACL still parses stored legacy `n-` ids.
+- **D12 Commands outside any project** are decided by **governance**. The shipped default rule allows read-only commands (`status`, `doctor`, `health`, `version`, `project list`) against the user daemon and denies state-changing commands with "not in a project; run `weft project init` or pass `--project`". Operators may change the rule.
+- **D13 Project kernels are processes by default.** In-process tenancy is the opt-in for small projects and the collapse for single-tenant hosts.
+- **D14 Resolution.** `weft` finds a kernel by flag → env → manifest → user default, then confirms with a `kernel.status` handshake returning `{node_id, user_id, project_id, depth, parent}`. It never maps CWD straight to a socket, never falls back silently to an in-process kernel, and prints what it tried.
+
+### Instances, federation and environments
+
+An entity or organization stands up a **primary instance**: the WeftOS instance that holds its governance root (genesis) and decides where work goes. A primary may have **subordinate instances**, which are separate WeftOS instances (their own genesis and chain) that the primary delegates work to. Primaries and subordinates talk through the existing inter-instance surface: mesh admission with capability claims, `coordination.link` (ADR-022), chain subscription and anchoring (D6), and ADR-099 placement for delegated workloads.
+
+For software projects the owner's model has three instances with different shapes:
+
+| Instance | Shape | Why |
+|---|---|---|
+| **Development** | distributed: many developers' user daemons and project kernels on one shared mesh | collaboration; placement fans work out |
+| **Staging** | a gate: a small, deliberately undistributed instance that receives a candidate, runs checks, holds the promote/reject decision and the intelligence around it | promotion must be governed, reproducible and auditable, not spread across whoever is online |
+| **Production** | the deployed target, fed only by staging promotions | stability |
+
+Promotion is a governed, chain-recorded hand-off between instances, not a mode of one instance. The same shape fits sensor fusion: leaves and edge nodes form a distributed instance; a fusion instance consumes their chains; downstream consumers subscribe.
+
+### Core versus cog
+
+Staging-as-a-gate, CI/CD, sensor fusion and similar purpose-specific behavior are **cogs** built on the OS primitives (ADR-100), not kernel features. The kernel keeps what every instance needs: identity and certification, chains, governance, placement, IPC and mesh, supervision, the token authority. A separate audit (card cog-boundary-01) lists everything in the WeftOS tree today that should have been a cog on those primitives. That audit is **advisory**: nothing is removed because it is listed; each item gets a keep, move later, or move now verdict with its cost, and core pieces that are correctly core are fixed in place rather than extracted.
+
+## Amendments
+
+- **A1 (Phase 0, legacy chain).** A kernel with no chain of its own keeps using the legacy `~/.clawft` chain and key rather than forking history. `chain.lock` guards every chain in use. While no `chain.lock` exists beside a legacy chain, the first adoption needs `weaver kernel start --adopt-legacy-chain` (also when the kernel is rooted at `~/.clawft` itself); a write within 120 s is refused as a probable lock-unaware writer. `--new-chain` starts fresh, and is refused where it would overwrite the legacy chain. Phase 1 `weaver migrate user-chain` reuses this flag family and lives beside `choose_default_chain`.
+- **A2 (mic source policy).** The voice pipeline's input node is: an operator pin (`WHISPER_INPUT_NODE_ID` or `voice.mic_node_id`), else the single registered node publishing `sensor/mic`; two or more candidates, including one appearing after an automatic choice, stop speech-to-text until a pin is set. `node.register` carries no capability declaration yet; requiring a declared mic capability is on the leaf track.
+- **A3 (voice principal).** Voice commands dispatch through the authorization chokepoint as an internal principal with `read, chat, write`, never `admin`. Whether cron mutations stay reachable by voice is decided in Phase 1 package G.
+- **A4 (D14 scope).** Phase 0 delivered the "prints what it tried, no silent fallback" half of D14. Manifest resolution and the `kernel.status` handshake are Phase 1 packages A and D.
+- **A5 (gateway bind).** The gateway's `0.0.0.0` default is changed to loopback with ADR-102 card 03; LAN exposure is an explicit choice.
+
+- **A6 (decisions of 2026-10-01, owner accepted the recommendations).**
+  - *D12 default:* `read_only` applies only to the `--profile user` daemon; every other root keeps `allow_all` until migrated; an explicit `kernel.governance.outside_project` always wins. Voice is inside the scope but is denied cron mutations. Denial `error_kind` is `project_required`.
+  - *Phase 2:* one project key (node = chain = anchor key); invalid overlay at boot refuses to start; `idle_stop_secs` 1800 and never while agents, workloads or streams are active; children survive a user-daemon restart by adoption (`kernel stop` cascades unless `--keep-children`); mesh delivery to children is register-only until Phase 3; project chains start fresh with a parent-head link; existing projects opt in via `weaver project migrate-kernel`, default flips in Phase 3.
+  - *Phase 3:* uid binding is TOFU on single-human-user machines and admin-approved otherwise; admission runs in observe mode for one release, then enforce after the Pi and ESP32 are redeployed; a designated `cluster_owner_uid` answers cluster verdicts, fail-closed, with a 10-minute grace for already-admitted peers; the owner's Mac adopts its existing `node.key` as the box key (new machines generate one); `user.key` keeps the migrated `chain.key` seed; the service runs as `weaver mesh serve` from a root-owned path; the local socket is 0666 with peer-credential authorization; service accounts `_weftos` (macOS) and `weftos` (Linux); user certificates last 24 h and renew at 12 h; Windows is design-only in Phase 3. On macOS a non-root LaunchDaemon writes `/var/run/weftos` only when its user is in the directory's group, so the installer creates the directory group-owned by the service group and adds the service account to it.
+
+- **A7 (Phase 2 contracts, package A).** The shared formats every Phase 2 package codes against; the file-level plan is `docs/plans/weave-topology-p2-plan.md` section 1.
+  - *One project key.* `<root>/.weftos/project.key` is the node key, the chain signing key, the anchor key and the proof-of-possession key, so a child's `node_id` equals its `project_key_id` (first 16 bytes of SHA-256 of the public key, 32 hex). Because one key signs several message types, every signature carries a domain tag: `weftos-project-cert-v1`, `weftos-project-anchor-v1`, `weftos-mesh-local-pop-v2`.
+  - *Certificate.* The user key signs `"weftos-project-cert-v1\n"` plus canonical JSON (sorted keys, no whitespace, no `sig`) of `{v, type, project_id, project_pubkey, project_key_id, user_key_id, user_pubkey, serial, issued_at, expires_at}`. No root path is inside, because projects move. `expires_at` is null in Phase 2; the verifier honours it. The first key seen for a project id is certified (TOFU against the manifest); a different key for the same id needs an explicit `project.rekey`.
+  - *Anchor statement.* The project key signs `"weftos-project-anchor-v1\n"` plus canonical JSON of `{project_id, project_key_id, cert_serial, seq, chain_id, head_hash, head_seq, rule_hash, at, prev_anchor}`; `prev_anchor` is the SHA-256 of the previous accepted statement including its `sig`. The user daemon attests "this key claimed head X at time T"; it cannot verify X without subscribing to the project chain, and says so.
+  - *Child root.* `RootSource::Child { id, project_root }`: ephemeral files under `~/.weftos/run/<id>/` (socket, pid, lock, log, `spawn.json`, `parent-policy.json`, `state.json`), durable files under `<root>/.weftos/` (`project.key`, `project.cert.json`, `chain/`, `state/`, committed `overlay.toml`). The project walk-up never selects a child.
+  - *Overlay.* Tighten-only: `deny` and `require_approval` union, numeric limits `min(parent, overlay)`, booleans `parent OR overlay`; `permit`, `deactivate`, a parent rule id (compared trimmed and case-insensitively) or a looser limit is a hard error naming the key, and an invalid overlay refuses boot. The effective-rules hash is `SHA-256("weftos-effective-rules-v1\n" + canonical JSON of {parent_hash, overlay_hash, merged rules sorted by id, merged limits})` and rides on every child chain event as `rule_hash`.
+  - *mesh-local/1 (Phase 2 child registry).* `mesh.challenge`, `mesh.register` (project key proof over `weftos-mesh-local-pop-v2\n<op>\n<user_key_id>\n<nonce>\n<project_id>` (op `register` or `rekey`, nonce 32 lowercase hex issued by the user daemon, id a canonical ULID, all validated) plus the spawn nonce), `mesh.heartbeat`, `mesh.unregister`; a session expires after three missed heartbeats and a second live session for one project is refused. Until Phase 3 peer credentials, the guard is the 0600 socket, the spawn nonce and the proof of possession. Delivery to a child is register-only in Phase 2.
+  - *Verified project.* `GatePrincipal` gains `project_id` and `instance_id` (absent on old payloads). `project_id` is stamped only from a `ProjectAttestation` that the daemon's `VerifiedProject` produces (cross-crate sealing is not possible, so this is by construction path plus a grep test): the kernel's own bound project, a validated token scoped to a project, or a user-signed forward header. A bare `Request.project` stays a claim. This is an isolation guard between one user's projects, not a boundary against a hostile same-uid process.
+  - *Verified project, as built (package I).* The forward header is `{project_id, issued_at_ms, sig}`, signed by the user key over `"weftos-project-forward-v2\n<project_id>\n<issued_at_ms>\n<method>\n<sha256 of canonical params>\n<target child key id>"`, so it authorises one request to one child; the child accepts it once and within 5 s, and the TCP relay strips it from remote lines. Refusal kinds: `forward_unavailable`, `forward_bad_signature`, `forward_expired`, `forward_replayed`, `project_scope_mismatch`, and the reserved `forward_wrong_target` (a header signed for a sibling child currently reports as `forward_bad_signature`). A method containing a newline is refused on both sides; the proxy stamps the header as its last step, after any param rewriting. A token scoped to one project cannot act as another (`project_scope_mismatch`). Honest limit: same-uid callers can still lie via `Request.project` on the claim path (no token, no forward header, unbound daemon), which keeps its Phase 1 meaning and is logged as `claimed`; `VerifiedProject` is an isolation guard between one user's projects, not a boundary against a hostile local process (Phase 3 peer credentials, Phase 4 sandboxes).
+  - *Child bootstrap, as built (package H).* `pre_boot` reads and deletes `spawn.json` (0600, 60 s, wall clock), loads `project.key`, registers over `mesh-local/1`, verifies and persists the certificate and verifies the signed parent policy before the chain is opened. The register acknowledgement is signed by the user key over child-chosen randomness, so a socket squatting at the parent path cannot forge one; registration is also bound by a second project-key signature over socket, pid and client nonce, and heartbeat and unregister carry a project-key signature over (op, session, pid, time), so a leaked session id is not a credential. The pid in `project.register` is recorded as `claimed_pid`: the child reports it and the user daemon does not verify it (it checks it against the pid the supervisor spawned, which the supervisor records on the spawn expectation right after starting the process; a registration that wins the race before that is not checked). Removal of `spawn.json` is by path after the descriptor checks. The anchor acknowledgement is not signed (transport-authenticated, as in A7 above). *Revocation reach:* `project.rekey` drops the session (the old key's re-register is refused `key_revoked`) and writes no marker, so the rekeyed child boots under its new certificate. `project.revoke` is terminal: it drops the session and writes `~/.weftos/run/<id>/revoked` (atomic, 0600; the run dir is created 0700 when the child is stopped), and nothing clears it, and since the Phase 2 review a revoked id never re-enrols at all (`project_revoked`, see *Phase 2 review* below). A running child whose re-register is refused `key_revoked`, `key_conflict`, `key_reuse`, `project_not_found` or `project_revoked` shuts the kernel down; a child booted while the parent is unreachable refuses only if the marker exists, so it cannot see a revocation issued while the user daemon could not write it. A challenge nonce that was evicted or used is refused `challenge_unknown` and the child asks again, for at most 45 s of retries (under the 60 s spawn window). A heartbeat proof covers the reported activity and is replayable for at most 30 s (liveness only). `--profile project` forces the project profile in `daemon::run`, so a project kernel cannot boot as a plain kernel.
+  - *Supervisor, as built (package G).* The user daemon runs one `Supervisor` (`weave/src/project_supervisor/`). A child is the `project` workload kind on the `logical` adapter (`clawft-kernel`: `ProjectKind`, `LogicalRuntime`, a `ChildLauncher` trait weave implements), driven through `WorkloadHost`, so every transition is gated and chained as `workload.*`. The only permit for the kind is `project_supervisor_permit()`, limited to the principal `weftos.project-supervisor` and `PackageTrust::ProjectCert` (which ranks below every signed-package trust, so no cog permit ever matches it); it is not installed in the operator placement gate, and `ProjectKind::load` always refuses, so `workload.place` of a project stays denied. Deviations from the plan, and why: (1) children are **not** launched with `workload_runtime::supervise::Supervised`: it pipes stdout and stderr, so a child that outlives a daemon restart would die of `SIGPIPE`; children log to `<run>/<id>/kernel.log` in their own process group; (2) restarts use a **local `RestartTracker`** (OTP `one_for_one` plus `Transient`, backoff 1 s to 30 s, `restart_max` inside `restart_window_secs` then `failed`) because the kernel `os-patterns` tracker backs off from 100 ms; (3) a run root whose `<run>/<id>/kernel.sock` exceeds 103 bytes is **refused** (`sun_path`), found by a test on macOS; (4) the user-daemon stop cascade is **CLI-side** (`project.stop_all` before SIGTERM; `--keep-children` skips it), so `daemon.rs` shutdown is untouched, and launchd `AbandonProcessGroup` / systemd `KillMode=process` keep children across a service restart or `weaver update`; (5) the child environment is an allow-list after `env_clear()` (`HOME`, `PATH`, locale, `WEFTOS_RUNTIME_DIR`, `WEFTOS_PROJECT_ID`), argv is exactly `kernel start --foreground --profile project --project <id>`.
+  - *Project token (package G).* `TokenScope::Project`: `write` capability only, never Admin, bound to one project, TTL 3600 s, renewed through `project.token.refresh` (route `Write`) by the child's `ParentLink` when 900 s remain (before each call and from its monitor, at most one attempt per 30 s). The supervisor honours a refresh only for the token it issued last or the one before and revokes the older; stopping or failing a project revokes both. In addition `authorize_caller` refuses every method outside `project_token_scope::ALLOWED_METHODS` / `ALLOWED_PREFIXES` (`shared.`, `kernel.handshake`, `project.token.refresh`) with `project_token_method_denied`: what the `ParentLink` calls and nothing else. The child's other parent calls (`mesh.*`, `project.anchor.submit`) do not present the token. Honest limit: a same-uid caller sending the literal scope `admin` (ADR-070) bypasses this like every capability check until Phase 3 peer credentials. Known limitation: tokens live in the chain, which is saved only on a clean shutdown, so after an unclean user-daemon exit a surviving child's token is unknown, its refresh fails closed, and its shared services stay `down` until the child is restarted (`weaver kernel restart --project <id>`). Adoption cannot re-issue a token to a running child because there is no channel to deliver it.
+  - *Adoption, revocation, markers (package G).* On boot the supervisor scans `<run>/*/kernel.pid` and adopts only a child whose pid is alive, whose executable name matches the one recorded in `state.json`, whose `kernel.lock` is held by that pid and whose `kernel.handshake` names the project and the same pid; an unverifiable leftover is listed (`weaver kernel status`, `weaver doctor`) and never signalled; a pid is re-verified before every signal (SIGTERM and SIGKILL), and an adopted pid is group-signalled only when it leads its group. A verified child of a project that no longer prepares is never left unmanaged: a revoked project's child is stopped, anything else is reported with the reason. `ensure_running` takes over a live verified child instead of starting a second. After a SIGHUP re-exec the daemon is still the parent of its children but has no waiter, so adopted pids are reaped with `waitpid(WNOHANG)` to tell a dead child from a zombie. G is the single writer of the terminal `<run>/<id>/revoked` marker: `project.revoke`'s identity hook (`on_identity_change`, after the journal write) writes it (0600, run dir 0700), and nothing ever clears it; the supervisor kills the child's credentials first, stops it (falling through to signals if the gated stop is refused), marks the project `failed` and never respawns it; `project.rekey` and a repair that changes a bound key stop the old child and write no marker.
+  - *Legacy daemons (package G).* A plain `weaver kernel start` inside a project, beside a running user daemon, is refused unless `--legacy-project-daemon` (one release); a re-exec (`SIGHUP`, `weaver update`) and the backgrounding of an already-allowed start carry the flag so the refusal never takes a running daemon down. The guard is skipped when `WEFTOS_RUNTIME_DIR` names the endpoint explicitly. `weaver project migrate-kernel <id> [--dry-run|--revert]` is the per-project opt-in: it refuses while the project's own daemon runs (never signalled), refuses symlinked sources or directories (re-checked at apply time, copies written `O_NOFOLLOW`), copies `workloads.json` and `apps.json` to `<root>/.weftos/state/`, flips `[serve] via` and prints the rollback line.
+  - *Parent transports (package G, H).* One transport for `project.anchor.submit`: H's `RpcParentTransport` (it verifies the parent socket's owner and mode and bounds the whole exchange). G's own was removed. `ParentLink` (shared services and token refresh) keeps its own bounded client because it is async and carries the project token.
+  - *Integration (Phase 2).* The user daemon's `post_boot` installs the supervisor, runs the adoption scan and starts the idle loop. The only permit for the `project` kind stays `project_supervisor_permit()` on the supervisor's own workload gate; it is not in the operator gate, so `workload.place` of a project is still denied. One derivation names the revoked marker, `runtime_paths::revoked_marker(run_root, id)` (`<run_root>/<id>/revoked`): the `project.revoke` writer and the supervisor use the user daemon's run root (`project_cert_rpc::user_run_root`, which `post_boot` and `governance.parent.push` also use, so `$WEFTOS_RUNTIME_DIR` is honoured; with no run root the push is refused `no_run_root`), and the child reaches the same file as `RuntimePaths::revoked_marker()` of its run dir. Before this, the writer derived it from the manifest store (`<manifests>/../run/<id>/revoked`), which a `$WEFTOS_RUNTIME_DIR` or a moved store pointed elsewhere. The end-to-end test with a real child found two more wiring gaps, both fixed: a child's chain was signed by a fresh `chain.key` beside the checkpoint instead of `project.key`, and `post_boot`'s one-key check then stopped every real child (boot now signs a `project`-profile chain with the project key `pre_boot` handed over as the node key seed, confirmed against `project.key` by the strict reader; a missing seed, a missing file or a different key refuses the boot, and nothing is created), and a child was bound to no project (`compute_bound` now binds `RootSource::Child` to its id), so its handshake failed the supervisor's readiness check, a forward header (the graceful `kernel.shutdown`) could not verify, and governance events carried no `project_id`.
+  - *Revoke marker fails closed.* When the marker cannot be written (no user-daemon run root, an id that is not a safe path component, or an I/O error, each with its own message), `project.revoke` still completes the revocation (journal, chain, session, child stop) and then returns `revoke_marker_unwritten` instead of success, so the owner can write the marker by hand; an identity repair that revokes reports it the same way.
+  - *Phase 2 review (`docs/research/daemon-topology/phase-2-review.md`), fixed before merge.* (M1) An overlay's `human_approval_required = true` over a parent that does not set it re-tags the parent's blocking rules as overlay denies (`OVERLAY_DENY_TAG`, which the engine never escalates, now also honoured on the browser-policy and binding-thread paths), so the flag makes only parent-permitted actions ask for approval and can never turn a parent deny into a `Defer` prompt approvable with `agent.chat.defer_decide`. The A7 overlay bullet's "booleans `parent OR overlay`" stays true; this is what makes it tighten-only. (M3) `governance`, `project` and `project.supervisor` are kernel-only sources (`chain::KERNEL_SOURCES`): `chain.append` and `chain_bridge` refuse them (`reserved_source`), and the rollback floor reads `governance.overlay.applied` only under source `governance`, so a `Write` caller cannot forge a huge `parent_version` and brick boot and reload. Replication (`append_signed`) still accepts them, because every chain carries governance events; a project kernel replicates nothing. (S1) Revoke is terminal for the id: `plan_registration` refuses any key for a project with a revoked (not merely rekey-retired) key and no certificate in force (`project_revoked`); a late store failure in `project.revoke` or `project.rekey` (cert file) is `identity_change_incomplete`, and the after-hooks (marker, session drop, child stop) run anyway. To run a revoked tree again, give it a new identity (`weft project init --fork --force`, after deleting the old `project.key` and certificate and moving the chain aside). `weft` keeps the user daemon's `error_kind` when an on-demand start is refused.
+  - *Chain-authority follow-ups (after the Phase 2 and Phase 3 reviews).* (a) `auth.token` joins `chain::RESERVED_SOURCES`, the one list of authority-owned sources (`user.projects`, `project.anchor`, `auth.token`); a test pins each literal to its owning module's constant. `chain.append`, `chain_bridge` and `append_signed` refuse them, so a `Write` caller cannot forge a token issue or revoke and a peer's replicated `auth.token` event is refused, not folded (`append_signed` now checks the source before any sequence or fork bookkeeping). Per-event signatures do not exist on the chain, so readers cannot tell a replicated event from a local one; the refusal at the doors is the control, and authority-bearing chain replication is unsupported until a verified replication path exists: `MeshRuntime::handle_chain_sync_outcome` stops cleanly at the first authority event with a typed, non-fatal `StoppedAtAuthorityEvent {sequence, source}` (skipping would leave a sequence gap), and verified replication of authority events is future work. `chain::RESERVED_KINDS` (`governance.overlay.applied`, which the rollback floor and `user_pin_used` fold) is refused from replication under any source. The kernel sources (`governance`, `project`, `project.supervisor`) still replicate: the invariant is that a kernel that evaluates the overlay rollback floor never replicates. (b) Token revocation pruning uses the horizon `min(now, newest chain event time)`, so a boot with a bad clock (a Pi with a dead RTC) cannot drop a revocation of a token still live by the real clock, and the journal lock is held across the journal read and the rewrite. Pruning lags by one boot. (c) The overlay's `max_processes` and `spawn_budget` are consumed at project-kernel boot (`Prepared::apply_limits`), and the supervisor now exports the parent's real caps (its kernel config's `max_processes` and subagent `max_per_conv`) in `parent-policy.json` instead of `Limits::default()`, so a child's merged limits start from them and an overlay can only tighten; `governance.parent.push` seeds from the same caps and explicit `limits` only tighten on top. An overlay above the parent cap is refused with the parent value and the fix in the message. (d) The placement control plane's gate is fixed when it is built and does not follow a governance push (D8: applies after a restart); after a push the placement RPCs now refuse (`governance changed ... restart this kernel`) rather than let the older gate decide. (e) Signing rules for untagged signers: a signer that takes caller-chosen bytes and does not domain-tag them (the chain's `dual_sign`, the tree manager's `sign_bytes`, the mesh handshake) must never sign bytes that start with a `weftos-project-*-v1` tag; `chain::signs_project_domain` makes the first two refuse (release builds too). The mesh admission hello only signs its own domain-tagged layout, never caller bytes. JavaScript verifiers must read any `u64` above 2^53 (versions, sequence numbers, millisecond stamps) as a decimal string, since a JS number loses it.
+  - *Phase 2 follow-ups, supervisor and shared services (cards 7e8d7350, d302d81c, 3503efb6).* (S5) `weaver kernel start --legacy-project-daemon` in a tree whose manifest says `via = child-kernel` is refused whatever the flag says, naming `weaver kernel start --project <id>` and the way back (`migrate-kernel --revert`); the flag still lifts only the "a user daemon is running" refusal. (S6) The supervisor records the build a child reports in its handshake (`sha`, `version`) in `<run>/<id>/state.json` when the child becomes ready or is adopted; `project.status` carries `kernel_sha`, `kernel_version` and `stale_build` (the running child's build differs from the daemon's), `weaver kernel status` annotates the row, and `weaver doctor` raises `child:<id>:stale-build`. Nothing restarts a stale child on its own: a project in use is never interrupted for an upgrade. (S7) `ensure_running` on a child in an automatic restart waits (bounded by `ready_timeout`) for its handshake instead of returning the unbound socket; adoption retries children that hold their lock but have not bound their socket for up to `ready_timeout`, and `stop_all` re-scans such leftovers first, so the cascade does not skip a child that was mid-boot. (S8) A degraded child that holds a spawn nonce the restarted daemon no longer expects (`spawn_not_expected`, `bad_spawn_nonce`, `spawn_expired`) drops the nonce and registers the way an adopted child does; a `running` child whose registry session has stayed expired for `lost_heartbeat_grace` (30 s, after the three missed beats) is treated as a crash: stopped with the pid re-verified, restarted inside its restart budget, then `failed`. The ledger pid (S8c) was fixed with the review round. (Note b) `prepare` consults the revocation view: a revoked project with no certificate in force is refused (`project_revoked`) even when its marker is missing, so it is not spawned five times to burn the restart budget. (d302d81c 2, 4) `project.stop` on an adopted-but-refused leftover answers `unmanaged_pid` (the CLI prints "unmanaged kernel pid N"); the idle clock counts a call only after the capability check and the project-token allow-list passed. (3503efb6) `shared.*` re-checks on every call that the project is still registered and active (limits stay cached until `shared.reload`, so editing a manifest still does not raise them), a re-registration invalidates that project's cached limits, and the four global slots are fair: a project that holds a slot may not take another while a project that holds none was refused within 3 s, so two busy projects cannot keep a third out. Declined: a `daemon::run` smoke test for the project profile with decoys beyond what `shared_services_child.rs` and the end-to-end test's real child already prove (the heavy half needs the real `weaver` binary and is the e2e's job); the `.env`-in-project-root case (S10e) stays open. Review fixes: an adopted child's tombstone session is never a lost heartbeat (it is flagged `adopted` until the child registers), a child whose last beat was busy is not restarted, and one restart happens per liveness pass; the boot scan waits at most 3 s and `stop_all` 2 s for children that have not bound their socket; the S5 guard ignores archived manifests; the `shared.*` active check is a `stat` on a blocking thread (the manifest is read only when its mtime or length changed) and an unreadable store is `project_store_unavailable`; the fairness wait window is 10 s. Known limits: a child that was unregistered from the store keeps running until stopped (the supervisor does not watch the store), and the `unmanaged_pid` report of `project.stop` is not re-verified at answer time (the pid may have exited since the last scan).
+  - *Known limits (Phase 2 as built).* A child booted while the user daemon is unreachable refuses only when the marker exists, so it cannot see a revocation whose marker the daemon could not write; it learns of it when it re-registers (`key_revoked`). A heartbeat proof is replayable for up to 30 s (liveness only). A same-uid caller sending the literal scope `admin` bypasses the project-token allow-list like every capability check (ADR-070) until Phase 3 peer credentials. An adopted child whose project token expired, or whose token the daemon lost in an unclean exit, fails closed on shared services until it is restarted (`weaver kernel restart --project <id>`). Not exercised by tests: the launchd and systemd units with live children (`AbandonProcessGroup`, `KillMode=process`) and a separately installed `weaver` binary as the child; the end-to-end test runs the real `weaver kernel` code path from the test binary.
+
+- **A8 (Phase 1 review, 2026-10-02).** One line per place the implementation differs from the text above; no decision is reopened.
+  - *D14 levels:* four levels, in order: flag (`--runtime`, `--project`), env (`WEFTOS_RUNTIME_DIR`, `WEFTOS_PROJECT`), manifest, user default. A manifest with `[serve] via = "user-daemon"` and no `runtime_dir` selects `~/.weftos/run`; with no project known, `~/.weftos/run` is used when it holds a `kernel.sock` or `kernel.lock`; otherwise the Phase 0 default. The handshake does not complain that the user daemon is unbound.
+  - *D14 handshake shape:* beyond `{node_id, user_id, project_id, depth, parent}` it carries `proto` (a range), `user_key_id` (hash of the chain verifying key), `profile`, `roles`, `bound_via`, `runtime_dir`, `pid`, `version`, `sha` and `binary`. `user_id` is the local uid, unverified until D3 (Phase 3).
+  - *D12 mechanism:* a policy mode (`read_only`, `deny_all`, `allow_all`; `kernel.governance.outside_project`) over a fixed, reviewed allow-list in `scope_gate.rs`. There is no `GovernanceRule` and no per-rule editing; rule-level editing is deferred. The allow-list includes the read streams and reads first-party clients use without a project (`kernel.logs_stream`, `substrate.subscribe`, `substrate.read`, `cluster.facts`, `voice.trace`); `ipc.subscribe_stream` is excluded.
+  - *D4 legacy root:* `~/.clawft/` stays the non-project default runtime root until Phase 2. Phase 1 permits three writes there: `chain.lock`, `MIGRATED-TO-WEFTOS.txt` and (before the review fix) `auth-tokens.jsonl`; the token journal now lives in the runtime root and the legacy copy is only read.
+  - *D3 peer credentials:* a uid-equality check landed in Phase 1: literal `auth` scopes are honoured only from a unix-socket peer with the daemon's uid, the TCP relay strips them, and other uids need a token (`peer_uid_mismatch`). Full user binding stays in Phase 3.
+  - *Token `project` scope:* recorded on the chain event; as of Phase 2 package I it is **enforced as the request's project** (superseded: see A14). A token carrying a `project` is a verified project source, a request whose own `project` claim names another is refused `project_scope_mismatch` before any capability check, and the scope gate treats the token's project as the request's project (so an unclaimed request from a token for A is inside A). It is a claim guard, not a capability limit: an owner token still carries owner scope, and a project token (`TokenScope::Project`) is write-only and method-restricted.
+  - *`weaver update`:* restarts only the user daemon, opt-in with `--restart`; per-project kernel restarts and the manifest `[binary]` write are Phase 2.
+  - *Local protocol versioning:* the daemon RPC carries `proto` 1 with a range; `mesh-local/N` negotiation is Phase 3.
+  - *Legacy clients:* in 0.8.1 a request without `proto` was accepted for every method (the plan said read-only methods only), and a daemon without `kernel.handshake` was accepted unverified on the default endpoint. **From 0.8.2 (CHANGELOG `[Unreleased]`) both are refused for mutating calls:** the daemon answers a no-`proto` request with `proto_mismatch` unless the method is read-only (`kernel.handshake` stays open), and a client that finds a daemon without `kernel.handshake` on the default endpoint warns once and then sends read-only calls only (`unverified_daemon` for the rest; the allowlist is `READ_ONLY_METHODS` in `clawft-rpc`, kept equal to `Capability::Read` by a test). Restart the old daemon with the current build to lift it. The daemon gate is the allowlist itself, so an unlisted method without `proto` is refused even if the capability table would call it Read. The TCP relay does not stamp `proto`: a remote JSON client that omits it is read-only from 0.8.2.
+  - *Chain guards:* an explicit `kernel.chain.checkpoint_path` into a directory holding `MIGRATED-TO-WEFTOS.txt` is refused at boot (exit 78) unless `--adopt-legacy-chain` is passed.
+  - *Refusal exits (0.8.2):* permanent refusals exit 78; the legacy-chain age-window refusal (an older kernel wrote the chain within 120 s) is transient and is a plain boot error (exit 1), so a service manager retries it. launchd cannot filter on exit codes, so the user daemon leaves `~/.weftos/run/REFUSED` on a permanent refusal or a clean exit and the generated plist's `KeepAlive` is `PathState {REFUSED: false}`; only an instance the service manager started removes it once a boot succeeds (the generated plist sets `WEFTOS_SERVICE_MANAGER=launchd`; `service_units::SERVICE_MANAGER_ENV`). A manual `kernel start --profile user` leaves the sentinel and prints a hint, because removing it would make launchd start its own instance beside the manual one, refused every 30 s; `launchctl kickstart gui/$UID/ai.weftos.user` after `kernel stop` hands control back. A refused duplicate start (lock held, socket live) never writes it, and the clean-exit write happens only if the instance lock can be retaken (no successor). The plist watches `~/.weftos/run/REFUSED`, so a `WEFTOS_RUNTIME_DIR` override is not supervised by launchd. Plists installed before 0.8.2 keep the old `SuccessfulExit` rule until the unit is regenerated (`weaver service unit --kind launchd`).
+  - *Phase 1 row:* `weft project` has `init`, `fork`, `list`, `show` and `seed`, plus the `project.register` RPC. The A1 migrate flag family and the A5 gateway loopback default (with a `Host` guard) are implemented as written.
+
+- **A9 (Phase 3, 2026-10-02).** One line per place the implementation differs from the Phase 3 plan (`docs/plans/weave-topology-p3-plan.md`); no decision is reopened.
+  - *Mode selection:* `kernel.mesh.service = auto | required | off` is decided once per boot by the user daemon (`mesh_boot::prepare`), which probes by really connecting, verifying the server and registering; `weaver kernel start --foreground` runs the same path. Project and legacy daemons keep their own mesh and refuse `required`. `kernel.status` and `kernel.handshake` report `mesh.mode` for every daemon.
+  - *Service record:* clients read `service.json` from beside the socket (`/var/run/weftos/service.json`), the copy the service writes for them; the state-dir copy is 0700 and unreadable to users. The service writes the record before it binds the socket (after checking that no live service owns the path), and a client that finds the socket without the record waits up to 2 s for it. The client trusts the record only when the opened file belongs to root or the socket's owner and names the socket's owner as `service_uid`. The local socket's directory is group-owned (0750), so the socket's 0666 mode (D-7) is not the gate; group membership plus the peer credential is.
+  - *Listener default:* `127.0.0.1:9489`; LAN exposure is an explicit `listen` in `mesh.toml` (R9).
+  - *Journal principal:* recorded as `{"kind":"uid","id":501}` (the plan wrote `v`); `bindings.list` shows `{"uid":501}`.
+  - *Sender scope:* a local cross-tenant delivery carries the sender's machine-issued certificate; the receiving daemon verifies it against the pinned machine key, and that it names the delivering node, and only then exposes the sender's `user_id` as `src_scope`. Cross-tenant sends need the recipient's `accept_from`. Scoped `weft://` sends are reachable from the API (`ServiceForwarder::send_to`) and the tests; no RPC or router caller uses them yet (known limit).
+  - *Stale keys:* after `bind rebind` or `revoke` the old daemon keeps retrying at its slowest backoff (30 s) instead of burning its uid's registration budget; it does not recover on its own and needs a restart with the current user key. A transport failure returns it to the normal backoff.
+  - *Doctor mode check:* `weaver doctor` compares the answering daemon's `mesh.mode` with the service only when that daemon is the user daemon; a project or legacy daemon reached from a project directory is reported, not compared.
+  - *User units:* the per-user launchd/systemd units carry no mesh flag; `kernel.mesh.service` lives in `~/.weftos/weave.toml` only. A `required` daemon started before the service exits 1 and is restarted by the service manager within its start limit (launchd every 30 s; systemd 3 tries in 60 s, after which `systemctl --user restart weftos` is needed).
+- **A10 (Phase 3 review, 2026-10-02; `docs/research/daemon-topology/phase-3-review.md`).** What the review established about the shipped behaviour; no decision is reopened.
+  - *Verdict caching compounds:* the kernel's admission gate and the service's verdict broker each cache a permit for up to 300 s, so a governance rule change can take up to about 600 s to reach a peer that is already permitted. Denials cache for 30 s.
+  - *`observe` is not protection:* under `observe` (the default for the first release) no peer is ever marked verified, so a peer can still take over another's route by claiming its `source_node`; route ownership and `src_scope` are enforced only under `enforce`. `weaver mesh peer revoke` closes the peer's live connection in every mode, and under `enforce` a revoked peer is also cut off on its next frame and refused on reconnect; under `observe` it can reconnect.
+  - *User chain in service mode:* the migration (plan section 5) modifies nothing under `~/.weftos/chain/`, but in steady state the service-mode user daemon appends `mesh.service.bound` and `mesh.journal.anchor` events to its user chain. "Never touched" applies to the migration only.
+  - *Identity is never changed by omission:* `weaver mesh install-service` refuses on a machine with `~/.weftos/run/node.key` unless `--adopt-node-key` or `--fresh-node-key` is given, and under `auto` a user daemon whose machine key is pinned and that has no local `node.key` refuses to boot rather than mint a new node id.
+  - *Observe takeover is a flap, by design:* under `observe` an unverified connection that claims a `source_node` already routed to another unverified connection replaces that route, and the displaced connection is closed within 250 ms (its route is gone). The legitimate peer then reconnects and takes the route back, so a persistent claimant produces a flap rather than a silent hijack. We do not refuse the displacement: a legitimate reconnect after a wifi blip looks identical (the old connection may be half-open for minutes) and must win. The replacement is logged at warn. Only `enforce` makes a route non-displaceable.
+  - *Connection limits apply in every mode:* the per-IP cap and the first-frame timeout apply under `off`, `observe` and `enforce`; only the idle timeout and live revocation checks remain `enforce`-only. A legacy leaf must therefore send something within 10 s of connecting. Both are configurable, with the same defaults, in each place the mesh runs: `kernel.mesh.max_connections_per_ip` (64) and `kernel.mesh.first_frame_timeout_secs` (10) for the collapsed daemon, and `max_connections_per_ip` / `first_frame_timeout_secs` in `mesh.toml` for the machine mesh service (`weaver mesh install-service` writes them only when `--max-connections-per-ip` / `--first-frame-timeout-secs` are given). The service passes them to the listener through `serve_listener_with`.
+  - *Route loss is O(1) per connection:* each serving connection counts its own live routes (`RouteTally`), flipped by removal or replacement, instead of scanning the peer map every 250 ms.
+  - *Seed dials are bidirectional and redial:* `connect_seeds` runs the same pump as the listener, so frames from the seed reach the runtime, and redials with jittered exponential backoff (1 s doubling to 60 s, 50-100% jitter, reset after 30 s up). The seed route is keyed by the dialled address until the seed's own envelopes register its node id on the same connection. The returned handles stop dialling when aborted, and `MeshService::stop` (and drop) aborts them together with the accept loop; stop is terminal for those loops. A dialled connection that hears nothing for 5 minutes is dropped and redialled (inbound silence only, so a half-open seed is detected). The seed's id is not authenticated (no hello comes back), so the connection binds to the first `source_node` it sends, drops later frames claiming another id, and may not claim an id another connection already routes. Duplicate seed addresses are dialled once. A route removed by aborting a dial emits `Left`.
+  - *Relays that predate scope fields strip them:* the wire format ignores unknown fields, so a peer on an older build accepts newer envelopes, but if it relays one it re-serialises without `dest_scope` and `src_scope`. Scoped traffic must not cross such a hop; treat a missing scope as unscoped, never as trusted.
+  - *Quiet seeds flap every 5 minutes:* the dial side has no keepalive, so a seed that sends nothing for 300 s is treated as half-open, dropped and redialled; its route emits `Left` then `Joined` each cycle. Seeds that publish or heartbeat more often than that are unaffected. A dial-side keepalive is a follow-up.
+  - *Unverified peers still reach cluster membership:* under `off` and `observe`, a peer that sends an envelope is registered under its claimed `source_node` and joins cluster membership as `Active` through the first-envelope path, as before. Only the early join at admission is limited to admitted peers. Carrying a `verified` flag on `MeshPeerEvent::Joined`, so membership can tell the two apart, is a follow-up.
+  - *Responders join on authentication, not first frame:* a connection whose hello verified registers its route under the verified node id (and emits the cluster `Joined`) as soon as admission completes, for admitted peers only; a key-valid peer under `off` or `observe` is not a member and keeps the first-envelope path. If the route is refused the connection is closed. The cluster node id is the Ed25519-derived node id (key on the Ed25519 node key; the Noise static key is bound to it by the hello), stable across restarts because it is derived from the persisted key rather than generated per boot.
+  - *Torn tail vs corrupt tail:* a lone torn final line (no newline, nothing readable in it, no earlier pending quarantine) is the signature of a crash during an append and was never acknowledged to a caller, so the service accepts it at start and journals `journal.accept_truncate` with `auto: "torn_tail"`; this keeps a power loss from killing every user link at the 12 h renewal. It was chosen over letting renewals run while read-only because a lost `rebind` in a quarantined tail is not visible in the harvested facts, so renewing the old key could resurrect a replaced key. Any other bad tail (complete line with a bad signature or hash, over-long line, several lines) still quarantines and needs an admin acceptance.
+  - *Record publication:* the service stages `service.json` under a temp name, binds the socket, and renames the record into place only after the bind succeeds, so a service that loses a bind race never replaces the winner's record (this replaces the record-before-socket order in A9; clients already wait up to 2 s for a record that is a moment late).
+- **A11 (D1 bind address, 2026-10-02; board card 773f9e4b, from `docs/research/daemon-topology/phase-0-review.md` R9).** Records what the code does; the owner has not ruled on the open point at the end.
+  - *Machine mesh service:* binds `127.0.0.1:9489` unless told otherwise (`MeshServiceConfig::default`, `crates/clawft-mesh-service/src/config.rs:125`; `weaver mesh install-service --listen` default, `crates/clawft-weave/src/commands/mesh_install.rs:24`). LAN exposure is explicit: `--listen` at install or `listen` in `/etc/weftos/mesh.toml`. The install script flags a non-loopback address in its header and on stderr (`mesh_install.rs:160`). A peer on another machine, such as the Pi, needs `--listen 0.0.0.0:9489`.
+  - *Collapsed daemon:* `kernel.mesh.listen_addr` (alias `listen`) defaults to `0.0.0.0:9489` (`default_mesh_listen_addr`, `crates/clawft-types/src/config/kernel.rs:1015-1017`), but only matters when `kernel.mesh.enabled` is set, and `enabled` defaults to `false` (`kernel.rs:898-900`). `weaver init --mesh` writes `enabled = true` with `listen_addr = "0.0.0.0:9489"` (`crates/clawft-weave/src/commands/init_cmd.rs:254`), so a project initialised that way listens on every interface.
+  - *So the two defaults differ:* the service is loopback by default, the collapsed daemon's mesh is LAN-wide once enabled. This is the shipped state; the R9 acceptance asked for a decision and none is recorded.
+  - *Open, for the owner:* whether the collapsed default (and the `weaver init --mesh` template) should also be loopback, with LAN exposure explicit as it is for the service. Until ruled, the deployment SOP (`docs/guides/weftos-deployment-sops.md`, SOP 3) tells operators to set `listen_addr` explicitly.
+  - *Gateway:* A5 says the gateway default moves to loopback with ADR-102 card 03. In this tree `gateway.host` already defaults to `127.0.0.1` (`default_gateway_host`, `crates/clawft-types/src/config/mod.rs:839-842`). Whatever else card 03 requires (A5 mentions a `Host` guard in the Phase 1 row) is pending on that card; its status was not checked for this addendum and no code was changed.
+- **A12 (terminology: two protocols called mesh-local, 2026-10-02; board card 7e8d7350).** Two different local protocols carry the name `mesh-local/1`. They share nothing on the wire. No decision is reopened; this fixes what each name refers to.
+
+  | | Phase 2: child link | Phase 3: service link |
+  |---|---|---|
+  | Endpoints | project kernel (child) and its user daemon | user daemon and the machine mesh service |
+  | Transport | the user daemon's kernel socket, the ordinary daemon JSON-RPC (`Request`/`Response`) | the service's own socket (`/var/run/weftos/mesh.sock`, `DEFAULT_SOCKET`, `crates/clawft-mesh-service/src/config.rs:22`), one JSON object per line with a `t` type (`crates/clawft-mesh-local/src/proto.rs:1-3`) |
+  | Operations | RPC methods `mesh.challenge`, `mesh.register`, `mesh.heartbeat`, `mesh.unregister` (`crates/clawft-rpc/src/mesh_local.rs:35-41`) | `Message` frames: hello, register, certificate renewal, send and deliver, verdict request and reply, admin verbs (`proto.rs:272-395`) |
+  | Version tag | `PROTOCOL_TAG = "mesh-local/1"` and `PROTO_MESH_LOCAL = 1` (`mesh_local.rs:30-32`) | `PROTO_MIN = 1`, `PROTO_MAX = 1` (`proto.rs:15-17`), documented as "mesh-local/1" (`crates/clawft-mesh-local/src/lib.rs:1`) |
+  | Signature domain tag | `weftos-mesh-local-pop-v2\n` (`POP_DOMAIN`, `crates/clawft-types/src/project/cert.rs:39`) over `<op>\n<user_key_id>\n<nonce>\n<project_id>` (A7) | `weftos/mesh-local/register/v1\0` (`REGISTER_DOMAIN`, `proto.rs:28`) and `weftos/mesh-local/hello/v1\0` (`HELLO_DOMAIN`, `proto.rs:20`) |
+  | Code | `crates/clawft-rpc/src/mesh_local.rs`, `crates/clawft-weave/src/mesh_local_rpc.rs`, `mesh_local_registry.rs` | `crates/clawft-mesh-local` (client and protocol), `crates/clawft-mesh-service` (server), `crates/clawft-weave/src/mesh_local_glue.rs` |
+
+  Their version counters are independent: bumping one does not bump the other, and "mesh-local/N" negotiation (A8, *Local protocol versioning*) is the Phase 3 service link's. A7's "mesh-local/1 (Phase 2 child registry)" bullet and A9 both use the bare name for different protocols; read them with this table.
+
+  *Recommendation (a proposal, not a decision):* rename the Phase 2 child link to **project-link** (tag `project-link/1`, methods `project.link.*` or keep `mesh.*` as aliases for one release, new PoP domain tag with a version bump), because it is the project kernel's link to its parent and does not touch the mesh. Keep `mesh-local` for the service link, where the name describes the machine-local mesh path. Follow-up card needed; nothing was renamed, and a renamed PoP domain tag changes what a child signs when it registers, so the rename needs a compatibility window between a user daemon and children of an older build.
+- **A13 (user-key rotation, 2026-10-02; review follow-up e19c3af1).** The user key (`~/.weftos/user.key`) can be replaced without orphaning what the old key sealed.
+  - *Rotation record.* `weaver migrate user-key --rotate` (offline: it probes the user chain's `chain.lock` and refuses while the user daemon runs, because the daemon holds the old key in memory) writes a **dual-signed handover**: `{v, seq, old_pubkey, old_key_id, new_pubkey, new_key_id, rotated_at, prev}` signed by BOTH keys under `weftos-user-key-rotation-v1`, hash-linked (`prev` is the SHA-256 of the previous record including its signatures) into the append-only `<manifests>/user-key-rotations.jsonl` (0600). The daemon chains each record as a `user.key.rotated` event (source `user.projects`) the next time it builds its certificate environment (idempotent; a record that cannot be chained is a warning, the log stays authoritative). The steps are resumable: the new seed is staged as `user.key.next`, the record appended, the old `user.key` moved to `user.key.retired-<seq>` (kept, 0600; code never deletes a key), then `user.key.next` becomes `user.key`. Running the verb again after a crash completes the same record. A user key that exists only as the migrated `chain.key` is rotated by writing a new `user.key` (the chain loader prefers it); `chain.key` is not touched.
+  - *What verifies across a rotation.* `UserKeyHistory` folds the log into "current key plus retired keys with their rotation point"; the history must end at the key the daemon actually holds (`NotCurrent` otherwise, and every identity call fails closed with `user_key_history_invalid`, as for a corrupt identity journal). A retired key is accepted for material dated at or before its rotation point and refused after it. **Chain-anchored rule for certificates:** a certificate sealed by a retired key counts only if, besides being dated at or before the rotation point, a `project.register` or `project.rekey` event on the user chain carries it with a sequence below that key's `user.key.rotated` event. A journal line or `<id>.cert.json` alone is never evidence, because only the daemon appends to the reserved chain source and whoever holds the old private key can backdate a claim (a backdated old-key certificate with a high serial is dropped). Anchor records (`<id>.anchor.json` `rec_sig`) are judged by the sealed statement's `at` only. A certificate in force that an older user key sealed keeps verifying for `project.anchor.submit`, so a running child continues anchoring; a child **started after** the rotation is pinned to the new key and registers normally. A child that was already running (or adopted) signs its proof of possession with the user key it was pinned to, so its `mesh.register` after the rotation fails `pop_failed`; that is neither fatal nor a spawn-nonce kind, so it keeps running unregistered until the supervisor's liveness pass (three missed beats plus the 30 s `lost_heartbeat_grace`) restarts it, and the restart pins the new key. The child heals by a forced restart, not by re-certification; `weaver kernel restart --project <id>` does the same at once.
+  - *Parent policies and children.* Policies, forward headers and the `user.pub` pin are signed or pinned under the key in use at spawn. The supervisor re-signs and re-pins on every spawn, so a child started after the rotation is consistent; a child that was already running keeps the old pin and rejects policy pushed under the new key until it is restarted (`weaver kernel restart --project <id>`). Children do not read the rotation log. Phase 3's user certificate (24 h) and machine binding follow the key through `weaver mesh bind rebind`, and the old certificate expires on its own. A daemon crash that loses the unsaved chain also loses the chain evidence of old-key certificates; those projects then re-register (fail closed).
+  - *Rotation log durability.* If `user-key-rotations.jsonl` is deleted or shorter than the chain's verified `user.key.rotated` records, the daemon rebuilds it from the chain when it builds its certificate environment, or refuses with an error naming the cause if those records do not end at the key in use; a missing log never silently downgrades verification. *Crash window.* `weaver migrate user-key --rotate` holds the chain lock through the swap, completes a half-done rotation on re-run (including the state where `user.key` is missing and `user.key.next` is present), never overwrites an existing `user.key.retired-<seq>`, and warns when `chain.key` still holds the retired key.
+  - *Known limits.* Anchor records are dated by the statement's `at`, so whoever still holds the OLD private key can backdate those past the point. After a suspected compromise, rotate and also `project.rekey` or `project.revoke` the affected projects (the user chain, signed by the new key from the first post-rotation boot, is the tamper-evident record of what was accepted when). The on-disk chain checkpoint keeps the signature it was saved with; nothing re-signs history.
+- **A14 (identity-trust follow-ups, 2026-10-02; reviews P1 S3, P2 S2 and S9).**
+  - *Anchor reset (P2 S2).* After a project chain is moved aside the project restarts its anchors at `seq = 1`; the user daemon, holding the old head, refused every retry (`anchor_seq`). The owner runs `weaver project anchor reset --project <id> [--reason ...]` (RPC `project.anchor.reset`, Admin, user daemon only, a token is refused). It appends a `project.anchor.reset` event to the user chain and writes `<manifests>/<id>.anchor-reset.json`, a sealed copy (user key, `weftos-project-anchor-reset-v1`). The chain event is the authority: an epoch counts only when it is exactly the previous epoch plus one, and a record file without a matching chain event changes nothing (a daemon crash that loses the unsaved chain loses the reset; the owner repeats it). It opens a new **epoch**: statements and records of an earlier epoch remain as history and are never the baseline, so the next accepted statement is `seq = 1` with no `prev_anchor`. `Accepted.epoch` is part of the sealed record only when non-zero, so old records keep verifying. The daemon cannot tell a deliberate chain reset from a project that merely lost anchor state: the owner decides, a project that did not reset keeps submitting N + 1 and is refused until it restarts its anchors, and a reset with nothing accepted in the current epoch is refused `anchor_nothing_to_reset`. Within an epoch a statement's `chain_id` must equal the last accepted one (`anchor_chain_id`).
+  - *Child peers (P2 S9).* ADR-070's same-uid shortcut honoured a literal `auth: "admin"` from any peer with the daemon's uid, which includes a compromised supervised child, which could then mint an owner token. The user daemon now classifies each unix-socket peer at accept (`child_peer`): a same-uid peer whose process group is a supervised child's (children lead their own group, `process_group(0)`, so the group id is the child's pid; the supervisor exposes `Launcher::supervised_pids`) is `Child`. A same-uid peer whose pid is unknown or whose process group cannot be read (it exited and was reaped before accept) is also a `Child`: the classifier fails closed. The supervised set is every child process group this daemon started or adopted, kept until `killpg(pgid, 0)` reports `ESRCH` (so grandchildren orphaned by the leader's exit are still recognised; the check never reaps). The Windows named-pipe path and the legacy `handle_connection` wrapper do not classify and default to Owner. A `Child`'s literal scopes are ignored and it is treated as anonymous (read and chat), not refused, because a child's own parent calls (`kernel.handshake`, `mesh.*`, `project.anchor.submit`) carry the client library's implicit `"admin"` and need only `read`; only its project token is honoured, and that token is write-only and method-restricted (`project_token_method_denied`). The owner's CLI is in no child's group and is unchanged. *Not done, and why:* stripping `wft_` tokens in the TCP relay. No code path carries a token into a child (the user daemon calls a child only with a signed forward header), remote callers legitimately authenticate with `wft_` tokens (ADR-102 D3), and with the mint hop closed a child cannot obtain an owner token to relay. *Honest limit:* this is a narrowing, not a boundary. A child process that leaves its group (`setsid`, `setpgid`, a double fork) escapes it; the boundary is a separate uid or a Phase 4 sandbox.
+  - *Token project scope (P1 S3).* Enforced, as amended in A8: the token's project is the request's project and a differing claim is `project_scope_mismatch`. Not a capability limit: an owner token labelled with a project still holds owner scope over user-level methods.
+- **A15 (service-stamped delivery origin, 2026-10-03; ADR-106 section 5.3, phase 1c).** The daemon could not tell who a `deliver` came from: the frame carried a claimed `source_node` and an optional certificate, and `MeshSink` built `PeerCtx::unauthenticated`. The service now vouches for the origin.
+  - *Protocol.* mesh-local `PROTO_MAX` is 2 (`PROTO_MIN` stays 1). A new constant `PROTO_ORIGIN = 2` names the first version whose `deliver` carries `origin`: `{"kind": "admitted_peer", "node_id", "class": "node" | "leaf" | "other"}`, `{"kind": "local_tenant"}` or `{"kind": "unadmitted"}`. The field is optional; an unknown kind or class decodes to `unadmitted` or `other`.
+  - *Service side.* `TenantRouter` stamps it, and only from what it knows about the connection: an inbound delivery is `admitted_peer` exactly when the kernel listener set `PeerCtx::node_verified` (admission verified the id), with the id admission verified and its class; anything else is `unadmitted`. `deliver_local` (one tenant to another on the machine) stamps `local_tenant`. The stamp is written only to a registration whose connection negotiated version 2 or higher (`Registration::proto`). The service never forwards an origin from a tenant: a `deliver` frame sent by a tenant is `unsupported`, and a tenant's `send` carries a `KernelMessage` whose contents are never read as an origin.
+  - *Daemon side.* `Deliver::effective_origin(negotiated)` returns `unadmitted` below `PROTO_ORIGIN` and when the field is absent, so a daemon talking to an older service reads every delivery as unadmitted. `MeshSink` records the version of each (re)connected link and builds the peer context from the stamped origin: `admitted_peer` with class `node` becomes a verified node (`node_verified`, `PeerClass::Node`, `peer_id` the vouched id), class `leaf` a verified leaf, and `local_tenant`, `unadmitted`, an unknown class and a missing stamp stay unauthenticated. The stamp is believed only on a link whose `MeshLocalClient` connected, which means the service peer-credential check (root or the `service.json` uid) and the hello key proof passed; a failed check never yields a link. The daemon must not be built with `clawft-mesh-local`'s `testing` feature, which injects a fake server credential: `scripts/build.sh gate` check 21 (`check-daemon-no-mesh-testing`) fails if the daemon's dependency graph enables it. On a single-user install where `service_uid` equals the daemon's uid, `admitted_peer` is only as strong as that uid, which could already act as the daemon.
+  - *Who uses it.* The cog mesh (`mesh.cog.checkout`, `mesh.artifact.tunnel`, ADR-106): only a verified node is served or accepted. The A2A router still ignores the context. The A12 table's `PROTO_MAX = 1` is now 2.
+  - *Tests.* `crates/clawft-mesh-service/src/router_origin_tests.rs`, `crates/clawft-weave/src/mesh_local_sink.rs` (unit), `crates/clawft-weave/tests/mesh_cog_checkout_e2e.rs` (the real service, unix socket, client, sink and router).
+
+- **A16 (licence records through the service, 2026-10-03; ADR-106 phase 3 part A).** The service runtime consumes `mesh.cog.binding`, `mesh.cog.grant` and `mesh.cog.sync` as control topics. It now installs a sink for each (`clawft-mesh-service` `licence_forward`) that hands a record from a licensed peer (admission verified, class `node`) to the reserved-topic holder's registration, stamped as in A15, and drops and counts anything else (`licence_unlicensed`). The reserved-topic rules of ADR-106 1c are unchanged. `peers.list` replies gain `licensed`: the connected peers whose route admission verified with class `node`. The service holds no licence state and adds no signing call; the user daemon signs placement and steward requests with its own control key (ADR-106, "the service-mode signer").
+
+## Consequences
+
+- One resolver for every runtime file; a second daemon for the same scope refuses to start; `$HOME` is never a project; the mesh node id is stable and derived from the node key.
+- ADR-102's token authority moves to the user role; tokens can carry an optional `project_id` scope; the playground gets a project selector.
+- `weaver update` restarts the user daemon found via its PID file and, per project, the kernels it supervises, recording binary path and sha in the manifest.
+- The existing project-local daemon on the owner's Mac (other project, PID 70730) is migrated in Phase 1 by the owner (stop, register as the first manifest entry); it is not stopped automatically.
+- Three tiers (service, user daemon, project kernels) can run different versions, so every local protocol (`mesh-local/N`, daemon RPC) is versioned and negotiated from Phase 1.
+- The leaf path needs provisioned keys and a parent-side admission gate; until then unsigned leaf publishes stay a bring-up exception that doctor flags.
+
+## Phases
+
+| Phase | Scope | Card |
+|---|---|---|
+| 0 | One resolver (node key, chain, workloads, cluster peers, socket, PID, log); walk-up stops at a project marker (`.weftos/` plus `project.toml`, `.weftos/weave.toml`, `weave.toml` beside it, an existing `.weftos/runtime/`, or `.git`), never `$HOME`; `kernel.lock` single instance, `chain.lock` per chain, explicit first adoption of the legacy chain (`--adopt-legacy-chain`, `--new-chain`) and stale-socket recovery; `weft` prints the socket and stops silent fallback; node id from the Ed25519 key with SHA-256; mesh port 9489 and bind failure fatal; docs port fix | weave-topology-P0a..c |
+| 1 | User daemon at `~/.weftos/run/` with machine and user roles collapsed; user chain migration from `~/.clawft/`; token authority; project manifest seeded from `~/.clawft/workspaces.json`; `weft project init/list`; resolution + handshake (D14); governance rule for D12; launchd/systemd user unit | weave-topology-P1 |
+| 2 | Project kernels as children: project key certified on the user chain, project chain with anchors, tighten-only overlay, `project_id` in `GatePrincipal`, shared services via the user daemon, idle stop, `project` workload kind with the `logical` driver | weave-topology-P2 |
+| 3 | `weaver mesh serve` as an OS service: peer-credential registration and user binding (D3), user certificates, machine journal, LaunchDaemon/systemd units, installer tier | weave-topology-P3 |
+| 4 | Sandbox drivers (OpenShell/containers on Linux, Seatbelt/`container` on macOS, wasmtime); nested WeftOS with `weave.master` (D10), exercised by running this repo's dev kernel under the release user daemon | weave-topology-P4 |
+| Leaf | Provisioned ESP32 keys, unified node id, signed publishes required, parent discovery, offline journal; browser via ADR-102 tokens | weave-topology-leaf |
+
+Known limits of Phase 3 admission (K1): a peer's class (`node` or `leaf`) is self-declared in its signed hello, so a node can claim leaf limits it does not need or omit them; under `enforce` the verdict source may override the class, and binding class to an issued credential is future work. `genesis_hash` is a cluster label, not a credential; membership is the verdict source's decision, and `enforce` without a governance gate refuses everyone unless `admission_open_membership` is set. Only an *admitted* peer (hello verified, `enforce`, verdict permit) is treated as verified for route ownership and `src_scope`.
+
+Known limits of the Phase 3 user-daemon mesh client (U): a `verdict.reply` carries `rule_hash`, which is a hash of the gate's witness (permit token or deny receipt) and is empty when the gate produced none; it is a verdict witness, not a rule identity, until the overlay runtime's rule hash (package E) is available to the gate. The service may cache a permit for up to 300 s (`ttl_s`), so a rule change reaches already-permitted peers only after that window; denials cache for 30 s. `service.json` is read once at boot; a legitimate machine key rotation needs `weaver mesh trust` and a daemon restart. A daemon that fell back to collapsed mode (`auto`, no service at boot) does not switch when a service appears; it logs loudly and needs a restart.
+
+Known limits of the Phase 3 installation (H, X): the macOS service log `/var/log/weftos/mesh.log` is not rotated (launchd holds it open; os_log or self-rotation is follow-up work). Windows is design only (plan section 6): the service refuses to start there. On macOS the service can start before the rundir helper recreates `/var/run/weftos` at boot; launchd's throttle restarts it until the directory exists, so the two converge within seconds rather than by ordering. The installer receipt's `tiers` list is read by `weaver doctor install` but nothing writes it yet, so the service tier is taken from `service.json` alone. The service does not yet emit `unsigned_leaf_peers` in its status, so the doctor's leaf check never fires. The two-uid paths are exercised with an injected peer identity in the suite and for real only by `scripts/dev/mesh-two-uid.sh` (sudo, never in the gate).
+
+Known limits of the Phase 3 machine service (S): under `enforce`, admission depends on the cluster-owner daemon being reachable. Asks are budgeted (10 per peer node id and 120 per minute in total, of which 60 are reserved for peers that already hold an allow entry) and a granted peer keeps its permit for `stale_grace` after the grant expires, but a sustained flood of new node ids can still delay *new* peers' admission while the owner is slow or away; existing members are not affected beyond the grace window. The cluster owner is never inferred from a TOFU bind: `enforce` needs an explicit `cluster_owner_uid`. `accept_from` governs local cross-tenant sends only; deliveries from admitted remote peers are gated by admission. A revocation made while the journal cannot be written is enforced in memory (and `revoked.json`) but is journalled only if a later append succeeds; the operator gets a warning.
+
+exec
+/bin/zsh -lc "ls -la .agents; sed -n '1,200p' docs/plans/weave-topology-p3-plan.md" in ~/.codex/worktrees/topology-finish/weftos
+ succeeded in 0ms:
+ls: .agents: No such file or directory
+# Weave topology Phase 3: file-level implementation plan
+
+> **Decisions (2026-10-01):** the owner accepted D-1..D-10 as recommended (ADR-103 A6). macOS: a non-root LaunchDaemon can write `/var/run/weftos` only when the service account is in the directory's group, so package H's installer creates `/var/run/weftos` group-owned by `_weftos` (mode 0770 or 0775) and adds the service account to that group; verify on the owner's Mac.
+
+Status: plan, not started. Implements Phase 3 of [ADR-103](../adr/adr-103-weave-topology-roles-and-instances.md) (card weave-topology-P3): the machine mesh service as an OS service. Analysis: [daemon-topology/analysis.md](../research/daemon-topology/analysis.md) sections 4, 5, 9, 10.4. Builds on [P1](weave-topology-p1-plan.md) and the Phase 0 review (R2, R9). Date: 2026-09-30.
+
+Assumes P0 and P1 have landed (P0 resolver and fatal mesh bind; P1 user daemon at `~/.weftos/run/` with roles `machine,user`, `kernel.status` handshake, `rpc_ext.rs` hook, `service_units.rs`, token authority, chain migrated to `~/.weftos/chain/`). Where this plan names a P1 module it means that branch's real name; agents read it first. P2 (project kernels) is independent: a project kernel never talks to the mesh listener, it registers its address with the user daemon, which forwards it (package U).
+
+## 0. Findings that shape the work (verified in the tree)
+
+1. **Admission is not enforced on the mesh listener today.** The accept loop (`clawft-kernel/src/boot.rs` ~578-700) does an optional Noise XX responder handshake and then `MeshRuntime::handle_incoming_from` registers the sender under `envelope.source_node`, a self-asserted string. `JoinRequest`/`JoinResponse` (`mesh_listener.rs:158-185`) and `FrameType::JoinRequest` exist but nothing verifies the ADR-025 steps (genesis hash, signature, skew, gate). `RevocationList::is_revoked` is only consulted by `ClusterMembership::add_peer_checked` (`cluster.rs:865`), which the listener never calls. "Cryptographic admission and revocation" in the service is therefore **net-new code (package K1), not a move**.
+2. **Noise is not bound to node identity.** The Noise static key is a fresh random X25519 key per boot unless `noise_key_path` is set (`boot.rs:549-572`), unrelated to the Ed25519 node key. Admission must bind the two by signing the Noise handshake hash (channel binding); `NoiseChannel` (`mesh_noise.rs:120-225`) keeps `remote_static` but does not expose the handshake hash. K1 adds it.
+3. **The mesh runtime is welded to the kernel in three places:** `MeshRuntime.local_router: Option<Arc<A2ARouter>>` (`mesh_runtime.rs:56,203`), `set_chain_manager` (`:262`, peer.envelope events), and the assessment transport (`:143`). The accept loop, seed-connect loop and `MeshService` registration live inline in `boot.rs` (~464-800). The service cannot reuse any of it until K0 extracts it behind small traits.
+4. **Reusable as is:** `node_id_from_pubkey` (`node_id.rs:18`), `load_or_generate_node_key` (`node_key.rs:53`, refuses symlinks/insecure files, atomic publish), `sign_node_facts`/`verify_node_facts` (`node_facts_advert.rs:127,149`, domain-separated, pure functions) and the `node_facts` probe, `RevocationList`, `MeshTransport` implementations (tcp/ws/quic), `mesh_discovery`, `mesh_heartbeat`, `mesh_mdns`, `mesh_kad`.
+5. **Peer credentials exist exactly once** (package F branch, `clawft-weave/src/daemon.rs:3133`): tokio `UnixStream::peer_cred()` compared to `geteuid()`, failing closed on error. tokio's `UCred` gives uid and gid on Linux and macOS and pid where the OS reports it (pid is informational only; macOS `LOCAL_PEERCRED` has no pid). `relay_auth.rs` is the TCP-to-unix sanitiser, unrelated to mesh. Windows accept loop uses `clawft_rpc::named_pipe` (no credential check).
+6. `MeshIpcEnvelope` (`mesh_ipc.rs:77`) has `source_node, dest_node, message, hop_count, envelope_id` and serde defaults are the compatibility tool: new scope fields must be `#[serde(default, skip_serializing_if = "Option::is_none")]`. `ClusterMembership`, `NodeIdentity::sign` and `capability_claim` sign with the node key inside the kernel; in service mode the daemon does **not** hold the box key, so those signing uses move to the user key (cert chain) or to the service (package U lists the call sites).
+7. The kernel `mesh` feature is separable from `exochain` in Cargo.toml (`mesh = [ed25519-dalek, rand, tokio-tungstenite, futures-util, snow]`), but no one builds `--no-default-features --features native,mesh` today. Whether it compiles is **unverified**; K0 proves it or Risk R1 triggers.
+
+## 1. Contracts every package codes against (fixed here)
+
+### 1.1 Files and roots (D4)
+
+| Path | Owner / mode | Content |
+|---|---|---|
+| `/var/lib/weftos/mesh/` | service user, 0700 | state dir |
+| `.../node.key` | 0600 | box Ed25519 seed (`node_key.rs` format) |
+| `.../journal.jsonl` (+ `journal.NNN.jsonl` segments) | 0600 | machine journal, section 1.3 |
+| `.../revoked.json` | 0600 | `RevocationList` file |
+| `.../facts.json` | 0600 | last signed machine facts |
+| `.../service.json` | 0644 | public record `{node_id, machine_pubkey, service_uid, proto:{min,max}, build_sha, started_at}` clients pin |
+| `.../mesh.toml` | root:service 0640 | `listen`, `transport`, `bind_policy`, `admission`, `cluster_owner_uid`, `admin_uids`, `cert_ttl_s` |
+| `/var/run/weftos/mesh.sock` | service user, 0666 | mesh-local socket; authorization is by peer credential, never by file mode |
+| `~/.weftos/user.key` | user, 0600 | user Ed25519 seed (package U) |
+| `~/.weftos/mesh/machine.pub` | user, 0600 | pinned machine pubkey (client TOFU pin) |
+| `~/.weftos/mesh/cert.json` | user, 0600 | current user certificate |
+
+Tests and probes override with `WEFTOS_MESH_STATE_DIR` and `WEFTOS_MESH_SOCKET` (full isolation, same spirit as `WEFTOS_RUNTIME_DIR`); production units never set them.
+
+### 1.2 mesh-local/1 (package L)
+
+*Updated 2026-10-01 after the package L review: `hello.client_nonce` and `hello_ack.machine_sig` (server key-possession proof), length-prefixed register signing bytes, reply-class id correlation with service-originated ids flagged `1<<63`.*
+
+Transport: unix stream (named pipe on Windows, section 6), newline-delimited JSON, one object per line, max line 1 MiB, 5 s deadline for `hello`, every object `{"t": "<type>", "id": <u64>?, ...}`. Binary payloads are not needed: mesh bodies are already JSON `KernelMessage`s (ADR-031 shipped encoding).
+
+```
+C->S  hello      {proto_min, proto_max, features:[..], role:"user"|"admin", build_sha, exe, pid,
+                  client_nonce:"<32B hex>"}
+S->C  hello_ack  {proto, features:[..], node_id, machine_pubkey, service_build_sha, deprecated_below?,
+                  uid, challenge:"<32B hex>", machine_sig}  // uid = what the service read from the peer credential
+      machine_sig = Ed25519(machine_key, "weftos/mesh-local/hello/v1\0" || client_nonce || challenge || machine_pubkey || principal(uid))
+      // the client also requires ack.uid == its own euid (a trusted-uid relay cannot register under its own uid)
+      // verified by the client against the pinned machine key BEFORE pinning or registering (key-possession proof)
+S->C  error      {kind:"proto_mismatch"|"bind_conflict"|"bind_pending"|"address_in_use"|"forbidden"|"bad_sig"|
+                  "rate_limited"|"scope_required"|..., message, remedy, data?}   // then close for fatal kinds
+C->S  register   {user_pubkey, sig, addresses:{user_id, projects:[{project_id, project_pubkey, cert_sig}]},
+                  topic_prefixes:[..], capabilities:[..], version, build_sha}
+      sig = Ed25519(user_key, "weftos/mesh-local/register/v1\0" || challenge || principal || node_id)
+      principal = tag(1=uid, 2=sid) || len_u16be || bytes;  node_id = len_u16be || bytes
+S->C  register_ack {user_id, cert:<UserCert>, accepted:{addresses,topic_prefixes}, rejected:[{what,reason}],
+                  bind:"new"|"existing"|"pending"}
+C->S  renew {} -> S->C {cert}                     // client renews at 50% of lifetime
+C->S  address.add|address.remove {project_id, project_pubkey, cert_sig} -> ack|error
+C->S  subscribe|unsubscribe {prefix}              -> ack|error
+C->S  send       {dest:"weft://...", message:<KernelMessage json>, request_id?}    // outbound
+S->C  deliver    {source_node, source_cert?:<UserCert>, scope:{user_id, project_id?}, envelope_id, message}
+S->C  verdict.request {id, subject:"peer.admit"|"cluster.join"|"publish"|"subscribe", peer:{node_id, pubkey,
+                  platform, capabilities, genesis_hash, chain_seq}, topic?}
+C->S  verdict.reply   {id, allow, ttl_s, reason, rule_hash}      // daemon evaluates GateBackend; service only caches
+C->S  journal.head {} -> S->C {seq, hash, ts, sig}                // daemon anchors this into its user chain
+C->S  status|peers.list|facts.get                -> reply          // read-only
+admin (role:"admin", uid in admin_uids or root):
+C->S  bindings.list | bind.approve {uid} | bind.revoke {uid, reason} | bind.rebind {uid, user_pubkey?}
+      | peer.revoke {node_id, reason} | peer.unrevoke {node_id} | policy.set {admission?, cluster_owner_uid?}
+C->S  ping/pong, bye
+```
+
+Negotiation: `proto = min(client.proto_max, service.max)` and must be `>= max(client.proto_min, service.min)`, else `proto_mismatch` carrying `{service:{min,max,sha}, client:{min,max,sha}}` and the remedy line ("restart the service after `weaver update`" or "update the user daemon"). `features` are intersected; unknown features are ignored, not errors. Support window: the service accepts `[PROTO_MIN, PROTO_MAX]` (1..=1 now); raising `PROTO_MIN` needs one release of `deprecated_below` in `hello_ack` and a doctor WARN on the daemon side. The daemon RPC proto (`clawft-rpc PROTO_VERSION`) is a separate number. `build_sha` is the same key `daemon_guard.rs` reads, so skew is reportable per tier.
+
+### 1.3 Machine journal schema (package J)
+
+JSON lines, hash-chained and signed by the box key. One record:
+
+```json
+{"v":1,"seq":42,"ts":1790000000,"prev":"<hex sha256 of previous line bytes; 64 zeros at seq 0>",
+ "kind":"user.bind","body":{...},"sig":"<hex Ed25519(box_key, \"weftos/mesh-journal/v1\\0\" || canonical line without sig)>"}
+```
+
+`canonical line without sig` = the record serialised by the typed struct with `sig` absent (field order fixed by the struct, tested by a golden file). Kinds and bodies:
+
+| kind | body |
+|---|---|
+| `machine.init` | `{node_id, machine_pubkey, key_origin:"generated"\|"adopted", build_sha}` |
+| `service.start` | `{build_sha, proto:{min,max}, pid, listen, admission, bind_policy}` |
+| `user.bind` | `{principal:{kind:"uid",id:501}\|{kind:"sid",id:"S-1-5-.."}, user_pubkey, user_id, how:"tofu"\|"approved"\|"rebind", by?:principal, peer_pid?, exe?}` |
+| `user.bind_pending` | `{principal, user_pubkey, user_id, peer_pid?, exe?}` (policy `approve`) |
+| `user.cert.issue` | `{user_id, serial, issued_at, not_after}` |
+| `user.revoke` | `{principal, user_id, reason, by, serials_revoked_through}` |
+| `peer.admit` / `peer.refuse` | `{node_id, pubkey, class:"node"\|"leaf", verdict_rule_hash?, reason?, mode:"enforce"\|"observe"}` |
+| `peer.revoke` / `peer.unrevoke` | `{node_id, reason, by}` |
+| `policy.set` | `{key, old, new, by}` |
+| `journal.quarantine` | `{lost_from_seq, lost_count, serial_high_water, raw_serial_high_water, revoked_user_ids, quarantine:[file names], ts, recorded}` (reserved: written by the service when it quarantines a bad tail; `serial_high_water` is clamped to the last accounted serial plus `lost_count`) |
+| `journal.accept_truncate` | `{quarantine_seq, marker_only?, serial_floor, quarantine, by:principal, auto?:"torn_tail"}` (reserved: written by `Bindings::accept_truncate` behind the admin gate, or by the service itself for a lone torn final line) |
+| `facts.sign` | `{facts_hash, valid_until}` (hash only, not the facts) |
+
+The journal records decisions, not traffic: no route churn, no message metadata (chatty and sensitive). `bindings` (principal to user key, serials, revocations) is a fold of the journal rebuilt at start; the journal is the source of truth and `bindings` is never persisted separately. Segment at 8 MiB (`journal.NNN.jsonl`, first record of a segment repeats the last `prev`). On start: verify the full hash chain and every signature; a bad tail record is quarantined to `journal.corrupt.<ts>` and the service starts **read-only for binds** (refuses new binds and cert issues, keeps serving existing registrations) until an admin acks with `weaver mesh journal verify --accept-truncate` (the one exception: a lone torn final line with no readable facts, the signature of a crash mid-append, was never acknowledged to any caller; the service accepts it at start and journals `auto:"torn_tail"`). Anchoring: the daemon periodically asks `journal.head` and appends `mesh.journal.anchor {seq, hash, node_id}` to its user chain (ADR-022), so truncation of the tail is detectable by any user chain holding a later anchor. The service owns no chain.
+
+### 1.4 User certificate (package L types, J issues, U stores)
+
+```json
+{"v":1,"node_id":"..","machine_pubkey":"<hex32>","user_pubkey":"<hex32>","user_id":"<32 hex>",
+ "serial":17,"issued_at":1790000000,"not_after":1790086400,"sig":"<hex64>"}
+```
+
+Signed bytes (fixed binary layout, not JSON, so no canonicalisation dispute): `"weftos/user-cert/v1\0" || machine_pubkey(32) || user_pubkey(32) || serial(u64 BE) || issued_at(u64 BE) || not_after(u64 BE)`. `user_id = node_id_from_pubkey(user_pubkey)` (the one hash, D11). The uid is deliberately **not** in the cert (meaningless to remote peers and a local-account leak); the uid binding lives only in the journal. Default lifetime 24 h, client renews at 12 h, verifiers allow 5 min leeway. Remote verification: cert chain machine -> user (and, from P2, user -> project via the `project.register` event); the machine key is the one remote peers already admitted, so no new trust root. Revocation: `user.revoke` journals the serials, the service stops renewing and drops the registration, and the revoked-serial list rides in the signed machine facts so peers can refuse a revoked cert before its expiry.
+
+### 1.5 Admission handshake on the listener (package K1)
+
+After Noise (when enabled) the first frame in each direction is `AdmitHello`:
+`{v:1, node_id, pubkey, platform, capabilities, genesis_hash, ts, noise_static_pub, sig}` with `sig = Ed25519(node_key, "weftos/mesh-admit/v1\0" || noise_handshake_hash || genesis_hash || ts_be)`. The service checks, in order: `node_id == node_id_from_pubkey(pubkey)`; `noise_static_pub` equals the handshake's remote static; `sig` verifies over the *session's* handshake hash (replay-proof); `|now - ts| <= 60 s`; genesis hash equals the cluster genesis pinned in `mesh.toml`/journal; not on `RevocationList`; then a **verdict** (cached `ttl_s`, default 300) from the cluster-owner daemon via `verdict.request peer.admit`. Admitted peers are registered in `MeshRuntime` under the **verified** `node_id`; `source_node` in later envelopes must equal it or the frame is dropped. `admission = observe` (default for the first release, decision D-2) journals `peer.refuse mode:"observe"` for would-be refusals and admits anyway. Peers that never send `AdmitHello` (ESP32 leaves, Pi on an old build) are class `leaf`/`legacy`: allowed under `observe`; under `enforce` leaves are limited to publish on `substrate/<own-id>/` and subscribe by prefix, and `doctor` flags them (the bring-up exception from the leaf track).
+
+### 1.6 `weft://` addressing (package L `addr.rs`)
+
+Grammar: `weft://<node>/<user>/<project>/<topic...>` where `node` = 32 hex or `local`; `user` = 32 hex or `_` (node-level, no tenant); `project` = 26-char Crockford ULID or `_` (user-level); `topic` = existing dotted/slashed topic, may be empty. `local` resolves to the sender's registered node id at the service (never accepted on the wire between nodes). Wire: `MeshIpcEnvelope` gains `dest_scope: Option<Scope>` and `src_scope: Option<Scope>` with `Scope {user_id, project_id?}`; the service **stamps** `src_scope` from the sending registration (a daemon cannot claim another user's id) and strips any `src_scope` an unregistered peer sends. Routing rule at the service for inbound: scope present: deliver to that registration or reply `unknown_scope`; scope absent: match the longest registered `topic_prefix`; no match: deliver to the single registered user if exactly one, else drop and count (`scope_required`). One registration owns an address; a prefix claimed by two different uids is refused for the second.
+
+## 2. Work packages
+
+Crates: new `clawft-mesh-local` (protocol, certs, addr, peer identity, client; deps: serde, serde_json, ed25519-dalek, sha2, tokio, nix; **no clawft-kernel dependency**) and new `clawft-mesh-service` (the service; depends on `clawft-mesh-local` and `clawft-kernel` with `default-features = false, features = ["native","mesh"]`; **must not enable `exochain`, `cluster`, `tilezero`, `ecc`**). `weaver mesh ...` subcommands live in `clawft-weave` and call the service crate.
+
+### K0. mesh-seam (crate `clawft-kernel`, behaviour-preserving refactor, first)
+Depends on: none. Blocks: K1, S, U.
+- new `mesh_serve.rs`: move the accept loop, per-connection Noise + pump loop and seed-connect loop out of `boot.rs` into `pub async fn serve_listener(runtime, listener, noise, gate: Arc<dyn AdmissionGate>)` and `pub async fn connect_seeds(..)`. `boot.rs` calls them with `AllowAll` (identical behaviour).
+- `mesh_runtime.rs`: replace `local_router: Option<Arc<A2ARouter>>` with `Arc<dyn LocalDelivery>` (`async fn deliver(&self, scope: Option<&Scope>, msg: KernelMessage) -> KernelResult<()>`); `A2ARouter` gets an impl; `set_chain_manager` and assessment stay optional and `cfg(exochain)`-gated so the service never sets them.
+- `mesh_ipc.rs`: add `dest_scope`/`src_scope` (serde-default). `mesh_noise.rs`: `NoiseChannel::handshake_hash()`.
+- new `mesh_mode.rs`: `pub fn select(cfg:&MeshConfig) -> MeshMode {Service{sock}|Collapsed|Off}` (`kernel.mesh.service = auto|required|off`, section 4). Called from `Kernel::boot` **and** `weft kernel boot --foreground`, closing the R2 hole where the CLI foreground path bypasses daemon-level checks.
+- `Cargo.toml`: nothing new; add a `scripts/build.sh` target `check-mesh-only` running `cargo check -p clawft-kernel --no-default-features --features native,mesh` (CLAUDE.md: extend the script, never raw cargo).
+Tests: existing `mesh_*` tests unchanged and green; a new test that `serve_listener` with `AllowAll` and a fake `LocalDelivery` delivers a scoped envelope; old-JSON envelope without scope fields still deserialises; `boot_registers_mesh_system_service` (`boot.rs:2744`) unchanged.
+Acceptance: `scripts/build.sh check`, `clippy`, `test`, `check-mesh-only`; `gate` before merge (touches boot).
+
+### L. mesh-local (new crate `clawft-mesh-local`)
+Depends on: none (types fixed in section 1). Blocks: J, S, U.
+- `proto.rs` (all messages in 1.2, `PROTO_MIN/MAX`, `negotiate()`), `cert.rs` (`UserCert`, `sign`, `verify(chain, now)`, binary signed layout), `addr.rs` (`WeftAddr::parse/Display`, section 1.6), `peer.rs` (`trait PeerIdentity { fn principal(&self)->Result<Principal> }`; unix impl over `peer_cred()` fail-closed; `Principal::{Uid(u32), Sid(String)}`; windows impl returns `Unsupported` and callers refuse), `framing.rs` (bounded line reader, deadlines), `client.rs` (`MeshLocalClient`: connect, verify the **server** (below), hello, register, renew, reconnect with jittered backoff, request/reply correlation, event stream), `testing.rs` (a loopback in-memory server for U's tests before S merges).
+- Client-side server verification (anti-squat): after connect, `peer_cred().uid()` of the *server* must be `0` or equal to `service_uid` in `service.json`; `hello_ack.machine_pubkey` must equal the pin in `~/.weftos/mesh/machine.pub` (written on first contact, then compared; mismatch is a hard `machine_key_changed` error that tells the user to run `weaver mesh trust` after verifying out of band).
+Tests: golden JSON for every message; cert sign/verify, tamper each field, expiry, leeway; addr round-trips plus malformed (path characters, uppercase node, bad ULID); negotiation matrix (older/newer client, feature intersection); line-length and deadline limits; client refuses a server whose uid differs.
+Acceptance: crate tests, clippy, check; `cargo tree -p clawft-mesh-local` contains no `clawft-kernel`.
+
+### J. journal-and-bindings (crate `clawft-mesh-service`, modules `journal.rs`, `bindings.rs`)
+Depends on: L (types). Blocks: S.
+- `Journal::open(dir, key)` (verify chain and signatures, quarantine bad tail), `append(kind, body)` (fsync, seq/prev/sig), `head()`, `iter()`; `Bindings::fold(&Journal)` with `bind(principal, key, how)`, `check(principal, key) -> Existing|New|Conflict|Pending`, `revoke`, `rebind`, `serials`. Invariants enforced in `Bindings`, not in callers: one key per principal, one principal per key, rebind revokes the old key's serials.
+- single writer: `flock` on `mesh.lock` in the state dir; a second service exits naming the holder pid.
+Tests (tempdir, no root): append/replay golden; tamper one byte at each position (every position detected); truncated tail quarantined and binds refused; segment rollover keeps the chain; concurrent appenders serialised by the lock; bind conflict, key-reuse-by-second-uid refused, rebind semantics; fold is deterministic and equals incremental state (metamorphic).
+Acceptance: crate tests, clippy, check.
+
+### K1. admission (crate `clawft-kernel`, `mesh_admit.rs`; kernel stays policy-free)
+Depends on: K0. Blocks: S (service wires it), no effect on collapsed boot until enabled.
+- `AdmitHello` encode/verify (section 1.5), `trait AdmissionGate { async fn admit(&self, hello:&VerifiedHello, class)->Admission }` plus `AllowAll` (K0 default) and `CryptoGate { genesis, revocations, verdicts: Arc<dyn VerdictSource>, mode }`. `serve_listener` enforces `source_node == verified node_id` after admission. In collapsed mode `VerdictSource` is the local `GateBackend` wrapper (`cluster.join` action), so collapsed and service mode share one code path.
+- `mesh.toml`/`MeshConfig`: `admission = off|observe|enforce` (default `observe`), `genesis_hash`.
+Tests: bad sig, wrong node_id for pubkey, handshake-hash replay on a second session, skewed `ts`, wrong genesis, revoked peer, `observe` admits and journals, `enforce` refuses, leaf class limits, source_node spoof after admission dropped; both Noise and passthrough channels (passthrough has no handshake hash: `enforce` refuses passthrough peers, `observe` records them).
+Acceptance: kernel tests, clippy, check, `check-mesh-only`.
+
+### S. mesh-service (crate `clawft-mesh-service` + `clawft-weave/src/commands/mesh_cmd.rs`)
+Depends on: K0, K1, L, J. Blocks: U integration, H.
+- `config.rs` (`mesh.toml` + env overrides + flags `--state-dir --socket --listen --config`), `main_loop.rs` (`run(cfg)`: refuse `euid==0`; verify state dir owner and mode 0700, socket dir owner; load/generate box key via `load_or_generate_node_key`; open journal; sign facts with the existing `node_facts` probe and `sign_node_facts`, refresh on change; start `MeshRuntime` + `serve_listener` + discovery/heartbeat/mdns/kad with a `TenantRouter`; write `service.json`), `registry.rs` (registrations keyed by user id, prefix table, per-registration bounded queue 256, counters), `local_server.rs` (accept on the unix socket, `PeerIdentity` per connection, hello/negotiate/challenge/register state machine, 64 connections and 5 registrations per minute per principal, admin gate), `verdicts.rs` (cache with TTL, `VerdictSource` that asks the cluster-owner registration, fail-closed after `verdict_timeout` except the stale-grace rule in D-3), `facts.rs`, `health.rs` (loopback-only `127.0.0.1` health JSON, nothing else listens).
+- `TenantRouter implements LocalDelivery`: inbound envelope to registration lookup to `deliver` frame; outbound `send` to `MeshIpcEnvelope` with stamped `src_scope`, `source_node = machine node id`.
+- `weaver mesh serve [--config --state-dir --socket --listen]`, `weaver mesh status` (reads `service.json` + `status` over the socket), `weaver mesh bindings|bind approve|revoke|rebind`, `weaver mesh peer revoke|unrevoke`, `weaver mesh journal verify [--accept-truncate]`, `weaver mesh trust`. Admin verbs connect as `role:"admin"`; they hold no keys.
+- **Must not own** (enforced three ways): no `Kernel`, `ChainManager`, `GateBackend`, token or secret type is constructed (a `scripts/build.sh` gate fails if `cargo tree -p clawft-mesh-service -e normal,features` contains `exo-resource-tree`, `rvf-runtime`, `cognitum-gate-tilezero`, `clawft-weave` or the kernel `exochain` feature); a runtime test lists the state dir after a full session and asserts the filename allow-list of section 1.1; the service exposes no RPC method that evaluates governance (grep test over `local_server.rs` message handlers).
+Tests (as the current user against tempdirs, loopback `--listen 127.0.0.1:0`, socket under a tempdir; two real clients in one process using different keys and an injected `PeerIdentity` for the second uid): register new/existing/conflict/pending; second daemon for the same uid gets `address_in_use` with holder pid; cert issue and renewal and expiry; admin verbs refused for a non-admin principal; scoped and unscoped delivery routing incl. prefix conflict and the single-user default; `src_scope` stamping and stripping; verdict cache TTL and fail-closed; service restart keeps bindings (journal fold) and clients reconnect; version mismatch both directions; kill -9 mid-append then restart is consistent; two services on one state dir (second refuses). A real-peercred test (same uid) runs always; a **two-uid** test is `#[ignore]` and driven by an optional root-run script (never in the gate).
+Acceptance: crate tests, clippy, check, `check-mesh-only`, the no-owned-state gate, a manual run: `weaver mesh serve --state-dir $(mktemp -d) --socket ... --listen 127.0.0.1:19489` plus `weaver mesh status`.
+
+### U. user-daemon-mesh-client (crate `clawft-weave`, `clawft-kernel` boot glue, `clawft-types` config)
+Depends on: L (S for integration). Blocks: integration commit.
+- new `clawft-weave/src/mesh_local_glue.rs`: on boot with `MeshMode::Service`, connect via `MeshLocalClient`, register (user key, addresses = user id plus P2 project ids, topic prefixes, capabilities), keep the cert fresh, expose `MeshSink` (`LocalDelivery` into the daemon's `A2ARouter`) for `deliver`, forward outbound `A2ARouter` remote targets as `send`, answer `verdict.request` with `GateBackend` (`peer.admit`, `cluster.join`, `publish`, `subscribe` actions, context includes `rule_hash`), periodically `journal.head` then `chain.append("mesh.journal.anchor")` and `mesh.service.bound {node_id, cert_serial}`. If the service drops, the daemon keeps running, queues anchors, serves local RPC, and reconnects with backoff; `weaver health` shows `mesh: service (connected|reconnecting)`.
+- Node identity in service mode: the daemon's `node_id` is the service's (`hello_ack.node_id`); `~/.weftos/run/node.key` is not read; `NodeIdentity::sign` call sites (`capability_claim.rs:146`, cluster join signing, `node_facts` advert) are replaced by: facts and admission signed by the service; capability claims signed by the **user key** and carried with the user cert. List and patch every `from_signing_key`/`sign` use in `boot.rs:~346-363` and `cluster.rs`; none may silently fall back to a locally generated key (fail boot with the reason).
+- `handshake.rs` (P1): `roles` becomes `["user"]` in service mode and `["machine","user"]` collapsed; add `mesh: {mode:"service"|"collapsed"|"off", service_node_id?, cert_serial?, cert_not_after?, proto?}` (serde-default, older clients ignore it).
+- user key (decision D-5): new `clawft-types/src/config/chain_paths.rs::user_key_path(home)` = `~/.weftos/user.key`; new `clawft-weave/src/commands/migrate_cmd.rs` verb `weaver migrate user-key [--dry-run]`: copies the 32-byte seed of the migrated `~/.weftos/chain/chain.key` to `user.key` (0600, atomic hard-link publish as in `node_key.rs`), proves the two public keys are equal, writes `user.key.MIGRATED_FROM.json {source_sha256_of_pubkey, at}`. The chain loader prefers `user.key` when present and falls back to `chain.key`; `chain.key` is never deleted by code; `user_id` is unchanged. `doctor` reports both files during the transition and WARNs if their pubkeys differ (a split-identity bug).
+- `crates/clawft-types/src/config/kernel.rs`: `mesh.service = "auto"|"required"|"off"` (default `auto`).
+Tests (clawft-weave integration over S in-process or L's loopback): boot in service mode registers and shows the handshake; collapsed when no socket; `required` without a service fails boot with the reason; service restart then re-register and cert refresh; verdict round trip through a real `GateBackend` rule; anchors survive a service outage and flush after reconnect; user-key migration idempotent, equal pubkeys, never touches `chain.key`; machine pin mismatch is fatal.
+Acceptance: crate tests, clippy, check, `scripts/build.sh gate` (touches boot).
+
+### H. service-units-and-installer (crate `clawft-weave`, `scripts/build.sh`, docs)
+Depends on: S (binary and flags), P1-H (`service_units.rs`). Blocks: none.
+- `service_units.rs` adds pure generators: `launchd_system_plist(exe,state,sock)->String` (label `ai.weftos.mesh`, `UserName _weftos`, `GroupName _weftos`, `KeepAlive`, `RunAtLoad`, `ProgramArguments [exe, mesh, serve, --config, /etc/weftos/mesh.toml]`, logs under `/var/log/weftos/`), `systemd_system_unit(..)->String` (`weftos-mesh.service`: `User=weftos`, `StateDirectory=weftos/mesh`, `StateDirectoryMode=0700`, `RuntimeDirectory=weftos`, `RuntimeDirectoryMode=0755`, `NoNewPrivileges=yes`, `ProtectSystem=strict`, `ProtectHome=yes`, `PrivateTmp=yes`, `CapabilityBoundingSet=` empty, `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6`, `Restart=always`), `sysusers_conf()` and a macOS `dscl` account snippet. The existing user-unit generators (P1 H) gain the `mesh.service` mode flag only.
+- new `commands/mesh_install.rs`: `weaver mesh install-service` **prints** a reviewed shell script (create account, create dirs with modes, copy the binary to `/usr/local/libexec/weftos/weaver` root-owned 0755, write `mesh.toml`, install the unit, the exact enable command); `--adopt-node-key PATH` adds the copy of an existing key (decision D-4); it never executes anything and refuses to print an `--apply` form in P3. `weaver mesh uninstall-service` prints the inverse and never deletes `/var/lib/weftos/mesh/node.key` unless `--purge-key` is spelled out.
+- installer tier (amends `install-update-review.md` 6.4 and the receipt): receipt gains `tiers: [{name:"service"|"user"|"project", exe, sha, version, owner}]`; `weaver doctor install` reads the service tier from `service.json`/`mesh status` (never trusts the receipt alone) and reports skew; `weaver update` restarts the user daemon as in P1, and for the service **only prints** `sudo launchctl kickstart -k system/ai.weftos.mesh` / `sudo systemctl restart weftos-mesh` plus the `cp` to `/usr/local/libexec/weftos/` when the packaged sha differs; it never invokes sudo. `install.sh` stays user-only.
+- `doctor` gains `mesh` checks: service reachable, proto window, pinned machine key, journal verifies, box key mode and owner, `node.key` still present in `~/.weftos/run/` while the service is active (WARN), leaf peers unsigned, two listeners on 9489 (FAIL).
+Tests: golden files for plist/unit/sysusers/script under `crates/clawft-weave/tests/golden/`; `plutil -lint` and `systemd-analyze verify` as optional script steps when present; the script printer escapes paths with spaces; restart logic never signals the service pid.
+Acceptance: crate tests, clippy, check; manual: `weaver mesh install-service | sh -n` and `plutil -lint`.
+
+### W. windows-design (doc only in P3, section 6) and X. integration commit (owner: U)
+X wires `MeshMode`, the doctor checks and the end-to-end script `scripts/dev/mesh-p3-e2e.sh` (service + two user daemons as the current user in tempdirs; no root); it runs under `scripts/build.sh test-mesh-service` (new target: `cargo test -p clawft-mesh-local -p clawft-mesh-service`, the no-owned-state gate, `check-mesh-only`).
+
+## 3. Shared files, ownership and merge order
+
+| File | Touched by | Rule |
+|---|---|---|
+| `clawft-kernel/src/boot.rs` | K0 (extract), U (identity guard) | K0 first and alone; U adds one guarded block after K0. |
+| `clawft-kernel/src/mesh_runtime.rs`, `mesh_ipc.rs`, `mesh_noise.rs` | K0, K1 | K1 rebases on K0; K1 adds only new functions and the hook call. |
+| `clawft-kernel/src/lib.rs`, `Cargo.toml` (workspace) | K0, K1, L, S | `pub mod`/member lines only. |
+| `clawft-weave/src/commands/mod.rs`, `main.rs` | S, H, U | one `mod` and one subcommand each (`mesh`, `migrate user-key`). |
+| `clawft-weave/src/service_units.rs` | H (owner), P1-H | H rebases on P1-H. |
+| `clawft-weave/src/handshake.rs` | U | additive field only. |
+
+exec
+/bin/zsh -lc 'node scripts/dashboard-board.mjs claim 0dc06c23-56a0-4718-b7d5-aefc2f05d98c' in ~/.codex/worktrees/topology-finish/weftos
+ exited 1 in 0ms:
+fetch failed
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/zsh -lc 'node scripts/dashboard-board.mjs claim 0dc06c23-56a0-4718-b7d5-aefc2f05d98c' in ~/.codex/worktrees/topology-finish/weftos
+ exited 1 in 0ms:
+fetch failed
+
+codex
+The board CLI cannot reach its local service yet, so the claim has not landed. I’m checking the project’s board startup path before editing; I’ve completed the read-only source and ADR pass in the meantime.
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+exec
+/bin/zsh -lc "sed -n '1,180p' scripts/dashboard-board.mjs" in ~/.codex/worktrees/topology-finish/weftos
+ succeeded in 0ms:
+#!/usr/bin/env node
+import { readFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+
+const baseUrl = process.env.WEFTOS_DASHBOARD_URL ?? 'https://weftos-dashboard.vercel.app';
+const tokenFile = process.env.WEFTOS_BOARD_TOKEN_FILE ?? join(homedir(), '.config/weftos/board-token');
+const statuses = new Set(['todo', 'in_progress', 'review', 'done']);
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function usage() {
+  console.log(`WeftOS dashboard board
+  dashboard-board.mjs ready [--json]
+  dashboard-board.mjs list [todo|in_progress|review|done] [--json]
+  dashboard-board.mjs goals [--json]
+  dashboard-board.mjs show <ticket UUID|WEFT-N> [--json]
+  dashboard-board.mjs create <stable-source-key> <title> <description> [source URL]
+  dashboard-board.mjs update <ticket UUID|WEFT-N> [--title "<t>"] [--description "<d>" | --description-file <path>] [--dry-run]
+  dashboard-board.mjs claim <ticket UUID|WEFT-N>
+  dashboard-board.mjs move <ticket UUID|WEFT-N> <status>
+  dashboard-board.mjs note <ticket UUID|WEFT-N> <comment>
+  dashboard-board.mjs link <ticket UUID|WEFT-N> <goal UUID>
+  dashboard-board.mjs unlink <ticket UUID|WEFT-N>
+  dashboard-board.mjs done <ticket UUID|WEFT-N> <tests, build, and shipped evidence>
+
+Credential: WEFTOS_BOARD_TOKEN or mode-600 ${tokenFile}`);
+}
+
+async function boardToken() {
+  const token = process.env.WEFTOS_BOARD_TOKEN ?? (await readFile(tokenFile, 'utf8')).trim();
+  if (!/^wfb_[a-f0-9]{64}$/.test(token)) throw new Error('Invalid board credential format');
+  return token;
+}
+
+async function request(token, method, path, body) {
+  const response = await fetch(new URL(path, baseUrl), {
+    method,
+    headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(15_000),
+    cache: 'no-store',
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(`Board HTTP ${response.status}: ${result.error ?? 'request failed'}`);
+  return result;
+}
+
+async function allTickets(token, status = null) {
+  const items = [];
+  for (let offset = 0; offset < 10_000; offset += 100) {
+    const query = new URLSearchParams({ limit: '100', offset: String(offset) });
+    if (status) query.set('status', status);
+    const page = await request(token, 'GET', `/api/harness/tickets?${query}`);
+    if (!Array.isArray(page.items)) throw new Error('Board returned an invalid page');
+    items.push(...page.items);
+    if (page.items.length < 100) return items;
+  }
+  throw new Error('Board pagination exceeded 10,000 items');
+}
+
+async function allGoals(token) {
+  const items = [];
+  for (let offset = 0; offset < 10_000; offset += 100) {
+    const page = await request(token, 'GET', `/api/harness/goals?limit=100&offset=${offset}`);
+    if (!Array.isArray(page.items)) throw new Error('Dashboard returned an invalid goal page');
+    items.push(...page.items);
+    if (page.items.length < 100) return items;
+  }
+  throw new Error('Goal pagination exceeded 10,000 goals');
+}
+
+function shortRef(ticket) {
+  return ticket.source_url?.match(/WEFT-\d+$/)?.[0] ?? ticket.id;
+}
+
+async function resolve(token, ref) {
+  const tickets = await allTickets(token);
+  const issue = tickets.find((ticket) => ticket.id === ref || ticket.source_id === ref || shortRef(ticket) === ref.toUpperCase());
+  if (!issue) throw new Error(`Ticket not found: ${ref}`);
+  return issue;
+}
+
+// Pulls `--name value` pairs (and bare `--dry-run`) out of argv so the
+// remaining positional words keep their existing meaning.
+function takeFlags(args) {
+  const flags = {};
+  const words = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--json' || arg === '--dry-run') flags[arg.slice(2)] = true;
+    else if (arg === '--title' || arg === '--description' || arg === '--description-file') {
+      if (i + 1 >= args.length) throw new Error(`${arg} requires a value`);
+      flags[arg.slice(2)] = args[++i];
+    } else words.push(arg);
+  }
+  return { flags, words };
+}
+
+async function updateFields(flags) {
+  if (flags.description !== undefined && flags['description-file'] !== undefined) {
+    throw new Error('Use --description or --description-file, not both');
+  }
+  const description = flags['description-file'] !== undefined
+    ? await readFile(flags['description-file'], 'utf8')
+    : flags.description;
+  const fields = {};
+  if (flags.title !== undefined) fields.title = flags.title;
+  if (description !== undefined) fields.description = description;
+  if (Object.keys(fields).length === 0) throw new Error('update requires --title and/or --description');
+  if (fields.title !== undefined && (fields.title.trim().length < 1 || fields.title.length > 300)) {
+    throw new Error('title must be 1-300 characters');
+  }
+  if (fields.description !== undefined && (fields.description.trim().length < 20 || fields.description.length > 30_000)) {
+    throw new Error('description must be 20-30000 characters');
+  }
+  return fields;
+}
+
+function printList(items) {
+  for (const ticket of items) {
+    console.log(`${shortRef(ticket).padEnd(12)} ${ticket.status.padEnd(11)} ${ticket.priority.padEnd(7)} ${ticket.title}`);
+  }
+  console.log(`${items.length} ticket(s)`);
+}
+
+async function main() {
+  const args = process.argv.slice(2);
+  const { flags, words } = takeFlags(args);
+  const json = flags.json === true;
+  const [command, ref, ...rest] = words;
+  if (!command || command === 'help' || command === '--help') return usage();
+  const token = await boardToken();
+  if (command === 'ready' || command === 'list') {
+    const status = command === 'ready' ? 'todo' : (ref ?? null);
+    if (status && !statuses.has(status)) throw new Error(`Invalid status: ${status}`);
+    const items = await allTickets(token, status);
+    return json ? console.log(JSON.stringify(items, null, 2)) : printList(items);
+  }
+  if (command === 'goals') {
+    const goals = await allGoals(token);
+    if (json) return console.log(JSON.stringify(goals, null, 2));
+    for (const goal of goals) console.log(`${goal.id} ${goal.status.padEnd(9)} ${goal.title}`);
+    return console.log(`${goals.length} goal(s)`);
+  }
+  if (!ref) throw new Error(`${command} requires a ticket reference`);
+  if (command === 'create') {
+    const [title, description, sourceUrl] = rest;
+    if (!title || !description || description.trim().length < 20) {
+      throw new Error('create requires a quoted title and a description of at least 20 characters');
+    }
+    const created = await request(token, 'POST', '/api/harness/tickets', {
+      action: 'create', source_key: ref, title, description, ...(sourceUrl ? { source_url: sourceUrl } : {}),
+    });
+    return console.log(json ? JSON.stringify(created, null, 2) : `${created.id} · ${created.created ? 'created' : 'already exists'}`);
+  }
+  const ticket = await resolve(token, ref);
+  if (command === 'show') return console.log(json ? JSON.stringify(ticket, null, 2) : `${shortRef(ticket)} · ${ticket.status}\n${ticket.title}\n${ticket.description}\n${ticket.source_url ?? ''}`);
+  if (command === 'update') {
+    const fields = await updateFields(flags);
+    const changed = Object.keys(fields).join(', ');
+    if (flags['dry-run']) {
+      return console.log(json ? JSON.stringify({ id: ticket.id, dry_run: true, fields }, null, 2) : `${ticket.id} · dry run, would update ${changed}`);
+    }
+    const updated = await request(token, 'POST', '/api/harness/tickets', { action: 'update', ticket_id: ticket.id, ...fields });
+    return console.log(json ? JSON.stringify(updated, null, 2) : `${updated.id} · updated ${changed}`);
+  }
+  if (command === 'link' || command === 'unlink') {
+    const goalId = command === 'unlink' ? null : rest[0];
+    if (command === 'link' && !uuidPattern.test(goalId ?? '')) {
+      throw new Error('link requires a goal UUID from this project');
+    }
+    const linked = await request(token, 'POST', '/api/harness/tickets', {
+      ticket_id: ticket.id, action: 'goal', value: goalId,
+    });
+    return console.log(json ? JSON.stringify(linked, null, 2) : `${shortRef(ticket)} → ${linked.goal_id ?? 'no goal'}`);
+  }
+  let result;
+  if (command === 'claim') {
+    result = await request(token, 'POST', '/api/harness/tickets', { ticket_id: ticket.id, action: 'claim' });
+  } else if (command === 'move') {
+
+exec
+/bin/zsh -lc 'rg --files .agents .codex 2>/dev/null | head -50' in ~/.codex/worktrees/topology-finish/weftos
+ succeeded in 0ms:
+.codex/config.toml
+.codex/hooks.json
+.codex/agents/world-builder.toml
+
+exec
+/bin/zsh -lc "rg -n 'Phase 4|P4|sandbox driver|weave.master|nested' docs/adr/adr-103-weave-topology-roles-and-instances.md" in ~/.codex/worktrees/topology-finish/weftos
+ succeeded in 0ms:
+3:- **Status**: Accepted (2026-09-30; decisions D1–D14 set by the owner 2026-09-30; implementation tracked on cards weave-topology-P0..P4, leaf track, cog-boundary audit)
+38:- **D4 Runtime roots are machine-wide.** Machine role: `/var/lib/weftos` (state) and `/var/run/weftos` (sockets). Per-user state under `~/.weftos/` (`run/`, `projects/`, `chain/`). `~/.clawft/` becomes legacy, read for migration only. `WEFTOS_RUNTIME_DIR` remains the full-isolation override for tests, probes and nested instances.
+42:- **D8 Governance overlays** are **tighten-only**: a project (and a nested instance) may add denies and lower limits, never relax the parent's rules. Every chain event records the effective-rule hash.
+43:  - *D8 limits (Phase 2):* the kernel gate, the `agent.chat` tool gate and the spawned-agent gate follow live parent updates and `governance.reload`; the placement `WorkloadGate` is built from the effective rules when the control plane is built, so a push does not reach it until the kernel restarts. `max_processes` and `spawn_budget` (the concurrent sub-agent spawn cap) apply at boot; a push that changes them reports `restart_required`. The child trusts the user key in `<run>/<id>/user.pub` (written by the supervisor, outside the project tree) and falls back to its own certificate with a warning only while that pin is absent; this assumes nothing inside the project can write the run dir, which Phase 4 sandboxes must keep true.
+44:- **D9 `project` is an ADR-099 workload kind** with pluggable sandbox drivers: `logical` (no sandbox, Phase 2), OpenShell or containers on Linux, Seatbelt or Apple `container` on macOS, wasmtime for WASM projects. The sandbox is the workload; the project kernel runs inside it as its supervisor; the user daemon supervises from outside (§6). *(Owner did not answer D9 explicitly; recorded as the analysis recommendation, reversible until Phase 4.)*
+45:- **D10 Nested WeftOS** is isolated by default. A toggle, `weave.master = true`, marks an instance as the master of the WeftOS instances nested under it; the master manages their config (ports, registration level, governance cap). An inner instance never joins the outer mesh unless its master registers it.
+90:  - *Verified project, as built (package I).* The forward header is `{project_id, issued_at_ms, sig}`, signed by the user key over `"weftos-project-forward-v2\n<project_id>\n<issued_at_ms>\n<method>\n<sha256 of canonical params>\n<target child key id>"`, so it authorises one request to one child; the child accepts it once and within 5 s, and the TCP relay strips it from remote lines. Refusal kinds: `forward_unavailable`, `forward_bad_signature`, `forward_expired`, `forward_replayed`, `project_scope_mismatch`, and the reserved `forward_wrong_target` (a header signed for a sibling child currently reports as `forward_bad_signature`). A method containing a newline is refused on both sides; the proxy stamps the header as its last step, after any param rewriting. A token scoped to one project cannot act as another (`project_scope_mismatch`). Honest limit: same-uid callers can still lie via `Request.project` on the claim path (no token, no forward header, unbound daemon), which keeps its Phase 1 meaning and is logged as `claimed`; `VerifiedProject` is an isolation guard between one user's projects, not a boundary against a hostile local process (Phase 3 peer credentials, Phase 4 sandboxes).
+170:  - *Child peers (P2 S9).* ADR-070's same-uid shortcut honoured a literal `auth: "admin"` from any peer with the daemon's uid, which includes a compromised supervised child, which could then mint an owner token. The user daemon now classifies each unix-socket peer at accept (`child_peer`): a same-uid peer whose process group is a supervised child's (children lead their own group, `process_group(0)`, so the group id is the child's pid; the supervisor exposes `Launcher::supervised_pids`) is `Child`. A same-uid peer whose pid is unknown or whose process group cannot be read (it exited and was reaped before accept) is also a `Child`: the classifier fails closed. The supervised set is every child process group this daemon started or adopted, kept until `killpg(pgid, 0)` reports `ESRCH` (so grandchildren orphaned by the leader's exit are still recognised; the check never reaps). The Windows named-pipe path and the legacy `handle_connection` wrapper do not classify and default to Owner. A `Child`'s literal scopes are ignored and it is treated as anonymous (read and chat), not refused, because a child's own parent calls (`kernel.handshake`, `mesh.*`, `project.anchor.submit`) carry the client library's implicit `"admin"` and need only `read`; only its project token is honoured, and that token is write-only and method-restricted (`project_token_method_denied`). The owner's CLI is in no child's group and is unchanged. *Not done, and why:* stripping `wft_` tokens in the TCP relay. No code path carries a token into a child (the user daemon calls a child only with a signed forward header), remote callers legitimately authenticate with `wft_` tokens (ADR-102 D3), and with the mint hop closed a child cannot obtain an owner token to relay. *Honest limit:* this is a narrowing, not a boundary. A child process that leaves its group (`setsid`, `setpgid`, a double fork) escapes it; the boundary is a separate uid or a Phase 4 sandbox.
+198:| 4 | Sandbox drivers (OpenShell/containers on Linux, Seatbelt/`container` on macOS, wasmtime); nested WeftOS with `weave.master` (D10), exercised by running this repo's dev kernel under the release user daemon | weave-topology-P4 |
+
+exec
+/bin/zsh -lc "rg -n 'dashboard|board' process-compose.yaml | head -60" in ~/.codex/worktrees/topology-finish/weftos
+ succeeded in 0ms:
+83:  dashboard-heartbeat:
+84:    description: Report this installation and MetaHarness receipts to the dashboard
+85:    command: node scripts/dashboard-heartbeat.mjs
+92:    log_location: .grok/compose/logs/dashboard-heartbeat.log
+104:  job_board_ready:
+105:    description: List WeftOS dashboard board ready tickets
+106:    command: node scripts/dashboard-board.mjs ready
+112:    log_location: .grok/compose/logs/job-board-ready.log
+
+exec
+/bin/zsh -lc "rg -n 'weave.master|SandboxDriver|sandbox.driver|ProjectSandbox|sandbox' crates/clawft-weave crates/clawft-kernel crates/clawft-types | head -160" in ~/.codex/worktrees/topology-finish/weftos
+ succeeded in 0ms:
+crates/clawft-weave/src/shared_meter.rs:23://! bump, not a boundary. The real boundary is the Phase 4 sandbox. Absent keys
+crates/clawft-kernel/src/capability.rs:100:    /// (S7 / WEFT-108 browser sandbox default).
+crates/clawft-kernel/src/capability.rs:160:    /// sandbox surface for untrusted in-browser code.
+crates/clawft-kernel/src/capability.rs:302:    /// 4. Shell tools require `sandbox.allow_shell`.
+crates/clawft-kernel/src/capability.rs:313:        sandbox: Option<&SandboxPolicy>,
+crates/clawft-kernel/src/capability.rs:349:        // Check sandbox policy for shell tools
+crates/clawft-kernel/src/capability.rs:350:        if let Some(sb) = sandbox
+crates/clawft-kernel/src/capability.rs:357:                reason: "sandbox policy does not allow shell execution".into(),
+crates/clawft-kernel/src/capability.rs:536:/// Browser agents start with a restricted sandbox. Elevation requires
+crates/clawft-kernel/src/capability.rs:647:    /// capabilities exceed the browser sandbox defaults (spawn, network,
+crates/clawft-kernel/src/capability.rs:816:    fn sandbox_policy_default() {
+crates/clawft-kernel/src/capability.rs:825:    fn sandbox_policy_serde_roundtrip() {
+crates/clawft-kernel/src/capability.rs:943:    fn checker_sandbox_blocks_shell() {
+crates/clawft-kernel/src/capability.rs:954:    fn checker_sandbox_allows_shell() {
+crates/clawft-weave/build.rs:16://! directly, and to `unknown` when git is unavailable (tarball / sandboxed
+crates/clawft-types/src/project/spawn.rs:20://! credential binding and the Phase 4 sandbox narrow it.
+crates/clawft-kernel/src/wasm_runner/mod.rs:1://! WASM tool execution sandbox and built-in tool catalog.
+crates/clawft-kernel/src/wasm_runner/mod.rs:4://! isolated WASM sandboxes with fuel metering, memory limits,
+crates/clawft-kernel/src/wasm_runner/mod.rs:16://! Wasmtime runtime integration requires the `wasm-sandbox`
+crates/clawft-kernel/src/wasm_runner/mod.rs:156:        #[cfg(not(feature = "wasm-sandbox"))]
+crates/clawft-kernel/src/wasm_runner/mod.rs:163:        #[cfg(feature = "wasm-sandbox")]
+crates/clawft-kernel/src/wasm_runner/mod.rs:183:        #[cfg(not(feature = "wasm-sandbox"))]
+crates/clawft-kernel/src/wasm_runner/mod.rs:193:        assert!(err.to_string().contains("wasm-sandbox"));
+crates/clawft-kernel/src/wasm_runner/mod.rs:529:    fn sandbox_denies_path_outside_allowed() {
+crates/clawft-kernel/src/wasm_runner/mod.rs:530:        let sandbox = SandboxConfig {
+crates/clawft-kernel/src/wasm_runner/mod.rs:534:        let tool = FsReadFileTool::with_sandbox(sandbox);
+crates/clawft-kernel/src/wasm_runner/mod.rs:540:    fn sandbox_allows_path_inside_allowed() {
+crates/clawft-kernel/src/wasm_runner/mod.rs:541:        let dir = std::env::temp_dir().join("clawft-sandbox-allow-test");
+crates/clawft-kernel/src/wasm_runner/mod.rs:546:        let sandbox = SandboxConfig {
+crates/clawft-kernel/src/wasm_runner/mod.rs:550:        let tool = FsReadFileTool::with_sandbox(sandbox);
+crates/clawft-kernel/src/wasm_runner/mod.rs:559:    fn sandbox_default_allows_all() {
+crates/clawft-kernel/src/wasm_runner/mod.rs:560:        let dir = std::env::temp_dir().join("clawft-sandbox-default-test");
+crates/clawft-kernel/src/wasm_runner/mod.rs:626:    fn fs_create_dir_sandbox_denied() {
+crates/clawft-kernel/src/wasm_runner/mod.rs:628:        let dir = std::env::temp_dir().join("clawft-fs-mkdir-sandbox-test");
+crates/clawft-kernel/src/wasm_runner/mod.rs:1113:    #[cfg(feature = "wasm-sandbox")]
+crates/clawft-kernel/src/wasm_runner/mod.rs:1119:    #[cfg(feature = "wasm-sandbox")]
+crates/clawft-kernel/src/wasm_runner/mod.rs:1131:    #[cfg(feature = "wasm-sandbox")]
+crates/clawft-kernel/src/wasm_runner/mod.rs:1148:    #[cfg(feature = "wasm-sandbox")]
+crates/clawft-kernel/src/wasm_runner/mod.rs:1158:    #[cfg(feature = "wasm-sandbox")]
+crates/clawft-kernel/src/wasm_runner/mod.rs:1188:    #[cfg(feature = "wasm-sandbox")]
+crates/clawft-kernel/src/wasm_runner/mod.rs:1206:    #[cfg(feature = "wasm-sandbox")]
+crates/clawft-kernel/src/wasm_runner/mod.rs:1225:    #[cfg(feature = "wasm-sandbox")]
+crates/clawft-kernel/src/wasm_runner/mod.rs:1235:    #[cfg(feature = "wasm-sandbox")]
+crates/clawft-kernel/src/wasm_runner/mod.rs:1250:    #[cfg(feature = "wasm-sandbox")]
+crates/clawft-kernel/src/wasm_runner/mod.rs:1267:    #[cfg(feature = "wasm-sandbox")]
+crates/clawft-kernel/src/wasm_runner/mod.rs:1278:    #[cfg(feature = "wasm-sandbox")]
+crates/clawft-kernel/src/wasm_runner/mod.rs:1307:    #[cfg(feature = "wasm-sandbox")]
+crates/clawft-kernel/src/wasm_runner/mod.rs:1331:    fn k3_host_filesystem_not_accessible_from_sandbox() {
+crates/clawft-kernel/src/wasm_runner/mod.rs:1342:        #[cfg(feature = "wasm-sandbox")]
+crates/clawft-kernel/src/wasm_runner/mod.rs:1359:                "module importing WASI fd_write should fail in sandboxed execute_sync: {result:?}",
+crates/clawft-kernel/src/wasm_runner/mod.rs:1538:            sandbox_config: Some(SandboxConfig::default()),
+crates/clawft-kernel/src/wasm_runner/mod.rs:1544:        assert!(restored.sandbox_config.is_some());
+crates/clawft-kernel/src/wasm_runner/mod.rs:1552:            sandbox_config: None,
+crates/clawft-kernel/src/wasm_runner/mod.rs:1565:            sandbox_config: None,
+crates/clawft-kernel/src/wasm_runner/mod.rs:1577:            sandbox_config: None,
+crates/clawft-kernel/src/wasm_runner/mod.rs:1620:            sandbox_config: None,
+crates/clawft-types/src/project/tests.rs:65:    assert!(!pt.is_weave_master());
+crates/clawft-types/src/project/tests.rs:83:fn weave_master_and_governance_parse() {
+crates/clawft-types/src/project/tests.rs:86:    assert!(pt.is_weave_master());
+crates/clawft-weave/src/project_forward.rs:35://! process (Phase 3 peer credentials, Phase 4 sandboxes).
+crates/clawft-kernel/src/wasm_runner/runner.rs:6:#[cfg(feature = "wasm-sandbox")]
+crates/clawft-kernel/src/wasm_runner/runner.rs:19:/// When the `wasm-sandbox` feature is enabled, this uses Wasmtime
+crates/clawft-kernel/src/wasm_runner/runner.rs:24:    #[cfg(feature = "wasm-sandbox")]
+crates/clawft-kernel/src/wasm_runner/runner.rs:35:        #[cfg(feature = "wasm-sandbox")]
+crates/clawft-kernel/src/wasm_runner/runner.rs:54:        #[cfg(not(feature = "wasm-sandbox"))]
+crates/clawft-kernel/src/wasm_runner/runner.rs:78:    /// Get the sandbox configuration.
+crates/clawft-kernel/src/wasm_runner/runner.rs:112:        #[cfg(not(feature = "wasm-sandbox"))]
+crates/clawft-kernel/src/wasm_runner/runner.rs:123:        #[cfg(feature = "wasm-sandbox")]
+crates/clawft-kernel/src/wasm_runner/runner.rs:154:    /// Validates the module, computes a SHA-256 hash, and (with `wasm-sandbox`)
+crates/clawft-kernel/src/wasm_runner/runner.rs:165:        #[cfg(not(feature = "wasm-sandbox"))]
+crates/clawft-kernel/src/wasm_runner/runner.rs:172:        #[cfg(feature = "wasm-sandbox")]
+crates/clawft-kernel/src/wasm_runner/runner.rs:228:        #[cfg(not(feature = "wasm-sandbox"))]
+crates/clawft-kernel/src/wasm_runner/runner.rs:233:        #[cfg(feature = "wasm-sandbox")]
+crates/clawft-kernel/src/wasm_runner/runner.rs:248:    #[cfg(feature = "wasm-sandbox")]
+crates/clawft-kernel/src/wasm_runner/runner.rs:278:        // Instantiate with NO imports -- fully sandboxed, no host access
+crates/clawft-kernel/src/wasm_runner/runner.rs:315:    #[cfg(feature = "wasm-sandbox")]
+crates/clawft-kernel/src/wasm_runner/runner.rs:449:    #[cfg(feature = "wasm-sandbox")]
+crates/clawft-kernel/src/wasm_runner/runner.rs:460:#[cfg(feature = "wasm-sandbox")]
+crates/clawft-kernel/src/wasm_runner/runner.rs:465:#[cfg(feature = "wasm-sandbox")]
+crates/clawft-kernel/src/wasm_runner/runner.rs:495:#[cfg(feature = "wasm-sandbox")]
+crates/clawft-kernel/src/wasm_runner/runner.rs:527:#[cfg(feature = "wasm-sandbox")]
+crates/clawft-types/src/project/schema.rs:46:    /// This project is the weave master for its mesh. Default false.
+crates/clawft-types/src/project/schema.rs:81:    pub fn is_weave_master(&self) -> bool {
+crates/clawft-kernel/src/wasm_runner/tools_sys.rs:426:/// A shell command to be executed in the sandbox.
+crates/clawft-kernel/src/wasm_runner/tools_sys.rs:428:/// Represents a command with arguments and optional sandbox configuration.
+crates/clawft-kernel/src/wasm_runner/tools_sys.rs:436:    /// Optional sandbox configuration to restrict execution.
+crates/clawft-kernel/src/wasm_runner/tools_sys.rs:437:    pub sandbox_config: Option<SandboxConfig>,
+crates/clawft-kernel/src/wasm_runner/tools_sys.rs:456:/// of shell commands is deferred to a future sprint. The sandbox config
+crates/clawft-kernel/src/wasm_runner/tools_sys.rs:464:    // Sandbox path check: if sandbox_config has allowed_paths,
+crates/clawft-kernel/src/wasm_runner/tools_sys.rs:465:    // reject commands that reference paths outside the sandbox.
+crates/clawft-kernel/src/wasm_runner/tools_sys.rs:466:    if let Some(ref sandbox) = cmd.sandbox_config
+crates/clawft-kernel/src/wasm_runner/tools_sys.rs:467:        && sandbox.sudo_override
+crates/clawft-kernel/src/wasm_runner/tools_sys.rs:473:    // Real execution would compile to WASM and run in the sandbox.
+crates/clawft-kernel/src/wasm_runner/tools_sys.rs:483:            // Future: compile to WASM and run in sandbox.
+crates/clawft-kernel/src/wasm_runner/tools_sys.rs:514:                description: "Execute a shell command in the sandbox".into(),
+crates/clawft-kernel/src/wasm_runner/tools_sys.rs:559:            sandbox_config: None,
+crates/clawft-kernel/src/wasm_runner/registry.rs:6:#[cfg(feature = "wasm-sandbox")]
+crates/clawft-kernel/src/wasm_runner/registry.rs:9:#[cfg(feature = "wasm-sandbox")]
+crates/clawft-kernel/src/wasm_runner/registry.rs:213:    #[cfg(feature = "wasm-sandbox")]
+crates/clawft-kernel/src/wasm_runner/registry.rs:262:#[cfg(feature = "wasm-sandbox")]
+crates/clawft-kernel/src/wasm_runner/registry.rs:270:#[cfg(feature = "wasm-sandbox")]
+crates/clawft-kernel/src/wasm_runner/registry.rs:314:#[cfg(feature = "wasm-sandbox")]
+crates/clawft-kernel/src/wasm_runner/registry.rs:316:#[cfg(feature = "wasm-sandbox")]
+crates/clawft-weave/src/project_token_scope.rs:25://! not stopped here; that is a separate uid or a Phase 4 sandbox.
+crates/clawft-kernel/src/tools_extended.rs:735:        if cfg!(feature = "wasm-sandbox") {
+crates/clawft-kernel/src/tools_extended.rs:736:            features.push("wasm-sandbox");
+crates/clawft-kernel/src/wasm_runner/types.rs:1://! WASM runner types: configuration, errors, tool specs, signing, and sandbox.
+crates/clawft-kernel/src/wasm_runner/types.rs:49:/// Configuration for the WASM sandbox.
+crates/clawft-kernel/src/wasm_runner/types.rs:207:    #[error("WASM runtime unavailable: compile with --features wasm-sandbox")]
+crates/clawft-kernel/src/wasm_runner/types.rs:234:    /// A host function call was denied by sandbox policy.
+crates/clawft-kernel/src/wasm_runner/types.rs:496:    /// Run in WASM sandbox.
+crates/clawft-kernel/src/wasm_runner/types.rs:505:    /// Simple heuristic: risk > 0.3 => WASM sandbox, else native.
+crates/clawft-kernel/src/wasm_runner/types.rs:512:// Multi-layer sandboxing (k3:D12)
+crates/clawft-kernel/src/wasm_runner/types.rs:515:/// Which sandbox layer denied (or allowed) access.
+crates/clawft-kernel/src/wasm_runner/types.rs:547:/// Result of evaluating the multi-layer sandbox stack.
+crates/clawft-kernel/src/wasm_runner/types.rs:578:/// Filesystem sandbox configuration for built-in tools.
+crates/clawft-kernel/src/wasm_runner/types.rs:584:/// Part of the multi-layer sandboxing stack (k3:D12):
+crates/clawft-kernel/src/wasm_runner/types.rs:601:    /// Check whether a path is allowed by this sandbox config.
+crates/clawft-kernel/src/wasm_runner/types.rs:617:    /// Multi-layer sandbox check (k3:D12).
+crates/clawft-kernel/src/wasm_runner/types.rs:659:            format!("path outside sandbox: {}", path.display()),
+crates/clawft-kernel/src/wasm_runner/tools_fs.rs:16:/// Supports multi-layer sandboxing via [`SandboxConfig`].
+crates/clawft-kernel/src/wasm_runner/tools_fs.rs:19:    sandbox: SandboxConfig,
+crates/clawft-kernel/src/wasm_runner/tools_fs.rs:37:            sandbox: SandboxConfig::default(),
+crates/clawft-kernel/src/wasm_runner/tools_fs.rs:41:    /// Create a sandboxed instance that restricts file access.
+crates/clawft-kernel/src/wasm_runner/tools_fs.rs:42:    pub fn with_sandbox(sandbox: SandboxConfig) -> Self {
+crates/clawft-kernel/src/wasm_runner/tools_fs.rs:48:        Self { spec, sandbox }
+crates/clawft-kernel/src/wasm_runner/tools_fs.rs:70:        if !self.sandbox.is_path_allowed(path) {
+crates/clawft-kernel/src/wasm_runner/tools_fs.rs:72:                "path outside sandbox: {}",
+crates/clawft-kernel/src/wasm_runner/tools_fs.rs:127:    sandbox: SandboxConfig,
+crates/clawft-kernel/src/wasm_runner/tools_fs.rs:138:            sandbox: SandboxConfig::default(),
+crates/clawft-kernel/src/wasm_runner/tools_fs.rs:141:    pub fn with_sandbox(sandbox: SandboxConfig) -> Self {
+crates/clawft-kernel/src/wasm_runner/tools_fs.rs:146:        Self { spec, sandbox }
+crates/clawft-kernel/src/wasm_runner/tools_fs.rs:171:        if !self.sandbox.is_path_allowed(path) {
+crates/clawft-kernel/src/wasm_runner/tools_fs.rs:173:                "path outside sandbox: {}",
+crates/clawft-kernel/src/wasm_runner/tools_fs.rs:207:    sandbox: SandboxConfig,
+crates/clawft-kernel/src/wasm_runner/tools_fs.rs:218:            sandbox: SandboxConfig::default(),
+crates/clawft-kernel/src/wasm_runner/tools_fs.rs:221:    pub fn with_sandbox(sandbox: SandboxConfig) -> Self {
+crates/clawft-kernel/src/wasm_runner/tools_fs.rs:226:        Self { spec, sandbox }
+crates/clawft-kernel/src/wasm_runner/tools_fs.rs:243:        if !self.sandbox.is_path_allowed(path) {
+crates/clawft-kernel/src/wasm_runner/tools_fs.rs:245:                "path outside sandbox: {}",
+crates/clawft-kernel/src/wasm_runner/tools_fs.rs:271:    sandbox: SandboxConfig,
+crates/clawft-kernel/src/wasm_runner/tools_fs.rs:282:            sandbox: SandboxConfig::default(),
+crates/clawft-kernel/src/wasm_runner/tools_fs.rs:300:        if !self.sandbox.is_path_allowed(path) {
+crates/clawft-kernel/src/wasm_runner/tools_fs.rs:302:                "path outside sandbox: {}",
+crates/clawft-kernel/src/wasm_runner/tools_fs.rs:331:    sandbox: SandboxConfig,
+crates/clawft-kernel/src/wasm_runner/tools_fs.rs:342:            sandbox: SandboxConfig::default(),
+crates/clawft-kernel/src/wasm_runner/tools_fs.rs:360:        if !self.sandbox.is_path_allowed(path) {
+crates/clawft-kernel/src/wasm_runner/tools_fs.rs:362:                "path outside sandbox: {}",
+crates/clawft-kernel/src/wasm_runner/tools_fs.rs:399:    sandbox: SandboxConfig,
+crates/clawft-kernel/src/wasm_runner/tools_fs.rs:410:            sandbox: SandboxConfig::default(),
+crates/clawft-kernel/src/wasm_runner/tools_fs.rs:433:        if !self.sandbox.is_path_allowed(src) || !self.sandbox.is_path_allowed(dst) {
+crates/clawft-kernel/src/wasm_runner/tools_fs.rs:434:            return Err(ToolError::PermissionDenied("path outside sandbox".into()));
+crates/clawft-kernel/src/wasm_runner/tools_fs.rs:457:    sandbox: SandboxConfig,
+crates/clawft-kernel/src/wasm_runner/tools_fs.rs:468:            sandbox: SandboxConfig::default(),
+crates/clawft-kernel/src/wasm_runner/tools_fs.rs:491:        if !self.sandbox.is_path_allowed(src) || !self.sandbox.is_path_allowed(dst) {
+crates/clawft-kernel/src/wasm_runner/tools_fs.rs:492:            return Err(ToolError::PermissionDenied("path outside sandbox".into()));
+crates/clawft-kernel/src/wasm_runner/tools_fs.rs:514:    sandbox: SandboxConfig,
+crates/clawft-kernel/src/wasm_runner/tools_fs.rs:525:            sandbox: SandboxConfig::default(),
+crates/clawft-kernel/src/wasm_runner/tools_fs.rs:543:        if !self.sandbox.is_path_allowed(path) {
+crates/clawft-kernel/src/wasm_runner/tools_fs.rs:545:                "path outside sandbox: {}",
+
+mcp: cua_repl/js started
+mcp: cua_repl/js (failed)
+mcp: cua_repl/js started
+mcp: cua_repl/js (completed)
+mcp: cua_repl/js started
+mcp: cua_repl/js (failed)
+codex
+I can’t start Phase 4 edits yet. The required claim for ticket `0dc06c23-56a0-4718-b7d5-aefc2f05d98c` failed because the board CLI could not connect. Browser access to the board was then denied, with an instruction not to retry through another route. AGENTS.md requires the claim **before editing**.
+
+Please claim the ticket yourself and tell me when it’s claimed. I’ll then continue the implementation in this worktree, run isolated tests through `scripts/build.sh`, and write the plan and exact evidence in docs. I made no edits, commits, or pushes.
+hook: Stop
+hook: Stop
+hook: Stop Failed
+hook: Stop Completed
+2026-10-04T18:44:29.379998Z  WARN codex_mcp::rmcp_client: failed to initialize MCP client during shutdown: MCP startup failed: handshaking with MCP server failed: connection closed: initialize response: connection closed: initialize response
+2026-10-04T18:44:29.380182Z  WARN codex_mcp::rmcp_client: failed to initialize MCP client during shutdown: MCP startup failed: Environment variable PARTS_KEY for MCP server 'parts' is not set
+2026-10-04T18:44:29.380247Z  WARN codex_mcp::rmcp_client: failed to initialize MCP client during shutdown: MCP startup failed: handshaking with MCP server failed: Send message error Transport [codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>] error: Auth required, when send initialize request: Send message error Transport [codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>] error: Auth required, when send initialize request
+2026-10-04T18:44:29.380258Z  WARN codex_mcp::rmcp_client: failed to initialize MCP client during shutdown: MCP startup failed: handshaking with MCP server failed: Send message error Transport [codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>] error: Auth required, when send initialize request: Send message error Transport [codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>] error: Auth required, when send initialize request
+2026-10-04T18:44:29.380307Z  WARN codex_mcp::rmcp_client: failed to initialize MCP client during shutdown: MCP startup failed: handshaking with MCP server failed: Send message error Transport [codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>] error: Auth required, when send initialize request: Send message error Transport [codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>] error: Auth required, when send initialize request
+tokens used
+66,811
+I can’t start Phase 4 edits yet. The required claim for ticket `0dc06c23-56a0-4718-b7d5-aefc2f05d98c` failed because the board CLI could not connect. Browser access to the board was then denied, with an instruction not to retry through another route. AGENTS.md requires the claim **before editing**.
+
+Please claim the ticket yourself and tell me when it’s claimed. I’ll then continue the implementation in this worktree, run isolated tests through `scripts/build.sh`, and write the plan and exact evidence in docs. I made no edits, commits, or pushes.

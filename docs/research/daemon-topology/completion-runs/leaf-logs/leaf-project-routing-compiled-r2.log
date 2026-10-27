@@ -1,0 +1,85 @@
+
+[1m── Running cargo nextest run (clawft-weave) (+ doctests)[0m
+info: experimental features enabled: wrapper-scripts
+   Compiling clawft-mesh-service v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-mesh-service)
+   Compiling clawft-weave v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-weave)
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9079:44
+     |
+9079 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+     |
+     = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9288:21
+     |
+9288 |             Config, KernelConfig, VectorBackendKind, VectorConfig, VectorHnswConfig,
+     |                     ^^^^^^^^^^^^
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9351:44
+     |
+9351 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9383:44
+     |
+9383 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9412:44
+     |
+9412 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9449:44
+     |
+9449 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9554:44
+     |
+9554 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+
+warning: unused import: `clawft_kernel::NODE_KEY_FILE as KEYFILE_NAME`
+  --> crates/clawft-weave/src/node_identity.rs:28:5
+   |
+28 | use clawft_kernel::NODE_KEY_FILE as KEYFILE_NAME;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `clawft-weave` (lib test) generated 8 warnings (run `cargo fix --lib -p clawft-weave --tests` to apply 8 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 12s
+────────────
+ Nextest run ID bc8097c7-3c6e-4938-a30c-d60cd5786729 with nextest profile: default
+    Starting 1 test across 43 binaries (968 tests skipped)
+        FAIL [   0.073s] (1/1) clawft-weave::mesh_p3_e2e signed_project_address_claim_routes_and_revocation_removes_route
+  stdout ───
+
+    running 1 test
+    test signed_project_address_claim_routes_and_revocation_removes_route ... FAILED
+
+    failures:
+
+    failures:
+        signed_project_address_claim_routes_and_revocation_removes_route
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.04s
+
+  stderr ───
+
+    thread 'signed_project_address_claim_routes_and_revocation_removes_route' (85331101) panicked at crates/clawft-weave/tests/mesh_e2e/mod.rs:110:14:
+    service starts: Listen { addr: "127.0.0.1:0", reason: "io error: Operation not permitted (os error 1)" }
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+  Cancelling due to test failure: 
+────────────
+     Summary [   0.078s] 1 test run: 0 passed, 1 failed, 968 skipped
+        FAIL [   0.073s] (1/1) clawft-weave::mesh_p3_e2e signed_project_address_claim_routes_and_revocation_removes_route
+error: test run failed
+SANDBOX_TEST_EXIT=100

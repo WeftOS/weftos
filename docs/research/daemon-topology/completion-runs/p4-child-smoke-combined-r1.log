@@ -1,0 +1,9 @@
+
+Traceback (most recent call last):
+  File "~/weftos/scripts/dev/p4-child-endpoint-smoke.py", line 101, in <module>
+    main()
+    ~~~~^^
+  File "~/weftos/scripts/dev/p4-child-endpoint-smoke.py", line 70, in main
+    raise AssertionError("daemon did not become ready")
+AssertionError: daemon did not become ready
+CHILD_SMOKE_EXIT=1

@@ -1,0 +1,82 @@
+info: experimental features enabled: wrapper-scripts
+   Compiling clawft-types v0.8.1 (~/weftos/crates/clawft-types)
+   Compiling clawft-weave v0.8.1 (~/weftos/crates/clawft-weave)
+warning: variable does not need to be mutable
+   --> crates/clawft-types/src/config/overlay_tests.rs:240:17
+    |
+240 |             let mut pick = |r: &mut Rng, v: u64| r.some().then_some(v);
+    |                 ----^^^^
+    |                 |
+    |                 help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+   Compiling clawft-llm v0.8.1 (~/weftos/crates/clawft-llm)
+   Compiling clawft-plugin v0.8.1 (~/weftos/crates/clawft-plugin)
+   Compiling clawft-platform v0.8.1 (~/weftos/crates/clawft-platform)
+   Compiling clawft-rpc v0.8.1 (~/weftos/crates/clawft-rpc)
+   Compiling weftos-cog-repo v0.8.1 (~/weftos/crates/weftos-cog-repo)
+   Compiling clawft-services v0.8.1 (~/weftos/crates/clawft-services)
+   Compiling weftos-cog-market v0.8.1 (~/weftos/crates/weftos-cog-market)
+warning: `clawft-types` (lib test) generated 1 warning (run `cargo fix --lib -p clawft-types --tests` to apply 1 suggestion)
+   Compiling clawft-core v0.8.1 (~/weftos/crates/clawft-core)
+   Compiling clawft-substrate v0.8.1 (~/weftos/crates/clawft-substrate)
+   Compiling clawft-kernel v0.8.1 (~/weftos/crates/clawft-kernel)
+   Compiling clawft-tools v0.8.1 (~/weftos/crates/clawft-tools)
+error[E0061]: this function takes 12 arguments but 11 arguments were supplied
+   --> crates/clawft-kernel/src/mesh_serve.rs:973:9
+    |
+973 |           pump(rt, channel, kind, addr, gate, Limits { idle, ..Limits::default() },
+    |  _________^^^^-
+974 | |             out_tx, out_rx, Some(active), tally, true).await;
+    | |______________________________________________________- argument #12 of type `bool` is missing
+    |
+note: function defined here
+   --> crates/clawft-kernel/src/mesh_serve.rs:438:10
+    |
+438 | async fn pump(
+    |          ^^^^
+...
+450 |     leaf_only: bool,
+    |     ---------------
+help: provide the argument
+    |
+973 -         pump(rt, channel, kind, addr, gate, Limits { idle, ..Limits::default() },
+974 -             out_tx, out_rx, Some(active), tally, true).await;
+973 +         pump(rt, channel, kind, addr, gate, Limits { idle, ..Limits::default() }, out_tx, out_rx, Some(active), tally, true, /* bool */).await;
+    |
+
+error[E0599]: no method named `unwrap` found for reference `&[u8]` in the current scope
+   --> crates/clawft-kernel/src/mesh_nested_dial_tests.rs:126:50
+    |
+126 |                         channel.handshake_hash().unwrap(),
+    |                                                  ^^^^^^
+    |
+help: there is a method `swap` with a similar name, but with different arguments
+   --> /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/core/src/slice/mod.rs:905:4
+
+error[E0599]: no method named `unwrap` found for reference `&[u8]` in the current scope
+   --> crates/clawft-kernel/src/mesh_nested_dial_tests.rs:135:50
+    |
+135 |                         channel.handshake_hash().unwrap(),
+    |                                                  ^^^^^^
+    |
+help: there is a method `swap` with a similar name, but with different arguments
+   --> /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/core/src/slice/mod.rs:905:4
+
+error[E0599]: no method named `unwrap` found for reference `&[u8]` in the current scope
+   --> crates/clawft-kernel/src/mesh_nested_dial_tests.rs:142:50
+    |
+142 |                         channel.handshake_hash().unwrap(),
+    |                                                  ^^^^^^
+    |
+help: there is a method `swap` with a similar name, but with different arguments
+   --> /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/core/src/slice/mod.rs:905:4
+
+For more information about this error, try `rustc --explain E0061`.
+error: could not compile `clawft-kernel` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+Some errors have detailed explanations: E0061, E0599.
+For more information about an error, try `rustc --explain E0061`.
+error: could not compile `clawft-kernel` (lib test) due to 4 previous errors
+error: command `~/.rustup/toolchains/1.95-aarch64-apple-darwin/bin/cargo test --no-run --message-format json-render-diagnostics --package clawft-weave --package clawft-kernel --package clawft-types` exited with code 101

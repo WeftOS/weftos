@@ -1,0 +1,8 @@
+
+[1m── Running cargo check -p clawft-weave -p clawft-kernel -p clawft-types[0m
+    |
+    = help: if you wanted to use a crate named `libc`, use `cargo add libc` to add it to your `Cargo.toml`
+
+For more information about this error, try `rustc --explain E0433`.
+error: could not compile `clawft-weave` (lib) due to 7 previous errors
+COMBINED_CHECK_EXIT=101

@@ -1,0 +1,15 @@
+
+running 1 test
+
+thread 'signed_project_address_claim_routes_and_revocation_removes_route' (85239766) panicked at crates/clawft-weave/tests/mesh_p3_e2e.rs:74:73:
+called `Result::unwrap()` on an `Err` value: Frame(Io(Os { code: 32, kind: BrokenPipe, message: "Broken pipe" }))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test signed_project_address_claim_routes_and_revocation_removes_route ... FAILED
+
+failures:
+
+failures:
+    signed_project_address_claim_routes_and_revocation_removes_route
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.09s
+

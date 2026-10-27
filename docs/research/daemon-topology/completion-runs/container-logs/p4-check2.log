@@ -1,0 +1,27 @@
+
+[1m── Running cargo check -p clawft-weave[0m
+   Compiling clawft-weave v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-weave)
+error[E0624]: method `adopt_one_container` is private
+   --> crates/clawft-weave/src/project_supervisor/mod.rs:326:39
+    |
+326 |                     return match self.adopt_one_container(id, host_pid, guest_pid, &slot).await {
+    |                                       ^^^^^^^^^^^^^^^^^^^ private method
+    |
+   ::: crates/clawft-weave/src/project_supervisor/boot.rs:56:5
+    |
+ 56 |     async fn adopt_one_container(self: &Arc<Self>, id: &str, host_pid: u32, guest_pid: u32, slot: &Arc<Slot>) -> Result<(), String> {
+    |     ------------------------------------------------------------------------------------------------------------------------------- private method defined here
+
+error[E0062]: field `container` specified more than once
+  --> crates/clawft-weave/src/project_supervisor/boot.rs:99:13
+   |
+96 | / ...   container: state::read(&self.run_dir(id)).and_then(|s| s.container).map(|c| clawft_rpc::mesh_local::ContainerRegistration {
+97 | | ...       engine: c.engine, container_id: c.id, host_socket: c.host_socket.to_string_lossy().into_owned(),
+98 | | ...   }),
+   | |________- first use of `container`
+99 |   ...   container: None,
+   |         ^^^^^^^^^ used more than once
+
+Some errors have detailed explanations: E0062, E0624.
+For more information about an error, try `rustc --explain E0062`.
+error: could not compile `clawft-weave` (lib) due to 2 previous errors

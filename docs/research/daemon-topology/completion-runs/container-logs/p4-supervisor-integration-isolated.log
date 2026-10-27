@@ -1,0 +1,125 @@
+   Compiling clawft-weave v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-weave)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 19.90s
+     Running tests/project_supervisor.rs (target/debug/deps/project_supervisor-a7b136744d5b9841)
+
+thread 'main' (84329091) panicked at crates/clawft-weave/tests/project_supervisor.rs:154:50:
+called `Result::unwrap()` on an `Err` value: NotReady("the child exited (code Some(101), signal None) before answering; see /private/tmp/wsupkH9tum/home/.weftos/run/01M4479MFFQWXQJF8GRA855YY3/kernel.log")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test env_allowlist_spawn_contract ... FAILED
+
+thread 'main' (84329091) panicked at crates/clawft-weave/tests/project_supervisor.rs:258:43:
+called `Result::unwrap()` on an `Err` value: NotReady("the child exited (code Some(101), signal None) before answering; see /private/tmp/wsupNXwKq0/home/.weftos/run/01M4479PDJDNJH6B9FE0A6VA68/kernel.log")
+test restart_budget_then_failed ... FAILED
+test backoff_schedule_is_chained ... ok (0.4s)
+test clean_exit_is_not_restarted ... ok (0.5s)
+
+thread 'main' (84329091) panicked at crates/clawft-weave/tests/project_supervisor.rs:307:50:
+called `Result::unwrap()` on an `Err` value: NotReady("the child exited (code Some(101), signal None) before answering; see /private/tmp/wsup74xfcg/home/.weftos/run/01M4479QQKT0YGT9SGFAG6J1ND/kernel.log")
+test idle_stop_then_restart ... FAILED
+
+thread 'main' (84329091) panicked at crates/clawft-weave/tests/project_supervisor.rs:341:50:
+called `Result::unwrap()` on an `Err` value: NotReady("the child exited (code Some(101), signal None) before answering; see /private/tmp/wsupWCh2Nc/home/.weftos/run/01M4479QSGW0SNGRSTHKC19MHZ/kernel.log")
+test ignored_shutdown_escalates_to_sigterm ... FAILED
+
+thread 'main' (84329091) panicked at crates/clawft-weave/tests/project_supervisor_support/lifecycle_tests.rs:21:42:
+called `Result::unwrap()` on an `Err` value: NotReady("the child exited (code Some(101), signal None) before answering; see /private/tmp/wsupQkhhok/home/.weftos/run/01M4479QV4D1Y353ABXY2W4Q0V/kernel.log")
+test adoption_after_user_daemon_restart ... FAILED
+
+thread 'main' (84329091) panicked at crates/clawft-weave/tests/project_supervisor_support/lifecycle_tests.rs:200:83:
+called `Result::unwrap()` on an `Err` value: NotReady("the child exited (code Some(101), signal None) before answering; see /private/tmp/wsupBXW7kt/home/.weftos/run/01M4479QWSDWAZ9F9FRE3X9CMZ/kernel.log")
+test revoked_child_is_stopped_at_adoption ... FAILED
+
+thread 'main' (84329091) panicked at crates/clawft-weave/tests/project_supervisor_support/lifecycle_tests.rs:226:83:
+called `Result::unwrap()` on an `Err` value: NotReady("the child exited (code Some(101), signal None) before answering; see /private/tmp/wsuppJS2yM/home/.weftos/run/01M4479QYEWNK85MZ8TVVVPBE2/kernel.log")
+test ensure_running_takes_over_a_live_verified_child ... FAILED
+
+thread 'main' (84329091) panicked at crates/clawft-weave/tests/project_supervisor_support/lifecycle_tests.rs:272:50:
+called `Result::unwrap()` on an `Err` value: NotReady("the child exited (code Some(101), signal None) before answering; see /private/tmp/wsupDCUi0k/home/.weftos/run/01M4479R03NQSKA2B8WD1D7N1Q/kernel.log")
+test revoke_stops_the_child_even_when_the_gated_stop_fails ... FAILED
+test a_failed_spawn_leaves_nothing_behind ... ok (0.0s)
+
+thread 'main' (84329091) panicked at crates/clawft-weave/tests/project_supervisor_support/lifecycle_tests.rs:309:42:
+called `Result::unwrap()` on an `Err` value: NotReady("the child exited (code Some(101), signal None) before answering; see /private/tmp/wsupjx4FNT/home/.weftos/run/01M4479R35E2AKAE272SZK6CPZ/kernel.log")
+test stop_removes_spawn_json_and_a_foreign_pid_is_not_ready ... FAILED
+test adopted_zombie_counts_as_dead ... ok (0.0s)
+
+thread 'main' (84329091) panicked at crates/clawft-weave/tests/project_supervisor_support/lifecycle_tests.rs:57:9:
+manual kernel did not start
+test pid_reuse_and_unverifiable_leftovers_are_never_adopted ... FAILED
+
+thread 'main' (84329091) panicked at crates/clawft-weave/tests/project_supervisor_support/lifecycle_tests.rs:161:50:
+called `Result::unwrap()` on an `Err` value: NotReady("the child exited (code Some(101), signal None) before answering; see /private/tmp/wsupB3f581/home/.weftos/run/01M447A1Z63S86VV6891JWWDV7/kernel.log")
+test spawn_refusal_cases ... FAILED
+
+thread 'main' (84329091) panicked at crates/clawft-weave/tests/project_supervisor.rs:365:42:
+called `Result::unwrap()` on an `Err` value: NotReady("the child exited (code Some(101), signal None) before answering; see /private/tmp/wsupYJG2ao/home/.weftos/run/01M447A220Z184NHREA6VXA6T0/kernel.log")
+test concurrent_ensure_running_starts_one_child ... FAILED
+
+thread 'main' (84329091) panicked at crates/clawft-weave/tests/project_supervisor.rs:382:50:
+called `Result::unwrap()` on an `Err` value: NotReady("the child exited (code Some(101), signal None) before answering; see /private/tmp/wsupcnnbgl/home/.weftos/run/01M447A25AY73BCGD8DZYM03TH/kernel.log")
+test revoked_marker_stops_the_child_and_blocks_a_restart ... FAILED
+
+thread 'main' (84329091) panicked at crates/clawft-weave/tests/project_supervisor.rs:399:42:
+called `Result::unwrap()` on an `Err` value: NotReady("the child exited (code Some(101), signal None) before answering; see /private/tmp/wsuprpIYNA/home/.weftos/run/01M447A26YJGT7975KP7N4FTKT/kernel.log")
+test token_refresh_rotates_and_refuses_strangers ... FAILED
+
+thread 'main' (84329091) panicked at crates/clawft-weave/tests/project_supervisor.rs:427:50:
+called `Result::unwrap()` on an `Err` value: NotReady("the child exited (code Some(101), signal None) before answering; see /private/tmp/wsupS8tqO6/home/.weftos/run/01M447A28J505GRMAQX2YQZKK1/kernel.log")
+test crash_after_ready_restarts_and_recovers ... FAILED
+
+thread 'main' (84329091) panicked at crates/clawft-weave/tests/project_supervisor_support/followup_tests.rs:37:50:
+called `Result::unwrap()` on an `Err` value: NotReady("the child exited (code Some(101), signal None) before answering; see /private/tmp/wsupAfMAbb/home/.weftos/run/01M447A2A8PSAXSW85K4MA4A44/kernel.log")
+test a_child_on_an_older_build_than_the_daemon_is_reported_stale ... FAILED
+
+thread 'main' (84329091) panicked at crates/clawft-weave/tests/project_supervisor_support/followup_tests.rs:71:54:
+called `Result::unwrap()` on an `Err` value: NotReady("the child exited (code Some(101), signal None) before answering; see /private/tmp/wsupPoUejT/home/.weftos/run/01M447A2BW8YEMECFDMPVXF6J8/kernel.log")
+test ensure_running_during_an_automatic_restart_waits_for_the_socket ... FAILED
+
+thread 'main' (84329091) panicked at crates/clawft-weave/tests/project_supervisor_support/followup_tests.rs:135:9:
+assertion `left == right` failed
+  left: [Unverifiable { id: "01M447A2DFP5V2VFAD4J65VTDM", pid: Some(23452), reason: WrongExe { found: "", expected: "project_supervisor-a7b136744d5b9841" } }]
+ right: [Adopted { id: "01M447A2DFP5V2VFAD4J65VTDM", pid: 23452 }]
+test a_child_still_booting_at_adoption_is_adopted_or_found_by_the_stop_cascade ... FAILED
+
+thread 'main' (84329091) panicked at crates/clawft-weave/tests/project_supervisor_support/followup_tests.rs:176:54:
+called `Result::unwrap()` on an `Err` value: NotReady("the child exited (code Some(101), signal None) before answering; see /private/tmp/wsupi4WOrU/home/.weftos/run/01M447A2EAVY0M1WD9SVSWHXCD/kernel.log")
+test a_child_that_lost_its_heartbeat_is_restarted_and_then_failed_when_the_budget_is_spent ... FAILED
+
+thread 'main' (84329091) panicked at crates/clawft-weave/tests/project_supervisor_support/followup_tests.rs:261:54:
+called `Result::unwrap()` on an `Err` value: NotReady("the child exited (code Some(101), signal None) before answering; see /private/tmp/wsup8RTjVn/home/.weftos/run/01M447A2G605SHT8G09W1ECEM4/kernel.log")
+test a_plain_lost_child_is_restarted_at_the_short_grace_not_the_busy_ceiling ... FAILED
+
+thread 'main' (84329091) panicked at crates/clawft-weave/tests/project_supervisor_support/followup_tests.rs:234:54:
+called `Result::unwrap()` on an `Err` value: NotReady("the child exited (code Some(101), signal None) before answering; see /private/tmp/wsupPBWK1f/home/.weftos/run/01M447A2HS0HMH613R05TM4AJ5/kernel.log")
+test a_child_wedged_while_busy_is_restarted_after_the_ceiling ... FAILED
+
+thread 'main' (84329091) panicked at crates/clawft-weave/tests/project_supervisor_support/followup_tests.rs:279:42:
+called `Result::unwrap()` on an `Err` value: NotReady("the child exited (code Some(101), signal None) before answering; see /private/tmp/wsupVyRR3P/home/.weftos/run/01M447A2KP7MHYCSY274WCMJY8/kernel.log")
+test an_adopted_child_that_never_registers_is_reported_in_status ... FAILED
+test a_revoked_project_without_a_marker_is_refused_before_spawning ... ok (0.0s)
+
+thread 'main' (84329091) panicked at crates/clawft-weave/tests/project_supervisor_support/lifecycle_tests.rs:57:9:
+manual kernel did not start
+test an_adopted_pid_recycled_between_sigterm_and_sigkill_is_never_killed ... FAILED
+
+thread 'main' (84329091) panicked at crates/clawft-weave/tests/project_supervisor_support/followup_tests.rs:368:83:
+called `Result::unwrap()` on an `Err` value: NotReady("the child exited (code Some(101), signal None) before answering; see /private/tmp/wsupIl7Huz/home/.weftos/run/01M447ACG4J2AJQQGAY3C5V6Y4/kernel.log")
+test an_adopted_but_refused_leftover_is_reported_as_unmanaged ... FAILED
+
+thread 'main' (84329091) panicked at crates/clawft-weave/tests/project_supervisor_support/followup_tests.rs:401:9:
+[Unverifiable { id: "01M447ACHSDS0EZ2TTAVMJSZAA", pid: Some(24104), reason: WrongExe { found: "", expected: "project_supervisor-a7b136744d5b9841" } }]
+test a_wedged_leftover_delays_boot_and_the_stop_cascade_only_briefly ... FAILED
+
+thread 'main' (84329091) panicked at crates/clawft-weave/tests/project_supervisor_support/lifecycle_tests.rs:57:9:
+manual kernel did not start
+test an_empty_pid_file_that_fills_in_is_adopted_not_bad ... FAILED
+
+thread 'main' (84329091) panicked at crates/clawft-weave/tests/project_supervisor_support/rpc_test.rs:46:50:
+called `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+test lifecycle_rpc_end_to_end ... FAILED
+
+project_supervisor: 32 ran, 27 failed
+error: test failed, to rerun pass `-p clawft-weave --test project_supervisor`
+
+Caused by:
+  process didn't exit successfully: `~/.codex/worktrees/project-container/weftos/target/debug/deps/project_supervisor-a7b136744d5b9841 --nocapture` (exit status: 1)

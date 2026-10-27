@@ -1,0 +1,79 @@
+
+[1m── Running cargo nextest run (clawft-weave) (+ doctests)[0m
+   Compiling clawft-weave v0.8.1 (~/.codex/worktrees/topology-finish/weftos/crates/clawft-weave)
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9079:44
+     |
+9079 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+     |
+     = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9288:21
+     |
+9288 |             Config, KernelConfig, VectorBackendKind, VectorConfig, VectorHnswConfig,
+     |                     ^^^^^^^^^^^^
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9351:44
+     |
+9351 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9383:44
+     |
+9383 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9412:44
+     |
+9412 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9449:44
+     |
+9449 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9554:44
+     |
+9554 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+
+warning: unused import: `clawft_kernel::NODE_KEY_FILE as KEYFILE_NAME`
+  --> crates/clawft-weave/src/node_identity.rs:28:5
+   |
+28 | use clawft_kernel::NODE_KEY_FILE as KEYFILE_NAME;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `clawft-weave` (lib test) generated 8 warnings (run `cargo fix --lib -p clawft-weave --tests` to apply 8 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 14s
+────────────
+ Nextest run ID 0107344a-1909-4632-b6fd-3d5a1644dd38 with nextest profile: default
+    Starting 3 tests across 43 binaries (969 tests skipped)
+        PASS [   0.124s] (1/3) clawft-weave project_supervisor::sandbox::seatbelt::tests::quoted_path_is_escaped_in_profile
+        PASS [   0.125s] (2/3) clawft-weave project_supervisor::sandbox::seatbelt::tests::profile_has_no_global_network_or_home_access
+        FAIL [   8.871s] (3/3) clawft-weave::project_supervisor seatbelt_denies_test_home
+  stdout ───
+    test seatbelt_denies_test_home ... FAILED
+
+    project_supervisor: 1 ran, 1 failed
+  stderr ───
+
+    thread 'main' (83704128) panicked at crates/clawft-weave/tests/project_supervisor.rs:224:17:
+    sandboxed kernel did not start: project kernel did not become ready: the child exited (code None, signal Some(6)) before answering; see /private/tmp/wsupDa1d6u/home/.weftos/run/01M445SZZWCRC9W8SGJ1GCZKDD/kernel.log; kernel.log: 
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+    (test failed with exit code 1)
+
+  Cancelling due to test failure: 
+────────────
+     Summary [   8.882s] 3 tests run: 2 passed, 1 failed, 969 skipped
+        FAIL [   8.871s] (3/3) clawft-weave::project_supervisor seatbelt_denies_test_home
+error: test run failed
+HOST_TEST_EXIT=100

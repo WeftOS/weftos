@@ -1,0 +1,129 @@
+--- a/crates/clawft-weave/src/project_cert_rpc.rs
++++ b/crates/clawft-weave/src/project_cert_rpc.rs
+@@ -57,15 +57,32 @@
+ static PROJECT_CLAIMS_CHANGED: OnceLock<tokio::sync::Notify> = OnceLock::new();
+ type ClaimSyncReply = tokio::sync::oneshot::Sender<Result<(), String>>;
+ type ClaimSyncSender = tokio::sync::mpsc::UnboundedSender<ClaimSyncReply>;
+-static CLAIM_SYNC: OnceLock<std::sync::Mutex<Option<(u64, ClaimSyncSender)>>> = OnceLock::new();
++static CLAIM_SYNC: OnceLock<std::sync::Mutex<ClaimSyncState>> = OnceLock::new();
+ static CLAIM_SYNC_GENERATION: AtomicU64 = AtomicU64::new(1);
++
++#[derive(Default)]
++struct ClaimSyncState {
++    /// Once a service session existed, its machine registration may outlive
++    /// local teardown briefly. Absence of a sender is then never proof that
++    /// the machine has removed its old project claims.
++    ever_connected: bool,
++    active: Option<(u64, ClaimSyncSender)>,
++}
+ 
+ pub(crate) fn project_claims_changed() -> &'static tokio::sync::Notify {
+     PROJECT_CLAIMS_CHANGED.get_or_init(tokio::sync::Notify::new)
+ }
+ 
+-fn claim_sync_slot() -> &'static std::sync::Mutex<Option<(u64, ClaimSyncSender)>> {
+-    CLAIM_SYNC.get_or_init(|| std::sync::Mutex::new(None))
++fn claim_sync_slot() -> &'static std::sync::Mutex<ClaimSyncState> {
++    CLAIM_SYNC.get_or_init(|| std::sync::Mutex::new(ClaimSyncState::default()))
++}
++
++fn claim_sync_sender(state: &ClaimSyncState) -> Result<Option<ClaimSyncSender>, String> {
++    match &state.active {
++        Some((_, sender)) => Ok(Some(sender.clone())),
++        None if state.ever_connected => Err("project claim service session is unavailable; machine cleanup is not confirmed".into()),
++        None => Ok(None), // collapsed or never connected: no service claims exist
++    }
+ }
+ 
+ /// Installed only while the mesh-local session can apply and acknowledge
+@@ -75,22 +92,29 @@
+ impl Drop for ClaimSyncLease {
+     fn drop(&mut self) {
+         let mut slot = claim_sync_slot().lock().expect("claim sync lock");
+-        if slot.as_ref().is_some_and(|(generation, _)| *generation == self.0) { *slot = None; }
++        if slot.active.as_ref().is_some_and(|(generation, _)| *generation == self.0) { slot.active = None; }
+     }
+ }
+ 
+ pub(crate) fn install_claim_sync(sender: ClaimSyncSender) -> ClaimSyncLease {
+     let generation = CLAIM_SYNC_GENERATION.fetch_add(1, Ordering::Relaxed);
+-    *claim_sync_slot().lock().expect("claim sync lock") = Some((generation, sender));
++    let mut slot = claim_sync_slot().lock().expect("claim sync lock");
++    slot.ever_connected = true;
++    slot.active = Some((generation, sender));
+     ClaimSyncLease(generation)
+ }
+ 
+ /// A journal mutation may return success only after the connected machine
+-/// service has acknowledged the new current address set. Without a connected
+-/// session there are no live address claims to preserve.
++/// service has acknowledged the new current address set. A session that was
++/// connected but is now unavailable may still have claims pending cleanup on
++/// the machine, so its absence must report an incomplete mutation.
+ pub(crate) async fn sync_claims_barrier() -> Result<(), String> {
+-    let sender = claim_sync_slot().lock().expect("claim sync lock").as_ref().map(|(_, sender)| sender.clone());
++    let sender = claim_sync_sender(&claim_sync_slot().lock().expect("claim sync lock"))?;
+     let Some(sender) = sender else { return Ok(()); };
++    await_claim_sync(sender).await
++}
++
++async fn await_claim_sync(sender: ClaimSyncSender) -> Result<(), String> {
+     let (reply, received) = tokio::sync::oneshot::channel();
+     sender.send(reply).map_err(|_| "project claim session ended before sync".to_string())?;
+     tokio::time::timeout(std::time::Duration::from_secs(5), received)
+@@ -105,18 +129,30 @@
+     #[tokio::test]
+     async fn mutation_barrier_waits_for_machine_ack_and_propagates_failure() {
+         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+-        let lease = install_claim_sync(tx);
+-        let first = tokio::spawn(sync_claims_barrier());
++        let first = tokio::spawn(await_claim_sync(tx.clone()));
+         let ack = rx.recv().await.expect("sync request");
+         assert!(!first.is_finished(), "journal mutation must wait for service ACK");
+         ack.send(Ok(())).unwrap();
+         assert!(first.await.unwrap().is_ok());
+ 
+-        let second = tokio::spawn(sync_claims_barrier());
++        let second = tokio::spawn(await_claim_sync(tx));
+         rx.recv().await.unwrap().send(Err("machine refused address.remove".into())).unwrap();
+         assert!(second.await.unwrap().unwrap_err().contains("machine refused"));
+-        drop(lease);
+-        assert!(sync_claims_barrier().await.is_ok(), "no live session has no claims to synchronize");
++    }
++
++    #[test]
++    fn disconnect_gap_is_incomplete_until_successor_installs() {
++        let mut state = ClaimSyncState::default();
++        assert!(claim_sync_sender(&state).unwrap().is_none(), "collapsed or never-service has no claims");
++        let (old, _) = tokio::sync::mpsc::unbounded_channel();
++        state.ever_connected = true;
++        state.active = Some((1, old));
++        assert!(claim_sync_sender(&state).unwrap().is_some());
++        state.active = None; // lease dropped before remote connection cleanup
++        assert!(claim_sync_sender(&state).err().expect("disconnect must fail closed").contains("cleanup is not confirmed"));
++        let (new, _) = tokio::sync::mpsc::unbounded_channel();
++        state.active = Some((2, new));
++        assert!(claim_sync_sender(&state).unwrap().is_some());
+     }
+ }
+ 
+--- a/docs/plans/adr-103-leaf-implementation.md
++++ b/docs/plans/adr-103-leaf-implementation.md
+@@ -20,7 +20,7 @@
+ - `weftos-leaf-types::link` supplies the `no_std` certificate, signed publish, signed ACK and signed discovery wire types, a canonical tenant scope parser, and a bounded sequence journal. Certificate capabilities and every publish path are checked before the leaf signature is accepted. Node IDs use the first 16 bytes of SHA-256 of the Ed25519 public key.
+ - `weaver leaf provision` creates a random leaf seed, a parent-signed certificate and a public enrollment artifact. A user scope must equal the key ID of the parent user key; a project scope requires `--project-cert` containing the user signed certificate for the issuing project key. `weaver leaf enroll` checks the scope chain, pinned parent and machine keys and installs the exact certificate in the machine service registry. `weaver leaf enqueue` durably writes a signed journal snapshot before transmission; `weaver leaf replay` discovers a signed endpoint, replays the oldest frame and removes it only after a machine-signed ACK. Files are bounded, private files use mode 0600, and the queue directory must be owner-private.
+ - The collapsed kernel and machine mesh service load an installed leaf registry at boot. The mesh receive pump accepts `WLF1` on its real connection path, validates the installed certificate, user or project issuer chain, sequence floor, signature, capability and inner topic, and converts the signed `ipc.publish` wrapper into a message on the certified leaf's actual input or announce topic. It routes that message to the tenant named by the certificate, strips the envelope's caller-controlled source scope and overwrites its destination scope. The machine service additionally requires the user key named by that chain to match its current live tenant registration on discovery, admission and push. The service router refuses an unavailable parent tenant so such a message is not ACKed. A successful local delivery is followed by a synced replay-floor rename and then a signed ACK. Raw traffic from that signed connection is refused.
+-- Project scoped leaves use a user signed `ProjectCert` carried in enrollment. The user daemon reads its journal-backed current project identity view and signs `AddressAdd` claims for each live project key on service connect and every second; successful issue, rekey and revoke wake that sync immediately. It removes a stale claim before replacing it on rekey and removes revoked or expired claims. The machine service verifies each claim signature against the registered user key and stores the current project key alongside the route. Its leaf authority check requires the current principal binding, no forced revocation, and an exact match between the enrolled project certificate key and the live project claim. A disconnected daemon loses all claims. Issue, rekey, revoke and repair now wait for the connected mesh session to acknowledge the resulting address set before returning success. A missing session has no live claims; a failed or timed-out sync reports an incomplete mutation after the journal write. This closes the earlier unroutable project scope and asynchronous user-binding revocation gap.
++- Project scoped leaves use a user signed `ProjectCert` carried in enrollment. The user daemon reads its journal-backed current project identity view and signs `AddressAdd` claims for each live project key on service connect and every second; successful issue, rekey and revoke wake that sync immediately. It removes a stale claim before replacing it on rekey and removes revoked or expired claims. The machine service verifies each claim signature against the registered user key and stores the current project key alongside the route. Its leaf authority check requires the current principal binding, no forced revocation, and an exact match between the enrolled project certificate key and the live project claim. A disconnected daemon eventually loses all claims when the machine closes that registration. Issue, rekey, revoke and repair wait for the connected mesh session to acknowledge the resulting address set before returning success. After any service session existed, a missing session reports an incomplete mutation because remote cleanup might still be pending; only a daemon that never connected to the service can skip the barrier. A failed or timed-out sync also reports an incomplete mutation after the journal write. This closes the earlier unroutable project scope and asynchronous user-binding revocation gap.
+ - When a leaf registry is installed, the mesh listener binds a separate TCP listener on the mesh port plus two for certified WLF1 frames only. The ordinary node-to-node listener keeps its configured Noise requirement. Signed UDP discovery on mesh port plus one advertises the dedicated leaf endpoint only after the TCP bind succeeds. Only enrolled leaf IDs receive an answer; advertisements bind a request nonce, the machine key, the certificate scope, the endpoint and a 30-second expiry. Both listener paths have global and per-IP connection limits.
+ - The IDF client accepts per-device build inputs `WEFTOS_LEAF_SEED_FILE=<provision>/leaf.seed` and `WEFTOS_LEAF_CERT_FILE=<provision>/leaf.cbor`. Its build script embeds those bytes, and an image without both stays offline. It discovers the certified parent and journals GT911 pointer down/move/up observations with their signed input envelopes in the `weft_leaf` NVS namespace before sending. A bounded channel backpressures the touch reader when the NVS journal fills. The client replays oldest-first and removes each entry only after a machine-signed ACK is verified and committed. On reconnect it drains the durable backlog and sends a fresh signed subscription; pushed frames arriving before ACK are demultiplexed and rendered. The IDF variant does not yet hit-test touch against its displayed scene, so input envelopes carry coordinates and no resolved scene node.
+ - The older bare-metal firmware's unsigned mesh tasks now compile and run only with `legacy-unsigned-mesh-bringup`. The default image does not start Wi-Fi or publish to the mesh. That opt-in is for isolated bring-up only; the provisioned IDF image is the supported signed path.
+@@ -75,6 +75,8 @@
+ 
+ Source was frozen after the acknowledged claim barrier compiled (`BARRIER_CHECK_EXIT=0`). The local `mesh_p3_e2e-d166f60cf1c0716c` binary was built at 16:24 local time, while `project_cert_rpc.rs` and `mesh_local_glue/session.rs` changed at 16:30. **That binary is stale for the barrier; rebuild it before any final host routing run.** The corrected test body itself was saved at 16:23. The barrier unit test, final Clippy and host binary build also remain to run after this freeze. There are no task-owned active compiler jobs.
+ 
++Post-freeze review correction changed only `crates/clawft-weave/src/project_cert_rpc.rs` and this plan. `ClaimSyncState` now remembers whether a service session ever existed: a dropped lease cannot make a concurrent mutation succeed before the machine has cleaned up its old registration. A never-connected/collapsed daemon has no machine claims and can proceed. The new `disconnect_gap_is_incomplete_until_successor_installs` unit test is source-only here; no compilation was started after the lead reserved the compiler lane for main integration. The exact delta must be imported before the main gate.
++
+ Changed tracked paths (`M`):
+ 
+ ```text

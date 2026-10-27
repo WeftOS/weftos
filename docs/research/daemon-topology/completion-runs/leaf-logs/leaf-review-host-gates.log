@@ -1,0 +1,57 @@
+
+[1m── Running cargo check -p weftos-leaf-types -p clawft-kernel -p clawft-mesh-service -p clawft-weave[0m
+    Checking clawft-kernel v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-kernel)
+   Compiling clawft-weave v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-weave)
+    Checking weftos-cog-host v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/weftos-cog-host)
+    Checking clawft-service-whisper v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-service-whisper)
+    Checking clawft-service-agent v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-service-agent)
+    Checking clawft-mesh-service v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-mesh-service)
+    Checking clawft-service-classify v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-service-classify)
+    Checking weftos-cog-sources v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/weftos-cog-sources)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 13.59s
+  [0;36mTIME[0m  14s
+CHECK_EXIT=0
+
+[1m── Running cargo nextest run (clawft-kernel) (+ doctests)[0m
+info: experimental features enabled: wrapper-scripts
+   Compiling clawft-kernel v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 24.32s
+────────────
+ Nextest run ID 028ceca2-7201-4d41-8079-7e146686242c with nextest profile: default
+    Starting 2 tests across 10 binaries (3535 tests skipped)
+        PASS [   0.054s] (1/2) clawft-kernel mesh_serve::serve_tests::certified_leaf_duplicate_subscribe_restores_route_after_restart
+        PASS [   0.055s] (2/2) clawft-kernel mesh_serve::serve_tests::certified_leaf_publish_replay_is_suppressed_after_committed_floor
+────────────
+     Summary [   0.057s] 2 tests run: 2 passed, 3535 skipped
+  [0;36mTIME[0m  26s
+TEST_EXIT=0
+
+[1m── Running clippy (warnings as errors) -p weftos-leaf-types -p clawft-kernel -p clawft-mesh-service -p clawft-weave --no-deps[0m
+    Checking clawft-kernel v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-kernel)
+   Compiling clawft-weave v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-weave)
+error: this `if` statement can be collapsed
+   --> crates/clawft-kernel/src/mesh_serve.rs:109:5
+    |
+109 | /     if let Some(ingress) = runtime.leaf_ingress().cloned()
+110 | |         && let Ok(mesh_addr) = bind.parse::<std::net::SocketAddr>() {
+111 | |         if let Some(port) = mesh_addr.port().checked_add(2) {
+112 | |             let leaf_addr = std::net::SocketAddr::new(mesh_addr.ip(), port);
+...   |
+127 | |     }
+    | |_____^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#collapsible_if
+    = note: `-D clippy::collapsible-if` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::collapsible_if)]`
+help: collapse nested if block
+    |
+110 ~         && let Ok(mesh_addr) = bind.parse::<std::net::SocketAddr>()
+111 ~         && let Some(port) = mesh_addr.port().checked_add(2) {
+112 |             let leaf_addr = std::net::SocketAddr::new(mesh_addr.ip(), port);
+...
+125 |             }
+126 ~         }
+    |
+
+error: could not compile `clawft-kernel` (lib) due to 1 previous error
+CLIPPY_EXIT=101

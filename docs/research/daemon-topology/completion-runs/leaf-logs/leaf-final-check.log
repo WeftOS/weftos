@@ -1,0 +1,59 @@
+
+[1m── Running cargo check -p weftos-leaf-types -p clawft-kernel -p clawft-mesh-service -p clawft-weave[0m
+    Checking weftos-leaf-types v0.1.0 (~/.codex/worktrees/leaf-finish/weftos/crates/weftos-leaf-types)
+   Compiling clawft-weave v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-weave)
+    Checking clawft-bvh v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-bvh)
+    Checking clawft-kernel v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-kernel)
+    Checking weftos-cog-host v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/weftos-cog-host)
+    Checking clawft-service-classify v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-service-classify)
+    Checking clawft-service-whisper v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-service-whisper)
+    Checking clawft-mesh-service v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-mesh-service)
+    Checking clawft-service-agent v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-service-agent)
+    Checking weftos-cog-sources v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/weftos-cog-sources)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 15.33s
+  [0;36mTIME[0m  16s
+
+[1m── Running clippy (warnings as errors) -p weftos-leaf-types -p clawft-kernel -p clawft-mesh-service -p clawft-weave --no-deps[0m
+    Checking weftos-leaf-types v0.1.0 (~/.codex/worktrees/leaf-finish/weftos/crates/weftos-leaf-types)
+   Compiling clawft-weave v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-weave)
+    Checking clawft-bvh v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-bvh)
+    Checking clawft-kernel v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-kernel)
+error: this `if` statement can be collapsed
+   --> crates/clawft-kernel/src/mesh_serve.rs:505:29
+    |
+505 | / ...                   if prepared == Prepare::New {
+506 | | ...                       if let Err(e) = ingress.commit(&frame) {
+507 | | ...                           tracing::error!(node = %id, error = %e, "leaf replay floor commit failed; no ACK");
+508 | | ...                           break;
+509 | | ...                       }
+510 | | ...                   }
+    | |_______________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#collapsible_if
+    = note: `-D clippy::collapsible-if` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::collapsible_if)]`
+help: collapse nested if block
+    |
+505 ~                             if prepared == Prepare::New
+506 ~                                 && let Err(e) = ingress.commit(&frame) {
+507 |                                     tracing::error!(node = %id, error = %e, "leaf replay floor commit failed; no ACK");
+508 |                                     break;
+509 ~                                 }
+    |
+
+error: could not compile `clawft-kernel` (lib) due to 1 previous error
+
+[1m── Running cargo nextest run (clawft-kernel) (+ doctests)[0m
+info: experimental features enabled: wrapper-scripts
+   Compiling weftos-leaf-types v0.1.0 (~/.codex/worktrees/leaf-finish/weftos/crates/weftos-leaf-types)
+   Compiling clawft-bvh v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-bvh)
+   Compiling clawft-kernel v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 33.37s
+────────────
+ Nextest run ID 3757fdde-5ceb-4cc0-8b54-2b738d982cca with nextest profile: default
+    Starting 1 test across 10 binaries (3536 tests skipped)
+        PASS [   0.068s] (1/1) clawft-kernel mesh_leaf::tests::enrolled_frame_replays_exactly_once_across_restart
+────────────
+     Summary [   0.071s] 1 test run: 1 passed, 3536 skipped
+  [0;36mTIME[0m  37s
+CHECK_EXIT=0 CLIPPY_EXIT=101 TEST_EXIT=0

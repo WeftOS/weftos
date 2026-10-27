@@ -1,0 +1,7 @@
+
+[1m── Running cargo check -p clawft-weave -p clawft-mesh-service -p clawft-kernel[0m
+    Checking clawft-mesh-service v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-mesh-service)
+   Compiling clawft-weave v0.8.1 (~/.codex/worktrees/leaf-finish/weftos/crates/clawft-weave)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 18.37s
+  [0;36mTIME[0m  18s
+BARRIER_CHECK_EXIT=0

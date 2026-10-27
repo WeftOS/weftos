@@ -1,0 +1,12 @@
+
+[1m── Running cargo nextest run (clawft-kernel) (+ doctests)[0m
+info: experimental features enabled: wrapper-scripts
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.42s
+────────────
+ Nextest run ID 6e5e9880-bad1-4078-b17e-d24b3474cacb with nextest profile: default
+    Starting 2 tests across 10 binaries (3535 tests skipped)
+        PASS [   0.120s] (1/2) clawft-kernel mesh_serve::serve_tests::certified_leaf_publish_replay_is_suppressed_after_committed_floor
+        PASS [   0.120s] (2/2) clawft-kernel mesh_serve::serve_tests::certified_leaf_duplicate_subscribe_restores_route_after_restart
+────────────
+     Summary [   0.122s] 2 tests run: 2 passed, 3535 skipped
+  [0;36mTIME[0m  2s

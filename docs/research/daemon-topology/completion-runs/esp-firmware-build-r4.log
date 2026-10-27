@@ -1,0 +1,17 @@
+     Locking 1 package to latest compatible version
+      Adding weftos-leaf-scene v0.1.0 (/home/esp/build/crates/weftos-leaf-scene)
+   Compiling esp-idf-sys v0.37.2
+   Compiling zmij v1.0.21
+   Compiling serde_json v1.0.149
+   Compiling weftos-leaf-types v0.1.0 (/home/esp/build/crates/weftos-leaf-types)
+   Compiling clawft-edge-pad-idf v0.1.0 (/home/esp/build/crates/clawft-edge-pad-idf)
+   Compiling bitflags v2.11.1
+   Compiling rustc-hash v2.1.2
+   Compiling memchr v2.8.0
+   Compiling itoa v1.0.18
+   Compiling weftos-leaf-scene v0.1.0 (/home/esp/build/crates/weftos-leaf-scene)
+   Compiling weftos-leaf-display v0.1.0 (/home/esp/build/crates/weftos-leaf-display)
+   Compiling esp-idf-hal v0.46.2
+   Compiling esp-idf-svc v0.52.1
+    Finished `release` profile [optimized] target(s) in 56.30s
+FIRMWARE_BUILD_PASS

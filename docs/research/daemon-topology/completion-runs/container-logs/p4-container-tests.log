@@ -1,0 +1,430 @@
+
+[1m── Running cargo nextest run (clawft-weave) (+ doctests)[0m
+info: experimental features enabled: wrapper-scripts
+   Compiling cfg-if v1.0.4
+   Compiling memchr v2.8.0
+   Compiling subtle v2.6.1
+   Compiling smallvec v1.15.1
+   Compiling itoa v1.0.17
+   Compiling pin-project-lite v0.2.16
+   Compiling once_cell v1.21.3
+   Compiling scopeguard v1.2.0
+   Compiling libc v0.2.189
+   Compiling serde_core v1.0.228
+   Compiling typenum v1.19.0
+   Compiling bytes v1.11.1
+   Compiling zmij v1.0.21
+   Compiling zeroize v1.8.2
+   Compiling zerocopy v0.8.39
+   Compiling thiserror v2.0.18
+   Compiling zerofrom v0.1.6
+   Compiling lock_api v0.4.14
+   Compiling futures-core v0.3.32
+   Compiling stable_deref_trait v1.2.1
+   Compiling libm v0.2.16
+   Compiling log v0.4.29
+   Compiling tracing-core v0.1.36
+   Compiling yoke v0.8.1
+   Compiling futures-sink v0.3.32
+   Compiling rustls-pki-types v1.14.0
+   Compiling untrusted v0.9.0
+   Compiling hashbrown v0.17.1
+   Compiling equivalent v1.0.2
+   Compiling slab v0.4.12
+   Compiling futures-io v0.3.32
+   Compiling futures-channel v0.3.32
+   Compiling futures-task v0.3.32
+   Compiling crossbeam-utils v0.8.21
+   Compiling writeable v0.6.2
+   Compiling zerovec v0.11.5
+   Compiling litemap v0.8.1
+   Compiling zerotrie v0.2.3
+   Compiling futures-util v0.3.32
+   Compiling aho-corasick v1.1.4
+   Compiling regex-syntax v0.8.9
+   Compiling httparse v1.10.1
+   Compiling base64 v0.22.1
+   Compiling percent-encoding v2.3.2
+   Compiling generic-array v0.14.7
+   Compiling tracing v0.1.44
+   Compiling http v1.4.0
+   Compiling icu_properties_data v2.1.2
+   Compiling icu_normalizer_data v2.1.1
+   Compiling core-foundation-sys v0.8.7
+   Compiling signature v2.2.0
+   Compiling ryu v1.0.23
+   Compiling try-lock v0.2.5
+   Compiling tower-service v0.3.3
+   Compiling want v0.3.1
+   Compiling webpki-roots v1.0.6
+   Compiling atomic-waker v1.1.2
+   Compiling indexmap v2.14.0
+   Compiling iana-time-zone v0.1.65
+   Compiling pin-utils v0.1.0
+   Compiling crossbeam-epoch v0.9.20
+   Compiling form_urlencoded v1.2.2
+   Compiling sync_wrapper v1.0.2
+   Compiling utf8_iter v1.0.4
+   Compiling tower-layer v0.3.3
+   Compiling ipnet v2.11.0
+   Compiling tinystr v0.8.2
+   Compiling potential_utf v0.1.4
+   Compiling iri-string v0.7.10
+   Compiling mime v0.3.17
+   Compiling getrandom v0.2.17
+   Compiling parking_lot_core v0.9.12
+   Compiling errno v0.3.14
+   Compiling cpufeatures v0.2.17
+   Compiling socket2 v0.6.5
+   Compiling mio v1.2.2
+   Compiling rand_core v0.6.4
+   Compiling signal-hook-registry v1.4.8
+   Compiling ring v0.17.14
+   Compiling crypto-common v0.1.7
+   Compiling parking_lot v0.12.5
+   Compiling block-buffer v0.10.4
+   Compiling getrandom v0.3.4
+   Compiling icu_locale_core v2.1.1
+   Compiling icu_collections v2.1.1
+   Compiling digest v0.10.7
+   Compiling rand_core v0.9.5
+   Compiling num-traits v0.2.19
+   Compiling getrandom v0.4.1
+   Compiling tokio v1.53.1
+   Compiling http-body v1.0.1
+   Compiling sha2 v0.10.9
+   Compiling curve25519-dalek v4.1.3
+   Compiling crossbeam-deque v0.8.6
+   Compiling http-body-util v0.1.3
+   Compiling mime_guess v2.0.5
+   Compiling winnow v0.7.15
+   Compiling toml_write v0.1.2
+   Compiling either v1.15.0
+   Compiling rayon-core v1.13.0
+   Compiling thiserror v1.0.69
+   Compiling anyhow v1.0.104
+   Compiling option-ext v0.2.0
+   Compiling utf8parse v0.2.2
+   Compiling lazy_static v1.5.0
+   Compiling anstyle v1.0.13
+   Compiling dirs-sys v0.5.0
+   Compiling anstyle-parse v0.2.7
+   Compiling colorchoice v1.0.4
+   Compiling dirs v6.0.0
+   Compiling anstyle-query v1.1.5
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling num_cpus v1.17.0
+   Compiling byteorder v1.5.0
+   Compiling icu_provider v2.1.1
+   Compiling ptr_meta v0.3.1
+   Compiling anstream v0.6.21
+   Compiling rayon v1.11.0
+   Compiling unty v0.0.4
+   Compiling rancor v0.1.1
+   Compiling inout v0.1.4
+   Compiling memmap2 v0.9.11
+   Compiling jiff v0.2.24
+   Compiling icu_normalizer v2.1.1
+   Compiling icu_properties v2.1.2
+   Compiling simdutf8 v0.1.5
+   Compiling hashbrown v0.14.5
+   Compiling rvf-types v0.2.1
+   Compiling cipher v0.4.4
+   Compiling universal-hash v0.5.1
+   Compiling bytecheck v0.8.2
+   Compiling cpu-time v1.0.0
+   Compiling mach2 v0.4.3
+   Compiling combine v4.6.7
+   Compiling allocator-api2 v0.2.21
+   Compiling foldhash v0.1.5
+   Compiling regex-automata v0.4.14
+   Compiling same-file v1.0.6
+   Compiling rawpointer v0.2.1
+   Compiling opaque-debug v0.3.1
+   Compiling ciborium-io v0.2.2
+   Compiling rustls-webpki v0.103.15
+   Compiling dashmap v6.1.0
+   Compiling walkdir v2.5.0
+   Compiling hashbrown v0.15.5
+   Compiling matrixmultiply v0.3.10
+   Compiling rend v0.5.3
+   Compiling serde v1.0.228
+   Compiling bitflags v2.11.0
+   Compiling serde_json v1.0.149
+   Compiling uuid v1.21.0
+   Compiling nix v0.30.1
+   Compiling sysctl v0.6.0
+   Compiling semver v1.0.27
+   Compiling rustls v0.23.45
+   Compiling idna_adapter v1.2.1
+   Compiling munge v0.4.7
+   Compiling crc32fast v1.5.0
+   Compiling ed25519 v2.2.3
+   Compiling chrono v0.4.43
+   Compiling idna v1.1.0
+   Compiling toml_datetime v0.6.11
+   Compiling serde_spanned v0.6.9
+   Compiling serde_urlencoded v0.7.1
+   Compiling ed25519-dalek v2.2.0
+   Compiling toml_edit v0.22.27
+   Compiling bincode v2.0.1
+   Compiling hex v0.4.3
+   Compiling url v2.5.8
+   Compiling bincode v1.3.3
+   Compiling num-complex v0.4.6
+   Compiling num-integer v0.1.46
+   Compiling crossbeam-queue v0.3.12
+   Compiling crossbeam-channel v0.5.15
+   Compiling minimal-lexical v0.2.1
+   Compiling bit-vec v0.8.0
+   Compiling unicode-segmentation v1.12.0
+   Compiling bit-vec v0.6.3
+   Compiling bit-set v0.8.0
+   Compiling nom v7.1.3
+   Compiling ndarray v0.16.1
+   Compiling bit-set v0.5.3
+   Compiling eml-core v0.1.0 (~/.codex/worktrees/project-container/weftos/crates/eml-core)
+   Compiling futures-executor v0.3.32
+   Compiling crossbeam v0.8.4
+   Compiling castaway v0.2.4
+   Compiling simsimd v5.9.11
+   Compiling notify-types v2.1.0
+   Compiling redb v2.6.3
+   Compiling rvf-quant v0.2.0
+   Compiling itertools v0.14.0
+   Compiling keccak v0.1.6
+   Compiling fsevent-sys v4.1.0
+   Compiling static_assertions v1.1.0
+   Compiling base64 v0.13.1
+   Compiling constant_time_eq v0.4.2
+   Compiling arrayvec v0.7.6
+   Compiling ppv-lite86 v0.2.21
+   Compiling half v2.7.1
+   Compiling arrayref v0.3.9
+   Compiling rustc-hash v2.1.1
+   Compiling rvf-index v0.2.0
+   Compiling unsafe-libyaml v0.2.11
+   Compiling rand_chacha v0.9.0
+   Compiling rand_chacha v0.3.1
+   Compiling blake3 v1.8.3
+   Compiling ciborium-ll v0.2.2
+   Compiling ahash v0.8.12
+   Compiling rand v0.9.5
+   Compiling rand v0.8.7
+   Compiling ciborium v0.2.2
+   Compiling rvf-runtime v0.3.2
+   Compiling compact_str v0.9.1
+   Compiling serde_yaml v0.9.34+deprecated
+   Compiling ulid v1.2.1
+   Compiling sha3 v0.10.8
+   Compiling macro_rules_attribute v0.2.3
+   Compiling bytemuck v1.25.0
+   Compiling monostate v0.1.18
+   Compiling toml v0.8.23
+   Compiling rand_distr v0.4.3
+   Compiling notify v8.2.0
+   Compiling futures v0.3.32
+   Compiling derive_builder v0.20.2
+   Compiling spm_precompiled v0.1.4
+   Compiling esaxx-rs v0.1.10
+   Compiling regex v1.12.3
+   Compiling fancy-regex v0.14.0
+   Compiling clawft-types v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-types)
+   Compiling rayon-cond v0.4.0
+   Compiling bstr v1.12.3
+   Compiling env_filter v1.0.0
+   Compiling fancy-regex v0.13.0
+   Compiling dary_heap v0.3.9
+   Compiling env_logger v0.11.9
+   Compiling polyval v0.6.2
+   Compiling ordered-float v3.9.2
+   Compiling aead v0.5.2
+   Compiling unicode-normalization-alignments v0.1.12
+   Compiling tinyvec_macros v0.1.1
+   Compiling anndists v0.1.4
+   Compiling powerfmt v0.2.0
+   Compiling rkyv v0.8.18
+   Compiling unicode_categories v0.1.1
+   Compiling time-core v0.1.9
+   Compiling deranged v0.5.8
+   Compiling rustc-hash v1.1.0
+   Compiling num-conv v0.2.2
+   Compiling base64 v0.21.7
+   Compiling instant-distance v0.6.1
+   Compiling tinyvec v1.10.0
+   Compiling ghash v0.5.1
+   Compiling clawft-cow-memory v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-cow-memory)
+   Compiling ruvector-diskann v2.3.2
+   Compiling hyper v1.8.1
+   Compiling tower v0.5.3
+   Compiling tokio-util v0.7.18
+   Compiling tokenizers v0.21.4
+   Compiling tiktoken-rs v0.6.0
+   Compiling poly1305 v0.8.0
+   Compiling aes v0.8.4
+   Compiling chacha20 v0.9.1
+   Compiling ctr v0.9.2
+   Compiling sha1 v0.10.6
+   Compiling hmac v0.12.1
+   Compiling utf-8 v0.7.6
+   Compiling lru-slab v0.1.2
+   Compiling tower-http v0.6.8
+   Compiling data-encoding v2.10.0
+   Compiling mmap-rs v0.7.0
+   Compiling web-time v1.1.0
+   Compiling aes-gcm v0.10.3
+   Compiling clawft-app v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-app)
+   Compiling tokio-rustls v0.26.4
+   Compiling quinn-proto v0.11.15
+   Compiling chacha20poly1305 v0.10.1
+   Compiling quinn-udp v0.5.14
+   Compiling crc32c v0.6.8
+   Compiling time v0.3.54
+   Compiling tungstenite v0.24.0
+   Compiling weftos-leaf-types v0.1.0 (~/.codex/worktrees/project-container/weftos/crates/weftos-leaf-types)
+   Compiling weft-licence-wire v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/weft-licence-wire)
+   Compiling blake2 v0.10.6
+   Compiling hyper-util v0.1.20
+   Compiling webpki-roots v0.26.11
+   Compiling pem v3.0.6
+   Compiling hnsw_rs v0.3.4
+   Compiling clawft-treecalc v0.1.0 (~/.codex/worktrees/project-container/weftos/crates/clawft-treecalc)
+   Compiling xxhash-rust v0.8.15
+   Compiling snow v0.10.0
+   Compiling cognitum-gate-tilezero v0.1.1
+   Compiling weftos-rvf-crypto v0.3.0
+   Compiling exo-resource-tree v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/exo-resource-tree)
+   Compiling yasna v0.5.2
+   Compiling weftos-rvf-wire v0.2.0
+   Compiling winnow v0.6.26
+   Compiling tokio-tungstenite v0.24.0
+   Compiling nix v0.28.0
+   Compiling rustix v0.38.44
+   Compiling rcgen v0.13.2
+   Compiling filedescriptor v0.8.3
+   Compiling clawft-bvh v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-bvh)
+   Compiling serial2 v0.2.37
+   Compiling clap_lex v1.0.0
+   Compiling downcast-rs v1.2.1
+   Compiling simd-adler32 v0.3.9
+   Compiling hyper-rustls v0.27.7
+   Compiling shell-words v1.1.1
+   Compiling adler2 v2.0.1
+   Compiling reqwest v0.12.28
+   Compiling fixedbitset v0.5.7
+   Compiling miniz_oxide v0.8.9
+   Compiling crossterm v0.28.1
+   Compiling clap_builder v4.5.59
+   Compiling rustix v1.1.4
+   Compiling petgraph v0.7.1
+   Compiling clawft-mesh-local v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-mesh-local)
+   Compiling matchers v0.2.0
+   Compiling weftos-leaf-scene v0.1.0 (~/.codex/worktrees/project-container/weftos/crates/weftos-leaf-scene)
+   Compiling portable-pty v0.9.0
+   Compiling sharded-slab v0.1.7
+   Compiling filetime v0.2.29
+   Compiling tracing-log v0.2.0
+   Compiling thread_local v1.1.9
+   Compiling fastrand v2.3.0
+   Compiling nu-ansi-term v0.50.3
+   Compiling unicode-width v0.2.2
+   Compiling clawft-weave v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-weave)
+   Compiling clawft-service-terminal v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-service-terminal)
+   Compiling cron v0.15.0
+   Compiling tracing-subscriber v0.3.22
+   Compiling comfy-table v7.1.4
+   Compiling tar v0.4.46
+   Compiling flate2 v1.1.9
+   Compiling nix v0.29.0
+   Compiling tempfile v3.25.0
+   Compiling dotenvy v0.15.7
+   Compiling weft-licence v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/weft-licence)
+   Compiling quinn v0.11.9
+   Compiling weftos-scene-builder v0.1.0 (~/.codex/worktrees/project-container/weftos/crates/weftos-scene-builder)
+   Compiling ruvector-core v2.3.0
+   Compiling clawft-service-llm v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-service-llm)
+   Compiling clawft-graphify v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-graphify)
+   Compiling clap v4.5.59
+   Compiling ruvector-raft v2.2.3
+   Compiling ruvector-cluster v2.2.3
+   Compiling ruvector-replication v2.2.3
+   Compiling clawft-plugin v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-plugin)
+   Compiling clawft-llm v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-llm)
+   Compiling clawft-platform v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-platform)
+   Compiling clawft-rpc v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-rpc)
+   Compiling weftos-cog-repo v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/weftos-cog-repo)
+   Compiling clawft-services v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-services)
+   Compiling weftos-cog-market v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/weftos-cog-market)
+   Compiling clawft-substrate v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-substrate)
+   Compiling clawft-core v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-core)
+   Compiling clawft-kernel v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-kernel)
+   Compiling clawft-tools v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-tools)
+   Compiling weftos-cog-host v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/weftos-cog-host)
+   Compiling clawft-service-agent v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-service-agent)
+   Compiling clawft-mesh-service v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-mesh-service)
+   Compiling clawft-service-whisper v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-service-whisper)
+   Compiling clawft-service-classify v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/clawft-service-classify)
+   Compiling weftos-cog-sources v0.8.1 (~/.codex/worktrees/project-container/weftos/crates/weftos-cog-sources)
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9079:44
+     |
+9079 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+     |
+     = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9288:21
+     |
+9288 |             Config, KernelConfig, VectorBackendKind, VectorConfig, VectorHnswConfig,
+     |                     ^^^^^^^^^^^^
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9351:44
+     |
+9351 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9383:44
+     |
+9383 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9412:44
+     |
+9412 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9449:44
+     |
+9449 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+
+warning: unused import: `KernelConfig`
+    --> crates/clawft-weave/src/daemon.rs:9554:44
+     |
+9554 |         use clawft_types::config::{Config, KernelConfig};
+     |                                            ^^^^^^^^^^^^
+
+warning: unused import: `clawft_kernel::NODE_KEY_FILE as KEYFILE_NAME`
+  --> crates/clawft-weave/src/node_identity.rs:28:5
+   |
+28 | use clawft_kernel::NODE_KEY_FILE as KEYFILE_NAME;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `clawft-weave` (lib test) generated 8 warnings (run `cargo fix --lib -p clawft-weave --tests` to apply 8 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 49s
+────────────
+ Nextest run ID 31c4562a-5088-4704-9357-d1855c6ee041 with nextest profile: default
+    Starting 5 tests across 43 binaries (967 tests skipped)
+        PASS [   0.177s] (1/5) clawft-weave project_supervisor::child::container_bridge_tests::bridge_cannot_promote_a_guest_literal_scope_or_cross_projects
+        PASS [   0.183s] (2/5) clawft-weave project_supervisor::container::tests::flags_pin_isolation_and_parent_mounts
+        PASS [   0.185s] (3/5) clawft-weave project_supervisor::container::tests::forged_id_label_or_mount_is_refused
+        PASS [   0.188s] (4/5) clawft-weave project_supervisor::container::tests::create_start_stop_reinspect_immutable_id
+        PASS [   0.195s] (5/5) clawft-weave workload_place_rpc::daemon_tests::container_and_seed_files_are_validated_at_the_boundary
+────────────
+     Summary [   0.196s] 5 tests run: 5 passed, 967 skipped
+  [0;36mTIME[0m  1m 53s
