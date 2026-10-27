@@ -2,8 +2,9 @@
 //!
 //! - `weaver expose list [--json]`: every exposure with audience, state, whether
 //!   it is announced and served, and 24 h use. Read.
-//! - `weaver expose on <id> [--audience local|paired|nodes:a,b|project:p]`,
-//!   `off <id>`, `pause <id>`: a local decision, persisted. Off withdraws the
+//! - `weaver expose on <id> [--audience local|paired|nodes:a,b|project:p] [--raw]`,
+//!   `off <id>`, `pause <id>`: a local decision, persisted. `--raw` allows raw
+//!   data on a topic exposure, for named nodes only (ADR-122 section 14). Off withdraws the
 //!   advertisement at once and refuses new requests. Admin.
 //! - `weaver expose off --all`: every exposure off. Admin.
 //! - `weaver expose log [<id>] [--limit N] [--json]`: recent requests (caller,
@@ -40,6 +41,11 @@ pub enum ExposeAction {
         /// Who may use it: local, paired, nodes:<a,b> or project:<id>.
         #[arg(long)]
         audience: Option<String>,
+        /// Allow raw data (microphone PCM, camera frames, IQ) on a topic
+        /// exposure; only with an audience of named nodes. Without it, `on`
+        /// clears raw (ADR-122 section 14).
+        #[arg(long)]
+        raw: bool,
     },
     /// Switch an exposure off, or every exposure with `--all`.
     Off {
@@ -162,8 +168,13 @@ pub async fn run(args: ExposeArgs) -> anyhow::Result<()> {
                 print!("{}", render_list(&v));
             }
         }
-        ExposeAction::On { id, audience } => {
+        ExposeAction::On { id, audience, raw } => {
             let mut p = json!({"id": id, "state": "on"});
+            if id.starts_with("topic.") {
+                p["raw"] = json!(raw);
+            } else if raw {
+                anyhow::bail!("--raw applies to topic exposures only");
+            }
             if let Some(a) = audience {
                 p["audience"] = json!(a);
             }

@@ -46,6 +46,10 @@ mod rows;
 mod svc;
 #[path = "blobops.rs"]
 mod blobops;
+#[path = "mesh_ops.rs"]
+pub(crate) mod mesh_ops;
+#[path = "mesh_blobs.rs"]
+pub(crate) mod mesh_blobs;
 
 struct Instance {
     spec: InstanceSpec,
@@ -96,6 +100,8 @@ struct State {
     rates: HashMap<(String, String), f64>,
     /// Publish budgets per (instance, kind, source).
     buckets: HashMap<(String, String, String), crate::rate::Bucket>,
+    /// Mesh topics: declared limits, offers, proxy subscriptions (B6).
+    mesh: mesh_ops::MeshState,
 }
 
 fn now_ns() -> u64 {
@@ -221,6 +227,7 @@ impl Broker {
         self.conns.lock().unwrap_or_else(|p| p.into_inner()).remove(instance_id);
         g.rates.retain(|(i, _), _| i != instance_id);
         g.buckets.retain(|(i, _, _), _| i != instance_id);
+        Self::mesh_forget(&mut g, instance_id);
         if let Some(b) = &self.blobs {
             b.drop_uploads(instance_id);
         }
@@ -457,6 +464,8 @@ impl Broker {
             project,
             r,
             to_sink: true,
+            origin: None,
+            seq: None,
         };
         let sent = self.put(&mut g, put).map(|d| d.seq);
         drop(g);
@@ -479,6 +488,16 @@ impl Broker {
     /// Subscribe to `topic` (`<kind>/<source_id>` or `<kind>/*`); returns
     /// the subscription id.
     pub fn subscribe(&self, s: &mut Session, topic: &str, schema: &str) -> Result<u64, BusError> {
+        self.subscribe_with(s, topic, schema, false)
+    }
+
+    /// [`subscribe`](Self::subscribe), also to a topic on another node by its
+    /// `weftos://<mesh>/sensors/<source_id>/topics/<kind>` name; `raw` asks
+    /// for a raw topic (ADR-122 section 14).
+    pub fn subscribe_with(&self, s: &mut Session, topic: &str, schema: &str, raw: bool) -> Result<u64, BusError> {
+        if topic.starts_with("weftos://") {
+            return self.subscribe_mesh(s, topic, schema, raw);
+        }
         let me = s.instance_id.clone();
         let no = |e| refuse(&me, "subscribe", topic, e);
         let (kind, source) = topic

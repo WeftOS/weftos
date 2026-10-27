@@ -488,6 +488,7 @@ async fn build(
     // beats the rest of this build is enforced by the sweep at its end.
     let revoker = revoker_for(revocations.clone());
     revoker.set_exchange(ex.clone());
+    let bus_mesh = mesh.clone();
     let notices = wire_revocations(&ex, revocations.clone(), &anchors, mesh, dir);
     let serving = load_host_config(dir)?;
     let container = load_container(dir, &dir.join("workload-containers"))?;
@@ -550,6 +551,11 @@ async fn build(
     local.set_node_admin(Arc::new(crate::dashboard_rpc::MeshAdmin));
     // ADR-122: the cog data plane broker beside the ingest bridge; down, cogs
     // are placed without WEFTOS_COGBUS.
+    // ADR-122 section 14: exposed topics to peers and `weftos://` subscribes,
+    // over the kernel's own mesh (none in service mode).
+    if let Some(rt) = bus_mesh {
+        crate::cogbus_mesh::start(broker.clone(), rt);
+    }
     if let Some(bus) = crate::cogbus_serve::install_with(broker, dir, store_sink, bus_container).await {
         local.set_cogbus(bus);
     }

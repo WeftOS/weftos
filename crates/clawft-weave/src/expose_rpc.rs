@@ -2,8 +2,10 @@
 //!
 //! - `expose.list` (Read): every exposure with audience, state, announced and
 //!   why it is refused, if it is; plus the master switch.
-//! - `expose.set {id, state: on|off|paused, audience?}` (Admin): a local
+//! - `expose.set {id, state: on|off|paused, audience?, raw?}` (Admin): a local
 //!   decision, persisted. Switching off withdraws the advertisement at once.
+//!   `raw` (topic exposures only, ADR-122 section 14) allows raw data, and
+//!   only for an audience of named nodes; `on` from the CLI always says it.
 //! - `expose.off_all` (Admin): every exposure off.
 //! - `expose.log {id?, limit?}` (Admin): recent activity, newest last, and
 //!   whether the chain verifies. Never request bodies.
@@ -27,6 +29,8 @@ struct SetParams {
     state: String,
     #[serde(default)]
     audience: Option<String>,
+    #[serde(default)]
+    raw: Option<bool>,
 }
 
 #[derive(Deserialize, Default)]
@@ -52,7 +56,7 @@ pub(crate) fn row(reg: &ExposureRegistry, e: &Exposure) -> Value {
     json!({
         "id": e.id, "kind": e.kind, "resource": e.resource, "audience": e.audience.label(),
         "api": e.api, "limits": e.limits, "state": e.state.as_str(), "announced": e.announced,
-        "served": refused.is_none(), "refused": refused,
+        "served": refused.is_none(), "refused": refused, "raw": e.raw,
     })
 }
 
@@ -102,15 +106,29 @@ pub(crate) fn route_infer(_: &str, _: ExposureState) -> Result<bool, String> {
 fn set(reg: &ExposureRegistry, p: SetParams) -> Result<Value, String> {
     let state = parse_state(&p.state)?;
     let audience = p.audience.as_deref().map(Audience::parse).transpose()?;
-    if reg.get(&p.id).is_none() {
+    let Some(cur) = reg.get(&p.id) else {
         return Err(format!("unknown exposure {:?}", p.id));
+    };
+    if p.raw == Some(true) {
+        if cur.kind != clawft_kernel::exposure::ExposureKind::Topic {
+            return Err("--raw applies to topic exposures only".into());
+        }
+        if !matches!(audience.as_ref().unwrap_or(&cur.audience), Audience::Nodes(_)) {
+            return Err("raw data is exposed only to named nodes: use --audience nodes:<a,b> with --raw".into());
+        }
     }
     if let Some(a) = audience {
         reg.set_audience(&p.id, a, "cli")?;
     }
+    if let Some(raw) = p.raw.filter(|r| *r != cur.raw) {
+        reg.set_raw(&p.id, raw, "cli")?;
+    }
     if !route_infer(&p.id, state)? {
         reg.set_state(&p.id, state, "cli")?;
     }
+    // Remote subscribers of a topic that is no longer served end now.
+    #[cfg(all(feature = "placement", unix))]
+    crate::cogbus_mesh::withdraw_if_narrowed(&p.id);
     let e = reg.get(&p.id).ok_or("exposure vanished")?;
     Ok(row(reg, &e))
 }

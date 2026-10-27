@@ -392,6 +392,11 @@ impl CogbusRegistrar for Registrar {
                 self.broker.set_output_rate(&r.instance_id, &o.topic, per_sec);
             }
         }
+        // The cog's own limits on other nodes reading its topics (ADR-122
+        // section 14); without them none of its topics is served remotely.
+        if let Some(l) = r.mesh_limits {
+            self.broker.set_mesh_limits(&r.instance_id, l);
+        }
         if let Some(s) = &self.sink {
             s.bind(InstanceBinding::new(&r.instance_id, r.project_id.clone(), &r.controller_node));
         }

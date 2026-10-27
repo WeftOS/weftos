@@ -165,6 +165,10 @@ pub struct Exposure {
     pub state: ExposureState,
     /// Whether an advertisement for it is currently published.
     pub announced: bool,
+    /// The operator allowed raw data on it (`weaver expose on --raw`; topic
+    /// exposures only, ADR-122 section 14). Never set by code or config.
+    #[serde(default)]
+    pub raw: bool,
 }
 
 /// Why an exposure is not served now. Local policy blocking a remote

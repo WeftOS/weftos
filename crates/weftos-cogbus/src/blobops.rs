@@ -136,9 +136,12 @@ impl Broker {
             self.ext.gate(&req.on(&topic, "blob.v1"))?;
         }
         let want = len.map_or(CHUNK, |l| l as usize);
-        let (h, bytes, eof) = store
-            .get(now_ms(), me, s.project_id.as_deref(), hash, offset, want)
-            .map_err(|e| no(map(e)))?;
+        let (h, bytes, eof) = match store.get(now_ms(), me, s.project_id.as_deref(), hash, offset, want) {
+            Ok(got) => got,
+            // A handle from another node's reading resolves there (B6e).
+            Err(BlobError::NotFound(m)) => return Err(self.mesh_blob_miss(s, hash).unwrap_or_else(|| no(bad(ErrorCode::NotFound, m)))),
+            Err(e) => return Err(no(map(e))),
+        };
         if offset == 0 {
             self.ext.noted(s, BusAction::BlobGet, &topic);
         }

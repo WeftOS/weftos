@@ -36,6 +36,7 @@ fn every_request() -> Vec<Request> {
             id: 4,
             topic: "telemetry/*".into(),
             schema: "telemetry.v1".into(),
+            raw: false,
         },
         Request::Unsubscribe { id: 5, sub: 1 },
         Request::List { id: 6 },

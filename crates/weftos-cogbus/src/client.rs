@@ -300,6 +300,12 @@ impl Client {
 
     /// Subscribe to `<kind>/<source_id>` or `<kind>/*`.
     pub async fn subscribe(&self, topic: &str, schema: &str) -> Result<Subscription, ClientError> {
+        self.subscribe_with(topic, schema, false).await
+    }
+
+    /// [`subscribe`](Self::subscribe) with `raw`: a topic on another node by
+    /// its `weftos://` name that carries raw data must be asked for raw.
+    pub async fn subscribe_with(&self, topic: &str, schema: &str, raw: bool) -> Result<Subscription, ClientError> {
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
         self.park(id, Pending::Subscribe(tx))?;
@@ -307,6 +313,7 @@ impl Client {
             id,
             topic: topic.into(),
             schema: schema.into(),
+            raw,
         })
         .await?;
         rx.await.map_err(|_| ClientError::Closed)?

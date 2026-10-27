@@ -342,6 +342,9 @@ pub mod cogbus_serve;
 /// The ingest bridge as a cogbus consumer: the store sink (ADR-122 section 9).
 #[cfg(all(feature = "placement", unix))]
 pub mod cogbus_ingest;
+/// cogbus mesh topics: exposed topics served to peers, `weftos://` subscribes (ADR-122 section 14).
+#[cfg(all(feature = "placement", unix))]
+pub mod cogbus_mesh;
 pub mod cogbus_npu_facts;
 /// cogbus governance: kernel rules plus `cogbus-policy.json` grants and denies (ADR-122 B3).
 #[cfg(all(feature = "placement", unix))]
