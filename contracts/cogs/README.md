@@ -3,7 +3,9 @@
 Registered schema ids for `[[outputs]]` and `[[inputs]]` in a cog's `cog.toml`
 (Ventuno cog plan, section 4.2). The id list and typed messages live in
 `clawft-types` (`cog_topics`); `weaver workload pack` rejects a declaration that
-names an id not listed here.
+names an id not listed here. A `cog.toml` with any `[[outputs]]` must also carry
+`[mesh_limits]` (`readings_per_min`, `bytes_per_sec`, `subscriptions_per_peer`,
+`credit_timeout_s`; starting values 600, 4194304, 16, 30); see ADR-122 section 14.
 
 | Path | What it is |
 |------|------------|

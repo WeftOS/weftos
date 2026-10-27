@@ -161,6 +161,12 @@ topic = "store.vector"
 schema = "store.vector.v1"
 class = "reading"
 rate = "1 Hz"
+
+[mesh_limits]
+readings_per_min = 600
+bytes_per_sec = 4194304
+subscriptions_per_peer = 16
+credit_timeout_s = 30
 "#;
 
 /// Register a broker-native cog the way the host does, and open its session.
@@ -176,6 +182,7 @@ fn native(reg: &Registrar, broker: &Broker, id: &str, project: &str, n: u8) -> S
         isolation: clawft_kernel::workload_ctl::host_cogbus::Isolation::SharedUid,
         outputs: spec.outputs,
         inputs: spec.inputs,
+        mesh_limits: spec.mesh_limits,
     };
     reg.register(&r).unwrap();
     broker.authenticate(&tok(n), None).unwrap()

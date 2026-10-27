@@ -35,6 +35,12 @@ class = "reading"
 topic = "detections"
 schema = "detections.v1"
 policy = "sample"
+
+[mesh_limits]
+readings_per_min = 600
+bytes_per_sec = 4194304
+subscriptions_per_peer = 16
+credit_timeout_s = 30
 "#;
 
 fn me() -> (u32, u32) {

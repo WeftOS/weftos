@@ -27,6 +27,12 @@ rate = "1 Hz"
 topic = "detections"
 schema = "detections.v1"
 policy = "sample"
+
+[mesh_limits]
+readings_per_min = 600
+bytes_per_sec = 4194304
+subscriptions_per_peer = 16
+credit_timeout_s = 30
 "#;
 
 fn registration(contract: &HostContract, uid: Option<u32>) -> CogbusRegistration {
@@ -41,6 +47,7 @@ fn registration(contract: &HostContract, uid: Option<u32>) -> CogbusRegistration
         isolation: clawft_kernel::workload_ctl::host_cogbus::Isolation::SharedUid,
         outputs: spec.outputs,
         inputs: spec.inputs,
+        mesh_limits: spec.mesh_limits,
     }
 }
 
@@ -78,6 +85,8 @@ async fn a_placed_manifest_becomes_the_broker_entry_and_the_cog_env() {
     assert_eq!(entry.uid, a.uid);
     assert_eq!(entry.outputs, vec![OutputSpec { topic: "telemetry".into(), schema: "telemetry.v1".into(), class: TopicClass::Reading }]);
     assert_eq!(entry.inputs, vec![InputSpec { topic: "detections".into(), schema: "detections.v1".into(), policy: InputPolicy::Sample }]);
+    // The manifest's own mesh limits reach the broker (ADR-122 section 14).
+    assert_eq!(rt.broker.mesh_limits("board-telemetry-1"), Some(clawft_types::cog_topics::MeshLimits::STARTING));
 
     // The cog connects with exactly what it was handed and publishes.
     let c = weftos_cogbus::Client::connect(Path::new(&env[ENV_COGBUS]), &env[ENV_COGBUS_TOKEN]).await.unwrap();
@@ -90,6 +99,7 @@ async fn a_placed_manifest_becomes_the_broker_entry_and_the_cog_env() {
     // Unload revokes; the token no longer opens a session.
     reg.revoke("board-telemetry-1");
     assert!(rt.broker.instance("board-telemetry-1").is_none());
+    assert!(rt.broker.mesh_limits("board-telemetry-1").is_none(), "revoke forgets the limits");
     assert!(weftos_cogbus::Client::connect(rt.socket(), contract.token.expose()).await.is_err());
     assert_eq!(list_json(None)["running"], false);
 }

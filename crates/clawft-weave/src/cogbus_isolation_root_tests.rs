@@ -93,6 +93,7 @@ async fn a_native_cog_under_a_range_uid_is_accepted_and_any_other_uid_is_refused
         isolation: a.isolation,
         outputs: vec![],
         inputs: vec![],
+        mesh_limits: None,
     })
     .unwrap();
 

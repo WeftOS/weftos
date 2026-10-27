@@ -17,6 +17,7 @@
 
 use std::sync::Arc;
 
+use clawft_types::cog_topics::MeshLimits;
 use clawft_types::secret::SecretString;
 
 use super::host_service::WorkloadHostService;
@@ -105,6 +106,9 @@ pub struct CogbusRegistration {
     pub outputs: Vec<OutputDecl>,
     /// Manifest `[[inputs]]`.
     pub inputs: Vec<InputDecl>,
+    /// Manifest `[mesh_limits]` (ADR-122 section 14); `None` when the cog
+    /// has no outputs, so nothing of it can be served to another node.
+    pub mesh_limits: Option<MeshLimits>,
 }
 
 /// The daemon's broker, behind the host.
@@ -133,6 +137,7 @@ pub(super) struct CogbusPending {
     isolation: Isolation,
     outputs: Vec<OutputDecl>,
     inputs: Vec<InputDecl>,
+    mesh_limits: Option<MeshLimits>,
     bus: Arc<dyn CogbusRegistrar>,
     owns_identity: bool,
 }
@@ -180,6 +185,7 @@ impl WorkloadHostService {
             isolation: a.isolation,
             outputs: p.spec.outputs.clone(),
             inputs: p.spec.inputs.clone(),
+            mesh_limits: p.spec.mesh_limits,
             bus: bus.clone(),
             owns_identity,
         };
@@ -225,6 +231,7 @@ impl WorkloadHostService {
             isolation: p.isolation,
             outputs: std::mem::take(&mut p.outputs),
             inputs: std::mem::take(&mut p.inputs),
+            mesh_limits: p.mesh_limits,
         };
         // A refused registration drops `p` armed: the identity goes back.
         bus.register(&r)

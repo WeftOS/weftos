@@ -7,7 +7,9 @@
 
 use std::collections::BTreeSet;
 
-use clawft_types::cog_topics::{InputPolicy, TopicClass, is_registered, valid_topic_kind};
+use clawft_types::cog_topics::{
+    InputPolicy, MISSING_MESH_LIMITS, MeshLimits, TopicClass, is_registered, valid_topic_kind,
+};
 use serde::Deserialize;
 
 use super::types::RuntimeError;
@@ -191,4 +193,17 @@ pub(super) fn parse_inputs(raw: Vec<RawInput>) -> Result<Vec<InputDecl>, Runtime
         });
     }
     Ok(out)
+}
+
+/// Validate `[mesh_limits]`: every value in range, and present whenever the
+/// cog declares outputs (ADR-122 section 14, owner rule 2026-10-27).
+pub(super) fn parse_mesh_limits(raw: Option<MeshLimits>, has_outputs: bool) -> Result<Option<MeshLimits>, RuntimeError> {
+    match raw {
+        None if has_outputs => Err(bad(MISSING_MESH_LIMITS)),
+        None => Ok(None),
+        Some(l) => {
+            l.validate().map_err(|e| bad(e.0))?;
+            Ok(Some(l))
+        }
+    }
 }

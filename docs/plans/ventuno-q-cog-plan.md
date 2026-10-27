@@ -128,7 +128,18 @@ rate   = "16000 Hz, 20 ms chunks"
 topic  = "audio.pcm"
 schema = "pcm.s16le.v1"
 policy = "drop-oldest"        # drop-oldest | block | sample
+
+[mesh_limits]                 # required with any [[outputs]] (ADR-122 section 14)
+readings_per_min       = 600      # per remote subscriber
+bytes_per_sec          = 4194304  # per remote subscriber, stream chunks and blob slices
+subscriptions_per_peer = 16
+credit_timeout_s       = 30
 ```
+
+`[mesh_limits]` is the cog's own ceiling on what another node may take from its topics; the
+values above are the starting values, to be set per cog (a 1 Hz telemetry cog and a 2 MS/s IQ
+cog need very different numbers). A manifest with outputs and no table is refused at pack,
+install and place.
 
 The live topic name is `<kind>/<source_id>`, for example
 `audio.pcm/venq-mic-0`. `source_id` is the installed sensor and stays the same

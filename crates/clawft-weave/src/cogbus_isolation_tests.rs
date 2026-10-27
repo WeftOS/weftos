@@ -173,6 +173,7 @@ async fn cogbus_list_shows_the_socket_and_marks_a_shared_uid_instance() {
         isolation: a.isolation,
         outputs: vec![],
         inputs: vec![],
+        mesh_limits: None,
     })
     .unwrap();
 

@@ -32,10 +32,12 @@ fn declarations_parse_into_typed_structs() {
          [[outputs]]\ntopic = \"audio.pcm\"\nschema = \"pcm.s16le.v1\"\nclass = \"stream\"\nrate = \"16000 Hz\"\n\
          [[outputs]]\ntopic = \"levels\"\nschema = \"telemetry.v1\"\nclass = \"reading\"\n\
          [[inputs]]\ntopic = \"audio.pcm\"\nschema = \"pcm.s16le.v1\"\npolicy = \"block\"\n\
-         [[inputs]]\ntopic = \"cmd\"\nschema = \"senml.v1\"\n",
+         [[inputs]]\ntopic = \"cmd\"\nschema = \"senml.v1\"\n\
+         [mesh_limits]\nreadings_per_min = 600\nbytes_per_sec = 4194304\nsubscriptions_per_peer = 16\ncredit_timeout_s = 30\n",
     )
     .unwrap();
     assert_eq!(s.interfaces, ["audio-in", "i2c"]);
+    assert_eq!(s.mesh_limits, Some(clawft_types::cog_topics::MeshLimits::STARTING));
     assert_eq!(s.outputs[0].class, TopicClass::Stream);
     assert_eq!(s.outputs[0].rate.as_deref(), Some("16000 Hz"));
     assert_eq!(s.outputs[1].rate, None);
@@ -63,6 +65,21 @@ fn output_errors_are_clear() {
     assert!(err(&o(&long)).contains("rate"));
     assert!(err(&o(&format!("{ok}extra = 1\n"))).contains("extra"));
     assert!(err(&format!("{}{}", o(ok), o(ok))).contains("duplicate"));
+}
+
+#[test]
+fn outputs_need_their_own_mesh_limits() {
+    let out = "[[outputs]]\ntopic = \"t0\"\nschema = \"telemetry.v1\"\nclass = \"reading\"\n";
+    let e = err(out);
+    assert!(e.contains("[mesh_limits] is required") && e.contains("readings_per_min"), "{e}");
+    let limits = "[mesh_limits]\nreadings_per_min = 600\nbytes_per_sec = 4194304\nsubscriptions_per_peer = 16\ncredit_timeout_s = 30\n";
+    assert!(parse(&format!("{out}{limits}")).is_ok());
+    // All four keys are required; a missing or unknown key is named.
+    assert!(err(&format!("{out}[mesh_limits]\nreadings_per_min = 600\n")).contains("bytes_per_sec"));
+    assert!(err(&format!("{out}{limits}burst = 1\n")).contains("burst"));
+    assert!(err(&format!("{out}{}", limits.replace("= 30", "= 1"))).contains("credit_timeout_s"));
+    // A cog with no outputs serves nothing and needs no table.
+    assert!(parse("[[inputs]]\ntopic = \"a\"\nschema = \"telemetry.v1\"\n").unwrap().mesh_limits.is_none());
 }
 
 #[test]
