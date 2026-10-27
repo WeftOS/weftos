@@ -1,7 +1,7 @@
 //! `weaver cog ...` and `weaver workload catalog --kind cog` (ADR-105).
 //!
 //! Project cog sources, licences, search, info and install, plus the cog
-//! catalog across sources. The logic lives in `weftos-cog-sources`; this file
+//! catalog across sources. The logic lives in the Cogs release's `cog-sources`; this file
 //! is argument parsing and output. Everything here runs locally: no daemon is
 //! needed, and nothing is sent to a daemon or a chain yet (ADR-105 section 9).
 //!
@@ -14,14 +14,14 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, bail, Context};
 use chrono::Utc;
 use clap::{Args, Subcommand, ValueEnum};
-use weftos_cog_sources::catalog::{build_rows, render_table, Expectations};
-use weftos_cog_sources::config::{
+use cog_sources::catalog::{build_rows, render_table, Expectations};
+use cog_sources::config::{
     load_effective, project_sources_path, user_sources_path, CogLicence, CogSource, EffectiveSources, LicensedCogs,
     SourceKind, SourcesFile, COGNITUM_DEFAULT_URL,
 };
-use weftos_cog_sources::fetch::HttpReader;
-use weftos_cog_sources::RevokedKeys;
-use weftos_cog_sources::{fetch_verified, install_into_host, load_all, parse_ref, resolve, FetchCtx};
+use cog_sources::fetch::HttpReader;
+use cog_sources::RevokedKeys;
+use cog_sources::{fetch_verified, install_into_host, load_all, parse_ref, resolve, FetchCtx};
 
 /// `weaver cog` arguments.
 #[derive(Args)]
@@ -276,7 +276,7 @@ impl Roots {
         })
     }
 
-    fn edit(&self, user: bool, f: impl FnOnce(&mut SourcesFile) -> weftos_cog_sources::Result<()>) -> anyhow::Result<PathBuf> {
+    fn edit(&self, user: bool, f: impl FnOnce(&mut SourcesFile) -> cog_sources::Result<()>) -> anyhow::Result<PathBuf> {
         let path = self.target(user)?.to_path_buf();
         let mut file = SourcesFile::load(&path)?;
         f(&mut file)?;
@@ -336,7 +336,7 @@ fn default_baseline(inputs: &CatalogInputs) -> anyhow::Result<Option<Expectation
     Ok(Some(Expectations::parse(&bytes)?))
 }
 
-fn print_failures(failures: &[(String, weftos_cog_sources::SourceError)]) {
+fn print_failures(failures: &[(String, cog_sources::SourceError)]) {
     for (name, e) in failures {
         eprintln!("warning: source '{name}' not loaded: {e}");
     }
@@ -354,7 +354,7 @@ pub async fn run(args: CogArgs) -> anyhow::Result<()> {
 
 /// Prefix a source error with its stable code: `[cog_unlicensed] ...`.
 pub fn coded(e: anyhow::Error) -> anyhow::Error {
-    match e.downcast_ref::<weftos_cog_sources::SourceError>() {
+    match e.downcast_ref::<cog_sources::SourceError>() {
         Some(s) => anyhow!("[{}] {}", s.code(), s),
         None => e,
     }
@@ -461,11 +461,11 @@ fn run_blocking(args: CogArgs) -> anyhow::Result<()> {
                 r.loaded.source.kind.label(),
                 r.loaded.source.effective_keys(&keys).len()
             );
-            weftos_cog_sources::resolve::enable_guard(&eff, &cref, &r, enable, confirm_project_source)?;
+            cog_sources::resolve::enable_guard(&eff, &cref, &r, enable, confirm_project_source)?;
             let revoked = revoked_signer_keys(&clawft_types::runtime_paths::RuntimePaths::resolve().revoked_hosts())?;
             let ctx = FetchCtx { reader: &reader, licences: &eff.licences, now: Utc::now(), extra_weftos_keys: &keys, revoked: &revoked };
             let fetched = fetch_verified(r.loaded, &r.cog.id, &arch, &ctx)?;
-            let root = root.unwrap_or_else(weftos_cog_sources::default_host_root);
+            let root = root.unwrap_or_else(cog_sources::default_host_root);
             let rec = install_into_host(&root, &fetched, enable, &args)?;
             let p = &fetched.provenance;
             println!("installed {} v{} from {} ({}) into {}", rec.id, rec.version, p.source, p.trust, root.display());
@@ -589,12 +589,12 @@ mod revocation_tests {
         let keys = revoked_signer_keys(&host_file).unwrap();
         assert_eq!(keys.len(), 1);
         assert!(keys.contains(&KEY.to_uppercase()));
-        // The standalone reader in weftos-cog-repo agrees with the kernel's file.
-        let standalone = weftos_cog_repo_reads(&list.subjects_path());
+        // The standalone reader in cog-repo agrees with the kernel's file.
+        let standalone = cog_repo_reads(&list.subjects_path());
         assert!(standalone);
     }
 
-    fn weftos_cog_repo_reads(path: &Path) -> bool {
+    fn cog_repo_reads(path: &Path) -> bool {
         RevokedKeys::load(path).unwrap().contains(KEY)
     }
 

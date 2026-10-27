@@ -1,11 +1,11 @@
 //! The registry fetcher over a local file registry (no network): reuses
-//! weftos-cog-sources' sha256 and size checks and its https-only rule.
+//! cog-sources' sha256 and size checks and its https-only rule.
 #![cfg(feature = "registry")]
 mod common;
 use common::*;
 use weft_licence::providers::{CogFetcher, FetchError};
 use weft_licence::registry::RegistryFetcher;
-use weftos_cog_sources::FsReader;
+use cog_sources::FsReader;
 
 const BIN: &[u8] = b"\x7fELF cognitum fall-detect armhf";
 

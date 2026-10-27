@@ -1,10 +1,11 @@
-//! Self-screenshot for headless visual checks (native only): with
-//! `COMPANION_SCREENSHOT=<path.bmp>` the app captures its own window after
-//! `COMPANION_SCREENSHOT_AFTER` seconds (default 6), writes a 24-bit BMP and exits.
+//! Self-screenshot for headless visual checks (native only), copied from the
+//! Cogs companion shell: with `COMPANION_SCREENSHOT=<path.bmp>` the app
+//! captures its own window after `COMPANION_SCREENSHOT_AFTER` seconds
+//! (default 6), writes a 24-bit BMP and exits.
 
 use eframe::egui;
 use std::sync::OnceLock;
-use web_time::Instant;
+use std::time::Instant;
 
 struct Plan {
     path: String,

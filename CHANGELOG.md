@@ -61,6 +61,14 @@ workspace to crates.io automatically and the first release built from the `WeftO
   clock and reading time (Proposed); the sensor-node spec and module types.
 
 ### Changed
+- **Cogs extraction B1.** The Cogs product (Cog Host, cog repository tooling, catalog, cog
+  sources, Weave Manager, the guide format and viewer, the ecg/tof/sound companion apps) is no
+  longer in this tree. It ships from `WeftOS/weftos-cogs`; `weaver cog`, `weaver update` and
+  `weft-licence` link its `cog-sources`, `cog-repo` and `cog-market` crates at v0.1.4 (pinned
+  by commit). Removed lanes: `scripts/build.sh cog-host-x86`, `cog-host-cross`, `manager`,
+  `manager-web`, `scope-web`, `guide-web` and the `ecg-scope` / `sound-scope` aliases;
+  `scope room` still builds `weft-room-scope`. Cog Host binaries now come from the signed Cogs
+  release. The crates.io set is unchanged (none of the removed crates was published).
 - The repositories moved to the WeftOS GitHub org (`WeftOS/weftos`, `WeftOS/weftos-cogs`).
   Container images publish to `ghcr.io/weftos/weftos`; earlier images stay under
   `ghcr.io/weave-logic-ai/weftos`.

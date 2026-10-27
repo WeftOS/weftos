@@ -544,94 +544,19 @@ cmd_browser() {
     fi
 }
 
-# Companion apps for sensor cogs (ADR-104): crates/weftos-<name>-scope, binary weft-<name>-scope.
+# Native egui viewers: crates/weftos-<name>-scope, binary weft-<name>-scope (room). The sensor-cog
+# companion apps (ecg, tof, sound) ship from WeftOS/weftos-cogs.
 cmd_scope() {
     local name="${1:-}"
-    [ -n "$name" ] && [ -d "$ROOT/crates/weftos-${name}-scope" ] || { fail "usage: scripts/build.sh scope <name>  (crates/weftos-<name>-scope; e.g. ecg, tof)"; return 1; }
+    [ -n "$name" ] && [ -d "$ROOT/crates/weftos-${name}-scope" ] || { fail "usage: scripts/build.sh scope <name>  (crates/weftos-<name>-scope; e.g. room)"; return 1; }
     local profile="${PROFILE:-release}"
-    header "Building weft-${name}-scope (native egui companion, profile: $profile)"
+    header "Building weft-${name}-scope (native egui viewer, profile: $profile)"
     timer_start
     run_cmd cargo build -p "weftos-${name}-scope" --bin "weft-${name}-scope" --profile "$profile"
     timer_end
     local dir="$profile"; [ "$profile" = "dev" ] && dir="debug"
     report_binary_size "target/${dir}/weft-${name}-scope" "weft-${name}-scope"
-    pass "run: SEED_HOST=169.254.42.1 target/${dir}/weft-${name}-scope"
-}
-
-cmd_scope_web() {
-    local name="${1:-}"
-    [ -n "$name" ] && [ -d "$ROOT/crates/weftos-${name}-scope" ] || { fail "usage: scripts/build.sh scope-web <name>"; return 1; }
-    local profile="${PROFILE:-release-wasm}"
-    header "Building weft-${name}-scope for the browser (wasm32-unknown-unknown, profile: $profile)"
-    if ! check_target_installed wasm32-unknown-unknown; then return 1; fi
-    timer_start
-    run_cmd cargo build --target wasm32-unknown-unknown -p "weftos-${name}-scope" --lib --profile "$profile"
-    timer_end
-    local wasm_file="target/wasm32-unknown-unknown/${profile}/weftos_${name}_scope.wasm"
-    report_binary_size "$wasm_file" "${name}-scope WASM (raw)"
-    local pkg_dir="$ROOT/crates/weftos-${name}-scope/www/pkg"
-    if command -v wasm-bindgen >/dev/null 2>&1; then
-        info "Running wasm-bindgen → $pkg_dir"
-        run_cmd wasm-bindgen "$wasm_file" --out-dir "$pkg_dir" --target web --no-typescript
-        report_binary_size "$pkg_dir/weftos_${name}_scope_bg.wasm" "${name}-scope WASM (bindgen)"
-        pass "pkg/ ready — serve crates/weftos-${name}-scope/www over http and open /?seed=<seed-ip>"
-    else
-        skip "wasm-bindgen CLI not found — pkg/ not generated"
-        info "Install with: cargo install wasm-bindgen-cli"
-    fi
-}
-
-cmd_guide_web() {
-    local profile="${PROFILE:-release-wasm}"
-    header "Building weftos-guide-view for the browser (wasm32-unknown-unknown, profile: $profile)"
-    if ! check_target_installed wasm32-unknown-unknown; then return 1; fi
-    timer_start
-    run_cmd cargo build --target wasm32-unknown-unknown -p weftos-guide-view --lib --profile "$profile"
-    timer_end
-    local wasm_file="target/wasm32-unknown-unknown/${profile}/weftos_guide_view.wasm"
-    report_binary_size "$wasm_file" "guide-view WASM (raw)"
-    local pkg_dir="$ROOT/crates/weftos-guide-view/www/pkg"
-    if command -v wasm-bindgen >/dev/null 2>&1; then
-        info "Running wasm-bindgen → $pkg_dir"
-        run_cmd wasm-bindgen "$wasm_file" --out-dir "$pkg_dir" --target web --no-typescript
-        report_binary_size "$pkg_dir/weftos_guide_view_bg.wasm" "guide-view WASM (bindgen)"
-        pass "pkg/ ready — Sensor Explorer loads /guide-view/weftos_guide_view.js"
-    else
-        skip "wasm-bindgen CLI not found — pkg/ not generated"
-        info "Install with: cargo install wasm-bindgen-cli"
-    fi
-}
-
-cmd_manager() {
-    local profile="${PROFILE:-release}"
-    header "Building Weave Manager (appliance console, native, profile: $profile)"
-    timer_start
-    run_cmd cargo build -p weftos-cog-manager --bin weave-manager --profile "$profile"
-    timer_end
-    local dir="$profile"; [ "$profile" = "dev" ] && dir="debug"
-    report_binary_size "target/${dir}/weave-manager" "weave-manager"
-    pass "run: target/${dir}/weave-manager   (WEFTOS_HOST overrides the first address; unset tries this machine)"
-}
-
-cmd_manager_web() {
-    local profile="${PROFILE:-release-wasm}"
-    header "Building weft-cog-manager for the browser (wasm32-unknown-unknown, profile: $profile)"
-    if ! check_target_installed wasm32-unknown-unknown; then return 1; fi
-    timer_start
-    run_cmd cargo build --target wasm32-unknown-unknown -p weftos-cog-manager --lib --profile "$profile"
-    timer_end
-    local wasm_file="target/wasm32-unknown-unknown/${profile}/weftos_cog_manager.wasm"
-    report_binary_size "$wasm_file" "cog-manager WASM (raw)"
-    local pkg_dir="$ROOT/crates/weftos-cog-manager/www/pkg"
-    if command -v wasm-bindgen >/dev/null 2>&1; then
-        info "Running wasm-bindgen → $pkg_dir"
-        run_cmd wasm-bindgen "$wasm_file" --out-dir "$pkg_dir" --target web --no-typescript
-        report_binary_size "$pkg_dir/weftos_cog_manager_bg.wasm" "cog-manager WASM (bindgen)"
-        pass "pkg/ ready — serve crates/weftos-cog-manager/www and open /?host=http://<ip>:9480"
-    else
-        skip "wasm-bindgen CLI not found — pkg/ not generated"
-        info "Install with: cargo install wasm-bindgen-cli"
-    fi
+    pass "built: target/${dir}/weft-${name}-scope (--help for its options)"
 }
 
 cmd_ui() {
@@ -1944,7 +1869,7 @@ cmd_cogs_launcher() {
 # host registry is never written), nothing is downloaded. Skips with a message when docker or the
 # image is missing. Output: target/licence-cross/<triple>/release/weft-licence
 # (stripped copy beside it as weft-licence.stripped) and a size report.
-# Shared by licence-cross and cog-host-cross: cross-build one workspace binary for the Seed
+# Used by licence-cross: cross-build one workspace binary for the Seed
 # targets. Args: <package> <bin> <extra cargo args or ""> <output dir>.
 cross_build_bin() {
     local pkg="$1" bin="$2" extra="$3" out="$4"
@@ -1971,6 +1896,9 @@ cross_build_bin() {
     timer_start
     local rc=0 t strip_bin
     mkdir -p "$out/cargo-src"
+    # Git dependencies (the Cogs release crates) come from the host's cargo git cache.
+    local git_mount=()
+    [ -d "$HOME/.cargo/git" ] && git_mount=(-v "$HOME/.cargo/git":/cargo-home/git:ro)
     for t in "${targets[@]}"; do
         case "$t" in
             armv7-unknown-linux-gnueabihf) strip_bin=arm-linux-gnueabihf-strip ;;
@@ -1983,6 +1911,7 @@ cross_build_bin() {
             -v "$HOME/.cargo/registry/cache":/cargo-home/registry/cache:ro \
             -v "$HOME/.cargo/registry/index":/cargo-home/registry/index:ro \
             -v "$out/cargo-src":/cargo-home/registry/src \
+            ${git_mount[@]+"${git_mount[@]}"} \
             -w /src -e HOME=/tmp -e CARGO_HOME=/cargo-home \
             -e CARGO_TARGET_DIR=/target -e RUSTUP_TOOLCHAIN=1.97.1 -e CARGO_NET_OFFLINE=true \
             -e CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc \
@@ -2130,43 +2059,6 @@ cmd_glasses() {
     timer_end
 }
 
-# Builds weft-cog-host natively for x86_64 Linux servers (e.g. photo-gallery) inside the
-# pinned rust image under linux/amd64 emulation, offline from the host cargo cache.
-# Output: target/cog-host-x86/release/weft-cog-host(.stripped).
-cmd_cog_host_x86() {
-    header "weft-cog-host build (x86_64-unknown-linux-gnu)"
-    local image="${COG_HOST_X86_IMAGE:-rust:1.95-bookworm}" out="$ROOT/target/cog-host-x86"
-    if [ "$DRY_RUN" = true ]; then
-        printf "  ${YELLOW}DRY${NC}   docker run --platform linux/amd64 %s cargo build --locked --offline --release -p weftos-cog-host\n" "$image"
-        return 0
-    fi
-    if ! command -v docker >/dev/null 2>&1 || ! docker image inspect "$image" >/dev/null 2>&1; then
-        skip "need docker and the $image image (docker pull --platform linux/amd64 $image)"
-        return 0
-    fi
-    [ -d "$HOME/.cargo/registry/cache" ] || { fail "no host cargo registry at ~/.cargo/registry (offline build needs it)"; return 1; }
-    cargo fetch --locked --offline --target x86_64-unknown-linux-gnu >/dev/null 2>&1 \
-        || { fail "host cargo cache is missing crates for x86_64-unknown-linux-gnu; run 'cargo fetch --locked --target x86_64-unknown-linux-gnu' once with network, then retry"; return 1; }
-    timer_start
-    mkdir -p "$out/cargo-src"
-    docker run --rm --platform linux/amd64 --user "$(id -u):$(id -g)" \
-        -v "$ROOT":/src:ro -v "$out":/target \
-        -v "$HOME/.cargo/registry/cache":/cargo-home/registry/cache:ro \
-        -v "$HOME/.cargo/registry/index":/cargo-home/registry/index:ro \
-        -v "$out/cargo-src":/cargo-home/registry/src \
-        -w /src -e HOME=/tmp -e CARGO_HOME=/cargo-home -e CARGO_TARGET_DIR=/target \
-        -e CARGO_NET_OFFLINE=true -e RUSTUP_TOOLCHAIN=1.95 \
-        "$image" bash -euo pipefail -c '
-            export PATH=/usr/local/cargo/bin:$PATH RUSTUP_HOME=/usr/local/rustup
-            cargo build --locked --offline --release -p weftos-cog-host
-            cp /target/release/weft-cog-host /target/release/weft-cog-host.stripped
-            strip /target/release/weft-cog-host.stripped
-        ' || { fail "x86_64 build failed"; timer_end; return 1; }
-    local st="$out/release/weft-cog-host.stripped"
-    pass "x86_64: stripped $(wc -c < "$st" | tr -d ' ') bytes ($st)"
-    timer_end
-}
-
 # Windows compile check of every cargo-dist app (weft, weaver, weftos, the egui GUI)
 # for x86_64-pc-windows-gnu with mingw-w64. The release builds x86_64-pc-windows-msvc,
 # which macOS cannot compile (ring needs MSVC), but cfg(unix)-only code breaks both the
@@ -2201,12 +2093,6 @@ cmd_windows_check() {
 
 cmd_licence_cross() {
     cross_build_bin weft-licence weft-licence "--features net" "$ROOT/target/licence-cross"
-}
-
-# Cross-builds weft-cog-host (the appliance supervisor) for the Seed. Output:
-# target/cog-host-cross/<triple>/release/weft-cog-host(.stripped).
-cmd_cog_host_cross() {
-    cross_build_bin weftos-cog-host weft-cog-host "" "$ROOT/target/cog-host-cross"
 }
 
 # weft-licence uid isolation check (ADR-106 phase 2 acceptance): on Linux, a
@@ -3022,10 +2908,8 @@ ${BOLD}Commands:${NC}
   gui-egui        Build native egui GUI binary (weft-gui-egui, requires --features native)
   wasi            Build WASM for WASI (wasm32-wasip2)
   browser         Build WASM for browser (wasm32-unknown-unknown)
-  scope <name>    Build a sensor-cog companion app crates/weftos-<name>-scope (ecg, tof); ADR-104
-  scope-web <name> Same for the browser (wasm + wasm-bindgen into crates/weftos-<name>-scope/www/pkg)
-  guide-web       Browser popup for one sensor guide (wasm into crates/weftos-guide-view/www/pkg)
-  ecg-scope[-web] Aliases for scope ecg / scope-web ecg
+  scope <name>    Build a native egui viewer crates/weftos-<name>-scope (room). The sensor-cog
+                  companion apps, guide view and Weave Manager build in WeftOS/weftos-cogs.
   ui              Build React frontend (tsc + vite)
   docker-smoke    Build the root Dockerfile image and run the release health smoke.
   ui-docker       Build the clawft-ui multi-stage Docker image (WEFT-317).
@@ -3153,11 +3037,6 @@ ${BOLD}Commands:${NC}
   glasses         Glasses agent (com.weftos.glasses, Mentra Live / Android 11): cue-asset check, UniFFI
                   Kotlin bindings, weftos-node-core for arm64-v8a (cargo-ndk), JVM unit tests, debug APK
                   of apps/android-glasses-node. Installs nothing; lists missing NDK/JDK/etc.
-  cog-host-x86    Build weft-cog-host for x86_64 Linux servers (photo-gallery) in the pinned
-                  rust image under linux/amd64, offline. Output under target/cog-host-x86/.
-  cog-host-cross [armv7-unknown-linux-gnueabihf|aarch64-unknown-linux-gnu]...
-                  Cross-build weft-cog-host for the Seed in the cogs cross image (same
-                  offline mechanism as licence-cross). Output under target/cog-host-cross/.
   licence-cross [armv7-unknown-linux-gnueabihf|aarch64-unknown-linux-gnu]...
                   Cross-build weft-licence (ADR-106 phase 2, the Seed licence
                   proxy) with the https registry reader in the cogs cross image
@@ -3272,7 +3151,7 @@ parse_args() {
         return 0
     fi
 
-    if [ "$COMMAND" = "licence-cross" ] || [ "$COMMAND" = "cog-host-cross" ]; then
+    if [ "$COMMAND" = "licence-cross" ]; then
         while [ $# -gt 0 ]; do
             case "$1" in
                 armv7|armv7-unknown-linux-gnueabihf) LICENCE_TARGETS+=(armv7-unknown-linux-gnueabihf) ;;
@@ -3333,9 +3212,9 @@ parse_args() {
         fi
     fi
 
-    # scope / scope-web take the companion app name: scripts/build.sh scope <name>
+    # scope takes the viewer name: scripts/build.sh scope <name>
     SCOPE_NAME=""
-    if [ "$COMMAND" = "scope" ] || [ "$COMMAND" = "scope-web" ]; then
+    if [ "$COMMAND" = "scope" ]; then
         if [ $# -gt 0 ] && [[ "$1" != -* ]]; then
             SCOPE_NAME="$1"
             shift
@@ -3438,14 +3317,6 @@ main() {
         wasi)         cmd_wasi ;;
         browser)      cmd_browser ;;
         scope)        cmd_scope "$SCOPE_NAME" ;;
-        scope-web)    cmd_scope_web "$SCOPE_NAME" ;;
-        guide-web)    cmd_guide_web ;;
-        ecg-scope)    cmd_scope ecg ;;
-        ecg-scope-web) cmd_scope_web ecg ;;
-        sound-scope)  cmd_scope sound ;;
-        sound-scope-web) cmd_scope_web sound ;;
-        manager)      cmd_manager ;;
-        manager-web)  cmd_manager_web ;;
         ui)           cmd_ui ;;
         ui-docker)    cmd_ui_docker ;;
         docker-smoke) cmd_docker_smoke ;;
@@ -3476,8 +3347,6 @@ main() {
         cogs-conformance)   cmd_cogs_conformance ;;
         cogs-launcher)      cmd_cogs_launcher ;;
         licence-cross)      cmd_licence_cross ;;
-        cog-host-cross)     cmd_cog_host_cross ;;
-        cog-host-x86)       cmd_cog_host_x86 ;;
         android)            cmd_android ;;
         glasses)            cmd_glasses ;;
         wasm-project)       cmd_wasm_project ;;

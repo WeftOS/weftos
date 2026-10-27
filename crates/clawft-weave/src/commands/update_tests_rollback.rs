@@ -1,7 +1,7 @@
 //! Anti-rollback, key revocation and staleness tests for `weaver update`,
 //! against the loopback mock release server (throwaway key, temp dirs).
 
-use weftos_cog_repo::RevokedKeys;
+use cog_repo::RevokedKeys;
 
 use super::update_flow::{Opts, Outcome};
 use super::update_install::HIGHEST_KEY;

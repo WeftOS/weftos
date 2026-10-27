@@ -3,11 +3,15 @@
 
 use eframe::egui::{self, Color32, RichText};
 use egui_plot::{Legend, Line, Plot, PlotPoint, PlotPoints, Text, VLine};
-use weftos_cog_companion::widgets::{AMBER, GREEN, GREY};
 
 use crate::RoomScope;
 use crate::model;
 use crate::view::{WARN, z_color};
+
+// Status colours, the same values the Cogs companion apps use.
+const GREEN: Color32 = Color32::from_rgb(70, 190, 110);
+const AMBER: Color32 = Color32::from_rgb(230, 170, 40);
+const GREY: Color32 = Color32::from_rgb(140, 140, 140);
 
 const NODE_COLORS: [Color32; 8] = [
     Color32::from_rgb(255, 99, 71),

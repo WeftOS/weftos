@@ -14,7 +14,7 @@ use ed25519_dalek::{Signer, SigningKey};
 
 use super::update_release::Source;
 use super::update_signature::{DOMAIN, SIGNATURE, SIGNED_DOC, Trust};
-use weftos_cog_repo::RevokedKeys;
+use cog_repo::RevokedKeys;
 
 pub const TRIPLE: &str = "test-triple";
 pub const BINS: [(&str, &str); 3] = [("weft", "clawft-cli"), ("weaver", "clawft-weave"), ("weftos", "weftos")];

@@ -16,6 +16,7 @@ pub mod heat;
 pub mod model;
 mod panels;
 pub mod plan;
+mod shot;
 mod tables;
 pub mod view;
 
@@ -353,7 +354,7 @@ impl eframe::App for RoomScope {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         #[cfg(not(target_arch = "wasm32"))]
-        weftos_cog_companion::shot::poll(&ctx);
+        shot::poll(&ctx);
         // keep ticking while idle so frame decodes and the self-screenshot timer are picked up
         ctx.request_repaint_after(std::time::Duration::from_millis(200));
         if self.loaded.is_none() && self.error.is_none() {

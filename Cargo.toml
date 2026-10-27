@@ -63,24 +63,12 @@ members = [
     "crates/eml-core",
     "crates/clawft-app",
     "crates/clawft-gui-egui",
-    "crates/weftos-ecg-scope",
-    "crates/weftos-sensor-guide",
-    # Browser popup: one ADR-104 guide on a canvas (Sensor Explorer).
-    "crates/weftos-guide-view",
-    "crates/weftos-cog-companion",
-    "crates/weftos-tof-scope",
+    # The sensor-cog companion apps, guide format/viewer and Weave Manager live in
+    # WeftOS/weftos-cogs (Cogs extraction B1).
     "crates/weftos-room-scope",
-    "crates/weftos-sound-scope",
     "crates/weftos-bridge-send",
-    # COG-008: off-device WeaveLogic cog repository tooling (sign/verify/install,
-    # signed-only Ed25519 trust model).
-    "crates/weftos-cog-repo",
-    # COG-009: unified cog marketplace catalog (WeaveLogic signed + Cognitum mirror).
-    "crates/weftos-cog-market",
-    # ADR-105: per-project multi-source cog repositories (WeftOS / Cognitum / private).
-    "crates/weftos-cog-sources",
-    # COG-009: on-appliance cog supervisor + lifecycle API (no agent cap).
-    "crates/weftos-cog-host",
+    # Cog repository tooling, catalog, sources and Cog Host ship from
+    # WeftOS/weftos-cogs; see [workspace.dependencies] for the tagged crates.
     # weftos.cog.v1: Cog Host to daemon wire types. No kernel dependency.
     "crates/weftos-cog-protocol",
     # ADR-122: cogbus, the node daemon's cog data plane broker (proto, broker, server, client).
@@ -89,8 +77,6 @@ members = [
     "crates/weft-licence-wire",
     # ADR-106 phase 2: the Seed-side licence proxy (own binary, user and unit).
     "crates/weft-licence",
-    # COG-009: the WeftOS appliance console (egui native + wasm) over the cog-host.
-    "crates/weftos-cog-manager",
     "crates/clawft-substrate",
     "crates/clawft-surface",
     "crates/clawft-canon",
@@ -426,6 +412,15 @@ clawft-service-classify = { version = "0.8.4", path = "crates/clawft-service-cla
 clawft-service-agent = { version = "0.8.4", path = "crates/clawft-service-agent" }
 clawft-cow-memory = { version = "0.8.4", path = "crates/clawft-cow-memory" }
 clawft-versions = { version = "0.8.4", path = "crates/clawft-versions" }
+
+# Cogs product crates, consumed from a tagged WeftOS/weftos-cogs release (Cogs
+# extraction B1). `weaver cog`, `weaver update` and weft-licence's registry
+# reader link these; the Cogs product sources no longer live in this tree.
+# Pinned by commit because tags can move: 643b89f1a02d08c9b15ca4696f09554a241331bb is tag v0.1.4.
+# Target boundary: weftos-cog-protocol only (follow-up card).
+cog-sources = { git = "https://github.com/WeftOS/weftos-cogs", rev = "643b89f1a02d08c9b15ca4696f09554a241331bb" } # v0.1.4
+cog-repo = { git = "https://github.com/WeftOS/weftos-cogs", rev = "643b89f1a02d08c9b15ca4696f09554a241331bb", default-features = false } # v0.1.4
+cog-market = { git = "https://github.com/WeftOS/weftos-cogs", rev = "643b89f1a02d08c9b15ca4696f09554a241331bb" } # v0.1.4
 
 # EML (exp-ln) function approximation
 eml-core = { version = "0.1.0", path = "crates/eml-core" }
