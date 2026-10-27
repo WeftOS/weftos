@@ -129,6 +129,35 @@ fn stop_completes_when_a_shutdown_step_wedges_its_thread() {
 }
 
 #[test]
+fn sigterm_ends_a_daemon_whose_runtime_never_acts_on_it() {
+    // Debug builds only: the hook blocks the daemon's main task before it
+    // waits for a signal, so tokio takes TERM and nothing acts on it (the
+    // 2026-10-13 "SIGTERM ignored"). Only the signal watcher can end it.
+    let d = Daemon::boot(&[("WEFTOS_TEST_WEDGE_SIGNALS", "1")]);
+    wait_for("the signal wedge", Duration::from_secs(10), || d.log().contains("WEFTOS_TEST_WEDGE_SIGNALS set"));
+    let t = Instant::now();
+    d.signal("-TERM");
+    assert!(d.gone_within(Duration::from_secs(12)), "TERM ignored\n--- daemon log ---\n{}", d.log());
+    assert!(t.elapsed() < Duration::from_secs(12), "{:?}", t.elapsed());
+    assert!(d.log().contains("no exit within the shutdown budget of the first signal"), "{}", d.log());
+    assert!(!d.rt().join("kernel.pid").exists(), "the exiting daemon removes its pid file");
+}
+
+#[test]
+fn a_second_sigterm_during_a_stuck_shutdown_exits_at_once() {
+    let d = Daemon::boot(&[("WEFTOS_TEST_WEDGE_SHUTDOWN", "1")]);
+    d.signal("-TERM");
+    wait_for("the wedged shutdown", Duration::from_secs(5), || d.log().contains("WEFTOS_TEST_WEDGE_SHUTDOWN set"));
+    let t = Instant::now();
+    d.signal("-TERM");
+    assert!(d.gone_within(Duration::from_secs(3)), "second TERM ignored\n--- daemon log ---\n{}", d.log());
+    // Well inside the 8 s the budget guard alone would take.
+    assert!(t.elapsed() < Duration::from_secs(3), "{:?}", t.elapsed());
+    assert!(d.log().contains("SIGTERM during shutdown"), "{}", d.log());
+    assert!(!d.rt().join("kernel.pid").exists(), "the exiting daemon removes its pid file");
+}
+
+#[test]
 fn stop_force_finds_a_wedged_daemon_by_its_lock_without_a_pid_file() {
     let d = Daemon::boot(&[]);
     // The 2026-10-13 state: no pid file, and TERM is not acted on.

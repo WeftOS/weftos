@@ -329,3 +329,20 @@ async fn a_changed_ports_file_is_picked_up_by_the_poller() {
     assert_eq!(serde_json::from_str::<serde_json::Value>(&body).unwrap()["xfpre"], "/second");
     assert!(!r.h.reload_if_changed(), "an unchanged source does not reload again");
 }
+
+#[tokio::test]
+async fn stop_accepting_closes_the_listener() {
+    // Daemon shutdown closes the router first (card 1a919ae6), while later
+    // steps may still be running.
+    let r = rig(basic).await;
+    let (status, _, _) = send(r.h.bound, get("/app/x")).await;
+    assert_eq!(status, StatusCode::OK);
+    r.h.stop_accepting();
+    for _ in 0..200 {
+        if TcpStream::connect(r.h.bound).await.is_err() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("router still accepting after stop_accepting");
+}

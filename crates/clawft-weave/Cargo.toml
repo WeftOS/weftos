@@ -150,6 +150,8 @@ rvf-types = { workspace = true, optional = true }
 # peer credentials); every user is gated on cfg(all(unix, feature = "mesh")).
 clawft-mesh-service = { workspace = true, optional = true }
 nix = { version = "0.29", default-features = false, features = ["signal", "process", "fs", "user"] }
+# Signal escalation outside tokio (shutdown_guard); the same registry tokio uses.
+signal-hook-registry = "1.4"
 clawft-mesh-local = { workspace = true }
 
 [dev-dependencies]
