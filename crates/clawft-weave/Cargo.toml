@@ -58,8 +58,9 @@ clawft-platform = { workspace = true }
 clawft-rpc = { workspace = true }
 clawft-versions = { workspace = true }
 clawft-types = { workspace = true }
-# ADR-105: `weaver cog ...` project cog sources, licences, install, catalog.
-weftos-cog-sources = { path = "../weftos-cog-sources", features = ["net"] }
+# ADR-105: `weaver cog ...` project cog sources, licences, install, catalog
+# (the Cogs release's cog-sources).
+cog-sources = { workspace = true, features = ["net"] }
 # weftos.cog.v1 request and verdict types. That crate does not link the kernel.
 weftos-cog-protocol = { path = "../weftos-cog-protocol" }
 # ADR-122: the cog data plane broker the daemon runs (cogbus).
@@ -102,7 +103,7 @@ blake3 = { workspace = true, optional = true }
 ed25519-dalek = { workspace = true }
 libc = "0.2"
 # `weaver update` verifies releases with the COG-008 pinned WeaveLogic release key.
-weftos-cog-repo = { path = "../weftos-cog-repo", default-features = false }
+cog-repo = { workspace = true }
 rand = { workspace = true }
 # The dashboard reporter (heartbeat + token rotation) is a plain HTTPS client.
 reqwest = { workspace = true }

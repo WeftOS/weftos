@@ -1971,6 +1971,9 @@ cross_build_bin() {
     timer_start
     local rc=0 t strip_bin
     mkdir -p "$out/cargo-src"
+    # Git dependencies (the Cogs release crates) come from the host's cargo git cache.
+    local git_mount=()
+    [ -d "$HOME/.cargo/git" ] && git_mount=(-v "$HOME/.cargo/git":/cargo-home/git:ro)
     for t in "${targets[@]}"; do
         case "$t" in
             armv7-unknown-linux-gnueabihf) strip_bin=arm-linux-gnueabihf-strip ;;
@@ -1983,6 +1986,7 @@ cross_build_bin() {
             -v "$HOME/.cargo/registry/cache":/cargo-home/registry/cache:ro \
             -v "$HOME/.cargo/registry/index":/cargo-home/registry/index:ro \
             -v "$out/cargo-src":/cargo-home/registry/src \
+            ${git_mount[@]+"${git_mount[@]}"} \
             -w /src -e HOME=/tmp -e CARGO_HOME=/cargo-home \
             -e CARGO_TARGET_DIR=/target -e RUSTUP_TOOLCHAIN=1.97.1 -e CARGO_NET_OFFLINE=true \
             -e CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc \

@@ -1,4 +1,4 @@
-//! The registry fetch, reusing `weftos-cog-sources` (https reader, registry
+//! The registry fetch, reusing the Cogs release's `cog-sources` (https reader, registry
 //! sha256 and size checks, https-to-http redirect refusal). Feature
 //! `registry`; the Seed build also enables `net` for the https reader.
 //!
@@ -7,10 +7,10 @@
 //! `arch_unavailable`.
 
 use sha2::{Digest, Sha256};
-use weftos_cog_sources::config::{CogLicence, CogSource, LicensedCogs, SourceKind};
-use weftos_cog_sources::fetch::{Reader, MAX_BINARY_BYTES};
-use weftos_cog_sources::resolve::{load_source, Listing, LoadedSource};
-use weftos_cog_sources::{fetch_verified, FetchCtx, RevokedKeys, SourceError};
+use cog_sources::config::{CogLicence, CogSource, LicensedCogs, SourceKind};
+use cog_sources::fetch::{Reader, MAX_BINARY_BYTES};
+use cog_sources::resolve::{load_source, Listing, LoadedSource};
+use cog_sources::{fetch_verified, FetchCtx, RevokedKeys, SourceError};
 
 use crate::providers::{CogEntry, CogFetcher, EntryArtifact, FetchError};
 
@@ -22,7 +22,7 @@ struct BoundedReader {
 }
 
 impl Reader for BoundedReader {
-    fn read(&self, location: &str, max: u64) -> weftos_cog_sources::Result<Vec<u8>> {
+    fn read(&self, location: &str, max: u64) -> cog_sources::Result<Vec<u8>> {
         self.inner.read(location, max.min(self.max))
     }
 }

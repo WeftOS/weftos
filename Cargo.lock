@@ -2132,6 +2132,8 @@ dependencies = [
  "clawft-types",
  "clawft-versions",
  "clawft-weave",
+ "cog-repo",
+ "cog-sources",
  "comfy-table",
  "dashmap",
  "dirs",
@@ -2167,8 +2169,6 @@ dependencies = [
  "weft-licence",
  "weftos",
  "weftos-cog-protocol",
- "weftos-cog-repo",
- "weftos-cog-sources",
  "weftos-cogbus",
  "weftos-cos-console",
  "weftos-display-client",
@@ -2216,6 +2216,74 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "af491d569909a7e4dee0ad7db7f5341fef5c614d5b8ec8cf765732aba3cff681"
 dependencies = [
  "unicode-width",
+]
+
+[[package]]
+name = "cog-host"
+version = "0.8.3"
+source = "git+https://github.com/WeftOS/weftos-cogs?tag=v0.1.2#ca251aa3ce74bcc7293e3126adbe53971d836985"
+dependencies = [
+ "base64 0.22.1",
+ "blake3",
+ "cog-market",
+ "cog-protocol",
+ "cog-repo",
+ "ed25519-dalek",
+ "libc",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "cog-market"
+version = "0.8.3"
+source = "git+https://github.com/WeftOS/weftos-cogs?tag=v0.1.2#ca251aa3ce74bcc7293e3126adbe53971d836985"
+dependencies = [
+ "cog-repo",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "cog-protocol"
+version = "0.8.3"
+source = "git+https://github.com/WeftOS/weftos-cogs?tag=v0.1.2#ca251aa3ce74bcc7293e3126adbe53971d836985"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "cog-repo"
+version = "0.8.3"
+source = "git+https://github.com/WeftOS/weftos-cogs?tag=v0.1.2#ca251aa3ce74bcc7293e3126adbe53971d836985"
+dependencies = [
+ "ed25519-dalek",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "cog-sources"
+version = "0.8.3"
+source = "git+https://github.com/WeftOS/weftos-cogs?tag=v0.1.2#ca251aa3ce74bcc7293e3126adbe53971d836985"
+dependencies = [
+ "chrono",
+ "cog-host",
+ "cog-market",
+ "cog-repo",
+ "ed25519-dalek",
+ "hex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.18",
+ "toml 0.8.23",
 ]
 
 [[package]]
@@ -11136,6 +11204,8 @@ version = "0.8.4-rc.15"
 dependencies = [
  "blake3",
  "chrono",
+ "cog-market",
+ "cog-sources",
  "ed25519-dalek",
  "libc",
  "serde",
@@ -11145,8 +11215,6 @@ dependencies = [
  "thiserror 2.0.18",
  "toml 0.8.23",
  "weft-licence-wire",
- "weftos-cog-market",
- "weftos-cog-sources",
  "zeroize",
 ]
 
@@ -11498,7 +11566,6 @@ dependencies = [
  "image",
  "serde",
  "serde_json",
- "weftos-cog-companion",
 ]
 
 [[package]]

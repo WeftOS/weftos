@@ -427,6 +427,13 @@ clawft-service-agent = { version = "0.8.4-rc.15", path = "crates/clawft-service-
 clawft-cow-memory = { version = "0.8.4-rc.15", path = "crates/clawft-cow-memory" }
 clawft-versions = { version = "0.8.4-rc.15", path = "crates/clawft-versions" }
 
+# Cogs product crates, consumed from a tagged WeftOS/weftos-cogs release (Cogs
+# extraction B1). `weaver cog`, `weaver update` and weft-licence's registry
+# reader link these; the Cogs product sources no longer live in this tree.
+cog-sources = { git = "https://github.com/WeftOS/weftos-cogs", tag = "v0.1.2" }
+cog-repo = { git = "https://github.com/WeftOS/weftos-cogs", tag = "v0.1.2", default-features = false }
+cog-market = { git = "https://github.com/WeftOS/weftos-cogs", tag = "v0.1.2" }
+
 # EML (exp-ln) function approximation
 eml-core = { version = "0.1.0", path = "crates/eml-core" }
 

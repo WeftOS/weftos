@@ -116,10 +116,10 @@ fn run(mut args: Vec<String>) -> Result<(), SvcError> {
 fn fetcher(cfg: &Config) -> Result<Box<dyn weft_licence::providers::CogFetcher>, SvcError> {
     use weft_licence::registry::RegistryFetcher;
     #[cfg(feature = "net")]
-    let reader: Box<dyn weftos_cog_sources::Reader + Send + Sync> =
-        Box::new(weftos_cog_sources::fetch::HttpReader::new());
+    let reader: Box<dyn cog_sources::Reader + Send + Sync> =
+        Box::new(cog_sources::fetch::HttpReader::new());
     #[cfg(not(feature = "net"))]
-    let reader: Box<dyn weftos_cog_sources::Reader + Send + Sync> = Box::new(weftos_cog_sources::FsReader);
+    let reader: Box<dyn cog_sources::Reader + Send + Sync> = Box::new(cog_sources::FsReader);
     Ok(Box::new(RegistryFetcher::new(
         &cfg.registry_url,
         cfg.allow_insecure_registry,

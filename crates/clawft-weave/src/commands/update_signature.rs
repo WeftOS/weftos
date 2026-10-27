@@ -29,7 +29,7 @@ use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use clawft_types::runtime_paths::{self as rp, RUNTIME_DIR_ENV};
-use weftos_cog_repo::{RevokedKeys, SUBJECTS_FILE_NAME};
+use cog_repo::{RevokedKeys, SUBJECTS_FILE_NAME};
 
 /// The pinned WeaveLogic release public key (Ed25519, hex). Generated
 /// 2026-10-03 as a dedicated release key; its seed is the
@@ -278,7 +278,7 @@ mod tests {
         let Trust::Pinned { key, .. } = Trust::pinned_with(RevokedKeys::none()) else { panic!() };
         assert_eq!(hex::encode(key.to_bytes()), WEFTOS_RELEASE_PUBKEY_HEX);
         // Never the COG-008 cog-signing key: the two must not overlap.
-        assert_ne!(WEFTOS_RELEASE_PUBKEY_HEX, weftos_cog_repo::WEAVELOGIC_PUBKEY_HEX);
+        assert_ne!(WEFTOS_RELEASE_PUBKEY_HEX, cog_repo::WEAVELOGIC_PUBKEY_HEX);
     }
 
     #[test]

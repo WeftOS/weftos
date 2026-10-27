@@ -10,12 +10,12 @@ description = "weft-licence (ADR-106 phase 2): the Seed-side licence proxy. Chec
 
 [features]
 default = ["registry"]
-# Registry fetch through weftos-cog-sources' https reader (sha256 + size
+# Registry fetch through the Cogs release's cog-sources https reader (sha256 + size
 # checked, https-to-http redirects refused). Off by default so the core
 # stays dependency-light; the Seed build turns it on.
-registry = ["dep:weftos-cog-sources", "dep:weftos-cog-market", "dep:chrono"]
+registry = ["dep:cog-sources", "dep:cog-market", "dep:chrono"]
 # Real https for the registry reader (rustls, pulls ring).
-net = ["registry", "weftos-cog-sources/net"]
+net = ["registry", "cog-sources/net"]
 
 [lib]
 name = "weft_licence"
@@ -36,8 +36,8 @@ blake3 = { workspace = true }
 ed25519-dalek = { version = "2", default-features = false, features = ["std", "zeroize"] }
 zeroize = { workspace = true }
 libc = "0.2"
-weftos-cog-sources = { path = "../weftos-cog-sources", optional = true }
-weftos-cog-market = { path = "../weftos-cog-market", optional = true }
+cog-sources = { workspace = true, optional = true }
+cog-market = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }
 
 [dev-dependencies]
