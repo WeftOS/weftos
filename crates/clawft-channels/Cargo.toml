@@ -98,6 +98,11 @@ rustfft = { workspace = true, optional = true }
 # - lettre: async SMTP with rustls (STARTTLS + implicit TLS)
 # - mailparse: RFC822 body/header decode for inbound
 # `tls` feature gates `imap::connect` / `connect_starttls` (native-tls).
+# TODO(imap-3-stable): imap 2.4 pulls lexical-core 0.7.6 through nom 5 (a low-severity
+# Dependabot alert, dismissed 2026-10-27 as tolerable risk). The only fix is imap 3, which is
+# still an alpha. When imap 3.0.0 ships stable, move to it (an alpha port exists as commit
+# d98302f96 on wt/dependabot: builder-based connect, native-tls dependency dropped) and remove
+# this note. Board card: "imap 3 stable: move clawft-channels off imap 2.4".
 imap = { version = "2.4", default-features = false, features = ["tls"], optional = true }
 native-tls = { version = "0.2", optional = true }
 lettre = { version = "0.11", default-features = false, features = ["builder", "hostname", "smtp-transport", "tokio1", "tokio1-rustls-tls"], optional = true }
