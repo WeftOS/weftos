@@ -95,6 +95,11 @@ async fn a_stalled_block_reader_falls_back_at_the_deadline_and_is_told() {
         "{waited:?}"
     );
     assert_eq!((w.demotions(), w.block_readers()), (1, 0));
+    assert!(
+        w.waited() >= Duration::from_millis(45) && w.waited() <= waited,
+        "the writer counts its own wait: {:?}",
+        w.waited()
+    );
     // No more waiting.
     let t = Instant::now();
     for i in 9..=100 {

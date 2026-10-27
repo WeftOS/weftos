@@ -99,6 +99,7 @@ pub struct StreamWriter {
     demote: mpsc::UnboundedSender<u64>,
     deadline: Duration,
     demotions: u64,
+    waited: Duration,
 }
 
 impl std::fmt::Debug for StreamWriter {
@@ -176,6 +177,7 @@ impl Client {
             demote,
             deadline,
             demotions: 0,
+            waited: Duration::ZERO,
         })
     }
 }
@@ -217,6 +219,12 @@ impl StreamWriter {
     /// `block` readers this writer stopped waiting for.
     pub fn demotions(&self) -> u64 {
         self.demotions
+    }
+
+    /// Time this writer has spent waiting for lagging `block` readers.
+    /// Readers of any other policy never add to it.
+    pub fn waited(&self) -> Duration {
+        self.waited
     }
 
     /// `block` readers this writer currently waits for.
@@ -289,6 +297,7 @@ impl StreamWriter {
                     _ => std::thread::sleep(Duration::from_micros(50)),
                 }
             }
+            self.waited += start.elapsed();
         }
         Ok(self.ring.write(t_ns, super::now_ns(), data))
     }
@@ -298,13 +307,16 @@ impl StreamWriter {
     pub async fn write_async(&mut self, t_ns: u64, data: &[u8]) -> Result<u64, ClientError> {
         self.check(data)?;
         let seq = self.ring.head() + 1;
-        let start = Instant::now();
-        while self.lagging(seq) {
-            if start.elapsed() >= self.deadline {
-                self.demote_lagging(seq);
-                break;
+        if self.lagging(seq) {
+            let start = Instant::now();
+            while self.lagging(seq) {
+                if start.elapsed() >= self.deadline {
+                    self.demote_lagging(seq);
+                    break;
+                }
+                tokio::time::sleep(Duration::from_micros(200)).await;
             }
-            tokio::time::sleep(Duration::from_micros(200)).await;
+            self.waited += start.elapsed();
         }
         Ok(self.ring.write(t_ns, super::now_ns(), data))
     }

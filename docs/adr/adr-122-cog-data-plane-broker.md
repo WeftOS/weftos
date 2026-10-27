@@ -571,8 +571,62 @@ daemon's uid, so a per-device allowlist is not enforceable there and must refuse
 | Raw cog-to-cog sockets | every pair negotiates its own format; no governance, no discovery, no drop accounting |
 
 For the stream rings themselves, `iceoryx2` (Rust, Apache-2.0/MIT, zero-copy shared-memory
-IPC) is evaluated in B2 before writing our own `memfd` ring. The decision record for that
-choice is the B2 result.
+IPC) was evaluated for B2 against our own `memfd` ring. Updated 2026-10-27 (card
+`cogbus-iceoryx2`): **we keep our ring. iceoryx2 is not used for cog streams.** We read it at
+v0.10.0 (`135d09dd8`, 2026-09-18; main at `1520519d9` changes none of the points below),
+built a probe on macOS and on aarch64 Linux (Debian VM), and checked that it compiles for
+armv7, x86-64 Linux and Windows-gnu.
+
+What fits:
+
+- **Licence and toolchain.** MIT OR Apache-2.0; MSRV 1.89, against our 1.95.
+- **Platforms.** Every one we run. Its README rates Linux x86-64, aarch64 and 32-bit, macOS
+  and Windows as tier 2.
+- **Crash cleanup.** After a publisher was killed with `SIGKILL`, its `/dev/shm` segments and
+  node files were removed when the next node started (`cleanup-dead-nodes-on-creation` is on
+  by default).
+- **Block with a deadline.** A backpressure handler retried for 50 ms and then dropped data
+  for that subscriber only. One send waited 50.1 ms, and a fast subscriber still got 20 of 20.
+- **Throughput.** A 300 s cross-process soak of 16 kHz PCM (640-byte chunks, macOS, safe
+  overflow on) delivered 15000 of 15000 with no gaps or corruption. Mean latency was 751 µs
+  (the reader polls every 1 ms), the maximum 12.6 ms, and the worst write 1.0 ms.
+- **Weight.** 62 crates, including `bindgen` and `clang-sys` as unconditional build
+  dependencies (they only run for QNX). A clean release build of the probe took 33 s.
+
+Why it does not fit (the probe showed each one):
+
+- **The broker cannot be the gatekeeper.** Services are found by name under a shared root
+  (`/tmp/iceoryx2` plus `/dev/shm/iox2_*`). Any process of the same uid can list every
+  service, subscribe to it and create a publisher in it without asking anyone. The probe did
+  all three to a service it had no part in. The broker's `SO_PEERCRED` check and the
+  governance decision on `stream_subscribe` would sit beside the data path, not in front of
+  it. Its roadmap lists "Identity and Access Management" as not started.
+- **It breaks per-cog uids (§4a).** Files are `0600` and directories `0750`, owner only, with
+  no group mode. On Linux, a process of uid 61001 could not even create a node under a root
+  that uid 61000 had created (`InternalError`). The only other mode is the `dev_permissions`
+  feature, which makes everything `0666`/`0777`. Its own `Cargo.toml` says that "shall not be
+  used in production".
+- **Containers (§4c).** Its Docker example bind-mounts the host's whole `/dev/shm` and
+  `/tmp/iceoryx2` into each container, with matching uids. A cog container would then see
+  every stream on the node. Our design mounts only the `0660` socket, and the ring descriptor
+  crosses it by `SCM_RIGHTS`.
+- **Readers are not read-only.** Subscribers map the payload segment read-only, but they must
+  map the service's dynamic config and connection queues read-write. Our readers get a
+  read-only descriptor, and the kernel refuses a writable mapping.
+- **Reader policy is set per service, not per reader (§6).** Safe overflow (drop-oldest) is a
+  property of the service. Opening the same service with the other setting fails with
+  `IncompatibleOverflowBehavior`. If overflow is off so that `block` can work, a demoted or
+  `drop-oldest` reader loses the newest samples, not the oldest: the slow subscriber kept
+  seqs 1-4 of 20. Mixing policies on one topic would take two services and two writes.
+- **Memory grows with the number of readers.** Its payload segment holds
+  `max_subscribers × buffer` samples. At the depth of our 4 MiB ring (6550 records of
+  640 bytes), it was 4.6 MB for one subscriber and 37 MB for eight. Ours is one 4 MiB ring
+  plus a 64-byte cursor page per `block` reader. That difference matters on a Pi Zero 2 W
+  with 473 MB.
+
+Revisit if iceoryx2 gains access control, or a way to hand an already-open segment to another
+process (fd passing) instead of opening it by name. Until then, two cogs that share a uid and
+already trust each other could use it directly, but the broker would neither see nor log it.
 
 ## Consequences
 
@@ -606,6 +660,11 @@ B1–B4 are the plan's P2. B5–B6 are P6. S1 is the primitive the plan's P4 (`n
 The owner took the recommended option for each:
 
 1. **Stream rings**: evaluate iceoryx2 first in B2; write our own `memfd` ring only if it does not fit.
+   Updated 2026-10-27: evaluated at v0.10.0, and it does not fit. Cogs find its services by
+   name, so the broker cannot control who opens a stream. It has no permission mode that
+   works with per-cog uids or containers short of opening every stream to everyone. And its
+   overflow policy is set per service, not per reader. The `memfd` ring from B2 stays. The
+   reasons and evidence are under "Alternatives considered".
 2. **Reading encoding on the socket**: length-prefixed JSON, matching the mesh today.
 3. **Audit depth**: governance decisions and the activity log for declare, subscribe and
    refuse; no chain event per subscription.

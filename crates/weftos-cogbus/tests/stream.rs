@@ -176,10 +176,11 @@ async fn a_stalled_drop_oldest_reader_does_not_slow_the_writer() {
     assert!(r.try_next().is_none(), "resumes at the head");
     let stalled = rate(&mut w);
     eprintln!("writer: {alone:.0} records/s alone, {stalled:.0} with a stalled drop-oldest reader");
-    assert!(
-        stalled > alone * 0.5,
-        "stalled reader slowed the writer: {alone:.0} -> {stalled:.0}"
-    );
+    // Throughput is only reported: on a loaded machine it halves with or
+    // without a reader. The writer's own wait is the measure: four laps
+    // past a reader that never reads cost it nothing.
+    assert_eq!(w.waited(), Duration::ZERO, "the writer waited for a drop-oldest reader");
+    assert_eq!(w.demotions(), 0);
     // The reader is now a ring behind: it jumps, and the gap is visible.
     w.write(0, &chunk).unwrap();
     let head = w.last_seq();
