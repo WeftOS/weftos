@@ -98,6 +98,17 @@ Both declare `~/llm`'s helpers (`bin/eikon`, `bin/sam`, `bin/depth`) as runtime 
 through the `llm_home` project-context key; the models and helpers stay owned by `~/llm`.
 Install with `weftos init --claude --grok --codex --agent eikon --agent eikon-specialist`.
 
+### CAN expert (2026-10-27)
+
+| Package | Kind | Role |
+|---|---|---|
+| `can-expert/` | specialist | Graded CAN-family brain. Corpus is `skills/can-brain/references/`. |
+
+The Desktop `CAN-STANDARDS.md` draft is a proposal layer inside that corpus, not an accepted
+bus map. `.grok/agents/can-expert.md` and `.grok/skills/can-brain/` are checked in for Grok.
+Claude and Codex get theirs from `weftos init --claude --codex --agent can-expert`
+(`.claude/agents/` and `.claude/skills/` are rendered, not tracked).
+
 ### Deliberately excluded from this port
 
 | Source agent | Reason |

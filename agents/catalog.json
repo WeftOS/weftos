@@ -40,6 +40,47 @@
       "path": "agents/weftos/app-deployer"
     },
     {
+      "id": "can-expert",
+      "name": "can-expert",
+      "nickname": "CAN brain",
+      "kind": "specialist",
+      "role": "CAN-family expert for WeftOS nodes, buses, and the readings they publish",
+      "description": "Expert on the CAN family for WeftOS: classic CAN CC (2.0A/B), CAN FD, CAN XL, the higher layers used on vehicles and sensor nodes (CANopen, J1939, ISOBUS, NMEA 2000, DeviceNet, DroneCAN, Cyphal, ISO-TP, UDS, OBD-II, K-line, LIN), and the host tools (SocketCAN, DBC, cantools, python-can, ESP32 TWAI, Zephyr, STM32 FDCAN). Grounds every claim in the can-brain references and grades it documented, inferred, or unknown. Use when: a WeftOS node, cog, DBC, or wiring choice touches CAN; a draft maps a sensor_types id onto a PGN or CANopen profile; someone asks whether a frame can carry time, audio, or a signed reading. NOT for: inventing an ID allocation, a scale factor, or a bit-timing register value the corpus does not cite; accepting the Desktop CAN-STANDARDS draft; adding a mesh.sensor.v1 topic; timestamping TDoA off a CAN frame.",
+      "trust_tier": "internal",
+      "capabilities": [
+        "can_corpus_query",
+        "can_claim_grade"
+      ],
+      "hosts": [
+        "claude",
+        "grok",
+        "codex"
+      ],
+      "skills": [
+        "can-brain"
+      ],
+      "requires": [
+        {
+          "skill": "can-brain"
+        }
+      ],
+      "provenance": {
+        "source_registry": "weftos (this repo) plus the operator Desktop CAN-STANDARDS draft",
+        "source_url": null,
+        "upstream_license": "none (internal harness agent, not open-source)",
+        "upstream_commit": null,
+        "adopted_at": "2026-10-27",
+        "verdict": "build",
+        "notes": "Built for the WeftOS carry deck, the Civic K-line bridge, and the VENTUNO Q hub. The brain cites public CiA, kernel, and vendor pages that were opened, plus in-repo copper-bus notes and proposed ADR-124. The Desktop draft is ingested as a proposal layer and is not accepted by this package."
+      },
+      "version": "0.8.4-rc.15",
+      "digest": "sha256:c2e1da51c3d0179a61b09f49a064cab6cee2d9b95f874e31d8b7dcedf421e023",
+      "parent": null,
+      "state": "active",
+      "dependencies": [],
+      "path": "agents/can-expert"
+    },
+    {
       "id": "chain-guardian",
       "name": "chain-guardian",
       "nickname": "chain-guardian",

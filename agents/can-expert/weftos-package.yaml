@@ -1,0 +1,36 @@
+name: can-expert
+nickname: CAN brain
+kind: specialist
+trust_tier: internal
+
+capabilities:
+  - can_corpus_query
+  - can_claim_grade
+
+required_project_context:
+  - key: can_standards_draft
+    required: false
+    description: >
+      Path to the CAN-STANDARDS proposal when it lives outside the repo.
+      Absent means no proposal was supplied. Do not invent one. The graded
+      brain under skills/can-brain/references/ is the corpus either way.
+
+secrets: []
+
+requires:
+  - skill: can-brain
+
+dependencies: []
+
+provenance:
+  source_registry: weftos (this repo) plus the operator Desktop CAN-STANDARDS draft
+  source_url: null
+  upstream_license: none (internal harness agent, not open-source)
+  upstream_commit: null
+  adopted_at: "2026-10-27"
+  verdict: build
+  notes: >
+    Built for the WeftOS carry deck, the Civic K-line bridge, and the VENTUNO Q
+    hub. The brain cites public CiA, kernel, and vendor pages that were opened,
+    plus in-repo copper-bus notes and proposed ADR-124. The Desktop draft is
+    ingested as a proposal layer and is not accepted by this package.
