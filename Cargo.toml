@@ -416,11 +416,11 @@ clawft-versions = { version = "0.8.4-rc.15", path = "crates/clawft-versions" }
 # Cogs product crates, consumed from a tagged WeftOS/weftos-cogs release (Cogs
 # extraction B1). `weaver cog`, `weaver update` and weft-licence's registry
 # reader link these; the Cogs product sources no longer live in this tree.
-# Pinned by commit because tags can move: 6d769c2562777f84c2529275388966a96eee6f31 is tag v0.1.3.
+# Pinned by commit because tags can move: 643b89f1a02d08c9b15ca4696f09554a241331bb is tag v0.1.4.
 # Target boundary: weftos-cog-protocol only (follow-up card).
-cog-sources = { git = "https://github.com/WeftOS/weftos-cogs", rev = "6d769c2562777f84c2529275388966a96eee6f31" } # v0.1.3
-cog-repo = { git = "https://github.com/WeftOS/weftos-cogs", rev = "6d769c2562777f84c2529275388966a96eee6f31", default-features = false } # v0.1.3
-cog-market = { git = "https://github.com/WeftOS/weftos-cogs", rev = "6d769c2562777f84c2529275388966a96eee6f31" } # v0.1.3
+cog-sources = { git = "https://github.com/WeftOS/weftos-cogs", rev = "643b89f1a02d08c9b15ca4696f09554a241331bb" } # v0.1.4
+cog-repo = { git = "https://github.com/WeftOS/weftos-cogs", rev = "643b89f1a02d08c9b15ca4696f09554a241331bb", default-features = false } # v0.1.4
+cog-market = { git = "https://github.com/WeftOS/weftos-cogs", rev = "643b89f1a02d08c9b15ca4696f09554a241331bb" } # v0.1.4
 
 # EML (exp-ln) function approximation
 eml-core = { version = "0.1.0", path = "crates/eml-core" }
