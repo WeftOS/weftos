@@ -432,11 +432,23 @@ jobs:
     # WEFT-593: use discrete plan outputs instead of fromJson(full manifest).
     if: ${{ needs.plan.outputs.is-prerelease != 'true' || needs.plan.outputs.publish-prereleases == 'true' }}
     steps:
+      # The tap lives in the weave-logic-ai org and this repo in WeftOS. A GitHub App
+      # owned by weave-logic-ai, installed only on homebrew-tap with Contents: write,
+      # mints a short-lived token per run (org policy disallows personal tokens).
+      # Hand edit: dist's allow-dirty = ["ci"] keeps it on regeneration checks.
+      - name: Mint homebrew-tap token
+        id: tap-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.TAP_APP_ID }}
+          private-key: ${{ secrets.TAP_APP_PRIVATE_KEY }}
+          owner: weave-logic-ai
+          repositories: homebrew-tap
       - uses: actions/checkout@v6
         with:
           persist-credentials: true
           repository: "weave-logic-ai/homebrew-tap"
-          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          token: ${{ steps.tap-token.outputs.token }}
       # So we have access to the formula
       - name: Fetch homebrew formulae
         uses: actions/download-artifact@v7
