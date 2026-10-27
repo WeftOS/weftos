@@ -589,7 +589,11 @@ What fits:
   for that subscriber only. One send waited 50.1 ms, and a fast subscriber still got 20 of 20.
 - **Throughput.** A 300 s cross-process soak of 16 kHz PCM (640-byte chunks, macOS, safe
   overflow on) delivered 15000 of 15000 with no gaps or corruption. Mean latency was 751 µs
-  (the reader polls every 1 ms), the maximum 12.6 ms, and the worst write 1.0 ms.
+  (the reader polls every 1 ms), the maximum 12.6 ms, and the worst write 1.0 ms. Our ring
+  did as well on the same machine in the same 300 s soak (`tests/stream_soak.rs`, debug
+  build, through the broker): `drop-oldest` and `block` each delivered 15000 of 15000 with
+  none skipped, none corrupt and no demotions. Mean latency was 1.26 and 1.30 ms, the
+  maximum 14.6 and 13.7 ms, and the worst write 330 and 807 µs.
 - **Weight.** 62 crates, including `bindgen` and `clang-sys` as unconditional build
   dependencies (they only run for QNX). A clean release build of the probe took 33 s.
 
