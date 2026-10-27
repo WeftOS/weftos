@@ -1,7 +1,7 @@
 # ADR-104: Sensor guides ship with sensor cogs
 
 - **Status**: Accepted (2026-10-01, owner: "make this a thing we provide with all of our sensor cogs, and maybe other places too")
-- **Successor**: [COG-104](https://github.com/WeftOS/weftos-cogs/blob/v0.1.2/docs/decisions/COG-104-sensor-guides.md) in WeftOS/weftos-cogs (Cogs extraction, 2026-10-27). Cogs owns guide packaging, the guide format and renderer, companion integration and per-cog content. The Cogs product crates it names now live in that repository without the `weftos-` prefix. This record stays as written.
+- **Successor**: [COG-104](https://github.com/WeftOS/weftos-cogs/blob/v0.1.3/docs/decisions/COG-104-sensor-guides.md) in WeftOS/weftos-cogs (Cogs extraction, 2026-10-27). Cogs owns guide packaging, the guide format and renderer, companion integration and per-cog content. The Cogs product crates it names now live in that repository without the `weftos-` prefix. This record stays as written.
 - **Date**: 2026-10-01
 - **Updated**: 2026-10-01. A1: companion apps share one shell, `weftos-cog-companion` (decision 5); second sensor, `sen0628-tof` and `weft-tof-scope`; `grid` diagram added (decision 1).
 - **Deciders**: Owner / platform

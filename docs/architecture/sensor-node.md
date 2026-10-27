@@ -2,6 +2,8 @@
 
 A cog is the interface to one thing we build against: a sensor, a speaker, a display, a camera, or a software endpoint. The thing can sit on an ESP32-S2, an ESP32-C5, a Pi, or a Linux container on a machine with none of that hardware. The board must not decide what the interaction means, or which machine is allowed to carry it out. That holds when every board runs a WeftOS node, the container we already run stays a WeftOS host, and the mesh carries the cog's frames to whichever node is doing the work.
 
+Ownership: the Cogs product (Cog Host, catalog, sources, Manager, guides, companion apps) lives in [WeftOS/weftos-cogs](https://github.com/WeftOS/weftos-cogs/tree/v0.1.3). WeftOS consumes its `cog-sources`, `cog-repo` and `cog-market` crates by tag, pinned by commit; the target boundary is the `weftos-cog-protocol` crate alone.
+
 This is a spec for that split. It is the cog split we already planned. It is not a change to steps 1–3 of the RuView sensor-contracts plan, and it does not replace the container runtime in ADR-100.
 
 ## The cog is the unit

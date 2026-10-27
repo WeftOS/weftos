@@ -25,7 +25,7 @@ signup). Rebuild it after editing a file or after a catalog pull.
 
 ## Catalog: hardware -> software link
 
-`crates/cog-market/catalog/catalog.json` in [WeftOS/weftos-cogs](https://github.com/WeftOS/weftos-cogs/tree/v0.1.2/crates/cog-market/catalog)
+`crates/cog-market/catalog/catalog.json` in [WeftOS/weftos-cogs](https://github.com/WeftOS/weftos-cogs/tree/v0.1.3/crates/cog-market/catalog)
 (moved out of this tree in the Cogs extraction) is the typed catalog the console and dashboard read
 (Projects -> Modules -> Chips). A module links to the software that drives it with `cogs: [<cog id>]`,
 and may carry `firmware` facts (`version`, `read_with`, `read_config_key`, `update`, `url`, `notes`;

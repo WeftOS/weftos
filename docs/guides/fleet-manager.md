@@ -8,7 +8,7 @@ through the cog host. Design brief: `docs/research/fleet-manager/network-tab-bri
 This page covers the WeftOS side: the daemon snapshot, the gateway and the node
 journal. The console itself (Weave Manager, its Network tab) is part of the Cogs
 product and is documented in WeftOS/weftos-cogs
-([docs/guides/fleet-manager.md at v0.1.2](https://github.com/WeftOS/weftos-cogs/blob/v0.1.2/docs/guides/fleet-manager.md)).
+([docs/guides/fleet-manager.md at v0.1.3](https://github.com/WeftOS/weftos-cogs/blob/v0.1.3/docs/guides/fleet-manager.md)).
 
 ## From the command line
 

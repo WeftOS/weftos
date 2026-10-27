@@ -2221,7 +2221,7 @@ dependencies = [
 [[package]]
 name = "cog-host"
 version = "0.8.3"
-source = "git+https://github.com/WeftOS/weftos-cogs?tag=v0.1.2#ca251aa3ce74bcc7293e3126adbe53971d836985"
+source = "git+https://github.com/WeftOS/weftos-cogs?rev=6d769c2562777f84c2529275388966a96eee6f31#6d769c2562777f84c2529275388966a96eee6f31"
 dependencies = [
  "base64 0.22.1",
  "blake3",
@@ -2237,7 +2237,7 @@ dependencies = [
 [[package]]
 name = "cog-market"
 version = "0.8.3"
-source = "git+https://github.com/WeftOS/weftos-cogs?tag=v0.1.2#ca251aa3ce74bcc7293e3126adbe53971d836985"
+source = "git+https://github.com/WeftOS/weftos-cogs?rev=6d769c2562777f84c2529275388966a96eee6f31#6d769c2562777f84c2529275388966a96eee6f31"
 dependencies = [
  "cog-repo",
  "serde",
@@ -2248,7 +2248,7 @@ dependencies = [
 [[package]]
 name = "cog-protocol"
 version = "0.8.3"
-source = "git+https://github.com/WeftOS/weftos-cogs?tag=v0.1.2#ca251aa3ce74bcc7293e3126adbe53971d836985"
+source = "git+https://github.com/WeftOS/weftos-cogs?rev=6d769c2562777f84c2529275388966a96eee6f31#6d769c2562777f84c2529275388966a96eee6f31"
 dependencies = [
  "serde",
  "serde_json",
@@ -2258,7 +2258,7 @@ dependencies = [
 [[package]]
 name = "cog-repo"
 version = "0.8.3"
-source = "git+https://github.com/WeftOS/weftos-cogs?tag=v0.1.2#ca251aa3ce74bcc7293e3126adbe53971d836985"
+source = "git+https://github.com/WeftOS/weftos-cogs?rev=6d769c2562777f84c2529275388966a96eee6f31#6d769c2562777f84c2529275388966a96eee6f31"
 dependencies = [
  "ed25519-dalek",
  "hex",
@@ -2270,7 +2270,7 @@ dependencies = [
 [[package]]
 name = "cog-sources"
 version = "0.8.3"
-source = "git+https://github.com/WeftOS/weftos-cogs?tag=v0.1.2#ca251aa3ce74bcc7293e3126adbe53971d836985"
+source = "git+https://github.com/WeftOS/weftos-cogs?rev=6d769c2562777f84c2529275388966a96eee6f31#6d769c2562777f84c2529275388966a96eee6f31"
 dependencies = [
  "chrono",
  "cog-host",
