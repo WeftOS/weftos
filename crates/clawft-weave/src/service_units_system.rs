@@ -173,7 +173,7 @@ pub fn systemd_system_unit(exe: &Path) -> String {
     format!(
         "[Unit]\n\
 Description=WeftOS machine mesh service\n\
-Documentation=https://github.com/weave-logic-ai/weftos\n\
+Documentation=https://github.com/WeftOS/weftos\n\
 After=network.target\n\
 StartLimitIntervalSec=60\n\
 StartLimitBurst=5\n\

@@ -10,7 +10,7 @@ multi-stage Dockerfile** (compiles static musl `weft` from the tag — no
 cargo-dist asset download; WEFT-594). Typical compressed size is ~30–40 MB.
 Multi-arch (`linux/amd64` + `linux/arm64`) is produced on native GitHub
 runners (no QEMU for arm64 Rust). Canonical operator guide:
-[docs/deployment/docker.md](https://github.com/weave-logic-ai/weftos/blob/master/docs/deployment/docker.md).
+[docs/deployment/docker.md](https://github.com/WeftOS/weftos/blob/master/docs/deployment/docker.md).
 
 ## Prerequisites
 
@@ -21,8 +21,8 @@ runners (no QEMU for arm64 Rust). Canonical operator guide:
 Pull the pre-built image and run the gateway:
 
 ```bash
-docker pull ghcr.io/weave-logic-ai/weftos:latest
-docker run --rm -it ghcr.io/weave-logic-ai/weftos:latest --version
+docker pull ghcr.io/weftos/weftos:latest
+docker run --rm -it ghcr.io/weftos/weftos:latest --version
 ```
 
 By default the container starts in gateway mode (`weft gateway`).
@@ -33,7 +33,7 @@ Clone the repository and build a static musl binary, then build the Docker
 image:
 
 ```bash
-git clone https://github.com/weave-logic-ai/clawft.git
+git clone https://github.com/WeftOS/weftos.git
 cd clawft
 
 # Build the static binary (requires musl target)
@@ -58,7 +58,7 @@ local config into the container:
 ```bash
 docker run --rm -it \
   -v "$HOME/.clawft:/root/.clawft:ro" \
-  ghcr.io/weave-logic-ai/weftos:latest gateway
+  ghcr.io/weftos/weftos:latest gateway
 ```
 
 ### Environment Variables
@@ -70,7 +70,7 @@ docker run --rm -it \
   -e OPENAI_API_KEY="sk-..." \
   -e CLAWFT_CONFIG="/root/.clawft/config.json" \
   -v "$HOME/.clawft:/root/.clawft:ro" \
-  ghcr.io/weave-logic-ai/weftos:latest gateway
+  ghcr.io/weftos/weftos:latest gateway
 ```
 
 ### Workspace Persistence
@@ -81,7 +81,7 @@ directory:
 ```bash
 docker run --rm -it \
   -v "$HOME/.clawft:/root/.clawft" \
-  ghcr.io/weave-logic-ai/weftos:latest gateway
+  ghcr.io/weftos/weftos:latest gateway
 ```
 
 ## Docker Compose
@@ -91,7 +91,7 @@ A Docker Compose configuration for running the gateway with persistent storage:
 ```yaml
 services:
   clawft:
-    image: ghcr.io/weave-logic-ai/weftos:latest
+    image: ghcr.io/weftos/weftos:latest
     command: ["gateway"]
     restart: unless-stopped
     volumes:
@@ -150,7 +150,7 @@ Check that the config file is valid JSON and the volume mount path is correct:
 ```bash
 docker run --rm -it \
   -v "$HOME/.clawft:/root/.clawft:ro" \
-  ghcr.io/weave-logic-ai/weftos:latest status --detailed
+  ghcr.io/weftos/weftos:latest status --detailed
 ```
 
 **Permission denied on config file**
@@ -166,7 +166,7 @@ chmod 644 ~/.clawft/config.json
 Verify DNS and network access from the container:
 
 ```bash
-docker run --rm ghcr.io/weave-logic-ai/weftos:latest agent -m "ping"
+docker run --rm ghcr.io/weftos/weftos:latest agent -m "ping"
 ```
 
 If running behind a corporate proxy, pass proxy environment variables:
@@ -249,7 +249,7 @@ Release images are published by `.github/workflows/release-docker.yml`:
    — `ubuntu-latest` → `linux/amd64`, `ubuntu-24.04-arm` → `linux/arm64`
    (no QEMU for compilation).
 2. Per-platform digests merged with `docker buildx imagetools create` into
-   `ghcr.io/weave-logic-ai/weftos:latest` and `:vX.Y.Z`.
+   `ghcr.io/weftos/weftos:latest` and `:vX.Y.Z`.
 3. Post-publish `GET /api/health` smoke (WEFT-550).
 
 Local host-arch build:

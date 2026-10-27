@@ -1,7 +1,7 @@
 # WeaveLogic Web Properties — Deploy Origins
 
 Pin-down of where each ADR-015 web property is built and deployed from, so
-operators of **this** repo (`weave-logic-ai/weftos`, formerly clawft) know what
+operators of **this** repo (`WeftOS/weftos`, formerly clawft) know what
 is in-tree vs out-of-tree.
 
 Source of the open question: `.planning/reviews/0.7.0-release-gate/14-deployment-release.md`
@@ -46,7 +46,7 @@ marketing property, **not** the standalone assessor app. Do not treat
 | Attribute | Value |
 |-----------|--------|
 | Role | WeftOS platform documentation (Fumadocs) |
-| Repo | **This repo** — https://github.com/weave-logic-ai/weftos |
+| Repo | **This repo** — https://github.com/WeftOS/weftos |
 | In-tree source | `docs/src/` |
 | Live check (2026-07-31) | HTTP 200; `server: Vercel`; CNAME `*.vercel-dns-016.com` |
 | Related artifacts | `install.sh` published at https://weftos.weavelogic.ai/install.sh (see [install.md](./install.md)) |

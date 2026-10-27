@@ -10,7 +10,7 @@ description: Install WeftOS from pre-built binaries, Homebrew, Docker, cargo, or
 ### Shell installer (Linux / macOS)
 
 ```bash
-curl -fsSL https://github.com/weave-logic-ai/weftos/releases/latest/download/clawft-cli-installer.sh | sh
+curl -fsSL https://github.com/WeftOS/weftos/releases/latest/download/clawft-cli-installer.sh | sh
 ```
 
 ### Homebrew (macOS / Linux)
@@ -21,7 +21,7 @@ brew install weave-logic-ai/tap/clawft-cli
 
 ### Download binary manually
 
-Pre-built binaries for all platforms are available on the [GitHub Releases](https://github.com/weave-logic-ai/weftos/releases) page.
+Pre-built binaries for all platforms are available on the [GitHub Releases](https://github.com/WeftOS/weftos/releases) page.
 
 | Platform | Binary |
 |----------|--------|
@@ -34,7 +34,7 @@ Pre-built binaries for all platforms are available on the [GitHub Releases](http
 ### PowerShell installer (Windows)
 
 ```powershell
-irm https://github.com/weave-logic-ai/weftos/releases/latest/download/clawft-cli-installer.ps1 | iex
+irm https://github.com/WeftOS/weftos/releases/latest/download/clawft-cli-installer.ps1 | iex
 ```
 
 ## Verify
@@ -50,8 +50,8 @@ weft tools list   # Show built-in tools
 ### Docker
 
 ```bash
-docker pull ghcr.io/weave-logic-ai/weftos:latest
-docker run --rm ghcr.io/weave-logic-ai/weftos weft --version
+docker pull ghcr.io/weftos/weftos:latest
+docker run --rm ghcr.io/weftos/weftos weft --version
 ```
 
 For persistent use:
@@ -60,7 +60,7 @@ For persistent use:
 docker run -d --name weftos \
   -v weftos-data:/home/nonroot/.clawft \
   -p 8080:8080 \
-  ghcr.io/weave-logic-ai/weftos
+  ghcr.io/weftos/weftos
 ```
 
 See the [Docker deployment guide](/weftos/guides/deployment-docker) for production setup.
@@ -77,7 +77,7 @@ This installs the `weftos` daemon binary. For the `weft` CLI:
 
 ```bash
 # Clone and build (weft is not published as a standalone crate)
-git clone https://github.com/weave-logic-ai/weftos.git
+git clone https://github.com/WeftOS/weftos.git
 cd weftos
 cargo install --path crates/clawft-cli
 ```
@@ -124,7 +124,7 @@ WeftOS ships three binaries:
 ## From source (development)
 
 ```bash
-git clone https://github.com/weave-logic-ai/weftos.git
+git clone https://github.com/WeftOS/weftos.git
 cd weftos
 
 # Build all binaries in release mode

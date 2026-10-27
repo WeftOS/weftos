@@ -30,7 +30,7 @@ A single-head attention block at toy scale — `d_model ≤ 32`, `seq_len ≤ 8`
 | `softmax_model` | `seq_len → seq_len` | Learned row-softmax approximator |
 | `out_model` | `(seq_len·d_k) → (seq_len·d_model)` | Output projection |
 
-The inter-projection matmuls (Q·Kᵀ and A·V) are `f64` in Iteration 0. The dev note [`eml_model_development.md`](https://github.com/weave-logic-ai/weftos/blob/master/.planning/development_notes/eml_model_development.md) is explicit that hybrid EML + float is acceptable through Iteration 4+; we adopt the hybrid from day one to make the spike tractable.
+The inter-projection matmuls (Q·Kᵀ and A·V) are `f64` in Iteration 0. The dev note [`eml_model_development.md`](https://github.com/WeftOS/weftos/blob/master/.planning/development_notes/eml_model_development.md) is explicit that hybrid EML + float is acceptable through Iteration 4+; we adopt the hybrid from day one to make the spike tractable.
 
 Training is **gradient-free**. `record(input, target)` stores end-to-end pairs in an internal buffer (cap 256). `train()` runs a forward pass on the buffer, derives per-submodel targets via self-distillation — numerical softmax for `softmax_model`; `(context, target)` for `out_model` — and trains using the existing coordinate-descent loop with random restarts.
 

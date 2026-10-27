@@ -13,7 +13,7 @@
 #   crates/clawft-kernel/docker-compose.yml (build context = workspace root)
 #
 # For end-user gateway deployments prefer the root Dockerfile / GHCR image
-# (ghcr.io/weave-logic-ai/weftos).
+# (ghcr.io/weftos/weftos).
 
 FROM rust:1.93-alpine AS builder
 # musl-dev only — weaver links fully static against musl. (Do NOT add

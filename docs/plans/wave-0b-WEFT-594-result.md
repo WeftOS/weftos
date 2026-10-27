@@ -40,7 +40,7 @@ alignment**, not a second Dockerfile rewrite.
 
 ## Local runtimes (same OCI image)
 
-Published multi-arch OCI image `ghcr.io/weave-logic-ai/weftos:*` is runtime-
+Published multi-arch OCI image `ghcr.io/weftos/weftos:*` is runtime-
 agnostic:
 
 - **Docker Desktop** / **OrbStack** — `docker pull` / `docker run` (arm64 layer

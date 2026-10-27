@@ -227,14 +227,14 @@ The same setup with `gh` (steps 1–3 were done this way on 2026-10-03; the
 reviewer is the account `aepod`, id 124563):
 
 ```bash
-gh api -X PUT repos/weave-logic-ai/weftos/environments/weftos-cogs --input - <<'EOF'
+gh api -X PUT repos/WeftOS/weftos/environments/weftos-cogs --input - <<'EOF'
 {"reviewers":[{"type":"User","id":124563}],
  "deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}
 EOF
-gh api -X POST repos/weave-logic-ai/weftos/environments/weftos-cogs/deployment-branch-policies \
+gh api -X POST repos/WeftOS/weftos/environments/weftos-cogs/deployment-branch-policies \
   -f name='v*' -f type=tag
 # Step 4: prompts for the 64-hex seed; never pass it on the command line.
-gh secret set WEAVELOGIC_RELEASE_KEY --env weftos-cogs -R weave-logic-ai/weftos
+gh secret set WEAVELOGIC_RELEASE_KEY --env weftos-cogs -R WeftOS/weftos
 ```
 
 **Dedicated key.** Releases are signed with their own key (generated
@@ -365,8 +365,8 @@ into:
 
 | Image                                        | Architectures               |
 |----------------------------------------------|-----------------------------|
-| `ghcr.io/weave-logic-ai/weftos:vX.Y.Z`       | `linux/amd64`, `linux/arm64`|
-| `ghcr.io/weave-logic-ai/weftos:latest`       | `linux/amd64`, `linux/arm64`|
+| `ghcr.io/weftos/weftos:vX.Y.Z`       | `linux/amd64`, `linux/arm64`|
+| `ghcr.io/weftos/weftos:latest`       | `linux/amd64`, `linux/arm64`|
 
 Post-publish smoke: `GET /api/health` (WEFT-550). See
 [`docker.md`](docker.md) for image internals, local builds, and macOS
@@ -403,15 +403,15 @@ and `weftos` into `/usr/local/bin/` (override with `WEFTOS_INSTALL_DIR`).
 ### Direct Download
 
 Download a specific archive from the
-[Releases page](https://github.com/weave-logic-ai/weftos/releases). For
+[Releases page](https://github.com/WeftOS/weftos/releases). For
 example, the latest Linux musl x86_64 build:
 
 ```bash
-LATEST=$(gh release view --repo weave-logic-ai/weftos --json tagName -q .tagName)
+LATEST=$(gh release view --repo WeftOS/weftos --json tagName -q .tagName)
 VERSION="${LATEST#v}"
 
 curl -fsSL -o weft.tar.gz \
-  "https://github.com/weave-logic-ai/weftos/releases/download/${LATEST}/weft-cli-${VERSION}-x86_64-unknown-linux-musl.tar.gz"
+  "https://github.com/WeftOS/weftos/releases/download/${LATEST}/weft-cli-${VERSION}-x86_64-unknown-linux-musl.tar.gz"
 
 tar xzf weft.tar.gz
 ./weft-cli-${VERSION}-x86_64-unknown-linux-musl/weft --version
@@ -424,11 +424,11 @@ Verify with the GitHub CLI:
 
 ```bash
 gh attestation verify weft.tar.gz \
-  --repo weave-logic-ai/weftos
+  --repo WeftOS/weftos
 ```
 
 This proves the archive was built by the `Release` workflow on a tag in
-the `weave-logic-ai/weftos` repository -- not pulled from a tampered
+the `WeftOS/weftos` repository -- not pulled from a tampered
 mirror.
 
 ### Checksums
@@ -438,7 +438,7 @@ archive against it:
 
 ```bash
 curl -fsSL -o sha256sums \
-  "https://github.com/weave-logic-ai/weftos/releases/download/v0.6.19/sha256sums"
+  "https://github.com/WeftOS/weftos/releases/download/v0.6.19/sha256sums"
 sha256sum -c sha256sums --ignore-missing
 ```
 
@@ -500,8 +500,8 @@ migrating from pre-rename builds; new installs always write to
 ## Docker
 
 ```bash
-docker pull ghcr.io/weave-logic-ai/weftos:v0.6.19   # pinned
-docker pull ghcr.io/weave-logic-ai/weftos:latest    # rolling
+docker pull ghcr.io/weftos/weftos:v0.6.19   # pinned
+docker pull ghcr.io/weftos/weftos:latest    # rolling
 ```
 
 See [`docker.md`](docker.md) for usage, configuration, and security
@@ -521,7 +521,7 @@ for development or air-gapped deployments.
 ### Build
 
 ```bash
-git clone https://github.com/weave-logic-ai/weftos.git
+git clone https://github.com/WeftOS/weftos.git
 cd weftos
 scripts/build.sh native   # or: scripts/build.sh native-debug for fast iteration
 ```

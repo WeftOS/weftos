@@ -10,7 +10,7 @@ description: "Install clawft, configure a provider, and run your first AI assist
 Requires Rust 1.93+ (edition 2024).
 
 ```bash
-git clone https://github.com/weave-logic-ai/weftos.git
+git clone https://github.com/WeftOS/weftos.git
 cd weftos
 cargo build --release --bin weft
 ```
@@ -41,8 +41,8 @@ scripts/build.sh native --features voice,channels
 Pull the pre-built image:
 
 ```bash
-docker pull ghcr.io/weave-logic-ai/weftos:latest
-docker run --rm -it ghcr.io/weave-logic-ai/weftos:latest --version
+docker pull ghcr.io/weftos/weftos:latest
+docker run --rm -it ghcr.io/weftos/weftos:latest --version
 ```
 
 The container starts in gateway mode by default. See [Deployment](/docs/clawft/deployment) for full Docker configuration.
@@ -223,7 +223,7 @@ rustup update stable
 You're running an image built for a different architecture. Pull the correct platform:
 
 ```bash
-docker pull --platform linux/amd64 ghcr.io/weave-logic-ai/weftos:latest
+docker pull --platform linux/amd64 ghcr.io/weftos/weftos:latest
 ```
 
 ### Config file not found

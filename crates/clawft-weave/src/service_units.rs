@@ -188,7 +188,7 @@ pub fn systemd_user_unit(exe: &Path, home: &Path) -> String {
     format!(
         "[Unit]\n\
 Description=WeftOS per-user daemon\n\
-Documentation=https://github.com/weave-logic-ai/weftos\n\
+Documentation=https://github.com/WeftOS/weftos\n\
 StartLimitIntervalSec=60\n\
 StartLimitBurst=3\n\
 \n\

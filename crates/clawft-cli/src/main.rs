@@ -607,7 +607,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 _ => {
                     println!("weaver not found — install manually:");
                     println!(
-                        "  curl -fsSL https://github.com/weave-logic-ai/weftos/releases/latest/download/clawft-cli-installer.sh | sh"
+                        "  curl -fsSL https://github.com/WeftOS/weftos/releases/latest/download/clawft-cli-installer.sh | sh"
                     );
                 }
             }

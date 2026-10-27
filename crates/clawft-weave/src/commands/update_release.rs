@@ -66,7 +66,7 @@ impl Source {
     /// The real GitHub Releases of this project.
     pub fn github() -> Self {
         Self {
-            base: "https://github.com/weave-logic-ai/weftos/releases".into(),
+            base: "https://github.com/WeftOS/weftos/releases".into(),
             allow_http: false,
             max_extract_bytes: MAX_EXTRACT_BYTES,
             curl_env: Vec::new(),

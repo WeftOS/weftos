@@ -1,6 +1,6 @@
 # clawft + WeftOS
 
-[![Release](https://img.shields.io/github/v/release/weave-logic-ai/weftos)](https://github.com/weave-logic-ai/weftos/releases)
+[![Release](https://img.shields.io/github/v/release/WeftOS/weftos)](https://github.com/WeftOS/weftos/releases)
 [![crates.io](https://img.shields.io/crates/v/weftos)](https://crates.io/crates/weftos)
 [![npm](https://img.shields.io/npm/v/@weftos/core)](https://www.npmjs.com/package/@weftos/core)
 [![License](https://img.shields.io/crates/l/weftos)](LICENSE)
@@ -305,7 +305,7 @@ causality, search semantic memory, and process ephemeral signals in real-time.
 
 ```sh
 # Shell installer (Linux / macOS)
-curl -fsSL https://github.com/weave-logic-ai/weftos/releases/latest/download/clawft-cli-installer.sh | sh
+curl -fsSL https://github.com/WeftOS/weftos/releases/latest/download/clawft-cli-installer.sh | sh
 
 # Or via Homebrew
 brew install weave-logic-ai/tap/clawft-cli
@@ -314,10 +314,10 @@ brew install weave-logic-ai/tap/clawft-cli
 cargo install weftos
 
 # Or via Docker
-docker pull ghcr.io/weave-logic-ai/weftos:latest
+docker pull ghcr.io/weftos/weftos:latest
 ```
 
-Pre-built binaries for Linux (x86_64, ARM64), macOS (Intel, Apple Silicon), and Windows are on [GitHub Releases](https://github.com/weave-logic-ai/weftos/releases). WASM module available as [`@weftos/core`](https://www.npmjs.com/package/@weftos/core) on npm. All framework crates on [crates.io](https://crates.io/crates/weftos).
+Pre-built binaries for Linux (x86_64, ARM64), macOS (Intel, Apple Silicon), and Windows are on [GitHub Releases](https://github.com/WeftOS/weftos/releases). WASM module available as [`@weftos/core`](https://www.npmjs.com/package/@weftos/core) on npm. All framework crates on [crates.io](https://crates.io/crates/weftos).
 
 ### Configure
 
@@ -500,7 +500,7 @@ Environments apply different thresholds:
 ### Build
 
 ```sh
-git clone https://github.com/weave-logic-ai/clawft.git
+git clone https://github.com/WeftOS/weftos.git
 cd clawft
 scripts/build.sh native          # Release binary
 scripts/build.sh native-debug    # Debug binary (fast iteration)

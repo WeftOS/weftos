@@ -18,7 +18,7 @@ export default function HomePage() {
           <a href="/docs/clawft/getting-started" className="rounded-md bg-fd-primary px-6 py-3 font-medium text-fd-primary-foreground hover:opacity-90 transition-opacity">
             Get Started in 5 Minutes
           </a>
-          <a href="https://github.com/weave-logic-ai/weftos" className="rounded-md border border-fd-border px-6 py-3 font-medium text-fd-foreground hover:bg-fd-accent transition-colors">
+          <a href="https://github.com/WeftOS/weftos" className="rounded-md border border-fd-border px-6 py-3 font-medium text-fd-foreground hover:bg-fd-accent transition-colors">
             View on GitHub
           </a>
           <a href="/clawft" className="rounded-md border border-fd-border px-6 py-3 font-medium text-fd-foreground hover:bg-fd-accent transition-colors">
@@ -79,14 +79,14 @@ export default function HomePage() {
           {/* One command. Any platform. */}
           <h3 className="mb-4 text-lg font-semibold text-fd-card-foreground">Install</h3>
           <div className="mb-4 rounded-lg bg-fd-background p-4 text-left font-mono text-sm text-fd-foreground">
-            <span className="text-fd-muted-foreground">$</span> curl -fsSL https://github.com/weave-logic-ai/weftos/releases/latest/download/clawft-cli-installer.sh | sh
+            <span className="text-fd-muted-foreground">$</span> curl -fsSL https://github.com/WeftOS/weftos/releases/latest/download/clawft-cli-installer.sh | sh
           </div>
           <p className="mb-4 text-sm text-fd-muted-foreground">
             Also available via Homebrew, Docker, cargo, and PowerShell.{' '}
             <a href="/docs/weftos/getting-started/installation" className="underline hover:text-fd-foreground transition-colors">See all install options</a>.
           </p>
           <div className="flex flex-wrap justify-center gap-3 text-sm">
-            <a href="https://github.com/weave-logic-ai/weftos/releases" className="rounded-md bg-fd-primary px-4 py-2 font-medium text-fd-primary-foreground hover:opacity-90 transition-opacity">
+            <a href="https://github.com/WeftOS/weftos/releases" className="rounded-md bg-fd-primary px-4 py-2 font-medium text-fd-primary-foreground hover:opacity-90 transition-opacity">
               GitHub Releases
             </a>
             <a href="https://crates.io/crates/weftos" className="rounded-md border border-fd-border px-4 py-2 font-medium text-fd-foreground hover:bg-fd-accent transition-colors">
@@ -95,7 +95,7 @@ export default function HomePage() {
             <a href="https://www.npmjs.com/package/@weftos/core" className="rounded-md border border-fd-border px-4 py-2 font-medium text-fd-foreground hover:bg-fd-accent transition-colors">
               npm
             </a>
-            <a href="https://github.com/weave-logic-ai/weftos/pkgs/container/weftos" className="rounded-md border border-fd-border px-4 py-2 font-medium text-fd-foreground hover:bg-fd-accent transition-colors">
+            <a href="https://github.com/WeftOS/weftos/pkgs/container/weftos" className="rounded-md border border-fd-border px-4 py-2 font-medium text-fd-foreground hover:bg-fd-accent transition-colors">
               Docker
             </a>
             <a href="/docs/weftos/getting-started/installation" className="rounded-md border border-fd-border px-4 py-2 font-medium text-fd-foreground hover:bg-fd-accent transition-colors">
@@ -119,7 +119,7 @@ export default function HomePage() {
         </div>
 
         <div className="mb-8 flex flex-wrap justify-center gap-2">
-          <img src="https://img.shields.io/github/v/release/weave-logic-ai/weftos?label=release&color=blue" alt="Release" />
+          <img src="https://img.shields.io/github/v/release/WeftOS/weftos?label=release&color=blue" alt="Release" />
           <img src="https://img.shields.io/crates/v/weftos?color=orange" alt="crates.io" />
           <img src="https://img.shields.io/npm/v/@weftos/core?color=red" alt="npm" />
           <img src="https://img.shields.io/badge/targets-7_platforms-green" alt="Platforms" />
@@ -128,7 +128,7 @@ export default function HomePage() {
 
         <footer className="mt-16 border-t border-fd-border pt-8 pb-8 text-center text-sm text-fd-muted-foreground">
           <div className="flex flex-wrap justify-center gap-6">
-            <a href="https://github.com/weave-logic-ai/weftos" className="hover:text-fd-foreground transition-colors">GitHub</a>
+            <a href="https://github.com/WeftOS/weftos" className="hover:text-fd-foreground transition-colors">GitHub</a>
             <a href="/docs" className="hover:text-fd-foreground transition-colors">Documentation</a>
             <a href="https://weavelogic.ai" className="hover:text-fd-foreground transition-colors">WeaveLogic</a>
             <a href="https://weavelogic.ai/contact" className="hover:text-fd-foreground transition-colors">Enterprise Support</a>

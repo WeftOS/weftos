@@ -200,8 +200,8 @@ version = "0.8.4-rc.15"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/weave-logic-ai/weftos"
-homepage = "https://github.com/weave-logic-ai/weftos"
+repository = "https://github.com/WeftOS/weftos"
+homepage = "https://github.com/WeftOS/weftos"
 
 [workspace.dependencies]
 # Serialization

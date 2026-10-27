@@ -26,7 +26,8 @@ on:
 env:
   CARGO_TERM_COLOR: always
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  # GHCR namespaces must be lowercase; github.repository is WeftOS/weftos.
+  IMAGE_NAME: weftos/weftos
 
 permissions:
   contents: read

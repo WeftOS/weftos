@@ -5,7 +5,7 @@
   "license": "SEE LICENSE IN LICENSE",
   "repository": {
     "type": "git",
-    "url": "https://github.com/weave-logic-ai/weftos.git"
+    "url": "https://github.com/WeftOS/weftos.git"
   },
   "engines": {
     "node": ">=20"

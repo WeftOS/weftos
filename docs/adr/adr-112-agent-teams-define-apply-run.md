@@ -192,5 +192,5 @@ spec v1. They carry **method only**:
 |---|---|
 | 1 | Direction accepted. Team spec v1 and project apply first (TM1-TM3), the runtime after. |
 | 2 | **The runtime is WeftOS-native.** WeftOS already has the surfaces: the daemon and mesh, the dashboard control plane, and Weave Manager (egui, builds as a binary and runs from the control plane). OpenRig is a design source only. |
-| 3 | **First project after WeftOS itself: the Cogs project** (`weave-logic-ai/weftos-cogs`), now its own product extracted from WeftOS. Its extraction rules apply: changes go through its integration branch and nothing is pushed there without the owner's approval. |
+| 3 | **First project after WeftOS itself: the Cogs project** (`WeftOS/weftos-cogs`), now its own product extracted from WeftOS. Its extraction rules apply: changes go through its integration branch and nothing is pushed there without the owner's approval. |
 | 4 | **The team is the owner's own** (Stew, Doc/Gus, Liber, Mo and the rest), not a client's. It is modelled as a deployable team that carries no memory from any project and builds new memories on each project it joins (§6). |

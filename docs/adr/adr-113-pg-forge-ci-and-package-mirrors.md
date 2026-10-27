@@ -51,7 +51,7 @@ the runners can be built into Actions.
   `weftforge`, with its data at `/data1/forge/forgejo`. It is reachable on the tailnet only
   and is never exposed publicly. TLS uses the tailnet certificate (decision D3).
 - **Where the truth lives, phase 1:** GitHub stays the source of truth for repos that
-  already live there, including the public `weave-logic-ai/weftos`. Forgejo pull-mirrors
+  already live there, including the public `WeftOS/weftos`. Forgejo pull-mirrors
   each one on a schedule and on webhook. A repo whose upstream is PG itself, such as a
   client project with no GitHub remote, is primary on Forgejo.
 - **Phase 2** (decision D1) can make Forgejo primary for private repos and push-mirror
@@ -178,7 +178,7 @@ New `terraform_data` resources in `~/weavelogic.terraform/environments/`:
 | Phase | Delivers | Done when |
 |---|---|---|
 | F0 | This ADR accepted; Terraform plan for accounts, roots and Forgejo | the owner approves the plan |
-| F1 | Forgejo running; pull mirrors of `weave-logic-ai/weftos` and the PG `internal_git_source` repos | mirrors sync on schedule; the web UI is reachable on the tailnet |
+| F1 | Forgejo running; pull mirrors of `WeftOS/weftos` and the PG `internal_git_source` repos | mirrors sync on schedule; the web UI is reachable on the tailnet |
 | F2 | `weftci` shared runner; `pr-gates.yml` running on PG against the mirror | one green PR gate on PG, with its timing compared to GitHub |
 | F3 | Kellnr, Verdaccio and the image proxy; mirror bindings in `scripts/build.sh` behind an opt-in flag | a cold `scripts/build.sh gate` on PG fetches every crate and npm package through the mirrors |
 | F4 | `ci/templates/`, `weft project ci plan|apply`, `.weftos/ci.lock`, dashboard `ci.*` parameters | one promoted project gets its pipeline from the dashboard, rendered as a change and merged |

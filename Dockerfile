@@ -29,7 +29,7 @@ FROM alpine:3.21
 ARG VERSION=dev
 LABEL org.opencontainers.image.title="weft" \
       org.opencontainers.image.version="$VERSION" \
-      org.opencontainers.image.source="https://github.com/weave-logic-ai/weftos"
+      org.opencontainers.image.source="https://github.com/WeftOS/weftos"
 
 RUN apk add --no-cache ca-certificates tzdata \
     && adduser -D -h /home/weft weft

@@ -292,8 +292,8 @@ export const CLOSER = {
     'The sensor network is a self-sufficient three-step learned pipeline whose emissions live on a SIGReg manifold so any consumer, including an optional world model, can subscribe uniformly.',
   kicker: 'ADR-058 — the constitutional invariant — is what makes every other decision on this page consistent.',
   ctas: [
-    { label: 'Read the synthesis', href: 'https://github.com/weave-logic-ai/weftos/tree/feature/lewm-worldmodel/.planning/symposiums/lewm-worldmodel' },
-    { label: 'Inspect the ADRs', href: 'https://github.com/weave-logic-ai/weftos/tree/feature/lewm-worldmodel/docs/adr' },
-    { label: 'Browse the workspace', href: 'https://github.com/weave-logic-ai/weftos' },
+    { label: 'Read the synthesis', href: 'https://github.com/WeftOS/weftos/tree/feature/lewm-worldmodel/.planning/symposiums/lewm-worldmodel' },
+    { label: 'Inspect the ADRs', href: 'https://github.com/WeftOS/weftos/tree/feature/lewm-worldmodel/docs/adr' },
+    { label: 'Browse the workspace', href: 'https://github.com/WeftOS/weftos' },
   ],
 } as const;

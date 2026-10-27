@@ -28,7 +28,7 @@ export default async function Page(props: {
       full={page.data.full}
       footer={{ items: neighbours }}
       editOnGithub={{
-        owner: 'weave-logic-ai',
+        owner: 'WeftOS',
         repo: 'weftos',
         sha: 'master',
         path: `docs/src/content/docs/${filePath}`,

@@ -30,7 +30,7 @@ export const runtime = 'nodejs';
 
 const CDN_ORIGIN =
   process.env.CDN_ORIGIN ||
-  'https://github.com/weave-logic-ai/weftos/releases/download/cdn-assets';
+  'https://github.com/WeftOS/weftos/releases/download/cdn-assets';
 
 /** Optional pin: rewrite rolling names to clawft_wasm-{sha}.* siblings.
  *  Snapshots are published under the 12-char short SHA (WEFT-454). */

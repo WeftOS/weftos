@@ -12,7 +12,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const REPO: &str = "weave-logic-ai/weftos";
+const REPO: &str = "WeftOS/weftos";
 const CACHE_FILE: &str = "version-check.json";
 const CACHE_TTL_SECS: u64 = 86400; // 24 hours
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");

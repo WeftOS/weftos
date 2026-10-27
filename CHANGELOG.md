@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Staging area for changes after the 0.8.4 cut.
 
+- The `weftos` and `weftos-cogs` repositories moved to the WeftOS GitHub org on 2026-10-27
+  (`WeftOS/weftos`, `WeftOS/weftos-cogs`). Container images publish to
+  `ghcr.io/weftos/weftos`; images published earlier stay under `ghcr.io/weave-logic-ai/weftos`.
+
 ## [0.8.4-rc.15] - 2026-10-23
 
 Release candidate for v0.8.4 stable. The scope is in `docs/plans/release-0.8.4-cut.md`.
@@ -514,7 +518,7 @@ Release candidate for the project console batch (`target-0.8.3`). Prerelease:
   - Certified leaves: signed publishing, ACK, discovery, offline replay, and
     an ESP-IDF producer with an NVS backlog.
 - **Public cogs.** The first 11 WeftOS hardware cogs are published in their
-  own repository (`weave-logic-ai/weftos-cogs`) with armv7 and aarch64
+  own repository (`WeftOS/weftos-cogs`) with armv7 and aarch64
   cross-builds and the shared `cog-sensor-sources` crate.
 - **Monitoring.** `/monitoring` shows real token counts, latency and failures,
   and the gateway shares the agent pipeline's routing history (WEFT-305).
@@ -2101,7 +2105,7 @@ data structure as an interactive, drillable topology graph.
 ### Fixed
 
 - **Browser WASM CI**: Pinned wasm-bindgen-cli to v0.2.108 (matches Cargo.lock)
-- **Wrong URLs**: Fixed all `github.com/clawft/clawft` to `weave-logic-ai/weftos` and `ghcr.io/clawft/clawft` to `weave-logic-ai/weftos` across 6 doc files
+- **Wrong URLs**: Fixed all `github.com/clawft/clawft` to `WeftOS/weftos` and `ghcr.io/clawft/clawft` to `WeftOS/weftos` across 6 doc files
 - **Test badge**: Updated from 3,300+ to 3,900+ on homepage
 - **Crate count**: Updated from 22 to 23 (added clawft-rpc)
 - **Glossary**: Added entries for clawft-rpc, AssessmentService, Analyzer/AnalyzerRegistry
@@ -2220,39 +2224,39 @@ data structure as an interactive, drillable topology graph.
 - Release profile with LTO, strip, single codegen unit, and abort-on-panic
 - 1,029 tests across the workspace
 
-[Unreleased]: https://github.com/weave-logic-ai/weftos/compare/v0.8.0...HEAD
-[0.8.0]: https://github.com/weave-logic-ai/weftos/compare/v0.6.20...v0.8.0
-[0.6.20]: https://github.com/weave-logic-ai/weftos/compare/v0.6.19...v0.6.20
-[0.6.19]: https://github.com/weave-logic-ai/weftos/compare/v0.6.18...v0.6.19
-[0.6.18]: https://github.com/weave-logic-ai/weftos/compare/v0.6.17...v0.6.18
-[0.6.17]: https://github.com/weave-logic-ai/weftos/compare/v0.6.16...v0.6.17
-[0.6.16]: https://github.com/weave-logic-ai/weftos/compare/v0.6.15...v0.6.16
-[0.6.15]: https://github.com/weave-logic-ai/weftos/compare/v0.6.14...v0.6.15
-[0.6.14]: https://github.com/weave-logic-ai/weftos/compare/v0.6.13...v0.6.14
-[0.6.13]: https://github.com/weave-logic-ai/weftos/compare/v0.6.12...v0.6.13
-[0.6.12]: https://github.com/weave-logic-ai/weftos/compare/v0.6.11...v0.6.12
-[0.6.11]: https://github.com/weave-logic-ai/weftos/compare/v0.6.10...v0.6.11
-[0.6.10]: https://github.com/weave-logic-ai/weftos/compare/v0.6.9...v0.6.10
-[0.6.9]: https://github.com/weave-logic-ai/weftos/compare/v0.6.8...v0.6.9
-[0.6.8]: https://github.com/weave-logic-ai/weftos/compare/v0.6.7...v0.6.8
-[0.6.7]: https://github.com/weave-logic-ai/weftos/compare/v0.6.6...v0.6.7
-[0.6.6]: https://github.com/weave-logic-ai/weftos/compare/v0.6.5...v0.6.6
-[0.6.5]: https://github.com/weave-logic-ai/weftos/compare/v0.6.4...v0.6.5
-[0.6.4]: https://github.com/weave-logic-ai/weftos/compare/v0.6.3...v0.6.4
-[0.6.3]: https://github.com/weave-logic-ai/weftos/compare/v0.6.2...v0.6.3
-[0.6.2]: https://github.com/weave-logic-ai/weftos/compare/v0.6.1...v0.6.2
-[0.6.1]: https://github.com/weave-logic-ai/weftos/compare/v0.6.0...v0.6.1
-[0.6.0]: https://github.com/weave-logic-ai/weftos/compare/v0.5.5...v0.6.0
-[0.5.5]: https://github.com/weave-logic-ai/weftos/compare/v0.5.4...v0.5.5
-[0.5.4]: https://github.com/weave-logic-ai/weftos/compare/v0.5.3...v0.5.4
-[0.5.3]: https://github.com/weave-logic-ai/weftos/compare/v0.5.2...v0.5.3
-[0.5.2]: https://github.com/weave-logic-ai/weftos/compare/v0.5.1...v0.5.2
-[0.5.1]: https://github.com/weave-logic-ai/weftos/compare/v0.5.0...v0.5.1
-[0.5.0]: https://github.com/weave-logic-ai/weftos/compare/v0.4.3...v0.5.0
-[0.4.3]: https://github.com/weave-logic-ai/weftos/compare/v0.4.2...v0.4.3
-[0.4.2]: https://github.com/weave-logic-ai/weftos/compare/v0.4.1...v0.4.2
-[0.4.1]: https://github.com/weave-logic-ai/weftos/compare/v0.4.0...v0.4.1
-[0.4.0]: https://github.com/weave-logic-ai/weftos/compare/v0.3.0...v0.4.0
-[0.3.0]: https://github.com/weave-logic-ai/weftos/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/weave-logic-ai/weftos/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/weave-logic-ai/weftos/releases/tag/v0.1.0
+[Unreleased]: https://github.com/WeftOS/weftos/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/WeftOS/weftos/compare/v0.6.20...v0.8.0
+[0.6.20]: https://github.com/WeftOS/weftos/compare/v0.6.19...v0.6.20
+[0.6.19]: https://github.com/WeftOS/weftos/compare/v0.6.18...v0.6.19
+[0.6.18]: https://github.com/WeftOS/weftos/compare/v0.6.17...v0.6.18
+[0.6.17]: https://github.com/WeftOS/weftos/compare/v0.6.16...v0.6.17
+[0.6.16]: https://github.com/WeftOS/weftos/compare/v0.6.15...v0.6.16
+[0.6.15]: https://github.com/WeftOS/weftos/compare/v0.6.14...v0.6.15
+[0.6.14]: https://github.com/WeftOS/weftos/compare/v0.6.13...v0.6.14
+[0.6.13]: https://github.com/WeftOS/weftos/compare/v0.6.12...v0.6.13
+[0.6.12]: https://github.com/WeftOS/weftos/compare/v0.6.11...v0.6.12
+[0.6.11]: https://github.com/WeftOS/weftos/compare/v0.6.10...v0.6.11
+[0.6.10]: https://github.com/WeftOS/weftos/compare/v0.6.9...v0.6.10
+[0.6.9]: https://github.com/WeftOS/weftos/compare/v0.6.8...v0.6.9
+[0.6.8]: https://github.com/WeftOS/weftos/compare/v0.6.7...v0.6.8
+[0.6.7]: https://github.com/WeftOS/weftos/compare/v0.6.6...v0.6.7
+[0.6.6]: https://github.com/WeftOS/weftos/compare/v0.6.5...v0.6.6
+[0.6.5]: https://github.com/WeftOS/weftos/compare/v0.6.4...v0.6.5
+[0.6.4]: https://github.com/WeftOS/weftos/compare/v0.6.3...v0.6.4
+[0.6.3]: https://github.com/WeftOS/weftos/compare/v0.6.2...v0.6.3
+[0.6.2]: https://github.com/WeftOS/weftos/compare/v0.6.1...v0.6.2
+[0.6.1]: https://github.com/WeftOS/weftos/compare/v0.6.0...v0.6.1
+[0.6.0]: https://github.com/WeftOS/weftos/compare/v0.5.5...v0.6.0
+[0.5.5]: https://github.com/WeftOS/weftos/compare/v0.5.4...v0.5.5
+[0.5.4]: https://github.com/WeftOS/weftos/compare/v0.5.3...v0.5.4
+[0.5.3]: https://github.com/WeftOS/weftos/compare/v0.5.2...v0.5.3
+[0.5.2]: https://github.com/WeftOS/weftos/compare/v0.5.1...v0.5.2
+[0.5.1]: https://github.com/WeftOS/weftos/compare/v0.5.0...v0.5.1
+[0.5.0]: https://github.com/WeftOS/weftos/compare/v0.4.3...v0.5.0
+[0.4.3]: https://github.com/WeftOS/weftos/compare/v0.4.2...v0.4.3
+[0.4.2]: https://github.com/WeftOS/weftos/compare/v0.4.1...v0.4.2
+[0.4.1]: https://github.com/WeftOS/weftos/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/WeftOS/weftos/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/WeftOS/weftos/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/WeftOS/weftos/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/WeftOS/weftos/releases/tag/v0.1.0

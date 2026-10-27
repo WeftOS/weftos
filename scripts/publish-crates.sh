@@ -11,7 +11,7 @@ set -euo pipefail
 
 DRY=0
 [ "${1:-}" = "--dry-run" ] && DRY=1
-UA="weftos-publish (https://github.com/weave-logic-ai/weftos)"
+UA="weftos-publish (https://github.com/WeftOS/weftos)"
 RETRY_SLEEP="${PUBLISH_RETRY_SLEEP:-660}"
 MAX_TRIES="${PUBLISH_MAX_TRIES:-30}"
 

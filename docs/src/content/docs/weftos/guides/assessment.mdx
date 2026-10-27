@@ -269,7 +269,7 @@ jobs:
 
       - name: Install WeftOS
         run: |
-          curl -fsSL https://github.com/weave-logic-ai/weftos/releases/latest/download/clawft-cli-installer.sh | sh
+          curl -fsSL https://github.com/WeftOS/weftos/releases/latest/download/clawft-cli-installer.sh | sh
 
       - name: Run assessment
         run: weft assess run --scope ci --format github-annotations

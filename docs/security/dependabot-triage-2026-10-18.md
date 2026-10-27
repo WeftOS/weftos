@@ -6,7 +6,7 @@ when master was fast-forwarded from v0.6.20 to v0.8.3 (291 alerts now `fixed`, 4
 (`8282dd5ee`, v0.8.4-rc.14) by three triage passes; nothing was changed or dismissed.
 
 Command used for the count:
-`gh api --paginate "repos/weave-logic-ai/weftos/dependabot/alerts?state=<s>&per_page=100"`.
+`gh api --paginate "repos/WeftOS/weftos/dependabot/alerts?state=<s>&per_page=100"`.
 
 ## Summary
 

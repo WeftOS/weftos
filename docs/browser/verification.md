@@ -68,8 +68,8 @@ deployed `pkg/` tree remains self-describing after extract.
 ## Verify checksums
 
 ```bash
-TAG=v0.6.20   # or: TAG=$(gh release view --repo weave-logic-ai/weftos --json tagName -q .tagName)
-REPO=https://github.com/weave-logic-ai/weftos/releases/download/${TAG}
+TAG=v0.6.20   # or: TAG=$(gh release view --repo WeftOS/weftos --json tagName -q .tagName)
+REPO=https://github.com/WeftOS/weftos/releases/download/${TAG}
 
 curl -fsSL -o "clawft-browser-wasm-${TAG}.tar.gz" \
   "${REPO}/clawft-browser-wasm-${TAG}.tar.gz"
@@ -90,11 +90,11 @@ WEFT-451):
 
 ```bash
 gh attestation verify "clawft-browser-wasm-${TAG}.tar.gz" \
-  --repo weave-logic-ai/weftos
+  --repo WeftOS/weftos
 ```
 
 This proves the archive was produced by a GitHub Actions run in
-`weave-logic-ai/weftos` with the OIDC identity of the release workflow —
+`WeftOS/weftos` with the OIDC identity of the release workflow —
 not a mirror or a re-uploaded blob from an unrelated actor.
 
 Requires [GitHub CLI](https://cli.github.com/) (`gh`) ≥ 2.49.

@@ -24,7 +24,7 @@
 //!   [`lifecycle::LifecycleTeardownTombstone`] is emitted on
 //!   uninstall-while-enabled so consumers can subscribe (WEFT-412).
 //!
-//! [adr]: https://github.com/weave-logic-ai/weftos/blob/development-0.7.0/.planning/symposiums/compositional-ui/adrs/adr-015-app-manifest.md
+//! [adr]: https://github.com/WeftOS/weftos/blob/development-0.7.0/.planning/symposiums/compositional-ui/adrs/adr-015-app-manifest.md
 
 pub mod adapter_catalog;
 pub mod install;

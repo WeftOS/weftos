@@ -185,7 +185,7 @@ pub fn remedy_for(ch: &Channel, name: &str) -> String {
         ChannelKind::CargoDist => {
             let app = ch.detail.clone().unwrap_or_else(|| "weftos".into());
             format!(
-                "curl --proto '=https' --tlsv1.2 -LsSf https://github.com/weave-logic-ai/weftos/releases/latest/download/{app}-installer.sh | sh"
+                "curl --proto '=https' --tlsv1.2 -LsSf https://github.com/WeftOS/weftos/releases/latest/download/{app}-installer.sh | sh"
             )
         }
         ChannelKind::DevBuild => "scripts/build.sh install   (from a clean checkout)".into(),

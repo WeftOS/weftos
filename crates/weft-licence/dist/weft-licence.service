@@ -3,7 +3,7 @@
 # /etc/systemd/system/weft-licence.service after `weft-licence init` has run.
 [Unit]
 Description=WeftOS licence proxy for the attached mesh (weft-licence)
-Documentation=https://github.com/weave-logic-ai/weftos/blob/master/docs/cogs/weft-licence.md
+Documentation=https://github.com/WeftOS/weftos/blob/master/docs/cogs/weft-licence.md
 # No RTC on the Seed: wait for the clock. The service also refuses to sign
 # below its clock floor, so a late sync only delays signing.
 After=network.target time-sync.target

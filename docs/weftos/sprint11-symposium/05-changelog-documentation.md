@@ -174,7 +174,7 @@ The Contributing section is minimal (5 lines). There is no distinction between "
 **Issue 9: GitHub URLs are inconsistent.**
 
 - CHANGELOG links: `github.com/clawft/clawft`
-- README badge: `github.com/weave-logic-ai/clawft`
+- README badge: `github.com/WeftOS/weftos`
 - Quickstart clone: `github.com/clawft/clawft`
 
 Only one of these can be correct. This needs to be settled and made consistent.

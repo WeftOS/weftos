@@ -44,7 +44,7 @@ docker build -f clawft-ui/Dockerfile -t clawft-ui:0.7.0 .
 scripts/build.sh ui-docker
 
 # Override the tag
-CLAWFT_UI_DOCKER_TAG=ghcr.io/weave-logic-ai/clawft-ui:0.7.0 \
+CLAWFT_UI_DOCKER_TAG=ghcr.io/weftos/clawft-ui:0.7.0 \
   scripts/build.sh ui-docker
 
 # Point the bundle at a remote API

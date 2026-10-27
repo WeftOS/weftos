@@ -53,7 +53,7 @@ fi
 cat > /etc/systemd/system/weftos-mesh.service.new <<'WEFTOS_EOF'
 [Unit]
 Description=WeftOS machine mesh service
-Documentation=https://github.com/weave-logic-ai/weftos
+Documentation=https://github.com/WeftOS/weftos
 After=network.target
 StartLimitIntervalSec=60
 StartLimitBurst=5

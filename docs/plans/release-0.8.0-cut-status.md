@@ -16,8 +16,8 @@
 |-------|--------|
 | Tag | `v0.8.0` (annotated, published) |
 | Tip commit | `dec3b28f` — pin Windows `dist.binaries` for weft-gui-egui |
-| Release URL | https://github.com/weave-logic-ai/weftos/releases/tag/v0.8.0 |
-| cargo-dist run | [30671958877](https://github.com/weave-logic-ai/weftos/actions/runs/30671958877) **success** |
+| Release URL | https://github.com/WeftOS/weftos/releases/tag/v0.8.0 |
+| cargo-dist run | [30671958877](https://github.com/WeftOS/weftos/actions/runs/30671958877) **success** |
 | Assets | 77 (cli/weave/weftos/gui + installers + WASI + formulae + sha256) |
 | Smoke test | `weft 0.8.0 (dec3b28f-dirty …)` from aarch64-apple-darwin archive |
 

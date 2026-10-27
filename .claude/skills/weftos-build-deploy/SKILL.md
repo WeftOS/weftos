@@ -19,7 +19,7 @@ You are the WeftOS release engineer. You handle builds, tagging, publishing, and
 
 ## Project Identity
 
-- **Repo**: `weave-logic-ai/weftos` (GitHub)
+- **Repo**: `WeftOS/weftos` (GitHub)
 - **Binaries**: `weft` (CLI), `weaver` (operator), `weftos` (kernel daemon)
 - **Naming**: `clawft-*` = framework crates, `weftos` = product facade
 - **Workspace version**: single version in `[workspace.package]` in root `Cargo.toml`
@@ -28,10 +28,10 @@ You are the WeftOS release engineer. You handle builds, tagging, publishing, and
 
 | Channel | Package | Registry/Location |
 |---------|---------|-------------------|
-| **GitHub Releases** | 3 binaries x 5 platforms + installers | `weave-logic-ai/weftos/releases` |
+| **GitHub Releases** | 3 binaries x 5 platforms + installers | `WeftOS/weftos/releases` |
 | **crates.io** | 10 crates (8 clawft-*, 2 weftos-*) | `crates.io` |
 | **npm** | `@weftos/core` (WASM browser module) | `npmjs.com` |
-| **Docker** | `ghcr.io/weave-logic-ai/weftos` | GHCR (multi-arch amd64+arm64) |
+| **Docker** | `ghcr.io/weftos/weftos` | GHCR (multi-arch amd64+arm64) |
 | **Homebrew** | `clawft-cli.rb`, `clawft-weave.rb`, `weftos.rb` | `weave-logic-ai/homebrew-tap` |
 
 ## Secrets & Auth
@@ -64,13 +64,13 @@ This is the most common operation. It publishes everywhere.
 
 3. **Monitor** (~12-14 min for all platforms):
    ```bash
-   gh run list --repo weave-logic-ai/weftos --limit 2
-   gh run view <RUN_ID> --repo weave-logic-ai/weftos
+   gh run list --repo WeftOS/weftos --limit 2
+   gh run view <RUN_ID> --repo WeftOS/weftos
    ```
 
 4. **Verify release**:
    ```bash
-   gh release view vX.Y.Z --repo weave-logic-ai/weftos
+   gh release view vX.Y.Z --repo WeftOS/weftos
    ```
 
 5. **Publish to crates.io** (manual, not automated by CI):
@@ -100,7 +100,7 @@ This is the most common operation. It publishes everywhere.
    ```
    Fix `package.json` in `crates/clawft-wasm/pkg/`:
    - Ensure `name` is `@weftos/core`
-   - Ensure `repository.url` is `https://github.com/weave-logic-ai/weftos`
+   - Ensure `repository.url` is `https://github.com/WeftOS/weftos`
    - Ensure `version` matches the release
    ```bash
    cd crates/clawft-wasm/pkg && npm publish --access public
@@ -143,7 +143,7 @@ cd crates/clawft-wasm/pkg && npm publish --access public
 
 ```bash
 # Binary (download from release)
-gh release download vX.Y.Z --repo weave-logic-ai/weftos \
+gh release download vX.Y.Z --repo WeftOS/weftos \
   --pattern 'clawft-cli-aarch64-unknown-linux-gnu.tar.gz' --dir /tmp/test
 tar xzf /tmp/test/clawft-cli-*.tar.gz -C /tmp/test
 /tmp/test/clawft-cli-*/weft --version
@@ -155,8 +155,8 @@ brew install weave-logic-ai/tap/clawft-cli
 weft --version
 
 # Docker
-docker pull ghcr.io/weave-logic-ai/weftos:X.Y.Z
-docker run --rm ghcr.io/weave-logic-ai/weftos:X.Y.Z --version
+docker pull ghcr.io/weftos/weftos:X.Y.Z
+docker run --rm ghcr.io/weftos/weftos:X.Y.Z --version
 
 # crates.io
 cargo install weftos
@@ -212,7 +212,7 @@ weftos 0.1.x             (facade -> kernel, core, types, platform, exo-resource-
 ```toml
 [workspace.package]
 version = "X.Y.Z"
-repository = "https://github.com/weave-logic-ai/weftos"
+repository = "https://github.com/WeftOS/weftos"
 ```
 
 ### Workspace deps (version + path for publishability)
@@ -270,7 +270,7 @@ github-attestations = true
 - **Platforms**: linux/amd64, linux/arm64
 - **Tags**: `X.Y.Z`, `X.Y`, `X`, `latest`
 - **Health check**: `weft status` (exec form, no shell)
-- **Registry**: `ghcr.io/weave-logic-ai/weftos`
+- **Registry**: `ghcr.io/weftos/weftos`
 
 ## Platform Support
 

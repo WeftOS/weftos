@@ -12,7 +12,7 @@ Branch `feat/cog-protocol-boundary`, parent `v0.8.3` (`fafd6168f8f97280ee24e5c2d
 
 ## Dependency review of 5bc8a952
 
-`5bc8a95203166a03a79e1a829790a45c9b592e66` adds `weftos-cog-protocol`. Dependencies in that commit are workspace `serde` (version "1", features `derive`), `serde_json` "1", and `thiserror` "2". The package inherits version 0.8.3, edition 2024, rust-version 1.95, license MIT OR Apache-2.0, and repository `https://github.com/weave-logic-ai/weftos`. `publish = false`. `Cargo.lock` in that commit adds 9 lines. The only new package name is `weftos-cog-protocol`. The crate does not link `clawft-kernel`, `clawft-types`, or `clawft-rpc`.
+`5bc8a95203166a03a79e1a829790a45c9b592e66` adds `weftos-cog-protocol`. Dependencies in that commit are workspace `serde` (version "1", features `derive`), `serde_json` "1", and `thiserror` "2". The package inherits version 0.8.3, edition 2024, rust-version 1.95, license MIT OR Apache-2.0, and repository `https://github.com/WeftOS/weftos`. `publish = false`. `Cargo.lock` in that commit adds 9 lines. The only new package name is `weftos-cog-protocol`. The crate does not link `clawft-kernel`, `clawft-types`, or `clawft-rpc`.
 
 The Unix client added after that commit uses `std::os::unix::net::UnixStream` with read and write timeouts. It adds no crate dependency. Workspace `serde_json` has no `preserve_order` feature, so `json!` maps sort keys. Struct `Serialize` keeps declaration order. Golden map files use sorted keys, and the golden test compares those bytes.
 

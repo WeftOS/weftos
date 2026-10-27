@@ -9,7 +9,7 @@
 #
 # Image name + tag are aligned with docker-compose.yml and the
 # release-docker.yml workflow (WEFT-441 / WEFT-450 / WEFT-594):
-#   ghcr.io/weave-logic-ai/weftos:<tag>
+#   ghcr.io/weftos/weftos:<tag>
 #
 # The host architecture is auto-detected and passed to buildx so the
 # resulting image targets the local machine. Cross-arch / multi-arch
@@ -42,7 +42,7 @@ err()   { printf "${RED}[ERROR]${NC} %s\n" "$*" >&2; }
 
 # Default image / repo name. Kept in lockstep with docker-compose.yml
 # and release-docker.yml's $IMAGE_NAME.
-DEFAULT_IMAGE_REPO="ghcr.io/weave-logic-ai/weftos"
+DEFAULT_IMAGE_REPO="ghcr.io/weftos/weftos"
 
 usage() {
     cat <<EOF

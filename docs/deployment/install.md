@@ -49,7 +49,7 @@ The same check can be run manually:
 
 ```bash
 gh attestation verify weft-cli-0.7.0-x86_64-unknown-linux-musl.tar.gz \
-  --repo weave-logic-ai/weftos
+  --repo WeftOS/weftos
 ```
 
 See [`release.md` "Verifying Provenance"](./release.md#verifying-provenance)

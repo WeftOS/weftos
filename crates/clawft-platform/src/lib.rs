@@ -47,7 +47,7 @@
 //! | [`clawft-llm`](https://crates.io/crates/clawft-llm) | LLM provider abstraction (11 providers + local) |
 //! | [`exo-resource-tree`](https://crates.io/crates/exo-resource-tree) | Hierarchical resource namespace with Merkle integrity |
 //!
-//! Source: <https://github.com/weave-logic-ai/weftos>
+//! Source: <https://github.com/WeftOS/weftos>
 
 // WEFT-397: native ⊥ browser — fail loud if both feature flags are enabled.
 #[cfg(all(feature = "native", feature = "browser"))]

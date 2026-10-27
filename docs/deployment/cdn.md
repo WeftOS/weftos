@@ -45,7 +45,7 @@ Alongside every upload, the same bytes are also stored under the
 Example URL:
 
 ```
-https://github.com/weave-logic-ai/weftos/releases/download/cdn-assets/clawft_wasm-a5124115b4fa.wasm
+https://github.com/WeftOS/weftos/releases/download/cdn-assets/clawft_wasm-a5124115b4fa.wasm
 ```
 
 ## Lifecycle / retention

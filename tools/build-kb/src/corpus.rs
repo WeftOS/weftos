@@ -8,7 +8,7 @@ use walkdir::WalkDir;
 const MAX_CHUNK_CHARS: usize = 2000;
 const MAX_FILE_CHARS: usize = 400_000;
 const FUMADOCS_BASE_URL: &str = "https://weftos.weavelogic.ai";
-const GITHUB_BLOB_BASE: &str = "https://github.com/weave-logic-ai/weftos/blob/HEAD";
+const GITHUB_BLOB_BASE: &str = "https://github.com/WeftOS/weftos/blob/HEAD";
 
 #[derive(Debug, Default)]
 pub struct Frontmatter {
@@ -395,7 +395,7 @@ mod tests {
         let file = docs_dir.join("adr-096-metaharness-foundation.md");
         let (src, url) = source_and_url(&file, docs_dir, Path::new("/repo"));
         assert_eq!(src, "docs/adr/adr-096-metaharness-foundation.md");
-        assert!(url.contains("github.com/weave-logic-ai/weftos/blob/HEAD/docs/adr/"));
+        assert!(url.contains("github.com/WeftOS/weftos/blob/HEAD/docs/adr/"));
     }
 
     #[test]

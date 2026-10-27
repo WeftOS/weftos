@@ -1,6 +1,6 @@
 [Unit]
 Description=WeftOS per-user daemon
-Documentation=https://github.com/weave-logic-ai/weftos
+Documentation=https://github.com/WeftOS/weftos
 StartLimitIntervalSec=60
 StartLimitBurst=3
 

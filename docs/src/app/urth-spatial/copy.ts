@@ -180,9 +180,9 @@ export const CLOSER = {
   title: 'Sparse first. Then densify.',
   body: 'The spatial-index decision is closed. The work left is publish, promote, and ingest — plus a 2026 reconstruction stack that can feed the same leaves.',
   links: [
-    { label: 'Survey index', href: 'https://github.com/weave-logic-ai/weftos/blob/0.8-metaharness/docs/research/spatial-intelligence-2026/README.md' },
+    { label: 'Survey index', href: 'https://github.com/WeftOS/weftos/blob/0.8-metaharness/docs/research/spatial-intelligence-2026/README.md' },
     { label: 'Urth ADR-079', href: '/docs/weftos/vision/urth' },
     { label: 'LeWM scrolly', href: '/lewm-worldmodel-rs' },
-    { label: 'Graph Views', href: 'https://github.com/weave-logic-ai/weftos/blob/0.8-metaharness/docs/research/graph-views.md' },
+    { label: 'Graph Views', href: 'https://github.com/WeftOS/weftos/blob/0.8-metaharness/docs/research/graph-views.md' },
   ],
 };

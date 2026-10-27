@@ -57,7 +57,7 @@ curl -s -o /dev/null -w "%{http_code}" https://weftos.weavelogic.ai/api/weftos/i
 To enable automatic deploys on push to master:
 1. Go to Vercel dashboard → project `src`
 2. Settings → Git → Root Directory → set to `docs/src`
-3. Connected repo: `weave-logic-ai/weftos`
+3. Connected repo: `WeftOS/weftos`
 4. After this, every push to master auto-deploys
 
 ## What Gets Deployed

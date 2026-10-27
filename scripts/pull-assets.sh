@@ -83,7 +83,7 @@ if [[ "$MODE" == "local" ]]; then
         "$ROOT/scripts/build-kb.sh"
     fi
 else
-    REPO="${GITHUB_REPOSITORY:-weave-logic-ai/weftos}"
+    REPO="${GITHUB_REPOSITORY:-WeftOS/weftos}"
     TAG="cdn-assets"
     BASE="https://github.com/$REPO/releases/download/$TAG"
 

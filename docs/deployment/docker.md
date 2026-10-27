@@ -10,6 +10,9 @@ Alpine runtime. There is no download of cargo-dist / GitHub Release assets at
 image-build time — the image tag is not coupled to whether platform binaries
 published successfully (WEFT-594 decision; see also WEFT-593).
 
+> **Registry move (2026-10-27):** images now publish to `ghcr.io/weftos/weftos`.
+> Images published before the move stay under `ghcr.io/weave-logic-ai/weftos`.
+
 Compressed size is typically ~30–40 MB; supported architectures are
 `linux/amd64` and `linux/arm64`.
 
@@ -40,8 +43,8 @@ Kernel-only variant: `crates/clawft-kernel/Dockerfile.alpine` (builds
 Pull the published image and run the gateway:
 
 ```bash
-docker pull ghcr.io/weave-logic-ai/weftos:latest
-docker run --rm -it ghcr.io/weave-logic-ai/weftos:latest --version
+docker pull ghcr.io/weftos/weftos:latest
+docker run --rm -it ghcr.io/weftos/weftos:latest --version
 ```
 
 By default the entrypoint is `weft` and the default command is `gateway`,
@@ -72,7 +75,7 @@ and the token-bootstrap path are public; other routes require a Bearer token.
 ```bash
 docker run --rm -it \
   -v "$HOME/.clawft:/home/weft/.clawft:ro" \
-  ghcr.io/weave-logic-ai/weftos:latest gateway
+  ghcr.io/weftos/weftos:latest gateway
 ```
 
 ### Environment Variables
@@ -85,7 +88,7 @@ docker run --rm -it \
   -e CLAWFT_CONFIG="/home/weft/.clawft/config.json" \
   -e RUST_LOG=info \
   -v "$HOME/.clawft:/home/weft/.clawft:ro" \
-  ghcr.io/weave-logic-ai/weftos:latest gateway
+  ghcr.io/weftos/weftos:latest gateway
 ```
 
 ### Persisting Workspace State
@@ -96,7 +99,7 @@ volume on the same path:
 ```bash
 docker run --rm -it \
   -v weftos-data:/home/weft/.clawft \
-  ghcr.io/weave-logic-ai/weftos:latest gateway
+  ghcr.io/weftos/weftos:latest gateway
 ```
 
 ## Docker Compose
@@ -122,7 +125,7 @@ Inline equivalent:
 ```yaml
 services:
   weft:
-    image: ghcr.io/weave-logic-ai/weftos:${WEFT_VERSION:-latest}
+    image: ghcr.io/weftos/weftos:${WEFT_VERSION:-latest}
     command: ["gateway"]
     restart: unless-stopped
     ports:
@@ -260,14 +263,14 @@ speaks OCI/GHCR can consume the same tags:
 | Runtime | Notes |
 |---------|--------|
 | **Docker Desktop** | Pulls the matching `linux/arm64` layer on Apple Silicon; `linux/amd64` via Rosetta/QEMU if forced with `--platform`. |
-| **OrbStack** | Drop-in Docker-compatible engine; uses the same `docker pull/run` commands against `ghcr.io/weave-logic-ai/weftos:*`. Prefer for lighter local resource use. |
+| **OrbStack** | Drop-in Docker-compatible engine; uses the same `docker pull/run` commands against `ghcr.io/weftos/weftos:*`. Prefer for lighter local resource use. |
 | **Apple container CLI** | Apple's OCI-oriented tooling (`container pull` / `container run`) can pull the same GHCR multi-arch image and run the `linux/arm64` manifest entry on Apple Silicon — same image digest family as Docker/OrbStack, not a separate build. |
 
 Example with Docker or OrbStack (identical CLI):
 
 ```bash
-docker pull ghcr.io/weave-logic-ai/weftos:latest
-docker run --rm -p 8080:8080 ghcr.io/weave-logic-ai/weftos:latest gateway
+docker pull ghcr.io/weftos/weftos:latest
+docker run --rm -p 8080:8080 ghcr.io/weftos/weftos:latest gateway
 ```
 
 There is no separate "Apple Silicon image" — multi-arch is the product.
@@ -295,7 +298,7 @@ The image is small but not minimal -- it includes Alpine + musl libc +
 ```bash
 docker run --rm -it \
   -v "$HOME/.clawft:/home/weft/.clawft:ro" \
-  ghcr.io/weave-logic-ai/weftos:latest status --detailed
+  ghcr.io/weftos/weftos:latest status --detailed
 ```
 
 Common causes: missing config, invalid JSON, an LLM provider env var
@@ -312,7 +315,7 @@ chmod 644 ~/.clawft/config.json
 inside the container:
 
 ```bash
-docker run --rm ghcr.io/weave-logic-ai/weftos:latest agent -m "ping"
+docker run --rm ghcr.io/weftos/weftos:latest agent -m "ping"
 ```
 
 If running behind a corporate proxy, propagate the proxy env vars:
@@ -322,7 +325,7 @@ docker run --rm \
   -e HTTPS_PROXY="http://proxy:8080" \
   -e HTTP_PROXY="http://proxy:8080" \
   -e NO_PROXY="localhost,127.0.0.1" \
-  ghcr.io/weave-logic-ai/weftos:latest agent -m "ping"
+  ghcr.io/weftos/weftos:latest agent -m "ping"
 ```
 
 ---

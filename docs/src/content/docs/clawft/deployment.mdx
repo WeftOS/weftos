@@ -10,8 +10,8 @@ clawft ships as a minimal Docker image containing the statically-linked `weft` b
 ### Quick Start
 
 ```bash
-docker pull ghcr.io/weave-logic-ai/weftos:latest
-docker run --rm -it ghcr.io/weave-logic-ai/weftos:latest --version
+docker pull ghcr.io/weftos/weftos:latest
+docker run --rm -it ghcr.io/weftos/weftos:latest --version
 ```
 
 By default the container starts in gateway mode (`weft gateway`).
@@ -19,7 +19,7 @@ By default the container starts in gateway mode (`weft gateway`).
 ### Building from Source
 
 ```bash
-git clone https://github.com/weave-logic-ai/weftos.git
+git clone https://github.com/WeftOS/weftos.git
 cd weftos
 
 rustup target add x86_64-unknown-linux-musl
@@ -39,7 +39,7 @@ Mount your config file and pass API keys via environment variables:
 docker run --rm -it \
   -e OPENAI_API_KEY="sk-..." \
   -v "$HOME/.clawft:/root/.clawft:ro" \
-  ghcr.io/weave-logic-ai/weftos:latest gateway
+  ghcr.io/weftos/weftos:latest gateway
 ```
 
 For persistent session data, mount the workspace without `:ro`:
@@ -47,7 +47,7 @@ For persistent session data, mount the workspace without `:ro`:
 ```bash
 docker run --rm -it \
   -v "$HOME/.clawft:/root/.clawft" \
-  ghcr.io/weave-logic-ai/weftos:latest gateway
+  ghcr.io/weftos/weftos:latest gateway
 ```
 
 ### Docker Compose
@@ -55,7 +55,7 @@ docker run --rm -it \
 ```yaml
 services:
   clawft:
-    image: ghcr.io/weave-logic-ai/weftos:latest
+    image: ghcr.io/weftos/weftos:latest
     command: ["gateway"]
     restart: unless-stopped
     volumes:
@@ -208,7 +208,7 @@ The Dockerfile uses a multi-stage build with `cargo-chef` for dependency caching
 ```bash
 docker run --rm -it \
   -v "$HOME/.clawft:/root/.clawft:ro" \
-  ghcr.io/weave-logic-ai/weftos:latest status --detailed
+  ghcr.io/weftos/weftos:latest status --detailed
 ```
 
 **Cannot reach LLM API** -- Verify DNS and network access. If behind a proxy, pass `HTTPS_PROXY`:
