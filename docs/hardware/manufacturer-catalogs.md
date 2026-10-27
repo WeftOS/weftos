@@ -1,6 +1,6 @@
 # Manufacturer catalog sources
 
-Where to find each manufacturer's full sensor/board catalog, and how to bulk-pull it into the parts pool. 79 manufacturers and 1 shop across 6 areas. Generated 2026-10-03 by the catalog-source sweep (Sipeed, Pololu, Toradex added 2026-10-04; DEBIX added 2026-10-05; Banana Pi, Akizuki Denshi, and sensiBel added 2026-10-06; Turing Pi added 2026-10-06; XIMEA added 2026-10-06). Type concerns live in [module-types.md](module-types.md).
+Where to find each manufacturer's full sensor/board catalog, and how to bulk-pull it into the parts pool. 80 manufacturers and 1 shop across 6 areas. Generated 2026-10-03 by the catalog-source sweep (Sipeed, Pololu, Toradex added 2026-10-04; DEBIX added 2026-10-05; Banana Pi, Akizuki Denshi, and sensiBel added 2026-10-06; Turing Pi added 2026-10-06; XIMEA added 2026-10-06; Vesper added 2026-10-06). Type concerns live in [module-types.md](module-types.md).
 
 > `best_ingest_path` is how WE pull it today (Mouser API by manufacturer+category) and the authoritative fuller source (parametric CSV export / Octopart-Nexar / first-party scrape). Many first-party selectors are bot-walled; the distributor/CSV paths are the practical ones.
 
@@ -51,7 +51,7 @@ Where to find each manufacturer's full sensor/board catalog, and how to bulk-pul
 | **u-blox** | https://www.u-blox.com/en/positioning-chips-and-modules (positioning product list) + https://www.u-blox.com/en/products | product-listing | GNSS modules ~40-60 SKUs; total portfolio hundreds | Mouser keyword 'u-blox GNSS module' / 'u-blox ZED-F9P'; distributor filter manufacturer=u-blox | found |
 | **Vayyar Imaging** | https://vayyar.com/technology/ (platform/RoC pages: 60GHz in-cabin, 79GHz automotive XRR) | product-listing | few RoC platform SKUs + eval kits (not retail-distributed at scale) | Record platform pages in registry; direct/solution sales, not Mouser pull | partial |
 
-## optical-audio  (21)
+## optical-audio  (22)
 
 | Manufacturer | Catalog source | Type | ~SKUs | Best ingest path | Status |
 |---|---|---|---|---|---|
@@ -75,6 +75,7 @@ Where to find each manufacturer's full sensor/board catalog, and how to bulk-pul
 | **Sony Semiconductor Solutions (image sensors / IMX)** | https://www.sony-semicon.com/en/products/is/index.html (Industrial, Consumer, Automotive, SPAD/ToF, polarization, SWIR/UV image sensor lineup pages) | product-listing | 300 | Scrape sony-semicon.com industrial/automotive/consumer lineup pages; Framos distributor catalog for orderable industrial modules. | found |
 | **Teledyne FLIR (OEM thermal camera cores)** | https://oem.flir.com/categories/infrared-camera-cores/modelselector (model selector for LWIR cores: Boson, Boson+, Lepton, Tau 2, Hadron, Tura) | parametric-selector | 60 | Scrape oem.flir.com model selector pages; DigiKey/GroupGets for Lepton breakout/orderable variants. | found |
 | **XIMEA** | https://www.ximea.com/products (camera finder, 275 results on 2026-10-06); family pages linked from https://www.ximea.com/ and https://www.ximea.com/products/industrial-grade-cameras and https://www.ximea.com/products/scientific-grade-cameras | product-listing | 12 staged | Stage one module per current family. Do not pull the finder row by row. Color, monochrome, board-level, and flex-cable versions stay inside the family. Leave legacy, xiD, xiT, cables, coolers, mounts, and the xCX computer. Quote-only, not a Mouser line. See [module-types.md](module-types.md). | found |
+| **Vesper** | https://audioxpress.com/news/vesper-launches-vm1001-piezoelectric-mems-microphone-specific-for-array-applications-and-outdoor-environments ; white paper WP2 https://forum.digikey.com/uploads/short-url/aoU3gXTXMwxdnUxSjRKjJAN8PTv.pdf ; 2-mic slider guide https://media.digikey.com/pdf/Data%20Sheets/Vesper%20Tech/VM1001_2_Mic_Slider_UG.pdf | product-listing | 1 staged | Stage chip vesper-vm1001 only. The 2-mic slider is an eval board and stays off until a board is chosen. No VM1001 datasheet PDF was found; the white paper table is the number source. Not confirmed as a current Mouser line. | found |
 | **Vishay Intertechnology** | https://www.vishay.com/en/optoelectronics/ (interactive parametric product tables: IR emitters, PIN photodiodes, phototransistors, reflective/transmissive optical sensors, ambient light/proximity sensors, optocouplers) + selector guide PDFs (sg2123, sg2166) | parametric-selector | 2000 | Mouser keyword pull (Vishay photodiode / phototransistor / IR emitter / proximity sensor) + Vishay parametric table scrape. | found |
 
 ## boards  (26)

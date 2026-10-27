@@ -1,5 +1,8 @@
 # Sensors — WeftOS/WeaveLogic hardware KB
 
+Types, shared concerns, and which output can carry a reading are in
+[module-types.md](module-types.md). This file stays the per-part notes.
+
 Public hardware facts for the sensors our WeftOS / Cognitum-cogs stack reads (and
 candidates worth turning into future cogs). Specs are from vendor wikis and
 datasheets; each entry cites its source. No appliance credentials or partner-internal

@@ -1,7 +1,7 @@
 {
   "generated": "2026-10-03",
-  "note": "Where to find each known sensor/board manufacturer's full product catalog. Built by 5 area agents. best_ingest_path = how to bulk-pull into the parts pool. Sipeed, Pololu, Toradex added 2026-10-04. DEBIX added 2026-10-05. Banana Pi, Akizuki Denshi, and sensiBel added 2026-10-06. Turing Pi added 2026-10-06. XIMEA added 2026-10-06 (12 camera families; see docs/hardware/module-types.md).",
-  "count": 80,
+  "note": "Where to find each known sensor/board manufacturer's full product catalog. Built by 5 area agents. best_ingest_path = how to bulk-pull into the parts pool. Sipeed, Pololu, Toradex added 2026-10-04. DEBIX added 2026-10-05. Banana Pi, Akizuki Denshi, and sensiBel added 2026-10-06. Turing Pi added 2026-10-06. XIMEA added 2026-10-06 (12 camera families; see docs/hardware/module-types.md). Vesper added 2026-10-06 (chip vesper-vm1001).",
+  "count": 81,
   "manufacturers": [
     {
       "manufacturer": "Adafruit",
@@ -881,6 +881,17 @@
       "access_notes": "XIMEA GmbH industrial and scientific cameras. The finder listed 275 cameras on 2026-10-06. Current families are staged as one module each. Sales are quote-only. Host software is GenICam / GenTL plus the vendor SDK. Not a Mouser line.",
       "approx_products": "12 staged",
       "best_ingest_path": "Modules ximea-xiq, ximea-xic, ximea-ximu, ximea-xix, ximea-xix-xtreme, ximea-xix-xl, ximea-xib, ximea-xib-64, ximea-xij, ximea-mx377, ximea-xiray, ximea-xispec. Do not split color, monochrome, board-level, or flex cable. Do not stage legacy, xiD, xiT, cables, coolers, mounts, or the xCX computer. Type writeup: docs/hardware/module-types.md.",
+      "status": "found"
+    },
+    {
+      "manufacturer": "Vesper",
+      "area": "optical-audio",
+      "website": "https://audioxpress.com/news/vesper-launches-vm1001-piezoelectric-mems-microphone-specific-for-array-applications-and-outdoor-environments",
+      "catalog_source": "Launch note https://audioxpress.com/news/vesper-launches-vm1001-piezoelectric-mems-microphone-specific-for-array-applications-and-outdoor-environments ; white paper WP2-Rev1.0 (2019-02-15) https://forum.digikey.com/uploads/short-url/aoU3gXTXMwxdnUxSjRKjJAN8PTv.pdf ; 2-mic slider user guide Rev 1.0 https://media.digikey.com/pdf/Data%20Sheets/Vesper%20Tech/VM1001_2_Mic_Slider_UG.pdf",
+      "source_type": "product-listing",
+      "access_notes": "Vesper Technologies Inc., Boston. Piezoelectric MEMS microphones. One chip staged: VM1001. No vendor datasheet PDF was found. Sensitivity -38 dBV, SNR 64 dB, AOP 127 dB SPL, and +/- 1 dB match are the white paper datasheet-comparison table. Package, phase matching, and reflow are the 2018-12-05 launch note. IP5x dust, IPx7 water, startup under 200 us, and the absolute maxima are the slider user guide (footer August 2017), which prints shock as IEC 60028-2-27:2008. The 2-mic slider stays off the parts list. VM1000 and VM1010 numbers are not this part.",
+      "approx_products": 1,
+      "best_ingest_path": "Stage chip vesper-vm1001 only. Do not stage the 2-mic slider until a board is chosen. Do not copy VM1000 or VM1010 specifications onto VM1001.",
       "status": "found"
     }
   ]
