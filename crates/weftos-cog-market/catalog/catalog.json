@@ -3322,6 +3322,253 @@
       "hash": "wh_bcca0b07546aa76f"
     },
     {
+      "id": "mb1240",
+      "name": "MaxBotix MB1240 XL-MaxSonar-EZ4",
+      "vendor": "MaxBotix",
+      "kind": "sensor",
+      "summary": "Indoor 42 kHz air-ultrasonic rangefinder for a large on-axis target. Narrowest beam in the XL-MaxSonar-EZ line. 20 cm to 765 cm at 1 cm, 10 Hz. Store price $34.95 on 2026-10-11; the store listing was sold out. DigiKey lists the bagged MB1240-000 at $39.95.",
+      "good_for": [
+        "aimed wall range past an HC-SR04",
+        "a narrow beam that rejects side clutter"
+      ],
+      "not_for": [
+        "targets closer than 20 cm (reported as 20 cm)",
+        "a person or a soft target at the far end of the scale",
+        "a second node that only listens"
+      ],
+      "notes": [
+        "Product page https://maxbotix.com/products/mb1240 . Pulse width is the ESP32 output: Pololu documents 58 µs/cm and an inverted logic-level serial pin at 9600 8N1, so a normal UART read of TX is backwards. The bare board ships without a header. Order MB1240-000 (bagged). MB1240-040 is the same sensor in a tray. Auto-calibration on the page is voltage, humidity, and noise, not a temperature-compensated sound speed."
+      ],
+      "spec": {
+        "type": "42 kHz ultrasonic ToF",
+        "range": "20 cm to 765 cm; closer targets report as 20 cm",
+        "resolution": "1 cm",
+        "rate": "10 Hz",
+        "supply": "3.3-5.5 V",
+        "current": "3.4 mA average",
+        "temp": "0 °C to 65 °C",
+        "interface": "pulse width, analog voltage, inverted RS232 serial",
+        "beam": "narrowest in the XL-MaxSonar-EZ line",
+        "housing": "bare board, indoor",
+        "source": "https://maxbotix.com/products/mb1240"
+      },
+      "pins": [
+        "GND",
+        "V+",
+        "AN",
+        "RX",
+        "TX",
+        "PW"
+      ],
+      "chips": [],
+      "photo": "",
+      "datasheet": "https://maxbotix.com/pages/xl-maxsonar-ez-datasheet",
+      "mouser_query": "MB1240-000",
+      "buy": [
+        {
+          "vendor": "MaxBotix",
+          "price": "$34.95 USD",
+          "url": "https://maxbotix.com/products/mb1240",
+          "ships_from": "MaxBotix"
+        },
+        {
+          "vendor": "DigiKey",
+          "price": "$39.95 USD",
+          "url": "https://www.digikey.com/en/products/detail/maxbotix-inc/MB1240-000/7896775",
+          "ships_from": "DigiKey"
+        }
+      ],
+      "seen_in": [],
+      "cogs": [],
+      "docs": [
+        {
+          "label": "Product page",
+          "url": "https://maxbotix.com/products/mb1240"
+        }
+      ],
+      "hash": "wh_f1888c5b9bdb27d6"
+    },
+    {
+      "id": "mb1340",
+      "name": "MaxBotix MB1340 XL-MaxSonar-AE4",
+      "vendor": "MaxBotix",
+      "kind": "sensor",
+      "summary": "Same 42 kHz range and narrow beam as the MB1240, with a real-time analog envelope instead of the pulse-width pin. 20 cm to 765 cm at 1 cm, 10 Hz. Store price $34.95 on 2026-10-11; the store listing was sold out.",
+      "good_for": [
+        "an echo envelope on the same ray as the MB1240",
+        "seeing a large return past smaller clutter"
+      ],
+      "not_for": [
+        "targets closer than 20 cm (reported as 20 cm)",
+        "a digital pulse an ESP32 can time directly"
+      ],
+      "notes": [
+        "Product page https://maxbotix.com/products/mb1340 . Outputs are analog envelope, analog voltage, and RS232 serial. The serial pin matches the EZ family: inverted logic-level 9600 8N1. Indoor bare board, 0 °C to 65 °C. Hardware gain 250."
+      ],
+      "spec": {
+        "type": "42 kHz ultrasonic ToF with analog envelope",
+        "range": "20 cm to 765 cm; closer targets report as 20 cm",
+        "resolution": "1 cm",
+        "rate": "10 Hz",
+        "supply": "3.3-5.5 V",
+        "current": "3.4 mA average",
+        "temp": "0 °C to 65 °C",
+        "interface": "analog envelope, analog voltage, inverted RS232 serial",
+        "beam": "narrowest in the XL-MaxSonar-AE line",
+        "housing": "bare board, indoor",
+        "source": "https://maxbotix.com/products/mb1340"
+      },
+      "pins": [
+        "GND",
+        "V+",
+        "AN",
+        "RX",
+        "TX",
+        "AE"
+      ],
+      "chips": [],
+      "photo": "",
+      "datasheet": "https://maxbotix.com/pages/xl-maxsonar-ae-datasheet",
+      "mouser_query": "MB1340-000",
+      "buy": [
+        {
+          "vendor": "MaxBotix",
+          "price": "$34.95 USD",
+          "url": "https://maxbotix.com/products/mb1340",
+          "ships_from": "MaxBotix"
+        }
+      ],
+      "seen_in": [],
+      "cogs": [],
+      "docs": [
+        {
+          "label": "Product page",
+          "url": "https://maxbotix.com/products/mb1340"
+        }
+      ],
+      "hash": "wh_2c22d626fe52c554"
+    },
+    {
+      "id": "mb7388",
+      "name": "MaxBotix MB7388 HRXL-MaxSonar-WRMLT",
+      "vendor": "MaxBotix",
+      "kind": "sensor",
+      "summary": "Weather-resistant 42 kHz rangefinder for the largest acoustic return. 500 mm to 9999 mm at 1 mm, about 6 Hz, with internal temperature compensation and TTL serial. Store price $109.95 on 2026-10-11; the store listing was sold out.",
+      "good_for": [
+        "a wall past 7.65 m",
+        "TTL serial on an ESP32"
+      ],
+      "not_for": [
+        "targets closer than 50 cm (reported as 50 cm)",
+        "the smallest return when a larger one is in the beam"
+      ],
+      "notes": [
+        "Product page https://maxbotix.com/products/mb7388 . IP67, 3/4-inch NPS housing. When returns are similar it prefers the closest. MB7368 is the RS232 twin. MB7389 is the 5 m version of this sensor. Chemical-coating options are not separate rows."
+      ],
+      "spec": {
+        "type": "42 kHz ultrasonic ToF, largest target",
+        "range": "500 mm to 9999 mm; closer targets report as 50 cm",
+        "resolution": "1 mm",
+        "rate": "6 Hz",
+        "supply": "2.7-5.5 V",
+        "current": "2.9 mA average",
+        "temp": "-40 °C to 65 °C, internal temperature compensation",
+        "interface": "pulse width, analog voltage, TTL serial",
+        "beam": "long narrow detection zone",
+        "housing": "IP67, 3/4-inch NPS",
+        "source": "https://maxbotix.com/products/mb7388"
+      },
+      "pins": [
+        "GND",
+        "V+",
+        "AN",
+        "RX",
+        "TX",
+        "PW"
+      ],
+      "chips": [],
+      "photo": "",
+      "datasheet": "https://maxbotix.com/pages/hrxl-maxsonar-wr-datasheet",
+      "mouser_query": "MB7388",
+      "buy": [
+        {
+          "vendor": "MaxBotix",
+          "price": "$109.95 USD",
+          "url": "https://maxbotix.com/products/mb7388",
+          "ships_from": "MaxBotix"
+        }
+      ],
+      "seen_in": [],
+      "cogs": [],
+      "docs": [
+        {
+          "label": "Product page",
+          "url": "https://maxbotix.com/products/mb7388"
+        }
+      ],
+      "hash": "wh_0688524a27898e1e"
+    },
+    {
+      "id": "mb7853",
+      "name": "MaxBotix MB7853 TankSensor",
+      "vendor": "MaxBotix",
+      "kind": "sensor",
+      "summary": "25 kHz weather-resistant tank sensor, 300 mm to 1650 cm at 1 mm, about 1.2 Hz. Reports the largest return and provides an analog envelope plus RS232 and TTL serial. Store price $124.95 on 2026-10-11; the store listing was sold out. The 16.5 m figure is a liquid surface down a tank.",
+      "good_for": [
+        "a hard flat surface on axis out past 10 m",
+        "an analog envelope at 25 kHz"
+      ],
+      "not_for": [
+        "a person, an alcove, or a 20 m hall",
+        "targets closer than 30 cm"
+      ],
+      "notes": [
+        "Product page https://maxbotix.com/products/mb7853-tanksensor . The page headline says 2.5-5 V and a later bullet says 3.0-5.5 V; the TankSensor datasheet line for MB7853 is 2.5-5 V. MB7854 is the same range on 5.5-40 V and is not a second row. Teach mode over serial can ignore corrugation in the first metre. IP67, 90-degree horn, 3/4-inch NPS on the sensor end and 2-inch NPS on the horn. Average current on the page is 12.2 mA."
+      ],
+      "spec": {
+        "type": "25 kHz ultrasonic ToF, largest target, tank",
+        "range": "300 mm to 1650 cm",
+        "resolution": "1 mm",
+        "rate": "about 1.2 Hz",
+        "supply": "2.5-5 V (datasheet); product page also prints 3.0-5.5 V",
+        "current": "12.2 mA average",
+        "temp": "-40 °C to 65 °C",
+        "interface": "analog envelope, analog voltage, RS232 serial, TTL serial",
+        "beam": "long narrow detection zone, 90-degree horn",
+        "housing": "IP67 tank housing",
+        "source": "https://maxbotix.com/products/mb7853-tanksensor"
+      },
+      "pins": [
+        "GND",
+        "V+",
+        "AN",
+        "RS232",
+        "TTL",
+        "AE"
+      ],
+      "chips": [],
+      "photo": "",
+      "datasheet": "https://maxbotix.com/pages/xl-tanksensor-wr-datasheet",
+      "mouser_query": "MB7853",
+      "buy": [
+        {
+          "vendor": "MaxBotix",
+          "price": "$124.95 USD",
+          "url": "https://maxbotix.com/products/mb7853-tanksensor",
+          "ships_from": "MaxBotix"
+        }
+      ],
+      "seen_in": [],
+      "cogs": [],
+      "docs": [
+        {
+          "label": "Product page",
+          "url": "https://maxbotix.com/products/mb7853-tanksensor"
+        }
+      ],
+      "hash": "wh_b559dcfca30eeb9a"
+    },
+    {
       "id": "max30102-ppg",
       "name": "Maxim MAX30102 (PPG / SpO2)",
       "vendor": "Maxim Integrated / Analog Devices",
@@ -44974,6 +45221,47 @@
       "mouser_query": "SBM140B",
       "datasheet": "https://www.sensibel.com/news-insights/sensibel-84db-announcement-2026",
       "hash": "wh_29dbfc9ada719321"
+    },
+    {
+      "id": "vesper-vm1001",
+      "name": "Vesper VM1001 piezoelectric MEMS microphone",
+      "manufacturer": "Vesper",
+      "role": "piezoelectric MEMS microphone",
+      "tags": [
+        "microphone",
+        "mems",
+        "piezoelectric",
+        "audio",
+        "array"
+      ],
+      "summary": "Piezoelectric MEMS microphone for arrays and outdoor use. The 2018-12-05 launch note gives a 3.76 x 2.95 x 1.3 mm package, sensitivity tolerance +/- 1 dB, guaranteed phase matching, a 127 dB SPL overload point, and reflow soldering with no sensitivity degradation. Sampling then, with volume production aimed at Q1 2019. Vesper white paper WP2 (2019-02-15) lists sensitivity -38 dBV, SNR 64 dB, and the same overload and match. The 2-mic slider is an eval board and is not a catalog row.",
+      "spec": {
+        "sensing": "piezoelectric MEMS",
+        "sensitivity": "-38 dBV",
+        "snr": "64 dB",
+        "aop": "127 dB SPL",
+        "sensitivity_match": "+/- 1 dB",
+        "phase_match": "guaranteed; no degree figure published",
+        "package": "3.76 x 2.95 x 1.3 mm",
+        "reflow": "reflow solder compatible with no sensitivity degradation",
+        "dust": "dust resistant to IP5x",
+        "water": "water resistant to IPx7",
+        "startup": "< 200 us",
+        "stiction": "immune",
+        "supply_abs_max": "-0.3 V to 3.6 V",
+        "spl_abs_max": "160 dB re 20 uPa",
+        "operating_temperature": "-40 to 85 C",
+        "storage_temperature": "-55 to 150 C",
+        "shock": "10,000 g per IEC 60028-2-27:2008 (as printed)",
+        "vibration": "per MIL-STD 883E, 2007.2 (as printed; no level given)",
+        "availability": "sampling as of 2018-12-05; volume production aimed at Q1 2019",
+        "source": "https://audioxpress.com/news/vesper-launches-vm1001-piezoelectric-mems-microphone-specific-for-array-applications-and-outdoor-environments",
+        "white_paper": "https://forum.digikey.com/uploads/short-url/aoU3gXTXMwxdnUxSjRKjJAN8PTv.pdf",
+        "user_guide": "https://media.digikey.com/pdf/Data%20Sheets/Vesper%20Tech/VM1001_2_Mic_Slider_UG.pdf"
+      },
+      "mouser_query": "VM1001",
+      "datasheet": "https://forum.digikey.com/uploads/short-url/aoU3gXTXMwxdnUxSjRKjJAN8PTv.pdf",
+      "hash": "wh_1a7ccadcdd6cadfe"
     }
   ]
 }

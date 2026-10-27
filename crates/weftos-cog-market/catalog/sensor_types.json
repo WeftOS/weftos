@@ -539,6 +539,34 @@
    "confidence": "low"
   },
   {
+   "ref": "module:mb1240",
+   "type": "ultrasonic-ranging",
+   "grade": "B",
+   "why": "42 kHz air-ultrasonic ToF; catalog spec range=20 cm to 765 cm, resolution=1 cm",
+   "confidence": "medium"
+  },
+  {
+   "ref": "module:mb1340",
+   "type": "ultrasonic-ranging",
+   "grade": "B",
+   "why": "42 kHz air-ultrasonic ToF with analog envelope; catalog spec range=20 cm to 765 cm, resolution=1 cm",
+   "confidence": "medium"
+  },
+  {
+   "ref": "module:mb7388",
+   "type": "ultrasonic-ranging",
+   "grade": "B",
+   "why": "42 kHz weather-resistant ToF, largest return; catalog spec range=500 mm to 9999 mm, resolution=1 mm",
+   "confidence": "medium"
+  },
+  {
+   "ref": "module:mb7853",
+   "type": "ultrasonic-ranging",
+   "grade": "B",
+   "why": "25 kHz tank ToF, largest return; catalog spec range=300 mm to 1650 cm, resolution=1 mm",
+   "confidence": "medium"
+  },
+  {
    "ref": "module:generic-24g-presence-board",
    "type": "radar",
    "grade": "C",
