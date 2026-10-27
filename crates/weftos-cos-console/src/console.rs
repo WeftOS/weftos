@@ -68,6 +68,15 @@ pub struct Console<'a> {
 /// one full redraw from the models.
 const QUEUE_CAP: usize = 2048;
 
+fn flatten_ops(ops: Vec<SceneOp>, out: &mut Vec<SceneOp>) {
+    for op in ops {
+        match op {
+            SceneOp::Batch(inner) => flatten_ops(inner, out),
+            other => out.push(other),
+        }
+    }
+}
+
 type Res<T = ()> = Result<T, DisplayError>;
 
 impl<'a> Console<'a> {
@@ -151,7 +160,7 @@ impl<'a> Console<'a> {
             return Ok(());
         }
         if !self.batching {
-            return self.session.apply(&ops);
+            return self.publish_each(ops, false);
         }
         // A batch that opens with Clear is a full frame: it supersedes
         // everything queued before it (latest wins).
@@ -171,23 +180,36 @@ impl<'a> Console<'a> {
         self.batching = on;
     }
 
-    /// Publish the queued ops as one batch. When the session says the op
-    /// rate is exceeded nothing is lost: the queue stays for the next call.
+    /// Publish the queued ops. When the session says the op rate is
+    /// exceeded nothing is lost: the unsent tail stays for the next call.
     pub fn flush(&mut self) -> Res {
         if self.queued.is_empty() {
             return Ok(());
         }
-        match self.session.apply(&self.queued) {
-            Ok(()) => {
-                self.queued.clear();
-                Ok(())
-            }
-            Err(DisplayError::OpRate { .. }) => Ok(()),
-            Err(e) => {
-                self.queued.clear();
-                Err(e)
+        let queued = std::mem::take(&mut self.queued);
+        self.publish_each(queued, true)
+    }
+
+    /// One scene op per `display.ops`. The daemon packs each RPC up to its
+    /// CBOR budget; a redraw sent as one RPC was the push that made the
+    /// pad drop its mesh socket. A `Batch` is flattened so it cannot be
+    /// repacked into one fat frame. When `keep_rate_limit` is set, an op
+    /// the session will not admit yet stays queued with everything after it.
+    fn publish_each(&mut self, ops: Vec<SceneOp>, keep_rate_limit: bool) -> Res {
+        let mut flat = Vec::new();
+        flatten_ops(ops, &mut flat);
+        let mut i = 0;
+        while i < flat.len() {
+            match self.session.apply(std::slice::from_ref(&flat[i])) {
+                Ok(()) => i += 1,
+                Err(DisplayError::OpRate { .. }) if keep_rate_limit => {
+                    self.queued.extend(flat.drain(i..));
+                    return Ok(());
+                }
+                Err(e) => return Err(e),
             }
         }
+        Ok(())
     }
 
     /// Clear the display and draw the current layout from the models.
@@ -453,10 +475,12 @@ impl<'a> Console<'a> {
         if matches!(self.last_drag_ms, Some(t) if now_ms.saturating_sub(t) > GESTURE_IDLE_MS) {
             self.release_gestures();
         }
-        let ops = self.avatar.tick(now_ms);
         if self.layout != Layout::Split {
             return Ok(());
         }
+        // One tile per frame, and only while the avatar panel is on
+        // screen. A guide or page redraw has cleared the leaf.
+        let ops = self.avatar.tick(now_ms);
         self.apply(ops)
     }
 }

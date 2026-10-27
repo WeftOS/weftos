@@ -4,7 +4,7 @@
 
 use std::collections::BTreeSet;
 
-use weftos_cos_console::avatar::{ID_BARS, ID_BRACKETS, ID_CAPTION, ID_DOTS, ID_EYES, ID_HEAD, ID_MOUTH, ID_RINGS, ID_SCAN};
+use weftos_cos_console::avatar::{ID_CAPTION, ID_FIELD};
 use weftos_cos_console::frame::open_sim_unmetered;
 use weftos_cos_console::page::SWIPE_PX;
 use weftos_cos_console::text::wrap;
@@ -17,7 +17,7 @@ use weftos_cos_console::{
     AgentState, Checklist, ChecklistItem, Choice, Console, DisplaySession, GuideAnswer, LeafSim,
     Layout, ObjectEvent, PageDoc, StatusLine, StepDir, Steps, Survey,
 };
-use weftos_leaf_scene::{from_px_q8, HitShape, Primitive, Scene, SceneOp};
+use weftos_leaf_scene::{from_px_q8, HitShape, Primitive, Scene};
 
 fn sim() -> (DisplaySession, LeafSim) {
     open_sim_unmetered().unwrap()
@@ -32,10 +32,6 @@ fn text_of(scene: &Scene, n: u32) -> Option<String> {
         Primitive::Text { content, .. } => Some(content.clone()),
         _ => None,
     })
-}
-
-fn visible(scene: &Scene, n: u32) -> bool {
-    scene.node(theme::nid(n)).map(|x| x.style.visible).unwrap_or(false)
 }
 
 fn drag(c: &mut Console<'_>, node: u32, dx: i32, dy: i32) -> Option<GuideAnswer> {
@@ -193,62 +189,53 @@ fn chat_nodes_are_recycled_through_the_range() {
     assert!(*seen.iter().next_back().unwrap() >= ids::CHAT_LINES.end - 20);
 }
 
+fn bitmap_of(scene: &Scene, id: u32) -> Option<Vec<u8>> {
+    scene.node(theme::nid(id)).and_then(|node| match &node.primitive {
+        Primitive::Bitmap { data, .. } => Some(data.clone()),
+        _ => None,
+    })
+}
+
 #[test]
 fn agent_state_maps_to_avatar_pose() {
     let (mut s, sim) = sim();
     let mut c = Console::new(&mut s).unwrap();
     c.set_agent_state(AgentState::Listening).unwrap();
+    c.tick(40).unwrap();
     let snap = sim.snapshot();
-    assert!(ID_RINGS.iter().all(|n| visible(&snap, *n)));
-    assert!(ID_BRACKETS.iter().all(|n| visible(&snap, *n)));
-    assert!(!visible(&snap, ID_SCAN));
-    assert!(visible(&snap, ID_MOUTH));
+    assert!(text_of(&snap, ID_CAPTION).unwrap().contains("listening"));
+    assert!(bitmap_of(&snap, ID_FIELD).is_some(), "listening paints a field tile");
 
     c.set_agent_state(AgentState::Thinking).unwrap();
-    c.tick(500).unwrap();
-    let snap = sim.snapshot();
-    assert!(visible(&snap, ID_SCAN));
-    assert!(ID_DOTS.iter().all(|n| visible(&snap, *n)));
-    assert!(!ID_RINGS.iter().any(|n| visible(&snap, *n)));
+    c.tick(80).unwrap();
+    assert!(text_of(&sim.snapshot(), ID_CAPTION).unwrap().contains("thinking"));
 
     c.set_agent_state(AgentState::Speaking).unwrap();
-    c.tick(1000).unwrap();
-    let snap = sim.snapshot();
-    assert!(ID_BARS.iter().all(|n| visible(&snap, *n)));
-    assert!(!visible(&snap, ID_MOUTH));
+    c.tick(120).unwrap();
+    assert!(text_of(&sim.snapshot(), ID_CAPTION).unwrap().contains("speaking"));
 
     c.set_agent_state(AgentState::Idle).unwrap();
-    let snap = sim.snapshot();
-    assert!(!ID_BARS.iter().any(|n| visible(&snap, *n)));
-    assert!(visible(&snap, ID_MOUTH));
-    assert_eq!(snap.node(theme::nid(ID_HEAD)).unwrap().style.stroke, Some(theme::GREEN));
+    c.tick(160).unwrap();
+    assert!(text_of(&sim.snapshot(), ID_CAPTION).unwrap().contains("idle"));
 
     c.set_agent_state(AgentState::Blocked("needs approval".into())).unwrap();
-    assert_eq!(c.avatar().clone().tick(5000).len(), 0, "blocked pose is static");
+    c.tick(200).unwrap();
     let snap = sim.snapshot();
-    assert_eq!(snap.node(theme::nid(ID_HEAD)).unwrap().style.stroke, Some(theme::AMBER));
     assert!(text_of(&snap, ID_CAPTION).unwrap().contains("blocked"));
+    assert!(text_of(&snap, 170).unwrap().contains("needs approval"));
     assert_eq!(text_of(&snap, 200).unwrap().trim(), "BLOCKED");
+    assert!(bitmap_of(&snap, ID_FIELD).is_some(), "blocked still paints the field");
 }
 
 #[test]
-fn idle_animation_emits_tweens_that_land_on_the_leaf() {
+fn shader_field_changes_across_frames() {
     let (mut s, sim) = sim();
     let mut c = Console::new(&mut s).unwrap();
-    let mut saw_tween = false;
-    let mut saw_blink = false;
-    let mut head_colors = BTreeSet::new();
-    for t in (40..8000).step_by(40) {
-        let ops = c.avatar().clone().tick(t);
-        saw_tween |= ops.iter().any(|o| matches!(o, SceneOp::Tween { .. }));
-        c.tick(t).unwrap();
-        let snap = sim.snapshot();
-        saw_blink |= !visible(&snap, ID_EYES[0]);
-        head_colors.insert(snap.node(theme::nid(ID_HEAD)).unwrap().style.stroke.unwrap().to_rgba_u32());
-    }
-    assert!(saw_tween, "breathing uses stroke tweens");
-    assert!(saw_blink, "eyes close during a blink");
-    assert!(head_colors.len() > 2, "the leaf applied the breathing tweens");
+    c.tick(40).unwrap();
+    let first = bitmap_of(&sim.snapshot(), ID_FIELD).expect("first tile");
+    c.tick(800).unwrap();
+    let later = bitmap_of(&sim.snapshot(), ID_FIELD).expect("later tile");
+    assert_ne!(first, later, "the field holds one picture");
 }
 
 #[test]

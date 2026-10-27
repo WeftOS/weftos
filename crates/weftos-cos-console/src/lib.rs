@@ -25,6 +25,7 @@
 //!   page 300–499, guide 500–999, chat 1000–4095 (recycled).
 
 pub mod avatar;
+mod avatar_shader;
 pub mod chat_log;
 pub mod chat_view;
 pub mod chrome;
