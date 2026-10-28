@@ -5,7 +5,7 @@ description: "WeftOS kernel boot state machine, boot phases and events, service 
 
 The WeftOS kernel manages its lifecycle through a `KernelState` state machine. The `Kernel<P: Platform>` struct is the central coordinator, wrapping `AppContext<P>` with structured startup and shutdown.
 
-**Source**: `crates/clawft-kernel/src/boot.rs` (~600 lines, 14 tests)
+**Source**: `crates/clawft-kernel/src/boot.rs` (the kernel boot and shutdown), `crates/clawft-kernel/src/console.rs` (boot events), `crates/clawft-weave/src/daemon.rs` (the daemon that owns signals and the RPC listener)
 
 ## KernelState State Machine
 
@@ -18,89 +18,50 @@ pub enum KernelState {
 }
 ```
 
-Valid transitions:
-
-```
-Booting ---------> Running
-    |                 |
-    |                 v
-    |           ShuttingDown
-    |                 |
-    v                 v
-  Halted          Halted
-```
-
-- **Booting**: Kernel is initializing subsystems. No commands accepted.
-- **Running**: All subsystems active. Accepting RPC requests.
-- **ShuttingDown**: Graceful teardown in progress. New commands rejected.
-- **Halted**: Terminal state. Kernel process exits.
+- **Booting**: the kernel is initializing subsystems.
+- **Running**: all subsystems are active and the daemon accepts RPC requests.
+- **ShuttingDown**: graceful teardown. `Kernel::shutdown` returns `WrongState` unless the state is `Running`.
+- **Halted**: terminal state.
 
 ## Boot Phases
 
-Boot events are organized into phases tracked by the `BootPhase` enum:
+Boot events carry a `BootPhase` (`console.rs`). There are eight phases:
 
-```rust
-pub enum BootPhase {
-    Init,       // Core subsystem initialization
-    Services,   // Service registration and startup
-    Network,    // Cluster and mesh initialization
-    Ready,      // Boot complete, kernel running
-    Ecc,        // ECC cognitive substrate (ecc feature)
-}
-```
+| Phase | Tag | Meaning in the enum |
+|-------|-----|---------------------|
+| `Init` | `INIT` | Pre-boot initialization |
+| `Config` | `CONFIG` | Loading configuration |
+| `Services` | `SERVICES` | Registering system services |
+| `ResourceTree` | | Loading the resource tree from the DAG |
+| `Agents` | | Spawning service agents |
+| `Network` | | Network service discovery |
+| `Ecc` | | ECC cognitive substrate initialization |
+| `Ready` | | Boot complete, ready for commands |
 
-## Boot Sequence
+The phases label log events; they are not strictly sequential. In `boot.rs` the `Network` and `Services` events interleave because mesh and chain setup are interleaved with service registration.
 
-The full boot sequence, triggered by `weaver kernel start`:
+## What boot does
 
-```
-weaver kernel start
-  1. Fork background daemon process
-  2. Read KernelConfig from config file
-  3. Kernel::boot(config, kernel_config, platform):
-     PHASE: Init
-       a. ProcessTable::new(max_processes)
-       b. ServiceRegistry::new()
-       c. KernelIpc::new(message_bus)
-       d. HealthSystem::new(interval)
-       e. A2ARouter::new()
+`Kernel::boot` calls `boot_with_node_key` with no persisted key (an ephemeral node identity, used by tests and one-shot CLI boots). The daemon boots with its persisted node key, so the node id, derived from the key by `node_id_from_pubkey`, is stable across restarts (ADR-025, ADR-103 D11). The main steps, in the order they appear in `boot_bound` (`boot.rs`):
 
-     PHASE: Services
-       f. CronService::new() -> register as system service
-       g. ClusterMembership::new()
-       h. [exochain] ChainManager::new()
-          -> load_from_rvf() if checkpoint exists
-       i. [exochain] TreeManager::new(chain)
-          -> bootstrap standard namespaces:
-             /kernel
-             /kernel/services
-             /kernel/agents
-             /apps
-             /network/peers
-             /environments
-       j. [exochain] GovernanceGate::new(threshold, human_approval)
-          -> attach to chain
-          -> write governance.genesis event
-          -> write governance.rule events (22 default rules)
-       k. [K2.1] SpawnBackend dispatch attached to supervisor
-       l. [K2.1] ServiceEntry metadata added to ServiceRegistry
+1. Resolve the chain location, and take `chain.lock` beside the chain so only one kernel runs per chain. An older lock-unaware kernel still writing the legacy chain makes boot refuse.
+2. Resolve the runtime-file directory used for cluster peers, apps and the revocation list. A `project` kernel takes its rules from the user's signed parent policy (ADR-103 D8).
+3. Create the process table, service registry, `AppContext` (reusing the existing bootstrap), `KernelIpc` on the app's message bus, and the health system.
+4. Register the kernel as PID 0.
+5. Derive the node identity. With mesh enabled, the key-derived node id is shared with the mesh and assessment transports up front.
+6. Load the host revocation list.
+7. Create cluster membership (always present). Peer membership and the installed application catalog (`apps.json`) persist to disk and survive restarts.
+8. With the `cluster` feature, register the cluster service; mesh without `cluster` still gets membership.
+9. Register services and start them. With mesh enabled the listener must bind or boot fails (ADR-103 D2). Mesh admission is allow-all unless `kernel.mesh.genesis_hash` is pinned.
+10. With the `exochain` feature, start the chain and tree manager, and attach the governance gate: the genesis rules are written to the chain, then the gate is wired into the A2A router for dual-layer enforcement.
+11. With the `ecc` feature, run calibration and register the HNSW and cognitive-tick services.
+12. Log `Ready` and move to `Running`.
 
-     PHASE: Network
-       m. [mesh] Start transport listener on bind_address
-       n. [mesh] Initialize discovery backends
-       o. [mesh] Start heartbeat ticker
+The default feature set of `clawft-kernel` is `native`, `exochain`, `cluster`, `tilezero`, `ecc`, `mesh`, `quic` and `workload-runtime` (`Cargo.toml`, `[features]`). The `containers`, `wasm-sandbox`, `os-patterns`, `treesitter` and `http-api` features are off by default.
 
-     PHASE: Ecc
-       p. [ecc] EccCalibration::run_calibration()
-       q. [ecc] CognitiveTick::new() -> register as service
-       r. [ecc] HnswService::new() -> register as service
+### Resource tree namespaces
 
-     PHASE: Ready
-       s. KernelState transitions to Running
-  4. Bind Unix socket for JSON-RPC
-  5. Start cron tick loop
-  6. Listen for RPC requests
-```
+With `exochain`, `TreeManager::bootstrap` creates the namespaces `/kernel`, `/kernel/services`, `/kernel/processes`, `/kernel/agents`, `/network`, `/network/peers`, `/apps` and `/environments` (`tree_manager.rs`, `bootstrapped_paths`).
 
 ## Boot Event Logging
 
@@ -111,84 +72,64 @@ pub struct BootEvent {
     pub timestamp: DateTime<Utc>,
     pub phase: BootPhase,
     pub message: String,
-    pub level: LogLevel,
-}
-
-pub enum LogLevel {
-    Info,
-    Warn,
-    Error,
-    Debug,
-}
-
-pub struct BootLog {
-    events: Vec<BootEvent>,
+    pub level: LogLevel, // Debug, Info, Warn, Error
+    pub seq: u64,        // assigned by KernelEventLog on ingest (WEFT-434)
 }
 ```
 
-The `KernelEventLog` aggregates boot events and is accessible via `weaver kernel logs`.
+The `KernelEventLog` aggregates events. `weaver kernel logs` shows a snapshot and `weaver kernel attach` streams them (`crates/clawft-weave/src/commands/kernel_cmd.rs` header).
 
-## Service Registration at Boot
+## Service Registration
 
-During the Services phase, the kernel registers its built-in services:
+Services are registered with the `ServiceRegistry` while boot runs. Those seen in `boot.rs` are `cron`, the assessment service, the container service, `mesh`, and with `ecc` the HNSW and cognitive-tick services. Use `weaver kernel services` on a running kernel for the live list; this page no longer carries a table of services because the set changes between releases.
 
-| Service | Type | Description |
-|---------|------|-------------|
-| `cron` | Core | Scheduled job execution |
-| `health` | Core | Aggregated health monitoring |
-| `governance` | Core | Governance gate evaluation |
-| `ecc.cognitive_tick` | Core (ecc) | Adaptive cognitive loop |
-| `ecc.hnsw` | Core (ecc) | HNSW vector search |
-
-Each service implements the `SystemService` trait:
+Each service implements the `SystemService` trait (`service.rs`):
 
 ```rust
 #[async_trait]
-pub trait SystemService: Send + Sync + 'static {
+pub trait SystemService: Send + Sync {
     fn name(&self) -> &str;
-    async fn start(&self) -> Result<(), Box<dyn std::error::Error>>;
-    async fn stop(&self) -> Result<(), Box<dyn std::error::Error>>;
-    fn health_check(&self) -> HealthStatus;
+    fn service_type(&self) -> ServiceType;
+    async fn start(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
+    async fn stop(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
+    async fn health_check(&self) -> HealthStatus;
+    fn health_detail(&self) -> Option<String> { None }
+    // plus further probe methods with defaults
 }
 ```
 
 ## Shutdown Sequence
 
-Triggered by `weaver kernel stop` or SIGTERM:
+Triggered by `weaver kernel stop`, SIGINT, SIGTERM, or an RPC shutdown. The daemon (`daemon.rs`) bounds every step with a time limit and logs it; a guard thread ends the process if the whole shutdown overruns, and `kernel.pid` is removed only at exit (CHANGELOG 0.8.4, "Bounded shutdown"). In order:
 
-```
-weaver kernel stop
-  1. Send "kernel.stop" RPC to daemon
-  2. Daemon sets KernelState::ShuttingDown
-  3. ServiceRegistry::stop_all()
-     -- stops all services in reverse registration order
-  4. [exochain] ChainManager::save_to_rvf()
-     -- persist chain checkpoint to disk
-  5. Remove PID file + Unix socket
-  6. KernelState transitions to Halted
-  7. Process exits
-```
+1. Stop accepting on the router and stop the mesh listeners first, so a slow later step never leaves a dying daemon holding its ports.
+2. Finish the RPC accept loop, then the child accept loop.
+3. Shut down stream-window anchors, so they flush their final windows before the chain manager stops.
+4. Drain the agent service: in-flight `agent.chat` dispatches are cancelled and the drain waits up to 5 seconds.
+5. `Kernel::shutdown`: set `ShuttingDown`, call `ServiceRegistry::stop_all`, append a `kernel`/`shutdown` event to the chain (tree root hash, chain sequence, node count), abort agent tasks, cancel every process except PID 0, and save the chain as an RVF checkpoint with a JSON fallback plus a tree checkpoint (`boot.rs`, `Kernel::shutdown`).
+6. State becomes `Halted` and the process exits.
 
-### Signal Handling (K2b)
+`weaver kernel stop` exits 1 and keeps the pid file when the daemon does not exit. `weaver kernel stop --force` finds the daemon through `kernel.lock` and escalates from TERM to KILL (CHANGELOG 0.8.4).
 
-| Signal | Action |
-|--------|--------|
-| `SIGTERM` | Initiate graceful shutdown |
-| `SIGHUP` | Reload configuration and restart services |
+### Signal Handling
+
+| Signal | Action (`daemon.rs`) |
+|--------|----------------------|
+| `SIGINT`, `SIGTERM` | Begin graceful shutdown |
+| `SIGHUP` | Shut down, then re-exec the daemon (`boot_refusal.rs` plans the re-exec) |
+
+On Windows only Ctrl+C is handled.
 
 ## Kernel Public API
 
 ```rust
 impl<P: Platform> Kernel<P> {
-    pub fn boot(config: Config, kernel_config: KernelConfig, platform: P)
+    pub async fn boot(config: Config, kernel_config: KernelConfig, platform: Arc<P>)
         -> KernelResult<Self>;
-    pub fn shutdown(&self) -> KernelResult<()>;
-    pub fn state(&self) -> KernelState;
-    pub fn process_table(&self) -> &ProcessTable;
-    pub fn service_registry(&self) -> &ServiceRegistry;
-    pub fn ipc(&self) -> &KernelIpc;
-    pub fn health(&self) -> &HealthSystem;
-    pub fn a2a(&self) -> &A2ARouter;
-    pub fn cron(&self) -> &CronService;
+    pub async fn boot_with_node_key(config, kernel_config, platform, node_key_seed: Option<[u8; 32]>)
+        -> KernelResult<Self>;
+    pub async fn shutdown(&mut self) -> KernelResult<()>;
+    pub fn boot_log(&self) -> &BootLog;
+    // accessors for the process table, service registry, IPC, health and A2A router
 }
 ```

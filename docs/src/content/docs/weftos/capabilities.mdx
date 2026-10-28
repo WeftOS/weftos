@@ -1,123 +1,121 @@
 ---
 title: "Capabilities and RBAC"
-description: "Agent capability model with IpcScope, ToolPermissions, SandboxPolicy, ResourceLimits, and the CapabilityChecker flow."
+description: "Agent capability model: AgentCapabilities, IpcScope, ToolPermissions, SandboxPolicy, ResourceLimits, the CapabilityChecker, and governance-gated elevation."
 ---
 
-WeftOS enforces a capability-based access control model for all kernel-managed agents. Each agent process is assigned an `AgentCapabilities` struct at spawn time that defines its IPC scope, tool permissions, sandbox policy, and resource limits.
+WeftOS enforces a capability-based access control model for kernel-managed agents. Each agent process carries an `AgentCapabilities` value that defines what it may spawn, send, execute and consume. Tool permissions and the sandbox policy are separate values passed to the checker alongside it.
 
-**Source**: `crates/clawft-kernel/src/capability.rs` (~980 lines, 24 tests)
+**Source**: `crates/clawft-kernel/src/capability.rs`. Cross-node capability claims (a different mechanism) are in `capability_claim.rs`; see the end of this page.
 
 ## AgentCapabilities
 
 ```rust
 pub struct AgentCapabilities {
-    pub ipc_scope: IpcScope,
-    pub tool_permissions: ToolPermissions,
-    pub sandbox_policy: SandboxPolicy,
+    pub can_spawn: bool,          // default true
+    pub can_ipc: bool,            // default true
+    pub can_exec_tools: bool,     // default true
+    pub can_network: bool,        // default false
+    pub ipc_scope: IpcScope,      // default IpcScope::All
     pub resource_limits: ResourceLimits,
 }
 ```
+
+Fields accept camelCase aliases when deserialized (`canSpawn`, `ipcScope` and so on).
 
 ## IpcScope
 
 ```rust
 pub enum IpcScope {
-    All,                    // Communicate with all agents
-    ParentOnly,             // Only communicate with parent
-    Restricted(Vec<u64>),   // Only communicate with listed PIDs
-    Topic(Vec<String>),     // Only pub/sub to listed topics
-    None,                   // No IPC allowed
+    All,                    // default
+    ParentOnly,
+    Restricted(Vec<u64>),   // listed PIDs; topics limited to public topics
+    Topic(Vec<String>),     // listed topics only, no direct PID messaging
+    None,
 }
 ```
 
-### Scope Enforcement Matrix
+A topic is public when it is exactly `public` or starts with `public.` (`is_public_topic`).
 
-| Scope | `Process(pid)` | `Topic(name)` | `Broadcast` | `Service(name)` |
-|-------|:--------------:|:--------------:|:-----------:|:----------------:|
-| `All` | Permit | Permit | Permit | Permit |
-| `ParentOnly` | Only if parent | Deny | Deny | Deny |
-| `Restricted(pids)` | Only if in list | Deny | Deny | Deny |
-| `Topic(topics)` | Deny | Only if in list | Deny | Deny |
-| `None` | Deny | Deny | Deny | Deny |
+### Scope enforcement
+
+`AgentCapabilities::can_message(pid)` and `can_topic(topic)` give these answers, and `can_ipc = false` denies everything:
+
+| Scope | Message to a PID | Topic access |
+|-------|------------------|--------------|
+| `All` | allowed | allowed |
+| `ParentOnly` | `can_message` returns false and its comment says the caller must check the parent separately | allowed (not restricted) |
+| `Restricted(pids)` | only PIDs in the list | only public topics |
+| `Topic(topics)` | denied | only topics in the list |
+| `None` | denied | denied |
+
+`CapabilityChecker::check_ipc_target` and `check_ipc_topic` call these methods, and `A2ARouter` calls the checker for `Process` and `Topic` targets (`a2a.rs`). No parent check was found in `check_ipc_target`, so `ParentOnly` behaves as "no direct PID messaging" there.
 
 ## ToolPermissions
 
 ```rust
 pub struct ToolPermissions {
-    pub allow: Vec<String>,  // Empty = all allowed
-    pub deny: Vec<String>,   // Checked before allow
+    pub allow: Vec<String>,           // empty = all allowed
+    pub deny: Vec<String>,            // overrides allow
+    pub service_access: Vec<String>,  // empty = no restriction
 }
 ```
-
-Deny takes precedence over allow.
 
 ## SandboxPolicy
 
 ```rust
-pub enum SandboxPolicy {
-    None,        // Full access
-    Strict,      // Minimal permissions
-    Permissive,  // Some restrictions relaxed
+pub struct SandboxPolicy {
+    pub allow_shell: bool,
+    pub allow_network: bool,
+    pub allowed_paths: Vec<String>,
+    pub denied_paths: Vec<String>,
 }
 ```
+
+`SandboxPolicy` is a struct of booleans and path lists. Earlier versions of this page showed an enum with `None`, `Strict` and `Permissive` variants; no such enum exists. The one check the checker makes with it is for shell tools: `shell_exec`, `exec_shell`, `bash`, `command` and `run_command` are denied when `allow_shell` is false.
 
 ## ResourceLimits
 
 ```rust
 pub struct ResourceLimits {
-    pub max_memory_bytes: u64,    // Default: 256 MiB
-    pub max_cpu_time_ms: u64,     // Default: 300,000 (5 min)
-    pub max_tool_calls: u64,      // Default: 1,000
-    pub max_messages: u64,        // Default: 5,000
+    pub max_memory_bytes: u64,   // default 256 MiB
+    pub max_cpu_time_ms: u64,    // default 300,000 (5 minutes)
+    pub max_tool_calls: u64,     // default 1,000
+    pub max_messages: u64,       // default 5,000
+    pub max_disk_bytes: u64,     // os-patterns only; default 100 MiB, 0 = unlimited
 }
 ```
 
-## CapabilityChecker Flow
+## CapabilityChecker
 
-```
-Agent attempts action
-  |
-  +---> IPC check: validate IpcScope against target
-  |       All -> Permit
-  |       ParentOnly -> check parent PID
-  |       Restricted(pids) -> check target in list
-  |       Topic(topics) -> check topic in list
-  |       None -> Deny
-  |
-  +---> Tool check: validate ToolPermissions
-  |       tool in deny list -> Deny
-  |       allow list empty -> Permit
-  |       tool in allow list -> Permit
-  |       tool not in allow list -> Deny
-  |
-  +---> Resource check: compare usage to limits
-          messages_sent >= max_messages -> Deny
-          tool_calls >= max_tool_calls -> Deny
-          within limits -> Permit
-```
+`CapabilityChecker::new(Arc<ProcessTable>)` reads each agent's capabilities from the process table. Its methods return `KernelError::CapabilityDenied` or `ResourceLimitExceeded`:
 
-## Capability Elevation
+- `check_tool_access(pid, tool, permissions, sandbox)`: the agent must have `can_exec_tools`; the tool must not be in `deny`; if `allow` is non-empty the tool must be in it; shell tools need `sandbox.allow_shell`.
+- `check_ipc_target(from, to)` and `check_ipc_topic(pid, topic)`: `can_ipc`, then the scope table above.
+- `check_service_access(pid, service, permissions)`: if `service_access` is non-empty the service must be listed.
+- `check_resource_limit(pid, resource)`: compares a `ResourceType` (`Memory`, `CpuTime`, `ConcurrentTools`, `Messages`) against the limits and fails when the value is greater than the limit.
+
+## Capability elevation
 
 ```rust
 pub struct CapabilityElevationRequest {
-    pub pid: Pid,
-    pub requested_scope: IpcScope,
-    pub requested_tools: Vec<String>,
+    pub pid: u64,
+    pub current: AgentCapabilities,
+    pub requested: AgentCapabilities,
     pub reason: String,
 }
 
 pub enum ElevationResult {
-    Granted(AgentCapabilities),
-    Denied(String),
+    Granted { new_capabilities: AgentCapabilities },
+    Denied { reason: String },
 }
 ```
 
-Elevation requests are subject to governance gate checks when `exochain` is enabled.
+`AgentCapabilities::request_elevation_gated` (feature `exochain`) asks the governance gate for the action `capability.elevate` with a fixed effect of risk 0.5 and security 0.5. If the gate denies, the result is `Denied`. When a chain manager is passed, both outcomes are appended as `capability.elevate` events (`EVENT_KIND_CAPABILITY_ELEVATE`). `needs_elevation(platform, requested)` is true for the `browser` platform when the request asks to spawn, to use the network, or for any scope other than `Restricted`.
 
-## Browser Defaults
+## Browser defaults
 
-In browser environments, the kernel applies restricted defaults:
-- `IpcScope::Restricted` with safe targets
-- `SandboxPolicy::Strict` (no filesystem or network)
-- Lower resource ceilings (64 MiB memory, 60s CPU)
-- Explicit tool allow-list
+`AgentCapabilities::browser_default()` gives: no spawning, IPC allowed, tools allowed, no network, `IpcScope::Restricted(vec![])`, and limits of 64 MiB memory, 60,000 ms CPU, 200 tool calls and 500 messages (10 MiB disk under `os-patterns`). The browser-sandbox default of "no filesystem or network" described in older versions of this page is expressed through `can_network = false` and the scope, not through a separate `Strict` policy.
+
+## Cross-node capability claims
+
+Separately from per-agent capabilities, peers advertise capability tokens (`mesh`, `code`, `review`, `ipc`, `spawn`, `ecc`, `hnsw` and others) as Ed25519-signed claims. Tokens outside an allow-list, and tampered signatures, are rejected at verification (`capability_claim.rs`, WEFT-147). The placement capability vocabulary (ADR-099), used to match workloads to nodes, is a third, unrelated list; it is in the repo reference `docs/reference/capability-vocabulary.md`.
