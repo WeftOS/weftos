@@ -1,5 +1,7 @@
 # WeftOS Kernel Architecture
 
+> **Status (2026-10-27).** Kernel crate map as of 0.7.0 (2026-04-28). The current two-layer picture, the mesh and placement subsystems and the Cogs repository boundary are in [../architecture/overview.md](../architecture/overview.md); this page does not cover them.
+
 This document describes the WeftOS kernel layer as implemented in `crates/clawft-kernel/`.
 The kernel sits between the CLI/API surface (`clawft-weave`, `clawft-cli`) and the core
 agent runtime (`clawft-core`). It provides OS-like abstractions for agent orchestration:

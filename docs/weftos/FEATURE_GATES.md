@@ -1,7 +1,11 @@
 # WeftOS Feature Gate Reference
 
-All feature flags are defined in `crates/clawft-kernel/Cargo.toml`. Only
-`native` is enabled by default.
+> **Status (2026-10-27).** Canonical for `clawft-kernel` features, but incomplete. Of the 22 entries under `[features]` in `crates/clawft-kernel/Cargo.toml`, the table below does not list `diskann`, `http-api`, `mesh-rvf`, `quantum-braket`, `quantum-pasqal`, `quic`, `rabitq-bench`, `sensor`, `test-support`, `treesitter` and `workload-runtime`; it lists `bluetooth`, `network`, `rfkill`, `voice`, `voice-wake` and `voice-wake-rustpotter`, which are not kernel features (method: feature names parsed from the Cargo.toml with tomllib against the first column of this table). The descriptions of the features it does list have not been re-checked. Rewrite proposed; see the Doc queue.
+
+All feature flags are defined in `crates/clawft-kernel/Cargo.toml`. The default
+set is `native`, `exochain`, `cluster`, `tilezero`, `ecc`, `mesh`, `quic` and
+`workload-runtime` (`default` under `[features]`). `weaver` (`clawft-weave`)
+enables `cluster`, `ecc`, `exochain`, `mesh` and `placement` by default.
 
 ## Feature Table
 

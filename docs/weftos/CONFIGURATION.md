@@ -1,5 +1,7 @@
 # WeftOS Configuration Reference
 
+> **Status (2026-10-27).** Hand-written, last edited 2026-03-27, and limited to the kernel section of `config.json`. The generated references are authoritative where they differ: [../reference/config.md](../reference/config.md) and [../reference/config-sections.md](../reference/config-sections.md) (kernel, mesh, router, project, cog.toml). Proposed: reduce this page to a stub that links to them.
+
 WeftOS reads its configuration from a JSON file (typically `config.json` at the
 project root or `~/.clawft/config.json` globally). The root `Config` struct
 contains sections for agents, providers, gateway, tools, voice, and the kernel

@@ -1,5 +1,7 @@
 # WeftOS K-Phase Status
 
+> **Status (2026-10-27).** The phase table below was last corrected on 2026-04-28 (0.7.0). It does not record K6 beyond phase 1 or any 0.8.x work. For what shipped since, see CHANGELOG.md and the [architecture overview](../architecture/overview.md#the-weftos-layer-v084). The K, Sprint, Phase and version schemes overlap; do not read K-numbers as release numbers.
+
 Implementation status for each kernel phase. As of 0.7.0
 (2026-04-28), K0 through K5 are complete and K6 has shipped Phase 1
 (types, traits, TCP/WS transport, 136 tests). The earlier "K3+

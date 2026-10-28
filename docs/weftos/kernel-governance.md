@@ -1,5 +1,7 @@
 # WeftOS Kernel Governance
 
+> **Status (2026-10-27).** Reference written against the 0.7.x governance code (last edited 2026-07-31). Governance rules are now also distributed across the cluster (ADR-092) and there is no governance CLI: the `governance.*` surface is RPC only (see [../reference/rpc.md](../reference/rpc.md#governance)).
+
 Complete reference for the constitutional governance system that controls
 all agent behavior in WeftOS.
 

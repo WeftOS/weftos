@@ -2,28 +2,26 @@
 
 ## Prerequisites
 
-- Rust 1.93+ (`rustup install 1.93`)
+- Rust 1.95+ (`rustup install 1.95`; the workspace `rust-version` and `rust-toolchain.toml` both say 1.95)
 - Git
 - (Optional) Docker and Docker Compose
-- (Optional) Node.js 18+ for the K8 GUI
+- (Optional) Node.js, only for the docs site and the dashboard
 
 ## From Source
 
 ```bash
 git clone https://github.com/WeftOS/weftos.git
-cd clawft
+cd weftos
 
-# Build the CLI in release mode
+# Build weft and weaver in release mode
 scripts/build.sh native
 
-# Or build directly with cargo (not recommended for regular use):
-cargo build --release -p clawft-cli
-
-# Install the CLI binary
-cargo install --path crates/clawft-cli
+# Or build and install both to ~/.cargo/bin
+scripts/build.sh install
 
 # Verify
 weft --version
+weaver version
 ```
 
 ### Debug Builds (faster iteration)
@@ -58,25 +56,20 @@ docker run -p 8080:8080 weftos
 ## Quick Start
 
 ```bash
-# Initialize WeftOS in your project
+# Initialize WeftOS in your project (the `weftos` binary is from the
+# `weftos` crate: `cargo install weftos`)
 cd my-project
 weftos init
 
-# Start the kernel
-weave boot
+# Start the kernel as a background daemon
+weaver kernel start
 
 # Check status
-weave status
+weaver kernel status
 ```
 
-### K8 GUI (optional)
-
-```bash
-cd gui
-npm install
-npm run dev
-# Open http://localhost:5173
-```
+The native GUI is `weft-gui-egui` (`scripts/build.sh gui-egui`). The old
+`gui/` Tauri and React shells no longer exist.
 
 ## ONNX Embeddings (optional)
 
@@ -107,7 +100,7 @@ This executes 11 checks: build, test, clippy, formatting, and more.
 
 | Problem | Fix |
 |---------|-----|
-| `rustup` reports Rust < 1.93 | `rustup update stable` |
+| `rustup` reports Rust < 1.95 | `rustup update stable` |
 | Missing `tokio` or `futures` | The `native` feature is not enabled (it is the default) |
 | ONNX model not found | Run `scripts/download-model.sh` first |
 | `scripts/build.sh` not found | You are not in the project root directory |

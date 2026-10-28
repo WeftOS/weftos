@@ -1,5 +1,7 @@
 # WeftOS Integration Patterns
 
+> **Status (2026-10-27).** Implementor guide written 2026-03-25 for K3 work. The patterns (RVF crypto, ExoChain, resource trees, governance, scoring) are the original design; code paths and signatures have not been re-checked since. Proposed: keep as design background; verify against `crates/clawft-kernel` before copying an example.
+
 How RVF crypto, ExoChain, resource trees, governance, and scoring integrate
 across the kernel. This document is the primary reference for K3+ implementors
 adding new subsystems.

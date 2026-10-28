@@ -5,7 +5,7 @@ directory.
 
 ## Prerequisites
 
-- **Rust 1.93+** -- install via [rustup](https://rustup.rs/):
+- **Rust 1.95+** -- install via [rustup](https://rustup.rs/):
 
   ```bash
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
@@ -18,19 +18,24 @@ directory.
 
 ```bash
 git clone https://github.com/WeftOS/weftos.git
-cd clawft
+cd weftos
 
-# Build the WeftOS binary
+# Build the two main binaries
 scripts/build.sh native
 
 # The binaries are in target/release/
-# - weftos  (WeftOS daemon)
-# - weave   (kernel management CLI)
-# - weft    (agent CLI)
+# - weaver  (WeftOS daemon and operator CLI, crate clawft-weave)
+# - weft    (agent CLI, crate clawft-cli)
 
 # Copy to your PATH (optional)
-cp target/release/weftos target/release/weave ~/.local/bin/
+cp target/release/weaver target/release/weft ~/.local/bin/
 ```
+
+`scripts/build.sh native` builds only `weft` and `weaver`. The `weftos`
+command used in the next sections (`init`, `boot`, `status`) is a third
+binary from the `weftos` crate: `cargo install weftos`, or
+`cargo build -p weftos` in a checkout. `weaver init` also writes a
+`weave.toml`; see [the CLI reference](../reference/cli.md).
 
 ## Initialize a Project
 
@@ -95,37 +100,37 @@ WeftOS initialized in current directory
   Runtime: .weftos/
 ```
 
-## Kernel Management with `weave`
+## Kernel Management with `weaver`
 
-The `weave` CLI provides detailed kernel management:
+The `weaver` CLI provides detailed kernel management:
 
 ```bash
 # Start kernel as a background daemon
-weave kernel start
+weaver kernel start
 
 # Start in foreground (blocking)
-weave kernel start --foreground
+weaver kernel start --foreground
 
 # Check kernel state, uptime, process/service counts
-weave kernel status
+weaver kernel status
 
 # List registered services
-weave kernel services
+weaver kernel services
 
 # List process table entries
-weave kernel ps
+weaver kernel ps
 
 # Stream logs in real time
-weave kernel attach
+weaver kernel attach
 
 # Show recent log entries
-weave kernel logs -n 50
+weaver kernel logs -n 50
 
 # Stop the daemon
-weave kernel stop
+weaver kernel stop
 
 # Restart the daemon
-weave kernel restart
+weaver kernel restart
 ```
 
 ## Build with More Features

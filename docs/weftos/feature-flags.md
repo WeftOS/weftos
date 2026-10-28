@@ -1,5 +1,7 @@
 # Feature Flag Reference
 
+> **Status (2026-10-27).** Stub candidate. It covers 22 workspace crates; the workspace now has 65 members, so most crates' flags are not listed. The kernel-only reference is [FEATURE_GATES.md](FEATURE_GATES.md) and the developer-oriented catalogue is [../development/feature-flags.md](../development/feature-flags.md). Proposed: prune this page in favour of those two once a ruling is given; nothing has been deleted.
+
 This document catalogs every Cargo feature flag across all 22 workspace crates.
 
 ## Workspace Crates Overview

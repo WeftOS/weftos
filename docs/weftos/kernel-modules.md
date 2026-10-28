@@ -1,5 +1,7 @@
 # WeftOS Kernel Modules Reference
 
+> **Status (2026-10-27).** Historical snapshot from 2026-03-25. It documents 25 source files; `crates/clawft-kernel/src/` now has 224 entries (method: `ls crates/clawft-kernel/src | wc -l`, files and directories), including `cog_ingest`, `exposure`, `licence`, `infer_proxy` and the governance overlay, none of which it describes. Treat it as the K0 to K5 module description only. Proposed: keep as a historical reference, or replace with a generated module list; no deletion without a ruling.
+
 Per-module documentation for the 25 source files in `crates/clawft-kernel/src/`.
 Each section covers: purpose, public API, integration points, and test coverage.
 
