@@ -7,6 +7,8 @@ description: Run OpenClaw and other AI coding agents as managed processes inside
 
 [OpenClaw](https://github.com/openclawai/openclaw) is an open-source AI coding agent. WeftOS can host OpenClaw (and similar agents like NanoClaw, Codex, Cursor) as managed kernel processes with governance, sandboxing, and provenance.
 
+> **Status as of 0.8.4: not implemented as described.** WeftOS has no OpenClaw runtime adapter. `weaver agent spawn` takes an agent id and an optional parent PID and has no `--runtime` or `--name` flag (generated [CLI reference](/docs/clawft/cli-reference), `weaver agent spawn`), and `AgentSupervisor::spawn` accepts only the native backend (`crates/clawft-kernel/src/supervisor.rs`). The tables below describe the intended integration, not a shipped one. What does exist is the supervised-process model (PID, capabilities, IPC, governance, chain logging) and, behind the off-by-default `http-api` feature of `clawft-kernel`, the `POST /api/v1/execute` endpoint (`http_api.rs`).
+
 ## How It Works
 
 OpenClaw runs as a **supervised process** inside the WeftOS kernel:
@@ -37,7 +39,7 @@ weaver kernel start
 ### 2. Spawn OpenClaw as a managed process
 
 ```bash
-weaver agent spawn --runtime openclaw --name code-reviewer
+weaver agent spawn code-reviewer     # native agent; no OpenClaw runtime flag exists
 ```
 
 Or via the HTTP API:

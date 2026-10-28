@@ -6,7 +6,7 @@ description: "Ephemeral Causal Cognition: causal DAG, cognitive tick, cross-refe
 The Ephemeral Causal Cognition (ECC) substrate is the cognitive layer of WeftOS. It implements a distributed nervous system where every kernel instance is a node -- from embedded sensor devices to GPU servers -- all running the same `Kernel<P: Platform>`, differentiated by boot-time calibration.
 
 **Feature**: `ecc`
-**Source**: 6 modules in `crates/clawft-kernel/src/` (83 tests)
+**Source**: 6 modules in `crates/clawft-kernel/src/`
 **Phase**: K3c
 **Quantum acceleration** (experimental, 0.6.7+): ECC's graph-spectral operations can be offloaded onto real neutral-atom quantum processors via the [Quantum Cognitive Layer](/weftos/quantum). The classical path remains the default; quantum is a compile-time opt-in.
 
@@ -42,7 +42,7 @@ Each transition is a causal edge. Training material falls out naturally -- every
 
 ## CausalGraph
 
-**Source**: `crates/clawft-kernel/src/causal.rs` (~700 lines, 22 tests)
+**Source**: `crates/clawft-kernel/src/causal.rs`
 
 A concurrent, lock-free DAG where nodes represent events/observations and edges encode causal relationships with weights and provenance.
 
@@ -75,7 +75,7 @@ Built on `DashMap` for safe concurrent access from multiple agent threads. BFS t
 
 ## CognitiveTick
 
-**Source**: `crates/clawft-kernel/src/cognitive_tick.rs` (~550 lines, 20 tests)
+**Source**: `crates/clawft-kernel/src/cognitive_tick.rs`
 
 The heartbeat of the ECC substrate. Drives cognitive processing at a configurable interval with adaptive adjustment.
 
@@ -101,7 +101,7 @@ Implements `SystemService` (name: `ecc.cognitive_tick`). The tick interval is se
 
 ## CrossRefStore
 
-**Source**: `crates/clawft-kernel/src/crossref.rs` (~425 lines, 12 tests)
+**Source**: `crates/clawft-kernel/src/crossref.rs`
 
 Universal cross-references between the forest structures.
 
@@ -139,7 +139,7 @@ Concurrent forward/reverse index enables grafting (linking) and shaking (pruning
 
 ## HnswService
 
-**Source**: `crates/clawft-kernel/src/hnsw_service.rs` (~280 lines, 11 tests)
+**Source**: `crates/clawft-kernel/src/hnsw_service.rs`
 
 Thread-safe kernel wrapper around `clawft_core::embeddings::hnsw_store::HnswStore`.
 
@@ -160,7 +160,7 @@ Implements `SystemService` (name: `ecc.hnsw`). **API**: `insert`, `search`, `len
 
 ## ImpulseQueue
 
-**Source**: `crates/clawft-kernel/src/impulse.rs` (~320 lines, 8 tests)
+**Source**: `crates/clawft-kernel/src/impulse.rs`
 
 Ephemeral causal events that flow between the four ECC structures.
 
@@ -181,7 +181,7 @@ HLC-sorted for causal ordering. Structure tags are raw `u8` values matching `Str
 
 ## EccCalibration
 
-**Source**: `crates/clawft-kernel/src/calibration.rs` (~410 lines, 10 tests)
+**Source**: `crates/clawft-kernel/src/calibration.rs`
 
 Boot-time benchmarking that determines hardware capability:
 
@@ -230,7 +230,7 @@ ef_construction = 200
 
 ### DiskANN (SSD-backed)
 
-SSD-backed approximate nearest neighbor search via `ruvector-diskann` v2.1. Uses a Vamana graph with optional product quantization and mmap persistence. Best for large corpora (1M+ vectors) where memory is constrained.
+SSD-backed approximate nearest neighbor search via `ruvector-diskann` v2.1. The `diskann` Cargo feature is off by default; selecting the DiskANN or Hybrid backend in a build without it falls back to an in-memory brute-force linear scan (correct results, O(n) latency). Boot warns about the mismatch, and `vector.strict = true` makes it a boot error (`crates/clawft-kernel/src/vector_diskann.rs`, WEFT-656). Uses a Vamana graph with optional product quantization and mmap persistence. Best for large corpora (1M+ vectors) where memory is constrained.
 
 ```toml
 [kernel.vector]
@@ -327,9 +327,7 @@ Information-gain-based pruning removes redundant evidence edges that contribute 
 
 Typed BFS traversal that follows specific edge types through the causal graph, producing natural-language explanations of causal chains. Given a source event and target outcome, it enumerates all causal paths up to a configurable depth, filtering by edge type (Causes, Enables, TriggeredBy) and producing human-readable explanations of each chain.
 
-```bash
-weaver ecc trace --from event_123 --to outcome_456 --depth 5 --types causes,enables
-```
+There is no `weaver` command for chain tracing at 0.8.4. An earlier version of this page showed a `trace` subcommand with `--from`, `--to`, `--depth` and `--types` flags; `weaver ecc --help` lists no such subcommand. The traversal is available in the kernel API (`crates/clawft-kernel/src/causal.rs`) and, for one node's edges, through `weaver ecc causal`.
 
 ## Resource Tree Namespaces
 
@@ -343,32 +341,25 @@ weaver ecc trace --from event_123 --to outcome_456 --depth 5 --types causes,enab
 
 ## CLI Commands
 
-```bash
-weaver ecc status          # Show ECC subsystem status
-weaver ecc calibrate       # Run calibration benchmark
-weaver ecc search <query>  # HNSW vector search
-weaver ecc causal          # Display causal graph info
-weaver ecc crossrefs       # List cross-references
-weaver ecc tick            # Show cognitive tick stats
-```
+The `weaver ecc` subcommands are listed under WeaverEngine below.
 
 ## Built-in Tools
 
-7 ECC tools in the tool catalog (behind `ecc` feature):
+7 ECC tools in the WASM tool catalog (`crates/clawft-kernel/src/wasm_runner/catalog.rs`, category `Ecc`):
 
 | Tool | Description |
 |------|-------------|
-| `ecc.status` | ECC subsystem status |
-| `ecc.calibrate` | Run calibration |
+| `ecc.embed` | Embed text through the configured provider |
 | `ecc.search` | HNSW search |
-| `ecc.causal.add` | Add causal node |
-| `ecc.causal.link` | Create causal edge |
-| `ecc.crossref.add` | Add cross-reference |
-| `ecc.impulse.emit` | Emit an impulse |
+| `ecc.causal.link` | Create a causal edge |
+| `ecc.causal.query` | Query the causal graph |
+| `ecc.crossref.create` | Create a cross-reference |
+| `ecc.tick.status` | Cognitive tick status |
+| `ecc.calibration.run` | Run calibration |
 
 ## WeaverEngine
 
-**Source**: `crates/clawft-kernel/src/weaver.rs` (~4,800 lines, 126 tests)
+**Source**: `crates/clawft-kernel/src/weaver.rs`
 
 The WeaverEngine is a `SystemService` that drives iterative causal modeling over data sources. It runs a HYPOTHESIZE-OBSERVE-EVALUATE-ADJUST loop within the cognitive tick, maintaining confidence scores and self-improvement tracking via a meta-Loom.
 
@@ -390,7 +381,7 @@ The WeaverEngine is a `SystemService` that drives iterative causal modeling over
 
 ### Embedding Providers
 
-**Source**: `crates/clawft-kernel/src/embedding.rs` and `embedding_onnx.rs` (62 tests)
+**Source**: `crates/clawft-kernel/src/embedding.rs` and `embedding_onnx.rs`
 
 | Provider | Dimensions | Use Case |
 |----------|-----------|----------|
@@ -406,19 +397,24 @@ The DEMOCRITUS loop (`democritus.rs`) is the integration layer that runs on ever
 
 ### Persistence
 
-CausalGraph and HNSW state can be saved to and restored from disk via the persistence coordinator. See [Persistence](/docs/weftos/persistence) for file layout, API, and recovery behavior.
+The kernel has helper functions that save and load the CausalGraph and HNSW state as JSON, but at 0.8.4 nothing calls them. See [Persistence](/docs/weftos/persistence) for what is and is not written to disk.
 
 ### CLI Commands
 
+The `weaver ecc` subcommands at 0.8.4 (generated [CLI reference](/docs/clawft/cli-reference)):
+
 ```bash
-weaver ecc session start --domain my-project --git .
-weaver ecc source add --domain my-project --type ci_pipeline
-weaver ecc confidence --domain my-project --verbose
-weaver ecc export --domain my-project --output weave-model.json
-weaver ecc stitch --source frontend --target backend
-weaver ecc meta --domain my-project
-weaver ecc meta export-kb --output weaver-kb.json
+weaver ecc status          # calibration and tick statistics
+weaver ecc calibrate       # re-run boot calibration
+weaver ecc search          # HNSW similarity search
+weaver ecc causal          # causal edges for a node
+weaver ecc crossrefs       # cross-references for a Universal Node ID
+weaver ecc tick            # current tick statistics
+weaver ecc vector-config   # active vector backend config
+weaver ecc spatial         # BVH spatial index (ADR-056): insert, query, branch, diff, status, events, replay
 ```
+
+Earlier versions of this page also listed `session`, `source`, `confidence`, `export`, `stitch` and `meta` subcommands for a Weaver modelling session. None of them is a `weaver ecc` subcommand now; the session and modelling operations live behind the `WeaverCommand` protocol below.
 
 ### IPC Protocol
 
@@ -426,7 +422,7 @@ weaver ecc meta export-kb --output weaver-kb.json
 
 ## O(1) Coherence Approximation (EML)
 
-**Source**: `crates/clawft-kernel/src/eml_coherence.rs` (16 tests)
+**Source**: `crates/clawft-kernel/src/eml_coherence.rs`
 **Phase**: K3c
 **See also**: [EML -- Self-Learning Functions](/docs/weftos/eml) for the full EML system covering all 16 models across the stack.
 
