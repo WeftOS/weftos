@@ -149,3 +149,9 @@ docs/research/agent-directory/private/
 crates/weftos-cog-market/catalog/mouser-pool.json
 # design-taste-frontend skill: per-project draw history and Chrome profiles
 .taste-skill/
+# Claude-Grok mailbox: local only. The records live in the private weftos-weavelogic repo.
+docs/comms/
+# Local tool output
+__pycache__/
+supabase/.temp/
+.grok/compose/*.log
