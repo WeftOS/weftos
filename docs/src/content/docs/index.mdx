@@ -1,50 +1,61 @@
 ---
 title: WeftOS Documentation
-description: Guides, references, and examples for the WeftOS AI framework.
+description: Guides, references, and examples for WeftOS, the governed AI operating system.
 ---
 
 # WeftOS Documentation
 
-WeftOS is a full-stack AI operating system built in Rust. It has three layers:
+WeftOS is an AI operating system written in Rust. This is documentation for v0.8.4. It is built in layers:
 
-- **clawft** — The agent runtime. Connects to any LLM, runs on any platform, with built-in tool use and skill learning.
-- **WeftOS Kernel** — Process management, constitutional governance, cryptographic provenance, and self-healing supervision.
-- **ECC** — The cognitive layer. A causal knowledge graph that gives agents persistent memory and reasoning.
+- **clawft** is the agent runtime. It connects to hosted and local LLMs, runs tools and skills, and handles channels such as the CLI, web, Slack and Discord.
+- **The WeftOS kernel** provides processes, typed IPC, capability checks, constitutional governance, and an append-only hash chain (ExoChain) that records privileged actions.
+- **ECC** is the cognitive layer: a causal graph with vector search that gives agents persistent memory.
+- **The node daemon** (`weaver`) runs on each machine. It hosts a kernel per project, joins machines into a mesh, and runs cogs (sandboxed workloads, including sensor drivers) with governed placement.
 
 ## Start Here
 
 <Cards>
-  <Card title="Quickstart" href="/docs/clawft/getting-started">
-    Install and run your first agent in under 5 minutes.
+  <Card title="Install" href="/docs/weftos/getting-started/installation">
+    Release installer, Homebrew, Docker, crates.io or source, plus `weaver update`.
+  </Card>
+  <Card title="Quickstart" href="/docs/weftos/getting-started/quickstart">
+    Initialize a project and boot a kernel.
+  </Card>
+  <Card title="Run your first agent" href="/docs/clawft/getting-started">
+    Configure a provider and talk to an agent with `weft`.
   </Card>
   <Card title="Architecture Overview" href="/docs/clawft/architecture">
-    Understand how the three layers work together.
+    How the layers fit together.
   </Card>
   <Card title="LLM Providers" href="/docs/clawft/providers">
-    Configure any of 9 supported LLM providers.
+    Hosted providers plus local servers such as Ollama.
   </Card>
   <Card title="Security Model" href="/docs/clawft/security">
-    Defense-in-depth with WASM sandboxing and governance.
+    Sandboxing, SSRF protection, capabilities and governance.
   </Card>
 </Cards>
 
 ## By Layer
 
 ### Agent Runtime (clawft)
-- [Getting Started](/docs/clawft/getting-started) — Installation and first run
-- [Agent Loop](/docs/clawft/agent-loop) — The 7-stage processing pipeline
-- [Providers](/docs/clawft/providers) — 9 LLM providers including local inference
-- [Tools](/docs/clawft/tools) — Built-in and custom agent tools
-- [Channels](/docs/clawft/channels) — Slack, Teams, Discord, web, CLI
-- [Security](/docs/clawft/security) — Sandboxing, SSRF protection, capability system
+- [Getting Started](/docs/clawft/getting-started): installation and first run
+- [Agent Loop](/docs/clawft/agent-loop): how a message becomes a response
+- [Providers](/docs/clawft/providers): LLM providers, including local inference
+- [Tools](/docs/clawft/tools): built-in and custom agent tools
+- [Channels](/docs/clawft/channels): CLI, web, Slack, Discord and others
+- [Security](/docs/clawft/security): sandboxing, SSRF protection, capability system
 
 ### Kernel (WeftOS)
-- [Kernel Overview](/docs/weftos) — Boot sequence, services, feature flags
-- [Process Table](/docs/weftos/process-table) — PID management and agent lifecycle
-- [Governance](/docs/weftos/governance) — Constitutional AI with effect vectors
-- [ExoChain](/docs/weftos/exochain) — Cryptographic provenance and audit trails
-- [Mesh Networking](/docs/weftos/mesh) — Encrypted P2P multi-node coordination
+- [Kernel Overview](/docs/weftos): boot sequence, services, feature flags
+- [Process Table](/docs/weftos/process-table): PID management and agent lifecycle
+- [Governance](/docs/weftos/governance): constitutional governance with effect vectors
+- [ExoChain](/docs/weftos/exochain): cryptographic provenance and audit trails
+- [Mesh Networking](/docs/weftos/mesh-networking): multi-node coordination
 
 ### Cognitive Layer (ECC)
-- [ECC Overview](/docs/weftos/ecc) — Causal knowledge graph and semantic search
-- [DEMOCRITUS](/docs/weftos/democritus) — The continuous cognitive loop
+- [ECC Overview](/docs/weftos/ecc): causal knowledge graph and semantic search
+- [DEMOCRITUS](/docs/weftos/democritus): the continuous cognitive loop
+
+## Release notes
+
+See [Release Notes](/docs/weftos/vision/releases) for what changed in each release. Pages for the 0.8.x platform features (cogs, cogbus, placement, the tailnet router, projects) are being added; until they land, the repository's `docs/guides/` and `docs/adr/` directories are the reference.

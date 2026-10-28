@@ -1,168 +1,87 @@
 ---
 title: "Deployment"
-description: "Docker deployment, WASM targets, CI/CD pipeline, and production configuration for clawft."
+description: "How to run clawft and the WeftOS node daemon in production: Docker, the per-user daemon, per-project kernels, WASM targets, and recommended configuration."
 ---
 
-## Docker Deployment
+This page covers how the pieces run on a machine. The step-by-step guides are linked from each section.
 
-clawft ships as a minimal Docker image containing the statically-linked `weft` binary. The runtime image uses `debian:bookworm-slim` with only `ca-certificates`, `libssl3`, and `libgcc-s1`.
+## Choose a shape
 
-### Quick Start
+| Shape | Use it for | Start here |
+|-------|------------|------------|
+| Docker gateway | A `weft gateway` (REST and WebSocket API) on a server | [Docker Deployment](/docs/weftos/guides/deployment-docker) |
+| Per-user daemon | A developer or edge machine that runs projects, cogs and a mesh node | [Per-user daemon](#per-user-daemon) |
+| WASM | Browser tabs, wasmtime or edge hosts | [WASM](#wasm) |
 
-```bash
-docker pull ghcr.io/weftos/weftos:latest
-docker run --rm -it ghcr.io/weftos/weftos:latest --version
-```
+## Docker
 
-By default the container starts in gateway mode (`weft gateway`).
-
-### Building from Source
-
-```bash
-git clone https://github.com/WeftOS/weftos.git
-cd weftos
-
-rustup target add x86_64-unknown-linux-musl
-cargo build --release --target x86_64-unknown-linux-musl
-
-mkdir -p docker-build
-cp target/x86_64-unknown-linux-musl/release/weft docker-build/weft-linux-x86_64
-
-docker build -t clawft:local .
-```
-
-### Configuration
-
-Mount your config file and pass API keys via environment variables:
+The image `ghcr.io/weftos/weftos` is multi-arch (`linux/amd64`, `linux/arm64`), based on Alpine, and runs as the non-root user `weft`. It holds `weft` and `weaver`; the default command is `gateway`, which also starts a kernel daemon in the container. Config lives in `/home/weft/.clawft`, kernel state in `/home/weft/.weftos`.
 
 ```bash
-docker run --rm -it \
-  -e OPENAI_API_KEY="sk-..." \
-  -v "$HOME/.clawft:/root/.clawft:ro" \
-  ghcr.io/weftos/weftos:latest gateway
+docker run -d --name weftos \
+  -v weftos-clawft:/home/weft/.clawft \
+  -v weftos-state:/home/weft/.weftos \
+  -p 127.0.0.1:8080:8080 \
+  ghcr.io/weftos/weftos:latest
 ```
 
-For persistent session data, mount the workspace without `:ro`:
+Tags, compose, health checks, hardening and troubleshooting are in the [Docker Deployment guide](/docs/weftos/guides/deployment-docker).
+
+## Per-user daemon
+
+On a workstation or edge node, `weaver` runs one daemon per user. Install the binaries (see [Installation](/docs/weftos/getting-started/installation)), then:
 
 ```bash
-docker run --rm -it \
-  -v "$HOME/.clawft:/root/.clawft" \
-  ghcr.io/weftos/weftos:latest gateway
+weaver kernel start --profile user    # start the per-user daemon (backgrounds by default)
+weaver kernel status --profile user
+weaver kernel stop --profile user
 ```
 
-### Docker Compose
+Without `--profile user`, `weaver kernel start` starts a daemon for the project in the current directory (or the legacy `~/.clawft` daemon). `--profile` can also be set with `WEAVER_PROFILE`.
 
-```yaml
-services:
-  clawft:
-    image: ghcr.io/weftos/weftos:latest
-    command: ["gateway"]
-    restart: unless-stopped
-    volumes:
-      - ./config.json:/root/.clawft/config.json:ro
-      - clawft-data:/root/.clawft/workspace
-    environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-    healthcheck:
-      test: ["CMD", "/usr/local/bin/weft", "status"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-
-volumes:
-  clawft-data:
-```
+To start it at login, print a launchd or systemd user unit and install it with the commands the tool prints. `weaver service unit` never runs `launchctl` or `systemctl` itself:
 
 ```bash
-docker compose up -d
-docker compose logs -f clawft
+weaver service unit --kind launchd --out ~/Library/LaunchAgents/ai.weftos.user.plist
+weaver service unit --kind systemd --out ~/.config/systemd/user/weftos.service
 ```
 
-### Health Checks
+The per-user daemon keeps its state under `~/.weftos/run`. A kernel started inside a project directory uses `<project>/.weftos/runtime` instead, and `$WEFTOS_RUNTIME_DIR` overrides both (`crates/clawft-types/src/runtime_paths.rs`).
 
-The `weft status` command returns a non-zero exit code if the agent cannot initialize. Use it as a Docker health check or probe manually:
+### Per-project kernels
+
+Under ADR-103 the user daemon hosts a kernel for each registered project, so projects stay isolated while sharing one mesh identity:
 
 ```bash
-docker exec <container> /usr/local/bin/weft status
+weaver project add <source>    # fetch, register and detect a project
+weaver project up <slug>       # start it
+weaver project status
+weaver project down <slug>
+weaver project remove <slug>
 ```
 
-### Docker Image Variants
+`weaver kernel start --project <id-or-name>` and `weaver kernel stop --project <id-or-name>` act on one project's kernel. The repository guides [project-install.md](https://github.com/WeftOS/weftos/blob/master/docs/guides/project-install.md) and [developer-quickstart.md](https://github.com/WeftOS/weftos/blob/master/docs/guides/developer-quickstart.md) cover installing a project from another machine over the mesh.
 
-| Variant | Features | Use Case |
-|---------|----------|----------|
-| Default | Standard build | Production gateway |
-| WASM-enabled | `--features wasm-plugins` | Plugin support |
-| Minimal | `--no-default-features` | Smallest image |
+### Tailnet router
+
+The user daemon can serve every project on the machine behind one HTTPS name, by path, over a tailnet. It is off by default (`[router] enabled = true` in `~/.weftos/weave.toml`), is tailnet-only, and never enables Funnel. Use `weaver route list`, `weaver route reload` and `weaver route serve --plan` to inspect it. ADR-116, which defines it, still has status Proposed. See the repository guide [tailnet-router.md](https://github.com/WeftOS/weftos/blob/master/docs/guides/tailnet-router.md).
+
+### Updating
+
+`weaver update` installs a signed release over the binaries it installed and offers to restart the daemon. See [Installation](/docs/weftos/getting-started/installation#updating).
+
+## WASM
 
 ```bash
-docker build --build-arg FEATURES="wasm-plugins" -t weft:wasm .
+scripts/build.sh wasi      # wasm32-wasip2, for wasmtime and edge hosts
+scripts/build.sh browser   # wasm32-unknown-unknown, for browser tabs
 ```
 
-### Security Considerations
+The `wasm32-wasip2` module has size gates of 300 KB raw and 120 KB gzipped in CI (`release-wasm` profile). For the browser, serve `clawft_wasm.js` and `clawft_wasm_bg.wasm` from any static host, with `Content-Type: application/wasm` for the `.wasm` file and compression on. See [Browser Mode](/docs/clawft/browser) and the [WASM deployment guide](/docs/weftos/guides/deployment-wasm).
 
-- **Read-only filesystem** -- mount config as `:ro`, use named volumes for workspace
-- **Non-root execution** -- run with `--user 1000:1000` and adjust volume permissions
-- **Network restrictions** -- use `--network=none` for offline testing or create a dedicated network
-- **Secrets** -- never bake API keys into the image; use environment variables or Docker secrets
+## Recommended configuration
 
----
-
-## WASM Deployment
-
-### Build Targets
-
-```bash
-# WASI target
-scripts/build.sh wasi
-
-# Browser target
-scripts/build.sh browser
-```
-
-The WASM binary is subject to size gates: < 300 KB raw, < 120 KB gzipped. The `release-wasm` profile uses `opt-level = "z"`.
-
-### Static Hosting
-
-Serve the `clawft_wasm.js` and `clawft_wasm_bg.wasm` files from any static host. Set `Content-Type: application/wasm` for `.wasm` files and enable compression.
-
-See [Browser Mode](/docs/clawft/browser) for detailed browser deployment instructions.
-
----
-
-## CI/CD Pipeline
-
-The GitHub Actions workflow (`.github/workflows/pr-gates.yml`) enforces quality gates on every pull request.
-
-### PR Gate Jobs
-
-| Job | Command | Description |
-|-----|---------|-------------|
-| Clippy lint | `cargo clippy --workspace -- -D warnings` | Zero-warning clippy |
-| Test suite | `cargo test --workspace` | Full workspace tests |
-| WASM size gate | `scripts/bench/wasm-size-gate.sh` | Binary < 300 KB raw, < 120 KB gzipped |
-| Binary size check | `wc -c target/release/weft` | Release binary < 10 MB |
-| Integration smoke | Docker build + gateway start | Build, start gateway, verify 5s uptime |
-
-The pipeline uses `concurrency` groups to cancel stale runs.
-
-### Multi-Arch Docker Builds
-
-```bash
-docker buildx build --platform linux/amd64,linux/arm64 -t weft .
-```
-
-The Dockerfile uses a multi-stage build with `cargo-chef` for dependency caching:
-
-1. **Chef stage** -- Install `cargo-chef`
-2. **Planner stage** -- Generate dependency recipe
-3. **Builder stage** -- Cook dependencies (cached), then build
-4. **Runtime stage** -- `debian:bookworm-slim` with stripped binary
-
----
-
-## Production Configuration
-
-### Recommended Settings
+A conservative gateway configuration, in `~/.clawft/config.json`:
 
 ```json
 {
@@ -174,51 +93,35 @@ The Dockerfile uses a multi-stage build with `cargo-chef` for dependency caching
       "memory_window": 30
     }
   },
-  "gateway": {
-    "host": "0.0.0.0",
-    "port": 18790
-  },
   "tools": {
-    "commandPolicy": {
-      "mode": "allowlist"
-    },
-    "urlPolicy": {
-      "enabled": true,
-      "allowPrivate": false
-    }
+    "commandPolicy": { "mode": "allowlist" },
+    "urlPolicy": { "enabled": true, "allowPrivate": false }
   }
 }
 ```
 
+The gateway binds to `127.0.0.1` by default (ADR-102). Binding a non-loopback address is refused unless TLS is terminated in front of it and `gateway.dangerously_plain_http` is set (or `--dangerously-plain-http` is passed). The Docker image sets that flag because the container boundary is meant to be the TLS boundary.
+
 ### Checklist
 
-- Set API keys via environment variables, never in config files
-- Use allowlist mode for command execution policy
-- Keep URL safety enabled with `allowPrivate: false`
-- Mount config as read-only in containers
-- Enable health checks for container orchestration
-- Set `RUST_LOG` appropriately (`warn` for production, `info` or `debug` for troubleshooting)
-- Review `weft security scan` output before deployment
-- Use persistent volumes for session and memory data
+- Set API keys through environment variables, not config files.
+- Keep `commandPolicy.mode` at `allowlist` (the default) and `urlPolicy.allowPrivate` at `false`.
+- Publish container ports on loopback or behind a TLS proxy.
+- Mount config read-only in containers and use named volumes for state.
+- Enable health checks (`weft status`, or `GET /api/health` on the gateway).
+- Set `RUST_LOG` to `warn` for production and `info` or `debug` for troubleshooting.
+- Run `weft security scan <path>` before deploying.
 
-### Troubleshooting
+## Troubleshooting
 
-**Container exits immediately** -- Check config JSON validity and volume mount paths:
-
-```bash
-docker run --rm -it \
-  -v "$HOME/.clawft:/root/.clawft:ro" \
-  ghcr.io/weftos/weftos:latest status --detailed
-```
-
-**Cannot reach LLM API** -- Verify DNS and network access. If behind a proxy, pass `HTTPS_PROXY`:
+**Container exits immediately.** Check that the config is valid JSON and the mounts are right:
 
 ```bash
-docker run --rm -e HTTPS_PROXY="http://proxy:8080" ...
+docker run --rm -it -v "$HOME/.clawft:/home/weft/.clawft:ro" ghcr.io/weftos/weftos:latest status --detailed
 ```
 
-**Permission denied on config** -- Ensure the file is readable:
+**Cannot reach an LLM API.** Check DNS and egress from the container, and pass `HTTPS_PROXY` if you are behind a proxy.
 
-```bash
-chmod 644 ~/.clawft/config.json
-```
+**Permission denied on config.** The container user is not root; make the file readable (`chmod 644 ~/.clawft/config.json`).
+
+**`weaver update` refuses.** The install belongs to Homebrew, cargo or a source build. Use the update command it prints.

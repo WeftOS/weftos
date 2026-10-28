@@ -47,7 +47,7 @@ Always uses the configured default model. No complexity scoring.
 
 ### Tiered Mode
 
-The tiered router (`tiered_router.rs`, ~1,650 lines) implements complexity-based routing across model tiers with cost tracking and permission awareness.
+The tiered router (`tiered_router.rs`) implements complexity-based routing across model tiers with cost tracking and permission awareness.
 
 **Routing flow**:
 
@@ -85,7 +85,7 @@ Sends the assembled request to the selected LLM provider via `clawft-llm`. Handl
 
 Evaluates response quality after the LLM returns. Produces a `QualityScore` with overall, relevance, and coherence dimensions. These scores serve as fitness signals for the learner stage.
 
-As of v0.2, the `FitnessScorer` replaces the previous `NoopScorer`. It evaluates responses on 4 weighted dimensions:
+The `FitnessScorer` is the Level 1 scorer; the default is the `NoopScorer` unless `pipeline.scorer` selects `"fitness"` (see Config-Based Stage Selection below). It evaluates responses on 4 weighted dimensions:
 
 | Dimension | Weight | Measures |
 |-----------|--------|----------|
@@ -102,7 +102,7 @@ Weights are configurable. The overall score is the weighted sum, normalized to [
 
 Records trajectories (request + response + score) for adaptive learning.
 
-As of v0.2, the `TrajectoryLearner` replaces the previous `NoopLearner`, implementing GEPA -- Genetic Evolution of Prompt Architectures (ADR-017). The learner operates in three phases:
+The `TrajectoryLearner` is the Level 1 learner; the default is the `NoopLearner` unless `pipeline.learner` selects `"trajectory"`. It implements GEPA -- Genetic Evolution of Prompt Architectures (ADR-017). The learner operates in three phases:
 
 ### Phase 1: Trajectory Collection
 
@@ -130,7 +130,7 @@ Mutations are proposed as skill candidates (similar to skill auto-generation) an
 
 ## Cost Tracking
 
-**File**: `crates/clawft-core/src/pipeline/cost_tracker.rs` (~954 lines)
+**File**: `crates/clawft-core/src/pipeline/cost_tracker.rs`
 
 The cost tracker enforces per-tier budget limits with configurable daily and monthly caps. It operates in conjunction with the tiered router:
 
@@ -141,13 +141,13 @@ Cost records are per-sender, enabling multi-tenant deployments where different u
 
 ## Rate Limiting
 
-**File**: `crates/clawft-core/src/pipeline/rate_limiter.rs` (~632 lines)
+**File**: `crates/clawft-core/src/pipeline/rate_limiter.rs`
 
 Per-sender rate limiting prevents abuse. Configurable limits include requests per minute and requests per hour. When a sender exceeds their rate limit, the pipeline returns an error response without invoking the LLM.
 
 ## Permissions
 
-**File**: `crates/clawft-core/src/pipeline/permissions.rs` (~757 lines)
+**File**: `crates/clawft-core/src/pipeline/permissions.rs`
 
 The permission resolver controls access to tools and model tiers. Permissions are evaluated at two points:
 
@@ -194,19 +194,11 @@ pub trait Learner: Send + Sync {
 
 Each trait can be implemented independently and injected into the pipeline via `set_pipeline()` on the `AppContext`.
 
-## Config-Based Stage Selection (v0.3)
+## Config-Based Stage Selection
 
 **File**: `crates/clawft-types/src/config/mod.rs` -- `PipelineConfig`
 
-As of Sprint 13, the scorer and learner stages can be selected via configuration
-instead of hard-coding the implementation. The `[pipeline]` section of the
-config file maps backend names to trait implementations:
-
-```toml
-[pipeline]
-scorer = "fitness"
-learner = "trajectory"
-```
+The scorer and learner stages are selected in the `pipeline` section of `config.json` instead of being hard-coded:
 
 ### Available Backends
 

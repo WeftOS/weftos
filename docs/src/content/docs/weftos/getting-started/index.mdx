@@ -1,84 +1,50 @@
 ---
 title: What is WeftOS
-description: An introduction to WeftOS, the secure distributed AI operating system built in Rust.
+description: An introduction to WeftOS, a governed AI operating system built in Rust.
 ---
 
 # What is WeftOS
 
-WeftOS is a secure, ephemeral AI operating system built in Rust. It replaces the
-fragile pattern of cloud-dependent chatbots with something fundamentally
-different: a distributed kernel that gives AI agents persistent memory, verifiable
-reasoning, and constitutional governance -- running on everything from a Raspberry
-Pi to a browser tab to an air-gapped data center.
+WeftOS is an AI operating system written in Rust. It gives agents persistent memory, an auditable record of what they did, and governed access to tools, models and hardware, and it runs on anything from a single-board computer to a browser tab to a server.
 
-The project is composed of two layers. **clawft** is the AI framework layer:
-connecting to LLM providers (OpenAI, Anthropic, Ollama, local models), managing
-conversations across channels (Telegram, Slack, Discord, CLI, WebSocket),
-executing tools in WASM sandboxes, and composing agent skills. **WeftOS** is the
-kernel layer: process management with PID allocation and capability-based RBAC,
-typed IPC with 7 target types, an append-only ExoChain for cryptographic audit
-trails, three-branch constitutional governance, encrypted mesh networking with
-post-quantum key exchange, and an application framework for packaged agent
-deployments.
+It is built in layers:
 
-Underneath both sits the **ECC** (Ephemeral Causal Cognition) cognitive layer: a
-causal DAG that tracks how ideas relate, an adaptive cognitive tick that processes
-events in real-time, HNSW approximate nearest neighbor search for semantic memory,
-BLAKE3-indexed cross-references linking every structure in the kernel, and an
-impulse queue for ephemeral signals that decay rather than accumulate. ECC operates
-in three modes -- Act (real-time conversation), Analyze (post-hoc corpus
-understanding), and Generate (goal-directed planning) -- using the same engine,
-the same data structures, and the same scoring system.
+- **clawft** is the agent runtime. It connects to LLM providers (hosted or local), handles conversations across channels, runs tools and skills, and keeps session memory. The `weft` CLI drives it.
+- **The WeftOS kernel** manages processes, typed IPC, capability-based access, governance, and an append-only hash chain (ExoChain) that records privileged actions. The `weaver` CLI operates it.
+- **ECC** is the cognitive layer: a causal graph with HNSW vector search that agents use as long-term memory.
+- **The node daemon** ties the layers together on each machine. It hosts per-project kernels, joins machines into a mesh, runs cogs (sandboxed workloads, many of them sensor drivers), and carries cog data over the cogbus broker.
 
-## Why WeftOS
+## What is in v0.8.4
 
-- **No more context windows.** A vector-indexed knowledge graph grows continuously
-  across sessions, conversations, and nodes. Sub-millisecond HNSW retrieval means
-  agents have searchable memory, not a fixed window.
+- A per-user daemon with a kernel per project (`weaver project add|up|down|status|remove`, ADR-103).
+- A mesh with signed membership, QUIC transport and pairing (`weaver mesh`, ADR-103, ADR-120).
+- Cogs and governed workload placement (`weaver cog`, `weaver workload`, ADR-099, ADR-100), with the cog repository and Cog Host now in the separate `WeftOS/weftos-cogs` repository.
+- The cogbus data-plane broker for readings, streams, blobs and mesh topics (ADR-122).
+- A tailnet router that puts one HTTPS front door on a dev machine (`weaver route`, ADR-116; off by default, and the ADR's status is still Proposed).
+- A chief-of-staff agent surface (`weft cos`, ADR-118, status Proposed).
+- Signed releases and verified self-update (`weaver update`).
+- The native GUI is egui. The Tauri shells were removed in 0.8.4-rc.15.
 
-- **No more hallucination without accountability.** Every agent action is recorded
-  in an append-only hash chain (ExoChain) with SHAKE-256 linking and Ed25519 +
-  ML-DSA-65 dual signatures. Claims are cryptographically verifiable.
+The [release notes](/docs/weftos/vision/releases) list every release, and each ADR is in the repository's `docs/adr/`. Pages on the 0.8.x platform features are being added to this site; until then the repository guides under `docs/guides/` are the reference.
 
-- **No more trusting the cloud.** WeftOS runs entirely on your hardware. Local LLM
-  inference, Noise Protocol encryption with post-quantum ML-KEM-768 key exchange,
-  and full air-gapped support.
-
-- **No more single points of failure.** Agents form encrypted peer-to-peer mesh
-  clusters across heterogeneous devices. SWIM heartbeats detect failures in
-  seconds. Services resolve to surviving replicas automatically.
-
-- **No more uncontrolled AI.** Every privileged operation passes through a
-  three-branch constitutional governance engine (Legislative, Executive, Judicial)
-  with a 5-dimensional effect vector scoring risk, fairness, privacy, novelty, and
-  security.
-
-- **No more "works on my machine."** The same binary runs on 7 platforms: Linux,
-  macOS, Windows, browser (WASM), WASI containers, ARM64 edge devices, and cloud
-  VMs. Feature flags compile out what you don't need.
-
-## Architecture Overview
+## Architecture overview
 
 ```
 +-------------------------------------------------------------------+
-|                         clawft                                     |
-|  AI framework: LLM providers, channels, tools, skills, agents    |
+|  clawft: LLM providers, channels, tools, skills, agent loop       |
 +-------------------------------------------------------------------+
-|                         WeftOS Kernel                               |
-|  Processes, IPC, governance, ExoChain, mesh networking, apps      |
+|  WeftOS kernel: processes, IPC, governance, ExoChain, mesh, apps  |
 +-------------------------------------------------------------------+
-|                    ECC Cognitive Substrate                          |
-|  Causal DAG, cognitive tick, HNSW memory, impulse queue           |
+|  ECC: causal graph, cognitive tick, HNSW memory                   |
 +-------------------------------------------------------------------+
-|                      Platform Layer                                |
-|  Native | WASI | Browser | Edge | Cloud | Air-Gapped | Docker    |
+|  Node daemon: projects, cogs, cogbus, placement, router           |
++-------------------------------------------------------------------+
+|  Platforms: native, WASI, browser (WASM), edge, Docker            |
 +-------------------------------------------------------------------+
 ```
 
-## Next Steps
+## Where to go next
 
-- [Quickstart](/weftos/getting-started/quickstart) -- go from zero to a running
-  kernel in minutes
-- [Installation](/weftos/getting-started/installation) -- detailed installation
-  options including Docker
-- [Architecture](/weftos/architecture) -- deep dive into the kernel architecture
+- [Installation](/docs/weftos/getting-started/installation) for release, Homebrew, Docker, crates.io and source installs
+- [Quickstart](/docs/weftos/getting-started/quickstart) to run a kernel in a project directory
+- [Architecture](/docs/weftos/architecture) for the kernel in depth

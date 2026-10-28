@@ -1,170 +1,166 @@
 ---
 title: Installation
-description: Install WeftOS from pre-built binaries, Homebrew, Docker, cargo, or npm.
+description: Install WeftOS from the release installer, Homebrew, Docker, crates.io, or source, and keep it updated.
 ---
 
-# WeftOS Installation Guide
+# Installing WeftOS
 
-## Quick Install (recommended)
+WeftOS ships three command-line binaries and one optional GUI:
 
-### Shell installer (Linux / macOS)
+| Binary | Purpose | cargo-dist package |
+|--------|---------|--------------------|
+| `weft` | Agent CLI: chat, gateway, tools, memory, chief of staff | `clawft-cli` |
+| `weaver` | Operator CLI: the node daemon, projects, mesh, cogs, updates | `clawft-weave` |
+| `weftos` | Standalone kernel daemon binary | `weftos` |
+| `clawft-gui-egui` | Native egui desktop shell (optional) | `clawft-gui-egui` |
+
+The current release is v0.8.4. Each release publishes archives for Linux (glibc and musl, x86_64 and aarch64), macOS (Intel and Apple Silicon) and Windows x86_64.
+
+## Release installer (recommended)
+
+The repository's `scripts/install.sh` installs `weft`, `weaver` and `weftos` into `/usr/local/bin` and is safe to re-run:
 
 ```bash
-curl -fsSL https://github.com/WeftOS/weftos/releases/latest/download/clawft-cli-installer.sh | sh
+curl -fsSL https://raw.githubusercontent.com/WeftOS/weftos/master/scripts/install.sh | sh
 ```
 
-### Homebrew (macOS / Linux)
+If the GitHub CLI (`gh`) is installed, the script verifies each archive's sigstore attestation before installing. Pass `--verify` to refuse to install without it, or `--no-verify` to skip it. Set `WEFTOS_INSTALL_DIR` to install somewhere else. The details are in the [repository install guide](https://github.com/WeftOS/weftos/blob/master/docs/deployment/install.md).
+
+Each release also carries a per-package cargo-dist installer if you want only one binary:
 
 ```bash
-brew install weave-logic-ai/tap/clawft-cli
+# weft only
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/WeftOS/weftos/releases/latest/download/clawft-cli-installer.sh | sh
+
+# weaver only
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/WeftOS/weftos/releases/latest/download/clawft-weave-installer.sh | sh
 ```
 
-### Download binary manually
-
-Pre-built binaries for all platforms are available on the [GitHub Releases](https://github.com/WeftOS/weftos/releases) page.
-
-| Platform | Binary |
-|----------|--------|
-| Linux x86_64 | `clawft-cli-x86_64-unknown-linux-gnu.tar.gz` |
-| Linux ARM64 | `clawft-cli-aarch64-unknown-linux-gnu.tar.gz` |
-| macOS Intel | `clawft-cli-x86_64-apple-darwin.tar.gz` |
-| macOS Apple Silicon | `clawft-cli-aarch64-apple-darwin.tar.gz` |
-| Windows x86_64 | `clawft-cli-x86_64-pc-windows-msvc.zip` |
-
-### PowerShell installer (Windows)
+On Windows, use the matching PowerShell installer:
 
 ```powershell
 irm https://github.com/WeftOS/weftos/releases/latest/download/clawft-cli-installer.ps1 | iex
 ```
 
-## Verify
+The installers are `clawft-cli-installer`, `clawft-weave-installer`, `weftos-installer` and `clawft-gui-egui-installer`, each with an `.sh` and `.ps1` form. You can also download an archive such as `clawft-cli-aarch64-apple-darwin.tar.gz` from the [Releases page](https://github.com/WeftOS/weftos/releases); every archive has a `.sha256` file beside it.
+
+## Homebrew (macOS and Linux)
+
+The tap is `weave-logic-ai/homebrew-tap`, with one formula per cargo-dist package:
 
 ```bash
-weft --version    # Should print: weft 0.1.x
-weft status       # Show configuration and defaults
-weft tools list   # Show built-in tools
+brew install weave-logic-ai/tap/clawft-cli     # weft
+brew install weave-logic-ai/tap/clawft-weave   # weaver
+brew install weave-logic-ai/tap/weftos         # kernel daemon
 ```
 
-## Other install methods
+## Docker
 
-### Docker
+Each stable release publishes a multi-arch (linux/amd64 and linux/arm64) image to `ghcr.io/weftos/weftos`, tagged with the version and `latest`. The image contains `weft` and `weaver`. Its entrypoint passes its arguments to `weft`, and the default command is `gateway`, which starts a kernel daemon beside the gateway.
 
 ```bash
 docker pull ghcr.io/weftos/weftos:latest
-docker run --rm ghcr.io/weftos/weftos weft --version
+docker run --rm ghcr.io/weftos/weftos --version
 ```
 
-For persistent use:
+For a long-running gateway (REST and WebSocket API on port 8080, bound to loopback on the host):
 
 ```bash
 docker run -d --name weftos \
-  -v weftos-data:/home/nonroot/.clawft \
-  -p 8080:8080 \
+  -v weftos-clawft:/home/weft/.clawft \
+  -v weftos-state:/home/weft/.weftos \
+  -p 127.0.0.1:8080:8080 \
   ghcr.io/weftos/weftos
 ```
 
-See the [Docker deployment guide](/weftos/guides/deployment-docker) for production setup.
+See the [Docker deployment guide](/docs/weftos/guides/deployment-docker) for production setup.
 
-### cargo install (builds from source)
+## crates.io
 
-Requires Rust 1.93+:
-
-```bash
-cargo install weftos
-```
-
-This installs the `weftos` daemon binary. For the `weft` CLI:
+Forty library and daemon crates are published to crates.io at 0.8.4, including `weftos`, `clawft-core`, `clawft-kernel` and `clawft-types`. Publishing happens on stable tags only; release candidates are not published.
 
 ```bash
-# Clone and build (weft is not published as a standalone crate)
-git clone https://github.com/WeftOS/weftos.git
-cd weftos
-cargo install --path crates/clawft-cli
+cargo install weftos      # the kernel daemon binary
 ```
-
-### cargo binstall (pre-built binary via cargo)
-
-```bash
-cargo binstall clawft-cli
-```
-
-### npm (WASM module for browser)
-
-```bash
-npm install @weftos/core
-```
-
-This gives you the WeftOS WASM runtime for browser-based agent applications.
-
-### Rust library (add to your project)
 
 ```toml
 [dependencies]
-weftos = "0.1"
-
-# Or individual framework crates:
-clawft-core = "0.1"
-clawft-kernel = "0.1"
-clawft-types = "0.1"
-clawft-plugin = "0.1"
+weftos = "0.8"
+clawft-core = "0.8"
+clawft-kernel = "0.8"
+clawft-types = "0.8"
 ```
 
-All crates are on [crates.io](https://crates.io/crates/weftos).
+The `weft` and `weaver` CLI packages (`clawft-cli`, `clawft-weave`) are marked `publish = false`, so `cargo install clawft-cli` and `cargo binstall clawft-cli` do not work. Install them from a release, Homebrew, Docker or source.
 
-## Three binaries
+## From source
 
-WeftOS ships three binaries:
-
-| Binary | Purpose | Install via |
-|--------|---------|-------------|
-| `weft` | Agent CLI (primary user interface) | `clawft-cli` package |
-| `weaver` | Kernel operator CLI (daemon management) | `clawft-weave` package |
-| `weftos` | Kernel daemon | `weftos` package |
-
-## From source (development)
+Source builds need Rust 1.95 or newer (`rust-toolchain.toml` pins `1.95`). Use the build script rather than raw cargo:
 
 ```bash
 git clone https://github.com/WeftOS/weftos.git
 cd weftos
 
-# Build all binaries in release mode
-scripts/build.sh native
-
-# Or debug mode (faster compilation)
-scripts/build.sh native-debug
-
-# Full feature set
+scripts/build.sh native          # release build of weft, weaver, weftos
+scripts/build.sh native-debug    # faster, for development
 scripts/build.sh native --features ecc,exochain,os-patterns,mesh,cluster,onnx-embeddings,wasm-sandbox
 ```
 
-See the [feature flags guide](/weftos/guides/feature-flags) for the complete feature reference.
+`scripts/build.sh gate` runs the full pre-commit check set. See the [feature flags guide](/docs/weftos/guides/feature-flags) for the flags.
 
-### ONNX embeddings (optional)
+For optional ONNX embeddings, run `scripts/download-model.sh` first, then build with `--features onnx-embeddings`.
 
-```bash
-scripts/download-model.sh
-scripts/build.sh native --features onnx-embeddings
-```
-
-### Compile-time checks
+## Verify
 
 ```bash
-scripts/build.sh gate   # 11 checks: build, test, clippy, etc.
+weft --version
+weaver --version
+weft status
+weft tools list
 ```
+
+Both version commands print the release you installed (for example `0.8.4`).
+
+## Updating
+
+A release installed with the installer updates itself:
+
+```bash
+weaver update --check    # report only
+weaver update            # verify the signed release, replace weft, weaver and weftos, offer a daemon restart
+```
+
+`weaver update` checks the release's Ed25519 signature against a key compiled into the binary, then each archive against the signed checksum list, and replaces all binaries together with rollback. It refuses to touch Homebrew, `cargo install` and source builds, and prints their own update command instead. `weft update` is also available. See the [repository install guide](https://github.com/WeftOS/weftos/blob/master/docs/deployment/install.md#updating) for the flags, the signature rules and the no-downgrade guarantee.
+
+`weaver doctor install` lists every copy of the binaries on the machine and which install channel owns each.
+
+## Running the daemon
+
+`weaver` runs a per-user daemon: `weaver kernel start --profile user` starts it and `weaver kernel status --profile user` checks it. To start it at login, print a launchd or systemd user unit and install it yourself; `weaver service unit` never runs `launchctl` or `systemctl`:
+
+```bash
+weaver service unit --kind launchd --out ~/Library/LaunchAgents/ai.weftos.weaver.plist
+weaver service unit --kind systemd
+```
+
+The command prints the install commands to run after writing a unit. For how the daemon relates to projects, see [Deployment](/docs/clawft/deployment).
 
 ## Troubleshooting
 
 | Problem | Fix |
 |---------|-----|
-| `weft: command not found` after install | Add `~/.cargo/bin` to your PATH |
-| Homebrew formula not found | `brew tap weave-logic-ai/tap` first |
-| Docker permission denied | `docker login ghcr.io` or check GHCR auth |
-| `rustup` reports Rust < 1.93 | `rustup update stable` |
-| ONNX model not found | Run `scripts/download-model.sh` first |
+| `weft: command not found` after install | Add the install directory (`/usr/local/bin`, or `WEFTOS_INSTALL_DIR`) to your `PATH`. For `cargo install`, add `~/.cargo/bin`. |
+| `weaver update` refuses | The install belongs to Homebrew, cargo or a source build. Use the command it prints. |
+| Homebrew formula not found | Run `brew tap weave-logic-ai/tap` first. |
+| Docker permission denied pulling the image | The image is public. Run `docker logout ghcr.io` if a stale login is rejected. |
+| Rust older than 1.95 | `rustup update`, or let `rust-toolchain.toml` select the toolchain. |
+| ONNX model not found | Run `scripts/download-model.sh` first. |
 
 ## Next steps
 
-- [Quickstart](/weftos/getting-started/quickstart) -- get a kernel running in 2 minutes
-- [Feature Flags](/weftos/guides/feature-flags) -- compile-time feature flags
-- [Configuration](/weftos/guides/configuration) -- runtime configuration
-- [First Project](/weftos/getting-started/first-project) -- create your first WeftOS project
+- [Quickstart](/docs/weftos/getting-started/quickstart) to get a kernel running
+- [Feature flags](/docs/weftos/guides/feature-flags) for compile-time options
+- [Configuration](/docs/weftos/guides/configuration) for runtime configuration
+- [First project](/docs/weftos/getting-started/first-project)

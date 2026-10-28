@@ -9,13 +9,13 @@ clawft is a Rust agent framework -- the user-space agent runtime that powers Wef
 
 The framework compiles to native binaries, WASM for browsers, and WASI for server-side sandboxing. The primary binary is `weft` (the CLI agent).
 
-The workspace contains 23 crates organized in a strict dependency hierarchy that enforces separation of concerns -- shared types at the bottom, platform abstraction above them, then the core engine, with tools, channels, services, plugins, and the CLI at the top. A WASM crate provides a browser-compatible entrypoint.
+The agent-runtime crates form a strict dependency hierarchy -- shared types at the bottom, platform abstraction above them, then the core engine, with tools, channels, services, plugins, and the CLI at the top. A WASM crate provides a browser-compatible entrypoint. The wider workspace adds the WeftOS kernel, the node daemon (`weaver`), mesh, voice and GUI crates.
 
 ## clawft as an Agent
 
 clawft is not a library for calling LLM APIs. It is a complete agent runtime -- the Rust-native equivalent to frameworks like Hermes (NousResearch) or OpenClaw. The `AgentLoop` at its center implements a consume-process-respond cycle with tool use:
 
-1. **Inbound** -- A message arrives from one of the production channels (Telegram, Slack, Discord, or the in-process `web` channel) via the `MessageBus`. Seven additional channel adapters ship as planning stubs; see [Channels](/clawft/channels) for the per-adapter status.
+1. **Inbound** -- A message arrives from one of the production channels (Telegram, Slack, Discord, or the in-process `web` channel) via the `MessageBus`. Seven more adapters exist as library code that `weft gateway` does not register; see [Channels](/docs/clawft/channels) for the per-adapter status.
 2. **Session** -- The loop retrieves or creates a conversation session.
 3. **Context** -- `ContextBuilder` assembles the system prompt, active skill instructions, memory (MEMORY.md), and conversation history into an LLM-ready message list.
 4. **Pipeline** -- The message passes through a 6-stage pluggable pipeline: Classifier, Router, Assembler, Transport, Scorer, Learner.
@@ -42,13 +42,13 @@ clawft's differentiator is the kernel integration layer: when running on WeftOS,
 
 - **6-stage processing pipeline** -- Classify, route, assemble context, transport to LLM, score quality, and feed learning signals. Every stage is trait-based and replaceable.
 - **Tiered model routing** -- Complexity-based routing across four model tiers (Free/Standard/Premium/Elite) with per-sender cost tracking and budget enforcement.
-- **Context compression** (v0.2) -- Sliding-window context management with configurable `max_context_tokens` (default 8192). Older messages are automatically summarized using first-sentence extraction to stay within token budgets. Opt-in via `builder.with_compression(config)`.
-- **GEPA prompt evolution** (v0.2) -- Genetic Evolution of Prompt Architectures. The pipeline's Scorer and Learner stages are now production-ready: `FitnessScorer` evaluates responses on 4 weighted dimensions, and `TrajectoryLearner` collects trajectories, extracts patterns, and applies prompt mutation strategies (rephrase, add examples, remove ineffective, emphasize).
-- **Local LLM provider** (v0.2) -- OpenAI-compatible provider for local inference servers. Factory methods for Ollama (`LocalProvider::ollama()`), vLLM (`::vllm()`), llama.cpp (`::llamacpp()`), and LM Studio (`::lmstudio()`). Key-optional auth, streaming, and model listing. See [Quickstart](/weftos/getting-started/quickstart) for setup.
+- **Context compression** -- When a conversation outgrows its token budget, older turns are summarized into the window (an LLM summarizer, with a first-sentence fallback) while the full text stays on the chain (`crates/clawft-core/src/agent/context_compress.rs`, ADR-058). Opt-in via `ContextBuilder::with_compression(config)`.
+- **GEPA prompt evolution** -- Genetic Evolution of Prompt Architectures. The pipeline's Scorer and Learner stages are now production-ready: `FitnessScorer` evaluates responses on 4 weighted dimensions, and `TrajectoryLearner` collects trajectories, extracts patterns, and applies prompt mutation strategies (rephrase, add examples, remove ineffective, emphasize).
+- **Local LLM provider** -- OpenAI-compatible provider for local inference servers. Factory methods for Ollama (`LocalProvider::ollama()`), vLLM (`::vllm()`), llama.cpp (`::llamacpp()`), and LM Studio (`::lmstudio()`). Key-optional auth, streaming, and model listing. See the [Quickstart](/docs/weftos/getting-started/quickstart) for setup.
 - **Skill auto-generation** -- Detects repeated tool-call patterns and generates skill candidates after a configurable threshold (default: 3 repetitions). Requires user approval.
 - **Cost tracking** -- Per-tier budget enforcement with daily and monthly spending limits, recording both estimated and actual costs.
-- **Multi-provider LLM routing** -- Nine built-in providers (OpenAI, Anthropic, Groq, DeepSeek, Mistral, Together, OpenRouter, Gemini, xAI) plus local providers, with prefix-based routing, automatic retry, and environment-driven API keys.
-- **11 communication channels** -- Telegram, Slack, Discord, Email, WhatsApp, Signal, Matrix, IRC, Google Chat, Microsoft Teams, and Web. All share one trait interface and lifecycle.
+- **Multi-provider LLM routing** -- Nine hosted providers (OpenAI, Anthropic, Groq, DeepSeek, Mistral, Together, OpenRouter, Gemini, xAI) plus the `local/` and `ollama/` local providers, with prefix-based routing, automatic retry, and environment-driven API keys.
+- **Channels** -- Telegram, Slack, Discord and the in-process web channel are wired into `weft gateway`; adapters for Email, WhatsApp, Signal, Matrix, IRC, Google Chat and Microsoft Teams exist as library code. All share one trait interface and lifecycle.
 - **Built-in tool system** -- File I/O, shell execution, memory, web search/fetch, messaging, voice, and subprocess spawning -- all workspace-sandboxed with security policies.
 - **Plugin architecture** -- Six extension points (Tool, Channel, Pipeline, Skill, Memory, Voice), WASM sandbox (wasmtime), hot-reload, permission system, and slash-command registry.
 - **Skills and agents** -- Reusable prompt bundles (SKILL.md) and named agent personas (agent.yaml) with template variables, tool allowlists, and three-level discovery (workspace, user, builtin).
@@ -58,27 +58,27 @@ clawft's differentiator is the kernel integration layer: when running on WeftOS,
 
 ## Quick Install
 
-Build from source using the project build script:
+Install `weft` from a release (installer, Homebrew or Docker; see [Installation](/docs/weftos/getting-started/installation)):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/WeftOS/weftos/master/scripts/install.sh | sh
+# or
+brew install weave-logic-ai/tap/clawft-cli
+```
+
+Or build from source with the project build script (Rust 1.95 or newer):
 
 ```bash
 git clone https://github.com/WeftOS/weftos.git
 cd weftos
-scripts/build.sh native
+scripts/build.sh native          # release build; binary at target/release/weft
+scripts/build.sh native-debug    # faster iteration
 ```
 
-The resulting binary is at `target/release/weft`.
-
-For debug builds (faster iteration):
+For Docker (the entrypoint is `weft`, so arguments go straight to it):
 
 ```bash
-scripts/build.sh native-debug
-```
-
-For Docker deployment:
-
-```bash
-docker pull ghcr.io/weftos/weftos:latest
-docker run --rm -it ghcr.io/weftos/weftos:latest --version
+docker run --rm ghcr.io/weftos/weftos:latest --version
 ```
 
 ## First Run

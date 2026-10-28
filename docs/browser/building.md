@@ -91,13 +91,7 @@ After a successful build, wasm-pack places output in `crates/clawft-wasm/pkg/`:
 scripts/build.sh test-browser
 
 # ≤10% wall-clock regression vs scripts/bench/browser-test-duration-baseline.json
-scripts/build.sh browser-duration-gate
-
-# Docker/nginx smoke of the harness pkg (index + pkg/*.wasm)
-scripts/build.sh browser-docker-smoke
-
-# All three
-scripts/build.sh browser-regression
+scripts/bench/check-browser-test-duration.sh browser-test-duration.json
 ```
 
 CI (`.github/workflows/pr-gates.yml` job `browser-wasm-tests`) uploads the
@@ -159,8 +153,7 @@ Performance baseline helpers + CI stub (WEFT-407 — load / init / first-msg /
 memory; no Chrome required):
 
 ```bash
-scripts/build.sh browser-perf
-# or: scripts/bench/browser-perf-baseline.sh
+scripts/bench/browser-perf-baseline.sh
 node --test crates/clawft-wasm/www/perf-baseline.test.mjs
 ```
 

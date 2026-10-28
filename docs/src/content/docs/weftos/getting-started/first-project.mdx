@@ -68,7 +68,7 @@ Key sections:
   `onnx-embeddings` for real neural embeddings.
 
 For the full field reference, see the
-[configuration guide](/weftos/guides/configuration).
+[configuration guide](/docs/weftos/guides/configuration).
 
 ## Step 3: Boot the Kernel
 
@@ -110,45 +110,45 @@ WeftOS initialized in current directory
   Runtime: .weftos/
 ```
 
-For more detailed information, use the `weave` CLI:
+For more detailed information, use the `weaver` CLI:
 
 ```bash
 # Kernel state, uptime, process/service counts
-weave kernel status
+weaver kernel status
 
 # List registered services
-weave kernel services
+weaver kernel services
 
 # Show the process table (empty at first)
-weave kernel ps
+weaver kernel ps
 ```
 
 ## Step 5: Use the Kernel Management CLI
 
-The `weave` CLI provides full lifecycle control. With the kernel running in
+The `weaver` CLI provides full lifecycle control. With the kernel running in
 another terminal (or as a daemon), try these commands:
 
 ```bash
 # Start as a background daemon instead of foreground
-weave kernel start
+weaver kernel start
 
 # Stream live kernel logs
-weave kernel attach
+weaver kernel attach
 
 # Show the last 50 log entries
-weave kernel logs -n 50
+weaver kernel logs -n 50
 
 # Stop the daemon gracefully
-weave kernel stop
+weaver kernel stop
 
 # Restart
-weave kernel restart
+weaver kernel restart
 ```
 
 ## Step 6: Enable More Features
 
-The default build includes only the `native` feature set (process table, agent
-supervision, IPC). To unlock the full kernel, rebuild with additional features:
+The release binaries use the default `native` feature set (process table, agent
+supervision, IPC). To unlock more of the kernel, build from source with additional features:
 
 ```bash
 # Add cognitive substrate + audit trail + self-healing
@@ -170,11 +170,14 @@ scripts/build.sh native --features ecc,exochain,os-patterns,mesh,cluster
 Then configure mesh settings in `weave.toml`:
 
 ```toml
-[mesh]
+[kernel.mesh]
 enabled = true
-bind_address = "0.0.0.0:9489"
-seed_peers = ["192.168.1.10:9489"]
+transport = "quic"
+listen_addr = "0.0.0.0:9489"
+seed_peers = ["quic://seed.example.com:9489"]
 ```
+
+The mesh listener binds to loopback (`127.0.0.1:9489`) unless you give it a non-loopback address. Peers on other machines need one. For the pairing flow that joins nodes into a named mesh, see `weaver mesh --help`.
 
 ## Project Structure
 
@@ -194,11 +197,11 @@ my-first-weftos-project/
 
 ## Next Steps
 
-- [Configuration Reference](/weftos/guides/configuration) -- tune every
+- [Configuration Reference](/docs/weftos/guides/configuration) -- tune every
   `weave.toml` field
-- [Feature Flags](/weftos/guides/feature-flags) -- understand compile-time
-  feature flags across all 22 crates
-- [Kernel Modules](/weftos/guides/kernel-modules) -- per-module reference for the
-  25 kernel source files
-- [Integration Patterns](/weftos/guides/integration-patterns) -- how to add new
+- [Feature Flags](/docs/weftos/guides/feature-flags) -- understand compile-time
+  feature flags across the workspace crates
+- [Kernel Modules](/docs/weftos/guides/kernel-modules) -- per-module reference for the
+  kernel source modules
+- [Integration Patterns](/docs/weftos/guides/integration-patterns) -- how to add new
   subsystems that integrate with ExoChain, resource tree, and governance

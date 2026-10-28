@@ -7,7 +7,7 @@ description: "Define reusable prompt bundles (skills) and named agent personas w
 
 A **skill** is a reusable LLM instruction bundle with metadata. Skills package a prompt template, variable declarations, and tool permissions into a single unit that can be activated on demand.
 
-The `SkillsV2Registry` (in `crates/clawft-core/src/agent/skills_v2.rs`, ~1,430 lines) manages the skill lifecycle: YAML frontmatter parsing, three-level discovery, security validation, hot-reload, and auto-generation.
+The `SkillsV2Registry` (in `crates/clawft-core/src/agent/skills_v2.rs`) manages the skill lifecycle: YAML frontmatter parsing, three-level discovery, security validation, hot-reload, and auto-generation.
 
 ### SKILL.md Format
 
@@ -95,7 +95,7 @@ In a `weft agent` session:
 
 ### Hot-Reload
 
-The `SkillWatcher` (~555 lines) monitors skill directories for filesystem changes using platform-native file watchers. Modified skills are atomically swapped so in-flight invocations complete with the old definition while new invocations use the updated version. No restart required.
+The `SkillWatcher` monitors skill directories for filesystem changes using platform-native file watchers. Modified skills are atomically swapped so in-flight invocations complete with the old definition while new invocations use the updated version. No restart required.
 
 The watcher covers all three discovery levels and handles:
 - New skill files appearing in a watched directory
@@ -104,7 +104,7 @@ The watcher covers all three discovery levels and handles:
 
 ### Skill Auto-Generation
 
-When `skill_autogen.enabled = true`, the `SkillAutogen` module (~638 lines) detects repeated tool call patterns during agent operation. The flow:
+When `skill_autogen.enabled = true`, the `SkillAutogen` module detects repeated tool call patterns during agent operation. The flow:
 
 1. The module tracks sequences of tool calls across messages.
 2. When the same tool-call pattern appears at least `threshold` times (default: 3), the module generates a skill candidate.

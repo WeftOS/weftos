@@ -1,14 +1,13 @@
 # Installing WeftOS
 
 `scripts/install.sh` is the canonical install path for the `weft`,
-`weaver`, and `weftos` binaries. It is published verbatim at
-[https://weftos.weavelogic.ai/install.sh](https://weftos.weavelogic.ai/install.sh)
-and intended for `curl | sh` use.
+`weaver`, and `weftos` binaries. Fetch it from the `master` branch with
+`curl | sh`, as below.
 
 ## Quick start
 
 ```bash
-curl -fsSL https://weftos.weavelogic.ai/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/WeftOS/weftos/master/scripts/install.sh | sh
 ```
 
 The installer is idempotent: re-running it upgrades to the latest
@@ -31,13 +30,13 @@ Examples:
 
 ```bash
 # Default behaviour (verify when gh is present, warn otherwise)
-curl -fsSL https://weftos.weavelogic.ai/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/WeftOS/weftos/master/scripts/install.sh | sh
 
 # Hard-require attestation verification — refuse to install on failure
-curl -fsSL https://weftos.weavelogic.ai/install.sh | sh -s -- --verify
+curl -fsSL https://raw.githubusercontent.com/WeftOS/weftos/master/scripts/install.sh | sh -s -- --verify
 
 # Skip verification (for air-gapped systems without gh)
-curl -fsSL https://weftos.weavelogic.ai/install.sh | sh -s -- --no-verify
+curl -fsSL https://raw.githubusercontent.com/WeftOS/weftos/master/scripts/install.sh | sh -s -- --no-verify
 ```
 
 `--verify` is the recommended setting for any production install. It
@@ -48,7 +47,7 @@ mirror.
 The same check can be run manually:
 
 ```bash
-gh attestation verify weft-cli-0.7.0-x86_64-unknown-linux-musl.tar.gz \
+gh attestation verify clawft-cli-x86_64-unknown-linux-musl.tar.gz \
   --repo WeftOS/weftos
 ```
 
@@ -63,7 +62,7 @@ The default install directory is `/usr/local/bin`. Override with
 ```bash
 mkdir -p ~/.local/bin
 WEFTOS_INSTALL_DIR=$HOME/.local/bin \
-  curl -fsSL https://weftos.weavelogic.ai/install.sh | sh
+  curl -fsSL https://raw.githubusercontent.com/WeftOS/weftos/master/scripts/install.sh | sh
 ```
 
 The installer writes one binary per channel (`weft`, `weaver`,
