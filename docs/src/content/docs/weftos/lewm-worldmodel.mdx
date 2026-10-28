@@ -126,6 +126,7 @@ weftos-worldmodel = { workspace = true, features = ["std"] }
 |---------|--------|
 | **default** | Null/hash stubs, `no_std` + `alloc` |
 | **std** | Host marker on core + impls |
+| **service-api** | ServiceApi-shaped `LatticeApi` facade (WEFT-527); pulls `serde_json`, implies `std` (`crates/weftos-worldmodel/Cargo.toml`) |
 | **candle** | Forwards ViT-tiny / AdaLN **skeleton** from impls (implies `std`). Without loaded weights, encoder/predictor return `WorldModelError::Unavailable`. **Not** enabled in default CI. |
 
 ## Lattice API (7 methods)
