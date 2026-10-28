@@ -5,11 +5,13 @@ description: Complete catalog of WeftOS console commands organized by namespace
 
 # Console Commands
 
-The WeftOS Console is a first-class OS shell powered by the kernel's `ShellAdapter`. Every command maps to `ServiceApi::call(service, method, params)`. Commands are:
+The WeftOS Console is a first-class OS shell powered by the kernel's `ShellAdapter`. Every command maps to `ServiceApi::call(service, method, params)`. The design intent is that commands are:
 
 - **Governed**: Every command passes the dual-layer governance gate (CapabilityGate + TileZeroGate) before execution.
 - **Witnessed**: Every command execution is logged to the ExoChain as a `ChainEvent` with kind `shell.exec`, `shell.deny`, or `shell.error`.
-- **Tab-completable**: The `CompletionProvider` returns candidates based on live kernel state.
+- **Tab-completable**: candidates come from live kernel state (not implemented, see Tab Completion).
+
+> **Status as of 0.8.4.** What the code does: `ShellAdapter::execute` in `crates/clawft-kernel/src/service.rs` splits `service.method args` at the first `.`, parses JSON arguments if the argument string starts with `{` or `[` (otherwise passes `{"args": "<string>"}`), and calls `ServiceApi::call`. The governance display, `shell.exec` witnessing in the response format and the per-namespace catalog below are a specification written in Sprint 11. The kernel defines the event kind `shell.exec` (`crates/clawft-kernel/src/chain.rs`, `EVENT_KIND_SHELL_EXEC`), but `ShellAdapter` itself does not log it or run a governance gate, and the `ShellResult` shown below is not a type in the kernel service layer. Treat each namespace section as the intended surface and check the registered services on a running kernel before relying on a command. For the operator CLI use `weaver --help` or the generated [CLI reference](/docs/clawft/cli-reference).
 
 ## Command Syntax
 
@@ -490,28 +492,4 @@ Alias created: status -> kernel.status
 
 ## Tab Completion
 
-The console supports context-aware tab completion via the `complete_command` Tauri command. The `CompletionProvider` on the Rust side returns a `Vec<String>` of candidates.
-
-### Completion Sources
-
-| Context | Data Source | Example |
-|---------|-------------|---------|
-| First token (empty) | Hard-coded namespace list | `kernel`, `process`, `service`, `chain`, `ecc`, `governance`, `mesh`, `config`, `weaver`, `wasm` |
-| After namespace `.` | Per-namespace method list | `process.` -> `list`, `spawn`, `stop`, `info` |
-| After `process.stop ` | `ProcessTable::list()` PIDs | `1`, `2`, `3`, `4`, `5` |
-| After `process.spawn ` | Agent type registry | `coder`, `reviewer`, `tester`, `planner`, `researcher`, `security-auditor`, `security-architect` |
-| After `service.health ` | `ServiceRegistry::list()` names | `registry`, `governance`, `mesh-sync`, `chain-manager` |
-| After `ecc.search ` | No completion (free text) | -- |
-| After `governance.check ` | Action prefix catalog | `tool.exec`, `ipc.send`, `service.register`, `config.set`, `process.spawn` |
-| After `config.get ` / `config.set ` | `ConfigService::list()` keys | `tick_interval_ms`, `max_agents`, `governance.risk_threshold` |
-| After `wasm.exec ` | `ToolRegistry::list()` names | `code_search`, `file_read`, `file_write`, `browser_nav`, `shell_exec` |
-
-### Completion Protocol
-
-```
-Frontend: complete_command("proc") -> ["process."]
-Frontend: complete_command("process.") -> ["process.list", "process.spawn", "process.stop", "process.info"]
-Frontend: complete_command("process.spawn ") -> ["coder", "reviewer", "tester", "planner", ...]
-```
-
-The frontend sends the partial input string; Rust returns candidates. The frontend handles display (dropdown, inline cycling).
+Not implemented in the kernel. An earlier version of this page described a `CompletionProvider` behind a Tauri `complete_command` call; neither exists in the tree (`git grep CompletionProvider -- crates` returns no match at the 0.8.4 base, and the Tauri shells were removed on 2026-10-18). Completion in the egui Terminal is the shell's own concern; see the [GUI Layer guide](/docs/weftos/guides/gui).

@@ -7,6 +7,12 @@ description: Key technology decisions with rationale from the Sprint 11 architec
 
 This page documents 15 key technology decisions made during the Sprint 11 architecture review. Each decision includes the rationale and the domain area it affects.
 
+> **Status as of 0.8.4.** TD-1 to TD-6 and TD-9 were decided for the React + Tauri GUI and its JSON
+> block descriptor. That GUI was removed on 2026-10-18 and the native GUI is the egui shell
+> (`crates/clawft-gui-egui`). ADR-005 (xterm.js), ADR-007 (Zustand + Tauri events), ADR-013
+> (JSON block descriptor) and ADR-038 (Tauri shell) are marked superseded in `docs/adr/README.md`.
+> These entries stay as the record of what was decided in Sprint 11, not of what ships.
+
 ---
 
 ## TD-1: No dockview; use CSS Grid + Lego engine

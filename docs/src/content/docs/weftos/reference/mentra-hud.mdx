@@ -5,7 +5,9 @@ description: Constraint-driven rendering rules for the Mentra smart glasses 400x
 
 # Mentra HUD Constraints
 
-The Mentra HUD renderer is a constraint-driven layout engine that takes standard WeftOS block descriptors and renders them for the Mentra smart glasses display. The same JSON descriptor that renders as a full React GUI on desktop renders as a compact, monochrome, voice-controlled view on the HUD.
+> **Status as of 0.8.4: specification, not shipped.** The HUD renderer below depends on the JSON block descriptor (ADR-013), which is superseded by the egui shell (see the [Block Descriptor Schema](/docs/weftos/reference/block-descriptor) status note). What exists for Mentra Live today is the microphone capture app `firmware/mentra-mic/` (CHANGELOG 0.8.4-rc.12) and the `mentra-live` cog in WeftOS/weftos-cogs (feature inventory 2026-10-27, Cogs list).
+
+The Mentra HUD renderer is a constraint-driven layout engine that takes standard WeftOS block descriptors and renders them for the Mentra smart glasses display. The same JSON descriptor that renders as a full GUI on desktop would render as a compact, monochrome, voice-controlled view on the HUD.
 
 ## Deployment Model
 

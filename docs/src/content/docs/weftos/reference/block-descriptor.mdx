@@ -5,7 +5,9 @@ description: JSON Schema reference for the WeftOS Block Descriptor format with f
 
 # Block Descriptor Schema
 
-A Block Descriptor is a self-contained JSON document defining a renderable UI assembly. One descriptor can render to React (Tauri desktop), Terminal (Ink/xterm.js), Mentra HUD (400x240 constraint), PDF, MCP, and Shell targets.
+> **Status as of 0.8.4: design reference.** ADR-013 (JSON block descriptor) is superseded by the egui shell, and the React and Tauri renderers this schema targeted were removed on 2026-10-18 (`docs/adr/adr-013-json-block-descriptor.md`, `docs/adr/adr-038-tauri-desktop-shell.md`). The shipped UI path is canon primitives plus TOML surface descriptions: see the [GUI Layer guide](/docs/weftos/guides/gui). Nothing on this page describes a renderer you can run today.
+
+A Block Descriptor is a self-contained JSON document defining a renderable UI assembly. One descriptor can render to React, Terminal (Ink/xterm.js), Mentra HUD (400x240 constraint), PDF, MCP, and Shell targets.
 
 **Schema version**: 0.2.0
 **JSON Schema draft**: 2020-12

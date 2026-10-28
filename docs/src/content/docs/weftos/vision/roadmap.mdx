@@ -1,98 +1,66 @@
 ---
 title: Roadmap
-description: WeftOS version roadmap from 0.1 Foundation through 1.0 Stable
+description: Where WeftOS versions stand at 0.8.4, what each release line delivered, and what is not committed
 ---
 
 # Roadmap
 
-WeftOS follows workspace-level lockstep semver versioning. All 22 crates share a single version. Breaking changes bump the minor version (0.1 to 0.2), non-breaking changes bump the patch (0.1.0 to 0.1.1).
+WeftOS uses workspace-level lockstep semver (ADR-001): workspace crates share one version
+through `[workspace.package]` in the root `Cargo.toml`, and a breaking change bumps the
+minor version while a non-breaking change bumps the patch. The current release is
+**0.8.4** (2026-10-27, `CHANGELOG.md`). The workspace has 65 member crates, 40 of which are
+published on crates.io (method and figures: docs refresh feature inventory, 2026-10-27).
 
-## Version Overview
+This page used to hold a forward plan written in March 2026 (0.1 foundation, 0.2 Tauri GUI,
+0.3 enterprise). Reality diverged from it: the Tauri GUI was dropped for egui, and the
+version line went from 0.6.20 straight to 0.8.0. What follows is the record of what each
+line actually delivered, followed by what is open. The full list of changes per release is on
+[Release Notes](/docs/weftos/vision/releases).
 
-| Version | Theme | Focus |
-|---------|-------|-------|
-| **0.1.0** | Foundation | Kernel complete, CLI works, WASM builds |
-| **0.2.0** | Operational Maturity | GUI (Tauri), operational hardening, testing depth |
-| **0.3.0** | Enterprise Readiness | Plugin marketplace, multi-tenant, advanced algorithms |
-| **1.0.0** | Stable Release | Stable API, security audit, production users |
+## What each release line delivered
 
----
+| Version | Date | Theme (from `CHANGELOG.md`) |
+|---------|------|-----------------------------|
+| 0.1.0 | 2026-02-17 | 9-crate workspace: agent loop, 6-stage LLM pipeline, platform abstraction, tool registry |
+| 0.2.0 to 0.3.0 | 2026-03-31 | Local LLM provider, GEPA prompt evolution, context compression, pipeline wiring, WASI support across the publishable crates |
+| 0.4.0 | 2026-04-03 | Browser WASM sandbox, `clawft-rpc`, assessment service, `weft assess`, ADR-020 to ADR-047 |
+| 0.5.0 to 0.6.5 | 2026-04-04 | `ServiceApi`, `wasm32-wasip2`, tiered kernel profiles T0 to T4, install script and update check |
+| 0.6.6 to 0.6.19 | 2026-04-04 to 2026-04-22 | App layer (`clawft-app`, `clawft-substrate`, `clawft-surface`), 21-primitive canon UI vocabulary, sensor framework |
+| 0.6.20 | 2026-06-28 | Rollup: the desktop GUI wave on egui, the leaf-display pipeline, a toolchain and test hardening pass; no crates.io publish |
+| 0.8.0 | 2026-07-31 | First 0.8.x publish line: spatial and BVH index (Phases A to E), QUIC mesh transport, mesh clock, chain replay and Merkle |
+| 0.8.1 | 2026-09-28 | Ruflo agent teams, one-shot `weft agent -m` |
+| 0.8.2 | 2026-10-04 | Seed licence proxy (ADR-106), `weaver update` signature verification, `weaver workload revoke`, Weave topology Phases 0 to 3 (ADR-103) |
+| 0.8.3 | 2026-10-06 | Project workspaces in the dashboard (ADR-108 P1) |
+| 0.8.4 | 2026-10-27 | `cogbus` data plane broker (ADR-122), cogs extraction to WeftOS/weftos-cogs, chief-of-staff glance cards, Tauri shells removed, `weaver kernel stop` hang fixed |
 
-## 0.1 -- Foundation
+There is no 0.7 release. The 0.6.19 entry describes itself as a rollup of the
+`development-0.7.0` work stream onto the 0.6 line.
 
-The kernel is functionally complete. All layers (K0 through K6) are operational. The CLI binary works for single-user development workflows.
+## Open at 0.8.4
 
-**What ships**:
-- Kernel with boot sequence, process management, IPC, capability-based RBAC
-- WASM tool sandbox with Ed25519 signature verification
-- ExoChain append-only hash chain with dual signatures
-- Three-branch constitutional governance engine
-- ECC cognitive substrate (causal DAG, HNSW, cognitive tick, Weaver)
-- Mesh networking (types, traits, logic -- Phase 1)
-- Application framework with container integration
-- CLI binary (`weft`) for all supported platforms
-- 7 platform targets: Linux, macOS, Windows, browser WASM, WASI, ARM64, Docker
+Items the repo itself records as unfinished, with their source:
 
-**What does not ship yet**:
-- GUI desktop application
-- Real ONNX embedding model (uses mock embeddings)
-- Actual TCP/WebSocket mesh connections (Phase 2)
+- The `docs/cogs` ownership split between WeftOS and weftos-cogs (pair, place, revoke,
+  redistribute stay in WeftOS; see `docs/cogs/operator-guide.md`).
+- Many ADRs are still Proposed: 062 to 069, 084 to 087, 106 and 113 to 120 (status lines in
+  `docs/adr/`, read 2026-10-27). ADR-102 is partially implemented, and 095 to 098 are Draft.
+- Several egui apps began as stubs (`crates/clawft-gui-egui/src/apps/mod.rs` header).
 
----
+This page does not commit dates or scope for 0.9 or later. Planning lives on the dashboard
+board, not in the docs site.
 
-## 0.2 -- Operational Maturity
+## 1.0 criteria
 
-The GUI becomes the primary interface. Testing and optimization harden the kernel for real-world use.
+These are the conditions this page has carried since the Sprint 11 review. They have not been
+re-assessed against 0.8.4, and none is claimed met.
 
-**What ships**:
-- Tauri desktop application with the Lego block engine
-- 18 block types rendered from JSON descriptors
-- Journey mode for guided walkthroughs (DAG-structured steps)
-- Console-to-kernel connection (Tauri invoke + events)
-- Zustand StateStore with `$state` resolution
-- Snapshot tests, property-based tests, fuzz harnesses
-- HNSW performance improvements (HashMap index, deferred rebuild)
-- Sparse Lanczos spectral analysis
-- Type extractions to `clawft-types` for GUI independence
-- ChainLoggable trait closing audit trail gaps
-- Mentra HUD specification and text-based simulator
-
----
-
-## 0.3 -- Enterprise Readiness
-
-The system is ready for multi-user, multi-node deployments with advanced analysis capabilities.
-
-**What ships**:
-- Mesh networking Phase 2 (actual TCP/WebSocket connections)
-- WebSocket server in kernel (Mentra prerequisite)
-- Real ONNX embedding model integration
-- Louvain/Leiden community detection for deep analysis
-- Lock ordering protocol for concurrency safety
-- Plugin marketplace infrastructure
-- HNSW eviction policy (TTL/LRU pruning)
-- Mentra HUD implementation (2 views + voice commands)
-- Multi-language support via MCP bridge
-
----
-
-## 1.0 -- Stable
-
-The public API is stable. External projects depend on WeftOS in production.
-
-**All criteria must be true**:
-- Public API stable across 2+ minor releases without breaking changes
+- Public API stable across two or more minor releases without breaking changes
 - Production users depending on API stability
 - Security audit completed
 - All public APIs documented
 - Migration path from every 0.x version documented
 
----
+## Stability notice
 
-## Stability Notice
-
-WeftOS is in active development (v0.x). The API may change between minor
-versions. We follow Cargo's semver conventions for 0.x: breaking changes
-bump the minor version, non-breaking changes bump the patch. Documentation
-tracks the latest development version until 1.0, when versioned docs will
-be introduced.
+WeftOS is pre-1.0. The API may change between minor versions. Documentation tracks the
+latest development version until 1.0, when versioned docs will be introduced.

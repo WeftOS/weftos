@@ -5,6 +5,8 @@ description: All 18 built-in block types with props schemas, ports, actions, and
 
 # Block Catalog
 
+> **Status as of 0.8.4: design reference.** ADR-013 (JSON block descriptor) is superseded by the egui shell, and the React and Tauri renderers this schema targeted were removed on 2026-10-18 (`docs/adr/adr-013-json-block-descriptor.md`, `docs/adr/adr-038-tauri-desktop-shell.md`). The shipped UI path is canon primitives plus TOML surface descriptions: see the [GUI Layer guide](/docs/weftos/guides/gui). Nothing on this page describes a renderer you can run today.
+
 The Block Catalog defines every built-in block type available in WeftOS. Each block has:
 
 - A **Zod schema** constraining its props (used by the Weaver to generate valid descriptors)
@@ -19,7 +21,7 @@ The Weaver generates JSON descriptors validated against these schemas. A descrip
 
 | Target | Renderer | Context |
 |--------|----------|---------|
-| Web (React) | `@weftos/react-renderer` | Main Tauri GUI desktop app |
+| Web (React) | `@weftos/react-renderer` | Former React GUI (removed 2026-10-18) |
 | Terminal | Ink / xterm.js inline | ConsolePan rich output, CLI mode |
 | Mentra HUD | Constraint engine (400x240, mono) | Smart glasses display |
 | Shell | Plain text formatter | Pure SSH / headless mode |
@@ -563,7 +565,7 @@ Rich text / narrative display. Renders Markdown content.
 
 ### 16. WebBrowser
 
-Embedded WebView for browsing URLs. Uses Tauri's native WebView.
+Embedded WebView for browsing URLs (specified for the removed Tauri shell).
 
 | Field | Value |
 |-------|-------|
@@ -587,7 +589,7 @@ Embedded WebView for browsing URLs. Uses Tauri's native WebView.
 **Actions**: None
 
 **Rendering Notes**:
-- Web: Tauri WebView with address bar, back/forward
+- Web: WebView with address bar, back/forward
 - Terminal: Not rendered; shows URL as a hyperlink
 - HUD: Not rendered; shows URL text only
 

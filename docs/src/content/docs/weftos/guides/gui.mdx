@@ -1,543 +1,111 @@
 ---
 title: GUI Layer
-description: Complete guide to the WeftOS K8 GUI layer covering the Lego block architecture, console views, JSON descriptor format, Tauri integration, and 3D visualization.
+description: How the WeftOS GUI is built today - the egui shell, the canon primitive vocabulary, TOML surface descriptions, the substrate RPCs, and the VS Code panel.
 ---
 
-# K8 GUI Layer
+# GUI Layer
 
-K8 is the human interface layer of WeftOS -- a web-based GUI that provides
-real-time visibility into kernel state and interactive administration. It is
-designed as a self-building, agent-extensible interface where the Weaver (and
-other authorized agents) can generate, improve, and distribute TypeScript-based
-applications that interact deeply with the Rust kernel.
+The WeftOS GUI is one egui/eframe application, `clawft-gui-egui`. It runs as a native
+binary and as a WASM bundle hosted inside VS Code and Cursor. The earlier React + Tauri
+GUI (`gui/`, `gui/src-tauri`, `clawft-ui/src-tauri`) was never released and was removed
+from the tree on 2026-10-18; CHANGELOG 0.8.4-rc.15 records "The Tauri desktop shells.
+egui is the native GUI." ADR-005, ADR-007, ADR-013 and ADR-038 are superseded by the
+egui shell and are kept as history only (`docs/adr/adr-038-tauri-desktop-shell.md`,
+status line and "Superseded note"). See [K8 GUI](/docs/weftos/gui) for the short form.
 
-**Source**: `gui/`
-**Stack**: React 19, TypeScript, Vite, Tailwind CSS, Cytoscape.js
-**Phase**: K8
+**Source**: `crates/clawft-gui-egui/` (shell, apps), `crates/clawft-canon/` (primitives),
+`crates/clawft-surface/` (surface descriptions), `extensions/vscode-weft-panel/` (editor host)
 
----
+## Surfaces
 
-## Design Philosophy
+| Surface | How it ships | Build |
+|---------|--------------|-------|
+| Native desktop | the `weft-gui-egui` binary, a cargo-dist app (`crates/clawft-gui-egui/Cargo.toml`, `[package.metadata.dist]`) | `scripts/build.sh gui-egui` |
+| Editor panel | the same crate compiled to `wasm32-unknown-unknown`, loaded by `extensions/vscode-weft-panel/` through `weft_start("weft-canvas")` | extension README |
+| Web dashboard | `clawft-ui/`, a separate Vite + React 19 SPA for the agent gateway; it is not the kernel GUI | `clawft-ui/README.md` |
 
-WeftOS is not just a kernel for agents and services -- it is a self-aware,
-self-extending operating system. The ECC cognitive substrate already ingests its
-own development history and uses it for self-improvement. The K8 GUI closes the
-loop: making the system visually inspectable, interactively manageable, and
-dynamically extensible by agents themselves.
+`clawft-gui-egui/src/lib.rs` states the split: native entry is `run()` (the
+`weft-gui-egui` binary), the WASM entry is `weft_start(canvas_id)`.
 
-Key principles:
+## How the shell talks to the kernel
 
-- **Agent-first extensibility**: The Weaver (or any authorized agent) can
-  generate, modify, and hot-reload user-facing applications without restarting
-  the kernel or GUI.
-- **Heterogeneous awareness**: The GUI gracefully degrades or requests missing
-  data across the mesh (cloud, edge, browser, WASI, embedded). Partial views
-  are acceptable -- the UI knows when to trigger `ServiceApi` calls for more data.
-- **Native binary feel with modern web power**: Launch like a traditional OS
-  executable while leveraging the TypeScript/React ecosystem for rapid UI
-  development.
-- **3D-first cognitive visualization**: The ECC graph, service maps, mesh
-  topology, deployment cycles, permission graphs, resource trees, HNSW clusters,
-  impulses, and governance rules deserve spatial, interactive 3D representation.
-- **Governed and secure**: Every GUI action routes through the existing
-  `ServiceApi`, dual-layer `GovernanceGate`, and chain witnessing. No bypasses.
-- **Self-building**: The OS GUI itself is introspectable and improvable by the
-  ECC/Weaver loop. Agents can propose UI changes, new apps, and evolve the shell.
+The shell is a client of the node daemon. `crates/clawft-gui-egui/src/live.rs` publishes one
+`Snapshot` from two transports behind the same `Arc<Live>`:
 
----
+- **Native**: a background thread with its own tokio runtime calls the daemon IPC socket
+  through `clawft_rpc::DaemonClient`.
+- **WASM**: inside the webview there is no Unix socket, so the panel posts JSON-RPC-shaped
+  messages through `acquireVsCodeApi()` and the extension host proxies them to the daemon.
 
-## Current Implementation
+The substrate RPCs (`read`, `subscribe`, `publish`, `notify`) come from the
+`clawft-substrate` crate (CHANGELOG 0.6.19, "M1.5 App Layer Trilogy"). Apps bind to
+substrate paths; the shell does not call kernel internals directly.
 
-### Dashboard
+## Desktop shell and apps
 
-Read-only overview of kernel state:
+`shell/desktop.rs` is the compositor: a wallpaper grid, floating windows and a tray of
+status chips (kernel, mesh, ExoChain). The sidebar targets are the variants of
+`SidebarTarget` in `shell/sidebar.rs`: Files, Processes, Services, Network (mesh, Wi-Fi,
+Bluetooth), Settings, Scheduler, Monitor, Logs, Terminal, Chat, Admin, Explorer,
+Workspace and Apps. Most have a module under `crates/clawft-gui-egui/src/apps/`.
 
-- **Metrics grid**: process count, chain height, uptime, message rates
-- **Process table**: active agents with PID, state, CPU/memory
-- **Chain events**: recent ExoChain commits with hash, type, timestamp
-- **Health indicators**: service status badges
+The `apps/mod.rs` header says the first cut of these apps shipped as stubs that render a
+heading plus an empty, loading or offline state against their substrate paths, to be
+filled in by follow-up tickets. Read an app's module to see how far it has gone; this
+page does not claim feature parity per app.
 
-### Admin Forms
+## The canon vocabulary
 
-Five CRUD forms testing the full TypeScript-to-Rust round-trip:
+Renderers speak one fixed vocabulary of 21 primitives, defined in `crates/clawft-canon/`
+(`lib.rs`: "Primitive canon - the 21-item vocabulary every renderer speaks"). The modules
+are canvas, chip, dock, field, gauge, grid, media, modal, plot, pressable, select, sheet,
+slider, stack, stream_view, strip, table, tabs, thread_dock, toggle and tree. Each
+primitive implements `CanonWidget` and returns a `CanonResponse`.
 
-1. **Spawn Agent** -- name, capabilities, restart strategy
-2. **Stop Agent** -- select by PID, graceful/force
-3. **Set Config** -- namespace, key, value (typed)
-4. **Query Chain** -- hash or height lookup
-5. **Register Service** -- name, port, health endpoint
+The `blocks/` module in the egui crate is an older 12-block demo gallery
+(text, table, tree, tabs, oscilloscope and others). Its header marks it as the theming
+test bed and showroom, with a planned retirement in favour of canon primitives. New UI
+should be built from canon primitives.
 
-### Knowledge Graph Visualization
+## Surface descriptions
 
-Interactive causal graph visualization using Cytoscape.js:
+`crates/clawft-surface/` turns a declarative surface description into canon primitives.
+Descriptions are TOML (fixtures in `crates/clawft-surface/fixtures/`, for example
+`weftos-admin-desktop.toml` and the per-chip surfaces) or built with a Rust builder. A
+binding expression evaluator drives values from substrate data; the supported combinators
+at the time of writing are `count`, `filter`, `sort`, `len`, `first` and `last` plus the
+`fmt_*` and `exists` helpers. Ternary `?:` and nested lambdas are rejected by the parser
+(`crates/clawft-surface/src/lib.rs`, "M1.5 scope reductions"). Compose-time governance
+filters which affordances a surface may show (`ComposeGovernance`).
 
-- **8 edge type colors**: Causes (red), Enables (green), Correlates (blue), etc.
-- **Node sizing**: scales with degree (more connections = larger node)
-- **Community coloring**: background tint by detected community
-- **Click-to-inspect**: NodeDetail panel showing edges, metadata, community ID
-- **Search**: highlight/dim filtering with search bar
-- **Coherence gauge**: displays lambda_2 (algebraic connectivity)
-- **Layout**: force-directed (cose) with configurable parameters
+This replaces the JSON block-descriptor format of ADR-013, which is superseded.
 
----
+## Theming
 
-## Architecture
-
-```
-+----------------+     WebSocket      +----------------+
-|   React GUI    | <----------------> |  Kernel API    |
-|  (Vite dev)    |     JSON messages  |  (Rust)        |
-+----------------+                    +----------------+
-```
-
-### TypeScript Types
-
-TypeScript interfaces mirror Rust kernel structs:
-- `ProcessEntry`, `ProcessState`, `ResourceUsage`
-- `ChainEvent`, `KernelMetrics`
-- `CausalNode`, `CausalEdge`, `SpectralResult`
-
-### WebSocket Hook
-
-`useKernelWebSocket` hook manages the connection lifecycle:
-- Auto-reconnect with exponential backoff
-- Mock data mode for development (no kernel required)
-- Message type routing to React state
-
----
-
-## Lego Block Architecture
-
-The GUI uses a composable "Lego block" architecture where views and widgets are
-self-describing, independently loadable components. Each block is a standalone
-React component that declares its data requirements, layout preferences, and
-kernel service dependencies through a JSON descriptor.
-
-### Block Structure
-
-A GUI block consists of:
-
-1. **JSON Descriptor** -- declares the block's identity, data requirements,
-   layout, and capabilities
-2. **React Component** -- the TSX implementation
-3. **Service Bindings** -- TypeScript types auto-generated from Rust kernel structs
-
-Blocks can be nested, composed into dashboards, and distributed as governed
-app bundles.
-
-### JSON Descriptor Format
-
-Each block is described by a JSON descriptor that the shell uses for layout,
-routing, and dependency resolution:
-
-```json
-{
-  "id": "process-explorer",
-  "version": "1.0.0",
-  "title": "Process Explorer",
-  "description": "Interactive process table with state transitions",
-  "category": "kernel",
-  "icon": "cpu",
-  "layout": {
-    "minWidth": 400,
-    "minHeight": 300,
-    "defaultWidth": 800,
-    "defaultHeight": 600,
-    "resizable": true,
-    "position": "center"
-  },
-  "data": {
-    "services": ["kernel.process_table", "kernel.supervisor"],
-    "subscriptions": ["process.state_change", "process.spawn", "process.stop"],
-    "refreshInterval": 1000
-  },
-  "capabilities": {
-    "required": ["kernel.ps", "kernel.inspect"],
-    "optional": ["kernel.spawn", "kernel.stop"]
-  },
-  "governance": {
-    "readOnly": false,
-    "gateActions": ["agent.spawn", "agent.stop"]
-  }
-}
-```
-
-Key fields:
-
-- **`data.services`** -- kernel services this block reads from. The shell
-  ensures these services are available (locally or via mesh) before rendering.
-- **`data.subscriptions`** -- WebSocket event topics for real-time updates.
-- **`capabilities.required`** -- capabilities the current user/agent must have
-  for the block to render. Missing capabilities hide the block.
-- **`capabilities.optional`** -- capabilities that unlock additional features
-  (e.g., write operations) when present.
-- **`governance.gateActions`** -- actions that pass through the GovernanceGate
-  before execution. The block's UI elements are automatically disabled when
-  governance denies the action.
-
-### Dynamic Loading
-
-Blocks can be loaded at runtime without rebuilding the shell:
-
-1. Weaver generates a new TSX component + JSON descriptor
-2. The bundle is signed and submitted for governance review
-3. On approval, the block is registered in the shell's block registry
-4. Users see the new block in the app launcher
-
-This enables agents to extend the GUI without human intervention (subject to
-governance approval).
-
----
+`crates/clawft-gui-egui/src/theming.rs` defines the base style tokens: dark surfaces, thin
+strokes, and one warm accent used only to mark active, focused or selected state. The
+four `--weftos-*` CSS themes described in older versions of this page belonged to the
+removed React app.
 
 ## Console
 
-The WeftOS console is a terminal-style interface embedded in the GUI that
-provides direct access to kernel commands:
-
-- **Command palette**: fuzzy-search across all `weave` CLI commands
-- **Output rendering**: structured JSON responses rendered as tables/trees
-- **History**: command history persisted across sessions
-- **Auto-complete**: tab completion from kernel service registry and process table
-- **Multi-pane**: split view with console + live dashboard side by side
-
-The console routes all commands through the same `ServiceApi` and governance
-pipeline as the graphical views. There is no privilege escalation through the
-console.
-
----
-
-## Tauri 2.0 Desktop Integration
-
-The target desktop packaging uses [Tauri 2.0](https://v2.tauri.app) as the GUI
-host.
-
-### Why Tauri
-
-- Produces tiny, secure, native-feeling binaries (few MB) using the OS's native
-  WebView (WebView2 on Windows, WKWebView on macOS, WebKitGTK on Linux).
-- Full GPU acceleration in the WebView enables smooth 3D rendering.
-- Backend remains pure Rust -- the GUI is just another client of the existing
-  kernel abstractions (`A2ARouter`, `ServiceApi`, `MeshAdapter`, etc.).
-- TypeScript integration with automatic bindings.
-- Feature-gated (`gui-tauri` or similar) so edge/WASI/browser builds remain
-  lightweight.
-- Supports transparent windows, custom chrome, multi-window, system tray, and
-  deep OS integration.
-
-### Rust-to-TypeScript Bridge
-
-The bridge uses a combination of tools for zero-boilerplate type safety:
-
-- **tauri-bindgen** or **rspc** (with Tauri adapter) -- defines a shared
-  interface and auto-generates TypeScript declarations, invoke functions, and
-  runtime validation.
-- **tauri-typegen** or **ts-rs** -- scans `#[tauri::command]` functions and
-  generates strongly-typed TS interfaces for all WeftOS types (`ServiceEntry`,
-  `ResolvedService`, `SyncStateDigest`, ECC graph nodes/edges, `PeerNode`,
-  governance rules, EffectVector scores, etc.).
-
-This turns the kernel into a TypeScript app server: agents generate full TS
-applications that call into the mesh, ECC, chain, governance, and sensors as
-if they were local services.
-
----
-
-## 3D Visualization
-
-The GUI targets 3D-first visualization using React Three Fiber + Three.js:
-
-### ECC / Knowledge Graph Explorer
-
-Spatial navigation of the causal Merkle vector graph:
-- Nodes as 3D objects with force-directed layout
-- Edge types (causal, crossref, impulse) with distinct colors and shapes
-- Timestamps (HLC) and drill-down to chain events or resource tree subgraphs
-- Weaver can generate new layouts or filters
-- Performance via InstancedMesh for large graphs
-
-### Service and Mesh Topology Map
-
-2D/3D graph of services, nodes (CloudNative, Edge, Browser, etc.), connections,
-and real-time status using `NodeEccCapability` and response scores.
-
-### Deployment and Task Cycles
-
-Timeline views and graphs showing governance decisions, chain events, agent
-actions, and mesh propagations.
-
-### Asset and Resource Management
-
-Browsable views of the ResourceTree with permissioning overlays and governance
-rule inspection.
-
-### Agent and Sensor Dashboard
-
-Live views of running agents, impulses, HNSW queries, and sensor feeds.
-Partial data handling shows "available on remote node X" with one-click
-resolution.
-
-### Governance Console
-
-Visual rule editor, genesis root verification, supersede flows with on-chain
-anchoring support.
-
----
-
-## Integration with Kernel Primitives
-
-The GUI is not a separate layer -- it is a first-class client of the kernel:
-
-- All interactions route through `A2ARouter` / `ServiceApi` (exactly like the
-  MeshAdapter and RegistryQueryService).
-- `RegistryQueryService`, `CmvgSyncService`, chain queries, tree diffs become
-  directly callable from TypeScript.
-- Mesh-aware: the UI can discover and invoke services on remote nodes. Partial
-  data triggers "Request from peer" flows.
-- Observability: response scores (RTT, success_rate, deny_rate, headroom,
-  risk_delta) drive dynamic UI elements (node coloring, affinity-based
-  recommendations, circuit-breaker visuals).
-- Governance: every command passes the dual-layer GovernanceGate. UI actions are
-  witnessed to the ExoChain.
-- Cognitive sync: real-time updates via multiplexed QUIC streams (IPC + CMVG
-  sync streams) feed live 3D graphs and dashboards.
-- Self-awareness: the ECC graph includes the GUI codebase itself. Weaver can
-  analyze, propose improvements, generate new components, and apply them.
-
----
-
-## Platform Support
-
-| Platform | Packaging | 3D Support | Notes |
-|----------|-----------|------------|-------|
-| Desktop (Linux, macOS, Windows) | Tauri 2.0 binary | Full GPU acceleration | Primary target |
-| Cloud / Edge nodes | Web fallback | Full (WebGL) | Same TS codebase, WebSocket to kernel |
-| Browser / WASI light nodes | Pure web | Full (WebGL) | No Tauri needed |
-| Embedded / low-resource | Optional minimal mode | 2D-only or remote | Reduced 3D, remote GUI via mesh |
-
-Feature flags ensure the core kernel never depends on GUI crates.
-
----
+The Terminal and Chat apps and the Explorer live in the egui shell. The kernel command
+dispatcher behind `service.method` strings is `ShellAdapter` in
+`crates/clawft-kernel/src/service.rs`; see [Console Commands](/docs/weftos/reference/console-commands)
+for what is and is not verified about it.
 
 ## Development
 
 ```bash
-cd gui
-npm install
-npm run dev     # Vite dev server at localhost:5173
-npm run build   # Production build (204KB JS, 17KB CSS)
+scripts/build.sh gui-egui        # native weft-gui-egui binary
+scripts/build.sh check           # compile check for the workspace
 ```
 
-Production build: **204KB** JavaScript, **17KB** CSS. No external CDN
-dependencies.
-
----
-
-## Block Engine (v0.2)
-
-Sprint 12 introduced a production-ready **Block Engine** in `gui/src/engine/`
-and `gui/src/blocks/`. The engine replaces the earlier prototype components with
-a fully recursive, registry-driven rendering system.
-
-### Core Engine (`gui/src/engine/`)
-
-- **BlockRegistry** -- Central registry mapping block type strings to React
-  components. Blocks self-register at import time. The registry supports
-  dynamic registration for agent-generated blocks.
-- **BlockRenderer** -- Recursive renderer that walks a block descriptor tree
-  and instantiates the correct component for each node. Handles nesting
-  (columns containing rows containing blocks) and error boundaries.
-- **StateStore** -- Zustand-based state management with a Tauri bridge. Kernel
-  state flows from Rust through Tauri commands into the Zustand store, and
-  React components subscribe to slices. The store supports optimistic updates
-  for responsive UI and rollback on kernel rejection.
-
-### Block Components (`gui/src/blocks/`)
-
-10 composable block types ship out of the box:
-
-| Block | Description |
-|-------|-------------|
-| **Text** | Rich text display with markdown rendering |
-| **Code** | Syntax-highlighted code blocks with copy-to-clipboard |
-| **Status** | Service/process health indicators with color coding |
-| **Table** | Sortable, filterable data tables with virtual scrolling |
-| **Tree** | Collapsible tree views for resource trees and process hierarchies |
-| **Terminal** | Embedded terminal output with ANSI color support |
-| **Button** | Action buttons wired to kernel commands via governance gate |
-| **Column** | Vertical layout container for stacking blocks |
-| **Row** | Horizontal layout container for side-by-side blocks |
-| **Grid** | CSS grid layout with configurable column/row templates |
-| **Tabs** | Tabbed container for switching between block groups |
-
-Layout blocks (Column, Row, Grid, Tabs) accept child blocks, enabling
-arbitrarily deep nesting. A dashboard is a tree of blocks described by a JSON
-descriptor -- the BlockRenderer walks the tree and produces the final UI.
-
-### Example: Composing a Dashboard
-
-```json
-{
-  "type": "Grid",
-  "props": { "columns": 2 },
-  "children": [
-    { "type": "Status", "props": { "service": "kernel.supervisor" } },
-    { "type": "Status", "props": { "service": "kernel.mesh" } },
-    {
-      "type": "Tabs",
-      "children": [
-        { "type": "Table", "props": { "label": "Processes", "source": "kernel.ps" } },
-        { "type": "Tree", "props": { "label": "Resources", "source": "kernel.tree" } }
-      ]
-    },
-    { "type": "Terminal", "props": { "source": "kernel.logs" } }
-  ]
-}
-```
-
----
-
-## Sprint 13 Additions
-
-### BudgetBlock (v0.3)
-
-**Source**: `gui/src/blocks/BudgetBlock.tsx`
-
-The BudgetBlock is a dashboard component that displays per-agent token usage,
-cost, and budget remaining. It reads from the StateStore key
-`/kernel/metrics/cost` (populated by `KernelDataProvider`) and renders:
-
-- **Total budget bar** -- color-coded progress bar (green/amber/red) showing
-  aggregate spend as a percentage of the total budget.
-- **Per-agent table** -- sortable rows showing each agent's ID, tokens consumed,
-  cost in USD, and remaining budget. Each row has a colored indicator dot
-  reflecting budget utilisation.
-
-Register the block by type name `"Budget"` in a dashboard descriptor:
-
-```json
-{ "type": "Budget", "props": { "stateKey": "/kernel/metrics/cost" } }
-```
-
-The `stateKey` prop defaults to `/kernel/metrics/cost` and can be overridden
-to point at a different cost data source.
-
-### KernelDataProvider (v0.3)
-
-**Source**: `gui/src/engine/KernelDataProvider.tsx`
-
-The KernelDataProvider replaces the earlier mock-only data flow with a real
-Tauri bridge. It wraps the application tree and polls the kernel at a
-configurable interval (default 2 seconds) via four Tauri invoke calls:
-
-| Tauri Command | StateStore Keys |
-|---------------|-----------------|
-| `kernel_status` | `/kernel/version`, `/kernel/uptime_secs`, `/kernel/health`, ... |
-| `kernel_metrics` | `/kernel/metrics/cpu_percent`, `/kernel/metrics/memory_used_mb`, ... |
-| `kernel_processes` | `/kernel/processes` |
-| `kernel_cost_metrics` | `/kernel/metrics/cost` |
-
-**Behavior modes**:
-
-- **Tauri desktop** -- polls the kernel and populates the Zustand StateStore.
-  Connection state transitions through `disconnected -> connecting -> connected`.
-  On error, an amber warning banner renders above the content.
-- **Browser / non-Tauri** -- displays a "Connect to kernel" placeholder banner.
-  Set `allowMockFallback={true}` to re-enable mock data in browser mode.
-
-Usage:
-
-```tsx
-<KernelDataProvider pollInterval={3000}>
-  <App />
-</KernelDataProvider>
-```
-
-### ThemeSwitcher (v0.3)
-
-**Source**: `gui/src/components/ThemeSwitcher.tsx`
-
-A dropdown component for switching the active WeftOS theme at runtime. It
-integrates with the ThemeProvider context and persists the user's selection:
-
-- **Tauri desktop** -- saves to kernel config via `invoke('save_config', ...)`
-- **Browser** -- saves to `localStorage` under the key `weftos-theme`
-
-The switcher lists all themes registered with `registerTheme()` and formats
-their names for display (e.g. `ocean-dark` becomes "Ocean Dark"). Drop it into
-any toolbar or settings panel:
-
-```tsx
-import { ThemeSwitcher } from '@/components/ThemeSwitcher';
-
-<ThemeSwitcher />
-```
-
----
-
-## Theming System (v0.2)
-
-The GUI ships with a CSS-variable-based theming system in `gui/src/themes/`.
-
-### Built-in Themes
-
-| Theme | Description |
-|-------|-------------|
-| **ocean-dark** | Default dark theme with blue accents |
-| **midnight** | Deep dark theme for low-light environments |
-| **paper-light** | Clean light theme for daytime use |
-| **high-contrast** | WCAG AAA compliant theme for accessibility |
-
-### Architecture
-
-- **ThemeProvider** -- React context provider that applies the active theme's
-  CSS variables to the document root. Supports runtime switching without
-  page reload.
-- **CSS Variable Bridge** -- All colors, spacing, and typography are exposed as
-  `--weftos-*` CSS custom properties. Tailwind classes reference these
-  variables, so switching themes updates the entire UI instantly.
-- **ANSI Palette Mapping** -- Terminal and code blocks map ANSI color codes to
-  the active theme's palette, ensuring consistent appearance across themes.
-- **Tailwind Integration** -- The `tailwind.config.ts` extends Tailwind's
-  color palette with `--weftos-*` custom properties, so utility classes like
-  `bg-weftos-surface` and `text-weftos-primary` respond to theme changes
-  automatically.
-
-### Custom Themes
-
-Create a new theme by defining a CSS file with `--weftos-*` custom properties
-and registering it with the ThemeProvider:
-
-```typescript
-import { registerTheme } from '@/themes';
-
-registerTheme('my-theme', {
-  '--weftos-bg': '#1a1a2e',
-  '--weftos-surface': '#16213e',
-  '--weftos-primary': '#0f3460',
-  '--weftos-accent': '#e94560',
-  '--weftos-text': '#eaeaea',
-  // ... full palette
-});
-```
-
----
-
-## Implementation Roadmap
-
-- **K8.1**: Tauri 2.0 scaffolding + basic Rust-to-TS bindings (ServiceApi
-  exposure, RegistryQueryService, etc.)
-- **K8.2**: Core dashboards (service map, mesh topology, chain viewer) with 2D
-  graphs
-- **K8.3**: 3D ECC visualization with React Three Fiber; score-driven dynamic
-  styling
-- **K8.4**: Dynamic app loading + Weaver integration for generating TS apps
-- **K8.5**: Governance integration, partial-data handling, and
-  self-introspection features
-- **K8.6**: Polish (native feel, multi-window, theming, distributable apps) +
-  testing across platforms
+For the WASM panel, see `extensions/vscode-weft-panel/README.md` and `SMOKE.md`.
 
 ## See Also
 
-- [ECC](/weftos/ecc) -- cognitive substrate that powers the knowledge graph
-- [Governance](/weftos/governance) -- the governance engine that gates GUI actions
-- [Mesh Networking](/weftos/mesh-networking) -- mesh topology the GUI visualizes
+- [K8 GUI](/docs/weftos/gui) - one-page summary and history
+- [ECC](/docs/weftos/ecc) - the knowledge graph the Explorer visualizes
+- [Governance](/docs/weftos/governance) - the engine that gates actions
+- [Mesh Networking](/docs/weftos/mesh-networking) - mesh topology shown in the Network app
