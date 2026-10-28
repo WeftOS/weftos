@@ -150,6 +150,38 @@ Spawn a subprocess with a concurrency limit of 5.
 | `description` | string | no | Human-readable description |
 | `timeout` | number | no | Timeout in seconds (default: 60) |
 
+### delegate_task
+
+Delegate a complex task to a specialist agent profile loaded from `agents/`, or to Claude for multi-step orchestration when no `agent` is given. Source: `crates/clawft-tools/src/delegate_tool.rs`.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `task` | string | yes | The task description to delegate |
+| `agent` | string | no | Specialist agent profile name (`agents/<name>.toml` or `agents/<name>/agent.*`); omit for the Claude path |
+| `model` | string | no | Model override for the Claude path (defaults to config) |
+
+### obs_recall
+
+Page a previously archived tool result. When a tool result is too large it is projected into a short summary with an `observation_pack` id; `obs_recall` reads the archived bytes back in pages so the original tool does not need to be re-run. Source: `crates/clawft-tools/src/obs_recall.rs`.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `id` | string | yes | Observation id (`obs_...`, from `observation_pack`) |
+| `offset` | integer | no | Byte offset into the archive (default 0) |
+| `limit` | integer | no | Page size in bytes (default 8192, maximum 32768) |
+
+### render_ui
+
+Render a UI element on the Live Canvas: text, buttons, inputs, images, code blocks, tables and forms. Source: `crates/clawft-tools/src/render_ui.rs`.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `command` | string | yes | `render`, `update`, `remove`, `reset` or `batch` |
+| `id` | string | for render, update, remove | Element id |
+| `element` | object | for render, update | The element; its `type` is one of `text`, `button`, `input`, `image`, `code`, `table`, `form` |
+| `position` | integer | no | Position index for `render` |
+| `commands` | object[] | for batch | Sub-commands to apply together |
+
 ## MCP Tools
 
 External tools can be integrated through MCP (Model Context Protocol) servers configured in `tools.mcp_servers`.
@@ -218,6 +250,8 @@ Register providers with `McpServerShell` via `shell.register_provider(Box::new(m
 1. `register_all()` -- registers all built-in tools (sandboxed to workspace)
 2. `register_mcp_tools()` -- discovers and registers tools from MCP servers
 3. `MessageTool` -- registered separately (requires MessageBus reference)
+
+`weft tools list` prints the tools registered in the current process; a plain run with no channels lists `delegate_task`, `edit_file`, `exec_shell`, `list_directory`, `memory_read`, `memory_write`, `obs_recall`, `read_file`, `render_ui`, `spawn`, `web_fetch`, `web_search` and `write_file`.
 
 If a tool is registered with an existing name, it replaces the previous one.
 

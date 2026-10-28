@@ -1153,6 +1153,49 @@ cmd_check_doc_commands() {
     timer_end
 }
 
+# CLI reference: regenerate (or --check) the weaver/weft reference from
+# target/debug/{weaver,weft} --help (scripts/gen-cli-reference.sh). Run
+# native-debug first. Not part of `gate`.
+cmd_gen_cli_reference() {
+    header "Generating the CLI reference from the built binaries"
+    timer_start
+    run_cmd scripts/gen-cli-reference.sh
+    timer_end
+}
+
+# RPC reference: regenerate (or --check) docs/reference/rpc.md from the daemon's
+# dispatch tables (scripts/gen-rpc-reference.py). Reads source only; no build.
+cmd_gen_rpc_reference() {
+    header "Generating the daemon RPC reference from the dispatch tables"
+    timer_start
+    run_cmd python3 -I scripts/gen-rpc-reference.py
+    timer_end
+}
+
+cmd_check_rpc_reference() {
+    header "Checking the daemon RPC reference against the dispatch tables"
+    timer_start
+    run_cmd python3 -I scripts/gen-rpc-reference.py --check
+    timer_end
+}
+
+# Config reference: regenerate docs/reference/config-sections.md from the serde
+# config structs (scripts/gen-config-reference.py). Source only; not in CI
+# because struct file:line numbers move with unrelated edits.
+cmd_gen_config_reference() {
+    header "Generating the config sections reference from the serde structs"
+    timer_start
+    run_cmd python3 -I scripts/gen-config-reference.py
+    timer_end
+}
+
+cmd_check_cli_reference() {
+    header "Checking the CLI reference against the built binaries"
+    timer_start
+    run_cmd scripts/gen-cli-reference.sh --check
+    timer_end
+}
+
 # P3-X: the machine mesh service lane: the mesh crates' tests, the Phase 3
 # end-to-end test (the real service plus two user daemons as the current user,
 # tempdirs only; scripts/dev/mesh-p3-e2e.sh), the no-owned-state gate and the
@@ -2977,8 +3020,21 @@ ${BOLD}Commands:${NC}
                   (workload-runtime only; also part of whole-workspace check)
   check-doc-commands
                   Doc drift check: weaver/weft commands and [kernel.mesh] keys in
-                  docs/guides/agents.md and the deployment SOPs (SOP 1, SOP 3)
+                  every guide, reference and docs-site page (deployment SOPs: SOP 1, SOP 3)
                   must exist in target/debug/{weaver,weft} (run native-debug first)
+  gen-cli-reference
+                  Regenerate docs/reference/cli.md and the clawft/cli-reference-{weaver,weft}
+                  site pages from target/debug/{weaver,weft} --help (run native-debug first)
+  check-cli-reference
+                  Fail if the generated CLI reference differs from the built binaries
+  gen-rpc-reference
+                  Regenerate docs/reference/rpc.md from the daemon dispatch tables
+                  (rpc_ext.rs ROUTES, daemon.rs dispatch, capability.rs); source only
+  gen-config-reference
+                  Regenerate docs/reference/config-sections.md (kernel, mesh, router,
+                  project, cog.toml, mesh_limits) from the serde config structs
+  check-rpc-reference
+                  Fail if docs/reference/rpc.md differs from the dispatch tables
   test-mesh-service
                   Machine mesh service lane (P3): cargo test -p clawft-mesh-local
                   -p clawft-mesh-service, scripts/dev/mesh-p3-e2e.sh, the
@@ -3333,6 +3389,11 @@ main() {
         fuzz-check)   cmd_fuzz_check ;;
         check-launcher) cmd_check_launcher ;;
         check-doc-commands) cmd_check_doc_commands ;;
+        gen-cli-reference) cmd_gen_cli_reference ;;
+        check-cli-reference) cmd_check_cli_reference ;;
+        gen-rpc-reference) cmd_gen_rpc_reference ;;
+        gen-config-reference) cmd_gen_config_reference ;;
+        check-rpc-reference) cmd_check_rpc_reference ;;
         test-mesh-service) cmd_test_mesh_service ;;
         check-tests)  cmd_check_tests ;;
         check-mesh-no-owned-state) cmd_check_mesh_no_owned_state ;;

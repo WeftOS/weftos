@@ -335,3 +335,9 @@ Key environment variables used by clawft:
 | `GOOGLE_GEMINI_API_KEY` | Google Gemini API key |
 | `XAI_API_KEY` | xAI API key |
 | `ELEVENLABS_API_KEY` | ElevenLabs TTS API key |
+
+## Kernel, mesh, router, project and cog sections
+
+The sections above configure the agent runtime. The daemon and the machine mesh read further sections from `~/.weftos/weave.toml` and from per-project and per-cog files: `[kernel]` and its subtables (cluster, chain, vector, spatial, pairing, IPC relay, shared services, governance), `[kernel.mesh]` (transport, admission, genesis pin, leaf listeners), `[router]` (the tailnet router), the project manifest at `~/.weftos/projects/<id>.toml`, and a cog's `cog.toml` including `[mesh_limits]`.
+
+Their field names, types and defaults are generated from the config structs in `docs/reference/config-sections.md` in the repository. The daemon methods that read and apply them are listed in `docs/reference/rpc.md`.

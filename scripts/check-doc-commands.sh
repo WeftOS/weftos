@@ -13,11 +13,11 @@
 # --self-test runs the checker over fixtures: every drifted form below must be
 # reported and every valid form must pass.
 #
-# Scope (the parts of the docs that were verified against the CLI):
-#   docs/guides/agents.md                     whole file
-#   docs/guides/weftos-deployment-sops.md     SOP 1 and SOP 3
-#   docs/cogs/cog-sources.md                  whole file
-#   docs/cogs/operator-guide.md               whole file
+# Scope (override with DOC_SPECS="file:all file:sop ..."):
+#   docs/guides/*.md, docs/reference/*.md, docs/cogs/*.md   whole files
+#   docs/src/content/docs/clawft/*.mdx                      whole files
+#   docs/src/content/docs/weftos/guides/*.mdx               whole files
+#   docs/guides/weftos-deployment-sops.md                   SOP 1 and SOP 3
 # Extracted: `weaver`/`weft` commands in fenced lines and inline code spans, at
 # the start of a line or after `&&`, `;`, `|`, `$(`, leading `VAR=val` words and
 # `sudo`; and `ExecStart=.../weaver ...` lines. A command is cut at ` > `,
@@ -50,7 +50,41 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-DOCS="${DOC_SPECS:-docs/guides/agents.md:all docs/guides/weftos-deployment-sops.md:sop docs/cogs/cog-sources.md:all docs/cogs/operator-guide.md:all}"
+# Default scope: the verified deployment docs plus every guide, reference and
+# docs-site page. The deployment SOPs file is checked for SOP 1 and SOP 3 only.
+#
+# KNOWN_DRIFT: pages that still name commands the CLI does not have (reported
+# 2026-10-27, owned by the docs lanes that rewrite them). Delete a line as its
+# page is fixed; do not add new pages here.
+KNOWN_DRIFT="
+docs/guides/kernel.md
+docs/guides/mcp-integration.md
+docs/guides/mcp.md
+docs/guides/plugins.md
+docs/guides/skill-signing.md
+docs/guides/tool-calls.md
+docs/guides/voice.md
+docs/guides/weftos-deferred-requirements.md
+docs/guides/workspaces.md
+docs/src/content/docs/clawft/architecture.mdx
+docs/src/content/docs/clawft/security.mdx
+docs/src/content/docs/weftos/guides/assessment.mdx
+docs/src/content/docs/weftos/guides/deployment-sops.mdx
+"
+default_docs() {
+    local f
+    echo "docs/guides/weftos-deployment-sops.md:sop"
+    for f in docs/guides/*.md docs/reference/*.md docs/cogs/*.md \
+             docs/src/content/docs/clawft/*.mdx docs/src/content/docs/weftos/guides/*.mdx; do
+        [ -f "$f" ] || continue
+        [ "$f" = "docs/guides/weftos-deployment-sops.md" ] && continue
+        case "$KNOWN_DRIFT" in *"
+$f
+"*) continue ;; esac
+        echo "$f:all"
+    done
+}
+DOCS="${DOC_SPECS:-$(default_docs | tr '\n' ' ')}"
 MESH_SRC="crates/clawft-types/src/config/kernel.rs"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/doc-commands.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT

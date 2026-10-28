@@ -18,6 +18,8 @@
     "plugins",
     "---Infrastructure",
     "cli-reference",
+    "cli-reference-weft",
+    "cli-reference-weaver",
     "configuration",
     "browser",
     "deployment",

@@ -1332,6 +1332,12 @@ export TELEGRAM_BOT_TOKEN="123456789:ABCdef..."
 
 ## See Also
 
+- [Configuration sections](config-sections.md) -- Generated reference for
+  `[kernel]`, `[kernel.mesh]`, `[router]`, the project manifest, `cog.toml`
+  and `[mesh_limits]`.
+- [Daemon RPC reference](rpc.md) -- Generated list of daemon methods and the
+  capability each needs.
+- [CLI reference](cli.md) -- Generated `weaver` and `weft` command reference.
 - [Providers Guide](../guides/providers.md) -- Detailed guide on provider
   routing, custom providers, and multi-provider strategies.
 - [Tools Reference](tools.md) -- Built-in tool documentation and MCP

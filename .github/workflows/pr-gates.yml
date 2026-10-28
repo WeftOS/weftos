@@ -837,6 +837,44 @@ jobs:
         run: target/release/weft assess run --scope ci --format github-annotations
 
   # -------------------------------------------------------------------
+  # Doc drift: the generated CLI reference (docs/reference/cli.md and the
+  # clawft/cli-reference-{weaver,weft}.mdx pages) must match the built
+  # binaries' --help, and every weaver/weft command in the verified docs
+  # must exist. Regenerate with `scripts/build.sh gen-cli-reference`.
+  # -------------------------------------------------------------------
+  cli-reference-drift:
+    name: CLI reference drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-debug-cli-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-debug-cli-
+
+      - name: Build weft and weaver (debug)
+        run: scripts/build.sh native-debug
+
+      - name: Generated CLI reference matches the binaries
+        run: scripts/build.sh check-cli-reference
+
+      - name: RPC reference matches the dispatch tables
+        run: scripts/build.sh check-rpc-reference
+
+      - name: Documented commands exist
+        run: scripts/build.sh check-doc-commands
+
+  # -------------------------------------------------------------------
   # Docs build (WEFT-448).
   #
   # Compiles the Fumadocs Next.js site so MDX syntax errors block

@@ -721,7 +721,7 @@ the server's own timeout is set high enough.
 Enable debug logging to see the full request/response cycle:
 
 ```sh
-RUST_LOG=clawft_llm=debug weft chat
+RUST_LOG=clawft_llm=debug weft agent
 ```
 
 This logs the provider name, model, message count, and response metadata

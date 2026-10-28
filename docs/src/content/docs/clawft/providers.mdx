@@ -12,7 +12,7 @@ Key design principles:
 - **Single protocol** -- every provider speaks the same OpenAI-compatible request/response format
 - **Prefix-based routing** -- model identifiers like `openai/gpt-4o` encode both the target provider and the model name
 - **Environment-driven keys** -- API keys are resolved from environment variables at request time, never persisted in configuration files
-- **Zero boilerplate** -- nine providers are pre-configured and ready to use
+- **Zero boilerplate** -- eleven providers are pre-configured and ready to use
 
 ## Provider Routing
 
@@ -27,7 +27,7 @@ If no prefix matches, the router falls back to the default provider (OpenAI) and
 
 ## Built-in Providers
 
-`ProviderRouter::with_builtins()` registers nine providers. Each requires only its corresponding environment variable.
+`ProviderRouter::with_builtins()` registers eleven providers. The hosted ones require only their environment variable; `local` and `ollama` point at a local server.
 
 | Provider | Base URL | API Key Env Var | Default Model |
 |----------|----------|-----------------|---------------|
@@ -40,6 +40,8 @@ If no prefix matches, the router falls back to the default provider (OpenAI) and
 | `openrouter` | `https://openrouter.ai/api/v1` | `OPENROUTER_API_KEY` | (none) |
 | `gemini` | `https://generativelanguage.googleapis.com/v1beta/openai` | `GOOGLE_GEMINI_API_KEY` | `gemini-2.5-flash` |
 | `xai` | `https://api.x.ai/v1` | `XAI_API_KEY` | `grok-3-mini` |
+| `local` | `http://127.0.0.1:8090/v1` | `LOCAL_LLM_API_KEY` | `hermes-4.3-36b` |
+| `ollama` | `http://localhost:11434/v1` | `LOCAL_LLM_API_KEY` | `llama3.2` |
 
 Anthropic requests automatically include the `anthropic-version: 2023-06-01` header.
 
