@@ -3,26 +3,10 @@ title: "Observability"
 description: "Dead letter queue, metrics registry, log service, and timer service for kernel-wide monitoring and diagnostics."
 ---
 
-WeftOS provides four observability services wired into the kernel boot sequence. They are registered as `SystemService` instances with start/stop lifecycle, gated behind the `os-patterns` feature.
+WeftOS provides four observability components created during kernel boot when the `os-patterns` feature is on. That feature is off by default (`crates/clawft-kernel/Cargo.toml`: `os-patterns = ["exochain"]`, not in `default`), so a default build has none of them and the accessors return `None`. Boot creates each as a shared object and exposes it through an accessor; the boot block (`boot.rs`, "Initialize os-patterns observability modules") does not register them in the `ServiceRegistry`.
 
 **Feature**: `os-patterns`
 **Phase**: K1/K5
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────┐
-│                 Kernel Boot                      │
-│  ┌──────────────┐  ┌──────────────┐             │
-│  │ MetricsRegistry│  │  LogService  │             │
-│  └──────────────┘  └──────────────┘             │
-│  ┌──────────────┐  ┌──────────────┐             │
-│  │ TimerService  │  │DeadLetterQueue│             │
-│  └──────────────┘  └──────────────┘             │
-└─────────────────────────────────────────────────┘
-```
-
-All four services are initialized during boot and accessible via `kernel.metrics_registry()`, `kernel.log_service()`, `kernel.timer_service()`, and `kernel.dead_letter_queue()`.
 
 ## Dead Letter Queue
 
@@ -31,24 +15,19 @@ Captures messages that could not be delivered (target not found, inbox full, rou
 **Source**: `crates/clawft-kernel/src/dead_letter.rs`
 
 ```rust
-pub struct DeadLetterQueue {
-    entries: RwLock<VecDeque<DeadLetter>>,
-    max_size: usize,
-}
+pub struct DeadLetterQueue { /* bounded queue of DeadLetter { message, reason, timestamp } */ }
+// DeadLetterQueue::new(max_size) or with_default_capacity(); with_chain(cm) logs intake to the chain
 ```
 
-### Failure Reasons
+### Failure reasons
 
 ```rust
 pub enum DeadLetterReason {
-    TargetNotFound,
-    InboxFull,
-    RoutingError(String),
-    Timeout,
-    SerializationError(String),
-    PermissionDenied,
-    ServiceUnavailable(String),
-    Custom(String),
+    TargetNotFound { pid: Pid },
+    InboxFull { pid: Pid },
+    Timeout { duration_ms: u64 },
+    GovernanceDenied { reason: String },
+    AgentExited { pid: Pid },
 }
 ```
 
@@ -63,6 +42,7 @@ pub enum DeadLetterReason {
 | `take_for_retry(msg_id)` | Remove and return for retry |
 | `re_add(letter)` | Return a letter after failed retry |
 | `snapshot()` | Get all entries (read-only) |
+| `len()`, `capacity()`, `clear()` | Size and housekeeping |
 
 ## Metrics Registry
 
@@ -70,17 +50,18 @@ Three metric types: counters, gauges, and histograms. Thread-safe via atomics an
 
 **Source**: `crates/clawft-kernel/src/metrics.rs`
 
-### Built-in Metrics
+### Built-in metrics
 
-Created automatically via `MetricsRegistry::with_builtins()`:
+`MetricsRegistry::with_builtins()` registers these names (constants in `metrics.rs`):
 
-| Metric | Type | Description |
-|--------|------|-------------|
-| `kernel.process_count` | Gauge | Active processes |
-| `kernel.chain_height` | Gauge | ExoChain block count |
-| `kernel.uptime_secs` | Gauge | Seconds since boot |
-| `kernel.messages_delivered` | Counter | Total IPC messages |
-| `kernel.messages_failed` | Counter | Failed deliveries |
+| Metric | Type |
+|--------|------|
+| `kernel.messages_sent`, `kernel.messages_delivered`, `kernel.messages_dropped` | Counter |
+| `kernel.agent_spawns`, `kernel.agent_crashes`, `kernel.tool_executions` | Counter |
+| `kernel.active_agents`, `kernel.active_services`, `kernel.chain_length` | Gauge |
+| `kernel.ipc_latency_ms`, `kernel.tool_execution_ms`, `kernel.governance_evaluation_ms` | Histogram |
+
+Boot also sets a few gauges with dotted names (`kernel.process.count`, `kernel.agent.count`, `kernel.chain.height`, `kernel.uptime_secs`) that differ from the constants above (`boot.rs`). Which names an exporter should rely on is not settled in the code, so read `registry.list_names()` on a running kernel.
 
 ### API
 
@@ -93,6 +74,7 @@ registry.counter_get("name") -> u64;
 // Gauges
 registry.gauge_set("name", 42);
 registry.gauge_inc("name", 1);
+registry.gauge_dec("name", 1);
 registry.gauge_get("name") -> i64;
 
 // Histograms
@@ -113,13 +95,13 @@ Structured kernel-level logging with per-agent attribution, trace correlation, a
 
 ```rust
 pub struct LogEntry {
-    pub timestamp: SystemTime,
+    pub timestamp: DateTime<Utc>,
     pub level: LogLevel,
+    pub source_pid: Option<Pid>,
+    pub source_service: Option<String>,
     pub message: String,
-    pub pid: Option<Pid>,
-    pub service: Option<String>,
-    pub trace_id: Option<String>,
     pub fields: HashMap<String, serde_json::Value>,
+    pub trace_id: Option<String>,
 }
 ```
 
@@ -133,12 +115,12 @@ LogEntry::new(LogLevel::Info, "agent spawned")
     .with_field("strategy", json!("OneForOne"))
 ```
 
-Queryable via `LogQuery` with filters for level, PID, service, time range, and limit.
+Queryable via `LogQuery` with filters for PID, service, minimum level, `since` and `until`, trace id, and a limit.
 
 ## Timer Service
 
-Provides named timers for scheduling periodic and one-shot kernel operations.
+Provides one-shot and repeating timers with sub-second precision. It complements `CronService` (cron expressions, minute granularity). Each timer delivers a `KernelMessage` to its owner's PID when it fires (`timer.rs` header).
 
 **Source**: `crates/clawft-kernel/src/timer.rs`
 
-Used internally by the cognitive tick, persistence auto-save, and mesh heartbeat intervals.
+The earlier claim that the cognitive tick, persistence auto-save and mesh heartbeat use this service was not supported by the code (the persistence helper has no timer; see [Persistence](/docs/weftos/persistence)).

@@ -1,11 +1,11 @@
 ---
 title: "Application Framework"
-description: "AppManifest structure, agent/tool/service specs, app lifecycle management, and CLI commands for WeftOS applications."
+description: "AppManifest structure, agent, tool and service specs, app lifecycle management, and the weaver app commands."
 ---
 
-The application framework provides manifest-based packaging and lifecycle management for agent applications via `weftapp.toml`.
+The application framework provides manifest-based packaging and lifecycle management for agent applications. A manifest is `weftapp.toml` or `weftapp.json`.
 
-**Source**: `crates/clawft-kernel/src/app.rs` (~980 lines)
+**Source**: `crates/clawft-kernel/src/app.rs`
 
 ## AppManifest
 
@@ -13,58 +13,80 @@ The application framework provides manifest-based packaging and lifecycle manage
 pub struct AppManifest {
     pub name: String,
     pub version: String,
-    pub description: Option<String>,
+    pub description: String,
+    pub author: Option<String>,
+    pub license: Option<String>,
     pub agents: Vec<AgentSpec>,
-    pub services: Vec<ServiceSpec>,
     pub tools: Vec<ToolSpec>,
+    pub services: Vec<ServiceSpec>,
     pub capabilities: AppCapabilities,
     pub hooks: AppHooks,
 }
 ```
 
-### Component Specs
+`AppManifest::from_toml_str` and `from_json_str` parse a manifest.
+
+### Component specs
 
 ```rust
 pub struct AgentSpec {
-    pub name: String,
-    pub agent_type: String,
+    pub id: String,
+    pub role: String,
     pub capabilities: AgentCapabilities,
-    pub resource_limits: ResourceLimits,
+    pub auto_start: bool,
 }
 
 pub struct ToolSpec {
     pub name: String,
-    pub source: ToolSource,  // Native, Wasm { module_path }, Api { endpoint }
-    pub description: String,
+    pub source: ToolSource,            // Wasm(String), Native(String), Skill(String)
+    pub schema: Option<serde_json::Value>,
+}
+
+pub struct ServiceSpec {
+    pub name: String,
+    pub image: Option<String>,
+    pub command: Option<String>,
+    pub ports: Vec<PortMapping>,
+    pub env: HashMap<String, String>,
+    pub health_endpoint: Option<String>,
 }
 ```
 
-## App Lifecycle
+## App lifecycle
 
 ```rust
-pub enum AppState {
-    Installed, Starting, Running, Stopping, Stopped, Failed,
-}
+pub enum AppState { Installed, Starting, Running, Stopping, Stopped, Failed(String) }
 ```
+
+`AppManager::start` accepts only `Installed` or `Stopped` apps, moves the app through `Starting` to `Running`, appends an `app` start event to the chain when `exochain` is on, and returns the `SpawnRequest` list built from the manifest's agents. The caller does the spawning.
 
 ## AppManager API
 
 ```rust
 impl AppManager {
-    pub fn install(&self, manifest: AppManifest) -> Result<(), AppError>;
-    pub fn start(&self, name: &str) -> Result<(), AppError>;
+    pub fn install(&self, manifest: AppManifest) -> Result<String, AppError>;
+    pub fn start(&self, name: &str) -> Result<Vec<SpawnRequest>, AppError>;
     pub fn stop(&self, name: &str) -> Result<(), AppError>;
-    pub fn uninstall(&self, name: &str) -> Result<(), AppError>;
-    pub fn list(&self) -> Vec<(String, InstalledApp)>;
+    pub fn remove(&self, name: &str) -> Result<AppManifest, AppError>;
+    pub fn list(&self) -> Vec<(String, AppState, String)>;
+    pub fn inspect(&self, name: &str) -> Result<InstalledApp, AppError>;
+    pub fn transition_to(&self, name: &str, new_state: AppState) -> Result<(), AppError>;
 }
 ```
 
-## Agent Spawning
-
-When an app starts, the AppManager creates `SpawnRequest` entries from each `AgentSpec`, spawns through the `AgentSupervisor`, registers services, loads tools, and registers under `/apps/{name}`.
+`with_persist_path` makes installs survive kernel restarts through an atomic `apps.json`; the kernel sets this at boot (`boot.rs`). Installs and starts can be governance-gated and chain-logged through `set_governance_gate` and `set_chain_manager`.
 
 ## CLI
 
 ```bash
-weft app list | install <manifest> | start <name> | stop <name> | uninstall <name>
+weaver app install <PATH>      # PATH is a directory containing weftapp.toml (or a JSON manifest)
+weaver app start <NAME>
+weaver app stop <NAME>
+weaver app remove <NAME>
+weaver app list
+weaver app inspect <NAME>
 ```
+
+Source: the generated [CLI reference](/docs/clawft/cli-reference) (`weaver app`). An earlier version of this page showed `weft app`, which is not a `weft` command.
+
+Applications are separate from cog workloads: cogs are installed and placed through `weaver cog` and `weaver workload` (see [Cogs](/docs/weftos/platform/cogs)).
