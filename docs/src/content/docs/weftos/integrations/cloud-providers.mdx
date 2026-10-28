@@ -9,15 +9,22 @@ WeftOS agents can use any cloud LLM provider through clawft's provider abstracti
 
 ## Supported Providers
 
-| Provider | Config prefix | Models | Notes |
-|----------|--------------|--------|-------|
-| **Anthropic (Claude)** | `anthropic/` | Claude 4.6, Sonnet, Haiku | Best for complex reasoning |
-| **Google (Gemini)** | `google/` | Gemini 2.5 Pro, Flash | Large context windows |
-| **OpenAI (GPT)** | `openai/` | GPT-4.1, GPT-4.1-mini | Broad ecosystem |
-| **DeepSeek** | `deepseek/` | DeepSeek-V3, DeepSeek-Coder | Cost-effective coding |
-| **xAI (Grok)** | `xai/` | Grok-3 | Real-time knowledge |
-| **OpenRouter** | `openrouter/` | Any model on OpenRouter | Multi-provider gateway |
-| **Groq** | `groq/` | Llama, Mixtral (fast inference) | Low latency |
+clawft-llm ships these built-in provider entries (`crates/clawft-llm/src/config.rs`, the built-in provider list; each is an OpenAI-compatible endpoint except where the adapter says otherwise):
+
+| Provider | Built-in name | Base URL |
+|----------|---------------|----------|
+| OpenAI | `openai` | `https://api.openai.com/v1` |
+| Anthropic | `anthropic` | `https://api.anthropic.com/v1` |
+| Google Gemini | `gemini` | `https://generativelanguage.googleapis.com/v1beta/openai` |
+| Groq | `groq` | `https://api.groq.com/openai/v1` |
+| DeepSeek | `deepseek` | `https://api.deepseek.com/v1` |
+| Mistral | `mistral` | `https://api.mistral.ai/v1` |
+| Together | `together` | `https://api.together.xyz/v1` |
+| xAI | `xai` | `https://api.x.ai/v1` |
+| OpenRouter | `openrouter` | `https://openrouter.ai/api/v1` |
+| Local server | `local`, `ollama` | the configured local base URL, `http://localhost:11434/v1` for `ollama` |
+
+That is 11 entries. Earlier versions of this page used a `google/` prefix and omitted Mistral and Together, and listed model families by version; model catalogs change faster than this page, so list them from the provider. The provider reference is `docs/reference/config.md` and `docs/guides/providers.md`.
 
 ## Configuration
 
@@ -27,7 +34,7 @@ Set environment variables:
 
 ```bash
 export ANTHROPIC_API_KEY="sk-ant-..."
-export GOOGLE_API_KEY="AIza..."
+export GOOGLE_GEMINI_API_KEY="AIza..."
 export OPENAI_API_KEY="sk-..."
 ```
 
@@ -35,7 +42,7 @@ export OPENAI_API_KEY="sk-..."
 
 ```bash
 weft agent --model anthropic/claude-sonnet-4-6
-weft agent --model google/gemini-2.5-pro
+weft agent --model gemini/gemini-2.5-pro
 weft agent --model openai/gpt-4.1
 ```
 
@@ -100,8 +107,8 @@ Supports:
 Gemini excels at large-context tasks:
 
 ```bash
-export GOOGLE_API_KEY="AIza..."
-weft agent --model google/gemini-2.5-pro
+export GOOGLE_GEMINI_API_KEY="AIza..."
+weft agent --model gemini/gemini-2.5-pro
 ```
 
 Supports:

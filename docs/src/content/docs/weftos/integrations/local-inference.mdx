@@ -64,18 +64,18 @@ use clawft_llm::LocalProvider;
 let provider = LocalProvider::ollama();
 
 // vLLM with specific model
-let provider = LocalProvider::vllm("meta-llama/Llama-3.1-8B-Instruct");
+let provider = LocalProvider::vllm("meta-llama/Llama-3.1-8B-Instruct".into());
 
 // llama.cpp (default: localhost:8080)
 let provider = LocalProvider::llamacpp();
 
 // LM Studio with specific model
-let provider = LocalProvider::lmstudio("deepseek-coder-v2");
+let provider = LocalProvider::lmstudio("deepseek-coder-v2".into());
 
 // Custom endpoint
 let provider = LocalProvider::new(
-    "http://my-server:9000/v1",
-    "my-model",
+    "http://my-server:9000/v1".into(),
+    "my-model".into(),
     None, // no API key needed
 );
 ```
