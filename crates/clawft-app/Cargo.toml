@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "WeftOS app manifest parser, validator, and local app registry (ADR-015)"
+readme = "README.md"
 keywords = ["weftos", "app", "manifest", "registry"]
 categories = ["development-tools"]
 

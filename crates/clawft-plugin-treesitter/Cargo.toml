@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Code analysis via tree-sitter tool plugin for clawft"
+readme = "README.md"
 keywords = ["plugin", "tree-sitter", "ast", "code-analysis", "complexity"]
 categories = ["development-tools"]
 

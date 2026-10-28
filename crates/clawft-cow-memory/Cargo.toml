@@ -7,6 +7,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Branchable, checkpointable memory over rvf-runtime::RvfStore (agenticow semantics, ported to Rust)."
+readme = "README.md"
 
 [dependencies]
 rvf-runtime = { workspace = true }

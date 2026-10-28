@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "WeftOS: A portable AI kernel with process management, mesh networking, and cognitive substrate"
+readme = "README.md"
 keywords = ["os", "kernel", "ai", "mesh", "ecc"]
 categories = ["development-tools", "network-programming"]
 

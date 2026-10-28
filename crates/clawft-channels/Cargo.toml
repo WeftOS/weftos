@@ -9,6 +9,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Channel plugin system for clawft"
+readme = "README.md"
 keywords = ["telegram", "slack", "discord", "chat", "bot"]
 categories = ["network-programming"]
 

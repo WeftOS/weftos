@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "LeWM sensor observation wire: mesh.sensor.v1.{encoded,consensus,control} CBOR + Ed25519 framing (WEFT-523)."
+readme = "README.md"
 keywords = ["weftos", "lewm", "sensor", "cbor", "mesh"]
 categories = ["encoding", "network-programming"]
 

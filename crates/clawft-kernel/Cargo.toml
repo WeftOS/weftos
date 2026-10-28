@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "WeftOS kernel: boot sequence, process table, service registry, and health subsystem"
+readme = "README.md"
 keywords = ["kernel", "os", "process", "service", "health"]
 categories = ["development-tools"]
 

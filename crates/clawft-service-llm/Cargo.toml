@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "WeftOS LLM service — HTTP client to a locally-hosted llama.cpp (or any OpenAI-compatible) chat-completions endpoint, exposed to the daemon as the `llm.prompt` RPC."
+readme = "README.md"
 
 [dependencies]
 # Async runtime — tokio 'full' matches the daemon, which is the intended host.

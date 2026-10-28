@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "WeftOS agent service — wraps clawft-core::agent::AgentLoop with per-conversation locking, cancellation, and a single dispatch entry point shaped for the agent.chat JSON-RPC handler."
+readme = "README.md"
 
 [dependencies]
 # Agent core — wraps `AgentLoop::handle_turn`. The native feature pulls

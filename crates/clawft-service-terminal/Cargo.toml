@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "WeftOS terminal service — daemon-side PTY allocation and shell hosting. Surfaces interactive shells over JSON-RPC for the egui Explorer terminal panel and any other surface that wants the same sessions (Cursor webview, future remote SSH)."
+readme = "README.md"
 
 [dependencies]
 # Async runtime — tokio 'full' matches the daemon, which is the intended host.

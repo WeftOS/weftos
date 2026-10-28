@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "WeftOS exo-resource-tree: hierarchical resource namespace with Merkle integrity"
+readme = "README.md"
 keywords = ["resource", "tree", "merkle", "permission", "namespace"]
 categories = ["data-structures"]
 

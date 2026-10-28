@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "LeWM latent world-model facade: re-exports core traits + default impls (single entrypoint for consumers). WEFT-522."
+readme = "README.md"
 keywords = ["weftos", "lewm", "world-model", "jepa", "facade"]
 categories = ["science", "algorithms"]
 

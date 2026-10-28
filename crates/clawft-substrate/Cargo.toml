@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "WeftOS substrate state tree + OntologyAdapter contract (ADR-017). M1.5 ships the kernel adapter; additional adapters (git, gh, fs, lsp, workspace, deployment) arrive in M1.6+."
+readme = "README.md"
 
 [dependencies]
 serde = { workspace = true }

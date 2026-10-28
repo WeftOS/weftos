@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "RPC client and protocol types for communicating with the WeftOS kernel daemon"
+readme = "README.md"
 keywords = ["rpc", "daemon", "ipc", "weftos"]
 categories = ["network-programming"]
 

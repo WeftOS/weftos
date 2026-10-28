@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Plugin trait definitions for clawft"
+readme = "README.md"
 keywords = ["plugin", "traits", "ai", "agent", "extensibility"]
 categories = ["development-tools"]
 

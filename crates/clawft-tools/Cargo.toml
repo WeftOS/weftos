@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Tool implementations for clawft (file, shell, memory)"
+readme = "README.md"
 keywords = ["tools", "shell", "file", "memory", "security"]
 categories = ["development-tools"]
 

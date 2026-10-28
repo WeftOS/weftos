@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "WeftOS audio-classification Stage — sits between mic PCM and STT inference. Initial impl is energy-based VAD; the ClassifierBackend trait keeps the emission shape generic so a llama.cpp-hosted classifier (music / speech / noise / ...) can swap in without changing any subscriber's wire-format code."
+readme = "README.md"
 
 [dependencies]
 # Async runtime — tokio 'full' matches the daemon, which is the intended host.

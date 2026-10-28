@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Cognitive work delegation to peer world-model services (client/server + certs). WEFT-525."
+readme = "README.md"
 keywords = ["weftos", "lewm", "delegation", "world-model", "mesh"]
 categories = ["network-programming", "asynchronous"]
 

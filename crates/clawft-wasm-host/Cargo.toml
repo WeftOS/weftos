@@ -9,6 +9,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Native wasmtime host runtime for clawft WASM plugins (sandbox, engine, audit, permissions)"
+readme = "README.md"
 keywords = ["wasm", "wasmtime", "plugin", "sandbox", "ai"]
 categories = ["wasm", "development-tools"]
 

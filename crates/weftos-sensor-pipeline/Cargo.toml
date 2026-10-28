@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "LeWM sensor pipeline: collect → aggregate → encode → signed wire frames (WEFT-523)."
+readme = "README.md"
 keywords = ["weftos", "lewm", "sensor", "pipeline", "jepa"]
 categories = ["science", "encoding"]
 

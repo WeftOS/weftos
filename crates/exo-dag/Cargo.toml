@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "K6 substrate DAG: in-memory DagStore + MMR + Sparse Merkle Tree (ADR-043 / WEFT-619). No postgres."
+readme = "README.md"
 keywords = ["dag", "mmr", "smt", "exochain", "k6"]
 categories = ["data-structures", "cryptography"]
 

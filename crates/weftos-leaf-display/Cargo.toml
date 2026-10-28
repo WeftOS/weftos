@@ -6,6 +6,7 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/WeftOS/weftos"
 description = "LeafSurface display-bus primitive + layer compositor for WeftOS leaf devices (no_std)"
+readme = "README.md"
 keywords = ["weftos", "leaf", "display", "embedded", "no-std"]
 categories = ["embedded", "no-std", "gui"]
 

@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "LLM provider abstraction for clawft (OpenAI-compatible + native providers)"
+readme = "README.md"
 keywords = ["llm", "openai", "anthropic", "ai", "provider"]
 categories = ["development-tools::testing"]
 

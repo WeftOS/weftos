@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "BVH broad-phase spatial index (ADR-056 Phase A). No kernel/chain deps — pure geometry + registry."
+readme = "README.md"
 
 [dependencies]
 serde = { workspace = true }

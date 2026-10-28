@@ -7,6 +7,7 @@ license.workspace = true
 repository.workspace = true
 publish = true
 description = "Wire types of the ADR-106 Seed licence proxy (checkout grant, signed envelope, mesh id), shared by the kernel (member side) and weft-licence (Seed side, armv7/aarch64)."
+readme = "README.md"
 
 [dependencies]
 serde = { workspace = true }

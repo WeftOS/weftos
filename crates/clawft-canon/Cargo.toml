@@ -7,6 +7,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Primitive canon widgets + return-signal types (ADR-001 / ADR-006) shared by clawft-surface composer and clawft-gui-egui"
+readme = "README.md"
 
 [lib]
 name = "clawft_canon"

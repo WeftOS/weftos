@@ -9,6 +9,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "WASM entrypoint for clawft (browser + wasip2)"
+readme = "README.md"
 keywords = ["wasm", "wasi", "ai", "agent", "edge"]
 categories = ["wasm"]
 

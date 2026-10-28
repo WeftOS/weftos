@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Core engine for clawft (agent loop, message bus, context management)"
+readme = "README.md"
 keywords = ["ai", "agent", "pipeline", "tools", "llm"]
 categories = ["development-tools"]
 

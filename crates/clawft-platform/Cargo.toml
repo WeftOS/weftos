@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Platform abstraction layer for clawft"
+readme = "README.md"
 keywords = ["platform", "abstraction", "wasm", "http", "filesystem"]
 categories = ["development-tools"]
 

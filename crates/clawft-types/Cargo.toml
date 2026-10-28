@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Core types for the clawft AI assistant framework"
+readme = "README.md"
 keywords = ["ai", "assistant", "types", "agent", "llm"]
 categories = ["development-tools"]
 

@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "WeftOS whisper.cpp transcription service — HTTP client pipeline from substrate PCM to substrate transcript. Phase 2 Track 4 spike probing the sensor-ingestion pipeline primitive (Machinery + Functions)."
+readme = "README.md"
 
 [dependencies]
 # Async runtime — tokio 'full' matches the daemon, which is the intended host.

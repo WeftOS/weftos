@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Services for clawft (cron, heartbeat, MCP)"
+readme = "README.md"
 keywords = ["cron", "heartbeat", "scheduling", "service"]
 categories = ["asynchronous"]
 

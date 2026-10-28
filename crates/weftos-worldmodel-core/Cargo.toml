@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "LeWM world-model core traits and latent contract (no_std). WEFT-520."
+readme = "README.md"
 keywords = ["weftos", "lewm", "world-model", "jepa", "no-std"]
 categories = ["no-std", "science", "embedded"]
 
