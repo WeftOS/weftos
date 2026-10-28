@@ -1,8 +1,8 @@
 # Cog conformance harness
 
-> **Cogs project:** the operational detail for Cognitum Seeds, the Pi 5, fleets, tooling, testing on hardware and upstream work lives in the private cogs repo (`weave-logic-ai/cognitum-cogs`, `docs/`; locally `~/Clients/cognitum/cogs-main`). Its decision records are the COG-NNN series. This WeftOS doc keeps only what WeftOS implements.
+> **Cogs project:** the cogs, the Cog Host and their operator docs live in [WeftOS/weftos-cogs](https://github.com/WeftOS/weftos-cogs/tree/v0.1.4). Its decision records are the COG-NNN series. This WeftOS doc keeps only what WeftOS implements: the harness under `scripts/cogs/` and its baseline.
 
-Card mesh-placement-08. Where a project gets its cogs: [cog-sources.md](cog-sources.md); running them: [operator-guide.md](operator-guide.md). Governing design: [ADR-100](../adr/adr-100-cog-workload-kind.md)
+Card mesh-placement-08. Where a project gets its cogs: [cog-sources.md](https://github.com/WeftOS/weftos-cogs/blob/v0.1.4/docs/cogs/cog-sources.md); running them: [operator-guide.md](https://github.com/WeftOS/weftos-cogs/blob/v0.1.4/docs/cogs/operator-guide.md). Governing design: [ADR-100](../adr/adr-100-cog-workload-kind.md)
 (cog workload kind, run modes, v1 scope) and
 [ADR-099](../adr/adr-099-governed-workload-placement.md) sections 2 and 3
 (capability provenance, `perf.cog.cycle_ms`, admission self-check).
@@ -107,7 +107,9 @@ disagrees with its expectation.
 ## Baseline
 
 The recorded baseline is the prototype sweep of 2026-09-28 (OrbStack linux/arm64,
-every aarch64 cog `--once`, 15 s cap, features feed). The raw prototype lines are in
+every aarch64 cog `--once`, 15 s cap, features feed). It covers the Cognitum catalog
+cogs recorded in `scripts/cogs/expectations.json` (108 entries), not the 29 cogs
+released from WeftOS/weftos-cogs, so its counts below are not the Cogs repository's cog count. The raw prototype lines are in
 `baseline/aarch64-once-2026-09-28.summary.txt`. Of 107 cogs with an aarch64 build
 (`presence-field` has none):
 

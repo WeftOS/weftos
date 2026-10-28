@@ -205,7 +205,7 @@ Check it with `weaver cog checkout status` (the steward, whether it is
 reachable, the relay) and `weaver doctor` (`licence.no_steward`,
 `licence.approval_missing`, `licence.grant_expiring`,
 `licence.approvals_orphaned`). The operator flow (checkout, approve, the run
-gate) is in [cog-sources.md](cog-sources.md), "In a mesh with a bound Seed".
+gate) is in [cog-sources.md in weftos-cogs](https://github.com/WeftOS/weftos-cogs/blob/v0.1.4/docs/cogs/cog-sources.md), "In a mesh with a bound Seed".
 
 The steward also pulls renewals: `POST /licence/v1/renew` every 12 h plus up
 to 30 min of jitter (the first pass 5 min after the daemon starts), then pages
@@ -307,7 +307,8 @@ highest `issued_at` it ever signed. The floor equals the bridge cog's
 `artifact_changed`, `verify_failed`, `fetch_failed`, `busy`, `rate_limited`,
 `rate_limited_unsigned`, `serve_limit`, `no_grant`, `gone`, `cache_full`,
 `clock_not_set`, `seed_not_bound`, `bad_signature`, `stale_request`, `replayed`,
-`wrong_node`, `malformed_auth`, `persist_failed`, `grant_invalid`, `duplicate_artifact`, `no_key`.
+`wrong_node`, `malformed_auth`, `persist_failed`, `grant_invalid`, `duplicate_artifact`, `no_key`,
+`bad_request`, `not_found`, `binding_changed`, `cache_io`, `sign_failed`.
 
 ### Serve override
 
@@ -329,7 +330,7 @@ scripts/build.sh licence-uid-check          # Linux: another user cannot read th
 ```
 
 `licence-cross` uses the cogs cross image `weavelogic-cogs-cross:1.97.1` (built by
-`scripts/cross-build.sh` in the private cogs repo), builds offline from the host
+`scripts/cross-build.sh` in [WeftOS/weftos-cogs](https://github.com/WeftOS/weftos-cogs/blob/v0.1.4/scripts/cross-build.sh)), builds offline from the host
 cargo cache (mounted read-only after an offline `cargo fetch` check), and writes `target/licence-cross/<triple>/release/weft-licence`.
 It skips with a message when docker or the image is missing. The build enables
 `--features net`, which adds the https registry reader (rustls).
@@ -399,7 +400,7 @@ Not run from the repository. Steps, in order:
    `weaver`. Sign and apply the binding. Place the signed `licence.json`.
 4. `systemctl enable --now weft-licence`. If the unit fails to resolve the registry
    host, check whether `AF_UNIX` in `RestrictAddressFamilies` is what it needs, and
-   drop it if the resolution works without. Then then from the steward host:
+   drop it if the resolution works without. Then, from the steward host:
    `curl http://<seed tailnet address>:8700/licence/v1/identity` and confirm
    `"bound": true`, `"clock_ok": true` and the same `grant_key_id`.
 5. Check the isolation on the Seed itself: as the user a cog runs under,
