@@ -1,37 +1,22 @@
 ---
 title: "Governance"
-description: "Three-branch constitutional governance model with EffectVector scoring, GovernanceDecision outcomes, GateBackend trait, and environment-scoped enforcement."
+description: "Three-branch constitutional governance: rules, EffectVector scoring, how the engine decides, the GateBackend trait, genesis rules, project overlays, workload governance and environment scoping."
 ---
 
-WeftOS implements a three-branch constitutional governance model. Every action an agent takes passes through a governance evaluation pipeline before it is allowed to proceed.
+WeftOS implements a three-branch constitutional governance model. Actions an agent takes are evaluated against a set of rules anchored to the chain at genesis.
 
-**Source**: `crates/clawft-kernel/src/governance.rs` (~400 lines), `crates/clawft-kernel/src/gate.rs` (~850 lines)
+**Source**: `crates/clawft-kernel/src/governance.rs` (engine, rules, requests), `gate.rs` (`GateBackend` and its implementations), `governance_overlay.rs` and `governance_project.rs` (per-project overlay, ADR-103), `workload_governance/` (workload actions, ADR-099), `environment.rs` (environment classes).
 
-## Three-Branch Model
+## Three-branch model
 
 ```
-                    +-----------------+
-                    |   Constitution  |
-                    | (Chain Genesis) |
-                    +--------+--------+
-                             |
-            +----------------+----------------+
-            |                |                |
-   +--------v--------+  +---v-----------+  +-v--------------+
-   |   LEGISLATIVE   |  |   EXECUTIVE   |  |    JUDICIAL    |
-   |                  |  |               |  |                |
-   | SOPs, manifests, |  | Agent exec    |  | CGR validation |
-   | genesis rules,   |  | policies,     |  | engine, bias   |
-   | data protection  |  | deployment,   |  | checks, audit  |
-   |                  |  | lifecycle     |  | compliance     |
-   +------------------+  +---------------+  +----------------+
+   Legislative            Executive               Judicial
+   SOPs, manifests,       agent execution         validation, bias checks,
+   genesis rules,         policies, deployment,   audit compliance
+   data protection        lifecycle
 ```
 
-No branch can modify another branch's constraints. The `GovernanceBranch` attached to every rule is immutable once anchored to the chain.
-
-```rust
-pub enum GovernanceBranch { Legislative, Executive, Judicial }
-```
+Each rule carries a `GovernanceBranch` (`Legislative`, `Executive`, `Judicial`). Rules are written to the chain at boot as genesis events, so a rule's branch and severity are anchored in the audit trail. This page does not claim that branches are separate enforcement processes: the engine evaluates one flat list of active rules.
 
 ## GovernanceRule
 
@@ -40,24 +25,29 @@ pub struct GovernanceRule {
     pub id: String,
     pub description: String,
     pub branch: GovernanceBranch,
-    pub severity: RuleSeverity,
-    pub active: bool,
+    pub severity: RuleSeverity,        // Advisory, Warning, Blocking, Critical
+    pub active: bool,                  // default true
     pub reference_url: Option<String>,
     pub sop_category: Option<String>,
+    pub rule_type: GovernanceRuleType, // General (default), BrowserPolicy, BindingThread
+    pub action_selector: Option<String>,
+    pub tool_selector: Option<String>,
+    pub force_on_match: bool,
 }
-
-pub enum RuleSeverity { Informational, Warning, Blocking }
 ```
 
-## GovernanceRequest and Decision
+Selectors are an exact action or a prefix ending in one `*`. A rule with a selector is skipped unless the request matches it. `force_on_match` makes a rule apply on the selector match alone, regardless of effect magnitude.
+
+## Request, decision and effect
 
 ```rust
 pub struct GovernanceRequest {
     pub agent_id: String,
     pub action: String,
     pub effect: EffectVector,
-    pub context: serde_json::Value,
+    pub context: HashMap<String, String>,
     pub node_id: Option<String>,
+    pub principal: Option<GatePrincipal>,
 }
 
 pub enum GovernanceDecision {
@@ -66,43 +56,34 @@ pub enum GovernanceDecision {
     EscalateToHuman(String),
     Deny(String),
 }
+
+pub struct EffectVector { pub risk: f64, pub fairness: f64, pub privacy: f64, pub novelty: f64, pub security: f64 }
 ```
 
-## EffectVector (5D)
+The effect score is the L2 magnitude of the five dimensions, `sqrt(risk^2 + fairness^2 + privacy^2 + novelty^2 + security^2)`. With the `ecc` feature a trained `GovernanceScorerModel` can replace it; without a model `score` returns the magnitude unchanged.
 
-```rust
-pub struct EffectVector {
-    pub risk: f64,       // 0.0 - 1.0
-    pub fairness: f64,
-    pub privacy: f64,
-    pub novelty: f64,
-    pub security: f64,
-}
-```
+## How `GovernanceEngine::evaluate` decides
 
-**Magnitude**: `sqrt(risk^2 + fairness^2 + privacy^2 + novelty^2 + security^2)`
+Read from `governance.rs`, `GovernanceEngine::evaluate`:
 
-If magnitude exceeds `risk_threshold` and a Blocking rule matches, the decision is Deny.
+1. A per-principal evaluation rate limit is checked first. Over quota is an immediate `Deny`.
+2. `threshold_exceeded` is true when the score is greater than the engine's `risk_threshold`.
+3. Each active rule whose selectors match is evaluated:
+   - `BrowserPolicy` rules fire on platform and context match, independent of magnitude. A blocking match sets the block flags; a non-blocking match only records a warning.
+   - `BindingThread` rules (`soul.binding_thread_intact`) fire when the request signals a binding-thread mismatch, independent of magnitude. Their reason text outranks any other rule's.
+   - `General` rules apply when the threshold is exceeded or `force_on_match` is set. `Blocking` and `Critical` set the block flags; `Warning` sets the warning flag; `Advisory` has no effect on the decision.
+4. The decision:
+   - any blocking rule applied: `EscalateToHuman` when the engine requires human approval (or an overlay approval rule applied and no other blocking rule did), unless an overlay deny rule applied; otherwise `Deny`;
+   - else, threshold exceeded and a warning set: `PermitWithWarning`;
+   - else `Permit`.
 
-## Dual-Layer Enforcement (Symposium D7)
+The first blocking rule in evaluation order supplies the decision text. Since 0.8.4-rc.15 a non-blocking browser-policy match no longer clears a block set by an earlier rule, so the decision does not depend on rule order (CHANGELOG 0.8.4-rc.15, "Governance").
 
-```
-  Agent A                                        Agent B
-    |                                              |
-    | send(msg)                                    |
-    |----> A2ARouter                               |
-    |        | 1. ROUTING GATE                     |
-    |        |    Deny -> error to A               |
-    |        |    Permit -> deliver                 |
-    |        +-----------------------------------> |
-    |                                   agent_loop |
-    |                                   2. HANDLER |
-    |                                      GATE    |
-    |                                   Deny->err  |
-    |                                   Permit->ok |
-```
+## Dual-layer enforcement (Symposium D7)
 
-## GateBackend Trait
+At boot the governance gate is wired into the A2A router (`boot.rs`, "Wire governance gate into A2A router for dual-layer enforcement"), so a message is checked at routing and again at the receiving handler.
+
+## GateBackend
 
 ```rust
 pub trait GateBackend: Send + Sync {
@@ -110,41 +91,51 @@ pub trait GateBackend: Send + Sync {
 }
 
 pub enum GateDecision {
-    Permit { token: Option<String> },
+    Permit { token: Option<Vec<u8>> },
     Defer { reason: String },
     Deny { reason: String, receipt: Option<String> },
 }
 ```
 
-Implementations: `CapabilityGate`, `GovernanceGate`, `TileZeroGate` (tilezero feature).
+Implementations in `gate.rs`: `CapabilityGate`, `GovernanceGate` and, with the `tilezero` feature, `TileZeroGate`.
 
-## Environment-Scoped Governance
+## Environment scoping
 
 ```rust
-pub enum EnvironmentClass { Development, Staging, Production }
+pub enum EnvironmentClass { Development, Staging, Production, Custom { name: String, risk_threshold: f64 } }
 ```
 
-Each environment configures its governance scope, risk threshold, audit level, and learning mode.
+Risk thresholds: Development 0.9, Staging 0.6, Production 0.3, Custom as given (`environment.rs`, `EnvironmentClass::risk_threshold`). A `GovernanceScope` also sets the audit level (`SessionSummary` by default, `PerAction`, `PerActionWithEffects`) and a learning mode (`Explore` by default, `Validate`, `Exploit`).
 
-## Default Genesis Rules
+## Default genesis rules
 
-22 rules across all three branches:
+`boot.rs` anchors 22 SOP and constitutional rules (`GOV-001` to `GOV-007`, `SOP-L001` to `SOP-L006`, `SOP-E001` to `SOP-E005`, `SOP-J001` to `SOP-J004`), counted by branch and severity from the rule literals:
 
 | Branch | Count | Blocking | Warning | Advisory |
 |--------|------:|:--------:|:-------:|:--------:|
-| Legislative | 8 | 3 | 4 | 1 |
+| Legislative | 8 | 2 | 5 | 1 |
 | Executive | 7 | 2 | 2 | 3 |
 | Judicial | 7 | 3 | 2 | 2 |
 
-Includes AI-SDLC SOP compliance rules (AI-IRB approval, secure coding, bias assessment, data protection).
+Boot adds more rules to that set: three browser-policy rules (`BP-001` to `BP-003`: public topics only, no spawn and no network without elevation), the binding-thread rule, and the two workload rules (below). A project kernel replaces the set with the effective rules from its signed parent policy plus overlay (ADR-103 D8).
 
-## Chain Events
+## Project overlay
 
-| Event Kind | Trigger |
+A project can tighten, but never relax, its parent's rules with `<root>/.weftos/overlay.toml` (`governance_overlay.rs`). Each `deny` glob becomes a blocking rule tagged `project-overlay:deny` that answers `Deny` even when engine-wide human approval is on. Each `require_approval` glob becomes a rule tagged `project-overlay:approval` that answers `EscalateToHuman`. A missing file is the empty overlay; an unreadable or unparseable file is an error, never silently fewer rules.
+
+## Workload governance
+
+`workload.*` actions are default-deny (ADR-099 section 4). `workload_governance::default_rules` adds a force-match blocking rule that denies every `workload.*` action unless an explicit permit rule matches, and an effect-ceiling rule that denies workload actions above the effect threshold even when permitted. `WorkloadGate` enforces the policy, checks subject revocations and chains each decision. See [Placement](/docs/weftos/platform/placement).
+
+## Chain events
+
+| Event kind | Trigger |
 |------------|---------|
 | `governance.genesis` | Boot (constitution) |
 | `governance.rule` | Boot (per-rule anchor) |
-| `governance.permit` | Action permitted |
-| `governance.warn` | Action permitted with warning |
-| `governance.defer` | Action escalated |
-| `governance.deny` | Action denied |
+| `governance.permit` | `Permit` |
+| `governance.warn` | `PermitWithWarning` |
+| `governance.defer` | `EscalateToHuman` |
+| `governance.deny` | `Deny` |
+
+The four decision kinds are mapped in `crates/clawft-kernel/src/chain.rs`; `governance.genesis` and `governance.rule` are written in `boot.rs`.

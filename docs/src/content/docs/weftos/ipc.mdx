@@ -5,7 +5,7 @@ description: "Kernel IPC message envelopes, MessageTarget variants, MessagePaylo
 
 WeftOS IPC provides typed message envelopes over the existing `MessageBus` from `clawft-core`. The `KernelIpc` subsystem adds PID-based routing, agent-to-agent delivery with capability checks, and pub/sub topic routing.
 
-**Source**: `crates/clawft-kernel/src/ipc.rs` (~470 lines, 18 tests), `crates/clawft-kernel/src/a2a.rs` (~870 lines, 28 tests)
+**Source**: `crates/clawft-kernel/src/ipc.rs`, `crates/clawft-kernel/src/a2a.rs`, `crates/clawft-kernel/src/topic.rs`
 
 ## KernelMessage Envelope
 
@@ -17,8 +17,9 @@ pub struct KernelMessage {
     pub from: Pid,
     pub target: MessageTarget,
     pub payload: MessagePayload,
-    pub correlation_id: Option<String>,
     pub timestamp: DateTime<Utc>,
+    pub correlation_id: Option<String>,
+    pub trace_id: Option<String>,
 }
 ```
 
@@ -54,54 +55,40 @@ pub enum MessagePayload {
     ToolCall { name: String, args: serde_json::Value },
     ToolResult { call_id: String, result: serde_json::Value },
     Signal(KernelSignal),
+    Binary(Vec<u8>),
     Rvf { segment_type: u8, data: Vec<u8> },
 }
 
 pub enum KernelSignal {
-    Shutdown, Suspend, Resume, Custom(String),
+    Shutdown, Suspend, Resume, Ping, Pong, ReloadConfig, DumpState,
 }
 ```
 
 ## A2ARouter Routing Flow
 
-```
-Agent A                                              Agent B
-  |                                                    |
-  | send(msg)                                          |
-  |-------> A2ARouter                                  |
-  |           |                                        |
-  |           | 1. Resolve target                      |
-  |           |    Process(pid) -> look up inbox        |
-  |           |    Service(name) -> resolve via registry|
-  |           |    Topic(name) -> fan out to subs       |
-  |           |    Broadcast -> all inboxes             |
-  |           |    RemoteNode -> mesh transport (K6)    |
-  |           |                                        |
-  |           | 2. Capability check (send_checked)      |
-  |           |    Validate sender IpcScope             |
-  |           |                                        |
-  |           | 3. [exochain] Routing gate check        |
-  |           |    GovernanceGate::check()              |
-  |           |    Deny -> error to sender              |
-  |           |                                        |
-  |           | 4. Deliver to inbox                     |
-  |           +--------------------------------------> |
-  |                                                    |
-  |           reply(correlation_id)                     |
-  |<----------------------------------------------------
-```
+`A2ARouter::send` (`a2a.rs`) does these steps in order:
 
-### A2ARouter Public API
+1. The sender must exist in the process table and be `Running` or `Suspended`.
+2. With `exochain`, the routing-time gate runs (first layer of dual-layer governance). The gate action is `tool.<name>` for a tool call, `ipc.signal` for a signal and `ipc.send` otherwise. A `Deny` returns `CapabilityDenied` before any inbox is reached. A `Defer` or `Permit` continues: a deferred message is still delivered, and the handler-time gate in the agent loop makes the final call.
+3. The router routes by target. `Process(pid)` runs `check_ipc_target`, `Topic(name)` runs `check_ipc_topic` and fans out through the `TopicRouter`, and the other variants (`Broadcast`, `Service`, `ServiceMethod`, `Kernel`, `RemoteNode`) go to their own delivery paths. `RemoteNode` uses the mesh runtime's remote forwarder.
+4. The message is delivered to the target's inbox.
+
+### A2ARouter public API
+
+The main methods (all in `a2a.rs`):
 
 ```rust
 impl A2ARouter {
-    pub fn new() -> Self;
-    pub fn register(&self, pid: Pid, sender: mpsc::Sender<KernelMessage>);
-    pub fn unregister(&self, pid: Pid);
-    pub fn send(&self, msg: KernelMessage) -> Result<(), IpcError>;
-    pub fn send_checked(&self, msg: KernelMessage, caps: &AgentCapabilities)
-        -> Result<(), IpcError>;
-    pub fn broadcast(&self, msg: KernelMessage) -> usize;
+    pub fn create_inbox(&self, pid: Pid) -> mpsc::Receiver<KernelMessage>;
+    pub fn remove_inbox(&self, pid: Pid);
+    pub async fn send(&self, msg: KernelMessage) -> KernelResult<()>;
+    pub async fn send_checked(&self, msg: KernelMessage, chain: Option<&ChainManager>) -> KernelResult<()>; // logs ipc.send, then send()
+    pub async fn request(&self, msg: KernelMessage, timeout: Duration) -> KernelResult<KernelMessage>;
+    pub fn try_complete_request(&self, msg: KernelMessage) -> bool;
+    pub fn topic_router(&self) -> &Arc<TopicRouter>;
+    pub fn set_gate(&self, gate: Arc<dyn GateBackend>);
+    pub fn set_dead_letter_queue(&self, dlq: Arc<DeadLetterQueue>);
+    pub fn set_mesh_runtime(&self, runtime: Arc<MeshRuntime>);
 }
 ```
 
@@ -111,26 +98,29 @@ For cross-node addressing (K6):
 
 ```rust
 pub struct GlobalPid {
-    pub node_id: String,
+    pub node_id: MeshNodeId,
     pub pid: Pid,
 }
-// Display format: "node_id:pid" (e.g., "abc123:42")
+// Alias: CompositePid (WEFT-142)
 ```
 
 ## Request-Response Pattern
 
-WeftOS IPC supports request-response via `correlation_id`. Agent A sends a message with a unique `id`. Agent B replies with `correlation_id: Some(original_id)`. Agent A matches the reply.
+`A2ARouter::request(msg, timeout)` registers a pending request keyed by `msg.id`, sends the message, and waits for a reply up to the timeout, returning `KernelError::Timeout` if none arrives. The replying agent sets `correlation_id` to the original id; `try_complete_request` matches it to the pending request.
 
 ## Topic Pub/Sub
 
-The `TopicRouter` (`crates/clawft-kernel/src/topic.rs`, ~360 lines, 14 tests):
+The `TopicRouter` (`crates/clawft-kernel/src/topic.rs`) holds subscriptions in a `DashMap`. A subscriber is a PID or, since subscriptions were generalized, a `SubscriberSink`:
 
 ```rust
 impl TopicRouter {
-    pub fn subscribe(&self, topic: &str, subscriber_id: Pid) -> Subscription;
-    pub fn unsubscribe(&self, subscription_id: &str);
-    pub fn publish(&self, topic: &str, message: KernelMessage) -> usize;
-    pub fn list_topics(&self) -> Vec<String>;
+    pub fn subscribe(&self, pid: Pid, topic: &str);
+    pub fn subscribe_sink(&self, topic: &str, sink: SubscriberSink) -> SubscriberId;
+    pub fn unsubscribe(&self, pid: Pid, topic: &str);
+    pub fn unsubscribe_id(&self, topic: &str, id: SubscriberId);
+    pub fn subscribers(&self, topic: &str) -> Vec<Pid>;
+    pub fn list_topics(&self) -> Vec<(String, usize)>;
+    pub fn unsubscribe_all(&self, pid: Pid);
 }
 ```
 
@@ -140,9 +130,9 @@ When `exochain` is enabled, IPC events are logged:
 
 | Event Kind | Trigger |
 |------------|---------|
-| `ipc.send` | Message sent via A2ARouter |
-| `ipc.recv` | Message received by agent loop |
-| `ipc.ack` | Message processed by agent loop |
+| `ipc.send` | Message sent via A2ARouter (`a2a.rs`) |
+| `ipc.recv` | Message received by agent loop (`agent_loop.rs`) |
+| `ipc.ack` | Message processed by agent loop (`agent_loop.rs`) |
 
 ## Built-in Agent Loop Commands
 
@@ -155,3 +145,5 @@ The kernel agent loop (`crates/clawft-kernel/src/agent_loop.rs`) processes:
 | `exec` | `"tool.exec"` | Execute a tool (gate checked) |
 | `cron.add` | `"service.cron.add"` | Register a cron job |
 | `cron.remove` | `"service.cron.remove"` | Remove a cron job |
+| `cron.list` | -- | List cron jobs |
+| `ping` | -- | Reply with status, PID and uptime |

@@ -100,7 +100,7 @@ pub trait SystemService: Send + Sync {
 
 ## Shutdown Sequence
 
-Triggered by `weaver kernel stop`, SIGINT, SIGTERM, or an RPC shutdown. The daemon (`daemon.rs`) bounds every step with a time limit and logs it; a guard thread ends the process if the whole shutdown overruns, and `kernel.pid` is removed only at exit (CHANGELOG 0.8.4, "Bounded shutdown"). In order:
+Triggered by `weaver kernel stop`, SIGINT, SIGTERM, or an RPC shutdown. The daemon (`daemon.rs`) bounds every step with a time limit and logs it; a guard thread ends the process if the whole shutdown overruns, and `kernel.pid` is removed only at exit (CHANGELOG 0.8.4-rc.15, "Bounded shutdown"). In order:
 
 1. Stop accepting on the router and stop the mesh listeners first, so a slow later step never leaves a dying daemon holding its ports.
 2. Finish the RPC accept loop, then the child accept loop.
@@ -109,7 +109,7 @@ Triggered by `weaver kernel stop`, SIGINT, SIGTERM, or an RPC shutdown. The daem
 5. `Kernel::shutdown`: set `ShuttingDown`, call `ServiceRegistry::stop_all`, append a `kernel`/`shutdown` event to the chain (tree root hash, chain sequence, node count), abort agent tasks, cancel every process except PID 0, and save the chain as an RVF checkpoint with a JSON fallback plus a tree checkpoint (`boot.rs`, `Kernel::shutdown`).
 6. State becomes `Halted` and the process exits.
 
-`weaver kernel stop` exits 1 and keeps the pid file when the daemon does not exit. `weaver kernel stop --force` finds the daemon through `kernel.lock` and escalates from TERM to KILL (CHANGELOG 0.8.4).
+`weaver kernel stop` exits 1 and keeps the pid file when the daemon does not exit. `weaver kernel stop --force` finds the daemon through `kernel.lock` and escalates from TERM to KILL (CHANGELOG 0.8.4-rc.15).
 
 ### Signal Handling
 

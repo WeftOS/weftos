@@ -5,23 +5,24 @@ description: "PID allocation, process state machine, ProcessEntry fields, resour
 
 The WeftOS process table tracks all kernel-managed agents using PIDs (process identifiers). It provides lock-free concurrent access via `DashMap`, allowing multiple kernel subsystems to query and update process state without contention.
 
-**Source**: `crates/clawft-kernel/src/process.rs` (~470 lines, 22 tests)
+**Source**: `crates/clawft-kernel/src/process.rs`, `crates/clawft-kernel/src/supervisor.rs`
 
 ## PID Allocation
 
-PIDs are monotonically increasing 64-bit integers that are never reused:
+PIDs are monotonically increasing 64-bit integers allocated from an atomic counter that starts at 1; PID 0 is reserved for the kernel. The table does not reuse PIDs:
 
 ```rust
 pub type Pid = u64;
 
 pub struct ProcessTable {
-    entries: DashMap<Pid, ProcessEntry>,
     next_pid: AtomicU64,
+    entries: DashMap<Pid, ProcessEntry>,
     max_processes: u32,
+    chain_manager: Option<Arc<ChainManager>>, // exochain feature
 }
 ```
 
-If the table reaches `max_processes`, the next spawn attempt returns `KernelError::ProcessLimitExceeded`.
+When the table is at `max_processes`, `insert` returns `KernelError::ProcessTableFull { max }`. With a chain manager set, `insert` appends a `process` register event and `update_state` appends a state event (`EVENT_KIND_PROCESS_REGISTER`, `EVENT_KIND_PROCESS_STATE`).
 
 ## ProcessState State Machine
 
@@ -72,13 +73,12 @@ impl ProcessState {
 ```rust
 pub struct ProcessEntry {
     pub pid: Pid,
-    pub name: String,
+    pub agent_id: String,
     pub state: ProcessState,
     pub capabilities: AgentCapabilities,
     pub resource_usage: ResourceUsage,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
     pub cancel_token: CancellationToken,
+    pub parent_pid: Option<Pid>,
 }
 ```
 
@@ -88,44 +88,57 @@ The `CancellationToken` enables cooperative shutdown -- when a process is stoppe
 
 ```rust
 pub struct ResourceUsage {
-    pub messages_sent: u64,
-    pub tool_calls: u64,
+    pub memory_bytes: u64,
     pub cpu_time_ms: u64,
+    pub tool_calls: u64,
+    pub messages_sent: u64,
 }
 ```
 
-Resource counters are checked against the process's `ResourceLimits`. When a limit is exceeded, the kernel can suspend or terminate the agent.
+Counters are updated with `update_resources` and checked against the process's `ResourceLimits` by `CapabilityChecker::check_resource_limit` (see [Capabilities](/docs/weftos/capabilities)), which returns `ResourceLimitExceeded`. This page does not claim an automatic suspend or terminate on breach.
 
-## ProcessTable Public API
+## ProcessTable public API
 
 ```rust
 impl ProcessTable {
-    pub fn new(max: u32) -> Self;
-    pub fn spawn(&self, name: String, capabilities: AgentCapabilities) -> KernelResult<Pid>;
+    pub fn new(max_processes: u32) -> Self;
+    pub fn allocate_pid(&self) -> Pid;
+    pub fn insert(&self, entry: ProcessEntry) -> Result<Pid, KernelError>;
+    pub fn insert_with_pid(&self, entry: ProcessEntry) -> Result<(), KernelError>;
     pub fn get(&self, pid: Pid) -> Option<ProcessEntry>;
-    pub fn set_state(&self, pid: Pid, state: ProcessState) -> KernelResult<()>;
-    pub fn remove(&self, pid: Pid) -> KernelResult<ProcessEntry>;
-    pub fn list(&self) -> Vec<(Pid, ProcessEntry)>;
-    pub fn count(&self) -> usize;
+    pub fn remove(&self, pid: Pid) -> Option<ProcessEntry>;
+    pub fn list(&self) -> Vec<ProcessEntry>;
+    pub fn update_state(&self, pid: Pid, new_state: ProcessState) -> Result<(), KernelError>;
+    pub fn update_resources(&self, pid: Pid, usage: ResourceUsage) -> Result<(), KernelError>;
+    pub fn set_capabilities(/* pid, capabilities */) -> Result<(), KernelError>;
+    pub fn count_by_state(&self, state: &ProcessState) -> usize;
+    pub fn len(&self) -> usize;
+    pub fn max_processes(&self) -> u32;
 }
 ```
 
-## Agent Supervisor Integration
+`update_state` rejects transitions that `can_transition_to` forbids with `KernelError::InvalidStateTransition`.
 
-The `AgentSupervisor` (`crates/clawft-kernel/src/supervisor.rs`, ~800 lines, 35 tests) wraps the ProcessTable:
+## Agent supervisor integration
+
+`AgentSupervisor` (`crates/clawft-kernel/src/supervisor.rs`) wraps the process table:
 
 ```rust
 pub struct SpawnRequest {
-    pub name: String,
-    pub agent_type: String,
-    pub capabilities: AgentCapabilities,
-    pub resource_limits: ResourceLimits,
-    pub backend: Option<SpawnBackend>,  // K2.1
+    pub agent_id: String,
+    pub capabilities: Option<AgentCapabilities>,
+    pub parent_pid: Option<Pid>,
+    pub env: HashMap<String, String>,
+    pub backend: Option<SpawnBackend>,
 }
 
 pub enum SpawnBackend {
-    Native, Wasm, Container, Tee, Remote,
+    Native,
+    Wasm { module: PathBuf },
+    Container { image: String },
+    Tee { enclave: EnclaveConfig },
+    Remote { node_id: String },
 }
 ```
 
-The supervisor allocates a PID, creates an IPC inbox, registers with A2ARouter, starts the agent work loop, and logs lifecycle events to the chain.
+`AgentSupervisor::spawn` accepts only `None` or `Native`. Every other backend returns `KernelError::BackendNotAvailable`: `Wasm` ("WASM sandbox requires K3"), `Container` (agents do not run in containers yet; cog workloads run in containers through `workload_runtime::WorkloadHost`, ADR-099 s5), `Tee` ("requires K6+ and hardware support") and `Remote` (remote workloads run through `workload_runtime` adapters, ADR-099 s5). Spawn inserts a `ProcessEntry` in state `Starting` and returns the new PID. The agent loop, inbox and chain events are wired by the daemon's agent service; see [IPC](/docs/weftos/ipc).
