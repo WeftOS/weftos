@@ -2,7 +2,7 @@
 
 - **Status**: Accepted (2026-09-29; decisions settled 2026-09-29, implementation tracked on cards mesh-placement-01..23)
 - **Date**: 2026-09-28 (rewritten same day; supersedes the earlier draft titled "Cog workloads and mesh placement", which is now ADR-100 plus this ADR)
-- **Deciders**: Platform / ops. Open questions settled 2026-09-29 (defaults accepted by user); status stays Proposed until implemented, but the decisions below are settled pending implementation.
+- **Deciders**: Platform / ops. Open questions settled 2026-09-29 (defaults accepted by user); status is Accepted (2026-09-29) and the decisions below are settled, with implementation tracked on the cards named in Status.
 - **Depends-On**: ADR-022 (mandatory ExoChain audit), ADR-024 (Noise), ADR-025 (Ed25519 node identity), ADR-031 (rvf-wire mesh format), ADR-033 (three-branch governance), ADR-092 (governance rule distribution), ADR-094 (spawn permission)
 - **Relates-To**: ADR-100 (cog workload kind), ADR-101 (inference workload kind), ADR-060 / ADR-018 (local model serving, which ADR-101 migrates), ADR-044 (wasip2), `~/llm` ADR-0004 (open capability vocabulary), 0016 (local serving), 0022 (storage tiers)
 - **Amends**: none. Fills the reserved `SpawnBackend::Remote / Container / Wasm` slots (`crates/clawft-kernel/src/supervisor.rs:298-322`). No earlier ADR covers workload placement or remote backends (searched `docs/adr`, `docs/architecture`, `.planning`; `docs/architecture/swarm-topology.md` covers claude-flow prompt roles and the flat `SwarmCoordinator`, not node placement).
