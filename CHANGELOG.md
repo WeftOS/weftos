@@ -22,6 +22,9 @@ Staging area for changes after the 0.8.4 release.
   `gen-config-reference`); READMEs for the 40 published crates.
 
 ### Changed
+- The Homebrew tap publish pushes with a write deploy key (`HOMEBREW_TAP_DEPLOY_KEY`) instead of a
+  GitHub App token, and skips with a notice when the key is absent; the org profile refresh no
+  longer needs a cross-repo dispatch.
 - The root README is rewritten for 0.8.4; cog-owned docs now point at `WeftOS/weftos-cogs`.
 
 ### Removed

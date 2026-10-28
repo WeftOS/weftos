@@ -12,16 +12,9 @@
 # The README and facts.json in the tree are never committed by automation (no
 # bot pushes to the release branches); the check job is what keeps them current.
 #
-# DISPATCH TOKEN. repository_dispatch to another repository needs a token that
-# can write to it; the default GITHUB_TOKEN cannot. This reuses the GitHub App
-# pattern of release.yml (actions/create-github-app-token@v2) and the same App
-# as its Homebrew tap job (secrets TAP_APP_ID and TAP_APP_PRIVATE_KEY). One App,
-# two installations: on weave-logic-ai for homebrew-tap, and on the WeftOS
-# organisation for WeftOS/.github with "Contents: Read and write"
-# (repository_dispatch needs it).
-# When either secret is missing, or the App is not installed on WeftOS/.github,
-# the dispatch step is skipped with a notice; the daily schedule in
-# WeftOS/.github then picks the change up within a day.
+# PROFILE REFRESH. The WeftOS/.github org profile reads facts.json from the
+# docs site on its own daily schedule (and on manual runs), so no cross-repo
+# token or GitHub App is needed here.
 name: Site facts
 
 on:
@@ -94,27 +87,3 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "$TAG" docs/src/public/facts.json --clobber
-      - name: Check for the App secret
-        id: has-app
-        env:
-          TAP_APP_ID: ${{ secrets.TAP_APP_ID }}
-        run: |
-          if [ -n "$TAP_APP_ID" ]; then echo "present=true" >> "$GITHUB_OUTPUT"; else echo "present=false" >> "$GITHUB_OUTPUT"; fi
-      - name: Mint a token for WeftOS/.github
-        id: profile-token
-        if: steps.has-app.outputs.present == 'true'
-        continue-on-error: true
-        uses: actions/create-github-app-token@v2
-        with:
-          app-id: ${{ secrets.TAP_APP_ID }}
-          private-key: ${{ secrets.TAP_APP_PRIVATE_KEY }}
-          owner: WeftOS
-          repositories: .github
-      - name: Tell the org profile to refresh
-        if: ${{ steps.profile-token.outputs.token != '' }}
-        env:
-          GH_TOKEN: ${{ steps.profile-token.outputs.token }}
-        run: gh api repos/WeftOS/.github/dispatches -f event_type=weftos-release -f "client_payload[tag]=$TAG"
-      - name: Dispatch skipped
-        if: ${{ steps.profile-token.outputs.token == '' }}
-        run: echo "::notice::No TAP_APP_ID secret or App installation on WeftOS/.github; skipping repository_dispatch. The org profile refreshes on its daily schedule."
