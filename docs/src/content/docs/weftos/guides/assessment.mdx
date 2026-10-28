@@ -261,7 +261,7 @@ jobs:
 
       - name: Install WeftOS
         run: |
-          curl -fsSL https://weftos.weavelogic.ai/install.sh | sh
+          curl -fsSL https://raw.githubusercontent.com/WeftOS/weftos/master/scripts/install.sh | sh
 
       - name: Run assessment
         run: weft assess run --scope ci --format github-annotations

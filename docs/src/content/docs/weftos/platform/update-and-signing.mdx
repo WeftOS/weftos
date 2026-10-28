@@ -108,7 +108,7 @@ is read-only.
 | Channel | What | Notes |
 |---|---|---|
 | GitHub Releases | cargo-dist archives and installers, `dist-manifest.json`, the signed hash list and signature | `weaver update` reads from here |
-| Shell installer | `scripts/install.sh`, served at `weftos.weavelogic.ai/install.sh` | Verifies each archive's sigstore attestation with `gh attestation verify` when `gh` is installed; `--verify` makes that mandatory and `--no-verify` skips it |
+| Shell installer | `scripts/install.sh`, fetched from the repository with `curl` (the short URL `weftos.weavelogic.ai/install.sh` is not live) | Verifies each archive's sigstore attestation with `gh attestation verify` when `gh` is installed; `--verify` makes that mandatory and `--no-verify` skips it |
 | Homebrew | the tap `weave-logic-ai/homebrew-tap`, updated by the release workflow's `homebrew` publish job | `brew upgrade weave-logic-ai/tap/<formula>` |
 | GHCR | `ghcr.io/weftos/weftos:vX.Y.Z` and `:latest`, `linux/amd64` and `linux/arm64` | built by the release-docker workflow |
 | crates.io | every workspace crate with `publish = true`, in dependency order | stable tags only; release candidates (tags with a hyphen) are skipped |

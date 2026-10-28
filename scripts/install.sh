@@ -2,7 +2,6 @@
 # WeftOS Universal Installer / Updater
 #
 # Usage:
-#   curl -fsSL https://weftos.weavelogic.ai/install.sh | sh
 #   curl -fsSL https://raw.githubusercontent.com/WeftOS/weftos/master/scripts/install.sh | sh
 #
 # Installs or updates: weft, weaver, weftos
