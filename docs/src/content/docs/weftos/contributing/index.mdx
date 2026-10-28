@@ -9,7 +9,7 @@ description: Development setup, build instructions, code style, and how to add t
 
 ### Prerequisites
 
-- **Rust 1.93+** (edition 2024) -- install via [rustup](https://rustup.rs/)
+- **Rust 1.95** (edition 2024); `rust-toolchain.toml` pins channel 1.95 and the workspace `rust-version` is 1.95, so rustup selects it automatically. Install via [rustup](https://rustup.rs/)
 - **Cargo** (ships with rustup)
 - **wasm32-unknown-unknown target** (optional, for WASM builds)
 
@@ -17,7 +17,7 @@ description: Development setup, build instructions, code style, and how to add t
 
 ```bash
 git clone https://github.com/WeftOS/weftos.git
-cd clawft
+cd weftos
 scripts/build.sh check
 scripts/build.sh test
 ```
@@ -40,10 +40,10 @@ Any editor with rust-analyzer support works well. Recommended settings:
 
 ## Project Structure
 
-The workspace is organized into 22 crates with clear dependency boundaries:
+The workspace has 65 member crates (`[workspace] members` in `Cargo.toml`, counted 2026-10-27); 81 directories exist under `crates/`, so not every directory is a member. The core ones, with clear dependency boundaries:
 
 ```
-clawft/
+weftos/
   Cargo.toml                # Workspace root
   crates/
     clawft-types/           # Core types: Config, events, errors
@@ -62,6 +62,8 @@ clawft/
     clawft-plugin-*/        # First-party plugins (git, cargo, browser, etc.)
     exo-resource-tree/      # Merkle-hashed resource tree
     weftos/                 # Facade crate
+    weftos-*/, weft-*/      # Platform crates: cogbus, cos, cog protocol, leaf and sensor crates, node core
+    (see `ls crates/` for the rest)
   docs/                     # Documentation
   scripts/                  # Build and utility scripts
 ```
@@ -72,7 +74,7 @@ clawft/
 - **`Tool` trait** (`clawft-core`): Extensible function-calling interface for the agent. Each tool declares its name, description, JSON Schema parameters, and an async `execute` method.
 - **`Channel` / `ChannelFactory` traits** (`clawft-channels`): Plugin system for chat platforms.
 - **`Provider` trait** (`clawft-llm`): Unified interface for LLM completions.
-- **Feature gates**: The workspace uses Cargo feature flags to gate optional subsystems (`ecc`, `exochain`, `mesh`, `os-patterns`, `tilezero`, `governance`).
+- **Feature gates**: The workspace uses Cargo feature flags to gate optional subsystems (`ecc`, `exochain`, `mesh`, `os-patterns`, `tilezero`; see [Feature Flags](/docs/weftos/guides/feature-flags)).
 
 ---
 
@@ -102,7 +104,7 @@ The `gate` subcommand runs all checks from the phase gate protocol and reports P
 scripts/build.sh test
 
 # Specific crate
-cargo test -p clawft-core
+scripts/build.sh test clawft-core
 
 # Single test by name
 cargo test -p clawft-core -- test_name

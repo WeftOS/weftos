@@ -6,7 +6,7 @@ description: "How WeftOS uses the EML operator (exp(x) - ln(y)) for O(1) learned
 WeftOS replaces hardcoded heuristics with learned functions that improve during operation. Every threshold, scoring formula, and tuning parameter that was once a magic constant is now a trainable EML model that converges toward the optimal function for the domain it runs in.
 
 **Feature**: `ecc`
-**Source**: `crates/eml-core/` (standalone) + 17 domain-specific wrappers across 4 crates
+**Source**: `crates/eml-core/` (standalone) + domain-specific wrappers in `clawft-kernel`, `clawft-llm`, `clawft-graphify`, `clawft-weave` and others
 **Phase**: K3c
 
 ## What is EML?
@@ -114,7 +114,7 @@ pub trait FeatureVector {
 
 ## Where EML is Used
 
-17 EML models span 4 crates, replacing hardcoded heuristics across the entire WeftOS stack:
+The models below are defined across several crates. Each sits next to the heuristic it can replace, and an untrained or absent model falls back to that heuristic: `EffectVector::score` returns the plain L2 magnitude when no `GovernanceScorerModel` is set (`governance.rs`), and `RestartTracker::next_backoff_ms_with_model` returns the fixed exponential backoff when the model is `None` or untrained (`supervisor.rs`). Whether a given deployment trains and loads the models is a runtime matter this page does not claim.
 
 ### Kernel: Coherence (eml_coherence.rs)
 

@@ -5,7 +5,7 @@ description: How to run tests, testing methodology, and where to add tests in th
 
 # Testing Guide
 
-The WeftOS workspace contains over 5,000 tests across 22 crates. This guide covers how to run them, what testing methodologies are used, and where to add new tests.
+The WeftOS workspace has 65 member crates and a large test suite (a figure that changes with every merge, so none is quoted here; run `scripts/build.sh test` for the current count). This guide covers how to run them, what testing methodologies are used, and where to add new tests.
 
 ## Running Tests
 
@@ -20,12 +20,14 @@ This runs all tests across every crate in the workspace.
 ### Specific Crate
 
 ```bash
-cargo test -p clawft-kernel
-cargo test -p clawft-core
-cargo test -p clawft-tools
+scripts/build.sh test clawft-kernel
+scripts/build.sh test clawft-core
+scripts/build.sh test clawft-tools
 ```
 
 ### Single Test by Name
+
+Raw `cargo` is for debugging one failure with flags the script does not expose:
 
 ```bash
 cargo test -p clawft-kernel -- test_name
@@ -184,18 +186,9 @@ scripts/build.sh gate
 
 This includes compilation checks, clippy, formatting verification, and the full test suite. The gate must pass before any commit.
 
-### Feature Flag Combinations
+### Feature flag combinations
 
-The CI tests these canonical feature combinations:
-
-| Combination | Purpose |
-|-------------|---------|
-| `native` | Minimal native build |
-| `native,exochain` | Native with chain support |
-| `native,ecc` | Native with cognitive substrate |
-| `native,os-patterns` | Native with observability |
-| `native,exochain,ecc,os-patterns` | Combined features |
-| `full` | All features enabled |
+`crates/clawft-kernel/tests/feature_composition.rs` boots the kernel under combined feature sets and checks that services do not conflict. The default kernel features are `native`, `exochain`, `cluster`, `tilezero`, `ecc`, `mesh`, `quic` and `workload-runtime`; `os-patterns`, `wasm-sandbox` and `containers` are off by default (see [Feature Flags](/docs/weftos/guides/feature-flags)). The PR gate also checks that `clawft-kernel` compiles for `wasm32-unknown-unknown` with `--no-default-features` (`.github/workflows/pr-gates.yml`). This page does not list a CI feature matrix because none was found in the workflows.
 
 ---
 

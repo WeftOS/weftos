@@ -5,6 +5,8 @@ description: "Consolidated design decisions from all WeftOS symposiums: K2, K3, 
 
 WeftOS development is guided by formal symposium processes where specialist panels evaluate the kernel and render design decisions. This page consolidates key decisions from all four symposiums.
 
+> **Status as of 0.8.4.** These tables record what each symposium decided in March 2026, not what the code does now. Outcomes that have since changed, with their evidence: K5 D5 ("zero networking in default build") no longer holds, because `mesh` and `quic` are in the default features of `clawft-kernel` and of `weaver` (`crates/clawft-kernel/Cargo.toml`, `crates/clawft-weave/Cargo.toml`); K2 C9 (N-dimensional `EffectVector`) was not built, the vector has five fields (`governance.rs`); K2 C2 (`ServiceApi`) exists (`service.rs`); K2 C6 dual signing exists with an optional ML-DSA key (`chain.rs`); K2 D14 `SpawnBackend::Tee` returns `BackendNotAvailable` (`supervisor.rs`). The "K2 Commitment Status at K3" table below is a K3-era snapshot and is stale. Later decisions are ADRs; see the [ADR index](https://github.com/WeftOS/weftos/blob/master/docs/adr/README.md).
+
 ## K2 Symposium (2026-03-04)
 
 **Scope**: K0-K2 readiness for K3+ development

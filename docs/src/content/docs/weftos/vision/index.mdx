@@ -85,8 +85,7 @@ The development followed a rigorous Generate-Analyze-Act cycle: SPARC
 plans specified each kernel phase, implementation sprints produced the
 Rust code, symposiums evaluated what was built, and new SPARC plans
 incorporated symposium decisions. This cycle executed at least 5 complete
-rotations over 27 days, producing 112 commits, 173,923 lines of Rust
-across 22 crates, 3,953 tests, and 65 symposium decisions.
+rotations over 27 days. At the end of that period (2026-03-26) the count was 112 commits, 173,923 lines of Rust across 22 crates, 3,953 tests and 65 symposium decisions. Those are historical figures: at 0.8.4 the workspace has 65 member crates.
 
 ### Phase 5: The Weaver Analyzes Itself (2026-03-26)
 
@@ -300,30 +299,25 @@ available at the time.
 
 ## What Is Proven vs. Aspirational
 
-### Proven
+### Proven (as of 0.8.4, with the file that shows it)
 
-- The Rust kernel compiles and passes 3,953 tests across all feature
-  combinations
-- The ECC causal graph ingests real data (29,029 session log nodes)
-- The Weaver identifies structural patterns and detects anomalies in its
-  own codebase
-- The mesh networking layer has types, traits, and logic with 224 tests
-- The ExoChain produces tamper-evident hash chains with dual signing
-- The governance engine evaluates effect vectors through three branches
-- 7 platform targets compile (Linux, macOS, Windows, browser WASM, WASI,
-  ARM64, Docker)
+- The workspace is published: the 0.8.4 release is the first tag that publishes the whole workspace to crates.io automatically (`CHANGELOG.md`, 0.8.4), 40 crates in all
+- The ExoChain produces tamper-evident hash chains with Ed25519 signing and optional ML-DSA-65 dual signing (`crates/clawft-kernel/src/chain.rs`)
+- The governance engine evaluates effect vectors through rules anchored at genesis, with a default-deny rule for workload actions (`governance.rs`, `workload_governance/`)
+- The mesh runs over TCP, WebSocket and QUIC with Noise sessions and peer admission (`mesh_noise.rs`, `mesh_quic.rs`, `mesh_admit.rs`)
+- `weaver update` verifies release signatures and fails closed (CHANGELOG 0.8.2)
+- The ECC causal graph and the Weaver ingest real data; the March 2026 self-analysis figures above are the record of that
 
-### In Progress
+### Open
 
-- ONNX embedding backend (semantic search currently uses mock embeddings)
-- Mesh networking Phase 2 (wire I/O: actual TCP/WebSocket connections)
-- Cross-project Weaver analysis
-- Public Fumadocs documentation site
+- Real embedding models need the off-by-default `onnx-embeddings` feature and staged model files; without them the provider falls back to a mock (`crates/clawft-kernel/src/embedding.rs`, `select_embedding_provider`)
+- The post-quantum key exchange in the mesh handshake is a placeholder (`mesh_noise.rs`, `KemUpgrade::execute`)
+- Many architecture decision records are still Proposed (ADR-062 to 069, 084 to 087, 106, 113 to 120)
+- Several egui apps began as stubs (`crates/clawft-gui-egui/src/apps/mod.rs`)
 
 ### Aspirational
 
 - External project adoption
-- crates.io publication
 - Real-world regulated industry deployment
 - Federated mesh clusters across organizations
 - Multi-language support via MCP bridge
