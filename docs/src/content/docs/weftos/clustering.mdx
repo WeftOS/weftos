@@ -1,89 +1,120 @@
 ---
-title: "Cluster Management"
-description: "ClusterMembership, NodeIdentity, NodeState lifecycle, SWIM heartbeat, distributed process table, service advertisement, chain replication, and CRDT gossip."
+title: "Clustering"
+description: "How WeftOS nodes track each other as a cluster at v0.8.4: node identity and state, the liveness ping and the heartbeat tracker, signed node facts, the service registry that placement reads, and which of the replicated-state designs (process table, chain and tree sync) are library code only."
 ---
 
-WeftOS clustering extends the kernel to multi-node operation with peer tracking, failure detection, distributed process management, service advertisement, and data replication.
+Clustering is what the kernel does once it has peers: it tracks who is alive,
+shares what each node offers, and keeps state in step. The transport and
+admission are on [Mesh networking](/docs/weftos/mesh-networking); how peers are
+found is on [Discovery](/docs/weftos/discovery).
 
-**Source**: `crates/clawft-kernel/src/cluster.rs`, `mesh_process.rs`, `mesh_service_adv.rs`, `mesh_heartbeat.rs`, `mesh_chain.rs`, `mesh_tree.rs`
-**Feature**: `mesh` (types), `cluster` (raft consensus)
+**Source**: `crates/clawft-kernel/src/cluster.rs`, `mesh_liveness.rs`,
+`mesh_heartbeat.rs`, `mesh_service_adv.rs`, `mesh_process.rs`, `mesh_chain.rs`,
+`mesh_tree.rs`. **Features**: `mesh` and `cluster`, both in the kernel's default
+features (`crates/clawft-kernel/Cargo.toml`).
 
-## NodeIdentity
+## What runs and what is library code
 
-Ed25519-based identity:
+Several of the K6 clustering designs are implemented and unit-tested but are not
+called by the daemon. This page separates them so that you do not plan around a
+feature that does not run. Method: for each symbol, a search of `crates/` for
+files other than its defining module, test files and `lib.rs` re-exports that
+mention it.
 
-```rust
-pub struct NodeIdentity { /* Ed25519 keypair */ }
+| Piece | Status at v0.8.4 |
+|---|---|
+| Node identity, node id | In use everywhere |
+| `NodeState` and cluster membership events | In use |
+| Liveness ping and pong (`mesh_liveness.rs`) | Started by the daemon (`node_facts_rpc.rs`) |
+| `HeartbeatTracker` (SWIM-style states) | In use, fed by the liveness pongs, when `discovery = true` |
+| `ClusterServiceRegistry` | Used by the workload placement control plane (`workload_ctl/plane.rs`) |
+| Signed node facts | In use; read by placement and `weaver cluster nodes --facts` |
+| `ChainSyncRequest`, `ChainSyncResponse` | A request builder and response type are in `mesh_runtime.rs`; the fork detector `detect_chain_fork` has no caller outside its module |
+| `DistributedProcessTable`, `CrdtGossipState`, `ConsistentHashRing`, `ProcessAdvertisement` | No caller outside `mesh_process.rs` |
+| `compare_tree_roots`, `MerkleProof`, `TreeSyncRequest` (tree sync) | No caller outside `mesh_tree.rs` |
+| `ConsensusRole` (Raft-style role) | No caller outside `mesh_process.rs` |
 
-impl NodeIdentity {
-    pub fn generate() -> Self;
-    pub fn sign(&self, data: &[u8]) -> Vec<u8>;
-    pub fn verify(&self, data: &[u8], signature: &[u8]) -> bool;
-    pub fn node_id(&self) -> String;  // hex(SHAKE-256(pubkey)[0..16])
-}
+An earlier version of this page described the process table, the consistent-hash
+ring, chain fork detection and Merkle tree sync as the clustering behaviour. They
+are the intended design (K6); the daemon does not run them yet.
+
+## Node identity
+
+A node's identity is an Ed25519 key pair. The node id is
+`hex(SHA-256(pubkey)[..16])`, 32 lowercase hex characters, derived in one place
+(`crates/clawft-kernel/src/node_id.rs`) and used by the mesh, the cluster, the
+registry and the substrate. ADR-103 decision D11 chose SHA-256 because it changes
+the fewest live ids, and amends ADR-025 to match. (The cluster id, a separate
+value derived from the genesis payload, is still SHAKE-256 in ADR-025.)
+
+Keys certify keys: the machine key certifies a user key, and a user key certifies
+a project key, with no derivation, so projects can move between machines
+([Project topology](/docs/weftos/platform/project-topology)).
+
+## Node state
+
+`NodeState` (`cluster.rs`) has six values:
+
+```
+Joining, Active, Suspect, Unreachable, Leaving, Left
 ```
 
-## NodeState Lifecycle
+## Liveness and heartbeats
 
-```rust
-pub enum NodeState { Joining, Active, Suspect, Unreachable, Left }
+Each node pings every verified peer on the `mesh.ping` control topic, by default
+every 10 seconds, and forgets an unanswered ping after 30 seconds
+(`LivenessConfig::default`, `mesh_liveness.rs`). A pong counts only when it
+arrives on the verified connection of the peer that was pinged and echoes a nonce
+this node sent and has not yet seen answered. A counted pong updates a smoothed
+round-trip time and feeds the heartbeat tracker. Unverified peers are never
+pinged. A pong may carry the responder's load sample. Everything is in memory.
+
+The tracker (`mesh_heartbeat.rs`) moves a peer through `Alive`, `Suspect` and
+`Dead`. It exists in the mesh runtime when `[kernel.mesh] discovery = true`, and
+its settings default to a 1 second probe interval, 500 ms ping timeout, 1 second
+indirect timeout, 3 indirect witnesses and a 5 second suspect timeout
+(`HeartbeatConfig::default`). Health transitions are emitted as cluster
+membership events, and peers the tracker considers dead can be disconnected.
+
+## Service registry and exposures
+
+`ClusterServiceRegistry` holds service advertisements per service name, merged
+last-writer-wins per (service name, node id). The placement control plane builds
+its view of which nodes serve `workload-host` and which expose inference from it
+(`workload_ctl/plane.rs`). A service that is
+[exposed](/docs/weftos/platform/exposures) is advertised, and an exposure that is
+not announced is refused.
+
+## Signed node facts
+
+Placement needs to know what a node can do, not only what it is doing. Each node
+publishes signed node facts: CPU architecture, memory, runtimes, accelerators and
+libraries, each with a provenance of `claimed`, `probed` or `measured`. They are
+signed by the node key, which proves who said it and not that it is true, and
+they carry a TTL. See [Governed placement](/docs/weftos/platform/placement).
+
+## Admission and the cluster owner
+
+Whether a peer is a cluster member is a verdict, not a label. Under
+`admission = "enforce"` the mesh listener asks a verdict source, which is a
+designated cluster-owner daemon (`cluster_owner_uid`) that answers fail-closed
+with a 10-minute grace for already-admitted peers (ADR-103 amendment A6). The
+genesis hash is a cluster label and not a credential. See
+[Mesh networking](/docs/weftos/mesh-networking#admission).
+
+## Commands
+
+```bash
+weaver cluster status          # node count, shard count, consensus
+weaver cluster nodes           # every node in the cluster
+weaver cluster nodes --facts   # with signed capability facts
+weaver cluster health          # per-node health
+weaver cluster shards          # shard distribution
+weaver cluster join <ADDRESS>  # add a node (see --help for platform and name)
+weaver cluster leave <NODE_ID> # remove a node
+weaver fleet status            # every known node: trust, last announce, placed cogs, location
 ```
 
-## SWIM Heartbeat
-
-```rust
-pub struct HeartbeatConfig {
-    pub probe_interval_ms: u64,     // 1000
-    pub ping_timeout_ms: u64,       // 500
-    pub suspect_timeout_ms: u64,    // 5000
-    pub indirect_witnesses: usize,  // 3
-}
-```
-
-State: `Alive -> Suspect -> Dead`. Indirect pings provide confirmation.
-
-## Distributed Process Table
-
-LWW CRDT: `merge()` compares `last_updated` timestamps (newer wins).
-
-```rust
-pub struct ProcessAdvertisement {
-    pub global_pid: GlobalPid,
-    pub agent_type: String,
-    pub capabilities: Vec<String>,
-    pub status: ProcessStatus,
-    pub resource_summary: ResourceSummary,
-}
-```
-
-Query: `find_by_type()`, `find_by_capability()`, `least_loaded_node()`.
-
-## ConsistentHashRing
-
-Distributes PID assignment: `ConsistentHashRing { ring: BTreeMap<u64, String> }`.
-
-## Service Advertisement
-
-```rust
-pub struct ClusterServiceRegistry {
-    services: HashMap<String, Vec<ServiceAdvertisement>>,
-}
-```
-
-LWW merge per (service_name, node_id). `resolve_preferred()` tries specific node, falls back to replicas.
-
-## Chain Replication
-
-`ChainSyncRequest` with `after_sequence` for incremental pull. `detect_chain_fork()` returns `InSync`, `LocalBehind`, `RemoteBehind`, or `Forked`.
-
-## Tree Synchronization
-
-Merkle-based: `compare_tree_roots()` returns sync action. `MerkleProof` with `verify()`.
-
-## Metadata Consensus
-
-Raft-style (behind `cluster` feature): `ConsensusRole { Follower, Candidate, Leader }`.
-
-## CRDT Gossip
-
-`CrdtGossipState` holds `DistributedProcessTable` + `ClusterServiceRegistry` for eventual consistency.
+`weaver fleet location set` records an operator-set site and room for a node; the
+change is chained and needs Admin. The fleet view is described in
+`docs/guides/fleet-manager.md`.

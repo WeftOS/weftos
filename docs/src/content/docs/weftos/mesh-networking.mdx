@@ -1,216 +1,217 @@
 ---
 title: "Mesh Networking"
-description: "K6 mesh networking: 5-layer model, transport backends, Noise Protocol encryption, hybrid KEM, wire framing, connection pool, cross-node IPC, service resolution, and sync frames."
+description: "The WeftOS mesh as of v0.8.4: transports (TCP, WebSocket, QUIC), Noise encryption, peer admission, the machine mesh service, wire frames, cross-node IPC, artifact and topic transfer, and the [kernel.mesh] configuration."
 ---
 
-K6 delivers the transport-agnostic encrypted mesh networking layer for WeftOS, extending the kernel from single-node to multi-node with encrypted peer-to-peer communication, distributed IPC, chain replication, tree synchronization, and cluster-wide service discovery.
+The mesh connects WeftOS nodes with encrypted peer-to-peer links. In the v0.8.4
+daemon it carries cross-node IPC, liveness pings, artifact transfer for
+[workload placement](/docs/weftos/platform/placement), inference proxying,
+assessment sync, and [cogbus](/docs/weftos/platform/cogbus) topics for
+[exposed](/docs/weftos/platform/exposures) data. The original K6 design also
+described chain and tree synchronisation and process and service gossip over the
+mesh; parts of that are library code that the daemon does not run, and this page
+marks them.
 
-**Status**: Phase 1 Complete + Boot Integration (3,543 lines, 14 new files, 133 tests)
-**Feature**: `mesh` (enabled by default since v0.6.13)
-**Boot phase**: 5d (after A2A router, before cluster)
-**Config**: `[kernel.mesh]` in `weave.toml` — see [Configuration Reference](/docs/weftos/guides/configuration#kernelmesh)
+**Feature**: `mesh` (default in the kernel build; QUIC is the `quic` feature, also default).
+**Enabled by**: `[kernel.mesh] enabled = true`; the default is `false`.
+**Boot phase**: 5d (after the A2A router, before cluster).
+**Source**: `crates/clawft-kernel/src/mesh*.rs`; the configuration type is `MeshConfig` in `crates/clawft-types/src/config/kernel.rs`.
 
-## 5-Layer Model
+Related pages: [Discovery](/docs/weftos/discovery) (how peers find each other),
+[Clustering](/docs/weftos/clustering) (node state, liveness, and which replicated-state pieces run),
+[Project topology](/docs/weftos/platform/project-topology) (the machine mesh service and who owns the listener).
+
+## Layers
 
 ```
 +-------------------------------------------------------------------+
-| APPLICATION LAYER                                                  |
-|  mesh_ipc.rs       -- MeshIpcEnvelope, hop tracking, dedup        |
-|  mesh_service.rs   -- ServiceResolveRequest/Response, cache       |
-|  mesh_chain.rs     -- ChainSyncRequest/Response, fork detection   |
-|  mesh_tree.rs      -- TreeSyncRequest/Response, Merkle proofs     |
+| APPLICATION   mesh_ipc (envelopes), mesh_artifact_*, mesh_swarm_*, |
+|               infer_proxy, mesh_topic_frames, mesh_assess,         |
+|               mesh_liveness, workload_ctl                          |
 +-------------------------------------------------------------------+
-| DISCOVERY LAYER                                                    |
-|  mesh_discovery.rs  -- DiscoveryBackend trait, coordinator         |
-|  mesh_bootstrap.rs  -- Seed peers, peer exchange                   |
-|  mesh_service_adv.rs -- ClusterServiceRegistry gossip              |
-|  mesh_process.rs    -- DistributedProcessTable CRDT gossip         |
-|  mesh_heartbeat.rs  -- SWIM heartbeat / failure detection          |
+| ADMISSION     mesh_admit, mesh_admit_gate (off | observe | enforce)|
 +-------------------------------------------------------------------+
-| FRAMING LAYER                                                      |
-|  mesh_framing.rs   -- [4-byte len][1-byte type][payload]           |
+| FRAMING       mesh_framing  [4-byte length][1-byte type][payload]  |
 +-------------------------------------------------------------------+
-| ENCRYPTION LAYER                                                   |
-|  mesh_noise.rs     -- EncryptedChannel trait, NoiseConfig          |
+| ENCRYPTION    mesh_noise    (Noise XX / IK, optional ML-KEM-768)   |
 +-------------------------------------------------------------------+
-| TRANSPORT LAYER                                                    |
-|  mesh.rs           -- MeshTransport / MeshStream / TransportListener|
-|  mesh_listener.rs  -- MeshConnectionPool, JoinRequest/Response     |
-|  mesh_tcp.rs       -- TCP transport backend                        |
-|  mesh_ws.rs        -- WebSocket transport backend                  |
+| TRANSPORT     mesh (traits), mesh_tcp, mesh_ws, mesh_quic          |
 +-------------------------------------------------------------------+
-| IDENTITY LAYER                                                     |
-|  cluster.rs        -- NodeIdentity (Ed25519 keypair)               |
-|  ipc.rs            -- GlobalPid (node_id, pid)                     |
+| IDENTITY      cluster (NodeIdentity), node_id, ipc (GlobalPid)     |
 +-------------------------------------------------------------------+
 ```
 
-## Transport Traits
+Beside these are modules that implement designs from the original K6 plan but
+have no caller in the daemon: `mesh_dedup`, `mesh_listener`, `mesh_log`,
+`mesh_bootstrap`, `mesh_mdns`, `mesh_kad` (the discovery backends), and, on the
+[clustering](/docs/weftos/clustering) side, the process table and the chain and
+tree synchronisation helpers. Each page says which pieces are which.
 
-```rust
-#[async_trait]
-pub trait MeshTransport: Send + Sync + 'static {
-    async fn connect(&self, addr: &str) -> Result<Box<dyn MeshStream>, MeshError>;
-    async fn listen(&self, addr: &str) -> Result<Box<dyn TransportListener>, MeshError>;
-    fn supports(&self, addr: &str) -> bool;
-}
+## Transports
 
-#[async_trait]
-pub trait MeshStream: Send + Sync + 'static {
-    async fn send(&mut self, data: &[u8]) -> Result<(), MeshError>;
-    async fn recv(&mut self) -> Result<Vec<u8>, MeshError>;
-    async fn close(&mut self) -> Result<(), MeshError>;
-    fn remote_addr(&self) -> Option<SocketAddr>;
-}
+The transport traits are `MeshTransport` (`name`, `listen`, `connect`,
+`supports`) and `MeshStream` (`send`, `recv`, `close`, `remote_addr`)
+(`crates/clawft-kernel/src/mesh.rs`). Three backends exist:
+
+| Transport | `transport =` | Address | Use |
+|---|---|---|---|
+| TCP | `tcp` (the default) | `host:port` or `tcp://...` | development, networks that block UDP |
+| WebSocket | `ws` or `websocket` | `ws://...`, `wss://...` | browsers, WASI, HTTP proxies |
+| QUIC | `quic` | `quic://host:port` | multiplexed, UDP; built on `quinn` |
+
+Over QUIC the TLS layer only completes the QUIC handshake: the listener mints an
+ephemeral self-signed certificate and the client skips certificate verification.
+Peer authentication and encryption are Noise, on top of the stream
+(`mesh_quic.rs`, ADR-026). If `transport = "quic"` is set on a build without the
+`quic` feature, boot logs an error and falls back to TCP
+(`docs/guides/mesh-quic.md`).
+
+## Encryption
+
+With `noise = true`, every peer connection runs a Noise handshake
+(`Noise_XX_25519_ChaChaPoly_SHA256`). XX is first contact with mutual
+authentication; IK is for a known responder key in one round trip
+(`NoisePattern` in `mesh_noise.rs`). After the handshake, a hybrid upgrade can run
+inside the encrypted channel: ML-KEM-768 key encapsulation, negotiated through
+`WeftHandshake.kem_supported`. `noise` defaults to `false`; `noise_key_path` names
+the key, and without it an ephemeral key is generated at boot.
+
+## Admission
+
+Encryption says the channel is private; admission says who is on it.
+After Noise, a peer sends an `AdmitHello` as its first frame. It signs the
+session's handshake hash, so a captured hello cannot be replayed on another
+session, and it binds the node id to the Ed25519 key the id derives from
+(`mesh_admit.rs`). The node id is `hex(SHA-256(pubkey)[..16])`
+(`crates/clawft-kernel/src/node_id.rs`).
+
+`admission` in `[kernel.mesh]` selects the policy (ADR-103, P3-K1):
+
+| Mode | Behaviour |
+|---|---|
+| `off` | no policy, but a hello that arrives is still verified and its `source_node` bound to the key |
+| `observe` (default) | checks and records would-be refusals; never refuses and never marks a peer admitted. Takes effect once `genesis_hash` is pinned |
+| `enforce` | refuses unsigned, plaintext, wrong-genesis, revoked and verdict-denied peers. Needs `genesis_hash` and a governance gate, unless `admission_open_membership` is set |
+
+For any peer that is not admitted, the listener strips the envelope's `src_scope`
+before delivery. `genesis_hash` is a cluster label, not a credential: anyone who
+knows it can present it. A peer's class (`node` or `leaf`) is self-declared in its
+signed hello. Two per-listener limits apply under every mode:
+`max_connections_per_ip` (default 64) and `first_frame_timeout_secs` (default 10).
+
+## Wire framing
+
+`mesh_framing.rs` defines a typed frame, `[4-byte big-endian length][1-byte
+type][payload]`, at most 16 MiB (`MAX_MESSAGE_SIZE` in `mesh.rs`), and a table of
+frame types. Not every type is in use. The daemon sends cross-node IPC as a
+`MeshIpcEnvelope` serialised to JSON and dispatches received bytes in order:
+assessment sync, then any typed-frame handler registered for the leading type
+byte, then the JSON envelope (`MeshRuntime::handle_incoming_tallied`,
+`mesh_runtime.rs`). The last column records what I found by searching `crates/`
+for non-test uses of each variant:
+
+| Type | Value | Carries | Used by the daemon |
+|---|---|---|---|
+| `Handshake` | 0x01 | `WeftHandshake` after Noise | yes (transports) |
+| `IpcMessage` | 0x02 | a `KernelMessage` envelope | no non-test use of the variant; envelopes are sent as JSON |
+| `ChainSync` | 0x03 | chain sync request and response | no non-test use |
+| `TreeSync` | 0x04 | Merkle tree sync | no non-test use |
+| `ServiceAdvert` | 0x05 | service advertisement | no non-test use |
+| `ProcessAdvert` | 0x06 | process advertisement | no non-test use |
+| `Heartbeat` | 0x07 | SWIM ping and pong | no non-test use; liveness uses the `mesh.ping` topic |
+| `JoinRequest`, `JoinResponse` | 0x08, 0x09 | cluster join | no; the join structs are never serialised into these frames (`mesh_listener.rs` notes) |
+| `SyncDigest` | 0x0A | compact state digest | no non-test use |
+| `ArtifactRequest`, `ArtifactResponse` | 0x0B, 0x0C | artifact control and piece data | yes (artifact transfer) |
+| `LogAggregation` | 0x0D | log aggregation | no non-test use |
+| `AssessmentSync` | 0x0E | cross-project assessment sync | yes |
+| `SensorObservation` | 0x0F | signed sensor observation payload | yes |
+| `InferRequest`, `InferResponse` | 0x10, 0x11 | one OpenAI-compatible request for an exposed inference role, and its response | yes |
+| `TopicRequest`, `TopicData` | 0x12, 0x13 | cogbus mesh topic subscribe, credit, data | yes |
+
+The inference and topic frames are served only to admitted, verified peers.
+
+`WeftHandshake` carries `node_id`, `governance_genesis_hash`,
+`governance_version`, `capabilities`, `kem_supported`, `chain_seq` and
+`supported_sync_streams`. Peers with a different governance genesis hash are
+rejected.
+
+## Cross-node IPC
+
+A message to another node travels in a `MeshIpcEnvelope` (`mesh_ipc.rs`):
+`source_node`, `dest_node`, the `KernelMessage`, a `hop_count` (at most 8), a UUID
+`envelope_id`, and optional `src_scope` and `dest_scope`. A peer's `dest_scope` is
+a request that the kernel ignores.
+
+Two supporting pieces exist as library code only: `DedupFilter` (a time-bounded
+duplicate filter, 60 second TTL and 10,000 entries by default) is never called by
+`MeshRuntime::handle_incoming`, and the service-resolution cache with 30 second
+negative entries (`ServiceResolutionCache`) has no caller outside its module. The
+WEFT-151 audit notes in `mesh_dedup.rs` record this and schedule wiring for 0.8.x.
+
+## Moving larger things
+
+- **Artifacts.** Workload packages and model shards are content-addressed by
+  BLAKE3 and move in verified pieces with a `have` bitfield, so a node that has
+  finished a download can serve it (`mesh_artifact_*`, `mesh_swarm_*`, ADR-099
+  section 6). Only artifacts whose signed manifest verifies are seeded.
+- **Inference.** An exposed model role is proxied as `InferRequest` and
+  `InferResponse` frames (ADR-101 section 5).
+- **Topics.** [Cogbus](/docs/weftos/platform/cogbus) readings, stream chunks and
+  blob slices cross as `TopicData`, against credit the subscriber grants.
+
+## Configuration
+
+```toml
+[kernel.mesh]
+enabled = true
+transport = "quic"                 # tcp (default) | ws | quic
+listen_addr = "0.0.0.0:9489"       # default 127.0.0.1:9489; `listen` is an alias
+noise = true
+seed_peers = ["quic://192.0.2.10:9489"]
+admission = "observe"              # off | observe (default) | enforce
 ```
 
-Backends: `TcpTransport` (`mesh_tcp.rs`), `WsTransport` (`mesh_ws.rs`), future QUIC.
+The fields of `MeshConfig` (`crates/clawft-types/src/config/kernel.rs`):
 
-## Noise Protocol Encryption
+| Field | Default | Notes |
+|---|---|---|
+| `enabled` | `false` | when `true`, a failed bind aborts boot |
+| `transport` | `"tcp"` | `tcp`, `ws`/`websocket`, `quic` |
+| `listen_addr` | `127.0.0.1:9489` | loopback by default; peers on other machines need an explicit address. Port 9489 is "the weave" (ADR-103 D1) |
+| `discovery` | `false` | creates the Kademlia routing table and heartbeat tracker at boot |
+| `seed_peers` | `[]` | an entry may be `address#node-id` to pin the id the seed must claim |
+| `noise`, `noise_key_path` | `false`, none | see Encryption |
+| `admission`, `genesis_hash`, `admission_open_membership` | `observe`, none, `false` | see Admission |
+| `mesh_nonce` | none | 64 hex characters, identical on every node of the mesh; with the genesis pin it derives the mesh id a Seed binding is for ([Seed licence proxy](/docs/weftos/platform/licence-proxy)). Not a secret. Generate with `weaver mesh nonce generate` |
+| `max_connections_per_ip`, `first_frame_timeout_secs` | `64`, `10` | apply under every admission mode |
+| `service`, `service_socket` | `auto`, none | relation to the machine mesh service, below |
+| `leaf_listen_addr`, `leaf_listen_any`, `leaf_discovery_any` | none, `false`, `false` | where the certified-leaf listeners bind, kept apart from `listen_addr` so a machine can accept leaves on its LAN while the mesh listener stays on loopback. An IP uses port main+2 for the leaf TCP listener and main+1 for leaf discovery. A list binds one pair per entry. A wildcard needs `leaf_listen_any = true` |
 
-```rust
-pub trait EncryptedChannel: Send + Sync {
-    async fn send_encrypted(&mut self, data: &[u8]) -> Result<(), MeshError>;
-    async fn recv_encrypted(&mut self) -> Result<Vec<u8>, MeshError>;
-    fn remote_static_key(&self) -> Option<Vec<u8>>;
-    async fn close(&mut self) -> Result<(), MeshError>;
-}
+## The machine mesh service
 
-pub enum NoisePattern {
-    XX,  // First contact, mutual auth, 2 RTT
-    IK,  // Known peer, 1 RTT
-}
+On a shared host, one machine mesh service owns the listener, Noise sessions and
+admission, and each user daemon is a client over a local socket
+(`WEFTOS_MESH_SOCKET`, default `/var/run/weftos/mesh.sock`). `service` is `auto`
+(use the service when its socket answers and verifies, else run the mesh inside
+the daemon), `required` (boot fails when no service answers) or `off`. A service
+that answers but fails verification is a boot failure under every policy, never a
+silent fallback (`mesh_mode.rs`). The roles and the commands are on
+[Project topology](/docs/weftos/platform/project-topology).
+
+## Operating the mesh
+
+```bash
+weaver mesh id                 # this node's MeshId and where it came from
+weaver mesh create             # mint a MeshId on a primary with no Seed licence
+weaver mesh identity           # node id, fingerprint, public key (never the private key)
+weaver mesh pair list          # pair requests for project work (ADR-108 P2b)
+weaver cluster nodes --facts   # nodes and their signed capability facts
+weaver fleet status            # every known node with trust, last seen, cogs, location
 ```
 
-### Hybrid KEM (Post-Quantum)
+## Test fixtures
 
-After Noise XX handshake, ML-KEM-768 key encapsulation upgrade runs inside the encrypted channel. Final session key combines X25519 + ML-KEM-768 via HKDF. Negotiated via `WeftHandshake.kem_supported`.
-
-## Wire Framing
-
-Format: `[4-byte BE length][1-byte type][payload]`. Max: 16 MiB.
-
-`FrameType` is the exhaustive wire **`msg_type`** enum (`MsgType` is a type alias).
-`MeshFrame` / `Frame` is the framed message container.
-
-```rust
-// WEFT-115 — shipped discriminants (see mesh_framing::FrameType::ALL)
-pub enum FrameType { // aka MsgType
-    Handshake = 0x01,
-    IpcMessage = 0x02,
-    ChainSync = 0x03,
-    TreeSync = 0x04,
-    ServiceAdvert = 0x05,
-    ProcessAdvert = 0x06,
-    Heartbeat = 0x07,
-    JoinRequest = 0x08,
-    JoinResponse = 0x09,
-    SyncDigest = 0x0A,
-    ArtifactRequest = 0x0B,
-    ArtifactResponse = 0x0C,
-    LogAggregation = 0x0D,
-    AssessmentSync = 0x0E,
-}
-
-pub struct MeshFrame { // aka Frame
-    pub frame_type: FrameType,
-    pub payload: Vec<u8>,
-}
-```
-
-## Protocol structs (WEFT-115)
-
-Concrete serde types used on the wire / in pools:
-
-| Type | Module | Notes |
-|------|--------|--------|
-| `MeshStream` / `TransportListener` / `MeshTransport` | `mesh` | Transport traits |
-| `WeftHandshake` | `mesh` | Post-Noise capability exchange |
-| `EncryptedPeer` | `mesh_noise` | Session metadata after Noise |
-| `JoinRequest` / `JoinResponse` / `PeerInfo` | `mesh_listener` | Cluster join |
-| `TreeSyncRequest` / `TreeSyncResponse` | `mesh_tree` | Merkle tree sync |
-| `ServiceEndpoint` (= `RemoteServiceEndpoint`) | `mesh_service` | Resolved remote service |
-| `ProcessAdvertisement` | `mesh_process` | CRDT process gossip |
-| `ServiceAdvertisement` | `mesh_service_adv` | Cluster service gossip |
-| `Frame` / `MsgType` | `mesh_framing` | Aliases for `MeshFrame` / `FrameType` |
-
-## Clock injection (WEFT-113)
-
-Time-dependent mesh components take an injectable `Clock`:
-
-- `RealClock` — production (`std::time`)
-- `MockClock` — deterministic tests (`advance(Duration)`)
-
-Bound into `HeartbeatTracker`, `DedupFilter`, and `ServiceResolutionCache`
-via `with_clock(...)`. Production constructors still default to `RealClock`.
-
-## Test fixtures (WEFT-112)
-
-`clawft_kernel::mesh_test_support` provides:
-
-- `InMemoryTransport` — `mem://` multi-node fabric (tokio channels)
-- `FaultyTransport` — drop / fail-next-connect / latency injection
-- `MockPeer` — lightweight peer with inbox + handshake
-- `MockClock` — re-export of `mesh_clock::MockClock`
-- Helpers: `connected_pair()`, `two_node_streams(genesis)`
-
-## WeftHandshake
-
-```rust
-pub struct WeftHandshake {
-    pub node_id: String,
-    pub governance_genesis_hash: [u8; 32],
-    pub governance_version: String,
-    pub capabilities: u32,
-    pub kem_supported: bool,
-    pub chain_seq: u64,
-    pub supported_sync_streams: Vec<u8>,
-}
-```
-
-Peers with different `governance_genesis_hash` are rejected.
-
-## Connection Pool
-
-`MeshConnectionPool` uses `DashMap<String, MeshPeerConnection>` for lock-free concurrent access.
-
-## Cross-Node IPC
-
-```rust
-pub struct MeshIpcEnvelope {
-    pub source_node: String,
-    pub dest_node: String,
-    pub hop_count: u8,        // Max 8
-    pub envelope_id: String,  // UUID for dedup
-    pub message: KernelMessage,
-}
-```
-
-`DedupFilter`: time-bounded HashMap (60s TTL, 10k capacity) for exact deduplication.
-
-## Service Resolution Cache
-
-Dual-cache with positive entries (per-entry TTL) and negative entries (30s TTL). Positive insert clears negative entry.
-
-## Stream Priorities and Sync Frames
-
-`SyncStateDigest` provides compact summary for sync initialization. Frame types implicitly define priority (heartbeat highest).
-
-## Module Dependency Graph
-
-```
-mesh_heartbeat --.
-mesh_process ----.
-mesh_service_adv --> ipc (GlobalPid)
-mesh_ipc ----------> ipc (KernelMessage, MessageTarget)
-mesh_service ------> (standalone)
-mesh_dedup --------> (standalone)
-mesh_chain --------> (standalone)
-mesh_tree ---------> (standalone)
-mesh_discovery ----> (standalone trait)
-mesh_bootstrap ----> mesh_discovery (DiscoveryBackend)
-mesh_framing ------> mesh (MeshError, MeshStream)
-mesh_noise --------> mesh (MeshError, MeshStream)
-mesh_listener -----> mesh (MeshPeer, WeftHandshake)
-mesh --------------> (root: traits, errors, handshake)
-```
+`clawft_kernel::mesh_test_support` provides an in-memory `mem://` transport, a
+fault-injecting transport (drop, fail-next-connect, latency), a mock peer and a
+mock clock. Time-dependent components (the heartbeat tracker, `DedupFilter`, the
+service cache) take an injectable `Clock`, so tests are deterministic.
