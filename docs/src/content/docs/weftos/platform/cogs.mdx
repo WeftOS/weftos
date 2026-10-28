@@ -1,0 +1,151 @@
+---
+title: Cogs and the Cog Host
+description: How WeftOS runs cogs, small native sensor and inference binaries, as signed, governed workloads; what stays in WeftOS and what moved to the WeftOS/weftos-cogs repository.
+---
+
+A **cog** is a small native program with a `cog.toml` manifest: a sensor
+driver, a detector, a bridge, a speech stage. WeftOS treats a cog as one kind of
+governed workload (`kind = "cog"`). This page explains the model and the
+commands. It does not repeat the Cogs product documentation, which lives with
+the cogs.
+
+**Status.**
+[ADR-100](https://github.com/WeftOS/weftos/blob/v0.8.4/docs/adr/adr-100-cog-workload-kind.md)
+(the cog workload kind) is Accepted (2026-09-29).
+[ADR-105](https://github.com/WeftOS/weftos/blob/v0.8.4/docs/adr/adr-105-cog-sources.md)
+(cog sources) is Accepted (2026-10-02).
+[ADR-106](https://github.com/WeftOS/weftos/blob/v0.8.4/docs/adr/adr-106-seed-licence-proxy.md)
+(the Seed licence proxy) is Proposed, with its phases 1a to 2 built; see
+[Seed licence proxy](/docs/weftos/platform/licence-proxy).
+
+## Where things live
+
+Since 0.8.4 (Cogs extraction, phase B1) the Cogs product is its own
+repository, [WeftOS/weftos-cogs](https://github.com/WeftOS/weftos-cogs),
+released as tag
+[v0.1.4](https://github.com/WeftOS/weftos-cogs/tree/v0.1.4). It holds the cogs
+themselves (29 directories under `src/cogs/` at that tag), the Cog Host
+(`weftos-cog-host`, built there as `cog-host`), the cog repository tooling
+(`cog-repo`), the source resolver (`cog-sources`) and the hardware catalog
+(`cog-market`). Its documentation for cog authors and for the host's `/hw/*`
+routes is under
+[docs/cogs](https://github.com/WeftOS/weftos-cogs/tree/v0.1.4/docs/cogs).
+
+WeftOS keeps the side of the boundary that the daemon owns:
+
+| In WeftOS | What it is |
+|---|---|
+| `crates/weftos-cog-protocol` | The `weftos.cog.v1` wire types between the Cog Host and the daemon: the start-time check (`cog.check_run`) and the licence methods (`cog.licence.import`, `.status`, `.claims`, `.revoked`) |
+| `weaver workload`, `weaver cog` | Packaging, placement, sources, licences and checkout |
+| `crates/weft-licence`, `crates/weft-licence-wire` | The Seed licence proxy and its grant wire format |
+| The workload runtime in `clawft-kernel` and `clawft-weave` | Placement, admission, governance and the ingest bridge |
+
+WeftOS still links three Cogs crates (`cog-sources`, `cog-repo`, `cog-market`)
+from the tagged release, pinned by commit in the root `Cargo.toml`. The stated
+target is for WeftOS to depend only on the protocol crate
+(`docs/cogs/host-hw-api.md`).
+
+## The cog workload kind
+
+A cog is placed through the general placement layer
+([Governed placement](/docs/weftos/platform/placement)). ADR-100 defines what is
+specific to cogs.
+
+**Package.** A cog package is a signed manifest, `cogpkg.json`, that lists the
+unmodified `cog.toml` by hash, one binary per architecture (`aarch64`, `armv7`;
+`x86_64` and `wasm` are accepted by `pack` but WASM execution is not built),
+the source commit and signatures. Files are addressed by BLAKE3. Config and
+secrets arrive at place time; secret values travel over Noise and only their
+hashes appear in chain events (ADR-100 section 1).
+
+**Requirements derived from the manifest.** CPU architecture of an available
+binary, a runtime that can run it (native, or a container runtime), memory and
+CPU headroom from `[resources]`, and the `hardware_requirement`. If the cog reads
+the ESP32 UDP sensor feed, the node must advertise that feed on the same LAN;
+cross-LAN relay is deferred (ADR-100 section 2).
+
+**Trust.** Native placement requires a node trust tier of at least `paired` and
+an operator-signed package, because landlock and seccomp are not built yet
+(ADR-100 section 3). The compiled-in WeftOS signer set is empty today
+(`WEFTOS_PINNED_SIGNERS` is `&[]` at
+`crates/clawft-kernel/src/workload_pkg/trust.rs:18`), so every accepted package
+signature comes from an operator-pinned key in the node's `workload-trust.json`.
+
+**Cognitum Seeds.** A Seed is driven through its own HTTP API by an adapter on
+the controlling node (ADR-100 section 5), only over a pinned link, with an
+operator-signed bind record. The Seed holds the licence; see
+[Seed licence proxy](/docs/weftos/platform/licence-proxy).
+
+**Where a cog's vectors go.** A cog that posts to the compatibility ingest
+endpoint (`POST /api/v1/store/ingest`) writes into the store of the project that
+placed it. A placement whose project has no known store owner is refused rather
+than redirected to the controller's store (ADR-100, "Decision 5 resolved"). New
+cogs publish through [cogbus](/docs/weftos/platform/cogbus) instead.
+
+## Commands
+
+Pick a cog and see how it runs:
+
+```bash
+weaver workload catalog --kind cog
+weaver cog search radar
+weaver cog info ld2450-radar
+```
+
+Cog sources and licences (ADR-105). A project lists where it gets cogs; kinds
+are `weftos`, `cognitum` and `private`:
+
+```bash
+weaver cog source list
+weaver cog source add acme --kind private --url https://cogs.example.org/ --key <64-hex-public-key>
+weaver cog licence list
+weaver cog licence add --help
+```
+
+Two paths to a running cog, which are not equivalent:
+
+- The appliance path, `weaver cog install <cog-id> --enable`, verifies a binary
+  and puts it in the local cog-host root, where the Cog Host supervises it. It
+  is verified and recorded, but it is not a governed placement.
+- The governed path packs and signs a package, then places it. Every step is
+  gated and chained:
+
+```bash
+weaver workload keygen --out ./operator.seed
+weaver workload pack --cog-dir ./src/cogs/anomaly-detect --bin aarch64=./cog-anomaly-detect --key ./operator.seed --out ./pkg/anomaly-detect
+weaver workload verify ./pkg/anomaly-detect --trust ./workload-trust.json
+weaver workload explain ./pkg/anomaly-detect
+weaver workload place ./pkg/anomaly-detect --mode interval --interval 10
+```
+
+`pack --redistributable` marks a package as one that other nodes may be seeded
+with and served. It is off by default. A package that carries a Cognitum
+attestation is never redistributed, and `pack` refuses the flag without a
+`provenance.json` showing the binary is not a licensed Cognitum one (see
+`weaver workload pack --help`). A package, signer key or artifact hash can be
+revoked mesh-wide with `weaver workload revoke`.
+
+The step-by-step operator procedure, including pairing and revocation, is in
+`docs/cogs/operator-guide.md` in the WeftOS repository, and the source and
+licence how-to is `docs/cogs/cog-sources.md`.
+
+## The cog manifest interfaces
+
+A cog declares its data interfaces in `cog.toml`: `[[outputs]]` and `[[inputs]]`
+(topic kind, schema id, class, reader policy) and, for any cog with outputs, a
+`[mesh_limits]` table. These are what [cogbus](/docs/weftos/platform/cogbus)
+enforces at run time. A cog that declares outputs without `[mesh_limits]` is
+refused by `weaver workload pack`.
+
+## Built and not built
+
+| Built | Not built or deferred |
+|---|---|
+| Signed packages, `pack`, `verify`, `keygen`; operator-pinned trust | A compiled-in WeftOS signer (set is empty) |
+| Native and container runtime adapters; Seed adapter over a pinned link | WASM runtime for cogs (planned on `clawft-wasm-host`) |
+| Governed placement with chained decisions and revocation | landlock and seccomp isolation for native cogs |
+| Cog sources, licence declarations, `weaver cog install` | Moving the source list into the user-daemon project manifest (ADR-105 open question) |
+| Seed-bound checkout, approval and the run gate (ADR-106 phase 3, in progress) | Cross-LAN sensor relay |
+
+Cognitum's 30 percent per cog is a contractual term. It is not enforced in code
+(ADR-100 section 6).

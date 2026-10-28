@@ -1,0 +1,201 @@
+---
+title: Cogbus, the cog data plane
+description: The broker in the node daemon that moves readings, streams and blobs between cogs on a node and, when an operator exposes a topic, between nodes. Covers topics, classes, limits, identity, mesh topics and the cog.toml mesh_limits table.
+---
+
+Before 0.8.4 a cog had one way to hand data on: an HTTP POST of an 8-float
+vector to the ingest bridge. No cog could subscribe to another cog's output,
+camera frames and audio had no path, and nothing recorded who read what.
+**Cogbus** is the broker that replaces that, inside the node daemon.
+
+**Status.**
+[ADR-122](https://github.com/WeftOS/weftos/blob/v0.8.4/docs/adr/adr-122-cog-data-plane-broker.md)
+is Accepted (2026-10-25, updated 2026-10-27). Phases B1 to B6 and service calls
+(S1) are built and shipped in 0.8.4 (`CHANGELOG.md`, 0.8.4). The ADR's "Known
+gaps" table records what is closed and what is open; one low-risk blob gap is
+still open (see below). Per-cog uid isolation is closed "for the code": it was
+proven as root on an aarch64 test VM, and enabling it on a real host is an
+owner-run setup step (ADR-122 gaps 2 and 3).
+
+## What it is
+
+The broker, `cogbus`, is a service of the `weaver` daemon on every node that
+hosts cogs. It is not a cog and not a separate system service, so it reuses the
+daemon's node key, mesh connection, governance and workload registry
+(ADR-122 section 1).
+
+A live topic is named `<kind>/<source_id>`, for example `audio.pcm/mic-0`.
+Outside the node the same topic is
+`weftos://<mesh>/sensors/<source_id>/topics/<kind>`, or
+`weftos://<mesh>/services/<name>/topics/<kind>` for a source that is not a
+sensor (section 2).
+
+### Three classes
+
+| Class | Carried by | Limit |
+|---|---|---|
+| `reading` | a message through the broker socket | 64 KiB per message; larger is a blob |
+| `stream` | a shared-memory ring per topic, one writer, many readers, each with its own cursor | ring size declared per output, default 4 MiB |
+| `blob` | written once to the node's content store, addressed by BLAKE3; messages carry a handle | node quota 2 GiB, 512 MiB per instance, 256 MiB per blob; TTL default 10 minutes, at most 24 hours |
+
+Every message carries `source_id`, `node_id`, the producer's capture time `t_ns`
+and a sequence number `seq`; a gap in `seq` is how a reader sees a drop
+(section 3).
+
+### Reader policies
+
+| Policy | Behaviour |
+|---|---|
+| `drop-oldest` (default) | the reader's cursor skips forward; the writer never waits |
+| `sample` | the reader gets the newest record when it asks |
+| `block` | the writer waits for the slowest reader up to a deadline (default 50 ms), then that reader becomes `drop-oldest`; refused across nodes |
+
+No reader can stall a writer indefinitely (section 6).
+
+## Identity and permission
+
+Cogs reach the broker on a Unix socket in the daemon's runtime directory
+(`cogbus.sock`, mode 0660). The workload runtime starts each cog with
+`WEFTOS_COGBUS` (the socket path) and `WEFTOS_COGBUS_TOKEN` (a per-instance
+token). The token names the instance and its manifest, and the broker also
+checks the peer's uid. A cog can only declare, publish and subscribe as itself
+(section 4).
+
+- A cog may publish only topics in its `[[outputs]]` and subscribe only to
+  topics matching its `[[inputs]]`. Cross-project subscriptions need an
+  explicit grant; the default is the cog's own project (section 5).
+- Each declare, subscribe, refusal and unsubscribe is a governance decision
+  (`cogbus.publish`, `cogbus.subscribe`) and lands in the node's activity log.
+  Individual messages are not chain events.
+- Repeated refusals stop the cog through the workload runtime, asking governance
+  (`cogbus.stop`) and chaining the cause.
+- A topic is limited by a per-topic rate from `[[outputs]]`; over it, publishes
+  are refused as `rate_limited`.
+
+**Per-cog uids depend on the daemon's privileges.** A privileged machine service
+with a uid range runs each native cog as its own uid and puts it in a `cogbus`
+group; a user daemon cannot switch uids, so its cogs run as `shared-uid`, and
+`weaver cogbus list` says which mode each instance got. An operator can set
+`require_cog_uid` so a cog that uses the bus is refused where it would share a
+uid. Creating the group, uid range and `cogbus-isolation.json` is an operator
+action through `scripts/cogbus-uid-setup.sh` (dry run unless `--yes`); the daemon
+never edits the host (section 4a). Containers on a Linux Docker or Podman engine
+get the bind-mounted socket; other container and VM routes are reported
+unsupported (section 4c).
+
+## Across the mesh
+
+**Nothing is shared by default.** A topic is offered to other nodes only as an
+[exposure](/docs/weftos/platform/exposures) of kind `topic`, with an audience
+(default `local`) and limits (ADR-122 section 8 and 14).
+
+The broker registers `topic.<kind>/<source_id>` the first time a writer
+publishes, with audience `local`, so nothing is served until an operator widens
+it:
+
+Topic ids below are illustrative.
+
+```bash
+weaver cogbus list
+weaver expose list
+weaver expose on topic.vision.detections/cam-0 --audience paired
+weaver expose off topic.vision.detections/cam-0
+```
+
+As built (B6, 2026-10-27), a remote subscribe is refused unless, in order: a cog
+on this node writes the topic; that cog's manifest declared `[mesh_limits]`; the
+schema matches; the exposure covers the peer; governance allows
+`cogbus.mesh.subscribe`; the policy is not `block`; and the raw rule holds.
+`weaver expose off`, a narrowed audience, or a cleared raw flag ends the
+subscription at once (section 14).
+
+- **Readings** cross as one mesh message each, against subscriber credit and the
+  cog's `readings_per_min`; excess is dropped and counted, and the `seq` gap is
+  visible.
+- **Streams** cross in chunks with credit-based flow control (64 records and
+  1 MiB of credit, topped up at half). Records over 64 KiB do not cross.
+- **Blobs** cross only when fetched by hash, in 32 KiB slices, and only for
+  handles a served reading actually carried to that peer.
+- Mesh frames are `TopicRequest` (0x12) and `TopicData` (0x13), served only to
+  admitted, verified peers.
+
+### Raw data stays where it is made
+
+Raw frames and IQ samples are served to consumers on the same node. A
+cross-node subscription to a raw topic is refused unless the subscriber asks for
+raw and the exposure allows it. Allowing it is an explicit flag, and only with an
+audience of named nodes:
+
+```bash
+weaver expose on topic.iq.cs16/sdr-0 --audience nodes:node-a --raw
+```
+
+Without `--raw`, `expose on` clears the raw permission (section 7 and 14).
+
+## The `[mesh_limits]` table in `cog.toml`
+
+Every cog that declares `[[outputs]]` declares its own limits for remote
+subscribers. All four keys are required (section 14, "mesh limits"):
+
+```toml
+[mesh_limits]
+readings_per_min = 600
+bytes_per_sec = 4194304
+subscriptions_per_peer = 16
+credit_timeout_s = 30
+```
+
+| Key | Range | Meaning |
+|---|---|---|
+| `readings_per_min` | 1 to 60000 | readings per remote subscriber |
+| `bytes_per_sec` | 1 to 1 GiB/s | stream chunks and blob slices per remote subscriber |
+| `subscriptions_per_peer` | 1 to 256 | remote subscriptions one peer may hold on this cog's topics |
+| `credit_timeout_s` | 5 to 600 | a subscription whose credit is not renewed this long ends |
+
+The operator's exposure limits can only lower these values. Enforcement:
+`weaver workload pack` refuses a manifest with outputs and no table;
+`weaver expose on` for a topic is refused unless the writing cog declared its
+table; a released cog without the table is accepted and runs with the starting
+values, but is never served to another node.
+
+## Compatibility with the ingest bridge
+
+The old HTTP contract (`POST /api/v1/store/ingest`) still works for released
+cogs. It now runs as a compatibility listener inside the broker: each post is
+published as a reading on `store.vector/<instance_id>` and a built-in store sink
+forwards it to the project store. Binding port 80 is optional (`bridge.bind`
+may be `off`, `bridge.fallback_bind` names a loopback fallback), so an
+unprivileged daemon works. New cogs should not use it (section 9).
+
+## Services and blobs
+
+A **service call** is a request and reply over a topic whose kind starts with
+`svc.` (for example the NPU inference service). The provider uses `serve`,
+callers use `call`, and the provider answers with `reply`; the same declaration,
+schema, project and governance checks apply (section 12). Large payloads are
+blobs: the caller uploads in slices and passes a handle (section 13).
+
+## What can be seen
+
+`weaver cogbus list` (the only `cogbus` subcommand) shows every topic on the node
+with its schema, class, writer, readers, rates and drop counts, plus the socket's
+mode and group, the uid mode, each instance's isolation, and recent refusals.
+`weaver expose log` shows requests against exposed topics. Both are per node.
+
+## Not done or open
+
+- Stream rings are a `memfd` ring built in this repository. The ADR evaluated
+  iceoryx2 (v0.10.0) and shelved it on 2026-10-27: its services are found by
+  name so the broker cannot control who opens a stream, it has no permission mode
+  that works with per-cog uids, and its overflow policy is per service, not per
+  reader. Revisit if it gains access control.
+- Gap 6 in the ADR's known-gaps table is open (low risk): blob `get` answers
+  `cross_project` for a blob another project holds, which tells a caller that
+  already has the bytes that this node holds them, and governance is asked on the
+  first slice of a get only.
+- Per-cog uids and the `cogbus` group need the owner-run host setup above; until
+  then the socket keeps the daemon's group and cogs on a user daemon share its
+  uid.
+- Publish budgets (gap 5, closed) meter readings by the rate in `[[outputs]]`.
+  A rate written as free text with no message rate is not metered, and streams
+  are not metered.

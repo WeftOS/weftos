@@ -1,72 +1,100 @@
 ---
-title: "Peer Discovery"
-description: "DiscoveryBackend trait, DiscoveryCoordinator, bootstrap peers, peer exchange, mDNS, Kademlia DHT, and DHT key namespacing."
+title: "Discovery"
+description: "How a WeftOS node finds peers at v0.8.4: seed peers dialed at boot, pairing, the leaf discovery socket, and the DiscoveryBackend library (bootstrap, peer exchange, mDNS, Kademlia) and which parts the daemon actually runs."
 ---
 
-WeftOS provides pluggable peer discovery through the `DiscoveryBackend` trait with cross-backend deduplication.
+There are two layers to peer discovery in the source: what the daemon does at
+boot today, and a library of pluggable discovery backends. They are not the same
+thing, and this page keeps them apart. The transport is on
+[Mesh networking](/docs/weftos/mesh-networking) and node tracking is on
+[Clustering](/docs/weftos/clustering).
 
-**Source**: `crates/clawft-kernel/src/mesh_discovery.rs`, `mesh_bootstrap.rs`, `mesh_mdns.rs`, `mesh_kad.rs`
-**Feature**: `mesh`
+**Source**: `crates/clawft-kernel/src/mesh_discovery.rs`, `mesh_bootstrap.rs`,
+`mesh_mdns.rs`, `mesh_kad.rs`, `boot.rs`.
 
-## DiscoveryBackend Trait
+## What the daemon does
+
+- **Seed peers.** Boot connects every entry of `[kernel.mesh] seed_peers`
+  directly, by iterating the addresses and calling `MeshTransport::connect`
+  (`mesh_bootstrap.rs` module notes, the WEFT-151 audit). An entry may be
+  `address#node-id`, which pins the node id the seed must claim; without a pin a
+  seed is bound to the first id it names (`MeshConfig`,
+  `crates/clawft-types/src/config/kernel.rs`).
+- **Join structures are not on the wire.** `JoinRequest` and `JoinResponse`
+  (which carries a `peer_list`) are defined in `mesh_listener.rs`, but that module
+  records that the frame types of the same names never serialise them and that
+  the connection pool it defines has no production caller. Nodes are
+  reached from the seed list, by pairing and by explicit join, not through a join
+  exchange.
+- **The Kademlia table.** With `discovery = true`, boot builds the mesh runtime
+  with a Kademlia routing table and a heartbeat tracker, keyed by the BLAKE3 hash
+  of the node id (`boot.rs`, `MeshRuntime::with_discovery`). Peer events are
+  published on a `MeshPeerEventBus`.
+- **Pairing.** Between machines that should trust each other for project work,
+  one node asks and the other approves; approval verifies the peer's Ed25519 key
+  against its node id before writing the trust files (ADR-108 P2b):
+
+  ```bash
+  weaver mesh pair list
+  ```
+
+  A node that cannot pair imports a signed mesh record exported elsewhere
+  (`weaver mesh export`, `weaver mesh import`).
+- **Leaf discovery.** Certified leaves such as ESP32 devices find a node by a UDP
+  discovery socket kept apart from the main listener. By default it binds on the
+  main port plus 1, and the leaf TCP listener on the main port plus 2
+  (`leaf_listen_addr`, `leaf_discovery_any`).
+- **Adding a node by address.** `weaver cluster join <ADDRESS>`.
+- **Trust is separate from finding.** Being discovered grants nothing. A peer is
+  `discovered`, `paired` or `pinned` for placement, and admission to the mesh is a
+  signature and policy check
+  ([Mesh networking](/docs/weftos/mesh-networking#admission)).
+
+## The discovery library
+
+`DiscoveryBackend` is the trait for a pluggable mechanism
+(`mesh_discovery.rs`):
 
 ```rust
 #[async_trait]
-pub trait DiscoveryBackend: Send + Sync {
+pub trait DiscoveryBackend: Send + Sync + 'static {
     fn name(&self) -> &str;
     async fn start(&mut self) -> Result<(), DiscoveryError>;
-    async fn poll(&mut self) -> Result<Vec<DiscoveredPeer>, DiscoveryError>;
+    async fn poll(&mut self) -> Vec<DiscoveredPeer>;
     async fn stop(&mut self) -> Result<(), DiscoveryError>;
 }
-
-pub enum DiscoverySource { SeedPeer, PeerExchange, Mdns, Dht }
 ```
 
-## DiscoveryCoordinator
+A `DiscoveredPeer` records where it came from, as a `DiscoverySource`:
+`SeedPeer`, `Mdns`, `Kademlia`, `PeerExchange` or `Manual`.
+`DiscoveryCoordinator::poll_all()` queries every registered backend and returns
+only peers it has not seen, deduplicating by node id.
 
-`poll_all()` queries all backends and deduplicates using node IDs.
+| Backend | Module | What it does |
+|---|---|---|
+| `BootstrapDiscovery` | `mesh_bootstrap.rs` | Reports the configured seed addresses. Idempotent, no dependencies |
+| `PeerExchangeDiscovery` | `mesh_bootstrap.rs` | Designed to learn peers from a `JoinResponse.peer_list`; see above |
+| `MdnsDiscovery` | `mesh_mdns.rs` | DNS-SD over multicast UDP `224.0.0.251:5353`, advertising `_weftos._tcp.local`; announcements carry the governance genesis hash so clusters stay separate |
+| `KademliaDiscovery` | `mesh_kad.rs` | A Kademlia table (bucket size 20, alpha 3, 256-bit keys) with governance-namespaced keys |
 
-## Bootstrap Discovery
+`NamespacedDhtKey` prefixes every DHT key with the governance genesis so one
+cluster's records do not pollute another's.
 
-Reads `ClusterConfig.seed_peers`. Idempotent, zero dependencies.
+### Which of these the daemon runs
 
-## Peer Exchange
+Not the coordinator, and not the backends. Reading the source at v0.8.4:
 
-Learns peers from `JoinResponse.peer_list` during handshake.
+- `mesh_bootstrap.rs` records that `BootstrapDiscovery` and
+  `PeerExchangeDiscovery` are library only: boot dials `seed_peers` itself and
+  never constructs them, and `DiscoveryCoordinator` is exercised only in its unit
+  tests.
+- I found no call site outside `mesh_mdns.rs` that constructs `MdnsDiscovery`
+  (method: `grep` over `crates/` for `MdnsDiscovery`; the only hits are its
+  definition, its tests and the re-export in `lib.rs`). So multicast LAN
+  discovery is not started by the daemon.
+- `KademliaDiscovery` likewise has no daemon call site. The Kademlia routing
+  table itself is created when `discovery = true`, as above.
 
-## mDNS (LAN Discovery)
-
-```rust
-pub struct MdnsDiscovery { /* UDP multicast 224.0.0.251:5353 */ }
-pub const WEFTOS_SERVICE_NAME: &str = "_weftos._tcp.local";
-```
-
-Announcements include governance genesis hash for cluster isolation.
-
-## Kademlia DHT
-
-```rust
-pub struct KademliaTable {
-    local_id: DhtKey,
-    buckets: Vec<Vec<DhtEntry>>,
-}
-
-pub const K_BUCKET_SIZE: usize = 20;
-pub const ALPHA: usize = 3;
-pub const KEY_BITS: usize = 256;
-```
-
-XOR distance metric: `xor_distance()`, `leading_zeros()`, `bucket_index()`.
-
-### DHT Key Namespacing
-
-```rust
-pub struct NamespacedDhtKey {
-    pub governance_genesis: String,
-    pub key_type: String,
-    pub key: String,
-}
-// Format: "{genesis_prefix}:{key_type}:{key}"
-```
-
-Prevents cross-cluster DHT pollution.
+The module notes schedule wiring a coordinator into boot for 0.8.x. Until that
+lands, treat `seed_peers`, pairing and `weaver cluster join` as the ways a node
+finds peers, and do not rely on mDNS to find them on a LAN.

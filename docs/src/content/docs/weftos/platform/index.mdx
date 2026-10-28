@@ -1,0 +1,32 @@
+---
+title: Platform features
+description: What shipped in the 0.8.x line beyond the kernel: cogs, the cog data plane, governed placement, exposures, the Seed licence proxy, project topology, the tailnet router, the chief of staff, the AI org, voice, and verified updates. Each page states its ADR status and what is built.
+---
+
+These pages cover the platform features added in the 0.8.x releases. They
+describe the product as of v0.8.4 (2026-10-27). Each page starts with the
+status of its decision record and separates what is built from what is only
+planned. Where a page and an ADR disagree, the ADR is the record of the decision
+and the code is the record of what runs.
+
+ADR links point at the `v0.8.4` tag in
+[WeftOS/weftos](https://github.com/WeftOS/weftos/tree/v0.8.4/docs/adr).
+
+| Page | What it covers | Decision records | Status of the record |
+|---|---|---|---|
+| [Cogs and the Cog Host](/docs/weftos/platform/cogs) | Cogs as signed, governed workloads; where the product lives | ADR-100, ADR-105, ADR-106 | 100 and 105 Accepted, 106 Proposed with phases built |
+| [Cogbus](/docs/weftos/platform/cogbus) | The cog data plane broker in the node daemon | ADR-122 | Accepted, B1 to B6 built |
+| [Governed placement](/docs/weftos/platform/placement) | `weaver workload`: where a workload runs, and why | ADR-099, ADR-101 | Accepted |
+| [Exposures](/docs/weftos/platform/exposures) | What a node offers to the mesh, and the local kill switch | ADR-120 | Proposed, X1 and X2 built |
+| [Seed licence proxy](/docs/weftos/platform/licence-proxy) | `weft-licence` and mesh-scoped cog checkout | ADR-106 | Proposed, phases 1a to 2 built, phase 3 in progress |
+| [Project topology](/docs/weftos/platform/project-topology) | Machine service, user daemon, project kernels; `weaver project` | ADR-103, ADR-108 | Accepted |
+| [Tailnet router](/docs/weftos/platform/tailnet-router) | One HTTPS front door per dev machine | ADR-116 | Proposed, R1 to R3 built |
+| [Chief of staff](/docs/weftos/platform/chief-of-staff) | `weft cos serve` and the conversation API | ADR-118 | Proposed, C1 to C3 built |
+| [AI org and agent teams](/docs/weftos/platform/ai-org) | Agent catalog, versions, teams, `weftos team` | ADR-121, ADR-112 | Accepted |
+| [Voice](/docs/weftos/platform/voice) | The voice stack and which pieces are current | ADR-053, 058 to 062, 074 | Accepted, except 062 (Proposed) |
+| [Updates and signed releases](/docs/weftos/platform/update-and-signing) | `weaver update`, release signatures, distribution channels | none (documented in `docs/deployment/install.md`) | n/a |
+
+The mesh itself (transport, discovery, clustering) is covered in
+[Mesh networking](/docs/weftos/mesh-networking),
+[Discovery](/docs/weftos/discovery) and
+[Clustering](/docs/weftos/clustering).

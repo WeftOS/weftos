@@ -1,0 +1,102 @@
+---
+title: Exposures and the local kill switch
+description: How a node announces what it offers to the mesh (inference, speech, harnesses, cog APIs, cogbus topics), who may use it, and how an operator switches it off locally with weaver expose.
+---
+
+An **exposure** is something a node offers to other nodes: a local model server,
+a speech service, an agent harness, a cog's API or a
+[cogbus](/docs/weftos/platform/cogbus) topic. Nothing is exposed by default.
+Exposing is an explicit, audited act, and the node's own operator can always
+switch it off.
+
+**Status.**
+[ADR-120](https://github.com/WeftOS/weftos/blob/v0.8.4/docs/adr/adr-120-mesh-resources-and-exposures.md)
+is Proposed (2026-10-11). Its phases X1 (resources and the registry) and X2
+(activity log) are built, each with defaults that the ADR marks "pending owner".
+The node half of X3 (the dashboard `expose.set` action) is built. X4 (harnesses
+started remotely through `workload.ctl`) is not built; the `harness` kind exists
+in the registry but no remote start path does.
+
+## What an exposure is
+
+One registry per node holds every exposure (ADR-120 section 2,
+`crates/clawft-kernel/src/exposure/mod.rs`):
+
+| Field | Meaning |
+|---|---|
+| `id` | stable name, for example `infer.chat`, `topic.<kind>/<source_id>` |
+| `kind` | `inference`, `tts`, `stt`, `embedding`, `harness`, `cog-api`, `topic` or `other` |
+| `resource` | what it uses, for example a GPU, an NPU or `cpu` |
+| `audience` | who may use it: `local` (default), `paired`, `nodes:<a,b>` or `project:<id>` |
+| `api` | protocol and path, never a raw port to the world |
+| `limits` | rate and maximum request size, and others per kind |
+| `state` | `on`, `off` or `paused`; a remote request that local policy blocks is reported as `refused` |
+
+Every exposure is announced: peers see an advertisement and the dashboard report
+carries a section for it. An exposure that is reachable but not announced is a
+bug, and the daemon refuses to serve it. The advertisement and the serving path
+both ask the same check (`ExposureRegistry::check_serve`); an exposure that is
+unregistered, off, paused, `local`, switched off by the master switch, or has no
+advertisement to publish is refused.
+
+## Resources
+
+Node facts describe what a node has, next to the hardware it serves: driver and
+toolkit versions (CUDA, ROCm, Core ML, MLX, PyTorch, ONNX Runtime and its
+execution providers) as `x.lib.*` capabilities, and free versus total VRAM and
+unified memory. Facts describe; they never grant access (ADR-120 section 1, "As
+built (X1, X2)"). They are part of the node facts that
+[placement](/docs/weftos/platform/placement) uses.
+
+## Local control always wins
+
+```bash
+weaver expose list
+weaver expose on infer.chat --audience paired
+weaver expose off infer.chat
+weaver expose pause infer.chat
+weaver expose off --all
+weaver expose log --limit 50
+```
+
+- `on` takes `--audience local|paired|nodes:<a,b>|project:<id>`. Without it the
+  audience is `local`. `--raw` allows raw data (microphone PCM, camera frames, IQ
+  samples) on a topic exposure, only with an audience of named nodes; without it
+  `on` clears the raw permission.
+- `off` withdraws the advertisement at once and refuses new requests. `off
+  --all` is the master switch. A second, configuration-level master switch,
+  `[mesh.expose] enabled = false` in `~/.weftos/weave.toml`, is read at daemon
+  start; an invalid section fails closed.
+- Operator decisions persist in `exposures.json` in the runtime directory and win
+  over configuration, so an exposure switched off locally stays off across
+  restarts.
+- `paired` covers a peer that is a placement target at tier `paired` or
+  `pinned`. For a topic exposure, `project:<id>` also needs a paired peer,
+  because a peer's project membership is not known on the node; it is never wider
+  than `paired` (ADR-122 section 14).
+
+## The dashboard can narrow, not widen
+
+The dashboard can queue an `expose.set` node action. The node applies its own
+policy first. The action can switch an exposure off or pause it; `on` is refused
+with a reason. A locally switched-off exposure stays off, and a pause never
+relaxes it. The acting source is recorded as `dashboard` in the audit
+(`crates/clawft-weave/src/expose_set.rs`). Whether the dashboard may ever switch
+an exposure on is an open owner question in the ADR.
+
+## Activity log
+
+Every request to an exposure is recorded: time, caller node, exposure id, size in
+and out, duration and outcome. Records are never request bodies. The log is a
+SHA-256 hash-chained file, `exposure-activity.jsonl` in the runtime directory;
+its tip is anchored on the ExoChain on every refusal or error and on every 64th
+record. Retention defaults to 14 days or 50 MB per node, whichever comes first.
+`weaver expose log [ID]` reads it. The dashboard report carries
+counts and last use per exposure within its size budget, not the log.
+
+## Defaults the owner has not confirmed
+
+The ADR leaves three questions open and ships X1 and X2 with defaults:
+the audience when none is given (`local`; inference roles already exposed through
+the older `expose_to_mesh` setting migrate as `paired`), the retention above,
+and the dashboard's narrow-only role. Treat these as defaults that may change.

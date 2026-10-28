@@ -1,0 +1,118 @@
+---
+title: Voice
+description: The WeftOS voice stack as the decision records and crates describe it: audio and echo cancellation, speech-to-text, the agent brain, text-to-speech, the cloud transport default and its local fallback, and which commands need which build features.
+---
+
+Voice in WeftOS is a front end to the same agent loop that handles text, not a
+separate agent. This page maps the decision records (ADR-053, ADR-058 to 062 and
+ADR-074) to the crates that exist at v0.8.4, and says which parts are optional or
+unfinished. It is a map, not an operator manual; the operator guide is
+`docs/guides/voice.md`.
+
+**Status of the records.** ADR-053 (STT canonical path, 2026-04-29), ADR-058
+(per-conversation context memory tier), ADR-059 (Qwen3 embedding provider),
+ADR-060 (local Hermes serving and KV management), ADR-061 (the conversational
+voice loop; all 2026-06-28) and ADR-074 (interim cloud voice path, 2026-07-30)
+are Accepted.
+[ADR-062](https://github.com/WeftOS/weftos/blob/v0.8.4/docs/adr/adr-062-ecc-graph-walk-conversation.md)
+(the ECC graph-walk conversation model), which ADR-061's own update section says
+replaces its routing heuristic, is Proposed. Read the two together.
+
+## The loop
+
+ADR-061 section "Decision" defines the loop: speech-to-text, a grounded agent,
+and dual-layer text-to-speech over a full-duplex, echo-cancelled audio channel,
+with a per-speaker identity.
+
+| Stage | Decision | Crate |
+|---|---|---|
+| Audio and barge-in | Native capture and playback in one aligned loop; WebRTC AEC3 echo cancellation; barge-in is voice activity on the cleaned microphone during playback, then a flush | `clawft-voice-aec` |
+| Speech-to-text | A swappable `SttBackend`. ADR-053 makes the substrate-side whisper service the canonical path for 0.7.0 and beyond, with the trait left open for in-process backends | `clawft-service-whisper`, `clawft-voice-onnx` (Parakeet, Silero VAD, smart-turn, ECAPA speaker embeddings) |
+| End of turn | Semantic endpointing (smart-turn) instead of a fixed silence cutoff | `clawft-voice-onnx` |
+| The agent | The same loop as text; replies are short by a hard spoken-length cap. Local serving is ADR-060 (a Hermes model through the OpenAI-compatible local provider with managed KV cache) | `clawft-voice-talk` and the agent loop |
+| Memory | A per-conversation context tier: a session-scoped RVF store with HNSW search (ADR-058), embedded by Qwen3-Embedding-0.6B through ONNX Runtime (ADR-059) | see ADR-058 and ADR-059 |
+| Text-to-speech | Two tiers: a fast contextual acknowledgement and a slower expressive streamed answer | `clawft-voice-tts` |
+| Speaker identity | An ECAPA vector per utterance matched against a persistent named registry; each identity is an ECC per-speaker node | `clawft-voice-onnx`, `clawft-voice-talk` |
+
+ADR-061's update (2026-06-29) records two carry-overs. Which response is current
+is decided by the node lifecycle of ADR-062 (the fast acknowledgement is a
+speculative node that the committed answer supersedes), not by a classifier. And
+all inference is native Rust: STT, speaker identity and end-of-turn through
+`ort` or sherpa-onnx, TTS as native ONNX with token generation over a local
+Ollama endpoint. ADR-062 is Proposed, so treat the lifecycle model as the
+direction.
+
+## Which engines are in the build
+
+`clawft-voice-tts` has engine modules for Chatterbox, Orpheus, Kokoro, SNAC
+decode and a Pocket TTS trial. The default build is weights-free: real SNAC and
+Kokoro inference needs the `onnx` feature. The Pocket TTS engine (the `ptts`
+crate) is a trial behind the default-off `pocket-tts` feature, added in
+0.8.4-rc.6; it never downloads weights and is selected with
+`WEFTOS_FAST_TTS=pocket-tts` (`CHANGELOG.md`, rc.6). Which engine answers in a
+given deployment depends on the features compiled in and the model files present,
+so check with `weft voice setup`.
+
+## Transport: cloud default, local fallback
+
+ADR-074 records an interim decision (2026-07-30). Its deciders line says the
+local stack is acceptable long-term but currently sub-par for realtime agent
+control, so the product default is a cloud speech-to-speech path with the local
+stack as the offline fallback. The default
+mode is `xai_s2s`, asserted in `crates/clawft-types/src/config/mod.rs` (the test
+at line 1701 to 1702). The modes are `local`, `xai_s2s` and `xai_hybrid`. If no
+API key is present or the health check fails, the transport falls open to local
+with a visible notice, and a runtime session error also falls back to local
+(`docs/guides/voice.md`, "Transport mode").
+
+If you do not want audio to leave the machine, set the mode to local:
+
+```toml
+[voice]
+enabled = true
+mode = "local"
+```
+
+The key is read from the environment variable named in `voice.xai.api_key_env`
+(default `XAI_API_KEY`) and is never stored in the config.
+
+## Commands and build features
+
+`weft voice` is behind the non-default `voice` cargo feature of `clawft-cli`; a
+release `weft` built without it has no `voice` subcommand
+(`crates/clawft-cli/Cargo.toml`; `voice-onnx` adds the ONNX models). Where the
+feature is on:
+
+| Command | What it does |
+|---|---|
+| `weft voice setup` | download the voice models with SHA-256 verification into `~/.clawft/models/voice/`; a model without a real checksum pin is refused |
+| `weft voice test-mic`, `test-speak` | check microphone input and speaker output |
+| `weft voice talk` | continuous voice conversation; `--brain auto` prefers a reachable daemon's voice-loop reply and falls back to the local brain |
+| `weft voice listen` | record and classify every turn without the brain or audio out |
+| `weft voice watch` | read-only view of the live voice process for a conversation |
+| `weft voice wake`, `install-service` | run the "Hey Weft" wake word daemon, or install it as a service |
+
+`weft cos serve` also has push-to-talk and local speech-to-text; see
+[Chief of staff](/docs/weftos/platform/chief-of-staff).
+
+## Privacy and safety behaviour recorded in the guide
+
+- A microphone privacy indicator exists (WEFT-207) and cloud fallback is
+  announced rather than silent (WEFT-224); both are described in
+  `docs/guides/voice.md`.
+- The microphone source policy (ADR-103 amendment A2): the input node is an
+  operator pin, else the single registered node publishing `sensor/mic`; two or
+  more candidates stop speech-to-text until a pin is set.
+- Voice commands dispatch as an internal principal with `read`, `chat` and
+  `write`, never `admin` (ADR-103 amendment A3).
+
+## Not settled
+
+- ADR-062's lifecycle model is Proposed, and ADR-061 depends on it for routing.
+- ADR-074 is an interim decision by its own title. Its exit criterion for
+  dropping the cloud path as primary is a documented A/B or owner sign-off that
+  local time-to-first-audio, intelligibility and tool-calling match or exceed it
+  for conductor demos; the phase that would do this (V3) is not filed.
+- The guide's `Substrate Voice Pipeline` section (M5-W) and the browser path
+  (Web Speech API for STT, cloud TTS proxied through the gateway) describe other
+  routes into the same agent loop; this page does not restate them.
