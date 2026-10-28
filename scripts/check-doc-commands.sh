@@ -59,8 +59,6 @@ done
 KNOWN_DRIFT="
 docs/src/content/docs/clawft/architecture.mdx
 docs/src/content/docs/clawft/security.mdx
-docs/src/content/docs/weftos/guides/assessment.mdx
-docs/src/content/docs/weftos/guides/deployment-sops.mdx
 "
 default_docs() {
     local f

@@ -36,7 +36,7 @@ WeftOS Assessment Report
 ========================
   Timestamp:    2026-04-03T12:00:00Z
   Scope:        full
-  Project:      /home/user/my-project
+  Project:      /path/to/my-project
 
 Summary
 -------
@@ -70,7 +70,7 @@ weft assess run --scope <SCOPE> --format <FORMAT> [--dir <PATH>]
 | `--scope` | `full`, `commit`, `ci`, `dependency` | `full` | What to scan |
 | `--format` | `table`, `json`, `github-annotations` | `table` | Output format |
 | `--dir` | path | `.` | Project directory |
-| `--pr-number` | number | — | PR number for future github-pr format |
+| `--pr-number` | number | — | PR number, reserved for a `github-pr` format that does not exist yet |
 
 ### `weft assess status`
 
@@ -82,7 +82,7 @@ weft assess status
 
 ### `weft assess init`
 
-Create `.weftos/` directory structure and `weave.toml` config:
+Create `.weftos/weave.toml` (assessment config), `.weftos/artifacts/`, `.weftos/memory/` and an empty `.weftos/peers.json` (`run_init` in `crates/clawft-cli/src/commands/assess_cmd.rs`). If `.weftos/weave.toml` exists it stops unless `--force` is given:
 
 ```bash
 weft assess init
@@ -93,7 +93,7 @@ weft assess init --force    # overwrite existing
 
 ### `full`
 
-Scans all files matching configured patterns (default: `*.rs`, `*.ts`, `*.tsx`, `*.json`). Excludes `node_modules/`, `target/`, `.weftos/`, `.git/`.
+Scans every file under the project with the extensions `rs`, `ts`, `tsx`, `js`, `json`, `toml`, `md` and `mdx`, skipping the directories `node_modules`, `target`, `.git`, `.next`, `.weftos`, `.claude` and `.planning` (`collect_all_files` and `collect_files_recursive` in `assess_cmd.rs`).
 
 ### `commit`
 
@@ -101,7 +101,7 @@ Only files changed in the last git commit. Uses `git diff --name-only HEAD~1 HEA
 
 ### `ci`
 
-All files changed relative to the main branch. Uses `git diff --name-only origin/main...HEAD`. Ideal for PR pipelines.
+All files changed relative to the main branch. Uses `git diff --name-only origin/main...HEAD`, or `origin/master...HEAD` when `origin/main` does not resolve. Ideal for PR pipelines.
 
 ### `dependency`
 
@@ -129,7 +129,7 @@ GitHub Actions annotation format. Each finding becomes a `::warning` or `::error
 
 ## Configuration
 
-Assessment configuration lives in `.weftos/weave.toml`:
+Assessment configuration lives in `.weftos/weave.toml` (this is the file `weft assess init` writes, not the project-root `weave.toml` that `weaver init` writes). The kernel's assessment service loads it (`AssessmentService::load_config`); the one-shot `weft assess` scan collectors use their built-in extension and skip lists, shown under Scopes. `weft assess init` writes this:
 
 ```toml
 [assessment]
@@ -158,24 +158,27 @@ save_artifacts = true
 Link projects for comparative analysis:
 
 ```bash
-# Link a local project
-weft assess link /path/to/other-project
+# Link a local project: <NAME> <PATH to its .weftos/ directory>
+weft assess link frontend /path/to/frontend/.weftos
 
-# Link a remote project via HTTP
-weft assess link https://other-host:8080
+# Link a remote project by URL
+weft assess link api https://api.example.com/weftos/artifacts
 
 # List linked peers
 weft assess peers
 
-# Compare assessments across projects
-weft assess compare
+# Compare your last assessment with a peer's
+weft assess compare frontend
+
+# Show assessment mesh peer state (needs a running daemon with mesh enabled)
+weft assess mesh-status
 ```
 
 The cross-project mesh uses `MeshCoordinator` with `AssessmentMessage` protocol for gossip-based peer discovery and bidirectional assessment exchange. Linked projects share assessment summaries (not raw source code) for trend analysis and organizational benchmarking.
 
 ### Multi-Project Namespace
 
-Configure project identity in `weave.toml`:
+Configure project identity in `.weftos/weave.toml`:
 
 ```toml
 [project]
@@ -202,30 +205,19 @@ The assessment runs a registry of pluggable analyzers. Eight are built in:
 
 Custom analyzers implement the `Analyzer` trait and register via `AnalyzerRegistry`.
 
-## LLM Assessor Agent
+## Not yet implemented
 
-The assessment framework can optionally spawn an LLM-powered assessor agent that analyzes findings for higher-order insights:
+- An LLM assessor agent. Earlier versions of this page showed a `--with-llm-assessor` flag on the run command; the flag does not exist in its `--help` and nothing in `crates/` implements it.
+- An assessment `diff` subcommand. The kernel has an `AssessmentDiff` type (`crates/clawft-kernel/src/assessment/analyzer.rs`) but no CLI command exposes it. To compare runs today, keep timestamped JSON artifacts (see Artifacts) and diff them yourself, or use `weft assess review` for trend analysis over past assessments.
 
-```bash
-weft assess run --with-llm-assessor
-```
-
-The assessor reads the structured findings from all analyzers and produces narrative analysis: architectural risks, dependency patterns, security posture assessment, and recommended remediation priorities. It runs via the kernel's AgentSupervisor with standard governance and chain logging.
-
-## Assessment Diff
-
-Compare the current assessment against a previous run to surface regressions and improvements:
+## Assessment Review
 
 ```bash
-weft assess diff
-weft assess diff --baseline .weftos/artifacts/assessment-2026-04-01.json
+weft assess review                # analyze the last 5 assessments
+weft assess review --history 10   # analyze the last 10
 ```
 
-Output highlights:
-- **New findings** introduced since the baseline
-- **Resolved findings** that no longer appear
-- **Changed severity** — findings that got better or worse
-- **Metric deltas** — LOC changes, file count changes, coherence score trend
+Reviews assessment trends and generates SOP improvement recommendations.
 
 ## Git Hooks
 
@@ -269,7 +261,7 @@ jobs:
 
       - name: Install WeftOS
         run: |
-          curl -fsSL https://github.com/WeftOS/weftos/releases/latest/download/clawft-cli-installer.sh | sh
+          curl -fsSL https://weftos.weavelogic.ai/install.sh | sh
 
       - name: Run assessment
         run: weft assess run --scope ci --format github-annotations
@@ -280,10 +272,10 @@ jobs:
 Install a post-commit hook for automatic assessment on every commit:
 
 ```bash
-weft hooks install --type post-commit
+weft assess hooks
 ```
 
-This creates `.git/hooks/post-commit` that runs `weft assess --scope commit`.
+This writes `.git/hooks/post-commit`, which runs `weft assess run --scope commit`. Use `--hook-type pre-push` for a pre-push hook and `--uninstall` to remove it.
 
 ## Artifacts
 
