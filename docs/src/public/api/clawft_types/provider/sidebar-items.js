@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["ContentBlock","StopReason"],"fn":["find_by_model","find_by_name","find_gateway"],"static":["PROVIDERS"],"struct":["LlmResponse","ProviderSpec","ToolCallRequest","Usage"]};

@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"mod":["boot","delegation","error","model","mutation","permission","scoring","tree"]};

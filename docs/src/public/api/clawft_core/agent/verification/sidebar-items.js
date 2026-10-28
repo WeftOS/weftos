@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"constant":["HALLUCINATION_EMA_ALPHA","HALLUCINATION_SCORE_KEY","MAX_HALLUCINATION_BOOST"],"fn":["parse_write_claim","score_to_boost","update_hallucination_score","verify_write_results"],"struct":["VerificationResult"]};

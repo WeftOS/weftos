@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"struct":["TreeManager","TreeNodeSnapshot","TreeSnapshot","TreeStats"]};

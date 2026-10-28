@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["build_live_pipeline","create_adapter_from_config"],"struct":["ClawftLlmAdapter"]};

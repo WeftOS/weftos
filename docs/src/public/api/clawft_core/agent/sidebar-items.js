@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"mod":["agents","context","helpers","loop_core","memory","sandbox","skill_autogen","skill_watcher","skills","skills_v2","verification"]};

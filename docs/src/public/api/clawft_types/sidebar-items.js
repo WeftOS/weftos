@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"mod":["agent_bus","agent_routing","canvas","config","cron","delegation","error","event","provider","registry","routing","secret","security","session","skill","workspace"]};

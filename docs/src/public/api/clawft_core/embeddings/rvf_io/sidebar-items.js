@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"constant":["RVF_EXTENSION"],"enum":["MemorySegmentType","RvfIoError"],"fn":["make_segment","read_segment_file","read_verified_segment_file","segment_file_path","write_segment_file"],"struct":["MemorySegment","SegmentFile","SegmentFileBuilder","SegmentFileHeader"]};

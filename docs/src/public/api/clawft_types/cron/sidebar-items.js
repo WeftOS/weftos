@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["JobStatus","PayloadKind","ScheduleKind"],"struct":["CronJob","CronJobState","CronPayload","CronSchedule","CronStore"]};

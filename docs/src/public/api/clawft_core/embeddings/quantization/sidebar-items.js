@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["QuantizedVector","Temperature"],"fn":["f32_to_fp16","fp16_to_f32"],"struct":["AccessTracker","PqCodebook","PqVector"]};

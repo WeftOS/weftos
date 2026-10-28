@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["CausalEdgeType"],"struct":["CausalEdge","CausalGraph","CausalNode","ChangeEvent","ChangePrediction","CouplingPair","SpectralResult"],"type":["NodeId"]};

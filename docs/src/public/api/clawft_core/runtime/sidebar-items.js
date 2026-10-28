@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["now_millis"],"struct":["Mutex","RwLock"]};

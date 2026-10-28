@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"struct":["ChannelsConfig","DingTalkConfig","DiscordConfig","EmailConfig","FeishuConfig","MochatConfig","MochatGroupRule","MochatMentionConfig","QQConfig","SlackConfig","SlackDMConfig","TelegramConfig","WhatsAppConfig"]};

@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["AgentBusError","MessagePayload"],"struct":["InterAgentMessage"]};

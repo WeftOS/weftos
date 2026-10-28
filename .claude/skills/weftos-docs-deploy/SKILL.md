@@ -25,23 +25,10 @@ cd docs/src
 npx vercel deploy --prod --yes --token "$VERCEL_TOKEN"
 ```
 
-## Full Deploy with API Docs Refresh
-
-```bash
-# 1. Regenerate rustdoc API reference (if Rust code changed)
-scripts/generate-api-docs.sh
-
-# 2. Deploy to Vercel
-source .env
-cd docs/src
-npx vercel deploy --prod --yes --token "$VERCEL_TOKEN"
-```
-
 ## Verify
 
 ```bash
 curl -s -o /dev/null -w "%{http_code}" https://weftos.weavelogic.ai/
-curl -s -o /dev/null -w "%{http_code}" https://weftos.weavelogic.ai/api/weftos/index.html
 ```
 
 ## Configuration
@@ -63,7 +50,6 @@ To enable automatic deploys on push to master:
 ## What Gets Deployed
 
 - Fumadocs MDX pages (65+ pages across WeftOS, clawft, Getting Started, Guides, Reference, Vision)
-- Rustdoc API reference at `/api/` (1,014 HTML pages, pre-generated)
 - Landing page with install CTA and package links
 - Next.js 16 with Tailwind CSS 4
 
@@ -73,5 +59,5 @@ To enable automatic deploys on push to master:
 |---------|-----|
 | 404 on weftos.weavelogic.ai | DNS: CNAME `weftos` → `cname.vercel-dns.com` |
 | Old content after push | Run manual deploy (auto-deploy needs root dir config) |
-| API docs missing | Run `scripts/generate-api-docs.sh` first |
+| Need API docs | Rustdoc is not hosted on the site; link `https://docs.rs/<crate>` for the published crates |
 | Build fails | Check `cd docs/src && npm run build` locally |

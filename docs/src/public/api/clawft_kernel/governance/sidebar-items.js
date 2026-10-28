@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["GovernanceBranch","GovernanceDecision","RuleSeverity","TrajectoryOutcome"],"struct":["EffectVector","GovernanceEngine","GovernanceRequest","GovernanceResult","GovernanceRule","TrajectoryRecord","TrajectoryRecorder"]};

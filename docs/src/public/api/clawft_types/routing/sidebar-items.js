@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["TierSelectionStrategy"],"struct":["AuthContext","CostBudgetConfig","EscalationConfig","ModelTierConfig","PermissionLevelConfig","PermissionsConfig","RateLimitConfig","RoutingConfig","UserPermissions"]};

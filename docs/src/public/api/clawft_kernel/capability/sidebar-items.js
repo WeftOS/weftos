@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["ElevationResult","IpcScope","ResourceType"],"struct":["AgentCapabilities","CapabilityChecker","CapabilityElevationRequest","ResourceLimits","SandboxPolicy","ToolPermissions"]};

@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["ServiceAuditLevel","ServiceEndpoint","ServiceType"],"struct":["McpAdapter","ServiceContract","ServiceEntry","ServiceInfo","ServiceRegistry","ShellAdapter"],"trait":["ServiceApi","SystemService"]};

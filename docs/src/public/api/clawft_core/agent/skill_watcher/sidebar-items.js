@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["start_watching"],"struct":["SkillWatcherConfig","SkillWatcherHandle"]};

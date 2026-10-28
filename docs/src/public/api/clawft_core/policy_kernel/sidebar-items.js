@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["PolicyKernelError"],"fn":["load_policy_kernel"],"struct":["PersistedCostRecord","PolicyEntry","PolicyKernel","PolicyKernelState"]};

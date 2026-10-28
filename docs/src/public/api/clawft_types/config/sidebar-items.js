@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"mod":["channels","kernel","personality","policies","voice"],"struct":["AgentDefaults","AgentsConfig","Config","ExecToolConfig","GatewayConfig","MCPServerConfig","ProviderConfig","ProvidersConfig","ToolsConfig","WebSearchConfig","WebToolsConfig"]};

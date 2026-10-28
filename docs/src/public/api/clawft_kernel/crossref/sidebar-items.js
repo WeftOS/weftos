@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["CrossRefType","StructureTag"],"struct":["CrossRef","CrossRefStore","UniversalNodeId"]};

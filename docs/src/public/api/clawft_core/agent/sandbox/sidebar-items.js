@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["apply_os_sandbox"],"struct":["SandboxEnforcer"]};

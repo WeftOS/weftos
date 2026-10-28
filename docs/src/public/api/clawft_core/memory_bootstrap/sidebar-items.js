@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["BootstrapError"],"fn":["bootstrap_memory_index"]};

@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["HealthStatus","OverallHealth"],"struct":["HealthSystem"]};

@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["RoutingError"],"fn":["compute_complexity"],"struct":["CostRecord","IntelligentRouter","ModelStats","RoutingContext","RoutingDecision"]};

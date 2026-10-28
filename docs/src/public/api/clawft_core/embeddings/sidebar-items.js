@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["EmbeddingError"],"mod":["api_embedder","hash_embedder","hnsw_store","micro_hnsw","progressive","quantization","rvf_io","rvf_stub","witness"],"trait":["Embedder"]};

@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["SandboxType"],"struct":["EnvPolicy","FilesystemPolicy","NetworkPolicy","ProcessPolicy","SandboxAuditEntry","SandboxPolicy"]};

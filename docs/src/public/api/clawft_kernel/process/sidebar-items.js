@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["ProcessState"],"struct":["ProcessEntry","ProcessTable","ResourceUsage"],"type":["Pid"]};

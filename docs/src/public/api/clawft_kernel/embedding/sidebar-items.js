@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["EmbeddingError"],"fn":["select_embedding_provider"],"struct":["LlmEmbeddingConfig","LlmEmbeddingProvider","MockEmbeddingProvider"],"trait":["EmbeddingProvider"]};

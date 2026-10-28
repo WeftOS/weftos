@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["CandidateState"],"fn":["approve_skill","generate_skill_md","install_pending_skill","is_pending","reject_skill"],"struct":["AutogenConfig","PatternDetector","SkillCandidate","ToolCallPattern"]};

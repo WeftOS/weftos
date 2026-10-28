@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["MicroHnswRequest","MicroHnswResponse"],"struct":["MicroHnsw"]};

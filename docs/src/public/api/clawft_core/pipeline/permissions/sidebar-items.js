@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["admin_defaults","defaults_for_level","level_from_name","level_name","merge_permissions","user_defaults","zero_trust_defaults"],"struct":["PermissionResolver"]};

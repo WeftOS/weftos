@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["ToolError"],"fn":["check_tool_permission","extract_mcp_metadata"],"struct":["ToolMetadata","ToolRegistry"],"trait":["Tool"]};

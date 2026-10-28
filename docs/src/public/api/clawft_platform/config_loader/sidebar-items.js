@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["camel_to_snake","discover_config_path","load_config_raw","normalize_keys"]};

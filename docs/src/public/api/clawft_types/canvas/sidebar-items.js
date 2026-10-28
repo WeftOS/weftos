@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["CanvasCommand","CanvasElement","CanvasInteraction"],"struct":["AdvancedFormField","ChartDataPoint","FormField"],"type":["CanvasId","ElementId"]};

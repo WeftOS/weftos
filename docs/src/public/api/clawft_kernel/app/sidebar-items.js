@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["AppError","AppState","ToolSource"],"fn":["validate_manifest"],"struct":["AgentSpec","AppCapabilities","AppHooks","AppManager","AppManifest","InstalledApp","ServiceSpec","ToolSpec"]};

@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["compute_content_hash","generate_keypair","load_public_key","load_signing_key","sign_content","verify_signature"],"struct":["SkillContentHash","SkillSignature"]};

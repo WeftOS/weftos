@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"constant":["DEFAULT_COMMAND_ALLOWLIST","DEFAULT_DANGEROUS_PATTERNS"],"enum":["CommandPolicyError","PolicyMode"],"fn":["extract_first_token","split_shell_commands"],"struct":["CommandPolicy","UrlPolicy"]};

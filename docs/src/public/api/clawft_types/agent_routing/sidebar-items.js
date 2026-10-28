@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"struct":["AgentRoute","AgentRoutingConfig","MatchCriteria"]};
