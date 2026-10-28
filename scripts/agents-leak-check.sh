@@ -3,7 +3,7 @@
 #
 # WeftOS's agents/ directory is checked into a PUBLIC repo. This script exists because
 # some packages under agents/ were ported from a private client engagement repo
-# (~/Clients/ctox/sansone) and generalized for reuse — see each package's
+# and generalized for reuse — see each package's
 # weftos-package.yaml `provenance` block. This scan is the safety net that keeps
 # client-identifying content out of agents/ going forward, on every run, not just at
 # port time.
@@ -11,12 +11,9 @@
 # Usage: scripts/agents-leak-check.sh
 # Exit code: 0 = clean, non-zero = at least one denylisted pattern matched.
 #
-# NOTE: this script's own source necessarily contains the denylisted terms as literal
-# grep patterns — that is how a denylist scanner works, the same way a secret-scanner's
-# rule file contains the shape of the secrets it looks for. The terms below are named
-# directly in this project's own confidentiality instructions; nothing here is content
-# discovered by inspecting client material, and the script's job is exactly to keep those
-# terms OUT of the files it scans.
+# NOTE: client-identifying patterns are NOT kept in this public script. They are read
+# from a private file outside the repo (see WEFTOS_LEAK_PATTERNS below). Only generic
+# checks (emails, home paths, credential shapes, roster keys) live here.
 
 set -uo pipefail
 
@@ -33,18 +30,8 @@ hits=0
 
 # name | pattern (extended regex, case-insensitive) | note
 declare -a RULES=(
-  "client/org name (Sansone)|sansone|the engagement client's own name"
-  "client/org name (CTOx)|ctox|the engagement methodology vendor's name"
-  "client/org name (Fortunian)|fortunian|a client-adjacent org name"
-  "client domain|sansonegroup\.com|the client's live domain, found in the source repo"
-  "board ticket id|\bSO-[0-9]+\b|a client-board ticket reference (e.g. SO-635)"
-  "underwriting vocabulary|underwrit|client business-rule vocabulary (underwriting)"
-  "borrower vocabulary|borrower|client business-rule vocabulary (borrower/deal data)"
-  "internal ADR series id|ctoxos-[0-9]+|the client engagement's own decision-record series"
-  "source system name (Smartsheet)|smartsheet|the client's specific granted third-party system — use the generic external-system-reader template's vocabulary instead"
   "email address|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|a real email address"
   "absolute home path|/Users/[A-Za-z0-9_.-]+|a local absolute path that can leak a username/machine"
-  "client repo path|~/Clients|a reference to the private client-engagement checkout"
   "roster entry (roster:)|^[[:space:]]*roster[[:space:]]*:[[:space:]]*\$|a literal roster key — verify no real personnel list follows (project rosters belong in project context, referenced by key name only, never embedded here)"
   "roster entry (people:)|^[[:space:]]*people[[:space:]]*:[[:space:]]*\$|a literal people key — verify no real personnel list follows"
   "roster entry (team_roster:)|^[[:space:]]*team_roster[[:space:]]*:[[:space:]]*\$|a literal team_roster key — verify no real personnel list follows"
@@ -56,15 +43,18 @@ declare -a RULES=(
   "credential shape (private key block)|-----BEGIN[ A-Z]*PRIVATE KEY-----|an embedded private key"
 )
 
-# Extra terms that must not be named in this public script (one extended regex per line,
-# '#' comments allowed) are read from a private file outside the repo:
-# $WEFTOS_LEAK_TERMS, default ~/.config/weftos/leak-terms.txt. Missing file: built-in rules only.
-LEAK_TERMS_FILE="${WEFTOS_LEAK_TERMS:-$HOME/.config/weftos/leak-terms.txt}"
-if [[ -r "$LEAK_TERMS_FILE" ]]; then
+# Client-identifying patterns (one extended regex per line, '#' comments allowed) are read
+# from a private file outside the repo: $WEFTOS_LEAK_PATTERNS, default
+# ~/.config/weftos/leak-patterns.txt. If the file is missing the generic checks still run,
+# a notice is printed, and the script does not fail.
+LEAK_PATTERNS_FILE="${WEFTOS_LEAK_PATTERNS:-$HOME/.config/weftos/leak-patterns.txt}"
+if [[ -r "$LEAK_PATTERNS_FILE" ]]; then
   while IFS= read -r term || [[ -n "$term" ]]; do
     [[ -z "${term// }" || "$term" == \#* ]] && continue
-    RULES+=("private term|$term|a name from the private leak-terms file")
-  done < "$LEAK_TERMS_FILE"
+    RULES+=("private pattern|$term|a pattern from the private leak-patterns file")
+  done < "$LEAK_PATTERNS_FILE"
+else
+  echo "agents-leak-check: notice: no private patterns file at $LEAK_PATTERNS_FILE; running generic checks only" >&2
 fi
 
 echo "agents-leak-check: scanning $TARGET_DIR"

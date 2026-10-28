@@ -13,7 +13,7 @@ competing copies.
 | Shasta software coordination | Dashboard Shasta board, from the Shasta repo | Native tickets and goals |
 | Shasta trailer restoration | Shasta Postgres `/board` | Existing read-only subscription |
 | BakeOS product work and goals | BakeOS OS board | 30 native Product Board tickets in a read-only subscription; goals pending |
-| Sansone product work and goals | Sansone steward and approved OS paths | 835 Product Board tickets in a read-only subscription under the [export decision](sansone-board-subscription-proposal-2026-09.md); goals pending |
+| Client product work and goals | Client steward and approved OS paths | 835 Product Board tickets in a read-only subscription under a scoped export decision; goals pending |
 | FlipsOS cards and goals | FlipsOS native board | 102 redacted native tickets in a read-only subscription; goal migration and recurring sync pending |
 | RuView and oil-rig demo work | Their dashboard project boards | Native project goals and tickets |
 
@@ -22,7 +22,7 @@ competing copies.
 - **Portfolio lead:** sets outcome and evidence, links tickets to goals, checks
   subscription freshness, and keeps the remote dashboard operational.
 - **Project steward:** decides what source-board data may leave a project. For
-  Sansone, the steward retains board write authority and controls restricted cards.
+  the client project, the steward retains board write authority and controls restricted cards.
 - **Harness implementer:** claims a native development ticket from the original
   repo, runs its checks, and posts a completion receipt.
 - **Demo operator:** supplies physical hardware, room capture, and measured
@@ -38,7 +38,7 @@ those when the responsible project lead commits to a delivery window.
 | Goal | Initial chain and evidence | Source |
 |---|---|---|
 | Project harnesses use scoped dashboard boards | Project-scoped credential RPCs → Shasta repo client → cross-project denial and board round trip → project goal API. Credential files remain host-local. | [Triple loop](../guides/agent-harness-triple-loop.md), Shasta `docs/weftos-dashboard-board.md` |
-| Portfolio shows project-owned boards and goals | Keep Shasta's 60-item snapshot fresh → keep BakeOS's 30 native tickets, Sansone's 835 tickets, and FlipsOS's 102 redacted tickets current → complete FlipsOS goal storage and recurring sync. | [Triple loop](../guides/agent-harness-triple-loop.md), project board ADRs |
+| Portfolio shows project-owned boards and goals | Keep Shasta's 60-item snapshot fresh → keep BakeOS's 30 native tickets, the client project's 835 tickets, and FlipsOS's 102 redacted tickets current → complete FlipsOS goal storage and recurring sync. | [Triple loop](../guides/agent-harness-triple-loop.md), project board ADRs |
 | Restore WeftOS baseline gate and research receipts | Existing gate ticket → fix baseline failures by owner → publish gate, score, and crosscut receipts on the board and nodes. | [Roadmap](../brain/01-roadmap-and-phases.md) |
 | Deliver a measured RuView room demo | Connect gear and diagnose router-2 association → first real capture and dimensions → placement and training → first hardware-backed live frame. Recorded benchmark output stays labeled. | `the client demo repo's docs/CONTRACT.md`, `docs/LIVE-PATH-READINESS.md` |
 | Complete the confidential oil-rig study | Draft the private paper from the existing abstract → test air-curtain, RFID portal, and deck-quality JSON at the collect gate. Cog packaging waits for a vendor home. This goal is excluded from public demo material. | `docs/handoff-oil-rig.md`, `docs/plans/cognitum-cogs-deck-twin.md` |
@@ -56,8 +56,8 @@ records, not evidence that the demo or spatial deliverables have shipped.
    authority.
 2. Add project-scoped goal reads and ticket-goal links to the harness API, then
    expose goal evidence and dependencies in the dashboard UI.
-3. Maintain the live BakeOS, Sansone, and FlipsOS ticket subscriptions. Deploy
-   the FlipsOS goal model and recurring source-side sync after review. Sansone's owner-only workspace
+3. Maintain the live BakeOS, a client project, and FlipsOS ticket subscriptions. Deploy
+   the FlipsOS goal model and recurring source-side sync after review. The client's owner-only workspace
    may hold the full ticket metadata snapshot under the lead's decision; do not
    expose it in public demos or broader dashboard memberships.
 4. Build from the ready evidence tasks: WeftOS baseline gate; RuView hardware

@@ -6,7 +6,7 @@ Inputs: the private harness agent inventory (kept locally, not in this public re
 
 ## 0. The request and the constraints that shape it
 
-The request: formalize the strong Sansone agents as a WeftOS **base team**, keep
+The request: formalize the strong client-engagement agents as a WeftOS **base team**, keep
 an **agent directory** (a tab on the AI org chart) that maintains teams, apply a
 team or single agent to any project with everything it needs (skills, helpers,
 sub-agents, hooks, code changes), and route every project change through a
@@ -40,7 +40,7 @@ ChangeSet *──1 PR (the approval of record) ; Project 1──1 ProjectAgentLo
 
 - **Agent** (identity only): slug, nickname, aliases ("Gus" for Doc), role, `kind`
   (`lead_doctrine`/`specialist`/`lane`/`template`), `reports_to`, trust tier
-  (`core`/`internal`/`client`/`external`), origin project, and Sansone's status
+  (`core`/`internal`/`client`/`external`), origin project, and the source client's status
   axes: build (`built`/`partial`/`buildable`/`future`) × integration (`live`/`pending`/`illustrative`).
 - **AgentPackageVersion**: `agents/<id>/` at a weftos commit, with digest,
   license, per-host coverage (`native`/`rendered`/`unsupported`), gate status and
@@ -310,7 +310,7 @@ Each view is one component under about 150 lines. Data loads in
 | View | Component | Contents |
 |---|---|---|
 | Nav "AI org" (`agents`), with tabs like `CompaniesView` | `AgentOrgView.tsx` | **Org chart** tab: the human lead, then the lead doctrine, then members by `reports_to`, as a nested CSS grid (no chart library). Each card shows nickname, role, commit, host dots, build × integration status, project count and drift badge. Tabs: **Directory**, **Teams** |
-| Directory | `AgentDirectory.tsx`, `AgentDetail.tsx` (drawer like `TicketDrawer`) | Filters: kind, host, trust, gate. Detail: persona, pieces with risk chips, history with CHANGELOG and per-host eval receipts, projects with installed vs pinned and drift, `agent_events`. The roster comes **only from `agents/catalog.json` in weftos** and is never hand-edited (the Sansone roster-from-scan rule) |
+| Directory | `AgentDirectory.tsx`, `AgentDetail.tsx` (drawer like `TicketDrawer`) | Filters: kind, host, trust, gate. Detail: persona, pieces with risk chips, history with CHANGELOG and per-host eval receipts, projects with installed vs pinned and drift, `agent_events`. The roster comes **only from `agents/catalog.json` in weftos** and is never hand-edited (the client-engagement roster-from-scan rule) |
 | Team editor | `TeamEditor.tsx` (modal) | Lead, ordered members (gated versions only), shared skills, path-conflict check. Saving produces a `team.yaml` change that a WeftOS harness opens as a weftos PR; the dashboard keeps the draft |
 | Project Agents panel | `ProjectAgentsPanel.tsx`, in the board header when one project is filtered | Team, installed vs pinned per agent, drift, pending change sets and PRs; actions: assign team, add agent, upgrade, remove, re-plan |
 | Changes (nav, with a count badge like Companies) | `ChangeQueueView.tsx` | §3.2 |
@@ -363,18 +363,18 @@ a chosen commit (no token), validates it, and upserts agents, versions and teams
 
 ## 6. Base team proposal: `weftos-core`
 
-From the Sansone inventory (verdict `adapt`); port rights confirmed (D6). An
-agent-porter is creating them under `weftos/agents/<id>/`. Sansone had no Grok
+From the client-engagement inventory (verdict `adapt`); port rights confirmed (D6). An
+agent-porter is creating them under `weftos/agents/<id>/`. The client engagement had no Grok
 versions, and **Liber and Mo existed only on disk**, so both need capture first.
 
-| Member | Source | Generalization work | What stays in the Sansone pack |
+| Member | Source | Generalization work | What stays in the client pack |
 |---|---|---|---|
-| **Lead doctrine** (shared skill `lead-doctrine`, not a spawnable agent) | `sansone-lead` | Lift the "five ways the lead seat is wrong" and the trustworthy-lane rules into a skill loaded by the main session; keep the rule that the lead is never spawned | Handoff paths, persona names |
+| **Lead doctrine** (shared skill `lead-doctrine`, not a spawnable agent) | `client-lead` | Lift the "five ways the lead seat is wrong" and the trustworthy-lane rules into a skill loaded by the main session; keep the rule that the lead is never spawned | Handoff paths, persona names |
 | **Stew** (`board-steward`) | `product-board-steward` | Add a **board-adapter interface** (`scripts/board-adapter.mjs`) with a dashboard adapter first, over `scripts/dashboard-board.mjs` and `/api/harness/steward`. Keep the intake contract as a script, dedupe against live state, dry-run → shown plan → confirm → apply, the disposition report, and the before/after row hashing that caught the body-doubling defect | Intake manifest, card schema, people roster, board-sync script, the client ADRs |
 | **Doc** (alias Gus; `doc-gardener`) | `doc-gardener` | Port near verbatim. Paths (ADR dir, docs root, brain) become config bindings, and `citations.mjs` becomes a package script. Keep Path A/B, the queue, graft/prune/plant/correct, retraction rules and the flywheel mode **`off` → `shadow` → `on`**, shipped `off` | `.brain/` paths, the client ADRs, `docs/gates/` specifics |
 | **Liber** (`liber`) | `liber` | Make the destination table a per-project binding (for WeftOS: `docs/brain`, `MEMORY.md` file memory, ruvector namespaces, AgentDB). Keep the four marks (packages, provenance, carryability, durability) and the refusal/delegation rules. Abscission and downward flow are out | Client-deal refusal class, package registry |
 | **Mo** (`mo`) | `mo` | Only the consult/read-back contract (`MO READ-BACK`: purpose, voice, findings) and the non-blocking stand-down. **Darwin is excluded** because it is unbuilt | Card-shape gauge path |
-| **Developer / Reviewer / Tester** lanes | `sansone-{developer,reviewer,tester}` | Rename to `developer`, `reviewer`, `tester`. The gate command is a binding (`scripts/build.sh gate` for WeftOS). Keep structural tool separation: the reviewer has no edit tools, and the tester plants the defect first. CodeGraph MCP is an optional piece | Playwright/prod-DB ban wording, gate-runner path |
+| **Developer / Reviewer / Tester** lanes | `client-{developer,reviewer,tester}` | Rename to `developer`, `reviewer`, `tester`. The gate command is a binding (`scripts/build.sh gate` for WeftOS). Keep structural tool separation: the reviewer has no edit tools, and the tester plants the defect first. CodeGraph MCP is an optional piece | Playwright/prod-DB ban wording, gate-runner path |
 
 Phase 2: **Documenter** (per-PR lane for Doc Path A), **Measurer** (read-only, per-project MCP).
 
@@ -394,13 +394,13 @@ keeping its confidence grades, mandatory radius and doxxing gate. `omero-integra
 pointer that fetches code at install time; a paid dependency the local Qwen3-VL,
 Grounding DINO and DA3 stack already covers).
 
-**Sansone domain pack** (`sansone-pack`, trust `client`) stays in the Sansone
-repo, referenced by `git_url + path + commit`, and assigned only to Sansone; the
-leak check keeps it out of public weftos. Its core is the **Sansone project context
+**Client domain pack** (`client-pack`, trust `client`) stays in the client
+repo, referenced by `git_url + path + commit`, and assigned only to that client; the
+leak check keeps it out of public weftos. Its core is the **Client project context
 file** (brain paths, board schema, roster pointers, ADR list) that Stew, Doc and
 Liber read, plus `client-domain-expert`, `proforma-domain-expert`,
 `smartsheet-expert` and the measurer's MCP bindings. **Excluded**:
-`ctox-roadmap-architect` (third-party IP), `weftos-core` (ours). Future scope: a
+`client-roadmap-architect` (third-party IP), `weftos-core` (ours). Future scope: a
 **marketing team** from coreyhaines31/marketingskills (45 MIT skills with evals).
 
 ## 7. Phased build plan
@@ -430,7 +430,7 @@ Tickets go on the dashboard board (`scripts/dashboard-board.mjs create …`) cit
 | 2 | AD-15 Liber and Mo v1.0 with WeftOS bindings; AD-16 Documenter and Measurer | AD-3 |
 | 2 | AD-17: paired eval harness (with/without × host × n≥3; token and completion axes) feeding `eval_receipt` | AD-1 |
 | 2 | AD-18 scheduled plan/apply from the project harness; AD-19 verify Grok `PostToolUse` (unblocks Grok hooks) | AD-10 |
-| 3 | AD-20 Episteme pack; AD-21 Urth pack; AD-22 `sansone-pack` in the Sansone repo; AD-23 CODEOWNERS for `agents/` | AD-17 |
+| 3 | AD-20 Episteme pack; AD-21 Urth pack; AD-22 `client-pack` in the client repo; AD-23 CODEOWNERS for `agents/` | AD-17 |
 
 ## 8. Decisions (recorded 2026-09-28)
 
@@ -441,7 +441,7 @@ Tickets go on the dashboard board (`scripts/dashboard-board.mjs create …`) cit
 | D3 | Version by weftos release | No per-package version numbers; the lock records the weftos release and commit per agent; `agent_versions.version` holds the release tag |
 | D4 | "Published in repo is approval"; git records it | Merging into weftos approves an agent version; merging the project PR approves a project change. The dashboard reviews, batches and triggers; decision and batch tables removed |
 | D5 | PR-based delivery | Every project change is a PR from the project's own checkout |
-| D6 | Port rights confirmed; the agents are the user's own harness | AD-3 proceeds; client content still stays in `sansone-pack` |
+| D6 | Port rights confirmed; the agents are the user's own harness | AD-3 proceeds; client content still stays in `client-pack` |
 
 **D3 in plain terms** (three lines):
 1. A "package" is one agent's folder, `agents/<id>/`: its persona, skills, scripts, hooks, MCP servers and evals, plus `weftos-package.yaml` saying what it needs.

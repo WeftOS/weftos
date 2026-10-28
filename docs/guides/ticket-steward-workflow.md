@@ -12,7 +12,7 @@ the source change is confirmed. A subscribed item is never a write target.
 |---|---|---|
 | WeftOS and other native dashboard boards | Project-scoped harness credential and conditional ticket action | Already native; no snapshot |
 | BakeOS OS board | Native machine transition command for allowed transitions; staff approves reassignment | Host-local snapshot publisher |
-| Sansone Product Board | Existing product-board steward lane, respecting protected cards and machine-write policy | Host-local approved publisher |
+| Client product board | Existing product-board steward lane, respecting protected cards and machine-write policy | Host-local approved publisher |
 | FlipsOS native board | Native ticket store with a dedicated machine actor and revision check | Project snapshot publisher |
 | Shasta restoration board | Its own `/board` writer after an adapter exists | Restoration subscription publisher |
 
@@ -83,7 +83,7 @@ crashes at the source-write and publish boundaries, two-node races, revoked
 credentials, and a ticket edited by a person between assessment and apply.
 
 The first implementation pass establishes the ledger and conservative
-decision path on native dashboard, BakeOS, Sansone, FlipsOS, and Shasta boards.
+decision path on native dashboard, BakeOS, a client project, FlipsOS, and Shasta boards.
 Shasta's conditional source writer is staged in a project branch; its steward
 is not active until that branch is released and a project schedule runs it.
 No steward should report a project as active merely because its snapshot

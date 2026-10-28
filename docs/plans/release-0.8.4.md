@@ -123,10 +123,10 @@ the pre-run listing (memory `tests-leak-real-weftos-home`).
 The repo is public. Before pushing `target-0.8.4` or the tag:
 
 1. `scripts/agents-leak-check.sh` (agents/, with the private terms file at
-   `~/.config/weftos/leak-terms.txt`).
+   `~/.config/weftos/leak-patterns.txt`).
 2. **haiku** sweeps `git diff v0.8.4-rc.15..HEAD --stat` plus the full text of every new or
    changed `docs/` and `CHANGELOG.md` file for: `/Users/`, `/home/`, `100.` tailnet addresses,
-   `192.168.`, `10.` private ranges, tokens/keys and the private leak-terms list (client and
+   `192.168.`, `10.` private ranges, tokens/keys and the private leak-patterns list (client and
    site names), and reports file:line hits only.
 3. Fable reads the hits and fixes or drops them. Node hostnames that already appear in history
    are not new exposure but must not appear in new files either.
@@ -208,8 +208,8 @@ Fable does not run Terraform. The hand-over is a filled-in checklist, not a sket
    (`WEFTOS_RELEASE_PUBKEY_HEX` → DER prefix `302a300506032b6570032100`), record sha256s.
 2. **Console tgz**: `scripts/build.sh manager-web` from the `v0.8.4` checkout →
    `~/weavelogic.terraform/artifacts/console-0.8.4.tgz`.
-3. **Pins**: in `~/weavelogic.terraform` (worktree `tf-sansone-hub`, branch
-   `tf/sansone-dev-hub`): 34 `rc.15` occurrences across `environments/main.tf` and
+3. **Pins**: in `~/weavelogic.terraform` (worktree `tf-client-hub`, branch
+   `tf/client-dev-hub`): 34 `rc.15` occurrences across `environments/main.tf` and
    `inventory/hosts.yaml` → `0.8.4`; `pg_weftos_release_json_sha256` and each archive sha;
    strip the held weftos-cogs entries for the apply and restore after.
    The local model produces the sed list from the grep; Fable checks it against the files.

@@ -54,7 +54,7 @@ His own terse style, subject-only, no body (`git log --format='%s'`):
 
 ```
 Expose dashboard goals to WeftOS harness
-Document Sansone board export decision gate
+Document client board export decision gate
 Use host-local node identity for dashboard heartbeat
 ```
 

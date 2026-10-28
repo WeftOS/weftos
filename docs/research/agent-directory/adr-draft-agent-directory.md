@@ -80,7 +80,7 @@ Three constraints shape the answer:
    four checks: injection stripping, install pinning, license fit and brand
    removal.
 8. **Client knowledge never enters weftos.** Client domain packs, such as
-   `sansone-pack`, stay in the client repo and are referenced by
+   `client-pack`, stay in the client repo and are referenced by
    `git_url + path + commit`. The leak check enforces this.
 9. **The base team `weftos-core`** contains the lead doctrine (a skill, never a
    spawnable agent), Stew (behind a board adapter), Doc, Liber, Mo (consult

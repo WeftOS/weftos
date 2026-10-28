@@ -11,5 +11,5 @@ with `note`, and close with `done` including shipped work, commit, and test/buil
 evidence. Create new work with a stable source key and acceptance criteria.
 
 Imported Plane IDs remain references only. Project boards such as Shasta,
-BakeOS, and Sansone retain authority for their own tickets. Follow AGENTS.md
+BakeOS, and other client projects retain authority for their own tickets. Follow AGENTS.md
 and docs/guides/agent-harness-triple-loop.md for the full contract.
