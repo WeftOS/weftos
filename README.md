@@ -33,7 +33,6 @@ has the details and the platform list.
 curl -fsSL https://raw.githubusercontent.com/WeftOS/weftos/master/scripts/install.sh | sh
 
 # Homebrew (one formula per package: clawft-cli = weft, clawft-weave = weaver, weftos).
-# Not working yet: available after the next tap update.
 brew install weave-logic-ai/tap/clawft-cli
 brew install weave-logic-ai/tap/clawft-weave
 
