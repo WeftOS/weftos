@@ -4,7 +4,7 @@
 
 ### Prerequisites
 
-- **Rust 1.93+** (edition 2024) -- install via [rustup](https://rustup.rs/)
+- **Rust 1.95+** (edition 2024; `rust-version` in the root `Cargo.toml`) -- install via [rustup](https://rustup.rs/)
 - **Cargo** (ships with rustup)
 - **wasm32-unknown-unknown target** (optional, for WASM builds)
 
@@ -12,15 +12,15 @@
 
 ```bash
 git clone https://github.com/WeftOS/weftos.git
-cd clawft
-cargo build --workspace
-cargo test --workspace
+cd weftos
+scripts/build.sh native-debug
+scripts/build.sh test
 ```
 
 Verify everything passes before making any changes:
 
 ```bash
-cargo clippy --workspace -- -D warnings
+scripts/build.sh clippy
 cargo fmt --all -- --check
 ```
 
@@ -34,10 +34,10 @@ Any editor with rust-analyzer support works well. Recommended settings:
 
 ## Project Structure
 
-The workspace is organized into 9 crates with clear dependency boundaries:
+The workspace has 65 member crates (`members` in the root `Cargo.toml`). The agent-layer core is nine of them, shown below with their dependency boundaries; the WeftOS kernel layer (`clawft-kernel`, `clawft-weave`, mesh, voice, world-model, cog and leaf crates) is described in the [architecture overview](../architecture/overview.md#the-weftos-layer-v084). Use `scripts/build.sh` for builds, tests and lint; run `scripts/build.sh gate` before committing.
 
 ```
-clawft/
+weftos/
   Cargo.toml                # Workspace root
   crates/
     clawft-types/           # Core types: Config, events, errors
@@ -94,31 +94,31 @@ scripts/build.sh all             # Build everything (native + WASI + browser + U
 
 Run `scripts/build.sh --help` for the full list. The `gate` subcommand runs all checks from the phase gate protocol and reports PASS/FAIL per check.
 
-### Full Workspace Build
+### Workspace Check
 
 ```bash
-cargo build --workspace
+scripts/build.sh check
 ```
 
 ### Running Tests
 
-The workspace contains 892 tests. Run them all:
+Run the whole workspace test suite:
 
 ```bash
-cargo test --workspace
+scripts/build.sh test
 ```
 
 Run tests for a specific crate:
 
 ```bash
-cargo test -p clawft-core
-cargo test -p clawft-tools
+scripts/build.sh test clawft-core
+scripts/build.sh test clawft-tools
 ```
 
 Run a single test by name:
 
 ```bash
-cargo test -p clawft-core -- test_name
+scripts/build.sh test clawft-core --filter test_name
 ```
 
 ### Linting
@@ -126,7 +126,7 @@ cargo test -p clawft-core -- test_name
 Zero warnings are required. Clippy must pass cleanly:
 
 ```bash
-cargo clippy --workspace -- -D warnings
+scripts/build.sh clippy
 ```
 
 ### Formatting
@@ -153,9 +153,9 @@ Or run the checks individually:
 
 ```bash
 cargo fmt --all -- --check
-cargo clippy --workspace -- -D warnings
-cargo test --workspace
-cargo build --workspace
+scripts/build.sh clippy
+scripts/build.sh test
+scripts/build.sh check
 ```
 
 All commands must succeed with zero errors and zero warnings.
@@ -758,13 +758,13 @@ ctx.enable_live_llm();
 ### Debug Build
 
 ```bash
-cargo build --workspace
+scripts/build.sh native-debug
 ```
 
 ### Release Build
 
 ```bash
-cargo build --workspace --release
+scripts/build.sh native
 ```
 
 The release profile is tuned for minimal binary size:
@@ -779,8 +779,8 @@ The release profile is tuned for minimal binary size:
 
 ### Release Checklist
 
-1. All tests pass: `cargo test --workspace`
-2. No clippy warnings: `cargo clippy --workspace -- -D warnings`
+1. All tests pass: `scripts/build.sh test`
+2. No clippy warnings: `scripts/build.sh clippy`
 3. Formatting is clean: `cargo fmt --all -- --check`
 4. Release build succeeds: `cargo build --workspace --release`
 5. WASM build succeeds (if applicable): `cargo build -p clawft-wasm --target wasm32-unknown-unknown --release`

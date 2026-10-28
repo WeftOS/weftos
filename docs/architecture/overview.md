@@ -1,8 +1,46 @@
-# clawft Architecture Overview
+# WeftOS and clawft Architecture Overview
 
-clawft is a Rust AI assistant framework designed around a modular, platform-abstracted pipeline architecture. It processes messages from chat channels (Telegram, Slack, Discord) through a 6-stage LLM pipeline with tool execution, session persistence, and long-term memory. The binary is named `weft`.
+WeftOS is two layers in one workspace.
 
-The workspace contains 18 crates organized in a strict dependency hierarchy that enforces separation of concerns: shared types at the bottom, platform abstraction above them, then core engine logic, with tools, channels, services, plugins, and the CLI at the top. A WASM crate provides a browser-compatible entrypoint using only the types layer. Nine plugin crates (added in Element 04) extend the framework with git tools, cargo integration, OAuth2, AST analysis, browser automation, calendar, container management, and security auditing.
+- **clawft, the agent layer.** A Rust AI assistant framework: chat channels feed a 6-stage LLM pipeline with tool execution, session persistence and long-term memory. Its CLI is `weft` (crate `clawft-cli`).
+- **WeftOS, the kernel layer.** A node daemon (`weaver`, crate `clawft-weave`) around `clawft-kernel`: process table, service registry, the ExoChain audit log, governance, a mesh, a substrate state tree and the workload placement system. Several nodes form a mesh; each project has its own kernel.
+
+The workspace has 65 member crates (the `members` list in the root `Cargo.toml`) and 40 of them are published to crates.io; 16 more directories under `crates/` are not workspace members (mostly embedded leaf firmware). "81 crates" counts directories, not workspace members. Run `scripts/build.sh` for every build, test and lint operation (see [contributing](../development/contributing.md)).
+
+The sections from [Crate Dependency Graph](#crate-dependency-graph) down describe the original clawft agent layer: its crates, pipeline and bootstrap. They were written for the first 18 crates and the plugin crates of Element 04 and were not re-checked against the current code in the 2026-10-27 refresh, except the build configuration at the end. The kernel layer below is current to v0.8.4.
+
+---
+
+## The WeftOS layer (v0.8.4)
+
+Each row names the decision record that owns the design and says what is built. Statuses are the ADRs' own; see the [ADR index](../adr/README.md).
+
+| Area | What exists | ADR |
+|---|---|---|
+| Kernel and daemon | `clawft-kernel` boot sequence, process table, service registry, health. `weaver kernel start|stop|restart|status|liveness`. `kernel stop` escalates SIGTERM to SIGKILL and closes listeners first. | ADR-048, ADR-049 |
+| Audit chain | ExoChain: every state-changing operation is logged; BLAKE3 / SHAKE-256 hashing, Ed25519 plus ML-DSA-65 dual signing, CBOR codec. `weaver chain`. | ADR-022, ADR-028, ADR-030, ADR-043 |
+| Governance | Three-branch model with effect-algebra scoring; rules distributed across the cluster. Reached by the `governance.reload`, `governance.parent.update` and `governance.parent.push` RPC methods; there is no governance CLI. | ADR-033, ADR-034, ADR-092 |
+| Mesh | QUIC primary transport, Noise encryption, SWIM failure detection, LWW-CRDT process table, Ed25519 node identity. The machine mesh service (`weaver mesh`) holds bindings, journal and peers. | ADR-024 to ADR-027, ADR-039, ADR-040, ADR-103 |
+| Weave topology | Roles, per-project kernels, user daemon (`--profile user`) and machine mesh service; `weaver project`, `weaver topology`. Phases 0 to 3 shipped in 0.8.2. | ADR-103, ADR-108 |
+| Workload placement | One governed placement layer for cogs, inference and other workloads over an open capability vocabulary. `weaver workload`. | ADR-099 |
+| Cog workload kind | Cogs are placed as workloads with a host contract (`weftos.cog.v1` types in `crates/weftos-cog-protocol`) and an ingest bridge. | ADR-100, ADR-105, ADR-106 |
+| Inference workload kind | Local model hosting migrated onto placement. `weaver model`. | ADR-101 |
+| Cog data plane | `cogbus` broker in the node daemon (`crates/weftos-cogbus`, `weaver cogbus`): topics `<kind>/<source_id>`, readings over a Unix socket, streams in shared-memory rings, blobs by BLAKE3 handle, per-instance tokens, governed publish and subscribe, `[mesh_limits]`. Shipped in 0.8.4 (B1 to B6). | ADR-122 |
+| Mesh resources and exposures | `weaver expose` and `weaver resource`: one registry of exposed APIs and harnesses; the local off switch always wins. | ADR-120 (Proposed) |
+| Tailnet router | `weaver route`: one HTTPS front door per dev machine, projects by path, allowlists. R1 and R2 shipped in rc.3 and rc.4. | ADR-116 (Proposed) |
+| AI org and versions | `weaver versions`, `clawft-versions`: append-only version index with content digests for agents, teams and cogs. | ADR-121 |
+| Agent teams | Team spec v1 and project-scoped apply; the ADR lists which phases are built. | ADR-112 |
+| Gateway health and tokens | Tiered `/api/health`, daemon-issued tokens (`weft token`), `/mcp` in the gateway. The `/playground` page is not built. | ADR-102 (partly implemented) |
+| Spatial and world model | BVH-on-RVF spatial index (`clawft-bvh`), LeWM world-model crates, sensor pipeline. | ADR-056, ADR-088, ADR-093 |
+| Voice | Native voice crates (`clawft-voice-*`); `weft voice` exists only in a build with the `voice` feature. | ADR-053, ADR-061, ADR-068 (Proposed) |
+
+### Cogs live in a separate repository
+
+Since Cogs extraction Phase B (0.8.4), the Cogs product lives in [WeftOS/weftos-cogs](https://github.com/WeftOS/weftos-cogs): the Cog Host, the cog repo tooling, the hardware and cog catalog, sensor guides and the cogs themselves. WeftOS consumes three crates from it, `cog-sources`, `cog-repo` and `cog-market`, as git dependencies pinned by commit to release v0.1.4 (`[workspace.dependencies]` in the root `Cargo.toml`). The boundary on the WeftOS side is the `weftos-cog-protocol` crate (`weftos.cog.v1` wire types), the cog workload kind (ADR-100) and the licence proxy (ADR-106, `crates/weft-licence`). Cog decisions are numbered COG-NNN in the cogs repo; ADR-104, ADR-105, ADR-106 and ADR-107 name their COG successors. See [sensor-node.md](sensor-node.md) and [docs/cogs](../cogs/).
+
+### GUI
+
+The native GUI is egui only. `crates/clawft-gui-egui` builds the `weft-gui-egui` binary and a WASM build. The Tauri desktop shells and the React, Zustand and xterm.js stack were removed (rc.15 changelog: "The Tauri desktop shells. egui is the native GUI."); ADR-005, ADR-007, ADR-013 and ADR-038 are Superseded by the egui shell. The browser build (`scripts/build.sh browser`, ADR-083) and the dashboard are separate surfaces.
 
 ---
 
@@ -490,7 +528,7 @@ Config discovery chain: `CLAWFT_CONFIG` env var -> `~/.clawft/config.json` -> `~
 ## Build Configuration
 
 - Rust edition: 2024
-- Minimum Rust version: 1.93
+- Minimum Rust version: 1.95 (`rust-version` in the root `Cargo.toml`; ADR-037 records the original 1.93 decision)
 - License: MIT OR Apache-2.0
 - Release profile: `opt-level = "z"`, LTO, stripped symbols, single codegen unit, abort on panic
 - WASM release profile: inherits release with `opt-level = "z"`

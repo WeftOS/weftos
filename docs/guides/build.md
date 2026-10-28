@@ -4,7 +4,7 @@ This guide covers every way to build the `weft` binary and the `clawft-wasm` mod
 
 ## Prerequisites
 
-- **Rust toolchain**: Edition 2024, minimum `rustc 1.93` (see `rust-version` in workspace `Cargo.toml`)
+- **Rust toolchain**: Edition 2024, minimum `rustc 1.95` (see `rust-version` in workspace `Cargo.toml`)
 - **Cargo**: Ships with rustup
 - Optional: `cross` for cross-compilation, `binaryen` for `wasm-opt`, `wasm-tools` for component model support
 
@@ -16,7 +16,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 ## Workspace Structure
 
-ClawFT is a Cargo workspace with 9 crates:
+The root `Cargo.toml` lists 65 workspace member crates (40 published to crates.io). The table shows the nine crates that make up the `weft` binary and the WASM entrypoint. The rest are the WeftOS kernel layer (`clawft-kernel`, `clawft-weave` which builds `weaver`, mesh, voice, world-model and cog crates); see [the architecture overview](../architecture/overview.md#the-weftos-layer-v084). Cogs themselves build in [WeftOS/weftos-cogs](https://github.com/WeftOS/weftos-cogs), which WeftOS consumes by pinned git rev.
 
 | Crate | Purpose | Optional |
 |-------|---------|----------|
@@ -39,9 +39,9 @@ The `scripts/build.sh` script wraps all build workflows behind simple subcommand
 ```bash
 scripts/build.sh native          # Release CLI binary
 scripts/build.sh native-debug    # Debug build (fast)
-scripts/build.sh wasi            # WASM for WASI (wasm32-wasip1)
+scripts/build.sh wasi            # WASM for WASI (wasm32-wasip2)
 scripts/build.sh browser         # WASM for browser (wasm32-unknown-unknown)
-scripts/build.sh ui              # React frontend (tsc + vite)
+scripts/build.sh ui              # React dashboard frontend (tsc + vite); skips when clawft-ui/ is absent
 scripts/build.sh ui-docker       # Multi-stage clawft-ui Docker image (WEFT-317)
 scripts/build.sh ui-e2e          # Run the clawft-ui Playwright E2E suite (WEFT-314)
 scripts/build.sh all             # Build everything
