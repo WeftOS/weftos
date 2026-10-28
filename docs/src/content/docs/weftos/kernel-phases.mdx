@@ -1,223 +1,65 @@
 ---
 title: "Kernel Phases (K0-K6)"
-description: "Complete overview of the six kernel development phases, their status, components, test counts, and dependency graph."
+description: "The kernel build order K0 to K6, what each phase delivered by 0.8.4, and where later work is tracked."
 ---
 
-WeftOS is built in incremental phases (K0 through K6). Each phase adds a layer of OS capability to the kernel. K0 through K2b are complete with 373+ passing tests. K3 through K6 have types and traits implemented with Phase 1 logic complete.
+WeftOS was built in incremental phases (K0 through K6). Each phase added a layer of OS capability to the kernel, and the module headers in `crates/clawft-kernel/src/` still carry the phase labels (for example `lib.rs`: `wasm-sandbox` is "Phase K3", `containers` is "Phase K4", `ecc` is "Phase K3c"). The phases are the original build order. Work since 0.8.0 is organized by ADR and card instead, so this page maps the phases to what is in the 0.8.4 code and points at where newer work is described.
 
-## Phase Summary
+Earlier versions of this page carried per-phase test counts (373+, 479, 560+). Those figures were not recomputed and are removed; run `scripts/build.sh test clawft-kernel` for current counts.
 
-| Phase | Name | Status | Tests | Key Deliverables |
-|-------|------|--------|------:|------------------|
-| K0 | Foundation | Complete | 45+ | Boot state machine, event logging, config, errors |
-| K1 | Process and Supervision | Complete | 80+ | PID allocation, process table, supervisor, RBAC |
-| K2 | IPC and Communication | Complete | 130+ | Message envelopes, A2A routing, pub/sub, cron, health, services |
-| K2b | Hardening | Complete | 30+ | Chain-logged lifecycle, signal handling, DashMap fixes |
-| ExoChain | Cryptographic Audit | Complete | 60+ | Hash chain, resource tree, gate backends |
-| K3 | WASM Sandbox | Complete | -- | Wasmtime runner, fuel metering, 27-tool catalog |
-| K3c | ECC Cognitive Substrate | Complete | 83 | Causal DAG, cognitive tick, HNSW, impulse queue |
-| K4 | Containers | Complete | -- | Container lifecycle, config, health propagation |
-| K5 | App Framework | Complete | -- | Manifest parsing, app lifecycle, agent spawning |
-| K6 | Mesh Networking | Phase 1 Complete | 133 | Transport traits, discovery, cross-node IPC, replication |
+## Phase summary
 
-**Total test count**: 560+ (479 baseline + 83 ECC).
+| Phase | Name | State at 0.8.4 | Where it lives |
+|-------|------|----------------|----------------|
+| K0 | Foundation | In the code, in use | `boot.rs`, `console.rs`, `config.rs`, `error.rs`. See [Boot Sequence](/docs/weftos/boot-sequence) |
+| K1 | Process and supervision | In the code, in use | `process.rs`, `supervisor.rs`, `capability.rs`. See [Process Table](/docs/weftos/process-table), [Capabilities](/docs/weftos/capabilities). Restart strategies need the off-by-default `os-patterns` feature ([Self-Healing](/docs/weftos/self-healing)) |
+| K2 | IPC and communication | In the code, in use | `ipc.rs`, `a2a.rs`, `topic.rs`, `agent_loop.rs`, `cron.rs`, `health.rs`, `service.rs`. See [IPC](/docs/weftos/ipc) |
+| K2b | Hardening | In the code | Chain-logged IPC events, SIGTERM and SIGHUP handling in the daemon, governance gate wired into the router |
+| ExoChain | Cryptographic audit | In the code, default feature | `chain.rs`, `tree_manager.rs`, `gate.rs`. See [ExoChain](/docs/weftos/exochain) |
+| K2.1 | Symposium changes | `SpawnBackend` exists and only `Native` spawns; `ServiceEntry` and `MessageTarget::Service` exist | `supervisor.rs`, `ipc.rs` |
+| K3 | WASM sandbox | Runner and 36-spec catalog exist; wasmtime is behind the off-by-default `wasm-sandbox` feature | `wasm_runner/`. See [WASM Sandbox](/docs/weftos/wasm-sandbox) |
+| K3c | ECC cognitive substrate | In the code, default feature `ecc` | `causal.rs`, `cognitive_tick.rs`, `hnsw_service.rs` and others. See [ECC](/docs/weftos/ecc) |
+| K4 | Containers | Types and registry only; the manager has no engine and refuses to start containers outside simulation. Container workloads run through `workload_runtime` | `container.rs`. See [Containers](/docs/weftos/containers) |
+| K5 | App framework | In the code | `app.rs`, `weaver app`. See [App Framework](/docs/weftos/app-framework) |
+| K6 | Mesh networking | Well past the original Phase 1: TCP, WebSocket and QUIC transports, Noise sessions, admission, discovery (mDNS, Kademlia), liveness, artifact transfer, leaf devices | `mesh*.rs` (54 non-test modules). See [Mesh Networking](/docs/weftos/mesh-networking) |
 
-## K0: Kernel Foundation
+## What is not covered by the K-phases
 
-**Status**: COMPLETE (45+ tests)
+These were added after the phase plan and are tracked by ADR:
 
-Establishes the kernel lifecycle with a boot state machine and structured event logging.
+- Governed workload placement and the cog workload kind (ADR-099, ADR-100), the Seed licence proxy (ADR-106), mesh resources and exposures (ADR-120), the AI org (ADR-121) and the cog data plane broker `cogbus` (ADR-122): see the platform pages under [Platform](/docs/weftos/platform).
+- Weave project topology and per-project kernels (ADR-103).
+- Spatial and BVH indexing (ADR-056).
 
-| Component | File | Tests | Description |
-|-----------|------|------:|-------------|
-| Kernel boot state machine | `boot.rs` | 14 | `Booting -> Running -> Halted` lifecycle |
-| Boot event logging | `console.rs` | 12 | `BootEvent`, `BootPhase`, `KernelEventLog` |
-| Configuration extension | `config.rs` | 8 | `KernelConfigExt` trait for config access |
-| Error types | `error.rs` | 11 | `KernelError` enum + `Display` implementations |
+## K2.1 symposium decisions
 
-K0 wraps `AppContext<P>` in a `Kernel<P: Platform>` struct with structured startup and shutdown. The `KernelState` enum (Booting, Running, ShuttingDown, Halted) manages the lifecycle state machine.
+The K2 Symposium (22 decisions, 10 approved changes) produced these breaking changes and quick wins, still visible in the code:
 
-## K1: Process and Supervision
+| Decision | Change | Evidence |
+|----------|--------|----------|
+| D3 | `SpawnBackend` enum on `SpawnRequest` | `supervisor.rs`: only `None` and `Native` spawn |
+| D11 | Ed25519 plus ML-DSA-65 dual signing | `chain.rs`: ML-DSA key is optional |
+| D14 | `SpawnBackend::Tee` variant | `supervisor.rs`: returns `BackendNotAvailable` |
+| D1 | `ServiceEntry` as a registry concept | `service.rs` |
+| D19 | `MessageTarget::Service(name)` routing | `ipc.rs` |
 
-**Status**: COMPLETE (80+ tests)
-
-Introduces PID-based agent tracking, lifecycle supervision, and the capability-based security model.
-
-| Component | File | Tests | Description |
-|-----------|------|------:|-------------|
-| Process table | `process.rs` | 22 | PID allocation, `ProcessState` state machine |
-| Agent supervisor | `supervisor.rs` | 35 | Spawn/stop/restart with resource limits |
-| Capability model | `capability.rs` | 24 | RBAC, `IpcScope`, `SandboxPolicy`, `ResourceLimits` |
-
-The process table uses `DashMap<Pid, ProcessEntry>` for lock-free concurrent access. Each process tracks state (Starting, Running, Suspended, Stopping, Exited), capabilities, and resource usage.
-
-## K2: IPC and Communication
-
-**Status**: COMPLETE (130+ tests)
-
-Adds typed inter-process communication with message envelopes, agent-to-agent routing, pub/sub topics, and system services.
-
-| Component | File | Tests | Description |
-|-----------|------|------:|-------------|
-| Kernel IPC | `ipc.rs` | 18 | `KernelMessage` envelopes, `MessageTarget`, `MessagePayload` |
-| A2A routing | `a2a.rs` | 28 | Per-agent inboxes with capability checks |
-| Topic pub/sub | `topic.rs` | 14 | `TopicRouter` with subscriptions |
-| Agent work loop | `agent_loop.rs` | 22 | Command processing, gate integration |
-| Cron scheduler | `cron.rs` | 12 | Job registration, tick handling |
-| Health system | `health.rs` | 10 | Aggregated health checks |
-| Service registry | `service.rs` | 16 | Named lifecycle management |
-
-K2 establishes the internal API surface. The A2ARouter manages per-agent inboxes using `DashMap`, with capability-based access control on every send.
-
-## K2b: Hardening
-
-**Status**: COMPLETE (30+ tests)
-
-Hardens K0-K2 with chain-logged lifecycle events, signal handling, and concurrency fixes.
-
-| Component | Area | Tests | Description |
-|-----------|------|------:|-------------|
-| Chain-logged lifecycle | `agent_loop.rs` | 8 | `ipc.recv`, `ipc.ack`, `agent.spawn` events |
-| Signal-based stop/restart | `daemon.rs` | 4 | SIGTERM/SIGHUP handlers |
-| CLI display | `commands/` | 6 | `agent inspect`, `chain detail` output |
-| DashMap deadlock fix | `a2a.rs` | 3 | Concurrent access safety |
-| GovernanceGate | `gate.rs` | 7 | Governance-to-GateBackend adapter |
-| Gate wiring | `daemon.rs` | 2 | GovernanceGate replaces None |
-
-## K2.1: Symposium Changes
-
-**Status**: PENDING
-
-Breaking changes and quick wins from the K2 Symposium (22 decisions, 10 approved changes):
-
-| Decision | Change | Description |
-|----------|--------|-------------|
-| D3 | C1 | `SpawnBackend` enum added to `SpawnRequest` |
-| D11 | C6 | Post-quantum dual signing (Ed25519 + ML-DSA-65) |
-| D14 | C8 | `SpawnBackend::Tee` variant (returns `BackendNotAvailable`) |
-| D1 | -- | `ServiceEntry` as first-class registry concept |
-| D19 | -- | Breaking IPC changes: `MessageTarget::Service(name)` routing |
-
-## ExoChain Subsystem
-
-**Status**: COMPLETE (60+ tests)
-
-Provides an append-only hash-linked event log with SHAKE-256 integrity, Ed25519 signing, and a resource tree facade.
-
-| Component | File | Tests | Description |
-|-----------|------|------:|-------------|
-| Hash chain manager | `chain.rs` | 28 | SHAKE-256, Ed25519, witness chains |
-| Resource tree facade | `tree_manager.rs` | 18 | Atomic tree+chain+mutation ops |
-| Gate backends | `gate.rs` | 14 | `CapabilityGate`, `GovernanceGate` |
-
-## K3: WASM Sandbox
-
-**Status**: COMPLETE (types, Wasmtime runner, fuel metering, sandbox tests pass)
-
-**File**: `wasm_runner.rs` (~1,639 lines)
-
-Key deliverables:
-- 27-tool catalog with `builtin_tool_catalog()`
-- `WasmToolRunner` with fuel metering, memory limits, timeout config
-- `WasmSandboxConfig` with configurable limits
-- Tool lifecycle: Build -> Deploy -> Execute -> Version -> Revoke
-- ExoChain audit logging for all lifecycle events
-
-K3 Symposium scorecard: 8.1/10 overall, rated "Ready for K4".
-
-## K3c: ECC Cognitive Substrate
-
-**Status**: COMPLETE (83 tests)
-
-Adds the Ephemeral Causal Cognition (ECC) substrate behind the `ecc` feature flag.
-
-| Component | File | Tests | Description |
-|-----------|------|------:|-------------|
-| Causal DAG | `causal.rs` | 22 | Typed/weighted edges, BFS traversal |
-| Cognitive tick | `cognitive_tick.rs` | 20 | Adaptive interval, drift detection |
-| Cross-references | `crossref.rs` | 12 | UniversalNodeId (BLAKE3), bidirectional store |
-| Calibration | `calibration.rs` | 10 | Boot-time benchmarking, p50/p95 |
-| HNSW service | `hnsw_service.rs` | 11 | Thread-safe HnswStore wrapper |
-| Impulse queue | `impulse.rs` | 8 | HLC-sorted ephemeral causal events |
-
-See [ECC](/docs/weftos/ecc) for the full deep dive.
-
-## K4: Containers
-
-**Status**: COMPLETE (config validation, lifecycle management, health propagation)
-
-**File**: `container.rs` (~600 lines)
-
-Key components:
-- `ContainerManager` with start/stop/health lifecycle
-- `ContainerConfig` with image, ports, volumes, env, restart policy
-- `ContainerState` state machine: `Created -> Running -> Stopped -> Failed`
-- Health check integration with HealthSystem
-
-## K5: App Framework
-
-**Status**: COMPLETE (manifest parsing, install/start/stop lifecycle, agent spawning)
-
-**File**: `app.rs` (~980 lines)
-
-Key components:
-- `AppManager` with install/start/stop/uninstall methods
-- `AppManifest` parsed from `weftapp.toml`
-- `AgentSpec`, `ServiceSpec`, `ToolSpec` for component definitions
-- `AppState` machine: `Installed -> Starting -> Running -> Stopping -> Stopped -> Failed`
-
-## K6: Mesh Networking
-
-**Status**: Phase 1 COMPLETE (types, traits, TCP/WS transport, 136 tests)
-
-3,543 lines across 14 new files implementing all types, traits, protocol messages, and in-process logic. See [Mesh Networking](/docs/weftos/mesh-networking) for the full deep dive.
-
-## Phase Dependency Graph
+## Phase dependency graph
 
 ```
-K0 (Foundation)
- |
- v
-K1 (Process + Supervision)
- |
- v
-K2 (IPC + Communication) -----> ExoChain (chain, tree, gate)
- |                                    |
- v                                    v
-K2b (Hardening) <----- chain logging integration
- |
- v
-K3 (WASM Sandbox) + K3c (ECC)
- |
- v
-K4 (Containers)
- |
- v
-K5 (App Framework + Clustering)
- |
- v
-K6 (Mesh Networking + Replication)
+K0 Foundation
+ -> K1 Process + supervision
+ -> K2 IPC + communication  -> ExoChain (chain, tree, gate)
+ -> K2b Hardening
+ -> K3 WASM sandbox + K3c ECC
+ -> K4 Containers
+ -> K5 App framework + clustering
+ -> K6 Mesh networking + replication
 ```
 
-## Integration Checklist
+## Integration checklist
 
-Every new K-phase must satisfy these requirements:
+Every new module should satisfy the checklist in the [Kernel Developer Guide](/docs/weftos/kernel-guide). This page used to show it with every box ticked; that was a status claim nobody re-verified per phase, so it is not repeated here.
 
-- [x] Chain logging for all state changes
-- [x] Tree registration in standard namespace
-- [x] Gate check before privileged operations
-- [x] Tests with chain verification
-- [x] CLI commands in `clawft-weave`
-- [x] Feature flag if external dependency
-- [x] Documentation in `docs/weftos/`
+## Implementation priority (K2 Symposium D21)
 
-## Implementation Priority
-
-Ordering per K2 Symposium decision D21: K3 -> K4 -> K5 -> K6, with iteration. K3-K6 are a development cycle, not a strict waterfall.
-
-| Priority | Phase | Estimated Effort | Key Dependency |
-|----------|-------|-----------------|----------------|
-| 1 | K3 WASM sandbox + ServiceApi | ~25h | wasmtime crate |
-| 2 | K4 Containers + ChainAnchor | ~20h | Docker/Podman on host |
-| 3 | K5 App framework + Clustering | ~35h | K3/K4 complete |
-| 4 | K6 Deep Networking + Replication | ~40h | SPARC spec, transport design |
+Ordering was K3, then K4, K5, K6, with iteration; the phases were a development cycle, not a strict waterfall. The effort estimates that used to be listed here (25, 20, 35 and 40 hours) were planning figures from 2026-03 and are dropped.

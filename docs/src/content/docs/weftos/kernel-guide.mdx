@@ -28,57 +28,41 @@ scripts/build.sh gate
 
 ## Testing
 
+Use `scripts/build.sh test` (it runs nextest when installed, else `cargo test`, and takes package names to narrow the scope):
+
 ```bash
-# Full workspace tests
-scripts/build.sh test
-
-# Kernel only (default features)
-cargo test -p clawft-kernel
-
-# Kernel + exochain (479 tests)
-cargo test -p clawft-kernel --features exochain
-
-# Kernel + ECC (562 tests)
-cargo test -p clawft-kernel --features "exochain,ecc"
-
-# Kernel + mesh (133 additional tests)
-cargo test -p clawft-kernel --features "mesh"
-
-# All features
-cargo test -p clawft-kernel --features "exochain,cluster,wasm-sandbox,containers,mesh,ecc"
+scripts/build.sh test                    # whole workspace
+scripts/build.sh test clawft-kernel      # one package
 ```
 
-## Project Structure
+Raw `cargo test` is for debugging a specific failure with flags the script does not expose. Feature combinations (`crates/clawft-kernel/Cargo.toml`, `[features]`):
+
+```bash
+cargo test -p clawft-kernel                                  # default features
+cargo test -p clawft-kernel --no-default-features --features native
+cargo test -p clawft-kernel --features "wasm-sandbox,containers,os-patterns"
+```
+
+The default features are `native`, `exochain`, `cluster`, `tilezero`, `ecc`, `mesh`, `quic` and `workload-runtime`. `wasm-sandbox`, `containers` and `os-patterns` are off by default. Earlier versions of this page quoted per-feature test counts; they were out of date and are not kept.
+
+## Project structure
+
+The kernel crate has 224 entries under `src/` (see [Kernel Architecture](/docs/weftos/architecture) for the module groups and the feature each needs). The files you will touch most:
 
 ```
-crates/clawft-kernel/
-  src/
-    lib.rs           -- Crate root, module declarations, re-exports
-    boot.rs          -- Kernel<P> struct, boot sequence (K0)
-    process.rs       -- ProcessTable, PID allocation (K1)
-    supervisor.rs    -- AgentSupervisor, SpawnRequest (K1)
-    capability.rs    -- AgentCapabilities, RBAC (K1)
-    ipc.rs           -- KernelMessage, MessageTarget (K2)
-    a2a.rs           -- A2ARouter (K2)
-    topic.rs         -- TopicRouter (K2)
-    agent_loop.rs    -- kernel_agent_loop() (K2)
-    service.rs       -- ServiceRegistry, SystemService (K2)
-    chain.rs         -- ChainManager (exochain)
-    tree_manager.rs  -- TreeManager (exochain)
-    gate.rs          -- GateBackend (exochain)
-    governance.rs    -- GovernanceEngine (always compiled)
-    wasm_runner.rs   -- WasmToolRunner, tool catalog (K3)
-    container.rs     -- ContainerManager (K4)
-    app.rs           -- AppManager (K5)
-    cluster.rs       -- ClusterMembership (K6)
-    mesh*.rs         -- 14 mesh modules (K6, mesh feature)
-    causal.rs        -- CausalGraph (K3c, ecc)
-    cognitive_tick.rs -- CognitiveTick (K3c, ecc)
-    crossref.rs      -- CrossRefStore (K3c, ecc)
-    calibration.rs   -- EccCalibration (K3c, ecc)
-    hnsw_service.rs  -- HnswService (K3c, ecc)
-    impulse.rs       -- ImpulseQueue (K3c, ecc)
-  Cargo.toml
+crates/clawft-kernel/src/
+  lib.rs           crate root: module declarations and re-exports
+  boot.rs          Kernel<P>, boot and shutdown
+  process.rs       ProcessTable
+  supervisor.rs    AgentSupervisor, SpawnRequest, restart strategies (os-patterns)
+  capability.rs    AgentCapabilities, CapabilityChecker
+  ipc.rs, a2a.rs, topic.rs, agent_loop.rs   messaging
+  service.rs       ServiceRegistry, SystemService, ServiceApi, adapters
+  chain.rs, tree_manager.rs, gate.rs        ExoChain (exochain)
+  governance.rs    GovernanceEngine (always compiled)
+  mesh*.rs         mesh transport and admission (mesh)
+  workload_*/      workload placement runtime and governance
+  causal.rs, cognitive_tick.rs, hnsw_service.rs   ECC (ecc)
 ```
 
 ## Adding a New Kernel Module
@@ -119,7 +103,7 @@ Every new module should satisfy:
 - [ ] Tests (aim for >80% coverage)
 - [ ] CLI commands in `clawft-weave` (if user-facing)
 - [ ] Feature flag if external dependency
-- [ ] Documentation in `docs/weftos/`
+- [ ] Documentation: a page under `docs/src/content/docs/weftos/` (the site) and, for operator-facing behaviour, `docs/guides/`
 
 ## Common Patterns
 
@@ -128,7 +112,7 @@ Every new module should satisfy:
 Implement the `SystemService` trait and register during boot:
 
 ```rust
-use crate::service::SystemService;
+use crate::service::{ServiceType, SystemService};
 use crate::health::HealthStatus;
 
 pub struct MyService { /* ... */ }
@@ -136,9 +120,10 @@ pub struct MyService { /* ... */ }
 #[async_trait]
 impl SystemService for MyService {
     fn name(&self) -> &str { "my-service" }
-    async fn start(&self) -> Result<(), Box<dyn std::error::Error>> { Ok(()) }
-    async fn stop(&self) -> Result<(), Box<dyn std::error::Error>> { Ok(()) }
-    fn health_check(&self) -> HealthStatus { HealthStatus::Healthy }
+    fn service_type(&self) -> ServiceType { ServiceType::Core }
+    async fn start(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> { Ok(()) }
+    async fn stop(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> { Ok(()) }
+    async fn health_check(&self) -> HealthStatus { HealthStatus::Healthy }
 }
 ```
 
@@ -147,7 +132,7 @@ impl SystemService for MyService {
 ```rust
 #[cfg(feature = "exochain")]
 {
-    let event = chain.append(
+    let event = chain.append(   // ChainManager methods take &self
         "my-module",           // source
         "my-module.action",    // kind
         Some(json!({           // payload
@@ -166,7 +151,7 @@ if let Some(gate) = &self.gate {
     match gate.check(&agent_id, "tool.my_tool", &context) {
         GateDecision::Permit { .. } => { /* proceed */ }
         GateDecision::Deny { reason, .. } => {
-            return Err(KernelError::PermissionDenied(reason));
+            return Err(KernelError::GovernanceDenied(reason));
         }
         GateDecision::Defer { reason } => { /* queue for review */ }
     }
@@ -195,7 +180,7 @@ impl MyRegistry {
 ## Feature Flag Guidelines
 
 - Use feature gates for external dependencies (wasmtime, docker, quinn, snow)
-- Keep the default build lean (no mesh, no WASM, no containers)
+- Keep what is off by default off (`wasm-sandbox`, `containers`, `os-patterns`, `onnx-embeddings`); the default set already includes `exochain`, `ecc`, `mesh` and `quic`
 - All types should compile unconditionally where possible
 - Feature gates control runtime behavior, not type definitions
 - One feature flag per subsystem (not per-module)
@@ -206,16 +191,19 @@ Kernel commands are exposed through the `weaver` binary (`clawft-weave`):
 
 ```bash
 weaver kernel start        # Boot the kernel daemon
-weaver kernel stop         # Graceful shutdown
+weaver kernel stop         # Graceful shutdown (--force escalates TERM to KILL)
 weaver kernel status       # Show kernel state
-weaver kernel logs         # Display boot events
-weaver agent list          # List all processes
+weaver kernel logs         # Boot and event log snapshot
+weaver kernel services     # Registered services and health
+weaver kernel ps           # Process listing
+weaver agent list          # List agents
 weaver agent inspect <pid> # Show process details
 weaver agent spawn <type>  # Spawn a new agent
 weaver chain status        # ExoChain status
 weaver chain verify        # Verify chain integrity
-weaver health              # Health check summary
 ```
+
+The complete list is the generated [CLI reference](/docs/clawft/cli-reference).
 
 ## Debugging
 
@@ -226,6 +214,6 @@ RUST_LOG=clawft_kernel=debug cargo test -p clawft-kernel
 # Run a specific test
 cargo test -p clawft-kernel test_name -- --nocapture
 
-# Check for deadlocks (DashMap)
+# Trace A2A routing
 RUST_LOG=clawft_kernel::a2a=trace cargo test -p clawft-kernel
 ```
