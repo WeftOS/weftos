@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Staging area for changes after the 0.8.4 release.
 
+### Added
+- **Site facts.** `scripts/gen-facts.mjs` (`scripts/build.sh gen-facts`) derives the headline
+  numbers (version, crates, published crates, ADRs, CLI commands, cogs, hardware catalog) into
+  `docs/src/public/facts.json` and the README facts block; `--check` runs in CI
+  (`site-facts.yml`), and after each release the file is attached to the release and the
+  `WeftOS/.github` org profile is told to refresh.
+- **Landing pages.** A new docs-site home page, and the `WeftOS/.github` organisation profile.
+- **Platform docs.** Pages for cogs, cogbus, placement, mesh and pairing, exposures, the tailnet
+  router, the chief of staff, the AI org, licensing, voice, and update and signing; generated
+  CLI, RPC and config references with drift checks (`gen-cli-reference`, `gen-rpc-reference`,
+  `gen-config-reference`); READMEs for the 40 published crates.
+
+### Changed
+- The root README is rewritten for 0.8.4; cog-owned docs now point at `WeftOS/weftos-cogs`.
+
+### Removed
+- The generated rustdoc pages under the docs site (`/api/`); API docs are on docs.rs.
+
 ## [0.8.4] - 2026-10-27
 
 The stable release of the 0.8.4 line: everything in rc.1 to rc.15 (the per-rc entries below have
