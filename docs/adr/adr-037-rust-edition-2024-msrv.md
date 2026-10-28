@@ -2,6 +2,7 @@
 
 **Date**: 2026-04-03
 **Status**: Accepted
+**Updated**: 2026-10-27. The workspace `rust-version` is now `1.95` (root `Cargo.toml`, `[workspace.package]`); the toolchain pin moved from 1.93 to 1.95 on 2026-10-02. The text below records the decision as taken on 2026-04-03 with MSRV 1.93.
 **Deciders**: Project lead (workspace Cargo.toml configuration)
 
 ## Context

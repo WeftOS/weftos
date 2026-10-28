@@ -1,6 +1,8 @@
 # Architecture Decision Records
 
-This directory contains Architecture Decision Records (ADRs) for the WeftOS + clawft project, following the MADR 3.0 format. All decisions were derived from the Sprint 11 Symposium (2026-03-27) across 9 tracks plus supporting analysis documents.
+This directory contains Architecture Decision Records (ADRs) for the WeftOS + clawft project, following the MADR 3.0 format. ADR-001 to ADR-023 came out of the Sprint 11 Symposium (2026-03-27) and its supporting analysis; later records were written as decisions were taken. The index below lists every `adr-*.md` file in this directory (123 files, ADR-001 to ADR-124).
+
+ADR-123 has no file. The number is reserved by a card on the dashboard board; do not reuse it. Each Status column cell is copied from the ADR's own header, so the ADR is authoritative if the two ever differ.
 
 ## ADR Index
 
@@ -43,7 +45,7 @@ This directory contains Architecture Decision Records (ADRs) for the WeftOS + cl
 | [ADR-035](adr-035-serviceapi-layered-protocol.md) | ServiceApi layered protocol | Accepted | Architecture | K3 |
 | [ADR-036](adr-036-hierarchical-tool-registry.md) | Hierarchical tool registry | Accepted | Architecture | K3 |
 | [ADR-037](adr-037-rust-edition-2024-msrv.md) | Rust edition 2024 / MSRV policy | Accepted | Release | Sprint 14 |
-| [ADR-038](adr-038-tauri-desktop-shell.md) | Tauri for desktop shell | Accepted | GUI | GUI Track |
+| [ADR-038](adr-038-tauri-desktop-shell.md) | Tauri for desktop shell | Superseded by egui shell (2026-04-28) | GUI | GUI Track |
 | [ADR-039](adr-039-swim-failure-detection.md) | SWIM failure detection | Accepted | Architecture | K6 |
 | [ADR-040](adr-040-lww-crdt-process-table.md) | LWW-CRDT for process table | Accepted | Architecture | K6 |
 | [ADR-041](adr-041-chainanchor-trait.md) | ChainAnchor trait | Accepted | Architecture | K4 |
@@ -55,6 +57,9 @@ This directory contains Architecture Decision Records (ADRs) for the WeftOS + cl
 | [ADR-047](adr-047-self-calibrating-tick.md) | Self-calibrating cognitive tick | Accepted | Architecture | DEMOCRITUS |
 | [ADR-048](adr-048-kernel-phase-responsibilities.md) | Kernel phase (K-level) responsibilities | Accepted | Architecture | Sprint 14 (formerly ADR-020 — renumbered 2026-04-28 / WEFT-140) |
 | [ADR-049](adr-049-weftos-kernel.md) | WeftOS kernel architecture overview | Accepted | Architecture | K0 (formerly `architecture/adr-028-weftos-kernel.md` — renumbered + relocated 2026-04-28 / WEFT-140) |
+| [ADR-050](adr-050-escalation-security-final-review.md) | Escalation security model — CONS-003 final review | Accepted | Security | Sprint 14 consolidation (CONS-003) |
+| [ADR-051](adr-051-clawft-plugin-crates-fate.md) | Fate of the eight orphaned `clawft-plugin-*` crates | Accepted | Architecture | Plugin crate audit |
+| [ADR-052](adr-052-toolregistry-split.md) | `clawft-core::ToolRegistry` vs `clawft-kernel::ToolRegistry` — two registries, two concerns | Accepted | Architecture | Tool registry audit |
 | [ADR-053](adr-053-voice-stt-canonical-path.md) | Voice STT canonical path — substrate-side whisper | Accepted | Architecture | 0.7.0 release-gate audit (WEFT-205) |
 | [ADR-054](adr-054-claude-flow-integration.md) | claude-flow integration — user-installed, not first-party | Accepted | Integration | 0.7.0 release-gate audit (WEFT-488) |
 | [ADR-055](adr-055-backend-adapter-contract.md) | BackendAdapter contract for the agent dashboard | Accepted | GUI | 0.7.0 release-gate audit (WEFT-319) |
@@ -65,6 +70,13 @@ This directory contains Architecture Decision Records (ADRs) for the WeftOS + cl
 | [ADR-060](adr-060-local-hermes-serving-kv.md) | Local Hermes serving + KV management for the agent loop | Accepted | Architecture | Long-context agent-loop thread 2026-06-28 |
 | [ADR-061](adr-061-conversational-voice-agent-loop.md) | Conversational voice agent loop — full-duplex, dual-layer TTS | Accepted | Architecture | Voice-pipeline thread 2026-06-26..28 (`~/llm` voicelab) |
 | [ADR-062](adr-062-ecc-graph-walk-conversation.md) | ECC graph-walk conversation — responses as nodes built by walking the causal graph | Proposed | Architecture | ECC graph-walk design swarm 2026-06-29 |
+| [ADR-063](adr-063-substrate-signed-envelope-a2a.md) | Signed, content-addressed envelope for substrate A2A messaging | Proposed | Architecture / Security | Substrate A2A design |
+| [ADR-064](adr-064-substrate-anti-entropy-reconciliation.md) | Fail-closed anti-entropy reconciliation for cross-node substrate sync | Proposed | Architecture | Substrate sync design |
+| [ADR-065](adr-065-channel-bridge-subkey-identity-loop-guard.md) | Per-source Ed25519 subkey identity and loop-guard for channel bridge mirroring | Proposed | Security | Channel bridge design |
+| [ADR-066](adr-066-capability-tokens-human-join-governance.md) | Capability tokens and human-join flow for board/channel access, gated by governance | Proposed | Security | Board/channel access design |
+| [ADR-067](adr-067-conversation-graph-view.md) | Conversation Graph View — timeline-scrubbed causal graph with classification-as-node-property in the egui GUI | Proposed | GUI | Conversation graph design |
+| [ADR-068](adr-068-full-duplex-voice-edge-agent.md) | Full-duplex conversation floor + dumb streaming VoiceEdge | Proposed | Architecture | Voice-pipeline thread |
+| [ADR-069](adr-069-atom-primary-index-panopticon.md) | Atom Primary Index & Locator Resolver (the Panopticon) | Proposed | Architecture | Atom index design |
 | [ADR-070](adr-070-mcp-registry-ownership.md) | MCP server registry ownership — CLI durable config vs daemon runtime | Accepted | Architecture | WEFT-494 (ws15 MCP audit open question) |
 | [ADR-071](adr-071-wasm-panel-auth.md) | WASM panel auth — per-panel token / capability model for webview proxy | Accepted | Security | WEFT-495 (ws15 MCP audit open question) |
 | [ADR-072](adr-072-webview-substrate-publish-gate.md) | Webview vs daemon substrate write boundary (`substrate.publish` denylist) | Accepted | Security | WEFT-496 (ws15 MCP audit open question) |
@@ -78,13 +90,16 @@ This directory contains Architecture Decision Records (ADRs) for the WeftOS + cl
 | [ADR-080](adr-080-pending-skill-review-timing.md) | Pending-skill review timing — CLI + non-blocking start notice | Accepted | Architecture | WEFT-74 |
 | [ADR-081](adr-081-no-imessage-applescript-bridge.md) | No first-party iMessage AppleScript channel (formal drop) | Accepted | Integration | WEFT-175 |
 | [ADR-082](adr-082-graphify-port.md) | Graphify Rust port — `clawft-graphify` knowledge-graph crate | Accepted | Architecture | WEFT-371 (planned as ADR-049; 049 taken by kernel overview / WEFT-140) |
-| [ADR-083](adr-083-browser-wasm-support.md) | Browser WASM Support | Accepted |
+| [ADR-083](adr-083-browser-wasm-support.md) | Browser WASM Support | Accepted | Architecture | W-BROWSER (retroactive, 2026-07-31) |
 | [ADR-084](adr-084-dependency-graph-retrieval-graphify.md) | Dependency-graph retrieval in Graphify (SGKR) | Proposed (Candidate) | Architecture | WEFT-372 phase2 survey (planned as ADR-050; 050 taken) |
 | [ADR-085](adr-085-entity-dedup-hnsw-prefilter.md) | Entity deduplication via HNSW pre-filter (CodaRAG) | Proposed (Candidate) | Architecture | WEFT-372 phase2 survey (planned as ADR-051; 051 taken) |
 | [ADR-086](adr-086-codebook-cold-start-entities.md) | Codebook cold-start for emerging entities (TransFIR) | Proposed (Candidate) | Architecture | WEFT-372 phase2 survey (planned as ADR-052; 052 taken) |
 | [ADR-087](adr-087-spatiotemporal-dual-branch-sensors.md) | Spatio-temporal dual-branch for sensor systems (K-STEMIT) | Proposed (Candidate) | Architecture | WEFT-372 phase2 survey (planned as ADR-053; 053 taken by voice STT) |
 | [ADR-088](adr-088-bvh-leaf-vector-ref.md) | Optional VectorRef on BVH spatial leaf payloads (before WEFT-709) | Accepted | Architecture | Design note `bvh_schema_updates.md`; amends ADR-056 |
 | [ADR-089](adr-089-exochain-dag-merge-split-brain.md) | ExoChain DAG merge strategy + split-brain (not leader consensus) | Accepted | Architecture | WEFT-109 (K5 Q1/Q5) |
+| [ADR-090](adr-090-lewm-ecc-decoupling-invariant.md) | LeWM ↔ ECC decoupling invariant (runtime-checkable rules) | Accepted (2026-07-31) | Architecture | LeWM / ECC design |
+| [ADR-091](adr-091-lightrag-dual-level.md) | LightRAG dual-level keyword retrieval in graphify | Accepted | Architecture | Graphify retrieval |
+| [ADR-092](adr-092-governance-rule-distribution.md) | Cluster-wide GovernanceRule distribution | Accepted (foundation) | Architecture / Security | Governance |
 | [ADR-093](adr-093-bvh-hnsw-phase-f-join.md) | BVH × HNSW Phase F dual-index join (spatial-first / feature-first) | Accepted | Architecture | WEFT-723; builds on ADR-088 |
 | [ADR-094](adr-094-spawn-user-level-permission.md) | Spawn-at-user-level permission story (principals + Defer grant) | Accepted (foundation) | Architecture / Security | WEFT-635; relates WEFT-633/634/636 |
 | [ADR-095](adr-095-batch-graph-analytics-plane.md) | Batch graph analytics plane (disk-spill join-agg) — research hold for sensor scale | Draft (Proposed) | Architecture / Performance | Sinchenko DataFusion graphs; DiskANN companion research |
@@ -94,6 +109,9 @@ This directory contains Architecture Decision Records (ADRs) for the WeftOS + cl
 | [ADR-099](adr-099-governed-workload-placement.md) | Governed workload placement across the mesh (open capability vocabulary, accelerators, runtime adapters) | Accepted | Architecture / Mesh | Cogs + local inference; docs/research/mesh-placement |
 | [ADR-100](adr-100-cog-workload-kind.md) | The cog workload kind (package, host contract, ingest bridge, Seed strategy) | Accepted | Architecture / Integration | Cognitum cogs; ADR-099. Cog-project decisions (COG-NNN) live in the private cogs repo |
 | [ADR-101](adr-101-inference-workload-kind.md) | Inference workload kind; migrate local model hosting onto placement | Accepted | Architecture / Integration | ~/llm serving; ADR-060 / ADR-099 |
+| [ADR-102](adr-102-gateway-health-and-api-playground.md) | Gateway health detail, daemon-issued tokens, and the API playground | Partially implemented (D1, D3, D5 and `/mcp` done; `/playground` page not done) | Architecture / Security | Owner decisions D1–D5, 2026-09-29 |
+| [ADR-103](adr-103-weave-topology-roles-and-instances.md) | The Weave topology: roles, project kernels, instances and environments | Accepted (2026-09-30) | Architecture / Mesh | Owner decisions D1–D14, 2026-09-30 |
+| [ADR-104](adr-104-sensor-guides-ship-with-sensor-cogs.md) | Sensor guides ship with sensor cogs | Accepted (2026-10-01) | Platform / Cogs | Owner, 2026-10-01; successor COG-104 in WeftOS/weftos-cogs |
 | [ADR-105](adr-105-cog-sources.md) | Cog sources: per-project multi-repo cog catalog (WeftOS, Cognitum with licence, private signed repo), namespaced resolution, package trust fixes | Accepted | Architecture / Integration | `docs/cogs/cog-sources.md`; ADR-099 / ADR-100 / COG-008; successor [COG-105](https://github.com/WeftOS/weftos-cogs/blob/v0.1.4/docs/decisions/COG-105-cog-sources.md) |
 | [ADR-106](adr-106-seed-licence-proxy.md) | Cognitum Seed as licence proxy for its WeftOS mesh: per-mesh checkout grants, operator hash approval, mesh-scoped redistribution | Proposed (review complete) | Architecture / Integration | ADR-099 / ADR-100 / ADR-103 / ADR-105; Phase 1a awaiting go; successor [COG-106](https://github.com/WeftOS/weftos-cogs/blob/v0.1.4/docs/decisions/COG-106-host-licence.md) |
 | [ADR-107](adr-107-catalog-hardware-software-link.md) | Hardware catalog links modules to cogs (`Module::cogs`, firmware, docs); sensor detail panel in the console | Accepted | Platform / Console | ADR-104 / ADR-105 / COG-009; successor [COG-107](https://github.com/WeftOS/weftos-cogs/blob/v0.1.4/docs/decisions/COG-107-catalog-link.md) |
@@ -120,12 +138,13 @@ This directory contains Architecture Decision Records (ADRs) for the WeftOS + cl
 | Category | ADRs | Description |
 |----------|------|-------------|
 | **Release** | 001, 002, 012, 029, 037, 044 | Versioning, distribution, and build decisions |
-| **GUI** | 003, 004, 005, 006, 007, 013, 016, 038, 055, 073 | UI/UX technology and architecture decisions |
-| **Architecture** | 010, 017, 019, 020, 021, 022, 023, 026, 027, 030, 031, 033, 034, 035, 036, 039, 040, 041, 042, 045, 046, 047, 048, 049, 053, 056, 061, 068, 070, 074, 078, 079, 080, 082, 084, 085, 086, 087, 088, 089, 093, 095 | Core system design decisions |
-| **Security** | 024, 025, 028, 043, 057, 071, 072, 097 | Cryptography, identity, and chain-integrity decisions |
+| **GUI** | 003, 004, 005, 006, 007, 013, 016, 038, 055, 067, 073 | UI/UX technology and architecture decisions |
+| **Architecture** | 010, 017, 019, 020, 021, 022, 023, 026, 027, 030, 031, 033, 034, 035, 036, 039, 040, 041, 042, 045, 046, 047, 048, 049, 051, 052, 053, 056, 061, 062, 063, 064, 068, 069, 070, 074, 078, 079, 080, 082, 084, 085, 086, 087, 088, 089, 090, 091, 093, 095, 099, 101, 102, 103, 106, 120, 121, 122, 124 | Core system design decisions |
+| **Security** | 024, 025, 028, 043, 050, 057, 065, 066, 071, 072, 092, 097 | Cryptography, identity, and chain-integrity decisions |
 | **Performance** | 009, 011, 032, 095 | Algorithmic and optimization decisions |
 | **Integration** | 008, 018, 054, 075, 076, 077, 081, 096, 097, 098 | External system integration decisions |
 | **Documentation** | 014, 015 | Documentation and web presence decisions |
+| **Platform and later** | 100, 104, 105, 107–119 | Cogs, projects, agents, leaves, dev environment (see each row's Category) |
 
 ## Decision Sources
 
