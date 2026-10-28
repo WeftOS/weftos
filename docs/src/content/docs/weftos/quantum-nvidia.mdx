@@ -1,9 +1,9 @@
 ---
-title: "NVIDIA Quantum Integration — 0.7.x Roadmap"
-description: "Planned integration of NVIDIA CUDA-Q and cuQuantum as a third QuantumBackend alongside Pasqal Cloud and AWS Braket. Status: research complete, implementation deferred to 0.7.x."
+title: "NVIDIA Quantum Integration (planned, unscheduled)"
+description: "Planned integration of NVIDIA CUDA-Q and cuQuantum as a third QuantumBackend alongside Pasqal Cloud and AWS Braket. Status: research complete, not implemented, no release assigned."
 ---
 
-**STATUS: PLANNED for v0.7.x** — research delivered 2026-04-15, implementation deferred until after GUI ship. This page summarizes the evaluation and planned integration path. See the existing [Quantum Cognitive Layer](/weftos/quantum) for what ships today (Pasqal Cloud + Braket stub).
+**STATUS: PLANNED, not implemented, no release assigned.** Research was delivered 2026-04-15. The page was written as a 0.7.x plan, but there is no 0.7 release (the version went from 0.6.20 to 0.8.0, `CHANGELOG.md`), and nothing in this plan has shipped in 0.8.x. This page summarizes the evaluation and planned integration path. See the existing [Quantum Cognitive Layer](/weftos/quantum) for what ships today (Pasqal Cloud + Braket stub).
 
 ## TL;DR
 
@@ -16,7 +16,7 @@ Neither helps WeftOS directly. Pasqal handles calibration on the cloud side, and
 
 **The useful piece is one layer below**: NVIDIA's `cuDensityMat` library inside `cuQuantum` can evolve the same analog time-dependent Hamiltonian that Pasqal runs. This makes it a plausible **local GPU simulator backend** — a third `QuantumBackend` alongside `PasqalBackend` and `BraketBackend`.
 
-**Recommendation: DEFER to v0.7.x**. Python-sidecar pre-flight simulator first; full backend only if it beats `EMU_FREE` on latency and fidelity.
+**Recommendation (April 2026): defer.** Python-sidecar pre-flight simulator first; full backend only if it beats `EMU_FREE` on latency and fidelity.
 
 ## What NVIDIA actually ships
 
@@ -51,15 +51,15 @@ For a buoy-array graph mapped to atom positions via our existing `quantum_regist
 
 ## Integration options (ranked)
 
-### Option A — Python-sidecar pre-flight simulator *(v0.7.x primary)*
+### Option A — Python-sidecar pre-flight simulator *(first step if pursued)*
 
-- **Scope**: new `crates/clawft-quantum-sim/` umbrella that spawns a Python subprocess running CUDA-Q + `cuDensityMat`
+- **Scope**: a new crate (not created; no `clawft-quantum-sim` exists in `crates/`) that spawns a Python subprocess running CUDA-Q + `cuDensityMat`
 - **Rust side**: build the same Pulser JSON we already send to Pasqal, hand it to the sidecar, receive bitstrings
 - **Deployment**: optional sidecar — if Python + CUDA-Q unavailable, fall back to existing `EMU_FREE`
 - **Effort**: ~0.5 sprint for working sidecar, ~1 sprint for full `QuantumBackend` impl
-- **ADR**: ADR-048 *NVIDIA-backed quantum simulation sidecar*
+- **ADR**: none exists. This page used to name ADR-048, but ADR-048 is "Kernel phase responsibilities" (`docs/adr/adr-048-kernel-phase-responsibilities.md`); an ADR for this decision would need a new number.
 
-### Option B — Full `QuantumBackend` implementation *(v0.7.x+1 follow-up)*
+### Option B — Full `QuantumBackend` implementation *(follow-up if the gate passes)*
 
 - **Scope**: `NvidiaBackend` implements the same trait as `PasqalBackend` and `BraketBackend`
 - **Requirements**: Python runtime, CUDA 12.x, NVIDIA GPU (Ampere+). Host deployment gains a hard dependency
@@ -74,7 +74,7 @@ The NVIDIA "Ising" page is a misnomer and `cuOpt` has no QUBO support. This opti
 
 Both models address QPU-builder concerns. WeftOS is a QPU client. Not applicable.
 
-## Open questions (parked for 0.7.x kickoff)
+## Open questions (parked)
 
 - What's the actual `cuDensityMat` latency for 20-40 atom analog simulation? (Benchmark required before Option A work begins.)
 - Does the Pulser JSON schema map cleanly into `cuDensityMat`'s operator representation, or do we need a translation layer?
@@ -83,13 +83,13 @@ Both models address QPU-builder concerns. WeftOS is a QPU client. Not applicable
 
 ## Timeline
 
-| Phase | Milestone | When |
-|-------|-----------|------|
-| Research complete | `.planning/development_notes/nvidia-quantum-integration.md` | **2026-04-15** |
-| ADR-048 draft | Decision to pursue Option A in v0.7.x | *post-GUI ship* |
-| Option A prototype | Python sidecar runs our Pulser JSON, returns bitstrings | *v0.7.x sprint 1* |
-| Benchmark gate | Decide Option A → B based on latency vs EMU-FREE | *v0.7.x sprint 2* |
-| Option B (optional) | `NvidiaBackend` implements `QuantumBackend` | *v0.7.x+1 if gate passes* |
+| Phase | Milestone | State |
+|-------|-----------|-------|
+| Research complete | `.planning/development_notes/nvidia-quantum-integration.md` | Done 2026-04-15 |
+| ADR | Decision to pursue Option A | Not written |
+| Option A prototype | Python sidecar runs our Pulser JSON, returns bitstrings | Not started |
+| Benchmark gate | Decide Option A or B on latency against EMU-FREE | Not started |
+| Option B | `NvidiaBackend` implements `QuantumBackend` | Not started |
 
 ## What *not* to do
 

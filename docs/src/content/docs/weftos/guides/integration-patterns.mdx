@@ -113,10 +113,11 @@ Witness chains provide independent verification:
 
 ```rust
 // Create witness entries from chain events
-let witness = chain.verify_witness()?;
+let verified = chain.verify_witness()?;   // Ok(count of verified witness entries)
 
 // Record provenance (DNA-style lineage)
-let lineage = chain.record_lineage(parent_id, child_id, DerivationType::Clone);
+let event = chain.record_lineage(child_id, parent_id, parent_hash,
+    DerivationType::Clone, 0, "description");   // ids are [u8; 16], parent_hash [u8; 32]
 ```
 
 ---
@@ -137,17 +138,16 @@ Register resources in the tree when:
 ```rust
 let tree: Arc<TreeManager> = /* from kernel context */;
 
-// Insert a node (automatically creates chain event + mutation event)
+// Insert a node (creates a chain event and a mutation event)
 tree.insert(
-    "/kernel/agents/worker-1",
-    HashMap::from([
-        ("pid".to_string(), "42".to_string()),
-        ("type".to_string(), "worker".to_string()),
-    ]),
+    ResourceId::new("/kernel/my_module/instance-1"),
+    ResourceKind::Namespace,
+    ResourceId::new("/kernel/my_module"),
 )?;
 
-// The chain event includes the tree path and metadata
-// The tree node stores chain_seq for two-way traceability
+// Higher-level helpers exist for the common cases, for example
+// tree.register_agent(agent_id, pid, &caps) and tree.register_service(...)
+// (crates/clawft-kernel/src/tree_manager.rs).
 ```
 
 ### Standard Namespace Layout
@@ -156,8 +156,8 @@ tree.insert(
 /
 ├── kernel/
 │   ├── services/       # registered SystemService instances
-│   ├── agents/         # spawned agent processes
-│   └── cron/           # registered cron jobs
+│   ├── processes/
+│   └── agents/         # spawned agent processes
 ├── apps/               # installed applications (AppManifest)
 ├── network/
 │   └── peers/          # cluster peer nodes
@@ -166,9 +166,7 @@ tree.insert(
 
 ### Two-Way Traceability
 
-Every tree node stores `chain_seq` metadata:
-- Given a tree node -> look up chain event by sequence number
-- Given a chain event -> find tree path in event payload
+Tree mutations append a chain event and a mutation-log entry (`TreeManager::insert` appends a `tree`/`insert` event). The chain event payload carries the tree path. Whether every node also stores its `chain_seq` was not re-verified for this page.
 
 ### Merkle Integrity
 
@@ -199,7 +197,7 @@ In the agent loop or any command handler:
 // Gate is available as Option<Arc<dyn GateBackend>>
 if let Some(ref gate) = gate {
     let context = serde_json::json!({
-        "pid": pid.0,
+        "pid": pid,
         "effect": {
             "risk": 0.3,
             "security": 0.2,
@@ -238,13 +236,9 @@ The 5D effect vector quantifies the impact of an action:
 
 **Magnitude calculation**: `sqrt(risk^2 + security^2 + privacy^2 + novelty^2 + fairness^2)`
 
-**K3 Update**: The EffectVector will become N-dimensional with configurable named
-dimensions (C9, D20). The current 5D schema remains the default. Edge devices
-can use a compact 3D profile. New dimensions (velocity, scope, reversibility,
-uncertainty, cascading_risk) will be available for environments that opt in.
+The symposium plan (C9, D20) was to make the EffectVector N-dimensional with named dimensions. That is not implemented: `EffectVector` in `governance.rs` has exactly the five fields above.
 
-If magnitude exceeds the environment's threshold (default 0.8) and a `Blocking`
-rule matches, the action is denied.
+If the score exceeds the engine's risk threshold and a `Blocking` or `Critical` rule applies, the action is denied or escalated; see [Governance](/docs/weftos/governance) for the exact decision. Environment thresholds are 0.9 (development), 0.6 (staging) and 0.3 (production).
 
 ### Adding Governance Rules
 
@@ -257,13 +251,20 @@ let gate = GovernanceGate::new(0.8, false)  // threshold, human_approval
         branch: GovernanceBranch::Judicial,
         severity: RuleSeverity::Blocking,
         active: true,
+        reference_url: None,
+        sop_category: None,
+        rule_type: GovernanceRuleType::General,
+        action_selector: None,
+        tool_selector: None,
+        force_on_match: false,
     });
 ```
 
 Rule severities:
-- `Informational` -- logged but never blocks
-- `Warning` -- logged with warning, action still permitted
-- `Blocking` -- denies action when effect exceeds threshold
+- `Advisory` -- no effect on the decision
+- `Warning` -- permit with a warning when the threshold is exceeded
+- `Blocking` -- denies (or escalates) when the threshold is exceeded or `force_on_match` is set
+- `Critical` -- treated like `Blocking` by the engine
 
 ---
 
@@ -350,7 +351,11 @@ impl MyManager {
 // During boot or registration
 #[cfg(feature = "exochain")]
 if let Some(ref tree) = tree_manager {
-    tree.insert("/kernel/my_module/instance-1", metadata)?;
+    tree.insert(
+        ResourceId::new("/kernel/my_module/instance-1"),
+        ResourceKind::Namespace,
+        ResourceId::new("/kernel/my_module"),
+    )?;
 }
 ```
 
@@ -409,6 +414,8 @@ mod tests {
 ---
 
 ## 7. Integration Status Matrix
+
+> This matrix is the K3-era snapshot of which module touches which pillar. Several entries were not re-checked at 0.8.4 (for example `cron.fire` and `peer.join` event names, and `config.rs` loading governance). Treat it as a pointer to where to look, and confirm in the code. Known corrections: `send_checked` only appends an `ipc.send` chain event; it does not check capabilities (the router's `send` does).
 
 | Module | Chain | Tree | Governance | Gate |
 |--------|-------|------|------------|------|

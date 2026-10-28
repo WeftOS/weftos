@@ -241,6 +241,8 @@ Hardware constraints — these shape what ECC can ask the backend to do:
 
 ## Roadmap
 
+The delivered rows shipped in 0.6.7. The open rows were planned for 0.7.x, which never existed (the version went from 0.6.20 to 0.8.0); none of them shipped in 0.8.x, so they carry no release now. The backends compile only with the off-by-default `quantum-pasqal` and `quantum-braket` kernel features (`crates/clawft-kernel/Cargo.toml`).
+
 | Phase | Deliverable | Version |
 |-------|-------------|---------|
 | ✓ | `QuantumBackend` trait + shared types | 0.6.7 |
@@ -248,12 +250,12 @@ Hardware constraints — these shape what ECC can ask the backend to do:
 | ✓ | Live `PasqalBackend` (auth + submit + poll + results + cancel) | 0.6.7 |
 | ✓ | T0 wiremock tests, T1–T4 live-test scaffolding | 0.6.7 |
 | ✓ | `BraketBackend` stub (interface only) | 0.6.7 |
-|   | `weave.toml` wiring + CLI command to submit | 0.7.x |
-|   | DEMOCRITUS hybrid tick integration | 0.7.x |
-|   | Real measurement feedback into `QuantumCognitiveState.psi` | 0.7.x |
-|   | Live Braket implementation | 0.7.x+ |
-|   | Laplacian-form Hamiltonian via local addressing | 0.7.x+ |
-|   | Spectral analysis via quantum phase estimation | 0.8.x+ |
+|   | `weave.toml` wiring + CLI command to submit | Not started, no release assigned |
+|   | DEMOCRITUS hybrid tick integration | Not started, no release assigned |
+|   | Real measurement feedback into `QuantumCognitiveState.psi` | Not started, no release assigned |
+|   | Live Braket implementation | Not started, no release assigned |
+|   | Laplacian-form Hamiltonian via local addressing | Not started, no release assigned |
+|   | Spectral analysis via quantum phase estimation | Not started, no release assigned |
 
 ## Further reading
 
