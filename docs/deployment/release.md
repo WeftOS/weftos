@@ -231,12 +231,12 @@ repository's Settings, Environments:
    delete any repository-level copy, so no other workflow or branch can
    read it.
 
-The same setup with `gh` (steps 1–3 were done this way on 2026-10-03; the
-reviewer is the account `aepod`, id 124563):
+The same setup with `gh` (replace `<REVIEWER_USER_ID>` with the numeric id of
+the person who approves releases):
 
 ```bash
 gh api -X PUT repos/WeftOS/weftos/environments/weftos-cogs --input - <<'EOF'
-{"reviewers":[{"type":"User","id":124563}],
+{"reviewers":[{"type":"User","id":<REVIEWER_USER_ID>}],
  "deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}
 EOF
 gh api -X POST repos/WeftOS/weftos/environments/weftos-cogs/deployment-branch-policies \
@@ -248,10 +248,10 @@ gh secret set WEAVELOGIC_RELEASE_KEY --env weftos-cogs -R WeftOS/weftos
 **Dedicated key.** Releases are signed with their own key (generated
 2026-10-03), not the COG-008 cog-signing key, so a cog signature can never pass
 as a release signature or the reverse, and a leak of one key does not expose
-the other. The `weftos-release-v1` prefix stays as a second layer. The seed is
-kept in the operator's macOS Keychain (service `weftos-release-key`) with a
-0600 copy at `~/.config/weftos/weftos-release.key`, and as the environment
-secret; the public half is `~/.config/weftos/weftos-release.pub`.
+the other. The `weftos-release-v1` prefix stays as a second layer. The seed
+lives only in operator-held storage and in the environment secret; where the
+operator keeps it is deliberately not documented in this public repository.
+The public half is compiled into `weaver update` for verification.
 
 Local GUI build (not just release CI):
 
