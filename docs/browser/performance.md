@@ -39,9 +39,6 @@ No Chrome, no network LLM, and no built `pkg/` required:
 # Unit tests + stub report (schema-valid, samples null → checks skipped)
 scripts/bench/browser-perf-baseline.sh
 
-# Or via build.sh
-scripts/build.sh browser-perf
-
 # Helpers only
 scripts/bench/browser-perf-baseline.sh --test-only
 

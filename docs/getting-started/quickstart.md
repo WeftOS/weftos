@@ -1,41 +1,32 @@
 # Quickstart
 
-This guide walks you through installing clawft from source, creating a
+This guide walks you through installing clawft, creating a
 configuration file, and running your first agent session.
 
-## Prerequisites
+## Install
 
-- **Rust 1.93+** (edition 2024). Install via [rustup](https://rustup.rs/):
-
-  ```bash
-  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-  rustup update
-  ```
-
-  Verify with `rustc --version` -- you need at least `1.93.0`.
-
-- **Cargo** (ships with Rust).
-
-## Installation
-
-Clone the repository and build in release mode:
+The quickest route is the release installer, which installs `weft`, `weaver` and `weftos`:
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/WeftOS/weftos/master/scripts/install.sh | sh
+```
+
+Homebrew, Docker and the other channels are covered in
+[../deployment/install.md](../deployment/install.md). To build from source
+instead, you need **Rust 1.95 or newer** (edition 2024):
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+rustup update
+
 git clone https://github.com/WeftOS/weftos.git
-cd clawft
-scripts/build.sh native    # Or: cargo build --release
+cd weftos
+scripts/build.sh native    # release build; binary at target/release/weft
 ```
 
-The binary is compiled to `target/release/weft`. You can copy it onto your
-`PATH` or run it directly:
-
-```bash
-# Option A: copy to a directory on your PATH
-cp target/release/weft ~/.local/bin/
-
-# Option B: run from the repo
-./target/release/weft --version
-```
+Verify with `weft --version`. When building from source, copy the binary onto
+your `PATH` (`cp target/release/weft ~/.local/bin/`) or run it from the repo
+(`./target/release/weft --version`).
 
 ## Configuration
 
@@ -75,7 +66,7 @@ for available providers.
 
 ## Choosing a Provider
 
-clawft ships with seven built-in LLM providers. Every model is referenced by
+clawft ships with nine hosted LLM providers pre-configured, plus the `local/` and `ollama/` local providers. Every model is referenced by
 a compound identifier in the form `provider/model-name` -- for example
 `openai/gpt-4o` or `anthropic/claude-sonnet-4-5-20250514`.
 
@@ -88,6 +79,8 @@ a compound identifier in the form `provider/model-name` -- for example
 | Mistral      | `MISTRAL_API_KEY`       | `mistral/mistral-large-latest`               |
 | Together     | `TOGETHER_API_KEY`      | `together/meta-llama/Llama-3.3-70B-Instruct` |
 | OpenRouter   | `OPENROUTER_API_KEY`    | `openrouter/google/gemini-2.5-pro-preview`   |
+| Gemini       | `GOOGLE_GEMINI_API_KEY` | `gemini/gemini-2.5-flash`                    |
+| xAI          | `XAI_API_KEY`           | `xai/grok-3-mini`                            |
 
 To change the default model, update the `model` field in your config file:
 
@@ -127,27 +120,29 @@ shell profile (`~/.bashrc`, `~/.zshrc`, etc.) to persist it across sessions.
 ## Using Local LLMs
 
 If you prefer to run models locally, clawft can connect to any
-OpenAI-compatible server. For example, with [Ollama](https://ollama.com):
+OpenAI-compatible server. Two prefixes are built in: `ollama/` (Ollama's
+default `http://localhost:11434/v1`) and `local/` (a local server on
+`http://127.0.0.1:8090/v1`). For Ollama, pull a model and select it:
+
+```bash
+ollama pull llama3.1
+weft agent --model ollama/llama3.1 -m "hello"
+```
+
+or set it as the default:
 
 ```json
 {
-  "providers": {
-    "ollama": {
-      "type": "openai",
-      "base_url": "http://localhost:11434/v1",
-      "api_key": "ollama"
-    }
-  },
   "agents": {
     "defaults": {
-      "model": "ollama/llama3"
+      "model": "ollama/llama3.1"
     }
   }
 }
 ```
 
 No API key environment variable is needed for local providers. See the
-[Providers Guide](../guides/providers.md) for detailed local-LLM setup.
+[Providers Guide](../guides/providers.md) for other local servers and URL overrides.
 
 ## Your First Message
 
@@ -179,8 +174,10 @@ inside the session:
 |----------|------------------------------|
 | `/help`  | Show available commands      |
 | `/tools` | List registered tools        |
+| `/skills`, `/use`, `/agent` | List and activate skills, switch agents |
+| `/status` | Show the current agent, model and skill |
 | `/clear` | Clear the current session    |
-| `/exit`  | Quit the interactive session |
+| `/quit`  | Quit the interactive session |
 
 Example session:
 
@@ -192,12 +189,12 @@ are valid...
 
 > /tools
 Registered tools:
-  - file_read
-  - file_write
-  - shell_exec
+  - read_file
+  - write_file
+  - exec_shell
   ...
 
-> /exit
+> /quit
 ```
 
 ## Setting Up a Gateway
@@ -306,14 +303,14 @@ RUST_LOG=debug weft gateway
 - [Configuration Reference](../reference/) -- full schema documentation for
   `config.json`, including all channel types, provider settings, MCP servers,
   and tool configuration.
-- [Providers Guide](../guides/providers.md) -- detailed setup for all seven
+- [Providers Guide](../guides/providers.md) -- detailed setup for the
   built-in providers, local LLMs, and custom endpoints.
 - [Routing and Pipeline](../guides/routing.md) -- configure multi-model
   routing, fallback chains, and the agent processing pipeline.
 - [Tool Calls](../guides/tool-calls.md) -- register tools, handle tool
   invocations, and integrate MCP tool servers.
-- [RVF Integration](../guides/rvf.md) -- connect clawft to the Rustic
-  Validation Framework for structured output validation.
+- [RVF Integration](../guides/rvf.md) -- work with RVF files for vectors and
+  knowledge bases.
 - [Architecture Overview](../architecture/) -- how the agent pipeline, message
   bus, and channel system fit together.
 - [Adding MCP Servers](../guides/tool-calls.md#mcp-tools) -- connect external

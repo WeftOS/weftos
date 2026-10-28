@@ -15,7 +15,7 @@ release attachment + CI provenance (see [ADR-083](../adr/adr-083-browser-wasm-su
 
 ## Release assets (per tag)
 
-On every version tag, `wasm-browser.yml` attaches:
+`wasm-browser.yml` is written to attach the following to the GitHub Release on a version tag, once the `Release` workflow has created it. As of 2026-10-27 the v0.8.3 and v0.8.4-rc.15 releases carry no `clawft-browser-wasm-*` asset (checked with `gh release view <tag> --json assets`), so look at the release's asset list before relying on this section. The `browser-wasm-pkg` Actions artifact from the same workflow run is the fallback:
 
 | Asset | Description |
 |-------|-------------|
@@ -43,12 +43,12 @@ WASI (for comparison / parity):
   "kind": "browser",
   "target": "wasm32-unknown-unknown",
   "package": "clawft-wasm",
-  "workspace_version": "0.6.20",
-  "tag": "v0.6.20",
+  "workspace_version": "0.8.4",
+  "tag": "v0.8.4",
   "git_sha": "…full 40-char SHA…",
   "git_sha_short": "…12-char…",
   "built_at": "2026-07-31T13:43:24Z",
-  "name": "clawft-browser-wasm-v0.6.20"
+  "name": "clawft-browser-wasm-v0.8.4"
 }
 ```
 
@@ -68,7 +68,7 @@ deployed `pkg/` tree remains self-describing after extract.
 ## Verify checksums
 
 ```bash
-TAG=v0.6.20   # or: TAG=$(gh release view --repo WeftOS/weftos --json tagName -q .tagName)
+TAG=v0.8.4   # or: TAG=$(gh release view --repo WeftOS/weftos --json tagName -q .tagName)
 REPO=https://github.com/WeftOS/weftos/releases/download/${TAG}
 
 curl -fsSL -o "clawft-browser-wasm-${TAG}.tar.gz" \

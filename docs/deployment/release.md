@@ -323,7 +323,7 @@ version + checksum + attestation pipeline as WASI (WEFT-405):
 | `clawft-browser-wasm-<tag>.VERSION.json.sha256` | Detached SHA-256 of the manifest |
 
 Consumer verification steps live in
-[docs/browser/verification.md](/docs/browser/verification.md).
+[docs/browser/verification.md](../browser/verification.md).
 PR / master pushes still upload the unbound `browser-wasm-pkg` Actions
 artifact for docs playground consumption.
 
