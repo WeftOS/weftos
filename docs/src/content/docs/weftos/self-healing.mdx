@@ -5,7 +5,7 @@ description: "Erlang-inspired restart strategies, budget tracking, exponential b
 
 The self-healing supervisor provides Erlang-inspired fault tolerance for WeftOS agents. When an agent crashes, the supervisor applies a configurable restart strategy, respects a budget to prevent restart storms, and uses exponential backoff to avoid thundering herds.
 
-**Feature**: `os-patterns`
+**Feature**: `os-patterns` (off by default: `crates/clawft-kernel/Cargo.toml`). Without it the strategy, budget and tracker types below are not compiled.
 **Source**: `crates/clawft-kernel/src/supervisor.rs`
 **Phase**: K1
 
@@ -44,7 +44,7 @@ pub struct RestartBudget {
 }
 ```
 
-When the budget is exhausted, the supervisor escalates — stops itself and notifies its parent supervisor. The window auto-resets after `within_secs` elapses.
+`record_restart` returns false once the restart count in the window exceeds `max_restarts`. The window resets after `within_secs` elapses (`check_window`). On exhaustion `AgentSupervisor::handle_exit` logs a warning ("restart budget exhausted for pid, escalating") and returns no restarts; there is no parent supervisor in the code to notify, so "escalation" here means the agent stays down.
 
 ## Exponential Backoff
 
@@ -54,7 +54,7 @@ Each restart increases the delay exponentially:
 100ms → 200ms → 400ms → 800ms → ... → 30s (cap)
 ```
 
-Formula: `100ms * 2^(restart_count - 1)`, capped at 30 seconds. This prevents a crashing agent from consuming resources in a tight loop.
+Formula: `100ms * 2^(restart_count - 1)`, capped at 30 seconds (`next_backoff_ms`). With a trained `RestartStrategyModel` (EML), `next_backoff_ms_with_model` uses the learned delay instead; untrained or absent, the result is the formula above (`supervisor.rs`).
 
 ## Restart Tracker
 
@@ -79,35 +79,26 @@ Key methods:
 | `next_backoff_ms()` | Calculate next backoff delay |
 | `should_restart(strategy, exit_code)` | Policy check for restart decision |
 
-## Supervisor Integration
+## Supervisor integration
 
-The `AgentSupervisor` integrates restart strategies into agent lifecycle:
+Strategy and budget are set once on the supervisor, not per spawn:
 
 ```rust
-supervisor.spawn_supervised(
-    agent_config,
-    RestartStrategy::OneForOne,
-    RestartBudget { max_restarts: 3, within_secs: 30 },
-);
+let supervisor = AgentSupervisor::new(/* ... */)
+    .with_restart_config(RestartStrategy::OneForOne, RestartBudget { max_restarts: 3, within_secs: 30 });
 ```
 
-When an agent exits:
-1. `should_restart()` checks the strategy and exit code
-2. If yes, `record_restart()` checks the budget
-3. If within budget, the agent sleeps for `backoff_ms` then restarts
-4. If budget exceeded, the supervisor escalates to its parent
+There is no `spawn_supervised` method. When an agent exits, the daemon calls `AgentSupervisor::handle_exit(pid, exit_code)`:
+
+1. Link and monitor signals are delivered (`monitor.rs`), with `Normal` for exit code 0 and `Crash` otherwise.
+2. `RestartTracker::should_restart(strategy, exit_code)` decides: `Permanent` never, `Transient` only on a non-zero code, the others always.
+3. `record_restart` charges the per-PID budget; over budget, nothing is restarted.
+4. Within budget, an `agent.self_heal_restart` event (strategy, exit code, backoff) is appended to the chain when `exochain` is on, then the strategy is applied: `OneForOne` and `Transient` restart the failed process, `OneForAll` restarts it and its siblings, `RestForOne` restarts it and those started after it.
+
+`handle_exit` records the computed `backoff_ms` and logs it; reading the function, the delay is not slept inside it, so the caller must honour the returned backoff. The page that preceded this one said the agent "sleeps for `backoff_ms` then restarts"; that was not found in `handle_exit`.
+
+A separate `watchdog_sweep` reaps finished tasks: processes still shown as running are moved to `Exited(-2)` (watchdog) or `Exited(-3)` (panic) (`supervisor.rs`, native feature).
 
 ## Configuration
 
-In `weave.toml`:
-
-```toml
-[supervisor]
-default_strategy = "OneForOne"
-max_restarts = 5
-restart_window_secs = 60
-```
-
-## Testing
-
-15+ supervisor tests cover all strategies, budget exhaustion, backoff calculation, window reset, and escalation paths.
+No `[supervisor]` table in `weave.toml` exists in the code at 0.8.4 (a `git grep` for `[supervisor]`, `default_strategy` and `restart_window_secs` over `crates/` finds only unrelated project-certificate settings in `clawft-types`). Per-project child-kernel supervision has its own settings, `restart_max`, `restart_window_secs` and `idle_stop_secs`, described in the project topology guide ([Project topology](/docs/weftos/platform/project-topology)); those restart whole project kernels, not agents.

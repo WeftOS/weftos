@@ -5,14 +5,17 @@ description: "WASM tool sandboxing with Wasmtime, fuel metering, memory limits, 
 
 The WASM sandbox provides isolated tool execution with configurable resource limits. Tools run as WASM modules inside a Wasmtime runtime with fuel metering, memory caps, and optional WASI access.
 
-**Source**: `crates/clawft-kernel/src/wasm_runner.rs` (~1,639 lines)
-**Feature**: `wasm-sandbox`
+**Source**: `crates/clawft-kernel/src/wasm_runner/` (`runner.rs`, `types.rs`, `registry.rs`, `catalog.rs`, `tools_*.rs`)
+**Feature**: `wasm-sandbox` for the wasmtime runtime. It is off by default (`crates/clawft-kernel/Cargo.toml`); the module and tool catalog compile without it.
+
+This is the kernel's tool sandbox. Cog workloads do not use it: WASM adapters for cogs use `clawft-wasm-host` (ADR-099 decision 4, `workload_runtime/mod.rs`).
 
 ## WasmToolRunner
 
 ```rust
 pub struct WasmToolRunner {
     config: WasmSandboxConfig,
+    // wasmtime Engine (wasm-sandbox); optional chain manager and governance engine (exochain)
 }
 ```
 
@@ -22,31 +25,33 @@ Executes WASM modules with fuel metering (each instruction consumes fuel), memor
 
 ```rust
 pub struct WasmSandboxConfig {
-    pub fuel_limit: u64,
-    pub memory_limit_bytes: u64,
-    pub timeout_ms: u64,
-    pub wasi_enabled: bool,
-    pub wasi_fs_scope: WasiFsScope,
+    pub max_fuel: u64,                    // default 1,000,000
+    pub max_memory_bytes: usize,          // default 16 MiB
+    pub max_execution_time_secs: u64,     // default 30
+    pub allowed_host_calls: Vec<String>,  // default empty
+    pub wasi_enabled: bool,               // default false
+    pub max_module_size_bytes: usize,
 }
 
 pub enum WasiFsScope {
-    None,
-    ReadOnly(Vec<PathBuf>),
-    ReadWrite(Vec<PathBuf>),
+    None,                  // default
+    ReadOnly(PathBuf),
+    ReadWrite(PathBuf),
 }
 ```
 
-## Tool Catalog (27 Built-in Tools)
+## Tool catalog (36 built-in specs)
 
-| Category | Tools | Gate Action Prefix |
-|----------|------:|-------------------|
-| Agent | 7 | `tool.agent.*` |
-| IPC | 2 | `tool.ipc.*` |
-| Filesystem | 9 | `tool.fs.*` |
-| System | 6 | `tool.sys.*` |
-| ECC | 7 | `tool.ecc.*` (ecc feature) |
+`wasm_runner/catalog.rs` declares 36 built-in tool specs. Counts by `ToolCategory` (spec `category` fields):
 
-Each tool has a `BuiltinToolSpec` with an `EffectVector` for governance scoring.
+| Category | Specs | Names |
+|----------|------:|-------|
+| Filesystem | 10 | `fs.read_file`, `fs.write_file`, `fs.read_dir`, `fs.create_dir`, `fs.remove`, `fs.copy`, `fs.move`, `fs.stat`, `fs.exists`, `fs.glob` |
+| Agent | 9 | `agent.spawn`, `agent.stop`, `agent.list`, `agent.inspect`, `agent.send`, `agent.suspend`, `agent.resume`, `ipc.send`, `ipc.subscribe` |
+| System | 10 | `sys.service.list`, `sys.service.health`, `sys.chain.status`, `sys.chain.query`, `sys.tree.read`, `sys.tree.inspect`, `sys.env.get`, `sys.cron.add`, `sys.cron.list`, `sys.cron.remove` |
+| Ecc | 7 | `ecc.embed`, `ecc.search`, `ecc.causal.link`, `ecc.causal.query`, `ecc.crossref.create`, `ecc.tick.status`, `ecc.calibration.run` |
+
+Each `BuiltinToolSpec` has a `gate_action` such as `tool.fs.read` or `tool.fs.write`, an `EffectVector` for governance scoring, and a `native` flag. `shell.exec` is a separate tool (`ShellExecTool`, `tools_sys.rs`).
 
 ## Tool Lifecycle
 
@@ -58,7 +63,7 @@ All phases are chain-logged when `exochain` is enabled.
 
 ## Host Isolation
 
-By default, WASM modules have no access to filesystem, network, environment variables, or system clock unless explicitly configured via `WasiFsScope`.
+`wasi_enabled` defaults to false and `WasiFsScope` defaults to `None`, so a module gets no WASI filesystem access unless the config grants it. Fuel is metered (`consume_fuel`, `set_fuel`) and memory is capped through a wasmtime `ResourceLimiter` (`runner.rs`). The wasmtime sandbox-escape fix shipped in 0.8.4-rc.15 (wasmtime 48.0.7, CHANGELOG rc.15).
 
 ## Extended Tool Catalog (Sprint 10)
 
@@ -85,51 +90,40 @@ Ed25519 signing for tool provenance and integrity verification.
 
 ```rust
 pub struct ToolSignature {
-    pub tool_hash: String,      // SHA-256 of tool module bytes
-    pub signer_id: String,      // Identity of the signer
-    pub signature: Vec<u8>,     // Ed25519 signature
+    pub tool_name: String,
+    pub tool_hash: [u8; 32],
+    pub signer_id: String,
+    pub signature: Vec<u8>,     // Ed25519
+    pub signed_at: DateTime<Utc>,
 }
 ```
 
 ### Signature Verification
 
 ```rust
-// Register a signed tool
-registry.register_signed("my-tool", module_bytes, signature)?;
+// Register a signed tool (the signature must verify against a trusted key)
+registry.register_signed(tool: Arc<dyn BuiltinTool>, signature)?;
 
 // Enforce signature requirement
 registry.set_require_signatures(true);
 
-// Manage trusted keys
+// Manage trusted keys ([u8; 32] Ed25519 public keys)
 registry.add_trusted_key(public_key);
 ```
 
-When `require_signatures` is enabled, unsigned tools are rejected at registration. Each signature is verified against all trusted keys.
+`register_signed` fails with `InvalidSignature` unless some trusted key verifies the signature. Whether plain registration is refused when `require_signatures` is set was not re-checked for this page.
 
 **Chain constant**: `EVENT_KIND_TOOL_SIGNED` logs signing events to ExoChain.
 
-## WASM Shell Execution (D10)
-
-Shell commands compiled to WASM for sandboxed execution:
+## Shell execution (D10)
 
 ```rust
-pub struct ShellCommand {
-    pub command: String,
-    pub args: Vec<String>,
-}
-
-pub struct ShellResult {
-    pub exit_code: i32,
-    pub stdout: String,
-    pub stderr: String,
-    pub duration_ms: u64,
-}
+pub struct ShellCommand { pub command: String, pub args: Vec<String>, pub sandbox_config: Option<SandboxConfig> }
+pub struct ShellResult { pub exit_code: i32, pub stdout: String, pub stderr: String, pub execution_time_ms: u64 }
 ```
 
-`execute_shell()` dispatches to built-in commands (`echo`, `true`, `false`) within the sandbox. Wall-clock timing is recorded. The `shell.exec` tool is registered in the builtin catalog.
-
-**Chain constant**: `EVENT_KIND_SHELL_EXEC` logs shell executions to ExoChain.
+`execute_shell()` (`tools_sys.rs`) handles three built-ins, `echo`, `true` and `false`, and answers any other command with exit code 127 and `command not found` on stderr. Its own comment says compiling arbitrary commands to WASM and running them in the sandbox is future work, so there is no general shell here. With `exochain`, `EVENT_KIND_SHELL_EXEC` is available for logging.
 
 ## CompiledModuleCache
 
-LRU cache of compiled WASM modules keyed by content hash to avoid repeated compilation.
+`CompiledModuleCache` (`runner.rs`) is a disk-persisted cache of compiled module bytes keyed by the module's 32-byte content hash, with a size cap, so a module is not compiled repeatedly. The earlier description of it as an LRU cache was not confirmed in the code read.
