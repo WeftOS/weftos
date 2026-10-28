@@ -19,11 +19,11 @@ sessions are created, how skills scope tool visibility, how
 # Pin matches package.json / .mcp.json (WEFT-684). Never @latest — schema-bearing.
 weft mcp add claude-flow \
   --command "npx" \
-  --args "--no-install,@claude-flow/cli,mcp,start" \
+  --arg=--no-install --arg=@claude-flow/cli --arg=mcp --arg=start \
   --internal-only
 ```
 
-Then start the daemon (or `weft kernel restart` if it's already up).
+Then start the daemon (or `weaver kernel restart` if it's already up).
 Run `weft mcp list` to confirm the session attached.
 
 ## Why we don't ship claude-flow first-party
@@ -143,7 +143,7 @@ weft mcp remove claude-flow
 - **Tools don't appear in the LLM context**: this is expected for
   `internalOnly = true` servers. The session is up, but a skill
   must opt in via `allowed-tools`. Inspect with
-  `weft skill show <skill-name>`.
+  `weft skills show <skill-name>`.
 
 - **Allowlist rejects a tool you expect to be callable**: the
   PermissionFilter (WEFT-189 / WEFT-480) gates `tools/list` and

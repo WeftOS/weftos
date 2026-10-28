@@ -1,7 +1,7 @@
 # WeftOS Kernel - Deferred Work Requirements
 
 **Document Version**: 1.0
-**Last Updated**: 2026-03-01
+**Last Updated**: 2026-03-01 (section 6 corrected 2026-10-27; the other sections have not been re-verified against the code)
 **Status**: Active Development
 
 ## Overview
@@ -651,106 +651,20 @@ cargo test -p exo-resource-tree test_capability_transfer
 
 ---
 
-## 6. CLI `weave` Binary (K0 - Planned)
+## 6. Separate OS CLI (K0 - Done, shipped as `weaver`)
 
 ### Status
-**Not Started** - All commands currently under `weft kernel`.
+**Done.** The OS-side CLI is the `weaver` binary in `crates/clawft-weave`
+(`[[bin]] name = "weaver"`). The agent-side CLI is `weft` in
+`crates/clawft-cli`. No `weave` binary exists and `weft` has no `kernel`
+subcommand: kernel, mesh, cluster, chain, workload and the rest of the OS
+surface are `weaver` commands. See [the CLI reference](../reference/cli.md)
+for the generated command list.
 
-### Priority
-**MEDIUM** - UX improvement for separation of concerns.
-
-### Code References
-- SPARC docs describe two CLIs: `weft` (agent) and `weave` (OS)
-
-### Dependencies
-None - refactor existing clawft-cli crate.
-
-### Effort Estimate
-**Small-Medium** (4-6 hours)
-
-### What's Needed
-
-1. **Create `weave` Binary Entry Point**
-   - New binary target in `clawft-cli/Cargo.toml`
-   - Separate help text and subcommands
-   - Shared code with `weft` for common functionality
-
-2. **Command Routing**
-   - **`weave` commands**: kernel, resource, network, env, session, console
-   - **`weft` commands**: agent, ipc, app, tools, channels, voice
-
-3. **Maintain Compatibility**
-   - `weft kernel <cmd>` should still work (alias)
-   - Consider soft deprecation warnings
-
-### Integration Steps
-
-```toml
-# 1. Add binary target to clawft-cli/Cargo.toml
-[[bin]]
-name = "weave"
-path = "src/bin/weave.rs"
-
-[[bin]]
-name = "weft"
-path = "src/bin/weft.rs"  # Rename from main.rs
-```
-
-```rust
-// 2. Create src/bin/weave.rs
-use clawft_cli::{WeaveCommand, run_weave};
-
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let cmd = WeaveCommand::parse();
-    run_weave(cmd).await
-}
-
-// 3. Update src/bin/weft.rs
-use clawft_cli::{WeftCommand, run_weft};
-
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let cmd = WeftCommand::parse();
-
-    // Detect if user ran "weft kernel" and suggest "weave"
-    if matches!(cmd, WeftCommand::Kernel(_)) {
-        eprintln!("Note: 'weft kernel' is deprecated. Use 'weave' instead.");
-    }
-
-    run_weft(cmd).await
-}
-
-// 4. Split commands.rs into weave_commands.rs and weft_commands.rs
-```
-
-### Verification
-
-```bash
-# 1. Build both binaries
-scripts/build.sh native
-
-# 2. Verify weave commands work
-./target/release/weaver kernel start
-./target/release/weaver resource tree
-./target/release/weaver console
-
-# 3. Verify weft commands work
-./target/release/weft agent spawn --type coder
-./target/release/weft tools list
-
-# 4. Check deprecation warning
-./target/release/weft kernel status
-# `weft` has no `kernel` subcommand; expect "unrecognized subcommand 'kernel'" (checked against weft --help)
-
-# 5. Install both to PATH
-cargo install --path crates/clawft-cli --bin weave
-cargo install --path crates/clawft-cli --bin weft
-```
-
-### SPARC Reference
-- **K0 Boot**: `.planning/sparc/kernel/00-k0-boot.md` (CLI design section)
-- **Command Structure**: Lines 50-100
+The original plan (a `weave` binary, with the `kernel` command kept on `weft` as a
+deprecated alias) was not carried out as written. This document still
+says `weave` in a few later places (sections 7 and 11); read those as
+`weaver`.
 
 ---
 

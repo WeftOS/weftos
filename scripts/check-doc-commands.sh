@@ -57,15 +57,6 @@ done
 # 2026-10-27, owned by the docs lanes that rewrite them). Delete a line as its
 # page is fixed; do not add new pages here.
 KNOWN_DRIFT="
-docs/guides/kernel.md
-docs/guides/mcp-integration.md
-docs/guides/mcp.md
-docs/guides/plugins.md
-docs/guides/skill-signing.md
-docs/guides/tool-calls.md
-docs/guides/voice.md
-docs/guides/weftos-deferred-requirements.md
-docs/guides/workspaces.md
 docs/src/content/docs/clawft/architecture.mdx
 docs/src/content/docs/clawft/security.mdx
 docs/src/content/docs/weftos/guides/assessment.mdx

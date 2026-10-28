@@ -460,11 +460,12 @@ service (owner migration)".
      starts a fresh project chain.
    - Against the user daemon, mutating commands outside a project return
      `project_required` (`read_only`). The log streams, `substrate.read`,
-     `cluster.facts` and `voice.trace` that the egui tray and
-     `weft voice watch` use are allowed; `ipc.subscribe_stream` needs a
+     `cluster.facts` and `voice.trace` that the egui tray and the
+     `voice watch` subcommand of `weft` (built only with the `voice`
+     feature) use are allowed; `ipc.subscribe_stream` needs a
      project.
 10. **Tokens.** `weft token issue` prints a `wft_` secret once, plus a
-    playground link; `weft token list|revoke` manage them. Literal `auth`
+    playground link; `weft token list` and `weft token revoke` manage them. Literal `auth`
     scopes work only from the daemon's uid on the unix socket.
 
 Rollback:
@@ -623,11 +624,11 @@ judicial (post-hoc review of `Defer` outcomes). Effects are scored
 via the `EffectAlgebra` (ADR-034) so high-blast-radius actions can
 be auto-deferred for human review.
 
-```bash
-weaver governance status            # current rule set summary
-weaver governance pending           # actions Deferred and awaiting review
-weaver governance review <id>       # accept or reject a deferred action
-```
+There is no `governance` subcommand in `weaver` or `weft`. Governance is
+reached through the daemon RPC methods `governance.reload`,
+`governance.parent.update` and `governance.parent.push` (all Admin; see
+[the RPC reference](../reference/rpc.md#governance)). A review queue for
+`Defer` outcomes is not yet implemented as a command.
 
 ### Process table & supervisor (K1)
 
@@ -646,7 +647,8 @@ weaver kernel start                # bring the kernel up
 weaver kernel stop                 # graceful shutdown (drains agents)
 weaver kernel status               # boot state + uptime
 weaver kernel liveness             # self-check; exit 1 when wedged or stale
-weaver health                      # aggregated health across services
+weaver doctor                      # install, daemon, runtime and MCP health (read-only)
+weaver kernel services             # registered services with health status
 weaver kernel logs                 # last N boot/runtime events
 ```
 
@@ -729,7 +731,7 @@ daemon that fails it. `KeepAlive` then relaunches it, because a SIGKILL
 leaves no `REFUSED` sentinel:
 
 ```bash
-weaver kernel liveness --profile user || weaver kernel stop --profile user --force
+if ! weaver kernel liveness --profile user; then weaver kernel stop --profile user --force; fi
 ```
 
 Run it every few minutes, for example from a LaunchAgent with
@@ -780,7 +782,7 @@ Application crypto is optional Noise (`noise = true`, snow XX). See
 
 ```bash
 weaver mesh status                 # peer count, view, listener address
-weaver mesh peers                  # detailed peer table with last-heard timestamps
+weaver mesh peer                   # revoke or restore a mesh peer (admin)
 ```
 
 ---
@@ -852,7 +854,7 @@ When the warning *does* mean something:
 - The warning fires every tick despite the backoff (it shouldn't —
   if it does, the backoff state machine is broken).
 - The warning correlates with elevated tick latency in
-  `weaver health` or with a flapping process under
+  `weaver kernel services` or with a flapping process under
   `weaver agent list`.
 
 In all three of those cases, capture the surrounding chain entries

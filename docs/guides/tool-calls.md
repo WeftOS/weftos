@@ -627,7 +627,7 @@ file watching.
 
 ```bash
 # Add a new MCP server
-weft mcp add my-server -- npx -y @example/mcp-server
+weft mcp add my-server --command npx --arg -y --arg @example/mcp-server
 
 # Remove an existing server
 weft mcp remove my-server

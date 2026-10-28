@@ -529,15 +529,18 @@ All per-agent directories are created with `0700` permissions on Unix:
 ### CLI Commands
 
 ```sh
-# List all agent workspaces
-weft agent list
+# List all agents with source annotation
+weft agents list
 
-# Create an agent workspace from a template
-weft agent create my-agent --template ~/.clawft/agents/default
+# Show one agent's definition
+weft agents show <name>
 
-# Delete an agent workspace
-weft agent delete my-agent
+# Set the active agent for the next session
+weft agents use <name>
 ```
+
+Creating or deleting an agent workspace from a template is not yet
+implemented as a command: `weft agents` has only `list`, `show` and `use`.
 
 ### Source Files
 

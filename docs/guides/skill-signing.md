@@ -44,8 +44,9 @@ Verification recomputes the content hash against the package on disk
 and checks the signature against the embedded public key. The signing
 feature uses `ed25519-dalek` for both signing and verification.
 
-`weft skills verify` (when shipped) and the install path use
-`verify_signature` from `clawft-core::security::signing`.
+The install path uses `verify_signature` from
+`clawft-core::security::signing`. A standalone verify command is not yet
+implemented.
 
 ## The author keypair
 
@@ -154,14 +155,10 @@ Field semantics:
 
 ### Planned CLI
 
-```text
-weft skills keys list
-weft skills keys add <pubkey-file-or-hex> [--id <label>] [--comment <text>]
-weft skills keys remove <id-or-fingerprint>
-weft skills keys verify <skill-path>
-```
+A `keys` command group (list, add, remove, verify) is planned and not yet
+implemented: `weft skills` has no `keys` subcommand.
 
-Until the CLI lands, operators can manage the file by hand. The schema
+Until it lands, operators can manage the file by hand. The schema
 above is the contract.
 
 ### Planned workspace override semantics

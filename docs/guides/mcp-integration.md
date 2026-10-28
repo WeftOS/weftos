@@ -619,7 +619,7 @@ flowchart LR
     subgraph clawft
         BT["Built-in Tools<br/>(read_file, exec_shell, ...)"]
         SK["Skills<br/>(research, code-assist, ...)"]
-        MCS["MCP Server Shell<br/>(weft mcp-server)"]
+        MCS["MCP Server Shell<br/>(mcp-server subcommand)"]
         MCL["MCP Client<br/>(McpSession)"]
         TR["ToolRegistry"]
     end

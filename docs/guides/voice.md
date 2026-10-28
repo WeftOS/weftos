@@ -656,8 +656,8 @@ crashes the daemon over a bad transcript.
 
 A new audio input must:
 
-1. Sign as a registered substrate node (use `weaver node register`
-   on first boot).
+1. Sign as a registered substrate node (use the `node.register` RPC method
+   on first boot; `weaver` has no node command).
 2. Publish PCM chunks at `substrate/<your-node>/sensor/mic/pcm_chunk`
    with the wire shape documented on
    `clawft_service_whisper::SUBSTRATE_PCM_INPUT_PATH`:
@@ -895,10 +895,12 @@ Cloud fallback active: sending audio to OpenAI Whisper API
 Filter logs with `RUST_LOG=voice.cloud_fallback=warn` (or include that
 target in a broader filter).
 
-## Wake word service (`weft voice install-service`)
+## Wake word service
 
-Install a background wake-word listener (`weft voice wake`) that starts with
-your session. The CLI auto-detects the platform service manager:
+The `voice install-service` subcommand of `weft` installs a background
+wake-word listener (the `voice wake` subcommand) that starts with your
+session. These subcommands exist only in a `weft` built with the `voice`
+Cargo feature; the default build has no `voice` command. The CLI auto-detects the platform service manager:
 
 | Platform | Manager | Artifact / mechanism |
 |----------|---------|----------------------|
@@ -906,7 +908,7 @@ your session. The CLI auto-detects the platform service manager:
 | macOS | `launchd` | `~/Library/LaunchAgents/com.clawft.wake.plist` |
 | Windows | **`schtasks`** | Task Scheduler task **`ClawftWake`** (ONLOGON) |
 
-Override detection with `--manager systemd|launchd|schtasks`.
+Override detection with the `--manager` option (`systemd`, `launchd` or `schtasks`).
 
 ### Windows (WEFT-220) — final supported route
 
@@ -917,9 +919,11 @@ interactive session and can use the microphone.
 **Preferred (automated):**
 
 ```text
-weft voice install-service
-weft voice install-service --manager schtasks
+voice install-service
+voice install-service --manager schtasks
 ```
+
+Both are subcommands of `weft` (feature `voice`).
 
 **Optional companion script** (same schtasks semantics; useful for imaging
 or when the CLI is not yet on PATH):

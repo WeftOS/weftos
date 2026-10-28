@@ -194,8 +194,9 @@ for changes.
 ### CLI Commands
 
 ```bash
-weft skill install <path-or-url>   # Install a skill
-weft skill remove <name>           # Remove an installed skill
+weft skills install <path>         # Install a skill from a local path
+weft skills remote-install <name>  # Install a skill from ClawHub by name
+weft skills remove <name>          # Remove a user-installed skill
 ```
 
 ---
