@@ -1,6 +1,11 @@
 # clawft-core
 
-Core engine for clawft (agent loop, message bus, context management).
+The core engine of the clawft agent framework: the agent loop, the message bus,
+context management and memory. Providers, channels and tools plug into it, and
+the `weft` CLI drives it. Use it to embed an agent in your own program.
+
+See [agent loop](https://weftos.weavelogic.ai/docs/clawft/agent-loop) and
+[architecture](https://weftos.weavelogic.ai/docs/clawft/architecture).
 
 Part of [WeftOS](https://github.com/WeftOS/weftos), version 0.8.4.
 

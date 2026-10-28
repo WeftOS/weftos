@@ -1,8 +1,14 @@
 # clawft-kernel
 
-WeftOS kernel: boot sequence, process table, service registry, and health subsystem.
+The WeftOS kernel crate: boot sequence, process table, typed IPC, service
+registry, governance, the ExoChain audit chain, and the mesh, placement,
+exposure and cogbus services that the node daemon runs. Use it to build on the
+kernel directly; the operator CLI is `weaver`.
 
-WeftOS kernel layer for clawft.
+Layers, from the bottom: boot (K0), process (K1), IPC (K2), services (K3-K5),
+then mesh and placement. ExoChain is cross-cutting. The layer model, module
+groups and the feature matrix are in
+[Kernel Architecture](https://weftos.weavelogic.ai/docs/weftos/architecture).
 
 Part of [WeftOS](https://github.com/WeftOS/weftos), version 0.8.4.
 
