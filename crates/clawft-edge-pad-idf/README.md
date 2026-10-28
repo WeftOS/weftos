@@ -186,7 +186,7 @@ module doc in `src/ptt.rs`).
 ## Status
 
 - Flashed and camera-verified on the CrowPanel DIS08070H (see the
-  frames under `/Users/mathewbeane/dev/edgepad-backups/frames/` on the
+  frames under `<backup-dir>/frames/` on the
   bring-up Mac; serial logs alongside). GT911 answers at 0x5D on that
   unit.
 - WiFi credentials: copy `wifi_secrets.rs.example` → `wifi_secrets.rs`
