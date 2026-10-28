@@ -1,0 +1,17 @@
+{
+  "adrs": 123,
+  "catalog": {
+    "chips": 312,
+    "modules": 795
+  },
+  "cogs": 29,
+  "cogs_release": "v0.1.4",
+  "cogs_source_offline": false,
+  "crates": 65,
+  "generated_from": "7e52ef5c2",
+  "latest_release": "v0.8.4",
+  "published": 40,
+  "version": "0.8.4",
+  "weaver_commands": 34,
+  "weft_commands": 29
+}

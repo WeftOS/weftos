@@ -27,6 +27,7 @@ FORCE=false
 DEBUG=false
 NO_FAIL_FAST=false
 PREFIX=""
+GEN_FACTS_ARGS=()
 SERVE_PORT=""
 WASM_PANEL_MAX_RAW_KB=""
 WASM_PANEL_MAX_GZ_KB=""
@@ -1186,6 +1187,17 @@ cmd_gen_config_reference() {
     header "Generating the config sections reference from the serde structs"
     timer_start
     run_cmd python3 -I scripts/gen-config-reference.py
+    timer_end
+}
+
+# Site facts: regenerate docs/src/public/facts.json (and, with --update-readme,
+# the README facts block) from the workspace, the CLI reference, the ADR
+# directory and the pinned Cogs release (scripts/gen-facts.mjs). `--check`
+# fails when either is stale. Flags are passed through.
+cmd_gen_facts() {
+    header "Generating the site facts (facts.json, README facts block)"
+    timer_start
+    run_cmd node scripts/gen-facts.mjs ${GEN_FACTS_ARGS[@]+"${GEN_FACTS_ARGS[@]}"}
     timer_end
 }
 
@@ -3025,6 +3037,9 @@ ${BOLD}Commands:${NC}
   gen-cli-reference
                   Regenerate docs/reference/cli.md and the clawft/cli-reference-{weaver,weft}
                   site pages from target/debug/{weaver,weft} --help (run native-debug first)
+  gen-facts       Regenerate docs/src/public/facts.json (site/README/org-profile numbers).
+                  --update-readme also rewrites the README facts block; --check fails
+                  when either is stale; --offline skips the Cogs repo fetch
   check-cli-reference
                   Fail if the generated CLI reference differs from the built binaries
   gen-rpc-reference
@@ -3334,6 +3349,11 @@ parse_args() {
                 ;;
             --check)
                 AGENTS_CATALOG_CHECK=true
+                GEN_FACTS_ARGS+=(--check)
+                shift
+                ;;
+            --update-readme|--offline)
+                GEN_FACTS_ARGS+=("$1")
                 shift
                 ;;
             --verbose)
@@ -3390,6 +3410,7 @@ main() {
         check-launcher) cmd_check_launcher ;;
         check-doc-commands) cmd_check_doc_commands ;;
         gen-cli-reference) cmd_gen_cli_reference ;;
+        gen-facts)    cmd_gen_facts ;;
         check-cli-reference) cmd_check_cli_reference ;;
         gen-rpc-reference) cmd_gen_rpc_reference ;;
         gen-config-reference) cmd_gen_config_reference ;;

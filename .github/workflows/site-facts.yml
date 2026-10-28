@@ -1,0 +1,120 @@
+# Keeps the numbers on the docs-site home page, the root README and the WeftOS
+# org profile (WeftOS/.github) in step with the code.
+#
+#   check    On changes that move a number: `scripts/build.sh gen-facts --check`
+#            fails when docs/src/public/facts.json or the README facts block is stale.
+#            Fix: scripts/build.sh gen-facts --update-readme, commit the result.
+#   publish  After the "Release" workflow succeeds on a tag: regenerate facts.json
+#            from that tag, attach it to the GitHub release, and send a
+#            `weftos-release` repository_dispatch to WeftOS/.github so the org
+#            profile refreshes at once (it also refreshes daily on its own).
+#
+# The README and facts.json in the tree are never committed by automation (no
+# bot pushes to the release branches); the check job is what keeps them current.
+#
+# DISPATCH TOKEN. repository_dispatch to another repository needs a token that
+# can write to it; the default GITHUB_TOKEN cannot. This reuses the GitHub App
+# pattern of release.yml (actions/create-github-app-token@v2) with:
+#   secrets PROFILE_APP_ID and PROFILE_APP_PRIVATE_KEY (a dedicated App, or the
+#   existing App's id and key under these names), and the App installed on the
+#   WeftOS organisation with access to the repository WeftOS/.github and the
+#   permission "Contents: Read and write" (repository_dispatch needs it).
+# When either secret is missing, or the App is not installed on WeftOS/.github,
+# the dispatch step is skipped with a notice; the daily schedule in
+# WeftOS/.github then picks the change up within a day.
+name: Site facts
+
+on:
+  pull_request:
+    branches: [main, master]
+    paths:
+      - 'Cargo.toml'
+      - 'crates/*/Cargo.toml'
+      - 'docs/adr/**'
+      - 'docs/reference/cli.md'
+      - 'docs/src/public/facts.json'
+      - 'README.md'
+      - 'scripts/gen-facts.mjs'
+      - '.github/workflows/site-facts.yml'
+  push:
+    branches: [main, master]
+    paths:
+      - 'Cargo.toml'
+      - 'crates/*/Cargo.toml'
+      - 'docs/adr/**'
+      - 'docs/reference/cli.md'
+      - 'docs/src/public/facts.json'
+      - 'README.md'
+      - 'scripts/gen-facts.mjs'
+      - '.github/workflows/site-facts.yml'
+  workflow_run:
+    workflows: ['Release']
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    if: github.event_name != 'workflow_run'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check facts are current
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: scripts/build.sh gen-facts --check
+
+  publish:
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      startsWith(github.event.workflow_run.head_branch, 'v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ github.event.workflow_run.head_branch }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Regenerate facts.json from the tag
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: scripts/build.sh gen-facts
+      - name: Attach facts.json to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" docs/src/public/facts.json --clobber
+      - name: Check for the profile App secret
+        id: has-app
+        env:
+          PROFILE_APP_ID: ${{ secrets.PROFILE_APP_ID }}
+        run: |
+          if [ -n "$PROFILE_APP_ID" ]; then echo "present=true" >> "$GITHUB_OUTPUT"; else echo "present=false" >> "$GITHUB_OUTPUT"; fi
+      - name: Mint a token for WeftOS/.github
+        id: profile-token
+        if: steps.has-app.outputs.present == 'true'
+        continue-on-error: true
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.PROFILE_APP_ID }}
+          private-key: ${{ secrets.PROFILE_APP_PRIVATE_KEY }}
+          owner: WeftOS
+          repositories: .github
+      - name: Tell the org profile to refresh
+        if: ${{ steps.profile-token.outputs.token != '' }}
+        env:
+          GH_TOKEN: ${{ steps.profile-token.outputs.token }}
+        run: gh api repos/WeftOS/.github/dispatches -f event_type=weftos-release -f "client_payload[tag]=$TAG"
+      - name: Dispatch skipped
+        if: ${{ steps.profile-token.outputs.token == '' }}
+        run: echo "::notice::No PROFILE_APP_ID secret or App installation on WeftOS/.github; skipping repository_dispatch. The org profile refreshes on its daily schedule."
