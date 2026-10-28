@@ -332,8 +332,8 @@ Accessed via `weaver` CLI or kernel IPC socket:
 #    User: genesis, Password: cognitum, Enable SSH, Configure WiFi
 
 # 2. Install WeftOS
-curl -fsSL https://github.com/weave-logic-ai/weftos/releases/latest/download/clawft-cli-installer.sh | sh
-curl -fsSL https://github.com/weave-logic-ai/weftos/releases/latest/download/clawft-weave-installer.sh | sh
+curl -fsSL https://github.com/WeftOS/weftos/releases/latest/download/clawft-cli-installer.sh | sh
+curl -fsSL https://github.com/WeftOS/weftos/releases/latest/download/clawft-weave-installer.sh | sh
 
 # 3. Initialize WeftOS
 weft onboard
@@ -514,10 +514,10 @@ WeftOS ships ARM64 Linux binaries. On the Pi 5:
 
 ```bash
 # Install clawft CLI (agent framework)
-curl -fsSL https://github.com/weave-logic-ai/weftos/releases/latest/download/clawft-cli-installer.sh | sh
+curl -fsSL https://github.com/WeftOS/weftos/releases/latest/download/clawft-cli-installer.sh | sh
 
 # Install weaver (kernel daemon)
-curl -fsSL https://github.com/weave-logic-ai/weftos/releases/latest/download/clawft-weave-installer.sh | sh
+curl -fsSL https://github.com/WeftOS/weftos/releases/latest/download/clawft-weave-installer.sh | sh
 
 # Verify
 weft --version    # clawft CLI

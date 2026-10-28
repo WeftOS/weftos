@@ -105,7 +105,7 @@ to hardcode this (both `scripts/install.sh` and `update_cmd.rs` do).
    ad-hoc re-signing and a guard against dropping features. It does not
    install `weftos`. This is the developer path and it is the one that
    wrote the stale binary on this machine.
-8. **Docker** (`ghcr.io/weave-logic-ai/weftos`), WASI and browser WASM
+8. **Docker** (`ghcr.io/weftos/weftos`), WASI and browser WASM
    artifacts. Separate distribution problems, out of scope here.
 
 Documentation split: `docs/deployment/install.md` says install.sh is

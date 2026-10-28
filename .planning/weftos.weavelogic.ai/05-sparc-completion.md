@@ -72,7 +72,7 @@ Each sprint has a clear "done" definition. Check off as completed.
 
 ### Prerequisites
 - [ ] Sprint 2 deployed (so /docs index links work)
-- [ ] Verify Docker image works: `docker run --rm ghcr.io/weave-logic-ai/weftos:0.3.1 weft --help`
+- [ ] Verify Docker image works: `docker run --rm ghcr.io/weftos/weftos:0.3.1 weft --help`
 - [ ] Verify curl installer works on a clean machine
 
 ### Tasks

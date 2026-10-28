@@ -71,7 +71,7 @@ docs/src/
     <p class="description">2-sentence value prop</p>
     <CTAButtons>
       <PrimaryButton href="/docs/clawft/getting-started">Get Started</PrimaryButton>
-      <SecondaryButton href="https://github.com/weave-logic-ai/weftos">GitHub ★</SecondaryButton>
+      <SecondaryButton href="https://github.com/WeftOS/weftos">GitHub ★</SecondaryButton>
     </CTAButtons>
   </HeroSection>
 

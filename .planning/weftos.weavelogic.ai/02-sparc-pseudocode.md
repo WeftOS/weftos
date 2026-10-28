@@ -111,7 +111,7 @@ ACCEPTANCE: Every doc page has navigation to adjacent pages
 ```
 INPUT: Fumadocs layout configuration
 CHANGE:
-  - Set editOnGithub.repo = "weave-logic-ai/weftos"
+  - Set editOnGithub.repo = "WeftOS/weftos"
   - Set editOnGithub.dir = "docs/src/content/docs"
   - Set editOnGithub.branch = "master"
 OUTPUT: "Edit on GitHub" link on every doc page
@@ -142,7 +142,7 @@ INPUT: docs/src/content/docs/clawft/getting-started.mdx
 CHANGE:
   - Restructure into three paths:
     Path 1 — "Try it" (30 seconds):
-      docker run --rm -it ghcr.io/weave-logic-ai/weftos:0.3.1 weft --help
+      docker run --rm -it ghcr.io/weftos/weftos:0.3.1 weft --help
       Show expected output
     Path 2 — "Build something" (5 minutes):
       curl install → set API key → weft agent -m "Hello"
