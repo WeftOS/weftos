@@ -38,7 +38,6 @@ brew install weave-logic-ai/tap/clawft-cli
 brew install weave-logic-ai/tap/clawft-weave
 
 # Docker (linux/amd64 and linux/arm64).
-# Not working yet: available after the first published image.
 docker pull ghcr.io/weftos/weftos:latest
 
 # crates.io: libraries and the kernel daemon. weft and weaver are not
