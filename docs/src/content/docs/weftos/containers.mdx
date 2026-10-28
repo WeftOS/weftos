@@ -1,19 +1,22 @@
 ---
 title: "Container Integration"
-description: "ContainerManager lifecycle, ContainerConfig validation, ContainerState state machine, health check propagation, and port mapping."
+description: "ContainerManager types and state, what it can and cannot start, health mapping, and where real container workloads run."
 ---
 
-WeftOS provides container integration for managing sidecar services (databases, caches, external APIs) alongside agent processes.
+`container.rs` holds the kernel's types for sidecar services (databases, caches, external APIs) and a registry of them. At 0.8.4 it does not start containers itself. Real container workloads, including cogs, run through the workload runtime adapters described below.
 
-**Source**: `crates/clawft-kernel/src/container.rs` (~600 lines)
-**Feature**: `containers`
+**Source**: `crates/clawft-kernel/src/container.rs`, `crates/clawft-kernel/src/workload_runtime/container.rs`
+
+## What `ContainerManager` does today
+
+The module is compiled unconditionally. `ContainerManager::new` has no container engine wired in: `start_container` returns `ContainerError::DockerNotAvailable` unless the manager was created with `ContainerManager::simulated`, which only flips state in memory and assigns a synthetic `sim-` container id for tests. A container whose image begins with the cog image prefix is refused even in simulation, because cog workloads must start through the governed engine adapters (`start_container` in `container.rs`). Treat the manager as a registry and state model, not an orchestrator.
 
 ## ContainerConfig
 
 ```rust
 pub struct ContainerConfig {
-    pub docker_socket: String,           // Default: "unix:///var/run/docker.sock"
-    pub network_name: String,            // Default: "weftos"
+    pub docker_socket: String,           // default from default_docker_socket()
+    pub network_name: String,            // default "weftos"
     pub default_restart_policy: RestartPolicy,
     pub health_check_interval_secs: u64,
 }
@@ -22,35 +25,25 @@ pub struct ContainerConfig {
 ## ContainerState
 
 ```rust
-pub enum ContainerState { Created, Running, Stopped, Failed }
+pub enum ContainerState { Pulling, Creating, Running, Stopping, Stopped, Failed(String) }
 ```
 
-## Port Mapping and Volumes
+## Port mapping, volumes, restart policy
 
 ```rust
-pub struct PortMapping {
-    pub host_port: u16,
-    pub container_port: u16,
-    pub protocol: String,
-}
-
-pub struct VolumeMount {
-    pub host_path: String,
-    pub container_path: String,
-    pub read_only: bool,
-}
-
-pub enum RestartPolicy {
-    Never,
-    Always,
-    OnFailure { max_retries: u32 },
-}
+pub struct PortMapping { pub host_port: u16, pub container_port: u16, pub protocol: String }
+pub struct VolumeMount { pub host_path: String, pub container_path: String, pub read_only: bool }
+pub enum RestartPolicy { Never /* default */, OnFailure { max_retries: u32 }, Always }
 ```
 
-## Health Check Propagation
+`ManagedContainer` bundles a name, image, optional container id, state, ports, env, volumes and an optional health endpoint.
 
-Each container is wrapped in a `ContainerService` implementing `SystemService`, making health visible through the standard kernel health system. Running maps to Healthy, Created to Degraded, Stopped/Failed to Unhealthy.
+## Health mapping
 
-## Service Registration
+`ContainerManager::health_check` maps `Running` to `Healthy`, `Stopped` to `Unhealthy("stopped")`, `Failed` to `Unhealthy("failed: ...")` and every other state (pulling, creating, stopping) to `Degraded`. `ContainerService` wraps the manager as a `SystemService`, so the result is visible in the kernel health system. With `exochain`, starts and stops append `container` chain events.
 
-Containers are registered in the kernel's `ServiceRegistry` and resource tree under `/kernel/services/{container_name}`.
+## Where container workloads actually run
+
+`crates/clawft-kernel/src/workload_runtime/container.rs` implements the container adapters for Apple `container`, Docker or OrbStack, and Podman. They run a one-binary image built locally from the verified artifact over an operator-pinned base image, fronted by an ingest relay when the cog's loopback is not the node's. `WorkloadHost` gates each transition and chains it as a `workload.*` event (ADR-099 section 5, ADR-100). See [Placement](/docs/weftos/platform/placement) and [Cogs](/docs/weftos/platform/cogs).
+
+The `containers` Cargo feature exists in `clawft-kernel` and is empty (`containers = []`); it is off by default.

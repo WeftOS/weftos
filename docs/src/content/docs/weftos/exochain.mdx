@@ -5,7 +5,7 @@ description: "Append-only hash chain with SHAKE-256, Ed25519 and ML-DSA-65 dual 
 
 The ExoChain provides a cryptographically verifiable audit trail for all kernel state changes. Every significant event is appended to a hash-linked chain that can be verified for integrity and replicated across nodes.
 
-**Source**: `crates/clawft-kernel/src/chain.rs` (~1100 lines, 28 tests)
+**Source**: `crates/clawft-kernel/src/chain.rs` (events, manager, signing, RVF persistence, `ChainAnchor`), `chain_storage.rs` (storage location and lock), `chain_anchor.rs` (external anchoring), `chain_migrate.rs`, `chain_subscribe.rs`
 **Feature**: `exochain`
 
 ## ChainEvent
@@ -13,13 +13,15 @@ The ExoChain provides a cryptographically verifiable audit trail for all kernel 
 ```rust
 pub struct ChainEvent {
     pub sequence: u64,
+    pub chain_id: u32,
+    pub timestamp: DateTime<Utc>,
+    pub prev_hash: [u8; 32],
+    pub hash: [u8; 32],
+    pub payload_hash: [u8; 32],
     pub source: String,
     pub kind: String,
     pub payload: Option<serde_json::Value>,
-    pub timestamp: DateTime<Utc>,
-    pub hash: [u8; 32],
-    pub prev_hash: [u8; 32],
-    pub payload_hash: [u8; 32],
+    pub idempotency_key: Option<[u8; 32]>, // not covered by `hash`
 }
 ```
 
@@ -30,24 +32,38 @@ Every event carries three SHAKE-256 hashes:
 - **`payload_hash`**: Hash of canonical JSON payload bytes (content commitment; zeroed when payload is `None`)
 - **`hash`**: Hash of `(sequence || chain_id || prev_hash || source || 0x00 || kind || 0x00 || timestamp || payload_hash)`
 
-This enables two-way verification: verify the chain link backward and the payload content independently.
+This enables two-way verification: verify the chain link backward and the payload content independently. The `idempotency_key` is an out-of-band dedup hint and is deliberately not part of the hash, so existing chains stay hash-stable.
 
 ## ChainManager API
 
+`ChainManager` is internally locked, so its methods take `&self`. The main ones in `chain.rs`:
+
 ```rust
 impl ChainManager {
-    pub fn new(chain_id: &str, max_events: usize) -> Self;
-    pub fn append(&mut self, source: &str, kind: &str, payload: Option<Value>) -> ChainEvent;
+    pub fn new(chain_id: u32, checkpoint_interval: u64) -> Self;
+    pub fn default_local() -> Self;
+    pub fn append(&self, source: &str, kind: &str, payload: Option<Value>) -> ChainEvent;
+    pub fn append_idempotent(&self, source: &str, kind: &str, payload: Option<Value>,
+                             idempotency_key: Option<[u8; 32]>) -> ChainEvent;
+    pub fn append_signed(&self, event: ChainEvent) -> Result<ChainEvent, AppendSignedError>;
     pub fn verify_integrity(&self) -> ChainVerifyResult;
     pub fn tail(&self, n: usize) -> Vec<ChainEvent>;
     pub fn tail_from(&self, after: u64) -> Vec<ChainEvent>;
-    pub fn save_to_rvf(&self, path: &Path) -> Result<()>;
-    pub fn load_from_rvf(path: &Path) -> Result<Self>;
-    pub fn record_lineage(&mut self, parent: &str, child: &str, derivation: &str) -> LineageRecord;
-    pub fn verify_lineage(&self, records: &[LineageRecord]) -> bool;
-    pub fn verify_witness(&self) -> Result<bool>;
+    pub fn subscribe(/* filter */) -> /* replay then live feed */;
+    pub fn save_to_rvf(&self, path: &Path) -> Result<(), Box<dyn Error + Send + Sync>>;
+    pub fn load_from_rvf(/* path, ... */) -> /* restored manager */;
+    pub fn save_to_file(/* JSON */);
+    pub fn load_from_file(/* JSON */);
+    pub fn record_lineage(&self, child_id: [u8; 16], parent_id: [u8; 16], parent_hash: [u8; 32],
+                          derivation_type: DerivationType, mutation_count: u32,
+                          description: &str) -> ChainEvent;
+    pub fn verify_lineage(&self) -> Result<usize, _>;
+    pub fn verify_witness(&self) -> Result<usize, _>;
+    pub fn dual_sign(&self, data: &[u8]) -> Option<DualSignature>;
 }
 ```
+
+`append_signed` accepts an event from another node. It refuses reserved sources and kinds, answers `AlreadyPresent` for an event it already has, and reports a `Fork` when the same sequence has a different hash.
 
 ## Ed25519 + ML-DSA-65 Dual Signing
 
@@ -56,7 +72,7 @@ Post-quantum protection (Symposium D11):
 - **Ed25519**: Fast classical signature for all chain events
 - **ML-DSA-65**: Post-quantum lattice-based signature for store-now-decrypt-later protection
 
-Both signatures must verify for cross-node chain events. Uses `rvf_crypto::sign_segment_ml_dsa()` and `rvf_crypto::verify_segment_ml_dsa()`.
+The ML-DSA key is optional: a `ChainManager` starts with `ml_dsa_key: None`, `set_ml_dsa_key` enables dual signing (`has_dual_signing`), and `dual_sign` returns `None` when either key is missing. `verify_rvf_dual_signature` and `verify_dual_signature` check both. Which deployments configure the ML-DSA key was not verified for this page. The primitives are `weftos_rvf_crypto::sign_segment_ml_dsa` and `verify_segment_ml_dsa`.
 
 ## RVF Segment Persistence
 
@@ -93,14 +109,18 @@ let delta = chain.tail_from(100); // events with sequence > 100
 
 Used by the mesh networking layer for cross-node chain synchronization.
 
-## ChainAnchor Trait
+## Storage location and the chain lock
+
+`pin_chain_storage` (`chain_storage.rs`) resolves the chain location once at boot: an explicit `kernel.chain.checkpoint_path`, else `chain.json` under the runtime root, else, for a project root with no chain yet while a legacy `~/.clawft/chain.*` exists, the legacy chain stays in use with a warning until `weaver migrate user-chain` moves it (ADR-103 Phase 1). A chain carrying a `MIGRATED-TO-WEFTOS.txt` marker is refused unless `WEFTOS_RUNTIME_DIR` isolates it or `--adopt-legacy-chain` is passed. The chain in use is guarded by a `chain.lock` beside it for the kernel's lifetime, so two kernels can never append to one chain.
+
+## ChainAnchor
 
 ```rust
 pub trait ChainAnchor: Send + Sync {
-    async fn anchor(&self, chain_status: &ChainStatus) -> Result<AnchorReceipt>;
-    async fn verify(&self, receipt: &AnchorReceipt) -> Result<bool>;
-    async fn status(&self, receipt: &AnchorReceipt) -> Result<AnchorStatus>;
+    fn anchor(&self, hash: &[u8; 32]) -> Result<AnchorReceipt, String>;
+    fn verify(&self, receipt: &AnchorReceipt) -> Result<bool, String>;
+    fn backend_name(&self) -> &str;
 }
 ```
 
-A `MockAnchor` implementation exists for testing. Production target: OpenTimestamps.
+Implementations (ADR-041, WEFT-137): `MockAnchor` (tests), `FileLedgerAnchor` (a durable, append-only, hash-linked local ledger and the practical production default), and `ExternalLedgerAnchor` (an intent log with an optional endpoint binding; the network POST is deferred until a target ledger is selected). `AnchoringController` applies a frequency policy (`min_interval_secs`, `min_events_between`) over any anchor. Configuration is `kernel.chain.external_anchor`. No public-ledger backend such as OpenTimestamps is implemented.

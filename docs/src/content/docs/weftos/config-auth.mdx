@@ -1,69 +1,66 @@
 ---
 title: "Config & Auth Services"
-description: "ConfigService for typed namespaced configuration and AuthService for SHA-256 credential hashing with scoped tokens."
+description: "ConfigService for namespaced configuration and in-memory secrets, and AuthService for credentials, scoped tokens and audit. Both are in-memory kernel services with governance gating."
 ---
 
-Two kernel services provide configuration management and authentication for WeftOS agents and system components.
+Two kernel services provide runtime configuration and credential handling for agents and system components. Both keep their state in memory only: nothing in `config_service.rs` or `auth_service.rs` writes to disk, so values do not survive a kernel restart through these services.
 
-**Source**: `crates/clawft-kernel/src/config_service.rs`, `auth_service.rs`
+**Source**: `crates/clawft-kernel/src/config_service.rs`, `crates/clawft-kernel/src/auth_service.rs`
 **Phase**: K5
+
+> **Security status.** Secrets and credential values held by both services are obfuscated with a keyed XOR (`xor_encrypt` in each file; the source comment says "production would use AEAD"). That is not encryption against an attacker who can read process memory or knows the key, and the page that used to say "encrypted at rest" overstated it. Do not treat these services as a secret store for production credentials.
 
 ## ConfigService
 
-Typed, namespaced key-value configuration with change notification and secret storage.
+Namespaced key-value configuration with change notification and a secret area. Mutating calls take the PID of the caller (`changed_by`), are gated by the governance gate when one is attached (actions `config.set` and the secret and delete equivalents), and with `exochain` append `config` events to the chain.
 
-### Config Values
+### Values
 
 ```rust
 pub enum ConfigValue {
     Text(String),
-    Int(i64),
+    Integer(i64),
     Float(f64),
-    Bool(bool),
+    Boolean(bool),
     Json(serde_json::Value),
 }
-```
 
-Each value is stored as a `ConfigEntry` with metadata:
-
-```rust
 pub struct ConfigEntry {
-    pub namespace: String,
     pub key: String,
+    pub namespace: String,
     pub value: ConfigValue,
-    pub updated_at: SystemTime,
-    pub version: u64,
+    pub updated_at: DateTime<Utc>,
 }
 ```
 
 ### API
 
 ```rust
-let config = ConfigService::new(encryption_key);
+let config = ConfigService::new(encryption_key);        // [u8; 32]
+// or ConfigService::new_default()
 
-// Typed storage
-config.set_typed("mesh", "heartbeat_interval_ms", ConfigValue::Int(5000));
-config.get_typed("mesh", "heartbeat_interval_ms") -> Option<ConfigEntry>;
-config.list("mesh") -> Vec<ConfigEntry>;
-config.delete_typed("mesh", "heartbeat_interval_ms");
-
-// JSON storage (legacy)
-config.set("mesh", "peers", json!(["node-a", "node-b"]));
+// JSON values
+config.set("mesh", "peers", json!(["node-a"]), caller_pid)?;
 config.get("mesh", "peers") -> Option<Value>;
+config.delete("mesh", "peers", caller_pid)?;
 config.list_keys("mesh") -> Vec<String>;
 
-// Secrets (encrypted at rest)
-config.set_secret("api", "openai_key", "sk-...");
-config.get_secret("api", "openai_key") -> Option<String>;
+// Typed values
+config.set_typed(/* namespace, key, ConfigValue, changed_by */)?;
+config.get_typed("mesh", "heartbeat_interval_ms") -> Option<ConfigEntry>;
+config.list("mesh") -> Vec<ConfigEntry>;
+config.delete_typed(/* namespace, key, changed_by */)?;
 
-// Change notifications
-let changes = config.subscribe("mesh");
-// Poll changes: changes.read().unwrap()
+// Secrets, optionally scoped to PIDs
+config.set_secret("api", "key", b"...", scoped_to_pids)?;
+config.get_secret(/* namespace, key, requesting pid */)?;
+
+// Change notification
+let changes = config.subscribe("mesh");   // Arc<RwLock<Vec<ConfigChange>>>
+config.change_log() -> Vec<ConfigChange>;
 ```
 
-### Change Tracking
-
-Every mutation emits a `ConfigChange`:
+### Change tracking
 
 ```rust
 pub struct ConfigChange {
@@ -71,74 +68,56 @@ pub struct ConfigChange {
     pub key: String,
     pub old_value: Option<serde_json::Value>,
     pub new_value: Option<serde_json::Value>,
-    pub timestamp: SystemTime,
+    pub changed_by: Pid,
+    pub timestamp: DateTime<Utc>,
 }
 ```
-
-Subscribers receive changes via `Arc<RwLock<Vec<ConfigChange>>>`.
 
 ## AuthService
 
-SHA-256 credential hashing with scoped, time-limited tokens. Raw credentials are **never** stored.
+Centralized credential management in the Plan 9 Factotum pattern (K5-G2, `auth_service.rs` header): agents do not hold raw secrets; they request scoped, time-limited tokens and every access is audited. There are two credential paths.
 
-### Credential Model
+### Path 1: stored credentials and issued tokens
 
 ```rust
-pub enum CredentialType {
-    Password,
-    ApiKey,
-    Certificate,
-    Token,
+pub struct CredentialRequest {
+    pub credential_name: String,
+    pub requester_pid: Pid,
+    pub agent_id: String,
+    pub scope: Vec<String>,
+    pub ttl_secs: u64,
 }
 
-pub struct HashedCredential {
-    pub hash: String,       // SHA-256 hex
-    pub credential_type: CredentialType,
-    pub scopes: Vec<String>,
+pub enum CredentialGrant { Granted(IssuedToken), Denied { reason: String } }
+
+pub struct IssuedToken {
+    pub token_id: String,
+    pub credential_name: String,
+    pub issued_to: Pid,
+    pub issued_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub scope: Vec<String>,
 }
 ```
 
-### Token Issuance
+`register_credential(name, credential_type, value, allowed_agents)` stores a credential (value XOR-obfuscated) restricted to the listed agents; registration is a governed action (`auth.credential.register`). `rotate_credential`, `request_token`, `validate_token` and `revoke_token` complete the path. `CredentialType` is `ApiKey`, `BearerToken`, `Certificate` or `Custom(String)`.
+
+### Path 2: hashed agent credentials
+
+`register_hashed_credential(agent_id, raw_credential, scopes)` stores only the SHA-256 hash. `authenticate(agent_id, raw_credential)` compares hashes and returns an `AuthToken` with the registered scopes and a fixed one-hour expiry. `validate_auth_token`, `revoke_auth_token` and `check_scope(token_id, scope)` follow. A failed attempt is audited and, with `exochain`, appended as an `auth` chain event.
 
 ```rust
 pub struct AuthToken {
     pub token_id: String,
-    pub subject: String,
+    pub agent_id: String,
     pub scopes: Vec<String>,
-    pub issued_at: SystemTime,
-    pub expires_at: SystemTime,
+    pub expires_at: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
 }
 ```
 
-Tokens are scoped — each token carries a list of allowed scopes (e.g., `["mesh:read", "config:write"]`). Operations check `token.scopes` before proceeding.
+The hash is plain unsalted SHA-256 (`sha256_hash`); it is a credential-equality check, not a password-hashing scheme.
 
-### API
+### Audit
 
-```rust
-let auth = AuthService::new();
-
-// Register credentials (stores SHA-256 hash only)
-auth.register("admin", CredentialRequest {
-    credential: "secret123",
-    credential_type: CredentialType::Password,
-    scopes: vec!["admin".into()],
-});
-
-// Authenticate → returns token
-let token = auth.authenticate("admin", "secret123")?;
-
-// Validate and check scope
-auth.validate(&token.token_id)?;
-auth.check_scope(&token.token_id, "admin") -> bool;
-
-// Revoke
-auth.revoke(&token.token_id);
-```
-
-### Security Properties
-
-- Credentials hashed with SHA-256 before storage (never raw)
-- Tokens include expiry timestamps, checked on every validation
-- Scope-based access control (not role-based)
-- Revocation is immediate (token removed from registry)
-- 10 tests covering hash verification, expiry, scope checking, revocation
+`audit_log()` returns `AuditEntry` records for registrations, token issues, authentication attempts and revocations.
