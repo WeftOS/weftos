@@ -5,8 +5,8 @@
 
 WeftOS ships a multi-arch Docker image based on `alpine:3.21`. The image is
 **self-contained**: a multi-stage build compiles a static musl `weft` binary
-from the repository tag (or local checkout), then copies it into a minimal
-Alpine runtime. There is no download of cargo-dist / GitHub Release assets at
+and `weaver` from the repository tag (or local checkout), then copies them
+into a minimal Alpine runtime. There is no download of cargo-dist / GitHub Release assets at
 image-build time — the image tag is not coupled to whether platform binaries
 published successfully (WEFT-594 decision; see also WEFT-593).
 
@@ -49,22 +49,31 @@ docker run --rm -it ghcr.io/weftos/weftos:latest --version
 
 By default the entrypoint is `weft` and the default command is `gateway`,
 so a bare `docker run ... weftos:latest` starts the gateway on port 8080.
+For `gateway` the entrypoint (`scripts/docker/entrypoint.sh`) first starts
+`weaver kernel start --foreground` in the background and waits up to 30
+seconds for `weaver kernel status` to succeed, because the gateway reports
+kernel reachability on `/api/health` (ADR-102 D1). Set
+`WEFT_NO_EMBEDDED_KERNEL=1` to skip that. Any other command is passed to
+`weft` unchanged; `weaver` is on the path for `docker exec`.
 
 ## Image Tags
 
 | Tag         | Contents                                            |
 |-------------|-----------------------------------------------------|
 | `latest`    | Most recent release (rolls forward on every release)|
-| `vX.Y.Z`    | Pinned release (e.g. `v0.6.19`, `v0.7.0`)           |
+| `X.Y.Z`     | Pinned release, no leading `v` (e.g. `0.8.4`)       |
 
-Pin to a version in production. The `latest` tag is safe for local
-exploration but moves under you on every release.
+The workflow tags the image with the tag name minus its `v`
+(`VERSION="${TAG#v}"` in `release-docker.yml`). It runs after any successful
+`Release` run on a version tag and does not exclude release candidates, so
+`latest` can point at a pre-release. Pin to a version in production.
 
 ## Configuration
 
 The container runs as the unprivileged `weft` user with `$HOME=/home/weft`.
-The canonical config + state directory inside the container is
-`/home/weft/.clawft` -- mount your host config there.
+The canonical config directory inside the container is
+`/home/weft/.clawft` -- mount your host config there. `/home/weft/.weftos`
+holds kernel state and is declared as a second volume.
 
 The image ships a default `config.json` that enables the auth-gated REST/WS
 API on port 8080 so `weft gateway` starts out of the box. Only `/api/health`
@@ -117,7 +126,7 @@ port 8080. Override the version with the `WEFT_VERSION` environment
 variable:
 
 ```bash
-WEFT_VERSION=0.6.19 docker compose -f scripts/deploy/docker-compose.yml up -d
+WEFT_VERSION=0.8.4 docker compose -f scripts/deploy/docker-compose.yml up -d
 ```
 
 Inline equivalent:
@@ -226,7 +235,7 @@ via emulation — fine for one-off publishes, not what CI uses):
 ```bash
 docker buildx build \
   --platform linux/amd64,linux/arm64 \
-  --build-arg VERSION=0.8.0 \
+  --build-arg VERSION=0.8.4 \
   -t weftos:local \
   --load .
 ```

@@ -9,27 +9,17 @@ This guide gets you from zero to a running WeftOS kernel in a project directory.
 
 ## Install
 
-The fastest way to install WeftOS:
-
 ```bash
-# macOS / Linux
-curl -fsSL https://github.com/WeftOS/weftos/releases/latest/download/clawft-cli-installer.sh | sh
-
-# Or via Homebrew
-brew install weave-logic-ai/tap/clawft-cli
+curl -fsSL https://raw.githubusercontent.com/WeftOS/weftos/master/scripts/install.sh | sh
 ```
 
-```powershell
-# Windows
-irm https://github.com/WeftOS/weftos/releases/latest/download/clawft-cli-installer.ps1 | iex
-```
-
-See the [installation guide](/weftos/getting-started/installation) for Docker, cargo, npm, and source builds.
+This installs `weft`, `weaver` and `weftos`. Homebrew, Docker, crates.io and source builds are covered in the [installation guide](/docs/weftos/getting-started/installation).
 
 Verify:
 
 ```bash
 weft --version
+weaver --version
 ```
 
 ## Initialize a Project
@@ -45,7 +35,7 @@ This creates two things:
 
 1. **`weave.toml`** -- project configuration (tick rate, sources, embedding,
    governance, mesh settings). See the
-   [configuration reference](/weftos/guides/configuration) for all fields.
+   [configuration reference](/docs/weftos/guides/configuration) for all fields.
 
 2. **`.weftos/`** -- runtime state directory containing:
    - `chain/` -- local chain checkpoints
@@ -95,43 +85,44 @@ WeftOS initialized in current directory
   Runtime: .weftos/
 ```
 
-## Kernel Management with `weave`
+## Kernel Management with `weaver`
 
-The `weave` CLI provides detailed kernel management:
+`weaver` is the operator CLI for the node daemon. It manages the daemon and everything running under it:
+
+Run these from the project directory: `weaver kernel start` then starts a daemon for that project. The per-user daemon that hosts many project kernels is `weaver kernel start --profile user` (see [Deployment](/docs/clawft/deployment)).
 
 ```bash
 # Start kernel as a background daemon
-weave kernel start
+weaver kernel start
 
 # Start in foreground (blocking)
-weave kernel start --foreground
+weaver kernel start --foreground
 
 # Check kernel state, uptime, process/service counts
-weave kernel status
+weaver kernel status
 
 # List registered services
-weave kernel services
+weaver kernel services
 
 # List process table entries
-weave kernel ps
+weaver kernel ps
 
 # Stream logs in real time
-weave kernel attach
+weaver kernel attach
 
 # Show recent log entries
-weave kernel logs -n 50
+weaver kernel logs -n 50
 
 # Stop the daemon
-weave kernel stop
+weaver kernel stop
 
 # Restart the daemon
-weave kernel restart
+weaver kernel restart
 ```
 
 ## Build with More Features
 
-The default build includes only the `native` feature (process table, agent
-supervision, IPC). For production use, enable additional subsystems:
+The `weftos` binary in the release archives is built with the default `native` feature (process table, agent supervision, IPC). To enable more subsystems, build from source:
 
 ```bash
 # Single-node production: cognitive substrate + audit trail + self-healing
@@ -144,7 +135,7 @@ scripts/build.sh native --features ecc,exochain,os-patterns,mesh,cluster
 scripts/build.sh native --features ecc,exochain,os-patterns,mesh,cluster,onnx-embeddings,wasm-sandbox
 ```
 
-See the [feature flags guide](/weftos/guides/feature-flags) for the complete reference.
+See the [feature flags guide](/docs/weftos/guides/feature-flags) for the complete reference.
 
 ## Project Structure After Init
 
@@ -160,65 +151,42 @@ my-project/
   ... your code ...
 ```
 
-## Local LLM Setup (v0.2)
+## Local LLM Setup
 
-Starting with v0.2, clawft includes a built-in local LLM provider that works
-with any OpenAI-compatible inference server. No cloud API keys required.
+clawft can talk to any OpenAI-compatible inference server, so no cloud API key is needed. Two prefixes cover local servers:
 
-### Ollama (recommended for getting started)
+| Prefix | Default endpoint | Notes |
+|--------|------------------|-------|
+| `local/` | `http://127.0.0.1:8090/v1` | The Hermes serve recipe (`hermes-4.3-36b` by default). Override the base URL in your config. |
+| `ollama/` | `http://localhost:11434/v1` | Ollama's default port. |
 
-Install [Ollama](https://ollama.ai) and pull a model:
+Both read an optional key from `LOCAL_LLM_API_KEY`; local servers usually need none.
+
+### Ollama
 
 ```bash
-# Install Ollama
-curl -fsSL https://ollama.ai/install.sh | sh
-
-# Pull a model
 ollama pull llama3.1
-
-# Verify it's running
-curl http://localhost:11434/api/tags
+weft agent --model ollama/llama3.1 -m "hello"
 ```
 
-Configure clawft to use Ollama by setting the model prefix to `local/`:
+To make it the default, set it in `~/.clawft/config.json`:
 
-```bash
-weft agent --model local/llama3.1
+```json
+{ "agents": { "defaults": { "model": "ollama/llama3.1" } } }
 ```
 
-Or set it in your configuration:
-
-```toml
-# In your agent config
-[routing]
-mode = "static"
-model = "local/llama3.1"
-```
-
-### Other Local Servers
-
-The local provider supports any OpenAI-compatible server:
-
-| Server | Default URL | Setup |
-|--------|-------------|-------|
-| **Ollama** | `http://localhost:11434/v1` | `ollama serve` |
-| **vLLM** | `http://localhost:8000/v1` | `vllm serve model-name` |
-| **llama.cpp** | `http://localhost:8080/v1` | `llama-server -m model.gguf` |
-| **LM Studio** | `http://localhost:1234/v1` | Start from LM Studio UI |
-
-No API key is required for local servers (key-optional auth). The provider
-auto-detects the server type from the URL and configures itself accordingly.
+Other servers (vLLM, llama.cpp, LM Studio) work the same way: point a provider's `api_base` at the server's `/v1` URL. See the [providers page](/docs/clawft/providers) for the provider list and override syntax.
 
 ## What Next
 
-- [Configuration Reference](/weftos/guides/configuration) -- every `weave.toml`
+- [Configuration Reference](/docs/weftos/guides/configuration) -- every `weave.toml`
   field with types, defaults, and examples
-- [Feature Flags](/weftos/guides/feature-flags) -- compile-time feature flags
+- [Feature Flags](/docs/weftos/guides/feature-flags) -- compile-time feature flags
   across all crates
-- [Installation](/weftos/getting-started/installation) -- detailed installation
+- [Installation](/docs/weftos/getting-started/installation) -- detailed installation
   (Docker, ONNX embeddings, debug builds)
-- [First Project](/weftos/getting-started/first-project) -- step-by-step tutorial
+- [First Project](/docs/weftos/getting-started/first-project) -- step-by-step tutorial
   for your first WeftOS project
-- [Kernel Phases](/weftos/kernel-phases) -- kernel phase architecture (K0-K6)
-- [Kernel Modules](/weftos/guides/kernel-modules) -- kernel module descriptions
-- [Architecture](/weftos/architecture) -- system architecture overview
+- [Kernel Phases](/docs/weftos/kernel-phases) -- kernel phase architecture (K0-K6)
+- [Kernel Modules](/docs/weftos/guides/kernel-modules) -- kernel module descriptions
+- [Architecture](/docs/weftos/architecture) -- system architecture overview

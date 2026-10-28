@@ -1,258 +1,91 @@
 ---
 title: Docker Deployment
-description: Complete Docker deployment guide including image builds, configuration, Docker Compose, CI/CD pipelines, and multi-arch releases.
+description: Run the WeftOS image from GHCR, configure it, compose it, and build it locally.
 ---
 
 # Docker Deployment
 
-WeftOS ships a minimal Alpine 3.21 Docker image built from a **self-contained
-multi-stage Dockerfile** (compiles static musl `weft` from the tag — no
-cargo-dist asset download; WEFT-594). Typical compressed size is ~30–40 MB.
-Multi-arch (`linux/amd64` + `linux/arm64`) is produced on native GitHub
-runners (no QEMU for arm64 Rust). Canonical operator guide:
-[docs/deployment/docker.md](https://github.com/WeftOS/weftos/blob/master/docs/deployment/docker.md).
+WeftOS publishes a multi-arch (`linux/amd64`, `linux/arm64`) image at `ghcr.io/weftos/weftos`. It is based on `alpine:3.21` and is built from the repository by a self-contained multi-stage `Dockerfile`: the build compiles `weft` and `weaver` as static musl binaries, so the image does not depend on the cargo-dist release assets. Arm64 is built on a native runner, not under QEMU.
 
-## Prerequisites
+The repository's operator guide has more detail: [docs/deployment/docker.md](https://github.com/WeftOS/weftos/blob/master/docs/deployment/docker.md).
 
-- [Docker](https://docs.docker.com/get-docker/) 20.10 or later
+Images published before 2026-10-27 live under `ghcr.io/weave-logic-ai/weftos`.
 
-## Quick Start
+## What is in the image
 
-Pull the pre-built image and run the gateway:
+- `weft` and `weaver`, in `/usr/local/bin`.
+- A non-root user `weft` with `$HOME=/home/weft`. Config and state live in two volumes: `/home/weft/.clawft` and `/home/weft/.weftos`.
+- A default `/home/weft/.clawft/config.json` that turns on the Bearer-token-gated REST and WebSocket API on port 8080, bound to `0.0.0.0` inside the container, over plain HTTP. Only `/api/health` and the token-bootstrap path are public.
+- An entrypoint that runs `weft` with your arguments. The default command is `gateway`. For `gateway`, the entrypoint first starts `weaver kernel start --foreground` in the background and waits up to 30 seconds for it to answer, because the gateway reports the kernel's reachability on `/api/health`. Set `WEFT_NO_EMBEDDED_KERNEL=1` to skip that.
+- A `HEALTHCHECK` that runs `weft status` every 30 seconds.
+
+## Quick start
 
 ```bash
 docker pull ghcr.io/weftos/weftos:latest
-docker run --rm -it ghcr.io/weftos/weftos:latest --version
+docker run --rm ghcr.io/weftos/weftos:latest --version
 ```
 
-By default the container starts in gateway mode (`weft gateway`).
-
-## Building from Source
-
-Clone the repository and build a static musl binary, then build the Docker
-image:
+The entrypoint is `weft`, so everything after the image name is a `weft` argument. A bare `docker run` starts the gateway. Publish the port on loopback unless you front it with a TLS proxy, because the container serves plain HTTP:
 
 ```bash
-git clone https://github.com/WeftOS/weftos.git
-cd clawft
-
-# Build the static binary (requires musl target)
-rustup target add x86_64-unknown-linux-musl
-cargo build --release --target x86_64-unknown-linux-musl
-
-# Prepare the Docker build context
-mkdir -p docker-build
-cp target/x86_64-unknown-linux-musl/release/weft docker-build/weft-linux-x86_64
-
-# Build the image
-docker build -t clawft:local .
+docker run -d --name weftos \
+  -v weftos-clawft:/home/weft/.clawft \
+  -v weftos-state:/home/weft/.weftos \
+  -p 127.0.0.1:8080:8080 \
+  ghcr.io/weftos/weftos:latest
 ```
+
+## Image tags
+
+The release workflow tags each image with the version without a leading `v` (for example `0.8.4`) and with `latest`.
+
+| Tag | Contents |
+|-----|----------|
+| `latest` | The most recent image the workflow published |
+| `X.Y.Z` | A pinned release, such as `0.8.4` |
+
+The workflow runs after any successful `Release` run on a version tag and does not skip release candidates, so `latest` can point at a pre-release. Pin a version in production.
 
 ## Configuration
 
-### Mounting a Config File
-
-The container expects configuration at `/root/.clawft/config.json`. Mount your
-local config into the container:
+Mount your own config over the default (read-only is fine; the workspace needs a writable volume):
 
 ```bash
 docker run --rm -it \
-  -v "$HOME/.clawft:/root/.clawft:ro" \
+  -v "$HOME/.clawft:/home/weft/.clawft:ro" \
+  -e OPENAI_API_KEY \
   ghcr.io/weftos/weftos:latest gateway
 ```
 
-### Environment Variables
-
-Pass API keys and settings via environment variables:
-
-```bash
-docker run --rm -it \
-  -e OPENAI_API_KEY="sk-..." \
-  -e CLAWFT_CONFIG="/root/.clawft/config.json" \
-  -v "$HOME/.clawft:/root/.clawft:ro" \
-  ghcr.io/weftos/weftos:latest gateway
-```
-
-### Workspace Persistence
-
-To persist agent session data across container restarts, mount the workspace
-directory:
-
-```bash
-docker run --rm -it \
-  -v "$HOME/.clawft:/root/.clawft" \
-  ghcr.io/weftos/weftos:latest gateway
-```
+API keys come from environment variables (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and so on). Do not bake them into an image. The gateway default is loopback (ADR-102); the shipped config overrides it so a published port is reachable, which is why the container boundary should be your TLS boundary.
 
 ## Docker Compose
 
-A Docker Compose configuration for running the gateway with persistent storage:
-
-```yaml
-services:
-  clawft:
-    image: ghcr.io/weftos/weftos:latest
-    command: ["gateway"]
-    restart: unless-stopped
-    volumes:
-      - ./config.json:/root/.clawft/config.json:ro
-      - clawft-data:/root/.clawft/workspace
-    environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-    healthcheck:
-      test: ["CMD", "/usr/local/bin/weft", "status"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-
-volumes:
-  clawft-data:
-```
-
-Start the service:
+The repository ships a working definition in `scripts/deploy/docker-compose.yml`:
 
 ```bash
-docker compose up -d
-docker compose logs -f clawft
+docker compose -f scripts/deploy/docker-compose.yml up -d
+docker compose -f scripts/deploy/docker-compose.yml logs -f
 ```
 
-## Health Checks
-
-The `weft status` command returns a non-zero exit code if the agent cannot
-initialise. Use it as a Docker health check (shown in the Compose example
-above) or probe it manually:
+It uses the named volume `weft-config` for `/home/weft/.clawft`, publishes `${WEFT_PORT:-8080}`, and takes the image tag from `WEFT_VERSION`:
 
 ```bash
-docker exec <container> /usr/local/bin/weft status
+WEFT_VERSION=0.8.4 docker compose -f scripts/deploy/docker-compose.yml up -d
 ```
 
-## Security Considerations
-
-The `FROM scratch` image has no shell, no package manager, and no OS libraries
--- the attack surface is minimal. For additional hardening:
-
-- **Read-only filesystem**: mount the config volume as `:ro` and use a named
-  volume for workspace data.
-- **Non-root execution**: the `scratch` image has no users, so the process runs
-  as UID 0 inside a minimal namespace. For stricter isolation, run with
-  `--user 1000:1000` and adjust volume permissions accordingly.
-- **Network restrictions**: use `--network=none` for offline testing, or create
-  a dedicated Docker network to restrict egress.
-- **Secrets**: never bake API keys into the image. Pass them via environment
-  variables or Docker secrets.
-
-## Troubleshooting
-
-**Container exits immediately**
-
-Check that the config file is valid JSON and the volume mount path is correct:
+## Health checks
 
 ```bash
-docker run --rm -it \
-  -v "$HOME/.clawft:/root/.clawft:ro" \
-  ghcr.io/weftos/weftos:latest status --detailed
+docker inspect --format '{{.State.Health.Status}}' weftos
+docker exec weftos weft status
+curl -sS http://127.0.0.1:8080/api/health
 ```
 
-**Permission denied on config file**
+`/api/health` returns 503 with a "degraded" status when the gateway cannot reach a kernel daemon.
 
-Ensure the config file is readable by the container user. On Linux:
-
-```bash
-chmod 644 ~/.clawft/config.json
-```
-
-**Cannot reach LLM API**
-
-Verify DNS and network access from the container:
-
-```bash
-docker run --rm ghcr.io/weftos/weftos:latest agent -m "ping"
-```
-
-If running behind a corporate proxy, pass proxy environment variables:
-
-```bash
-docker run --rm -e HTTPS_PROXY="http://proxy:8080" ...
-```
-
----
-
-## CI/CD Pipeline (K2)
-
-clawft uses a GitHub Actions workflow (`.github/workflows/pr-gates.yml`) to
-enforce quality gates on every pull request. The pipeline also supports
-multi-arch Docker image builds for releases.
-
-### PR Gate Jobs
-
-Every pull request must pass all of the following jobs before merge:
-
-| Job | Command | Description |
-|-----|---------|-------------|
-| **Clippy lint** | `cargo clippy --workspace -- -D warnings` | Zero-warning clippy across all crates |
-| **Test suite** | `cargo test --workspace` | Full workspace test suite |
-| **WASM size gate** | `scripts/bench/wasm-size-gate.sh` | Assert WASM binary < 300 KB raw, < 120 KB gzipped |
-| **Binary size check** | `wc -c target/release/weft` | Assert release binary < 10 MB |
-| **Integration smoke** | Docker build + gateway start | Build image, start gateway, verify it runs for 5s |
-
-The pipeline uses `concurrency` groups to cancel stale runs when new commits
-are pushed to the same PR branch.
-
-### Clippy Gate
-
-Clippy runs with `-D warnings` (deny all warnings), which means any new
-warning introduced by a PR will fail the build:
-
-```bash
-cargo clippy --workspace -- -D warnings
-```
-
-### Test Gate
-
-The full workspace test suite runs without feature flags to catch regressions
-in the default build:
-
-```bash
-cargo test --workspace
-```
-
-### WASM Size Assertion
-
-The WASM size gate builds the `clawft-wasm` crate with the `release-wasm`
-profile and checks both raw and gzipped sizes:
-
-```bash
-cargo build --target wasm32-wasip2 --profile release-wasm -p clawft-wasm
-bash scripts/bench/wasm-size-gate.sh "$WASM_BINARY" 300 120
-```
-
-The `release-wasm` profile uses `opt-level = "z"` for aggressive size
-optimization. The CI job also installs `binaryen` for `wasm-opt`.
-
-### Binary Size Check
-
-The release binary must stay under 10 MB:
-
-```bash
-cargo build --release --bin weft
-SIZE_BYTES=$(wc -c < target/release/weft)
-# Fail if > 10 MB
-```
-
-A size report is posted to the GitHub Actions step summary for visibility.
-
-### Multi-Arch Docker Release (WEFT-594)
-
-Release images are published by `.github/workflows/release-docker.yml`:
-
-1. Self-contained multi-stage build of `weft` (static musl) on native runners
-   — `ubuntu-latest` → `linux/amd64`, `ubuntu-24.04-arm` → `linux/arm64`
-   (no QEMU for compilation).
-2. Per-platform digests merged with `docker buildx imagetools create` into
-   `ghcr.io/weftos/weftos:latest` and `:vX.Y.Z`.
-3. Post-publish `GET /api/health` smoke (WEFT-550).
-
-Local host-arch build:
+## Building locally
 
 ```bash
 ./scripts/build/docker-build.sh --tag dev --version dev
@@ -260,39 +93,46 @@ Local host-arch build:
 docker build -t weft:dev --build-arg VERSION=dev .
 ```
 
-The runtime is Alpine 3.21 + `ca-certificates` + `tzdata`, runs as non-root
-`weft`, and ships a default config enabling the auth-gated API on `:8080`.
-
-Same OCI multi-arch image works with Docker Desktop, OrbStack, and the
-Apple container CLI on macOS (pulls the `linux/arm64` layer natively on
-Apple Silicon).
-
-### Docker Image Variants
-
-| Variant | Base | Features | Use Case |
-|---------|------|----------|----------|
-| Default (root `Dockerfile`) | `alpine:3.21` | default CLI features (channels+services+delegate+api) | Production gateway / GHCR |
-| Kernel-only (`Dockerfile.alpine`) | `alpine:3.21` | `weaver` native | Kernel-only / compose under crates/clawft-kernel |
-
-To build with WASM plugin support:
+The build compiles inside Docker; no pre-built binary is needed. A kernel-only image (`weaver`, no gateway) builds from `crates/clawft-kernel/Dockerfile.alpine`:
 
 ```bash
-docker build --build-arg FEATURES="wasm-plugins" -t weft:wasm .
+docker build -f crates/clawft-kernel/Dockerfile.alpine -t weft-kernel:dev .
 ```
 
-### Integration Smoke Test
+## Security
 
-The smoke test job runs after the test suite passes:
+- Run as the built-in `weft` user; do not override it with `--user 0:0`.
+- Mount config read-only and keep state on named volumes.
+- Publish on `127.0.0.1` or behind a TLS proxy; the API is plain HTTP inside the container.
+- Use `--network=none` for offline work, or a dedicated Docker network to limit egress.
+- Pass secrets by environment variable or Docker secret, never in the image.
 
-1. Build a Docker image using `docker/build-push-action@v6` with GHA cache
-2. Start the container in gateway mode (`weft gateway`)
-3. Wait 5 seconds and verify the container is still running
-4. Shut down the container
+## Troubleshooting
 
-This catches issues like missing runtime dependencies, incorrect entrypoint
-configuration, or crash-on-startup bugs that unit tests cannot detect.
+**Container exits immediately.** Check the config is valid JSON and that any provider key your config references is set:
 
-## See Also
+```bash
+docker run --rm -it -v "$HOME/.clawft:/home/weft/.clawft:ro" ghcr.io/weftos/weftos:latest status --detailed
+```
 
-- [Installation](/weftos/getting-started/installation) -- source build instructions
-- [Configuration](/weftos/guides/configuration) -- runtime configuration reference
+**Permission denied on a mounted config.** The container runs as a non-root user. Make the file readable (`chmod 644 ~/.clawft/config.json`).
+
+**"degraded" health.** The kernel daemon did not start. Look at the container logs, or check whether `WEFT_NO_EMBEDDED_KERNEL=1` is set.
+
+**Cannot reach an LLM API.** Test from inside the container, and pass `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` if you are behind a proxy:
+
+```bash
+docker run --rm -e OPENAI_API_KEY ghcr.io/weftos/weftos:latest agent -m "ping"
+```
+
+## CI and release pipeline
+
+`.github/workflows/release-docker.yml` runs after the `Release` workflow succeeds on a tag (or by manual dispatch). It builds each architecture on a native runner, merges the digests into one multi-arch manifest, and then pulls the published image for a health smoke test (`scripts/release/docker-smoke.sh`).
+
+Pull requests run the gates in `.github/workflows/pr-gates.yml`, which include clippy, the test suite, WASM and binary size checks, browser WASM checks, `cargo audit`, the docs site build, and an integration smoke test. Run the same checks locally with `scripts/build.sh gate`.
+
+## See also
+
+- [Installation](/docs/weftos/getting-started/installation)
+- [Configuration](/docs/weftos/guides/configuration)
+- [Release process](/docs/weftos/guides/deployment-release)

@@ -12,7 +12,7 @@ The core execution cycle in clawft: receive message, build context, run pipeline
 Pluggable trait-based assessment analyzers. The `AnalyzerRegistry` holds registered analyzers (complexity, dependency, security, topology, data source) and runs them during `weft assess`. Custom analyzers implement the `Analyzer` trait.
 
 **AssessmentService**
-Kernel-native `SystemService` that performs codebase analysis. Uses tree-sitter for symbol extraction, pluggable analyzers for findings, and logs all operations to ExoChain. See [Assessment Workflow](/docs/weftos/guides/assessment).
+Kernel-native `SystemService` that performs codebase analysis. Runs pluggable analyzers over the scoped files to produce findings, and logs operations to ExoChain. See [Assessment Workflow](/docs/weftos/guides/assessment).
 
 **AppContext**
 The top-level runtime container that holds the message bus, session manager, memory store, tool registry, and LLM adapter. Wrapped by the kernel's `Kernel<P>` struct.
@@ -24,6 +24,18 @@ The ordered startup process: K0 kernel init, K1 process table, K2 IPC, ExoChain 
 
 ## C
 
+**Cog**
+A packaged, sandboxed workload that runs under the node daemon: a sensor driver, an inference step, an audio or camera pipeline. A cog has a `cog.toml` manifest and is placed on a node by governed placement (ADR-099, ADR-100). Cogs are built and catalogued in the separate `WeftOS/weftos-cogs` repository.
+
+**Cog Host**
+The service that runs cogs on a node. Its code moved to `WeftOS/weftos-cogs` in 0.8.4; the node daemon consumes it at a pinned revision.
+
+**Cogbus**
+The cog data-plane broker inside each node daemon (ADR-122). Cogs exchange readings, shared-memory streams, blobs and mesh topics through it, under governed subscriptions. Operate it with `weaver cogbus`.
+
+**Chief of staff (CoS)**
+The assistant surface that reads and acts across a user's devices and tools. Driven by `weft cos` (ADR-118).
+
 **CBOR**
 Concise Binary Object Representation. Used as the payload encoding inside RVF segments for compact binary serialization.
 
@@ -34,6 +46,9 @@ The agent runtime layer of WeftOS. Provides the LLM pipeline, tool system, skill
 Shared RPC crate providing `DaemonClient` for both `weft` and `weaver` CLIs. Enables daemon-first operation with graceful local fallback. Uses line-delimited JSON over Unix domain socket.
 
 ## E
+
+**Exposure**
+A resource a node announces to the mesh so other nodes can see it, switch it off and read its log (ADR-120). Operate with `weaver expose`.
 
 **ECC (Ephemeral Causal Cognition)**
 The cognitive substrate layer. Maintains a causal DAG (directed acyclic graph), HNSW vector memory, impulse queue for ephemeral signals, and a cognitive tick loop that runs continuous reasoning. See [ECC](/docs/weftos/ecc).
@@ -47,7 +62,7 @@ A tamper-evident append-only hash chain (SHAKE-256) that records every significa
 The governance enforcement point. Every agent action passes through a gate that checks capabilities, constitutional rules, and resource limits before allowing execution.
 
 **GGUF**
-A quantized model format used for local inference. WeftOS plans to support 0.5B-7B parameter GGUF models via the `ruvllm` crate for on-device agent reasoning.
+A quantized model format used for local inference. clawft does not load GGUF files itself; it talks to servers that do (llama.cpp, Ollama) through the `local/` and `ollama/` providers.
 
 ## H
 
@@ -69,10 +84,24 @@ The central `Kernel<P: Platform>` struct that manages the agent fleet. Wraps App
 
 ## M
 
+**MeshId**
+The identity of a named mesh, created with `weaver mesh create` and exported or imported as a signed record with `weaver mesh export` and `weaver mesh import`.
+
 **Mesh**
-The K6 peer-to-peer networking layer for cross-node agent coordination. Supports encrypted transport, discovery, and state replication without central servers.
+The peer-to-peer networking layer for cross-node coordination. Supports encrypted transport (QUIC, Noise), discovery, and state replication without central servers. See [Mesh Networking](/docs/weftos/mesh-networking).
+
+## N
+
+**Node daemon**
+The per-user `weaver` daemon on a machine. It hosts a kernel per project, runs cogs, brokers cog data and joins the machine to the mesh (ADR-103). Start it with `weaver kernel start`.
 
 ## P
+
+**Placement**
+The governed decision of which node runs a workload, based on signed node facts (ADR-099). See `weaver workload`.
+
+**Project kernel**
+The kernel for one registered project, run under the user daemon. Manage with `weaver project add|up|down|status|remove` (ADR-103).
 
 **PID (Process ID)**
 Every agent gets a unique PID from the kernel's process table, enabling supervision, resource limits, and lifecycle management.
@@ -84,6 +113,9 @@ The multi-stage message processing chain in clawft: context building, tool selec
 The trait abstraction (`Platform`) that lets WeftOS run on native (Linux, macOS, Windows), Docker, WASI, and browser WASM with the same kernel code.
 
 ## R
+
+**Router**
+The tailnet router in the user daemon: one HTTPS front door per machine that serves each project by path (ADR-116). Off by default; operate with `weaver route`.
 
 **RVF (Rust Vector Format)**
 A binary segment format for storing embeddings, metadata, and knowledge bases. Uses 64-byte aligned segments with CBOR payloads and optional WITNESS chains for tamper evidence.
@@ -105,10 +137,10 @@ The WASM runtime target for server-side deployments. WeftOS builds for `wasm32-w
 The browser build target (`wasm32-unknown-unknown`). Enables running the full clawft agent runtime in a web browser via wasm-bindgen.
 
 **Weaver**
-The ECC cognitive modeler. Runs the HYPOTHESIZE-OBSERVE-EVALUATE-ADJUST loop on causal models within the kernel.
+Two things share the name. `weaver` is the operator CLI and node daemon binary. In the ECC layer, the Weaver is the cognitive modeler that runs the HYPOTHESIZE-OBSERVE-EVALUATE-ADJUST loop on causal models within the kernel.
 
 **WeftOS**
-The complete AI agent operating system. Three layers: clawft (agent runtime), kernel (OS abstractions), and ECC (cognitive substrate).
+The complete AI agent operating system: clawft (agent runtime), the kernel (OS abstractions), ECC (cognitive substrate) and the node daemon that hosts them and joins machines into a mesh.
 
 **WITNESS Chain**
 A hash chain appended to RVF segment files that proves the integrity of embedded knowledge. Each operation is cryptographically linked to the previous, creating tamper-evident provenance.

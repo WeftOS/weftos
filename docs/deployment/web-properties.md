@@ -10,13 +10,13 @@ Source of the open question: `.planning/reviews/0.7.0-release-gate/14-deployment
 Architectural intent: [ADR-015 — Three-Property Web Architecture](../adr/adr-015-three-property-web.md).
 Strategy detail: [Web Presence Strategy](../weftos/web-presence-strategy.md).
 
-## Status summary (verified 2026-07-31)
+## Status summary (verified 2026-10-27)
 
 | Property | Public URL | DNS / live? | Deploy origin | Hosted on |
 |----------|------------|-------------|---------------|-----------|
-| Marketing | https://weavelogic.ai | Yes (A → Google Frontend) | Sibling repo [`weave-logic-ai/weavelogic.ai`](https://github.com/weave-logic-ai/weavelogic.ai) (private) | GCP (Next.js; `server: Google Frontend`) |
-| Docs / platform | https://weftos.weavelogic.ai | Yes (CNAME → Vercel) | **This repo** — Fumadocs under `docs/src/` | Vercel |
-| Assessment product | https://assess.weavelogic.ai | **No — NXDOMAIN** | Sibling project `agentic_ai_assessor` (not this repo; see below) | **Not deployed** |
+| Marketing | https://weavelogic.ai | Yes (HTTP 200) | Sibling repo [`weave-logic-ai/weavelogic.ai`](https://github.com/weave-logic-ai/weavelogic.ai) (private) | GCP (Next.js; as of 2026-07-31 the response header was `server: Google Frontend`) |
+| Docs / platform | https://weftos.weavelogic.ai | Yes (HTTP 200, `server: Vercel`) | **This repo** — Fumadocs under `docs/src/` | Vercel |
+| Assessment product | https://assess.weavelogic.ai | **No — no DNS answer** | Sibling project `agentic_ai_assessor` (not this repo; see below) | **Not deployed** |
 
 None of the GitHub Actions under `.github/workflows/` in **weftos** target
 `assess.weavelogic.ai`. That is expected: the assessment app is intentionally
@@ -30,8 +30,7 @@ out of this monorepo.
 |-----------|--------|
 | Role | Buyer-facing marketing + product landing |
 | Repo | https://github.com/weave-logic-ai/weavelogic.ai (private, org-internal) |
-| Historical workspace path | `/claw/root/weavelogic/projects/weavelogic.ai/` |
-| Live check (2026-07-31) | HTTP 200; Next.js; Google Frontend |
+| Live check (2026-10-27) | `curl -s -o /dev/null -w %{http_code} https://weavelogic.ai` = 200 |
 | CI in weftos? | No |
 
 **Interim assessment intake:** The marketing site serves an “AI Maturity
@@ -48,8 +47,8 @@ marketing property, **not** the standalone assessor app. Do not treat
 | Role | WeftOS platform documentation (Fumadocs) |
 | Repo | **This repo** — https://github.com/WeftOS/weftos |
 | In-tree source | `docs/src/` |
-| Live check (2026-07-31) | HTTP 200; `server: Vercel`; CNAME `*.vercel-dns-016.com` |
-| Related artifacts | `install.sh` published at https://weftos.weavelogic.ai/install.sh (see [install.md](./install.md)) |
+| Live check (2026-10-27) | `curl -sI https://weftos.weavelogic.ai`: HTTP 200, `server: Vercel` |
+| Related artifacts | `scripts/install.sh`, fetched from the repository (see [install.md](./install.md)) |
 
 Release and install runbooks for **WeftOS binaries / Docker / WASM** remain
 under this directory (`release.md`, `docker.md`, `wasm.md`, `install.md`).
@@ -61,10 +60,10 @@ They do not deploy the marketing or assessor properties.
 
 ### Confirmed status: **not deployed**
 
-As of **2026-07-31**:
+As of **2026-10-27** (first confirmed 2026-07-31):
 
-- `host assess.weavelogic.ai` → **NXDOMAIN** (no A/AAAA/CNAME).
-- `curl https://assess.weavelogic.ai` → cannot resolve host.
+- `dig +short assess.weavelogic.ai` returns nothing (no A/AAAA/CNAME).
+- `curl https://assess.weavelogic.ai` cannot connect (curl status 000).
 - No workflow, Dockerfile, or deploy script in **weftos** references this host.
 - ADR-015 still names the property as a **planned** third surface; it is not
   dead. No ADR amendment required — only this origin pin-down.
@@ -75,10 +74,8 @@ As of **2026-07-31**:
 |-----------|--------|
 | Project name | `agentic_ai_assessor` |
 | Role | Assessment product app: intake, scoring, reports, admin |
-| Historical workspace path | `/claw/root/weavelogic/projects/agentic_ai_assessor/` |
-| Product BRD (historical path) | `…/agentic_ai_assessor/docs/BUSINESS_REQUIREMENTS.md` |
 | Cross-refs in this repo | ADR-015; `docs/weftos/web-presence-strategy.md`; `.planning/sparc/weftos/0.1/10-sprint-plan.md` (W8) |
-| GitHub under `weave-logic-ai` | **No repo named `agentic_ai_assessor` listed** in the org inventory checked 2026-07-31 — treat as sibling / offline workspace until published under the org |
+| GitHub under `weave-logic-ai` | **No repo named `agentic_ai_assessor` listed** in the org inventory checked 2026-07-31 (not re-checked) — treat as sibling / offline workspace until published under the org |
 | CI in weftos? | **No** — do not add assessor deploy jobs here |
 
 Planned stack (strategy doc, not production reality yet):
@@ -105,7 +102,7 @@ See strategy §7: [Web Presence Strategy — Cross-Property Technical Architectu
 
 | Criterion | Result |
 |-----------|--------|
-| Status confirmed (deployed / not / from-where) | **Not deployed** (NXDOMAIN). Origin: sibling `agentic_ai_assessor`, not weftos. |
+| Status confirmed (deployed / not / from-where) | **Not deployed** (no DNS answer). Origin: sibling `agentic_ai_assessor`, not weftos. |
 | Origin documented in release runbook or `docs/deployment/` | This file. |
 | Sibling link or ADR-015 amend if dead | Sibling project + marketing interim URL documented; property is planned, **not** dead → ADR-015 left as Accepted. |
 

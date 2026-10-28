@@ -1,6 +1,6 @@
 ---
 title: "WeftOS Overview"
-description: "The kernel layer for clawft -- OS abstractions for agent orchestration, process management, IPC, governance, and cryptographic audit trails."
+description: "The WeftOS kernel: process management, IPC, governance, cryptographic audit trails, mesh networking, and the node daemon that hosts them."
 ---
 
 WeftOS is the kernel abstraction layer for clawft. It sits between the CLI/API surface (`clawft-weave`, `clawft-cli`) and the core agent runtime (`clawft-core`), providing OS-like abstractions for agent orchestration: process management, inter-process communication, governance, cryptographic audit trails, and resource namespacing.
@@ -9,7 +9,7 @@ WeftOS is the kernel abstraction layer for clawft. It sits between the CLI/API s
 
 WeftOS treats AI agents as first-class OS processes. Each agent receives a PID, a set of capabilities, an IPC inbox, and resource limits -- all managed by a central kernel that boots, supervises, and shuts down the agent fleet.
 
-The kernel is implemented in the `clawft-kernel` crate (25+ source files, 560+ tests) and is organized into six phases (K0 through K6) that incrementally add capabilities from basic boot/process management through mesh networking.
+The kernel is implemented in the `clawft-kernel` crate and was built in phases (K0 through K6) that added capabilities from basic boot and process management through mesh networking. Since 0.8.x the `weaver` daemon runs one kernel per project under a per-user daemon, and joins machines into a mesh (ADR-103). Cogs, the cogbus data-plane broker, workload placement and the tailnet router sit on top of the kernel; see the [release notes](/docs/weftos/vision/releases) for when each arrived.
 
 ### Platform Identity
 
@@ -29,40 +29,36 @@ WeftOS is an agent operating system kernel -- a Rust-native runtime that manages
 
 ## Feature Flags and Build Configurations
 
-| Feature | What It Enables | Key Dependencies |
-|---------|----------------|-----------------|
-| `native` (default) | Tokio runtime, native I/O | tokio, dirs |
-| `exochain` | Chain, TreeManager, Gate, RVF persistence | rvf-crypto, rvf-types, ed25519-dalek |
-| `tilezero` | TileZeroGate (three-way gate with receipts) | cognitum-gate-tilezero |
-| `cluster` | ClusterService with raft consensus | ruvector-cluster, ruvector-raft |
-| `wasm-sandbox` | Wasmtime-based tool runner | wasmtime |
-| `containers` | Container lifecycle management | system docker/podman |
-| `mesh` | K6 mesh networking (14 modules) | ed25519-dalek, rand |
-| `ecc` | ECC cognitive substrate (6 modules) | (internal) |
+`clawft-kernel` enables `native`, `exochain`, `cluster`, `tilezero`, `ecc`, `mesh`, `quic` and `workload-runtime` by default (`crates/clawft-kernel/Cargo.toml`, `default`). The `weftos` crate is thinner: its default is `native` only, and the other flags are opt-in.
 
-### Build Configurations
+| Feature | What It Enables |
+|---------|-----------------|
+| `native` | Tokio runtime, native I/O |
+| `exochain` | Chain, TreeManager, Gate, RVF persistence |
+| `tilezero` | TileZeroGate (three-way gate with receipts) |
+| `cluster` | ClusterService with raft consensus |
+| `mesh` | Mesh networking (`quic` adds the QUIC transport) |
+| `ecc` | ECC cognitive substrate |
+| `os-patterns` | Self-healing, dead-letter queue, metrics (requires `exochain`) |
+| `wasm-sandbox` | Wasmtime-based tool runner |
+| `containers` | Container lifecycle management |
 
-| Build | Features | Use Case |
-|-------|----------|----------|
-| Single-node | `default` (no mesh) | Development, testing, embedded |
-| Static cluster | `mesh` | Known peers, seed-peer bootstrap |
-| Dynamic cluster | `mesh-full` | DHT + mDNS auto-discovery |
-| Cognitive | `ecc` | Causal reasoning, HNSW search |
+The [feature flags guide](/docs/weftos/guides/feature-flags) has the full list and the per-crate defaults.
 
 ## Phase Roadmap (K0-K6)
 
-| Phase | Name | Status | Tests | Scope |
-|-------|------|--------|------:|-------|
-| K0 | Kernel Foundation | Complete | 45+ | Boot state machine, event logging, config, errors |
-| K1 | Process and Supervision | Complete | 80+ | PID allocation, process table, agent supervisor, RBAC |
-| K2 | IPC and Communication | Complete | 130+ | Message envelopes, A2A routing, pub/sub, cron, health, services |
-| K2b | Hardening | Complete | 30+ | Chain-logged lifecycle, signal handling, DashMap safety |
-| ExoChain | Cryptographic Audit | Complete | 60+ | Hash chain, resource tree, gate backends |
-| K3 | WASM Sandbox | Complete | -- | Wasmtime runner, fuel metering, sandbox config |
-| K3c | ECC Cognitive Substrate | Complete | 83 | Causal DAG, cognitive tick, HNSW, impulse queue |
-| K4 | Containers | Complete | -- | Container lifecycle, config validation, health propagation |
-| K5 | App Framework | Complete | -- | Manifest parsing, app lifecycle, agent spawning |
-| K6 | Mesh Networking | Phase 1 Complete | 133 | Transport traits, discovery, cross-node IPC, replication |
+| Phase | Name | Status | Scope |
+|-------|------|--------|-------|
+| K0 | Kernel Foundation | Complete | Boot state machine, event logging, config, errors |
+| K1 | Process and Supervision | Complete | PID allocation, process table, agent supervisor, RBAC |
+| K2 | IPC and Communication | Complete | Message envelopes, A2A routing, pub/sub, cron, health, services |
+| K2b | Hardening | Complete | Chain-logged lifecycle, signal handling, DashMap safety |
+| ExoChain | Cryptographic Audit | Complete | Hash chain, resource tree, gate backends |
+| K3 | WASM Sandbox | Complete | Wasmtime runner, fuel metering, sandbox config |
+| K3c | ECC Cognitive Substrate | Complete | Causal DAG, cognitive tick, HNSW, impulse queue |
+| K4 | Containers | Complete | Container lifecycle, config validation, health propagation |
+| K5 | App Framework | Complete | Manifest parsing, app lifecycle, agent spawning |
+| K6 | Mesh Networking | Shipped | Transport traits, discovery, cross-node IPC, replication; QUIC transport since 0.8.0 |
 
 ## Architecture Diagram
 
@@ -129,23 +125,9 @@ clawft-llm          LLM provider abstraction
 ## Running Tests
 
 ```bash
-# All kernel tests (default features)
-scripts/build.sh test
-
-# Kernel only
-cargo test -p clawft-kernel
-
-# Kernel + exochain
-cargo test -p clawft-kernel --features exochain
-
-# Kernel + all features
-cargo test -p clawft-kernel --features "exochain,cluster,wasm-sandbox,containers"
-
-# Kernel + ECC cognitive substrate
-cargo test -p clawft-kernel --features "exochain,ecc"
-
-# Full phase gate (11 checks)
-scripts/build.sh gate
+scripts/build.sh test    # workspace tests
+scripts/build.sh check   # fast compile check
+scripts/build.sh gate    # full phase gate, run before committing
 ```
 
 ## Documentation Map
@@ -161,7 +143,7 @@ scripts/build.sh gate
 - [WASM Sandbox](/docs/weftos/wasm-sandbox) -- tool sandboxing with Wasmtime
 - [Containers](/docs/weftos/containers) -- container integration
 - [App Framework](/docs/weftos/app-framework) -- application manifests and lifecycle
-- [Mesh Networking](/docs/weftos/mesh-networking) -- K6 multi-node networking
+- [Mesh Networking](/docs/weftos/mesh-networking) -- multi-node networking
 - [Discovery](/docs/weftos/discovery) -- peer discovery protocols
 - [Clustering](/docs/weftos/clustering) -- cluster management and distributed state
 - [Security](/docs/weftos/security) -- security model overview

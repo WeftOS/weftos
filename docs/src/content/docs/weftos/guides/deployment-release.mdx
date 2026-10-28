@@ -1,44 +1,50 @@
 ---
 title: Release Process
-description: Tag-driven SemVer releases — cargo-dist binaries, WASM, crates.io, multi-arch Docker, and release gates.
+description: Tag-driven SemVer releases: cargo-dist binaries and installers, signed manifest, WASM, SBOMs, crates.io, multi-arch Docker, and release gates.
 ---
 
 # Release Process
 
-WeftOS releases are **tag-driven**. Pushing a SemVer-shaped tag (`vX.Y.Z`)
-fans out into workflows that produce binaries, WASM artifacts, knowledge-base
-bundles, crates.io publish, and the multi-arch Docker image.
+WeftOS releases are tag-driven. Pushing a SemVer tag with a `v` prefix (`vX.Y.Z`, or `vX.Y.Z-rc.N` for a release candidate) starts several workflows that produce binaries and installers, a signed release manifest, WASM artifacts, SBOMs, a knowledge-base bundle, the crates.io publish, and the multi-arch Docker image.
 
-Canonical long-form operator guide (repo):
-[docs/deployment/release.md](https://github.com/WeftOS/weftos/blob/master/docs/deployment/release.md)
-(WEFT-468 — Fumadocs surfaces this publicly; deep detail lives with the
-deployment markdown set).
+The full operator guide is in the repository: [docs/deployment/release.md](https://github.com/WeftOS/weftos/blob/master/docs/deployment/release.md).
 
 ## Version numbering
 
-- **MAJOR.MINOR.PATCH** ([SemVer](https://semver.org/)).
-- Workspace root `Cargo.toml` is the version source of truth.
-- Publish refuses tag/workspace mismatches.
+- MAJOR.MINOR.PATCH ([SemVer](https://semver.org/)), with pre-release suffixes such as `-rc.15`.
+- The workspace root `Cargo.toml` is the version source of truth.
+- `Publish Crates` refuses a tag that does not match the workspace version.
 
 ## What a tag triggers
 
-| Artifact | Typical workflow / tool |
-|----------|-------------------------|
-| Host binaries | cargo-dist |
-| Browser / WASI WASM | `scripts/build.sh browser` / `wasi` |
-| Docker multi-arch | `release-docker.yml` (see [Docker Deployment](./deployment-docker)) |
-| crates.io | publish workflow for `publish = true` crates |
+| Artifact | Workflow |
+|----------|----------|
+| `weft`, `weaver`, `weftos` and `clawft-gui-egui` archives, shell and PowerShell installers, Homebrew formulas, a signed manifest | `Release` (cargo-dist, `release.yml`) |
+| `wasm32-wasip2` module | `build-wasi` job in `release.yml` |
+| Browser WASM package | `Browser WASM` (`wasm-browser.yml`) |
+| CycloneDX SBOMs | `Release SBOM` |
+| `weftos-docs-<tag>.rvf` knowledge base | `Release (Knowledge Base)` |
+| crates.io (40 crates at v0.8.4), stable tags only | `Publish Crates` |
+| Multi-arch image at `ghcr.io/weftos/weftos` (tags `X.Y.Z` and `latest`) | `Release (Docker)`, after `Release` succeeds; see [Docker Deployment](./deployment-docker) |
+| Marks the release "Pre-release" if crates.io or Docker failed | `Release Gate` |
+
+## Signed releases
+
+The `host` job in `release.yml` signs every release. It writes `weftos-release.json`, which lists the SHA-256 of every release file, and `weftos-release.json.sig`, an Ed25519 signature over it by the WeaveLogic release key. `weaver update` has the public key compiled in and refuses an unsigned release, a bad signature, or an archive that does not match the signed list. The key is separate from the cog-signing key. Details, key protection and manual verification are in the repository guide.
+
+Archives also carry sigstore attestations (`gh attestation verify`) and `.sha256` files; the signature is the stronger check.
 
 ## Local rehearsal
 
 ```bash
-# Prefer the unified script (see scripts/build.sh --help)
-scripts/build.sh gate --with-release-dry-run   # optional multi-minute
+scripts/build.sh gate --with-release-dry-run   # optional, takes several minutes
+scripts/build.sh release-dry-run               # cargo-dist packaging for the host triple
 scripts/build.sh native                        # release CLI
 ```
 
 ## Related
 
+- [Installation](/docs/weftos/getting-started/installation)
 - [Docker Deployment](./deployment-docker)
 - [WASM Deployment](./deployment-wasm)
 - [Deployment SOPs](./deployment-sops)

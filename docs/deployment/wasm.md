@@ -2,7 +2,8 @@
 
 > **Public site:** [Fumadocs — WASM Deployment](../src/content/docs/weftos/guides/deployment-wasm.mdx)
 > (WEFT-468 dual surface — see [README.md](./README.md)). ECC is excluded on
-> `wasm32-unknown-unknown` (WEFT-504).
+> `wasm32-unknown-unknown` (WEFT-504). The browser build (`scripts/build.sh browser`)
+> is documented under [`docs/browser/`](../browser/).
 
 clawft compiles to a WebAssembly module targeting `wasm32-wasip2`. The WASM
 build provides a lightweight agent core (target: < 300 KB uncompressed,
@@ -11,7 +12,7 @@ environments.
 
 ## Current Status
 
-The WASM build is functional but uses **platform stubs** for several subsystems:
+The `wasm32-wasip2` module is functional but uses **platform stubs** for several subsystems:
 
 | Subsystem       | Status                    | Notes                                      |
 |-----------------|---------------------------|--------------------------------------------|
@@ -29,7 +30,7 @@ Excluded tools: `exec_shell`, `spawn`, `message`.
 
 ## Prerequisites
 
-- **Rust 1.93+** with the `wasm32-wasip2` target:
+- **Rust 1.95+** with the `wasm32-wasip2` target:
 
   ```bash
   rustup target add wasm32-wasip2
@@ -140,7 +141,7 @@ The WASM plugin host allows third-party plugins to run as isolated WASM
 modules inside the clawft process. Plugins are sandboxed with configurable
 resource limits and have access to a controlled set of host functions.
 
-Source: `clawft-wasm/src/engine.rs`, `clawft-wasm/src/sandbox.rs`
+Source: `crates/clawft-wasm-host/src/engine.rs`, `crates/clawft-wasm-host/src/sandbox.rs`. `clawft-wasm` re-exports the host behind the `wasm-plugins` feature.
 
 ### Feature Gate
 
@@ -148,15 +149,15 @@ The plugin host is gated behind the `wasm-plugins` feature flag:
 
 ```bash
 # Build with WASM plugin support
-cargo build --features wasm-plugins
+cargo build -p clawft-wasm --features wasm-plugins
 
 # Build without (default -- smaller binary)
-cargo build
+cargo build -p clawft-wasm
 ```
 
 ### wasmtime Integration
 
-The plugin host uses [wasmtime](https://wasmtime.dev/) 33 with the WIT
+The plugin host uses [wasmtime](https://wasmtime.dev/) (the workspace pins 48.x in `Cargo.toml`) with the WIT
 (WebAssembly Interface Types) component model. Each plugin gets its own
 `wasmtime::Store` with isolated memory and an independent fuel budget.
 
@@ -289,6 +290,4 @@ Each plugin gets independent:
   via `wasi:http/outgoing-handler`, enabling LLM API calls from WASM.
 - **WASI filesystem**: Replace the filesystem stub with `wasi:filesystem/types`
   and `wasi:filesystem/preopens` for config and session persistence.
-- **Browser target**: Add a `wasm32-unknown-unknown` build with `wasm-bindgen`
-  for use in web applications.
 - **Component model**: Package as a WASI component for composable deployment.
