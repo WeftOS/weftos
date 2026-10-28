@@ -1,55 +1,61 @@
 ---
 title: "Security Model"
-description: "Capability-based access control, dual-layer governance gate, transport encryption, post-quantum protection, rate limiting, and browser sandboxing."
+description: "Capability-based access control, the governance gate, mesh transport and peer admission, tokens, revocation, rate limiting, message limits and browser sandboxing, each with the file that implements it."
 ---
 
-WeftOS implements defense-in-depth security across multiple layers.
+WeftOS applies several independent controls. This page lists each with its source; it does not rate the combined posture. For the operator reference see `docs/reference/security.md` and, for agents, the [Capabilities](/docs/weftos/capabilities) and [Governance](/docs/weftos/governance) pages.
 
-## Capability-Based Access Control
+## Capability-based access control
 
-Every agent has `AgentCapabilities` restricting IPC scope, tool permissions, sandbox policy, and resource limits. See [Capabilities](/docs/weftos/capabilities).
+Every agent process carries `AgentCapabilities` (spawn, IPC, tool and network flags, an IPC scope and resource limits), and `CapabilityChecker` enforces them (`crates/clawft-kernel/src/capability.rs`). See [Capabilities](/docs/weftos/capabilities).
 
-## Dual-Layer Governance Gate
+## Dual-layer governance gate
 
-Every action passes through two independent gate checks (Symposium D7):
-1. **Routing gate** (A2ARouter): Prevents unauthorized messages from reaching inboxes
-2. **Handler gate** (agent_loop): Prevents unauthorized command execution
+With the governance gate wired in at boot, a message is checked at routing in `A2ARouter::send` and again at handler time in the agent loop (Symposium D7; `boot.rs`, `a2a.rs`, `agent_loop.rs`). A routing `Deny` stops delivery; a routing `Defer` still delivers and the handler decides. See [Governance](/docs/weftos/governance), including the default-deny rule for `workload.*` actions.
 
-See [Governance](/docs/weftos/governance).
+## Mesh transport encryption
 
-## Transport Encryption (Noise Protocol)
+Mesh streams are wrapped in a Noise session (`crates/clawft-kernel/src/mesh_noise.rs`): the XX pattern for first contact (mutual authentication) and IK for a known responder key, using `Noise_XX_25519_ChaChaPoly_SHA256` for XX. The QUIC transport (`mesh_quic.rs`, ADR-026) uses quinn's TLS only to satisfy the QUIC handshake: it mints an ephemeral self-signed certificate on listen and skips certificate verification on connect, because the Noise session authenticates the peer. QUIC without a Noise session would therefore be unauthenticated.
 
-All inter-node traffic uses Noise Protocol:
-- **XX pattern**: First contact, mutual authentication, 2 RTT
-- **IK pattern**: Known peers, 1 RTT
-- Forward secrecy, no PKI required
+The mesh listener defaults to loopback `127.0.0.1:9489` (CHANGELOG 0.8.4-rc.1); a machine must be configured to listen on a LAN address.
 
-## Post-Quantum Protection
+## Post-quantum pieces
 
-### ML-KEM-768 (Key Encapsulation)
+- **ML-KEM-768 key exchange: placeholder, not protection.** `mesh_noise.rs` defines `KemConfig`, a negotiation result and a `HybridKeyExchange`, and `WeftHandshake` carries a `kem_supported` flag (`mesh.rs`). The exchange step is a stand-in: `KemUpgrade::execute` derives the "post-quantum" secret as a SHA-256 of the string `ml-kem-768-simulated` plus the remote public key, and its own comment says a real implementation would use ML-KEM-768 encapsulate and decapsulate. Do not rely on it for quantum resistance. The classical Noise session (X25519, ChaCha20-Poly1305) is what protects mesh traffic.
+- **ML-DSA-65 chain signatures**: `ChainManager` can hold an ML-DSA-65 key next to the Ed25519 key and `dual_sign` events; the key is optional (`chain.rs`). See [ExoChain](/docs/weftos/exochain).
 
-After Noise handshake, ML-KEM-768 upgrade combines X25519 + ML-KEM-768 via HKDF for quantum resistance.
+## Peer admission
 
-### ML-DSA-65 (Digital Signatures)
+After the optional Noise handshake, a peer may send an `AdmitHello` that signs the session's Noise handshake hash (so a captured hello cannot be replayed on another session) and binds the node id to the Ed25519 key the id is derived from (`crates/clawft-kernel/src/mesh_admit.rs`). Policy sits behind `AdmissionGate`: `AllowAll` is the default behaviour, and `CryptoGate` implements `off`, `observe` and `enforce` using a pinned governance genesis hash, revocation and a verdict source. At boot, `kernel.mesh.admission = "enforce"` requires `kernel.mesh.genesis_hash` (`boot.rs`). A peer's claimed destination scope is ignored, and its source scope is kept only when admission verified the peer.
 
-Cross-node chain events carry dual signatures (Ed25519 + ML-DSA-65). Both must verify.
+## Revocation
 
-## Message Size Limits
+A persistent host ban list is loaded at boot and checked in the peer handshake (`revocation.rs`). The same list revokes package ids, signer keys and artifact hashes for workloads (ADR-099 section 7).
 
-16 MiB maximum enforced in wire framing and IPC serialization.
+## Bearer tokens
 
-## Rate Limiting
+The daemon is the single issuer and validator of bearer tokens (`token_authority/`, ADR-102 D3 and D4). A token is a 256-bit random secret shown once to the issuer; only its SHA-256 is kept, and every issue and revoke is a chain event. A token has owner scope, so it is owner-equivalent with one exception enforced in the daemon: a token cannot issue, revoke or list tokens. The TTL is the limit.
 
-Resource limits provide implicit rate limiting: `max_messages`, `max_tool_calls`, fuel metering for WASM.
+## Rate limiting
 
-## Peer Capability Validation
+`rate_limit.rs` provides a keyed sliding-window limiter (WEFT-148) used per source on `ClusterMembership::add_peer` and per principal on `GovernanceEngine::evaluate`. A limit of 0 disables it. Separately, `ResourceLimits` caps messages and tool calls per agent, and the WASM runner meters fuel; see [WASM Sandbox](/docs/weftos/wasm-sandbox).
 
-`WeftHandshake` carries `governance_genesis_hash` (must match), capabilities bitmap, and `kem_supported` flag.
+## Message size limits
 
-## Browser Sandboxing
+16 MiB maximum: `MAX_MESSAGE_SIZE` for mesh framing (`mesh.rs`, `mesh_framing.rs`) and `KERNEL_IPC_MAX_MESSAGE_BYTES` for kernel IPC (`ipc.rs`).
 
-`SandboxPolicy::Strict` by default. No filesystem or network. Lower resource ceilings. Explicit tool allow-list.
+## Peer capability validation
 
-## Chain Integrity
+`WeftHandshake` carries `governance_genesis_hash`, a governance version string, a capabilities bitmap, the `kem_supported` flag, the chain head sequence and the supported sync streams (`mesh.rs`). Capability tokens a peer advertises are checked against an allow-list and an Ed25519 signature (`capability_claim.rs`).
 
-SHAKE-256 hash linking, Ed25519 + ML-DSA-65 dual signing, witness chain verification. `governance.genesis` serves as cluster trust root.
+## Browser sandboxing
+
+`AgentCapabilities::browser_default()` gives no spawning, no network, a restricted IPC scope (public topics only) and lower limits; three default `browser_policy` rules (BP-001 to BP-003) block the same things without elevation, and elevation goes through the governance gate (`capability.rs`, `governance.rs`).
+
+## Chain integrity
+
+SHAKE-256 hash linking, Ed25519 signatures, optional ML-DSA-65 dual signing and witness-chain verification (`chain.rs`). The `governance.genesis` event anchors the rule set, and a pinned genesis hash is what peers compare at admission.
+
+## Updates and releases
+
+`weaver update` verifies release signatures and fails closed (CHANGELOG 0.8.2). The wasmtime sandbox-escape fix shipped in 0.8.4-rc.15 (wasmtime 48.0.7, CHANGELOG rc.15). See [Update and signing](/docs/weftos/platform/update-and-signing).

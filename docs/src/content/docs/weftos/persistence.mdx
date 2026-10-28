@@ -1,98 +1,45 @@
 ---
 title: "Persistence"
-description: "Unified persistence coordinator for saving and restoring CausalGraph, HNSW index, and ExoChain state to disk."
+description: "What is persisted to disk at 0.8.4: the chain and tree checkpoints, cluster and app catalogs, and the JSON save/load helpers for the causal graph and HNSW index."
 ---
 
-The persistence layer provides a single entry point for saving and restoring all kernel subsystems to a local data directory. No external database is required — all state is stored as JSON files.
+Persistence in the kernel is several separate mechanisms, not one coordinator. This page lists each, says what writes it, and marks the helper module that nothing calls yet.
 
-**Source**: `crates/clawft-kernel/src/persistence.rs`
-**Phase**: K3c/K3
+## What the kernel writes on its own
 
-## Configuration
+| State | File and writer | Source |
+|-------|-----------------|--------|
+| Chain checkpoint | RVF checkpoint (primary) with a JSON fallback beside it, written by `Kernel::shutdown`; the chain location is pinned once at boot | `boot.rs` `shutdown`, `chain_storage.rs` |
+| Resource tree checkpoint | `<chain checkpoint>.tree.json`, written at shutdown | `boot.rs` `shutdown` |
+| Cluster peers | persisted to disk so joins survive restarts | `boot.rs`, "Cluster peer membership persists to disk" |
+| Installed apps | atomic `apps.json` | `boot.rs`, "Installs survive kernel restarts via atomic apps.json" |
+| Runtime files | socket, pid, log and lock files under the runtime root (`$WEFTOS_RUNTIME_DIR`, else the project's `.weftos/runtime`, else legacy `~/.clawft`) | `crates/clawft-types/src/runtime_paths.rs` |
+
+Chain details are on the [ExoChain](/docs/weftos/exochain) page and the shutdown order is on [Boot Sequence](/docs/weftos/boot-sequence).
+
+## The `persistence` helper module
+
+`crates/clawft-kernel/src/persistence.rs` is a tested helper for saving and loading the causal graph and the HNSW index as JSON. At the 0.8.4 base, `git grep` over `crates/` finds no caller of `save_all`, `load_all` or `PersistenceConfig` outside that file, so neither the kernel boot nor the daemon uses it. An earlier version of this page showed a `Kernel::boot_with_state` call that does not exist. Treat the module as a building block until a caller is added.
 
 ```rust
 pub struct PersistenceConfig {
-    pub data_dir: PathBuf,                    // Default: ".weftos/state"
-    pub auto_save_interval_secs: Option<u64>, // Future: background timer
+    pub data_dir: PathBuf,                    // default ".weftos/state"
+    pub auto_save_interval_secs: Option<u64>, // not used by any timer
 }
 ```
 
-## File Layout
+File names the helper uses under `data_dir`:
 
 ```
-.weftos/state/
-├── causal_graph.json   # CausalGraph nodes + edges
-├── hnsw_index.json     # HNSW vectors + metadata
-└── exochain.jsonl      # ExoChain events (line-delimited JSON)
+causal_graph.json   CausalGraph nodes, edges and next_node_id
+hnsw_index.json     HNSW vectors, metadata and index configuration
+exochain.jsonl      chain events as line-delimited JSON (chain_path())
 ```
 
-## API
+Functions: `save_causal_graph`, `load_causal_graph`, `save_hnsw`, `load_hnsw`, `save_all`, `load_all`, plus `save_all_with_chain` and `load_all_with_chain`, which also append a chain event. Loads return an empty instance when a file is missing and an `io::Error` when the JSON is corrupt or truncated (the module's own tests cover both). There is no file locking.
 
-### Save Operations
+## Other save and load helpers
 
-```rust
-// Save individual components
-save_causal_graph(&config, &graph)?;
-save_hnsw(&config, &hnsw)?;
-
-// Save everything at once (creates data_dir if needed)
-save_all(&config, &graph, &hnsw)?;
-```
-
-### Load Operations
-
-```rust
-// Load individual components (returns empty instance if file missing)
-let graph = load_causal_graph(&config)?;
-let hnsw = load_hnsw(&config)?;
-
-// Load everything
-let (graph, hnsw) = load_all(&config)?;
-```
-
-All load functions return fresh empty instances when no saved state exists, making cold boot and warm restart use the same code path.
-
-## CausalGraph Serialization
-
-The CausalGraph serializes its full internal state:
-- All nodes with labels, metadata, timestamps
-- All edges with type, weight, tick, and depth
-- The `next_node_id` counter for deterministic ID assignment
-
-Format: Single JSON object with `nodes`, `edges`, and `next_node_id` fields.
-
-## HNSW Index Serialization
-
-The HNSW service serializes:
-- All vectors with their string keys
-- Associated metadata (arbitrary JSON per vector)
-- Index configuration (M, ef_construction, dimensions)
-
-On reload, the HNSW graph structure is rebuilt from the stored vectors.
-
-## Recovery Behavior
-
-| Scenario | Behavior |
-|----------|----------|
-| No state directory | `load_all` returns empty instances |
-| Partial state (graph exists, HNSW missing) | Loads what exists, defaults the rest |
-| Corrupted JSON | Returns `io::Error` — caller decides recovery |
-| Concurrent access | Not currently locked — single-writer assumed |
-
-## Integration with Boot
-
-Persistence is typically invoked during kernel shutdown (save) and boot (restore):
-
-```rust
-// On boot
-let config = PersistenceConfig::default();
-let (graph, hnsw) = load_all(&config)?;
-let kernel = Kernel::boot_with_state(graph, hnsw);
-
-// On shutdown
-save_all(&config, kernel.causal_graph(), kernel.hnsw())?;
-```
-
-## Testing
-
-12+ roundtrip tests verify save/load for CausalGraph and HNSW, including empty state, populated state, and path configuration.
+- `eml_persistence.rs` saves and loads the EML models as JSON under `.weftos/eml-models/`; its header says kernel shutdown and boot use it, but no call site was found in `crates/` outside tests, so the same caveat applies. The retry model in `clawft-core` reads from `eml-models/` under the runtime dir (`llm_adapter.rs`).
+- `ecc_segment.rs` defines RVF segment types in the `0x50` to `0x5F` block for ECC payloads; its header says moving on-disk chain blobs onto them is follow-up work.
+- The HNSW service appends an `hnsw.save` chain event when it saves (`hnsw_service.rs`).
