@@ -41,7 +41,7 @@ Weights live on the model drive (mounted now); `~/.cache/huggingface/hub/models-
 | Qwen3.8-27B | yes | MLX 4-bit | 30G | yes | not measured by us |
 | Qwen3.5-4B / Qwen3-4B-Instruct-2507 | yes | MLX 4-bit | 5.7G / 4.2G | yes | Qwen3-4B printed tool names as text about half the time against a 16-tool prompt [memory: cos-local-model-gotchas] |
 
-The aepod-xpc 4070 (12 GB CUDA) cannot hold any of the 30B-80B ones; it fits only 4B-9B class. Not needed here. No GGUF Qwen3-Next was found in the listings I ran, so llama.cpp is not the path; MLX or Ollama is. I did not inspect `ollama list` output (empty at check time, Ollama may be stopped) or the drive's gguf directory beyond a listing that returned nothing for Qwen.
+The CUDA host's RTX 4070 (12 GB) cannot hold any of the 30B-80B ones; it fits only 4B-9B class. Not needed here. No GGUF Qwen3-Next was found in the listings I ran, so llama.cpp is not the path; MLX or Ollama is. I did not inspect `ollama list` output (empty at check time, Ollama may be stopped) or the drive's gguf directory beyond a listing that returned nothing for Qwen.
 
 Memory budget: Coder-Next 4-bit (~50 GB) plus the Haiku-class tier is Anthropic-side, so only one big local model is needed. `~/llm` doc rule: one big brain at a time; Coder-Next plus tiny worker plus embed plus STT/TTS is ~50 GB.
 
