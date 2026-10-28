@@ -7,30 +7,22 @@ description: "Communication channel setup for Telegram, Slack, Discord, and othe
 
 Channels are bidirectional bridges between external chat platforms and the agent pipeline. Each channel receives inbound messages from users and delivers outbound messages produced by agents.
 
-clawft has channel adapter scaffolding for eleven platforms, but only **four
-ship with real network I/O today**: Telegram, Slack, Discord, and the
-in-process `web` channel served by the Axum gateway. The remaining seven
-(`email`, `whatsapp`, `signal`, `matrix`, `irc`, `google_chat`, `teams`) are
-**planning stubs**: trait implementations, config validation, factories, and
-tests exist, but the transports are unimplemented. `start()` waits for
-cancellation and `send()` returns a synthetic message ID without contacting
-the platform. Do **not** enable the corresponding feature in production
-until the runtime ships -- outbound messages will be silently dropped.
-Roadmap tracking lives in
-`.planning/reviews/0.7.0-release-gate/05-channels.md` (Tasks 1-7).
+clawft has channel code for eleven platforms, but `weft gateway` wires up only **four** of them: Telegram, Slack, Discord, and the in-process `web` channel served by the Axum gateway. Those four are the supported channels.
+
+The other seven (`email`, `whatsapp`, `signal`, `matrix`, `irc`, `google_chat`, `teams`) are adapters in `clawft-channels` behind their own Cargo features. Each implements the plugin-trait `ChannelAdapter` with network code of its own (for example IMAP and SMTP for email, a Pub/Sub pull loop for Google Chat), but nothing in `weft gateway` registers them: the only channel factories it registers are Telegram, Slack and Discord (`crates/clawft-cli/src/commands/gateway.rs`). To use one you must embed the adapter in your own host or load it through the plugin system. Treat them as library code, not as gateway features. Google Chat's module header also says full OAuth2 is deferred.
 
 | Channel | Transport | Threading | Media | Feature Gate | Status |
 |---------|-----------|-----------|-------|--------------|--------|
-| Telegram | HTTP long polling (Bot API) | No | Yes | `telegram` | Ships |
-| Slack | WebSocket (Socket Mode) | Yes | Yes | `slack` | Ships |
-| Discord | WebSocket (Gateway v10) | Yes | Yes | `discord` | Ships |
-| Email | IMAP + SMTP | Yes | Yes | `email` | Roadmap (stub only) |
-| WhatsApp | WhatsApp Business API (webhook) | No | Yes | `whatsapp` | Roadmap (stub only) |
-| Signal | Signal CLI / signald bridge | No | Yes | `signal` | Roadmap (stub only) |
-| Matrix | Matrix client-server API | Yes | No | `matrix` | Roadmap (stub only) |
-| IRC | TCP / TLS (RFC 2812) | No | No | `irc` | Roadmap (stub only) |
-| Google Chat | Google Chat API (webhook / SA) | Yes | No | `google-chat` | Roadmap (stub only) |
-| Microsoft Teams | Bot Framework / Graph API | Yes | Yes | `teams` | Roadmap (stub only) |
+| Telegram | HTTP long polling (Bot API) | No | Yes | `telegram` | Ships (gateway) |
+| Slack | WebSocket (Socket Mode) | Yes | Yes | `slack` | Ships (gateway) |
+| Discord | WebSocket (Gateway v10) | Yes | Yes | `discord` | Ships (gateway) |
+| Email | IMAP + SMTP | Yes | Yes | `email` | Adapter in library, not wired into `weft gateway` |
+| WhatsApp | WhatsApp Business API (webhook) | No | Yes | `whatsapp` | Adapter in library, not wired into `weft gateway` |
+| Signal | Signal CLI / signald bridge | No | Yes | `signal` | Adapter in library, not wired into `weft gateway` |
+| Matrix | Matrix client-server API | Yes | No | `matrix` | Adapter in library, not wired into `weft gateway` |
+| IRC | TCP / TLS (RFC 2812) | No | No | `irc` | Adapter in library, not wired into `weft gateway` |
+| Google Chat | Google Chat API (webhook / SA) | Yes | No | `google-chat` | Adapter in library, not wired into `weft gateway` |
+| Microsoft Teams | Bot Framework / Graph API | Yes | Yes | `teams` | Adapter in library, not wired into `weft gateway` |
 | Discord Resume | WebSocket (Gateway v10, resume) | Yes | Yes | `discord-resume` | Folded into Discord (E1) |
 
 All channels share the same trait-based interface and lifecycle.

@@ -5,7 +5,7 @@ description: "The AgentLoop architecture: message processing cycle, tool executi
 
 ## Overview
 
-The `AgentLoop` (in `crates/clawft-core/src/agent/loop_core.rs`, ~2,235 lines) is the heart of the clawft agent runtime. It implements the consume-process-respond cycle that turns inbound messages into LLM-augmented responses with tool use.
+The `AgentLoop` (in `crates/clawft-core/src/agent/loop_core.rs`) is the heart of the clawft agent runtime. It implements the consume-process-respond cycle that turns inbound messages into LLM-augmented responses with tool use.
 
 ## Message Processing Flow
 
@@ -103,7 +103,7 @@ The `ContextBuilder` (`crates/clawft-core/src/agent/context.rs`) builds the LLM 
 | Conversation history | From session | Previous turns in the conversation |
 | User message | Current turn | The inbound message being processed |
 
-The context is assembled within a token budget. The `TokenBudgetAssembler` (pipeline stage 3) handles truncation when the context exceeds model limits, dropping middle messages first to preserve the system prompt and recent turns.
+With compression enabled (`ContextBuilder::with_compression`, `crates/clawft-core/src/agent/context_compress.rs`, ADR-058), turns older than the recent window are summarized into one summary message while the full text stays on the chain. The context is assembled within a token budget. The `TokenBudgetAssembler` (pipeline stage 3) handles truncation when the context exceeds model limits, dropping middle messages first to preserve the system prompt and recent turns.
 
 ## Bootstrap Sequence
 

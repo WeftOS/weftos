@@ -30,7 +30,7 @@ The security policies act as a guardrail between the LLM and the operating syste
 
 ## Command Execution Policy
 
-Source: `clawft-tools/src/security_policy.rs`
+Source: `crates/clawft-tools/src/security_policy.rs`; the default lists are in `crates/clawft-types/src/security.rs`.
 
 The `CommandPolicy` validates every command before `exec_shell` or `spawn` executes it.
 
@@ -43,11 +43,17 @@ The `CommandPolicy` validates every command before `exec_shell` or `spawn` execu
 
 In both modes, dangerous patterns are always checked first.
 
-### Default Allowlist (17 commands)
+### Default Allowlist
 
-`echo`, `cat`, `ls`, `pwd`, `head`, `tail`, `wc`, `grep`, `find`, `sort`, `uniq`, `diff`, `date`, `env`, `true`, `false`, `test`
+`DEFAULT_COMMAND_ALLOWLIST` has 51 entries (`crates/clawft-types/src/security.rs`):
 
-These are read-only or informational commands that cannot modify the system.
+- Read-only and informational: `echo`, `cat`, `ls`, `pwd`, `head`, `tail`, `wc`, `grep`, `find`, `sort`, `uniq`, `diff`, `date`, `env`, `true`, `false`, `test`, `which`, `basename`, `dirname`, `stat`, `file`, `readlink`
+- Text processing: `sed`, `awk`, `cut`, `tr`, `tee`, `xargs`
+- File operations: `mkdir`, `cp`, `mv`, `touch`, `rm`, `ln`, `chmod`
+- Shell builtins: `cd`, `export`, `source`, `type`, `command`
+- Development tools: `git`, `cargo`, `rustc`, `npm`, `npx`, `node`, `python`, `python3`, `weft`, `claude-flow`
+
+The list is not read-only: it includes commands that write and delete files. The dangerous-pattern check below still blocks destructive forms, and workspace containment applies to the file tools, but a command run through `exec_shell` is not confined to the workspace by this list. Narrow `tools.commandPolicy.allowlist` for untrusted channels.
 
 ### Dangerous Patterns (Always Blocked)
 
@@ -82,7 +88,7 @@ A command matching a dangerous pattern returns `PermissionDenied` even if its ba
 }
 ```
 
-When `allowlist` is empty, the 17 built-in defaults are used. A non-empty array replaces the defaults entirely.
+When `allowlist` is empty, the 51 built-in defaults are used. A non-empty array replaces the defaults entirely.
 
 ### Why Allowlist Over Denylist
 
@@ -155,7 +161,7 @@ Do not set `enabled: false` in production.
 
 ## Permission-Gated Tool Access
 
-Source: `clawft-core/src/tools/registry.rs`
+Source: `crates/clawft-core/src/tools/registry.rs`
 
 The `ToolRegistry` enforces permission checks before every tool execution when an `AuthContext` is present.
 
@@ -200,7 +206,7 @@ For write operations on non-existent paths, the deepest existing ancestor is can
 
 ## WASM Plugin Sandbox
 
-Source: `clawft-plugin/src/wasm_host.rs`
+Source: `crates/clawft-wasm-host/src/` (`engine.rs`, `sandbox.rs`)
 
 The WASM sandbox prevents untrusted plugin code from escaping isolation.
 
@@ -231,11 +237,12 @@ SHA-256 hash-chained audit trail for memory operations. Sequential verification 
 
 ### Security Auditor
 
-The `clawft-security` crate provides 57 audit checks across 10 categories: authentication, authorization, input validation, filesystem, network, cryptography, dependencies, configuration, logging, and plugin security.
+The `clawft-security` crate scans files for 50+ patterns across 10 categories: prompt injection, exfiltration URLs, credential literals, permission escalation, unsafe shell, supply-chain risk, denial of service, indirect prompt injection, information disclosure, and cross-agent access (`crates/clawft-security/src/checks/patterns.rs`).
 
 ```bash
-weft security scan          # run all checks
-weft security scan --fix    # auto-fix where possible
+weft security scan <path>                                 # scan a file or directory
+weft security scan <path> --format json --min-severity medium
+weft security checks                                      # list the available checks
 ```
 
 ### SandboxPolicy

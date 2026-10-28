@@ -7,7 +7,7 @@ description: "Run clawft in the browser via WebAssembly, including build instruc
 
 The `clawft-wasm` crate provides a browser-compatible entrypoint for clawft. It compiles to WebAssembly and exposes a JavaScript API for initializing the framework, sending messages, and managing configuration from within a web page.
 
-The WASM crate depends only on `clawft-types`, keeping the binary size minimal. The `Platform` trait is designed for this target -- `process()` returns `None`, HTTP uses the fetch API, and the filesystem uses WASI or in-memory backends.
+With the `browser` feature, `clawft-wasm` pulls in `clawft-core`, `clawft-llm`, `clawft-tools` and `clawft-platform` so the whole agent pipeline runs in the tab. The `Platform` trait is designed for this target -- `process()` returns `None`, HTTP uses the fetch API, and storage can be in-memory or OPFS (`browser-opfs` feature). The full API is in the [browser API reference](https://github.com/WeftOS/weftos/blob/master/docs/browser/api-reference.md).
 
 ## Architecture
 
@@ -17,15 +17,19 @@ Browser JavaScript
     v
 clawft-wasm (wasm-bindgen exports)
     |
-    +-- init(config_json)      -- Initialize the framework
-    +-- send_message(text)     -- Send a message to the agent
-    +-- set_env(key, value)    -- Set environment variables
+    +-- init(config_json, env_json?)  -- Initialize the framework
+    +-- send_message(text)            -- Send a message to the agent
+    +-- send_message_to(text, group)  -- Send into a named group session
+    +-- stream_chat(text, on_chunk)   -- Stream a response chunk by chunk
+    +-- set_env / get_env             -- Environment variables
+    +-- get_history / clear_history   -- Session history
+    +-- tool_list / tool_schema       -- Tool introspection
     |
     v
-clawft-types (shared type definitions)
+clawft-core pipeline + clawft-llm + clawft-tools (browser feature)
 ```
 
-The WASM module is loaded via `wasm-bindgen` and provides three primary exports: `init`, `send_message`, and `set_env`.
+The WASM module is loaded via `wasm-bindgen`. `init` must be called before the agent functions.
 
 ## Build the WASM Module
 
@@ -37,7 +41,7 @@ wasm-pack build --target web --no-default-features --features browser \
 
 This produces `pkg/clawft_wasm.js` and `pkg/clawft_wasm_bg.wasm`.
 
-Alternatively, use the build script:
+The build script wraps this and the wasm-bindgen step (output under `crates/clawft-wasm/www/pkg/`):
 
 ```bash
 scripts/build.sh browser

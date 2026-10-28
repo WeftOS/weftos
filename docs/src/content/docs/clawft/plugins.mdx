@@ -128,7 +128,7 @@ All plugin crates depend on `clawft-plugin` for the `Tool` trait.
 
 Feature gate: `wasm-plugins`
 
-The WASM plugin host uses wasmtime 29 with the WIT component model to execute untrusted plugin code in a sandboxed environment.
+The WASM plugin host (the `clawft-wasm-host` crate, re-exported by `clawft-wasm` behind `wasm-plugins`) uses wasmtime (workspace pin 48.x) with the WIT component model to execute untrusted plugin code in a sandboxed environment.
 
 ### Resource Limits
 

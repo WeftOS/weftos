@@ -5,7 +5,7 @@ description: "Crate dependency structure, core abstractions, pipeline stages, an
 
 ## Crate Structure
 
-The workspace contains 22 crates organized in a strict dependency hierarchy. Shared types sit at the bottom, platform abstraction above them, then core engine logic, with tools, channels, services, plugins, and the CLI at the top.
+This page covers the agent-runtime crates of the workspace. They form a strict dependency hierarchy: shared types at the bottom, platform abstraction above them, then core engine logic, with tools, channels, services, plugins, and the CLI at the top. The workspace has many more crates (the kernel, the node daemon `clawft-weave`, mesh, voice, GUI and hardware crates); see the [WeftOS architecture](/docs/weftos/architecture) page and the `crates/` directory.
 
 ```
                           clawft-cli (weft binary)
@@ -27,7 +27,7 @@ The workspace contains 22 crates organized in a strict dependency hierarchy. Sha
                 clawft-types
 ```
 
-`clawft-llm` has no internal dependencies -- it is a standalone LLM provider abstraction depending only on `async-trait`, `reqwest`, and `serde`.
+`clawft-llm` is a standalone LLM provider abstraction with no dependency on the agent-loop crates.
 
 ## Crate Reference
 
@@ -82,11 +82,11 @@ Optional feature: `vector-memory` -- enables embeddings, vector store, intellige
 
 ### clawft-tools
 
-Built-in tool implementations. Provides 11 tools: `read_file`, `write_file`, `edit_file`, `list_directory`, `exec_shell`, `memory_read`, `memory_write`, `web_search`, `web_fetch`, `message`, and `spawn`. All file tools enforce workspace path containment.
+Built-in tool implementations: file tools (`read_file`, `write_file`, `edit_file`, `list_directory`), `exec_shell`, memory tools, `web_search`, `web_fetch`, `spawn`, UI rendering, sub-agent tools, and voice and audio tools when the `voice` feature is on (`crates/clawft-tools/src/lib.rs`, `register_all`). All file tools enforce workspace path containment. See [Tools](/docs/clawft/tools) for the list.
 
 ### clawft-channels
 
-Plugin-based chat channel system with three core traits (`Channel`, `ChannelHost`, `ChannelFactory`) and `PluginHost` for lifecycle management. Four production adapters (Telegram, Slack, Discord, in-process `web`) ship with real network I/O; seven additional adapters (`email`, `whatsapp`, `signal`, `matrix`, `irc`, `google_chat`, `teams`) are planning stubs that compile and pass tests but do not yet transmit. See [Channels](/clawft/channels) for the per-adapter status table.
+Plugin-based chat channel system with three core traits (`Channel`, `ChannelHost`, `ChannelFactory`) and `PluginHost` for lifecycle management. `weft gateway` registers Telegram, Slack and Discord, and the gateway serves the in-process `web` channel. Seven more adapters (`email`, `whatsapp`, `signal`, `matrix`, `irc`, `google_chat`, `teams`) exist behind Cargo features but are not registered by the gateway. See [Channels](/docs/clawft/channels) for the per-adapter status table.
 
 ### clawft-services
 
@@ -94,7 +94,7 @@ Background services: `CronService` (scheduled jobs), `HeartbeatService`, MCP sub
 
 ### clawft-plugin
 
-Plugin trait definitions and runtime infrastructure: six extension-point traits, WASM sandbox (wasmtime 29), skill loader, hot-reload watcher, permission system, slash-command registry, and unified `PluginHost`.
+Plugin trait definitions and runtime infrastructure: six extension-point traits, the plugin manifest, skill loader, hot-reload watcher, permission system and slash-command registry. The wasmtime-based plugin host lives in `clawft-wasm-host`, re-exported by `clawft-wasm` behind the `wasm-plugins` feature.
 
 ### clawft-cli
 
@@ -102,7 +102,7 @@ The `weft` binary. Depends on all workspace crates. Provides the clap-derived CL
 
 ### clawft-wasm
 
-Browser/WASM entrypoint. Depends only on `clawft-types`. Provides a WASM-compatible surface; the `Platform` trait is designed for this target.
+Browser and WASI entrypoint. By default it depends on `clawft-types`; the `browser` feature adds `clawft-core`, `clawft-llm`, `clawft-tools` and `clawft-platform` for the in-tab agent. See [Browser Mode](/docs/clawft/browser).
 
 ## Pipeline Architecture
 
@@ -126,7 +126,7 @@ Every message flows through a 6-stage pipeline:
   LlmResponse
 ```
 
-The `PipelineRegistry` maps `TaskType` variants to specialized `Pipeline` instances. Unregistered task types fall back to the default pipeline. Current Level 0 implementations:
+The `PipelineRegistry` maps `TaskType` variants to specialized `Pipeline` instances. Unregistered task types fall back to the default pipeline. Default (Level 0) implementations; configuration can select Level 1 stages (`FitnessScorer`, `TrajectoryLearner`) and the tiered router:
 
 | Stage | Implementation | Behavior |
 |-------|---------------|----------|
@@ -174,7 +174,7 @@ AppContext::new(config, platform)
 ## Build Configuration
 
 - Rust edition: 2024
-- Minimum Rust version: 1.93
+- Minimum Rust version: 1.95 (`rust-version` in `Cargo.toml`; `rust-toolchain.toml` pins `1.95`)
 - License: MIT OR Apache-2.0
-- Release profile: `opt-level = "z"`, LTO, stripped symbols, single codegen unit, abort on panic
-- WASM release profile: inherits release with `opt-level = "z"`
+- Release profile: `opt-level = 3`, LTO, stripped symbols, single codegen unit, abort on panic
+- WASM release profile (`release-wasm`): inherits release with `opt-level = "z"`

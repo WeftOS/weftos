@@ -13,7 +13,7 @@ clawft uses file-based persistent memory following the nanobot pattern. Two mark
 
 Long-term facts in append-only format. Contains knowledge the agent should remember across sessions -- user preferences, project context, learned patterns, and accumulated facts.
 
-The file is periodically consolidated to prevent unbounded growth. The agent writes to MEMORY.md via the `memory_write` tool (append or overwrite mode) and reads from it via `memory_read` (with optional paragraph-level search).
+Automatic consolidation of a large file is not implemented (see Future Directions). The agent writes to MEMORY.md via the `memory_write` tool (append or overwrite mode) and reads from it via `memory_read` (with optional paragraph-level search).
 
 ### HISTORY.md
 
@@ -113,9 +113,9 @@ weft memory import --agent <id> --input path.json
 
 ## Future Directions
 
-Several memory enhancements are planned but not yet implemented:
+Several memory enhancements are planned but not yet implemented. (Compression of the live conversation window is a separate feature that exists; see [Agent Loop](/docs/clawft/agent-loop).)
 
-- **Context compression** -- Structured summarization of long memory files to reduce token consumption while preserving key facts.
+- **Memory-file summarization** -- Structured summarization of long memory files to reduce token consumption while preserving key facts.
 - **User modeling** -- Building a dialectic understanding of the user's preferences, communication style, and domain expertise (similar to Honcho's approach).
 - **Session search** -- Full-text search across HISTORY.md using the ECC cognitive substrate's HNSW index, enabling semantic retrieval of past session content.
 - **Memory consolidation** -- Automatic deduplication and summarization of MEMORY.md entries that have grown beyond a configurable threshold.

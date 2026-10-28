@@ -5,14 +5,24 @@ description: "Install clawft, configure a provider, and run your first AI assist
 
 ## Installation
 
-### From Source (Cargo)
+### Release installer
 
-Requires Rust 1.93+ (edition 2024).
+```bash
+curl -fsSL https://raw.githubusercontent.com/WeftOS/weftos/master/scripts/install.sh | sh
+```
+
+This installs `weft`, `weaver` and `weftos`. Homebrew (`brew install weave-logic-ai/tap/clawft-cli`), Docker and update instructions are in the [installation guide](/docs/weftos/getting-started/installation).
+
+### From Source
+
+Requires Rust 1.95 or newer (edition 2024). Use the project build script:
 
 ```bash
 git clone https://github.com/WeftOS/weftos.git
 cd weftos
-cargo build --release --bin weft
+scripts/build.sh native          # release build
+scripts/build.sh native-debug    # faster iteration
+scripts/build.sh native --features voice,channels
 ```
 
 The binary is produced at `target/release/weft`. Copy it to a directory on your `PATH`:
@@ -21,28 +31,13 @@ The binary is produced at `target/release/weft`. Copy it to a directory on your 
 cp target/release/weft ~/.local/bin/
 ```
 
-### Using the Build Script
-
-The project ships a build script that wraps common cargo operations:
-
-```bash
-# Release build
-scripts/build.sh native
-
-# Debug build (faster iteration)
-scripts/build.sh native-debug
-
-# Build with optional features
-scripts/build.sh native --features voice,channels
-```
-
 ### Docker
 
-Pull the pre-built image:
+Pull the pre-built image. Its entrypoint is `weft`, so arguments go straight to it:
 
 ```bash
 docker pull ghcr.io/weftos/weftos:latest
-docker run --rm -it ghcr.io/weftos/weftos:latest --version
+docker run --rm ghcr.io/weftos/weftos:latest --version
 ```
 
 The container starts in gateway mode by default. See [Deployment](/docs/clawft/deployment) for full Docker configuration.
@@ -211,10 +206,10 @@ You've hit the provider's rate limit. Options:
 
 ### Build fails with `error[E0658]: edition 2024`
 
-You need Rust 1.93+. Check your version and update:
+You need Rust 1.95 or newer. Check your version and update:
 
 ```bash
-rustc --version       # must be >= 1.93.0
+rustc --version       # must be >= 1.95.0
 rustup update stable
 ```
 
