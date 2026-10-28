@@ -1,0 +1,157 @@
+---
+title: Seed licence proxy
+description: How one Cognitum Seed acts as the licence proxy for one WeftOS mesh with weft-licence: mesh binding, checkout grants, operator approval of hashes, lapse and unbinding. States what is built and what is still a stub.
+---
+
+Cognitum cogs are licensed software. WeftOS does not copy-protect them and does
+not enforce payment. It scopes redistribution to **one admitted mesh**: a Cognitum
+Seed that holds the licence checks a cog out for the mesh, and the mesh's nodes
+share the bytes among themselves. This page describes the mechanism and how far
+it is built.
+
+**Status.**
+[ADR-106](https://github.com/WeftOS/weftos/blob/v0.8.4/docs/adr/adr-106-seed-licence-proxy.md)
+is Proposed, with review complete (three rounds). Phases 1a to 2 are built and
+integrated; phase 3 (steward relay, run gate, checkout CLI) is in progress. The
+Cog Host licence enforcement moved with the Cogs product; its successor decision
+is
+[COG-106](https://github.com/WeftOS/weftos-cogs/blob/v0.1.4/docs/decisions/COG-106-host-licence.md)
+in WeftOS/weftos-cogs. This ADR still owns the licence protocol, mesh identity,
+governance facts and the run gate. `weft-licence` stays in WeftOS.
+
+The commercial side of decision 3 below is pending: the ADR marks it "Pending
+C3: Cognitum must agree to this commercially".
+
+## The rules the design implements
+
+These are the owner's decisions recorded at the top of the ADR:
+
+1. The Seed works as a proxy for the one WeftOS mesh it is attached to, and is
+   not overloaded.
+2. The Seed fetches and maintains the licence, the Cognitum credential and the
+   cogs. When a node needs a cog, the Seed handles it.
+3. One Seed licence covers the whole attached mesh.
+4. Once a cog is checked out, no other node needs permission. A checkout is per
+   mesh, not per node; any node in the mesh may fetch, run and share the cog with
+   no further round trip to the Seed.
+
+## Roles
+
+| Role | Holds | Never holds |
+|---|---|---|
+| `weft-licence` on the Seed | the licence, the grant key, the cache of checked-out binaries, the mesh binding | mesh membership; it runs no cogs and does not seed the swarm |
+| Steward node (one admitted mesh node) | the link to `weft-licence`, the steward key, the first copy of each artifact | the grant key, the licence, Cognitum tokens |
+| Member nodes | the binding and grants, copies fetched from peers | Cognitum tokens, any link to the Seed |
+
+`weft-licence` is its own binary, system user and service unit on the Seed. It
+shares no uid, token or API with the Cog Host, because the Cog Host runs cogs and
+accepts installs from anyone holding its LAN token, and a grant key inside that
+process would be readable by them (ADR-106 section 2). Files and the install steps
+are in `docs/cogs/weft-licence.md`.
+
+## How a checkout works
+
+1. The steward asks for a cog at a version and architecture. A node first looks
+   for a valid grant for this mesh and fetches from peers if it has one.
+2. Otherwise the steward sends a signed request to `weft-licence`. It accepts
+   only requests the mesh service stamped as from an admitted peer of class
+   `node`, and asks governance for `cog.checkout`.
+3. `weft-licence` checks the declared licence, fetches the cog from the Cognitum
+   registry, checks the registry sha256 and size, computes BLAKE3, caches the
+   bytes, writes the new `seq` durably, and only then releases a signed
+   `CheckoutGrant`.
+4. The steward verifies the signature, binding and mesh id, stores the bytes,
+   chains `cog.checkout.granted` and floods the grant. It renews every 12
+   hours. Members fetch from peers, never from the Seed.
+5. An operator **approves the hashes** of a checked-out version before anything
+   runs. A run or install without an approval covering the artifact is refused,
+   even with a valid grant.
+
+## Mesh binding
+
+A Seed binds to exactly one mesh. The mesh id is derived from the genesis pin
+and a random `mesh_nonce` that the operator writes into every node's mesh
+config:
+
+```bash
+weaver mesh nonce generate
+```
+
+A node accepts a binding and turns on the checkout part of its policy only when
+admission is `enforce`, a governance verdict source is bound and
+`admission_open_membership` is off; otherwise it stays on the plain manifest
+policy. A changed nonce or pin orphans the binding: the node chains
+`licence.binding_orphaned`, turns checkout off and `weaver doctor` reports it
+(ADR-106 section 3).
+
+The grant key is generated on the Seed by `weft-licence init` over the USB link,
+with someone at the device, and is never learned over the network. The operator
+compares its fingerprint with what `weaver` shows before signing the binding.
+Binding is an operator signature; there is no automatic binding.
+
+```bash
+weaver workload node status
+weaver workload node bind --help
+weaver workload node unbind --help
+```
+
+The `weft-licence` commands are `init`, `bind FILE`, `override FILE`, `identity`
+and `serve` (`crates/weft-licence/src/main.rs`).
+
+## Checkout from the operator's seat
+
+```bash
+weaver cog checkout <cog>@<version>
+weaver cog checkout approve <cog>@<version> --operator-key ./operator.seed
+weaver cog checkout approve <cog>@<version> --operator-key ./operator.seed --confirm <content-key>
+weaver cog checkout status
+weaver cog checkout list
+weaver cog checkout renew
+weaver cog checkout release <cog>@<version>
+```
+
+Approving is an Admin operation signed with an operator key pinned on the
+daemon. The first form above prints the content and signs nothing; the second
+signs, pinned to the content key the first printed, and is refused if the
+content has changed. `weaver workload node reset-floor` (alias `weaver cog checkout
+reset-floor`) forgets the grant clock's high-water mark after a forward clock jump
+and changes nothing without `--confirm`.
+
+## Lapse, unbinding and revocation
+
+| Event | Sharing | Running instances |
+|---|---|---|
+| Licence lapses | no renewals; grants lapse within one TTL | keep running; a start or restart is refused (phase 3) |
+| Seed offline or steward down | grants lapse at expiry | same |
+| Unbind (any operator-Admin node) | every grant under the key stops when the record arrives | same |
+| Revocation of key, hash or package | immediate, and the bytes are evicted | same |
+
+A withdrawal reaches the mesh within the steward's next pull (at most 12 hours),
+then flood or sync. A grant TTL of T means a lapse can go unnoticed for up to T;
+the default is 72 hours and the maximum 7 days. Unbind alone does not void grants
+against a later rebind to the same grant key; the response to a stolen Seed is
+unbind plus a signer-key revocation of the grant key (ADR-106 section 8).
+Stopping is soft by design: running instances finish and are not killed over a
+clock or network fault.
+
+## What is built, and what is a stub
+
+- **Built:** the grant, binding and approval types and policy (phase 1a);
+  `mesh.cog.binding` and `mesh.cog.grant` floods and sync (1b); transport and
+  steward relay (1c); Seed bind through `weaver workload node bind` (1d);
+  the `weft-licence` service (phase 2); the `weaver cog checkout` CLI and the run
+  gate (phase 3, in progress).
+- **A declaration, not a check.** The licence `weft-licence` consults is a
+  declared licence file that the operator places and signs
+  (`licence.json`; `LocalDeclaredLicence` in
+  `crates/weft-licence/src/providers.rs`). `weaver cog licence add` is described
+  in its own help as "a declaration, not a payment check". Nothing here verifies
+  an entitlement with Cognitum.
+- **No device key yet.** The device signer is a stub that returns no signature
+  (`StubDeviceSigner`, marked `STUB (C4)` at
+  `crates/weft-licence/src/providers.rs:112`). The Seed's own device-key
+  signing is not used.
+- **Not copy protection.** Mesh nodes never see a Cognitum token, and the design
+  scopes sharing to a mesh; a node that is admitted to the mesh can still copy
+  what it holds. See the threat section of the ADR.
+- **One Seed per mesh** through phases 1 to 3.

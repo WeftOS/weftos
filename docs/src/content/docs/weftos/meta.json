@@ -33,6 +33,8 @@
     "observability",
     "persistence",
     "security",
+    "---Platform",
+    "...platform",
     "---Guides",
     "...guides",
     "---Integrations",

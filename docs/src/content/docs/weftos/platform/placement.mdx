@@ -1,0 +1,153 @@
+---
+title: Governed placement and workloads
+description: How WeftOS decides which node runs a workload, how the decision is gated and recorded, and how to drive it with weaver workload.
+---
+
+Placement answers one question: which node on the mesh should run this
+workload, and may it? It applies to cogs
+([Cogs and the Cog Host](/docs/weftos/platform/cogs)), to model servers, and to
+any later workload kind. Every step is a governance decision and a chain event.
+
+**Status.**
+[ADR-099](https://github.com/WeftOS/weftos/blob/v0.8.4/docs/adr/adr-099-governed-workload-placement.md)
+is Accepted (2026-09-29), with two later amendments (node-admin methods on the
+`workload.ctl` wire, 2026-10-05; placed instances survive a daemon restart,
+2026-10-26). The inference kind,
+[ADR-101](https://github.com/WeftOS/weftos/blob/v0.8.4/docs/adr/adr-101-inference-workload-kind.md),
+is Accepted. The ADR's Deciders line still says the status "stays Proposed until
+implemented"; the Status line is the current one.
+
+## The model
+
+A workload is a kind, a spec, a signed package, config, requirements and a
+policy (ADR-099 section 1). The kind is an open string: `cog` and `inference`
+exist; `project` is used internally by the per-project kernel supervisor
+([Project topology](/docs/weftos/platform/project-topology)). Requirements are
+written only in the capability vocabulary, so the placement engine contains no
+kind-specific logic.
+
+**Capabilities are not an enum.** A node advertises dotted ids such as
+`cpu.arch.aarch64`, `runtime.native`, `accel.gpu.metal`, `accel.npu.ane`,
+`mem.system` and `feed.esp32-csi-udp`, each with attributes and a provenance of
+`claimed`, `probed` or `measured`. Advertisements are signed by the node key,
+which proves who said it, not that it is true. An id the placer does not know is
+carried and matched like any other; `config/capabilities.toml` lists the
+well-known ids but does not gate (ADR-099 section 2). To see what a node
+advertises:
+
+```bash
+weaver cluster nodes --facts
+```
+
+## How a node is chosen
+
+Placement is a pure function from request and node facts to a decision, so it is
+testable as a table (ADR-099 section 3).
+
+1. **Hard constraints.** A node that fails any is filtered out and the failing
+   constraint is recorded: requirements met, trust tier at least what the
+   package policy needs, node alive and not revoked, facts within their TTL,
+   co-residency exclusions, and a governance permit for `workload.place`.
+2. **Preference scoring** among survivors, in strict tiers: native on the real
+   target hardware, then emulated, then the development-machine fallback. A
+   lower tier never outranks a higher one.
+3. **Overrides.** `--pin`, `--prefer` and `--avoid` override scoring, not
+   constraints. A pin to an ineligible node is an error naming the failed
+   constraint. Emulation is an operator opt-in (`--allow-emulated`), never
+   automatic, and is recorded as emulated.
+
+A workload with no eligible node is reported `Unplaceable` with a reason per
+node. It is never silently degraded.
+
+## Trust
+
+Package signatures are Ed25519 from a pinned signer set plus operator-pinned
+keys (ADR-099 section 8). Node trust tiers gate what may run where:
+`discovered` runs nothing by default, `paired` runs operator-signed workloads,
+and `pinned` runs workloads that carry secrets. Tiers and keys are operator
+files in the daemon's runtime directory: `workload-peers.json` (a peer entry may
+pin a `key`; without one the tier attaches to the first key seen at that
+address), `workload-host.json` (which controller keys may drive this node) and
+`workload-seeds.json` (Cognitum Seeds). The compiled-in WeftOS signer set is
+empty today, so all accepted signatures are operator-pinned
+(`crates/clawft-kernel/src/workload_pkg/trust.rs:18`).
+
+## Lifecycle and audit
+
+Each instance moves through `Requested`, `Placed`, `Fetching`, `Verified`,
+`Loaded`, `Running`, then `Stopping` and `Unloaded`, or `Failed` or `Lost`
+(ADR-099 section 7). Control messages (`workload.ctl`) are signed, expire, carry
+a nonce and the governance decision id, and go to the target node's
+`workload-host` service. Governance actions are `workload.install`, `.place`,
+`.load`, `.start`, `.unload` and `.migrate`; the rule set must default-deny the
+`workload.*` prefix because the capability gate permits unknown actions.
+Placement decisions, refusals and revocations are ExoChain events
+([ADR-022](https://github.com/WeftOS/weftos/blob/v0.8.4/docs/adr/adr-022-exochain-mandatory-audit.md)).
+
+Behaviour worth knowing before you rely on it:
+
+- **Node loss.** Instances of a node declared dead become `Lost` and are placed
+  again elsewhere, unless pinned (`--pin`, or `--no-migrate`) or the kind is not
+  migratable, in which case an alert is chained.
+- **At-least-once, no fencing.** A node that is cut off keeps running what it
+  holds. For the span between the cut and its replacement, a workload may run
+  twice: a sensor cog produces duplicates, and a workload with side effects may
+  act twice (ADR-099 section 7).
+- **Daemon restart.** A `workload-host` journals each placed instance in a file
+  signed by the node key and restores them at startup through the same
+  governance path. A copy older than the chain's recorded generation is refused
+  (amendment 2026-10-26).
+- **Revocation.** A package id, signer key or artifact hash can be revoked. The
+  node stops and unloads what it runs from it, drops the bytes and, with a pinned
+  operator key, tells peers to do the same.
+- **Artifacts** are content-addressed by BLAKE3 and move between nodes in
+  verified pieces; only artifacts whose signed manifest verifies are seeded.
+
+## Commands
+
+All are subcommands of `weaver workload` (clap definitions in
+`crates/clawft-weave/src/commands/workload_cmd.rs`, `workload_pack.rs`,
+`workload_place_cmd.rs`).
+
+| Command | What it does |
+|---|---|
+| `list`, `inspect` | The node-local catalog, plus instances this node's control plane placed anywhere |
+| `catalog` | Cogs across the project's sources with run mode and placement policy (local, no daemon) |
+| `keygen`, `pack`, `verify` | Make a signing key, build and sign a package, verify one against pinned keys (local) |
+| `place`, `explain` | Place a package on the best node, or explain the decision without dispatching |
+| `place-seed` | Place an operator-pinned store cog on a Cognitum Seed |
+| `status`, `logs` | Live status of placed instances; captured output of a stopped one |
+| `stop`, `unload` | Stop an instance (gated and chained on both nodes); unload an instance, or a catalog entry with `--catalog` |
+| `revoke` | Revoke a package, signer or hash (Admin) |
+| `node bind`, `unbind`, `status`, `reset-floor` | Seed binding for the licence proxy ([Seed licence proxy](/docs/weftos/platform/licence-proxy)) |
+
+```bash
+weaver workload explain ./pkg/anomaly-detect --prefer node-a --avoid node-b
+weaver workload place ./pkg/anomaly-detect --pin node-a --mode interval --interval 10
+weaver workload status
+weaver workload stop <instance-id>
+weaver workload revoke --signer <64-hex-public-key> --reason "key rotated"
+```
+
+## Inference as a workload
+
+ADR-101 makes a model server a placed workload with a stable loopback address,
+so existing clients keep working and the endpoint can move to a better node. The
+decisions are settled (loopback proxy for compatibility, model trust by operator
+attestation over a hash manifest, adopt-in-place for large weights). The operator
+surface that exists today is `weaver model`, which adopts local weights in place,
+lists them, verifies them against their attestation and controls whether a model
+is advertised:
+
+```bash
+weaver model --help
+```
+
+An exposed inference role is one kind of [exposure](/docs/weftos/platform/exposures).
+
+## Deferred
+
+The ADR lists as deferred: the WASM lane, landlock and seccomp, cross-LAN sensor
+relay, ML-DSA dual signing, hardware attestation, and adapters for NPU, TPU and
+TSU devices until the devices exist. It also scopes placement as constraints plus
+scoring, not a general scheduler: no preemption and no bin-packing.

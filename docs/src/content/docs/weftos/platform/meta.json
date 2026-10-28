@@ -1,0 +1,17 @@
+{
+  "title": "Platform",
+  "pages": [
+    "index",
+    "cogs",
+    "cogbus",
+    "placement",
+    "exposures",
+    "licence-proxy",
+    "project-topology",
+    "tailnet-router",
+    "chief-of-staff",
+    "ai-org",
+    "voice",
+    "update-and-signing"
+  ]
+}

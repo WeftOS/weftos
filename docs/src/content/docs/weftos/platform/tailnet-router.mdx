@@ -1,0 +1,125 @@
+---
+title: Tailnet router
+description: One HTTPS front door per development machine that routes by path prefix to each project's own port, over Tailscale Serve. Covers enabling it, declaring routes, allowlists, and the weaver route commands.
+---
+
+Each project on a dev machine runs its own process-compose on its own ports. The
+tailnet router, built into the user daemon, makes each of them reachable at one
+address:
+
+```text
+https://<machine>.<tailnet>.ts.net/<project>/
+```
+
+Tailscale Serve terminates TLS on `:443` and proxies to the router on loopback;
+the router proxies by path prefix to the project's port. It is tailnet-only and
+never enables Funnel.
+
+**Status.**
+[ADR-116](https://github.com/WeftOS/weftos/blob/v0.8.4/docs/adr/adr-116-local-tailnet-router.md)
+is Proposed (2026-10-10). R1 (the router, routes, conflict refusal, WebSocket
+proxying, the index) shipped in 0.8.4-rc.3 and R2 (per-route allowlists) in
+rc.4 (`CHANGELOG.md`). The node side of R3 (dashboard-applied routes) is in the
+v0.8.4 code as the `route` dashboard action
+(`crates/clawft-weave/src/dashboard_actions.rs`). R4 (start a stopped process on
+demand) is not built.
+
+## Enable it
+
+In `~/.weftos/weave.toml`, for the user daemon (`weaver kernel start --profile
+user`). The keys and bounds are `RouterConfig` in
+`crates/clawft-weave/src/router_cfg.rs`; unknown keys are rejected:
+
+```toml
+[router]
+enabled = true            # off by default
+# listen = "127.0.0.1:18000"   # loopback only
+# poll_secs = 5                # 1 to 300; how often each compose/ports.yaml mtime is checked
+# health_timeout_ms = 1500     # 100 to 10000; per health or process-compose probe
+```
+
+Restart the daemon. `weaver route list` then shows the router on its listen
+address. An invalid section is logged and the daemon keeps running without the
+router.
+
+## Declare routes
+
+Routes live in each project's own `compose/ports.yaml`, beside its port claims.
+The router reads every project registered with the user daemon.
+
+```yaml
+project: myapp
+claims:
+  - { port: 18110, use: process-compose-http }
+  - { port: 18120, use: web }
+routes:
+  - { prefix: /myapp, port: 18120, health: /api/health, default: true }
+```
+
+| Field | Meaning |
+|---|---|
+| `prefix` | `/segment[/segment]` of `[a-z0-9-]`; defaults to `/<project>`. `/`, `/api/`, `/console/` and `/_weftos/` are reserved |
+| `port` | loopback upstream, 1024 to 65535 |
+| `health` | a path the index GETs; 2xx or 3xx is healthy. Optional |
+| `default` | at most one route per machine; it also answers paths no prefix matches |
+| `allow` | tailnet logins that may use the route; at most 64. Absent means open to the tailnet |
+
+Longest prefix wins on segment boundaries. The prefix is kept on the upstream
+request, and the router sets `X-Forwarded-Host`, `X-Forwarded-Proto`,
+`X-Forwarded-Prefix` and `X-Forwarded-For`. WebSocket upgrades are tunnelled, so
+Next.js and Vite hot reload work. A prefix or port already taken by an earlier
+project, or a second `default: true`, is refused and reported, never resolved
+silently. The table is re-read when a `ports.yaml` or overlay changes and on
+`weaver route reload`.
+
+An app under a prefix must know its base path (`basePath` in Next.js, `base` in
+Vite, or read `X-Forwarded-Prefix`). Until it does, `default: true` keeps the
+root pointed at it.
+
+## Allowlists (R2)
+
+Tailscale Serve tells the router who is calling through `Tailscale-User-Login`.
+A route with `allow` serves only the listed logins; matching is exact and
+case-insensitive. Everyone else gets one uniform 403 page that never shows the
+list. Two limits to know:
+
+- A tagged device (a server, a CI runner) sends no login, so it is refused on
+  every restricted route. Leave `allow` off a route those devices must reach.
+- The router listens on loopback only, so only Serve and local processes reach
+  it, but a local process can still reach the upstream port directly.
+
+The identity comes from Tailscale. The router has no login of its own.
+
+## Dashboard-managed routes (R3)
+
+The dashboard can add, change and remove routes through the node's `route`
+action. They are written to an overlay,
+`~/.weftos/routes/<project ULID>.yaml` (mode 0600), never to the repository. The
+repository wins on a prefix clash, and a losing overlay route is refused and
+reported with `source: dashboard`.
+
+## The index and commands
+
+`https://<machine>.<tailnet>.ts.net/_weftos/` lists every route, its project, the
+upstream's health and the project's process-compose state; the same document is
+JSON at `/_weftos/routes.json`.
+
+```bash
+weaver route list
+weaver route list --json
+weaver route reload
+weaver route serve --plan
+weaver route serve --apply
+```
+
+`route serve` reads `tailscale serve status --json` and refuses, changing
+nothing, when Funnel is on for `:443` or when an existing mapping has no
+equivalent route. With `--plan` it prints the change and stops; with `--apply`
+it prints the change and runs it (`--tailscale` names the binary). Full
+operator detail: `docs/guides/tailnet-router.md`.
+
+## Other services behind the router
+
+The [chief of staff](/docs/weftos/platform/chief-of-staff) can leave its API on
+loopback and let the router forward only a fixed set of its endpoints from
+allowed peers.

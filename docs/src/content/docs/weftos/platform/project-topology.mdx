@@ -1,0 +1,131 @@
+---
+title: Project topology and per-project kernels
+description: The four WeftOS roles (machine mesh service, user daemon, project kernel, leaf), how a project gets its own key and chain, and the weaver project and weaver mesh commands that operate them.
+---
+
+WeftOS is four roles, not a process count. A profile decides which roles one
+process holds. This page covers the topology (ADR-103) and the commands that
+operate it, and how a project is installed on a second machine (ADR-108).
+
+**Status.**
+[ADR-103](https://github.com/WeftOS/weftos/blob/v0.8.4/docs/adr/adr-103-weave-topology-roles-and-instances.md)
+is Accepted (2026-09-30; decisions D1 to D14 set by the owner), amended many
+times since. The 0.8.2 release notes record Phases 0 to 3, per-project kernels and
+the machine mesh service as shipped. Phase 4 is partial: the Wasmtime project
+driver is integrated behind the off-by-default `wasmtime-project` feature and was
+not yet run under a real user daemon as of 2026-10-06. I found no statement that
+the other Phase 4 sandbox drivers (containers, Seatbelt) are built; only the
+`logical` driver (no sandbox) is confirmed for Phase 2.
+[ADR-108](https://github.com/WeftOS/weftos/blob/v0.8.4/docs/adr/adr-108-project-workspaces-across-machines.md)
+(installing a project locally) is Accepted (2026-10-05); its P4 (configure) is
+open.
+
+## The four roles
+
+| Role | Owns | Does not own |
+|---|---|---|
+| **Machine mesh service** | the box node key, the one mesh listener, Noise sessions, discovery, admission and revocation, routing to local tenants, a small machine journal | user or project chains, secrets, tokens, governance evaluation |
+| **User daemon** | the user key and chain, the token authority, secrets, the model and accelerator access path, shared heavy services, the project manifest, supervision of project kernels | the mesh listener when a machine service runs |
+| **Project kernel** | the project key and chain, a tighten-only governance overlay, workspace config, the project's workload catalog | a mesh listener; duplicated heavy services |
+| **Leaf / client** | one provisioned identity and one role | a chain; governance (its parent enforces it) |
+
+Profiles combine roles: a shared host (service, a user daemon per user, a kernel
+per active project), a personal host (machine and user roles in one `weaver`,
+project kernels as children), and a single-tenant host such as a Pi or container
+(one process, all roles) (ADR-103, "Roles, not a process count").
+
+## Decisions that shape behaviour
+
+- **One mesh port.** The default listener is `127.0.0.1:9489` ("the weave",
+  D1). Loopback is the default; peers on other machines need an explicit
+  `listen_addr` (`crates/clawft-types/src/config/kernel.rs`, `MeshConfig`).
+- **Keys certify keys.** The machine key certifies a user key; the user key
+  certifies a project key. No derivation, so projects can move between machines
+  (D7). `node_id = hex(SHA-256(pubkey)[..16])` (D11,
+  `crates/clawft-kernel/src/node_id.rs`).
+- **A project has a stable ULID** in `<root>/.weftos/project.toml` (D5) and a
+  chain in `<root>/.weftos/chain/`, anchored into the user chain by
+  `project.anchor` events (D6).
+- **Governance overlays only tighten.** A project may add denies and lower
+  limits, never relax the parent's rules. An invalid overlay refuses boot (D8).
+- **Project kernels are child processes by default** supervised by the user
+  daemon, which is also the only place a `project` workload is permitted
+  (D9, D13, amendment A7).
+- **Commands outside any project** are decided by governance. On the user daemon
+  the default allows read-only commands and denies state changes with
+  `project_required` (D12, A6).
+- **`weft` finds a kernel** by flag, then environment, then manifest, then user
+  default, confirms with a `kernel.status` handshake, never silently falls back to
+  an in-process kernel, and prints what it tried (D14).
+- **Nested WeftOS is isolated by default.** `weave.master = true` marks a master
+  that manages nested instances' config (D10).
+
+Purpose-specific behaviour such as staging gates, CI and sensor fusion is meant
+to be cogs on these primitives, not kernel features (ADR-103, "Core versus cog").
+
+## Commands
+
+Start the per-user daemon, which holds the user and machine roles together:
+
+```bash
+weaver kernel start --profile user
+weaver kernel status --profile user
+weft project init
+weft project list
+```
+
+`weaver project` operates projects on this machine
+(`crates/clawft-weave/src/commands/project_cmd.rs`):
+
+| Command | What it does |
+|---|---|
+| `project add <SOURCE>` | Fetch a project, register it, detect how it runs, install its router route, report next steps. SOURCE is `weftos://<mesh>/projects/<ULID>` (over the mesh from the paired primary) or a git URL. Never copies `.env` files or values; lists the variable names it asks for |
+| `project up <slug>`, `down <slug>` | Start or stop a project added here (process-compose, detached) |
+| `project status [slug]` | Processes, route, local URL and tailnet URL |
+| `project remove <slug> [--purge]` | Undo `add`: stop it, drop its route, unregister it, keep the checkout unless `--purge` |
+| `project migrate-kernel <id>` | Opt one project into a supervised child kernel, or back out with `--revert`; `--dry-run` shows what would change |
+| `project anchor reset --project <ULID>` | Retire a project's anchor head after its chain was reset on purpose (owner only) |
+
+```bash
+weaver project add weftos://<mesh>/projects/<ULID> --slug myapp
+weaver project up myapp
+weaver project status myapp
+```
+
+The machine mesh service and the mesh identity are under `weaver mesh`
+(`crates/clawft-weave/src/commands/mesh_cmd/mod.rs`): `serve`, `status`,
+`bindings`, `bind approve|revoke|rebind`, `peer revoke|unrevoke`,
+`journal verify`, `trust`, `identity`, `create`, `id`, `export`, `import`,
+`nonce`, `pair` and `install-service`. `install-service` prints a reviewed shell
+script and runs nothing. A user is bound to an OS uid on first registration over
+a peer-credential-checked local socket (D3); an administrator can revoke and
+rebind.
+
+## Installing a project on a second machine
+
+A project has one primary installation, normally on a server, and workspaces on
+members' machines. `weaver project add weftos://...` fetches from the primary
+over the signed `workload.ctl` wire: no SSH, no shared secret and no bytes
+through the dashboard (ADR-108 P3b). Preconditions on the primary: it serves
+`workload-host`, lists the member's node with its key at tier `paired` or
+`pinned`, and holds a per-project grant in `project-fetch.json`. The default is
+deny, and the grant is re-checked on every chunk. Pairing writes the files after
+verifying the peer's key against its node id. Details:
+`docs/guides/project-install.md` and `docs/guides/developer-quickstart.md`.
+
+A `weftos://` name needs a mesh id. `weaver mesh id` prints it. Without a Seed
+licence, create one once on the mesh's primary with `weaver mesh create` and
+restart that daemon; a node that cannot pair with the primary imports a signed
+record from `weaver mesh export` with `weaver mesh import`.
+
+## Known limits recorded in the ADR
+
+- A peer's class (`node` or `leaf`) is self-declared in its signed hello;
+  binding class to an issued credential is future work.
+- `genesis_hash` is a cluster label, not a credential.
+- Under `admission = enforce`, admission depends on the cluster-owner daemon
+  being reachable; a flood of new node ids can delay new peers' admission.
+- The macOS service log is not rotated. Windows is design only: the machine
+  service refuses to start there.
+- Admission mode defaults to `observe`: it records would-be refusals and never
+  refuses.

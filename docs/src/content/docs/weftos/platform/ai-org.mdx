@@ -1,0 +1,132 @@
+---
+title: AI org and agent teams
+description: The agent catalog with versions and digests, the definition-installation-instance model, how to apply an agent team to a project with weftos team, and which parts of the team runtime are built.
+---
+
+WeftOS ships a directory of agent packages, a way to group them into **teams**,
+and a way to apply a team to a project on Claude Code, Grok Build or Codex. This
+page covers the model (ADR-121), team definitions and apply (ADR-112), and the
+commands.
+
+**Status.**
+[ADR-121](https://github.com/WeftOS/weftos/blob/v0.8.4/docs/adr/adr-121-ai-org-versions-and-instances.md)
+(AI org: versions and instances) is Accepted (2026-10-11).
+[ADR-112](https://github.com/WeftOS/weftos/blob/v0.8.4/docs/adr/adr-112-agent-teams-define-apply-run.md)
+(agent teams) is Accepted (2026-10-07). From the ADR-112 phase table: team apply
+(TM2) and the daemon-side `agent.install` action are in the code
+(`crates/weftos/src/team_cmd.rs`, `crates/clawft-weave/src/agent_install.rs`);
+the team runtime (TM5, the planned `team up` command) is not, because `weaver` has no `team`
+command at v0.8.4 (`crates/clawft-weave/src/main.rs`). I did not verify TM6
+(signed team bundles); `weftos team apply --pin` pins a bundle digest, which is
+not a signature.
+
+## The model
+
+ADR-121 adopts one model for agents and for groups:
+
+- **Definition, installation, instance.** A package is a definition. An
+  installation is a package installed at a target, which is a (project, node)
+  pair. An instance is a running installation. For groups: team definition, team
+  installation, team run.
+- **OS agents are catalog packages.** They are installed by the release at node
+  scope, and enabled or disabled per node, versioned with WeftOS.
+- **Every first-class object with a definition has a version:** a content digest
+  (`sha256` of the whole bundle), a semantic label, a parent version and
+  dependencies pinned by digest. Sub-packages form a version tree.
+- **Versions are enforced.** A node refuses to start an installation whose files
+  do not match its pinned digest, and reports drift (ADR-121 section 4).
+- **Install is request, approval, install,** and the requester may approve their
+  own request when allowed. The dashboard can see and stop; starting is a queued
+  node action that the node confirms locally.
+- **Every installation binds its own brain** (an RVF store with a metadata
+  schema). Nothing carries between projects unless promoted deliberately.
+- **Private catalogs and teams** are visible only inside their workspace.
+- **The org is flat above the chiefs of staff:** people and their chiefs of staff
+  are peers, and teams hang below a chief of staff by delegation edges
+  (decision 5). `reports_to` is dropped.
+
+Instances reporting transcripts is a tracked card (phase O5); v1 reports a
+summary only. ADR-121's other phases (O1 digests and versions, O2 instance
+registry and digest enforcement, O3 install flow, O4 dashboard page) are listed
+in the ADR without a built marker.
+
+## The catalog
+
+`agents/catalog.json` is generated. At v0.8.4 it lists 29 packages: 17 `active`
+and 12 `inactive` (method: counted from the `state` field of
+`agents/catalog.json`). The 12 inactive ones are the legacy agents packaged as
+originals and marked inactive (ADR-121 decision 10), which exercises the
+inactive-package feature. Each entry carries a digest, version, parent, state and
+dependencies. `scripts/build.sh agents-validate` checks them.
+
+The version index is local, one append-only file per node, with an index
+queryable from the CLI (`crates/clawft-weave/src/commands/versions_cmd.rs`):
+
+```bash
+weaver versions list --help
+weaver versions tree --help
+weaver versions deps --help
+weaver versions import-catalog --help
+```
+
+## Team definitions
+
+A team is `agents/teams/<team>/team.yaml` (schema in
+`agents/teams/SCHEMA.md`). Team spec v1 (ADR-112 section 1) has:
+
+- **Members:** a package reference pinned to a catalog version, a nickname, a
+  one-job statement, a model tier, an authority level (`autonomous`,
+  `supervised` or `escalated`), a named owner, a `must_not` list, the
+  confidentiality tiers the member may read, and `active` and `phase` flags.
+- **A write-authority table:** each shared resource (board rows, per-card
+  history, code, docs) has exactly one holder. The gate fails on a resource with
+  zero or two holders, or a holder whose tools cannot perform the write.
+- **A lead that is never a spawnable member.** The lead's doctrine loads as a
+  shared skill into the coordinating session.
+- **Agents hold method, not project facts.** Project facts live in the project
+  (a `project-context.md` that is never overwritten) and memory belongs to the
+  project, not the agent (ADR-112 sections 2 and 6).
+
+The shipped team is `weftos-core`: a chief of staff, the steward, the docs owner,
+the memory router, the purpose advisor, and the developer, reviewer and tester
+build lanes, with the documenter and measurer shipping inactive
+(`agents/teams/weftos-core/team.yaml`).
+
+## Apply a team to a project
+
+`weftos team` is the project-scoped apply path (ADR-112 TM2,
+`crates/weftos/src/team_cmd.rs`). It writes only inside the project, records
+`.weftos/agents.lock.json`, and refuses, writing nothing, if a target file was
+changed locally or belongs to something else. Inactive members are never
+applied.
+
+```bash
+weftos team apply weftos-core --plan
+weftos team apply weftos-core --claude --grok --codex
+weftos team apply weftos-core --pin sha256:<hex>
+weftos team status
+weftos team uninstall weftos-core --plan
+```
+
+- `--plan` reports what would happen and writes nothing. `--package` treats the
+  name as a single agent package. `--from DIR` uses an `agents/` tree on disk
+  instead of the embedded one. `--json` prints the birth report as JSON.
+- With no host flag, `apply` renders for Claude Code.
+- `uninstall` removes exactly what the lock lists.
+
+`weftos init --claude|--grok|--codex --team <team>` is the older entry point:
+plan by default, `--apply` writes, and it never commits or pushes. The daemon's
+`agent.install` node action, which the dashboard can queue, runs the same apply
+path.
+
+## Not built
+
+- **The team runtime.** ADR-112 section 4 designs the `team up`, `down` and `ps` commands of `weaver`, an
+  agent bus exposed as MCP tools, board claims and recycling. No `team` subcommand
+  of `weaver` exists at v0.8.4.
+- **Signed bundles** (ADR-112 section 5, TM6), unverified as noted above.
+- **Transcripts from instances** (ADR-121 O5).
+
+The owner's own team (the steward, docs owner, memory router and purpose advisor
+named in ADR-112) is modelled as a deployable team that carries no memory from
+any project; this is ADR-112's TM4 and its decision 4.

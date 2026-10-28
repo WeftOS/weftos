@@ -1,0 +1,130 @@
+---
+title: Chief of staff
+description: The chief-of-staff agent host, weft cos serve, its loopback conversation API (cos.v1), models, voice, remote endpoints, the dashboard bridge, traces and the MCP server; with status and what is not built.
+---
+
+The chief of staff is an agent that answers from live data (the board, project
+history, the weaver daemon), speaks its replies, keeps notes in an installation
+brain, and serves a small conversation API to front ends: a console window on a
+Mac, an edge pad, the glasses bridge and the dashboard's phone page.
+
+**Status.**
+[ADR-118](https://github.com/WeftOS/weftos/blob/v0.8.4/docs/adr/adr-118-chief-of-staff-console.md)
+is Proposed (2026-10-10). The 0.8.4-rc.5 release notes record C1 to C3 as
+shipped: the display endpoint client, the console screen, and the agent with the
+conversation API, push-to-talk and Mac-microphone speech-to-text. The ADR's
+phases C4 (the same conversation on the edge pad) and C5 (page mode with rendered
+markdown and SVG) are not claimed as built here. Later releases added
+`GET /v1/cos/turns` (rc.12) and `devices.status` and MCP servers (rc.14).
+
+The agent is a separate crate, `weftos-cos`. `weft cos serve` and the standalone
+`weftos-cos` binary start the same host
+(`crates/clawft-cli/src/commands/cos_cmd.rs`).
+
+## Run it
+
+```bash
+weft cos serve
+```
+
+This starts the agent and its loopback conversation API on `127.0.0.1:18300`.
+The repository's `scripts/build.sh cos-up` builds `weftos-cos` with push-to-talk
+and local speech-to-text, starts the local model server if it is down, and serves;
+`scripts/build.sh cos-host` builds the console window as a second terminal.
+
+The standalone binary has more subcommands than `weft cos` (`weftos-cos` in
+`crates/weftos-cos/src/bin/weftos-cos.rs`):
+
+| Command | What it does |
+|---|---|
+| `serve` | the agent and conversation API |
+| `model status`, `start`, `stop` | probe, start (detached) or stop the local model server this host started |
+| `endpoint add`, `list` | make or list tokens for remote, non-loopback endpoints |
+| `bridge` | relay the hosted dashboard's phone page to this agent |
+| `mcp` | the chief of staff as an MCP server on stdio |
+| `transcribe` | check local speech-to-text on a WAV file |
+| `glance-serial` | mirror state to an e-ink panel over USB serial (ADR-119) |
+
+## The conversation API
+
+The API is `cos.v1`, frozen in
+`docs/plans/adr-118-cos-contract.md`. Routes from
+`crates/weftos-cos/src/server.rs`:
+
+| Route | Purpose |
+|---|---|
+| `POST /v1/cos/utterance` | a user turn; `endpoint` names the front end |
+| `POST /v1/cos/answer` | answer a held action |
+| `POST /v1/cos/ptt` | push-to-talk edge (the host's microphone only) |
+| `GET /v1/cos/events` | the event stream |
+| `GET /v1/cos/turns`, `/status`, `/tools`, `/devices` | recent turns, state, bound tools, device verdicts |
+| `GET /v1/cos/traces`, `/traces/{turn_id}` | one trace per finished turn (the last 200) |
+| `GET /healthz` | `{"ok": true, "api": "cos.v1"}` |
+
+Each front end is an endpoint with its own id; the Mac's own microphone, button
+and console are `host`. A remote endpoint does its own speech-to-text and speaks
+its own replies. A remote endpoint sees the whole event stream, not just its own
+turns.
+
+## Safety and tools
+
+Per ADR-118 section 3, the agent asks before anything outward-facing,
+destructive or production-touching, never handles the owner's credentials, and
+records every tool call. In the host, gated actions are held until an `answer`.
+Traces record the model, the role (`quick`, `plan` or `confirmation`), the tools
+called with a digest of the arguments, never the arguments, the gates hit,
+rounds, latency and cost. Events and tool logs are redacted.
+
+## Models
+
+Turns are routed per task: a quick tier for ordinary turns, a planning tier for
+planning cues or high complexity, and a fallback chain of the fast model of every
+keyed cloud provider, so an account out of credit does not end a turn. The status
+line always shows the model answering. The default model names, the local server
+and their trade-offs are in `docs/guides/chief-of-staff.md`; they change faster
+than this page. Configuration is `~/.config/weftos/cos.json`, every field
+optional.
+
+## Voice and remote front ends
+
+Hold the button to talk (space in the console window, or `POST /v1/cos/ptt`).
+Speech-to-text is local and raw audio is dropped after transcription. Spoken
+replies use the host's speech command (the `engine` setting in `cos.json`), and a
+new button press cuts a reply off. The wider voice stack is on the
+[Voice](/docs/weftos/platform/voice) page.
+
+Reaching the agent from another device, two ways:
+
+- **A tailnet listener.** `"serve": {"bind": "tailnet"}` in `cos.json` also
+  listens on the machine's Tailscale IPv4 address (never on `0.0.0.0`). Each
+  endpoint gets a token from `weftos-cos endpoint add <name>`, written to a 0600
+  file that is never printed; the client sends it as a bearer token. The local
+  console on loopback needs no token.
+- **The [tailnet router](/docs/weftos/platform/tailnet-router).** Leave the API on
+  loopback and forward only `/v1/cos/utterance`, `/v1/cos/answer`,
+  `/v1/cos/events` and `/healthz` from allowed peers, never `/v1/cos/ptt`.
+
+## Dashboard bridge and MCP
+
+The hosted dashboard cannot reach a loopback API, so `weftos-cos bridge` relays
+through the dashboard with the node's existing credential, reading `url` and
+`token_file` from `[dashboard]` in `~/.weftos/weave.toml` (the token file must be
+a regular 0600 file). It sends new final turns, a status snapshot and traces, and
+posts each queued dashboard request to the local agent as a typed turn. It never
+calls `/v1/cos/ptt`. `weftos-cos bridge --dry-run` prints the sync body and posts
+nothing. Contract: `docs/plans/cos-dashboard-bridge.md`.
+
+`weftos-cos mcp` serves the chief of staff as an MCP server on stdio. It holds no
+agent of its own and drives a running one over `cos.v1`. Its `cos.say` speaks only
+as `mcp` or `test-<run>`, cannot name a tool or lift a gate, and `cos.confirm`
+only answers a gate that the same programmatic endpoint raised.
+
+## What is not here
+
+- C4 and C5 of ADR-118 are not described as built (see Status).
+- Tools the Rust host does not bind are marked pending in the evaluation cases
+  (`goals.list`, calendar and flights sources); the host reports which tools did
+  not bind in `weftos-cos model status` and `GET /v1/cos/tools`.
+- Delegating to named lanes (board writes, docs, memory) is described in the ADR
+  as the agent's job; the lanes themselves are an agent team, see
+  [AI org and agent teams](/docs/weftos/platform/ai-org).

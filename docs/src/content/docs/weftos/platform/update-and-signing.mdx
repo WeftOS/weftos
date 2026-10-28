@@ -1,0 +1,130 @@
+---
+title: Updates and signed releases
+description: How weaver update finds, verifies and installs a release (an Ed25519 signature over a signed hash list, fail closed), which install channels it will and will not touch, and how releases are distributed through GitHub, Homebrew, GHCR and crates.io.
+---
+
+Since 0.8.2, `weaver update` refuses a release it cannot verify. This page
+explains the signature chain, what `weaver update` does and will not do, and the
+channels a release is published to.
+
+**Status.** There is no ADR for this flow. The behaviour is specified by the
+code in `crates/clawft-weave/src/commands/update_*.rs`, the CI signing script
+`scripts/release/sign-release.sh`, and `docs/deployment/install.md` ("Updating"),
+which is the user-facing record. The 0.8.2 release notes record "`weaver update`
+verifies release signatures (fail closed)".
+
+## What is signed
+
+Release CI writes two assets with `scripts/release/sign-release.sh`:
+
+- `weftos-release.json`: the tag, a signing time (`published`) and the sha256 of
+  every file in the release, `dist-manifest.json` included.
+- `weftos-release.json.sig`: an Ed25519 signature over the bytes
+  `weftos-release-v1` plus a newline, followed by the exact bytes of that file.
+
+The verifying key is compiled into `weaver` (`WEFTOS_RELEASE_PUBKEY_HEX` in
+`crates/clawft-weave/src/commands/update_signature.rs`). No file, variable or flag
+replaces it. It is a dedicated release key, separate from the key that signs
+cogs, and the signing script refuses to sign unless the key's public half equals
+the pinned one. The private key is a CI secret in a protected environment.
+
+## What `weaver update` does
+
+```bash
+weaver update              # verify, install all binaries, offer a daemon restart
+weaver update --check      # report only; install nothing
+weaver update --dry-run    # show which files would be replaced
+weaver update --restart    # restart the per-user daemon without asking
+weaver update --no-restart # never ask; print the restart command
+weaver update --force      # reinstall the same version, or update an install with no receipt
+```
+
+(`weft update` is the same command on the `weft` side.) In order, before any
+archive is downloaded:
+
+1. The signature must verify under the pinned key.
+2. The signed tag must be the manifest's tag.
+3. `dist-manifest.json` must hash to its signed entry.
+
+Each archive must then hash to its own signed entry. The `.sha256` files that
+ship beside archives only prove integrity, because anyone who can replace an
+archive can rehash it; the signature is what proves the release came from
+WeaveLogic. An unsigned release, a bad signature, a signature for another tag,
+or any mismatch is refused with nothing downloaded or installed, and `--check`
+refuses too, so an unverified version is never reported as available.
+
+Further behaviour, from `docs/deployment/install.md`:
+
+- **Staleness warning.** If the latest release was signed more than 90 days ago,
+  it warns: a mirror may be serving an old release and hiding newer ones.
+- **Revoked key.** If an operator has revoked the release key (a `signer_key`
+  entry in `revoked_subjects.json`, the same list cog installs honour),
+  `weaver update` refuses everything. A revoked key means a new key, which can
+  only arrive with a new `weaver` installed out of band.
+- **No downgrades.** It never installs a release older than the running build, and
+  `--force` does not change that. The install receipt records the highest version
+  ever installed through it, and a lower release is refused as well.
+  `--allow-downgrade` overrides this, with a warning.
+- **`--insecure-skip-signature`.** Installs without checking the signature
+  (sha256 and archive checks still run) and warns loudly. It exists for an
+  emergency such as a lost key, and means trusting whoever controls the GitHub
+  release.
+- **Archives** are unpacked by `weaver` itself: only regular files and
+  directories are written, links, `..` and absolute paths are refused, and the
+  unpacked size is capped. Each extracted binary is run once with `--version`.
+  Downloads use `curl -q`, https only, at most 5 redirects.
+- **All binaries together.** `weft`, `weaver` and `weftos` are replaced
+  together, each by an atomic same-directory rename, and every binary is restored
+  if any swap fails.
+- **Restart.** After installing it offers to restart the per-user daemon, through
+  the service manager when there is one. It never restarts a daemon under `sudo`,
+  and it never touches the machine mesh service; it prints the command to refresh
+  that.
+
+## Which installs it will touch
+
+| Install | What `weaver update` does |
+|---|---|
+| Release installer (cargo-dist receipt) | Updates all binaries in the receipt's install directory |
+| No receipt (a hand-copied tarball) | Updates the binaries beside the running `weaver`; asks first, or needs `--force` |
+| System package manager (`/usr/bin`, `/nix/store`, `/snap` and similar) | Refuses and points at the package manager |
+| Homebrew | Refuses and prints `brew upgrade weave-logic-ai/tap/<formula>` |
+| `cargo install` | Refuses and prints the matching command |
+| Source build | Refuses and prints `scripts/build.sh install` |
+
+A refused update exits non-zero. `weaver update --check` always exits 0, so read
+its output.
+
+```bash
+weaver doctor install
+```
+
+lists every copy of `weft`, `weaver` and `weftos`, which channel owns each, which
+one wins on `PATH`, and any running daemon whose binary is a different file. It
+is read-only.
+
+## Distribution channels
+
+| Channel | What | Notes |
+|---|---|---|
+| GitHub Releases | cargo-dist archives and installers, `dist-manifest.json`, the signed hash list and signature | `weaver update` reads from here |
+| Shell installer | `scripts/install.sh`, served at `weftos.weavelogic.ai/install.sh` | Verifies each archive's sigstore attestation with `gh attestation verify` when `gh` is installed; `--verify` makes that mandatory and `--no-verify` skips it |
+| Homebrew | the tap `weave-logic-ai/homebrew-tap`, updated by the release workflow's `homebrew` publish job | `brew upgrade weave-logic-ai/tap/<formula>` |
+| GHCR | `ghcr.io/weftos/weftos:vX.Y.Z` and `:latest`, `linux/amd64` and `linux/arm64` | built by the release-docker workflow |
+| crates.io | every workspace crate with `publish = true`, in dependency order | stable tags only; release candidates (tags with a hyphen) are skipped |
+
+Release tags are `v`-prefixed. The `Publish Crates` workflow refuses to run when
+the tag and the workspace version disagree
+(`docs/deployment/release.md`, `.github/workflows/publish-crates.yml`).
+
+## What the signature does not cover
+
+- The shell installer's attestation check and `weaver update`'s signature check
+  are different mechanisms with different trust roots. The first proves a build
+  came from this repository's workflow; the second proves WeaveLogic's release
+  key signed the hash list.
+- `weaver update` verifies before it installs. It does not re-verify binaries
+  later, and a source build or package-manager install is outside it.
+- `GET releases/latest` on GitHub points at the newest non-prerelease. Until a
+  release is published as a full release, `releases/latest/download/...` URLs
+  serve the previous one.
