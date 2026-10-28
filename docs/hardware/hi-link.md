@@ -20,7 +20,7 @@ the catalog was not reseeded.
 
 543 unique product-page ids. One page is one catalog module. A family listing
 such as VRB4805/12/24 stays one row; the other tokens are `spec.variants`.
-532 rows were appended to `crates/weftos-cog-market/catalog/catalog.json`.
+532 rows were appended to `crates/cog-market/catalog/catalog.json` in [WeftOS/weftos-cogs](https://github.com/WeftOS/weftos-cogs/blob/v0.1.4/crates/cog-market/catalog/catalog.json).
 11 pages were skipped because the model is already in the catalog (below).
 
 New rows by assigned category. A page that sits in a parent and a leaf is

@@ -22,7 +22,7 @@ details here — hardware only.
   amp + filtering to recover clear P-QRS-T morphology (PR / QT intervals).
 - **Our usage**: Analog `A` pin feeds an ADS1115 I2C ADC adapter on a Cognitum Seed
   (Pi Zero 2 W, now Pi 5); the cog samples the digitized waveform (~10 Hz on the Seed's
-  native ADS1115 driver) and exports it. Companion app `weftos-ecg-scope` polls the
+  native ADS1115 driver) and exports it. Companion app `cog-ecg-scope` ([WeftOS/weftos-cogs](https://github.com/WeftOS/weftos-cogs/tree/v0.1.4/crates/cog-ecg-scope)) polls the
   cog's export on port **:8046**.
 - **Gotchas**: Lead/electrode placement dominates signal quality; motion artifacts are
   large. It is a biopotential **demo/education** front end, not a medical device. The

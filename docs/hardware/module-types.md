@@ -2,7 +2,7 @@
 
 A catalog card is one family. This page is what a type shares: what it measures, which concerns repeat, and which output can carry the reading. Numbers live on the card, copied from the vendor page named there. This page does not add a spec the card does not have.
 
-Written 2026-10-06. The five catalog kinds are `sensor`, `board`, `display`, `actuator`, and `tool` (`crates/weftos-cog-market/src/hw.rs`). A camera, a radar, a microphone, and a temperature chip are all `sensor`. The sections below are sensing types, carried in the summary and `spec`, not a sixth kind.
+Written 2026-10-06. The five catalog kinds are `sensor`, `board`, `display`, `actuator`, and `tool` (`crates/cog-market/src/hw.rs` in [WeftOS/weftos-cogs](https://github.com/WeftOS/weftos-cogs/blob/v0.1.4/crates/cog-market/src/hw.rs)). A camera, a radar, a microphone, and a temperature chip are all `sensor`. The sections below are sensing types, carried in the summary and `spec`, not a sixth kind.
 
 ## How a row is cut
 

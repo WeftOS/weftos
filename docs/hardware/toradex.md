@@ -150,7 +150,7 @@ Source: <https://www.toradex.com/computer-on-modules/osm-arm-family/nxp-imx93>
 |---|---|---|
 | Governed workload placement / app delivery | Torizon OS **container/Docker** app model | They ship apps as OCI containers; a clean precedent for how cogs could be packaged + delivered. |
 | Signed OTA, per-component | Torizon Cloud **Remote Updates** — bootloader / OS subsystem / app, per-device or **whole fleet** | Mirrors our signed-OTA + per-slice update goal; study their update-granularity + rollback model. |
-| Fleet manager / Catalog | Torizon Cloud **Device & Fleet Management** + **Device Monitoring** | Direct analog to the weft-cog-manager Network/Catalog view (fleet state, versions, health). |
+| Fleet manager / Catalog | Torizon Cloud **Device & Fleet Management** + **Device Monitoring** | Direct analog to the `cog-manager` Network/Catalog view ([WeftOS/weftos-cogs](https://github.com/WeftOS/weftos-cogs/tree/v0.1.4/crates/cog-manager)) (fleet state, versions, health). |
 | Licence/provisioning per mesh | Torizon Cloud **device provisioning** (+ "hibernate" to decouple provisioning cost) | Compare to the Seed-as-licence-proxy / one-checkout-per-mesh direction. |
 | Secure boot + supply-chain integrity | Torizon **Secure Boot + SBOM/CVE analytics + EU CRA** alignment | A compliance bar (EU CRA) a commercial WeftOS/Cognitum product will also have to clear. |
 

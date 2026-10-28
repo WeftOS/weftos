@@ -56,9 +56,9 @@ Cards readable in that frame: ESP32-S3 DevKitC-1, 0.96" I2C OLED, KY-023 joystic
   Compare on memory + precision + ecosystem, not a single TOPS number. DGX Spark power draw unconfirmed.
 
 ## Related
-- Cogs/sensors: `~/Clients/cognitum/cogs-*` (COG-007 bridge, COG-009 host/console, COG-010 Fleet).
+- Cogs/sensors: [WeftOS/weftos-cogs](https://github.com/WeftOS/weftos-cogs/tree/v0.1.4) (cogs, host, console, fleet manager, hardware catalog).
 - Firmware substrate: `crates/clawft-edge-pad*` (no_std/std ESP32).
-- Placement direction: WeftOS ADR-099 (placement), the mesh-workload-placement memory.
+- Placement direction: [ADR-099](../adr/adr-099-governed-workload-placement.md) (placement).
 - Vendor writeups: [sipeed.md](sipeed.md), [pololu.md](pololu.md), [toradex.md](toradex.md), [debix.md](debix.md).
 - ESP32-P4 Linux reference: [esp32-p4-nommu-linux.md](esp32-p4-nommu-linux.md) (NOMMU Linux on Stamp-P4 + C6; patterns, not a runtime target).
 - Types and cross-cutting concerns: [module-types.md](module-types.md).
