@@ -157,17 +157,25 @@ impl Ext {
     /// caller as the agent and the carrying instance in `via`, so a rule or
     /// a `cogbus-policy.json` deny that names the caller applies. The
     /// refusal is still marked against the instance that made the call.
+    /// The carrying instance is asked as well, as itself: a deny or rule
+    /// that names it refuses everything it carries, not only its own calls.
     pub(crate) fn gate(&self, req: &BusRequest<'_>) -> Result<(), BusError> {
-        let asked = match req.on_behalf {
-            Some(caller) => BusRequest {
-                instance_id: caller,
-                via: Some(req.instance_id),
-                on_behalf: None,
-                ..*req
-            },
-            None => *req,
+        let decided = match req.on_behalf {
+            Some(caller) => {
+                let for_caller = BusRequest {
+                    instance_id: caller,
+                    via: Some(req.instance_id),
+                    on_behalf: None,
+                    ..*req
+                };
+                self.hooks
+                    .policy
+                    .decide(&for_caller)
+                    .and_then(|()| self.hooks.policy.decide(&BusRequest { on_behalf: None, ..*req }))
+            }
+            None => self.hooks.policy.decide(req),
         };
-        self.hooks.policy.decide(&asked).map_err(|reason| {
+        decided.map_err(|reason| {
             let short = req.action.as_str().trim_start_matches("cogbus.");
             let who = req.on_behalf.map(|c| format!(" for {c}")).unwrap_or_default();
             let e = BusError::new(

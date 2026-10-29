@@ -232,11 +232,11 @@ Qwen3-VL-4B).
   (not on the wire): the bytes are dropped when no putter holds them, and
   bytes that another principal also put survive one release. The TTL (the
   120 s call timeout plus 30 s) remains as the backstop for a crash mid-call.
-  A failed upload drops the proxy's open uploads. `stream: true` is a 400: the
+  A failed upload aborts only that call's own upload (the proxy instance owns the uploads of every caller, so another caller's open upload is untouched). `stream: true` is a 400: the
   service answers once.
 - A full content store, too many open uploads or the broker's pending-call cap
   is a **429 with `Retry-After`** (`ProxyError::Busy`), not a 502 or 503. One
-  caller (`local:<addr>` or `mesh:<node>`) may have at most 2 image calls in
+  caller (`local:<ip>` or `mesh:<node>`) may have at most 2 image calls in
   flight; a third is a 429.
 - The proxy is a broker principal of its own (`infer-proxy`, an in-process
   session; no socket and no token handed out). Its calls are governed as any
@@ -261,6 +261,16 @@ Qwen3-VL-4B).
   recorded the same way with the caller, status and reason. For peers it is
   also in the ADR-120 activity log. The per-caller image cap above still
   bounds one caller's use of the shared identity.
+  **Local callers are keyed on the IP (2026-10-29).** A client of the
+  loopback listener is `local:<ip>` (for example `local:127.0.0.1`), not
+  `local:<ip>:<port>`: the source port changes with every connection, so a
+  deny naming `local:127.0.0.1` would never match and the per-caller image cap
+  would reset per connection. **Carrier and caller are both governed.** For a
+  call or put made on behalf of a caller, governance is asked twice, once for
+  the caller (with `via: infer-proxy`) and once for the carrying instance
+  `infer-proxy` itself; a deny or kernel rule naming either refuses the
+  request. A deny with `agents: ["infer-proxy"]` therefore stops every svc
+  call and image put, and one naming a caller stops only that caller.
 - Over the mesh the forwarded request is capped at 2 MiB (`max_mesh_request_body`),
   after base64 inflation (4/3) and JSON framing. An image therefore has to be
   about 1.5 MiB or less to cross the mesh; downscale on the client. A local

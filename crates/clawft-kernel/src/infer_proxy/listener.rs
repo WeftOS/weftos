@@ -268,7 +268,9 @@ async fn serve_conn(sh: Arc<Shared>, mut s: TcpStream, peer: SocketAddr) {
                 };
                 sh.stats.local.fetch_add(1, Ordering::Relaxed);
                 let route = SvcRoute { topic: topic.clone(), model: model.clone() };
-                let caller = format!("local:{peer}");
+                // The IP only: a source port is new per connection, so a deny or
+                // the per-caller image cap keyed on it would never hold.
+                let caller = format!("local:{}", peer.ip());
                 serve_svc(b.as_ref(), &route, &req, &caller, &mut sink, sh.audit.as_deref()).await
             }
             Some(Target::Remote { node_id }) => {

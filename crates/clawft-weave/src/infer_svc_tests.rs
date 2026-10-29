@@ -147,16 +147,22 @@ async fn a_full_content_store_is_busy_not_a_bad_gateway() {
     provider(&b);
     // Fill the instance's upload slots: 4 uploads open and never finished.
     let store = b.blob_store().unwrap().clone();
-    for i in 0..4 {
-        store.begin(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64, "infer-proxy", None, "image/png", 10 + i, None).unwrap();
-    }
+    let filler: Vec<u64> = (0..4)
+        .map(|i| store.begin(now_ms(), "infer-proxy", None, "image/png", 10 + i, None).unwrap())
+        .collect();
     let mut png = vec![0x89, b'P', b'N', b'G'];
     png.extend([1u8; 64]);
     let img = SvcImage { media_type: "image/png", bytes: png.clone() };
     let e = svc.call(TOPIC, json!({"model": "m", "text": "x"}), Some(img.clone()), "local:a").await.unwrap_err();
     assert!(matches!(e, ProxyError::Busy(_)), "{e}");
     assert_eq!(e.status(), 429);
-    // The failed put dropped the proxy's open uploads: the next call works.
+    // The failed put aborted only its own upload (none began): the slots stay
+    // taken until they are freed, then the next call works.
+    let e = svc.call(TOPIC, json!({"model": "m", "text": "x"}), Some(img.clone()), "local:a").await.unwrap_err();
+    assert!(matches!(e, ProxyError::Busy(_)), "{e}");
+    for id in filler {
+        store.abort_upload("infer-proxy", id);
+    }
     let r = svc.call(TOPIC, json!({"model": "m", "text": "x"}), Some(img), "local:a").await.unwrap();
     assert_eq!(r["text"], format!("image {} bytes, read {}", png.len(), png.len()));
 }
@@ -230,4 +236,82 @@ async fn a_call_leaves_no_image_blob_behind() {
     let e = svc.call("svc.infer/nowhere", json!({"model": "m"}), Some(png(500)), "local:a").await.unwrap_err();
     assert!(matches!(e, ProxyError::NoInstance(_)), "{e}");
     assert_eq!(store.stats().bytes, 0);
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64
+}
+
+#[tokio::test]
+async fn one_callers_failed_put_leaves_another_callers_open_upload_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let hooks = BusHooks { policy: Arc::new(Bar("mesh:bad-node")), ..BusHooks::default() };
+    let b = crate::cogbus_serve::broker_in("venq", hooks, dir.path());
+    let svc = BrokerSvc::open(b.clone(), None).unwrap();
+    provider(&b);
+    let store = b.blob_store().unwrap().clone();
+    // Caller A is mid-upload under the shared proxy owner.
+    let a_up = store.begin(now_ms(), "infer-proxy", None, "image/png", 10, None).unwrap();
+    assert!(store.chunk(now_ms(), "infer-proxy", a_up, 0, &[1u8; 4], false).unwrap().is_none());
+    // Caller B is denied at the put.
+    let e = svc.call(TOPIC, json!({"model": "m", "text": "x"}), Some(png(64)), "mesh:bad-node").await.unwrap_err();
+    assert!(matches!(e, ProxyError::Refused(_)), "{e}");
+    // A's upload is still open and completes.
+    let h = store.chunk(now_ms(), "infer-proxy", a_up, 4, &[2u8; 6], true).expect("A's upload survived B's failure");
+    assert!(h.is_some());
+}
+
+#[tokio::test]
+async fn a_failed_chunk_aborts_only_its_own_upload() {
+    let (b, _dir) = broker();
+    let svc = BrokerSvc::open(b.clone(), None).unwrap();
+    provider(&b);
+    let store = b.blob_store().unwrap().clone();
+    let a_up = store.begin(now_ms(), "infer-proxy", None, "image/png", 10, None).unwrap();
+    // Fill the other upload slots so B's begin is over quota.
+    let mut filler = Vec::new();
+    while let Ok(id) = store.begin(now_ms(), "infer-proxy", None, "image/png", 10, None) {
+        filler.push(id);
+    }
+    let e = svc.call(TOPIC, json!({"model": "m", "text": "x"}), Some(png(64)), "local:b").await.unwrap_err();
+    assert!(matches!(e, ProxyError::Busy(_)), "{e}");
+    store.chunk(now_ms(), "infer-proxy", a_up, 0, &[3u8; 10], true).expect("A's upload survived B's quota failure");
+}
+
+fn deny_file(dir: &std::path::Path, agent: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    let p = dir.join("cogbus-policy.json");
+    std::fs::write(&p, json!({"deny": [{"agents": [agent], "reason": "barred"}]}).to_string()).unwrap();
+    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600)).unwrap();
+}
+
+#[tokio::test]
+async fn a_policy_deny_naming_the_carrier_or_the_caller_refuses_neither_allows() {
+    let body = || json!({"model": "m", "text": "x"});
+    for (denied, expect_ok_for) in [("infer-proxy", None), ("mesh:bad-node", Some("mesh:good-node")), ("nobody", Some("mesh:bad-node"))] {
+        let dir = tempfile::tempdir().unwrap();
+        deny_file(dir.path(), denied);
+        let b = crate::cogbus_serve::broker_in("venq", crate::cogbus_serve::hooks(dir.path(), None), dir.path());
+        let svc = BrokerSvc::open(b.clone(), None).unwrap();
+        provider(&b);
+        match expect_ok_for {
+            // The carrier is named: every call and put is refused.
+            None => {
+                for who in ["mesh:good-node", "local:127.0.0.1"] {
+                    let e = svc.call(TOPIC, body(), None, who).await.unwrap_err();
+                    assert!(matches!(e, ProxyError::Refused(_)), "{denied} {who}: {e}");
+                    let e = svc.call(TOPIC, body(), Some(png(64)), who).await.unwrap_err();
+                    assert!(matches!(e, ProxyError::Refused(_)), "{denied} {who}: {e}");
+                }
+                assert_eq!(b.blob_store().unwrap().stats().reserved, 0);
+            }
+            Some(ok) => {
+                assert!(svc.call(TOPIC, body(), Some(png(64)), ok).await.is_ok(), "{denied}: {ok} allowed");
+                if denied != "nobody" {
+                    let e = svc.call(TOPIC, body(), None, denied).await.unwrap_err();
+                    assert!(matches!(e, ProxyError::Refused(_)), "{denied}: {e}");
+                }
+            }
+        }
+    }
 }

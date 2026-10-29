@@ -249,6 +249,16 @@ pub fn models_list(model: &str) -> Value {
     json!({"object": "list", "data": [{"id": model, "object": "model", "owned_by": "weftos"}]})
 }
 
+/// `s` cut to at most `max` bytes on a char boundary (the reason echoes
+/// caller-chosen text, so a plain byte cut can land inside a character).
+fn clip(s: &str, max: usize) -> String {
+    let mut end = max.min(s.len());
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s[..end].to_string()
+}
+
 async fn send(sink: &mut dyn ResponseSink, v: &Value) -> Result<(), ProxyError> {
     let bytes = serde_json::to_vec(v).map_err(|e| ProxyError::Upstream(e.to_string()))?;
     sink.head(200, Some("application/json")).await?;
@@ -275,8 +285,7 @@ pub async fn serve_svc(
                 Ok(t) => t,
                 Err(e) => {
                     if let Some(a) = audit {
-                        let mut reason = e.to_string();
-                        reason.truncate(200);
+                        let reason = clip(&e.to_string(), 200);
                         a.record(
                             "infer.svc.call",
                             json!({"role": req.role, "caller": caller, "topic": route.topic, "status": e.status(),

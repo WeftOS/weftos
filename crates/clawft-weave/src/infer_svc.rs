@@ -191,23 +191,25 @@ impl BrokerSvc {
         Ok(Arc::new(Self { broker, session, next: AtomicU64::new(1), waiters, image_calls: Arc::default(), _pump: pump }))
     }
 
-    /// Put `image` as a blob and return its handle. On any failure the
-    /// proxy's open uploads are dropped (none belongs to another call: this
-    /// function never awaits), so a failed chunk leaves nothing open.
+    /// Put `image` as a blob and return its handle. On a failure after the
+    /// upload began, that one upload is aborted: the proxy instance owns the
+    /// uploads of every caller, so nothing else of its is touched.
     fn put_image(&self, image: &SvcImage, caller: &str) -> Result<(ImageBlob<'_>, Value), ProxyError> {
-        self.put_image_inner(image, caller).inspect_err(|_| {
-            if let Some(store) = self.broker.blob_store() {
-                store.drop_uploads(INSTANCE);
+        let mut began = None;
+        self.put_image_inner(image, caller, &mut began).inspect_err(|_| {
+            if let (Some(id), Some(store)) = (began, self.broker.blob_store()) {
+                store.abort_upload(INSTANCE, id);
             }
         })
     }
 
-    fn put_image_inner(&self, image: &SvcImage, caller: &str) -> Result<(ImageBlob<'_>, Value), ProxyError> {
+    fn put_image_inner(&self, image: &SvcImage, caller: &str, began_id: &mut Option<u64>) -> Result<(ImageBlob<'_>, Value), ProxyError> {
         let b = &self.broker;
         let began = b
             .blob_begin_for(&self.session, image.media_type, image.bytes.len() as u64, Some(IMAGE_TTL_MS), caller)
             .map_err(|e| map_err(e.code, &e.message))?;
         let upload = began["upload"].as_u64().ok_or_else(|| ProxyError::Upstream("blob_begin gave no upload id".into()))?;
+        *began_id = Some(upload);
         let total = image.bytes.len();
         let mut offset = 0usize;
         for piece in image.bytes.chunks(CHUNK) {

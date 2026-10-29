@@ -269,7 +269,7 @@ async fn an_image_chat_through_the_proxy_arrives_as_image_blob_and_the_reply_map
         let calls = echo.calls.lock().unwrap();
         assert_eq!(calls[0].0, TOPIC);
         assert_eq!(calls[0].2.as_ref().unwrap().bytes, bytes);
-        assert!(calls[0].3.starts_with("local:127.0.0.1:"), "{}", calls[0].3);
+        assert_eq!(calls[0].3, "local:127.0.0.1");
     }
     assert!(audit.kinds().contains(&"infer.svc.call".to_string()));
     // Models list, and a refused streaming request.
@@ -397,4 +397,134 @@ async fn an_image_chat_from_a_consumer_node_is_answered_by_the_svc_node_over_the
     let big = String::from_utf8(chat(json!([{"type": "image_url", "image_url": {"url": data_uri("image/png", &png(2 * 1024 * 1024))}}]))).unwrap();
     let resp = raw(p.addr(), &post(p.addr(), "/v1/chat/completions", &big)).await;
     assert_eq!(status(&resp), 413, "{}", &resp[..resp.len().min(200)]);
+}
+
+/// A rejected request whose content-part type is padding plus multibyte
+/// characters, at every alignment of the 200-byte reason cut, is audited
+/// (the cut falls on a char boundary; it must not panic).
+#[tokio::test]
+async fn a_rejected_request_with_multibyte_text_in_the_reason_is_audited_without_a_panic() {
+    let echo = Arc::new(Echo::default());
+    let t = svc_table("venq", &echo);
+    let audit = Arc::new(Audit::default());
+    let p = start_proxy(&t, Some(audit.clone())).await;
+    let mut sent = 0;
+    for pad in 150..=200usize {
+        // 2-byte and 4-byte characters, so byte 200 lands inside one for some pad.
+        for fill in ["\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}", "\u{1f600}\u{1f600}\u{1f600}\u{1f600}"] {
+            let ty = format!("{}{fill}", "a".repeat(pad));
+            let body = String::from_utf8(chat(json!([{"type": ty, "text": "x"}]))).unwrap();
+            let resp = raw(p.addr(), &post(p.addr(), "/v1/chat/completions", &body)).await;
+            assert_eq!(status(&resp), 400, "pad {pad}: {resp}");
+            sent += 1;
+        }
+    }
+    let rec = audit.0.lock().unwrap();
+    let rejected: Vec<_> = rec.iter().filter(|(_, v)| v["outcome"] == "rejected").collect();
+    assert_eq!(rejected.len(), sent, "every rejected request is audited");
+    assert!(rejected.iter().all(|(_, v)| v["reason"].as_str().unwrap().len() <= 200));
+    assert!(echo.calls.lock().unwrap().is_empty());
+}
+
+fn image_chat() -> String {
+    String::from_utf8(chat(json!([
+        {"type": "text", "text": "d"},
+        {"type": "image_url", "image_url": {"url": data_uri("image/png", &png(40))}}
+    ])))
+    .unwrap()
+}
+
+/// Backend that applies a per-caller in-flight cap of 2 and a deny list, as
+/// the daemon's backend does, and holds admitted calls until released.
+struct Held {
+    seen: Mutex<Vec<String>>,
+    inflight: Mutex<std::collections::HashMap<String, usize>>,
+    deny: Vec<&'static str>,
+    release: tokio::sync::Semaphore,
+}
+
+#[async_trait]
+impl SvcBackend for Held {
+    async fn call(&self, _: &str, _: Value, _: Option<SvcImage>, caller: &str) -> Result<Value, ProxyError> {
+        self.seen.lock().unwrap().push(caller.to_string());
+        if self.deny.contains(&caller) {
+            return Err(ProxyError::Refused(format!("{caller} is barred")));
+        }
+        {
+            let mut m = self.inflight.lock().unwrap();
+            let n = m.entry(caller.to_string()).or_insert(0);
+            if *n >= 2 {
+                return Err(ProxyError::Busy("2 image calls in flight".into()));
+            }
+            *n += 1;
+        }
+        let _p = self.release.acquire().await.unwrap();
+        *self.inflight.lock().unwrap().get_mut(caller).unwrap() -= 1;
+        Ok(json!({"text": "ok"}))
+    }
+}
+
+/// One image chat; a request that is held (not refused) ends as "held".
+async fn quick(addr: std::net::SocketAddr) -> String {
+    let req = post(addr, "/v1/chat/completions", &image_chat());
+    tokio::time::timeout(std::time::Duration::from_secs(2), raw(addr, &req)).await.unwrap_or_else(|_| "HTTP/1.1 000 held".into())
+}
+
+impl Held {
+    fn new(deny: Vec<&'static str>) -> Arc<Self> {
+        Arc::new(Self { seen: Mutex::default(), inflight: Mutex::default(), deny, release: tokio::sync::Semaphore::new(0) })
+    }
+}
+
+async fn held_proxy(h: &Arc<Held>) -> InferProxy {
+    let t = Arc::new(PlacementTable::new("venq", None, None));
+    t.set_svc_backend(h.clone());
+    t.register_local_svc("vision", SvcRoute { topic: TOPIC.into(), model: MODEL.into() }).unwrap();
+    start_proxy(&t, None).await
+}
+
+#[tokio::test]
+async fn local_callers_are_keyed_on_the_ip_not_the_source_port() {
+    let echo = Arc::new(Echo::default());
+    let p = start_proxy(&svc_table("venq", &echo), None).await;
+    for _ in 0..3 {
+        let r = raw(p.addr(), &post(p.addr(), "/v1/chat/completions", &image_chat())).await;
+        assert_eq!(status(&r), 200, "{r}");
+    }
+    let callers: Vec<String> = echo.calls.lock().unwrap().iter().map(|c| c.3.clone()).collect();
+    assert_eq!(callers, vec!["local:127.0.0.1"; 3], "separate connections, one caller id");
+}
+
+#[tokio::test]
+async fn a_deny_for_the_local_ip_fires_on_every_connection() {
+    let h = Held::new(vec!["local:127.0.0.1"]);
+    let p = held_proxy(&h).await;
+    for _ in 0..2 {
+        let r = quick(p.addr()).await;
+        assert_eq!(status(&r), 403, "{r}");
+    }
+}
+
+#[tokio::test]
+async fn the_per_caller_image_cap_holds_across_connections() {
+    let h = Held::new(vec![]);
+    let p = held_proxy(&h).await;
+    let addr = p.addr();
+    let mut held = Vec::new();
+    for _ in 0..2 {
+        held.push(tokio::spawn(async move { raw(addr, &post(addr, "/v1/chat/completions", &image_chat())).await }));
+    }
+    for _ in 0..200 {
+        if h.inflight.lock().unwrap().get("local:127.0.0.1") == Some(&2) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    // A third connection (another source port) is the same caller: refused.
+    let r = quick(addr).await;
+    assert_eq!(status(&r), 429, "{r}");
+    h.release.add_permits(2);
+    for j in held {
+        assert_eq!(status(&j.await.unwrap()), 200);
+    }
 }

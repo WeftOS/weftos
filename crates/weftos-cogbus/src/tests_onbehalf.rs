@@ -50,8 +50,12 @@ struct Rig {
 }
 
 fn rig() -> Rig {
+    rig_with("mesh:bad")
+}
+
+fn rig_with(bad: &'static str) -> Rig {
     let dir = tempfile::tempdir().unwrap();
-    let policy = Arc::new(ByAgent { bad: "mesh:bad", asked: Mutex::default() });
+    let policy = Arc::new(ByAgent { bad, asked: Mutex::default() });
     let log = Arc::new(Log::default());
     let hooks = BusHooks { policy: policy.clone(), sink: log.clone(), limits: RefusalLimits::default() };
     let blobs = Arc::new(crate::blob::BlobStore::open(&dir.path().join("blobs"), Default::default(), 0).unwrap());
@@ -169,4 +173,30 @@ fn bytes_put_twice_survive_one_release() {
     assert_eq!(store.stats().bytes, 64);
     assert!(r.broker.blob_release(&r.proxy, &a).unwrap());
     assert_eq!(store.stats().bytes, 0);
+}
+
+/// A deny that names either side applies: the caller the session acts for,
+/// or the instance that carries the call (`via`).
+#[test]
+fn a_deny_naming_the_carrier_refuses_an_on_behalf_call_and_put() {
+    let r = rig_with("infer-proxy");
+    let e = r.broker.call_service_for(&r.proxy, 1, "svc.infer/venq", "infer.v1", json!({}), Some(5000), "mesh:good").unwrap_err();
+    assert_eq!(e.code, ErrorCode::Denied, "{e}");
+    let e = r.broker.blob_begin_for(&r.proxy, "image/png", 10, Some(60_000), "mesh:good").unwrap_err();
+    assert_eq!(e.code, ErrorCode::Denied, "{e}");
+    assert_eq!(r.broker.blob_store().unwrap().stats().reserved, 0);
+}
+
+#[test]
+fn a_deny_naming_the_caller_still_refuses_and_no_deny_allows() {
+    let r = rig_with("mesh:bad");
+    let e = r.broker.call_service_for(&r.proxy, 1, "svc.infer/venq", "infer.v1", json!({}), Some(5000), "mesh:bad").unwrap_err();
+    assert_eq!(e.code, ErrorCode::Denied, "{e}");
+    assert_eq!(
+        r.broker.blob_begin_for(&r.proxy, "image/png", 10, Some(60_000), "mesh:bad").unwrap_err().code,
+        ErrorCode::Denied
+    );
+    // Neither the caller nor the carrier is named: allowed.
+    r.broker.call_service_for(&r.proxy, 2, "svc.infer/venq", "infer.v1", json!({}), Some(5000), "mesh:good").unwrap();
+    r.broker.blob_begin_for(&r.proxy, "image/png", 10, Some(60_000), "mesh:good").unwrap();
 }

@@ -556,6 +556,18 @@ impl BlobStore {
         }
     }
 
+    /// Abort the one open upload `id` of `owner` and free its reservation.
+    /// Another upload of the same owner (the shared infer-proxy instance has
+    /// several callers) is left alone; an unknown or foreign id does nothing.
+    pub fn abort_upload(&self, owner: &str, id: u64) {
+        let mut g = self.lock();
+        if g.uploads.get(&id).is_some_and(|u| u.owner == owner)
+            && let Some(u) = g.uploads.remove(&id)
+        {
+            let _ = std::fs::remove_file(&u.path);
+        }
+    }
+
     /// Counts and bytes.
     pub fn stats(&self) -> BlobStats {
         let g = self.lock();
