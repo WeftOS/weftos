@@ -118,6 +118,53 @@ Caveats:
 - Not yet verified: whether audit logs cover every request type, how quickly a disabled
   key is refused, and the RAM footprint (PG is fine; it doesn't belong on the Venq).
 
+## A WeftOS storage crate, so the store is part of the mesh
+
+The owner's suggestion (2026-10-29) is to build this into a WeftOS crate, so storage
+meshes like everything else instead of being a side service.
+
+Building blocks, checked on crates.io 2026-10-29:
+
+- **RustFS is a library as well as a binary.** `rustfs` has a `[lib]` target, and its
+  parts are published separately (`rustfs`, `rustfs-ecstore`, `rustfs-iam`,
+  `rustfs-audit`, ...). crates.io has 1.0.1; GitHub is at 1.0.4. Apache-2.0, which is
+  compatible with our `MIT OR Apache-2.0`.
+- **OpenDAL** (`opendal` 0.59.5, Apache Software Foundation, about 19M downloads) is
+  the Rust client layer. One API covers S3, local fs, WebDAV, SFTP, GCS, Azure and
+  others. WeftOS doesn't use it yet.
+
+Proposed shape for a `weftos-store` crate:
+
+1. **Client in every daemon (OpenDAL).** Every node talks to the mesh store natively,
+   without rclone:
+   - the ADR-122 blob store can spill to S3 or use it as a backend;
+   - cogs and agents read and write through the daemon, so every operation passes
+     governance and the activity log;
+   - model weights, archives and project assets are fetched by name.
+
+   rclone stays for people: desktop mounts and bisync.
+2. **Server as a governed workload on PG, first.** RustFS runs as a supervised service
+   under the daemon (ADR-099 placement), not linked into the daemon binary. Upgrades
+   stay separate, the daemon stays small, and a RustFS fault can't take the kernel
+   down. Linking the server in comes later, behind an off-by-default feature, the same
+   pattern as the Wasmtime project kernel.
+3. **Mesh identity drives access.**
+   - When a node pairs into the mesh, the daemon creates that node's IAM access key
+     through RustFS's admin API, scoped to its projects' buckets, and delivers it over
+     the mesh. Terraform's `rclone.conf` is still how a person's machine gets one.
+   - When a node unpairs, or a governance rule is hit, its key is disabled.
+4. **The store is an ADR-120 exposure.** PG advertises the store with its on/off switch.
+   RustFS audit and bucket-notification targets go to the activity log and the
+   dashboard. Notifications can also drive cache invalidation on other nodes.
+
+This would need its own ADR. The questions it has to answer:
+- the bucket layout (per project, per account, per client);
+- whether client projects get separate buckets under the client user (PG isolation
+  rules) or stay out entirely;
+- how keys reach nodes without passing through agents;
+- what happens to the store when PG is down: read-only caches on the nodes, or a
+  second RustFS node with replication.
+
 ## Proposed first slice
 
 1. Run RustFS on PG as the mesh's S3 storage (owner direction 2026-10-29): every other
