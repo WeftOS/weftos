@@ -47,6 +47,10 @@ pub fn host_target() -> Option<&'static str> {
 /// Mach-O `cputype` for arm64 (`CPU_TYPE_ARM64`).
 pub const CPU_TYPE_ARM64: u32 = 0x0100_000c;
 
+/// Mach-O `filetype` for an executable (`MH_EXECUTE`). Dylibs, bundles and
+/// object files are not runnable payloads.
+pub const MH_EXECUTE: u32 = 2;
+
 /// ELF `e_machine` for a package arch.
 pub fn elf_machine(arch: &str) -> Option<u16> {
     match arch {
@@ -62,8 +66,10 @@ pub fn elf_machine(arch: &str) -> Option<u16> {
 pub enum PayloadKind {
     /// ELF with this `e_machine`.
     Elf(u16),
-    /// Thin 64-bit little-endian Mach-O with this `cputype`. Fat/universal
-    /// binaries are not recognised (ship a thin arm64 slice).
+    /// Thin 64-bit little-endian Mach-O executable (`MH_EXECUTE`, header of
+    /// at least 16 bytes) with this `cputype`. Fat/universal, 32-bit,
+    /// big-endian, dylib and truncated files are not recognised (ship a
+    /// thin arm64 slice).
     MachO(u32),
     /// `#!` script.
     Script,
@@ -81,7 +87,10 @@ pub fn classify(bytes: &[u8]) -> PayloadKind {
             u16::from_le_bytes(m)
         };
         PayloadKind::Elf(machine)
-    } else if bytes.len() >= 8 && bytes[..4] == [0xcf, 0xfa, 0xed, 0xfe] {
+    } else if bytes.len() >= 16
+        && bytes[..4] == [0xcf, 0xfa, 0xed, 0xfe]
+        && u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]) == MH_EXECUTE
+    {
         PayloadKind::MachO(u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]))
     } else if bytes.starts_with(b"#!") {
         PayloadKind::Script
@@ -152,10 +161,23 @@ impl NativeRuntime {
 
     /// Admission with `has_run_as` saying whether an unprivileged identity
     /// is available (the adapter's, or the instance's own).
-    fn admit_as(&self, w: &VerifiedWorkload, has_run_as: bool) -> Result<Admission, RuntimeError> {
+    /// `instance_run_as` says the controller asked this instance for its own
+    /// identity, which the macOS route cannot give.
+    fn admit_as(
+        &self,
+        w: &VerifiedWorkload,
+        has_run_as: bool,
+        instance_run_as: bool,
+    ) -> Result<Admission, RuntimeError> {
         let p = w.signed(NATIVE_ID)?;
         let (arch, bytes, emulated) = self.pick(p)?;
         let mut notes = vec![self.check_payload(&arch, bytes)?];
+        if arch == MACOS_AARCH64
+            && let Some(m) =
+                macos_route_refusal(super::supervise::running_as_root(), instance_run_as)
+        {
+            return Err(RuntimeError::AdmissionRefused(m));
+        }
         if super::supervise::running_as_root() && !has_run_as {
             return Err(RuntimeError::AdmissionRefused(
                 "host runs as root and no unprivileged run_as user is configured".into(),
@@ -168,11 +190,14 @@ impl NativeRuntime {
                     .into(),
             );
         }
+        let ram = if arch == MACOS_AARCH64 {
+            "ram not enforced on macOS (RLIMIT_AS is ignored there)".to_string()
+        } else {
+            format!("ram {} MiB", p.spec.resources.ram_mb)
+        };
         notes.push(format!(
-            "limits: ram {} MiB, console {} s, output {} B",
-            p.spec.resources.ram_mb,
-            p.spec.console.max_runtime_secs,
-            p.spec.console.output_limit_bytes
+            "limits: {ram}, console {} s, output {} B",
+            p.spec.console.max_runtime_secs, p.spec.console.output_limit_bytes
         ));
         Ok(Admission {
             runtime: NATIVE_ID.into(),
@@ -212,6 +237,19 @@ impl NativeRuntime {
         ev.runtime = NATIVE_ID.into();
         ev.instance_id = h.instance_id.clone();
         ev
+    }
+}
+
+/// Why the macOS route must be refused at admission, if it must: it has no
+/// per-cog uid, so it cannot honour a requested identity, and a root daemon
+/// would run the cog as root.
+pub(super) fn macos_route_refusal(is_root: bool, run_as_requested: bool) -> Option<String> {
+    if is_root {
+        Some("the macOS route runs as the daemon user and is refused when the daemon runs as root".into())
+    } else if run_as_requested {
+        Some("a run_as identity was requested but the macOS route runs as the daemon user and cannot give one".into())
+    } else {
+        None
     }
 }
 
@@ -307,7 +345,7 @@ impl WorkloadRuntime for NativeRuntime {
     }
 
     async fn admit(&self, w: &VerifiedWorkload) -> Result<Admission, RuntimeError> {
-        self.admit_as(w, self.cfg.run_as.is_some())
+        self.admit_as(w, self.cfg.run_as.is_some(), false)
     }
 
     async fn load(
@@ -326,7 +364,11 @@ impl WorkloadRuntime for NativeRuntime {
                     .into(),
             ));
         }
-        let adm = self.admit_as(w, self.cfg.run_as.is_some() || cfg.host.run_as.is_some())?;
+        let adm = self.admit_as(
+            w,
+            self.cfg.run_as.is_some() || cfg.host.run_as.is_some(),
+            cfg.host.run_as.is_some(),
+        )?;
         let p = w.signed(NATIVE_ID)?;
         cfg.mode.validate()?;
         cfg.host.validate()?;

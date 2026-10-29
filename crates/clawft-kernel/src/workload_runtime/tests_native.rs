@@ -470,7 +470,9 @@ fn data_is_private_to_the_instance_uid_even_when_the_files_were_kept_from_an_ear
 }
 
 mod macos {
-    use super::super::native::{CPU_TYPE_ARM64, PayloadKind, check_payload_on, classify, host_target};
+    use super::super::native::{
+        CPU_TYPE_ARM64, PayloadKind, check_payload_on, classify, host_target, macos_route_refusal,
+    };
     use super::super::test_support::fake_elf;
     use crate::workload_pkg::manifest::MACOS_AARCH64;
 
@@ -478,7 +480,37 @@ mod macos {
         let mut b = vec![0u8; 32];
         b[..4].copy_from_slice(&[0xcf, 0xfa, 0xed, 0xfe]);
         b[4..8].copy_from_slice(&cputype.to_le_bytes());
+        b[12..16].copy_from_slice(&2u32.to_le_bytes()); // MH_EXECUTE
         b
+    }
+
+    #[test]
+    fn truncated_or_non_executable_or_foreign_macho_is_refused() {
+        let full = macho(CPU_TYPE_ARM64);
+        for n in [4, 7, 8, 15] {
+            assert_eq!(classify(&full[..n]), PayloadKind::Unknown, "{n} bytes");
+            assert!(check_payload_on("macos", false, MACOS_AARCH64, &full[..n]).is_err());
+        }
+        let mut dylib = full.clone();
+        dylib[12..16].copy_from_slice(&6u32.to_le_bytes()); // MH_DYLIB
+        let mut m32 = full.clone();
+        m32[..4].copy_from_slice(&[0xce, 0xfa, 0xed, 0xfe]); // feedface, LE 32-bit
+        let mut be32 = full.clone();
+        be32[..4].copy_from_slice(&[0xfe, 0xed, 0xfa, 0xce]);
+        let mut be64 = full.clone();
+        be64[..4].copy_from_slice(&[0xfe, 0xed, 0xfa, 0xcf]);
+        for (name, b) in [("dylib", dylib), ("32-bit", m32), ("be32", be32), ("be64", be64)] {
+            assert_eq!(classify(&b), PayloadKind::Unknown, "{name}");
+            assert!(check_payload_on("macos", false, MACOS_AARCH64, &b).is_err(), "{name}");
+        }
+    }
+
+    #[test]
+    fn the_macos_route_is_refused_for_root_or_a_requested_identity() {
+        assert!(macos_route_refusal(true, false).unwrap().contains("root"));
+        assert!(macos_route_refusal(false, true).unwrap().contains("run_as"));
+        assert!(macos_route_refusal(true, true).is_some());
+        assert!(macos_route_refusal(false, false).is_none());
     }
 
     #[test]
@@ -522,6 +554,27 @@ mod macos {
         assert!(check_payload_on("linux", false, "aarch64", &fake_elf(183)).is_ok());
         assert!(check_payload_on("macos", false, "aarch64", &fake_elf(183)).is_err());
         assert!(check_payload_on("linux", false, "aarch64", &fake_elf(62)).is_err());
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[tokio::test]
+    async fn load_refuses_a_requested_identity_and_the_note_says_ram_is_not_enforced() {
+        use super::super::host_contract::CogIdentity;
+        use super::super::types::{RunMode, WorkloadRuntime};
+        use super::{cfg, runtime, toml};
+        let fx = super::super::test_support::signed_workload(
+            &toml(15, 4096),
+            &[(MACOS_AARCH64, &macho(CPU_TYPE_ARM64))],
+        );
+        let rt = runtime(&fx.root.join("rt"), false);
+        let adm = rt.admit(&fx.workload).await.unwrap();
+        let note = adm.notes.iter().find(|n| n.starts_with("limits:")).unwrap();
+        assert!(note.contains("not enforced"), "{note}");
+        assert!(!note.contains("MiB"), "{note}");
+        let mut c = cfg(RunMode::Once);
+        c.host.run_as = Some(CogIdentity { uid: 1, gid: 1, groups: vec![] });
+        let err = rt.load(&fx.workload, &c).await.unwrap_err();
+        assert!(err.to_string().contains("run_as"), "{err}");
     }
 
     #[test]

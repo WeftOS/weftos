@@ -158,6 +158,28 @@ fn parse_bin(s: &str) -> anyhow::Result<(String, PathBuf)> {
     Ok((arch.to_string(), PathBuf::from(path)))
 }
 
+/// Reject a `--bin` whose bytes do not match its arch key, using the
+/// kernel's own payload classifier so pack and admission agree.
+fn check_bin_matches_key(arch: &str, bytes: &[u8]) -> anyhow::Result<()> {
+    use clawft_kernel::workload_runtime::native::{
+        CPU_TYPE_ARM64, PayloadKind, classify, elf_machine,
+    };
+    let kind = classify(bytes);
+    match arch {
+        "aarch64-macos" => match kind {
+            PayloadKind::MachO(CPU_TYPE_ARM64) => Ok(()),
+            _ => anyhow::bail!(
+                "--bin aarch64-macos must be a thin arm64 Mach-O executable (got {kind:?}; fat, dylib, 32-bit and big-endian files are refused)"
+            ),
+        },
+        "aarch64" | "armv7" | "x86_64" => match (kind, elf_machine(arch)) {
+            (PayloadKind::Elf(m), Some(want)) if m == want => Ok(()),
+            _ => anyhow::bail!("--bin {arch} must be an ELF for {arch} (got {kind:?})"),
+        },
+        _ => Ok(()),
+    }
+}
+
 fn load_trust(path: Option<&Path>) -> anyhow::Result<TrustAnchors> {
     match path {
         Some(p) => {
@@ -185,6 +207,11 @@ fn pack(a: PackArgs) -> anyhow::Result<()> {
         .iter()
         .map(|b| parse_bin(b))
         .collect::<anyhow::Result<Vec<_>>>()?;
+    for (arch, path) in &binaries {
+        let bytes = std::fs::read(path)
+            .map_err(|e| anyhow::anyhow!("--bin {arch}: cannot read {}: {e}", path.display()))?;
+        check_bin_matches_key(arch, &bytes)?;
+    }
     let commit = a.source_commit.clone().or_else(|| {
         if a.release_url.is_none() {
             git_head(&a.cog_dir)
@@ -382,5 +409,39 @@ mod tests {
             ("armv7".into(), PathBuf::from("/x/y"))
         );
         assert!(parse_bin("armv7").is_err());
+    }
+
+    fn macho(cputype: u32, filetype: u32) -> Vec<u8> {
+        let mut b = vec![0u8; 32];
+        b[..4].copy_from_slice(&[0xcf, 0xfa, 0xed, 0xfe]);
+        b[4..8].copy_from_slice(&cputype.to_le_bytes());
+        b[12..16].copy_from_slice(&filetype.to_le_bytes());
+        b
+    }
+
+    fn elf(machine: u16) -> Vec<u8> {
+        let mut b = vec![0u8; 64];
+        b[..4].copy_from_slice(b"\x7fELF");
+        b[4] = 2;
+        b[5] = 1;
+        b[18..20].copy_from_slice(&machine.to_le_bytes());
+        b
+    }
+
+    #[test]
+    fn pack_rejects_a_bin_that_does_not_match_its_arch_key() {
+        let arm = 0x0100_000c;
+        assert!(check_bin_matches_key("aarch64-macos", &macho(arm, 2)).is_ok());
+        assert!(check_bin_matches_key("aarch64-macos", &macho(0x0100_0007, 2)).is_err());
+        assert!(check_bin_matches_key("aarch64-macos", &macho(arm, 6)).is_err());
+        assert!(check_bin_matches_key("aarch64-macos", &elf(183)).is_err());
+        assert!(check_bin_matches_key("aarch64-macos", b"#!/bin/sh\n").is_err());
+        assert!(check_bin_matches_key("aarch64", &elf(183)).is_ok());
+        assert!(check_bin_matches_key("aarch64", &elf(62)).is_err());
+        assert!(check_bin_matches_key("x86_64", &elf(62)).is_ok());
+        assert!(check_bin_matches_key("armv7", &elf(40)).is_ok());
+        assert!(check_bin_matches_key("armv7", &macho(arm, 2)).is_err());
+        assert!(check_bin_matches_key("x86_64", b"junk").is_err());
+        assert!(check_bin_matches_key("wasm", b"\0asm").is_ok());
     }
 }
