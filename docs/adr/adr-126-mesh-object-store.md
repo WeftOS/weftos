@@ -188,6 +188,33 @@ policy covers only `s0-spike`.
 | Footprint | The `rustfs` process: about 310–320 MB RSS, idle and under a 1 GB upload. The service cgroup reached 1.5 GB after the upload, which is mostly the kernel's page cache. The audit sink: 19 MB. An hour-long reading is still to do. |
 | Restarts | Objects are intact after `restart rustfs.service` (the md5 of the 1 GB object is unchanged). With the audit sink stopped, events queue on disk and are delivered once it's back. |
 
+**Audit follow-up (2026-10-29, source read of the 1.0.4 tag plus a re-test on PG):**
+
+- **Why the gaps exist.** Audit is emitted per handler, through `OperationHelper`
+  (`rustfs/src/storage/helper.rs`). A handler without one emits nothing, and the helper only
+  exists for operations that map to a notification event name. About 43 operations map to
+  none (`crates/s3-ops/src/lib.rs`). No code comment, doc, issue or PR says this is a
+  deliberate scope. It reads as an oversight that comes from tying audit to notification
+  events.
+- **Not audited, confirmed on PG:**
+  - UploadPart and AbortMultipartUpload;
+  - PutBucketPolicy and DeleteBucketPolicy;
+  - PutBucketVersioning;
+  - PutBucketTagging and DeleteBucketTagging;
+  - HeadBucket.
+
+  The unaudited policy and config changes are the larger governance gap.
+- **CreateMultipartUpload** is emitted but then lost. With a queue directory set, the queued
+  event fails to replay ("Invalid event name: s3:ObjectCreated:CreateMultipartUpload") and is
+  dropped (`audit_replay_dropped`). That is a RustFS bug.
+- **Refusals** are decided in RustFS's `DenialContext::deny` (`rustfs/src/storage/access.rs`),
+  which only writes the `s3_authorization_denied` log line. That line has the account,
+  bucket, object, action and reason. It's a gap nobody designed, and RustFS owns the hook.
+- **Bad signatures** are rejected inside s3s `prepare`, before RustFS sees the request. That
+  needs a response-status layer or an s3s change.
+- **MinIO**, which RustFS mirrors, audits UploadPart, Abort and middleware rejections, so
+  RustFS diverges from it here.
+
 Not tested: bucket notifications (not configured in the spike), and erasure coding and
 replication (single drive).
 
