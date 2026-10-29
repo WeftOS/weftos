@@ -209,8 +209,10 @@ replication (single drive).
 
 1. ~~Can the existing project directory be served in place?~~ Answered by S0: no. It's
    imported once and the bucket becomes the source.
-4. Listing a store isn't logged by RustFS (S0). Is that acceptable, or should listings go through
-   the daemon so the daemon logs them?
+4. ~~Listing a store isn't logged by RustFS (S0). Is that acceptable?~~ Answered by the owner on
+   2026-10-29: yes. Anyone with read access is assumed to see all of a store's metadata with a
+   single read, so listings don't need an audit line. Multipart part uploads do, and so do refusals
+   and bad signatures. Whether RustFS can be extended to cover them is under study.
 2. How long do archived buckets (from a removed worktree, project or node) live before
    they're deleted?
 3. Do cloud agent sessions get write access to worktree stores, or only read?
