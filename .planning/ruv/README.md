@@ -19,6 +19,7 @@ source of truth for the deep K0–K5 phase-by-phase alignment already written.
 | `packages/agentbbs/overview.md` | Deep-dive: AgentBBS (federated agent+human BBS) |
 | `packages/agenticow/overview.md` | Deep-dive: agenticow (copy-on-write vector memory branching) |
 | `packages/new-libraries-2026-07.md` | Survey: metaharness, midstream, RuLake, agentdb, rvm, RuView, and other new repos |
+| `docs/research/rune-evaluation-2026-10-29.md` (repo root) | Evaluation: ruvnet/rune (Cargo wrapper, Agent Booster sidecar, bounded AI discovery) — verdict: watch, pattern-only |
 | `integration/midstream-integration-plan.md` | Plan: MidStream → WeftOS voice/ECC. Verdict: adopt `temporal-compare` (vendored) + reference the LTL checker; no-go on scheduler/strange-loop/QUIC (redundant with ImpulseQueue/CognitiveTick/Weaver or off the voice path) |
 | `integration/agenticow-integration-plan.md` | Plan: agenticow COW memory branching → hermes-loop turn checkpointing + exochain DualStateBridge. **Decision: reimplement in Rust over `rvf_runtime::RvfStore` (already a workspace dep, Cargo.toml:208); skip the JS/napi/sidecar layer entirely** |
 
