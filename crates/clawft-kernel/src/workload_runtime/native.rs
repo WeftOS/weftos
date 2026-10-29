@@ -11,6 +11,7 @@ use clawft_types::placement::{AttrValue, Capability, CapabilityId, Provenance};
 use tokio::sync::Mutex;
 
 use super::cog_spec::CogSpec;
+use crate::workload_pkg::manifest::MACOS_AARCH64;
 use super::evidence::RunEvidence;
 use super::host_contract::HostContract;
 use super::supervise::{LaunchSpec, ProcLimits, Supervised};
@@ -33,6 +34,19 @@ pub fn host_arch() -> Option<&'static str> {
     }
 }
 
+/// Binary key this host runs: [`MACOS_AARCH64`] on Apple Silicon macOS, else
+/// the CPU arch ([`host_arch`]).
+pub fn host_target() -> Option<&'static str> {
+    if std::env::consts::OS == "macos" && std::env::consts::ARCH == "aarch64" {
+        Some(MACOS_AARCH64)
+    } else {
+        host_arch()
+    }
+}
+
+/// Mach-O `cputype` for arm64 (`CPU_TYPE_ARM64`).
+pub const CPU_TYPE_ARM64: u32 = 0x0100_000c;
+
 /// ELF `e_machine` for a package arch.
 pub fn elf_machine(arch: &str) -> Option<u16> {
     match arch {
@@ -48,6 +62,9 @@ pub fn elf_machine(arch: &str) -> Option<u16> {
 pub enum PayloadKind {
     /// ELF with this `e_machine`.
     Elf(u16),
+    /// Thin 64-bit little-endian Mach-O with this `cputype`. Fat/universal
+    /// binaries are not recognised (ship a thin arm64 slice).
+    MachO(u32),
     /// `#!` script.
     Script,
     /// Anything else.
@@ -64,6 +81,8 @@ pub fn classify(bytes: &[u8]) -> PayloadKind {
             u16::from_le_bytes(m)
         };
         PayloadKind::Elf(machine)
+    } else if bytes.len() >= 8 && bytes[..4] == [0xcf, 0xfa, 0xed, 0xfe] {
+        PayloadKind::MachO(u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]))
     } else if bytes.starts_with(b"#!") {
         PayloadKind::Script
     } else {
@@ -89,6 +108,8 @@ struct Instance {
     spec: CogSpec,
     args: Vec<String>,
     host: HostContract,
+    /// macOS route: no per-cog uid; the cog runs as the daemon user.
+    daemon_user: bool,
     proc: Option<Supervised>,
     last: Option<RunEvidence>,
 }
@@ -111,34 +132,22 @@ impl NativeRuntime {
     fn pick<'a>(&self, p: &'a SignedPayload) -> Result<(String, &'a [u8], bool), RuntimeError> {
         let host = host_arch()
             .ok_or_else(|| RuntimeError::AdmissionRefused("unsupported host arch".into()))?;
-        if let Some(b) = p.binaries.get(host) {
-            return Ok((host.to_string(), b.bytes.as_slice(), false));
+        // Apple Silicon macOS prefers its Mach-O binary; every other host
+        // (and a macOS host without one) looks up its CPU arch, as before.
+        let key = host_target()
+            .filter(|t| p.binaries.contains_key(*t))
+            .unwrap_or(host);
+        if let Some(b) = p.binaries.get(key) {
+            return Ok((key.to_string(), b.bytes.as_slice(), false));
         }
         Err(RuntimeError::AdmissionRefused(format!(
-            "package has no {host} binary (has: {}); native never emulates",
+            "package has no {key} binary (has: {}); native never emulates",
             p.binaries.keys().cloned().collect::<Vec<_>>().join(",")
         )))
     }
 
     fn check_payload(&self, arch: &str, bytes: &[u8]) -> Result<String, RuntimeError> {
-        let refuse = |m: String| Err(RuntimeError::AdmissionRefused(m));
-        match classify(bytes) {
-            PayloadKind::Elf(m) => {
-                if std::env::consts::OS != "linux" {
-                    return refuse(format!(
-                        "native on {} cannot run Linux ELF binaries",
-                        std::env::consts::OS
-                    ));
-                }
-                if Some(m) != elf_machine(arch) {
-                    return refuse(format!("ELF machine {m} is not {arch}"));
-                }
-                Ok(format!("ELF {arch} on linux"))
-            }
-            PayloadKind::Script if self.cfg.allow_interpreted => Ok("interpreted payload".into()),
-            PayloadKind::Script => refuse("script payloads are disabled".into()),
-            PayloadKind::Unknown => refuse("payload is not an executable".into()),
-        }
+        check_payload_on(std::env::consts::OS, self.cfg.allow_interpreted, arch, bytes)
     }
 
     /// Admission with `has_run_as` saying whether an unprivileged identity
@@ -151,6 +160,13 @@ impl NativeRuntime {
             return Err(RuntimeError::AdmissionRefused(
                 "host runs as root and no unprivileged run_as user is configured".into(),
             ));
+        }
+        if arch == MACOS_AARCH64 {
+            notes.push(
+                "isolation: runs as the daemon user (no per-cog uid on macOS; \
+                 ADR-122 section 4a does not apply)"
+                    .into(),
+            );
         }
         notes.push(format!(
             "limits: ram {} MiB, console {} s, output {} B",
@@ -175,7 +191,11 @@ impl NativeRuntime {
         let data = inst.dir.join("data");
         let mut limits = ProcLimits::for_ram_mb(inst.spec.resources.ram_mb);
         limits.cpu_secs = cpu_secs;
-        let (run_as, groups) = effective_identity(self.cfg.run_as, &inst.host);
+        let (run_as, groups) = if inst.daemon_user {
+            (None, Vec::new())
+        } else {
+            effective_identity(self.cfg.run_as, &inst.host)
+        };
         Supervised::spawn(LaunchSpec {
             program: inst.program.clone(),
             args,
@@ -192,6 +212,44 @@ impl NativeRuntime {
         ev.runtime = NATIVE_ID.into();
         ev.instance_id = h.instance_id.clone();
         ev
+    }
+}
+
+/// Payload admission for binary key `arch` on a daemon running `host_os`.
+/// The `aarch64-macos` key takes only thin arm64 Mach-O on a macOS daemon;
+/// every other key takes only its Linux ELF (or a dev script).
+pub(super) fn check_payload_on(
+    host_os: &str,
+    allow_interpreted: bool,
+    arch: &str,
+    bytes: &[u8],
+) -> Result<String, RuntimeError> {
+    let refuse = |m: String| Err(RuntimeError::AdmissionRefused(m));
+    let macos_route = arch == MACOS_AARCH64;
+    match classify(bytes) {
+        PayloadKind::Elf(_) if macos_route => refuse("ELF payload on the macOS route".into()),
+        PayloadKind::Elf(m) => {
+            if host_os != "linux" {
+                return refuse(format!("native on {host_os} cannot run Linux ELF binaries"));
+            }
+            if Some(m) != elf_machine(arch) {
+                return refuse(format!("ELF machine {m} is not {arch}"));
+            }
+            Ok(format!("ELF {arch} on linux"))
+        }
+        PayloadKind::MachO(_) if !macos_route => {
+            refuse(format!("Mach-O payload on the {arch} route (Linux ELF only)"))
+        }
+        PayloadKind::MachO(_) if host_os != "macos" => {
+            refuse(format!("native on {host_os} cannot run Mach-O binaries"))
+        }
+        PayloadKind::MachO(c) if c != CPU_TYPE_ARM64 => {
+            refuse(format!("Mach-O cputype {c:#x} is not arm64"))
+        }
+        PayloadKind::MachO(_) => Ok("Mach-O arm64 on macos".into()),
+        PayloadKind::Script if allow_interpreted => Ok("interpreted payload".into()),
+        PayloadKind::Script => refuse("script payloads are disabled".into()),
+        PayloadKind::Unknown => refuse("payload is not an executable".into()),
     }
 }
 
@@ -284,7 +342,18 @@ impl WorkloadRuntime for NativeRuntime {
         let program = dir.join(format!("cog-{}", w.id));
         let bytes = p.binaries[&adm.arch].bytes.clone();
         let (d, prog) = (dir.clone(), program.clone());
-        let run_as = effective_identity(self.cfg.run_as, &cfg.host).0;
+        let daemon_user = adm.arch == MACOS_AARCH64;
+        if daemon_user {
+            tracing::warn!(
+                cog = %w.id,
+                "macOS native cog runs as the daemon user: no per-cog uid, no uid isolation"
+            );
+        }
+        let run_as = if daemon_user {
+            None
+        } else {
+            effective_identity(self.cfg.run_as, &cfg.host).0
+        };
         let owner = cfg.host.owner.clone();
         tokio::task::spawn_blocking(move || stage(&d, &prog, &bytes, run_as, owner.as_deref()))
             .await
@@ -299,6 +368,7 @@ impl WorkloadRuntime for NativeRuntime {
                 spec: p.spec.clone(),
                 args,
                 host: cfg.host.clone(),
+                daemon_user,
                 proc: None,
                 last: None,
             },

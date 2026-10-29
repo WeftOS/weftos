@@ -21,7 +21,14 @@ pub const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
 /// Most signature entries accepted on one envelope.
 pub const MAX_SIGNATURES: usize = 16;
 /// Architectures a cog package may carry (ADR-100 section 1).
-pub const COG_ARCHES: &[&str] = &["aarch64", "armv7", "x86_64", "wasm"];
+/// Binary key for a thin arm64 Mach-O cog run natively on a macOS node
+/// (ADR-100, 2026-10-28). The key doubles as the per-binary OS marker: a
+/// package carries it only for cogs that declare they run on macOS.
+pub const MACOS_AARCH64: &str = "aarch64-macos";
+
+/// Binary keys a cog package may carry: Linux/WASM arches, plus
+/// [`MACOS_AARCH64`].
+pub const COG_ARCHES: &[&str] = &["aarch64", "armv7", "x86_64", "wasm", MACOS_AARCH64];
 
 /// Manifest parse / validation failure.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

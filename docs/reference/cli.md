@@ -4170,7 +4170,7 @@ Options:
           Enable verbose (debug-level) logging
 
       --bin <ARCH=PATH>
-          Per-arch binary, `<arch>=<path>` (repeat; arch: aarch64, armv7, x86_64, wasm)
+          Per-arch binary, `<arch>=<path>` (repeat; arch: aarch64, armv7, x86_64, wasm, or aarch64-macos for a thin arm64 Mach-O run on macOS)
 
       --out <OUT>
           Output package directory (must not exist or be empty)

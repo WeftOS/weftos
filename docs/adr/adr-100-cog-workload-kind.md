@@ -1,6 +1,6 @@
 # ADR-100: The cog workload kind
 
-- **Status**: Accepted (2026-09-29; decisions settled 2026-09-29, implementation tracked on cards mesh-placement-01..23)
+- **Status**: Accepted (2026-09-29; decisions settled 2026-09-29, implementation tracked on cards mesh-placement-01..23); updated 2026-10-28 with the macOS native route (below)
 - **Numbering**: This ADR was briefly filed as "COG-001" on 2026-09-29 and moved back to ADR-100 the same day. The COG-NNN series now belongs to the cogs project repo, which is private (`weave-logic-ai/cognitum-cogs`; its `docs/decisions/`), and holds cog-project decisions. This ADR stays in WeftOS because it defines how WeftOS hosts cogs.
 - **Cogs project**: operational detail on Seeds, the Pi 5, fleets, tooling and upstream work now lives in the cogs repo (`docs/devices/`, `docs/testing.md`, `docs/upstream.md`). This ADR keeps only what WeftOS implements.
 - **Date**: 2026-09-28
@@ -168,3 +168,12 @@ Card 7306a144. `[resources].ram_mb` does two jobs today. The planner reserves it
 - The new optional manifest field changes the signed manifest schema and the mixed-version rule above.
 - cgroup v2 needs a delegated subtree on the node, so the unit files and the Terraform inventory that create the host service are part of the change, and Pi Zero and macOS nodes fall back to the watchdog.
 - The test for the 4 GiB mapping only exercises the kernel path on Linux. macOS never enforced `RLIMIT_AS`, so it would pass there for the wrong reason; it has to run on the arm64 VM or a Linux host.
+
+## Updated 2026-10-28: macOS native route and Mach-O payload (card b5b881f8)
+
+A governed `weaver workload place` can run a native cog on an Apple Silicon Mac.
+
+- **Package marker.** A cog declares it runs on macOS by shipping a binary under the key `aarch64-macos` (`weaver workload pack --bin aarch64-macos=<path>`). The key is part of the signed manifest, so the declaration is signed with the rest of the package. Signature verification is unchanged: there is no unsigned bypass, and a dev test uses `weaver workload keygen` with a pinned operator key.
+- **Route.** `aarch64-macos` produces exactly one variant, `aarch64-macos-native`, which needs `cpu.arch.aarch64`, `os.macos` and `runtime.native`. It has no container or emulated variant. The Linux routes still need `os.linux`, so a Linux cog never lands on a Mac and a macOS cog never lands on Linux. `arch_of` now returns the binary key (everything before the route), which for `aarch64-macos-native` is `aarch64-macos`.
+- **Payload.** `PayloadKind::MachO` recognises a thin 64-bit little-endian Mach-O (`cf fa ed fe`) and reads its `cputype`. Admission accepts it only when the route is `aarch64-macos`, the daemon runs on macOS, and `cputype` is arm64 (`0x0100000c`). An x86_64 Mach-O is refused. Fat/universal binaries (`0xcafebabe`) classify as Unknown and are refused: ship the thin arm64 slice. ELF stays the only payload on Linux, and an ELF on the macOS route is refused. The macOS adapter picks the `aarch64-macos` binary when the package has one and otherwise looks up its CPU arch as before.
+- **Isolation.** A user daemon on macOS cannot `setuid`, so the macOS route does not use a per-cog uid (ADR-122 section 4a). The cog runs as the daemon user. Admission records a note saying so, and `load` logs a warning; this route does not claim uid isolation. A daemon running as root on macOS is still refused (no unprivileged identity is used on this route).

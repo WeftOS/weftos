@@ -468,3 +468,65 @@ fn data_is_private_to_the_instance_uid_even_when_the_files_were_kept_from_an_ear
     let f = std::fs::metadata(dir.join("data/sub/f")).unwrap();
     assert_eq!((f.uid(), f.gid()), (uid, gid), "kept files are brought to the instance uid");
 }
+
+mod macos {
+    use super::super::native::{CPU_TYPE_ARM64, PayloadKind, check_payload_on, classify, host_target};
+    use super::super::test_support::fake_elf;
+    use crate::workload_pkg::manifest::MACOS_AARCH64;
+
+    fn macho(cputype: u32) -> Vec<u8> {
+        let mut b = vec![0u8; 32];
+        b[..4].copy_from_slice(&[0xcf, 0xfa, 0xed, 0xfe]);
+        b[4..8].copy_from_slice(&cputype.to_le_bytes());
+        b
+    }
+
+    #[test]
+    fn classifies_thin_macho_and_not_fat() {
+        assert_eq!(classify(&macho(CPU_TYPE_ARM64)), PayloadKind::MachO(CPU_TYPE_ARM64));
+        let mut fat = vec![0u8; 32];
+        fat[..4].copy_from_slice(&[0xca, 0xfe, 0xba, 0xbe]);
+        assert_eq!(classify(&fat), PayloadKind::Unknown);
+    }
+
+    #[test]
+    fn thin_arm64_macho_is_ok_on_the_macos_route_on_macos() {
+        let r = check_payload_on("macos", false, MACOS_AARCH64, &macho(CPU_TYPE_ARM64));
+        assert!(r.is_ok(), "{r:?}");
+    }
+
+    #[test]
+    fn x86_64_macho_is_refused() {
+        let r = check_payload_on("macos", false, MACOS_AARCH64, &macho(0x0100_0007));
+        assert!(r.unwrap_err().to_string().contains("not arm64"));
+    }
+
+    #[test]
+    fn elf_is_refused_on_the_macos_route() {
+        let r = check_payload_on("macos", false, MACOS_AARCH64, &fake_elf(183));
+        assert!(r.unwrap_err().to_string().contains("macOS route"));
+    }
+
+    #[test]
+    fn macho_is_refused_on_linux_routes_and_linux_daemons() {
+        for host in ["linux", "macos"] {
+            let r = check_payload_on(host, false, "aarch64", &macho(CPU_TYPE_ARM64));
+            assert!(r.unwrap_err().to_string().contains("Linux ELF only"), "{host}");
+        }
+        let r = check_payload_on("linux", false, MACOS_AARCH64, &macho(CPU_TYPE_ARM64));
+        assert!(r.unwrap_err().to_string().contains("cannot run Mach-O"));
+    }
+
+    #[test]
+    fn linux_elf_still_ok_on_linux_and_refused_elsewhere() {
+        assert!(check_payload_on("linux", false, "aarch64", &fake_elf(183)).is_ok());
+        assert!(check_payload_on("macos", false, "aarch64", &fake_elf(183)).is_err());
+        assert!(check_payload_on("linux", false, "aarch64", &fake_elf(62)).is_err());
+    }
+
+    #[test]
+    fn host_target_is_the_macos_key_only_on_apple_silicon() {
+        let expect = cfg!(all(target_os = "macos", target_arch = "aarch64"));
+        assert_eq!(host_target() == Some(MACOS_AARCH64), expect);
+    }
+}

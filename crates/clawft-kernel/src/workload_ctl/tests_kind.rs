@@ -209,3 +209,14 @@ fn project_sources_are_refused_by_signed() {
     };
     assert!(w.signed("native").is_err());
 }
+
+#[test]
+fn macos_binary_package_yields_only_the_macos_native_route() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pkg = package(tmp.path(), "mac-cog", "#!/bin/sh\nexit 0\n", &["aarch64-macos"]);
+    let verified = verify_dir(&pkg, &anchors(), &VerifyPolicy::default()).unwrap();
+    let w = VerifiedWorkload::from_package(&verified, &DirSource::new(&pkg)).unwrap();
+    let spec = super::cog_workload_spec(&w).unwrap();
+    let names: Vec<_> = spec.requirements.variants.iter().map(|v| v.name.as_str()).collect();
+    assert_eq!(names, ["aarch64-macos-native"]);
+}

@@ -9,6 +9,11 @@
 //! - `<arch>-emulated`: a `runtime.container.*` emulating the arch
 //!   (placed only when the operator sets `allow_emulated`).
 //!
+//! A package binary keyed `aarch64-macos` (a thin arm64 Mach-O, declared by
+//! the cog) gets one route only, `aarch64-macos-native`: `cpu.arch.aarch64`,
+//! `os.macos` and `runtime.native`. It never routes to a container or to a
+//! Linux node, and the Linux binaries never route to a macOS node.
+//!
 //! `[cog].interfaces` become common requirements (`i2c` needs `bus.i2c`,
 //! `camera` anything under `media.camera`, ...); the legacy
 //! `hardware_requirement` board list is not used.
@@ -24,6 +29,7 @@ use clawft_types::placement::{
     AttrPredicate, CapabilityId, MemoryDemand, PlacementTypeError, Requirement,
 };
 
+use crate::workload_pkg::manifest::MACOS_AARCH64;
 use crate::workload_runtime::cog_decl::{InterfaceNeed, interface_need};
 use crate::workload_runtime::VerifiedWorkload;
 
@@ -40,6 +46,17 @@ fn runtime(prefix: &str, attr: &str, arch: &str) -> Result<Requirement, Placemen
 
 /// The three routes for one arch.
 pub fn arch_routes(arch: &str) -> Result<Vec<ExecutionVariant>, PlacementTypeError> {
+    if arch == MACOS_AARCH64 {
+        return Ok(vec![ExecutionVariant {
+            name: format!("{arch}-native"),
+            execution: Execution::Native,
+            requirements: vec![
+                exact("cpu.arch.aarch64")?,
+                exact("os.macos")?,
+                runtime("runtime.native", "arches_native", "aarch64")?,
+            ],
+        }]);
+    }
     Ok(vec![
         ExecutionVariant {
             name: format!("{arch}-native"),
@@ -69,9 +86,10 @@ pub fn route_of(variant: &str) -> &str {
     variant.rsplit('-').next().unwrap_or(variant)
 }
 
-/// The arch a variant name starts with.
+/// The package binary key a variant name starts with (everything before the
+/// route; `aarch64-macos` for the macOS route).
 pub fn arch_of(variant: &str) -> &str {
-    variant.split('-').next().unwrap_or(variant)
+    variant.rsplit_once('-').map_or(variant, |(a, _)| a)
 }
 
 /// The common requirements a cog's `[cog].interfaces` add: one per
@@ -136,4 +154,35 @@ pub fn cog_workload_spec(w: &VerifiedWorkload) -> Result<WorkloadSpec, String> {
     };
     spec.validate().map_err(|e| e.to_string())?;
     Ok(spec)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn reqs(v: &ExecutionVariant) -> Vec<String> {
+        v.requirements.iter().map(|r| format!("{r:?}")).collect()
+    }
+
+    #[test]
+    fn macos_binary_gets_one_native_route_that_needs_os_macos() {
+        let v = arch_routes("aarch64-macos").unwrap();
+        assert_eq!(v.len(), 1, "no container or emulated route for a Mach-O");
+        assert_eq!(v[0].name, "aarch64-macos-native");
+        let r = reqs(&v[0]).join(" ");
+        assert!(r.contains("os.macos") && !r.contains("os.linux"), "{r}");
+        assert_eq!(route_of(&v[0].name), "native");
+        assert_eq!(arch_of(&v[0].name), "aarch64-macos");
+    }
+
+    #[test]
+    fn linux_routes_are_unchanged_and_need_os_linux() {
+        let v = arch_routes("aarch64").unwrap();
+        let names: Vec<_> = v.iter().map(|x| x.name.as_str()).collect();
+        assert_eq!(names, ["aarch64-native", "aarch64-container", "aarch64-emulated"]);
+        let r = reqs(&v[0]).join(" ");
+        assert!(r.contains("os.linux") && !r.contains("os.macos"), "{r}");
+        assert_eq!(arch_of("armv7-container"), "armv7");
+        assert_eq!(arch_of("x86_64-emulated"), "x86_64");
+    }
 }

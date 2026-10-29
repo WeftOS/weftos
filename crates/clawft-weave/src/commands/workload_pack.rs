@@ -37,7 +37,7 @@ pub struct PackArgs {
     /// (e.g. `vendor/cogs/src/cogs/anomaly-detect`).
     #[arg(long)]
     pub cog_dir: PathBuf,
-    /// Per-arch binary, `<arch>=<path>` (repeat; arch: aarch64, armv7, x86_64, wasm).
+    /// Per-arch binary, `<arch>=<path>` (repeat; arch: aarch64, armv7, x86_64, wasm, or aarch64-macos for a thin arm64 Mach-O run on macOS).
     #[arg(long = "bin", value_name = "ARCH=PATH", required = true)]
     pub bins: Vec<String>,
     /// Output package directory (must not exist or be empty).
@@ -229,7 +229,7 @@ fn pack(a: PackArgs) -> anyhow::Result<()> {
     println!("package id {}", env.package_id()?);
     for (arch, f) in &body.binaries {
         println!(
-            "  {arch:<8} {} {} bytes blake3 {}",
+            "  {arch:<13} {} {} bytes blake3 {}",
             f.path, f.size, f.blake3
         );
     }
