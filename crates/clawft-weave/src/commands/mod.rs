@@ -18,6 +18,7 @@ pub mod daemon_restart;
 pub mod doctor_cmd;
 pub mod dashboard_cmd;
 pub mod expose_cmd;
+pub mod infer_cmd;
 pub mod route_cmd;
 pub mod fleet_cmd;
 pub mod ecc_cmd;

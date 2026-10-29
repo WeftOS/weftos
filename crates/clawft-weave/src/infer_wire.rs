@@ -96,6 +96,8 @@ pub struct InferState {
     pub(crate) ledger: Arc<ResidencyLedger>,
     pub(crate) skipped_roster: Vec<(String, String)>,
     pub(crate) stopping: AtomicBool,
+    /// The proxy's session on the cog data plane, for roles backed by a service.
+    pub(crate) svc: OnceLock<Arc<crate::infer_svc::BrokerSvc>>,
 }
 
 static STATE: OnceLock<Arc<InferState>> = OnceLock::new();
@@ -353,6 +355,7 @@ pub async fn build(p: InitParts<'_>) -> Result<Option<(Arc<InferState>, FileCfg)
         ledger,
         skipped_roster: imported.map(|i| i.skipped).unwrap_or_default(),
         stopping: AtomicBool::new(false),
+        svc: OnceLock::new(),
     });
     state.sync_once().await;
     Ok(Some((state, cfg)))

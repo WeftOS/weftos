@@ -151,6 +151,7 @@ sha2 = { workspace = true }
 weft-licence-wire = { version = "0.8.4", path = "../weft-licence-wire" }
 chrono = { workspace = true }
 hex = "0.4"
+base64 = "0.22"
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }

@@ -47,6 +47,7 @@ fn pin_body_rules() {
         base: "http://127.0.0.1:1".into(),
         model: model.map(String::from),
         runtime: rt.into(),
+        svc: None,
     };
     let v = |b: Vec<u8>| serde_json::from_slice::<serde_json::Value>(&b).unwrap();
     let chat = "/v1/chat/completions";
@@ -71,7 +72,7 @@ fn pin_body_rules() {
 #[test]
 fn pin_body_keeps_only_allowlisted_keys_per_path() {
     use super::mesh_policy::pin_body;
-    let local = MeshLocal { base: "http://127.0.0.1:1".into(), model: Some("m".into()), runtime: "MlxLm".into() };
+    let local = MeshLocal { base: "http://127.0.0.1:1".into(), model: Some("m".into()), runtime: "MlxLm".into(), svc: None };
     let keys = |path: &str, body: serde_json::Value| -> std::collections::BTreeSet<String> {
         let out = pin_body(path, body.to_string().as_bytes(), &local).unwrap();
         serde_json::from_slice::<serde_json::Value>(&out)

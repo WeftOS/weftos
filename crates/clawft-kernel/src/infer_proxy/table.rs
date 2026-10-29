@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::watch;
 
+use super::svc::{SvcBackend, SvcRoute};
 use super::types::{MeshDialer, ProxyAudit, ProxyError, Target};
 use super::upstream::parse_loopback_base;
 use super::wire::MAX_ROLE;
@@ -32,6 +33,8 @@ struct LocalEntry {
     model: Option<String>,
     api: String,
     runtime: String,
+    /// Served by a cogbus service instead of the HTTP server at `base`.
+    svc: Option<SvcRoute>,
 }
 
 /// How long a received advertisement counts without being refreshed.
@@ -51,8 +54,11 @@ pub struct MeshLocal {
     pub base: String,
     /// The model the server knows the instance by; requests are pinned to it.
     pub model: Option<String>,
-    /// Server software (`LlamaCpp`, `MlxLm`, `Ollama`).
+    /// Server software (`LlamaCpp`, `MlxLm`, `Ollama`, or `svc`).
     pub runtime: String,
+    /// Set when the role is served by a cogbus service: `base` is empty and
+    /// the request goes to this service instead.
+    pub svc: Option<SvcRoute>,
 }
 
 #[derive(Default)]
@@ -88,6 +94,8 @@ pub struct PlacementTable {
     advert_ttl: Duration,
     /// ADR-120: the exposure registry the `infer.<role>` roles live in.
     exposures: Arc<ExposureRegistry>,
+    /// The caller of cogbus-served roles; absent until the broker is up.
+    svc_backend: RwLock<Option<Arc<dyn SvcBackend>>>,
 }
 
 mod exposure;
@@ -113,7 +121,18 @@ impl PlacementTable {
             inner: RwLock::new(Inner::default()),
             gen_tx: watch::channel(0).0,
             advert_ttl: DEFAULT_ADVERT_TTL,
+            svc_backend: RwLock::new(None),
         }
+    }
+
+    /// Install the caller of cogbus-served roles (the daemon's broker session).
+    pub fn set_svc_backend(&self, b: Arc<dyn SvcBackend>) {
+        *self.svc_backend.write().unwrap() = Some(b);
+    }
+
+    /// The caller of cogbus-served roles, once installed.
+    pub fn svc_backend(&self) -> Option<Arc<dyn SvcBackend>> {
+        self.svc_backend.read().unwrap().clone()
     }
 
     /// Lifetime of a received advertisement (refreshed by each repeat).
@@ -194,11 +213,37 @@ impl PlacementTable {
             model,
             api: api.to_string(),
             runtime: runtime.to_string(),
+            svc: None,
         };
         let changed = {
             let mut g = self.inner.write().unwrap();
             let prev = g.local.insert(role.to_string(), entry.clone());
             prev.is_none_or(|p| p.base != entry.base)
+        };
+        if changed {
+            self.bump();
+        }
+        self.sync_exposure(role);
+        Ok(())
+    }
+
+    /// Serve `role` from a cogbus service on this node. The role advertises
+    /// and exposes exactly like an HTTP-served one.
+    pub fn register_local_svc(&self, role: &str, route: SvcRoute) -> Result<(), ProxyError> {
+        if !valid_role(role) {
+            return Err(ProxyError::BadRequest(format!("bad role '{role}'")));
+        }
+        let entry = LocalEntry {
+            base: String::new(),
+            model: Some(route.model.clone()),
+            api: "openai".to_string(),
+            runtime: "svc".to_string(),
+            svc: Some(route),
+        };
+        let changed = {
+            let mut g = self.inner.write().unwrap();
+            let prev = g.local.insert(role.to_string(), entry.clone());
+            prev.is_none_or(|p| p.svc != entry.svc)
         };
         if changed {
             self.bump();
@@ -385,6 +430,12 @@ impl PlacementTable {
     pub fn resolve(&self, role: &str) -> Option<Target> {
         let g = self.inner.read().unwrap();
         if let Some(l) = g.local.get(role) {
+            if let Some(s) = &l.svc {
+                return Some(Target::Svc {
+                    topic: s.topic.clone(),
+                    model: s.model.clone(),
+                });
+            }
             return Some(Target::Local {
                 base: l.base.clone(),
             });
@@ -416,6 +467,7 @@ impl PlacementTable {
                     base: l.base.clone(),
                     model: l.model.clone(),
                     runtime: l.runtime.clone(),
+                    svc: l.svc.clone(),
                 })
             })
             .flatten()
@@ -454,7 +506,9 @@ impl PlacementTable {
     pub fn base_url_for_role(&self, role: &str) -> Option<String> {
         match self.resolve(role)? {
             Target::Local { base } => Some(format!("{base}/v1")),
-            Target::Remote { .. } => {
+            // The proxy speaks the mesh and the service; in-process
+            // consumers only speak HTTP.
+            Target::Remote { .. } | Target::Svc { .. } => {
                 let port = *self.inner.read().unwrap().proxy_ports.get(role)?;
                 Some(format!("http://127.0.0.1:{port}/v1"))
             }
@@ -466,7 +520,7 @@ impl PlacementTable {
     pub fn local_base_for_role(&self, role: &str) -> Option<String> {
         match self.resolve(role)? {
             Target::Local { base } => Some(format!("{base}/v1")),
-            Target::Remote { .. } => None,
+            Target::Remote { .. } | Target::Svc { .. } => None,
         }
     }
 
@@ -489,9 +543,13 @@ impl PlacementTable {
         }
         Some(ServiceAdvertisement {
             name: format!("{SERVICE_PREFIX}{role}"),
-            methods: ["chat.completions", "completions", "embeddings", "models"]
-                .map(String::from)
-                .to_vec(),
+            methods: if l.svc.is_some() {
+                vec!["chat.completions".to_string(), "models".to_string()]
+            } else {
+                ["chat.completions", "completions", "embeddings", "models"]
+                    .map(String::from)
+                    .to_vec()
+            },
             node_id: self.node_id.clone(),
             global_pid: GlobalPid::local(0, &self.node_id),
             version: "1".to_string(),

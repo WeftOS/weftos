@@ -187,6 +187,8 @@ pub mod infer_managed;
 #[cfg(all(feature = "placement", unix))]
 pub mod infer_rpc;
 #[cfg(all(feature = "placement", unix))]
+pub mod infer_svc;
+#[cfg(all(feature = "placement", unix))]
 pub mod infer_wire;
 #[cfg(all(test, feature = "placement", unix))]
 pub(crate) mod infer_wire_tests;
@@ -194,6 +196,8 @@ pub(crate) mod infer_wire_tests;
 mod infer_managed_tests;
 #[cfg(all(test, feature = "placement", unix))]
 mod infer_cfg_tests;
+#[cfg(all(test, feature = "placement", unix))]
+mod infer_svc_tests;
 #[cfg(all(test, feature = "placement", unix))]
 mod infer_hardening_tests;
 pub mod expose_rpc;

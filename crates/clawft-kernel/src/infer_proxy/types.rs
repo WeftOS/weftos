@@ -106,6 +106,14 @@ pub enum Target {
         /// Peer node id.
         node_id: String,
     },
+    /// A provider of a cogbus service on this node (the Venq's NPU cog), called
+    /// through the table's [`SvcBackend`](super::svc::SvcBackend).
+    Svc {
+        /// `svc.infer/<source_id>`.
+        topic: String,
+        /// Model id the role uses.
+        model: String,
+    },
 }
 
 /// Why a request was not served.

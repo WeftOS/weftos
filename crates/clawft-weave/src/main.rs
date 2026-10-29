@@ -80,6 +80,9 @@ enum Commands {
     /// What this node exposes to the mesh: list, on, off, pause, log (ADR-120).
     Expose(commands::expose_cmd::ExposeArgs),
 
+    /// Inference placement: status, expose (ADR-101).
+    Infer(commands::infer_cmd::InferArgs),
+
     /// The node's cog data plane broker: list topics (ADR-122).
     Cogbus(commands::cogbus_cmd::CogbusArgs),
 
@@ -214,6 +217,7 @@ async fn async_main() -> anyhow::Result<()> {
         Commands::Fleet(args) => commands::fleet_cmd::run(args).await?,
         Commands::Dashboard(args) => commands::dashboard_cmd::run(args).await?,
         Commands::Expose(args) => commands::expose_cmd::run(args).await?,
+        Commands::Infer(args) => commands::infer_cmd::run(args).await?,
         Commands::Cogbus(args) => commands::cogbus_cmd::run(args).await?,
         Commands::Route(args) => commands::route_cmd::run(args).await?,
         Commands::Chain(args) => commands::chain_cmd::run(args).await?,

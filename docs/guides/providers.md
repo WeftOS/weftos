@@ -517,6 +517,14 @@ off unless `<runtime>/inference.json` exists.
   dropped. The local client's `Authorization` header goes to the local server
   only, never over the mesh; adopting a server is the decision to trust it
   with the credentials local clients send to that address.
+- A role can be served by a cog data plane service instead of an HTTP server:
+  `{"role": "vision", "proxy_port": 18391, "svc": {"topic": "svc.infer/venq-npu",
+  "model": "qwen3-vl-4b"}}` (no `flavor`, `instance_port` or `model` on the
+  role). The proxy turns `POST /v1/chat/completions` (text plus at most one
+  `data:` PNG or JPEG image, at most 4 MiB; no streaming, no image URLs) into
+  an `infer.v1` call and answers in the OpenAI shape. Exposing it to peers is
+  the same as for any role; over the mesh the whole request, base64 image
+  included, must fit 2 MiB. See ADR-101 (update 2026-10-28).
 - `infer.status` (read) shows roles, proxy state, where each role resolves
   and why the mesh is or is not available. `infer.expose` and `infer.allow`
   (admin) change exposure and the allowlists until restart; each change is

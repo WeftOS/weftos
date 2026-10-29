@@ -17,6 +17,7 @@ use async_trait::async_trait;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use super::mesh_policy::{mesh_path_allowed, pin_body};
+use super::svc::serve_svc;
 use super::table::{MeshLocal, PlacementTable};
 use super::types::qualifies;
 use super::types::{MeshDialer, ProxyAudit, ProxyError, ProxyLimits, ProxyRequest, ResponseSink};
@@ -258,6 +259,10 @@ pub trait ServePolicy: Send + Sync {
     fn instance_for(&self, role: &str, peer: &str) -> Option<MeshLocal>;
     /// Whether `peer` is on any role's serve allowlist.
     fn peer_listed(&self, peer: &str) -> bool;
+    /// The caller of cogbus-served roles; `None` when this node has none.
+    fn svc_backend(&self) -> Option<Arc<dyn super::svc::SvcBackend>> {
+        None
+    }
     /// Where to record the request (ADR-120 activity log); `None` records nothing.
     fn activity(&self) -> Option<&crate::exposure::ExposureRegistry> {
         None
@@ -272,6 +277,9 @@ pub trait ServePolicy: Send + Sync {
 impl ServePolicy for PlacementTable {
     fn instance_for(&self, role: &str, peer: &str) -> Option<MeshLocal> {
         self.local_for_peer(role, peer)
+    }
+    fn svc_backend(&self) -> Option<Arc<dyn super::svc::SvcBackend>> {
+        PlacementTable::svc_backend(self)
     }
     fn peer_listed(&self, peer: &str) -> bool {
         self.peer_listed_any(peer)
@@ -376,10 +384,21 @@ pub async fn serve_infer(
             ProxyError::NoInstance(format!("{} (not served to this peer here)", req.role))
         })?;
         req.body = pin_body(&req.path, &req.body, &local)?;
-        let fwd = upstream.forward(&local.base, &req, false, &mut sink);
-        tokio::time::timeout(limits.request_timeout, fwd)
-            .await
-            .map_err(|_| ProxyError::Timeout("request".into()))??;
+        if let Some(route) = &local.svc {
+            let backend = policy
+                .svc_backend()
+                .ok_or_else(|| ProxyError::NoInstance(format!("{} (service not available here)", req.role)))?;
+            let caller = format!("mesh:{}", peer.node_id);
+            let fwd = serve_svc(backend.as_ref(), route, &req, &caller, &mut sink, audit);
+            tokio::time::timeout(limits.request_timeout, fwd)
+                .await
+                .map_err(|_| ProxyError::Timeout("request".into()))??;
+        } else {
+            let fwd = upstream.forward(&local.base, &req, false, &mut sink);
+            tokio::time::timeout(limits.request_timeout, fwd)
+                .await
+                .map_err(|_| ProxyError::Timeout("request".into()))??;
+        }
         sink.send(Resp::End).await
     }
     .await;

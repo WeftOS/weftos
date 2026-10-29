@@ -187,3 +187,54 @@ Risks: a placement bug takes local inference down (mitigation: `Adopted` first, 
 6. **First slice**: `coder-daily`, the Hermes `local/` role, and Orpheus TTS. Rationale: these are the consumers actually wired in clawft and the voice path.
 7. **Vocabulary changes** go through the governance path (ADR-099 decision 6).
 8. **Measured throughput**: `perf.infer.tok_s{model}` measured capabilities feed scoring for `interactive` roles (ADR-099 section 2).
+
+## Updated 2026-10-28: roles backed by a cogbus service (infer.vision)
+
+Status is unchanged (Accepted). Section 5's proxy gains a second kind of
+local backend: besides a loopback HTTP server, a role can be served by a
+provider of the `infer.v1` service on this node's cog data plane (ADR-122
+section 12), for example the Venq's `npu-infer` cog (`svc.infer/venq-npu`,
+Qwen3-VL-4B).
+
+```json
+{ "roles": [ { "role": "vision", "proxy_port": 18391,
+               "svc": { "topic": "svc.infer/venq-npu", "model": "qwen3-vl-4b" } } ],
+  "mesh": { "expose": ["vision"], "serve_peers": { "vision": ["<mac node id>"] } } }
+```
+
+- The placement table resolves such a role to `Target::Svc{topic, model}`.
+  It is registered only while the topic has a provider and withdrawn when the
+  provider goes, so the `infer.<role>` advertisement follows the NPU cog.
+  Exposure, the serve allowlist, the ADR-120 `infer.<role>` exposure, the
+  activity log and `infer.expose` / `weaver infer expose` behave exactly as
+  for an HTTP-served role; a role that is not exposed (or a peer not on its
+  allowlist) is refused before any call is made.
+- The proxy translates, it does not forward. `POST /v1/chat/completions` is
+  turned into `infer.v1`: system messages become `system`, the last user
+  message's text parts become `text`, `max_tokens` / `max_completion_tokens`
+  become `max_tokens` clamped to 1..=4096 (512 when absent). Earlier turns and
+  assistant/tool messages are not sent (`infer.v1` is single-shot). The reply
+  `text` becomes `choices[0].message.content`, `usage` is mapped when the
+  service reports token counts, and `model` is the role's model. `GET
+  /v1/models` lists that model. Completions and embeddings are 501.
+- One image per request, as a `data:image/png|jpeg;base64,` URL, at most 4 MiB
+  decoded and checked against the PNG/JPEG signature. `http(s)` image URLs are
+  refused (the daemon does not fetch what a client names), as are other types
+  and more than one image. The image is put as a broker blob owned by the
+  proxy (5 minute TTL) and sent as `image_blob`, because a service call body is
+  capped at 64 KiB. `stream: true` is a 400: the service answers once.
+- The proxy is a broker principal of its own (`infer-proxy`, an in-process
+  session; no socket and no token handed out). Its calls are governed as any
+  `cogbus.call` and `cogbus.blob.put`, count in the bus activity under that
+  identity, and obey the broker's pending-call caps. If the provider is in a
+  project, `svc.project` gives the proxy's instance that project and bus policy
+  must grant it calls across projects; otherwise the call is refused. The
+  originating client (`local:<addr>` or `mesh:<node>`) is written to the
+  proxy's audit trail (`infer.svc.call`, never the prompt) and, for peers, to
+  the ADR-120 activity log.
+- Over the mesh the forwarded request is capped at 2 MiB (`max_mesh_request_body`),
+  after base64 inflation (4/3) and JSON framing. An image therefore has to be
+  about 1.5 MiB or less to cross the mesh; downscale on the client. A local
+  client of the Venq itself may send up to the 4 MiB image limit (8 MiB body).
+- Service-mode daemons build no hub (ADR-101 section 7 and ADR-103), so remote
+  callers are user daemons until the grant hand-off lands.

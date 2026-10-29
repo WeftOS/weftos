@@ -23,6 +23,7 @@ use tokio::task::JoinHandle;
 
 use super::http::{read_request_with, write_error, write_head};
 use super::mesh_forward::forward_remote;
+use super::svc::{SvcRoute, serve_svc};
 use super::table::PlacementTable;
 use super::types::{ProxyAudit, ProxyError, ProxyLimits, ResponseSink, Target};
 use super::upstream::{PROBE_TIMEOUT, Upstream};
@@ -211,6 +212,7 @@ impl ExposurePermit {
 }
 
 struct Shared {
+    audit: Option<Arc<dyn ProxyAudit>>,
     bearer: Option<Vec<u8>>,
     role: String,
     table: Arc<PlacementTable>,
@@ -239,7 +241,7 @@ impl ResponseSink for TcpSink<'_> {
     }
 }
 
-async fn serve_conn(sh: Arc<Shared>, mut s: TcpStream) {
+async fn serve_conn(sh: Arc<Shared>, mut s: TcpStream, peer: SocketAddr) {
     sh.stats.requests.fetch_add(1, Ordering::Relaxed);
     let req = match read_request_with(&mut s, &sh.role, &sh.limits, sh.bearer.as_deref()).await {
         Ok(r) => r,
@@ -259,6 +261,15 @@ async fn serve_conn(sh: Arc<Shared>, mut s: TcpStream) {
             Some(Target::Local { base }) => {
                 sh.stats.local.fetch_add(1, Ordering::Relaxed);
                 sh.upstream.forward(base, &req, true, &mut sink).await
+            }
+            Some(Target::Svc { topic, model }) => {
+                let Some(b) = sh.table.svc_backend() else {
+                    return Err(ProxyError::NoInstance(req.role.clone()));
+                };
+                sh.stats.local.fetch_add(1, Ordering::Relaxed);
+                let route = SvcRoute { topic: topic.clone(), model: model.clone() };
+                let caller = format!("local:{peer}");
+                serve_svc(b.as_ref(), &route, &req, &caller, &mut sink, sh.audit.as_deref()).await
             }
             Some(Target::Remote { node_id }) => {
                 let Some(d) = sh.table.dialer() else {
@@ -399,6 +410,7 @@ impl InferProxy {
 
         let stats = Arc::new(ProxyStats::default());
         let sh = Arc::new(Shared {
+            audit: audit.clone(),
             bearer: auth.map(|a| a.0),
             role: role.to_string(),
             table,
@@ -450,7 +462,7 @@ impl InferProxy {
                 };
                 let sh = sh.clone();
                 tokio::spawn(async move {
-                    serve_conn(sh, s).await;
+                    serve_conn(sh, s, peer).await;
                     drop(permit);
                     drop(slot);
                 });

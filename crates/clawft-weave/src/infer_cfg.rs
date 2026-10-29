@@ -48,6 +48,8 @@ use clawft_kernel::workload_runtime::infer::{
 };
 use serde::Deserialize;
 
+pub use crate::infer_svc::SvcCfg;
+
 /// Config file under the runtime dir.
 pub const CONFIG_FILE: &str = "inference.json";
 const MAX_FILE: u64 = 64 * 1024;
@@ -109,6 +111,11 @@ pub struct RoleCfg {
     /// Let the proxy listen beyond loopback.
     #[serde(default)]
     pub expose: Option<ExposeCfg>,
+    /// Serve the role from a cogbus service instead of an HTTP server
+    /// (ADR-101 update 2026-10-28). Excludes `flavor`, `roster_id`, `model`,
+    /// `instance_port`, `mode: managed` and the other server fields.
+    #[serde(default)]
+    pub svc: Option<SvcCfg>,
 }
 
 /// A proxy that listens beyond loopback.
@@ -207,13 +214,28 @@ impl FileCfg {
             if !valid_token(&r.role, 64) || r.role.contains('/') || !seen.insert(r.role.clone()) {
                 return bad(format!("role {:?} is invalid or repeated", r.role));
             }
+            if let Some(s) = &r.svc {
+                let server_fields = r.flavor.is_some()
+                    || r.roster_id.is_some()
+                    || r.model.is_some()
+                    || r.instance_port.is_some()
+                    || r.mode.as_deref() == Some("managed")
+                    || r.memory_gb.is_some()
+                    || r.ctx.is_some()
+                    || r.autostart;
+                if server_fields {
+                    return bad(format!("role {}: a svc role has no flavor, roster_id, model, instance_port, ctx, memory_gb or managed mode (the service owns the model)", r.role));
+                }
+                s.validate(&r.role).map_err(|m| format!("{CONFIG_FILE}: {m}"))?;
+            }
+            let is_svc = r.svc.is_some();
             if r.flavor.as_deref().is_some_and(|f| flavor_of(f).is_none()) {
                 return bad(format!("role {}: flavor is llamacpp, mlx-lm or ollama", r.role));
             }
             if !matches!(r.mode.as_deref(), None | Some("adopted") | Some("managed")) {
                 return bad(format!("role {}: mode is adopted or managed", r.role));
             }
-            if r.flavor.is_none() && r.roster_id.is_none() {
+            if !is_svc && r.flavor.is_none() && r.roster_id.is_none() {
                 return bad(format!("role {}: name a flavor or a roster_id", r.role));
             }
             if r.roster_id.is_some() && self.roster.is_none() {
@@ -356,6 +378,14 @@ pub fn resolve_roles(cfg: &FileCfg, imported: Option<&ImportedRoster>) -> Result
     let mut out: Vec<Resolved> = Vec::new();
     for r in &cfg.roles {
         let fail = |m: String| Err(format!("{CONFIG_FILE}: role {}: {m}", r.role));
+        if let Some(s) = &r.svc {
+            // The service owns the model and the server: nothing to place, so
+            // the spec is only a label for status.
+            let mut spec = InferenceSpec::new(&r.role, InferFlavor::LlamaCpp);
+            spec.model = Some(s.model.clone());
+            out.push(Resolved { cfg: r.clone(), managed: false, spec });
+            continue;
+        }
         let from_roster = match (&r.roster_id, imported) {
             (Some(id), Some(roster)) => match roster.get(id) {
                 Some(s) => Some(s.spec.clone()),

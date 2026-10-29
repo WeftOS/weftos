@@ -210,7 +210,8 @@ impl InferState {
     /// One local pass: bring wanted managed roles up, (re)register each
     /// served instance and update the table.
     pub async fn sync_once(&self) {
-        for r in &self.roles {
+        self.sync_svc();
+        for r in self.roles.iter().filter(|r| r.cfg.svc.is_none()) {
             if r.managed.is_some() {
                 self.drive(r).await;
             } else {
@@ -287,6 +288,7 @@ impl InferState {
         let serves = match self.table.resolve(&r.cfg.role) {
             Some(Target::Local { .. }) => json!("local"),
             Some(Target::Remote { node_id }) => json!({"remote": node_id}),
+            Some(Target::Svc { topic, .. }) => json!({"svc": topic}),
             None => Value::Null,
         };
         let (wanted, started, reason) = {
@@ -294,7 +296,10 @@ impl InferState {
             (g.wanted, g.started, g.reason.clone())
         };
         let managed = r.managed.is_some() || r.cfg.mode.as_deref() == Some("managed");
-        let state = if managed {
+        let svc = r.cfg.svc.as_ref();
+        let state = if svc.is_some() {
+            if serves.is_null() { "waiting" } else { "serving" }
+        } else if managed {
             match (&reason, started) {
                 (Some(w), _) if w.contains("unplaceable") => "unplaceable",
                 (Some(w), _) if w.starts_with("not available") => "unavailable",
@@ -311,8 +316,9 @@ impl InferState {
         };
         json!({
             "role": r.cfg.role,
-            "mode": if managed { "managed" } else { "adopted" },
-            "flavor": r.spec.runtime.id(),
+            "mode": if svc.is_some() { "svc" } else if managed { "managed" } else { "adopted" },
+            "svc": svc.map(|s| json!({"topic": s.topic, "model": s.model})),
+            "flavor": if svc.is_some() { "svc" } else { r.spec.runtime.id() },
             "model": r.spec.model,
             "instance_port": r.spec.serve.port,
             "memory_gb": r.spec.memory.weights_bytes as f64 / 1e9,

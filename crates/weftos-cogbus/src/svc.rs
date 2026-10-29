@@ -348,6 +348,12 @@ impl Broker {
         late.len()
     }
 
+    /// Whether an instance currently serves `topic` (`svc.<name>/<source_id>`).
+    pub fn serves(&self, topic: &str) -> bool {
+        split_topic(topic)
+            .is_some_and(|(k, s)| self.lock().svc.servers.contains_key(&(k.to_string(), s.to_string())))
+    }
+
     /// Calls in flight (for tests and `cogbus list`).
     pub fn pending_calls(&self) -> usize {
         self.lock().svc.calls.len()

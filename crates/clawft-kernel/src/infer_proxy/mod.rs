@@ -23,6 +23,7 @@
 pub mod http;
 pub mod hub;
 pub mod listener;
+pub mod svc;
 pub mod mesh_forward;
 pub mod mesh_policy;
 pub mod table;
@@ -46,6 +47,8 @@ mod tests_mesh;
 mod tests_mesh_serve;
 #[cfg(test)]
 mod tests_proxy;
+#[cfg(test)]
+mod tests_svc;
 
 #[cfg(feature = "exochain")]
 pub use types::ChainAudit;
@@ -56,4 +59,5 @@ pub use table::{DEFAULT_ADVERT_TTL, MeshLocal, PlacementTable, SERVICE_PREFIX, S
 pub use types::{
     MeshDialer, Method, ProxyAudit, ProxyError, ProxyLimits, ProxyRequest, ResponseSink, Target,
 };
+pub use svc::{SvcBackend, SvcImage, SvcRoute};
 pub use upstream::Upstream;
