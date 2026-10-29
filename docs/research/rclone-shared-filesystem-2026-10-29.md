@@ -100,7 +100,7 @@ Why it matters here: it closes most of the governance gaps rclone has on its own
 | Durability | none | erasure coding, replication |
 
 The shape this suggests:
-- **RustFS on PG** is the canonical store, one bucket per project.
+- **RustFS on PG** is the canonical store and the S3 storage for every other node, one bucket per project.
 - **rclone on each machine** uses its S3 backend: `nfsmount` on the Mac, `mount` on
   Linux, WinFsp on Windows, or `bisync` where a mount isn't wanted.
 - **Credentials:** Terraform writes each machine's access key into its 0600
@@ -120,9 +120,11 @@ Caveats:
 
 ## Proposed first slice
 
-1. Run RustFS on PG with a bucket per project under the weftos account (or, without RustFS, `rclone serve webdav` over a per-project directory); either way bound to loopback or the tailnet,
-   weftos account, bound to loopback, with the daemon as auth proxy. Connections
-   arrive over the tailnet through the daemon exposure.
+1. Run RustFS on PG as the mesh's S3 storage (owner direction 2026-10-29): every other
+   node uses it as its S3 endpoint, with a bucket per project under the weftos account.
+   It is bound to the tailnet or loopback and reached through the daemon exposure.
+   Fallback without RustFS: `rclone serve webdav` over a per-project directory, with
+   the daemon as the auth proxy.
 2. The Mac mounts it with `rclone nfsmount`, and the Venq and Linux with `rclone mount`.
    The Windows laptop uses WinFsp, or `rclone bisync` where a mount isn't wanted.
 3. Tests:
