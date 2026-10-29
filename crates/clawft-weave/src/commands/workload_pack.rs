@@ -160,6 +160,7 @@ fn parse_bin(s: &str) -> anyhow::Result<(String, PathBuf)> {
 
 /// Reject a `--bin` whose bytes do not match its arch key, using the
 /// kernel's own payload classifier so pack and admission agree.
+#[cfg(unix)]
 fn check_bin_matches_key(arch: &str, bytes: &[u8]) -> anyhow::Result<()> {
     use clawft_kernel::workload_runtime::native::{
         CPU_TYPE_ARM64, PayloadKind, classify, elf_machine,
@@ -178,6 +179,13 @@ fn check_bin_matches_key(arch: &str, bytes: &[u8]) -> anyhow::Result<()> {
         },
         _ => Ok(()),
     }
+}
+
+/// The payload classifier is part of the unix-only workload runtime; a
+/// Windows `pack` leaves the check to admission on the node.
+#[cfg(not(unix))]
+fn check_bin_matches_key(_arch: &str, _bytes: &[u8]) -> anyhow::Result<()> {
+    Ok(())
 }
 
 fn load_trust(path: Option<&Path>) -> anyhow::Result<TrustAnchors> {
@@ -428,6 +436,7 @@ mod tests {
         b
     }
 
+    #[cfg(unix)]
     #[test]
     fn pack_rejects_a_bin_that_does_not_match_its_arch_key() {
         let arm = 0x0100_000c;
