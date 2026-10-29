@@ -1,6 +1,7 @@
 # ADR-126: Mesh object store: WeftOS-governed buckets for nodes, projects, worktrees and releases
 
 - **Status**: Proposed (2026-10-29; the owner asked for a meshed S3 store and set the bucket model)
+- **Updated**: 2026-10-29 (S0 spike applied on PG and run; results in "S0 results"; open question 1 answered: import, not in place; §6 amended: the activity log must take RustFS's own log as well as its audit stream)
 - **Deciders**: owner
 - **Research**: `docs/research/rclone-shared-filesystem-2026-10-29.md` (rclone, RustFS,
   OpenDAL, governance gaps). Board card `3605565e`.
@@ -135,6 +136,11 @@ Only the daemon creates, grants access to, or deletes a store.
   with the principal, the store name, the operation and the size. Every create, read,
   write, rename and delete is logged. S0 proves this; if a type of operation is missing,
   this ADR is amended.
+  **Amended after S0:** the audit stream doesn't cover every operation. Refusals (403 with the
+  account) and bad signatures go only to RustFS's own JSON log (`s3_authorization_denied`,
+  `SignatureDoesNotMatch`), so the activity log takes both sources. Successful listings
+  (ListObjects, ListBuckets) and multipart part uploads appear in neither, so listing a store
+  isn't logged.
 - **Removing a connection:** a rule hit disables that principal's access key, so its next
   request is refused. The daemon also drops its proxied sessions for that principal. A
   transfer already in progress may finish. That's accepted (owner).
@@ -164,6 +170,27 @@ Only the daemon creates, grants access to, or deletes a store.
 | S4 | Release stores: CI writes once, retention, signed artifacts referenced by hash | a release build's artifacts land in its release store, and a rebuild can't overwrite them |
 | S5 | Clients: one instance per client account under `/data1` as the client user; cross-mesh grants (ADR-114 N5) | a client project's store lives only under the client user, and a WeftOS-account principal is refused unless granted |
 
+## S0 results (2026-10-29)
+
+These come from a spike on PG: RustFS 1.0.4, single drive, run as `weftos`. The Terraform is
+branch `tf/rustfs-spike` in `weftos-weavelogic.terraform`, with the runbook in
+`docs/rustfs-spike.md`. The client was rclone 1.75.2 on the Mac, using a test user whose
+policy covers only `s0-spike`.
+
+| Check | Result |
+|---|---|
+| Audit coverage | Needs `RUSTFS_AUDIT_ENABLE=true`, which defaults to off. With it on, every event carries the access key, client IP, operation, bucket, object, status code and timing, with auth headers redacted. **Logged:** PutObject (including 412s), GetObject (including presigned), HeadObject, CopyObject, DeleteObject, CompleteMultipartUpload, CreateBucket. A rename shows as copy plus delete. **Not in the audit stream:** ListObjects, ListBuckets and UploadPart, which aren't logged anywhere, plus 403 refusals and bad signatures, which go to `rustfs.log` only. |
+| Policy | The test user is refused (403) on any other bucket, for both create and list. |
+| Revocation | `admin user disable`: the next GET, about 0.22 s later, gets a 403. A 1 GB multipart upload in progress fails at its next part (403) and is never completed. Re-enabling takes effect at the next request. |
+| STS | AssumeRole issues 15-minute temporary credentials, and a GET with them returns 200. §5 can use STS for edge and Wasm nodes. |
+| Conditional put | `If-None-Match: *` returns 412 on an existing key and 200 on a new one. |
+| On-disk format | RustFS's own (`xl.meta`, as in MinIO). Small objects are inlined, large ones stored as `part.N` files. **Answer to open question 1: the existing project directory can't be served in place; it's imported once.** |
+| Footprint | The `rustfs` process: about 310–320 MB RSS, idle and under a 1 GB upload. The service cgroup reached 1.5 GB after the upload, which is mostly the kernel's page cache. The audit sink: 19 MB. An hour-long reading is still to do. |
+| Restarts | Objects are intact after `restart rustfs.service` (the md5 of the 1 GB object is unchanged). With the audit sink stopped, events queue on disk and are delivered once it's back. |
+
+Not tested: bucket notifications (not configured in the spike), and erasure coding and
+replication (single drive).
+
 ## Consequences
 
 - **Gains:**
@@ -180,8 +207,10 @@ Only the daemon creates, grants access to, or deletes a store.
 
 ## Open questions for the owner
 
-1. S0 decides whether the existing project directory on PG can be served in place. If it
-   can't, it's imported once and the bucket becomes the source.
+1. ~~Can the existing project directory be served in place?~~ Answered by S0: no. It's
+   imported once and the bucket becomes the source.
+4. Listing a store isn't logged by RustFS (S0). Is that acceptable, or should listings go through
+   the daemon so the daemon logs them?
 2. How long do archived buckets (from a removed worktree, project or node) live before
    they're deleted?
 3. Do cloud agent sessions get write access to worktree stores, or only read?
