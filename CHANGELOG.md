@@ -10,6 +10,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Staging area for changes after the 0.8.4 release.
 
 ### Added
+- **Vision service contract (ADR-125, Proposed).** `svc.vision.{ocr,codes,faces,labels,embed,point,segment}`
+  as cogbus services and one `vision.v1` request/reply schema in the cog schema registry, with golden
+  vectors. Unknown fields and bodies over 64 KiB are refused; embeddings carry a registered kind
+  (`apple-featureprint-r2`, `siglip2-so400m-p16-384`) and are never compared across kinds.
+- **Inference roles served by a cogbus service (ADR-101 update).** A role in `inference.json` can name
+  `svc: {topic, model}` (for example `svc.infer/venq-npu`), so OpenAI chat completions with one data-URI
+  image reach the NPU service as `infer.v1` with the image as a broker blob. Governance sees the real
+  caller (`local:<ip>`, `mesh:<node>`) and the proxy; image blobs are released after each call; quota
+  exhaustion is 429. Received `infer.<role>` adverts expire 60 s after they were heard and a stopped
+  provider is withdrawn. New `weaver infer status` and `weaver infer expose`.
+- **macOS native cogs (ADR-100 update).** An `aarch64-macos` binary key and `aarch64-macos-native`
+  route; thin arm64 Mach-O executables only, on a macOS daemon, running as the daemon user (no per-cog
+  uid, RAM limits not enforced). `weaver workload pack` checks each binary against its key.
 - **Site facts.** `scripts/gen-facts.mjs` (`scripts/build.sh gen-facts`) derives the headline
   numbers (version, crates, published crates, ADRs, CLI commands, cogs, hardware catalog) into
   `docs/src/public/facts.json` and the README facts block; `--check` runs in CI
