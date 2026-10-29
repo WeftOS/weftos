@@ -68,6 +68,23 @@ git push origin v0.8.5
 
 That's the whole local flow. Everything downstream is automation.
 
+### Roll the target branch after a stable tag
+
+Work lands on one branch, `target-<next version>`. When a stable release is tagged, the target
+branch it was cut from is finished:
+
+1. Cut the next target from the released target's tip:
+   `git push origin origin/target-0.8.5:refs/heads/target-0.8.6`.
+2. Check that the old target is fully contained in the new one
+   (`git merge-base --is-ancestor origin/target-0.8.5 origin/target-0.8.6`), then delete it:
+   `git push origin --delete target-0.8.5`. The release tag keeps the released commit.
+3. Update the pointers that name the landing branch: agent briefs, handoff notes, this page, and
+   any plan that says where lanes land. Historical notes ("built on `target-0.8.4`") stay as they are.
+4. Fast-forward `master` to the release tag (agent-git-flow `release.sh promote`).
+
+`config/agent-git.env` picks the newest `target-0.8.*`, so deleting the old target leaves exactly
+one landing branch. Never push to a target branch after its release is tagged.
+
 ### Pre-Tag Checklist
 
 Before pushing the release tag:
