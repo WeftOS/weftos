@@ -17,7 +17,7 @@ decision recorded. The current release is v0.8.4.
 
 <!-- facts:start -->
 - 65 workspace crates, 40 of them published to crates.io
-- 123 architecture decision records
+- 124 architecture decision records
 - 29 cogs in the Cogs repository, and 795 modules in the hardware catalog
 <!-- facts:end -->
 
