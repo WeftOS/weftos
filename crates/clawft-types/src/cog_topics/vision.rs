@@ -48,6 +48,10 @@ pub const VISION_MAX_PROVIDER_FIELD: usize = 128;
 pub const VISION_MAX_PIXELS: u64 = 64_000_000;
 /// Largest decoded image side a provider will read, pixels.
 pub const VISION_MAX_SIDE: u32 = 16384;
+/// Largest mask blob in a segment reply, bytes (64 MiB).
+pub const VISION_MAX_MASK_BLOB: u64 = 64 * 1024 * 1024;
+/// Largest face `count` in a reply.
+pub const VISION_MAX_FACE_COUNT: u32 = 65535;
 /// Tolerance for `x + w <= 1` and `y + h <= 1`.
 pub const VISION_BBOX_EPSILON: f64 = 1e-9;
 /// Media type of an inline f32 little-endian embedding blob.
@@ -126,17 +130,31 @@ pub(super) fn check_task_fields(task: VisionTask, fields: &[(&str, bool, VisionT
     Ok(())
 }
 
-/// Char-count check, `1..=max`.
+/// Char-count check, `1..=max`, with no control characters.
 pub(super) fn text_len(name: &str, s: &str, max: usize) -> Check {
     let n = s.chars().count();
     if n == 0 || n > max {
         return fail(format!("{name} must be 1..={max} chars"));
     }
+    if s.chars().any(char::is_control) {
+        return fail(format!("{name} has a control character"));
+    }
     Ok(())
 }
 
-/// `vision.v1` request: run `task` on one image.
+/// The whole message as JSON must fit the broker's body cap.
+pub(super) fn check_body_size<T: Serialize>(msg: &T) -> Check {
+    let n = serde_json::to_vec(msg).map_err(|e| super::CogTopicError(e.to_string()))?.len();
+    if n > VISION_MAX_BODY {
+        return fail(format!("message is {n} bytes as JSON, more than {VISION_MAX_BODY}"));
+    }
+    Ok(())
+}
+
+/// `vision.v1` request: run `task` on one image. Unknown fields are refused,
+/// unlike most schemas (ADR-125 section 2).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct VisionRequest {
     /// Which task; must match the kind called.
     pub task: VisionTask,
@@ -197,7 +215,8 @@ impl VisionRequest {
                 ("mask_format", self.mask_format.is_some(), T::Segment, false),
             ],
         )?;
-        self.validate_task_fields()
+        self.validate_task_fields()?;
+        check_body_size(self)
     }
 
     fn validate_image(&self) -> Check {
@@ -223,6 +242,9 @@ impl VisionRequest {
                 if i.len() > VISION_MAX_IMAGE_B64 {
                     return fail(format!("image_b64 longer than {VISION_MAX_IMAGE_B64} chars"));
                 }
+                if super::b64_len(i).is_none_or(|n| n == 0) {
+                    return fail("image_b64 must be non-empty standard padded base64");
+                }
                 if !valid_image_type(m) {
                     return fail(format!("image_mime {m:?} is not an allowed image type"));
                 }
@@ -235,19 +257,25 @@ impl VisionRequest {
 
     fn validate_task_fields(&self) -> Check {
         if let Some(l) = &self.languages {
-            if l.len() > VISION_MAX_LANGUAGES {
-                return fail(format!("languages has more than {VISION_MAX_LANGUAGES} entries"));
+            if l.is_empty() || l.len() > VISION_MAX_LANGUAGES {
+                return fail(format!("languages must have 1..={VISION_MAX_LANGUAGES} entries"));
             }
             for t in l {
                 text_len("language tag", t, VISION_MAX_LANGUAGE_TAG)?;
+                if !t.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
+                    return fail(format!("language tag {t:?} must be letters, digits and '-'"));
+                }
             }
         }
         if let Some(l) = &self.labels {
             if l.is_empty() || l.len() > VISION_MAX_REQUEST_LABELS {
                 return fail(format!("labels must have 1..={VISION_MAX_REQUEST_LABELS} entries"));
             }
-            for t in l {
+            for (i, t) in l.iter().enumerate() {
                 text_len("label", t, VISION_MAX_LABEL)?;
+                if l[..i].contains(t) {
+                    return fail(format!("label {t:?} is listed twice"));
+                }
             }
         }
         if let Some(k) = &self.embedding_kind

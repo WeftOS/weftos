@@ -104,14 +104,30 @@ expected case.
 A field that belongs to another task is refused, so a caller that misspells the task does not
 get a silently different call.
 
+**Unknown fields are refused** in `vision.v1` requests and replies, at every level the schema
+defines (not inside a nested `blob.v1`, which keeps its own rule). This is an exception to the
+registry's rule that unknown fields are ignored: a face reply must not be able to carry identity
+data under a key `v1` does not name (section 6), and the only way to make that checkable is to
+refuse every key it does not name. A new optional field therefore needs every provider and
+client of `vision.v1` updated together, or a `v2`.
+
+**Text** fields hold no control characters, except that a code `payload` and a point `raw` may
+hold tab, newline and carriage return (a vCard in a QR code has newlines). `image_b64` must be
+non-empty standard padded base64. Language tags are letters, digits and `-`; request labels are
+distinct.
+
 **Reply** (every task):
 
 | Field | Type | Rule |
 |---|---|---|
 | `task` | string | as the request |
 | `provider` | object | `{model, version}`: the model or framework that answered (`apple-vision`, `rapidocr-onnx`) and its version, each 1..=128 chars |
-| `width`, `height` | u32 | 1..=65535: the decoded image size the provider read, so a caller can check boxes against it |
+| `width`, `height` | u32 | 1..=16384, with `width * height` at most 64,000,000: the decoded image size the provider read, so a caller can check boxes against it |
 | `took_ms` | u32 | time the provider spent, queueing excluded |
+
+Each task's result fields are required in its reply (`lines`; `codes`; `count` and `boxes`;
+`labels`; `embedding`; `phrase` and `points`; `instances`), possibly empty arrays; `taxonomy`
+and `raw` are optional. A field of another task is refused.
 
 Geometry is normalised to the image, origin top-left, as `detections.v1`: a box is
 `[x, y, w, h]` with every value in 0..=1 and `x + w <= 1`, `y + h <= 1`; a point is `[x, y]`
@@ -122,15 +138,15 @@ replying.
 |---|---|---|---|
 | `ocr` | `lines` | array | at most 1024 of `{text (1..=1024 chars), confidence (0..=1), bbox}` |
 | `codes` | `codes` | array | at most 256 of `{symbology, payload (at most 4096 chars), bbox}`; `symbology` is `[a-z0-9_-]`, 1..=32 chars (`qr`, `ean13`, `code128`, `datamatrix`, `pdf417`, `aztec`) |
-| `faces` | `count` | u32 | the number of faces found, at least the number of `boxes` (`max_results` may cut the boxes) |
-| `faces` | `boxes` | array | at most 256 of `{bbox, score (0..=1)}`. **No identity, no landmarks, no attributes, no embedding of a face.** A field that could identify a person is not in `v1`, and a provider must not add one under an unknown key |
+| `faces` | `count` | u32 | the number of faces found, at most 65535 and at least the number of `boxes` (`max_results` may cut the boxes) |
+| `faces` | `boxes` | array | at most 256 of `{bbox, score (0..=1)}`. **No identity, no landmarks, no attributes, no embedding of a face.** A field that could identify a person is not in `v1`, and the validator refuses unknown keys, so one cannot be added under another name |
 | `labels` | `labels` | array | at most 256 of `{label (1..=64 chars), score (0..=1)}`, highest first |
 | `labels` | `taxonomy` | string | present when the request named no labels: the provider's taxonomy (`apple-vision-classify-r1`), 1..=64 chars |
 | `embed` | `embedding` | object | section 4 |
 | `point` | `phrase` | string | the phrase answered |
 | `point` | `points` | array | at most 256 `[x, y]` |
 | `point` | `raw` | string | the model's own text, at most 4096 chars, for audit |
-| `segment` | `instances` | array | at most 256 of `{bbox, score, mask}`; `mask` is a `blob.v1` (`image/png` for `png`, `application/x-weftos-rle` for `rle`) of the mask at the image size |
+| `segment` | `instances` | array | at most 256 of `{bbox, score, mask}`; `mask` is a `blob.v1` (`image/png` for `png`, `application/x-weftos-rle` for `rle`, at most 64 MiB) of the mask at the image size. The reply cannot see the request, so the validator accepts either format; a caller checks it got the one it asked for |
 
 Masks are blobs because a 1-bit mask of a phone photo is larger than the whole reply cap.
 The reply hands the caller read access to each mask by carrying its handle (ADR-122 section
@@ -148,12 +164,17 @@ as unsigned LEB128 varints, preceded by `width` and `height` as varints.
   provider with one model in memory (point, segment) runs one call at a time and queues the
   rest within those limits.
 - **Pixel cap.** A provider reads the image header first and refuses a decoded size over
-  64 megapixels or 16384 on a side (`service_error`, `image_too_large`) before it decodes the
+  64 megapixels (64,000,000 pixels) or 16384 on a side (`service_error`, `image_too_large`) before it decodes the
   pixels, so a small, highly compressed file cannot exhaust memory. The 32 MiB blob cap
-  bounds the bytes; this bounds the pixels.
-- **Body caps.** Every request and reply is at most 64 KiB as JSON; the reply caps in section
-  2 keep a typical reply under it. A provider that would exceed it truncates to `max_results`
-  and, failing that, answers `service_error` (`too_many_results`).
+  bounds the bytes; this bounds the pixels. The validator cannot see the image, so the cap is
+  enforced by each provider (and, after the fact, by the reply's `width` and `height` rule);
+  each vision cog's tests must cover it.
+- **Body caps.** Every request and reply is at most 64 KiB as JSON, and `validate()` checks the
+  serialized size, so a message that passes the validator also passes the broker's
+  `too_large` check (ADR-122 section 12). The per-item caps in section 2 are not small enough
+  on their own (1024 OCR lines of 1024 characters is about a megabyte), so a provider stops
+  adding results when the reply would pass 64 KiB, keeping the highest scored, and sets no
+  flag; a caller that needs every line of a dense page tiles the image.
 
 ### 4. Embedding kinds
 
@@ -165,7 +186,7 @@ preprocessing, the same output layer. The reply's `embedding` object says which:
 | `kind` | string | a registered embedding kind |
 | `dim` | u32 | must equal the kind's dimension |
 | `distance` | string | must equal the kind's distance: `cosine` or `euclidean` |
-| `vector` | array of f32 | `dim` finite values, inline. Exactly one of `vector` and `vector_blob` |
+| `vector` | array of f32 | `dim` finite values within the f32 range, inline (JSON numbers, read as 64-bit like every float in the registry). Exactly one of `vector` and `vector_blob` |
 | `vector_blob` | `blob.v1` | for a kind too large to inline: `application/x-weftos-f32le`, size `dim * 4` |
 
 Registered kinds (`vision.v1` validates `dim` and `distance` against this table):
@@ -205,7 +226,9 @@ SigLIP provider, never to Apple.
 Vision calls see whatever is in the image. The contract keeps three lines:
 
 - **Faces are counted and boxed, never identified.** `v1` has no field for identity, a face
-  embedding or face landmarks, and section 2 forbids adding one under an unknown key. An
+  embedding or face landmarks, and the validator refuses unknown keys (section 2), so a
+  conforming reply cannot carry one. A provider whose detector also emits landmarks (YuNet)
+  drops them before replying. An
   identity service would be a separate ADR with its own governance.
 - **Images stay where they are put.** An image is a blob on the caller's node; across the
   mesh it travels only to the provider of an exposed service the caller called (card 4), and
@@ -250,5 +273,7 @@ Vision calls see whatever is in the image. The contract keeps three lines:
    draft uses `apple-featureprint-r2` (it is Vision's revision 2, and revision 1 is a different
    vector) and `siglip2-so400m-p16-384` (Google also publishes a patch-14 384 model).
 2. The caps: 32 MiB per image blob, 64 megapixels and 16384 per side decoded, 256 results.
+4. Refusing unknown fields (section 2). It closes the identity hole but makes every new
+   optional field a coordinated change; the alternative is `v2` per addition.
 3. Whether `labels` with no list (the provider's own taxonomy) stays in `v1`, or every labels
    call must name its labels.

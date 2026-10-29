@@ -254,3 +254,19 @@ fn vision_request_caps() {
     big["size"] = json!(VISION_MAX_IMAGE_BLOB + 1);
     assert!(check_message("vision.v1", &json!({"task": "ocr", "image": big})).is_err());
 }
+
+#[test]
+fn vision_body_cap_and_text_rules() {
+    let line = json!({"text": "x".repeat(VISION_MAX_OCR_TEXT), "confidence": 0.5, "bbox": [0.0, 0.0, 0.1, 0.1]});
+    let lines: Vec<Value> = (0..200).map(|_| line.clone()).collect();
+    let big = json!({"task": "ocr", "provider": {"model": "m", "version": "1"}, "width": 10, "height": 10,
+                     "took_ms": 0, "lines": lines});
+    assert!(check_reply("vision.v1", &big).is_err(), "a reply over 64 KiB must be refused");
+    let ctl = json!({"task": "point", "image": vimg(), "phrase": "a\u{0}b"});
+    assert!(check_message("vision.v1", &ctl).is_err());
+    let qr = json!({"task": "codes", "provider": {"model": "m", "version": "1"}, "width": 10, "height": 10,
+                    "took_ms": 0, "codes": [{"symbology": "qr", "payload": "BEGIN:VCARD\nEND:VCARD", "bbox": [0.0, 0.0, 0.5, 0.5]}]});
+    assert!(check_reply("vision.v1", &qr).is_ok(), "a newline in a code payload is allowed");
+    let empty_lang = json!({"task": "ocr", "image": vimg(), "languages": []});
+    assert!(check_message("vision.v1", &empty_lang).is_err());
+}

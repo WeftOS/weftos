@@ -19,7 +19,7 @@ names an id not listed here. A `cog.toml` with any `[[outputs]]` must also carry
 
 Every message is one JSON object carrying these, beside the schema's own fields.
 Unknown fields are ignored, so new optional fields stay in `v1`; changing the
-meaning of a field needs `v2`.
+meaning of a field needs `v2`. The exception is `vision.v1`, which refuses unknown fields (ADR-125 section 2).
 
 | Field | Type | Rule |
 |-------|------|------|
@@ -250,4 +250,4 @@ One schema for the seven vision tasks (`svc.vision.<task>/<node>`); full rules i
 | `point` | `phrase` (required, 1..=256) | `phrase`, `points` (`[x, y]`), `raw` optional |
 | `segment` | `prompt` (required, 1..=256), `mask_format` `png`\|`rle` | `instances` (`bbox`, `score`, `mask` blob) |
 
-Every reply also carries `provider` `{model, version}`, `width`, `height` (1..=65535) and `took_ms`. Geometry is normalised, origin top-left: a box is `[x, y, w, h]` in 0..=1 with `x + w <= 1`, `y + h <= 1`. Embedding kinds: `apple-featureprint-r2` (768, `euclidean`), `siglip2-so400m-p16-384` (1152, `cosine`); a vector is `dim` finite values or a `application/x-weftos-f32le` blob of `dim * 4` bytes. Providers refuse images over 64 MP or 16384 px a side. Reply vectors are the `reply-valid-*.json` / `reply-invalid-*.json` files.
+Every reply also carries `provider` `{model, version}`, `width`, `height` (1..=16384, product at most 64,000,000) and `took_ms`. Geometry is normalised, origin top-left: a box is `[x, y, w, h]` in 0..=1 with `x + w <= 1`, `y + h <= 1`. Embedding kinds: `apple-featureprint-r2` (768, `euclidean`), `siglip2-so400m-p16-384` (1152, `cosine`); a vector is `dim` finite values or a `application/x-weftos-f32le` blob of `dim * 4` bytes. Providers refuse images over 64 MP or 16384 px a side. Requests and replies refuse unknown fields and must be at most 64 KiB as JSON. Reply vectors are the `reply-valid-*.json` / `reply-invalid-*.json` files.

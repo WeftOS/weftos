@@ -1,0 +1,5 @@
+{
+  "task": "ocr",
+  "image_b64": "!!!not base64",
+  "image_mime": "image/png"
+}

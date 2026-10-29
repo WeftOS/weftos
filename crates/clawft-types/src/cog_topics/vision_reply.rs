@@ -1,6 +1,9 @@
 //! `vision.v1` reply (ADR-125 sections 2 and 4). The reply cannot see the
 //! request, so request-dependent rules (a `taxonomy` only when no labels were
 //! named, a mask format) are not checked here.
+//!
+//! Unlike most schemas, unknown fields are refused: a field `v1` does not
+//! name could carry identity data about a face (ADR-125 section 6).
 
 use serde::{Deserialize, Serialize};
 
@@ -10,6 +13,7 @@ use super::{Check, fail, in_range};
 
 /// The model or framework that answered.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct VisionProvider {
     /// Model or framework, 1..=128 chars.
     pub model: String,
@@ -19,6 +23,7 @@ pub struct VisionProvider {
 
 /// One OCR line.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct OcrLine {
     /// The text, 1..=1024 chars.
     pub text: String,
@@ -30,6 +35,7 @@ pub struct OcrLine {
 
 /// One code found.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CodeHit {
     /// `[a-z0-9_-]`, 1..=32 chars.
     pub symbology: String,
@@ -41,6 +47,7 @@ pub struct CodeHit {
 
 /// One face box. No identity, landmarks, attributes or embedding.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FaceBox {
     /// `[x, y, w, h]`, normalised.
     pub bbox: [f64; 4],
@@ -50,6 +57,7 @@ pub struct FaceBox {
 
 /// One scored label.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LabelScore {
     /// 1..=64 chars.
     pub label: String,
@@ -59,6 +67,7 @@ pub struct LabelScore {
 
 /// One segmentation instance.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MaskInstance {
     /// `[x, y, w, h]`, normalised.
     pub bbox: [f64; 4],
@@ -70,6 +79,7 @@ pub struct MaskInstance {
 
 /// The `embedding` object of an `embed` reply.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Embedding {
     /// A registered kind.
     pub kind: String,
@@ -87,6 +97,7 @@ pub struct Embedding {
 
 /// `vision.v1` reply.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct VisionReply {
     /// As the request.
     pub task: VisionTask,
@@ -190,9 +201,12 @@ impl VisionReply {
         text_len("provider.model", &self.provider.model, VISION_MAX_PROVIDER_FIELD)?;
         text_len("provider.version", &self.provider.version, VISION_MAX_PROVIDER_FIELD)?;
         for (n, v) in [("width", self.width), ("height", self.height)] {
-            if !(1..=65535).contains(&v) {
-                return fail(format!("{n} must be 1..=65535"));
+            if !(1..=VISION_MAX_SIDE).contains(&v) {
+                return fail(format!("{n} must be 1..={VISION_MAX_SIDE}"));
             }
+        }
+        if u64::from(self.width) * u64::from(self.height) > VISION_MAX_PIXELS {
+            return fail(format!("width * height is more than {VISION_MAX_PIXELS} pixels"));
         }
         use VisionTask as T;
         check_task_fields(
@@ -211,7 +225,8 @@ impl VisionReply {
                 ("instances", self.instances.is_some(), T::Segment, true),
             ],
         )?;
-        self.validate_results()
+        self.validate_results()?;
+        check_body_size(self)
     }
 
     fn validate_results(&self) -> Check {
@@ -231,6 +246,9 @@ impl VisionReply {
             if c.payload.chars().count() > VISION_MAX_CODE_PAYLOAD {
                 return fail(format!("payload longer than {VISION_MAX_CODE_PAYLOAD} chars"));
             }
+            if c.payload.chars().any(|ch| ch.is_control() && !matches!(ch, '\t' | '\n' | '\r')) {
+                return fail("payload has a control character other than tab or newline");
+            }
             check_bbox(&c.bbox)?;
         }
         check_count("codes", self.codes.as_ref().map_or(0, Vec::len), VISION_MAX_RESULTS)?;
@@ -243,6 +261,9 @@ impl VisionReply {
             && (n as usize) < b.len()
         {
             return fail("count is less than the number of boxes");
+        }
+        if self.count.is_some_and(|n| n > VISION_MAX_FACE_COUNT) {
+            return fail(format!("count is more than {VISION_MAX_FACE_COUNT}"));
         }
         self.validate_labels_and_rest()
     }
@@ -274,8 +295,13 @@ impl VisionReply {
                 in_range("point y", p[1], 0.0, 1.0)?;
             }
         }
-        if self.raw.as_ref().is_some_and(|r| r.chars().count() > VISION_MAX_RAW) {
-            return fail(format!("raw longer than {VISION_MAX_RAW} chars"));
+        if let Some(r) = &self.raw {
+            if r.chars().count() > VISION_MAX_RAW {
+                return fail(format!("raw longer than {VISION_MAX_RAW} chars"));
+            }
+            if r.chars().any(|ch| ch.is_control() && !matches!(ch, '\t' | '\n' | '\r')) {
+                return fail("raw has a control character other than tab or newline");
+            }
         }
         if let Some(is) = &self.instances {
             check_count("instances", is.len(), VISION_MAX_RESULTS)?;
@@ -285,6 +311,9 @@ impl VisionReply {
                 i.mask.validate()?;
                 if i.mask.media_type != "image/png" && i.mask.media_type != VISION_RLE_MEDIA_TYPE {
                     return fail(format!("mask media_type must be image/png or {VISION_RLE_MEDIA_TYPE}"));
+                }
+                if i.mask.size > VISION_MAX_MASK_BLOB {
+                    return fail(format!("mask is larger than {VISION_MAX_MASK_BLOB} bytes"));
                 }
             }
         }
