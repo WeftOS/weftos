@@ -79,3 +79,35 @@ The `study*` directories do contain real data: preregistrations with frozen hash
 4. A published result on a real workload, not a synthetic sorting study.
 
 **Strongest non-ruv alternative.** The boring stack we already run: `cargo build --locked`, sccache, `cargo-deny`, `cargo-audit`, `cargo-vet` or `cargo-semver-checks`, and criterion for benchmark gating. They solve build speed and supply chain with mature tooling.
+
+## Spike testability (commit `9242551`)
+
+Install and run, as documented in `README.md`:
+
+```sh
+# Prerequisite: Rust 1.88+ (we pin 1.95). Linux is needed for isolation (prlimit, unshare).
+cargo install rune-toolchain --locked        # or: cargo build --release from a clone; binary is `rune`
+cd <workspace>                                # needs Cargo.toml and a committed Cargo.lock; deps already in the cargo cache
+rune build --freeze                           # first approval of a plan
+rune build ; rune verify ; rune explain ; rune rollback
+rune -C <workspace> ...                       # -C selects the workspace
+```
+
+The CLI has no `check`, `test`, `doctor` or `affected` command. It exposes `build`, `verify`, `improve`, `edit`, `eval`, `recipes`, `promote`, `target`, `package`, `verify-artifact`, `cleanup`, `explain` and `rollback`. `build` writes state under `.rune/` inside the workspace.
+
+| Task | Testable? | Status and notes |
+|---|---|---|
+| T1 install | Yes | Implemented. No `doctor`. Optional `npm install` of `agent-booster@0.2.2` (Node sidecar) for T7 |
+| T2 cold check | No | No check mode. Only `cargo build --release --locked --offline` of one selected product. A comparable test is a release build, not `build.sh check` |
+| T3 warm rebuild | Partial | `rune build` refuses after any source edit (`stale plan`) until `--freeze`, so measure freeze+build vs `build.sh`. Needs its own target dir; no sccache hook, so set `RUSTC_WRAPPER` in the environment and see whether it passes through |
+| T4 crate tests | No | No test command. The evaluator runs only contract fixtures, not workspace tests |
+| T5 wasm | No for our targets | Only `wasm32-wasip1` (Node WASI, emulated) and aarch64 (qemu). No `--features`/`--no-default-features`, no wasm32-unknown-unknown or wasip2 flow. Cannot respect the ADR-083 mutex because it passes no feature flags. Expect a failed or wrong build; record as the finding |
+| T6 affected | No | Documented-only/absent: no selection logic |
+| T7 Agent Booster | Yes, narrowly | Implemented: `rune edit --file F --sha256 H --find ... --booster [--node-modules DIR] [--language rust]`. One file per call, hash-checked, exact-find. Local; needs Node and the npm package. Drive it from a loop for ~20 files. No semantic validation (`booster-smoke.cjs` says so). Baseline: `hooks_codemod` or sed |
+| T8 RuVector memory | No (cannot observe effect on builds) | Memory exists for recipes only (`rune recipes add/rank/validate/snapshot`). The ruvector HNSW ranking is behind an off-by-default feature needing Rust 1.89. Running T3 twice teaches it nothing. Mark n/a and put it in feedback |
+| T9 bounded discovery | Stub-level for compile fixes | `rune improve` sends one budgeted prompt for a kernel optimisation proposal, not compile-error repair. It needs `OPENROUTER_API_KEY` and sends source to openrouter.ai. Per the plan's rule, record and stop. `RUNE_OPENROUTER_URL` can point it at a local mock to inspect the request body without a key leaving the machine |
+| T10 validated build | Yes, partially | Implemented: `rune verify` (clean rebuild, digest compare), `rune package --signing-key FILE` and `rune verify-artifact --trusted-key FILE`. Use a throwaway test key generated outside the repo; Rune never generates keys. This proves reproducibility and provenance, not correctness, and does not replace owner-run release signing |
+
+Anything that needs a key or leaves the machine: `rune improve` only (`OPENROUTER_API_KEY`, openrouter.ai, sends source text). `build`, `verify`, `edit` (exact replace or local booster), `eval`, `target`, `package`, `cleanup` are local. Cargo itself stays offline. The booster path runs Node with the pinned npm package; read `scripts/` and `package-lock.json` first and install with `npm ci --ignore-scripts`.
+
+Net: of T1-T10, T1, T3 (partial), T7 and T10 are runnable; T2, T4, T5, T6 are structurally unsupported and become findings; T8 and T9 should be n/a or run only against a local mock.
