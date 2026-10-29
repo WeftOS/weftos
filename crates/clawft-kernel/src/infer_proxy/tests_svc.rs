@@ -112,6 +112,45 @@ fn two_images_are_refused_with_a_clear_400() {
 }
 
 #[test]
+fn data_uri_parameters_are_ignored_but_base64_is_required() {
+    let b64 = B64.encode(png(8));
+    let ok = decode_image(&format!("data:image/png;charset=utf-8;base64,{b64}")).unwrap();
+    assert_eq!(ok.media_type, "image/png");
+    assert!(decode_image(&format!("data:image/png;name=a.png;charset=utf-8;base64,{b64}")).is_ok());
+    assert!(decode_image(&format!("data:IMAGE/PNG;BASE64,{b64}")).is_ok());
+    // No base64 parameter: refused even when other parameters are present.
+    assert!(decode_image(&format!("data:image/png;charset=utf-8,{b64}")).is_err());
+    assert!(decode_image(&format!("data:;base64,{b64}")).is_err(), "empty mime");
+}
+
+#[test]
+fn only_the_last_user_message_images_count() {
+    let u = data_uri("image/png", &png(4));
+    let m = json!([
+        {"role": "user", "content": [{"type": "text", "text": "old"}, {"type": "image_url", "image_url": {"url": u}},
+                                      {"type": "image_url", "image_url": {"url": u}}]},
+        {"role": "assistant", "content": "a picture"},
+        {"role": "user", "content": "and now text only"}
+    ]);
+    let t = chat_to_infer(&msgs(m, json!({})), MODEL).unwrap();
+    assert!(t.image.is_none(), "an image in an earlier turn is ignored (even two of them)");
+    assert_eq!(t.body["text"], "and now text only");
+    // The last turn's image is the one sent.
+    let last = png(9);
+    let m = json!([
+        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": u}}]},
+        {"role": "user", "content": [{"type": "text", "text": "this"}, {"type": "image_url", "image_url": {"url": data_uri("image/png", &last)}}]}
+    ]);
+    let t = chat_to_infer(&msgs(m, json!({})), MODEL).unwrap();
+    assert_eq!(t.image.unwrap().bytes, last);
+}
+
+#[test]
+fn busy_is_a_503() {
+    assert_eq!(ProxyError::Busy("x".into()).status(), 503);
+}
+
+#[test]
 fn an_oversize_image_is_refused() {
     let big = png(MAX_IMAGE_BYTES);
     let e = decode_image(&data_uri("image/png", &big)).unwrap_err();
@@ -238,6 +277,16 @@ async fn an_image_chat_through_the_proxy_arrives_as_image_blob_and_the_reply_map
     assert!(body_of(&m).contains(MODEL), "{m}");
     let s = raw(p.addr(), &post(p.addr(), "/v1/chat/completions", r#"{"stream":true,"messages":[{"role":"user","content":"x"}]}"#)).await;
     assert_eq!(status(&s), 400, "{s}");
+    {
+        // A rejected request is audited with the caller and the reason, never the prompt.
+        let rec = audit.0.lock().unwrap();
+        let (k, v) = rec.iter().find(|(_, v)| v["outcome"] == "rejected").expect("rejected request audited");
+        assert_eq!(k, "infer.svc.call");
+        assert_eq!(v["status"], 400);
+        assert!(v["caller"].as_str().unwrap().starts_with("local:"));
+        assert!(v["reason"].as_str().unwrap().contains("streaming"));
+        assert!(!v.to_string().contains("describe"), "no prompt in the audit record");
+    }
     let e = raw(p.addr(), &post(p.addr(), "/v1/embeddings", r#"{"input":"x"}"#)).await;
     assert_eq!(status(&e), 501, "{e}");
     assert_eq!(echo.calls.lock().unwrap().len(), 1, "refused requests never reach the service");

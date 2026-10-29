@@ -390,6 +390,8 @@ pub async fn write_error<S: AsyncWrite + Unpin>(s: &mut S, e: &ProxyError) {
     .to_string();
     let challenge = if matches!(e, ProxyError::Unauthorized) {
         "WWW-Authenticate: Bearer\r\n"
+    } else if matches!(e, ProxyError::Busy(_)) {
+        "Retry-After: 5\r\n"
     } else {
         ""
     };

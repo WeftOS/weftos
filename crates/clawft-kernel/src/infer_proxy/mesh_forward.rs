@@ -247,6 +247,7 @@ fn peer_reason(e: &ProxyError) -> &'static str {
         | ProxyError::MethodNotAllowed
         | ProxyError::TooLarge(_) => "request not accepted",
         ProxyError::Timeout(_) => "timeout",
+        ProxyError::Busy(_) => "busy",
         _ => "upstream error",
     }
 }

@@ -128,3 +128,49 @@ async fn bus_policy_applies_to_the_proxy_like_any_caller() {
     let e = svc.call(TOPIC, json!({"model": "m", "text": "hi"}), None, "local:test").await.unwrap_err();
     assert!(matches!(e, ProxyError::Refused(_)), "{e}");
 }
+
+#[tokio::test]
+async fn a_failed_open_leaves_nothing_registered_so_a_retry_works() {
+    let (b, _dir) = broker();
+    let first = BrokerSvc::open(b.clone(), None).unwrap();
+    // The instance id is taken while the first session lives.
+    assert!(BrokerSvc::open(b.clone(), None).is_err());
+    drop(first);
+    // Dropping revokes it; opening again works.
+    BrokerSvc::open(b.clone(), None).unwrap();
+}
+
+#[tokio::test]
+async fn a_full_content_store_is_busy_not_a_bad_gateway() {
+    let (b, _dir) = broker();
+    let svc = BrokerSvc::open(b.clone(), None).unwrap();
+    provider(&b);
+    // Fill the instance's upload slots: 4 uploads open and never finished.
+    let store = b.blob_store().unwrap().clone();
+    for i in 0..4 {
+        store.begin(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64, "infer-proxy", None, "image/png", 10 + i, None).unwrap();
+    }
+    let mut png = vec![0x89, b'P', b'N', b'G'];
+    png.extend([1u8; 64]);
+    let img = SvcImage { media_type: "image/png", bytes: png.clone() };
+    let e = svc.call(TOPIC, json!({"model": "m", "text": "x"}), Some(img.clone()), "local:a").await.unwrap_err();
+    assert!(matches!(e, ProxyError::Busy(_)), "{e}");
+    assert_eq!(e.status(), 503);
+    // The failed put dropped the proxy's open uploads: the next call works.
+    let r = svc.call(TOPIC, json!({"model": "m", "text": "x"}), Some(img), "local:a").await.unwrap();
+    assert_eq!(r["text"], format!("image {} bytes, read {}", png.len(), png.len()));
+}
+
+#[tokio::test]
+async fn one_caller_has_at_most_two_image_calls_in_flight() {
+    let (b, _dir) = broker();
+    let svc = BrokerSvc::open(b.clone(), None).unwrap();
+    // Hold two slots the way two in-flight calls would.
+    let s1 = svc.image_slot("mesh:n1").unwrap();
+    let _s2 = svc.image_slot("mesh:n1").unwrap();
+    assert!(matches!(svc.image_slot("mesh:n1"), Err(ProxyError::Busy(_))));
+    // Another caller is unaffected, and a released slot frees room.
+    assert!(svc.image_slot("local:x").is_ok());
+    drop(s1);
+    assert!(svc.image_slot("mesh:n1").is_ok());
+}

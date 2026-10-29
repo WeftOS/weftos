@@ -16,6 +16,8 @@
 //! - The system messages become `system`, the last user message's text parts
 //!   become `text`. Earlier turns and assistant/tool messages are not sent:
 //!   `infer.v1` is a single-shot request.
+//! - Images are taken from the last user message only; an image in an earlier
+//!   turn is ignored (the history is not sent).
 //! - An `http(s)` image URL is refused, never fetched (the daemon must not be
 //!   made to dial a client-named host).
 //! - An image travels as a broker blob (`image_blob`), because a service call
@@ -127,7 +129,13 @@ pub fn decode_image(url: &str) -> Result<SvcImage, ProxyError> {
     }
     let rest = url.strip_prefix("data:").ok_or_else(|| bad("an image is a data:image/png|jpeg;base64, URL"))?;
     let (meta, data) = rest.split_once(',').ok_or_else(|| bad("malformed data: URI"))?;
-    let mime = meta.strip_suffix(";base64").ok_or_else(|| bad("a data: URI image must be base64"))?;
+    // `<mime>[;param=value]*;base64`: the mime is the first segment, a bare
+    // `base64` parameter is required, other parameters (charset) are ignored.
+    let mut segs = meta.split(';');
+    let mime = segs.next().unwrap_or("").trim();
+    if !segs.any(|p| p.trim().eq_ignore_ascii_case("base64")) {
+        return Err(bad("a data: URI image must be base64"));
+    }
     let (media_type, magic): (&'static str, &[u8]) = match mime.to_ascii_lowercase().as_str() {
         "image/png" => ("image/png", &[0x89, b'P', b'N', b'G']),
         "image/jpeg" => ("image/jpeg", &[0xff, 0xd8, 0xff]),
@@ -166,24 +174,28 @@ pub fn chat_to_infer(body: &[u8], model: &str) -> Result<Translated, ProxyError>
     }
     let msgs = o.get("messages").and_then(Value::as_array).filter(|m| !m.is_empty()).ok_or_else(|| bad("messages is a non-empty array"))?;
     let mut system: Vec<String> = Vec::new();
-    let mut images: Vec<String> = Vec::new();
-    let mut last_user: Option<String> = None;
+    let mut last_user: Option<(String, Vec<String>)> = None;
     for m in msgs {
         let role = m.get("role").and_then(Value::as_str).ok_or_else(|| bad("a message has no role"))?;
         let content = m.get("content").unwrap_or(&Value::Null);
         match role {
             "system" | "developer" => {
-                let t = parts(content, &mut images, false)?;
+                let t = parts(content, &mut Vec::new(), false)?;
                 if !t.is_empty() {
                     system.push(t);
                 }
             }
-            "user" => last_user = Some(parts(content, &mut images, true)?),
+            // Each user message replaces the last: only its images count.
+            "user" => {
+                let mut imgs = Vec::new();
+                let t = parts(content, &mut imgs, true)?;
+                last_user = Some((t, imgs));
+            }
             // History: not part of a single-shot request.
             _ => {}
         }
     }
-    let text = last_user.ok_or_else(|| bad("there is no user message"))?;
+    let (text, images) = last_user.ok_or_else(|| bad("there is no user message"))?;
     if images.len() > 1 {
         return Err(bad(format!("{} images sent: a svc role takes at most one image per request", images.len())));
     }
@@ -259,7 +271,21 @@ pub async fn serve_svc(
         (Method::Get, "/v1/models") => send(sink, &models_list(&route.model)).await,
         (Method::Post, "/v1/chat/completions") => {
             let started = Instant::now();
-            let t = chat_to_infer(&req.body, &route.model)?;
+            let t = match chat_to_infer(&req.body, &route.model) {
+                Ok(t) => t,
+                Err(e) => {
+                    if let Some(a) = audit {
+                        let mut reason = e.to_string();
+                        reason.truncate(200);
+                        a.record(
+                            "infer.svc.call",
+                            json!({"role": req.role, "caller": caller, "topic": route.topic, "status": e.status(),
+                                   "bytes_in": req.body.len(), "outcome": "rejected", "reason": reason}),
+                        );
+                    }
+                    return Err(e);
+                }
+            };
             let had_image = t.image.is_some();
             let res = backend.call(&route.topic, t.body, t.image, caller).await;
             if let Some(a) = audit {

@@ -9,11 +9,20 @@
 //! `cogbus.blob.put`), counted in the bus activity under the proxy's
 //! identity, and subject to the broker's per-caller pending cap. Which client
 //! asked (`local:<addr>` or `mesh:<node>`) goes to the proxy's audit trail
-//! with each call, not into the bus.
+//! with each call (`infer.svc.call`, rejected requests included), not into
+//! the bus: the broker's governance request carries one principal (the
+//! instance) and no on-behalf-of field, so governance and the bus activity see
+//! `infer-proxy` only. Carrying the caller there needs a change to the broker
+//! request type; the proxy limits what one caller can do instead (see
+//! [`MAX_IMAGE_CALLS_PER_CALLER`]).
 //!
-//! An image is put as a blob owned by the proxy with a short TTL: a service
-//! call body is capped at 64 KiB, an image is not. The handle rides in the
-//! call body (`image_blob`), which is what lets the provider read it.
+//! An image is put as a blob owned by the proxy: a service call body is capped
+//! at 64 KiB, an image is not. The handle rides in the call body
+//! (`image_blob`), which is what lets the provider read it. The store has no
+//! delete, so the blob gets the shortest TTL that outlives the call
+//! ([`IMAGE_TTL_MS`]: the call timeout plus 30 s) and expires on its own. A
+//! failed upload drops the proxy's open uploads (the put is synchronous, so
+//! none belongs to another call).
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -38,10 +47,13 @@ pub const COG: &str = "weft-infer-proxy";
 pub const KIND: &str = "svc.infer";
 /// Blob kind the proxy declares for the images it uploads.
 const BLOB_KIND: &str = "infer.image";
-/// An uploaded image is kept this long; the provider reads it within the call.
-const IMAGE_TTL_MS: u64 = 5 * 60 * 1000;
 /// Longest wait for a reply (vision prompts on an NPU take seconds).
 const CALL_TIMEOUT: Duration = Duration::from_secs(120);
+/// An uploaded image is kept this long: the call deadline plus 30 s. There is
+/// no blob delete, so this is the shortest life that outlives the call.
+const IMAGE_TTL_MS: u64 = CALL_TIMEOUT.as_millis() as u64 + 30_000;
+/// Image calls one caller may have in flight at once.
+pub const MAX_IMAGE_CALLS_PER_CALLER: usize = 2;
 /// Raw bytes per blob slice (the broker's chunk size).
 const CHUNK: usize = 32 * 1024;
 
@@ -88,13 +100,34 @@ pub struct BrokerSvc {
     session: Session,
     next: AtomicU64,
     waiters: Waiters,
+    /// Image calls in flight per caller.
+    image_calls: Arc<Mutex<HashMap<String, usize>>>,
     _pump: tokio::task::JoinHandle<()>,
+}
+
+/// One caller's slot among its in-flight image calls; released on drop.
+pub(crate) struct ImageSlot {
+    map: Arc<Mutex<HashMap<String, usize>>>,
+    caller: String,
+}
+
+impl Drop for ImageSlot {
+    fn drop(&mut self) {
+        let mut m = self.map.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(n) = m.get_mut(&self.caller) {
+            *n -= 1;
+            if *n == 0 {
+                m.remove(&self.caller);
+            }
+        }
+    }
 }
 
 impl BrokerSvc {
     /// Register the proxy instance on `broker` (in `project`, if the policy
-    /// grants calls across projects to it) and open its session. Needs a
-    /// running tokio runtime.
+    /// grants calls across projects to it) and open its session. If opening
+    /// fails after the register, the instance is revoked so a retry works.
+    /// Needs a running tokio runtime.
     pub fn open(broker: Arc<Broker>, project: Option<String>) -> Result<Arc<Self>, String> {
         let spec = InstanceSpec {
             instance_id: INSTANCE.into(),
@@ -107,8 +140,18 @@ impl BrokerSvc {
         // The token is never given to anyone: the session is opened here.
         let token: String = rand::random::<[u8; 32]>().iter().map(|b| format!("{b:02x}")).collect();
         broker.register(spec, &token).map_err(|e| format!("register {INSTANCE}: {}", e.message))?;
-        let mut session = broker.authenticate(&token, None).map_err(|e| format!("open {INSTANCE}: {}", e.message))?;
-        let mut rx = session.take_pushed().ok_or("session has no push channel")?;
+        let mut session = match broker.authenticate(&token, None) {
+            Ok(s) => s,
+            Err(e) => {
+                broker.revoke(INSTANCE);
+                return Err(format!("open {INSTANCE}: {}", e.message));
+            }
+        };
+        let Some(mut rx) = session.take_pushed() else {
+            drop(session);
+            broker.revoke(INSTANCE);
+            return Err("session has no push channel".into());
+        };
         let waiters: Waiters = Arc::default();
         let w = waiters.clone();
         let pump = tokio::spawn(async move {
@@ -122,11 +165,21 @@ impl BrokerSvc {
                 }
             }
         });
-        Ok(Arc::new(Self { broker, session, next: AtomicU64::new(1), waiters, _pump: pump }))
+        Ok(Arc::new(Self { broker, session, next: AtomicU64::new(1), waiters, image_calls: Arc::default(), _pump: pump }))
     }
 
-    /// Put `image` as a blob and return its handle.
+    /// Put `image` as a blob and return its handle. On any failure the
+    /// proxy's open uploads are dropped (none belongs to another call: this
+    /// function never awaits), so a failed chunk leaves nothing open.
     fn put_image(&self, image: &SvcImage) -> Result<Value, ProxyError> {
+        self.put_image_inner(image).inspect_err(|_| {
+            if let Some(store) = self.broker.blob_store() {
+                store.drop_uploads(INSTANCE);
+            }
+        })
+    }
+
+    fn put_image_inner(&self, image: &SvcImage) -> Result<Value, ProxyError> {
         let b = &self.broker;
         let began = b
             .blob_begin(&self.session, image.media_type, image.bytes.len() as u64, Some(IMAGE_TTL_MS))
@@ -146,6 +199,17 @@ impl BrokerSvc {
         }
         Err(ProxyError::BadRequest("empty image".into()))
     }
+
+    /// Take one of `caller`'s image-call slots, or `Busy`.
+    pub(crate) fn image_slot(&self, caller: &str) -> Result<ImageSlot, ProxyError> {
+        let mut m = self.image_calls.lock().unwrap_or_else(|p| p.into_inner());
+        let n = m.entry(caller.to_string()).or_insert(0);
+        if *n >= MAX_IMAGE_CALLS_PER_CALLER {
+            return Err(ProxyError::Busy(format!("{caller} already has {MAX_IMAGE_CALLS_PER_CALLER} image calls in flight")));
+        }
+        *n += 1;
+        Ok(ImageSlot { map: self.image_calls.clone(), caller: caller.to_string() })
+    }
 }
 
 /// A bus refusal as the proxy's error.
@@ -157,6 +221,9 @@ fn map_err(code: ErrorCode, message: &str) -> ProxyError {
         }
         ErrorCode::TooLarge => ProxyError::TooLarge(message.to_string()),
         ErrorCode::Timeout => ProxyError::Timeout(message.to_string()),
+        // The content store is full or the proxy's pending calls are spent:
+        // a retry later works, so 503 + Retry-After, not a bad gateway.
+        ErrorCode::QuotaExceeded | ErrorCode::Busy => ProxyError::Busy(message.to_string()),
         _ => ProxyError::Upstream(message.to_string()),
     }
 }
@@ -165,6 +232,8 @@ fn map_err(code: ErrorCode, message: &str) -> ProxyError {
 impl SvcBackend for BrokerSvc {
     async fn call(&self, topic: &str, mut body: Value, image: Option<SvcImage>, caller: &str) -> Result<Value, ProxyError> {
         tracing::debug!(target: "infer", %topic, %caller, image = image.is_some(), "svc call");
+        // Held for the whole call; the blob expires on its own (no delete).
+        let _slot = if image.is_some() { Some(self.image_slot(caller)?) } else { None };
         if let Some(img) = &image {
             body["image_blob"] = self.put_image(img)?;
         }
@@ -220,7 +289,15 @@ impl crate::infer_wire::InferState {
             let Some(rt) = crate::cogbus_serve::runtime() else {
                 return none("waiting: the cog data plane (cogbus) is not up");
             };
-            let project = roles.iter().find_map(|r| r.cfg.svc.as_ref().and_then(|s| s.project.clone()));
+            // One bus identity serves every svc role, so one project: roles
+            // that name different projects are refused rather than one
+            // silently winning.
+            let mut projects: Vec<Option<String>> = roles.iter().filter_map(|r| r.cfg.svc.as_ref().map(|s| s.project.clone())).collect();
+            projects.dedup();
+            if projects.len() > 1 {
+                return none("svc roles name different svc.project values: the proxy has one bus identity");
+            }
+            let project = projects.into_iter().next().flatten();
             match BrokerSvc::open(rt.broker.clone(), project) {
                 Ok(b) => {
                     self.table.set_svc_backend(b.clone());

@@ -220,18 +220,36 @@ Qwen3-VL-4B).
 - One image per request, as a `data:image/png|jpeg;base64,` URL, at most 4 MiB
   decoded and checked against the PNG/JPEG signature. `http(s)` image URLs are
   refused (the daemon does not fetch what a client names), as are other types
-  and more than one image. The image is put as a broker blob owned by the
-  proxy (5 minute TTL) and sent as `image_blob`, because a service call body is
-  capped at 64 KiB. `stream: true` is a 400: the service answers once.
+  and more than one image. A data URI is `data:<mime>[;param=value]*;base64,<data>`:
+  the mime is the first segment, a `base64` parameter is required, other
+  parameters (`charset`) are ignored. Images are taken from the **last user
+  message only**; an image in an earlier turn is ignored, not refused (the
+  history is not sent). The image is put as a broker blob owned by the proxy
+  and sent as `image_blob`, because a service call body is capped at 64 KiB.
+  The content store has no delete, so the blob gets the shortest TTL that
+  outlives the call (the 120 s call timeout plus 30 s) and expires on its own;
+  a failed upload drops the proxy's open uploads. `stream: true` is a 400: the
+  service answers once.
+- A full content store, too many open uploads or the broker's pending-call cap
+  is a **503 with `Retry-After`**, not a 502. One caller (`local:<addr>` or
+  `mesh:<node>`) may have at most 2 image calls in flight; a third is a 503.
 - The proxy is a broker principal of its own (`infer-proxy`, an in-process
   session; no socket and no token handed out). Its calls are governed as any
   `cogbus.call` and `cogbus.blob.put`, count in the bus activity under that
   identity, and obey the broker's pending-call caps. If the provider is in a
   project, `svc.project` gives the proxy's instance that project and bus policy
-  must grant it calls across projects; otherwise the call is refused. The
-  originating client (`local:<addr>` or `mesh:<node>`) is written to the
-  proxy's audit trail (`infer.svc.call`, never the prompt) and, for peers, to
-  the ADR-120 activity log.
+  must grant it calls across projects; otherwise the call is refused. The proxy
+  has one bus identity, so every svc role must name the same `svc.project`
+  (or none); roles that differ are not served (stated in the role's reason).
+  **Limit:** the broker's governance request carries a single principal (the
+  instance) and has no on-behalf-of field, so governance and the bus activity
+  see `infer-proxy`, not the real caller; carrying it needs a change to the
+  broker request type. The originating client is instead written to the
+  proxy's audit trail with every call (`infer.svc.call`: role, caller, topic,
+  image or not, size, outcome, never the prompt), and rejected requests (400,
+  413) are recorded the same way with the caller, status and reason. For
+  peers it is also in the ADR-120 activity log. The per-caller image cap above
+  is what bounds one caller's use of the shared identity.
 - Over the mesh the forwarded request is capped at 2 MiB (`max_mesh_request_body`),
   after base64 inflation (4/3) and JSON framing. An image therefore has to be
   about 1.5 MiB or less to cross the mesh; downscale on the client. A local
