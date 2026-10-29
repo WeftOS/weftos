@@ -7,7 +7,9 @@
 //! and no other project's topic is granted.
 //!
 //! - **Kernel rules.** Each request is evaluated as a `GovernanceRequest`:
-//!   agent the instance id, action `cogbus.declare`, `cogbus.publish`,
+//!   agent the instance id (for a call made on a caller's behalf, the caller
+//!   as `local:<addr>` / `mesh:<node id>`, with the carrying instance in
+//!   context `via`), action `cogbus.declare`, `cogbus.publish`,
 //!   `cogbus.subscribe`, `cogbus.serve`, `cogbus.call` (service calls,
 //!   ADR-122 section 12), `cogbus.blob.put`, `cogbus.blob.get` (the content
 //!   store, topic `blob/<media type>` and `blob/<hash>`) or `cogbus.stop` (the
@@ -98,6 +100,11 @@ pub struct DenyEntry {
     /// Cog ids; empty is every cog.
     #[serde(default)]
     pub cogs: Vec<String>,
+    /// Agents the rule names: an instance id, or for a call the daemon makes
+    /// for someone (the inference proxy's svc roles) the caller as
+    /// `local:<addr>` or `mesh:<node id>`; empty is every agent.
+    #[serde(default)]
+    pub agents: Vec<String>,
     /// Projects of the requesting cog; empty is every project.
     #[serde(default)]
     pub projects: Vec<String>,
@@ -182,6 +189,7 @@ impl DenyEntry {
         listed(&self.actions, Some(r.action.as_str()))
             && (self.topics.is_empty() || self.topics.iter().any(|p| covers(p, r.topic)))
             && listed(&self.cogs, Some(r.cog_id))
+            && listed(&self.agents, Some(r.instance_id))
             && listed(&self.projects, r.project_id)
     }
 }
@@ -270,7 +278,7 @@ impl CogbusPolicy {
 
     fn kernel(&self, r: &BusRequest<'_>) -> Result<(), String> {
         let Some(engine) = &self.engine else { return Ok(()) };
-        let ask = BusAsk { instance: r.instance_id, action: r.action.as_str(), topic: r.topic, cog_id: r.cog_id, schema: r.schema };
+        let ask = BusAsk { instance: r.instance_id, action: r.action.as_str(), topic: r.topic, cog_id: r.cog_id, schema: r.schema, via: r.via };
         crate::cogbus_governance::evaluate(engine, ask)
     }
 }

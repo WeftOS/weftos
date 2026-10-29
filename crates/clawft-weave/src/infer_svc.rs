@@ -5,24 +5,31 @@
 //! The daemon owns the broker in-process, so the proxy registers one instance
 //! of its own ([`INSTANCE`]) and opens a session on it without a socket. That
 //! instance is a normal broker principal: it declares `svc.infer` as an input
-//! and a blob output, every call is governed (`cogbus.call`,
-//! `cogbus.blob.put`), counted in the bus activity under the proxy's
-//! identity, and subject to the broker's per-caller pending cap. Which client
-//! asked (`local:<addr>` or `mesh:<node>`) goes to the proxy's audit trail
-//! with each call (`infer.svc.call`, rejected requests included), not into
-//! the bus: the broker's governance request carries one principal (the
-//! instance) and no on-behalf-of field, so governance and the bus activity see
-//! `infer-proxy` only. Carrying the caller there needs a change to the broker
-//! request type; the proxy limits what one caller can do instead (see
-//! [`MAX_IMAGE_CALLS_PER_CALLER`]).
+//! and a blob output, and every call is governed (`cogbus.call`,
+//! `cogbus.blob.put`), counted in the bus activity and subject to the broker's
+//! per-caller pending cap.
+//!
+//! **The real caller is the governed agent.** Each call goes through the
+//! broker's in-process entry points (`call_service_for`, `blob_begin_for`)
+//! with the client's id (`local:<addr>` or `mesh:<node id>`, the convention of
+//! the mesh topic hub). Governance is asked with that id as the agent and
+//! `infer-proxy` as context `via`, so a `cogbus-policy.json` deny with
+//! `agents: ["mesh:<node>"]` (or a kernel rule on that agent) refuses that
+//! caller's call and image put; the bus activity records the caller with
+//! `via: infer-proxy`. A cog on the socket cannot do this: the wire request
+//! has no such field and rejects one. The proxy's audit trail
+//! (`infer.svc.call`) still records every call, rejected ones included, and
+//! [`MAX_IMAGE_CALLS_PER_CALLER`] still limits what one caller can hold.
 //!
 //! An image is put as a blob owned by the proxy: a service call body is capped
 //! at 64 KiB, an image is not. The handle rides in the call body
-//! (`image_blob`), which is what lets the provider read it. The store has no
-//! delete, so the blob gets the shortest TTL that outlives the call
-//! ([`IMAGE_TTL_MS`]: the call timeout plus 30 s) and expires on its own. A
-//! failed upload drops the proxy's open uploads (the put is synchronous, so
-//! none belongs to another call).
+//! (`image_blob`), which is what lets the provider read it. The proxy releases
+//! the blob when the call ends, whether it succeeded, failed or timed out
+//! ([`ImageBlob`], a drop guard), so the store holds an image only for the
+//! length of its call; the TTL ([`IMAGE_TTL_MS`]: the call timeout plus 30 s)
+//! stays as the backstop for a process that dies mid-call. A failed upload
+//! drops the proxy's open uploads (the put is synchronous, so none belongs to
+//! another call).
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -49,8 +56,8 @@ pub const KIND: &str = "svc.infer";
 const BLOB_KIND: &str = "infer.image";
 /// Longest wait for a reply (vision prompts on an NPU take seconds).
 const CALL_TIMEOUT: Duration = Duration::from_secs(120);
-/// An uploaded image is kept this long: the call deadline plus 30 s. There is
-/// no blob delete, so this is the shortest life that outlives the call.
+/// An uploaded image expires after this at the latest: the call deadline plus
+/// 30 s. The call releases it sooner; this covers a crash mid-call.
 const IMAGE_TTL_MS: u64 = CALL_TIMEOUT.as_millis() as u64 + 30_000;
 /// Image calls one caller may have in flight at once.
 pub const MAX_IMAGE_CALLS_PER_CALLER: usize = 2;
@@ -123,6 +130,22 @@ impl Drop for ImageSlot {
     }
 }
 
+/// The proxy's hold on one uploaded image; released on drop so every exit of
+/// a call (ok, error, timeout, early return) frees the blob and its quota.
+pub(crate) struct ImageBlob<'a> {
+    svc: &'a BrokerSvc,
+    hash: String,
+}
+
+impl Drop for ImageBlob<'_> {
+    fn drop(&mut self) {
+        if let Err(e) = self.svc.broker.blob_release(&self.svc.session, &self.hash) {
+            // Already expired or swept: nothing left to free.
+            tracing::debug!(target: "infer", hash = %self.hash, error = %e.message, "image blob release");
+        }
+    }
+}
+
 impl BrokerSvc {
     /// Register the proxy instance on `broker` (in `project`, if the policy
     /// grants calls across projects to it) and open its session. If opening
@@ -171,18 +194,18 @@ impl BrokerSvc {
     /// Put `image` as a blob and return its handle. On any failure the
     /// proxy's open uploads are dropped (none belongs to another call: this
     /// function never awaits), so a failed chunk leaves nothing open.
-    fn put_image(&self, image: &SvcImage) -> Result<Value, ProxyError> {
-        self.put_image_inner(image).inspect_err(|_| {
+    fn put_image(&self, image: &SvcImage, caller: &str) -> Result<(ImageBlob<'_>, Value), ProxyError> {
+        self.put_image_inner(image, caller).inspect_err(|_| {
             if let Some(store) = self.broker.blob_store() {
                 store.drop_uploads(INSTANCE);
             }
         })
     }
 
-    fn put_image_inner(&self, image: &SvcImage) -> Result<Value, ProxyError> {
+    fn put_image_inner(&self, image: &SvcImage, caller: &str) -> Result<(ImageBlob<'_>, Value), ProxyError> {
         let b = &self.broker;
         let began = b
-            .blob_begin(&self.session, image.media_type, image.bytes.len() as u64, Some(IMAGE_TTL_MS))
+            .blob_begin_for(&self.session, image.media_type, image.bytes.len() as u64, Some(IMAGE_TTL_MS), caller)
             .map_err(|e| map_err(e.code, &e.message))?;
         let upload = began["upload"].as_u64().ok_or_else(|| ProxyError::Upstream("blob_begin gave no upload id".into()))?;
         let total = image.bytes.len();
@@ -194,7 +217,9 @@ impl BrokerSvc {
                 .blob_chunk(&self.session, upload, (offset - piece.len()) as u64, &B64.encode(piece), last)
                 .map_err(|e| map_err(e.code, &e.message))?;
             if last {
-                return r.get("handle").cloned().ok_or_else(|| ProxyError::Upstream("blob upload gave no handle".into()));
+                let handle = r.get("handle").cloned().ok_or_else(|| ProxyError::Upstream("blob upload gave no handle".into()))?;
+                let hash = handle["hash"].as_str().unwrap_or_default().to_string();
+                return Ok((ImageBlob { svc: self, hash }, handle));
             }
         }
         Err(ProxyError::BadRequest("empty image".into()))
@@ -232,18 +257,23 @@ fn map_err(code: ErrorCode, message: &str) -> ProxyError {
 impl SvcBackend for BrokerSvc {
     async fn call(&self, topic: &str, mut body: Value, image: Option<SvcImage>, caller: &str) -> Result<Value, ProxyError> {
         tracing::debug!(target: "infer", %topic, %caller, image = image.is_some(), "svc call");
-        // Held for the whole call; the blob expires on its own (no delete).
+        // Held for the whole call; the blob is released when `_blob` drops.
         let _slot = if image.is_some() { Some(self.image_slot(caller)?) } else { None };
-        if let Some(img) = &image {
-            body["image_blob"] = self.put_image(img)?;
-        }
+        let _blob = match &image {
+            Some(img) => {
+                let (blob, handle) = self.put_image(img, caller)?;
+                body["image_blob"] = handle;
+                Some(blob)
+            }
+            None => None,
+        };
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
         self.waiters.lock().unwrap_or_else(|p| p.into_inner()).insert(id, tx);
         let forget = || {
             self.waiters.lock().unwrap_or_else(|p| p.into_inner()).remove(&id);
         };
-        if let Err(e) = self.broker.call_service(&self.session, id, topic, "infer.v1", body, Some(CALL_TIMEOUT.as_millis() as u64)) {
+        if let Err(e) = self.broker.call_service_for(&self.session, id, topic, "infer.v1", body, Some(CALL_TIMEOUT.as_millis() as u64), caller) {
             forget();
             return Err(map_err(e.code, &e.message));
         }

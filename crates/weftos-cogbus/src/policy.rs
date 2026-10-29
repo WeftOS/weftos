@@ -77,6 +77,15 @@ pub struct BusRequest<'a> {
     pub schema: &'a str,
     /// Project of the live topic, when it is known and not the instance's.
     pub topic_project: Option<&'a str>,
+    /// Who an in-process session acts for (`local:<addr>`, `mesh:<node id>`).
+    /// Only the broker's internal entry points set it (never the wire); the
+    /// broker's gate then asks governance with this as the agent and the
+    /// instance in [`via`](Self::via).
+    pub on_behalf: Option<&'a str>,
+    /// Set by the broker's gate on the request governance sees when
+    /// `on_behalf` was given: the instance that carried the call, whose id
+    /// is no longer the agent (`instance_id` is the real caller then).
+    pub via: Option<&'a str>,
 }
 
 impl<'a> BusRequest<'a> {
@@ -95,7 +104,15 @@ impl<'a> BusRequest<'a> {
             topic: "-",
             schema: "-",
             topic_project: None,
+            on_behalf: None,
+            via: None,
         }
+    }
+
+    /// The same request made on behalf of `caller` (in-process sessions
+    /// only; see [`on_behalf`](Self::on_behalf)).
+    pub fn for_caller(self, caller: &'a str) -> Self {
+        Self { on_behalf: Some(caller), ..self }
     }
 
     /// The same request on `topic` with `schema`.
@@ -186,6 +203,10 @@ pub struct BusActivity {
     pub project: Option<String>,
     /// Topic, kind or `-`.
     pub topic: String,
+    /// The instance that carried the action when `instance` is the real
+    /// caller it acted for (`infer-proxy` for a proxied inference call).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub via: Option<String>,
     /// What happened.
     #[serde(flatten)]
     pub outcome: Outcome,

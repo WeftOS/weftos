@@ -7,7 +7,7 @@ use std::sync::Arc;
 use clawft_kernel::infer_proxy::{ProxyError, SvcBackend, SvcImage};
 use clawft_types::cog_topics::TopicClass;
 use serde_json::{Value, json};
-use weftos_cogbus::{Broker, BusHooks, Event, InstanceSpec, OutputSpec};
+use weftos_cogbus::{Broker, BusHooks, BusPolicy, BusRequest, Event, Grant, InstanceSpec, OutputSpec};
 
 use crate::infer_svc::BrokerSvc;
 use crate::infer_wire_tests::write_cfg;
@@ -173,4 +173,61 @@ async fn one_caller_has_at_most_two_image_calls_in_flight() {
     assert!(svc.image_slot("local:x").is_ok());
     drop(s1);
     assert!(svc.image_slot("mesh:n1").is_ok());
+}
+
+fn png(extra: usize) -> SvcImage {
+    let mut bytes = vec![0x89, b'P', b'N', b'G'];
+    bytes.extend(std::iter::repeat_n(3u8, extra));
+    SvcImage { media_type: "image/png", bytes }
+}
+
+/// Refuses every request whose governed agent is `bad`.
+struct Bar(&'static str);
+
+impl BusPolicy for Bar {
+    fn decide(&self, r: &BusRequest<'_>) -> Result<(), String> {
+        if r.instance_id == self.0 { Err(format!("{} is barred", r.instance_id)) } else { Ok(()) }
+    }
+    fn grants(&self, _: &BusRequest<'_>) -> Vec<Grant> {
+        Vec::new()
+    }
+}
+
+#[tokio::test]
+async fn governance_refuses_the_real_caller_not_only_the_proxy() {
+    let dir = tempfile::tempdir().unwrap();
+    let hooks = BusHooks { policy: Arc::new(Bar("mesh:bad-node")), ..BusHooks::default() };
+    let b = crate::cogbus_serve::broker_in("venq", hooks, dir.path());
+    let svc = BrokerSvc::open(b.clone(), None).unwrap();
+    provider(&b);
+    let body = || json!({"model": "m", "text": "x"});
+    // A text call and an image call (the blob put) by the barred node are
+    // refused; the image never reaches the store.
+    let e = svc.call(TOPIC, body(), None, "mesh:bad-node").await.unwrap_err();
+    assert!(matches!(e, ProxyError::Refused(_)), "{e}");
+    let e = svc.call(TOPIC, body(), Some(png(64)), "mesh:bad-node").await.unwrap_err();
+    assert!(matches!(e, ProxyError::Refused(_)), "{e}");
+    assert_eq!(b.blob_store().unwrap().stats().blobs, 0);
+    // Another node, and a local client, still get through.
+    assert!(svc.call(TOPIC, body(), None, "mesh:good-node").await.is_ok());
+    assert!(svc.call(TOPIC, body(), Some(png(64)), "mesh:good-node").await.is_ok());
+    assert!(svc.call(TOPIC, body(), None, "local:127.0.0.1:5").await.is_ok());
+}
+
+#[tokio::test]
+async fn a_call_leaves_no_image_blob_behind() {
+    let (b, _dir) = broker();
+    let svc = BrokerSvc::open(b.clone(), None).unwrap();
+    provider(&b);
+    let store = b.blob_store().unwrap().clone();
+    for i in 0..5 {
+        let r = svc.call(TOPIC, json!({"model": "m", "text": "x"}), Some(png(1000 + i)), "local:a").await.unwrap();
+        assert!(r["text"].as_str().unwrap().starts_with("image "), "{r}");
+        assert_eq!(store.stats().bytes, 0, "after call {i}");
+    }
+    assert_eq!(store.stats().blobs, 0);
+    // A failed call (nothing serves a topic) frees it too.
+    let e = svc.call("svc.infer/nowhere", json!({"model": "m"}), Some(png(500)), "local:a").await.unwrap_err();
+    assert!(matches!(e, ProxyError::NoInstance(_)), "{e}");
+    assert_eq!(store.stats().bytes, 0);
 }

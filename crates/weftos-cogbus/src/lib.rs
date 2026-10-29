@@ -47,6 +47,8 @@ mod types;
 #[cfg(test)]
 mod tests_broker;
 #[cfg(test)]
+mod tests_onbehalf;
+#[cfg(test)]
 mod tests_policy;
 #[cfg(test)]
 mod tests_proto;

@@ -16,7 +16,7 @@ use clawft_types::cog_topics::{BlobHandle, TopicClass, find_handles};
 use serde_json::{Value, json};
 
 use super::{Broker, bad};
-use crate::audit::now_ms;
+use crate::audit::{check_caller, now_ms};
 use crate::blob::{BlobError, CHUNK};
 use crate::policy::{BusAction, BusRequest};
 use crate::proto::ErrorCode;
@@ -68,6 +68,47 @@ impl Broker {
         size: u64,
         ttl_ms: Option<u64>,
     ) -> Result<Value, BusError> {
+        self.blob_begin_as(s, media_type, size, ttl_ms, None)
+    }
+
+    /// [`blob_begin`](Self::blob_begin) for an in-process session putting on
+    /// behalf of `on_behalf` (`local:<addr>` / `mesh:<node id>`): governance
+    /// is asked about that caller with the session's instance as `via`. Not
+    /// reachable from the socket.
+    pub fn blob_begin_for(
+        &self,
+        s: &Session,
+        media_type: &str,
+        size: u64,
+        ttl_ms: Option<u64>,
+        on_behalf: &str,
+    ) -> Result<Value, BusError> {
+        let topic = format!("blob/{media_type}");
+        check_caller(on_behalf).map_err(|e| refuse(s.instance_id.as_str(), "blob.put", &topic, e))?;
+        self.blob_begin_as(s, media_type, size, ttl_ms, Some(on_behalf))
+    }
+
+    /// Give up this session's hold on blob `hash` (in-process only). The
+    /// bytes go when no other putter still holds them; readers that were only
+    /// handed the handle lose access then. A session that never put (or
+    /// re-put) the bytes is refused. Returns whether the bytes were dropped.
+    pub fn blob_release(&self, s: &Session, hash: &str) -> Result<bool, BusError> {
+        let me = s.instance_id.as_str();
+        let topic = format!("blob/{hash}");
+        let store = self.store(me, "blob.release")?;
+        store
+            .release(me, s.project_id.as_deref(), hash)
+            .map_err(|e| refuse(me, "blob.release", &topic, map(e)))
+    }
+
+    fn blob_begin_as(
+        &self,
+        s: &Session,
+        media_type: &str,
+        size: u64,
+        ttl_ms: Option<u64>,
+        on_behalf: Option<&str>,
+    ) -> Result<Value, BusError> {
         let me = s.instance_id.as_str();
         let topic = format!("blob/{media_type}");
         let no = |e| refuse(me, "blob.put", &topic, e);
@@ -84,12 +125,13 @@ impl Broker {
             }
             (spec.project_id.clone(), spec.cog_id.clone())
         };
-        let req = BusRequest::new(BusAction::BlobPut, me, &cog, project.as_deref());
+        let mut req = BusRequest::new(BusAction::BlobPut, me, &cog, project.as_deref());
+        req.on_behalf = on_behalf;
         self.ext.gate(&req.on(&topic, "blob.v1"))?;
         let upload = store
             .begin(now_ms(), me, project.as_deref(), media_type, size, ttl_ms)
             .map_err(|e| no(map(e)))?;
-        self.ext.noted(s, BusAction::BlobPut, &topic);
+        self.ext.noted_for(s, BusAction::BlobPut, &topic, on_behalf);
         Ok(json!({ "upload": upload, "chunk": CHUNK }))
     }
 

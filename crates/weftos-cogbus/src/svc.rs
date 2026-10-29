@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedSender;
 
 use super::{Broker, bad, now_ns};
-use crate::audit::granted;
+use crate::audit::{check_caller, granted};
 use crate::policy::{BusAction, BusRequest};
 use crate::proto::{CallDelivery, DEFAULT_CALL_MS, ErrorCode, Event, MAX_BODY, MAX_CALL_MS};
 use crate::types::{BusError, Session, refuse, valid_source_id};
@@ -192,6 +192,41 @@ impl Broker {
         body: Value,
         timeout_ms: Option<u64>,
     ) -> Result<(), BusError> {
+        self.call_service_as(s, req_id, topic, schema, body, timeout_ms, None)
+    }
+
+    /// [`call_service`](Self::call_service) for an in-process session that
+    /// calls on behalf of `on_behalf` (`local:<addr>` / `mesh:<node id>`):
+    /// governance is asked about that caller, with the session's instance as
+    /// `via`, and the activity record names the caller. Not reachable from
+    /// the socket: the wire request has no such field.
+    #[allow(clippy::too_many_arguments)]
+    pub fn call_service_for(
+        &self,
+        s: &Session,
+        req_id: u64,
+        topic: &str,
+        schema: &str,
+        body: Value,
+        timeout_ms: Option<u64>,
+        on_behalf: &str,
+    ) -> Result<(), BusError> {
+        let no = |e| refuse(s.instance_id.as_str(), "call", topic, e);
+        check_caller(on_behalf).map_err(no)?;
+        self.call_service_as(s, req_id, topic, schema, body, timeout_ms, Some(on_behalf))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn call_service_as(
+        &self,
+        s: &Session,
+        req_id: u64,
+        topic: &str,
+        schema: &str,
+        body: Value,
+        timeout_ms: Option<u64>,
+        on_behalf: Option<&str>,
+    ) -> Result<(), BusError> {
         let me = s.instance_id.as_str();
         let no = |e| refuse(me, "call", topic, e);
         let (kind, source) = split_topic(topic).ok_or_else(|| {
@@ -223,6 +258,7 @@ impl Broker {
         }
         let mut req = BusRequest::new(BusAction::Call, me, &spec.cog_id, s.project_id.as_deref())
             .on(topic, schema);
+        req.on_behalf = on_behalf;
         if server.project_id != s.project_id {
             let also = self.ext.grants(&req, Some(source));
             if !granted(&also, &server.project_id, source) {
@@ -273,7 +309,7 @@ impl Broker {
             },
         );
         drop(g);
-        self.ext.noted(s, BusAction::Call, topic);
+        self.ext.noted_for(s, BusAction::Call, topic, on_behalf);
         Ok(())
     }
 

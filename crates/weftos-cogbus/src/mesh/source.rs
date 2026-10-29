@@ -363,6 +363,7 @@ impl MeshTopicHub {
                 instance: mesh_principal(peer),
                 project: None,
                 topic: topic.to_string(),
+                via: None,
                 outcome: Outcome::Refused { code, reason, suppressed: 0 },
             });
         }

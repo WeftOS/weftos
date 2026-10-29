@@ -152,12 +152,27 @@ impl Ext {
     }
 
     /// Governance for `req`; a denial comes back as a marked refusal.
+    ///
+    /// A request made `on_behalf` of a caller is put to governance with the
+    /// caller as the agent and the carrying instance in `via`, so a rule or
+    /// a `cogbus-policy.json` deny that names the caller applies. The
+    /// refusal is still marked against the instance that made the call.
     pub(crate) fn gate(&self, req: &BusRequest<'_>) -> Result<(), BusError> {
-        self.hooks.policy.decide(req).map_err(|reason| {
+        let asked = match req.on_behalf {
+            Some(caller) => BusRequest {
+                instance_id: caller,
+                via: Some(req.instance_id),
+                on_behalf: None,
+                ..*req
+            },
+            None => *req,
+        };
+        self.hooks.policy.decide(&asked).map_err(|reason| {
             let short = req.action.as_str().trim_start_matches("cogbus.");
+            let who = req.on_behalf.map(|c| format!(" for {c}")).unwrap_or_default();
             let e = BusError::new(
                 ErrorCode::Denied,
-                format!("{} denied by governance: {reason}", req.action.as_str()),
+                format!("{} denied by governance{who}: {reason}", req.action.as_str()),
             );
             refuse(req.instance_id, short, req.topic, e)
         })
@@ -171,12 +186,25 @@ impl Ext {
         project: Option<&str>,
         topic: &str,
     ) {
+        self.allowed_via(action, instance, None, project, topic);
+    }
+
+    /// Record an allowed action of `instance`, carried by `via`.
+    pub(crate) fn allowed_via(
+        &self,
+        action: BusAction,
+        instance: &str,
+        via: Option<&str>,
+        project: Option<&str>,
+        topic: &str,
+    ) {
         self.hooks.sink.record(&BusActivity {
             ts_ms: now_ms(),
             action: action.as_str().into(),
             instance: instance.into(),
             project: project.map(String::from),
             topic: topic.into(),
+            via: via.map(String::from),
             outcome: Outcome::Ok,
         });
     }
@@ -205,11 +233,33 @@ impl Ext {
         self.allowed(action, &s.instance_id, s.project_id.as_deref(), topic);
     }
 
+    /// Record an allowed action of session `s` made on behalf of `caller`:
+    /// the activity names the caller, with the session's instance in `via`.
+    pub(crate) fn noted_for(&self, s: &Session, action: BusAction, topic: &str, caller: Option<&str>) {
+        match caller {
+            Some(c) => self.allowed_via(action, c, Some(&s.instance_id), s.project_id.as_deref(), topic),
+            None => self.noted(s, action, topic),
+        }
+    }
+
     /// The policy's grants for a subscribe, narrowed to its `source`.
     pub(crate) fn grants(&self, req: &BusRequest<'_>, source: Option<&str>) -> Vec<Grant> {
         let mut g = self.hooks.policy.grants(req);
         g.retain(|g| source.is_none() || g.source.is_none() || g.source.as_deref() == source);
         g
+    }
+}
+
+/// A caller named by an in-process session: `local:<addr>` or
+/// `mesh:<node id>`, printable and short, so it is a sane governance agent id.
+pub(crate) fn check_caller(c: &str) -> Result<(), BusError> {
+    let ok = (c.starts_with("local:") || c.starts_with("mesh:"))
+        && c.len() <= 256
+        && c.chars().all(|ch| !ch.is_control() && !ch.is_whitespace());
+    if ok {
+        Ok(())
+    } else {
+        Err(BusError::new(ErrorCode::BadRequest, "on_behalf is local:<addr> or mesh:<node id>"))
     }
 }
 
@@ -255,6 +305,7 @@ impl Broker {
                 instance: instance.into(),
                 project: project.clone(),
                 topic: topic.into(),
+                via: None,
                 outcome: Outcome::Refused {
                     code,
                     reason: e.message.clone(),
@@ -276,6 +327,7 @@ impl Broker {
             instance: instance.into(),
             project: project.clone(),
             topic: "-".into(),
+            via: None,
             outcome: Outcome::Stopped { refusals },
         };
         self.ext.hooks.sink.record(&a);
@@ -303,6 +355,7 @@ impl Broker {
                     instance: instance.into(),
                     project: project.map(String::from),
                     topic: "-".into(),
+                    via: None,
                     outcome: Outcome::Refused {
                         code: "denied".into(),
                         reason: format!("cogbus.stop denied by governance: {why}"),

@@ -25,15 +25,21 @@ pub struct BusAsk<'a> {
     pub cog_id: &'a str,
     /// Schema id.
     pub schema: &'a str,
+    /// The instance that carried the call when `instance` is the caller it
+    /// acted for.
+    pub via: Option<&'a str>,
 }
 
 /// Evaluate `ask` on `engine`; `Err` is the refusal reason. Not chained
 /// (ADR-122: no chain event per subscription).
 pub fn evaluate(engine: &GovernanceEngine, ask: BusAsk<'_>) -> Result<(), String> {
-    let req = GovernanceRequest::new(ask.instance, ask.action)
+    let mut req = GovernanceRequest::new(ask.instance, ask.action)
         .with_context_entry("tool", ask.topic)
         .with_context_entry("cog_id", ask.cog_id)
         .with_context_entry("schema", ask.schema);
+    if let Some(via) = ask.via {
+        req = req.with_context_entry("via", via);
+    }
     match engine.evaluate(&req).decision {
         GovernanceDecision::Permit | GovernanceDecision::PermitWithWarning(_) => Ok(()),
         GovernanceDecision::Deny(why) => Err(why),

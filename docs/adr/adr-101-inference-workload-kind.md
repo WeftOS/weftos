@@ -226,9 +226,13 @@ Qwen3-VL-4B).
   message only**; an image in an earlier turn is ignored, not refused (the
   history is not sent). The image is put as a broker blob owned by the proxy
   and sent as `image_blob`, because a service call body is capped at 64 KiB.
-  The content store has no delete, so the blob gets the shortest TTL that
-  outlives the call (the 120 s call timeout plus 30 s) and expires on its own;
-  a failed upload drops the proxy's open uploads. `stream: true` is a 400: the
+  The proxy releases the blob when the call ends (success, error or timeout,
+  by a drop guard), so the store holds an image only for the length of its call
+  and the proxy's usage returns to zero. Release is owner-only and in-process
+  (not on the wire): the bytes are dropped when no putter holds them, and
+  bytes that another principal also put survive one release. The TTL (the
+  120 s call timeout plus 30 s) remains as the backstop for a crash mid-call.
+  A failed upload drops the proxy's open uploads. `stream: true` is a 400: the
   service answers once.
 - A full content store, too many open uploads or the broker's pending-call cap
   is a **429 with `Retry-After`** (`ProxyError::Busy`), not a 502 or 503. One
@@ -242,15 +246,21 @@ Qwen3-VL-4B).
   must grant it calls across projects; otherwise the call is refused. The proxy
   has one bus identity, so every svc role must name the same `svc.project`
   (or none); roles that differ are not served (stated in the role's reason).
-  **Limit:** the broker's governance request carries a single principal (the
-  instance) and has no on-behalf-of field, so governance and the bus activity
-  see `infer-proxy`, not the real caller; carrying it needs a change to the
-  broker request type. The originating client is instead written to the
-  proxy's audit trail with every call (`infer.svc.call`: role, caller, topic,
-  image or not, size, outcome, never the prompt), and rejected requests (400,
-  413) are recorded the same way with the caller, status and reason. For
-  peers it is also in the ADR-120 activity log. The per-caller image cap above
-  is what bounds one caller's use of the shared identity.
+  **The real caller is the governed agent (2026-10-29).** The proxy calls the
+  broker through in-process entry points (`call_service_for`,
+  `blob_begin_for`) that carry the client's id (`local:<addr>` or
+  `mesh:<node id>`, the same convention as the mesh topic hub, ADR-122 section
+  14). Governance is asked with that id as the agent and `infer-proxy` as
+  context `via`, so a `cogbus-policy.json` deny with `agents` naming the
+  caller (or a kernel rule on that agent) refuses that caller's call and image
+  put, and the bus activity records the caller with `via: infer-proxy`. The
+  wire protocol has no such field and rejects one, so a cog cannot act as
+  another caller. The originating client is also written to the proxy's audit
+  trail with every call (`infer.svc.call`: role, caller, topic, image or not,
+  size, outcome, never the prompt), and rejected requests (400, 413) are
+  recorded the same way with the caller, status and reason. For peers it is
+  also in the ADR-120 activity log. The per-caller image cap above still
+  bounds one caller's use of the shared identity.
 - Over the mesh the forwarded request is capped at 2 MiB (`max_mesh_request_body`),
   after base64 inflation (4/3) and JSON framing. An image therefore has to be
   about 1.5 MiB or less to cross the mesh; downscale on the client. A local

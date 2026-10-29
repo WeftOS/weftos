@@ -16,7 +16,7 @@ const P1: &str = "01J9ZXW0PRJCTAAAAAAAAAAAAA";
 const P2: &str = "01J9ZXW0PRJCTBBBBBBBBBBBBB";
 
 fn req<'a>(action: BusAction, cog: &'a str, project: Option<&'a str>, topic: &'a str) -> BusRequest<'a> {
-    BusRequest { action, instance_id: "i1", cog_id: cog, project_id: project, topic, schema: "telemetry.v1", topic_project: None }
+    BusRequest { action, instance_id: "i1", cog_id: cog, project_id: project, topic, schema: "telemetry.v1", topic_project: None, on_behalf: None, via: None }
 }
 
 fn write(dir: &Path, v: serde_json::Value) {
@@ -198,6 +198,7 @@ fn the_activity_log_persists_chained_in_the_runtime_dir() {
         instance: "i1".into(),
         project: None,
         topic: "-".into(),
+        via: None,
         outcome: weftos_cogbus::Outcome::Stopped { refusals: 20 },
     });
     drop(a);
@@ -258,4 +259,22 @@ fn a_stop_is_governed_by_kernel_rules_and_deny_entries_and_survives_a_broken_pol
     let p = CogbusPolicy::new(tmp.path(), None);
     assert!(p.decide(&stop()).unwrap_err().contains("leave it"));
     assert_eq!(p.decide(&req(BusAction::Stop, "other", Some(P1), "-")), Ok(()));
+}
+
+#[test]
+fn a_deny_can_name_the_agent_and_a_kernel_rule_sees_the_caller_and_the_carrier() {
+    let tmp = tempfile::tempdir().unwrap();
+    write(tmp.path(), json!({"deny": [{"actions": ["cogbus.call"], "agents": ["mesh:bad"], "reason": "no"}]}));
+    let p = CogbusPolicy::new(tmp.path(), None);
+    // The broker puts the caller in `instance_id` and the proxy in `via`.
+    let mut r = req(BusAction::Call, "proxy", None, "svc.infer/venq");
+    r.instance_id = "mesh:bad";
+    r.via = Some("infer-proxy");
+    assert!(p.decide(&r).unwrap_err().contains("deny[0]"));
+    r.instance_id = "mesh:good";
+    assert_eq!(p.decide(&r), Ok(()));
+    // The proxy itself is not named by the rule.
+    r.instance_id = "infer-proxy";
+    r.via = None;
+    assert_eq!(p.decide(&r), Ok(()));
 }

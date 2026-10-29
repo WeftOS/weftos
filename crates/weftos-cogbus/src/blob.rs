@@ -16,7 +16,10 @@
 //! - **Access.** A blob is readable by its owner, by instances of the
 //!   owner's project (or of the node bucket for a project-less owner), and by
 //!   instances the owner named by passing them its handle ([`BlobStore::grant`]:
-//!   a service call, its reply, a published reading). The broker checks the
+//!   a service call, its reply, a published reading).
+//! - **Release.** [`BlobStore::release`] gives up one put of the bytes; the
+//!   bytes go when no putter holds them any more (a re-put of known bytes is
+//!   another hold), which returns the quota. Only a putter may release. The broker checks the
 //!   token, uid and governance before it gets here.
 //!
 //! Time is passed in (`now_ms`), so tests need no clock.
@@ -107,6 +110,11 @@ struct Meta {
     #[serde(skip)]
     /// `(project, instance)` pairs the owner's handle was passed to.
     readers: HashSet<(Option<String>, String)>,
+    /// `(project, instance, puts)`: who put these bytes and how many times
+    /// (a re-put of known bytes is another hold). Empty in a store written
+    /// before holds existed: the owner then holds once.
+    #[serde(default)]
+    holds: Vec<(Option<String>, String, u32)>,
 }
 
 struct Upload {
@@ -194,7 +202,11 @@ impl BlobStore {
             });
             match alive {
                 Some(m) => {
-                    inner.blobs.insert(hash.to_string(), m.clone());
+                    let mut m = m.clone();
+                    if m.holds.is_empty() {
+                        m.holds.push((m.project_id.clone(), m.owner.clone(), 1));
+                    }
+                    inner.blobs.insert(hash.to_string(), m);
                 }
                 None => {
                     let _ = std::fs::remove_file(&p);
@@ -405,6 +417,10 @@ impl BlobStore {
             if (m.owner == owner && m.project_id == u.project_id) || m.readers.contains(&me) {
                 m.expires_ms = m.expires_ms.max(expires);
             }
+            match m.holds.iter_mut().find(|h| h.0 == me.0 && h.1 == me.1) {
+                Some(h) => h.2 += 1,
+                None => m.holds.push((me.0.clone(), me.1.clone(), 1)),
+            }
             m.readers.insert(me);
             let meta = m.clone();
             std::fs::write(meta_path(&self.dir, &hash), serde_json::to_vec(&meta).unwrap_or_default()).map_err(io)?;
@@ -423,6 +439,7 @@ impl BlobStore {
             owner: u.owner.clone(),
             project_id: u.project_id.clone(),
             readers: HashSet::new(),
+            holds: vec![(u.project_id.clone(), u.owner.clone(), 1)],
         };
         std::fs::write(meta_path(&self.dir, &hash), serde_json::to_vec(&meta).map_err(|e| BlobError::Io(e.to_string()))?)
             .map_err(io)?;
@@ -493,6 +510,38 @@ impl BlobStore {
                 m.readers.insert(to.clone());
             }
         }
+    }
+
+    /// Give up one hold of `owner` (of `project_id`) on blob `hash`. Only a
+    /// principal that put the bytes holds them; anyone else is `Denied`. The
+    /// bytes are dropped when the last hold goes (the quota is returned and
+    /// readers that were only handed the handle lose access); while another
+    /// putter still holds them they stay, and the owner role passes to it.
+    /// Returns whether the bytes were dropped.
+    pub fn release(&self, owner: &str, project_id: Option<&str>, hash: &str) -> Result<bool, BlobError> {
+        let mut g = self.lock();
+        let Some(m) = g.blobs.get_mut(hash) else {
+            return Err(BlobError::NotFound(format!("no blob {hash}")));
+        };
+        let Some(i) = m.holds.iter().position(|h| h.0.as_deref() == project_id && h.1 == owner) else {
+            return Err(BlobError::Denied(format!("blob {hash} is not held by this instance")));
+        };
+        m.holds[i].2 -= 1;
+        if m.holds[i].2 == 0 {
+            m.holds.remove(i);
+        }
+        if m.holds.is_empty() {
+            self.drop_blob(&mut g, hash);
+            return Ok(true);
+        }
+        if !m.holds.iter().any(|h| h.0 == m.project_id && h.1 == m.owner) {
+            let (p, o, _) = m.holds[0].clone();
+            m.project_id = p;
+            m.owner = o;
+        }
+        let meta = m.clone();
+        std::fs::write(meta_path(&self.dir, hash), serde_json::to_vec(&meta).unwrap_or_default()).map_err(io)?;
+        Ok(false)
     }
 
     /// An instance went away: its open uploads are dropped (finished blobs

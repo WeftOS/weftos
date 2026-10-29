@@ -153,6 +153,7 @@ fn demoted(broker: &Broker, r: &Value) {
         instance: reader.into(),
         project: r["project"].as_str().map(String::from),
         topic: r["topic"].as_str().unwrap_or("-").into(),
+        via: None,
         outcome: Outcome::Demoted {
             policy: "drop-oldest".into(),
             reason: format!(

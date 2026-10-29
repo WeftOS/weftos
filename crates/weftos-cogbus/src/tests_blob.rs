@@ -275,3 +275,42 @@ fn an_instance_id_re_placed_under_another_project_is_not_the_old_owner() {
     let again = put(&s, 5, "cam-1", Some(P2), b"private frame", Some(86_400_000)).unwrap();
     assert_eq!(again.expires_ms, h.expires_ms);
 }
+
+#[test]
+fn release_returns_the_quota_and_only_a_putter_may_release() {
+    let tmp = tempfile::tempdir().unwrap();
+    let s = BlobStore::open(tmp.path(), cfg(1000), 0).unwrap();
+    let h = put(&s, 0, "a", Some(P1), &[1u8; 600], None).unwrap();
+    assert!(put(&s, 0, "a2", Some(P1), &[2u8; 600], None).is_err(), "the store is nearly full");
+    // A reader of the project (or one handed the handle) is not a putter.
+    s.grant(std::slice::from_ref(&h.hash), (Some(P1), "a"), (Some(P2), "friend"));
+    assert!(matches!(s.release("friend", Some(P2), &h.hash), Err(BlobError::Denied(_))));
+    assert!(matches!(s.release("mate", Some(P1), &h.hash), Err(BlobError::Denied(_))));
+    assert!(matches!(s.release("a", Some(P2), &h.hash), Err(BlobError::Denied(_))), "same id, other project");
+    assert_eq!(s.stats().bytes, 600);
+    assert!(s.release("a", Some(P1), &h.hash).unwrap());
+    assert_eq!(s.stats().bytes, 0);
+    assert!(matches!(s.get(1, "friend", Some(P2), &h.hash, 0, 10), Err(BlobError::NotFound(_))), "handle readers lose it");
+    assert!(put(&s, 0, "a2", Some(P1), &[2u8; 600], None).is_ok(), "the quota is back");
+    assert!(matches!(s.release("a", Some(P1), &h.hash), Err(BlobError::NotFound(_))));
+}
+
+#[test]
+fn bytes_put_by_two_principals_survive_one_release() {
+    let tmp = tempfile::tempdir().unwrap();
+    let s = BlobStore::open(tmp.path(), BlobConfig::default(), 0).unwrap();
+    let a = put(&s, 0, "a", Some(P1), b"same", None).unwrap();
+    let b = put(&s, 0, "b", Some(P2), b"same", None).unwrap();
+    assert_eq!(a.hash, b.hash);
+    // The first putter lets go: the second still holds and reads them.
+    assert!(!s.release("a", Some(P1), &a.hash).unwrap());
+    assert_eq!(s.stats().bytes, 4);
+    assert_eq!(read_all(&s, 1, "b", Some(P2), &b).unwrap(), b"same");
+    assert!(matches!(s.release("a", Some(P1), &a.hash), Err(BlobError::Denied(_))), "a already let go");
+    // It survives a restart with its holds.
+    drop(s);
+    let s = BlobStore::open(tmp.path(), BlobConfig::default(), 1).unwrap();
+    assert!(matches!(s.release("a", Some(P1), &a.hash), Err(BlobError::Denied(_))));
+    assert!(s.release("b", Some(P2), &a.hash).unwrap());
+    assert_eq!(s.stats().blobs, 0);
+}
