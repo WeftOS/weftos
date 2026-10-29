@@ -235,3 +235,19 @@ Request body, no envelope (the broker stamps caller, call id and clock): `{"meth
 | `tx_config` | `attenuation_db` (at most 0), `centre_hz`, `rate_sps`, all optional | transmit setup; a receive-only service always refuses it |
 
 Reply body on success: `{"ok": true}` plus, by method, `plan` (string), `bands` (u32), `lease` (u64), `secs` (u64) and `uncalibrated` (bool, `tune`: the band is outside the part's rated range). `status` replies with the status document. A failed call fails with a message instead of an `ok: false` body. Reply vectors are the `reply-valid-*.json` files.
+
+### `vision.v1` (service call request and reply)
+
+One schema for the seven vision tasks (`svc.vision.<task>/<node>`); full rules in ADR-125 sections 2-4. No envelope on either side. Request: `task` (`ocr|codes|faces|labels|embed|point|segment`), exactly one of `image` (`blob.v1`, at most 32 MiB) and `image_b64` (at most 40 K chars, with `image_mime`), optional `max_results` 1..=256 and `min_score` 0..=1. Image types: `image/png`, `jpeg`, `webp`, `heic`, `tiff`, `bmp`. Fields of another task are refused.
+
+| `task` | Request fields | Reply fields |
+|--------|----------------|--------------|
+| `ocr` | `languages` (at most 8 tags) | `lines` (at most 1024 of `text`, `confidence`, `bbox`) |
+| `codes` | none | `codes` (at most 256 of `symbology`, `payload`, `bbox`) |
+| `faces` | none | `count` (at least `boxes` length), `boxes` (at most 256 of `bbox`, `score`); no identity of any kind |
+| `labels` | `labels` (1..=64 entries, 1..=64 chars) | `labels` (`label`, `score`, highest first), `taxonomy` optional |
+| `embed` | `embedding_kind` (registered) | `embedding` `{kind, dim, distance, vector` or `vector_blob}` |
+| `point` | `phrase` (required, 1..=256) | `phrase`, `points` (`[x, y]`), `raw` optional |
+| `segment` | `prompt` (required, 1..=256), `mask_format` `png`\|`rle` | `instances` (`bbox`, `score`, `mask` blob) |
+
+Every reply also carries `provider` `{model, version}`, `width`, `height` (1..=65535) and `took_ms`. Geometry is normalised, origin top-left: a box is `[x, y, w, h]` in 0..=1 with `x + w <= 1`, `y + h <= 1`. Embedding kinds: `apple-featureprint-r2` (768, `euclidean`), `siglip2-so400m-p16-384` (1152, `cosine`); a vector is `dim` finite values or a `application/x-weftos-f32le` blob of `dim * 4` bytes. Providers refuse images over 64 MP or 16384 px a side. Reply vectors are the `reply-valid-*.json` / `reply-invalid-*.json` files.

@@ -1,0 +1,14 @@
+{
+  "task": "labels",
+  "image": {
+    "hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "size": 204800,
+    "media_type": "image/webp",
+    "expires_ms": 1792000000000
+  },
+  "labels": [
+    "cat",
+    "dog",
+    "car"
+  ]
+}

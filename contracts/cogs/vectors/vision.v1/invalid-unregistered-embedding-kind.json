@@ -1,0 +1,10 @@
+{
+  "task": "embed",
+  "image": {
+    "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "size": 204800,
+    "media_type": "image/jpeg",
+    "expires_ms": 1792000000000
+  },
+  "embedding_kind": "clip-vit-b32"
+}

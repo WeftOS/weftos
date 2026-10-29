@@ -1,0 +1,42 @@
+{
+  "task": "segment",
+  "provider": {
+    "model": "apple-vision",
+    "version": "macos-26.1"
+  },
+  "width": 4032,
+  "height": 3024,
+  "took_ms": 120,
+  "instances": [
+    {
+      "bbox": [
+        0.1,
+        0.2,
+        0.3,
+        0.4
+      ],
+      "score": 0.95,
+      "mask": {
+        "hash": "1111111111111111111111111111111111111111111111111111111111111111",
+        "size": 5000,
+        "media_type": "image/png",
+        "expires_ms": 1792000000000
+      }
+    },
+    {
+      "bbox": [
+        0.1,
+        0.2,
+        0.3,
+        0.4
+      ],
+      "score": 0.5,
+      "mask": {
+        "hash": "2222222222222222222222222222222222222222222222222222222222222222",
+        "size": 900,
+        "media_type": "application/x-weftos-rle",
+        "expires_ms": 1792000000000
+      }
+    }
+  ]
+}

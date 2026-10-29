@@ -1,0 +1,22 @@
+{
+  "task": "codes",
+  "provider": {
+    "model": "apple-vision",
+    "version": "macos-26.1"
+  },
+  "width": 4032,
+  "height": 3024,
+  "took_ms": 120,
+  "codes": [
+    {
+      "symbology": "qr",
+      "payload": "p",
+      "bbox": [
+        0.8,
+        0.1,
+        0.3,
+        0.1
+      ]
+    }
+  ]
+}

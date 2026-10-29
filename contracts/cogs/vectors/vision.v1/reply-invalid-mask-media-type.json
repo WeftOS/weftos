@@ -1,0 +1,27 @@
+{
+  "task": "segment",
+  "provider": {
+    "model": "apple-vision",
+    "version": "macos-26.1"
+  },
+  "width": 4032,
+  "height": 3024,
+  "took_ms": 120,
+  "instances": [
+    {
+      "bbox": [
+        0.1,
+        0.2,
+        0.3,
+        0.4
+      ],
+      "score": 0.9,
+      "mask": {
+        "hash": "1111111111111111111111111111111111111111111111111111111111111111",
+        "size": 5000,
+        "media_type": "image/jpeg",
+        "expires_ms": 1792000000000
+      }
+    }
+  ]
+}

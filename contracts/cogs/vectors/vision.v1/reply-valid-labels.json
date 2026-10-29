@@ -1,0 +1,25 @@
+{
+  "task": "labels",
+  "provider": {
+    "model": "apple-vision",
+    "version": "macos-26.1"
+  },
+  "width": 4032,
+  "height": 3024,
+  "took_ms": 120,
+  "labels": [
+    {
+      "label": "dog",
+      "score": 0.9
+    },
+    {
+      "label": "animal",
+      "score": 0.9
+    },
+    {
+      "label": "grass",
+      "score": 0.2
+    }
+  ],
+  "taxonomy": "apple-vision-classify-r1"
+}

@@ -1,0 +1,17 @@
+{
+  "task": "point",
+  "provider": {
+    "model": "apple-vision",
+    "version": "macos-26.1"
+  },
+  "width": 4032,
+  "height": 3024,
+  "took_ms": 120,
+  "phrase": "mug",
+  "points": [
+    [
+      1.5,
+      0.5
+    ]
+  ]
+}

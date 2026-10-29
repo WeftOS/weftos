@@ -173,3 +173,84 @@ fn mesh_limits_ranges_and_narrowing() {
     let n = s.narrowed(Some(60), Some(u64::MAX));
     assert_eq!((n.readings_per_min, n.bytes_per_sec), (60, 4 << 20));
 }
+
+#[test]
+fn vision_replies_validate_and_round_trip() {
+    let valid = vector_files("vision.v1", "reply-valid-");
+    assert!(valid.len() >= 9, "one reply per task plus both embeds");
+    for f in valid {
+        let v = load(&f);
+        let back = check_reply("vision.v1", &v).unwrap_or_else(|e| panic!("{}: {e}", f.display()));
+        assert_eq!(back, v, "{} does not round-trip", f.display());
+    }
+    for f in vector_files("vision.v1", "reply-invalid-") {
+        assert!(check_reply("vision.v1", &load(&f)).is_err(), "{} was accepted", f.display());
+    }
+    assert!(check_reply("senml.v1", &json!({})).is_err());
+}
+
+#[test]
+fn vision_embed_vectors_are_full_length() {
+    let v = load(&vectors_root().join("vision.v1/reply-valid-embed-siglip.json"));
+    assert_eq!(v["embedding"]["vector"].as_array().unwrap().len(), 1152);
+    let v = load(&vectors_root().join("vision.v1/reply-valid-embed-apple.json"));
+    assert_eq!(v["embedding"]["vector"].as_array().unwrap().len(), 768);
+}
+
+#[test]
+fn vision_embedding_registry_lookup() {
+    let a = embedding_kind("apple-featureprint-r2").unwrap();
+    assert_eq!((a.dim, a.distance), (768, "euclidean"));
+    let s = embedding_kind("siglip2-so400m-p16-384").unwrap();
+    assert_eq!((s.dim, s.distance), (1152, "cosine"));
+    assert!(embedding_kind("clip").is_none());
+}
+
+fn vimg() -> Value {
+    json!({"hash": "a".repeat(64), "size": 10, "media_type": "image/png", "expires_ms": 5})
+}
+
+#[test]
+fn vision_task_field_mismatches_are_refused() {
+    let img = vimg();
+    let bad = [
+        json!({"task": "ocr", "image": img, "phrase": "x"}),
+        json!({"task": "ocr", "image": img, "prompt": "x"}),
+        json!({"task": "embed", "image": img, "labels": ["a"]}),
+        json!({"task": "labels", "image": img, "languages": ["en"]}),
+        json!({"task": "point", "image": img, "phrase": "x", "prompt": "y"}),
+        json!({"task": "segment", "image": img, "prompt": "x", "embedding_kind": "apple-featureprint-r2"}),
+        json!({"task": "point", "image": img}),
+    ];
+    for m in bad {
+        assert!(check_message("vision.v1", &m).is_err(), "{m}");
+    }
+    let ok = json!({"task": "point", "image": img, "phrase": "x"});
+    assert_eq!(check_message("vision.v1", &ok).unwrap(), ok);
+}
+
+#[test]
+fn vision_bbox_edges() {
+    let reply = |bbox: Value| {
+        json!({"task": "faces", "provider": {"model": "m", "version": "1"}, "width": 1, "height": 1,
+               "took_ms": 0, "count": 1, "boxes": [{"bbox": bbox, "score": 1.0}]})
+    };
+    assert!(check_reply("vision.v1", &reply(json!([0.0, 0.0, 1.0, 1.0]))).is_ok());
+    assert!(check_reply("vision.v1", &reply(json!([0.5, 0.5, 0.5, 0.5]))).is_ok());
+    assert!(check_reply("vision.v1", &reply(json!([0.5, 0.5, 0.5000001, 0.5]))).is_err());
+    assert!(check_reply("vision.v1", &reply(json!([-0.1, 0.0, 0.5, 0.5]))).is_err());
+}
+
+#[test]
+fn vision_request_caps() {
+    let b64 = "A".repeat(VISION_MAX_IMAGE_B64);
+    let at_cap = json!({"task": "codes", "image_b64": b64, "image_mime": "image/png"});
+    assert!(check_message("vision.v1", &at_cap).is_ok());
+    let over = json!({"task": "codes", "image_b64": "A".repeat(VISION_MAX_IMAGE_B64 + 1), "image_mime": "image/png"});
+    assert!(check_message("vision.v1", &over).is_err());
+    let mut big = vimg();
+    big["size"] = json!(VISION_MAX_IMAGE_BLOB);
+    assert!(check_message("vision.v1", &json!({"task": "ocr", "image": big})).is_ok());
+    big["size"] = json!(VISION_MAX_IMAGE_BLOB + 1);
+    assert!(check_message("vision.v1", &json!({"task": "ocr", "image": big})).is_err());
+}

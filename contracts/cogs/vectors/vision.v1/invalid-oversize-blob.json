@@ -1,0 +1,9 @@
+{
+  "task": "ocr",
+  "image": {
+    "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "size": 33554433,
+    "media_type": "image/png",
+    "expires_ms": 1792000000000
+  }
+}

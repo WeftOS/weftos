@@ -1,0 +1,31 @@
+{
+  "task": "faces",
+  "provider": {
+    "model": "apple-vision",
+    "version": "macos-26.1"
+  },
+  "width": 4032,
+  "height": 3024,
+  "took_ms": 120,
+  "count": 1,
+  "boxes": [
+    {
+      "bbox": [
+        0.1,
+        0.2,
+        0.3,
+        0.4
+      ],
+      "score": 0.9
+    },
+    {
+      "bbox": [
+        0.1,
+        0.2,
+        0.3,
+        0.4
+      ],
+      "score": 0.8
+    }
+  ]
+}

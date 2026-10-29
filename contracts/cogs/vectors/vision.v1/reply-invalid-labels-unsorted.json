@@ -1,0 +1,20 @@
+{
+  "task": "labels",
+  "provider": {
+    "model": "apple-vision",
+    "version": "macos-26.1"
+  },
+  "width": 4032,
+  "height": 3024,
+  "took_ms": 120,
+  "labels": [
+    {
+      "label": "a",
+      "score": 0.2
+    },
+    {
+      "label": "b",
+      "score": 0.9
+    }
+  ]
+}

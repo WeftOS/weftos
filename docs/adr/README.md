@@ -1,8 +1,8 @@
 # Architecture Decision Records
 
-This directory contains Architecture Decision Records (ADRs) for the WeftOS + clawft project, following the MADR 3.0 format. ADR-001 to ADR-023 came out of the Sprint 11 Symposium (2026-03-27) and its supporting analysis; later records were written as decisions were taken. The index below lists every `adr-*.md` file in this directory (124 files, ADR-001 to ADR-126).
+This directory contains Architecture Decision Records (ADRs) for the WeftOS + clawft project, following the MADR 3.0 format. ADR-001 to ADR-023 came out of the Sprint 11 Symposium (2026-03-27) and its supporting analysis; later records were written as decisions were taken. The index below lists every `adr-*.md` file in this directory (125 files, ADR-001 to ADR-126).
 
-ADR-123 has no file. The number is reserved by a card on the dashboard board; do not reuse it. ADR-125 is reserved by the vision epic (card 30e898d7) and lands with it. Each Status column cell is copied from the ADR's own header, so the ADR is authoritative if the two ever differ.
+ADR-123 has no file. The number is reserved by a card on the dashboard board; do not reuse it. Each Status column cell is copied from the ADR's own header, so the ADR is authoritative if the two ever differ.
 
 ## ADR Index
 
@@ -131,6 +131,7 @@ ADR-123 has no file. The number is reserved by a card on the dashboard board; do
 | [ADR-121](adr-121-ai-org-versions-and-instances.md) | AI org: definition -> installation -> instance; flat org above per-person chiefs of staff; request/approve/install; versions, version trees and dependencies (local file + CoW ruvector index); nodes report instances on the chain and enforce digests; explain affordance | Accepted | Agents / Org | ADR-112, ADR-114, ADR-120, ADR-022 |
 | [ADR-122](adr-122-cog-data-plane-broker.md) | Cog data plane: `cogbus` broker in the node daemon; topics `<kind>/<source_id>`; readings over a Unix socket, streams in shared-memory rings, blobs by BLAKE3 handle; per-instance tokens; governed publish/subscribe; reader policies; raw data local by default; mesh topics as ADR-120 exposures; ingest bridge becomes a consumer | Accepted | Cogs / Data plane | ADR-099, ADR-100, ADR-114, ADR-117, ADR-120, ADR-031 |
 | [ADR-124](adr-124-node-clock-and-reading-time.md) | Node clock status on `mesh.clock.v1.status`; SenML capture time; host owns chrony | Proposed | Architecture / Sensors | ADR-025 / ADR-100 / ADR-106 |
+| [ADR-125](adr-125-vision-service-contract.md) | Vision service contract: `svc.vision.*` kinds (ocr, codes, faces never identity, labels, embed, point, segment) as cogbus services; one `vision.v1` request/reply schema; images and masks as blob handles; embeddings carry a registered kind and are never compared across kinds; image chat stays on `svc.infer` / ADR-101 | Proposed | Cogs / Data plane | ADR-122, ADR-101, ADR-120, ADR-099 |
 | [ADR-126](adr-126-mesh-object-store.md) | Mesh object store: RustFS on PG as the mesh's S3 storage, run by the daemon; `weftos://` store names for nodes, projects, worktrees and releases mapped to derived buckets; daemon-owned lifecycle and grants mirrored into RustFS IAM; worktree stores overlay the project store; edge and Wasm nodes via the parent daemon; audit and notifications into the activity log; `weftos-store` crate (OpenDAL) | Proposed | Mesh / Storage | ADR-099, ADR-114, ADR-120, ADR-122 |
 
 
@@ -140,7 +141,7 @@ ADR-123 has no file. The number is reserved by a card on the dashboard board; do
 |----------|------|-------------|
 | **Release** | 001, 002, 012, 029, 037, 044 | Versioning, distribution, and build decisions |
 | **GUI** | 003, 004, 005, 006, 007, 013, 016, 038, 055, 067, 073 | UI/UX technology and architecture decisions |
-| **Architecture** | 010, 017, 019, 020, 021, 022, 023, 026, 027, 030, 031, 033, 034, 035, 036, 039, 040, 041, 042, 045, 046, 047, 048, 049, 051, 052, 053, 056, 061, 062, 063, 064, 068, 069, 070, 074, 078, 079, 080, 082, 084, 085, 086, 087, 088, 089, 090, 091, 093, 095, 099, 101, 102, 103, 106, 120, 121, 122, 124 | Core system design decisions |
+| **Architecture** | 010, 017, 019, 020, 021, 022, 023, 026, 027, 030, 031, 033, 034, 035, 036, 039, 040, 041, 042, 045, 046, 047, 048, 049, 051, 052, 053, 056, 061, 062, 063, 064, 068, 069, 070, 074, 078, 079, 080, 082, 084, 085, 086, 087, 088, 089, 090, 091, 093, 095, 099, 101, 102, 103, 106, 120, 121, 122, 124, 125 | Core system design decisions |
 | **Security** | 024, 025, 028, 043, 050, 057, 065, 066, 071, 072, 092, 097 | Cryptography, identity, and chain-integrity decisions |
 | **Performance** | 009, 011, 032, 095 | Algorithmic and optimization decisions |
 | **Integration** | 008, 018, 054, 075, 076, 077, 081, 096, 097, 098 | External system integration decisions |

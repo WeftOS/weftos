@@ -3,7 +3,7 @@
 **Original audit**: 2026-04-02 (ADR Architect Agent), proposed ADR-024 … ADR-047.
 **Resolved**: 2026-06-29 — **every proposal in this audit (024–047) has since been written as a real ADR** in this directory. There are no outstanding proposals from this audit. The numbering held: each proposed number maps 1:1 to its shipped file.
 
-This file is retained only as the historical audit record + the mapping below. New ADRs are numbered from the highest existing file (currently **ADR-124**; ADR-123 is reserved without a file); do not reuse 024–047.
+This file is retained only as the historical audit record + the mapping below. New ADRs are numbered from the highest existing file (currently **ADR-126**; ADR-123 is reserved without a file); do not reuse 024–047.
 
 ## Resolution map (proposal → shipped ADR file)
 

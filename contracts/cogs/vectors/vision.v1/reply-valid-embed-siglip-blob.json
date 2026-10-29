@@ -1,0 +1,21 @@
+{
+  "task": "embed",
+  "provider": {
+    "model": "apple-vision",
+    "version": "macos-26.1"
+  },
+  "width": 4032,
+  "height": 3024,
+  "took_ms": 120,
+  "embedding": {
+    "kind": "siglip2-so400m-p16-384",
+    "dim": 1152,
+    "distance": "cosine",
+    "vector_blob": {
+      "hash": "3333333333333333333333333333333333333333333333333333333333333333",
+      "size": 4608,
+      "media_type": "application/x-weftos-f32le",
+      "expires_ms": 1792000000000
+    }
+  }
+}

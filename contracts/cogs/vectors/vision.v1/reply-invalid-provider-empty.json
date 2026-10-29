@@ -1,0 +1,11 @@
+{
+  "task": "ocr",
+  "provider": {
+    "model": "",
+    "version": "1"
+  },
+  "width": 4032,
+  "height": 3024,
+  "took_ms": 120,
+  "lines": []
+}

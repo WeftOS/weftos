@@ -1,0 +1,11 @@
+{
+  "task": "ocr",
+  "image": {
+    "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "size": 204800,
+    "media_type": "image/jpeg",
+    "expires_ms": 1792000000000
+  },
+  "image_b64": "iVBORw0KGgo=",
+  "image_mime": "image/png"
+}

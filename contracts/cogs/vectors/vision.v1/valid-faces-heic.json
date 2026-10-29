@@ -1,0 +1,10 @@
+{
+  "task": "faces",
+  "image": {
+    "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "size": 204800,
+    "media_type": "image/heic",
+    "expires_ms": 1792000000000
+  },
+  "max_results": 256
+}

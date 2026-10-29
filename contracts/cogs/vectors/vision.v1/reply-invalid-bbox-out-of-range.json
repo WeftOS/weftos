@@ -1,0 +1,22 @@
+{
+  "task": "ocr",
+  "provider": {
+    "model": "apple-vision",
+    "version": "macos-26.1"
+  },
+  "width": 4032,
+  "height": 3024,
+  "took_ms": 120,
+  "lines": [
+    {
+      "text": "x",
+      "confidence": 0.5,
+      "bbox": [
+        0.1,
+        0.2,
+        0.3,
+        1.2
+      ]
+    }
+  ]
+}

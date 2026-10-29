@@ -1,0 +1,9 @@
+{
+  "task": "labels",
+  "image": {
+    "hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "size": 204800,
+    "media_type": "image/tiff",
+    "expires_ms": 1792000000000
+  }
+}

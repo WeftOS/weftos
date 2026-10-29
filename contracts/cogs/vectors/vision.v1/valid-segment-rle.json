@@ -1,0 +1,12 @@
+{
+  "task": "segment",
+  "image": {
+    "hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "size": 33554432,
+    "media_type": "image/png",
+    "expires_ms": 1792000000000
+  },
+  "prompt": "the dog",
+  "mask_format": "rle",
+  "min_score": 1.0
+}

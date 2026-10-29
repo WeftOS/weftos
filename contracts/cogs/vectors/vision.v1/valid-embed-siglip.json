@@ -1,0 +1,10 @@
+{
+  "task": "embed",
+  "image": {
+    "hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "size": 204800,
+    "media_type": "image/bmp",
+    "expires_ms": 1792000000000
+  },
+  "embedding_kind": "siglip2-so400m-p16-384"
+}

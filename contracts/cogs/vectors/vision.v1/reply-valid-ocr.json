@@ -1,0 +1,32 @@
+{
+  "task": "ocr",
+  "provider": {
+    "model": "apple-vision",
+    "version": "macos-26.1"
+  },
+  "width": 4032,
+  "height": 3024,
+  "took_ms": 120,
+  "lines": [
+    {
+      "text": "HELLO WORLD",
+      "confidence": 0.98,
+      "bbox": [
+        0.1,
+        0.2,
+        0.3,
+        0.4
+      ]
+    },
+    {
+      "text": "edge",
+      "confidence": 1.0,
+      "bbox": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ]
+    }
+  ]
+}

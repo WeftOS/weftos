@@ -1,0 +1,22 @@
+{
+  "task": "point",
+  "provider": {
+    "model": "apple-vision",
+    "version": "macos-26.1"
+  },
+  "width": 4032,
+  "height": 3024,
+  "took_ms": 120,
+  "phrase": "the red mug",
+  "points": [
+    [
+      0.25,
+      0.75
+    ],
+    [
+      1.0,
+      0.0
+    ]
+  ],
+  "raw": "<point x=\"25.0\" y=\"75.0\">mug</point>"
+}
