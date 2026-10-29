@@ -74,9 +74,53 @@ So:
   project could hold a shared compile cache across machines. Check the sccache version
   and its WebDAV support before relying on this.
 
+## RustFS as the backing store
+
+RustFS (rustfs.com, github.com/rustfs/rustfs) is an S3-compatible object store
+written in Rust and pitched as a MinIO replacement.
+
+- Apache-2.0.
+- 1.0.0 GA on 2026-09-16; 1.0.4 on 2026-10-25.
+- About 35k stars, active daily.
+- Release builds for Linux x86_64 and aarch64 (gnu and musl), macOS aarch64 and
+  Windows x86_64, so it covers PG, the Venq, the Mac and the Windows laptop.
+
+Its source tree has `iam`, `policy`, `audit`, `notify`, `lock`, `replication`,
+`lifecycle` and `kms` crates, and erasure coding (Reed-Solomon) across drives and
+nodes.
+
+Why it matters here: it closes most of the governance gaps rclone has on its own.
+
+| Need | rclone alone | RustFS behind rclone |
+|---|---|---|
+| Per-identity access | auth proxy, cached login | IAM users or access keys per person, agent or node, plus bucket and prefix policies |
+| Per-operation log | INFO transfer lines | audit crate (MinIO-style audit targets): every S3 request, with the identity |
+| Revoke | restart the serve process, or the daemon proxy | disable the access key. Each S3 request is signed and checked, so it should be refused at the next request. **Test this.** |
+| Watch for changes | polling | `notify` bucket events. Could feed the WeftOS activity log and invalidate rclone caches (`vfs/forget`) |
+| Durability | none | erasure coding, replication |
+
+The shape this suggests:
+- **RustFS on PG** is the canonical store, one bucket per project.
+- **rclone on each machine** uses its S3 backend: `nfsmount` on the Mac, `mount` on
+  Linux, WinFsp on Windows, or `bisync` where a mount isn't wanted.
+- **Credentials:** Terraform writes each machine's access key into its 0600
+  `rclone.conf`.
+- **Governance:** the audit targets and bucket notifications go to the daemon's
+  activity log. A rule hit disables that access key. RustFS stays bound to the tailnet
+  or loopback, and the daemon exposure (ADR-120) provides the on/off switch.
+
+Caveats:
+- It has been GA for six weeks. The vendor says to validate the S3 operations you
+  depend on; it doesn't claim full parity.
+- An object store isn't POSIX. Through an rclone mount, a rename is a copy plus a
+  delete, and there's still no cross-client file locking, so the one-writer-per-path
+  rule stays.
+- Not yet verified: whether audit logs cover every request type, how quickly a disabled
+  key is refused, and the RAM footprint (PG is fine; it doesn't belong on the Venq).
+
 ## Proposed first slice
 
-1. Run `rclone serve webdav` (or `sftp`) on PG over a per-project directory under the
+1. Run RustFS on PG with a bucket per project under the weftos account (or, without RustFS, `rclone serve webdav` over a per-project directory); either way bound to loopback or the tailnet,
    weftos account, bound to loopback, with the daemon as auth proxy. Connections
    arrive over the tailnet through the daemon exposure.
 2. The Mac mounts it with `rclone nfsmount`, and the Venq and Linux with `rclone mount`.
