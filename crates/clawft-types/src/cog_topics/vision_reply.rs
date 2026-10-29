@@ -103,9 +103,9 @@ pub struct VisionReply {
     pub task: VisionTask,
     /// Who answered.
     pub provider: VisionProvider,
-    /// Decoded image width, 1..=65535.
+    /// Decoded image width, 1..=16384 (width * height at most 64,000,000).
     pub width: u32,
-    /// Decoded image height, 1..=65535.
+    /// Decoded image height, 1..=16384.
     pub height: u32,
     /// Provider time, queueing excluded.
     pub took_ms: u32,
