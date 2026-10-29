@@ -89,7 +89,11 @@ scripts/build.sh browser --features browser-opfs  # extra features on top of bro
 # Build everything (native + wasi + browser + ui)
 scripts/build.sh all
 
-# Full phase gate (11 checks — use before committing)
+# Full phase gate (use before committing). Check 0 is the pre-build diff gate
+# (scripts/diff-gate.sh): it runs first and rejects new unsafe, deps, build.rs, net/process/FFI
+# and CI-file changes before anything compiles. Agents must NOT add entries to
+# config/diff-gate-approvals.toml or set DIFF_GATE_OWNER_APPROVED; only the owner does.
+# See docs/development/diff-gate.md.
 scripts/build.sh gate
 
 # Preview what a command would do

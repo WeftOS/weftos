@@ -47,6 +47,8 @@ COGS_ARGS=()
 LAUNCHER_LINUX=false
 # test-pi: everything after the subcommand is passed through to scripts/pi/pi_lane.py
 PI_ARGS=()
+# diff-gate: arguments pass straight through to scripts/diff-gate.sh
+DIFF_GATE_ARGS=()
 # licence-cross: which targets to build (default: armv7 and aarch64)
 LICENCE_TARGETS=()
 
@@ -2665,9 +2667,9 @@ cmd_gate() {
     if [ "${GATE_RELEASE_DRY_RUN:-}" = "1" ] || [ "${GATE_RELEASE_DRY_RUN:-}" = "true" ]; then
         WITH_RELEASE_DRY_RUN=true
     fi
-    local total=23
+    local total=24
     if [ "$WITH_RELEASE_DRY_RUN" = true ]; then
-        total=24
+        total=25
     fi
     header "Phase Gate — ${total} checks"
     local passed=0 failed=0 skipped=0
@@ -2714,6 +2716,17 @@ cmd_gate() {
         fi
         timer_end
     }
+
+    # 0. Pre-build diff gate: reject unsafe, new deps, build scripts, net/process/FFI
+    #    and CI-file changes BEFORE anything compiles. Fails fast so nothing builds on
+    #    a rejected diff. Includes uncommitted work (--worktree).
+    run_gate_check 0 "pre-build diff gate (scripts/diff-gate.sh)" \
+        bash "$ROOT/scripts/diff-gate.sh" --worktree
+    if [ "$failed" -gt 0 ]; then
+        echo ""
+        printf "${RED}Diff gate rejected the diff; skipping all compile checks.${NC}\n"
+        return 1
+    fi
 
     # 1. Workspace tests — nextest (per-test process isolation, kills the
     #    parallel-isolation flake class) + doctests when available, else cargo test
@@ -3118,7 +3131,12 @@ ${BOLD}Commands:${NC}
                   Linux check that another user cannot read or list the
                   weft-licence grant key (runs the licence-cross aarch64
                   binary as real users in the cogs cross image).
-  gate            Run full phase gate (22 checks, includes cargo audit +
+  diff-gate       Pre-build static gate over what the diff adds (unsafe, new deps,
+                  build.rs, proc-macro, net, process, FFI, CI files). Runs first in
+                  \`gate\` and in CI. Extra args pass through (--json, --worktree,
+                  --base REF). See docs/development/diff-gate.md.
+  gate            Run full phase gate (24 checks; check 0 is the pre-build diff gate,
+                  includes cargo audit +
                   npm audit critical/high / WEFT-598 +
                   kernel WASM no-mesh / WEFT-114 + pipeline pass / WEFT-56 +
                   agents/ validate + catalog + leak-check / AD-1 + AD-2).
@@ -3219,6 +3237,11 @@ parse_args() {
     # --help) through to scripts/pi/pi_lane.py.
     if [ "$COMMAND" = "test-pi" ]; then
         PI_ARGS=("$@")
+        return 0
+    fi
+
+    if [ "$COMMAND" = "diff-gate" ]; then
+        DIFF_GATE_ARGS=("$@")
         return 0
     fi
 
@@ -3419,6 +3442,7 @@ main() {
         check-tests)  cmd_check_tests ;;
         check-mesh-no-owned-state) cmd_check_mesh_no_owned_state ;;
         check-daemon-no-mesh-testing) cmd_check_daemon_no_mesh_testing ;;
+        diff-gate)    bash "$ROOT/scripts/diff-gate.sh" ${DIFF_GATE_ARGS[@]+"${DIFF_GATE_ARGS[@]}"} ;;
         clippy)       cmd_clippy ;;
         clippy-onnx)  cargo clippy --all-targets -p clawft-voice-onnx --features onnx -- -D warnings ;;
         audit)        cmd_audit ;;

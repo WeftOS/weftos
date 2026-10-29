@@ -1,0 +1,24 @@
+# Owner-approved exceptions for scripts/diff-gate.sh (the pre-build diff gate).
+#
+# OWNER ONLY. Agents and automated lanes must never add, edit or remove entries here,
+# and must never set DIFF_GATE_OWNER_APPROVED. Any change to this file is itself a
+# finding (rule `approvals-change`) that fails the gate unless the owner sets
+# DIFF_GATE_OWNER_APPROVED=1 locally, or the repository variable
+# DIFF_GATE_OWNER_APPROVED=1 / the PR label `diff-gate-approved` in CI (maintainers only).
+#
+# An approved finding is reported as "approved" and does not fail the gate.
+# Each entry needs all five keys:
+#
+#   [[approval]]
+#   rule        = "unsafe"            # unsafe | new-dep | build-script | proc-macro | net |
+#                                     # process | ffi | ci-workflow
+#   path        = "crates/foo/**"     # glob: * stays inside a directory, ** crosses them
+#   pattern     = "unsafe { libc::"   # substring or regex of the ADDED line; "*" = whole file
+#   reason      = "why this is safe"
+#   approved_by = "owner"
+#
+# Use single quotes for regex patterns so backslashes stay literal:
+#   pattern = 'Command::new\("git"\)'
+#
+# Entries apply to any diff, so keep path and pattern as narrow as the need.
+# There are no entries yet.

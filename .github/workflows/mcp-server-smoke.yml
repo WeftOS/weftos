@@ -31,8 +31,18 @@ permissions:
   contents: read
 
 jobs:
+  # Pre-build static diff gate (scripts/diff-gate.sh): the job below needs it, so no
+  # crate compiles on a rejected diff. Defined in diff-gate.yml.
+  diff-gate:
+    name: Pre-build diff gate
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/diff-gate.yml
+
   smoke:
     name: tools/list + tools/call round-trip
+    needs: diff-gate
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:

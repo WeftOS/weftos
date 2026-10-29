@@ -1,0 +1,64 @@
+name: Diff gate
+
+# Pre-build static gate over what a diff adds (scripts/diff-gate.sh). Reusable: pr-gates.yml,
+# wasm-build.yml and wasm-browser.yml call it as their first job and make every crate-building
+# job `needs:` it, so nothing compiles on a rejected diff. See docs/development/diff-gate.md.
+# The idea comes from ruvnet/rune's static pre-build gates (MIT); no Rune code is used.
+#
+# Owner approval for a change to config/diff-gate-approvals.toml comes from the repository
+# variable DIFF_GATE_OWNER_APPROVED=1 or the PR label `diff-gate-approved`. Both need
+# maintainer rights to set. Agents must never set either.
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  diff-gate:
+    name: Pre-build diff gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run diff gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          OWNER_VAR: ${{ vars.DIFF_GATE_OWNER_APPROVED }}
+        run: |
+          set -euo pipefail
+          script=scripts/diff-gate.sh
+          base=""
+          approved=0
+
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            base="$PR_BASE_SHA"
+            # Run the gate as it is on the base branch so a PR cannot weaken the check that
+            # judges it. Changes to the script are reported by the ci-workflow rule.
+            if git cat-file -e "$PR_BASE_SHA:scripts/diff-gate.sh" 2>/dev/null; then
+              git show "$PR_BASE_SHA:scripts/diff-gate.sh" > "$RUNNER_TEMP/diff-gate.sh"
+              script="$RUNNER_TEMP/diff-gate.sh"
+            fi
+            if gh api "repos/$REPO/issues/$PR_NUMBER/labels" --jq '.[].name' 2>/dev/null | grep -qx 'diff-gate-approved'; then
+              approved=1
+            fi
+          elif [ "$EVENT_NAME" = "push" ] && git cat-file -e "$PUSH_BEFORE^{commit}" 2>/dev/null; then
+            base="$PUSH_BEFORE"
+          fi
+
+          if [ "$OWNER_VAR" = "1" ]; then approved=1; fi
+
+          export DIFF_GATE_BASE="$base"
+          export DIFF_GATE_OWNER_APPROVED="$approved"
+          bash "$script"

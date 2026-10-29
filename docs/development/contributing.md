@@ -88,7 +88,8 @@ The `scripts/build.sh` script provides subcommands for all build workflows:
 scripts/build.sh native          # Release CLI binary
 scripts/build.sh test            # Run all tests
 scripts/build.sh clippy          # Clippy with -D warnings
-scripts/build.sh gate            # Full 11-check phase gate
+scripts/build.sh gate            # Full phase gate; check 0 is the pre-build diff gate
+scripts/build.sh diff-gate       # Just the diff gate (see diff-gate.md)
 scripts/build.sh all             # Build everything (native + WASI + browser + UI)
 ```
 

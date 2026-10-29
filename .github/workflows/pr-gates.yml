@@ -45,11 +45,21 @@ permissions:
   contents: read
 
 jobs:
+  # Pre-build static diff gate (scripts/diff-gate.sh): every job below needs it, so no
+  # crate compiles on a rejected diff. Defined in diff-gate.yml.
+  diff-gate:
+    name: Pre-build diff gate
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/diff-gate.yml
+
   # -------------------------------------------------------------------
   # Lint: clippy with warnings-as-errors
   # -------------------------------------------------------------------
   clippy:
     name: Clippy lint
+    needs: diff-gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -85,6 +95,7 @@ jobs:
   # -------------------------------------------------------------------
   test:
     name: Test suite (${{ matrix.os }})
+    needs: diff-gate
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -149,6 +160,7 @@ jobs:
   # -------------------------------------------------------------------
   wasm-size:
     name: WASM size gate
+    needs: diff-gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -191,6 +203,7 @@ jobs:
   # -------------------------------------------------------------------
   binary-size:
     name: Binary size check
+    needs: diff-gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -251,6 +264,7 @@ jobs:
   # -------------------------------------------------------------------
   wasm-browser-check:
     name: Browser WASM check
+    needs: diff-gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -284,6 +298,7 @@ jobs:
   # -------------------------------------------------------------------
   wasm-host-check:
     name: WASM host crate (clawft-wasm-host)
+    needs: diff-gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -329,6 +344,7 @@ jobs:
   # -------------------------------------------------------------------
   wasm-kernel-no-mesh:
     name: Kernel WASM check (no mesh)
+    needs: diff-gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -373,6 +389,7 @@ jobs:
   # -------------------------------------------------------------------
   browser-wasm-tests:
     name: Browser WASM regression suite
+    needs: diff-gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -474,6 +491,7 @@ jobs:
   # -------------------------------------------------------------------
   browser-wasm-bundle-size:
     name: Browser WASM bundle size
+    needs: diff-gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -512,6 +530,7 @@ jobs:
   # -------------------------------------------------------------------
   voice-feature-check:
     name: Voice feature check
+    needs: diff-gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -560,6 +579,7 @@ jobs:
   # -------------------------------------------------------------------
   experimental-attention:
     name: Experimental attention feature
+    needs: diff-gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -615,6 +635,7 @@ jobs:
   # -------------------------------------------------------------------
   graphify-vision-extract:
     name: graphify vision-extract feature
+    needs: diff-gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -652,6 +673,7 @@ jobs:
   # -------------------------------------------------------------------
   ui-check:
     name: UI lint and type-check
+    needs: diff-gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -703,6 +725,7 @@ jobs:
   # -------------------------------------------------------------------
   cargo-audit:
     name: Cargo audit
+    needs: diff-gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -741,6 +764,7 @@ jobs:
   # -------------------------------------------------------------------
   npm-audit:
     name: npm audit (critical/high)
+    needs: diff-gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -761,6 +785,7 @@ jobs:
   # -------------------------------------------------------------------
   agents-gate:
     name: Agent directory (validate, catalog, leak check)
+    needs: diff-gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -784,6 +809,7 @@ jobs:
   # -------------------------------------------------------------------
   check:
     name: Cargo Check
+    needs: diff-gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -809,6 +835,7 @@ jobs:
   # -------------------------------------------------------------------
   assess:
     name: Assessment
+    needs: diff-gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -844,6 +871,7 @@ jobs:
   # -------------------------------------------------------------------
   cli-reference-drift:
     name: CLI reference drift
+    needs: diff-gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -883,6 +911,7 @@ jobs:
   # -------------------------------------------------------------------
   docs-build:
     name: Docs site build
+    needs: diff-gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -927,7 +956,7 @@ jobs:
   smoke-test:
     name: Integration smoke test
     runs-on: ubuntu-latest
-    needs: [test]
+    needs: [diff-gate, test]
     steps:
       - uses: actions/checkout@v4
 
@@ -1003,6 +1032,7 @@ jobs:
   # -------------------------------------------------------------------
   vscode-panel-build:
     name: VSCode panel build (wasm + tsc)
+    needs: diff-gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -1108,6 +1138,7 @@ jobs:
   # -------------------------------------------------------------------
   weftos-design:
     name: weftos-design audit
+    needs: diff-gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
