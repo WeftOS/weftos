@@ -222,7 +222,7 @@ fn map_err(code: ErrorCode, message: &str) -> ProxyError {
         ErrorCode::TooLarge => ProxyError::TooLarge(message.to_string()),
         ErrorCode::Timeout => ProxyError::Timeout(message.to_string()),
         // The content store is full or the proxy's pending calls are spent:
-        // a retry later works, so 503 + Retry-After, not a bad gateway.
+        // a retry later works, so 429 + Retry-After, not a bad gateway.
         ErrorCode::QuotaExceeded | ErrorCode::Busy => ProxyError::Busy(message.to_string()),
         _ => ProxyError::Upstream(message.to_string()),
     }

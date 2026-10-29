@@ -146,8 +146,8 @@ fn only_the_last_user_message_images_count() {
 }
 
 #[test]
-fn busy_is_a_503() {
-    assert_eq!(ProxyError::Busy("x".into()).status(), 503);
+fn busy_is_a_429() {
+    assert_eq!(ProxyError::Busy("x".into()).status(), 429);
 }
 
 #[test]

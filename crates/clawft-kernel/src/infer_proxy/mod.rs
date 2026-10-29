@@ -49,6 +49,8 @@ mod tests_mesh_serve;
 mod tests_proxy;
 #[cfg(test)]
 mod tests_svc;
+#[cfg(test)]
+mod tests_advert;
 
 #[cfg(feature = "exochain")]
 pub use types::ChainAudit;

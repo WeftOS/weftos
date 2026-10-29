@@ -194,6 +194,7 @@ impl InferHub {
         }
         let Some(table) = self.table() else { return };
         self.flush_withdrawals().await;
+        table.prune_expired();
         for ad in table.advertisements(now_secs) {
             let Some(role) = ad.name.strip_prefix(super::table::SERVICE_PREFIX) else {
                 continue;

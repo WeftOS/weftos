@@ -155,7 +155,7 @@ async fn a_full_content_store_is_busy_not_a_bad_gateway() {
     let img = SvcImage { media_type: "image/png", bytes: png.clone() };
     let e = svc.call(TOPIC, json!({"model": "m", "text": "x"}), Some(img.clone()), "local:a").await.unwrap_err();
     assert!(matches!(e, ProxyError::Busy(_)), "{e}");
-    assert_eq!(e.status(), 503);
+    assert_eq!(e.status(), 429);
     // The failed put dropped the proxy's open uploads: the next call works.
     let r = svc.call(TOPIC, json!({"model": "m", "text": "x"}), Some(img), "local:a").await.unwrap();
     assert_eq!(r["text"], format!("image {} bytes, read {}", png.len(), png.len()));

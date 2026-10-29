@@ -141,7 +141,7 @@ pub enum ProxyError {
     #[error("no instance serves role '{0}'")]
     NoInstance(String),
     /// A local limit is full (content store quota, open uploads, concurrent
-    /// image calls): retry later. 503 with `Retry-After`.
+    /// image calls): retry later. 429 with `Retry-After`.
     #[error("busy: {0}")]
     Busy(String),
     /// The upstream failed or answered garbage.
@@ -177,7 +177,8 @@ impl ProxyError {
             Self::MethodNotAllowed => 405,
             Self::TooLarge(_) => 413,
             Self::Unsupported(_) => 501,
-            Self::NoInstance(_) | Self::Busy(_) => 503,
+            Self::NoInstance(_) => 503,
+            Self::Busy(_) => 429,
             Self::Upstream(_) | Self::Mesh(_) => 502,
             Self::Timeout(_) => 504,
             Self::NotLoopback(_) | Self::Occupied(_) | Self::Io(_) => 500,

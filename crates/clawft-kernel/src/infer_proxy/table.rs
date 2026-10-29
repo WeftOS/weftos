@@ -92,6 +92,9 @@ pub struct PlacementTable {
     inner: RwLock<Inner>,
     gen_tx: watch::Sender<u64>,
     advert_ttl: Duration,
+    /// Receive-time clock for adverts; replaceable so expiry is testable
+    /// without sleeping.
+    clock: Arc<dyn Fn() -> Instant + Send + Sync>,
     /// ADR-120: the exposure registry the `infer.<role>` roles live in.
     exposures: Arc<ExposureRegistry>,
     /// The caller of cogbus-served roles; absent until the broker is up.
@@ -121,6 +124,7 @@ impl PlacementTable {
             inner: RwLock::new(Inner::default()),
             gen_tx: watch::channel(0).0,
             advert_ttl: DEFAULT_ADVERT_TTL,
+            clock: Arc::new(Instant::now),
             svc_backend: RwLock::new(None),
         }
     }
@@ -139,6 +143,36 @@ impl PlacementTable {
     pub fn with_advert_ttl(mut self, ttl: Duration) -> Self {
         self.advert_ttl = ttl;
         self
+    }
+
+    /// Replace the receive-time clock (tests drive expiry with a fake one).
+    pub fn with_clock(mut self, clock: Arc<dyn Fn() -> Instant + Send + Sync>) -> Self {
+        self.clock = clock;
+        self
+    }
+
+    fn age(&self, e: &RemoteEntry) -> Duration {
+        (self.clock)().saturating_duration_since(e.received)
+    }
+
+    /// Drop received adverts that were not refreshed within the TTL, so a
+    /// dead instance cannot linger. Returns how many were removed.
+    pub fn prune_expired(&self) -> usize {
+        let n = {
+            let mut g = self.inner.write().unwrap();
+            let mut n = 0;
+            for per in g.remote.values_mut() {
+                let before = per.len();
+                per.retain(|_, e| self.age(e) <= self.advert_ttl);
+                n += before - per.len();
+            }
+            g.remote.retain(|_, per| !per.is_empty());
+            n
+        };
+        if n > 0 {
+            self.bump();
+        }
+        n
     }
 
     /// Allow or stop allowing `node` to serve `role` to this node. This is
@@ -254,11 +288,19 @@ impl PlacementTable {
 
     /// Stop serving `role` locally.
     pub fn deregister_local(&self, role: &str) {
-        let had = self.inner.write().unwrap().local.remove(role).is_some();
+        let (had, exposed) = {
+            let mut g = self.inner.write().unwrap();
+            (g.local.remove(role).is_some(), g.exposed.contains(role))
+        };
         if had {
             self.bump();
         }
         self.sync_exposure(role);
+        // Peers hold the advert of an instance that just stopped serving:
+        // tell them now instead of letting them route to it until the TTL.
+        if had && exposed {
+            self.exposures.queue_withdrawal(&Self::exposure_id(role));
+        }
     }
 
     /// Re-evaluate `role` against its adapter instance: reconcile (a dead
@@ -391,18 +433,24 @@ impl PlacementTable {
             return refuse("node is not allowed to serve this role");
         }
         let per = g.remote.entry(role.to_string()).or_default();
+        // Expired neighbours of this role go now rather than lingering.
+        let before = per.len();
+        per.retain(|_, e| (self.clock)().saturating_duration_since(e.received) <= self.advert_ttl);
+        let pruned = per.len() != before;
         let changed = per.get(sender).is_none_or(|e| {
-            e.ad.metadata != ad.metadata || e.ad.methods != ad.methods || e.received.elapsed() > self.advert_ttl
+            e.ad.metadata != ad.metadata || e.ad.methods != ad.methods || self.age(e) > self.advert_ttl
         });
+        // One entry per (role, node): a newer advert replaces the older one,
+        // so a restarted or moved instance supersedes what it advertised before.
         per.insert(
             sender.to_string(),
             RemoteEntry {
                 ad: ad.clone(),
-                received: Instant::now(),
+                received: (self.clock)(),
             },
         );
         drop(g);
-        if changed {
+        if changed || pruned {
             self.bump();
         }
         true
@@ -445,11 +493,12 @@ impl PlacementTable {
         g.remote
             .get(role)?
             .iter()
-            .find(|(n, e)| {
-                allowed.contains(*n)
-                    && e.received.elapsed() <= self.advert_ttl
-                    && dialer.is_admitted(n)
+            .filter(|(n, e)| {
+                allowed.contains(*n) && self.age(e) <= self.advert_ttl && dialer.is_admitted(n)
             })
+            // The most recently heard node wins, so a placement that moved
+            // to another node supersedes the one that went quiet.
+            .max_by_key(|(_, e)| e.received)
             .map(|(n, _)| Target::Remote { node_id: n.clone() })
     }
 
