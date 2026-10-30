@@ -35,6 +35,9 @@ Staging area for changes after the 0.8.4 release.
   `gen-config-reference`); READMEs for the 40 published crates.
 
 ### Changed
+- WeftOS uses upstream `rvf-crypto` 0.3 and `rvf-wire` 0.2 in place of the `weftos-rvf-crypto` /
+  `weftos-rvf-wire` forks (ADR-129, superseding ADR-029), and the workspace is on rvf-runtime 0.5 and
+  rvf-types 0.3 (ADR-128 T0).
 - The Homebrew tap publish pushes with a write deploy key (`HOMEBREW_TAP_DEPLOY_KEY`) instead of a
   GitHub App token, and skips with a notice when the key is absent; the org profile refresh no
   longer needs a cross-repo dispatch.
@@ -42,6 +45,16 @@ Staging area for changes after the 0.8.4 release.
 
 ### Removed
 - The generated rustdoc pages under the docs site (`/api/`); API docs are on docs.rs.
+
+### Security
+- **Real ML-DSA-65 for ExoChain signatures (ADR-129, Proposed).** The ML-DSA-65 half of the chain's
+  dual signature was an HMAC placeholder whose verify key was its signing key. The new
+  `weftos-pq-sign` crate signs with FIPS 204 ML-DSA-65, its verifying key cannot sign, and dual
+  signatures carry a suite tag. Checkpoints written from now on hold a real ML-DSA-65 footer; older
+  files and signatures still verify on Ed25519 and are reported as legacy, never as post-quantum.
+  Each node generates its ML-DSA-65 key beside its Ed25519 key (`user.mldsa65`, mode 0600) on the
+  first boot after the upgrade. `ChainManager::verify_rvf_dual_signature` and
+  `verify_dual_signature` return a `Verdict` instead of a `bool`.
 
 ## [0.8.4] - 2026-10-27
 

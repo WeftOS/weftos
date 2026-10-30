@@ -3,6 +3,7 @@
 **Date**: 2026-04-03
 **Status**: Accepted
 - **Updated**: 2026-10-30. **Finding: the ML-DSA-65 half is not post-quantum today.** In `weftos-rvf-crypto` 0.3.0 (`src/dual_sign.rs`), `MlDsa65Key` is an HMAC placeholder whose signing key equals its verify key (also noted at `crates/clawft-kernel/src/chain.rs:2766`). Anyone holding the "verify key" can forge the ML-DSA half. Ed25519 still gives classical authenticity. Fix tracked on the board (real FIPS 204 ML-DSA-65, for example via `pqcrypto-mldsa`, which ADR-128's T4 spike used).
+- **Updated**: 2026-10-30. **Fixed by [ADR-129](adr-129-upstream-rvf-and-real-ml-dsa.md)** (Proposed): real ML-DSA-65 in `crates/weftos-pq-sign`, a versioned suite tag on chain signatures, and legacy placeholder signatures accepted on Ed25519 only and never reported as post-quantum. The `pqcrypto-dilithium` and `weftos-rvf-crypto` `DualSignature` references below describe the old design.
 **Deciders**: K2 Symposium (D11), K5 Symposium Security Panel (D9, S5)
 **Depends-On**: ADR-025 (Ed25519 Node Identity), ADR-029 (weftos-rvf-crypto Fork Strategy)
 **Note (2026-04-28, WEFT-140)**: ADR-028 was previously shared with

@@ -16,8 +16,8 @@ programs (cogs) on the machines that have the hardware for them, with every
 decision recorded. The current release is v0.8.4.
 
 <!-- facts:start -->
-- 65 workspace crates, 40 of them published to crates.io
-- 127 architecture decision records
+- 66 workspace crates, 41 of them published to crates.io
+- 128 architecture decision records
 - 29 cogs in the Cogs repository, and 795 modules in the hardware catalog
 <!-- facts:end -->
 

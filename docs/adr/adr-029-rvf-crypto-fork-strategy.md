@@ -1,7 +1,7 @@
 # ADR-029: weftos-rvf-crypto as Published Fork of rvf-crypto
 
 **Date**: 2026-04-03
-**Status**: Accepted
+**Status**: Superseded by [ADR-129](adr-129-upstream-rvf-and-real-ml-dsa.md) (2026-10-30). The forks were crates.io-only renames of older upstream sources; the wire fork had no WeftOS change and the crypto fork's ML-DSA-65 was an HMAC placeholder. WeftOS now uses upstream `rvf-crypto` / `rvf-wire` and `crates/weftos-pq-sign`.
 **Deciders**: Architecture review, Sprint 14 (informed by ADR-012 context, K2 D11)
 **Depends-On**: ADR-012 (Inline sha3 to Eliminate rvf-crypto Path Dependency)
 

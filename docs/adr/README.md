@@ -1,6 +1,6 @@
 # Architecture Decision Records
 
-This directory contains Architecture Decision Records (ADRs) for the WeftOS + clawft project, following the MADR 3.0 format. ADR-001 to ADR-023 came out of the Sprint 11 Symposium (2026-03-27) and its supporting analysis; later records were written as decisions were taken. The index below lists every `adr-*.md` file in this directory (127 files, ADR-001 to ADR-128).
+This directory contains Architecture Decision Records (ADRs) for the WeftOS + clawft project, following the MADR 3.0 format. ADR-001 to ADR-023 came out of the Sprint 11 Symposium (2026-03-27) and its supporting analysis; later records were written as decisions were taken. The index below lists every `adr-*.md` file in this directory (128 files, ADR-001 to ADR-129).
 
 ADR-123 has no file. The number is reserved by a card on the dashboard board; do not reuse it. Each Status column cell is copied from the ADR's own header, so the ADR is authoritative if the two ever differ.
 
@@ -36,7 +36,7 @@ ADR-123 has no file. The number is reserved by a card on the dashboard board; do
 | [ADR-026](adr-026-quic-primary-transport.md) | QUIC as primary transport | Accepted | Architecture | K6 |
 | [ADR-027](adr-027-selective-libp2p.md) | Selective libp2p adoption | Accepted | Architecture | K6 |
 | [ADR-028](adr-028-post-quantum-dual-signing.md) | Mandatory dual signing (Ed25519 + ML-DSA-65) | Accepted | Security | K2 / K5 Symposium |
-| [ADR-029](adr-029-rvf-crypto-fork-strategy.md) | weftos-rvf-crypto fork strategy | Accepted | Release | K2 Symposium |
+| [ADR-029](adr-029-rvf-crypto-fork-strategy.md) | weftos-rvf-crypto fork strategy | Superseded by ADR-129 | Release | K2 Symposium |
 | [ADR-030](adr-030-cbor-exochain-codec.md) | CBOR exochain codec | Accepted | Architecture | K6 |
 | [ADR-031](adr-031-rvf-wire-mesh-format.md) | RVF wire mesh format (JSON shipped; RVF deferred WEFT-683) | Accepted | Architecture | K6 |
 | [ADR-032](adr-032-dashmap-concurrency.md) | DashMap for concurrent registry | Accepted | Performance | K2 |
@@ -135,6 +135,7 @@ ADR-123 has no file. The number is reserved by a card on the dashboard board; do
 | [ADR-126](adr-126-mesh-object-store.md) | Mesh object store: RustFS on PG as the mesh's S3 storage, run by the daemon; `weftos://` store names for nodes, projects, worktrees and releases mapped to derived buckets; daemon-owned lifecycle and grants mirrored into RustFS IAM; worktree stores overlay the project store; edge and Wasm nodes via the parent daemon; audit and notifications into the activity log; `weftos-store` crate (OpenDAL) | Proposed | Mesh / Storage | ADR-099, ADR-114, ADR-120, ADR-122 |
 | [ADR-127](adr-127-weftos-orchestrated-ci.md) | WeftOS-orchestrated CI: dev on the Mac with quick affected checks only; CI authoritative; ephemeral rootless-podman GitHub runners on a CI host as a `ci-runner` workload kind with per-class pools; RustFS-backed sccache, cargo and node caches with per-job STS; diff gate first; target-* push triggers; results routed to lanes and the board; client pools under the client user | Proposed | CI / Placement | ADR-099, ADR-120, ADR-126 |
 | [ADR-128](adr-128-rvf-layered-trees.md) | RVF layered trees: tree metadata and agent memory as copy-on-write RVF lineages composed per CI job; data chunks in RustFS; layers published over the substrate under ADR-057; one writer per tip; git kept, run by an integrator role; merge order from the CoW DAG; gated on proofs T1-T6 | Proposed | Storage / CI / Agents | ADR-017, ADR-057, ADR-089, ADR-121, ADR-126, ADR-127 |
+| [ADR-129](adr-129-upstream-rvf-and-real-ml-dsa.md) | Upstream rvf-crypto / rvf-wire replace the weftos- forks; real ML-DSA-65 (FIPS 204) in `weftos-pq-sign`; versioned dual-signature suite; legacy HMAC-placeholder chain signatures verified on Ed25519 only and never counted as post-quantum; rvf-runtime 0.5 / rvf-types 0.3 workspace-wide | Proposed | Security / Release | ADR-028, ADR-029, ADR-128 |
 
 
 ## Categories
