@@ -1786,4 +1786,27 @@ mod tests {
             std::path::PathBuf::from("models/voice/wake/hey-weft.rpw")
         );
     }
+
+    #[test]
+    fn tts_provider_predicates_partition_known_values() {
+        use tts_providers::*;
+        // (value, local, browser, cloud)
+        let cases = [
+            (LOCAL, true, false, false),
+            (LOCAL_STUB, true, false, false),
+            (BROWSER, false, true, false),
+            (OPENAI, false, false, true),
+            (ELEVENLABS, false, false, true),
+            ("nope", false, false, false),
+            ("", false, false, false),
+            ("LOCAL", false, false, false),
+        ];
+        for (value, local, browser, cloud) in cases {
+            assert_eq!(is_local_tts_provider(value), local, "local: {value:?}");
+            assert_eq!(is_browser_tts_provider(value), browser, "browser: {value:?}");
+            assert_eq!(is_cloud_tts_provider(value), cloud, "cloud: {value:?}");
+            let hits = [local, browser, cloud].iter().filter(|b| **b).count();
+            assert!(hits <= 1, "predicate sets overlap for {value:?}");
+        }
+    }
 }
