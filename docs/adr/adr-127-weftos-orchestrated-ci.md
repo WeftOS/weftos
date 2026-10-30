@@ -1,6 +1,7 @@
 # ADR-127: WeftOS-orchestrated CI: ephemeral container runners on a CI host, with RustFS-backed caches
 
 - **Status**: Proposed (2026-10-29; owner direction, see Context)
+- **Updated**: 2026-10-29 (§3's caches and per-job environments are re-expressed as composed RVF layer stacks in ADR-128)
 - **Deciders**: owner
 - **Prior decisions**: the decision store, consulted on 2026-10-29, holds only ADR-126 (the mesh object store) on this topic. No earlier ADR covers CI runners.
 - **Builds on**:
