@@ -21,6 +21,17 @@ enables `cluster`, `ecc`, `exochain`, `mesh` and `placement` by default.
 | `cluster` | Distributed coordination: Raft consensus, sharding, replication | ruvector-cluster, ruvector-raft, ruvector-replication, parking_lot | Multi-node consensus and data replication |
 | `tilezero` | TileZero governance gate | cognitum-gate-tilezero (implies `exochain`) | Advanced governance policies |
 | `containers` | Container runtime integration markers | (none extra) | Docker/Podman orchestration hooks |
+| `quic` | QUIC (quinn) mesh transport; heavy rustls/ring tree, on by default (opt out with `--no-default-features --features mesh`) | (implies `mesh`) quinn, rcgen, rustls | Multi-node clusters over QUIC |
+| `mesh-rvf` | Experimental RVF `KernelMessage` IPC encoding (`MeshIpcEncoding::Rvf`); encode/decode return `UnsupportedEncoding` for now, default stays JSON | (implies `mesh`) | Experimenting with the RVF IPC path; not for production |
+| `workload-runtime` | `WorkloadRuntime` adapters: native process, container engines, Cognitum Seed API | (implies `native`, `ecc`, `exochain`) reqwest, rustls, serde_yaml | Placing workloads on nodes; on by default |
+| `quantum-pasqal` | Experimental Pasqal quantum backend; interface only, stubs return `NotImplemented` | (implies `ecc`) reqwest | Quantum backend development |
+| `quantum-braket` | Experimental Amazon Braket quantum backend; interface only, stubs return `NotImplemented` | (implies `ecc`) reqwest | Quantum backend development |
+| `diskann` | DiskANN vector backend | (implies `ecc`) ruvector-diskann | Large vector indexes beyond RAM |
+| `rabitq-bench` | RaBitQ runner in `benches/vector_backend_bench.rs` (bench only) | ruvector-rabitq | Running the vector backend benchmark |
+| `treesitter` | Tree-sitter code analysis plugin (Rust, TypeScript) | clawft-plugin-treesitter | Source code analysis |
+| `sensor` | Sensor feature marker | (none extra) | Sensor integrations |
+| `http-api` | HTTP API feature marker | (none extra) | HTTP API surface |
+| `test-support` | Test-only hooks for other crates' integration tests (debug builds only) | (none extra) | Integration tests in other crates |
 
 ## Dependency Graph
 
