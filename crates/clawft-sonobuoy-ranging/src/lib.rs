@@ -258,6 +258,78 @@ mod tests {
         assert!((back.fill_ratio() - 1.0).abs() < 1e-12);
     }
 
+    fn ids(n: usize) -> Vec<BuoyId> {
+        (0..n).map(|i| BuoyId::new(format!("b{i}"))).collect()
+    }
+
+    #[test]
+    fn matrix_empty_diagonal_and_len() {
+        let m = DistanceMatrix::empty(ids(3));
+        assert_eq!(m.len(), 3);
+        assert!(!m.is_empty());
+        assert_eq!(m.ranges_m.len(), 9);
+        for i in 0..3 {
+            for j in 0..3 {
+                let expected = if i == j { Some(0.0) } else { None };
+                assert_eq!(m.ranges_m[i * 3 + j], expected);
+            }
+        }
+        let e = DistanceMatrix::empty(Vec::new());
+        assert_eq!(e.len(), 0);
+        assert!(e.is_empty());
+    }
+
+    #[test]
+    fn matrix_set_asymmetric_fills_one_cell() {
+        let b = ids(2);
+        let mut m = DistanceMatrix::empty(b.clone());
+        assert!(m.set(&b[0], &b[1], 42.0, false));
+        assert_eq!(m.get(&b[0], &b[1]), Some(42.0));
+        assert_eq!(m.get(&b[1], &b[0]), None);
+    }
+
+    #[test]
+    fn matrix_set_symmetric_fills_both_cells() {
+        let b = ids(2);
+        let mut m = DistanceMatrix::empty(b.clone());
+        assert!(m.set(&b[0], &b[1], 42.0, true));
+        assert_eq!(m.get(&b[0], &b[1]), Some(42.0));
+        assert_eq!(m.get(&b[1], &b[0]), Some(42.0));
+    }
+
+    #[test]
+    fn matrix_set_unknown_id_changes_nothing() {
+        let b = ids(2);
+        let mut m = DistanceMatrix::empty(b.clone());
+        let before = m.ranges_m.clone();
+        let unknown = BuoyId::new("nope");
+        assert!(!m.set(&unknown, &b[1], 1.0, true));
+        assert!(!m.set(&b[0], &unknown, 1.0, true));
+        assert_eq!(m.ranges_m, before);
+    }
+
+    #[test]
+    fn matrix_get_unknown_id_is_none() {
+        let b = ids(2);
+        let m = DistanceMatrix::empty(b.clone());
+        let unknown = BuoyId::new("nope");
+        assert_eq!(m.get(&unknown, &b[0]), None);
+        assert_eq!(m.get(&b[0], &unknown), None);
+        assert_eq!(m.get(&unknown, &unknown), None);
+    }
+
+    #[test]
+    fn matrix_fill_ratio_cases() {
+        assert!((DistanceMatrix::empty(Vec::new()).fill_ratio() - 1.0).abs() < 1e-12);
+        assert!((DistanceMatrix::empty(ids(1)).fill_ratio() - 1.0).abs() < 1e-12);
+
+        let b = ids(3);
+        let mut m = DistanceMatrix::empty(b.clone());
+        assert!(m.fill_ratio().abs() < 1e-12);
+        assert!(m.set(&b[0], &b[1], 10.0, true));
+        assert!((m.fill_ratio() - 1.0 / 3.0).abs() < 1e-12);
+    }
+
     #[test]
     fn version_nonempty() {
         assert!(!VERSION.is_empty());
