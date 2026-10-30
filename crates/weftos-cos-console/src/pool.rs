@@ -100,6 +100,54 @@ mod tests {
     }
 
     #[test]
+    fn alloc_tracks_live_and_total() {
+        let mut p = LinePool::new(0..8);
+        let a = p.alloc();
+        let b = p.alloc();
+        assert_eq!(p.live_count(), 2);
+        assert!(p.is_live(a));
+        assert!(p.is_live(b));
+        assert_eq!(p.allocated_total(), 2);
+    }
+
+    #[test]
+    fn free_releases_one_id() {
+        let mut p = LinePool::new(0..8);
+        let a = p.alloc();
+        let b = p.alloc();
+        p.free(a);
+        assert!(!p.is_live(a));
+        assert!(p.is_live(b));
+        assert_eq!(p.live_count(), 1);
+        // A double free is ignored.
+        p.free(a);
+        assert_eq!(p.live_count(), 1);
+    }
+
+    #[test]
+    fn clear_empties_live_but_keeps_total() {
+        let mut p = LinePool::new(0..8);
+        let a = p.alloc();
+        p.alloc();
+        p.clear();
+        assert_eq!(p.live_count(), 0);
+        assert!(!p.is_live(a));
+        assert_eq!(p.allocated_total(), 2);
+    }
+
+    #[test]
+    fn range_returns_constructor_range() {
+        let p = LinePool::new(3..9);
+        assert_eq!(p.range(), &(3..9));
+    }
+
+    #[test]
+    #[should_panic(expected = "must not be empty")]
+    fn empty_range_panics() {
+        let _ = LinePool::new(5..5);
+    }
+
+    #[test]
     #[should_panic(expected = "exhausted")]
     fn exhaustion_panics() {
         let mut p = LinePool::new(0..2);
