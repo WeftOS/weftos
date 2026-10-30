@@ -644,4 +644,13 @@ mod tests {
         assert!(topics.iter().any(|t| t.contains("consensus")));
         assert!(topics.iter().any(|t| t.contains("control")));
     }
+
+    #[test]
+    fn latent_from_slice_checks_length() {
+        let ok = [0.5f32; LATENT_DIM];
+        assert_eq!(latent_from_slice(&ok).unwrap(), ok);
+        assert!(latent_from_slice(&[0.5f32; LATENT_DIM - 1]).is_none());
+        assert!(latent_from_slice(&[0.5f32; LATENT_DIM + 1]).is_none());
+        assert!(latent_from_slice(&[]).is_none());
+    }
 }
