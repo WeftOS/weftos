@@ -75,8 +75,8 @@ pub enum WorkloadPlaceCmd {
         .args(["package", "signer", "hash"])
 ))]
 pub struct RevokeArgs {
-    /// Package id (the signed statement's BLAKE3, shown by `weaver cog
-    /// verify`, or a catalog name for `workload install`).
+    /// Package id (the signed statement's BLAKE3, shown by `weaver
+    /// workload verify`, or a catalog name for `workload install`).
     #[arg(long)]
     pub package: Option<String>,
     /// Signer public key (64 hex): revokes every package that key signed.
