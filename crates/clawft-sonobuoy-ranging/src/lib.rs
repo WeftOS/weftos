@@ -220,6 +220,17 @@ mod tests {
     }
 
     #[test]
+    fn owtt_rejects_invalid() {
+        assert!(owtt_range_m(-1.0, 1500.0).is_none());
+        assert!(owtt_range_m(f64::NAN, 1500.0).is_none());
+        assert!(owtt_range_m(f64::INFINITY, 1500.0).is_none());
+        assert!(owtt_range_m(1.0, 0.0).is_none());
+        assert!(owtt_range_m(1.0, -1500.0).is_none());
+        assert!(owtt_range_m(1.0, f64::NAN).is_none());
+        assert_eq!(owtt_range_m(0.0, 1500.0), Some(0.0));
+    }
+
+    #[test]
     fn observation_range() {
         let o = RangeObservation::from_travel_time(BuoyId::new("a"), BuoyId::new("b"), 0.1);
         assert!((o.range_m() - 150.0).abs() < 1e-9);
