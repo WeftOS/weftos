@@ -17,13 +17,13 @@ On 2026-10-29 the owner stopped all development. Agent lanes on the development 
 The owner's direction, the same day:
 
 - "I want it so the dev work is done on this mac, and then the ci/cd workflow takes over and weftos can orchestrate."
-- CI work runs on **the CI host**, not on PG. The host is a Windows workstation already on the tailnet, with an RTX 4070. Measured on 2026-10-29 in its Linux environment:
+- CI work runs on **the CI host**, not on PG. The host is a Windows workstation already on the tailnet: an Intel i9-14900K (32 threads), 128 GB RAM, a Samsung 9100 PRO 4 TB and a WD SN770 2 TB (both NVMe), and an RTX 4070 12 GB. Measured on 2026-10-29 in its existing WSL distro:
   - WSL2 (kernel 6.18), Debian 12;
   - 16 vCPUs and 31 GB RAM available to WSL;
   - 419 GB free on the root filesystem;
   - load average 0.2.
   
-  No container runtime is installed yet, and the GPU isn't exposed inside WSL.
+  No container runtime is installed yet. CUDA-on-WSL is present: `nvidia-smi` in `/usr/lib/wsl/lib` reports the RTX 4070 on driver 616.64. WSL is capped at 16 of 32 threads and 31 of 128 GB.
 - "We need to build it able to run the containerized workflow and mount the rust s3 buckets so its all very fast."
 
 Two gaps exist today:
@@ -53,11 +53,11 @@ Two gaps exist today:
 - **Labels route jobs:** `self-hosted, weftos-ci, <project>`. GitHub-hosted runners stay as the fallback when the CI host is down: the same workflow, slower. The required checks don't change.
 - **Capacity and queueing:**
   - The CI host gets a runner-pool limit per class. Each runner gets CPU and memory limits through podman, and WSL2's `.wslconfig` cap is part of the host setup.
-    - Starting sizes, from the measured 16 vCPUs and 31 GB: `rust-heavy` = 2 runners (about 7 vCPUs and 12 GB each); `node` = 1.
-    - The total is held under about 28 GB, leaving the host headroom.
+    - Starting sizes, on today's WSL cap of 16 vCPUs and 31 GB: `rust-heavy` = 2 runners (about 7 vCPUs and 12 GB each); `node` = 1. The CI distro in §3c raises the cap.
+    - The total is held under the WSL cap, leaving the host headroom.
   - Jobs beyond the pool wait in GitHub's queue, which is the queue. WeftOS keeps the pool at its target size.
   - This is the one place ADR-099's "no queueing" stance is relaxed: the placer maintains a pool, not single instances.
-- **The GPU is opt-in and deferred.** A `gpu` label and a pool of one wait until CUDA is exposed inside WSL2. Nothing needs it today.
+- **The GPU is opt-in.** A `gpu` label and a pool of one, using CUDA-on-WSL, which works today. Nothing needs it yet.
 
 ### 3. RustFS buckets make cold jobs warm
 
@@ -97,8 +97,8 @@ Measured on the CI host on 2026-10-29 with a 1 GiB direct-I/O file, and with sma
 ### 3b. Option: native Linux on a dedicated drive
 
 The owner offered (2026-10-29) to put a separate M.2 drive in the CI host and run it as a native Linux box, built for its hardware, instead of WSL2. What that would gain:
-- direct CUDA access to the RTX 4070 (today the GPU isn't exposed in WSL);
-- all of the host's RAM, with no `.wslconfig` cap (WSL sees 31 GB today);
+- native CUDA access to the RTX 4070 without the WSL GPU paravirtualisation layer (CUDA-on-WSL works today);
+- all 128 GB and 32 threads, with no `.wslconfig` cap (WSL sees 31 GB and 16 threads today);
 - no Windows sleep, update or VM-memory interference.
 
 - no virtual-disk bloat. WSL2's `ext4.vhdx` grows as data is written but doesn't return space to Windows when files are deleted, unless the disk is sparse and trimmed. CI churn (ephemeral containers, `target/` directories, caches written and deleted all day) is the worst case. The host's root filesystem already reports 537 GB used of 1 TB.
@@ -113,6 +113,22 @@ Until a move to native Linux, the C0 host setup on WSL2 must handle the bloat:
 - report the vhdx file size alongside the in-WSL usage, as a host health fact.
 
 Recommendation: start C0 to C2 on WSL2, which works today, and keep the same Terraform host role, so moving to native Linux is a re-provision, not a redesign. Switch when the GPU pool is needed, or when C2 or the vhdx size shows WSL memory, interference or disk-reclaim limits. The owner decides.
+
+### 3c. The CI distro (owner offer, 2026-10-29: a fresh OS picked for this)
+
+- **A new WSL2 distro just for CI:** Ubuntu 26.04 LTS (24.04 if 26.04 isn't offered, then upgraded by Terraform), named `weftos-ci`. It's kept separate from the host's existing distro.
+- **Why Ubuntu 26.04:**
+  - PG runs the same release, so the Terraform account and package modules reuse unchanged;
+  - NVIDIA's CUDA-on-WSL targets Ubuntu first;
+  - current rootless podman is in its repositories;
+  - systemd is on by default, which user units need.
+- **Owner steps on Windows:**
+  - install the distro with its vhdx on the Samsung 9100 PRO;
+  - `wsl --manage weftos-ci --set-sparse true`;
+  - in `.wslconfig` under `[wsl2]`: `memory=96GB`, `processors=28`, `swap=16GB`, `sparseVhd=true`; under `[experimental]`: `autoMemoryReclaim=dropCache`. These are shared by every distro on the host;
+  - a sudo user, and Tailscale joined as its own tagged node.
+- **Everything after that is Terraform (C0).**
+- **Pool sizes with that cap:** `rust-heavy` = 4 runners (about 6 vCPUs and 18 GB each), `node` = 2. The total stays under about 88 GB. Re-measure in C2.
 
 ### 4. Client isolation
 
