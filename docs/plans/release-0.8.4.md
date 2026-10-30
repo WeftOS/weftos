@@ -62,8 +62,8 @@ Not landing:
 Phase B and crates.io: the three crates that take the git-pinned cog deps (`clawft-weave`,
 `weft-licence`, `weftos-cos`) are all `publish = false`, and none of the deleted crates was
 `publish = true` or dist-able. The publish list stays at 40 and the release asset set is
-unchanged (6 dist apps: `clawft-cli`, `clawft-weave`, `clawft-gui-egui`, `clawft-wasm-host`,
-`clawft-wasm`, `weftos`).
+unchanged (4 dist apps: `clawft-cli`, `clawft-weave`, `clawft-gui-egui`, `weftos`;
+`clawft-wasm-host` and `clawft-wasm` are `dist = false`).
 
 ## 2. Version bump (codemod, verified by Fable)
 
