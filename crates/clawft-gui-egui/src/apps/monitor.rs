@@ -19,7 +19,6 @@
 use std::sync::Arc;
 
 use eframe::egui;
-use serde_json::Value;
 
 use crate::live::{Live, Snapshot};
 use crate::shell::desktop::Desktop;
@@ -372,11 +371,6 @@ fn paint_sparkline(painter: &egui::Painter, rect: egui::Rect, tokens: &Tokens, s
         );
         painter.line_segment([p0, p1], egui::Stroke::new(1.0, tokens.accent));
     }
-}
-
-#[allow(dead_code)] // reserved for forward-compat — sparklines need a series source
-fn pull_series(_v: &Value) -> Option<Vec<f32>> {
-    None
 }
 
 #[cfg(test)]
