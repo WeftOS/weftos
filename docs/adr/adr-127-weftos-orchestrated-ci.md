@@ -1,7 +1,7 @@
 # ADR-127: WeftOS-orchestrated CI: ephemeral container runners on a CI host, with RustFS-backed caches
 
 - **Status**: Proposed (2026-10-29; owner direction, see Context)
-- **Updated**: 2026-10-30 (standalone Incus/WSL prototype accepted 9 infrastructure checks; Terraform and durable request integration remain pending). Previously 2026-10-29 (§3's caches and per-job environments are re-expressed as composed RVF layer stacks in ADR-128).
+- **Updated**: 2026-10-29 (§3's caches and per-job environments are re-expressed as composed RVF layer stacks in ADR-128)
 - **Deciders**: owner
 - **Prior decisions**: the decision store, consulted on 2026-10-29, holds only ADR-126 (the mesh object store) on this topic. No earlier ADR covers CI runners.
 - **Builds on**:
@@ -157,26 +157,6 @@ The pre-build diff gate (`scripts/diff-gate.sh`) is the first job on every trigg
 - **Each runner placement, registration and teardown** is recorded in the activity log.
 
 ## Phases
-
-### Prototype evidence (2026-10-30; not a C0–C3 completion)
-
-The owner directed a standalone Incus system-container trial before integration,
-with every OS change recorded for later Terraform and WeftOS control-plane work.
-The [bootstrap ledger](../deployment/ci-wsl-bootstrap-2026-10-30.md) and
-[acceptance report](../deployment/ci-wsl-bootstrap-2026-10-30/acceptance-report.md)
-record the configuration, scripts, failures and hash-bound receipts. Nine checks
-pass, including actual CUDA compute in an unprivileged Incus container, nested
-Docker, instance restart readiness, clone isolation, cancellation and detached
-job failure results. The physical CI disk remains unformatted.
-
-This trial explores Incus per-tree environments alongside the original Podman
-proposal; it does not register an Incus adapter or implement the CI pools above.
-The owner also identified GPU inference requests and CI tasks as candidates for
-a common durable workflow call from development machines/builders. The proposed
-request contract and unproven recovery/idempotency requirements are in the report.
-Terraform codification, authorized request APIs, retained job state, leases,
-retry/recovery and shared filesystem integration remain work to implement and
-prove. Status remains Proposed.
 
 | Phase | Scope | Done when |
 |---|---|---|
