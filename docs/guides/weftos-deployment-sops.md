@@ -1277,7 +1277,7 @@ This appendix applies the SOPs above to the two WeaveLogic properties.
 | Attribute | Value |
 |---|---|
 | Path | `/claw/root/weavelogic/projects/clawft/` |
-| Type | Rust workspace (22 crates) + Fumadocs site (Next.js 16) |
+| Type | Rust workspace (66 crates, as of 2026-10-30) + Fumadocs site (Next.js 16) |
 | Current .weftos/ | Exists, populated (sessions, ONNX model, handoff doc) |
 | Status | SOP 1 partially complete (directory exists, no weave.toml yet) |
 
@@ -1288,7 +1288,7 @@ This appendix applies the SOPs above to the two WeaveLogic properties.
 4. Boot kernel with ONNX embeddings (model already present)
 
 **SOP 2 priority data sources:**
-1. Cargo workspace dependency graph (22 crates, rich internal dependency data)
+1. Cargo workspace dependency graph (66 crates as of 2026-10-30, rich internal dependency data)
 2. Tree-sitter on all `.rs` files (kernel, core, plugins -- the heart of WeftOS)
 3. Git history (rich, 13+ sprints of development)
 4. Vercel deployment config (docs/src/)
