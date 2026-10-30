@@ -28,6 +28,7 @@ pub struct VectorItem {
 }
 
 impl VectorItem {
+    /// Item with just a vector: no id (auto-assigned), no text, no tags.
     pub fn new(vector: Vec<f32>) -> Self {
         Self {
             id: None,
@@ -37,16 +38,19 @@ impl VectorItem {
         }
     }
 
+    /// Pins an explicit id instead of letting ingest auto-assign one.
     pub fn with_id(mut self, id: u64) -> Self {
         self.id = Some(id);
         self
     }
 
+    /// Attaches an in-process text payload to the item.
     pub fn with_text(mut self, text: impl Into<String>) -> Self {
         self.text = Some(text.into());
         self
     }
 
+    /// Replaces the item's provenance tags.
     pub fn with_tags(mut self, tags: VectorTags) -> Self {
         self.tags = tags;
         self
@@ -139,4 +143,33 @@ pub struct MemoryStatus {
     /// `true` if this lineage is parked (see [`crate::BranchableMemory::pause`] /
     /// [`crate::BranchableMemory::resume`]).
     pub paused: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_leaves_id_text_none_and_tags_empty() {
+        let item = VectorItem::new(vec![1.0, 2.0]);
+        assert_eq!(item.id, None);
+        assert_eq!(item.text, None);
+        assert!(item.tags.is_empty());
+        assert_eq!(item.vector, vec![1.0, 2.0]);
+    }
+
+    #[test]
+    fn builders_set_id_text_and_tags() {
+        let mut tags = VectorTags::new();
+        tags.insert("role".to_string(), "user".to_string());
+        let item = VectorItem::new(vec![0.5, 0.25])
+            .with_id(7)
+            .with_text("hello")
+            .with_tags(tags);
+        assert_eq!(item.id, Some(7));
+        assert_eq!(item.text.as_deref(), Some("hello"));
+        assert_eq!(item.tags.len(), 1);
+        assert_eq!(item.tags.get("role").map(String::as_str), Some("user"));
+        assert_eq!(item.vector, vec![0.5, 0.25]);
+    }
 }
