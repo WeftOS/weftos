@@ -11,10 +11,12 @@ use std::str::FromStr;
 
 use crate::hexser;
 
+/// URL scheme prefix every address must start with.
 pub const SCHEME: &str = "weft://";
 /// Upper bound on the whole address string.
 pub const MAX_LEN: usize = 512;
 
+/// Why an address string or [`WeftAddr`] failed parsing or validation.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum AddrError {
     #[error("address must start with weft://")]
@@ -39,6 +41,7 @@ pub enum AddrError {
     LocalOnWire,
 }
 
+/// The node part of an address: the sender's own node or a node id.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Node {
     /// The sender's own registered node, resolved at the service.
@@ -47,6 +50,10 @@ pub enum Node {
     Id(String),
 }
 
+/// A parsed `weft://<node>/<user>/<project>[/<topic>]` address.
+///
+/// Use [`WeftAddr::new`] or `FromStr` to get a validated value; fields are
+/// public, so call [`WeftAddr::validate`] after building one by hand.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct WeftAddr {
     pub node: Node,
@@ -102,6 +109,12 @@ impl WeftAddr {
         Ok(a)
     }
 
+    /// Check the address against the format rules.
+    ///
+    /// A node id and a user must be 32 lowercase hex characters, a project
+    /// must be a 26 character ULID and requires a user, the topic must have
+    /// no empty or dot segments, and the rendered address must fit in
+    /// [`MAX_LEN`] bytes.
     pub fn validate(&self) -> Result<(), AddrError> {
         if let Node::Id(n) = &self.node
             && !is_hex32(n)
