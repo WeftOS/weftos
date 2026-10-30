@@ -118,7 +118,7 @@ Each contribution makes a proof cleaner. None blocks a proof, because each has a
 | U2 | ruvnet/RuVector **#1288** (merges after #1287): a membership filter sized by the visible count, not the maximum id, with the old dense format still readable | non-dense ids work | path-hash ids in T2 | dense ordinals plus a path-to-ordinal map |
 | U3 | ruvnet/RuVector **#1289**: multi-parent derivation (`DerivationType::Merge`); `derive()` honours its type and records it in lineage | native composition | T3 without our walk | the WeftOS `compose` walk in `clawft-cow-memory` |
 | U4 | ruvnet/RuVector **#1290**: a typed custom-segment API for vendor types, inherited through branch, hashed and signed | tree records as their own segment type | T2's option (b) | `META_SEG` key/value plus per-record metadata |
-| R1 | rustfs/rustfs #9066 (queued audit replay), #9067 (multipart and bucket-config audit), and the denial-audit PR once #9067 merges | complete audit of store operations | ADR-126 governance for the stores under T1 and T4 | tail `rustfs.log` for `s3_authorization_denied` |
+| R1 | rustfs/rustfs **#9067 merged** 2026-10-30 (multipart and bucket-config audit, and it included #9066's queued-replay fix; #9066 closed as superseded), and **#9073** (denial audit, open) | complete audit of store operations | ADR-126 governance for the stores under T1 and T4 | tail `rustfs.log` for `s3_authorization_denied` |
 
 A scheduled check every 2 hours watches these: it fixes CI failures, rebases, answers concrete review requests, and brings design questions to the owner.
 
