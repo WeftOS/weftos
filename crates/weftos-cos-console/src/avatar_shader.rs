@@ -12,19 +12,27 @@ use crate::status::AgentState;
 
 /// Compute resolution. The panel shows each sample as a 2×2 block.
 pub const COMPUTE_W: i32 = 48;
+/// Compute height, in samples.
 pub const COMPUTE_H: i32 = 72;
+/// Panel pixels per compute sample along each axis.
 pub const SCALE: i32 = 2;
+/// Field width in panel pixels.
 pub const FIELD_W: i32 = COMPUTE_W * SCALE;
+/// Field height in panel pixels.
 pub const FIELD_H: i32 = COMPUTE_H * SCALE;
 /// Rows per mesh tile. One `SceneOp` must encode under the pad's
 /// chunk budget (`MAX_PUSH_CBOR` minus the Ops wrapper), so a strip
 /// stays at 96×8 RGB565.
 pub const TILE_H: i32 = 8;
+/// Number of `TILE_H`-row strips that make up one field.
 pub const TILES: usize = (FIELD_H / TILE_H) as usize;
+/// Size of one full field in bytes: RGB565, 2 bytes per pixel.
 pub const FIELD_BYTES: usize = (FIELD_W * FIELD_H * 2) as usize;
 
 /// Where the field sits in the visual panel (the caption stays below it).
+/// Panel column where the field starts.
 pub const FIELD_X: i32 = 102;
+/// Panel row where the field starts.
 pub const FIELD_Y: i32 = 120;
 
 const STOCK_STEPS: u32 = 70;
