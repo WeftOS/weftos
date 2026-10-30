@@ -141,7 +141,7 @@ fn main() {
 
         let cbor_buf = cbor_encode(&payload);
         chunk_count += 1;
-        let seg_bytes = weftos_rvf_wire::write_segment(
+        let seg_bytes = rvf_wire::write_segment(
             SegmentType::Vec as u8,
             &cbor_buf,
             SegmentFlags::empty(),
@@ -160,7 +160,7 @@ fn main() {
         version: 1,
     };
     let manifest_cbor = cbor_encode(&manifest);
-    let manifest_seg = weftos_rvf_wire::write_segment(
+    let manifest_seg = rvf_wire::write_segment(
         SegmentType::Meta as u8,
         &manifest_cbor,
         SegmentFlags::empty(),

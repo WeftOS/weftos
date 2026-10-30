@@ -1358,8 +1358,8 @@ dependencies = [
  "reqwest",
  "ruvector-diskann",
  "ruvector-sona",
- "rvf-runtime 0.5.0",
- "rvf-types 0.3.0",
+ "rvf-runtime",
+ "rvf-types",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -1383,8 +1383,8 @@ name = "clawft-cow-memory"
 version = "0.8.4"
 dependencies = [
  "rand 0.8.7",
- "rvf-runtime 0.5.0",
- "rvf-types 0.3.0",
+ "rvf-runtime",
+ "rvf-types",
  "serde",
  "serde_json",
  "tempfile",
@@ -1538,8 +1538,10 @@ dependencies = [
  "ruvector-rabitq",
  "ruvector-raft",
  "ruvector-replication",
- "rvf-runtime 0.3.2",
- "rvf-types 0.2.1",
+ "rvf-crypto",
+ "rvf-runtime",
+ "rvf-types",
+ "rvf-wire",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -1559,8 +1561,7 @@ dependencies = [
  "weft-licence",
  "weft-licence-wire",
  "weftos-leaf-types",
- "weftos-rvf-crypto",
- "weftos-rvf-wire",
+ "weftos-pq-sign",
  "wiremock",
 ]
 
@@ -2066,8 +2067,10 @@ dependencies = [
  "js-sys",
  "lol_alloc",
  "rand 0.8.7",
- "rvf-runtime 0.3.2",
- "rvf-types 0.2.1",
+ "rvf-crypto",
+ "rvf-runtime",
+ "rvf-types",
+ "rvf-wire",
  "serde",
  "serde_json",
  "sha2",
@@ -2078,8 +2081,7 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
  "web-sys",
- "weftos-rvf-crypto",
- "weftos-rvf-wire",
+ "weftos-pq-sign",
 ]
 
 [[package]]
@@ -2151,7 +2153,8 @@ dependencies = [
  "nix 0.29.0",
  "rand 0.8.7",
  "reqwest",
- "rvf-types 0.2.1",
+ "rvf-types",
+ "rvf-wire",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -2175,7 +2178,6 @@ dependencies = [
  "weftos-display-client",
  "weftos-leaf-scene",
  "weftos-leaf-types",
- "weftos-rvf-wire",
  "weftos-scene-builder",
 ]
 
@@ -3197,6 +3199,12 @@ name = "dpi"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
+
+[[package]]
+name = "dunce"
+version = "1.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 
 [[package]]
 name = "duplicate"
@@ -7282,6 +7290,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "pqcrypto-internals"
+version = "0.2.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b4a326caf27cbf2ac291ca7fd56300497ba9e76a8cc6a7d95b7a18b57f22b61d"
+dependencies = [
+ "cc",
+ "dunce",
+ "getrandom 0.3.4",
+ "libc",
+]
+
+[[package]]
+name = "pqcrypto-mldsa"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f9f812cd126a2582599478a434fea75937b4b05d234c64a49e0cea129e130528"
+dependencies = [
+ "cc",
+ "glob",
+ "libc",
+ "paste",
+ "pqcrypto-internals",
+ "pqcrypto-traits",
+]
+
+[[package]]
+name = "pqcrypto-traits"
+version = "0.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "94e851c7654eed9e68d7d27164c454961a616cf8c203d500607ef22c737b51bb"
+
+[[package]]
 name = "prettyplease"
 version = "0.2.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8359,7 +8399,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1649a83d33539c7e74f5a440583a35fa0a3c0be03b7dc5b0c5d9b3ec54be7f09"
 dependencies = [
  "ed25519-dalek",
- "rvf-types 0.3.0",
+ "rvf-types",
  "sha2",
  "sha3",
 ]
@@ -8376,19 +8416,7 @@ version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "117813739bf05e6bb841696ef7af3253a9a72d80c12f70f04666a46edafdb05e"
 dependencies = [
- "rvf-types 0.3.0",
-]
-
-[[package]]
-name = "rvf-runtime"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0149d87869d0cbe66766f401b65bccb4cd5bd107b2366781f0b7b1db4fd51e59"
-dependencies = [
- "crc32fast",
- "rvf-index",
- "rvf-quant",
- "rvf-types 0.2.1",
+ "rvf-types",
 ]
 
 [[package]]
@@ -8403,15 +8431,9 @@ dependencies = [
  "rvf-crypto",
  "rvf-index",
  "rvf-quant",
- "rvf-types 0.3.0",
+ "rvf-types",
  "rvf-wire",
 ]
-
-[[package]]
-name = "rvf-types"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "05adcbb7dd0f7d323314ad2de13fbfebd43b6403e3a9bcc6fea94d1b873b72c3"
 
 [[package]]
 name = "rvf-types"
@@ -8428,7 +8450,7 @@ dependencies = [
  "crc32c",
  "ed25519-dalek",
  "rvf-crypto",
- "rvf-types 0.3.0",
+ "rvf-types",
  "sha3",
  "subtle",
  "xxhash-rust",
@@ -11484,6 +11506,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "weftos-pq-sign"
+version = "0.8.4"
+dependencies = [
+ "ed25519-dalek",
+ "pqcrypto-mldsa",
+ "pqcrypto-traits",
+ "rand 0.8.7",
+ "serde",
+ "serde_json",
+ "sha3",
+ "tempfile",
+ "thiserror 2.0.18",
+ "zeroize",
+]
+
+[[package]]
 name = "weftos-room-scope"
 version = "0.8.4"
 dependencies = [
@@ -11492,30 +11530,6 @@ dependencies = [
  "image",
  "serde",
  "serde_json",
-]
-
-[[package]]
-name = "weftos-rvf-crypto"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e72ddaf6c0411631bd8c8de7e32aeee06c836f9cfca289d973593b0049d95582"
-dependencies = [
- "ed25519-dalek",
- "rvf-types 0.2.1",
- "sha3",
-]
-
-[[package]]
-name = "weftos-rvf-wire"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a251749be321bd4968f7e5771bc85f1eb1d0837071aa66d50e43dbc9fc9acc59"
-dependencies = [
- "crc32c",
- "rvf-types 0.2.1",
- "sha3",
- "subtle",
- "xxhash-rust",
 ]
 
 [[package]]

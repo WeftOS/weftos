@@ -1058,7 +1058,7 @@ impl<P: Platform> Kernel<P> {
                         BootPhase::Services,
                         format!("Ed25519 signing key is the project key: {}", path.display()),
                     ));
-                    Some(key)
+                    Some((key, path))
                 } else if let Some(ref ckpt_path) =
                     chain_config.effective_checkpoint_path()
                 {
@@ -1088,7 +1088,7 @@ impl<P: Platform> Kernel<P> {
                                 BootPhase::Services,
                                 format!("Ed25519 signing key loaded: {}", key_path.display()),
                             ));
-                            Some(key)
+                            Some((key, key_path))
                         }
                         Err(e) => {
                             warn!(error = %e, "failed to load/create signing key");
@@ -1198,20 +1198,37 @@ impl<P: Platform> Kernel<P> {
                     ))
                 };
 
-                // Attach Ed25519 signing key if available.
+                // Attach the Ed25519 signing key and, beside it, the node's
+                // real ML-DSA-65 key (ADR-129): generated on the first boot
+                // after the upgrade, then reused. Without it the chain stays
+                // Ed25519-signed; nothing is derived from the Ed25519 key.
                 let mut cm = cm;
-                if let Some(key) = signing_key
+                if let Some((key, key_path)) = signing_key
                     && let Some(inner) = Arc::get_mut(&mut cm)
                 {
-                    // Generate ML-DSA key from Ed25519 key bytes for dual signing.
-                    let ml_dsa_seed = key.to_bytes();
-                    let (ml_key, _ml_vk) = weftos_rvf_crypto::MlDsa65Key::generate(&ml_dsa_seed);
                     inner.set_signing_key(key);
-                    inner.set_ml_dsa_key(ml_key);
-                    boot_log.push(BootEvent::info(
-                        BootPhase::Services,
-                        "Dual signing enabled (Ed25519 + ML-DSA-65)",
-                    ));
+                    let pq_path = crate::chain_pq::pq_key_path_for(&key_path);
+                    match crate::chain_pq::load_or_create_pq_key(&key_path) {
+                        Ok((ml_key, created)) => {
+                            let id = ml_key.verifying_key().key_id();
+                            inner.set_ml_dsa_key(ml_key);
+                            boot_log.push(BootEvent::info(
+                                BootPhase::Services,
+                                format!(
+                                    "Dual signing enabled (Ed25519 + ML-DSA-65 {id}, {} {})",
+                                    if created { "generated" } else { "loaded" },
+                                    pq_path.display()
+                                ),
+                            ));
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "ML-DSA-65 key unavailable; chain signing is Ed25519 only");
+                            boot_log.push(BootEvent::info(
+                                BootPhase::Services,
+                                format!("ML-DSA-65 key unavailable: {e} — checkpoints will be Ed25519-only"),
+                            ));
+                        }
+                    }
                 }
 
                 boot_log.push(BootEvent::info(

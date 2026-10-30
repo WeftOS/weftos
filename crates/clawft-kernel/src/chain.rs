@@ -1,7 +1,7 @@
 //! Local exochain manager for kernel event logging.
 //!
 //! Provides an append-only event chain with SHAKE-256 hash linking
-//! (via [`weftos_rvf_crypto`]). Each event references the hash of the
+//! (via [`rvf_crypto`]). Each event references the hash of the
 //! previous event *and* a content hash of its payload, forming
 //! an immutable, tamper-evident audit trail suitable for cross-service
 //! and cross-node verification.
@@ -31,14 +31,18 @@ use std::sync::{Arc, Mutex};
 use chrono::{DateTime, Utc};
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use rvf_types::SEGMENT_HEADER_SIZE;
-use weftos_rvf_crypto::hash::shake256_256;
-use weftos_rvf_crypto::{
-    MlDsa65Key, MlDsa65VerifyKey, WitnessEntry, create_witness_chain, decode_signature_footer,
-    encode_signature_footer, lineage_record_to_bytes, lineage_witness_entry, sign_segment,
-    sign_segment_ml_dsa, verify_segment, verify_segment_ml_dsa, verify_witness_chain,
+use rvf_crypto::hash::shake256_256;
+use rvf_crypto::{
+    WitnessEntry, create_witness_chain, decode_signature_footer, encode_signature_footer,
+    lineage_record_to_bytes, lineage_witness_entry, sign_segment, verify_segment,
+    verify_witness_chain,
 };
-use weftos_rvf_wire::writer::{calculate_padded_size, write_segment};
-use weftos_rvf_wire::{read_segment, validate_segment};
+use rvf_wire::writer::{calculate_padded_size, write_segment};
+use rvf_wire::{read_segment, validate_segment};
+use weftos_pq_sign::mldsa65;
+/// Dual signature types (ADR-129). `DualSignature` keeps its old serde
+/// shape plus a `suite` tag that defaults to the legacy placeholder.
+pub use weftos_pq_sign::{DualSignature, PqStatus, RejectReason, SigSuite, Verdict};
 
 // ── ExoChain-specific RVF types ─────────────────────────────────────
 //
@@ -130,6 +134,11 @@ fn write_exochain_event(header: &ExoChainHeader, cbor: &[u8], segment_id: u64) -
 fn decode_exochain_payload(payload: &[u8]) -> Option<(ExoChainHeader, &[u8])> {
     let header = ExoChainHeader::from_bytes(payload)?;
     Some((header, &payload[EXOCHAIN_HEADER_SIZE..]))
+}
+
+/// The CBOR body of a checkpoint segment payload (subtype 0x41), if it is one.
+pub(crate) fn checkpoint_cbor(payload: &[u8]) -> Option<&[u8]> {
+    decode_exochain_payload(payload).and_then(|(h, cbor)| (h.subtype == 0x41).then_some(cbor))
 }
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
@@ -1262,8 +1271,8 @@ pub struct ChainManager {
     inner: Mutex<LocalChain>,
     /// Ed25519 signing key for RVF segment signing.
     signing_key: Option<SigningKey>,
-    /// ML-DSA-65 signing key for post-quantum dual signing.
-    ml_dsa_key: Option<MlDsa65Key>,
+    /// ML-DSA-65 signing key for post-quantum dual signing (ADR-129).
+    ml_dsa_key: Option<mldsa65::SigningKey>,
 }
 
 impl ChainManager {
@@ -1349,8 +1358,13 @@ impl ChainManager {
     }
 
     /// Set the ML-DSA-65 key for post-quantum dual signing.
-    pub fn set_ml_dsa_key(&mut self, key: MlDsa65Key) {
+    pub fn set_ml_dsa_key(&mut self, key: mldsa65::SigningKey) {
         self.ml_dsa_key = Some(key);
+    }
+
+    /// The ML-DSA-65 verifying key, if an ML-DSA-65 key is set.
+    pub fn ml_dsa_verifying_key(&self) -> Option<&mldsa65::VerifyingKey> {
+        self.ml_dsa_key.as_ref().map(|k| k.verifying_key())
     }
 
     /// Whether dual signing (Ed25519 + ML-DSA-65) is enabled.
@@ -2045,12 +2059,20 @@ impl ChainManager {
             None
         };
 
-        let cp_payload = serde_json::json!({
+        let mut cp_payload = serde_json::json!({
             "event_count": chain.events.len(),
             "last_hash": hex_hash(&chain.last_hash),
             "witness_chain": witness_hex,
             "witness_entries": chain.witness_entries.len(),
         });
+        // ADR-129: a dual-signed checkpoint names its suite inside the
+        // Ed25519-signed payload, so a verifier can tell a real ML-DSA-65
+        // footer from the legacy placeholder and cannot be downgraded.
+        let dual_signed = self.signing_key.is_some() && self.ml_dsa_key.is_some();
+        if dual_signed {
+            cp_payload[crate::chain_pq::CHECKPOINT_SIG_SUITE_KEY] =
+                SigSuite::Ed25519MlDsa65V2.as_str().into();
+        }
         let mut cp_cbor = Vec::new();
         ciborium::into_writer(&cp_payload, &mut cp_cbor)
             .map_err(|e| format!("cbor encode checkpoint: {e}"))?;
@@ -2070,18 +2092,17 @@ impl ChainManager {
             let footer_bytes = encode_signature_footer(&footer);
             output.extend_from_slice(&footer_bytes);
 
-            // Dual-sign with ML-DSA-65 if the key is available.
+            // Dual-sign with real ML-DSA-65 over the whole checkpoint segment.
             if let Some(ref ml_key) = self.ml_dsa_key {
-                let ml_footer = sign_segment_ml_dsa(&cp_seg_header, cp_seg_payload, ml_key);
-                let ml_footer_bytes = encode_signature_footer(&ml_footer);
-                output.extend_from_slice(&ml_footer_bytes);
+                let ml_footer = crate::chain_pq::ml_dsa_checkpoint_footer(&cp_segment, ml_key)
+                    .map_err(|e| format!("ML-DSA-65 checkpoint signature: {e}"))?;
+                output.extend_from_slice(&encode_signature_footer(&ml_footer));
             }
 
             true
         } else {
             false
         };
-        let dual_signed = signed && self.ml_dsa_key.is_some();
 
         std::fs::write(path, &output)?;
         info!(
@@ -2108,6 +2129,7 @@ impl ChainManager {
         let mut offset = 0;
         let mut events = Vec::new();
         let mut witness_entries = Vec::new();
+        let mut sig_suite: Option<SigSuite> = None;
 
         while offset < data.len() {
             // Need at least a segment header.
@@ -2172,6 +2194,7 @@ impl ChainManager {
                 });
             } else if exo_header.subtype == 0x41 {
                 // Checkpoint — extract witness chain if present.
+                sig_suite = crate::chain_pq::checkpoint_suite(cbor_bytes).ok();
                 let cp_obj: serde_json::Value =
                     ciborium::from_reader(cbor_bytes).unwrap_or_default();
                 if let Some(wc_hex) = cp_obj.get("witness_chain").and_then(|v| v.as_str())
@@ -2247,6 +2270,8 @@ impl ChainManager {
             chain_id,
             has_signature,
             has_dual_signature,
+            // A legacy second footer is the HMAC placeholder (ADR-129), not ML-DSA.
+            pq_legacy = has_dual_signature && sig_suite != Some(SigSuite::Ed25519MlDsa65V2),
             "chain restored from RVF file"
         );
         Ok(mgr)
@@ -2581,206 +2606,60 @@ impl ChainManager {
 
     /// Verify dual (Ed25519 + ML-DSA-65) signatures on an RVF chain file.
     ///
-    /// Returns `Ok(true)` if both signatures are valid, `Ok(false)` if
-    /// either is invalid, and `Err` if the file has no dual signature.
+    /// Ed25519 is mandatory. A checkpoint written since ADR-129 names its
+    /// suite and must carry a valid real ML-DSA-65 footer
+    /// ([`Verdict::Valid`] with [`PqStatus::Verified`]). A legacy file's
+    /// second footer is the HMAC placeholder: it is not checked, and the
+    /// verdict is [`PqStatus::LegacyPlaceholder`], never post-quantum.
+    /// `Err` means the file cannot be read or has no signature footer.
     pub fn verify_rvf_dual_signature(
         path: &Path,
         ed_key: &VerifyingKey,
-        ml_key: &MlDsa65VerifyKey,
-    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+        ml_key: &mldsa65::VerifyingKey,
+    ) -> Result<Verdict, Box<dyn std::error::Error + Send + Sync>> {
         let data = std::fs::read(path)?;
-        let mut offset = 0;
-        let mut last_seg_start = 0;
-
-        while offset < data.len() {
-            if data.len() - offset < SEGMENT_HEADER_SIZE {
-                break;
-            }
-            let (seg_header, _) = match read_segment(&data[offset..]) {
-                Ok(result) => result,
-                Err(_) => break,
-            };
-            last_seg_start = offset;
-            let padded =
-                calculate_padded_size(SEGMENT_HEADER_SIZE, seg_header.payload_length as usize);
-            offset += padded;
-        }
-
-        if offset >= data.len() {
-            return Err("no signature footer found in RVF file".into());
-        }
-
-        let ed_footer = decode_signature_footer(&data[offset..])
-            .map_err(|e| format!("decode Ed25519 signature footer: {e}"))?;
-        let ed_footer_size = ed_footer.footer_length as usize;
-        let ml_offset = offset + ed_footer_size;
-
-        if ml_offset >= data.len() {
-            return Err("no ML-DSA-65 signature footer found (single-signed file)".into());
-        }
-        let ml_footer = decode_signature_footer(&data[ml_offset..])
-            .map_err(|e| format!("decode ML-DSA-65 signature footer: {e}"))?;
-
-        let (cp_seg_header, cp_seg_payload) = read_segment(&data[last_seg_start..])
-            .map_err(|e| format!("re-read checkpoint segment: {e}"))?;
-
-        let ed_ok = verify_segment(&cp_seg_header, cp_seg_payload, &ed_footer, ed_key);
-        let ml_ok = verify_segment_ml_dsa(&cp_seg_header, cp_seg_payload, &ml_footer, ml_key);
-
-        Ok(ed_ok && ml_ok)
+        Ok(crate::chain_pq::verify_checkpoint(&data, ed_key, ml_key)?)
     }
 
     // ── Dual signing for cross-node chain events ───────────────
 
-    /// Sign data with both Ed25519 and ML-DSA-65 (if configured).
+    /// Sign data with Ed25519 and, if configured, real ML-DSA-65.
     ///
     /// Returns `Some(DualSignature)` when at least the Ed25519 key is
     /// present. The ML-DSA-65 half is populated only when the ML-DSA key
-    /// has been set via [`set_ml_dsa_key`].
+    /// has been set via [`set_ml_dsa_key`](Self::set_ml_dsa_key). The
+    /// signature is tagged [`SigSuite::Ed25519MlDsa65V2`].
     pub fn dual_sign(&self, data: &[u8]) -> Option<DualSignature> {
-        use ed25519_dalek::Signer;
-
         if signs_project_domain(data) {
             tracing::error!("dual_sign refused bytes tagged for a project statement");
             return None;
         }
         let signing_key = self.signing_key.as_ref()?;
-        let ed_sig = signing_key.sign(data);
-        let ed_bytes = ed_sig.to_bytes().to_vec();
-
-        let ml_sig = self.ml_dsa_key.as_ref().map(|ml_key| {
-            // Use SHAKE-256 HMAC-like construction matching rvf-crypto placeholder.
-            ml_dsa_sign_raw(ml_key, data)
-        });
-
-        Some(DualSignature {
-            ed25519: ed_bytes,
-            ml_dsa65: ml_sig,
-        })
+        DualSignature::sign(
+            data,
+            crate::chain_pq::CHAIN_DUAL_SIG_CONTEXT,
+            signing_key,
+            self.ml_dsa_key.as_ref(),
+        )
+        .ok()
     }
 
     /// Verify a dual signature against the given data and public keys.
     ///
-    /// Ed25519 verification is mandatory. ML-DSA-65 verification is
-    /// performed only when both the signature and verification key are
-    /// present. Returns `false` if any present signature is invalid.
+    /// Ed25519 is mandatory. For a v2 signature the ML-DSA-65 half is
+    /// checked when both it and `ml_dsa_pubkey` are present. A legacy
+    /// (pre-ADR-129) signature is accepted on Ed25519 alone and reported as
+    /// [`PqStatus::LegacyPlaceholder`]. Use [`Verdict::is_valid`] where a
+    /// `bool` used to be enough, and [`Verdict::is_post_quantum`] where
+    /// post-quantum assurance is required.
     pub fn verify_dual_signature(
         data: &[u8],
         sig: &DualSignature,
         ed25519_pubkey: &VerifyingKey,
-        ml_dsa_pubkey: Option<&MlDsa65VerifyKey>,
-    ) -> bool {
-        use ed25519_dalek::{Signature, Verifier};
-
-        // Ed25519 is mandatory.
-        if sig.ed25519.len() != 64 {
-            return false;
-        }
-        let ed_sig = Signature::from_bytes(sig.ed25519.as_slice().try_into().unwrap_or(&[0u8; 64]));
-        if ed25519_pubkey.verify(data, &ed_sig).is_err() {
-            return false;
-        }
-
-        // ML-DSA-65 when both signature and key are present.
-        if let (Some(ml_sig), Some(ml_key)) = (&sig.ml_dsa65, ml_dsa_pubkey)
-            && !ml_dsa_verify_raw(ml_key, data, ml_sig)
-        {
-            return false;
-        }
-
-        true
+        ml_dsa_pubkey: Option<&mldsa65::VerifyingKey>,
+    ) -> Verdict {
+        sig.verify(data, crate::chain_pq::CHAIN_DUAL_SIG_CONTEXT, ed25519_pubkey, ml_dsa_pubkey)
     }
-}
-
-// ── Raw ML-DSA-65 placeholder signing for arbitrary data ──────────
-//
-// These mirror the HMAC-SHA3-256 placeholder in rvf-crypto's dual_sign
-// module but operate on raw byte slices instead of RVF segments.
-
-/// ML-DSA-65 placeholder signature length (FIPS 204).
-const ML_DSA_RAW_SIG_LEN: usize = 3309;
-
-/// Sign arbitrary data with the ML-DSA-65 placeholder (HMAC-SHAKE-256).
-fn ml_dsa_sign_raw(key: &MlDsa65Key, data: &[u8]) -> Vec<u8> {
-    // Extract 32-byte key material via verifying_key round-trip.
-    let vk = key.verifying_key();
-    let key_bytes = ml_dsa_vk_bytes(&vk);
-
-    let mut input = Vec::with_capacity(32 + data.len() + 32);
-    input.extend_from_slice(&key_bytes);
-    input.extend_from_slice(data);
-    input.extend_from_slice(&key_bytes);
-
-    let mut sig = Vec::with_capacity(ML_DSA_RAW_SIG_LEN);
-    let mut block = shake256_256(&input);
-    while sig.len() < ML_DSA_RAW_SIG_LEN {
-        sig.extend_from_slice(&block);
-        let mut next = Vec::with_capacity(64);
-        next.extend_from_slice(&block);
-        next.extend_from_slice(&key_bytes);
-        block = shake256_256(&next);
-    }
-    sig.truncate(ML_DSA_RAW_SIG_LEN);
-    sig
-}
-
-/// Verify an ML-DSA-65 placeholder signature on arbitrary data.
-fn ml_dsa_verify_raw(pubkey: &MlDsa65VerifyKey, data: &[u8], sig: &[u8]) -> bool {
-    let key_bytes = ml_dsa_vk_bytes(pubkey);
-
-    let mut input = Vec::with_capacity(32 + data.len() + 32);
-    input.extend_from_slice(&key_bytes);
-    input.extend_from_slice(data);
-    input.extend_from_slice(&key_bytes);
-
-    let mut expected = Vec::with_capacity(ML_DSA_RAW_SIG_LEN);
-    let mut block = shake256_256(&input);
-    while expected.len() < ML_DSA_RAW_SIG_LEN {
-        expected.extend_from_slice(&block);
-        let mut next = Vec::with_capacity(64);
-        next.extend_from_slice(&block);
-        next.extend_from_slice(&key_bytes);
-        block = shake256_256(&next);
-    }
-    expected.truncate(ML_DSA_RAW_SIG_LEN);
-
-    sig.len() == ML_DSA_RAW_SIG_LEN && sig == expected.as_slice()
-}
-
-/// Extract the 32-byte key material from an `MlDsa65VerifyKey`.
-///
-/// Since `MlDsa65VerifyKey` does not expose its inner bytes directly,
-/// we regenerate via the same seed path used in generate(). In
-/// placeholder mode the signing key and verify key share the same
-/// 32-byte SHAKE-256 digest, so `verifying_key()` round-trips cleanly.
-fn ml_dsa_vk_bytes(vk: &MlDsa65VerifyKey) -> [u8; 32] {
-    // MlDsa65VerifyKey is Clone; generate a fresh one from a known seed
-    // and compare — but we cannot peek inside. Instead we use a simple
-    // workaround: the test-time key generation uses `generate(seed)` which
-    // produces `key = SHAKE-256(seed)`. The verify key holds the same bytes.
-    // Since the struct is opaque, we sign a sentinel and derive the key
-    // bytes from the output (the first 32 bytes of the HMAC chain are
-    // `SHAKE-256(key || sentinel || key)` which IS deterministic).
-    //
-    // However, the simplest correct approach: we know in placeholder mode
-    // signing_key bytes == verify_key bytes. The MlDsa65Key::generate
-    // returns both with the same 32-byte value. So we reconstruct via
-    // a zero-length sign and extract the block. This works because the
-    // HMAC construction in rvf-crypto uses the key bytes directly.
-    //
-    // For a clean API, we add a compile-time assertion that verifying_key
-    // is 32 bytes and access it through the known memory layout.
-    //
-    // In practice, both MlDsa65Key and MlDsa65VerifyKey wrap `key: [u8; 32]`.
-    // We use unsafe transmute in a controlled, size-asserted way.
-    assert_eq!(
-        std::mem::size_of::<MlDsa65VerifyKey>(),
-        32,
-        "MlDsa65VerifyKey must be exactly 32 bytes"
-    );
-    // SAFETY: MlDsa65VerifyKey is a repr(Rust) struct containing only
-    // `key: [u8; 32]`. We assert the size matches before transmuting.
-    unsafe { std::mem::transmute_copy(vk) }
 }
 
 // ── Cross-node dual signature types ───────────────────────────────
@@ -2790,16 +2669,7 @@ pub struct DualSigningConfig {
     /// Ed25519 signing key.
     pub ed25519_key: SigningKey,
     /// ML-DSA-65 signing key (if available).
-    pub ml_dsa_key: Option<MlDsa65Key>,
-}
-
-/// A dual signature (Ed25519 + optional ML-DSA-65).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DualSignature {
-    /// Ed25519 signature (64 bytes).
-    pub ed25519: Vec<u8>,
-    /// ML-DSA-65 signature (optional, ~3309 bytes).
-    pub ml_dsa65: Option<Vec<u8>>,
+    pub ml_dsa_key: Option<mldsa65::SigningKey>,
 }
 
 /// Chain status summary.
@@ -3936,7 +3806,7 @@ mod tests {
         let record_bytes = hex_decode(record_hex).unwrap();
         assert_eq!(record_bytes.len(), 128); // LINEAGE_RECORD_SIZE
 
-        let record: rvf_types::LineageRecord = weftos_rvf_crypto::lineage_record_from_bytes(
+        let record: rvf_types::LineageRecord = rvf_crypto::lineage_record_from_bytes(
             record_bytes.as_slice().try_into().unwrap(),
         )
         .unwrap();
@@ -4045,6 +3915,8 @@ mod tests {
         assert_eq!(restored.tx_id, "test-tx");
     }
 
+    // Needs the ML-DSA backend: kernel only, not the wasm project guest (ADR-129).
+    #[cfg(feature = "exochain")]
     #[test]
     fn ml_dsa_key_set_and_has() {
         let mut cm = ChainManager::new(0, 1000);
@@ -4057,18 +3929,21 @@ mod tests {
         assert!(!cm.has_dual_signing());
 
         // Add ML-DSA key
-        let (ml_key, _) = weftos_rvf_crypto::MlDsa65Key::generate(b"test-seed");
+        let ml_key = weftos_pq_sign::mldsa65::SigningKey::generate();
         cm.set_ml_dsa_key(ml_key);
         assert!(cm.has_dual_signing());
     }
 
+    // Needs the ML-DSA backend: kernel only, not the wasm project guest (ADR-129).
+    #[cfg(feature = "exochain")]
     #[test]
     fn dual_sign_rvf_roundtrip() {
         use ed25519_dalek::SigningKey;
         use rand::rngs::OsRng;
 
         let ed_key = SigningKey::generate(&mut OsRng);
-        let (ml_key, ml_vk) = weftos_rvf_crypto::MlDsa65Key::generate(&ed_key.to_bytes());
+        let ml_key = weftos_pq_sign::mldsa65::SigningKey::generate();
+        let ml_vk = ml_key.verifying_key().clone();
 
         let mut cm = ChainManager::new(0, 1000).with_signing_key(ed_key.clone());
         cm.set_ml_dsa_key(ml_key);
@@ -4101,29 +3976,33 @@ mod tests {
         assert!(ed_valid, "Ed25519 signature should be valid");
 
         // Verify dual signatures.
-        let dual_valid =
+        let dual =
             ChainManager::verify_rvf_dual_signature(&path, &ed_pubkey, &ml_vk).unwrap();
-        assert!(dual_valid, "dual signature should be valid");
+        assert!(dual.is_post_quantum(), "dual signature should verify as real ML-DSA-65: {dual:?}");
 
         // Wrong ML-DSA key should fail dual verification.
-        let (_, wrong_ml_vk) = weftos_rvf_crypto::MlDsa65Key::generate(b"wrong-seed");
+        let wrong_ml_vk = weftos_pq_sign::mldsa65::SigningKey::generate().verifying_key().clone();
         let dual_wrong =
             ChainManager::verify_rvf_dual_signature(&path, &ed_pubkey, &wrong_ml_vk).unwrap();
-        assert!(
-            !dual_wrong,
+        assert_eq!(
+            dual_wrong,
+            Verdict::Rejected(RejectReason::MlDsa65),
             "dual signature should fail with wrong ML-DSA key"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    // Needs the ML-DSA backend: kernel only, not the wasm project guest (ADR-129).
+    #[cfg(feature = "exochain")]
     #[test]
     fn dual_signed_checkpoint_verifies() {
         use ed25519_dalek::SigningKey;
         use rand::rngs::OsRng;
 
         let ed_key = SigningKey::generate(&mut OsRng);
-        let (ml_key, ml_vk) = weftos_rvf_crypto::MlDsa65Key::generate(b"checkpoint-test");
+        let ml_key = weftos_pq_sign::mldsa65::SigningKey::generate();
+        let ml_vk = ml_key.verifying_key().clone();
 
         let mut cm = ChainManager::new(0, 1000).with_signing_key(ed_key.clone());
         cm.set_ml_dsa_key(ml_key);
@@ -4161,9 +4040,9 @@ mod tests {
 
         // Verify both independently.
         let ed_pubkey = ed_key.verifying_key();
-        let dual_valid =
+        let dual =
             ChainManager::verify_rvf_dual_signature(&path, &ed_pubkey, &ml_vk).unwrap();
-        assert!(dual_valid);
+        assert!(dual.is_post_quantum(), "{dual:?}");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -4243,13 +4122,15 @@ mod tests {
         );
     }
 
+    // Needs the ML-DSA backend: kernel only, not the wasm project guest (ADR-129).
+    #[cfg(feature = "exochain")]
     #[test]
     fn dual_signature_both_algorithms() {
         use ed25519_dalek::SigningKey;
         use rand::rngs::OsRng;
 
         let ed_key = SigningKey::generate(&mut OsRng);
-        let (ml_key, _ml_vk) = weftos_rvf_crypto::MlDsa65Key::generate(b"dual-sig-test");
+        let ml_key = weftos_pq_sign::mldsa65::SigningKey::generate();
 
         let mut cm = ChainManager::new(0, 1000).with_signing_key(ed_key.clone());
         cm.set_ml_dsa_key(ml_key);
@@ -4276,18 +4157,21 @@ mod tests {
         let ed_pub = ed_key.verifying_key();
 
         assert!(
-            ChainManager::verify_dual_signature(data, &sig, &ed_pub, None),
+            ChainManager::verify_dual_signature(data, &sig, &ed_pub, None).is_valid(),
             "Ed25519-only dual signature should verify"
         );
     }
 
+    // Needs the ML-DSA backend: kernel only, not the wasm project guest (ADR-129).
+    #[cfg(feature = "exochain")]
     #[test]
     fn verify_dual_signature_both_valid() {
         use ed25519_dalek::SigningKey;
         use rand::rngs::OsRng;
 
         let ed_key = SigningKey::generate(&mut OsRng);
-        let (ml_key, ml_vk) = weftos_rvf_crypto::MlDsa65Key::generate(b"verify-both");
+        let ml_key = weftos_pq_sign::mldsa65::SigningKey::generate();
+        let ml_vk = ml_key.verifying_key().clone();
 
         let mut cm = ChainManager::new(0, 1000).with_signing_key(ed_key.clone());
         cm.set_ml_dsa_key(ml_key);
@@ -4297,18 +4181,21 @@ mod tests {
         let ed_pub = ed_key.verifying_key();
 
         assert!(
-            ChainManager::verify_dual_signature(data, &sig, &ed_pub, Some(&ml_vk)),
+            ChainManager::verify_dual_signature(data, &sig, &ed_pub, Some(&ml_vk)).is_post_quantum(),
             "dual signature with both algorithms should verify"
         );
     }
 
+    // Needs the ML-DSA backend: kernel only, not the wasm project guest (ADR-129).
+    #[cfg(feature = "exochain")]
     #[test]
     fn verify_dual_signature_rejects_tampered() {
         use ed25519_dalek::SigningKey;
         use rand::rngs::OsRng;
 
         let ed_key = SigningKey::generate(&mut OsRng);
-        let (ml_key, ml_vk) = weftos_rvf_crypto::MlDsa65Key::generate(b"tamper-test");
+        let ml_key = weftos_pq_sign::mldsa65::SigningKey::generate();
+        let ml_vk = ml_key.verifying_key().clone();
 
         let mut cm = ChainManager::new(0, 1000).with_signing_key(ed_key.clone());
         cm.set_ml_dsa_key(ml_key);
@@ -4320,7 +4207,7 @@ mod tests {
         // Tampered data should fail Ed25519 verification.
         let tampered = b"tampered data";
         assert!(
-            !ChainManager::verify_dual_signature(tampered, &sig, &ed_pub, Some(&ml_vk)),
+            !ChainManager::verify_dual_signature(tampered, &sig, &ed_pub, Some(&ml_vk)).is_valid(),
             "tampered data must fail verification"
         );
 
@@ -4330,7 +4217,7 @@ mod tests {
             ml[0] ^= 0xFF;
         }
         assert!(
-            !ChainManager::verify_dual_signature(data, &bad_sig, &ed_pub, Some(&ml_vk)),
+            !ChainManager::verify_dual_signature(data, &bad_sig, &ed_pub, Some(&ml_vk)).is_valid(),
             "tampered ML-DSA-65 signature must fail verification"
         );
     }
@@ -4433,11 +4320,13 @@ mod tests {
         let sig = DualSignature {
             ed25519: vec![0xCA, 0xFE, 0xBA, 0xBE],
             ml_dsa65: Some(vec![0xDE, 0xAD]),
+            suite: SigSuite::Ed25519MlDsa65V2,
         };
         let json = serde_json::to_string(&sig).unwrap();
         let restored: DualSignature = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.ed25519, vec![0xCA, 0xFE, 0xBA, 0xBE]);
         assert_eq!(restored.ml_dsa65.unwrap(), vec![0xDE, 0xAD]);
+        assert_eq!(restored.suite, SigSuite::Ed25519MlDsa65V2);
     }
 
     #[test]
@@ -4445,6 +4334,7 @@ mod tests {
         let sig = DualSignature {
             ed25519: vec![0x01, 0x02],
             ml_dsa65: None,
+            suite: SigSuite::default(),
         };
         let json = serde_json::to_string(&sig).unwrap();
         let restored: DualSignature = serde_json::from_str(&json).unwrap();

@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use weftos_rvf_crypto::hash::shake256_256;
+use rvf_crypto::hash::shake256_256;
 
 use crate::chain::{AnchorReceipt, ChainAnchor, ChainManager, MockAnchor};
 use clawft_types::config::{ChainAnchorBackend, ChainExternalAnchorConfig};

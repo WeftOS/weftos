@@ -14,6 +14,6 @@ chrono = { version = "0.4", features = ["serde"] }
 walkdir = "2"
 sha2 = "0.10"
 regex = "1"
-rvf-types = { version = "0.2", default-features = false, features = ["std"] }
-weftos-rvf-wire = "0.2"
+rvf-types = { version = "0.3", default-features = false, features = ["std"] }
+rvf-wire = "0.2"
 ciborium = "0.2"

@@ -210,6 +210,9 @@ pub mod capability_claim;
 pub mod chain;
 #[cfg(feature = "exochain")]
 pub mod chain_anchor;
+/// Real ML-DSA-65 signing of ExoChain checkpoints and the legacy policy (ADR-129).
+#[cfg(feature = "exochain")]
+pub mod chain_pq;
 #[cfg(feature = "exochain")]
 pub mod chain_rule_hash;
 /// Project governance overlay, kernel side: load, merge, hash (ADR-103 D8).

@@ -43,7 +43,7 @@ exochain = ["clawft-kernel/exochain", "dep:exo-resource-tree", "dep:rvf-types"]
 mesh = ["clawft-kernel/mesh", "clawft-kernel/quic", "dep:clawft-mesh-service"]
 # mesh-placement-12: placement control plane (runtime adapters + mesh).
 placement = ["clawft-kernel/workload-runtime", "mesh", "ecc", "exochain"]
-rvf-rpc = ["dep:weftos-rvf-wire", "dep:rvf-types"]
+rvf-rpc = ["dep:rvf-wire", "dep:rvf-types"]
 # Stub installers for the `shared.*` services (integration tests only).
 test-support = ["clawft-kernel/test-support"]
 
@@ -144,7 +144,7 @@ base64 = "0.22"
 # in their shell rc.
 dotenvy = "0.15"
 exo-resource-tree = { workspace = true, optional = true }
-weftos-rvf-wire = { workspace = true, optional = true }
+rvf-wire = { workspace = true, optional = true }
 rvf-types = { workspace = true, optional = true }
 [target.'cfg(unix)'.dependencies]
 # The machine mesh service and its local client are unix-only (unix sockets,

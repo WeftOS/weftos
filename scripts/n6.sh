@@ -12,7 +12,7 @@
 #   scripts/n6.sh clock [secs]  measure the CPU clock on HSI and HSE against host time
 #   scripts/n6.sh dw3000-id     read the DEV_ID of a DWM3000EVB shield on the Arduino header
 #   scripts/n6.sh leaf          WeftOS leaf smoke: RVF segment + leaf-types CBOR on the M55,
-#                               segment validated on the host with weftos-rvf-wire
+#                               segment validated on the host with rvf-wire
 #   scripts/n6.sh node [secs]   embassy node: HSE clocks, Ethernet DHCP, UDP 47006 announce;
 #                               streams its defmt log and listens for the announce on this host
 #   scripts/n6.sh run <elf>     load a RAM-linked ELF into AXISRAM and start it

@@ -38,10 +38,11 @@ cluster = [
 ]
 exochain = [
     "dep:exo-resource-tree",
-    "dep:weftos-rvf-crypto",
-    "dep:weftos-rvf-wire",
+    "dep:rvf-crypto",
+    "dep:rvf-wire",
     "dep:rvf-types",
     "dep:rvf-runtime",
+    "dep:weftos-pq-sign",
     "dep:ciborium",
     "dep:ed25519-dalek",
     "dep:rand",
@@ -110,10 +111,11 @@ ruvector-rabitq = { workspace = true, optional = true }
 parking_lot = { workspace = true, optional = true }
 futures = { workspace = true, optional = true }
 exo-resource-tree = { workspace = true, optional = true }
-weftos-rvf-crypto = { workspace = true, optional = true }
-weftos-rvf-wire = { workspace = true, optional = true }
+rvf-crypto = { workspace = true, optional = true }
+rvf-wire = { workspace = true, optional = true }
 rvf-types = { workspace = true, optional = true }
 rvf-runtime = { workspace = true, optional = true }
+weftos-pq-sign = { workspace = true, optional = true, features = ["mldsa"] }
 ciborium = { workspace = true, optional = true }
 cognitum-gate-tilezero = { workspace = true, optional = true }
 ed25519-dalek = { workspace = true, optional = true }

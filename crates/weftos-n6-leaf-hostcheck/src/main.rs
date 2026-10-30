@@ -4,7 +4,7 @@
 use std::process::ExitCode;
 
 use rvf_types::SegmentType;
-use weftos_rvf_wire::{read_segment, validate_segment};
+use rvf_wire::{read_segment, validate_segment};
 
 fn main() -> ExitCode {
     let Some(path) = std::env::args().nth(1) else {
@@ -36,7 +36,7 @@ fn main() -> ExitCode {
         println!("FAIL  validate_segment (content hash): {e:?}");
         return ExitCode::FAILURE;
     }
-    println!("PASS  weftos-rvf-wire read_segment + validate_segment (XXH3-128 content hash)");
+    println!("PASS  rvf-wire read_segment + validate_segment (XXH3-128 content hash)");
 
     // VEC payload: dim u16 | count u32 | count × (id u64 | f32 × dim)
     let dim = u16::from_le_bytes([payload[0], payload[1]]) as usize;

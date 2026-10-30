@@ -80,8 +80,8 @@ pub fn durable(chain: &ChainManager) -> Result<()> {
 /// Loading may race a file replacement: the restored chain must still match
 /// this authenticated commitment, including each event's chain ID/sequence.
 fn verify_restored(bytes: &[u8], key: &SigningKey, chain: &ChainManager) -> Result<()> {
-    use weftos_rvf_crypto::{decode_signature_footer, verify_segment};
-    use weftos_rvf_wire::{read_segment, validate_segment, writer::calculate_padded_size};
+    use rvf_crypto::{decode_signature_footer, verify_segment};
+    use rvf_wire::{read_segment, validate_segment, writer::calculate_padded_size};
     let mut offset = 0usize;
     let mut last = None;
     while let Ok((header, payload)) = read_segment(&bytes[offset..]) {
@@ -137,7 +137,7 @@ mod tests {
     use super::*;
     #[test]
     fn retained_signed_footer_cannot_authenticate_rewritten_events() {
-        use weftos_rvf_wire::{read_segment, writer::calculate_padded_size};
+        use rvf_wire::{read_segment, writer::calculate_padded_size};
         // Real chain serialization: both event histories are internally valid.
         let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
             ".wasm-chain-test-{}-{}",

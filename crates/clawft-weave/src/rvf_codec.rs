@@ -13,7 +13,7 @@
 //!
 //! The 4-byte length prefix is NOT part of the RVF spec -- it is stream
 //! framing so the reader knows how many bytes to consume before handing
-//! the buffer to `weftos_rvf_wire::read_segment`.
+//! the buffer to `rvf_wire::read_segment`.
 
 // Public API used by daemon, client, and tests.
 #![allow(dead_code)]
@@ -71,12 +71,12 @@ impl<R: AsyncRead + Unpin> RvfFrameReader<R> {
             .context("reading RVF segment bytes")?;
 
         // 3. Parse header + payload via rvf-wire.
-        let (header, payload) = weftos_rvf_wire::read_segment(&buf)
-            .map_err(|e| anyhow!("weftos_rvf_wire::read_segment failed: {e}"))?;
+        let (header, payload) = rvf_wire::read_segment(&buf)
+            .map_err(|e| anyhow!("rvf_wire::read_segment failed: {e}"))?;
 
         // 4. Verify content hash.
-        weftos_rvf_wire::validate_segment(&header, payload)
-            .map_err(|e| anyhow!("weftos_rvf_wire::validate_segment failed: {e}"))?;
+        rvf_wire::validate_segment(&header, payload)
+            .map_err(|e| anyhow!("rvf_wire::validate_segment failed: {e}"))?;
 
         Ok(Some(RvfFrame {
             header,
@@ -100,7 +100,7 @@ impl<W: AsyncWrite + Unpin> RvfFrameWriter<W> {
 
     /// Serialize an RVF segment and write it with a 4-byte length prefix.
     ///
-    /// The segment bytes are produced by `weftos_rvf_wire::write_segment` (which
+    /// The segment bytes are produced by `rvf_wire::write_segment` (which
     /// computes the content hash, sets the timestamp, and pads to 64-byte
     /// alignment). The length prefix is the total size of those bytes.
     pub async fn write_frame(
@@ -110,7 +110,7 @@ impl<W: AsyncWrite + Unpin> RvfFrameWriter<W> {
         flags: rvf_types::SegmentFlags,
         segment_id: u64,
     ) -> Result<(), anyhow::Error> {
-        let segment_bytes = weftos_rvf_wire::write_segment(seg_type, payload, flags, segment_id);
+        let segment_bytes = rvf_wire::write_segment(seg_type, payload, flags, segment_id);
 
         let len = segment_bytes.len() as u32;
         self.writer
@@ -216,7 +216,7 @@ mod tests {
         let segment_id = 99u64;
 
         // Build the raw wire bytes manually.
-        let segment_bytes = weftos_rvf_wire::write_segment(seg_type, &payload, flags, segment_id);
+        let segment_bytes = rvf_wire::write_segment(seg_type, &payload, flags, segment_id);
         let len = segment_bytes.len() as u32;
 
         let mut raw = Vec::new();

@@ -113,6 +113,8 @@ members = [
     # .planning/ruv/integration/agenticow-integration-plan.md). Standalone;
     # no hermes-loop or exochain wiring yet (Phases 2-3).
     "crates/clawft-cow-memory",
+    # ADR-129: real ML-DSA-65 and versioned Ed25519 + ML-DSA-65 dual signatures.
+    "crates/weftos-pq-sign",
     # Append-only version index for first-class objects (ADR-121 O1), mirrored
     # into clawft-cow-memory lineages.
     "crates/clawft-versions",
@@ -288,18 +290,18 @@ wasmtime-wasi = { version = "48.0.4", default-features = false, features = ["p1"
 notify = "8"
 
 # RVF (RuVector Format) -- vector storage
-# rvf-types, rvf-runtime, rvf-wire: upstream crates.io (ruvnet)
-# weftos-rvf-crypto: our fork with ML-DSA-65 dual signing
-rvf-runtime = { version = "0.3", default-features = false, features = ["std"] }
-rvf-types = { version = "0.2", default-features = false, features = ["std"] }
-# ADR-128 T0: clawft-cow-memory and clawft-core (rvf) are on rvf-runtime 0.5 /
-# rvf-types 0.3, declared locally in those crates. These workspace pins stay at
-# 0.3 / 0.2 because clawft-kernel passes rvf-types values (Scorecard,
-# LineageRecord, SegmentFlags) to weftos-rvf-crypto / weftos-rvf-wire, which
-# still depend on rvf-types 0.2; two rvf-types versions cannot mix there.
-# Moving them needs the weftos- forks rebased onto rvf-types 0.3 first.
-weftos-rvf-crypto = { version = "0.3", default-features = false, features = ["std", "ed25519"] }
-weftos-rvf-wire = { version = "0.2" }
+# All upstream crates.io (ruvnet). The weftos-rvf-crypto / weftos-rvf-wire
+# forks were dropped by ADR-129: they were renamed copies of older upstream
+# sources plus an HMAC ML-DSA placeholder. Real ML-DSA-65 lives in
+# crates/weftos-pq-sign. ADR-128 T0: rvf-runtime 0.5 / rvf-types 0.3.
+rvf-runtime = { version = "0.5", default-features = false, features = ["std"] }
+rvf-types = { version = "0.3", default-features = false, features = ["std"] }
+rvf-crypto = { version = "0.3", default-features = false, features = ["std", "ed25519"] }
+rvf-wire = { version = "0.2" }
+
+# Post-quantum signatures (ADR-129): ML-DSA-65, FIPS 204 (PQClean via pqcrypto).
+pqcrypto-mldsa = "0.1.2"
+pqcrypto-traits = "0.3.5"
 
 # CBOR codec (ExoChain payload format)
 ciborium = "0.2"
@@ -373,6 +375,7 @@ futures = "0.3"
 # Versions MUST track `workspace.package.version` so that bumping the workspace
 # version atomically updates all path-dep version constraints (WEFT-8).
 clawft-rpc = { version = "0.8.4", path = "crates/clawft-rpc" }
+weftos-pq-sign = { version = "0.8.4", path = "crates/weftos-pq-sign", default-features = false }
 clawft-mesh-local = { version = "0.8.4", path = "crates/clawft-mesh-local" }
 clawft-mesh-service = { version = "0.8.4", path = "crates/clawft-mesh-service" }
 clawft-types = { version = "0.8.4", path = "crates/clawft-types", default-features = false }

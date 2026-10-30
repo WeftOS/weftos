@@ -4,7 +4,7 @@
 //! 1. Builds an RVF `VEC` segment with `rvf-types` (no_std): 64-byte header,
 //!    XXH3-128 content hash, payload `dim u16 | count u32 | count × (id u64 |
 //!    f32 × dim)`, padded to 64 bytes. It lands in `N6_SEGMENT`, where the host
-//!    dumps it and validates it independently with `weftos-rvf-wire`.
+//!    dumps it and validates it independently with `rvf-wire`.
 //! 2. Encodes a `weftos-leaf-types::LeafServices` announce to CBOR and
 //!    decodes it back.
 //! 3. Publishes the outcome in `N6_RESULT` and keeps a heartbeat counting.

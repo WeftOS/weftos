@@ -109,8 +109,8 @@ tiktoken-rs = { workspace = true, optional = true }
 # (see `agent::tokenizer`); o200k_base stays the bundled, download-free
 # stand-in when no exact tokenizer is configured.
 tokenizers = { workspace = true, optional = true }
-rvf-runtime = { version = "0.5", default-features = false, features = ["std"], optional = true }
-rvf-types = { package = "rvf-types", version = "0.3", default-features = false, features = ["std"], optional = true }
+rvf-runtime = { workspace = true, optional = true }
+rvf-types = { workspace = true, optional = true }
 # WEFT-616 Phase 2: per-turn COW memory checkpointing (BranchableMemory).
 # No clawft-* deps of its own; safe in the clawft-core -> clawft-cow-memory
 # direction. Gated behind `rvf` since it links rvf-runtime.
