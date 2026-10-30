@@ -40,6 +40,7 @@ impl<F> Grid<F>
 where
     F: FnOnce(&mut egui::Ui),
 {
+    /// Construct a `Grid` with `num_columns` columns; `build` emits the cells.
     pub fn new(id_source: impl std::hash::Hash, num_columns: usize, build: F) -> Self {
         Self {
             id_source: egui::Id::new(("canon.grid", id_source)),
@@ -53,26 +54,31 @@ where
         }
     }
 
+    /// Set the minimum width of each column.
     pub fn min_col_width(mut self, w: f32) -> Self {
         self.min_col_width = Some(w);
         self
     }
 
+    /// Override the horizontal and vertical spacing between cells.
     pub fn spacing(mut self, spacing: egui::Vec2) -> Self {
         self.spacing = Some(spacing);
         self
     }
 
+    /// Shade alternating rows when `striped` is true.
     pub fn striped(mut self, striped: bool) -> Self {
         self.striped = striped;
         self
     }
 
+    /// Attach a tooltip shown when hovering the grid.
     pub fn tooltip(mut self, text: impl Into<Tooltip>) -> Self {
         self.tooltip = Some(text.into());
         self
     }
 
+    /// Select the visual variant for this grid.
     pub fn variant(mut self, variant: VariantId) -> Self {
         self.variant = variant;
         self
