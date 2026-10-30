@@ -57,7 +57,9 @@ const MAX_ROLES: usize = 16;
 /// Default seconds between local re-checks.
 pub const DEFAULT_SYNC: u64 = 5;
 /// Default seconds between mesh announcements.
-pub const DEFAULT_ADVERT: u64 = 20;
+pub const DEFAULT_ADVERT: u64 = 60;
+/// Longest advert TTL a config may set, seconds.
+pub const MAX_ADVERT_TTL: u64 = 3600;
 const MAX_LIST: usize = 64;
 
 /// One served role.
@@ -178,9 +180,13 @@ pub struct FileCfg {
     /// Seconds between local re-checks (default 5).
     #[serde(default)]
     pub sync_secs: Option<u64>,
-    /// Seconds between mesh announcements (default 20).
+    /// Seconds between mesh announcements (default 60).
     #[serde(default)]
     pub advert_secs: Option<u64>,
+    /// Seconds a received advert counts without a repeat (default 180).
+    /// `advert_secs` must be at most half of it.
+    #[serde(default)]
+    pub advert_ttl_secs: Option<u64>,
 }
 
 /// `llamacpp`, `mlx-lm`, `ollama`.
@@ -203,6 +209,13 @@ pub fn flavor_key(f: InferFlavor) -> &'static str {
 }
 
 impl FileCfg {
+    /// The TTL this node gives received adverts.
+    pub fn advert_ttl(&self) -> std::time::Duration {
+        self.advert_ttl_secs
+            .map(std::time::Duration::from_secs)
+            .unwrap_or(clawft_kernel::infer_proxy::DEFAULT_ADVERT_TTL)
+    }
+
     /// Boundary validation (no file access).
     pub fn validate(&self) -> Result<(), String> {
         let bad = |m: String| Err(format!("{CONFIG_FILE}: {m}"));
@@ -309,9 +322,12 @@ impl FileCfg {
             }
         }
         // An advert must be repeated well inside the receivers' TTL.
-        let max_advert = clawft_kernel::infer_proxy::DEFAULT_ADVERT_TTL.as_secs() / 2;
+        if self.advert_ttl_secs.is_some_and(|t| !(2..=MAX_ADVERT_TTL).contains(&t)) {
+            return bad(format!("advert_ttl_secs must be 2..={MAX_ADVERT_TTL}"));
+        }
+        let max_advert = self.advert_ttl().as_secs() / 2;
         if self.advert_secs.is_some_and(|a| a == 0 || a > max_advert) {
-            return bad(format!("advert_secs must be 1..={max_advert} (half the advert TTL)"));
+            return bad(format!("advert_secs must be 1..={max_advert} (half advert_ttl_secs)"));
         }
         if self.sync_secs.is_some_and(|s| s == 0 || s > 60) {
             return bad("sync_secs must be 1..=60".into());

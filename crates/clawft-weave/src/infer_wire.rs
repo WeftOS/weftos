@@ -275,7 +275,7 @@ pub async fn build(p: InitParts<'_>) -> Result<Option<(Arc<InferState>, FileCfg)
         (None, false) => (None, "unavailable: this daemon has no mesh runtime".to_string()),
     };
     let dialer = hub.clone().map(|h| h as Arc<dyn clawft_kernel::infer_proxy::MeshDialer>);
-    let mut table = PlacementTable::new(p.node_id.clone(), dialer, p.audit.clone());
+    let mut table = PlacementTable::new(p.node_id.clone(), dialer, p.audit.clone()).with_advert_ttl(cfg.advert_ttl());
     // ADR-120: the daemon's shared, persisted exposure registry (in-memory when absent).
     if let Some(reg) = crate::expose_rt::global() {
         table = table.with_exposures(reg);

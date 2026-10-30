@@ -111,24 +111,41 @@ fn config_is_validated_and_defaults_to_off() {
     bad(serde_json::json!({"roles": [role(5, Some(6))], "unknown": 1}));
     bad(serde_json::json!({"roles": [role(5, None)], "mesh": {"expose": ["nope"]}}));
     bad(serde_json::json!({"roles": [role(5, None)], "mesh": {"serve_peers": {"hermes": ["bad node!"]}}}));
-    bad(serde_json::json!({"roles": [role(5, None)], "advert_secs": 31}));
-    bad(serde_json::json!({"roles": [role(5, None)], "advert_secs": 0}));
+    bad(serde_json::json!({"roles": [role(5, None)], "advert_ttl_secs": 60, "advert_secs": 31}));
+    bad(serde_json::json!({"roles": [role(5, None)], "advert_ttl_secs": 60, "advert_secs": 0}));
     bad(serde_json::json!({"roles": [role(5, None)], "sync_secs": 0}));
     bad(serde_json::json!({"roles": [role(5, None)], "sync_secs": 61}));
     // The announcement rides the sync tick: sync may not exceed advert
     // (against the defaults too).
-    bad(serde_json::json!({"roles": [role(5, None)], "advert_secs": 2}));
-    bad(serde_json::json!({"roles": [role(5, None)], "sync_secs": 30}));
-    bad(serde_json::json!({"roles": [role(5, None)], "sync_secs": 11, "advert_secs": 10}));
+    bad(serde_json::json!({"roles": [role(5, None)], "advert_ttl_secs": 60, "advert_secs": 2}));
+    // sync 50 against the 60 s default announce really announces every 100 s, over 90.
+    bad(serde_json::json!({"roles": [role(5, None)], "sync_secs": 50}));
+    bad(serde_json::json!({"roles": [role(5, None)], "sync_secs": 11, "advert_ttl_secs": 60, "advert_secs": 10}));
     // sync 29 with advert 30 really announces every 58 s: rejected.
-    bad(serde_json::json!({"roles": [role(5, None)], "advert_secs": 30, "sync_secs": 29}));
-    bad(serde_json::json!({"roles": [role(5, None)], "advert_secs": 30, "sync_secs": 7}));
-    write_cfg(dir.path(), serde_json::json!({"roles": [role(5, None)], "advert_secs": 30, "sync_secs": 6}));
+    bad(serde_json::json!({"roles": [role(5, None)], "advert_ttl_secs": 60, "advert_secs": 30, "sync_secs": 29}));
+    bad(serde_json::json!({"roles": [role(5, None)], "advert_ttl_secs": 60, "advert_secs": 30, "sync_secs": 7}));
+    write_cfg(dir.path(), serde_json::json!({"roles": [role(5, None)], "advert_ttl_secs": 60, "advert_secs": 30, "sync_secs": 6}));
     assert!(load_config(dir.path()).is_ok(), "30 is a multiple of 6");
-    write_cfg(dir.path(), serde_json::json!({"roles": [role(5, None)], "advert_secs": 30, "sync_secs": 30}));
+    write_cfg(dir.path(), serde_json::json!({"roles": [role(5, None)], "advert_ttl_secs": 60, "advert_secs": 30, "sync_secs": 30}));
     assert!(load_config(dir.path()).is_ok());
-    write_cfg(dir.path(), serde_json::json!({"roles": [role(5, None)], "advert_secs": 5}));
+    write_cfg(dir.path(), serde_json::json!({"roles": [role(5, None)], "advert_ttl_secs": 60, "advert_secs": 5}));
     assert!(load_config(dir.path()).is_ok(), "equal to the default sync");
+    // Defaults (owner 2026-10-29): announce every 60 s, TTL 180 s.
+    assert_eq!(crate::infer_cfg::DEFAULT_ADVERT, 60);
+    assert_eq!(clawft_kernel::infer_proxy::DEFAULT_ADVERT_TTL.as_secs(), 180);
+    write_cfg(dir.path(), serde_json::json!({"roles": [role(5, None)]}));
+    let c = load_config(dir.path()).unwrap().unwrap();
+    assert_eq!(c.advert_ttl().as_secs(), 180);
+    // An announce period above half the TTL is refused, at the default TTL and a configured one.
+    bad(serde_json::json!({"roles": [role(5, None)], "advert_secs": 91}));
+    write_cfg(dir.path(), serde_json::json!({"roles": [role(5, None)], "advert_secs": 90}));
+    assert!(load_config(dir.path()).is_ok(), "90 is half the 180 s default TTL");
+    bad(serde_json::json!({"roles": [role(5, None)], "advert_ttl_secs": 100}));
+    bad(serde_json::json!({"roles": [role(5, None)], "advert_ttl_secs": 1}));
+    bad(serde_json::json!({"roles": [role(5, None)], "advert_ttl_secs": 3601}));
+    write_cfg(dir.path(), serde_json::json!({"roles": [role(5, None)], "advert_ttl_secs": 120}));
+    let c = load_config(dir.path()).unwrap().unwrap();
+    assert_eq!(c.advert_ttl().as_secs(), 120);
     let mut r = role(5, Some(6));
     r["on_occupied"] = "bind-anyway".into();
     bad(serde_json::json!({"roles": [r]}));

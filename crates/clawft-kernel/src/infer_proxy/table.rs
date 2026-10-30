@@ -37,8 +37,10 @@ struct LocalEntry {
     svc: Option<SvcRoute>,
 }
 
-/// How long a received advertisement counts without being refreshed.
-pub const DEFAULT_ADVERT_TTL: Duration = Duration::from_secs(60);
+/// How long a received advertisement counts without being refreshed: three
+/// announce periods at the 60 s default, so two missed announcements are
+/// tolerated. A clean stop withdraws at once and does not wait for it.
+pub const DEFAULT_ADVERT_TTL: Duration = Duration::from_secs(180);
 
 struct RemoteEntry {
     ad: ServiceAdvertisement,

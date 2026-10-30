@@ -106,3 +106,19 @@ async fn a_svc_role_is_unadvertised_and_withdrawn_when_its_provider_stops_servin
     assert_eq!(t.resolve("vision"), None);
     assert_eq!(t.exposures().drain_withdrawals(), vec!["infer.vision".to_string()]);
 }
+
+#[tokio::test]
+async fn the_default_ttl_survives_two_missed_announcements() {
+    // Defaults (2026-10-29): announce every 60 s, adverts count for 180 s.
+    assert_eq!(super::table::DEFAULT_ADVERT_TTL, Duration::from_secs(180));
+    let mesh = FakeMesh::new("node-a");
+    let b = serving_node(&mesh, "node-b").await;
+    let (c, now) = clock();
+    let a = PlacementTable::new("node-a", Some(mesh.clone() as Arc<dyn MeshDialer>), None).with_clock(c);
+    a.allow_remote_node("hermes", "node-b", true);
+    assert!(a.ingest_advertisement("node-b", &b.advertisement("hermes", 1).unwrap()));
+    now.store(179, Ordering::SeqCst);
+    assert!(a.resolve("hermes").is_some(), "two announcements (60 s, 120 s) missed, still routed");
+    now.store(181, Ordering::SeqCst);
+    assert_eq!(a.resolve("hermes"), None, "the third missed announcement expires it");
+}

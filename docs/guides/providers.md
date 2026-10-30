@@ -529,11 +529,13 @@ off unless `<runtime>/inference.json` exists.
   and why the mesh is or is not available. `infer.expose` and `infer.allow`
   (admin) change exposure and the allowlists until restart; each change is
   recorded on the chain. The file holds the persistent settings. Optional
-  `sync_secs` (1 to 60, default 5) and `advert_secs` (1 to 30, default 20)
-  tune the local re-check and the mesh announcement (`sync_secs` may not
-  exceed `advert_secs`, since the announcement rides the sync tick, and the real period,
-  `advert_secs` rounded up to a multiple of `sync_secs`, must stay within 30); adverts expire after 60 s
-  without a refresh.
+  `sync_secs` (1 to 60, default 5), `advert_secs` (default 60) and
+  `advert_ttl_secs` (2 to 3600, default 180) tune the local re-check, the mesh
+  announcement and how long a received advert counts without a refresh
+  (`sync_secs` may not exceed `advert_secs`, since the announcement rides the sync
+  tick, and the real period, `advert_secs` rounded up to a multiple of `sync_secs`,
+  must be at most half of `advert_ttl_secs`). At the defaults two announcements can
+  be missed before an advert expires; a provider that stops cleanly withdraws at once.
 - In service mode (ADR-103) the machine mesh service owns the mesh and hands
   the daemon deliveries as an unverified peer, so local placement and the
   proxy work but serving or using a remote node does not; the status says so.
