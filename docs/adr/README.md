@@ -1,6 +1,6 @@
 # Architecture Decision Records
 
-This directory contains Architecture Decision Records (ADRs) for the WeftOS + clawft project, following the MADR 3.0 format. ADR-001 to ADR-023 came out of the Sprint 11 Symposium (2026-03-27) and its supporting analysis; later records were written as decisions were taken. The index below lists every `adr-*.md` file in this directory (125 files, ADR-001 to ADR-126).
+This directory contains Architecture Decision Records (ADRs) for the WeftOS + clawft project, following the MADR 3.0 format. ADR-001 to ADR-023 came out of the Sprint 11 Symposium (2026-03-27) and its supporting analysis; later records were written as decisions were taken. The index below lists every `adr-*.md` file in this directory (126 files, ADR-001 to ADR-127).
 
 ADR-123 has no file. The number is reserved by a card on the dashboard board; do not reuse it. Each Status column cell is copied from the ADR's own header, so the ADR is authoritative if the two ever differ.
 
@@ -133,6 +133,7 @@ ADR-123 has no file. The number is reserved by a card on the dashboard board; do
 | [ADR-124](adr-124-node-clock-and-reading-time.md) | Node clock status on `mesh.clock.v1.status`; SenML capture time; host owns chrony | Proposed | Architecture / Sensors | ADR-025 / ADR-100 / ADR-106 |
 | [ADR-125](adr-125-vision-service-contract.md) | Vision service contract: `svc.vision.*` kinds (ocr, codes, faces never identity, labels, embed, point, segment) as cogbus services; one `vision.v1` request/reply schema; images and masks as blob handles; embeddings carry a registered kind and are never compared across kinds; image chat stays on `svc.infer` / ADR-101 | Proposed | Cogs / Data plane | ADR-122, ADR-101, ADR-120, ADR-099 |
 | [ADR-126](adr-126-mesh-object-store.md) | Mesh object store: RustFS on PG as the mesh's S3 storage, run by the daemon; `weftos://` store names for nodes, projects, worktrees and releases mapped to derived buckets; daemon-owned lifecycle and grants mirrored into RustFS IAM; worktree stores overlay the project store; edge and Wasm nodes via the parent daemon; audit and notifications into the activity log; `weftos-store` crate (OpenDAL) | Proposed | Mesh / Storage | ADR-099, ADR-114, ADR-120, ADR-122 |
+| [ADR-127](adr-127-weftos-orchestrated-ci.md) | WeftOS-orchestrated CI: dev on the Mac with quick affected checks only; CI authoritative; ephemeral rootless-podman GitHub runners on a CI host as a `ci-runner` workload kind with per-class pools; RustFS-backed sccache, cargo and node caches with per-job STS; diff gate first; target-* push triggers; results routed to lanes and the board; client pools under the client user | Proposed | CI / Placement | ADR-099, ADR-120, ADR-126 |
 
 
 ## Categories

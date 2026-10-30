@@ -1,5 +1,5 @@
 {
-  "adrs": 124,
+  "adrs": 126,
   "catalog": {
     "chips": 312,
     "modules": 795
@@ -8,7 +8,7 @@
   "cogs_release": "v0.1.4",
   "cogs_source_offline": false,
   "crates": 65,
-  "generated_from": "db1c61bf4",
+  "generated_from": "5507cffc2",
   "latest_release": "v0.8.4",
   "published": 40,
   "version": "0.8.4",
