@@ -9,17 +9,9 @@ repository.workspace = true
 description = "Real ML-DSA-65 (FIPS 204) and versioned Ed25519 + ML-DSA-65 dual signatures for WeftOS, with an explicit legacy-placeholder policy (ADR-129)."
 readme = "README.md"
 
-[features]
-# The ML-DSA-65 backend (PQClean C via pqcrypto-mldsa). Off only for targets
-# without a C toolchain, such as the wasm32-wasip1 project guest: the types stay
-# so shared code compiles, but no key can be built and every verify fails closed.
-default = ["mldsa"]
-mldsa = ["dep:pqcrypto-mldsa", "dep:pqcrypto-traits"]
-
 [dependencies]
 ed25519-dalek = { workspace = true }
-pqcrypto-mldsa = { workspace = true, optional = true }
-pqcrypto-traits = { workspace = true, optional = true }
+ml-dsa = { workspace = true }
 serde = { workspace = true }
 sha3 = { workspace = true }
 thiserror = { workspace = true }

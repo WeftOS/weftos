@@ -8,7 +8,7 @@
 //! What this crate provides:
 //!
 //! - [`mldsa65`]: real ML-DSA-65 (FIPS 204, security category 3) through
-//!   `pqcrypto-mldsa`. The signing key and the verifying key are separate
+//!   RustCrypto's pure-Rust `ml-dsa`. The signing key and the verifying key are separate
 //!   types; [`mldsa65::VerifyingKey`] has no signing method, and its bytes
 //!   cannot be loaded as a signing key.
 //! - [`dual`]: an Ed25519 + ML-DSA-65 dual signature carrying a
@@ -61,9 +61,9 @@ pub enum Error {
     /// A key file failed a permission or file-type check.
     #[error("key file {path}: {reason}")]
     KeyFile { path: String, reason: String },
-    /// Built without the `mldsa` feature: no ML-DSA-65 backend is linked.
-    #[error("ML-DSA-65 is not available in this build (feature `mldsa` is off)")]
-    Unsupported,
+    /// The operating system RNG failed while generating a key or signing.
+    #[error("operating system RNG failed")]
+    Rng,
     /// An I/O error reading or writing a key file.
     #[error("key file I/O: {0}")]
     Io(#[from] std::io::Error),

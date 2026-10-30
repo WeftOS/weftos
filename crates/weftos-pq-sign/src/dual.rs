@@ -98,6 +98,9 @@ pub enum RejectReason {
     Ed25519,
     /// The ML-DSA-65 half is malformed or did not verify.
     MlDsa65,
+    /// A legacy or Ed25519-only signature where the signer had already cut
+    /// over to ML-DSA-65 (ADR-129 downgrade rule).
+    Downgrade,
 }
 
 /// The outcome of verifying a dual signature.
@@ -225,7 +228,7 @@ impl DualSignature {
     }
 }
 
-#[cfg(all(test, feature = "mldsa"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use rand::rngs::OsRng;

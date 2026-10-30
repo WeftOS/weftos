@@ -115,7 +115,7 @@ rvf-crypto = { workspace = true, optional = true }
 rvf-wire = { workspace = true, optional = true }
 rvf-types = { workspace = true, optional = true }
 rvf-runtime = { workspace = true, optional = true }
-weftos-pq-sign = { workspace = true, optional = true, features = ["mldsa"] }
+weftos-pq-sign = { workspace = true, optional = true }
 ciborium = { workspace = true, optional = true }
 cognitum-gate-tilezero = { workspace = true, optional = true }
 ed25519-dalek = { workspace = true, optional = true }

@@ -299,9 +299,8 @@ rvf-types = { version = "0.3", default-features = false, features = ["std"] }
 rvf-crypto = { version = "0.3", default-features = false, features = ["std", "ed25519"] }
 rvf-wire = { version = "0.2" }
 
-# Post-quantum signatures (ADR-129): ML-DSA-65, FIPS 204 (PQClean via pqcrypto).
-pqcrypto-mldsa = "0.1.2"
-pqcrypto-traits = "0.3.5"
+# Post-quantum signatures (ADR-129): ML-DSA-65, FIPS 204 (RustCrypto, pure Rust).
+ml-dsa = { version = "0.1.1", default-features = false, features = ["alloc", "getrandom", "zeroize"] }
 
 # CBOR codec (ExoChain payload format)
 ciborium = "0.2"
