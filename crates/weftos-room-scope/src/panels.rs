@@ -24,11 +24,15 @@ const NODE_COLORS: [Color32; 8] = [
     Color32::from_rgb(200, 200, 200),
 ];
 
+/// Formats `s` seconds as `M:SS.s` (minutes unbounded, seconds zero-padded
+/// to two digits with one decimal), e.g. `65.5` becomes `1:05.5`.
 pub fn fmt_t(s: f64) -> String {
     let m = (s / 60.0).floor();
     format!("{}:{:04.1}", m as i64, s - 60.0 * m)
 }
 
+/// Formats an optional float to `d` decimal places, or an en dash (U+2013)
+/// when the value is absent.
 pub fn f2(v: Option<f64>, d: usize) -> String {
     v.map_or("–".into(), |x| format!("{x:.d$}"))
 }
@@ -438,5 +442,24 @@ pub fn plots(s: &mut RoomScope, ui: &mut egui::Ui) {
     }
     if let Some(t) = seek {
         s.t = t.clamp(0.0, dur);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fmt_t_formats_minutes_and_seconds() {
+        assert_eq!(fmt_t(0.0), "0:00.0");
+        assert_eq!(fmt_t(65.5), "1:05.5");
+        assert_eq!(fmt_t(600.0), "10:00.0");
+    }
+
+    #[test]
+    fn f2_formats_option_or_en_dash() {
+        assert_eq!(f2(None, 2), "\u{2013}");
+        assert_eq!(f2(Some(1.0), 2), "1.00");
+        assert_eq!(f2(Some(1.23456), 3), "1.235");
     }
 }
