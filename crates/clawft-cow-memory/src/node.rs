@@ -70,6 +70,10 @@ pub(crate) struct MemoryNode {
     /// Free-form tags carried alongside a vector id -- see
     /// [`VectorTags`]. Not persisted into the `.rvf` file itself.
     pub(crate) tags: HashMap<u64, VectorTags>,
+    /// `true` once this node's store is frozen (or opened read-only), i.e.
+    /// it may be the parent of a native `branch()`. `base` starts `false`
+    /// and is frozen lazily by [`MemoryNode::branch_from`].
+    pub(crate) frozen: bool,
 }
 
 impl MemoryNode {
@@ -125,12 +129,99 @@ impl MemoryNode {
             tombstones: self.tombstones.clone(),
             texts: self.texts.clone(),
             tags: self.tags.clone(),
+            frozen: true,
         })
     }
 
     pub(crate) fn freeze(&mut self) -> Result<()> {
         self.store.freeze()?;
+        self.frozen = true;
         Ok(())
+    }
+
+    /// Freeze unless already frozen/read-only; upstream requires a branch
+    /// parent to be immutable.
+    pub(crate) fn ensure_frozen(&mut self) -> Result<()> {
+        if !self.frozen {
+            self.freeze()?;
+        }
+        Ok(())
+    }
+
+    /// Native copy-on-write child of `parent` (`RvfStore::branch`): the
+    /// child reads through to the parent's own vectors and hides ids via
+    /// its membership filter. Freezes `parent` first. Read-through is
+    /// exactly ONE level (the parent's own slab), so deeper history still
+    /// needs the chain walk -- see `crate::chain_walk`.
+    ///
+    /// Upstream sizes the membership bitmap from the highest vector id in
+    /// the parent, so ids must stay dense (the process-wide counter in
+    /// `id_gen` is; caller-supplied sparse ids above ~512M make `branch`
+    /// fail closed with `MembershipInvalid`). Metadata is copied in full per
+    /// child; this crate stores none (`ingest_batch(.., None)`), so the
+    /// copy is empty.
+    pub(crate) fn branch_from(
+        id: CheckpointId,
+        parent: &mut MemoryNode,
+        path: &Path,
+        label: Option<String>,
+    ) -> Result<Self> {
+        parent.ensure_frozen()?;
+        let store = parent.store.branch(path)?;
+        Ok(Self::wrap(id, store, path.to_path_buf(), label))
+    }
+
+    /// Build the next `working` node under `parent`. Uses native `branch()`
+    /// when `parent` is not itself a COW child, and plain `derive` (a
+    /// lineage link with no COW state) otherwise.
+    ///
+    /// Why not always branch: opening or querying a COW child recurses
+    /// through every COW ancestor (`open_readonly_with_ancestry`, the
+    /// parent arm of `query`), one deep stack frame set per level. A
+    /// lineage with a checkpoint per turn branched all the way down
+    /// overflowed the stack at ~80 checkpoints. Alternating this way
+    /// bounds COW depth at one, which is also all the native read-through
+    /// covers (see `crate::chain_walk`).
+    pub(crate) fn child_of(
+        id: CheckpointId,
+        parent: &mut MemoryNode,
+        path: &Path,
+        opts: rvf_runtime::RvfOptions,
+        label: Option<String>,
+    ) -> Result<Self> {
+        if parent.store.is_cow_child() {
+            parent.ensure_frozen()?;
+            Self::derive_from(id, &parent.store, path, opts, label)
+        } else {
+            match Self::branch_from(id, parent, path, label.clone()) {
+                // Sparse ids (e.g. digest-derived, as `clawft-versions`
+                // uses): upstream's membership bitmap is dense and refuses
+                // ids past 64 MiB of bitmap before creating any file. Fall
+                // back to a plain derive; the chain walk then supplies the
+                // read-through. Dense ordinals are an ADR-128 T2 concern.
+                Err(CowMemoryError::Rvf(rvf_types::RvfError::Code(
+                    rvf_types::ErrorCode::MembershipInvalid,
+                ))) => Self::derive_from(id, &parent.store, path, opts, label),
+                other => other,
+            }
+        }
+    }
+
+    /// Reopen this (frozen) node's file writable, releasing the old
+    /// handle's writer lock first. Used by `promote`, which mutates `base`
+    /// in place; the caller re-freezes before branching again.
+    pub(crate) fn reopen_writable(&mut self) -> Result<()> {
+        let placeholder = RvfStore::open_readonly(&self.path)?;
+        drop(std::mem::replace(&mut self.store, placeholder));
+        self.store = RvfStore::open(&self.path)?;
+        self.frozen = false;
+        Ok(())
+    }
+
+    /// Whether `id` is in this node's own slab (not read through from a
+    /// parent). O(n); only used on the rare resurrection-guard path.
+    pub(crate) fn owns(&self, id: u64) -> bool {
+        self.store.iter_vectors().any(|(v, _)| v == id)
     }
 
     /// Wrap an already-open `RvfStore` (e.g. from `RvfStore::open`) as a
@@ -174,6 +265,7 @@ impl MemoryNode {
             tombstones: HashSet::new(),
             texts: HashMap::new(),
             tags: HashMap::new(),
+            frozen: false,
         }
     }
 }

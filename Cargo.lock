@@ -1358,8 +1358,8 @@ dependencies = [
  "reqwest",
  "ruvector-diskann",
  "ruvector-sona",
- "rvf-runtime",
- "rvf-types",
+ "rvf-runtime 0.5.0",
+ "rvf-types 0.3.0",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -1383,8 +1383,8 @@ name = "clawft-cow-memory"
 version = "0.8.4"
 dependencies = [
  "rand 0.8.7",
- "rvf-runtime",
- "rvf-types",
+ "rvf-runtime 0.5.0",
+ "rvf-types 0.3.0",
  "serde",
  "serde_json",
  "tempfile",
@@ -1538,8 +1538,8 @@ dependencies = [
  "ruvector-rabitq",
  "ruvector-raft",
  "ruvector-replication",
- "rvf-runtime",
- "rvf-types",
+ "rvf-runtime 0.3.2",
+ "rvf-types 0.2.1",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -2066,8 +2066,8 @@ dependencies = [
  "js-sys",
  "lol_alloc",
  "rand 0.8.7",
- "rvf-runtime",
- "rvf-types",
+ "rvf-runtime 0.3.2",
+ "rvf-types 0.2.1",
  "serde",
  "serde_json",
  "sha2",
@@ -2151,7 +2151,7 @@ dependencies = [
  "nix 0.29.0",
  "rand 0.8.7",
  "reqwest",
- "rvf-types",
+ "rvf-types 0.2.1",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -8353,18 +8353,30 @@ dependencies = [
 ]
 
 [[package]]
-name = "rvf-index"
-version = "0.2.0"
+name = "rvf-crypto"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce36812dd23269e9daf8819344e29c0f13ef73e84f31a02b3b8a9cc0c431795e"
+checksum = "1649a83d33539c7e74f5a440583a35fa0a3c0be03b7dc5b0c5d9b3ec54be7f09"
+dependencies = [
+ "ed25519-dalek",
+ "rvf-types 0.3.0",
+ "sha2",
+ "sha3",
+]
+
+[[package]]
+name = "rvf-index"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1d45e708cbeae8860da2fe96d73856b29d7f344f4a5958945e7cfd48894c148"
 
 [[package]]
 name = "rvf-quant"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a1984a13b774b4c8a28b0cc3f95b070dcf953575ce99bffc8cf2db5b52894ff"
+checksum = "117813739bf05e6bb841696ef7af3253a9a72d80c12f70f04666a46edafdb05e"
 dependencies = [
- "rvf-types",
+ "rvf-types 0.3.0",
 ]
 
 [[package]]
@@ -8376,7 +8388,23 @@ dependencies = [
  "crc32fast",
  "rvf-index",
  "rvf-quant",
- "rvf-types",
+ "rvf-types 0.2.1",
+]
+
+[[package]]
+name = "rvf-runtime"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7668edb8f1579d458686e7e82ddcc20cc8099908aa7948c1f5a9c30bc9fadb32"
+dependencies = [
+ "crc32fast",
+ "ed25519-dalek",
+ "log",
+ "rvf-crypto",
+ "rvf-index",
+ "rvf-quant",
+ "rvf-types 0.3.0",
+ "rvf-wire",
 ]
 
 [[package]]
@@ -8384,6 +8412,27 @@ name = "rvf-types"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "05adcbb7dd0f7d323314ad2de13fbfebd43b6403e3a9bcc6fea94d1b873b72c3"
+
+[[package]]
+name = "rvf-types"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5282a5e43da09fae7011a2ecde1792cc9e311848cb5be74ded0de56d40239b9c"
+
+[[package]]
+name = "rvf-wire"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "97aa71ad17c93e987a71a7cfca50567b9087a9152ef8626d45a506df70fe8996"
+dependencies = [
+ "crc32c",
+ "ed25519-dalek",
+ "rvf-crypto",
+ "rvf-types 0.3.0",
+ "sha3",
+ "subtle",
+ "xxhash-rust",
+]
 
 [[package]]
 name = "ryu"
@@ -11452,7 +11501,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e72ddaf6c0411631bd8c8de7e32aeee06c836f9cfca289d973593b0049d95582"
 dependencies = [
  "ed25519-dalek",
- "rvf-types",
+ "rvf-types 0.2.1",
  "sha3",
 ]
 
@@ -11463,7 +11512,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a251749be321bd4968f7e5771bc85f1eb1d0837071aa66d50e43dbc9fc9acc59"
 dependencies = [
  "crc32c",
- "rvf-types",
+ "rvf-types 0.2.1",
  "sha3",
  "subtle",
  "xxhash-rust",

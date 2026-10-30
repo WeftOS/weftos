@@ -31,10 +31,18 @@ enum ForkSource {
 }
 
 impl BranchableMemory {
+    /// The node a fresh `working` branches from: the newest checkpoint, or
+    /// `base` when there is none.
+    fn head_node_mut(&mut self) -> &mut MemoryNode {
+        match self.ancestors.first_mut() {
+            Some(n) => n,
+            None => &mut self.base,
+        }
+    }
+
     /// Freeze `working` into a new checkpoint (pushed onto `ancestors`,
     /// newest-first) and derive a fresh, empty, writable `working` from it.
-    /// O(1) regardless of lineage size: `derive` copies zero vectors (see
-    /// `MemoryNode::derive_from`).
+    /// O(1) in vectors: `branch` copies none (see `MemoryNode::branch_from`).
     pub fn checkpoint(&mut self, label: impl Into<String>) -> Result<CheckpointId> {
         let label = label.into();
         let current = self.working.as_mut().ok_or(CowMemoryError::Paused)?;
@@ -43,11 +51,12 @@ impl BranchableMemory {
 
         let new_id = CheckpointId::alloc();
         let new_path = self.dir.join(format!("node-{}.working.rvf", new_id.0));
-        let new_working = MemoryNode::derive_from(
+        let opts = self.opts.clone();
+        let new_working = MemoryNode::child_of(
             new_id,
-            &self.working.as_ref().expect("checked above").store,
+            self.working.as_mut().expect("checked above"),
             &new_path,
-            self.opts.clone(),
+            opts,
             Some("working".into()),
         )?;
 
@@ -98,22 +107,14 @@ impl BranchableMemory {
         }
         let new_id = CheckpointId::alloc();
         let new_path = self.dir.join(format!("node-{}.working.rvf", new_id.0));
-        let new_working = match self.ancestors.first() {
-            Some(head) => MemoryNode::derive_from(
-                new_id,
-                &head.store,
-                &new_path,
-                self.opts.clone(),
-                Some("working".into()),
-            )?,
-            None => MemoryNode::derive_from(
-                new_id,
-                &self.base.store,
-                &new_path,
-                self.opts.clone(),
-                Some("working".into()),
-            )?,
-        };
+        let opts = self.opts.clone();
+        let new_working = MemoryNode::child_of(
+            new_id,
+            self.head_node_mut(),
+            &new_path,
+            opts,
+            Some("working".into()),
+        )?;
         self.working = Some(new_working);
         self.write_manifest()?;
         Ok(())
@@ -153,22 +154,14 @@ impl BranchableMemory {
 
         let new_id = CheckpointId::alloc();
         let new_path = self.dir.join(format!("node-{}.working.rvf", new_id.0));
-        let new_working = match self.ancestors.first() {
-            Some(head) => MemoryNode::derive_from(
-                new_id,
-                &head.store,
-                &new_path,
-                self.opts.clone(),
-                Some("working".into()),
-            )?,
-            None => MemoryNode::derive_from(
-                new_id,
-                &self.base.store,
-                &new_path,
-                self.opts.clone(),
-                Some("working".into()),
-            )?,
-        };
+        let opts = self.opts.clone();
+        let new_working = MemoryNode::child_of(
+            new_id,
+            self.head_node_mut(),
+            &new_path,
+            opts,
+            Some("working".into()),
+        )?;
         let old_working = self.working.replace(new_working).expect("checked above");
 
         let mut to_remove: Vec<PathBuf> = discarded.iter().map(|n| n.path.clone()).collect();
@@ -234,6 +227,10 @@ impl BranchableMemory {
             working.tombstones.clone(),
         ));
 
+        // `base` was frozen so children could `branch()` from it; reopen it
+        // writable for the in-place replay. The next `branch_from` re-freezes.
+        self.base.reopen_writable()?;
+
         let mut ingested = 0usize;
         let mut deleted = 0usize;
         for (edit_log, texts, tags, tombstones) in &replay {
@@ -271,11 +268,12 @@ impl BranchableMemory {
         let discarded_ancestors = std::mem::take(&mut self.ancestors);
         let new_id = CheckpointId::alloc();
         let new_path = self.dir.join(format!("node-{}.working.rvf", new_id.0));
-        let new_working = MemoryNode::derive_from(
+        let opts = self.opts.clone();
+        let new_working = MemoryNode::child_of(
             new_id,
-            &self.base.store,
+            &mut self.base,
             &new_path,
-            self.opts.clone(),
+            opts,
             Some("working".into()),
         )?;
         let old_working = self.working.replace(new_working).expect("checked above");
@@ -370,7 +368,7 @@ impl BranchableMemory {
 
         let new_base_id = CheckpointId::alloc();
         let new_base_path = target_dir.join(format!("node-{}.base.rvf", new_base_id.0));
-        let new_base = MemoryNode::derive_from(
+        let mut new_base = MemoryNode::derive_from(
             new_base_id,
             head_store,
             &new_base_path,
@@ -380,11 +378,12 @@ impl BranchableMemory {
 
         let new_working_id = CheckpointId::alloc();
         let new_working_path = target_dir.join(format!("node-{}.working.rvf", new_working_id.0));
-        let new_working = MemoryNode::derive_from(
+        let opts = self.opts.clone();
+        let new_working = MemoryNode::child_of(
             new_working_id,
-            &new_base.store,
+            &mut new_base,
             &new_working_path,
-            self.opts.clone(),
+            opts,
             Some("working".into()),
         )?;
 

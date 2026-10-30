@@ -203,8 +203,8 @@ impl BranchableMemory {
             ..Default::default()
         };
 
-        let base = Self::reopen_node(dir, &manifest.base, false)?;
-        let mut ancestors = Vec::with_capacity(manifest.ancestors.len());
+        let mut base = Self::reopen_node(dir, &manifest.base, false)?;
+        let mut ancestors: Vec<MemoryNode> = Vec::with_capacity(manifest.ancestors.len());
         for n in &manifest.ancestors {
             ancestors.push(Self::reopen_node(dir, n, true)?);
         }
@@ -216,12 +216,15 @@ impl BranchableMemory {
         let working = if manifest.paused {
             None
         } else {
-            let head_store = ancestors.first().map(|n| &n.store).unwrap_or(&base.store);
+            let head = match ancestors.first_mut() {
+                Some(n) => n,
+                None => &mut base,
+            };
             let working_id = CheckpointId::alloc();
             let working_path = dir.join(format!("node-{}.working.rvf", working_id.0));
-            Some(MemoryNode::derive_from(
+            Some(MemoryNode::child_of(
                 working_id,
-                head_store,
+                head,
                 &working_path,
                 opts.clone(),
                 Some("working".into()),
@@ -247,6 +250,7 @@ impl BranchableMemory {
         };
         let mut node = MemoryNode::adopt(CheckpointId::alloc(), store, path, n.label.clone());
         node.created_at_ms = n.created_at_ms;
+        node.frozen = read_only;
         node.tombstones = n.tombstones.iter().copied().collect::<HashSet<u64>>();
         Ok(node)
     }

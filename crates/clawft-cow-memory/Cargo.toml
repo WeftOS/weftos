@@ -10,8 +10,8 @@ description = "Branchable, checkpointable memory over rvf-runtime::RvfStore (age
 readme = "README.md"
 
 [dependencies]
-rvf-runtime = { workspace = true }
-rvf-types = { workspace = true }
+rvf-runtime = { version = "0.5", default-features = false, features = ["std"] }
+rvf-types = { package = "rvf-types", version = "0.3", default-features = false, features = ["std"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true }

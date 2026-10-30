@@ -101,13 +101,13 @@ impl BranchableMemory {
 
         let base_id = CheckpointId::alloc();
         let base_path = dir.join(format!("node-{}.base.rvf", base_id.0));
-        let base = MemoryNode::create_root(base_id, &base_path, opts.clone(), Some("base".into()))?;
+        let mut base = MemoryNode::create_root(base_id, &base_path, opts.clone(), Some("base".into()))?;
 
         let working_id = CheckpointId::alloc();
         let working_path = dir.join(format!("node-{}.working.rvf", working_id.0));
-        let working = MemoryNode::derive_from(
+        let working = MemoryNode::child_of(
             working_id,
-            &base.store,
+            &mut base,
             &working_path,
             opts.clone(),
             Some("working".into()),
@@ -153,13 +153,13 @@ impl BranchableMemory {
         };
 
         let base_id = CheckpointId::alloc();
-        let base = MemoryNode::adopt(base_id, base_store, base_path, Some("base".into()));
+        let mut base = MemoryNode::adopt(base_id, base_store, base_path, Some("base".into()));
 
         let working_id = CheckpointId::alloc();
         let working_path = dir.join(format!("node-{}.working.rvf", working_id.0));
-        let working = MemoryNode::derive_from(
+        let working = MemoryNode::child_of(
             working_id,
-            &base.store,
+            &mut base,
             &working_path,
             opts.clone(),
             Some("working".into()),
@@ -291,8 +291,19 @@ impl BranchableMemory {
             return Ok(Vec::new());
         }
         let normalized = l2_normalize(vector);
-        let chain = self.chain_priority_order();
         let qopts = QueryOptions::default();
+        // Single-parent shape with a native COW child: no walk needed. A
+        // working node that fell back to `derive` (sparse ids, see
+        // `MemoryNode::child_of`) has no read-through and takes the walk.
+        if let (Some(working), true, true, true) = (
+            &self.working,
+            self.ancestors.is_empty(),
+            self.inherited.is_empty(),
+            self.working.as_ref().is_some_and(|w| w.store.is_cow_child()),
+        ) {
+            return chain_walk::query_single_parent(working, &self.base, &normalized, k, &qopts);
+        }
+        let chain = self.chain_priority_order();
         chain_walk::query_chain(&chain, &normalized, k, &qopts)
     }
 

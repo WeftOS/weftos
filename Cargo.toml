@@ -292,6 +292,12 @@ notify = "8"
 # weftos-rvf-crypto: our fork with ML-DSA-65 dual signing
 rvf-runtime = { version = "0.3", default-features = false, features = ["std"] }
 rvf-types = { version = "0.2", default-features = false, features = ["std"] }
+# ADR-128 T0: clawft-cow-memory and clawft-core (rvf) are on rvf-runtime 0.5 /
+# rvf-types 0.3, declared locally in those crates. These workspace pins stay at
+# 0.3 / 0.2 because clawft-kernel passes rvf-types values (Scorecard,
+# LineageRecord, SegmentFlags) to weftos-rvf-crypto / weftos-rvf-wire, which
+# still depend on rvf-types 0.2; two rvf-types versions cannot mix there.
+# Moving them needs the weftos- forks rebased onto rvf-types 0.3 first.
 weftos-rvf-crypto = { version = "0.3", default-features = false, features = ["std", "ed25519"] }
 weftos-rvf-wire = { version = "0.2" }
 
