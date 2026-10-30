@@ -21,15 +21,21 @@ use crate::surface::LeafSurface;
 /// them into a [`LeafSurface`].
 #[derive(Default)]
 pub struct Compositor {
+    /// Ops for `LayerSlot::Bg`, composited first (bottom layer).
     bg: Vec<LeafPush>,
+    /// Ops for `LayerSlot::Widget`, composited above `Bg`.
     widget: Vec<LeafPush>,
+    /// Ops for `LayerSlot::Text`, composited above `Widget`.
     text: Vec<LeafPush>,
+    /// Ops for `LayerSlot::Alert`, composited last (top layer).
     alert: Vec<LeafPush>,
     /// Pending brightness, applied to the surface on the next compose.
     brightness: Option<u32>,
 }
 
 impl Compositor {
+    /// Create an empty compositor: no ops in any layer and no pending
+    /// brightness.
     pub fn new() -> Self {
         Self::default()
     }
