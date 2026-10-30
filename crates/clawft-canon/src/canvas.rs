@@ -95,6 +95,9 @@ impl<F> Canvas<F>
 where
     F: FnOnce(&egui::Painter, egui::Rect, CanvasTransform),
 {
+    /// Create a canvas with a stable `id_source`, the allocated `size`,
+    /// and the `paint` closure. Defaults: `zoom_step` 0.1, pan and zoom
+    /// enabled, no tooltip, variant 0.
     pub fn new(id_source: impl std::hash::Hash, size: egui::Vec2, paint: F) -> Self {
         Self {
             id_source: egui::Id::new(("canon.canvas", id_source)),
@@ -108,26 +111,35 @@ where
         }
     }
 
+    /// Set the fractional scale change per scroll event. Each scroll
+    /// multiplies `CanvasTransform::scale` by `1.0 ± step` (sign follows
+    /// scroll direction); the result is clamped to `0.05..=50.0`.
     pub fn zoom_step(mut self, step: f32) -> Self {
         self.zoom_step = step;
         self
     }
 
+    /// Enable or disable drag-to-pan, which updates
+    /// `CanvasTransform::offset` (default: enabled).
     pub fn allow_pan(mut self, allow: bool) -> Self {
         self.allow_pan = allow;
         self
     }
 
+    /// Enable or disable scroll-to-zoom while the pointer hovers the
+    /// canvas, which updates `CanvasTransform::scale` (default: enabled).
     pub fn allow_zoom(mut self, allow: bool) -> Self {
         self.allow_zoom = allow;
         self
     }
 
+    /// Set hover text shown over the canvas (default: none).
     pub fn tooltip(mut self, text: impl Into<Tooltip>) -> Self {
         self.tooltip = Some(text.into());
         self
     }
 
+    /// Set the variant id reported on the response (default: 0).
     pub fn variant(mut self, variant: VariantId) -> Self {
         self.variant = variant;
         self
