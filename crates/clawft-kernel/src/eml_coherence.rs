@@ -153,10 +153,6 @@ impl eml_core::FeatureVector for GraphFeatures {
 // EmlCoherenceModel
 // ---------------------------------------------------------------------------
 
-/// Number of trainable parameters in the depth-3 EML formula.
-#[allow(dead_code)] // V1 constant kept alongside V2 for the v1→v2 migration docstring
-const PARAM_COUNT_V1: usize = 34;
-
 /// Number of trainable parameters in the depth-4 multi-head EML formula.
 const PARAM_COUNT_V2: usize = 50;
 
