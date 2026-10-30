@@ -220,3 +220,43 @@ pub fn tween_pos(id: u32, from: (i32, i32), to: (i32, i32), duration_ms: u32) ->
         curve: EaseCurve::Linear,
     }
 }
+
+#[cfg(test)]
+mod tween_tests {
+    use super::*;
+    use crate::theme::{AMBER, GREEN};
+
+    #[test]
+    fn tween_stroke_builds_color_tween() {
+        let op = tween_stroke(7, GREEN, AMBER, 250);
+        assert_eq!(
+            op,
+            SceneOp::Tween {
+                id: nid(7),
+                property: AnimatableProperty::Stroke,
+                from: PropertyValue::Color(GREEN),
+                to: PropertyValue::Color(AMBER),
+                duration_ms: 250,
+                start_at: None,
+                curve: EaseCurve::EaseInOut,
+            }
+        );
+    }
+
+    #[test]
+    fn tween_pos_builds_position_tween() {
+        let op = tween_pos(7, (1, 2), (3, 4), 100);
+        assert_eq!(
+            op,
+            SceneOp::Tween {
+                id: nid(7),
+                property: AnimatableProperty::Position,
+                from: PropertyValue::Position(Point::from_px(1, 2)),
+                to: PropertyValue::Position(Point::from_px(3, 4)),
+                duration_ms: 100,
+                start_at: None,
+                curve: EaseCurve::Linear,
+            }
+        );
+    }
+}
