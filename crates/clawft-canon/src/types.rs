@@ -43,6 +43,8 @@ pub struct Affordance {
 }
 
 impl Affordance {
+    /// Affordance invoking WSP verb `verb` under symbolic `name`; open to
+    /// any actor, no args schema, not reorderable.
     pub const fn new(name: &'static str, verb: &'static str) -> Self {
         Self {
             name: Cow::Borrowed(name),
@@ -65,6 +67,8 @@ pub enum ConfidenceSource {
     Input,
 }
 
+/// `primitive-head.confidence` (ADR-006 §3) — how trustworthy the state
+/// value is, and where it came from.
 #[derive(Copy, Clone, Debug)]
 pub struct Confidence {
     pub source: ConfidenceSource,
@@ -75,6 +79,8 @@ pub struct Confidence {
 }
 
 impl Confidence {
+    /// Confidence for a deterministically computed value: certain (`1.0`),
+    /// no interval.
     pub const fn deterministic() -> Self {
         Self {
             source: ConfidenceSource::Deterministic,
@@ -82,6 +88,8 @@ impl Confidence {
             interval: None,
         }
     }
+    /// Confidence for a value taken directly from user input: certain
+    /// (`1.0`), no interval.
     pub const fn input() -> Self {
         Self {
             source: ConfidenceSource::Input,
@@ -102,6 +110,8 @@ pub enum FrozenBy {
     UserRequest,
 }
 
+/// One entry in `primitive-head.mutation-axes` — a GEPA-mutable axis of the
+/// primitive, together with the reasons (if any) it is currently frozen.
 #[derive(Clone, Debug)]
 pub struct MutationAxis {
     pub name: Cow<'static, str>,
@@ -109,6 +119,7 @@ pub struct MutationAxis {
 }
 
 impl MutationAxis {
+    /// Axis called `name` with no freeze reasons, so it is open to mutation.
     pub const fn new(name: &'static str) -> Self {
         Self {
             name: Cow::Borrowed(name),
