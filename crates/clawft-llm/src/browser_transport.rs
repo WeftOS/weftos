@@ -443,19 +443,6 @@ mod tests {
         }
     }
 
-    #[allow(dead_code)]
-    fn anthropic_config() -> LlmProviderConfig {
-        LlmProviderConfig {
-            name: "anthropic".into(),
-            base_url: "https://api.anthropic.com/v1".into(),
-            api_key_env: "ANTHROPIC_API_KEY".into(),
-            model_prefix: Some("anthropic/".into()),
-            default_model: None,
-            headers: HashMap::from([("anthropic-version".into(), "2023-06-01".into())]),
-            timeout_secs: None,
-        }
-    }
-
     // ── resolve_url tests ───────────────────────────────────────────────
 
     #[test]
