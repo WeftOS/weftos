@@ -1,6 +1,6 @@
 # WeftOS Feature Gate Reference
 
-> **Status (2026-10-27).** Canonical for `clawft-kernel` features, but incomplete. Of the 22 entries under `[features]` in `crates/clawft-kernel/Cargo.toml`, the table below does not list `diskann`, `http-api`, `mesh-rvf`, `quantum-braket`, `quantum-pasqal`, `quic`, `rabitq-bench`, `sensor`, `test-support`, `treesitter` and `workload-runtime`; it lists `bluetooth`, `network`, `rfkill`, `voice`, `voice-wake` and `voice-wake-rustpotter`, which are not kernel features (method: feature names parsed from the Cargo.toml with tomllib against the first column of this table). The descriptions of the features it does list have not been re-checked. Rewrite proposed; see the Doc queue.
+> **Status (2026-10-27).** Canonical for `clawft-kernel` features, but incomplete. Of the 22 entries under `[features]` in `crates/clawft-kernel/Cargo.toml`, the table below does not list `diskann`, `http-api`, `mesh-rvf`, `quantum-braket`, `quantum-pasqal`, `quic`, `rabitq-bench`, `sensor`, `test-support`, `treesitter` and `workload-runtime`. Features and adapters of other crates (`clawft-substrate`, `clawft-plugin`) are listed under "Features of other crates" at the end of this file, not in the kernel table (method: feature names parsed from the Cargo.toml with tomllib against the first column of this table). The descriptions of the features it does list have not been re-checked. Rewrite proposed; see the Doc queue.
 
 All feature flags are defined in `crates/clawft-kernel/Cargo.toml`. The default
 set is `native`, `exochain`, `cluster`, `tilezero`, `ecc`, `mesh`, `quic` and
@@ -128,20 +128,6 @@ checking `cause == "sysfs-unavailable"` or the adapter-health reason.
 
 Shared helpers live in `crates/clawft-substrate/src/sysfs.rs`.
 
-## Related crate features (not kernel)
-
-### `clawft-plugin` voice / wake (WEFT-212, WEFT-671, WEFT-216)
-
-| Feature | Crate | What it enables | Notes |
-|---------|-------|-----------------|-------|
-| `voice` | `clawft-plugin` | Umbrella: `voice-vad` + `voice-wake` + `voice-stt` + `voice-tts` + tokio | Legacy scaffold + transitional wake (WEFT-671). Product Talk Mode is **not** this path. |
-| `voice-wake` | `clawft-plugin` | `WakeWordDetector` / `WakeDaemon` API | **Stub backend** only. `process_frame` always returns `false`. |
-| `voice-wake-rustpotter` | `clawft-plugin` | Fail-closed `try_with_rustpotter` reserve | **Does not link rustpotter.** crates.io `rustpotter` 3.0.2 → `candle-core` 0.2.2 fails to compile on this workspace (rand dual + half/bf16). Returns `PluginError::NotImplemented` with `RUSTPOTTER_BLOCKED_REASON`. |
-
-**Concrete alternative (documented, not wired):** OpenWakeWord-style keyword spotting via ONNX through `clawft-voice-onnx` (`ort`), once a trained model and capture loop exist. Do **not** add `dep:rustpotter` until upstream builds on current deps or a compatible pin is proven.
-
-Full decision + revisit triggers: `docs/plans/wave-0k-WEFT-216-result.md`.
-
 ## Gaussian splat pipeline (clawft-splatd)
 
 External **runtime** tools (not Cargo features). Crates always compile.
@@ -154,3 +140,20 @@ External **runtime** tools (not Cargo features). Crates always compile.
 | splat-transform | `npm i -g @playcanvas/splat-transform` | compress (optional) |
 
 See `docs/weftos/splat-harness.md` and `config/splatd.toml`.
+
+## Features of other crates
+
+Not `clawft-kernel` features. The first three are adapter modules in `clawft-substrate` (no `[features]` entry in its Cargo.toml); the voice rows are `clawft-plugin` features (WEFT-212, WEFT-671, WEFT-216).
+
+| Feature | Owning crate | What it enables | Notes |
+|---------|--------------|-----------------|-------|
+| `network` | `clawft-substrate` | `network` adapter module (native-only) | Linux sysfs adapter; see "Linux-only sysfs adapters (WEFT-420)" above. |
+| `bluetooth` | `clawft-substrate` | `bluetooth` adapter module (native-only) | Linux sysfs adapter; see the sysfs section above. |
+| `rfkill` | `clawft-substrate` | `rfkill` adapter module (native-only) | Linux sysfs adapter; see the sysfs section above. |
+| `voice` | `clawft-plugin` | Umbrella: `voice-vad` + `voice-wake` + `voice-stt` + `voice-tts` + tokio | Legacy scaffold + transitional wake (WEFT-671). Product Talk Mode is **not** this path. |
+| `voice-wake` | `clawft-plugin` | `WakeWordDetector` / `WakeDaemon` API | **Stub backend** only. `process_frame` always returns `false`. |
+| `voice-wake-rustpotter` | `clawft-plugin` | Fail-closed `try_with_rustpotter` reserve | **Does not link rustpotter.** crates.io `rustpotter` 3.0.2 → `candle-core` 0.2.2 fails to compile on this workspace (rand dual + half/bf16). Returns `PluginError::NotImplemented` with `RUSTPOTTER_BLOCKED_REASON`. |
+
+**Concrete alternative (documented, not wired):** OpenWakeWord-style keyword spotting via ONNX through `clawft-voice-onnx` (`ort`), once a trained model and capture loop exist. Do **not** add `dep:rustpotter` until upstream builds on current deps or a compatible pin is proven.
+
+Full decision + revisit triggers: `docs/plans/wave-0k-WEFT-216-result.md`.
