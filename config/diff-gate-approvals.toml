@@ -21,4 +21,33 @@
 #   pattern = 'Command::new\("git"\)'
 #
 # Entries apply to any diff, so keep path and pattern as narrow as the need.
-# There are no entries yet.
+# Entries follow.
+
+# Approved by the owner in chat on 2026-10-30 for ADR-129 (branch wt/pq-crypto).
+[[approval]]
+rule        = "new-dep"
+path        = "**/Cargo.toml"
+pattern     = 'rvf-(crypto|wire)([[:space:]]*=|\])'
+reason      = "ADR-129: upstream rvf-crypto/rvf-wire replace the weftos-rvf-crypto/wire forks"
+approved_by = "owner"
+
+[[approval]]
+rule        = "new-dep"
+path        = "Cargo.toml"
+pattern     = '(^|[^-[:alnum:]])ml-dsa[[:space:]]*='
+reason      = "ADR-129: RustCrypto ml-dsa 0.1.1, pure Rust, real ML-DSA-65 (pqcrypto unmaintained, RUSTSEC-2026-0162/0163/0166)"
+approved_by = "owner"
+
+[[approval]]
+rule        = "new-dep"
+path        = "crates/weftos-pq-sign/Cargo.toml"
+pattern     = '(^|[^-[:alnum:]])ml-dsa[[:space:]]*='
+reason      = "ADR-129: weftos-pq-sign uses the workspace ml-dsa"
+approved_by = "owner"
+
+[[approval]]
+rule        = "new-dep"
+path        = "**/Cargo.toml"
+pattern     = 'weftos-pq-sign([[:space:]]*=|\])'
+reason      = "ADR-129: in-tree ML-DSA-65 dual-signing crate"
+approved_by = "owner"
