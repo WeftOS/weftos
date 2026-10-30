@@ -5,14 +5,20 @@ use serde::{Deserialize, Serialize};
 /// Configuration for a language server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LanguageConfig {
+    /// Language identifier, e.g. `rust`.
     pub name: String,
+    /// Executable that launches the language server.
     pub command: String,
+    /// Arguments passed to `command`.
     pub args: Vec<String>,
+    /// File extensions (without the dot) this server handles.
     pub extensions: Vec<String>,
+    /// Options sent to the server in the LSP `initialize` request.
     pub initialization_options: serde_json::Value,
 }
 
 impl LanguageConfig {
+    /// Preset for `rust-analyzer`.
     pub fn rust() -> Self {
         Self {
             name: "rust".into(),
@@ -23,6 +29,7 @@ impl LanguageConfig {
         }
     }
 
+    /// Preset for `typescript-language-server --stdio`, covering TypeScript and JavaScript.
     pub fn typescript() -> Self {
         Self {
             name: "typescript".into(),
@@ -33,6 +40,7 @@ impl LanguageConfig {
         }
     }
 
+    /// Preset for `pylsp`.
     pub fn python() -> Self {
         Self {
             name: "python".into(),
@@ -43,6 +51,7 @@ impl LanguageConfig {
         }
     }
 
+    /// Preset for `gopls serve`.
     pub fn go() -> Self {
         Self {
             name: "go".into(),
@@ -121,4 +130,45 @@ fn collect_extensions(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rust_preset() {
+        let c = LanguageConfig::rust();
+        assert_eq!(c.name, "rust");
+        assert_eq!(c.command, "rust-analyzer");
+        assert!(c.args.is_empty());
+        assert!(c.extensions.contains(&"rs".to_string()));
+    }
+
+    #[test]
+    fn typescript_preset() {
+        let c = LanguageConfig::typescript();
+        assert_eq!(c.name, "typescript");
+        assert_eq!(c.command, "typescript-language-server");
+        assert_eq!(c.args, vec!["--stdio".to_string()]);
+        assert!(c.extensions.contains(&"ts".to_string()));
+    }
+
+    #[test]
+    fn python_preset() {
+        let c = LanguageConfig::python();
+        assert_eq!(c.name, "python");
+        assert_eq!(c.command, "pylsp");
+        assert!(c.args.is_empty());
+        assert!(c.extensions.contains(&"py".to_string()));
+    }
+
+    #[test]
+    fn go_preset() {
+        let c = LanguageConfig::go();
+        assert_eq!(c.name, "go");
+        assert_eq!(c.command, "gopls");
+        assert_eq!(c.args, vec!["serve".to_string()]);
+        assert!(c.extensions.contains(&"go".to_string()));
+    }
 }
