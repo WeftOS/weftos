@@ -146,10 +146,13 @@ fn check_record(rec: &VersionRecord) -> Result<(), VersionsError> {
 }
 
 impl VersionsIndex {
+    /// An index rooted at `dir`, which holds one `<kind>.jsonl` file per kind.
+    /// The directory is not created or read until a record is listed or appended.
     pub fn new(dir: impl Into<PathBuf>) -> Self {
         Self { dir: dir.into() }
     }
 
+    /// The directory holding the per-kind `.jsonl` files.
     pub fn dir(&self) -> &Path {
         &self.dir
     }

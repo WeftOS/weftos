@@ -22,11 +22,16 @@ pub struct DependencyView {
     pub dependents: Vec<Dependent>,
 }
 
+/// A latest version that depends on the queried object.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Dependent {
+    /// Kind of the dependent object.
     pub kind: String,
+    /// Name of the dependent object.
     pub object: String,
+    /// Latest version of the dependent object.
     pub version: String,
+    /// Digest recorded for that version.
     pub digest: String,
 }
 
