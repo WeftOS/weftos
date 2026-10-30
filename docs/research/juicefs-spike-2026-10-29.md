@@ -141,6 +141,50 @@ bucket for roughly 5 GB of logical data (compression).
 - RustFS bucket usage: about 2.7 GiB at the end. AOF durability on both Redis instances is
   `everysec`.
 
+## Mac native (macFUSE), 2026-10-30
+
+macFUSE 5.4.0, JuiceFS 1.4.2 built from source for this M5 (the official darwin binary segfaults). Both volumes were mounted natively on the Mac, with no NFS and no tunnels. The Mac stayed busy with other agents, so treat the numbers as noisy. The leftover mounts from the NFS phase were already gone after the reboot.
+
+Metadata round trip from the Mac: volume B Redis (in the VM, reached on the Mac's loopback because OrbStack forwards the VM's loopback listener) 0.16 ms; volume A Redis on PG 88 ms at mount time (ICMP to PG 60 to 73 ms). The VM's Redis for volume B had stopped over the reboot and was restarted with its existing config. No bind, auth or firewall change was made.
+
+Mount commands (credentials come from 0600 env files under the jfs-mac dir, `META_URL` and `META_PASSWORD` exported from there):
+
+```
+J=<jfs-mac>/bin/juicefs-m5
+# volume A (metadata on PG), defaults
+$J mount -d --cache-dir <jfs-mac>/cache-a --cache-size 10240 --log <jfs-mac>/log/mount-a.log "$META_URL" <jfs-mac>/mnt/a
+# volume B (metadata in the VM), same flags as the VM mount
+$J mount -d --cache-dir <jfs-mac>/cache-b --cache-size 20480 --writeback \
+  --attr-cache 5 --entry-cache 5 --dir-entry-cache 5 --open-cache 5 \
+  --log <jfs-mac>/log/mount-b.log "$META_URL" <jfs-mac>/mnt/b
+```
+
+Both mounts are left up. Unmount with `umount` on the mount point, or kill the mount by PID.
+
+### Volume B, same trees under `bench/`
+
+| Operation | Mac over NFS | Mac native macFUSE | VM native | Mac local disk |
+|---|---|---|---|---|
+| `git status` weftos, first | 8.9 s | 5.1 s | 1.13 s | 0.39 s |
+| `git status` weftos, warm | 0.28 to 0.34 s | 2.1 to 2.5 s | 0.11 s | 0.09 to 0.22 s |
+| `git status` Linux, first | 78 s | 42 s | 27.9 s | 0.56 s |
+| `git status` Linux, warm | 26.5 s | 31 to 34 s | 0.73 s | 0.31 s |
+| `juicefs clone` of the weftos tree | not run | 1.7 s | 0.41 s | |
+| `git status` in the clone, first | | 473 s | 1.1 s | |
+| Create 10k small files | 66 s | 63 s | | 8.1 s |
+| Write 256 MB (random data) | | 6.8 s (39 MB/s) | | |
+
+Read throughput was not measured meaningfully: a re-read of the 256 MB file came from the page cache. Volume A was mounted and listed but not benchmarked, because the 88 ms metadata round trip already put it in the unusable band measured earlier (0.84 s per create). `git clone` was not rerun.
+
+Findings:
+
+- Native macFUSE is about the same as NFS for stat-heavy work: faster on the first cold run, no better on warm runs (warm Linux `git status` 31 to 34 s against 26.5 s over NFS), and about 30 to 100x slower than the same operation inside the VM. The cost is the macFUSE kernel round trip per `lstat`, not metadata latency (0.16 ms).
+- The first `git status` in a fresh `juicefs clone` took 473 s, because a clone shares chunks but every inode is new and the first pass populates the Mac's caches. In the VM it took 1.1 s.
+- Small-file creates did not improve (63 s against 66 s for 10k).
+- Working in the VM remains the only usable route for large trees. The Mac mount is acceptable for browsing and for single-file reads and writes.
+
+Not tried: tuning the kernel-side attribute caching (macFUSE `-o` options, longer `--attr-cache`), `git fsmonitor`, or `core.untrackedCache`. These are the next levers if a Mac-side mount is still wanted.
+
 ## Mount, unmount, teardown
 
 Paths: `<spike>` is the spike dir on PG under the weftos services tree (`juicefs-spike`).
