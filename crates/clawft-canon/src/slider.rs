@@ -44,6 +44,7 @@ pub struct Slider<'b> {
 }
 
 impl<'b> Slider<'b> {
+    /// Creates a slider that edits `value` within `min..=max`, labelled `label`.
     pub fn new(
         id_source: impl std::hash::Hash,
         label: impl Into<Cow<'static, str>>,
@@ -65,26 +66,31 @@ impl<'b> Slider<'b> {
         }
     }
 
+    /// Snaps the value to multiples of `step`, in the same units as the value itself.
     pub fn step(mut self, step: f64) -> Self {
         self.step = Some(step);
         self
     }
 
+    /// Appends `suffix` (such as a unit) to the value text shown on the slider.
     pub fn suffix(mut self, suffix: impl Into<Cow<'static, str>>) -> Self {
         self.suffix = Some(suffix.into());
         self
     }
 
+    /// Enables or disables the slider; a disabled slider cannot be edited.
     pub fn enabled(mut self, enabled: bool) -> Self {
         self.enabled = enabled;
         self
     }
 
+    /// Sets the hover tooltip shown for the slider.
     pub fn tooltip(mut self, text: impl Into<Tooltip>) -> Self {
         self.tooltip = Some(text.into());
         self
     }
 
+    /// Selects the canon variant reported in the slider's response.
     pub fn variant(mut self, variant: VariantId) -> Self {
         self.variant = variant;
         self
