@@ -111,4 +111,15 @@ mod tests {
         assert!(json.contains("graph_ops_total"));
         assert!(report.passed);
     }
+
+    #[test]
+    fn with_notes_sets_and_replaces() {
+        let thresholds = GraphifyBenchThresholds::default();
+        let eval = thresholds.evaluate(None, None, None);
+        let report = GraphifyBenchReport::from_evaluation(thresholds, eval, None, None);
+        let report = report.with_notes("first");
+        assert_eq!(report.notes.as_deref(), Some("first"));
+        let report = report.with_notes("second");
+        assert_eq!(report.notes.as_deref(), Some("second"));
+    }
 }

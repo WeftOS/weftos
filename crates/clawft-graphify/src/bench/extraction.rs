@@ -327,4 +327,20 @@ mod tests {
         assert_eq!(kg.entity_count(), 24);
         assert!(!h.build_samples().is_empty());
     }
+
+    #[test]
+    fn with_note_sets_and_replaces() {
+        let sample = ExtractionSample {
+            extractor: "mock".into(),
+            files: 1,
+            entities: 1,
+            relationships: 0,
+            duration: Duration::from_millis(1),
+            note: None,
+        };
+        let sample = sample.with_note("first");
+        assert_eq!(sample.note.as_deref(), Some("first"));
+        let sample = sample.with_note("second");
+        assert_eq!(sample.note.as_deref(), Some("second"));
+    }
 }
