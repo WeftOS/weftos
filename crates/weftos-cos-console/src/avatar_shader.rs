@@ -310,6 +310,21 @@ mod tests {
     }
 
     #[test]
+    fn green_shade_ramps_up_from_a_black_index_zero() {
+        let channels = |w: u16| (w >> 11, (w >> 5) & 63, w & 31);
+        let (r0, g0, b0) = channels(green_shade(0));
+        assert_eq!((r0, g0, b0), (0, 0, 0), "index 0 is the darkest shade");
+        let mut prev_green = g0;
+        for i in 1..SHADES.len() {
+            let (r, g, b) = channels(green_shade(i as u8));
+            assert!(g >= r && g >= b, "shade {i} leaves green: r={r} g={g} b={b}");
+            assert!(g >= prev_green, "shade {i} green {g} dips below {prev_green}");
+            assert!(r + g + b > 0, "shade {i} is as dark as index 0");
+            prev_green = g;
+        }
+    }
+
+    #[test]
     fn moods_move_the_published_constants() {
         let idle = mood_for(&AgentState::Idle);
         let listen = mood_for(&AgentState::Listening);
