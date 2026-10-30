@@ -260,3 +260,69 @@ mod tween_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod recolor_tests {
+    use super::*;
+
+    const OLD: Rgba = Rgba::opaque(1, 2, 3);
+    const OLD_FILL: Rgba = Rgba::opaque(4, 5, 6);
+    const NEW: Rgba = Rgba::opaque(200, 100, 50);
+
+    fn styled(stroke: Option<Rgba>, fill: Option<Rgba>) -> Node {
+        let mut node = line(1, 0, 0, 10, 0, OLD);
+        node.style.stroke = stroke;
+        node.style.fill = fill;
+        node
+    }
+
+    #[test]
+    fn recolor_stroke_only_leaves_fill_none() {
+        let mut node = styled(Some(OLD), None);
+        recolor(&mut node, NEW);
+        assert_eq!(node.style.stroke, Some(NEW));
+        assert_eq!(node.style.fill, None);
+    }
+
+    #[test]
+    fn recolor_fill_only_leaves_stroke_none() {
+        let mut node = styled(None, Some(OLD_FILL));
+        recolor(&mut node, NEW);
+        assert_eq!(node.style.fill, Some(NEW));
+        assert_eq!(node.style.stroke, None);
+    }
+
+    #[test]
+    fn recolor_sets_both_when_both_present() {
+        let mut node = styled(Some(OLD), Some(OLD_FILL));
+        recolor(&mut node, NEW);
+        assert_eq!(node.style.stroke, Some(NEW));
+        assert_eq!(node.style.fill, Some(NEW));
+    }
+
+    #[test]
+    fn recolor_changes_nothing_without_colors() {
+        let mut node = styled(None, None);
+        recolor(&mut node, NEW);
+        assert_eq!(node.style.stroke, None);
+        assert_eq!(node.style.fill, None);
+    }
+
+    #[test]
+    fn color_of_prefers_stroke_over_fill() {
+        let node = styled(Some(OLD), Some(OLD_FILL));
+        assert_eq!(color_of(&node), Some(OLD));
+    }
+
+    #[test]
+    fn color_of_falls_back_to_fill() {
+        let node = styled(None, Some(OLD_FILL));
+        assert_eq!(color_of(&node), Some(OLD_FILL));
+    }
+
+    #[test]
+    fn color_of_is_none_without_colors() {
+        let node = styled(None, None);
+        assert_eq!(color_of(&node), None);
+    }
+}
