@@ -194,6 +194,8 @@ impl ToolRegistry {
             .collect()
     }
 
+    /// Every tool known right now: built-ins, then source tools that do not
+    /// shadow a built-in. Not capped; see `specs_for` for the per-turn set.
     pub fn specs(&self) -> Vec<ToolSpec> {
         let mut v: Vec<ToolSpec> = self.tools.iter().map(|t| t.spec()).collect();
         v.extend(self.dynamic_tools().iter().map(|t| t.spec()));
@@ -210,6 +212,7 @@ impl ToolRegistry {
         v
     }
 
+    /// Every tool's spec in the OpenAI function-calling wire format.
     pub fn openai_specs(&self) -> Vec<Value> {
         self.specs().iter().map(ToolSpec::openai_spec).collect()
     }
@@ -219,14 +222,17 @@ impl ToolRegistry {
         self.sources.iter().flat_map(|s| s.catalog()).collect()
     }
 
+    /// One line per source: its id and where its definition came from.
     pub fn describe_sources(&self) -> Vec<String> {
         self.sources.iter().flat_map(|s| s.describe()).collect()
     }
 
+    /// `(source, reason)` for each source that cannot be reached right now.
     pub fn unavailable_sources(&self) -> Vec<(String, String)> {
         self.sources.iter().flat_map(|s| s.unavailable()).collect()
     }
 
+    /// True when there are no built-in tools and no sources.
     pub fn is_empty(&self) -> bool {
         self.tools.is_empty() && self.sources.is_empty()
     }
