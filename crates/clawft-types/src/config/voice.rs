@@ -1348,6 +1348,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn voice_mode_prefers_xai_only_for_xai_variants() {
+        // Exhaustive match (no wildcard): a new variant fails to compile here.
+        for mode in [VoiceMode::Local, VoiceMode::XaiS2s, VoiceMode::XaiHybrid] {
+            let expected = match mode {
+                VoiceMode::Local => false,
+                VoiceMode::XaiS2s | VoiceMode::XaiHybrid => true,
+            };
+            assert_eq!(mode.prefers_xai(), expected, "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn resolved_voice_transport_is_xai_only_for_xai_variants() {
+        // Exhaustive match (no wildcard): a new variant fails to compile here.
+        for transport in [
+            ResolvedVoiceTransport::Local,
+            ResolvedVoiceTransport::XaiS2s,
+            ResolvedVoiceTransport::XaiHybrid,
+        ] {
+            let expected = match transport {
+                ResolvedVoiceTransport::Local => false,
+                ResolvedVoiceTransport::XaiS2s | ResolvedVoiceTransport::XaiHybrid => true,
+            };
+            assert_eq!(transport.is_xai(), expected, "{transport:?}");
+        }
+    }
+
+    #[test]
     fn voice_mode_serde_snake_case() {
         assert_eq!(
             serde_json::to_string(&VoiceMode::Local).unwrap(),
