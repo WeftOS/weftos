@@ -119,7 +119,7 @@ Each contribution makes a proof cleaner. None blocks a proof, because each has a
 | U3 | ruvnet/RuVector **#1289**: multi-parent derivation (`DerivationType::Merge`); `derive()` honours its type and records it in lineage | native composition | T3 without our walk | the WeftOS `compose` walk in `clawft-cow-memory` |
 | U4 | ruvnet/RuVector **#1290**: a typed custom-segment API for vendor types, inherited through branch, hashed and signed | tree records as their own segment type | T2's option (b) | `META_SEG` key/value plus per-record metadata |
 | U5 | ruvnet/RuVector (to file): `branch()` of a copy-on-write child builds its membership filter from local vectors only, so inherited records vanish or fail to reopen at depth 2 and deeper (repro in the T2 spike, `examples/depth2.rs`) | nested branches keep their inherited records | T2 at depth, B1 | rebuild the membership filter after `branch()` in WeftOS |
-| R1 | rustfs/rustfs **#9067 merged** 2026-10-30 (multipart and bucket-config audit, and it included #9066's queued-replay fix; #9066 closed as superseded), and **#9073** (denial audit, open) | complete audit of store operations | ADR-126 governance for the stores under T1 and T4 | tail `rustfs.log` for `s3_authorization_denied` |
+| R1 | rustfs/rustfs **#9067 merged** 2026-10-30 (multipart and bucket-config audit, and it included #9066's queued-replay fix; #9066 closed as superseded), and **#9073 merged** 2026-10-30 (denial audit, merge 7e536843e) | complete audit of store operations | ADR-126 governance for the stores under T1 and T4 | tail `rustfs.log` for `s3_authorization_denied` |
 
 A scheduled check every 2 hours watches these: it fixes CI failures, rebases, answers concrete review requests, and brings design questions to the owner.
 
