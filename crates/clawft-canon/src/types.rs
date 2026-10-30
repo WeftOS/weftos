@@ -145,3 +145,41 @@ pub enum Modality {
 /// Optional head field — hover / accessibility / long-press help text.
 /// Future i18n wrapper; for now a plain string.
 pub type Tooltip = Cow<'static, str>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn confidence_deterministic_is_certain() {
+        let c = Confidence::deterministic();
+        assert_eq!(c.source, ConfidenceSource::Deterministic);
+        assert_eq!(c.value, Some(1.0));
+        assert_eq!(c.interval, None);
+    }
+
+    #[test]
+    fn confidence_input_is_certain() {
+        let c = Confidence::input();
+        assert_eq!(c.source, ConfidenceSource::Input);
+        assert_eq!(c.value, Some(1.0));
+        assert_eq!(c.interval, None);
+    }
+
+    #[test]
+    fn affordance_new_has_defaults() {
+        let a = Affordance::new("a", "b");
+        assert_eq!(a.name, "a");
+        assert_eq!(a.verb, "b");
+        assert!(a.actors.is_empty());
+        assert!(a.args_schema.is_none());
+        assert!(!a.reorderable);
+    }
+
+    #[test]
+    fn mutation_axis_new_has_no_frozen_by() {
+        let m = MutationAxis::new("x");
+        assert_eq!(m.name, "x");
+        assert!(m.frozen_by.is_empty());
+    }
+}
