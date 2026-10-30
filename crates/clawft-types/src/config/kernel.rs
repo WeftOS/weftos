@@ -1827,6 +1827,22 @@ pub struct SimdDistanceStubConfig {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn ipc_tcp_is_non_loopback_classifies_addresses() {
+        let mut cfg = super::IpcTcpConfig::default();
+        assert!(!cfg.is_non_loopback(), "default is loopback");
+        for (addr, expected) in [
+            ("127.0.0.1:9471", false),
+            ("[::1]:9471", false),
+            ("0.0.0.0:9471", true),
+            ("10.0.0.5:9471", true),
+            ("localhost", true),
+        ] {
+            cfg.listen_addr = addr.to_string();
+            assert_eq!(cfg.is_non_loopback(), expected, "{addr}");
+        }
+    }
+
+    #[test]
     fn mesh_listens_on_loopback_unless_configured() {
         assert_eq!(super::MeshConfig::default().listen_addr, "127.0.0.1:9489");
         let none: super::MeshConfig = serde_json::from_str("{}").unwrap();
