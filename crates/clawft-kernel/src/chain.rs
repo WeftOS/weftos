@@ -140,6 +140,38 @@ fn decode_exochain_payload(payload: &[u8]) -> Option<(ExoChainHeader, &[u8])> {
 pub(crate) fn checkpoint_cbor(payload: &[u8]) -> Option<&[u8]> {
     decode_exochain_payload(payload).and_then(|(h, cbor)| (h.subtype == 0x41).then_some(cbor))
 }
+
+/// The ADR-129 cutover marker carried by an event segment payload, if it
+/// is one. A segment that is not an ExoChain event is `Ok(None)`.
+pub(crate) fn cutover_from_segment(
+    payload: &[u8],
+) -> Result<Option<crate::chain_pq::Cutover>, String> {
+    let Some((h, cbor)) = decode_exochain_payload(payload) else {
+        return Ok(None);
+    };
+    if h.subtype != 0x40 {
+        return Ok(None);
+    }
+    let ev: RvfChainPayload =
+        ciborium::from_reader(cbor).map_err(|e| format!("event CBOR at sequence {}: {e}", h.sequence))?;
+    Ok(crate::chain_pq::is_cutover_event(&ev.source, &ev.kind).then_some(crate::chain_pq::Cutover {
+        chain_id: h.chain_id,
+        sequence: h.sequence,
+        hash: ev.hash,
+    }))
+}
+
+/// The first cutover marker among `events`, if any.
+fn cutover_in_events(events: &[ChainEvent]) -> Option<crate::chain_pq::Cutover> {
+    events
+        .iter()
+        .find(|e| crate::chain_pq::is_cutover_event(&e.source, &e.kind))
+        .map(|e| crate::chain_pq::Cutover {
+            chain_id: e.chain_id,
+            sequence: e.sequence,
+            hash: hex_hash(&e.hash),
+        })
+}
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
@@ -1997,7 +2029,33 @@ impl ChainManager {
     /// ExochainCheckpoint segment (subtype 0x41) records the final chain
     /// state for external verification.
     pub fn save_to_rvf(&self, path: &Path) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let chain = self.inner.lock().map_err(|e| format!("lock: {e}"))?;
+        let mut chain = self.inner.lock().map_err(|e| format!("lock: {e}"))?;
+
+        // ADR-129 downgrade rule: the first dual-signed save records the
+        // cutover in the hash-linked history; after it, an Ed25519-only or
+        // unsigned checkpoint over this history is refused.
+        let dual_signed = self.signing_key.is_some() && self.ml_dsa_key.is_some();
+        match (cutover_in_events(&chain.events), &self.ml_dsa_key) {
+            (None, Some(ml_key)) if dual_signed => {
+                let id = ml_key.verifying_key().key_id();
+                chain.append(
+                    crate::chain_pq::PQ_CUTOVER_SOURCE.into(),
+                    crate::chain_pq::PQ_CUTOVER_KIND.into(),
+                    Some(serde_json::json!({
+                        "sig_suite": SigSuite::Ed25519MlDsa65V2.as_str(),
+                        "ml_dsa65_key_id": id,
+                    })),
+                );
+            }
+            (Some(c), _) if !dual_signed => {
+                return Err(format!(
+                    "refusing to save chain {} without ML-DSA-65: it cut over to dual signing at sequence {} (ADR-129)",
+                    c.chain_id, c.sequence
+                )
+                .into());
+            }
+            _ => {}
+        }
 
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -2068,7 +2126,6 @@ impl ChainManager {
         // ADR-129: a dual-signed checkpoint names its suite inside the
         // Ed25519-signed payload, so a verifier can tell a real ML-DSA-65
         // footer from the legacy placeholder and cannot be downgraded.
-        let dual_signed = self.signing_key.is_some() && self.ml_dsa_key.is_some();
         if dual_signed {
             cp_payload[crate::chain_pq::CHECKPOINT_SIG_SUITE_KEY] =
                 SigSuite::Ed25519MlDsa65V2.as_str().into();
@@ -2240,6 +2297,11 @@ impl ChainManager {
         if events.is_empty() {
             return Err("RVF file contains no chain events".into());
         }
+        crate::chain_pq::check_cutover(
+            Some(path),
+            &data,
+            has_dual_signature && sig_suite == Some(SigSuite::Ed25519MlDsa65V2),
+        )?;
 
         let chain_id = events[0].chain_id;
         let chain = LocalChain::from_events(chain_id, checkpoint_interval, events, witness_entries);
@@ -2618,7 +2680,30 @@ impl ChainManager {
         ml_key: &mldsa65::VerifyingKey,
     ) -> Result<Verdict, Box<dyn std::error::Error + Send + Sync>> {
         let data = std::fs::read(path)?;
-        Ok(crate::chain_pq::verify_checkpoint(&data, ed_key, ml_key)?)
+        let verdict = crate::chain_pq::verify_checkpoint(&data, ed_key, ml_key)?;
+        // A file without this node's recorded cutover is a rewritten history.
+        if verdict.is_valid()
+            && crate::chain_pq::check_cutover(Some(path), &data, verdict.is_post_quantum()).is_err()
+        {
+            return Ok(Verdict::Rejected(RejectReason::Downgrade));
+        }
+        Ok(verdict)
+    }
+
+    /// Record, beside the chain file at `rvf_path`, where this chain cut
+    /// over to ML-DSA-65, so that a later load refuses a file without that
+    /// cutover (ADR-129). Call it after saving the node's own chain file;
+    /// a chain with no cutover yet writes nothing.
+    pub fn record_cutover(&self, rvf_path: &Path) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let chain = self.inner.lock().map_err(|e| format!("lock: {e}"))?;
+        let Some(c) = cutover_in_events(&chain.events) else {
+            return Ok(());
+        };
+        drop(chain);
+        if crate::chain_pq::read_cutover_record(rvf_path)?.as_ref() != Some(&c) {
+            crate::chain_pq::write_cutover_record(rvf_path, &c)?;
+        }
+        Ok(())
     }
 
     // ── Dual signing for cross-node chain events ───────────────
@@ -3953,13 +4038,16 @@ mod tests {
         cm.append("tree", "bootstrap", Some(serde_json::json!({"nodes": 4})));
         cm.append("kernel", "boot.ready", None);
 
+        let dir = std::env::temp_dir().join("clawft-chain-dual-sign-test");
+        let path = dir.join("dual-signed.rvf");
+        let before = cm.len();
+        cm.save_to_rvf(&path).unwrap();
+        // ADR-129: the first dual-signed save appends the cutover event.
+        assert_eq!(cm.len(), before + 1);
+        assert_eq!(cm.tail(1)[0].kind, crate::chain_pq::PQ_CUTOVER_KIND);
         let original_seq = cm.sequence();
         let original_hash = cm.last_hash();
         let original_len = cm.len();
-
-        let dir = std::env::temp_dir().join("clawft-chain-dual-sign-test");
-        let path = dir.join("dual-signed.rvf");
-        cm.save_to_rvf(&path).unwrap();
 
         // Load the dual-signed file (should work without keys).
         let restored = ChainManager::load_from_rvf(&path, 1000).unwrap();

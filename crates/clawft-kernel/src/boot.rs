@@ -1127,8 +1127,11 @@ impl<P: Platform> Kernel<P> {
                             }
                             Err(e) => {
                                 error!(error = %e, "failed to restore RVF chain, trying JSON fallback");
-                                // Fall back to JSON
-                                if json_path.exists() {
+                                // Fall back to JSON, which is unsigned: never once
+                                // this node has cut over to ML-DSA-65 (ADR-129).
+                                if json_path.exists()
+                                    && matches!(crate::chain_pq::read_cutover_record(&rvf_path), Ok(None))
+                                {
                                     match crate::chain::ChainManager::load_from_file(
                                         &json_path,
                                         chain_config.checkpoint_interval,
@@ -2591,7 +2594,13 @@ impl<P: Platform> Kernel<P> {
 
                 // Save RVF format (primary)
                 match cm.save_to_rvf(&rvf_path) {
-                    Ok(()) => info!(path = %rvf_path.display(), "chain saved to RVF checkpoint"),
+                    Ok(()) => {
+                        info!(path = %rvf_path.display(), "chain saved to RVF checkpoint");
+                        // ADR-129: remember the cutover so a rewritten file is refused.
+                        if let Err(e) = cm.record_cutover(&rvf_path) {
+                            error!(error = %e, "failed to write the ML-DSA-65 cutover record");
+                        }
+                    }
                     Err(e) => {
                         error!(error = %e, "failed to save RVF checkpoint, falling back to JSON");
                         // Fallback: save JSON

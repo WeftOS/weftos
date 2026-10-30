@@ -243,7 +243,8 @@ fn mixed_chain_old_events_then_new_events_verifies_end_to_end() {
     let reloaded = ChainManager::load_from_rvf(&new, 1000).unwrap();
     assert!(reloaded.verify_integrity().valid);
     let kinds: Vec<_> = reloaded.tail(0).into_iter().map(|e| e.kind).collect();
-    assert_eq!(kinds, ["genesis", "boot.init", "bootstrap", "boot.ready"]);
+    // The first dual-signed save records the cutover (ADR-129 downgrade rule).
+    assert_eq!(kinds, ["genesis", "boot.init", "bootstrap", "boot.ready", "pq.cutover"]);
     let v = ChainManager::verify_rvf_dual_signature(&new, &ek.verifying_key(), &mlv).unwrap();
     assert_eq!(v, Verdict::Valid(PqStatus::Verified));
 
