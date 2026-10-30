@@ -144,8 +144,8 @@ optional = true
 workspace = true
 optional = true
 
-# ADR-129: chain.rs types only. No `mldsa` feature: the PQClean C backend
-# needs a WASI SDK, so the guest signs Ed25519-only and fails PQ checks closed.
+# ADR-129: real ML-DSA-65 dual signing in the guest (RustCrypto ml-dsa is pure
+# Rust, so wasm32-wasip1 needs no C toolchain).
 [dependencies.weftos-pq-sign]
 workspace = true
 optional = true

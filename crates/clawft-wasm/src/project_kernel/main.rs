@@ -17,7 +17,7 @@ pub mod chain;
 #[allow(clippy::derivable_impls)]
 #[path = "../../../clawft-kernel/src/chain_subscribe.rs"]
 pub mod chain_subscribe;
-// ADR-129 checkpoint signing; built without the ML-DSA backend here.
+// ADR-129 checkpoint signing: real ML-DSA-65 (pure Rust) in the guest too.
 #[path = "../../../clawft-kernel/src/chain_pq.rs"]
 pub mod chain_pq;
 #[path = "../../../clawft-kernel/src/governance_overlay.rs"]

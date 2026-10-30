@@ -1,6 +1,7 @@
 //! Guest-owned persistent state within the runner's single WASI preopen.
 use crate::{Result, chain::ChainManager};
 use ed25519_dalek::SigningKey;
+use weftos_pq_sign::mldsa65;
 use std::{
     fs::{self, OpenOptions},
     io::Write,
@@ -44,19 +45,28 @@ pub fn key() -> Result<SigningKey> {
     }
 }
 
-pub fn load_chain(key: &SigningKey) -> Result<ChainManager> {
-    match fs::metadata(CHAIN) {
+/// The project's ML-DSA-65 key (ADR-129), generated in the guest from WASI
+/// entropy on first use and kept beside the Ed25519 project key.
+pub fn pq_key() -> Result<mldsa65::SigningKey> {
+    let (key, _created) = weftos_pq_sign::keyfile::load_or_create(Path::new("/project/project.mldsa65"))?;
+    Ok(key)
+}
+
+pub fn load_chain(key: &SigningKey, pq: mldsa65::SigningKey) -> Result<ChainManager> {
+    let mut chain = match fs::metadata(CHAIN) {
         Ok(_) => {
             let bytes = fs::read(CHAIN)?;
             let chain = ChainManager::load_from_rvf(Path::new(CHAIN), 100)?;
-            verify_restored(&bytes, key, &chain)?;
-            Ok(chain.with_signing_key(key.clone()))
+            verify_restored(&bytes, key, pq.verifying_key(), &chain)?;
+            chain.with_signing_key(key.clone())
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            Ok(ChainManager::new(0, 100).with_signing_key(key.clone()))
+            ChainManager::new(0, 100).with_signing_key(key.clone())
         }
-        Err(e) => Err(e.into()),
-    }
+        Err(e) => return Err(e.into()),
+    };
+    chain.set_ml_dsa_key(pq);
+    Ok(chain)
 }
 
 pub fn save_chain(chain: &ChainManager) -> Result<()> {
@@ -64,6 +74,7 @@ pub fn save_chain(chain: &ChainManager) -> Result<()> {
     chain.save_to_rvf(next)?;
     OpenOptions::new().read(true).open(next)?.sync_all()?;
     fs::rename(next, CHAIN)?;
+    chain.record_cutover(Path::new(CHAIN))?;
     Ok(())
 }
 
@@ -79,7 +90,12 @@ pub fn durable(chain: &ChainManager) -> Result<()> {
 /// Authenticate the exact checkpoint being compared, not a separate reread.
 /// Loading may race a file replacement: the restored chain must still match
 /// this authenticated commitment, including each event's chain ID/sequence.
-fn verify_restored(bytes: &[u8], key: &SigningKey, chain: &ChainManager) -> Result<()> {
+fn verify_restored(
+    bytes: &[u8],
+    key: &SigningKey,
+    pq: &mldsa65::VerifyingKey,
+    chain: &ChainManager,
+) -> Result<()> {
     use rvf_crypto::{decode_signature_footer, verify_segment};
     use rvf_wire::{read_segment, validate_segment, writer::calculate_padded_size};
     let mut offset = 0usize;
@@ -101,6 +117,12 @@ fn verify_restored(bytes: &[u8], key: &SigningKey, chain: &ChainManager) -> Resu
     let footer = decode_signature_footer(&bytes[offset..]).map_err(|e| format!("footer: {e}"))?;
     if !verify_segment(&header, payload, &footer, &key.verifying_key()) {
         return Err("project chain signature failed".into());
+    }
+    // ADR-129: a v2 checkpoint needs a valid ML-DSA-65 footer, and a legacy
+    // one over a history that already cut over is a downgrade.
+    let verdict = crate::chain_pq::verify_checkpoint(bytes, &key.verifying_key(), pq)?;
+    if !verdict.is_valid() {
+        return Err(format!("project chain checkpoint rejected: {verdict:?}").into());
     }
     // ExoChainHeader v1 is 64 bytes; see the shared chain writer.
     if payload.len() < 64
@@ -151,7 +173,8 @@ mod tests {
         let path = dir.join("original.rvf");
         original.save_to_rvf(&path).unwrap();
         let good = fs::read(&path).unwrap();
-        verify_restored(&good, &key, &original).unwrap();
+        let pq = mldsa65::SigningKey::generate();
+        verify_restored(&good, &key, pq.verifying_key(), &original).unwrap();
         let forged = ChainManager::new(0, 100); // attacker has no signing key
         forged.append("test", "forged", Some(serde_json::json!({"value":2})));
         let forged_path = dir.join("forged.rvf");
@@ -176,7 +199,7 @@ mod tests {
         assert!(ChainManager::verify_rvf_signature(&forged_path, &key.verifying_key()).unwrap());
         let loaded = ChainManager::load_from_rvf(&forged_path, 100).unwrap();
         assert!(loaded.verify_integrity().valid);
-        assert!(verify_restored(&attack, &key, &loaded).is_err());
+        assert!(verify_restored(&attack, &key, pq.verifying_key(), &loaded).is_err());
         fs::remove_file(path).unwrap();
         fs::remove_file(forged_path).unwrap();
         fs::remove_dir(dir).unwrap();

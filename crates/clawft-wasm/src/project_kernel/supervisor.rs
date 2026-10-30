@@ -371,7 +371,7 @@ pub fn run() -> Result<()> {
     clawft_types::project::validate_id(&boot.project_id)?;
     let user = hex_decode::<32>(&boot.user_pubkey).ok_or("missing pinned user key")?;
     let key = storage::key()?;
-    let chain = storage::load_chain(&key)?;
+    let chain = storage::load_chain(&key, storage::pq_key()?)?;
     let effective = policy(&boot, &user, &chain, boot.parent_policy.clone())?;
     let hash = effective.effective_hash;
     chain.set_rule_hash_provider(Arc::new(move || Some(hash)));
