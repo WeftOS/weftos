@@ -174,3 +174,10 @@ fn import_refuses_unknown_parent_and_malformed_catalog() {
     assert!(matches!(i.import_catalog("agents", &no_digest, 1), Err(VersionsError::Invalid { .. })));
     assert!(i.list("agents").unwrap().is_empty());
 }
+
+#[test]
+fn index_paths() {
+    let i = VersionsIndex::new("/x/y");
+    assert_eq!(i.dir(), Path::new("/x/y"));
+    assert_eq!(i.file("cog"), Path::new("/x/y/cog.jsonl"));
+}
