@@ -20,8 +20,6 @@ use std::collections::{HashMap, HashSet};
 const CODE_EXTENSIONS: &[&str] = &[
     "py", "ts", "tsx", "js", "go", "rs", "java", "rb", "cpp", "c", "h", "cs", "kt", "scala", "php",
 ];
-#[allow(dead_code)]
-const DOC_EXTENSIONS: &[&str] = &["md", "txt", "rst"];
 const PAPER_EXTENSIONS: &[&str] = &["pdf"];
 const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp", "gif", "svg"];
 
