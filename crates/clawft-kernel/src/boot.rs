@@ -3949,6 +3949,52 @@ mod tests {
         }
     }
 
+    /// ADR-129: a node whose chain never cut over boots exactly as before,
+    /// from a legacy RVF file or, when that is unreadable, from the JSON
+    /// fallback. Only once the node holds a cutover record is the unsigned
+    /// JSON fallback refused.
+    #[cfg(all(feature = "exochain", unix))]
+    #[tokio::test]
+    async fn boot_json_fallback_is_refused_only_after_the_pq_cutover() {
+        for (case, cut_over) in [("legacy", false), ("cut over", true)] {
+            let dir = tempfile::tempdir().unwrap();
+            let ckpt = dir.path().join("chain.json");
+            let rvf = ckpt.with_extension("rvf");
+            let cm = crate::chain::ChainManager::new(0, 0);
+            cm.append("test", "from-json", None);
+            cm.save_to_file(&ckpt).unwrap();
+            std::fs::write(&rvf, b"not an rvf chain").unwrap();
+            if cut_over {
+                let record = crate::chain_pq::Cutover { chain_id: 0, sequence: 1, hash: "00".into() };
+                crate::chain_pq::write_cutover_record(&rvf, &record).unwrap();
+            }
+            let mut kc = test_kernel_config_exochain();
+            kc.chain.as_mut().unwrap().checkpoint_path = Some(ckpt.to_string_lossy().into_owned());
+            let booted = Kernel::boot(test_config(), kc, Arc::new(NativePlatform::new())).await;
+            if cut_over {
+                let msg = booted.err().expect("an unsigned JSON fallback after the cutover must be refused").to_string();
+                assert!(msg.contains("refusing to start a fresh chain"), "{case}: {msg}");
+            } else {
+                let kernel = booted.unwrap_or_else(|e| panic!("{case}: boot failed: {e}"));
+                let events = kernel.chain_manager().unwrap().tail(0);
+                assert!(events.iter().any(|e| e.kind == "from-json"), "{case}: JSON chain not restored");
+            }
+        }
+
+        // A legacy, Ed25519-only RVF chain with no record loads as before.
+        let dir = tempfile::tempdir().unwrap();
+        let ckpt = dir.path().join("chain.json");
+        let ek = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
+        let cm = crate::chain::ChainManager::new(0, 0).with_signing_key(ek);
+        cm.append("test", "legacy-rvf", None);
+        cm.save_to_rvf(&ckpt.with_extension("rvf")).unwrap();
+        let mut kc = test_kernel_config_exochain();
+        kc.chain.as_mut().unwrap().checkpoint_path = Some(ckpt.to_string_lossy().into_owned());
+        let kernel = Kernel::boot(test_config(), kc, Arc::new(NativePlatform::new())).await.unwrap();
+        let events = kernel.chain_manager().unwrap().tail(0);
+        assert!(events.iter().any(|e| e.kind == "legacy-rvf"));
+    }
+
     #[cfg(feature = "exochain")]
     #[tokio::test]
     async fn boot_exochain_creates_chain_manager() {
