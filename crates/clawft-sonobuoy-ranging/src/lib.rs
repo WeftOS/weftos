@@ -331,6 +331,30 @@ mod tests {
     }
 
     #[test]
+    fn from_travel_time_defaults() {
+        let o = RangeObservation::from_travel_time(BuoyId::new("a"), BuoyId::new("b"), 2.0);
+        assert_eq!(o.sound_speed_mps, DEFAULT_SOUND_SPEED_MPS);
+        assert!(o.sigma_m.is_none());
+        assert!(o.epoch_unix.is_none());
+        assert!((o.range_m() - 2.0 * 1500.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn synthetic_ring_field_four_buoys() {
+        let (buoys, mat, chord) = synthetic_ring_field(4, 100.0);
+        assert_eq!(buoys.len(), 4);
+        assert!((mat.fill_ratio() - 1.0).abs() < 1e-12);
+        let expected = 2.0 * 100.0 * (std::f64::consts::PI / 4.0).sin();
+        assert!((chord - expected).abs() < 1e-9);
+    }
+
+    #[test]
+    #[should_panic(expected = "need at least 2 buoys")]
+    fn synthetic_ring_field_rejects_single_buoy() {
+        let _ = synthetic_ring_field(1, 1.0);
+    }
+
+    #[test]
     fn version_nonempty() {
         assert!(!VERSION.is_empty());
     }
