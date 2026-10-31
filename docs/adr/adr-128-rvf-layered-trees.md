@@ -2,6 +2,7 @@
 
 - **Status**: Proposed (2026-10-29; owner direction, see Context). Adoption is gated on the proofs in "Prove first".
 - **Updated**: 2026-10-30 (T0 finished by ADR-129: upstream rvf-crypto, rvf-types 0.3 workspace-wide). Also 2026-10-30 (T4 passes locally; ML-DSA placeholder finding). Also 2026-10-30 (T3 passes). Also 2026-10-30 (T5 passes). Also 2026-10-30 (T2 passes with the per-record design; U5 added). Also 2026-10-30 (T1 partial results from the JuiceFS spike are recorded in the proof table). Also 2026-10-30: the RVF facts are rewritten from a source study of ruvnet/ruvector `fefc2ec9` (`docs/research/rvf-container-study-2026-10-29.md`). The first draft read the pinned rvf-runtime 0.3.2 and misjudged the format. The proofs now name their upstream dependencies, with a fallback for each, and the plan runs the proofs alongside the upstream contributions.
+- **Updated**: 2026-10-30 (ADR-130: integrated master layers are published one way to a GCS seed bucket by one elected writer; PG is seed, standby writer and replica).
 - **Deciders**: owner
 - **Prior decisions**: the decision store, consulted on 2026-10-29, holds ADR-126 and ADR-127 on this topic.
 - **Builds on**:
