@@ -151,7 +151,7 @@ Everything carries labels `project=weftos`, `purpose=seed-spike`, `adr=adr-130`.
 | Stop or suspend with preservation (Preview, opt-in) | Copied to durable storage and restored; **not available on machine types that use Titanium SSD** |
 | Power loss on C4, C4A, C4D, C4N, H4D | Disks **might not recover all writes completed before the loss** |
 
-Consequences. The writer must treat the Local SSD as lost on any stop and as possibly missing recent acked writes after a power event, so durability is carried by GCS and never by the disk. That is the reason the writer is stateless. Local SSDs cannot be snapshotted or added after creation, and customer-managed keys cannot be used with them (data is encrypted by Compute Engine). Device names can change across restarts, so mounts use `/dev/disk/by-id/`. The mount recipe is formatted on every boot.
+Consequences. The writer must treat the Local SSD as lost on any stop and as possibly missing recent acked writes after a power event, so durability is carried by GCS and never by the disk. That is the reason the writer is stateless. Local SSDs cannot be snapshotted or added after creation, and customer-managed keys cannot be used with them (data is encrypted by Compute Engine). Device names can change across restarts, so mounts use `/dev/disk/by-id/`. The startup script formats the device only when it has no filesystem (an existing one is fsck-checked and mounted), and writes a fresh-format marker so the writer knows whether to rehydrate.
 
 **I/O-shaping rules** (from the PD/Hyperdisk guidance, applied to avoid the network-disk worst case and keep the Local SSD fast):
 
