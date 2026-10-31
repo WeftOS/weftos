@@ -3,6 +3,7 @@
 - **Status**: Proposed (2026-10-30; owner direction, see Context). Adoption is gated on the spike in "Spike plan".
 - **Date**: 2026-10-30
 - **Updated**: 2026-10-30 (owner replan: the writer is stateless; GCS is the only durable store; Titanium Local SSD replaces the PD-SSD state disk)
+- **Updated**: 2026-10-31 (owner naming: the elected writer node is the **seed cone**, **SC** for short; the GCP node is `weftos-seed-cone`)
 - **Deciders**: owner
 - **Prior decisions**: the decision store, consulted on 2026-10-30, holds nothing on cloud-hosted seed storage.
 - **Builds on**:
@@ -18,7 +19,7 @@
 The owner's decisions on 2026-10-30:
 
 - Integrated master layers (sealed, content-addressed, dual-signed per ADR-129) go **one way** into a **GCS bucket**. Any node pulls packs from it.
-- There is **one elected writer**, a **Compute Engine VM** with a fast disk that "acts as PG", next to the bucket.
+- There is **one elected writer**, a **Compute Engine VM** with a fast disk that "acts as PG", next to the bucket. The owner named this role the **seed cone (SC)**; the GCP node is `weftos-seed-cone`. Whichever node holds the writer lease is acting as the SC, so PG becomes the SC when it takes over.
 - **PG stays the seed, the standby writer and a full replica.**
 - GCP project `weavelogic-internal`, region as close to Orlando and Miami as possible: **us-east1** (South Carolina). The bucket may be a configurable dual-region, us-east1 plus us-east4.
 - An existing bucket in us-central1 is unrelated. This work never references it.
