@@ -211,6 +211,93 @@ All gates are recorded in this ADR on completion. The Terraform is a separate ro
 
 Kill criteria: gate 7 or 8 failing is a design failure, not a tuning problem. Gate 3 is run first. Gates 4 to 6 failing against the baselines means the tier adds cost without a speed benefit and the spike stops.
 
+## Spike results: gates 1 and 2 (2026-10-31)
+
+Run on the SC (`c4-standard-4-lssd`, us-east1-b, Ubuntu 24.04, fio 3.36, RustFS 1.0.4 official x86_64 gnu release, checksum verified). In this section "gate 1" is the disk test (spike-plan gate 3) and "gate 2" the round-trip test (spike-plan gate 4, partly: the bucket and the SC, not yet the 4 KB range read from each host). Temporary disks were created with gcloud outside Terraform and deleted afterwards; `terraform plan` shows no changes.
+
+### Gate 1: disks
+
+Disks under test: Titanium Local SSD (`/mnt/scratch`, ext4, `discard`, scheduler none); a 100 GB Hyperdisk Balanced at its defaults (3,600 provisioned IOPS, 290 MB/s); a 100 GB PD-SSD. **PD-SSD cannot be used on this machine type**: attaching it fails with "pd-ssd disk type cannot be used by c4-standard-4-lssd machine type", so the third column of the original plan does not exist on C4. Both formatted ext4 with lazy init off and `discard`. 30 s per fio run, buffered `--ioengine=sync --fsync=1` at queue depth 1, then `libaio --direct=1 --iodepth=32 --rw=randwrite`.
+
+**fio, queue depth 1 (write then fsync after every write)**
+
+| Disk | bs | IOPS | MB/s | write p50 | fsync p50 | fsync p99 | fsync p99.9 |
+|---|---|---|---|---|---|---|---|
+| Local SSD | 4k | 6,904 | 28 | 3 us | 136 us | 281 us | 465 us |
+| Local SSD | 256k | 1,296 | 340 | 41 us | 823 us | 1.45 ms | 1.48 ms |
+| Hyperdisk Balanced | 4k | 1,205 | 4.9 | 4 us | 791 us | 1.38 ms | 1.81 ms |
+| Hyperdisk Balanced | 256k | 536 | 140 | 44 us | 1.79 ms | 2.54 ms | 3.06 ms |
+| PG USB HDD (baseline, earlier test) | 4k | | | | 26 to 33 ms | | |
+
+**fio, queue depth 32 (libaio, direct, random write; completion latency)**
+
+| Disk | bs | fdatasync | IOPS | MB/s | clat p50 | p99 | p99.9 |
+|---|---|---|---|---|---|---|---|
+| Local SSD | 4k | no | 85,752 | 351 | 477 us | 498 us | 502 us |
+| Local SSD | 4k | every write | 43,486 | 178 | 473 us | 3.0 ms | 5.8 ms |
+| Local SSD | 256k | no | 1,340 | 351 | 23.5 ms | 25.0 ms | 43.8 ms |
+| Local SSD | 256k | every write | 1,332 | 349 | 23.5 ms | 33.4 ms | 46.9 ms |
+| Hyperdisk Balanced | 4k | no | 3,619 | 15 | 8.6 ms | 10.7 ms | 18.0 ms |
+| Hyperdisk Balanced | 4k | every write | 1,306 | 5.3 | 24.8 ms | 33.8 ms | 39.1 ms |
+| Hyperdisk Balanced | 256k | no | 1,168 | 306 | 27.7 ms | 41.2 ms | 53.7 ms |
+| Hyperdisk Balanced | 256k | every write | 1,162 | 305 | 27.7 ms | 50.1 ms | 61.6 ms |
+
+Both disks sit on their limits: Hyperdisk at its provisioned 3,600 IOPS (4k) and about 300 MB/s (256k); Local SSD at about 350 MB/s for large blocks. Large writes are bandwidth bound on either disk, so the 256 KB segment rule is about the sync count, not about escaping a latency floor.
+
+**RustFS-style object, four syncs each** (create temp file, write 4 KB, fsync, rename, fsync directory; Python, 20 s per cell)
+
+| Writers | Local SSD obj/s | p50 | p99 | Hyperdisk obj/s | p50 | p99 |
+|---|---|---|---|---|---|---|
+| 1 | 3,692 | 0.26 ms | 0.40 ms | 669 | 1.38 ms | 2.66 ms |
+| 4 | 7,296 | 0.51 ms | 0.91 ms | 1,138 | 3.46 ms | 4.70 ms |
+| 8 | 9,277 | 0.81 ms | 2.58 ms | 1,618 | 4.94 ms | 6.58 ms |
+| 32 | 12,318 | 2.14 ms | 9.04 ms | 2,689 | 11.82 ms | 16.50 ms |
+| 128 | 12,423 | 7.80 ms | 17.56 ms | 3,010 | 40.89 ms | 67.58 ms |
+
+### Gate 1b: RustFS 1.0.4 PUT burst, same probe as the PG test
+
+A throwaway RustFS on loopback with its data directory on each disk, audit off (PG mode (a)), own temporary credentials in a 0600 file, 2,000 PUTs per cell using the same `probe.py` as the PG test (`probe.py` creates up to 8 client processes; the probe client runs on the same four vCPUs as RustFS). PUT/s with p50 and p99 in ms.
+
+| Writers | 4 KB Local SSD | 4 KB Hyperdisk | 4 KB PG HDD | 64 KB Local SSD | 64 KB Hyperdisk | 64 KB PG HDD |
+|---|---|---|---|---|---|---|
+| 1 | 353 (2.8 / 3.2) | 235 (4.2 / 5.0) | n/a | 308 (3.2 / 3.7) | 195 (5.0 / 6.1) | n/a |
+| 4 | 939 (4.0 / 6.3) | 571 (6.8 / 8.9) | 21.3 (173 p50) | 838 (4.6 / 6.2) | 526 (7.4 / 9.9) | 13.2 (272 p50) |
+| 8 | 1,095 (6.7 / 10.1) | 698 (10.8 / 15.9) | n/a | 977 (7.6 / 11.0) | 714 (10.6 / 14.5) | n/a |
+| 32 | 959 (24.8 / 101.9) | 745 (33.6 / 89.5) | 48.1 (623 p50) | 873 (28.0 / 110.5) | 710 (36.1 / 95.5) | 36.5 |
+| 128 | 564 (100.3 / 412.2) | 494 (130.4 / 428.5) | 48.1 (2,353 p50) | 537 (109.9 / 382.7) | 472 (139.2 / 477.3) | 35.7 |
+
+Syncs per PUT, `strace -f -c -e trace=fsync,fdatasync -p <rustfs pid>`, 32 writers, 640 4 KB PUTs: 1,926 `fsync` plus 646 `fdatasync` = 2,572, which is **4.0 syncs per PUT**, the same as on PG. Mean time per sync under strace (which inflates it): Local SSD 126 us (`fsync`) and 223 us (`fdatasync`); Hyperdisk 568 us and 1,232 us; PG 26 to 29 ms.
+
+### Gate 2: round-trip times
+
+Ping to the SC's tailnet address, 30 echoes each, from the host named. Tailscale SSH to the CI host and PG is not permitted, so the tests ran as the hosts' ordinary users with plain `ping`; the path was direct at the end of every run (the first pongs of each `tailscale ping` went via the Ashburn DERP relay at 50 to 150 ms before the direct path came up).
+
+| From | min | median | p95 | max | Path |
+|---|---|---|---|---|---|
+| Mac | 28.2 ms | 29.3 ms | 88.7 ms | 94.4 ms | direct (the p95 is a few slow Wi-Fi samples) |
+| CI host | 25.4 ms | 25.8 ms | 27.1 ms | 29.0 ms | direct |
+| PG | 34.6 ms | 39.2 ms | 46.2 ms | 52.2 ms | direct |
+
+From the SC to Cloud Storage (`gs://weavelogic-weftos-seed`, JSON API, VM service account, each call a fresh `curl` so each includes DNS lookup, TCP and TLS, about 30 ms of the figures; ten calls each, objects under `spike/` only and deleted afterwards):
+
+| Operation | min | median | p95 |
+|---|---|---|---|
+| Object metadata GET (small) | 29.8 ms | 37.8 ms | 43.8 ms |
+| 1 KB PUT | 66.1 ms | 74.6 ms | 80.3 ms |
+| 1 KB PUT, `ifGenerationMatch=0` (the head compare-and-swap shape) | 67.9 ms | 74.0 ms | 83.3 ms |
+| 1 KB GET | 44.4 ms | 45.9 ms | 54.0 ms |
+| 8 MiB PUT | 126 ms | 161 ms | 212 ms |
+| 8 MiB GET | 86.4 ms | 114 ms | 122 ms |
+
+### What this means for the design
+
+- **The stateless-writer premise holds.** At queue depth 1 an fsync on the Local SSD takes 0.14 ms at 4 KB, about 190 times faster than PG's HDD and 5.8 times faster than Hyperdisk at its defaults. The "Local SSD clearly faster at queue depth 1" condition is met.
+- **RustFS-style objects are fast on the Local SSD, and the cap on PG is the disk.** The same four-sync PUT that tops out at 48/s on PG's HDD does 1,095/s (4 KB, 8 writers) on the SC's Local SSD, about 23 times more, with p50 under 7 ms. Raw four-sync objects reach 12,400/s. Past 8 writers the RustFS figures fall, and Hyperdisk and Local SSD converge; with the load generator on the same four vCPUs the RustFS test is CPU bound above that point, so read the 32 and 128 writer cells as a CPU limit of this VM shape, not a disk limit. The mean sync is 0.15 ms against 26 to 29 ms on PG, so the ring's segmenting is no longer needed for the disk's sake on the SC, only for GCS request count.
+- **Hyperdisk Balanced as a durable fallback is usable, not equal.** At defaults it manages 0.8 ms fsync, 3,600 IOPS and about 300 MB/s, and 745 RustFS PUT/s. It is 4 to 6 times slower than Local SSD on raw syncs and 1.2 to 1.6 times slower through RustFS. If the Local SSD is lost and the writer needs a state disk, this is good enough for the publish path; provisioned IOPS can be raised. PD-SSD is not an option on C4.
+- **GCS op latency against the planned cadence.** A 1 KB write or a head compare-and-swap costs about 75 ms, a read about 46 ms, an 8 MiB segment about 160 ms including connection setup (less on a reused connection). The planned 250 ms segment timer with 4 to 8 segments in flight fits: one segment PUT finishes well inside the timer, and a head advance (one segment wait plus one conditional PUT) is about 250 to 350 ms of added latency.
+- **Network to the SC:** 26 to 39 ms median from the CI host, the Mac and PG, all direct. Fetching a head is therefore a one-RTT call from any node on the tailnet, and the SC adds no more than about 40 ms to a writer round trip.
+- **Not measured here:** parallel segment throughput to GCS (my 8-way test did not validate its own results and is excluded), Mac, CI host and PG round trips to the bucket itself, and the 4 KB range read.
+
 ## Consequences
 
 - The writer holds no durable state: losing the VM, its disk or its zone costs rehydration time, not data.
