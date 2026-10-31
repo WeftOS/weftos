@@ -356,6 +356,104 @@ The Mac's materialised tree (files read back from disk) hashes to git tree `d070
 - **Manifest size is the next cost.** Gzipped JSON of the full tree is 8 MB; deltas are 0.4 KB. Heads should be published as deltas over a cached parent, with the full manifest only for cold joins.
 - **Not done in this run:** gates 7 and 8 (writer failover, tamper checks), billing (gate 9), and signature verification of the lineage on the reader side (the readers check blob hashes and the tree hash, not layer signatures).
 
+## Spike results: gate 5 (2026-10-31)
+
+The seed cone (SC) did the whole write path itself, with no PG in the loop: it took in six client layers, merged them, sealed a master layer, signed its manifest, published, and moved the head. **Ed25519 only, by the owner's choice for this gate.** Tool: `gcsmesh` in the mesh-mock crate (new `src/sc.rs`; changes in `src/gcs.rs`, `src/gcsflow.rs`, `src/bin/gcsmesh.rs`, `src/lib.rs`; scripts `scripts/gate5-*.{sh,py}`). The CI host copy of the crate was synced to match.
+
+### Setup and rehydrate
+
+The SC is x86-64 with git 2.43. The binary was built on the CI host and copied over (rustup was not installed on the SC; nothing there needs a compiler). Rehydrate is a cold join of the head's tracked files (dependency trees skipped) onto the Local SSD scratch, then a git base commit built from the materialised tree.
+
+| Step | Time |
+|---|---|
+| Cold join, 5,914 files, 5,878 blobs, 107 MB, 66 GETs | **0.61 s** (0.87 s on the first run) |
+| Git base commit | **1.97 s** (25.8 s on the first run, one `git hash-object` process per blob; now one batched `hash-object --stdin-paths` and one `update-index`) |
+| Tree hash of the files on disk | 0.08 s |
+| Total | **2.85 s** |
+
+The integrator's git tree is `d070bb36d22d94d0eb7a89458f3606626a726170`, the tree the Mac and the CI host reached in gate 3, and equals the tree hash of the files on disk. The SC then signed the inherited w4 manifest (`manifest/085bfe31….sig`), because a reader that requires signatures needs one on every manifest in the chain, and the SC had just checked that manifest's tree against git.
+
+### Signing key
+
+An Ed25519 key was generated on the SC for the spike: `/mnt/scratch/gate5/sc-ed25519.key`, mode 0600, never printed or uploaded. The public key is at `keys/sc-ed25519.pub` in the bucket. **Fingerprint (SHA-256 of the raw public key): `2a59ea15017045b9dff2ab5902c6faf7d6eb24eba77559f2d7762cf764a24cf1`.** The production key belongs in Secret Manager or KMS (KMS can hold the Ed25519 half), not on the Local SSD, and its fingerprint is pinned in each reader's configuration. A reader that fetched the public key from the bucket and trusted it unpinned would verify nothing; the tool takes `--verify-pin <fingerprint>` and refuses a key that does not match.
+
+A signature is a detached document at `manifest/<id>.sig`: `{alg, key_id, manifest, manifest_sha, sig}`, where the signed message is `weft-seed-manifest-v1`, the manifest id and the SHAKE-256 of the stored manifest bytes.
+
+### The wave: six layers, two clients
+
+Both clients joined the w4 head with the signature check on (Mac 6.8 s over Wi-Fi, CI host 3.3 s, base only), made real edits, and sealed one layer per task against `head/master`. Each layer is a signed `layer.json` (the layer plus its blob locations) and one pack of its new blobs. Edits (the Rust test and the doc comment were not compiled in this run):
+
+| Client | Layer | Change |
+|---|---|---|
+| Mac | `4cd76bb1` | docs: new "Reading a rejection" section in `diff-gate.md` |
+| Mac | `6773bdae` | test: same version record under two kinds stays apart (`clawft-versions/src/tests.rs`) |
+| Mac | `0e77457b` | docs: `diff-gate.md`, the first-push sentence (contested line) |
+| CI host | `b127398b` | docs: a doc comment on `embed` in `clawft-versions/src/mirror.rs` |
+| CI host | `168092ef` | docs: `contributing.md` points at the local diff-gate run |
+| CI host | `78600597` | docs: `diff-gate.md`, the fail-closed sentence (the same line as `0e77457b`) |
+
+### Ingest
+
+The SC minted 12 V4 PUT URLs (15 minutes) under `incoming/<client>/<layer>/{pack,layer.json}`, into 0600 files handed over ssh and shredded afterwards. The URLs sign `x-goog-if-generation-match: 0` as a header, so a holder can create the object once and can never overwrite it; the clients held no other bucket access. A URL does not bound the object's size (a signed `x-goog-content-length-range` header would); that is a hardening item.
+
+| Client | Layers | Objects | Bytes | Wall time (3 layers in parallel) |
+|---|---|---|---|---|
+| Mac | 3 | 6 | 19,953 | 0.62 s (0.30 to 0.37 s each) |
+| CI host | 3 | 6 | 35,684 | 0.38 s (0.33 to 0.37 s each) |
+
+### Integrate, seal, sign, publish (on the SC)
+
+The SC waited for six complete bundles (it polled `incoming/` every 250 ms; production would use a Pub/Sub event on `incoming/`), then:
+
+| Phase | Result |
+|---|---|
+| Fetch 12 incoming objects | 97 ms, 55,637 B |
+| Verify (layer signature against a client allowlist, parent, pack and blob hashes) | under 1 ms |
+| Build six git commits | 170 ms |
+| Merge, flat `(depth, name)` order, `git merge-tree --write-tree` | **26 ms**, 6 merge operations |
+| Same six commits with plain `git merge` in a worktree | **372 ms** (plus 538 ms to create the worktree), same final tree |
+| Conflict records (3 objects) | 195 ms |
+| Seal (git diff, master layer, delta manifest) | 11 ms |
+| Sign (Ed25519 over the manifest) | under 1 ms |
+| Repack | 4 new blobs into 1 pack, under 1 ms |
+| Publish 9 objects create-only (1 pack, 5 client layers, the master layer, manifest, signature) | 224 ms, 47,885 B |
+| Head compare-and-swap (`ifGenerationMatch` = the generation read at the start) | 60 to 87 ms |
+| Clean up `incoming/` | 12 deletes, 164 ms |
+| Fetch to head moved (excluding the wait) | **906 ms** |
+
+**Last client upload to new head visible: 1,097 ms**, from the object generations on both sides, which are GCS server timestamps in microseconds (no clock skew), and it includes the SC's 250 ms poll. **The temporary Pub/Sub subscription was not measured:** the Mac's gcloud session had expired (reauthentication needs a person), the CI host has a different account, and the SC's service account has no Pub/Sub permission (403; no IAM change was made). Gate 3 already showed one `OBJECT_FINALIZE` per head write.
+
+**Conflict.** One layer was refused and recorded, not dropped. In name order `0e77457b` merged first; `78600597` changed the same line and `git merge-tree` reported a content conflict in `docs/development/diff-gate.md`. The SC wrote `conflicts/78600597…/record.json` (kind, client, message, both sides' hunk with conflict markers, git's messages, and the merged layers that touched the same file), plus the layer and its pack, so the owner can rebase it. `4cd76bb1`, which edits a different region of the same file, merged cleanly. Five layers merged. The plain `git merge` run also merged five and refused one, and produced the identical git tree `fc52a711ff4f070c0c63da87a6c7a1470cba8e2d`. The master layer has 4 operations (the four edited files), a 574-byte manifest and a 396-byte signature.
+
+### Readers verify
+
+The SC minted read URLs for the new head, its manifest, its signature and the public key. The CI host and the Mac warm-joined with `--verify-pin`:
+
+| Client | Warm join of the new head | GETs | Bytes | Signature check |
+|---|---|---|---|---|
+| CI host | **0.50 s** | 5 | 43,513 | 63 ms |
+| Mac | **0.54 s** | 5 | 43,513 | 86 ms |
+
+**Tree hash.** Both clients' materialised trees (read back from disk) hash to git tree `fc52a711ff4f070c0c63da87a6c7a1470cba8e2d`, which is the SC integrator's merged tree.
+
+**Negative tests (both clients).** A copy of the new manifest with one byte flipped was uploaded to `spike/gate5-neg/manifest/<id>`. Each reader fetched it with the real signature and rejected it ("manifest bytes do not match the signed hash"; exit code 3). On the real manifest each reader also ran four tamperings in memory, and all were rejected: a flipped manifest byte; a flipped manifest with the hash field in the signature rewritten to match (the Ed25519 check fails); a flipped signature byte; a signature by another key. The untouched pair verified. A wrong pin was refused before any manifest was read.
+
+### Cost signals
+
+Client side: 12 PUTs. SC: about 90 LIST calls while waiting at 250 ms (an estimate; this goes away with a Pub/Sub trigger), 2 LISTs for the fetch and cleanup, 12 GETs for the layers, 13 PUTs (3 conflict objects, 9 publish objects, the head) plus 12 DELETEs. Each reader: 5 GETs. At the published list prices that is far below a cent for the whole wave.
+
+### What this means for the design
+
+- **The SC can own the write path alone.** Seal, sign and publish from the Local SSD took under a second for a small wave, and the compare-and-swap is still the only commit point.
+- **Rehydrate is cheap once the working set is batched:** 2.9 s from blank. Per-blob git processes are the cost to avoid (25.8 s).
+- **Flat merge in `git merge-tree` beats plain git by about 14 times** on six layers, and refuses the same layer.
+- **Ed25519-only caveats.** (1) The head document itself is not signed here, only the manifest. A hostile bucket could point `head/master` back at an older, validly signed manifest (a rollback) and a reader would accept it; the dual-signed head with sequence and epoch (this ADR, section 4) is what closes that, and the reader should check the head's `manifest_sha` against the manifest. (2) A single classical signature offers no post-quantum protection for long-lived history. **ML-DSA-65 dual signing, to come:** ML-DSA-65 is added next to the Ed25519 signature in the same `.sig` document and on the head, a reader requires both, and the key custody problem (KMS cannot hold ML-DSA-65) is solved by a wrapped key, not by KMS signing. The measured cost is two signatures of a few kilobytes per head, so size and time stay small.
+- **Hardening still open:** size-bound the signed PUT URLs; readers do not yet verify the lineage's layer signatures (the SC verifies the clients' layers, readers verify manifests); the clients' public keys are an allowlist file on the SC, not yet in a registry.
+
+### State left behind
+
+`head/master` was restored to the w4 head (`085bfe31…`, sequence 7) after the tests; the wave's head `84d967fd…` and its manifest, signature and layers remain in the bucket and can be re-selected with `head-set`. The bucket also holds `keys/sc-ed25519.pub`, `manifest/085bfe31….sig`, `conflicts/78600597…/` and `spike/gate5-neg/`. On the SC, `/mnt/scratch/gate5/` (about 200 MB: binary, blob cache, tree, integrator repo, keys, client allowlist) is unchanged and is at the wave's head, so rehydrate again before the next run. No `incoming/` objects remain; every URL file was deleted.
+
 ## Consequences
 
 - The writer holds no durable state: losing the VM, its disk or its zone costs rehydration time, not data.
