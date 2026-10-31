@@ -298,6 +298,64 @@ From the SC to Cloud Storage (`gs://weavelogic-weftos-seed`, JSON API, VM servic
 - **Network to the SC:** 26 to 39 ms median from the CI host, the Mac and PG, all direct. Fetching a head is therefore a one-RTT call from any node on the tailnet, and the SC adds no more than about 40 ms to a writer round trip.
 - **Not measured here:** parallel segment throughput to GCS (my 8-way test did not validate its own results and is excluded), Mac, CI host and PG round trips to the bucket itself, and the 4 KB range read.
 
+## Spike results: gate 3 (2026-10-31)
+
+Spike-plan gates 1, 5 and 6 (publish, publish throughput, cold and warm joins), the 4 KB range read and bucket round trips of gate 4, and the reader-access question. The SC published the mesh mock's merged master head (the w4 integrator layer `085bfe31`, 87,158 files, 2.2 GB) into the seed bucket, and the CI host and the Mac joined from it. Tool: `gcsmesh` in the mesh-mock crate (`src/gcs.rs`, `src/gcsflow.rs`, `src/bin/gcsmesh.rs`): GCS XML API with the VM's metadata-server token, plus V4 signed URLs for readers. Objects written: `packs/<hash>`, `layers/<id>`, `manifest/<id>` (all with `x-goog-if-generation-match: 0`, a 412 counts as success) and `head/master` (generation compare-and-swap only). The manifest is gzip JSON (30 MB raw, 8.0 MB gzipped) holding the full tree and a blob-to-pack location map; later heads are delta manifests over a parent.
+
+### Publish
+
+| Item | Result |
+|---|---|
+| Source | PG's RustFS and the mock service over the tailnet, read from the SC |
+| Objects written | 686 pack or blob objects (151 existing packs copied as is, 10 new 8 MiB packs repacked from 5,878 small loose blobs, 525 large loose blobs), 4 lineage layers, 1 manifest, 1 head = 692 PUTs |
+| Bytes up | 2,245,718,377 (2.25 GB) |
+| Wall time | 104 s: 7 s reading layers and tree, 6 s locating blobs, 90 s copying, 1 s layers, manifest and head |
+| Throughput | 21.6 MB/s. The source is the limit (RustFS on PG's disk over the tailnet at about 24 MB/s, as for the CI host in the RustFS baseline), not GCS or the SC |
+
+**Compare-and-swap.** The first `head/master` write used `ifGenerationMatch=0` and got generation 1793455059458548. A synthetic two-file layer (a 4 KB and a 1 KB file, signed with a throwaway key, delta manifest of 408 bytes) moved the head with `ifGenerationMatch=1793455059458548` to generation 1793455271223423. A write with the old generation was refused with 412 and the head stayed. The real head was restored with the current generation (1793455290269087). The warm-join test for the CI host repeated this (1793455290269087 to 1793456400405888, then back to 1793456410435237). Each head write took 60 to 100 ms.
+
+**Pub/Sub.** A temporary pull subscription on the head topic received one `OBJECT_FINALIZE` message for each successful `head/master` write, with the object generation in its attributes, and none for the refused 412. The subscription was deleted afterwards. No `spike/` objects were written.
+
+### Joins
+
+A join reads `head/master`, then the manifest (and parents until a cached tree), fetches only blobs missing from a local content-addressed cache (whole pack when two or more wanted blobs share it, otherwise a range), hash-checks every blob, and materialises the tree. 32 fetch threads.
+
+| Client | Case | Time | Bytes | GCS requests | RustFS baseline |
+|---|---|---|---|---|---|
+| CI host | Cold, full tree incl. dependency prep (77,100 blobs, 87,158 files) | **22.5 s** (head 0.15, manifest 0.5, fetch 21.4, materialise 0.4) | 2.23 GB | 688 | 90.3 s, 2,120 MB |
+| CI host | Warm, one 2-file layer | **0.45 s** | 5.9 KB | 3 | 2 to 4 s, no bytes |
+| Mac | Cold, base only (dependency trees skipped, 5,878 blobs) | **14.0 s** (13.8, 14.0, 19.1 over 3 runs; head 0.24, manifest 1.4 to 5.2, fetch 11.7, materialise 0.45) | 107 MB | 66 | 18.8 s, 99 MB, 5,878 requests; git clone 9 s |
+| Mac | Warm, one 2-file layer | **0.49 s** | 5.9 KB | 3 | adopt 12 s (18 KB) |
+| Mac | Cold, full tree (one run, for completeness) | 300 s (fetch 290) | 2.23 GB | 688 | no baseline |
+
+The Mac figure for the full tree is its Wi-Fi link (about 7.4 MB/s), not the store. The CI host moved the same bytes at about 100 MB/s. The cold join is 4 times faster on the CI host than from RustFS on PG, and 1.3 times faster on the Mac. It stays slower than a git clone on the Mac (9 s) for the base alone: a 1.4 to 5 s manifest fetch (8 MB gzipped, 30 MB parsed) is a fixed cost that a per-path or binary manifest would cut. A warm join costs three requests.
+
+### Round trips to the bucket (30 samples, GCS XML API)
+
+| From | TCP connect (median) | head/master GET, kept-alive (median / p95) | head/master GET, new connection | 4 KB range read on a 100 MB pack, kept-alive (median / p95) | 4 KB range read, new connection |
+|---|---|---|---|---|---|
+| The SC (same region) | 0.3 ms | 28 / 42 ms | 30 / 43 ms | 37 / 61 ms | 32 / 46 ms |
+| CI host | 13.9 ms | 51 / 61 ms | 137 / 155 ms | 58 / 64 ms | 138 / 163 ms |
+| Mac | 38 ms | 80 / 123 ms | 191 / 246 ms | 102 / 145 ms | 197 / 265 ms |
+
+A new connection costs three round trips (TCP and TLS 1.3 and the request); keep-alive makes a head check or a range read one round trip plus about 25 ms of service time. The 4 KB range read costs about the same as a head fetch.
+
+### Reader access
+
+Neither the CI host nor the Mac has a bucket permission, and the design does not give them one. The SC signs short-lived V4 GET URLs with IAM `signBlob` as its own service account, for the head, the head's manifest and every pack the manifest names (688 URLs in 1.4 s, one hour). That needs `roles/iam.serviceAccountTokenCreator` for the SC account on itself, one Terraform resource (`google_service_account_iam_member.writer_signs_for_itself`, plan 1 add, 0 change, 0 destroy), applied on approval. After the binding propagated (the first signBlob calls were denied for under two minutes), the CI host ran both joins above using only the URL file (mode 0600, deleted afterwards), with no credentials of its own. The Mac joins used the owner's own gcloud application default credentials as an interim and needed no IAM change. Limits seen: a URL names one object, so a join that reads a newer manifest needs the SC to mint again (the warm join did); the head URL reads the live head but expires with the rest.
+
+### Verification
+
+The Mac's materialised tree (files read back from disk) hashes to git tree `d070bb36d22d94d0eb7a89458f3606626a726170`, and so does the CI host's. That is `refs/mesh/integrated/w4^{tree}` in the integrator on PG, the git tree of the master head. After each warm join the hash was recomputed over a tree that includes that run's two synthetic files (the Mac and the CI host used different synthetic layers, so those two hashes differ); it is not comparable to git.
+
+### What this means for the design
+
+- **The store works as a seed.** One writer publishes immutable content-named objects and moves the head by generation compare-and-swap; readers need nothing but signed URLs. The cold join beat the RustFS baseline on both clients and the warm join needs three requests.
+- **Publish is bounded by its source here.** Copying from PG's disk ran at 21.6 MB/s; the same 2.2 GB from a local source would be limited by GCS write rates, which this run did not reach. Gate 5 (seal-and-publish from the SC's own disk) is still open.
+- **Repack on publish pays.** The 5,878 small loose base blobs became 10 packs, so the Mac's base join read 66 objects instead of 5,878 requests.
+- **Manifest size is the next cost.** Gzipped JSON of the full tree is 8 MB; deltas are 0.4 KB. Heads should be published as deltas over a cached parent, with the full manifest only for cold joins.
+- **Not done in this run:** gates 7 and 8 (writer failover, tamper checks), billing (gate 9), and signature verification of the lineage on the reader side (the readers check blob hashes and the tree hash, not layer signatures).
+
 ## Consequences
 
 - The writer holds no durable state: losing the VM, its disk or its zone costs rehydration time, not data.
