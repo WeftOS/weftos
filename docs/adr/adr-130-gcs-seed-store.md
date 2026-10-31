@@ -454,6 +454,54 @@ Client side: 12 PUTs. SC: about 90 LIST calls while waiting at 250 ms (an estima
 
 `head/master` was restored to the w4 head (`085bfe31…`, sequence 7) after the tests; the wave's head `84d967fd…` and its manifest, signature and layers remain in the bucket and can be re-selected with `head-set`. The bucket also holds `keys/sc-ed25519.pub`, `manifest/085bfe31….sig`, `conflicts/78600597…/` and `spike/gate5-neg/`. On the SC, `/mnt/scratch/gate5/` (about 200 MB: binary, blob cache, tree, integrator repo, keys, client allowlist) is unchanged and is at the wave's head, so rehydrate again before the next run. No `incoming/` objects remain; every URL file was deleted.
 
+## Spike results: Pub/Sub, signed head (2026-10-31)
+
+Two gaps left by gate 5: the change-notification latency was never measured, and the head was unsigned, so a hostile bucket could roll it back to an older validly signed manifest. Code: `head.rs` (new), changes in `gcs.rs`, `gcsflow.rs`, `sc.rs`, `bin/gcsmesh.rs`, `lib.rs` in the mesh-mock crate; the CI host copy is in sync and the x86-64 binary on the SC was replaced (the gate 5 binary is kept beside it as `gcsmesh.g5`).
+
+### Pub/Sub latency
+
+A temporary pull subscription (`spike-pubsub-20261031`) on `weftos-seed-head` was read from the Mac with the owner's login, then deleted (the topic has no subscriptions again). Six events: one real integrate-and-publish cycle on the SC (a one-line docs layer from the Mac client, SC rehydrate 2.3 s, head CAS 84 ms) and five bare head compare-and-swap writes (the same bytes rewritten, a new generation each time). Times are from the object generation, which is the GCS server's microsecond timestamp.
+
+| Interval | Median | Range |
+|---|---|---|
+| Head object finalize to message `publishTime` | **71 ms** | 62 to 93 ms |
+| `publishTime` to received on the Mac | **688 ms** | 622 to 763 ms |
+| Finalize to received on the Mac | **766 ms** | 687 to 826 ms |
+
+- **Publishing is fast; delivery depends on the subscriber.** The 0.7 s on the Mac is a unary REST `pull` in a Python loop over Wi-Fi, which is the slow way to consume a subscription. A streaming pull (client library or `gcloud`) was not tried, so treat 0.77 s as an upper bound for a Mac and not as the floor.
+- **Clock.** The Mac's clock and GCS agree to within about 35 ms (four of the five PUT responses arrived 33 to 36 ms after the generation stamp it returned), small next to the 0.7 s.
+- **Not measured on the CI host.** It cannot use the owner's login, and the other option (a subscriber on the SC) needs a Pub/Sub subscriber role the SC's service account does not have; none was granted.
+- **Compared with polling.** Gate 5's 250 ms `LIST` poll saw the last client upload 1.1 s before the new head was visible, end to end; a notification costs about 0.07 s to publish plus the subscriber's pull. For a reader that only needs "the head moved", a plain `HEAD`/`GET` of `head/master` every second is within the same range and needs no subscription.
+
+### Signed head
+
+`head/master` is still one object, still written by one generation compare-and-swap, now carrying `{manifest_id (the existing `head` field), manifest_sha, seq, prev_manifest_id, signer_key_id, issued_at}` and a detached Ed25519 signature over those fields (message: `weft-seed-head-v1`, then the fields NUL-separated). The signature is in the same object, so there is no window where the head and its signature disagree. `seq` is the old head's `seq` plus one, read in the same step as the CAS generation, so a lost race fails with 412 and never reuses a number.
+
+A reader accepts a head only if all of these hold:
+
+1. it is signed, by a key whose fingerprint the reader pinned locally (`--verify-pin`, comma-separated for more than one key); keys found under `keys/` in the bucket but not pinned are ignored, so writing a key into the bucket buys an attacker nothing;
+2. the signature verifies;
+3. `seq` is not lower than the last `seq` the reader accepted, which is kept in a per-reader state file (`--head-state`, written by rename); an equal `seq` is accepted only for the same manifest, so a fork at one number is refused too.
+
+Refusals never touch the state file. The manifest signature check from gate 5 is unchanged, except that it now accepts any pinned key (the standby writer in gate 7 has its own key).
+
+| Case (run on the Mac against the bucket and offline, and on the CI host offline) | Result |
+|---|---|
+| Valid head, seq 1, then seq 2 | accepted |
+| **Rollback:** the seq 1 head, validly signed, published again over seq 2 | **refused** (seq 1 is lower than the last accepted 2) |
+| Fork: seq 2 again with a different manifest, validly signed | refused |
+| **Tampered**, one field changed after signing: manifest id, seq, prev, `issued_at`, `manifest_sha`, or one signature byte (six cases) | **refused** (signature does not verify) |
+| **Unknown key:** a validly signed head from a key outside the trusted list | **refused** |
+| Same key B claiming the trusted key's id | refused (signature does not verify) |
+| Unsigned head (the old format) | refused |
+| Valid seq 3 after all of the above, and the same head read twice | accepted (refusals left the state alone) |
+
+All 15 cases came out as expected on each of the three runs. The Mac run against the bucket wrote its heads to `spike/head-test/master` by real compare-and-swap and deleted the object afterwards. Each case builds a new reader from the state file on disk, so the rollback refusal holds across process restarts.
+
+**The real head.** `head/master` was re-published as a signed head at the current integrated head (`001acc49…`, seq 9, signed by the SC key, `prev` the same manifest because it was a `head-set`). The Mac read it with `head-verify` and with a verified `join` (440 ms, warm cache, manifest signature verified); the CI host read it with signed read URLs minted on the SC. Both accepted it. With a state file already at seq 10, both refused it as a rollback, which tests the persisted state against a real head. Pinning an unrelated fingerprint fails with "pinned key not found".
+
+- **Still open.** The reader trusts what the bucket serves for the *latest* head, so an attacker who can only replay can hide new heads from a reader (a freeze): readers should also reject a head whose `issued_at` is older than a bound they choose. Not built. Readers also still do not check the head's `manifest_sha` against the manifest bytes in `join`; the manifest's own signature covers the same bytes, so a mismatch is caught there. A reader that has never seen the bucket (state file absent) accepts any signed head; the first seen `seq` should be pinned out of band when that matters.
+
 ## Consequences
 
 - The writer holds no durable state: losing the VM, its disk or its zone costs rehydration time, not data.
