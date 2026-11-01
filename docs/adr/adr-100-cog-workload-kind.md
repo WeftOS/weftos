@@ -78,7 +78,7 @@ Remaining unknowns: whether Seeds can be given the WeftOS node agent later; ~~ho
 
 1. The pinned WeftOS Ed25519 signer set plus operator-pinned keys (ADR-099 section 8) is authoritative. Rationale: one controlled anchor.
 2. Cognitum ADR-154/155 release records are an **optional additional verifier**: with the Cognitum registry key pinned, a valid record counts as a signature. Not required, since only `anomaly-detect` is release-eligible.
-3. Our fork (`~/Clients/cognitum/vendor/cogs`, upstream `8970f99`) is the source of truth and is **ahead of upstream until our PRs merge**; packages record the fork commit. Upstream released binaries are usable only after an operator hashes and signs them; a URL is never trust.
+3. Our fork of the cogs repo (upstream `8970f99`) is the source of truth and is **ahead of upstream until our PRs merge**; packages record the fork commit. Upstream released binaries are usable only after an operator hashes and signs them; a URL is never trust.
 4. Cognitum's 30% per cog is contractual and not enforced in code. Rationale: agreement, not code, carries the commercial term.
 
 ## Consequences
