@@ -1,10 +1,11 @@
 # ADR-130: GCS seed store: integrated master layers published one way to a bucket, one elected writer on a Compute Engine VM, PG kept as seed and standby
 
-- **Status**: Proposed (2026-10-30; owner direction, see Context). Adoption is gated on the spike in "Spike plan".
+- **Status**: Accepted (2026-11-01, owner). Production decisions taken with the acceptance: the SC runs as a **Spot** instance (`instance_termination_action = STOP`), and every gate 9 cost control is built (idle-stop with a waker, a Pub/Sub trigger on `incoming/` in place of the 10 s LIST poll, the boot disk at baseline IOPS and throughput, dependency trees out of default cold joins, a budget alert on the `adr=adr-130` label). See "Production build".
 - **Date**: 2026-10-30
 - **Updated**: 2026-10-30 (owner replan: the writer is stateless; GCS is the only durable store; Titanium Local SSD replaces the PD-SSD state disk)
 - **Updated**: 2026-10-31 (owner naming: the elected writer node is the **seed cone**, **SC** for short; the GCP node is `weftos-seed-cone`)
 - **Updated**: 2026-11-01 (the SC writer unit; ML-DSA-65 dual signing of heads and manifests; gate 8 tamper tests; gate 9 cost; spike cleanup)
+- **Updated**: 2026-11-01 (accepted by the owner: Spot SC, idle-stop and waker, and the gate 9 cost controls for production)
 - **Deciders**: owner
 - **Prior decisions**: the decision store, consulted on 2026-10-30, holds nothing on cloud-hosted seed storage.
 - **Builds on**:
@@ -127,7 +128,7 @@ The spike publishes only the mesh mock's WeftOS master head, which is public sou
 
 | Item | Choice | Reason |
 |---|---|---|
-| Machine | `c4-standard-4-lssd`, standard (not spot), us-east1-b | The smallest bundled-Titanium-Local-SSD shape: 4 vCPU, 15 GB, one 375 GB Titanium SSD. Offered in us-east1-b, -c and -d. C4D and C3 have `-lssd` shapes too; C4 is preferred for Titanium SSD and the lowest small shape |
+| Machine | `c4-standard-4-lssd`, **Spot** since the production build (was standard during the spike), us-east1-b | The smallest bundled-Titanium-Local-SSD shape: 4 vCPU, 15 GB, one 375 GB Titanium SSD. Offered in us-east1-b, -c and -d. C4D and C3 have `-lssd` shapes too; C4 is preferred for Titanium SSD and the lowest small shape |
 | Boot | 40 GB Hyperdisk Balanced | C4 requires Hyperdisk for boot. No durable data lives here |
 | State | None. Titanium Local SSD, rebuildable scratch | See above |
 | Image | Ubuntu 24.04 LTS | Matches the CI host's family and the WeftOS release targets |
@@ -162,7 +163,7 @@ Consequences. The writer must treat the Local SSD as lost on any stop and as pos
 - ext4 with lazy init off (`lazy_itable_init=0,lazy_journal_init=0`) and `discard` at mkfs and mount, I/O scheduler `none`.
 - Reference disks by `/dev/disk/by-id/`, never by `/dev/nvme*`.
 
-**Spot as a later option.** The Terraform has a `provisioning_model` variable (default `STANDARD`). Spot is cheaper but the Local SSD does not survive preemption and the lease must fail over to PG. It becomes reasonable only after gate 7 and rehydration are proven, and only for a second, non-default writer.
+**Spot as a later option.** The Terraform has a `provisioning_model` variable (default `STANDARD`). Spot is cheaper but the Local SSD does not survive preemption and the lease must fail over to PG. It becomes reasonable only after gate 7 and rehydration are proven, and only for a second, non-default writer. **Superseded on acceptance (2026-11-01):** the owner chose Spot for the SC itself; see "Production build". A preemption stops the SC, and the waker starts it again.
 
 ### 11. Bucket location
 
@@ -735,6 +736,106 @@ The objects left under `spike/` from gates 1 to 5, with all their versions. The 
 | **Total** | **39** | **77** | **302,031,422 bytes** | |
 
 Command used (all versions): `gcloud storage rm --all-versions 'gs://weavelogic-weftos-seed/spike/gate2-**' 'gs://weavelogic-weftos-seed/spike/gate5-neg/**'`.
+
+## Production build (2026-11-01, accepted)
+
+The owner accepted this ADR on 2026-11-01 with three decisions: the SC runs as a **Spot** instance, and it gets every gate 9 cost control. Terraform: the `gcp/seed-store` root on the Terraform branch. Code: `wake.rs` and `bin/seedwaker.rs` (new), plus changes in `lease.rs`, `sc.rs` and `bin/gcsmesh.rs`, in the mesh-mock crate (both copies in sync).
+
+### The wake path
+
+A stopped SC cannot mint upload URLs, so something else has to start it. Three options were weighed:
+
+| Option | Verdict |
+|---|---|
+| **A. A Cloud Run waker** whose service account can only start this one VM | **Chosen.** No credential on clients, least privilege, about $0 a month |
+| B. PG holds a start-only credential and wakes the SC over the tailnet | Rejected: PG has no GCP identity, so this means a service-account key on PG (what the gate 7 close removed) or a WIF pool plus a token source on PG |
+| C. A scheduler | Rejected as the primary path: wake latency in hours. It could be added later as a weekday pre-warm |
+
+**Waker.** One image (`seedwaker`, distroless, in Artifact Registry repo `weftos-seed`) runs as two Cloud Run services (max one instance, min zero):
+
+- `weftos-seed-waker` is public and serves `POST /wake`. The client signs `weft-seed-wake-v1 \0 <client> \0 <unix seconds>` with the Ed25519 seal key it already has. The waker accepts only keys on its allowlist (the same public-key map as the SC's `clients.json`, from the Terraform variable `waker_clients`) and refuses any clock skew over 120 s. Clients hold no GCP credential. A stolen client key can keep the SC awake, at most the Spot hourly rate; it cannot read, write or stop anything.
+- `weftos-seed-waker-push` is IAM-only. It is the endpoint of a push subscription on `weftos-seed-incoming`, the bucket notification for `OBJECT_FINALIZE` under `incoming/`. Cloud Run checks the push OIDC token, which is minted as the waker's account. An upload that lands while the SC is stopped or preempted starts it (a client's minted URLs stay valid for 15 min). While the VM is still stopping, the waker answers 503 and Pub/Sub retries with a 10 to 60 s backoff.
+- **The waker's service account** has a custom role holding only `compute.instances.get` and `compute.instances.start`, bound on the SC instance only. `instances.start` needed no `actAs` on the SC's account. A second start inside 10 s answers "start already requested".
+
+**Idle-stop.** `sc-loop` exits 0 after `WEFT_IDLE_EXIT_S` (900 s) with nothing incoming. Then:
+
+1. `lease-run --release-on-exit` releases the lease: a CAS write that sets `expires_at` to now.
+2. The unit's `ExecStopPost` (`sc-idle-stop`) powers the VM off, but only after a clean idle exit (the loop's marker plus exit code 0). A manual stop, a crash or a lost lease leaves the VM running.
+
+A guest poweroff leaves the instance TERMINATED, so the SC needs no IAM grant to stop itself.
+
+**Spot.** The settings are `provisioning_model = SPOT`, `instance_termination_action = STOP`, `preemptible = true`, `automatic_restart = false` and `on_host_maintenance = TERMINATE`. A preemption stops the VM and keeps it: the boot disk with the unit and the reader state survives, the Local SSD does not. The SC rehydrates on the next start.
+
+### Cost controls: status
+
+| Control | Status |
+|---|---|
+| Spot SC | Built and running |
+| Idle-stop plus waker | Built; measured below |
+| Pub/Sub trigger in place of the 10 s LIST poll | Built. Pull subscription `weftos-seed-incoming-sc`; the SC's account has `roles/pubsub.subscriber` on that subscription only. A LIST of `incoming/` every 300 s is the fallback for a missed message |
+| Boot disk at the Hyperdisk Balanced baseline | Built: 3,000 IOPS and 140 MiB/s (was 3,240 and 200) |
+| Dependency trees out of cold joins | Built. `gcsmesh join` now skips git-ignored trees (`node_modules`, `.cargo-home`, `target` and so on) by default; `--with-deps` fetches them |
+| Unit installed by Terraform | Built. `sc_unit_via_metadata` is on: the startup script installs the unit, its scripts, `sc.env`, `clients.json` and the `gcsmesh` binary (from the bucket, refused unless its SHA-256 matches). Later edits are in-place metadata updates |
+| Budget alert on `adr=adr-130` (50/90/100% of $150 a month) | **Pending.** The resource is in Terraform, but the billing budgets API rejects user credentials with no quota project. It waits for the owner to set the ADC quota project, then a budget-only plan for approval |
+
+### How the apply went
+
+All four of the replacement's changes forced a new VM on their own: Spot, the startup script, and the boot disk IOPS and throughput. So they went in one window.
+
+- **Before the apply:** the binary was uploaded create-only to `bin/` in the bucket, the Artifact Registry repo was created on its own, and the image was pushed.
+- **The full apply was blocked by the agent permission check;** the owner's session ran it. It took three plans:
+  - **The first** failed at the budget (no ADC quota project), after the old VM had already been destroyed.
+  - **The second** (without the budget) failed creating the VM: the Terraform set `preemptible = false`, which the API refuses with `SPOT`. The fix makes `preemptible` follow the provisioning model.
+  - **The third** created the Spot VM, both Cloud Run services, their invokers, the instance-scoped start binding and the push subscription.
+  - **The cost:** the writer was down from the destroy until the new VM came up. The head stayed at seq 13 in GCS and readers were unaffected.
+- **Tailscale.** The new VM could not join the tailnet: the auth key in Secret Manager was single-use (`invalid key ... not valid` in the serial log, repeated). The writer did not care, because it needs no tailnet. The unit started, loaded its keys, rehydrated and took the lease. The owner added a reusable key as a new version; the next start joined with it.
+  - The old node, logged out but still listed, kept the hostname, so the SC is now `weftos-seed-cone-1` on the tailnet.
+- **Drift.** After the apply, Cloud Run reported a service-level `scaling` block the config does not declare. It is now ignored, and the plan shows no changes.
+
+### Verification (2026-11-01 UTC)
+
+| Check | Result |
+|---|---|
+| Spot | `provisioningModel SPOT`, `instanceTerminationAction STOP`, `onHostMaintenance TERMINATE` |
+| Unit and keys | `scratch ok` (Local SSD, ext4, fresh-format marker). `sc-keys` loaded the `weft-sc-keys/v1` bundle from Secret Manager with both fingerprints (Ed25519 `2a59ea15…`, ML-DSA-65 `3ef7b6d1…`). Rehydrate 3.1 s, trees match, lease taken. The installed `gcsmesh` matches the pinned SHA-256 |
+| Pub/Sub trigger (SC running) | A one-line docs layer from the Mac (uploaded with the owner's login in place of SC-minted URLs; the tailnet was down). The SC's pull got the message 0.79 s after the upload finished; head seq 14 was published 0.62 s later, **1.41 s from the end of the upload**. The push waker saw the same two objects and answered "RUNNING, none". The Mac verified seq 14 (dual-signed, `--require-pq`) |
+| Idle-stop | The last integrate finished at 17:50:49. The idle exit came after 900.5 s (18:05:50.5); the lease was released by CAS 0.24 s later (its `expires_at` equals the release time). The poweroff was queued at once, the guest journal stopped at 18:06:26, and the instance was **TERMINATED by 18:06:41: 51 s from the release**. The reader state on the boot disk (`last_seq` 14, `pq_cutover`) survived to the next boot. A shortened `WEFT_IDLE_EXIT_S` run was not needed, because the production 900 s ran to completion |
+| `/wake`, signed, SC stopped | Timeline below: **72.2 s from the wake request to head seq 15 published** |
+| Preemption (a stop as preemption, Local SSD discarded, lease not released) | Upload of a layer to the stopped SC (0.39 s), then the push waker started it 3.3 s after the upload ("TERMINATED, started"; a second delivery got "start already requested"). VM RUNNING at +14 s, unit started at +72 s (after boot, mkfs 21.7 s and the startup script), lease taken at +72 s, **head seq 16 published 71.6 s after the upload**. The old lease had expired on its own; the SC retook it with no conflict |
+
+**Wake timeline (from the `/wake` request; GCS server time for the head):**
+
+| Step | Time |
+|---|---|
+| Waker answers 202 "started" (cold Cloud Run instance, signature check, `instances.get`, `instances.start`) | 2.0 s |
+| VM RUNNING | 15.9 s |
+| Startup script: `mke2fs` of the 375 GB Local SSD (lazy init off) | 21 s of the boot |
+| On the tailnet (the startup script's `tailscale up`; first join with the new key) | 66.8 s |
+| Unit started (scratch check, keys 0.4 s, rehydrate 3.1 s) | 70.5 s |
+| Lease taken | 70.6 s |
+| Head seq 15 published (the layer was waiting in `incoming/`; the first LIST found it) | **72.2 s** |
+
+The unit is ordered after the whole startup script, so the tailnet join and the Local SSD format are on the wake path. Taking the scratch format out of it (lazy init on, or the unit ordered on the mount alone) would save about 20 s. Neither was changed here.
+
+### Cost re-estimate: Spot with idle-stop
+
+List prices as in gate 9 (Cloud Billing Catalog, 2026-11-01). Spot while running: cores $0.0830, RAM $0.0354 and Local SSD $0.0483 per hour, so **$0.167 per hour**. The parts that bill whether the SC runs or not: the boot disk at the baseline ($3.60), Cloud NAT gateway and IP ($4.67, counted in full), Secret Manager ($0.12). Cloud Run, Pub/Sub and Artifact Registry stay within free tiers. That is **about $8.40 a month fixed**. The lease renewals and the 300 s LIST fallback cost only while the SC runs: cents.
+
+| Duty cycle | SC hours a month | Monthly |
+|---|---|---|
+| Always on (Spot) | 730 | about $130 |
+| 8 h every weekday | 176 | about $38 |
+| 2 h a day | 61 | about $19 |
+| 10 wakes a day, nothing else (each at least about 1.5 min to start plus the 15 min idle tail) | about 83 | about $22 |
+
+Against $218 for a standard SC running 24/7 (gate 9). Each wake costs at least about $0.05: the idle tail dominates. Shortening `WEFT_IDLE_EXIT_S` trades that against more cold starts of about 72 s. Egress is unchanged from gate 9, and smaller in practice now that joins skip dependency trees by default.
+
+### Still open
+
+- The budget (above): owner step, then a budget-only plan.
+- The waker image is referenced by tag (`seedwaker:v1`); Cloud Run resolved it to digest `sha256:91b81585…` at deploy. Pinning it by digest in the Terraform is a small in-place update.
+- A wake on Spot can fail when the zone has no Spot capacity. The waker then answers 500, and Pub/Sub retries pushes. Falling back to a standard VM is an owner decision and is not automatic.
+- Option A+ (the waker also mints create-only PUT URLs for `incoming/<client>/`, so a client never waits for the SC) is deferred: it would give an internet-facing service write access to the bucket.
 
 ## Consequences
 
