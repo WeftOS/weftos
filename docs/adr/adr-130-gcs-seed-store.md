@@ -529,7 +529,7 @@ Failover and rehydrate: the SC (the elected writer) was stopped with its Local S
 
 - **Time to detect:** the lease has to run out, so detection is the TTL (30 s after the last renewal) plus up to one poll (1 s). The standby's own log was lost, so detection is inferred from the expiry time and the take time: the take landed 0.8 s after expiry, with the CAS itself taking about 0.1 s.
 - **Time to take over:** 0.8 s from expiry to holding the lease (one poll plus one CAS). **From the stop command to a new head: 73.5 s**; from the last renewal, 43.9 s.
-- **Standby rehydrate on PG, blank scratch:** **11.0 s** (cold join 3.7 s for 5,878 blobs and 107 MB in 73 GETs, with the head and both manifests verified; git base commit 6.9 s, slower than on the SC because git 2.53 on PG runs one extra pass; tree hash 0.3 s). Integrate, seal, sign, publish: 1.5 s; head CAS 121 ms. Trees matched.
+- **Standby rehydrate on PG, blank scratch:** **11.0 s** (cold join 3.7 s for 5,878 blobs and 107 MB in 73 GETs, with the head and both manifests verified; git base commit 6.9 s, slower than the SC's 2.1 s (not investigated); tree hash 0.3 s). Integrate, seal, sign, publish: 1.5 s; head CAS 121 ms. Trees matched.
 - **SC restart:** VM started and reachable over the tailnet in **34 s**. The startup script then formatted the Local SSD (`mke2fs` with lazy initialisation off, about 23 s for 375 GB). **My run started before the SSD was mounted, so the first rehydrate ran on the boot disk: 3.5 s** (join 1.3 s, git base 2.1 s). **Re-run on the mounted Local SSD from blank: 3.3 s** (join 1.1 s, git base 2.1 s). The key was read from Secret Manager in 0.1 s. The lease had already expired (the standby had stopped), so the SC took it back at once (seq 3) rather than waiting; the signed head seq 11 was published 50.8 s after the start command. **Lesson for the production unit:** the writer must wait for the scratch mount marker before it starts; nothing in the startup script gates that today.
 - **Readers.** The Mac accepted seq 10 (signed by the standby's key) and seq 11 (the SC's key) with both fingerprints pinned, and a verified join of seq 10 took 1.2 s. With only the SC's fingerprint pinned, seq 10 is refused ("signed by unknown key"), so adding a standby key is a deliberate reader-side step. Not repeated on the CI host, which can only read through SC-minted URLs and the SC was down at the time.
 
@@ -555,7 +555,7 @@ The lease is what makes a handover orderly, and the generation compare-and-swap 
 
 ### Close
 
-The head was set back to the Part A head (`001acc49…`) by the SC with a signed seq 12 (the Mac verified it, accepting seq 12 after 11). The service-account key was disabled and deleted in GCP, PG's key file and all spike files there were shredded and removed, and the objects the gate created were deleted with all their versions. The Terraform block is removed by reverting the gate-7 commit; the destroy plan was sent to main for the owner to approve and apply.
+The head was set back to the Part A head (`001acc49…`) by the SC with a signed seq 12 (the Mac verified it, accepting seq 12 after 11). The service-account key was disabled and deleted in GCP, PG's key file and all spike files there were shredded and removed, and the objects the gate created were deleted with all their versions. The Terraform block is removed by reverting the gate-7 commit; the destroy plan goes to main for the owner to approve and apply (it needs a fresh login; the saved one had expired when the plan was first tried).
 
 ## Consequences
 
