@@ -1,6 +1,6 @@
 # Architecture Decision Records
 
-This directory contains Architecture Decision Records (ADRs) for the WeftOS + clawft project, following the MADR 3.0 format. ADR-001 to ADR-023 came out of the Sprint 11 Symposium (2026-03-27) and its supporting analysis; later records were written as decisions were taken. The index below lists every `adr-*.md` file in this directory (128 files, ADR-001 to ADR-129).
+This directory contains Architecture Decision Records (ADRs) for the WeftOS + clawft project, following the MADR 3.0 format. ADR-001 to ADR-023 came out of the Sprint 11 Symposium (2026-03-27) and its supporting analysis; later records were written as decisions were taken. The index below lists every `adr-*.md` file in this directory (130 files, ADR-001 to ADR-131).
 
 ADR-123 has no file. The number is reserved by a card on the dashboard board; do not reuse it. Each Status column cell is copied from the ADR's own header, so the ADR is authoritative if the two ever differ.
 
@@ -137,6 +137,7 @@ ADR-123 has no file. The number is reserved by a card on the dashboard board; do
 | [ADR-128](adr-128-rvf-layered-trees.md) | RVF layered trees: tree metadata and agent memory as copy-on-write RVF lineages composed per CI job; data chunks in RustFS; layers published over the substrate under ADR-057; one writer per tip; git kept, run by an integrator role; merge order from the CoW DAG; gated on proofs T1-T6 | Proposed | Storage / CI / Agents | ADR-017, ADR-057, ADR-089, ADR-121, ADR-126, ADR-127 |
 | [ADR-129](adr-129-upstream-rvf-and-real-ml-dsa.md) | Upstream rvf-crypto / rvf-wire replace the weftos- forks; real ML-DSA-65 (FIPS 204, pure-Rust RustCrypto `ml-dsa`) in `weftos-pq-sign`; versioned dual-signature suite; legacy HMAC-placeholder chain signatures verified on Ed25519 only and never counted as post-quantum, and refused once a chain has cut over; rvf-runtime 0.5 / rvf-types 0.3 workspace-wide | Proposed | Security / Release | ADR-028, ADR-029, ADR-128 |
 | [ADR-130](adr-130-gcs-seed-store.md) | GCS seed store: integrated master layers published one way to a bucket under content-hash names; one elected writer on a Compute Engine VM holds a generation-checked lease; PG kept as seed, standby writer and replica; readers verify the dual-signed head so GCS is untrusted storage; Pub/Sub head notifications; no long-lived node keys | Accepted (2026-11-01) | Storage / CI | ADR-126, ADR-128, ADR-129 |
+| [ADR-131](adr-131-seed-drive.md) | The seed drive: a project as a materialised native tree (APFS clones, overlayfs or reflinks, ProjFS) kept in step with the seed store by a drive daemon (watcher, ring, sealed device-signed layers, signed-head refresh, conflicts as visible records); no FUSE on client working trees; per-project chains, a seed and inbox bucket per client, client-side encryption with KMS-wrapped project keys; the SC becomes the primary file holder and PG standby, replica and backup, cut over per project | Proposed | Storage / Security | ADR-126, ADR-128, ADR-129, ADR-130 |
 
 
 ## Categories

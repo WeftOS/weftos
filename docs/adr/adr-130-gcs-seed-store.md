@@ -6,6 +6,7 @@
 - **Updated**: 2026-10-31 (owner naming: the elected writer node is the **seed cone**, **SC** for short; the GCP node is `weftos-seed-cone`)
 - **Updated**: 2026-11-01 (the SC writer unit; ML-DSA-65 dual signing of heads and manifests; gate 8 tamper tests; gate 9 cost; spike cleanup)
 - **Updated**: 2026-11-01 (accepted by the owner: Spot SC, idle-stop and waker, and the gate 9 cost controls for production)
+- **Updated**: 2026-11-01 (ADR-131, Proposed: the seed drive over this store; per-project chains, a seed and inbox bucket per client, client-side encryption for §9, waker-minted inbox URLs (A+) and the plan to make the SC the primary file holder with PG as standby, replica and backup)
 - **Deciders**: owner
 - **Prior decisions**: the decision store, consulted on 2026-10-30, holds nothing on cloud-hosted seed storage.
 - **Builds on**:
