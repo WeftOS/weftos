@@ -502,6 +502,61 @@ All 15 cases came out as expected on each of the three runs. The Mac run against
 
 - **Still open.** The reader trusts what the bucket serves for the *latest* head, so an attacker who can only replay can hide new heads from a reader (a freeze): readers should also reject a head whose `issued_at` is older than a bound they choose. Not built. Readers also still do not check the head's `manifest_sha` against the manifest bytes in `join`; the manifest's own signature covers the same bytes, so a mismatch is caught there. A reader that has never seen the bucket (state file absent) accepts any signed head; the first seen `seq` should be pinned out of band when that matters.
 
+## Spike results: gate 7 (2026-10-31)
+
+Failover and rehydrate: the SC (the elected writer) was stopped with its Local SSD discarded, the standby on PG took the writer lease, rehydrated from GCS and published a signed wave, then the SC was started again, read its key back from Secret Manager, rehydrated onto a blank scratch and published the next wave. Code: `lease.rs` (new) and a `--verify-pin`/`--head-state` option on `rehydrate`, in the mesh-mock crate (both copies in sync). The failover ran on 2026-11-01 UTC.
+
+### Setup
+
+| Part | What |
+|---|---|
+| Lease | `lease/writer` = `{holder, expires_at, seq}`; taken and renewed only with a generation compare-and-swap; TTL 30 s, renewal every 10 s; `seq` is the term (it rises by one when the holder changes). Contenders poll once a second. |
+| SC signing key | In Secret Manager (`weftos-seed-cone-signing-key`, accessor for the SC's service account only). Piped from the SC by the owner, never printed. |
+| Standby identity | A service account with `objectAdmin` on the bucket and nothing else. **A service-account key, not Workload Identity Federation:** PG is not a GCP host and has no OIDC or x.509 identity provider, so federation would need a pool, a provider, a binding and a PG-side token source. The key was created with gcloud (not as a Terraform resource, so it never entered the state), held as a 0600 file under the weftos user on PG, exchanged for tokens with a JWT grant, and deleted at close. |
+| Standby signing key | Its own Ed25519 key, generated on PG; the public key was published to `keys/`; readers pin both fingerprints (`--verify-pin SC,PG`). |
+| Wave input | One real client layer per wave (a one-line docs edit sealed by the Mac), uploaded to `incoming/` through SC-minted create-only URLs before the SC was stopped; the second wave's layer was sealed against the standby's head. |
+
+### Timeline (server timestamps of the lease and head objects; ms)
+
+| Event | Time | Since the SC's last renewal |
+|---|---|---|
+| `gcloud compute instances stop` issued (first try failed: a VM with Local SSD needs `--discard-local-ssd=true`; the time here is the second try) | 660.9 s (Mac clock) | |
+| SC's last lease renewal (the guest kept running during the stop) | 690.5 s | 0 |
+| SC's lease expires | 720.5 s | 30.0 s |
+| **Standby takes the lease (CAS, seq 2)** | 721.3 s | **30.7 s** |
+| Standby has rehydrated | | 41.7 s |
+| **Signed head seq 10 published by the standby** | 734.4 s | **43.9 s** |
+
+- **Time to detect:** the lease has to run out, so detection is the TTL (30 s after the last renewal) plus up to one poll (1 s). The standby's own log was lost, so detection is inferred from the expiry time and the take time: the take landed 0.8 s after expiry, with the CAS itself taking about 0.1 s.
+- **Time to take over:** 0.8 s from expiry to holding the lease (one poll plus one CAS). **From the stop command to a new head: 73.5 s**; from the last renewal, 43.9 s.
+- **Standby rehydrate on PG, blank scratch:** **11.0 s** (cold join 3.7 s for 5,878 blobs and 107 MB in 73 GETs, with the head and both manifests verified; git base commit 6.9 s, slower than on the SC because git 2.53 on PG runs one extra pass; tree hash 0.3 s). Integrate, seal, sign, publish: 1.5 s; head CAS 121 ms. Trees matched.
+- **SC restart:** VM started and reachable over the tailnet in **34 s**. The startup script then formatted the Local SSD (`mke2fs` with lazy initialisation off, about 23 s for 375 GB). **My run started before the SSD was mounted, so the first rehydrate ran on the boot disk: 3.5 s** (join 1.3 s, git base 2.1 s). **Re-run on the mounted Local SSD from blank: 3.3 s** (join 1.1 s, git base 2.1 s). The key was read from Secret Manager in 0.1 s. The lease had already expired (the standby had stopped), so the SC took it back at once (seq 3) rather than waiting; the signed head seq 11 was published 50.8 s after the start command. **Lesson for the production unit:** the writer must wait for the scratch mount marker before it starts; nothing in the startup script gates that today.
+- **Readers.** The Mac accepted seq 10 (signed by the standby's key) and seq 11 (the SC's key) with both fingerprints pinned, and a verified join of seq 10 took 1.2 s. With only the SC's fingerprint pinned, seq 10 is refused ("signed by unknown key"), so adding a standby key is a deliberate reader-side step. Not repeated on the CI host, which can only read through SC-minted URLs and the SC was down at the time.
+
+### No two writers
+
+| Check | Result |
+|---|---|
+| Lease history (every version of `lease/writer` is kept) | seed-cone seq 1 (renewals every 10.0 s, each lasting 30 s), then pg-standby seq 2, then seed-cone seq 3. **No overlap:** seq 1 expired at 720.5 s, seq 2 started at 721.3 s; seq 2 expired at 761.3 s, seq 3 started at 863.6 s. |
+| Head history | seq 8 and the five bare rewrites, 9 (SC), 10 (standby), 11 (SC), each with a distinct generation and a strictly rising `seq`, `prev` the one before. |
+| Stale head write (a zombie holding the seq 10 generation, after the SC wrote seq 11) | **412 precondition failed**, head unchanged |
+| Stale lease renewal (the standby's last generation, after the SC took the lease) | **412** |
+| Lease create-only on an existing lease | **412** |
+| Natural 412s during the run | none (the counters of both integrates read 0): the lease serialised the writers so they never raced |
+
+The lease is what makes a handover orderly, and the generation compare-and-swap on `head/` is what makes it safe if the lease logic is wrong: a stale writer cannot move the head even while it believes it holds the lease. A writer that stalls past its TTL can still publish one wave that is stale relative to the new holder only if it reads the head and writes inside the same generation, which the CAS refuses.
+
+### Things that went wrong, and what they cost
+
+- The first `instances stop` was refused (no `--discard-local-ssd` flag). It cost 2.5 minutes with the SC still renewing; the timings above are from the second try.
+- My standby script cleared its own log directory, so the standby's lease events (detect and take) were lost. They are rebuilt from the object versions, which is why the detect time is an inference. The lease code now prints these events; the script needs a log path outside the directory it clears.
+- Putting the private key into Secret Manager and creating the service-account key were both stopped by the permission check and run by the owner.
+- The stale-lease and stale-head tests were run from the Mac with the owner's login, as a stand-in for a zombie process.
+
+### Close
+
+The head was set back to the Part A head (`001acc49…`) by the SC with a signed seq 12 (the Mac verified it, accepting seq 12 after 11). The service-account key was disabled and deleted in GCP, PG's key file and all spike files there were shredded and removed, and the objects the gate created were deleted with all their versions. The Terraform block is removed by reverting the gate-7 commit; the destroy plan was sent to main for the owner to approve and apply.
+
 ## Consequences
 
 - The writer holds no durable state: losing the VM, its disk or its zone costs rehydration time, not data.
