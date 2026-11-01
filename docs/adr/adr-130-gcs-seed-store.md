@@ -4,6 +4,7 @@
 - **Date**: 2026-10-30
 - **Updated**: 2026-10-30 (owner replan: the writer is stateless; GCS is the only durable store; Titanium Local SSD replaces the PD-SSD state disk)
 - **Updated**: 2026-10-31 (owner naming: the elected writer node is the **seed cone**, **SC** for short; the GCP node is `weftos-seed-cone`)
+- **Updated**: 2026-11-01 (the SC writer unit; ML-DSA-65 dual signing of heads and manifests; gate 8 tamper tests; gate 9 cost; spike cleanup)
 - **Deciders**: owner
 - **Prior decisions**: the decision store, consulted on 2026-10-30, holds nothing on cloud-hosted seed storage.
 - **Builds on**:
@@ -556,6 +557,184 @@ The lease is what makes a handover orderly, and the generation compare-and-swap 
 ### Close
 
 The head was set back to the Part A head (`001acc49…`) by the SC with a signed seq 12 (the Mac verified it, accepting seq 12 after 11). The service-account key was disabled and deleted in GCP, PG's key file and all spike files there were shredded and removed, and the objects the gate created were deleted with all their versions. The Terraform block is removed by reverting the gate-7 commit; the destroy plan goes to main for the owner to approve and apply (it needs a fresh login; the saved one had expired when the plan was first tried).
+
+## Spike results: the SC writer unit (2026-11-01)
+
+Gate 7 found that the SC's first rehydrate after a stop ran before the startup script had mounted the Local SSD, so it wrote to the boot disk. The writer is now a systemd unit, `weftos-seed-sc.service`, installed on the SC's boot disk (`/etc/systemd/system`, scripts and the `gcsmesh` binary in `/opt/weftos-seed/bin`, configuration without secrets in `/etc/weftos-seed/sc.env`). The boot disk survives a stop and start; the Terraform startup script is unchanged and still formats and mounts the Local SSD.
+
+| Step | What it does |
+|---|---|
+| Ordering | `After=google-startup-scripts.service network-online.target tailscaled.service`, `RequiresMountsFor=/mnt/scratch`. The startup script is a oneshot, so the unit starts only after the format, the mount and the fresh-format marker. |
+| `ExecStartPre` 1: scratch check | `/mnt/scratch` must be a mount point, its source must resolve to `/dev/disk/by-id/google-local-nvme-ssd-0`, it must be ext4 and on a different device from `/`. Otherwise it exits 1 and systemd retries every 15 s (`Restart=on-failure`, no start limit). It never falls back to the boot disk. |
+| `ExecStartPre` 2: keys | `gcloud secrets versions access latest` for `weftos-seed-cone-signing-key` into the unit's `RuntimeDirectory` (tmpfs, 0700), split by `gcsmesh key-unbundle`, the payload shredded. With `WEFT_REQUIRE_PQ=1` the unit refuses to start without the ML-DSA-65 key. |
+| `ExecStartPre` 3: rehydrate | Only when the fresh-format marker exists or the SC state is missing: a verified cold join (pinned keys; `--require-pq` after the cutover), the git base, the tree check; then the marker is removed. The reader state (rollback, cutover) lives on the boot disk (`/var/lib/weftos-seed`), so a blank scratch does not reset it. |
+| `ExecStart` | `gcsmesh lease-run --holder seed-cone --wait -- sc-loop`: take or renew `lease/writer`, then the integrate loop under it (LIST `incoming/` every 10 s, exit 0 after 600 s idle, rehydrate on any failure). Losing the lease kills the loop (exit 7) and systemd restarts the unit. |
+
+Tests on the running SC (no VM stop or restart):
+
+| Case | Result |
+|---|---|
+| First start on the scratch the gate 7 restart left blank (marker present) | running in **3.8 s**: rehydrate 3.0 s (join 0.84 s, 5,878 blobs in 65 packs, git base 1.98 s), trees match, lease taken |
+| `systemctl restart` (no marker, state present) | **0.5 s** to running, no rehydrate, the same holder retakes the lease at once |
+| Local SSD unmounted, then `systemctl start` | refused three times, 15 s apart ("not mounted; not running on the boot disk"); nothing written under the mount point; after the same `mount` as the startup script the next retry started the unit by itself |
+| A tmpfs stacked on `/mnt/scratch` | refused ("is tmpfs, not the Local SSD"); started once the tmpfs was removed |
+| Marker written by hand, then `systemctl restart` | rehydrated (3.1 s) and removed the marker |
+
+**Found on the boot disk.** Hidden under the mount point, the gate 7 run left `/mnt/scratch/gate7/` on the boot disk: 223 MB, including `sc.key`, a 0600 copy of the SC's Ed25519 private key. The same key is in Secret Manager. With the owner's approval it was removed through a bind mount of `/`, without touching the Local SSD; `sc.key` was shredded.
+
+**Terraform (plan only).** Changing `metadata_startup_script` **forces replacement** of the instance in the google provider: the plan that installs the unit from the startup script shows `must be replaced` (1 to add, 1 to destroy). Instance metadata keys alone are an in-place update. The change on the Terraform branch therefore carries the unit and its scripts as metadata keys and adds a short install block to the startup script (install the files, `daemon-reload`, `enable`, and a queued `start --no-block`, because a start from inside the script would wait on a job ordered after it), both behind `sc_unit_via_metadata`, default `false`. With the default the plan shows no changes. Turning it on is for an owner-approved replacement window; after that one replacement, later unit edits are in-place metadata updates. It was not applied.
+
+## Spike results: ML-DSA-65 dual signing (2026-11-01)
+
+Heads and manifest signatures now use weftos-pq-sign's `Ed25519MlDsa65V2` suite (ADR-129: RustCrypto `ml-dsa` 0.1.1, key file WPQK v2). The mesh mock uses a verbatim source copy of the crate with standalone versions in its `Cargo.toml`; nothing ML-DSA is hand-rolled.
+
+**Keys.** The SC generated an ML-DSA-65 key (WPQK v2) with weftos-pq-sign; it was never printed. Its public key is at `keys/sc-mldsa65.pub` (hex, 3,905 bytes).
+
+| Key | Fingerprint (SHA-256 of the raw public key) |
+|---|---|
+| SC Ed25519 (unchanged) | `2a59ea15017045b9dff2ab5902c6faf7d6eb24eba77559f2d7762cf764a24cf1` |
+| SC ML-DSA-65 | `3ef7b6d17acffa0084d4f6b12a8da0ad9e5d5428e35eb91b7e2a099d895fbdf3` |
+
+Both private keys go into one payload, a new version of the existing secret `weftos-seed-cone-signing-key` (no Terraform change). The bundle is three LF-terminated lines: `weft-sc-keys/v1`, `ed25519 <the 32-byte seed, hex>`, `ml-dsa-65 <the 1,992-byte WPQK v2 file, base64>` (2,756 bytes). `gcsmesh key-bundle` writes it 0600 and never over an existing file; `key-unbundle` also accepts the bare-hex version 1 payload. The owner wrote the bundle as **version 2** of the secret, piped from the SC as in gate 7. It was checked hash-equal to the pending bundle, and the pending copies on the SC's boot disk were then shredded. On restart the unit's key step loaded `weft-sc-keys/v1` with both fingerprints from the secret, took the lease and is renewing it. Until that point the unit had taken the ML-DSA-65 key from a 0600 copy on the boot disk.
+
+**Format (version bump).**
+
+- **Head v2.** The head document gains `chain` (the logical chain, `master`), `suite` (`ed25519+ml-dsa-65/v2`), `mldsa_key_id`, and `dsig`, the base64 of weftos-pq-sign's binary dual signature (`WDS`, suite tag byte, Ed25519 half, ML-DSA-65 half). The signed message is `weft-seed-head-v2`, then the suite, the chain, the manifest id, `manifest_sha`, `seq`, `prev_manifest_id`, both key ids and `issued_at`, NUL-separated. The suite name is in the signed bytes and the suite tag is in the signature, so neither can be changed without breaking a half. The chain binds a head to the store it moves: a test chain's heads can never be accepted as `master`. ML-DSA-65 context: `weftos/seed-head/v2`. Head object: 5.2 KB (v1: 0.6 KB).
+- **Manifest signature v2.** `manifest/<id>.sig2` (the v1 `.sig` objects are create-only and stay): `{v: 2, suite, key_id, mldsa_key_id, manifest, manifest_sha, dsig}`, message `weft-seed-manifest-v2`, then the suite, id, hash and both key ids; context `weftos/seed-manifest/v2`. 4.9 KB each. The integrate path writes both `.sig` and `.sig2` for new manifests during the transition.
+
+**Readers.** A reader pins both fingerprints, verifies both halves and accepts only `PqStatus::Verified` (an Ed25519-valid signature with the ML-DSA-65 half absent, unchecked or legacy is refused). It keeps the rollback and fork rules on `seq`. After the first v2 head it accepts, it records `pq_cutover` in its state file (as ADR-129 does for nodes), and from then on refuses a v1 head, a v2 head with a legacy suite name or tag or a missing half, and a v1-only manifest signature. `--require-pq` sets the cutover out of band. Two reader fixes came with this:
+
+- the reader state is now written only after the whole join has verified (head, every manifest, every blob). Before, `check_head` recorded the head before the manifest was fetched, so a head whose manifest was missing or tampered still advanced the reader;
+- the join checks that the head's signed `manifest_sha` matches the manifest bytes (open since the signed-head section).
+
+**Cutover and the real head.** Under the writer lease, the SC ran a fresh verified rehydrate (both manifests of the chain checked against their v1 signatures, git tree equal to the tree on disk), then dual-signed both: `manifest/001acc49….sig2` and `manifest/085bfe31….sig2`. `head-set` then published **seq 13**, v2, at `001acc49…` (the same integrated head as seq 12).
+
+| Reader | Result |
+|---|---|
+| The SC's unit, restarted with `WEFT_REQUIRE_PQ=1` and a forced rehydrate | accepted seq 13; both manifests `ed25519+ml-dsa-65/v2`; state: seq 13, cut over |
+| Mac, `head-verify` with both pins, fresh state | accepted, version 2, `pq_cutover: true` |
+| Mac, verified cold join, dependency trees skipped, fresh cache | **13.8 s** over Wi-Fi (fetch 11.7 s), 73 GETs; signature checks 128 and 165 ms; tree `95ee1f59…` = the SC integrator's git tree |
+| Mac, only the Ed25519 key pinned | refused ("signed by unknown ML-DSA-65 key") |
+| CI host, through 698 SC-minted read URLs (the chain walk now includes `.sig`, `.sig2`, layers and keys), fresh cache | accepted seq 13; cold join **3.8 s** (fetch 2.5 s); signature checks 184 and 256 ms; same tree. The URL file was shredded afterwards |
+
+## Spike results: gate 8, tamper tests (2026-11-01)
+
+Gate 8 ran on copies only. The SC built a parallel test chain under `spike/g8/`, never touching the real `head/`, `manifest/`, `layers/` or `packs/`: throwaway test keys (a dual key pair for the test writer and a second, unpinned pair for the forger), the chain name `g8`, and every case as a complete store under its own prefix (`spike/g8/<case>/`, through a key prefix in the tool). The chain: a full manifest (ten small files in one pack, a 600 KB blob as its own pack, a symlink) and two deltas, each with its lineage layer, `.sig` and `.sig2`; seq 1 Ed25519-only, seq 2 the first dual-signed head (the reader cuts over), seq 3 the valid next head. Each tamper case is the seq 3 store with one change. The reader ran every case with a fresh cache and a copy of the state the case needs (S2: after accepting seq 2; S3: after seq 3), with `--verify-lineage` on (each manifest's `layers/<id>` must hash to its id, carry the manifest's parent and ops, and be signed by a pinned key). A case passes only if the outcome, the reason and the state file all match: after every refusal the state file was byte-for-byte unchanged, so the head did not advance.
+
+| Case | Expected | Mac | CI host (signed URLs only) |
+|---|---|---|---|
+| Control: valid chain at seq 2, reader cuts over | accepted | accepted | accepted |
+| Control: a v1 head to a reader that has not cut over | accepted | accepted | accepted |
+| Control: valid seq 3 | accepted | accepted | accepted |
+| Pack byte flipped | refused: blob hash at materialise | "blob … fails its hash" | same |
+| Pack index entry altered (a blob offset in the manifest's `locs`, the pack index of this layout; signatures kept) | refused: manifest hash | "manifest bytes do not match the signed hash" | same |
+| Layer object altered (message rewritten, name kept) | refused: lineage | "content does not match its name" | same |
+| Layer object swapped (the seq 2 layer, validly signed) | refused: lineage | "names a different layer (swapped)" | same |
+| Manifest altered (a path), signature document kept | refused: manifest hash | "manifest bytes do not match the signed hash" | same |
+| Manifest altered and the hash in `.sig2` rewritten to match | refused: signature | "dual signature: Ed25519 half does not verify" | same |
+| Manifest signatures stripped (`.sig` and `.sig2` deleted) | refused | "has no ed25519+ml-dsa-65/v2 signature and this reader has cut over" | same |
+| Head signature stripped | refused | "unsigned" | same |
+| Downgrade: a validly Ed25519-signed v1 head after the cutover | refused | "downgrade, an Ed25519-only (v1) head after this reader cut over" | same |
+| Downgrade: the head's suite field set to the legacy suite | refused | "suite … is not ed25519+ml-dsa-65/v2" | same |
+| Downgrade: the suite tag inside the binary signature set to legacy | refused | "suite tag downgraded … inside the signature" | same |
+| ML-DSA-65 half removed (Ed25519 half valid) | refused | "ML-DSA-65 half missing" | same |
+| Downgrade: `.sig2` replaced by the manifest's valid v1 signature | refused | "downgrade: Ed25519-only manifest signature after the cutover" | same |
+| ML-DSA-65 half taken from the seq 2 head (a valid signature by the same key over another message) | refused | "ML-DSA-65 half does not verify" | same |
+| Key substituted: head and manifest signed by another dual key pair, its public keys in `keys/` but not pinned | refused | "signed by unknown key" | same |
+| Key substituted in place: `keys/sc-*.pub` replaced by the other pair | refused | "pinned key … not found under keys/" | same |
+| Replay: the validly signed seq 2 head served to a reader at seq 3 | refused | "rollback, seq 2 is lower than the last accepted 3" | same |
+| Same seq, different manifest (validly signed, valid manifest) | refused | "seq 3 was already accepted for a different manifest" | same |
+| Truncated pack | refused | "pack shorter than its location" | same |
+| Truncated manifest | refused | "manifest bytes do not match the signed hash" | same |
+| Truncated head | refused | "malformed head object" | same |
+| Head pointing at a manifest that does not exist (validly signed) | refused, state not advanced | "manifest … not found" | same |
+| Forged lease: `lease/writer` overwritten with no generation precondition, then the forger's head (its own dual key) written the same way | refused | "signed by unknown key" | same |
+
+All 26 as expected on both. Per case 0.3 to 3.4 s on the Mac and 0.2 to 1.4 s on the CI host.
+
+**Writer side of the forged lease (on the SC, under the case's prefix).** A holder renewing every 3 s (TTL 15 s); the forger's unconditional PUT of `lease/writer` succeeded, as it must for any principal with write access to the bucket. The holder's next renewal failed with **412**, it reported `lost` and exited 7 (the unit would restart and wait). Its stale compare-and-swap with its last generation was also refused with 412. The lease is not a security boundary: the forger's heads fail on signatures, and a stale writer cannot move the head (gate 7).
+
+**A client's incoming layer trying to overwrite (both clients, SC-minted create-only PUT URLs).** First PUT 200; a second PUT with different bytes **412** `PreconditionFailed`; the same PUT without the signed `x-goog-if-generation-match` header **400** `MalformedSecurityHeader`. Each object kept a single version holding the original bytes, read back on the SC.
+
+**Close.** Every `spike/g8/` object was deleted with all its versions (495, then 0). The test keys existed only in the builder's memory.
+
+## Spike results: gate 9, cost (2026-11-01)
+
+**Source.** The billing account has a BigQuery export (standard and resource-level tables). Actual spend comes from the resource-level table, filtered to the spike: the `adr=adr-130` label, the spike's resource names (the SC under both its names, the gate 1 test disks, the bucket), and the Cloud NAT rows in us-east1 (the NAT carries no labels). The project runs other services; they are excluded. The export lags: compute rows run to 05:00 UTC on 2026-11-01 and Cloud Storage rows to 17:00 UTC on 2026-10-31. Prices are from the Cloud Billing Catalog API (USD, read on 2026-11-01) and match the export's cost per unit; the Class B operation price is the published list price, not read from the catalog.
+
+**Actual spend to date.**
+
+| Item | Actual (export) |
+|---|---|
+| SC compute: C4 cores and RAM (about 41 h, under both names) | $5.22 |
+| Titanium Local SSD | $2.13 |
+| Boot disk, Hyperdisk Balanced 40 GB (capacity, IOPS, throughput) | $0.28 |
+| Gate 1 temporary disks (Hyperdisk 100 GB, PD-SSD 100 GB, about 3 h) | $0.14 |
+| Cloud NAT (gateway, NAT IP, 2.9 GiB processed) | $0.30 |
+| Network Intelligence Center (console views) | $0.02 |
+| Cloud Storage (374 Class A, 444 Class B, 1.03 GiB internet egress, storage) | $0.002 (egress and Class B inside the free tier) |
+| Secret Manager, Pub/Sub, network transfer, Ubuntu licence | $0.002 |
+| **Total in the export** | **$8.09** |
+| Not yet exported: the SC from 05:00 to 17:00 UTC on 2026-11-01, at the run rate below ($0.295 per hour) | about $3.56 (estimate) |
+| **Spend to date** | **about $11.65** |
+
+**Monthly projection for the production layout (730 h).**
+
+| Item | Basis (list price) | Standard | Spot |
+|---|---|---|---|
+| SC cores | 4 vCPU at $0.03465 (Spot $0.02074) per hour | $101.18 | $60.56 |
+| SC RAM | 15 GiB at $0.003938 (Spot $0.002357) per GiB-hour | $43.12 | $25.81 |
+| Titanium Local SSD | billed separately: 368 GiB at $0.16 (Spot $0.0958) per GiB-month | $58.87 | $35.25 |
+| Boot disk | 40 GiB at $0.09, plus IOPS and throughput provisioned above the baseline | $7.66 | $7.66 |
+| Cloud NAT | gateway $0.0014 per hour, NAT IP $0.005 per hour, $0.045 per GiB processed | $4.67 plus traffic | $4.67 |
+| Writer while idle | LIST of `incoming/` and a lease renewal, each every 10 s: 518,400 Class A at $0.005 per 1,000 | $2.59 | $2.59 |
+| Secret Manager | two active versions | $0.12 | $0.12 |
+| Bucket storage | Standard, us-east1, $0.02 per GiB-month (the first 5 GiB of the billing account are free) | now 2.1 GiB live: $0.04 | |
+| **Fixed total** | | **about $218** | **about $137** |
+
+Against the estimate table: the VM is about $203, not $150 to $185, because the `-lssd` shape bills its Local SSD as its own SKU ($58.87, 29% of the VM). Spot saves 40% but loses the Local SSD on preemption and forces a failover to PG; it stays the option for a second, non-default writer.
+
+**Growth of the bucket.** 10 GiB $0.20, 100 GiB $2.00, 1 TiB $20.48 per month, plus noncurrent versions for 30 days (now 0.30 GB). Storage stays small next to the VM at any size this store is likely to reach.
+
+**Operations per integrate cycle** (counted in gate 5; L client layers): about 3L + 8 Class A (two create-only PUTs per client layer, the LIST that finds them, one PUT per pack, per merged layer, master layer, manifest and both signature documents, the head compare-and-swap, and three per conflict record) and 2L + 2 Class B. A six-layer wave is about 26 Class A and 14 Class B: $0.0001. Even 1,000 waves a day is about $4 a month. Deletes are free. A warm reader join is 4 to 6 Class B GETs.
+
+**Egress per join** (internet, North America; the first 100 GiB a month on the billing account are free, then $0.12 per GiB to 1 TiB, $0.11 to 10 TiB, $0.08 beyond):
+
+| Join | Bytes | |
+|---|---|---|
+| Warm (one new head) | about 15 KB plus the new content (head 5.2 KB, delta manifest, `.sig2` 4.9 KB) | |
+| Cold, tracked files only | 107 MB (8 MB of it the full manifest) | |
+| Cold, full tree with dependency trees | 2.23 GB | |
+
+| Clients N, each per month | N = 10 | N = 100 | N = 1,000 |
+|---|---|---|---|
+| One cold tracked-files join plus 1,500 warm joins | 1.3 GB: free | 13 GB: free | 130 GB: about $2.50, plus about $3 of Class B |
+| One cold full-tree join | 22 GB: free | 223 GB: about $13 | 2.2 TB: about $227 |
+
+Egress matters only for full-tree cold joins at scale. Warm joins are cheap at any N here.
+
+**Cost control.**
+
+1. **The SC's uptime is the cost.** The VM, Local SSD and boot disk are 98% of the fixed total. The SC is stateless and rehydrates in about 3 s, so it can sleep: stop it when `incoming/` is quiet and start it on a Pub/Sub event, with PG holding the lease meanwhile. A stopped SC bills only its boot disk and the NAT IP, so 8 hours a weekday would be roughly a quarter of $203. A committed-use discount is the other lever if it must run 24/7 (check the current C4 rates).
+2. **Boot disk:** set provisioned IOPS and throughput to the Hyperdisk Balanced baseline; about $4 a month of the $7.66 is provisioning above it.
+3. **Replace the 10 s LIST poll with a Pub/Sub notification on `incoming/`** ($1.30 a month and lower latency). Lengthening the lease (60 s TTL, 20 s renewal) halves the renewal cost. Versioning keeps every renewal as a noncurrent version for 30 days; a lifecycle rule on the `lease/` prefix (keep a few newer versions) keeps the listings clean.
+4. **Keep dependency trees out of cold joins from GCS:** they are 95% of a full-tree join. Use package mirrors or the L1 RustFS tier on the LAN, and publish tracked files only, which already make up the default join.
+5. **A billing budget with alerts on the `adr=adr-130` label** (an owner step). The labels hold on the VM, bucket, disks and secret; label the NAT and router too, so the spike's cost can be read without name filters.
+
+## Cleanup (2026-11-01, owner-approved)
+
+The objects left under `spike/` from gates 1 to 5, with all their versions. The owner approved the deletion, and all 77 versions were removed; `spike/` is empty.
+
+| Prefix | Names | Versions | Bytes per version | State |
+|---|---|---|---|---|
+| `spike/gate2-1k-1` … `-10` | 10 | 20 | 1,024 | noncurrent only (2026-10-31 06:47-06:48) |
+| `spike/gate2-cond-1` … `-10` | 10 | 20 | 1,024 | noncurrent only |
+| `spike/gate2-8m-1` … `-10` | 10 | 20 | 8,388,608 | noncurrent only |
+| `spike/gate2-par-1` … `-8` | 8 | 16 | 8,388,608 | noncurrent only |
+| `spike/gate5-neg/manifest/84d967fd…` | 1 | 1 | 574 | live (the gate 5 tampered manifest) |
+| **Total** | **39** | **77** | **302,031,422 bytes** | |
+
+Command used (all versions): `gcloud storage rm --all-versions 'gs://weavelogic-weftos-seed/spike/gate2-**' 'gs://weavelogic-weftos-seed/spike/gate5-neg/**'`.
 
 ## Consequences
 
