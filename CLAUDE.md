@@ -247,7 +247,7 @@ npx --no-install @claude-flow/cli memory retrieve --key "pattern-auth" --namespa
 ## Quick Setup
 
 ```bash
-# Prefer project .mcp.json (pinned via package.json weftos.rufloPin = 3.42.4;
+# Prefer project .mcp.json (pinned via package.json weftos.rufloPin = 3.71.1;
 # real source is ~/dev/ruflo feat/grok-host — see weftos.rufloPinNote).
 # Manual add: never @latest — schema owns .swarm/agentdb-memory.db (WEFT-684).
 claude mcp add claude-flow -- npx --no-install @claude-flow/cli mcp start
