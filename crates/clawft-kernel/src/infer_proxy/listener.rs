@@ -21,6 +21,7 @@ use tokio::net::{TcpListener, TcpSocket, TcpStream};
 use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
 
+use super::hosted::pin_model;
 use super::http::{read_request_with, write_error, write_head};
 use super::mesh_forward::forward_remote;
 use super::svc::{SvcRoute, serve_svc};
@@ -252,6 +253,20 @@ async fn serve_conn(sh: Arc<Shared>, mut s: TcpStream, peer: SocketAddr) {
         }
     };
     let target = sh.table.resolve(&req.role);
+    let policy = sh.table.role_policy(&req.role);
+    let stall = policy.stall.unwrap_or(sh.limits.stall_timeout);
+    let mut req = req;
+    if let (Some(m), Some(Target::Local { .. })) = (&policy.pin_model, &target) {
+        match pin_model(&req.body, m) {
+            Ok(b) => req.body = b,
+            Err(e) => {
+                sh.stats.rejected.fetch_add(1, Ordering::Relaxed);
+                write_error(&mut s, &e).await;
+                return;
+            }
+        }
+    }
+    let limits = ProxyLimits { stall_timeout: stall, ..sh.limits.clone() };
     let mut sink = TcpSink {
         s: &mut s,
         sent_head: false,
@@ -260,7 +275,11 @@ async fn serve_conn(sh: Arc<Shared>, mut s: TcpStream, peer: SocketAddr) {
         match &target {
             Some(Target::Local { base }) => {
                 sh.stats.local.fetch_add(1, Ordering::Relaxed);
-                sh.upstream.forward(base, &req, true, &mut sink).await
+                sh.upstream.forward_stall(base, &req, true, &mut sink, stall).await
+            }
+            Some(Target::Hosted { route }) => {
+                sh.stats.local.fetch_add(1, Ordering::Relaxed);
+                sh.upstream.forward_hosted(route, &req, &mut sink, stall).await
             }
             Some(Target::Svc { topic, model }) => {
                 let Some(b) = sh.table.svc_backend() else {
@@ -278,7 +297,7 @@ async fn serve_conn(sh: Arc<Shared>, mut s: TcpStream, peer: SocketAddr) {
                     return Err(ProxyError::NoInstance(req.role.clone()));
                 };
                 sh.stats.remote.fetch_add(1, Ordering::Relaxed);
-                forward_remote(d.as_ref(), node_id, &req, &mut sink, &sh.limits).await
+                forward_remote(d.as_ref(), node_id, &req, &mut sink, &limits).await
             }
             None => Err(ProxyError::NoInstance(req.role.clone())),
         }

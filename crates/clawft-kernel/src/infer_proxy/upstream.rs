@@ -8,6 +8,7 @@
 use std::net::IpAddr;
 use std::time::Duration;
 
+use super::hosted::{HostedRoute, pin_model};
 use super::types::{Method, ProxyError, ProxyLimits, ProxyRequest, ResponseSink};
 
 /// `http://<loopback ip>:<port>` and nothing else (no path, userinfo or
@@ -61,6 +62,19 @@ impl Upstream {
         send_auth: bool,
         sink: &mut dyn ResponseSink,
     ) -> Result<(), ProxyError> {
+        self.forward_stall(base, req, send_auth, sink, self.limits.stall_timeout).await
+    }
+
+    /// [`forward`](Self::forward) with this request's own stall timeout (a
+    /// role may set one longer than the default for a slow cold prefill).
+    pub async fn forward_stall(
+        &self,
+        base: &str,
+        req: &ProxyRequest,
+        send_auth: bool,
+        sink: &mut dyn ResponseSink,
+        stall: Duration,
+    ) -> Result<(), ProxyError> {
         let (ip, port) = parse_loopback_base(base)?;
         let authority = match ip {
             IpAddr::V4(a) => format!("{a}:{port}"),
@@ -85,7 +99,42 @@ impl Upstream {
         if send_auth && let Some(a) = &req.authorization {
             b = b.header("authorization", a);
         }
-        let stall = self.limits.stall_timeout;
+        self.relay(b, sink, stall).await
+    }
+
+    /// Forward `req` to a hosted API role. The URL comes from the role's
+    /// config, the client's `Authorization` is dropped, and the role's key
+    /// (read from the environment by name, now) is sent as a bearer token.
+    /// The key appears in no error: failures name the variable only.
+    pub async fn forward_hosted(
+        &self,
+        route: &HostedRoute,
+        req: &ProxyRequest,
+        sink: &mut dyn ResponseSink,
+        stall: Duration,
+    ) -> Result<(), ProxyError> {
+        let url = route.url_for(&req.path)?;
+        let auth = route.bearer()?;
+        let mut b = match req.method {
+            Method::Get => self.http.get(url),
+            Method::Post => self.http.post(url).body(pin_model(&req.body, &route.model)?),
+        };
+        if let Some(ct) = &req.content_type {
+            b = b.header("content-type", ct);
+        }
+        if let Some(a) = &req.accept {
+            b = b.header("accept", a);
+        }
+        self.relay(b.header("authorization", auth), sink, stall).await
+    }
+
+    /// Send, then relay the response into `sink` chunk by chunk.
+    async fn relay(
+        &self,
+        b: reqwest::RequestBuilder,
+        sink: &mut dyn ResponseSink,
+        stall: Duration,
+    ) -> Result<(), ProxyError> {
         let mut resp = tokio::time::timeout(stall, b.send())
             .await
             .map_err(|_| ProxyError::Timeout("upstream did not answer".into()))?

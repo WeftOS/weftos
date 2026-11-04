@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::watch;
 
+use super::hosted::{HostedRoute, RolePolicy};
 use super::svc::{SvcBackend, SvcRoute};
 use super::types::{MeshDialer, ProxyAudit, ProxyError, Target};
 use super::upstream::parse_loopback_base;
@@ -73,6 +74,10 @@ struct Inner {
     serve_allow: HashMap<String, HashSet<String>>,
     exposed: HashSet<String>,
     proxy_ports: HashMap<String, u16>,
+    /// Roles served by a hosted API. Separate from `local` so they can never
+    /// be advertised, exposed or served to a peer.
+    hosted: HashMap<String, HostedRoute>,
+    policies: HashMap<String, RolePolicy>,
 }
 
 /// What [`PlacementTable::sync_local`] found.
@@ -288,6 +293,32 @@ impl PlacementTable {
         Ok(())
     }
 
+    /// Serve `role` from a hosted API. Resolves like a local role but is
+    /// never advertised, exposed to the mesh or served to a peer.
+    pub fn register_hosted(&self, role: &str, route: HostedRoute) -> Result<(), ProxyError> {
+        if !valid_role(role) {
+            return Err(ProxyError::BadRequest(format!("bad role '{role}'")));
+        }
+        let changed = {
+            let mut g = self.inner.write().unwrap();
+            g.hosted.insert(role.to_string(), route.clone()).is_none_or(|p| p != route)
+        };
+        if changed {
+            self.bump();
+        }
+        Ok(())
+    }
+
+    /// Set how `role`'s requests are forwarded (stall timeout, model pin).
+    pub fn set_role_policy(&self, role: &str, policy: RolePolicy) {
+        self.inner.write().unwrap().policies.insert(role.to_string(), policy);
+    }
+
+    /// The forwarding policy of `role` (default: none).
+    pub fn role_policy(&self, role: &str) -> RolePolicy {
+        self.inner.read().unwrap().policies.get(role).cloned().unwrap_or_default()
+    }
+
     /// Stop serving `role` locally.
     pub fn deregister_local(&self, role: &str) {
         let (had, exposed) = {
@@ -479,6 +510,9 @@ impl PlacementTable {
     /// once even before its entry is removed.
     pub fn resolve(&self, role: &str) -> Option<Target> {
         let g = self.inner.read().unwrap();
+        if let Some(route) = g.hosted.get(role) {
+            return Some(Target::Hosted { route: route.clone() });
+        }
         if let Some(l) = g.local.get(role) {
             if let Some(s) = &l.svc {
                 return Some(Target::Svc {
@@ -559,7 +593,7 @@ impl PlacementTable {
             Target::Local { base } => Some(format!("{base}/v1")),
             // The proxy speaks the mesh and the service; in-process
             // consumers only speak HTTP.
-            Target::Remote { .. } | Target::Svc { .. } => {
+            Target::Remote { .. } | Target::Svc { .. } | Target::Hosted { .. } => {
                 let port = *self.inner.read().unwrap().proxy_ports.get(role)?;
                 Some(format!("http://127.0.0.1:{port}/v1"))
             }
@@ -571,7 +605,7 @@ impl PlacementTable {
     pub fn local_base_for_role(&self, role: &str) -> Option<String> {
         match self.resolve(role)? {
             Target::Local { base } => Some(format!("{base}/v1")),
-            Target::Remote { .. } | Target::Svc { .. } => None,
+            Target::Remote { .. } | Target::Svc { .. } | Target::Hosted { .. } => None,
         }
     }
 

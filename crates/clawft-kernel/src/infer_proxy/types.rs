@@ -114,6 +114,12 @@ pub enum Target {
         /// Model id the role uses.
         model: String,
     },
+    /// A hosted API (`mode: "remote"`): HTTPS to the configured base URL with
+    /// the role's own key. Never offered to the mesh.
+    Hosted {
+        /// The configured route.
+        route: super::hosted::HostedRoute,
+    },
 }
 
 /// Why a request was not served.

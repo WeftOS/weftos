@@ -20,6 +20,7 @@
 //!
 //! [`ServiceAdvertisement`]: crate::mesh_service_adv::ServiceAdvertisement
 
+pub mod hosted;
 pub mod http;
 pub mod hub;
 pub mod listener;
@@ -39,6 +40,8 @@ mod tests_expose;
 mod tests_exposure;
 #[cfg(test)]
 mod tests_http;
+#[cfg(test)]
+mod tests_hosted;
 #[cfg(test)]
 mod tests_hub;
 #[cfg(test)]
@@ -61,5 +64,6 @@ pub use table::{DEFAULT_ADVERT_TTL, MeshLocal, PlacementTable, SERVICE_PREFIX, S
 pub use types::{
     MeshDialer, Method, ProxyAudit, ProxyError, ProxyLimits, ProxyRequest, ResponseSink, Target,
 };
+pub use hosted::{HostedRoute, RolePolicy};
 pub use svc::{SvcBackend, SvcImage, SvcRoute};
 pub use upstream::Upstream;

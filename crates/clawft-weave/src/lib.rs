@@ -187,6 +187,10 @@ pub mod infer_managed;
 #[cfg(all(feature = "placement", unix))]
 pub mod infer_rpc;
 #[cfg(all(feature = "placement", unix))]
+pub mod infer_remote;
+#[cfg(all(feature = "placement", unix))]
+pub mod infer_resolve;
+#[cfg(all(feature = "placement", unix))]
 pub mod infer_svc;
 #[cfg(all(feature = "placement", unix))]
 pub mod infer_wire;
@@ -196,6 +200,8 @@ pub(crate) mod infer_wire_tests;
 mod infer_managed_tests;
 #[cfg(all(test, feature = "placement", unix))]
 mod infer_cfg_tests;
+#[cfg(all(test, feature = "placement", unix))]
+mod infer_remote_tests;
 #[cfg(all(test, feature = "placement", unix))]
 mod infer_svc_tests;
 #[cfg(all(test, feature = "placement", unix))]

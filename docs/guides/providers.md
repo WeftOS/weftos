@@ -517,6 +517,17 @@ off unless `<runtime>/inference.json` exists.
   dropped. The local client's `Authorization` header goes to the local server
   only, never over the mesh; adopting a server is the decision to trust it
   with the credentials local clients send to that address.
+- `stall_timeout_s` (10..=900, default 120) gives one role a longer upstream
+  silence limit, for a long cold prefill. `pin_model: true` rewrites a
+  client's `model` to the role's model so a server such as mlx-lm cannot be
+  told to swap models.
+- `mode: "remote"` serves a role from a hosted OpenAI-compatible API through
+  the same proxy. The key is named by environment variable, never stored:
+  `{"role": "hard-task", "mode": "remote", "proxy_port": 8095, "remote":
+  {"base_url": "https://api.x.ai/v1", "api_key_env": "GROK_API_KEY", "model":
+  "grok-4"}}`. The model is always pinned, the client's `Authorization` is
+  replaced with the key, and the role is never exposed or shared over the
+  mesh. See ADR-101 (update 2026-11-04).
 - A role can be served by a cog data plane service instead of an HTTP server:
   `{"role": "vision", "proxy_port": 18391, "svc": {"topic": "svc.infer/venq-npu",
   "model": "qwen3-vl-4b"}}` (no `flavor`, `instance_port` or `model` on the

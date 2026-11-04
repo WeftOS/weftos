@@ -2,7 +2,7 @@
 
 - **Status**: Accepted (2026-09-29; decisions settled 2026-09-29, implementation tracked on cards mesh-placement-01..23)
 - **Date**: 2026-09-28
-- **Updated**: 2026-10-29 (advert defaults slowed to a 60 s announce and a 180 s TTL, both configurable); 2026-10-28 (roles backed by a cogbus service)
+- **Updated**: 2026-11-04 (remote hosted-API roles, per-role stall timeout, model pinning); 2026-10-29 (advert defaults slowed to a 60 s announce and a 180 s TTL, both configurable); 2026-10-28 (roles backed by a cogbus service)
 - **Deciders**: Platform / ops. Open questions settled 2026-09-29 (defaults accepted by user); status is Accepted (2026-09-29) and the decisions below are settled, with implementation tracked on the cards named in Status.
 - **Depends-On**: ADR-099 (governed workload placement)
 - **Relates-To**: ADR-060 (local Hermes serving and KV management), ADR-018 (Hermes as clawft-llm provider), ADR-100, `~/llm` ADR-0004 (open capability vocabulary), 0016 (local model serving), 0022 (model storage tiers), 0025 (ruflo local models across hosts; title only, not read)
@@ -278,3 +278,43 @@ Qwen3-VL-4B).
   client of the Venq itself may send up to the 4 MiB image limit (8 MiB body).
 - Service-mode daemons build no hub (ADR-101 section 7 and ADR-103), so remote
   callers are user daemons until the grant hand-off lands.
+
+## Updated 2026-11-04: hosted-API roles, per-role stall timeout, model pinning
+
+Three additions to `inference.json`, all off unless a role sets them.
+
+- **`stall_timeout_s`** (10..=900) replaces the 120 s default stall timeout
+  for that role's forwarding only. A 14.8k-token cold prefill on mlx-lm took
+  124 s, so the default returned `504 upstream did not answer`. The
+  request cap (`request_timeout`) still applies.
+- **`pin_model`** (bool) rewrites the top-level `model` of a forwarded JSON
+  body to the role's model. A client that sent `"model": "grok-4.6"` to an
+  adopted mlx-lm role made the server unload its 45 GB model, since mlx-lm
+  treats any new name as a swap. The role needs a model (for mlx-lm, the name
+  the server loaded, or `default_model`). A body that is not a JSON object is
+  refused with 400.
+- **`mode: "remote"`** serves a role from a hosted OpenAI-compatible API:
+
+  ```json
+  { "role": "hard-task", "mode": "remote", "proxy_port": 8095,
+    "remote": { "base_url": "https://api.x.ai/v1", "api_key_env": "GROK_API_KEY",
+                "model": "grok-4" },
+    "stall_timeout_s": 300 }
+  ```
+
+  The destination is `remote.base_url` alone (`https://`, or `http://` for a
+  `127.0.0.1` / `[::1]` literal only), so a request still cannot name a host.
+  Only `POST /v1/chat/completions` and `GET /v1/models` are forwarded
+  (`/v1/<rest>` goes to `<base_url>/<rest>`, query dropped), with streaming
+  passthrough, the same body and response limits, redirects off and TLS
+  verification on. `api_key_env` is the NAME of a daemon environment
+  variable. It is read at each request (a rotated key needs no restart and
+  the value is never held in config, state or status), the client's own
+  `Authorization` is dropped and `Authorization: Bearer <key>` is sent
+  instead, marked sensitive. A missing or empty variable fails the request
+  with 502 naming the variable only; the value appears in no error, log,
+  audit record or `Debug`. `model` is always pinned. A remote role has no
+  flavor, roster_id, instance_port, memory, svc or managed fields, takes no
+  part in placement, residency or memory accounting, cannot be `expose`d
+  beyond loopback (it spends this node's key) and cannot be named in the
+  `mesh` settings, so it is never advertised or served to a peer.
