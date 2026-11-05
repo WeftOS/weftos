@@ -38,14 +38,14 @@
     "metaharness:goal": "node scripts/metaharness/goal-check.mjs"
   },
   "devDependencies": {
-    "@claude-flow/cli": "3.71.1",
+    "@claude-flow/cli": "3.71.4",
     "@metaharness/flywheel": "^0.1.10",
     "agentic-flow": "^2.1.0",
-    "ruflo": "3.71.1",
+    "ruflo": "3.71.4",
     "typescript": "^6.0.3"
   },
   "overrides": {
-    "@claude-flow/cli": "3.71.1",
+    "@claude-flow/cli": "3.71.4",
     "protobufjs": "7.6.5",
     "undici": "7.30.1",
     "adm-zip": "0.6.1",
@@ -57,8 +57,8 @@
     "proxy-addr": "2.0.8"
   },
   "weftos": {
-    "rufloPin": "3.71.1",
-    "rufloPinNote": "AUTHORITY is ~/dev/ruflo branch feat/grok-host (ADR-320 team_*, init --grok). Grok loads it via .grok/config.toml [mcp_servers.ruflo] → v3/@claude-flow/cli/bin/cli.js. The version string only documents that checkout (3.42.4 after merging ruvnet/main into grok-host 2026-09-19, cf8443898). Do not treat npm ruflo@3.42.4 as a substitute — published packages do not carry team_*. Relink: ~/dev/ruflo/scripts/use-local-ruflo.sh. AgentDB backups: .swarm/backups/2026-09-19-pre-ruflo-3.42.4/ and .swarm/backups/2026-11-04-pre-ruflo-3.71.0/ and .swarm/backups/2026-11-04-pre-ruflo-3.71.1/ (npm pin moved to 3.71.0, then 3.71.1, on owner approval 2026-11-04). WEFT-684 / WEFT-669: never npx ruflo@latest; never put ~/dev/ruflo in tracked .mcp.json.",
+    "rufloPin": "3.71.4",
+    "rufloPinNote": "AUTHORITY is ~/dev/ruflo branch feat/grok-host (ADR-320 team_*, init --grok). Grok loads it via .grok/config.toml [mcp_servers.ruflo] → v3/@claude-flow/cli/bin/cli.js. The version string only documents that checkout (3.42.4 after merging ruvnet/main into grok-host 2026-09-19, cf8443898). Do not treat npm ruflo@3.42.4 as a substitute — published packages do not carry team_*. Relink: ~/dev/ruflo/scripts/use-local-ruflo.sh. AgentDB backups: .swarm/backups/2026-09-19-pre-ruflo-3.42.4/ and .swarm/backups/2026-11-04-pre-ruflo-3.71.0/ and .swarm/backups/2026-11-04-pre-ruflo-3.71.1/ and .swarm/backups/2026-11-05-pre-ruflo-3.71.4/ (npm pin moved to 3.71.0, then 3.71.1, on owner approval 2026-11-04; to 3.71.4 on owner approval 2026-11-05). WEFT-684 / WEFT-669: never npx ruflo@latest; never put ~/dev/ruflo in tracked .mcp.json.",
     "primaryLanguage": "rust",
     "product": "agent-operating-system",
     "harness": {
@@ -71,7 +71,7 @@
   "allowScripts": {
     "better-sqlite3@11.10.0": true,
     "better-sqlite3@12.11.1": true,
-    "@claude-flow/cli@3.71.1": true,
+    "@claude-flow/cli@3.71.4": true,
     "agentdb@3.3.0": true,
     "agentdb@3.0.0-alpha.20": true,
     "hnswlib-node@3.0.0": true,
