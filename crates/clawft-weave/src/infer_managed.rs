@@ -6,7 +6,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use clawft_kernel::infer_proxy::{InferProxy, OccupiedPolicy, PlacementTable, Started, Target};
+use clawft_kernel::infer_proxy::{InferProxy, OccupiedPolicy, PlacementTable, ProxyError, Started, Target};
 use clawft_kernel::workload_runtime::infer::Reconcile;
 use clawft_kernel::workload_runtime::types::WorkloadRuntime;
 use serde_json::{Value, json};
@@ -20,6 +20,11 @@ use crate::infer_wire::{InferState, InitParts, ProxyState, RoleState, wl_cfg, wo
 const RETRY_AFTER: Duration = Duration::from_secs(30);
 /// Grace given to a server being stopped.
 const STOP_GRACE: Duration = Duration::from_secs(5);
+/// A refused loopback port is retried this many times, this far apart, before
+/// the role is left without a listener: a daemon restarted right after a stop
+/// can find its port still held by the old process for a few seconds.
+const BIND_RETRIES: u32 = 10;
+const BIND_RETRY_GAP: Duration = Duration::from_millis(500);
 
 fn record(p: &InitParts<'_>, kind: &str, role: &str, why: &str) {
     if let Some(a) = &p.audit {
@@ -47,16 +52,24 @@ pub(crate) async fn start_proxies(r: &Resolved, table: &Arc<PlacementTable>, p: 
         warn!(role = %role, %why, "inference proxy not started");
         (ProxyState::Refused(why), None)
     };
-    let local = match InferProxy::start(
-        role,
-        ([127, 0, 0, 1], port).into(),
-        policy,
-        table.clone(),
-        p.limits.clone(),
-        p.audit.clone(),
-    )
-    .await
-    {
+    let mut tries = 0;
+    let started = loop {
+        let res = InferProxy::start(
+            role,
+            ([127, 0, 0, 1], port).into(),
+            policy,
+            table.clone(),
+            p.limits.clone(),
+            p.audit.clone(),
+        )
+        .await;
+        if !matches!(res, Err(ProxyError::Occupied(_))) || tries >= BIND_RETRIES {
+            break res;
+        }
+        tries += 1;
+        tokio::time::sleep(BIND_RETRY_GAP).await;
+    };
+    let local = match started {
         Ok(Started::Running(px)) => (ProxyState::Listening(px.addr()), Some(px)),
         Ok(Started::Adopted(a)) => (ProxyState::Adopted(a), None),
         Err(e) => refused(e.to_string()),
