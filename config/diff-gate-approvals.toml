@@ -51,3 +51,25 @@ path        = "**/Cargo.toml"
 pattern     = 'weftos-pq-sign([[:space:]]*=|\])'
 reason      = "ADR-129: in-tree ML-DSA-65 dual-signing crate"
 approved_by = "owner"
+
+# Approved by the owner on 2026-11-05 for the ADR-101 remote inference role.
+[[approval]]
+rule        = "net"
+path        = "crates/clawft-kernel/src/infer_proxy/hosted.rs"
+pattern     = "*"
+reason      = "ADR-101 remote role: hosted-API URL/header handling; key read from api_key_env"
+approved_by = "owner"
+
+[[approval]]
+rule        = "net"
+path        = "crates/clawft-kernel/src/infer_proxy/upstream.rs"
+pattern     = "reqwest::RequestBuilder"
+reason      = "ADR-101 remote role: shared upstream request builder"
+approved_by = "owner"
+
+[[approval]]
+rule        = "net"
+path        = "crates/clawft-kernel/src/infer_proxy/tests_hosted.rs"
+pattern     = "*"
+reason      = "loopback-only test listener"
+approved_by = "owner"
