@@ -477,3 +477,27 @@ fn different_bases_mark_overlaps_as_unreliable() {
         .unwrap();
     assert!(!overlaps(&b, &a, &c).unwrap().same_base);
 }
+
+#[test]
+fn follow_state_round_trips_and_rejects_corruption() {
+    use weftos_store::follower::FollowState;
+    let d = tempfile::tempdir().unwrap();
+    let f = d.path().join("sub/follow.json");
+    assert_eq!(FollowState::load(&f).unwrap(), FollowState::default());
+    let mut st = FollowState::default();
+    st.seen.insert(
+        "a".into(),
+        weftos_store::follower::Seen {
+            bucket: "w-1-x".into(),
+            head_commit: "abc".into(),
+            state: weftos_store::share::State::Open,
+        },
+    );
+    st.save(&f).unwrap();
+    assert_eq!(FollowState::load(&f).unwrap(), st);
+    // no temp files left behind
+    let left: Vec<_> = std::fs::read_dir(f.parent().unwrap()).unwrap().collect();
+    assert_eq!(left.len(), 1);
+    std::fs::write(&f, b"{ not json").unwrap();
+    assert!(FollowState::load(&f).is_err());
+}

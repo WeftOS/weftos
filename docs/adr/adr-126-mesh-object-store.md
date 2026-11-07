@@ -223,7 +223,8 @@ owed and is **not** produced by the in-memory tests.
    an unknown-schema entry; an empty or wrong project bucket; a merged entry whose cleanup never
    ran; an interrupted `sync-docs` followed by a deleted doc; `overlaps` on two real worktrees with
    different bases (measure the false-positive rate); two overlapping `follow` runs sharing a state
-   file (the file is not locked or written atomically by the S2 code).
+   file (`FollowState::save` writes atomically via temp+rename but does not lock, so the last writer
+   wins; `load` errors on a corrupt file rather than resetting).
 7. ADR-131 D1 and D2 pass first (the card's prerequisite).
 
 ### 5. Edge and Wasm nodes hold no long-lived keys
@@ -338,7 +339,7 @@ replication (single drive).
 - **Needs from S1's `weaver store`:** `worktree create|publish|promote|fetch|claim|buckets|follow|search|leftovers|sync-docs|overlaps` verbs
   that call these functions; the script's argument shapes are the contract. `publish` reads the
   NUL-separated path lists the script writes. The daemon, not agents, calls `write_registry_entry`.
-- **Verified (scratch crate, same sources):** 46 integration tests, clippy `-D warnings` clean; 33
+- **Verified (scratch crate, same sources):** 47 integration tests, clippy `-D warnings` clean; 33
   shell assertions including a real `git bundle` round trip. **Not verified:** against a real RustFS
   or OpenDAL, the union mount with a live rclone, two machines, or `agent-git-flow` calling the script
   (it has no hook seam; the repo wraps `wt.sh` and `land.sh` instead).

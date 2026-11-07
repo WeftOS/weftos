@@ -35,6 +35,46 @@ pub struct FollowState {
     pub seen: BTreeMap<String, Seen>,
 }
 
+impl FollowState {
+    /// Load from `path`. A missing file is a first run (empty state). An unreadable or corrupt
+    /// file is an error: silently resetting would re-report every worktree as `New`.
+    pub fn load(path: &Path) -> Result<Self> {
+        match std::fs::read(path) {
+            Ok(bytes) => serde_json::from_slice(&bytes)
+                .map_err(|e| S2Error::Invalid(format!("follow state {}: {e}", path.display()))),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
+            Err(e) => Err(S2Error::Invalid(format!(
+                "follow state {}: {e}",
+                path.display()
+            ))),
+        }
+    }
+
+    /// Write to `path` through a temp file in the same directory, then rename, so a crash or a
+    /// concurrent poll never leaves a truncated file. Two pollers sharing one file can still
+    /// overwrite each other's last write; give each its own state file.
+    pub fn save(&self, path: &Path) -> Result<()> {
+        let io =
+            |e: std::io::Error| S2Error::Invalid(format!("follow state {}: {e}", path.display()));
+        let dir = path
+            .parent()
+            .filter(|d| !d.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        std::fs::create_dir_all(dir).map_err(io)?;
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("follow");
+        let tmp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
+        let json = serde_json::to_vec_pretty(self).map_err(|e| S2Error::Invalid(e.to_string()))?;
+        std::fs::write(&tmp, json).map_err(io)?;
+        std::fs::rename(&tmp, path).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            io(e)
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Change {
     New(RegistryEntry),
