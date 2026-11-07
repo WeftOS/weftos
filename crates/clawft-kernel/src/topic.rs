@@ -267,10 +267,15 @@ impl TopicRouter {
             .get(topic)
             .map(|subs| {
                 subs.iter()
-                    .filter_map(|(_, sink)| match sink {
-                        SubscriberSink::PidInbox(pid) => Some(*pid),
-                        #[cfg(feature = "native")]
-                        SubscriberSink::ExternalStream(_) => None,
+                    .filter_map(|(_, sink)| {
+                        // Without `native` the enum has one variant, so this
+                        // `if let` is irrefutable; with it, streams are skipped.
+                        #[allow(irrefutable_let_patterns)]
+                        if let SubscriberSink::PidInbox(pid) = sink {
+                            Some(*pid)
+                        } else {
+                            None
+                        }
                     })
                     .collect()
             })
