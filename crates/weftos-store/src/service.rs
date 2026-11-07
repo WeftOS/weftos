@@ -13,10 +13,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::access::{Access, Grant, GrantTable, Op, Principal};
-use crate::audit::{self, AuditEvent, AuditSink, Outcome, Raw, Source};
+use crate::audit::{AuditEvent, AuditSink, Outcome, Source};
 use crate::backend::{AdminBackend, BackendError, ObjectBackend, ObjectMeta};
 use crate::name::StoreName;
 use crate::{StoreError, policy};
+
+mod ingest;
+mod lifecycle;
 
 /// The bucket archived stores are copied into, under `<bucket>/<key>`.
 pub const ARCHIVE_BUCKET: &str = "weftos-archive";
@@ -506,183 +509,6 @@ impl StoreService {
         Ok(self.objects.list(&name.bucket(), prefix)?)
     }
 
-    // ---- promote and archive ------------------------------------------------------------------
-
-    /// Copy a worktree store's objects under `promotable` prefixes into its project store.
-    /// Everything else is archived (`archive_rest`) or left where it is.
-    pub fn promote(&self, worktree: &StoreName, promotable: &[String], archive_rest: bool, actor: &str) -> Result<PromoteReport, StoreError> {
-        if !matches!(worktree, StoreName::Worktree { .. }) {
-            return Err(StoreError::Refused(format!("{worktree} is not a worktree store")));
-        }
-        let project = worktree.project_store().ok_or_else(|| StoreError::BadName(worktree.to_string()))?;
-        if self.known(worktree)?.archived {
-            return Err(StoreError::Refused(format!("{worktree} is archived")));
-        }
-        let prec = self.known(&project).map_err(|_| StoreError::Refused(format!("the project store {project} does not exist; create it first")))?;
-        if prec.archived {
-            return Err(StoreError::Refused(format!("{project} is archived")));
-        }
-        let (wb, pb) = (worktree.bucket(), project.bucket());
-        let mut rep = PromoteReport::default();
-        let ts = self.now();
-        let mut step = || -> Result<(), StoreError> {
-            for m in self.objects.list(&wb, "")? {
-                if promotable.iter().any(|p| m.key.starts_with(p.as_str())) {
-                    match self.objects.head(&pb, &m.key) {
-                        Ok(h) if h.etag == m.etag => {
-                            rep.unchanged += 1;
-                            continue;
-                        }
-                        Ok(_) => {
-                            // Keep what is being replaced.
-                            self.ensure_archive()?;
-                            self.objects.copy(&pb, &m.key, ARCHIVE_BUCKET, &archive_key(&pb, ts, &format!("replaced/{}", m.key)))?;
-                            rep.replaced.push(m.key.clone());
-                        }
-                        Err(BackendError::NoObject(_)) => {}
-                        Err(e) => return Err(e.into()),
-                    }
-                    self.objects.copy(&wb, &m.key, &pb, &m.key)?;
-                    self.emit(actor, &project, Op::Copy.name(), Some(&m.key), m.size, Outcome::Ok, Source::Governed);
-                    rep.promoted += 1;
-                } else if archive_rest {
-                    self.ensure_archive()?;
-                    self.objects.copy(&wb, &m.key, ARCHIVE_BUCKET, &archive_key(&wb, ts, &m.key))?;
-                    rep.archived += 1;
-                } else {
-                    rep.left += 1;
-                }
-            }
-            Ok(())
-        };
-        if let Err(e) = step() {
-            self.emit(actor, worktree, "Promote", None, 0, Outcome::Error(e.to_string()), Source::Governed);
-            self.chain.record("store.promote.failed", json!({"from": worktree.to_string(), "to": project.to_string(), "promoted_before_failure": rep.promoted, "error": e.to_string(), "actor": actor}));
-            return Err(e);
-        }
-        self.chain.record("store.promote", json!({"from": worktree.to_string(), "to": project.to_string(), "promoted": rep.promoted, "replaced": rep.replaced.len(), "archived": rep.archived, "actor": actor}));
-        self.emit(actor, worktree, "Promote", None, 0, Outcome::Ok, Source::Governed);
-        Ok(rep)
-    }
-
-    fn ensure_archive(&self) -> Result<(), StoreError> {
-        match self.admin.create_bucket(ARCHIVE_BUCKET, &[("kind".into(), "archive".into())]) {
-            Ok(()) | Err(BackendError::BucketExists(_)) => Ok(()),
-            Err(e) => Err(e.into()),
-        }
-    }
-
-    /// Close the store (every grant disabled, requests refused), then copy every object to the
-    /// archive bucket; with `delete`, remove the bucket and forget the store. Closing comes first,
-    /// so nothing is accepted after the copy starts. A failed run can be repeated: archiving an
-    /// archived store is refused only without `delete`. Returns the number of objects archived.
-    pub fn archive(&self, name: &StoreName, delete: bool, actor: &str) -> Result<u64, StoreError> {
-        let rec = self.known(name)?;
-        if rec.archived && !delete {
-            return Err(StoreError::Refused(format!("{name} is already archived")));
-        }
-        self.ensure_archive()?;
-        let b = name.bucket();
-        let principals = self.principals_of(name);
-        if !rec.archived {
-            {
-                let mut st = self.lock();
-                for p in &principals {
-                    st.grants.set_enabled(p, name, false);
-                }
-                if let Some(r) = st.stores.get_mut(&name.to_string()) {
-                    r.archived = true;
-                }
-                self.persist(&st)?;
-            }
-            for p in &principals {
-                self.apply_principal(p)?;
-            }
-        }
-        let ts = self.now();
-        let objs = self.objects.list(&b, "")?;
-        let run = || -> Result<(), StoreError> {
-            for m in &objs {
-                self.objects.copy(&b, &m.key, ARCHIVE_BUCKET, &archive_key(&b, ts, &m.key))?;
-            }
-            if delete {
-                for m in &objs {
-                    self.objects.delete(&b, &m.key)?;
-                }
-                self.admin.delete_bucket(&b)?;
-            }
-            Ok(())
-        };
-        if let Err(e) = run() {
-            self.emit(actor, name, "Archive", None, 0, Outcome::Error(e.to_string()), Source::Governed);
-            return Err(e);
-        }
-        if delete {
-            {
-                let mut st = self.lock();
-                st.grants.drop_store(name);
-                st.stores.remove(&name.to_string());
-                self.persist(&st)?;
-            }
-            // The principals' keys must not keep a policy naming the deleted bucket.
-            for p in &principals {
-                self.apply_principal(p)?;
-            }
-        }
-        self.chain.record("store.archive", json!({"store": name.to_string(), "objects": objs.len(), "deleted": delete, "actor": actor}));
-        self.emit(actor, name, if delete { "ArchiveDelete" } else { "Archive" }, None, objs.iter().map(|m| m.size).sum(), Outcome::Ok, Source::Governed);
-        Ok(objs.len() as u64)
-    }
-
-    // ---- RustFS audit, log and notifications --------------------------------------------------
-
-    fn resolve(&self, raw: &Raw) -> (String, String) {
-        let g = self.lock();
-        let principal = g.keys.iter().find(|(_, k)| **k == raw.access_key).map_or_else(|| raw.access_key.clone(), |(p, _)| p.clone());
-        let store = g
-            .stores
-            .keys()
-            .filter_map(|n| StoreName::parse(n).ok())
-            .find(|n| n.bucket() == raw.bucket)
-            .map_or_else(|| raw.bucket.clone(), |n| n.to_string());
-        (principal, store)
-    }
-
-    fn event_from(&self, raw: Raw, source: Source) -> AuditEvent {
-        let (principal, store) = self.resolve(&raw);
-        let outcome = match raw.status {
-            Some(s) if (200..300).contains(&s) => Outcome::Ok,
-            Some(403) => Outcome::Refused(raw.reason.clone().unwrap_or_else(|| "403".into())),
-            Some(s) => Outcome::Error(format!("status {s}")),
-            None => Outcome::Ok,
-        };
-        AuditEvent { ts_ms: self.now(), principal, store, bucket: raw.bucket, op: raw.op, key: raw.object, bytes: raw.bytes, outcome, source }
-    }
-
-    /// One line of RustFS's audit stream into the activity log. False if it was not an audit line.
-    pub fn ingest_audit_line(&self, line: &str) -> bool {
-        audit::parse_audit(line).map(|r| self.audit.record(&self.event_from(r, Source::RustfsAudit))).is_some()
-    }
-
-    /// One line of RustFS's JSON log: refusals only.
-    pub fn ingest_log_line(&self, line: &str) -> bool {
-        audit::parse_denial(line).map(|r| self.audit.record(&self.event_from(r, Source::RustfsLog))).is_some()
-    }
-
-    /// A bucket notification: logged, and every changed object is passed to the invalidator.
-    /// Returns the number of records.
-    pub fn ingest_notification(&self, body: &str) -> usize {
-        let recs = audit::parse_notification(body);
-        let inv = self.invalidator.lock().unwrap_or_else(|e| e.into_inner()).clone();
-        for r in &recs {
-            let ev = self.event_from(r.clone(), Source::Notification);
-            if let (Some(f), Some(k)) = (&inv, &r.object) {
-                f(&ev.store, k);
-            }
-            self.audit.record(&ev);
-        }
-        recs.len()
-    }
 }
 
 #[cfg(test)]

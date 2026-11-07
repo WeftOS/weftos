@@ -261,8 +261,10 @@ the audit-stream record (successful operations) and bucket-notification field na
 start from the environment variables I tried (`RUSTFS_AUDIT_ENABLE`, a webhook target), so no record
 was captured; the parser still reads field names from the S0 write-up. Cogs reach the store through
 `store.put` and `store.get` as a named principal; a cogbus verb is not built. Remote (mesh) callers
-are modelled (`Caller::mesh`, exposure check) but no mesh transport calls it yet. Project stores are
-created with `weaver store create`; `weaver project add` does not create one yet. Not done for PG:
+are modelled (`Caller::mesh`, exposure check) but no mesh transport calls it yet. `project add` (the daemon's
+install action) creates the project store when the daemon runs an object store, and says so in its
+report; a failure there is a note, never a failed add. Other project stores come from
+`weaver store create`. Not done for PG:
 nothing here was deployed, and `WEFTOS_STORE_RUSTFS_ENV` is unset by default (local-directory backend).
 
 ## Consequences

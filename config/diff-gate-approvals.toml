@@ -73,3 +73,25 @@ path        = "crates/clawft-kernel/src/infer_proxy/tests_hosted.rs"
 pattern     = "*"
 reason      = "loopback-only test listener"
 approved_by = "owner"
+
+# Approved by the owner in chat on 2026-11-07 for ADR-126 S1 (RustFS S3 + admin transport).
+[[approval]]
+rule        = "net"
+path        = "crates/weftos-store/src/rustfs.rs"
+pattern     = "reqwest::blocking::Client"
+reason      = "ADR-126 S1: blocking HTTP client for the RustFS S3/admin endpoints, SigV4-signed"
+approved_by = "owner"
+
+[[approval]]
+rule        = "net"
+path        = "crates/weftos-store/src/rustfs.rs"
+pattern     = "reqwest::Method::from_bytes"
+reason      = "ADR-126 S1: HTTP method for the signed RustFS requests"
+approved_by = "owner"
+
+[[approval]]
+rule        = "new-dep"
+path        = "crates/clawft-weave/Cargo.toml"
+pattern     = 'weftos-store[[:space:]]*='
+reason      = "ADR-126 S1: the daemon depends on weftos-store with the rustfs feature"
+approved_by = "owner"

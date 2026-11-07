@@ -50,3 +50,15 @@ fn live_rustfs_backs_the_daemon_service() {
     svc.set_grant_enabled(&name, &cog, false, "test").unwrap();
     assert!(svc.get(&who, &name, "agents/live/out.txt").is_err());
 }
+
+#[test]
+fn project_added_makes_the_project_store_once() {
+    let d = tempfile::tempdir().unwrap();
+    let svc = open_service("pg-1", d.path(), Arc::new(ExposureRegistry::new("pg-1")), None, None).unwrap();
+    let ulid = "01HZX3K9Q5M2N7P8R4T6V0WABC";
+    let a = ensure_project_store(&svc, ulid).unwrap();
+    assert!(a.ends_with(&format!("/projects/{ulid}/store")), "{a}");
+    assert_eq!(ensure_project_store(&svc, ulid).unwrap(), a, "idempotent");
+    assert!(svc.has_store(&StoreName::project(&mesh_token(), ulid).unwrap()));
+    assert!(ensure_project_store(&svc, "not-a-ulid").is_err());
+}

@@ -105,6 +105,20 @@ pub fn start(node_id: &str, dir: &Path, exposures: Arc<ExposureRegistry>, chain:
     Ok(GLOBAL.get_or_init(|| svc).clone())
 }
 
+/// Create (or find) the project store `…/projects/<ulid>/store` on `svc`. Returns its name.
+pub fn ensure_project_store(svc: &StoreService, ulid: &str) -> Result<String, String> {
+    let name = StoreName::project(&mesh_token(), ulid).map_err(|e| e.to_string())?;
+    svc.ensure_store(&name, "project-add", weftos_store::service::Parties::defaults_for(&name)).map_err(|e| e.to_string())?;
+    Ok(name.to_string())
+}
+
+/// The `project add` hook: make the project's store if the daemon runs an object store.
+/// `Ok(None)` when it does not. Runs on a plain thread because the RustFS backend is blocking.
+pub fn project_added(ulid: &str) -> Result<Option<String>, String> {
+    let Some(svc) = global() else { return Ok(None) };
+    std::thread::scope(|s| s.spawn(|| ensure_project_store(&svc, ulid)).join().map_err(|_| "project store creation panicked".to_owned())?).map(Some)
+}
+
 type Backends = (Arc<dyn AdminBackend>, Arc<dyn ObjectBackend>);
 
 fn backends(dir: &Path, rustfs_env: Option<&Path>) -> Result<Backends, String> {
