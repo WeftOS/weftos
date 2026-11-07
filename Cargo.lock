@@ -11527,6 +11527,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "weftos-edge-creds"
+version = "0.8.4"
+dependencies = [
+ "hmac",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.18",
+ "tokio",
+ "zeroize",
+]
+
+[[package]]
 name = "weftos-exo-core"
 version = "0.8.4"
 dependencies = [

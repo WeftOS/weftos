@@ -4,6 +4,7 @@
 - **Updated**: 2026-10-29 (§4's worktree overlay is re-expressed as RVF layers and branch metadata in ADR-128)
 - **Updated**: 2026-10-29 (S0 spike applied on PG and run; results in "S0 results"; open question 1 answered: import, not in place; §6 amended: the activity log must take RustFS's own log as well as its audit stream)
 - **Updated**: 2026-10-30 (ADR-130 adds a GCS seed bucket as the tier above this store; this store becomes the optional L1 staging tier)
+- **Updated**: 2026-11-07 (S3 implemented in `crates/weftos-edge-creds` against a mock store; see "S3 results". The ADR stays Proposed: S1, S2, S4, S5 are not landed)
 - **Deciders**: owner
 - **Research**: `docs/research/rclone-shared-filesystem-2026-10-29.md` (rclone, RustFS,
   OpenDAL, governance gaps). Board card `3605565e`.
@@ -219,6 +220,45 @@ policy covers only `s0-spike`.
 
 Not tested: bucket notifications (not configured in the spike), and erasure coding and
 replication (single drive).
+
+## S3 results (2026-11-07)
+
+S3 is built in `crates/weftos-edge-creds`, separate from S1's `weftos-store`. It does no I/O and
+reads no clock, so the host supplies the parent link, the HTTP client and the time. It depends on
+S1 only through two traits, `StsMinter` (RustFS AssumeRole and user disable/enable, card b76c74a7)
+and `GrantCheck` (the chain-recorded grant).
+
+- **Parent side (`EdgeBroker`).** For a node the link has authenticated, it checks the revoked set,
+  a per-node rate limit (30 per minute) and the grant. It derives the bucket `n-<node id>` from the
+  node id, never from the request. It then asks RustFS for an STS session as the node's own RustFS
+  user, with an inline policy naming only that bucket. The user's long-lived key stays on the
+  parent. For a presigned URL it mints a session scoped to one object and one action, and signs
+  with that, so the edge can hold no credentials at all.
+- **Edge side (`EdgeNodeStore`).** It is built with no key. It signs with SigV4 and the session
+  token, refreshes inside the last 60 s, and retries once with a fresh lease on a 403. It refuses
+  any credential with no session token or a lifetime above 15 minutes plus 60 s of skew, so a
+  parent that leaked a long-lived key is rejected.
+- **Revocation.** `revoke` records the node, then disables its RustFS user. A live session is
+  refused at its next request (S0: about 0.22 s), and the parent refuses a new lease.
+
+Verified against an in-memory store that checks SigV4, the session token, expiry, the user's
+enabled flag and the session policy (`cargo test -p weftos-edge-creds`, 21 tests):
+
+- the SigV4 header and presign code reproduces AWS's two published S3 example signatures;
+- a Wasm-style node writes, reads, conditionally creates and deletes in its own bucket, and the
+  store only ever saw STS access keys;
+- a session aimed at another node's bucket is refused, and a presigned URL is bound to its key,
+  bucket and host;
+- expiry is refreshed transparently; a node revoked mid-session is refused on its next request;
+- planted defects (revoke without disabling the user, a wildcard session policy, a removed TTL
+  cap, skipped key validation) each fail a test.
+
+**Not yet verified:** against a live RustFS (the real STS `AssumeRole` call, the inline-policy
+field and the `ASIA` key shape are S0 measurements, not re-run here); on real edge hardware; and
+compiled for `wasm32-unknown-unknown` (the target is not installed on this host; the crate has no
+tokio, `SystemTime` or sockets outside tests). The link between a node and its parent (cogbus,
+mesh-local or a WebSocket) is the host's and is not part of this crate. The bucket-name function
+`node_bucket` is the one-line ADR rule and should be replaced by S1's mapping when S1 lands.
 
 ## Consequences
 

@@ -73,6 +73,8 @@ members = [
     "crates/weftos-cog-protocol",
     # ADR-122: cogbus, the node daemon's cog data plane broker (proto, broker, server, client).
     "crates/weftos-cogbus",
+    # ADR-126 S3: short-lived credentials for edge and Wasm nodes (no I/O, wasm-clean).
+    "crates/weftos-edge-creds",
     # ADR-106: wire types of the Seed licence proxy (shared by kernel + weft-licence).
     "crates/weft-licence-wire",
     # ADR-106 phase 2: the Seed-side licence proxy (own binary, user and unit).
