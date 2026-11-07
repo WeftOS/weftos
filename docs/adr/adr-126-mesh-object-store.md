@@ -399,11 +399,18 @@ nothing here was deployed, and `WEFTOS_STORE_RUSTFS_ENV` is unset by default (lo
   desktop mount are in `scripts/worktree-store.sh` (tests: `scripts/tests/worktree-store.test.sh`,
   `scripts/tests/worktree-union-mount.test.sh`). `sha2` is now a non-optional dependency of the crate.
 - **Merged with S1** (`feat/adr126-s1`, 2026-11-07): the modules are wired into `lib.rs`.
-- **Needs from S1's `weaver store`:** `worktree create|publish|promote|fetch|claim|buckets|follow|search|leftovers|sync-docs|overlaps` verbs
-  that call these functions; the script's argument shapes are the contract. `publish` reads the
-  NUL-separated path lists the script writes (`--paths-z`, `--uncommitted-z`, `--changes-z`; parse the
-  last with `share::parse_name_status_z`). The daemon, not agents, calls `write_registry_entry`.
-- **Verified (in `weftos-store`, with `--features rustfs`, clippy `-D warnings` clean):** 56 S2
+- **The `weaver store worktree` verbs exist** (`crates/clawft-weave/src/store_worktree.rs`, CLI in
+  `commands/store_cmd.rs`, RPC `store.worktree.*`, Admin like every `store.*` verb): `create`,
+  `buckets`, `publish` (`--paths-z`, `--uncommitted-z`, `--changes-z`, `--bundle`, `--handoff`),
+  `fetch`, `claim`, `promote`, `follow`, `search`, `leftovers`, `sync-docs`, `overlaps`. They run on
+  the daemon's raw data plane (`StoreService::operator_objects`, added for this, as is the now-public
+  `ensure_archive`), the same level as S1's own promote and archive, so they skip per-principal
+  grants and the activity log; the daemon refreshes the project registry entry after publish and
+  claim, which is the only writer of `worktrees/<slug>.json`. Paths in params (`--root`, `--dest`,
+  `--cache`, the lists) are read and written by the daemon itself, so the CLI and daemon must share
+  a host and a user. Promotion archives into `weftos-archive` under `<bucket>@<ms>/`. Two S1 files
+  got small additive edits for this (`service.rs`, `service/lifecycle.rs`).
+- **Verified (in `weftos-store` and `clawft-weave`, clippy `-D warnings` clean; daemon test `store_worktree::tests` drives every verb from create through claim and land on an `FsBackend`):** 56 S2
   integration tests plus `tests/s2_done_when.rs`, which runs the three done-when checks on S1's
   `FsBackend` with two machines sharing only the store: publish, hand off, follow, search, fetch,
   claim and merge across machines (a claimed merge cannot be overwritten by the writer); a new

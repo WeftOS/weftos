@@ -69,7 +69,7 @@ impl StoreService {
         Ok(rep)
     }
 
-    fn ensure_archive(&self) -> Result<(), StoreError> {
+    pub fn ensure_archive(&self) -> Result<(), StoreError> {
         match self.admin.create_bucket(ARCHIVE_BUCKET, &[("kind".into(), "archive".into())]) {
             Ok(()) | Err(BackendError::BucketExists(_)) => Ok(()),
             Err(e) => Err(e.into()),

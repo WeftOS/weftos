@@ -194,6 +194,13 @@ impl StoreService {
         Ok(Self { cfg, admin, objects, exposure, audit, chain, invalidator: Mutex::new(None), st: Mutex::new(st) })
     }
 
+    /// The raw data plane, for operator-level work that spans stores (ADR-126 S2 worktree sharing,
+    /// promotion with conflict checks). Not a principal's path: it skips grants and exposure, so
+    /// only an Admin verb on the daemon may use it, and must record what it did itself.
+    pub fn operator_objects(&self) -> Arc<dyn ObjectBackend> {
+        self.objects.clone()
+    }
+
     fn lock(&self) -> MutexGuard<'_, State> {
         self.st.lock().unwrap_or_else(|e| e.into_inner())
     }

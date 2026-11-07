@@ -6578,6 +6578,8 @@ async fn dispatch(
         "store.ls" | "store.create" | "store.grant" | "store.revoke" | "store.promote" | "store.archive" | "store.put" | "store.get" => {
             crate::store_rpc::handle(method.as_str(), params).await
         }
+        // ADR-126 S2: worktree stores, tree sharing, the follower view.
+        m if m.starts_with("store.worktree.") => crate::store_worktree::handle(m, params).await,
         // ADR-122: the cog data plane broker's topics.
         #[cfg(all(feature = "placement", unix))]
         "cogbus.list" => crate::cogbus_serve::handle(method.as_str(), params).await,
