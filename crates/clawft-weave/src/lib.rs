@@ -200,6 +200,10 @@ mod infer_cfg_tests;
 mod infer_svc_tests;
 #[cfg(all(test, feature = "placement", unix))]
 mod infer_hardening_tests;
+/// Agent directory, mesh view: `agent.sources` and its node-admin twin.
+pub mod agent_sources_rpc;
+#[cfg(all(test, feature = "placement", unix))]
+mod agent_sources_mesh_tests;
 pub mod expose_rpc;
 pub mod expose_set;
 pub mod expose_rt;

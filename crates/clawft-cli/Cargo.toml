@@ -50,6 +50,8 @@ clawft-voice-talk = { path = "../clawft-voice-talk", optional = true }
 clawft-llm = { workspace = true }
 # Chief-of-staff agent host behind `weft cos serve` (ADR-118 C3).
 weftos-cos = { path = "../weftos-cos" }
+# The one agent-package loader (`weftos::init::source::AgentSource`) for the agent directory.
+weftos = { workspace = true }
 clawft-services = { workspace = true, optional = true }
 clawft-plugin = { workspace = true }
 clawft-security = { workspace = true }

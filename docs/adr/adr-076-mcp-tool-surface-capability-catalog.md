@@ -2,6 +2,7 @@
 
 **Date**: 2026-07-30  
 **Status**: Accepted  
+**Updated**: 2026-11-07 (`agent_list` now serves the joined agent directory over `agent.list`, `expose.list` and the catalog; `agent_get` added; see docs/grok-build-fork/agent-directory-design.md)  
 **Deciders**: product + integration (owner: outbound MCP must be a designed API, not a dump of the agent registry)  
 **Depends-On**: ADR-070 (MCP registry ownership), ADR-075 (Grok/peer MCP clients)  
 **Relates-To**: ADR-073 (`WindowIntent`), ADR-074 (voice frontends), weave capabilities (`clawft-weave` capability map), HTTP `/api/*` facade
@@ -131,7 +132,8 @@ Capability class drives both weave ACL and MCP session scopes (ADR-075 G5):
 | id | class | mcp_tool | weave | profiles |
 |----|-------|----------|-------|----------|
 | `instance.status` | Read | `status` | `kernel.status` | control, default |
-| `agents.list` | Read | `agent_list` | `agent.list` | control, default |
+| `agents.list` | Read | `agent_list` | `agent.list` + `expose.list` + catalog | control, default |
+| `agents.get` | Read | `agent_get` | (directory join) | control, default |
 | `agents.spawn` | Write | `agent_spawn` | `agent.spawn` | control, default |
 | `agents.stop` | Write | `agent_stop` | `agent.stop` | control, default |
 | `window.intent` | Write | `window_*` / intent tools | (UI bus) | control when WM exists |

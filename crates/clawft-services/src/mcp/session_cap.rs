@@ -114,6 +114,7 @@ impl SessionScopes {
             tools: Some(vec![
                 "status".into(),
                 "agent_list".into(),
+                "agent_get".into(),
                 "agent_stop".into(),
                 "skill_list".into(),
                 "skill_get".into(),
