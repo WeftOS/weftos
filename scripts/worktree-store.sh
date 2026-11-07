@@ -7,6 +7,11 @@
 #   worktree-store.sh fetch <slug> <dest> [--bundle-ref REF]
 #                                               pull a shared tree (and its commits) from another node
 #   worktree-store.sh claim <slug>              take the merge of a handed-off worktree
+#   worktree-store.sh follow [--state FILE]     what changed among unmerged worktrees since last look
+#   worktree-store.sh search <query>            docs/planning across all unmerged worktrees
+#   worktree-store.sh leftovers [--json]        forgotten / unclaimed / abandoned worktrees
+#   worktree-store.sh sync-docs <slug> <cache>  read-only local mirror of a worktree's docs
+#   worktree-store.sh overlaps <slugA> <slugB>  files both changed differently (merge-conflict hint)
 #   worktree-store.sh mount-config <slug>       print the rclone union remote (worktree over project)
 #
 # All store operations go through `weaver store worktree <verb>` (S1 owns the `weaver store` surface;
@@ -120,6 +125,31 @@ claim)
     slug=${1:?usage: claim <slug>}; check_slug "$slug"
     store_must claim --project "$(project_id)" --slug "$slug"
     ;;
+follow)
+    pid=$(project_id); [[ $pid =~ ^[A-Za-z0-9]{1,40}$ ]] || die "unexpected project id '$pid'"
+    state=${XDG_STATE_HOME:-$HOME/.local/state}/weftos/follow-$pid.json
+    [ "${1:-}" = "--state" ] && { state=${2:?--state needs a file}; }
+    mkdir -p "$(dirname "$state")"
+    store_must follow --project "$(project_id)" --state "$state"
+    ;;
+search)
+    q=${1:?usage: search <query>}
+    store_must search --project "$(project_id)" --query "$q"
+    ;;
+leftovers)
+    case "${1:-}" in ""|--json) ;; *) die "usage: leftovers [--json]" ;; esac
+    store_must leftovers --project "$(project_id)" ${1:+"$1"}
+    ;;
+sync-docs)
+    slug=${1:?usage: sync-docs <slug> <cache>}; cache=${2:?usage: sync-docs <slug> <cache>}
+    check_slug "$slug"; mkdir -p "$cache"
+    store_must sync-docs --project "$(project_id)" --slug "$slug" --cache "$cache"
+    ;;
+overlaps)
+    a=${1:?usage: overlaps <slugA> <slugB>}; c=${2:?usage: overlaps <slugA> <slugB>}
+    check_slug "$a"; check_slug "$c"
+    store_must overlaps --project "$(project_id)" --a "$a" --b "$c"
+    ;;
 mount-config)
     slug=${1:?usage: mount-config <slug>}; check_slug "$slug"
     # Desktop union view (ADR-126 §4): worktree bucket first and writable, project bucket read-only.
@@ -154,6 +184,6 @@ search_policy = ff
 # refused (project is :ro). Delete through the weftos-store client to record a tombstone.
 CFG
     ;;
--h|--help|"") sed -n '2,19p' "$0" ;;
+-h|--help|"") sed -n '2,25p' "$0" ;;
 *) die "unknown command: $cmd" ;;
 esac

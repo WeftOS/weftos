@@ -10,7 +10,7 @@ ok() { if eval "$2"; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: $
 mkdir -p "$t/bin" "$t/agf"
 cat >"$t/bin/weaver" <<'W'
 #!/usr/bin/env bash
-echo "$*" >>"$WTS_LOG"
+printf '%q ' "$@" >>"$WTS_LOG"; echo >>"$WTS_LOG"
 if [ "$1 $2 $3" = "store worktree buckets" ]; then echo "w-01abc-aaaaaaaaaaaa p-01abc"; fi
 if [ "$1 $2" = "project id" ]; then echo 01ABC; fi
 if [ "$1 $2 $3" = "store worktree fetch" ]; then : ; fi
@@ -37,7 +37,7 @@ export AGF_TARGET_REF=master
 "$here/worktree-store.sh" share --handoff "please merge"
 ok "share calls publish" "grep -q '^store worktree publish' '$t/log'"
 ok "slug derived from branch" "grep -q -- '--slug feat-s2' '$t/log'"
-ok "handoff note passed" "grep -q -- '--handoff please merge' '$t/log'"
+ok "handoff note passed as one argument" "grep -qF -- '--handoff please\\ merge' '$t/log'"
 ok "bundle passed" "grep -q -- '--bundle ' '$t/log'"
 ok "base is the master tip" "grep -q -- \"--base $(git rev-parse master)\" '$t/log'"
 # the path list handed to weaver includes the untracked doc and excludes ignored files
@@ -78,7 +78,7 @@ ok "no secrets in config" "! grep -qi 'secret_access_key\|access_key_id' <<<'$ou
 # end-to-end bundle: share with a weaver that copies the bundle aside, then fetch it into a clone
 cat >"$t/bin/weaver" <<'W'
 #!/usr/bin/env bash
-echo "$*" >>"$WTS_LOG"
+printf '%q ' "$@" >>"$WTS_LOG"; echo >>"$WTS_LOG"
 case "$*" in
   "store worktree publish"*) while [ $# -gt 0 ]; do [ "$1" = --bundle ] && cp "$2" "$WTS_STORE/bundle"; shift; done ;;
   "store worktree fetch"*) while [ $# -gt 0 ]; do [ "$1" = --bundle-out ] && cp "$WTS_STORE/bundle" "$2"; shift; done ;;
@@ -93,4 +93,15 @@ clone="$t/clone"; git clone -q "$r" "$clone" 2>/dev/null; git -C "$clone" remote
 ok "fetched commits appear under refs/shared" "git -C '$clone' rev-parse --verify -q refs/shared/feat-s2/feat/s2 >/dev/null"
 "$here/worktree-store.sh" fetch feat-s2 "$clone" --bundle-ref refs/heads 2>/dev/null && rc=0 || rc=$?
 ok "bundle ref outside refs/shared rejected" "[ $rc != 0 ]"
+# follower verbs: strict, validated, correct weaver shape
+: >"$t/log"
+"$here/worktree-store.sh" search "rooms and doors"
+ok "search passes the query as one argument" "grep -qF -- '--query rooms\\ and\\ doors' '$t/log'"
+"$here/worktree-store.sh" leftovers --json; ok "leftovers --json forwarded" "grep -q 'leftovers --project 01ABC --json' '$t/log'"
+"$here/worktree-store.sh" follow --state "$t/fs/state.json"; ok "follow creates the state dir" "[ -d '$t/fs' ]"
+"$here/worktree-store.sh" leftovers --project X 2>/dev/null && rc=0 || rc=$?; ok "leftovers rejects extra flags" "[ $rc != 0 ]"
+WTS_PROJECT='../x' "$here/worktree-store.sh" follow 2>/dev/null && rc=0 || rc=$?; ok "follow rejects a path-like project id" "[ $rc != 0 ]"
+"$here/worktree-store.sh" overlaps 'a b' c 2>/dev/null && rc=0 || rc=$?; ok "overlaps validates slugs" "[ $rc != 0 ]"
+"$here/worktree-store.sh" sync-docs ../x "$t/c" 2>/dev/null && rc=0 || rc=$?; ok "sync-docs rejects traversal slug" "[ $rc != 0 ]"
+WEAVER_RC=1 "$here/worktree-store.sh" search q 2>/dev/null && rc=0 || rc=$?; ok "search failure is an error" "[ $rc != 0 ]"
 echo "passed=$pass failed=$fail"; [ "$fail" = 0 ]

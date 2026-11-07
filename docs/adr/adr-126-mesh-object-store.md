@@ -162,6 +162,62 @@ Only the daemon creates, grants access to, or deletes a store.
 - **One writer per path.** There's no cross-client locking. Parallel agents in one
   worktree write under `agents/<instance id>/`, and shared paths are read-mostly.
 
+### 4a. The L1 follower view: seeing unmerged worktrees before integration
+
+(Added 2026-11-07, owner decision: this is required leftover work, not optional. ADR-130 names
+L1 as the tier for "unmerged layers that other nodes should see before integration".)
+
+- **Follower:** any node with project read access. It is read-only; it never writes to a worktree
+  or project bucket. It keeps one small JSON state file of what it last reported.
+- **Source of truth:** the daemon-written registry in the project bucket (`worktrees/<slug>.json`),
+  then each worktree's manifest. The daemon refreshes a registry entry on every publish, handoff,
+  claim and merge, and removes it after promotion and bucket deletion.
+- **What a follower can do** (`weftos_store::follower`, `worktree-store.sh`):
+  - `poll` / `follow`: new, head-moved, state-changed, gone and unreadable worktrees since the last
+    look. A head move and a state change in one poll are both reported; a recreated slug (new
+    bucket) is gone-then-new; one corrupt registry entry is reported, not fatal; an empty registry
+    when worktrees were known is an error (wrong bucket?), not mass-gone, unless confirmed;
+  - `search_docs` / `search`: docs and planning across every unmerged worktree, by path or title;
+  - `sync_docs` / `sync-docs`: a read-only local mirror of one worktree's docs, pruned as docs leave;
+  - `leftovers`: open worktrees idle 3 days, handoffs unclaimed 1 day, claims past the 30-minute
+    TTL, merged entries still in the registry after a day (cleanup stuck), and timestamps in the
+    future (writer clock ahead, so idle time is unknown). This is the forgotten-work detector;
+  - `overlaps`: files two unmerged worktrees both changed differently, as a merge-conflict hint.
+    It reports whether both share a base commit; if not, it over-reports. It cannot see
+    modify/delete or rename conflicts, so absence proves nothing;
+  - **a registry entry is a pointer, not authority:** before reading a bucket a follower checks the
+    slug is well-formed and that the bucket's own `.wt/meta.json` names the same slug, so an entry
+    cannot aim a follower's read grants at another worktree's bucket.
+- **Latency:** polling the registry is one list plus one get per worktree. Bucket notifications
+  (§6) can later replace polling by waking the follower; polling stays the fallback.
+- **Clocks:** ages compare the registry's writer-side timestamp with the follower's clock, so the
+  thresholds are days. They are a nudge, not a lock.
+- **Not in scope:** an operator UI (card d18e1ab0), automatic merging, and enforcing that anyone
+  acts on a leftover.
+
+#### Gate for moving a project (Sansone) onto shared worktrees
+
+Card 4c4319e0 holds the move until these have passed. S2 supplies the code; the evidence is still
+owed and is **not** produced by the in-memory tests.
+
+1. Against real RustFS (not `MemBackend`): publish, poll, search, sync-docs and claim with two
+   different principals on two machines; a follower sees a publish within one poll interval.
+2. A Windows node loads a worktree bucket (never tested). Case-insensitive collisions, reserved
+   names (`CON`, `NUL`), long paths and CRLF are the first things to try.
+3. Metadata caching is only partial: measure `list` and `head` latency for a worktree of Sansone's
+   size (file count, largest file) before assuming one-poll-per-worktree is affordable.
+4. Leftover drill: leave a worktree open past the threshold and confirm `leftovers` reports it;
+   hand one off and confirm a second agent on another machine lands it with git, then promotion
+   and bucket deletion complete and the registry entry disappears.
+5. Failure drill: kill the writer mid-publish, kill the merger mid-claim, take the daemon down
+   during a registry refresh. Nothing may be lost, and a stale claim must be recoverable.
+6. Follower drills on real clocks and a real registry: a writer machine a day ahead; a corrupt and
+   an unknown-schema entry; an empty or wrong project bucket; a merged entry whose cleanup never
+   ran; an interrupted `sync-docs` followed by a deleted doc; `overlaps` on two real worktrees with
+   different bases (measure the false-positive rate); two overlapping `follow` runs sharing a state
+   file (the file is not locked or written atomically by the S2 code).
+7. ADR-131 D1 and D2 pass first (the card's prerequisite).
+
 ### 5. Edge and Wasm nodes hold no long-lived keys
 
 - **The node bucket is reached through the parent.** A node that is only a Wasm build on an
@@ -263,18 +319,18 @@ replication (single drive).
 
 ## S2 status (2026-11-07, branch `feat/adr126-s2`, not landed)
 
-- **Where the code is:** `crates/weftos-store/src/{overlay,promote,share,share_fetch,testing}.rs`
+- **Where the code is:** `crates/weftos-store/src/{overlay,promote,share,share_fetch,follower,testing}.rs`
   and `tests/s2_worktree.rs`. The Rust uses only `std`, `serde`, `serde_json` and `sha2` and spawns
   no processes. Git work is in `scripts/worktree-store.sh` (tests: `scripts/tests/worktree-store.test.sh`).
 - **Depends on S1:** the crate's `Cargo.toml`, workspace membership and `lib.rs` belong to S1. When S1
-  lands, `lib.rs` needs `pub mod overlay; pub mod promote; pub mod share; pub mod share_fetch;` and
+  lands, `lib.rs` needs `pub mod overlay; pub mod promote; pub mod share; pub mod share_fetch; pub mod follower;` and
   `#[cfg(any(test, feature = "testing"))] pub mod testing;`, `tempfile` as a dev-dependency, and an
   adapter implementing `overlay::ObjectBackend` over the OpenDAL client (the trait is synchronous;
   the daemon blocks on its async client).
-- **Needs from S1's `weaver store`:** `worktree create|publish|promote|fetch|claim|buckets` verbs
+- **Needs from S1's `weaver store`:** `worktree create|publish|promote|fetch|claim|buckets|follow|search|leftovers|sync-docs|overlaps` verbs
   that call these functions; the script's argument shapes are the contract. `publish` reads the
   NUL-separated path lists the script writes. The daemon, not agents, calls `write_registry_entry`.
-- **Verified (scratch crate, same sources):** 28 integration tests, clippy `-D warnings` clean; 25
+- **Verified (scratch crate, same sources):** 45 integration tests, clippy `-D warnings` clean; 33
   shell assertions including a real `git bundle` round trip. **Not verified:** against a real RustFS
   or OpenDAL, the union mount with a live rclone, two machines, or `agent-git-flow` calling the script
   (it has no hook seam; the repo wraps `wt.sh` and `land.sh` instead).

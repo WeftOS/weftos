@@ -79,6 +79,36 @@ pub fn list_shared<B: ObjectBackend>(b: &B, project_bucket: &str) -> Result<Vec<
     Ok(v)
 }
 
+/// Like [`list_shared`] but a corrupt or unknown-schema entry is reported, not fatal: returns the
+/// readable entries and the slugs of the unreadable ones.
+pub fn list_shared_lenient<B: ObjectBackend>(
+    b: &B,
+    project_bucket: &str,
+) -> Result<(Vec<RegistryEntry>, Vec<String>)> {
+    let (mut v, mut bad) = (Vec::new(), Vec::new());
+    for o in b.list(project_bucket, REGISTRY_PREFIX)? {
+        let slug = o
+            .key
+            .trim_start_matches(REGISTRY_PREFIX)
+            .trim_end_matches(".json")
+            .to_string();
+        match b
+            .get(project_bucket, &o.key)?
+            .map(|d| serde_json::from_slice::<RegistryEntry>(&d))
+        {
+            Some(Ok(e)) => v.push(e),
+            _ => bad.push(slug),
+        }
+    }
+    v.sort_by(|a, c| {
+        c.updated_ms
+            .cmp(&a.updated_ms)
+            .then_with(|| a.slug.cmp(&c.slug))
+    });
+    bad.sort();
+    Ok((v, bad))
+}
+
 /// Docs and planning in a published tree whose path or title contains `query` (case-insensitive).
 /// An empty query returns all of them.
 pub fn find_docs<'m>(m: &'m TreeManifest, query: &str) -> Vec<&'m DocEntry> {
