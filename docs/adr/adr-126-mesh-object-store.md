@@ -121,8 +121,13 @@ Only the daemon creates, grants access to, or deletes a store.
   overwrites, by policy). Deleting a project object in a worktree leaves a tombstone, which
   promotion turns into a delete in the project (skipped if the project object changed since the
   worktree was created, unless the policy is overwrite). An object and a tombstone for the same key
-  mean the object wins. "Created" is the server-side modified time of the worktree's
-  `.wt/meta.json`, so client clock skew cannot hide a concurrent edit. The run is idempotent and
+  mean the object wins. "Changed" is decided by etag, not by time: the first write or delete of a
+  key in a worktree records the project's etag for it (`.wt/base/<key>`, `-` if the project had
+  none), and promotion treats the project as changed when its etag now differs. No clock is
+  involved, so neither client nor server skew can hide or invent a conflict; an object written
+  around the overlay has no recorded base and is treated as a conflict (fail safe). Reads do not
+  record a base, so a project edit between a worktree's read and its first write goes unnoticed.
+  The run is idempotent and
   safe to retry after a partial failure; once the report is written, later writes to that
   worktree bucket are ignored.
 - **Who does the overlay:** the `weftos-store` client does it for daemons and agents. For a
@@ -386,24 +391,35 @@ nothing here was deployed, and `WEFTOS_STORE_RUSTFS_ENV` is unset by default (lo
 
 ## S2 status (2026-11-07, branch `feat/adr126-s2`, not landed)
 
-- **Where the code is:** `crates/weftos-store/src/{overlay,promote,share,share_fetch,follower,testing}.rs`
-  and `tests/s2_worktree.rs`. The Rust uses only `std`, `serde`, `serde_json` and `sha2` and spawns
-  no processes. Git work is in `scripts/worktree-store.sh` (tests: `scripts/tests/worktree-store.test.sh`).
-- **Depends on S1:** the crate's `Cargo.toml`, workspace membership and `lib.rs` belong to S1. When S1
-  lands, `lib.rs` needs `pub mod overlay; pub mod promote; pub mod share; pub mod share_fetch; pub mod follower;` and
-  `#[cfg(any(test, feature = "testing"))] pub mod testing;`, `tempfile` as a dev-dependency, and an
-  adapter implementing `overlay::ObjectBackend` over the OpenDAL client (the trait is synchronous;
-  the daemon blocks on its async client).
+- **Where the code is:** `crates/weftos-store/src/{overlay,promote,share,share_fetch,follower,testing,worktree_backend}.rs`
+  and `tests/s2_{worktree,follower,done_when}.rs`. The Rust uses only `std`, `serde`, `serde_json` and
+  `sha2` and spawns no processes. `worktree_backend.rs` implements `overlay::ObjectBackend` for every
+  S1 `ObjectBackend` (local directory, RustFS, in-memory), so the S2 code runs unchanged on any of
+  them; S1's backends report no modification time, which S2 no longer needs. Git work and the
+  desktop mount are in `scripts/worktree-store.sh` (tests: `scripts/tests/worktree-store.test.sh`,
+  `scripts/tests/worktree-union-mount.test.sh`). `sha2` is now a non-optional dependency of the crate.
+- **Merged with S1** (`feat/adr126-s1`, 2026-11-07): the modules are wired into `lib.rs`.
 - **Needs from S1's `weaver store`:** `worktree create|publish|promote|fetch|claim|buckets|follow|search|leftovers|sync-docs|overlaps` verbs
   that call these functions; the script's argument shapes are the contract. `publish` reads the
   NUL-separated path lists the script writes (`--paths-z`, `--uncommitted-z`, `--changes-z`; parse the
   last with `share::parse_name_status_z`). The daemon, not agents, calls `write_registry_entry`.
-- **Verified (scratch crate, same sources):** 51 integration tests, clippy `-D warnings` clean; 37
-  shell assertions including a real `git bundle` round trip. **Not verified:** against a real RustFS
-  or OpenDAL, the union mount with a live rclone, two machines, or `agent-git-flow` calling the script
-  (it has no hook seam; the repo wraps `wt.sh` and `land.sh` instead).
+- **Verified (in `weftos-store`, with `--features rustfs`, clippy `-D warnings` clean):** 56 S2
+  integration tests plus `tests/s2_done_when.rs`, which runs the three done-when checks on S1's
+  `FsBackend` with two machines sharing only the store: publish, hand off, follow, search, fetch,
+  claim and merge across machines (a claimed merge cannot be overwritten by the writer); a new
+  worktree reads project assets with nothing copied into its bucket; landing promotes once and
+  archives the unmerged docs. Shell: 37 assertions including a real `git bundle` round trip, and 8
+  more in `worktree-union-mount.test.sh`, which does a real `rclone mount` (FUSE, rclone 1.75.2)
+  over the local-directory store layout: project files read through with no copy, new and edited
+  files land only in the worktree bucket, `.wt/` is hidden, deleting a project-only file is
+  refused, the project bucket is untouched. **Not verified:** a real RustFS (the same scenario is
+  `two_machines_share_a_worktree_on_a_real_rustfs`, ignored until `WEFTOS_STORE_TEST_RUSTFS_ENV`
+  names a throwaway server), the mount over an S3 remote, macOS or Windows, two physical machines,
+  or `agent-git-flow` calling the script (it has no hook seam; the repo wraps `wt.sh` and `land.sh`).
 - **Known limits:** claims are advisory; claim expiry uses client clocks; `rclone union` cannot
-  express tombstones, so deleting a project-only file through the mount is refused.
+  express tombstones, so deleting a project-only file through the mount is refused; rclone does not
+  flush its write cache on unmount, so `worktree-store.sh umount` waits for the write-back delay;
+  doc search matches path and title only, not content.
 
 ## Consequences
 

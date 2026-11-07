@@ -12,7 +12,8 @@
 #   worktree-store.sh leftovers [--json]        forgotten / unclaimed / abandoned worktrees
 #   worktree-store.sh sync-docs <slug> <cache>  read-only local mirror of a worktree's docs
 #   worktree-store.sh overlaps <slugA> <slugB>  files both changed differently (merge-conflict hint)
-#   worktree-store.sh mount-config <slug>       print the rclone union remote (worktree over project)
+#   worktree-store.sh mount-config <slug> [--local ROOT]   print the rclone union remote (worktree over project)
+#   worktree-store.sh mount <slug> <dir> [--local ROOT]    mount it (rclone, FUSE); umount <dir> unmounts
 #
 # All store operations go through `weaver store worktree <verb>` (S1 owns the `weaver store` surface;
 # the verbs are create|publish|promote|fetch|claim|done|list). Git work stays here, not in Rust.
@@ -154,8 +155,12 @@ overlaps)
     check_slug "$a"; check_slug "$c"
     store_must overlaps --project "$(project_id)" --a "$a" --b "$c"
     ;;
-mount-config)
-    slug=${1:?usage: mount-config <slug>}; check_slug "$slug"
+mount-config|mount)
+    sub=$cmd
+    slug=${1:?usage: $sub <slug> $([ "$sub" = mount ] && echo '<dir> ')[--local STORE_ROOT]}; check_slug "$slug"; shift
+    dir=""; [ "$sub" = mount ] && { dir=${1:?usage: mount <slug> <dir> [--local STORE_ROOT]}; shift; }
+    local_root=""
+    if [ "${1:-}" = "--local" ]; then local_root=${2:?--local needs the store root}; shift 2; fi
     # Desktop union view (ADR-126 §4): worktree bucket first and writable, project bucket read-only.
     # Bucket names come from `weaver store worktree buckets`, never hand-built.
     if [ "${WTS_DRY_RUN:-0}" = 1 ]; then wb="w-DRY-$slug"; pb="p-DRY"; else
@@ -163,30 +168,75 @@ mount-config)
             || die "cannot resolve bucket names"
     fi
     [[ $wb =~ ^[a-z0-9-]{3,63}$ && $pb =~ ^[a-z0-9-]{3,63}$ ]] || die "unexpected bucket names"
-    cat <<CFG
-# rclone.conf fragment. Credentials come from the environment (RCLONE_S3_*), never from this file.
+    if [ -n "$local_root" ]; then
+        # The daemon's local-directory backend keeps each bucket as <root>/buckets/<bucket>/.
+        [[ $local_root = /* && $local_root != *[[:space:]]* ]] || die "--local wants an absolute path without spaces"
+        remote_type="local"; wt_up="$local_root/buckets/$wb"; pr_up="$local_root/buckets/$pb"
+        wt_remote="wts-$slug-wt"; pr_remote="wts-$slug-pr"
+        upstreams="$wt_remote:$wt_up $pr_remote:$pr_up:ro"
+        remotes="[$wt_remote]
+type = local
+
+[$pr_remote]
+type = local
+"
+    else
+        endpoint=${WEFTOS_STORE_ENDPOINT:-}
+        if [ "$sub" = mount ]; then [ -n "$endpoint" ] || die "set WEFTOS_STORE_ENDPOINT (and RCLONE_S3_ACCESS_KEY_ID / RCLONE_S3_SECRET_ACCESS_KEY), or use --local"; fi
+        [ -n "$endpoint" ] || endpoint="<set WEFTOS_STORE_ENDPOINT>"
+        [[ $endpoint =~ ^https?://[A-Za-z0-9._:/-]+$ || $endpoint = "<set WEFTOS_STORE_ENDPOINT>" ]] || die "unexpected endpoint '$endpoint'"
+        upstreams="wts-$slug-wt:$wb wts-$slug-pr:$pb:ro"
+        remotes="# Credentials come from the environment (RCLONE_S3_*), never from this file.
 [wts-$slug-wt]
 type = s3
 provider = Other
 env_auth = true
-endpoint = \${WEFTOS_STORE_ENDPOINT}
+endpoint = $endpoint
 
 [wts-$slug-pr]
 type = s3
 provider = Other
 env_auth = true
-endpoint = \${WEFTOS_STORE_ENDPOINT}
-
+endpoint = $endpoint
+"
+    fi
+    cfg=$(cat <<CFG
+$remotes
 [wts-$slug]
 type = union
-upstreams = wts-$slug-wt:$wb wts-$slug-pr:$pb:ro
+upstreams = $upstreams
 action_policy = epall
 create_policy = epff
 search_policy = ff
-# Mount with:  rclone mount wts-$slug: ~/mnt/$slug --exclude '.wt/**'
-# Limit: rclone union has no tombstones, so deleting a project-only file through the mount is
-# refused (project is :ro). Delete through the weftos-store client to record a tombstone.
 CFG
+)
+    if [ "$sub" = mount-config ]; then
+        printf '%s\n' "$cfg"
+        cat <<NOTE
+# Mount with:  $0 mount $slug <dir>${local_root:+ --local $local_root}
+#   (rclone mount wts-$slug: <dir> --exclude '.wt/**' --vfs-cache-mode writes --vfs-write-back 1s)
+# Why those flags: .wt/ holds overlay and sharing state, never project files; the write cache is
+# required for normal editors; writes upload after the write-back delay, so unmount waits for it.
+# Limits (checked against rclone 1.75.2): the union has no tombstones, so deleting a project-only
+# file through the mount is refused (the project upstream is :ro); delete through the store client
+# to record a tombstone. Overwriting a project file creates a worktree copy; the project is untouched.
+NOTE
+        exit 0
+    fi
+    command -v rclone >/dev/null 2>&1 || die "rclone not found"
+    [ -d "$dir" ] || die "mount dir '$dir' must exist"
+    conf=$(mktemp "${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/wts-rclone.XXXXXX"); chmod 600 "$conf"
+    printf '%s\n' "$cfg" >"$conf"
+    # Not exec'd or traced: the config may be sensitive on S3 setups. Removed after the daemon starts.
+    RCLONE_CONFIG="$conf" rclone mount "wts-$slug:" "$dir" --exclude '.wt/**' \
+        --vfs-cache-mode writes --vfs-write-back 1s --daemon || { rm -f "$conf"; die "rclone mount failed"; }
+    rm -f "$conf"   # rclone read it at start
+    warn "mounted $dir; unmount with: $0 umount $dir"
+    ;;
+umount)
+    dir=${1:?usage: umount <dir>}
+    sleep 3   # let the write-back cache upload (--vfs-write-back 1s); rclone does not flush on unmount
+    fusermount3 -u "$dir" 2>/dev/null || fusermount -u "$dir" || die "unmount failed"
     ;;
 -h|--help|"") sed -n '2,25p' "$0" ;;
 *) die "unknown command: $cmd" ;;
