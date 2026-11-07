@@ -268,6 +268,7 @@ pub mod mesh_pair;
 /// What this node paired with, by project (resolves weftos:// project names).
 pub mod mesh_pairings;
 /// `weftos://` names (ADR-114).
+pub mod client_store;
 pub mod store_account;
 pub mod weftos_uri;
 /// Pending pair requests, reported in the heartbeat (ADR-108 P2b).

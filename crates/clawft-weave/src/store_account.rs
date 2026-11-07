@@ -284,6 +284,14 @@ impl StoreGate {
         Ok(())
     }
 
+    /// Remove and return the cross-mesh grants past their end, so the caller can drop the
+    /// matching backend grants. Each is returned once.
+    pub fn take_expired(&mut self, now: u64) -> Vec<CrossMeshGrant> {
+        let (gone, keep): (Vec<_>, Vec<_>) = self.xmesh.drain(..).partition(|g| g.expires_at <= now);
+        self.xmesh = keep;
+        gone
+    }
+
     /// Revoke a cross-mesh grant; takes effect on the next [`authorize`](Self::authorize).
     pub fn revoke_xmesh(&mut self, id: [u8; 64]) {
         self.revoked.insert(id);
@@ -300,7 +308,11 @@ impl StoreGate {
     fn decide(&self, who: &Principal, store: &str, want: Access, now: u64) -> &'static str {
         let Ok(name) = WeftosUri::parse(store) else { return "bad_name" };
         // The store must be a project store, on this mesh, held by this instance.
-        if name.kind != Kind::Projects || name.path.as_slice() != ["store"] {
+        let shape = matches!(
+            name.path.iter().map(String::as_str).collect::<Vec<_>>().as_slice(),
+            ["store"] | ["worktrees", _, "store"] | ["releases", _, "store"]
+        );
+        if name.kind != Kind::Projects || !shape {
             return "not_a_project_store";
         }
         let ours = name.authority == self.mesh;
