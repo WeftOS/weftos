@@ -69,34 +69,93 @@ pub fn normalize_key(input: &str) -> Result<String, String> {
     Ok(uri_for(t))
 }
 
-/// Find `agents/catalog.json`: `$WEFTOS_AGENTS_DIR/catalog.json`, else walk up
-/// from `start` looking for `agents/catalog.json`.
-pub fn locate_catalog(start: &Path, env_dir: Option<&str>) -> Source<PathBuf> {
-    if let Some(d) = env_dir.filter(|d| !d.is_empty()) {
-        let p = Path::new(d).join("catalog.json");
-        return if p.is_file() { Ok(p) } else { Err(format!("no catalog at {}", p.display())) };
-    }
-    for dir in start.ancestors() {
-        let p = dir.join("agents").join("catalog.json");
-        if p.is_file() {
-            return Ok(p);
-        }
-    }
-    Err(format!(
-        "no agents/catalog.json at or above {} (set WEFTOS_AGENTS_DIR)",
-        start.display()
-    ))
+/// The declared agents and where they were read from.
+pub struct Declared {
+    /// One row per package, or why they could not be read.
+    pub rows: Source<Vec<Value>>,
+    /// `{origin: "disk"|"embedded", location, commit}`.
+    pub origin: Value,
 }
 
-/// Read the declared agents from a catalog file.
-pub fn load_catalog(path: &Path) -> Source<Vec<Value>> {
-    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let doc: Value =
-        serde_json::from_slice(&bytes).map_err(|e| format!("{}: not valid JSON: {e}", path.display()))?;
-    match doc.get("agents") {
-        Some(Value::Array(a)) => Ok(a.clone()),
-        _ => Err(format!("{}: no \"agents\" array", path.display())),
+fn has_packages(dir: &Path) -> bool {
+    std::fs::read_dir(dir)
+        .map(|rd| rd.flatten().any(|e| e.path().join("weftos-package.yaml").is_file()))
+        .unwrap_or(false)
+}
+
+/// Where the checkout's `agents/` package tree is: `$WEFTOS_AGENTS_DIR` (which
+/// must be usable: a bad value is an error, never a silent fallback), else the
+/// nearest `agents/` at or above `start` that holds a package. `Ok(None)`
+/// means "no checkout here", and the caller uses the embedded tree.
+pub fn locate_agents_dir(start: &Path, env_dir: Option<&str>) -> Source<Option<PathBuf>> {
+    if let Some(d) = env_dir.filter(|d| !d.is_empty()) {
+        let p = PathBuf::from(d);
+        return if has_packages(&p) {
+            Ok(Some(p))
+        } else {
+            Err(format!("WEFTOS_AGENTS_DIR {}: no agent packages (dirs with weftos-package.yaml)", p.display()))
+        };
     }
+    Ok(start
+        .ancestors()
+        .map(|d| d.join("agents"))
+        .find(|a| has_packages(a)))
+}
+
+/// Declared agents from the package tree, through the one loader the repo has
+/// (`weftos::init::source::AgentSource`): the checkout's `agents/` if there is
+/// one, else the tree embedded in this binary.
+pub fn load_declared(start: &Path, env_dir: Option<&str>) -> Declared {
+    use weftos::init::source::AgentSource;
+    let located = locate_agents_dir(start, env_dir);
+    let (src, origin) = match located {
+        Err(e) => return Declared { rows: Err(e), origin: json!({"origin": null}) },
+        Ok(Some(dir)) => match AgentSource::from_dir(&dir) {
+            Ok(s) => {
+                let o = json!({"origin": "disk", "location": dir.display().to_string(), "commit": s.commit});
+                (s, o)
+            }
+            Err(e) => {
+                return Declared {
+                    rows: Err(format!("{}: {e}", dir.display())),
+                    origin: json!({"origin": "disk", "location": dir.display().to_string()}),
+                };
+            }
+        },
+        Ok(None) => {
+            let s = AgentSource::embedded();
+            let o = json!({"origin": "embedded", "location": "built into this binary", "commit": s.commit});
+            (s, o)
+        }
+    };
+    Declared { rows: rows_of(&src), origin }
+}
+
+/// One row per package in the tree (inactive ones included, flagged by
+/// `state`). An empty tree is an error: an embedded tree is empty only when
+/// the binary was built outside the repo.
+pub fn rows_of(src: &weftos::init::source::AgentSource) -> Source<Vec<Value>> {
+    let mut rows = Vec::new();
+    for (path, bytes) in &src.files {
+        let Some(id) = path.strip_suffix("/weftos-package.yaml").filter(|i| !i.contains('/')) else {
+            continue;
+        };
+        let m: serde_yaml::Value = serde_yaml::from_slice(bytes)
+            .map_err(|e| format!("{} ({path}): not valid YAML: {e}", src.origin))?;
+        let field = |k: &str| m.get(k).and_then(serde_yaml::Value::as_str).map(str::to_string);
+        rows.push(json!({
+            "id": id,
+            "version": field("version"),
+            "kind": field("kind"),
+            "trust_tier": field("trust_tier"),
+            "state": field("state").unwrap_or_else(|| "active".into()),
+            "path": format!("agents/{id}"),
+        }));
+    }
+    if rows.is_empty() {
+        return Err(format!("{}: the package tree holds no agents", src.origin));
+    }
+    Ok(rows)
 }
 
 #[derive(Default)]
@@ -111,93 +170,169 @@ fn str_of<'a>(v: &'a Value, k: &str) -> Option<&'a str> {
     v.get(k).and_then(Value::as_str)
 }
 
-/// Join the three sources. Entries are sorted by key.
-pub fn join(
-    declared: &Source<Vec<Value>>,
-    running: &Source<Vec<Value>>,
-    exposed: &Source<Value>,
-) -> Value {
-    let mut map: BTreeMap<String, Acc> = BTreeMap::new();
+/// One node's agents and exposures. `node` is `None` for the local-only view
+/// (rows then carry no node field).
+pub struct NodeInput {
+    pub node: Option<String>,
+    pub running: Source<Vec<Value>>,
+    pub exposed: Source<Value>,
+}
 
-    if let Ok(rows) = declared {
+impl NodeInput {
+    /// Build from one block of the daemon's `agent.sources` answer. A block
+    /// with `ok: false` makes both of its sources unreadable.
+    pub fn from_block(b: &Value) -> Self {
+        let node = b.get("node_id").and_then(Value::as_str).map(str::to_string);
+        if b.get("ok").and_then(Value::as_bool) != Some(true) {
+            let e = b.get("error").and_then(Value::as_str).unwrap_or("no answer").to_string();
+            return Self { node, running: Err(e.clone()), exposed: Err(e) };
+        }
+        let running = match b.get("agents") {
+            Some(Value::Array(a)) => Ok(a.clone()),
+            _ => Err("answer has no agents array".to_string()),
+        };
+        let exposed = match b.get("exposures") {
+            Some(d) if d.is_object() => Ok(d.clone()),
+            _ => Err(b
+                .get("exposures_error")
+                .and_then(Value::as_str)
+                .unwrap_or("answer has no exposures")
+                .to_string()),
+        };
+        Self { node, running, exposed }
+    }
+}
+
+fn node_label(n: &Option<String>) -> &str {
+    n.as_deref().unwrap_or("local")
+}
+
+fn tag(mut row: Value, node: &Option<String>) -> Value {
+    if let Some(n) = node {
+        row["node"] = json!(n);
+    }
+    row
+}
+
+/// The agent key an exposure row belongs to: its explicit `agent` field
+/// (ADR-120), else, for older exposures without one, `harness.<id>` of a
+/// harness exposure. `Ok(None)`: not an agent exposure. `Err`: a malformed
+/// `agent` field (reported in `warnings`, never joined by guesswork).
+fn exposure_agent(r: &Value) -> Result<Option<(String, &'static str)>, String> {
+    match r.get("agent") {
+        Some(Value::String(a)) => return normalize_key(a).map(|k| Some((k, "field"))),
+        Some(Value::Null) | None => {}
+        Some(other) => return Err(format!("agent must be a string, got {other}")),
+    }
+    let id = str_of(r, "id").unwrap_or_default();
+    if str_of(r, "kind") == Some("harness")
+        && let Some(a) = id.strip_prefix(HARNESS_PREFIX).filter(|s| !s.is_empty())
+    {
+        return Ok(Some((uri_for(a), "harness-id-fallback")));
+    }
+    Ok(None)
+}
+
+/// Join declared agents with every node's running and exposed rows. Entries
+/// are sorted by key.
+pub fn join(declared: &Declared, nodes: &[NodeInput]) -> Value {
+    let mut map: BTreeMap<String, Acc> = BTreeMap::new();
+    let mut warnings: Vec<String> = Vec::new();
+
+    if let Ok(rows) = &declared.rows {
         for r in rows {
             let Some(id) = str_of(r, "id") else { continue };
             let a = map.entry(uri_for(id)).or_default();
             a.name = Some(id.to_string());
-            a.declared = Some(json!({
-                "id": id,
-                "version": r.get("version"),
-                "kind": r.get("kind"),
-                "role": r.get("role"),
-                "trust_tier": r.get("trust_tier"),
-                "state": r.get("state"),
-                "digest": r.get("digest"),
-                "path": r.get("path"),
-            }));
+            a.declared = Some(r.clone());
         }
     }
-    if let Ok(rows) = running {
-        for r in rows {
-            let Some(id) = str_of(r, "agent_id") else { continue };
-            let a = map.entry(uri_for(id)).or_default();
-            a.name.get_or_insert_with(|| id.to_string());
-            a.running.push(json!({
-                "pid": r.get("pid"),
-                "state": r.get("state"),
-                "parent_pid": r.get("parent_pid"),
-            }));
-        }
-    }
-    if let Ok(doc) = exposed {
-        let rows = doc.get("exposures").and_then(Value::as_array).cloned().unwrap_or_default();
-        for r in rows {
-            if str_of(&r, "kind") != Some("harness") {
-                continue;
+    for n in nodes {
+        if let Ok(rows) = &n.running {
+            for r in rows {
+                let Some(id) = str_of(r, "agent_id") else { continue };
+                let a = map.entry(uri_for(id)).or_default();
+                a.name.get_or_insert_with(|| id.to_string());
+                a.running.push(tag(
+                    json!({"pid": r.get("pid"), "state": r.get("state"), "parent_pid": r.get("parent_pid")}),
+                    &n.node,
+                ));
             }
-            let Some(eid) = str_of(&r, "id") else { continue };
-            let Some(agent) = eid.strip_prefix(HARNESS_PREFIX).filter(|s| !s.is_empty()) else {
-                continue;
-            };
-            let a = map.entry(uri_for(agent)).or_default();
-            a.name.get_or_insert_with(|| agent.to_string());
-            a.exposed.push(json!({
-                "exposure_id": eid,
-                "state": r.get("state"),
-                "audience": r.get("audience"),
-                "announced": r.get("announced"),
-                "served": r.get("served"),
-                "refused": r.get("refused"),
-            }));
+        }
+        if let Ok(doc) = &n.exposed {
+            let rows = doc.get("exposures").and_then(Value::as_array).cloned().unwrap_or_default();
+            for r in rows {
+                let (key, how) = match exposure_agent(&r) {
+                    Ok(Some(k)) => k,
+                    Ok(None) => continue,
+                    Err(e) => {
+                        warnings.push(format!(
+                            "exposure {} on {}: {e}",
+                            str_of(&r, "id").unwrap_or("?"),
+                            node_label(&n.node)
+                        ));
+                        continue;
+                    }
+                };
+                let a = map.entry(key.clone()).or_default();
+                a.name.get_or_insert_with(|| key.trim_start_matches(URI_PREFIX).to_string());
+                a.exposed.push(tag(
+                    json!({
+                        "exposure_id": r.get("id"),
+                        "linked_by": how,
+                        "state": r.get("state"),
+                        "audience": r.get("audience"),
+                        "announced": r.get("announced"),
+                        "served": r.get("served"),
+                        "refused": r.get("refused"),
+                    }),
+                    &n.node,
+                ));
+            }
         }
     }
 
-    let running_known = running.is_ok();
+    let unreadable: Vec<&Option<String>> = nodes.iter().filter(|n| n.running.is_err()).map(|n| &n.node).collect();
     let agents: Vec<Value> = map
         .into_iter()
-        .map(|(key, a)| entry(key, a, declared.is_ok(), running_known))
+        .map(|(key, a)| entry(key, a, declared.rows.is_ok(), &unreadable))
         .collect();
 
-    let src = |label: &str, s: Result<usize, &String>| match s {
-        Ok(n) => json!({ "source": label, "ok": true, "count": n }),
-        Err(e) => json!({ "source": label, "ok": false, "error": e }),
+    let counted = |s: Result<usize, &String>| match s {
+        Ok(n) => json!({"ok": true, "count": n}),
+        Err(e) => json!({"ok": false, "error": e}),
     };
-    let exposed_n = exposed.as_ref().map(|d| {
-        d.get("exposures")
-            .and_then(Value::as_array)
-            .map_or(0, |a| a.iter().filter(|r| str_of(r, "kind") == Some("harness")).count())
-    });
+    let node_sources: Vec<Value> = nodes
+        .iter()
+        .map(|n| {
+            let exposed_n = n.exposed.as_ref().map(|d| {
+                d.get("exposures").and_then(Value::as_array).map_or(0, |a| {
+                    a.iter().filter(|r| matches!(exposure_agent(r), Ok(Some(_)))).count()
+                })
+            });
+            json!({
+                "node": n.node,
+                "ok": n.running.is_ok() && n.exposed.is_ok(),
+                "running": counted(n.running.as_ref().map(Vec::len)),
+                "exposed": counted(exposed_n),
+            })
+        })
+        .collect();
+    let mut declared_src = counted(declared.rows.as_ref().map(Vec::len));
+    if let (Some(o), Some(d)) = (declared.origin.as_object(), declared_src.as_object_mut()) {
+        for (k, v) in o {
+            d.insert(k.clone(), v.clone());
+        }
+    }
     json!({
         "count": agents.len(),
         "agents": agents,
-        "sources": {
-            "declared": src("declared", declared.as_ref().map(Vec::len)),
-            "running": src("running", running.as_ref().map(Vec::len)),
-            "exposed": src("exposed", exposed_n),
-        },
+        "warnings": warnings,
+        "sources": { "declared": declared_src, "nodes": node_sources },
     })
 }
 
-fn entry(key: String, a: Acc, declared_ok: bool, running_ok: bool) -> Value {
+fn entry(key: String, a: Acc, declared_ok: bool, unreadable: &[&Option<String>]) -> Value {
     let mut from = Vec::new();
     if a.declared.is_some() {
         from.push("declared");
@@ -209,25 +344,34 @@ fn entry(key: String, a: Acc, declared_ok: bool, running_ok: bool) -> Value {
         from.push("exposed");
     }
     let inactive = a.declared.as_ref().and_then(|d| str_of(d, "state")) == Some("inactive");
-    let exposed_live = a.exposed.iter().any(|e| e.get("state").and_then(Value::as_str) == Some("on"));
+    let on_node = |rows: &[Value], node: Option<&str>| rows.iter().any(|r| str_of(r, "node") == node);
+    let dark: Vec<&str> = unreadable.iter().map(|n| node_label(n)).collect();
 
-    let mut notes: Vec<&str> = Vec::new();
+    let mut notes: Vec<String> = Vec::new();
     if declared_ok && a.declared.is_none() {
-        notes.push("undeclared: not in the catalog");
+        notes.push("undeclared: not in the package tree".into());
     }
     if !a.running.is_empty() && inactive {
-        notes.push("inactive_but_running: catalog says inactive");
+        notes.push("inactive_but_running: the package says inactive".into());
     }
-    if running_ok && a.running.is_empty() && exposed_live {
-        notes.push("exposed_not_running: exposure is on but no instance is running");
+    for e in a.exposed.iter().filter(|e| str_of(e, "state") == Some("on")) {
+        let node = str_of(e, "node");
+        let node_readable = !dark.contains(&node.unwrap_or("local"));
+        if node_readable && !on_node(&a.running, node) {
+            notes.push(format!(
+                "exposed_not_running: {} is on at {} but no instance runs there",
+                str_of(e, "exposure_id").unwrap_or("?"),
+                node.unwrap_or("local")
+            ));
+        }
     }
-    if !running_ok {
-        notes.push("running_unknown: agent.list could not be read");
+    if !dark.is_empty() {
+        notes.push(format!("running_unknown: could not read agents from {}", dark.join(", ")));
     }
 
     let status = if !a.running.is_empty() {
         "running"
-    } else if !running_ok {
+    } else if !dark.is_empty() {
         "unknown"
     } else if !a.exposed.is_empty() {
         "stopped"
@@ -267,14 +411,28 @@ pub fn get(dir: &Value, key: &str) -> Result<Value, String> {
 mod tests {
     use super::*;
 
-    fn cat(rows: &[(&str, &str)]) -> Source<Vec<Value>> {
-        Ok(rows.iter().map(|(i, s)| json!({"id": i, "version": "1", "state": s})).collect())
+    fn decl(rows: &[(&str, &str)]) -> Declared {
+        Declared {
+            rows: Ok(rows.iter().map(|(i, s)| json!({"id": i, "version": "1", "state": s})).collect()),
+            origin: json!({"origin": "disk", "location": "t"}),
+        }
     }
     fn run(rows: &[(u64, &str)]) -> Source<Vec<Value>> {
         Ok(rows.iter().map(|(p, i)| json!({"pid": p, "agent_id": i, "state": "running"})).collect())
     }
-    fn exp(rows: &[(&str, &str, &str)]) -> Source<Value> {
-        Ok(json!({"exposures": rows.iter().map(|(id, kind, st)| json!({"id": id, "kind": kind, "state": st})).collect::<Vec<_>>()}))
+    /// (exposure id, kind, state, agent field)
+    fn exp(rows: &[(&str, &str, &str, Option<&str>)]) -> Source<Value> {
+        Ok(json!({"exposures": rows.iter().map(|(id, kind, st, ag)| {
+            let mut v = json!({"id": id, "kind": kind, "state": st});
+            if let Some(a) = ag { v["agent"] = json!(a); }
+            v
+        }).collect::<Vec<_>>()}))
+    }
+    fn local(running: Source<Vec<Value>>, exposed: Source<Value>) -> Vec<NodeInput> {
+        vec![NodeInput { node: None, running, exposed }]
+    }
+    fn node(n: &str, running: Source<Vec<Value>>, exposed: Source<Value>) -> NodeInput {
+        NodeInput { node: Some(n.into()), running, exposed }
     }
     fn find<'a>(d: &'a Value, id: &str) -> &'a Value {
         d["agents"].as_array().unwrap().iter().find(|e| e["id"] == uri_for(id).as_str()).unwrap()
@@ -282,10 +440,9 @@ mod tests {
 
     #[test]
     fn same_entry_before_and_after_restart() {
-        let c = cat(&[("developer", "active")]);
-        let e = exp(&[]);
-        let before = join(&c, &run(&[(10, "developer")]), &e);
-        let after = join(&c, &run(&[(3, "developer")]), &e);
+        let c = decl(&[("developer", "active")]);
+        let before = join(&c, &local(run(&[(10, "developer")]), exp(&[])));
+        let after = join(&c, &local(run(&[(3, "developer")]), exp(&[])));
         assert_eq!(find(&before, "developer")["id"], find(&after, "developer")["id"]);
         assert_eq!(find(&before, "developer")["id"], "weftos://agent/developer");
         assert_eq!(find(&after, "developer")["running"][0]["pid"], 3);
@@ -293,7 +450,7 @@ mod tests {
 
     #[test]
     fn declared_not_running() {
-        let d = join(&cat(&[("a", "active"), ("b", "inactive")]), &run(&[]), &exp(&[]));
+        let d = join(&decl(&[("a", "active"), ("b", "inactive")]), &local(run(&[]), exp(&[])));
         assert_eq!(find(&d, "a")["status"], "declared");
         assert_eq!(find(&d, "b")["status"], "inactive");
         assert_eq!(find(&d, "a")["from"], json!(["declared"]));
@@ -301,7 +458,7 @@ mod tests {
 
     #[test]
     fn running_but_undeclared_is_flagged() {
-        let d = join(&cat(&[]), &run(&[(1, "stray"), (2, "stray")]), &exp(&[]));
+        let d = join(&decl(&[]), &local(run(&[(1, "stray"), (2, "stray")]), exp(&[])));
         let e = find(&d, "stray");
         assert_eq!(e["status"], "running");
         assert_eq!(e["running"].as_array().unwrap().len(), 2);
@@ -309,36 +466,118 @@ mod tests {
     }
 
     #[test]
-    fn exposed_but_stopped() {
-        let d = join(&cat(&[("runner", "active")]), &run(&[]), &exp(&[("harness.runner", "harness", "on")]));
+    fn exposure_joins_on_its_agent_field() {
+        let rows = [("harness.team-run", "harness", "on", Some("weftos://agent/runner"))];
+        let d = join(&decl(&[("runner", "active")]), &local(run(&[]), exp(&rows)));
         let e = find(&d, "runner");
         assert_eq!(e["status"], "stopped");
         assert_eq!(e["from"], json!(["declared", "exposed"]));
+        assert_eq!(e["exposed"][0]["linked_by"], "field");
         assert!(e["notes"].to_string().contains("exposed_not_running"));
+        assert!(d["agents"].as_array().unwrap().iter().all(|a| a["id"] != "weftos://agent/team-run"));
     }
 
     #[test]
-    fn non_harness_exposures_are_ignored() {
-        let d = join(&cat(&[]), &run(&[]), &exp(&[("infer.chat", "inference", "on"), ("harness.x", "harness", "off")]));
+    fn the_field_wins_over_the_harness_id() {
+        let rows = [("harness.other", "harness", "on", Some("runner"))];
+        let d = join(&decl(&[("runner", "active")]), &local(run(&[]), exp(&rows)));
         assert_eq!(d["count"], 1);
-        assert_eq!(d["sources"]["exposed"]["count"], 1);
+        assert_eq!(find(&d, "runner")["exposed"][0]["exposure_id"], "harness.other");
     }
 
     #[test]
-    fn unreadable_source_is_named_and_status_is_unknown() {
-        let d = join(&cat(&[("a", "active")]), &Err("daemon down".into()), &exp(&[]));
-        assert_eq!(d["sources"]["running"]["ok"], false);
-        assert_eq!(d["sources"]["running"]["error"], "daemon down");
+    fn older_harness_exposures_fall_back_to_the_id_and_say_so() {
+        let rows = [("harness.runner", "harness", "off", None)];
+        let d = join(&decl(&[("runner", "active")]), &local(run(&[]), exp(&rows)));
+        assert_eq!(find(&d, "runner")["exposed"][0]["linked_by"], "harness-id-fallback");
+        assert_eq!(find(&d, "runner")["status"], "stopped");
+    }
+
+    #[test]
+    fn nothing_else_links_an_exposure_to_an_agent() {
+        let rows = [("infer.chat", "inference", "on", None), ("tts.x", "tts", "on", None), ("cog.runner.api", "cog-api", "on", None)];
+        let d = join(&decl(&[("runner", "active")]), &local(run(&[]), exp(&rows)));
+        assert_eq!(find(&d, "runner")["exposed"], json!([]));
+        assert_eq!(d["count"], 1);
+    }
+
+    #[test]
+    fn a_malformed_agent_field_is_a_warning_not_a_join() {
+        let rows = [("harness.x", "harness", "on", Some("a/b"))];
+        let d = join(&decl(&[]), &local(run(&[]), exp(&rows)));
+        assert_eq!(d["count"], 0, "no fallback to harness.x when the field is present but bad");
+        assert!(d["warnings"][0].as_str().unwrap().contains("harness.x"));
+    }
+
+    #[test]
+    fn unreadable_local_source_is_named_and_status_is_unknown() {
+        let d = join(&decl(&[("a", "active")]), &local(Err("daemon down".into()), exp(&[])));
+        assert_eq!(d["sources"]["nodes"][0]["ok"], false);
+        assert_eq!(d["sources"]["nodes"][0]["running"]["error"], "daemon down");
         assert_eq!(find(&d, "a")["status"], "unknown");
-        let d = join(&Err("no catalog".into()), &run(&[(1, "a")]), &exp(&[]));
+        let nod = Declared { rows: Err("no tree".into()), origin: json!({"origin": null}) };
+        let d = join(&nod, &local(run(&[(1, "a")]), exp(&[])));
         assert_eq!(d["sources"]["declared"]["ok"], false);
         assert_eq!(find(&d, "a")["status"], "running");
         assert!(!find(&d, "a")["notes"].to_string().contains("undeclared"));
     }
 
     #[test]
+    fn mesh_instances_carry_their_node_under_one_key() {
+        let nodes = vec![
+            node("n1", run(&[(5, "developer")]), exp(&[])),
+            node("n2", run(&[(9, "developer")]), exp(&[("harness.d", "harness", "on", Some("developer"))])),
+        ];
+        let d = join(&decl(&[("developer", "active")]), &nodes);
+        assert_eq!(d["count"], 1);
+        let e = find(&d, "developer");
+        assert_eq!(e["running"].as_array().unwrap().len(), 2);
+        assert_eq!(e["running"][0]["node"], "n1");
+        assert_eq!(e["running"][1]["node"], "n2");
+        assert_eq!(e["exposed"][0]["node"], "n2");
+        assert!(e["notes"].as_array().unwrap().is_empty(), "exposed at n2 where an instance runs");
+    }
+
+    #[test]
+    fn exposure_on_a_node_without_an_instance_there_is_flagged() {
+        let nodes = vec![
+            node("n1", run(&[(5, "developer")]), exp(&[])),
+            node("n2", run(&[]), exp(&[("harness.d", "harness", "on", Some("developer"))])),
+        ];
+        let d = join(&decl(&[("developer", "active")]), &nodes);
+        assert!(find(&d, "developer")["notes"].to_string().contains("exposed_not_running"));
+        assert_eq!(find(&d, "developer")["status"], "running");
+    }
+
+    #[test]
+    fn an_unreachable_peer_is_named_and_does_not_fail_the_list() {
+        let nodes = vec![
+            node("n1", run(&[(5, "developer")]), exp(&[])),
+            NodeInput::from_block(&json!({"node_id": "n2", "ok": false, "error": "timed out"})),
+        ];
+        let d = join(&decl(&[("developer", "active"), ("steward", "active")]), &nodes);
+        assert_eq!(d["sources"]["nodes"][1]["node"], "n2");
+        assert_eq!(d["sources"]["nodes"][1]["ok"], false);
+        assert_eq!(d["sources"]["nodes"][1]["running"]["error"], "timed out");
+        assert_eq!(find(&d, "developer")["status"], "running");
+        // Not running anywhere we could see, but n2 is dark: unknown, not "declared".
+        assert_eq!(find(&d, "steward")["status"], "unknown");
+        assert!(find(&d, "steward")["notes"].to_string().contains("n2"));
+    }
+
+    #[test]
+    fn from_block_reads_a_good_answer_and_refuses_a_bad_one() {
+        let ok = NodeInput::from_block(&json!({"node_id": "n1", "ok": true, "agents": [], "exposures": {"exposures": []}}));
+        assert!(ok.running.is_ok() && ok.exposed.is_ok());
+        let no_reg = NodeInput::from_block(&json!({"node_id": "n1", "ok": true, "agents": [], "exposures": null, "exposures_error": "registry down"}));
+        assert_eq!(no_reg.exposed.unwrap_err(), "registry down");
+        let bad = NodeInput::from_block(&json!({"node_id": "n1", "ok": true}));
+        assert!(bad.running.is_err());
+    }
+
+    #[test]
     fn odd_running_ids_are_encoded() {
-        let d = join(&cat(&[]), &run(&[(1, "a b/c")]), &exp(&[]));
+        let d = join(&decl(&[]), &local(run(&[(1, "a b/c")]), exp(&[])));
         assert_eq!(d["agents"][0]["id"], "weftos://agent/a%20b%2Fc");
         assert!(get(&d, "a b/c").is_err(), "a bare id with a slash is malformed");
         assert!(get(&d, "weftos://agent/a%20b%2Fc").is_ok());
@@ -346,45 +585,70 @@ mod tests {
 
     #[test]
     fn get_accepts_bare_and_uri_and_refuses_bad_input() {
-        let d = join(&cat(&[("a", "active")]), &run(&[]), &exp(&[]));
+        let d = join(&decl(&[("a", "active")]), &local(run(&[]), exp(&[])));
         assert_eq!(get(&d, "a").unwrap()["id"], "weftos://agent/a");
         assert_eq!(get(&d, "weftos://agent/a").unwrap()["id"], "weftos://agent/a");
-        assert!(get(&d, "a").unwrap()["sources"]["declared"]["ok"].as_bool().unwrap());
+        assert_eq!(get(&d, "a").unwrap()["sources"]["declared"]["ok"], true);
         for bad in ["", "  ", "http://x/a", "weftos://mesh.bot.x", "weftos://agent/", "weftos://agent/a/b"] {
             assert!(get(&d, bad).is_err(), "{bad:?} must be refused");
         }
         assert!(get(&d, "missing").unwrap_err().contains("no agent"));
     }
 
-    #[test]
-    fn catalog_loader_refuses_instead_of_returning_empty() {
-        let t = tempfile::tempdir().unwrap();
-        assert!(locate_catalog(t.path(), None).is_err());
-        let p = t.path().join("catalog.json");
-        std::fs::write(&p, "{").unwrap();
-        assert!(load_catalog(&p).unwrap_err().contains("not valid JSON"));
-        std::fs::write(&p, "{\"teams\":[]}").unwrap();
-        assert!(load_catalog(&p).unwrap_err().contains("agents"));
-        std::fs::write(&p, "{\"agents\":[{\"id\":\"x\"}]}").unwrap();
-        assert_eq!(load_catalog(&p).unwrap().len(), 1);
-        let found = locate_catalog(t.path(), Some(t.path().to_str().unwrap())).unwrap();
-        assert_eq!(found, p);
+    fn write_pkg(root: &Path, id: &str, state: Option<&str>) {
+        let d = root.join(id);
+        std::fs::create_dir_all(&d).unwrap();
+        let st = state.map(|s| format!("state: {s}\n")).unwrap_or_default();
+        std::fs::write(d.join("weftos-package.yaml"), format!("name: {id}\nkind: lane\nversion: 1.2.3\n{st}")).unwrap();
     }
 
     #[test]
-    fn locate_walks_up() {
+    fn declared_comes_from_the_package_tree_on_disk() {
         let t = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(t.path().join("agents")).unwrap();
-        std::fs::write(t.path().join("agents/catalog.json"), "{}").unwrap();
+        let agents = t.path().join("agents");
+        write_pkg(&agents, "alpha", None);
+        write_pkg(&agents, "beta", Some("inactive"));
         let deep = t.path().join("a/b");
         std::fs::create_dir_all(&deep).unwrap();
-        assert!(locate_catalog(&deep, None).is_ok());
+        let d = load_declared(&deep, None);
+        let rows = d.rows.unwrap();
+        assert_eq!(rows.len(), 2);
+        let alpha = rows.iter().find(|r| r["id"] == "alpha").unwrap();
+        assert_eq!(alpha["state"], "active");
+        assert_eq!(alpha["kind"], "lane");
+        assert_eq!(rows.iter().find(|r| r["id"] == "beta").unwrap()["state"], "inactive");
+        assert_eq!(d.origin["origin"], "disk");
+        assert!(d.origin["location"].as_str().unwrap().ends_with("agents"));
     }
 
     #[test]
-    fn real_catalog_loads() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../agents/catalog.json");
-        let rows = load_catalog(&root).unwrap();
-        assert!(rows.iter().any(|r| r["id"] == "developer"));
+    fn env_dir_is_used_and_a_bad_one_is_an_error_not_a_fallback() {
+        let t = tempfile::tempdir().unwrap();
+        write_pkg(t.path(), "gamma", None);
+        let ok = load_declared(Path::new("/"), Some(t.path().to_str().unwrap()));
+        assert_eq!(ok.rows.unwrap()[0]["id"], "gamma");
+        let empty = tempfile::tempdir().unwrap();
+        let bad = load_declared(t.path(), Some(empty.path().to_str().unwrap()));
+        assert!(bad.rows.unwrap_err().contains("WEFTOS_AGENTS_DIR"));
+        assert!(bad.origin["origin"].is_null(), "no silent switch to embedded");
+    }
+
+    #[test]
+    fn outside_a_checkout_the_embedded_tree_is_used() {
+        let t = tempfile::tempdir().unwrap();
+        assert_eq!(locate_agents_dir(t.path(), None).unwrap(), None);
+        let d = load_declared(t.path(), None);
+        assert_eq!(d.origin["origin"], "embedded");
+        let rows = d.rows.unwrap();
+        assert!(rows.iter().any(|r| r["id"] == "developer"), "embedded tree is the repo's agents/");
+    }
+
+    #[test]
+    fn broken_package_yaml_is_an_error() {
+        let t = tempfile::tempdir().unwrap();
+        let d = t.path().join("bad");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("weftos-package.yaml"), "name: [unclosed").unwrap();
+        assert!(load_declared(Path::new("/"), Some(t.path().to_str().unwrap())).rows.unwrap_err().contains("not valid YAML"));
     }
 }

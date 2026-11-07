@@ -1,75 +1,78 @@
 # Agent directory: design note
 
-- **Status**: Built on `feat/agent-directory`, 2026-11-07. Card c3d1051d.
+- **Status**: Built on `feat/agent-directory`, 2026-11-07 (follow-up the same day). Card c3d1051d.
 - **Surface**: MCP `control` profile tools `agent_list` and `agent_get` (attach mode).
-- **Code**: `crates/clawft-cli/src/commands/agent_directory.rs` (join), `mcp_attach.rs` (tools).
+- **Code**: `crates/clawft-cli/src/commands/agent_directory.rs` (join), `mcp_attach.rs` (tools),
+  `crates/clawft-weave/src/agent_sources_rpc.rs` (`agent.sources`, mesh fetch).
 
 ## Identity
 
-An agent's key is `weftos://agent/<id>`. `<id>` is the definition id: the `id` in
-`agents/catalog.json` for a declared agent, the `agent_id` string for a running one (the
-supervisor table stores the name the agent was spawned under, which is the definition id by
-convention), and the part after `harness.` for an exposure (`harness.<id>`, ADR-120 section 3).
-Anything outside `[A-Za-z0-9._-]` is percent-encoded. The key holds no pid, node or boot
-number, so a daemon restart gives the same entry; a pid is only an attribute of a running
-instance (`running[].pid`).
+An agent's key is `weftos://agent/<id>`. `<id>` is the package directory name for a declared
+agent, the `agent_id` string for a running one (the name it was spawned under, which is the
+definition id by convention), and the exposure's `agent` field for an exposed one. Characters
+outside `[A-Za-z0-9._-]` are percent-encoded. The key holds no pid, node or boot number, so a
+daemon restart gives the same entry; a pid is an attribute of a running instance.
 
-Not used as keys: `agent_id` UUIDs from `AgentRegistry` (restart-reset), pids, and key
-material. Keying on name plus pubkey (research 08) would need per-agent keys on every source;
-declared and exposed agents have none, so the pubkey stays an attribute for a later phase.
+Not keys: `AgentRegistry` UUIDs (restart-reset), pids, key material. Per-agent pubkeys stay an
+attribute for a later phase: declared and exposed agents have none.
 
-## The join
+## Mesh: no node qualifier on the key
 
-Three sources, one entry per key:
+Decision: one key per definition, with an instance list. In a mesh view every `running[]` and
+`exposed[]` row carries `node`; the key stays `weftos://agent/<id>`. Reasons: the directory
+answers "what is this agent and where does it run", so a per-node key would split one agent
+into N entries and `agent_get developer` would need a node first; a restart or a move to
+another node keeps the entry; and a durable placed bot already has its own node-bound name
+(`weftos://mesh.bot.*`, on the unmerged `feat/mesh-bots-phase-a`, joined by its `definition`).
+Cost: a caller wanting one node reads `node` on the rows. Local-only views carry no `node`.
+
+## Sources and the join
 
 | Source | Read from | Contributes |
 |---|---|---|
-| declared | `agents/catalog.json` (found at or above the cwd, or `$WEFTOS_AGENTS_DIR`) | version, kind, role, trust tier, state, digest |
-| running | weave `agent.list` | one `running[]` row per instance (pid, state, parent) |
-| exposed | weave `expose.list`, rows of kind `harness` | `exposed[]`: exposure id, state, audience, served or refused |
+| declared | the `agents/` package tree through `weftos::init::source::AgentSource` | version, kind, trust tier, `state` (`inactive` kept) |
+| running | `agent.list` per node | one `running[]` row per instance |
+| exposed | `expose.list` per node | `exposed[]` rows that name an agent |
 
-Each entry has `status`, `from` (which sources it appears in), the three blocks, and `notes`.
-`agent_get` takes the bare id or the URI and adds the `sources` health block.
+Declared comes from the checkout's `agents/` (nearest at or above the cwd with a package, or
+`$WEFTOS_AGENTS_DIR`, which must be usable: a bad value is an error, never a fallback). With
+no checkout the tree embedded in the binary is used. `sources.declared.origin` says `disk` or
+`embedded` (plus `location`, `commit`). Declared is local only; peers' trees are not read.
 
-The join runs in the MCP server (the client side of the daemon socket): it adds no daemon RPC.
-`weftos::init::AgentSource` is the build-time loader for packages, but `clawft-cli` does not
-depend on the `weftos` crate; the directory reads the generated catalog directly rather than
-add a dependency.
+Exposure to agent: an exposure's `agent` field (ADR-120, updated 2026-11-07) is the only
+link, plus a fallback for older exposures: a `harness` exposure `harness.<id>` links to
+`<id>`, marked `linked_by: harness-id-fallback`. A malformed `agent` field is a `warnings`
+entry; the fallback is not tried when the field is present.
+
+Each entry: `status`, `from`, `declared`, `running`, `exposed`, `notes`. `agent_get` (bare id
+or URI) adds `sources`. Both take `mesh` (default false: this node only).
+
+## Mesh fetch
+
+`agent_list {mesh:true}` calls the daemon RPC `agent.sources {mesh:true}` (Admin: it contacts
+peers). The daemon returns this node's block, then asks each known peer for the read-only
+node-admin method `agent.sources` on the signed `workload.ctl` wire (same wire and controller-key
+rule as `dashboard.status` and the bot directory). A read-only method needs a peer at tier
+`paired` or above; the peer must list this node's key as a controller. A peer that does not
+answer is a block `{node_id, ok:false, error}`, shown in `sources.nodes[]` with its error; it
+fails nothing and nothing is shown for it from memory. If the whole mesh call cannot be made
+(older daemon, no Admin) the tool errors instead of answering with the local view.
 
 ## When sources disagree
 
 | Case | `status` | `notes` |
 |---|---|---|
-| declared, nothing running or exposed | `declared` (`inactive` if the catalog says so) | none |
-| declared and running | `running` | none |
-| running, not in the catalog | `running` | `undeclared` |
-| declared `inactive` but running | `running` | `inactive_but_running` |
-| exposure on, no instance running | `stopped` | `exposed_not_running` |
-| exposure off or paused, nothing running | `stopped` | none (the exposure block says why) |
-| exposed under `harness.<x>`, `<x>` not in the catalog | `stopped` or `running` | `undeclared` |
+| declared, nothing running or exposed | `declared` (`inactive` if the package says so) | none |
+| running (any node) | `running` | `undeclared` if not in the tree; `inactive_but_running` |
+| exposure on at a node with no instance there | `running` or `stopped` | `exposed_not_running` |
+| exposure off or paused, nothing running | `stopped` | none |
+| nothing running seen, but a node was unreadable | `unknown` | `running_unknown`, naming the nodes |
 
-Several instances of one id are one entry with several `running[]` rows.
+If every source fails the tool errors, never an empty list.
 
-## When a source is unreadable
+## Open
 
-`sources.<name>` is `{ok: false, error}`; it is never an empty list. Entries that depend on the
-missing source say so: if `agent.list` fails, every entry without a running row has status
-`unknown` and the note `running_unknown`. If all three sources fail the tool returns an
-error, not an empty directory. A missing `expose.list` (older daemon) shows as an exposed
-source error.
-
-## Relation to mesh bots
-
-`feat/mesh-bots-phase-a` (unmerged) names bots `weftos://mesh.bot.*` with a per-bot Ed25519
-key, and its `BotRecord` carries a `definition` and version. A bot is a placed instance of a
-definition, so the two do not collide: `weftos://agent/<definition>` is the template-and-
-instances view here, `weftos://mesh.bot.<name>` is one durable bot. The join key between them
-is the bot's `definition`. A shared type is worth it only for the state vocabulary
-(`running|idle|dead`) and is left until that branch merges.
-
-## Not done
-
-- The directory is per daemon. A mesh-wide view needs peers' `agent.list` and `expose.list`
-  over the signed wire (the bot directory's `mesh:true` pattern).
-- Exposure to agent mapping is by the `harness.<id>` naming convention; ADR-120 does not yet
-  say which agent a harness exposure runs.
+- A spawn name that differs from the definition id shows as undeclared (accepted for now).
+- `agent.sources` and the bot directory both list peers; `directory_peer_ids` in
+  `workload_place_rpc.rs` duplicates `peer_node_ids` on the mesh-bots branch. Keep one when
+  they merge. The two also both extend `workload_ctl::msg::method::NODE_ADMIN`.

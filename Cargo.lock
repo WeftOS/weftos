@@ -1326,6 +1326,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "weftos",
  "weftos-cos",
  "which",
 ]
