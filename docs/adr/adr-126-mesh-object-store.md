@@ -10,6 +10,8 @@
 - **Updated**: 2026-11-07 (card b76c74a7: live STS minter and chain-fed grant ledger added to `weftos-edge-creds`, still tested against a mock store)
 - **Updated**: 2026-11-07 (S3 implemented in `crates/weftos-edge-creds` against a mock store; see "S3 results". The ADR stays Proposed: S1, S2, S4, S5 are not landed)
 - **Updated**: 2026-11-07 (S5 gate and per-account instance spec in `crates/clawft-weave/src/store_account.rs`; wiring to `weftos-store` waits on S1)
+- **Updated**: 2026-11-07 (S5 gate and per-account instance spec in `crates/clawft-weave/src/store_account.rs`; `client_store.rs` puts the gate in front of S1's `StoreService`, tested on local directories, not yet on RustFS)
+- **Updated**: 2026-11-07 (S1 built on `feat/adr126-s1`: `weftos-store` crate, `weaver store`, daemon wiring, local-directory backend; no RustFS backend or S3 transport yet, see "S1 status")
 - **Deciders**: owner
 - **Research**: `docs/research/rclone-shared-filesystem-2026-10-29.md` (rclone, RustFS,
   OpenDAL, governance gaps). Board card `3605565e`.
