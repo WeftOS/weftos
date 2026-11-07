@@ -13,6 +13,7 @@ use async_trait::async_trait;
 use clawft_rpc::resolve::Resolution;
 use clawft_rpc::{DaemonClient, Request};
 
+use super::agent_directory;
 use super::daemon_conn::{Outcome, outcome, outcome_for};
 use clawft_services::mcp::ToolDefinition;
 use clawft_services::mcp::provider::{CallToolResult, ToolError, ToolProvider};
@@ -23,7 +24,13 @@ use tracing::{info, warn};
 // ── Public MCP tool names (catalog / ADR-076) ─────────────────────────
 
 /// Public MCP tool names served by the attach façade.
-pub const ATTACH_TOOL_NAMES: &[&str] = &["status", "agent_list", "agent_spawn", "agent_stop"];
+pub const ATTACH_TOOL_NAMES: &[&str] = &[
+    "status",
+    "agent_list",
+    "agent_get",
+    "agent_spawn",
+    "agent_stop",
+];
 
 /// Actionable error when the kernel daemon is not reachable.
 pub fn daemon_unavailable_error() -> String {
@@ -49,6 +56,9 @@ pub trait AttachFacade: Send + Sync {
 
     /// `agent.list` → public MCP `agent_list`.
     async fn agent_list(&self) -> Result<Value, String>;
+
+    /// `expose.list` → the exposed source of the agent directory.
+    async fn expose_list(&self) -> Result<Value, String>;
 
     /// `agent.spawn` → public MCP `agent_spawn`.
     async fn agent_spawn(
@@ -190,6 +200,10 @@ impl AttachFacade for DaemonAttachFacade {
         self.rpc(Request::new("agent.list")).await
     }
 
+    async fn expose_list(&self) -> Result<Value, String> {
+        self.rpc(Request::new("expose.list")).await
+    }
+
     async fn agent_spawn(
         &self,
         agent_id: String,
@@ -229,12 +243,33 @@ pub fn attach_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "agent_list".into(),
-            description: "List agents running on the live kernel (weave `agent.list`). \
-                Requires `weft mcp-server --attach`."
+            description: "Agent directory: declared (agents/catalog.json), running \
+                (weave `agent.list`) and exposed (weave `expose.list`, harness \
+                exposures) agents joined under a stable id `weftos://agent/<id>`. \
+                Each entry names its sources and status; unreadable sources are \
+                reported, never silently empty. Requires `weft mcp-server --attach`."
                 .into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {},
+                "additionalProperties": false
+            }),
+        },
+        ToolDefinition {
+            name: "agent_get".into(),
+            description: "One agent directory entry by stable id (`weftos://agent/<id>` or \
+                the bare id). Same shape as an `agent_list` entry plus `sources`. \
+                Requires `weft mcp-server --attach`."
+                .into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": "Stable id: weftos://agent/<id> or the bare agent id"
+                    }
+                },
+                "required": ["id"],
                 "additionalProperties": false
             }),
         },
@@ -301,12 +336,17 @@ pub fn filter_attach_tools_by_profile(
 pub struct AttachToolProvider {
     tools: Vec<ToolDefinition>,
     facade: Arc<dyn AttachFacade>,
+    catalog: Option<PathBuf>,
 }
 
 impl AttachToolProvider {
     /// Build a provider with the given façade and (already profile-filtered) tools.
     pub fn new(facade: Arc<dyn AttachFacade>, tools: Vec<ToolDefinition>) -> Self {
-        Self { tools, facade }
+        Self {
+            tools,
+            facade,
+            catalog: None,
+        }
     }
 
     /// Convenience: full attach surface filtered by a profile allow predicate.
@@ -316,6 +356,42 @@ impl AttachToolProvider {
     ) -> Self {
         let tools = filter_attach_tools_by_profile(attach_tool_definitions(), allows);
         Self::new(facade, tools)
+    }
+}
+
+impl AttachToolProvider {
+    /// Use this catalog file instead of locating `agents/catalog.json`.
+    #[allow(dead_code)] // tests; the server locates the catalog itself
+    pub fn with_catalog(mut self, path: PathBuf) -> Self {
+        self.catalog = Some(path);
+        self
+    }
+
+    /// Join declared, running and exposed agents (see [`agent_directory`]).
+    async fn directory(&self) -> Result<Value, String> {
+        let declared = match &self.catalog {
+            Some(p) => agent_directory::load_catalog(p),
+            None => std::env::current_dir()
+                .map_err(|e| format!("cwd: {e}"))
+                .and_then(|cwd| {
+                    agent_directory::locate_catalog(
+                        &cwd,
+                        std::env::var("WEFTOS_AGENTS_DIR").ok().as_deref(),
+                    )
+                })
+                .and_then(|p| agent_directory::load_catalog(&p)),
+        };
+        let running = self.facade.agent_list().await.and_then(|v| match v {
+            Value::Array(a) => Ok(a),
+            other => Err(format!("agent.list returned {other}, expected an array")),
+        });
+        let exposed = self.facade.expose_list().await;
+        if let (Err(d), Err(r), Err(x)) = (&declared, &running, &exposed) {
+            return Err(format!(
+                "agent directory unavailable: declared: {d}; running: {r}; exposed: {x}"
+            ));
+        }
+        Ok(agent_directory::join(&declared, &running, &exposed))
     }
 }
 
@@ -345,7 +421,16 @@ impl ToolProvider for AttachToolProvider {
 
         let result = match name {
             "status" => self.facade.status().await,
-            "agent_list" => self.facade.agent_list().await,
+            "agent_list" => self.directory().await,
+            "agent_get" => {
+                let id = args.get("id").and_then(|v| v.as_str()).ok_or_else(|| {
+                    ToolError::ExecutionFailed("missing required argument 'id'".into())
+                })?;
+                match self.directory().await {
+                    Ok(dir) => agent_directory::get(&dir, id),
+                    Err(e) => Err(e),
+                }
+            }
             "agent_spawn" => {
                 let agent_id = args
                     .get("agent_id")
@@ -400,6 +485,9 @@ impl AttachFacade for StandaloneAttachFacade {
         Err(standalone_control_error("status"))
     }
     async fn agent_list(&self) -> Result<Value, String> {
+        Err(standalone_control_error("agent_list"))
+    }
+    async fn expose_list(&self) -> Result<Value, String> {
         Err(standalone_control_error("agent_list"))
     }
     async fn agent_spawn(
@@ -484,6 +572,16 @@ mod tests {
             ]))
         }
 
+        async fn expose_list(&self) -> Result<Value, String> {
+            if self.fail {
+                return Err(daemon_unavailable_error());
+            }
+            Ok(json!({"exposures": [
+                {"id": "harness.alpha", "kind": "harness", "state": "on", "audience": "paired"},
+                {"id": "infer.chat", "kind": "inference", "state": "on"}
+            ]}))
+        }
+
         async fn agent_spawn(
             &self,
             agent_id: String,
@@ -540,7 +638,10 @@ mod tests {
     #[tokio::test]
     async fn provider_dispatches_status_and_agent_list() {
         let facade = Arc::new(MockAttachFacade::new());
-        let provider = AttachToolProvider::with_profile(facade.clone(), |_| true);
+        let t = tempfile::tempdir().unwrap();
+        let empty = t.path().join("catalog.json");
+        std::fs::write(&empty, r#"{"agents":[]}"#).unwrap();
+        let provider = AttachToolProvider::with_profile(facade.clone(), |_| true).with_catalog(empty);
 
         assert_eq!(provider.namespace(), "");
         let listed: Vec<_> = provider.list_tools().iter().map(|t| t.name.clone()).collect();
@@ -563,11 +664,89 @@ mod tests {
         match &list.content[0] {
             ContentBlock::Text { text } => {
                 let v: Value = serde_json::from_str(text).unwrap();
-                assert!(v.is_array());
-                assert_eq!(v.as_array().unwrap().len(), 2);
+                // alpha (running + exposed), beta (running), empty catalog
+                assert_eq!(v["count"], 2);
+                assert_eq!(v["agents"][0]["id"], "weftos://agent/alpha");
+                assert_eq!(v["agents"][0]["from"], json!(["running", "exposed"]));
             }
         }
         assert_eq!(facade.list_calls.load(Ordering::SeqCst), 1);
+    }
+
+    fn text_of(r: &CallToolResult) -> String {
+        match &r.content[0] {
+            ContentBlock::Text { text } => text.clone(),
+        }
+    }
+
+    fn catalog_file(dir: &std::path::Path) -> PathBuf {
+        let p = dir.join("catalog.json");
+        std::fs::write(
+            &p,
+            r#"{"agents":[{"id":"alpha","version":"1","state":"active"},{"id":"gamma","version":"2","state":"active"}]}"#,
+        )
+        .unwrap();
+        p
+    }
+
+    #[tokio::test]
+    async fn directory_joins_three_sources_and_agent_get_finds_by_stable_id() {
+        let t = tempfile::tempdir().unwrap();
+        let provider = AttachToolProvider::with_profile(Arc::new(MockAttachFacade::new()), |_| true)
+            .with_catalog(catalog_file(t.path()));
+        let list = provider.call_tool("agent_list", json!({})).await.unwrap();
+        let v: Value = serde_json::from_str(&text_of(&list)).unwrap();
+        assert_eq!(v["count"], 3);
+        assert_eq!(v["sources"]["declared"]["ok"], true);
+        let by = |id: &str| v["agents"].as_array().unwrap().iter().find(|e| e["id"] == id).unwrap().clone();
+        assert_eq!(by("weftos://agent/alpha")["from"], json!(["declared", "running", "exposed"]));
+        assert_eq!(by("weftos://agent/gamma")["status"], "declared");
+        assert_eq!(by("weftos://agent/beta")["status"], "running");
+
+        for key in ["alpha", "weftos://agent/alpha"] {
+            let got = provider.call_tool("agent_get", json!({"id": key})).await.unwrap();
+            assert!(!got.is_error);
+            let e: Value = serde_json::from_str(&text_of(&got)).unwrap();
+            assert_eq!(e["id"], "weftos://agent/alpha");
+            assert_eq!(e["running"][0]["pid"], 1);
+            assert_eq!(e["sources"]["running"]["ok"], true);
+        }
+    }
+
+    #[tokio::test]
+    async fn agent_get_refuses_unknown_malformed_and_missing_id() {
+        let t = tempfile::tempdir().unwrap();
+        let provider = AttachToolProvider::with_profile(Arc::new(MockAttachFacade::new()), |_| true)
+            .with_catalog(catalog_file(t.path()));
+        for bad in ["nope", "", "http://x/y", "weftos://agent/a/b"] {
+            let r = provider.call_tool("agent_get", json!({"id": bad})).await.unwrap();
+            assert!(r.is_error, "{bad:?} must be an error result");
+        }
+        assert!(matches!(
+            provider.call_tool("agent_get", json!({})).await.unwrap_err(),
+            ToolError::ExecutionFailed(m) if m.contains("'id'")
+        ));
+    }
+
+    #[tokio::test]
+    async fn directory_with_no_readable_source_is_an_error_not_empty() {
+        let provider = AttachToolProvider::with_profile(Arc::new(MockAttachFacade::failing()), |_| true)
+            .with_catalog(PathBuf::from("/nonexistent/catalog.json"));
+        let r = provider.call_tool("agent_list", json!({})).await.unwrap();
+        assert!(r.is_error);
+        assert!(text_of(&r).contains("agent directory unavailable"));
+    }
+
+    #[tokio::test]
+    async fn directory_degrades_when_daemon_is_down_but_catalog_reads() {
+        let t = tempfile::tempdir().unwrap();
+        let provider = AttachToolProvider::with_profile(Arc::new(MockAttachFacade::failing()), |_| true)
+            .with_catalog(catalog_file(t.path()));
+        let r = provider.call_tool("agent_list", json!({})).await.unwrap();
+        assert!(!r.is_error);
+        let v: Value = serde_json::from_str(&text_of(&r)).unwrap();
+        assert_eq!(v["sources"]["running"]["ok"], false);
+        assert_eq!(v["agents"][0]["status"], "unknown");
     }
 
     #[tokio::test]

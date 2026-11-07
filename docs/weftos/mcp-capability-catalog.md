@@ -23,8 +23,8 @@ Status: `planned` = not yet stable on MCP wire; `partial` = exists under differe
 | id | class | mcp_tool (public) | weave_method | http (approx) | profiles | session_bound | status | notes |
 |----|-------|-------------------|--------------|---------------|----------|---------------|--------|-------|
 | `instance.status` | Read | `status` | `kernel.status` | `/api/status` | control, default | no | planned | |
-| `agents.list` | Read | `agent_list` | `agent.list` | agents API | control, default | no | planned | |
-| `agents.get` | Read | `agent_get` | `agent.inspect` | agents API | control, default | no | planned | |
+| `agents.list` | Read | `agent_list` | `agent.list` + `expose.list` + `agents/catalog.json` | agents API | control, default | no | live | attach mode; joined directory, key `weftos://agent/<id>` |
+| `agents.get` | Read | `agent_get` | (directory join) | agents API | control, default | no | live | attach mode; takes the stable id |
 | `agents.spawn` | Write | `agent_spawn` | `agent.spawn` | — | control, default | no | planned | visible-agent policy ADR-073 |
 | `agents.stop` | Write | `agent_stop` | `agent.stop` | — | control, default | no | planned | |
 | `agents.chat` | Chat | `agent_chat` | `agent.chat` | — | control (opt) | no | planned | high token cost; profile flag |

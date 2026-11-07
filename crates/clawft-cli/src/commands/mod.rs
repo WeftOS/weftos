@@ -17,6 +17,7 @@ pub mod config_cmd;
 pub mod cos_cmd;
 pub mod cron;
 pub mod doctor;
+pub mod agent_directory;
 pub mod daemon_conn;
 pub mod daemon_fallback;
 pub mod daemon_guard;
@@ -24,7 +25,6 @@ pub mod delegate_cmd;
 pub mod gateway;
 pub mod help_cmd;
 pub mod mcp_cmd;
-#[cfg(feature = "services")]
 pub mod mcp_attach;
 pub mod mcp_profile;
 #[cfg(feature = "services")]
