@@ -149,6 +149,42 @@ fn expiry_stops_a_cross_mesh_grant_and_sweep_removes_the_backend_grant() {
     assert_eq!(s.sweep("sweeper"), 0);
 }
 
+#[test]
+fn revoking_a_local_grant_refuses_the_next_call() {
+    let d = tempfile::tempdir().unwrap();
+    let s = open("acme", d.path(), Arc::new(MemSink::default()));
+    let name = s.hold_project(ULID, "op").unwrap();
+    s.grant_local(&cog("c1"), &name, Access::Write, "op").unwrap();
+    let c1 = ClientCaller::Local(cog("c1"));
+    s.put(&c1, &name, "k", b"v", false).unwrap();
+    s.revoke_local(&cog("c1"), &name, "op").unwrap();
+    assert!(s.get(&c1, &name, "k").is_err());
+}
+
+#[test]
+fn a_restart_fails_closed_until_the_gate_is_rebuilt() {
+    let d = tempfile::tempdir().unwrap();
+    let name = {
+        let s = open("acme", d.path(), Arc::new(MemSink::default()));
+        let name = s.hold_project(ULID, "op").unwrap();
+        s.grant_local(&cog("c1"), &name, Access::Write, "op").unwrap();
+        s.grant_weftos("weaver", &name, Access::Admin, "owner").unwrap();
+        s.put(&ClientCaller::Local(cog("c1")), &name, "k", b"v", false).unwrap();
+        name
+    };
+    // The service state persisted; the gate did not. Nobody gets in on the service's grants alone.
+    let s = open("acme", d.path(), Arc::new(MemSink::default()));
+    let (c1, w) = (ClientCaller::Local(cog("c1")), ClientCaller::Weftos { id: "weaver".into() });
+    assert!(s.get(&c1, &name, "k").is_err());
+    assert!(s.get(&w, &name, "k").is_err());
+    s.hold_project(ULID, "op").unwrap();
+    assert!(s.get(&c1, &name, "k").is_err(), "holding the project is not a grant");
+    assert!(s.get(&w, &name, "k").is_err());
+    s.grant_local(&cog("c1"), &name, Access::Write, "op").unwrap();
+    assert_eq!(s.get(&c1, &name, "k").unwrap(), b"v", "bytes survived the restart");
+    assert!(s.get(&w, &name, "k").is_err(), "the WeftOS account stays out until re-granted");
+}
+
 #[cfg(unix)]
 #[test]
 fn open_fs_needs_a_root_owned_by_the_client_with_mode_0700() {
