@@ -10,7 +10,7 @@
 //! This code touches only the filesystem and the backend. Enumerating files and building the
 //! bundle is done by `scripts/worktree-store.sh` (git), keeping subprocess use out of Rust.
 
-use crate::overlay::{validate_key, ObjectBackend, Result, S2Error};
+use crate::overlay::{ObjectBackend, Result, S2Error, validate_key};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -69,7 +69,7 @@ pub fn parse_name_status_z(raw: &[u8]) -> Result<Vec<PathChange>> {
                 return Err(S2Error::Invalid(format!(
                     "unsupported change status {:?} (use --no-renames)",
                     String::from_utf8_lossy(other)
-                )))
+                )));
             }
         };
         let path = toks
@@ -446,12 +446,11 @@ fn write_handoff<B: ObjectBackend>(b: &B, bucket: &str, h: &Handoff) -> Result<(
 
 /// Refuse changes by anyone but the merger while a live claim exists.
 fn guard_live_claim(h: &Handoff, who: &Actor, now_ms: u64) -> Result<()> {
-    if h.state == State::Claimed {
-        if let Some(m) = h.merger.as_ref().filter(|m| *m != who) {
-            if now_ms.saturating_sub(h.updated_ms) < CLAIM_TTL_MS {
-                return Err(S2Error::Claimed(format!("{}@{}", m.agent, m.host)));
-            }
-        }
+    if h.state == State::Claimed
+        && let Some(m) = h.merger.as_ref().filter(|m| *m != who)
+        && now_ms.saturating_sub(h.updated_ms) < CLAIM_TTL_MS
+    {
+        return Err(S2Error::Claimed(format!("{}@{}", m.agent, m.host)));
     }
     Ok(())
 }
@@ -508,14 +507,14 @@ pub fn claim_merge<B: ObjectBackend>(
             return Err(S2Error::Invalid(format!(
                 "worktree is already {:?}",
                 cur.state
-            )))
+            )));
         }
         State::Claimed => {
             let other = cur.merger.as_ref().filter(|m| *m != me);
-            if let Some(m) = other {
-                if now_ms.saturating_sub(cur.updated_ms) < CLAIM_TTL_MS {
-                    return Err(S2Error::Claimed(format!("{}@{}", m.agent, m.host)));
-                }
+            if let Some(m) = other
+                && now_ms.saturating_sub(cur.updated_ms) < CLAIM_TTL_MS
+            {
+                return Err(S2Error::Claimed(format!("{}@{}", m.agent, m.host)));
             }
         }
         State::Open | State::Handoff => {}
@@ -620,10 +619,10 @@ pub fn safe_join(dest: &Path, rel: &str) -> Result<PathBuf> {
     let mut cur = dest.to_path_buf();
     for seg in rel.split('/') {
         cur.push(seg);
-        if let Ok(md) = std::fs::symlink_metadata(&cur) {
-            if md.file_type().is_symlink() {
-                return Err(S2Error::BadKey(rel.to_string()));
-            }
+        if let Ok(md) = std::fs::symlink_metadata(&cur)
+            && md.file_type().is_symlink()
+        {
+            return Err(S2Error::BadKey(rel.to_string()));
         }
     }
     Ok(cur)

@@ -5,7 +5,9 @@
 //! Planning happens before any write, so a conflict under [`OnConflict::Fail`] leaves both
 //! buckets untouched. The run is idempotent: the report is stored at `.wt/promoted.json`.
 
-use crate::overlay::{is_reserved, validate_key, ObjectBackend, Overlay, Result, S2Error};
+use crate::overlay::{
+    ObjectBackend, Overlay, Result, S2Error, is_reserved, read_base, validate_key,
+};
 use serde::{Deserialize, Serialize};
 
 pub const PROMOTED_KEY: &str = ".wt/promoted.json";
@@ -120,6 +122,21 @@ pub struct ArchiveTarget<'a> {
     pub prefix: &'a str,
 }
 
+/// Did the project change this key since the worktree first touched it? With no recorded base
+/// (an object written before base tracking, or written around the overlay) assume yes: failing
+/// safe means a `Fail` policy asks a human rather than overwriting someone's edit.
+fn project_moved<B: ObjectBackend>(
+    b: &B,
+    worktree: &str,
+    key: &str,
+    project_etag: &str,
+) -> Result<bool> {
+    Ok(match read_base(b, worktree, key)? {
+        Some(base) => base != project_etag,
+        None => true,
+    })
+}
+
 pub fn promote<B: ObjectBackend>(
     b: &B,
     worktree_bucket: &str,
@@ -141,12 +158,7 @@ pub fn promote<B: ObjectBackend>(
     let meta = read_meta(b, worktree_bucket)?.ok_or_else(|| {
         S2Error::Invalid("worktree has no .wt/meta.json; refusing to promote".into())
     })?;
-    // Server-side creation time (the meta object's own modified time), so client clock skew
-    // cannot hide a concurrent project edit. The client-written `created_ms` is informational.
-    let created_ms = b
-        .head(worktree_bucket, META_KEY)?
-        .map(|m| m.modified_ms)
-        .unwrap_or(meta.created_ms);
+    let _ = &meta; // presence is the check; `created_ms` is informational
     let ov = Overlay::new(b, worktree_bucket, project_bucket);
 
     // Plan: no writes yet.
@@ -173,11 +185,13 @@ pub fn promote<B: ObjectBackend>(
             Some(p) if prior.copy.iter().any(|(k, n)| k == &o.key && *n == p.size) => {
                 acts.push(Act::Copy(o.key.clone(), o.size))
             }
-            Some(p) if p.etag != o.etag && p.modified_ms > created_ms => match policy.on_conflict {
-                OnConflict::Fail => conflicts.push(o.key.clone()),
-                OnConflict::KeepProject => acts.push(Act::Keep(o.key.clone())),
-                OnConflict::Overwrite => acts.push(Act::Copy(o.key.clone(), o.size)),
-            },
+            Some(p) if p.etag != o.etag && project_moved(b, worktree_bucket, &o.key, &p.etag)? => {
+                match policy.on_conflict {
+                    OnConflict::Fail => conflicts.push(o.key.clone()),
+                    OnConflict::KeepProject => acts.push(Act::Keep(o.key.clone())),
+                    OnConflict::Overwrite => acts.push(Act::Copy(o.key.clone(), o.size)),
+                }
+            }
             _ => acts.push(Act::Copy(o.key.clone(), o.size)),
         }
     }
@@ -195,7 +209,8 @@ pub fn promote<B: ObjectBackend>(
         }
         match b.head(project_bucket, &k)? {
             Some(p)
-                if p.modified_ms > created_ms && policy.on_conflict != OnConflict::Overwrite =>
+                if policy.on_conflict != OnConflict::Overwrite
+                    && project_moved(b, worktree_bucket, &k, &p.etag)? =>
             {
                 if policy.on_conflict == OnConflict::Fail {
                     conflicts.push(k.clone());

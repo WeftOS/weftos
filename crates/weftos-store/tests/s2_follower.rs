@@ -1,7 +1,7 @@
 //! L1 follower view tests: visibility before merge, change polling, leftovers, overlaps.
 use weftos_store::follower::*;
 use weftos_store::overlay::{ObjectBackend, ObjectMeta, Result as R};
-use weftos_store::promote::{write_meta, WorktreeMeta};
+use weftos_store::promote::{WorktreeMeta, write_meta};
 use weftos_store::share::*;
 use weftos_store::share_fetch::*;
 use weftos_store::testing::MemBackend;
@@ -439,9 +439,11 @@ fn registry_entry_cannot_redirect_a_follower_to_another_worktrees_bucket() {
         bucket: victim.bucket.clone(),
         ..victim.clone()
     };
-    assert!(search_docs(&b, std::slice::from_ref(&evil), "")
-        .hits
-        .is_empty());
+    assert!(
+        search_docs(&b, std::slice::from_ref(&evil), "")
+            .hits
+            .is_empty()
+    );
     let cache = tempfile::tempdir().unwrap();
     assert!(sync_docs(&b, &evil, cache.path()).is_err());
     assert!(overlaps(&b, &victim, &evil).is_err());

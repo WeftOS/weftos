@@ -1,0 +1,5 @@
+{
+  "op": "put",
+  "key": "notes/a.txt",
+  "text": "hello"
+}

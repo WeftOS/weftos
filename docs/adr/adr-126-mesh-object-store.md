@@ -5,6 +5,7 @@
 - **Updated**: 2026-10-29 (S0 spike applied on PG and run; results in "S0 results"; open question 1 answered: import, not in place; §6 amended: the activity log must take RustFS's own log as well as its audit stream)
 - **Updated**: 2026-10-30 (ADR-130 adds a GCS seed bucket as the tier above this store; this store becomes the optional L1 staging tier)
 - **Updated**: 2026-11-07 (follower view §4a, Windows-safe fetch, notification/poll answers from ADR-131; S2 implemented on `feat/adr126-s2`, not yet landed: overlay, promotion, agent-git-flow hooks, union mount; §4 amended by the owner extension, board card f40828fb: the worktree tree itself is shared, so unmerged docs stay visible and another agent can merge)
+- **Updated**: 2026-11-07 (S1 built on `feat/adr126-s1`: `weftos-store` crate, `weaver store`, daemon wiring, local-directory backend; RustFS S3 + admin transport added and verified against a throwaway RustFS 1.0.4, audit-stream and notification field names still unverified, see "S1 status")
 - **Deciders**: owner
 - **Research**: `docs/research/rclone-shared-filesystem-2026-10-29.md` (rclone, RustFS,
   OpenDAL, governance gaps). Board card `3605565e`.
@@ -329,6 +330,59 @@ policy covers only `s0-spike`.
 
 Not tested: bucket notifications (not configured in the spike), and erasure coding and
 replication (single drive).
+
+## S1 status (2026-11-07)
+
+Built: name-to-bucket mapping, grants (recorded on the chain, pushed into the backend as access
+keys and IAM policies), the exposure per store (`store.<bucket>`, ADR-120), governed
+get/put/head/delete/list with every request and refusal in the exposure activity log, parsers for
+RustFS audit, `s3_authorization_denied` log lines and bucket notifications, promote, archive, and
+`weaver store ls|create|grant|revoke|promote|archive|put|get`. The daemon creates its node store at
+start. Tests: `weftos-store` (32) and the `store` tests in `clawft-weave`.
+
+**RustFS transport (2026-11-07, owner approved the HTTP client and the `weftos-store` dependency):**
+`RustfsBackend` (feature `rustfs`, `crates/weftos-store/src/rustfs.rs`, `sigv4.rs`) implements both
+traits over blocking HTTP with SigV4 signed by the root credential: the S3 data plane (put with
+`If-None-Match`, get, head, delete, copy, list v2 with paging, buckets and tags) and the admin API
+(`/rustfs/admin/v3`: add-user, set-user-status, add-canned-policy, set-user-or-group-policy,
+remove-user, remove-canned-policy). The daemon selects it when `WEFTOS_STORE_RUSTFS_ENV` names an
+env file (`MESH_S3_ENDPOINT`, `MESH_S3_ACCESS_KEY`, `MESH_S3_SECRET_KEY`, optional `MESH_S3_REGION`);
+each principal's key id is `wk-<16 hex of blake3(principal)>` and its secret is kept 0600 under
+`<runtime dir>/store-secrets/`. It is called from blocking contexts only (the weave verbs already
+use `spawn_blocking`; start-up runs it on a plain thread).
+
+Verified against a throwaway RustFS 1.0.4 on loopback (not PG), by `cargo test -p weftos-store
+--features rustfs -- --ignored` with `WEFTOS_STORE_TEST_RUSTFS_ENV` set:
+- object and bucket operations, paging past 1000 keys, tags, a 412 on a conditional put;
+- a scoped key is refused outside its bucket, and **a disabled key's next request is a 403**;
+  re-creating a key keeps its secret and its disabled state; no grants becomes a deny-all policy
+  (RustFS rejects a policy with no statements: HTTP 500);
+- the S1 done-when end to end: node and project stores, a cog's write in the activity log, and
+  disabling the grant refuses the next request at the service and at RustFS.
+
+Findings that shaped the code: creating a bucket the root already owns returns 200 (so
+`create_bucket` checks first); a bucket name needs 3 or more characters; headers such as
+`If-None-Match` must be signed; `ObjectMeta.etag` is the backend's etag (MD5 on RustFS, BLAKE3 on
+the local backends).
+
+Audit parsers: the `s3_authorization_denied` line was captured from RustFS 1.0.4 and the parser fixed
+to match (`action` is `S3Action(GetObjectAction)`, `object` can be `"None"`). **Still unverified:**
+the audit-stream record (successful operations) and bucket-notification field names. Audit did not
+start from the environment variables I tried (`RUSTFS_AUDIT_ENABLE` with a webhook target named `_A` or
+unnamed, plus a queue dir, on a fresh data dir; RustFS 1.0.4 wrote no record to a loopback sink in
+three tries, and its own log for those runs was not updated, so the reason is unknown; it may need the
+audit target set through the admin config API instead), so no record was captured; the parser still reads field names from the S0 write-up. Cogs reach the store through the cog data plane: the daemon serves `svc.store/<project ULID, lower
+case>` (default store: that project's) and `svc.store/<node>` (the node's store), schema `store.v1`
+(`contracts/cogs/README.md`), with ops put, get, head, list and delete. The caller becomes the principal
+`cog:<instance id>` and needs a grant, so an ungranted cog is refused and a disabled grant refuses the
+next call; one provider per project keeps a call inside its project, because a cross-project call
+needs a policy grant and the node's own bucket cannot be granted. A reply is limited to 64 KiB, so a
+larger object is an error, not a truncation. `store.put` and `store.get` on the weaver socket remain. Remote (mesh) callers
+are modelled (`Caller::mesh`, exposure check) but no mesh transport calls it yet. `project add` (the daemon's
+install action) creates the project store when the daemon runs an object store, and says so in its
+report; a failure there is a note, never a failed add. Other project stores come from
+`weaver store create`. Not done for PG:
+nothing here was deployed, and `WEFTOS_STORE_RUSTFS_ENV` is unset by default (local-directory backend).
 
 ## S2 status (2026-11-07, branch `feat/adr126-s2`, not landed)
 

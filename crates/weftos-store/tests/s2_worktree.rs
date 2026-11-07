@@ -84,11 +84,12 @@ fn delete_tombstones_project_object_and_put_revives() {
     ov.delete("assets/old.txt").unwrap();
     assert!(ov.get("assets/old.txt").unwrap().is_none());
     assert!(ov.head("assets/old.txt").unwrap().is_none());
-    assert!(ov
-        .list("assets/")
-        .unwrap()
-        .iter()
-        .all(|m| m.key != "assets/old.txt"));
+    assert!(
+        ov.list("assets/")
+            .unwrap()
+            .iter()
+            .all(|m| m.key != "assets/old.txt")
+    );
     assert!(
         b.get(PR, "assets/old.txt").unwrap().is_some(),
         "project untouched"
@@ -297,11 +298,13 @@ fn publish_shares_docs_skips_secrets_symlinks_and_bad_paths() {
     assert_eq!(hits[0].path, "docs/grok-build-fork/rooms.md");
     assert_eq!(find_docs(&m, "").len(), 2);
     // never visible through the asset overlay, never promoted as an asset
-    assert!(Overlay::new(&b, WT, PR)
-        .list("")
-        .unwrap()
-        .iter()
-        .all(|m| !m.key.contains("grok-build-fork") && !m.key.starts_with(".wt/")));
+    assert!(
+        Overlay::new(&b, WT, PR)
+            .list("")
+            .unwrap()
+            .iter()
+            .all(|m| !m.key.contains("grok-build-fork") && !m.key.starts_with(".wt/"))
+    );
     assert!(b.get(WT, ".wt/tree/.env").unwrap().is_none());
 }
 
@@ -543,13 +546,14 @@ fn promotion_archives_the_shared_tree_and_never_promotes_it() {
         b.list(PR, ".wt/").unwrap().is_empty(),
         "no reserved state in the project bucket"
     );
-    assert!(b
-        .get(
+    assert!(
+        b.get(
             AR,
             "archive/worktrees/s2/.wt/tree/docs/grok-build-fork/rooms.md"
         )
         .unwrap()
-        .is_some());
+        .is_some()
+    );
 }
 
 /// Backend that fails the Nth project write, to prove a retry after partial promotion works.
@@ -817,7 +821,7 @@ fn live_claim_blocks_republish_and_rehandoff_and_merge_needs_a_claim() {
 fn client_clock_skew_cannot_hide_a_project_edit() {
     let b = MemBackend::new();
     b.set_clock(2_000); // server time at worktree creation
-                        // the client wrote a created_ms 10 minutes in the future
+    // the client wrote a created_ms 10 minutes in the future
     write_meta(
         &b,
         WT,
@@ -845,7 +849,9 @@ fn object_plus_leftover_tombstone_keeps_the_object() {
     let b = setup();
     b.set_clock(2_500);
     // simulate a put that crashed before clearing the tombstone
-    b.put(WT, "assets/old.txt", b"rewritten").unwrap();
+    Overlay::new(&b, WT, PR)
+        .put("assets/old.txt", b"rewritten")
+        .unwrap();
     b.put(WT, ".wt/tombstones/assets/old.txt", b"").unwrap();
     promote(&b, WT, PR, &ARCH, &policy(), 5_000).unwrap();
     assert_eq!(b.get(PR, "assets/old.txt").unwrap().unwrap(), b"rewritten");
@@ -915,4 +921,62 @@ fn windows_hostile_names_are_refused_on_every_platform() {
     ] {
         assert!(!is_dangerous_path(p), "{p}");
     }
+}
+
+#[test]
+fn conflict_detection_needs_no_clock_at_all() {
+    // Server clock goes backwards and the client clock is garbage: only etags decide.
+    let b = setup();
+    Overlay::new(&b, WT, PR).put("assets/x", b"mine").unwrap();
+    b.set_clock(1); // project edit "in the past"
+    b.put(PR, "assets/x", b"theirs").unwrap();
+    assert!(matches!(
+        promote(&b, WT, PR, &ARCH, &policy(), 0),
+        Err(S2Error::Conflict(_))
+    ));
+}
+
+#[test]
+fn project_edit_before_the_first_write_is_not_a_conflict() {
+    let b = setup();
+    b.put(PR, "assets/logo.png", b"v2-before-we-wrote").unwrap();
+    Overlay::new(&b, WT, PR)
+        .put("assets/logo.png", b"mine")
+        .unwrap();
+    promote(&b, WT, PR, &ARCH, &policy(), 5_000).unwrap();
+    assert_eq!(b.get(PR, "assets/logo.png").unwrap().unwrap(), b"mine");
+}
+
+#[test]
+fn key_created_in_the_project_after_our_new_key_conflicts() {
+    let b = setup();
+    Overlay::new(&b, WT, PR)
+        .put("assets/new.bin", b"mine")
+        .unwrap();
+    b.put(PR, "assets/new.bin", b"theirs").unwrap();
+    assert!(matches!(
+        promote(&b, WT, PR, &ARCH, &policy(), 5_000),
+        Err(S2Error::Conflict(_))
+    ));
+}
+
+#[test]
+fn delete_of_a_project_file_the_project_since_changed_conflicts() {
+    let b = setup();
+    Overlay::new(&b, WT, PR).delete("assets/old.txt").unwrap();
+    b.put(PR, "assets/old.txt", b"changed").unwrap();
+    assert!(matches!(
+        promote(&b, WT, PR, &ARCH, &policy(), 5_000),
+        Err(S2Error::Conflict(_))
+    ));
+}
+
+#[test]
+fn object_written_around_the_overlay_has_no_base_and_fails_safe() {
+    let b = setup();
+    b.put(WT, "assets/logo.png", b"raw").unwrap();
+    assert!(matches!(
+        promote(&b, WT, PR, &ARCH, &policy(), 5_000),
+        Err(S2Error::Conflict(_))
+    ));
 }

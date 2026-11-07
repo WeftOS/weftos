@@ -12,11 +12,11 @@
 //! - [`leftovers`]: worktrees nobody is finishing (the "forgotten docs" failure this exists to end);
 //! - [`overlaps`]: files two unmerged worktrees both changed differently, before anyone merges.
 
-use crate::overlay::{validate_key, ObjectBackend, Result, S2Error};
+use crate::overlay::{ObjectBackend, Result, S2Error, validate_key};
 use crate::promote::read_meta;
-use crate::share::{read_manifest, safe_join, ChangeKind, State, CLAIM_TTL_MS};
+use crate::share::{CLAIM_TTL_MS, ChangeKind, State, read_manifest, safe_join};
 use crate::share_fetch::{
-    fetch_tree, list_shared_lenient, FetchReport, RegistryEntry, Select, REGISTRY_PREFIX,
+    FetchReport, REGISTRY_PREFIX, RegistryEntry, Select, fetch_tree, list_shared_lenient,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

@@ -265,6 +265,9 @@ pub fn required_capability(method: &str) -> Capability {
         // ADR-120: likewise for an unclassified `expose.*` verb.
         m if m.starts_with("expose.") => Capability::Admin,
 
+        // ADR-126: every `store.*` verb is an operator act; listings name objects, so none is anonymous Read.
+        m if m.starts_with("store.") => Capability::Admin,
+
         // ADR-122: an unclassified `cogbus.*` verb is a mutation.
         m if m.starts_with("cogbus.") => Capability::Admin,
 

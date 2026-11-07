@@ -14,6 +14,21 @@ use std::fmt;
 /// Reserved prefix in a worktree bucket for overlay, promotion and sharing state.
 pub const RESERVED: &str = ".wt/";
 const TOMBSTONES: &str = ".wt/tombstones/";
+const BASES: &str = ".wt/base/";
+/// Recorded base when the project had no such key at the first write.
+pub(crate) const BASE_ABSENT: &str = "-";
+
+/// The project etag this worktree first wrote or deleted `key` against, if recorded. Promotion
+/// compares it with the project's current etag: a difference means the project moved on. No
+/// clocks are involved, so client or server time skew cannot hide or invent a conflict.
+pub(crate) fn read_base<B: ObjectBackend + ?Sized>(
+    b: &B,
+    worktree: &str,
+    key: &str,
+) -> Result<Option<String>> {
+    Ok(b.get(worktree, &format!("{BASES}{key}"))?
+        .map(|d| String::from_utf8_lossy(&d).into_owned()))
+}
 
 /// Errors from the S2 worktree-store paths.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -187,9 +202,28 @@ impl<'a, B: ObjectBackend> Overlay<'a, B> {
         self.backend.get(&self.project, key)
     }
 
+    /// Remember which project version a first write or delete is based on. One tiny object per
+    /// key, written once; skipped when a base or a local copy already exists (the base was
+    /// recorded then, or the object predates base tracking and promotion treats it conservatively).
+    fn note_base(&self, key: &str) -> Result<()> {
+        let bk = format!("{BASES}{key}");
+        if self.backend.head(&self.worktree, &bk)?.is_some()
+            || self.backend.head(&self.worktree, key)?.is_some()
+        {
+            return Ok(());
+        }
+        let base = match self.backend.head(&self.project, key)? {
+            Some(p) => p.etag,
+            None => BASE_ABSENT.to_string(),
+        };
+        self.backend.put(&self.worktree, &bk, base.as_bytes())?;
+        Ok(())
+    }
+
     /// Writes go to the worktree bucket only; a write revives a tombstoned key.
     pub fn put(&self, key: &str, data: &[u8]) -> Result<ObjectMeta> {
         Self::user_key(key)?;
+        self.note_base(key)?;
         let meta = self.backend.put(&self.worktree, key, data)?;
         self.backend
             .delete(&self.worktree, &Self::tombstone_key(key))?;
@@ -200,6 +234,7 @@ impl<'a, B: ObjectBackend> Overlay<'a, B> {
     /// stop falling through. The project bucket is never touched.
     pub fn delete(&self, key: &str) -> Result<()> {
         Self::user_key(key)?;
+        self.note_base(key)?;
         self.backend.delete(&self.worktree, key)?;
         if self.backend.head(&self.project, key)?.is_some() {
             self.backend

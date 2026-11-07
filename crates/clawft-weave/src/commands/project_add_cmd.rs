@@ -278,6 +278,7 @@ mod tests {
             run: RunKind::ProcessCompose { file: "process-compose.yaml".into() },
             process_compose_port: Some(18110),
             route,
+            store: None,
             env_vars: vec![EnvVar { name: "A_KEY".into(), file: ".env.example".into(), set_here: false }, EnvVar { name: "PORT".into(), file: ".env.example".into(), set_here: true }],
             notes: vec!["a note".into()],
             next: vec!["weaver project up demo".into()],

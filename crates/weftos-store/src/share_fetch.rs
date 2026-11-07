@@ -1,7 +1,7 @@
 //! Read side of worktree sharing: find a shared worktree and its docs from any node, materialize
 //! the tree locally, and fetch the git bundle so a different agent can merge. See `share.rs`.
 
-use crate::overlay::{validate_key, ObjectBackend, Result, S2Error};
+use crate::overlay::{ObjectBackend, Result, S2Error, validate_key};
 use crate::share::*;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
