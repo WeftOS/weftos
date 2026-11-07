@@ -14,7 +14,7 @@
 
 use crate::overlay::{validate_key, ObjectBackend, Result, S2Error};
 use crate::promote::read_meta;
-use crate::share::{read_manifest, safe_join, State, CLAIM_TTL_MS};
+use crate::share::{read_manifest, safe_join, ChangeKind, State, CLAIM_TTL_MS};
 use crate::share_fetch::{
     fetch_tree, list_shared_lenient, FetchReport, RegistryEntry, Select, REGISTRY_PREFIX,
 };
@@ -391,6 +391,15 @@ pub struct Overlap {
     pub path: String,
     pub in_a: String,
     pub in_b: String,
+    pub kind: OverlapKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OverlapKind {
+    /// Both trees hold the file with different content.
+    BothChanged,
+    /// One worktree deleted the file; the other changed it. `deleted_in` is the deleting slug.
+    ModifyDelete { deleted_in: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -398,8 +407,9 @@ pub struct OverlapReport {
     /// Both trees branch from the same base commit. If `false`, a path can differ only because
     /// the base moved, so treat `overlaps` as a superset of the real conflicts.
     pub same_base: bool,
-    /// Files in both trees with different content. Blind to modify/delete and rename conflicts
-    /// (a path in only one tree is not listed): confirm with git before relying on absence.
+    /// Files in both trees with different content, and files one worktree deleted that the other
+    /// changed (needs `changes` in both manifests; a rename counts as delete + add). Absence is not
+    /// proof of no conflict: only paths, never hunks, are compared.
     pub overlaps: Vec<Overlap>,
 }
 
@@ -433,8 +443,27 @@ pub fn overlaps<B: ObjectBackend>(
             path: f.path.clone(),
             in_a: a.slug.clone(),
             in_b: c.slug.clone(),
+            kind: OverlapKind::BothChanged,
         })
         .collect();
+    for (del, del_slug, chg) in [(&ma, &a.slug, &mc), (&mc, &c.slug, &ma)] {
+        for d in del.changes.iter().filter(|x| x.kind == ChangeKind::Deleted) {
+            let touched = chg
+                .changes
+                .iter()
+                .any(|x| x.path == d.path && x.kind != ChangeKind::Deleted);
+            if touched {
+                v.push(Overlap {
+                    path: d.path.clone(),
+                    in_a: a.slug.clone(),
+                    in_b: c.slug.clone(),
+                    kind: OverlapKind::ModifyDelete {
+                        deleted_in: del_slug.clone(),
+                    },
+                });
+            }
+        }
+    }
     v.sort_by(|x, y| x.path.cmp(&y.path));
     Ok(OverlapReport {
         same_base: ma.base_commit == mc.base_commit,

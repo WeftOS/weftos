@@ -13,6 +13,7 @@
 use crate::overlay::{validate_key, ObjectBackend, Result, S2Error};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 pub const TREE_PREFIX: &str = ".wt/tree/";
@@ -37,6 +38,54 @@ pub struct FileEntry {
     pub sha256: String,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ChangeKind {
+    Added,
+    Modified,
+    Deleted,
+}
+
+/// One path this worktree changed relative to its base. A rename is a delete plus an add.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PathChange {
+    pub path: String,
+    pub kind: ChangeKind,
+}
+
+/// Parse `git diff --name-status -z --no-renames` output (`M\0path\0D\0path\0...`), optionally
+/// followed by `A\0path\0` records for untracked files. The result is sorted, one entry per path
+/// (a later record for the same path wins). Rename/copy records (`R`, `C`) are refused: the caller
+/// must pass `--no-renames`, so a rename can never hide a delete.
+pub fn parse_name_status_z(raw: &[u8]) -> Result<Vec<PathChange>> {
+    let mut toks = raw.split(|b| *b == 0).filter(|t| !t.is_empty());
+    let mut out: BTreeMap<String, ChangeKind> = BTreeMap::new();
+    while let Some(st) = toks.next() {
+        let kind = match st {
+            b"A" => ChangeKind::Added,
+            b"M" | b"T" => ChangeKind::Modified,
+            b"D" => ChangeKind::Deleted,
+            other => {
+                return Err(S2Error::Invalid(format!(
+                    "unsupported change status {:?} (use --no-renames)",
+                    String::from_utf8_lossy(other)
+                )))
+            }
+        };
+        let path = toks
+            .next()
+            .ok_or_else(|| S2Error::Invalid("change record without a path".into()))?;
+        let path = std::str::from_utf8(path)
+            .map_err(|_| S2Error::Invalid("non-UTF-8 path in change list".into()))?;
+        validate_key(path)?;
+        out.insert(path.to_string(), kind);
+    }
+    Ok(out
+        .into_iter()
+        .map(|(path, kind)| PathChange { path, kind })
+        .collect())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DocEntry {
     pub path: String,
@@ -52,6 +101,10 @@ pub struct TreeManifest {
     pub files: Vec<FileEntry>,
     /// Paths whose working-tree content is not in `head_commit` (the bundle does not carry them).
     pub uncommitted: Vec<String>,
+    /// Paths changed relative to `base_commit`, including deletions. Empty for a manifest written
+    /// before this field existed, in which case `overlaps` can only compare file content.
+    #[serde(default)]
+    pub changes: Vec<PathChange>,
     pub docs: Vec<DocEntry>,
     pub has_bundle: bool,
     pub writer: Actor,
@@ -101,6 +154,8 @@ pub struct TreeSource<'a> {
     pub root: &'a Path,
     pub paths: &'a [String],
     pub uncommitted: &'a [String],
+    /// Changes relative to the base (see [`parse_name_status_z`]); may be empty.
+    pub changes: &'a [PathChange],
     pub branch: &'a str,
     pub base_commit: &'a str,
     pub head_commit: &'a str,
@@ -342,6 +397,7 @@ pub fn publish_tree<B: ObjectBackend>(
         head_commit: src.head_commit.into(),
         files,
         uncommitted,
+        changes: src.changes.to_vec(),
         docs,
         has_bundle,
         writer: src.writer.clone(),

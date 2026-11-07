@@ -22,6 +22,17 @@ fn publish(
     files: &[(&str, &str)],
     now: u64,
 ) -> RegistryEntry {
+    publish_c(b, slug, head, files, &[], now)
+}
+
+fn publish_c(
+    b: &MemBackend,
+    slug: &str,
+    head: &str,
+    files: &[(&str, &str)],
+    changes: &[PathChange],
+    now: u64,
+) -> RegistryEntry {
     let d = tempfile::tempdir().unwrap();
     let mut ps = vec![];
     for (p, c) in files {
@@ -35,6 +46,7 @@ fn publish(
         root: d.path(),
         paths: &ps,
         uncommitted: &[],
+        changes,
         branch: slug,
         base_commit: "base",
         head_commit: head,
@@ -500,4 +512,106 @@ fn follow_state_round_trips_and_rejects_corruption() {
     assert_eq!(left.len(), 1);
     std::fs::write(&f, b"{ not json").unwrap();
     assert!(FollowState::load(&f).is_err());
+}
+
+fn ch(p: &str, k: ChangeKind) -> PathChange {
+    PathChange {
+        path: p.into(),
+        kind: k,
+    }
+}
+
+#[test]
+fn overlaps_report_modify_delete_and_rename_conflicts() {
+    let b = MemBackend::new();
+    // A deletes old.rs (a rename to new.rs); C edits old.rs. Content comparison alone sees nothing.
+    let a = publish_c(
+        &b,
+        "a",
+        "h",
+        &[("new.rs", "x")],
+        &[
+            ch("old.rs", ChangeKind::Deleted),
+            ch("new.rs", ChangeKind::Added),
+        ],
+        1,
+    );
+    let c = publish_c(
+        &b,
+        "c",
+        "h",
+        &[("old.rs", "edited")],
+        &[ch("old.rs", ChangeKind::Modified)],
+        1,
+    );
+    let o = overlaps(&b, &a, &c).unwrap().overlaps;
+    assert_eq!(o.len(), 1);
+    assert_eq!(o[0].path, "old.rs");
+    assert_eq!(
+        o[0].kind,
+        OverlapKind::ModifyDelete {
+            deleted_in: "a".into()
+        }
+    );
+    // symmetric: swapping the arguments still names the deleter
+    let o = overlaps(&b, &c, &a).unwrap().overlaps;
+    assert_eq!(
+        o[0].kind,
+        OverlapKind::ModifyDelete {
+            deleted_in: "a".into()
+        }
+    );
+}
+
+#[test]
+fn both_deleting_or_untouched_is_not_a_conflict() {
+    let b = MemBackend::new();
+    let a = publish_c(
+        &b,
+        "a",
+        "h",
+        &[("k", "1")],
+        &[ch("gone", ChangeKind::Deleted)],
+        1,
+    );
+    let c = publish_c(
+        &b,
+        "c",
+        "h",
+        &[("k", "1")],
+        &[ch("gone", ChangeKind::Deleted)],
+        1,
+    );
+    assert!(overlaps(&b, &a, &c).unwrap().overlaps.is_empty());
+    // C merely still contains the file (did not change it): the deletion is not contested
+    let d = publish_c(&b, "d", "h", &[("gone", "same")], &[], 1);
+    assert!(overlaps(&b, &a, &d).unwrap().overlaps.is_empty());
+}
+
+#[test]
+fn name_status_parser_handles_all_kinds_and_refuses_renames() {
+    let raw = b"M\0a.rs\0D\0b.rs\0T\0c.rs\0A\0docs/new.md\0A\0a.rs\0";
+    let v = parse_name_status_z(raw).unwrap();
+    assert_eq!(
+        v,
+        vec![
+            ch("a.rs", ChangeKind::Added), // later record wins
+            ch("b.rs", ChangeKind::Deleted),
+            ch("c.rs", ChangeKind::Modified),
+            ch("docs/new.md", ChangeKind::Added),
+        ]
+    );
+    assert!(parse_name_status_z(b"R100\0a\0b\0").is_err());
+    assert!(parse_name_status_z(b"M\0").is_err());
+    assert!(parse_name_status_z(b"M\0../escape\0").is_err());
+    assert!(parse_name_status_z(b"").unwrap().is_empty());
+}
+
+#[test]
+fn manifest_without_changes_still_parses() {
+    let j = r#"{"schema":1,"branch":"f","base_commit":"a","head_commit":"b","files":[],
+        "uncommitted":[],"docs":[],"has_bundle":false,
+        "writer":{"agent":"w","host":"h"},"published_ms":1}"#;
+    let m: TreeManifest = serde_json::from_str(j).unwrap();
+    assert!(m.changes.is_empty());
 }

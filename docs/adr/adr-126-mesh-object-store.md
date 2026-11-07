@@ -183,8 +183,12 @@ L1 as the tier for "unmerged layers that other nodes should see before integrati
     TTL, merged entries still in the registry after a day (cleanup stuck), and timestamps in the
     future (writer clock ahead, so idle time is unknown). This is the forgotten-work detector;
   - `overlaps`: files two unmerged worktrees both changed differently, as a merge-conflict hint.
-    It reports whether both share a base commit; if not, it over-reports. It cannot see
-    modify/delete or rename conflicts, so absence proves nothing;
+    It reports whether both share a base commit; if not, it over-reports. It also reports a file one
+    worktree deleted that the other changed (a rename is a delete plus an add, so editing the old
+    name is caught). That needs the manifest's `changes` list, which the script builds from
+    `git diff --name-status --no-renames <base>` plus untracked files; a manifest published before
+    that field existed gets content comparison only. Paths are compared, never hunks, so absence
+    still does not prove a clean merge;
   - **a registry entry is a pointer, not authority:** before reading a bucket a follower checks the
     slug is well-formed and that the bucket's own `.wt/meta.json` names the same slug, so an entry
     cannot aim a follower's read grants at another worktree's bucket.
@@ -338,8 +342,9 @@ replication (single drive).
   the daemon blocks on its async client).
 - **Needs from S1's `weaver store`:** `worktree create|publish|promote|fetch|claim|buckets|follow|search|leftovers|sync-docs|overlaps` verbs
   that call these functions; the script's argument shapes are the contract. `publish` reads the
-  NUL-separated path lists the script writes. The daemon, not agents, calls `write_registry_entry`.
-- **Verified (scratch crate, same sources):** 47 integration tests, clippy `-D warnings` clean; 33
+  NUL-separated path lists the script writes (`--paths-z`, `--uncommitted-z`, `--changes-z`; parse the
+  last with `share::parse_name_status_z`). The daemon, not agents, calls `write_registry_entry`.
+- **Verified (scratch crate, same sources):** 51 integration tests, clippy `-D warnings` clean; 37
   shell assertions including a real `git bundle` round trip. **Not verified:** against a real RustFS
   or OpenDAL, the union mount with a live rclone, two machines, or `agent-git-flow` calling the script
   (it has no hook seam; the repo wraps `wt.sh` and `land.sh` instead).

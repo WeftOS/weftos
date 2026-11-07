@@ -80,7 +80,7 @@ cat >"$t/bin/weaver" <<'W'
 #!/usr/bin/env bash
 printf '%q ' "$@" >>"$WTS_LOG"; echo >>"$WTS_LOG"
 case "$*" in
-  "store worktree publish"*) while [ $# -gt 0 ]; do [ "$1" = --bundle ] && cp "$2" "$WTS_STORE/bundle"; shift; done ;;
+  "store worktree publish"*) while [ $# -gt 0 ]; do [ "$1" = --bundle ] && cp "$2" "$WTS_STORE/bundle"; [ "$1" = --changes-z ] && cp "$2" "$WTS_STORE/changes.z"; shift; done ;;
   "store worktree fetch"*) while [ $# -gt 0 ]; do [ "$1" = --bundle-out ] && cp "$WTS_STORE/bundle" "$2"; shift; done ;;
   "project id"*) echo 01ABC ;;
 esac
@@ -88,6 +88,12 @@ exit "${WEAVER_RC:-0}"
 W
 export WTS_STORE="$t/store"; mkdir -p "$WTS_STORE"; : >"$t/log"
 cd "$r"; "$here/worktree-store.sh" share
+ok "changes list passed to publish" "grep -q -- '--changes-z' '$t/log'"
+ok "modified file recorded" "tr '\\0' '\\n' <'$t/store/changes.z' | grep -qx a.txt"
+ok "untracked doc recorded as added" "tr '\\0' '\\n' <'$t/store/changes.z' | grep -qx docs/rooms.md"
+git rm -qf a.txt; "$here/worktree-store.sh" share
+ok "deletion recorded as D" "tr '\\0' '\\n' <'$t/store/changes.z' | grep -x -A1 D | grep -qx a.txt"
+git checkout -q HEAD -- a.txt
 clone="$t/clone"; git clone -q "$r" "$clone" 2>/dev/null; git -C "$clone" remote remove origin
 "$here/worktree-store.sh" fetch feat-s2 "$clone" 2>/dev/null
 ok "fetched commits appear under refs/shared" "git -C '$clone' rev-parse --verify -q refs/shared/feat-s2/feat/s2 >/dev/null"

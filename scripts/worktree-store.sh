@@ -88,6 +88,10 @@ share)
     git -C "$top" ls-files -co --exclude-standard -z >"$tmp/paths.z"
     # Paths whose working-tree content differs from HEAD (the bundle will not carry them).
     { git -C "$top" diff --name-only -z HEAD; git -C "$top" ls-files -o --exclude-standard -z; } >"$tmp/uncommitted.z"
+    # Changes vs the base incl. deletions; --no-renames so a rename stays delete+add (overlap check).
+    { git -C "$top" diff --name-status -z --no-renames "$base"
+      git -C "$top" ls-files -o --exclude-standard -z | while IFS= read -r -d '' f; do printf 'A\0%s\0' "$f"; done
+    } >"$tmp/changes.z"
     bundle_args=()
     if [ "$base" != "$head" ]; then
         git -C "$top" bundle create "$tmp/branch.bundle" "refs/heads/$(git symbolic-ref --short HEAD)" "^$base" >/dev/null 2>&1 \
@@ -96,7 +100,7 @@ share)
     handoff_args=(); [ -n "$note" ] && handoff_args=(--handoff "$note")
     store_must publish --project "$(project_id)" --slug "$slug" --root "$top" \
         --branch "$(git symbolic-ref --short HEAD)" --base "$base" --head "$head" \
-        --paths-z "$tmp/paths.z" --uncommitted-z "$tmp/uncommitted.z" \
+        --paths-z "$tmp/paths.z" --uncommitted-z "$tmp/uncommitted.z" --changes-z "$tmp/changes.z" \
         ${bundle_args[@]+"${bundle_args[@]}"} ${handoff_args[@]+"${handoff_args[@]}"}
     ;;
 land)
