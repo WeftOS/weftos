@@ -1,6 +1,7 @@
 # ADR-120: Mesh resources and exposures: announce, see, switch off, log
 
 - **Status**: Proposed (2026-10-11; owner direction)
+- **Updated**: 2026-11-07 (exposure record gains an `agent` field naming the agent it runs; see "Exposure to agent link")
 - **Deciders**: owner
 - **Builds on**: ADR-099 (governed placement; signed node facts, `ServiceAdvertisement`,
   `workload.ctl`), ADR-101 (inference kind; `expose_to_mesh`, per-model advertise opt-out,
@@ -55,6 +56,15 @@ A harness that can be started remotely (a MetaHarness run, an agent team, a rufl
 headless job) is an exposure of kind `harness`: who may start it, with what inputs, on which
 resource, with what budget. Starting one is a governed `workload.ctl` request (ADR-099), never a
 shell endpoint.
+
+Exposure to agent link (2026-11-07). An exposure that runs an agent names it in an optional
+`agent` field: the definition id (`developer`) or its directory key (`weftos://agent/developer`),
+stored as the definition id. Code or configuration sets it; a malformed value (empty, over 128
+characters, containing `/` or a scheme other than `weftos://agent/`) is refused when the spec is
+built. The agent directory joins exposures to agents on this field and on nothing else. For
+older exposures without the field, a `harness` exposure whose id is `harness.<id>` still
+joins to `<id>`; the directory marks such a link `harness-id-fallback`, and the fallback goes
+away once the existing harness exposures carry the field.
 
 ### 4. Local control always wins
 - `weaver expose list | on <id> | off <id> | pause <id>` and a master switch

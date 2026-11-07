@@ -169,6 +169,10 @@ pub struct Exposure {
     /// exposures only, ADR-122 section 14). Never set by code or config.
     #[serde(default)]
     pub raw: bool,
+    /// The agent definition id this exposure runs (ADR-120 section 3), when
+    /// it exposes an agent or harness. The agent directory joins on it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
 }
 
 /// Why an exposure is not served now. Local policy blocking a remote

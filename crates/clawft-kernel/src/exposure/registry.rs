@@ -54,9 +54,32 @@ pub struct ExposureSpec {
     pub limits: Limits,
     /// Desired state.
     pub state: ExposureState,
+    /// The agent definition id this exposure runs (ADR-120 section 3). Set
+    /// it with [`ExposureSpec::with_agent`], which refuses a malformed id.
+    pub agent: Option<String>,
+}
+
+/// Most characters in an agent definition id.
+pub const MAX_AGENT_ID: usize = 128;
+
+/// Normalise an agent reference: a bare definition id or a
+/// `weftos://agent/<id>` key, to the definition id. Refuses empty, over-long
+/// or slash-bearing input.
+pub fn parse_agent_ref(s: &str) -> Result<String, String> {
+    let id = s.strip_prefix("weftos://agent/").unwrap_or(s);
+    if id.is_empty() || id.len() > MAX_AGENT_ID || id.contains('/') || id.contains("://") {
+        return Err(format!("not an agent id or weftos://agent/<id> key: {s:?}"));
+    }
+    Ok(id.to_string())
 }
 
 impl ExposureSpec {
+    /// Name the agent this exposure runs (definition id or `weftos://agent/<id>`).
+    pub fn with_agent(mut self, agent: &str) -> Result<Self, String> {
+        self.agent = Some(parse_agent_ref(agent)?);
+        Ok(self)
+    }
+
     /// A spec with the safe defaults: audience `local`, no limits, state on.
     pub fn new(id: &str, kind: ExposureKind, resource: &str, api: &str) -> Self {
         Self {
@@ -68,6 +91,7 @@ impl ExposureSpec {
             api: api.into(),
             limits: Limits::default(),
             state: ExposureState::On,
+            agent: None,
         }
     }
 }
@@ -224,6 +248,7 @@ impl ExposureRegistry {
             state: ov.state.unwrap_or(spec.state),
             announced,
             raw: ov.raw.unwrap_or(false),
+            agent: spec.agent,
         };
         g.map.insert(spec.id, e.clone());
         e
