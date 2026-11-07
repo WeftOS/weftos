@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use crate::clock::Clock;
 use crate::creds::{CredentialRefusal, TempCredentials};
 use crate::policy::{NameError, validate_key};
-use crate::sigv4::{HeaderSigner, UNSIGNED_PAYLOAD};
+use crate::sigv4::HeaderSigner;
 use crate::wire::{
     Endpoint, HttpRequest, HttpResponse, LeaseRefused, LeaseRequest, LeaseResponse, ObjectTransport,
     ParentLink, TransportError,
@@ -172,10 +172,9 @@ impl<L: ParentLink, T: ObjectTransport, C: Clock> EdgeNodeStore<L, T, C> {
             host: p.endpoint.host.clone(),
             path: p.path,
             query: p.query,
-            headers: vec![
-                ("host".into(), p.endpoint.host),
-                ("x-amz-content-sha256".into(), UNSIGNED_PAYLOAD.into()),
-            ],
+            // Host only: RustFS rejects a presigned request carrying any x-amz-*
+            // header that is not in the signed set (measured on 1.0.4).
+            headers: vec![("host".into(), p.endpoint.host)],
             body: body.to_vec(),
         };
         let r = self.transport.send(req).await?;

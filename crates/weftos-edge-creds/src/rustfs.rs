@@ -10,10 +10,12 @@
 //!   admin key. S0 measured the next request after `admin user disable`
 //!   being refused about 0.22 s later, including a multipart upload in flight.
 //!
-//! Wire facts follow the MinIO API that RustFS mirrors. The AssumeRole form,
-//! the XML reply and the 900 s minimum are the standard STS shape; the admin
-//! path (default `/rustfs/admin/v3`) is configurable because it is the one
-//! piece not yet confirmed against a running RustFS from this host.
+//! Wire facts follow the MinIO API that RustFS mirrors and were checked against
+//! a RustFS 1.0.4 container on loopback (2026-11-07): the AssumeRole form and
+//! XML reply, `/rustfs/admin/v3/{add-canned-policy,add-user,
+//! set-user-or-group-policy,set-user-status,remove-user,remove-canned-policy}`
+//! with plain JSON bodies (the `/minio/admin/v3` prefix wants an encrypted
+//! body), and bucket create. RustFS accepts `DurationSeconds` below 900.
 //!
 //! No sockets here: the host supplies the HTTP client as an
 //! [`ObjectTransport`], same as the edge. Long-lived keys are held by the
@@ -24,10 +26,12 @@ use zeroize::Zeroize;
 use crate::broker::{StsError, StsMinter};
 use crate::clock::Clock;
 use crate::creds::{MAX_LEASE_TTL_SECS, TempCredentials};
+use crate::policy::{Access, bucket_session_policy, node_bucket, principal_for};
 use crate::sigv4::{self, HeaderSigner};
 use crate::wire::{Endpoint, HttpRequest, ObjectTransport};
 
-/// STS rejects DurationSeconds below this.
+/// Default floor for DurationSeconds. MinIO and AWS refuse less; RustFS 1.0.4
+/// accepted 60 s when measured (2026-11-07), so this is a config field.
 pub const MIN_STS_DURATION_SECS: u64 = 900;
 /// Inline session policy size limit.
 pub const MAX_SESSION_POLICY_BYTES: usize = 2048;
@@ -64,11 +68,14 @@ pub struct RustfsConfig {
     pub region: String,
     /// Admin API prefix, e.g. `/rustfs/admin/v3`.
     pub admin_prefix: String,
+    /// Shortest session to ask STS for. 900 is portable; 60 works on RustFS 1.0.4 and
+    /// lets a presigned URL's session die with the URL.
+    pub min_session_secs: u64,
 }
 
 impl RustfsConfig {
     pub fn new(endpoint: Endpoint) -> Self {
-        Self { endpoint, region: "us-east-1".into(), admin_prefix: "/rustfs/admin/v3".into() }
+        Self { endpoint, region: "us-east-1".into(), admin_prefix: "/rustfs/admin/v3".into(), min_session_secs: MIN_STS_DURATION_SECS }
     }
 }
 
@@ -115,6 +122,53 @@ impl<H: ObjectTransport, K: NodeKeys, C: Clock> RustfsMinter<H, K, C> {
         }
     }
 
+    /// Admin-signed call; `Ok(body)` on 2xx.
+    async fn admin(&self, method: &str, op: &str, query: &[(&str, &str)], body: Vec<u8>) -> Result<String, StsError> {
+        let path = format!("{}/{op}", self.cfg.admin_prefix);
+        let query = query.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        let headers = if body.is_empty() { vec![] } else { vec![("content-type".to_string(), "application/json".to_string())] };
+        let req = self.request(&self.admin, sigv4::SERVICE, method, &path, Parts { query, headers, body });
+        let r = self.http.send(req).await.map_err(|e| StsError(e.to_string()))?;
+        if (200..300).contains(&r.status) {
+            Ok(String::from_utf8_lossy(&r.body).into_owned())
+        } else {
+            Err(StsError(format!("{op}: HTTP {}", r.status)))
+        }
+    }
+
+    /// Create the node's bucket (`n-<id>`) with the admin key. Idempotent.
+    pub async fn create_bucket(&self, node_id: &str) -> Result<(), StsError> {
+        let bucket = node_bucket(node_id).map_err(|e| StsError(e.to_string()))?;
+        let req = self.request(&self.admin, sigv4::SERVICE, "PUT", &format!("/{bucket}"), Parts::default());
+        let r = self.http.send(req).await.map_err(|e| StsError(e.to_string()))?;
+        // 409 BucketAlreadyOwnedByYou is fine.
+        if (200..300).contains(&r.status) || r.status == 409 { Ok(()) } else { Err(StsError(format!("create bucket: HTTP {}", r.status))) }
+    }
+
+    /// Pairing (ADR-126 section 3): the node's own policy (its bucket only),
+    /// its RustFS user with `secret`, the policy attached, and the bucket.
+    /// The secret goes in the parent's [`NodeKeys`] store, never to the edge.
+    pub async fn provision_node(&self, node_id: &str, secret: &str) -> Result<(), StsError> {
+        let bucket = node_bucket(node_id).map_err(|e| StsError(e.to_string()))?;
+        let principal = principal_for(node_id);
+        let policy = bucket_session_policy(&bucket, Access::Write);
+        self.admin("PUT", "add-canned-policy", &[("name", &principal)], policy.into_bytes()).await?;
+        let user = serde_json::json!({"secretKey": secret, "status": "enabled"}).to_string();
+        self.admin("PUT", "add-user", &[("accessKey", &principal)], user.into_bytes()).await?;
+        self.admin("PUT", "set-user-or-group-policy", &[("policyName", &principal), ("userOrGroup", &principal), ("isGroup", "false")], vec![]).await?;
+        self.create_bucket(node_id).await
+    }
+
+    /// Unpairing: remove the user and its policy. The bucket is archived by
+    /// the daemon before any delete (ADR-126 section 3), not here.
+    pub async fn deprovision_node(&self, node_id: &str) -> Result<(), StsError> {
+        let principal = principal_for(node_id);
+        node_bucket(node_id).map_err(|e| StsError(e.to_string()))?;
+        self.admin("DELETE", "remove-user", &[("accessKey", &principal)], vec![]).await?;
+        self.admin("DELETE", "remove-canned-policy", &[("name", &principal)], vec![]).await?;
+        Ok(())
+    }
+
     async fn set_status(&self, principal: &str, status: &str) -> Result<(), StsError> {
         let user = self.keys.key_for(principal).ok_or_else(|| StsError(format!("no RustFS user for {principal}")))?;
         let path = format!("{}/set-user-status", self.cfg.admin_prefix);
@@ -139,8 +193,7 @@ impl<H: ObjectTransport, K: NodeKeys, C: Clock> StsMinter for RustfsMinter<H, K,
             return Err(StsError(format!("session policy is {} bytes, limit {MAX_SESSION_POLICY_BYTES}", policy.len())));
         }
         let user = self.keys.key_for(principal).ok_or_else(|| StsError(format!("no RustFS user for {principal}")))?;
-        // STS will not issue below 900 s; the edge cap is 900 s, so it is always 900.
-        let dur = ttl_secs.clamp(MIN_STS_DURATION_SECS, MAX_LEASE_TTL_SECS);
+        let dur = ttl_secs.clamp(self.cfg.min_session_secs.min(MAX_LEASE_TTL_SECS), MAX_LEASE_TTL_SECS);
         let form = [("Action", "AssumeRole"), ("DurationSeconds", &dur.to_string()), ("Policy", policy), ("Version", "2011-06-15")]
             .iter()
             .map(|(k, v)| format!("{}={}", sigv4::uri_encode(k, false), sigv4::uri_encode(v, false)))

@@ -97,6 +97,11 @@ impl<M: StsMinter, G: GrantCheck, A: AuditSink, C: Clock> EdgeBroker<M, G, A, C>
         Self { cfg, minter, grants, audit, clock, state: Mutex::new(State::default()) }
     }
 
+    /// The RustFS side, for pairing and unpairing (provision / deprovision).
+    pub fn minter(&self) -> &M {
+        &self.minter
+    }
+
     fn note(&self, node: &str, action: &'static str, refused: Option<RefusalCode>, detail: String) {
         self.audit.record(AuditEvent { at: self.clock.now(), node_id: node.into(), action, refused, detail });
     }

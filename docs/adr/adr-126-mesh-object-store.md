@@ -4,6 +4,7 @@
 - **Updated**: 2026-10-29 (§4's worktree overlay is re-expressed as RVF layers and branch metadata in ADR-128)
 - **Updated**: 2026-10-29 (S0 spike applied on PG and run; results in "S0 results"; open question 1 answered: import, not in place; §6 amended: the activity log must take RustFS's own log as well as its audit stream)
 - **Updated**: 2026-10-30 (ADR-130 adds a GCS seed bucket as the tier above this store; this store becomes the optional L1 staging tier)
+- **Updated**: 2026-11-07 (live run against RustFS 1.0.4 in a loopback container: results in "S3 results"; edge presign fixed)
 - **Updated**: 2026-11-07 (card b76c74a7: live STS minter and chain-fed grant ledger added to `weftos-edge-creds`, still tested against a mock store)
 - **Updated**: 2026-11-07 (S3 implemented in `crates/weftos-edge-creds` against a mock store; see "S3 results". The ADR stays Proposed: S1, S2, S4, S5 are not landed)
 - **Deciders**: owner
@@ -262,6 +263,8 @@ enabled flag and the session policy (`cargo test -p weftos-edge-creds`, 21 tests
   user. The 2048-byte policy limit is checked before anything is sent.
 - **Disable and enable:** an admin-signed `PUT <prefix>/set-user-status`. The prefix defaults to
   `/rustfs/admin/v3` and is configurable.
+- **Pairing and unpairing:** `provision_node` creates the node's policy, user, policy attachment and
+  bucket; `deprovision_node` removes the user and policy.
 - **Keys:** the per-node user keys sit behind `NodeKeys` on the parent, are redacted in `Debug`
   and zeroed on drop, and never appear in anything sent to the edge.
 
@@ -278,14 +281,29 @@ the user-policy intersection, and serves STS and admin calls with the 900 s mini
 a node gets a session for its own bucket only, another node is refused, and revocation refuses
 the next request.
 
-**Not yet verified:** against a live RustFS (the STS form, the XML reply and the 900 s minimum follow the MinIO API RustFS mirrors, and S0 measured
-AssumeRole and disable; the admin path `/rustfs/admin/v3/set-user-status` is the one piece not
-confirmed against a running RustFS; creating the per-node user and attaching its policy at
-pairing is S1's, not built here; the spike's gate C6 was not re-run); on real edge hardware; and
-compiled for `wasm32-unknown-unknown` (the target is not installed on this host; the crate has no
-tokio, `SystemTime` or sockets outside tests). The link between a node and its parent (cogbus,
-mesh-local or a WebSocket) is the host's and is not part of this crate. The bucket-name function
-`node_bucket` is the one-line ADR rule and should be replaced by S1's mapping when S1 lands.
+**Live run (2026-11-07, RustFS 1.0.4 in a loopback container, not PG).** The real broker, minter and
+edge store ran against it from a throwaway harness kept outside the repo (its raw-socket client would
+trip the diff gate's `net` rule). Results:
+
+| Check | Result |
+|---|---|
+| Pairing: policy, user, attach, bucket | all four calls work with plain JSON bodies on `/rustfs/admin/v3`. The `/minio/admin/v3` prefix wants an encrypted body and refuses plain JSON |
+| STS lease, edge write, read, delete | work; the session lasts 900 s |
+| Conditional create | `If-None-Match: *` gives 412 on the second write |
+| Presigned PUT | works, **only with `Host` as the sole header**. RustFS refuses a presigned request that carries an `x-amz-*` header outside the signed set (`presigned_unsigned_amz_header`). The first live run caught this; the edge is fixed and the mock now enforces it |
+| Cross-node | node A's session writing to node B's bucket: 403. A's user asking for a session policy that names B's bucket, then writing: 403 |
+| Revocation | `set-user-status` disabled: the first request after the call, on a session still 14 min from expiry, got 403, about 7 ms after the revoke started; the edge's next write was refused by the parent. Restore works |
+| Removal | after `remove-user`, AssumeRole as that user: 403 |
+| Session floor | RustFS accepted `DurationSeconds=60`. The 900 s minimum is MinIO's, so the floor is a config field defaulting to 900 |
+
+Also checked: the crate compiles for `wasm32-unknown-unknown`.
+
+**Not yet verified:** the spike's gate C6 on PG itself (this run used a local container); real edge
+hardware; the link between a node and its parent (cogbus, mesh-local or a WebSocket), which is the
+host's. Still not built: key generation for a node's secret (the caller supplies it), the native HTTP
+client for the minter (a `reqwest` one needs an owner diff-gate approval), and moving archived
+buckets. `node_bucket` is the one-line ADR rule and should be replaced by S1's mapping when S1
+lands.
 
 ## Consequences
 

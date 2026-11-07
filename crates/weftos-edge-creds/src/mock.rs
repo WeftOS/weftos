@@ -38,6 +38,8 @@ struct Inner {
     /// Long-lived users (the parent's per-node users and the admin).
     users: HashMap<String, StaticUser>,
     admins: Vec<String>,
+    canned: HashMap<String, Value>,
+    buckets: Vec<String>,
     disabled: Vec<String>,
     sessions: HashMap<String, Session>,
     objects: BTreeMap<(String, String), Vec<u8>>,
@@ -132,6 +134,10 @@ impl MockRustfs {
             let t0 = sigv4::parse_stamp(&stamp).ok_or("bad date")?;
             if now >= t0 + expires {
                 return Err("ExpiredToken: presigned url expired");
+            }
+            // RustFS 1.0.4: "Presigned request rejected: unsigned_amz_header".
+            if req.headers.iter().any(|(k, _)| k.to_ascii_lowercase().starts_with("x-amz-")) {
+                return Err("unsigned x-amz header on a presigned request");
             }
             let rest: Vec<(String, String)> = req.query.iter().filter(|(k, _)| k != "X-Amz-Signature").cloned().collect();
             let headers = [("host".to_string(), req.host.clone())];
@@ -261,9 +267,48 @@ impl MockRustfs {
     fn admin_endpoint(&self, inner: &mut Inner, req: &HttpRequest) -> HttpResponse {
         let ok = self.authenticate(inner, req).ok().filter(|a| inner.admins.contains(a));
         let q = |n: &str| req.query.iter().find(|(k, _)| k == n).map(|(_, v)| v.clone());
-        let (Some(admin), "/rustfs/admin/v3/set-user-status", Some(user), Some(status)) = (ok, req.path.as_str(), q("accessKey"), q("status")) else {
+        let Some(admin) = ok else {
             inner.log.push((403, String::new(), req.method.clone(), req.path.clone()));
             return xml_error(403, "AccessDenied");
+        };
+        let op = req.path.trim_start_matches("/rustfs/admin/v3/").to_string();
+        let done = |inner: &mut Inner| {
+            inner.log.push((200, admin.clone(), req.method.clone(), req.path.clone()));
+            HttpResponse { status: 200, ..Default::default() }
+        };
+        match op.as_str() {
+            "add-canned-policy" => {
+                let (Some(name), Ok(p)) = (q("name"), serde_json::from_slice::<Value>(&req.body)) else { return xml_error(400, "InvalidRequest") };
+                inner.canned.insert(name, p);
+                return done(inner);
+            }
+            "add-user" => {
+                let (Some(ak), Ok(b)) = (q("accessKey"), serde_json::from_slice::<Value>(&req.body)) else { return xml_error(400, "InvalidRequest") };
+                let Some(secret) = b["secretKey"].as_str() else { return xml_error(400, "InvalidRequest") };
+                inner.users.insert(ak, StaticUser { secret: secret.into(), policy: serde_json::json!({}) });
+                return done(inner);
+            }
+            "set-user-or-group-policy" => {
+                let (Some(name), Some(user)) = (q("policyName"), q("userOrGroup")) else { return xml_error(400, "InvalidRequest") };
+                let (Some(p), true) = (inner.canned.get(&name).cloned(), inner.users.contains_key(&user)) else { return xml_error(404, "NoSuchPolicy") };
+                inner.users.get_mut(&user).unwrap().policy = p;
+                return done(inner);
+            }
+            "remove-user" => {
+                let Some(ak) = q("accessKey") else { return xml_error(400, "InvalidRequest") };
+                inner.users.remove(&ak);
+                inner.sessions.retain(|_, s| s.user != ak);
+                return done(inner);
+            }
+            "remove-canned-policy" => {
+                let Some(name) = q("name") else { return xml_error(400, "InvalidRequest") };
+                inner.canned.remove(&name);
+                return done(inner);
+            }
+            _ => {}
+        }
+        let (true, Some(user), Some(status)) = (op == "set-user-status", q("accessKey"), q("status")) else {
+            return xml_error(404, "NotImplemented");
         };
         if !inner.users.contains_key(&user) {
             return xml_error(404, "NoSuchUser");
@@ -312,6 +357,19 @@ impl ObjectTransport for MockRustfs {
         let mut parts = req.path.trim_start_matches('/').splitn(2, '/');
         let bucket = parts.next().unwrap_or("").to_string();
         let key = parts.next().unwrap_or("").to_string();
+        if req.method == "PUT" && key.is_empty() {
+            let admin = self.authenticate(&inner, &req).ok().filter(|a| inner.admins.contains(a));
+            let status = match admin {
+                None => 403,
+                Some(_) if inner.buckets.contains(&bucket) => 409,
+                Some(_) => {
+                    inner.buckets.push(bucket.clone());
+                    200
+                }
+            };
+            inner.log.push((status, admin.unwrap_or_default(), "PUT".into(), req.path.clone()));
+            return Ok(HttpResponse { status, ..Default::default() });
+        }
         let result = self.authenticate(&inner, &req).and_then(|ak| {
             let s = inner.sessions.get(&ak).ok_or("AccessDenied: static key not accepted for objects here")?;
             let arn = if key.is_empty() { format!("arn:aws:s3:::{bucket}") } else { format!("arn:aws:s3:::{bucket}/{key}") };

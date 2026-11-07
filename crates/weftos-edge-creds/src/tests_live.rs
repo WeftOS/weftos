@@ -39,6 +39,26 @@ struct Rig {
     broker: Arc<Broker>,
 }
 
+/// Nodes whose key the parent will hold, but with nothing created in RustFS yet.
+fn rig_unprovisioned(nodes: &[&str]) -> Rig {
+    let clock = ManualClock::new(T0);
+    let store = MockRustfs::new(clock.clone());
+    store.add_admin("rootadmin", "adminsecret");
+    let keys: HashMap<_, _> = nodes.iter().map(|n| (format!("node-{n}"), (format!("node-{n}"), format!("generated-secret-{n}")))).collect();
+    let ep = Endpoint { scheme: "http".into(), host: HOST.into() };
+    let minter = RustfsMinter::new(
+        RustfsConfig::new(ep.clone()),
+        store.clone(),
+        Keys(Arc::new(keys)),
+        StaticKey { access_key: "rootadmin".into(), secret_key: "adminsecret".into() },
+        clock.clone(),
+    );
+    let ledger = Arc::new(GrantLedger::new());
+    let audit = VecAudit::default();
+    let broker = Arc::new(EdgeBroker::new(BrokerConfig::new(ep), minter, ledger.clone(), audit.clone(), clock.clone()));
+    Rig { clock, store, ledger, audit, broker }
+}
+
 /// `users`: node ids provisioned in RustFS with their own-bucket policy.
 /// `wrong_base`: node ids whose attached policy names someone else's bucket.
 fn rig(users: &[&str], wrong_base: &[&str]) -> Rig {
@@ -334,4 +354,72 @@ fn losing_write_but_keeping_read_still_cuts_off_the_write_lease() {
         let e = r.broker.lease("wasm-1", LeaseRequest::Sts).await.unwrap_err();
         assert_eq!(e.code, RefusalCode::Revoked);
     });
+}
+
+// ---- pairing: provision and deprovision ----------------------------------------
+
+#[test]
+fn pairing_provisions_the_user_policy_and_bucket_and_unpairing_removes_them() {
+    let r = rig_unprovisioned(&["wasm-9"]);
+    pair(&r, 1, "wasm-9");
+    let node = edge(&r, "wasm-9");
+    // Nothing exists in RustFS yet: the parent cannot mint.
+    assert!(matches!(run(node.put("k", b"v")), Err(EdgeError::Parent(LeaseRefused { code: RefusalCode::Unavailable, .. }))));
+    run(r.broker.minter().provision_node("wasm-9", "generated-secret-wasm-9")).unwrap();
+    run(node.put("k", b"v")).unwrap();
+    assert_eq!(r.store.object("n-wasm-9", "k").unwrap(), b"v");
+    // Provisioning twice is harmless.
+    run(r.broker.minter().provision_node("wasm-9", "generated-secret-wasm-9")).unwrap();
+    run(r.broker.minter().deprovision_node("wasm-9")).unwrap();
+    // The session the edge still holds died with its user; a new lease cannot be minted.
+    assert!(run(node.put("k2", b"v")).is_err());
+    assert!(r.store.object("n-wasm-9", "k2").is_none());
+}
+
+#[test]
+fn provisioned_user_is_limited_to_its_own_bucket() {
+    let r = rig_unprovisioned(&["wasm-9", "wasm-8"]);
+    pair(&r, 1, "wasm-9");
+    run(r.broker.minter().provision_node("wasm-9", "generated-secret-wasm-9")).unwrap();
+    run(r.broker.minter().provision_node("wasm-8", "generated-secret-wasm-8")).unwrap();
+    // wasm-9's own user policy is what bounds the session: ask for a session
+    // policy on wasm-8's bucket as wasm-9's user and write there.
+    use crate::broker::StsMinter;
+    let c = run(r.broker.minter().assume_role("node-wasm-9", &bucket_session_policy("n-wasm-8", Access::Write), 900)).unwrap();
+    let signer = crate::sigv4::HeaderSigner { access_key: &c.access_key, secret_key: &c.secret_key, session_token: Some(&c.session_token), region: "us-east-1", now: T0 };
+    let h = signer.sign("PUT", "/n-wasm-8/x", &[], &[("host".into(), HOST.into())], b"x");
+    let resp = run(crate::wire::ObjectTransport::send(&r.store, HttpRequest { method: "PUT".into(), scheme: "http".into(), host: HOST.into(), path: "/n-wasm-8/x".into(), query: vec![], headers: h, body: b"x".to_vec() })).unwrap();
+    assert_eq!(resp.status, 403, "session policy cannot widen the user's policy");
+}
+
+#[test]
+fn provisioning_rejects_bad_node_ids_before_any_request() {
+    let r = rig_unprovisioned(&[]);
+    let before = r.store.log().len();
+    assert!(run(r.broker.minter().provision_node("../x", "s")).is_err());
+    assert!(run(r.broker.minter().deprovision_node("A B")).is_err());
+    assert_eq!(r.store.log().len(), before);
+}
+
+#[test]
+fn session_floor_is_configurable_for_stores_that_allow_short_sessions() {
+    use crate::broker::StsMinter;
+    // The mock refuses < 900 like MinIO; a floor of 60 reaches it as 60 and is refused,
+    // the default floor of 900 is accepted.
+    let r = rig(&["wasm-1"], &[]);
+    let ep = Endpoint { scheme: "http".into(), host: HOST.into() };
+    let mk = |floor: u64| {
+        let mut cfg = RustfsConfig::new(ep.clone());
+        cfg.min_session_secs = floor;
+        RustfsMinter::new(
+            cfg,
+            r.store.clone(),
+            Keys(Arc::new(HashMap::from([("node-wasm-1".to_string(), ("node-wasm-1".to_string(), "long-lived-secret-of-wasm-1".to_string()))]))),
+            StaticKey { access_key: "rootadmin".into(), secret_key: "adminsecret".into() },
+            r.clock.clone(),
+        )
+    };
+    let p = bucket_session_policy("n-wasm-1", Access::Write);
+    assert!(run(mk(900).assume_role("node-wasm-1", &p, 60)).is_ok());
+    assert!(run(mk(60).assume_role("node-wasm-1", &p, 60)).is_err());
 }
