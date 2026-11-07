@@ -115,6 +115,8 @@ members = [
     "crates/clawft-cow-memory",
     # ADR-129: real ML-DSA-65 and versioned Ed25519 + ML-DSA-65 dual signatures.
     "crates/weftos-pq-sign",
+    # ADR-126 S4: release stores (write-once, hash-referenced, signed, retention).
+    "crates/weftos-release",
     # Append-only version index for first-class objects (ADR-121 O1), mirrored
     # into clawft-cow-memory lineages.
     "crates/clawft-versions",

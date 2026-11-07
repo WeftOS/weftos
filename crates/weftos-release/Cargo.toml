@@ -1,0 +1,22 @@
+[package]
+name = "weftos-release"
+version.workspace = true
+# rationale: ADR-126 S4 release-store semantics; consumed by the daemon and CI tooling in-tree.
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "ADR-126 S4: write-once, hash-referenced, signed release stores with retention. Backend-agnostic; the weftos-store S3 client implements the backend trait."
+
+[dependencies]
+blake3 = { workspace = true }
+ed25519-dalek = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+ulid = { workspace = true }
+weftos-pq-sign = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
