@@ -20,13 +20,24 @@ use crate::wire::{HttpRequest, HttpResponse, ObjectTransport, TransportError};
 struct Session {
     secret: String,
     token: String,
+    /// The user's attached policy; the effective permission is its
+    /// intersection with `policy` (the inline session policy), as in STS.
+    base: Option<Value>,
     expires_at: u64,
     user: String,
     policy: Value,
 }
 
+struct StaticUser {
+    secret: String,
+    policy: Value,
+}
+
 #[derive(Default)]
 struct Inner {
+    /// Long-lived users (the parent's per-node users and the admin).
+    users: HashMap<String, StaticUser>,
+    admins: Vec<String>,
     disabled: Vec<String>,
     sessions: HashMap<String, Session>,
     objects: BTreeMap<(String, String), Vec<u8>>,
@@ -45,6 +56,17 @@ pub struct MockRustfs {
 impl MockRustfs {
     pub fn new(clock: ManualClock) -> Self {
         Self { inner: Arc::default(), clock, region: "us-east-1".into() }
+    }
+
+    /// A long-lived user with an attached policy, as the parent provisions at pairing.
+    pub fn add_user(&self, access: &str, secret: &str, policy_json: &str) {
+        let policy = serde_json::from_str(policy_json).expect("policy json");
+        self.inner.lock().unwrap().users.insert(access.into(), StaticUser { secret: secret.into(), policy });
+    }
+
+    pub fn add_admin(&self, access: &str, secret: &str) {
+        self.add_user(access, secret, "{}");
+        self.inner.lock().unwrap().admins.push(access.into());
     }
 
     pub fn object(&self, bucket: &str, key: &str) -> Option<Vec<u8>> {
@@ -100,7 +122,7 @@ impl MockRustfs {
     /// Authenticate: returns the access key whose session signed the request.
     fn authenticate(&self, inner: &Inner, req: &HttpRequest) -> Result<String, &'static str> {
         let now = self.clock.now();
-        let (access, token, sig_given, canon, stamp) = if let Some(sig) =
+        let (access, token, sig_given, canon, stamp, service) = if let Some(sig) =
             req.query.iter().find(|(k, _)| k == "X-Amz-Signature").map(|(_, v)| v.clone())
         {
             let q = |n: &str| req.query.iter().find(|(k, _)| k == n).map(|(_, v)| v.clone());
@@ -120,7 +142,8 @@ impl MockRustfs {
                 headers: &headers,
                 payload_hash: UNSIGNED_PAYLOAD,
             });
-            (cred.split('/').next().unwrap_or("").to_string(), q("X-Amz-Security-Token"), sig, canon, stamp)
+            let service = cred.split('/').nth(3).unwrap_or("s3").to_string();
+            (cred.split('/').next().unwrap_or("").to_string(), q("X-Amz-Security-Token"), sig, canon, stamp, service)
         } else {
             let auth = req.header("authorization").ok_or("missing authorization")?;
             let rest = auth.strip_prefix("AWS4-HMAC-SHA256 ").ok_or("bad algorithm")?;
@@ -160,19 +183,26 @@ impl MockRustfs {
                 sig,
                 canon,
                 stamp,
+                cred.split('/').nth(3).unwrap_or("s3").to_string(),
             )
         };
-        let s = inner.sessions.get(&access).ok_or("InvalidAccessKeyId")?;
-        if token.as_deref() != Some(s.token.as_str()) {
+        let (secret, want_token, expires_at, user) = if let Some(s) = inner.sessions.get(&access) {
+            (s.secret.as_str(), Some(s.token.as_str()), s.expires_at, s.user.as_str())
+        } else if let Some(u) = inner.users.get(&access) {
+            (u.secret.as_str(), None, u64::MAX, access.as_str())
+        } else {
+            return Err("InvalidAccessKeyId");
+        };
+        if token.as_deref() != want_token {
             return Err("InvalidToken");
         }
-        if now >= s.expires_at {
+        if now >= expires_at {
             return Err("ExpiredToken");
         }
-        if inner.disabled.contains(&s.user) {
+        if inner.disabled.iter().any(|u| u == user) {
             return Err("AccessDenied: user disabled");
         }
-        let expect = sigv4::sign(&s.secret, &stamp, &self.region, &canon);
+        let expect = sigv4::sign_for(secret, &stamp, &self.region, &service, &canon);
         if !sigv4::sig_eq(&expect, &sig_given) {
             return Err("SignatureDoesNotMatch");
         }
@@ -180,16 +210,113 @@ impl MockRustfs {
     }
 }
 
+fn xml_error(status: u16, code: &str) -> HttpResponse {
+    HttpResponse { status, headers: vec![], body: format!("<ErrorResponse><Error><Code>{code}</Code></Error></ErrorResponse>").into_bytes() }
+}
+
+fn rfc3339(unix: u64) -> String {
+    let (d, s) = sigv4::amz_dates(unix);
+    format!("{}-{}-{}T{}:{}:{}Z", &d[0..4], &d[4..6], &d[6..8], &s[9..11], &s[11..13], &s[13..15])
+}
+
+impl MockRustfs {
+    /// STS `AssumeRole` as MinIO/RustFS serve it: caller is a long-lived user,
+    /// duration at least 900 s, inline policy at most 2048 bytes.
+    fn sts_endpoint(&self, inner: &mut Inner, req: &HttpRequest) -> HttpResponse {
+        let caller = match self.authenticate(inner, req) {
+            Ok(a) if inner.users.contains_key(&a) => a,
+            _ => {
+                inner.log.push((403, String::new(), req.method.clone(), "sts".into()));
+                return xml_error(403, "SignatureDoesNotMatch");
+            }
+        };
+        let form: HashMap<String, String> = String::from_utf8_lossy(&req.body)
+            .split('&')
+            .filter_map(|kv| kv.split_once('='))
+            .map(|(k, v)| (pct_decode(k), pct_decode(v)))
+            .collect();
+        let dur: u64 = form.get("DurationSeconds").and_then(|d| d.parse().ok()).unwrap_or(3600);
+        let policy = form.get("Policy").cloned().unwrap_or_default();
+        let bad = form.get("Action").map(String::as_str) != Some("AssumeRole") || dur < 900 || policy.len() > 2048;
+        let parsed = serde_json::from_str::<Value>(&policy);
+        if bad || parsed.is_err() {
+            inner.log.push((400, caller, "POST".into(), "sts".into()));
+            return xml_error(400, "InvalidParameterValue");
+        }
+        inner.counter += 1;
+        let n = inner.counter;
+        let (access, secret) = (format!("ASIA{n:016}"), sigv4::sha256_hex(format!("secret-{n}").as_bytes()));
+        let token = format!("tok-{}", sigv4::sha256_hex(format!("token-{n}").as_bytes()));
+        let expires_at = self.clock.now() + dur;
+        let base = inner.users[&caller].policy.clone();
+        inner.sessions.insert(access.clone(), Session { secret: secret.clone(), token: token.clone(), base: Some(base), expires_at, user: caller.clone(), policy: parsed.unwrap() });
+        inner.log.push((200, caller, "POST".into(), "sts".into()));
+        let body = format!(
+            "<AssumeRoleResponse><AssumeRoleResult><Credentials><AccessKeyId>{access}</AccessKeyId><SecretAccessKey>{secret}</SecretAccessKey><SessionToken>{token}</SessionToken><Expiration>{}</Expiration></Credentials></AssumeRoleResult></AssumeRoleResponse>",
+            rfc3339(expires_at)
+        );
+        HttpResponse { status: 200, headers: vec![], body: body.into_bytes() }
+    }
+
+    fn admin_endpoint(&self, inner: &mut Inner, req: &HttpRequest) -> HttpResponse {
+        let ok = self.authenticate(inner, req).ok().filter(|a| inner.admins.contains(a));
+        let q = |n: &str| req.query.iter().find(|(k, _)| k == n).map(|(_, v)| v.clone());
+        let (Some(admin), "/rustfs/admin/v3/set-user-status", Some(user), Some(status)) = (ok, req.path.as_str(), q("accessKey"), q("status")) else {
+            inner.log.push((403, String::new(), req.method.clone(), req.path.clone()));
+            return xml_error(403, "AccessDenied");
+        };
+        if !inner.users.contains_key(&user) {
+            return xml_error(404, "NoSuchUser");
+        }
+        match status.as_str() {
+            "disabled" => {
+                if !inner.disabled.contains(&user) {
+                    inner.disabled.push(user);
+                }
+            }
+            _ => inner.disabled.retain(|u| *u != user),
+        }
+        inner.log.push((200, admin, req.method.clone(), req.path.clone()));
+        HttpResponse { status: 200, ..Default::default() }
+    }
+}
+
+fn pct_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%'
+            && i + 2 < b.len()
+            && let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16)
+        {
+            out.push(v);
+            i += 3;
+            continue;
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 impl ObjectTransport for MockRustfs {
     async fn send(&self, req: HttpRequest) -> Result<HttpResponse, TransportError> {
         let mut inner = self.inner.lock().unwrap();
+        if req.path == "/" && req.method == "POST" {
+            return Ok(self.sts_endpoint(&mut inner, &req));
+        }
+        if req.path.starts_with("/rustfs/admin/v3/") {
+            return Ok(self.admin_endpoint(&mut inner, &req));
+        }
         let mut parts = req.path.trim_start_matches('/').splitn(2, '/');
         let bucket = parts.next().unwrap_or("").to_string();
         let key = parts.next().unwrap_or("").to_string();
         let result = self.authenticate(&inner, &req).and_then(|ak| {
-            let s = &inner.sessions[&ak];
+            let s = inner.sessions.get(&ak).ok_or("AccessDenied: static key not accepted for objects here")?;
             let arn = if key.is_empty() { format!("arn:aws:s3:::{bucket}") } else { format!("arn:aws:s3:::{bucket}/{key}") };
-            if allows(&s.policy, s3_action(&req.method, !key.is_empty()), &arn) { Ok(ak) } else { Err("AccessDenied: policy") }
+            let act = s3_action(&req.method, !key.is_empty());
+            if allows(&s.policy, act, &arn) && s.base.as_ref().is_none_or(|b| allows(b, act, &arn)) { Ok(ak) } else { Err("AccessDenied: policy") }
         });
         let (status, body, who) = match result {
             Err(_) => (403, vec![], String::new()),
@@ -236,6 +363,7 @@ impl StsMinter for MockRustfs {
             Session {
                 secret: secret.clone(),
                 token: token.clone(),
+                base: None,
                 expires_at,
                 user: principal.into(),
                 policy: serde_json::from_str(policy).map_err(|e| StsError(e.to_string()))?,

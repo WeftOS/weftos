@@ -18,7 +18,9 @@
 //! builds for `wasm32-unknown-unknown`. S1's `weftos-store` owns bucket
 //! naming, the control-plane client and grants; this crate depends on none of
 //! it and is wired to it through [`broker::StsMinter`] and
-//! [`broker::GrantCheck`].
+//! [`broker::GrantCheck`]. The live implementations are [`rustfs::RustfsMinter`]
+//! (STS AssumeRole and admin user status over the host's HTTP client) and
+//! [`grants::GrantLedger`] (chain grant events folded into a table).
 
 #![allow(async_fn_in_trait)]
 
@@ -26,7 +28,9 @@ pub mod broker;
 pub mod clock;
 pub mod creds;
 pub mod edge;
+pub mod grants;
 pub mod policy;
+pub mod rustfs;
 pub mod sigv4;
 pub mod wire;
 
@@ -35,3 +39,5 @@ pub mod mock;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_live;

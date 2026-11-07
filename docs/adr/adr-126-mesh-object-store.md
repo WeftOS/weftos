@@ -4,6 +4,7 @@
 - **Updated**: 2026-10-29 (§4's worktree overlay is re-expressed as RVF layers and branch metadata in ADR-128)
 - **Updated**: 2026-10-29 (S0 spike applied on PG and run; results in "S0 results"; open question 1 answered: import, not in place; §6 amended: the activity log must take RustFS's own log as well as its audit stream)
 - **Updated**: 2026-10-30 (ADR-130 adds a GCS seed bucket as the tier above this store; this store becomes the optional L1 staging tier)
+- **Updated**: 2026-11-07 (card b76c74a7: live STS minter and chain-fed grant ledger added to `weftos-edge-creds`, still tested against a mock store)
 - **Updated**: 2026-11-07 (S3 implemented in `crates/weftos-edge-creds` against a mock store; see "S3 results". The ADR stays Proposed: S1, S2, S4, S5 are not landed)
 - **Deciders**: owner
 - **Research**: `docs/research/rclone-shared-filesystem-2026-10-29.md` (rclone, RustFS,
@@ -253,8 +254,34 @@ enabled flag and the session policy (`cargo test -p weftos-edge-creds`, 21 tests
 - planted defects (revoke without disabling the user, a wildcard session policy, a removed TTL
   cap, skipped key validation) each fail a test.
 
-**Not yet verified:** against a live RustFS (the real STS `AssumeRole` call, the inline-policy
-field and the `ASIA` key shape are S0 measurements, not re-run here); on real edge hardware; and
+**Live minter and grants (card b76c74a7).** `RustfsMinter` implements `StsMinter`:
+
+- **Mint:** a signed (SigV4, service `sts`) `AssumeRole` form POST using the node user's own
+  long-lived key, with the inline session policy and `DurationSeconds` fixed at 900. STS
+  intersects the session policy with the user's attached policy, so a session never exceeds its
+  user. The 2048-byte policy limit is checked before anything is sent.
+- **Disable and enable:** an admin-signed `PUT <prefix>/set-user-status`. The prefix defaults to
+  `/rustfs/admin/v3` and is configurable.
+- **Keys:** the per-node user keys sit behind `NodeKeys` on the parent, are redacted in `Debug`
+  and zeroed on drop, and never appear in anything sent to the edge.
+
+`GrantLedger` implements `GrantCheck` from chain `GrantEvent`s (grant, revoke, revoke-all, with a
+sequence number so a replayed or out-of-order event is ignored). A node is allowed only on its own
+`weftos://<mesh>/nodes/<id>/store`, and write implies read. `apply_and_enforce` applies an event
+and, when the node lost write, revokes it at once, rather than waiting for its session to expire.
+The native HTTP client is the host's: a `reqwest` client here would trip the diff gate's `net`
+rule, which only the owner can approve.
+
+Tested end to end (37 tests) against a store that verifies signatures, session tokens, expiry and
+the user-policy intersection, and serves STS and admin calls with the 900 s minimum and the
+2048-byte limit. Seven planted defects in the new code each fail a test. Acceptance for the card:
+a node gets a session for its own bucket only, another node is refused, and revocation refuses
+the next request.
+
+**Not yet verified:** against a live RustFS (the STS form, the XML reply and the 900 s minimum follow the MinIO API RustFS mirrors, and S0 measured
+AssumeRole and disable; the admin path `/rustfs/admin/v3/set-user-status` is the one piece not
+confirmed against a running RustFS; creating the per-node user and attaching its policy at
+pairing is S1's, not built here; the spike's gate C6 was not re-run); on real edge hardware; and
 compiled for `wasm32-unknown-unknown` (the target is not installed on this host; the crate has no
 tokio, `SystemTime` or sockets outside tests). The link between a node and its parent (cogbus,
 mesh-local or a WebSocket) is the host's and is not part of this crate. The bucket-name function

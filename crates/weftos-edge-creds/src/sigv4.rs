@@ -86,15 +86,15 @@ pub fn parse_stamp(s: &str) -> Option<u64> {
     u64::try_from(days * 86_400 + hh * 3600 + mm * 60 + ss).ok()
 }
 
-pub fn signing_key(secret: &str, date: &str, region: &str) -> Vec<u8> {
+pub fn signing_key(secret: &str, date: &str, region: &str, service: &str) -> Vec<u8> {
     let k = hmac(format!("AWS4{secret}").as_bytes(), date.as_bytes());
     let k = hmac(&k, region.as_bytes());
-    let k = hmac(&k, SERVICE.as_bytes());
+    let k = hmac(&k, service.as_bytes());
     hmac(&k, b"aws4_request")
 }
 
-pub fn scope(date: &str, region: &str) -> String {
-    format!("{date}/{region}/{SERVICE}/aws4_request")
+pub fn scope(date: &str, region: &str, service: &str) -> String {
+    format!("{date}/{region}/{service}/aws4_request")
 }
 
 /// Everything the canonical request covers.
@@ -135,10 +135,16 @@ pub fn canonical_request(c: &Canonical<'_>) -> (String, String) {
     (req, signed)
 }
 
+/// Signature over `canonical` for the S3 service.
 pub fn sign(secret: &str, stamp: &str, region: &str, canonical: &str) -> String {
+    sign_for(secret, stamp, region, SERVICE, canonical)
+}
+
+/// Signature over `canonical` for any service (`s3`, `sts`).
+pub fn sign_for(secret: &str, stamp: &str, region: &str, service: &str, canonical: &str) -> String {
     let date = &stamp[..8];
-    let sts = format!("{ALGORITHM}\n{stamp}\n{}\n{}", scope(date, region), sha256_hex(canonical.as_bytes()));
-    hex(&hmac(&signing_key(secret, date, region), sts.as_bytes()))
+    let sts = format!("{ALGORITHM}\n{stamp}\n{}\n{}", scope(date, region, service), sha256_hex(canonical.as_bytes()));
+    hex(&hmac(&signing_key(secret, date, region, service), sts.as_bytes()))
 }
 
 /// The inputs to sign a request with header auth.
@@ -162,6 +168,19 @@ impl HeaderSigner<'_> {
         base_headers: &[(String, String)],
         body: &[u8],
     ) -> Vec<(String, String)> {
+        self.sign_service(SERVICE, method, path, query, base_headers, body)
+    }
+
+    /// As [`Self::sign`] for another service, e.g. `sts` for AssumeRole.
+    pub fn sign_service(
+        &self,
+        service: &str,
+        method: &str,
+        path: &str,
+        query: &[(String, String)],
+        base_headers: &[(String, String)],
+        body: &[u8],
+    ) -> Vec<(String, String)> {
         let (date, stamp) = amz_dates(self.now);
         let payload = sha256_hex(body);
         let mut headers: Vec<(String, String)> = base_headers.to_vec();
@@ -171,13 +190,13 @@ impl HeaderSigner<'_> {
             headers.push(("x-amz-security-token".into(), t.into()));
         }
         let (canon, signed) = canonical_request(&Canonical { method, path, query, headers: &headers, payload_hash: &payload });
-        let sig = sign(self.secret_key, &stamp, self.region, &canon);
+        let sig = sign_for(self.secret_key, &stamp, self.region, service, &canon);
         headers.push((
             "authorization".into(),
             format!(
                 "{ALGORITHM} Credential={}/{}, SignedHeaders={signed}, Signature={sig}",
                 self.access_key,
-                scope(&date, self.region)
+                scope(&date, self.region, service)
             ),
         ));
         headers
@@ -203,7 +222,7 @@ pub fn presign(
     let (date, stamp) = amz_dates(c.now);
     let mut query = vec![
         ("X-Amz-Algorithm".to_string(), ALGORITHM.to_string()),
-        ("X-Amz-Credential".into(), format!("{}/{}", c.access_key, scope(&date, c.region))),
+        ("X-Amz-Credential".into(), format!("{}/{}", c.access_key, scope(&date, c.region, SERVICE))),
         ("X-Amz-Date".into(), stamp.clone()),
         ("X-Amz-Expires".into(), expires.to_string()),
         ("X-Amz-SignedHeaders".into(), "host".into()),
@@ -221,4 +240,15 @@ pub fn presign(
 pub fn render_url(scheme: &str, host: &str, p: &Presigned) -> String {
     let q = p.query.iter().map(|(k, v)| format!("{}={}", uri_encode(k, false), uri_encode(v, false))).collect::<Vec<_>>().join("&");
     format!("{scheme}://{host}{}?{q}", uri_encode(&p.path, true))
+}
+
+/// RFC 3339 UTC timestamp (`2026-11-07T11:00:00Z`, optional fraction) to unix seconds.
+pub fn parse_rfc3339(s: &str) -> Option<u64> {
+    let s = s.trim();
+    let (main, _frac) = s.strip_suffix('Z')?.split_once('.').unwrap_or((s.strip_suffix('Z')?, ""));
+    let b = main.as_bytes();
+    if b.len() != 19 || b[4] != b'-' || b[7] != b'-' || b[10] != b'T' || b[13] != b':' || b[16] != b':' {
+        return None;
+    }
+    parse_stamp(&format!("{}{}{}T{}{}{}Z", &main[0..4], &main[5..7], &main[8..10], &main[11..13], &main[14..16], &main[17..19]))
 }
