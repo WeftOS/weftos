@@ -109,6 +109,9 @@ enum Commands {
     /// Manage tools (list, show, search, deny/allow).
     Tools(commands::tools_cmd::ToolsArgs),
 
+    /// Tapestry harness integration (generate a plugin from the agent directory).
+    Tapestry(commands::tapestry_cmd::TapestryArgs),
+
     /// Manage agents (list, show, use).
     Agents(commands::agents_cmd::AgentsArgs),
 
@@ -451,6 +454,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         Commands::Mcp(args) => commands::mcp_cmd::run(args).await?,
         #[cfg(feature = "services")]
         Commands::McpServer(args) => commands::mcp_server::run(args).await?,
+        Commands::Tapestry(args) => commands::tapestry_cmd::run(args).await?,
         Commands::Status(args) => commands::status::run(args).await?,
         Commands::Channels { action } => {
             let platform = clawft_platform::NativePlatform::new();
