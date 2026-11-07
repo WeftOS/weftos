@@ -4,7 +4,7 @@
 - **Updated**: 2026-10-29 (§4's worktree overlay is re-expressed as RVF layers and branch metadata in ADR-128)
 - **Updated**: 2026-10-29 (S0 spike applied on PG and run; results in "S0 results"; open question 1 answered: import, not in place; §6 amended: the activity log must take RustFS's own log as well as its audit stream)
 - **Updated**: 2026-10-30 (ADR-130 adds a GCS seed bucket as the tier above this store; this store becomes the optional L1 staging tier)
-- **Updated**: 2026-11-07 (S1 built on `feat/adr126-s1`: `weftos-store` crate, `weaver store`, daemon wiring, local-directory backend; no RustFS backend or S3 transport yet, see "S1 status")
+- **Updated**: 2026-11-07 (S1 built on `feat/adr126-s1`: `weftos-store` crate, `weaver store`, daemon wiring, local-directory backend; RustFS S3 + admin transport added and verified against a throwaway RustFS 1.0.4, audit-stream and notification field names still unverified, see "S1 status")
 - **Deciders**: owner
 - **Research**: `docs/research/rclone-shared-filesystem-2026-10-29.md` (rclone, RustFS,
   OpenDAL, governance gaps). Board card `3605565e`.
@@ -230,14 +230,40 @@ RustFS audit, `s3_authorization_denied` log lines and bucket notifications, prom
 `weaver store ls|create|grant|revoke|promote|archive|put|get`. The daemon creates its node store at
 start. Tests: `weftos-store` (32) and the `store` tests in `clawft-weave`.
 
-Not built, and so not verified: the RustFS transport (S3 data plane and admin API behind the
-`ObjectBackend` and `AdminBackend` traits; it needs an HTTP client, which the diff gate holds for
-owner approval), and the RustFS field names the audit parsers accept (written from the S0
-write-up, not from a captured line). Until then the daemon uses a local-directory backend. Cogs
-reach the store through `store.put` and `store.get` as a named principal; a cogbus verb is not
-built. Remote (mesh) callers are modelled (`Caller::mesh`, exposure check) but no mesh transport
-calls it yet. Project stores are created with `weaver store create`; `weaver project add` does not
-create one yet.
+**RustFS transport (2026-11-07, owner approved the HTTP client and the `weftos-store` dependency):**
+`RustfsBackend` (feature `rustfs`, `crates/weftos-store/src/rustfs.rs`, `sigv4.rs`) implements both
+traits over blocking HTTP with SigV4 signed by the root credential: the S3 data plane (put with
+`If-None-Match`, get, head, delete, copy, list v2 with paging, buckets and tags) and the admin API
+(`/rustfs/admin/v3`: add-user, set-user-status, add-canned-policy, set-user-or-group-policy,
+remove-user, remove-canned-policy). The daemon selects it when `WEFTOS_STORE_RUSTFS_ENV` names an
+env file (`MESH_S3_ENDPOINT`, `MESH_S3_ACCESS_KEY`, `MESH_S3_SECRET_KEY`, optional `MESH_S3_REGION`);
+each principal's key id is `wk-<16 hex of blake3(principal)>` and its secret is kept 0600 under
+`<runtime dir>/store-secrets/`. It is called from blocking contexts only (the weave verbs already
+use `spawn_blocking`; start-up runs it on a plain thread).
+
+Verified against a throwaway RustFS 1.0.4 on loopback (not PG), by `cargo test -p weftos-store
+--features rustfs -- --ignored` with `WEFTOS_STORE_TEST_RUSTFS_ENV` set:
+- object and bucket operations, paging past 1000 keys, tags, a 412 on a conditional put;
+- a scoped key is refused outside its bucket, and **a disabled key's next request is a 403**;
+  re-creating a key keeps its secret and its disabled state; no grants becomes a deny-all policy
+  (RustFS rejects a policy with no statements: HTTP 500);
+- the S1 done-when end to end: node and project stores, a cog's write in the activity log, and
+  disabling the grant refuses the next request at the service and at RustFS.
+
+Findings that shaped the code: creating a bucket the root already owns returns 200 (so
+`create_bucket` checks first); a bucket name needs 3 or more characters; headers such as
+`If-None-Match` must be signed; `ObjectMeta.etag` is the backend's etag (MD5 on RustFS, BLAKE3 on
+the local backends).
+
+Audit parsers: the `s3_authorization_denied` line was captured from RustFS 1.0.4 and the parser fixed
+to match (`action` is `S3Action(GetObjectAction)`, `object` can be `"None"`). **Still unverified:**
+the audit-stream record (successful operations) and bucket-notification field names. Audit did not
+start from the environment variables I tried (`RUSTFS_AUDIT_ENABLE`, a webhook target), so no record
+was captured; the parser still reads field names from the S0 write-up. Cogs reach the store through
+`store.put` and `store.get` as a named principal; a cogbus verb is not built. Remote (mesh) callers
+are modelled (`Caller::mesh`, exposure check) but no mesh transport calls it yet. Project stores are
+created with `weaver store create`; `weaver project add` does not create one yet. Not done for PG:
+nothing here was deployed, and `WEFTOS_STORE_RUSTFS_ENV` is unset by default (local-directory backend).
 
 ## Consequences
 

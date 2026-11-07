@@ -66,7 +66,7 @@ weftos-cog-protocol = { path = "../weftos-cog-protocol" }
 # ADR-122: the cog data plane broker the daemon runs (cogbus).
 weftos-cogbus = { path = "../weftos-cogbus" }
 # ADR-126: the mesh object store (names, grants, governed access, audit).
-weftos-store = { path = "../weftos-store" }
+weftos-store = { path = "../weftos-store", features = ["rustfs"] }
 clap = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }

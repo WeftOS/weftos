@@ -25,3 +25,28 @@ fn start_creates_the_node_store_once_and_it_is_an_exposure() {
     assert!(global().is_some());
     assert!(Arc::ptr_eq(&svc, &start("pg-1", d.path(), reg, None).unwrap()), "the first start wins");
 }
+
+/// The daemon's wiring over a real RustFS: node store created, exposure registered, a governed
+/// write lands as an object. Needs a THROWAWAY RustFS (never PG): set WEFTOS_STORE_TEST_RUSTFS_ENV
+/// to an env file with MESH_S3_ENDPOINT / MESH_S3_ACCESS_KEY / MESH_S3_SECRET_KEY.
+#[test]
+#[ignore = "needs a throwaway RustFS: WEFTOS_STORE_TEST_RUSTFS_ENV"]
+fn live_rustfs_backs_the_daemon_service() {
+    use weftos_store::{Access, Principal, service::Caller};
+    let env = std::path::PathBuf::from(std::env::var("WEFTOS_STORE_TEST_RUSTFS_ENV").expect("WEFTOS_STORE_TEST_RUSTFS_ENV"));
+    let d = tempfile::tempdir().unwrap();
+    let reg = Arc::new(ExposureRegistry::new("live-1"));
+    let node_id = format!("live-{}", &ulid::Ulid::new().to_string().to_lowercase()[10..]);
+    let svc = open_service(&node_id, d.path(), reg.clone(), None, Some(env)).unwrap();
+    let node = svc.list_stores().into_iter().next().expect("node store");
+    assert!(reg.get(&format!("store.{}", node.bucket)).is_some());
+    let name = StoreName::parse(&node.name).unwrap();
+    let cog = Principal::parse("cog:live").unwrap();
+    svc.grant(&name, cog.clone(), Access::Write, "test").unwrap();
+    let who = Caller::local(cog.clone());
+    svc.put(&who, &name, "agents/live/out.txt", b"hi", false).unwrap();
+    assert_eq!(svc.get(&who, &name, "agents/live/out.txt").unwrap(), b"hi");
+    assert!(d.path().join("store-secrets").read_dir().unwrap().count() >= 1, "the cog's key secret is kept 0600");
+    svc.set_grant_enabled(&name, &cog, false, "test").unwrap();
+    assert!(svc.get(&who, &name, "agents/live/out.txt").is_err());
+}

@@ -1,8 +1,11 @@
 //! The daemon's object store (ADR-126 S1): `weftos-store` wired to this node's exposure
 //! registry (ADR-120), activity log and chain.
 //!
-//! - Stores live under `<runtime dir>/store/` (a local-directory backend) until a RustFS
-//!   backend is configured; the daemon is the only door either way.
+//! - Stores live under `<runtime dir>/store/` (a local-directory backend) unless
+//!   `WEFTOS_STORE_RUSTFS_ENV` names an env file (`MESH_S3_ENDPOINT`, `MESH_S3_ACCESS_KEY`,
+//!   `MESH_S3_SECRET_KEY`, optional `MESH_S3_REGION`), which selects the RustFS backend; per-key
+//!   secrets are then written 0600 under `<runtime dir>/store-secrets/`. The daemon is the only
+//!   door either way.
 //! - Each store is an exposure `store.<bucket>`, audience `local` until an operator widens it.
 //! - Every governed request, grant and refusal is a record in the exposure activity log
 //!   (`weaver expose log --id store.<bucket>`); grants and lifecycle changes also go on the chain.
@@ -16,7 +19,7 @@ use clawft_kernel::exposure::{AuditFn, ExposureKind, ExposureRegistry, ExposureS
 use serde_json::Value;
 use weftos_store::audit::{AuditEvent, AuditSink};
 use weftos_store::service::{Config, ChainSink, ExposureGate};
-use weftos_store::{FsBackend, StoreName, StoreService};
+use weftos_store::{AdminBackend, FsBackend, ObjectBackend, RustfsBackend, RustfsConfig, StoreName, StoreService};
 
 static GLOBAL: OnceLock<Arc<StoreService>> = OnceLock::new();
 
@@ -94,11 +97,38 @@ pub fn start(node_id: &str, dir: &Path, exposures: Arc<ExposureRegistry>, chain:
     if let Some(g) = global() {
         return Ok(g);
     }
+    // The RustFS backend uses blocking HTTP, which must not run on (or be built inside) an async
+    // task; a plain thread keeps both backends safe to start from the daemon's runtime.
+    let svc = std::thread::scope(|s| {
+        s.spawn(|| open_service(node_id, dir, exposures, chain, std::env::var_os("WEFTOS_STORE_RUSTFS_ENV").filter(|v| !v.is_empty()).map(Into::into))).join().map_err(|_| "object store start panicked".to_owned())?
+    })?;
+    Ok(GLOBAL.get_or_init(|| svc).clone())
+}
+
+type Backends = (Arc<dyn AdminBackend>, Arc<dyn ObjectBackend>);
+
+fn backends(dir: &Path, rustfs_env: Option<&Path>) -> Result<Backends, String> {
+    if let Some(env_file) = rustfs_env {
+        let cfg = RustfsConfig::from_env_file(env_file, dir.join("store-secrets")).map_err(|e| e.to_string())?;
+        let be = Arc::new(RustfsBackend::new(cfg).map_err(|e| e.to_string())?);
+        return Ok((be.clone(), be));
+    }
     let be = Arc::new(FsBackend::open(&dir.join("store")).map_err(|e| e.to_string())?);
+    Ok((be.clone(), be))
+}
+
+pub(crate) fn open_service(
+    node_id: &str,
+    dir: &Path,
+    exposures: Arc<ExposureRegistry>,
+    chain: Option<AuditFn>,
+    rustfs_env: Option<std::path::PathBuf>,
+) -> Result<Arc<StoreService>, String> {
+    let (admin, objects) = backends(dir, rustfs_env.as_deref())?;
     let svc = StoreService::open(
         Config { node_id: node_id.to_owned(), state_path: Some(dir.join("store-state.json")), clock: now_ms },
-        be.clone(),
-        be,
+        admin,
+        objects,
         Arc::new(RegistryGate(exposures.clone())),
         Arc::new(ActivitySink(exposures)),
         Arc::new(ChainAudit(chain)),
@@ -107,11 +137,11 @@ pub fn start(node_id: &str, dir: &Path, exposures: Arc<ExposureRegistry>, chain:
     let svc = Arc::new(svc);
     let node = StoreName::node(&mesh_token(), &node_token(node_id)).map_err(|e| e.to_string())?;
     // A node store that cannot be created (for example the mesh id appeared since the bucket was
-    // made under `local`) must not take the other stores down: say so and carry on.
+    // made under `local`, or RustFS is down) must not take the other stores down: say so and carry on.
     if let Err(e) = svc.ensure_store(&node, "daemon", weftos_store::service::Parties::defaults_for(&node)) {
         tracing::warn!(error = %e, store = %node, "node store not created; other stores are served");
     }
-    Ok(GLOBAL.get_or_init(|| svc).clone())
+    Ok(svc)
 }
 
 #[cfg(test)]

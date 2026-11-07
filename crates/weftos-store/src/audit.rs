@@ -137,6 +137,15 @@ pub fn parse_audit(line: &str) -> Option<Raw> {
     })
 }
 
+/// `S3Action(GetObjectAction)` (RustFS 1.0.4's log) or `s3:GetObject` to `GetObject`.
+fn action_name(a: &str) -> String {
+    let a = a.trim();
+    match a.strip_prefix("S3Action(").and_then(|x| x.strip_suffix(')')) {
+        Some(x) => x.strip_suffix("Action").unwrap_or(x).to_owned(),
+        None => a.trim_start_matches("s3:").to_owned(),
+    }
+}
+
 /// One `s3_authorization_denied` line of RustFS's JSON log.
 pub fn parse_denial(line: &str) -> Option<Raw> {
     if !line.contains("s3_authorization_denied") {
@@ -146,8 +155,8 @@ pub fn parse_denial(line: &str) -> Option<Raw> {
     Some(Raw {
         access_key: text(&v, &["account", "accessKey", "access_key"]).unwrap_or_default(),
         bucket: text(&v, &["bucket"]).unwrap_or_default(),
-        object: text(&v, &["object", "key"]),
-        op: text(&v, &["action"]).map(|a| a.trim_start_matches("s3:").to_owned()).unwrap_or_default(),
+        object: text(&v, &["object", "key"]).filter(|o| o != "None" && !o.is_empty()),
+        op: text(&v, &["action"]).map(|a| action_name(&a)).unwrap_or_default(),
         status: Some(403),
         bytes: 0,
         reason: text(&v, &["reason"]),
@@ -193,6 +202,15 @@ mod tests {
         assert_eq!((r.op.as_str(), r.status, r.reason.as_deref()), ("PutObject", Some(403), Some("no policy")));
         assert!(parse_denial(r#"{"message":"something else"}"#).is_none());
         assert!(parse_denial("s3_authorization_denied but not json").is_none());
+    }
+
+    #[test]
+    fn a_denial_line_captured_from_rustfs_1_0_4_is_read() {
+        let line = r#"{"timestamp":"2026-11-07T06:36:23.965138209-05:00","level":"WARN","message":"request denied by authorization layer","event":"s3_authorization_denied","reason":"no_policy_allows_action","action":"S3Action(GetObjectAction)","bucket":"denybkt","object":"x","version_id":"None","account":"wk-denytest","is_owner":false,"target":"rustfs::storage::access"}"#;
+        let r = parse_denial(line).unwrap();
+        assert_eq!((r.access_key.as_str(), r.bucket.as_str(), r.object.as_deref(), r.op.as_str()), ("wk-denytest", "denybkt", Some("x"), "GetObject"));
+        assert_eq!(r.reason.as_deref(), Some("no_policy_allows_action"));
+        assert_eq!(parse_denial(&line.replace("\"object\":\"x\"", "\"object\":\"None\"")).unwrap().object, None);
     }
 
     #[test]
