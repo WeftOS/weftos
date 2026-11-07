@@ -209,6 +209,10 @@ mod infer_hardening_tests;
 pub mod expose_rpc;
 pub mod expose_set;
 pub mod expose_rt;
+/// ADR-126 S1: the object store wired to exposure, activity log and chain.
+pub mod store_rt;
+/// ADR-126 S1: `store.*` operator verbs.
+pub mod store_rpc;
 pub mod node_facts_rpc;
 /// Operator location labels for the fleet manager (site and room per node).
 pub mod agent_install;

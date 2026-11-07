@@ -4,7 +4,8 @@
 - **Updated**: 2026-10-29 (§4's worktree overlay is re-expressed as RVF layers and branch metadata in ADR-128)
 - **Updated**: 2026-10-29 (S0 spike applied on PG and run; results in "S0 results"; open question 1 answered: import, not in place; §6 amended: the activity log must take RustFS's own log as well as its audit stream)
 - **Updated**: 2026-10-30 (ADR-130 adds a GCS seed bucket as the tier above this store; this store becomes the optional L1 staging tier)
-- **Updated**: 2026-11-07 (S5 gate and per-account instance spec in `crates/clawft-weave/src/store_account.rs`; wiring to `weftos-store` waits on S1)
+- **Updated**: 2026-11-07 (S5 gate and per-account instance spec in `crates/clawft-weave/src/store_account.rs`; wired to `weftos-store` from S1)
+- **Updated**: 2026-11-07 (S1 built on `feat/adr126-s1`: `weftos-store` crate, `weaver store`, daemon wiring, local-directory backend; no RustFS backend or S3 transport yet, see "S1 status")
 - **Deciders**: owner
 - **Research**: `docs/research/rclone-shared-filesystem-2026-10-29.md` (rclone, RustFS,
   OpenDAL, governance gaps). Board card `3605565e`.
@@ -220,6 +221,24 @@ policy covers only `s0-spike`.
 
 Not tested: bucket notifications (not configured in the spike), and erasure coding and
 replication (single drive).
+
+## S1 status (2026-11-07)
+
+Built: name-to-bucket mapping, grants (recorded on the chain, pushed into the backend as access
+keys and IAM policies), the exposure per store (`store.<bucket>`, ADR-120), governed
+get/put/head/delete/list with every request and refusal in the exposure activity log, parsers for
+RustFS audit, `s3_authorization_denied` log lines and bucket notifications, promote, archive, and
+`weaver store ls|create|grant|revoke|promote|archive|put|get`. The daemon creates its node store at
+start. Tests: `weftos-store` (32) and the `store` tests in `clawft-weave`.
+
+Not built, and so not verified: the RustFS transport (S3 data plane and admin API behind the
+`ObjectBackend` and `AdminBackend` traits; it needs an HTTP client, which the diff gate holds for
+owner approval), and the RustFS field names the audit parsers accept (written from the S0
+write-up, not from a captured line). Until then the daemon uses a local-directory backend. Cogs
+reach the store through `store.put` and `store.get` as a named principal; a cogbus verb is not
+built. Remote (mesh) callers are modelled (`Caller::mesh`, exposure check) but no mesh transport
+calls it yet. Project stores are created with `weaver store create`; `weaver project add` does not
+create one yet.
 
 ## Consequences
 
