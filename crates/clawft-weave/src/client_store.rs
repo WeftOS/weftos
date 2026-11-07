@@ -139,6 +139,13 @@ impl ClientStore {
         self.svc.grant(name, p.clone(), to_s1_access(a), actor).map(|_| ())
     }
 
+    /// Revoke a local principal's grant. Drops it from the gate and the service.
+    pub fn revoke_local(&self, p: &S1Principal, name: &StoreName, actor: &str) -> Result<(), StoreError> {
+        let gp = Principal::Client { account: self.spec.account.clone(), id: p.to_string() };
+        self.gate().revoke(&gp, &name.to_string());
+        self.svc.revoke(name, p, actor)
+    }
+
     /// Grant the WeftOS account. This is the only way it gets in.
     pub fn grant_weftos(&self, id: &str, name: &StoreName, a: Access, actor: &str) -> Result<(), StoreError> {
         let m = mapped(WEFTOS_PREFIX, id).map_err(|_| StoreError::Refused("refused".into()))?;
