@@ -258,9 +258,16 @@ the local backends).
 Audit parsers: the `s3_authorization_denied` line was captured from RustFS 1.0.4 and the parser fixed
 to match (`action` is `S3Action(GetObjectAction)`, `object` can be `"None"`). **Still unverified:**
 the audit-stream record (successful operations) and bucket-notification field names. Audit did not
-start from the environment variables I tried (`RUSTFS_AUDIT_ENABLE`, a webhook target), so no record
-was captured; the parser still reads field names from the S0 write-up. Cogs reach the store through
-`store.put` and `store.get` as a named principal; a cogbus verb is not built. Remote (mesh) callers
+start from the environment variables I tried (`RUSTFS_AUDIT_ENABLE` with a webhook target named `_A` or
+unnamed, plus a queue dir, on a fresh data dir; RustFS 1.0.4 wrote no record to a loopback sink in
+three tries, and its own log for those runs was not updated, so the reason is unknown; it may need the
+audit target set through the admin config API instead), so no record was captured; the parser still reads field names from the S0 write-up. Cogs reach the store through the cog data plane: the daemon serves `svc.store/<project ULID, lower
+case>` (default store: that project's) and `svc.store/<node>` (the node's store), schema `store.v1`
+(`contracts/cogs/README.md`), with ops put, get, head, list and delete. The caller becomes the principal
+`cog:<instance id>` and needs a grant, so an ungranted cog is refused and a disabled grant refuses the
+next call; one provider per project keeps a call inside its project, because a cross-project call
+needs a policy grant and the node's own bucket cannot be granted. A reply is limited to 64 KiB, so a
+larger object is an error, not a truncation. `store.put` and `store.get` on the weaver socket remain. Remote (mesh) callers
 are modelled (`Caller::mesh`, exposure check) but no mesh transport calls it yet. `project add` (the daemon's
 install action) creates the project store when the daemon runs an object store, and says so in its
 report; a failure there is a note, never a failed add. Other project stores come from

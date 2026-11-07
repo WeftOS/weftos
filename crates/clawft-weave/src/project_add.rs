@@ -154,7 +154,14 @@ pub fn finish(env: &InstallEnv, f: Finish<'_>) -> AddReport {
         notes.push(format!("could not record what was added ({e}); `weaver project remove` will not find it"));
     }
     let store = match crate::store_rt::project_added(&f.ulid) {
-        Ok(s) => s,
+        Ok(s) => {
+            if s.is_some()
+                && let Err(e) = crate::store_svc::project_added(&f.ulid)
+            {
+                notes.push(format!("the project's store is not offered to its cogs on the data plane ({e})"));
+            }
+            s
+        }
         Err(e) => {
             notes.push(format!("the project's object store was not created ({e}); it can be made later"));
             None

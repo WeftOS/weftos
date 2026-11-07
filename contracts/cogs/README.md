@@ -174,6 +174,26 @@ the service's own (the NPU service returns `text`, `usage` and timings).
 | `image_blob` | `blob.v1` | optional, instead of `image_b64`: a PNG or JPEG of at most 4 MiB held by the broker (ADR-122 section 13). The handle travelling in the call lets the service read it |
 | `max_tokens` | u32 | optional, 1..=4096 |
 
+### `store.v1` (service call request)
+
+The body of a call on `svc.store/<node>` (ADR-126 S1, ADR-122 section 12): one object
+operation on the daemon's store. It names no identity: the daemon governs the call as the
+principal `cog:<calling instance id>`, so the cog needs a grant (`weaver store grant`) on the
+store, and a refusal is in that store's activity log. The reply is `{key,size,etag}` for `put` and
+`head`, `{key,size,b64,text}` for `get` (an object that does not fit in 64 KiB is an error),
+`{objects:[{key,size,etag}]}` for `list` and `{key,deleted}` for `delete`.
+
+| Field | Type | Rule |
+|-------|------|------|
+| `op` | string | `put`, `get`, `head`, `list` or `delete` |
+| `key` | string | 1..=1024 bytes; required by every op except `list`, which takes `prefix` |
+| `text`, `b64` | string | `put` only, exactly one: UTF-8 text up to 48 KiB, or base64 up to 48 K chars |
+| `prefix` | string | `list` only, optional |
+| `if_none_match` | bool | `put` only: refuse if the key exists |
+| `store` | string | optional `weftos://…` store name; default: the project store of the cog's project, else this node's store |
+
+Unknown fields are refused.
+
 ### `mcu.call.v1` (service call request)
 
 The body of a call on `svc.mcu/<node>` (ADR-122 section 12). It carries no common fields.

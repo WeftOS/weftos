@@ -211,6 +211,7 @@ pub mod expose_set;
 pub mod expose_rt;
 /// ADR-126 S1: the object store wired to exposure, activity log and chain.
 pub mod store_rt;
+pub mod store_svc;
 /// ADR-126 S1: `store.*` operator verbs.
 pub mod store_rpc;
 pub mod node_facts_rpc;

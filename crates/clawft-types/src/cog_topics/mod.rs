@@ -18,6 +18,7 @@ mod limits;
 mod mcu;
 mod media;
 mod sdr;
+mod store_call;
 mod vision;
 mod vision_reply;
 #[cfg(test)]
@@ -37,6 +38,7 @@ pub use limits::{
 pub use mcu::{MAX_METHOD, MAX_PARAMS, McuCall};
 pub use infer::{DEFAULT_PRIORITY, InferRequest, MAX_IMAGE_B64, MAX_IMAGE_BLOB, MAX_PRIORITY, MAX_TEXT, MIN_PRIORITY};
 pub use media::{Detection, Detections, FrameRef, IqCs16, PcmS16le, SpectrumPsd, is_gap_record};
+pub use store_call::StoreCall;
 pub use sdr::{AutoGain, Gain, SdrBand, SdrReply, SdrRequest};
 pub use vision::*;
 pub use vision_reply::{
@@ -45,8 +47,8 @@ pub use vision_reply::{
 
 /// Registered schema ids, in the order the plan lists them, then
 /// `store.vector.v1` (ADR-122 section 9), `infer.v1` and `mcu.call.v1` (section 12), `sdr.v1`
-/// (service calls), `blob.v1` (section 3, B5), `event.v1` (plan 5.1), then `vision.v1` (ADR-125).
-pub const SCHEMA_IDS: [&str; 17] = [
+/// (service calls), `blob.v1` (section 3, B5), `event.v1` (plan 5.1), then `vision.v1` (ADR-125) and `store.v1` (ADR-126).
+pub const SCHEMA_IDS: [&str; 18] = [
     "senml.v1",
     "spatial.evidence.v1",
     "pcm.s16le.v1",
@@ -64,6 +66,7 @@ pub const SCHEMA_IDS: [&str; 17] = [
     "blob.v1",
     "event.v1",
     "vision.v1",
+    "store.v1",
 ];
 
 /// True if `id` is a registered schema id.
@@ -244,6 +247,7 @@ pub fn check_message(
         "blob.v1" => parse::<BlobHandle>(msg, BlobHandle::validate),
         "event.v1" => parse::<EventMsg>(msg, EventMsg::validate),
         "vision.v1" => parse::<VisionRequest>(msg, VisionRequest::validate),
+        "store.v1" => parse::<StoreCall>(msg, StoreCall::validate),
         "spatial.evidence.v1" => Err(CogTopicError(
             "spatial.evidence.v1 is validated by weftos-spatial-core".into(),
         )),
