@@ -399,6 +399,7 @@ impl AttachToolProvider {
                 ),
                 Err(e) => agent_directory::Declared {
                     rows: Err(format!("cwd: {e}")),
+                    teams: Err(format!("cwd: {e}")),
                     origin: json!({"origin": null}),
                 },
             },

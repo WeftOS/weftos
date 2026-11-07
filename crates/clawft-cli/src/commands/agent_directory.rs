@@ -71,8 +71,10 @@ pub fn normalize_key(input: &str) -> Result<String, String> {
 
 /// The declared agents and where they were read from.
 pub struct Declared {
-    /// One row per package, or why they could not be read.
+    /// One row per agent package, or why they could not be read.
     pub rows: Source<Vec<Value>>,
+    /// The teams (not agents), or why they could not be read.
+    pub teams: Source<Vec<Value>>,
     /// `{origin: "disk"|"embedded", location, commit}`.
     pub origin: Value,
 }
@@ -109,15 +111,17 @@ pub fn load_declared(start: &Path, env_dir: Option<&str>) -> Declared {
     use weftos::init::source::AgentSource;
     let located = locate_agents_dir(start, env_dir);
     let (src, origin) = match located {
-        Err(e) => return Declared { rows: Err(e), origin: json!({"origin": null}) },
+        Err(e) => return Declared { rows: Err(e.clone()), teams: Err(e), origin: json!({"origin": null}) },
         Ok(Some(dir)) => match AgentSource::from_dir(&dir) {
             Ok(s) => {
                 let o = json!({"origin": "disk", "location": dir.display().to_string(), "commit": s.commit});
                 (s, o)
             }
             Err(e) => {
+                let e = format!("{}: {e}", dir.display());
                 return Declared {
-                    rows: Err(format!("{}: {e}", dir.display())),
+                    rows: Err(e.clone()),
+                    teams: Err(e),
                     origin: json!({"origin": "disk", "location": dir.display().to_string()}),
                 };
             }
@@ -128,28 +132,100 @@ pub fn load_declared(start: &Path, env_dir: Option<&str>) -> Declared {
             (s, o)
         }
     };
-    Declared { rows: rows_of(&src), origin }
+    let teams = teams_of(&src);
+    let rows = rows_of(&src, teams.as_ref().ok());
+    let mut origin = origin;
+    origin["non_agent_packages"] = json!(non_agent_ids(&src));
+    Declared { rows, teams, origin }
 }
 
-/// One row per package in the tree (inactive ones included, flagged by
-/// `state`). An empty tree is an error: an embedded tree is empty only when
-/// the binary was built outside the repo.
-pub fn rows_of(src: &weftos::init::source::AgentSource) -> Source<Vec<Value>> {
+/// Every team in the tree, as declared in its team.yaml. Teams are not
+/// agents: they are a separate section of the directory. Fields `weftos init`
+/// ignores sit under `declared_not_enforced`.
+pub fn teams_of(src: &weftos::init::source::AgentSource) -> Source<Vec<Value>> {
+    use weftos::init::package::team_decl;
+    let mut out = Vec::new();
+    for t in src.team_ids() {
+        let d = team_decl(src, &t)
+            .map_err(|e| format!("team {t}: {e}"))?
+            .ok_or_else(|| format!("team {t}: team.yaml vanished"))?;
+        out.push(json!({
+            "name": d.name,
+            "schema": d.schema,
+            "description": d.description,
+            "lead": d.lead,
+            "shared_skills": d.shared_skills,
+            "members": d.members.iter().map(|m| json!({
+                "agent": m.agent, "active": m.active, "pinned": m.pinned,
+                "nickname": m.nickname, "position": m.position, "phase": m.phase,
+            })).collect::<Vec<_>>(),
+            "declared_not_enforced": d.declared_unenforced,
+        }));
+    }
+    Ok(out)
+}
+
+/// Package ids of kind `skill` or `template` (not agents).
+fn non_agent_ids(src: &weftos::init::source::AgentSource) -> Vec<String> {
+    src.all_package_ids()
+        .into_iter()
+        .filter(|id| {
+            let v: serde_yaml::Value = serde_yaml::from_slice(src.get(&format!("{id}/weftos-package.yaml")).unwrap_or_default())
+                .unwrap_or(serde_yaml::Value::Null);
+            matches!(v.get("kind").and_then(serde_yaml::Value::as_str), Some("skill" | "template"))
+        })
+        .collect()
+}
+
+/// One row per agent package: packages of kind `skill` or `template` are not
+/// agents and are left out (`sources.declared.non_agent_packages` names them).
+/// Inactive packages are kept, flagged by `state`. An empty tree is an error:
+/// an embedded tree is empty only when the binary was built outside the repo.
+pub fn rows_of(src: &weftos::init::source::AgentSource, teams: Option<&Vec<Value>>) -> Source<Vec<Value>> {
+    use weftos::init::package::{package_skills, team_decl};
     let mut rows = Vec::new();
-    for (path, bytes) in &src.files {
-        let Some(id) = path.strip_suffix("/weftos-package.yaml").filter(|i| !i.contains('/')) else {
-            continue;
-        };
-        let m: serde_yaml::Value = serde_yaml::from_slice(bytes)
+    let ids = src.all_package_ids();
+    if ids.is_empty() {
+        return Err(format!("{}: the package tree holds no agents", src.origin));
+    }
+    for id in ids {
+        let path = format!("{id}/weftos-package.yaml");
+        let m: serde_yaml::Value = serde_yaml::from_slice(src.get(&path).unwrap_or_default())
             .map_err(|e| format!("{} ({path}): not valid YAML: {e}", src.origin))?;
         let field = |k: &str| m.get(k).and_then(serde_yaml::Value::as_str).map(str::to_string);
+        let kind = field("kind");
+        if matches!(kind.as_deref(), Some("skill" | "template")) {
+            continue;
+        }
+        let skills = package_skills(src, &id).map_err(|e| format!("{id}: {e}"))?;
+        let mut memberships = Vec::new();
+        for t in teams.into_iter().flatten() {
+            let name = t["name"].as_str().unwrap_or_default();
+            // Re-read the member's own declared data (init ignores it).
+            let Some(d) = team_decl(src, name).ok().flatten() else { continue };
+            for mem in d.members.iter().filter(|m| m.agent == id) {
+                memberships.push(json!({
+                    "team": name,
+                    "lead": d.lead.as_deref() == Some(id.as_str()),
+                    "active": mem.active,
+                    "phase": mem.phase,
+                    "position": mem.position,
+                    "nickname": mem.nickname,
+                    "pinned": mem.pinned,
+                    "shared_skills": d.shared_skills,
+                    "declared_not_enforced": mem.rest,
+                }));
+            }
+        }
         rows.push(json!({
             "id": id,
             "version": field("version"),
-            "kind": field("kind"),
+            "kind": kind,
             "trust_tier": field("trust_tier"),
             "state": field("state").unwrap_or_else(|| "active".into()),
             "path": format!("agents/{id}"),
+            "skills": {"own": skills.own, "requires": skills.requires},
+            "teams": memberships,
         }));
     }
     if rows.is_empty() {
@@ -324,9 +400,14 @@ pub fn join(declared: &Declared, nodes: &[NodeInput]) -> Value {
             d.insert(k.clone(), v.clone());
         }
     }
+    if let Some(d) = declared_src.as_object_mut() {
+        d.insert("teams".into(), counted(declared.teams.as_ref().map(Vec::len)));
+    }
     json!({
         "count": agents.len(),
         "agents": agents,
+        // Teams are not agents; each agent's entry carries its own memberships.
+        "teams": declared.teams.as_ref().ok().cloned().unwrap_or_default(),
         "warnings": warnings,
         "sources": { "declared": declared_src, "nodes": node_sources },
     })
@@ -414,6 +495,7 @@ mod tests {
     fn decl(rows: &[(&str, &str)]) -> Declared {
         Declared {
             rows: Ok(rows.iter().map(|(i, s)| json!({"id": i, "version": "1", "state": s})).collect()),
+            teams: Ok(vec![]),
             origin: json!({"origin": "disk", "location": "t"}),
         }
     }
@@ -515,7 +597,7 @@ mod tests {
         assert_eq!(d["sources"]["nodes"][0]["ok"], false);
         assert_eq!(d["sources"]["nodes"][0]["running"]["error"], "daemon down");
         assert_eq!(find(&d, "a")["status"], "unknown");
-        let nod = Declared { rows: Err("no tree".into()), origin: json!({"origin": null}) };
+        let nod = Declared { rows: Err("no tree".into()), teams: Ok(vec![]), origin: json!({"origin": null}) };
         let d = join(&nod, &local(run(&[(1, "a")]), exp(&[])));
         assert_eq!(d["sources"]["declared"]["ok"], false);
         assert_eq!(find(&d, "a")["status"], "running");
@@ -650,5 +732,100 @@ mod tests {
         std::fs::create_dir_all(&d).unwrap();
         std::fs::write(d.join("weftos-package.yaml"), "name: [unclosed").unwrap();
         assert!(load_declared(Path::new("/"), Some(t.path().to_str().unwrap())).rows.unwrap_err().contains("not valid YAML"));
+    }
+}
+
+#[cfg(test)]
+mod team_tests {
+    use super::*;
+    use std::borrow::Cow;
+    use weftos::init::source::AgentSource;
+
+    fn src_of(files: &[(&str, &str)]) -> AgentSource {
+        AgentSource {
+            files: files.iter().map(|(p, c)| (p.to_string(), Cow::Owned(c.as_bytes().to_vec()))).collect(),
+            origin: "test".into(),
+            commit: "t".into(),
+        }
+    }
+
+    fn tree() -> AgentSource {
+        src_of(&[
+            ("dev/weftos-package.yaml", "name: dev\nkind: lane\nrequires:\n  - skill: build-lane\n"),
+            ("dev/skills/build-lane/SKILL.md", "x"),
+            ("doc/weftos-package.yaml", "name: doc\nkind: lane\nstate: inactive\n"),
+            ("doctrine/weftos-package.yaml", "name: doctrine\nkind: skill\n"),
+            ("doctrine/SKILL.md", "x"),
+            (
+                "teams/core/team.yaml",
+                "schema: 1\nname: core\nlead: null\nshared_skills: [doctrine]\nmembers:\n  - agent: dev\n    position: 1\n    model_tier: mid\n    authority: supervised\n  - agent: doc\n    position: 2\n    active: false\n    phase: 2\nedges:\n  - {from: dev, to: doc, kind: consults}\nwrite_authority: {code: dev}\n",
+            ),
+            ("teams/other/team.yaml", "schema: 1\nname: other\nmembers:\n  - agent: dev\n"),
+        ])
+    }
+
+    #[test]
+    fn an_entry_carries_its_package_skills_and_team_memberships() {
+        let s = tree();
+        let teams = teams_of(&s).unwrap();
+        let rows = rows_of(&s, Some(&teams)).unwrap();
+        let dev = rows.iter().find(|r| r["id"] == "dev").unwrap();
+        assert_eq!(dev["skills"]["own"], json!(["build-lane"]));
+        assert_eq!(dev["skills"]["requires"], json!(["build-lane"]));
+        let ms = dev["teams"].as_array().unwrap();
+        assert_eq!(ms.len(), 2);
+        let core = ms.iter().find(|m| m["team"] == "core").unwrap();
+        assert_eq!(core["active"], true);
+        assert_eq!(core["lead"], false);
+        assert_eq!(core["shared_skills"], json!(["doctrine"]));
+        assert_eq!(core["declared_not_enforced"]["model_tier"], "mid");
+        assert_eq!(core["declared_not_enforced"]["authority"], "supervised");
+        let doc = rows.iter().find(|r| r["id"] == "doc").unwrap();
+        assert_eq!(doc["state"], "inactive");
+        assert_eq!(doc["teams"][0]["active"], false);
+        assert_eq!(doc["teams"][0]["phase"], 2);
+    }
+
+    #[test]
+    fn skill_packages_are_not_agents_and_teams_are_a_separate_section() {
+        let s = tree();
+        let teams = teams_of(&s).unwrap();
+        let rows = rows_of(&s, Some(&teams)).unwrap();
+        assert!(rows.iter().all(|r| r["id"] != "doctrine"));
+        assert_eq!(non_agent_ids(&s), vec!["doctrine"]);
+        let d = join(
+            &Declared { rows: Ok(rows), teams: Ok(teams), origin: json!({"origin": "disk"}) },
+            &[NodeInput { node: None, running: Ok(vec![]), exposed: Ok(json!({"exposures": []})) }],
+        );
+        assert_eq!(d["teams"].as_array().unwrap().len(), 2);
+        assert!(d["agents"].as_array().unwrap().iter().all(|a| a["id"] != "weftos://agent/core"));
+        assert_eq!(d["sources"]["declared"]["teams"]["count"], 2);
+        let core = d["teams"].as_array().unwrap().iter().find(|t| t["name"] == "core").unwrap();
+        assert_eq!(core["declared_not_enforced"]["edges"][0]["kind"], "consults");
+        assert_eq!(core["declared_not_enforced"]["write_authority"]["code"], "dev");
+        assert_eq!(core["members"][1]["agent"], "doc");
+    }
+
+    #[test]
+    fn a_broken_team_file_is_reported_not_dropped() {
+        let s = src_of(&[("a/weftos-package.yaml", "name: a\nkind: lane\n"), ("teams/t/team.yaml", "members: [")]);
+        assert!(teams_of(&s).unwrap_err().contains("team t"));
+        // The agent rows still read; the teams source says why it is missing.
+        assert!(rows_of(&s, None).is_ok());
+    }
+
+    #[test]
+    fn the_real_tree_has_weftos_core_with_chief_of_staff_and_inactive_members() {
+        let s = AgentSource::embedded();
+        let teams = teams_of(&s).unwrap();
+        let core = teams.iter().find(|t| t["name"] == "weftos-core").unwrap();
+        assert_eq!(core["schema"], 1);
+        assert!(core["shared_skills"].as_array().unwrap().iter().any(|x| x == "lead-doctrine"));
+        let rows = rows_of(&s, Some(&teams)).unwrap();
+        assert!(rows.iter().all(|r| r["id"] != "lead-doctrine"));
+        let cos = rows.iter().find(|r| r["id"] == "chief-of-staff").unwrap();
+        assert_eq!(cos["teams"][0]["team"], "weftos-core");
+        let documenter = rows.iter().find(|r| r["id"] == "documenter").unwrap();
+        assert_eq!(documenter["teams"][0]["active"], false);
     }
 }
