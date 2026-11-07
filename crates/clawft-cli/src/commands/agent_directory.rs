@@ -1,8 +1,10 @@
 //! Agent directory: one view that joins declared, running and exposed agents
 //! (design note `docs/grok-build-fork/agent-directory-design.md`).
 //!
-//! - declared: `agents/catalog.json` (generated from the `agents/<id>/`
-//!   packages by `scripts/agents-catalog.mjs`),
+//! - declared: the `agents/<id>/` packages and `agents/teams/<team>/team.yaml`
+//!   teams, loaded through `weftos::init::source::AgentSource` (the checkout's
+//!   `agents/`, else `AgentSource::embedded()`); `agents/catalog.json` is only
+//!   a generated index and is not read here,
 //! - running: weave `agent.list`,
 //! - exposed: weave `expose.list` rows of kind `harness` (ADR-120 section 3).
 //!
