@@ -159,6 +159,9 @@ pub const USER_LEVEL_ALLOW: &[&str] = &[
     "dashboard.status",
     "dashboard.actions",
     "dashboard.token.rotate",
+    // Agent directory: this node's agents and exposures; `mesh` / `node` asks peers over
+    // the signed mesh wire. Machine-level, like `dashboard.status`.
+    "agent.sources",
     // ADR-116: re-reading every project's compose/ports.yaml belongs to the machine.
     "route.reload",
     // ADR-108 P3b: the remote helper fetches a project onto this machine; the

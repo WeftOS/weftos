@@ -960,12 +960,27 @@ pub async fn node_admin(
     })
 }
 
+/// Node ids of the peers this node's control plane knows, other than itself
+/// (the whole-mesh agent directory asks each of them).
+pub async fn directory_peer_ids(kernel: &Arc<RwLock<Kernel<NativePlatform>>>) -> Result<Vec<String>, String> {
+    let plane = ready_plane(kernel, BUILT_RULES.get()).await?;
+    let me = plane.node_id().to_string();
+    Ok(plane
+        .targets()
+        .into_iter()
+        .filter(|t| t.node_id != me && t.addr != LOCAL_ADDR)
+        .map(|t| t.node_id)
+        .collect())
+}
+
 /// Daemon boot: when `workload-host.json` is present, build the control
 /// plane (and with it this node's `workload-host`) and serve the host to
 /// the configured controllers. Returns where it is served.
 pub async fn start_serving(
     kernel: Arc<RwLock<Kernel<NativePlatform>>>,
 ) -> Result<Option<SocketAddr>, String> {
+    // A peer's `agent.sources` request is answered from this kernel.
+    crate::agent_sources_rpc::set_kernel(kernel.clone());
     let dir = BOOT
         .get()
         .map(|b| b.runtime_dir.clone())

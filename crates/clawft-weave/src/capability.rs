@@ -233,6 +233,9 @@ pub fn required_capability(method: &str) -> Capability {
         | "cog.licence.revoked"
         | "infer.status"
         | "expose.list"
+        // Agent directory: this node's agents and exposures; a `node` or
+        // `mesh` call contacts peers and needs Admin inside the handler.
+        | "agent.sources"
         // ADR-122: topics, writers and counters; no payloads, no tokens.
         | "cogbus.list"
         // Fleet manager: one read-only document composed from sources the

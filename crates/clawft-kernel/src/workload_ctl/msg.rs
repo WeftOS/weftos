@@ -78,9 +78,11 @@ pub mod method {
     /// target; served to a paired peer that holds a fetch grant for the
     /// project (the node's `project-fetch.json`), not only to controllers.
     pub const PROJECT_FETCH: &str = "project.fetch";
+    /// The target's agents and exposures for the agent directory (read-only).
+    pub const AGENT_SOURCES: &str = "agent.sources";
     /// Node-admin methods: signed like the rest of the set, but answered by
     /// the node's own admin hook rather than a workload adapter.
-    pub const NODE_ADMIN: &[&str] = &[DASHBOARD_STATUS, DASHBOARD_ROTATE, PROJECT_FETCH];
+    pub const NODE_ADMIN: &[&str] = &[DASHBOARD_STATUS, DASHBOARD_ROTATE, PROJECT_FETCH, AGENT_SOURCES];
 
     /// True for a node-admin method.
     pub fn is_node_admin(m: &str) -> bool {

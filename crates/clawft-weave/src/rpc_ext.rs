@@ -483,6 +483,12 @@ const ROUTES: &[ExtRoute] = &[
         capability: Capability::Read,
         handler: crate::dashboard_rpc::handle,
     },
+    // Agent directory: Read locally; `node` / `mesh` is checked for Admin in the handler.
+    ExtRoute {
+        prefix: "agent.sources",
+        capability: Capability::Read,
+        handler: crate::agent_sources_rpc::handle,
+    },
     ExtRoute {
         prefix: "dashboard.token.rotate",
         capability: Capability::Admin,
@@ -847,6 +853,12 @@ const ROUTES: &[ExtRoute] = &[
         prefix: "dashboard.actions",
         capability: Capability::Read,
         handler: crate::dashboard_rpc::handle,
+    },
+    // Agent directory: Read locally; `node` / `mesh` is checked for Admin in the handler.
+    ExtRoute {
+        prefix: "agent.sources",
+        capability: Capability::Read,
+        handler: crate::agent_sources_rpc::handle,
     },
     ExtRoute {
         prefix: "dashboard.token.rotate",
