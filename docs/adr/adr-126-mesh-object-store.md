@@ -4,7 +4,7 @@
 - **Updated**: 2026-10-29 (§4's worktree overlay is re-expressed as RVF layers and branch metadata in ADR-128)
 - **Updated**: 2026-10-29 (S0 spike applied on PG and run; results in "S0 results"; open question 1 answered: import, not in place; §6 amended: the activity log must take RustFS's own log as well as its audit stream)
 - **Updated**: 2026-10-30 (ADR-130 adds a GCS seed bucket as the tier above this store; this store becomes the optional L1 staging tier)
-- **Updated**: 2026-11-07 (S2 implemented on `feat/adr126-s2`, not yet landed: overlay, promotion, agent-git-flow hooks, union mount; §4 amended by the owner extension, board card f40828fb: the worktree tree itself is shared, so unmerged docs stay visible and another agent can merge)
+- **Updated**: 2026-11-07 (follower view §4a, Windows-safe fetch, notification/poll answers from ADR-131; S2 implemented on `feat/adr126-s2`, not yet landed: overlay, promotion, agent-git-flow hooks, union mount; §4 amended by the owner extension, board card f40828fb: the worktree tree itself is shared, so unmerged docs stay visible and another agent can merge)
 - **Deciders**: owner
 - **Research**: `docs/research/rclone-shared-filesystem-2026-10-29.md` (rclone, RustFS,
   OpenDAL, governance gaps). Board card `3605565e`.
@@ -188,8 +188,14 @@ L1 as the tier for "unmerged layers that other nodes should see before integrati
   - **a registry entry is a pointer, not authority:** before reading a bucket a follower checks the
     slug is well-formed and that the bucket's own `.wt/meta.json` names the same slug, so an entry
     cannot aim a follower's read grants at another worktree's bucket.
-- **Latency:** polling the registry is one list plus one get per worktree. Bucket notifications
-  (§6) can later replace polling by waking the follower; polling stays the fallback.
+- **Waking and polling** (owner answers on ADR-131, 2026-11-07): head notifications reach devices
+  through the mesh relay from one site subscriber (the PG WeftOS daemon). Followers treat a
+  notification only as a wake-up and re-read the registry; a 30-60 s poll is the fallback and the
+  source of truth. Polling costs one list plus one get per worktree. Registry entries are not
+  signed in S2, so a follower trusts its own read grants and the bucket cross-check below; signed
+  worktree heads are an open question if followers ever read from an untrusted relay.
+- **Per-client stores:** a client project has its own buckets (ADR-131: one seed bucket and one
+  inbox bucket per client), so a follower of a client project reads only that client's registry.
 - **Clocks:** ages compare the registry's writer-side timestamp with the follower's clock, so the
   thresholds are days. They are a nudge, not a lock.
 - **Not in scope:** an operator UI (card d18e1ab0), automatic merging, and enforcing that anyone
@@ -202,8 +208,10 @@ owed and is **not** produced by the in-memory tests.
 
 1. Against real RustFS (not `MemBackend`): publish, poll, search, sync-docs and claim with two
    different principals on two machines; a follower sees a publish within one poll interval.
-2. A Windows node loads a worktree bucket (never tested). Case-insensitive collisions, reserved
-   names (`CON`, `NUL`), long paths and CRLF are the first things to try.
+2. A Windows node loads a worktree bucket natively (never tested; in scope now on aepod-xpc as the
+   bucket-load proof, with the ProjFS drive after macOS D1 and Linux D2). Fetch already refuses
+   reserved names (`CON`, `NUL`, `COM1`), trailing dots/spaces, `<>:"|?*`, `git~1` aliases and
+   case-insensitive collisions on every platform; long paths and CRLF are still to try.
 3. Metadata caching is only partial: measure `list` and `head` latency for a worktree of Sansone's
    size (file count, largest file) before assuming one-poll-per-worktree is affordable.
 4. Leftover drill: leave a worktree open past the threshold and confirm `leftovers` reports it;
@@ -330,7 +338,7 @@ replication (single drive).
 - **Needs from S1's `weaver store`:** `worktree create|publish|promote|fetch|claim|buckets|follow|search|leftovers|sync-docs|overlaps` verbs
   that call these functions; the script's argument shapes are the contract. `publish` reads the
   NUL-separated path lists the script writes. The daemon, not agents, calls `write_registry_entry`.
-- **Verified (scratch crate, same sources):** 45 integration tests, clippy `-D warnings` clean; 33
+- **Verified (scratch crate, same sources):** 46 integration tests, clippy `-D warnings` clean; 33
   shell assertions including a real `git bundle` round trip. **Not verified:** against a real RustFS
   or OpenDAL, the union mount with a live rclone, two machines, or `agent-git-flow` calling the script
   (it has no hook seam; the repo wraps `wt.sh` and `land.sh` instead).

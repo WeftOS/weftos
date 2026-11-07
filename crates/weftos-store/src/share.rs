@@ -526,7 +526,33 @@ pub fn is_dangerous_path(rel: &str) -> bool {
             ".git" | ".gitattributes" | ".gitmodules" | ".hg" | ".svn" | ".envrc"
         ) || seg.contains(':')
             || seg.len() > 200
+            || is_windows_hostile(seg)
     })
+}
+
+/// Names a Windows filesystem treats specially, refused on every platform because a tree fetched
+/// here may later be read there (and `.git` aliases like `git~1` would bypass the `.git` check).
+fn is_windows_hostile(seg: &str) -> bool {
+    if seg.ends_with('.') || seg.ends_with(' ') || seg.contains(['<', '>', '"', '|', '?', '*']) {
+        return true;
+    }
+    if seg.bytes().any(|b| b < 0x20) {
+        return true;
+    }
+    let stem = seg.split('.').next().unwrap_or(seg).to_ascii_uppercase();
+    let reserved = matches!(
+        stem.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+    ) || (stem.len() == 4
+        && (stem.starts_with("COM") || stem.starts_with("LPT"))
+        && stem.as_bytes()[3].is_ascii_digit()
+        && stem.as_bytes()[3] != b'0');
+    // 8.3 short-name aliases of the dangerous names (GIT~1, GITATT~1, GITMOD~1).
+    let lower = seg.to_ascii_lowercase();
+    reserved
+        || lower.starts_with("git~")
+        || lower.starts_with("gitatt~")
+        || lower.starts_with("gitmod~")
 }
 
 /// Where a path lands under `dest`, refusing traversal and symlinked parents.

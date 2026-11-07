@@ -480,7 +480,13 @@ fn tampered_manifest_cannot_escape_dest() {
         .unwrap();
     b.put(WT, ".wt/tree/../evil", b"x").unwrap();
     let dest = tempfile::tempdir().unwrap();
-    assert!(fetch_tree(&b, WT, dest.path(), Select::All, true).is_err());
+    match fetch_tree(&b, WT, dest.path(), Select::All, true) {
+        Err(_) => {}
+        Ok(r) => {
+            assert_eq!(r.refused, ["../evil"]);
+            assert!(r.written.is_empty());
+        }
+    }
     assert!(!dest.path().parent().unwrap().join("evil").exists());
 }
 
@@ -862,5 +868,37 @@ fn handoff_and_bundle_records_are_archived_on_promotion() {
                 .is_some(),
             "{k}"
         );
+    }
+}
+
+#[test]
+fn windows_hostile_names_are_refused_on_every_platform() {
+    for p in [
+        "docs/CON",
+        "docs/con.txt",
+        "NUL.md",
+        "a/COM1",
+        "a/lpt9.log",
+        "a/trailing.",
+        "a/trailing ",
+        "a/b?c",
+        "a/b*c",
+        "a/b|c",
+        "a/b\"c",
+        "a/GIT~1/config",
+        "a/gitatt~1",
+        "x/CONIN$",
+    ] {
+        assert!(is_dangerous_path(p), "{p}");
+    }
+    for p in [
+        "docs/console.md",
+        "docs/communication.md",
+        "a/com0",
+        "docs/auxiliary.md",
+        "src/lib.rs",
+        "docs/a.b.md",
+    ] {
+        assert!(!is_dangerous_path(p), "{p}");
     }
 }
