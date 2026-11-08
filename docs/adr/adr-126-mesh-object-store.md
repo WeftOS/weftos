@@ -269,7 +269,26 @@ percent-encoded. `parse_audit` was wrong before the capture (it returned `Object
 versioned operations, and `auth_token`. **Not yet done:** the daemon does not launch or configure RustFS (it is an external
 service), so setting those env names and issuing `PutBucketNotification` belongs to whoever deploys RustFS (Phase A):
 `docs/guides/rustfs-audit-deploy.md` is the runbook and `scripts/store/rustfs-audit-plan.sh` a dry run that prints it
-(`RustfsBackend::put_bucket_notification` is the call). **The daemon now has the receiver** (`clawft-weave/src/store_ingest.rs`, 2026-11-08): a loopback HTTP listener, off unless
+(`RustfsBackend::put_bucket_notification` is the call). **Conditional write (for S2).** `ObjectBackend::put_if_match(bucket, key, data, etag)` is a compare-and-swap (S3 `If-Match`): a
+changed key is `BackendError::Stale`, a missing key is `NoObject`. The service has `StoreService::put_if_match(who, store,
+key, data, etag)` (gated and logged like `put`), `svc.store` takes `"if_match": "<etag>"` on `put` (`store.v1`, not with
+`if_none_match`), and RustFS gets `If-Match`. Take the etag from the last `head` or `put` result of the same backend
+(opaque: MD5 on RustFS, BLAKE3 locally), and on `Stale` read again and retry. The local backend serialises swaps within the
+daemon process; across processes only RustFS is atomic. S2 should use this instead of unconditional `put` for any
+read-modify-write.
+
+**CI and sweeper roles (release stores).** Two narrow access levels exist besides read, write and admin: `append` (get, head,
+list, and a put that must carry `if_none_match`, so nothing is overwritten; no delete or copy) and `sweep` (get, head, list and
+delete; no put). A new release store gets the well-known principals `agent:ci` as `append` and `agent:store-sweeper` as
+`sweep` by default (`weaver store grant <name> <principal> append|sweep`). Proven live on a throwaway RustFS 1.0.4: the `append` key can read and list, and is refused put, copy and
+delete when used straight against RustFS; the `sweep` key reads, lists and deletes and is refused put. RustFS IAM cannot state
+write-once (it rejects the `s3:if-none-match` condition key, and a plain PutObject allow lets a key overwrite or copy over an
+object), so CI's writes go through the daemon, which makes them `If-None-Match: *` with its own key and refuses an overwrite,
+copy or delete for an `append` principal. A CI job therefore writes artifacts through `store.put`/`svc.store` or a daemon-side
+client, not with an S3 SDK and its own key. Immutability on the backend itself and retention are S4's. Readers of a release store (the project's
+members) are named when the store is made.
+
+**The daemon now has the receiver** (`clawft-weave/src/store_ingest.rs`, 2026-11-08): a loopback HTTP listener, off unless
 `WEFTOS_STORE_INGEST_ADDR` is set, POST only, 1 MiB cap, authenticated by a 256-bit secret in the URL path
 (`store-ingest-token`, 0600; the URLs are written to `store-ingest-urls`), because RustFS's webhook `auth_token` is unverified.
 It feeds `ingest_audit_line` and `ingest_notification`, which now drop records for buckets that are not the daemon's stores and

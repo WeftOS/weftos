@@ -11,9 +11,11 @@ fn actions(a: Access) -> Vec<&'static str> {
     let put = ["s3:PutObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"];
     match a {
         Access::Read => {}
-        // CI: put, never delete. Overwrite is refused by the service (write-once); RustFS IAM
-        // has no condition for it, so a direct S3 call with the key could still overwrite.
-        Access::Append => v.extend(put),
+        // CI: read only at RustFS. Write-once cannot be stated in RustFS IAM (it rejects the
+        // `s3:if-none-match` condition key, 1.0.4), and a plain PutObject allow would let the key
+        // overwrite or copy over an artifact. So CI's puts go through the daemon, which makes them
+        // `If-None-Match: *` with its own key; the key itself can read and list, nothing else.
+        Access::Append => {}
         // The sweeper: delete, never put.
         Access::Sweep => v.push("s3:DeleteObject"),
         Access::Write | Access::Admin => {
@@ -70,7 +72,7 @@ mod tests {
             p["Statement"][0]["Action"].as_array().unwrap().iter().filter_map(Value::as_str).map(str::to_owned).collect::<Vec<_>>()
         };
         let ci = acts(Access::Append);
-        assert!(ci.contains(&"s3:PutObject".into()) && !ci.contains(&"s3:DeleteObject".into()));
+        assert!(ci.contains(&"s3:GetObject".into()) && !ci.contains(&"s3:PutObject".into()) && !ci.contains(&"s3:DeleteObject".into()), "append is read-only at RustFS; the daemon does the write-once puts");
         let sw = acts(Access::Sweep);
         assert!(sw.contains(&"s3:DeleteObject".into()) && !sw.contains(&"s3:PutObject".into()) && sw.contains(&"s3:GetObject".into()));
         let w = acts(Access::Write);

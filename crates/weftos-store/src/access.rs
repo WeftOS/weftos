@@ -16,7 +16,7 @@ use crate::StoreError;
 pub enum Access {
     /// Get, head, list.
     Read,
-    /// Read, plus write-once puts: a put must carry `if_none_match`, so nothing is overwritten.
+    /// Read, plus write-once puts through the service: a put must carry `if_none_match`, so nothing is overwritten (the key itself is read-only at RustFS).
     /// No delete, no copy. The CI role of a release store.
     Append,
     /// Read, plus delete. No put, no copy. The retention sweeper of a release store.

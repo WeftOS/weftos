@@ -240,3 +240,54 @@ fn live_put_if_match_is_a_compare_and_swap() {
     be.delete(&b, "k").unwrap();
     be.delete_bucket(&b).unwrap();
 }
+
+/// The release-store roles, live. CI (`append`) writes once through the service; its own key at
+/// RustFS can only read (no put, copy or delete). The sweeper (`sweep`) key may read and delete
+/// but not put.
+#[test]
+#[ignore = "needs a throwaway RustFS: WEFTOS_STORE_TEST_RUSTFS_ENV"]
+fn live_release_roles_ci_appends_and_the_sweeper_only_deletes() {
+    use crate::service::{CI_PRINCIPAL, SWEEPER_PRINCIPAL};
+    let (cfg, _d) = live().expect("WEFTOS_STORE_TEST_RUSTFS_ENV");
+    let be = Arc::new(RustfsBackend::new(cfg.clone()).unwrap());
+    let svc = StoreService::open(
+        Config { node_id: uniq("n").replace('_', "-"), state_path: None, clock: || 1_000 },
+        be.clone(),
+        be.clone(),
+        Arc::new(Open),
+        Arc::new(MemSink::default()),
+        Arc::new(Chain::default()),
+    )
+    .unwrap();
+    let rel = StoreName::release("weft", &ulid::Ulid::new().to_string(), "stable").unwrap();
+    svc.create_store(&rel, "daemon", Parties::defaults_for(&rel)).unwrap();
+    let b = rel.bucket();
+    let ci = as_key(&cfg, &be, &RustfsBackend::key_id_for(CI_PRINCIPAL));
+    let sw = as_key(&cfg, &be, &RustfsBackend::key_id_for(SWEEPER_PRINCIPAL));
+
+    // CI creates an artifact through the service (write-once), and reads it with its own key.
+    let ci_caller = Caller::local(Principal::parse(CI_PRINCIPAL).unwrap());
+    svc.put(&ci_caller, &rel, "v1/app.tar", b"build", true).unwrap();
+    assert!(matches!(svc.put(&ci_caller, &rel, "v1/app.tar", b"evil", false), Err(crate::StoreError::Refused(_))), "service: overwrite refused");
+    assert!(matches!(svc.delete(&ci_caller, &rel, "v1/app.tar"), Err(crate::StoreError::Refused(_))), "service: delete refused");
+    assert_eq!(ci.get(&b, "v1/app.tar").unwrap(), b"build");
+    // With its own key straight at RustFS, CI is refused put (so no overwrite), copy and delete.
+    assert!(matches!(ci.put(&b, "v1/app.tar", b"evil", false), Err(BackendError::Forbidden(_))), "append key: overwrite refused at RustFS");
+    assert!(matches!(ci.put(&b, "v1/other.tar", b"x", true), Err(BackendError::Forbidden(_))), "append key: even a create is the daemon's job");
+    assert!(matches!(ci.copy(&b, "v1/app.tar", &b, "v1/copy.tar"), Err(BackendError::Forbidden(_))), "append key: copy refused at RustFS");
+    assert!(matches!(ci.delete(&b, "v1/app.tar"), Err(BackendError::Forbidden(_))), "append key: delete refused at RustFS");
+    assert_eq!(ci.get(&b, "v1/app.tar").unwrap(), b"build", "the artifact is unchanged");
+
+    // The sweeper reads and lists, cannot put, and can delete.
+    assert!(sw.list(&b, "v1/").unwrap().iter().any(|m| m.key == "v1/app.tar"));
+    assert_eq!(sw.get(&b, "v1/app.tar").unwrap(), b"build");
+    assert!(matches!(sw.put(&b, "v1/new", b"x", false), Err(BackendError::Forbidden(_))), "sweep: put refused");
+    assert!(matches!(sw.put(&b, "v1/new", b"x", true), Err(BackendError::Forbidden(_))), "sweep: conditional put refused");
+    sw.delete(&b, "v1/app.tar").unwrap();
+    assert!(be.list(&b, "").unwrap().iter().all(|m| m.key != "v1/app.tar"), "the sweeper's delete worked");
+
+    for m in be.list(&b, "").unwrap() {
+        be.delete(&b, &m.key).unwrap();
+    }
+    let _ = be.delete_bucket(&b);
+}
