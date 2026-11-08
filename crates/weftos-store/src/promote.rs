@@ -151,10 +151,10 @@ fn displace<B: ObjectBackend>(
     Ok(())
 }
 
-/// Re-check, right before a write, that the project object is still the one the plan was made
-/// against. A change in between aborts the run with a conflict instead of overwriting it. This
-/// narrows the plan-to-apply window to one head call; closing it needs an if-match write from the
-/// backend. Earlier writes of the same run stay valid: a retry sees them as already promoted.
+/// Re-check, right before a delete, that the project object is still the one the plan was made
+/// against (backends have no conditional delete, so this narrows the window to one head call
+/// rather than closing it). Copies use [`ObjectBackend::put_cas`] instead. Earlier writes of the
+/// same run stay valid: a retry sees them as already promoted.
 fn still_unchanged<B: ObjectBackend>(
     b: &B,
     project: &str,
@@ -294,11 +294,18 @@ pub fn promote<B: ObjectBackend>(
     for a in acts {
         match a {
             Act::Copy(k, _, planned) => {
-                if policy.on_conflict != OnConflict::Overwrite {
-                    still_unchanged(b, project_bucket, &k, planned.as_deref())?;
-                }
                 displace(b, project_bucket, &k, archive)?;
-                b.copy(worktree_bucket, &k, project_bucket, &k)?;
+                if policy.on_conflict == OnConflict::Overwrite {
+                    b.copy(worktree_bucket, &k, project_bucket, &k)?;
+                } else {
+                    // Compare-and-swap against the version the plan was made on.
+                    let data = b.get(worktree_bucket, &k)?.ok_or_else(|| {
+                        S2Error::Backend(format!("worktree object vanished: {k}"))
+                    })?;
+                    if !b.put_cas(project_bucket, &k, &data, planned.as_deref())? {
+                        return Err(S2Error::Conflict(vec![k]));
+                    }
+                }
                 report.promoted.push(k);
             }
             Act::Keep(k) => report.kept_project.push(k),

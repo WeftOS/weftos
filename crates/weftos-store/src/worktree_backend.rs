@@ -41,6 +41,19 @@ impl<T: S1Backend + ?Sized> ObjectBackend for T {
             .map_err(err)
     }
 
+    fn put_cas(&self, bucket: &str, key: &str, data: &[u8], expect: Option<&str>) -> Result<bool> {
+        let r = match expect {
+            Some(etag) => S1Backend::put_if_match(self, bucket, key, data, etag),
+            None => S1Backend::put(self, bucket, key, data, true),
+        };
+        match r {
+            Ok(_) => Ok(true),
+            // lost the race: the object changed, vanished (a CAS needs an existing key), or appeared
+            Err(BackendError::Stale(_) | BackendError::NoObject(_) | BackendError::Exists(_)) => Ok(false),
+            Err(e) => Err(err(e)),
+        }
+    }
+
     fn delete(&self, bucket: &str, key: &str) -> Result<()> {
         match S1Backend::delete(self, bucket, key) {
             Ok(()) | Err(BackendError::NoObject(_)) => Ok(()),

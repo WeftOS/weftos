@@ -96,6 +96,18 @@ pub trait ObjectBackend {
     fn delete(&self, bucket: &str, key: &str) -> Result<()>;
     /// Every object whose key starts with `prefix`, any order.
     fn list(&self, bucket: &str, prefix: &str) -> Result<Vec<ObjectMeta>>;
+    /// Write only if the object is still the version the caller saw: `Some(etag)` replaces that
+    /// exact version, `None` creates and refuses an existing key. `Ok(false)` means the race was
+    /// lost and nothing was written. The default is a head-then-put and is NOT atomic; backends
+    /// with a real compare-and-swap (S1's `put_if_match`) override it.
+    fn put_cas(&self, bucket: &str, key: &str, data: &[u8], expect: Option<&str>) -> Result<bool> {
+        let now = self.head(bucket, key)?.map(|m| m.etag);
+        if now.as_deref() != expect {
+            return Ok(false);
+        }
+        self.put(bucket, key, data)?;
+        Ok(true)
+    }
     /// Server-side copy where the backend has one; the default streams through memory.
     fn copy(
         &self,
