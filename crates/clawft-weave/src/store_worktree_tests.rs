@@ -184,3 +184,53 @@ fn archiving_and_deleting_a_worktree_store_removes_its_registry_entry() {
     forget(&svc, &keep.pr_name).unwrap();
     assert_eq!(slugs(), vec!["feat-keep".to_string()]);
 }
+
+#[test]
+fn a_corrupt_registry_entry_does_not_fail_search() {
+    let (_d, svc) = rig();
+    call(&svc, "create", json!({"project": PROJ, "slug": "feat-s", "branch": "feat/s", "base": "abc"}), 10).unwrap();
+    let src = tempfile::tempdir().unwrap();
+    let (paths, unc, chg) = files(src.path());
+    let root = src.path().to_string_lossy().into_owned();
+    call(
+        &svc,
+        "publish",
+        json!({"project": PROJ, "slug": "feat-s", "root": root, "branch": "feat/s", "base": "abc", "head": "def",
+               "paths_z": paths, "uncommitted_z": unc, "changes_z": chg}),
+        20,
+    )
+    .unwrap();
+    let n = names("local", PROJ, "feat-s").unwrap();
+    S1::put(&*svc.operator_objects(), &n.pr, "worktrees/corrupt.json", b"{ not json", false).unwrap();
+    S1::put(&*svc.operator_objects(), &n.pr, "worktrees/future.json", br#"{"schema":99,"slug":"future"}"#, false).unwrap();
+    let r = call(&svc, "search", json!({"project": PROJ, "query": "plan"}), 30).unwrap();
+    assert_eq!(r["hits"][0]["slug"], "feat-s");
+    assert_eq!(r["unreadable_entries"], json!(["corrupt", "future"]));
+}
+
+#[test]
+fn create_on_a_second_daemon_sharing_the_backend_succeeds() {
+    // Two daemons, one backend (one RustFS): the second has no record of the stores the first made.
+    let d = tempfile::tempdir().unwrap();
+    let mk = |node: &str| {
+        let reg = Arc::new(ExposureRegistry::new(node));
+        let be = Arc::new(FsBackend::open(d.path()).unwrap());
+        StoreService::open(
+            weftos_store::service::Config { node_id: node.into(), state_path: None, clock: clawft_kernel::exposure::registry::now_ms },
+            be.clone(),
+            be,
+            Arc::new(RegistryGate(reg.clone())),
+            Arc::new(ActivitySink(reg)),
+            Arc::new(ChainAudit(None)),
+        )
+        .unwrap()
+    };
+    let (a, b) = (mk("node-a"), mk("node-b"));
+    call(&a, "create", json!({"project": PROJ, "slug": "feat-one", "branch": "feat/one", "base": "abc"}), 10).unwrap();
+    // the project store exists already (node-a made it); node-b must still create its own worktree
+    let r = call(&b, "create", json!({"project": PROJ, "slug": "feat-two", "branch": "feat/two", "base": "abc"}), 11).unwrap();
+    let wt = r["worktree"].as_str().unwrap();
+    assert!(S1::list(&*b.operator_objects(), wt, ".wt/").unwrap().iter().any(|m| m.key == ".wt/meta.json"), "the second worktree has its metadata");
+    // and the same slug from the other daemon is idempotent
+    call(&b, "create", json!({"project": PROJ, "slug": "feat-one", "branch": "feat/one", "base": "abc"}), 12).unwrap();
+}

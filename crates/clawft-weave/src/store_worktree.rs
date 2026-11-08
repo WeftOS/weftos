@@ -19,7 +19,7 @@ use weftos_store::share::{
     Actor, Limits, TreeSource, claim_merge, mark_handoff, mark_merged, parse_name_status_z, publish_tree,
 };
 use weftos_store::share_fetch::{
-    RegistryEntry, Select, fetch_bundle, fetch_tree, list_shared, summarize, write_registry_entry,
+    RegistryEntry, Select, fetch_bundle, fetch_tree, list_shared_lenient, summarize, write_registry_entry,
 };
 use weftos_store::{StoreName, StoreService};
 
@@ -206,8 +206,15 @@ pub fn run(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms: 
             let slug = need(&p.slug, "slug")?;
             let n = names(mesh, &project, slug)?;
             // The project store may not exist yet on a fresh node; create it, never fail on "exists".
-            svc.ensure_store(&n.pr_name, "cli", Parties::defaults_for(&n.pr_name)).map_err(|e| e.to_string())?;
-            svc.ensure_store(&n.wt_name, "cli", Parties::defaults_for(&n.wt_name)).map_err(|e| e.to_string())?;
+            // "Exists" is fine even when this daemon's own state does not know the store: another
+            // daemon on the same backend made it (the project store is shared; its record and
+            // grants live with the daemon that created it). The S2 verbs use the raw data plane.
+            for name in [&n.pr_name, &n.wt_name] {
+                match svc.ensure_store(name, "cli", Parties::defaults_for(name)) {
+                    Ok(_) | Err(weftos_store::StoreError::Exists(_)) => {}
+                    Err(e) => return Err(e.to_string()),
+                }
+            }
             write_meta(
                 &b,
                 &n.wt,
@@ -322,11 +329,14 @@ pub fn run(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms: 
         }
         "search" => {
             let n = names(mesh, &project, "x")?;
-            let entries = list_shared(&b, &n.pr).map_err(e)?;
+            // One corrupt or unknown-schema registry entry must not blind the search (it does not
+            // blind `follow` or `leftovers`): search the readable ones and name the others.
+            let (entries, bad_entries) = list_shared_lenient(&b, &n.pr).map_err(e)?;
             let r = follower::search_docs(&b, &entries, need(&p.query, "query")?);
             Ok(json!({
                 "hits": r.hits.iter().map(|h| json!({"slug": h.slug, "path": h.path, "title": h.title, "state": h.state})).collect::<Vec<_>>(),
                 "unreadable": r.unreadable,
+                "unreadable_entries": bad_entries,
             }))
         }
         "leftovers" => {

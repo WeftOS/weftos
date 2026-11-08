@@ -206,6 +206,11 @@ fn wt_lines(verb: &str, v: &Value) -> Option<String> {
             if h.is_empty() {
                 out = "no matches\n".into();
             }
+            for k in ["unreadable", "unreadable_entries"] {
+                for x in v[k].as_array().into_iter().flatten().filter_map(Value::as_str) {
+                    out.push_str(&format!("(could not read {} {x})\n", if k == "unreadable" { "worktree" } else { "registry entry" }));
+                }
+            }
             Some(out)
         }
         "leftovers" => {
