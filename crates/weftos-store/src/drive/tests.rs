@@ -557,3 +557,34 @@ fn a_read_only_drive_refuses_sync_up_but_still_materialises_and_syncs_down() {
     assert_eq!(rd(&dest, "new.txt"), "fresh");
     assert!(s.put_keys().is_empty());
 }
+
+/// Delete `dir/b.txt` from a fresh drive whose store already holds `tomb` for it; returns the tombstone after.
+fn delete_over_tombstone(tomb: Option<&str>, cond: bool) -> Option<String> {
+    let mut s = project();
+    s.cond = cond;
+    if let Some(t) = tomb {
+        s.seed("proj/.drive-tombstones/dir/b.txt", t);
+    }
+    let (_d, dest) = drive(&s);
+    std::fs::remove_file(dest.join("dir/b.txt")).unwrap();
+    let r = sync_up(&s, &dest).unwrap();
+    assert_eq!(r.deleted, ["dir/b.txt"]);
+    s.text("proj/.drive-tombstones/dir/b.txt")
+}
+
+#[test]
+fn a_stale_writer_does_not_overwrite_a_newer_tombstone() {
+    let newer = r#"{"device":"other","ts_ms":99999999999999,"etag":"zzz"}"#;
+    assert_eq!(delete_over_tombstone(Some(newer), true).as_deref(), Some(newer));
+}
+
+#[test]
+fn an_older_tombstone_is_replaced_with_a_conditional_put_and_kept_when_the_backend_has_none() {
+    let older = r#"{"device":"other","ts_ms":1,"etag":"zzz"}"#;
+    let after = delete_over_tombstone(Some(older), true).unwrap();
+    assert!(after.contains("\"device\"") && !after.contains("\"other\""), "{after}");
+    // No conditional write: the existing marker stays rather than being overwritten blind.
+    assert_eq!(delete_over_tombstone(Some(older), false).as_deref(), Some(older));
+    // Nothing there: a plain create.
+    assert!(delete_over_tombstone(None, true).is_some());
+}

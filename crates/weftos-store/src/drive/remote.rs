@@ -74,9 +74,26 @@ pub(crate) fn write_tombstone<B: ObjectBackend + ?Sized>(
     device: &str,
     deleted_etag: &str,
 ) -> Result<()> {
-    let body = serde_json::json!({"device": device, "ts_ms": now_ms(), "etag": deleted_etag});
-    b.put(bucket, &tombstone_key(prefix, rel), body.to_string().as_bytes(), false)?;
-    Ok(())
+    let ts = now_ms();
+    let body = serde_json::json!({"device": device, "ts_ms": ts, "etag": deleted_etag}).to_string();
+    let key = tombstone_key(prefix, rel);
+    // Create-only first: a tombstone that is already there is never overwritten blind.
+    match b.put(bucket, &key, body.as_bytes(), true) {
+        Ok(_) => return Ok(()),
+        Err(BackendError::Exists(_)) => {}
+        Err(e) => return Err(e.into()),
+    }
+    // One is there. A newer one (this writer is stale, e.g. a skewed clock) or one for the same
+    // deleted version stays. An older one is replaced only if still the version we looked at.
+    let (Ok(cur), Some(old)) = (b.head(bucket, &key), read_tombstone(b, bucket, prefix, rel)) else { return Ok(()) };
+    let newer = old["ts_ms"].as_u64().is_some_and(|t| t > ts);
+    if newer || old["etag"].as_str() == Some(deleted_etag) {
+        return Ok(());
+    }
+    match b.put_if_match(bucket, &key, body.as_bytes(), &cur.etag) {
+        Ok(_) | Err(BackendError::PreconditionFailed(_) | BackendError::NoObject(_) | BackendError::Unsupported) => Ok(()),
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// Revive: the key is written again, so its marker goes.
