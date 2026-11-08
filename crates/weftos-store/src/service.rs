@@ -209,6 +209,10 @@ pub struct StoreService {
     st: Mutex<State>,
 }
 
+/// The longest retention an `append` principal may stamp: 5 years (a Compliance hold cannot be
+/// shortened by anyone, root included, so what CI can name is bounded; write and admin are not).
+pub const APPEND_MAX_RETENTION_S: u64 = 5 * 365 * 86_400;
+
 /// The exposure id of a store.
 pub fn exposure_id(name: &StoreName) -> String {
     format!("store.{}", name.bucket())
@@ -343,6 +347,13 @@ impl StoreService {
         }
         {
             let mut g = self.lock();
+            // The check at the top and this insert are separate lock holds: a retire that landed
+            // between them must still win. Undo the bucket if it was made just now.
+            if g.retired.contains(&name.to_string()) {
+                drop(g);
+                let _ = self.admin.delete_bucket(&name.bucket());
+                return Err(StoreError::Refused(format!("{name} belongs to a node that was unpaired and its store archived: a new node needs a new id")));
+            }
             g.stores.insert(name.to_string(), StoreRec { name: name.to_string(), created_ms: self.now(), archived: false, locked, archive_ts: None, archive_done: true, archive_count: 0 });
             let d = Parties::defaults_for(name);
             let ts = self.now();
@@ -734,6 +745,14 @@ impl StoreService {
     /// logged as a put. Returns the retention now in force.
     pub fn extend_retention(&self, who: &Caller, name: &StoreName, key: &str, version_id: &str, until_unix_s: u64, mode: crate::backend::LockMode) -> Result<crate::backend::Retention, StoreError> {
         self.gate(who, name, Op::Put, Some(key), 0)?;
+        // An append principal (CI) cannot name how long: a Compliance hold cannot be undone by
+        // anyone, so its reach is bounded. Write and admin are not.
+        let horizon = self.now() / 1000 + APPEND_MAX_RETENTION_S;
+        if self.lock().grants.effective(&who.principal, name) == Some(Access::Append) && until_unix_s > horizon {
+            let why = format!("{} holds append on {name}: retention may run at most {} days from now", who.principal, APPEND_MAX_RETENTION_S / 86_400);
+            self.emit(&who.principal.to_string(), name, Op::Put.name(), Some(key), 0, Outcome::Refused(why.clone()), Source::Governed);
+            return Err(StoreError::Refused(why));
+        }
         if !self.is_locked(name) {
             return Err(StoreError::Refused(format!("{name} was not made with object lock")));
         }

@@ -89,6 +89,9 @@ pub(crate) struct BreakerState {
     open_until: Option<Instant>,
     /// A probe is out; everyone else keeps failing fast until it comes back.
     probing: bool,
+    /// When the probe went out. One that never reports back (its thread died) is given up on
+    /// after a cooldown and another is let through.
+    probe_at: Option<Instant>,
 }
 
 impl BreakerState {
@@ -100,9 +103,10 @@ impl BreakerState {
         match self.open_until {
             None => Ok(()),
             Some(t) if now < t => Err(t - now),
-            Some(_) if self.probing => Err(Duration::from_secs(1)),
+            Some(_) if self.probing && self.probe_at.is_some_and(|p| now < p + self.cfg.cooldown) => Err(Duration::from_secs(1)),
             Some(_) => {
                 self.probing = true;
+                self.probe_at = Some(now);
                 Ok(())
             }
         }
@@ -121,7 +125,15 @@ impl BreakerState {
         if self.probing || self.fails >= self.cfg.threshold {
             self.open_until = Some(now + self.cfg.cooldown);
             self.probing = false;
+            self.probe_at = None;
         }
+    }
+
+    /// A request that was let through as the probe ended without saying anything about RustFS
+    /// (a local fault): free the probe slot, leave the breaker as it was.
+    pub(crate) fn release_probe(&mut self) {
+        self.probing = false;
+        self.probe_at = None;
     }
 
     pub(crate) fn is_open(&self, now: Instant) -> bool {
@@ -132,6 +144,23 @@ impl BreakerState {
 /// Whether a finished request means RustFS is unreachable.
 fn counts_as_down(r: &Result<u16, &Xport>) -> bool {
     matches!(r, Err(_) | Ok(502..=504))
+}
+
+/// What a finished request tells the breaker.
+#[derive(Debug, PartialEq, Eq)]
+enum Feed {
+    Down,
+    Up,
+    /// Nothing about RustFS (the caller's own short deadline ran out).
+    Neutral,
+}
+
+fn breaker_feed(r: &Result<u16, &Xport>, short_view: bool) -> Feed {
+    match r {
+        Err(x) if x.timed_out && short_view => Feed::Neutral,
+        _ if counts_as_down(r) => Feed::Down,
+        _ => Feed::Up,
+    }
 }
 
 /// How a request is retried. Only what is safe to repeat is: a connection that never opened (any
@@ -275,6 +304,18 @@ fn parse_lifecycle(x: &str) -> Vec<LifecycleRule> {
         .collect()
 }
 
+/// A retain-until time must be in the future and writable as a four-digit-year ISO date.
+fn check_until(until_unix_s: u64) -> Result<(), BackendError> {
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).map_err(io)?.as_secs();
+    if until_unix_s <= now {
+        return Err(BackendError::BadKey(format!("retain-until {until_unix_s} is not in the future")));
+    }
+    if until_unix_s > sigv4::MAX_ISO_SECS {
+        return Err(BackendError::BadKey(format!("retain-until {until_unix_s} is past the year 9999")));
+    }
+    Ok(())
+}
+
 /// Parse an `ObjectLockConfiguration` document.
 fn parse_lock_config(x: &str) -> Result<LockConfig, BackendError> {
     let enabled = xml_tag(x, "ObjectLockEnabled").as_deref() == Some("Enabled");
@@ -378,7 +419,7 @@ impl RustfsBackend {
                 Ok(Err(x)) => Err(x),
                 Err(e) => {
                     // A local fault (signing, clock) says nothing about RustFS; free a probe if this was one.
-                    self.breaker.lock().unwrap_or_else(|x| x.into_inner()).record(false, Instant::now());
+                    self.breaker.lock().unwrap_or_else(|x| x.into_inner()).release_probe();
                     return Err(e.clone());
                 }
             };
@@ -386,7 +427,15 @@ impl RustfsBackend {
                 std::thread::sleep(self.retry.wait_after(done));
                 continue;
             }
-            self.breaker.lock().unwrap_or_else(|e| e.into_inner()).record(counts_as_down(&seen), Instant::now());
+            // A timeout under a caller's own short deadline says the caller was impatient, not that
+            // RustFS is down: it does not count toward opening the breaker for everyone.
+            let short_view = self.call_timeout.is_some_and(|t| t < self.cfg.timeout);
+            let mut b = self.breaker.lock().unwrap_or_else(|e| e.into_inner());
+            match breaker_feed(&seen, short_view) {
+                Feed::Down => b.record(true, Instant::now()),
+                Feed::Up => b.record(false, Instant::now()),
+                Feed::Neutral => b.release_probe(),
+            }
             return match r {
                 Ok(Ok(resp)) => Ok(resp),
                 Ok(Err(x)) => Err(BackendError::Unavailable(format!("{method} {path}: {}", x.msg))),
@@ -628,10 +677,7 @@ impl ObjectBackend for RustfsBackend {
 
     fn put_retention(&self, bucket: &str, key: &str, version_id: &str, r: &Retention, bypass_governance: bool) -> Result<(), BackendError> {
         check_key(key)?;
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).map_err(io)?.as_secs();
-        if r.until_unix_s <= now {
-            return Err(BackendError::BadKey(format!("retain-until {} is not in the future", r.until_unix_s)));
-        }
+        check_until(r.until_unix_s)?;
         let body = format!("<Retention><Mode>{}</Mode><RetainUntilDate>{}</RetainUntilDate></Retention>", r.mode.as_str(), sigv4::iso_date(r.until_unix_s));
         let extra: Vec<(&str, String)> = if bypass_governance { vec![("x-amz-bypass-governance-retention", "true".into())] } else { Vec::new() };
         let resp = self.send("PUT", &format!("/{bucket}/{key}"), &Self::q(&[("retention", ""), ("versionId", version_id)]), body.as_bytes(), &extra)?;
@@ -734,10 +780,7 @@ impl RustfsBackend {
     fn lock_headers(&self, opts: &PutOpts) -> Result<Vec<(&'static str, String)>, BackendError> {
         let mut extra = Vec::new();
         if let Some(r) = opts.retention {
-            let now = SystemTime::now().duration_since(UNIX_EPOCH).map_err(io)?.as_secs();
-            if r.until_unix_s <= now {
-                return Err(BackendError::BadKey(format!("retain-until {} is not in the future", r.until_unix_s)));
-            }
+            check_until(r.until_unix_s)?;
             extra.push(("x-amz-object-lock-mode", r.mode.as_str().into()));
             extra.push(("x-amz-object-lock-retain-until-date", sigv4::iso_date(r.until_unix_s)));
         }

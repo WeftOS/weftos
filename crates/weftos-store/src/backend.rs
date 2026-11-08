@@ -185,6 +185,8 @@ pub struct Part {
 pub const MIN_PART: usize = 5 * 1024 * 1024;
 /// Part size [`ObjectBackend::put_stream`] uses by default.
 pub const DEFAULT_PART: usize = 8 * 1024 * 1024;
+/// Largest object a backend without multipart will take through `put_stream` (it holds it in memory).
+pub const LOCAL_MAX: usize = 512 * 1024 * 1024;
 /// Most parts one upload can have.
 pub const MAX_PARTS: u32 = 10_000;
 
@@ -235,7 +237,8 @@ pub trait ObjectBackend: Send + Sync {
     /// visible. Backends without multipart (the local ones) read it all and put it once, which
     /// keeps the old size limit, and refuse lock options.
     fn put_stream(&self, bucket: &str, key: &str, src: &mut dyn std::io::Read, part_size: usize, opts: &PutOpts) -> Result<LockedPut, BackendError> {
-        let part_size = part_size.max(MIN_PART);
+        // Between the smallest part S3 takes and 1 GiB: a bigger one only holds memory.
+        let part_size = part_size.clamp(MIN_PART, 1024 * 1024 * 1024);
         let first = read_up_to(src, part_size)?;
         if first.len() < part_size {
             // Fits in one part: one request, lock headers and all.
@@ -250,8 +253,14 @@ pub trait ObjectBackend: Send + Sync {
         let id = match self.create_multipart(bucket, key, opts) {
             Ok(id) => id,
             Err(BackendError::Unsupported(_)) if opts.retention.is_none() && !opts.legal_hold => {
+                // The local backends hold the object in memory: the old whole-body limit applies.
                 let mut all = first;
-                src.read_to_end(&mut all).map_err(|e| BackendError::Io(e.to_string()))?;
+                let room = (LOCAL_MAX as u64).saturating_sub(all.len() as u64);
+                use std::io::Read as _;
+                (&mut *src).take(room + 1).read_to_end(&mut all).map_err(|e| BackendError::Io(e.to_string()))?;
+                if all.len() > LOCAL_MAX {
+                    return Err(BackendError::BadKey(format!("over {} MiB: this backend has no multipart upload", LOCAL_MAX / (1024 * 1024))));
+                }
                 let meta = self.put(bucket, key, &all, opts.if_none_match)?;
                 return Ok(LockedPut { meta, version_id: None });
             }
@@ -346,8 +355,6 @@ pub trait ObjectBackend: Send + Sync {
 /// Buckets, access keys and policies (the RustFS admin API).
 pub trait AdminBackend: Send + Sync {
     fn create_bucket(&self, bucket: &str, tags: &[(String, String)]) -> Result<(), BackendError>;
-    /// Create a bucket with Object Lock enabled (which also turns versioning on). It can only be
-    /// chosen at creation. Local backends answer [`BackendError::Unsupported`].
     /// Replace the bucket's lifecycle rules with `rules` (an empty list removes them all).
     fn put_lifecycle(&self, _bucket: &str, _rules: &[LifecycleRule]) -> Result<(), BackendError> {
         Err(BackendError::Unsupported("lifecycle rules".into()))
@@ -356,6 +363,8 @@ pub trait AdminBackend: Send + Sync {
     fn get_lifecycle(&self, _bucket: &str) -> Result<Vec<LifecycleRule>, BackendError> {
         Err(BackendError::Unsupported("lifecycle rules".into()))
     }
+    /// Create a bucket with Object Lock enabled (which also turns versioning on). It can only be
+    /// chosen at creation. Local backends answer [`BackendError::Unsupported`].
     fn create_locked_bucket(&self, _bucket: &str, _tags: &[(String, String)]) -> Result<(), BackendError> {
         Err(BackendError::Unsupported("object lock".into()))
     }

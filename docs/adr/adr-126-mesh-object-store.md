@@ -387,6 +387,19 @@ and the ledger must install the guard. Events recorded before this change have n
 at the consumer is not enough (a forged value just under it moves `last` far ahead and the ledger then accepts nothing honest until it passes that
 value), so the stamp must come from one trusted writer and be gapless, and the consumer's bound is then a check that the writer's promise holds.
 
+**S3 review of the S1 commits, fixes (2026-11-08).** HIGH 1 (retire after a cut-short archive reported success): `archive` now records when it
+started and whether it finished (`archive_ts`, `archive_done`, `archive_count` on the store record), so a retry resumes under the same archive keys, and
+`retire_node_store` returns `Ok` only when every object is copied, with the real count on a repeat. HIGH 2: see the grant event sequence above.
+Also fixed from the same review: the breaker no longer counts a timeout from a short `with_timeout` view (the caller's impatience is not news
+about RustFS), frees a probe slot after a local fault without closing the breaker, and gives up on a probe that never reports back after one cooldown;
+the retired-id check in `create_store` is repeated under the lock that records the store (a retire landing in between wins, and the bucket just made is
+removed); an `append` principal's `extend_retention` is capped at `APPEND_MAX_RETENTION_S` (5 years), since a Compliance hold cannot be undone by
+anyone (write and admin are not capped; the cap is a policy number for Mathew to change); retain-until dates past year 9999 are refused before sending and `parse_iso`
+rejects years outside 1970..=9999 and impossible days (Feb 31); `put_stream` on a backend without multipart refuses over 512 MiB and clamps `part_size` to 5 MiB..1 GiB.
+Not changed: a failed `abort_multipart` after a failed upload is still silent (the upload is orphaned until the `abort_multipart_days`
+lifecycle rule removes it, so set that rule on stores that stream large objects); the review's default-build note stands (`--features rustfs` is needed to
+compile and test `rustfs.rs`).
+
 **The daemon now has the receiver** (`clawft-weave/src/store_ingest.rs`, 2026-11-08): a loopback HTTP listener, off unless
 `WEFTOS_STORE_INGEST_ADDR` is set, POST only, 1 MiB cap, authenticated by a 256-bit secret in the URL path
 (`store-ingest-token`, 0600; the URLs are written to `store-ingest-urls`), because RustFS's webhook `auth_token` is unverified.

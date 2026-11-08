@@ -62,8 +62,13 @@ pub fn amz_date(unix_s: u64) -> String {
     format!("{y:04}{m:02}{d:02}T{:02}{:02}{:02}Z", rem / 3600, rem % 3600 / 60, rem % 60)
 }
 
+/// The last second `iso_date` can write: 9999-12-31T23:59:59Z. A later one needs a fifth digit of year.
+pub const MAX_ISO_SECS: u64 = 253_402_300_799;
+
 /// `YYYY-MM-DDTHH:MM:SS.000Z` (ISO 8601, what the Object Lock retain-until header takes).
+/// Callers check against [`MAX_ISO_SECS`] first; a later time is clamped to it here.
 pub fn iso_date(unix_s: u64) -> String {
+    let unix_s = unix_s.min(MAX_ISO_SECS);
     let a = amz_date(unix_s);
     format!("{}-{}-{}T{}:{}:{}.000Z", &a[..4], &a[4..6], &a[6..8], &a[9..11], &a[11..13], &a[13..15])
 }
@@ -80,7 +85,16 @@ pub fn parse_iso(s: &str) -> Option<u64> {
     let (y, m, day) = (num(d.next()?)?, num(d.next()?)?, num(d.next()?)?);
     let mut t = time.split(':');
     let (hh, mm, ss) = (num(t.next()?)?, num(t.next()?)?, num(t.next()?)?);
-    if d.next().is_some() || t.next().is_some() || !(1..=12).contains(&m) || !(1..=31).contains(&day) || hh > 23 || mm > 59 || ss > 60 || y < 1970 {
+    if d.next().is_some() || t.next().is_some() || !(1..=12).contains(&m) || day == 0 || hh > 23 || mm > 59 || ss > 60 || !(1970..=9999).contains(&y) {
+        return None;
+    }
+    let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+    let in_month = match m {
+        2 => 28 + u64::from(leap),
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    };
+    if day > in_month {
         return None;
     }
     // Days from civil (Howard Hinnant's algorithm).
@@ -149,7 +163,11 @@ mod tests {
             assert_eq!(parse_iso(&iso_date(t)), Some(t), "{t}");
         }
         assert_eq!(parse_iso("2026-11-08T09:49:44+00:00"), parse_iso("2026-11-08T09:49:44.000Z"));
-        for bad in ["", "2026-11-08", "2026-13-08T00:00:00Z", "2026-11-08T25:00:00Z", "1969-12-31T23:59:59Z", "2026-11-08T09:49:44+02:00", "x"] {
+        assert_eq!(parse_iso("9999-12-31T23:59:59Z"), Some(MAX_ISO_SECS));
+        assert_eq!(iso_date(MAX_ISO_SECS + 1), iso_date(MAX_ISO_SECS), "clamped, never a five-digit year");
+        assert!(parse_iso("2024-02-29T00:00:00Z").is_some() && parse_iso("2000-02-29T00:00:00Z").is_some());
+        for bad in ["", "2026-11-08", "2026-13-08T00:00:00Z", "2026-11-08T25:00:00Z", "1969-12-31T23:59:59Z", "2026-11-08T09:49:44+02:00", "x",
+            "2026-02-31T00:00:00Z", "2025-02-29T00:00:00Z", "1900-02-29T00:00:00Z", "2026-04-31T00:00:00Z", "10000-01-01T00:00:00Z", "100000000000000000-01-01T00:00:00Z"] {
             assert_eq!(parse_iso(bad), None, "{bad}");
         }
     }

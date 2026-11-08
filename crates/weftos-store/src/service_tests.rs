@@ -803,3 +803,75 @@ fn the_counter_survives_a_restart_and_a_forged_far_future_value_cannot_be_issued
     let e = StoreService::open(Config { node_id: "pg-1".into(), state_path: Some(state), clock: || 1_000 }, be.clone(), be, Arc::new(Gate(AtomicBool::new(true))), Arc::new(MemSink::default()), Arc::new(Chain::default()));
     assert!(matches!(e, Err(StoreError::State(m)) if m.contains("ceiling")));
 }
+
+#[test]
+fn an_append_principal_cannot_hold_an_object_for_longer_than_the_cap_but_write_can_name_more() {
+    let r = rig();
+    let rel = StoreName::release("weft", P, "stable").unwrap();
+    r.svc.create_store(&rel, "daemon", Parties::defaults_for(&rel)).unwrap();
+    r.svc.grant(&rel, cog("owner"), Access::Write, "op").unwrap();
+    let ci = Caller::local(Principal::parse(CI_PRINCIPAL).unwrap());
+    let mode = crate::backend::LockMode::Compliance;
+    let now_s = 1_000 / 1000; // the rig's clock is fixed at 1000 ms
+    let far = now_s + APPEND_MAX_RETENTION_S + 1;
+    let e = r.svc.extend_retention(&ci, &rel, "a", "v", far, mode).unwrap_err().to_string();
+    assert!(e.contains("append") && e.contains("days"), "{e}");
+    assert!(r.sink.events().iter().any(|ev| ev.principal == CI_PRINCIPAL && matches!(ev.outcome, Outcome::Refused(_))), "the refusal is logged");
+    // Inside the cap, it gets past this check (and meets the next one: this store has no lock).
+    let e2 = r.svc.extend_retention(&ci, &rel, "a", "v", now_s + APPEND_MAX_RETENTION_S, mode).unwrap_err().to_string();
+    assert!(e2.contains("object lock"), "{e2}");
+    // Write is not held to the cap (same next check).
+    let w = local("owner");
+    let e3 = r.svc.extend_retention(&w, &rel, "a", "v", far, mode).unwrap_err().to_string();
+    assert!(e3.contains("object lock"), "{e3}");
+}
+
+#[test]
+fn a_create_that_loses_a_race_with_a_retire_is_refused_and_leaves_no_bucket() {
+    // The retire lands after the create's first check but before it records the store.
+    struct RetireBetween {
+        inner: Arc<MemBackend>,
+        svc: Mutex<Option<Arc<StoreService>>>,
+        name: StoreName,
+    }
+    impl AdminBackend for RetireBetween {
+        fn create_bucket(&self, b: &str, t: &[(String, String)]) -> Result<(), BackendError> {
+            self.inner.create_bucket(b, t)?;
+            // Right after the bucket exists, the unpair happens.
+            if let Some(s) = self.svc.lock().unwrap().clone() {
+                s.retire_node_store(&self.name, "op").unwrap();
+            }
+            Ok(())
+        }
+        fn delete_bucket(&self, b: &str) -> Result<(), BackendError> {
+            self.inner.delete_bucket(b)
+        }
+        fn bucket_exists(&self, b: &str) -> Result<bool, BackendError> {
+            self.inner.bucket_exists(b)
+        }
+        fn buckets(&self) -> Result<Vec<crate::backend::BucketTags>, BackendError> {
+            self.inner.buckets()
+        }
+        fn create_access_key(&self, p: &str) -> Result<crate::backend::AccessKey, BackendError> {
+            self.inner.create_access_key(p)
+        }
+        fn set_key_enabled(&self, k: &str, e: bool) -> Result<(), BackendError> {
+            self.inner.set_key_enabled(k, e)
+        }
+        fn put_policy(&self, k: &str, p: &Value) -> Result<(), BackendError> {
+            self.inner.put_policy(k, p)
+        }
+        fn delete_access_key(&self, k: &str) -> Result<(), BackendError> {
+            self.inner.delete_access_key(k)
+        }
+    }
+    let be = Arc::new(MemBackend::new());
+    let n = node();
+    let hook = Arc::new(RetireBetween { inner: be.clone(), svc: Mutex::new(None), name: n.clone() });
+    let svc = Arc::new(StoreService::open(Config { node_id: "pg-1".into(), state_path: None, clock: || 1_000 }, hook.clone(), be.clone(), Arc::new(Gate(AtomicBool::new(true))), Arc::new(MemSink::default()), Arc::new(Chain::default())).unwrap());
+    *hook.svc.lock().unwrap() = Some(svc.clone());
+    let e = svc.create_store(&n, "daemon", Parties::default()).unwrap_err();
+    assert!(matches!(e, StoreError::Refused(_)) && e.to_string().contains("unpaired"), "{e}");
+    assert!(!svc.has_store(&n), "no store recorded for a retired id");
+    assert!(!be.bucket_exists(&n.bucket()).unwrap(), "the bucket made a moment ago is taken back");
+}

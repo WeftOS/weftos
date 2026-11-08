@@ -173,6 +173,47 @@ fn the_breaker_opens_after_a_run_of_failures_probes_once_and_closes_on_any_answe
 }
 
 #[test]
+fn a_short_views_timeout_is_not_news_about_rustfs_and_a_lost_probe_is_given_up_on() {
+    // An impatient caller's timeout feeds nothing; a connect failure or a default-deadline timeout is down.
+    assert_eq!(breaker_feed(&Err(&xport(false, true)), true), Feed::Neutral);
+    assert_eq!(breaker_feed(&Err(&xport(false, true)), false), Feed::Down);
+    assert_eq!(breaker_feed(&Err(&xport(true, false)), true), Feed::Down, "no connection is down whichever view saw it");
+    assert_eq!(breaker_feed(&Ok(503), true), Feed::Down);
+    assert_eq!(breaker_feed(&Ok(404), true), Feed::Up);
+    // Five neutral results never open it.
+    let t0 = Instant::now();
+    let mut b = breaker(3);
+    for _ in 0..5 {
+        b.release_probe();
+    }
+    assert!(!b.is_open(t0) && b.admit(t0).is_ok());
+    // A probe whose thread died never reports back: after a cooldown another is let through.
+    b.record(true, t0);
+    b.record(true, t0);
+    b.record(true, t0);
+    let after = t0 + Duration::from_secs(10);
+    assert!(b.admit(after).is_ok(), "the probe");
+    assert!(b.admit(after + Duration::from_secs(5)).is_err(), "still waiting for it");
+    assert!(b.admit(after + Duration::from_secs(10)).is_ok(), "given up on, a new probe");
+    // A probe that ended with a local fault frees the slot without closing or counting.
+    b.release_probe();
+    let later = after + Duration::from_secs(10);
+    assert!(!b.is_open(later), "half-open: the fault neither closed it nor counted");
+    assert!(b.admit(later).is_ok(), "slot free again");
+    assert!(b.admit(later).is_err(), "and only one probe at a time");
+}
+
+#[test]
+fn a_retain_until_must_be_in_the_future_and_inside_year_9999() {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    assert!(check_until(now + 60).is_ok() && check_until(sigv4::MAX_ISO_SECS).is_ok());
+    assert!(check_until(now).is_err() && check_until(0).is_err());
+    let e = check_until(sigv4::MAX_ISO_SECS + 1).unwrap_err().to_string();
+    assert!(e.contains("9999"), "{e}");
+    assert!(check_until(u64::MAX).is_err());
+}
+
+#[test]
 fn only_an_unreachable_rustfs_counts_toward_the_breaker() {
     assert!(counts_as_down(&Err(&xport(true, false))) && counts_as_down(&Err(&xport(false, true))));
     for st in [502, 503, 504] {
