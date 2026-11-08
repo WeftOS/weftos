@@ -12,6 +12,10 @@
 //! No kernel dependency: the daemon supplies an [`ExposureGate`], an [`AuditSink`] and a
 //! [`ChainSink`].
 
+#[cfg(test)]
+mod prop_tests;
+#[cfg(test)]
+mod testrng;
 pub mod access;
 pub mod audit;
 pub mod backend;
@@ -25,10 +29,6 @@ pub mod rustfs;
 pub mod service;
 #[cfg(feature = "rustfs")]
 pub mod sigv4;
-#[cfg(test)]
-mod prop_tests;
-#[cfg(test)]
-mod testrng;
 
 pub use access::{Access, Grant, GrantTable, Op, Principal, PrincipalKind};
 pub use audit::{AuditEvent, AuditSink, Outcome, Source};
