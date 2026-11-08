@@ -291,3 +291,47 @@ the 2.1 s quiet period costs no wall time.
 
 Not done: cleanup of stale `.drive.tmp.*`, tombstone collection, fsync of the index before rename
 (a power cut, as opposed to a kill, is not covered), a death inside `place_file`, a real SIGKILL in the committed tests, two real machines.
+
+### Hardening 2, 2026-11-08
+
+Branch `wt/adr126-s3-harden2`, based on `4082527e8`. Of the "not done" list above, stale temp
+cleanup and the index fsync are done here.
+
+**Stale temp cleanup at open.** `materialise_with` and `sync_down_with` (both go through
+`run_down`) first remove `.drive.tmp.*` regular files under the drive root whose mtime is at least
+`Options::stale_tmp_age` old, and report the count in `DownReport::stale_tmp_removed`. The walk
+covers the tree, `.drive/` and `.drive/cas/`. It never follows a symlink (a symlinked directory is
+not entered, a symlinked temp name is left alone), so it cannot leave the drive root. A temp this
+process is writing is never removed: every writer (`place_file`, `Cas::put`, `write_atomic`,
+`Index::save`) registers its temp path in a process-wide set for the life of the file, and the
+cleanup skips registered paths whatever their age. The age gate defaults to
+`DEFAULT_STALE_TMP_AGE` = 10 minutes. The number is an owner choice. A writer in another process
+on the same drive is protected only by the age gate. `sync_up` and `watch` do not clean.
+
+**Durable index save.** `Index::save` now writes the temp, `sync_all` on the file, renames, then
+`sync_all` on the parent directory (the mesh-mock order). `.drive/.drive.tmp.index` keeps its fixed
+name.
+
+**Crash tests** (`tests_durable.rs`, in-process, like `tests_crash.rs`: a test-only checkpoint
+inside `Index::save` panics on its own thread, so nothing after it runs):
+- *Death after the temp is written, before the rename.* `index.json` is the old one and loads; the
+  temp holds the complete new index; the placed file is on disk. Aged with `File::set_modified`,
+  the next open removes the temp (count 1), adopts the placed file by content (no conflict) and
+  saves the new index.
+- *Death after the rename.* The new index loads; no temp is left; the next pull fetches and places
+  nothing.
+- Cleanup: old temps in the root, a subdirectory and the CAS go, fresh ones and a non-temp name
+  stay; a registered live temp survives even with the gate at zero and goes once released; symlinks
+  to a directory, to a file and to the root itself are left alone and nothing outside the root is
+  touched; `materialise` counts too.
+
+**What they do not cover.** A power cut or kernel crash: fsync order cannot be observed from a test,
+so the order is read from the code, not proven. A death inside `place_file` or in the middle of a
+file write. The live-temp test registers the path directly; it does not race a real write, and the
+registry does not protect against another process. Real SIGKILL and two real machines are still
+not covered. Tombstone collection is another lane.
+
+Counts, `scripts/build.sh test weftos-store --features rustfs`: before 148 passed, 20 ignored; after
+153 passed, 20 ignored (the 5 new tests are in-process only). The 9 ignored drive tests (live
+hardening and drive cycle) pass on a throwaway RustFS on loopback: 50 s wall for the nine
+(noisy, load 6-7).

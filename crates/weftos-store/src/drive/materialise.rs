@@ -11,6 +11,7 @@ use super::cas::{Cas, prune_empty_parents};
 use super::conflict::{ConflictKind, record};
 use super::index::{Entry, Index, Local, local_state, mtime_ns};
 use super::remote::{self, fetch_to_cas, read_tombstone};
+use super::tmp::{Live, remove_stale};
 use super::{DRIVE_DIR, DriveError, Options, Result, Skipped, TMP_PREFIX, log_event, norm_prefix};
 use crate::backend::{ObjectBackend, ObjectMeta};
 
@@ -29,6 +30,8 @@ pub struct DownReport {
     pub fetched: usize,
     pub bytes_fetched: u64,
     pub skipped: Vec<Skipped>,
+    /// Stale `.drive.tmp.*` files (older than `Options::stale_tmp_age`) removed at open.
+    pub stale_tmp_removed: usize,
 }
 
 /// Bind `dest` to `(bucket, prefix)` and bring it up to date. Safe to run again: the second run is
@@ -75,7 +78,7 @@ pub fn sync_down_with<B: ObjectBackend + ?Sized>(backend: &B, dest: &Path, opts:
 }
 
 fn run_down<B: ObjectBackend + ?Sized>(backend: &B, dest: &Path, index: &mut Index, opts: &Options) -> Result<DownReport> {
-    let mut rep = DownReport::default();
+    let mut rep = DownReport { stale_tmp_removed: remove_stale(dest, opts.stale_tmp_age), ..Default::default() };
     let r = apply_remote(backend, dest, index, opts, &mut rep);
     // The index is saved even when a fetch failed halfway: what was placed is recorded.
     let saved = index.save(dest);
@@ -90,6 +93,7 @@ fn place_file(dest: &Path, cas: &Cas, rel: &str, hash: &str) -> Result<(u64, u64
     let dir = target.parent().ok_or_else(|| DriveError::Io(format!("{rel}: no parent")))?;
     std::fs::create_dir_all(dir)?;
     let tmp = dir.join(format!("{TMP_PREFIX}{}", ulid::Ulid::new()));
+    let _live = Live::new(&tmp);
     let res = cas.clone_to(hash, &tmp).and_then(|()| std::fs::rename(&tmp, &target).map_err(Into::into));
     if res.is_err() {
         let _ = std::fs::remove_file(&tmp);

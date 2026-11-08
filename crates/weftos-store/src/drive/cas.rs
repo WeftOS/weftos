@@ -6,6 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
+use super::tmp::Live;
 use super::{DRIVE_DIR, DriveError, Result, TMP_PREFIX};
 
 pub(crate) struct Cas {
@@ -45,6 +46,7 @@ impl Cas {
         let dir = p.parent().ok_or_else(|| DriveError::Io("cas path has no parent".into()))?;
         std::fs::create_dir_all(dir)?;
         let tmp = dir.join(format!("{TMP_PREFIX}{}", ulid::Ulid::new()));
+        let _live = Live::new(&tmp);
         std::fs::write(&tmp, data)?;
         std::fs::rename(&tmp, &p).inspect_err(|_| {
             let _ = std::fs::remove_file(&tmp);
@@ -68,6 +70,7 @@ pub(crate) fn write_atomic(path: &Path, data: &[u8]) -> Result<()> {
     let dir = path.parent().ok_or_else(|| DriveError::Io(format!("{} has no parent", path.display())))?;
     std::fs::create_dir_all(dir)?;
     let tmp = dir.join(format!("{TMP_PREFIX}{}", ulid::Ulid::new()));
+    let _live = Live::new(&tmp);
     std::fs::write(&tmp, data)?;
     std::fs::rename(&tmp, path).inspect_err(|_| {
         let _ = std::fs::remove_file(&tmp);

@@ -25,6 +25,7 @@ mod materialise;
 mod remote;
 mod scan;
 mod sync_up;
+mod tmp;
 mod watch;
 
 #[cfg(all(test, feature = "rustfs"))]
@@ -33,6 +34,8 @@ mod live_tests;
 mod tests;
 #[cfg(test)]
 mod tests_crash;
+#[cfg(test)]
+mod tests_durable;
 #[cfg(test)]
 mod tests_hardening;
 #[cfg(all(test, feature = "rustfs"))]
@@ -51,6 +54,7 @@ pub use index::{Entry, Index, OpenConflict};
 pub use materialise::{DownReport, materialise, materialise_with, sync_down, sync_down_with};
 pub use scan::{Change, ChangeKind, Scan, scan};
 pub use sync_up::{UpReport, sync_up, sync_up_with};
+pub use tmp::DEFAULT_STALE_TMP_AGE;
 pub use watch::{WatchConfig, Watcher, watch_once};
 #[cfg(feature = "drive-notify")]
 pub use watch::watch_once_events;
@@ -140,7 +144,7 @@ impl Skipped {
 }
 
 /// Knobs shared by the sync functions.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Options {
     /// The existing S2 ceilings (16 MiB per file, 20,000 files, 512 MiB).
     pub limits: Limits,
@@ -150,6 +154,16 @@ pub struct Options {
     /// Use it for areas only the daemon writes, such as a worktree bucket's `.wt/tree/`, which the
     /// policy denies to writers: a mistaken push then fails here, not at the server.
     pub read_only: bool,
+    /// At open (`materialise`, `sync_down`), `.drive.tmp.*` files at least this old by mtime are
+    /// removed, unless this process is writing them. Default [`DEFAULT_STALE_TMP_AGE`]; a test may
+    /// shrink it.
+    pub stale_tmp_age: Duration,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self { limits: Limits::default(), device: None, read_only: false, stale_tmp_age: DEFAULT_STALE_TMP_AGE }
+    }
 }
 
 /// Normalise a prefix: empty, or ending in exactly one `/`.
