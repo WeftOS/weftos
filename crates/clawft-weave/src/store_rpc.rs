@@ -126,6 +126,12 @@ pub fn run(svc: &StoreService, method: &str, params: Value) -> Result<Value, Str
             let n = svc.archive(&name, p.delete, "cli").map_err(e)?;
             Ok(json!({"store": name.to_string(), "archived_objects": n, "deleted": p.delete}))
         }
+        // A node was unpaired: archive its node store and retire the id (ADR-126; S3 calls this).
+        "store.node.retire" => {
+            let name = store(&p)?;
+            let n = svc.retire_node_store(&name, "cli").map_err(e)?;
+            Ok(json!({"store": name.to_string(), "archived_objects": n, "retired": true}))
+        }
         "store.put" => {
             let (name, key) = (store(&p)?, need(&p.key, "key")?.to_owned());
             let who = Caller::local(principal(need(&p.principal, "principal")?)?);

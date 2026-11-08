@@ -130,6 +130,9 @@ struct State {
     /// principal -> access key id
     keys: BTreeMap<String, String>,
     suspended: BTreeSet<Principal>,
+    /// Node stores of nodes that were unpaired: the id is not handed out again.
+    #[serde(default)]
+    retired: BTreeSet<String>,
 }
 
 /// One store as `weaver store ls` shows it.
@@ -278,6 +281,9 @@ impl StoreService {
     }
 
     fn create_store_with(&self, name: &StoreName, actor: &str, extra: Parties, locked: bool) -> Result<StoreInfo, StoreError> {
+        if self.lock().retired.contains(&name.to_string()) {
+            return Err(StoreError::Refused(format!("{name} belongs to a node that was unpaired and its store archived: a new node needs a new id")));
+        }
         if self.lock().stores.contains_key(&name.to_string()) {
             return Err(StoreError::Exists(name.to_string()));
         }
@@ -332,6 +338,39 @@ impl StoreService {
             Err(StoreError::Exists(_)) if self.lock().stores.contains_key(&name.to_string()) => self.info(name),
             r => r,
         }
+    }
+
+    /// A node was unpaired: archive its node store (grants off, objects copied to the archive
+    /// bucket, nothing deleted) and remember the id as retired, so a different node that comes up
+    /// under the same id cannot be handed the old node's store, grants or keys. `create_store`
+    /// and `ensure_store` refuse a retired node's store from now on, and this survives a restart.
+    /// Call it from the unpair path; calling it again is harmless. A node store that was never
+    /// created is simply marked. Returns the number of objects archived.
+    pub fn retire_node_store(&self, name: &StoreName, actor: &str) -> Result<u64, StoreError> {
+        if name.kind() != "node" {
+            return Err(StoreError::Refused(format!("{name} is not a node store")));
+        }
+        let archived = match self.known(name) {
+            Ok(rec) if !rec.archived => self.archive(name, false, actor)?,
+            _ => 0,
+        };
+        let newly = {
+            let mut g = self.lock();
+            let newly = g.retired.insert(name.to_string());
+            if newly {
+                self.persist(&g)?;
+            }
+            newly
+        };
+        if newly {
+            self.chain.record("store.node.retired", json!({"store": name.to_string(), "actor": actor, "archived_objects": archived}));
+        }
+        Ok(archived)
+    }
+
+    /// The node stores whose ids are retired.
+    pub fn retired_nodes(&self) -> Vec<String> {
+        self.lock().retired.iter().cloned().collect()
     }
 
     fn principals_of(&self, name: &StoreName) -> Vec<Principal> {

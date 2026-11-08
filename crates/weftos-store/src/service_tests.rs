@@ -578,3 +578,42 @@ fn a_streamed_put_is_gated_write_once_for_append_and_refuses_lock_options_on_an_
     // The activity log shows the real size.
     assert!(r.sink.events().iter().any(|e| e.op == "PutObject" && e.bytes == 6 * 1024 * 1024), "{:?}", r.sink.events());
 }
+
+#[test]
+fn an_unpaired_nodes_store_is_archived_and_its_id_is_not_handed_out_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path().join("s.json");
+    let be = Arc::new(MemBackend::new());
+    let r = rig_at(Some(state.clone()), be.clone());
+    let n = node();
+    r.svc.ensure_store(&n, "daemon", Parties::defaults_for(&n)).unwrap();
+    r.svc.grant(&n, cog("c1"), Access::Write, "op").unwrap();
+    r.svc.put(&local("c1"), &n, "data/a", b"old node's data", false).unwrap();
+    assert!(r.svc.retire_node_store(&project(), "op").is_err(), "only node stores");
+
+    assert_eq!(r.svc.retire_node_store(&n, "op").unwrap(), 1, "one object archived");
+    assert_eq!(r.svc.retired_nodes(), vec![n.to_string()]);
+    // The old grants are off, and the data is in the archive, not gone.
+    assert!(r.svc.get(&local("c1"), &n, "data/a").is_err());
+    assert_eq!(r.be.list("n-pg-1", "").unwrap().len(), 1, "nothing deleted from the bucket");
+    // The id cannot come back: not created, not ensured, whoever asks.
+    for e in [r.svc.create_store(&n, "daemon", Parties::default()), r.svc.ensure_store(&n, "daemon", Parties::defaults_for(&n))] {
+        let msg = e.unwrap_err().to_string();
+        assert!(msg.contains("unpaired") && msg.contains("new id"), "{msg}");
+    }
+    // Even once the store record is deleted for good, the id stays retired.
+    r.svc.archive(&n, true, "op").unwrap();
+    assert!(r.svc.ensure_store(&n, "daemon", Parties::defaults_for(&n)).is_err());
+    // Repeating is harmless and records once.
+    r.svc.retire_node_store(&n, "op").unwrap();
+    assert_eq!(r.chain.0.lock().unwrap().iter().filter(|(k, _)| k == "store.node.retired").count(), 1);
+    // It survives a restart.
+    drop(r);
+    let r2 = rig_at(Some(state), be);
+    assert!(r2.svc.ensure_store(&n, "daemon", Parties::defaults_for(&n)).is_err());
+    // A node that never had a store is marked too; other nodes are untouched.
+    let ghost = StoreName::node("weft", "ghost-9").unwrap();
+    assert_eq!(r2.svc.retire_node_store(&ghost, "op").unwrap(), 0);
+    assert!(r2.svc.create_store(&ghost, "daemon", Parties::default()).is_err());
+    r2.svc.ensure_store(&StoreName::node("weft", "pg-2").unwrap(), "daemon", Parties::default()).unwrap();
+}

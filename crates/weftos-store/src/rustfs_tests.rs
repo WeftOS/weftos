@@ -757,3 +757,24 @@ fn live_multipart_upload_carries_lock_headers_and_aborts_clean() {
     assert!(be.complete_multipart(&b, "x", "id", &[Part { number: 2, etag: "a".into() }, Part { number: 1, etag: "b".into() }], &PutOpts::default()).is_err());
     assert!(be.upload_part(&b, "x", "id", 0, b"x").is_err() && be.upload_part(&b, "x", "id", 10_001, b"x").is_err());
 }
+
+/// An unpaired node's store, live: archived into the archive bucket with its data, grants off,
+/// the id not handed out again.
+#[test]
+#[ignore = "needs a throwaway RustFS: WEFTOS_STORE_TEST_RUSTFS_ENV"]
+fn live_retiring_a_node_archives_its_store_and_keeps_the_id_out() {
+    let (cfg, _d) = live().expect("WEFTOS_STORE_TEST_RUSTFS_ENV");
+    let be = Arc::new(RustfsBackend::new(cfg).unwrap());
+    let node_id = uniq("n").replace('_', "-");
+    let svc = StoreService::open(Config { node_id: node_id.clone(), state_path: None, clock: || 1_000 }, be.clone(), be.clone(), Arc::new(Open), Arc::new(MemSink::default()), Arc::new(Chain::default())).unwrap();
+    let n = StoreName::node("weft", &node_id).unwrap();
+    svc.ensure_store(&n, "daemon", Parties::defaults_for(&n)).unwrap();
+    let cog = Principal::parse("cog:old-node-cog").unwrap();
+    svc.grant(&n, cog.clone(), Access::Write, "op").unwrap();
+    svc.put(&Caller::local(cog.clone()), &n, "d/a.txt", b"before unpair", false).unwrap();
+    assert_eq!(svc.retire_node_store(&n, "op").unwrap(), 1);
+    let archived = be.list(crate::service::ARCHIVE_BUCKET, "").unwrap();
+    assert!(archived.iter().any(|m| m.key.contains(&n.bucket()) && m.key.ends_with("d/a.txt")), "{archived:?}");
+    assert!(svc.get(&Caller::local(cog), &n, "d/a.txt").is_err(), "old grants are off");
+    assert!(svc.ensure_store(&n, "daemon", Parties::defaults_for(&n)).is_err(), "the id is retired");
+}
