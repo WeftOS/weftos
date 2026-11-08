@@ -1,6 +1,6 @@
 //! L1 follower view tests: visibility before merge, change polling, leftovers, overlaps.
 use weftos_store::follower::*;
-use weftos_store::overlay::{ObjectBackend, ObjectMeta, Result as R};
+use weftos_store::overlay::{ObjectBackend, ObjectMeta, Result as R, S2Error};
 use weftos_store::promote::{WorktreeMeta, write_meta};
 use weftos_store::share::*;
 use weftos_store::share_fetch::*;
@@ -616,4 +616,43 @@ fn manifest_without_changes_still_parses() {
         "writer":{"agent":"w","host":"h"},"published_ms":1}"#;
     let m: TreeManifest = serde_json::from_str(j).unwrap();
     assert!(m.changes.is_empty());
+}
+
+fn claimed_by_alice(b: &MemBackend) -> String {
+    publish(b, "feat-x", "h1", &[("docs/a.md", "a")], 10);
+    let wt = list_shared(b, PR).unwrap().into_iter().find(|e| e.slug == "feat-x").unwrap().bucket;
+    mark_handoff(b, &wt, &actor("writer"), "go", 11).unwrap();
+    claim_merge(b, &wt, &actor("alice"), 12).unwrap();
+    wt
+}
+
+#[test]
+fn a_claim_expires_on_observed_silence_not_on_the_stored_wall_clock() {
+    use weftos_store::claim_watch::*;
+    let b = MemBackend::new();
+    let wt = claimed_by_alice(&b);
+    let mut w = ClaimWatch::new();
+    let ttl = CLAIM_TTL_MS;
+    // bob's wall clock is wildly ahead of alice's stamp: the old rule would hand him the claim at once
+    let far_future = 10 * ttl;
+    let e = claim_merge_observed(&b, &wt, &actor("bob"), &mut w, 1_000, far_future).unwrap_err();
+    assert!(matches!(e, S2Error::Claimed(_)), "first sighting starts the watch, it does not expire it");
+    let e = claim_merge_observed(&b, &wt, &actor("bob"), &mut w, 1_000 + ttl - 1, far_future).unwrap_err();
+    assert!(matches!(e, S2Error::Claimed(_)));
+    // alice is alive and refreshes her claim: the record changes, the watch restarts
+    claim_merge(&b, &wt, &actor("alice"), 99).unwrap();
+    let e = claim_merge_observed(&b, &wt, &actor("bob"), &mut w, 1_000 + ttl + 5, far_future).unwrap_err();
+    assert!(matches!(e, S2Error::Claimed(_)), "a refreshed claim is not expired");
+    // silence for a full TTL on bob's own clock: now it can be taken over, and the epoch moves
+    let h = claim_merge_observed(&b, &wt, &actor("bob"), &mut w, 1_000 + 2 * ttl + 5, 5_000).unwrap();
+    assert_eq!(h.merger, Some(actor("bob")));
+    assert_eq!(h.epoch, 3, "alice claimed twice, bob once");
+}
+
+#[test]
+fn a_merge_under_a_stale_epoch_is_refused() {
+    let b = MemBackend::new();
+    let wt = claimed_by_alice(&b); // epoch 1
+    assert!(mark_merged_at(&b, &wt, &actor("alice"), Some(2), "x", 20).is_err(), "wrong epoch");
+    mark_merged_at(&b, &wt, &actor("alice"), Some(1), "landed", 21).unwrap();
 }

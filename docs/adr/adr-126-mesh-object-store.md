@@ -130,9 +130,11 @@ Only the daemon creates, grants access to, or deletes a store.
   of something read earlier conflicts; a read made around the overlay still records none. A
   project-side delete of a file the worktree edited is a conflict as well. Every project version
   that promotion overwrites or deletes is first copied to the archive under `.wt/displaced/`.
-  Promotion has no conditional write, but re-checks each project etag right before its copy or
-  delete and aborts with a conflict if it moved (the window is one head call; closing it needs an
-  if-match write from S1). Registry signing and the claim epoch: see
+  Promotion copies use S1's `put_if_match` (or an if-none-match create) so a project write between
+  the plan and the copy is a conflict, not an overwrite; deletes re-check the etag just before
+  (no conditional delete exists). Claims carry a fencing epoch that `promote` can require, and the
+  daemon decides claim expiry on silence it observed on its own monotonic clock. Registry signing
+  mechanism and the key options: see
   `docs/research/adr126-s2-registry-signing-and-claim-clock.md`. The daemon refuses to `create` a slug that has already landed. The run is idempotent and
   safe to retry after a partial failure; once the report is written, later writes to that
   worktree bucket are ignored.

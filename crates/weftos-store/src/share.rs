@@ -506,6 +506,21 @@ pub fn claim_merge<B: ObjectBackend>(
     me: &Actor,
     now_ms: u64,
 ) -> Result<Handoff> {
+    claim_merge_with(b, bucket, me, now_ms, |cur| {
+        now_ms.saturating_sub(cur.updated_ms) >= CLAIM_TTL_MS
+    })
+}
+
+/// [`claim_merge`] with the expiry decision supplied by the caller: `expired(current)` says whether
+/// a live claim by someone else may be taken over. `claim_watch` uses it to decide on elapsed time
+/// the caller observed itself instead of on the stored wall-clock stamp.
+pub fn claim_merge_with<B: ObjectBackend>(
+    b: &B,
+    bucket: &str,
+    me: &Actor,
+    now_ms: u64,
+    mut expired: impl FnMut(&Handoff) -> bool,
+) -> Result<Handoff> {
     let cur = read_handoff(b, bucket)?
         .ok_or_else(|| S2Error::Invalid("worktree has no handoff record".into()))?;
     match cur.state {
@@ -518,7 +533,7 @@ pub fn claim_merge<B: ObjectBackend>(
         State::Claimed => {
             let other = cur.merger.as_ref().filter(|m| *m != me);
             if let Some(m) = other
-                && now_ms.saturating_sub(cur.updated_ms) < CLAIM_TTL_MS
+                && !expired(&cur)
             {
                 return Err(S2Error::Claimed(format!("{}@{}", m.agent, m.host)));
             }
@@ -550,6 +565,20 @@ pub fn mark_merged<B: ObjectBackend>(
     note: &str,
     now_ms: u64,
 ) -> Result<()> {
+    mark_merged_at(b, bucket, me, None, note, now_ms)
+}
+
+/// [`mark_merged`] that also demands the claim epoch the merger claimed under. If the claim was
+/// taken over and re-taken by the same actor in between, or the record was rewritten, the epoch has
+/// moved and the merge is refused (fencing), whatever the clocks say.
+pub fn mark_merged_at<B: ObjectBackend>(
+    b: &B,
+    bucket: &str,
+    me: &Actor,
+    epoch: Option<u64>,
+    note: &str,
+    now_ms: u64,
+) -> Result<()> {
     let cur = read_handoff(b, bucket)?
         .ok_or_else(|| S2Error::Invalid("worktree has no handoff record".into()))?;
     if cur.state != State::Claimed {
@@ -564,6 +593,14 @@ pub fn mark_merged<B: ObjectBackend>(
                 .map(|m| format!("{}@{}", m.agent, m.host))
                 .unwrap_or_default(),
         ));
+    }
+    if let Some(e) = epoch
+        && e != cur.epoch
+    {
+        return Err(S2Error::Claimed(format!(
+            "claim epoch {e} is stale (now {}); the claim was taken over",
+            cur.epoch
+        )));
     }
     write_handoff(
         b,

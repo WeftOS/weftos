@@ -180,7 +180,12 @@ pub fn worktree_params(rest: &[String], agent: &str, host: &str) -> anyhow::Resu
             m.insert(k, Value::Bool(true));
         } else {
             let v = it.next().ok_or_else(|| anyhow::anyhow!("--{k} needs a value"))?;
-            m.insert(k, Value::String(v.clone()));
+            if k == "epoch" {
+                let n: u64 = v.parse().map_err(|_| anyhow::anyhow!("--epoch needs a whole number"))?;
+                m.insert(k, Value::from(n));
+            } else {
+                m.insert(k, Value::String(v.clone()));
+            }
         }
     }
     m.entry("agent").or_insert_with(|| Value::String(agent.into()));

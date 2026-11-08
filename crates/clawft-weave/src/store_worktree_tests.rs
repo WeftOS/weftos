@@ -87,6 +87,7 @@ fn the_verbs_carry_a_worktree_from_create_to_land_through_the_daemon_store() {
     let nm = names("local", PROJ, "feat-rooms").unwrap();
     let h = weftos_store::share::read_handoff(&Op(svc.operator_objects()), &nm.wt).unwrap().unwrap();
     assert_eq!(h.epoch, 1, "a claim bumps the fencing epoch");
+    assert_eq!(c["epoch"], 1);
     assert!(publish("alice", 41).is_err(), "the writer cannot overwrite a claimed merge");
     let f2 = call(&svc, "follow", json!({"project": PROJ, "state": st.to_string_lossy()}), 42).unwrap();
     assert_eq!(f2["changes"][0]["change"], "state_changed");
@@ -94,7 +95,9 @@ fn the_verbs_carry_a_worktree_from_create_to_land_through_the_daemon_store() {
     // landing: the worktree's own asset reaches the project, the claim is closed as merged
     let n = names("local", PROJ, "feat-rooms").unwrap();
     weftos_store::overlay::Overlay::new(&Op(svc.operator_objects()), &n.wt, &n.pr).put("assets/room.bin", b"ROOM").unwrap();
-    let p = call(&svc, "promote", json!({"project": PROJ, "slug": "feat-rooms", "agent": "bob", "host": "m2"}), 50).unwrap();
+    let stale = call(&svc, "promote", json!({"project": PROJ, "slug": "feat-rooms", "agent": "bob", "host": "m2", "epoch": 7}), 49);
+    assert!(stale.unwrap_err().contains("stale"), "a land under the wrong claim epoch is refused");
+    let p = call(&svc, "promote", json!({"project": PROJ, "slug": "feat-rooms", "agent": "bob", "host": "m2", "epoch": 1}), 50).unwrap();
     assert_eq!(p["promoted"], json!(["assets/room.bin"]));
     assert_eq!(S1::get(&*svc.operator_objects(), pb, "assets/room.bin").unwrap(), b"ROOM");
     let again = call(&svc, "promote", json!({"project": PROJ, "slug": "feat-rooms"}), 51).unwrap();

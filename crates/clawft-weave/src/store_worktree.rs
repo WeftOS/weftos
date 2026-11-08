@@ -7,16 +7,18 @@
 //! the `*_z` lists) are read or written by the daemon itself, so client and daemon share a host.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Instant;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
 use weftos_store::backend::{BackendError, ObjectBackend as S1, ObjectMeta};
+use weftos_store::claim_watch::{ClaimWatch, claim_merge_observed};
 use weftos_store::follower::{self, Change, FollowState, LeftoverPolicy, Why};
 use weftos_store::promote::{ArchiveTarget, PromotionPolicy, WorktreeMeta, promote, write_meta};
 use weftos_store::service::{ARCHIVE_BUCKET, Parties, archive_key};
 use weftos_store::share::{
-    Actor, Limits, TreeSource, claim_merge, mark_handoff, mark_merged, parse_name_status_z, publish_tree,
+    Actor, Limits, TreeSource, mark_handoff, mark_merged_at, parse_name_status_z, publish_tree,
 };
 use weftos_store::share_fetch::{
     RegistryEntry, Select, fetch_bundle, fetch_tree, list_shared, summarize, write_registry_entry,
@@ -29,6 +31,9 @@ struct Op(Arc<dyn S1>);
 impl S1 for Op {
     fn put(&self, b: &str, k: &str, d: &[u8], n: bool) -> Result<ObjectMeta, BackendError> {
         self.0.put(b, k, d, n)
+    }
+    fn put_if_match(&self, b: &str, k: &str, d: &[u8], etag: &str) -> Result<ObjectMeta, BackendError> {
+        self.0.put_if_match(b, k, d, etag)
     }
     fn get(&self, b: &str, k: &str) -> Result<Vec<u8>, BackendError> {
         self.0.get(b, k)
@@ -69,6 +74,8 @@ struct P {
     bundle: Option<String>,
     bundle_out: Option<String>,
     handoff: Option<String>,
+    /// The claim epoch the caller claimed under; `promote` refuses a merge made under another.
+    epoch: Option<u64>,
     #[serde(default)]
     force: bool,
     /// Output format; the CLI formats, the daemon ignores it.
@@ -120,6 +127,17 @@ fn nul_list(raw: &[u8]) -> Result<Vec<String>, String> {
         .filter(|t| !t.is_empty())
         .map(|t| std::str::from_utf8(t).map(str::to_owned).map_err(|_| "non-UTF-8 path in list".to_string()))
         .collect()
+}
+
+fn claim_watch() -> &'static Mutex<ClaimWatch> {
+    static W: OnceLock<Mutex<ClaimWatch>> = OnceLock::new();
+    W.get_or_init(|| Mutex::new(ClaimWatch::new()))
+}
+
+/// Milliseconds on a monotonic clock, from the first call in this process.
+fn mono_ms() -> u64 {
+    static T0: OnceLock<Instant> = OnceLock::new();
+    T0.get_or_init(Instant::now).elapsed().as_millis() as u64
 }
 
 fn who(p: &P) -> Actor {
@@ -273,9 +291,15 @@ pub fn run(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms: 
         "claim" => {
             let slug = need(&p.slug, "slug")?;
             let n = names(mesh, &project, slug)?;
-            let h = claim_merge(&b, &n.wt, &who(&p), now_ms).map_err(e)?;
+            // Expiry is judged on how long this daemon has watched the claim sit unchanged, on its
+            // own monotonic clock; the stored stamp (some caller's wall clock) decides nothing.
+            let h = {
+                let mut w = claim_watch().lock().map_err(|_| "claim watch poisoned".to_string())?;
+                claim_merge_observed(&b, &n.wt, &who(&p), &mut w, mono_ms(), now_ms).map_err(e)?
+            };
             refresh(&b, &n.pr, slug, &n.wt)?;
-            Ok(json!({"state": h.state, "merger": h.merger.map(|m| format!("{}@{}", m.agent, m.host))}))
+            Ok(json!({"state": h.state, "epoch": h.epoch,
+                      "merger": h.merger.map(|m| format!("{}@{}", m.agent, m.host))}))
         }
         "promote" => {
             let slug = need(&p.slug, "slug")?;
@@ -296,7 +320,7 @@ pub fn run(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms: 
             if let Ok(Some(h)) = weftos_store::share::read_handoff(&b, &n.wt)
                 && h.state == weftos_store::share::State::Claimed
             {
-                mark_merged(&b, &n.wt, &who(&p), "landed", now_ms).map_err(e)?;
+                mark_merged_at(&b, &n.wt, &who(&p), p.epoch, "landed", now_ms).map_err(e)?;
             }
             Ok(json!({
                 "promoted": r.promoted, "deleted": r.deleted, "kept_project": r.kept_project,

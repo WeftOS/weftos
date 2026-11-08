@@ -1,6 +1,6 @@
 # ADR-126 S2: signing the worktree registry, and claim timeouts off the client clock
 
-Status: design note with a partial implementation, 2026-11-08. Belongs to ADR-126 S2.
+Status: mechanism and claim fixes implemented; daemon signing waits on the owner's key choice. 2026-11-08. Belongs to ADR-126 S2.
 
 ## Problem
 
@@ -33,16 +33,40 @@ trusted public keys). Until then entries are `Unsigned` and followers behave as 
 does not stop replay of an older, validly signed entry; the entry's `updated_ms` and the handoff
 `epoch` are the freshness signals.
 
-## Claim clock (partly implemented)
+## Claim clock (implemented)
 
 - **One clock per store.** Every `store.worktree.*` verb takes `now_ms` from the daemon, not from the
-  caller, so claims made through the daemon already share one clock. Callers using the library
-  directly choose their own `now_ms`; documented, not enforced.
-- **Fencing epoch (implemented).** `Handoff.epoch` counts claims. A merger that reads a higher
-  epoch than the one it claimed under knows its claim was taken over, whatever the clocks say.
-  `mark_merged` does not yet require the claimer's epoch; that is the next step, together with a
-  `claim` response that returns the epoch to hold.
-- **Observer-side expiry (design only).** Better than comparing two wall clocks: a taker treats a
-  claim as expired only after it has watched the same `(epoch, updated_ms)` for 30 minutes on its
-  own monotonic clock. This removes skew entirely, at the cost of a taker needing state between
-  polls (the follower's `FollowState` is the natural home).
+  caller. Library callers choose their own, which is why the next two items exist.
+- **Fencing epoch.** `Handoff.epoch` counts claims; `claim` returns it. `promote` takes an optional
+  `epoch` and, through `mark_merged_at`, refuses to record a merge made under a different one.
+- **Observer-side expiry.** `claim_watch::claim_merge_observed`: a taker treats a claim by someone
+  else as expired only after it has watched the same `(epoch, updated_ms)` unchanged for the TTL on
+  its own monotonic clock. The stored wall-clock stamp decides nothing, so skew can neither steal a
+  live claim nor keep a dead one. A live claimer refreshes the record and resets the watch. The
+  daemon `claim` verb uses it with a process-lifetime watch; a daemon restart forgets the watch,
+  which only lengthens the wait. The library `claim_merge` keeps the wall-clock rule for callers
+  that have no place to keep a watch.
+
+## Conditional writes (implemented, S1's `put_if_match`)
+
+Promotion copies now go through `put_cas`: `Some(etag)` is S1's `put_if_match`, `None` is a put
+with `if_none_match`. A lost race is a conflict and nothing is written. Deletes still re-check the
+etag just before (no conditional delete exists), and the `Overwrite` policy stays unconditional by
+design. A CAS needs the object in memory, so a promoted file passes through the daemon rather than
+being copied server-side.
+
+## Signing key: options for the owner
+
+1. **Daemon node identity (ed25519, the key that signs the kernel chain).** The daemon signs each
+   entry; followers hold the daemon public keys the project trusts. End to end, survives a
+   compromised store or a project-write principal. Needs: a decision on where followers read the
+   trusted keys (project manifest, pinned in config), and key rotation.
+2. **Store governance only (no new crypto).** Grant `worktrees/` and `worktrees.sig/` write to the
+   daemon principal alone, via S1's per-principal grants. Zero key management, but it trusts the
+   store and the operator credentials; a store admin can still forge entries.
+3. **A dedicated per-project signing key.** Cleanest separation, but a new secret to store, hand out
+   and rotate, which is what the owner asked not to invent.
+
+Recommendation: do 2 now (it needs only grants), and 1 as the real fix once the owner names the
+trusted-key location. Skip 3. Whichever is picked, the mechanism in `registry_sign` is unchanged;
+only the `EntrySigner` and `EntryVerifier` implementations differ.
