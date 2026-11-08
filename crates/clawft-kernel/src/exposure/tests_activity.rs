@@ -172,8 +172,25 @@ fn a_log_whose_last_record_is_u64_max_opens_exhausted_instead_of_overflowing() {
     assert!(again.verify().is_ok());
 }
 
+/// Rewrite a log file with the given records re-chained and re-hashed, so the ONLY thing wrong
+/// with it is whatever the caller changed about `seq`.
+fn reseal(path: &std::path::Path, mut recs: Vec<super::activity::ActivityRecord>) {
+    let mut prev = GENESIS.to_owned();
+    for r in &mut recs {
+        r.prev = prev.clone();
+        r.hash = r.digest();
+        prev = r.hash.clone();
+    }
+    let text: String = recs.iter().map(|r| serde_json::to_string(r).unwrap() + "\n").collect();
+    std::fs::write(path, text).unwrap();
+}
+
+fn written(path: &std::path::Path) -> Vec<super::activity::ActivityRecord> {
+    std::fs::read_to_string(path).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect()
+}
+
 #[test]
-fn a_sequence_that_repeats_or_steps_back_breaks_the_chain() {
+fn a_sequence_that_repeats_or_steps_back_breaks_the_chain_even_when_every_hash_is_valid() {
     let d = tmpdir("seqorder");
     let p = d.join("a.jsonl");
     {
@@ -182,10 +199,25 @@ fn a_sequence_that_repeats_or_steps_back_breaks_the_chain() {
             log.append(act("e", "n", "ok"), t);
         }
     }
-    // Reorder two lines: the hashes still chain only if recomputed, and the seq order is wrong anyway.
-    let text = std::fs::read_to_string(&p).unwrap();
-    let mut lines: Vec<&str> = text.lines().collect();
-    lines.swap(1, 2);
-    std::fs::write(&p, lines.join("\n") + "\n").unwrap();
-    assert!(ActivityLog::open(&p, Retention::default(), 0).is_err());
+    let good = written(&p);
+    assert_eq!(good.iter().map(|r| r.seq).collect::<Vec<_>>(), [0, 1, 2]);
+    // Control: re-sealing the untouched records opens fine, so a failure below is about `seq` alone.
+    reseal(&p, good.clone());
+    assert!(ActivityLog::open(&p, Retention::default(), 0).is_ok());
+    for (label, seqs) in [("repeat", [0, 1, 1]), ("step back", [0, 2, 1]), ("all equal", [5, 5, 5])] {
+        let mut recs = good.clone();
+        for (r, s) in recs.iter_mut().zip(seqs) {
+            r.seq = s;
+        }
+        reseal(&p, recs);
+        let e = ActivityLog::open(&p, Retention::default(), 0).err().unwrap_or_else(|| panic!("{label}: opened"));
+        assert!(e.contains("chain broken at seq"), "{label}: {e}");
+    }
+    // Gaps upward are fine (retention drops the oldest records).
+    let mut recs = good;
+    for (r, s) in recs.iter_mut().zip([4, 9, 70]) {
+        r.seq = s;
+    }
+    reseal(&p, recs);
+    assert!(ActivityLog::open(&p, Retention::default(), 0).is_ok());
 }

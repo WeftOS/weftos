@@ -715,3 +715,91 @@ fn an_interrupted_archive_survives_a_restart_and_can_be_finished_by_archive_itse
     assert_eq!(be2.list(ARCHIVE_BUCKET, "").unwrap().len(), 4, "no duplicates from the resume");
     assert!(matches!(svc2.archive(&n, false, "op"), Err(StoreError::Refused(_))), "a finished archive is refused again");
 }
+
+fn seqs(r: &Rig) -> Vec<(String, u64)> {
+    r.chain.0.lock().unwrap().iter().filter_map(|(k, v)| v["seq"].as_u64().map(|s| (k.clone(), s))).collect()
+}
+
+#[test]
+fn every_grant_affecting_event_is_stamped_one_higher_in_the_order_it_was_made() {
+    let r = rig();
+    let n = project();
+    r.svc.create_store(&n, "daemon", Parties::default()).unwrap();
+    assert!(seqs(&r).is_empty(), "creating a store grants nothing by itself here");
+    let c = cog("c");
+    r.svc.grant(&n, c.clone(), Access::Write, "op").unwrap();
+    r.svc.set_grant_enabled(&n, &c, false, "op").unwrap();
+    r.svc.set_grant_enabled(&n, &c, true, "op").unwrap();
+    r.svc.suspend_principal(&c, "test").unwrap();
+    r.svc.resume_principal(&c).unwrap();
+    r.svc.revoke(&n, &c, "op").unwrap();
+    r.svc.grant(&n, c, Access::Read, "op").unwrap();
+    r.svc.archive(&n, false, "op").unwrap();
+    let got = seqs(&r);
+    let kinds: Vec<&str> = got.iter().map(|(k, _)| k.as_str()).collect();
+    assert_eq!(kinds, ["store.grant", "store.grant.disable", "store.grant.enable", "store.principal.suspend", "store.principal.resume", "store.revoke", "store.grant", "store.close", "store.archive"]);
+    let nums: Vec<u64> = got.iter().map(|(_, s)| *s).collect();
+    assert_eq!(nums, (1..=9).collect::<Vec<u64>>(), "gapless from 1, in recorded order");
+    // A refused change takes no number.
+    assert!(r.svc.revoke(&project(), &cog("nobody"), "op").is_err());
+    assert_eq!(seqs(&r).len(), 9);
+}
+
+#[test]
+fn concurrent_changes_are_recorded_in_seq_order_not_just_numbered_uniquely() {
+    let r = rig();
+    let n = project();
+    r.svc.create_store(&n, "daemon", Parties::default()).unwrap();
+    let svc = &r.svc;
+    std::thread::scope(|s| {
+        for t in 0..8 {
+            let n = n.clone();
+            s.spawn(move || {
+                for i in 0..25 {
+                    svc.grant(&n, cog(&format!("c{t}-{i}")), Access::Read, "op").unwrap();
+                }
+            });
+        }
+    });
+    let nums: Vec<u64> = seqs(&r).iter().map(|(_, s)| *s).collect();
+    assert_eq!(nums, (1..=200).collect::<Vec<u64>>(), "the chain sees 1..=200 in order, so a consumer that drops a repeat or a step back loses nothing");
+}
+
+#[test]
+fn the_counter_survives_a_restart_and_a_forged_far_future_value_cannot_be_issued() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path().join("s.json");
+    let be = Arc::new(MemBackend::new());
+    let n = project();
+    {
+        let r = rig_at(Some(state.clone()), be.clone());
+        r.svc.create_store(&n, "daemon", Parties::default()).unwrap();
+        r.svc.grant(&n, cog("a"), Access::Read, "op").unwrap();
+        r.svc.grant(&n, cog("b"), Access::Read, "op").unwrap();
+    }
+    let r = rig_at(Some(state.clone()), be.clone());
+    r.svc.grant(&n, cog("c"), Access::Read, "op").unwrap();
+    assert_eq!(seqs(&r), vec![("store.grant".into(), 3)], "continues after the restart, never reuses 1 or 2");
+    drop(r);
+
+    // Put the counter one below the ceiling by hand: one more event is stamped, then changes are refused and change nothing.
+    let mut v: serde_json::Value = serde_json::from_slice(&std::fs::read(&state).unwrap()).unwrap();
+    v["grant_seq"] = serde_json::json!(crate::grant_seq::CEILING - 1);
+    std::fs::write(&state, serde_json::to_vec(&v).unwrap()).unwrap();
+    let r = rig_at(Some(state.clone()), be.clone());
+    r.svc.grant(&n, cog("d"), Access::Read, "op").unwrap();
+    assert_eq!(seqs(&r), vec![("store.grant".into(), crate::grant_seq::CEILING)]);
+    let e = r.svc.grant(&n, cog("e"), Access::Read, "op").unwrap_err();
+    assert!(matches!(e, StoreError::Refused(_)) && e.to_string().contains("ceiling"), "{e}");
+    assert!(r.svc.revoke(&n, &cog("d"), "op").is_err(), "every grant-affecting change is refused at the ceiling");
+    assert!(r.svc.suspend_principal(&cog("d"), "x").is_err());
+    assert!(r.svc.info(&n).unwrap().grants.iter().all(|g| g.principal != cog("e")), "the refused grant changed nothing");
+    assert_eq!(seqs(&r).len(), 1);
+    drop(r);
+
+    // A state file claiming a seq above the ceiling is damage, not something to continue from.
+    v["grant_seq"] = serde_json::json!(u64::MAX);
+    std::fs::write(&state, serde_json::to_vec(&v).unwrap()).unwrap();
+    let e = StoreService::open(Config { node_id: "pg-1".into(), state_path: Some(state), clock: || 1_000 }, be.clone(), be, Arc::new(Gate(AtomicBool::new(true))), Arc::new(MemSink::default()), Arc::new(Chain::default()));
+    assert!(matches!(e, Err(StoreError::State(m)) if m.contains("ceiling")));
+}

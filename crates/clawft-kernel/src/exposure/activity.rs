@@ -83,7 +83,7 @@ pub struct ActivityRecord {
 }
 
 impl ActivityRecord {
-    fn digest(&self) -> String {
+    pub(super) fn digest(&self) -> String {
         let user = self.caller_user.as_deref().unwrap_or("");
         let text = format!(
             "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",

@@ -93,6 +93,7 @@ impl StoreService {
             {
                 let now = self.now();
                 let mut st = self.lock();
+                Self::seq_room(&st)?;
                 for p in &principals {
                     st.grants.set_enabled(p, name, false);
                 }
@@ -101,7 +102,10 @@ impl StoreService {
                     r.archive_done = false;
                     r.archive_ts = Some(now);
                 }
+                // Every grant on the store went off at once: one stamped event says so.
+                let seq = self.stamp(&mut st);
                 self.persist(&st)?;
+                self.chain.record("store.close", json!({"seq": seq, "store": name.to_string(), "actor": actor, "grants_disabled": principals.len()}));
             }
             for p in &principals {
                 self.apply_principal(p)?;
@@ -153,7 +157,12 @@ impl StoreService {
                 self.apply_principal(p)?;
             }
         }
-        self.chain.record("store.archive", json!({"store": name.to_string(), "objects": objs.len(), "deleted": delete, "actor": actor}));
+        {
+            let mut st = self.lock();
+            let seq = if Self::seq_room(&st).is_ok() { Some(self.stamp(&mut st)) } else { None };
+            self.persist(&st)?;
+            self.chain.record("store.archive", json!({"seq": seq, "store": name.to_string(), "objects": objs.len(), "deleted": delete, "actor": actor}));
+        }
         self.emit(actor, name, if delete { "ArchiveDelete" } else { "Archive" }, None, objs.iter().map(|m| m.size).sum(), Outcome::Ok, Source::Governed);
         Ok(objs.len() as u64)
     }

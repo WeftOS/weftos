@@ -16,6 +16,7 @@ pub mod access;
 pub mod audit;
 pub mod backend;
 pub mod fs;
+pub mod grant_seq;
 pub mod mem;
 pub mod name;
 pub mod policy;

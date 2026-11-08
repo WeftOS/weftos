@@ -359,6 +359,34 @@ tokens never reach it; a panic in the sink is caught and does not change the ans
 seam: after the two branches merge, S2's implementation is `fn notified(&self, _store, bucket, body) { let h = registry_hints(body, bucket);
 if !h.is_empty() { /* publish a wake on the project's relay topic */ } }`. The relay hop itself is the mesh transport card and is not started.
 
+**Grant event sequence: where it is stamped and what bound applies (decision for the chain owner to confirm, 2026-11-08).** S3's review found
+that the `seq = u64::MAX` freeze was not closed: my earlier guard covered the exposure activity log, a different sequence, and the ledger that
+S3 feeds from the chain (`GrantLedger::apply` ignores any event with `seq <=` the last applied) would stop applying all later events,
+revocations included, after one event claiming a huge `seq`. The decision, in `weftos_store::grant_seq` and `StoreService`:
+
+1. **Stamped by `StoreService`, the one writer of grant changes**, not by the chain feed and not by the consumer. A counter `grant_seq` is
+   part of the saved state and goes up by exactly one for each event that changes what a principal may do: `store.grant`, `store.revoke`,
+   `store.grant.enable`, `store.grant.disable`, `store.principal.suspend`, `store.principal.resume`, `store.close` (all grants of a store
+   went off at the start of an archive), `store.archive`, `store.node.retired`. It starts at 1, is gapless, is saved before the event is
+   recorded, and is never reused after a restart.
+2. **Stamped under the same lock as the change, and recorded to the chain before that lock is released**, so the order of the numbers is the
+   order the changes were made and the order the chain sees them (two threads cannot record 6 before 5). The `ChainSink` therefore must be quick
+   and must not call back into the service. A test makes 200 grants from 8 threads and requires the chain to see 1..=200 in order; moving the record out of
+   the lock fails it.
+3. **Upper bound on issuing: `CEILING = 2^62`.** At the ceiling every grant-affecting call is refused with a clear error before it changes anything; a state
+   file that claims a `grant_seq` above it is refused at open as damaged.
+4. **Bound on accepting, for every consumer: `grant_seq::admit(last, seq)`** is `last < seq <= last + MAX_GAP` and `seq <= CEILING`, with
+   `MAX_GAP = 1_000_000`. A forged or corrupt `seq` far ahead is refused without moving `last`, so the next honest event (`last + 1`) still applies.
+   The gap is allowed because a consumer may legitimately miss events (a feed filtered to its own principals, or an outage it repairs); 10^6
+   is far above any real burst and far below the ceiling. The bound limits the harm of a forgery that slips under it to at most `MAX_GAP` honest events being treated as stale, not a permanent freeze. A consumer that is refused must resync from a snapshot, not widen the bound.
+   For S3: `MaxSeqJump(MAX_GAP)` is the same rule except for the ceiling, so install `set_seq_guard` with a guard that calls `admit`, by default,
+   and again after every `restore`. S3's edge-creds crate does not depend on `weftos-store`, so the two numbers may be copied; they are public constants.
+
+What is NOT closed here: S1 stamps and bounds; whoever builds the chain feed must carry `seq` through (the field is in the chain payload now),
+and the ledger must install the guard. Events recorded before this change have no `seq`. Reasoning for the chain owner to confirm: a bound only
+at the consumer is not enough (a forged value just under it moves `last` far ahead and the ledger then accepts nothing honest until it passes that
+value), so the stamp must come from one trusted writer and be gapless, and the consumer's bound is then a check that the writer's promise holds.
+
 **The daemon now has the receiver** (`clawft-weave/src/store_ingest.rs`, 2026-11-08): a loopback HTTP listener, off unless
 `WEFTOS_STORE_INGEST_ADDR` is set, POST only, 1 MiB cap, authenticated by a 256-bit secret in the URL path
 (`store-ingest-token`, 0600; the URLs are written to `store-ingest-urls`), because RustFS's webhook `auth_token` is unverified.

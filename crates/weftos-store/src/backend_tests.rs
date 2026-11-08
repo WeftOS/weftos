@@ -140,3 +140,63 @@ fn local_backends_read_it_whole_put_it_once_and_refuse_lock_options() {
     assert!(matches!(m.put_stream("b", "l", &mut bytes(6 * MIB), 5 * MIB, &lock), Err(BackendError::Unsupported(_))));
     assert!(matches!(m.put_stream("b", "l", &mut bytes(10), 5 * MIB, &lock), Err(BackendError::Unsupported(_))));
 }
+
+/// Only the retention calls: what a version holds now, and what was asked to change.
+struct Held {
+    now: Mutex<Option<Retention>>,
+    puts: Mutex<Vec<Retention>>,
+}
+impl Held {
+    fn with(r: Option<Retention>) -> Self {
+        Self { now: Mutex::new(r), puts: Mutex::default() }
+    }
+}
+impl ObjectBackend for Held {
+    fn get_retention(&self, _: &str, _: &str, _: &str) -> Result<Option<Retention>, BackendError> {
+        Ok(*self.now.lock().unwrap())
+    }
+    fn put_retention(&self, _: &str, _: &str, _: &str, r: &Retention, bypass: bool) -> Result<(), BackendError> {
+        assert!(!bypass, "extending never asks to bypass governance");
+        self.puts.lock().unwrap().push(*r);
+        *self.now.lock().unwrap() = Some(*r);
+        Ok(())
+    }
+    fn put(&self, _: &str, _: &str, _: &[u8], _: bool) -> Result<ObjectMeta, BackendError> {
+        unreachable!()
+    }
+    fn put_if_match(&self, _: &str, _: &str, _: &[u8], _: &str) -> Result<ObjectMeta, BackendError> {
+        unreachable!()
+    }
+    fn get(&self, _: &str, _: &str) -> Result<Vec<u8>, BackendError> {
+        unreachable!()
+    }
+    fn head(&self, _: &str, _: &str) -> Result<ObjectMeta, BackendError> {
+        unreachable!()
+    }
+    fn delete(&self, _: &str, _: &str) -> Result<(), BackendError> {
+        unreachable!()
+    }
+    fn copy(&self, _: &str, _: &str, _: &str, _: &str) -> Result<ObjectMeta, BackendError> {
+        unreachable!()
+    }
+    fn list(&self, _: &str, _: &str) -> Result<Vec<ObjectMeta>, BackendError> {
+        unreachable!()
+    }
+}
+
+#[test]
+fn extend_retention_only_ever_lengthens_and_keeps_the_current_mode() {
+    let comp = |t| Retention { mode: LockMode::Compliance, until_unix_s: t };
+    let b = Held::with(Some(comp(1000)));
+    // Equal and shorter are refused, and nothing is sent.
+    assert!(matches!(b.extend_retention("b", "k", "v", 1000, LockMode::Governance), Err(BackendError::BadKey(_))), "equal is not an extension");
+    assert!(matches!(b.extend_retention("b", "k", "v", 999, LockMode::Governance), Err(BackendError::BadKey(_))));
+    assert!(matches!(b.extend_retention("b", "k", "v", 0, LockMode::Governance), Err(BackendError::BadKey(_))));
+    assert!(b.puts.lock().unwrap().is_empty(), "a refused extension sends nothing");
+    // One second longer is enough; the mode stays Compliance whatever the caller names.
+    assert_eq!(b.extend_retention("b", "k", "v", 1001, LockMode::Governance).unwrap(), comp(1001));
+    assert_eq!(*b.puts.lock().unwrap(), vec![comp(1001)]);
+    // An object with no retention takes the caller's mode and any date.
+    let none = Held::with(None);
+    assert_eq!(none.extend_retention("b", "k", "v", 5, LockMode::Governance).unwrap(), Retention { mode: LockMode::Governance, until_unix_s: 5 });
+}

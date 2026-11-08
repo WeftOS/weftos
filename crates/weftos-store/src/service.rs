@@ -39,6 +39,10 @@ pub trait ExposureGate: Send + Sync {
 }
 
 /// Where grant and lifecycle decisions are recorded on the chain.
+///
+/// Grant-affecting events (they carry a `seq`, see [`crate::grant_seq`]) are recorded while the
+/// service holds its state lock, so that chain order is the order of the changes. An implementation
+/// must therefore be quick and must not call back into the `StoreService`.
 pub trait ChainSink: Send + Sync {
     fn record(&self, kind: &str, payload: Value);
 }
@@ -148,6 +152,9 @@ struct State {
     /// Node stores of nodes that were unpaired: the id is not handed out again.
     #[serde(default)]
     retired: BTreeSet<String>,
+    /// The `seq` of the last grant-affecting chain event (see `grant_seq`); 0 before the first.
+    #[serde(default)]
+    grant_seq: u64,
 }
 
 /// One store as `weaver store ls` shows it.
@@ -225,12 +232,30 @@ impl StoreService {
             },
             None => State::default(),
         };
+        if st.grant_seq > crate::grant_seq::CEILING {
+            return Err(StoreError::State(format!("grant_seq {} is beyond the ceiling {}: the state file is damaged", st.grant_seq, crate::grant_seq::CEILING)));
+        }
         for r in st.stores.values().filter(|r| !r.archived) {
             if let Ok(n) = StoreName::parse(&r.name) {
                 exposure.register(&exposure_id(&n), &n.to_string());
             }
         }
         Ok(Self { cfg, admin, objects, exposure, audit, chain, invalidator: Mutex::new(None), apply: Mutex::new(()), policy_opts: Mutex::new(policy::PolicyOpts::default()), st: Mutex::new(st) })
+    }
+
+    /// Refuse before changing anything once the grant sequence is spent.
+    fn seq_room(st: &State) -> Result<(), StoreError> {
+        if st.grant_seq >= crate::grant_seq::CEILING {
+            return Err(StoreError::Refused("the grant event sequence has reached its ceiling; no further grant changes".into()));
+        }
+        Ok(())
+    }
+
+    /// Stamp the next grant-feed `seq` on `payload`, then (once the caller has persisted the state)
+    /// record it. Called with the state lock held, so chain order is change order.
+    fn stamp(&self, st: &mut State) -> u64 {
+        st.grant_seq += 1;
+        st.grant_seq
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {
@@ -373,17 +398,15 @@ impl StoreService {
             Ok(rec) => rec.archive_count,
             Err(_) => 0,
         };
-        let newly = {
-            let mut g = self.lock();
-            let newly = g.retired.insert(name.to_string());
-            if newly {
-                self.persist(&g)?;
-            }
-            newly
-        };
-        if newly {
-            self.chain.record("store.node.retired", json!({"store": name.to_string(), "actor": actor, "archived_objects": archived}));
+        let mut g = self.lock();
+        if !g.retired.contains(&name.to_string()) {
+            Self::seq_room(&g)?;
+            g.retired.insert(name.to_string());
+            let seq = self.stamp(&mut g);
+            self.persist(&g)?;
+            self.chain.record("store.node.retired", json!({"seq": seq, "store": name.to_string(), "actor": actor, "archived_objects": archived}));
         }
+        drop(g);
         Ok(archived)
     }
 
@@ -456,11 +479,13 @@ impl StoreService {
         }
         let g = {
             let mut st = self.lock();
+            Self::seq_room(&st)?;
             let g = st.grants.grant(principal.clone(), name, access, actor, self.now());
+            let seq = self.stamp(&mut st);
             self.persist(&st)?;
+            self.chain.record("store.grant", json!({"seq": seq, "store": name.to_string(), "principal": principal.to_string(), "access": access.as_str(), "actor": actor}));
             g
         };
-        self.chain.record("store.grant", json!({"store": name.to_string(), "principal": principal.to_string(), "access": access.as_str(), "actor": actor}));
         self.emit(actor, name, "Grant", Some(&principal.to_string()), 0, Outcome::Ok, Source::Governed);
         self.apply_principal(&principal)?;
         Ok(g)
@@ -471,12 +496,14 @@ impl StoreService {
         self.known(name)?;
         {
             let mut st = self.lock();
+            Self::seq_room(&st)?;
             if !st.grants.revoke(principal, name) {
                 return Err(StoreError::Refused(format!("{principal} holds no grant on {name}")));
             }
+            let seq = self.stamp(&mut st);
             self.persist(&st)?;
+            self.chain.record("store.revoke", json!({"seq": seq, "store": name.to_string(), "principal": principal.to_string(), "actor": actor}));
         }
-        self.chain.record("store.revoke", json!({"store": name.to_string(), "principal": principal.to_string(), "actor": actor}));
         self.emit(actor, name, "Revoke", Some(&principal.to_string()), 0, Outcome::Ok, Source::Governed);
         self.apply_principal(principal)?;
         Ok(())
@@ -490,13 +517,15 @@ impl StoreService {
         self.known(name)?;
         {
             let mut st = self.lock();
+            Self::seq_room(&st)?;
             if !st.grants.set_enabled(principal, name, enabled) {
                 return Err(StoreError::Refused(format!("{principal} holds no grant on {name}")));
             }
+            let seq = self.stamp(&mut st);
             self.persist(&st)?;
+            let kind = if enabled { "store.grant.enable" } else { "store.grant.disable" };
+            self.chain.record(kind, json!({"seq": seq, "store": name.to_string(), "principal": principal.to_string(), "actor": actor}));
         }
-        let kind = if enabled { "store.grant.enable" } else { "store.grant.disable" };
-        self.chain.record(kind, json!({"store": name.to_string(), "principal": principal.to_string(), "actor": actor}));
         self.emit(actor, name, if enabled { "GrantEnable" } else { "GrantDisable" }, Some(&principal.to_string()), 0, Outcome::Ok, Source::Governed);
         self.apply_principal(principal)?;
         Ok(())
@@ -507,10 +536,12 @@ impl StoreService {
     pub fn suspend_principal(&self, principal: &Principal, reason: &str) -> Result<(), StoreError> {
         {
             let mut st = self.lock();
+            Self::seq_room(&st)?;
             st.suspended.insert(principal.clone());
+            let seq = self.stamp(&mut st);
             self.persist(&st)?;
+            self.chain.record("store.principal.suspend", json!({"seq": seq, "principal": principal.to_string(), "reason": reason}));
         }
-        self.chain.record("store.principal.suspend", json!({"principal": principal.to_string(), "reason": reason}));
         self.emit_principal(principal, "Suspend", Outcome::Refused(reason.to_owned()));
         self.apply_principal(principal)?;
         Ok(())
@@ -520,10 +551,12 @@ impl StoreService {
     pub fn resume_principal(&self, principal: &Principal) -> Result<(), StoreError> {
         {
             let mut st = self.lock();
+            Self::seq_room(&st)?;
             st.suspended.remove(principal);
+            let seq = self.stamp(&mut st);
             self.persist(&st)?;
+            self.chain.record("store.principal.resume", json!({"seq": seq, "principal": principal.to_string()}));
         }
-        self.chain.record("store.principal.resume", json!({"principal": principal.to_string()}));
         self.emit_principal(principal, "Resume", Outcome::Ok);
         self.apply_principal(principal)?;
         Ok(())
