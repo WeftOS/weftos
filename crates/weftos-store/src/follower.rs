@@ -207,7 +207,11 @@ pub fn verify_entry<B: ObjectBackend>(b: &B, e: &RegistryEntry) -> Result<()> {
         )));
     }
     match read_meta(b, &e.bucket)? {
-        Some(m) if m.slug == e.slug => Ok(()),
+        Some(m) if m.slug == e.slug && bucket_project(&e.bucket).is_none_or(|p| p.eq_ignore_ascii_case(&m.project)) => Ok(()),
+        Some(m) if m.slug == e.slug => Err(S2Error::Invalid(format!(
+            "registry entry {} points at a bucket whose metadata names project {}",
+            e.slug, m.project
+        ))),
         Some(m) => Err(S2Error::Invalid(format!(
             "registry entry {} points at bucket of worktree {}",
             e.slug, m.slug
@@ -217,6 +221,12 @@ pub fn verify_entry<B: ObjectBackend>(b: &B, e: &RegistryEntry) -> Result<()> {
             e.bucket, e.slug
         ))),
     }
+}
+
+/// The project ULID in a worktree bucket name `w-<ulid>-<h12>`, if it has that shape.
+fn bucket_project(bucket: &str) -> Option<&str> {
+    let rest = bucket.strip_prefix("w-")?;
+    (rest.len() > 27 && rest.as_bytes()[26] == b'-').then(|| &rest[..26])
 }
 
 /// Daemon-side: drop a registry entry once its worktree bucket is promoted and deleted.

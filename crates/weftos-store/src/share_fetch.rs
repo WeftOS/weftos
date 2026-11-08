@@ -79,6 +79,14 @@ pub fn list_shared<B: ObjectBackend>(b: &B, project_bucket: &str) -> Result<Vec<
     Ok(v)
 }
 
+/// The bucket worktree `slug` of the project whose bucket is `project_bucket` must have. `None`
+/// when `project_bucket` is not a real project bucket (`p-<ULID>`), as in fixtures that use
+/// made-up names; the cross-check is then skipped.
+pub fn expected_worktree_bucket(project_bucket: &str, slug: &str) -> Option<String> {
+    let ulid = project_bucket.strip_prefix("p-").filter(|u| u.len() == 26)?;
+    crate::StoreName::worktree("x", ulid, slug).ok().map(|n| n.bucket())
+}
+
 /// Like [`list_shared`] but a corrupt or unknown-schema entry is reported, not fatal: returns the
 /// readable entries and the slugs of the unreadable ones.
 pub fn list_shared_lenient<B: ObjectBackend>(
@@ -96,7 +104,11 @@ pub fn list_shared_lenient<B: ObjectBackend>(
             .get(project_bucket, &o.key)?
             .map(|d| serde_json::from_slice::<RegistryEntry>(&d))
         {
-            Some(Ok(e)) => v.push(e),
+            // A registry entry is a pointer, not authority (review F3): it must name the bucket
+            // this project's worktree of that slug has, and the slug its own key carries.
+            Some(Ok(e)) if e.slug == slug && expected_worktree_bucket(project_bucket, &e.slug).is_none_or(|x| x == e.bucket) => {
+                v.push(e)
+            }
             _ => bad.push(slug),
         }
     }

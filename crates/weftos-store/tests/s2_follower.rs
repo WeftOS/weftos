@@ -636,3 +636,42 @@ fn overlapping_saves_from_threads_of_one_process_never_fail_or_corrupt_the_file(
     let left: Vec<_> = std::fs::read_dir(d.path()).unwrap().map(|e| e.unwrap().file_name()).collect();
     assert_eq!(left.len(), 1, "no temp files left behind: {left:?}");
 }
+
+const PROJ_A: &str = "01JBXK2M3N4P5Q6R7S8T9V0W1X";
+const PROJ_B: &str = "01JBXK2M3N4P5Q6R7S8T9V0W2X";
+
+#[test]
+fn a_registry_entry_pointing_at_another_projects_worktree_is_unreadable_not_followed() {
+    let b = MemBackend::new();
+    let bucket_of = |proj: &str, slug: &str| weftos_store::StoreName::worktree("local", proj, slug).unwrap().bucket();
+    let (pa, pb) = (format!("p-{}", PROJ_A.to_lowercase()), format!("p-{}", PROJ_B.to_lowercase()));
+    // Project B has a real worktree "fix-typo" with a secret doc.
+    let victim_bucket = bucket_of(PROJ_B, "fix-typo");
+    let d = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(d.path().join("docs")).unwrap();
+    std::fs::write(d.path().join("docs/secret-plan.md"), "# B's secret plan\n").unwrap();
+    write_meta(&b, &victim_bucket, &WorktreeMeta { slug: "fix-typo".into(), project: PROJ_B.into(), branch: "x".into(), base_commit: "base".into(), created_ms: 0 }).unwrap();
+    let src = TreeSource { root: d.path(), paths: &["docs/secret-plan.md".to_string()], uncommitted: &[], changes: &[], branch: "x", base_commit: "base", head_commit: "h", bundle: None, writer: actor("w") };
+    publish_tree(&b, &victim_bucket, &src, &Limits::default(), 1).unwrap();
+    let victim = summarize(&b, "fix-typo", &victim_bucket).unwrap().unwrap();
+    // A writer in project A plants an entry for the same slug that points at B's bucket.
+    write_registry_entry(&b, &pa, &victim).unwrap();
+    // an honest entry for A's own worktree of that slug is fine
+    let own_bucket = bucket_of(PROJ_A, "fix-typo");
+    assert_ne!(own_bucket, victim_bucket);
+
+    let (good, bad) = list_shared_lenient(&b, &pa).unwrap();
+    assert!(good.is_empty(), "the redirected entry is not trusted");
+    assert_eq!(bad, vec!["fix-typo".to_string()]);
+    let mut st = FollowState::default();
+    let ch = poll(&b, &pa, &mut st).unwrap();
+    assert_eq!(ch, vec![Change::Unreadable { slug: "fix-typo".into() }]);
+    // the entry is fine where it belongs
+    write_registry_entry(&b, &pb, &victim).unwrap();
+    assert_eq!(list_shared_lenient(&b, &pb).unwrap().0.len(), 1);
+    // a bucket whose own metadata names another project is refused by verify_entry too
+    let mut forged = victim.clone();
+    forged.bucket = victim_bucket.clone();
+    write_meta(&b, &victim_bucket, &WorktreeMeta { slug: "fix-typo".into(), project: PROJ_A.into(), branch: "x".into(), base_commit: "base".into(), created_ms: 0 }).unwrap();
+    assert!(verify_entry(&b, &forged).is_err());
+}
