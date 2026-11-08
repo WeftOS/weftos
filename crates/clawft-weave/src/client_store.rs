@@ -155,6 +155,21 @@ impl ClientStore {
         self.state.snapshot(&g, (self.clock)() / 1000).map_err(StoreError::State)
     }
 
+    /// Write the chain segment the newest verified snapshot covers to `<root>/archive/`, for the
+    /// owner to check ([`verify_gate_archive`](Self::verify_gate_archive)) and then prune from
+    /// the chain. `None` when there is no journal or no verified snapshot yet.
+    pub fn archive_gate(&self) -> Result<Option<crate::client_store_archive::ArchiveReport>, StoreError> {
+        self.state.archive(&self.spec.root.join("archive")).map_err(StoreError::State)
+    }
+
+    /// Check an archive file in `<root>/archive/` (by file name) against the signed snapshots.
+    pub fn verify_gate_archive(&self, file: &str) -> Result<crate::client_store_archive::ArchiveHeader, StoreError> {
+        if file.is_empty() || file.contains(['/', '\\']) || file.starts_with('.') {
+            return Err(StoreError::State("archive name must be a plain file name in the archive directory".into()));
+        }
+        self.state.verify_archive(&self.spec.root.join("archive").join(file)).map_err(StoreError::State)
+    }
+
     /// Gate changes recorded since the last snapshot.
     pub fn events_since_snapshot(&self) -> u64 {
         self.state.events_since_snapshot()

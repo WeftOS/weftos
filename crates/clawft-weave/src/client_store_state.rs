@@ -23,6 +23,7 @@ use crate::client_store_snapshot::{
     GateSnapshot, SNAPSHOT_KIND, SNAPSHOT_VERSION, SignedGateSnapshot, SnapshotError, SnapshotKey, event_bytes, genesis_head,
     head_extend, scope_of, signing_bytes, state_hash, verify_against_history, verify_snapshot,
 };
+use crate::client_store_archive::{ArchiveHeader, ArchiveReport, read_archive, write_archive};
 use crate::store_account::{GateEvent, StoreGate};
 use crate::weftos_uri::Authority;
 
@@ -44,6 +45,15 @@ pub trait GateState: Send + Sync {
     /// Events recorded since the last snapshot (or since open, with none).
     fn events_since_snapshot(&self) -> u64 {
         0
+    }
+    /// Write the segment the newest verified snapshot covers to `dir`; `None` when there is
+    /// nothing to archive (no journal, or no verified snapshot yet).
+    fn archive(&self, _dir: &std::path::Path) -> Result<Option<ArchiveReport>, String> {
+        Ok(None)
+    }
+    /// Check an archive file against the snapshots on the chain.
+    fn verify_archive(&self, _path: &std::path::Path) -> Result<ArchiveHeader, String> {
+        Err("this client store keeps its gate in gate.json; there is no chain history to archive".into())
     }
 }
 
@@ -121,12 +131,12 @@ impl JournalState {
 /// A scope event read from the log: `(seq, kind suffix, ev)`.
 type ScopeEvent = (u64, String, Value);
 
-impl GateState for JournalState {
-    fn load(&self, mesh: Authority, account: &str, now: u64) -> Result<StoreGate, String> {
-        if mesh != self.mesh || account != self.account {
-            return Err("journal belongs to another mesh or account".into());
-        }
-        let (scope, mesh_hex) = (scope_of(account, &mesh), hex::encode(mesh.0));
+type Scan = (Vec<ScopeEvent>, Vec<(u64, SignedGateSnapshot)>);
+
+impl JournalState {
+    /// This account's gate events and snapshot records, in log order.
+    fn scan(&self) -> Result<Scan, String> {
+        let mesh_hex = hex::encode(self.mesh.0);
         let mut events: Vec<ScopeEvent> = Vec::new();
         let mut snaps: Vec<(u64, SignedGateSnapshot)> = Vec::new();
         for e in self.log.all() {
@@ -134,7 +144,7 @@ impl GateState for JournalState {
                 continue;
             }
             let Some(p) = e.payload else { continue };
-            if p.get("account").and_then(Value::as_str) != Some(account) || p.get("mesh").and_then(Value::as_str) != Some(&mesh_hex) {
+            if p.get("account").and_then(Value::as_str) != Some(&self.account) || p.get("mesh").and_then(Value::as_str) != Some(&mesh_hex) {
                 continue;
             }
             if e.kind == SNAPSHOT_KIND {
@@ -145,12 +155,15 @@ impl GateState for JournalState {
                 events.push((e.seq, kind.to_owned(), p.get("ev").cloned().unwrap_or(Value::Null)));
             }
         }
+        Ok((events, snaps))
+    }
 
-        let key = self.key.as_deref();
-        // Start from the verified snapshot that covers the most (greatest `through_seq`; the last
-        // one on a tie), not the newest by position, so replaying an older record cannot roll the
-        // gate back. One signed by a key we no longer hold is passed over; any other failure
-        // means the chain's record is wrong: refuse to open.
+    /// The verified snapshot that covers the most (greatest `through_seq`; the last one on a
+    /// tie), not the newest by position, so replaying an older record cannot roll the gate back.
+    /// One signed by a key we no longer hold is passed over; any other failure means the chain's
+    /// record is wrong.
+    fn best_snapshot(&self, snaps: &[(u64, SignedGateSnapshot)]) -> Result<Option<usize>, String> {
+        let (key, scope) = (self.key.as_deref(), scope_of(&self.account, &self.mesh));
         let mut best: Option<usize> = None;
         for (i, (at, s)) in snaps.iter().enumerate() {
             match verify_snapshot(s, &scope, key, *at) {
@@ -163,6 +176,47 @@ impl GateState for JournalState {
                 Err(e) => return Err(bad(e)),
             }
         }
+        Ok(best)
+    }
+
+    /// Write the segment the newest verified snapshot covers to `dir` (see
+    /// [`crate::client_store_archive`]). The chain's copy is the owner's to prune afterwards,
+    /// once [`verify_archive`](Self::verify_archive) agrees.
+    pub fn archive(&self, dir: &std::path::Path) -> Result<Option<ArchiveReport>, String> {
+        let (events, snaps) = self.scan()?;
+        let Some(i) = self.best_snapshot(&snaps)? else { return Ok(None) };
+        let snap = &snaps[i].1.snapshot;
+        let seg: Vec<(u64, &str, &Value)> = events.iter().filter(|(q, ..)| *q <= snap.through_seq).map(|(q, k, v)| (*q, k.as_str(), v)).collect();
+        write_archive(dir, snap, &seg).map(Some)
+    }
+
+    /// Does the archive file at `path` hold exactly what a verified snapshot on the chain covers?
+    /// This is the check before pruning: the file is self-consistent and matches the signed
+    /// snapshot's range, head and count.
+    pub fn verify_archive(&self, path: &std::path::Path) -> Result<ArchiveHeader, String> {
+        let (header, _) = read_archive(path)?;
+        let (_, snaps) = self.scan()?;
+        let scope = scope_of(&self.account, &self.mesh);
+        let key = self.key.as_deref();
+        let matched = snaps.iter().any(|(at, s)| {
+            let n = &s.snapshot;
+            verify_snapshot(s, &scope, key, *at).is_ok()
+                && (n.through_seq, n.event_count, n.events_head.as_str()) == (header.through_seq, header.event_count, header.events_head.as_str())
+        });
+        if !matched {
+            return Err("no verified snapshot on the chain matches this archive".into());
+        }
+        Ok(header)
+    }
+}
+
+impl GateState for JournalState {
+    fn load(&self, mesh: Authority, account: &str, now: u64) -> Result<StoreGate, String> {
+        if mesh != self.mesh || account != self.account {
+            return Err("journal belongs to another mesh or account".into());
+        }
+        let (events, snaps) = self.scan()?;
+        let best = self.best_snapshot(&snaps)?;
         let start = best.map(|i| &snaps[i].1.snapshot);
 
         // The events between where we start and any snapshot that claims more must all still be
@@ -251,6 +305,14 @@ impl GateState for JournalState {
 
     fn events_since_snapshot(&self) -> u64 {
         self.folded().since_snapshot
+    }
+
+    fn archive(&self, dir: &std::path::Path) -> Result<Option<ArchiveReport>, String> {
+        JournalState::archive(self, dir)
+    }
+
+    fn verify_archive(&self, path: &std::path::Path) -> Result<ArchiveHeader, String> {
+        JournalState::verify_archive(self, path)
     }
 }
 

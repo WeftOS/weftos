@@ -120,3 +120,14 @@ fn a_grant_round_trips_through_json() {
     let g = CrossMeshGrant::sign(&key(), [1; 32], [2; 32], &name(), Access::Write, 7, 10, 20);
     assert_eq!(CrossMeshGrant::from_json(&g.to_json()).unwrap(), g);
 }
+
+#[test]
+fn archive_verbs_say_so_when_the_gate_is_in_a_file_and_refuse_odd_names() {
+    let d = tempfile::tempdir().unwrap();
+    let c = client(d.path());
+    assert!(run(&c, "store.client.archive", json!({})).unwrap_err().contains("nothing to archive"));
+    for bad in ["../x", "/etc/passwd", ".hidden", "a/b", ""] {
+        assert!(run(&c, "store.client.archive_verify", json!({"file": bad})).is_err(), "{bad:?}");
+    }
+    assert!(run(&c, "store.client.archive_verify", json!({})).unwrap_err().contains("missing file"));
+}

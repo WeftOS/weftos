@@ -3,7 +3,9 @@
 //! Verbs map 1:1 onto the daemon's `store.client.*` RPCs (all Admin):
 //! `status`, `hold <ulid>`, `grant|revoke` (local principals), `weftos-grant|weftos-revoke`
 //! (WeftOS identities), `xmesh-trust|xmesh-install|xmesh-revoke` (foreign meshes), `sweep`,
-//! `snapshot` (publish a signed gate snapshot on the chain), and the governed `put|get|ls|delete`.
+//! `snapshot` (publish a signed gate snapshot on the chain), `archive` (seal the chain's events into
+//! a range file), `archive-verify <FILE>` (re-check an archived range file), and the governed
+//! `put|get|ls|delete`.
 //!
 //! `--as` is `local:<principal>` (e.g. `local:cog:c1`), `weftos:<id>`, or
 //! `foreign:<64hex mesh>:<id>`. Anything else is refused before a request is sent.
@@ -70,6 +72,18 @@ pub enum StoreClientAction {
     },
     /// Publish a signed snapshot of the gate on the chain.
     Snapshot {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Archive the chain's events into a sealed range file.
+    Archive {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Verify an archived range file by name.
+    ArchiveVerify {
+        /// Bare file name of an archive (no path separators, not dot-prefixed).
+        file: String,
         #[arg(long)]
         json: bool,
     },
@@ -280,6 +294,20 @@ fn hex_arg(what: &str, s: &str, len: usize) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Client-side check of an archive file name: a bare name, as the daemon requires.
+pub fn archive_name(s: &str) -> anyhow::Result<()> {
+    if s.is_empty() {
+        bail!("archive file name must not be empty");
+    }
+    if s.contains('/') || s.contains('\\') {
+        bail!("archive file name must not contain '/' or '\\' (got {s:?})");
+    }
+    if s.starts_with('.') {
+        bail!("archive file name must not start with '.' (got {s:?})");
+    }
+    Ok(())
+}
+
 fn access_arg(s: &str) -> anyhow::Result<()> {
     match s {
         "read" | "write" | "admin" => Ok(()),
@@ -369,6 +397,11 @@ pub fn build(action: &StoreClientAction) -> anyhow::Result<(&'static str, Value)
         A::XmeshSign(_) => bail!("xmesh-sign is local and sends no request"),
         A::Sweep { .. } => ("store.client.sweep", json!({})),
         A::Snapshot { .. } => ("store.client.snapshot", json!({})),
+        A::Archive { .. } => ("store.client.archive", json!({})),
+        A::ArchiveVerify { file, .. } => {
+            archive_name(file)?;
+            ("store.client.archive_verify", json!({"file": file}))
+        }
         A::Put { name, key, as_, text, file, .. } => {
             let as_v = parse_as(as_)?;
             let mut p = json!({"name": name, "key": key, "as": as_v});
@@ -391,6 +424,7 @@ pub fn build(action: &StoreClientAction) -> anyhow::Result<(&'static str, Value)
 fn wants_json(a: &StoreClientAction) -> bool {
     use StoreClientAction as A;
     matches!(a, A::Status { json: true } | A::Sweep { json: true } | A::Snapshot { json: true }
+        | A::Archive { json: true } | A::ArchiveVerify { json: true, .. }
         | A::XmeshInstall { json: true, .. }
         | A::XmeshRevoke { json: true, .. } | A::Put { json: true, .. } | A::Get { json: true, .. }
         | A::Ls { json: true, .. } | A::Delete { json: true, .. })
@@ -438,6 +472,24 @@ pub fn render(action: &StoreClientAction, v: &Value) -> anyhow::Result<String> {
             Some(n) => format!("gate snapshot published, covers chain event {n}\n"),
             None => bail!("snapshot result has no through_seq"),
         },
+        A::Archive { .. } => {
+            let Some(file) = v["file"].as_str() else { bail!("archive result has no file") };
+            let Some(through) = v["through_seq"].as_u64() else { bail!("archive result has no through_seq") };
+            let Some(count) = v["event_count"].as_u64() else { bail!("archive result has no event_count") };
+            let head = cell(v, "events_head");
+            format!(
+                "archived  {file}\npath      {}\ncovers    {count} events through chain event {through}\nhead      {}\n",
+                cell(v, "path"), head.get(..12).unwrap_or(&head)
+            )
+        }
+        A::ArchiveVerify { file, .. } => {
+            if v["verified"].as_bool() != Some(true) {
+                bail!("archive verify result is not verified");
+            }
+            let Some(through) = v["through_seq"].as_u64() else { bail!("archive verify result has no through_seq") };
+            let Some(count) = v["event_count"].as_u64() else { bail!("archive verify result has no event_count") };
+            format!("verified  {file}\ncovers    {count} events through chain event {through}\n")
+        }
         A::Put { .. } => format!("wrote {} ({} bytes)\n", cell(v, "key"), cell(v, "size")),
         A::Get { .. } => match v["text"].as_str() {
             Some(t) => t.to_string(),
@@ -790,5 +842,85 @@ mod tests {
         let raw = parse(&["snapshot", "--json"]).unwrap();
         assert!(!wants_json(&human) && wants_json(&raw));
         assert!(matches!(raw, StoreClientAction::Snapshot { json: true }));
+    }
+
+    // ---- archive / archive-verify ----
+
+    #[test]
+    fn archive_verbs_parse_and_required_args_are_enforced() {
+        assert!(parse(&["archive"]).is_ok() && parse(&["archive", "--json"]).is_ok());
+        assert!(parse(&["archive", "extra"]).is_err(), "archive takes no positional args");
+        assert!(parse(&["archive-verify", "2026-11.archive"]).is_ok());
+        assert!(parse(&["archive-verify", "2026-11.archive", "--json"]).is_ok());
+        assert!(parse(&["archive-verify"]).is_err(), "archive-verify needs a file");
+        assert!(parse(&["archive-verify", "a", "b"]).is_err(), "one file only");
+    }
+
+    #[test]
+    fn archive_params_and_verify_params_are_exact() {
+        assert_eq!(built(&["archive"]), ("store.client.archive", json!({})));
+        assert_eq!(built(&["archive", "--json"]), ("store.client.archive", json!({})));
+        assert_eq!(built(&["archive-verify", "a.archive"]),
+            ("store.client.archive_verify", json!({"file": "a.archive"})));
+        assert_eq!(built(&["archive-verify", "a.archive", "--json"]),
+            ("store.client.archive_verify", json!({"file": "a.archive"})));
+    }
+
+    #[test]
+    fn archive_name_good_and_bad() {
+        for good in ["a.archive", "2026-11-08T00.archive", "x", "a..b", "name with space"] {
+            assert!(archive_name(good).is_ok(), "{good:?} must be accepted");
+            assert!(build(&parse(&["archive-verify", good]).unwrap()).is_ok(), "{good:?} must build");
+        }
+        for bad in ["", "a/b", "/abs", "a\\b", "..\\x", ".hidden", "..", "."] {
+            let e = build(&parse(&["archive-verify", bad]).unwrap()).unwrap_err().to_string();
+            assert!(!e.is_empty(), "{bad:?} must be refused with a message");
+            assert!(archive_name(bad).is_err(), "{bad:?} must be refused");
+        }
+        assert!(archive_name("").unwrap_err().to_string().contains("empty"));
+        assert!(archive_name("a/b").unwrap_err().to_string().contains("'/'"));
+        assert!(archive_name(".x").unwrap_err().to_string().contains("'.'"));
+    }
+
+    #[test]
+    fn archive_human_rendering_and_refusals() {
+        let a = parse(&["archive"]).unwrap();
+        let v = json!({"file": "f.archive", "path": "/data/f.archive", "through_seq": 42, "event_count": 7,
+            "events_head": "0123456789abcdef0123", "range_sha256": "ff"});
+        assert_eq!(render(&a, &v).unwrap(),
+            "archived  f.archive\npath      /data/f.archive\ncovers    7 events through chain event 42\nhead      0123456789ab\n");
+        for missing in ["file", "through_seq", "event_count"] {
+            let mut m = v.clone();
+            m.as_object_mut().unwrap().remove(missing);
+            assert!(render(&a, &m).is_err(), "missing {missing} refuses");
+        }
+        let mut bad = v.clone();
+        bad["through_seq"] = json!("42");
+        assert!(render(&a, &bad).is_err(), "non-integer through_seq refuses");
+        assert!(render(&a, &json!({"expired": 3})).is_err(), "sweep's field is not an archive result");
+    }
+
+    #[test]
+    fn archive_verify_human_rendering_and_refusals() {
+        let av = parse(&["archive-verify", "f.archive"]).unwrap();
+        let v = json!({"verified": true, "through_seq": 42, "event_count": 7,
+            "events_head": "0123456789abcdef", "range_sha256": "ff"});
+        assert_eq!(render(&av, &v).unwrap(),
+            "verified  f.archive\ncovers    7 events through chain event 42\n");
+        assert!(render(&av, &json!({"verified": false, "through_seq": 42, "event_count": 7})).is_err(),
+            "verified false refuses");
+        assert!(render(&av, &json!({"through_seq": 42, "event_count": 7})).is_err(), "missing verified refuses");
+        assert!(render(&av, &json!({"verified": "true", "through_seq": 42, "event_count": 7})).is_err(),
+            "non-bool verified refuses");
+        let mut no_count = v.clone();
+        no_count.as_object_mut().unwrap().remove("event_count");
+        assert!(render(&av, &no_count).is_err(), "missing event_count refuses");
+    }
+
+    #[test]
+    fn archive_json_flag_selects_raw_output() {
+        assert!(!wants_json(&parse(&["archive"]).unwrap()) && wants_json(&parse(&["archive", "--json"]).unwrap()));
+        assert!(!wants_json(&parse(&["archive-verify", "f"]).unwrap())
+            && wants_json(&parse(&["archive-verify", "f", "--json"]).unwrap()));
     }
 }

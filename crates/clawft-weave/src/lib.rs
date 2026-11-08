@@ -289,6 +289,8 @@ pub mod client_store;
 pub mod client_store_state;
 /// ADR-126 S5: signed snapshots that compact the gate's chain history.
 pub mod client_store_snapshot;
+/// ADR-126 S5: archive of the compacted gate history, written before the chain is pruned.
+pub mod client_store_archive;
 /// ADR-126 S5: the daemon's client store (started only as the client user).
 pub mod client_store_rt;
 /// ADR-126 S5: `store.client.*` operator verbs.

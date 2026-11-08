@@ -841,4 +841,99 @@ mod journal {
         assert!(evil_in_gate(&s), "without the sequence check the old key forges into the gate (S1's own grant table still refuses)");
         assert!(refused(s.get(&ClientCaller::Weftos { id: "evil".into() }, &name, "k")), "the second layer holds");
     }
+
+    // ---- archive before prune ----
+
+    fn archive_dir(root: &Path) -> std::path::PathBuf {
+        root.join("archive")
+    }
+    fn archive_name(r: &crate::client_store_archive::ArchiveReport) -> String {
+        r.path.file_name().unwrap().to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn archive_then_verify_then_prune_and_the_store_still_opens() {
+        let d = tempfile::tempdir().unwrap();
+        let log = Arc::new(MemLog::default());
+        let (rep, name) = {
+            let s = open_k(d.path(), &log, clock, Some(sk())).unwrap();
+            assert!(s.archive_gate().unwrap().is_none(), "no snapshot yet, nothing to archive");
+            let name = churn(&s);
+            s.snapshot().unwrap();
+            let rep = s.archive_gate().unwrap().unwrap();
+            assert_eq!((rep.header.event_count, rep.header.scope.starts_with("gate/acme/")), (7, true));
+            assert_eq!(s.verify_gate_archive(&archive_name(&rep)).unwrap(), rep.header);
+            assert!(s.archive_gate().is_err(), "the same segment is not archived twice");
+            (rep, name)
+        };
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+            assert_eq!((mode(&rep.path), mode(&archive_dir(d.path()))), (0o600, 0o700));
+        }
+        // The owner prunes the chain segment the archive now holds.
+        log.edit(|v| v.retain(|e| e.kind == SNAPSHOT_KIND));
+        let s = open_k(d.path(), &log, clock, Some(sk())).unwrap();
+        assert!(s.put(&ClientCaller::Local(cog("c1")), &name, "k", b"v", false).is_ok());
+        assert_eq!(s.verify_gate_archive(&archive_name(&rep)).unwrap(), rep.header, "still verifies after the prune");
+        assert!(s.archive_gate().is_err(), "and a pruned segment cannot be archived over it");
+    }
+
+    #[test]
+    fn a_tampered_truncated_or_unmatched_archive_does_not_verify() {
+        let d = tempfile::tempdir().unwrap();
+        let log = Arc::new(MemLog::default());
+        let s = open_k(d.path(), &log, clock, Some(sk())).unwrap();
+        churn(&s);
+        s.snapshot().unwrap();
+        let rep = s.archive_gate().unwrap().unwrap();
+        let original = std::fs::read_to_string(&rep.path).unwrap();
+        let check = |text: String, want: &str| {
+            std::fs::write(&rep.path, text).unwrap();
+            let e = s.verify_gate_archive(&archive_name(&rep)).unwrap_err().to_string();
+            assert!(e.contains(want), "{want}: {e}");
+        };
+        let lines: Vec<&str> = original.lines().collect();
+        check(lines[..lines.len() - 1].join("\n") + "\n", "count or range");
+        // Same events, written non-canonically (a space after a colon).
+        check(original.replacen("\"kind\":", "\"kind\": ", 1), "canonical form");
+        let mut edited = lines.iter().map(|l| l.to_string()).collect::<Vec<_>>();
+        let i = edited.iter().position(|l| l.contains("cog:c2")).unwrap();
+        edited[i] = edited[i].replace("cog:c2", "cog:c7");
+        check(edited.join("\n") + "\n", "events_head");
+        let mut swapped = lines.iter().map(|l| l.to_string()).collect::<Vec<_>>();
+        swapped.swap(1, 2);
+        check(swapped.join("\n") + "\n", "chain order");
+        // A header edited to claim another range matches no snapshot on the chain.
+        check(original.replacen(&format!("\"through_seq\":{}", rep.header.through_seq), "\"through_seq\":999", 1), "");
+        std::fs::write(&rep.path, &original).unwrap();
+        assert!(s.verify_gate_archive(&archive_name(&rep)).is_ok(), "restored");
+    }
+
+    #[test]
+    fn a_partial_segment_is_not_archived() {
+        let d = tempfile::tempdir().unwrap();
+        let log = Arc::new(MemLog::default());
+        let s = open_k(d.path(), &log, clock, Some(sk())).unwrap();
+        churn(&s);
+        s.snapshot().unwrap();
+        log.edit(|v| {
+            let i = v.iter().position(|e| e.kind.ends_with(".grant")).unwrap();
+            v.remove(i);
+        });
+        let e = s.archive_gate().unwrap_err().to_string();
+        assert!(e.contains("partial segment"), "{e}");
+        assert!(!archive_dir(d.path()).join("anything").exists());
+    }
+
+    #[test]
+    fn archive_names_that_leave_the_archive_directory_are_refused() {
+        let d = tempfile::tempdir().unwrap();
+        let log = Arc::new(MemLog::default());
+        let s = open_k(d.path(), &log, clock, Some(sk())).unwrap();
+        for bad in ["../gate.json", "/etc/passwd", "a/b", ".x", ""] {
+            assert!(s.verify_gate_archive(bad).unwrap_err().to_string().contains("plain file name"), "{bad:?}");
+        }
+    }
 }

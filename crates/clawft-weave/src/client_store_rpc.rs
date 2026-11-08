@@ -7,6 +7,9 @@
 //!   the WeftOS account, which is refused until one of these names it.
 //! - `store.client.snapshot {}`: publish a signed snapshot of the gate on the chain (replay then
 //!   starts from it); `{"through_seq": n}`.
+//! - `store.client.archive {}`: write the chain segment the newest verified snapshot covers to
+//!   `<root>/archive/`; `store.client.archive_verify {file}`: check that file against the signed
+//!   snapshots. Run both before the owner prunes the chain.
 //! - `store.client.xmesh_trust {mesh, key}`, `store.client.xmesh_install {grant}`,
 //!   `store.client.xmesh_revoke {grant}`, `store.client.sweep {}`: cross-mesh grants (ADR-114 N5).
 //! - `store.client.put|get|ls|delete {name, key|prefix, as, text|b64}`: a governed request as the
@@ -39,6 +42,8 @@ struct P {
     name: Option<String>,
     #[serde(default)]
     ulid: Option<String>,
+    #[serde(default)]
+    file: Option<String>,
     #[serde(default)]
     principal: Option<String>,
     #[serde(default)]
@@ -148,6 +153,21 @@ pub fn run(cs: &ClientStore, method: &str, params: Value) -> Result<Value, Strin
             Ok(json!({"revoked": g.to_json()}))
         }
         "store.client.sweep" => Ok(json!({"expired": cs.sweep("cli")})),
+        "store.client.archive" => match cs.archive_gate().map_err(e)? {
+            Some(r) => Ok(json!({
+                "file": crate::client_store_archive::file_name(r.header.through_seq),
+                "path": r.path, "through_seq": r.header.through_seq, "event_count": r.header.event_count,
+                "events_head": r.header.events_head, "range_sha256": r.header.range_sha256,
+            })),
+            None => Err("nothing to archive: no chain journal, or no snapshot verified yet (take one with store.client.snapshot)".into()),
+        },
+        "store.client.archive_verify" => {
+            let h = cs.verify_gate_archive(need(&p.file, "file")?).map_err(e)?;
+            Ok(json!({
+                "verified": true, "through_seq": h.through_seq, "event_count": h.event_count,
+                "events_head": h.events_head, "range_sha256": h.range_sha256,
+            }))
+        }
         "store.client.snapshot" => match cs.snapshot().map_err(e)? {
             Some(through_seq) => Ok(json!({"through_seq": through_seq})),
             None => Err("this client store keeps its gate in gate.json; there is no chain history to compact".into()),
