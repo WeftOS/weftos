@@ -28,7 +28,7 @@ the ADR-131 drive over GCS (L2), and the Mac drive library over RustFS buckets (
 | photo-gallery (weftos-pg) | PG session as `mathew`; PG tailnet 100.90.170.87 | Checkout `/data1/home/mathew/weftos` at 527ea4db | Host survey; S0 proofs in ADR-126 "S0 results" | RustFS 1.0.4 live on `:9700`, with JuiceFS mounts, Redis `:9710`, meshd `:9720` still up | PG RustFS upgrade (card `3f30aaf9`, upstream fixes #9067 and #9073 merged upstream, not deployed); no PG credentials on the Mac; Linux bwrap side of E-1 (handoff pending); the owner's pre-PG asks in section 4 |
 
 Merge order for aepod: `wt/adr126-s2-mac`, then `wt/adr126-s2-meta`, then `wt/adr126-s2-hooks`, then
-`wt/adr126-s3-drive`, then `wt/adr126-s3-harden2`, then `wt/adr126-e1-scoped-view`, then
+`wt/adr126-s3-drive`, then `wt/adr126-s3-harden2`, then `wt/adr126-s1-names` (S1 code: `name.rs`, `service.rs`; aepod s1 reviews), then `wt/adr126-e1-scoped-view`, then
 `wt/adr126-e1-view-verbs`. `wt/adr126-s3-drive` already contains `wt/adr126-s2-mac`.
 `wt/adr126-s2-meta` (tip 8f4652c16, 2 commits over be64b6014, the same base as the first-pass
 `wt/adr126-s2-mac`) touches only `scripts/bench/adr126_s2_meta_gen.py`,
