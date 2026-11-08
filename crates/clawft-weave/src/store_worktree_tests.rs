@@ -478,3 +478,33 @@ fn overlaps_names_both_bases_so_callers_can_discount_it() {
     let r = call(&svc, "overlaps", json!({"project": PROJ, "a": "feat-a", "b": "feat-b"}), 50).unwrap();
     assert_eq!((r["base_a"].as_str(), r["base_b"].as_str(), r["reliable"].as_bool()), (Some("abc"), Some("abc"), Some(true)));
 }
+
+#[test]
+fn promote_runs_when_someone_else_holds_the_claim_or_it_expired_and_records_the_lander() {
+    let (_d, svc) = rig();
+    let n = |slug: &str| names("local", PROJ, slug).unwrap();
+    let handoff = |slug: &str| weftos_store::share::read_handoff(&Op(svc.operator_objects()), &n(slug).wt).unwrap().unwrap();
+    for (slug, claim_at, promote_at) in [("feat-other", 30u64, 40u64), ("feat-expired", 30, 30 + weftos_store::share::CLAIM_TTL_MS + 5)] {
+        let src = tempfile::tempdir().unwrap();
+        published(&svc, slug, src.path());
+        call(&svc, "claim", json!({"project": PROJ, "slug": slug, "agent": "bob", "host": "m2"}), claim_at).unwrap();
+        weftos_store::overlay::Overlay::new(&Op(svc.operator_objects()), &n(slug).wt, &n(slug).pr).put("assets/room.bin", b"ROOM").unwrap();
+        // carol landed the branch through git; bob's claim is live (or stale) and is not hers
+        let p = call(&svc, "promote", json!({"project": PROJ, "slug": slug, "agent": "carol", "host": "m3"}), promote_at).unwrap();
+        assert_eq!(p["promoted"], json!(["assets/room.bin"]), "{slug}");
+        let h = handoff(slug);
+        assert_eq!(h.state, weftos_store::share::State::Merged, "{slug}");
+        assert_eq!(h.merger.as_ref().map(|m| format!("{}@{}", m.agent, m.host)).as_deref(), Some("carol@m3"), "{slug}");
+        assert!(h.note.contains("bob@m2"), "the displaced claimer is named: {}", h.note);
+    }
+    // never claimed: the land is still recorded as the merge
+    let src = tempfile::tempdir().unwrap();
+    published(&svc, "feat-open", src.path());
+    call(&svc, "promote", json!({"project": PROJ, "slug": "feat-open", "agent": "carol", "host": "m3"}), 60).unwrap();
+    let h = handoff("feat-open");
+    assert_eq!((h.state, h.merger.map(|m| m.agent)), (weftos_store::share::State::Merged, Some("carol".into())));
+    // never published: there is no handoff to close, and none is invented
+    call(&svc, "create", json!({"project": PROJ, "slug": "feat-quiet", "branch": "q", "base": "abc"}), 70).unwrap();
+    call(&svc, "promote", json!({"project": PROJ, "slug": "feat-quiet", "agent": "carol", "host": "m3"}), 71).unwrap();
+    assert!(weftos_store::share::read_handoff(&Op(svc.operator_objects()), &n("feat-quiet").wt).unwrap().is_none());
+}

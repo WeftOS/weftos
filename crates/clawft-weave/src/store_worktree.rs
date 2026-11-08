@@ -18,7 +18,7 @@ use weftos_store::follower::{self, Change, FollowState, LeftoverPolicy, Why};
 use weftos_store::promote::{ArchiveTarget, PromotionPolicy, WorktreeMeta, is_promoted, promote, read_meta, write_meta};
 use weftos_store::service::{ARCHIVE_BUCKET, Parties, archive_key};
 use weftos_store::share::{
-    Actor, Limits, TreeSource, claim_merge, mark_handoff, mark_merged, parse_name_status_z, publish_tree,
+    Actor, Limits, TreeSource, claim_merge, mark_handoff, parse_name_status_z, publish_tree,
 };
 use weftos_store::share_fetch::{
     self, RegistryEntry, Select, fetch_bundle, fetch_tree, list_shared_lenient, summarize, write_registry_entry,
@@ -387,12 +387,10 @@ fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms:
             let slug = need(&p.slug, "slug")?;
             let n = names(mesh, &project, slug)?;
             live_worktree(svc, &b, &n, &project, slug)?;
-            // A land that went through git is the merge: record it if a claimer did not.
-            if let Ok(Some(h)) = weftos_store::share::read_handoff(&b, &n.wt)
-                && h.state == weftos_store::share::State::Claimed
-            {
-                mark_merged(&b, &n.wt, &who(&p), "landed", now_ms).map_err(e)?;
-            }
+            // A land that went through git is the merge, whoever held the claim (a claim that is
+            // someone else's or has expired must not stop the assets reaching the project). A
+            // worktree that was never published has no handoff and gets none.
+            weftos_store::share::mark_landed(&b, &n.wt, &who(&p), "landed", now_ms).map_err(e)?;
             svc.ensure_archive().map_err(|e| e.to_string())?;
             let prefix = archive_key(&n.wt, now_ms, "");
             let r = promote(

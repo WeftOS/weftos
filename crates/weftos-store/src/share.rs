@@ -604,6 +604,35 @@ pub fn mark_merged<B: ObjectBackend>(
     )
 }
 
+/// The branch landed through git, so the worktree is merged whoever held the claim. Unlike
+/// [`mark_merged`] this needs no claim: the landed tree is the source of truth once the land
+/// happened, and a claim that is someone else's, or has expired, cannot undo it. The lander is
+/// recorded as the merger and a displaced claimer is named in the note. Returns false, writing
+/// nothing, when there is no handoff record (the tree was never published) or the worktree is
+/// already merged or archived.
+pub fn mark_landed<B: ObjectBackend>(
+    b: &B,
+    bucket: &str,
+    lander: &Actor,
+    note: &str,
+    now_ms: u64,
+) -> Result<bool> {
+    let Some(cur) = read_handoff(b, bucket)? else { return Ok(false) };
+    if matches!(cur.state, State::Merged | State::Archived) {
+        return Ok(false);
+    }
+    let note = match cur.merger.as_ref().filter(|m| *m != lander && cur.state == State::Claimed) {
+        Some(m) => format!("{note} (claim was held by {}@{})", m.agent, m.host),
+        None => note.to_string(),
+    };
+    write_handoff(
+        b,
+        bucket,
+        &Handoff { state: State::Merged, note, merger: Some(lander.clone()), updated_ms: now_ms, ..cur },
+    )?;
+    Ok(true)
+}
+
 /// Path segments that must never be written by a fetch: VCS control dirs and files that make a
 /// later git/shell command in the destination run attacker-chosen code.
 pub fn is_dangerous_path(rel: &str) -> bool {
