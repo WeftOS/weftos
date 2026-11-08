@@ -39,7 +39,12 @@ pub mod wire;
 #[cfg(any(test, feature = "mock"))]
 pub mod mock;
 
+#[cfg(any(test, feature = "loopback-chain"))]
+pub mod loopback;
+
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod tests_live;
+#[cfg(test)]
+mod tests_loopback;

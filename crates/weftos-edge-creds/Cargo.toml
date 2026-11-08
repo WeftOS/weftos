@@ -13,6 +13,8 @@ description = "ADR-126 S3: edge and Wasm nodes reach their node bucket through t
 mock = []
 # OS-random node secret generation via getrandom (host side only).
 keygen = ["dep:getrandom"]
+# In-memory loopback chain for the compaction spike (no I/O, no live chain).
+loopback-chain = []
 
 [dependencies]
 serde = { workspace = true }

@@ -56,6 +56,47 @@ pub fn head_extend(head: &str, canonical_event: &[u8]) -> String {
     sha256_hex(&buf)
 }
 
+/// When to take a snapshot. **Off by default**: nothing in this crate takes
+/// one unless the host builds an enabled schedule and asks. The schedule
+/// reads no clock; the host passes the counts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SnapshotSchedule {
+    every_events: Option<u64>,
+    every_secs: Option<u64>,
+}
+
+impl SnapshotSchedule {
+    /// Never due. Same as `default()`.
+    pub fn off() -> Self {
+        Self::default()
+    }
+    /// Due after `n` events since the last snapshot (0 is treated as off).
+    pub fn every_events(n: u64) -> Self {
+        Self { every_events: (n > 0).then_some(n), every_secs: None }
+    }
+    /// Due after `secs` since the last snapshot, if at least one event arrived.
+    pub fn every_secs(secs: u64) -> Self {
+        Self { every_events: None, every_secs: (secs > 0).then_some(secs) }
+    }
+    /// Either trigger.
+    pub fn or_every_secs(mut self, secs: u64) -> Self {
+        if secs > 0 {
+            self.every_secs = Some(secs);
+        }
+        self
+    }
+    pub fn is_enabled(&self) -> bool {
+        self.every_events.is_some() || self.every_secs.is_some()
+    }
+    /// A snapshot with nothing new since the last one is never due.
+    pub fn due(&self, events_since: u64, secs_since: u64) -> bool {
+        if events_since == 0 {
+            return false;
+        }
+        self.every_events.is_some_and(|n| events_since >= n) || self.every_secs.is_some_and(|t| secs_since >= t)
+    }
+}
+
 /// One held grant, sorted for a canonical encoding.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HeldGrant {
@@ -151,15 +192,9 @@ impl GrantLedger {
         SignedSnapshot { snapshot, signer: signer.into(), signature }
     }
 
-    /// Start from a verified snapshot, then apply the tail. Events at or
-    /// before the snapshot (a whole log handed in by mistake) are an error,
-    /// not silently skipped, because they mean the caller mixed two histories.
-    pub fn restore(
-        signed: &SignedSnapshot,
-        scope: &str,
-        verifier: &dyn SnapshotVerifier,
-        tail: &[GrantEvent],
-    ) -> Result<GrantLedger, SnapshotError> {
+    /// The checks a follower makes on a snapshot with no history to hand:
+    /// version, scope, state hash, then the signature.
+    pub fn check(signed: &SignedSnapshot, scope: &str, verifier: &dyn SnapshotVerifier) -> Result<(), SnapshotError> {
         let s = &signed.snapshot;
         if s.version != SNAPSHOT_VERSION {
             return Err(SnapshotError::Version(s.version));
@@ -173,6 +208,20 @@ impl GrantLedger {
         if !verifier.verify(&signed.signer, &signing_bytes(s), &signed.signature) {
             return Err(SnapshotError::BadSignature);
         }
+        Ok(())
+    }
+
+    /// Start from a verified snapshot, then apply the tail. Events at or
+    /// before the snapshot (a whole log handed in by mistake) are an error,
+    /// not silently skipped, because they mean the caller mixed two histories.
+    pub fn restore(
+        signed: &SignedSnapshot,
+        scope: &str,
+        verifier: &dyn SnapshotVerifier,
+        tail: &[GrantEvent],
+    ) -> Result<GrantLedger, SnapshotError> {
+        Self::check(signed, scope, verifier)?;
+        let s = &signed.snapshot;
         if let Some(e) = tail.iter().find(|e| e.seq <= s.through_seq) {
             return Err(SnapshotError::TailBeforeSnapshot { seq: e.seq, through: s.through_seq });
         }
