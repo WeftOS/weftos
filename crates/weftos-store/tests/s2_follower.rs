@@ -617,3 +617,22 @@ fn manifest_without_changes_still_parses() {
     let m: TreeManifest = serde_json::from_str(j).unwrap();
     assert!(m.changes.is_empty());
 }
+
+#[test]
+fn overlapping_saves_from_threads_of_one_process_never_fail_or_corrupt_the_file() {
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("follow.json");
+    let st = FollowState::default();
+    std::thread::scope(|s| {
+        for _ in 0..8 {
+            s.spawn(|| {
+                for _ in 0..200 {
+                    st.save(&path).expect("a concurrent save must not lose its temp file");
+                    FollowState::load(&path).expect("the file always parses");
+                }
+            });
+        }
+    });
+    let left: Vec<_> = std::fs::read_dir(d.path()).unwrap().map(|e| e.unwrap().file_name()).collect();
+    assert_eq!(left.len(), 1, "no temp files left behind: {left:?}");
+}

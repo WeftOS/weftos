@@ -65,7 +65,12 @@ impl FollowState {
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("follow");
-        let tmp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
+        // Unique per call, not per process: the daemon serves overlapping `follow` calls on the
+        // same state file from threads of one process, and a shared temp name would let one call
+        // rename the other's file away.
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp = dir.join(format!(".{name}.{}.{seq}.tmp", std::process::id()));
         let json = serde_json::to_vec_pretty(self).map_err(|e| S2Error::Invalid(e.to_string()))?;
         std::fs::write(&tmp, json).map_err(io)?;
         std::fs::rename(&tmp, path).map_err(|e| {
