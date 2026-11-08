@@ -1,5 +1,11 @@
 # weft-hub: the WeftOS-side computer hub for Tapestry
 
+> **Status: exploratory prep, superseded, unmerged.** The owner has not answered Phase 3
+> D1-D6. The standalone-binary-under-weaver placement (D1) and machine-list-as-data (D2)
+> below are my working assumptions, not decisions; the design stays open to the other D1
+> option (a daemon service). Only "hub on the WeftOS side" and "WeftOS-minted pass key"
+> came from the owner. Superseded by the test-only loopback hub (`tapestry/p3-test-hub`).
+
 Package: `crates/weft-computer-hub/` (binary `weft-hub`, library `weft_hub`).
 Branch `feat/weft-computer-hub`, off WeftOS `target-0.8.5` at e3688fedb. Fork docs are
 not committed to `target-0.8.5`; this branch is separate.
