@@ -186,6 +186,8 @@ pub enum Skip {
     BadPath,
     Missing,
     OverBudget,
+    /// The path changed between the checks and the read (swapped for a symlink or another file).
+    Changed,
 }
 
 #[derive(Debug, Default)]
@@ -246,6 +248,54 @@ pub fn is_secret_path(path: &str) -> bool {
         || name == ".netrc"
         || (name.contains("secret") && !name.ends_with(".md"))
         || name == "board-token"
+}
+
+/// Read a regular file for publishing from one open handle, never following a symlink and never
+/// reading more than `max` bytes (review F14). The checks made on the path before this are only
+/// for choosing a skip reason; this is the one that holds. The portable std has no `O_NOFOLLOW`,
+/// and the store may not take a `libc` dependency, so a symlink is caught the other way round:
+/// open, then require that the path still names a regular file that is the very file the handle
+/// is on (same device and inode on unix). A swap before the open shows as a symlink or another
+/// inode, a swap after it cannot change what the handle reads. `Err(None)` is a real I/O error.
+fn read_regular(path: &Path, max: u64) -> std::result::Result<Vec<u8>, Option<Skip>> {
+    let file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(Some(Skip::Missing)),
+        Err(_) => return Err(None),
+    };
+    read_open_regular(file, path, max)
+}
+
+fn read_open_regular(file: std::fs::File, path: &Path, max: u64) -> std::result::Result<Vec<u8>, Option<Skip>> {
+    use std::io::Read;
+    let on_handle = file.metadata().map_err(|_| None)?;
+    let on_path = match std::fs::symlink_metadata(path) {
+        Ok(m) => m,
+        Err(_) => return Err(Some(Skip::Changed)),
+    };
+    if on_path.file_type().is_symlink() {
+        return Err(Some(Skip::Symlink));
+    }
+    if !on_handle.is_file() || !on_path.is_file() {
+        return Err(Some(Skip::NotAFile));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if (on_handle.dev(), on_handle.ino()) != (on_path.dev(), on_path.ino()) {
+            return Err(Some(Skip::Changed));
+        }
+    }
+    if on_handle.len() > max {
+        return Err(Some(Skip::TooLarge));
+    }
+    // One byte past the cap tells a file that grew after the stat from one that fits.
+    let mut data = Vec::with_capacity(on_handle.len().min(max) as usize);
+    file.take(max + 1).read_to_end(&mut data).map_err(|_| None)?;
+    if data.len() as u64 > max {
+        return Err(Some(Skip::TooLarge));
+    }
+    Ok(data)
 }
 
 /// PEM/OpenSSH private key material, whatever the file is called.
@@ -379,7 +429,18 @@ pub fn publish_tree<B: ObjectBackend>(
             rep.skipped.push((p.clone(), Skip::OverBudget));
             continue;
         }
-        let data = std::fs::read(&full)?;
+        let data = match read_regular(&full, limits.max_file) {
+            Ok(d) => d,
+            Err(Some(skip)) => {
+                rep.skipped.push((p.clone(), skip));
+                continue;
+            }
+            Err(None) => return Err(S2Error::Backend(format!("cannot read {p}"))),
+        };
+        if total + data.len() as u64 > limits.max_total {
+            rep.skipped.push((p.clone(), Skip::OverBudget));
+            continue;
+        }
         if looks_like_private_key(&data) {
             rep.skipped.push((p.clone(), Skip::Secret));
             continue;
@@ -704,3 +765,7 @@ pub fn safe_join(dest: &Path, rel: &str) -> Result<PathBuf> {
     }
     Ok(cur)
 }
+
+#[cfg(test)]
+#[path = "share_read_tests.rs"]
+mod read_tests;
