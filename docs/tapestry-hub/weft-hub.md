@@ -47,9 +47,11 @@ CARGO_TARGET_DIR=/Volumes/ai-models/weftos-worktrees/weft-computer-hub-target ca
 ## Run on loopback
 
 ```
-weft-hub keygen --out ~/.weftos/hub/xpc-mint.key           # 32 random bytes, hex, mode 0600, refuses to overwrite
-cp config/hub.example.toml ~/.weftos/hub/hub.toml          # edit machines/minters
-weft-hub serve --config ~/.weftos/hub/hub.toml             # binds 127.0.0.1:9490
+export WEFT_HUB_HOME=$HOME/.config/weft-hub                 # never ~/.weftos (the daemon's home)
+mkdir -p $WEFT_HUB_HOME
+weft-hub keygen --out $WEFT_HUB_HOME/xpc-mint.key          # 32 random bytes, hex, mode 0600, refuses to overwrite
+cp config/hub.example.toml $WEFT_HUB_HOME/hub.toml         # edit machines/minters
+weft-hub serve --config $WEFT_HUB_HOME/hub.toml            # binds 127.0.0.1:9490; --config is preferred
 ```
 
 Any non-loopback `--addr`/`listen.addr` is refused unless `--allow-non-loopback` is given;
@@ -141,7 +143,7 @@ the server's key and the harness's key must carry the same `sub`.
 `crates/weft-computer-hub/deploy/weftapp.toml` (printed by `weft-hub print-app`) is an
 `AppManifest` with one `[[services]]` entry (`name`, `command = "weft-hub serve"`, port
 9490/tcp, `RUST_LOG`), `network = true` (listener only), `shell = false`, filesystem
-`~/.weftos/hub`. It follows `crates/clawft-kernel/src/app.rs` (`AppManifest`, `ServiceSpec`,
+`~/.config/weft-hub`. It follows `crates/clawft-kernel/src/app.rs` (`AppManifest`, `ServiceSpec`,
 `PortMapping`, `AppCapabilities`). Restart behaviour is whatever weaver's managed-process
 policy gives (`workload_runtime/infer/config.rs` `RestartPolicy`: 2 s base, doubling, 60 s
 cap, 5 restarts); the definition overrides nothing.
@@ -245,3 +247,8 @@ not restructure code to avoid the findings. Approval is the owner's call. Full o
   holds absolute local paths and must be removed once the fork is pushed.
 - **Full workspace gate** (`scripts/build.sh gate`) was not run, per the targeted-tests rule
   and because this package is outside the workspace; CI is the green-of-record.
+
+
+Config location: an explicit `--config` wins; otherwise `$WEFT_HUB_HOME/hub.toml`, then
+`$XDG_CONFIG_HOME/weft-hub/hub.toml`, then `$HOME/.config/weft-hub/hub.toml`. Nothing in the
+hub defaults to or creates anything under `~/.weftos`.

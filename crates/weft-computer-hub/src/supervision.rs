@@ -74,7 +74,7 @@ mod tests {
         let m = manifest();
         assert!(!m.capabilities.shell, "hub needs no shell");
         assert!(m.capabilities.network, "the listener needs sockets");
-        assert_eq!(m.capabilities.filesystem, ["~/.weftos/hub"]);
+        assert_eq!(m.capabilities.filesystem, ["~/.config/weft-hub"]);
         // The declared port is the hub's default listen port, over tcp.
         let p = &m.services[0].ports[0];
         assert_eq!(

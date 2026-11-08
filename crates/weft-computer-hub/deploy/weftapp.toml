@@ -16,12 +16,12 @@ license = "Apache-2.0"
 # "needs sockets", so it is true for the listener.
 network = true
 shell = false
-filesystem = ["~/.weftos/hub"]
+filesystem = ["~/.config/weft-hub"]
 
 [[services]]
 name = "weft-hub"
 # argv, not a shell string. With no flags `serve` reads
-# $HOME/.weftos/hub/hub.toml and binds the address in it (loopback default).
+# $WEFT_HUB_HOME/hub.toml or ~/.config/weft-hub/hub.toml and binds the address in it (loopback default).
 command = "weft-hub serve"
 
 [[services.ports]]

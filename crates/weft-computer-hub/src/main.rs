@@ -11,7 +11,7 @@ use weft_hub::passkey::{self, Role};
 use weft_hub::server;
 
 const USAGE: &str = "\
-weft-hub serve   [--config <hub.toml>, default $HOME/.weftos/hub/hub.toml] [--addr ip:port] [--allow-non-loopback]
+weft-hub serve   [--config <hub.toml>, default $WEFT_HUB_HOME/hub.toml, else $XDG_CONFIG_HOME/weft-hub/hub.toml, else $HOME/.config/weft-hub/hub.toml] [--addr ip:port] [--allow-non-loopback]
 weft-hub mint    --config <hub.toml> --minter <id> --sub <user> --role server|harness[,..]
                  [--srv <machine id>] [--ttl <secs, default 3600>] [--out <file>]
 weft-hub keygen  --out <file>
@@ -127,12 +127,24 @@ fn cmd_mint(args: &[String]) -> Result<(), String> {
     }
 }
 
+/// Default config location. Never under `~/.weftos` (the daemon's home).
+fn default_config_path() -> Result<PathBuf, String> {
+    let env = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty()).map(PathBuf::from);
+    if let Some(h) = env("WEFT_HUB_HOME") {
+        return Ok(h.join("hub.toml"));
+    }
+    if let Some(x) = env("XDG_CONFIG_HOME") {
+        return Ok(x.join("weft-hub/hub.toml"));
+    }
+    let home = env("HOME").ok_or("--config not given and none of WEFT_HUB_HOME, XDG_CONFIG_HOME, HOME is set")?;
+    Ok(home.join(".config/weft-hub/hub.toml"))
+}
+
 async fn cmd_serve(args: &[String]) -> Result<(), String> {
     let f = parse_flags(args, &["config", "addr"], &["allow-non-loopback"])?;
     let cfg_path = match f.get("config") {
         Some(p) => PathBuf::from(p),
-        None => PathBuf::from(std::env::var_os("HOME").ok_or("--config not given and HOME unset")?)
-            .join(".weftos/hub/hub.toml"),
+        None => default_config_path()?,
     };
     let cfg = HubConfig::load(&cfg_path).map_err(|e| e.to_string())?;
     let addr = f.get("addr").cloned().unwrap_or_else(|| cfg.addr.clone());

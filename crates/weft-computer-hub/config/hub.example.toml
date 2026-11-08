@@ -1,6 +1,6 @@
 # weft-hub configuration (owner decision D2: the machine list is data).
 # Copy to a private location. Key files are hex, >= 32 bytes, mode 0600:
-#   weft-hub keygen --out ~/.weftos/hub/xpc-mint.key
+#   weft-hub keygen --out $WEFT_HUB_HOME/xpc-mint.key
 
 [listen]
 # Loopback by default. Anything else also needs `serve --allow-non-loopback`.
