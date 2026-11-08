@@ -184,8 +184,24 @@ where
         }
         let _ = sink.close().await;
     });
+    // The pass key is checked at upgrade; also close the socket when it expires.
+    let expiry = tokio::time::sleep(Duration::from_secs(
+        auth.claims.exp.saturating_sub(now_secs()),
+    ));
+    tokio::pin!(expiry);
     loop {
-        match tokio::time::timeout(IDLE_TIMEOUT, stream.next()).await {
+        let next = tokio::select! {
+            () = &mut expiry => {
+                tracing::info!(cid, "pass key expired; closing");
+                let _ = tx.send(Message::Close(Some(CloseFrame {
+                    code: CloseCode::Policy,
+                    reason: "pass key expired".into(),
+                })));
+                break;
+            }
+            n = tokio::time::timeout(IDLE_TIMEOUT, stream.next()) => n,
+        };
+        match next {
             Ok(Some(Ok(Message::Text(t)))) => hub.on_text(cid, t.as_ref()),
             Ok(Some(Ok(Message::Ping(p)))) => {
                 let _ = tx.send(Message::Pong(p));

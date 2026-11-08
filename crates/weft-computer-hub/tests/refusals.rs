@@ -272,3 +272,35 @@ async fn session_ownership_unsupported_methods_and_unbound_calls_are_refused() {
     send(&mut ha, req(json!(9), None, "session_open", json!({}))).await;
     assert_eq!(recv(&mut ha).await["error"]["code"], -32602);
 }
+
+#[tokio::test]
+async fn open_socket_is_closed_when_its_pass_key_expires() {
+    use futures_util::StreamExt;
+    let env = start().await;
+    let m = env.minter("weftos-xpc");
+    let key =
+        weft_hub::passkey::mint(m, "u", &[Role::Harness], 2, None, weft_hub::hub::now_secs())
+            .unwrap();
+    let (mut ws, ack) = env.peer("harness", &key, None).await;
+    assert!(ack.get("result").is_some() || ack.get("kind").is_some() || ack.is_object());
+    assert_eq!(env.hub.connection_count(), 1);
+    // Within a few seconds the hub must send a policy close naming the expiry.
+    let closed = tokio::time::timeout(std::time::Duration::from_secs(6), async {
+        while let Some(m) = ws.next().await {
+            if let Ok(Message::Close(Some(f))) = m {
+                return Some(f.reason.to_string());
+            }
+        }
+        None
+    })
+    .await
+    .expect("hub did not close the expired socket in time");
+    assert_eq!(closed.as_deref(), Some("pass key expired"));
+    for _ in 0..50 {
+        if env.hub.connection_count() == 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert_eq!(env.hub.connection_count(), 0);
+}
