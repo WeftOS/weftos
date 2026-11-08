@@ -116,14 +116,19 @@ fn validate_text(what: &'static str, s: &str, max: usize) -> Result<()> {
     Ok(())
 }
 
-/// Relative, `/`-separated, no empty / `.` / `..` segments, no backslash or control characters.
+/// The longest one path segment (file name) an artifact may have, in bytes.
+pub const MAX_SEGMENT_LEN: usize = 255;
+
+/// Relative, `/`-separated, no empty / `.` / `..` segments, none over [`MAX_SEGMENT_LEN`] bytes, no backslash or control characters.
 pub fn validate_artifact_path(path: &str) -> Result<()> {
     let bad = path.is_empty()
         || path.len() > MAX_PATH_LEN
         || path.starts_with('/')
         || path.ends_with('/')
         || path.chars().any(|c| c == '\\' || c.is_control())
-        || path.split('/').any(|s| s.is_empty() || s == "." || s == "..");
+        // a segment becomes a file name when the artifact is installed: 255 bytes is the most Linux,
+        // macOS and Windows (NTFS) allow for one name
+        || path.split('/').any(|s| s.is_empty() || s == "." || s == ".." || s.len() > MAX_SEGMENT_LEN);
     if bad {
         Err(invalid(
             "artifact path",

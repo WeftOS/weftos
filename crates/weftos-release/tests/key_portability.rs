@@ -136,3 +136,28 @@ async fn the_longest_key_s4_writes_stays_inside_the_path_and_key_budgets() {
     assert!(bucket + 1 + longest <= 200, "bucket+key is {} bytes; 200 leaves 60 of 260 for the data dir and RustFS's own files", bucket + 1 + longest);
     assert!(longest + 78 <= 512, "plus S1's archive prefix");
 }
+
+/// Segment length (the 11:05 pile): no path segment of anything S4 writes may exceed the 255 bytes a file
+/// name can have on Linux, macOS and Windows. Object keys are covered by the validators' own caps (build id
+/// 128, hash 64, fixed prefixes); artifact paths, which become file names when installed, are capped per
+/// segment in `validate_artifact_path`.
+#[tokio::test]
+async fn no_segment_of_a_key_or_artifact_path_exceeds_a_file_name() {
+    // keys: the longest build id gives the longest segment
+    let (be, st, sg) = (MemoryBackend::new(), store(), signer());
+    ReleasePublisher::new(&be, &st, &sg).publish(req(&"a".repeat(128), 100, &[("x", b"x")]), NOW).await.unwrap();
+    for k in be.keys() {
+        assert!(k.split('/').all(|s| s.len() <= 255), "{k}");
+    }
+    assert!(be.keys().iter().flat_map(|k| k.split('/')).map(str::len).max().unwrap() <= 128);
+    // artifact paths: 255 is fine, 256 is refused, in any position
+    let seg = |n: usize| "s".repeat(n);
+    let ok = format!("{}/{}", seg(255), seg(255));
+    let p = ReleasePublisher::new(&be, &st, &sg);
+    p.publish(req("b-ok", 100, &[(&ok, b"x")]), NOW).await.unwrap();
+    for bad in [seg(256), format!("d/{}", seg(256)), format!("{}/f", seg(300))] {
+        let e = p.publish(req("b-bad", 100, &[(&bad, b"x")]), NOW).await.unwrap_err();
+        assert!(matches!(e, ReleaseError::Invalid { .. }), "{}: {e}", bad.len());
+    }
+    assert!(!be.keys().iter().any(|k| k.contains("b-bad")), "nothing written for the refused paths");
+}
