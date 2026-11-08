@@ -241,9 +241,12 @@ pub struct StoreService {
     apply: Mutex<()>,
     policy_opts: Mutex<policy::PolicyOpts>,
     gc_sched: Mutex<archive_gc::Sched>,
+    /// Refusals RustFS reported per principal, for the rule that suspends a key (see `ingest`).
+    denials: Mutex<ingest::Denials>,
     st: Mutex<State>,
 }
 
+pub use ingest::DenialRule;
 pub use archive_gc::{ArchiveGcReport, ArchiveKeep, ArchiveSchedule, ArchiveSet, KeepFor};
 
 /// The longest retention an `append` principal may stamp: 5 years (a Compliance hold cannot be
@@ -281,7 +284,7 @@ impl StoreService {
                 exposure.register(&exposure_id(&n), &n.to_string());
             }
         }
-        Ok(Self { cfg, admin, objects, exposure, audit, chain, invalidator: Mutex::new(None), apply: Mutex::new(()), policy_opts: Mutex::new(policy::PolicyOpts::default()), gc_sched: Mutex::new(archive_gc::Sched::default()), st: Mutex::new(st) })
+        Ok(Self { cfg, admin, objects, exposure, audit, chain, invalidator: Mutex::new(None), apply: Mutex::new(()), policy_opts: Mutex::new(policy::PolicyOpts::default()), gc_sched: Mutex::new(archive_gc::Sched::default()), denials: Mutex::new(ingest::Denials::default()), st: Mutex::new(st) })
     }
 
     /// Refuse before changing anything once the grant sequence is spent.

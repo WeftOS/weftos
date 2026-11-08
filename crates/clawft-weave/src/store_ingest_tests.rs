@@ -270,3 +270,20 @@ async fn a_sink_that_panics_does_not_change_what_rustfs_is_told() {
     // The receiver still serves the next request.
     assert_eq!(post(&r.rx, &path, "POST", notify_body(&r.store.bucket(), "k2", "s3:ObjectCreated:Put").as_bytes()).await, 200);
 }
+
+#[tokio::test]
+async fn refusals_posted_to_the_audit_url_suspend_the_key_through_the_service() {
+    let r = rig().await;
+    r.svc.set_denial_rule(Some(weftos_store::service::DenialRule { max: 3, window_ms: 60_000 }));
+    let key = key_of(&r);
+    let denied = |status: u16| format!(r#"{{"EventName":"s3:GetObject","Key":"x","Records":[{{"accessKey":"{key}","api":{{"name":"s3:GetObject","bucket":"{}","object":"x","status_code":{status}}}}}]}}"#, r.store.bucket());
+    let path = format!("/store/ingest/{}/audit", r.rx.token);
+    for _ in 0..2 {
+        assert_eq!(post(&r.rx, &path, "POST", denied(403).as_bytes()).await, 200);
+    }
+    assert_eq!(r.be.key_enabled(&key), Some(true));
+    assert_eq!(post(&r.rx, &path, "POST", denied(403).as_bytes()).await, 200);
+    assert_eq!(r.be.key_enabled(&key), Some(false), "the third refusal disabled the key at the backend, by way of suspend_principal");
+    // A wrong token reaches nothing, so it can neither log nor count.
+    assert_eq!(post(&r.rx, "/store/ingest/nope/audit", "POST", denied(403).as_bytes()).await, 404);
+}

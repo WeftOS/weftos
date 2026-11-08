@@ -1196,3 +1196,110 @@ fn a_worktree_with_overlay_state_is_not_promoted_object_by_object() {
     r2.svc.put(&local("a1"), &wt2, ".wt/tombstones/assets/x", b"", false).unwrap();
     assert!(r2.svc.promote(&wt2, &["assets/".into()], false, "land").is_err());
 }
+
+// ---- F9: refusals RustFS reports are logged and, in a run, suspend the key -----------------------
+
+/// A line of RustFS 1.0.4's JSON log as captured from a throwaway instance (only the account and
+/// bucket are ours).
+fn denied_line(account: &str, bucket: &str) -> String {
+    format!(r#"{{"timestamp":"2026-11-07T06:36:23.965138209-05:00","level":"WARN","message":"request denied by authorization layer","event":"s3_authorization_denied","reason":"no_policy_allows_action","action":"S3Action(GetObjectAction)","bucket":"{bucket}","object":"x","version_id":"None","account":"{account}","is_owner":false,"target":"rustfs::storage::access","filename":"rustfs/src/storage/access.rs","line_number":1267,"threadName":"rustfs-worker","threadId":"ThreadId(31)"}}"#)
+}
+
+const SIG_LINE: &str = r#"{"timestamp":"2026-11-08T11:23:14.31776997-05:00","level":"ERROR","error":"S3Error { code: SignatureDoesNotMatch, message: \"The request signature we calculated does not match the signature you provided. Check your AWS secret access key and signing method. For more information, see REST Authentication and SOAP Authentication for details.\", .. }","target":"s3s::ops","filename":"/usr/local/cargo/git/checkouts/s3s-5cf49da3e5499213/5761ddf/crates/s3s/src/ops/mod.rs","line_number":862,"threadName":"rustfs-worker","threadId":"ThreadId(41)"}"#;
+
+fn denial_rig() -> (Rig, StoreName, Principal, String) {
+    let r = rig();
+    let n = project();
+    r.svc.create_store(&n, "daemon", Parties::default()).unwrap();
+    let c = cog("c");
+    r.svc.grant(&n, c.clone(), Access::Read, "op").unwrap();
+    let key = r.be.keys_of(&c.to_string()).pop().unwrap();
+    (r, n, c, key)
+}
+
+#[test]
+fn a_denied_line_is_logged_as_a_refusal_and_an_authentication_failure_is_logged_unattributed() {
+    let (r, n, _c, key) = denial_rig();
+    assert!(r.svc.ingest_log_line(&denied_line(&key, &n.bucket())));
+    let ev = r.sink.events().pop().unwrap();
+    assert_eq!((ev.principal.as_str(), ev.store.as_str(), ev.op.as_str(), ev.source), ("cog:c", n.to_string().as_str(), "GetObject", Source::RustfsLog));
+    assert!(matches!(ev.outcome, Outcome::Refused(ref w) if w == "no_policy_allows_action"));
+    assert!(r.svc.ingest_log_line(SIG_LINE), "a SignatureDoesNotMatch line is a record");
+    let ev = r.sink.events().pop().unwrap();
+    assert_eq!((ev.op.as_str(), ev.principal.as_str()), ("Authenticate", "(unknown key)"));
+    assert!(matches!(ev.outcome, Outcome::Refused(ref w) if w == "SignatureDoesNotMatch"));
+    let inv = SIG_LINE.replace("SignatureDoesNotMatch", "InvalidAccessKeyId");
+    assert!(r.svc.ingest_log_line(&inv));
+    assert!(matches!(r.sink.events().pop().unwrap().outcome, Outcome::Refused(ref w) if w == "InvalidAccessKeyId"));
+    // Other log lines are not records.
+    for other in ["", "not json", r#"{"level":"ERROR","message":"op returns error","op":"PutObject","err":"S3Error(Inner { code: AccessDenied })"}"#] {
+        assert!(!r.svc.ingest_log_line(other), "{other:?}");
+    }
+}
+
+#[test]
+fn a_run_of_refusals_suspends_the_key_through_suspend_principal_and_not_before() {
+    let (r, n, c, key) = denial_rig();
+    r.svc.set_denial_rule(Some(DenialRule { max: 5, window_ms: 60_000 }));
+    for _ in 0..4 {
+        r.svc.ingest_log_line(&denied_line(&key, &n.bucket()));
+    }
+    assert_eq!(r.be.key_enabled(&key), Some(true), "four is under the rule");
+    r.svc.ingest_log_line(&denied_line(&key, &n.bucket()));
+    assert_eq!(r.be.key_enabled(&key), Some(false), "the fifth disables the key at RustFS");
+    assert!(r.svc.get(&local("c"), &n, "x").is_err(), "and the service refuses it");
+    assert_eq!(chain_kinds(&r.chain, "store.principal.suspend"), 1);
+    let why = r.chain.0.lock().unwrap().iter().find(|(k, _)| k == "store.principal.suspend").map(|(_, v)| v["reason"].as_str().unwrap().to_owned()).unwrap();
+    assert!(why.contains("rule: 5 refusals"), "{why}");
+    // More refusals while suspended do not suspend again; resume re-enables and counting restarts.
+    for _ in 0..12 {
+        r.svc.ingest_log_line(&denied_line(&key, &n.bucket()));
+    }
+    assert_eq!(chain_kinds(&r.chain, "store.principal.suspend"), 1);
+    r.svc.resume_principal(&c).unwrap();
+    assert_eq!(r.be.key_enabled(&key), Some(true));
+}
+
+#[test]
+fn refusals_that_are_spread_out_unattributed_or_for_unknown_keys_suspend_nobody_and_the_rule_can_be_off() {
+    let (r, n, _c, key) = denial_rig();
+    r.svc.set_denial_rule(Some(DenialRule { max: 3, window_ms: 10_000 }));
+    // A bad signature has no account: it can never suspend anyone however many arrive.
+    for _ in 0..50 {
+        r.svc.ingest_log_line(SIG_LINE);
+    }
+    // A key that is not a principal's is logged but not counted against anyone.
+    for _ in 0..50 {
+        r.svc.ingest_log_line(&denied_line("wk-stranger", &n.bucket()));
+    }
+    assert_eq!(chain_kinds(&r.chain, "store.principal.suspend"), 0);
+    assert_eq!(r.be.key_enabled(&key), Some(true));
+    // Off: nothing suspends.
+    r.svc.set_denial_rule(None);
+    for _ in 0..50 {
+        r.svc.ingest_log_line(&denied_line(&key, &n.bucket()));
+    }
+    assert_eq!(r.be.key_enabled(&key), Some(true));
+    // The default is on, at 20 in a minute.
+    r.svc.set_denial_rule(Some(DenialRule::default()));
+    for _ in 0..19 {
+        r.svc.ingest_log_line(&denied_line(&key, &n.bucket()));
+    }
+    assert_eq!(r.be.key_enabled(&key), Some(true));
+    r.svc.ingest_log_line(&denied_line(&key, &n.bucket()));
+    assert_eq!(r.be.key_enabled(&key), Some(false));
+}
+
+#[test]
+fn audit_lines_with_a_403_count_too_and_a_successful_audit_line_never_does() {
+    let (r, n, _c, key) = denial_rig();
+    r.svc.set_denial_rule(Some(DenialRule { max: 2, window_ms: 60_000 }));
+    let rec = |status: u16| format!(r#"{{"EventName":"s3:GetObject","Key":"x","Records":[{{"accessKey":"{key}","api":{{"name":"s3:GetObject","bucket":"{}","object":"x","status_code":{status}}}}}]}}"#, n.bucket());
+    for _ in 0..5 {
+        assert!(r.svc.ingest_audit_line(&rec(200)));
+    }
+    assert_eq!(r.be.key_enabled(&key), Some(true));
+    r.svc.ingest_audit_line(&rec(403));
+    r.svc.ingest_audit_line(&rec(403));
+    assert_eq!(r.be.key_enabled(&key), Some(false));
+}

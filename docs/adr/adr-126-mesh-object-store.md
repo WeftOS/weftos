@@ -434,8 +434,8 @@ the daemon's own root-key requests (already logged on the governed path), so a r
 principal's own key. Notifications still invalidate caches whoever wrote. Verified end to end against a throwaway
 RustFS (`live_a_request_straight_to_rustfs_reaches_the_activity_log`, `--ignored`, `WEFTOS_STORE_TEST_RUSTFS_BIN`): a put made
 straight to RustFS with a cog's key shows as that cog's `PutObject` (audit) and a notification event. Not wired yet: attaching
-`PutBucketNotification` to buckets automatically when a store is created (the runbook does it by hand), and reading
-`rustfs.log` for 403 refusals (`ingest_log_line` has no caller).
+`PutBucketNotification` to buckets automatically when a store is created (the runbook does it by hand). Reading `rustfs.log` for
+refusals is wired (see the close-out findings below).
 
 **Adversarial review of S1 (2026-11-08), fixed:** a grant change saved but not pushed (RustFS down, a crash between the two)
 is now made good by `StoreService::reconcile()` at daemon start, and backend pushes are serialised per service so an older snapshot
@@ -444,8 +444,35 @@ refuses); an archived store's grant cannot be switched back on; `svc.store get` 
 cog service startup no longer lists objects on the async runtime; `weaver store put|get --as` now leaves a `store.as` chain
 record naming the operator. **Known and not fixed:** `archive` can lose an object put by a request that passed the gate just
 before it; listings and `FsBackend` etags read whole files (the local backend is the development path); a mesh-id change
-renames the stores' `weftos://` names (the bucket names do not move) and needs a migration; `project add`'s store hook
+renames the stores' `weftos://` names (the bucket names do not move; the migration is F17 below); `project add`'s store hook
 joins a blocking thread; (the receiver now authenticates and drops unknown buckets; see above).
+
+**Close-out findings F2, F9, F15, F16, F17, F18 (2026-11-08, owner order of 15:00), fixed on `feat/adr126-s1`:**
+- **F2** Every grant change (grant, revoke, enable, disable, suspend, resume, archive's close) runs under one lock with its
+  backend push. The chain event and activity lines are recorded only after the push succeeded; a change whose push failed
+  stays saved (the service enforces it at once) with its events pending, and doing the same change again or `reconcile`
+  (at start, and covering suspended and pending principals) finishes it and records it once. A repeated revoke no longer
+  answers "holds no grant" while its push is outstanding. `ensure_store` on an existing store re-pushes its principals.
+- **F9** The audit and notification receivers (path-secret authenticated, `WEFTOS_STORE_INGEST_ADDR`) were already called by
+  the daemon; new: the daemon follows RustFS's own log (`WEFTOS_STORE_RUSTFS_LOG`) into `ingest_log_line`, which now reads both
+  `s3_authorization_denied` and `SignatureDoesNotMatch` / `InvalidAccessKeyId` (the latter carry no account or bucket in
+  RustFS 1.0.4, so they are logged as an unattributed `Authenticate` refusal and cannot suspend anyone). A principal whose own
+  key is refused 20 times in 60 s (`WEFTOS_STORE_DENIAL_RULE=off|<max>/<s>`) is suspended through `suspend_principal`.
+  Field names: the denial and signature lines are real RustFS 1.0.4 lines; the audit and notification bodies are exercised by
+  the live test against a real RustFS (`live_a_request_straight_to_rustfs_reaches_the_activity_log`). Not validated: a
+  production (photo-gallery) log, which was not read.
+- **F15** `RustfsConfig` `Debug` redacts both root keys; the secrets directory is 0700 (a loose one of ours is tightened, another
+  user's is refused); the secret's temp file is `create_new` 0600; plain `http://` is accepted only to a loopback host.
+- **F16** SigV4 is checked against four AWS-documented canonical requests and signatures; every bucket string goes through
+  `check_bucket`; a CopyObject `200` with an `<Error>` body is an error and the body must be a `CopyObjectResult` that agrees with the
+  destination. Integrity: puts send `x-amz-checksum-sha256` (RustFS refuses a wrong one); a read is checked against Content-Length and
+  the stored SHA-256, else the single-part ETag (MD5), else reported `Unverified` (multipart ETags prove nothing about content).
+- **F17** The bucket is the store's identity. A second name for one bucket is refused; `ensure_store` and the daemon at start move
+  a `local` store to its mesh-id name (record, grants, retired mark, pending events, exposure) with one stamped `store.migrate`
+  event. Node store tokens must be the clean id (`pg.1` and `pg-1` no longer share `n-pg-1`). This is not the `n-<id>` to `node-<id>`
+  bucket rename, which stays an open owner decision.
+- **F18** `store.promote` refuses an empty, unclean or reserved (`.wt/`, `worktrees/`) prefix, never copies a reserved-area object,
+  and refuses a worktree that holds overlay state under `.wt/`, so S2's landing path and its conflict check cannot be bypassed.
 
 ## Consequences
 
