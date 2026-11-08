@@ -139,6 +139,46 @@ pub(crate) fn policy_opts_from_env() -> weftos_store::policy::PolicyOpts {
     weftos_store::policy::PolicyOpts { sweeper_put: on("WEFTOS_STORE_SWEEPER_PUT"), ci_direct_put: on("WEFTOS_STORE_CI_DIRECT_PUT") }
 }
 
+/// The scheduled archive sweep (ADR-126 open question 2), from env. Off unless
+/// `WEFTOS_STORE_ARCHIVE_GC_EVERY_HOURS` is set. No day numbers are built in: name them with
+/// `WEFTOS_STORE_ARCHIVE_{NODE,PROJECT,RELEASE}_DAYS` (a kind left out keeps for ever; a per-store
+/// override from `weaver store archive-keep` also counts). Without `WEFTOS_STORE_ARCHIVE_GC_CONFIRM`
+/// = `1`/`true`/`on` a scheduled run only reports (to the log).
+pub(crate) fn archive_schedule_from(get: impl Fn(&str) -> Option<String>) -> Result<Option<weftos_store::service::ArchiveSchedule>, String> {
+    let num = |k: &str| -> Result<Option<u64>, String> {
+        match get(k).map(|v| v.trim().to_owned()).filter(|v| !v.is_empty()) {
+            None => Ok(None),
+            Some(v) => v.parse::<u64>().map(Some).map_err(|_| format!("{k}={v:?} is not a whole number")),
+        }
+    };
+    let Some(every_hours) = num("WEFTOS_STORE_ARCHIVE_GC_EVERY_HOURS")? else { return Ok(None) };
+    let confirmed = get("WEFTOS_STORE_ARCHIVE_GC_CONFIRM").is_some_and(|v| matches!(v.trim(), "1" | "true" | "on"));
+    let keep = weftos_store::service::ArchiveKeep {
+        node_days: num("WEFTOS_STORE_ARCHIVE_NODE_DAYS")?,
+        project_days: num("WEFTOS_STORE_ARCHIVE_PROJECT_DAYS")?,
+        release_days: num("WEFTOS_STORE_ARCHIVE_RELEASE_DAYS")?,
+    };
+    let s = weftos_store::service::ArchiveSchedule { every_hours, keep, confirmed };
+    s.validate().map_err(|e| e.to_string())?;
+    Ok(Some(s))
+}
+
+/// Run the due sweep once a minute for as long as the service lives. Only started when a schedule is set.
+fn spawn_archive_gc(svc: &Arc<StoreService>) {
+    let weak = Arc::downgrade(svc);
+    let _ = std::thread::Builder::new().name("store-archive-gc".into()).spawn(move || {
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(60));
+            let Some(svc) = weak.upgrade() else { return };
+            match svc.archive_gc_tick() {
+                Ok(Some(r)) => tracing::info!(dry_run = r.dry_run, expired = r.expired.len(), deleted_objects = r.deleted_objects, in_progress = r.in_progress.len(), "scheduled archive sweep"),
+                Ok(None) => {}
+                Err(e) => tracing::warn!(error = %e, "scheduled archive sweep failed; retried next interval"),
+            }
+        }
+    });
+}
+
 pub(crate) fn open_service(
     node_id: &str,
     dir: &Path,
@@ -158,6 +198,17 @@ pub(crate) fn open_service(
     .map_err(|e| e.to_string())?;
     let svc = Arc::new(svc);
     svc.set_policy_opts(policy_opts_from_env());
+    match archive_schedule_from(|k| std::env::var(k).ok()) {
+        Ok(Some(s)) => match svc.set_archive_schedule(Some(s)) {
+            Ok(()) => {
+                tracing::info!(every_hours = s.every_hours, confirmed = s.confirmed, "scheduled archive sweep on");
+                spawn_archive_gc(&svc);
+            }
+            Err(e) => tracing::warn!(error = %e, "archive sweep schedule refused; left off"),
+        },
+        Ok(None) => {}
+        Err(e) => tracing::warn!(error = %e, "archive sweep schedule not read; left off"),
+    }
     // A grant change is saved before it is pushed to RustFS; make the backend match what was saved.
     for (p, why) in svc.reconcile() {
         tracing::warn!(principal = %p, error = %why, "grants not pushed to the object store backend; refused by the service, but the backend key is behind");

@@ -985,3 +985,7 @@ impl AdminBackend for RustfsBackend {
 #[cfg(test)]
 #[path = "rustfs_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "rustfs_prop_tests.rs"]
+mod prop_tests;

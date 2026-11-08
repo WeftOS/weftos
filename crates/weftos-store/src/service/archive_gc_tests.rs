@@ -192,3 +192,135 @@ fn a_real_archive_of_a_project_expires_after_its_time_and_the_store_record_is_un
     assert!(r.svc.has_store(&p), "the store record is not the archive's to remove");
     assert_eq!(r.be.get(&p.bucket(), "a/b").unwrap(), b"data", "and the live bucket is untouched");
 }
+
+fn project(r: &Rig, ulid: &str) -> StoreName {
+    let p = StoreName::project("weft", ulid).unwrap();
+    r.svc.create_store(&p, "daemon", Parties::default()).unwrap();
+    p
+}
+
+const P2: &str = "01HZX3K9Q5M2N7P8R4T6V0WXYZ";
+
+#[test]
+fn a_per_store_override_beats_the_kind_limit_both_ways() {
+    let r = rig(100);
+    let short = project(&r, PROJECT);
+    let long = project(&r, P2);
+    put_set(&r, &short.bucket(), 90, &["x"]); // 10 days old
+    put_set(&r, &long.bucket(), 1, &["x"]); // 99 days old
+    put_set(&r, "p-other", 1, &["x"]); // no record, 99 days: kind limit
+    r.svc.set_archive_keep(&short, Some(KeepFor::Days(5)), "op").unwrap();
+    r.svc.set_archive_keep(&long, Some(KeepFor::Forever), "op").unwrap();
+    let rep = r.svc.archive_gc(&KEEP30, true, "op").unwrap();
+    let gone: Vec<&str> = rep.expired.iter().map(|s| s.bucket.as_str()).collect();
+    assert!(gone.contains(&short.bucket().as_str()), "10 days old but its own limit is 5: {gone:?}");
+    assert!(gone.contains(&"p-other"), "no override, the kind's 30 days: {gone:?}");
+    assert!(!gone.contains(&long.bucket().as_str()), "forever beats the kind's 30 days: {gone:?}");
+    assert_eq!(left(&r).len(), 1);
+}
+
+#[test]
+fn an_override_works_when_the_kind_has_no_limit_and_clearing_it_goes_back() {
+    let r = rig(100);
+    let p = project(&r, PROJECT);
+    put_set(&r, &p.bucket(), 1, &["x"]);
+    r.svc.set_archive_keep(&p, Some(KeepFor::Days(10)), "op").unwrap();
+    assert_eq!(r.svc.archive_keep(&p).unwrap(), Some(KeepFor::Days(10)));
+    let dry = r.svc.archive_gc(&ArchiveKeep::default(), false, "op").unwrap();
+    assert_eq!(dry.expired.len(), 1, "the override alone makes it expire");
+    r.svc.set_archive_keep(&p, None, "op").unwrap();
+    let rep = r.svc.archive_gc(&ArchiveKeep::default(), true, "op").unwrap();
+    assert_eq!((rep.expired.len(), rep.kept, rep.deleted_objects), (0, 1, 0));
+}
+
+#[test]
+fn an_override_is_refused_for_zero_days_unknown_stores_and_worktrees_and_is_recorded_and_persisted() {
+    let r = rig(100);
+    let p = project(&r, PROJECT);
+    assert!(matches!(r.svc.set_archive_keep(&p, Some(KeepFor::Days(0)), "op"), Err(StoreError::Refused(_))));
+    let ghost = StoreName::project("weft", P2).unwrap();
+    assert!(matches!(r.svc.set_archive_keep(&ghost, Some(KeepFor::Forever), "op"), Err(StoreError::UnknownStore(_))));
+    let w = StoreName::worktree("weft", PROJECT, "main").unwrap();
+    r.svc.create_store(&w, "daemon", Parties::default()).unwrap();
+    assert!(matches!(r.svc.set_archive_keep(&w, Some(KeepFor::Days(3)), "op"), Err(StoreError::Refused(_))), "worktree archives are S2's");
+    r.svc.set_archive_keep(&p, Some(KeepFor::Days(7)), "op").unwrap();
+    let ev: Vec<_> = r.chain.0.lock().unwrap().iter().filter(|(k, _)| k == "store.archive.keep").cloned().collect();
+    assert_eq!(ev.len(), 1);
+    assert_eq!(ev[0].1["keep"], serde_json::json!({"days": 7}));
+    // Survives a restart: the record carries it.
+    let st = serde_json::to_string(&*r.svc.lock()).unwrap();
+    assert!(st.contains("\"archive_keep\":{\"days\":7}"), "{st}");
+}
+
+const EVERY2H: ArchiveSchedule = ArchiveSchedule { every_hours: 2, keep: KEEP30, confirmed: true };
+
+#[test]
+fn the_schedule_is_off_by_default_and_never_runs_until_set() {
+    let r = rig(100);
+    put_set(&r, "n-old", 1, &["x"]);
+    assert_eq!(r.svc.archive_schedule(), None);
+    NOW.store(500 * DAY, Ordering::SeqCst);
+    assert!(r.svc.archive_gc_tick().unwrap().is_none());
+    assert_eq!(left(&r).len(), 1, "nothing deleted without a schedule");
+}
+
+#[test]
+fn a_scheduled_run_waits_one_interval_then_runs_and_then_waits_again() {
+    let r = rig(100);
+    put_set(&r, "n-old", 1, &["x"]);
+    r.svc.set_archive_schedule(Some(EVERY2H)).unwrap();
+    assert!(r.svc.archive_gc_tick().unwrap().is_none(), "first run is one interval away");
+    NOW.store(100 * DAY + 2 * 3_600_000 - 1, Ordering::SeqCst);
+    assert!(r.svc.archive_gc_tick().unwrap().is_none(), "one ms early");
+    NOW.store(100 * DAY + 2 * 3_600_000, Ordering::SeqCst);
+    let rep = r.svc.archive_gc_tick().unwrap().expect("due");
+    assert_eq!((rep.deleted_objects, rep.dry_run), (1, false));
+    put_set(&r, "n-old2", 1, &["y"]);
+    assert!(r.svc.archive_gc_tick().unwrap().is_none(), "interval restarted");
+    NOW.store(100 * DAY + 4 * 3_600_000, Ordering::SeqCst);
+    assert_eq!(r.svc.archive_gc_tick().unwrap().unwrap().deleted_objects, 1);
+    assert_eq!(r.chain.0.lock().unwrap().iter().filter(|(k, v)| k == "store.archive.gc" && v["actor"] == "schedule").count(), 2);
+}
+
+#[test]
+fn an_unconfirmed_schedule_only_reports() {
+    let r = rig(100);
+    put_set(&r, "n-old", 1, &["x"]);
+    r.svc.set_archive_schedule(Some(ArchiveSchedule { confirmed: false, ..EVERY2H })).unwrap();
+    NOW.store(100 * DAY + 3 * 3_600_000, Ordering::SeqCst);
+    let rep = r.svc.archive_gc_tick().unwrap().unwrap();
+    assert!(rep.dry_run);
+    assert_eq!((rep.expired.len(), rep.deleted_objects), (1, 0));
+    assert_eq!(left(&r).len(), 1);
+}
+
+#[test]
+fn a_schedule_with_no_day_numbers_and_no_override_does_nothing_even_when_due() {
+    let r = rig(100);
+    put_set(&r, "n-old", 1, &["x"]);
+    r.svc.set_archive_schedule(Some(ArchiveSchedule { keep: ArchiveKeep::default(), ..EVERY2H })).unwrap();
+    NOW.store(900 * DAY, Ordering::SeqCst);
+    assert!(r.svc.archive_gc_tick().unwrap().is_none());
+    assert_eq!(left(&r).len(), 1);
+    // A per-store override alone is enough to make a due run do work.
+    let p = project(&r, PROJECT);
+    put_set(&r, &p.bucket(), 1, &["z"]);
+    r.svc.set_archive_keep(&p, Some(KeepFor::Days(1)), "op").unwrap();
+    NOW.store(1800 * DAY, Ordering::SeqCst);
+    let rep = r.svc.archive_gc_tick().unwrap().unwrap();
+    assert_eq!(rep.deleted_objects, 1, "only the overridden store's set; the kind has no limit");
+}
+
+#[test]
+fn a_bad_schedule_is_refused_and_turning_it_off_stops_runs() {
+    let r = rig(100);
+    assert!(matches!(r.svc.set_archive_schedule(Some(ArchiveSchedule { every_hours: 0, ..EVERY2H })), Err(StoreError::Refused(_))));
+    assert!(matches!(r.svc.set_archive_schedule(Some(ArchiveSchedule { keep: ArchiveKeep { node_days: Some(0), ..Default::default() }, ..EVERY2H })), Err(StoreError::Refused(_))));
+    assert_eq!(r.svc.archive_schedule(), None, "a refused schedule does not half-apply");
+    put_set(&r, "n-old", 1, &["x"]);
+    r.svc.set_archive_schedule(Some(EVERY2H)).unwrap();
+    r.svc.set_archive_schedule(None).unwrap();
+    NOW.store(500 * DAY, Ordering::SeqCst);
+    assert!(r.svc.archive_gc_tick().unwrap().is_none());
+    assert_eq!(left(&r).len(), 1);
+}

@@ -415,6 +415,15 @@ compile and test `rustfs.rs`).
   are not the archive's to remove and are untouched.
 Not done: no schedule (an operator or a timer runs it), and no per-store override. The one question left for Mathew is the numbers; none is set.
 
+**Archive retention, scheduled and per store (S1, 2026-11-08).** Both are off and carry no day numbers; the numbers stay the owner's call.
+- **Per-store override.** `set_archive_keep(store, Some(Days(n)) | Some(Forever) | None)`, RPC `store.archive.keep {name, days? | forever?}` (neither clears it), CLI
+  `weaver store archive-keep <name> [--days N | --forever]`. It beats the kind's limit in both directions (shorter, longer, or exempt) and works when the kind has no limit.
+  Zero days, an unknown store and worktree stores (S2's) are refused. It lives on the store's record (saved with the rest) and is a chain event, `store.archive.keep`.
+- **Schedule.** Off unless `WEFTOS_STORE_ARCHIVE_GC_EVERY_HOURS` is set (at least 1). The days come only from `WEFTOS_STORE_ARCHIVE_{NODE,PROJECT,RELEASE}_DAYS` (a kind left out
+  keeps for ever). Unless `WEFTOS_STORE_ARCHIVE_GC_CONFIRM` is `1`/`true`/`on`, a scheduled run only reports (to the daemon log). The first run is one interval after start
+  (the last-run time is in memory); a failed run is retried at the next interval, not in a loop; a due run with no day numbers and no override does nothing, not even a listing.
+  A bad value is logged and leaves the schedule off, it does not stop the daemon. Scheduled deletes are chain events with `actor: "schedule"`.
+
 **The daemon now has the receiver** (`clawft-weave/src/store_ingest.rs`, 2026-11-08): a loopback HTTP listener, off unless
 `WEFTOS_STORE_INGEST_ADDR` is set, POST only, 1 MiB cap, authenticated by a 256-bit secret in the URL path
 (`store-ingest-token`, 0600; the URLs are written to `store-ingest-urls`), because RustFS's webhook `auth_token` is unverified.

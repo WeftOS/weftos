@@ -11,6 +11,8 @@
 //! - `store.archive.gc {node_days?, project_days?, release_days?, confirmed?}`: delete archives of
 //!   node, project and release stores older than the days given (none given: nothing expires). A
 //!   dry run unless `confirmed`. Worktree archives are `store worktree gc`'s.
+//! - `store.archive.keep {name, days?, forever?}`: how long this store's archives are kept, over
+//!   the kind's limit (`days`, or `forever`; neither clears the override). Not for worktrees.
 //! - `store.put {name, key, principal, text|b64}`, `store.get {name, key, principal}`:
 //!   a governed request as that principal, the same path a cog's request takes.
 
@@ -55,6 +57,10 @@ struct P {
     release_days: Option<u64>,
     #[serde(default)]
     confirmed: bool,
+    #[serde(default)]
+    days: Option<u64>,
+    #[serde(default)]
+    forever: bool,
     #[serde(default)]
     key: Option<String>,
     #[serde(default)]
@@ -141,6 +147,17 @@ pub fn run(svc: &StoreService, method: &str, params: Value) -> Result<Value, Str
         "store.archive.gc" => {
             let keep = weftos_store::service::ArchiveKeep { node_days: p.node_days, project_days: p.project_days, release_days: p.release_days };
             Ok(json!(svc.archive_gc(&keep, p.confirmed, "cli").map_err(e)?))
+        }
+        "store.archive.keep" => {
+            let name = store(&p)?;
+            let keep = match (p.days, p.forever) {
+                (Some(_), true) => return Err("store.archive.keep takes days or forever, not both".into()),
+                (Some(d), false) => Some(weftos_store::service::KeepFor::Days(d)),
+                (None, true) => Some(weftos_store::service::KeepFor::Forever),
+                (None, false) => None,
+            };
+            svc.set_archive_keep(&name, keep, "cli").map_err(e)?;
+            Ok(json!({"store": name.to_string(), "keep": keep}))
         }
         // A node was unpaired: archive its node store and retire the id (ADR-126; S3 calls this).
         "store.node.retire" => {

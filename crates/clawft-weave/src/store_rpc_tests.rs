@@ -111,3 +111,16 @@ fn archive_gc_is_a_dry_run_by_default_and_expires_nothing_unless_days_are_given(
     let rep = run(&svc, "store.archive.gc", json!({})).unwrap();
     assert_eq!(rep["dry_run"], true);
 }
+
+#[test]
+fn archive_keep_sets_and_clears_a_per_store_override_and_refuses_bad_ones() {
+    let (_d, _r, svc, _c) = rig();
+    run(&svc, "store.create", json!({"name": NODE})).unwrap();
+    let set = run(&svc, "store.archive.keep", json!({"name": NODE, "days": 9})).unwrap();
+    assert_eq!(set["keep"], json!({"days": 9}));
+    assert_eq!(run(&svc, "store.archive.keep", json!({"name": NODE, "forever": true})).unwrap()["keep"], json!("forever"));
+    assert!(run(&svc, "store.archive.keep", json!({"name": NODE, "days": 9, "forever": true})).is_err(), "both is refused");
+    assert!(run(&svc, "store.archive.keep", json!({"name": NODE, "days": 0})).is_err(), "zero days is refused");
+    assert!(run(&svc, "store.archive.keep", json!({"days": 3})).is_err(), "needs a store");
+    assert_eq!(run(&svc, "store.archive.keep", json!({"name": NODE})).unwrap()["keep"], json!(null));
+}

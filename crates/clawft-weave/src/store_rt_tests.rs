@@ -12,6 +12,41 @@ fn node_ids_become_store_tokens() {
     assert!(StoreName::node("m", &node_token("Weird Node/ID")).is_ok());
 }
 
+fn env(pairs: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
+    move |k| pairs.iter().find(|(n, _)| *n == k).map(|(_, v)| (*v).to_owned())
+}
+
+#[test]
+fn the_archive_schedule_is_off_unless_an_interval_is_set_and_has_no_built_in_days() {
+    assert_eq!(archive_schedule_from(env(&[])).unwrap(), None);
+    // Day numbers alone do not turn it on.
+    assert_eq!(archive_schedule_from(env(&[("WEFTOS_STORE_ARCHIVE_NODE_DAYS", "30")])).unwrap(), None);
+    let s = archive_schedule_from(env(&[("WEFTOS_STORE_ARCHIVE_GC_EVERY_HOURS", "24")])).unwrap().unwrap();
+    assert_eq!((s.every_hours, s.keep, s.confirmed), (24, weftos_store::service::ArchiveKeep::default(), false));
+}
+
+#[test]
+fn the_archive_schedule_reads_days_and_confirm_and_refuses_bad_values() {
+    let s = archive_schedule_from(env(&[
+        ("WEFTOS_STORE_ARCHIVE_GC_EVERY_HOURS", " 6 "),
+        ("WEFTOS_STORE_ARCHIVE_NODE_DAYS", "30"),
+        ("WEFTOS_STORE_ARCHIVE_RELEASE_DAYS", "365"),
+        ("WEFTOS_STORE_ARCHIVE_GC_CONFIRM", "true"),
+    ]))
+    .unwrap()
+    .unwrap();
+    assert_eq!((s.every_hours, s.keep.node_days, s.keep.project_days, s.keep.release_days, s.confirmed), (6, Some(30), None, Some(365), true));
+    for bad in [
+        &[("WEFTOS_STORE_ARCHIVE_GC_EVERY_HOURS", "daily")][..],
+        &[("WEFTOS_STORE_ARCHIVE_GC_EVERY_HOURS", "0")][..],
+        &[("WEFTOS_STORE_ARCHIVE_GC_EVERY_HOURS", "1"), ("WEFTOS_STORE_ARCHIVE_NODE_DAYS", "0")][..],
+        &[("WEFTOS_STORE_ARCHIVE_GC_EVERY_HOURS", "1"), ("WEFTOS_STORE_ARCHIVE_PROJECT_DAYS", "-3")][..],
+    ] {
+        let bad: &'static [(&str, &str)] = Box::leak(bad.to_vec().into_boxed_slice());
+        assert!(archive_schedule_from(env(bad)).is_err(), "{bad:?}");
+    }
+}
+
 #[test]
 fn start_creates_the_node_store_once_and_it_is_an_exposure() {
     let d = tempfile::tempdir().unwrap();

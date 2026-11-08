@@ -102,6 +102,15 @@ pub enum StoreAction {
         #[arg(long)]
         confirmed: bool,
     },
+    /// How long one store's archives are kept, over its kind's limit: --days N, --forever, or
+    /// neither to clear the override. Not for worktree stores.
+    ArchiveKeep {
+        name: String,
+        #[arg(long, conflicts_with = "forever")]
+        days: Option<u64>,
+        #[arg(long)]
+        forever: bool,
+    },
     /// Write a text object as a principal.
     Put {
         name: String,
@@ -220,6 +229,14 @@ pub async fn run(args: StoreArgs) -> anyhow::Result<()> {
                 println!("kept (archive still being written): {}", cell(&s, "bucket"));
             }
             println!("{} set(s) kept, {} other key(s) left alone{}", cell(&v, "kept"), cell(&v, "not_ours"), if confirmed { "" } else { "; dry run, nothing deleted (--confirmed to delete)" });
+        }
+        StoreAction::ArchiveKeep { name, days, forever } => {
+            let v = call("store.archive.keep", json!({"name": name, "days": days, "forever": forever})).await?;
+            match (v["keep"]["days"].as_u64(), v["keep"].as_str()) {
+                (Some(d), _) => println!("{name}: archives kept {d} day(s)"),
+                (_, Some("forever")) => println!("{name}: archives kept for ever"),
+                _ => println!("{name}: override cleared (its kind's limit applies)"),
+            }
         }
         StoreAction::Put { name, key, text, principal } => {
             let v = call("store.put", json!({"name": name, "key": key, "text": text, "principal": principal})).await?;

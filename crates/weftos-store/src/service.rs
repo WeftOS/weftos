@@ -137,6 +137,9 @@ struct StoreRec {
     /// Objects the finished archive holds.
     #[serde(default)]
     archive_count: u64,
+    /// Per-store override of how long this store's archives are kept (beats the kind's limit).
+    #[serde(default)]
+    archive_keep: Option<archive_gc::KeepFor>,
 }
 
 fn yes() -> bool {
@@ -207,10 +210,11 @@ pub struct StoreService {
     /// Serialises backend pushes of a principal's grants.
     apply: Mutex<()>,
     policy_opts: Mutex<policy::PolicyOpts>,
+    gc_sched: Mutex<archive_gc::Sched>,
     st: Mutex<State>,
 }
 
-pub use archive_gc::{ArchiveGcReport, ArchiveKeep, ArchiveSet};
+pub use archive_gc::{ArchiveGcReport, ArchiveKeep, ArchiveSchedule, ArchiveSet, KeepFor};
 
 /// The longest retention an `append` principal may stamp: 5 years (a Compliance hold cannot be
 /// shortened by anyone, root included, so what CI can name is bounded; write and admin are not).
@@ -247,7 +251,7 @@ impl StoreService {
                 exposure.register(&exposure_id(&n), &n.to_string());
             }
         }
-        Ok(Self { cfg, admin, objects, exposure, audit, chain, invalidator: Mutex::new(None), apply: Mutex::new(()), policy_opts: Mutex::new(policy::PolicyOpts::default()), st: Mutex::new(st) })
+        Ok(Self { cfg, admin, objects, exposure, audit, chain, invalidator: Mutex::new(None), apply: Mutex::new(()), policy_opts: Mutex::new(policy::PolicyOpts::default()), gc_sched: Mutex::new(archive_gc::Sched::default()), st: Mutex::new(st) })
     }
 
     /// Refuse before changing anything once the grant sequence is spent.
@@ -357,7 +361,7 @@ impl StoreService {
                 let _ = self.admin.delete_bucket(&name.bucket());
                 return Err(StoreError::Refused(format!("{name} belongs to a node that was unpaired and its store archived: a new node needs a new id")));
             }
-            g.stores.insert(name.to_string(), StoreRec { name: name.to_string(), created_ms: self.now(), archived: false, locked, archive_ts: None, archive_done: true, archive_count: 0 });
+            g.stores.insert(name.to_string(), StoreRec { name: name.to_string(), created_ms: self.now(), archived: false, locked, archive_ts: None, archive_done: true, archive_count: 0, archive_keep: None });
             let d = Parties::defaults_for(name);
             let ts = self.now();
             for (list, acc) in [(d.admins.iter().chain(&extra.admins), Access::Admin), (d.writers.iter().chain(&extra.writers), Access::Write), (d.appenders.iter().chain(&extra.appenders), Access::Append), (d.sweepers.iter().chain(&extra.sweepers), Access::Sweep), (d.readers.iter().chain(&extra.readers), Access::Read)] {

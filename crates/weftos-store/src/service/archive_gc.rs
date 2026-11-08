@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::{ARCHIVE_BUCKET, StoreService};
@@ -46,6 +46,42 @@ impl ArchiveKeep {
         }
         Ok(())
     }
+}
+
+/// A per-store override of the keep time. `Days` can shorten or lengthen the kind's limit;
+/// `Forever` exempts the store's archives from any limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KeepFor {
+    Days(u64),
+    Forever,
+}
+
+/// Running the archive sweep on a timer. Off unless a daemon is given one; this carries no default
+/// day numbers (the keep times, like whether to delete at all, are the owner's call). Without
+/// `confirmed` a scheduled run only reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct ArchiveSchedule {
+    /// Hours between runs, at least 1.
+    pub every_hours: u64,
+    pub keep: ArchiveKeep,
+    pub confirmed: bool,
+}
+
+impl ArchiveSchedule {
+    pub fn validate(&self) -> Result<(), StoreError> {
+        if self.every_hours == 0 {
+            return Err(StoreError::Refused("archive gc schedule: every_hours must be at least 1".into()));
+        }
+        self.keep.validate()
+    }
+}
+
+/// The schedule in force and when it last ran (in memory: a restart waits one full interval).
+#[derive(Default)]
+pub(super) struct Sched {
+    cfg: Option<ArchiveSchedule>,
+    last_ms: Option<u64>,
 }
 
 /// One archive of one store, as found in the archive bucket.
@@ -98,6 +134,69 @@ fn kind_of(bucket: &str) -> Option<&'static str> {
 }
 
 impl StoreService {
+    /// Set (or clear, with `None`) how long this store's archives are kept, over the kind's limit.
+    /// Worktree stores are refused: their archives are S2's. Recorded on the chain.
+    pub fn set_archive_keep(&self, name: &crate::StoreName, keep: Option<KeepFor>, actor: &str) -> Result<(), StoreError> {
+        if keep == Some(KeepFor::Days(0)) {
+            return Err(StoreError::Refused("archive keep must be at least 1 day (use forever to keep for ever)".into()));
+        }
+        if kind_of(&name.bucket()) == Some("worktree") {
+            return Err(StoreError::Refused("worktree archives are kept by `store worktree gc`, not here".into()));
+        }
+        {
+            let mut g = self.lock();
+            let rec = g.stores.get_mut(&name.to_string()).ok_or_else(|| StoreError::UnknownStore(name.to_string()))?;
+            rec.archive_keep = keep;
+            self.persist(&g)?;
+        }
+        self.chain.record("store.archive.keep", json!({"actor": actor, "store": name.to_string(), "keep": keep}));
+        Ok(())
+    }
+
+    /// The override on a store, if any.
+    pub fn archive_keep(&self, name: &crate::StoreName) -> Result<Option<KeepFor>, StoreError> {
+        Ok(self.known(name)?.archive_keep)
+    }
+
+    /// Turn the scheduled sweep on (`Some`) or off (`None`, the default). The first run is one
+    /// interval from now.
+    pub fn set_archive_schedule(&self, sched: Option<ArchiveSchedule>) -> Result<(), StoreError> {
+        if let Some(s) = &sched {
+            s.validate()?;
+        }
+        let now = self.now();
+        let mut g = self.gc_sched.lock().unwrap_or_else(|e| e.into_inner());
+        g.cfg = sched;
+        g.last_ms = Some(now);
+        Ok(())
+    }
+
+    pub fn archive_schedule(&self) -> Option<ArchiveSchedule> {
+        self.gc_sched.lock().unwrap_or_else(|e| e.into_inner()).cfg
+    }
+
+    /// Run the sweep if a schedule is set and its interval has passed; `Ok(None)` when not due, off,
+    /// or when there is nothing that could expire (no day numbers and no per-store override). The
+    /// interval restarts even when a run fails, so a broken backend is retried each interval, not in a loop.
+    pub fn archive_gc_tick(&self) -> Result<Option<ArchiveGcReport>, StoreError> {
+        let now = self.now();
+        let cfg = {
+            let mut g = self.gc_sched.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(cfg) = g.cfg else { return Ok(None) };
+            let every = cfg.every_hours.saturating_mul(3_600_000);
+            if g.last_ms.is_some_and(|l| now.saturating_sub(l) < every) {
+                return Ok(None);
+            }
+            g.last_ms = Some(now);
+            cfg
+        };
+        let nothing_set = cfg.keep == ArchiveKeep::default() && !self.lock().stores.values().any(|r| r.archive_keep.is_some());
+        if nothing_set {
+            return Ok(None);
+        }
+        self.archive_gc(&cfg.keep, cfg.confirmed, "schedule").map(Some)
+    }
+
     /// Sweep the archive bucket for archives past `keep`. A dry run (`confirmed` false) only
     /// reports. An archive that a store record shows as still being written is never deleted. Safe to
     /// repeat after a failure: it deletes whole sets, and a half-deleted set is finished next time.
@@ -130,6 +229,12 @@ impl StoreService {
             .filter(|r| r.archived && !r.archive_done)
             .filter_map(|r| Some((crate::name::StoreName::parse(&r.name).ok()?.bucket(), r.archive_ts?)))
             .collect();
+        let overrides: BTreeMap<String, KeepFor> = self
+            .lock()
+            .stores
+            .values()
+            .filter_map(|r| Some((crate::name::StoreName::parse(&r.name).ok()?.bucket(), r.archive_keep?)))
+            .collect();
         let mut doomed: Vec<Vec<String>> = Vec::new();
         for ((bucket, ts), (keys, bytes)) in sets {
             let Some(kind) = kind_of(&bucket) else {
@@ -142,7 +247,12 @@ impl StoreService {
             }
             let age_ms = now.saturating_sub(ts);
             let set = ArchiveSet { bucket: bucket.clone(), kind: kind.to_owned(), archived_ms: ts, age_days: age_ms / DAY_MS, objects: keys.len() as u64, bytes };
-            let Some(days) = keep.days_for(kind) else {
+            let days = match overrides.get(&bucket) {
+                Some(KeepFor::Days(d)) => Some(*d),
+                Some(KeepFor::Forever) => None,
+                None => keep.days_for(kind),
+            };
+            let Some(days) = days else {
                 report.kept += 1;
                 continue;
             };
