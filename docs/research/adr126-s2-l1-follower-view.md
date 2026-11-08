@@ -135,6 +135,10 @@ Once entries are signed in format 2, someone with project write could delete the
 - Anything outside this repo that reads `worktrees/<slug>.json` as a bare entry breaks on format 2. In this repo that is only `share_fetch` and the follower; the shell script goes through the daemon verbs and never reads the object.
 - Tests needed: read both formats; mixed registry (some of each); format 2 with a tampered payload, a swapped signature, a key/slug mismatch and a replay into another project; the downgrade refusal; an old-format follower (the current code) seeing a format 2 object as `unreadable` and nothing worse; rollback generations continuing across the format change; the rewrite verb; live RustFS round trip. About a day of work, all in `weftos-store` plus a switch in the daemon.
 
+### Owner decision (2026-11-08, ~11:21 AM ET)
+
+Accepted the recommendation: **stay on A (format 1 as it is).** Use B (`WEFTOS_WT_FOLLOW_RETRY_MS`, on `feat/adr126-s2`, off by default) only if the noisy poll actually shows up; use C (`feat/adr126-s2-format2`) only when the registry format has to change for another reason. C is not merged and B is not turned on by default; both stay ready and unmerged.
+
 ### Options and a recommendation
 
 | Option | What it does | Cost |
