@@ -14,6 +14,10 @@ pub enum BackendError {
     /// A conditional put found the key already there (HTTP 412).
     #[error("object {0} already exists")]
     Exists(String),
+    /// A conditional put found a different object than the one the caller read (HTTP 412 on
+    /// `If-Match`): someone else wrote since. Read again and retry.
+    #[error("object {0} changed since it was read (etag mismatch)")]
+    Stale(String),
     /// The credential or its policy refuses this (HTTP 403).
     #[error("forbidden: {0}")]
     Forbidden(String),
@@ -45,6 +49,11 @@ pub type BucketTags = (String, Vec<(String, String)>);
 pub trait ObjectBackend: Send + Sync {
     /// Store an object. With `if_none_match`, refuse an existing key ([`BackendError::Exists`]).
     fn put(&self, bucket: &str, key: &str, data: &[u8], if_none_match: bool) -> Result<ObjectMeta, BackendError>;
+    /// Replace an object only if its current etag is `etag` (a compare-and-swap, S3 `If-Match`).
+    /// A different etag is [`BackendError::Stale`], a missing key is [`BackendError::NoObject`].
+    /// Take the etag from the last `put` or `head` of this backend: etags are opaque and differ
+    /// between backends (BLAKE3 for the local ones, MD5 for RustFS).
+    fn put_if_match(&self, bucket: &str, key: &str, data: &[u8], etag: &str) -> Result<ObjectMeta, BackendError>;
     fn get(&self, bucket: &str, key: &str) -> Result<Vec<u8>, BackendError>;
     fn head(&self, bucket: &str, key: &str) -> Result<ObjectMeta, BackendError>;
     fn delete(&self, bucket: &str, key: &str) -> Result<(), BackendError>;

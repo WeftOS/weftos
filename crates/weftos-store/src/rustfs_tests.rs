@@ -213,3 +213,21 @@ fn live_service_done_when() {
         let _ = be.delete_bucket(&s.bucket());
     }
 }
+
+#[test]
+#[ignore = "needs a throwaway RustFS: WEFTOS_STORE_TEST_RUSTFS_ENV"]
+fn live_put_if_match_is_a_compare_and_swap() {
+    let (cfg, _d) = live().expect("WEFTOS_STORE_TEST_RUSTFS_ENV");
+    let be = RustfsBackend::new(cfg).unwrap();
+    let b = uniq("t-cas");
+    be.create_bucket(&b, &[]).unwrap();
+    assert!(matches!(be.put_if_match(&b, "k", b"x", "abc"), Err(BackendError::NoObject(_))), "missing key");
+    let v1 = be.put(&b, "k", b"one", false).unwrap();
+    let v2 = be.put_if_match(&b, "k", b"two", &v1.etag).unwrap();
+    assert!(matches!(be.put_if_match(&b, "k", b"three", &v1.etag), Err(BackendError::Stale(_))), "stale etag");
+    assert_eq!(be.get(&b, "k").unwrap(), b"two");
+    be.put_if_match(&b, "k", b"three", &v2.etag).unwrap();
+    assert_eq!(be.get(&b, "k").unwrap(), b"three");
+    be.delete(&b, "k").unwrap();
+    be.delete_bucket(&b).unwrap();
+}

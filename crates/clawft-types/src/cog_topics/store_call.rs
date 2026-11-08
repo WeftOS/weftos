@@ -34,6 +34,10 @@ pub struct StoreCall {
     /// `put`: refuse if the key exists.
     #[serde(default, skip_serializing_if = "is_false")]
     pub if_none_match: bool,
+    /// `put`: replace only if the key's current etag is this (compare-and-swap; take the etag
+    /// from the last `head`/`put` reply). A changed key is refused as stale. Not with `if_none_match`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub if_match: Option<String>,
     /// The store (`weftos://…`); default: the project store of the cog's project, else the node's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub store: Option<String>,
@@ -63,8 +67,13 @@ impl StoreCall {
                 (Some(_), None) | (None, Some(_)) => {}
                 _ => return fail("put needs exactly one of text, b64"),
             }
-        } else if self.text.is_some() || self.b64.is_some() || self.if_none_match {
-            return fail("text, b64 and if_none_match belong to put");
+            match &self.if_match {
+                Some(_) if self.if_none_match => return fail("if_match and if_none_match exclude each other"),
+                Some(e) if e.is_empty() || e.len() > 128 => return fail("if_match must be 1..=128 characters"),
+                _ => {}
+            }
+        } else if self.text.is_some() || self.b64.is_some() || self.if_none_match || self.if_match.is_some() {
+            return fail("text, b64, if_none_match and if_match belong to put");
         }
         if self.prefix.is_some() && self.op != "list" {
             return fail("prefix belongs to list");

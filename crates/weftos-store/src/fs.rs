@@ -54,6 +54,8 @@ struct Keys {
 pub struct FsBackend {
     root: PathBuf,
     keys: Mutex<Keys>,
+    /// Serialises `put_if_match` so two compare-and-swaps cannot both pass.
+    cas: Mutex<()>,
 }
 
 fn io(e: impl std::fmt::Display) -> BackendError {
@@ -78,7 +80,7 @@ impl FsBackend {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Keys::default(),
             Err(e) => return Err(StoreError::State(format!("{}: {e}", kp.display()))),
         };
-        Ok(Self { root: root.to_owned(), keys: Mutex::new(keys) })
+        Ok(Self { root: root.to_owned(), keys: Mutex::new(keys), cas: Mutex::new(()) })
     }
 
     fn bdir(&self, bucket: &str) -> Result<PathBuf, BackendError> {
@@ -161,6 +163,16 @@ impl ObjectBackend for FsBackend {
         }
         res?;
         Ok(ObjectMeta { key: key.to_owned(), size: data.len() as u64, etag: etag_of(data) })
+    }
+
+    fn put_if_match(&self, bucket: &str, key: &str, data: &[u8], etag: &str) -> Result<ObjectMeta, BackendError> {
+        // Atomic against other writers in this process (the daemon is the only writer of its
+        // local store); the replace itself is the usual rename.
+        let _g = self.cas.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.head(bucket, key)?.etag != etag.trim_matches('"') {
+            return Err(BackendError::Stale(key.into()));
+        }
+        self.put(bucket, key, data, false)
     }
 
     fn get(&self, bucket: &str, key: &str) -> Result<Vec<u8>, BackendError> {
@@ -305,6 +317,20 @@ mod tests {
         b.delete("p-two", "copied").unwrap();
         b.delete_bucket("p-two").unwrap();
         assert_eq!(b.buckets().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn put_if_match_swaps_only_the_object_that_was_read() {
+        let (_d, b) = be();
+        b.create_bucket("n-one", &[]).unwrap();
+        assert!(matches!(b.put_if_match("n-one", "k", b"x", "e"), Err(BackendError::NoObject(_))), "a missing key is not a match");
+        let v1 = b.put("n-one", "k", b"one", false).unwrap();
+        let v2 = b.put_if_match("n-one", "k", b"two", &v1.etag).unwrap();
+        assert_ne!(v1.etag, v2.etag);
+        assert!(matches!(b.put_if_match("n-one", "k", b"three", &v1.etag), Err(BackendError::Stale(_))), "the old etag lost the race");
+        assert_eq!(b.get("n-one", "k").unwrap(), b"two", "the refused swap changed nothing");
+        b.put_if_match("n-one", "k", b"three", &format!("\"{}\"", v2.etag)).unwrap();
+        assert_eq!(b.get("n-one", "k").unwrap(), b"three", "a quoted etag works too");
     }
 
     #[test]

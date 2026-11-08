@@ -130,7 +130,7 @@ fn revoke_read_only_unknown_and_suspended_principals_are_refused_and_logged() {
     r.svc.put(&local("writer"), &project(), "assets/a", b"x", false).unwrap();
     assert_eq!(r.svc.get(&local("reader"), &project(), "assets/a").unwrap(), b"x");
     let e = r.svc.put(&local("reader"), &project(), "assets/b", b"y", false).unwrap_err().to_string();
-    assert!(e.contains("holds read") && e.contains("needs write"), "{e}");
+    assert!(e.contains("holds read") && e.contains("needs append"), "{e}");
     assert!(r.svc.delete(&local("reader"), &project(), "assets/a").is_err());
     assert!(r.svc.get(&local("stranger"), &project(), "assets/a").is_err());
 
@@ -329,4 +329,48 @@ fn suspend_and_resume_are_in_the_activity_log() {
     r.svc.resume_principal(&cog("c1")).unwrap();
     let ops: Vec<String> = r.sink.events().into_iter().map(|e| e.op).collect();
     assert!(ops.contains(&"Suspend".to_string()) && ops.contains(&"Resume".to_string()), "{ops:?}");
+}
+
+#[test]
+fn a_release_store_lets_ci_write_once_and_the_sweeper_only_delete() {
+    let r = rig();
+    let rel = StoreName::release("weft", P, "stable").unwrap();
+    r.svc.create_store(&rel, "daemon", Parties::defaults_for(&rel)).unwrap();
+    let ci = Caller::local(Principal::parse(CI_PRINCIPAL).unwrap());
+    let sw = Caller::local(Principal::parse(SWEEPER_PRINCIPAL).unwrap());
+
+    // CI creates a build artifact once, and cannot replace, copy or delete it.
+    r.svc.put(&ci, &rel, "v1/app.tar", b"build", true).unwrap();
+    assert!(matches!(r.svc.put(&ci, &rel, "v1/app.tar", b"again", true), Err(StoreError::Backend(BackendError::Exists(_)))));
+    assert!(matches!(r.svc.put(&ci, &rel, "v1/app.tar", b"evil", false), Err(StoreError::Refused(_))), "an unconditional put could overwrite");
+    let etag = r.svc.head(&ci, &rel, "v1/app.tar").unwrap().etag;
+    assert!(matches!(r.svc.put_if_match(&ci, &rel, "v1/app.tar", b"evil", &etag), Err(StoreError::Refused(_))), "a swap overwrites too");
+    assert!(matches!(r.svc.delete(&ci, &rel, "v1/app.tar"), Err(StoreError::Refused(_))));
+    assert_eq!(r.svc.get(&ci, &rel, "v1/app.tar").unwrap(), b"build", "the artifact is unchanged");
+
+    // The sweeper reads and deletes, and cannot put.
+    assert_eq!(r.svc.list(&sw, &rel, "v1/").unwrap().len(), 1);
+    assert!(matches!(r.svc.put(&sw, &rel, "v1/x", b"x", true), Err(StoreError::Refused(_))));
+    r.svc.delete(&sw, &rel, "v1/app.tar").unwrap();
+    assert!(r.svc.list(&sw, &rel, "").unwrap().is_empty());
+
+    // Both entries are real grants: visible, and the backend policy matches.
+    let grants = r.svc.lock().grants.for_store(&rel);
+    assert!(grants.iter().any(|g| g.principal.to_string() == CI_PRINCIPAL && g.access == Access::Append));
+    assert!(grants.iter().any(|g| g.principal.to_string() == SWEEPER_PRINCIPAL && g.access == Access::Sweep));
+}
+
+#[test]
+fn put_if_match_through_the_service_is_gated_and_logged() {
+    let r = rig();
+    let n = StoreName::project("weft", P).unwrap();
+    r.svc.create_store(&n, "daemon", Parties::default()).unwrap();
+    let w = Principal::parse("cog:w").unwrap();
+    r.svc.grant(&n, w.clone(), Access::Write, "op").unwrap();
+    let who = Caller::local(w);
+    let m = r.svc.put(&who, &n, "k", b"1", false).unwrap();
+    r.svc.put_if_match(&who, &n, "k", b"2", &m.etag).unwrap();
+    assert!(matches!(r.svc.put_if_match(&who, &n, "k", b"3", &m.etag), Err(StoreError::Backend(BackendError::Stale(_)))));
+    let nobody = Caller::local(Principal::parse("cog:nobody").unwrap());
+    assert!(matches!(r.svc.put_if_match(&nobody, &n, "k", b"x", &m.etag), Err(StoreError::Refused(_))));
 }

@@ -47,6 +47,23 @@ fn a_cog_with_a_grant_uses_its_project_store_and_one_without_is_refused() {
 }
 
 #[test]
+fn a_cog_swaps_an_object_only_if_its_etag_still_matches() {
+    let (svc, _d) = service();
+    let n = project(&svc);
+    svc.grant(&n, Principal::parse("cog:inst-1").unwrap(), Access::Write, "t").unwrap();
+    let c = |b: serde_json::Value| call(&svc, "pg-1", "inst-1", Some(P), b);
+    let v1 = c(json!({"op": "put", "key": "s.json", "text": "1"})).unwrap();
+    let e1 = v1["etag"].as_str().unwrap().to_owned();
+    let v2 = c(json!({"op": "put", "key": "s.json", "text": "2", "if_match": e1})).unwrap();
+    // The first etag is stale now: a second writer holding it loses.
+    let lost = c(json!({"op": "put", "key": "s.json", "text": "3", "if_match": e1})).unwrap_err();
+    assert!(lost.contains("changed"), "{lost}");
+    assert_eq!(c(json!({"op": "get", "key": "s.json"})).unwrap()["text"], "2");
+    c(json!({"op": "put", "key": "s.json", "text": "3", "if_match": v2["etag"]})).unwrap();
+    assert!(c(json!({"op": "put", "key": "s.json", "text": "x", "if_match": "a", "if_none_match": true})).is_err());
+}
+
+#[test]
 fn bad_requests_are_errors_not_panics() {
     let (svc, _d) = service();
     let c = |b| call(&svc, "pg-1", "inst-1", None, b);

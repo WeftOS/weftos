@@ -8,12 +8,19 @@ use serde::{Deserialize, Serialize};
 use crate::name::StoreName;
 use crate::StoreError;
 
-/// What a grant allows. Each level includes the one before it.
+/// What a grant allows. `Read < Append < Sweep < Write < Admin`; `Write` and `Admin` include
+/// everything below. `Append` and `Sweep` are the two narrow roles of a release store (ADR-126
+/// section 3, S4): CI appends, a retention sweeper deletes, and neither can do the other's job.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Access {
     /// Get, head, list.
     Read,
+    /// Read, plus write-once puts: a put must carry `if_none_match`, so nothing is overwritten.
+    /// No delete, no copy. The CI role of a release store.
+    Append,
+    /// Read, plus delete. No put, no copy. The retention sweeper of a release store.
+    Sweep,
     /// Read, plus put, copy, delete.
     Write,
     /// Write, plus managing the store's grants and deleting the store.
@@ -21,13 +28,15 @@ pub enum Access {
 }
 
 impl Access {
-    /// Parse `read`, `write` or `admin`.
+    /// Parse `read`, `append`, `sweep`, `write` or `admin`.
     pub fn parse(s: &str) -> Result<Self, StoreError> {
         match s {
             "read" | "r" => Ok(Self::Read),
+            "append" | "ci" => Ok(Self::Append),
+            "sweep" | "sweeper" => Ok(Self::Sweep),
             "write" | "rw" | "w" => Ok(Self::Write),
             "admin" => Ok(Self::Admin),
-            o => Err(StoreError::BadName(format!("unknown access {o:?} (read, write, admin)"))),
+            o => Err(StoreError::BadName(format!("unknown access {o:?} (read, append, sweep, write, admin)"))),
         }
     }
 
@@ -35,6 +44,8 @@ impl Access {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Read => "read",
+            Self::Append => "append",
+            Self::Sweep => "sweep",
             Self::Write => "write",
             Self::Admin => "admin",
         }
@@ -59,11 +70,24 @@ pub enum Op {
 }
 
 impl Op {
-    /// The access needed.
+    /// Whether a grant of `a` lets this operation through. (Write-once for `Append` is checked
+    /// by the service, which knows whether the put was conditional.)
+    pub fn allowed_by(self, a: Access) -> bool {
+        match a {
+            Access::Read => self.needs() == Access::Read,
+            Access::Append => matches!(self, Self::Get | Self::Head | Self::List | Self::Put),
+            Access::Sweep => matches!(self, Self::Get | Self::Head | Self::List | Self::Delete),
+            Access::Write | Access::Admin => true,
+        }
+    }
+
+    /// The access needed (the lowest level that allows it, for messages).
     pub fn needs(self) -> Access {
         match self {
             Self::Get | Self::Head | Self::List => Access::Read,
-            Self::Put | Self::Copy | Self::Delete => Access::Write,
+            Self::Put => Access::Append,
+            Self::Delete => Access::Sweep,
+            Self::Copy => Access::Write,
         }
     }
 
@@ -254,6 +278,10 @@ mod tests {
     fn access_levels_include_the_lower_ones() {
         assert!(Access::Admin >= Op::Put.needs() && Access::Write >= Op::Delete.needs() && Access::Write >= Op::List.needs());
         assert!(Access::Read < Op::Put.needs());
+        // CI appends and cannot delete or copy; the sweeper deletes and cannot put.
+        assert!(Op::Put.allowed_by(Access::Append) && !Op::Delete.allowed_by(Access::Append) && !Op::Copy.allowed_by(Access::Append));
+        assert!(Op::Delete.allowed_by(Access::Sweep) && !Op::Put.allowed_by(Access::Sweep) && Op::Get.allowed_by(Access::Sweep));
+        assert!(!Op::Put.allowed_by(Access::Read) && Op::Copy.allowed_by(Access::Write));
     }
 
     #[test]
