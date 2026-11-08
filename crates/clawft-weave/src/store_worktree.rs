@@ -5,8 +5,9 @@
 //! plane (`StoreService::operator_objects`), the same level as S1's promote and archive, and the
 //! ones that change shared state record a chain event. Paths in params (`root`, `dest`, `cache`,
 //! the `*_z` lists) are read or written by the daemon itself, so client and daemon share a host.
+//! That is a premise, not a protection: every path is checked by `store_worktree_paths::Guard`
+//! (absolute, resolved, no symlinked final component, kept out of the daemon's own state).
 
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::Deserialize;
@@ -22,6 +23,8 @@ use weftos_store::share_fetch::{
     RegistryEntry, Select, fetch_bundle, fetch_tree, list_shared_lenient, summarize, write_registry_entry,
 };
 use weftos_store::{StoreName, StoreService};
+
+use crate::store_worktree_paths::{Guard, Use};
 
 /// Delegates to the service's shared backend so the S2 code (generic over a sized backend) can use it.
 struct Op(Arc<dyn S1>);
@@ -102,15 +105,16 @@ fn project_ok(s: &str) -> Result<&str, String> {
     }
 }
 
-fn read_list(path: &Option<String>) -> Result<Vec<u8>, String> {
+fn read_list(g: &Guard, path: &Option<String>, what: &str) -> Result<Vec<u8>, String> {
     match path {
         None => Ok(Vec::new()),
         Some(p) => {
-            let md = std::fs::metadata(p).map_err(|e| format!("{p}: {e}"))?;
+            let c = g.check(p, what, Use::ReadFile)?;
+            let md = std::fs::metadata(&c).map_err(|e| format!("--{what}: {e}"))?;
             if !md.is_file() || md.len() > 32 << 20 {
-                return Err(format!("{p}: not a regular file under 32 MiB"));
+                return Err(format!("--{what}: not a regular file under 32 MiB"));
             }
-            std::fs::read(p).map_err(|e| format!("{p}: {e}"))
+            std::fs::read(&c).map_err(|e| format!("--{what}: {e}"))
         }
     }
 }
@@ -192,6 +196,11 @@ pub fn forget(svc: &StoreService, name: &StoreName) -> Result<(), String> {
 
 /// Run one verb. `mesh` is the store-name mesh token of this daemon.
 pub fn run(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms: u64) -> Result<Value, String> {
+    run_with(svc, mesh, method, params, now_ms, &Guard::from_runtime())
+}
+
+/// [`run`] with an explicit set of protected paths.
+pub fn run_with(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms: u64, guard: &Guard) -> Result<Value, String> {
     let p: P = serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
     let e = |e: weftos_store::overlay::S2Error| e.to_string();
     let b = Op(svc.operator_objects());
@@ -232,14 +241,23 @@ pub fn run(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms: 
         "publish" => {
             let slug = need(&p.slug, "slug")?;
             let n = names(mesh, &project, slug)?;
-            let root = PathBuf::from(need(&p.root, "root")?);
-            if !root.is_absolute() || !root.is_dir() {
-                return Err("--root must be an absolute directory".into());
+            let root = guard.check(need(&p.root, "root")?, "root", Use::ReadDir)?;
+            // The hook publishes from the top of a git worktree; anything else is not a worktree.
+            if !root.join(".git").exists() {
+                return Err("--root must be the top of a git worktree (no .git there)".into());
             }
-            let paths = nul_list(&read_list(&p.paths_z)?)?;
-            let uncommitted = nul_list(&read_list(&p.uncommitted_z)?)?;
-            let changes = parse_name_status_z(&read_list(&p.changes_z)?).map_err(e)?;
-            let bundle = p.bundle.as_deref().map(Path::new);
+            let paths = nul_list(&read_list(guard, &p.paths_z, "paths-z")?)?;
+            let uncommitted = nul_list(&read_list(guard, &p.uncommitted_z, "uncommitted-z")?)?;
+            let changes = parse_name_status_z(&read_list(guard, &p.changes_z, "changes-z")?).map_err(e)?;
+            // A listed path that resolves into the daemon's own state is refused outright, not skipped.
+            if let Some(bad) = paths.iter().find(|rel| guard.is_protected(&root.join(rel))) {
+                return Err(format!("{bad}: inside the daemon's own state; refused"));
+            }
+            let bundle = match p.bundle.as_deref() {
+                Some(b) => Some(guard.check(b, "bundle", Use::ReadFile)?),
+                None => None,
+            };
+            let bundle = bundle.as_deref();
             let writer = who(&p);
             let rep = publish_tree(
                 &b,
@@ -271,12 +289,16 @@ pub fn run(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms: 
         }
         "fetch" => {
             let n = names(mesh, &project, need(&p.slug, "slug")?)?;
-            let dest = PathBuf::from(need(&p.dest, "dest")?);
+            let dest = guard.check(need(&p.dest, "dest")?, "dest", Use::WriteDir)?;
+            let out = match &p.bundle_out {
+                Some(o) => Some(guard.check(o, "bundle-out", Use::WriteFile)?),
+                None => None,
+            };
             std::fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
             let r = fetch_tree(&b, &n.wt, &dest, Select::All, p.force).map_err(e)?;
             let mut head = None;
-            if let Some(out) = &p.bundle_out {
-                head = Some(fetch_bundle(&b, &n.wt, Path::new(out)).map_err(e)?);
+            if let Some(out) = &out {
+                head = Some(fetch_bundle(&b, &n.wt, out).map_err(e)?);
             }
             Ok(json!({
                 "written": r.written.len(), "unchanged": r.unchanged.len(), "conflicts": r.conflicts,
@@ -320,7 +342,7 @@ pub fn run(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms: 
         }
         "follow" => {
             let n = names(mesh, &project, "x")?;
-            let sp = PathBuf::from(need(&p.state, "state")?);
+            let sp = guard.check(need(&p.state, "state")?, "state", Use::WriteFile)?;
             let mut st = FollowState::load(&sp).map_err(e)?;
             let ch = if p.confirmed { follower::poll_confirmed(&b, &n.pr, &mut st) } else { follower::poll(&b, &n.pr, &mut st) }
                 .map_err(e)?;
@@ -349,7 +371,7 @@ pub fn run(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms: 
             let slug = need(&p.slug, "slug")?;
             let n = names(mesh, &project, slug)?;
             let entry = summarize(&b, slug, &n.wt).map_err(e)?.ok_or("worktree has nothing published")?;
-            let r = follower::sync_docs(&b, &entry, Path::new(need(&p.cache, "cache")?)).map_err(e)?;
+            let r = follower::sync_docs(&b, &entry, &guard.check(need(&p.cache, "cache")?, "cache", Use::WriteDir)?).map_err(e)?;
             Ok(json!({"written": r.written.len(), "unchanged": r.unchanged.len(), "refused": r.refused}))
         }
         "overlaps" => {

@@ -231,9 +231,20 @@ pub fn fetch_bundle<B: ObjectBackend>(b: &B, bucket: &str, out: &Path) -> Result
     let data = b
         .get(bucket, BUNDLE_KEY)?
         .ok_or_else(|| S2Error::Backend("manifest says bundle, object missing".into()))?;
-    if let Some(parent) = out.parent() {
-        std::fs::create_dir_all(parent)?;
+    // Never write through a symlink: the final component is refused, and the bytes go to a fresh
+    // exclusive temp file that is renamed over `out`, so a link or hard link at `out` is replaced.
+    if std::fs::symlink_metadata(out).is_ok_and(|md| md.file_type().is_symlink()) {
+        return Err(S2Error::Invalid(format!("{} is a symlink; refusing to write the bundle", out.display())));
     }
-    std::fs::write(out, data)?;
+    let dir = out.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    std::fs::create_dir_all(dir)?;
+    let tmp = dir.join(format!(".wt-bundle-{}.tmp", std::process::id()));
+    let _ = std::fs::remove_file(&tmp);
+    let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+    std::io::Write::write_all(&mut f, &data)?;
+    drop(f);
+    std::fs::rename(&tmp, out).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })?;
     Ok(m.head_commit)
 }

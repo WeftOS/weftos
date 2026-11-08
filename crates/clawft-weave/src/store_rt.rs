@@ -28,6 +28,15 @@ pub fn global() -> Option<Arc<StoreService>> {
     GLOBAL.get().cloned()
 }
 
+static PROTECTED: OnceLock<Vec<std::path::PathBuf>> = OnceLock::new();
+
+/// Paths the `store.worktree.*` verbs must never read from, write into or contain: the daemon's
+/// runtime directory (it holds `store-secrets/`) and the RustFS environment file. Empty until
+/// [`start`] has run.
+pub fn protected_paths() -> Vec<std::path::PathBuf> {
+    PROTECTED.get().cloned().unwrap_or_default()
+}
+
 /// ADR-120 exposure for each store.
 pub struct RegistryGate(pub Arc<ExposureRegistry>);
 
@@ -97,6 +106,9 @@ pub fn start(node_id: &str, dir: &Path, exposures: Arc<ExposureRegistry>, chain:
     if let Some(g) = global() {
         return Ok(g);
     }
+    let mut protect = vec![dir.to_path_buf()];
+    protect.extend(std::env::var_os("WEFTOS_STORE_RUSTFS_ENV").filter(|v| !v.is_empty()).map(std::path::PathBuf::from));
+    let _ = PROTECTED.set(protect);
     // The RustFS backend uses blocking HTTP, which must not run on (or be built inside) an async
     // task; a plain thread keeps both backends safe to start from the daemon's runtime.
     let svc = std::thread::scope(|s| {

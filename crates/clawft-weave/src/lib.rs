@@ -215,6 +215,7 @@ pub mod store_svc;
 /// ADR-126 S1: `store.*` operator verbs.
 pub mod store_rpc;
 pub mod store_worktree;
+pub mod store_worktree_paths;
 pub mod node_facts_rpc;
 /// Operator location labels for the fleet manager (site and room per node).
 pub mod agent_install;

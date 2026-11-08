@@ -5,6 +5,8 @@ use serde_json::json;
 use weftos_store::{FsBackend, StoreService};
 
 use super::*;
+use crate::store_worktree_paths::Guard;
+use std::path::Path;
 use crate::store_rt::{ActivitySink, ChainAudit, RegistryGate};
 
 const PROJ: &str = "01JBXK2M3N4P5Q6R7S8T9V0W1X";
@@ -30,6 +32,7 @@ fn call(svc: &StoreService, verb: &str, p: Value, now: u64) -> Result<Value, Str
 }
 
 fn files(dir: &Path) -> (String, String, String) {
+    std::fs::create_dir_all(dir.join(".git")).unwrap();
     std::fs::create_dir_all(dir.join("docs")).unwrap();
     std::fs::write(dir.join("docs/plan.md"), "# Rooms plan\n").unwrap();
     std::fs::write(dir.join("a.rs"), "fn a() {}\n").unwrap();
@@ -233,4 +236,140 @@ fn create_on_a_second_daemon_sharing_the_backend_succeeds() {
     assert!(S1::list(&*b.operator_objects(), wt, ".wt/").unwrap().iter().any(|m| m.key == ".wt/meta.json"), "the second worktree has its metadata");
     // and the same slug from the other daemon is idempotent
     call(&b, "create", json!({"project": PROJ, "slug": "feat-one", "branch": "feat/one", "base": "abc"}), 12).unwrap();
+}
+
+// ---- F1: path params are checked whoever sends them ----------------------------------------------
+
+fn call_g(svc: &StoreService, verb: &str, p: Value, g: &Guard) -> Result<Value, String> {
+    run_with(svc, "local", &format!("store.worktree.{verb}"), p, 10, g)
+}
+
+fn published(svc: &StoreService, slug: &str, src: &Path) {
+    call(svc, "create", json!({"project": PROJ, "slug": slug, "branch": slug, "base": "abc"}), 10).unwrap();
+    let (paths, unc, chg) = files(src);
+    call(
+        svc,
+        "publish",
+        json!({"project": PROJ, "slug": slug, "root": src.to_string_lossy(), "branch": slug, "base": "abc", "head": "def",
+               "paths_z": paths, "uncommitted_z": unc, "changes_z": chg}),
+        20,
+    )
+    .unwrap();
+}
+
+#[test]
+fn every_path_param_must_be_absolute() {
+    let (_d, svc) = rig();
+    let g = Guard::none();
+    let src = tempfile::tempdir().unwrap();
+    published(&svc, "feat-p", src.path());
+    let abs = src.path().to_string_lossy().into_owned();
+    let (paths, _, _) = files(src.path());
+    let pub_with = |k: &str, v: &str| {
+        let mut p = json!({"project": PROJ, "slug": "feat-p", "root": abs, "branch": "b", "base": "a", "head": "h", "paths_z": paths});
+        p[k] = json!(v);
+        call_g(&svc, "publish", p, &g)
+    };
+    for k in ["root", "paths_z", "uncommitted_z", "changes_z", "bundle"] {
+        let e = pub_with(k, "relative/x").unwrap_err();
+        assert!(e.contains("absolute"), "{k}: {e}");
+    }
+    for (verb, key) in [("fetch", "dest"), ("sync-docs", "cache"), ("follow", "state")] {
+        let e = call_g(&svc, verb, json!({"project": PROJ, "slug": "feat-p", key: "rel/dir"}), &g).unwrap_err();
+        assert!(e.contains("absolute"), "{verb}: {e}");
+    }
+    let e = call_g(&svc, "fetch", json!({"project": PROJ, "slug": "feat-p", "dest": abs, "bundle_out": "rel.bundle"}), &g).unwrap_err();
+    assert!(e.contains("absolute"), "{e}");
+    let e = pub_with("root", &format!("{abs}/../x")).unwrap_err();
+    assert!(e.contains("'..'"), "{e}");
+}
+
+#[test]
+fn publish_refuses_the_daemons_own_state_and_non_worktree_roots() {
+    let (_d, svc) = rig();
+    let base = tempfile::tempdir().unwrap();
+    let root = base.path().join("repo");
+    let run = root.join("run"); // a runtime dir that happens to sit under the root
+    std::fs::create_dir_all(run.join("store-secrets")).unwrap();
+    std::fs::write(run.join("store-secrets/wk-1"), "deadbeefdeadbeef").unwrap();
+    let (paths, _, _) = files(&root);
+    let g = Guard::new([run.clone()]);
+    call(&svc, "create", json!({"project": PROJ, "slug": "feat-s", "branch": "b", "base": "abc"}), 10).unwrap();
+    let list = base.path().join("l.z");
+    std::fs::write(&list, "docs/plan.md\0run/store-secrets/wk-1\0").unwrap();
+    let pubp = |root: &Path, list: &str| {
+        call_g(&svc, "publish", json!({"project": PROJ, "slug": "feat-s", "root": root.to_string_lossy(), "branch": "b", "base": "a", "head": "h", "paths_z": list}), &g)
+    };
+    let e = pubp(&root, &list.to_string_lossy()).unwrap_err();
+    assert!(e.contains("daemon's own state"), "{e}");
+    // the secret never reached a bucket
+    let n = names("local", PROJ, "feat-s").unwrap();
+    assert!(S1::list(&*svc.operator_objects(), &n.wt, ".wt/tree/").unwrap().is_empty());
+    // a root inside the protected dir, and a root that is not a git worktree
+    let e = pubp(&run, &paths).unwrap_err();
+    assert!(e.contains("daemon's own state"), "{e}");
+    let plain = base.path().join("plain");
+    std::fs::create_dir_all(&plain).unwrap();
+    let e = pubp(&plain, &paths).unwrap_err();
+    assert!(e.contains("git worktree"), "{e}");
+    // a list file inside the protected dir is not read either
+    std::fs::write(run.join("l.z"), "docs/plan.md\0").unwrap();
+    let e = pubp(&root, &run.join("l.z").to_string_lossy()).unwrap_err();
+    assert!(e.contains("daemon's own state"), "{e}");
+}
+
+#[test]
+fn a_bundle_that_is_a_symlink_to_something_else_is_not_uploaded() {
+    let (_d, svc) = rig();
+    let src = tempfile::tempdir().unwrap();
+    let (paths, _, _) = files(src.path());
+    std::fs::write(src.path().join("secret.txt"), "hunter2").unwrap();
+    std::os::unix::fs::symlink(src.path().join("secret.txt"), src.path().join("b.bundle")).unwrap();
+    call(&svc, "create", json!({"project": PROJ, "slug": "feat-l", "branch": "b", "base": "abc"}), 10).unwrap();
+    let e = call_g(
+        &svc,
+        "publish",
+        json!({"project": PROJ, "slug": "feat-l", "root": src.path().to_string_lossy(), "branch": "b", "base": "a", "head": "h",
+               "paths_z": paths, "bundle": src.path().join("b.bundle").to_string_lossy()}),
+        &Guard::none(),
+    )
+    .unwrap_err();
+    assert!(e.contains("symlink"), "{e}");
+}
+
+#[test]
+fn fetch_never_writes_into_or_over_the_daemons_state_or_through_a_symlink() {
+    let (_d, svc) = rig();
+    let src = tempfile::tempdir().unwrap();
+    published(&svc, "feat-f", src.path());
+    let base = tempfile::tempdir().unwrap();
+    let run = base.path().join("run");
+    std::fs::create_dir_all(run.join("store-secrets")).unwrap();
+    let g = Guard::new([run.clone()]);
+    let fetch = |dest: &Path, extra: Value| {
+        let mut p = json!({"project": PROJ, "slug": "feat-f", "dest": dest.to_string_lossy()});
+        p.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        call_g(&svc, "fetch", p, &g)
+    };
+    // inside the runtime dir, and an ancestor that would contain it
+    let e = fetch(&run.join("x"), json!({})).unwrap_err();
+    assert!(e.contains("daemon's own state"), "{e}");
+    let e = fetch(base.path(), json!({"force": true})).unwrap_err();
+    assert!(e.contains("contain"), "{e}");
+    assert!(!base.path().join("docs").exists());
+    // bundle-out: a symlink is refused and its target is untouched
+    let victim = base.path().join("victim");
+    std::fs::write(&victim, "keep").unwrap();
+    let link = base.path().join("link.bundle");
+    std::os::unix::fs::symlink(&victim, &link).unwrap();
+    let ok_dest = tempfile::tempdir().unwrap();
+    let e = fetch(ok_dest.path(), json!({"bundle_out": link.to_string_lossy()})).unwrap_err();
+    assert!(e.contains("symlink"), "{e}");
+    assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep");
+    // follow state: same rule
+    let e = call_g(&svc, "follow", json!({"project": PROJ, "state": link.to_string_lossy()}), &g).unwrap_err();
+    assert!(e.contains("symlink"), "{e}");
+    assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep");
+    // and the honest case still works
+    assert_eq!(fetch(ok_dest.path(), json!({})).unwrap()["written"], 2);
 }
