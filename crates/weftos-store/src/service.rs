@@ -623,6 +623,16 @@ impl StoreService {
         self.finish(who, name, Op::List, None, 0, r)
     }
 
+    /// Every stored version and delete marker under `prefix` (a locked store keeps them all), on
+    /// behalf of `who`. Needs read access, like a listing. A key with two or more non-marker
+    /// versions was replaced after its first put; compare `etag` or `version_id` against what you
+    /// recorded to see which. Backends without versioning answer `Unsupported`.
+    pub fn list_versions(&self, who: &Caller, name: &StoreName, prefix: &str) -> Result<Vec<crate::backend::ObjectVersion>, StoreError> {
+        self.gate(who, name, Op::List, None, 0)?;
+        let r = self.objects.list_versions(&name.bucket(), prefix);
+        self.finish(who, name, Op::List, None, 0, r)
+    }
+
     /// List objects as the daemon itself (an operator reading metadata, `weaver store ls <name>`).
     /// Not a principal's request, so it needs no grant and, like any listing, is not logged.
     pub fn list_as_operator(&self, name: &StoreName, prefix: &str) -> Result<Vec<ObjectMeta>, StoreError> {

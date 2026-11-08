@@ -18,6 +18,13 @@ fn xml_helpers_unescape_and_walk_blocks() {
 }
 
 #[test]
+fn version_blocks_come_out_in_document_order_with_markers_between() {
+    let x = "<R><Version><Key>a</Key><VersionId>2</VersionId></Version><DeleteMarker><Key>a</Key><VersionId>3</VersionId></DeleteMarker><Version><Key>b</Key></Version></R>";
+    let b: Vec<_> = xml_blocks_in_order(x, &["Version", "DeleteMarker"]).into_iter().map(|(t, c)| (t, xml_tag(c, "Key").unwrap())).collect();
+    assert_eq!(b, vec![("Version", "a".to_owned()), ("DeleteMarker", "a".to_owned()), ("Version", "b".to_owned())]);
+}
+
+#[test]
 fn config_reads_an_env_file_and_defaults_the_region() {
     let d = tempfile::tempdir().unwrap();
     let f = d.path().join("c.env");
@@ -375,4 +382,73 @@ fn live_locked_release_store_through_the_service() {
     eprintln!("LOCK sweeper plain delete: {swept:?}");
     // The version itself cannot be removed.
     assert!(matches!(be.delete_version(&rel.bucket(), "v1/app.tar", put.version_id.as_deref().unwrap(), true), Err(BackendError::Forbidden(_))));
+}
+
+/// S4's replaced-manifest check, live: every version of a key is listed, a replaced key shows two,
+/// a plain delete shows as a marker, paging works past the page size, and a Read key can list.
+#[test]
+#[ignore = "needs a throwaway RustFS: WEFTOS_STORE_TEST_RUSTFS_ENV"]
+fn live_list_versions_shows_a_replaced_manifest_and_a_delete_marker() {
+    use crate::backend::{LockMode, PutOpts, Retention};
+    let (cfg, _d) = live().expect("WEFTOS_STORE_TEST_RUSTFS_ENV");
+    let be = RustfsBackend::new(cfg.clone()).unwrap();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    let plain = uniq("t-nover");
+    be.create_bucket(&plain, &[]).unwrap();
+    let unversioned = be.list_versions(&plain, "");
+    eprintln!("VERSIONS unversioned bucket: {unversioned:?}");
+    be.delete_bucket(&plain).unwrap();
+
+    let b = uniq("t-ver");
+    be.create_locked_bucket(&b, &[]).unwrap();
+    let keep = PutOpts { if_none_match: true, retention: Some(Retention { mode: LockMode::Governance, until_unix_s: now + 3600 }), legal_hold: false };
+    let first = be.put_locked(&b, "release/manifest.json", b"{\"sha\":\"good\"}", &keep).unwrap();
+    be.put_locked(&b, "release/other.bin", b"o", &keep).unwrap();
+    let v = be.list_versions(&b, "release/").unwrap();
+    assert_eq!(v.len(), 2);
+    assert!(v.iter().all(|x| x.is_latest && !x.is_delete_marker && !x.version_id.is_empty()), "{v:?}");
+    assert_eq!(v[0].key, "release/manifest.json");
+    assert_eq!(v[0].version_id, first.version_id.clone().unwrap());
+    assert_eq!(v[0].etag, first.meta.etag, "a listed version carries the etag the put returned");
+    assert_eq!(v[0].size, 14);
+    assert!(be.list_versions(&b, "nothing/").unwrap().is_empty());
+
+    // Someone replaces the manifest with a plain put (no If-None-Match): a second version appears.
+    let evil = be.put_locked(&b, "release/manifest.json", b"{\"sha\":\"evil\"}", &PutOpts::default()).unwrap();
+    let v = be.list_versions(&b, "release/manifest").unwrap();
+    assert_eq!(v.len(), 2, "{v:?}");
+    assert!(v[0].is_latest && v[0].version_id == evil.version_id.clone().unwrap(), "newest first: {v:?}");
+    assert!(!v[1].is_latest && v[1].version_id == first.version_id.clone().unwrap());
+    assert_ne!(v[0].etag, v[1].etag, "the replacement is told apart by etag");
+    assert_eq!(v.iter().filter(|x| !x.is_delete_marker).count(), 2);
+
+    // A plain delete adds a marker on top; both real versions stay listed beneath it.
+    be.delete(&b, "release/other.bin").unwrap();
+    let o = be.list_versions(&b, "release/other").unwrap();
+    eprintln!("VERSIONS after plain delete: {o:?}");
+    assert!(o[0].is_delete_marker && o[0].is_latest, "{o:?}");
+    assert!(o.iter().any(|x| !x.is_delete_marker), "the content version is still there");
+    eprintln!("VERSIONS get after plain delete: {:?}", be.get(&b, "release/other.bin"));
+
+    // Paging: force page boundaries with a small page size instead of making 1000 keys.
+    for i in 0..30 {
+        be.put_locked(&b, &format!("p/{i:03}"), b"x", &PutOpts::default()).unwrap();
+    }
+    assert_eq!(be.list_versions(&b, "p/").unwrap().len(), 30);
+    let paged = be.list_versions_paged(&b, "p/", 7).unwrap();
+    assert_eq!(paged.len(), 30, "five pages of seven stitch back together");
+    assert_eq!(paged.iter().map(|v| &v.key).collect::<std::collections::BTreeSet<_>>().len(), 30, "no key twice, none lost");
+
+    // A Read key can list versions (the policy carries s3:ListBucketVersions).
+    let k = be.create_access_key(&uniq("cog:vreader")).unwrap();
+    be.put_policy(&k.id, &json!({"Version": "2012-10-17", "Statement": [{"Effect": "Allow",
+        "Action": ["s3:GetObject", "s3:ListBucket", "s3:ListBucketVersions", "s3:GetBucketLocation"],
+        "Resource": [format!("arn:aws:s3:::{b}"), format!("arn:aws:s3:::{b}/*")]}]})).unwrap();
+    let user = as_key(&cfg, &be, &k.id);
+    let seen = user.list_versions(&b, "release/manifest");
+    eprintln!("VERSIONS read key: {:?}", seen.as_ref().map(|v| v.len()));
+    assert_eq!(seen.unwrap().len(), 2);
+    assert!(matches!(user.delete_version(&b, "release/manifest.json", &evil.version_id.unwrap(), true), Err(BackendError::Forbidden(_))));
+    be.set_key_enabled(&k.id, false).unwrap();
+    assert!(matches!(user.list_versions(&b, ""), Err(BackendError::Forbidden(_))), "a disabled key lists nothing");
 }

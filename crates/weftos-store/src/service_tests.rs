@@ -485,3 +485,13 @@ fn object_lock_needs_a_backend_that_has_it_and_a_store_made_for_it() {
     let opts = crate::backend::PutOpts { if_none_match: true, ..Default::default() };
     assert!(matches!(r.svc.put_locked(&ci, &rel, "a", b"x", &opts), Err(StoreError::Refused(_))));
 }
+
+#[test]
+fn listing_versions_needs_a_grant_and_a_backend_that_keeps_them() {
+    let r = rig();
+    r.svc.create_store(&project(), "daemon", Parties::default()).unwrap();
+    r.svc.grant(&project(), cog("reader"), Access::Read, "op").unwrap();
+    assert!(r.svc.list_versions(&local("stranger"), &project(), "").is_err(), "no grant, no listing");
+    // The in-memory backend keeps one copy per key; the answer says so rather than inventing versions.
+    assert!(matches!(r.svc.list_versions(&local("reader"), &project(), ""), Err(StoreError::Backend(BackendError::Unsupported(_)))));
+}

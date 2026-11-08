@@ -7,7 +7,7 @@ use crate::access::{Access, Grant};
 use crate::name::StoreName;
 
 fn actions(a: Access) -> Vec<&'static str> {
-    let mut v = vec!["s3:GetObject", "s3:ListBucket", "s3:GetBucketLocation"];
+    let mut v = vec!["s3:GetObject", "s3:ListBucket", "s3:ListBucketVersions", "s3:GetBucketLocation"];
     let put = ["s3:PutObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"];
     match a {
         Access::Read => {}

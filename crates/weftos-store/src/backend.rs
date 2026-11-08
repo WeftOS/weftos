@@ -39,6 +39,23 @@ pub struct ObjectMeta {
     pub etag: String,
 }
 
+/// One stored version of a key in a versioned (locked) bucket, or a delete marker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObjectVersion {
+    pub key: String,
+    /// The version id; `"null"` for an object written before versioning was on.
+    pub version_id: String,
+    /// The newest entry for its key.
+    pub is_latest: bool,
+    /// A delete marker (a plain delete in a versioned bucket): no content, size 0.
+    pub is_delete_marker: bool,
+    pub size: u64,
+    /// The backend's etag for this version (empty for a delete marker).
+    pub etag: String,
+    /// When RustFS stored it, as the ISO-8601 text it sent.
+    pub last_modified: String,
+}
+
 /// S3 Object Lock retention mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LockMode {
@@ -115,6 +132,13 @@ pub trait ObjectBackend: Send + Sync {
     /// Turn a legal hold on or off for one version.
     fn put_legal_hold(&self, _bucket: &str, _key: &str, _version_id: &str, _on: bool) -> Result<(), BackendError> {
         Err(BackendError::Unsupported("object lock".into()))
+    }
+    /// Every stored version and delete marker whose key starts with `prefix`, sorted by key and
+    /// newest first within a key. A key with more than one non-marker version was replaced; a
+    /// newest entry that is a delete marker was deleted. Backends that keep one copy per key
+    /// answer [`BackendError::Unsupported`].
+    fn list_versions(&self, _bucket: &str, _prefix: &str) -> Result<Vec<ObjectVersion>, BackendError> {
+        Err(BackendError::Unsupported("object versions".into()))
     }
     fn get(&self, bucket: &str, key: &str) -> Result<Vec<u8>, BackendError>;
     fn head(&self, bucket: &str, key: &str) -> Result<ObjectMeta, BackendError>;

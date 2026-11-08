@@ -13,7 +13,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use reqwest::blocking::Client;
 use serde_json::{Value, json};
 
-use crate::backend::{AccessKey, AdminBackend, BackendError, BucketTags, LockedPut, ObjectBackend, ObjectMeta, PutOpts, check_key};
+use crate::backend::{AccessKey, AdminBackend, BackendError, BucketTags, LockedPut, ObjectBackend, ObjectMeta, ObjectVersion, PutOpts, check_key};
 use crate::sigv4::{self, Req};
 
 /// Connection settings. `secrets_dir` receives one 0600 file per issued access key.
@@ -95,6 +95,21 @@ fn xml_blocks<'a>(s: &'a str, tag: &str) -> Vec<&'a str> {
         let Some(b) = s[a..].find(&close) else { break };
         v.push(&s[a..a + b]);
         at = a + b + close.len();
+    }
+    v
+}
+
+/// The blocks of any of `tags`, in the order they appear (versions and delete markers interleave).
+fn xml_blocks_in_order<'a>(s: &'a str, tags: &[&'a str]) -> Vec<(&'a str, &'a str)> {
+    let mut v = Vec::new();
+    let mut at = 0;
+    while at < s.len() {
+        let next = tags.iter().filter_map(|t| s[at..].find(&format!("<{t}>")).map(|i| (i, *t))).min_by_key(|(i, _)| *i);
+        let Some((i, t)) = next else { break };
+        let a = at + i + t.len() + 2;
+        let Some(b) = s[a..].find(&format!("</{t}>")) else { break };
+        v.push((t, &s[a..a + b]));
+        at = a + b + t.len() + 3;
     }
     v
 }
@@ -300,6 +315,10 @@ impl ObjectBackend for RustfsBackend {
         self.check(r, Ctx::Object(bucket, key)).map(|_| ())
     }
 
+    fn list_versions(&self, bucket: &str, prefix: &str) -> Result<Vec<ObjectVersion>, BackendError> {
+        self.list_versions_paged(bucket, prefix, 1000)
+    }
+
     fn get(&self, bucket: &str, key: &str) -> Result<Vec<u8>, BackendError> {
         check_key(key)?;
         let r = self.send("GET", &format!("/{bucket}/{key}"), &[], &[], &[])?;
@@ -357,6 +376,46 @@ impl ObjectBackend for RustfsBackend {
 }
 
 impl RustfsBackend {
+    pub(crate) fn list_versions_paged(&self, bucket: &str, prefix: &str, page: usize) -> Result<Vec<ObjectVersion>, BackendError> {
+        let page_s = page.to_string();
+        let mut out = Vec::new();
+        let (mut key_marker, mut ver_marker) = (String::new(), String::new());
+        loop {
+            let mut q = vec![("versions", ""), ("prefix", prefix), ("max-keys", &page_s)];
+            if !key_marker.is_empty() {
+                q.push(("key-marker", &key_marker));
+            }
+            if !ver_marker.is_empty() {
+                q.push(("version-id-marker", &ver_marker));
+            }
+            let r = self.send("GET", &format!("/{bucket}"), &Self::q(&q), &[], &[])?;
+            let r = self.check(r, Ctx::Bucket(bucket))?;
+            let text = String::from_utf8_lossy(&r.body).into_owned();
+            for (marker, c) in xml_blocks_in_order(&text, &["Version", "DeleteMarker"]) {
+                out.push(ObjectVersion {
+                    key: xml_tag(c, "Key").unwrap_or_default(),
+                    version_id: xml_tag(c, "VersionId").unwrap_or_else(|| "null".into()),
+                    is_latest: xml_tag(c, "IsLatest").as_deref() == Some("true"),
+                    is_delete_marker: marker == "DeleteMarker",
+                    size: xml_tag(c, "Size").and_then(|s| s.parse().ok()).unwrap_or(0),
+                    etag: xml_tag(c, "ETag").unwrap_or_default().trim_matches('"').to_owned(),
+                    last_modified: xml_tag(c, "LastModified").unwrap_or_default(),
+                });
+            }
+            match (xml_tag(&text, "IsTruncated").as_deref(), xml_tag(&text, "NextKeyMarker"), xml_tag(&text, "NextVersionIdMarker")) {
+                (Some("true"), Some(k), v) if !k.is_empty() => {
+                    key_marker = k;
+                    ver_marker = v.unwrap_or_default();
+                }
+                _ => break,
+            }
+        }
+        // S3 lists by key and newest first within a key; keep that order, and make the sort
+        // stable so a backend that ties on time keeps what it sent.
+        out.sort_by(|a, b| a.key.cmp(&b.key).then(b.is_latest.cmp(&a.is_latest)));
+        Ok(out)
+    }
+
     fn create_bucket_with(&self, bucket: &str, tags: &[(String, String)], locked: bool) -> Result<(), BackendError> {
         // RustFS answers 200 for a bucket the root already owns; an explicit check keeps the
         // contract ("already exists" is an error) the same as the other backends.

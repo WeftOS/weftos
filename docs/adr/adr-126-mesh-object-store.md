@@ -296,9 +296,15 @@ and `put_legal_hold(.., on)` act on one version. Seen on RustFS: a bucket made w
 version's delete is refused with `AccessDenied` under COMPLIANCE (bypass does not help), under GOVERNANCE (without bypass), and
 under a legal hold until it is lifted; a past retain-until date is refused before sending. At the service: `create_locked_store(name,
 actor, parties)`, `is_locked(name)` and `put_locked(who, store, key, data, &opts)` (gated and logged like `put`; an `append` principal must
-set `if_none_match`; a store not made locked refuses it). **Not covered:** a plain delete (no version id) in a locked bucket returned OK
-for the sweeper, which in S3 semantics adds a delete marker and leaves the retained version, but I did not check how RustFS lists or reads
-it afterwards; default bucket retention (`PutObjectLockConfiguration`) and `PutObjectRetention` on an existing version are not
+set `if_none_match`; a store not made locked refuses it). **Listing versions (for S4's replaced-manifest check, live 2026-11-08):**
+`ObjectBackend::list_versions(bucket, prefix)` and `StoreService::list_versions(who, store, prefix)` (needs read, logged as a list)
+return every version and delete marker as `ObjectVersion{key, version_id, is_latest, is_delete_marker, size, etag, last_modified}`, sorted
+by key and newest first. A manifest put once with `if_none_match` shows one entry; a later plain put under the same key shows a
+second, newer entry with a different `version_id` and `etag` (the first keeps the etag its put returned), so S4 compares the
+newest entry to what it recorded. Local backends answer `Unsupported`. Paging was checked by forcing a page of 7 over 30 keys.
+Read keys now carry `s3:ListBucketVersions`, and a Read key listed versions at RustFS. A plain delete (no version id) in a locked bucket,
+as the sweeper does, adds a delete marker: the listing shows the marker newest and the retained version beneath it, and a get answers
+not found. **Not covered:** default bucket retention (`PutObjectLockConfiguration`) and `PutObjectRetention` on an existing version are not
 implemented; `archive(delete)` of a locked store will fail on its retained versions; the key policy for `sweep` still allows only
 `s3:DeleteObject`, not `s3:DeleteObjectVersion`/`s3:BypassGovernanceRetention`, which is what you want for retained versions.
 
