@@ -142,3 +142,34 @@ pub fn create_locked_release_bucket<A: AdminBackend>(admin: &A, store: &ReleaseS
     admin.create_locked_bucket(&name.bucket(), &tags).map_err(err)?;
     Ok(name.bucket())
 }
+
+/// IAM policy for a CI key that writes straight to a release bucket, as `weaver store release publish`
+/// does. Measured on RustFS 1.0.4 (`tests/store_ci_key.rs`):
+///
+/// - `s3:PutObject` alone cannot send Object Lock headers; the put also needs `s3:PutObjectRetention`.
+/// - The Deny refuses any put that carries no lock mode (condition `Null s3:object-lock-mode`), so every
+///   version this key writes is locked. RustFS IAM cannot require `If-None-Match`.
+/// - **It cannot stop this key replacing a key it can write**: an unconditional put with lock headers
+///   makes a new version that reads as current (the locked old version survives, readable by version id).
+///   The publisher's own `If-None-Match` is what protects against that, and S1's daemon-mediated append
+///   role (read-only at RustFS) is the only way to make write-once a server-side fact. Use this role only
+///   where CI is trusted not to do that.
+/// - There is no DeleteObject, so deletion stays with the sweeper.
+pub fn direct_ci_policy(bucket: &str) -> serde_json::Value {
+    serde_json::json!({
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Effect": "Allow",
+                "Action": ["s3:GetObject", "s3:ListBucket", "s3:GetBucketLocation", "s3:PutObject", "s3:PutObjectRetention"],
+                "Resource": [format!("arn:aws:s3:::{bucket}"), format!("arn:aws:s3:::{bucket}/*")]
+            },
+            {
+                "Effect": "Deny",
+                "Action": ["s3:PutObject"],
+                "Resource": [format!("arn:aws:s3:::{bucket}/*")],
+                "Condition": {"Null": {"s3:object-lock-mode": "true"}}
+            }
+        ]
+    })
+}

@@ -58,9 +58,11 @@ Our code on a locked, versioned bucket: publish, retry, refused rebuild, retenti
 3. **A blob shared by a later release keeps the lock it was first written with.** There is no way to extend it: S1 has no PutObjectRetention call and a second put is refused by `If-None-Match`. The logical rule (the sweeper never deletes a referenced blob) still holds; only the physical floor for the later release can be shorter than its own. Ask S1 for an extend-retention call, then stamp after commit.
 4. **A copy takes only the bucket default**, never the source's lock. The sweeper's quarantine copy is therefore unlocked, and a restore must write the bytes back locked: `Sweeper::with_lock` does that on the rare restore path (the normal delete still never reads the bytes). A bucket default retention (PutObjectLockConfiguration) would also cover this, but S1 does not set it yet.
 5. **Physical removal is the lifecycle scanner's job.** The sweeper's delete stays logical (delete marker). A rule with `NoncurrentVersionExpiration` plus `ExpiredObjectDeleteMarker` removed noncurrent versions and orphan markers, and skipped anything still under retention or a hold. That makes lifecycle the reclaim path, and makes the lock the thing that decides when. Only seen on RustFS 1.0.4 with a sped-up scanner.
-6. **Grants** (S1 owns them; this is the requirement):
-   - CI: PutObject, GetObject; no DeleteObject, no DeleteObjectVersion, no BypassGovernanceRetention, no bucket-level configuration (versioning, lock, policy, lifecycle). Lock headers on its puts need no extra permission in RustFS 1.0.4 that we saw as root; whether a non-root key needs `s3:PutObjectRetention` for them was not checked.
-   - Sweeper: DeleteObject, copy and put on `blobs/*` and `quarantine/*`, tombstone put; not BypassGovernanceRetention.
+6. **Grants** (S1 owns them; measured with non-root keys in `crates/weftos-release/tests/store_ci_key.rs`):
+   - **S1's CI `append` role cannot write at all** at RustFS (read, list only; a conditional create is a 403 too). Its puts go through the daemon's service with the daemon's key, which is the only way write-once is a server-side fact, because RustFS IAM rejects the `s3:if-none-match` condition key.
+   - **A key that writes straight to the bucket** (what `weaver store release publish` does with an `--s3-env`) needs `s3:PutObject`, and to send lock headers also `s3:PutObjectRetention`: `PutObject` alone is a 403 on a locked put. `weftos_release::s3::direct_ci_policy` is that role plus a Deny on any put without a lock mode (condition `Null s3:object-lock-mode`, which RustFS accepts and enforces), so every version it writes is locked, and a copy (no lock headers) is refused. No DeleteObject.
+   - **The direct role can still replace a key it can write.** An unconditional put with lock headers over a COMPLIANCE-locked key succeeded and read back as current; the locked original survives, readable by version id. Only the publisher's own `If-None-Match` stops that, which a hostile or buggy CI step can skip. Use the direct role only where CI is trusted not to; otherwise use S1's daemon-mediated append role. A reader catches a replaced blob (hash mismatch) but not a replaced manifest signed with CI's own key; seeing more than one version of a key would, which needs a list-versions call S1 does not have.
+   - Sweeper: DeleteObject, copy and put on `blobs/*` and `quarantine/*`, tombstone put; not BypassGovernanceRetention. (S1's `sweep` role has delete only and cannot put, so a locked restore needs the put added.)
    - Bypass: the owner only.
 7. **Audit.** Changes to versioning, lock configuration, lifecycle and policy leave no event, and neither do the lifecycle scanner's deletions. The log therefore cannot show who weakened a bucket or what the scanner removed. Lock retention itself is only as trustworthy as the control of who holds bucket-level admin; keep that to the owner and have the daemon read the configuration back and compare it to what was provisioned.
 8. **Streaming.** Retention headers on CreateMultipartUpload carry to the completed object and `If-None-Match: *` works on Complete, so a multipart path can keep both guarantees. S1's transport has no multipart yet.
@@ -70,13 +72,12 @@ Our code on a locked, versioned bucket: publish, retry, refused rebuild, retenti
 - Whether lifecycle respects a retention date at real day scale (only a sped-up scanner against wall-clock dates was seen), and whether it expires a version once its retention has lapsed.
 - Why an unlocked object's delete marker disappeared in the lock bucket without an `ExpiredObjectDeleteMarker` rule.
 - Bucket policy conditions that exempt the sweeper principal from a Deny.
-- Whether a non-root CI key needs `s3:PutObjectRetention` to send lock headers on a put.
 - Behaviour at scale (many versions of one key, listing cost).
 - Multipart through our own code: only the raw S3 behaviour was probed, since S1's transport has no multipart call.
 
 ## Order of work
 
-1. S1: extend-retention call; default bucket retention; multipart (with lock headers on create); expose `--locked` on `weaver store create`.
-2. S4 (done in this branch): lock policy on publish, locked restore, locked-bucket helper, `--lock` on the verb, live tests.
+1. S1: decide the CI route (daemon-mediated append, or the direct role above); a put for the `sweep` role (locked restore); list-versions; extend-retention call; default bucket retention; multipart (with lock headers on create); expose `--locked` on `weaver store create`.
+2. S4 (done in this branch): lock policy on publish, locked restore, locked-bucket helper, `--lock` on the verb, the direct CI policy, live tests with non-root keys.
 3. S4 next: stamp after commit once S1 has extend-retention; read-back check of lock configuration; lifecycle rule provisioning.
 4. Owner: pick the modes and floors per channel.

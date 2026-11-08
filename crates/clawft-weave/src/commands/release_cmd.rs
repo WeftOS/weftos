@@ -142,6 +142,21 @@ pub async fn publish_dir<B: ReleaseBackend>(
     Ok(p.publish(req, now).await?)
 }
 
+/// A refused write is almost always the credential, not the release: say which roles can write.
+pub fn explain_denied(e: anyhow::Error) -> anyhow::Error {
+    let m = e.to_string();
+    let low = m.to_lowercase();
+    if low.contains("forbidden") || low.contains("accessdenied") || low.contains("access denied") {
+        anyhow::anyhow!(
+            "{m}\nhint: this credential may not write. S1's CI `append` role is read-only at RustFS (its puts go \
+             through the daemon). A key that writes straight to the bucket needs s3:PutObject, and with --lock also \
+             s3:PutObjectRetention (see weftos_release::s3::direct_ci_policy)."
+        )
+    } else {
+        e
+    }
+}
+
 /// `--lock` and `--lock-days` as a policy.
 pub fn lock_policy(mode: Option<&str>, days: Option<u64>) -> anyhow::Result<Option<LockPolicy>> {
     let (Some(m), Some(d)) = (mode, days) else { return Ok(None) };
@@ -181,7 +196,9 @@ pub async fn run(args: ReleaseArgs) -> anyhow::Result<()> {
             let backend = StoreBackend::for_release(objects, &name)?;
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs();
             let req = PublishRequest { build_id, source_rev, created_at: now, builder, artifacts };
-            let r = publish_dir(&backend, &name, &signer, req, now, lock_policy(lock.as_deref(), lock_days)?).await?;
+            let r = publish_dir(&backend, &name, &signer, req, now, lock_policy(lock.as_deref(), lock_days)?)
+                .await
+                .map_err(explain_denied)?;
             if json {
                 println!(
                     "{}",
@@ -212,6 +229,15 @@ mod tests {
 
     fn req(arts: Vec<Artifact>, id: &str) -> PublishRequest {
         PublishRequest { build_id: id.into(), source_rev: "r".into(), created_at: 1_000, builder: "ci".into(), artifacts: arts }
+    }
+
+    #[test]
+    fn a_refused_write_explains_which_roles_can_write() {
+        let denied = anyhow::anyhow!("store backend: forbidden: AccessDenied Access Denied");
+        let m = explain_denied(denied).to_string();
+        assert!(m.contains("PutObjectRetention") && m.contains("append"), "{m}");
+        let other = explain_denied(anyhow::anyhow!("build b1 is already published")).to_string();
+        assert!(!other.contains("hint"), "{other}");
     }
 
     #[test]
@@ -360,5 +386,59 @@ mod tests {
             },
         };
         run(locked).await.unwrap();
+    }
+
+    /// The verb with NON-ROOT keys on a locked bucket: the direct CI role publishes locked; S1's
+    /// read-only append role is refused with a hint. Throwaway RustFS only (see above).
+    #[tokio::test]
+    #[ignore = "needs a throwaway RustFS: WEFTOS_RELEASE_TEST_RUSTFS_ENV"]
+    async fn live_verb_with_non_root_ci_keys() {
+        use std::os::unix::fs::PermissionsExt;
+        use weftos_store::{AdminBackend, ObjectBackend};
+        let env = std::env::var("WEFTOS_RELEASE_TEST_RUSTFS_ENV").expect("WEFTOS_RELEASE_TEST_RUSTFS_ENV");
+        let d = tempfile::tempdir().unwrap();
+        let dist = d.path().join("dist");
+        std::fs::create_dir_all(&dist).unwrap();
+        std::fs::write(dist.join("weaver"), b"bin").unwrap();
+        let key = d.path().join("k.json");
+        std::fs::write(&key, serde_json::json!({"ed25519_seed": "07".repeat(32), "ml_dsa65_seed": "09".repeat(32)}).to_string()).unwrap();
+        std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let channel = format!("n{}", &ulid::Ulid::new().to_string().to_lowercase()[16..]);
+        let name = format!("weftos://m/projects/{ULID}/releases/{channel}/store");
+        let st = parse_store(&name).unwrap();
+
+        // root makes the locked bucket and two keys; write an env file per key
+        let (envp, root_dir, kdir) = (PathBuf::from(&env), d.path().join("root"), d.path().to_path_buf());
+        let sfx = ulid::Ulid::new().to_string().to_lowercase()[16..].to_owned();
+        let (direct_env, append_env) = tokio::task::spawn_blocking(move || {
+            let cfg = weftos_store::RustfsConfig::from_env_file(&envp, root_dir).unwrap();
+            let root = weftos_store::RustfsBackend::new(cfg.clone()).unwrap();
+            let bucket = weftos_release::s3::create_locked_release_bucket(&root, &st).unwrap();
+            let mk = |tag: &str, policy: serde_json::Value| -> PathBuf {
+                let id = root.create_access_key(&format!("cog:ci-{tag}-{sfx}")).unwrap().id;
+                root.put_policy(&id, &policy).unwrap();
+                let secret = std::fs::read_to_string(root.secret_path(&id)).unwrap();
+                let f = kdir.join(format!("{tag}.env"));
+                std::fs::write(&f, format!("MESH_S3_ENDPOINT={}\nMESH_S3_ACCESS_KEY={id}\nMESH_S3_SECRET_KEY={secret}\n", cfg.endpoint)).unwrap();
+                f
+            };
+            let append = serde_json::json!({"Version": "2012-10-17", "Statement": [{"Effect": "Allow",
+                "Action": ["s3:GetObject", "s3:ListBucket", "s3:GetBucketLocation"],
+                "Resource": [format!("arn:aws:s3:::{bucket}"), format!("arn:aws:s3:::{bucket}/*")]}]});
+            let _ = root.head(&bucket, "none"); // warm the connection; result irrelevant
+            (mk("direct", weftos_release::s3::direct_ci_policy(&bucket)), mk("append", append))
+        }).await.unwrap();
+
+        let go = |id: &str, s3: &Path| ReleaseArgs {
+            action: ReleaseAction::Publish {
+                store: name.clone(), build_id: id.into(), source_rev: "r".into(), dir: dist.clone(),
+                builder: "ci".into(), signing_key: key.clone(), s3_env: s3.to_path_buf(),
+                lock: Some("compliance".into()), lock_days: Some(2), json: true,
+            },
+        };
+        run(go("b1", &direct_env)).await.unwrap();
+        run(go("b1", &direct_env)).await.unwrap(); // identical retry from the same key
+        let e = run(go("b2", &append_env)).await.expect_err("the append role cannot write at RustFS");
+        assert!(e.to_string().contains("PutObjectRetention"), "{e}");
     }
 }
