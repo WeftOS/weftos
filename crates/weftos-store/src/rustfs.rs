@@ -8,7 +8,8 @@
 //! existing key is a 412, and a disabled user's next request is a 403.
 
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use reqwest::blocking::Client;
 use serde_json::{Value, json};
@@ -55,6 +56,82 @@ pub struct RustfsBackend {
     host: String,
     http: Client,
     retry: Retry,
+    /// Shared by every view of this backend (see [`RustfsBackend::with_timeout`]).
+    breaker: Arc<Mutex<BreakerState>>,
+    /// A per-request deadline shorter than the client's, set by `with_timeout`.
+    call_timeout: Option<Duration>,
+}
+
+/// When to stop calling a RustFS that is not there: after `threshold` requests in a row fail
+/// because it could not be reached (no connection, a timeout, 502/503/504), calls fail at once
+/// with [`BackendError::Unavailable`] for `cooldown`, instead of each waiting out its own
+/// timeout. After the cooldown one request is let through as a probe: if it gets any answer the
+/// breaker closes, if not it opens for another cooldown. An answer of any kind (even 403 or 404, even
+/// a 500) means RustFS is up and resets the count.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Breaker {
+    /// Consecutive failures that open it. 0 turns the breaker off.
+    pub threshold: u32,
+    pub cooldown: Duration,
+}
+
+impl Default for Breaker {
+    fn default() -> Self {
+        Self { threshold: 5, cooldown: Duration::from_secs(10) }
+    }
+}
+
+/// The breaker's memory.
+#[derive(Debug, Default)]
+pub(crate) struct BreakerState {
+    cfg: Breaker,
+    fails: u32,
+    open_until: Option<Instant>,
+    /// A probe is out; everyone else keeps failing fast until it comes back.
+    probing: bool,
+}
+
+impl BreakerState {
+    /// May a request go out at `now`? `Err(wait)` is how long the breaker stays open.
+    pub(crate) fn admit(&mut self, now: Instant) -> Result<(), Duration> {
+        if self.cfg.threshold == 0 {
+            return Ok(());
+        }
+        match self.open_until {
+            None => Ok(()),
+            Some(t) if now < t => Err(t - now),
+            Some(_) if self.probing => Err(Duration::from_secs(1)),
+            Some(_) => {
+                self.probing = true;
+                Ok(())
+            }
+        }
+    }
+
+    /// Record how a request ended. `down` is true when RustFS could not be reached.
+    pub(crate) fn record(&mut self, down: bool, now: Instant) {
+        if self.cfg.threshold == 0 {
+            return;
+        }
+        if !down {
+            *self = Self { cfg: self.cfg, ..Self::default() };
+            return;
+        }
+        self.fails = self.fails.saturating_add(1);
+        if self.probing || self.fails >= self.cfg.threshold {
+            self.open_until = Some(now + self.cfg.cooldown);
+            self.probing = false;
+        }
+    }
+
+    pub(crate) fn is_open(&self, now: Instant) -> bool {
+        self.cfg.threshold != 0 && self.open_until.is_some_and(|t| now < t || self.probing)
+    }
+}
+
+/// Whether a finished request means RustFS is unreachable.
+fn counts_as_down(r: &Result<u16, &Xport>) -> bool {
+    matches!(r, Err(_) | Ok(502..=504))
 }
 
 /// How a request is retried. Only what is safe to repeat is: a connection that never opened (any
@@ -250,13 +327,32 @@ impl RustfsBackend {
         };
         let http = Client::builder().timeout(cfg.timeout).build().map_err(io)?;
         std::fs::create_dir_all(&cfg.secrets_dir).map_err(io)?;
-        Ok(Self { cfg, base: format!("{scheme}://{auth}"), host, http, retry: Retry::default() })
+        Ok(Self { cfg, base: format!("{scheme}://{auth}"), host, http, retry: Retry::default(), breaker: Arc::new(Mutex::new(BreakerState::default())), call_timeout: None })
     }
 
     /// Change how requests are retried (tests use a short `base`; `attempts: 1` turns it off).
     pub fn with_retry(mut self, retry: Retry) -> Self {
         self.retry = retry;
         self
+    }
+
+    /// Set when the circuit breaker opens (see [`Breaker`]); `Breaker { threshold: 0, .. }` turns it off.
+    pub fn with_breaker(self, b: Breaker) -> Self {
+        *self.breaker.lock().unwrap_or_else(|e| e.into_inner()) = BreakerState { cfg: b, ..Default::default() };
+        self
+    }
+
+    /// Whether calls are failing fast right now because RustFS could not be reached.
+    pub fn breaker_open(&self) -> bool {
+        self.breaker.lock().unwrap_or_else(|e| e.into_inner()).is_open(Instant::now())
+    }
+
+    /// A view of this backend whose requests give up after `d` instead of the client's default
+    /// (30 s), for a caller that would rather fail than wait: `be.with_timeout(2s).get(..)`. It
+    /// shares the circuit breaker with the original, so a dead RustFS found through one view is
+    /// known to all. A timed-out write is not retried (it may have landed).
+    pub fn with_timeout(&self, d: Duration) -> Self {
+        Self { cfg: self.cfg.clone(), base: self.base.clone(), host: self.host.clone(), http: self.http.clone(), retry: self.retry, breaker: self.breaker.clone(), call_timeout: Some(d) }
     }
 
     /// The access-key id issued for a principal label. Stable, so a restart finds the same key.
@@ -270,6 +366,9 @@ impl RustfsBackend {
     }
 
     fn send(&self, method: &str, path: &str, query: &[(String, String)], body: &[u8], extra: &[(&str, String)]) -> Result<Resp, BackendError> {
+        if let Err(wait) = self.breaker.lock().unwrap_or_else(|e| e.into_inner()).admit(Instant::now()) {
+            return Err(BackendError::Unavailable(format!("{method} {path}: circuit open, RustFS was unreachable; next try in {}s", wait.as_secs().max(1))));
+        }
         let mut done = 0;
         loop {
             done += 1;
@@ -277,12 +376,17 @@ impl RustfsBackend {
             let seen = match &r {
                 Ok(Ok(resp)) => Ok(resp.status),
                 Ok(Err(x)) => Err(x),
-                Err(e) => return Err(e.clone()),
+                Err(e) => {
+                    // A local fault (signing, clock) says nothing about RustFS; free a probe if this was one.
+                    self.breaker.lock().unwrap_or_else(|x| x.into_inner()).record(false, Instant::now());
+                    return Err(e.clone());
+                }
             };
             if done < self.retry.attempts && should_retry(method, query, &seen) {
                 std::thread::sleep(self.retry.wait_after(done));
                 continue;
             }
+            self.breaker.lock().unwrap_or_else(|e| e.into_inner()).record(counts_as_down(&seen), Instant::now());
             return match r {
                 Ok(Ok(resp)) => Ok(resp),
                 Ok(Err(x)) => Err(BackendError::Unavailable(format!("{method} {path}: {}", x.msg))),
@@ -316,6 +420,9 @@ impl RustfsBackend {
         }
         if !body.is_empty() {
             rb = rb.body(body.to_vec());
+        }
+        if let Some(t) = self.call_timeout {
+            rb = rb.timeout(t);
         }
         let r = match rb.send() {
             Ok(r) => r,

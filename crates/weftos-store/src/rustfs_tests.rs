@@ -133,6 +133,74 @@ fn lifecycle_rules_are_checked_written_and_read_back_as_documents() {
     assert!(rule("ok", "p/").validate().is_ok());
 }
 
+fn breaker(threshold: u32) -> BreakerState {
+    BreakerState { cfg: Breaker { threshold, cooldown: Duration::from_secs(10) }, ..Default::default() }
+}
+
+#[test]
+fn the_breaker_opens_after_a_run_of_failures_probes_once_and_closes_on_any_answer() {
+    let t0 = Instant::now();
+    let s = Duration::from_secs;
+    let mut b = breaker(3);
+    // Two failures then a success: not open, and the count starts over.
+    b.record(true, t0);
+    b.record(true, t0);
+    b.record(false, t0);
+    b.record(true, t0);
+    b.record(true, t0);
+    assert!(b.admit(t0).is_ok() && !b.is_open(t0), "a success reset the run");
+    // Third in a row opens it for the cooldown.
+    b.record(true, t0);
+    assert!(b.is_open(t0));
+    assert_eq!(b.admit(t0 + s(4)), Err(s(6)), "fails fast, says how long");
+    // After the cooldown exactly one probe gets through.
+    assert!(b.admit(t0 + s(10)).is_ok());
+    assert!(b.admit(t0 + s(10)).is_err(), "others wait for the probe");
+    assert!(b.is_open(t0 + s(10)));
+    // The probe fails: open again for a full cooldown from then.
+    b.record(true, t0 + s(11));
+    assert_eq!(b.admit(t0 + s(12)), Err(s(9)));
+    // The next probe gets an answer: closed, everything flows.
+    assert!(b.admit(t0 + s(21)).is_ok());
+    b.record(false, t0 + s(21));
+    assert!(!b.is_open(t0 + s(21)) && b.admit(t0 + s(21)).is_ok() && b.admit(t0 + s(21)).is_ok());
+    // Off: never opens.
+    let mut off = breaker(0);
+    for _ in 0..50 {
+        off.record(true, t0);
+    }
+    assert!(off.admit(t0).is_ok() && !off.is_open(t0));
+}
+
+#[test]
+fn only_an_unreachable_rustfs_counts_toward_the_breaker() {
+    assert!(counts_as_down(&Err(&xport(true, false))) && counts_as_down(&Err(&xport(false, true))));
+    for st in [502, 503, 504] {
+        assert!(counts_as_down(&Ok(st)), "{st}");
+    }
+    for st in [200, 400, 403, 404, 408, 412, 429, 500] {
+        assert!(!counts_as_down(&Ok(st)), "{st} is an answer: RustFS is up");
+    }
+}
+
+#[test]
+fn a_dead_rustfs_fails_fast_after_the_breaker_opens_and_a_short_timeout_view_shares_it() {
+    let d = tempfile::tempdir().unwrap();
+    let cfg = RustfsConfig { endpoint: "http://127.0.0.1:1".into(), region: "us-east-1".into(), root_access_key: "a".into(), root_secret_key: "b".into(), secrets_dir: d.path().join("s"), timeout: Duration::from_secs(5) };
+    let be = RustfsBackend::new(cfg).unwrap().with_retry(Retry { attempts: 1, base: Duration::ZERO }).with_breaker(Breaker { threshold: 3, cooldown: Duration::from_secs(30) });
+    let quick = be.with_timeout(Duration::from_millis(200));
+    for i in 0..3 {
+        assert!(!be.breaker_open(), "closed before failure {i}");
+        assert!(be.get("b", "k").unwrap_err().is_transient());
+    }
+    assert!(be.breaker_open() && quick.breaker_open(), "all views see it");
+    let t = Instant::now();
+    let e = quick.get("b", "k").unwrap_err();
+    assert!(e.is_transient() && e.to_string().contains("circuit open"), "{e}");
+    assert!(t.elapsed() < Duration::from_millis(50), "no connection attempt: {:?}", t.elapsed());
+    assert!(be.put("b", "k", b"v", false).unwrap_err().to_string().contains("circuit open"));
+}
+
 #[test]
 fn config_reads_an_env_file_and_defaults_the_region() {
     let d = tempfile::tempdir().unwrap();
