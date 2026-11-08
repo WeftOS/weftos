@@ -308,6 +308,30 @@ not found. **Not covered:** default bucket retention (`PutObjectLockConfiguratio
 implemented; `archive(delete)` of a locked store will fail on its retained versions; the key policy for `sweep` still allows only
 `s3:DeleteObject`, not `s3:DeleteObjectVersion`/`s3:BypassGovernanceRetention`, which is what you want for retained versions.
 
+**Owner decisions on the release roles (2026-11-08). Each is ready as a switch, tested both ways; the defaults are the safe choice.**
+
+| Decision | Switch | Off (default) | On | Cost of turning it on |
+|---|---|---|---|---|
+| Sweeper may put | `WEFTOS_STORE_SWEEPER_PUT=1` (`PolicyOpts.sweeper_put`) | sweeper key: read, list, `s3:DeleteObject` | adds `s3:PutObject` and multipart actions | the key can overwrite or copy over any artifact; in a locked store the overwrite adds a version and the retained one stays (live: 2 versions, delete of the original still refused) |
+| CI uploads straight to RustFS | `WEFTOS_STORE_CI_DIRECT_PUT=1` (`PolicyOpts.ci_direct_put`) | CI key: read only; uploads go through the daemon (`store.put` / `svc.store`), which makes them write-once | adds `s3:PutObject` to the `append` key | RustFS IAM cannot express write-once (it rejects `s3:if-none-match`), so the key can overwrite and copy as well as create; delete stays refused; again only a locked store keeps the original |
+| Receiver diff-gate approvals | none; owner appends `docs/guides/rustfs-store-ingest-approvals.draft.toml` to `config/diff-gate-approvals.toml` | gate fails on `net` (listener, test sockets) and `process` (live test spawns RustFS) | all store_ingest findings become "approved" (checked on a scratch copy) | the entries are narrow (this file, these patterns), no other finding changes |
+
+The switches widen only the direct S3 key; the service gate is unchanged (a sweeper `put` through the service is still refused, and an
+`append` put still has to be write-once). Set the env var in the daemon's environment, restart, and the daemon pushes the new policy to
+existing keys at start (`reconcile`); `StoreService::set_policy_opts` then `reconcile()` does the same at run time. Tested: policy unit
+test (off, each switch alone, back off), service test (backend key policy after reconcile, both ways), and a live test on a throwaway
+RustFS 1.0.4 that flips both switches over a locked release store. Recommendation: leave both off. A locked release store with CI
+uploading through the daemon gives write-once, retention and no overwrite path; each switch trades that for convenience.
+
+**Transport hardening (2026-11-08).** `BackendError::Unavailable` (with `is_transient()`) now means the backend, not the request, was the
+problem: no connection, or HTTP 408/429/500/502/503/504 after retries. 401 maps to `Forbidden`; a 400 stays `Io` and is not transient.
+`RustfsBackend` retries 3 tries in all with waits of 100 ms then 400 ms (`Retry{attempts, base}`, `with_retry`; waits grow fourfold, cap 5 s).
+It repeats only what is safe: a connection that never opened (any request), a 503/429/408 (the server says it did not act), and for
+reads and plain deletes also 500/502/504 or a dropped connection. A timed-out or dropped write is not repeated, nor a delete of a
+named version, since a repeat could add a second version in a locked store or turn a conditional create into a false "exists".
+Tested without sockets (decision table, wait schedule, unreachable port, status-to-error map). Not done: no circuit breaker, so a
+dead RustFS costs 3 quick tries per call; a timeout still holds a caller for the full 30 s.
+
 **The daemon now has the receiver** (`clawft-weave/src/store_ingest.rs`, 2026-11-08): a loopback HTTP listener, off unless
 `WEFTOS_STORE_INGEST_ADDR` is set, POST only, 1 MiB cap, authenticated by a 256-bit secret in the URL path
 (`store-ingest-token`, 0600; the URLs are written to `store-ingest-urls`), because RustFS's webhook `auth_token` is unverified.

@@ -32,7 +32,7 @@ pub use fs::FsBackend;
 pub use mem::MemBackend;
 pub use name::StoreName;
 #[cfg(feature = "rustfs")]
-pub use rustfs::{RustfsBackend, RustfsConfig};
+pub use rustfs::{Retry, RustfsBackend, RustfsConfig};
 pub use service::{ChainSink, ExposureGate, StoreInfo, StoreService};
 
 /// Errors of the store layer.

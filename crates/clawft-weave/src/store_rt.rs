@@ -131,6 +131,14 @@ fn backends(dir: &Path, rustfs_env: Option<&Path>) -> Result<Backends, String> {
     Ok((be.clone(), be))
 }
 
+/// The owner's decisions on the release roles' direct keys: `WEFTOS_STORE_SWEEPER_PUT=1` lets the
+/// sweeper key put, `WEFTOS_STORE_CI_DIRECT_PUT=1` lets the CI key put straight to RustFS. Both off
+/// unless set to `1` or `true`. See ADR-126, "Owner decisions on the release roles".
+pub(crate) fn policy_opts_from_env() -> weftos_store::policy::PolicyOpts {
+    let on = |k: &str| std::env::var(k).is_ok_and(|v| matches!(v.trim(), "1" | "true" | "on"));
+    weftos_store::policy::PolicyOpts { sweeper_put: on("WEFTOS_STORE_SWEEPER_PUT"), ci_direct_put: on("WEFTOS_STORE_CI_DIRECT_PUT") }
+}
+
 pub(crate) fn open_service(
     node_id: &str,
     dir: &Path,
@@ -149,6 +157,7 @@ pub(crate) fn open_service(
     )
     .map_err(|e| e.to_string())?;
     let svc = Arc::new(svc);
+    svc.set_policy_opts(policy_opts_from_env());
     // A grant change is saved before it is pushed to RustFS; make the backend match what was saved.
     for (p, why) in svc.reconcile() {
         tracing::warn!(principal = %p, error = %why, "grants not pushed to the object store backend; refused by the service, but the backend key is behind");

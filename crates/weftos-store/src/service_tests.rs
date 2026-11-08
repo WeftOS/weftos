@@ -495,3 +495,31 @@ fn listing_versions_needs_a_grant_and_a_backend_that_keeps_them() {
     // The in-memory backend keeps one copy per key; the answer says so rather than inventing versions.
     assert!(matches!(r.svc.list_versions(&local("reader"), &project(), ""), Err(StoreError::Backend(BackendError::Unsupported(_)))));
 }
+
+#[test]
+fn the_owner_switches_reach_the_backend_keys_both_ways_after_a_reconcile() {
+    use crate::policy::PolicyOpts;
+    let r = rig();
+    let rel = StoreName::release("weft", P, "stable").unwrap();
+    let (ci, sw) = (Principal::parse(CI_PRINCIPAL).unwrap(), Principal::parse(SWEEPER_PRINCIPAL).unwrap());
+    r.svc.create_store(&rel, "daemon", Parties { appenders: vec![ci.clone()], sweepers: vec![sw.clone()], ..Default::default() }).unwrap();
+    let key = |p: &Principal| crate::backend::AdminBackend::create_access_key(&*r.be, &p.to_string()).unwrap().id;
+    let (ci_k, sw_k) = (key(&ci), key(&sw));
+    let can_put = |k: &str| r.be.authorize(k, &rel.bucket(), "s3:PutObject").is_ok();
+    // Default: both keys are put-less at the backend.
+    assert!(!can_put(&ci_k) && !can_put(&sw_k));
+    // The owner turns the sweeper switch on: after a reconcile only the sweeper key can put.
+    r.svc.set_policy_opts(PolicyOpts { sweeper_put: true, ..Default::default() });
+    assert!(r.svc.reconcile().is_empty());
+    assert!(can_put(&sw_k) && !can_put(&ci_k));
+    // CI switch on, sweeper off.
+    r.svc.set_policy_opts(PolicyOpts { ci_direct_put: true, ..Default::default() });
+    assert!(r.svc.reconcile().is_empty());
+    assert!(can_put(&ci_k) && !can_put(&sw_k));
+    // Back to the default: both refused again, and the service's own gate never moved.
+    r.svc.set_policy_opts(PolicyOpts::default());
+    assert!(r.svc.reconcile().is_empty());
+    assert!(!can_put(&ci_k) && !can_put(&sw_k));
+    let sweeper = Caller::local(sw);
+    assert!(r.svc.put(&sweeper, &rel, "v1/x", b"x", false).is_err(), "the service still refuses a sweeper put");
+}

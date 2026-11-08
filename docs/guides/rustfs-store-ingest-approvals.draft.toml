@@ -1,0 +1,25 @@
+# DRAFT for the owner, not applied. Append to config/diff-gate-approvals.toml (owner only) to approve
+# the ADR-126 S1 receiver (commit 698de23f). Checked: with these appended, every store_ingest finding of
+# scripts/diff-gate.sh is "approved" and nothing else changes.
+
+# ADR-126 S1 store_ingest (RustFS audit/notification receiver). Draft for the owner to paste; scoped to this file.
+[[approval]]
+rule        = "net"
+path        = "crates/clawft-weave/src/store_ingest.rs"
+pattern     = 'TcpListener'
+reason      = "ADR-126 S1: loopback-only listener (127.0.0.1, POST only, 1 MiB cap, secret path token) receiving RustFS audit/notification webhooks; off unless WEFTOS_STORE_INGEST_ADDR is set"
+approved_by = "owner"
+
+[[approval]]
+rule        = "net"
+path        = "crates/clawft-weave/src/store_ingest_tests.rs"
+pattern     = '(TcpStream|TcpListener)'
+reason      = "ADR-126 S1: tests talk to the receiver and bind a free loopback port"
+approved_by = "owner"
+
+[[approval]]
+rule        = "process"
+path        = "crates/clawft-weave/src/store_ingest_tests.rs"
+pattern     = 'std::process::|Command::new'
+reason      = "ADR-126 S1: the ignored live test starts a throwaway loopback RustFS binary named by WEFTOS_STORE_TEST_RUSTFS_BIN"
+approved_by = "owner"

@@ -24,10 +24,21 @@ pub enum BackendError {
     /// The backend cannot do this (Object Lock on the local backends).
     #[error("unsupported: {0}")]
     Unsupported(String),
+    /// The backend could not be reached, or answered 5xx/429/408: nothing says the request was
+    /// refused, so the same call may work later. Already retried (see `Retry`) before it surfaces.
+    #[error("backend unavailable: {0}")]
+    Unavailable(String),
     #[error("bad object key: {0}")]
     BadKey(String),
     #[error("backend: {0}")]
     Io(String),
+}
+
+impl BackendError {
+    /// Whether trying again later might succeed (the backend, not the request, was the problem).
+    pub fn is_transient(&self) -> bool {
+        matches!(self, Self::Unavailable(_))
+    }
 }
 
 /// Size and identity of one object.

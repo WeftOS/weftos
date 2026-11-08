@@ -6,20 +6,42 @@ use serde_json::{Value, json};
 use crate::access::{Access, Grant};
 use crate::name::StoreName;
 
-fn actions(a: Access) -> Vec<&'static str> {
+/// Two owner decisions about what the direct (S3) keys of the `append` and `sweep` roles may do.
+/// Both default to off, the safer choice; each widens only the key's own power at RustFS, never what
+/// the service lets a principal do. See the ADR-126 section "Owner decisions on the release roles".
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PolicyOpts {
+    /// The sweeper's key may also `s3:PutObject` (so it can overwrite or copy over an artifact).
+    pub sweeper_put: bool,
+    /// CI's key may `s3:PutObject` directly (uploads need no trip through the daemon) but can then
+    /// overwrite or copy over an artifact; only a locked store's retention protects existing versions.
+    pub ci_direct_put: bool,
+}
+
+const PUT: [&str; 3] = ["s3:PutObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"];
+
+fn actions(a: Access, o: &PolicyOpts) -> Vec<&'static str> {
     let mut v = vec!["s3:GetObject", "s3:ListBucket", "s3:ListBucketVersions", "s3:GetBucketLocation"];
-    let put = ["s3:PutObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"];
     match a {
         Access::Read => {}
         // CI: read only at RustFS. Write-once cannot be stated in RustFS IAM (it rejects the
         // `s3:if-none-match` condition key, 1.0.4), and a plain PutObject allow would let the key
         // overwrite or copy over an artifact. So CI's puts go through the daemon, which makes them
         // `If-None-Match: *` with its own key; the key itself can read and list, nothing else.
-        Access::Append => {}
+        Access::Append => {
+            if o.ci_direct_put {
+                v.extend(PUT);
+            }
+        }
         // The sweeper: delete, never put.
-        Access::Sweep => v.push("s3:DeleteObject"),
+        Access::Sweep => {
+            v.push("s3:DeleteObject");
+            if o.sweeper_put {
+                v.extend(PUT);
+            }
+        }
         Access::Write | Access::Admin => {
-            v.extend(put);
+            v.extend(PUT);
             v.push("s3:DeleteObject");
         }
     }
@@ -29,13 +51,18 @@ fn actions(a: Access) -> Vec<&'static str> {
 /// A policy allowing exactly the enabled grants, nothing else. No enabled grants gives a
 /// policy with no statements (everything denied).
 pub fn for_grants(grants: &[Grant]) -> Value {
+    for_grants_with(grants, &PolicyOpts::default())
+}
+
+/// [`for_grants`] with the owner's switches for the `append` and `sweep` roles.
+pub fn for_grants_with(grants: &[Grant], opts: &PolicyOpts) -> Value {
     let mut st = Vec::new();
     for g in grants.iter().filter(|g| g.enabled) {
         let Ok(name) = StoreName::parse(&g.store) else { continue };
         let b = name.bucket();
         st.push(json!({
             "Effect": "Allow",
-            "Action": actions(g.access),
+            "Action": actions(g.access, opts),
             "Resource": [format!("arn:aws:s3:::{b}"), format!("arn:aws:s3:::{b}/*")],
         }));
     }
@@ -77,5 +104,27 @@ mod tests {
         assert!(sw.contains(&"s3:DeleteObject".into()) && !sw.contains(&"s3:PutObject".into()) && sw.contains(&"s3:GetObject".into()));
         let w = acts(Access::Write);
         assert!(w.contains(&"s3:PutObject".into()) && w.contains(&"s3:DeleteObject".into()));
+    }
+
+    #[test]
+    fn the_owner_switches_widen_only_the_ci_and_sweeper_keys_and_default_off() {
+        let s = StoreName::release("m", "01HZX3K9Q5M2N7P8R4T6V0WABC", "stable").unwrap().to_string();
+        let acts = |a, o: PolicyOpts| {
+            let p = for_grants_with(&[g(&s, a, true)], &o);
+            p["Statement"][0]["Action"].as_array().unwrap().iter().filter_map(Value::as_str).map(str::to_owned).collect::<Vec<_>>()
+        };
+        let put = "s3:PutObject".to_owned();
+        assert_eq!(PolicyOpts::default(), PolicyOpts { sweeper_put: false, ci_direct_put: false });
+        // Off (the default): neither key can put, and `for_grants` is the off policy.
+        assert!(!acts(Access::Append, PolicyOpts::default()).contains(&put));
+        assert!(!acts(Access::Sweep, PolicyOpts::default()).contains(&put));
+        assert_eq!(for_grants(&[g(&s, Access::Sweep, true)]), for_grants_with(&[g(&s, Access::Sweep, true)], &PolicyOpts::default()));
+        // Each switch moves only its own role.
+        let sw_on = PolicyOpts { sweeper_put: true, ..Default::default() };
+        assert!(acts(Access::Sweep, sw_on).contains(&put) && acts(Access::Sweep, sw_on).contains(&"s3:DeleteObject".to_owned()));
+        assert!(!acts(Access::Append, sw_on).contains(&put) && !acts(Access::Read, sw_on).contains(&put));
+        let ci_on = PolicyOpts { ci_direct_put: true, ..Default::default() };
+        assert!(acts(Access::Append, ci_on).contains(&put) && !acts(Access::Append, ci_on).contains(&"s3:DeleteObject".to_owned()));
+        assert!(!acts(Access::Sweep, ci_on).contains(&put) && !acts(Access::Read, ci_on).contains(&put));
     }
 }

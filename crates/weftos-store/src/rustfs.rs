@@ -54,8 +54,65 @@ pub struct RustfsBackend {
     base: String,
     host: String,
     http: Client,
+    retry: Retry,
 }
 
+/// How a request is retried. Only what is safe to repeat is: a connection that never opened (any
+/// request), a 503/429/408 (the server says it did not act, any request), and for reads and deletes
+/// also a 500/502/504 or a dropped connection. A timed-out or dropped write is NOT repeated: it may
+/// have landed, and a repeat would add a version in a locked store or turn a conditional create
+/// into a false "exists".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Retry {
+    /// Total tries, the first included. 1 turns retrying off.
+    pub attempts: u32,
+    /// Wait before the second try; each wait is four times the one before, capped at 5 s.
+    pub base: Duration,
+}
+
+impl Default for Retry {
+    fn default() -> Self {
+        Self { attempts: 3, base: Duration::from_millis(100) }
+    }
+}
+
+impl Retry {
+    /// The wait after try number `done` (1-based) failed.
+    pub fn wait_after(&self, done: u32) -> Duration {
+        self.base.saturating_mul(4u32.saturating_pow(done.saturating_sub(1))).min(Duration::from_secs(5))
+    }
+}
+
+/// A request that failed below HTTP.
+struct Xport {
+    msg: String,
+    /// The connection was never made, so the server saw nothing.
+    never_sent: bool,
+    timed_out: bool,
+}
+
+/// Reads and deletes can be repeated without changing the outcome.
+fn repeatable(method: &str, query: &[(String, String)]) -> bool {
+    match method {
+        "GET" | "HEAD" => true,
+        // A plain delete is idempotent; deleting a named version of a locked object is too, but
+        // leave that to the caller to reissue.
+        "DELETE" => !query.iter().any(|(k, _)| k == "versionId"),
+        _ => false,
+    }
+}
+
+/// Whether to try again after this result.
+fn should_retry(method: &str, query: &[(String, String)], r: &Result<u16, &Xport>) -> bool {
+    match r {
+        Ok(503 | 429 | 408) => true,
+        Ok(500 | 502 | 504) => repeatable(method, query),
+        Ok(_) => false,
+        Err(x) => x.never_sent || (repeatable(method, query) && !x.timed_out),
+    }
+}
+
+#[derive(Debug)]
 struct Resp {
     status: u16,
     etag: Option<String>,
@@ -133,7 +190,13 @@ impl RustfsBackend {
         };
         let http = Client::builder().timeout(cfg.timeout).build().map_err(io)?;
         std::fs::create_dir_all(&cfg.secrets_dir).map_err(io)?;
-        Ok(Self { cfg, base: format!("{scheme}://{auth}"), host, http })
+        Ok(Self { cfg, base: format!("{scheme}://{auth}"), host, http, retry: Retry::default() })
+    }
+
+    /// Change how requests are retried (tests use a short `base`; `attempts: 1` turns it off).
+    pub fn with_retry(mut self, retry: Retry) -> Self {
+        self.retry = retry;
+        self
     }
 
     /// The access-key id issued for a principal label. Stable, so a restart finds the same key.
@@ -147,6 +210,29 @@ impl RustfsBackend {
     }
 
     fn send(&self, method: &str, path: &str, query: &[(String, String)], body: &[u8], extra: &[(&str, String)]) -> Result<Resp, BackendError> {
+        let mut done = 0;
+        loop {
+            done += 1;
+            let r = self.send_once(method, path, query, body, extra);
+            let seen = match &r {
+                Ok(Ok(resp)) => Ok(resp.status),
+                Ok(Err(x)) => Err(x),
+                Err(e) => return Err(e.clone()),
+            };
+            if done < self.retry.attempts && should_retry(method, query, &seen) {
+                std::thread::sleep(self.retry.wait_after(done));
+                continue;
+            }
+            return match r {
+                Ok(Ok(resp)) => Ok(resp),
+                Ok(Err(x)) => Err(BackendError::Unavailable(format!("{method} {path}: {}", x.msg))),
+                Err(e) => Err(e),
+            };
+        }
+    }
+
+    /// One try. The outer error is a local fault (signing, clock) that retrying cannot help.
+    fn send_once(&self, method: &str, path: &str, query: &[(String, String)], body: &[u8], extra: &[(&str, String)]) -> Result<Result<Resp, Xport>, BackendError> {
         let now = SystemTime::now().duration_since(UNIX_EPOCH).map_err(io)?.as_secs();
         let date = sigv4::amz_date(now);
         let sha = sigv4::sha256_hex(body);
@@ -171,13 +257,19 @@ impl RustfsBackend {
         if !body.is_empty() {
             rb = rb.body(body.to_vec());
         }
-        let r = rb.send().map_err(io)?;
+        let r = match rb.send() {
+            Ok(r) => r,
+            Err(e) => return Ok(Err(Xport { msg: e.to_string(), never_sent: e.is_connect(), timed_out: e.is_timeout() })),
+        };
         let status = r.status().as_u16();
         let etag = r.headers().get("etag").and_then(|v| v.to_str().ok()).map(|v| v.trim_matches('"').to_owned());
         let len = r.headers().get("content-length").and_then(|v| v.to_str().ok()).and_then(|v| v.parse().ok());
         let version = r.headers().get("x-amz-version-id").and_then(|v| v.to_str().ok()).map(str::to_owned);
-        let body = r.bytes().map_err(io)?.to_vec();
-        Ok(Resp { status, etag, len, version, body })
+        let body = match r.bytes() {
+            Ok(b) => b.to_vec(),
+            Err(e) => return Ok(Err(Xport { msg: format!("reading the response: {e}"), never_sent: false, timed_out: e.is_timeout() })),
+        };
+        Ok(Ok(Resp { status, etag, len, version, body }))
     }
 
     /// Turn a non-2xx response into the matching [`BackendError`].
@@ -189,7 +281,8 @@ impl RustfsBackend {
         let code = xml_tag(&text, "Code").unwrap_or_default();
         let msg = xml_tag(&text, "Message").unwrap_or_default();
         Err(match (r.status, code.as_str(), ctx) {
-            (403, _, _) => BackendError::Forbidden(format!("{code} {msg}").trim().to_owned()),
+            (401 | 403, _, _) => BackendError::Forbidden(format!("{code} {msg}").trim().to_owned()),
+            (408 | 429 | 500 | 502 | 503 | 504, _, _) => BackendError::Unavailable(format!("{} {code} {msg}", r.status).trim().to_owned()),
             (412, _, Ctx::Object(_, k)) => BackendError::Exists(k.to_owned()),
             (404, "NoSuchBucket", Ctx::Bucket(b) | Ctx::Object(b, _)) => BackendError::NoBucket(b.to_owned()),
             (404, _, Ctx::Object(_, k)) => BackendError::NoObject(k.to_owned()),

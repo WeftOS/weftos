@@ -180,6 +180,7 @@ pub struct StoreService {
     invalidator: Mutex<Option<Invalidator>>,
     /// Serialises backend pushes of a principal's grants.
     apply: Mutex<()>,
+    policy_opts: Mutex<policy::PolicyOpts>,
     st: Mutex<State>,
 }
 
@@ -211,7 +212,7 @@ impl StoreService {
                 exposure.register(&exposure_id(&n), &n.to_string());
             }
         }
-        Ok(Self { cfg, admin, objects, exposure, audit, chain, invalidator: Mutex::new(None), apply: Mutex::new(()), st: Mutex::new(st) })
+        Ok(Self { cfg, admin, objects, exposure, audit, chain, invalidator: Mutex::new(None), apply: Mutex::new(()), policy_opts: Mutex::new(policy::PolicyOpts::default()), st: Mutex::new(st) })
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {
@@ -359,10 +360,21 @@ impl StoreService {
                 k
             }
         };
-        self.admin.put_policy(&key, &policy::for_grants(&grants))?;
+        self.admin.put_policy(&key, &policy::for_grants_with(&grants, &self.policy_opts()))?;
         let live = !suspended && grants.iter().any(|g| g.enabled);
         self.admin.set_key_enabled(&key, live)?;
         Ok(())
+    }
+
+    /// The owner's switches for the direct keys of the `append` and `sweep` roles.
+    pub fn policy_opts(&self) -> policy::PolicyOpts {
+        *self.policy_opts.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Set the owner's switches; takes effect for keys as their grants are pushed, so call
+    /// [`Self::reconcile`] after changing it to bring existing keys in line.
+    pub fn set_policy_opts(&self, opts: policy::PolicyOpts) {
+        *self.policy_opts.lock().unwrap_or_else(|e| e.into_inner()) = opts;
     }
 
     /// Push every principal's grants into the backend again. A grant change is saved before it

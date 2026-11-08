@@ -24,6 +24,83 @@ fn version_blocks_come_out_in_document_order_with_markers_between() {
     assert_eq!(b, vec![("Version", "a".to_owned()), ("DeleteMarker", "a".to_owned()), ("Version", "b".to_owned())]);
 }
 
+fn xport(never_sent: bool, timed_out: bool) -> Xport {
+    Xport { msg: "x".into(), never_sent, timed_out }
+}
+
+#[test]
+fn only_what_is_safe_to_repeat_is_retried() {
+    let no_q: &[(String, String)] = &[];
+    let ver = vec![("versionId".to_owned(), "v".to_owned())];
+    // The server says it did not act: any request.
+    for m in ["GET", "PUT", "DELETE", "POST"] {
+        for st in [503, 429, 408] {
+            assert!(should_retry(m, no_q, &Ok(st)), "{m} {st}");
+        }
+    }
+    // Other 5xx: reads and plain deletes only; a write may have landed.
+    for st in [500, 502, 504] {
+        assert!(should_retry("GET", no_q, &Ok(st)) && should_retry("HEAD", no_q, &Ok(st)) && should_retry("DELETE", no_q, &Ok(st)));
+        assert!(!should_retry("PUT", no_q, &Ok(st)) && !should_retry("POST", no_q, &Ok(st)), "a write is not repeated on {st}");
+        assert!(!should_retry("DELETE", &ver, &Ok(st)), "deleting a named version is the caller's to reissue");
+    }
+    // Answers that are final.
+    for st in [200, 204, 400, 403, 404, 409, 412] {
+        assert!(!should_retry("GET", no_q, &Ok(st)), "{st} is an answer");
+    }
+    // Transport failures: a connection that never opened is always safe; otherwise only a repeatable
+    // request, and never after a timeout (the work may still be running).
+    assert!(should_retry("PUT", no_q, &Err(&xport(true, false))));
+    assert!(!should_retry("PUT", no_q, &Err(&xport(false, false))), "a dropped write may have landed");
+    assert!(should_retry("GET", no_q, &Err(&xport(false, false))));
+    assert!(!should_retry("GET", no_q, &Err(&xport(false, true))), "a timeout is not retried");
+}
+
+#[test]
+fn waits_grow_fourfold_and_stop_at_five_seconds() {
+    let r = Retry { attempts: 9, base: Duration::from_millis(100) };
+    let w: Vec<u128> = (1..=5).map(|n| r.wait_after(n).as_millis()).collect();
+    assert_eq!(w, vec![100, 400, 1600, 5000, 5000]);
+    assert_eq!(Retry::default().attempts, 3);
+}
+
+#[test]
+fn an_unreachable_backend_is_retried_then_reported_as_unavailable() {
+    let cfg = |d: &Path| RustfsConfig { endpoint: "http://127.0.0.1:1".into(), region: "us-east-1".into(), root_access_key: "a".into(), root_secret_key: "b".into(), secrets_dir: d.join("s"), timeout: Duration::from_secs(2) };
+    let d = tempfile::tempdir().unwrap();
+    let t = std::time::Instant::now();
+    let slow = RustfsBackend::new(cfg(d.path())).unwrap().with_retry(Retry { attempts: 3, base: Duration::from_millis(40) });
+    let e = slow.get("b", "k").unwrap_err();
+    assert!(matches!(e, BackendError::Unavailable(_)) && e.is_transient(), "{e:?}");
+    assert!(t.elapsed() >= Duration::from_millis(40 + 160), "two waits happened: {:?}", t.elapsed());
+    // A write to a port nothing listens on never opened a connection, so it is retried too.
+    let t = std::time::Instant::now();
+    assert!(slow.put("b", "k", b"v", false).unwrap_err().is_transient());
+    assert!(t.elapsed() >= Duration::from_millis(200));
+    // Off: one try, no waiting.
+    let once = RustfsBackend::new(cfg(d.path())).unwrap().with_retry(Retry { attempts: 1, base: Duration::from_secs(9) });
+    let t = std::time::Instant::now();
+    assert!(once.get("b", "k").unwrap_err().is_transient());
+    assert!(t.elapsed() < Duration::from_secs(3));
+}
+
+#[test]
+fn http_statuses_map_to_the_error_that_says_what_to_do() {
+    let be = RustfsBackend::new(RustfsConfig { endpoint: "http://127.0.0.1:1".into(), region: "r".into(), root_access_key: "a".into(), root_secret_key: "b".into(), secrets_dir: tempfile::tempdir().unwrap().keep(), timeout: Duration::from_secs(1) }).unwrap();
+    let resp = |status, code: &str| Resp { status, etag: None, len: None, version: None, body: format!("<Error><Code>{code}</Code><Message>m</Message></Error>").into_bytes() };
+    let ob = Ctx::Object("b", "k");
+    assert!(matches!(be.check(resp(401, "InvalidAccessKeyId"), ob), Err(BackendError::Forbidden(_))));
+    assert!(matches!(be.check(resp(403, "AccessDenied"), ob), Err(BackendError::Forbidden(_))));
+    for st in [408, 429, 500, 502, 503, 504] {
+        assert!(be.check(resp(st, "SlowDown"), ob).unwrap_err().is_transient(), "{st}");
+    }
+    assert!(matches!(be.check(resp(404, "NoSuchKey"), ob), Err(BackendError::NoObject(_))));
+    assert!(matches!(be.check(resp(404, "NoSuchBucket"), ob), Err(BackendError::NoBucket(_))));
+    assert!(matches!(be.check(resp(412, "PreconditionFailed"), ob), Err(BackendError::Exists(_))));
+    assert!(matches!(be.check(resp(400, "InvalidArgument"), ob), Err(BackendError::Io(_))), "a bad request is not transient");
+    assert!(!be.check(resp(400, "InvalidArgument"), ob).unwrap_err().is_transient());
+}
+
 #[test]
 fn config_reads_an_env_file_and_defaults_the_region() {
     let d = tempfile::tempdir().unwrap();
@@ -451,4 +528,64 @@ fn live_list_versions_shows_a_replaced_manifest_and_a_delete_marker() {
     assert!(matches!(user.delete_version(&b, "release/manifest.json", &evil.version_id.unwrap(), true), Err(BackendError::Forbidden(_))));
     be.set_key_enabled(&k.id, false).unwrap();
     assert!(matches!(user.list_versions(&b, ""), Err(BackendError::Forbidden(_))), "a disabled key lists nothing");
+}
+
+/// The owner's two switches, live, both ways: off, the CI and sweeper keys cannot put (the
+/// `live_release_roles_*` test); on, each can, and what that costs is visible. In a locked store
+/// an overwrite by the widened key adds a version and leaves the retained one in place.
+#[test]
+#[ignore = "needs a throwaway RustFS: WEFTOS_STORE_TEST_RUSTFS_ENV"]
+fn live_owner_switches_let_the_ci_and_sweeper_keys_put_and_the_lock_keeps_the_original() {
+    use crate::backend::{LockMode, PutOpts, Retention};
+    use crate::policy::PolicyOpts;
+    use crate::service::{CI_PRINCIPAL, SWEEPER_PRINCIPAL};
+    let (cfg, _d) = live().expect("WEFTOS_STORE_TEST_RUSTFS_ENV");
+    let be = Arc::new(RustfsBackend::new(cfg.clone()).unwrap());
+    let svc = StoreService::open(
+        Config { node_id: uniq("n").replace('_', "-"), state_path: None, clock: || 1_000 },
+        be.clone(),
+        be.clone(),
+        Arc::new(Open),
+        Arc::new(MemSink::default()),
+        Arc::new(Chain::default()),
+    )
+    .unwrap();
+    let rel = StoreName::release("weft", &ulid::Ulid::new().to_string(), "stable").unwrap();
+    let sfx = ulid::Ulid::new().to_string().to_lowercase()[16..].to_owned();
+    let (ci_p, sw_p) = (Principal::parse(&format!("{CI_PRINCIPAL}-{sfx}")).unwrap(), Principal::parse(&format!("{SWEEPER_PRINCIPAL}-{sfx}")).unwrap());
+    svc.create_locked_store(&rel, "daemon", Parties { appenders: vec![ci_p.clone()], sweepers: vec![sw_p.clone()], ..Default::default() }).unwrap();
+    let b = rel.bucket();
+    let ci = as_key(&cfg, &be, &RustfsBackend::key_id_for(&ci_p.to_string()));
+    let sw = as_key(&cfg, &be, &RustfsBackend::key_id_for(&sw_p.to_string()));
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    let keep = PutOpts { if_none_match: true, retention: Some(Retention { mode: LockMode::Compliance, until_unix_s: now + 3600 }), legal_hold: false };
+    let orig = svc.put_locked(&Caller::local(ci_p.clone()), &rel, "v1/app.tar", b"build", &keep).unwrap();
+
+    // Off: both keys refused.
+    assert!(matches!(ci.put(&b, "v1/app.tar", b"evil", false), Err(BackendError::Forbidden(_))));
+    assert!(matches!(sw.put(&b, "v1/app.tar", b"evil", false), Err(BackendError::Forbidden(_))));
+
+    // Sweeper switch on: the sweeper key can now put (an overwrite), the CI key still cannot.
+    svc.set_policy_opts(PolicyOpts { sweeper_put: true, ..Default::default() });
+    assert!(svc.reconcile().is_empty());
+    sw.put(&b, "v1/app.tar", b"swept-in", false).expect("sweeper put allowed with the switch on");
+    assert!(matches!(ci.put(&b, "v1/app.tar", b"evil", false), Err(BackendError::Forbidden(_))));
+    // The retained original is still there as its own version; the newest is the overwrite.
+    let v = be.list_versions(&b, "v1/app.tar").unwrap();
+    eprintln!("SWITCH sweeper put in a locked store: {v:?}");
+    assert_eq!(v.len(), 2);
+    assert!(v.iter().any(|x| Some(&x.version_id) == orig.version_id.as_ref() && !x.is_latest), "the original is kept, no longer newest");
+    assert!(matches!(be.delete_version(&b, "v1/app.tar", orig.version_id.as_deref().unwrap(), true), Err(BackendError::Forbidden(_))));
+
+    // CI switch on, sweeper off: CI can put directly (even a copy over a key), the sweeper cannot.
+    svc.set_policy_opts(PolicyOpts { ci_direct_put: true, ..Default::default() });
+    assert!(svc.reconcile().is_empty());
+    ci.put(&b, "v1/direct.tar", b"direct", true).expect("CI direct put allowed with the switch on");
+    assert!(matches!(sw.put(&b, "v1/app.tar", b"again", false), Err(BackendError::Forbidden(_))));
+    assert!(matches!(ci.delete(&b, "v1/direct.tar"), Err(BackendError::Forbidden(_))), "the switch gives CI put, never delete");
+
+    // Back to the default: refused again.
+    svc.set_policy_opts(PolicyOpts::default());
+    assert!(svc.reconcile().is_empty());
+    assert!(matches!(ci.put(&b, "v1/direct2.tar", b"x", true), Err(BackendError::Forbidden(_))));
 }
