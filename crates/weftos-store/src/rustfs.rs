@@ -240,6 +240,27 @@ impl ObjectBackend for RustfsBackend {
         Ok(ObjectMeta { key: key.to_owned(), size: r.len.unwrap_or(0), etag: r.etag.unwrap_or_default() })
     }
 
+    fn put_if_match(&self, bucket: &str, key: &str, data: &[u8], etag: &str) -> Result<ObjectMeta, BackendError> {
+        check_key(key)?;
+        let extra = [("if-match", format!("\"{etag}\""))];
+        let r = self.send("PUT", &format!("/{bucket}/{key}"), &[], data, &extra)?;
+        if r.status == 412 {
+            return Err(BackendError::PreconditionFailed(key.to_owned()));
+        }
+        let r = self.check(r, Ctx::Object(bucket, key))?;
+        Ok(ObjectMeta { key: key.to_owned(), size: data.len() as u64, etag: r.etag.unwrap_or_default() })
+    }
+
+    fn delete_if_match(&self, bucket: &str, key: &str, etag: &str) -> Result<(), BackendError> {
+        check_key(key)?;
+        let extra = [("if-match", format!("\"{etag}\""))];
+        let r = self.send("DELETE", &format!("/{bucket}/{key}"), &[], &[], &extra)?;
+        if r.status == 412 {
+            return Err(BackendError::PreconditionFailed(key.to_owned()));
+        }
+        self.check(r, Ctx::Object(bucket, key)).map(|_| ())
+    }
+
     fn delete(&self, bucket: &str, key: &str) -> Result<(), BackendError> {
         check_key(key)?;
         let r = self.send("DELETE", &format!("/{bucket}/{key}"), &[], &[], &[])?;

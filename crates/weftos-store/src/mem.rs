@@ -92,6 +92,31 @@ impl ObjectBackend for MemBackend {
         Ok(meta(key, data))
     }
 
+    fn put_if_match(&self, bucket: &str, key: &str, data: &[u8], etag: &str) -> Result<ObjectMeta, BackendError> {
+        check_key(key)?;
+        let mut g = self.lock();
+        let b = g.buckets.get_mut(bucket).ok_or_else(|| BackendError::NoBucket(bucket.into()))?;
+        match b.objects.get(key) {
+            None => return Err(BackendError::NoObject(key.into())),
+            Some(cur) if etag_of(cur) != etag => return Err(BackendError::PreconditionFailed(key.into())),
+            Some(_) => {}
+        }
+        b.objects.insert(key.to_owned(), data.to_vec());
+        Ok(meta(key, data))
+    }
+
+    fn delete_if_match(&self, bucket: &str, key: &str, etag: &str) -> Result<(), BackendError> {
+        let mut g = self.lock();
+        let b = g.buckets.get_mut(bucket).ok_or_else(|| BackendError::NoBucket(bucket.into()))?;
+        match b.objects.get(key) {
+            None => return Err(BackendError::NoObject(key.into())),
+            Some(cur) if etag_of(cur) != etag => return Err(BackendError::PreconditionFailed(key.into())),
+            Some(_) => {}
+        }
+        b.objects.remove(key);
+        Ok(())
+    }
+
     fn get(&self, bucket: &str, key: &str) -> Result<Vec<u8>, BackendError> {
         let g = self.lock();
         let b = g.buckets.get(bucket).ok_or_else(|| BackendError::NoBucket(bucket.into()))?;

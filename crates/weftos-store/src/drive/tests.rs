@@ -18,13 +18,15 @@ struct Spy {
     puts: Mutex<Vec<String>>,
     /// Extra keys `list` reports that the store would never accept (a hostile or buggy listing).
     ghosts: Vec<String>,
+    /// False: the conditional writes answer `Unsupported`, like a backend that has none.
+    cond: bool,
 }
 
 impl Spy {
     fn new() -> Self {
         let inner = MemBackend::new();
         inner.create_bucket(B, &[]).unwrap();
-        Self { inner, gets: AtomicUsize::new(0), puts: Mutex::new(vec![]), ghosts: vec![] }
+        Self { inner, gets: AtomicUsize::new(0), puts: Mutex::new(vec![]), ghosts: vec![], cond: true }
     }
     fn seed(&self, key: &str, data: &str) {
         self.inner.put(B, key, data.as_bytes(), false).unwrap();
@@ -50,6 +52,19 @@ impl ObjectBackend for Spy {
     fn put(&self, b: &str, k: &str, d: &[u8], n: bool) -> std::result::Result<ObjectMeta, BackendError> {
         self.puts.lock().unwrap().push(k.to_owned());
         self.inner.put(b, k, d, n)
+    }
+    fn put_if_match(&self, b: &str, k: &str, d: &[u8], e: &str) -> std::result::Result<ObjectMeta, BackendError> {
+        if !self.cond {
+            return Err(BackendError::Unsupported);
+        }
+        self.puts.lock().unwrap().push(k.to_owned());
+        self.inner.put_if_match(b, k, d, e)
+    }
+    fn delete_if_match(&self, b: &str, k: &str, e: &str) -> std::result::Result<(), BackendError> {
+        if !self.cond {
+            return Err(BackendError::Unsupported);
+        }
+        self.inner.delete_if_match(b, k, e)
     }
     fn get(&self, b: &str, k: &str) -> std::result::Result<Vec<u8>, BackendError> {
         self.gets.fetch_add(1, Ordering::SeqCst);
@@ -467,4 +482,56 @@ fn event_driven_watch_reports_a_change_made_while_it_waits() {
     t.join().unwrap();
     assert_eq!(got.map(|c| c.len()), Some(1));
     assert!(started.elapsed() < Duration::from_secs(10));
+}
+
+fn fs_project() -> (tempfile::TempDir, crate::fs::FsBackend) {
+    let root = tempfile::tempdir().unwrap();
+    let be = crate::fs::FsBackend::open(&root.path().join("store")).unwrap();
+    be.create_bucket(B, &[]).unwrap();
+    be.put(B, "proj/a.txt", b"alpha", false).unwrap();
+    be.put(B, "proj/dir/b.txt", b"beta", false).unwrap();
+    (root, be)
+}
+
+#[test]
+fn modify_and_delete_use_the_conditional_write_when_the_backend_has_one() {
+    let (root, be) = fs_project();
+    let dest = root.path().join("tree");
+    materialise(&be, B, "proj", &dest).unwrap();
+    wr(&dest, "a.txt", "alpha v2");
+    std::fs::remove_file(dest.join("dir/b.txt")).unwrap();
+    let r = sync_up(&be, &dest).unwrap();
+    assert_eq!((r.put.clone(), r.deleted.clone()), (vec!["a.txt".to_string()], vec!["dir/b.txt".to_string()]));
+    assert_eq!((r.conditional, r.head_then_write), (2, 0));
+    assert_eq!(be.get(B, "proj/a.txt").unwrap(), b"alpha v2");
+    assert!(be.get(B, "proj/dir/b.txt").is_err());
+}
+
+#[test]
+fn a_conditional_modify_refused_by_the_store_becomes_a_conflict_and_leaves_the_remote_alone() {
+    let (root, be) = fs_project();
+    let dest = root.path().join("tree");
+    materialise(&be, B, "proj", &dest).unwrap();
+    wr(&dest, "a.txt", "mine");
+    be.put(B, "proj/a.txt", b"theirs", false).unwrap();
+    std::fs::remove_file(dest.join("dir/b.txt")).unwrap();
+    be.put(B, "proj/dir/b.txt", b"beta v2", false).unwrap();
+    let r = sync_up(&be, &dest).unwrap();
+    assert_eq!((r.put.len(), r.deleted.len(), r.conditional), (0, 0, 0));
+    assert_eq!(sorted(r.conflicts.clone()), ["a.txt", "dir/b.txt"]);
+    assert_eq!(be.get(B, "proj/a.txt").unwrap(), b"theirs");
+    assert_eq!(be.get(B, "proj/dir/b.txt").unwrap(), b"beta v2");
+}
+
+#[test]
+fn a_backend_without_a_conditional_write_falls_back_to_head_then_write() {
+    let mut s = project();
+    s.cond = false;
+    let (_d, dest) = drive(&s);
+    wr(&dest, "a.txt", "alpha v2");
+    std::fs::remove_file(dest.join("dir/b.txt")).unwrap();
+    let r = sync_up(&s, &dest).unwrap();
+    assert_eq!((r.put.clone(), r.deleted.clone()), (vec!["a.txt".to_string()], vec!["dir/b.txt".to_string()]));
+    assert_eq!((r.conditional, r.head_then_write), (0, 2));
+    assert_eq!(s.text("proj/a.txt").as_deref(), Some("alpha v2"));
 }

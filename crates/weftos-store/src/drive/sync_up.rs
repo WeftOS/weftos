@@ -5,9 +5,11 @@
 //! Delete: the remote object goes and a delete marker is written (ADR-126 section 4 style), unless
 //! the remote changed since, which is a conflict.
 //!
-//! The Modify and Delete checks are head-then-write, not atomic: the store traits have no
-//! conditional put on an etag yet (see the S3 notes). A writer that lands inside that window wins
-//! silently; the create path has no such window.
+//! Modify and Delete send the etag with the write (`put_if_match`, `delete_if_match`) when the
+//! backend supports it, so a writer that lands in between is refused (412) and becomes a conflict.
+//! A backend that answers `Unsupported`, or ignores `If-Match`, gets the older head-then-write,
+//! which is not atomic: a writer that lands inside that window wins silently. The report counts
+//! which path each write took. The create path has no window either way.
 
 use std::path::Path;
 
@@ -30,6 +32,10 @@ pub struct UpReport {
     /// Paths already in conflict, left alone.
     pub open_conflicts: usize,
     pub bytes_put: u64,
+    /// Modifies and deletes that went out as a conditional write (etag checked by the store).
+    pub conditional: usize,
+    /// Modifies and deletes that used head-then-write because the backend has no conditional write.
+    pub head_then_write: usize,
     pub skipped: Vec<Skipped>,
 }
 
@@ -102,6 +108,17 @@ fn up<B: ObjectBackend + ?Sized>(b: &B, dest: &Path, index: &mut Index, opts: &O
                 let Some(entry) = index.entries.get(&ch.path).cloned() else { continue };
                 let Some(data) = read_for_upload(dest, &ch, opts.limits.max_file, rep) else { continue };
                 let hash = hash_of(&data);
+                // Conditional first: the store checks the etag as part of the write.
+                match b.put_if_match(&bucket, &key, &data, &entry.etag) {
+                    Ok(m) => {
+                        rep.conditional += 1;
+                        uploaded(dest, index, &ch, &data, hash, m.etag, rep);
+                        continue;
+                    }
+                    Err(BackendError::Unsupported) => {}
+                    Err(BackendError::PreconditionFailed(_) | BackendError::NoObject(_)) => {}
+                    Err(e) => return Err(e.into()),
+                }
                 match b.head(&bucket, &key) {
                     Err(BackendError::NoObject(_)) => {
                         let who = read_tombstone(b, &bucket, &prefix, &ch.path)
@@ -121,13 +138,29 @@ fn up<B: ObjectBackend + ?Sized>(b: &B, dest: &Path, index: &mut Index, opts: &O
                         }
                     }
                     Ok(_) => {
+                        // Unsupported backend, or a refusal whose etag now matches (a backend whose
+                        // etag form differs between put and head): the older unconditional write.
                         let m = b.put(&bucket, &key, &data, false)?;
+                        rep.head_then_write += 1;
                         uploaded(dest, index, &ch, &data, hash, m.etag, rep);
                     }
                 }
             }
             ChangeKind::Delete => {
                 let Some(entry) = index.entries.get(&ch.path).cloned() else { continue };
+                match b.delete_if_match(&bucket, &key, &entry.etag) {
+                    Ok(()) => {
+                        rep.conditional += 1;
+                        write_tombstone(b, &bucket, &prefix, &ch.path, &device, &entry.etag)?;
+                        index.entries.remove(&ch.path);
+                        rep.deleted.push(ch.path.clone());
+                        log_event(dest, "delete", &ch.path);
+                        continue;
+                    }
+                    Err(BackendError::Unsupported) => {}
+                    Err(BackendError::PreconditionFailed(_) | BackendError::NoObject(_)) => {}
+                    Err(e) => return Err(e.into()),
+                }
                 match b.head(&bucket, &key) {
                     Err(BackendError::NoObject(_)) => {
                         index.entries.remove(&ch.path);
@@ -144,6 +177,7 @@ fn up<B: ObjectBackend + ?Sized>(b: &B, dest: &Path, index: &mut Index, opts: &O
                             Ok(()) | Err(BackendError::NoObject(_)) => {}
                             Err(e) => return Err(e.into()),
                         }
+                        rep.head_then_write += 1;
                         write_tombstone(b, &bucket, &prefix, &ch.path, &device, &entry.etag)?;
                         index.entries.remove(&ch.path);
                         rep.deleted.push(ch.path.clone());
