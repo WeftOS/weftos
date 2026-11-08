@@ -290,3 +290,133 @@ fn live_follower_sees_unmerged_worktrees_across_three_identities() {
         root.delete_access_key(&k.id).unwrap();
     }
 }
+
+// ---- relay notification path -------------------------------------------------------------------
+// Needs RustFS started with a NOTIFY webhook target named `wake` posting to 127.0.0.1:<port>, and
+// WEFTOS_STORE_TEST_NOTIFY_PORT=<port>; see docs/research/adr126-s2-l1-follower-view.md for the exact
+// start command. The listener below plays the site subscriber; the mpsc channel plays the relay hop.
+
+/// Minimal webhook receiver: one POST per connection, body to the channel, 200 back.
+fn webhook_listener(port: u16) -> std::sync::mpsc::Receiver<(Instant, String)> {
+    use std::io::{Read, Write};
+    let l = std::net::TcpListener::bind(("127.0.0.1", port)).expect("bind the notify port");
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for s in l.incoming().flatten() {
+            let tx = tx.clone();
+            std::thread::spawn(move || {
+                let mut s = s;
+                s.set_read_timeout(Some(Duration::from_secs(5))).ok();
+                let mut buf = Vec::new();
+                let mut tmp = [0u8; 4096];
+                let (head_end, want) = loop {
+                    let Ok(n) = s.read(&mut tmp) else { return };
+                    if n == 0 {
+                        return;
+                    }
+                    buf.extend_from_slice(&tmp[..n]);
+                    if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let head = String::from_utf8_lossy(&buf[..i]).to_lowercase();
+                        let len = head
+                            .lines()
+                            .find_map(|l| l.strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap_or(0)))
+                            .unwrap_or(0);
+                        break (i + 4, len);
+                    }
+                };
+                while buf.len() < head_end + want {
+                    let Ok(n) = s.read(&mut tmp) else { return };
+                    if n == 0 {
+                        break;
+                    }
+                    buf.extend_from_slice(&tmp[..n]);
+                }
+                let _ = s.write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
+                let _ = tx.send((Instant::now(), String::from_utf8_lossy(&buf[head_end..]).into_owned()));
+            });
+        }
+    });
+    rx
+}
+
+#[test]
+#[ignore = "needs a throwaway RustFS with a notify target: WEFTOS_STORE_TEST_RUSTFS_ENV + WEFTOS_STORE_TEST_NOTIFY_PORT"]
+fn live_a_bucket_notification_wakes_the_follower_before_its_fallback_poll() {
+    use weftos_store::wake::{Waker, registry_hints};
+    let port: u16 = std::env::var("WEFTOS_STORE_TEST_NOTIFY_PORT").expect("WEFTOS_STORE_TEST_NOTIFY_PORT").parse().unwrap();
+    let rx = webhook_listener(port);
+    let (cfg, _d) = live();
+    let root = RustfsBackend::new(cfg.clone()).unwrap();
+    let uniq = ulid::Ulid::new().to_string().to_lowercase();
+    let slug = format!("wake-{}", &uniq[18..]);
+    let pb = StoreName::project("lab", &uniq).unwrap().bucket();
+    let wa = StoreName::worktree("lab", &uniq, &slug).unwrap().bucket();
+    for b in [&pb, &wa] {
+        root.create_bucket(b, &[]).unwrap();
+    }
+    root.put_bucket_notification(&pb, "wake").expect("notify target `wake` must exist on the RustFS");
+    let kf = root.create_access_key(&format!("follower:{uniq}")).unwrap();
+    root.put_policy(&kf.id, &policy(&[], &[&pb, &wa])).unwrap();
+    let follower = as_key(&cfg, &root, &kf.id);
+    write_meta(&root, &wa, &WorktreeMeta { slug: slug.clone(), project: uniq.clone(), branch: slug.clone(), base_commit: "base".into(), created_ms: 0 }).unwrap();
+    publish(&root, &wa, &slug, "h1", &[("docs/plan.md", "# p")], 1);
+
+    // The follower: fallback poll a minute away, so any change seen within seconds came from a wake-up.
+    let t0 = Instant::now();
+    let now = || t0.elapsed().as_millis() as u64;
+    let mut waker = Waker::new(300, 60_000, now());
+    let mut st = FollowState::default();
+    assert!(poll(&follower, &pb, &mut st).unwrap().is_empty(), "empty registry, nothing known yet");
+
+    // Wait for the follower's next change: block on the relay channel, poll when the waker says so.
+    let mut next_change = |what: &str| -> (Vec<Change>, Duration) {
+        let started = Instant::now();
+        loop {
+            assert!(started.elapsed() < Duration::from_secs(20), "no wake-up for: {what}");
+            if waker.due(now()) {
+                // confirmed: the last worktree leaving makes the registry legitimately empty
+                let ch = poll_confirmed(&follower, &pb, &mut st).unwrap();
+                waker.polled(now());
+                if !ch.is_empty() {
+                    return (ch, started.elapsed());
+                }
+            }
+            let wait = Duration::from_millis(waker.wait_ms(now()).clamp(10, 1_000));
+            if let Ok((_, body)) = rx.recv_timeout(wait)
+                && !registry_hints(&body, &pb).is_empty()
+            {
+                waker.hint(now());
+            }
+        }
+    };
+
+    // 1. the daemon registers the worktree (entry, then signature)
+    let e = summarize(&root, &slug, &wa).unwrap().unwrap();
+    write_registry_entry_signed(&root, &pb, &e, &Toy).unwrap();
+    let (ch, took) = next_change("new worktree");
+    assert!(matches!(&ch[..], [Change::New(x)] if x.slug == slug), "{ch:?}");
+    assert!(took < Duration::from_secs(15), "{took:?}");
+    eprintln!("relay spike: registry write -> notification -> settle -> follower saw New in {took:?}");
+    assert_eq!(verify_registry_entry(&follower, &pb, &slug, &Toy).unwrap(), Trust::Verified, "signature had landed by the time we polled");
+
+    // 2. head moves
+    publish(&root, &wa, &slug, "h2", &[("docs/plan.md", "# p2")], 2);
+    let e = summarize(&root, &slug, &wa).unwrap().unwrap();
+    write_registry_entry_signed(&root, &pb, &e, &Toy).unwrap();
+    let (ch, took) = next_change("head move");
+    assert!(matches!(&ch[..], [Change::HeadMoved { from, .. }] if from == "h1"), "{ch:?}");
+    eprintln!("relay spike: head move seen in {took:?}");
+
+    // 3. removal arrives as a wake-up too (the removed flag is a hint, the poll decides)
+    remove_registry_entry_signed(&root, &pb, &slug).unwrap();
+    let (ch, _) = next_change("removal");
+    assert!(matches!(&ch[..], [Change::Gone { slug: s }] if *s == slug), "{ch:?}");
+
+    // 4. nothing else is pending: no phantom wake-ups
+    assert!(rx.recv_timeout(Duration::from_millis(800)).map(|(_, b)| registry_hints(&b, &pb).is_empty()).unwrap_or(true));
+
+    for b in [&pb, &wa] {
+        drain(&root, b);
+    }
+    root.delete_access_key(&kf.id).unwrap();
+}

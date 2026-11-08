@@ -40,6 +40,7 @@ pub mod share_fetch;
 pub mod sigv4;
 #[doc(hidden)]
 pub mod testing;
+pub mod wake;
 pub mod worktree_backend;
 
 pub use access::{Access, Grant, GrantTable, Op, Principal, PrincipalKind};

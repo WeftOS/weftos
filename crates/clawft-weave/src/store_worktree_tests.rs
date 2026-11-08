@@ -272,3 +272,56 @@ fn signing_settings_come_from_files_and_a_bad_file_is_an_error_not_unsigned() {
     assert!(SignCfg::from_lookup(env("", "", Some("1"))).is_err(), "require without a trusted file is refused");
     assert!(SignCfg::from_lookup(env("", "", None)).unwrap().key.is_none());
 }
+
+/// The daemon's real ed25519 signer and trusted-key verifier against a real RustFS (the bytes the
+/// store holds are what is signed). Throwaway RustFS only: WEFTOS_STORE_TEST_RUSTFS_ENV.
+#[test]
+#[ignore = "needs a throwaway RustFS: WEFTOS_STORE_TEST_RUSTFS_ENV"]
+fn live_ed25519_signed_entries_verify_against_the_bytes_rustfs_holds() {
+    use weftos_store::backend::AdminBackend;
+    use weftos_store::registry_sign::{Trust, list_trusted_lenient, verify_registry_entry};
+    let f = std::env::var("WEFTOS_STORE_TEST_RUSTFS_ENV").expect("WEFTOS_STORE_TEST_RUSTFS_ENV");
+    let d = tempfile::tempdir().unwrap();
+    let cfg = weftos_store::RustfsConfig::from_env_file(Path::new(&f), d.path().join("secrets")).unwrap();
+    let be = weftos_store::RustfsBackend::new(cfg).unwrap();
+    let b = format!("p-{}", ulid::Ulid::new().to_string().to_lowercase());
+    be.create_bucket(&b, &[]).unwrap();
+
+    let daemon = ed25519_dalek::SigningKey::from_bytes(&[3u8; 32]);
+    let intruder = ed25519_dalek::SigningKey::from_bytes(&[4u8; 32]);
+    let trusted = [daemon.verifying_key().to_bytes()];
+    let entry = |slug: &str| RegistryEntry {
+        slug: slug.into(),
+        bucket: format!("w-01abc-{slug}"),
+        branch: "feat/x".into(),
+        head_commit: "abc".into(),
+        state: weftos_store::share::State::Open,
+        writer: Actor { agent: "a".into(), host: "h".into() },
+        merger: None,
+        doc_count: 1,
+        file_count: 1,
+        updated_ms: 5,
+    };
+    write_registry_entry_signed(&be, &b, &entry("good"), &Ed(daemon.clone())).unwrap();
+    write_registry_entry_signed(&be, &b, &entry("forged"), &Ed(intruder)).unwrap();
+    write_registry_entry(&be, &b, &entry("plain")).unwrap();
+
+    let v = Trusted(&trusted);
+    assert_eq!(verify_registry_entry(&be, &b, "good", &v).unwrap(), Trust::Verified);
+    assert_eq!(verify_registry_entry(&be, &b, "forged", &v).unwrap(), Trust::Bad, "signed by a key nobody trusts");
+    assert_eq!(verify_registry_entry(&be, &b, "plain", &v).unwrap(), Trust::Unsigned);
+    let (ok, refused) = list_trusted_lenient(&be, &b, &v, true).unwrap();
+    assert_eq!(ok.len(), 1);
+    assert_eq!(refused, ["forged", "plain"]);
+
+    // an edit of the stored entry breaks the signature
+    let mut e = entry("good");
+    e.head_commit = "edited".into();
+    write_registry_entry(&be, &b, &e).unwrap();
+    assert_eq!(verify_registry_entry(&be, &b, "good", &v).unwrap(), Trust::Bad);
+
+    for s in ["good", "forged", "plain"] {
+        remove_registry_entry_signed(&be, &b, s).unwrap();
+    }
+    be.delete_bucket(&b).unwrap();
+}
