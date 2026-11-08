@@ -20,6 +20,7 @@
 
 mod cas;
 mod conflict;
+mod gc;
 mod index;
 mod materialise;
 mod remote;
@@ -37,6 +38,8 @@ mod tests_crash;
 #[cfg(test)]
 mod tests_durable;
 #[cfg(test)]
+mod tests_gc;
+#[cfg(test)]
 mod tests_hardening;
 #[cfg(all(test, feature = "rustfs"))]
 mod live_hardening;
@@ -50,6 +53,7 @@ use crate::backend::BackendError;
 use crate::share::Limits;
 
 pub use conflict::{ConflictKind, Keep, resolve};
+pub use gc::{DEFAULT_GC_CAP, GcReport, PLACEHOLDER_RETENTION, collect_tombstones};
 pub use index::{Entry, Index, OpenConflict};
 pub use materialise::{DownReport, materialise, materialise_with, sync_down, sync_down_with};
 pub use scan::{Change, ChangeKind, Scan, scan};
@@ -158,11 +162,26 @@ pub struct Options {
     /// removed, unless this process is writing them. Default [`DEFAULT_STALE_TMP_AGE`]; a test may
     /// shrink it.
     pub stale_tmp_age: Duration,
+    /// Let `sync_up` collect old delete markers after a successful push. Default off.
+    pub collect_tombstones: bool,
+    /// A marker older than this is collected. [`PLACEHOLDER_RETENTION`] is a placeholder: the
+    /// owner picks the number.
+    pub tombstone_retention: Duration,
+    /// Markers examined per pass at most (one read each), so a backlog never stalls a sync.
+    pub tombstone_gc_cap: usize,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Self { limits: Limits::default(), device: None, read_only: false, stale_tmp_age: DEFAULT_STALE_TMP_AGE }
+        Self {
+            limits: Limits::default(),
+            device: None,
+            read_only: false,
+            stale_tmp_age: DEFAULT_STALE_TMP_AGE,
+            collect_tombstones: false,
+            tombstone_retention: PLACEHOLDER_RETENTION,
+            tombstone_gc_cap: DEFAULT_GC_CAP,
+        }
     }
 }
 
