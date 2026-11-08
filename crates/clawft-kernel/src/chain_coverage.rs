@@ -168,7 +168,7 @@ fn parse_checkpoint(cm: &ChainManager, tail: &[u8]) -> Result<Parsed, String> {
     let ed_valid = cm
         .verifying_key()
         .is_some_and(|k| verify_segment(&hdr, payload, &ed_footer, &k));
-    let second = footer_at(tail, ml_at).map(|(f, end)| (f, end));
+    let second = footer_at(tail, ml_at);
     let ml_sig = second
         .as_ref()
         .filter(|(f, _)| f.sig_algo == SIG_ALGO_ML_DSA_65 && f.sig_length as usize == mldsa65::SIGNATURE_LEN)
@@ -227,8 +227,15 @@ pub fn coverage_for(cm: &ChainManager, event: &ChainEvent, include_signatures: b
         return unsigned(cm, Some(p.head));
     }
     let link = cm.verify_link_to(event.sequence, p.head, &p.last_hash);
+    let (status, reason) = verdict(&p, &link);
+    let checkpoint = checkpoint_of(cm, &p, link.is_ok(), include_signatures);
+    SignatureCoverage { status, reason, checkpoint: Some(checkpoint) }
+}
+
+/// Status and plain-words reason for one event given its link result.
+fn verdict(p: &Parsed, link: &Result<(), String>) -> (CoverageStatus, String) {
     let sigs_ok = p.ed_valid && p.ml_valid.unwrap_or(true);
-    let (status, reason) = match (&link, sigs_ok) {
+    match (link, sigs_ok) {
         (Ok(()), true) => (CoverageStatus::Signed, "signed: covered by a valid checkpoint signature".to_string()),
         (Err(e), _) => (
             CoverageStatus::SignatureInvalid,
@@ -242,8 +249,11 @@ pub fn coverage_for(cm: &ChainManager, event: &ChainEvent, include_signatures: b
             CoverageStatus::SignatureInvalid,
             "signature invalid: ML-DSA-65 checkpoint signature does not verify".to_string(),
         ),
-    };
-    let checkpoint = CheckpointCoverage {
+    }
+}
+
+fn checkpoint_of(cm: &ChainManager, p: &Parsed, chain_linked: bool, include_signatures: bool) -> CheckpointCoverage {
+    CheckpointCoverage {
         range_start: 0,
         range_end: p.head,
         event_count: p.event_count,
@@ -256,14 +266,11 @@ pub fn coverage_for(cm: &ChainManager, event: &ChainEvent, include_signatures: b
         ml_dsa65_signature: include_signatures.then(|| p.ml_sig.as_deref().map(hex)).flatten(),
         ed25519_valid: p.ed_valid,
         ml_dsa65_valid: p.ml_valid,
-        chain_linked: link.is_ok(),
-    };
-    SignatureCoverage { status, reason, checkpoint: Some(checkpoint) }
+        chain_linked,
+    }
 }
 
-/// `chain.get`: the event at `sequence` in full, or `None` when absent.
-pub fn event_detail(cm: &ChainManager, sequence: u64, include_signatures: bool) -> Option<ChainEventDetail> {
-    let e = cm.event(sequence)?;
+fn body_of(e: ChainEvent) -> ChainEventBody {
     let payload_hash_valid = e.payload_hash == crate::chain::compute_payload_hash(&e.payload);
     let hash_valid = e.hash
         == crate::chain::compute_event_hash(
@@ -276,8 +283,7 @@ pub fn event_detail(cm: &ChainManager, sequence: u64, include_signatures: bool) 
             &e.payload_hash,
             e.rule_hash.as_ref(),
         );
-    let coverage = coverage_for(cm, &e, include_signatures);
-    Some(ChainEventDetail {
+    ChainEventBody {
         sequence: e.sequence,
         chain_id: e.chain_id,
         timestamp: e.timestamp.to_rfc3339(),
@@ -295,8 +301,159 @@ pub fn event_detail(cm: &ChainManager, sequence: u64, include_signatures: bool) 
         rule_hash: e.rule_hash.as_ref().map(|h| hex(h)),
         hash_valid,
         payload_hash_valid,
+    }
+}
+
+/// `chain.get`: the event at `sequence` in full, or `None` when absent.
+pub fn event_detail(cm: &ChainManager, sequence: u64, include_signatures: bool) -> Option<ChainEventDetail> {
+    let e = cm.event(sequence)?;
+    let coverage = coverage_for(cm, &e, include_signatures);
+    let b = body_of(e);
+    Some(ChainEventDetail {
+        sequence: b.sequence,
+        chain_id: b.chain_id,
+        timestamp: b.timestamp,
+        prev_hash: b.prev_hash,
+        hash: b.hash,
+        payload_hash: b.payload_hash,
+        source: b.source,
+        kind: b.kind,
+        payload: b.payload,
+        payload_canonical: b.payload_canonical,
+        rule_hash: b.rule_hash,
+        hash_valid: b.hash_valid,
+        payload_hash_valid: b.payload_hash_valid,
         coverage,
     })
+}
+
+/// Largest number of events one `chain.get_range` call returns.
+pub const CHAIN_RANGE_MAX: u64 = 1000;
+
+/// Per-event verdict in a range read: the same `status` and `reason` a single
+/// `chain.get` gives. The checkpoint (with its signatures) is once per response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RangeEntryCoverage {
+    pub status: CoverageStatus,
+    pub reason: String,
+    /// The stored events from this one to the signed head recompute and link.
+    /// Absent for an event no signed checkpoint covers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chain_linked: Option<bool>,
+}
+
+/// One event of a range read.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChainRangeEvent {
+    #[serde(flatten)]
+    pub event: ChainEventBody,
+    pub coverage: RangeEntryCoverage,
+}
+
+/// The event fields of `chain.get`, without coverage.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChainEventBody {
+    pub sequence: u64,
+    pub chain_id: u32,
+    pub timestamp: String,
+    pub prev_hash: String,
+    pub hash: String,
+    pub payload_hash: String,
+    pub source: String,
+    pub kind: String,
+    pub payload: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload_canonical: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule_hash: Option<String>,
+    pub hash_valid: bool,
+    pub payload_hash_valid: bool,
+}
+
+/// The `chain.get_range` result.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChainRangeDetail {
+    pub from: u64,
+    pub to: u64,
+    pub count: u64,
+    /// The latest signed checkpoint, once. `None` when none exists or it is
+    /// unreadable (each event's `reason` says which). Its `chain_linked` is
+    /// the verdict for the whole signed chain up to the head, not per event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkpoint: Option<CheckpointCoverage>,
+    pub events: Vec<ChainRangeEvent>,
+}
+
+/// `chain.get_range`: events `from..=to` in full with per-event coverage.
+///
+/// Refused (never truncated or clipped): `from > to`, a range past the head,
+/// more than `limit` events, or a `limit` above [`CHAIN_RANGE_MAX`].
+/// `limit` defaults to [`CHAIN_RANGE_MAX`].
+pub fn range_detail(
+    cm: &ChainManager,
+    from: u64,
+    to: u64,
+    limit: Option<u64>,
+    include_signatures: bool,
+) -> Result<ChainRangeDetail, String> {
+    let limit = limit.unwrap_or(CHAIN_RANGE_MAX);
+    if limit == 0 || limit > CHAIN_RANGE_MAX {
+        return Err(format!("limit {limit} is not in 1..={CHAIN_RANGE_MAX}"));
+    }
+    if from > to {
+        return Err(format!("from {from} is after to {to}"));
+    }
+    let count = to - from + 1;
+    if count > limit {
+        return Err(format!(
+            "range {from}..={to} is {count} events, over the limit of {limit} (server maximum {CHAIN_RANGE_MAX}); split it"
+        ));
+    }
+    let events = cm.events_range(from, to)?;
+    let tail = cm.signed_checkpoint_bytes();
+    let parsed = tail.as_deref().map(|t| parse_checkpoint(cm, t));
+    let mut out = Vec::with_capacity(events.len());
+    let mut checkpoint = None;
+    // Link results for the events at or below the signed head, one pass.
+    let (p, links) = match &parsed {
+        Some(Ok(p)) if from <= p.head => {
+            let upto = to.min(p.head);
+            let l = cm.link_status_range(from, upto, p.head, &p.last_hash)?;
+            (Some(p), l)
+        }
+        Some(Ok(p)) => (Some(p), Vec::new()),
+        _ => (None, Vec::new()),
+    };
+    if let Some(p) = p {
+        let whole = cm.verify_link_to(0, p.head, &p.last_hash).is_ok();
+        checkpoint = Some(checkpoint_of(cm, p, whole, include_signatures));
+    }
+    for (i, e) in events.into_iter().enumerate() {
+        let seq = e.sequence;
+        let coverage = match (&parsed, p) {
+            (None, _) => {
+                let u = unsigned(cm, None);
+                RangeEntryCoverage { status: u.status, reason: u.reason, chain_linked: None }
+            }
+            (Some(Err(err)), _) => RangeEntryCoverage {
+                status: CoverageStatus::SignatureInvalid,
+                reason: format!("signature invalid: unreadable checkpoint: {err}"),
+                chain_linked: None,
+            },
+            (Some(Ok(_)), Some(p)) if seq > p.head => {
+                let u = unsigned(cm, Some(p.head));
+                RangeEntryCoverage { status: u.status, reason: u.reason, chain_linked: None }
+            }
+            (Some(Ok(_)), Some(p)) => {
+                let link = &links[i];
+                let (status, reason) = verdict(p, link);
+                RangeEntryCoverage { status, reason, chain_linked: Some(link.is_ok()) }
+            }
+            (Some(Ok(_)), None) => unreachable!("p is Some whenever the checkpoint parsed"),
+        };
+        out.push(ChainRangeEvent { event: body_of(e), coverage });
+    }
+    Ok(ChainRangeDetail { from, to, count, checkpoint, events: out })
 }
 
 /// For `chain.verify`: did the latest signed checkpoint verify, over the

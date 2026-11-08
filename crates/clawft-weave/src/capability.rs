@@ -202,6 +202,7 @@ pub fn required_capability(method: &str) -> Capability {
         // `chain.tail`; kept off the scope gate's project-less allow-list
         // because it returns whole payloads, not a 60-char preview.
         | "chain.get"
+        | "chain.get_range"
         | "chain.verify"
         // WEFT-125: active vector backend introspection (read-only).
         | "ecc.vector-config"
@@ -496,6 +497,8 @@ mod tests {
     fn chain_get_is_read_like_chain_tail() {
         assert_eq!(required_capability("chain.get"), Capability::Read);
         assert_eq!(required_capability("chain.get"), required_capability("chain.tail"));
+        assert_eq!(required_capability("chain.get_range"), Capability::Read);
+        assert!(CallerCapabilities::anonymous().allows_method("chain.get_range"));
         assert!(CallerCapabilities::anonymous().allows_method("chain.get"));
     }
 

@@ -256,7 +256,7 @@ fn allow_list_excludes_known_sensitive_reads() {
     }
     // `chain.get` is Read like `chain.tail`, but returns whole payloads rather than a
     // 60-character preview, so it stays inside a project like `chain.local`.
-    for m in ["chain.get", "chain.local", "chain.export", "agent.chat", "ipc.subscribe_stream"] {
+    for m in ["chain.get", "chain.get_range", "chain.local", "chain.export", "agent.chat", "ipc.subscribe_stream"] {
         assert!(!READ_ONLY_ALLOW.contains(&m), "{m}");
     }
 }

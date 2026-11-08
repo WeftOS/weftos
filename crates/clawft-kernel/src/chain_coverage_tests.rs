@@ -171,3 +171,139 @@ fn ml_dsa_65_coverage_verifies_survives_a_reload_and_rejects_a_wrong_key() {
     let keyless = ChainManager::load_from_rvf(&path, 0).unwrap();
     assert_eq!(get(&keyless, e.sequence).coverage.status, CoverageStatus::SignatureInvalid);
 }
+
+// ---- chain.get_range ----
+
+fn assert_same_as_single_reads(cm: &ChainManager, r: &ChainRangeDetail) {
+    for ev in &r.events {
+        let single = get(cm, ev.event.sequence);
+        assert_eq!(ev.event.hash, single.hash);
+        assert_eq!(ev.event.payload, single.payload);
+        assert_eq!(ev.event.payload_canonical, single.payload_canonical);
+        assert_eq!(ev.event.hash_valid, single.hash_valid);
+        assert_eq!(ev.event.payload_hash_valid, single.payload_hash_valid);
+        assert_eq!(ev.coverage.status, single.coverage.status, "seq {}", ev.event.sequence);
+        assert_eq!(ev.coverage.reason, single.coverage.reason, "seq {}", ev.event.sequence);
+        assert_eq!(
+            ev.coverage.chain_linked,
+            single.coverage.checkpoint.as_ref().map(|c| c.chain_linked),
+            "seq {}",
+            ev.event.sequence
+        );
+        if let (Some(c), Some(s)) = (&r.checkpoint, &single.coverage.checkpoint) {
+            assert_eq!(c.signed_root, s.signed_root);
+            assert_eq!(c.checkpoint_hash, s.checkpoint_hash);
+            assert_eq!(c.range_end, s.range_end);
+            assert_eq!(c.ed25519_signature, s.ed25519_signature);
+            assert_eq!(c.ml_dsa65_signature, s.ml_dsa65_signature);
+            assert_eq!((c.ed25519_valid, c.ml_dsa65_valid), (s.ed25519_valid, s.ml_dsa65_valid));
+        }
+    }
+}
+
+fn filled(n: usize) -> ChainManager {
+    let cm = dual();
+    for i in 0..n {
+        cm.append("journal", "turn.digest", Some(json!({"i": i})));
+    }
+    cm
+}
+
+#[test]
+fn a_500_entry_range_matches_500_single_reads() {
+    let dir = tempfile::tempdir().unwrap();
+    let cm = filled(600);
+    cm.save_to_rvf(&dir.path().join("c.rvf")).unwrap();
+    let r = range_detail(&cm, 10, 509, None, true).unwrap();
+    assert_eq!((r.count, r.events.len()), (500, 500));
+    assert!(r.events.iter().all(|e| e.coverage.status == CoverageStatus::Signed));
+    assert_same_as_single_reads(&cm, &r);
+    // Signatures once per response, not per entry.
+    assert!(r.checkpoint.as_ref().unwrap().ml_dsa65_signature.is_some());
+    let wire = serde_json::to_value(&r).unwrap();
+    assert!(wire["events"][0]["coverage"].get("checkpoint").is_none());
+    let lean = range_detail(&cm, 10, 12, None, false).unwrap();
+    assert!(lean.checkpoint.unwrap().ed25519_signature.is_none());
+}
+
+#[test]
+fn over_limit_and_bad_ranges_are_refused_never_truncated() {
+    let cm = filled(1200);
+    let e = range_detail(&cm, 0, 1000, None, true).unwrap_err();
+    assert!(e.contains("1001 events") && e.contains("limit"), "{e}");
+    assert!(range_detail(&cm, 0, 999, None, true).is_ok());
+    assert!(range_detail(&cm, 0, 9, Some(5), true).unwrap_err().contains("over the limit of 5"));
+    assert!(range_detail(&cm, 0, 9, Some(10), true).is_ok());
+    assert!(range_detail(&cm, 0, 0, Some(0), true).unwrap_err().contains("limit"));
+    assert!(range_detail(&cm, 0, 5, Some(CHAIN_RANGE_MAX + 1), true).unwrap_err().contains("limit"));
+    assert!(range_detail(&cm, 9, 3, None, true).unwrap_err().contains("after"));
+    // Past the head: refused, not clipped.
+    let past = range_detail(&cm, 1190, 1300, None, true).unwrap_err();
+    assert!(past.contains("outside the chain"), "{past}");
+    assert!(range_detail(&cm, 5000, 5001, None, true).is_err());
+}
+
+#[test]
+fn a_range_spanning_the_signed_head_goes_signed_then_pending() {
+    let dir = tempfile::tempdir().unwrap();
+    let cm = filled(10);
+    cm.save_to_rvf(&dir.path().join("c.rvf")).unwrap();
+    let head = r_head(&cm);
+    for i in 0..5 {
+        cm.append("journal", "turn.digest", Some(json!({"late": i})));
+    }
+    let r = range_detail(&cm, head - 2, head + 3, None, true).unwrap();
+    let st: Vec<_> = r.events.iter().map(|e| e.coverage.status).collect();
+    use CoverageStatus::*;
+    assert_eq!(st, [Signed, Signed, Signed, UnsignedPendingCheckpoint, UnsignedPendingCheckpoint, UnsignedPendingCheckpoint]);
+    assert!(r.events[3].coverage.reason.contains("unsigned: pending checkpoint"));
+    assert_same_as_single_reads(&cm, &r);
+    // Entirely past the head: all pending, checkpoint still reported once.
+    let tail = range_detail(&cm, head + 1, head + 5, None, true).unwrap();
+    assert!(tail.events.iter().all(|e| e.coverage.status == UnsignedPendingCheckpoint));
+    assert_same_as_single_reads(&cm, &tail);
+}
+
+fn r_head(cm: &ChainManager) -> u64 {
+    signature_summary(cm).unwrap().signed_through
+}
+
+#[test]
+fn no_checkpoint_at_all_is_pending_for_every_entry() {
+    let cm = filled(4);
+    let r = range_detail(&cm, 0, 3, None, true).unwrap();
+    assert!(r.checkpoint.is_none());
+    assert!(r.events.iter().all(|e| e.coverage.status == CoverageStatus::UnsignedPendingCheckpoint));
+    assert_same_as_single_reads(&cm, &r);
+}
+
+#[test]
+fn a_tampered_event_breaks_itself_and_everything_before_it_in_the_range() {
+    let dir = tempfile::tempdir().unwrap();
+    let cm = filled(30);
+    cm.save_to_rvf(&dir.path().join("c.rvf")).unwrap();
+    cm.tamper_for_test(20, |ev| ev.payload = Some(json!({"i": "forged"})));
+    let r = range_detail(&cm, 5, 29, None, true).unwrap();
+    for ev in &r.events {
+        let want = if ev.event.sequence <= 20 { CoverageStatus::SignatureInvalid } else { CoverageStatus::Signed };
+        assert_eq!(ev.coverage.status, want, "seq {}", ev.event.sequence);
+    }
+    assert_same_as_single_reads(&cm, &r);
+
+    // A self-consistent forgery is caught at the link to its successor, so
+    // it breaks events before it only; the forged one itself still links up.
+    let cm2 = filled(30);
+    cm2.save_to_rvf(&dir.path().join("d.rvf")).unwrap();
+    cm2.tamper_for_test(15, |ev| {
+        ev.payload = Some(json!({"i": "forged"}));
+        ev.payload_hash = crate::chain::compute_payload_hash(&ev.payload);
+        ev.hash = crate::chain::compute_event_hash(
+            ev.sequence, ev.chain_id, &ev.prev_hash, &ev.source, &ev.kind,
+            &ev.timestamp, &ev.payload_hash, ev.rule_hash.as_ref(),
+        );
+    });
+    let r2 = range_detail(&cm2, 0, 29, None, true).unwrap();
+    assert_same_as_single_reads(&cm2, &r2);
+    assert_eq!(r2.events[14].coverage.status, CoverageStatus::SignatureInvalid);
+    assert_eq!(r2.events[16].coverage.status, CoverageStatus::Signed);
+}
