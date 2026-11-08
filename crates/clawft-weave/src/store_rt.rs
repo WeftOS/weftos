@@ -149,6 +149,10 @@ pub(crate) fn open_service(
     )
     .map_err(|e| e.to_string())?;
     let svc = Arc::new(svc);
+    // A grant change is saved before it is pushed to RustFS; make the backend match what was saved.
+    for (p, why) in svc.reconcile() {
+        tracing::warn!(principal = %p, error = %why, "grants not pushed to the object store backend; refused by the service, but the backend key is behind");
+    }
     let node = StoreName::node(&mesh_token(), &node_token(node_id)).map_err(|e| e.to_string())?;
     // A node store that cannot be created (for example the mesh id appeared since the bucket was
     // made under `local`, or RustFS is down) must not take the other stores down: say so and carry on.

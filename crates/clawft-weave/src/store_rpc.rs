@@ -129,6 +129,7 @@ pub fn run(svc: &StoreService, method: &str, params: Value) -> Result<Value, Str
         "store.put" => {
             let (name, key) = (store(&p)?, need(&p.key, "key")?.to_owned());
             let who = Caller::local(principal(need(&p.principal, "principal")?)?);
+            svc.note_operator("cli", "store.put", &who.principal, &name, &key);
             let data = match (&p.text, &p.b64) {
                 (Some(t), None) => t.clone().into_bytes(),
                 (None, Some(b)) => B64.decode(b).map_err(|e| format!("b64: {e}"))?,
@@ -140,6 +141,7 @@ pub fn run(svc: &StoreService, method: &str, params: Value) -> Result<Value, Str
         "store.get" => {
             let (name, key) = (store(&p)?, need(&p.key, "key")?.to_owned());
             let who = Caller::local(principal(need(&p.principal, "principal")?)?);
+            svc.note_operator("cli", "store.get", &who.principal, &name, &key);
             let d = svc.get(&who, &name, &key).map_err(e)?;
             Ok(json!({"key": key, "size": d.len(), "b64": B64.encode(&d), "text": String::from_utf8(d).ok()}))
         }

@@ -218,6 +218,28 @@ impl RustfsBackend {
     }
 }
 
+/// The `NotificationConfiguration` body that sends a bucket's object-created and -removed
+/// events to the webhook target `target` (the `<NAME>` of `RUSTFS_NOTIFY_WEBHOOK_*_<NAME>`).
+pub fn notification_xml(target: &str) -> String {
+    format!(
+        "<NotificationConfiguration><QueueConfiguration><Id>weftos-activity</Id><Queue>arn:rustfs:sqs::{target}:webhook</Queue>\
+<Event>s3:ObjectCreated:*</Event><Event>s3:ObjectRemoved:*</Event></QueueConfiguration></NotificationConfiguration>"
+    )
+}
+
+impl RustfsBackend {
+    /// `PutBucketNotification`: route the bucket's events to the webhook target `target`. The
+    /// target must already exist (set from the environment when RustFS starts); without it
+    /// RustFS answers 500. See docs/guides/rustfs-audit-deploy.md.
+    pub fn put_bucket_notification(&self, bucket: &str, target: &str) -> Result<(), BackendError> {
+        if target.is_empty() || !target.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
+            return Err(BackendError::BadKey(format!("notification target {target:?}: letters, digits, '_' and '-' only")));
+        }
+        let r = self.send("PUT", &format!("/{bucket}"), &Self::q(&[("notification", "")]), notification_xml(target).as_bytes(), &[])?;
+        self.check(r, Ctx::Bucket(bucket)).map(|_| ())
+    }
+}
+
 impl ObjectBackend for RustfsBackend {
     fn put(&self, bucket: &str, key: &str, data: &[u8], if_none_match: bool) -> Result<ObjectMeta, BackendError> {
         check_key(key)?;

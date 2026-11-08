@@ -374,3 +374,99 @@ fn put_if_match_through_the_service_is_gated_and_logged() {
     let nobody = Caller::local(Principal::parse("cog:nobody").unwrap());
     assert!(matches!(r.svc.put_if_match(&nobody, &n, "k", b"x", &m.etag), Err(StoreError::Refused(_))));
 }
+
+/// An admin backend that can be told to fail its pushes, to model RustFS being down.
+struct Flaky {
+    inner: Arc<MemBackend>,
+    down: AtomicBool,
+}
+impl Flaky {
+    fn check(&self) -> Result<(), BackendError> {
+        if self.down.load(Ordering::SeqCst) { Err(BackendError::Io("backend down".into())) } else { Ok(()) }
+    }
+}
+impl AdminBackend for Flaky {
+    fn create_bucket(&self, b: &str, t: &[(String, String)]) -> Result<(), BackendError> {
+        self.inner.create_bucket(b, t)
+    }
+    fn delete_bucket(&self, b: &str) -> Result<(), BackendError> {
+        self.inner.delete_bucket(b)
+    }
+    fn bucket_exists(&self, b: &str) -> Result<bool, BackendError> {
+        self.inner.bucket_exists(b)
+    }
+    fn buckets(&self) -> Result<Vec<crate::backend::BucketTags>, BackendError> {
+        self.inner.buckets()
+    }
+    fn create_access_key(&self, p: &str) -> Result<crate::backend::AccessKey, BackendError> {
+        self.inner.create_access_key(p)
+    }
+    fn set_key_enabled(&self, k: &str, e: bool) -> Result<(), BackendError> {
+        self.check()?;
+        self.inner.set_key_enabled(k, e)
+    }
+    fn put_policy(&self, k: &str, p: &Value) -> Result<(), BackendError> {
+        self.check()?;
+        self.inner.put_policy(k, p)
+    }
+    fn delete_access_key(&self, k: &str) -> Result<(), BackendError> {
+        self.inner.delete_access_key(k)
+    }
+}
+
+fn flaky_rig() -> (StoreService, Arc<MemBackend>, Arc<Flaky>) {
+    let be = Arc::new(MemBackend::new());
+    let fl = Arc::new(Flaky { inner: be.clone(), down: AtomicBool::new(false) });
+    let svc = StoreService::open(
+        Config { node_id: "pg-1".into(), state_path: None, clock: || 1_000 },
+        fl.clone(),
+        be.clone(),
+        Arc::new(Gate(AtomicBool::new(true))),
+        Arc::new(MemSink::default()),
+        Arc::new(Chain::default()),
+    )
+    .unwrap();
+    (svc, be, fl)
+}
+
+#[test]
+fn a_push_that_failed_is_made_good_by_reconcile() {
+    let (svc, be, fl) = flaky_rig();
+    let n = project();
+    svc.create_store(&n, "daemon", Parties::default()).unwrap();
+    let c = cog("c");
+    svc.grant(&n, c.clone(), Access::Write, "op").unwrap();
+    let key = be.keys_of(&c.to_string()).pop().expect("key");
+    assert_eq!(be.key_enabled(&key), Some(true));
+    fl.down.store(true, Ordering::SeqCst);
+    assert!(svc.set_grant_enabled(&n, &c, false, "op").is_err(), "the push fails");
+    assert!(svc.get(&local("c"), &n, "x").is_err(), "the service already refuses");
+    assert_eq!(be.key_enabled(&key), Some(true), "the backend key is still on: it is behind");
+    assert!(!svc.reconcile().is_empty(), "still down: reported, not hidden");
+    fl.down.store(false, Ordering::SeqCst);
+    assert!(svc.reconcile().is_empty());
+    assert_eq!(be.key_enabled(&key), Some(false), "now the backend refuses the key too");
+}
+
+#[test]
+fn a_bucket_made_but_never_recorded_is_adopted_and_a_foreign_one_is_not() {
+    let (svc, be, _fl) = flaky_rig();
+    let n = project();
+    be.create_bucket(&n.bucket(), &n.tags()).unwrap();
+    svc.ensure_store(&n, "daemon", Parties::default()).expect("our own bucket, recorded now");
+    assert!(svc.has_store(&n));
+    let other = StoreName::project("weft", "01JBXK2M3N4P5Q6R7S8T9V0W2Y").unwrap();
+    be.create_bucket(&other.bucket(), &[]).unwrap();
+    assert!(matches!(svc.create_store(&other, "daemon", Parties::default()), Err(StoreError::Exists(_))), "someone else's bucket");
+}
+
+#[test]
+fn an_archived_store_cannot_have_a_grant_switched_back_on() {
+    let r = rig();
+    let n = project();
+    r.svc.create_store(&n, "daemon", Parties::default()).unwrap();
+    let c = cog("c");
+    r.svc.grant(&n, c.clone(), Access::Write, "op").unwrap();
+    r.svc.archive(&n, false, "op").unwrap();
+    assert!(matches!(r.svc.set_grant_enabled(&n, &c, true, "op"), Err(StoreError::Refused(_))));
+}

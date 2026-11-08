@@ -267,7 +267,11 @@ with a plain object key and no size. A notification post is a standard S3 event 
 percent-encoded. `parse_audit` was wrong before the capture (it returned `ObjectCreated:Put`, not `PutObject`) and now reads
 `Records[0].api`; `parse_notification` decodes the key. Not yet verified: batched posts (`batch_size` above 1), multipart and
 versioned operations, and `auth_token`. **Not yet done:** the daemon does not launch or configure RustFS (it is an external
-service), so setting those env names and issuing `PutBucketNotification` belongs to whoever deploys RustFS (Phase A).
+service), so setting those env names and issuing `PutBucketNotification` belongs to whoever deploys RustFS (Phase A):
+`docs/guides/rustfs-audit-deploy.md` is the runbook and `scripts/store/rustfs-audit-plan.sh` a dry run that prints it
+(`RustfsBackend::put_bucket_notification` is the call). **The daemon also has no HTTP receiver for either stream yet**
+(the ingest functions exist in `weftos-store` but nothing in `weaver` listens), so direct-S3 activity reaches the
+activity log only once that lands; it is the next S1 item after this one, and a listener will need its own diff-gate approval.
 
 **Conditional write (for S2).** `ObjectBackend::put_if_match(bucket, key, data, etag)` is a compare-and-swap (S3 `If-Match`): a
 changed key is `BackendError::Stale`, a missing key is `NoObject`. The service has `StoreService::put_if_match(who, store,
@@ -297,6 +301,17 @@ install action) creates the project store when the daemon runs an object store, 
 report; a failure there is a note, never a failed add. Other project stores come from
 `weaver store create`. Not done for PG:
 nothing here was deployed, and `WEFTOS_STORE_RUSTFS_ENV` is unset by default (local-directory backend).
+
+**Adversarial review of S1 (2026-11-08), fixed:** a grant change saved but not pushed (RustFS down, a crash between the two)
+is now made good by `StoreService::reconcile()` at daemon start, and backend pushes are serialised per service so an older snapshot
+cannot undo a newer policy; a bucket made but never recorded is adopted when its tags are the store's own (a foreign bucket still
+refuses); an archived store's grant cannot be switched back on; `svc.store get` checks the size before reading the object; the
+cog service startup no longer lists objects on the async runtime; `weaver store put|get --as` now leaves a `store.as` chain
+record naming the operator. **Known and not fixed:** `archive` can lose an object put by a request that passed the gate just
+before it; listings and `FsBackend` etags read whole files (the local backend is the development path); a mesh-id change
+renames the stores' `weftos://` names (the bucket names do not move) and needs a migration; `project add`'s store hook
+joins a blocking thread; the ingest functions must authenticate the webhook and drop records whose bucket is not a known
+store when the receiver is built (they have no caller yet).
 
 ## Consequences
 

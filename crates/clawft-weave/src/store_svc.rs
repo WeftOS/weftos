@@ -78,8 +78,12 @@ pub fn call(svc: &StoreService, node_id: &str, from: &str, project: Option<&str>
         }
         "get" => {
             let k = key()?;
+            // Size first (a head), so an object that cannot fit is never read into memory.
+            let size = svc.head(&who, &name, &k).map_err(e)?.size;
+            if usize::try_from(size).unwrap_or(usize::MAX).div_ceil(3).saturating_mul(4).saturating_add(512) > MAX_REPLY {
+                return Err(format!("{k} is {size} bytes: over what a service reply can carry"));
+            }
             let d = svc.get(&who, &name, &k).map_err(e)?;
-            // base64 is 4/3 the size, plus the envelope.
             if d.len().div_ceil(3) * 4 + 512 > MAX_REPLY {
                 return Err(format!("{k} is {} bytes: over what a service reply can carry", d.len()));
             }
@@ -120,11 +124,12 @@ pub fn attach(broker: &Arc<Broker>, node_id: &str) -> Result<bool, String> {
 /// [`attach`] for a given store service.
 pub fn attach_with(broker: &Arc<Broker>, node_id: &str, store: Arc<StoreService>) -> Result<(), String> {
     serve(broker, node_id, store.clone(), None)?;
-    for info in store.list_stores().into_iter().filter(|i| i.kind == "project") {
-        if let Ok(StoreName::Project { project, .. }) = StoreName::parse(&info.name)
+    // Names come from the service's own state: no backend (HTTP) call on this async path.
+    for name in store.store_names() {
+        if let Ok(StoreName::Project { project, .. }) = StoreName::parse(&name)
             && let Err(e) = serve(broker, node_id, store.clone(), Some(&project.to_string()))
         {
-            tracing::warn!(error = %e, store = %info.name, "project store not offered to cogs");
+            tracing::warn!(error = %e, store = %name, "project store not offered to cogs");
         }
     }
     Ok(())

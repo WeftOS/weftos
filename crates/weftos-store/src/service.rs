@@ -175,6 +175,8 @@ pub struct StoreService {
     audit: Arc<dyn AuditSink>,
     chain: Arc<dyn ChainSink>,
     invalidator: Mutex<Option<Invalidator>>,
+    /// Serialises backend pushes of a principal's grants.
+    apply: Mutex<()>,
     st: Mutex<State>,
 }
 
@@ -206,7 +208,7 @@ impl StoreService {
                 exposure.register(&exposure_id(&n), &n.to_string());
             }
         }
-        Ok(Self { cfg, admin, objects, exposure, audit, chain, invalidator: Mutex::new(None), st: Mutex::new(st) })
+        Ok(Self { cfg, admin, objects, exposure, audit, chain, invalidator: Mutex::new(None), apply: Mutex::new(()), st: Mutex::new(st) })
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {
@@ -266,10 +268,14 @@ impl StoreService {
         }
         let mut tags = name.tags();
         tags.push(("created".into(), self.now().to_string()));
-        self.admin.create_bucket(&name.bucket(), &tags).map_err(|e| match e {
-            BackendError::BucketExists(_) => StoreError::Exists(format!("{name} (bucket {} is already there)", name.bucket())),
-            o => o.into(),
-        })?;
+        match self.admin.create_bucket(&name.bucket(), &tags) {
+            Ok(()) => {}
+            // A bucket this daemon made but never recorded (a crash between the two steps, or a
+            // state file lost): adopt it when its tags are this store's, refuse anything else.
+            Err(BackendError::BucketExists(_)) if self.bucket_is_ours(name) => {}
+            Err(BackendError::BucketExists(_)) => return Err(StoreError::Exists(format!("{name} (bucket {} is already there)", name.bucket()))),
+            Err(o) => return Err(o.into()),
+        }
         {
             let mut g = self.lock();
             g.stores.insert(name.to_string(), StoreRec { name: name.to_string(), created_ms: self.now(), archived: false });
@@ -291,6 +297,16 @@ impl StoreService {
         self.info(name)
     }
 
+    /// Whether the existing bucket of `name` carries exactly this store's identity tags.
+    fn bucket_is_ours(&self, name: &StoreName) -> bool {
+        let want = name.tags();
+        self.admin
+            .buckets()
+            .ok()
+            .and_then(|bs| bs.into_iter().find(|(b, _)| *b == name.bucket()))
+            .is_some_and(|(_, have)| want.iter().all(|t| have.contains(t)))
+    }
+
     /// The store, created if it is not there yet.
     pub fn ensure_store(&self, name: &StoreName, actor: &str, parties: Parties) -> Result<StoreInfo, StoreError> {
         match self.create_store(name, actor, parties) {
@@ -307,6 +323,9 @@ impl StoreService {
     /// policy, and whether the key is enabled (not while the principal is suspended, and not when
     /// no enabled grant is left).
     fn apply_principal(&self, p: &Principal) -> Result<(), StoreError> {
+        // One push at a time, and the grants are read inside it: an older snapshot can never
+        // overwrite a newer policy (and so bring a revoked grant back in the backend).
+        let _one = self.apply.lock().unwrap_or_else(|e| e.into_inner());
         let (grants, suspended, key) = {
             let g = self.lock();
             (g.grants.for_principal(p), g.suspended.contains(p), g.keys.get(&p.to_string()).cloned())
@@ -326,6 +345,19 @@ impl StoreService {
         let live = !suspended && grants.iter().any(|g| g.enabled);
         self.admin.set_key_enabled(&key, live)?;
         Ok(())
+    }
+
+    /// Push every principal's grants into the backend again. A grant change is saved before it
+    /// is pushed, so a push that failed (RustFS down, a crash between the two) leaves the backend
+    /// behind the saved state; call this at start and after the backend comes back. Returns the
+    /// principals whose push failed, with the reason.
+    pub fn reconcile(&self) -> Vec<(Principal, String)> {
+        let mut ps: BTreeSet<Principal> = self.lock().keys.keys().filter_map(|k| Principal::parse(k).ok()).collect();
+        let stores: Vec<StoreName> = self.lock().stores.values().filter_map(|r| StoreName::parse(&r.name).ok()).collect();
+        for s in &stores {
+            ps.extend(self.principals_of(s));
+        }
+        ps.into_iter().filter_map(|p| self.apply_principal(&p).err().map(|e| (p, e.to_string()))).collect()
     }
 
     /// Grant (or change) access. Recorded on the chain and in the activity log.
@@ -364,6 +396,9 @@ impl StoreService {
 
     /// Disable or re-enable one grant without losing it.
     pub fn set_grant_enabled(&self, name: &StoreName, principal: &Principal, enabled: bool, actor: &str) -> Result<(), StoreError> {
+        if enabled && self.known(name)?.archived {
+            return Err(StoreError::Refused(format!("{name} is archived")));
+        }
         self.known(name)?;
         {
             let mut st = self.lock();
@@ -427,6 +462,17 @@ impl StoreService {
     }
 
     /// Whether the store is known to this daemon.
+    /// Record on the chain that an operator made a request *as* `principal` (`weaver store put|get
+    /// --as`). The activity log shows the request under that principal; this is the line that says who really asked.
+    pub fn note_operator(&self, actor: &str, verb: &str, principal: &Principal, name: &StoreName, key: &str) {
+        self.chain.record("store.as", json!({"actor": actor, "verb": verb, "principal": principal.to_string(), "store": name.to_string(), "key": key}));
+    }
+
+    /// The names of the stores this daemon knows, from its own state: no backend call.
+    pub fn store_names(&self) -> Vec<String> {
+        self.lock().stores.values().filter(|r| !r.archived).map(|r| r.name.clone()).collect()
+    }
+
     pub fn has_store(&self, name: &StoreName) -> bool {
         self.lock().stores.contains_key(&name.to_string())
     }

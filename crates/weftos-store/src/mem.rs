@@ -70,6 +70,11 @@ impl MemBackend {
         self.get(bucket, key).is_err()
     }
 
+    /// The ids of the keys issued for a principal label.
+    pub fn keys_of(&self, principal: &str) -> Vec<String> {
+        self.lock().keys.iter().filter(|(_, k)| k.principal == principal).map(|(id, _)| id.clone()).collect()
+    }
+
     /// Whether the key is enabled.
     pub fn key_enabled(&self, key_id: &str) -> Option<bool> {
         self.lock().keys.get(key_id).map(|k| k.enabled)

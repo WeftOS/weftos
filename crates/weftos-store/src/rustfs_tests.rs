@@ -215,6 +215,15 @@ fn live_service_done_when() {
 }
 
 #[test]
+fn the_notification_body_names_the_target_and_a_bad_target_is_refused() {
+    let x = crate::rustfs::notification_xml("primary");
+    assert!(x.contains("<Queue>arn:rustfs:sqs::primary:webhook</Queue>") && x.contains("s3:ObjectCreated:*") && x.contains("s3:ObjectRemoved:*"));
+    let be = RustfsBackend::new(RustfsConfig { endpoint: "http://127.0.0.1:1".into(), region: "us-east-1".into(), root_access_key: "a".into(), root_secret_key: "b".into(), secrets_dir: std::env::temp_dir(), timeout: std::time::Duration::from_secs(1) }).unwrap();
+    assert!(matches!(be.put_bucket_notification("b", "x/y"), Err(BackendError::BadKey(_))));
+    assert!(matches!(be.put_bucket_notification("b", ""), Err(BackendError::BadKey(_))));
+}
+
+#[test]
 #[ignore = "needs a throwaway RustFS: WEFTOS_STORE_TEST_RUSTFS_ENV"]
 fn live_put_if_match_is_a_compare_and_swap() {
     let (cfg, _d) = live().expect("WEFTOS_STORE_TEST_RUSTFS_ENV");
