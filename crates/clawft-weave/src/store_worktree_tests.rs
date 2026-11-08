@@ -94,6 +94,10 @@ fn the_verbs_carry_a_worktree_from_create_to_land_through_the_daemon_store() {
     let p = call(&svc, "promote", json!({"project": PROJ, "slug": "feat-rooms", "agent": "bob", "host": "m2"}), 50).unwrap();
     assert_eq!(p["promoted"], json!(["assets/room.bin"]));
     assert_eq!(S1::get(&*svc.operator_objects(), pb, "assets/room.bin").unwrap(), b"ROOM");
+    // followers see the landed worktree as merged, not still claimed
+    let f3 = call(&svc, "follow", json!({"project": PROJ, "state": st.to_string_lossy()}), 52).unwrap();
+    assert_eq!(f3["changes"][0]["change"], "state_changed");
+    assert_eq!(f3["changes"][0]["worktree"]["state"], "merged");
     let again = call(&svc, "promote", json!({"project": PROJ, "slug": "feat-rooms"}), 51).unwrap();
     assert_eq!(again["promoted"], p["promoted"], "landing twice is a no-op");
 }
@@ -141,4 +145,42 @@ fn fetch_writes_the_bundle_when_one_was_published_and_says_so_when_not() {
     let r = fetch().unwrap();
     assert_eq!(r["bundle_head"], "def");
     assert_eq!(std::fs::read(&out).unwrap(), b"BUNDLE-BYTES");
+}
+
+#[test]
+fn archiving_and_deleting_a_worktree_store_removes_its_registry_entry() {
+    let (_d, svc) = rig();
+    let ens = |slug: &str| {
+        let n = names("local", PROJ, slug).unwrap();
+        svc.ensure_store(&n.pr_name, "t", Parties::defaults_for(&n.pr_name)).unwrap();
+        svc.ensure_store(&n.wt_name, "t", Parties::defaults_for(&n.wt_name)).unwrap();
+        n
+    };
+    let (keep, gone) = (ens("feat-keep"), ens("feat-gone"));
+    let src = tempfile::tempdir().unwrap();
+    let (paths, unc, chg) = files(src.path());
+    let root = src.path().to_string_lossy().into_owned();
+    for slug in ["feat-keep", "feat-gone"] {
+        call(&svc, "create", json!({"project": PROJ, "slug": slug, "branch": slug, "base": "abc"}), 10).unwrap();
+        call(
+            &svc,
+            "publish",
+            json!({"project": PROJ, "slug": slug, "root": root, "branch": slug, "base": "abc", "head": "def",
+                   "paths_z": paths, "uncommitted_z": unc, "changes_z": chg}),
+            20,
+        )
+        .unwrap();
+    }
+    let slugs = || -> Vec<String> {
+        weftos_store::share_fetch::list_shared(&Op(svc.operator_objects()), &keep.pr).unwrap().into_iter().map(|e| e.slug).collect()
+    };
+    assert_eq!(slugs().len(), 2);
+    // closing without deleting keeps the entry (the bucket still exists); deleting drops only its own
+    svc.archive(&gone.wt_name, true, "t").unwrap();
+    forget(&svc, &gone.wt_name).unwrap();
+    assert_eq!(slugs(), vec!["feat-keep".to_string()]);
+    forget(&svc, &gone.wt_name).unwrap(); // already gone: fine
+    // a project store is not a worktree: nothing happens
+    forget(&svc, &keep.pr_name).unwrap();
+    assert_eq!(slugs(), vec!["feat-keep".to_string()]);
 }

@@ -181,6 +181,15 @@ fn refresh(b: &Op, pr: &str, slug: &str, wt: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// After a worktree store is archived and its bucket deleted, drop its registry entry from the
+/// project bucket (ADR-126 §4a: the daemon "removes it after promotion and bucket deletion").
+/// Any other kind of store is a no-op. Removing an entry that is already gone is fine.
+pub fn forget(svc: &StoreService, name: &StoreName) -> Result<(), String> {
+    let StoreName::Worktree { mesh, project, slug } = name else { return Ok(()) };
+    let pr = StoreName::project(mesh, &project.to_string()).map_err(|e| e.to_string())?.bucket();
+    follower::remove_registry_entry(&Op(svc.operator_objects()), &pr, slug).map_err(|e| e.to_string())
+}
+
 /// Run one verb. `mesh` is the store-name mesh token of this daemon.
 pub fn run(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms: u64) -> Result<Value, String> {
     let p: P = serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
@@ -294,6 +303,9 @@ pub fn run(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms: 
                 now_ms,
             )
             .map_err(e)?;
+            // Followers must stop seeing a landed worktree as claimed (or open): the entry now says
+            // merged, and stays until the worktree store is archived and deleted (see `forget`).
+            refresh(&b, &n.pr, slug, &n.wt)?;
             Ok(json!({
                 "promoted": r.promoted, "deleted": r.deleted, "kept_project": r.kept_project,
                 "archived": r.archived.len(), "dropped_tombstones": r.dropped_tombstones,
