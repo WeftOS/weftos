@@ -582,6 +582,14 @@ impl StoreService {
         self.lock().stores.get(&name.to_string()).is_some_and(|r| r.locked)
     }
 
+    /// Read back the Object Lock configuration the backend holds for a store's bucket (does it
+    /// have lock on, and what default retention), as the daemon itself: an operator's check that
+    /// the store is what the daemon recorded. The local backends answer `Unsupported`.
+    pub fn lock_config(&self, name: &StoreName) -> Result<crate::backend::LockConfig, StoreError> {
+        self.known(name)?;
+        Ok(self.objects.get_lock_config(&name.bucket())?)
+    }
+
     /// PutObject with Object Lock retention and/or a legal hold, in a store made by
     /// [`Self::create_locked_store`]. Gated and logged like `put`; an `append` principal (CI) must
     /// set `opts.if_none_match`. Returns the version written. A locked version cannot be deleted

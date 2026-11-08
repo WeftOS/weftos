@@ -13,7 +13,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use reqwest::blocking::Client;
 use serde_json::{Value, json};
 
-use crate::backend::{AccessKey, AdminBackend, BackendError, BucketTags, LockedPut, ObjectBackend, ObjectMeta, ObjectVersion, PutOpts, check_key};
+use crate::backend::{AccessKey, AdminBackend, BackendError, BucketTags, DefaultRetention, LockConfig, LockMode, LockedPut, ObjectBackend, ObjectMeta, ObjectVersion, PutOpts, check_key};
 use crate::sigv4::{self, Req};
 
 /// Connection settings. `secrets_dir` receives one 0600 file per issued access key.
@@ -154,6 +154,24 @@ fn xml_blocks<'a>(s: &'a str, tag: &str) -> Vec<&'a str> {
         at = a + b + close.len();
     }
     v
+}
+
+/// Parse an `ObjectLockConfiguration` document.
+fn parse_lock_config(x: &str) -> Result<LockConfig, BackendError> {
+    let enabled = xml_tag(x, "ObjectLockEnabled").as_deref() == Some("Enabled");
+    let default = match xml_blocks(x, "DefaultRetention").first() {
+        None => None,
+        Some(d) => {
+            let mode = match xml_tag(d, "Mode").as_deref() {
+                Some("GOVERNANCE") => LockMode::Governance,
+                Some("COMPLIANCE") => LockMode::Compliance,
+                other => return Err(BackendError::Io(format!("object lock configuration: unknown mode {other:?}"))),
+            };
+            let n = |t: &str| xml_tag(d, t).and_then(|v| v.trim().parse::<u32>().ok());
+            Some(DefaultRetention { mode, days: n("Days"), years: n("Years") })
+        }
+    };
+    Ok(LockConfig { enabled, default })
 }
 
 /// The blocks of any of `tags`, in the order they appear (versions and delete markers interleave).
@@ -399,6 +417,30 @@ impl ObjectBackend for RustfsBackend {
         let extra: Vec<(&str, String)> = if bypass_governance { vec![("x-amz-bypass-governance-retention", "true".into())] } else { Vec::new() };
         let r = self.send("DELETE", &format!("/{bucket}/{key}"), &Self::q(&[("versionId", version_id)]), &[], &extra)?;
         self.check(r, Ctx::Object(bucket, key)).map(|_| ())
+    }
+
+    fn get_lock_config(&self, bucket: &str) -> Result<LockConfig, BackendError> {
+        let r = self.send("GET", &format!("/{bucket}"), &Self::q(&[("object-lock", "")]), &[], &[])?;
+        // A bucket made without lock answers 404 ObjectLockConfigurationNotFoundError.
+        if r.status == 404 && String::from_utf8_lossy(&r.body).contains("ObjectLockConfigurationNotFound") {
+            return Ok(LockConfig { enabled: false, default: None });
+        }
+        let r = self.check(r, Ctx::Bucket(bucket))?;
+        parse_lock_config(&String::from_utf8_lossy(&r.body))
+    }
+
+    fn put_default_retention(&self, bucket: &str, d: &DefaultRetention) -> Result<(), BackendError> {
+        let span = match (d.days, d.years) {
+            (Some(n), None) if n > 0 => format!("<Days>{n}</Days>"),
+            (None, Some(n)) if n > 0 => format!("<Years>{n}</Years>"),
+            _ => return Err(BackendError::BadKey("default retention needs exactly one of days or years, above zero".into())),
+        };
+        let body = format!(
+            "<ObjectLockConfiguration><ObjectLockEnabled>Enabled</ObjectLockEnabled><Rule><DefaultRetention><Mode>{}</Mode>{span}</DefaultRetention></Rule></ObjectLockConfiguration>",
+            d.mode.as_str()
+        );
+        let r = self.send("PUT", &format!("/{bucket}"), &Self::q(&[("object-lock", "")]), body.as_bytes(), &[])?;
+        self.check(r, Ctx::Bucket(bucket)).map(|_| ())
     }
 
     fn put_legal_hold(&self, bucket: &str, key: &str, version_id: &str, on: bool) -> Result<(), BackendError> {

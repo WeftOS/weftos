@@ -112,6 +112,23 @@ pub struct LockedPut {
     pub version_id: Option<String>,
 }
 
+/// A bucket's default retention (applied to a put that carries no retention headers).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DefaultRetention {
+    pub mode: LockMode,
+    /// Exactly one of `days` and `years` is set.
+    pub days: Option<u32>,
+    pub years: Option<u32>,
+}
+
+/// A bucket's Object Lock configuration, as read back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LockConfig {
+    /// The bucket was made with Object Lock.
+    pub enabled: bool,
+    pub default: Option<DefaultRetention>,
+}
+
 /// An access key the backend issued for one principal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccessKey {
@@ -138,6 +155,14 @@ pub trait ObjectBackend: Send + Sync {
     /// Delete one version. A locked version is refused ([`BackendError::Forbidden`]) until its
     /// retention ends or its legal hold is lifted; `bypass_governance` overrides only `Governance`.
     fn delete_version(&self, _bucket: &str, _key: &str, _version_id: &str, _bypass_governance: bool) -> Result<(), BackendError> {
+        Err(BackendError::Unsupported("object lock".into()))
+    }
+    /// Read a bucket's Object Lock configuration. A bucket made without lock is `enabled: false`.
+    fn get_lock_config(&self, _bucket: &str) -> Result<LockConfig, BackendError> {
+        Err(BackendError::Unsupported("object lock".into()))
+    }
+    /// Set a locked bucket's default retention (what a put with no retention headers gets).
+    fn put_default_retention(&self, _bucket: &str, _d: &DefaultRetention) -> Result<(), BackendError> {
         Err(BackendError::Unsupported("object lock".into()))
     }
     /// Turn a legal hold on or off for one version.

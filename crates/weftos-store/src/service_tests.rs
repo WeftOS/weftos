@@ -523,3 +523,12 @@ fn the_owner_switches_reach_the_backend_keys_both_ways_after_a_reconcile() {
     let sweeper = Caller::local(sw);
     assert!(r.svc.put(&sweeper, &rel, "v1/x", b"x", false).is_err(), "the service still refuses a sweeper put");
 }
+
+#[test]
+fn a_stores_lock_configuration_is_read_through_the_service_or_reported_unsupported() {
+    let r = rig();
+    let rel = StoreName::release("weft", P, "stable").unwrap();
+    assert!(r.svc.lock_config(&rel).is_err(), "unknown store");
+    r.svc.create_store(&rel, "daemon", Parties::defaults_for(&rel)).unwrap();
+    assert!(matches!(r.svc.lock_config(&rel), Err(StoreError::Backend(BackendError::Unsupported(_)))));
+}

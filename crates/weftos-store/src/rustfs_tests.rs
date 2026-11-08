@@ -102,6 +102,18 @@ fn http_statuses_map_to_the_error_that_says_what_to_do() {
 }
 
 #[test]
+fn an_object_lock_configuration_document_is_read_back() {
+    let on = "<ObjectLockConfiguration><ObjectLockEnabled>Enabled</ObjectLockEnabled></ObjectLockConfiguration>";
+    assert_eq!(parse_lock_config(on).unwrap(), LockConfig { enabled: true, default: None });
+    let d = "<ObjectLockConfiguration><ObjectLockEnabled>Enabled</ObjectLockEnabled><Rule><DefaultRetention><Mode>COMPLIANCE</Mode><Years>2</Years></DefaultRetention></Rule></ObjectLockConfiguration>";
+    assert_eq!(parse_lock_config(d).unwrap().default, Some(DefaultRetention { mode: LockMode::Compliance, days: None, years: Some(2) }));
+    let g = "<ObjectLockConfiguration><ObjectLockEnabled>Enabled</ObjectLockEnabled><Rule><DefaultRetention><Mode>GOVERNANCE</Mode><Days>30</Days></DefaultRetention></Rule></ObjectLockConfiguration>";
+    assert_eq!(parse_lock_config(g).unwrap().default, Some(DefaultRetention { mode: LockMode::Governance, days: Some(30), years: None }));
+    assert!(parse_lock_config("<ObjectLockConfiguration><Rule><DefaultRetention><Mode>NOPE</Mode></DefaultRetention></Rule></ObjectLockConfiguration>").is_err());
+    assert!(!parse_lock_config("<ObjectLockConfiguration></ObjectLockConfiguration>").unwrap().enabled);
+}
+
+#[test]
 fn config_reads_an_env_file_and_defaults_the_region() {
     let d = tempfile::tempdir().unwrap();
     let f = d.path().join("c.env");
@@ -588,4 +600,32 @@ fn live_owner_switches_let_the_ci_and_sweeper_keys_put_and_the_lock_keeps_the_or
     svc.set_policy_opts(PolicyOpts::default());
     assert!(svc.reconcile().is_empty());
     assert!(matches!(ci.put(&b, "v1/direct2.tar", b"x", true), Err(BackendError::Forbidden(_))));
+}
+
+/// Object Lock configuration read-back, live: plain bucket, locked bucket, locked bucket with a
+/// default retention (and a put with no headers inheriting it).
+#[test]
+#[ignore = "needs a throwaway RustFS: WEFTOS_STORE_TEST_RUSTFS_ENV"]
+fn live_lock_configuration_reads_back() {
+    use crate::backend::{DefaultRetention, LockConfig, LockMode, PutOpts};
+    let (cfg, _d) = live().expect("WEFTOS_STORE_TEST_RUSTFS_ENV");
+    let be = RustfsBackend::new(cfg).unwrap();
+    let plain = uniq("t-cfgp");
+    be.create_bucket(&plain, &[]).unwrap();
+    assert_eq!(be.get_lock_config(&plain).unwrap(), LockConfig { enabled: false, default: None });
+    assert!(be.put_default_retention(&plain, &DefaultRetention { mode: LockMode::Governance, days: Some(1), years: None }).is_err(), "a plain bucket takes no default retention");
+    be.delete_bucket(&plain).unwrap();
+
+    let b = uniq("t-cfgl");
+    be.create_locked_bucket(&b, &[]).unwrap();
+    assert_eq!(be.get_lock_config(&b).unwrap(), LockConfig { enabled: true, default: None });
+    let d = DefaultRetention { mode: LockMode::Governance, days: Some(2), years: None };
+    be.put_default_retention(&b, &d).unwrap();
+    assert_eq!(be.get_lock_config(&b).unwrap(), LockConfig { enabled: true, default: Some(d) });
+    assert!(be.put_default_retention(&b, &DefaultRetention { mode: LockMode::Governance, days: Some(1), years: Some(1) }).is_err(), "days and years together are refused before sending");
+    // A put with no lock headers now carries the default: its delete is refused.
+    let v = be.put_locked(&b, "k", b"x", &PutOpts::default()).unwrap().version_id.unwrap();
+    assert!(matches!(be.delete_version(&b, "k", &v, false), Err(BackendError::Forbidden(_))), "the default retention applied");
+    be.delete_version(&b, "k", &v, true).unwrap();
+    assert!(matches!(be.get_lock_config("no-such-bucket-zz"), Err(BackendError::NoBucket(_)) | Err(BackendError::Io(_))));
 }

@@ -27,7 +27,7 @@ pub mod sigv4;
 
 pub use access::{Access, Grant, GrantTable, Op, Principal, PrincipalKind};
 pub use audit::{AuditEvent, AuditSink, Outcome, Source};
-pub use backend::{AccessKey, AdminBackend, BackendError, LockMode, LockedPut, ObjectBackend, ObjectMeta, ObjectVersion, PutOpts, Retention};
+pub use backend::{AccessKey, AdminBackend, BackendError, DefaultRetention, LockConfig, LockMode, LockedPut, ObjectBackend, ObjectMeta, ObjectVersion, PutOpts, Retention};
 pub use fs::FsBackend;
 pub use mem::MemBackend;
 pub use name::StoreName;
