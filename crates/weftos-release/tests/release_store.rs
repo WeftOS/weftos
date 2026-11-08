@@ -869,6 +869,37 @@ async fn a_backend_that_cannot_extend_leaves_a_reused_blob_as_written() {
 }
 
 #[tokio::test]
+async fn a_blind_extending_backend_still_lengthens_a_reused_blob_and_a_shorter_ask_is_a_no_op() {
+    // The service route: no retention read, but S1's extend only lengthens and answers "does not extend"
+    // for a date that is not later. The publisher asks without reading, and that answer counts as done.
+    struct Blind(MemoryBackend, std::sync::atomic::AtomicUsize);
+    impl ReleaseBackend for Blind {
+        async fn put_if_absent(&self, k: &str, b: &[u8]) -> std::result::Result<PutOutcome, BackendError> { self.0.put_if_absent(k, b).await }
+        async fn put_if_absent_locked(&self, k: &str, b: &[u8], l: &Lock) -> std::result::Result<PutOutcome, BackendError> { self.0.put_if_absent_locked(k, b, l).await }
+        async fn get(&self, k: &str) -> std::result::Result<Option<Vec<u8>>, BackendError> { self.0.get(k).await }
+        async fn list(&self, p: &str) -> std::result::Result<Vec<String>, BackendError> { self.0.list(p).await }
+        async fn lock_config(&self) -> std::result::Result<Option<BucketLock>, BackendError> { self.0.lock_config().await }
+        fn extends_blind(&self) -> bool { true }
+        async fn extend_lock(&self, k: &str, l: &Lock) -> std::result::Result<(), BackendError> {
+            self.1.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            match self.0.lock_of(k) {
+                Some(have) if l.until <= have.until => Ok(()), // S1: does not extend -> already held
+                _ => self.0.extend_lock(k, l).await,
+            }
+        }
+    }
+    let (be, st, sg) = (Blind(locked_backend(), Default::default()), store("stable"), signer(1));
+    let h = format!("blobs/{}", blake3::hash(b"shared").to_hex());
+    let p = |days| LockPolicy::new(LockMode::Governance, days).unwrap();
+    ReleasePublisher::new(&be, &st, &sg).with_lock(p(500)).publish(req("b1", &[("a", b"shared")]), NOW).await.unwrap();
+    ReleasePublisher::new(&be, &st, &sg).with_lock(p(900)).publish(req("b2", &[("a", b"shared")]), NOW).await.unwrap();
+    assert_eq!(be.0.lock_of(&h).unwrap().until, NOW + 900, "lengthened without reading the old date");
+    ReleasePublisher::new(&be, &st, &sg).with_lock(p(100)).publish(req("b3", &[("a", b"shared")]), NOW).await.unwrap();
+    assert_eq!(be.0.lock_of(&h).unwrap().until, NOW + 900, "a shorter ask never shortens");
+    assert!(be.1.load(std::sync::atomic::Ordering::SeqCst) >= 2, "extension was asked for");
+}
+
+#[tokio::test]
 async fn lifecycle_rules_are_set_then_read_back() {
     let be = MemoryBackend::new();
     let rules = LifecycleRules { noncurrent_days: 30, expire_delete_markers: true, abort_multipart_days: Some(7) };

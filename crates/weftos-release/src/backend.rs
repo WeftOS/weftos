@@ -117,6 +117,13 @@ pub trait ReleaseBackend: Send + Sync {
         async { Ok(None) }
     }
 
+    /// True when this backend cannot read a version's retention but its `extend_lock` still only ever
+    /// lengthens (the service route: S1 refuses a date that does not extend). The publisher then asks for
+    /// the new date without reading the old one, and a "does not extend" answer counts as done.
+    fn extends_blind(&self) -> bool {
+        false
+    }
+
     /// Lengthen (never shorten, never weaken) the retention of the current version of `key`. The default
     /// refuses; the publisher only calls it after `retention_of` returned a lock.
     fn extend_lock(&self, _key: &str, _lock: &Lock) -> impl Future<Output = Result<(), BackendError>> + Send {

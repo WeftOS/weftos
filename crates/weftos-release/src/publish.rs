@@ -317,7 +317,12 @@ impl<'a, B: ReleaseBackend> ReleasePublisher<'a, B> {
     /// different mode). A backend that cannot read or
     /// extend retention leaves it as written (the old behaviour).
     async fn lengthen(&self, key: &str, want: &Lock) -> Result<()> {
-        let Some(have) = self.backend.retention_of(key).await? else { return Ok(()) };
+        let Some(have) = self.backend.retention_of(key).await? else {
+            if self.backend.extends_blind() {
+                self.backend.extend_lock(key, want).await?;
+            }
+            return Ok(());
+        };
         // Date only. RustFS refuses to change a held mode without a governance bypass, and CI does not
         // hold the bypass, so a blob keeps the mode it was written with and gets the later date.
         if have.until >= want.until {

@@ -157,6 +157,35 @@ impl ReleaseBackend for ServiceBackend {
         }
     }
 
+    fn extends_blind(&self) -> bool {
+        true
+    }
+
+    /// Lengthen the current version's retention through S1's `extend_retention` (an `append` principal may
+    /// call it: it only adds protection, and S1 caps how far an append principal reaches). The service has
+    /// no retention read, so the date is asked for blind; S1 answering "does not extend" means the version
+    /// already holds at least that long, which is the goal.
+    async fn extend_lock(&self, key: &str, lock: &Lock) -> Result<(), BackendError> {
+        let (k, want) = (key.to_string(), *lock);
+        let mode = match want.mode {
+            LockMode::Governance => weftos_store::LockMode::Governance,
+            LockMode::Compliance => weftos_store::LockMode::Compliance,
+        };
+        self.blocking(move |s, w, n| {
+            let versions = s.list_versions(w, n, &k)?;
+            let Some(v) = versions.into_iter().find(|v| v.key == k && v.is_latest && !v.is_delete_marker) else {
+                return Err(StoreError::Backend(StoreErr::NoObject(k.clone())));
+            };
+            match s.extend_retention(w, n, &k, &v.version_id, want.until, mode) {
+                Ok(_) => Ok(()),
+                Err(StoreError::Backend(StoreErr::BadKey(m))) if m.contains("does not extend") => Ok(()),
+                Err(e) => Err(e),
+            }
+        })
+        .await
+        .map_err(store_err)
+    }
+
     /// Streams the file through `put_stream`: parts go up as they are read, locked and write-once.
     async fn put_file_if_absent(&self, key: &str, path: &std::path::Path, size: u64, lock: Option<&Lock>) -> Result<PutOutcome, BackendError> {
         let (k, p) = (key.to_string(), path.to_path_buf());
@@ -280,6 +309,9 @@ impl<O: ObjectBackend + 'static> ReleaseBackend for CiBackend<O> {
     async fn retention_of(&self, key: &str) -> Result<Option<Lock>, BackendError> {
         either!(self, b => b.retention_of(key).await)
     }
+    fn extends_blind(&self) -> bool {
+        either!(self, b => b.extends_blind())
+    }
     async fn extend_lock(&self, key: &str, lock: &Lock) -> Result<(), BackendError> {
         either!(self, b => b.extend_lock(key, lock).await)
     }
@@ -315,4 +347,18 @@ pub fn ci_backend<O: ObjectBackend + 'static>(
         (CiRoute::Daemon, None, _) => Err(BackendError("CI route is daemon but no store service was given".into())),
         (CiRoute::Direct, _, None) => Err(BackendError("CI route is direct but no S3 transport was given".into())),
     }
+}
+
+/// What the release archives hold and what they would lose, for the stores S1 archives (retired
+/// releases land in the archive bucket). **Always a dry run:** nothing here confirms a deletion, and
+/// with `release_days` left `None` (the default) nothing is even marked as expiring, because an archive
+/// is recovery data and the owner has set no number. Passing `Some(days)` only previews what S1's
+/// `archive_gc` would delete for release stores at that age; node and project archives are not asked about.
+pub fn release_archive_report(
+    svc: &StoreService,
+    release_days: Option<u64>,
+    actor: &str,
+) -> Result<weftos_store::service::ArchiveGcReport, StoreError> {
+    let keep = weftos_store::service::ArchiveKeep { release_days, ..Default::default() };
+    svc.archive_gc(&keep, false, actor)
 }

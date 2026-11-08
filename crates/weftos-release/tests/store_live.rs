@@ -208,7 +208,7 @@ async fn live_s1_seams_lock_read_back_extend_lifecycle_and_multipart() {
     let dir = tempfile::tempdir().unwrap();
     let cfg = RustfsConfig::from_env_file(Path::new(&f), dir.path().join("secrets")).unwrap();
     let objects = Arc::new(tokio::task::spawn_blocking(move || RustfsBackend::new(cfg)).await.unwrap().unwrap());
-    let uniq = || format!("{}", &ulid::Ulid::new().to_string().to_lowercase()[16..]);
+    let uniq = || ulid::Ulid::new().to_string().to_lowercase()[16..].to_string();
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
     let sg = ReleaseSigner::new(ed25519_dalek::SigningKey::from_bytes(&[3; 32]), MlDsa65SigningKey::from_seed(&[3; 32]));
     let tk = TrustedKeys(vec![sg.trusted()]);

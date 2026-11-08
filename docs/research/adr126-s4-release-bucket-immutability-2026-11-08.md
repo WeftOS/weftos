@@ -121,7 +121,7 @@ a defaulted method on `ReleaseBackend` / `LifecycleBackend`; `MemoryBackend` moc
 | Seam | S4 behaviour | S1 call used | Notes from the live run |
 |---|---|---|---|
 | Lock read-back | a locked publish reads the config first and refuses an unlocked bucket before any write | `get_lock_config` (adapter), `StoreService::lock_config` (service) | unlocked bucket reads `enabled: false`; nothing written |
-| Extend retention | a reused blob's retention date moves out to the later release's floor; never earlier | `list_versions` + `get_retention` + `extend_retention` (adapter) | **the mode is never changed.** RustFS refuses Governance to Compliance on an existing version without a governance bypass (it reports it as a delete refusal), and CI holds no bypass. A blob keeps its first mode; the new release's manifest has the mode it asked for. The service route has no retention read, so it does not extend |
+| Extend retention | a reused blob's retention date moves out to the later release's floor; never earlier | `list_versions` + `get_retention` + `extend_retention` (adapter) | **the mode is never changed.** RustFS refuses Governance to Compliance on an existing version without a governance bypass (it reports it as a delete refusal), and CI holds no bypass. A blob keeps its first mode; the new release's manifest has the mode it asked for. The service route has no retention read, so it asks blind (see below) |
 | Lifecycle | `provision_lifecycle` sets one rule (`s4-release`: noncurrent days, abort-multipart days) and reads it back | `put_lifecycle` / `get_lifecycle` via `StoreLifecycle` | S1's rule type has no delete-marker expiry, so `expire_delete_markers: true` is refused. Ask S1 for it if orphan markers matter (measured earlier: RustFS does remove them) |
 | Multipart | `publish_files` hashes in chunks and uploads with `put_stream` (8 MiB parts), locked, `If-None-Match` | `put_stream` (adapter), `StoreService::put_stream` (service; an `append` principal may) | an 11 MiB locked publish round-trips on both routes; the manifest equals the bytes path |
 
@@ -129,6 +129,23 @@ a defaulted method on `ReleaseBackend` / `LifecycleBackend`; `MemoryBackend` moc
 remaining memory cost: when a blob already exists the publisher re-verifies it with `get`, and S1 has no
 streaming get, so a retry of a very large release downloads each existing blob once. Ask: a ranged or
 streaming get (or a server-side checksum) from S1.
+
+### Service-route extension and release archives (S1 50660398 .. 19de450e)
+
+- **Extension on the daemon route.** `ServiceBackend::extend_lock` finds the latest version with `list_versions` and
+  calls `StoreService::extend_retention`. The service cannot read a version's retention, so the publisher asks for the
+  later date without reading (`ReleaseBackend::extends_blind`), and S1's "does not extend" answer counts as already
+  held. Live on RustFS: a later release moves the reused blob's date out, a shorter one leaves it, and an `append`
+  principal asking past S1's five-year cap (`APPEND_MAX_RETENTION_S`) is refused with "at most 1825 days". The live test's
+  service clock must be real time for that cap to mean anything.
+- **Release archive retention, dry run only.** `route::release_archive_report(svc, release_days, actor)` calls S1's
+  `archive_gc` with `confirmed = false` and only the release kind set. `None` (the default, and the only value S4 ships)
+  marks nothing as expiring; `Some(n)` previews what S1 would delete at that age; `Some(0)` is refused. Nothing in S4
+  confirms a deletion and no number is set anywhere. To actually delete, the owner runs S1's `store archive gc` with a
+  chosen number.
+- The other newer S1 commits (retire resume, grant seq ceiling, breaker and cap fixes) add no S4 seam.
+- Still open on S1: delete-marker expiry in the lifecycle rule, a streaming or ranged get, a retention read on the
+  service route (would remove the blind ask), the sweeper put grant.
 
 ## Not verified
 
@@ -142,5 +159,6 @@ streaming get (or a server-side checksum) from S1.
 
 1. S1: decide the CI route (daemon-mediated append, or the direct role above); a put for the `sweep` role (locked restore); list-versions; extend-retention call; default bucket retention; multipart (with lock headers on create); expose `--locked` on `weaver store create`.
 2. S4 (done in this branch): lock policy on publish, locked restore, locked-bucket helper, `--lock` on the verb, the direct CI policy, live tests with non-root keys, version-history audit (`history()`), both CI routes behind `DEFAULT_CI_ROUTE`.
-3. S4 next: stamp after commit once S1 has extend-retention; read-back check of lock configuration; lifecycle rule provisioning.
+3. S4 (done 2026-11-08): stamp after commit (extend-retention, both routes), lock read-back, lifecycle provisioning, multipart, release archive report (dry run).
+4. Owner: pick the CI route, grant the sweeper put, approve the diff-gate entries, set (or leave unset) archive days.
 4. Owner: pick the modes and floors per channel.

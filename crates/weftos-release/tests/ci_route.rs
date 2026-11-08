@@ -234,20 +234,22 @@ async fn live_daemon_route_on_a_locked_store() {
     let cfg = RustfsConfig::from_env_file(std::path::Path::new(&f), dir.path().join("secrets")).unwrap();
     let svc = tokio::task::spawn_blocking(move || {
         let be = Arc::new(RustfsBackend::new(cfg).unwrap());
-        Arc::new(
+        let svc = Arc::new(
             StoreService::open(
-                Config { node_id: "pg-1".into(), state_path: None, clock: || 1_000 },
+                Config { node_id: "pg-1".into(), state_path: None, clock: || std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64 },
                 be.clone(),
-                be,
+                be.clone(),
                 Arc::new(OpenGate),
                 Arc::new(MemSink::default()),
                 Arc::new(NoChain),
             )
             .unwrap(),
-        )
+        );
+        (svc, be)
     })
     .await
     .unwrap();
+    let (svc, probe) = svc;
     let channel = format!("d{}", &ulid::Ulid::new().to_string().to_lowercase()[16..]);
     let store = ReleaseStoreName::new("pg-mesh", ULID, &channel).unwrap();
     let name = StoreName::parse(&store.uri()).unwrap();
@@ -291,6 +293,29 @@ async fn live_daemon_route_on_a_locked_store() {
     let m2 = rd.manifest("b2").await.unwrap();
     assert_eq!(rd.read_artifact(&m2, "bin/big").await.unwrap(), big);
 
+    // S1's extend-retention on the service route: a later release that reuses the blob moves its date out
+    // (asked blind, then read back at RustFS), a shorter one leaves it, and an append principal cannot
+    // reach past S1's five-year cap.
+    let blob = format!("blobs/{}", blake3::hash(b"ELF").to_hex());
+    let held = |probe: Arc<weftos_store::RustfsBackend>, bucket: String, key: String| {
+        tokio::task::spawn_blocking(move || {
+            let v = probe.list_versions(&bucket, &key).unwrap().into_iter().find(|v| v.key == key && v.is_latest).unwrap();
+            probe.get_retention(&bucket, &key, &v.version_id).unwrap().unwrap().until_unix_s
+        })
+    };
+    let bucket = name.bucket();
+    let before = held(probe.clone(), bucket.clone(), blob.clone()).await.unwrap();
+    let longer = LockPolicy::new(LockMode::Governance, 7_200).unwrap();
+    ReleasePublisher::new(&ci, &store, &sg).with_lock(longer).publish(rq("b3", now - 4, &[("bin/weaver", b"ELF")]), now).await.unwrap();
+    let after = held(probe.clone(), bucket.clone(), blob.clone()).await.unwrap();
+    assert!(after > before && after >= now + 7_200 - 5, "extended {before} -> {after}");
+    let shorter = LockPolicy::new(LockMode::Governance, 60).unwrap();
+    ReleasePublisher::new(&ci, &store, &sg).with_lock(shorter).publish(rq("b4", now - 3, &[("bin/weaver", b"ELF")]), now).await.unwrap();
+    assert_eq!(held(probe.clone(), bucket, blob.clone()).await.unwrap(), after, "a shorter ask leaves it");
+    let far = Lock { mode: LockMode::Governance, until: now + 6 * 365 * 86_400 };
+    let e = ci.extend_lock(&blob, &far).await.unwrap_err();
+    assert!(e.0.contains("at most"), "{e}");
+
     // the service refuses what RustFS alone could not
     let blind = {
         let (s, n) = (svc.clone(), name.clone());
@@ -301,5 +326,54 @@ async fn live_daemon_route_on_a_locked_store() {
     assert!(blind.is_err());
     // the viewer cannot write at all
     assert!(viewer.put_if_absent("blobs/x", b"x").await.is_err());
-    tokio::task::spawn_blocking(move || drop((ci, viewer, svc))).await.unwrap();
+    tokio::task::spawn_blocking(move || drop((ci, viewer, svc, probe))).await.unwrap();
+}
+
+// ---- release archives: S1's archive_gc, reported as a dry run only ----
+
+static ARCH_NOW: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static ARCH_TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+fn arch_clock() -> u64 {
+    ARCH_NOW.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+#[test]
+fn the_release_archive_report_is_a_dry_run_and_sets_no_number() {
+    use weftos_release::route::release_archive_report;
+    const DAY: u64 = 86_400_000;
+    let _turn = ARCH_TURN.lock().unwrap_or_else(|e| e.into_inner());
+    ARCH_NOW.store(10 * DAY, std::sync::atomic::Ordering::SeqCst);
+    let mem = Arc::new(MemBackend::new());
+    let svc = StoreService::open(
+        Config { node_id: "pg-1".into(), state_path: None, clock: arch_clock },
+        mem.clone(),
+        mem.clone(),
+        Arc::new(OpenGate),
+        Arc::new(MemSink::default()),
+        Arc::new(NoChain),
+    )
+    .unwrap();
+    let name = StoreName::parse(&st().uri()).unwrap();
+    svc.create_store(&name, "daemon", Parties::default()).unwrap();
+    mem.put(&name.bucket(), "releases/b1/manifest.json", b"m", false).unwrap();
+    mem.put(&name.bucket(), "blobs/aa", b"b", false).unwrap();
+    // retire the release store: its objects move to the archive bucket
+    assert_eq!(svc.archive(&name, false, "op").unwrap(), 2);
+    ARCH_NOW.store(50 * DAY, std::sync::atomic::Ordering::SeqCst); // 40 days later
+
+    // no number set: nothing is marked to expire, and it says it was a dry run
+    let none = release_archive_report(&svc, None, "op").unwrap();
+    assert!(none.dry_run && none.expired.is_empty() && none.deleted_objects == 0);
+    assert_eq!(none.kept, 1);
+
+    // a preview at 30 days names the release archive whole, deletes nothing, and leaves no chain record
+    let prev = release_archive_report(&svc, Some(30), "op").unwrap();
+    assert!(prev.dry_run);
+    assert_eq!((prev.expired.len(), prev.expired[0].kind.as_str(), prev.expired[0].objects), (1, "release", 2));
+    assert_eq!(prev.deleted_objects, 0);
+    assert_eq!(mem.list(weftos_store::service::ARCHIVE_BUCKET, "").unwrap().len(), 2, "archive intact");
+
+    // younger than the number: kept; zero days is refused, as S1 does
+    assert_eq!(release_archive_report(&svc, Some(60), "op").unwrap().expired.len(), 0);
+    assert!(release_archive_report(&svc, Some(0), "op").is_err());
 }
