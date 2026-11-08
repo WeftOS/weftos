@@ -118,3 +118,45 @@ fn a_strict_follower_is_told_about_refused_entries_and_removal_leaves_no_orphan(
     // removing an unsigned entry (no sidecar) is fine too
     remove_registry_entry_signed(&b, PR, "plain").unwrap();
 }
+
+/// S3 review S2 #1: an object under one key whose body names another (signed) worktree must not be
+/// listed, let alone vouched for by that worktree's signature.
+#[test]
+fn an_entry_whose_body_names_another_worktree_is_refused_not_vouched_for() {
+    use weftos_store::follower::{Change, FollowState};
+    let b = MemBackend::new();
+    write_registry_entry_signed(&b, PR, &entry("good"), &Toy("daemon")).unwrap();
+    // someone with project write plants worktrees/zzz.json whose body is a redirected copy of "good"
+    let mut evil = entry("good");
+    evil.bucket = "w-EVIL".into();
+    b.put(PR, "worktrees/zzz.json", &serde_json::to_vec_pretty(&evil).unwrap()).unwrap();
+    // and even copies good's genuine bytes and signature under the new key
+    let good_bytes = b.get(PR, "worktrees/good.json").unwrap().unwrap();
+    b.put(PR, "worktrees/yyy.json", &good_bytes).unwrap();
+    b.put(PR, "worktrees.sig/yyy.json", &b.get(PR, "worktrees.sig/good.json").unwrap().unwrap()).unwrap();
+    let v = Trusts("daemon");
+
+    let (listed, refused) = list_trusted_lenient(&b, PR, &v, true).unwrap();
+    assert_eq!(listed.iter().map(|(e, _)| e.slug.as_str()).collect::<Vec<_>>(), ["good"]);
+    assert_eq!(refused, ["yyy", "zzz"], "named, not silently dropped");
+    // not even a lenient (non-strict) listing shows a mislabelled entry
+    let (listed, refused) = list_trusted_lenient(&b, PR, &v, false).unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(refused, ["yyy", "zzz"]);
+    assert_eq!(verify_registry_entry(&b, PR, "zzz", &v).unwrap(), Trust::Bad);
+    assert_eq!(verify_registry_entry(&b, PR, "yyy", &v).unwrap(), Trust::Bad);
+    assert_eq!(list_shared_verified(&b, PR, &v, false).unwrap().len(), 1);
+    // the unsigned paths refuse them too
+    let (plain, bad) = list_shared_lenient(&b, PR).unwrap();
+    assert_eq!((plain.len(), bad.as_slice()), (1, ["yyy".to_string(), "zzz".to_string()].as_slice()));
+    assert!(list_shared(&b, PR).is_err());
+
+    // a follower is told, and the forged bucket is never aimed at
+    let mut st = FollowState::default();
+    let ch = poll_verified(&b, PR, &mut st, &v, true, false).unwrap();
+    assert!(ch.iter().any(|c| matches!(c, Change::New(e) if e.slug == "good" && e.bucket != "w-EVIL")));
+    for s in ["yyy", "zzz"] {
+        assert!(ch.iter().any(|c| matches!(c, Change::Unreadable { slug } if slug == s)), "{ch:?}");
+    }
+    assert!(st.seen.values().all(|s| s.bucket != "w-EVIL"));
+}

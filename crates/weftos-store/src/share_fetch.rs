@@ -185,7 +185,7 @@ pub fn expected_worktree_bucket(project_bucket: &str, slug: &str) -> Option<Stri
 pub fn list_shared_lenient<B: ObjectBackend>(
     b: &B,
     project_bucket: &str,
-) -> Result<(Vec<RegistryEntry>, Vec<String>)> {
+) -> Result<(Vec<RawEntry>, Vec<String>)> {
     let (mut v, mut bad) = (Vec::new(), Vec::new());
     for o in b.list(project_bucket, REGISTRY_PREFIX)?.into_iter().filter(|o| o.key != DIGEST_KEY) {
         let slug = o
@@ -206,12 +206,35 @@ pub fn list_shared_lenient<B: ObjectBackend>(
         }
     }
     v.sort_by(|a, c| {
-        c.updated_ms
-            .cmp(&a.updated_ms)
-            .then_with(|| a.slug.cmp(&c.slug))
+        c.entry
+            .updated_ms
+            .cmp(&a.entry.updated_ms)
+            .then_with(|| a.key_slug.cmp(&c.key_slug))
     });
     bad.sort();
     Ok((v, bad))
+}
+
+/// Every shared worktree of a project, newest first. Readable from any node with project read.
+/// An unreadable or mislabelled entry is an error here; use [`list_shared_lenient`] to survive one.
+pub fn list_shared<B: ObjectBackend>(b: &B, project_bucket: &str) -> Result<Vec<RegistryEntry>> {
+    let (v, bad) = read_registry(b, project_bucket)?;
+    if let Some(slug) = bad.first() {
+        return Err(S2Error::Invalid(format!(
+            "registry entry {slug} is unreadable or names a different worktree than its key"
+        )));
+    }
+    Ok(v.into_iter().map(|r| r.entry).collect())
+}
+
+/// Like [`list_shared`] but a corrupt, unknown-schema or mislabelled entry is reported, not fatal:
+/// returns the readable entries and the key slugs of the rest.
+pub fn list_shared_lenient<B: ObjectBackend>(
+    b: &B,
+    project_bucket: &str,
+) -> Result<(Vec<RegistryEntry>, Vec<String>)> {
+    let (v, bad) = read_registry(b, project_bucket)?;
+    Ok((v.into_iter().map(|r| r.entry).collect(), bad))
 }
 
 /// Docs and planning in a published tree whose path or title contains `query` (case-insensitive).

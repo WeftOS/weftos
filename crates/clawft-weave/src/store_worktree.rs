@@ -200,9 +200,23 @@ pub struct SignCfg {
     require: bool,
 }
 
+/// 32 bytes from 64 hex characters. The error never repeats any of the input: this parses a secret seed.
 fn hex32(s: &str) -> Result<[u8; 32], String> {
-    let v = hex::decode(s.trim()).map_err(|e| format!("bad hex key: {e}"))?;
-    v.try_into().map_err(|_| "a key is 32 bytes (64 hex characters)".to_string())
+    const BAD: &str = "a key is 32 bytes written as 64 hex characters";
+    let v = hex::decode(s.trim()).map_err(|_| BAD.to_string())?;
+    v.try_into().map_err(|_| BAD.to_string())
+}
+
+/// A public key that may be trusted: 32 bytes that decode to a curve point that is not small-order.
+/// A small-order (weak) key makes signatures forgeable without knowing any secret, so it is refused
+/// where trusted keys are loaded as well as where signatures are checked.
+fn trusted_key(s: &str) -> Result<[u8; 32], String> {
+    let k = hex32(s)?;
+    let vk = ed25519_dalek::VerifyingKey::from_bytes(&k).map_err(|_| "a trusted key is not a valid ed25519 public key".to_string())?;
+    if vk.is_weak() {
+        return Err("a trusted key is a small-order (weak) point; refusing it".into());
+    }
+    Ok(k)
 }
 
 impl SignCfg {
@@ -231,7 +245,7 @@ impl SignCfg {
         let key = file("WEFTOS_WT_REGISTRY_SIGN_KEY")?.map(|t| hex32(&t)).transpose()?;
         let trusted = file("WEFTOS_WT_REGISTRY_TRUSTED")?
             .map(|t| {
-                t.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).map(hex32).collect::<Result<Vec<_>, _>>()
+                t.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).map(trusted_key).collect::<Result<Vec<_>, _>>()
             })
             .transpose()?;
         let require = get("WEFTOS_WT_REGISTRY_REQUIRE_SIGNED").is_some_and(|v| v == "1");
@@ -259,13 +273,14 @@ impl EntrySigner for Ed {
 struct Trusted<'a>(&'a [[u8; 32]]);
 impl EntryVerifier for Trusted<'_> {
     fn verify(&self, signer: &str, alg: &str, msg: &[u8], sig: &[u8]) -> bool {
-        use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+        use ed25519_dalek::{Signature, VerifyingKey};
         let Ok(k) = hex32(signer) else { return false };
         if alg != "ed25519" || !self.0.contains(&k) {
             return false;
         }
         let (Ok(vk), Ok(sig)) = (VerifyingKey::from_bytes(&k), Signature::from_slice(sig)) else { return false };
-        vk.verify(msg, &sig).is_ok()
+        // Strict: rejects non-canonical signatures and small-order components; a weak key is never trusted.
+        !vk.is_weak() && vk.verify_strict(msg, &sig).is_ok()
     }
 }
 

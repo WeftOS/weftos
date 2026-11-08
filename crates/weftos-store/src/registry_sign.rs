@@ -77,8 +77,28 @@ pub fn write_registry_entry_signed<B: ObjectBackend>(
     Ok(())
 }
 
+/// Check `bytes` (the object `worktrees/<slug>.json` as read) against its signature object.
+fn verify_bytes<B: ObjectBackend>(
+    b: &B,
+    project_bucket: &str,
+    slug: &str,
+    bytes: &[u8],
+    verifier: &dyn EntryVerifier,
+) -> Result<Trust> {
+    let Some(side) = b.get(project_bucket, &format!("{SIG_PREFIX}{slug}.json"))? else {
+        return Ok(Trust::Unsigned);
+    };
+    let Ok(side) = serde_json::from_slice::<Sidecar>(&side) else {
+        return Ok(Trust::Bad);
+    };
+    let ok = unhex(&side.sig)
+        .is_some_and(|sig| verifier.verify(&side.signer, &side.alg, bytes, &sig));
+    Ok(if ok { Trust::Verified } else { Trust::Bad })
+}
+
 /// Check one entry against its signature object. Entries are matched by the bytes in the store,
-/// so a verified entry is exactly what the signer wrote.
+/// so a verified entry is exactly what the signer wrote. The entry's body must also name `slug`:
+/// a signature is for the object at that key, and a body claiming another worktree is `Bad`.
 pub fn verify_registry_entry<B: ObjectBackend>(
     b: &B,
     project_bucket: &str,
@@ -89,15 +109,10 @@ pub fn verify_registry_entry<B: ObjectBackend>(
     let Some(bytes) = b.get(project_bucket, &format!("{REGISTRY_PREFIX}{slug}.json"))? else {
         return Err(S2Error::Invalid(format!("no registry entry for {slug}")));
     };
-    let Some(side) = b.get(project_bucket, &format!("{SIG_PREFIX}{slug}.json"))? else {
-        return Ok(Trust::Unsigned);
-    };
-    let Ok(side) = serde_json::from_slice::<Sidecar>(&side) else {
-        return Ok(Trust::Bad);
-    };
-    let ok = unhex(&side.sig)
-        .is_some_and(|sig| verifier.verify(&side.signer, &side.alg, &bytes, &sig));
-    Ok(if ok { Trust::Verified } else { Trust::Bad })
+    match serde_json::from_slice::<RegistryEntry>(&bytes) {
+        Ok(e) if e.slug == slug => verify_bytes(b, project_bucket, slug, &bytes, verifier),
+        _ => Ok(Trust::Bad),
+    }
 }
 
 /// Every registry entry with its trust level, newest first. With `require_signed`, anything not
@@ -108,11 +123,12 @@ pub fn list_shared_verified<B: ObjectBackend>(
     verifier: &dyn EntryVerifier,
     require_signed: bool,
 ) -> Result<Vec<(RegistryEntry, Trust)>> {
+    let (v, _refused) = crate::share_fetch::read_registry(b, project_bucket)?;
     let mut out = Vec::new();
-    for e in crate::share_fetch::list_shared(b, project_bucket)? {
-        let t = verify_registry_entry(b, project_bucket, &e.slug, verifier)?;
+    for r in v {
+        let t = verify_bytes(b, project_bucket, &r.key_slug, &r.bytes, verifier)?;
         if !require_signed || t == Trust::Verified {
-            out.push((e, t));
+            out.push((r.entry, t));
         }
     }
     Ok(out)
@@ -142,14 +158,15 @@ pub fn list_trusted_lenient<B: ObjectBackend>(
     verifier: &dyn EntryVerifier,
     require_signed: bool,
 ) -> Result<TrustedList> {
-    let (entries, mut bad) = crate::share_fetch::list_shared_lenient(b, project_bucket)?;
+    let (v, mut bad) = crate::share_fetch::read_registry(b, project_bucket)?;
     let mut out = Vec::new();
-    for e in entries {
-        let t = verify_registry_entry(b, project_bucket, &e.slug, verifier)?;
+    for r in v {
+        // the signature is checked against the bytes that were parsed, under the key they came from
+        let t = verify_bytes(b, project_bucket, &r.key_slug, &r.bytes, verifier)?;
         if require_signed && t != Trust::Verified {
-            bad.push(e.slug);
+            bad.push(r.key_slug);
         } else {
-            out.push((e, t));
+            out.push((r.entry, t));
         }
     }
     bad.sort();

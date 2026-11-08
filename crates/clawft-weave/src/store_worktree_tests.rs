@@ -428,3 +428,39 @@ fn a_worktree_store_over_its_quota_refuses_another_publish() {
     assert!(e.contains("over its 10 byte quota"), "{e}");
     publish(json!({"quota_bytes": 0}), 4).unwrap();
 }
+
+/// S3 review S2 #2: plain `verify` accepts a forged signature under a small-order key.
+#[test]
+fn a_small_order_trusted_key_is_refused_at_load_and_at_verify_and_strict_checks_are_used() {
+    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+    // the identity point: with it, R = identity, S = 0 "verifies" any message under plain verify
+    let mut identity = [0u8; 32];
+    identity[0] = 1;
+    let mut forged = [0u8; 64];
+    forged[0] = 1;
+    let vk = VerifyingKey::from_bytes(&identity).unwrap();
+    assert!(vk.is_weak());
+    assert!(vk.verify(b"any entry bytes", &Signature::from_bytes(&forged)).is_ok(), "the hole: plain verify accepts it");
+    // ... so it must be refused wherever we decide who to trust
+    let t = Trusted(&[identity]);
+    assert!(!t.verify(&hex::encode(identity), "ed25519", b"any entry bytes", &forged), "verifier refuses");
+    let d = tempfile::tempdir().unwrap();
+    let f = d.path().join("trusted");
+    std::fs::write(&f, format!("{}\n", hex::encode(identity))).unwrap();
+    let path = f.to_string_lossy().into_owned();
+    let cfg = SignCfg::from_lookup(|v| (v == "WEFTOS_WT_REGISTRY_TRUSTED").then(|| path.clone()));
+    assert!(cfg.err().unwrap().contains("small-order"), "the trusted file is refused at load");
+    // a real key still works, and one bit flipped in a good signature does not
+    let sk = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
+    let pubk = sk.verifying_key().to_bytes();
+    let sig = Ed(sk).sign(b"entry");
+    let good = Trusted(&[pubk]);
+    assert!(good.verify(&hex::encode(pubk), "ed25519", b"entry", &sig));
+    let mut bad = sig.clone();
+    bad[10] ^= 1;
+    assert!(!good.verify(&hex::encode(pubk), "ed25519", b"entry", &bad));
+    assert!(!good.verify(&hex::encode(pubk), "ed25519", b"other", &sig));
+    // a seed typo does not echo any of what was typed
+    let e = hex32("zz-secret-ish").unwrap_err();
+    assert!(!e.contains("zz") && !e.contains("secret"), "{e}");
+}
