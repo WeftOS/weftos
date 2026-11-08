@@ -708,3 +708,52 @@ fn live_retention_is_stamped_after_commit_and_only_lengthens() {
     assert!(be.put_retention(&b, "a.tar", &v, &Retention { mode: LockMode::Compliance, until_unix_s: now - 1 }, false).is_err());
     assert!(be.extend_retention(&b, "a.tar", "no-such-version", now + 9000, LockMode::Governance).is_err());
 }
+
+/// Multipart upload with lock headers, live: an 11 MiB object streamed in three parts into a
+/// locked bucket with retention, read back byte for byte, held, and an aborted upload leaves nothing.
+#[test]
+#[ignore = "needs a throwaway RustFS: WEFTOS_STORE_TEST_RUSTFS_ENV"]
+fn live_multipart_upload_carries_lock_headers_and_aborts_clean() {
+    use crate::backend::{LockMode, MIN_PART, Part, PutOpts, Retention};
+    let (cfg, _d) = live().expect("WEFTOS_STORE_TEST_RUSTFS_ENV");
+    let be = RustfsBackend::new(cfg).unwrap();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    let b = uniq("t-mp");
+    be.create_locked_bucket(&b, &[]).unwrap();
+    // A reader with a pattern that is not constant, so a misordered part shows.
+    let total = 11 * 1024 * 1024usize;
+    let pattern = |i: usize| (i.wrapping_mul(31) % 251) as u8;
+    let want: Vec<u8> = (0..total).map(pattern).collect();
+    let opts = PutOpts { if_none_match: true, retention: Some(Retention { mode: LockMode::Compliance, until_unix_s: now + 3600 }), legal_hold: false };
+    let put = be.put_stream(&b, "big.bin", &mut std::io::Cursor::new(want.clone()), MIN_PART, &opts).unwrap();
+    eprintln!("MULTIPART put: {put:?}");
+    assert_eq!(put.meta.size, total as u64);
+    let vid = put.version_id.clone().expect("a locked bucket gives a version id");
+    assert_eq!(be.get(&b, "big.bin").unwrap(), want, "read back byte for byte");
+    assert!(put.meta.etag.contains('-'), "a multipart etag ends in -<parts>: {}", put.meta.etag);
+    assert_eq!(be.head(&b, "big.bin").unwrap().size, total as u64);
+    // The retention given at create applies to the finished object.
+    let held = be.get_retention(&b, "big.bin", &vid).unwrap().expect("retention applied");
+    assert_eq!(held.mode, LockMode::Compliance);
+    assert!(matches!(be.delete_version(&b, "big.bin", &vid, true), Err(BackendError::Forbidden(_))), "held");
+    // if_none_match on a second upload to the same key: RustFS's answer is recorded.
+    let again = be.put_stream(&b, "big.bin", &mut std::io::Cursor::new(vec![1u8; 6 * 1024 * 1024]), MIN_PART, &opts);
+    eprintln!("MULTIPART second upload with if_none_match: {:?}", again.as_ref().map(|p| &p.meta.etag).map_err(|e| e.to_string()));
+    assert!(again.is_err(), "an existing key is refused at complete");
+    assert_eq!(be.get(&b, "big.bin").unwrap(), want, "the first object is untouched");
+    // Small objects take the single-request path with the same headers.
+    let small = be.put_stream(&b, "small.bin", &mut std::io::Cursor::new(b"tiny".to_vec()), MIN_PART, &opts).unwrap();
+    assert!(small.version_id.is_some() && small.meta.size == 4);
+    // An aborted upload leaves nothing behind.
+    let id = be.create_multipart(&b, "gone.bin", &PutOpts::default()).unwrap();
+    let e1 = be.upload_part(&b, "gone.bin", &id, 1, &vec![3u8; MIN_PART]).unwrap();
+    assert!(!e1.is_empty());
+    be.abort_multipart(&b, "gone.bin", &id).unwrap();
+    assert!(matches!(be.head(&b, "gone.bin"), Err(BackendError::NoObject(_))));
+    assert!(be.upload_part(&b, "gone.bin", &id, 2, b"x").is_err(), "no part after abort");
+    be.abort_multipart(&b, "gone.bin", &id).unwrap();
+    // Order and numbering are checked before sending; a part below the minimum that is not last is RustFS's call.
+    assert!(be.complete_multipart(&b, "x", "id", &[], &PutOpts::default()).is_err());
+    assert!(be.complete_multipart(&b, "x", "id", &[Part { number: 2, etag: "a".into() }, Part { number: 1, etag: "b".into() }], &PutOpts::default()).is_err());
+    assert!(be.upload_part(&b, "x", "id", 0, b"x").is_err() && be.upload_part(&b, "x", "id", 10_001, b"x").is_err());
+}

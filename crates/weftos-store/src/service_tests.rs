@@ -1,5 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use std::io::Read;
+
 use super::*;
 use crate::audit::MemSink;
 use crate::mem::MemBackend;
@@ -556,4 +558,23 @@ fn extending_retention_needs_a_grant_and_a_store_made_with_lock() {
     assert!(r.svc.extend_retention(&local("stranger"), &rel, "a", "v", 4_000_000_000, crate::backend::LockMode::Compliance).is_err(), "no grant");
     r.svc.grant(&rel, cog("reader"), Access::Read, "op").unwrap();
     assert!(r.svc.extend_retention(&local("reader"), &rel, "a", "v", 4_000_000_000, crate::backend::LockMode::Compliance).is_err(), "read cannot hold");
+}
+
+#[test]
+fn a_streamed_put_is_gated_write_once_for_append_and_refuses_lock_options_on_an_unlocked_store() {
+    let r = rig();
+    let rel = StoreName::release("weft", P, "stable").unwrap();
+    r.svc.create_store(&rel, "daemon", Parties::defaults_for(&rel)).unwrap();
+    let ci = Caller::local(Principal::parse(CI_PRINCIPAL).unwrap());
+    let once = crate::backend::PutOpts { if_none_match: true, ..Default::default() };
+    let mut data = std::io::repeat(1).take(6 * 1024 * 1024);
+    assert!(r.svc.put_stream(&local("stranger"), &rel, "a", &mut data, &once).is_err(), "no grant");
+    let p = r.svc.put_stream(&ci, &rel, "a", &mut std::io::repeat(1).take(6 * 1024 * 1024), &once).unwrap();
+    assert_eq!(p.meta.size, 6 * 1024 * 1024);
+    assert!(matches!(r.svc.put_stream(&ci, &rel, "a", &mut std::io::repeat(1).take(5), &once), Err(StoreError::Backend(BackendError::Exists(_)))));
+    assert!(matches!(r.svc.put_stream(&ci, &rel, "b", &mut std::io::repeat(1).take(5), &crate::backend::PutOpts::default()), Err(StoreError::Refused(_))), "append must be conditional");
+    let hold = crate::backend::PutOpts { if_none_match: true, legal_hold: true, ..Default::default() };
+    assert!(matches!(r.svc.put_stream(&ci, &rel, "c", &mut std::io::repeat(1).take(5), &hold), Err(StoreError::Refused(_))), "lock options need a locked store");
+    // The activity log shows the real size.
+    assert!(r.sink.events().iter().any(|e| e.op == "PutObject" && e.bytes == 6 * 1024 * 1024), "{:?}", r.sink.events());
 }

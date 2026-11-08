@@ -41,6 +41,14 @@ impl BackendError {
     }
 }
 
+/// Read until `n` bytes or the end.
+fn read_up_to(src: &mut dyn std::io::Read, n: usize) -> Result<Vec<u8>, BackendError> {
+    let mut buf = Vec::with_capacity(n.min(16 * 1024 * 1024));
+    use std::io::Read;
+    src.take(n as u64).read_to_end(&mut buf).map_err(|e| BackendError::Io(e.to_string()))?;
+    Ok(buf)
+}
+
 /// Size and identity of one object.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObjectMeta {
@@ -165,6 +173,21 @@ impl LifecycleRule {
     }
 }
 
+/// One uploaded part of a multipart upload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Part {
+    /// 1..=10000.
+    pub number: u32,
+    pub etag: String,
+}
+
+/// Smallest part S3 accepts (the last part may be smaller).
+pub const MIN_PART: usize = 5 * 1024 * 1024;
+/// Part size [`ObjectBackend::put_stream`] uses by default.
+pub const DEFAULT_PART: usize = 8 * 1024 * 1024;
+/// Most parts one upload can have.
+pub const MAX_PARTS: u32 = 10_000;
+
 /// An access key the backend issued for one principal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccessKey {
@@ -187,6 +210,81 @@ pub trait ObjectBackend: Send + Sync {
     /// [`AdminBackend::create_locked_bucket`]; others answer [`BackendError::Unsupported`].
     fn put_locked(&self, _bucket: &str, _key: &str, _data: &[u8], _opts: &PutOpts) -> Result<LockedPut, BackendError> {
         Err(BackendError::Unsupported("object lock".into()))
+    }
+    /// Start a multipart upload (carrying the lock headers of `opts`, if any); returns its id.
+    /// `opts.if_none_match` is applied when the upload is completed.
+    fn create_multipart(&self, _bucket: &str, _key: &str, _opts: &PutOpts) -> Result<String, BackendError> {
+        Err(BackendError::Unsupported("multipart upload".into()))
+    }
+    /// Upload one part (5 MiB or more unless it is the last); returns its etag. Repeating a part
+    /// number replaces it, so a failed part can be sent again.
+    fn upload_part(&self, _bucket: &str, _key: &str, _upload_id: &str, _number: u32, _data: &[u8]) -> Result<String, BackendError> {
+        Err(BackendError::Unsupported("multipart upload".into()))
+    }
+    /// Finish the upload from its parts, in order. Nothing is visible before this succeeds.
+    fn complete_multipart(&self, _bucket: &str, _key: &str, _upload_id: &str, _parts: &[Part], _opts: &PutOpts) -> Result<LockedPut, BackendError> {
+        Err(BackendError::Unsupported("multipart upload".into()))
+    }
+    /// Throw an unfinished upload away.
+    fn abort_multipart(&self, _bucket: &str, _key: &str, _upload_id: &str) -> Result<(), BackendError> {
+        Err(BackendError::Unsupported("multipart upload".into()))
+    }
+    /// Store an object read from `src` without holding it all in memory: parts of `part_size`
+    /// bytes (at least [`MIN_PART`]) go up as they are read, so only one part is in memory. An
+    /// object smaller than one part is a single put. A failure aborts the upload; nothing is left
+    /// visible. Backends without multipart (the local ones) read it all and put it once, which
+    /// keeps the old size limit, and refuse lock options.
+    fn put_stream(&self, bucket: &str, key: &str, src: &mut dyn std::io::Read, part_size: usize, opts: &PutOpts) -> Result<LockedPut, BackendError> {
+        let part_size = part_size.max(MIN_PART);
+        let first = read_up_to(src, part_size)?;
+        if first.len() < part_size {
+            // Fits in one part: one request, lock headers and all.
+            return match self.put_locked(bucket, key, &first, opts) {
+                Err(BackendError::Unsupported(_)) if opts.retention.is_none() && !opts.legal_hold => {
+                    let meta = self.put(bucket, key, &first, opts.if_none_match)?;
+                    Ok(LockedPut { meta, version_id: None })
+                }
+                other => other,
+            };
+        }
+        let id = match self.create_multipart(bucket, key, opts) {
+            Ok(id) => id,
+            Err(BackendError::Unsupported(_)) if opts.retention.is_none() && !opts.legal_hold => {
+                let mut all = first;
+                src.read_to_end(&mut all).map_err(|e| BackendError::Io(e.to_string()))?;
+                let meta = self.put(bucket, key, &all, opts.if_none_match)?;
+                return Ok(LockedPut { meta, version_id: None });
+            }
+            Err(e) => return Err(e),
+        };
+        let run = || -> Result<LockedPut, BackendError> {
+            let (mut parts, mut total, mut buf, mut n) = (Vec::new(), 0u64, first, 1u32);
+            loop {
+                if n > MAX_PARTS {
+                    return Err(BackendError::BadKey(format!("more than {MAX_PARTS} parts: raise part_size")));
+                }
+                total += buf.len() as u64;
+                parts.push(Part { number: n, etag: self.upload_part(bucket, key, &id, n, &buf)? });
+                if buf.len() < part_size {
+                    break;
+                }
+                buf = read_up_to(src, part_size)?;
+                if buf.is_empty() {
+                    break;
+                }
+                n += 1;
+            }
+            let mut done = self.complete_multipart(bucket, key, &id, &parts, opts)?;
+            done.meta.size = total;
+            Ok(done)
+        };
+        match run() {
+            Ok(v) => Ok(v),
+            Err(e) => {
+                let _ = self.abort_multipart(bucket, key, &id);
+                Err(e)
+            }
+        }
     }
     /// Delete one version. A locked version is refused ([`BackendError::Forbidden`]) until its
     /// retention ends or its legal hold is lifted; `bypass_governance` overrides only `Governance`.
@@ -295,3 +393,7 @@ pub fn check_key(key: &str) -> Result<(), BackendError> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "backend_tests.rs"]
+mod tests;

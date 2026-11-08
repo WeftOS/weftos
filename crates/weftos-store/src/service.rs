@@ -622,6 +622,21 @@ impl StoreService {
         self.finish(who, name, Op::Put, Some(key), data.len() as u64, r)
     }
 
+    /// PutObject from a reader, in parts, so an object larger than memory can be stored (the
+    /// 512 MiB limit of a whole-body put does not apply). Lock options in `opts` need a store made
+    /// by [`Self::create_locked_store`]. Gated and logged like `put`, with the size known only at the
+    /// end; an `append` principal must set `opts.if_none_match`. On any failure nothing is visible.
+    pub fn put_stream(&self, who: &Caller, name: &StoreName, key: &str, src: &mut dyn std::io::Read, opts: &crate::backend::PutOpts) -> Result<crate::backend::LockedPut, StoreError> {
+        self.gate(who, name, Op::Put, Some(key), 0)?;
+        if (opts.retention.is_some() || opts.legal_hold) && !self.is_locked(name) {
+            return Err(StoreError::Refused(format!("{name} was not made with object lock")));
+        }
+        self.write_once(who, name, key, 0, opts.if_none_match)?;
+        let r = self.objects.put_stream(&name.bucket(), key, src, crate::backend::DEFAULT_PART, opts);
+        let bytes = r.as_ref().map_or(0, |p| p.meta.size);
+        self.finish(who, name, Op::Put, Some(key), bytes, r)
+    }
+
     /// Stamp or lengthen the retention of one version after the upload is committed (CI puts the
     /// artifact, then holds it). Only ever lengthens: a date not later than the current one is
     /// refused, so the `append` role (CI) may call it, since it can only add protection. Gated and

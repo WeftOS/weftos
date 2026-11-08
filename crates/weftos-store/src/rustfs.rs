@@ -13,7 +13,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use reqwest::blocking::Client;
 use serde_json::{Value, json};
 
-use crate::backend::{AccessKey, AdminBackend, BackendError, BucketTags, DefaultRetention, LockConfig, LockMode, LifecycleRule, LockedPut, ObjectBackend, ObjectMeta, ObjectVersion, PutOpts, Retention, check_key};
+use crate::backend::{AccessKey, AdminBackend, BackendError, BucketTags, DefaultRetention, LockConfig, LockMode, LifecycleRule, LockedPut, ObjectBackend, ObjectMeta, ObjectVersion, Part, PutOpts, Retention, check_key};
 use crate::sigv4::{self, Req};
 
 /// Connection settings. `secrets_dir` receives one 0600 file per issued access key.
@@ -95,6 +95,8 @@ struct Xport {
 fn repeatable(method: &str, query: &[(String, String)]) -> bool {
     match method {
         "GET" | "HEAD" => true,
+        // Sending the same part number again replaces it: safe to repeat.
+        "PUT" if query.iter().any(|(k, _)| k == "partNumber") => true,
         // A plain delete is idempotent; deleting a named version of a locked object is too, but
         // leave that to the caller to reissue.
         "DELETE" => !query.iter().any(|(k, _)| k == "versionId"),
@@ -432,24 +434,63 @@ impl ObjectBackend for RustfsBackend {
 
     fn put_locked(&self, bucket: &str, key: &str, data: &[u8], opts: &PutOpts) -> Result<LockedPut, BackendError> {
         check_key(key)?;
-        let mut extra: Vec<(&str, String)> = Vec::new();
+        let mut extra = self.lock_headers(opts)?;
         if opts.if_none_match {
             extra.push(("if-none-match", "*".into()));
-        }
-        if let Some(r) = opts.retention {
-            let now = SystemTime::now().duration_since(UNIX_EPOCH).map_err(io)?.as_secs();
-            if r.until_unix_s <= now {
-                return Err(BackendError::BadKey(format!("retain-until {} is not in the future", r.until_unix_s)));
-            }
-            extra.push(("x-amz-object-lock-mode", r.mode.as_str().into()));
-            extra.push(("x-amz-object-lock-retain-until-date", sigv4::iso_date(r.until_unix_s)));
-        }
-        if opts.legal_hold {
-            extra.push(("x-amz-object-lock-legal-hold", "ON".into()));
         }
         let r = self.send("PUT", &format!("/{bucket}/{key}"), &[], data, &extra)?;
         let r = self.check(r, Ctx::Object(bucket, key))?;
         Ok(LockedPut { meta: ObjectMeta { key: key.to_owned(), size: data.len() as u64, etag: r.etag.unwrap_or_default() }, version_id: r.version })
+    }
+
+    fn create_multipart(&self, bucket: &str, key: &str, opts: &PutOpts) -> Result<String, BackendError> {
+        check_key(key)?;
+        let extra = self.lock_headers(opts)?;
+        let r = self.send("POST", &format!("/{bucket}/{key}"), &Self::q(&[("uploads", "")]), &[], &extra)?;
+        let r = self.check(r, Ctx::Object(bucket, key))?;
+        xml_tag(&String::from_utf8_lossy(&r.body), "UploadId").filter(|u| !u.is_empty()).ok_or_else(|| BackendError::Io("multipart: no UploadId in the answer".into()))
+    }
+
+    fn upload_part(&self, bucket: &str, key: &str, upload_id: &str, number: u32, data: &[u8]) -> Result<String, BackendError> {
+        check_key(key)?;
+        if !(1..=crate::backend::MAX_PARTS).contains(&number) {
+            return Err(BackendError::BadKey(format!("part number {number} is outside 1..={}", crate::backend::MAX_PARTS)));
+        }
+        let n = number.to_string();
+        let r = self.send("PUT", &format!("/{bucket}/{key}"), &Self::q(&[("partNumber", &n), ("uploadId", upload_id)]), data, &[])?;
+        let r = self.check(r, Ctx::Object(bucket, key))?;
+        r.etag.filter(|e| !e.is_empty()).ok_or_else(|| BackendError::Io(format!("multipart: part {number} came back without an etag")))
+    }
+
+    fn complete_multipart(&self, bucket: &str, key: &str, upload_id: &str, parts: &[Part], opts: &PutOpts) -> Result<LockedPut, BackendError> {
+        check_key(key)?;
+        if parts.is_empty() || parts.windows(2).any(|w| w[0].number >= w[1].number) {
+            return Err(BackendError::BadKey("multipart: parts must be given in increasing order, at least one".into()));
+        }
+        let body = format!(
+            "<CompleteMultipartUpload>{}</CompleteMultipartUpload>",
+            parts.iter().map(|p| format!("<Part><PartNumber>{}</PartNumber><ETag>\"{}\"</ETag></Part>", p.number, p.etag)).collect::<String>()
+        );
+        let extra: Vec<(&str, String)> = if opts.if_none_match { vec![("if-none-match", "*".into())] } else { Vec::new() };
+        let r = self.send("POST", &format!("/{bucket}/{key}"), &Self::q(&[("uploadId", upload_id)]), body.as_bytes(), &extra)?;
+        let r = self.check(r, Ctx::Object(bucket, key))?;
+        // S3 may answer 200 and put the failure in the body.
+        let text = String::from_utf8_lossy(&r.body).into_owned();
+        if text.contains("<Error>") {
+            return Err(BackendError::Io(format!("multipart complete: {} {}", xml_tag(&text, "Code").unwrap_or_default(), xml_tag(&text, "Message").unwrap_or_default())));
+        }
+        let etag = xml_tag(&text, "ETag").map(|e| e.trim_matches('"').to_owned()).or(r.etag).unwrap_or_default();
+        Ok(LockedPut { meta: ObjectMeta { key: key.to_owned(), size: 0, etag }, version_id: r.version })
+    }
+
+    fn abort_multipart(&self, bucket: &str, key: &str, upload_id: &str) -> Result<(), BackendError> {
+        check_key(key)?;
+        let r = self.send("DELETE", &format!("/{bucket}/{key}"), &Self::q(&[("uploadId", upload_id)]), &[], &[])?;
+        // Aborting an upload that is already gone is fine.
+        if r.status == 404 && String::from_utf8_lossy(&r.body).contains("NoSuchUpload") {
+            return Ok(());
+        }
+        self.check(r, Ctx::Object(bucket, key)).map(|_| ())
     }
 
     fn delete_version(&self, bucket: &str, key: &str, version_id: &str, bypass_governance: bool) -> Result<(), BackendError> {
@@ -582,6 +623,23 @@ impl ObjectBackend for RustfsBackend {
 }
 
 impl RustfsBackend {
+    /// The Object Lock headers for `opts` (retention and legal hold; not the conditional).
+    fn lock_headers(&self, opts: &PutOpts) -> Result<Vec<(&'static str, String)>, BackendError> {
+        let mut extra = Vec::new();
+        if let Some(r) = opts.retention {
+            let now = SystemTime::now().duration_since(UNIX_EPOCH).map_err(io)?.as_secs();
+            if r.until_unix_s <= now {
+                return Err(BackendError::BadKey(format!("retain-until {} is not in the future", r.until_unix_s)));
+            }
+            extra.push(("x-amz-object-lock-mode", r.mode.as_str().into()));
+            extra.push(("x-amz-object-lock-retain-until-date", sigv4::iso_date(r.until_unix_s)));
+        }
+        if opts.legal_hold {
+            extra.push(("x-amz-object-lock-legal-hold", "ON".into()));
+        }
+        Ok(extra)
+    }
+
     pub(crate) fn list_versions_paged(&self, bucket: &str, prefix: &str, page: usize) -> Result<Vec<ObjectVersion>, BackendError> {
         let page_s = page.to_string();
         let mut out = Vec::new();
