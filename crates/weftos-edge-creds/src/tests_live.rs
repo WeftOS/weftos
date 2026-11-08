@@ -550,3 +550,35 @@ fn presign_refuses_keys_that_would_be_policy_wildcards() {
     }
     assert!(run(r.broker.lease("wasm-1", LeaseRequest::PresignPut { key: "plain/k.bin".into(), ttl_secs: 60 })).is_ok());
 }
+
+// ---- known gaps handed to other lanes (ignored until fixed) ---------------------------
+// Each test states the behaviour the ADR wants. Run with `--ignored` to see it fail today.
+
+/// Owner: the lane that feeds chain events into `GrantLedger::apply` (S1 weftos-store /
+/// chain integration). One event claiming `seq = u64::MAX` makes every later event
+/// `Stale`, so a later revoke is silently dropped. Only chain-authenticated events may
+/// reach `apply`, or `apply` must bound a jump in `seq`.
+#[test]
+#[ignore = "known gap: seq = u64::MAX freezes the ledger; owner S1/chain feed (ADR-126 S3 results)"]
+fn a_far_future_seq_cannot_freeze_later_revocations() {
+    let ledger = GrantLedger::new();
+    ledger.apply(&GrantEvent::pairing(1, MESH, "wasm-1"));
+    let _ = ledger.apply(&GrantEvent { seq: u64::MAX, principal: "wasm-1".into(), store: node_store_name(MESH, "wasm-1"), access: Access::Read, op: GrantOp::Grant });
+    let later = GrantEvent { seq: 5, principal: "wasm-1".into(), store: node_store_name(MESH, "wasm-1"), access: Access::Write, op: GrantOp::RevokeAll };
+    assert!(matches!(ledger.apply(&later), Applied::Changed { .. }), "a legitimate revoke must still apply");
+}
+
+/// Owner: S1 (weftos-store) archives the bucket on unpair (ADR-126 section 3). Today
+/// `deprovision_node` leaves `n-<id>`, so a later node that reuses the id inherits the data.
+#[test]
+#[ignore = "known gap: node id reuse after unpair inherits the old bucket; owner S1 archive-on-unpair (ADR-126 S3 results)"]
+fn a_reused_node_id_does_not_inherit_the_previous_nodes_objects() {
+    let r = rig_unprovisioned(&["wasm-9"]);
+    pair(&r, 1, "wasm-9");
+    run(r.broker.minter().provision_node("wasm-9", "generated-secret-wasm-9")).unwrap();
+    run(edge(&r, "wasm-9").put("secret.txt", b"old node data")).unwrap();
+    run(r.broker.minter().deprovision_node("wasm-9")).unwrap();
+    run(r.broker.minter().provision_node("wasm-9", "generated-secret-wasm-9")).unwrap();
+    let fresh = edge(&r, "wasm-9");
+    assert_eq!(run(fresh.get("secret.txt")).unwrap(), None, "new pairing must start from an empty bucket");
+}

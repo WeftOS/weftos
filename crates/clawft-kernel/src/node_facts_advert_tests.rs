@@ -148,3 +148,22 @@ fn delta_sign_verify_and_tamper() {
     );
     assert!(verify_facts_delta(&s, 900).is_err(), "future-dated delta");
 }
+
+/// The identity point is a small-order key: with R = identity and S = 0 the
+/// cofactorless check accepts a "signature" over any message. A peer that
+/// presents such a key must be refused (verify_strict).
+#[test]
+fn small_order_key_with_a_trivial_signature_is_refused() {
+    let mut pk = [0u8; 32];
+    pk[0] = 1; // identity point
+    let mut sig = vec![0u8; 64];
+    sig[0] = 1; // R = identity, S = 0
+    let mut f = NodeFacts::new(node_id_from_pubkey(&pk), 1_000, 600, 1);
+    f.capabilities = vec![Capability::new(CapabilityId::new("cpu.arch.aarch64").unwrap(), Provenance::Probed)];
+    let signed = SignedNodeFacts {
+        payload: serde_json::to_string(&f).unwrap(),
+        public_key: pk.to_vec(),
+        signature: sig,
+    };
+    assert_eq!(verify_node_facts(&signed, 1_100), Err(NodeFactsAdvertError::BadSignature));
+}

@@ -39,7 +39,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 
 use clawft_types::placement::vocabulary::MAX_VOCAB_BYTES;
 use clawft_types::placement::vocabulary_pin::{GENESIS_EVENT, MAX_PIN_BYTES};
@@ -107,7 +107,7 @@ pub fn verify_pin(pin: &VocabularyPin, anchors: &TrustAnchors) -> Result<(), Ker
     let sig = hex_decode_exact::<64>(sig_hex)
         .map(|b| Signature::from_bytes(&b))
         .ok_or_else(|| config_err("pin signature is malformed"))?;
-    key.verify(&pin.signed_statement(), &sig)
+    key.verify_strict(&pin.signed_statement(), &sig)
         .map_err(|_| config_err("pin signature does not verify"))
 }
 

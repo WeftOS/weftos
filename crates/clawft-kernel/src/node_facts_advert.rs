@@ -15,7 +15,7 @@
 //! window (not expired, not issued in the future beyond [`MAX_CLOCK_SKEW_SECS`]).
 
 use clawft_types::placement::{FactsDelta, FactsError, NodeFacts};
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
 
 use crate::node_registry::node_id_from_pubkey;
@@ -106,7 +106,7 @@ fn check_envelope(
         return Err(NodeFactsAdvertError::TooLarge(payload.len()));
     }
     let vk = VerifyingKey::from_bytes(&pk).map_err(|_| NodeFactsAdvertError::BadPublicKey)?;
-    vk.verify(&signed_bytes(domain, payload), &Signature::from_bytes(&sig))
+    vk.verify_strict(&signed_bytes(domain, payload), &Signature::from_bytes(&sig))
         .map_err(|_| NodeFactsAdvertError::BadSignature)?;
     Ok(pk)
 }

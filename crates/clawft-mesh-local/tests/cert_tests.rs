@@ -106,3 +106,17 @@ fn ttl_overflow_saturates() {
     let c = UserCert::issue(&machine(), user(), 1, u64::MAX - 5, u64::MAX);
     assert_eq!(c.not_after, u64::MAX);
 }
+
+/// A small-order machine key (the identity point) with R = identity, S = 0
+/// "signs" anything under a cofactorless check. The cert must be refused even
+/// though the key is self-consistent and listed as trusted.
+#[test]
+fn small_order_machine_key_is_rejected() {
+    let (c, _) = issued();
+    let mut weak = [0u8; 32];
+    weak[0] = 1;
+    let mut sig = [0u8; 64];
+    sig[0] = 1;
+    let forged = UserCert { machine_pubkey: weak, node_id: node_id_from_pubkey(&weak), sig, ..c };
+    assert_eq!(forged.verify(&weak, T0 + 1), Err(CertError::BadSignature));
+}

@@ -28,7 +28,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use clawft_types::placement::{Capability, NodeFacts, ProbeNote, Provenance};
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -391,7 +391,7 @@ impl SeedBinder {
             return Err(BindError::UntrustedOperator);
         }
         let vk = VerifyingKey::from_bytes(&key).map_err(|_| bad("bad operator key"))?;
-        vk.verify(&signed_bytes(&signed.record), &Signature::from_bytes(&sig))
+        vk.verify_strict(&signed_bytes(&signed.record), &Signature::from_bytes(&sig))
             .map_err(|_| BindError::BadSignature)?;
         let record: BindRecord = serde_json::from_str(&signed.record)
             .map_err(|e| BindError::Malformed(e.to_string()))?;
