@@ -474,7 +474,7 @@ nothing here was deployed, and `WEFTOS_STORE_RUSTFS_ENV` is unset by default (lo
   - F7 and F13 to F20, not yet addressed (see
     `docs/research/adr126-s1-s2-adversarial-review-2026-11-08.md`), including S1 `store.promote`
     prefix validation.
-  - `slug_of` in `worktree-store.sh` is not injective: `feat/x` and `feat-x` map to one store.
+  - `slug_of` in `worktree-store.sh` is now injective (`/` becomes `--`; branches containing `--`, `-/` or `/-` are refused and `WTS_SLUG` overrides). Existing stores created under the old slashed-branch slugs (`feat/s2` was `feat-s2`, now `feat--s2`) are not found by the script until renamed or re-created; none are known to exist outside drills.
   - The owner rejected the rclone mount. The union mount (`mount-config`, `mount`, `umount`) is
     proposed to be parked: kept in the code, dropped from the S2 done-when and from any gate, and
     marked parked in the script help and §4 (proposal in §1 of
