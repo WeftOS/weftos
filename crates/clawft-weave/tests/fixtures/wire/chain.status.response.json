@@ -1,0 +1,11 @@
+{
+  "ok": true,
+  "result": {
+    "chain_id": 0,
+    "sequence": 2,
+    "event_count": 2,
+    "checkpoint_count": 0,
+    "events_since_checkpoint": 2,
+    "last_hash": "29663b9a32ee32c2ca5a645117696ce0888c84b39f8fd91c0ec4ebcd09025df4"
+  }
+}

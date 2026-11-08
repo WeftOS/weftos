@@ -1,0 +1,6 @@
+{
+  "method": "agent.sources",
+  "params": {},
+  "auth": "admin",
+  "proto": 1
+}

@@ -1,0 +1,5 @@
+{
+  "ok": false,
+  "error": "needs `action` or `tool`",
+  "error_kind": "invalid_params"
+}

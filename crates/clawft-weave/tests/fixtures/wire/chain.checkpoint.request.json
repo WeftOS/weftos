@@ -1,0 +1,6 @@
+{
+  "method": "chain.checkpoint",
+  "params": {},
+  "auth": "admin",
+  "proto": 1
+}

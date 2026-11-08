@@ -1,0 +1,5 @@
+{
+  "ok": false,
+  "error": "chain.append: this source is reserved for the daemon's own events (identity, anchors, governance, project, supervisor)",
+  "error_kind": "reserved_source"
+}
