@@ -1,0 +1,8 @@
+{
+  "method": "chain.tail",
+  "params": {
+    "count": 2
+  },
+  "auth": "admin",
+  "proto": 1
+}

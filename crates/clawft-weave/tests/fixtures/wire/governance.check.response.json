@@ -1,0 +1,13 @@
+{
+  "ok": true,
+  "result": {
+    "decision": "deny",
+    "reason": "rule 'block-shell': effect magnitude 1.00 > threshold 0.50",
+    "evaluated_rules": [
+      "block-shell"
+    ],
+    "grant_applied": false,
+    "agent_id": "tapestry",
+    "action": "tool.shell_exec"
+  }
+}

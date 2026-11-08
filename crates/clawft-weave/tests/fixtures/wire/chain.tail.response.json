@@ -1,0 +1,23 @@
+{
+  "ok": true,
+  "result": [
+    {
+      "sequence": 0,
+      "chain_id": 0,
+      "timestamp": "2026-11-07T12:00:00.123456+00:00",
+      "source": "kernel",
+      "kind": "boot",
+      "hash": "83787c5fbb5b4f70617932764a4194669193f76fe90ed9476c559d68bbb3ce6b",
+      "detail": ""
+    },
+    {
+      "sequence": 1,
+      "chain_id": 0,
+      "timestamp": "2026-11-07T12:00:00.123456+00:00",
+      "source": "tapestry",
+      "kind": "tapestry.turn",
+      "hash": "29663b9a32ee32c2ca5a645117696ce0888c84b39f8fd91c0ec4ebcd09025df4",
+      "detail": "{\"kind\":\"tapestry.turn\",\"entries\":[\"01JC00000000000000000000"
+    }
+  ]
+}

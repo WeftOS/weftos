@@ -1,0 +1,25 @@
+{
+  "ok": true,
+  "result": {
+    "nodes": [
+      {
+        "ok": true,
+        "node_id": "local",
+        "fetched_at": "2026-11-07T12:00:00.123456+00:00",
+        "agents": [
+          {
+            "row_id": "pid:2",
+            "pid": 2,
+            "agent_id": "worker-1",
+            "state": "running",
+            "memory_bytes": 0,
+            "cpu_time_ms": 0,
+            "parent_pid": null
+          }
+        ],
+        "exposures": null,
+        "exposures_error": "the exposure registry is not running on this node"
+      }
+    ]
+  }
+}

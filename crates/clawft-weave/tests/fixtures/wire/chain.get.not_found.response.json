@@ -1,0 +1,4 @@
+{
+  "ok": false,
+  "error": "chain.get: no event at sequence 9 (head is 1)"
+}

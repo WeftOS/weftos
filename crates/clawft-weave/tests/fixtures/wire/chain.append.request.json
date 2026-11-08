@@ -1,0 +1,17 @@
+{
+  "method": "chain.append",
+  "params": {
+    "source": "tapestry",
+    "record": {
+      "kind": "tapestry.turn",
+      "entries": [
+        "01JC0000000000000000000001"
+      ],
+      "hash_before": "6db7d803e74f1ffa7d8f5adc0bf95b3e15bf4c8373fffadf546227cc6c6742cb",
+      "hash_after": "f39592393ef0859cb196a52693d2cea00fb2df784b3c04ae54aa7cadb8e562f8",
+      "ts": "2026-11-07T12:00:00.123456+00:00"
+    }
+  },
+  "auth": "admin",
+  "proto": 1
+}

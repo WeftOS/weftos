@@ -1,0 +1,9 @@
+{
+  "method": "chain.get",
+  "params": {
+    "sequence": 1,
+    "signatures": false
+  },
+  "auth": "admin",
+  "proto": 1
+}
