@@ -3,7 +3,7 @@
 //! Verbs map 1:1 onto the daemon's `store.client.*` RPCs (all Admin):
 //! `status`, `hold <ulid>`, `grant|revoke` (local principals), `weftos-grant|weftos-revoke`
 //! (WeftOS identities), `xmesh-trust|xmesh-install|xmesh-revoke` (foreign meshes), `sweep`,
-//! and the governed `put|get|ls|delete`.
+//! `snapshot` (publish a signed gate snapshot on the chain), and the governed `put|get|ls|delete`.
 //!
 //! `--as` is `local:<principal>` (e.g. `local:cog:c1`), `weftos:<id>`, or
 //! `foreign:<64hex mesh>:<id>`. Anything else is refused before a request is sent.
@@ -65,6 +65,11 @@ pub enum StoreClientAction {
     XmeshSign(XmeshSignArgs),
     /// Sweep expired/revoked state.
     Sweep {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Publish a signed snapshot of the gate on the chain.
+    Snapshot {
         #[arg(long)]
         json: bool,
     },
@@ -363,6 +368,7 @@ pub fn build(action: &StoreClientAction) -> anyhow::Result<(&'static str, Value)
         A::XmeshRevoke { grant, .. } => ("store.client.xmesh_revoke", json!({"grant": grant_from_file(grant)?})),
         A::XmeshSign(_) => bail!("xmesh-sign is local and sends no request"),
         A::Sweep { .. } => ("store.client.sweep", json!({})),
+        A::Snapshot { .. } => ("store.client.snapshot", json!({})),
         A::Put { name, key, as_, text, file, .. } => {
             let as_v = parse_as(as_)?;
             let mut p = json!({"name": name, "key": key, "as": as_v});
@@ -384,7 +390,8 @@ pub fn build(action: &StoreClientAction) -> anyhow::Result<(&'static str, Value)
 
 fn wants_json(a: &StoreClientAction) -> bool {
     use StoreClientAction as A;
-    matches!(a, A::Status { json: true } | A::Sweep { json: true } | A::XmeshInstall { json: true, .. }
+    matches!(a, A::Status { json: true } | A::Sweep { json: true } | A::Snapshot { json: true }
+        | A::XmeshInstall { json: true, .. }
         | A::XmeshRevoke { json: true, .. } | A::Put { json: true, .. } | A::Get { json: true, .. }
         | A::Ls { json: true, .. } | A::Delete { json: true, .. })
 }
@@ -426,6 +433,10 @@ pub fn render(action: &StoreClientAction, v: &Value) -> anyhow::Result<String> {
             Some(0) => "no expired grants\n".into(),
             Some(n) => format!("expired grants dropped: {n}\n"),
             None => bail!("sweep result has no expired count"),
+        },
+        A::Snapshot { .. } => match v["through_seq"].as_u64() {
+            Some(n) => format!("gate snapshot published, covers chain event {n}\n"),
+            None => bail!("snapshot result has no through_seq"),
         },
         A::Put { .. } => format!("wrote {} ({} bytes)\n", cell(v, "key"), cell(v, "size")),
         A::Get { .. } => match v["text"].as_str() {
@@ -502,6 +513,8 @@ mod tests {
         assert!(parse(&["put", "n", "k", "--as", "weftos:w", "--text", "t", "--file", "f"]).is_err());
         assert!(parse(&["put", "n", "k", "--text", "t"]).is_err(), "needs --as");
         assert!(parse(&["get", "n", "k"]).is_err() && parse(&["ls", "n", "--as", "weftos:w", "--prefix", "p/"]).is_ok());
+        assert!(parse(&["snapshot"]).is_ok() && parse(&["snapshot", "--json"]).is_ok());
+        assert!(parse(&["snapshot", "extra"]).is_err(), "snapshot takes no positional args");
     }
 
     #[test]
@@ -522,6 +535,8 @@ mod tests {
     fn params_for_each_verb() {
         assert_eq!(built(&["status"]), ("store.client.status", json!({})));
         assert_eq!(built(&["sweep"]), ("store.client.sweep", json!({})));
+        assert_eq!(built(&["snapshot"]), ("store.client.snapshot", json!({})));
+        assert_eq!(built(&["snapshot", "--json"]), ("store.client.snapshot", json!({})));
         assert_eq!(built(&["hold", "U1"]), ("store.client.hold", json!({"ulid": "U1"})));
         assert_eq!(built(&["grant", "n", "cog:c1", "write"]),
             ("store.client.grant", json!({"name": "n", "principal": "cog:c1", "access": "write"})));
@@ -755,5 +770,25 @@ mod tests {
         assert!(wants_json(&parse(&["sweep", "--json"]).unwrap()) && !wants_json(&sw));
         assert!(wants_json(&parse(&["xmesh-install", "g", "--json"]).unwrap()));
         assert!(wants_json(&parse(&["xmesh-revoke", "g", "--json"]).unwrap()));
+    }
+
+    #[test]
+    fn snapshot_human_rendering_and_refusal() {
+        let snap = parse(&["snapshot"]).unwrap();
+        assert_eq!(render(&snap, &json!({"through_seq": 42})).unwrap(),
+            "gate snapshot published, covers chain event 42\n");
+        assert_eq!(render(&snap, &json!({"through_seq": 0})).unwrap(),
+            "gate snapshot published, covers chain event 0\n");
+        assert!(render(&snap, &json!({})).is_err(), "missing through_seq refuses");
+        assert!(render(&snap, &json!({"through_seq": "42"})).is_err(), "non-integer through_seq refuses");
+        assert!(render(&snap, &json!({"expired": 3})).is_err(), "sweep's field is not a snapshot result");
+    }
+
+    #[test]
+    fn snapshot_json_flag_selects_raw_output() {
+        let human = parse(&["snapshot"]).unwrap();
+        let raw = parse(&["snapshot", "--json"]).unwrap();
+        assert!(!wants_json(&human) && wants_json(&raw));
+        assert!(matches!(raw, StoreClientAction::Snapshot { json: true }));
     }
 }

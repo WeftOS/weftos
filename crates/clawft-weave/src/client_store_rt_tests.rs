@@ -9,7 +9,7 @@ fn cfg(account: &str) -> ClientStoreConfig {
     ClientStoreConfig { account: account.into(), port: 9100 }
 }
 fn open(c: &ClientStoreConfig, euid: u32, mesh: &str) -> Result<ClientStore, String> {
-    open_as(c, euid, mesh, Arc::new(OpenGate), Arc::new(MemSink::default()), Arc::new(weftos_store::service::NoChain), None)
+    open_as(c, euid, mesh, Arc::new(OpenGate), Arc::new(MemSink::default()), Arc::new(weftos_store::service::NoChain), None, None)
 }
 
 #[test]

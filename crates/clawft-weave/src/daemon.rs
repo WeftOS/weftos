@@ -1321,7 +1321,11 @@ pub async fn run(
             let gate_log = chain.clone().map(|c| {
                 Arc::new(crate::client_store_rt::ChainLog(c)) as Arc<dyn crate::client_store_state::EventLog>
             });
-            match crate::client_store_rt::start(&runtime_dir, reg, audit_fn, gate_log) {
+            // Snapshots are signed with the chain's own key, so the daemon already trusts it.
+            let gate_key = chain.as_ref().and_then(|c| c.signing_key_clone()).map(|k| {
+                Arc::new(crate::client_store_snapshot::Ed25519Key(k)) as Arc<dyn crate::client_store_snapshot::SnapshotKey>
+            });
+            match crate::client_store_rt::start(&runtime_dir, reg, audit_fn, gate_log, gate_key) {
                 Ok(Some(cs)) => {
                     info!(account = %cs.spec.account, root = %cs.root().display(), "client store started");
                     crate::client_store_rt::spawn_sweeper(cs);

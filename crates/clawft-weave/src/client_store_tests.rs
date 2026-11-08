@@ -379,12 +379,12 @@ mod journal {
         };
         let me = mesh().to_string();
         let push = |source: &str, p: serde_json::Value| {
-            log.push(LoggedEvent { source: source.into(), kind: "store.client.gate.grant".into(), payload: Some(p) })
+            log.push(LoggedEvent { seq: 0, source: source.into(), kind: "store.client.gate.grant".into(), payload: Some(p) })
         };
         push("store.client", grant_ev("rival", &me));
         push("store.client", grant_ev("acme", &Authority([7; 32]).to_string()));
         push("kernel", grant_ev("acme", &me));
-        log.push(LoggedEvent { source: "store.client".into(), kind: "store.client.gate.grant".into(), payload: None });
+        log.push(LoggedEvent { seq: 0, source: "store.client".into(), kind: "store.client.gate.grant".into(), payload: None });
         let s = open_j("acme", d.path(), &log, clock, mesh()).unwrap();
         let w = ClientCaller::Weftos { id: "weaver".into() };
         assert!(matches!(s.get(&w, &name, "k"), Err(StoreError::Refused(_))), "none of those grants reached acme's gate");
@@ -396,6 +396,7 @@ mod journal {
         let log = Arc::new(MemLog::default());
         open_j("acme", d.path(), &log, clock, mesh()).unwrap();
         log.push(LoggedEvent {
+            seq: 0,
             source: "store.client".into(),
             kind: "store.client.gate.grant".into(),
             payload: Some(json!({"account": "acme", "mesh": mesh().to_string(), "ev": {"principal": 5}})),
@@ -411,5 +412,382 @@ mod journal {
         let state = Arc::new(JournalState::new(log, mesh(), "acme"));
         let r = ClientStore::open_with(spec("rival", d.path()), mesh(), be.clone(), be, Arc::new(OpenGate), Arc::new(MemSink::default()), Arc::new(NoChain), Some(state), clock);
         assert!(r.is_err());
+    }
+
+    // ---- compaction (S3's design applied to the gate) ----
+
+    use crate::client_store_snapshot::{Ed25519Key, GateSnapshot, SNAPSHOT_KIND, SignedGateSnapshot, SnapshotKey, signing_bytes, state_hash};
+    use crate::client_store_state::SOURCE;
+
+    fn sk() -> Arc<dyn SnapshotKey> {
+        Arc::new(Ed25519Key(SigningKey::from_bytes(&[5; 32])))
+    }
+    fn open_k(root: &Path, log: &Arc<MemLog>, clock: fn() -> u64, key: Option<Arc<dyn SnapshotKey>>) -> Result<ClientStore, StoreError> {
+        let be = Arc::new(FsBackend::open(&root.join("data")).unwrap());
+        let mut j = JournalState::new(log.clone(), mesh(), "acme");
+        if let Some(k) = key {
+            j = j.with_key(k);
+        }
+        ClientStore::open_with(spec("acme", root), mesh(), be.clone(), be, Arc::new(OpenGate), Arc::new(MemSink::default()), Arc::new(NoChain), Some(Arc::new(j)), clock)
+    }
+    fn xname() -> String {
+        format!("weftos://{}/projects/{ULID}/store", mesh())
+    }
+    fn grant_for(seq: u64, ttl: u64) -> CrossMeshGrant {
+        CrossMeshGrant::sign(&key(), [1; 32], [2; 32], &xname(), Access::Read, seq, MS / 1000 - 10, MS / 1000 + ttl)
+    }
+    /// Some changes of every kind.
+    fn churn(s: &ClientStore) -> StoreName {
+        let name = s.hold_project(ULID, "op").unwrap();
+        s.grant_local(&cog("c1"), &name, Access::Write, "op").unwrap();
+        s.grant_local(&cog("c2"), &name, Access::Write, "op").unwrap();
+        s.revoke_local(&cog("c2"), &name, "op").unwrap();
+        s.grant_weftos("weaver", &name, Access::Read, "owner").unwrap();
+        s.trust_mesh([1; 32], key().verifying_key()).unwrap();
+        s.install_xmesh(grant_for(1, 100), "owner").unwrap();
+        name
+    }
+    fn state(s: &ClientStore) -> String {
+        crate::client_store_snapshot::canonical(&s.gate().state_json(MS / 1000))
+    }
+    fn without_snapshots(log: &MemLog) -> Arc<MemLog> {
+        let out = Arc::new(MemLog::default());
+        for e in log.all().into_iter().filter(|e| e.kind != SNAPSHOT_KIND) {
+            out.push(e);
+        }
+        out
+    }
+    fn snapshots(log: &MemLog) -> Vec<SignedGateSnapshot> {
+        log.all()
+            .into_iter()
+            .filter(|e| e.kind == SNAPSHOT_KIND)
+            .map(|e| serde_json::from_value(e.payload.unwrap()["signed"].clone()).unwrap())
+            .collect()
+    }
+    /// Append `snap` as a snapshot record, signed by `signer`, with its state hash recomputed if asked.
+    fn publish(log: &MemLog, mut snap: GateSnapshot, rehash: bool, signer: &Ed25519Key) {
+        if rehash {
+            snap.state_hash = state_hash(&snap.state);
+        }
+        let (id, sig) = signer.sign(&signing_bytes(&snap)).unwrap();
+        let signed = SignedGateSnapshot { snapshot: snap, signer: id, signature: hex::encode(sig) };
+        log.append(SOURCE, SNAPSHOT_KIND, json!({"account": "acme", "mesh": mesh().to_string(), "signed": signed}));
+    }
+    fn refused(r: Result<Vec<u8>, StoreError>) -> bool {
+        matches!(r, Err(StoreError::Refused(_)))
+    }
+
+    #[test]
+    fn snapshot_plus_tail_gives_the_same_gate_as_a_full_replay() {
+        let d = tempfile::tempdir().unwrap();
+        let log = Arc::new(MemLog::default());
+        let name = {
+            let s = open_k(d.path(), &log, clock, Some(sk())).unwrap();
+            let name = churn(&s);
+            assert_eq!(s.events_since_snapshot(), 7);
+            assert!(s.snapshot().unwrap().is_some());
+            assert_eq!(s.events_since_snapshot(), 0);
+            s.grant_local(&cog("c3"), &name, Access::Read, "op").unwrap();
+            s.revoke_weftos("weaver", &name, "owner").unwrap();
+            s.put(&ClientCaller::Local(cog("c1")), &name, "k", b"v", false).unwrap();
+            name
+        };
+        assert_eq!(snapshots(&log).len(), 1);
+        let fast = open_k(d.path(), &log, clock, Some(sk())).unwrap();
+        let full = open_k(d.path(), &without_snapshots(&log), clock, Some(sk())).unwrap();
+        assert_eq!(state(&fast), state(&full));
+        assert_eq!(fast.events_since_snapshot(), 2, "only the tail was replayed");
+        assert_eq!(full.events_since_snapshot(), 9);
+        let f = ClientCaller::Foreign { mesh: [2; 32], id: "x".into() };
+        assert_eq!(fast.get(&f, &name, "k").unwrap(), b"v");
+        assert!(refused(fast.get(&ClientCaller::Weftos { id: "weaver".into() }, &name, "k")), "revoked after the snapshot");
+        assert!(refused(fast.get(&ClientCaller::Local(cog("c2")), &name, "k")), "revoked before it");
+    }
+
+    #[test]
+    fn a_pruned_history_restores_from_the_snapshot_and_keeps_the_replay_guard() {
+        let d = tempfile::tempdir().unwrap();
+        let log = Arc::new(MemLog::default());
+        let name = {
+            let s = open_k(d.path(), &log, clock, Some(sk())).unwrap();
+            let name = churn(&s);
+            s.snapshot().unwrap();
+            name
+        };
+        // The segment before the snapshot is archived and pruned.
+        log.edit(|v| v.retain(|e| e.kind == SNAPSHOT_KIND));
+        let s = open_k(d.path(), &log, clock, Some(sk())).unwrap();
+        assert!(refused(s.get(&ClientCaller::Local(cog("nobody")), &name, "k")));
+        assert!(s.put(&ClientCaller::Local(cog("c1")), &name, "k", b"v", false).is_ok());
+        assert!(s.get(&ClientCaller::Weftos { id: "weaver".into() }, &name, "k").is_ok());
+        assert!(refused(s.get(&ClientCaller::Local(cog("c2")), &name, "k")));
+        assert!(s.install_xmesh(grant_for(1, 100), "owner").is_err(), "the seq guard came through the snapshot");
+    }
+
+    #[test]
+    fn a_snapshot_with_the_state_edited_or_the_wrong_scope_stops_the_store_opening() {
+        let d = tempfile::tempdir().unwrap();
+        let log = Arc::new(MemLog::default());
+        {
+            let s = open_k(d.path(), &log, clock, Some(sk())).unwrap();
+            churn(&s);
+            s.snapshot().unwrap();
+        }
+        let good = snapshots(&log).pop().unwrap().snapshot;
+        let mut edited = good.clone();
+        edited.state["grants"] = json!([]);
+        let signer = Ed25519Key(SigningKey::from_bytes(&[5; 32]));
+        // Edited without re-hashing: the state does not match its hash.
+        let l1 = without_snapshots(&log);
+        let (id, sig) = signer.sign(&signing_bytes(&edited)).unwrap();
+        l1.append(SOURCE, SNAPSHOT_KIND, json!({"account": "acme", "mesh": mesh().to_string(), "signed": SignedGateSnapshot { snapshot: edited.clone(), signer: id, signature: hex::encode(sig) }}));
+        let e = open_k(d.path(), &l1, clock, Some(sk())).err().unwrap().to_string();
+        assert!(e.contains("does not match its hash"), "{e}");
+        // Another scope under this account's name.
+        let l2 = without_snapshots(&log);
+        let mut wrong = good.clone();
+        wrong.scope = "gate/rival/00".into();
+        publish(&l2, wrong, false, &signer);
+        let e = open_k(d.path(), &l2, clock, Some(sk())).err().unwrap().to_string();
+        assert!(e.contains("expected"), "{e}");
+    }
+
+    #[test]
+    fn a_validly_signed_false_snapshot_is_caught_when_the_history_is_still_there() {
+        let signer = Ed25519Key(SigningKey::from_bytes(&[5; 32]));
+        for (lie, want) in [("state", "(state)"), ("head", "(events_head)"), ("count", "more history")] {
+            let dir = tempfile::tempdir().unwrap();
+            let log = Arc::new(MemLog::default());
+            {
+                let s = open_k(dir.path(), &log, clock, Some(sk())).unwrap();
+                churn(&s);
+                s.snapshot().unwrap();
+            }
+            let mut snap = snapshots(&log).pop().unwrap().snapshot;
+            match lie {
+                // The same history, but the snapshot also grants the WeftOS account admin.
+                "state" => {
+                    snap.state["grants"].as_array_mut().unwrap().push(json!({
+                        "principal": {"kind": "weftos", "account": null, "mesh": null, "id": "evil"},
+                        "store": xname(), "access": "admin"}));
+                }
+                "head" => snap.events_head = "00".repeat(32),
+                _ => snap.event_count -= 1,
+            }
+            publish(&log, snap, true, &signer);
+            let e = open_k(dir.path(), &log, clock, Some(sk())).err().unwrap_or_else(|| panic!("{lie}: a signed lie opened")).to_string();
+            assert!(e.contains(want), "{lie}: {e}");
+        }
+    }
+
+    #[test]
+    fn a_snapshot_signed_by_another_key_is_passed_over_for_a_full_replay_when_the_history_is_whole() {
+        let d = tempfile::tempdir().unwrap();
+        let log = Arc::new(MemLog::default());
+        let name = {
+            let s = open_k(d.path(), &log, clock, Some(sk())).unwrap();
+            let name = churn(&s);
+            s.snapshot().unwrap();
+            name
+        };
+        // Reopened with a different chain key (a rotation): the snapshot is skipped, the events remain.
+        let other: Arc<dyn SnapshotKey> = Arc::new(Ed25519Key(SigningKey::from_bytes(&[6; 32])));
+        let s = open_k(d.path(), &log, clock, Some(other.clone())).unwrap();
+        assert_eq!(s.events_since_snapshot(), 7, "replayed from the first event");
+        assert!(s.put(&ClientCaller::Local(cog("c1")), &name, "k", b"v", false).is_ok());
+        // With the history pruned there is nothing safe to rebuild from.
+        log.edit(|v| v.retain(|e| e.kind == SNAPSHOT_KIND));
+        let e = open_k(d.path(), &log, clock, Some(other)).err().unwrap().to_string();
+        assert!(e.contains("no longer here"), "{e}");
+    }
+
+    #[test]
+    fn an_expired_cross_mesh_grant_is_left_out_of_the_snapshot_and_cannot_be_reinstalled() {
+        let d = tempfile::tempdir().unwrap();
+        let log = Arc::new(MemLog::default());
+        {
+            let s = open_k(d.path(), &log, clock, Some(sk())).unwrap();
+            churn(&s);
+        }
+        // Reopen after the grant ended; replay decides as the live call did, then it is snapshotted.
+        {
+            let s = open_k(d.path(), &log, far_future, Some(sk())).unwrap();
+            s.snapshot().unwrap();
+        }
+        let snap = snapshots(&log).pop().unwrap().snapshot;
+        assert_eq!(snap.state["xmesh"], json!([]), "expired, so not carried");
+        assert!(snap.state["seqs"].as_array().is_some_and(|a| !a.is_empty()), "but its seq is");
+        log.edit(|v| v.retain(|e| e.kind == SNAPSHOT_KIND));
+        let s = open_k(d.path(), &log, far_future, Some(sk())).unwrap();
+        assert!(s.install_xmesh(grant_for(1, 100), "owner").is_err());
+    }
+
+    #[test]
+    fn compaction_is_due_after_enough_changes_and_needs_a_key() {
+        let d = tempfile::tempdir().unwrap();
+        let log = Arc::new(MemLog::default());
+        let s = open_k(d.path(), &log, clock, Some(sk())).unwrap();
+        let name = s.hold_project(ULID, "op").unwrap();
+        s.grant_local(&cog("c1"), &name, Access::Read, "op").unwrap();
+        assert_eq!(s.compact_if_due(3), None);
+        s.grant_local(&cog("c2"), &name, Access::Read, "op").unwrap();
+        assert!(s.compact_if_due(3).is_some());
+        assert_eq!(s.events_since_snapshot(), 0);
+        assert_eq!(s.compact_if_due(3), None);
+        // No key: no snapshot, and the daemon's loop just does not compact.
+        let d2 = tempfile::tempdir().unwrap();
+        let s2 = open_k(d2.path(), &Arc::new(MemLog::default()), clock, None).unwrap();
+        s2.hold_project(ULID, "op").unwrap();
+        assert!(s2.snapshot().is_err());
+        assert_eq!(s2.compact_if_due(1), None);
+    }
+
+    #[test]
+    fn a_gate_kept_in_a_file_has_nothing_to_compact() {
+        let d = tempfile::tempdir().unwrap();
+        let s = open("acme", d.path(), Arc::new(MemSink::default()));
+        s.hold_project(ULID, "op").unwrap();
+        assert_eq!(s.snapshot().unwrap(), None);
+        assert_eq!(s.compact_if_due(0), None);
+    }
+
+    #[test]
+    fn heads_carry_across_restarts_so_a_later_snapshot_still_verifies_against_history() {
+        let d = tempfile::tempdir().unwrap();
+        let log = Arc::new(MemLog::default());
+        {
+            let s = open_k(d.path(), &log, clock, Some(sk())).unwrap();
+            churn(&s);
+            s.snapshot().unwrap();
+        }
+        {
+            let s = open_k(d.path(), &log, clock, Some(sk())).unwrap();
+            let name = s.hold_project(ULID, "op").unwrap();
+            s.grant_local(&cog("c4"), &name, Access::Read, "op").unwrap();
+            s.snapshot().unwrap();
+        }
+        assert_eq!(snapshots(&log).len(), 2);
+        // The full history is still here, so the newest snapshot is re-folded and must match.
+        let fast = open_k(d.path(), &log, clock, Some(sk())).unwrap();
+        let full = open_k(d.path(), &without_snapshots(&log), clock, Some(sk())).unwrap();
+        assert_eq!(state(&fast), state(&full));
+    }
+
+    /// Accepts a signature from either key; signs with the second.
+    struct TwoKeys(Ed25519Key, Ed25519Key);
+    impl SnapshotKey for TwoKeys {
+        fn sign(&self, m: &[u8]) -> Option<(String, Vec<u8>)> {
+            self.1.sign(m)
+        }
+        fn verify(&self, who: &str, m: &[u8], sig: &[u8]) -> bool {
+            self.0.verify(who, m, sig) || self.1.verify(who, m, sig)
+        }
+    }
+    fn key_n(n: u8) -> Ed25519Key {
+        Ed25519Key(SigningKey::from_bytes(&[n; 32]))
+    }
+
+    #[test]
+    fn a_junk_snapshot_cannot_make_a_pruned_log_open_on_a_smaller_gate() {
+        let d = tempfile::tempdir().unwrap();
+        let log = Arc::new(MemLog::default());
+        {
+            let s = open_k(d.path(), &log, clock, Some(sk())).unwrap();
+            churn(&s);
+            s.snapshot().unwrap();
+        }
+        let mut junk = snapshots(&log).pop().unwrap().snapshot;
+        (junk.through_seq, junk.event_count) = (0, 0);
+        publish(&log, junk, true, &key_n(7));
+        log.edit(|v| v.retain(|e| e.kind == SNAPSHOT_KIND));
+        // The honest snapshot cannot be verified under the rotated key and its history is gone; the
+        // junk record that claims to cover nothing must not talk the loader into a partial rebuild.
+        let e = open_k(d.path(), &log, clock, Some(Arc::new(key_n(6)))).err().unwrap().to_string();
+        assert!(e.contains("no longer here"), "{e}");
+    }
+
+    #[test]
+    fn an_unverifiable_newer_snapshot_over_a_pruned_gap_stops_the_store_opening() {
+        for pruned in [false, true] {
+            let d = tempfile::tempdir().unwrap();
+            let log = Arc::new(MemLog::default());
+            let name = {
+                let s = open_k(d.path(), &log, clock, Some(sk())).unwrap();
+                let name = churn(&s);
+                s.snapshot().unwrap(); // S1, key 5
+                s.grant_local(&cog("c5"), &name, Access::Write, "op").unwrap();
+                s.revoke_local(&cog("c1"), &name, "op").unwrap();
+                name
+            };
+            {
+                // S2 is signed by key 6 (a rotation); this daemon trusts both.
+                let s = open_k(d.path(), &log, clock, Some(Arc::new(TwoKeys(key_n(5), key_n(6))))).unwrap();
+                s.snapshot().unwrap();
+            }
+            if pruned {
+                log.edit(|v| v.retain(|e| e.kind == SNAPSHOT_KIND));
+            }
+            // Now only key 5 is held: S2 fails its signature, S1 verifies.
+            let r = open_k(d.path(), &log, clock, Some(sk()));
+            if pruned {
+                let e = r.err().unwrap().to_string();
+                assert!(e.contains("no longer here"), "{e}");
+            } else {
+                let s = r.unwrap();
+                assert!(refused(s.get(&ClientCaller::Local(cog("c1")), &name, "k")), "the revoke after S1 was replayed");
+                assert!(!matches!(s.get(&ClientCaller::Local(cog("c5")), &name, "k"), Err(StoreError::Refused(_))));
+            }
+        }
+    }
+
+    #[test]
+    fn replaying_an_older_snapshot_does_not_roll_the_gate_back() {
+        let d = tempfile::tempdir().unwrap();
+        let log = Arc::new(MemLog::default());
+        let name = {
+            let s = open_k(d.path(), &log, clock, Some(sk())).unwrap();
+            let name = churn(&s);
+            s.snapshot().unwrap(); // S1: c1 holds write
+            s.revoke_local(&cog("c1"), &name, "op").unwrap();
+            s.snapshot().unwrap(); // S2: c1 revoked
+            name
+        };
+        let s1 = log.all().into_iter().find(|e| e.kind == SNAPSHOT_KIND).unwrap();
+        let s2_through = snapshots(&log).last().unwrap().snapshot.through_seq;
+        log.edit(|v| v.retain(|e| e.kind == SNAPSHOT_KIND || e.seq > s2_through));
+        log.append(SOURCE, SNAPSHOT_KIND, s1.payload.unwrap()); // S1 copied byte for byte, now last
+        let s = open_k(d.path(), &log, clock, Some(sk())).unwrap();
+        assert!(refused(s.get(&ClientCaller::Local(cog("c1")), &name, "k")), "c1 stays revoked");
+    }
+
+    #[test]
+    fn snapshots_taken_while_the_gate_is_changing_still_open() {
+        let d = tempfile::tempdir().unwrap();
+        let log = Arc::new(MemLog::default());
+        {
+            let s = open_k(d.path(), &log, clock, Some(sk())).unwrap();
+            let name = s.hold_project(ULID, "op").unwrap();
+            std::thread::scope(|sc| {
+                for t in 0..4 {
+                    let (s, name) = (&s, &name);
+                    sc.spawn(move || {
+                        for i in 0..25 {
+                            s.grant_local(&cog(&format!("t{t}-{i}")), name, Access::Read, "op").unwrap();
+                        }
+                    });
+                }
+                let s = &s;
+                sc.spawn(move || {
+                    for _ in 0..30 {
+                        s.snapshot().unwrap();
+                        std::thread::yield_now();
+                    }
+                });
+            });
+        }
+        // Every snapshot matches its history, however the threads interleaved.
+        let again = open_k(d.path(), &log, clock, Some(sk())).unwrap();
+        let full = open_k(d.path(), &without_snapshots(&log), clock, Some(sk())).unwrap();
+        assert_eq!(state(&again), state(&full));
     }
 }

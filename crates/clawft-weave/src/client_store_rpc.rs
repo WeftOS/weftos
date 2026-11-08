@@ -5,6 +5,8 @@
 //!   a local principal (`cog:c1`, `member:ann`, ...).
 //! - `store.client.weftos_grant {name, id, access}`, `store.client.weftos_revoke {name, id}`:
 //!   the WeftOS account, which is refused until one of these names it.
+//! - `store.client.snapshot {}`: publish a signed snapshot of the gate on the chain (replay then
+//!   starts from it); `{"through_seq": n}`.
 //! - `store.client.xmesh_trust {mesh, key}`, `store.client.xmesh_install {grant}`,
 //!   `store.client.xmesh_revoke {grant}`, `store.client.sweep {}`: cross-mesh grants (ADR-114 N5).
 //! - `store.client.put|get|ls|delete {name, key|prefix, as, text|b64}`: a governed request as the
@@ -146,6 +148,10 @@ pub fn run(cs: &ClientStore, method: &str, params: Value) -> Result<Value, Strin
             Ok(json!({"revoked": g.to_json()}))
         }
         "store.client.sweep" => Ok(json!({"expired": cs.sweep("cli")})),
+        "store.client.snapshot" => match cs.snapshot().map_err(e)? {
+            Some(through_seq) => Ok(json!({"through_seq": through_seq})),
+            None => Err("this client store keeps its gate in gate.json; there is no chain history to compact".into()),
+        },
         "store.client.put" => {
             let (name, key, who) = (store(&p)?, need(&p.key, "key")?, caller(&p)?);
             let data = match (&p.text, &p.b64) {

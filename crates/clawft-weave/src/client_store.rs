@@ -140,10 +140,29 @@ impl ClientStore {
         self.gate.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Make one gate change durable so a restart rebuilds it.
-    fn persist(&self, ev: &GateEvent) -> Result<(), StoreError> {
+    /// Change the gate and record the change under ONE hold of the gate lock, so a snapshot
+    /// (which takes the same lock) never sees the change without its record or the reverse.
+    fn change(&self, ev: GateEvent, f: impl FnOnce(&mut StoreGate)) -> Result<(), StoreError> {
+        let mut g = self.gate();
+        f(&mut g);
+        self.state.record(&g, &ev).map_err(StoreError::State)
+    }
+
+    /// Publish a signed snapshot of the gate on the chain so a restart replays only what follows
+    /// it. Returns the chain sequence it covers; `None` when the gate is kept in `gate.json`.
+    pub fn snapshot(&self) -> Result<Option<u64>, StoreError> {
         let g = self.gate();
-        self.state.record(&g, ev).map_err(StoreError::State)
+        self.state.snapshot(&g, (self.clock)() / 1000).map_err(StoreError::State)
+    }
+
+    /// Gate changes recorded since the last snapshot.
+    pub fn events_since_snapshot(&self) -> u64 {
+        self.state.events_since_snapshot()
+    }
+
+    /// Snapshot when at least `every` changes have piled up since the last one.
+    pub fn compact_if_due(&self, every: u64) -> Option<u64> {
+        if self.events_since_snapshot() >= every { self.snapshot().ok().flatten() } else { None }
     }
 
     fn mesh_hex(&self) -> String {
@@ -154,8 +173,7 @@ impl ClientStore {
     pub fn hold_project(&self, ulid: &str, actor: &str) -> Result<StoreName, StoreError> {
         let name = StoreName::project(&self.mesh_hex(), ulid)?;
         self.svc.ensure_store(&name, actor, Parties::default())?;
-        self.gate().hold_project(ulid);
-        self.persist(&GateEvent::Hold { ulid: ulid.to_owned() })?;
+        self.change(GateEvent::Hold { ulid: ulid.to_owned() }, |g| g.hold_project(ulid))?;
         Ok(name)
     }
 
@@ -183,8 +201,7 @@ impl ClientStore {
         }
         let gp = Principal::Client { account: self.spec.account.clone(), id: p.to_string() };
         let sg = StoreGrant { principal: gp, store: name.to_string(), access: a };
-        self.gate().grant(sg.clone());
-        self.persist(&GateEvent::Grant(sg))?;
+        self.change(GateEvent::Grant(sg.clone()), |g| g.grant(sg))?;
         self.svc.grant(name, p.clone(), to_s1_access(a), actor).map(|_| ())
     }
 
@@ -195,8 +212,7 @@ impl ClientStore {
         }
         let gp = Principal::Client { account: self.spec.account.clone(), id: p.to_string() };
         let store = name.to_string();
-        self.gate().revoke(&gp, &store);
-        self.persist(&GateEvent::Revoke { principal: gp, store })?;
+        self.change(GateEvent::Revoke { principal: gp.clone(), store: store.clone() }, |g| g.revoke(&gp, &store))?;
         self.svc.revoke(name, p, actor)
     }
 
@@ -204,8 +220,7 @@ impl ClientStore {
     pub fn grant_weftos(&self, id: &str, name: &StoreName, a: Access, actor: &str) -> Result<(), StoreError> {
         let m = mapped(WEFTOS_PREFIX, id).map_err(|_| StoreError::Refused("refused".into()))?;
         let sg = StoreGrant { principal: Principal::WeftosAccount { id: id.into() }, store: name.to_string(), access: a };
-        self.gate().grant(sg.clone());
-        self.persist(&GateEvent::Grant(sg))?;
+        self.change(GateEvent::Grant(sg.clone()), |g| g.grant(sg))?;
         self.svc.grant(name, m, to_s1_access(a), actor).map(|_| ())
     }
 
@@ -213,14 +228,12 @@ impl ClientStore {
     pub fn revoke_weftos(&self, id: &str, name: &StoreName, actor: &str) -> Result<(), StoreError> {
         let m = mapped(WEFTOS_PREFIX, id).map_err(|_| StoreError::Refused("refused".into()))?;
         let (principal, store) = (Principal::WeftosAccount { id: id.into() }, name.to_string());
-        self.gate().revoke(&principal, &store);
-        self.persist(&GateEvent::Revoke { principal, store })?;
+        self.change(GateEvent::Revoke { principal: principal.clone(), store: store.clone() }, |g| g.revoke(&principal, &store))?;
         self.svc.revoke(name, &m, actor)
     }
 
     pub fn trust_mesh(&self, mesh: [u8; 32], key: VerifyingKey) -> Result<(), StoreError> {
-        self.gate().trust_mesh(mesh, key);
-        self.persist(&GateEvent::Trust { mesh, key: key.to_bytes() })
+        self.change(GateEvent::Trust { mesh, key: key.to_bytes() }, |g| g.trust_mesh(mesh, key))
     }
 
     /// Install a cross-mesh grant (ADR-114 N5) and give its mesh member the matching S1 grant.
@@ -231,14 +244,16 @@ impl ClientStore {
         // The S1 member exists only for grants where we own the store; on the receiving side
         // our own principals are granted with `grant_local`.
         let member = if g.owner_mesh == own { Some(member.map_err(|_| StoreError::Refused("refused".into()))?) } else { None };
-        let ev = GateEvent::XmeshInstall(g.clone());
-        self.gate().install_xmesh(g, now).map_err(|_| StoreError::Refused("refused".into()))?;
-        self.persist(&ev)?;
+        {
+            // Install and record under one hold of the gate lock; nothing is recorded for a refusal.
+            let mut gate = self.gate();
+            gate.install_xmesh(g.clone(), now).map_err(|_| StoreError::Refused("refused".into()))?;
+            self.state.record(&gate, &GateEvent::XmeshInstall { grant: g, at: now }).map_err(StoreError::State)?;
+        }
         let granted = member.map_or(Ok(()), |m| self.svc.grant(&name, m, to_s1_access(access), actor).map(|_| ()));
         if granted.is_err() {
             // Leave nothing half-installed: the gate must not allow what the service does not.
-            self.gate().revoke_xmesh(id);
-            let _ = self.persist(&GateEvent::XmeshRevoke { id });
+            let _ = self.change(GateEvent::XmeshRevoke { id }, |gate| gate.revoke_xmesh(id));
         }
         granted
     }
@@ -247,9 +262,12 @@ impl ClientStore {
     pub fn revoke_xmesh(&self, g: &CrossMeshGrant, actor: &str) -> Result<(), StoreError> {
         // A grant that a newer one replaced no longer owns the service-side member; dropping it
         // would cut off the newer grant.
-        let live = self.gate().xmesh_installed(g.id());
-        self.gate().revoke_xmesh(g.id());
-        self.persist(&GateEvent::XmeshRevoke { id: g.id() })?;
+        let id = g.id();
+        let mut live = false;
+        self.change(GateEvent::XmeshRevoke { id }, |gate| {
+            live = gate.xmesh_installed(id);
+            gate.revoke_xmesh(id);
+        })?;
         if live {
             self.drop_member(g, actor)?;
         }
@@ -270,11 +288,17 @@ impl ClientStore {
     /// time; this removes the backend policy too. Returns how many.
     pub fn sweep(&self, actor: &str) -> usize {
         let now = (self.clock)() / 1000;
-        let ex = self.gate().take_expired(now);
+        let ex = {
+            let mut gate = self.gate();
+            let ex = gate.take_expired(now);
+            for g in &ex {
+                gate.revoke_xmesh(g.id());
+                // If this write fails the grant is expired anyway: replay and reload refuse it by time.
+                let _ = self.state.record(&gate, &GateEvent::XmeshRevoke { id: g.id() });
+            }
+            ex
+        };
         for g in &ex {
-            self.gate().revoke_xmesh(g.id());
-            // If this write fails the grant is expired anyway: replay and reload refuse it by time.
-            let _ = self.persist(&GateEvent::XmeshRevoke { id: g.id() });
             let _ = self.drop_member(g, actor);
         }
         ex.len()

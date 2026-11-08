@@ -19,6 +19,7 @@ use weftos_store::audit::AuditSink;
 use weftos_store::service::{ChainSink, ExposureGate};
 
 use crate::client_store::ClientStore;
+use crate::client_store_snapshot::SnapshotKey;
 use crate::client_store_state::{EventLog, GateState, JournalState};
 #[cfg(feature = "exochain")]
 use crate::client_store_state::LoggedEvent;
@@ -30,6 +31,9 @@ use crate::weftos_uri::Authority;
 pub const CONFIG_FILE: &str = "client-store.json";
 /// How often expired cross-mesh grants are swept out of the service.
 const SWEEP_EVERY: Duration = Duration::from_secs(60);
+
+/// Publish a gate snapshot once this many changes have piled up since the last one.
+const COMPACT_EVERY: u64 = 256;
 
 static GLOBAL: OnceLock<Arc<ClientStore>> = OnceLock::new();
 
@@ -68,11 +72,15 @@ pub struct ChainLog(pub Arc<clawft_kernel::chain::ChainManager>);
 
 #[cfg(feature = "exochain")]
 impl EventLog for ChainLog {
-    fn append(&self, source: &str, kind: &str, payload: serde_json::Value) {
-        self.0.append(source, kind, Some(payload));
+    fn append(&self, source: &str, kind: &str, payload: serde_json::Value) -> u64 {
+        self.0.append(source, kind, Some(payload)).sequence
     }
     fn all(&self) -> Vec<LoggedEvent> {
-        self.0.tail(0).into_iter().map(|e| LoggedEvent { source: e.source, kind: e.kind, payload: e.payload }).collect()
+        self.0
+            .tail(0)
+            .into_iter()
+            .map(|e| LoggedEvent { seq: e.sequence, source: e.source, kind: e.kind, payload: e.payload })
+            .collect()
     }
 }
 
@@ -81,13 +89,20 @@ impl EventLog for ChainLog {
 /// With `log` the gate is rebuilt from, and recorded to, that event log (the chain); without
 /// it the gate lives in `gate.json` under the client root.
 #[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
 pub fn open_as(
     cfg: &ClientStoreConfig, euid: u32, mesh_token: &str, exposure: Arc<dyn ExposureGate>, audit: Arc<dyn AuditSink>,
-    chain: Arc<dyn ChainSink>, log: Option<Arc<dyn EventLog>>,
+    chain: Arc<dyn ChainSink>, log: Option<Arc<dyn EventLog>>, key: Option<Arc<dyn SnapshotKey>>,
 ) -> Result<ClientStore, String> {
     let mesh = mesh_of(mesh_token).ok_or_else(|| "this node has no mesh id yet; the client store waits for one".to_owned())?;
     let spec = ClientStoreSpec::standard(&cfg.account, euid, cfg.port).map_err(|e| e.to_string())?;
-    let state = log.map(|l| Arc::new(JournalState::new(l, mesh, &cfg.account)) as Arc<dyn GateState>);
+    let state = log.map(|l| {
+        let j = JournalState::new(l, mesh, &cfg.account);
+        Arc::new(match key {
+            Some(k) => j.with_key(k),
+            None => j,
+        }) as Arc<dyn GateState>
+    });
     ClientStore::open_fs_with(spec, mesh, exposure, audit, chain, state, now_ms).map_err(|e| e.to_string())
 }
 
@@ -96,6 +111,7 @@ pub fn open_as(
 #[cfg(unix)]
 pub fn start(
     dir: &Path, exposures: Arc<ExposureRegistry>, chain: Option<AuditFn>, log: Option<Arc<dyn EventLog>>,
+    key: Option<Arc<dyn SnapshotKey>>,
 ) -> Result<Option<Arc<ClientStore>>, String> {
     if let Some(g) = global() {
         return Ok(Some(g));
@@ -109,7 +125,7 @@ pub fn start(
     let euid = nix::unistd::geteuid().as_raw();
     let cs = open_as(
         &cfg, euid, &crate::store_rt::mesh_token(), Arc::new(RegistryGate(exposures.clone())), Arc::new(ActivitySink(exposures)),
-        Arc::new(ChainAudit(chain)), log,
+        Arc::new(ChainAudit(chain)), log, key,
     )?;
     Ok(Some(GLOBAL.get_or_init(|| Arc::new(cs)).clone()))
 }
@@ -118,6 +134,7 @@ pub fn start(
 #[cfg(not(unix))]
 pub fn start(
     _dir: &Path, _exposures: Arc<ExposureRegistry>, _chain: Option<AuditFn>, _log: Option<Arc<dyn EventLog>>,
+    _key: Option<Arc<dyn SnapshotKey>>,
 ) -> Result<Option<Arc<ClientStore>>, String> {
     Ok(None)
 }
@@ -129,7 +146,11 @@ pub fn spawn_sweeper(cs: Arc<ClientStore>) {
         loop {
             tick.tick().await;
             let c = cs.clone();
-            let _ = tokio::task::spawn_blocking(move || c.sweep("sweeper")).await;
+            let _ = tokio::task::spawn_blocking(move || {
+                c.sweep("sweeper");
+                c.compact_if_due(COMPACT_EVERY);
+            })
+            .await;
         }
     });
 }

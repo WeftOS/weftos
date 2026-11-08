@@ -175,6 +175,28 @@ impl StoreGate {
         }
     }
 
+    /// The gate's state in a canonical order, for hashing and snapshots. Cross-mesh grants past
+    /// their end at `now` are left out: they cannot be used, and a snapshot must not carry them.
+    fn canonical_snap(&self, now: u64) -> Snap {
+        let mut s = self.snapshot();
+        s.grants.sort_by_cached_key(|g| (serde_json::to_string(&g.principal).unwrap_or_default(), g.store.clone()));
+        s.xmesh.retain(|x| x.expires_at > now);
+        s.xmesh.sort_by(|a, b| a.sig.cmp(&b.sig));
+        s.revoked.sort();
+        s
+    }
+
+    /// The canonical state as JSON (see [`canonical_snap`](Self::canonical_snap)).
+    pub fn state_json(&self, now: u64) -> serde_json::Value {
+        serde_json::to_value(self.canonical_snap(now)).unwrap_or(serde_json::Value::Null)
+    }
+
+    /// Rebuild a gate from [`state_json`](Self::state_json). Cross-mesh grants are re-verified
+    /// against the trusted keys in the same document.
+    pub fn from_state_json(mesh: Authority, account: &str, v: &serde_json::Value) -> Result<Self, String> {
+        Self::from_snap(mesh, account, serde_json::from_value(v.clone()).map_err(|e| e.to_string())?)
+    }
+
     /// Write the gate to `path` atomically (temp file, fsync, rename), mode 0600.
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
         let json = serde_json::to_vec_pretty(&self.snapshot()).map_err(std::io::Error::other)?;
@@ -201,6 +223,11 @@ impl StoreGate {
             Err(e) => return Err(e.to_string()),
         };
         let s: Snap = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+        Self::from_snap(mesh, account, s)
+    }
+
+    /// Build a gate from a state document for `mesh` and `account`.
+    fn from_snap(mesh: Authority, account: &str, s: Snap) -> Result<Self, String> {
         if s.version != VERSION {
             return Err(format!("gate state version {}", s.version));
         }
@@ -244,7 +271,9 @@ pub enum GateEvent {
     Grant(StoreGrant),
     Revoke { principal: Principal, store: String },
     Trust { mesh: [u8; 32], key: [u8; 32] },
-    XmeshInstall(CrossMeshGrant),
+    /// `at` is the unix second the install was checked at, so replay decides exactly as the live
+    /// call did, whatever the clock says now.
+    XmeshInstall { grant: CrossMeshGrant, at: u64 },
     XmeshRevoke { id: [u8; 64] },
 }
 
@@ -260,7 +289,7 @@ impl GateEvent {
             Self::Grant(_) => "grant",
             Self::Revoke { .. } => "revoke",
             Self::Trust { .. } => "trust",
-            Self::XmeshInstall(_) => "xmesh_install",
+            Self::XmeshInstall { .. } => "xmesh_install",
             Self::XmeshRevoke { .. } => "xmesh_revoke",
         }
     }
@@ -277,7 +306,7 @@ impl GateEvent {
                 "principal": serde_json::to_value(sprincipal(principal)).unwrap_or_default(), "store": store,
             }),
             Self::Trust { mesh, key } => json!({ "mesh": hex::encode(mesh), "key": hex::encode(key) }),
-            Self::XmeshInstall(g) => json!({ "grant": g.to_json() }),
+            Self::XmeshInstall { grant, at } => json!({ "grant": grant.to_json(), "at": at }),
             Self::XmeshRevoke { id } => json!({ "id": hex::encode(id) }),
         }
     }
@@ -295,7 +324,10 @@ impl GateEvent {
             })),
             "revoke" => Ok(Self::Revoke { principal: principal()?, store: str_of(v, "store")?.to_owned() }),
             "trust" => Ok(Self::Trust { mesh: hex_n::<32>(str_of(v, "mesh")?)?, key: hex_n::<32>(str_of(v, "key")?)? }),
-            "xmesh_install" => Ok(Self::XmeshInstall(CrossMeshGrant::from_json(v.get("grant").ok_or("missing grant")?)?)),
+            "xmesh_install" => Ok(Self::XmeshInstall {
+                grant: CrossMeshGrant::from_json(v.get("grant").ok_or("missing grant")?)?,
+                at: v.get("at").and_then(|x| x.as_u64()).ok_or("missing at")?,
+            }),
             "xmesh_revoke" => Ok(Self::XmeshRevoke { id: hex_n::<64>(str_of(v, "id")?)? }),
             o => Err(format!("unknown gate event {o:?}")),
         }
@@ -303,15 +335,16 @@ impl GateEvent {
 }
 
 impl StoreGate {
-    /// Apply one journalled change. A cross-mesh install is checked against `now` (unix
-    /// seconds) like a live one, so an expired grant does not come back on replay.
-    pub fn apply(&mut self, ev: &GateEvent, now: u64) -> Result<(), Refused> {
+    /// Apply one journalled change. A cross-mesh install is checked at the time it recorded
+    /// (`at`), not the clock now, so replay reproduces the live decision exactly. The grant
+    /// stays installed after it expires and is refused by time until swept, as it was live.
+    pub fn apply(&mut self, ev: &GateEvent) -> Result<(), Refused> {
         match ev {
             GateEvent::Hold { ulid } => self.hold_project(ulid),
             GateEvent::Grant(g) => self.grant(g.clone()),
             GateEvent::Revoke { principal, store } => self.revoke(principal, store),
             GateEvent::Trust { mesh, key } => self.trust_mesh(*mesh, VerifyingKey::from_bytes(key).map_err(|_| Refused)?),
-            GateEvent::XmeshInstall(g) => self.install_xmesh(g.clone(), now)?,
+            GateEvent::XmeshInstall { grant, at } => self.install_xmesh(grant.clone(), *at)?,
             GateEvent::XmeshRevoke { id } => self.revoke_xmesh(*id),
         }
         Ok(())

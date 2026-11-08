@@ -287,6 +287,8 @@ pub mod mesh_pairings;
 pub mod client_store;
 /// ADR-126 S5: where a client store's gate state lives (chain journal, or a file).
 pub mod client_store_state;
+/// ADR-126 S5: signed snapshots that compact the gate's chain history.
+pub mod client_store_snapshot;
 /// ADR-126 S5: the daemon's client store (started only as the client user).
 pub mod client_store_rt;
 /// ADR-126 S5: `store.client.*` operator verbs.
