@@ -69,9 +69,10 @@ space did not drop, so the standard library clones on macOS and the crate needs 
 - **CAS layout.** `cas/<first two hex>/<blake3>`, written once through a temp file and rename. A
   placed file is a clone, so editing it never reaches the cache. Identical objects (same etag) are
   fetched once.
-- **Compare-and-set.** The store traits have only create-only put. Modify and delete check the
-  remote etag with a head, then write. That window is real and documented in `sync_up.rs`. Create
-  has no window.
+- **Compare-and-set.** Create is a create-only put and has no window. Modify and delete now send the
+  etag with the write when the backend supports it (see "Conditional put and read-only"); the
+  prototype first shipped head-then-write, whose window remains on a backend that answers
+  `Unsupported`.
 - **Error posture.** A bad path or a failed placement is a `skipped` entry, not a failed sync. The
   index is always saved, even after a backend error, so what was placed is recorded.
 
@@ -96,8 +97,8 @@ space did not drop, so the standard library clones on macOS and the crate needs 
 1. **First targets.** (a) The project bucket `p-<ulid>`, read-write, excluding `worktrees/`, which
    is already excluded. (b) The worktree bucket's `.wt/tree/` is a daemon-written publish area
    (`publish_tree`), and the policy denies writer puts under `.wt/*`. Use it read-only
-   (`materialise` and `sync_down`) as the follower's fetch; add an `Options.read_only` that makes
-   `sync_up` refuse, so a mistaken run cannot hit that Deny at the server. (c) Photo-gallery's
+   (`materialise` and `sync_down`) as the follower's fetch with `Options.read_only` set (built, see
+   "Conditional put and read-only"), so a mistaken `sync_up` fails in the library, not at the Deny. (c) Photo-gallery's
    `/data1` import stays owner-gated and out of this work.
 2. **Relation to the S2 follower.** `fetch_tree_with` and `sync_docs` already share the refusal
    helpers. Swap their bodies for `materialise`, so a followed tree gets the CAS, the index and
@@ -109,9 +110,12 @@ space did not drop, so the standard library clones on macOS and the crate needs 
    transport. `sync_up` puts per file; the daemon seals a signed layer and sends it to the inbox,
    and `sync_down` becomes a signed-head warm join. Put the transport behind a small trait (list,
    fetch, send changes) so this crate's tests keep using the store and the daemon uses layers.
-4. **Conditional put.** Add `put_if_match(etag)` to the S1 backend trait and send `If-Match` from
-   `rustfs.rs`. Whether RustFS 1.0.4 honours `If-Match` on PUT is unverified; test it on a throwaway
-   server before relying on it. It closes the modify and delete window.
+4. **Conditional put.** Built: `put_if_match` and `delete_if_match` on the S1 backend trait, used by
+   `sync_up`; RustFS 1.0.4 honours `If-Match` on both (measured). What is left: make the daemon's
+   backend wiring (the S2 follower and any wrapper that forwards the trait) forward the two methods,
+   because a wrapper that only implements the required methods answers `Unsupported` and silently
+   drops the drive back to head-then-write. The report's `head_then_write` count shows when that
+   happens.
 5. **aepod `s3`.** Edge and Wasm nodes hold no long-lived keys (ADR-126 section 5), so the drive
    needs a short-lived credential scoped to one `(bucket, prefix)`: get, list, put and delete on the
    prefix, put and delete on `<prefix>.drive-tombstones/`. That is a new statement in `policy.rs`,
@@ -124,3 +128,49 @@ space did not drop, so the standard library clones on macOS and the crate needs 
 7. **Loose ends.** `weaver store drive materialise|watch|sync` was not wired; it is a thin call
    into these functions. Tombstone collection, `.drive.tmp.*` cleanup, a `resolve` verb on the CLI,
    and a scan of 20,000 files are open.
+
+## Conditional put and read-only
+
+Added after the prototype, in three commits on `wt/adr126-s3-drive`.
+
+**Conditional writes.** `ObjectBackend` gained two default methods, `put_if_match(bucket, key, data,
+etag)` and `delete_if_match(bucket, key, etag)`. The default answers `BackendError::Unsupported`, so
+existing backends compile unchanged. A different etag is the new `PreconditionFailed` (HTTP 412), a
+missing key is `NoObject`. Delete needed one too: `sync_up`'s delete path has the same window as
+modify, and a conditional put cannot delete. `MemBackend` is atomic under its lock. `FsBackend`
+serialises writes inside the process with a lock, so compare and rename cannot interleave; another
+process on the same directory is not covered. `RustfsBackend` sends `If-Match: "<etag>"`.
+
+`sync_up` modify and delete try the conditional write first. If the store refuses (412 or key
+gone), it takes the old head path to classify the case, so the conflict kinds and records are the
+same as before. If the backend answers `Unsupported`, it does the old head-then-write. `UpReport`
+counts both: `conditional` and `head_then_write`. The race test: a remote change after
+`materialise` makes the next `sync_up` produce `BothModified` and `RemoteModifiedLocalDeleted`
+conflicts and leaves the remote bytes untouched.
+
+**RustFS 1.0.4 answer: it honours `If-Match` on PUT and on DELETE.** Throwaway server on loopback,
+console off, random credentials in a 0600 file, test
+`drive::live_tests::live_if_match_is_honoured_or_not`. Observed:
+
+| Request | Result |
+|---|---|
+| PUT with the current etag | succeeds, new etag returned, bytes replaced |
+| PUT with a stale etag | 412, object unchanged |
+| PUT with an etag on a missing key | 404, nothing created |
+| DELETE with a stale etag | 412, object still there |
+| DELETE with the current etag | succeeds |
+
+The test was run three times: the first two printed nothing because nextest hides output (set
+`NEXTEST_SUCCESS_OUTPUT=final` to see it); all three passed with the same result. One server
+version, one node, single drive, so this says nothing about distributed mode. The modify and delete
+window is closed on RustFS; it stays open only on a backend that answers `Unsupported`, where a
+writer landing between the head and the write still wins silently.
+
+**Read-only.** `Options.read_only` makes `sync_up_with` return `DriveError::ReadOnly` before it
+scans or touches the store. `materialise_with` and `sync_down_with` work as before. A worktree
+bucket's `.wt/tree/` is a daemon-written publish area, so followers use it with `read_only` set;
+this is in the `drive` module docs too.
+
+**Not done.** The S2 follower and daemon wrappers were not changed to forward the two new methods.
+Plain `sync_up(backend, dest)` has no read-only form (use `sync_up_with`). Delete tombstone writes
+are still plain puts.
