@@ -471,9 +471,14 @@ nothing here was deployed, and `WEFTOS_STORE_RUSTFS_ENV` is unset by default (lo
 - **Still open:**
   - F2, grant and revoke locking, and F9, RustFS audit ingestion. Both are in the S1 layer and
     belong to the S1 session.
-  - F7 and F13 to F20, not yet addressed (see
-    `docs/research/adr126-s1-s2-adversarial-review-2026-11-08.md`), including S1 `store.promote`
-    prefix validation.
+  - F7, F13, F14, F19 and F20 are fixed in the S2 layer (a land closes the handoff as merged
+    whatever the claim state; a wider secret denylist; publish reads one open handle checked
+    against the path; fetched manifests cannot name the follower's control files; `FsBackend`
+    refuses keys that differ only by case). Still open in the S1 layer, for the S1 session: F15
+    (`RustfsConfig` derives `Debug` with the root key; secrets dir mode), F16 (no SigV4 known-vector
+    test; bucket strings unvalidated), F17 (the bucket name omits the mesh id, so `local` and
+    `<hex>` names alias one bucket), F18 (S1 `store.promote` accepts `""`, `.wt/` and `worktrees/`
+    prefixes). See `docs/research/adr126-s1-s2-adversarial-review-2026-11-08.md`.
   - `slug_of` in `worktree-store.sh` is now injective (`/` becomes `--`; branches containing `--`, `-/` or `/-` are refused and `WTS_SLUG` overrides). Existing stores created under the old slashed-branch slugs (`feat/s2` was `feat-s2`, now `feat--s2`) are not found by the script until renamed or re-created; none are known to exist outside drills.
   - The owner rejected the rclone mount. The union mount (`mount-config`, `mount`, `umount`) is
     proposed to be parked: kept in the code, dropped from the S2 done-when and from any gate, and
