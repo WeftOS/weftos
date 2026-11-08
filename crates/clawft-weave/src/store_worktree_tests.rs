@@ -107,3 +107,38 @@ fn bad_input_is_refused() {
     assert!(call(&svc, "nope", json!({"project": PROJ}), 1).is_err());
     assert!(call(&svc, "publish", json!({"project": PROJ, "slug": "ok", "root": "relative/dir", "branch": "b", "base": "a", "head": "h"}), 1).is_err());
 }
+
+#[test]
+fn fetch_writes_the_bundle_when_one_was_published_and_says_so_when_not() {
+    let (_d, svc) = rig();
+    call(&svc, "create", json!({"project": PROJ, "slug": "feat-b", "branch": "feat/b", "base": "abc"}), 10).unwrap();
+    let src = tempfile::tempdir().unwrap();
+    let (paths, unc, chg) = files(src.path());
+    let root = src.path().to_string_lossy().into_owned();
+    let publish = |extra: Value| {
+        let mut p = json!({"project": PROJ, "slug": "feat-b", "root": root, "branch": "feat/b", "base": "abc", "head": "def",
+                           "paths_z": paths, "uncommitted_z": unc, "changes_z": chg});
+        p.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        call(&svc, "publish", p, 20)
+    };
+    let dest = tempfile::tempdir().unwrap();
+    let out = dest.path().join("nested/b.bundle");
+    let fetch = || {
+        call(&svc, "fetch", json!({"project": PROJ, "slug": "feat-b", "dest": dest.path().join("t").to_string_lossy(),
+                                   "bundle_out": out.to_string_lossy()}), 30)
+    };
+
+    // no bundle published: a clear error, and no file written
+    publish(json!({})).unwrap();
+    let err = fetch().unwrap_err();
+    assert!(err.contains("without a git bundle"), "{err}");
+    assert!(!out.exists());
+
+    // with a bundle: bytes land at the requested path (parent created), head returned
+    let bundle = src.path().join("in.bundle");
+    std::fs::write(&bundle, b"BUNDLE-BYTES").unwrap();
+    publish(json!({"bundle": bundle.to_string_lossy()})).unwrap();
+    let r = fetch().unwrap();
+    assert_eq!(r["bundle_head"], "def");
+    assert_eq!(std::fs::read(&out).unwrap(), b"BUNDLE-BYTES");
+}
