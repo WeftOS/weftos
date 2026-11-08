@@ -130,8 +130,10 @@ Only the daemon creates, grants access to, or deletes a store.
   of something read earlier conflicts; a read made around the overlay still records none. A
   project-side delete of a file the worktree edited is a conflict as well. Every project version
   that promotion overwrites or deletes is first copied to the archive under `.wt/displaced/`.
-  Promotion still has no conditional write: a project write between the plan and the apply is not
-  detected. The daemon refuses to `create` a slug that has already landed. The run is idempotent and
+  Promotion has no conditional write, but re-checks each project etag right before its copy or
+  delete and aborts with a conflict if it moved (the window is one head call; closing it needs an
+  if-match write from S1). Registry signing and the claim epoch: see
+  `docs/research/adr126-s2-registry-signing-and-claim-clock.md`. The daemon refuses to `create` a slug that has already landed. The run is idempotent and
   safe to retry after a partial failure; once the report is written, later writes to that
   worktree bucket are ignored.
 - **Who does the overlay:** the `weftos-store` client does it for daemons and agents. For a
