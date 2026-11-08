@@ -400,6 +400,21 @@ Not changed: a failed `abort_multipart` after a failed upload is still silent (t
 lifecycle rule removes it, so set that rule on stores that stream large objects); the review's default-build note stands (`--features rustfs` is needed to
 compile and test `rustfs.rs`).
 
+**Archive retention (S1, for node, project and release stores; 2026-11-08).** Worktree archives are S2's (`store worktree gc --archive-keep-days`). For the rest,
+`StoreService::archive_gc(&ArchiveKeep{node_days, project_days, release_days}, confirmed, actor)`, RPC `store.archive.gc`, CLI `weaver store archive-gc
+[--node-days N] [--project-days N] [--release-days N] [--confirmed]`:
+- **Nothing expires unless a number of days is given for that kind**: an archive is recovery data, as with S2's default. Zero days is refused (it
+  would delete an archive the moment it was made).
+- **A dry run unless `confirmed`**; the report lists each expired set (bucket, kind, age in days, objects, bytes), what was kept, and what was left alone.
+- **Whole sets only.** The archive bucket keys are `<bucket>@<archive ms>/<key>`; a set is one archive of one store. A set is deleted when its age is at least
+  the days for its kind, never partly, and a half-deleted set is finished by the next run. Worktree sets (`w-`), unknown prefixes and keys that are not archive keys are
+  never touched (counted as `not_ours`).
+- **An archive that is still being written is never deleted**, however old: a store record with `archived` set and `archive_done` false protects the set
+  whose start time it holds (found by a mutation test).
+- A deleting run records `store.archive.gc` on the chain (not a grant event, no `seq`). The store record, and the live bucket of a store archived but not deleted,
+  are not the archive's to remove and are untouched.
+Not done: no schedule (an operator or a timer runs it), and no per-store override. The one question left for Mathew is the numbers; none is set.
+
 **The daemon now has the receiver** (`clawft-weave/src/store_ingest.rs`, 2026-11-08): a loopback HTTP listener, off unless
 `WEFTOS_STORE_INGEST_ADDR` is set, POST only, 1 MiB cap, authenticated by a 256-bit secret in the URL path
 (`store-ingest-token`, 0600; the URLs are written to `store-ingest-urls`), because RustFS's webhook `auth_token` is unverified.
@@ -443,6 +458,7 @@ joins a blocking thread; (the receiver now authenticates and drops unknown bucke
    2026-10-29: yes. Anyone with read access is assumed to see all of a store's metadata with a
    single read, so listings don't need an audit line. Multipart part uploads do, and so do refusals
    and bad signatures. Whether RustFS can be extended to cover them is under study.
-2. How long do archived buckets (from a removed worktree, project or node) live before
-   they're deleted?
+2. ~~How long do archived buckets (from a removed worktree, project or node) live before
+   they're deleted?~~ Answered as a setting, not a number (S1 2026-11-08, see "Archive retention"): the
+   default is for ever; the operator names days per kind of store.
 3. Do cloud agent sessions get write access to worktree stores, or only read?

@@ -93,3 +93,21 @@ fn archive_and_revoke_verbs() {
     assert_eq!((a["archived_objects"].as_u64(), a["deleted"].as_bool()), (Some(1), Some(true)));
     assert!(run(&svc, "store.ls", json!({})).unwrap()["stores"].as_array().unwrap().is_empty());
 }
+
+#[test]
+fn archive_gc_is_a_dry_run_by_default_and_expires_nothing_unless_days_are_given() {
+    let (_d, _r, svc, _c) = rig();
+    run(&svc, "store.create", json!({"name": NODE, "write": ["cog:c1"]})).unwrap();
+    run(&svc, "store.put", json!({"name": NODE, "key": "k", "principal": "cog:c1", "b64": "YQ=="})).unwrap();
+    run(&svc, "store.archive", json!({"name": NODE, "delete": true})).unwrap();
+    // No days: nothing is old enough, whatever the flags.
+    let none = run(&svc, "store.archive.gc", json!({"confirmed": true})).unwrap();
+    assert_eq!((none["expired"].as_array().unwrap().len(), none["kept"].as_u64(), none["deleted_objects"].as_u64()), (0, Some(1), Some(0)));
+    // Days given but the archive is minutes old: kept.
+    let young = run(&svc, "store.archive.gc", json!({"node_days": 30, "confirmed": true})).unwrap();
+    assert_eq!(young["kept"].as_u64(), Some(1));
+    assert!(run(&svc, "store.archive.gc", json!({"node_days": 0})).is_err(), "zero days is refused");
+    assert!(run(&svc, "store.archive.gc", json!({"bogus": 1})).is_err(), "unknown params are refused");
+    let rep = run(&svc, "store.archive.gc", json!({})).unwrap();
+    assert_eq!(rep["dry_run"], true);
+}

@@ -7,6 +7,8 @@
 //! - `weaver store revoke <name> <principal>`: the principal's next request is refused.
 //! - `weaver store promote <worktree store> --prefix P..  [--archive-rest]`: into the project store.
 //! - `weaver store archive <name> [--delete]`: copy to the archive bucket, close, optionally delete.
+//! - `weaver store archive-gc [--node-days N] [--project-days N] [--release-days N] [--confirmed]`: expire old
+//!   archives of node, project and release stores; a dry run without `--confirmed`.
 //! - `weaver store put|get <name> <key> --as <principal>`: a governed request as that principal.
 //!
 //! Names are `weftos://<mesh>/nodes/<id>/store`, `.../projects/<ULID>/store`,
@@ -85,6 +87,20 @@ pub enum StoreAction {
         /// Then delete the bucket and forget the store.
         #[arg(long)]
         delete: bool,
+    },
+    /// Delete old archives of node, project and release stores (a dry run unless --confirmed).
+    /// With no --*-days nothing expires. Worktree archives are `store worktree gc`'s.
+    ArchiveGc {
+        /// Delete node-store archives older than this many days.
+        #[arg(long)]
+        node_days: Option<u64>,
+        #[arg(long)]
+        project_days: Option<u64>,
+        #[arg(long)]
+        release_days: Option<u64>,
+        /// Actually delete; without it, only report.
+        #[arg(long)]
+        confirmed: bool,
     },
     /// Write a text object as a principal.
     Put {
@@ -193,6 +209,17 @@ pub async fn run(args: StoreArgs) -> anyhow::Result<()> {
         StoreAction::Archive { name, delete } => {
             let v = call("store.archive", json!({"name": name, "delete": delete})).await?;
             println!("archived {} object(s) of {name}{}", cell(&v, "archived_objects"), if delete { "; bucket deleted" } else { "; store closed" });
+        }
+        StoreAction::ArchiveGc { node_days, project_days, release_days, confirmed } => {
+            let v = call("store.archive.gc", json!({"node_days": node_days, "project_days": project_days, "release_days": release_days, "confirmed": confirmed})).await?;
+            let list = |k: &str| v[k].as_array().cloned().unwrap_or_default();
+            for s in list("expired") {
+                println!("{} {}  {} object(s), {} day(s) old", if confirmed { "deleted " } else { "would delete" }, cell(&s, "bucket"), cell(&s, "objects"), cell(&s, "age_days"));
+            }
+            for s in list("in_progress") {
+                println!("kept (archive still being written): {}", cell(&s, "bucket"));
+            }
+            println!("{} set(s) kept, {} other key(s) left alone{}", cell(&v, "kept"), cell(&v, "not_ours"), if confirmed { "" } else { "; dry run, nothing deleted (--confirmed to delete)" });
         }
         StoreAction::Put { name, key, text, principal } => {
             let v = call("store.put", json!({"name": name, "key": key, "text": text, "principal": principal})).await?;

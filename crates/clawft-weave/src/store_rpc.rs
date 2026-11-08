@@ -7,6 +7,10 @@
 //! - `store.revoke {name, principal}`.
 //! - `store.promote {name, prefixes[], archive_rest?}`: a worktree store into its project store.
 //! - `store.archive {name, delete?}`.
+//! - `store.node.retire {name}`: a node was unpaired; archive its store and retire the id.
+//! - `store.archive.gc {node_days?, project_days?, release_days?, confirmed?}`: delete archives of
+//!   node, project and release stores older than the days given (none given: nothing expires). A
+//!   dry run unless `confirmed`. Worktree archives are `store worktree gc`'s.
 //! - `store.put {name, key, principal, text|b64}`, `store.get {name, key, principal}`:
 //!   a governed request as that principal, the same path a cog's request takes.
 
@@ -43,6 +47,14 @@ struct P {
     archive_rest: bool,
     #[serde(default)]
     delete: bool,
+    #[serde(default)]
+    node_days: Option<u64>,
+    #[serde(default)]
+    project_days: Option<u64>,
+    #[serde(default)]
+    release_days: Option<u64>,
+    #[serde(default)]
+    confirmed: bool,
     #[serde(default)]
     key: Option<String>,
     #[serde(default)]
@@ -125,6 +137,10 @@ pub fn run(svc: &StoreService, method: &str, params: Value) -> Result<Value, Str
             let name = store(&p)?;
             let n = svc.archive(&name, p.delete, "cli").map_err(e)?;
             Ok(json!({"store": name.to_string(), "archived_objects": n, "deleted": p.delete}))
+        }
+        "store.archive.gc" => {
+            let keep = weftos_store::service::ArchiveKeep { node_days: p.node_days, project_days: p.project_days, release_days: p.release_days };
+            Ok(json!(svc.archive_gc(&keep, p.confirmed, "cli").map_err(e)?))
         }
         // A node was unpaired: archive its node store and retire the id (ADR-126; S3 calls this).
         "store.node.retire" => {

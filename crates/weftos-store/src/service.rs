@@ -18,6 +18,7 @@ use crate::backend::{AdminBackend, BackendError, ObjectBackend, ObjectMeta};
 use crate::name::StoreName;
 use crate::{StoreError, policy};
 
+mod archive_gc;
 mod ingest;
 mod lifecycle;
 
@@ -208,6 +209,8 @@ pub struct StoreService {
     policy_opts: Mutex<policy::PolicyOpts>,
     st: Mutex<State>,
 }
+
+pub use archive_gc::{ArchiveGcReport, ArchiveKeep, ArchiveSet};
 
 /// The longest retention an `append` principal may stamp: 5 years (a Compliance hold cannot be
 /// shortened by anyone, root included, so what CI can name is bounded; write and admin are not).
