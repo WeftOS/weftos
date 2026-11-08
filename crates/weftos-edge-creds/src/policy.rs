@@ -34,8 +34,13 @@ pub fn validate_node_id(id: &str) -> Result<(), NameError> {
     if ok { Ok(()) } else { Err(NameError::NodeId) }
 }
 
+/// The longest single path segment RustFS accepts (a file name on its disk).
+pub const MAX_SEGMENT_BYTES: usize = 255;
+
 /// Object key rules: no traversal, no empty or dot segments, no control
-/// characters, no backslash, at most 1024 bytes, relative.
+/// characters, no backslash, at most 1024 bytes, no path segment over 255
+/// bytes (RustFS 1.0.4 refuses one with `InvalidArgument`, measured 2026-11-08),
+/// relative.
 pub fn validate_key(key: &str) -> Result<(), NameError> {
     if key.is_empty() || key.len() > 1024 || key.starts_with('/') {
         return Err(NameError::Key);
@@ -43,7 +48,7 @@ pub fn validate_key(key: &str) -> Result<(), NameError> {
     if key.chars().any(|c| c.is_control() || c == '\\') {
         return Err(NameError::Key);
     }
-    if key.split('/').any(|seg| seg.is_empty() || seg == "." || seg == "..") {
+    if key.split('/').any(|seg| seg.is_empty() || seg == "." || seg == ".." || seg.len() > MAX_SEGMENT_BYTES) {
         return Err(NameError::Key);
     }
     Ok(())

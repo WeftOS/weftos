@@ -344,6 +344,14 @@ fn keys_and_node_ids_are_validated() {
         assert!(validate_key(bad).is_err(), "{bad:?}");
     }
     assert!(validate_key(&"k".repeat(1025)).is_err());
+    // RustFS refuses a path segment over 255 bytes however short the whole key is.
+    assert!(validate_key(&"k".repeat(255)).is_ok());
+    assert!(validate_key(&"k".repeat(256)).is_err());
+    assert!(validate_key(&format!("a/{}", "k".repeat(256))).is_err());
+    assert!(validate_key(&format!("{}/{}", "k".repeat(255), "k".repeat(255))).is_ok());
+    // Bytes, not characters: 128 two-byte characters are 256 bytes.
+    assert!(validate_key(&"\u{e9}".repeat(127)).is_ok());
+    assert!(validate_key(&"\u{e9}".repeat(128)).is_err());
     for ok in ["a", "a/b/c.json", "agents/01HX/out.bin", "with space/ünï"] {
         assert!(validate_key(ok).is_ok(), "{ok:?}");
     }
