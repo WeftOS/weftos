@@ -18,6 +18,7 @@ pub mod cos_cmd;
 pub mod cron;
 pub mod doctor;
 pub mod agent_directory;
+pub mod tapestry_cmd;
 pub mod daemon_conn;
 pub mod daemon_fallback;
 pub mod daemon_guard;
