@@ -9,11 +9,43 @@ use crate::backend::BackendError;
 use crate::name::StoreName;
 use crate::StoreError;
 
+/// Key areas that are the worktree overlay's (S2: `.wt/` holds the tombstones, the recorded bases
+/// and the worktree's own metadata) or the project's own bookkeeping of worktrees. No promotable
+/// prefix may name or cover them, and an object under them is never copied as a plain object.
+pub const RESERVED_PROMOTE_AREAS: [&str; 2] = [".wt/", "worktrees/"];
+
+/// A promotable prefix is checked like S2's `PromotionPolicy::validate` and more strictly: it must
+/// name a directory (end in `/`), be a clean key path (no empty, `.` or `..` segment, no NUL or
+/// backslash, no leading `/`), and not be, or sit under, a reserved area. The empty prefix, which
+/// would promote the whole store, is refused by name.
+pub fn check_promote_prefix(p: &str) -> Result<(), StoreError> {
+    let bad = |why: &str| Err(StoreError::Refused(format!("promotable prefix {p:?}: {why}")));
+    if p.is_empty() {
+        return bad("empty (that would promote everything, state and tombstones included)");
+    }
+    if !p.ends_with('/') {
+        return bad("must end in '/'");
+    }
+    if p.starts_with('/') || p.contains('\0') || p.contains('\\') || p.trim_end_matches('/').split('/').any(|s| s.is_empty() || s == "." || s == "..") {
+        return bad("not a clean key path");
+    }
+    if let Some(r) = RESERVED_PROMOTE_AREAS.iter().find(|r| p.starts_with(**r) || r.starts_with(p)) {
+        return bad(&format!("is, or covers, the reserved area {r:?}"));
+    }
+    Ok(())
+}
+
 impl StoreService {
     // ---- promote and archive ------------------------------------------------------------------
 
     /// Copy a worktree store's objects under `promotable` prefixes into its project store.
     /// Everything else is archived (`archive_rest`) or left where it is.
+    ///
+    /// This is the plain-store path, and it cannot stand in for the worktree overlay's landing
+    /// (S2): a worktree whose bucket holds overlay state under `.wt/` (tombstones, recorded bases,
+    /// its metadata) is refused, because copying it object by object would resurrect what the
+    /// worktree deleted and skip the conflict check against the recorded base. Prefixes are checked
+    /// by [`check_promote_prefix`], and nothing under a reserved area is ever copied.
     pub fn promote(&self, worktree: &StoreName, promotable: &[String], archive_rest: bool, actor: &str) -> Result<PromoteReport, StoreError> {
         if !matches!(worktree, StoreName::Worktree { .. }) {
             return Err(StoreError::Refused(format!("{worktree} is not a worktree store")));
@@ -26,11 +58,25 @@ impl StoreService {
         if prec.archived {
             return Err(StoreError::Refused(format!("{project} is archived")));
         }
+        if promotable.is_empty() {
+            return Err(StoreError::Refused("promote needs at least one promotable prefix".into()));
+        }
+        for p in promotable {
+            check_promote_prefix(p)?;
+        }
         let (wb, pb) = (worktree.bucket(), project.bucket());
+        if !self.objects.list(&wb, ".wt/")?.is_empty() {
+            return Err(StoreError::Refused(format!("{worktree} holds worktree overlay state under .wt/ (tombstones, bases, metadata): land it with the worktree landing path, not store.promote, which would copy deleted objects back and skip the conflict check")));
+        }
         let mut rep = PromoteReport::default();
         let ts = self.now();
         let mut step = || -> Result<(), StoreError> {
             for m in self.objects.list(&wb, "")? {
+                if RESERVED_PROMOTE_AREAS.iter().any(|r| m.key.starts_with(r)) {
+                    // Never a plain object, whatever prefix would have matched it.
+                    rep.left += 1;
+                    continue;
+                }
                 if promotable.iter().any(|p| m.key.starts_with(p.as_str())) {
                     match self.objects.head(&pb, &m.key) {
                         Ok(h) if h.etag == m.etag => {

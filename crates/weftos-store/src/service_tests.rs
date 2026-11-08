@@ -1144,3 +1144,55 @@ fn a_retired_node_stays_retired_under_the_mesh_name_and_an_adopted_bucket_ignore
     let r2 = rig_at(None, be);
     assert!(r2.svc.create_store(&at(MESH, "project"), "daemon", Parties::default()).is_ok(), "same bucket, same owner and kind: ours");
 }
+// ---- F18: store.promote cannot be used to bypass what a worktree is ----------------------------
+
+fn wt_rig() -> (Rig, StoreName) {
+    let r = rig();
+    let wt = StoreName::worktree("weft", P, "feat-x").unwrap();
+    r.svc.create_store(&project(), "daemon", Parties::default()).unwrap();
+    r.svc.create_store(&wt, "daemon", Parties::default()).unwrap();
+    r.svc.grant(&wt, cog("a1"), Access::Write, "op").unwrap();
+    r.svc.grant(&project(), cog("a1"), Access::Write, "op").unwrap();
+    (r, wt)
+}
+
+#[test]
+fn promote_refuses_an_empty_unclean_or_reserved_prefix_and_copies_nothing() {
+    let (r, wt) = wt_rig();
+    r.svc.put(&local("a1"), &wt, "assets/a.bin", b"a", false).unwrap();
+    r.svc.put(&local("a1"), &wt, "worktrees/x/state", b"w", false).unwrap();
+    let before = r.be.list(&project().bucket(), "").unwrap().len();
+    for bad in ["", ".wt/", ".wt/tombstones/", ".wt/base/x/", "worktrees/", "worktrees/x/", "assets", "assets/../.wt/", "/assets/", "a//b/", "./", "../", "a\\b/"] {
+        let e = r.svc.promote(&wt, &[bad.to_owned()], false, "land").unwrap_err().to_string();
+        assert!(e.contains("promotable prefix"), "{bad:?}: {e}");
+    }
+    // One bad prefix among good ones refuses the whole call: nothing is half-promoted.
+    assert!(r.svc.promote(&wt, &["assets/".into(), "".into()], false, "land").is_err());
+    assert!(r.svc.promote(&wt, &[], false, "land").is_err());
+    assert_eq!(r.be.list(&project().bucket(), "").unwrap().len(), before, "nothing was copied into the project");
+    assert!(r.chain.0.lock().unwrap().iter().all(|(k, _)| k != "store.promote"), "and no promotion was recorded");
+    // A clean prefix still works, and a reserved-area object that sits in a plain bucket is not copied.
+    let rep = r.svc.promote(&wt, &["assets/".into()], false, "land").unwrap();
+    assert_eq!(rep.promoted, 1);
+    assert!(r.be.get(&project().bucket(), "worktrees/x/state").is_err());
+}
+
+#[test]
+fn a_worktree_with_overlay_state_is_not_promoted_object_by_object() {
+    let (r, wt) = wt_rig();
+    r.svc.put(&local("a1"), &wt, "assets/a.bin", b"a", false).unwrap();
+    r.svc.put(&local("a1"), &project(), "assets/gone.bin", b"project copy", false).unwrap();
+    // S2's overlay records a delete of assets/gone.bin as a tombstone, and the base it started from.
+    r.svc.put(&local("a1"), &wt, ".wt/tombstones/assets/gone.bin", b"", false).unwrap();
+    r.svc.put(&local("a1"), &wt, ".wt/base/assets/a.bin", b"old", false).unwrap();
+    r.svc.put(&local("a1"), &wt, ".wt/meta.json", b"{}", false).unwrap();
+    let e = r.svc.promote(&wt, &["assets/".into()], true, "land").unwrap_err().to_string();
+    assert!(e.contains("overlay state") && e.contains("tombstones"), "{e}");
+    assert!(r.be.get(&project().bucket(), "assets/a.bin").is_err(), "nothing was copied");
+    assert_eq!(r.be.get(&project().bucket(), "assets/gone.bin").unwrap(), b"project copy", "and the project's object the worktree deleted is untouched");
+    assert!(r.be.list(ARCHIVE_BUCKET, "").map(|l| l.is_empty()).unwrap_or(true), "nothing was archived either");
+    // Even a bare tombstone is enough.
+    let (r2, wt2) = wt_rig();
+    r2.svc.put(&local("a1"), &wt2, ".wt/tombstones/assets/x", b"", false).unwrap();
+    assert!(r2.svc.promote(&wt2, &["assets/".into()], false, "land").is_err());
+}
