@@ -25,6 +25,10 @@ mod materialise;
 mod remote;
 mod scan;
 mod sync_up;
+/// The scoped view a sandboxed session is given (Tapestry R9). Unix only: it sets modes and reads
+/// device numbers.
+#[cfg(unix)]
+pub mod view;
 mod watch;
 
 #[cfg(all(test, feature = "rustfs"))]
@@ -115,6 +119,8 @@ pub enum SkipWhy {
     Changed,
     /// Placing or reading it failed; see the detail.
     Io,
+    /// A scoped view's deny pattern (`view::ViewSpec::deny`).
+    Denied,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
