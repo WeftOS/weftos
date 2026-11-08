@@ -532,3 +532,15 @@ fn a_stores_lock_configuration_is_read_through_the_service_or_reported_unsupport
     r.svc.create_store(&rel, "daemon", Parties::defaults_for(&rel)).unwrap();
     assert!(matches!(r.svc.lock_config(&rel), Err(StoreError::Backend(BackendError::Unsupported(_)))));
 }
+
+#[test]
+fn lifecycle_provisioning_is_checked_recorded_and_unsupported_on_local_backends() {
+    let r = rig();
+    let n = project();
+    let rule = crate::backend::LifecycleRule { id: "tmp".into(), prefix: "tmp/".into(), enabled: true, expire_days: Some(7), noncurrent_days: None, abort_multipart_days: None };
+    assert!(r.svc.set_lifecycle(&n, std::slice::from_ref(&rule), "op").is_err(), "unknown store");
+    r.svc.create_store(&n, "daemon", Parties::default()).unwrap();
+    assert!(matches!(r.svc.set_lifecycle(&n, std::slice::from_ref(&rule), "op"), Err(StoreError::Backend(BackendError::Unsupported(_)))));
+    assert!(matches!(r.svc.lifecycle(&n), Err(StoreError::Backend(BackendError::Unsupported(_)))));
+    assert!(r.chain.0.lock().unwrap().iter().all(|(k, _)| k != "store.lifecycle"), "a refused provisioning leaves no record");
+}

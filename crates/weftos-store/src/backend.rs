@@ -129,6 +129,42 @@ pub struct LockConfig {
     pub default: Option<DefaultRetention>,
 }
 
+/// One bucket lifecycle rule: what the backend does to objects by age, so nobody has to sweep.
+/// At least one action is required. Object Lock still wins: an expiry never removes a version
+/// whose retention or legal hold has not ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LifecycleRule {
+    /// Unique within the bucket, 1..=255 characters.
+    pub id: String,
+    /// Keys starting with this (empty: the whole bucket).
+    pub prefix: String,
+    pub enabled: bool,
+    /// Expire the current version this many days after it was written (in a versioned bucket this
+    /// adds a delete marker).
+    pub expire_days: Option<u32>,
+    /// Remove a version this many days after a newer one replaced it.
+    pub noncurrent_days: Option<u32>,
+    /// Abort a multipart upload not completed this many days after it started.
+    pub abort_multipart_days: Option<u32>,
+}
+
+impl LifecycleRule {
+    /// Check the rule before it is sent.
+    pub fn validate(&self) -> Result<(), BackendError> {
+        let bad = |m: &str| Err(BackendError::BadKey(format!("lifecycle rule {:?}: {m}", self.id)));
+        if self.id.is_empty() || self.id.len() > 255 {
+            return bad("id must be 1..=255 characters");
+        }
+        if self.expire_days.is_none() && self.noncurrent_days.is_none() && self.abort_multipart_days.is_none() {
+            return bad("needs at least one action");
+        }
+        if [self.expire_days, self.noncurrent_days, self.abort_multipart_days].into_iter().flatten().any(|d| d == 0) {
+            return bad("days must be at least 1");
+        }
+        Ok(())
+    }
+}
+
 /// An access key the backend issued for one principal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccessKey {
@@ -190,6 +226,14 @@ pub trait AdminBackend: Send + Sync {
     fn create_bucket(&self, bucket: &str, tags: &[(String, String)]) -> Result<(), BackendError>;
     /// Create a bucket with Object Lock enabled (which also turns versioning on). It can only be
     /// chosen at creation. Local backends answer [`BackendError::Unsupported`].
+    /// Replace the bucket's lifecycle rules with `rules` (an empty list removes them all).
+    fn put_lifecycle(&self, _bucket: &str, _rules: &[LifecycleRule]) -> Result<(), BackendError> {
+        Err(BackendError::Unsupported("lifecycle rules".into()))
+    }
+    /// The bucket's lifecycle rules (none when it has none).
+    fn get_lifecycle(&self, _bucket: &str) -> Result<Vec<LifecycleRule>, BackendError> {
+        Err(BackendError::Unsupported("lifecycle rules".into()))
+    }
     fn create_locked_bucket(&self, _bucket: &str, _tags: &[(String, String)]) -> Result<(), BackendError> {
         Err(BackendError::Unsupported("object lock".into()))
     }

@@ -113,6 +113,26 @@ fn an_object_lock_configuration_document_is_read_back() {
     assert!(!parse_lock_config("<ObjectLockConfiguration></ObjectLockConfiguration>").unwrap().enabled);
 }
 
+fn rule(id: &str, prefix: &str) -> LifecycleRule {
+    LifecycleRule { id: id.into(), prefix: prefix.into(), enabled: true, expire_days: Some(30), noncurrent_days: None, abort_multipart_days: None }
+}
+
+#[test]
+fn lifecycle_rules_are_checked_written_and_read_back_as_documents() {
+    let all = LifecycleRule { id: "a&b".into(), prefix: "tmp/<x>/".into(), enabled: false, expire_days: Some(7), noncurrent_days: Some(3), abort_multipart_days: Some(1) };
+    let x = lifecycle_xml(&[all.clone(), rule("two", "")]);
+    assert!(x.contains("<ID>a&amp;b</ID>") && x.contains("<Prefix>tmp/&lt;x&gt;/</Prefix>") && x.contains("<Status>Disabled</Status>"));
+    assert_eq!(parse_lifecycle(&x), vec![all, rule("two", "")], "what is written is what is read");
+    // A bare <Prefix> (older documents) still reads.
+    assert_eq!(parse_lifecycle("<LifecycleConfiguration><Rule><ID>o</ID><Prefix>old/</Prefix><Status>Enabled</Status><Expiration><Days>2</Days></Expiration></Rule></LifecycleConfiguration>")[0].prefix, "old/");
+    // Validation.
+    assert!(rule("", "").validate().is_err());
+    assert!(rule(&"x".repeat(256), "").validate().is_err());
+    assert!(LifecycleRule { expire_days: None, ..rule("n", "") }.validate().is_err(), "no action");
+    assert!(LifecycleRule { expire_days: Some(0), ..rule("z", "") }.validate().is_err(), "zero days");
+    assert!(rule("ok", "p/").validate().is_ok());
+}
+
 #[test]
 fn config_reads_an_env_file_and_defaults_the_region() {
     let d = tempfile::tempdir().unwrap();
@@ -628,4 +648,29 @@ fn live_lock_configuration_reads_back() {
     assert!(matches!(be.delete_version(&b, "k", &v, false), Err(BackendError::Forbidden(_))), "the default retention applied");
     be.delete_version(&b, "k", &v, true).unwrap();
     assert!(matches!(be.get_lock_config("no-such-bucket-zz"), Err(BackendError::NoBucket(_)) | Err(BackendError::Io(_))));
+}
+
+/// Lifecycle rules, live: written, read back, replaced, refused when malformed, removed.
+#[test]
+#[ignore = "needs a throwaway RustFS: WEFTOS_STORE_TEST_RUSTFS_ENV"]
+fn live_lifecycle_rules_round_trip() {
+    let (cfg, _d) = live().expect("WEFTOS_STORE_TEST_RUSTFS_ENV");
+    let be = RustfsBackend::new(cfg).unwrap();
+    let b = uniq("t-life");
+    be.create_bucket(&b, &[]).unwrap();
+    assert_eq!(be.get_lifecycle(&b).unwrap(), vec![], "a new bucket has none");
+    be.put_lifecycle(&b, &[]).unwrap();
+    let rules = vec![rule("tmp-30d", "tmp/"), LifecycleRule { id: "mp".into(), prefix: String::new(), enabled: true, expire_days: None, noncurrent_days: None, abort_multipart_days: Some(2) }];
+    be.put_lifecycle(&b, &rules).unwrap();
+    let got = be.get_lifecycle(&b).unwrap();
+    eprintln!("LIFECYCLE read back: {got:?}");
+    assert_eq!(got, rules);
+    // A second put replaces the set.
+    be.put_lifecycle(&b, &[rule("only", "x/")]).unwrap();
+    assert_eq!(be.get_lifecycle(&b).unwrap(), vec![rule("only", "x/")]);
+    assert!(be.put_lifecycle(&b, &[rule("d", ""), rule("d", "p/")]).is_err(), "duplicate ids refused before sending");
+    assert!(be.put_lifecycle("no-such-bucket-zz", &[rule("a", "")]).is_err());
+    be.put_lifecycle(&b, &[]).unwrap();
+    assert_eq!(be.get_lifecycle(&b).unwrap(), vec![]);
+    be.delete_bucket(&b).unwrap();
 }

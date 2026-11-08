@@ -582,6 +582,24 @@ impl StoreService {
         self.lock().stores.get(&name.to_string()).is_some_and(|r| r.locked)
     }
 
+    /// Provision a store's lifecycle rules (replacing any; an empty list removes them), so the
+    /// backend expires old objects, old versions and abandoned multipart uploads by itself.
+    /// Recorded on the chain. Object Lock still wins: nothing under retention or a legal hold is
+    /// removed. The local backends answer `Unsupported`.
+    pub fn set_lifecycle(&self, name: &StoreName, rules: &[crate::backend::LifecycleRule], actor: &str) -> Result<(), StoreError> {
+        self.known(name)?;
+        self.admin.put_lifecycle(&name.bucket(), rules)?;
+        let ids: Vec<&str> = rules.iter().map(|r| r.id.as_str()).collect();
+        self.chain.record("store.lifecycle", json!({"actor": actor, "store": name.to_string(), "rules": ids}));
+        Ok(())
+    }
+
+    /// The lifecycle rules the backend holds for a store.
+    pub fn lifecycle(&self, name: &StoreName) -> Result<Vec<crate::backend::LifecycleRule>, StoreError> {
+        self.known(name)?;
+        Ok(self.admin.get_lifecycle(&name.bucket())?)
+    }
+
     /// Read back the Object Lock configuration the backend holds for a store's bucket (does it
     /// have lock on, and what default retention), as the daemon itself: an operator's check that
     /// the store is what the daemon recorded. The local backends answer `Unsupported`.

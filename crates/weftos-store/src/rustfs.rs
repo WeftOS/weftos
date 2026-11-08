@@ -13,7 +13,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use reqwest::blocking::Client;
 use serde_json::{Value, json};
 
-use crate::backend::{AccessKey, AdminBackend, BackendError, BucketTags, DefaultRetention, LockConfig, LockMode, LockedPut, ObjectBackend, ObjectMeta, ObjectVersion, PutOpts, check_key};
+use crate::backend::{AccessKey, AdminBackend, BackendError, BucketTags, DefaultRetention, LockConfig, LockMode, LifecycleRule, LockedPut, ObjectBackend, ObjectMeta, ObjectVersion, PutOpts, check_key};
 use crate::sigv4::{self, Req};
 
 /// Connection settings. `secrets_dir` receives one 0600 file per issued access key.
@@ -154,6 +154,46 @@ fn xml_blocks<'a>(s: &'a str, tag: &str) -> Vec<&'a str> {
         at = a + b + close.len();
     }
     v
+}
+
+/// The `LifecycleConfiguration` body for `rules`.
+pub fn lifecycle_xml(rules: &[LifecycleRule]) -> String {
+    let mut x = String::from("<LifecycleConfiguration>");
+    for r in rules {
+        x.push_str(&format!("<Rule><ID>{}</ID><Filter><Prefix>{}</Prefix></Filter><Status>{}</Status>", escape(&r.id), escape(&r.prefix), if r.enabled { "Enabled" } else { "Disabled" }));
+        if let Some(d) = r.expire_days {
+            x.push_str(&format!("<Expiration><Days>{d}</Days></Expiration>"));
+        }
+        if let Some(d) = r.noncurrent_days {
+            x.push_str(&format!("<NoncurrentVersionExpiration><NoncurrentDays>{d}</NoncurrentDays></NoncurrentVersionExpiration>"));
+        }
+        if let Some(d) = r.abort_multipart_days {
+            x.push_str(&format!("<AbortIncompleteMultipartUpload><DaysAfterInitiation>{d}</DaysAfterInitiation></AbortIncompleteMultipartUpload>"));
+        }
+        x.push_str("</Rule>");
+    }
+    x.push_str("</LifecycleConfiguration>");
+    x
+}
+
+/// Read the rules out of a `LifecycleConfiguration` document.
+fn parse_lifecycle(x: &str) -> Vec<LifecycleRule> {
+    xml_blocks(x, "Rule")
+        .into_iter()
+        .map(|b| {
+            let n = |outer: &str, t: &str| xml_blocks(b, outer).first().and_then(|o| xml_tag(o, t)).and_then(|v| v.trim().parse::<u32>().ok());
+            // The prefix is either `Filter/Prefix` or a bare `Prefix` (older documents).
+            let prefix = xml_blocks(b, "Filter").first().and_then(|f| xml_tag(f, "Prefix")).or_else(|| xml_tag(b, "Prefix")).unwrap_or_default();
+            LifecycleRule {
+                id: xml_tag(b, "ID").unwrap_or_default(),
+                prefix,
+                enabled: xml_tag(b, "Status").as_deref() == Some("Enabled"),
+                expire_days: n("Expiration", "Days"),
+                noncurrent_days: n("NoncurrentVersionExpiration", "NoncurrentDays"),
+                abort_multipart_days: n("AbortIncompleteMultipartUpload", "DaysAfterInitiation"),
+            }
+        })
+        .collect()
 }
 
 /// Parse an `ObjectLockConfiguration` document.
@@ -574,6 +614,36 @@ impl RustfsBackend {
 }
 
 impl AdminBackend for RustfsBackend {
+    fn put_lifecycle(&self, bucket: &str, rules: &[LifecycleRule]) -> Result<(), BackendError> {
+        if rules.is_empty() {
+            let r = self.send("DELETE", &format!("/{bucket}"), &Self::q(&[("lifecycle", "")]), &[], &[])?;
+            // Removing rules from a bucket that has none is fine.
+            if r.status == 404 && String::from_utf8_lossy(&r.body).contains("NoSuchLifecycleConfiguration") {
+                return Ok(());
+            }
+            return self.check(r, Ctx::Bucket(bucket)).map(|_| ());
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for r in rules {
+            r.validate()?;
+            if !seen.insert(&r.id) {
+                return Err(BackendError::BadKey(format!("lifecycle rule id {:?} is used twice", r.id)));
+            }
+        }
+        let body = lifecycle_xml(rules);
+        let r = self.send("PUT", &format!("/{bucket}"), &Self::q(&[("lifecycle", "")]), body.as_bytes(), &[])?;
+        self.check(r, Ctx::Bucket(bucket)).map(|_| ())
+    }
+
+    fn get_lifecycle(&self, bucket: &str) -> Result<Vec<LifecycleRule>, BackendError> {
+        let r = self.send("GET", &format!("/{bucket}"), &Self::q(&[("lifecycle", "")]), &[], &[])?;
+        if r.status == 404 && String::from_utf8_lossy(&r.body).contains("NoSuchLifecycleConfiguration") {
+            return Ok(Vec::new());
+        }
+        let r = self.check(r, Ctx::Bucket(bucket))?;
+        Ok(parse_lifecycle(&String::from_utf8_lossy(&r.body)))
+    }
+
     fn create_locked_bucket(&self, bucket: &str, tags: &[(String, String)]) -> Result<(), BackendError> {
         self.create_bucket_with(bucket, tags, true)
     }
