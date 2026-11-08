@@ -73,14 +73,21 @@ pub enum Applied {
     Changed { lost_write: bool },
 }
 
-#[derive(Default)]
-struct Table {
-    last_seq: u64,
-    held: HashMap<(String, String), HashSet<Access>>,
+pub(crate) struct Table {
+    pub(crate) last_seq: u64,
+    pub(crate) held: HashMap<(String, String), HashSet<Access>>,
+    /// Hash chain over the events applied so far (compaction, ADR-126).
+    pub(crate) events_head: String,
+}
+
+impl Default for Table {
+    fn default() -> Self {
+        Self { last_seq: 0, held: HashMap::new(), events_head: crate::compaction::genesis_head() }
+    }
 }
 
 #[derive(Default)]
-pub struct GrantLedger(Mutex<Table>);
+pub struct GrantLedger(pub(crate) Mutex<Table>);
 
 impl GrantLedger {
     pub fn new() -> Self {
@@ -114,6 +121,7 @@ impl GrantLedger {
             return Applied::Stale;
         }
         t.last_seq = ev.seq;
+        t.events_head = crate::compaction::extend_head(&t.events_head, ev);
         let own = node_of_store(&ev.store) == Some(ev.principal.as_str());
         let could_write = own && Self::can(&t, &ev.principal, &ev.store, Access::Write);
         let key = (ev.principal.clone(), ev.store.clone());

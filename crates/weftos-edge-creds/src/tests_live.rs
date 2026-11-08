@@ -582,3 +582,142 @@ fn a_reused_node_id_does_not_inherit_the_previous_nodes_objects() {
     let fresh = edge(&r, "wasm-9");
     assert_eq!(run(fresh.get("secret.txt")).unwrap(), None, "new pairing must start from an empty bucket");
 }
+
+// ---- compaction spike ---------------------------------------------------------------
+
+mod compaction_spike {
+    use super::*;
+    use crate::compaction::*;
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+
+    fn mac(key: &[u8], msg: &[u8]) -> Vec<u8> {
+        let mut m = Hmac::<Sha256>::new_from_slice(key).unwrap();
+        m.update(msg);
+        m.finalize().into_bytes().to_vec()
+    }
+
+    /// Stand-in for the chain signer: HMAC under a per-signer key.
+    struct Keyring(Vec<(&'static str, &'static [u8])>);
+    impl SnapshotVerifier for Keyring {
+        fn verify(&self, signer: &str, message: &[u8], signature: &[u8]) -> bool {
+            self.0.iter().any(|(id, k)| *id == signer && mac(k, message) == signature)
+        }
+    }
+    const KEY: &[u8] = b"chain-signer-key";
+    fn ring() -> Keyring { Keyring(vec![("chain-1", KEY)]) }
+
+    fn history() -> Vec<GrantEvent> {
+        let st = |n: &str| node_store_name(MESH, n);
+        vec![
+            GrantEvent::pairing(3, MESH, "a"),
+            GrantEvent::pairing(5, MESH, "b"),
+            GrantEvent { seq: 9, principal: "a".into(), store: st("b"), access: Access::Read, op: GrantOp::Grant },
+            GrantEvent::unpair(12, MESH, "b"),
+            GrantEvent::pairing(14, MESH, "c"),
+        ]
+    }
+
+    fn snap_of(h: &[GrantEvent]) -> SignedSnapshot {
+        GrantLedger::replay(h.iter().cloned()).signed_snapshot("grants/m1", "chain-1", |m| mac(KEY, m))
+    }
+
+    #[test]
+    fn snapshot_plus_tail_equals_full_replay() {
+        let h = history();
+        let signed = snap_of(&h[..3]);
+        let restored = GrantLedger::restore(&signed, "grants/m1", &ring(), &h[3..]).unwrap();
+        let full = GrantLedger::replay(h.iter().cloned());
+        assert_eq!(restored.snapshot("grants/m1"), full.snapshot("grants/m1"));
+        // The revoke in the tail took effect; the node paired after it is held.
+        use crate::broker::GrantCheck;
+        assert!(!restored.allows("b", Access::Write));
+        assert!(restored.allows("c", Access::Write) && restored.allows("a", Access::Write));
+    }
+
+    #[test]
+    fn a_pre_snapshot_event_is_not_replayed_over_the_snapshot() {
+        let h = history();
+        let signed = snap_of(&h[..4]);
+        // Handing the whole log in as the "tail" mixes two histories: refused.
+        assert!(matches!(GrantLedger::restore(&signed, "grants/m1", &ring(), &h), Err(SnapshotError::TailBeforeSnapshot { .. })));
+    }
+
+    #[test]
+    fn follower_refuses_a_tampered_unsigned_wrong_scope_or_edited_snapshot() {
+        let h = history();
+        let good = snap_of(&h[..3]);
+        let ok = |s: &SignedSnapshot, scope: &str| GrantLedger::restore(s, scope, &ring(), &[]).err();
+        assert_eq!(ok(&good, "grants/m1"), None);
+        assert_eq!(ok(&good, "grants/other"), Some(SnapshotError::Scope { want: "grants/other".into(), got: "grants/m1".into() }));
+        // Grant an extra right inside the state.
+        let mut edited = good.clone();
+        edited.snapshot.state[0].access.push(Access::Write);
+        assert_eq!(ok(&edited, "grants/m1"), Some(SnapshotError::StateHash));
+        // Edit the state and fix its hash: the signature no longer matches.
+        let mut rehashed = edited.clone();
+        let mut forged = rehashed.snapshot.clone();
+        forged.state_hash = GrantLedger::replay(std::iter::empty()).snapshot("x").state_hash;
+        forged.state = vec![];
+        rehashed.snapshot = forged;
+        assert_eq!(ok(&rehashed, "grants/m1"), Some(SnapshotError::BadSignature));
+        // Signed by a key the follower does not trust.
+        let mut stranger = good.clone();
+        stranger.signer = "chain-9".into();
+        assert_eq!(ok(&stranger, "grants/m1"), Some(SnapshotError::BadSignature));
+        // Moving through_seq back (to replay old events over it) breaks the signature too.
+        let mut rewound = good.clone();
+        rewound.snapshot.through_seq = 1;
+        assert_eq!(ok(&rewound, "grants/m1"), Some(SnapshotError::BadSignature));
+    }
+
+    #[test]
+    fn a_follower_with_history_catches_a_validly_signed_but_false_snapshot() {
+        let h = history();
+        // A compromised signer signs a snapshot that omits a revoke.
+        let lie = GrantLedger::replay(h[..2].iter().cloned()); // never saw the unpair at 12
+        let mut forged = lie.snapshot("grants/m1");
+        forged.through_seq = 12;
+        let signed = SignedSnapshot { signature: mac(KEY, &signing_bytes(&forged)), snapshot: forged, signer: "chain-1".into() };
+        // Signature and hash are fine, so the trusting follower accepts it...
+        assert!(GrantLedger::restore(&signed, "grants/m1", &ring(), &[]).is_ok());
+        // ...but one that kept the events does not.
+        assert!(matches!(verify_against_history(&signed.snapshot, &h), Err(SnapshotError::HistoryMismatch(_))));
+        // And the honest snapshot passes.
+        assert_eq!(verify_against_history(&snap_of(&h[..4]).snapshot, &h), Ok(()));
+    }
+
+    #[test]
+    fn ledger_head_is_order_and_content_sensitive() {
+        let h = history();
+        let a = GrantLedger::replay(h.iter().cloned()).snapshot("s").events_head;
+        let mut h2 = h.clone();
+        h2[2].access = Access::Write;
+        let b = GrantLedger::replay(h2).snapshot("s").events_head;
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn compaction_shrinks_the_replay_input() {
+        let mut ev = Vec::new();
+        for i in 0..500u64 {
+            let n = format!("n{}", i % 10);
+            ev.push(GrantEvent::pairing(2 * i + 1, MESH, &n));
+            ev.push(GrantEvent::unpair(2 * i + 2, MESH, &n));
+        }
+        let snap = GrantLedger::replay(ev.iter().cloned()).snapshot("s");
+        assert!(snap.state.is_empty(), "everything was revoked, so the snapshot holds nothing");
+        assert_eq!(snap.through_seq, 1000);
+    }
+
+    #[test]
+    fn same_state_reached_by_a_different_history_is_caught_by_the_head() {
+        let st = node_store_name(MESH, "a");
+        let ev = |seq, access| GrantEvent { seq, principal: "a".into(), store: st.clone(), access, op: GrantOp::Grant };
+        let real = vec![ev(1, Access::Read), ev(2, Access::Write)];
+        let other = vec![ev(1, Access::Write), ev(2, Access::Read)];
+        let snap = GrantLedger::replay(other).snapshot("s");
+        assert_eq!(GrantLedger::replay(real.clone()).snapshot("s").state, snap.state, "same final state");
+        assert_eq!(verify_against_history(&snap, &real), Err(SnapshotError::HistoryMismatch("events_head")));
+    }
+}

@@ -26,6 +26,7 @@
 
 pub mod broker;
 pub mod clock;
+pub mod compaction;
 pub mod creds;
 pub mod edge;
 pub mod grants;
