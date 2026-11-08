@@ -24,6 +24,13 @@ use nix::unistd::Pid;
 const WEAVER: &str = env!("CARGO_BIN_EXE_weaver");
 const EX_CONFIG: i32 = 78;
 
+/// Ceiling for a spawned weaver to start and serve. The debug weaver is ~170 MB
+/// and on macOS its exec can sit in dyld/code-signature checks for tens of
+/// seconds when many test processes start at once (nextest runs a whole crate
+/// in parallel); the daemon itself boots in well under a second. A hang still
+/// fails, just later.
+const BOOT_WAIT: Duration = Duration::from_secs(300);
+
 /// A spawned weaver that is killed and reaped if the test panics.
 struct Kid(Option<Child>);
 
@@ -88,7 +95,7 @@ impl Home {
     fn wait_serving(&self, kid: &mut Kid) {
         let child = kid.get();
         let sock = self.legacy().join("kernel.sock");
-        let end = Instant::now() + Duration::from_secs(60);
+        let end = Instant::now() + BOOT_WAIT;
         while !sock.exists() {
             assert!(child.try_wait().unwrap().is_none(), "exited before serving:\n{}", self.log());
             assert!(Instant::now() < end, "never served:\n{}", self.log());
@@ -147,7 +154,7 @@ fn a_lock_unaware_legacy_chain_is_refused_until_adopted_explicitly() {
 
     // 3. A plain boot refuses with the permanent exit code and starts nothing.
     let mut refused = h.start(&[]);
-    let end = Instant::now() + Duration::from_secs(60);
+    let end = Instant::now() + BOOT_WAIT;
     let status = loop {
         if let Some(st) = refused.get().try_wait().unwrap() {
             break st;

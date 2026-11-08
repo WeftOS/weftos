@@ -7,6 +7,13 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+/// Ceiling for a spawned weaver to start and serve. The debug weaver is ~170 MB
+/// and on macOS its exec can sit in dyld/code-signature checks for tens of
+/// seconds when many test processes start at once (nextest runs a whole crate
+/// in parallel); the daemon itself boots in well under a second. A hang still
+/// fails, just later.
+const BOOT_WAIT: Duration = Duration::from_secs(300);
+
 /// Short root: macOS limits a Unix socket path to ~104 bytes, and a worktree
 /// checkout or the per-user temp dir overflows it.
 fn dir() -> tempfile::TempDir {
@@ -23,7 +30,7 @@ fn listening_count(log: &Path) -> usize {
 
 fn wait_for(what: &str, mut f: impl FnMut() -> bool) {
     let t = Instant::now();
-    while t.elapsed() < Duration::from_secs(60) {
+    while t.elapsed() < BOOT_WAIT {
         if f() {
             return;
         }
