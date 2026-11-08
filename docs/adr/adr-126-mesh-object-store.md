@@ -493,14 +493,15 @@ rustfs --lib -- --ignored --test-threads=1` and `cargo test -p clawft-weave --fe
   failed because that endpoint is not available.
 
 **Touch point with the Mac-side S3/drive work.** The additive `put_if_match` / `delete_if_match` default
-methods on the backend trait (`wt/adr126-s3-drive`, `2c43a95c5..1cade20f8`) are not in this repository, so
-they could not be diffed. From S1's side: `ObjectBackend::put_if_match` already exists here as a *required*
-method (`backend.rs`, implemented by the RustFS, local-directory and in-memory backends, and by the two test
-backends in `backend_tests.rs` and the `Flaky` backend in `service_tests.rs`), and there is no
-`delete_if_match`. A default `put_if_match` with the same signature will conflict textually in `backend.rs` at
-that declaration and must be taken as one definition (the default body is fine for backends without an
-override; the S1 implementations remain valid overrides). A new `delete_if_match` default does not break any S1
-implementation. Whether the signatures are identical is unconfirmed until the commits are available.
+methods on the backend trait (`wt/adr126-s3-drive`, `2c43a95c5..1cade20f8`) touch S1's `backend.rs`.
+`ObjectBackend::put_if_match` already exists here as a *required* method (`backend.rs`, implemented by the
+RustFS, local-directory and in-memory backends, and by the two test backends in `backend_tests.rs` and the
+`Flaky` backend in `service_tests.rs`); there is no `delete_if_match`. Signature identical (confirmed against
+`1cade20f8`, per the owner's check of `backend.rs` in the Mac repo). At merge: one declaration of
+`put_if_match` (S1's, required), S1's implementations stand, and the `delete_if_match` default comes in
+unchanged. One detail to settle at merge: the Mac defaults return `BackendError::Unsupported` bare, while
+S1's `BackendError::Unsupported` carries a message (`Unsupported(String)`), so the `delete_if_match` default
+needs `Unsupported("conditional delete".into())` here.
 
 ## Consequences
 
