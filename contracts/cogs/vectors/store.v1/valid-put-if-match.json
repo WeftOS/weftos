@@ -1,0 +1,6 @@
+{
+  "op": "put",
+  "key": "state/cursor.json",
+  "text": "{\"n\":2}",
+  "if_match": "9e107d9d372bb6826bd81d3542a419d6"
+}

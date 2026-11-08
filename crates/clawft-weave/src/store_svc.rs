@@ -13,7 +13,7 @@
 //!
 //! Request body (at most 64 KiB, the broker's limit):
 //! `{"op": "put"|"get"|"head"|"list"|"delete", "key": …, "text": … | "b64": …, "prefix": …,
-//!   "if_none_match": bool, "store": "weftos://…"}`.
+//!   "if_none_match": bool, "if_match": "<etag>", "store": "weftos://…"}`.
 //! `store` is optional: the default is the provider's store (above). Reply: `put`/`head` give `{key,size,etag}`; `get` gives
 //! `{key,size,b64,text}` (an object over the reply limit is an error, not a truncation); `list`
 //! gives `{objects:[{key,size,etag}]}`; `delete` gives `{key,deleted:true}`.
@@ -69,7 +69,11 @@ pub fn call(svc: &StoreService, node_id: &str, from: &str, project: Option<&str>
                 (None, Some(b)) => B64.decode(b).map_err(|e| format!("b64: {e}"))?,
                 _ => return Err("put needs exactly one of text, b64".into()),
             };
-            let m = svc.put(&who, &name, &key()?, &data, r.if_none_match).map_err(e)?;
+            let m = match &r.if_match {
+                Some(etag) => svc.put_if_match(&who, &name, &key()?, &data, etag),
+                None => svc.put(&who, &name, &key()?, &data, r.if_none_match),
+            }
+            .map_err(e)?;
             Ok(json!({"key": m.key, "size": m.size, "etag": m.etag}))
         }
         "get" => {

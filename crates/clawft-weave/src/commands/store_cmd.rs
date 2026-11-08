@@ -2,7 +2,7 @@
 //!
 //! - `weaver store ls [<name>] [--prefix P] [--json]`: every store, or one store's grants and objects.
 //! - `weaver store create <name> [--admin P].. [--write P].. [--read P]..`
-//! - `weaver store grant <name> <principal> <read|write|admin>`; `--off` / `--on` switch an
+//! - `weaver store grant <name> <principal> <read|append|sweep|write|admin>`; `--off` / `--on` switch an
 //!   existing grant without losing it.
 //! - `weaver store revoke <name> <principal>`: the principal's next request is refused.
 //! - `weaver store promote <worktree store> --prefix P..  [--archive-rest]`: into the project store.
@@ -57,7 +57,7 @@ pub enum StoreAction {
     Grant {
         name: String,
         principal: String,
-        /// read, write or admin.
+        /// read, append, sweep, write or admin.
         #[arg(required_unless_present_any = ["off", "on"])]
         access: Option<String>,
         /// Disable the grant (kept, allows nothing).

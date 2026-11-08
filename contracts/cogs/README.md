@@ -190,9 +190,49 @@ store, and a refusal is in that store's activity log. The reply is `{key,size,et
 | `text`, `b64` | string | `put` only, exactly one: UTF-8 text up to 48 KiB, or base64 up to 48 K chars |
 | `prefix` | string | `list` only, optional |
 | `if_none_match` | bool | `put` only: refuse if the key exists |
+| `if_match` | string | `put` only, 1..=128 chars, not with `if_none_match`: replace only if the key still has this etag (from the last `head`/`put` reply); a changed key is refused as stale |
 | `store` | string | optional `weftos://…` store name; default: the project store of the cog's project, else this node's store |
 
 Unknown fields are refused.
+
+**Using it from a cog.** The cog is a caller, so it lists the service as an input and nothing
+else (no `[[outputs]]`, so no `[mesh_limits]`). The topic is the kind `svc.store` with the
+schema `store.v1`; the cog calls `svc.store/<project ULID in lower case>` for its project's
+store, or `svc.store/<node>` when it has no project.
+
+```toml
+[cog]
+id = "report-writer"
+name = "Report Writer"
+version = "0.1.0"
+category = "data"
+binary = "cog-report-writer"
+
+[[inputs]]
+topic  = "svc.store"
+schema = "store.v1"
+policy = "drop-oldest"     # as for any input
+```
+
+A call from the cog (wire frame, see ADR-122 section 12):
+
+```json
+{"op":"call","id":1,"topic":"svc.store/01hzx3k9q5m2n7p8r4t6v0wabc","schema":"store.v1",
+ "body":{"op":"put","key":"reports/2026-11-08.json","text":"{\"rows\":12}"},"timeout_ms":10000}
+```
+
+The daemon runs the call as the store principal `cog:<instance id>`, so the operator grants
+that principal before the first call (an ungranted cog is refused, and the refusal shows in
+the activity log):
+
+```sh
+weaver store grant weftos://<mesh>/projects/<ULID>/store cog:<instance id> write
+weaver store grant ... cog:<instance id> --off     # the next call is refused
+```
+
+To update an object that other writers may also change, read its etag with `head` (or keep the
+one `put` returned) and write with `if_match`; a `stale` refusal means someone wrote in
+between, so `get` again and retry. `if_none_match` is the create-only form.
 
 ### `mcu.call.v1` (service call request)
 

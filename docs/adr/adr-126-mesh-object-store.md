@@ -5,7 +5,7 @@
 - **Updated**: 2026-10-29 (S0 spike applied on PG and run; results in "S0 results"; open question 1 answered: import, not in place; §6 amended: the activity log must take RustFS's own log as well as its audit stream)
 - **Updated**: 2026-10-30 (ADR-130 adds a GCS seed bucket as the tier above this store; this store becomes the optional L1 staging tier)
 - **Updated**: 2026-11-07 (follower view §4a, Windows-safe fetch, notification/poll answers from ADR-131; S2 implemented on `feat/adr126-s2`, not yet landed: overlay, promotion, agent-git-flow hooks, union mount; §4 amended by the owner extension, board card f40828fb: the worktree tree itself is shared, so unmerged docs stay visible and another agent can merge)
-- **Updated**: 2026-11-07 (S1 built on `feat/adr126-s1`: `weftos-store` crate, `weaver store`, daemon wiring, local-directory backend; RustFS S3 + admin transport added and verified against a throwaway RustFS 1.0.4, audit-stream and notification field names still unverified, see "S1 status")
+- **Updated**: 2026-11-07 (S1 built on `feat/adr126-s1`: `weftos-store` crate, `weaver store`, daemon wiring, local-directory backend; RustFS S3 + admin transport added and verified against a throwaway RustFS 1.0.4, audit-stream and notification parsers fixed from captured records, `put_if_match`, release-store `append`/`sweep` roles; see "S1 status")
 - **Deciders**: owner
 - **Research**: `docs/research/rclone-shared-filesystem-2026-10-29.md` (rclone, RustFS,
   OpenDAL, governance gaps). Board card `3605565e`.
@@ -377,12 +377,36 @@ Findings that shaped the code: creating a bucket the root already owns returns 2
 the local backends).
 
 Audit parsers: the `s3_authorization_denied` line was captured from RustFS 1.0.4 and the parser fixed
-to match (`action` is `S3Action(GetObjectAction)`, `object` can be `"None"`). **Still unverified:**
-the audit-stream record (successful operations) and bucket-notification field names. Audit did not
-start from the environment variables I tried (`RUSTFS_AUDIT_ENABLE` with a webhook target named `_A` or
-unnamed, plus a queue dir, on a fresh data dir; RustFS 1.0.4 wrote no record to a loopback sink in
-three tries, and its own log for those runs was not updated, so the reason is unknown; it may need the
-audit target set through the admin config API instead), so no record was captured; the parser still reads field names from the S0 write-up. Cogs reach the store through the cog data plane: the daemon serves `svc.store/<project ULID, lower
+to match (`action` is `S3Action(GetObjectAction)`, `object` can be `"None"`). **Audit stream and notifications verified (2026-11-08)** against a throwaway loopback RustFS 1.0.4, and the
+parsers match the captured records. The earlier "no record" runs failed because RustFS rejects loopback webhook endpoints unless
+`RUSTFS_OUTBOUND_ALLOW_ORIGINS=http://127.0.0.1:<port>` is set at start; targets must be named
+(`RUSTFS_AUDIT_WEBHOOK_ENABLE_<NAME>`, `..._ENDPOINT_<NAME>`, and the same for `NOTIFY`), and `RUSTFS_AUDIT_ENABLE=true` is
+still needed. The admin `set-config-kv` call silently drops `enable` and `endpoint` for audit targets, so it is not a way to
+configure them. Notifications additionally need a `PutBucketNotification` pointing at `arn:rustfs:sqs::<name>:webhook`. An
+audit post is `{"EventName","Key","Records":[{"event","trigger","api":{"name":"s3:PutObject","bucket","object","status_code",...},"accessKey",...}]}`
+with a plain object key and no size. A notification post is a standard S3 event record, also with `EventName` and `Key`, whose object key is
+percent-encoded. `parse_audit` was wrong before the capture (it returned `ObjectCreated:Put`, not `PutObject`) and now reads
+`Records[0].api`; `parse_notification` decodes the key. Not yet verified: batched posts (`batch_size` above 1), multipart and
+versioned operations, and `auth_token`. **Not yet done:** the daemon does not launch or configure RustFS (it is an external
+service), so setting those env names and issuing `PutBucketNotification` belongs to whoever deploys RustFS (Phase A).
+
+**Conditional write (for S2).** `ObjectBackend::put_if_match(bucket, key, data, etag)` is a compare-and-swap (S3 `If-Match`): a
+changed key is `BackendError::Stale`, a missing key is `NoObject`. The service has `StoreService::put_if_match(who, store,
+key, data, etag)` (gated and logged like `put`), `svc.store` takes `"if_match": "<etag>"` on `put` (`store.v1`, not with
+`if_none_match`), and RustFS gets `If-Match`. Take the etag from the last `head` or `put` result of the same backend
+(opaque: MD5 on RustFS, BLAKE3 locally), and on `Stale` read again and retry. The local backend serialises swaps within the
+daemon process; across processes only RustFS is atomic. S2 should use this instead of unconditional `put` for any
+read-modify-write.
+
+**CI and sweeper roles (release stores).** Two narrow access levels exist besides read, write and admin: `append` (get, head,
+list, and a put that must carry `if_none_match`, so nothing is overwritten; no delete or copy) and `sweep` (get, head, list and
+delete; no put). A new release store gets the well-known principals `agent:ci` as `append` and `agent:store-sweeper` as
+`sweep` by default (`weaver store grant <name> <principal> append|sweep`). RustFS IAM has no condition for write-once, so the
+key's policy for `append` allows PutObject and a direct S3 call with that key could still overwrite: write-once holds on the
+governed path only. Immutability on the backend itself and retention are S4's. Readers of a release store (the project's
+members) are named when the store is made.
+
+Cogs reach the store through the cog data plane: the daemon serves `svc.store/<project ULID, lower
 case>` (default store: that project's) and `svc.store/<node>` (the node's store), schema `store.v1`
 (`contracts/cogs/README.md`), with ops put, get, head, list and delete. The caller becomes the principal
 `cog:<instance id>` and needs a grant, so an ungranted cog is refused and a disabled grant refuses the

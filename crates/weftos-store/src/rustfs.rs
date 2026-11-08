@@ -227,6 +227,18 @@ impl ObjectBackend for RustfsBackend {
         Ok(ObjectMeta { key: key.to_owned(), size: data.len() as u64, etag: r.etag.unwrap_or_default() })
     }
 
+    fn put_if_match(&self, bucket: &str, key: &str, data: &[u8], etag: &str) -> Result<ObjectMeta, BackendError> {
+        check_key(key)?;
+        // An ETag header value is quoted; accept the bare value the caller got from `ObjectMeta`.
+        let q = if etag.starts_with('"') { etag.to_owned() } else { format!("\"{etag}\"") };
+        let r = self.send("PUT", &format!("/{bucket}/{key}"), &[], data, &[("if-match", q)])?;
+        let r = self.check(r, Ctx::Object(bucket, key)).map_err(|e| match e {
+            BackendError::Exists(k) => BackendError::Stale(k),
+            e => e,
+        })?;
+        Ok(ObjectMeta { key: key.to_owned(), size: data.len() as u64, etag: r.etag.unwrap_or_default() })
+    }
+
     fn get(&self, bucket: &str, key: &str) -> Result<Vec<u8>, BackendError> {
         check_key(key)?;
         let r = self.send("GET", &format!("/{bucket}/{key}"), &[], &[], &[])?;

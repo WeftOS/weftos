@@ -81,7 +81,16 @@ pub struct Parties {
     pub admins: Vec<Principal>,
     pub writers: Vec<Principal>,
     pub readers: Vec<Principal>,
+    /// Write-once (`append`): CI on a release store.
+    pub appenders: Vec<Principal>,
+    /// Delete-only (`sweep`): the retention sweeper of a release store.
+    pub sweepers: Vec<Principal>,
 }
+
+/// The well-known principal CI runs as when it writes a release store.
+pub const CI_PRINCIPAL: &str = "agent:ci";
+/// The well-known principal of the retention sweeper.
+pub const SWEEPER_PRINCIPAL: &str = "agent:store-sweeper";
 
 impl Parties {
     /// The defaults of ADR-126 section 3 that the name alone decides: a node's own principal
@@ -92,6 +101,12 @@ impl Parties {
             && let Ok(pr) = Principal::new(crate::PrincipalKind::Node, node)
         {
             p.writers.push(pr);
+        }
+        // A release store (ADR-126 section 3): CI writes once, the sweeper only deletes. Who may
+        // read is the project's members, which the caller names.
+        if matches!(name, StoreName::Release { .. }) {
+            p.appenders.extend(Principal::parse(CI_PRINCIPAL));
+            p.sweepers.extend(Principal::parse(SWEEPER_PRINCIPAL));
         }
         p
     }
@@ -267,7 +282,7 @@ impl StoreService {
             g.stores.insert(name.to_string(), StoreRec { name: name.to_string(), created_ms: self.now(), archived: false });
             let d = Parties::defaults_for(name);
             let ts = self.now();
-            for (list, acc) in [(d.admins.iter().chain(&extra.admins), Access::Admin), (d.writers.iter().chain(&extra.writers), Access::Write), (d.readers.iter().chain(&extra.readers), Access::Read)] {
+            for (list, acc) in [(d.admins.iter().chain(&extra.admins), Access::Admin), (d.writers.iter().chain(&extra.writers), Access::Write), (d.appenders.iter().chain(&extra.appenders), Access::Append), (d.sweepers.iter().chain(&extra.sweepers), Access::Sweep), (d.readers.iter().chain(&extra.readers), Access::Read)] {
                 for p in list {
                     g.grants.grant(p.clone(), name, acc, if actor.is_empty() { "default" } else { actor }, ts);
                 }
@@ -450,7 +465,7 @@ impl StoreService {
             return refuse(format!("{} is suspended", who.principal));
         }
         match held {
-            Some(a) if a >= op.needs() => Ok(()),
+            Some(a) if op.allowed_by(a) => Ok(()),
             Some(a) => refuse(format!("{} holds {} on {name}; {} needs {}", who.principal, a.as_str(), op.name(), op.needs().as_str())),
             None => refuse(format!("{} holds no enabled grant on {name}", who.principal)),
         }
@@ -473,10 +488,33 @@ impl StoreService {
         }
     }
 
+    /// An `append` grant (CI on a release store) writes once: a put that could replace an
+    /// object is refused. Anyone with more than `append` is not held to it.
+    fn write_once(&self, who: &Caller, name: &StoreName, key: &str, bytes: u64, conditional_create: bool) -> Result<(), StoreError> {
+        let held = self.lock().grants.effective(&who.principal, name);
+        if held == Some(Access::Append) && !conditional_create {
+            let why = format!("{} holds append on {name}: a put must carry if_none_match, nothing is overwritten", who.principal);
+            self.emit(&who.principal.to_string(), name, Op::Put.name(), Some(key), bytes, Outcome::Refused(why.clone()), Source::Governed);
+            return Err(StoreError::Refused(why));
+        }
+        Ok(())
+    }
+
     /// PutObject on behalf of `who`.
     pub fn put(&self, who: &Caller, name: &StoreName, key: &str, data: &[u8], if_none_match: bool) -> Result<ObjectMeta, StoreError> {
         self.gate(who, name, Op::Put, Some(key), data.len() as u64)?;
+        self.write_once(who, name, key, data.len() as u64, if_none_match)?;
         let r = self.objects.put(&name.bucket(), key, data, if_none_match);
+        self.finish(who, name, Op::Put, Some(key), data.len() as u64, r)
+    }
+
+    /// Conditional PutObject: write only if the key still has the etag the caller read (S3
+    /// `If-Match`). A changed key is `BackendError::Stale`; read again and retry. Unlike `put`,
+    /// a concurrent writer can never be overwritten blind.
+    pub fn put_if_match(&self, who: &Caller, name: &StoreName, key: &str, data: &[u8], etag: &str) -> Result<ObjectMeta, StoreError> {
+        self.gate(who, name, Op::Put, Some(key), data.len() as u64)?;
+        self.write_once(who, name, key, data.len() as u64, false)?;
+        let r = self.objects.put_if_match(&name.bucket(), key, data, etag);
         self.finish(who, name, Op::Put, Some(key), data.len() as u64, r)
     }
 

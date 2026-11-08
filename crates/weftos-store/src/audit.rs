@@ -121,9 +121,27 @@ fn num(v: &Value, names: &[&str]) -> Option<u64> {
     find(v, names).and_then(|x| x.as_u64().or_else(|| x.as_str().and_then(|s| s.parse().ok())))
 }
 
-/// One line of RustFS's audit stream.
+/// One line of RustFS's audit stream. RustFS 1.0.4 posts `{"EventName":..,"Key":..,"Records":[{..}]}`
+/// with the operation in `Records[0].api` (`name` is `s3:PutObject`, `status_code` is the S3 result,
+/// the object key is plain) and the caller in `Records[0].accessKey`. There is no size field, so
+/// `bytes` is 0. A flat or differently nested record is still read by field name.
 pub fn parse_audit(line: &str) -> Option<Raw> {
     let v: Value = serde_json::from_str(line.trim()).ok()?;
+    let rec = v["Records"].as_array().and_then(|a| a.first()).unwrap_or(&v);
+    let api = &rec["api"];
+    if api.get("status_code").is_some()
+        && let (Some(op), Some(bucket)) = (api["name"].as_str(), api["bucket"].as_str().filter(|b| !b.is_empty()))
+    {
+        return Some(Raw {
+            access_key: rec["accessKey"].as_str().unwrap_or_default().to_owned(),
+            bucket: bucket.to_owned(),
+            object: api["object"].as_str().filter(|o| !o.is_empty()).map(str::to_owned),
+            op: op.trim_start_matches("s3:").to_owned(),
+            status: api["status_code"].as_u64().and_then(|n| u16::try_from(n).ok()),
+            bytes: 0,
+            reason: None,
+        });
+    }
     let bucket = text(&v, &["bucket", "bucketName"])?;
     let op = text(&v, &["apiName", "api", "name", "operation", "event", "eventName"])?;
     Some(Raw {
@@ -135,6 +153,24 @@ pub fn parse_audit(line: &str) -> Option<Raw> {
         bytes: num(&v, &["contentLength", "size", "rx", "bytes"]).unwrap_or(0),
         reason: None,
     })
+}
+
+/// Notification object keys are percent-encoded (`a%2Fb.txt`); undo that. Invalid escapes stay as written.
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let hex = |c: u8| (c as char).to_digit(16);
+        if b[i] == b'%' && i + 2 < b.len() && hex(b[i + 1]).is_some() && hex(b[i + 2]).is_some() {
+            out.push((hex(b[i + 1]).unwrap_or(0) * 16 + hex(b[i + 2]).unwrap_or(0)) as u8);
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// `S3Action(GetObjectAction)` (RustFS 1.0.4's log) or `s3:GetObject` to `GetObject`.
@@ -163,7 +199,8 @@ pub fn parse_denial(line: &str) -> Option<Raw> {
     })
 }
 
-/// The records of an S3 event notification (`{"Records": [...]}`): event name, bucket, key, size, identity.
+/// The records of an S3 event notification (`{"Records": [...]}`, RustFS 1.0.4 adds `EventName` and `Key`
+/// beside it): event name, bucket, percent-decoded key, size, identity.
 pub fn parse_notification(body: &str) -> Vec<Raw> {
     let Ok(v) = serde_json::from_str::<Value>(body.trim()) else { return Vec::new() };
     let recs = v["Records"].as_array().cloned().unwrap_or_else(|| if v.is_object() { vec![v.clone()] } else { Vec::new() });
@@ -174,7 +211,7 @@ pub fn parse_notification(body: &str) -> Vec<Raw> {
             Some(Raw {
                 access_key: r["userIdentity"]["principalId"].as_str().unwrap_or_default().to_owned(),
                 bucket,
-                object: r["s3"]["object"]["key"].as_str().map(str::to_owned),
+                object: r["s3"]["object"]["key"].as_str().map(percent_decode),
                 op,
                 status: Some(200),
                 bytes: r["s3"]["object"]["size"].as_u64().unwrap_or(0),
@@ -220,5 +257,24 @@ mod tests {
         assert_eq!(v.len(), 2);
         assert_eq!((v[0].op.as_str(), v[0].bytes, v[0].object.as_deref()), ("ObjectCreated:Put", 7, Some("k")));
         assert!(parse_notification("garbage").is_empty());
+    }
+
+    #[test]
+    fn audit_records_captured_from_rustfs_1_0_4_are_read() {
+        let put = r#"{"EventName":"s3:ObjectCreated:Put","Key":"auditbkt/s3:PutObject","Records":[{"version":"1.0","time":1794117164509,"event":"s3:ObjectCreated:Put","trigger":"s3:PutObject","api":{"name":"s3:PutObject","bucket":"auditbkt","object":"k/obj.txt","status":"success","status_code":200,"time_to_response":"93.66ms","timeToResponseInNS":"93659887"},"remotehost":"127.0.0.1","requestID":"r1","userAgent":"curl/8.18.0","requestPath":"/auditbkt/k/obj.txt","requestHost":"127.0.0.1:19400","requestQuery":{"authorization":"***redacted***"},"responseHeader":{},"accessKey":"AK1"}]}"#;
+        let r = parse_audit(put).unwrap();
+        assert_eq!((r.op.as_str(), r.bucket.as_str(), r.object.as_deref(), r.status, r.access_key.as_str()), ("PutObject", "auditbkt", Some("k/obj.txt"), Some(200), "AK1"));
+        let mk = r#"{"EventName":"s3:BucketCreated:*","Key":"auditbkt/s3:CreateBucket","Records":[{"event":"s3:BucketCreated:*","trigger":"s3:CreateBucket","api":{"name":"s3:CreateBucket","bucket":"auditbkt","status":"success","status_code":200},"accessKey":"AK1"}]}"#;
+        let r = parse_audit(mk).unwrap();
+        assert_eq!((r.op.as_str(), r.object, r.status), ("CreateBucket", None, Some(200)));
+    }
+
+    #[test]
+    fn a_notification_captured_from_rustfs_1_0_4_is_read_and_its_key_decoded() {
+        let b = r#"{"EventName":"s3:ObjectCreated:Put","Key":"auditbkt/c/obj.txt","Records":[{"eventVersion":"2.1","eventSource":"rustfs:s3","eventTime":"2026-11-08T05:48:46.452Z","eventName":"s3:ObjectCreated:Put","userIdentity":{"principalId":"AK1"},"s3":{"s3SchemaVersion":"1.0","configurationId":"Config","bucket":{"name":"auditbkt","ownerIdentity":{"principalId":"AK1"},"arn":"arn:aws:s3:::auditbkt"},"object":{"key":"c%2Fobj%20x.txt","size":6,"eTag":"b1946ac92492d2347c6235b4d2611184","sequencer":"18E5FBD6C446E271"}}}]}"#;
+        let v = parse_notification(b);
+        assert_eq!(v.len(), 1);
+        assert_eq!((v[0].op.as_str(), v[0].bucket.as_str(), v[0].object.as_deref(), v[0].bytes, v[0].access_key.as_str()), ("ObjectCreated:Put", "auditbkt", Some("c/obj x.txt"), 6, "AK1"));
+        assert_eq!(percent_decode("100%"), "100%", "a bare percent stays");
     }
 }

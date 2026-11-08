@@ -8,8 +8,18 @@ use crate::name::StoreName;
 
 fn actions(a: Access) -> Vec<&'static str> {
     let mut v = vec!["s3:GetObject", "s3:ListBucket", "s3:GetBucketLocation"];
-    if a >= Access::Write {
-        v.extend(["s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"]);
+    let put = ["s3:PutObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"];
+    match a {
+        Access::Read => {}
+        // CI: put, never delete. Overwrite is refused by the service (write-once); RustFS IAM
+        // has no condition for it, so a direct S3 call with the key could still overwrite.
+        Access::Append => v.extend(put),
+        // The sweeper: delete, never put.
+        Access::Sweep => v.push("s3:DeleteObject"),
+        Access::Write | Access::Admin => {
+            v.extend(put);
+            v.push("s3:DeleteObject");
+        }
     }
     v
 }
@@ -50,5 +60,20 @@ mod tests {
         assert!(acts.contains(&"s3:GetObject") && !acts.contains(&"s3:PutObject"));
         assert_eq!(st[0]["Resource"][0], "arn:aws:s3:::n-n1");
         assert!(for_grants(&[g(&s, Access::Write, false)])["Statement"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn ci_appends_the_sweeper_deletes_and_neither_does_the_others_job() {
+        let s = StoreName::release("m", "01HZX3K9Q5M2N7P8R4T6V0WABC", "stable").unwrap().to_string();
+        let acts = |a| {
+            let p = for_grants(&[g(&s, a, true)]);
+            p["Statement"][0]["Action"].as_array().unwrap().iter().filter_map(Value::as_str).map(str::to_owned).collect::<Vec<_>>()
+        };
+        let ci = acts(Access::Append);
+        assert!(ci.contains(&"s3:PutObject".into()) && !ci.contains(&"s3:DeleteObject".into()));
+        let sw = acts(Access::Sweep);
+        assert!(sw.contains(&"s3:DeleteObject".into()) && !sw.contains(&"s3:PutObject".into()) && sw.contains(&"s3:GetObject".into()));
+        let w = acts(Access::Write);
+        assert!(w.contains(&"s3:PutObject".into()) && w.contains(&"s3:DeleteObject".into()));
     }
 }
