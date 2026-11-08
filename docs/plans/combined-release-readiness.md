@@ -213,7 +213,7 @@ All live runs were noisy (load 3 to 13), so no timing from them counts as a desi
 | PG end to end for the scoped view (weftos-pg, Linux bwrap side, five e2e checks on `weftos-ci`) | **not started** | status page section 9 |
 | `weaver store drive` and `view` against a live daemon | **not run**. No-install rule stands | status page section 9 |
 | S3 on a real edge node; S4 wired into `release.sh`; S5 as a second RustFS on PG | **not run** | next-steps 7, steps 9, 10, 13 |
-| Tapestry: 16 Linux sandbox tests on PG | **not run** | Tapestry lead, message 2026-11-08 PM |
+| Tapestry: 16 Linux sandbox tests on PG | **done** 2026-11-08 PM: items 9+10 pass on photo-gallery, 104/104, 0 skips, all 16 Linux-only tests ok, no EPERM (commit eee49baf on `tapestry/p3-scoped-view`; `docs/tapestry/p3-linux-sandbox-pg-results-2026-11-08.md`; not verified from this Mac) | Tapestry lead, message 2026-11-08 13:12 |
 | Tapestry: loopback onboarding e2e | **done** 2026-11-08 PM, green in both probe roles (Tapestry lead delta; evidence `docs/tapestry/p3-workspace-loopback.md` on `tapestry/p3-item4-onboarding` and logs in `~/tapestry-p3-onboarding-logs-20261108/`; not verified from this Mac) | same |
 | Tapestry: Phase 1 gates (a), (b), (c) on the final integration build | **not run** | same |
 | WeftOS: the two daemon-boot tests under nextest on the real branch | **not run** (fail under nextest only, pass under cargo test, per the Tapestry lead) | same |
@@ -235,7 +235,7 @@ nothing pushed. I did not read it.
 | c | `tapestry/p3-test-hub` | 17c43e99 | Test-only loopback hub crate | In no shipped binary |
 | d | Docs: `p3-merge-rehearsal` e4146f9f, `p3-decision-memo` d4808a46, `p3-workspace-loopback` 23349d5d, `p3-prep-docs` cc216e50 | | Docs only | |
 | HELD | `tapestry/p2-r11-release` | cb216887 | R11 self-update and release workflow | Do not merge |
-| NO | `feat/weft-computer-hub` | 99bad03c / b1b2726c0 | Superseded D1 prep branch | Must NOT land |
+| BACKUP | `feat/weft-computer-hub` | 99bad03c / b1b2726c0 | Approved backup plan: unmerged prep that stays unmerged while Phase 3 D1 is unanswered; work continues on it (owner clarification 2026-11-08 13:12, via the Tapestry lead) | Stays unmerged for this release unless the owner answers D1 in its favour |
 
 ### WeftOS-side commits, checked with git
 
