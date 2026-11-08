@@ -539,3 +539,14 @@ fn debug_output_of_transport_types_carries_no_secrets() {
         assert!(!all.contains(bad), "{bad} leaked: {all}");
     }
 }
+
+#[test]
+fn presign_refuses_keys_that_would_be_policy_wildcards() {
+    let r = rig(&["wasm-1"], &[]);
+    pair(&r, 1, "wasm-1");
+    for k in ["a*", "dir/?x", "${aws:username}"] {
+        let e = run(r.broker.lease("wasm-1", LeaseRequest::PresignPut { key: k.into(), ttl_secs: 60 })).unwrap_err();
+        assert_eq!(e.code, RefusalCode::BadRequest, "{k}");
+    }
+    assert!(run(r.broker.lease("wasm-1", LeaseRequest::PresignPut { key: "plain/k.bin".into(), ttl_secs: 60 })).is_ok());
+}

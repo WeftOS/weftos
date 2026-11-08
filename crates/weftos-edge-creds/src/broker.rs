@@ -197,6 +197,11 @@ impl<M: StsMinter, G: GrantCheck, A: AuditSink, C: Clock> EdgeBroker<M, G, A, C>
         if let Err(NameError::Key | NameError::NodeId) = validate_key(key) {
             return Err(self.deny(node, action, RefusalCode::BadRequest, "invalid object key"));
         }
+        // `*`, `?` and `$` mean something in a policy Resource, so the one-object
+        // session would cover more than the one object. Plain keys only.
+        if key.contains(['*', '?', '$']) {
+            return Err(self.deny(node, action, RefusalCode::BadRequest, "invalid object key"));
+        }
         let bucket = node_bucket(node).map_err(|_| refuse(RefusalCode::BadRequest, "invalid node id"))?;
         let ttl = ttl_secs.clamp(1, self.cfg.max_presign_secs.min(MAX_LEASE_TTL_SECS));
         // The session behind the URL is scoped to this one object and action.

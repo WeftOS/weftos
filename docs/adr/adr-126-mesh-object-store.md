@@ -312,11 +312,12 @@ A read-only review of the crate found four defects, all fixed with a test that f
 - The 900 s cap was enforced only on the edge. The broker now refuses any session whose expiry is above `now + 900 + 60`, whatever the store returned.
 - Revoke could fail open: disabling the RustFS user looked up the node key first, so a missing key left existing sessions alive. The disable now names the principal directly and signs with the admin key.
 - `Debug` on `HttpRequest`, `HttpResponse` and `Presigned` printed session tokens, the node secret on the add-user path and presigned URLs. They now print shape only.
+- Presigned keys containing `*`, `?` or `$` are refused, since they would widen the one-object session policy.
 - Refusals sent to the edge carried store error text. The edge now sees "credential service unavailable"; the detail goes to the audit sink.
 
 Node secrets come from `keygen` (160 bits of host entropy, constant input refused; `generate_node_key` behind the `keygen` feature).
 
-Open from the review, not fixed: a presigned session policy admits `*` and `?` in the object key (still inside the node's bucket); a grant event with `seq = u64::MAX` freezes the ledger, so only chain-authenticated events may reach `apply`; reusing a node id after unpair inherits the old bucket unless S1 archives it.
+Open from the review, not fixed: a grant event with `seq = u64::MAX` freezes the ledger, so only chain-authenticated events may reach `apply`; reusing a node id after unpair inherits the old bucket unless S1 archives it.
 
 ## Consequences
 
