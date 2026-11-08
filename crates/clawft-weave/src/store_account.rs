@@ -24,7 +24,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Component, Path, PathBuf};
 
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 
 use crate::weftos_uri::{Authority, Kind, WeftosUri};
 
@@ -311,7 +311,8 @@ impl StoreGate {
     pub fn install_xmesh(&mut self, g: CrossMeshGrant, now: u64) -> Result<(), Refused> {
         let key = self.mesh_keys.get(&g.owner_mesh).ok_or(Refused)?;
         let sig = Signature::from_bytes(&g.sig);
-        key.verify(&g.signing_bytes(), &sig).map_err(|_| Refused)?;
+        // verify_strict: a small-order (weak) trusted key would accept a trivial signature under plain verify.
+        key.verify_strict(&g.signing_bytes(), &sig).map_err(|_| Refused)?;
         let name = WeftosUri::parse(&g.store).map_err(|_| Refused)?;
         let ok_ttl = g.expires_at > g.issued_at && g.expires_at - g.issued_at <= MAX_GRANT_TTL_SECS;
         // Receiving side: the owner is another mesh. Owning side: the owner is us.

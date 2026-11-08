@@ -351,3 +351,43 @@ fn every_gate_event_round_trips_through_json_and_replays() {
     assert!(GateEvent::from_json("nope", &serde_json::json!({})).is_err());
     assert!(GateEvent::from_json("grant", &serde_json::json!({"store": "x"})).is_err());
 }
+
+/// A small-order public key (the identity point) with the trivial signature (R = identity, s = 0).
+/// Plain `verify` accepts it for any message; `verify_strict` must not.
+fn weak_grant(owner: [u8; 32], receiver: [u8; 32], store: &str) -> (CrossMeshGrant, VerifyingKey) {
+    use ed25519_dalek::Verifier;
+    let mut identity = [0u8; 32];
+    identity[0] = 1;
+    let weak = VerifyingKey::from_bytes(&identity).unwrap();
+    let mut g = CrossMeshGrant {
+        owner_mesh: owner, receiver_mesh: receiver, store: store.into(), access: Access::Admin,
+        seq: 1, issued_at: NOW - 10, expires_at: NOW + 100, sig: [0; 64],
+    };
+    g.sig[..32].copy_from_slice(&identity);
+    // The premise: this really is a signature plain verify would take.
+    assert!(weak.verify(&g.signing_bytes(), &Signature::from_bytes(&g.sig)).is_ok(), "premise");
+    (g, weak)
+}
+
+#[test]
+fn a_small_order_trusted_key_cannot_install_a_grant_with_a_trivial_signature() {
+    let mut g = gate();
+    let (forged, weak) = weak_grant(mesh(2), mesh(1), &name(mesh(2), ULID));
+    g.trust_mesh(mesh(2), weak);
+    assert!(g.install_xmesh(forged, NOW).is_err());
+    // The same key and gate still take a properly signed grant from a normal key.
+    g.trust_mesh(mesh(3), key(3).verifying_key());
+    let ok = CrossMeshGrant::sign(&key(3), mesh(3), mesh(1), &name(mesh(3), ULID), Access::Read, 1, NOW - 10, NOW + 100);
+    assert!(g.install_xmesh(ok, NOW).is_ok());
+}
+
+#[test]
+fn a_saved_state_carrying_a_weak_signature_does_not_restore_the_grant() {
+    let mut g = gate();
+    let (forged, weak) = weak_grant(mesh(2), mesh(1), &name(mesh(2), ULID));
+    g.trust_mesh(mesh(2), weak);
+    let mut state = g.state_json(NOW);
+    state["xmesh"] = serde_json::json!([forged.to_json()]);
+    let back = StoreGate::from_state_json(Authority(mesh(1)), "acme", &state).unwrap();
+    assert!(back.xmesh.is_empty(), "the forged grant was dropped on load");
+}

@@ -247,7 +247,7 @@ impl StoreGate {
             let grant = x.into_grant()?;
             // A grant that no longer verifies against a trusted key is not carried over.
             let verifies = g.mesh_keys.get(&grant.owner_mesh).is_some_and(|k| {
-                k.verify(&grant.signing_bytes(), &Signature::from_bytes(&grant.sig)).is_ok()
+                k.verify_strict(&grant.signing_bytes(), &Signature::from_bytes(&grant.sig)).is_ok()
             });
             if verifies {
                 g.xmesh.push(grant);
