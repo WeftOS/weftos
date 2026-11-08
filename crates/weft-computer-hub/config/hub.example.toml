@@ -1,0 +1,26 @@
+# weft-hub configuration (owner decision D2: the machine list is data).
+# Copy to a private location. Key files are hex, >= 32 bytes, mode 0600:
+#   weft-hub keygen --out ~/.weftos/hub/xpc-mint.key
+
+[listen]
+# Loopback by default. Anything else also needs `serve --allow-non-loopback`.
+addr = "127.0.0.1:9490"
+
+[auth]
+# Longest pass-key lifetime the hub accepts (seconds).
+max_ttl_secs = 86400
+# jti values to refuse even though signature and expiry are good.
+revoked_jti = []
+
+# A trusted minter. host_kind (desktop | container | sandbox) is what the hub
+# reports for every server connected under this minter's keys.
+[[auth.minters]]
+id = "weftos-xpc"
+host_kind = "desktop"
+key_file = "xpc-mint.key"
+
+# Machines allowed to register as tool servers. xpc is the only one for now.
+[[machines]]
+id = "xpc"
+description = "aepod-xpc (RTX 4070, Windows + WSL)"
+minter = "weftos-xpc"

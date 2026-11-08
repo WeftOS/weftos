@@ -1,0 +1,6 @@
+# Local build override: the fork is not pushed, so the git dependency in
+# Cargo.toml cannot be fetched yet. Point it at the local checkout.
+# Remove this file (or the [patch] table) once the fork rev is on GitHub.
+[patch."https://github.com/WeftOS/grok-build"]
+xai-tool-protocol = { path = "/Volumes/ai-models/research/tapestry/crates/common/xai-tool-protocol" }
+xai-tool-types = { path = "/Volumes/ai-models/research/tapestry/crates/common/xai-tool-types" }

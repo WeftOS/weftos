@@ -1,0 +1,33 @@
+# Weaver-supervised definition for weft-hub, in the AppManifest shape
+# (crates/clawft-kernel/src/app.rs: ServiceSpec = name, command, ports, env,
+# health_endpoint). `weft-hub print-app` prints this file.
+#
+# Restart behaviour is the weaver workload runtime's managed-process policy
+# (crates/clawft-kernel/src/workload_runtime/infer/config.rs RestartPolicy:
+# 2 s base, doubling, 60 s cap, 5 restarts, 60 s stable window). Nothing here
+# overrides it.
+name = "weft-hub"
+version = "0.1.0"
+description = "WeftOS computer hub for Tapestry (loopback only)"
+license = "Apache-2.0"
+
+[capabilities]
+# Listens on loopback (enforced by the hub); dials nothing. `network` means
+# "needs sockets", so it is true for the listener.
+network = true
+shell = false
+filesystem = ["~/.weftos/hub"]
+
+[[services]]
+name = "weft-hub"
+# argv, not a shell string. With no flags `serve` reads
+# $HOME/.weftos/hub/hub.toml and binds the address in it (loopback default).
+command = "weft-hub serve"
+
+[[services.ports]]
+host_port = 9490
+container_port = 9490
+protocol = "tcp"
+
+[services.env]
+RUST_LOG = "info"
