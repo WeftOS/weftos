@@ -147,6 +147,19 @@ streaming get (or a server-side checksum) from S1.
 - Still open on S1: delete-marker expiry in the lifecycle rule, a streaming or ranged get, a retention read on the
   service route (would remove the blind ask), the sweeper put grant.
 
+## Keys on a Windows RustFS host (weftos-drive, 2026-11-08)
+
+weftos-drive found that RustFS on Windows rejects keys containing `: * ? " | < >` and folds case. Every key S4 writes was
+checked: `blobs/<64 lowercase hex>`, `quarantine/<64 lowercase hex>`, `releases/<build id>/manifest.json`, `tombstones/<build id>`.
+The hashes are safe. Artifact paths never become keys (they live inside the signed manifest). The channel goes into the bucket name
+only as a hash, and the project id is lowercased there. The one free-text part of a key was the **build id**, which allowed
+uppercase and a trailing dot: `Build1` and `build1` are two objects on Linux and one on a case-folding host, `x.` becomes `x`,
+and `con`/`nul`/`com1` cannot be files. `validate_build_id` now refuses all of those (lowercase only, no trailing `.`, no Windows
+device names); uppercase is refused rather than escaped because an escape would give one build id different keys on different hosts.
+`crates/weftos-release/tests/key_portability.rs` checks a publish, tombstone and sweep cycle (every key ever written) against the
+Windows rules and the case-fold rule, and that hostile ids are refused before anything is written. Other lanes' keys (S1 archive keys
+`<bucket>@<ms>/<key>`, which carry the writer's key) are not covered here.
+
 ## Not verified
 
 - Whether lifecycle respects a retention date at real day scale (only a sped-up scanner against wall-clock dates was seen), and whether it expires a version once its retention has lapsed.

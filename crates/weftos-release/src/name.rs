@@ -62,17 +62,34 @@ pub fn validate_channel(channel: &str) -> Result<()> {
     }
 }
 
-/// 1-128 of `[A-Za-z0-9._-]`, not starting with `.` or `-`, no `..`.
+/// Names Windows will not make files of, with or without an extension (`con`, `con.txt`).
+const WINDOWS_DEVICE_NAMES: [&str; 22] = [
+    "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9", "lpt1", "lpt2", "lpt3", "lpt4",
+    "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
+];
+
+/// 1-128 of `[a-z0-9._-]`, not starting with `.` or `-`, not ending with `.`, no `..`, and not a Windows
+/// device name. A release key is `releases/<id>/manifest.json` and `tombstones/<id>`, and RustFS on a
+/// Windows host stores a key as a file: it rejects `: * ? " | < >`, folds case (so `Build1` and `build1`
+/// would be one object there and two on Linux), drops a trailing `.`, and cannot make `con` or `nul`.
+/// Lowercase-only plus these rules makes every id safe on both. (Uppercase is refused rather than escaped:
+/// an escape would make the same build id name two different keys depending on the host.)
 pub fn validate_build_id(id: &str) -> Result<()> {
+    let stem = id.split('.').next().unwrap_or("");
     let ok = !id.is_empty()
         && id.len() <= 128
-        && id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '-' | '_' | '.'))
         && !id.starts_with(['.', '-'])
-        && !id.contains("..");
+        && !id.ends_with('.')
+        && !id.contains("..")
+        && !WINDOWS_DEVICE_NAMES.contains(&stem);
     if ok {
         Ok(())
     } else {
-        Err(invalid("build id", "1-128 of letters, digits, '-', '_', '.', not starting with '.' or '-'"))
+        Err(invalid(
+            "build id",
+            "1-128 lowercase letters, digits, '-', '_', '.', not starting with '.' or '-', not ending with '.', not a Windows device name (con, nul, com1...)",
+        ))
     }
 }
 
