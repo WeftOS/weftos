@@ -147,8 +147,11 @@ pub async fn run(args: ReleaseArgs) -> anyhow::Result<()> {
             let name = parse_store(&store)?;
             let signer = load_signer(&signing_key)?;
             let artifacts = collect_artifacts(&dir)?;
-            let cfg = weftos_store::RustfsConfig::from_env_file(&s3_env, std::env::temp_dir().join("weaver-release-unused"))?;
-            let objects = Arc::new(weftos_store::RustfsBackend::new(cfg)?);
+            // The backend wants a secrets dir for admin key issuance, which a publish never uses.
+            let scratch = tempfile::tempdir()?;
+            let cfg = weftos_store::RustfsConfig::from_env_file(&s3_env, scratch.path().join("unused"))?;
+            // Its HTTP client is blocking, so build it (and, via StoreBackend, drop it) off the async threads.
+            let objects = Arc::new(tokio::task::spawn_blocking(move || weftos_store::RustfsBackend::new(cfg)).await??);
             let backend = StoreBackend::for_release(objects, &name)?;
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs();
             let req = PublishRequest { build_id, source_rev, created_at: now, builder, artifacts };
@@ -176,6 +179,7 @@ pub async fn run(args: ReleaseArgs) -> anyhow::Result<()> {
 mod tests {
     use super::*;
     use weftos_release::{MemoryBackend, ReleaseError};
+    use std::sync::Arc;
 
     const ULID: &str = "01JBXZ3N5C8QW4M2R7T9V6YH0K";
 
@@ -238,5 +242,56 @@ mod tests {
         assert_eq!(r.outcome, PublishOutcome::AlreadyPresent);
         let e = publish_dir(&be, &st, &signer, req(a(b"EVIL"), "b1"), 1_000).await.unwrap_err();
         assert!(matches!(e.downcast_ref::<ReleaseError>(), Some(ReleaseError::AlreadyPublished { .. })), "{e}");
+    }
+
+    /// Against a THROWAWAY RustFS: `WEFTOS_RELEASE_TEST_RUSTFS_ENV=<env file> cargo test -p clawft-weave
+    /// live_publish -- --ignored`. Creates its own bucket; never point it at PG.
+    #[tokio::test]
+    #[ignore = "needs a throwaway RustFS: WEFTOS_RELEASE_TEST_RUSTFS_ENV"]
+    async fn live_publish_through_the_verb() {
+        use std::os::unix::fs::PermissionsExt;
+        let env = std::env::var("WEFTOS_RELEASE_TEST_RUSTFS_ENV").expect("WEFTOS_RELEASE_TEST_RUSTFS_ENV");
+        let d = tempfile::tempdir().unwrap();
+        let dist = d.path().join("dist");
+        std::fs::create_dir_all(dist.join("bin")).unwrap();
+        std::fs::write(dist.join("bin/weaver"), vec![5u8; 1 << 20]).unwrap();
+        std::fs::write(dist.join("SHA256SUMS"), b"sums").unwrap();
+        let key = d.path().join("k.json");
+        std::fs::write(&key, serde_json::json!({"ed25519_seed": "07".repeat(32), "ml_dsa65_seed": "09".repeat(32)}).to_string()).unwrap();
+        std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let channel = format!("t{}", &ulid::Ulid::new().to_string().to_lowercase()[16..]);
+        let name = format!("weftos://m/projects/{ULID}/releases/{channel}/store");
+        // make the bucket as the root credential
+        let st = parse_store(&name).unwrap();
+        let (envp, root_dir) = (std::path::PathBuf::from(&env), d.path().join("root"));
+        let bucket = StoreBackend::<weftos_store::RustfsBackend>::for_release(
+            Arc::new(tokio::task::spawn_blocking(move || {
+                weftos_store::RustfsBackend::new(weftos_store::RustfsConfig::from_env_file(&envp, root_dir).unwrap())
+            }).await.unwrap().unwrap()),
+            &st,
+        ).unwrap();
+        let b = bucket.bucket().to_string();
+        let envp = std::path::PathBuf::from(&env);
+        let root_dir = d.path().join("root2");
+        tokio::task::spawn_blocking(move || {
+            use weftos_store::AdminBackend;
+            weftos_store::RustfsBackend::new(weftos_store::RustfsConfig::from_env_file(&envp, root_dir).unwrap())
+                .unwrap()
+                .create_bucket(&b, &[])
+        }).await.unwrap().unwrap();
+        drop(bucket);
+
+        let go = |id: &str, bytes_dir: &Path| ReleaseArgs {
+            action: ReleaseAction::Publish {
+                store: name.clone(), build_id: id.into(), source_rev: "r".into(), dir: bytes_dir.to_path_buf(),
+                builder: "ci".into(), signing_key: key.clone(), s3_env: PathBuf::from(&env), json: true,
+            },
+        };
+        run(go("b1", &dist)).await.unwrap();
+        run(go("b1", &dist)).await.unwrap(); // identical retry
+        std::fs::write(dist.join("SHA256SUMS"), b"REBUILT").unwrap();
+        let e = run(go("b1", &dist)).await.err().expect("a rebuild must be refused");
+        assert!(e.to_string().contains("already"), "{e}");
     }
 }

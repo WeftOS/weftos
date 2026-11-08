@@ -17,14 +17,30 @@ use crate::name::ReleaseStoreName;
 /// Hand CI an adapter built on a credential whose policy lacks DeleteObject and `tombstones/*` put
 /// (ADR-126 section 3); the sweeper gets its own, wider one. Both use this same type.
 pub struct StoreBackend<O: ObjectBackend + 'static> {
-    objects: Arc<O>,
+    /// `None` only while dropping.
+    objects: Option<Arc<O>>,
     bucket: String,
+}
+
+/// S1's RustFS transport owns a blocking HTTP client, and tokio panics if one is dropped on an
+/// async thread. Hand the last reference to the blocking pool instead.
+impl<O: ObjectBackend + 'static> Drop for StoreBackend<O> {
+    fn drop(&mut self) {
+        if let Some(o) = self.objects.take() {
+            match tokio::runtime::Handle::try_current() {
+                Ok(h) => {
+                    drop(h.spawn_blocking(move || drop(o)));
+                }
+                Err(_) => drop(o),
+            }
+        }
+    }
 }
 
 impl<O: ObjectBackend + 'static> StoreBackend<O> {
     /// Use an explicit bucket.
     pub fn new(objects: Arc<O>, bucket: impl Into<String>) -> Self {
-        Self { objects, bucket: bucket.into() }
+        Self { objects: Some(objects), bucket: bucket.into() }
     }
 
     /// Use the bucket S1 assigns to this release store's name.
@@ -41,7 +57,8 @@ impl<O: ObjectBackend + 'static> StoreBackend<O> {
         &self,
         f: impl FnOnce(&O, &str) -> Result<T, StoreErr> + Send + 'static,
     ) -> Result<T, StoreErr> {
-        let (o, b) = (self.objects.clone(), self.bucket.clone());
+        let o = self.objects.clone().expect("present until dropped");
+        let b = self.bucket.clone();
         tokio::task::spawn_blocking(move || f(&o, &b))
             .await
             .map_err(|e| StoreErr::Io(format!("blocking task: {e}")))?
