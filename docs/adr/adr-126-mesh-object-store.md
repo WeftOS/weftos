@@ -361,7 +361,7 @@ Ed25519 verification audit: the S3 crate and ledger verify no signatures (grant 
 
 **Spike results.** The ledger now keeps `events_head`; `GrantLedger::snapshot`, `signed_snapshot`, `restore` and `verify_against_history` exist. Seven tests: snapshot plus tail equals full replay; a pre-snapshot event in the tail is refused; a follower refuses an edited, re-hashed, wrong-scope, rewound or foreign-signed snapshot; a follower with history catches a signed but false snapshot; the head catches a different history with the same state; the head depends on order and content; 1000 pair and unpair events fold to an empty snapshot. Each check was removed in turn and a test failed.
 
-**Loopback wiring and schedule (2026-11-08).** `loopback::LoopbackChain` (feature `loopback-chain`, or tests) is an in-memory, append-only stand-in for the chain: grant events and signed snapshots, no I/O, no clock, no live chain. It adds `append`, `snapshot_now`, `recover` (newest snapshot that passes the follower checks, then an older one, then a full replay while nothing is pruned), `archive` (copies the events to cold storage and requires them to reproduce the signed snapshot) and `prune` (only after `archive`, only up to the newest usable snapshot). `SnapshotSchedule` is the scheduled-snapshot option: **off by default**, `every_events(n)` and/or `every_secs(t)`, never due when nothing is new; the chain takes a snapshot on `append` only if the host built it with an enabled schedule. Nothing in the crate turns it on. Twelve tests; a forged newest snapshot falls back, a forged one after a prune is an error rather than a silent partial ledger, prune is refused without a matching archive, and the schedule defaults off. Five planted defects (schedule always due, prune without the archive check, unchecked newest snapshot, ignoring the pruned bound, archive without the history check) each fail a test. Still the chain owner's: the real signer, where the snapshot event sits, and the cadence to use.
+**Loopback wiring and schedule (2026-11-08).** `loopback::LoopbackChain` (feature `loopback-chain`, or tests) is an in-memory, append-only stand-in for the chain: grant events and signed snapshots, no I/O, no clock, no live chain. It adds `append`, `snapshot_now`, `recover` (newest snapshot that passes the follower checks, then an older one, then a full replay while nothing is pruned), `archive` (copies the events to cold storage and requires them to reproduce the signed snapshot) and `prune` (only after `archive`, only up to the newest usable snapshot). `SnapshotSchedule` is the scheduled-snapshot option: **off by default**, `every_events(n)` and/or `every_secs(t)`, never due when nothing is new; the chain takes a snapshot on `append` only if the host built it with an enabled schedule. Nothing in the crate turns it on. Twelve tests; a forged newest snapshot falls back, a forged one after a prune is an error rather than a silent partial ledger, prune is refused without a matching archive, and the schedule defaults off. Five planted defects (schedule always due, prune without the archive check, unchecked newest snapshot, ignoring the pruned bound, archive without the history check) each fail a test. `tick(now)` lets a host timer take a snapshot when only the time rule is due, and `compact(verifier, now)` is the owner-run snapshot, archive, prune sequence (the schedule never calls it; each stage refuses to go on if the one before did not hold). A repeat `snapshot_now` with nothing new returns the existing snapshot. A property test runs seven cadences against every compaction point and checks recovery equals a full replay. Still the chain owner's: the real signer, where the snapshot event sits, and the cadence to use (see the switches below).
 
 **Bucket name parity with S1 (2026-11-08).** S1's `StoreName::Node` (weftos-store `name.rs`) derives `n-<id>` with an id of lowercase `[a-z0-9-]`, at most 61 characters. This crate's `node_bucket` accepts a strict subset (at most 48, no leading or trailing dash), so every id it accepts maps to the bucket S1 derives; `node_bucket_agrees_with_s1s_store_name_rule_and_is_never_looser` pins that. When S1's crate lands as a dependency, replace `node_bucket` with `StoreName::bucket` and drop the extra restriction only if the owner wants ids S1 allows.
 
@@ -378,6 +378,43 @@ Ed25519 verification audit: the S3 crate and ledger verify no signatures (grant 
 **Chain-authenticated feed (2026-11-08).** S5 found that `GrantLedger::apply` trusts whatever it is handed. `authchain::ChainFeed` is now the way events reach the ledger: `ingest(&ChainGrantEvent)` accepts an event only if (1) its scope (a mesh, `grants/<mesh>`) is the feed's, (2) the signature verifies through the same `SnapshotVerifier` interface the snapshots use, under its own signing domain `weftos/grant-ledger/event/v1`, with the signature covering scope, event (so `seq` and `op`) and `prev_head`, (3) its `seq` is after the last applied one (otherwise `Replay`, harmless and safe to drop), and (4) `prev_head` equals the ledger's current `events_head` (otherwise `BrokenLink`: reordered, or an earlier event is missing, and nothing after the gap applies). The link reuses the head kept for compaction, so it survives a snapshot restore. Ingests are serialised, a refused event changes nothing, and `ingest_and_enforce` revokes at once when a node lost write, returning the failure if the RustFS disable fails. Ten tests; seven planted defects (no signature check, no link check, no scope check, signature without scope, signature without `prev_head`, no replay check, guard refusal returned as success) each fail a test; the `prev_head` case needed a new test (a relay rewriting `prev_head` to skip a revoke).
 
 What this settles and what it does not: a forged, edited, relabelled, replayed, reordered or gap-spliced event is refused, and a relay cannot add a far-future `seq` (it is signed). It does not stop a trusted signer from signing `seq = u64::MAX`; the seq guard does that (`OutOfRange`), and a feed that refuses such an event cannot follow a chain that moved on, which is deliberate: an operator has to look. Still the chain owner's: the real signer and its key trust, how the chain wraps a grant event (this crate defines `ChainGrantEvent` as the shape it needs), who is allowed to sign grants for which meshes, and the snapshot cadence and placement.
+
+### Chain-owner switches for S3 (2026-11-08)
+
+Three decisions are the chain owner's. Each is written as one switch with its options and S3's recommendation. S3 has decided none of them and no code depends on a choice: the crate takes the answer through the existing interfaces (`SnapshotVerifier`, `ChainGrantEvent`, `SnapshotSchedule`, `LoopbackChain`).
+
+**Switch 1. Who may sign grant events for which mesh.** Today the verifier only answers "did this signer sign these bytes". The feed also checks the scope, so a signer is currently trusted for every mesh the host's `SnapshotVerifier` accepts it for.
+
+| Option | What it means | Cost |
+|---|---|---|
+| A. One signer key per mesh | The verifier maps `scope` (`grants/<mesh>`) to exactly one trusted key. | Smallest blast radius. Key rotation is per mesh. |
+| B. The account's owner key signs all its meshes | One trusted key per account; scope must start with that account's meshes. | One key to protect. A leak affects every mesh of the account. |
+| C. Delegated signers | The owner key signs a short-lived delegation to a signer for named meshes; the verifier checks the delegation. | Most flexible. Needs a delegation event, expiry and revoke on the chain. |
+
+Recommendation: A to start. It needs no new chain event, and the `scope` field is already signed. Move to C when a mesh needs more than one signer.
+Flip: the owner names A, B or C; the change is in the host's `SnapshotVerifier` implementation, not in this crate.
+
+**Switch 2. Snapshot cadence.** `SnapshotSchedule` is off by default and supports `every_events(n)`, `every_secs(t)` or both.
+
+| Option | Setting | Effect |
+|---|---|---|
+| A. Stay off | No schedule; a person runs `snapshot_now` or `compact`. | No new load. A follower replays the whole chain. |
+| B. By count | `every_events(n)` | Tail length stays under `n`. The cost follows write rate. |
+| C. By count and time | `every_events(n).or_every_secs(t)` | Bounded tail and bounded staleness on a quiet mesh. |
+
+Recommendation: C, with `n` near the number of events a follower can replay in about a second and `t` of one day. S3 sets no numbers; they are the owner's. Pruning is never scheduled: `compact` (snapshot, archive, prune) is owner-run in every option.
+Flip: build the chain with `with_schedule(...)`; nothing else changes.
+
+**Switch 3. Where the signed snapshot lives.**
+
+| Option | Where | Cost |
+|---|---|---|
+| A. On the chain as an event | `store.snapshot`, signed by the grant signer. | One source of truth. Chain-level pruning needs a rule that refers to it. |
+| B. In the mesh store, with a hash on the chain | The snapshot is an object; the chain holds its hash and `through_seq`. | Keeps the chain small. Followers need store access to bootstrap. |
+| C. A and anchored `events_head` | As A, plus `events_head` in the existing chain anchor. | A fresh follower has a second source besides the signer. Needs the anchor to carry one more field. |
+
+Recommendation: A now, and C when the anchor can carry the field. B has a bootstrap loop (a follower needs a snapshot to learn which store to read), so S3 advises against it for grants.
+Flip: the owner names A, B or C; the wiring is `GrantLedger::signed_snapshot` on the chain side.
 
 ## Consequences
 

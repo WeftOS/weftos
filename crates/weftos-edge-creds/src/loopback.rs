@@ -45,6 +45,14 @@ pub struct Recovered {
     pub tail_len: usize,
 }
 
+/// What one `compact` call did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Compacted {
+    pub snapshot_taken: bool,
+    pub archived_through: u64,
+    pub pruned_entries: usize,
+}
+
 type Signer = Box<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync>;
 
 pub struct LoopbackChain {
@@ -120,10 +128,37 @@ impl LoopbackChain {
         Ok(applied)
     }
 
-    /// Fold, sign and append a snapshot of the current ledger.
+    /// Take a snapshot if the schedule says one is due. For a host timer: the
+    /// time rule can come due with no append. Off by default; `due` is never true when
+    /// nothing is new since the last snapshot. Returns whether one was taken.
+    pub fn tick(&mut self, now: u64) -> Result<bool, ChainError> {
+        if !self.schedule.due(self.since_snapshot, now.saturating_sub(self.last_snapshot_at)) {
+            return Ok(false);
+        }
+        self.snapshot_now(now)?;
+        Ok(true)
+    }
+
+    /// The owner-run compaction step: snapshot (if anything is new), archive,
+    /// then prune. The schedule never calls this; only a person or an
+    /// explicitly enabled job does. Each stage refuses to go on if the one
+    /// before it did not hold, so a failure leaves the chain whole.
+    pub fn compact(&mut self, verifier: &dyn SnapshotVerifier, now: u64) -> Result<Compacted, ChainError> {
+        let snapshot_taken = self.since_snapshot > 0 && self.snapshot_now(now).is_ok();
+        let archived_through = self.archive(verifier)?;
+        let pruned_entries = self.prune(verifier)?;
+        Ok(Compacted { snapshot_taken, archived_through, pruned_entries })
+    }
+
+    /// Fold, sign and append a snapshot of the current ledger. A second call
+    /// with nothing new returns the existing newest snapshot instead of
+    /// appending a duplicate.
     pub fn snapshot_now(&mut self, now: u64) -> Result<SignedSnapshot, ChainError> {
         if self.ledger.snapshot(&self.scope).through_seq == 0 {
             return Err(ChainError::Empty);
+        }
+        if let (0, Some(last)) = (self.since_snapshot, self.snapshots().last()) {
+            return Ok((*last).clone());
         }
         let signed = self.ledger.signed_snapshot(&self.scope, &self.signer_id, |m| (self.sign)(m));
         self.entries.push(ChainEntry::Snapshot(signed.clone()));

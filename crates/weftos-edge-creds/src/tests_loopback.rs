@@ -277,3 +277,120 @@ fn node_bucket_agrees_with_s1s_store_name_rule_and_is_never_looser() {
     assert!(validate_node_id("-a").is_err() && s1_accepts("-a"));
     assert!(validate_node_id(&"a".repeat(49)).is_err() && s1_accepts(&"a".repeat(49)));
 }
+
+// ---- the spike as tested code: tick, compact, cadence property ----
+
+#[test]
+fn tick_does_nothing_when_the_schedule_is_off_or_nothing_is_new() {
+    let mut off = chain();
+    feed(&mut off, 10, 1_000);
+    assert!(!off.tick(u64::MAX).unwrap(), "off means off, however late");
+    assert_eq!(snapshots(&off), 0);
+
+    let mut c = chain().with_schedule(SnapshotSchedule::every_secs(60));
+    assert!(!c.tick(10_000).unwrap(), "empty chain");
+    c.append(GrantEvent::pairing(1, MESH, "a"), 1_000).unwrap();
+    assert!(!c.tick(1_030).unwrap(), "not yet 60 s");
+    assert!(c.tick(1_061).unwrap(), "due by time, no append needed");
+    assert!(!c.tick(9_999).unwrap(), "nothing new since the snapshot");
+    assert_eq!(snapshots(&c), 1);
+    // The clock going backwards is not "due".
+    c.append(GrantEvent::pairing(2, MESH, "b"), 2_000).unwrap();
+    assert!(!c.tick(1).unwrap());
+}
+
+#[test]
+fn a_second_snapshot_with_nothing_new_is_the_same_snapshot_not_a_duplicate() {
+    let mut c = chain();
+    feed(&mut c, 6, 1_000);
+    let a = c.snapshot_now(2_000).unwrap();
+    let b = c.snapshot_now(3_000).unwrap();
+    assert_eq!(a, b);
+    assert_eq!(snapshots(&c), 1);
+}
+
+#[test]
+fn compact_is_never_run_by_the_schedule() {
+    let mut c = chain().with_schedule(SnapshotSchedule::every_events(2));
+    feed(&mut c, 20, 1_000);
+    assert!(snapshots(&c) > 0);
+    assert!(c.entries().iter().any(|e| matches!(e, ChainEntry::Grant(g) if g.seq == 1)), "a schedule snapshots; it does not prune");
+    assert_eq!(c.archive_mut().len(), 0, "and it does not archive");
+}
+
+#[test]
+fn compact_snapshots_archives_and_prunes_and_recovery_matches() {
+    let mut c = chain();
+    feed(&mut c, 30, 1_000);
+    let reference = full(&c).snapshot(SCOPE);
+    let report = c.compact(&Ring, 2_000).unwrap();
+    assert!(report.snapshot_taken && report.archived_through > 0 && report.pruned_entries > 0);
+    let r = c.recover(&Ring).unwrap();
+    assert_eq!(r.ledger.snapshot(SCOPE), reference);
+    assert_eq!(r.tail_len, 0);
+
+    // Again with nothing new: nothing to snapshot, nothing left to prune.
+    let again = c.compact(&Ring, 3_000).unwrap();
+    assert!(!again.snapshot_taken);
+    assert_eq!(again.pruned_entries, 0);
+}
+
+#[test]
+fn compact_on_an_empty_chain_or_with_a_wrong_verifier_changes_nothing() {
+    let mut empty = chain();
+    assert!(empty.compact(&Ring, 1).is_err());
+
+    struct Nobody;
+    impl SnapshotVerifier for Nobody {
+        fn verify(&self, _: &str, _: &[u8], _: &[u8]) -> bool {
+            false
+        }
+    }
+    let mut c = chain();
+    feed(&mut c, 10, 1_000);
+    let grants = |c: &LoopbackChain| c.entries().iter().filter(|e| matches!(e, ChainEntry::Grant(_))).count();
+    let n = grants(&c);
+    assert!(c.compact(&Nobody, 2_000).is_err(), "a verifier that trusts nobody archives and prunes nothing");
+    assert_eq!(c.archive_mut().len(), 0);
+    assert_eq!(grants(&c), n, "no grant event was removed");
+    assert_eq!(c.recover(&Ring).unwrap().ledger.snapshot(SCOPE), full(&c).snapshot(SCOPE));
+}
+
+#[test]
+fn compact_survives_a_restart_between_archive_and_prune() {
+    // Archive done, prune not yet: the chain is whole and a second compact finishes the job.
+    let mut c = chain();
+    feed(&mut c, 20, 1_000);
+    c.snapshot_now(2_000).unwrap();
+    c.archive(&Ring).unwrap();
+    let reference = full(&c).snapshot(SCOPE);
+    assert_eq!(c.recover(&Ring).unwrap().ledger.snapshot(SCOPE), reference);
+    let report = c.compact(&Ring, 3_000).unwrap();
+    assert!(report.pruned_entries > 0);
+    assert_eq!(c.recover(&Ring).unwrap().ledger.snapshot(SCOPE), reference);
+}
+
+#[test]
+fn any_cadence_and_any_compaction_point_recovers_the_same_ledger() {
+    // Property: for every schedule size and every point we compact at,
+    // recovery equals a full replay of everything ever appended.
+    let mut all: Vec<GrantEvent> = Vec::new();
+    for i in 0..12u64 {
+        let id = format!("n{}", i % 5);
+        all.push(if i % 3 == 2 { GrantEvent::unpair(i + 1, MESH, &id) } else { GrantEvent::pairing(i + 1, MESH, &id) });
+    }
+    let want = GrantLedger::replay(all.clone()).snapshot(SCOPE);
+    for every in [0u64, 1, 2, 3, 5, 12, 100] {
+        for compact_at in 0..=all.len() {
+            let mut c = chain().with_schedule(SnapshotSchedule::every_events(every));
+            for (i, ev) in all.iter().enumerate() {
+                if i == compact_at && i > 0 {
+                    let _ = c.compact(&Ring, 5_000 + i as u64);
+                }
+                c.append(ev.clone(), 1_000 + i as u64).unwrap();
+            }
+            let got = c.recover(&Ring).unwrap().ledger.snapshot(SCOPE);
+            assert_eq!(got, want, "every={every} compact_at={compact_at}");
+        }
+    }
+}
