@@ -78,33 +78,6 @@ async fn live_release_store_round_trip() {
     assert!(matches!(e, ReleaseError::Retired { .. }), "{e}");
 }
 
-fn creds(env: &Path) -> (String, String, String) {
-    let text = std::fs::read_to_string(env).unwrap();
-    let get = |k: &str| text.lines().find_map(|l| l.strip_prefix(&format!("{k}="))).unwrap().trim().to_string();
-    (get("MESH_S3_ENDPOINT"), get("MESH_S3_ACCESS_KEY"), get("MESH_S3_SECRET_KEY"))
-}
-
-/// One signed S3 call through curl: (status, body). Used to look at what the server actually holds.
-fn s3(env: &Path, method: &str, path: &str, extra: &[&str]) -> (String, String) {
-    let (ep, ak, sk) = creds(env);
-    let out = std::process::Command::new("curl")
-        .args(["-s", "-w", "\n%{http_code}", "-X", method, "--aws-sigv4", "aws:amz:us-east-1:s3", "--user"])
-        .arg(format!("{ak}:{sk}"))
-        .args(extra)
-        .arg(format!("{ep}{path}"))
-        .output()
-        .unwrap();
-    let t = String::from_utf8_lossy(&out.stdout).into_owned();
-    let (body, code) = t.rsplit_once('\n').unwrap_or(("", &t));
-    (code.trim().to_string(), body.to_string())
-}
-
-fn between<'a>(s: &'a str, a: &str, b: &str) -> &'a str {
-    let i = s.find(a).map(|i| i + a.len()).unwrap_or(0);
-    let j = s[i..].find(b).map(|j| i + j).unwrap_or(s.len());
-    &s[i..j]
-}
-
 /// The same flow on a versioned, Object-Lock bucket made through S1's `create_locked_bucket`, with
 /// a locked publisher and sweeper: a delete is a delete marker, so listings, conditional puts and
 /// the locked restore must all still hold, and the server must really hold the retention.
@@ -143,16 +116,22 @@ async fn live_release_store_on_a_locked_versioned_bucket() {
     let e = p.publish(rq("b1", now - 500, &[("bin/weaver", b"EVIL")]), now).await.unwrap_err();
     assert!(matches!(e, ReleaseError::AlreadyPublished { .. }), "{e}");
 
-    // the server really holds COMPLIANCE retention on the manifest, to roughly now + 2 days
-    let (code, body) = s3(env, "GET", &format!("/{bucket}/releases/b1/manifest.json?retention"), &[]);
-    assert_eq!(code, "200", "{body}");
-    assert!(body.contains("<Mode>COMPLIANCE</Mode>"), "{body}");
-    // ...and refuses to delete that version, bypass or not
-    let (_, versions) = s3(env, "GET", &format!("/{bucket}?versions&prefix=releases/b1/"), &["-H", "x-amz-bypass-governance-retention: true"]);
-    let vid = between(&versions, "<Version>", "</Version>");
-    let vid = between(vid, "<VersionId>", "</VersionId>").to_string();
-    let (code, body) = s3(env, "DELETE", &format!("/{bucket}/releases/b1/manifest.json?versionId={vid}"), &["-H", "x-amz-bypass-governance-retention: true"]);
-    assert_eq!(code, "403", "{body}");
+    // the server really holds COMPLIANCE retention on the manifest, to roughly now + 2 days,
+    // and refuses to delete that version, bypass or not (read back through S1's own calls)
+    let (o, bk) = (raw_objects.clone(), bucket.clone());
+    let (ret, del) = tokio::task::spawn_blocking(move || {
+        let key = "releases/b1/manifest.json";
+        use weftos_store::ObjectBackend as _;
+        let v = o.list_versions(&bk, "releases/b1/").unwrap().into_iter().find(|v| v.key == key && !v.is_delete_marker).expect("the manifest version");
+        let ret = o.get_retention(&bk, key, &v.version_id).unwrap();
+        (ret, o.delete_version(&bk, key, &v.version_id, true))
+    })
+    .await
+    .unwrap();
+    let ret = ret.expect("a retention on the manifest");
+    assert_eq!(ret.mode, weftos_store::LockMode::Compliance, "{ret:?}");
+    assert!(ret.until_unix_s >= now + 2 * 86_400 - 60 && ret.until_unix_s <= now + 2 * 86_400 + 60, "{ret:?}");
+    assert!(del.is_err(), "a COMPLIANCE version must refuse delete even with the bypass header: {del:?}");
 
     // retention: b1 retires (its manifest gets a delete marker; the locked version stays)
     let sw = Sweeper::new(&be, &st, &tk).with_lock(pol);
