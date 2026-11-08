@@ -105,3 +105,29 @@ async fn a_cog_calls_the_store_through_the_broker() {
     svc.set_grant_enabled(&n, &Principal::parse("cog:caller-1").unwrap(), false, "t").unwrap();
     assert!(ask(3, json!({"op": "get", "key": "k"})).await.is_err());
 }
+
+// ---- against a real RustFS ------------------------------------------------------------------
+// WEFTOS_STORE_TEST_RUSTFS_ENV names the env file of a THROWAWAY RustFS; run with `--ignored`.
+// Never point it at PG or a real mesh store.
+#[test]
+#[ignore = "needs a throwaway RustFS: WEFTOS_STORE_TEST_RUSTFS_ENV"]
+fn live_a_cog_uses_svc_store_on_rustfs_and_a_disabled_grant_is_refused() {
+    let env = std::env::var_os("WEFTOS_STORE_TEST_RUSTFS_ENV").expect("WEFTOS_STORE_TEST_RUSTFS_ENV");
+    let d = tempfile::tempdir().unwrap();
+    // A fresh ULID per run, so reruns never collide on a bucket.
+    let ulid = ulid::Ulid::new().to_string();
+    let svc = open_service("pg-live", d.path(), Arc::new(ExposureRegistry::new("pg-live")), None, Some(env.into())).unwrap();
+    let n = StoreName::project(&mesh_token(), &ulid).unwrap();
+    svc.ensure_store(&n, "t", Parties::defaults_for(&n)).unwrap();
+    let cog = Principal::parse("cog:live-1").unwrap();
+    let c = |b: serde_json::Value| call(&svc, "pg-live", "live-1", Some(&ulid), b);
+    assert!(c(json!({"op": "put", "key": "k.txt", "text": "no grant"})).is_err(), "no grant, no write");
+    svc.grant(&n, cog.clone(), Access::Write, "t").unwrap();
+    assert_eq!(c(json!({"op": "put", "key": "k.txt", "text": "hello"})).unwrap()["size"], 5);
+    assert_eq!(c(json!({"op": "get", "key": "k.txt"})).unwrap()["text"], "hello");
+    assert!(c(json!({"op": "put", "key": "k.txt", "text": "y", "if_none_match": true})).is_err());
+    svc.set_grant_enabled(&n, &cog, false, "t").unwrap();
+    assert!(c(json!({"op": "get", "key": "k.txt"})).is_err(), "a disabled grant refuses the next call");
+    svc.set_grant_enabled(&n, &cog, true, "t").unwrap();
+    c(json!({"op": "delete", "key": "k.txt"})).unwrap();
+}
