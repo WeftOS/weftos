@@ -29,7 +29,8 @@
 #
 # Env: WTS_WEAVER (default: weaver), WTS_AGF (default: ~/.claude/skills/agent-git-flow/scripts),
 #      WTS_DRY_RUN=1 print the weaver calls instead of running them, WTS_SLUG (default: branch
-#      with '/' -> '-'; else AGF_HOOK_SLUG), WTS_PROJECT (project ULID; default: from `weaver project id`).
+#      with '/' -> '--', colliding branches refused; AGF_HOOK_SLUG only if no branch),
+#      WTS_PROJECT (project ULID; default: from `weaver project id`).
 set -euo pipefail
 
 weaver=${WTS_WEAVER:-weaver}
@@ -39,7 +40,20 @@ strict=${WTS_STRICT:-0}
 warn() { printf 'worktree-store: %s\n' "$*" >&2; }
 die() { warn "$*"; exit 1; }
 
-slug_of() { printf '%s' "${WTS_SLUG:-${AGF_HOOK_SLUG:-$(git symbolic-ref --quiet --short HEAD | tr '/' '-')}}"; }
+# Slug = branch with '/' encoded as '--'. Injective: a branch containing '--', '-/' or '/-' is refused
+# (feat/x -> feat--x, so feat--x or a-/b vs a/-b would collide). WTS_SLUG overrides; AGF_HOOK_SLUG is
+# only trusted when no branch is known (the hook's own slug is the lossy '/' -> '-').
+slug_of() {
+    local b
+    if [ -n "${WTS_SLUG:-}" ]; then printf '%s' "$WTS_SLUG"; return; fi
+    b=${AGF_HOOK_BRANCH:-}
+    if [ -z "$b" ] && [ -n "${AGF_HOOK_SLUG:-}" ]; then printf '%s' "$AGF_HOOK_SLUG"; return; fi
+    [ -n "$b" ] || b=$(git symbolic-ref --quiet --short HEAD)
+    case "$b" in
+        *--*|*-/*|*/-*) die "branch '$b' has '--', '-/' or '/-', which would collide with another branch's store slug; set WTS_SLUG to choose the slug" ;;
+    esac
+    printf '%s' "${b//\//--}"
+}
 
 # Store halves of `new` and `land`: one code path for the verbs and for the agent-git-flow hooks.
 # store_create [--branch B] [--base C]: run inside the lane (cwd).
