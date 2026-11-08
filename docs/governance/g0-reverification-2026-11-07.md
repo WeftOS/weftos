@@ -64,6 +64,23 @@ gave Deny. Fixed in `fe59c46ab` (2026-10-23).
 - Not covered here: rule distribution and gossip merge order across nodes (G3, `bb4dff9d`), and
   overlay file merging beyond the existing `governance_overlay_tests` hash-order test.
 
+## Independent review (Fable, standing in for the Cogs Bot), 2026-11-07
+
+**Verdict: approve, no required changes.** Full write-up kept outside the repo
+(`~/weftos-fable-g0-verdict-20261107.txt`).
+- The set-only flag argument holds: every flag write is `= true` or `|=`, the only early return is the
+  rate-limit Deny, and the verdict is computed once after the loop.
+- The probe is adequate for G0. The gaps it lists (Critical severity, overlay-deny on browser and
+  binding-thread rules, the BP-001/BP-003 request shapes) all feed the same set-only flag code.
+- Outside `evaluate`: treat `evaluated_rules` as a set; the per-principal rate limiter fails closed.
+  Rule-set loading and G3 cross-node distribution were not reviewed.
+- Recommendation, not a G0 condition: deprecate `exo_resource_tree::permission::check` and drop the
+  `check_permission` re-export before R9 ships; remove it when card `eb1d6a2d` closes. Fable did not verify
+  the "no callers" claim. WeftOS Claude's search on 2026-11-07 found only the re-export at
+  `exo-resource-tree/src/lib.rs:63`.
+
+This review does not change the owner's sign-off and is not a new merge gate.
+
 ## Sign-off
 
 - [x] WeftOS Claude: verified, 2026-11-07 (this note)
