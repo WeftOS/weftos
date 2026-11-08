@@ -465,7 +465,16 @@ fn create_publish_claim_and_promote_are_in_the_activity_log_and_on_the_chain() {
     let ev: Vec<(String, String, String)> = sink.events().into_iter().filter(|e| e.op.starts_with("Worktree")).map(|e| (e.op, e.principal, e.outcome.text())).collect();
     assert_eq!(ev.len(), 5, "{ev:?}");
     assert!(ev.iter().any(|(op, who, out)| op == "WorktreeClaim" && who == "bob@m2" && out == "ok"));
-    assert!(ev.iter().any(|(op, who, out)| op == "WorktreeClaim" && who == "eve@m3" && out == format!("error:{e}")));
+    assert!(ev.iter().any(|(op, who, out)| op == "WorktreeClaim" && who == "eve@m3" && *out == format!("error:{e}")));
     assert!(ev.iter().any(|(op, _, _)| op == "WorktreePromote"));
 }
 
+#[test]
+fn overlaps_names_both_bases_so_callers_can_discount_it() {
+    let (_d, svc) = rig();
+    let src = tempfile::tempdir().unwrap();
+    published(&svc, "feat-a", src.path());
+    published(&svc, "feat-b", src.path());
+    let r = call(&svc, "overlaps", json!({"project": PROJ, "a": "feat-a", "b": "feat-b"}), 50).unwrap();
+    assert_eq!((r["base_a"].as_str(), r["base_b"].as_str(), r["reliable"].as_bool()), (Some("abc"), Some("abc"), Some(true)));
+}

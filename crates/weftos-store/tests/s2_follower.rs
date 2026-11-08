@@ -489,7 +489,9 @@ fn different_bases_mark_overlaps_as_unreliable() {
     m.base_commit = "other-base".into();
     b.put("w-c", MANIFEST_KEY, &serde_json::to_vec(&m).unwrap())
         .unwrap();
-    assert!(!overlaps(&b, &a, &c).unwrap().same_base);
+    let r = overlaps(&b, &a, &c).unwrap();
+    assert!(!r.same_base);
+    assert_eq!((r.base_a.as_str(), r.base_b.as_str()), ("base", "other-base"), "the report names both bases");
 }
 
 #[test]
@@ -502,6 +504,7 @@ fn follow_state_round_trips_and_rejects_corruption() {
     st.seen.insert(
         "a".into(),
         weftos_store::follower::Seen {
+            etag: None,
             bucket: "w-1-x".into(),
             head_commit: "abc".into(),
             state: weftos_store::share::State::Open,
@@ -674,4 +677,86 @@ fn a_registry_entry_pointing_at_another_projects_worktree_is_unreadable_not_foll
     forged.bucket = victim_bucket.clone();
     write_meta(&b, &victim_bucket, &WorktreeMeta { slug: "fix-typo".into(), project: PROJ_A.into(), branch: "x".into(), base_commit: "base".into(), created_ms: 0 }).unwrap();
     assert!(verify_entry(&b, &forged).is_err());
+}
+
+struct GetCounter<'a> {
+    inner: &'a weftos_store::FsBackend,
+    gets: std::sync::atomic::AtomicUsize,
+}
+impl ObjectBackend for GetCounter<'_> {
+    fn head(&self, b: &str, k: &str) -> R<Option<ObjectMeta>> {
+        ObjectBackend::head(self.inner, b, k)
+    }
+    fn get(&self, b: &str, k: &str) -> R<Option<Vec<u8>>> {
+        self.gets.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        ObjectBackend::get(self.inner, b, k)
+    }
+    fn put(&self, b: &str, k: &str, d: &[u8]) -> R<ObjectMeta> {
+        ObjectBackend::put(self.inner, b, k, d)
+    }
+    fn delete(&self, b: &str, k: &str) -> R<()> {
+        ObjectBackend::delete(self.inner, b, k)
+    }
+    fn list(&self, b: &str, p: &str) -> R<Vec<ObjectMeta>> {
+        ObjectBackend::list(self.inner, b, p)
+    }
+}
+
+#[test]
+fn a_poll_with_the_digest_fetches_only_entries_that_changed() {
+    use weftos_store::AdminBackend;
+    let d = tempfile::tempdir().unwrap();
+    let fs = weftos_store::FsBackend::open(d.path()).unwrap();
+    fs.create_bucket(PR, &[]).unwrap();
+    let be = GetCounter { inner: &fs, gets: Default::default() };
+    let entry = |i: usize, head: &str| RegistryEntry {
+        slug: format!("wt-{i}"),
+        bucket: format!("w-{i}"),
+        branch: "b".into(),
+        head_commit: head.into(),
+        state: State::Open,
+        writer: actor("w"),
+        merger: None,
+        doc_count: 0,
+        file_count: 0,
+        updated_ms: i as u64,
+    };
+    for i in 0..12 {
+        write_registry_entry(&be, PR, &entry(i, "h1")).unwrap();
+    }
+    let digest = read_digest(&be, PR).unwrap().expect("the daemon wrote a digest");
+    assert_eq!(digest.entries.len(), 12);
+    assert!(!digest.entries.contains_key("_digest"), "the digest is not one of its own entries");
+    assert_eq!(list_shared(&be, PR).unwrap().len(), 12, "listings skip the digest");
+
+    let gets = || be.gets.swap(0, std::sync::atomic::Ordering::SeqCst);
+    let mut st = FollowState::default();
+    gets();
+    let ch = poll_fast(&be, PR, &mut st, false, true, FETCH_JOBS).unwrap();
+    assert_eq!(ch.len(), 12);
+    assert_eq!(gets(), 13, "the digest plus every entry once");
+    // nothing changed: the digest alone
+    assert!(poll_fast(&be, PR, &mut st, false, true, FETCH_JOBS).unwrap().is_empty());
+    assert_eq!(gets(), 1);
+    // one worktree moves: the digest and that entry
+    write_registry_entry(&be, PR, &entry(7, "h2")).unwrap();
+    gets();
+    let ch = poll_fast(&be, PR, &mut st, false, true, FETCH_JOBS).unwrap();
+    assert!(matches!(ch.as_slice(), [Change::HeadMoved { entry, from }] if entry.slug == "wt-7" && from == "h1"), "{ch:?}");
+    assert_eq!(gets(), 2);
+    // a missing digest falls back to the listing and still sees every change
+    ObjectBackend::delete(&be, PR, DIGEST_KEY).unwrap();
+    write_registry_entry(&be, PR, &entry(3, "h3")).unwrap(); // rewrites the digest
+    ObjectBackend::delete(&be, PR, DIGEST_KEY).unwrap();
+    gets();
+    let ch = poll_fast(&be, PR, &mut st, false, true, FETCH_JOBS).unwrap();
+    assert!(matches!(ch.as_slice(), [Change::HeadMoved { entry, .. }] if entry.slug == "wt-3"), "{ch:?}");
+    assert_eq!(gets(), 2, "no digest: one get for it (absent) and one changed entry, the rest by listing etag");
+    // gone, and the empty-registry guard still applies
+    remove_registry_entry(&be, PR, "wt-0").unwrap();
+    let ch = poll_fast(&be, PR, &mut st, false, true, FETCH_JOBS).unwrap();
+    assert_eq!(ch, vec![Change::Gone { slug: "wt-0".into() }]);
+    // the serial poll agrees with the fast one
+    let mut st2 = FollowState::default();
+    assert_eq!(poll(&be, PR, &mut st2).unwrap().len(), 11);
 }

@@ -11,6 +11,98 @@ use std::path::Path;
 /// worktree bucket" (ADR-126 §4) true for agents.
 pub const REGISTRY_PREFIX: &str = "worktrees/";
 
+/// One object holding `slug -> etag of its registry entry`, rewritten by the daemon on every
+/// registry change. A follower that has seen those etags before can skip fetching those entries
+/// (ADR-126 section 4a poll cost): one GET instead of a listing plus one GET per worktree. It is a
+/// hint written from a fresh listing each time, so a lost update between two daemons heals on the
+/// next refresh; a follower falls back to the listing when it is missing or unreadable.
+pub const DIGEST_KEY: &str = "worktrees/_digest.json";
+
+/// How many entry fetches a follower runs at once.
+pub const FETCH_JOBS: usize = 8;
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Digest {
+    pub schema: u32,
+    pub entries: std::collections::BTreeMap<String, String>,
+}
+
+/// The slug of a registry object key, `None` for the digest and for anything else.
+pub fn registry_slug(key: &str) -> Option<&str> {
+    let s = key.strip_prefix(REGISTRY_PREFIX)?.strip_suffix(".json")?;
+    (key != DIGEST_KEY && !s.is_empty()).then_some(s)
+}
+
+/// `slug -> etag` for every registry object, from one listing.
+pub fn registry_listing<B: ObjectBackend>(b: &B, project_bucket: &str) -> Result<std::collections::BTreeMap<String, String>> {
+    Ok(b.list(project_bucket, REGISTRY_PREFIX)?
+        .into_iter()
+        .filter_map(|o| registry_slug(&o.key).map(|s| (s.to_owned(), o.etag)))
+        .collect())
+}
+
+/// Read the digest; a missing or unreadable one is `None` (callers fall back to listing).
+pub fn read_digest<B: ObjectBackend>(b: &B, project_bucket: &str) -> Result<Option<Digest>> {
+    Ok(b.get(project_bucket, DIGEST_KEY)?.and_then(|d| serde_json::from_slice::<Digest>(&d).ok()).filter(|d| d.schema == 1))
+}
+
+/// Daemon-side: rewrite the digest from a fresh listing. Best effort for callers: it is a hint.
+pub fn write_digest<B: ObjectBackend>(b: &B, project_bucket: &str) -> Result<()> {
+    let d = Digest { schema: 1, entries: registry_listing(b, project_bucket)? };
+    b.put(project_bucket, DIGEST_KEY, &serde_json::to_vec(&d)?)?;
+    Ok(())
+}
+
+/// Parse and cross-check one registry object (see [`list_shared_lenient`]).
+fn check_entry(project_bucket: &str, slug: &str, data: Option<&[u8]>) -> Option<RegistryEntry> {
+    let e: RegistryEntry = serde_json::from_slice(data?).ok()?;
+    (e.slug == slug && expected_worktree_bucket(project_bucket, &e.slug).is_none_or(|x| x == e.bucket)).then_some(e)
+}
+
+/// Fetch and check the entries for `slugs`, up to `jobs` at a time. Returns the readable entries
+/// and the slugs that were corrupt, from a newer schema, or pointed at the wrong bucket. A backend
+/// error is an error.
+pub fn fetch_entries<B: ObjectBackend + Sync>(
+    b: &B,
+    project_bucket: &str,
+    slugs: &[String],
+    jobs: usize,
+) -> Result<(Vec<RegistryEntry>, Vec<String>)> {
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let results = std::sync::Mutex::new(Vec::with_capacity(slugs.len()));
+    let first_err = std::sync::Mutex::new(None);
+    std::thread::scope(|sc| {
+        for _ in 0..jobs.clamp(1, slugs.len().max(1)) {
+            sc.spawn(|| {
+                loop {
+                    let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let Some(slug) = slugs.get(i) else { return };
+                    match b.get(project_bucket, &format!("{REGISTRY_PREFIX}{slug}.json")) {
+                        Ok(d) => results.lock().unwrap_or_else(|e| e.into_inner()).push((slug.clone(), check_entry(project_bucket, slug, d.as_deref()))),
+                        Err(e) => {
+                            first_err.lock().unwrap_or_else(|x| x.into_inner()).get_or_insert(e);
+                            return;
+                        }
+                    }
+                }
+            });
+        }
+    });
+    if let Some(e) = first_err.into_inner().unwrap_or_else(|e| e.into_inner()) {
+        return Err(e);
+    }
+    let (mut good, mut bad) = (Vec::new(), Vec::new());
+    for (slug, e) in results.into_inner().unwrap_or_else(|e| e.into_inner()) {
+        match e {
+            Some(e) => good.push(e),
+            None => bad.push(slug),
+        }
+    }
+    good.sort_by(|a, c| c.updated_ms.cmp(&a.updated_ms).then_with(|| a.slug.cmp(&c.slug)));
+    bad.sort();
+    Ok((good, bad))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RegistryEntry {
     pub slug: String,
@@ -60,13 +152,14 @@ pub fn write_registry_entry<B: ObjectBackend>(
         &format!("{REGISTRY_PREFIX}{}.json", e.slug),
         &serde_json::to_vec_pretty(e)?,
     )?;
+    let _ = write_digest(b, project_bucket); // a hint; the entry is already written
     Ok(())
 }
 
 /// Every shared worktree of a project, newest first. Readable from any node with project read.
 pub fn list_shared<B: ObjectBackend>(b: &B, project_bucket: &str) -> Result<Vec<RegistryEntry>> {
     let mut v = Vec::new();
-    for o in b.list(project_bucket, REGISTRY_PREFIX)? {
+    for o in b.list(project_bucket, REGISTRY_PREFIX)?.into_iter().filter(|o| o.key != DIGEST_KEY) {
         if let Some(d) = b.get(project_bucket, &o.key)? {
             v.push(serde_json::from_slice::<RegistryEntry>(&d)?);
         }
@@ -94,7 +187,7 @@ pub fn list_shared_lenient<B: ObjectBackend>(
     project_bucket: &str,
 ) -> Result<(Vec<RegistryEntry>, Vec<String>)> {
     let (mut v, mut bad) = (Vec::new(), Vec::new());
-    for o in b.list(project_bucket, REGISTRY_PREFIX)? {
+    for o in b.list(project_bucket, REGISTRY_PREFIX)?.into_iter().filter(|o| o.key != DIGEST_KEY) {
         let slug = o
             .key
             .trim_start_matches(REGISTRY_PREFIX)

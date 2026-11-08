@@ -164,7 +164,7 @@ async fn call(method: &str, params: Value) -> anyhow::Result<Value> {
     Ok(resp.result.unwrap_or_default())
 }
 
-const WT_FLAGS: &[&str] = &["json", "force", "confirmed"];
+const WT_FLAGS: &[&str] = &["json", "force", "confirmed", "full"];
 
 /// `--key value` pairs to the daemon's params: hyphens become underscores, `--json`, `--force` and
 /// `--confirmed` are flags. The acting agent and host come from the environment.

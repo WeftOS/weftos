@@ -24,6 +24,10 @@ use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Seen {
+    /// Etag of the registry object when it was read; with the digest it lets a poll skip the
+    /// entry. `None` for state saved before the digest existed.
+    #[serde(default)]
+    pub etag: Option<String>,
     pub bucket: String,
     pub head_commit: String,
     pub state: State,
@@ -133,15 +137,55 @@ fn poll_with<B: ObjectBackend>(
     allow_all_gone: bool,
 ) -> Result<Vec<Change>> {
     let (entries, bad) = list_shared_lenient(b, project_bucket)?;
-    if entries.is_empty() && bad.is_empty() && !state.seen.is_empty() && !allow_all_gone {
+    let total = entries.len() + bad.len();
+    poll_core(state, entries.into_iter().map(|e| (e, None)).collect(), bad, Vec::new(), total, allow_all_gone)
+}
+
+/// [`poll`] for a backend that can be read from several threads: the registry entries are fetched
+/// `jobs` at a time, and with `use_digest` the daemon-written digest replaces the listing, so only
+/// entries whose etag changed since this follower last looked are fetched at all. Same results as
+/// [`poll`]; a missing digest falls back to listing.
+pub fn poll_fast<B: ObjectBackend + Sync>(
+    b: &B,
+    project_bucket: &str,
+    state: &mut FollowState,
+    allow_all_gone: bool,
+    use_digest: bool,
+    jobs: usize,
+) -> Result<Vec<Change>> {
+    let current = match use_digest.then(|| crate::share_fetch::read_digest(b, project_bucket)).transpose()?.flatten() {
+        Some(d) => d.entries,
+        None => crate::share_fetch::registry_listing(b, project_bucket)?,
+    };
+    let (mut want, mut carried) = (Vec::new(), Vec::new());
+    for (slug, etag) in &current {
+        match state.seen.get(slug) {
+            Some(s) if s.etag.as_ref() == Some(etag) => carried.push((slug.clone(), s.clone())),
+            _ => want.push(slug.clone()),
+        }
+    }
+    let (fresh, bad) = crate::share_fetch::fetch_entries(b, project_bucket, &want, jobs)?;
+    let fresh = fresh.into_iter().map(|e| { let t = current.get(&e.slug).cloned(); (e, t) }).collect();
+    poll_core(state, fresh, bad, carried, current.len(), allow_all_gone)
+}
+
+fn poll_core(
+    state: &mut FollowState,
+    fresh: Vec<(RegistryEntry, Option<String>)>,
+    bad: Vec<String>,
+    carried: Vec<(String, Seen)>,
+    total: usize,
+    allow_all_gone: bool,
+) -> Result<Vec<Change>> {
+    if total == 0 && !state.seen.is_empty() && !allow_all_gone {
         return Err(S2Error::Invalid(format!(
             "registry is empty but {} worktree(s) were known; wrong project bucket? (poll_confirmed accepts it)",
             state.seen.len()
         )));
     }
     let mut out = Vec::new();
-    let mut now_seen = BTreeMap::new();
-    for e in entries {
+    let mut now_seen: BTreeMap<String, Seen> = carried.into_iter().collect();
+    for (e, etag) in fresh {
         let seen = state.seen.get(&e.slug);
         match seen {
             Some(s) if s.bucket != e.bucket => {
@@ -169,6 +213,7 @@ fn poll_with<B: ObjectBackend>(
         now_seen.insert(
             e.slug.clone(),
             Seen {
+                etag,
                 bucket: e.bucket,
                 head_commit: e.head_commit,
                 state: e.state,
@@ -177,7 +222,8 @@ fn poll_with<B: ObjectBackend>(
     }
     for slug in bad {
         if let Some(prev) = state.seen.get(&slug) {
-            now_seen.insert(slug.clone(), prev.clone());
+            // Keep what was known, but forget the etag so the entry is fetched (and reported) again.
+            now_seen.insert(slug.clone(), Seen { etag: None, ..prev.clone() });
         }
         out.push(Change::Unreadable { slug });
     }
@@ -236,7 +282,9 @@ pub fn remove_registry_entry<B: ObjectBackend>(
     slug: &str,
 ) -> Result<()> {
     validate_key(slug)?;
-    b.delete(project_bucket, &format!("{REGISTRY_PREFIX}{slug}.json"))
+    b.delete(project_bucket, &format!("{REGISTRY_PREFIX}{slug}.json"))?;
+    let _ = crate::share_fetch::write_digest(b, project_bucket); // a hint
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -422,6 +470,10 @@ pub struct OverlapReport {
     /// Both trees branch from the same base commit. If `false`, a path can differ only because
     /// the base moved, so treat `overlaps` as a superset of the real conflicts.
     pub same_base: bool,
+    /// The base commits of the two trees (`a` then `b`), so a caller can discount the report
+    /// when they differ: on different bases a path can differ only because the base moved.
+    pub base_a: String,
+    pub base_b: String,
     /// Files in both trees with different content, and files one worktree deleted that the other
     /// changed (needs `changes` in both manifests; a rename counts as delete + add). Absence is not
     /// proof of no conflict: only paths, never hunks, are compared.
@@ -482,6 +534,8 @@ pub fn overlaps<B: ObjectBackend>(
     v.sort_by(|x, y| x.path.cmp(&y.path));
     Ok(OverlapReport {
         same_base: ma.base_commit == mc.base_commit,
+        base_a: ma.base_commit.clone(),
+        base_b: mc.base_commit.clone(),
         overlaps: v,
     })
 }

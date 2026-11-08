@@ -21,7 +21,7 @@ use weftos_store::share::{
     Actor, Limits, TreeSource, claim_merge, mark_handoff, mark_merged, parse_name_status_z, publish_tree,
 };
 use weftos_store::share_fetch::{
-    RegistryEntry, Select, fetch_bundle, fetch_tree, list_shared_lenient, summarize, write_registry_entry,
+    self, RegistryEntry, Select, fetch_bundle, fetch_tree, list_shared_lenient, summarize, write_registry_entry,
 };
 use weftos_store::{StoreName, StoreService};
 
@@ -81,6 +81,9 @@ struct P {
     json: bool,
     #[serde(default)]
     confirmed: bool,
+    /// `follow`: list the registry instead of reading the digest.
+    #[serde(default)]
+    full: bool,
     /// Who is acting; filled in by the CLI from the environment.
     agent: Option<String>,
     host: Option<String>,
@@ -413,8 +416,7 @@ fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms:
             let n = names(mesh, &project, "x")?;
             let sp = guard.check(need(&p.state, "state")?, "state", Use::WriteFile)?;
             let mut st = FollowState::load(&sp).map_err(e)?;
-            let ch = if p.confirmed { follower::poll_confirmed(&b, &n.pr, &mut st) } else { follower::poll(&b, &n.pr, &mut st) }
-                .map_err(e)?;
+            let ch = follower::poll_fast(&b, &n.pr, &mut st, p.confirmed, !p.full, share_fetch::FETCH_JOBS).map_err(e)?;
             st.save(&sp).map_err(e)?;
             Ok(json!({"changes": ch.iter().map(change_json).collect::<Vec<_>>()}))
         }
@@ -451,6 +453,9 @@ fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms:
             let r = follower::overlaps(&b, &ea, &eb).map_err(e)?;
             Ok(json!({
                 "same_base": r.same_base,
+                // On different bases a path can differ only because the base moved: discount it.
+                "reliable": r.same_base,
+                "base_a": r.base_a, "base_b": r.base_b,
                 "overlaps": r.overlaps.iter().map(|o| json!({"path": o.path, "kind": format!("{:?}", o.kind)})).collect::<Vec<_>>(),
             }))
         }
