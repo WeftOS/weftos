@@ -6744,13 +6744,75 @@ async fn dispatch(
             #[cfg(not(feature = "exochain"))]
             Response::error("exochain feature not enabled")
         }
+        // `chain.get {sequence, signatures?}`: one event in full (payload
+        // included) plus the checkpoint signature that covers it, or an
+        // explicit "unsigned: pending checkpoint". Read-only; same capability
+        // as `chain.tail`. A bad request is refused, not answered with an
+        // empty event.
+        "chain.get" => {
+            #[cfg(feature = "exochain")]
+            {
+                let p: protocol::ChainGetParams = match serde_json::from_value(params) {
+                    Ok(p) => p,
+                    Err(e) => return Response::error(format!("chain.get: bad params: {e}")),
+                };
+                let k = kernel.read().await;
+                if let Some(cm) = k.chain_manager() {
+                    match clawft_kernel::chain_coverage::event_detail(cm, p.sequence, p.signatures) {
+                        Some(d) => Response::success(serde_json::to_value(d).unwrap()),
+                        None => Response::error(format!(
+                            "chain.get: no event at sequence {} (head is {})",
+                            p.sequence,
+                            cm.sequence().saturating_sub(1)
+                        )),
+                    }
+                } else {
+                    Response::error("chain not enabled")
+                }
+            }
+            #[cfg(not(feature = "exochain"))]
+            Response::error("exochain feature not enabled")
+        }
         "chain.checkpoint" => {
             #[cfg(feature = "exochain")]
             {
                 let k = kernel.read().await;
                 if let Some(cm) = k.chain_manager() {
                     let cp = cm.checkpoint();
-                    Response::success(serde_json::to_value(cp).unwrap())
+                    let mut out = serde_json::to_value(cp).unwrap();
+                    // The in-memory checkpoint carries no signature. Write the
+                    // signed RVF checkpoint now (the same file shutdown writes)
+                    // so events up to here are covered and `chain.verify` /
+                    // `chain.get` can report it, instead of only at shutdown.
+                    let cfg = k.kernel_config().chain.clone().unwrap_or_default();
+                    match cfg.effective_checkpoint_path() {
+                        Some(ckpt) => {
+                            let rvf = std::path::PathBuf::from(ckpt).with_extension("rvf");
+                            match cm.save_to_rvf(&rvf) {
+                                Ok(()) => {
+                                    if let Err(e) = cm.record_cutover(&rvf) {
+                                        return Response::error(format!(
+                                            "checkpoint written but cutover record failed: {e}"
+                                        ));
+                                    }
+                                    out["signed"] = cm.signed_checkpoint_bytes().is_some().into();
+                                    out["rvf_path"] = rvf.display().to_string().into();
+                                    out["has_signing_key"] = cm.has_signing_key().into();
+                                    out["dual_signing"] = cm.has_dual_signing().into();
+                                }
+                                Err(e) => {
+                                    return Response::error(format!(
+                                        "signed checkpoint failed: {e}"
+                                    ));
+                                }
+                            }
+                        }
+                        None => {
+                            out["signed"] = false.into();
+                            out["reason"] = "no checkpoint path configured; nothing was signed".into();
+                        }
+                    }
+                    Response::success(out)
                 } else {
                     Response::error("chain not enabled")
                 }
@@ -6765,34 +6827,19 @@ async fn dispatch(
                 if let Some(cm) = k.chain_manager() {
                     let result = cm.verify_integrity();
 
-                    // Also verify RVF signature if chain has a signing key.
-                    let signature_verified = if let Some(pubkey) = cm.verifying_key() {
-                        let cfg = k.kernel_config().chain.clone().unwrap_or_default();
-                        if let Some(ref ckpt_path) = cfg.effective_checkpoint_path() {
-                            let rvf_path =
-                                std::path::PathBuf::from(ckpt_path).with_extension("rvf");
-                            if rvf_path.exists() {
-                                match clawft_kernel::ChainManager::verify_rvf_signature(
-                                    &rvf_path, &pubkey,
-                                ) {
-                                    Ok(valid) => Some(valid),
-                                    Err(_) => Some(false),
-                                }
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    };
+                    // Signature status comes from the latest signed checkpoint
+                    // the chain holds: written by `chain.checkpoint` / shutdown,
+                    // or restored from the RVF file at boot. It also re-checks
+                    // that the chain still links to the signed head.
+                    let summary = clawft_kernel::chain_coverage::signature_summary(cm);
 
                     let proto_result = ChainVerifyResult {
                         valid: result.valid,
                         event_count: result.event_count,
                         errors: result.errors,
-                        signature_verified,
+                        signature_verified: summary.as_ref().map(|s| s.valid),
+                        signed_through: summary.as_ref().map(|s| s.signed_through),
+                        pq_verified: summary.as_ref().and_then(|s| s.pq_verified),
                     };
                     Response::success(serde_json::to_value(proto_result).unwrap())
                 } else {

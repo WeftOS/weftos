@@ -351,9 +351,35 @@ pub struct ChainVerifyResult {
     pub valid: bool,
     pub event_count: usize,
     pub errors: Vec<String>,
-    /// Ed25519 signature verification: None=unsigned, Some(true)=valid, Some(false)=invalid.
+    /// Latest signed checkpoint: None=no signed checkpoint yet, Some(true)=every
+    /// signature on it verifies and the chain links up to its head,
+    /// Some(false)=a signature or the link is broken. Events after
+    /// `signed_through` are not covered.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signature_verified: Option<bool>,
+    /// Highest sequence the latest signed checkpoint covers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signed_through: Option<u64>,
+    /// `Some(true)` when a real ML-DSA-65 signature verified (ADR-129).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pq_verified: Option<bool>,
+}
+
+/// Parameters for `chain.get`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChainGetParams {
+    /// Sequence number of the event to read.
+    pub sequence: u64,
+    /// Include the hex signatures in the coverage (default true). A caller
+    /// reading many events that only needs the verdicts can turn them off;
+    /// the ML-DSA-65 signature alone is 6.6 KB of hex.
+    #[serde(default = "default_true")]
+    pub signatures: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 // ── Resource tree result types ────────────────────────────
@@ -417,10 +443,6 @@ pub struct AgentStopParams {
     /// Whether to stop gracefully (default: true).
     #[serde(default = "default_true")]
     pub graceful: bool,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 /// Parameters for `agent.restart`.

@@ -48,7 +48,7 @@ pub const CHECKPOINT_PQ_CONTEXT: &[u8] = b"weftos/exochain/checkpoint/ml-dsa-65/
 /// FIPS 204 context for [`crate::chain::ChainManager::dual_sign`].
 pub const CHAIN_DUAL_SIG_CONTEXT: &[u8] = b"weftos/exochain/dual-sig/ml-dsa-65/v2";
 
-const SIG_ALGO_ML_DSA_65: u16 = 1;
+pub(crate) const SIG_ALGO_ML_DSA_65: u16 = 1;
 
 /// Source of the cutover event appended by the first dual-signed save.
 pub const PQ_CUTOVER_SOURCE: &str = "chain";
@@ -215,7 +215,7 @@ fn locate_checkpoint(data: &[u8]) -> Result<Layout, String> {
 
 /// Decode a footer at `at` and return it with the offset just past it,
 /// using the size implied by `sig_length`, not the file's `footer_length`.
-fn footer_at(data: &[u8], at: usize) -> Option<(SignatureFooter, usize)> {
+pub(crate) fn footer_at(data: &[u8], at: usize) -> Option<(SignatureFooter, usize)> {
     let f = decode_signature_footer(data.get(at..)?).ok()?;
     let end = at.checked_add(SignatureFooter::compute_footer_length(f.sig_length) as usize)?;
     (end <= data.len()).then_some((f, end))
