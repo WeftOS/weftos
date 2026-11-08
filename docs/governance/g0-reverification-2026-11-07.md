@@ -1,7 +1,8 @@
 # G0 re-verification: WeftOS Claude step
 
-Status: **signed off** (Mathew, 2026-11-07). WeftOS Claude verified; Mathew signed off. The Cogs Bot
-review step was not run: the recorded owner decision for Q16 is "no middle reviewer". Required before the Tapestry R9 policy layer ships (plan.md Phase 2, Q16). R9 is not built,
+Status: **step 1 of 3 done; awaiting WeftOS Cogs Bot review, then Mathew's sign-off.** Mathew's Phase 2
+card answer (2026-11-07, ~10:00 PM ET): "Sign off on G0 after the Cogs Bot reviews it." That overrides the
+sign-off recorded earlier the same evening; the R9 policy layer does not merge until both steps are done. Required before the Tapestry R9 policy layer ships (plan.md Phase 2, Q16). R9 is not built,
 merged or shipped by this note.
 
 Date: 2026-11-07. Tree: `target-0.8.5` at `fe8e81104` (local; same tree as `16f21c646`). Branch with the
@@ -68,5 +69,5 @@ gave Deny. Fixed in `fe59c46ab` (2026-10-23).
 ## Sign-off
 
 - [x] WeftOS Claude: verified, 2026-11-07 (this note)
-- [~] WeftOS Cogs Bot: review not run (owner decision: no middle reviewer)
-- [x] Mathew: signed off, 2026-11-07
+- [ ] WeftOS Cogs Bot: review (sent 2026-11-07)
+- [ ] Mathew: sign-off (after the Cogs Bot review)
