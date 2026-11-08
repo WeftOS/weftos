@@ -78,11 +78,12 @@ impl StoreService {
 
     /// Close the store (every grant disabled, requests refused), then copy every object to the
     /// archive bucket; with `delete`, remove the bucket and forget the store. Closing comes first,
-    /// so nothing is accepted after the copy starts. A failed run can be repeated: archiving an
-    /// archived store is refused only without `delete`. Returns the number of objects archived.
+    /// so nothing is accepted after the copy starts. A run that failed part-way is resumed by
+    /// calling `archive` again (same archive keys, so nothing is duplicated); a finished archive
+    /// is refused again unless `delete`. Returns the number of objects archived.
     pub fn archive(&self, name: &StoreName, delete: bool, actor: &str) -> Result<u64, StoreError> {
         let rec = self.known(name)?;
-        if rec.archived && !delete {
+        if rec.archived && rec.archive_done && !delete {
             return Err(StoreError::Refused(format!("{name} is already archived")));
         }
         self.ensure_archive()?;
@@ -90,12 +91,15 @@ impl StoreService {
         let principals = self.principals_of(name);
         if !rec.archived {
             {
+                let now = self.now();
                 let mut st = self.lock();
                 for p in &principals {
                     st.grants.set_enabled(p, name, false);
                 }
                 if let Some(r) = st.stores.get_mut(&name.to_string()) {
                     r.archived = true;
+                    r.archive_done = false;
+                    r.archive_ts = Some(now);
                 }
                 self.persist(&st)?;
             }
@@ -103,7 +107,15 @@ impl StoreService {
                 self.apply_principal(p)?;
             }
         }
-        let ts = self.now();
+        // The archive keys carry the time the archive began, kept across a resume.
+        let ts = {
+            let now = self.now();
+            let mut st = self.lock();
+            match st.stores.get_mut(&name.to_string()) {
+                Some(r) => *r.archive_ts.get_or_insert(now),
+                None => now,
+            }
+        };
         let objs = self.objects.list(&b, "")?;
         let run = || -> Result<(), StoreError> {
             for m in &objs {
@@ -120,6 +132,14 @@ impl StoreService {
         if let Err(e) = run() {
             self.emit(actor, name, "Archive", None, 0, Outcome::Error(e.to_string()), Source::Governed);
             return Err(e);
+        }
+        if !delete {
+            let mut st = self.lock();
+            if let Some(r) = st.stores.get_mut(&name.to_string()) {
+                r.archive_done = true;
+                r.archive_count = objs.len() as u64;
+            }
+            self.persist(&st)?;
         }
         if delete {
             {

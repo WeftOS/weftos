@@ -121,6 +121,21 @@ struct StoreRec {
     /// Made with Object Lock (retention and legal hold are available).
     #[serde(default)]
     locked: bool,
+    /// When the archive copy was started; a resumed run reuses it, so the archive keys are the
+    /// same and a repeat overwrites rather than duplicates.
+    #[serde(default)]
+    archive_ts: Option<u64>,
+    /// Every object has been copied to the archive. `false` while `archived` means a run was
+    /// cut short and must be resumed (records from before this field read as done).
+    #[serde(default = "yes")]
+    archive_done: bool,
+    /// Objects the finished archive holds.
+    #[serde(default)]
+    archive_count: u64,
+}
+
+fn yes() -> bool {
+    true
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -303,7 +318,7 @@ impl StoreService {
         }
         {
             let mut g = self.lock();
-            g.stores.insert(name.to_string(), StoreRec { name: name.to_string(), created_ms: self.now(), archived: false, locked });
+            g.stores.insert(name.to_string(), StoreRec { name: name.to_string(), created_ms: self.now(), archived: false, locked, archive_ts: None, archive_done: true, archive_count: 0 });
             let d = Parties::defaults_for(name);
             let ts = self.now();
             for (list, acc) in [(d.admins.iter().chain(&extra.admins), Access::Admin), (d.writers.iter().chain(&extra.writers), Access::Write), (d.appenders.iter().chain(&extra.appenders), Access::Append), (d.sweepers.iter().chain(&extra.sweepers), Access::Sweep), (d.readers.iter().chain(&extra.readers), Access::Read)] {
@@ -350,9 +365,13 @@ impl StoreService {
         if name.kind() != "node" {
             return Err(StoreError::Refused(format!("{name} is not a node store")));
         }
+        // Archived only counts once every object is copied: a run cut short (RustFS went away
+        // part-way) is resumed here, never reported as done. The caller may delete the node's
+        // user on `Ok`, so `Ok` has to mean the whole archive exists.
         let archived = match self.known(name) {
-            Ok(rec) if !rec.archived => self.archive(name, false, actor)?,
-            _ => 0,
+            Ok(rec) if !rec.archived || !rec.archive_done => self.archive(name, false, actor)?,
+            Ok(rec) => rec.archive_count,
+            Err(_) => 0,
         };
         let newly = {
             let mut g = self.lock();

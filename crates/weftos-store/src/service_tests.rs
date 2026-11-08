@@ -617,3 +617,101 @@ fn an_unpaired_nodes_store_is_archived_and_its_id_is_not_handed_out_again() {
     assert!(r2.svc.create_store(&ghost, "daemon", Parties::default()).is_err());
     r2.svc.ensure_store(&StoreName::node("weft", "pg-2").unwrap(), "daemon", Parties::default()).unwrap();
 }
+
+/// An object backend whose `copy` fails from the Nth call on (RustFS going away part-way through
+/// an archive), until healed.
+struct CopyFlaky {
+    inner: Arc<MemBackend>,
+    calls: std::sync::atomic::AtomicU32,
+    fail_from: std::sync::atomic::AtomicU32,
+}
+impl ObjectBackend for CopyFlaky {
+    fn put(&self, b: &str, k: &str, d: &[u8], n: bool) -> Result<ObjectMeta, BackendError> {
+        self.inner.put(b, k, d, n)
+    }
+    fn put_if_match(&self, b: &str, k: &str, d: &[u8], e: &str) -> Result<ObjectMeta, BackendError> {
+        self.inner.put_if_match(b, k, d, e)
+    }
+    fn get(&self, b: &str, k: &str) -> Result<Vec<u8>, BackendError> {
+        self.inner.get(b, k)
+    }
+    fn head(&self, b: &str, k: &str) -> Result<ObjectMeta, BackendError> {
+        self.inner.head(b, k)
+    }
+    fn delete(&self, b: &str, k: &str) -> Result<(), BackendError> {
+        self.inner.delete(b, k)
+    }
+    fn copy(&self, sb: &str, sk: &str, db: &str, dk: &str) -> Result<ObjectMeta, BackendError> {
+        let n = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+        if n >= self.fail_from.load(Ordering::SeqCst) {
+            return Err(BackendError::Unavailable("copy failed".into()));
+        }
+        self.inner.copy(sb, sk, db, dk)
+    }
+    fn list(&self, b: &str, p: &str) -> Result<Vec<ObjectMeta>, BackendError> {
+        self.inner.list(b, p)
+    }
+}
+
+fn copy_flaky_rig(state: Option<PathBuf>) -> (StoreService, Arc<MemBackend>, Arc<CopyFlaky>) {
+    let be = Arc::new(MemBackend::new());
+    let cf = Arc::new(CopyFlaky { inner: be.clone(), calls: Default::default(), fail_from: std::sync::atomic::AtomicU32::new(u32::MAX) });
+    let svc = StoreService::open(Config { node_id: "pg-1".into(), state_path: state, clock: || 1_000 }, be.clone(), cf.clone(), Arc::new(Gate(AtomicBool::new(true))), Arc::new(MemSink::default()), Arc::new(Chain::default())).unwrap();
+    (svc, be, cf)
+}
+
+#[test]
+fn a_retire_cut_short_is_resumed_and_ok_means_every_object_is_in_the_archive() {
+    let (svc, be, cf) = copy_flaky_rig(None);
+    let n = node();
+    svc.create_store(&n, "daemon", Parties::default()).unwrap();
+    svc.grant(&n, cog("c1"), Access::Write, "op").unwrap();
+    for i in 0..10 {
+        svc.put(&local("c1"), &n, &format!("d/{i}"), format!("v{i}").as_bytes(), false).unwrap();
+    }
+    // RustFS goes away after three copies.
+    cf.fail_from.store(4, Ordering::SeqCst);
+    let e = svc.retire_node_store(&n, "op").unwrap_err();
+    assert!(matches!(e, StoreError::Backend(BackendError::Unavailable(_))), "{e:?}");
+    assert!(svc.retired_nodes().is_empty(), "a failed retire does not retire the id");
+    assert_eq!(be.list(ARCHIVE_BUCKET, "").unwrap().len(), 3);
+    // Retrying while it is still down fails again and still reports no success.
+    assert!(svc.retire_node_store(&n, "op").is_err());
+    assert!(svc.retired_nodes().is_empty());
+    // Healed: the retry finishes the copy and only then retires. All ten are there once, not thirteen.
+    cf.fail_from.store(u32::MAX, Ordering::SeqCst);
+    assert_eq!(svc.retire_node_store(&n, "op").unwrap(), 10, "the count is the whole archive, not 0 and not the remainder");
+    let archived = be.list(ARCHIVE_BUCKET, "").unwrap();
+    assert_eq!(archived.len(), 10, "resumed under the same keys: {archived:?}");
+    for i in 0..10 {
+        assert!(archived.iter().any(|m| m.key.ends_with(&format!("/d/{i}"))), "d/{i} archived");
+    }
+    assert_eq!(svc.retired_nodes(), vec![n.to_string()]);
+    // A repeat reports the same count, not 0.
+    assert_eq!(svc.retire_node_store(&n, "op").unwrap(), 10);
+}
+
+#[test]
+fn an_interrupted_archive_survives_a_restart_and_can_be_finished_by_archive_itself() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path().join("s.json");
+    let (svc, be, cf) = copy_flaky_rig(Some(state.clone()));
+    let n = project();
+    svc.create_store(&n, "daemon", Parties::default()).unwrap();
+    svc.grant(&n, cog("c"), Access::Write, "op").unwrap();
+    for i in 0..4 {
+        svc.put(&local("c"), &n, &format!("k{i}"), b"x", false).unwrap();
+    }
+    cf.fail_from.store(3, Ordering::SeqCst);
+    assert!(svc.archive(&n, false, "op").is_err());
+    drop(svc);
+    // After a restart the store is archived but not done: archive resumes rather than saying "already archived".
+    let (svc2, be2, _cf2) = {
+        let cf2 = Arc::new(CopyFlaky { inner: be.clone(), calls: Default::default(), fail_from: std::sync::atomic::AtomicU32::new(u32::MAX) });
+        let s = StoreService::open(Config { node_id: "pg-1".into(), state_path: Some(state), clock: || 1_000 }, be.clone(), cf2.clone(), Arc::new(Gate(AtomicBool::new(true))), Arc::new(MemSink::default()), Arc::new(Chain::default())).unwrap();
+        (s, be.clone(), cf2)
+    };
+    assert_eq!(svc2.archive(&n, false, "op").unwrap(), 4);
+    assert_eq!(be2.list(ARCHIVE_BUCKET, "").unwrap().len(), 4, "no duplicates from the resume");
+    assert!(matches!(svc2.archive(&n, false, "op"), Err(StoreError::Refused(_))), "a finished archive is refused again");
+}
