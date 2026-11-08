@@ -110,12 +110,11 @@ space did not drop, so the standard library clones on macOS and the crate needs 
    transport. `sync_up` puts per file; the daemon seals a signed layer and sends it to the inbox,
    and `sync_down` becomes a signed-head warm join. Put the transport behind a small trait (list,
    fetch, send changes) so this crate's tests keep using the store and the daemon uses layers.
-4. **Conditional put.** Built: `put_if_match` and `delete_if_match` on the S1 backend trait, used by
-   `sync_up`; RustFS 1.0.4 honours `If-Match` on both (measured). What is left: make the daemon's
-   backend wiring (the S2 follower and any wrapper that forwards the trait) forward the two methods,
-   because a wrapper that only implements the required methods answers `Unsupported` and silently
-   drops the drive back to head-then-write. The report's `head_then_write` count shows when that
-   happens.
+4. **Conditional put.** Built and forwarded: `put_if_match` and `delete_if_match` on the S1 backend
+   trait, used by `sync_up`; RustFS 1.0.4 honours `If-Match` on both (measured). The daemon's
+   wrapping backend (`Op` in `store_worktree.rs`, the only non-test implementer of the trait besides
+   the three real backends) now forwards both methods, and a test fails if it stops
+   (`head_then_write` would be 1, `conditional` 0).
 5. **aepod `s3`.** Edge and Wasm nodes hold no long-lived keys (ADR-126 section 5), so the drive
    needs a short-lived credential scoped to one `(bucket, prefix)`: get, list, put and delete on the
    prefix, put and delete on `<prefix>.drive-tombstones/`. That is a new statement in `policy.rs`,
@@ -125,9 +124,9 @@ space did not drop, so the standard library clones on macOS and the crate needs 
    the root credential; write access only to a named test prefix first; no restart of PG's RustFS;
    and a decision on the audit webhook, which capped small writes near 43 a second in the mesh mock
    (a 500-file first upload there would take about 12 s).
-7. **Loose ends.** `weaver store drive materialise|watch|sync` was not wired; it is a thin call
-   into these functions. Tombstone collection, `.drive.tmp.*` cleanup, a `resolve` verb on the CLI,
-   and a scan of 20,000 files are open.
+7. **Loose ends.** `weaver store drive materialise|sync-up|sync-down|resolve|watch` is wired (see
+   "The `weaver store drive` verbs"). Open: tombstone collection, `.drive.tmp.*` cleanup, a
+   daemon loop in place of `watch`'s one scan per call (ADR-131), and a scan of 20,000 files.
 
 ## Conditional put and read-only
 
@@ -171,6 +170,46 @@ scans or touches the store. `materialise_with` and `sync_down_with` work as befo
 bucket's `.wt/tree/` is a daemon-written publish area, so followers use it with `read_only` set;
 this is in the `drive` module docs too.
 
-**Not done.** The S2 follower and daemon wrappers were not changed to forward the two new methods.
-Plain `sync_up(backend, dest)` has no read-only form (use `sync_up_with`). Delete tombstone writes
-are still plain puts.
+**Forwarding and tombstones.** The daemon's wrapper `Op` forwards the two methods, so the drive
+through the daemon reports `conditional` (test in `store_worktree_tests.rs`). Tombstone writes are
+create-only: the put refuses an existing marker; then a marker that is newer than this writer's
+clock, or that names the same deleted etag, stays; an older one is replaced with `put_if_match`
+against the etag just read, and left alone on a backend with no conditional write. A stale writer
+therefore never overwrites a newer tombstone. This does not stop a tombstone landing after a
+revive (a delete whose marker write is delayed past a re-create); only the next `sync_up` of the
+key clears it.
+
+Plain `sync_up(backend, dest)` has no read-only form (use `sync_up_with`).
+
+## The `weaver store drive` verbs
+
+Thin calls into the library through the daemon RPC (`store.drive.<verb>`, `store_drive.rs`), wired
+like the S2 verbs: an Admin act on the raw data plane, paths checked by the same `Guard` as the
+worktree verbs (absolute, no `.` or `..`, resolved through symlinks, outside the daemon's own state),
+the library's secret denylist and ceilings (`Limits::default()`) unchanged.
+
+```
+weaver store drive materialise --name <store> --dest <abs dir> [--prefix P] [--read-only]
+weaver store drive sync-down   --root <abs dir> [--name <store>] [--read-only]
+weaver store drive sync-up     --name <store> --root <abs dir> [--read-only]
+weaver store drive resolve     --name <store> --root <abs dir> --path <rel> --keep local|remote
+weaver store drive watch       --root <abs dir>
+```
+
+- `--root` is the existing drive; `--dest` is accepted for it, and two different values are refused.
+  A `--name` given with `--root` must match the store the drive is bound to.
+- `--read-only` sets `Options.read_only` for that call: `sync-up` then fails with the read-only
+  error before it scans or contacts the store.
+- `materialise`, `sync-up` and `resolve` write an activity-log entry (`DriveMaterialise`,
+  `DriveSyncUp`, `DriveResolve`) and a chain event (`store.drive.<verb>`), success or failure, with
+  counts in the payload and not file lists. `sync-down` and `watch` read and record nothing.
+- `watch` is one scan per call and does not block. It prints the pending local changes, skipped
+  paths and the open-conflict count. A shell loop drives it: call every second, and `sync-up` once
+  two reports in a row are the same and non-empty (the quiet rule, kept by the caller until the
+  ADR-131 loop exists).
+- The output is the report as JSON. `weaver store drive sync-up` shows `conditional` and
+  `head_then_write`, so a wrapper that drops the conditional write is visible.
+
+Tests: `store_drive_tests.rs` (round trip with `conditional` reported, conflict and `resolve`, relative
+and protected paths refused, read-only refusal, secret skipped, wrong-store refusal, records) and
+`store_worktree_tests.rs` (wrapper forwarding).
