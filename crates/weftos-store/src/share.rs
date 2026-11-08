@@ -204,12 +204,27 @@ pub fn sha256_hex(data: &[u8]) -> String {
 
 /// Files that must never be shared even when git can see them.
 pub fn is_secret_path(path: &str) -> bool {
-    let name = path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase();
+    let lower = path.to_ascii_lowercase();
+    let mut segs: Vec<&str> = lower.split('/').collect();
+    let name = segs.pop().unwrap_or("").to_string();
+    // Credential directories, wherever they sit in the tree: a kube config and its caches, the
+    // docker client config, and the daemon's own per-store keys (`store-secrets/wk-*`).
+    if segs.iter().any(|s| *s == ".kube" || *s == "store-secrets")
+        || (name == "config.json" && segs.last() == Some(&".docker"))
+    {
+        return true;
+    }
+    let name = name.as_str();
     let env_template = [".example", ".sample", ".template"]
         .iter()
         .any(|t| name.ends_with(t));
     (!env_template && (name == ".env" || name.starts_with(".env.")))
         || name.ends_with(".env")
+        // backups and copies of env files (`prod.env.bak`); the template suffixes stay shareable
+        || (!env_template && name.contains(".env."))
+        || name.ends_with(".tfvars")
+        || name == ".pypirc"
+        || name.ends_with(".token")
         || name == ".envrc"
         || name == ".git-credentials"
         || name == ".pgpass"

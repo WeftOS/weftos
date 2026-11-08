@@ -869,6 +869,37 @@ fn secret_name_gaps_are_closed_but_templates_pass() {
 }
 
 #[test]
+fn more_secret_names_are_refused_and_lookalikes_pass() {
+    for p in [
+        "config/prod.env.bak",
+        "config/PROD.ENV.OLD",
+        "terraform.tfvars",
+        "infra/prod.auto.tfvars",
+        "home/.kube/config",
+        ".kube/cache/token",
+        ".docker/config.json",
+        "x/.docker/config.json",
+        ".pypirc",
+        "ci/deploy.token",
+        "store-secrets/wk-abc123",
+        "run/store-secrets/wk-abc123.json",
+    ] {
+        assert!(is_secret_path(p), "{p}");
+    }
+    for p in [
+        "docs/kube-config.md",
+        "src/docker/config.rs",
+        "src/token.rs",
+        "environment.backup",
+        "config/prod.env.example",
+        "README.md",
+        "src/store_keys.rs",
+    ] {
+        assert!(!is_secret_path(p), "{p}");
+    }
+}
+
+#[test]
 fn live_claim_blocks_republish_and_rehandoff_and_merge_needs_a_claim() {
     let d = tree_dir();
     let b = setup();
