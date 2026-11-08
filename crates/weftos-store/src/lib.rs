@@ -25,6 +25,8 @@ pub mod mem;
 pub mod name;
 pub mod policy;
 #[cfg(feature = "rustfs")]
+pub mod integrity;
+#[cfg(feature = "rustfs")]
 pub mod rustfs;
 pub mod service;
 #[cfg(feature = "rustfs")]

@@ -70,24 +70,24 @@ fn an_unreachable_backend_is_retried_then_reported_as_unavailable() {
     let d = tempfile::tempdir().unwrap();
     let t = std::time::Instant::now();
     let slow = RustfsBackend::new(cfg(d.path())).unwrap().with_retry(Retry { attempts: 3, base: Duration::from_millis(40) });
-    let e = slow.get("b", "k").unwrap_err();
+    let e = slow.get("bkt", "k").unwrap_err();
     assert!(matches!(e, BackendError::Unavailable(_)) && e.is_transient(), "{e:?}");
     assert!(t.elapsed() >= Duration::from_millis(40 + 160), "two waits happened: {:?}", t.elapsed());
     // A write to a port nothing listens on never opened a connection, so it is retried too.
     let t = std::time::Instant::now();
-    assert!(slow.put("b", "k", b"v", false).unwrap_err().is_transient());
+    assert!(slow.put("bkt", "k", b"v", false).unwrap_err().is_transient());
     assert!(t.elapsed() >= Duration::from_millis(200));
     // Off: one try, no waiting.
     let once = RustfsBackend::new(cfg(d.path())).unwrap().with_retry(Retry { attempts: 1, base: Duration::from_secs(9) });
     let t = std::time::Instant::now();
-    assert!(once.get("b", "k").unwrap_err().is_transient());
+    assert!(once.get("bkt", "k").unwrap_err().is_transient());
     assert!(t.elapsed() < Duration::from_secs(3));
 }
 
 #[test]
 fn http_statuses_map_to_the_error_that_says_what_to_do() {
     let be = RustfsBackend::new(RustfsConfig { endpoint: "http://127.0.0.1:1".into(), region: "r".into(), root_access_key: "a".into(), root_secret_key: "b".into(), secrets_dir: tempfile::tempdir().unwrap().keep(), timeout: Duration::from_secs(1) }).unwrap();
-    let resp = |status, code: &str| Resp { status, etag: None, len: None, version: None, body: format!("<Error><Code>{code}</Code><Message>m</Message></Error>").into_bytes() };
+    let resp = |status, code: &str| Resp { status, etag: None, len: None, version: None, sha256: None, body: format!("<Error><Code>{code}</Code><Message>m</Message></Error>").into_bytes() };
     let ob = Ctx::Object("b", "k");
     assert!(matches!(be.check(resp(401, "InvalidAccessKeyId"), ob), Err(BackendError::Forbidden(_))));
     assert!(matches!(be.check(resp(403, "AccessDenied"), ob), Err(BackendError::Forbidden(_))));
@@ -232,14 +232,14 @@ fn a_dead_rustfs_fails_fast_after_the_breaker_opens_and_a_short_timeout_view_sha
     let quick = be.with_timeout(Duration::from_millis(200));
     for i in 0..3 {
         assert!(!be.breaker_open(), "closed before failure {i}");
-        assert!(be.get("b", "k").unwrap_err().is_transient());
+        assert!(be.get("bkt", "k").unwrap_err().is_transient());
     }
     assert!(be.breaker_open() && quick.breaker_open(), "all views see it");
     let t = Instant::now();
-    let e = quick.get("b", "k").unwrap_err();
+    let e = quick.get("bkt", "k").unwrap_err();
     assert!(e.is_transient() && e.to_string().contains("circuit open"), "{e}");
     assert!(t.elapsed() < Duration::from_millis(50), "no connection attempt: {:?}", t.elapsed());
-    assert!(be.put("b", "k", b"v", false).unwrap_err().to_string().contains("circuit open"));
+    assert!(be.put("bkt", "k", b"v", false).unwrap_err().to_string().contains("circuit open"));
 }
 
 #[test]
@@ -445,8 +445,8 @@ fn the_notification_body_names_the_target_and_a_bad_target_is_refused() {
     assert!(x.contains("<Queue>arn:rustfs:sqs::primary:webhook</Queue>") && x.contains("s3:ObjectCreated:*") && x.contains("s3:ObjectRemoved:*"));
     let d = tempfile::tempdir().unwrap();
     let be = RustfsBackend::new(RustfsConfig { endpoint: "http://127.0.0.1:1".into(), region: "us-east-1".into(), root_access_key: "a".into(), root_secret_key: "b".into(), secrets_dir: d.path().join("s"), timeout: std::time::Duration::from_secs(1) }).unwrap();
-    assert!(matches!(be.put_bucket_notification("b", "x/y"), Err(BackendError::BadKey(_))));
-    assert!(matches!(be.put_bucket_notification("b", ""), Err(BackendError::BadKey(_))));
+    assert!(matches!(be.put_bucket_notification("bkt", "x/y"), Err(BackendError::BadKey(_))));
+    assert!(matches!(be.put_bucket_notification("bkt", ""), Err(BackendError::BadKey(_))));
 }
 
 #[test]
@@ -962,4 +962,211 @@ fn a_secret_is_written_with_create_new_a_leftover_is_replaced_and_a_planted_link
     RustfsBackend::write_secret(&path, "again").unwrap();
     assert_eq!(std::fs::read(&victim).unwrap(), b"keep");
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "again");
+}
+
+
+// ---- F16: bucket names, a copy that fails inside a 200, and the integrity of what is read ------
+
+/// A canned HTTP/1.1 server on loopback: each request is answered by `f(request line)` as
+/// `(status, extra headers, body)`; every request line it saw is returned when `stop` is called.
+struct Canned {
+    port: u16,
+    seen: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+impl Canned {
+    fn start(f: impl Fn(&str) -> (u16, Vec<(&'static str, String)>, Vec<u8>) + Send + 'static) -> Self {
+        use std::io::{Read, Write};
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let s2 = seen.clone();
+        std::thread::spawn(move || {
+            for c in l.incoming() {
+                let Ok(mut c) = c else { break };
+                let mut buf = Vec::new();
+                let mut b = [0u8; 4096];
+                while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match c.read(&mut b) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => buf.extend_from_slice(&b[..n]),
+                    }
+                }
+                let line = String::from_utf8_lossy(&buf).lines().next().unwrap_or("").to_owned();
+                s2.lock().unwrap().push(line.clone());
+                let (st, hs, body) = f(&line);
+                let mut head = format!("HTTP/1.1 {st} X\r\ncontent-length: {}\r\nconnection: close\r\n", body.len());
+                for (k, v) in hs {
+                    head.push_str(&format!("{k}: {v}\r\n"));
+                }
+                let _ = c.write_all(head.as_bytes());
+                let _ = c.write_all(b"\r\n");
+                let _ = c.write_all(&body);
+            }
+        });
+        Self { port, seen }
+    }
+    fn backend(&self, d: &Path) -> RustfsBackend {
+        RustfsBackend::new(cfg_in(d, &format!("http://127.0.0.1:{}", self.port))).unwrap().with_retry(Retry { attempts: 1, base: Duration::from_millis(1) })
+    }
+    fn requests(&self) -> Vec<String> {
+        self.seen.lock().unwrap().clone()
+    }
+}
+
+#[test]
+fn a_bucket_string_that_is_not_a_bucket_name_never_reaches_the_network_on_any_call() {
+    let srv = Canned::start(|_| (200, vec![], b"<CopyObjectResult><ETag>\"x\"</ETag></CopyObjectResult>".to_vec()));
+    let d = tempfile::tempdir().unwrap();
+    let be = srv.backend(d.path());
+    for bad in ["w-x/../p-y", "../x", "a/b", "ab", "UPPER", "-lead", "a b c", "x%2Fy", "p-y?acl", &"a".repeat(64), "", "a.b.c"] {
+        let k = "k";
+        let bad_key = |e: BackendError| matches!(e, BackendError::BadKey(_));
+        assert!(bad_key(be.put(bad, k, b"v", false).unwrap_err()), "put {bad:?}");
+        assert!(bad_key(be.get(bad, k).unwrap_err()), "get {bad:?}");
+        assert!(bad_key(be.head(bad, k).unwrap_err()), "head {bad:?}");
+        assert!(bad_key(be.delete(bad, k).unwrap_err()), "delete {bad:?}");
+        assert!(bad_key(be.list(bad, "").unwrap_err()), "list {bad:?}");
+        assert!(bad_key(be.copy(bad, k, "good-bucket", "k2").unwrap_err()), "copy src {bad:?}");
+        assert!(bad_key(be.copy("good-bucket", k, bad, "k2").unwrap_err()), "copy dst {bad:?}");
+        assert!(bad_key(be.create_bucket(bad, &[]).unwrap_err()), "create {bad:?}");
+        assert!(bad_key(be.delete_bucket(bad).unwrap_err()), "delete_bucket {bad:?}");
+        assert!(bad_key(be.bucket_exists(bad).unwrap_err()), "exists {bad:?}");
+        assert!(bad_key(be.get_lifecycle(bad).unwrap_err()), "lifecycle {bad:?}");
+        assert!(bad_key(be.put_if_match(bad, k, b"v", "e").unwrap_err()), "put_if_match {bad:?}");
+        assert!(bad_key(be.list_versions(bad, "").unwrap_err()), "list_versions {bad:?}");
+        assert!(bad_key(be.get_lock_config(bad).unwrap_err()), "lock config {bad:?}");
+        assert!(bad_key(be.put_bucket_notification(bad, "t").unwrap_err()), "notification {bad:?}");
+    }
+    assert!(srv.requests().is_empty(), "not one request was sent: {:?}", srv.requests());
+    // The names the daemon really makes pass.
+    for ok in ["weftos-archive", "p-01jbxk2m3n4p5q6r7s8t9v0w1x", "w-abc-def", "n-pg-1"] {
+        assert!(crate::backend::check_bucket(ok).is_ok(), "{ok}");
+    }
+}
+
+#[test]
+fn a_copy_that_answers_200_with_an_error_body_is_an_error_and_a_real_result_is_not() {
+    let d = tempfile::tempdir().unwrap();
+    let err = |code: &'static str| Canned::start(move |_| (200, vec![], format!("<?xml version=\"1.0\"?><Error><Code>{code}</Code><Message>it broke</Message></Error>").into_bytes()));
+    for (code, want) in [("InternalError", "unavailable"), ("NoSuchKey", "noobject"), ("NoSuchBucket", "nobucket"), ("AccessDenied", "forbidden"), ("EntityTooLarge", "io")] {
+        let srv = err(code);
+        let e = srv.backend(d.path()).copy("src-bkt", "a.txt", "dst-bkt", "b.txt").unwrap_err();
+        let got = match &e {
+            BackendError::Unavailable(_) => "unavailable",
+            BackendError::NoObject(_) => "noobject",
+            BackendError::NoBucket(_) => "nobucket",
+            BackendError::Forbidden(_) => "forbidden",
+            BackendError::Io(_) => "io",
+            o => panic!("{o:?}"),
+        };
+        assert_eq!(got, want, "{code}");
+        assert_eq!(srv.requests().len(), 1, "{code}: failed on the copy's own answer; no HEAD of a destination was trusted");
+    }
+    // 200 with no body at all, or with something else: not a copy result.
+    for body in ["", "<html>ok</html>"] {
+        let srv = Canned::start(move |_| (200, vec![], body.as_bytes().to_vec()));
+        assert!(matches!(srv.backend(d.path()).copy("src-bkt", "a", "dst-bkt", "b"), Err(BackendError::Io(_))), "{body:?}");
+    }
+    // A real result passes, and the destination's own ETag has to agree with it.
+    let ok = Canned::start(|line| {
+        if line.starts_with("PUT") {
+            (200, vec![], b"<CopyObjectResult><ETag>&quot;5d41402abc4b2a76b9719d911017c592&quot;</ETag></CopyObjectResult>".to_vec())
+        } else {
+            (200, vec![("etag", "\"5d41402abc4b2a76b9719d911017c592\"".into())], vec![])
+        }
+    });
+    let m = ok.backend(d.path()).copy("src-bkt", "a", "dst-bkt", "b").unwrap();
+    assert_eq!(m.etag, "5d41402abc4b2a76b9719d911017c592");
+    let liar = Canned::start(|line| {
+        if line.starts_with("PUT") { (200, vec![], b"<CopyObjectResult><ETag>\"aaaa\"</ETag></CopyObjectResult>".to_vec()) } else { (200, vec![("etag", "\"bbbb\"".into())], vec![]) }
+    });
+    assert!(matches!(liar.backend(d.path()).copy("src-bkt", "a", "dst-bkt", "b"), Err(BackendError::Io(_))), "a destination that is not what the copy reported");
+}
+
+#[test]
+fn a_read_whose_body_does_not_match_its_checksum_or_etag_is_an_error_not_data() {
+    let d = tempfile::tempdir().unwrap();
+    let good = crate::integrity::checksum_sha256(b"hello");
+    let md5 = "5d41402abc4b2a76b9719d911017c592";
+    // The store's SHA-256 matches / does not.
+    let s = Canned::start({
+        let good = good.clone();
+        move |_| (200, vec![("x-amz-checksum-sha256", good.clone()), ("etag", "\"whatever\"".into())], b"hello".to_vec())
+    });
+    assert_eq!(s.backend(d.path()).get_checked("bkt", "k").unwrap(), (b"hello".to_vec(), crate::integrity::Check::Sha256));
+    let s = Canned::start(move |_| (200, vec![("x-amz-checksum-sha256", good.clone())], b"hellp".to_vec()));
+    assert!(s.backend(d.path()).get("bkt", "k").unwrap_err().to_string().contains("integrity"));
+    // No checksum: the single-part ETag.
+    let s = Canned::start(move |_| (200, vec![("etag", format!("\"{md5}\""))], b"hello".to_vec()));
+    assert_eq!(s.backend(d.path()).get_checked("bkt", "k").unwrap().1, crate::integrity::Check::Md5Etag);
+    let s = Canned::start(move |_| (200, vec![("etag", format!("\"{md5}\""))], b"HELLO".to_vec()));
+    assert!(s.backend(d.path()).get("bkt", "k").unwrap_err().to_string().contains("MD5"));
+    // A multipart ETag proves nothing: reported as unverified, not as verified.
+    let s = Canned::start(move |_| (200, vec![("etag", format!("\"{md5}-2\""))], b"anything".to_vec()));
+    assert_eq!(s.backend(d.path()).get_checked("bkt", "k").unwrap().1, crate::integrity::Check::Unverified);
+    // The request asked for the checksum, and a put sends one.
+    let seen = Canned::start(|_| (200, vec![], vec![]));
+    let be = seen.backend(d.path());
+    let _ = be.put("bkt", "k", b"hello", false);
+    let _ = be.get("bkt", "k");
+    assert_eq!(seen.requests().len(), 2);
+}
+
+#[test]
+fn put_and_get_requests_carry_the_checksum_headers() {
+    use std::io::{Read, Write};
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    let h = std::thread::spawn(move || {
+        let mut heads = Vec::new();
+        for _ in 0..2 {
+            let (mut c, _) = l.accept().unwrap();
+            let mut buf = Vec::new();
+            let mut b = [0u8; 4096];
+            while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                let n = c.read(&mut b).unwrap();
+                if n == 0 {
+                    break;
+                }
+                buf.extend_from_slice(&b[..n]);
+            }
+            heads.push(String::from_utf8_lossy(&buf).to_lowercase());
+            let _ = c.write_all(b"HTTP/1.1 200 X\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
+        }
+        heads
+    });
+    let d = tempfile::tempdir().unwrap();
+    let be = RustfsBackend::new(cfg_in(d.path(), &format!("http://127.0.0.1:{port}"))).unwrap().with_retry(Retry { attempts: 1, base: Duration::from_millis(1) });
+    be.put("bkt", "k", b"hello", false).unwrap();
+    let _ = be.get("bkt", "k");
+    let heads = h.join().unwrap();
+    assert!(heads[0].starts_with("put ") && heads[0].contains(&format!("x-amz-checksum-sha256: {}", crate::integrity::checksum_sha256(b"hello").to_lowercase())), "{}", heads[0]);
+    assert!(heads[0].contains("signedheaders=") && heads[0].contains("x-amz-checksum-sha256"), "the checksum is a signed header: {}", heads[0]);
+    assert!(heads[1].starts_with("get ") && heads[1].contains("x-amz-checksum-mode: enabled"), "{}", heads[1]);
+}
+
+#[test]
+#[ignore = "needs a throwaway RustFS: WEFTOS_STORE_TEST_RUSTFS_ENV"]
+fn live_reads_are_checked_against_the_stored_checksum_and_a_copy_is_a_copy_result() {
+    let (cfg, _d) = live().expect("WEFTOS_STORE_TEST_RUSTFS_ENV");
+    let be = RustfsBackend::new(cfg).unwrap();
+    let b = uniq("t-int");
+    be.create_bucket(&b, &[]).unwrap();
+    be.put(&b, "a.txt", b"hello", false).unwrap();
+    let (body, how) = be.get_checked(&b, "a.txt").unwrap();
+    assert_eq!(body, b"hello");
+    eprintln!("RustFS 1.0.4 read of an object put with a checksum was verified by {how:?}");
+    assert_ne!(how, crate::integrity::Check::Unverified, "a put by this backend can always be checked on read");
+    // An object put without our checksum header (a raw signed PUT) is still checkable by its ETag.
+    let r = be.send("PUT", &format!("/{b}/raw.txt"), &[], b"hello", &[]).unwrap();
+    assert_eq!(r.status, 200);
+    assert_ne!(be.get_checked(&b, "raw.txt").unwrap().1, crate::integrity::Check::Unverified);
+    // A wrong checksum on a put is refused by the store.
+    let wrong = be.send("PUT", &format!("/{b}/bad.txt"), &[], b"hello", &[("x-amz-checksum-sha256", crate::integrity::checksum_sha256(b"other"))]).unwrap();
+    assert_ne!(wrong.status, 200, "RustFS verifies the checksum it is sent");
+    // Copy: the result's ETag is the destination's.
+    let m = be.copy(&b, "a.txt", &b, "b.txt").unwrap();
+    assert_eq!(m.etag, "5d41402abc4b2a76b9719d911017c592");
+    assert!(matches!(be.copy(&b, "missing.txt", &b, "c.txt"), Err(BackendError::NoObject(_))));
 }

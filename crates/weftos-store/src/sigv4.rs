@@ -128,9 +128,8 @@ pub fn canonical_query(q: &[(String, String)]) -> String {
     v.iter().map(|(k, x)| format!("{k}={x}")).collect::<Vec<_>>().join("&")
 }
 
-/// The `authorization` header value for a request signed at `amz_date`.
-pub fn authorization(r: &Req, access: &str, secret: &str, region: &str, amz_date: &str) -> String {
-    let date = &amz_date[..8];
+/// The signed headers (`;`-joined names) and the canonical request for `r` signed at `amz_date`.
+pub fn canonical_request(r: &Req, amz_date: &str) -> (String, String) {
     let mut hs: Vec<(String, String)> = vec![
         ("host".into(), r.host.to_owned()),
         ("x-amz-content-sha256".into(), r.payload_sha256.to_owned()),
@@ -141,6 +140,13 @@ pub fn authorization(r: &Req, access: &str, secret: &str, region: &str, amz_date
     let signed = hs.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>().join(";");
     let heads: String = hs.iter().map(|(k, v)| format!("{k}:{v}\n")).collect();
     let canon = format!("{}\n{}\n{}\n{heads}\n{signed}\n{}", r.method, encode(r.path, true), canonical_query(r.query), r.payload_sha256);
+    (signed, canon)
+}
+
+/// The `authorization` header value for a request signed at `amz_date`.
+pub fn authorization(r: &Req, access: &str, secret: &str, region: &str, amz_date: &str) -> String {
+    let date = &amz_date[..8];
+    let (signed, canon) = canonical_request(r, amz_date);
     let scope = format!("{date}/{region}/s3/aws4_request");
     let to_sign = format!("AWS4-HMAC-SHA256\n{amz_date}\n{scope}\n{}", sha256_hex(canon.as_bytes()));
     let sig = hex(&hmac(&signing_key(secret, date, region, "s3"), to_sign.as_bytes()));
@@ -196,5 +202,56 @@ mod tests {
     #[test]
     fn empty_payload_hash_is_the_well_known_constant() {
         assert_eq!(sha256_hex(b""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    }
+
+    // The four worked examples of "Signature Calculations for the Authorization Header" in the
+    // Amazon S3 API reference (AWS's published canonical requests and signatures; the credentials
+    // are AWS's documentation example keys, not real ones).
+    const DOC_ACCESS: &str = "AKIAIOSFODNN7EXAMPLE";
+    const DOC_SECRET: &str = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
+    const DOC_DATE: &str = "20130524T000000Z";
+    const EMPTY: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+    fn doc_check(r: &Req, canon: &str, signed: &str, sig: &str) {
+        let (s, c) = canonical_request(r, DOC_DATE);
+        assert_eq!(c, canon, "canonical request");
+        assert_eq!(s, signed);
+        let auth = authorization(r, DOC_ACCESS, DOC_SECRET, "us-east-1", DOC_DATE);
+        assert_eq!(auth, format!("AWS4-HMAC-SHA256 Credential={DOC_ACCESS}/20130524/us-east-1/s3/aws4_request, SignedHeaders={signed}, Signature={sig}"));
+    }
+
+    #[test]
+    fn aws_documented_get_object_with_a_range_header() {
+        let extra = [("range".to_owned(), "bytes=0-9".to_owned())];
+        let r = Req { method: "GET", path: "/test.txt", query: &[], host: "examplebucket.s3.amazonaws.com", payload_sha256: EMPTY, extra: &extra };
+        let canon = format!("GET\n/test.txt\n\nhost:examplebucket.s3.amazonaws.com\nrange:bytes=0-9\nx-amz-content-sha256:{EMPTY}\nx-amz-date:{DOC_DATE}\n\nhost;range;x-amz-content-sha256;x-amz-date\n{EMPTY}");
+        doc_check(&r, &canon, "host;range;x-amz-content-sha256;x-amz-date", "f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41");
+    }
+
+    #[test]
+    fn aws_documented_put_object_with_a_dollar_in_the_key_and_extra_headers() {
+        let body = sha256_hex(b"Welcome to Amazon S3.");
+        assert_eq!(body, "44ce7dd67c959e0d3524ffac1771dfbba87d2b6b4b4e99e42034a8b803f8b072");
+        let extra = [("date".to_owned(), "Fri, 24 May 2013 00:00:00 GMT".to_owned()), ("x-amz-storage-class".to_owned(), "REDUCED_REDUNDANCY".to_owned())];
+        let r = Req { method: "PUT", path: "/test$file.text", query: &[], host: "examplebucket.s3.amazonaws.com", payload_sha256: &body, extra: &extra };
+        let canon = format!("PUT\n/test%24file.text\n\ndate:Fri, 24 May 2013 00:00:00 GMT\nhost:examplebucket.s3.amazonaws.com\nx-amz-content-sha256:{body}\nx-amz-date:{DOC_DATE}\nx-amz-storage-class:REDUCED_REDUNDANCY\n\ndate;host;x-amz-content-sha256;x-amz-date;x-amz-storage-class\n{body}");
+        doc_check(&r, &canon, "date;host;x-amz-content-sha256;x-amz-date;x-amz-storage-class", "98ad721746da40c64f1a55b78f14c238d841ea1380cd77a1b5971af0ece108bd");
+    }
+
+    #[test]
+    fn aws_documented_get_bucket_lifecycle_with_an_empty_query_value() {
+        let q = [("lifecycle".to_owned(), String::new())];
+        let r = Req { method: "GET", path: "/", query: &q, host: "examplebucket.s3.amazonaws.com", payload_sha256: EMPTY, extra: &[] };
+        let canon = format!("GET\n/\nlifecycle=\nhost:examplebucket.s3.amazonaws.com\nx-amz-content-sha256:{EMPTY}\nx-amz-date:{DOC_DATE}\n\nhost;x-amz-content-sha256;x-amz-date\n{EMPTY}");
+        doc_check(&r, &canon, "host;x-amz-content-sha256;x-amz-date", "fea454ca298b7da1c68078a5d1bdbfbbe0d65c699e0f91ac7a200a0136783543");
+    }
+
+    #[test]
+    fn aws_documented_list_objects_with_two_sorted_query_parameters() {
+        // Given out of order: the canonical query sorts them.
+        let q = [("prefix".to_owned(), "J".to_owned()), ("max-keys".to_owned(), "2".to_owned())];
+        let r = Req { method: "GET", path: "/", query: &q, host: "examplebucket.s3.amazonaws.com", payload_sha256: EMPTY, extra: &[] };
+        let canon = format!("GET\n/\nmax-keys=2&prefix=J\nhost:examplebucket.s3.amazonaws.com\nx-amz-content-sha256:{EMPTY}\nx-amz-date:{DOC_DATE}\n\nhost;x-amz-content-sha256;x-amz-date\n{EMPTY}");
+        doc_check(&r, &canon, "host;x-amz-content-sha256;x-amz-date", "34b48302e7b5fa45bde8084f4b7868a86f0a534bc59db6670ed5711ef69dc6f7");
     }
 }

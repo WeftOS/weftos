@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::StoreError;
-use crate::backend::{AccessKey, AdminBackend, BackendError, ObjectBackend, ObjectMeta, check_key, etag_of};
+use crate::backend::{AccessKey, AdminBackend, BackendError, ObjectBackend, ObjectMeta, check_bucket, check_key, etag_of};
 
 static TMP: AtomicU64 = AtomicU64::new(0);
 
@@ -60,14 +60,6 @@ pub struct FsBackend {
 
 fn io(e: impl std::fmt::Display) -> BackendError {
     BackendError::Io(e.to_string())
-}
-
-fn check_bucket(b: &str) -> Result<(), BackendError> {
-    if (3..=63).contains(&b.len()) && b.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-') && !b.starts_with('-') {
-        Ok(())
-    } else {
-        Err(BackendError::BadKey(format!("bucket {b:?}: 3 to 63 of a-z, 0-9, '-'")))
-    }
 }
 
 impl FsBackend {

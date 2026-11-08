@@ -14,7 +14,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use reqwest::blocking::Client;
 use serde_json::{Value, json};
 
-use crate::backend::{AccessKey, AdminBackend, BackendError, BucketTags, DefaultRetention, LockConfig, LockMode, LifecycleRule, LockedPut, ObjectBackend, ObjectMeta, ObjectVersion, Part, PutOpts, Retention, check_key};
+use crate::backend::{AccessKey, AdminBackend, BackendError, BucketTags, DefaultRetention, LockConfig, LockMode, LifecycleRule, LockedPut, ObjectBackend, ObjectMeta, ObjectVersion, Part, PutOpts, Retention, check_bucket, check_key};
+use crate::integrity;
 use crate::sigv4::{self, Req};
 
 /// Connection settings. `secrets_dir` receives one 0600 file per issued access key, in a 0700
@@ -258,6 +259,8 @@ struct Resp {
     len: Option<u64>,
     /// `x-amz-version-id`, set by versioned (Object Lock) buckets.
     version: Option<String>,
+    /// `x-amz-checksum-sha256` (base64), when the store returns one.
+    sha256: Option<String>,
     body: Vec<u8>,
 }
 
@@ -268,6 +271,26 @@ enum Ctx<'a> {
     /// (bucket, key)
     Object(&'a str, &'a str),
     Other,
+}
+
+/// The ETag in a CopyObject answer, or the error an `<Error>` body of a `200` carries (the same
+/// mapping as a non-2xx answer), or an error if the body is neither.
+fn copy_result_etag(body: &[u8], src_bucket: &str, src_key: &str) -> Result<String, BackendError> {
+    let text = String::from_utf8_lossy(body);
+    if let Some(code) = xml_tag(&text, "Code").filter(|_| text.contains("<Error>")) {
+        let msg = xml_tag(&text, "Message").unwrap_or_default();
+        return Err(match code.as_str() {
+            "NoSuchKey" => BackendError::NoObject(src_key.to_owned()),
+            "NoSuchBucket" => BackendError::NoBucket(src_bucket.to_owned()),
+            "AccessDenied" => BackendError::Forbidden(format!("{code} {msg}").trim().to_owned()),
+            "InternalError" | "SlowDown" | "ServiceUnavailable" | "RequestTimeout" => BackendError::Unavailable(format!("{code} {msg}").trim().to_owned()),
+            _ => BackendError::Io(format!("copy failed with a 200 answer: {code}: {msg}")),
+        });
+    }
+    if !text.contains("<CopyObjectResult") {
+        return Err(BackendError::Io(format!("copy answered 200 without a CopyObjectResult ({} bytes)", body.len())));
+    }
+    Ok(xml_tag(&text, "ETag").map(|e| unescape(&e).trim_matches('"').to_owned()).unwrap_or_default())
 }
 
 fn io(e: impl std::fmt::Display) -> BackendError {
@@ -520,11 +543,12 @@ impl RustfsBackend {
         let etag = r.headers().get("etag").and_then(|v| v.to_str().ok()).map(|v| v.trim_matches('"').to_owned());
         let len = r.headers().get("content-length").and_then(|v| v.to_str().ok()).and_then(|v| v.parse().ok());
         let version = r.headers().get("x-amz-version-id").and_then(|v| v.to_str().ok()).map(str::to_owned);
+        let sha256 = r.headers().get("x-amz-checksum-sha256").and_then(|v| v.to_str().ok()).map(str::to_owned);
         let body = match r.bytes() {
             Ok(b) => b.to_vec(),
             Err(e) => return Ok(Err(Xport { msg: format!("reading the response: {e}"), never_sent: false, timed_out: e.is_timeout() })),
         };
-        Ok(Ok(Resp { status, etag, len, version, body }))
+        Ok(Ok(Resp { status, etag, len, version, sha256, body }))
     }
 
     /// Turn a non-2xx response into the matching [`BackendError`].
@@ -623,7 +647,22 @@ impl RustfsBackend {
     /// `PutBucketNotification`: route the bucket's events to the webhook target `target`. The
     /// target must already exist (set from the environment when RustFS starts); without it
     /// RustFS answers 500. See docs/guides/rustfs-audit-deploy.md.
+    /// GetObject with its integrity check (see [`integrity`]): the body is verified against
+    /// `Content-Length` and the SHA-256 the store holds, or the single-part ETag, and a mismatch is an
+    /// error, not data. The [`integrity::Check`] says what it was verified against; `Unverified`
+    /// means only the length could be checked (an object stored without a checksum with a
+    /// multipart ETag).
+    pub fn get_checked(&self, bucket: &str, key: &str) -> Result<(Vec<u8>, integrity::Check), BackendError> {
+        check_bucket(bucket)?;
+        check_key(key)?;
+        let r = self.send("GET", &format!("/{bucket}/{key}"), &[], &[], &[("x-amz-checksum-mode", "ENABLED".into())])?;
+        let r = self.check(r, Ctx::Object(bucket, key))?;
+        let how = integrity::verify_body(&r.body, r.len, r.sha256.as_deref(), r.etag.as_deref()).map_err(BackendError::Io)?;
+        Ok((r.body, how))
+    }
+
     pub fn put_bucket_notification(&self, bucket: &str, target: &str) -> Result<(), BackendError> {
+        check_bucket(bucket)?;
         if target.is_empty() || !target.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
             return Err(BackendError::BadKey(format!("notification target {target:?}: letters, digits, '_' and '-' only")));
         }
@@ -634,18 +673,23 @@ impl RustfsBackend {
 
 impl ObjectBackend for RustfsBackend {
     fn put(&self, bucket: &str, key: &str, data: &[u8], if_none_match: bool) -> Result<ObjectMeta, BackendError> {
+        check_bucket(bucket)?;
         check_key(key)?;
-        let extra: Vec<(&str, String)> = if if_none_match { vec![("if-none-match", "*".into())] } else { Vec::new() };
+        let mut extra: Vec<(&str, String)> = vec![("x-amz-checksum-sha256", integrity::checksum_sha256(data))];
+        if if_none_match {
+            extra.push(("if-none-match", "*".into()));
+        }
         let r = self.send("PUT", &format!("/{bucket}/{key}"), &[], data, &extra)?;
         let r = self.check(r, Ctx::Object(bucket, key))?;
         Ok(ObjectMeta { key: key.to_owned(), size: data.len() as u64, etag: r.etag.unwrap_or_default() })
     }
 
     fn put_if_match(&self, bucket: &str, key: &str, data: &[u8], etag: &str) -> Result<ObjectMeta, BackendError> {
+        check_bucket(bucket)?;
         check_key(key)?;
         // An ETag header value is quoted; accept the bare value the caller got from `ObjectMeta`.
         let q = if etag.starts_with('"') { etag.to_owned() } else { format!("\"{etag}\"") };
-        let r = self.send("PUT", &format!("/{bucket}/{key}"), &[], data, &[("if-match", q)])?;
+        let r = self.send("PUT", &format!("/{bucket}/{key}"), &[], data, &[("if-match", q), ("x-amz-checksum-sha256", integrity::checksum_sha256(data))])?;
         let r = self.check(r, Ctx::Object(bucket, key)).map_err(|e| match e {
             BackendError::Exists(k) => BackendError::Stale(k),
             e => e,
@@ -654,8 +698,10 @@ impl ObjectBackend for RustfsBackend {
     }
 
     fn put_locked(&self, bucket: &str, key: &str, data: &[u8], opts: &PutOpts) -> Result<LockedPut, BackendError> {
+        check_bucket(bucket)?;
         check_key(key)?;
         let mut extra = self.lock_headers(opts)?;
+        extra.push(("x-amz-checksum-sha256", integrity::checksum_sha256(data)));
         if opts.if_none_match {
             extra.push(("if-none-match", "*".into()));
         }
@@ -665,6 +711,7 @@ impl ObjectBackend for RustfsBackend {
     }
 
     fn create_multipart(&self, bucket: &str, key: &str, opts: &PutOpts) -> Result<String, BackendError> {
+        check_bucket(bucket)?;
         check_key(key)?;
         let extra = self.lock_headers(opts)?;
         let r = self.send("POST", &format!("/{bucket}/{key}"), &Self::q(&[("uploads", "")]), &[], &extra)?;
@@ -673,6 +720,7 @@ impl ObjectBackend for RustfsBackend {
     }
 
     fn upload_part(&self, bucket: &str, key: &str, upload_id: &str, number: u32, data: &[u8]) -> Result<String, BackendError> {
+        check_bucket(bucket)?;
         check_key(key)?;
         if !(1..=crate::backend::MAX_PARTS).contains(&number) {
             return Err(BackendError::BadKey(format!("part number {number} is outside 1..={}", crate::backend::MAX_PARTS)));
@@ -684,6 +732,7 @@ impl ObjectBackend for RustfsBackend {
     }
 
     fn complete_multipart(&self, bucket: &str, key: &str, upload_id: &str, parts: &[Part], opts: &PutOpts) -> Result<LockedPut, BackendError> {
+        check_bucket(bucket)?;
         check_key(key)?;
         if parts.is_empty() || parts.windows(2).any(|w| w[0].number >= w[1].number) {
             return Err(BackendError::BadKey("multipart: parts must be given in increasing order, at least one".into()));
@@ -705,6 +754,7 @@ impl ObjectBackend for RustfsBackend {
     }
 
     fn abort_multipart(&self, bucket: &str, key: &str, upload_id: &str) -> Result<(), BackendError> {
+        check_bucket(bucket)?;
         check_key(key)?;
         let r = self.send("DELETE", &format!("/{bucket}/{key}"), &Self::q(&[("uploadId", upload_id)]), &[], &[])?;
         // Aborting an upload that is already gone is fine.
@@ -715,6 +765,7 @@ impl ObjectBackend for RustfsBackend {
     }
 
     fn delete_version(&self, bucket: &str, key: &str, version_id: &str, bypass_governance: bool) -> Result<(), BackendError> {
+        check_bucket(bucket)?;
         check_key(key)?;
         let extra: Vec<(&str, String)> = if bypass_governance { vec![("x-amz-bypass-governance-retention", "true".into())] } else { Vec::new() };
         let r = self.send("DELETE", &format!("/{bucket}/{key}"), &Self::q(&[("versionId", version_id)]), &[], &extra)?;
@@ -722,6 +773,7 @@ impl ObjectBackend for RustfsBackend {
     }
 
     fn get_retention(&self, bucket: &str, key: &str, version_id: &str) -> Result<Option<Retention>, BackendError> {
+        check_bucket(bucket)?;
         check_key(key)?;
         let r = self.send("GET", &format!("/{bucket}/{key}"), &Self::q(&[("retention", ""), ("versionId", version_id)]), &[], &[])?;
         // An object with no retention answers 404 NoSuchObjectLockConfiguration.
@@ -741,6 +793,7 @@ impl ObjectBackend for RustfsBackend {
     }
 
     fn put_retention(&self, bucket: &str, key: &str, version_id: &str, r: &Retention, bypass_governance: bool) -> Result<(), BackendError> {
+        check_bucket(bucket)?;
         check_key(key)?;
         check_until(r.until_unix_s)?;
         let body = format!("<Retention><Mode>{}</Mode><RetainUntilDate>{}</RetainUntilDate></Retention>", r.mode.as_str(), sigv4::iso_date(r.until_unix_s));
@@ -750,6 +803,7 @@ impl ObjectBackend for RustfsBackend {
     }
 
     fn get_lock_config(&self, bucket: &str) -> Result<LockConfig, BackendError> {
+        check_bucket(bucket)?;
         let r = self.send("GET", &format!("/{bucket}"), &Self::q(&[("object-lock", "")]), &[], &[])?;
         // A bucket made without lock answers 404 ObjectLockConfigurationNotFoundError.
         if r.status == 404 && String::from_utf8_lossy(&r.body).contains("ObjectLockConfigurationNotFound") {
@@ -760,6 +814,7 @@ impl ObjectBackend for RustfsBackend {
     }
 
     fn put_default_retention(&self, bucket: &str, d: &DefaultRetention) -> Result<(), BackendError> {
+        check_bucket(bucket)?;
         let span = match (d.days, d.years) {
             (Some(n), None) if n > 0 => format!("<Days>{n}</Days>"),
             (None, Some(n)) if n > 0 => format!("<Years>{n}</Years>"),
@@ -774,6 +829,7 @@ impl ObjectBackend for RustfsBackend {
     }
 
     fn put_legal_hold(&self, bucket: &str, key: &str, version_id: &str, on: bool) -> Result<(), BackendError> {
+        check_bucket(bucket)?;
         check_key(key)?;
         let body = format!("<LegalHold><Status>{}</Status></LegalHold>", if on { "ON" } else { "OFF" });
         let r = self.send("PUT", &format!("/{bucket}/{key}"), &Self::q(&[("legal-hold", ""), ("versionId", version_id)]), body.as_bytes(), &[])?;
@@ -781,16 +837,16 @@ impl ObjectBackend for RustfsBackend {
     }
 
     fn list_versions(&self, bucket: &str, prefix: &str) -> Result<Vec<ObjectVersion>, BackendError> {
+        check_bucket(bucket)?;
         self.list_versions_paged(bucket, prefix, 1000)
     }
 
     fn get(&self, bucket: &str, key: &str) -> Result<Vec<u8>, BackendError> {
-        check_key(key)?;
-        let r = self.send("GET", &format!("/{bucket}/{key}"), &[], &[], &[])?;
-        Ok(self.check(r, Ctx::Object(bucket, key))?.body)
+        self.get_checked(bucket, key).map(|(b, _)| b)
     }
 
     fn head(&self, bucket: &str, key: &str) -> Result<ObjectMeta, BackendError> {
+        check_bucket(bucket)?;
         check_key(key)?;
         let r = self.send("HEAD", &format!("/{bucket}/{key}"), &[], &[], &[])?;
         let r = self.check(r, Ctx::Object(bucket, key))?;
@@ -798,21 +854,35 @@ impl ObjectBackend for RustfsBackend {
     }
 
     fn delete(&self, bucket: &str, key: &str) -> Result<(), BackendError> {
+        check_bucket(bucket)?;
         check_key(key)?;
         let r = self.send("DELETE", &format!("/{bucket}/{key}"), &[], &[], &[])?;
         self.check(r, Ctx::Object(bucket, key)).map(|_| ())
     }
 
     fn copy(&self, src_bucket: &str, src_key: &str, dst_bucket: &str, dst_key: &str) -> Result<ObjectMeta, BackendError> {
+        check_bucket(src_bucket)?;
+        check_bucket(dst_bucket)?;
         check_key(src_key)?;
         check_key(dst_key)?;
         let src = format!("/{src_bucket}/{}", sigv4::encode(src_key, true));
         let r = self.send("PUT", &format!("/{dst_bucket}/{dst_key}"), &[], &[], &[("x-amz-copy-source", src)])?;
-        self.check(r, Ctx::Object(src_bucket, src_key))?;
-        self.head(dst_bucket, dst_key)
+        let r = self.check(r, Ctx::Object(src_bucket, src_key))?;
+        // S3 answers a copy that failed part-way with 200 and an <Error> body: the status is not
+        // the verdict. The body has to be a CopyObjectResult, and its ETag is the copy's.
+        let etag = copy_result_etag(&r.body, src_bucket, src_key)?;
+        let mut meta = self.head(dst_bucket, dst_key)?;
+        if !etag.is_empty() && !meta.etag.is_empty() && etag != meta.etag {
+            return Err(BackendError::Io(format!("copy {src_key} -> {dst_key}: the copy reports ETag {etag} but the destination now has {}", meta.etag)));
+        }
+        if meta.etag.is_empty() {
+            meta.etag = etag;
+        }
+        Ok(meta)
     }
 
     fn list(&self, bucket: &str, prefix: &str) -> Result<Vec<ObjectMeta>, BackendError> {
+        check_bucket(bucket)?;
         let mut out = Vec::new();
         let mut token = String::new();
         loop {
@@ -856,6 +926,7 @@ impl RustfsBackend {
     }
 
     pub(crate) fn list_versions_paged(&self, bucket: &str, prefix: &str, page: usize) -> Result<Vec<ObjectVersion>, BackendError> {
+        check_bucket(bucket)?;
         let page_s = page.to_string();
         let mut out = Vec::new();
         let (mut key_marker, mut ver_marker) = (String::new(), String::new());
@@ -896,6 +967,7 @@ impl RustfsBackend {
     }
 
     fn create_bucket_with(&self, bucket: &str, tags: &[(String, String)], locked: bool) -> Result<(), BackendError> {
+        check_bucket(bucket)?;
         // RustFS answers 200 for a bucket the root already owns; an explicit check keeps the
         // contract ("already exists" is an error) the same as the other backends.
         if self.bucket_exists(bucket)? {
@@ -919,6 +991,7 @@ impl RustfsBackend {
 
 impl AdminBackend for RustfsBackend {
     fn put_lifecycle(&self, bucket: &str, rules: &[LifecycleRule]) -> Result<(), BackendError> {
+        check_bucket(bucket)?;
         if rules.is_empty() {
             let r = self.send("DELETE", &format!("/{bucket}"), &Self::q(&[("lifecycle", "")]), &[], &[])?;
             // Removing rules from a bucket that has none is fine.
@@ -940,6 +1013,7 @@ impl AdminBackend for RustfsBackend {
     }
 
     fn get_lifecycle(&self, bucket: &str) -> Result<Vec<LifecycleRule>, BackendError> {
+        check_bucket(bucket)?;
         let r = self.send("GET", &format!("/{bucket}"), &Self::q(&[("lifecycle", "")]), &[], &[])?;
         if r.status == 404 && String::from_utf8_lossy(&r.body).contains("NoSuchLifecycleConfiguration") {
             return Ok(Vec::new());
@@ -949,19 +1023,23 @@ impl AdminBackend for RustfsBackend {
     }
 
     fn create_locked_bucket(&self, bucket: &str, tags: &[(String, String)]) -> Result<(), BackendError> {
+        check_bucket(bucket)?;
         self.create_bucket_with(bucket, tags, true)
     }
 
     fn create_bucket(&self, bucket: &str, tags: &[(String, String)]) -> Result<(), BackendError> {
+        check_bucket(bucket)?;
         self.create_bucket_with(bucket, tags, false)
     }
 
     fn delete_bucket(&self, bucket: &str) -> Result<(), BackendError> {
+        check_bucket(bucket)?;
         let r = self.send("DELETE", &format!("/{bucket}"), &[], &[], &[])?;
         self.check(r, Ctx::Bucket(bucket)).map(|_| ())
     }
 
     fn bucket_exists(&self, bucket: &str) -> Result<bool, BackendError> {
+        check_bucket(bucket)?;
         let r = self.send("HEAD", &format!("/{bucket}"), &[], &[], &[])?;
         match r.status {
             404 => Ok(false),

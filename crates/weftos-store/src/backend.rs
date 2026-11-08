@@ -391,6 +391,17 @@ pub fn etag_of(data: &[u8]) -> String {
 /// accepted, 256 is `InvalidArgument`).
 pub const MAX_SEGMENT: usize = 255;
 
+/// A bucket name this crate will put in a request path: 3 to 63 of `a-z`, `0-9`, `-`, not starting
+/// with `-`. Bucket strings come from store names and from a registry; one with `/`, `..` or `%`
+/// in it must never reach a URL (`w-x/../p-y` would address another bucket).
+pub fn check_bucket(b: &str) -> Result<(), BackendError> {
+    if (3..=63).contains(&b.len()) && b.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-') && !b.starts_with('-') {
+        Ok(())
+    } else {
+        Err(BackendError::BadKey(format!("bucket {b:?}: 3 to 63 of a-z, 0-9, '-'")))
+    }
+}
+
 /// An object key every backend accepts: non-empty, at most 512 bytes, no NUL or backslash,
 /// no empty, `.` or `..` segments, no leading or trailing `/`, no segment over [`MAX_SEGMENT`] bytes.
 pub fn check_key(key: &str) -> Result<(), BackendError> {
