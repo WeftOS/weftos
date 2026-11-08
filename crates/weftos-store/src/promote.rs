@@ -6,7 +6,7 @@
 //! buckets untouched. The run is idempotent: the report is stored at `.wt/promoted.json`.
 
 use crate::overlay::{
-    ObjectBackend, Overlay, Result, S2Error, is_reserved, read_base, validate_key,
+    BASE_ABSENT, ObjectBackend, Overlay, Result, S2Error, is_reserved, read_base, validate_key,
 };
 use serde::{Deserialize, Serialize};
 
@@ -137,6 +137,20 @@ fn project_moved<B: ObjectBackend>(
     })
 }
 
+/// Keep the project version that a promotion is about to overwrite or delete, under the archive's
+/// reserved `.wt/displaced/` prefix (worktree keys can never start with `.wt/`).
+fn displace<B: ObjectBackend>(
+    b: &B,
+    project: &str,
+    key: &str,
+    archive: &ArchiveTarget<'_>,
+) -> Result<()> {
+    if b.head(project, key)?.is_some() {
+        b.copy(project, key, archive.bucket, &format!("{}.wt/displaced/{}", archive.prefix, key))?;
+    }
+    Ok(())
+}
+
 pub fn promote<B: ObjectBackend>(
     b: &B,
     worktree_bucket: &str,
@@ -167,10 +181,6 @@ pub fn promote<B: ObjectBackend>(
         Keep(String),
         Archive(String),
     }
-    let prior: Intent = match b.get(worktree_bucket, PROMOTING_KEY)? {
-        Some(d) => serde_json::from_slice(&d)?,
-        None => Intent::default(),
-    };
     let locals = ov.local_objects()?;
     let local_keys: std::collections::HashSet<&str> =
         locals.iter().map(|o| o.key.as_str()).collect();
@@ -182,10 +192,15 @@ pub fn promote<B: ObjectBackend>(
             continue;
         }
         match b.head(project_bucket, &o.key)? {
-            Some(p) if prior.copy.iter().any(|(k, n)| k == &o.key && *n == p.size) => {
-                acts.push(Act::Copy(o.key.clone(), o.size))
-            }
             Some(p) if p.etag != o.etag && project_moved(b, worktree_bucket, &o.key, &p.etag)? => {
+                match policy.on_conflict {
+                    OnConflict::Fail => conflicts.push(o.key.clone()),
+                    OnConflict::KeepProject => acts.push(Act::Keep(o.key.clone())),
+                    OnConflict::Overwrite => acts.push(Act::Copy(o.key.clone(), o.size)),
+                }
+            }
+            // The project deleted what this worktree edited: resurrecting it silently is a conflict.
+            None if matches!(read_base(b, worktree_bucket, &o.key)?, Some(base) if base != BASE_ABSENT) => {
                 match policy.on_conflict {
                     OnConflict::Fail => conflicts.push(o.key.clone()),
                     OnConflict::KeepProject => acts.push(Act::Keep(o.key.clone())),
@@ -261,6 +276,7 @@ pub fn promote<B: ObjectBackend>(
     for a in acts {
         match a {
             Act::Copy(k, _) => {
+                displace(b, project_bucket, &k, archive)?;
                 b.copy(worktree_bucket, &k, project_bucket, &k)?;
                 report.promoted.push(k);
             }
@@ -269,6 +285,7 @@ pub fn promote<B: ObjectBackend>(
         }
     }
     for k in deletes {
+        displace(b, project_bucket, &k, archive)?;
         b.delete(project_bucket, &k)?;
         report.deleted.push(k);
     }

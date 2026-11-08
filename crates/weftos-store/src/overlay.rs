@@ -199,6 +199,12 @@ impl<'a, B: ObjectBackend> Overlay<'a, B> {
         {
             return Ok(None);
         }
+        // Reading a project object pins the version this worktree saw, so a later edit based on
+        // it is compared against the right base. Best effort: a failed note only means promotion
+        // falls back to its fail-safe (no base = conflict).
+        if self.backend.head(&self.project, key)?.is_some() {
+            let _ = self.note_base(key);
+        }
         self.backend.get(&self.project, key)
     }
 

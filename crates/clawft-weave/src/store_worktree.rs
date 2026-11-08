@@ -199,6 +199,9 @@ pub fn run(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms: 
             // The project store may not exist yet on a fresh node; create it, never fail on "exists".
             svc.ensure_store(&n.pr_name, "cli", Parties::defaults_for(&n.pr_name)).map_err(|e| e.to_string())?;
             svc.ensure_store(&n.wt_name, "cli", Parties::defaults_for(&n.wt_name)).map_err(|e| e.to_string())?;
+            if weftos_store::promote::is_promoted(&b, &n.wt).map_err(e)?.is_some() {
+                return Err(format!("worktree {slug} was already landed; use a new slug"));
+            }
             write_meta(
                 &b,
                 &n.wt,
@@ -277,12 +280,6 @@ pub fn run(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms: 
         "promote" => {
             let slug = need(&p.slug, "slug")?;
             let n = names(mesh, &project, slug)?;
-            // A land that went through git is the merge: record it if a claimer did not.
-            if let Ok(Some(h)) = weftos_store::share::read_handoff(&b, &n.wt)
-                && h.state == weftos_store::share::State::Claimed
-            {
-                mark_merged(&b, &n.wt, &who(&p), "landed", now_ms).map_err(e)?;
-            }
             svc.ensure_archive().map_err(|e| e.to_string())?;
             let prefix = archive_key(&n.wt, now_ms, "");
             let r = promote(
@@ -294,6 +291,13 @@ pub fn run(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms: 
                 now_ms,
             )
             .map_err(e)?;
+            // A land that went through git is the merge: record it if a claimer did not. Only after
+            // the promotion succeeded, so a conflict leaves the handoff claimable and republishable.
+            if let Ok(Some(h)) = weftos_store::share::read_handoff(&b, &n.wt)
+                && h.state == weftos_store::share::State::Claimed
+            {
+                mark_merged(&b, &n.wt, &who(&p), "landed", now_ms).map_err(e)?;
+            }
             Ok(json!({
                 "promoted": r.promoted, "deleted": r.deleted, "kept_project": r.kept_project,
                 "archived": r.archived.len(), "dropped_tombstones": r.dropped_tombstones,

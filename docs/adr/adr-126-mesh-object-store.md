@@ -125,9 +125,13 @@ Only the daemon creates, grants access to, or deletes a store.
   key in a worktree records the project's etag for it (`.wt/base/<key>`, `-` if the project had
   none), and promotion treats the project as changed when its etag now differs. No clock is
   involved, so neither client nor server skew can hide or invent a conflict; an object written
-  around the overlay has no recorded base and is treated as a conflict (fail safe). Reads do not
-  record a base, so a project edit between a worktree's read and its first write goes unnoticed.
-  The run is idempotent and
+  around the overlay has no recorded base and is treated as a conflict (fail safe). An overlay
+  read that falls through to a project object records the base too (best effort), so a stale edit
+  of something read earlier conflicts; a read made around the overlay still records none. A
+  project-side delete of a file the worktree edited is a conflict as well. Every project version
+  that promotion overwrites or deletes is first copied to the archive under `.wt/displaced/`.
+  Promotion still has no conditional write: a project write between the plan and the apply is not
+  detected. The daemon refuses to `create` a slug that has already landed. The run is idempotent and
   safe to retry after a partial failure; once the report is written, later writes to that
   worktree bucket are ignored.
 - **Who does the overlay:** the `weftos-store` client does it for daemons and agents. For a

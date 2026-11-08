@@ -980,3 +980,40 @@ fn object_written_around_the_overlay_has_no_base_and_fails_safe() {
         Err(S2Error::Conflict(_))
     ));
 }
+
+#[test]
+fn an_edit_based_on_a_read_is_compared_with_what_was_read() {
+    let b = setup();
+    let ov = Overlay::new(&b, WT, PR);
+    b.put(PR, "assets/shared.md", b"v1").unwrap();
+    let seen = ov.get("assets/shared.md").unwrap().unwrap(); // the worktree reads v1 ...
+    b.put(PR, "assets/shared.md", b"v2-from-teammate").unwrap(); // ... a teammate lands v2 ...
+    ov.put("assets/shared.md", &[seen.as_slice(), b"+edit"].concat()).unwrap(); // ... then we edit v1
+    let e = promote(&b, WT, PR, &ARCH, &policy(), 5_000).unwrap_err();
+    assert_eq!(e, S2Error::Conflict(vec!["assets/shared.md".into()]));
+}
+
+#[test]
+fn a_project_side_delete_of_an_edited_file_is_a_conflict() {
+    let b = setup();
+    let ov = Overlay::new(&b, WT, PR);
+    b.put(PR, "assets/a.png", b"v1").unwrap();
+    ov.put("assets/a.png", b"mine").unwrap();
+    b.delete(PR, "assets/a.png").unwrap();
+    let e = promote(&b, WT, PR, &ARCH, &policy(), 5_000).unwrap_err();
+    assert_eq!(e, S2Error::Conflict(vec!["assets/a.png".into()]));
+}
+
+#[test]
+fn overwritten_and_deleted_project_versions_are_archived() {
+    let b = setup();
+    let ov = Overlay::new(&b, WT, PR);
+    b.put(PR, "assets/x.bin", b"old-x").unwrap();
+    b.put(PR, "assets/y.bin", b"old-y").unwrap();
+    ov.put("assets/x.bin", b"new-x").unwrap();
+    ov.delete("assets/y.bin").unwrap();
+    promote(&b, WT, PR, &ARCH, &policy(), 5_000).unwrap();
+    let pre = "archive/worktrees/s2/.wt/displaced/assets";
+    assert_eq!(b.get(AR, &format!("{pre}/x.bin")).unwrap().unwrap(), b"old-x");
+    assert_eq!(b.get(AR, &format!("{pre}/y.bin")).unwrap().unwrap(), b"old-y");
+}

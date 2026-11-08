@@ -96,6 +96,8 @@ fn the_verbs_carry_a_worktree_from_create_to_land_through_the_daemon_store() {
     assert_eq!(S1::get(&*svc.operator_objects(), pb, "assets/room.bin").unwrap(), b"ROOM");
     let again = call(&svc, "promote", json!({"project": PROJ, "slug": "feat-rooms"}), 51).unwrap();
     assert_eq!(again["promoted"], p["promoted"], "landing twice is a no-op");
+    let re = call(&svc, "create", json!({"project": PROJ, "slug": "feat-rooms", "branch": "feat/rooms", "base": "abc"}), 60);
+    assert!(re.unwrap_err().contains("already landed"), "a landed slug is not reused");
 }
 
 #[test]
