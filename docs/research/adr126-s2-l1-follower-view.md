@@ -88,3 +88,59 @@ WEFTOS_STORE_TEST_RUSTFS_ENV=<env file> WEFTOS_STORE_TEST_NOTIFY_FILE=<events fi
 - **What is signed (#3):** `"weftos-registry-v1\0" || registry bucket || \0 || slug || \0 || generation || \0 || entry bytes`. The signature object carries the generation (one more than the previous signature object, or the entry's `updated_ms` if larger, so it keeps rising across a remove-and-recreate). A signature for one project's registry or one worktree name does not verify anywhere else, and the old bare-bytes format is `Bad`. **Rollback:** `FollowState` keeps the highest verified generation per worktree (also after the worktree leaves) and `poll_verified` reports an older signed entry as `unreadable`, keeping the follower's previous view. Limits: a follower with no state file has no earlier generation to compare, so protection starts at its first sight of an entry; the generation rises with the daemon's clock, so a daemon clock stepped far backwards would be refused by followers until it catches up.
 - **Seed file (#5):** the signing key file must not be readable by group or others (mode `& 0o077`), or the daemon refuses to start with it; the seed in an error message is never echoed. Not done: wiping the seed from memory (needs a zeroize dependency; `ed25519-dalek` zeroizes its key on drop, but the hex text read from the file is a plain `String`).
 - **Left as is (#6):** the entry and its signature object are two writes, so a strict follower polling between them sees one `unreadable` poll and the previous view is kept; the next poll (or the settle delay in `Waker`) clears it. Making it atomic means putting the signature inside the entry object, a format change.
+
+## Decision note: signature inside the entry (versioned registry format), for the owner
+
+Status: proposal, no code written. Closes review finding #6 (two writes, so a strict follower can see one `unreadable` poll) and removes the orphan-sidecar class of bug. It is a format change on a shared object, so it needs a decision and a rollout order.
+
+### Today (format 1)
+
+`worktrees/<slug>.json` is the bare entry (`RegistryEntry` as pretty JSON). `worktrees.sig/<slug>.json` is the signature object `{signer, alg, generation, sig}`. Writing is entry then signature; removing is entry then signature. A follower reads both and checks the signature over `domain || bucket || slug || generation || entry bytes`. An entry with no signature object reads as `Unsigned`. Failure mode of the two-object layout: a strict follower polling between the two writes sees the new entry with the old signature (`bad`), or a deleted entry with its signature still there; the previous view is kept and the next poll clears it. It fails safe and is only noisy.
+
+### Proposal (format 2)
+
+One object per worktree, still at `worktrees/<slug>.json`, so the key space, the listing prefix and the wake-up hints (`registry_hints`) do not change:
+
+```json
+{ "v": 2,
+  "payload": "<the entry JSON, as a string>",
+  "signature": { "signer": "<hex pubkey>", "alg": "ed25519", "generation": 41, "sig": "<hex>" } }
+```
+
+- **`payload` is a string holding the entry's JSON text**, and the signature covers exactly those string bytes (plus the same domain prefix, bucket, slug and generation as today). That avoids needing a canonical JSON form: nobody re-serializes before verifying. The price is readability: a human reads it with `jq -r .payload | jq .`.
+- An unsigned daemon writes `"signature": null`, so unsigned and signed entries share one shape and `Unsigned` stays a state a follower can show.
+- Write, replace and remove are each one object, so there is no window and no orphan. The existing conditional write (`put_cas`) can guard the replace if two daemons ever shared a registry.
+- The `v` field is the version switch: absent means format 1.
+
+### How followers read both
+
+A follower parses the object once. If it has `"v": 2` it takes `payload` and `signature` from the envelope; if it parses as a bare entry (no `v`, has `slug`) it is format 1 and the follower looks for the sidecar as today. The rest of the follower (poll, search, leftovers, rollback generations, trust map) works on the same internal `(entry, trust, generation)` triple, so the change is confined to the reader in `share_fetch` / `registry_sign`. The slug-equals-key check and the "verify the parsed bytes" rule carry over unchanged (the signed bytes are the payload string).
+
+### Migration, in order (the order is the whole risk)
+
+1. **Readers first.** Ship followers that understand both formats. Nothing writes format 2 yet. A daemon at this stage is the only thing that must not move.
+2. **Wait until every follower reads both.** An old follower that meets a format 2 object fails to parse it as a bare entry and reports that worktree `unreadable`; it fails safe but sees nothing. There is no way to detect old followers from the store, so this is a statement the owner makes ("all followers are at least version X").
+3. **Flip the writer** with an off-by-default switch, `WEFTOS_WT_REGISTRY_FORMAT=2`. The daemon rewrites each entry in format 2 the next time it refreshes it (publish, claim, handoff). Entries nobody touches stay format 1 until then. A one-shot `registry rewrite` verb could convert them all.
+4. **Clean up** sidecars for converted entries (the daemon deletes `worktrees.sig/<slug>.json` when it writes format 2), and later remove the format 1 reader in a release once nothing writes or holds format 1.
+
+A dual-write transition (keep writing format 1 and also write format 2 elsewhere) would let old followers keep working, but it keeps the forgeable unsigned-looking format 1 object alive, and see the next point.
+
+### Downgrade attack (must be handled with the format)
+
+Once entries are signed in format 2, someone with project write could delete the format 2 object and put a format 1 bare entry in its place. A strict follower already refuses an unsigned or bad entry, so strict mode is safe. Followers that are not strict would accept it as `Unsigned`, as they do today. Add to `FollowState` a per-worktree "has been seen as format 2" bit (next to the generations) and refuse a format 1 reading afterwards; and a `REQUIRE_FORMAT_2` setting for when the whole fleet has moved.
+
+### Costs and risks
+
+- Registry objects get a little bigger (the payload is escaped JSON inside JSON, about 10-20% more) and are harder to read by eye.
+- Anything outside this repo that reads `worktrees/<slug>.json` as a bare entry breaks on format 2. In this repo that is only `share_fetch` and the follower; the shell script goes through the daemon verbs and never reads the object.
+- Tests needed: read both formats; mixed registry (some of each); format 2 with a tampered payload, a swapped signature, a key/slug mismatch and a replay into another project; the downgrade refusal; an old-format follower (the current code) seeing a format 2 object as `unreadable` and nothing worse; rollback generations continuing across the format change; the rewrite verb; live RustFS round trip. About a day of work, all in `weftos-store` plus a switch in the daemon.
+
+### Options and a recommendation
+
+| Option | What it does | Cost |
+|---|---|---|
+| A. Do nothing | keep two objects; one noisy `unreadable` poll at worst, which fails safe | none |
+| B. Retry in the follower | on `bad` for a previously verified worktree, re-read that one entry after the settle delay before reporting it; no format change | small code change, no rollout |
+| C. Format 2 as above | atomic, no orphans, one object | the rollout above, a downgrade guard, a day of work |
+
+Recommendation: **B now if the noise is ever seen in practice; C only when the registry format has to change for another reason** (for example signed worktree heads read from an untrusted relay, which ADR-126 §4a lists as an open question), so the rollout is paid once. Today nothing is wrong, only untidy: the two-write window fails safe, and the rollback and replay protections already hold. One-line decision for the owner: "A", "B", or "C, readers first".
