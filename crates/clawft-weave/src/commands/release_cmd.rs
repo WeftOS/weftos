@@ -17,10 +17,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use clap::{Args, Subcommand};
-/// Largest single artifact while the S3 backend has no multipart upload: its file path reads the whole
-/// file into memory. Lift this (set it to `u64::MAX`) when S1's multipart put lands and
-/// `StoreBackend::put_file_if_absent` uses it; the publisher itself already streams the hashing.
-pub const MAX_FILE_BYTES: u64 = 512 * 1024 * 1024;
 
 use weftos_release::{
     FileArtifact, FileRequest, LockMode, LockPolicy, PublishOutcome, ReleaseBackend, ReleasePublisher, ReleaseSigner, ReleaseStoreName,
@@ -92,8 +88,9 @@ pub fn resolve_route(flag: Option<&str>) -> anyhow::Result<CiRoute> {
 }
 
 /// Every regular file under `dir`, as artifacts with `/`-separated relative paths, sorted.
-/// Symlinks, special files and files over [`MAX_FILE_BYTES`] are refused. Files are not read here: the
-/// publisher hashes them in chunks and uploads through the backend's file path.
+/// Symlinks and special files are refused. There is no size limit: files are not read here, the publisher
+/// hashes them in chunks and S1's multipart put streams them in parts. Re-checking a blob that is already
+/// stored still downloads it (S1 has no streaming get), so a retry of a huge release needs that memory once.
 pub fn collect_artifacts(dir: &Path) -> anyhow::Result<Vec<FileArtifact>> {
     fn walk(root: &Path, at: &Path, out: &mut Vec<FileArtifact>) -> anyhow::Result<()> {
         let mut entries: Vec<_> = std::fs::read_dir(at)?.collect::<Result<_, _>>()?;
@@ -107,10 +104,6 @@ pub fn collect_artifacts(dir: &Path) -> anyhow::Result<Vec<FileArtifact>> {
             if ft.is_dir() {
                 walk(root, &path, out)?;
             } else if ft.is_file() {
-                let len = e.metadata()?.len();
-                if len > MAX_FILE_BYTES {
-                    anyhow::bail!("{}: {len} bytes is over the {MAX_FILE_BYTES}-byte limit", path.display());
-                }
                 let rel = path.strip_prefix(root)?;
                 let rel = rel
                     .components()

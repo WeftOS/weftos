@@ -17,7 +17,7 @@ use weftos_store::service::Caller;
 use weftos_store::{ObjectBackend, StoreError, StoreName, StoreService};
 use weftos_store::backend::{BackendError as StoreErr, PutOpts, Retention};
 
-use crate::backend::{BackendError, DeletableBackend, KeyVersion, Lock, LockMode, PutOutcome, ReleaseBackend};
+use crate::backend::{BackendError, BucketLock, DeletableBackend, KeyVersion, Lock, LockMode, PutOutcome, ReleaseBackend};
 use crate::name::ReleaseStoreName;
 use crate::s3::StoreBackend;
 
@@ -137,6 +137,57 @@ impl ReleaseBackend for ServiceBackend {
         Ok(metas.into_iter().map(|m| m.key).collect())
     }
 
+    async fn lock_config(&self) -> Result<Option<BucketLock>, BackendError> {
+        match self.blocking(|s, _, n| s.lock_config(n)).await {
+            Ok(c) => Ok(Some(BucketLock {
+                enabled: c.enabled,
+                default_retention: c.default.map(|d| {
+                    let days = d.days.unwrap_or_else(|| d.years.unwrap_or(0).saturating_mul(365));
+                    (
+                        match d.mode {
+                            weftos_store::LockMode::Governance => LockMode::Governance,
+                            weftos_store::LockMode::Compliance => LockMode::Compliance,
+                        },
+                        days,
+                    )
+                }),
+            })),
+            Err(StoreError::Backend(StoreErr::Unsupported(_))) => Ok(None),
+            Err(e) => Err(store_err(e)),
+        }
+    }
+
+    /// Streams the file through `put_stream`: parts go up as they are read, locked and write-once.
+    async fn put_file_if_absent(&self, key: &str, path: &std::path::Path, size: u64, lock: Option<&Lock>) -> Result<PutOutcome, BackendError> {
+        let (k, p) = (key.to_string(), path.to_path_buf());
+        let opts = PutOpts {
+            if_none_match: true,
+            retention: lock.map(|l| Retention {
+                mode: match l.mode {
+                    LockMode::Governance => weftos_store::LockMode::Governance,
+                    LockMode::Compliance => weftos_store::LockMode::Compliance,
+                },
+                until_unix_s: l.until,
+            }),
+            legal_hold: false,
+        };
+        let r = self
+            .blocking(move |s, w, n| {
+                let mut f = std::fs::File::open(&p).map_err(|e| StoreError::Backend(StoreErr::Io(format!("{}: {e}", p.display()))))?;
+                let put = s.put_stream(w, n, &k, &mut f, &opts)?;
+                if put.meta.size != size {
+                    return Err(StoreError::Backend(StoreErr::Io(format!("{}: changed while publishing", p.display()))));
+                }
+                Ok(put)
+            })
+            .await;
+        match r {
+            Ok(_) => Ok(PutOutcome::Created),
+            Err(StoreError::Backend(StoreErr::Exists(_))) => Ok(PutOutcome::Exists),
+            Err(e) => Err(store_err(e)),
+        }
+    }
+
     async fn versions(&self, prefix: &str) -> Result<Option<Vec<KeyVersion>>, BackendError> {
         let p = prefix.to_string();
         match self.blocking(move |s, w, n| s.list_versions(w, n, &p)).await {
@@ -222,6 +273,21 @@ impl<O: ObjectBackend + 'static> ReleaseBackend for CiBackend<O> {
     }
     async fn versions(&self, prefix: &str) -> Result<Option<Vec<KeyVersion>>, BackendError> {
         either!(self, b => b.versions(prefix).await)
+    }
+    async fn lock_config(&self) -> Result<Option<BucketLock>, BackendError> {
+        either!(self, b => b.lock_config().await)
+    }
+    async fn retention_of(&self, key: &str) -> Result<Option<Lock>, BackendError> {
+        either!(self, b => b.retention_of(key).await)
+    }
+    async fn extend_lock(&self, key: &str, lock: &Lock) -> Result<(), BackendError> {
+        either!(self, b => b.extend_lock(key, lock).await)
+    }
+    async fn put_file_if_absent(&self, key: &str, path: &std::path::Path, size: u64, lock: Option<&Lock>) -> Result<PutOutcome, BackendError> {
+        either!(self, b => b.put_file_if_absent(key, path, size, lock).await)
+    }
+    async fn blob_digest(&self, key: &str) -> Result<Option<(String, u64)>, BackendError> {
+        either!(self, b => b.blob_digest(key).await)
     }
 }
 

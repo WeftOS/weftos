@@ -197,3 +197,90 @@ async fn live_release_store_on_a_locked_versioned_bucket() {
     let h = rd.history().await.unwrap();
     assert_eq!(h.findings, vec![HistoryFinding::Replaced { key: "releases/b2/manifest.json".into(), contents: 2 }]);
 }
+
+/// S1's lock read-back, extend-retention, lifecycle and multipart, through the S3 adapter on a real
+/// locked bucket: the same behaviour the mock tests pin.
+#[tokio::test]
+#[ignore = "needs a throwaway RustFS: WEFTOS_RELEASE_TEST_RUSTFS_ENV"]
+async fn live_s1_seams_lock_read_back_extend_lifecycle_and_multipart() {
+    use weftos_release::s3::StoreLifecycle;
+    let f = std::env::var("WEFTOS_RELEASE_TEST_RUSTFS_ENV").expect("WEFTOS_RELEASE_TEST_RUSTFS_ENV");
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = RustfsConfig::from_env_file(Path::new(&f), dir.path().join("secrets")).unwrap();
+    let objects = Arc::new(tokio::task::spawn_blocking(move || RustfsBackend::new(cfg)).await.unwrap().unwrap());
+    let uniq = || format!("{}", &ulid::Ulid::new().to_string().to_lowercase()[16..]);
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    let sg = ReleaseSigner::new(ed25519_dalek::SigningKey::from_bytes(&[3; 32]), MlDsa65SigningKey::from_seed(&[3; 32]));
+    let tk = TrustedKeys(vec![sg.trusted()]);
+
+    // ---- an unlocked bucket: read-back says so and a locked publish writes nothing
+    let plain = ReleaseStoreName::new("pg-mesh", ULID, &format!("p{}", uniq())).unwrap();
+    let be_plain = StoreBackend::for_release(objects.clone(), &plain).unwrap();
+    {
+        let (o, b) = (objects.clone(), be_plain.bucket().to_string());
+        tokio::task::spawn_blocking(move || o.create_bucket(&b, &[])).await.unwrap().unwrap();
+    }
+    assert!(!be_plain.lock_config().await.unwrap().unwrap().enabled);
+    let pol = |m, s| LockPolicy::new(m, s).unwrap();
+    let e = ReleasePublisher::new(&be_plain, &plain, &sg)
+        .with_lock(pol(LockMode::Governance, 3_600))
+        .publish(rq("b1", now - 5, &[("a", b"x")]), now)
+        .await
+        .unwrap_err();
+    assert!(e.to_string().contains("Object Lock"), "{e}");
+    assert!(be_plain.list("").await.unwrap().is_empty(), "nothing written");
+
+    // ---- a locked bucket
+    let st = ReleaseStoreName::new("pg-mesh", ULID, &format!("s{}", uniq())).unwrap();
+    {
+        let (o, s) = (objects.clone(), st.clone());
+        tokio::task::spawn_blocking(move || weftos_release::s3::create_locked_release_bucket(&*o, &s)).await.unwrap().unwrap();
+    }
+    let be = StoreBackend::for_release(objects.clone(), &st).unwrap();
+    assert!(be.lock_config().await.unwrap().unwrap().enabled);
+
+    // extend: b1 governance 1h, b2 compliance 3h over the same shared blob
+    let p1 = ReleasePublisher::new(&be, &st, &sg).with_lock(pol(LockMode::Governance, 3_600));
+    p1.publish(rq("b1", now - 5, &[("a", b"shared")]), now).await.unwrap();
+    let blob = format!("blobs/{}", blake3::hash(b"shared").to_hex());
+    let first = be.retention_of(&blob).await.unwrap().unwrap();
+    assert_eq!(first.mode, LockMode::Governance);
+    let p2 = ReleasePublisher::new(&be, &st, &sg).with_lock(pol(LockMode::Compliance, 3 * 3_600));
+    p2.publish(rq("b2", now - 4, &[("a", b"shared")]), now).await.unwrap();
+    let after = be.retention_of(&blob).await.unwrap().unwrap();
+    assert_eq!(after.mode, LockMode::Governance, "the mode is kept: RustFS refuses a change without a bypass");
+    assert!(after.until >= now + 3 * 3_600 - 2, "lengthened: {after:?}");
+    // a later, shorter, weaker publish changes nothing
+    let p3 = ReleasePublisher::new(&be, &st, &sg).with_lock(pol(LockMode::Governance, 60));
+    p3.publish(rq("b3", now - 3, &[("a", b"shared")]), now).await.unwrap();
+    assert_eq!(be.retention_of(&blob).await.unwrap().unwrap(), after);
+
+    // multipart: an 11 MiB file (two parts) published locked from disk
+    let big: Vec<u8> = (0..11 * 1024 * 1024u32).map(|i| (i % 251) as u8).collect();
+    let fpath = dir.path().join("big.bin");
+    std::fs::write(&fpath, &big).unwrap();
+    let fr = FileRequest {
+        build_id: "b4".into(), source_rev: "r".into(), created_at: now - 2, builder: "ci".into(),
+        artifacts: vec![FileArtifact { path: "bin/big".into(), file: fpath.clone() }],
+    };
+    let p4 = ReleasePublisher::new(&be, &st, &sg).with_lock(pol(LockMode::Compliance, 3_600));
+    p4.publish_files(fr, now).await.unwrap();
+    let rd = ReleaseReader::new(&be, &st, &tk);
+    let m = rd.manifest("b4").await.unwrap();
+    assert_eq!(rd.read_artifact(&m, "bin/big").await.unwrap(), big);
+    let bigblob = format!("blobs/{}", blake3::hash(&big).to_hex());
+    assert_eq!(be.retention_of(&bigblob).await.unwrap().unwrap().mode, LockMode::Compliance);
+    let fr_retry = FileRequest {
+        build_id: "b4".into(), source_rev: "r".into(), created_at: now - 2, builder: "ci".into(),
+        artifacts: vec![FileArtifact { path: "bin/big".into(), file: fpath }],
+    };
+    assert_eq!(p4.publish_files(fr_retry, now).await.unwrap().outcome, PublishOutcome::AlreadyPresent);
+    assert!(rd.history().await.unwrap().findings.is_empty());
+
+    // lifecycle: set, read back, and the unsupported marker rule refused
+    let lc = StoreLifecycle::for_release(objects.clone(), &st).unwrap();
+    let rules = LifecycleRules { noncurrent_days: 30, expire_delete_markers: false, abort_multipart_days: Some(7) };
+    provision_lifecycle(&lc, &rules).await.unwrap();
+    assert_eq!(lc.get_lifecycle().await.unwrap(), Some(rules));
+    assert!(provision_lifecycle(&lc, &LifecycleRules { expire_delete_markers: true, ..rules }).await.is_err());
+}

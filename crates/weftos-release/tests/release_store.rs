@@ -823,7 +823,7 @@ async fn a_locked_publish_reads_the_bucket_lock_config_first_and_writes_nothing_
 }
 
 #[tokio::test]
-async fn a_reused_blob_gets_the_longer_lock_and_never_a_shorter_or_weaker_one() {
+async fn a_reused_blob_gets_the_later_date_and_never_an_earlier_one_or_a_new_mode() {
     let (be, st, sg) = (locked_backend(), store("stable"), signer(1));
     let h = format!("blobs/{}", blake3::hash(b"shared").to_hex());
     let gov = |s| LockPolicy::new(LockMode::Governance, s).unwrap();
@@ -832,17 +832,21 @@ async fn a_reused_blob_gets_the_longer_lock_and_never_a_shorter_or_weaker_one() 
     ReleasePublisher::new(&be, &st, &sg).with_lock(gov(100)).publish(req("b1", &[("a", b"shared")]), NOW).await.unwrap();
     assert_eq!(be.lock_of(&h).unwrap(), Lock { mode: LockMode::Governance, until: NOW + 100 });
 
-    // A later release that wants longer and stronger: the shared blob follows.
+    // A later release that wants a longer date and a stronger mode: the shared blob gets the date and
+    // keeps its mode (RustFS refuses a mode change without a governance bypass).
     ReleasePublisher::new(&be, &st, &sg).with_lock(comp(1_000)).publish(req("b2", &[("a", b"shared")]), NOW).await.unwrap();
-    assert_eq!(be.lock_of(&h).unwrap(), Lock { mode: LockMode::Compliance, until: NOW + 1_000 });
+    assert_eq!(be.lock_of(&h).unwrap(), Lock { mode: LockMode::Governance, until: NOW + 1_000 });
+    // ...while the new release's own manifest has the mode it asked for.
+    assert_eq!(be.lock_of("releases/b2/manifest.json").unwrap().mode, LockMode::Compliance);
 
-    // A third that wants shorter and weaker changes nothing.
+    // A third that wants a shorter date changes nothing.
     ReleasePublisher::new(&be, &st, &sg).with_lock(gov(10)).publish(req("b3", &[("a", b"shared")]), NOW).await.unwrap();
-    assert_eq!(be.lock_of(&h).unwrap(), Lock { mode: LockMode::Compliance, until: NOW + 1_000 });
+    assert_eq!(be.lock_of(&h).unwrap(), Lock { mode: LockMode::Governance, until: NOW + 1_000 });
 
-    // The backend itself refuses a shortening, whatever the publisher asks.
-    let e = be.extend_lock(&h, &Lock { mode: LockMode::Compliance, until: NOW + 5 }).await.unwrap_err();
+    // The backend itself refuses a shortening and a mode change, whatever the publisher asks.
+    let e = be.extend_lock(&h, &Lock { mode: LockMode::Governance, until: NOW + 5 }).await.unwrap_err();
     assert!(e.0.contains("never shortened"), "{e}");
+    assert!(be.extend_lock(&h, &Lock { mode: LockMode::Compliance, until: NOW + 5_000 }).await.is_err());
 }
 
 #[tokio::test]
@@ -867,7 +871,7 @@ async fn a_backend_that_cannot_extend_leaves_a_reused_blob_as_written() {
 #[tokio::test]
 async fn lifecycle_rules_are_set_then_read_back() {
     let be = MemoryBackend::new();
-    let rules = LifecycleRules { noncurrent_days: 30, expire_delete_markers: true };
+    let rules = LifecycleRules { noncurrent_days: 30, expire_delete_markers: true, abort_multipart_days: Some(7) };
     provision_lifecycle(&be, &rules).await.unwrap();
     assert_eq!(be.get_lifecycle().await.unwrap(), Some(rules));
     assert!(provision_lifecycle(&be, &LifecycleRules { noncurrent_days: 0, ..rules }).await.is_err());
@@ -877,7 +881,7 @@ async fn lifecycle_rules_are_set_then_read_back() {
     impl LifecycleBackend for Liar {
         async fn put_lifecycle(&self, _: &LifecycleRules) -> std::result::Result<(), BackendError> { Ok(()) }
         async fn get_lifecycle(&self) -> std::result::Result<Option<LifecycleRules>, BackendError> {
-            Ok(Some(LifecycleRules { noncurrent_days: 9999, expire_delete_markers: false }))
+            Ok(Some(LifecycleRules { noncurrent_days: 9999, expire_delete_markers: false, abort_multipart_days: None }))
         }
     }
     assert!(provision_lifecycle(&Liar, &rules).await.unwrap_err().0.contains("not the rules just set"));

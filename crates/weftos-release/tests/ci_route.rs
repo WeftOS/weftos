@@ -278,6 +278,19 @@ async fn live_daemon_route_on_a_locked_store() {
     let h = rd.history().await.unwrap();
     assert!(h.checked && h.findings.is_empty(), "{h:?}");
 
+    // a file larger than one part goes through the service's put_stream, locked, as the append principal
+    assert!(ci.lock_config().await.unwrap().unwrap().enabled);
+    let big: Vec<u8> = (0..9 * 1024 * 1024u32).map(|i| (i % 241) as u8).collect();
+    let fpath = dir.path().join("big.bin");
+    std::fs::write(&fpath, &big).unwrap();
+    let fr = FileRequest {
+        build_id: "b2".into(), source_rev: "r".into(), created_at: now - 5, builder: "ci".into(),
+        artifacts: vec![FileArtifact { path: "bin/big".into(), file: fpath }],
+    };
+    p.publish_files(fr, now).await.unwrap();
+    let m2 = rd.manifest("b2").await.unwrap();
+    assert_eq!(rd.read_artifact(&m2, "bin/big").await.unwrap(), big);
+
     // the service refuses what RustFS alone could not
     let blind = {
         let (s, n) = (svc.clone(), name.clone());

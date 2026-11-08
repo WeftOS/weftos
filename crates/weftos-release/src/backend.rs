@@ -64,8 +64,11 @@ pub struct BucketLock {
 pub struct LifecycleRules {
     /// Remove a noncurrent version this many days after it stopped being current. At least 1.
     pub noncurrent_days: u32,
-    /// Remove a delete marker once no version remains behind it.
+    /// Remove a delete marker once no version remains behind it. S1's rule type cannot express this
+    /// yet, so the S3 adapter refuses `true`.
     pub expire_delete_markers: bool,
+    /// Abort a multipart upload not completed after this many days (a failed publish leaves parts).
+    pub abort_multipart_days: Option<u32>,
 }
 
 /// One stored version of a key, or a delete marker, as a versioned bucket keeps them.
@@ -406,9 +409,8 @@ impl ReleaseBackend for MemoryBackend {
         let Some(have) = g.locks.get(key).copied() else {
             return Err(BackendError(format!("{key} has no retention to extend")));
         };
-        let weaker = have.mode == LockMode::Compliance && lock.mode == LockMode::Governance;
-        if lock.until < have.until || weaker {
-            return Err(BackendError("a lock can be lengthened or strengthened, never shortened or weakened".into()));
+        if lock.until < have.until || lock.mode != have.mode {
+            return Err(BackendError("a lock can be lengthened, never shortened, and its mode is not changed".into()));
         }
         g.locks.insert(key.to_string(), *lock);
         Ok(())

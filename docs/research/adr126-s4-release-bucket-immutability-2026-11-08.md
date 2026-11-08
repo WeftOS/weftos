@@ -111,22 +111,24 @@ sweeper `write` on the release store (it can then overwrite too, which weakens t
 separation from CI), (b) add a `sweep+put` level that may put under `tombstones/*`, `quarantine/*` and
 `blobs/*` only, plus a service copy call. (b) is the narrower grant and is what S1 is asked to prepare.
 
-## S4 side of S1's lock read-back, lifecycle, extend-retention and multipart (prepared on the mock, 2026-11-08)
+## S1's lock read-back, extend-retention, lifecycle and multipart, wired (2026-11-08)
 
-Each seam is a defaulted method on `ReleaseBackend` (or `LifecycleBackend`), implemented on `MemoryBackend`
-and tested there. `StoreBackend` (S3) keeps the defaults until S1 lands the call; the switch is one `impl`
-override per row, no publisher change.
+S1's commits 9d9e28c1, e9eb44eb, 3af683c5 and ef63f7c5 are merged into `integ/adr126-s1-s4`. Each S4 seam is
+a defaulted method on `ReleaseBackend` / `LifecycleBackend`; `MemoryBackend` mocks it and `StoreBackend`
+(direct route) and `ServiceBackend` (daemon route) now use the real call. Live proof is on RustFS 1.0.4
+(`store_live.rs`, `ci_route.rs`).
 
-| Seam | S4 behaviour (tested on the mock) | S1 call the S3 adapter will use | Until it lands |
+| Seam | S4 behaviour | S1 call used | Notes from the live run |
 |---|---|---|---|
-| Lock read-back | `lock_config()`; a locked publish reads it first and refuses an unlocked bucket with one error, before any write | read of the bucket's Object Lock configuration | default `None`: the first locked put is the test |
-| Extend retention | `retention_of` + `extend_lock`; a reused blob is lengthened to the later floor and mode, never shortened or weakened (mock refuses both) | PutObjectRetention on the current version plus a read of its retention | default: a reused blob keeps the lock it was written with |
-| Lifecycle | `provision_lifecycle(rules)` sets then reads back; zero days, a mismatch and a silent server are errors | put and get of the bucket lifecycle configuration | not callable on S3 |
-| Multipart | `publish_files`: hashes in chunks, uploads through `put_file_if_absent` (mock reads 1 MiB parts), manifest identical to the bytes path | multipart create/part/complete with the lock headers on create and `If-None-Match` on complete (both measured on RustFS) | default reads the whole file |
+| Lock read-back | a locked publish reads the config first and refuses an unlocked bucket before any write | `get_lock_config` (adapter), `StoreService::lock_config` (service) | unlocked bucket reads `enabled: false`; nothing written |
+| Extend retention | a reused blob's retention date moves out to the later release's floor; never earlier | `list_versions` + `get_retention` + `extend_retention` (adapter) | **the mode is never changed.** RustFS refuses Governance to Compliance on an existing version without a governance bypass (it reports it as a delete refusal), and CI holds no bypass. A blob keeps its first mode; the new release's manifest has the mode it asked for. The service route has no retention read, so it does not extend |
+| Lifecycle | `provision_lifecycle` sets one rule (`s4-release`: noncurrent days, abort-multipart days) and reads it back | `put_lifecycle` / `get_lifecycle` via `StoreLifecycle` | S1's rule type has no delete-marker expiry, so `expire_delete_markers: true` is refused. Ask S1 for it if orphan markers matter (measured earlier: RustFS does remove them) |
+| Multipart | `publish_files` hashes in chunks and uploads with `put_stream` (8 MiB parts), locked, `If-None-Match` | `put_stream` (adapter), `StoreService::put_stream` (service; an `append` principal may) | an 11 MiB locked publish round-trips on both routes; the manifest equals the bytes path |
 
-**The 512 MiB limit stays in `weaver store release publish` (`MAX_FILE_BYTES`) until multipart lands**,
-because without it the file path still holds the whole file in memory. When S1's multipart call exists,
-override `StoreBackend::put_file_if_absent` with it and set `MAX_FILE_BYTES` to `u64::MAX`.
+**The 512 MiB limit is gone** from `weaver store release publish` (`MAX_FILE_BYTES = u64::MAX`). One
+remaining memory cost: when a blob already exists the publisher re-verifies it with `get`, and S1 has no
+streaming get, so a retry of a very large release downloads each existing blob once. Ask: a ranged or
+streaming get (or a server-side checksum) from S1.
 
 ## Not verified
 
