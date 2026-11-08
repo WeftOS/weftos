@@ -24,6 +24,7 @@
 
 #![allow(async_fn_in_trait)]
 
+pub mod authchain;
 pub mod broker;
 pub mod clock;
 pub mod compaction;
@@ -49,3 +50,5 @@ mod tests;
 mod tests_live;
 #[cfg(test)]
 mod tests_loopback;
+#[cfg(test)]
+mod tests_authchain;

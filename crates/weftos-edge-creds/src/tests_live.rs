@@ -910,3 +910,44 @@ mod lifecycle_consume {
         assert!(a.log.lock().unwrap().is_empty() && !removed_user(&r));
     }
 }
+
+mod chain_auth_enforce {
+    use super::*;
+    use crate::authchain::*;
+    use crate::compaction::SnapshotVerifier;
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+
+    const SC: &str = "grants/m1";
+    fn mac(msg: &[u8]) -> Vec<u8> {
+        let mut m = Hmac::<Sha256>::new_from_slice(b"k").unwrap();
+        m.update(msg);
+        m.finalize().into_bytes().to_vec()
+    }
+    struct V;
+    impl SnapshotVerifier for V {
+        fn verify(&self, s: &str, m: &[u8], sig: &[u8]) -> bool {
+            s == "c" && mac(m) == sig
+        }
+    }
+
+    #[test]
+    fn an_authenticated_unpair_cuts_the_node_off_and_a_forged_one_does_not() {
+        let r = rig(&["wasm-1"], &[]);
+        let feed = ChainFeed::new(r.ledger.clone(), SC, V);
+        let head = feed.head();
+        let pairing = ChainGrantEvent::sign(SC, GrantEvent::pairing(1, MESH, "wasm-1"), &head, "c", mac);
+        run(ingest_and_enforce(&feed, &r.broker, &pairing)).unwrap();
+        let node = edge(&r, "wasm-1");
+        run(node.put("k", b"v")).unwrap();
+
+        let mut forged = ChainGrantEvent::sign(SC, GrantEvent::unpair(2, MESH, "wasm-1"), &feed.head(), "c", mac);
+        forged.signature[0] ^= 1;
+        assert_eq!(run(ingest_and_enforce(&feed, &r.broker, &forged)), Err(IngestError::Feed(FeedError::BadSignature)));
+        run(node.put("k2", b"v")).unwrap();
+
+        let real = ChainGrantEvent::sign(SC, GrantEvent::unpair(2, MESH, "wasm-1"), &feed.head(), "c", mac);
+        assert_eq!(run(ingest_and_enforce(&feed, &r.broker, &real)).unwrap(), Applied::Changed { lost_write: true });
+        assert!(run(node.put("k3", b"v")).is_err(), "revoked at once");
+    }
+}
