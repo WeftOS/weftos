@@ -84,6 +84,9 @@ fn the_verbs_carry_a_worktree_from_create_to_land_through_the_daemon_store() {
     assert_eq!(std::fs::read_to_string(dest.path().join("docs/plan.md")).unwrap(), "# Rooms plan\n");
     let c = call(&svc, "claim", json!({"project": PROJ, "slug": "feat-rooms", "agent": "bob", "host": "m2"}), 40).unwrap();
     assert_eq!(c["merger"], "bob@m2");
+    let nm = names("local", PROJ, "feat-rooms").unwrap();
+    let h = weftos_store::share::read_handoff(&Op(svc.operator_objects()), &nm.wt).unwrap().unwrap();
+    assert_eq!(h.epoch, 1, "a claim bumps the fencing epoch");
     assert!(publish("alice", 41).is_err(), "the writer cannot overwrite a claimed merge");
     let f2 = call(&svc, "follow", json!({"project": PROJ, "state": st.to_string_lossy()}), 42).unwrap();
     assert_eq!(f2["changes"][0]["change"], "state_changed");

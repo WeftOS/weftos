@@ -129,6 +129,10 @@ pub struct Handoff {
     pub writer: Actor,
     pub merger: Option<Actor>,
     pub updated_ms: u64,
+    /// Counts claims. A merger that sees a higher epoch than the one it claimed under knows its
+    /// claim was taken over (fencing), whatever the clocks say.
+    #[serde(default)]
+    pub epoch: u64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -426,6 +430,7 @@ pub fn publish_tree<B: ObjectBackend>(
                 writer: src.writer.clone(),
                 merger: None,
                 updated_ms: now_ms,
+                epoch: 0,
             },
         )?;
     }
@@ -487,6 +492,7 @@ pub fn mark_handoff<B: ObjectBackend>(
             writer: writer.clone(),
             merger: None,
             updated_ms: now_ms,
+            epoch: cur.as_ref().map_or(0, |h| h.epoch),
         },
     )
 }
@@ -523,6 +529,7 @@ pub fn claim_merge<B: ObjectBackend>(
         state: State::Claimed,
         merger: Some(me.clone()),
         updated_ms: now_ms,
+        epoch: cur.epoch + 1,
         ..cur
     };
     write_handoff(b, bucket, &next)?;

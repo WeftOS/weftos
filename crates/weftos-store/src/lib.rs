@@ -22,6 +22,7 @@ pub mod name;
 pub mod overlay;
 pub mod policy;
 pub mod promote;
+pub mod registry_sign;
 #[cfg(feature = "rustfs")]
 pub mod rustfs;
 pub mod service;
