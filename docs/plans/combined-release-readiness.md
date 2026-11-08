@@ -214,7 +214,7 @@ All live runs were noisy (load 3 to 13), so no timing from them counts as a desi
 | `weaver store drive` and `view` against a live daemon | **not run**. No-install rule stands | status page section 9 |
 | S3 on a real edge node; S4 wired into `release.sh`; S5 as a second RustFS on PG | **not run** | next-steps 7, steps 9, 10, 13 |
 | Tapestry: 16 Linux sandbox tests on PG | **not run** | Tapestry lead, message 2026-11-08 PM |
-| Tapestry: loopback onboarding e2e | running at time of message, result **not verified from this Mac** | same |
+| Tapestry: loopback onboarding e2e | **done** 2026-11-08 PM, green in both probe roles (Tapestry lead delta; evidence `docs/tapestry/p3-workspace-loopback.md` on `tapestry/p3-item4-onboarding` and logs in `~/tapestry-p3-onboarding-logs-20261108/`; not verified from this Mac) | same |
 | Tapestry: Phase 1 gates (a), (b), (c) on the final integration build | **not run** | same |
 | WeftOS: the two daemon-boot tests under nextest on the real branch | **not run** (fail under nextest only, pass under cargo test, per the Tapestry lead) | same |
 | Tapestry and WeftOS full suites at release | **not run**, release only | same |
@@ -231,7 +231,7 @@ nothing pushed. I did not read it.
 |---|---|---|---|---|
 | 0 | `tapestry/p2-integration` | ef376c8d | Phase 1 and 2, plus owner-approved R6 live roster, verify-range, wire fixtures (2026-11-08) | Already integrated on the fork |
 | a | `tapestry/p3-scoped-view` | ab572851 | Items 9 and 10: Linux sandbox (bwrap, allow-list seccomp, Landlock TCP, tmpfs `/tmp`, opt-in `landlock_optional`) plus the file half over our view verbs | Contains `tapestry/p3-linux-sandbox` 2d27f635. Needs the Linux run on PG first. Needs our `wt/adr126-e1-view-verbs` landed first |
-| b | `tapestry/p3-hub-passkey` | only c3e1be5b and e242fa6a | Workspace server stops self-sandboxing; `--pass-key-file` | Tip 847521bf is exploratory D5/D6 and must NOT land. A probe-fix commit from the loopback run will follow |
+| b | `tapestry/p3-item4-onboarding` | 01cfe6fa (= c3e1be5b, e242fa6a, 01cfe6fa) | Workspace server stops self-sandboxing; `--pass-key-file`; two stale upstream probe calls fixed plus the green loopback onboarding write-up (delta from the Tapestry lead, 2026-11-08 PM) | Do NOT land `tapestry/p3-hub-passkey` 847521bf (exploratory D5/D6) nor its backup `tapestry/p3-hub-passkey-full-backup` |
 | c | `tapestry/p3-test-hub` | 17c43e99 | Test-only loopback hub crate | In no shipped binary |
 | d | Docs: `p3-merge-rehearsal` e4146f9f, `p3-decision-memo` d4808a46, `p3-workspace-loopback` 23349d5d, `p3-prep-docs` cc216e50 | | Docs only | |
 | HELD | `tapestry/p2-r11-release` | cb216887 | R11 self-update and release workflow | Do not merge |
