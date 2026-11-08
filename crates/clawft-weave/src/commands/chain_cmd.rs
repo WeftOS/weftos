@@ -4,7 +4,7 @@ use clap::{Args, Subcommand};
 use comfy_table::{Cell, Table};
 
 use crate::protocol::{
-    ChainEventInfo, ChainExportParams, ChainLocalParams, ChainStatusResult, ChainVerifyResult,
+    ChainEventInfo, ChainExportParams, ChainGetParams, ChainLocalParams, ChainStatusResult, ChainVerifyResult,
     Request,
 };
 
@@ -28,6 +28,14 @@ pub enum ChainCommand {
     Checkpoint,
     /// Verify chain integrity (hash linking).
     Verify,
+    /// Show one event in full with its checkpoint-signature coverage.
+    Get {
+        /// Sequence number of the event.
+        sequence: u64,
+        /// Leave the hex signatures out of the coverage.
+        #[arg(long)]
+        no_signatures: bool,
+    },
     /// Export chain to file (JSON or RVF format).
     Export {
         /// Output format: json or rvf.
@@ -98,10 +106,14 @@ pub async fn run(args: ChainArgs) -> anyhow::Result<()> {
                 anyhow::bail!("{}", resp.error.unwrap_or_default());
             }
             println!("Checkpoint created.");
-            if let Some(result) = resp.result
-                && let Some(seq) = result.get("sequence")
-            {
-                println!("  Sequence: {seq}");
+            if let Some(result) = resp.result {
+                if let Some(seq) = result.get("sequence") {
+                    println!("  Sequence: {seq}");
+                }
+                match result.get("signed").and_then(|v| v.as_bool()) {
+                    Some(true) => println!("  Signed:   yes ({})", result.get("rvf_path").and_then(|v| v.as_str()).unwrap_or("")),
+                    _ => println!("  Signed:   no (chain has no signing key or no checkpoint path)"),
+                }
             }
         }
         ChainCommand::Verify => {
@@ -119,14 +131,26 @@ pub async fn run(args: ChainArgs) -> anyhow::Result<()> {
             }
             println!("Events verified: {}", result.event_count);
             match result.signature_verified {
-                Some(true) => println!("Signature:       VALID (Ed25519)"),
+                Some(true) => println!(
+                    "Signature:       VALID through sequence {} ({})",
+                    result.signed_through.map(|s| s.to_string()).unwrap_or_default(),
+                    if result.pq_verified == Some(true) { "Ed25519 + ML-DSA-65" } else { "Ed25519" },
+                ),
                 Some(false) => println!("Signature:       INVALID"),
-                None => println!("Signature:       unsigned"),
+                None => println!("Signature:       unsigned (run `weaver chain checkpoint`)"),
             }
             println!("Errors: {}", result.errors.len());
             for err in &result.errors {
                 println!("  - {err}");
             }
+        }
+        ChainCommand::Get { sequence, no_signatures } => {
+            let params = serde_json::to_value(ChainGetParams { sequence, signatures: !no_signatures })?;
+            let resp = client.call(Request::with_params("chain.get", params)).await?;
+            if !resp.ok {
+                anyhow::bail!("{}", resp.error.unwrap_or_default());
+            }
+            println!("{}", serde_json::to_string_pretty(&resp.result.unwrap_or_default())?);
         }
         ChainCommand::Export { format, output } => {
             let params = serde_json::to_value(ChainExportParams {

@@ -198,6 +198,10 @@ pub fn required_capability(method: &str) -> Capability {
         // verified-project check in the handler.
         | "chain.subscribe"
         | "chain.local"
+        // Full event + signature coverage (read-only). Same capability as
+        // `chain.tail`; kept off the scope gate's project-less allow-list
+        // because it returns whole payloads, not a 60-char preview.
+        | "chain.get"
         | "chain.verify"
         // WEFT-125: active vector backend introspection (read-only).
         | "ecc.vector-config"
@@ -484,6 +488,13 @@ mod tests {
                 "method {m} should be Admin",
             );
         }
+    }
+
+    #[test]
+    fn chain_get_is_read_like_chain_tail() {
+        assert_eq!(required_capability("chain.get"), Capability::Read);
+        assert_eq!(required_capability("chain.get"), required_capability("chain.tail"));
+        assert!(CallerCapabilities::anonymous().allows_method("chain.get"));
     }
 
     #[test]
