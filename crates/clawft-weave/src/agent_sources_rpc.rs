@@ -136,7 +136,7 @@ async fn local_block(kernel: &KernelRef, me: Option<&str>) -> Value {
     block(me.unwrap_or("local"), Ok(local_document(kernel, me).await))
 }
 
-async fn handle_inner(params: Value, kernel: &KernelRef, is_admin: bool) -> Result<Value, String> {
+pub(crate) async fn handle_inner(params: Value, kernel: &KernelRef, is_admin: bool) -> Result<Value, String> {
     let node = parse_node(&params)?;
     let mesh = parse_mesh(&params)?;
     if node.is_some() && mesh {
