@@ -244,13 +244,19 @@ untouched. B's second delete replaces the older marker with `If-Match` on RustFS
 of the in-memory test) and the marker then names B and the deleted version. A third recreate clears
 it again. Result: correct, no bug.
 
-**3. Watch restart after a crash.** The test re-executes its own test binary as a child that runs
-`watch_once` and then `sync_up` through a wrapper backend, parks after the Nth data write, prints a
-marker, and the parent sends SIGKILL (real signal, not a drop). Batch in path order: modify f0,
-modify f1, delete f2, delete f3, create n0, create n1.
-- *Killed after 3 writes* (f2's delete landed, its tombstone did not). *Killed after 5* (n0's
+**3. Watch restart after a crash.** The committed test runs `watch_once` and then `sync_up` on a
+thread against a wrapper backend that panics right after the Nth data write lands. The panic
+unwinds through `sync_up_with` without reaching its index save and without cleanup, so the store
+holds the completed writes and `index.json` is the one from before the batch, which is what a killed
+process leaves. A real SIGKILL version (the test binary re-executed as a child, parked after the
+Nth write, killed by the parent) was built first and passed on the file backend and on RustFS; it
+is in commits 7f4eac450 and cbabe7727. `scripts/diff-gate.sh` rejects new `std::process::Command`
+use, and approvals are the owner's, so the tip simulates the death in-process. Restoring the
+SIGKILL form needs a gate approval for `tests_crash.rs`. Batch in path order: modify f0, modify f1,
+delete f2, delete f3, create n0, create n1.
+- *Dies after 3 writes* (f2's delete landed, its tombstone did not). *Dies after 5* (n0's
   create landed, the index was not saved).
-- `index.json` was intact both times: it is written to a temp file and renamed, so a kill leaves the
+- `index.json` was intact both times: it is written to a temp file and renamed, so a death leaves the
   old index. Because the index is saved only at the end of `sync_up`, the index is always the state
   before the batch.
 - Restart: a fresh watcher finds all six changes from the scan, stale temps are not among them.
@@ -259,7 +265,7 @@ modify f1, delete f2, delete f3, create n0, create n1.
   adopt, one GET, no PUT). Deletes whose object is already gone are forgotten. The remote etags of
   f0 and f1 do not change across the restart. Final index equals the store, a rescan is empty, a
   second device sees one consistent state, and the half-written index temp is overwritten and gone.
-- Not simulated by a real kill, planted instead (a SIGKILL cannot be aimed at these windows): a
+- Not produced by the death itself, planted instead (a death cannot be aimed at these windows): a
   `.drive.tmp.*` beside a target, one in a subdirectory, a half-written `.drive/.drive.tmp.index`,
   one in the CAS. They are ignored by the scan, never uploaded and not cleaned (the temp beside a
   target stays on disk).
@@ -278,10 +284,10 @@ answers 204 for a key that is not there, so a create costs one extra request on 
 and file backends answer "no such object", which is ignored.
 
 Counts, `scripts/build.sh test weftos-store --features rustfs`: before this lane 141 passed, 13
-ignored; after 149 passed, 20 ignored. Of the 8 new in-process tests, 7 are scenarios and 1 is the
-inert child entry point; the 7 new ignored tests are the live versions (all pass on RustFS).
-Timings (noisy, load 6-7): each live scenario 1 to 2.4 s wall, most of it the 2.1 s test clock being
-virtual so none of it is waiting; the killed-loop scenarios include a child process start.
+ignored; after 148 passed, 20 ignored. The 7 new in-process tests are the scenarios; the 7 new
+ignored tests are their live versions (all pass on RustFS).
+Timings (noisy, load 6-7): each live scenario 1 to 2.4 s wall, the test clock is virtual, so
+the 2.1 s quiet period costs no wall time.
 
 Not done: cleanup of stale `.drive.tmp.*`, tombstone collection, fsync of the index before rename
-(a power cut, as opposed to a kill, is not covered), a kill inside `place_file`, two real machines.
+(a power cut, as opposed to a kill, is not covered), a death inside `place_file`, a real SIGKILL in the committed tests, two real machines.

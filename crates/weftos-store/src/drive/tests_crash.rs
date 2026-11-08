@@ -1,32 +1,32 @@
-//! Hardening scenario 3: the watch loop is killed (SIGKILL) in the middle of a batch.
+//! Hardening scenario 3: the watch loop dies in the middle of a batch.
 //!
-//! The test re-executes its own test binary as a child (`crash_child_entry`) that runs the watch
-//! and `sync_up` against a shared store, parks after the Nth data write, and is killed by the
-//! parent. Runs here on the file-system backend (two processes can share a directory) and, ignored,
-//! on a real RustFS from `live_hardening.rs`.
+//! The loop (`watch_once`, then `sync_up`) runs on its own thread against a wrapper backend that
+//! panics right after the Nth data write lands. The panic unwinds through `sync_up_with` without
+//! reaching its index save and without any cleanup, which is the state a killed process leaves: the
+//! store holds the writes that completed and `index.json` is still the one from before the batch.
+//!
+//! A real SIGKILL of a re-executed test binary was built and passed on the file backend and on
+//! RustFS (commit 7f4eac450 and cbabe7727 hold it), but `scripts/diff-gate.sh` rejects new
+//! `std::process::Command` use, so the committed version simulates the death in-process.
 
-use std::io::{BufRead, Write};
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::Mutex;
-use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use super::*;
 use super::tests_hardening::*;
-use crate::backend::{AdminBackend, ObjectBackend, ObjectMeta};
+use super::*;
+use crate::backend::{ObjectBackend, ObjectMeta};
 
-/// A backend wrapper that logs every successful write and can park the process after the Nth
-/// data write (tombstone writes are logged but not counted), so a parent can SIGKILL it there.
+/// A backend wrapper that logs every successful write and can die (panic) right after the Nth
+/// data write lands. Tombstone writes are logged but not counted.
 pub(super) struct Probe<'a, B: ObjectBackend + ?Sized> {
     inner: &'a B,
-    park_after: Option<usize>,
+    die_after: Option<usize>,
     log: Mutex<Vec<String>>,
 }
 
 impl<'a, B: ObjectBackend + ?Sized> Probe<'a, B> {
-    pub(super) fn new(inner: &'a B, park_after: Option<usize>) -> Self {
-        Self { inner, park_after, log: Mutex::new(vec![]) }
+    pub(super) fn new(inner: &'a B, die_after: Option<usize>) -> Self {
+        Self { inner, die_after, log: Mutex::new(vec![]) }
     }
     /// Successful writes, sorted. A delete of a tombstone key is dropped: a create always tries to
     /// clear its marker, which RustFS answers 204 even when there was none, while the file and
@@ -42,12 +42,8 @@ impl<'a, B: ObjectBackend + ?Sized> Probe<'a, B> {
             l.push(format!("{what}:{key}"));
             l.iter().filter(|e| !e.contains(TOMBSTONE_DIR)).count()
         };
-        if self.park_after == Some(n) && !key.contains(TOMBSTONE_DIR) {
-            println!("PARKED");
-            let _ = std::io::stdout().flush();
-            loop {
-                std::thread::sleep(Duration::from_secs(3600));
-            }
+        if self.die_after == Some(n) && !key.contains(TOMBSTONE_DIR) {
+            panic!("simulated death after data write {n}: {what} {key}");
         }
     }
 }
@@ -87,14 +83,13 @@ impl<B: ObjectBackend + ?Sized> ObjectBackend for Probe<'_, B> {
     }
 }
 
-/// 3: the watch loop dies in the middle of a batch. `child_kind` tells the child process how to
-/// open the same store (`fs:<root>` or `rustfs`). The batch, in path order, is: modify f0, modify
-/// f1, delete f2, delete f3, create n0, create n1. `park_after` is how many data writes the child
-/// completes before the kill: 3 stops after f2's delete (before its tombstone), 5 stops after the
+/// 3: the watch loop dies in the middle of a batch. The batch, in path order, is: modify f0, modify
+/// f1, delete f2, delete f3, create n0, create n1. `die_after` is how many data writes the loop
+/// completes before it dies: 3 stops after f2's delete (before its tombstone), 5 stops after the
 /// create of n0 (before the index is saved).
-pub(super) fn crash_mid_batch<B: ObjectBackend + ?Sized>(be: &B, bk: &str, child_kind: &str, park_after: usize) {
-    assert!(park_after == 3 || park_after == 5);
-    let late = park_after == 5;
+pub(super) fn crash_mid_batch<B: ObjectBackend + ?Sized>(be: &B, bk: &str, die_after: usize) {
+    assert!(die_after == 3 || die_after == 5);
+    let late = die_after == 5;
     let pre = if late { "k2" } else { "k1" };
     let r = Rig::new(be, bk, pre);
     for i in 0..4 {
@@ -109,45 +104,28 @@ pub(super) fn crash_mid_batch<B: ObjectBackend + ?Sized>(be: &B, bk: &str, child
     wr(&a, "n0.txt", "new 0");
     wr(&a, "n1.txt", "new 1");
 
-    // The child runs watch then sync_up and parks after its Nth data write. The parent SIGKILLs it.
-    let mut child = Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "drive::tests_crash::crash_child_entry", "--nocapture", "--test-threads=1"])
-        .env("DRIVE_CRASH_CHILD", format!("{child_kind}|{}|{park_after}", a.display()))
-        .stdout(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let out = child.stdout.take().unwrap();
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        for l in std::io::BufReader::new(out).lines().map_while(std::result::Result::ok) {
-            let _ = tx.send(l);
-        }
+    // The loop runs watch then sync_up on its own thread and dies after its Nth data write.
+    let cfg = WatchConfig { quiet: Duration::from_millis(100), poll: Duration::from_millis(20), ..Default::default() };
+    let died = std::thread::scope(|sc| {
+        sc.spawn(|| {
+            let batch = watch_once(&a, &cfg, Duration::from_secs(30)).unwrap().expect("a batch");
+            assert_eq!(batch.len(), 6);
+            sync_up(&Probe::new(be, Some(die_after)), &a)
+        })
+        .join()
     });
-    loop {
-        match rx.recv_timeout(Duration::from_secs(90)) {
-            Ok(l) if l.trim() == "PARKED" => break,
-            Ok(l) if l.trim() == "COMPLETED" => panic!("the child finished before the kill point"),
-            Ok(_) => {}
-            Err(_) => {
-                let _ = child.kill();
-                panic!("the child never reached its kill point");
-            }
-        }
-    }
-    child.kill().unwrap(); // SIGKILL on unix
-    let st = child.wait().unwrap();
-    assert!(!st.success(), "killed, not exited: {st:?}");
+    assert!(died.is_err(), "the loop was meant to die mid-batch");
 
-    // What the crash left: the writes before the kill landed, the rest did not, and the index
+    // What the crash left: the writes before the death landed, the rest did not, and the index
     // still describes the tree before the batch.
     assert_eq!((r.text("f0.txt").as_deref(), r.text("f1.txt").as_deref()), (Some("f0 edited"), Some("f1 edited")));
     assert!(r.text("f2.txt").is_none() && r.text("n1.txt").is_none());
     assert_eq!((r.text("f3.txt").is_none(), r.text("n0.txt").is_some()), (late, late));
-    assert_eq!(r.tomb("f2.txt").is_some(), late, "with 3 writes the kill came before f2's tombstone");
+    assert_eq!(r.tomb("f2.txt").is_some(), late, "with 3 writes the death came before f2's tombstone");
     let ix = Index::load(&a).unwrap().expect("index.json is intact (renamed into place, never half-written)");
     assert!(ix.entries["f0.txt"].etag == e0 && ix.entries["f1.txt"].etag == e1 && ix.entries.contains_key("f2.txt"));
     let (landed0, landed1) = (r.etag("f0.txt"), r.etag("f1.txt"));
-    // Debris a killed run can leave, planted (a SIGKILL cannot be aimed at these windows): a
+    // Debris a killed run can leave, planted (a death cannot be aimed at these windows): a
     // temp beside a target, one in a subdirectory, a half-written index temp, a CAS temp.
     wr(&a, ".drive.tmp.01KILLED", "partial placement");
     wr(&a, "sub/.drive.tmp.01KILLED", "partial placement");
@@ -194,50 +172,14 @@ pub(super) fn crash_mid_batch<B: ObjectBackend + ?Sized>(be: &B, bk: &str, child
     assert!(dn.conflicts.is_empty() && dn.created.is_empty() && dn.updated.is_empty() && dn.removed.is_empty());
 }
 
-/// The child half of `crash_mid_batch`. With `DRIVE_CRASH_CHILD` unset it does nothing, so a
-/// normal test run passes it. Spec: `<kind>|<drive dir>|<park after N data writes>`.
 #[test]
-fn crash_child_entry() {
-    let Ok(spec) = std::env::var("DRIVE_CRASH_CHILD") else { return };
-    let mut it = spec.splitn(3, '|');
-    let (kind, dest, n) = (it.next().unwrap(), PathBuf::from(it.next().unwrap()), it.next().unwrap().parse().unwrap());
-    let _keep;
-    let be: Box<dyn ObjectBackend> = if let Some(root) = kind.strip_prefix("fs:") {
-        Box::new(crate::fs::FsBackend::open(Path::new(root)).unwrap())
-    } else {
-        #[cfg(feature = "rustfs")]
-        {
-            let envf = std::env::var("WEFTOS_STORE_TEST_RUSTFS_ENV").unwrap();
-            let sd = tempfile::tempdir().unwrap();
-            let cfg = crate::rustfs::RustfsConfig::from_env_file(Path::new(&envf), sd.path().join("secrets")).unwrap();
-            _keep = sd;
-            Box::new(crate::rustfs::RustfsBackend::new(cfg).unwrap())
-        }
-        #[cfg(not(feature = "rustfs"))]
-        panic!("kind {kind:?} needs the rustfs feature")
-    };
-    let cfg = WatchConfig { quiet: Duration::from_millis(100), poll: Duration::from_millis(20), ..Default::default() };
-    let batch = watch_once(&dest, &cfg, Duration::from_secs(30)).unwrap().expect("a batch");
-    println!("BATCH {}", batch.len());
-    let probe = Probe::new(&*be, Some(n));
-    sync_up(&probe, &dest).unwrap();
-    println!("COMPLETED");
+fn a_watch_loop_that_dies_mid_batch_restarts_from_the_scan_without_double_uploads() {
+    let be = mem();
+    crash_mid_batch(&be, BK, 3);
 }
 
 #[test]
-fn a_killed_watch_loop_restarts_from_the_scan_without_double_uploads() {
-    let root = tempfile::tempdir().unwrap();
-    let store = root.path().join("store");
-    let be = crate::fs::FsBackend::open(&store).unwrap();
-    be.create_bucket(BK, &[]).unwrap();
-    crash_mid_batch(&be, BK, &format!("fs:{}", store.display()), 3);
-}
-
-#[test]
-fn a_watch_loop_killed_after_a_create_landed_adopts_it_on_restart() {
-    let root = tempfile::tempdir().unwrap();
-    let store = root.path().join("store");
-    let be = crate::fs::FsBackend::open(&store).unwrap();
-    be.create_bucket(BK, &[]).unwrap();
-    crash_mid_batch(&be, BK, &format!("fs:{}", store.display()), 5);
+fn a_watch_loop_that_dies_after_a_create_landed_adopts_it_on_restart() {
+    let be = mem();
+    crash_mid_batch(&be, BK, 5);
 }

@@ -77,14 +77,14 @@ fn live_hard_pull_that_lost_its_index_save() {
 
 #[test]
 #[ignore = "needs a throwaway RustFS: WEFTOS_STORE_TEST_RUSTFS_ENV"]
-fn live_hard_killed_watch_loop() {
+fn live_hard_dying_watch_loop() {
     let l = Live::new("kl");
-    crash_mid_batch(&l.be, &l.bucket, "rustfs", 3);
+    crash_mid_batch(&l.be, &l.bucket, 3);
 }
 
 #[test]
 #[ignore = "needs a throwaway RustFS: WEFTOS_STORE_TEST_RUSTFS_ENV"]
-fn live_hard_killed_watch_loop_after_a_create() {
+fn live_hard_dying_watch_loop_after_a_create() {
     let l = Live::new("k5");
-    crash_mid_batch(&l.be, &l.bucket, "rustfs", 5);
+    crash_mid_batch(&l.be, &l.bucket, 5);
 }
