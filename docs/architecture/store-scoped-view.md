@@ -223,6 +223,7 @@ is unchanged. `SkipWhy` gained one variant, `Denied`.
   "spec_hash": "<blake3 of the spec>",
   "bucket": "p-...", "base_includes": [{"prefix": "docs", "at": "docs"}], "work_prefix": "proj/",
   "mount_points": ["work", "tmp"],
+  "deny": ["*.log"],
   "refresh": {"rpc": "store.view.refresh", "root": "/abs/root"},
   "opened_ms": 0, "updated_ms": 0
 }
@@ -231,7 +232,7 @@ is unchanged. `SkipWhy` gained one variant, `Denied`.
 For `Empty` the second bind is
 `{"kind": "overlay", "lower": ".../lower", "upper": ".../work", "workdir": ".../.state/ovl-work", "dest": "/work"}`.
 `dest` assumes `base/` is `/`. A launcher that binds `base/` under a chroot path prefixes every
-`dest`. The manifest carries no credential and no store endpoint. The launcher must treat any other
+`dest`. `deny` is the spec's deny list as applied (added 2026-11-08 for the Tapestry launcher, which checks that the globs it asked for took effect; the drive's built-in denylists are not repeated; older manifests without it read as empty). The manifest carries no credential and no store endpoint. The launcher must treat any other
 field as advisory.
 
 ### 6.3 `weaver store view` verbs (built 2026-11-08, unit and loopback tests only)

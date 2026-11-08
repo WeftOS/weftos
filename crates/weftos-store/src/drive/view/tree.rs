@@ -350,6 +350,7 @@ pub(crate) fn manifest(spec: &ViewSpec, lay: &Layout, l: Option<&Lease>) -> View
         base_includes: spec.base.clone(),
         work_prefix: spec.work.as_ref().map(|w| norm_prefix(&w.prefix)),
         mount_points: spec.mounts(),
+        deny: spec.deny.clone(),
         refresh: RefreshEndpoint { rpc: REFRESH_RPC.into(), root: lay.root().to_path_buf() },
         opened_ms: now,
         updated_ms: now,

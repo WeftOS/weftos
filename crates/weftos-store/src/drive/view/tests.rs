@@ -413,6 +413,7 @@ fn deny_patterns_keep_paths_out_of_the_view_and_out_of_publish() {
     let p = v.publish(&s).unwrap();
     assert!(s.data_puts().is_empty(), "{p:?}");
     assert!(p.skipped.iter().any(|k| k.path == "run.log" && k.why == SkipWhy::Denied));
+    assert_eq!(v.manifest().deny, sp.deny, "view.json reports the deny patterns it applied");
 }
 
 #[test]

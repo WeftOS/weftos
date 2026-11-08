@@ -243,6 +243,11 @@ pub struct ViewManifest {
     pub base_includes: Vec<Include>,
     pub work_prefix: Option<String>,
     pub mount_points: Vec<String>,
+    /// The deny patterns the view applied (the spec's list; the drive's built-in secret-name and
+    /// dangerous-path denylists are not repeated here). The launcher checks that the globs it asked
+    /// for took effect. Absent in manifests written before 2026-11-08: read as empty.
+    #[serde(default)]
+    pub deny: Vec<String>,
     pub refresh: RefreshEndpoint,
     pub opened_ms: u64,
     pub updated_ms: u64,
