@@ -17,8 +17,12 @@ use serde_json::{Value, json};
 use crate::backend::{AccessKey, AdminBackend, BackendError, BucketTags, DefaultRetention, LockConfig, LockMode, LifecycleRule, LockedPut, ObjectBackend, ObjectMeta, ObjectVersion, Part, PutOpts, Retention, check_key};
 use crate::sigv4::{self, Req};
 
-/// Connection settings. `secrets_dir` receives one 0600 file per issued access key.
-#[derive(Debug, Clone)]
+/// Connection settings. `secrets_dir` receives one 0600 file per issued access key, in a 0700
+/// directory.
+///
+/// `Debug` is written by hand and prints neither key: the root secret and access key must not
+/// reach a log line, a panic message or a test failure through `{:?}`.
+#[derive(Clone)]
 pub struct RustfsConfig {
     /// `http://host:port` or `https://host:port`, no path.
     pub endpoint: String,
@@ -27,6 +31,33 @@ pub struct RustfsConfig {
     pub root_secret_key: String,
     pub secrets_dir: PathBuf,
     pub timeout: Duration,
+}
+
+impl std::fmt::Debug for RustfsConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RustfsConfig")
+            .field("endpoint", &self.endpoint)
+            .field("region", &self.region)
+            .field("root_access_key", &"<redacted>")
+            .field("root_secret_key", &"<redacted>")
+            .field("secrets_dir", &self.secrets_dir)
+            .field("timeout", &self.timeout)
+            .finish()
+    }
+}
+
+/// Whether an endpoint authority (`host`, `host:port`, `[v6]:port`, with optional `user@`) names
+/// this machine: `localhost`, a 127.0.0.0/8 address or `::1`.
+fn is_loopback_host(auth: &str) -> bool {
+    let auth = auth.rsplit_once('@').map_or(auth, |(_, h)| h);
+    let host = match auth.strip_prefix('[') {
+        Some(v6) => v6.split(']').next().unwrap_or(""),
+        None => auth.rsplit_once(':').map_or(auth, |(h, _)| h),
+    };
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
 }
 
 impl RustfsConfig {
@@ -362,12 +393,20 @@ impl RustfsBackend {
         let base = cfg.endpoint.trim_end_matches('/').to_owned();
         let (scheme, rest) = base.split_once("://").ok_or_else(|| io(format!("endpoint {base:?}: need http:// or https://")))?;
         let auth = rest.split('/').next().unwrap_or(rest);
+        // The root credential is signed into every request and the bodies are not encrypted:
+        // plain http only to this machine.
+        if scheme == "http" && !is_loopback_host(auth) {
+            return Err(io(format!("endpoint {base:?}: plain http is only allowed to a loopback host (localhost, 127.0.0.0/8, ::1); use https")));
+        }
+        if scheme != "http" && scheme != "https" {
+            return Err(io(format!("endpoint {base:?}: need http:// or https://")));
+        }
         let host = match (scheme, auth.rsplit_once(':')) {
             ("http", Some((h, "80"))) | ("https", Some((h, "443"))) => h.to_owned(),
             _ => auth.to_owned(),
         };
         let http = Client::builder().timeout(cfg.timeout).build().map_err(io)?;
-        std::fs::create_dir_all(&cfg.secrets_dir).map_err(io)?;
+        Self::private_dir(&cfg.secrets_dir)?;
         Ok(Self { cfg, base: format!("{scheme}://{auth}"), host, http, retry: Retry::default(), breaker: Arc::new(Mutex::new(BreakerState::default())), call_timeout: None })
     }
 
@@ -534,11 +573,37 @@ impl RustfsBackend {
         Ok(sigv4::hex(&b))
     }
 
+    /// The secrets directory: made 0700, and an existing one is tightened to 0700, so no other
+    /// user can list or read the per-key secret files.
+    fn private_dir(dir: &Path) -> Result<(), BackendError> {
+        use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir).map_err(io)?;
+        let md = std::fs::metadata(dir).map_err(io)?;
+        if md.permissions().mode() & 0o777 != 0o700 {
+            // Only a directory of ours is tightened: a shared one (a temp dir, say) is refused
+            // rather than having its permissions changed under other users.
+            let me = std::fs::metadata("/proc/self").map_err(io)?.uid();
+            if md.uid() != me {
+                return Err(io(format!("{}: secrets directory belongs to another user and is not 0700", dir.display())));
+            }
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).map_err(io)?;
+        }
+        Ok(())
+    }
+
     fn write_secret(path: &Path, secret: &str) -> Result<(), BackendError> {
         use std::io::Write;
         use std::os::unix::fs::OpenOptionsExt;
         let tmp = path.with_extension("tmp");
-        let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&tmp).map_err(io)?;
+        // `create_new` (O_EXCL): the mode applies only to a file made here, never to one that was
+        // already there, and a pre-planted file or link at the path is not written through. A
+        // leftover from an earlier crash is removed first.
+        match std::fs::remove_file(&tmp) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(io(e)),
+        }
+        let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp).map_err(io)?;
         f.write_all(secret.as_bytes()).map_err(io)?;
         f.sync_all().map_err(io)?;
         std::fs::rename(&tmp, path).map_err(io)

@@ -443,7 +443,8 @@ fn live_service_done_when() {
 fn the_notification_body_names_the_target_and_a_bad_target_is_refused() {
     let x = crate::rustfs::notification_xml("primary");
     assert!(x.contains("<Queue>arn:rustfs:sqs::primary:webhook</Queue>") && x.contains("s3:ObjectCreated:*") && x.contains("s3:ObjectRemoved:*"));
-    let be = RustfsBackend::new(RustfsConfig { endpoint: "http://127.0.0.1:1".into(), region: "us-east-1".into(), root_access_key: "a".into(), root_secret_key: "b".into(), secrets_dir: std::env::temp_dir(), timeout: std::time::Duration::from_secs(1) }).unwrap();
+    let d = tempfile::tempdir().unwrap();
+    let be = RustfsBackend::new(RustfsConfig { endpoint: "http://127.0.0.1:1".into(), region: "us-east-1".into(), root_access_key: "a".into(), root_secret_key: "b".into(), secrets_dir: d.path().join("s"), timeout: std::time::Duration::from_secs(1) }).unwrap();
     assert!(matches!(be.put_bucket_notification("b", "x/y"), Err(BackendError::BadKey(_))));
     assert!(matches!(be.put_bucket_notification("b", ""), Err(BackendError::BadKey(_))));
 }
@@ -886,4 +887,79 @@ fn live_retiring_a_node_archives_its_store_and_keeps_the_id_out() {
     assert!(archived.iter().any(|m| m.key.contains(&n.bucket()) && m.key.ends_with("d/a.txt")), "{archived:?}");
     assert!(svc.get(&Caller::local(cog), &n, "d/a.txt").is_err(), "old grants are off");
     assert!(svc.ensure_store(&n, "daemon", Parties::defaults_for(&n)).is_err(), "the id is retired");
+}
+
+// ---- F15: secrets are not printed, the secrets directory is private, plain http is loopback only
+
+fn cfg_in(d: &Path, endpoint: &str) -> RustfsConfig {
+    RustfsConfig { endpoint: endpoint.into(), region: "us-east-1".into(), root_access_key: "ROOTACCESS-Q9".into(), root_secret_key: "ROOTSECRET-Z7".into(), secrets_dir: d.join("s"), timeout: Duration::from_secs(1) }
+}
+
+#[test]
+fn debug_of_the_config_and_its_error_never_shows_the_root_keys() {
+    let d = tempfile::tempdir().unwrap();
+    let c = cfg_in(d.path(), "http://127.0.0.1:1");
+    for shown in [format!("{c:?}"), format!("{c:#?}")] {
+        assert!(!shown.contains("ROOTACCESS-Q9") && !shown.contains("ROOTSECRET-Z7"), "{shown}");
+        assert!(shown.contains("redacted") && shown.contains("127.0.0.1:1"), "the rest is still shown: {shown}");
+    }
+    // A refused endpoint's error does not carry them either.
+    let e = RustfsBackend::new(cfg_in(d.path(), "http://rustfs.example.com:9000")).err().unwrap().to_string();
+    assert!(!e.contains("ROOTSECRET-Z7") && !e.contains("ROOTACCESS-Q9"), "{e}");
+}
+
+#[test]
+fn plain_http_is_for_loopback_only() {
+    let d = tempfile::tempdir().unwrap();
+    for ok in ["http://127.0.0.1:9000", "http://127.9.9.9", "http://localhost:9000", "http://LOCALHOST", "http://[::1]:9000", "https://rustfs.example.com:9000", "https://10.0.0.5"] {
+        assert!(RustfsBackend::new(cfg_in(d.path(), ok)).is_ok(), "{ok} is allowed");
+    }
+    for bad in ["http://10.0.0.5:9000", "http://rustfs.example.com", "http://192.168.1.2:9000", "http://127.0.0.1.evil.example:9000", "http://localhost.evil.example", "http://user@evil.example/", "http://[::2]:9000", "ftp://127.0.0.1", "127.0.0.1:9000"] {
+        let e = RustfsBackend::new(cfg_in(d.path(), bad)).err().unwrap_or_else(|| panic!("{bad} must be refused")).to_string();
+        assert!(e.contains("http") || e.contains("endpoint"), "{bad}: {e}");
+    }
+    // The host after an `@` is the host that is connected to.
+    assert!(RustfsBackend::new(cfg_in(d.path(), "http://evil.example@127.0.0.1:9000")).is_ok());
+    assert!(RustfsBackend::new(cfg_in(d.path(), "http://127.0.0.1@evil.example:9000")).is_err());
+}
+
+#[test]
+fn the_secrets_directory_is_0700_a_loose_one_of_ours_is_tightened_and_a_secret_file_is_0600() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = tempfile::tempdir().unwrap();
+    let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    let c = cfg_in(d.path(), "http://127.0.0.1:1");
+    let _ = RustfsBackend::new(c.clone()).unwrap();
+    assert_eq!(mode(&c.secrets_dir), 0o700, "made private, nested parents included");
+    std::fs::set_permissions(&c.secrets_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let be = RustfsBackend::new(c.clone()).unwrap();
+    assert_eq!(mode(&c.secrets_dir), 0o700, "an existing loose directory of ours is tightened");
+    let nested = RustfsConfig { secrets_dir: d.path().join("a/b/c"), ..c };
+    let _ = RustfsBackend::new(nested.clone()).unwrap();
+    assert_eq!(mode(&nested.secrets_dir), 0o700);
+    RustfsBackend::write_secret(&be.secret_path("k1"), "s3cr3t").unwrap();
+    assert_eq!(mode(&be.secret_path("k1")), 0o600);
+}
+
+#[test]
+fn a_secret_is_written_with_create_new_a_leftover_is_replaced_and_a_planted_link_is_not_followed() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = tempfile::tempdir().unwrap();
+    let be = RustfsBackend::new(cfg_in(d.path(), "http://127.0.0.1:1")).unwrap();
+    let path = be.secret_path("k2");
+    let tmp = path.with_extension("tmp");
+    // A leftover tmp file with loose permissions from a crash: the secret still ends up 0600,
+    // because the old file is removed and a new one made, not reopened with its old mode.
+    std::fs::write(&tmp, b"stale").unwrap();
+    std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o666)).unwrap();
+    RustfsBackend::write_secret(&path, "fresh").unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "fresh");
+    assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+    // A symlink planted at the tmp path is replaced by a file; what it pointed at is untouched.
+    let victim = d.path().join("victim");
+    std::fs::write(&victim, b"keep").unwrap();
+    std::os::unix::fs::symlink(&victim, &tmp).unwrap();
+    RustfsBackend::write_secret(&path, "again").unwrap();
+    assert_eq!(std::fs::read(&victim).unwrap(), b"keep");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "again");
 }
