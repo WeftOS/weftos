@@ -1,6 +1,7 @@
 //! `<dest>/.drive/index.json`: what the tree looked like at the last sync.
 
 use std::collections::BTreeMap;
+use std::io::Write;
 use std::path::Path;
 use std::time::UNIX_EPOCH;
 
@@ -8,10 +9,37 @@ use serde::{Deserialize, Serialize};
 
 use super::cas::{hash_of, valid_hash};
 use super::conflict::ConflictKind;
+use super::tmp::Live;
 use super::{DRIVE_DIR, DriveError, Result, TMP_PREFIX};
 use crate::share::{Skip, read_regular};
 
 const SCHEMA: u32 = 1;
+
+/// Where `Index::save` can be made to die in a test.
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum SaveStage {
+    AfterTemp,
+    AfterRename,
+}
+#[cfg(test)]
+thread_local! {
+    pub(crate) static DIE_AT: std::cell::Cell<Option<SaveStage>> = const { std::cell::Cell::new(None) };
+}
+#[cfg(test)]
+fn checkpoint(s: SaveStage) {
+    if DIE_AT.with(|d| d.get()) == Some(s) {
+        panic!("simulated death in Index::save {s:?}");
+    }
+}
+#[cfg(not(test))]
+#[derive(Clone, Copy)]
+enum SaveStage {
+    AfterTemp,
+    AfterRename,
+}
+#[cfg(not(test))]
+fn checkpoint(_: SaveStage) {}
 
 /// One synced path. `etag` is the store's etag of the version this file was synced against;
 /// `hash` is the BLAKE3 of the local bytes (the CAS key).
@@ -84,8 +112,16 @@ impl Index {
         let dir = f.parent().ok_or_else(|| DriveError::Io("index path has no parent".into()))?;
         std::fs::create_dir_all(dir)?;
         let tmp = dir.join(format!("{TMP_PREFIX}index"));
-        std::fs::write(&tmp, serde_json::to_vec_pretty(self)?)?;
+        let _live = Live::new(&tmp);
+        // Durable order: temp bytes on disk, rename, then the directory entry on disk.
+        let mut t = std::fs::File::create(&tmp)?;
+        t.write_all(&serde_json::to_vec_pretty(self)?)?;
+        t.sync_all()?;
+        drop(t);
+        checkpoint(SaveStage::AfterTemp);
         std::fs::rename(&tmp, &f)?;
+        checkpoint(SaveStage::AfterRename);
+        std::fs::File::open(dir)?.sync_all()?;
         Ok(())
     }
 
