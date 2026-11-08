@@ -378,6 +378,23 @@ pub struct ChainGetParams {
     pub signatures: bool,
 }
 
+/// Parameters for `chain.get_range`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChainGetRangeParams {
+    /// First sequence (inclusive).
+    pub from: u64,
+    /// Last sequence (inclusive). Must not be past the chain head.
+    pub to: u64,
+    /// Most events the caller will accept; a larger range is refused.
+    /// Defaults to, and may not exceed, the server maximum (1000).
+    #[serde(default)]
+    pub limit: Option<u64>,
+    /// Include the hex checkpoint signatures, once (default true).
+    #[serde(default = "default_true")]
+    pub signatures: bool,
+}
+
 fn default_true() -> bool {
     true
 }

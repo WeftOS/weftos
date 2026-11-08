@@ -6773,6 +6773,30 @@ async fn dispatch(
             #[cfg(not(feature = "exochain"))]
             Response::error("exochain feature not enabled")
         }
+        // `chain.get_range {from, to, limit?, signatures?}`: events from..=to in
+        // full with per-event coverage, checkpoint signatures once. At most 1000
+        // events; a bigger range, from > to, or a range past the head is
+        // refused, never truncated or clipped. Read-only, like `chain.get`.
+        "chain.get_range" => {
+            #[cfg(feature = "exochain")]
+            {
+                let p: protocol::ChainGetRangeParams = match serde_json::from_value(params) {
+                    Ok(p) => p,
+                    Err(e) => return Response::error(format!("chain.get_range: bad params: {e}")),
+                };
+                let k = kernel.read().await;
+                if let Some(cm) = k.chain_manager() {
+                    match clawft_kernel::chain_coverage::range_detail(cm, p.from, p.to, p.limit, p.signatures) {
+                        Ok(d) => Response::success(serde_json::to_value(d).unwrap()),
+                        Err(e) => Response::error(format!("chain.get_range: {e}")),
+                    }
+                } else {
+                    Response::error("chain not enabled")
+                }
+            }
+            #[cfg(not(feature = "exochain"))]
+            Response::error("exochain feature not enabled")
+        }
         "chain.checkpoint" => {
             #[cfg(feature = "exochain")]
             {

@@ -4,7 +4,7 @@ use clap::{Args, Subcommand};
 use comfy_table::{Cell, Table};
 
 use crate::protocol::{
-    ChainEventInfo, ChainExportParams, ChainGetParams, ChainLocalParams, ChainStatusResult, ChainVerifyResult,
+    ChainEventInfo, ChainExportParams, ChainGetParams, ChainGetRangeParams, ChainLocalParams, ChainStatusResult, ChainVerifyResult,
     Request,
 };
 
@@ -30,8 +30,18 @@ pub enum ChainCommand {
     Verify,
     /// Show one event in full with its checkpoint-signature coverage.
     Get {
-        /// Sequence number of the event.
-        sequence: u64,
+        /// Sequence number of the event (omit with --from/--to).
+        #[arg(required_unless_present = "from", conflicts_with_all = ["from", "to"])]
+        sequence: Option<u64>,
+        /// First sequence of a range read (one call, at most 1000 events).
+        #[arg(long, requires = "to")]
+        from: Option<u64>,
+        /// Last sequence of a range read.
+        #[arg(long, requires = "from")]
+        to: Option<u64>,
+        /// Most events to accept in a range read; a larger range is refused.
+        #[arg(long, requires = "from")]
+        limit: Option<u64>,
         /// Leave the hex signatures out of the coverage.
         #[arg(long)]
         no_signatures: bool,
@@ -144,9 +154,19 @@ pub async fn run(args: ChainArgs) -> anyhow::Result<()> {
                 println!("  - {err}");
             }
         }
-        ChainCommand::Get { sequence, no_signatures } => {
-            let params = serde_json::to_value(ChainGetParams { sequence, signatures: !no_signatures })?;
-            let resp = client.call(Request::with_params("chain.get", params)).await?;
+        ChainCommand::Get { sequence, from, to, limit, no_signatures } => {
+            let (method, params) = match (sequence, from, to) {
+                (Some(sequence), None, None) => (
+                    "chain.get",
+                    serde_json::to_value(ChainGetParams { sequence, signatures: !no_signatures })?,
+                ),
+                (None, Some(from), Some(to)) => (
+                    "chain.get_range",
+                    serde_json::to_value(ChainGetRangeParams { from, to, limit, signatures: !no_signatures })?,
+                ),
+                _ => anyhow::bail!("give either <SEQUENCE> or both --from and --to"),
+            };
+            let resp = client.call(Request::with_params(method, params)).await?;
             if !resp.ok {
                 anyhow::bail!("{}", resp.error.unwrap_or_default());
             }
