@@ -117,9 +117,9 @@ Then decide:
 
 | Phase | Card | State |
 |---|---|---|
-| G0 | `85f29f99` | todo |
+| G0 | `85f29f99` | done, re-verified 2026-11-07 (docs/governance/g0-reverification-2026-11-07.md) |
 | G1 | `ef5785d6` | todo |
 | G2 | `16c8c22c` | todo |
 | G3 | `bb4dff9d` | todo |
 | G4 | `b58b8384` | todo |
-| Side: K0 stub | `eb1d6a2d` | todo |
+| Side: K0 stub | `eb1d6a2d` | deprecated on feat/deprecate-k0-check-permission, removal pending |

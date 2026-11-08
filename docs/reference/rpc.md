@@ -47,6 +47,7 @@ Method sets here are the registration points; per-method parameters and results 
 - [`route.*`](#route) (2)
 - [`service.*`](#service) (3)
 - [`shared.*`](#shared) (1)
+- [`store.*`](#store) (11)
 - [`substrate.*`](#substrate) (6)
 - [`terminal.*`](#terminal) (4)
 - [`tools.*`](#tools) (1)
@@ -423,6 +424,22 @@ Extension routes (prefix match unless the name is exact):
 |-------|------------|---------|-----------------|
 | `shared.` | Write | `shared_rpc::handle` |  |
 
+## store
+
+| Method | Capability | Handler |
+|--------|------------|---------|
+| `store.archive` | Admin | `daemon.rs`, `store_rpc.rs` |
+| `store.archive.gc` | Admin | `store_rpc.rs` |
+| `store.archive.keep` | Admin | `store_rpc.rs` |
+| `store.create` | Admin | `daemon.rs`, `store_rpc.rs` |
+| `store.get` | Admin | `daemon.rs`, `store_rpc.rs` |
+| `store.grant` | Admin | `daemon.rs`, `store_rpc.rs` |
+| `store.ls` | Admin | `daemon.rs`, `store_rpc.rs` |
+| `store.node.retire` | Admin | `store_rpc.rs` |
+| `store.promote` | Admin | `daemon.rs`, `store_rpc.rs` |
+| `store.put` | Admin | `daemon.rs`, `store_rpc.rs` |
+| `store.revoke` | Admin | `daemon.rs`, `store_rpc.rs` |
+
 ## substrate
 
 | Method | Capability | Handler |
@@ -530,5 +547,6 @@ Prefix rules in the capability table:
 | `expose.*` | Admin |
 | `fleet.*` | Admin |
 | `infer.*` | Admin |
+| `store.*` | Admin |
 | `versions.*` | Admin |
 | `workload.*` | Write |

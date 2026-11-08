@@ -135,6 +135,9 @@ pub mod licence_role_gate;
 /// D12 scope gate: outside-project policy and the voice deny-list (ADR-103).
 #[cfg(any(unix, windows))]
 pub mod scope_gate;
+/// `governance.check`: read-only dry-run verdict from the governance engine (Tapestry R9).
+#[cfg(feature = "exochain")]
+pub mod governance_check_rpc;
 /// `governance.parent.push|update` and `governance.reload` (ADR-103 D8).
 #[cfg(any(unix, windows))]
 pub mod governance_push;
@@ -206,15 +209,26 @@ mod infer_remote_tests;
 mod infer_svc_tests;
 #[cfg(all(test, feature = "placement", unix))]
 mod infer_hardening_tests;
+/// Agent directory, mesh view: `agent.sources` and its node-admin twin.
+pub mod agent_sources_rpc;
+/// Agent directory with an etag: `agent.directory`.
+pub mod agent_directory_rpc;
+#[cfg(all(test, feature = "placement", unix))]
+mod agent_sources_mesh_tests;
 pub mod expose_rpc;
 pub mod expose_set;
 pub mod expose_rt;
 /// ADR-126 S1: the object store wired to exposure, activity log and chain.
 pub mod store_rt;
+pub mod store_ingest;
+pub mod store_watch;
 pub mod store_svc;
 /// ADR-126 S1: `store.*` operator verbs.
 pub mod store_rpc;
+pub mod store_drive;
+pub mod store_view;
 pub mod store_worktree;
+pub mod store_worktree_paths;
 pub mod node_facts_rpc;
 /// Operator location labels for the fleet manager (site and room per node).
 pub mod agent_install;

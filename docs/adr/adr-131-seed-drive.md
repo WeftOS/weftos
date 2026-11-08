@@ -238,7 +238,10 @@ Run on the existing SC and bucket, a test chain (`drive-test`) and, for D4, a th
 3. **Bucket per client** (recommended) or a prefix per client in one bucket?
 4. **First project** to cut over after WeftOS, and the first client project.
 5. **macOS cold data:** accept sparse-by-path in v1 and build a File Provider extension later (needs an Apple Developer ID and a signed app extension)?
+   Answered 2026-11-07: sparse-by-path in v1; D1 skips cold dependencies via the `@ignored` list; no File Provider extension work now.
 6. **Windows:** in scope now, or after macOS and Linux?
 7. **Git history for client projects:** an encrypted bundle in the client bucket, or kept on PG?
 8. **Head notifications:** a relay over the mesh from one site subscriber (recommended), or WIF identities per node?
+   Answered 2026-11-07: one Pub/Sub subscriber on PG rebroadcasts head moves over the mesh (the site relay); per-node WIF identities are not pursued. Build item: next-steps row 12.
 9. **SC wake latency:** add a weekday pre-warm schedule so drive users rarely wait 72 s?
+   2026-11-07: noted as owner-side (a Terraform schedule the owner would apply); still an owner call, not scheduled.

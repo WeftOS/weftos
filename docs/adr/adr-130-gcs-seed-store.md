@@ -777,7 +777,7 @@ A guest poweroff leaves the instance TERMINATED, so the SC needs no IAM grant to
 | Boot disk at the Hyperdisk Balanced baseline | Built: 3,000 IOPS and 140 MiB/s (was 3,240 and 200) |
 | Dependency trees out of cold joins | Built. `gcsmesh join` now skips git-ignored trees (`node_modules`, `.cargo-home`, `target` and so on) by default; `--with-deps` fetches them |
 | Unit installed by Terraform | Built. `sc_unit_via_metadata` is on: the startup script installs the unit, its scripts, `sc.env`, `clients.json` and the `gcsmesh` binary (from the bucket, refused unless its SHA-256 matches). Later edits are in-place metadata updates |
-| Budget alert on `adr=adr-130` (50/90/100% of $150 a month) | **Pending.** The resource is in Terraform, but the billing budgets API rejects user credentials with no quota project. It waits for the owner to set the ADC quota project, then a budget-only plan for approval |
+| Budget alert on `adr=adr-130` (50/90/100% of $150 a month) | **Live** (2026-11-01, TF 6c7d73d), scoped to the project plus the label. The first attempt failed because the billing budgets API rejects user credentials with no quota project; the provider now sets `user_project_override` with a billing project, and plans must pass `TF_VAR_budget_billing_account` or they plan to destroy the budget |
 
 ### How the apply went
 
@@ -833,7 +833,6 @@ Against $218 for a standard SC running 24/7 (gate 9). Each wake costs at least a
 
 ### Still open
 
-- The budget (above): owner step, then a budget-only plan.
 - The waker image is referenced by tag (`seedwaker:v1`); Cloud Run resolved it to digest `sha256:91b81585…` at deploy. Pinning it by digest in the Terraform is a small in-place update.
 - A wake on Spot can fail when the zone has no Spot capacity. The waker then answers 500, and Pub/Sub retries pushes. Falling back to a standard VM is an owner decision and is not automatic.
 - Option A+ (the waker also mints create-only PUT URLs for `incoming/<client>/`, so a client never waits for the SC) is deferred: it would give an internet-facing service write access to the bucket.

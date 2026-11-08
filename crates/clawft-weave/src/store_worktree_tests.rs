@@ -5,6 +5,8 @@ use serde_json::json;
 use weftos_store::{FsBackend, StoreService};
 
 use super::*;
+use crate::store_worktree_paths::Guard;
+use std::path::Path;
 use crate::store_rt::{ActivitySink, ChainAudit, RegistryGate};
 
 const PROJ: &str = "01JBXK2M3N4P5Q6R7S8T9V0W1X";
@@ -30,6 +32,7 @@ fn call(svc: &StoreService, verb: &str, p: Value, now: u64) -> Result<Value, Str
 }
 
 fn files(dir: &Path) -> (String, String, String) {
+    std::fs::create_dir_all(dir.join(".git")).unwrap();
     std::fs::create_dir_all(dir.join("docs")).unwrap();
     std::fs::write(dir.join("docs/plan.md"), "# Rooms plan\n").unwrap();
     std::fs::write(dir.join("a.rs"), "fn a() {}\n").unwrap();
@@ -100,6 +103,10 @@ fn the_verbs_carry_a_worktree_from_create_to_land_through_the_daemon_store() {
     let p = call(&svc, "promote", json!({"project": PROJ, "slug": "feat-rooms", "agent": "bob", "host": "m2", "epoch": 1}), 50).unwrap();
     assert_eq!(p["promoted"], json!(["assets/room.bin"]));
     assert_eq!(S1::get(&*svc.operator_objects(), pb, "assets/room.bin").unwrap(), b"ROOM");
+    // followers see the landed worktree as merged, not still claimed
+    let f3 = call(&svc, "follow", json!({"project": PROJ, "state": st.to_string_lossy()}), 52).unwrap();
+    assert_eq!(f3["changes"][0]["change"], "state_changed");
+    assert_eq!(f3["changes"][0]["worktree"]["state"], "merged");
     let again = call(&svc, "promote", json!({"project": PROJ, "slug": "feat-rooms"}), 51).unwrap();
     assert_eq!(again["promoted"], p["promoted"], "landing twice is a no-op");
     let re = call(&svc, "create", json!({"project": PROJ, "slug": "feat-rooms", "branch": "feat/rooms", "base": "abc"}), 60);

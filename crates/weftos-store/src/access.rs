@@ -16,7 +16,7 @@ use crate::StoreError;
 pub enum Access {
     /// Get, head, list.
     Read,
-    /// Read, plus write-once puts: a put must carry `if_none_match`, so nothing is overwritten.
+    /// Read, plus write-once puts through the service: a put must carry `if_none_match`, so nothing is overwritten (the key itself is read-only at RustFS).
     /// No delete, no copy. The CI role of a release store.
     Append,
     /// Read, plus delete. No put, no copy. The retention sweeper of a release store.
@@ -235,6 +235,18 @@ impl GrantTable {
     /// Every grant of a principal.
     pub fn for_principal(&self, p: &Principal) -> Vec<Grant> {
         self.grants.iter().filter(|g| g.principal == *p).cloned().collect()
+    }
+
+    /// The store is now named `to` (the mesh id replaced `local`): its grants follow the name.
+    /// Returns how many grants moved.
+    pub fn rename_store(&mut self, from: &StoreName, to: &StoreName) -> usize {
+        let (f, t) = (from.to_string(), to.to_string());
+        let mut n = 0;
+        for g in self.grants.iter_mut().filter(|g| g.store == f) {
+            g.store.clone_from(&t);
+            n += 1;
+        }
+        n
     }
 
     /// Drop every grant of a store (the store is gone).

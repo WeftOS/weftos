@@ -213,6 +213,52 @@ fn sync_docs_mirrors_read_only_and_prunes_removed_docs() {
 }
 
 #[test]
+fn a_forged_manifest_cannot_touch_the_followers_own_files_or_leave_the_cache() {
+    let b = MemBackend::new();
+    let e = publish(&b, "a", "h1", &[("docs/a.md", "# A\n")], 1);
+    let cache = tempfile::tempdir().unwrap();
+    sync_docs(&b, &e, cache.path()).unwrap();
+    // someone with direct write access to the worktree bucket lists the follower's control file
+    // and names that climb out of the cache as documents
+    let mut m = read_manifest(&b, &e.bucket).unwrap().unwrap();
+    for (path, body) in [(".wt-index.json", "[\"docs/a.md\"]"), ("../escape.md", "x"), (".wt-other/n.md", "x"), ("docs/../../up.md", "x")] {
+        b.put(&e.bucket, &format!("{TREE_PREFIX}{path}"), body.as_bytes()).unwrap();
+        m.files.push(FileEntry { path: path.into(), size: body.len() as u64, sha256: sha256_hex(body.as_bytes()) });
+        m.docs.push(DocEntry { path: path.into(), title: None });
+    }
+    b.put(&e.bucket, MANIFEST_KEY, &serde_json::to_vec(&m).unwrap()).unwrap();
+    let r = sync_docs(&b, &e, cache.path()).unwrap();
+    assert_eq!(r.written, Vec::<String>::new(), "the honest doc is unchanged: {r:?}");
+    assert!(!cache.path().join("escape.md").exists() && !cache.path().join("up.md").exists());
+    assert!(!cache.path().join("a/.wt-other").exists());
+    // the follower's own index is the one it wrote, not the forged body, and stays writable
+    let idx = cache.path().join("a/.wt-index.json");
+    assert_eq!(std::fs::read_to_string(&idx).unwrap(), "[\"docs/a.md\"]");
+    assert!(!std::fs::metadata(&idx).unwrap().permissions().readonly());
+    // and later syncs still work
+    let e2 = publish(&b, "a", "h2", &[("docs/a.md", "# A2\n")], 2);
+    sync_docs(&b, &e2, cache.path()).unwrap();
+    assert_eq!(std::fs::read_to_string(cache.path().join("a/docs/a.md")).unwrap(), "# A2\n");
+}
+
+#[test]
+fn a_registry_object_is_known_by_its_key_and_an_entry_claiming_another_slug_is_unreadable() {
+    let b = MemBackend::new();
+    let a = publish(&b, "a", "h1", &[("docs/a.md", "# A\n")], 1);
+    let c = publish(&b, "c", "h1", &[("docs/a.md", "# C\n")], 1);
+    // a second key whose JSON claims the slug of the first
+    let mut forged = a.clone();
+    forged.head_commit = "evil".into();
+    b.put(PR, &format!("{REGISTRY_PREFIX}zzz.json"), &serde_json::to_vec(&forged).unwrap()).unwrap();
+    let mut st = FollowState::default();
+    let ch = poll(&b, PR, &mut st).unwrap();
+    let news: Vec<_> = ch.iter().filter_map(|c| if let Change::New(e) = c { Some((e.slug.clone(), e.head_commit.clone())) } else { None }).collect();
+    assert!(news.contains(&("a".into(), a.head_commit.clone())) && news.contains(&("c".into(), c.head_commit.clone())), "{news:?}");
+    assert!(!news.iter().any(|(_, h)| h == "evil"), "{news:?}");
+    assert_eq!(st.seen.len(), 2);
+}
+
+#[test]
 fn leftovers_flag_forgotten_unclaimed_and_abandoned_oldest_first() {
     let day = 24 * 3600 * 1000u64;
     let b = MemBackend::new();
@@ -489,7 +535,9 @@ fn different_bases_mark_overlaps_as_unreliable() {
     m.base_commit = "other-base".into();
     b.put("w-c", MANIFEST_KEY, &serde_json::to_vec(&m).unwrap())
         .unwrap();
-    assert!(!overlaps(&b, &a, &c).unwrap().same_base);
+    let r = overlaps(&b, &a, &c).unwrap();
+    assert!(!r.same_base);
+    assert_eq!((r.base_a.as_str(), r.base_b.as_str()), ("base", "other-base"), "the report names both bases");
 }
 
 #[test]
@@ -502,6 +550,7 @@ fn follow_state_round_trips_and_rejects_corruption() {
     st.seen.insert(
         "a".into(),
         weftos_store::follower::Seen {
+            etag: None,
             bucket: "w-1-x".into(),
             head_commit: "abc".into(),
             state: weftos_store::share::State::Open,

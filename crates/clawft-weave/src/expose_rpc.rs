@@ -57,6 +57,7 @@ pub(crate) fn row(reg: &ExposureRegistry, e: &Exposure) -> Value {
         "id": e.id, "kind": e.kind, "resource": e.resource, "audience": e.audience.label(),
         "api": e.api, "limits": e.limits, "state": e.state.as_str(), "announced": e.announced,
         "served": refused.is_none(), "refused": refused, "raw": e.raw,
+        "agent": e.agent,
     })
 }
 

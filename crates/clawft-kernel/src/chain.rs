@@ -1305,6 +1305,12 @@ pub struct ChainManager {
     signing_key: Option<SigningKey>,
     /// ML-DSA-65 signing key for post-quantum dual signing (ADR-129).
     ml_dsa_key: Option<mldsa65::SigningKey>,
+    /// The latest signed checkpoint, exactly as written to the RVF file
+    /// (checkpoint segment followed by its signature footers). Set by
+    /// [`Self::save_to_rvf`] when a signing key is present and by
+    /// [`Self::load_from_rvf`] when the file carries a signature. It is
+    /// what [`crate::chain_coverage`] answers "is this event signed?" from.
+    signed_tail: Mutex<Option<Vec<u8>>>,
 }
 
 impl ChainManager {
@@ -1323,6 +1329,7 @@ impl ChainManager {
             inner: Mutex::new(chain),
             signing_key: None,
             ml_dsa_key: None,
+            signed_tail: Mutex::new(None),
         }
     }
 
@@ -1349,6 +1356,7 @@ impl ChainManager {
             inner: Mutex::new(chain),
             signing_key: None,
             ml_dsa_key: None,
+            signed_tail: Mutex::new(None),
         };
         let result = mgr.verify_integrity();
         if !result.valid {
@@ -1547,6 +1555,143 @@ impl ChainManager {
         } else {
             chain.events[chain.events.len() - n..].to_vec()
         }
+    }
+
+    /// One event by sequence number, or `None` when the chain has no such
+    /// event. A `None` is "not there", never "unreadable": the chain lives
+    /// in memory and a lookup cannot fail otherwise.
+    pub fn event(&self, sequence: u64) -> Option<ChainEvent> {
+        let chain = self.inner.lock().unwrap();
+        let idx = usize::try_from(sequence).ok()?;
+        chain.events.get(idx).filter(|e| e.sequence == sequence).cloned()
+    }
+
+    /// The latest signed checkpoint as written to the RVF file (segment plus
+    /// signature footers), or `None` when no signed checkpoint exists yet.
+    pub fn signed_checkpoint_bytes(&self) -> Option<Vec<u8>> {
+        self.signed_tail.lock().unwrap().clone()
+    }
+
+    /// Recompute events `from..=to` and check they link to each other and
+    /// that the event at `to` carries `expect_head` as its hash. Each event
+    /// hash commits to `prev_hash`, so this proves the stored `from` event is
+    /// an ancestor of the signed head. `Err` names the first break.
+    pub fn verify_link_to(&self, from: u64, to: u64, expect_head: &[u8; 32]) -> Result<(), String> {
+        let chain = self.inner.lock().unwrap();
+        let (Ok(lo), Ok(hi)) = (usize::try_from(from), usize::try_from(to)) else {
+            return Err("sequence out of range".into());
+        };
+        if lo > hi || hi >= chain.events.len() {
+            return Err(format!(
+                "range {from}..={to} is outside the chain ({} events)",
+                chain.events.len()
+            ));
+        }
+        for i in lo..=hi {
+            let e = &chain.events[i];
+            if e.sequence != i as u64 {
+                return Err(format!("seq {i}: stored sequence is {}", e.sequence));
+            }
+            if e.payload_hash != compute_payload_hash(&e.payload) {
+                return Err(format!("seq {i}: payload_hash mismatch"));
+            }
+            let recomputed = compute_event_hash(
+                e.sequence,
+                e.chain_id,
+                &e.prev_hash,
+                &e.source,
+                &e.kind,
+                &e.timestamp,
+                &e.payload_hash,
+                e.rule_hash.as_ref(),
+            );
+            if e.hash != recomputed {
+                return Err(format!("seq {i}: hash mismatch"));
+            }
+            if i > lo && e.prev_hash != chain.events[i - 1].hash {
+                return Err(format!("seq {i}: prev_hash does not link to seq {}", i - 1));
+            }
+        }
+        if &chain.events[hi].hash != expect_head {
+            return Err(format!("seq {to}: hash differs from the signed head"));
+        }
+        Ok(())
+    }
+
+    /// Events `from..=to` (clones), taken under one lock. Refuses an inverted
+    /// range or one past the head; never returns a short list.
+    pub fn events_range(&self, from: u64, to: u64) -> Result<Vec<ChainEvent>, String> {
+        let chain = self.inner.lock().unwrap();
+        let (Ok(lo), Ok(hi)) = (usize::try_from(from), usize::try_from(to)) else {
+            return Err("sequence out of range".into());
+        };
+        if lo > hi || hi >= chain.events.len() {
+            return Err(format!("range {from}..={to} is outside the chain ({} events)", chain.events.len()));
+        }
+        Ok(chain.events[lo..=hi].to_vec())
+    }
+
+    /// For each `i` in `from..=to`, exactly what [`Self::verify_link_to`]`(i, head,
+    /// expect_head)` returns, computed in one backward pass over `from..=head`
+    /// instead of one pass per `i`. Entry `i` is `Ok` only when every stored
+    /// event from `i` to `head` recomputes and links and `head` is the signed
+    /// head; otherwise it carries the first error a scan upward from `i` meets.
+    pub fn link_status_range(
+        &self,
+        from: u64,
+        to: u64,
+        head: u64,
+        expect_head: &[u8; 32],
+    ) -> Result<Vec<Result<(), String>>, String> {
+        let chain = self.inner.lock().unwrap();
+        let (Ok(lo), Ok(hi), Ok(head)) =
+            (usize::try_from(from), usize::try_from(to), usize::try_from(head))
+        else {
+            return Err("sequence out of range".into());
+        };
+        if lo > hi || hi > head || head >= chain.events.len() {
+            return Err(format!(
+                "range {from}..={to} (signed head {head}) is outside the chain ({} events)",
+                chain.events.len()
+            ));
+        }
+        let self_err = |i: usize| -> Option<String> {
+            let e = &chain.events[i];
+            if e.sequence != i as u64 {
+                return Some(format!("seq {i}: stored sequence is {}", e.sequence));
+            }
+            if e.payload_hash != compute_payload_hash(&e.payload) {
+                return Some(format!("seq {i}: payload_hash mismatch"));
+            }
+            let recomputed = compute_event_hash(
+                e.sequence, e.chain_id, &e.prev_hash, &e.source, &e.kind,
+                &e.timestamp, &e.payload_hash, e.rule_hash.as_ref(),
+            );
+            (e.hash != recomputed).then(|| format!("seq {i}: hash mismatch"))
+        };
+        // `after`: the first error a scan meets from index i+1 upward, with a
+        // predecessor in the scan (so link checks apply), ending at the head check.
+        let mut after: Option<String> = (&chain.events[head].hash != expect_head)
+            .then(|| format!("seq {head}: hash differs from the signed head"));
+        let mut out: Vec<Result<(), String>> = Vec::with_capacity(hi - lo + 1);
+        for i in (lo..=head).rev() {
+            let own = self_err(i);
+            if i <= hi {
+                out.push(own.clone().or_else(|| after.clone()).map_or(Ok(()), Err));
+            }
+            let link = (i > lo && chain.events[i].prev_hash != chain.events[i - 1].hash)
+                .then(|| format!("seq {i}: prev_hash does not link to seq {}", i - 1));
+            after = own.or(link).or(after);
+        }
+        out.reverse();
+        Ok(out)
+    }
+
+    /// Test hook: mutate a stored event in place, bypassing the hash.
+    #[cfg(test)]
+    pub(crate) fn tamper_for_test(&self, sequence: u64, f: impl FnOnce(&mut ChainEvent)) {
+        let mut chain = self.inner.lock().unwrap();
+        f(&mut chain.events[sequence as usize]);
     }
 
     /// Install the provider that stamps `rule_hash` on every append
@@ -1997,6 +2142,7 @@ impl ChainManager {
             inner: Mutex::new(chain),
             signing_key: None,
             ml_dsa_key: None,
+            signed_tail: Mutex::new(None),
         };
 
         // Verify integrity of the loaded chain
@@ -2139,6 +2285,7 @@ impl ChainManager {
             &cp_cbor,
             chain.sequence, // use next sequence as segment_id
         );
+        let cp_start = output.len();
         output.extend_from_slice(&cp_segment);
 
         // Sign the checkpoint segment if a signing key is available.
@@ -2162,6 +2309,13 @@ impl ChainManager {
         };
 
         std::fs::write(path, &output)?;
+        // Remember the signed checkpoint so `chain.get` can say which events
+        // it covers. An unsigned save leaves the previous record alone: it
+        // still describes a real earlier signature over a prefix of this
+        // chain, and coverage re-checks the link to the head each time.
+        if signed && let Ok(mut tail) = self.signed_tail.lock() {
+            *tail = Some(output[cp_start..].to_vec());
+        }
         info!(
             path = %path.display(),
             events = chain.events.len(),
@@ -2187,6 +2341,7 @@ impl ChainManager {
         let mut events = Vec::new();
         let mut witness_entries = Vec::new();
         let mut sig_suite: Option<SigSuite> = None;
+        let mut cp_start: Option<usize> = None;
 
         while offset < data.len() {
             // Need at least a segment header.
@@ -2251,6 +2406,7 @@ impl ChainManager {
                 });
             } else if exo_header.subtype == 0x41 {
                 // Checkpoint — extract witness chain if present.
+                cp_start = Some(offset);
                 sig_suite = crate::chain_pq::checkpoint_suite(cbor_bytes).ok();
                 let cp_obj: serde_json::Value =
                     ciborium::from_reader(cbor_bytes).unwrap_or_default();
@@ -2310,6 +2466,11 @@ impl ChainManager {
             inner: Mutex::new(chain),
             signing_key: None,
             ml_dsa_key: None,
+            // A signed file keeps its checkpoint across a restart.
+            signed_tail: Mutex::new(match (has_signature, cp_start) {
+                (true, Some(at)) => Some(data[at..].to_vec()),
+                _ => None,
+            }),
         };
 
         // Verify integrity of the loaded chain.

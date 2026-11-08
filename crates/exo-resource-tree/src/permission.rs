@@ -70,6 +70,9 @@ impl Decision {
 /// **K0 stub**: Always returns `Allow`. Preserved so existing K0
 /// call sites compile unchanged. New code must use
 /// [`CapabilityChecker::check_permission`] instead.
+#[deprecated(
+    note = "always returns Allow; use PermissionEngine (or the governance gate). Card eb1d6a2d"
+)]
 pub fn check(_agent_id: &str, _role: &Role, _action: &Action, _resource: &ResourceId) -> Decision {
     Decision::Allow
 }
@@ -705,6 +708,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn k0_stub_always_allows() {
         let decision = check(
             "agent-001",

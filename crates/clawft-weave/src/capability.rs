@@ -198,6 +198,11 @@ pub fn required_capability(method: &str) -> Capability {
         // verified-project check in the handler.
         | "chain.subscribe"
         | "chain.local"
+        // Full event + signature coverage (read-only). Same capability as
+        // `chain.tail`; kept off the scope gate's project-less allow-list
+        // because it returns whole payloads, not a 60-char preview.
+        | "chain.get"
+        | "chain.get_range"
         | "chain.verify"
         // WEFT-125: active vector backend introspection (read-only).
         | "ecc.vector-config"
@@ -233,6 +238,11 @@ pub fn required_capability(method: &str) -> Capability {
         | "cog.licence.revoked"
         | "infer.status"
         | "expose.list"
+        // Agent directory: this node's agents and exposures; a `node` or
+        // `mesh` call contacts peers and needs Admin inside the handler.
+        | "agent.sources"
+        // Joined directory with an etag; `mesh` is checked for Admin in the handler.
+        | "agent.directory"
         // ADR-122: topics, writers and counters; no payloads, no tokens.
         | "cogbus.list"
         // Fleet manager: one read-only document composed from sources the
@@ -248,7 +258,10 @@ pub fn required_capability(method: &str) -> Capability {
         // Recent dashboard actions and their outcomes (no payloads); local only.
         | "dashboard.actions"
         // Pending pair requests (ids, node ids, project ULIDs; no key material).
-        | "mesh.pair.list" => Capability::Read,
+        | "mesh.pair.list"
+        // Tapestry R9: a dry-run verdict from the live governance engine. Changes no
+        // rule, writes no chain event; returns the verdict and rule names only.
+        | "governance.check" => Capability::Read,
 
         // An unclassified `dashboard.*` verb is a mutation, never anonymous Read.
         m if m.starts_with("dashboard.") && m != "dashboard.status" && m != "dashboard.actions" => Capability::Admin,
@@ -481,6 +494,15 @@ mod tests {
                 "method {m} should be Admin",
             );
         }
+    }
+
+    #[test]
+    fn chain_get_is_read_like_chain_tail() {
+        assert_eq!(required_capability("chain.get"), Capability::Read);
+        assert_eq!(required_capability("chain.get"), required_capability("chain.tail"));
+        assert_eq!(required_capability("chain.get_range"), Capability::Read);
+        assert!(CallerCapabilities::anonymous().allows_method("chain.get_range"));
+        assert!(CallerCapabilities::anonymous().allows_method("chain.get"));
     }
 
     #[test]

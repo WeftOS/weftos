@@ -88,6 +88,27 @@ impl AgentSource {
             .collect()
     }
 
+    /// Every package dir, inactive ones included (`package_ids` hides those),
+    /// sorted. For read-only listings such as the agent directory.
+    pub fn all_package_ids(&self) -> Vec<String> {
+        self.files
+            .keys()
+            .filter_map(|p| p.strip_suffix("/weftos-package.yaml"))
+            .filter(|id| !id.contains('/') && !LEGACY_DIRS.contains(id))
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// Team names: dirs under `teams/` holding a `team.yaml`, sorted.
+    pub fn team_ids(&self) -> Vec<String> {
+        self.files
+            .keys()
+            .filter_map(|p| p.strip_prefix("teams/")?.strip_suffix("/team.yaml"))
+            .filter(|t| !t.contains('/'))
+            .map(str::to_string)
+            .collect()
+    }
+
     pub fn get(&self, rel: &str) -> Option<&[u8]> {
         self.files.get(rel).map(|b| b.as_ref())
     }

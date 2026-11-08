@@ -87,6 +87,10 @@ pub struct PromotionReport {
     pub archived: Vec<String>,
     pub dropped_tombstones: Vec<String>,
     pub promoted_ms: u64,
+    /// `created_ms` of the worktree metadata this report belongs to. A report from an earlier
+    /// life of a reused slug does not match the new metadata and is ignored (review F6).
+    #[serde(default)]
+    pub generation_ms: u64,
 }
 
 pub fn write_meta<B: ObjectBackend>(
@@ -111,7 +115,13 @@ pub fn is_promoted<B: ObjectBackend>(
     worktree_bucket: &str,
 ) -> Result<Option<PromotionReport>> {
     match b.get(worktree_bucket, PROMOTED_KEY)? {
-        Some(d) => Ok(Some(serde_json::from_slice(&d)?)),
+        Some(d) => {
+            let r: PromotionReport = serde_json::from_slice(&d)?;
+            match read_meta(b, worktree_bucket)? {
+                Some(m) if m.created_ms != r.generation_ms && r.generation_ms != 0 => Ok(None),
+                _ => Ok(Some(r)),
+            }
+        }
         None => Ok(None),
     }
 }
@@ -189,7 +199,7 @@ pub fn promote<B: ObjectBackend>(
     let meta = read_meta(b, worktree_bucket)?.ok_or_else(|| {
         S2Error::Invalid("worktree has no .wt/meta.json; refusing to promote".into())
     })?;
-    let _ = &meta; // presence is the check; `created_ms` is informational
+    // Presence is the check; `created_ms` identifies this life of the slug.
     let ov = Overlay::new(b, worktree_bucket, project_bucket);
 
     // Plan: no writes yet.
@@ -280,6 +290,7 @@ pub fn promote<B: ObjectBackend>(
     // Apply. Archive first so nothing is lost if a later copy fails.
     let mut report = PromotionReport {
         promoted_ms: now_ms,
+        generation_ms: meta.created_ms,
         ..Default::default()
     };
     let arch_key = |k: &str| format!("{}{}", archive.prefix, k);

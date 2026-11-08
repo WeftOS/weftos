@@ -5,11 +5,57 @@ use clawft_kernel::exposure::ExposureRegistry;
 use super::*;
 
 #[test]
-fn node_ids_become_store_tokens() {
-    assert_eq!(node_token("PG_1.local"), "pg-1-local");
-    assert_eq!(node_token(""), "node");
-    assert_eq!(node_token(&"a".repeat(100)).len(), 61);
-    assert!(StoreName::node("m", &node_token("Weird Node/ID")).is_ok());
+fn node_ids_become_topic_tokens_and_only_a_clean_id_becomes_a_store_token() {
+    // The topic token is lossy on purpose.
+    assert_eq!(topic_token("PG_1.local"), "pg-1-local");
+    assert_eq!(topic_token(""), "node");
+    assert_eq!(topic_token(&"a".repeat(100)).len(), 61);
+    assert!(StoreName::node("m", &topic_token("Weird Node/ID")).is_ok());
+    // The store token is the id itself or nothing: nothing cleaned up can share a bucket.
+    assert_eq!(node_token("pg-1").unwrap(), "pg-1");
+    assert_eq!(node_token(&"a".repeat(61)).unwrap().len(), 61);
+    for lossy in ["pg.1", "PG-1", "pg_1", "pg 1", "pg/1", "", &"a".repeat(62), "pg-1\n"] {
+        let e = node_token(lossy).unwrap_err();
+        assert!(e.contains("collid"), "{lossy:?}: {e}");
+    }
+    // The ids that used to collide are told apart: one is a store token, the other is refused.
+    assert_eq!(topic_token("pg.1"), topic_token("pg-1"));
+    assert!(node_token("pg-1").is_ok() && node_token("pg.1").is_err());
+}
+
+fn env(pairs: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
+    move |k| pairs.iter().find(|(n, _)| *n == k).map(|(_, v)| (*v).to_owned())
+}
+
+#[test]
+fn the_archive_schedule_is_off_unless_an_interval_is_set_and_has_no_built_in_days() {
+    assert_eq!(archive_schedule_from(env(&[])).unwrap(), None);
+    // Day numbers alone do not turn it on.
+    assert_eq!(archive_schedule_from(env(&[("WEFTOS_STORE_ARCHIVE_NODE_DAYS", "30")])).unwrap(), None);
+    let s = archive_schedule_from(env(&[("WEFTOS_STORE_ARCHIVE_GC_EVERY_HOURS", "24")])).unwrap().unwrap();
+    assert_eq!((s.every_hours, s.keep, s.confirmed), (24, weftos_store::service::ArchiveKeep::default(), false));
+}
+
+#[test]
+fn the_archive_schedule_reads_days_and_confirm_and_refuses_bad_values() {
+    let s = archive_schedule_from(env(&[
+        ("WEFTOS_STORE_ARCHIVE_GC_EVERY_HOURS", " 6 "),
+        ("WEFTOS_STORE_ARCHIVE_NODE_DAYS", "30"),
+        ("WEFTOS_STORE_ARCHIVE_RELEASE_DAYS", "365"),
+        ("WEFTOS_STORE_ARCHIVE_GC_CONFIRM", "true"),
+    ]))
+    .unwrap()
+    .unwrap();
+    assert_eq!((s.every_hours, s.keep.node_days, s.keep.project_days, s.keep.release_days, s.confirmed), (6, Some(30), None, Some(365), true));
+    for bad in [
+        &[("WEFTOS_STORE_ARCHIVE_GC_EVERY_HOURS", "daily")][..],
+        &[("WEFTOS_STORE_ARCHIVE_GC_EVERY_HOURS", "0")][..],
+        &[("WEFTOS_STORE_ARCHIVE_GC_EVERY_HOURS", "1"), ("WEFTOS_STORE_ARCHIVE_NODE_DAYS", "0")][..],
+        &[("WEFTOS_STORE_ARCHIVE_GC_EVERY_HOURS", "1"), ("WEFTOS_STORE_ARCHIVE_PROJECT_DAYS", "-3")][..],
+    ] {
+        let bad: &'static [(&str, &str)] = Box::leak(bad.to_vec().into_boxed_slice());
+        assert!(archive_schedule_from(env(bad)).is_err(), "{bad:?}");
+    }
 }
 
 #[test]

@@ -12,18 +12,25 @@
 //! No kernel dependency: the daemon supplies an [`ExposureGate`], an [`AuditSink`] and a
 //! [`ChainSink`].
 
+#[cfg(test)]
+mod prop_tests;
+#[cfg(test)]
+mod testrng;
 pub mod access;
 pub mod audit;
 pub mod backend;
 pub mod claim_watch;
 pub mod follower;
 pub mod fs;
+pub mod grant_seq;
 pub mod mem;
 pub mod name;
 pub mod overlay;
 pub mod policy;
 pub mod promote;
 pub mod registry_sign;
+#[cfg(feature = "rustfs")]
+pub mod integrity;
 #[cfg(feature = "rustfs")]
 pub mod rustfs;
 pub mod service;
@@ -37,12 +44,12 @@ pub mod worktree_backend;
 
 pub use access::{Access, Grant, GrantTable, Op, Principal, PrincipalKind};
 pub use audit::{AuditEvent, AuditSink, Outcome, Source};
-pub use backend::{AccessKey, AdminBackend, BackendError, ObjectBackend, ObjectMeta};
+pub use backend::{AccessKey, AdminBackend, BackendError, DefaultRetention, LifecycleRule, LockConfig, LockMode, LockedPut, ObjectBackend, ObjectMeta, ObjectVersion, Part, PutOpts, Retention};
 pub use fs::FsBackend;
 pub use mem::MemBackend;
 pub use name::StoreName;
 #[cfg(feature = "rustfs")]
-pub use rustfs::{RustfsBackend, RustfsConfig};
+pub use rustfs::{Retry, RustfsBackend, RustfsConfig};
 pub use service::{ChainSink, ExposureGate, StoreInfo, StoreService};
 
 /// Errors of the store layer.

@@ -7,6 +7,12 @@
 //! - `store.revoke {name, principal}`.
 //! - `store.promote {name, prefixes[], archive_rest?}`: a worktree store into its project store.
 //! - `store.archive {name, delete?}`.
+//! - `store.node.retire {name}`: a node was unpaired; archive its store and retire the id.
+//! - `store.archive.gc {node_days?, project_days?, release_days?, confirmed?}`: delete archives of
+//!   node, project and release stores older than the days given (none given: nothing expires). A
+//!   dry run unless `confirmed`. Worktree archives are `store worktree gc`'s.
+//! - `store.archive.keep {name, days?, forever?}`: how long this store's archives are kept, over
+//!   the kind's limit (`days`, or `forever`; neither clears the override). Not for worktrees.
 //! - `store.put {name, key, principal, text|b64}`, `store.get {name, key, principal}`:
 //!   a governed request as that principal, the same path a cog's request takes.
 
@@ -43,6 +49,18 @@ struct P {
     archive_rest: bool,
     #[serde(default)]
     delete: bool,
+    #[serde(default)]
+    node_days: Option<u64>,
+    #[serde(default)]
+    project_days: Option<u64>,
+    #[serde(default)]
+    release_days: Option<u64>,
+    #[serde(default)]
+    confirmed: bool,
+    #[serde(default)]
+    days: Option<u64>,
+    #[serde(default)]
+    forever: bool,
     #[serde(default)]
     key: Option<String>,
     #[serde(default)]
@@ -124,11 +142,36 @@ pub fn run(svc: &StoreService, method: &str, params: Value) -> Result<Value, Str
         "store.archive" => {
             let name = store(&p)?;
             let n = svc.archive(&name, p.delete, "cli").map_err(e)?;
-            Ok(json!({"store": name.to_string(), "archived_objects": n, "deleted": p.delete}))
+            // A deleted worktree store leaves the follower registry too; a failure here is reported
+            // but does not undo the archive (it is safe to repeat).
+            let registry = if p.delete { crate::store_worktree::forget(svc, &name).err() } else { None };
+            Ok(json!({"store": name.to_string(), "archived_objects": n, "deleted": p.delete, "registry_error": registry}))
+        }
+        "store.archive.gc" => {
+            let keep = weftos_store::service::ArchiveKeep { node_days: p.node_days, project_days: p.project_days, release_days: p.release_days };
+            Ok(json!(svc.archive_gc(&keep, p.confirmed, "cli").map_err(e)?))
+        }
+        "store.archive.keep" => {
+            let name = store(&p)?;
+            let keep = match (p.days, p.forever) {
+                (Some(_), true) => return Err("store.archive.keep takes days or forever, not both".into()),
+                (Some(d), false) => Some(weftos_store::service::KeepFor::Days(d)),
+                (None, true) => Some(weftos_store::service::KeepFor::Forever),
+                (None, false) => None,
+            };
+            svc.set_archive_keep(&name, keep, "cli").map_err(e)?;
+            Ok(json!({"store": name.to_string(), "keep": keep}))
+        }
+        // A node was unpaired: archive its node store and retire the id (ADR-126; S3 calls this).
+        "store.node.retire" => {
+            let name = store(&p)?;
+            let n = svc.retire_node_store(&name, "cli").map_err(e)?;
+            Ok(json!({"store": name.to_string(), "archived_objects": n, "retired": true}))
         }
         "store.put" => {
             let (name, key) = (store(&p)?, need(&p.key, "key")?.to_owned());
             let who = Caller::local(principal(need(&p.principal, "principal")?)?);
+            svc.note_operator("cli", "store.put", &who.principal, &name, &key);
             let data = match (&p.text, &p.b64) {
                 (Some(t), None) => t.clone().into_bytes(),
                 (None, Some(b)) => B64.decode(b).map_err(|e| format!("b64: {e}"))?,
@@ -140,6 +183,7 @@ pub fn run(svc: &StoreService, method: &str, params: Value) -> Result<Value, Str
         "store.get" => {
             let (name, key) = (store(&p)?, need(&p.key, "key")?.to_owned());
             let who = Caller::local(principal(need(&p.principal, "principal")?)?);
+            svc.note_operator("cli", "store.get", &who.principal, &name, &key);
             let d = svc.get(&who, &name, &key).map_err(e)?;
             Ok(json!({"key": key, "size": d.len(), "b64": B64.encode(&d), "text": String::from_utf8(d).ok()}))
         }

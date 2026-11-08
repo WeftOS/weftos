@@ -212,3 +212,38 @@ fn raw_is_an_operator_decision_that_persists_and_withdraws_when_cleared() {
     again.set_raw(id, false, "cli").unwrap();
     assert_eq!(again.drain_withdrawals(), [id.to_string()]);
 }
+
+#[test]
+fn an_exposure_names_the_agent_it_runs() {
+    let r = ExposureRegistry::new("n-a");
+    let s = ExposureSpec::new("harness.team-run", ExposureKind::Harness, "cpu", "weftos-harness")
+        .with_agent("weftos://agent/developer")
+        .unwrap();
+    assert_eq!(r.register(s).agent.as_deref(), Some("developer"));
+    let bare = ExposureSpec::new("harness.b", ExposureKind::Harness, "cpu", "weftos-harness").with_agent("steward").unwrap();
+    assert_eq!(r.register(bare).agent.as_deref(), Some("steward"));
+    assert_eq!(r.get("harness.team-run").unwrap().agent.as_deref(), Some("developer"));
+    // No agent unless the spec names one.
+    assert_eq!(r.register(spec("infer.chat")).agent, None);
+}
+
+#[test]
+fn a_malformed_agent_reference_is_refused() {
+    let base = || ExposureSpec::new("harness.x", ExposureKind::Harness, "cpu", "weftos-harness");
+    for bad in ["", "weftos://agent/", "a/b", "weftos://agent/a/b", "http://x/y", &"x".repeat(129)] {
+        assert!(base().with_agent(bad).is_err(), "{bad:?} must be refused");
+    }
+}
+
+#[test]
+fn the_agent_field_survives_serde_and_old_records_lack_it() {
+    let r = ExposureRegistry::new("n-a");
+    let e = r.register(ExposureSpec::new("harness.x", ExposureKind::Harness, "cpu", "w").with_agent("x").unwrap());
+    let back: super::Exposure = serde_json::from_value(serde_json::to_value(&e).unwrap()).unwrap();
+    assert_eq!(back.agent.as_deref(), Some("x"));
+    let mut v = serde_json::to_value(r.register(spec("infer.chat"))).unwrap();
+    assert!(v.get("agent").is_none(), "None is not serialized");
+    v.as_object_mut().unwrap().remove("agent");
+    let old: super::Exposure = serde_json::from_value(v).unwrap();
+    assert_eq!(old.agent, None);
+}

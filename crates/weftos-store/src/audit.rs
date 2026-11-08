@@ -182,6 +182,20 @@ fn action_name(a: &str) -> String {
     }
 }
 
+/// A request RustFS refused before it knew who sent it: a bad signature or an unknown access key.
+/// RustFS 1.0.4 logs these as `{"level":"ERROR","error":"S3Error { code: SignatureDoesNotMatch,
+/// message: ... }","target":"s3s::ops",...}` with **no account, bucket or operation**, so the
+/// record is unattributed (`access_key` is empty) and `reason` is the S3 error code.
+pub fn parse_auth_failure(line: &str) -> Option<Raw> {
+    if !line.contains("SignatureDoesNotMatch") && !line.contains("InvalidAccessKeyId") {
+        return None;
+    }
+    let v: Value = serde_json::from_str(line.trim()).ok()?;
+    let msg = ["error", "err", "message"].iter().find_map(|k| v[*k].as_str().filter(|m| m.contains("code: ")))?;
+    let code = ["SignatureDoesNotMatch", "InvalidAccessKeyId"].into_iter().find(|c| msg.contains(&format!("code: {c}")))?;
+    Some(Raw { access_key: String::new(), bucket: String::new(), object: None, op: String::new(), status: Some(403), bytes: 0, reason: Some(code.to_owned()) })
+}
+
 /// One `s3_authorization_denied` line of RustFS's JSON log.
 pub fn parse_denial(line: &str) -> Option<Raw> {
     if !line.contains("s3_authorization_denied") {

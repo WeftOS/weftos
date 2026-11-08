@@ -7,7 +7,12 @@
 //! - `weaver store revoke <name> <principal>`: the principal's next request is refused.
 //! - `weaver store promote <worktree store> --prefix P..  [--archive-rest]`: into the project store.
 //! - `weaver store archive <name> [--delete]`: copy to the archive bucket, close, optionally delete.
+//! - `weaver store archive-gc [--node-days N] [--project-days N] [--release-days N] [--confirmed]`: expire old
+//!   archives of node, project and release stores; a dry run without `--confirmed`.
 //! - `weaver store put|get <name> <key> --as <principal>`: a governed request as that principal.
+//! - `weaver store drive materialise|sync-down|sync-up|resolve|watch ...`: ADR-131 prototype.
+//! - `weaver store view open|status|refresh|publish|resolve|renew|close ...`: the scoped view
+//!   (ADR-126 E-1); flags in `store_view_args`.
 //!
 //! Names are `weftos://<mesh>/nodes/<id>/store`, `.../projects/<ULID>/store`,
 //! `.../worktrees/<slug>/store`, `.../releases/<channel>/store`. Principals are
@@ -86,6 +91,29 @@ pub enum StoreAction {
         #[arg(long)]
         delete: bool,
     },
+    /// Delete old archives of node, project and release stores (a dry run unless --confirmed).
+    /// With no --*-days nothing expires. Worktree archives are `store worktree gc`'s.
+    ArchiveGc {
+        /// Delete node-store archives older than this many days.
+        #[arg(long)]
+        node_days: Option<u64>,
+        #[arg(long)]
+        project_days: Option<u64>,
+        #[arg(long)]
+        release_days: Option<u64>,
+        /// Actually delete; without it, only report.
+        #[arg(long)]
+        confirmed: bool,
+    },
+    /// How long one store's archives are kept, over its kind's limit: --days N, --forever, or
+    /// neither to clear the override. Not for worktree stores.
+    ArchiveKeep {
+        name: String,
+        #[arg(long, conflicts_with = "forever")]
+        days: Option<u64>,
+        #[arg(long)]
+        forever: bool,
+    },
     /// Write a text object as a principal.
     Put {
         name: String,
@@ -101,6 +129,23 @@ pub enum StoreAction {
     Worktree {
         verb: String,
         /// `--key value` pairs (and the flags `--json`, `--force`, `--confirmed`).
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        rest: Vec<String>,
+    },
+    /// Materialise a store prefix as a local tree and keep it in sync (ADR-131 prototype):
+    /// materialise, sync-down, sync-up, resolve, watch. `watch` is one scan per call.
+    Drive {
+        verb: String,
+        /// `--key value` pairs (and the flags `--json`, `--read-only`). `materialise` takes
+        /// `--name --dest [--prefix]`; the others take `--root`, and `--name` for sync-up and resolve.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        rest: Vec<String>,
+    },
+    /// A scoped view of a store for one sandboxed session (ADR-126 E-1): open, status, refresh,
+    /// publish, resolve, renew, close. `open` takes `--name --root` and `--spec <file>` or
+    /// `--include P[=AT]`/`--work P`; `close` takes `--publish` or `--discard`.
+    View {
+        verb: String,
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         rest: Vec<String>,
     },
@@ -164,7 +209,7 @@ async fn call(method: &str, params: Value) -> anyhow::Result<Value> {
     Ok(resp.result.unwrap_or_default())
 }
 
-const WT_FLAGS: &[&str] = &["json", "force", "confirmed"];
+const WT_FLAGS: &[&str] = &["json", "force", "confirmed", "full", "read_only"];
 
 /// `--key value` pairs to the daemon's params: hyphens become underscores, `--json`, `--force` and
 /// `--confirmed` are flags. The acting agent and host come from the environment.
@@ -211,6 +256,11 @@ fn wt_lines(verb: &str, v: &Value) -> Option<String> {
             if h.is_empty() {
                 out = "no matches\n".into();
             }
+            for k in ["unreadable", "unreadable_entries"] {
+                for x in v[k].as_array().into_iter().flatten().filter_map(Value::as_str) {
+                    out.push_str(&format!("(could not read {} {x})\n", if k == "unreadable" { "worktree" } else { "registry entry" }));
+                }
+            }
             Some(out)
         }
         "leftovers" => {
@@ -223,6 +273,45 @@ fn wt_lines(verb: &str, v: &Value) -> Option<String> {
         }
         _ => None,
     }
+}
+
+/// This machine's name for claim identities: the kernel's hostname file, `/etc/hostname`, then the
+/// shell variables, then (macOS, which has none of those) the system preferences, whose
+/// `LocalHostName` is the Bonjour name. Reading a file avoids a process or an FFI call.
+fn local_host() -> Option<String> {
+    let clean = |s: &str| Some(s.trim().to_owned()).filter(|h| !h.is_empty() && h != "unknown" && h != "localhost");
+    for f in ["/proc/sys/kernel/hostname", "/etc/hostname"] {
+        if let Some(h) = std::fs::read_to_string(f).ok().and_then(|s| clean(&s)) {
+            return Some(h);
+        }
+    }
+    for v in ["HOSTNAME", "HOST"] {
+        if let Some(h) = std::env::var(v).ok().and_then(|s| clean(&s)) {
+            return Some(h);
+        }
+    }
+    let plist = std::fs::read_to_string("/Library/Preferences/SystemConfiguration/preferences.plist").ok()?;
+    ["LocalHostName", "HostName", "ComputerName"].iter().find_map(|k| plist_string(&plist, k).and_then(|s| clean(&s)))
+}
+
+/// The `<string>` that follows `<key>name</key>` in an XML property list (first match).
+fn plist_string(plist: &str, name: &str) -> Option<String> {
+    let after = &plist[plist.find(&format!("<key>{name}</key>"))? + name.len() + 11..];
+    let start = after.find("<string>")? + 8;
+    let end = after[start..].find("</string>")?;
+    Some(after[start..start + end].to_owned())
+}
+
+/// Who is acting: the agent from the environment, and the host half of a claim identity, which must
+/// tell machines apart (never a shared fallback).
+fn agent_and_host(rest: &[String]) -> anyhow::Result<(String, String)> {
+    let agent = std::env::var("WEFTOS_AGENT").or_else(|_| std::env::var("USER")).unwrap_or_else(|_| "agent".into());
+    let host = match local_host() {
+        Some(h) => h,
+        None if rest.iter().any(|a| a == "--host") => String::new(),
+        None => anyhow::bail!("cannot tell this machine's host name; pass --host <name>"),
+    };
+    Ok((agent, host))
 }
 
 /// Run the store subcommand.
@@ -263,16 +352,31 @@ pub async fn run(args: StoreArgs) -> anyhow::Result<()> {
             let v = call("store.archive", json!({"name": name, "delete": delete})).await?;
             println!("archived {} object(s) of {name}{}", cell(&v, "archived_objects"), if delete { "; bucket deleted" } else { "; store closed" });
         }
+        StoreAction::ArchiveGc { node_days, project_days, release_days, confirmed } => {
+            let v = call("store.archive.gc", json!({"node_days": node_days, "project_days": project_days, "release_days": release_days, "confirmed": confirmed})).await?;
+            let list = |k: &str| v[k].as_array().cloned().unwrap_or_default();
+            for s in list("expired") {
+                println!("{} {}  {} object(s), {} day(s) old", if confirmed { "deleted " } else { "would delete" }, cell(&s, "bucket"), cell(&s, "objects"), cell(&s, "age_days"));
+            }
+            for s in list("in_progress") {
+                println!("kept (archive still being written): {}", cell(&s, "bucket"));
+            }
+            println!("{} set(s) kept, {} other key(s) left alone{}", cell(&v, "kept"), cell(&v, "not_ours"), if confirmed { "" } else { "; dry run, nothing deleted (--confirmed to delete)" });
+        }
+        StoreAction::ArchiveKeep { name, days, forever } => {
+            let v = call("store.archive.keep", json!({"name": name, "days": days, "forever": forever})).await?;
+            match (v["keep"]["days"].as_u64(), v["keep"].as_str()) {
+                (Some(d), _) => println!("{name}: archives kept {d} day(s)"),
+                (_, Some("forever")) => println!("{name}: archives kept for ever"),
+                _ => println!("{name}: override cleared (its kind's limit applies)"),
+            }
+        }
         StoreAction::Put { name, key, text, principal } => {
             let v = call("store.put", json!({"name": name, "key": key, "text": text, "principal": principal})).await?;
             println!("wrote {} ({} bytes)", cell(&v, "key"), cell(&v, "size"));
         }
         StoreAction::Worktree { verb, rest } => {
-            let agent = std::env::var("WEFTOS_AGENT").or_else(|_| std::env::var("USER")).unwrap_or_else(|_| "agent".into());
-            let host = std::fs::read_to_string("/proc/sys/kernel/hostname")
-                .map(|h| h.trim().to_owned())
-                .or_else(|_| std::env::var("HOSTNAME"))
-                .unwrap_or_else(|_| "unknown".into());
+            let (agent, host) = agent_and_host(&rest)?;
             let as_json = rest.iter().any(|a| a == "--json");
             let params = worktree_params(&rest, &agent, &host)?;
             let v = call(&format!("store.worktree.{verb}"), params).await?;
@@ -280,6 +384,18 @@ pub async fn run(args: StoreArgs) -> anyhow::Result<()> {
                 (false, Some(t)) => print!("{t}"),
                 _ => println!("{}", serde_json::to_string_pretty(&v)?),
             }
+        }
+        StoreAction::Drive { verb, rest } => {
+            let (agent, host) = agent_and_host(&rest)?;
+            let params = worktree_params(&rest, &agent, &host)?;
+            let v = call(&format!("store.drive.{verb}"), params).await?;
+            println!("{}", serde_json::to_string_pretty(&v)?);
+        }
+        StoreAction::View { verb, rest } => {
+            let (agent, host) = agent_and_host(&rest)?;
+            let params = super::store_view_args::view_params(&rest, &agent, &host)?;
+            let v = call(&format!("store.view.{verb}"), params).await?;
+            println!("{}", serde_json::to_string_pretty(&v)?);
         }
         StoreAction::Get { name, key, principal } => {
             let v = call("store.get", json!({"name": name, "key": key, "principal": principal})).await?;
@@ -295,6 +411,23 @@ pub async fn run(args: StoreArgs) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plist_host_names_are_read_without_a_process() {
+        let p = "<dict><key>System</key><dict><key>Network</key><dict><key>HostNames</key><dict>\n<key>LocalHostName</key>\n\t<string>mac-studio</string></dict></dict><key>System</key><dict><key>ComputerName</key><string>Mac Studio</string></dict></dict></dict>";
+        assert_eq!(plist_string(p, "LocalHostName").as_deref(), Some("mac-studio"));
+        assert_eq!(plist_string(p, "ComputerName").as_deref(), Some("Mac Studio"));
+        assert_eq!(plist_string(p, "HostName"), None);
+        assert_eq!(plist_string("", "LocalHostName"), None);
+    }
+
+    #[test]
+    fn this_machine_has_a_host_name_that_is_not_the_shared_fallback() {
+        // On a Mac with no HOSTNAME exported this used to be "unknown".
+        if let Some(h) = local_host() {
+            assert!(!h.is_empty() && h != "unknown");
+        }
+    }
 
     #[test]
     fn verbs_parse_and_required_args_are_enforced() {
@@ -318,6 +451,12 @@ mod tests {
         assert!(worktree_params(&a(&["stray"]), "a", "h").is_err());
         assert_eq!(wt_lines("buckets", &json!({"worktree": "w-1", "project": "p-1"})).unwrap(), "w-1 p-1\n");
         assert!(StoreArgs::try_parse_from(["store", "worktree", "publish", "--project", "X", "--changes-z", "/f"]).is_ok());
+        let d = worktree_params(&a(&["--name", "n", "--root", "/r", "--read-only"]), "ag", "h1").unwrap();
+        assert_eq!((d["read_only"].as_bool(), d["root"].as_str()), (Some(true), Some("/r")));
+        assert!(StoreArgs::try_parse_from(["store", "drive", "sync-up", "--name", "n", "--root", "/r"]).is_ok());
+        assert!(StoreArgs::try_parse_from(["store", "view", "open", "--name", "n", "--root", "/r", "--include", "docs=docs", "--read-only"]).is_ok());
+        assert!(StoreArgs::try_parse_from(["store", "view", "close", "--name", "n", "--root", "/r", "--discard"]).is_ok());
+        assert!(StoreArgs::try_parse_from(["store", "view"]).is_err(), "a verb is required");
     }
 
     #[test]

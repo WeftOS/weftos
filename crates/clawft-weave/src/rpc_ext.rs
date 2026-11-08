@@ -483,6 +483,17 @@ const ROUTES: &[ExtRoute] = &[
         capability: Capability::Read,
         handler: crate::dashboard_rpc::handle,
     },
+    // Agent directory: Read locally; `node` / `mesh` is checked for Admin in the handler.
+    ExtRoute {
+        prefix: "agent.sources",
+        capability: Capability::Read,
+        handler: crate::agent_sources_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "agent.directory",
+        capability: Capability::Read,
+        handler: crate::agent_directory_rpc::handle,
+    },
     ExtRoute {
         prefix: "dashboard.token.rotate",
         capability: Capability::Admin,
@@ -576,6 +587,13 @@ const ROUTES: &[ExtRoute] = &[
         prefix: "governance.reload",
         capability: Capability::Admin,
         handler: crate::governance_push::handle_reload,
+    },
+    // Tapestry R9: dry-run verdict from the live engine; Read, local, writes nothing.
+    #[cfg(feature = "exochain")]
+    ExtRoute {
+        prefix: "governance.check",
+        capability: Capability::Read,
+        handler: crate::governance_check_rpc::handle,
     },
     // ADR-106 phase 3: Admin (a checkout spends licence budget); routed here
     // so the relay rate-limits and gates the caller's own principal.
@@ -848,6 +866,17 @@ const ROUTES: &[ExtRoute] = &[
         capability: Capability::Read,
         handler: crate::dashboard_rpc::handle,
     },
+    // Agent directory: Read locally; `node` / `mesh` is checked for Admin in the handler.
+    ExtRoute {
+        prefix: "agent.sources",
+        capability: Capability::Read,
+        handler: crate::agent_sources_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "agent.directory",
+        capability: Capability::Read,
+        handler: crate::agent_directory_rpc::handle,
+    },
     ExtRoute {
         prefix: "dashboard.token.rotate",
         capability: Capability::Admin,
@@ -941,6 +970,13 @@ const ROUTES: &[ExtRoute] = &[
         prefix: "governance.reload",
         capability: Capability::Admin,
         handler: crate::governance_push::handle_reload,
+    },
+    // Tapestry R9: dry-run verdict from the live engine; Read, local, writes nothing.
+    #[cfg(feature = "exochain")]
+    ExtRoute {
+        prefix: "governance.check",
+        capability: Capability::Read,
+        handler: crate::governance_check_rpc::handle,
     },
     // ADR-106 phase 3: Admin (a checkout spends licence budget); routed here
     // so the relay rate-limits and gates the caller's own principal.

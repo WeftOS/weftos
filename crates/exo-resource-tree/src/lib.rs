@@ -60,7 +60,11 @@ pub use model::{Action, ResourceId, ResourceKind, ResourceNode, Role};
 pub use mutation::{MutationEvent, MutationLog};
 pub use permission::{
     AclPolicy, CapabilityChecker, Decision, Effect, EffectiveAclCache, Principal,
-    check as check_permission, resource_in_scope,
+    resource_in_scope,
 };
+// Kept (not dropped): the crate is published (`publish = true`); the alias
+// resolves to the deprecated stub, so external users still get the warning.
+#[allow(deprecated)]
+pub use permission::check as check_permission;
 pub use scoring::NodeScoring;
 pub use tree::ResourceTree;

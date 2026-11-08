@@ -22,7 +22,18 @@ pub const BUNDLE_KEY: &str = ".wt/git/branch.bundle";
 pub const HANDOFF_KEY: &str = ".wt/handoff.json";
 pub const SCHEMA: u32 = 1;
 /// A merge claim older than this is considered abandoned.
+///
+/// The age is `now - updated_ms`, where `now` is the clock of the daemon being asked and
+/// `updated_ms` was written by the daemon that took the claim: two machines' clocks, not one.
 pub const CLAIM_TTL_MS: u64 = 30 * 60 * 1000;
+/// A claim stamped further ahead of this daemon's clock than this is not trusted as live (a
+/// claimer with a fast clock would otherwise hold the merge far past the TTL), so it can be taken.
+pub const CLAIM_SKEW_MS: u64 = 10 * 60 * 1000;
+
+/// Is this claim still live at `now_ms`: younger than the TTL, and not stamped from the future.
+fn claim_is_live(h: &Handoff, now_ms: u64) -> bool {
+    h.updated_ms <= now_ms.saturating_add(CLAIM_SKEW_MS) && now_ms.saturating_sub(h.updated_ms) < CLAIM_TTL_MS
+}
 
 /// Who wrote or claimed something. Advisory identity, not authority (grants are in RustFS IAM).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -107,6 +118,9 @@ pub struct TreeManifest {
     pub changes: Vec<PathChange>,
     pub docs: Vec<DocEntry>,
     pub has_bundle: bool,
+    /// SHA-256 of the bundle object, so a fetch can tell a swapped bundle from the published one.
+    #[serde(default)]
+    pub bundle_sha256: Option<String>,
     pub writer: Actor,
     pub published_ms: u64,
 }
@@ -176,6 +190,8 @@ pub enum Skip {
     BadPath,
     Missing,
     OverBudget,
+    /// The path changed between the checks and the read (swapped for a symlink or another file).
+    Changed,
 }
 
 #[derive(Debug, Default)]
@@ -194,12 +210,27 @@ pub fn sha256_hex(data: &[u8]) -> String {
 
 /// Files that must never be shared even when git can see them.
 pub fn is_secret_path(path: &str) -> bool {
-    let name = path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase();
+    let lower = path.to_ascii_lowercase();
+    let mut segs: Vec<&str> = lower.split('/').collect();
+    let name = segs.pop().unwrap_or("").to_string();
+    // Credential directories, wherever they sit in the tree: a kube config and its caches, the
+    // docker client config, and the daemon's own per-store keys (`store-secrets/wk-*`).
+    if segs.iter().any(|s| *s == ".kube" || *s == "store-secrets")
+        || (name == "config.json" && segs.last() == Some(&".docker"))
+    {
+        return true;
+    }
+    let name = name.as_str();
     let env_template = [".example", ".sample", ".template"]
         .iter()
         .any(|t| name.ends_with(t));
     (!env_template && (name == ".env" || name.starts_with(".env.")))
         || name.ends_with(".env")
+        // backups and copies of env files (`prod.env.bak`); the template suffixes stay shareable
+        || (!env_template && name.contains(".env."))
+        || name.ends_with(".tfvars")
+        || name == ".pypirc"
+        || name.ends_with(".token")
         || name == ".envrc"
         || name == ".git-credentials"
         || name == ".pgpass"
@@ -223,8 +254,56 @@ pub fn is_secret_path(path: &str) -> bool {
         || name == "board-token"
 }
 
+/// Read a regular file for publishing from one open handle, never following a symlink and never
+/// reading more than `max` bytes (review F14). The checks made on the path before this are only
+/// for choosing a skip reason; this is the one that holds. The portable std has no `O_NOFOLLOW`,
+/// and the store may not take a `libc` dependency, so a symlink is caught the other way round:
+/// open, then require that the path still names a regular file that is the very file the handle
+/// is on (same device and inode on unix). A swap before the open shows as a symlink or another
+/// inode, a swap after it cannot change what the handle reads. `Err(None)` is a real I/O error.
+pub(crate) fn read_regular(path: &Path, max: u64) -> std::result::Result<Vec<u8>, Option<Skip>> {
+    let file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(Some(Skip::Missing)),
+        Err(_) => return Err(None),
+    };
+    read_open_regular(file, path, max)
+}
+
+fn read_open_regular(file: std::fs::File, path: &Path, max: u64) -> std::result::Result<Vec<u8>, Option<Skip>> {
+    use std::io::Read;
+    let on_handle = file.metadata().map_err(|_| None)?;
+    let on_path = match std::fs::symlink_metadata(path) {
+        Ok(m) => m,
+        Err(_) => return Err(Some(Skip::Changed)),
+    };
+    if on_path.file_type().is_symlink() {
+        return Err(Some(Skip::Symlink));
+    }
+    if !on_handle.is_file() || !on_path.is_file() {
+        return Err(Some(Skip::NotAFile));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if (on_handle.dev(), on_handle.ino()) != (on_path.dev(), on_path.ino()) {
+            return Err(Some(Skip::Changed));
+        }
+    }
+    if on_handle.len() > max {
+        return Err(Some(Skip::TooLarge));
+    }
+    // One byte past the cap tells a file that grew after the stat from one that fits.
+    let mut data = Vec::with_capacity(on_handle.len().min(max) as usize);
+    file.take(max + 1).read_to_end(&mut data).map_err(|_| None)?;
+    if data.len() as u64 > max {
+        return Err(Some(Skip::TooLarge));
+    }
+    Ok(data)
+}
+
 /// PEM/OpenSSH private key material, whatever the file is called.
-fn looks_like_private_key(data: &[u8]) -> bool {
+pub(crate) fn looks_like_private_key(data: &[u8]) -> bool {
     const NEEDLE: &[u8] = b"PRIVATE KEY-----";
     data.len() >= NEEDLE.len() && data.windows(NEEDLE.len()).any(|w| w == NEEDLE)
 }
@@ -247,9 +326,24 @@ fn md_title(path: &str, data: &[u8]) -> Option<String> {
     })
 }
 
+/// Largest manifest object a reader will load (review F11): a writer with direct S3 access could
+/// otherwise make every follower read an object of any size into memory.
+pub const MAX_MANIFEST_BYTES: u64 = 32 << 20;
+
 pub fn read_manifest<B: ObjectBackend>(b: &B, bucket: &str) -> Result<Option<TreeManifest>> {
+    let Some(h) = b.head(bucket, MANIFEST_KEY)? else { return Ok(None) };
+    if h.size > MAX_MANIFEST_BYTES {
+        return Err(S2Error::Invalid(format!("manifest is {} bytes, over the {MAX_MANIFEST_BYTES} limit", h.size)));
+    }
     match b.get(bucket, MANIFEST_KEY)? {
-        Some(d) => Ok(Some(serde_json::from_slice(&d)?)),
+        Some(d) => {
+            let m: TreeManifest = serde_json::from_slice(&d)?;
+            let lim = Limits::default();
+            if m.files.len() > lim.max_files || m.docs.len() > lim.max_files {
+                return Err(S2Error::Invalid(format!("manifest lists more than {} files", lim.max_files)));
+            }
+            Ok(Some(m))
+        }
         None => Ok(None),
     }
 }
@@ -339,7 +433,18 @@ pub fn publish_tree<B: ObjectBackend>(
             rep.skipped.push((p.clone(), Skip::OverBudget));
             continue;
         }
-        let data = std::fs::read(&full)?;
+        let data = match read_regular(&full, limits.max_file) {
+            Ok(d) => d,
+            Err(Some(skip)) => {
+                rep.skipped.push((p.clone(), skip));
+                continue;
+            }
+            Err(None) => return Err(S2Error::Backend(format!("cannot read {p}"))),
+        };
+        if total + data.len() as u64 > limits.max_total {
+            rep.skipped.push((p.clone(), Skip::OverBudget));
+            continue;
+        }
         if looks_like_private_key(&data) {
             rep.skipped.push((p.clone(), Skip::Secret));
             continue;
@@ -370,6 +475,7 @@ pub fn publish_tree<B: ObjectBackend>(
         .as_ref()
         .map(|m| m.has_bundle && m.head_commit == src.head_commit)
         .unwrap_or(false);
+    let mut bundle_sha256 = if has_bundle { prev.as_ref().and_then(|m| m.bundle_sha256.clone()) } else { None };
     if let Some(bp) = src.bundle {
         if !has_bundle {
             let md = std::fs::metadata(bp)?;
@@ -380,7 +486,9 @@ pub fn publish_tree<B: ObjectBackend>(
                     limits.max_bundle
                 )));
             }
-            b.put(bucket, BUNDLE_KEY, &std::fs::read(bp)?)?;
+            let bytes = std::fs::read(bp)?;
+            bundle_sha256 = Some(sha256_hex(&bytes));
+            b.put(bucket, BUNDLE_KEY, &bytes)?;
             rep.bundle_uploaded = true;
             has_bundle = true;
         }
@@ -404,6 +512,7 @@ pub fn publish_tree<B: ObjectBackend>(
         changes: src.changes.to_vec(),
         docs,
         has_bundle,
+        bundle_sha256,
         writer: src.writer.clone(),
         published_ms: now_ms,
     };
@@ -453,7 +562,7 @@ fn write_handoff<B: ObjectBackend>(b: &B, bucket: &str, h: &Handoff) -> Result<(
 fn guard_live_claim(h: &Handoff, who: &Actor, now_ms: u64) -> Result<()> {
     if h.state == State::Claimed
         && let Some(m) = h.merger.as_ref().filter(|m| *m != who)
-        && now_ms.saturating_sub(h.updated_ms) < CLAIM_TTL_MS
+        && claim_is_live(h, now_ms)
     {
         return Err(S2Error::Claimed(format!("{}@{}", m.agent, m.host)));
     }
@@ -615,6 +724,35 @@ pub fn mark_merged_at<B: ObjectBackend>(
     )
 }
 
+/// The branch landed through git, so the worktree is merged whoever held the claim. Unlike
+/// [`mark_merged`] this needs no claim: the landed tree is the source of truth once the land
+/// happened, and a claim that is someone else's, or has expired, cannot undo it. The lander is
+/// recorded as the merger and a displaced claimer is named in the note. Returns false, writing
+/// nothing, when there is no handoff record (the tree was never published) or the worktree is
+/// already merged or archived.
+pub fn mark_landed<B: ObjectBackend>(
+    b: &B,
+    bucket: &str,
+    lander: &Actor,
+    note: &str,
+    now_ms: u64,
+) -> Result<bool> {
+    let Some(cur) = read_handoff(b, bucket)? else { return Ok(false) };
+    if matches!(cur.state, State::Merged | State::Archived) {
+        return Ok(false);
+    }
+    let note = match cur.merger.as_ref().filter(|m| *m != lander && cur.state == State::Claimed) {
+        Some(m) => format!("{note} (claim was held by {}@{})", m.agent, m.host),
+        None => note.to_string(),
+    };
+    write_handoff(
+        b,
+        bucket,
+        &Handoff { state: State::Merged, note, merger: Some(lander.clone()), updated_ms: now_ms, ..cur },
+    )?;
+    Ok(true)
+}
+
 /// Path segments that must never be written by a fetch: VCS control dirs and files that make a
 /// later git/shell command in the destination run attacker-chosen code.
 pub fn is_dangerous_path(rel: &str) -> bool {
@@ -622,8 +760,9 @@ pub fn is_dangerous_path(rel: &str) -> bool {
         let s = seg.to_ascii_lowercase();
         matches!(
             s.as_str(),
-            ".git" | ".gitattributes" | ".gitmodules" | ".hg" | ".svn" | ".envrc"
-        ) || seg.contains(':')
+            ".git" | ".gitattributes" | ".gitmodules" | ".hg" | ".svn" | ".envrc" | ".wt"
+        ) || seg.starts_with(".wt-") // the follower's own control files (`.wt-index.json`, temp files)
+            || seg.contains(':')
             || seg.len() > 200
             || is_windows_hostile(seg)
     })
@@ -671,3 +810,7 @@ pub fn safe_join(dest: &Path, rel: &str) -> Result<PathBuf> {
     }
     Ok(cur)
 }
+
+#[cfg(test)]
+#[path = "share_read_tests.rs"]
+mod read_tests;

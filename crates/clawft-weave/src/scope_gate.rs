@@ -94,6 +94,8 @@ pub const READ_ONLY_ALLOW: &[&str] = &[
     "chain.tail",
     // Streaming form of `chain.tail` (ADR-103 P2 D).
     "chain.subscribe",
+    // Tapestry R9: read-only dry-run verdict; a local client asks before it acts.
+    "governance.check",
     "ecc.status",
     "ecc.search",
     "ecc.calibrate",
@@ -159,6 +161,11 @@ pub const USER_LEVEL_ALLOW: &[&str] = &[
     "dashboard.status",
     "dashboard.actions",
     "dashboard.token.rotate",
+    // Agent directory: this node's agents and exposures; `mesh` / `node` asks peers over
+    // the signed mesh wire. Machine-level, like `dashboard.status`.
+    "agent.sources",
+    // Joined directory with an etag (`mesh` asks peers, Admin in the handler).
+    "agent.directory",
     // ADR-116: re-reading every project's compose/ports.yaml belongs to the machine.
     "route.reload",
     // ADR-108 P3b: the remote helper fetches a project onto this machine; the

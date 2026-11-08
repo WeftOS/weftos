@@ -213,6 +213,9 @@ pub mod chain_anchor;
 /// Real ML-DSA-65 signing of ExoChain checkpoints and the legacy policy (ADR-129).
 #[cfg(feature = "exochain")]
 pub mod chain_pq;
+/// `chain.get`: one event in full plus its checkpoint-signature coverage.
+#[cfg(feature = "exochain")]
+pub mod chain_coverage;
 #[cfg(feature = "exochain")]
 pub mod chain_rule_hash;
 /// Project governance overlay, kernel side: load, merge, hash (ADR-103 D8).
@@ -627,7 +630,7 @@ pub use floor::{
     floor_verdict_from_erl_config,
 };
 #[cfg(feature = "exochain")]
-pub use gate::{CapabilityGate, GateBackend, GateDecision, GovernanceGate};
+pub use gate::{CapabilityGate, GateBackend, GateDecision, GateVerdict, GovernanceGate};
 pub use governance::{
     EffectVector, GateEffectKind, GatePrincipal, GovernanceBranch, GovernanceDecision,
     GovernanceEngine, GovernanceRequest, GovernanceResult, GovernanceRule, GovernanceRuleType,

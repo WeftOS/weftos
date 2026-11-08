@@ -70,6 +70,11 @@ impl MemBackend {
         self.get(bucket, key).is_err()
     }
 
+    /// The ids of the keys issued for a principal label.
+    pub fn keys_of(&self, principal: &str) -> Vec<String> {
+        self.lock().keys.iter().filter(|(_, k)| k.principal == principal).map(|(id, _)| id.clone()).collect()
+    }
+
     /// Whether the key is enabled.
     pub fn key_enabled(&self, key_id: &str) -> Option<bool> {
         self.lock().keys.get(key_id).map(|k| k.enabled)
@@ -103,6 +108,18 @@ impl ObjectBackend for MemBackend {
         }
         b.objects.insert(key.to_owned(), data.to_vec());
         Ok(meta(key, data))
+    }
+
+    fn delete_if_match(&self, bucket: &str, key: &str, etag: &str) -> Result<(), BackendError> {
+        let mut g = self.lock();
+        let b = g.buckets.get_mut(bucket).ok_or_else(|| BackendError::NoBucket(bucket.into()))?;
+        match b.objects.get(key) {
+            None => return Err(BackendError::NoObject(key.into())),
+            Some(cur) if etag_of(cur) != etag.trim_matches('"') => return Err(BackendError::Stale(key.into())),
+            Some(_) => {}
+        }
+        b.objects.remove(key);
+        Ok(())
     }
 
     fn get(&self, bucket: &str, key: &str) -> Result<Vec<u8>, BackendError> {

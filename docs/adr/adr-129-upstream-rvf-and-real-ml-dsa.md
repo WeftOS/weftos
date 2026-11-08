@@ -4,6 +4,7 @@
 - **Supersedes**: ADR-029 (weftos-rvf-crypto fork strategy).
 - **Fixes**: the ADR-028 finding of 2026-10-30, where the ML-DSA-65 half of the dual signature was an HMAC placeholder.
 - **Finishes**: ADR-128 T0 (workspace on rvf-runtime 0.5 and rvf-types 0.3).
+- **Updated**: 2026-11-08 (`chain.get_range` range read, see end of "Per-event coverage"; `chain.get` reports the checkpoint signature covering one event; `chain.checkpoint` now writes the signed RVF checkpoint, so `chain.verify` reports `signature_verified` in a running daemon; see "Per-event coverage")
 - **Deciders**: owner
 - **Prior decisions**: the decision store, consulted on 2026-10-30, holds nothing on this topic.
 - **Board**: card 7bed694c (real ML-DSA-65).
@@ -66,6 +67,10 @@ What the swap changes:
   - A v2 checkpoint must carry a well-formed ML-DSA-65 footer that ends the file and verifies; otherwise `Rejected(MlDsa65)`. A stripped or swapped footer is a rejection, not a downgrade.
   - A checkpoint without the tag is legacy: the second footer is not checked and the verdict is `Valid(LegacyPlaceholder)`, or `Valid(Absent)` without one. Legacy is **never** reported as post-quantum.
 - **Loading** (`load_from_rvf`) still does not check signatures, but it enforces the downgrade rule below. It logs `pq_legacy` when a legacy second footer is present.
+
+**Per-event coverage (2026-11-07).** Appended events carry no signature of their own; a signed checkpoint commits to the head hash and so to every event before it. `ChainManager` keeps the latest signed checkpoint as written (segment plus footers), set by `save_to_rvf` and restored by `load_from_rvf`. The read-only `chain.get {sequence, signatures?}` RPC returns the full event (payload, `payload_canonical`, hashes, rule hash) and its coverage: `signed` when the event's sequence is at or below the signed head, the stored events from it to the head recompute and link to the signed head hash, and the Ed25519 and (v2) ML-DSA-65 signatures verify against the chain's own keys; `unsigned_pending_checkpoint` when no signed checkpoint reaches it; `signature_invalid` with a reason otherwise. `chain.checkpoint` (Admin) now also writes the signed RVF checkpoint, the same file shutdown writes. Before this, `chain.checkpoint` only recorded an unsigned in-memory checkpoint and the RVF file existed only after a shutdown, so `chain.verify` found no file and reported no `signature_verified`. `chain.verify` now reads the in-memory signed checkpoint, re-checks the link to its head, and adds `signed_through` and `pq_verified`. Signing needs the chain's Ed25519 key (a chain without a checkpoint path or key reports `unsigned`, with the reason).
+
+**Range reads (2026-11-08).** `chain.get_range {from, to, limit?, signatures?}` (Read, not on the project-less allow-list) returns events `from..=to` in full, each with the same `status`, `reason` and `chain_linked` a single `chain.get` gives, and the checkpoint with its signatures once per response. The link of every entry to the signed head is computed in one backward pass, not one pass per entry. At most 1000 events per call; a larger range, `from > to`, or a range past the head is refused, never truncated or clipped. `chain.get` is unchanged.
 
 **Downgrade.** A chain file holds one checkpoint and is rewritten whole on every save, so a "legacy checkpoint appended later" can only be a whole file re-signed with Ed25519 alone, by someone who can forge or holds Ed25519 but not ML-DSA-65. The rule is enforced at two levels.
 

@@ -24,6 +24,10 @@ use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Seen {
+    /// Etag of the registry object when it was read; with the digest it lets a poll skip the
+    /// entry. `None` for state saved before the digest existed.
+    #[serde(default)]
+    pub etag: Option<String>,
     pub bucket: String,
     pub head_commit: String,
     pub state: State,
@@ -65,7 +69,12 @@ impl FollowState {
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("follow");
-        let tmp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
+        // Unique per call, not per process: the daemon serves overlapping `follow` calls on the
+        // same state file from threads of one process, and a shared temp name would let one call
+        // rename the other's file away.
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp = dir.join(format!(".{name}.{}.{seq}.tmp", std::process::id()));
         let json = serde_json::to_vec_pretty(self).map_err(|e| S2Error::Invalid(e.to_string()))?;
         std::fs::write(&tmp, json).map_err(io)?;
         std::fs::rename(&tmp, path).map_err(|e| {
@@ -146,8 +155,8 @@ pub(crate) fn diff_poll(
         )));
     }
     let mut out = Vec::new();
-    let mut now_seen = BTreeMap::new();
-    for e in entries {
+    let mut now_seen: BTreeMap<String, Seen> = carried.into_iter().collect();
+    for (e, etag) in fresh {
         let seen = state.seen.get(&e.slug);
         match seen {
             Some(s) if s.bucket != e.bucket => {
@@ -175,6 +184,7 @@ pub(crate) fn diff_poll(
         now_seen.insert(
             e.slug.clone(),
             Seen {
+                etag,
                 bucket: e.bucket,
                 head_commit: e.head_commit,
                 state: e.state,
@@ -183,7 +193,8 @@ pub(crate) fn diff_poll(
     }
     for slug in bad {
         if let Some(prev) = state.seen.get(&slug) {
-            now_seen.insert(slug.clone(), prev.clone());
+            // Keep what was known, but forget the etag so the entry is fetched (and reported) again.
+            now_seen.insert(slug.clone(), Seen { etag: None, ..prev.clone() });
         }
         out.push(Change::Unreadable { slug });
     }
@@ -213,7 +224,11 @@ pub fn verify_entry<B: ObjectBackend>(b: &B, e: &RegistryEntry) -> Result<()> {
         )));
     }
     match read_meta(b, &e.bucket)? {
-        Some(m) if m.slug == e.slug => Ok(()),
+        Some(m) if m.slug == e.slug && bucket_project(&e.bucket).is_none_or(|p| p.eq_ignore_ascii_case(&m.project)) => Ok(()),
+        Some(m) if m.slug == e.slug => Err(S2Error::Invalid(format!(
+            "registry entry {} points at a bucket whose metadata names project {}",
+            e.slug, m.project
+        ))),
         Some(m) => Err(S2Error::Invalid(format!(
             "registry entry {} points at bucket of worktree {}",
             e.slug, m.slug
@@ -225,6 +240,12 @@ pub fn verify_entry<B: ObjectBackend>(b: &B, e: &RegistryEntry) -> Result<()> {
     }
 }
 
+/// The project ULID in a worktree bucket name `w-<ulid>-<h12>`, if it has that shape.
+fn bucket_project(bucket: &str) -> Option<&str> {
+    let rest = bucket.strip_prefix("w-")?;
+    (rest.len() > 27 && rest.as_bytes()[26] == b'-').then(|| &rest[..26])
+}
+
 /// Daemon-side: drop a registry entry once its worktree bucket is promoted and deleted.
 pub fn remove_registry_entry<B: ObjectBackend>(
     b: &B,
@@ -232,7 +253,9 @@ pub fn remove_registry_entry<B: ObjectBackend>(
     slug: &str,
 ) -> Result<()> {
     validate_key(slug)?;
-    b.delete(project_bucket, &format!("{REGISTRY_PREFIX}{slug}.json"))
+    b.delete(project_bucket, &format!("{REGISTRY_PREFIX}{slug}.json"))?;
+    let _ = crate::share_fetch::write_digest(b, project_bucket); // a hint
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -292,8 +315,20 @@ pub fn sync_docs<B: ObjectBackend>(b: &B, e: &RegistryEntry, cache: &Path) -> Re
     std::fs::create_dir_all(&dest)?;
     let m = read_manifest(b, &e.bucket)?
         .ok_or_else(|| S2Error::Invalid("worktree has no published tree".into()))?;
-    let want: std::collections::BTreeSet<String> = m.docs.iter().map(|d| d.path.clone()).collect();
-    let idx = safe_join(&dest, INDEX)?;
+    // The manifest is untrusted: a doc that names the follower's own control files, a dangerous
+    // name or a path that leaves the cache is neither fetched nor tracked in the index.
+    let want: std::collections::BTreeSet<String> = m
+        .docs
+        .iter()
+        .map(|d| d.path.clone())
+        .filter(|p| validate_key(p).is_ok() && !crate::share::is_dangerous_path(p) && !crate::share::is_secret_path(p))
+        .collect();
+    // The index is the follower's own fixed name (`safe_join` refuses `.wt-` names on purpose, so
+    // a manifest cannot reach it). A symlink put there is replaced, not written through.
+    let idx = dest.join(INDEX);
+    if std::fs::symlink_metadata(&idx).is_ok_and(|m| m.file_type().is_symlink()) {
+        std::fs::remove_file(&idx)?;
+    }
     let old: Vec<String> = std::fs::read(&idx)
         .ok()
         .and_then(|d| serde_json::from_slice(&d).ok())
@@ -418,6 +453,10 @@ pub struct OverlapReport {
     /// Both trees branch from the same base commit. If `false`, a path can differ only because
     /// the base moved, so treat `overlaps` as a superset of the real conflicts.
     pub same_base: bool,
+    /// The base commits of the two trees (`a` then `b`), so a caller can discount the report
+    /// when they differ: on different bases a path can differ only because the base moved.
+    pub base_a: String,
+    pub base_b: String,
     /// Files in both trees with different content, and files one worktree deleted that the other
     /// changed (needs `changes` in both manifests; a rename counts as delete + add). Absence is not
     /// proof of no conflict: only paths, never hunks, are compared.
@@ -478,6 +517,8 @@ pub fn overlaps<B: ObjectBackend>(
     v.sort_by(|x, y| x.path.cmp(&y.path));
     Ok(OverlapReport {
         same_base: ma.base_commit == mc.base_commit,
+        base_a: ma.base_commit.clone(),
+        base_b: mc.base_commit.clone(),
         overlaps: v,
     })
 }

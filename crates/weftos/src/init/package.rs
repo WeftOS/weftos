@@ -275,6 +275,136 @@ pub fn team_slots(src: &AgentSource, team: &str) -> Result<Option<Vec<TeamSlot>>
     Ok(Some(slots))
 }
 
+/// One member of a team.yaml with everything the file declares about it.
+/// `agent`, `active` and (via the team) `lead` are what `weftos init` honours;
+/// `rest` holds every other member key (model_tier, authority, owner, must_not,
+/// tiers, one_job, phase, tools, ...) as declared data that init ignores.
+pub struct MemberDecl {
+    pub agent: String,
+    pub pinned: Option<String>,
+    pub nickname: Option<String>,
+    pub position: Option<u32>,
+    pub active: bool,
+    pub phase: Option<u32>,
+    pub rest: serde_json::Value,
+}
+
+/// A team.yaml read for listing. `declared_unenforced` holds `edges`,
+/// `write_authority`, `team_rules`, `presets` and `hosts` as declared data
+/// that `weftos init` ignores.
+pub struct TeamDecl {
+    pub name: String,
+    pub schema: Option<u64>,
+    pub description: Option<String>,
+    pub lead: Option<String>,
+    pub shared_skills: Vec<String>,
+    pub members: Vec<MemberDecl>,
+    pub declared_unenforced: serde_json::Value,
+}
+
+/// Read one team.yaml in full. `None` when the team does not exist; a member
+/// without an `agent` id is an error (never skipped silently).
+pub fn team_decl(src: &AgentSource, team: &str) -> Result<Option<TeamDecl>, InitError> {
+    let path = format!("teams/{team}/team.yaml");
+    let Some(bytes) = src.get(&path) else {
+        return Ok(None);
+    };
+    let v: Value =
+        serde_yaml::from_slice(bytes).map_err(|e| InitError::Other(format!("{path}: {e}")))?;
+    let to_json = |x: &Value| serde_json::to_value(x).unwrap_or(serde_json::Value::Null);
+    let id_of = |item: &Value| -> Option<String> {
+        item.as_str().map(str::to_string).or_else(|| {
+            ["agent", "id", "package", "skill"]
+                .iter()
+                .find_map(|k| item.get(*k).and_then(Value::as_str).map(str::to_string))
+        })
+    };
+    let lead = v.get("lead").and_then(id_of).map(|s| s.split('@').next().unwrap_or_default().to_string());
+    let shared_skills = match v.get("shared_skills") {
+        Some(Value::Sequence(items)) => items
+            .iter()
+            .filter_map(id_of)
+            .map(|s| s.split('@').next().unwrap_or_default().to_string())
+            .collect(),
+        _ => Vec::new(),
+    };
+    let mut members = Vec::new();
+    if let Some(Value::Sequence(items)) = v.get("members") {
+        for item in items {
+            let full = id_of(item)
+                .ok_or_else(|| InitError::Other(format!("{path}: a member has no `agent`")))?;
+            let (agent, pinned) = match full.split_once('@') {
+                Some((a, ver)) => (a.to_string(), Some(ver.to_string())),
+                None => (full, None),
+            };
+            let mut rest = serde_json::Map::new();
+            if let Value::Mapping(m) = item {
+                for (k, val) in m {
+                    let Some(k) = k.as_str() else { continue };
+                    if !["agent", "id", "package", "nickname", "position", "active", "phase"].contains(&k) {
+                        rest.insert(k.to_string(), to_json(val));
+                    }
+                }
+            }
+            members.push(MemberDecl {
+                agent,
+                pinned,
+                nickname: str_field(item, "nickname"),
+                position: item.get("position").and_then(Value::as_u64).map(|p| p as u32),
+                active: item.get("active").and_then(Value::as_bool).unwrap_or(true),
+                phase: item.get("phase").and_then(Value::as_u64).map(|p| p as u32),
+                rest: serde_json::Value::Object(rest),
+            });
+        }
+    }
+    members.sort_by_key(|m| m.position.unwrap_or(u32::MAX));
+    let mut unenforced = serde_json::Map::new();
+    for k in ["edges", "write_authority", "team_rules", "presets", "hosts"] {
+        if let Some(x) = v.get(k) {
+            unenforced.insert(k.to_string(), to_json(x));
+        }
+    }
+    Ok(Some(TeamDecl {
+        name: str_field(&v, "name").unwrap_or_else(|| team.to_string()),
+        schema: v.get("schema").and_then(Value::as_u64),
+        description: str_field(&v, "description"),
+        lead,
+        shared_skills,
+        members,
+        declared_unenforced: serde_json::Value::Object(unenforced),
+    }))
+}
+
+/// A package's own skills (dirs under `<id>/skills/`; a skill-only package is
+/// its own skill) and the skills its manifest `requires`.
+pub struct PackageSkills {
+    pub own: Vec<String>,
+    pub requires: Vec<String>,
+}
+
+pub fn package_skills(src: &AgentSource, id: &str) -> Result<PackageSkills, InitError> {
+    let mut own: Vec<String> = src
+        .under(&format!("{id}/skills"))
+        .filter_map(|(rel, _)| rel.split_once('/').map(|(d, _)| d.to_string()))
+        .collect();
+    own.sort();
+    own.dedup();
+    if own.is_empty() && src.get(&format!("{id}/SKILL.md")).is_some() {
+        own.push(id.to_string());
+    }
+    let path = format!("{id}/weftos-package.yaml");
+    let v: Value = serde_yaml::from_slice(src.get(&path).unwrap_or_default())
+        .map_err(|e| InitError::Other(format!("{path}: {e}")))?;
+    let requires = match v.get("requires") {
+        Some(Value::Sequence(items)) => items
+            .iter()
+            .filter_map(|i| i.get("skill").and_then(Value::as_str).map(str::to_string))
+            .collect(),
+        _ => Vec::new(),
+    };
+    Ok(PackageSkills { own, requires })
+}
+
 /// Manifest `version` of package `id` (None when the manifest has none).
 pub fn package_version(src: &AgentSource, id: &str) -> Option<String> {
     let text = std::str::from_utf8(src.get(&format!("{id}/weftos-package.yaml"))?).ok()?;
@@ -342,5 +472,63 @@ mod tests {
         }
         assert_eq!(m.inactive, vec!["documenter", "measurer"]);
         assert!(m.active.iter().all(|a| !a.contains('@')));
+    }
+
+    fn src_of(files: &[(&str, &str)]) -> AgentSource {
+        AgentSource {
+            files: files
+                .iter()
+                .map(|(p, c)| (p.to_string(), std::borrow::Cow::Owned(c.as_bytes().to_vec())))
+                .collect(),
+            origin: "test".into(),
+            commit: "t".into(),
+        }
+    }
+
+    #[test]
+    fn team_decl_reads_members_and_keeps_unenforced_data_apart() {
+        let s = src_of(&[(
+            "teams/t/team.yaml",
+            "schema: 1\nname: t\nlead: null\nshared_skills: [doctrine]\nmembers:\n  - agent: b@1.0\n    position: 2\n    model_tier: top\n    active: false\n    phase: 2\n  - agent: a\n    position: 1\n    nickname: A\nedges:\n  - {from: a, to: b, kind: consults}\n",
+        )]);
+        assert_eq!(s.team_ids(), vec!["t"]);
+        let t = team_decl(&s, "t").unwrap().unwrap();
+        assert_eq!(t.schema, Some(1));
+        assert_eq!(t.lead, None);
+        assert_eq!(t.shared_skills, vec!["doctrine"]);
+        assert_eq!(t.members[0].agent, "a");
+        assert_eq!(t.members[0].nickname.as_deref(), Some("A"));
+        let b = &t.members[1];
+        assert_eq!((b.agent.as_str(), b.pinned.as_deref(), b.active, b.phase), ("b", Some("1.0"), false, Some(2)));
+        assert_eq!(b.rest["model_tier"], "top");
+        assert!(b.rest.get("agent").is_none());
+        assert_eq!(t.declared_unenforced["edges"][0]["kind"], "consults");
+        assert!(team_decl(&s, "nope").unwrap().is_none());
+    }
+
+    #[test]
+    fn team_decl_refuses_a_member_without_an_agent_and_bad_yaml() {
+        let s = src_of(&[("teams/x/team.yaml", "members:\n  - nickname: n\n"), ("teams/y/team.yaml", "members: [")]);
+        assert!(team_decl(&s, "x").is_err());
+        assert!(team_decl(&s, "y").is_err());
+    }
+
+    #[test]
+    fn package_skills_lists_own_and_required_and_all_ids_include_inactive() {
+        let s = src_of(&[
+            ("a/weftos-package.yaml", "name: a\nrequires:\n  - skill: build-lane\n"),
+            ("a/skills/one/SKILL.md", "x"),
+            ("a/skills/one/extra.md", "x"),
+            ("a/skills/two/SKILL.md", "x"),
+            ("d/weftos-package.yaml", "name: d\nkind: skill\n"),
+            ("d/SKILL.md", "x"),
+            ("z/weftos-package.yaml", "name: z\nstate: inactive\n"),
+        ]);
+        let a = package_skills(&s, "a").unwrap();
+        assert_eq!(a.own, vec!["one", "two"]);
+        assert_eq!(a.requires, vec!["build-lane"]);
+        assert_eq!(package_skills(&s, "d").unwrap().own, vec!["d"]);
+        assert_eq!(s.all_package_ids(), vec!["a", "d", "z"]);
+        assert_eq!(s.package_ids(), vec!["a", "d"], "package_ids still hides inactive");
     }
 }

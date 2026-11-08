@@ -1,5 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use std::io::Read;
+
 use super::*;
 use crate::audit::MemSink;
 use crate::mem::MemBackend;
@@ -373,4 +375,972 @@ fn put_if_match_through_the_service_is_gated_and_logged() {
     assert!(matches!(r.svc.put_if_match(&who, &n, "k", b"3", &m.etag), Err(StoreError::Backend(BackendError::Stale(_)))));
     let nobody = Caller::local(Principal::parse("cog:nobody").unwrap());
     assert!(matches!(r.svc.put_if_match(&nobody, &n, "k", b"x", &m.etag), Err(StoreError::Refused(_))));
+}
+
+/// An admin backend that can be told to fail its pushes, to model RustFS being down.
+struct Flaky {
+    inner: Arc<MemBackend>,
+    down: AtomicBool,
+    /// Milliseconds a policy push takes, to widen the window two pushes could interleave in.
+    lag: std::sync::atomic::AtomicU64,
+    pushes: std::sync::atomic::AtomicU64,
+}
+impl Flaky {
+    fn check(&self) -> Result<(), BackendError> {
+        if self.down.load(Ordering::SeqCst) { Err(BackendError::Io("backend down".into())) } else { Ok(()) }
+    }
+}
+impl AdminBackend for Flaky {
+    fn create_bucket(&self, b: &str, t: &[(String, String)]) -> Result<(), BackendError> {
+        self.inner.create_bucket(b, t)
+    }
+    fn delete_bucket(&self, b: &str) -> Result<(), BackendError> {
+        self.inner.delete_bucket(b)
+    }
+    fn bucket_exists(&self, b: &str) -> Result<bool, BackendError> {
+        self.inner.bucket_exists(b)
+    }
+    fn buckets(&self) -> Result<Vec<crate::backend::BucketTags>, BackendError> {
+        self.inner.buckets()
+    }
+    fn create_access_key(&self, p: &str) -> Result<crate::backend::AccessKey, BackendError> {
+        self.inner.create_access_key(p)
+    }
+    fn set_key_enabled(&self, k: &str, e: bool) -> Result<(), BackendError> {
+        self.check()?;
+        self.inner.set_key_enabled(k, e)
+    }
+    fn put_policy(&self, k: &str, p: &Value) -> Result<(), BackendError> {
+        self.check()?;
+        // Every other push is slow: a push that read its grants first can land last.
+        let lag = if self.pushes.fetch_add(1, Ordering::SeqCst).is_multiple_of(2) { self.lag.load(Ordering::SeqCst) } else { 0 };
+        if lag > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(lag));
+        }
+        self.inner.put_policy(k, p)
+    }
+    fn delete_access_key(&self, k: &str) -> Result<(), BackendError> {
+        self.inner.delete_access_key(k)
+    }
+}
+
+fn flaky_rig() -> (StoreService, Arc<MemBackend>, Arc<Flaky>) {
+    let be = Arc::new(MemBackend::new());
+    let fl = Arc::new(Flaky { inner: be.clone(), down: AtomicBool::new(false), lag: Default::default(), pushes: Default::default() });
+    let svc = StoreService::open(
+        Config { node_id: "pg-1".into(), state_path: None, clock: || 1_000 },
+        fl.clone(),
+        be.clone(),
+        Arc::new(Gate(AtomicBool::new(true))),
+        Arc::new(MemSink::default()),
+        Arc::new(Chain::default()),
+    )
+    .unwrap();
+    (svc, be, fl)
+}
+
+#[test]
+fn a_push_that_failed_is_made_good_by_reconcile() {
+    let (svc, be, fl) = flaky_rig();
+    let n = project();
+    svc.create_store(&n, "daemon", Parties::default()).unwrap();
+    let c = cog("c");
+    svc.grant(&n, c.clone(), Access::Write, "op").unwrap();
+    let key = be.keys_of(&c.to_string()).pop().expect("key");
+    assert_eq!(be.key_enabled(&key), Some(true));
+    fl.down.store(true, Ordering::SeqCst);
+    assert!(svc.set_grant_enabled(&n, &c, false, "op").is_err(), "the push fails");
+    assert!(svc.get(&local("c"), &n, "x").is_err(), "the service already refuses");
+    assert_eq!(be.key_enabled(&key), Some(true), "the backend key is still on: it is behind");
+    assert!(!svc.reconcile().is_empty(), "still down: reported, not hidden");
+    fl.down.store(false, Ordering::SeqCst);
+    assert!(svc.reconcile().is_empty());
+    assert_eq!(be.key_enabled(&key), Some(false), "now the backend refuses the key too");
+}
+
+#[test]
+fn a_bucket_made_but_never_recorded_is_adopted_and_a_foreign_one_is_not() {
+    let (svc, be, _fl) = flaky_rig();
+    let n = project();
+    be.create_bucket(&n.bucket(), &n.tags()).unwrap();
+    svc.ensure_store(&n, "daemon", Parties::default()).expect("our own bucket, recorded now");
+    assert!(svc.has_store(&n));
+    let other = StoreName::project("weft", "01JBXK2M3N4P5Q6R7S8T9V0W2Y").unwrap();
+    be.create_bucket(&other.bucket(), &[]).unwrap();
+    assert!(matches!(svc.create_store(&other, "daemon", Parties::default()), Err(StoreError::Exists(_))), "someone else's bucket");
+}
+
+#[test]
+fn an_archived_store_cannot_have_a_grant_switched_back_on() {
+    let r = rig();
+    let n = project();
+    r.svc.create_store(&n, "daemon", Parties::default()).unwrap();
+    let c = cog("c");
+    r.svc.grant(&n, c.clone(), Access::Write, "op").unwrap();
+    r.svc.archive(&n, false, "op").unwrap();
+    assert!(matches!(r.svc.set_grant_enabled(&n, &c, true, "op"), Err(StoreError::Refused(_))));
+}
+
+#[test]
+fn object_lock_needs_a_backend_that_has_it_and_a_store_made_for_it() {
+    let r = rig();
+    let rel = StoreName::release("weft", P, "stable").unwrap();
+    // The in-memory backend has no Object Lock: asking for a locked store is an error, and nothing is recorded.
+    assert!(matches!(r.svc.create_locked_store(&rel, "daemon", Parties::defaults_for(&rel)), Err(StoreError::Backend(BackendError::Unsupported(_)))));
+    assert!(!r.svc.has_store(&rel));
+    // An ordinary store takes no locked puts.
+    r.svc.create_store(&rel, "daemon", Parties::defaults_for(&rel)).unwrap();
+    assert!(!r.svc.is_locked(&rel));
+    let ci = Caller::local(Principal::parse(CI_PRINCIPAL).unwrap());
+    let opts = crate::backend::PutOpts { if_none_match: true, ..Default::default() };
+    assert!(matches!(r.svc.put_locked(&ci, &rel, "a", b"x", &opts), Err(StoreError::Refused(_))));
+}
+
+#[test]
+fn listing_versions_needs_a_grant_and_a_backend_that_keeps_them() {
+    let r = rig();
+    r.svc.create_store(&project(), "daemon", Parties::default()).unwrap();
+    r.svc.grant(&project(), cog("reader"), Access::Read, "op").unwrap();
+    assert!(r.svc.list_versions(&local("stranger"), &project(), "").is_err(), "no grant, no listing");
+    // The in-memory backend keeps one copy per key; the answer says so rather than inventing versions.
+    assert!(matches!(r.svc.list_versions(&local("reader"), &project(), ""), Err(StoreError::Backend(BackendError::Unsupported(_)))));
+}
+
+#[test]
+fn the_owner_switches_reach_the_backend_keys_both_ways_after_a_reconcile() {
+    use crate::policy::PolicyOpts;
+    let r = rig();
+    let rel = StoreName::release("weft", P, "stable").unwrap();
+    let (ci, sw) = (Principal::parse(CI_PRINCIPAL).unwrap(), Principal::parse(SWEEPER_PRINCIPAL).unwrap());
+    r.svc.create_store(&rel, "daemon", Parties { appenders: vec![ci.clone()], sweepers: vec![sw.clone()], ..Default::default() }).unwrap();
+    let key = |p: &Principal| crate::backend::AdminBackend::create_access_key(&*r.be, &p.to_string()).unwrap().id;
+    let (ci_k, sw_k) = (key(&ci), key(&sw));
+    let can_put = |k: &str| r.be.authorize(k, &rel.bucket(), "s3:PutObject").is_ok();
+    // Default: both keys are put-less at the backend.
+    assert!(!can_put(&ci_k) && !can_put(&sw_k));
+    // The owner turns the sweeper switch on: after a reconcile only the sweeper key can put.
+    r.svc.set_policy_opts(PolicyOpts { sweeper_put: true, ..Default::default() });
+    assert!(r.svc.reconcile().is_empty());
+    assert!(can_put(&sw_k) && !can_put(&ci_k));
+    // CI switch on, sweeper off.
+    r.svc.set_policy_opts(PolicyOpts { ci_direct_put: true, ..Default::default() });
+    assert!(r.svc.reconcile().is_empty());
+    assert!(can_put(&ci_k) && !can_put(&sw_k));
+    // Back to the default: both refused again, and the service's own gate never moved.
+    r.svc.set_policy_opts(PolicyOpts::default());
+    assert!(r.svc.reconcile().is_empty());
+    assert!(!can_put(&ci_k) && !can_put(&sw_k));
+    let sweeper = Caller::local(sw);
+    assert!(r.svc.put(&sweeper, &rel, "v1/x", b"x", false).is_err(), "the service still refuses a sweeper put");
+}
+
+#[test]
+fn a_stores_lock_configuration_is_read_through_the_service_or_reported_unsupported() {
+    let r = rig();
+    let rel = StoreName::release("weft", P, "stable").unwrap();
+    assert!(r.svc.lock_config(&rel).is_err(), "unknown store");
+    r.svc.create_store(&rel, "daemon", Parties::defaults_for(&rel)).unwrap();
+    assert!(matches!(r.svc.lock_config(&rel), Err(StoreError::Backend(BackendError::Unsupported(_)))));
+}
+
+#[test]
+fn lifecycle_provisioning_is_checked_recorded_and_unsupported_on_local_backends() {
+    let r = rig();
+    let n = project();
+    let rule = crate::backend::LifecycleRule { id: "tmp".into(), prefix: "tmp/".into(), enabled: true, expire_days: Some(7), noncurrent_days: None, abort_multipart_days: None };
+    assert!(r.svc.set_lifecycle(&n, std::slice::from_ref(&rule), "op").is_err(), "unknown store");
+    r.svc.create_store(&n, "daemon", Parties::default()).unwrap();
+    assert!(matches!(r.svc.set_lifecycle(&n, std::slice::from_ref(&rule), "op"), Err(StoreError::Backend(BackendError::Unsupported(_)))));
+    assert!(matches!(r.svc.lifecycle(&n), Err(StoreError::Backend(BackendError::Unsupported(_)))));
+    assert!(r.chain.0.lock().unwrap().iter().all(|(k, _)| k != "store.lifecycle"), "a refused provisioning leaves no record");
+}
+
+#[test]
+fn extending_retention_needs_a_grant_and_a_store_made_with_lock() {
+    let r = rig();
+    let rel = StoreName::release("weft", P, "stable").unwrap();
+    r.svc.create_store(&rel, "daemon", Parties::defaults_for(&rel)).unwrap();
+    let ci = Caller::local(Principal::parse(CI_PRINCIPAL).unwrap());
+    // CI (append) is allowed to call it; this store has no lock, so it is refused for that.
+    assert!(matches!(r.svc.extend_retention(&ci, &rel, "a", "v", 4_000_000_000, crate::backend::LockMode::Compliance), Err(StoreError::Refused(_))));
+    assert!(r.svc.extend_retention(&local("stranger"), &rel, "a", "v", 4_000_000_000, crate::backend::LockMode::Compliance).is_err(), "no grant");
+    r.svc.grant(&rel, cog("reader"), Access::Read, "op").unwrap();
+    assert!(r.svc.extend_retention(&local("reader"), &rel, "a", "v", 4_000_000_000, crate::backend::LockMode::Compliance).is_err(), "read cannot hold");
+}
+
+#[test]
+fn a_streamed_put_is_gated_write_once_for_append_and_refuses_lock_options_on_an_unlocked_store() {
+    let r = rig();
+    let rel = StoreName::release("weft", P, "stable").unwrap();
+    r.svc.create_store(&rel, "daemon", Parties::defaults_for(&rel)).unwrap();
+    let ci = Caller::local(Principal::parse(CI_PRINCIPAL).unwrap());
+    let once = crate::backend::PutOpts { if_none_match: true, ..Default::default() };
+    let mut data = std::io::repeat(1).take(6 * 1024 * 1024);
+    assert!(r.svc.put_stream(&local("stranger"), &rel, "a", &mut data, &once).is_err(), "no grant");
+    let p = r.svc.put_stream(&ci, &rel, "a", &mut std::io::repeat(1).take(6 * 1024 * 1024), &once).unwrap();
+    assert_eq!(p.meta.size, 6 * 1024 * 1024);
+    assert!(matches!(r.svc.put_stream(&ci, &rel, "a", &mut std::io::repeat(1).take(5), &once), Err(StoreError::Backend(BackendError::Exists(_)))));
+    assert!(matches!(r.svc.put_stream(&ci, &rel, "b", &mut std::io::repeat(1).take(5), &crate::backend::PutOpts::default()), Err(StoreError::Refused(_))), "append must be conditional");
+    let hold = crate::backend::PutOpts { if_none_match: true, legal_hold: true, ..Default::default() };
+    assert!(matches!(r.svc.put_stream(&ci, &rel, "c", &mut std::io::repeat(1).take(5), &hold), Err(StoreError::Refused(_))), "lock options need a locked store");
+    // The activity log shows the real size.
+    assert!(r.sink.events().iter().any(|e| e.op == "PutObject" && e.bytes == 6 * 1024 * 1024), "{:?}", r.sink.events());
+}
+
+#[test]
+fn an_unpaired_nodes_store_is_archived_and_its_id_is_not_handed_out_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path().join("s.json");
+    let be = Arc::new(MemBackend::new());
+    let r = rig_at(Some(state.clone()), be.clone());
+    let n = node();
+    r.svc.ensure_store(&n, "daemon", Parties::defaults_for(&n)).unwrap();
+    r.svc.grant(&n, cog("c1"), Access::Write, "op").unwrap();
+    r.svc.put(&local("c1"), &n, "data/a", b"old node's data", false).unwrap();
+    assert!(r.svc.retire_node_store(&project(), "op").is_err(), "only node stores");
+
+    assert_eq!(r.svc.retire_node_store(&n, "op").unwrap(), 1, "one object archived");
+    assert_eq!(r.svc.retired_nodes(), vec![n.to_string()]);
+    // The old grants are off, and the data is in the archive, not gone.
+    assert!(r.svc.get(&local("c1"), &n, "data/a").is_err());
+    assert_eq!(r.be.list("n-pg-1", "").unwrap().len(), 1, "nothing deleted from the bucket");
+    // The id cannot come back: not created, not ensured, whoever asks.
+    for e in [r.svc.create_store(&n, "daemon", Parties::default()), r.svc.ensure_store(&n, "daemon", Parties::defaults_for(&n))] {
+        let msg = e.unwrap_err().to_string();
+        assert!(msg.contains("unpaired") && msg.contains("new id"), "{msg}");
+    }
+    // Even once the store record is deleted for good, the id stays retired.
+    r.svc.archive(&n, true, "op").unwrap();
+    assert!(r.svc.ensure_store(&n, "daemon", Parties::defaults_for(&n)).is_err());
+    // Repeating is harmless and records once.
+    r.svc.retire_node_store(&n, "op").unwrap();
+    assert_eq!(r.chain.0.lock().unwrap().iter().filter(|(k, _)| k == "store.node.retired").count(), 1);
+    // It survives a restart.
+    drop(r);
+    let r2 = rig_at(Some(state), be);
+    assert!(r2.svc.ensure_store(&n, "daemon", Parties::defaults_for(&n)).is_err());
+    // A node that never had a store is marked too; other nodes are untouched.
+    let ghost = StoreName::node("weft", "ghost-9").unwrap();
+    assert_eq!(r2.svc.retire_node_store(&ghost, "op").unwrap(), 0);
+    assert!(r2.svc.create_store(&ghost, "daemon", Parties::default()).is_err());
+    r2.svc.ensure_store(&StoreName::node("weft", "pg-2").unwrap(), "daemon", Parties::default()).unwrap();
+}
+
+/// An object backend whose `copy` fails from the Nth call on (RustFS going away part-way through
+/// an archive), until healed.
+struct CopyFlaky {
+    inner: Arc<MemBackend>,
+    calls: std::sync::atomic::AtomicU32,
+    fail_from: std::sync::atomic::AtomicU32,
+}
+impl ObjectBackend for CopyFlaky {
+    fn put(&self, b: &str, k: &str, d: &[u8], n: bool) -> Result<ObjectMeta, BackendError> {
+        self.inner.put(b, k, d, n)
+    }
+    fn put_if_match(&self, b: &str, k: &str, d: &[u8], e: &str) -> Result<ObjectMeta, BackendError> {
+        self.inner.put_if_match(b, k, d, e)
+    }
+    fn get(&self, b: &str, k: &str) -> Result<Vec<u8>, BackendError> {
+        self.inner.get(b, k)
+    }
+    fn head(&self, b: &str, k: &str) -> Result<ObjectMeta, BackendError> {
+        self.inner.head(b, k)
+    }
+    fn delete(&self, b: &str, k: &str) -> Result<(), BackendError> {
+        self.inner.delete(b, k)
+    }
+    fn copy(&self, sb: &str, sk: &str, db: &str, dk: &str) -> Result<ObjectMeta, BackendError> {
+        let n = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+        if n >= self.fail_from.load(Ordering::SeqCst) {
+            return Err(BackendError::Unavailable("copy failed".into()));
+        }
+        self.inner.copy(sb, sk, db, dk)
+    }
+    fn list(&self, b: &str, p: &str) -> Result<Vec<ObjectMeta>, BackendError> {
+        self.inner.list(b, p)
+    }
+}
+
+fn copy_flaky_rig(state: Option<PathBuf>) -> (StoreService, Arc<MemBackend>, Arc<CopyFlaky>) {
+    let be = Arc::new(MemBackend::new());
+    let cf = Arc::new(CopyFlaky { inner: be.clone(), calls: Default::default(), fail_from: std::sync::atomic::AtomicU32::new(u32::MAX) });
+    let svc = StoreService::open(Config { node_id: "pg-1".into(), state_path: state, clock: || 1_000 }, be.clone(), cf.clone(), Arc::new(Gate(AtomicBool::new(true))), Arc::new(MemSink::default()), Arc::new(Chain::default())).unwrap();
+    (svc, be, cf)
+}
+
+#[test]
+fn a_retire_cut_short_is_resumed_and_ok_means_every_object_is_in_the_archive() {
+    let (svc, be, cf) = copy_flaky_rig(None);
+    let n = node();
+    svc.create_store(&n, "daemon", Parties::default()).unwrap();
+    svc.grant(&n, cog("c1"), Access::Write, "op").unwrap();
+    for i in 0..10 {
+        svc.put(&local("c1"), &n, &format!("d/{i}"), format!("v{i}").as_bytes(), false).unwrap();
+    }
+    // RustFS goes away after three copies.
+    cf.fail_from.store(4, Ordering::SeqCst);
+    let e = svc.retire_node_store(&n, "op").unwrap_err();
+    assert!(matches!(e, StoreError::Backend(BackendError::Unavailable(_))), "{e:?}");
+    assert!(svc.retired_nodes().is_empty(), "a failed retire does not retire the id");
+    assert_eq!(be.list(ARCHIVE_BUCKET, "").unwrap().len(), 3);
+    // Retrying while it is still down fails again and still reports no success.
+    assert!(svc.retire_node_store(&n, "op").is_err());
+    assert!(svc.retired_nodes().is_empty());
+    // Healed: the retry finishes the copy and only then retires. All ten are there once, not thirteen.
+    cf.fail_from.store(u32::MAX, Ordering::SeqCst);
+    assert_eq!(svc.retire_node_store(&n, "op").unwrap(), 10, "the count is the whole archive, not 0 and not the remainder");
+    let archived = be.list(ARCHIVE_BUCKET, "").unwrap();
+    assert_eq!(archived.len(), 10, "resumed under the same keys: {archived:?}");
+    for i in 0..10 {
+        assert!(archived.iter().any(|m| m.key.ends_with(&format!("/d/{i}"))), "d/{i} archived");
+    }
+    assert_eq!(svc.retired_nodes(), vec![n.to_string()]);
+    // A repeat reports the same count, not 0.
+    assert_eq!(svc.retire_node_store(&n, "op").unwrap(), 10);
+}
+
+#[test]
+fn an_interrupted_archive_survives_a_restart_and_can_be_finished_by_archive_itself() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path().join("s.json");
+    let (svc, be, cf) = copy_flaky_rig(Some(state.clone()));
+    let n = project();
+    svc.create_store(&n, "daemon", Parties::default()).unwrap();
+    svc.grant(&n, cog("c"), Access::Write, "op").unwrap();
+    for i in 0..4 {
+        svc.put(&local("c"), &n, &format!("k{i}"), b"x", false).unwrap();
+    }
+    cf.fail_from.store(3, Ordering::SeqCst);
+    assert!(svc.archive(&n, false, "op").is_err());
+    drop(svc);
+    // After a restart the store is archived but not done: archive resumes rather than saying "already archived".
+    let (svc2, be2, _cf2) = {
+        let cf2 = Arc::new(CopyFlaky { inner: be.clone(), calls: Default::default(), fail_from: std::sync::atomic::AtomicU32::new(u32::MAX) });
+        let s = StoreService::open(Config { node_id: "pg-1".into(), state_path: Some(state), clock: || 1_000 }, be.clone(), cf2.clone(), Arc::new(Gate(AtomicBool::new(true))), Arc::new(MemSink::default()), Arc::new(Chain::default())).unwrap();
+        (s, be.clone(), cf2)
+    };
+    assert_eq!(svc2.archive(&n, false, "op").unwrap(), 4);
+    assert_eq!(be2.list(ARCHIVE_BUCKET, "").unwrap().len(), 4, "no duplicates from the resume");
+    assert!(matches!(svc2.archive(&n, false, "op"), Err(StoreError::Refused(_))), "a finished archive is refused again");
+}
+
+fn seqs(r: &Rig) -> Vec<(String, u64)> {
+    r.chain.0.lock().unwrap().iter().filter_map(|(k, v)| v["seq"].as_u64().map(|s| (k.clone(), s))).collect()
+}
+
+#[test]
+fn every_grant_affecting_event_is_stamped_one_higher_in_the_order_it_was_made() {
+    let r = rig();
+    let n = project();
+    r.svc.create_store(&n, "daemon", Parties::default()).unwrap();
+    assert!(seqs(&r).is_empty(), "creating a store grants nothing by itself here");
+    let c = cog("c");
+    r.svc.grant(&n, c.clone(), Access::Write, "op").unwrap();
+    r.svc.set_grant_enabled(&n, &c, false, "op").unwrap();
+    r.svc.set_grant_enabled(&n, &c, true, "op").unwrap();
+    r.svc.suspend_principal(&c, "test").unwrap();
+    r.svc.resume_principal(&c).unwrap();
+    r.svc.revoke(&n, &c, "op").unwrap();
+    r.svc.grant(&n, c, Access::Read, "op").unwrap();
+    r.svc.archive(&n, false, "op").unwrap();
+    let got = seqs(&r);
+    let kinds: Vec<&str> = got.iter().map(|(k, _)| k.as_str()).collect();
+    assert_eq!(kinds, ["store.grant", "store.grant.disable", "store.grant.enable", "store.principal.suspend", "store.principal.resume", "store.revoke", "store.grant", "store.close", "store.archive"]);
+    let nums: Vec<u64> = got.iter().map(|(_, s)| *s).collect();
+    assert_eq!(nums, (1..=9).collect::<Vec<u64>>(), "gapless from 1, in recorded order");
+    // A refused change takes no number.
+    assert!(r.svc.revoke(&project(), &cog("nobody"), "op").is_err());
+    assert_eq!(seqs(&r).len(), 9);
+}
+
+#[test]
+fn concurrent_changes_are_recorded_in_seq_order_not_just_numbered_uniquely() {
+    let r = rig();
+    let n = project();
+    r.svc.create_store(&n, "daemon", Parties::default()).unwrap();
+    let svc = &r.svc;
+    std::thread::scope(|s| {
+        for t in 0..8 {
+            let n = n.clone();
+            s.spawn(move || {
+                for i in 0..25 {
+                    svc.grant(&n, cog(&format!("c{t}-{i}")), Access::Read, "op").unwrap();
+                }
+            });
+        }
+    });
+    let nums: Vec<u64> = seqs(&r).iter().map(|(_, s)| *s).collect();
+    assert_eq!(nums, (1..=200).collect::<Vec<u64>>(), "the chain sees 1..=200 in order, so a consumer that drops a repeat or a step back loses nothing");
+}
+
+#[test]
+fn the_counter_survives_a_restart_and_a_forged_far_future_value_cannot_be_issued() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path().join("s.json");
+    let be = Arc::new(MemBackend::new());
+    let n = project();
+    {
+        let r = rig_at(Some(state.clone()), be.clone());
+        r.svc.create_store(&n, "daemon", Parties::default()).unwrap();
+        r.svc.grant(&n, cog("a"), Access::Read, "op").unwrap();
+        r.svc.grant(&n, cog("b"), Access::Read, "op").unwrap();
+    }
+    let r = rig_at(Some(state.clone()), be.clone());
+    r.svc.grant(&n, cog("c"), Access::Read, "op").unwrap();
+    assert_eq!(seqs(&r), vec![("store.grant".into(), 3)], "continues after the restart, never reuses 1 or 2");
+    drop(r);
+
+    // Put the counter one below the ceiling by hand: one more event is stamped, then changes are refused and change nothing.
+    let mut v: serde_json::Value = serde_json::from_slice(&std::fs::read(&state).unwrap()).unwrap();
+    v["grant_seq"] = serde_json::json!(crate::grant_seq::CEILING - 1);
+    std::fs::write(&state, serde_json::to_vec(&v).unwrap()).unwrap();
+    let r = rig_at(Some(state.clone()), be.clone());
+    r.svc.grant(&n, cog("d"), Access::Read, "op").unwrap();
+    assert_eq!(seqs(&r), vec![("store.grant".into(), crate::grant_seq::CEILING)]);
+    let e = r.svc.grant(&n, cog("e"), Access::Read, "op").unwrap_err();
+    assert!(matches!(e, StoreError::Refused(_)) && e.to_string().contains("ceiling"), "{e}");
+    assert!(r.svc.revoke(&n, &cog("d"), "op").is_err(), "every grant-affecting change is refused at the ceiling");
+    assert!(r.svc.suspend_principal(&cog("d"), "x").is_err());
+    assert!(r.svc.info(&n).unwrap().grants.iter().all(|g| g.principal != cog("e")), "the refused grant changed nothing");
+    assert_eq!(seqs(&r).len(), 1);
+    drop(r);
+
+    // A state file claiming a seq above the ceiling is damage, not something to continue from.
+    v["grant_seq"] = serde_json::json!(u64::MAX);
+    std::fs::write(&state, serde_json::to_vec(&v).unwrap()).unwrap();
+    let e = StoreService::open(Config { node_id: "pg-1".into(), state_path: Some(state), clock: || 1_000 }, be.clone(), be, Arc::new(Gate(AtomicBool::new(true))), Arc::new(MemSink::default()), Arc::new(Chain::default()));
+    assert!(matches!(e, Err(StoreError::State(m)) if m.contains("ceiling")));
+}
+
+#[test]
+fn an_append_principal_cannot_hold_an_object_for_longer_than_the_cap_but_write_can_name_more() {
+    let r = rig();
+    let rel = StoreName::release("weft", P, "stable").unwrap();
+    r.svc.create_store(&rel, "daemon", Parties::defaults_for(&rel)).unwrap();
+    r.svc.grant(&rel, cog("owner"), Access::Write, "op").unwrap();
+    let ci = Caller::local(Principal::parse(CI_PRINCIPAL).unwrap());
+    let mode = crate::backend::LockMode::Compliance;
+    let now_s = 1_000 / 1000; // the rig's clock is fixed at 1000 ms
+    let far = now_s + APPEND_MAX_RETENTION_S + 1;
+    let e = r.svc.extend_retention(&ci, &rel, "a", "v", far, mode).unwrap_err().to_string();
+    assert!(e.contains("append") && e.contains("days"), "{e}");
+    assert!(r.sink.events().iter().any(|ev| ev.principal == CI_PRINCIPAL && matches!(ev.outcome, Outcome::Refused(_))), "the refusal is logged");
+    // Inside the cap, it gets past this check (and meets the next one: this store has no lock).
+    let e2 = r.svc.extend_retention(&ci, &rel, "a", "v", now_s + APPEND_MAX_RETENTION_S, mode).unwrap_err().to_string();
+    assert!(e2.contains("object lock"), "{e2}");
+    // Write is not held to the cap (same next check).
+    let w = local("owner");
+    let e3 = r.svc.extend_retention(&w, &rel, "a", "v", far, mode).unwrap_err().to_string();
+    assert!(e3.contains("object lock"), "{e3}");
+}
+
+#[test]
+fn a_create_that_loses_a_race_with_a_retire_is_refused_and_leaves_no_bucket() {
+    // The retire lands after the create's first check but before it records the store.
+    struct RetireBetween {
+        inner: Arc<MemBackend>,
+        svc: Mutex<Option<Arc<StoreService>>>,
+        name: StoreName,
+    }
+    impl AdminBackend for RetireBetween {
+        fn create_bucket(&self, b: &str, t: &[(String, String)]) -> Result<(), BackendError> {
+            self.inner.create_bucket(b, t)?;
+            // Right after the bucket exists, the unpair happens.
+            if let Some(s) = self.svc.lock().unwrap().clone() {
+                s.retire_node_store(&self.name, "op").unwrap();
+            }
+            Ok(())
+        }
+        fn delete_bucket(&self, b: &str) -> Result<(), BackendError> {
+            self.inner.delete_bucket(b)
+        }
+        fn bucket_exists(&self, b: &str) -> Result<bool, BackendError> {
+            self.inner.bucket_exists(b)
+        }
+        fn buckets(&self) -> Result<Vec<crate::backend::BucketTags>, BackendError> {
+            self.inner.buckets()
+        }
+        fn create_access_key(&self, p: &str) -> Result<crate::backend::AccessKey, BackendError> {
+            self.inner.create_access_key(p)
+        }
+        fn set_key_enabled(&self, k: &str, e: bool) -> Result<(), BackendError> {
+            self.inner.set_key_enabled(k, e)
+        }
+        fn put_policy(&self, k: &str, p: &Value) -> Result<(), BackendError> {
+            self.inner.put_policy(k, p)
+        }
+        fn delete_access_key(&self, k: &str) -> Result<(), BackendError> {
+            self.inner.delete_access_key(k)
+        }
+    }
+    let be = Arc::new(MemBackend::new());
+    let n = node();
+    let hook = Arc::new(RetireBetween { inner: be.clone(), svc: Mutex::new(None), name: n.clone() });
+    let svc = Arc::new(StoreService::open(Config { node_id: "pg-1".into(), state_path: None, clock: || 1_000 }, hook.clone(), be.clone(), Arc::new(Gate(AtomicBool::new(true))), Arc::new(MemSink::default()), Arc::new(Chain::default())).unwrap());
+    *hook.svc.lock().unwrap() = Some(svc.clone());
+    let e = svc.create_store(&n, "daemon", Parties::default()).unwrap_err();
+    assert!(matches!(e, StoreError::Refused(_)) && e.to_string().contains("unpaired"), "{e}");
+    assert!(!svc.has_store(&n), "no store recorded for a retired id");
+    assert!(!be.bucket_exists(&n.bucket()).unwrap(), "the bucket made a moment ago is taken back");
+}
+
+// ---- F2: one push at a time, events only after the push, retry and recovery --------------------
+
+struct FlakyRig {
+    svc: StoreService,
+    be: Arc<MemBackend>,
+    fl: Arc<Flaky>,
+    chain: Arc<Chain>,
+    sink: Arc<MemSink>,
+}
+
+fn flaky_at(state: Option<PathBuf>, be: Arc<MemBackend>, down: bool) -> FlakyRig {
+    let fl = Arc::new(Flaky { inner: be.clone(), down: AtomicBool::new(down), lag: Default::default(), pushes: Default::default() });
+    let chain = Arc::new(Chain::default());
+    let sink = Arc::new(MemSink::default());
+    let svc = StoreService::open(Config { node_id: "pg-1".into(), state_path: state, clock: || 1_000 }, fl.clone(), be.clone(), Arc::new(Gate(AtomicBool::new(true))), sink.clone(), chain.clone()).unwrap();
+    FlakyRig { svc, be, fl, chain, sink }
+}
+
+fn chain_kinds(c: &Chain, kind: &str) -> usize {
+    c.0.lock().unwrap().iter().filter(|(k, _)| k == kind).count()
+}
+
+fn activity_ops(s: &MemSink, op: &str) -> usize {
+    s.events().iter().filter(|e| e.op == op).count()
+}
+
+#[test]
+fn a_revoke_whose_push_failed_is_not_announced_and_a_retry_finishes_it_once() {
+    let d = tempfile::tempdir().unwrap();
+    let r = flaky_at(Some(d.path().join("s.json")), Arc::new(MemBackend::new()), false);
+    let n = project();
+    r.svc.create_store(&n, "daemon", Parties::default()).unwrap();
+    let c = cog("c");
+    r.svc.grant(&n, c.clone(), Access::Write, "op").unwrap();
+    let key = r.be.keys_of(&c.to_string()).pop().unwrap();
+    assert_eq!((chain_kinds(&r.chain, "store.grant"), activity_ops(&r.sink, "Grant")), (1, 1), "a grant that reached the backend is announced");
+
+    r.fl.down.store(true, Ordering::SeqCst);
+    assert!(r.svc.revoke(&n, &c, "op").is_err(), "the policy push fails");
+    assert_eq!((chain_kinds(&r.chain, "store.revoke"), activity_ops(&r.sink, "Revoke")), (0, 0), "no success on the chain or in the activity log for a push that failed");
+    assert!(r.svc.get(&local("c"), &n, "x").is_err(), "the service already refuses the revoked principal");
+    assert!(r.be.authorize(&key, &n.bucket(), "s3:GetObject").is_ok(), "the backend policy is still the old one: it is behind");
+
+    // A retry while it is still down fails the same way: it does not claim there was no grant.
+    let again = r.svc.revoke(&n, &c, "op").unwrap_err().to_string();
+    assert!(!again.contains("holds no grant"), "{again}");
+
+    r.fl.down.store(false, Ordering::SeqCst);
+    r.svc.revoke(&n, &c, "op").expect("the retry pushes and finishes");
+    assert!(r.be.authorize(&key, &n.bucket(), "s3:GetObject").is_err(), "the backend refuses now");
+    assert_eq!((chain_kinds(&r.chain, "store.revoke"), activity_ops(&r.sink, "Revoke")), (1, 1), "announced once, after the push");
+    assert!(r.svc.revoke(&n, &c, "op").unwrap_err().to_string().contains("holds no grant"), "a revoke that is complete and repeated is the ordinary refusal");
+    assert_eq!(chain_kinds(&r.chain, "store.revoke"), 1);
+}
+
+#[test]
+fn a_restart_reconciles_a_failed_push_and_announces_it_then() {
+    let d = tempfile::tempdir().unwrap();
+    let sp = d.path().join("s.json");
+    let be = Arc::new(MemBackend::new());
+    let key;
+    let n = project();
+    let c = cog("c");
+    {
+        let r = flaky_at(Some(sp.clone()), be.clone(), false);
+        r.svc.create_store(&n, "daemon", Parties::default()).unwrap();
+        r.svc.grant(&n, c.clone(), Access::Write, "op").unwrap();
+        key = be.keys_of(&c.to_string()).pop().unwrap();
+        r.fl.down.store(true, Ordering::SeqCst);
+        assert!(r.svc.revoke(&n, &c, "op").is_err());
+        assert!(r.svc.suspend_principal(&c, "rule").is_err(), "suspension is saved too, and fails the same way");
+        assert_eq!(chain_kinds(&r.chain, "store.revoke") + chain_kinds(&r.chain, "store.principal.suspend"), 0);
+    }
+    // The daemon is restarted with RustFS back: open reconciles every principal, key state included.
+    let r = flaky_at(Some(sp), be.clone(), false);
+    assert!(r.svc.reconcile().is_empty());
+    assert!(be.authorize(&key, &n.bucket(), "s3:GetObject").is_err(), "policy brought in line");
+    assert_eq!(be.key_enabled(&key), Some(false), "key state brought in line (no grants, suspended)");
+    assert_eq!((chain_kinds(&r.chain, "store.revoke"), chain_kinds(&r.chain, "store.principal.suspend")), (1, 1), "each announced after its push, by the daemon that finished it");
+    assert!(r.svc.reconcile().is_empty());
+    assert_eq!((chain_kinds(&r.chain, "store.revoke"), chain_kinds(&r.chain, "store.principal.suspend")), (1, 1), "and only once");
+}
+
+#[test]
+fn a_grant_or_disable_whose_push_failed_waits_for_reconcile_to_be_announced() {
+    let r = flaky_at(None, Arc::new(MemBackend::new()), false);
+    let n = project();
+    r.svc.create_store(&n, "daemon", Parties::default()).unwrap();
+    let c = cog("c");
+    r.svc.grant(&n, c.clone(), Access::Read, "op").unwrap();
+    r.fl.down.store(true, Ordering::SeqCst);
+    assert!(r.svc.grant(&n, c.clone(), Access::Write, "op").is_err());
+    assert!(r.svc.set_grant_enabled(&n, &c, false, "op").is_err());
+    assert_eq!((chain_kinds(&r.chain, "store.grant"), chain_kinds(&r.chain, "store.grant.disable")), (1, 0));
+    assert!(!r.svc.reconcile().is_empty(), "still down: reported");
+    assert_eq!(chain_kinds(&r.chain, "store.grant"), 1, "still not announced");
+    r.fl.down.store(false, Ordering::SeqCst);
+    assert!(r.svc.reconcile().is_empty());
+    assert_eq!((chain_kinds(&r.chain, "store.grant"), chain_kinds(&r.chain, "store.grant.disable")), (2, 1));
+    let seq: Vec<u64> = seqs_of(&r.chain);
+    assert_eq!(seq, vec![1, 2, 3], "numbered in the order they were announced, gapless");
+}
+
+fn seqs_of(c: &Chain) -> Vec<u64> {
+    c.0.lock().unwrap().iter().filter_map(|(_, v)| v["seq"].as_u64()).collect()
+}
+
+#[test]
+fn concurrent_grants_and_revokes_leave_the_backend_policy_equal_to_the_saved_grants() {
+    for round in 0..6 {
+        let r = flaky_at(None, Arc::new(MemBackend::new()), false);
+        r.fl.lag.store(4, Ordering::SeqCst);
+        let (a, b) = (StoreName::project("weft", P).unwrap(), StoreName::project("weft", "01JBXK2M3N4P5Q6R7S8T9V0W2Y").unwrap());
+        r.svc.create_store(&a, "daemon", Parties::default()).unwrap();
+        r.svc.create_store(&b, "daemon", Parties::default()).unwrap();
+        let c = cog("c");
+        r.svc.grant(&a, c.clone(), Access::Read, "op").unwrap();
+        let svc = &r.svc;
+        std::thread::scope(|s| {
+            for t in 0..4usize {
+                let (a, b, c) = (a.clone(), b.clone(), c.clone());
+                s.spawn(move || {
+                    for i in 0..12usize {
+                        let n = if (i + t + round) % 2 == 0 { &a } else { &b };
+                        match (i + t) % 4 {
+                            0 => drop(svc.grant(n, c.clone(), Access::Write, "op")),
+                            1 => drop(svc.revoke(n, &c, "op")),
+                            2 => drop(svc.set_grant_enabled(n, &c, i % 8 < 4, "op")),
+                            _ => drop(svc.grant(n, c.clone(), Access::Read, "op")),
+                        }
+                    }
+                });
+            }
+        });
+        let key = r.be.keys_of(&c.to_string()).pop().unwrap();
+        let grants = r.svc.info(&a).unwrap().grants.into_iter().chain(r.svc.info(&b).unwrap().grants).filter(|g| g.principal == c).collect::<Vec<_>>();
+        let want = crate::policy::for_grants_with(&grants, &r.svc.policy_opts());
+        let sorted = |v: Value| {
+            let mut st: Vec<String> = v["Statement"].as_array().cloned().unwrap_or_default().iter().map(Value::to_string).collect();
+            st.sort();
+            st
+        };
+        assert_eq!(sorted(r.be.policy_of(&key).unwrap()), sorted(want), "round {round}: the policy the backend holds is the one the saved grants give");
+        assert_eq!(r.be.key_enabled(&key), Some(grants.iter().any(|g| g.enabled)), "round {round}: and so is the key state");
+        let nums = seqs_of(&r.chain);
+        assert_eq!(nums, (1..=nums.len() as u64).collect::<Vec<_>>(), "the chain sees every change numbered and in order");
+    }
+}
+
+// ---- F17: the bucket is the identity; the mesh id appearing renames the store, it does not fork it
+
+const MESH: &str = "0f1e2d3c4b5a69788796a5b4c3d2e1f0";
+
+fn at(mesh: &str, kind: &str) -> StoreName {
+    match kind {
+        "node" => StoreName::node(mesh, "pg-1").unwrap(),
+        _ => StoreName::project(mesh, P).unwrap(),
+    }
+}
+
+#[test]
+fn a_second_name_for_the_same_bucket_is_not_a_second_store() {
+    let r = rig();
+    r.svc.create_store(&at("local", "project"), "daemon", Parties::default()).unwrap();
+    let e = r.svc.create_store(&at(MESH, "project"), "daemon", Parties::default()).unwrap_err().to_string();
+    assert!(e.contains("already the bucket of") && e.contains("weftos://local/"), "{e}");
+    assert_eq!(r.svc.list_stores().len(), 1, "no second record, no second set of grants");
+    // Another real mesh does not take a mesh-id store either.
+    r.svc.migrate_store(&at("local", "project"), &at(MESH, "project"), "daemon").unwrap();
+    let other = at("aaaabbbbccccdddd", "project");
+    assert!(r.svc.ensure_store(&other, "daemon", Parties::default()).is_err(), "a store that already has a mesh id does not change it by being asked for under another");
+    assert_eq!(r.svc.list_stores().len(), 1);
+}
+
+#[test]
+fn the_mesh_id_appearing_renames_the_store_with_its_grants_and_ensure_is_idempotent() {
+    let d = tempfile::tempdir().unwrap();
+    let sp = d.path().join("s.json");
+    let be = Arc::new(MemBackend::new());
+    let (local, real) = (at("local", "project"), at(MESH, "project"));
+    let c = cog("c");
+    let key;
+    {
+        let r = rig_at(Some(sp.clone()), be.clone());
+        r.svc.create_store(&local, "daemon", Parties::default()).unwrap();
+        r.svc.grant(&local, c.clone(), Access::Write, "op").unwrap();
+        r.svc.put(&local_caller(&c), &local, "k", b"v", false).unwrap();
+        key = be.keys_of(&c.to_string()).pop().unwrap();
+        let policy_before = be.policy_of(&key);
+        // The S2 path: ensure under the new name.
+        let info = r.svc.ensure_store(&real, "s2", Parties::default()).unwrap();
+        assert_eq!(info.name, real.to_string());
+        assert_eq!(info.grants.len(), 1, "the grant came with the store");
+        assert_eq!(info.grants[0].store, real.to_string());
+        assert_eq!(be.policy_of(&key), policy_before, "same bucket: nothing changed at the backend");
+        assert!(r.svc.get(&local_caller(&c), &real, "k").is_ok(), "the principal reads under the new name");
+        assert!(r.svc.get(&local_caller(&c), &local, "k").is_err(), "the old name is not a store any more");
+        // Revoke by the NEW name works (it used to say unknown store), and the policy follows.
+        r.svc.revoke(&real, &c, "op").unwrap();
+        assert!(be.authorize(&key, &real.bucket(), "s3:GetObject").is_err());
+        assert!(r.svc.get(&local_caller(&c), &real, "k").is_err());
+        r.svc.grant(&real, c.clone(), Access::Read, "op").unwrap();
+        // Idempotent: asking again changes nothing and is not an error.
+        let again = r.svc.ensure_store(&real, "s2", Parties::default()).unwrap();
+        assert_eq!(again.name, real.to_string());
+        assert_eq!(r.svc.list_stores().len(), 1);
+        let migrates: Vec<_> = r.chain.0.lock().unwrap().iter().filter(|(k, _)| k == "store.migrate").map(|(_, v)| v.clone()).collect();
+        assert_eq!(migrates.len(), 1, "one event, for the one move");
+        assert_eq!((migrates[0]["from"].as_str(), migrates[0]["to"].as_str()), (Some(local.to_string().as_str()), Some(real.to_string().as_str())));
+        assert!(migrates[0]["seq"].as_u64().is_some(), "stamped like every grant-affecting event");
+    }
+    // The new name survives a restart.
+    let r = rig_at(Some(sp), be.clone());
+    assert_eq!(r.svc.list_stores().iter().map(|s| s.name.clone()).collect::<Vec<_>>(), vec![real.to_string()]);
+    assert!(r.svc.get(&local_caller(&c), &real, "k").is_ok());
+    assert!(r.svc.reconcile().is_empty());
+}
+
+fn local_caller(c: &Principal) -> Caller {
+    Caller::local(c.clone())
+}
+
+#[test]
+fn migrate_mesh_moves_every_local_store_and_a_move_is_only_ever_local_to_a_mesh_id() {
+    let r = rig();
+    let (n, p) = (at("local", "node"), at("local", "project"));
+    r.svc.create_store(&n, "daemon", Parties::default()).unwrap();
+    r.svc.create_store(&p, "daemon", Parties::default()).unwrap();
+    r.svc.grant(&p, cog("c"), Access::Read, "op").unwrap();
+    assert!(r.svc.migrate_mesh("local", "daemon").is_empty(), "nothing to do while there is no mesh id");
+    let moved = r.svc.migrate_mesh(MESH, "daemon");
+    assert_eq!(moved.len(), 2);
+    assert!(moved.iter().all(Result::is_ok), "{moved:?}");
+    assert!(r.svc.list_stores().iter().all(|s| s.name.contains(MESH)));
+    assert!(r.svc.migrate_mesh(MESH, "daemon").is_empty(), "a second call finds nothing left under local");
+    // Not other directions, other kinds, or other buckets.
+    let (a, b) = (at(MESH, "project"), at("aaaabbbbccccdddd", "project"));
+    assert!(r.svc.migrate_store(&a, &b, "x").is_err(), "mesh id to mesh id");
+    assert!(r.svc.migrate_store(&a, &at("local", "project"), "x").is_err(), "back to local");
+    assert!(r.svc.migrate_store(&at("local", "node"), &at(MESH, "project"), "x").is_err(), "different store");
+}
+
+#[test]
+fn a_retired_node_stays_retired_under_the_mesh_name_and_an_adopted_bucket_ignores_the_mesh_in_its_name_tag() {
+    let r = rig();
+    let n = at("local", "node");
+    r.svc.create_store(&n, "daemon", Parties::default()).unwrap();
+    r.svc.retire_node_store(&n, "unpair").unwrap();
+    let moved = r.svc.migrate_mesh(MESH, "daemon");
+    assert!(moved.iter().all(Result::is_ok), "{moved:?}");
+    assert_eq!(r.svc.retired_nodes(), vec![at(MESH, "node").to_string()]);
+    assert!(r.svc.create_store(&at(MESH, "node"), "daemon", Parties::default()).is_err(), "the id is still not handed out again");
+    assert!(r.svc.create_store(&n, "daemon", Parties::default()).is_err(), "nor under the old name");
+    // A bucket made under `local` whose record was lost is adopted under the mesh name.
+    let be = Arc::new(MemBackend::new());
+    let r1 = rig_at(None, be.clone());
+    r1.svc.create_store(&at("local", "project"), "daemon", Parties::default()).unwrap();
+    let r2 = rig_at(None, be);
+    assert!(r2.svc.create_store(&at(MESH, "project"), "daemon", Parties::default()).is_ok(), "same bucket, same owner and kind: ours");
+}
+// ---- F18: store.promote cannot be used to bypass what a worktree is ----------------------------
+
+fn wt_rig() -> (Rig, StoreName) {
+    let r = rig();
+    let wt = StoreName::worktree("weft", P, "feat-x").unwrap();
+    r.svc.create_store(&project(), "daemon", Parties::default()).unwrap();
+    r.svc.create_store(&wt, "daemon", Parties::default()).unwrap();
+    r.svc.grant(&wt, cog("a1"), Access::Write, "op").unwrap();
+    r.svc.grant(&project(), cog("a1"), Access::Write, "op").unwrap();
+    (r, wt)
+}
+
+#[test]
+fn promote_refuses_an_empty_unclean_or_reserved_prefix_and_copies_nothing() {
+    let (r, wt) = wt_rig();
+    r.svc.put(&local("a1"), &wt, "assets/a.bin", b"a", false).unwrap();
+    r.svc.put(&local("a1"), &wt, "worktrees/x/state", b"w", false).unwrap();
+    let before = r.be.list(&project().bucket(), "").unwrap().len();
+    for bad in ["", ".wt/", ".wt/tombstones/", ".wt/base/x/", "worktrees/", "worktrees/x/", "assets", "assets/../.wt/", "/assets/", "a//b/", "./", "../", "a\\b/"] {
+        let e = r.svc.promote(&wt, &[bad.to_owned()], false, "land").unwrap_err().to_string();
+        assert!(e.contains("promotable prefix"), "{bad:?}: {e}");
+    }
+    // One bad prefix among good ones refuses the whole call: nothing is half-promoted.
+    assert!(r.svc.promote(&wt, &["assets/".into(), "".into()], false, "land").is_err());
+    assert!(r.svc.promote(&wt, &[], false, "land").is_err());
+    assert_eq!(r.be.list(&project().bucket(), "").unwrap().len(), before, "nothing was copied into the project");
+    assert!(r.chain.0.lock().unwrap().iter().all(|(k, _)| k != "store.promote"), "and no promotion was recorded");
+    // A clean prefix still works, and a reserved-area object that sits in a plain bucket is not copied.
+    let rep = r.svc.promote(&wt, &["assets/".into()], false, "land").unwrap();
+    assert_eq!(rep.promoted, 1);
+    assert!(r.be.get(&project().bucket(), "worktrees/x/state").is_err());
+}
+
+#[test]
+fn a_worktree_with_overlay_state_is_not_promoted_object_by_object() {
+    let (r, wt) = wt_rig();
+    r.svc.put(&local("a1"), &wt, "assets/a.bin", b"a", false).unwrap();
+    r.svc.put(&local("a1"), &project(), "assets/gone.bin", b"project copy", false).unwrap();
+    // S2's overlay records a delete of assets/gone.bin as a tombstone, and the base it started from.
+    // Planted at the backend: through the service a principal cannot write `.wt/` (S2, reserved control state).
+    r.be.put(&wt.bucket(), ".wt/tombstones/assets/gone.bin", b"", false).unwrap();
+    r.be.put(&wt.bucket(), ".wt/base/assets/a.bin", b"old", false).unwrap();
+    r.be.put(&wt.bucket(), ".wt/meta.json", b"{}", false).unwrap();
+    let e = r.svc.promote(&wt, &["assets/".into()], true, "land").unwrap_err().to_string();
+    assert!(e.contains("overlay state") && e.contains("tombstones"), "{e}");
+    assert!(r.be.get(&project().bucket(), "assets/a.bin").is_err(), "nothing was copied");
+    assert_eq!(r.be.get(&project().bucket(), "assets/gone.bin").unwrap(), b"project copy", "and the project's object the worktree deleted is untouched");
+    assert!(r.be.list(ARCHIVE_BUCKET, "").map(|l| l.is_empty()).unwrap_or(true), "nothing was archived either");
+    // Even a bare tombstone is enough.
+    let (r2, wt2) = wt_rig();
+    r2.be.put(&wt2.bucket(), ".wt/tombstones/assets/x", b"", false).unwrap();
+    assert!(r2.svc.promote(&wt2, &["assets/".into()], false, "land").is_err());
+}
+
+// ---- F9: refusals RustFS reports are logged and, in a run, suspend the key -----------------------
+
+/// A line of RustFS 1.0.4's JSON log as captured from a throwaway instance (only the account and
+/// bucket are ours).
+fn denied_line(account: &str, bucket: &str) -> String {
+    format!(r#"{{"timestamp":"2026-11-07T06:36:23.965138209-05:00","level":"WARN","message":"request denied by authorization layer","event":"s3_authorization_denied","reason":"no_policy_allows_action","action":"S3Action(GetObjectAction)","bucket":"{bucket}","object":"x","version_id":"None","account":"{account}","is_owner":false,"target":"rustfs::storage::access","filename":"rustfs/src/storage/access.rs","line_number":1267,"threadName":"rustfs-worker","threadId":"ThreadId(31)"}}"#)
+}
+
+const SIG_LINE: &str = r#"{"timestamp":"2026-11-08T11:23:14.31776997-05:00","level":"ERROR","error":"S3Error { code: SignatureDoesNotMatch, message: \"The request signature we calculated does not match the signature you provided. Check your AWS secret access key and signing method. For more information, see REST Authentication and SOAP Authentication for details.\", .. }","target":"s3s::ops","filename":"/usr/local/cargo/git/checkouts/s3s-5cf49da3e5499213/5761ddf/crates/s3s/src/ops/mod.rs","line_number":862,"threadName":"rustfs-worker","threadId":"ThreadId(41)"}"#;
+
+fn denial_rig() -> (Rig, StoreName, Principal, String) {
+    let r = rig();
+    let n = project();
+    r.svc.create_store(&n, "daemon", Parties::default()).unwrap();
+    let c = cog("c");
+    r.svc.grant(&n, c.clone(), Access::Read, "op").unwrap();
+    let key = r.be.keys_of(&c.to_string()).pop().unwrap();
+    (r, n, c, key)
+}
+
+#[test]
+fn a_denied_line_is_logged_as_a_refusal_and_an_authentication_failure_is_logged_unattributed() {
+    let (r, n, _c, key) = denial_rig();
+    assert!(r.svc.ingest_log_line(&denied_line(&key, &n.bucket())));
+    let ev = r.sink.events().pop().unwrap();
+    assert_eq!((ev.principal.as_str(), ev.store.as_str(), ev.op.as_str(), ev.source), ("cog:c", n.to_string().as_str(), "GetObject", Source::RustfsLog));
+    assert!(matches!(ev.outcome, Outcome::Refused(ref w) if w == "no_policy_allows_action"));
+    assert!(r.svc.ingest_log_line(SIG_LINE), "a SignatureDoesNotMatch line is a record");
+    let ev = r.sink.events().pop().unwrap();
+    assert_eq!((ev.op.as_str(), ev.principal.as_str()), ("Authenticate", "(unknown key)"));
+    assert!(matches!(ev.outcome, Outcome::Refused(ref w) if w == "SignatureDoesNotMatch"));
+    let inv = SIG_LINE.replace("SignatureDoesNotMatch", "InvalidAccessKeyId");
+    assert!(r.svc.ingest_log_line(&inv));
+    assert!(matches!(r.sink.events().pop().unwrap().outcome, Outcome::Refused(ref w) if w == "InvalidAccessKeyId"));
+    // Other log lines are not records.
+    for other in ["", "not json", r#"{"level":"ERROR","message":"op returns error","op":"PutObject","err":"S3Error(Inner { code: AccessDenied })"}"#] {
+        assert!(!r.svc.ingest_log_line(other), "{other:?}");
+    }
+}
+
+#[test]
+fn a_run_of_refusals_suspends_the_key_through_suspend_principal_and_not_before() {
+    let (r, n, c, key) = denial_rig();
+    r.svc.set_denial_rule(Some(DenialRule { max: 5, window_ms: 60_000 }));
+    for _ in 0..4 {
+        r.svc.ingest_log_line(&denied_line(&key, &n.bucket()));
+    }
+    assert_eq!(r.be.key_enabled(&key), Some(true), "four is under the rule");
+    r.svc.ingest_log_line(&denied_line(&key, &n.bucket()));
+    assert_eq!(r.be.key_enabled(&key), Some(false), "the fifth disables the key at RustFS");
+    assert!(r.svc.get(&local("c"), &n, "x").is_err(), "and the service refuses it");
+    assert_eq!(chain_kinds(&r.chain, "store.principal.suspend"), 1);
+    let why = r.chain.0.lock().unwrap().iter().find(|(k, _)| k == "store.principal.suspend").map(|(_, v)| v["reason"].as_str().unwrap().to_owned()).unwrap();
+    assert!(why.contains("rule: 5 refusals"), "{why}");
+    // More refusals while suspended do not suspend again; resume re-enables and counting restarts.
+    for _ in 0..12 {
+        r.svc.ingest_log_line(&denied_line(&key, &n.bucket()));
+    }
+    assert_eq!(chain_kinds(&r.chain, "store.principal.suspend"), 1);
+    r.svc.resume_principal(&c).unwrap();
+    assert_eq!(r.be.key_enabled(&key), Some(true));
+}
+
+#[test]
+fn refusals_that_are_spread_out_unattributed_or_for_unknown_keys_suspend_nobody_and_the_rule_can_be_off() {
+    let (r, n, _c, key) = denial_rig();
+    r.svc.set_denial_rule(Some(DenialRule { max: 3, window_ms: 10_000 }));
+    // A bad signature has no account: it can never suspend anyone however many arrive.
+    for _ in 0..50 {
+        r.svc.ingest_log_line(SIG_LINE);
+    }
+    // A key that is not a principal's is logged but not counted against anyone.
+    for _ in 0..50 {
+        r.svc.ingest_log_line(&denied_line("wk-stranger", &n.bucket()));
+    }
+    assert_eq!(chain_kinds(&r.chain, "store.principal.suspend"), 0);
+    assert_eq!(r.be.key_enabled(&key), Some(true));
+    // Off: nothing suspends.
+    r.svc.set_denial_rule(None);
+    for _ in 0..50 {
+        r.svc.ingest_log_line(&denied_line(&key, &n.bucket()));
+    }
+    assert_eq!(r.be.key_enabled(&key), Some(true));
+    // The default is on, at 20 in a minute.
+    r.svc.set_denial_rule(Some(DenialRule::default()));
+    for _ in 0..19 {
+        r.svc.ingest_log_line(&denied_line(&key, &n.bucket()));
+    }
+    assert_eq!(r.be.key_enabled(&key), Some(true));
+    r.svc.ingest_log_line(&denied_line(&key, &n.bucket()));
+    assert_eq!(r.be.key_enabled(&key), Some(false));
+}
+
+#[test]
+fn audit_lines_with_a_403_count_too_and_a_successful_audit_line_never_does() {
+    let (r, n, _c, key) = denial_rig();
+    r.svc.set_denial_rule(Some(DenialRule { max: 2, window_ms: 60_000 }));
+    let rec = |status: u16| format!(r#"{{"EventName":"s3:GetObject","Key":"x","Records":[{{"accessKey":"{key}","api":{{"name":"s3:GetObject","bucket":"{}","object":"x","status_code":{status}}}}}]}}"#, n.bucket());
+    for _ in 0..5 {
+        assert!(r.svc.ingest_audit_line(&rec(200)));
+    }
+    assert_eq!(r.be.key_enabled(&key), Some(true));
+    r.svc.ingest_audit_line(&rec(403));
+    r.svc.ingest_audit_line(&rec(403));
+    assert_eq!(r.be.key_enabled(&key), Some(false));
+}
+
+#[test]
+fn principals_cannot_write_a_worktrees_control_state_or_a_projects_registry() {
+    let r = rig();
+    let wt = StoreName::worktree("weft", P, "feat-x").unwrap();
+    r.svc.create_store(&project(), "daemon", Parties::default()).unwrap();
+    r.svc.create_store(&wt, "daemon", Parties::default()).unwrap();
+    r.svc.grant(&wt, cog("a1"), Access::Write, "op").unwrap();
+    r.svc.grant(&project(), cog("a1"), Access::Write, "op").unwrap();
+    for k in [".wt/promoted.json", ".wt/promoting.json", ".wt/base/assets/a", ".wt/meta.json"] {
+        let e = r.svc.put(&local("a1"), &wt, k, b"forged", false).unwrap_err().to_string();
+        assert!(e.contains("reserved control state"), "{k}: {e}");
+        assert!(r.svc.delete(&local("a1"), &wt, k).is_err(), "{k}");
+        assert!(r.be.get(&wt.bucket(), k).is_err(), "{k} was not written");
+    }
+    assert!(r.svc.put(&local("a1"), &project(), "worktrees/feat-x.json", b"{}", false).is_err());
+    // ordinary objects are unaffected
+    r.svc.put(&local("a1"), &wt, "assets/a", b"ok", false).unwrap();
+    r.svc.put(&local("a1"), &project(), "assets/a", b"ok", false).unwrap();
+}
+
+#[test]
+fn a_second_daemon_can_archive_and_delete_a_worktree_store_the_first_created() {
+    let be = Arc::new(MemBackend::new());
+    let (a, b) = (rig_at(None, be.clone()), rig_at(None, be.clone()));
+    let wt = StoreName::worktree("weft", P, "feat-x").unwrap();
+    a.svc.create_store(&project(), "daemon", Parties::default()).unwrap();
+    a.svc.create_store(&wt, "daemon", Parties::default()).unwrap();
+    a.svc.grant(&wt, cog("a1"), Access::Write, "op").unwrap();
+    a.svc.put(&local("a1"), &wt, "assets/x.bin", b"x", false).unwrap();
+    assert!(!b.svc.has_store(&wt), "B has no record of A's store");
+    // closing without deleting would mean disabling grants B does not hold
+    assert!(b.svc.archive(&wt, false, "op").unwrap_err().to_string().contains("another daemon"));
+    // other kinds of store still need to be known
+    assert!(b.svc.archive(&project(), true, "op").is_err());
+    assert_eq!(b.svc.archive(&wt, true, "op").unwrap(), 1);
+    assert!(be.get(&wt.bucket(), "assets/x.bin").is_err(), "the bucket is gone");
+    assert_eq!(be.get(ARCHIVE_BUCKET, &archive_key(&wt.bucket(), 1_000, "assets/x.bin")).unwrap(), b"x");
+    assert!(b.chain.0.lock().unwrap().iter().any(|(k, v)| k == "store.archive" && v["foreign"] == true));
 }

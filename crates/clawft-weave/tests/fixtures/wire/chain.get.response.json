@@ -1,0 +1,29 @@
+{
+  "ok": true,
+  "result": {
+    "sequence": 1,
+    "chain_id": 0,
+    "timestamp": "2026-11-07T12:00:00.123456+00:00",
+    "prev_hash": "83787c5fbb5b4f70617932764a4194669193f76fe90ed9476c559d68bbb3ce6b",
+    "hash": "29663b9a32ee32c2ca5a645117696ce0888c84b39f8fd91c0ec4ebcd09025df4",
+    "payload_hash": "75f3ae1057c197610e33633c630a4e0000dd997f095592bb90cf797202a92b07",
+    "source": "tapestry",
+    "kind": "tapestry.turn",
+    "payload": {
+      "kind": "tapestry.turn",
+      "entries": [
+        "01JC0000000000000000000001"
+      ],
+      "hash_before": "6db7d803e74f1ffa7d8f5adc0bf95b3e15bf4c8373fffadf546227cc6c6742cb",
+      "hash_after": "f39592393ef0859cb196a52693d2cea00fb2df784b3c04ae54aa7cadb8e562f8",
+      "ts": "2026-11-07T12:00:00.123456+00:00"
+    },
+    "payload_canonical": "{\"kind\":\"tapestry.turn\",\"entries\":[\"01JC0000000000000000000001\"],\"hash_before\":\"6db7d803e74f1ffa7d8f5adc0bf95b3e15bf4c8373fffadf546227cc6c6742cb\",\"hash_after\":\"f39592393ef0859cb196a52693d2cea00fb2df784b3c04ae54aa7cadb8e562f8\",\"ts\":\"2026-11-07T12:00:00.123456+00:00\"}",
+    "hash_valid": true,
+    "payload_hash_valid": true,
+    "coverage": {
+      "status": "unsigned_pending_checkpoint",
+      "reason": "unsigned: pending checkpoint"
+    }
+  }
+}

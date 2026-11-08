@@ -1,0 +1,13 @@
+{
+  "method": "governance.check",
+  "params": {
+    "agent_id": "tapestry",
+    "tool": "shell_exec",
+    "effect": {
+      "risk": 0.8,
+      "security": 0.6
+    }
+  },
+  "auth": "admin",
+  "proto": 1
+}

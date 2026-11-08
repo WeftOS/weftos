@@ -26,6 +26,7 @@ DRY_RUN=false
 FORCE=false
 DEBUG=false
 NO_FAIL_FAST=false
+RUN_IGNORED=false
 PREFIX=""
 GEN_FACTS_ARGS=()
 SERVE_PORT=""
@@ -834,6 +835,10 @@ workspace_test() {
         cfilter=(-- "$TEST_FILTER")
     fi
     [ "$NO_FAIL_FAST" = true ] && extra+=(--no-fail-fast)
+    # `--ignored` runs only the #[ignore]d tests (real-service tests that name their own env
+    # file, such as WEFTOS_STORE_TEST_RUSTFS_ENV). nextest only: the doctest pass is skipped.
+    local ign=()
+    [ "$RUN_IGNORED" = true ] && ign=(--run-ignored only)
     # Honor `--features <f>` so feature-gated adapters (matrix, email, …)
     # are compiled and tested (WEFT-159).
     [ -n "$FEATURES" ] && extra+=(--features "$FEATURES")
@@ -865,8 +870,8 @@ workspace_test() {
         doctest_runtime cargo test "${doc[@]}" --doc ${extra[@]+"${extra[@]}"}
     }
     if command -v cargo-nextest >/dev/null 2>&1; then
-        env -u "$(cargo_runner_var)" cargo nextest run ${NEXTEST_CONFIG[@]+"${NEXTEST_CONFIG[@]}"} "${scope[@]}" ${extra[@]+"${extra[@]}"} ${filter[@]+"${filter[@]}"} \
-            && { [ ${#filter[@]} -gt 0 ] || run_doctests; }
+        env -u "$(cargo_runner_var)" cargo nextest run ${NEXTEST_CONFIG[@]+"${NEXTEST_CONFIG[@]}"} "${scope[@]}" ${extra[@]+"${extra[@]}"} ${ign[@]+"${ign[@]}"} ${filter[@]+"${filter[@]}"} \
+            && { [ ${#filter[@]} -gt 0 ] || [ "$RUN_IGNORED" = true ] || run_doctests; }
     else
         cargo test "${scope[@]}" ${extra[@]+"${extra[@]}"} ${cfilter[@]+"${cfilter[@]}"}
     fi
@@ -3174,6 +3179,7 @@ ${BOLD}Options:${NC}
   --debug         Use the debug profile (install command)
   --no-fail-fast  Keep running tests after a failure (test command) — full
                   verdict when a known-environmental failure would fail-fast
+  --ignored       Run only the #[ignore]d tests (test command, needs cargo-nextest)
   --prefix <dir>  Install into <dir> instead of ~/.cargo/bin (install command)
   --days <n>      Age threshold in days (clean-stale command, default 7)
   --with-release-dry-run
@@ -3356,6 +3362,10 @@ parse_args() {
                 ;;
             --no-fail-fast)
                 NO_FAIL_FAST=true
+                shift
+                ;;
+            --ignored)
+                RUN_IGNORED=true
                 shift
                 ;;
             --prefix)

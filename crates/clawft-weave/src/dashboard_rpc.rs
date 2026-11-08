@@ -54,6 +54,10 @@ impl NodeAdmin for MeshAdmin {
             let h = crate::project_fetch_serve::global().ok_or("project fetch is not enabled on this node")?;
             return h.serve_raw(requester, body).await;
         }
+        // Agent directory: this node's agents and exposures, read-only.
+        if method == crate::agent_sources_rpc::METHOD {
+            return crate::agent_sources_rpc::serve_peer(requester).await.map(|v| (v, None));
+        }
         let d = dashboard_report::global()
             .ok_or("the dashboard reporter is not enabled on this node ([dashboard] enabled = true)")?;
         DashAdmin(d).call(method, requester, body).await.map(|v| (v, None))

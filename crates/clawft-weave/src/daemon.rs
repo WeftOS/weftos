@@ -1305,7 +1305,14 @@ pub async fn run(
             let reg = crate::expose_rt::start(&daemon_identity.node_id, &runtime_dir, home.as_deref(), audit_fn.clone()).await;
             // ADR-126 S1: the object store, with this node's own store created.
             match crate::store_rt::start(&daemon_identity.node_id, &runtime_dir, reg, audit_fn) {
-                Ok(_) => {}
+                Ok(svc) => {
+                    // Refusals RustFS logs (off unless WEFTOS_STORE_RUSTFS_LOG names its log file), and the suspension rule.
+                    crate::store_watch::start_from_env(&svc);
+                    // Direct-S3 activity: RustFS's audit and notification posts (off unless WEFTOS_STORE_INGEST_ADDR is set).
+                    if let Err(e) = crate::store_ingest::start_from_env(svc, &runtime_dir).await {
+                        error!(error = %e, "store ingest receiver not started");
+                    }
+                }
                 Err(e) => error!(error = %e, "object store not started"),
             }
         }
@@ -6580,6 +6587,9 @@ async fn dispatch(
         }
         // ADR-126 S2: worktree stores, tree sharing, the follower view.
         m if m.starts_with("store.worktree.") => crate::store_worktree::handle(m, params).await,
+        // ADR-131 prototype: materialise, sync and watch a prefix as a local tree.
+        m if m.starts_with("store.drive.") => crate::store_drive::handle(m, params).await,
+        m if m.starts_with("store.view.") => crate::store_view::handle(m, params).await,
         // ADR-122: the cog data plane broker's topics.
         #[cfg(all(feature = "placement", unix))]
         "cogbus.list" => crate::cogbus_serve::handle(method.as_str(), params).await,
@@ -6755,13 +6765,99 @@ async fn dispatch(
             #[cfg(not(feature = "exochain"))]
             Response::error("exochain feature not enabled")
         }
+        // `chain.get {sequence, signatures?}`: one event in full (payload
+        // included) plus the checkpoint signature that covers it, or an
+        // explicit "unsigned: pending checkpoint". Read-only; same capability
+        // as `chain.tail`. A bad request is refused, not answered with an
+        // empty event.
+        "chain.get" => {
+            #[cfg(feature = "exochain")]
+            {
+                let p: protocol::ChainGetParams = match serde_json::from_value(params) {
+                    Ok(p) => p,
+                    Err(e) => return Response::error(format!("chain.get: bad params: {e}")),
+                };
+                let k = kernel.read().await;
+                if let Some(cm) = k.chain_manager() {
+                    match clawft_kernel::chain_coverage::event_detail(cm, p.sequence, p.signatures) {
+                        Some(d) => Response::success(serde_json::to_value(d).unwrap()),
+                        None => Response::error(format!(
+                            "chain.get: no event at sequence {} (head is {})",
+                            p.sequence,
+                            cm.sequence().saturating_sub(1)
+                        )),
+                    }
+                } else {
+                    Response::error("chain not enabled")
+                }
+            }
+            #[cfg(not(feature = "exochain"))]
+            Response::error("exochain feature not enabled")
+        }
+        // `chain.get_range {from, to, limit?, signatures?}`: events from..=to in
+        // full with per-event coverage, checkpoint signatures once. At most 1000
+        // events; a bigger range, from > to, or a range past the head is
+        // refused, never truncated or clipped. Read-only, like `chain.get`.
+        "chain.get_range" => {
+            #[cfg(feature = "exochain")]
+            {
+                let p: protocol::ChainGetRangeParams = match serde_json::from_value(params) {
+                    Ok(p) => p,
+                    Err(e) => return Response::error(format!("chain.get_range: bad params: {e}")),
+                };
+                let k = kernel.read().await;
+                if let Some(cm) = k.chain_manager() {
+                    match clawft_kernel::chain_coverage::range_detail(cm, p.from, p.to, p.limit, p.signatures) {
+                        Ok(d) => Response::success(serde_json::to_value(d).unwrap()),
+                        Err(e) => Response::error(format!("chain.get_range: {e}")),
+                    }
+                } else {
+                    Response::error("chain not enabled")
+                }
+            }
+            #[cfg(not(feature = "exochain"))]
+            Response::error("exochain feature not enabled")
+        }
         "chain.checkpoint" => {
             #[cfg(feature = "exochain")]
             {
                 let k = kernel.read().await;
                 if let Some(cm) = k.chain_manager() {
                     let cp = cm.checkpoint();
-                    Response::success(serde_json::to_value(cp).unwrap())
+                    let mut out = serde_json::to_value(cp).unwrap();
+                    // The in-memory checkpoint carries no signature. Write the
+                    // signed RVF checkpoint now (the same file shutdown writes)
+                    // so events up to here are covered and `chain.verify` /
+                    // `chain.get` can report it, instead of only at shutdown.
+                    let cfg = k.kernel_config().chain.clone().unwrap_or_default();
+                    match cfg.effective_checkpoint_path() {
+                        Some(ckpt) => {
+                            let rvf = std::path::PathBuf::from(ckpt).with_extension("rvf");
+                            match cm.save_to_rvf(&rvf) {
+                                Ok(()) => {
+                                    if let Err(e) = cm.record_cutover(&rvf) {
+                                        return Response::error(format!(
+                                            "checkpoint written but cutover record failed: {e}"
+                                        ));
+                                    }
+                                    out["signed"] = cm.signed_checkpoint_bytes().is_some().into();
+                                    out["rvf_path"] = rvf.display().to_string().into();
+                                    out["has_signing_key"] = cm.has_signing_key().into();
+                                    out["dual_signing"] = cm.has_dual_signing().into();
+                                }
+                                Err(e) => {
+                                    return Response::error(format!(
+                                        "signed checkpoint failed: {e}"
+                                    ));
+                                }
+                            }
+                        }
+                        None => {
+                            out["signed"] = false.into();
+                            out["reason"] = "no checkpoint path configured; nothing was signed".into();
+                        }
+                    }
+                    Response::success(out)
                 } else {
                     Response::error("chain not enabled")
                 }
@@ -6776,34 +6872,19 @@ async fn dispatch(
                 if let Some(cm) = k.chain_manager() {
                     let result = cm.verify_integrity();
 
-                    // Also verify RVF signature if chain has a signing key.
-                    let signature_verified = if let Some(pubkey) = cm.verifying_key() {
-                        let cfg = k.kernel_config().chain.clone().unwrap_or_default();
-                        if let Some(ref ckpt_path) = cfg.effective_checkpoint_path() {
-                            let rvf_path =
-                                std::path::PathBuf::from(ckpt_path).with_extension("rvf");
-                            if rvf_path.exists() {
-                                match clawft_kernel::ChainManager::verify_rvf_signature(
-                                    &rvf_path, &pubkey,
-                                ) {
-                                    Ok(valid) => Some(valid),
-                                    Err(_) => Some(false),
-                                }
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    };
+                    // Signature status comes from the latest signed checkpoint
+                    // the chain holds: written by `chain.checkpoint` / shutdown,
+                    // or restored from the RVF file at boot. It also re-checks
+                    // that the chain still links to the signed head.
+                    let summary = clawft_kernel::chain_coverage::signature_summary(cm);
 
                     let proto_result = ChainVerifyResult {
                         valid: result.valid,
                         event_count: result.event_count,
                         errors: result.errors,
-                        signature_verified,
+                        signature_verified: summary.as_ref().map(|s| s.valid),
+                        signed_through: summary.as_ref().map(|s| s.signed_through),
+                        pq_verified: summary.as_ref().and_then(|s| s.pq_verified),
                     };
                     Response::success(serde_json::to_value(proto_result).unwrap())
                 } else {

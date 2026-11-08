@@ -2,9 +2,12 @@
 //! follower view). `scripts/worktree-store.sh` calls these through `weaver store worktree <verb>`.
 //!
 //! Every verb is an Admin act on the local daemon (see `capability.rs`). They work on the raw data
-//! plane (`StoreService::operator_objects`), the same level as S1's promote and archive, and the
-//! ones that change shared state record a chain event. Paths in params (`root`, `dest`, `cache`,
+//! plane (`StoreService::operator_objects`), the same level as S1's promote and archive. The four
+//! that change shared state (create, publish, claim, promote) are recorded in the activity log and
+//! as a chain event, including when they fail (`record_verb`). Paths in params (`root`, `dest`, `cache`,
 //! the `*_z` lists) are read or written by the daemon itself, so client and daemon share a host.
+//! That is a premise, not a protection: every path is checked by `store_worktree_paths::Guard`
+//! (absolute, resolved, no symlinked final component, kept out of the daemon's own state).
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -15,7 +18,7 @@ use serde_json::{Value, json};
 use weftos_store::backend::{BackendError, ObjectBackend as S1, ObjectMeta};
 use weftos_store::claim_watch::{ClaimWatch, claim_merge_observed};
 use weftos_store::follower::{self, Change, FollowState, LeftoverPolicy, Why};
-use weftos_store::promote::{ArchiveTarget, PromotionPolicy, WorktreeMeta, promote, write_meta};
+use weftos_store::promote::{ArchiveTarget, PromotionPolicy, WorktreeMeta, is_promoted, promote, read_meta, write_meta};
 use weftos_store::service::{ARCHIVE_BUCKET, Parties, archive_key};
 use weftos_store::share::{
     Actor, Limits, TreeSource, mark_handoff, mark_merged_at, parse_name_status_z, publish_tree,
@@ -29,8 +32,10 @@ use weftos_store::share_fetch::{
 };
 use weftos_store::{StoreName, StoreService};
 
+use crate::store_worktree_paths::{Guard, Use};
+
 /// Delegates to the service's shared backend so the S2 code (generic over a sized backend) can use it.
-struct Op(Arc<dyn S1>);
+pub(crate) struct Op(pub(crate) Arc<dyn S1>);
 
 impl S1 for Op {
     fn put(&self, b: &str, k: &str, d: &[u8], n: bool) -> Result<ObjectMeta, BackendError> {
@@ -45,8 +50,14 @@ impl S1 for Op {
     fn head(&self, b: &str, k: &str) -> Result<ObjectMeta, BackendError> {
         self.0.head(b, k)
     }
+    fn delete_if_match(&self, b: &str, k: &str, e: &str) -> Result<(), BackendError> {
+        self.0.delete_if_match(b, k, e)
+    }
     fn delete(&self, b: &str, k: &str) -> Result<(), BackendError> {
         self.0.delete(b, k)
+    }
+    fn put_if_match(&self, b: &str, k: &str, d: &[u8], e: &str) -> Result<ObjectMeta, BackendError> {
+        self.0.put_if_match(b, k, d, e)
     }
     fn copy(&self, sb: &str, sk: &str, db: &str, dk: &str) -> Result<ObjectMeta, BackendError> {
         self.0.copy(sb, sk, db, dk)
@@ -88,6 +99,9 @@ struct P {
     json: bool,
     #[serde(default)]
     confirmed: bool,
+    /// `follow`: list the registry instead of reading the digest.
+    #[serde(default)]
+    full: bool,
     /// Who is acting; filled in by the CLI from the environment.
     agent: Option<String>,
     host: Option<String>,
@@ -113,15 +127,16 @@ fn project_ok(s: &str) -> Result<&str, String> {
     }
 }
 
-fn read_list(path: &Option<String>) -> Result<Vec<u8>, String> {
+fn read_list(g: &Guard, path: &Option<String>, what: &str) -> Result<Vec<u8>, String> {
     match path {
         None => Ok(Vec::new()),
         Some(p) => {
-            let md = std::fs::metadata(p).map_err(|e| format!("{p}: {e}"))?;
+            let c = g.check(p, what, Use::ReadFile)?;
+            let md = std::fs::metadata(&c).map_err(|e| format!("--{what}: {e}"))?;
             if !md.is_file() || md.len() > 32 << 20 {
-                return Err(format!("{p}: not a regular file under 32 MiB"));
+                return Err(format!("--{what}: not a regular file under 32 MiB"));
             }
-            std::fs::read(p).map_err(|e| format!("{p}: {e}"))
+            std::fs::read(&c).map_err(|e| format!("--{what}: {e}"))
         }
     }
 }
@@ -300,6 +315,28 @@ fn why_str(w: Why) -> &'static str {
     }
 }
 
+/// A verb that writes into a worktree must find a live, matching worktree (review F6, F8): not
+/// archived or closed, created (so its metadata names this project and slug, which also stops a
+/// slug whose 48-bit bucket hash collides with another from writing into that other's bucket).
+/// A store another daemon created is fine: it need not be known here, only be a real worktree.
+fn live_worktree(svc: &StoreService, b: &Op, n: &Names, project: &str, slug: &str) -> Result<(), String> {
+    for name in [&n.wt_name, &n.pr_name] {
+        if svc.is_archived(name) == Some(true) {
+            return Err(format!("{name} is archived; refusing"));
+        }
+    }
+    let meta = match read_meta(b, &n.wt) {
+        Ok(m) => m,
+        Err(weftos_store::overlay::S2Error::Backend(m)) if m.contains("no such bucket") => None,
+        Err(e) => return Err(e.to_string()),
+    };
+    match meta {
+        None => Err(format!("worktree {slug} was never created here (no metadata); run create first")),
+        Some(m) if m.slug == slug && m.project.eq_ignore_ascii_case(project) => Ok(()),
+        Some(m) => Err(format!("bucket {} belongs to worktree {} of project {}, not {slug}", n.wt, m.slug, m.project)),
+    }
+}
+
 /// Re-derive one worktree's registry entry from its own bucket (the daemon is the only writer).
 fn refresh(b: &Op, pr: &str, slug: &str, wt: &str, sign: &SignCfg) -> Result<(), String> {
     let e = |e: weftos_store::overlay::S2Error| e.to_string();
@@ -369,7 +406,7 @@ pub fn run_full(svc: &StoreService, mesh: &str, method: &str, params: Value, now
                     project: project.clone(),
                     branch: need(&p.branch, "branch")?.into(),
                     base_commit: need(&p.base, "base")?.into(),
-                    created_ms: now_ms,
+                    created_ms,
                 },
             )
             .map_err(e)?;
@@ -378,14 +415,24 @@ pub fn run_full(svc: &StoreService, mesh: &str, method: &str, params: Value, now
         "publish" => {
             let slug = need(&p.slug, "slug")?;
             let n = names(mesh, &project, slug)?;
-            let root = PathBuf::from(need(&p.root, "root")?);
-            if !root.is_absolute() || !root.is_dir() {
-                return Err("--root must be an absolute directory".into());
+            live_worktree(svc, &b, &n, &project, slug)?;
+            let root = guard.check(need(&p.root, "root")?, "root", Use::ReadDir)?;
+            // The hook publishes from the top of a git worktree; anything else is not a worktree.
+            if !root.join(".git").exists() {
+                return Err("--root must be the top of a git worktree (no .git there)".into());
             }
-            let paths = nul_list(&read_list(&p.paths_z)?)?;
-            let uncommitted = nul_list(&read_list(&p.uncommitted_z)?)?;
-            let changes = parse_name_status_z(&read_list(&p.changes_z)?).map_err(e)?;
-            let bundle = p.bundle.as_deref().map(Path::new);
+            let paths = nul_list(&read_list(guard, &p.paths_z, "paths-z")?)?;
+            let uncommitted = nul_list(&read_list(guard, &p.uncommitted_z, "uncommitted-z")?)?;
+            let changes = parse_name_status_z(&read_list(guard, &p.changes_z, "changes-z")?).map_err(e)?;
+            // A listed path that resolves into the daemon's own state is refused outright, not skipped.
+            if let Some(bad) = paths.iter().find(|rel| guard.is_protected(&root.join(rel))) {
+                return Err(format!("{bad}: inside the daemon's own state; refused"));
+            }
+            let bundle = match p.bundle.as_deref() {
+                Some(b) => Some(guard.check(b, "bundle", Use::ReadFile)?),
+                None => None,
+            };
+            let bundle = bundle.as_deref();
             let writer = who(&p);
             let rep = publish_tree(
                 &b,
@@ -417,12 +464,16 @@ pub fn run_full(svc: &StoreService, mesh: &str, method: &str, params: Value, now
         }
         "fetch" => {
             let n = names(mesh, &project, need(&p.slug, "slug")?)?;
-            let dest = PathBuf::from(need(&p.dest, "dest")?);
+            let dest = guard.check(need(&p.dest, "dest")?, "dest", Use::WriteDir)?;
+            let out = match &p.bundle_out {
+                Some(o) => Some(guard.check(o, "bundle-out", Use::WriteFile)?),
+                None => None,
+            };
             std::fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
             let r = fetch_tree(&b, &n.wt, &dest, Select::All, p.force).map_err(e)?;
             let mut head = None;
-            if let Some(out) = &p.bundle_out {
-                head = Some(fetch_bundle(&b, &n.wt, Path::new(out)).map_err(e)?);
+            if let Some(out) = &out {
+                head = Some(fetch_bundle(&b, &n.wt, out).map_err(e)?);
             }
             Ok(json!({
                 "written": r.written.len(), "unchanged": r.unchanged.len(), "conflicts": r.conflicts,
@@ -473,7 +524,7 @@ pub fn run_full(svc: &StoreService, mesh: &str, method: &str, params: Value, now
         }
         "follow" => {
             let n = names(mesh, &project, "x")?;
-            let sp = PathBuf::from(need(&p.state, "state")?);
+            let sp = guard.check(need(&p.state, "state")?, "state", Use::WriteFile)?;
             let mut st = FollowState::load(&sp).map_err(e)?;
             let ch = match &sign.trusted {
                 Some(t) => poll_verified(&b, &n.reg, &mut st, &Trusted(t), sign.require, p.confirmed),
@@ -491,6 +542,7 @@ pub fn run_full(svc: &StoreService, mesh: &str, method: &str, params: Value, now
             Ok(json!({
                 "hits": r.hits.iter().map(|h| json!({"slug": h.slug, "path": h.path, "title": h.title, "state": h.state})).collect::<Vec<_>>(),
                 "unreadable": r.unreadable,
+                "unreadable_entries": bad_entries,
             }))
         }
         "leftovers" => {
@@ -503,7 +555,7 @@ pub fn run_full(svc: &StoreService, mesh: &str, method: &str, params: Value, now
             let slug = need(&p.slug, "slug")?;
             let n = names(mesh, &project, slug)?;
             let entry = summarize(&b, slug, &n.wt).map_err(e)?.ok_or("worktree has nothing published")?;
-            let r = follower::sync_docs(&b, &entry, Path::new(need(&p.cache, "cache")?)).map_err(e)?;
+            let r = follower::sync_docs(&b, &entry, &guard.check(need(&p.cache, "cache")?, "cache", Use::WriteDir)?).map_err(e)?;
             Ok(json!({"written": r.written.len(), "unchanged": r.unchanged.len(), "refused": r.refused}))
         }
         "overlaps" => {
@@ -514,6 +566,9 @@ pub fn run_full(svc: &StoreService, mesh: &str, method: &str, params: Value, now
             let r = follower::overlaps(&b, &ea, &eb).map_err(e)?;
             Ok(json!({
                 "same_base": r.same_base,
+                // On different bases a path can differ only because the base moved: discount it.
+                "reliable": r.same_base,
+                "base_a": r.base_a, "base_b": r.base_b,
                 "overlaps": r.overlaps.iter().map(|o| json!({"path": o.path, "kind": format!("{:?}", o.kind)})).collect::<Vec<_>>(),
             }))
         }

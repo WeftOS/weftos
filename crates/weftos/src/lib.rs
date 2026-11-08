@@ -46,6 +46,7 @@
 //!
 //! Source: <https://github.com/WeftOS/weftos>
 
+pub mod agent_directory;
 pub mod init;
 
 // Re-export the kernel under the weftos namespace

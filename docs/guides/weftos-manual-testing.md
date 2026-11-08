@@ -972,8 +972,15 @@ weaver chain verify
 weaver chain status
 # Expected: chain_id, sequence, event count
 
-# Trigger manual checkpoint
+# Trigger manual checkpoint (writes the signed RVF checkpoint)
 weaver chain checkpoint
+# Expected: "Signed: yes (<runtime>/chain.rvf)"; chain verify now reports
+# "Signature: VALID through sequence N (Ed25519 + ML-DSA-65)"
+
+# One event in full, with the checkpoint signature that covers it
+weaver chain get 3
+# Expected: payload plus coverage.status = signed, or
+# "unsigned: pending checkpoint" for an event newer than the last checkpoint
 
 # Shutdown and restart daemon
 weaver kernel stop
