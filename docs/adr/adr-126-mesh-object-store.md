@@ -332,6 +332,26 @@ named version, since a repeat could add a second version in a locked store or tu
 Tested without sockets (decision table, wait schedule, unreachable port, status-to-error map). Not done: no circuit breaker, so a
 dead RustFS costs 3 quick tries per call; a timeout still holds a caller for the full 30 s.
 
+**S3/S4 pile (2026-11-08), one commit per slice, each with unit tests and a live test on a throwaway loopback RustFS 1.0.4.**
+
+| # | What | API | Seen on RustFS |
+|---|---|---|---|
+| 1 | Read back Object Lock config | `ObjectBackend::get_lock_config(bucket) -> LockConfig{enabled, default}`, `put_default_retention`, `StoreService::lock_config(store)` | plain bucket: `enabled:false` (404 `ObjectLockConfigurationNotFoundError`); locked: `enabled:true`; a default retention reads back and a put with no headers inherits it |
+| 2 | Lifecycle rules | `AdminBackend::put_lifecycle(bucket, &[LifecycleRule])` (empty list removes), `get_lifecycle`, `StoreService::set_lifecycle(store, rules, actor)` (chain `store.lifecycle`) / `lifecycle(store)`; rule = id, prefix, enabled, `expire_days`, `noncurrent_days`, `abort_multipart_days` | written and read back identically, no Content-MD5 needed; Object Lock still wins over an expiry |
+| 3 | Extend retention after commit | `get_retention`, `put_retention`, `extend_retention(bucket, key, version, until, mode)` (only lengthens, keeps the current mode), `StoreService::extend_retention(who, ..)` (the `append` role may call it: it only adds protection) | an object put with no hold is stamped COMPLIANCE, lengthened, read back; RustFS refuses to shorten it even with bypass |
+| 4 | Multipart upload with lock headers | `create_multipart`/`upload_part`/`complete_multipart`/`abort_multipart`, `put_stream(bucket, key, reader, part_size, &PutOpts)` (8 MiB parts, one part in memory), `StoreService::put_stream(who, store, key, reader, &opts)` | 11 MiB in three parts, retention applied to the finished object, bytes identical, `If-None-Match` enforced at complete, abort leaves nothing; the 512 MiB whole-body limit no longer applies; local backends still read it whole and refuse lock options |
+| 5 | Retire a node on unpair | `StoreService::retire_node_store(node_store, actor)` and RPC `store.node.retire`: archives the store, records the id as retired (persists), `create_store`/`ensure_store` refuse it | data lands in the archive bucket, grants off, id refused |
+| 7 | Dead RustFS | `Breaker{threshold 5, cooldown 10 s}` (`with_breaker`, `breaker_open`), `with_timeout(d)` view sharing the breaker | after 5 failed-to-connect requests in a row calls fail at once with `Unavailable("circuit open")` for the cooldown, then one probe; any HTTP answer (403, 404, 500) closes it |
+
+Slice 6 (S3's ask) is in `clawft-kernel`, not the store: the exposure activity log (`ActivityLog`) did `next_seq + 1` unchecked, a panic in
+debug and a wrap to 0 in release at `u64::MAX`, and `open()` did `last.seq + 1` on a file, so a log whose last record was `u64::MAX` could not be opened. Now `u64::MAX` is a
+usable last number; after it, `append` keeps nothing, returns the record with `seq` `u64::MAX` and an empty `hash`, counts it in `dropped()`
+and logs once; `is_exhausted()` says so; `open()` of such a file opens exhausted; and `verify` rejects a sequence that repeats or steps back.
+Reaching it takes 1.8e19 appends, so this is a guard against a damaged or hostile file, not an expected state.
+
+Notes: `put_stream` through the service logs the real size. A multipart part PUT is retried (same part number replaces the part); nothing
+else that writes is. The breaker counts only "could not reach RustFS" (no connection, timeout, 502-504), not a 500 or 429.
+
 **The daemon now has the receiver** (`clawft-weave/src/store_ingest.rs`, 2026-11-08): a loopback HTTP listener, off unless
 `WEFTOS_STORE_INGEST_ADDR` is set, POST only, 1 MiB cap, authenticated by a 256-bit secret in the URL path
 (`store-ingest-token`, 0600; the URLs are written to `store-ingest-urls`), because RustFS's webhook `auth_token` is unverified.

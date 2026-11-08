@@ -135,3 +135,57 @@ fn counts_use_the_window_and_remember_last_use() {
     let all = log.counts(90_000_000, u64::MAX);
     assert_eq!(all["infer.chat"].total, 2);
 }
+
+#[test]
+fn the_last_sequence_number_is_used_then_appends_are_dropped_not_wrapped() {
+    let log = ActivityLog::memory(Retention::default()).start_at(u64::MAX - 1);
+    let a = log.append(act("e", "n", "ok"), 1);
+    let b = log.append(act("e", "n", "ok"), 2);
+    assert_eq!((a.seq, b.seq), (u64::MAX - 1, u64::MAX));
+    assert!(log.is_exhausted() && log.dropped() == 0);
+    // Past the end: no panic, no wrap to 0, nothing stored, and the caller can tell.
+    let c = log.append(act("e", "n", "ok"), 3);
+    let d = log.append(act("e", "n", "ok"), 4);
+    assert_eq!((c.seq, c.hash.as_str(), d.seq), (u64::MAX, "", u64::MAX));
+    assert_eq!(c.prev, b.hash, "it names the tip it would have chained to");
+    assert_eq!(log.dropped(), 2);
+    assert_eq!(log.query(Some("e"), 10).len(), 2, "only the two real records are kept");
+    assert!(log.verify().is_ok(), "the chain is intact");
+}
+
+#[test]
+fn a_log_whose_last_record_is_u64_max_opens_exhausted_instead_of_overflowing() {
+    let d = tmpdir("maxseq");
+    let p = d.join("a.jsonl");
+    {
+        let log = ActivityLog::open(&p, Retention::default(), 0).unwrap().start_at(u64::MAX);
+        let r = log.append(act("e", "n", "ok"), 10);
+        assert_eq!(r.seq, u64::MAX);
+        assert!(log.is_exhausted());
+        assert_eq!(log.append(act("e", "n", "ok"), 11).hash, "");
+    }
+    // Reopening used to compute seq + 1 here (a panic in debug, a wrap to 0 in release).
+    let again = ActivityLog::open(&p, Retention::default(), 0).unwrap();
+    assert!(again.is_exhausted());
+    assert_eq!(again.append(act("e", "n", "ok"), 12).seq, u64::MAX);
+    assert_eq!(again.query(Some("e"), 10).len(), 1);
+    assert!(again.verify().is_ok());
+}
+
+#[test]
+fn a_sequence_that_repeats_or_steps_back_breaks_the_chain() {
+    let d = tmpdir("seqorder");
+    let p = d.join("a.jsonl");
+    {
+        let log = ActivityLog::open(&p, Retention::default(), 0).unwrap();
+        for t in 1..=3 {
+            log.append(act("e", "n", "ok"), t);
+        }
+    }
+    // Reorder two lines: the hashes still chain only if recomputed, and the seq order is wrong anyway.
+    let text = std::fs::read_to_string(&p).unwrap();
+    let mut lines: Vec<&str> = text.lines().collect();
+    lines.swap(1, 2);
+    std::fs::write(&p, lines.join("\n") + "\n").unwrap();
+    assert!(ActivityLog::open(&p, Retention::default(), 0).is_err());
+}
