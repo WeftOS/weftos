@@ -111,6 +111,22 @@ impl<M: StsMinter, G: GrantCheck, A: AuditSink, C: Clock> EdgeBroker<M, G, A, C>
         refuse(code, msg)
     }
 
+    /// The minter failed or misbehaved: the detail goes to the audit sink, the
+    /// edge sees only a generic message.
+    fn minter_down(&self, node: &str, action: &'static str, detail: &str) -> LeaseRefused {
+        self.note(node, action, Some(RefusalCode::Unavailable), format!("minter: {detail}"));
+        refuse(RefusalCode::Unavailable, "credential service unavailable")
+    }
+
+    /// Never hand out a session that outlives the cap, whatever the store says.
+    fn check_lifetime(&self, node: &str, action: &'static str, c: &crate::creds::TempCredentials) -> Result<(), LeaseRefused> {
+        let limit = self.clock.now() + MAX_LEASE_TTL_SECS + crate::creds::CLOCK_SKEW_SECS;
+        if c.expires_at > limit {
+            return Err(self.minter_down(node, action, "session lifetime above cap"));
+        }
+        Ok(())
+    }
+
     fn admit(&self, node: &str, action: &'static str, access: Access) -> Result<(), LeaseRefused> {
         if crate::policy::validate_node_id(node).is_err() {
             return Err(self.deny(node, action, RefusalCode::BadRequest, "invalid node id"));
@@ -155,9 +171,8 @@ impl<M: StsMinter, G: GrantCheck, A: AuditSink, C: Clock> EdgeBroker<M, G, A, C>
         let bucket = node_bucket(node).map_err(|_| refuse(RefusalCode::BadRequest, "invalid node id"))?;
         let policy = bucket_session_policy(&bucket, Access::Write);
         let ttl = self.cfg.sts_ttl_secs.min(MAX_LEASE_TTL_SECS);
-        let creds = self.minter.assume_role(&principal_for(node), &policy, ttl).await.map_err(|e| {
-            self.deny(node, "sts", RefusalCode::Unavailable, &format!("minter: {}", e.0))
-        })?;
+        let creds = self.minter.assume_role(&principal_for(node), &policy, ttl).await.map_err(|e| self.minter_down(node, "sts", &e.0))?;
+        self.check_lifetime(node, "sts", &creds)?;
         self.note(node, "sts", None, format!("bucket={bucket} ttl={ttl}s"));
         Ok(LeaseResponse::Sts {
             credentials: creds,
@@ -186,9 +201,8 @@ impl<M: StsMinter, G: GrantCheck, A: AuditSink, C: Clock> EdgeBroker<M, G, A, C>
         let ttl = ttl_secs.clamp(1, self.cfg.max_presign_secs.min(MAX_LEASE_TTL_SECS));
         // The session behind the URL is scoped to this one object and action.
         let policy = object_session_policy(&bucket, key, s3_action);
-        let creds = self.minter.assume_role(&principal_for(node), &policy, ttl.max(60)).await.map_err(|e| {
-            self.deny(node, action, RefusalCode::Unavailable, &format!("minter: {}", e.0))
-        })?;
+        let creds = self.minter.assume_role(&principal_for(node), &policy, ttl.max(60)).await.map_err(|e| self.minter_down(node, action, &e.0))?;
+        self.check_lifetime(node, action, &creds)?;
         let now = self.clock.now();
         let signer = HeaderSigner {
             access_key: &creds.access_key,

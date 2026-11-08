@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::broker::{BrokerConfig, EdgeBroker};
-use crate::clock::ManualClock;
+use crate::clock::{Clock as _, ManualClock};
 use crate::edge::{EdgeError, EdgeNodeStore};
 use crate::grants::{Applied, GrantEvent, GrantLedger, GrantOp, apply_and_enforce, node_store_name};
 use crate::mock::{MockRustfs, VecAudit};
@@ -460,4 +460,82 @@ fn keygen_os_keys_differ_and_are_provisionable() {
     let b = generate_node_key("edge-7").unwrap();
     assert_ne!(a.secret_key, b.secret_key);
     assert_eq!(a.secret_key.len(), SECRET_LEN);
+}
+
+// ---- adversarial review fixes -----------------------------------------------------
+
+/// A minter that misbehaves in the ways a real store could.
+struct Rogue {
+    lifetime: u64,
+    clock: ManualClock,
+}
+
+impl crate::broker::StsMinter for Rogue {
+    async fn assume_role(&self, _p: &str, _pol: &str, _ttl: u64) -> Result<crate::creds::TempCredentials, crate::broker::StsError> {
+        if self.lifetime == 0 {
+            return Err(crate::broker::StsError("AssumeRole: HTTP 403 for node-secret-internal".into()));
+        }
+        Ok(crate::creds::TempCredentials {
+            access_key: "A".into(),
+            secret_key: "S".into(),
+            session_token: "T".into(),
+            expires_at: self.clock.now() + self.lifetime,
+        })
+    }
+    async fn disable_principal(&self, _p: &str) -> Result<(), crate::broker::StsError> { Ok(()) }
+    async fn enable_principal(&self, _p: &str) -> Result<(), crate::broker::StsError> { Ok(()) }
+}
+
+fn rogue_broker(lifetime: u64) -> (EdgeBroker<Rogue, crate::mock::StaticGrants, VecAudit, ManualClock>, VecAudit) {
+    let clock = ManualClock::new(T0);
+    let g = crate::mock::StaticGrants::default();
+    g.grant("n1", &[Access::Write]);
+    let audit = VecAudit::default();
+    let ep = Endpoint { scheme: "http".into(), host: HOST.into() };
+    (EdgeBroker::new(BrokerConfig::new(ep), Rogue { lifetime, clock: clock.clone() }, g, audit.clone(), clock), audit)
+}
+
+#[test]
+fn broker_refuses_a_session_that_outlives_the_cap_even_if_the_store_granted_it() {
+    let (b, _) = rogue_broker(3600);
+    let e = run(b.lease("n1", LeaseRequest::Sts)).unwrap_err();
+    assert_eq!(e.code, RefusalCode::Unavailable);
+    let e = run(b.lease("n1", LeaseRequest::PresignPut { key: "k".into(), ttl_secs: 60 })).unwrap_err();
+    assert_eq!(e.code, RefusalCode::Unavailable);
+    // A compliant store is still served.
+    let (ok, _) = rogue_broker(900);
+    assert!(run(ok.lease("n1", LeaseRequest::Sts)).is_ok());
+}
+
+#[test]
+fn minter_detail_goes_to_the_audit_log_not_to_the_edge() {
+    let (b, audit) = rogue_broker(0);
+    let e = run(b.lease("n1", LeaseRequest::Sts)).unwrap_err();
+    assert!(!e.message.contains("secret-internal") && !e.message.contains("403"), "{}", e.message);
+    assert!(audit.events().iter().any(|a| a.detail.contains("secret-internal")));
+}
+
+#[test]
+fn revoke_disables_the_user_even_when_the_key_store_has_no_entry() {
+    // Provisioned in RustFS, but absent from the parent's key map.
+    let r = rig(&[], &[]);
+    r.store.add_user("node-ghost", "s", &bucket_session_policy("n-ghost", Access::Write));
+    pair(&r, 1, "ghost");
+    run(r.broker.revoke("ghost")).unwrap();
+    assert!(r.store.log().iter().any(|(s, _, _, p)| *s == 200 && p.contains("set-user-status")), "{:?}", r.store.log());
+}
+
+#[test]
+fn debug_output_of_transport_types_carries_no_secrets() {
+    let req = HttpRequest {
+        method: "PUT".into(), scheme: "http".into(), host: HOST.into(), path: "/p".into(), query: vec![],
+        headers: vec![("x-amz-security-token".into(), "TOKEN-SECRET".into())],
+        body: b"secretKey=LONG-LIVED".to_vec(),
+    };
+    let resp = HttpResponse { status: 200, headers: vec![], body: b"<SecretAccessKey>SAK</SecretAccessKey>".to_vec() };
+    let pre = Presigned { method: "GET".into(), endpoint: Endpoint { scheme: "http".into(), host: HOST.into() }, path: "/b/k".into(), query: vec![("X-Amz-Signature".into(), "SIG".into())], url: "http://h/b/k?X-Amz-Security-Token=TOK".into(), expires_at: 1 };
+    let all = format!("{req:?} {resp:?} {pre:?}");
+    for bad in ["TOKEN-SECRET", "LONG-LIVED", "SAK", "SIG", "TOK"] {
+        assert!(!all.contains(bad), "{bad} leaked: {all}");
+    }
 }

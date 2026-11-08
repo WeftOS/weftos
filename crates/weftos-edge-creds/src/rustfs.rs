@@ -170,9 +170,10 @@ impl<H: ObjectTransport, K: NodeKeys, C: Clock> RustfsMinter<H, K, C> {
     }
 
     async fn set_status(&self, principal: &str, status: &str) -> Result<(), StsError> {
-        let user = self.keys.key_for(principal).ok_or_else(|| StsError(format!("no RustFS user for {principal}")))?;
+        // The admin key signs; the target user is named by its principal, so no
+        // lookup in the key store can make a disable fail open.
         let path = format!("{}/set-user-status", self.cfg.admin_prefix);
-        let query = vec![("accessKey".to_string(), user.access_key.clone()), ("status".to_string(), status.to_string())];
+        let query = vec![("accessKey".to_string(), principal.to_string()), ("status".to_string(), status.to_string())];
         let req = self.request(&self.admin, sigv4::SERVICE, "PUT", &path, Parts { query, ..Default::default() });
         let r = self.http.send(req).await.map_err(|e| StsError(e.to_string()))?;
         if (200..300).contains(&r.status) { Ok(()) } else { Err(StsError(format!("set-user-status {status}: HTTP {}", r.status))) }

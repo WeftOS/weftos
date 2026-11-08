@@ -24,7 +24,7 @@ pub enum LeaseRequest {
     PresignGet { key: String, ttl_secs: u64 },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Presigned {
     pub method: String,
     pub endpoint: Endpoint,
@@ -58,7 +58,7 @@ pub struct LeaseRefused {
     pub message: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct HttpRequest {
     pub method: String,
     pub scheme: String,
@@ -75,7 +75,7 @@ impl HttpRequest {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct HttpResponse {
     pub status: u16,
     pub headers: Vec<(String, String)>,
@@ -94,4 +94,24 @@ pub trait ParentLink {
 /// The edge's HTTP client (fetch on the browser build), supplied by the host.
 pub trait ObjectTransport {
     async fn send(&self, req: HttpRequest) -> Result<HttpResponse, TransportError>;
+}
+
+// Requests and responses carry session tokens, signatures and, on the admin
+// path, long-lived secrets, so Debug prints shape only.
+impl std::fmt::Debug for Presigned {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Presigned({} {}, <redacted>)", self.method, self.path)
+    }
+}
+
+impl std::fmt::Debug for HttpRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "HttpRequest({} {}{}, {} body bytes, <redacted>)", self.method, self.host, self.path, self.body.len())
+    }
+}
+
+impl std::fmt::Debug for HttpResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "HttpResponse({}, {} body bytes, <redacted>)", self.status, self.body.len())
+    }
 }
