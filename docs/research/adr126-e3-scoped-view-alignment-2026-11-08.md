@@ -57,6 +57,7 @@ Code is `ViewManifest` at LIB `view/spec.rs` L231-249, built at `view/tree.rs` L
 | `base_includes` | list of `{prefix, at}` | library | audit only | |
 | `work_prefix` | string or null | library | audit only | normalised with a trailing slash |
 | `mount_points` | list of names | library | launcher | `work` first when there is a work tree, then the spec's. Already present as empty dirs in `base/` |
+| `deny` | string array | library (the spec's deny list as applied; built-in denylists excluded) | launcher, to verify its globs took effect | added 2026-11-08 PM at the Tapestry lane's request (068ea6723 on `wt/adr126-e1-view-verbs`); serde default, so older manifests read as empty |
 | `refresh` | `{rpc, root}` | library | supervisor | `rpc` is the constant `store.view.refresh` (`view.rs` L57) |
 | `opened_ms`, `updated_ms` | u64 | library | audit only | `updated_ms` moves on every renew and publish |
 
