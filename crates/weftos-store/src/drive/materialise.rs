@@ -155,6 +155,17 @@ fn apply_remote<B: ObjectBackend + ?Sized>(
             }
             (true, Local::Modified { hash: lh }) => {
                 let hash = fetch(rep)?;
+                if hash == lh {
+                    // Both sides hold the same bytes: a pull that placed this file and died before
+                    // saving the index, or the same edit made twice. Adopt, as the create case does.
+                    let md = std::fs::metadata(dest.join(rel))?;
+                    index.entries.insert(
+                        rel.clone(),
+                        Entry { size: md.len(), mtime_ns: mtime_ns(&md), hash, etag: meta.etag.clone() },
+                    );
+                    rep.unchanged += 1;
+                    continue;
+                }
                 let bytes = cas.read(&hash)?;
                 record(dest, index, rel, ConflictKind::BothModified, Some((&meta.etag, &bytes)), Some(&lh), "")?;
                 rep.conflicts.push(rel.clone());

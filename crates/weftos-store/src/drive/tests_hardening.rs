@@ -258,6 +258,33 @@ pub(super) fn tombstone_cycle<B: ObjectBackend + ?Sized>(be: &B, bk: &str) {
     assert_eq!(rd(&b, "x.txt"), "x v3");
 }
 
+/// 3b: a pull that placed files but died before saving the index (the save is its last step).
+/// The next pull must adopt what is already on disk, not call it a conflict.
+pub(super) fn pull_that_lost_its_index_save<B: ObjectBackend + ?Sized>(be: &B, bk: &str) {
+    let r = Rig::new(be, bk, "c2");
+    r.seed("x.txt", OX);
+    r.seed("y.txt", OY);
+    let (a, b) = (r.join("a"), r.join("b"));
+    wr(&b, "x.txt", BX);
+    wr(&b, "n.txt", "new on B");
+    std::fs::remove_file(b.join("y.txt")).unwrap();
+    let up = r.up(&b);
+    assert_eq!((up.put.len(), up.deleted.len()), (2, 1));
+    let saved = std::fs::read(a.join(DRIVE_DIR).join("index.json")).unwrap();
+    let dn = sync_down(be, &a).unwrap();
+    assert_eq!((dn.updated, dn.created, dn.removed), (vec!["x.txt".to_owned()], vec!["n.txt".to_owned()], vec!["y.txt".to_owned()]));
+    // Crash: files placed and removed, index never saved.
+    std::fs::write(a.join(DRIVE_DIR).join("index.json"), saved).unwrap();
+    let dn = sync_down(be, &a).unwrap();
+    assert!(dn.conflicts.is_empty(), "false conflicts after a lost index save: {dn:?}");
+    assert!(rows(&a).is_empty());
+    assert_eq!((rd(&a, "x.txt"), rd(&a, "n.txt")), (BX.to_owned(), "new on B".to_owned()));
+    let ix = Index::load(&a).unwrap().unwrap();
+    assert_eq!(ix.entries["x.txt"].etag, r.etag("x.txt"));
+    assert!(!ix.entries.contains_key("y.txt") && ix.conflicts.is_empty());
+    assert!(scan(&a, &ix, &Default::default()).unwrap().changes.is_empty());
+}
+
 pub(super) fn mem() -> MemBackend {
     let m = MemBackend::new();
     m.create_bucket(BK, &[]).unwrap();
@@ -283,3 +310,9 @@ fn a_remote_write_inside_the_quiet_period_never_overwrites_the_edit() {
 fn tombstones_survive_recreate_and_redelete_and_a_stale_device_cannot_win() {
     tombstone_cycle(&mem(), BK);
 }
+
+#[test]
+fn a_pull_that_died_before_saving_its_index_adopts_instead_of_conflicting() {
+    pull_that_lost_its_index_save(&mem(), BK);
+}
+
