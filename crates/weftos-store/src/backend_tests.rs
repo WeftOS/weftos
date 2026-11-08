@@ -200,3 +200,48 @@ fn extend_retention_only_ever_lengthens_and_keeps_the_current_mode() {
     let none = Held::with(None);
     assert_eq!(none.extend_retention("b", "k", "v", 5, LockMode::Governance).unwrap(), Retention { mode: LockMode::Governance, until_unix_s: 5 });
 }
+
+#[test]
+fn a_key_segment_over_255_bytes_is_refused_wherever_it_sits_and_255_is_fine() {
+    let seg = |n: usize| "a".repeat(n);
+    assert!(check_key(&seg(255)).is_ok());
+    assert!(matches!(check_key(&seg(256)), Err(BackendError::BadKey(_))), "256 bytes in one segment");
+    for k in [format!("{}/x", seg(256)), format!("x/{}/y", seg(256)), format!("x/{}", seg(256)), format!("{}/{}", seg(255), seg(256))] {
+        assert!(matches!(check_key(&k), Err(BackendError::BadKey(_))), "{} bytes", k.len());
+    }
+    // Several full segments are fine while the total stays inside 512; the limit is per segment.
+    assert!(check_key(&format!("{}/{}", seg(255), seg(256 - 2))).is_ok());
+    // Bytes, not characters: 128 two-byte characters are 256 bytes.
+    assert!(check_key(&"é".repeat(127)).is_ok());
+    assert!(matches!(check_key(&"é".repeat(128)), Err(BackendError::BadKey(_))));
+    // The old total rule still holds.
+    assert!(matches!(check_key(&format!("{}/{}/{}", seg(200), seg(200), seg(113))), Err(BackendError::BadKey(_))), "513 bytes");
+    assert!(check_key(&format!("{}/{}/{}", seg(200), seg(200), seg(110))).is_ok(), "512 bytes");
+}
+
+#[test]
+fn check_key_agrees_with_its_rules_over_random_keys_and_a_backend_refuses_the_same() {
+    let mut r = crate::testrng::Rng::new(0x5E6_1E57);
+    let mem = MemBackend::new();
+    crate::backend::AdminBackend::create_bucket(&mem, "b", &[]).unwrap();
+    for i in 0..30_000 {
+        let nseg = r.range(1, 4) as usize;
+        let segs: Vec<String> = (0..nseg)
+            .map(|_| {
+                let n = match r.below(5) {
+                    0 => 255,
+                    1 => 256,
+                    2 => r.range(250, 260),
+                    _ => r.range(1, 40),
+                } as usize;
+                if r.chance(8) { "é".repeat(n / 2 + 1) } else { "k".repeat(n) }
+            })
+            .collect();
+        let key = segs.join("/");
+        let want = key.len() <= 512 && segs.iter().all(|s| s.len() <= 255);
+        assert_eq!(check_key(&key).is_ok(), want, "case {i}: segments {:?} total {}", segs.iter().map(String::len).collect::<Vec<_>>(), key.len());
+        if segs.iter().any(|s| s.len() > 255) {
+            assert!(matches!(mem.put("b", &key, b"x", false), Err(BackendError::BadKey(_))), "case {i}: the backend takes a key the check refuses");
+        }
+    }
+}

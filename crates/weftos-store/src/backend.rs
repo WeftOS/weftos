@@ -387,8 +387,12 @@ pub fn etag_of(data: &[u8]) -> String {
     blake3::hash(data).to_hex().to_string()
 }
 
+/// The longest one `/`-separated segment of a key, in bytes (measured on RustFS 1.0.4: 255 is
+/// accepted, 256 is `InvalidArgument`).
+pub const MAX_SEGMENT: usize = 255;
+
 /// An object key every backend accepts: non-empty, at most 512 bytes, no NUL or backslash,
-/// no empty, `.` or `..` segments, no leading or trailing `/`.
+/// no empty, `.` or `..` segments, no leading or trailing `/`, no segment over [`MAX_SEGMENT`] bytes.
 pub fn check_key(key: &str) -> Result<(), BackendError> {
     let bad = |why: &str| Err(BackendError::BadKey(format!("{key:?}: {why}")));
     if key.is_empty() || key.len() > 512 {
@@ -399,6 +403,11 @@ pub fn check_key(key: &str) -> Result<(), BackendError> {
     }
     if key.split('/').any(|s| s.is_empty() || s == "." || s == "..") {
         return bad("no empty, '.' or '..' segments");
+    }
+    // RustFS (and every file system under it) refuses one path segment over 255 bytes with an
+    // opaque InvalidArgument, below the total limit: say so here, where the cause is visible.
+    if key.split('/').any(|s| s.len() > MAX_SEGMENT) {
+        return bad("no segment over 255 bytes");
     }
     Ok(())
 }
