@@ -111,6 +111,23 @@ sweeper `write` on the release store (it can then overwrite too, which weakens t
 separation from CI), (b) add a `sweep+put` level that may put under `tombstones/*`, `quarantine/*` and
 `blobs/*` only, plus a service copy call. (b) is the narrower grant and is what S1 is asked to prepare.
 
+## S4 side of S1's lock read-back, lifecycle, extend-retention and multipart (prepared on the mock, 2026-11-08)
+
+Each seam is a defaulted method on `ReleaseBackend` (or `LifecycleBackend`), implemented on `MemoryBackend`
+and tested there. `StoreBackend` (S3) keeps the defaults until S1 lands the call; the switch is one `impl`
+override per row, no publisher change.
+
+| Seam | S4 behaviour (tested on the mock) | S1 call the S3 adapter will use | Until it lands |
+|---|---|---|---|
+| Lock read-back | `lock_config()`; a locked publish reads it first and refuses an unlocked bucket with one error, before any write | read of the bucket's Object Lock configuration | default `None`: the first locked put is the test |
+| Extend retention | `retention_of` + `extend_lock`; a reused blob is lengthened to the later floor and mode, never shortened or weakened (mock refuses both) | PutObjectRetention on the current version plus a read of its retention | default: a reused blob keeps the lock it was written with |
+| Lifecycle | `provision_lifecycle(rules)` sets then reads back; zero days, a mismatch and a silent server are errors | put and get of the bucket lifecycle configuration | not callable on S3 |
+| Multipart | `publish_files`: hashes in chunks, uploads through `put_file_if_absent` (mock reads 1 MiB parts), manifest identical to the bytes path | multipart create/part/complete with the lock headers on create and `If-None-Match` on complete (both measured on RustFS) | default reads the whole file |
+
+**The 512 MiB limit stays in `weaver store release publish` (`MAX_FILE_BYTES`) until multipart lands**,
+because without it the file path still holds the whole file in memory. When S1's multipart call exists,
+override `StoreBackend::put_file_if_absent` with it and set `MAX_FILE_BYTES` to `u64::MAX`.
+
 ## Not verified
 
 - Whether lifecycle respects a retention date at real day scale (only a sped-up scanner against wall-clock dates was seen), and whether it expires a version once its retention has lapsed.

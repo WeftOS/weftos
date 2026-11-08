@@ -17,13 +17,16 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use clap::{Args, Subcommand};
+/// Largest single artifact while the S3 backend has no multipart upload: its file path reads the whole
+/// file into memory. Lift this (set it to `u64::MAX`) when S1's multipart put lands and
+/// `StoreBackend::put_file_if_absent` uses it; the publisher itself already streams the hashing.
+pub const MAX_FILE_BYTES: u64 = 512 * 1024 * 1024;
+
 use weftos_release::{
-    Artifact, LockMode, LockPolicy, PublishOutcome, PublishRequest, ReleaseBackend, ReleasePublisher, ReleaseSigner, ReleaseStoreName,
+    FileArtifact, FileRequest, LockMode, LockPolicy, PublishOutcome, ReleaseBackend, ReleasePublisher, ReleaseSigner, ReleaseStoreName,
     route::CiRoute, s3::StoreBackend,
 };
 
-/// Largest single artifact: it is read into memory (a streaming upload comes with multipart support).
-pub const MAX_FILE_BYTES: u64 = 512 * 1024 * 1024;
 
 /// `weaver store release ...`
 #[derive(Args)]
@@ -89,9 +92,10 @@ pub fn resolve_route(flag: Option<&str>) -> anyhow::Result<CiRoute> {
 }
 
 /// Every regular file under `dir`, as artifacts with `/`-separated relative paths, sorted.
-/// Symlinks, special files and files over [`MAX_FILE_BYTES`] are refused.
-pub fn collect_artifacts(dir: &Path) -> anyhow::Result<Vec<Artifact>> {
-    fn walk(root: &Path, at: &Path, out: &mut Vec<Artifact>) -> anyhow::Result<()> {
+/// Symlinks, special files and files over [`MAX_FILE_BYTES`] are refused. Files are not read here: the
+/// publisher hashes them in chunks and uploads through the backend's file path.
+pub fn collect_artifacts(dir: &Path) -> anyhow::Result<Vec<FileArtifact>> {
+    fn walk(root: &Path, at: &Path, out: &mut Vec<FileArtifact>) -> anyhow::Result<()> {
         let mut entries: Vec<_> = std::fs::read_dir(at)?.collect::<Result<_, _>>()?;
         entries.sort_by_key(|e| e.file_name());
         for e in entries {
@@ -113,7 +117,7 @@ pub fn collect_artifacts(dir: &Path) -> anyhow::Result<Vec<Artifact>> {
                     .map(|c| c.as_os_str().to_str().ok_or_else(|| anyhow::anyhow!("{}: not UTF-8", path.display())))
                     .collect::<Result<Vec<_>, _>>()?
                     .join("/");
-                out.push(Artifact { path: rel, bytes: std::fs::read(&path)? });
+                out.push(FileArtifact { path: rel, file: path.clone() });
             } else {
                 anyhow::bail!("{}: not a regular file", path.display());
             }
@@ -151,7 +155,7 @@ pub async fn publish_dir<B: ReleaseBackend>(
     backend: &B,
     store: &ReleaseStoreName,
     signer: &ReleaseSigner,
-    req: PublishRequest,
+    req: FileRequest,
     now: u64,
     lock: Option<LockPolicy>,
 ) -> anyhow::Result<weftos_release::PublishReceipt> {
@@ -159,7 +163,7 @@ pub async fn publish_dir<B: ReleaseBackend>(
     if let Some(l) = lock {
         p = p.with_lock(l);
     }
-    Ok(p.publish(req, now).await?)
+    Ok(p.publish_files(req, now).await?)
 }
 
 /// A refused write is almost always the credential, not the release: say which roles can write.
@@ -216,7 +220,7 @@ pub async fn run(args: ReleaseArgs) -> anyhow::Result<()> {
             let objects = Arc::new(tokio::task::spawn_blocking(move || weftos_store::RustfsBackend::new(cfg)).await??);
             let backend = StoreBackend::for_release(objects, &name)?;
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs();
-            let req = PublishRequest { build_id, source_rev, created_at: now, builder, artifacts };
+            let req = FileRequest { build_id, source_rev, created_at: now, builder, artifacts };
             let r = publish_dir(&backend, &name, &signer, req, now, lock_policy(lock.as_deref(), lock_days)?)
                 .await
                 .map_err(explain_denied)?;
@@ -248,8 +252,8 @@ mod tests {
 
     const ULID: &str = "01JBXZ3N5C8QW4M2R7T9V6YH0K";
 
-    fn req(arts: Vec<Artifact>, id: &str) -> PublishRequest {
-        PublishRequest { build_id: id.into(), source_rev: "r".into(), created_at: 1_000, builder: "ci".into(), artifacts: arts }
+    fn req(arts: Vec<FileArtifact>, id: &str) -> FileRequest {
+        FileRequest { build_id: id.into(), source_rev: "r".into(), created_at: 1_000, builder: "ci".into(), artifacts: arts }
     }
 
     #[test]
@@ -340,7 +344,12 @@ mod tests {
         let st = ReleaseStoreName::new("m", ULID, "stable").unwrap();
         let signer = ReleaseSigner::from_seeds(&[7; 32], &[9; 32]);
         let be = MemoryBackend::new();
-        let a = |b: &[u8]| vec![Artifact { path: "bin/weaver".into(), bytes: b.to_vec() }];
+        let dir = tempfile::tempdir().unwrap();
+        let a = |b: &[u8]| {
+            let f = dir.path().join("weaver");
+            std::fs::write(&f, b).unwrap();
+            vec![FileArtifact { path: "bin/weaver".into(), file: f }]
+        };
         let r = publish_dir(&be, &st, &signer, req(a(b"v1"), "b1"), 1_000, None).await.unwrap();
         assert_eq!(r.outcome, PublishOutcome::Published);
         let r = publish_dir(&be, &st, &signer, req(a(b"v1"), "b1"), 1_000, None).await.unwrap();

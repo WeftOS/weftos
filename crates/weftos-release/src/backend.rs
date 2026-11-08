@@ -49,6 +49,25 @@ pub struct Lock {
     pub until: u64,
 }
 
+/// A bucket's Object Lock configuration, as read back from the server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BucketLock {
+    /// Object Lock is on (it can only be chosen when the bucket is made).
+    pub enabled: bool,
+    /// The default retention applied to a write that carries none: mode and days.
+    pub default_retention: Option<(LockMode, u32)>,
+}
+
+/// Lifecycle rules a release bucket needs so deleted and replaced versions are eventually reclaimed.
+/// The server skips versions still under retention, so these never shorten a lock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LifecycleRules {
+    /// Remove a noncurrent version this many days after it stopped being current. At least 1.
+    pub noncurrent_days: u32,
+    /// Remove a delete marker once no version remains behind it.
+    pub expire_delete_markers: bool,
+}
+
 /// One stored version of a key, or a delete marker, as a versioned bucket keeps them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyVersion {
@@ -84,6 +103,53 @@ pub trait ReleaseBackend: Send + Sync {
         async { Err(BackendError("object lock is not supported by this backend".into())) }
     }
 
+    /// The bucket's Object Lock configuration, or `None` when this backend cannot report it. A publisher
+    /// that was asked to lock reads this first, so an unlocked bucket is one clear error.
+    fn lock_config(&self) -> impl Future<Output = Result<Option<BucketLock>, BackendError>> + Send {
+        async { Ok(None) }
+    }
+
+    /// The retention on the current version of `key`, or `None` when it has none or the backend cannot say.
+    fn retention_of(&self, _key: &str) -> impl Future<Output = Result<Option<Lock>, BackendError>> + Send {
+        async { Ok(None) }
+    }
+
+    /// Lengthen (never shorten, never weaken) the retention of the current version of `key`. The default
+    /// refuses; the publisher only calls it after `retention_of` returned a lock.
+    fn extend_lock(&self, _key: &str, _lock: &Lock) -> impl Future<Output = Result<(), BackendError>> + Send {
+        async { Err(BackendError("extending a lock is not supported by this backend".into())) }
+    }
+
+    /// Store the file at `path` (`size` bytes) under `key` only if the key does not exist, locked when
+    /// `lock` is given. The default reads the whole file; a backend with multipart upload overrides it
+    /// so the file is sent in parts and never held in memory.
+    fn put_file_if_absent(
+        &self,
+        key: &str,
+        path: &std::path::Path,
+        size: u64,
+        lock: Option<&Lock>,
+    ) -> impl Future<Output = Result<PutOutcome, BackendError>> + Send {
+        async move {
+            let bytes = std::fs::read(path).map_err(|e| BackendError(format!("{}: {e}", path.display())))?;
+            if bytes.len() as u64 != size {
+                return Err(BackendError(format!("{}: changed while publishing", path.display())));
+            }
+            match lock {
+                Some(l) => self.put_if_absent_locked(key, &bytes, l).await,
+                None => self.put_if_absent(key, &bytes).await,
+            }
+        }
+    }
+
+    /// BLAKE3 and length of the stored object, or `None` when absent. The default downloads it; a backend
+    /// that can hash server-side or in a stream overrides it.
+    fn blob_digest(&self, key: &str) -> impl Future<Output = Result<Option<(String, u64)>, BackendError>> + Send {
+        async move {
+            Ok(self.get(key).await?.map(|b| (crate::manifest::hash_bytes(&b), b.len() as u64)))
+        }
+    }
+
     /// The object's bytes, or `None` when the key does not exist.
     fn get(&self, key: &str) -> impl Future<Output = Result<Option<Vec<u8>>, BackendError>> + Send;
 
@@ -106,6 +172,26 @@ pub trait DeletableBackend: ReleaseBackend {
     /// Copy `src` to `dst` inside the store, server side: the bytes never pass through this
     /// process. Overwrites `dst`. Fails if `src` does not exist.
     fn copy(&self, src: &str, dst: &str) -> impl Future<Output = Result<(), BackendError>> + Send;
+}
+
+/// Lifecycle provisioning for a release bucket (an admin grant, never CI's).
+pub trait LifecycleBackend: Send + Sync {
+    fn put_lifecycle(&self, rules: &LifecycleRules) -> impl Future<Output = Result<(), BackendError>> + Send;
+    /// The rules the server holds, or `None` when it has none.
+    fn get_lifecycle(&self) -> impl Future<Output = Result<Option<LifecycleRules>, BackendError>> + Send;
+}
+
+/// Set the lifecycle rules and read them back; a server that stored something else is an error.
+pub async fn provision_lifecycle<B: LifecycleBackend>(b: &B, rules: &LifecycleRules) -> Result<(), BackendError> {
+    if rules.noncurrent_days == 0 {
+        return Err(BackendError("noncurrent_days must be at least 1".into()));
+    }
+    b.put_lifecycle(rules).await?;
+    match b.get_lifecycle().await? {
+        Some(held) if held == *rules => Ok(()),
+        Some(held) => Err(BackendError(format!("server holds {held:?}, not the rules just set"))),
+        None => Err(BackendError("server reports no lifecycle rules right after setting them".into())),
+    }
 }
 
 /// An in-memory backend with the same conditional-put semantics, for tests and local dry runs.
@@ -151,6 +237,11 @@ struct MemInner {
     /// is on (Object Lock turns it on).
     history: BTreeMap<String, Vec<Option<String>>>,
     versioned: bool,
+    lifecycle: Option<LifecycleRules>,
+    default_retention: Option<(LockMode, u32)>,
+    /// Largest single read a file put made (the mock of multipart part size).
+    max_part: usize,
+    file_puts: usize,
 }
 
 impl MemInner {
@@ -195,6 +286,17 @@ impl MemoryBackend {
         let mut g = self.inner.lock().unwrap();
         g.lock_enabled = true;
         g.versioned = true;
+    }
+
+    /// The default retention the bucket reports (mock of a bucket default).
+    pub fn set_default_retention(&self, d: Option<(LockMode, u32)>) {
+        self.inner.lock().unwrap().default_retention = d;
+    }
+
+    /// Largest chunk a file put read at once, and how many file puts were made.
+    pub fn file_put_stats(&self) -> (usize, usize) {
+        let g = self.inner.lock().unwrap();
+        (g.max_part, g.file_puts)
     }
 
     /// Keep every version, as a versioned bucket does, without Object Lock.
@@ -290,6 +392,64 @@ impl ReleaseBackend for MemoryBackend {
         Ok(out)
     }
 
+    async fn lock_config(&self) -> Result<Option<BucketLock>, BackendError> {
+        let g = self.inner.lock().unwrap();
+        Ok(Some(BucketLock { enabled: g.lock_enabled, default_retention: g.default_retention }))
+    }
+
+    async fn retention_of(&self, key: &str) -> Result<Option<Lock>, BackendError> {
+        Ok(self.inner.lock().unwrap().locks.get(key).copied())
+    }
+
+    async fn extend_lock(&self, key: &str, lock: &Lock) -> Result<(), BackendError> {
+        let mut g = self.inner.lock().unwrap();
+        let Some(have) = g.locks.get(key).copied() else {
+            return Err(BackendError(format!("{key} has no retention to extend")));
+        };
+        let weaker = have.mode == LockMode::Compliance && lock.mode == LockMode::Governance;
+        if lock.until < have.until || weaker {
+            return Err(BackendError("a lock can be lengthened or strengthened, never shortened or weakened".into()));
+        }
+        g.locks.insert(key.to_string(), *lock);
+        Ok(())
+    }
+
+    async fn put_file_if_absent(
+        &self,
+        key: &str,
+        path: &std::path::Path,
+        size: u64,
+        lock: Option<&Lock>,
+    ) -> Result<PutOutcome, BackendError> {
+        use std::io::Read;
+        // Read in parts, as a multipart upload would, and remember the biggest part held at once.
+        const PART: usize = 1 << 20;
+        let mut f = std::fs::File::open(path).map_err(|e| BackendError(format!("{}: {e}", path.display())))?;
+        let mut all = Vec::new();
+        let mut buf = vec![0u8; PART];
+        let mut biggest = 0;
+        loop {
+            let n = f.read(&mut buf).map_err(|e| BackendError(e.to_string()))?;
+            if n == 0 {
+                break;
+            }
+            biggest = biggest.max(n);
+            all.extend_from_slice(&buf[..n]);
+        }
+        if all.len() as u64 != size {
+            return Err(BackendError(format!("{}: changed while publishing", path.display())));
+        }
+        {
+            let mut g = self.inner.lock().unwrap();
+            g.max_part = g.max_part.max(biggest);
+            g.file_puts += 1;
+        }
+        match lock {
+            Some(l) => self.put_if_absent_locked(key, &all, l).await,
+            None => self.put_if_absent(key, &all).await,
+        }
+    }
+
     async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, BackendError> {
         self.pause().await;
         Ok(self.inner.lock().unwrap().objects.get(key).cloned())
@@ -321,6 +481,16 @@ impl ReleaseBackend for MemoryBackend {
             }
         }
         Ok(Some(out))
+    }
+}
+
+impl LifecycleBackend for MemoryBackend {
+    async fn put_lifecycle(&self, rules: &LifecycleRules) -> Result<(), BackendError> {
+        self.inner.lock().unwrap().lifecycle = Some(*rules);
+        Ok(())
+    }
+    async fn get_lifecycle(&self) -> Result<Option<LifecycleRules>, BackendError> {
+        Ok(self.inner.lock().unwrap().lifecycle)
     }
 }
 

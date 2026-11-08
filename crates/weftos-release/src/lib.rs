@@ -79,14 +79,14 @@ pub mod route;
 #[cfg(feature = "store")]
 pub mod s3;
 
-pub use backend::{BackendError, DeletableBackend, KeyVersion, Lock, LockMode, MemoryBackend, PutOutcome, ReleaseBackend};
+pub use backend::{provision_lifecycle, BackendError, BucketLock, DeletableBackend, KeyVersion, LifecycleBackend, LifecycleRules, Lock, LockMode, MemoryBackend, PutOutcome, ReleaseBackend};
 pub use error::{ReleaseError, Result};
 pub use manifest::{
     ArtifactRef, Manifest, ReleaseSigner, SignedManifest, TrustedKey, TrustedKeys, SCHEMA,
 };
 pub use name::ReleaseStoreName;
 pub use publish::{
-    LockPolicy, MAX_BACKDATE_SECS, MAX_FUTURE_SKEW_SECS, MAX_LOCK_FLOOR_SECS, Artifact, PublishOutcome, PublishReceipt, PublishRequest, ReleasePublisher,
+    FileArtifact, FileRequest, LockPolicy, MAX_BACKDATE_SECS, MAX_FUTURE_SKEW_SECS, MAX_LOCK_FLOOR_SECS, Artifact, PublishOutcome, PublishReceipt, PublishRequest, ReleasePublisher,
 };
 pub use read::{HistoryFinding, HistoryReport, ReleaseReader, VerifiedManifest};
 pub use retention::{

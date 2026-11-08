@@ -649,15 +649,15 @@ async fn locked_publish_stamps_the_manifest_and_new_blobs_from_the_publishers_cl
 }
 
 #[tokio::test]
-async fn a_reused_blob_keeps_the_lock_it_was_written_with() {
+async fn a_reused_blob_follows_a_later_longer_lock_now_that_the_backend_can_extend() {
     let (be, st, sg) = (locked_backend(), store("stable"), signer(1));
     let first = LockPolicy::new(LockMode::Governance, 1_000).unwrap();
     ReleasePublisher::new(&be, &st, &sg).with_lock(first).publish(req("b1", &[("a", b"shared")]), NOW).await.unwrap();
     let longer = LockPolicy::new(LockMode::Compliance, 9_000).unwrap();
     ReleasePublisher::new(&be, &st, &sg).with_lock(longer).publish(req("b2", &[("a", b"shared")]), NOW).await.unwrap();
     let h = blake3::hash(b"shared").to_hex().to_string();
-    // no way to extend: the blob stays at the first release's floor, the new manifest gets its own
-    assert_eq!(be.lock_of(&format!("blobs/{h}")).unwrap().until, NOW + 1_000);
+    // the backend can extend, so the shared blob is lengthened to the later release's floor
+    assert_eq!(be.lock_of(&format!("blobs/{h}")).unwrap().until, NOW + 9_000);
     assert_eq!(be.lock_of("releases/b2/manifest.json").unwrap().until, NOW + 9_000);
 }
 
@@ -666,8 +666,8 @@ async fn asking_for_a_lock_on_a_backend_without_one_fails_and_writes_no_release(
     let (be, st, sg) = (MemoryBackend::new(), store("stable"), signer(1)); // lock not enabled
     let pol = LockPolicy::new(LockMode::Governance, 100).unwrap();
     let e = ReleasePublisher::new(&be, &st, &sg).with_lock(pol).publish(req("b1", &[("a", b"x")]), NOW).await.unwrap_err();
-    assert!(matches!(e, ReleaseError::Backend(_)), "{e}");
-    assert!(!be.keys().iter().any(|k| k.starts_with("releases/")), "no manifest");
+    assert!(matches!(e, ReleaseError::Invalid { what: "lock", .. }), "{e}");
+    assert!(be.keys().is_empty(), "nothing written at all");
 }
 
 #[tokio::test]
@@ -799,4 +799,176 @@ async fn a_manifest_deleted_without_a_tombstone_is_found() {
     be.delete("releases/b1/manifest.json").await.unwrap(); // an operator, not retention
     let h = ReleaseReader::new(&be, &st, &tk).history().await.unwrap();
     assert_eq!(h.findings, vec![HistoryFinding::ManifestDeleted { key: "releases/b1/manifest.json".into() }]);
+}
+
+// ---- S1 seams prepared on the mock: lock read-back, extend-retention, lifecycle, file/multipart put ----
+
+#[tokio::test]
+async fn a_locked_publish_reads_the_bucket_lock_config_first_and_writes_nothing_when_it_is_off() {
+    let (be, st, sg) = (MemoryBackend::new(), store("stable"), signer(1)); // bucket made without Object Lock
+    let p = ReleasePublisher::new(&be, &st, &sg).with_lock(LockPolicy::new(LockMode::Governance, 60).unwrap());
+    let e = p.publish(req("b1", &[("a", b"x")]), NOW).await.unwrap_err();
+    assert!(e.to_string().contains("Object Lock"), "{e}");
+    assert_eq!(be.put_calls(), 0, "refused before the first write");
+    // An unlocked publisher never asks.
+    assert!(ReleasePublisher::new(&be, &st, &sg).publish(req("b1", &[("a", b"x")]), NOW).await.is_ok());
+    // A locked bucket passes.
+    let ok = locked_backend();
+    ReleasePublisher::new(&ok, &st, &sg)
+        .with_lock(LockPolicy::new(LockMode::Governance, 60).unwrap())
+        .publish(req("b1", &[("a", b"x")]), NOW)
+        .await
+        .unwrap();
+    assert!(ok.lock_config().await.unwrap().unwrap().enabled);
+}
+
+#[tokio::test]
+async fn a_reused_blob_gets_the_longer_lock_and_never_a_shorter_or_weaker_one() {
+    let (be, st, sg) = (locked_backend(), store("stable"), signer(1));
+    let h = format!("blobs/{}", blake3::hash(b"shared").to_hex());
+    let gov = |s| LockPolicy::new(LockMode::Governance, s).unwrap();
+    let comp = |s| LockPolicy::new(LockMode::Compliance, s).unwrap();
+
+    ReleasePublisher::new(&be, &st, &sg).with_lock(gov(100)).publish(req("b1", &[("a", b"shared")]), NOW).await.unwrap();
+    assert_eq!(be.lock_of(&h).unwrap(), Lock { mode: LockMode::Governance, until: NOW + 100 });
+
+    // A later release that wants longer and stronger: the shared blob follows.
+    ReleasePublisher::new(&be, &st, &sg).with_lock(comp(1_000)).publish(req("b2", &[("a", b"shared")]), NOW).await.unwrap();
+    assert_eq!(be.lock_of(&h).unwrap(), Lock { mode: LockMode::Compliance, until: NOW + 1_000 });
+
+    // A third that wants shorter and weaker changes nothing.
+    ReleasePublisher::new(&be, &st, &sg).with_lock(gov(10)).publish(req("b3", &[("a", b"shared")]), NOW).await.unwrap();
+    assert_eq!(be.lock_of(&h).unwrap(), Lock { mode: LockMode::Compliance, until: NOW + 1_000 });
+
+    // The backend itself refuses a shortening, whatever the publisher asks.
+    let e = be.extend_lock(&h, &Lock { mode: LockMode::Compliance, until: NOW + 5 }).await.unwrap_err();
+    assert!(e.0.contains("never shortened"), "{e}");
+}
+
+#[tokio::test]
+async fn a_backend_that_cannot_extend_leaves_a_reused_blob_as_written() {
+    // A backend with locks but no retention read-back (today's S1 transport): reuse still works.
+    struct NoExtend(MemoryBackend);
+    impl ReleaseBackend for NoExtend {
+        async fn put_if_absent(&self, k: &str, b: &[u8]) -> std::result::Result<PutOutcome, BackendError> { self.0.put_if_absent(k, b).await }
+        async fn put_if_absent_locked(&self, k: &str, b: &[u8], l: &Lock) -> std::result::Result<PutOutcome, BackendError> { self.0.put_if_absent_locked(k, b, l).await }
+        async fn get(&self, k: &str) -> std::result::Result<Option<Vec<u8>>, BackendError> { self.0.get(k).await }
+        async fn list(&self, p: &str) -> std::result::Result<Vec<String>, BackendError> { self.0.list(p).await }
+    }
+    let (be, st, sg) = (NoExtend(locked_backend()), store("stable"), signer(1));
+    let pol = LockPolicy::new(LockMode::Governance, 100).unwrap();
+    ReleasePublisher::new(&be, &st, &sg).with_lock(pol).publish(req("b1", &[("a", b"shared")]), NOW).await.unwrap();
+    let later = LockPolicy::new(LockMode::Governance, 900).unwrap();
+    ReleasePublisher::new(&be, &st, &sg).with_lock(later).publish(req("b2", &[("a", b"shared")]), NOW).await.unwrap();
+    let h = format!("blobs/{}", blake3::hash(b"shared").to_hex());
+    assert_eq!(be.0.lock_of(&h).unwrap().until, NOW + 100);
+}
+
+#[tokio::test]
+async fn lifecycle_rules_are_set_then_read_back() {
+    let be = MemoryBackend::new();
+    let rules = LifecycleRules { noncurrent_days: 30, expire_delete_markers: true };
+    provision_lifecycle(&be, &rules).await.unwrap();
+    assert_eq!(be.get_lifecycle().await.unwrap(), Some(rules));
+    assert!(provision_lifecycle(&be, &LifecycleRules { noncurrent_days: 0, ..rules }).await.is_err());
+
+    // A server that accepts the call and stores something else is caught by the read-back.
+    struct Liar;
+    impl LifecycleBackend for Liar {
+        async fn put_lifecycle(&self, _: &LifecycleRules) -> std::result::Result<(), BackendError> { Ok(()) }
+        async fn get_lifecycle(&self) -> std::result::Result<Option<LifecycleRules>, BackendError> {
+            Ok(Some(LifecycleRules { noncurrent_days: 9999, expire_delete_markers: false }))
+        }
+    }
+    assert!(provision_lifecycle(&Liar, &rules).await.unwrap_err().0.contains("not the rules just set"));
+    struct Silent;
+    impl LifecycleBackend for Silent {
+        async fn put_lifecycle(&self, _: &LifecycleRules) -> std::result::Result<(), BackendError> { Ok(()) }
+        async fn get_lifecycle(&self) -> std::result::Result<Option<LifecycleRules>, BackendError> { Ok(None) }
+    }
+    assert!(provision_lifecycle(&Silent, &rules).await.is_err());
+}
+
+fn write_file(dir: &std::path::Path, name: &str, bytes: &[u8]) -> std::path::PathBuf {
+    let p = dir.join(name);
+    std::fs::write(&p, bytes).unwrap();
+    p
+}
+
+#[tokio::test]
+async fn files_publish_in_parts_and_give_the_same_release_as_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let big = vec![0x5Au8; 3 * (1 << 20) + 17];
+    let f_big = write_file(dir.path(), "weaver", &big);
+    let f_small = write_file(dir.path(), "SUMS", b"sums");
+    let (st, sg) = (store("stable"), signer(1));
+
+    let by_files = MemoryBackend::new();
+    let fr = FileRequest {
+        build_id: "b1".into(), source_rev: "527ea4db".into(), created_at: 1_000, builder: "ci-runner-1".into(),
+        artifacts: vec![
+            FileArtifact { path: "bin/weaver".into(), file: f_big },
+            FileArtifact { path: "SHA256SUMS".into(), file: f_small },
+        ],
+    };
+    let r1 = ReleasePublisher::new(&by_files, &st, &sg).publish_files(fr, NOW).await.unwrap();
+    let (part, puts) = by_files.file_put_stats();
+    assert!(puts >= 2, "both files went through the file path: {puts}");
+    assert!(part <= 1 << 20, "no read larger than one part: {part}");
+
+    let by_bytes = MemoryBackend::new();
+    let r2 = ReleasePublisher::new(&by_bytes, &st, &sg).publish(req("b1", &[("bin/weaver", &big), ("SHA256SUMS", b"sums")]), NOW).await.unwrap();
+    assert_eq!(r1.manifest_digest, r2.manifest_digest, "the manifest does not depend on how the bytes arrived");
+    assert_eq!(by_files.keys(), by_bytes.keys());
+
+    // Read back through the verified reader.
+    let tk = trusted(&sg);
+    let rd = ReleaseReader::new(&by_files, &st, &tk);
+    let m = rd.manifest("b1").await.unwrap();
+    assert_eq!(rd.read_artifact(&m, "bin/weaver").await.unwrap(), big);
+
+    // Retry and a same-bytes file in another release are idempotent / shared.
+    let fr2 = FileRequest {
+        build_id: "b1".into(), source_rev: "527ea4db".into(), created_at: 1_000, builder: "ci-runner-1".into(),
+        artifacts: vec![
+            FileArtifact { path: "bin/weaver".into(), file: dir.path().join("weaver") },
+            FileArtifact { path: "SHA256SUMS".into(), file: dir.path().join("SUMS") },
+        ],
+    };
+    assert_eq!(ReleasePublisher::new(&by_files, &st, &sg).publish_files(fr2, NOW).await.unwrap().outcome, PublishOutcome::AlreadyPresent);
+}
+
+#[tokio::test]
+async fn a_file_that_changes_or_vanishes_publishes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let f = write_file(dir.path(), "a", b"first");
+    let (be, st, sg) = (MemoryBackend::new(), store("stable"), signer(1));
+    let fr = |file: std::path::PathBuf| FileRequest {
+        build_id: "b1".into(), source_rev: "r".into(), created_at: 1_000, builder: "ci".into(),
+        artifacts: vec![FileArtifact { path: "a".into(), file }],
+    };
+    let e = ReleasePublisher::new(&be, &st, &sg).publish_files(fr(dir.path().join("missing")), NOW).await.unwrap_err();
+    assert!(matches!(e, ReleaseError::Invalid { .. }), "{e}");
+    assert!(be.is_empty());
+    // A rebuild with different bytes under the same id is refused exactly as for byte artifacts.
+    ReleasePublisher::new(&be, &st, &sg).publish_files(fr(f.clone()), NOW).await.unwrap();
+    std::fs::write(&f, b"second").unwrap();
+    let e = ReleasePublisher::new(&be, &st, &sg).publish_files(fr(f), NOW).await.unwrap_err();
+    assert!(matches!(e, ReleaseError::AlreadyPublished { .. }), "{e}");
+}
+
+#[tokio::test]
+async fn locked_file_publish_locks_each_blob_and_the_manifest() {
+    let dir = tempfile::tempdir().unwrap();
+    let f = write_file(dir.path(), "a", b"locked-bytes");
+    let (be, st, sg) = (locked_backend(), store("stable"), signer(1));
+    let pol = LockPolicy::new(LockMode::Compliance, 500).unwrap();
+    let fr = FileRequest {
+        build_id: "b1".into(), source_rev: "r".into(), created_at: 1_000, builder: "ci".into(),
+        artifacts: vec![FileArtifact { path: "a".into(), file: f }],
+    };
+    ReleasePublisher::new(&be, &st, &sg).with_lock(pol).publish_files(fr, NOW).await.unwrap();
+    let h = format!("blobs/{}", blake3::hash(b"locked-bytes").to_hex());
+    assert_eq!(be.lock_of(&h).unwrap().until, NOW + 500);
+    assert!(be.lock_of("releases/b1/manifest.json").is_some());
 }
