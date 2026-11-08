@@ -508,3 +508,21 @@ fn promote_runs_when_someone_else_holds_the_claim_or_it_expired_and_records_the_
     call(&svc, "promote", json!({"project": PROJ, "slug": "feat-quiet", "agent": "carol", "host": "m3"}), 71).unwrap();
     assert!(weftos_store::share::read_handoff(&Op(svc.operator_objects()), &n("feat-quiet").wt).unwrap().is_none());
 }
+
+#[test]
+fn the_daemons_wrapping_backend_forwards_the_conditional_writes_to_the_drive() {
+    use weftos_store::drive::{materialise, sync_up};
+    let (_d, svc) = rig();
+    let n = StoreName::project("local", PROJ).unwrap();
+    svc.ensure_store(&n, "cli", Parties::defaults_for(&n)).unwrap();
+    let b = Op(svc.operator_objects());
+    b.put(&n.bucket(), "proj/a.txt", b"alpha", false).unwrap();
+    let t = tempfile::tempdir().unwrap();
+    let dest = t.path().join("tree");
+    materialise(&b, &n.bucket(), "proj", &dest).unwrap();
+    std::fs::write(dest.join("a.txt"), "alpha v2").unwrap();
+    let r = sync_up(&b, &dest).unwrap();
+    // Through `Op` the store checked the etag. Without the forwarding this is (0, 1): `Unsupported`.
+    assert_eq!((r.conditional, r.head_then_write), (1, 0));
+    assert_eq!(b.get(&n.bucket(), "proj/a.txt").unwrap(), b"alpha v2");
+}

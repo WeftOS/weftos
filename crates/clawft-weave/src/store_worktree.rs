@@ -40,6 +40,12 @@ impl S1 for Op {
     fn head(&self, b: &str, k: &str) -> Result<ObjectMeta, BackendError> {
         self.0.head(b, k)
     }
+    fn put_if_match(&self, b: &str, k: &str, d: &[u8], e: &str) -> Result<ObjectMeta, BackendError> {
+        self.0.put_if_match(b, k, d, e)
+    }
+    fn delete_if_match(&self, b: &str, k: &str, e: &str) -> Result<(), BackendError> {
+        self.0.delete_if_match(b, k, e)
+    }
     fn delete(&self, b: &str, k: &str) -> Result<(), BackendError> {
         self.0.delete(b, k)
     }
