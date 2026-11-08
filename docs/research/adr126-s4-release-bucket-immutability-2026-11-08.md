@@ -160,6 +160,14 @@ device names); uppercase is refused rather than escaped because an escape would 
 Windows rules and the case-fold rule, and that hostile ids are refused before anything is written. Other lanes' keys (S1 archive keys
 `<bucket>@<ms>/<key>`, which carry the writer's key) are not covered here.
 
+## S1's archive on a locked release store (measured 2026-11-08)
+
+`StoreService::archive(delete = true)` on a locked release store copies the objects to the archive bucket (unlocked: the copies carry
+no retention), then deletes each source object, which only adds delete markers, and the bucket delete fails with `409 BucketNotEmpty`.
+The store ends up with every version held but a plain listing empty, and `archive_done` never becomes true. Do not use S1's archive or
+node-retire on a release store; retire releases with tombstone and sweep. Raised with S1 in `/tmp/weftos-owner-0440/s4-review-0910.md`.
+Test: `ci_route.rs::live_archiving_a_locked_release_store` (ignored, needs RustFS).
+
 ## Not verified
 
 - Whether lifecycle respects a retention date at real day scale (only a sped-up scanner against wall-clock dates was seen), and whether it expires a version once its retention has lapsed.

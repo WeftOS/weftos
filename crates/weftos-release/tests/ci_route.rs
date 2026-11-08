@@ -377,3 +377,75 @@ fn the_release_archive_report_is_a_dry_run_and_sets_no_number() {
     assert_eq!(release_archive_report(&svc, Some(60), "op").unwrap().expired.len(), 0);
     assert!(release_archive_report(&svc, Some(0), "op").is_err());
 }
+
+/// What S1's `archive(delete = true)` does to a LOCKED release store, on a real locked RustFS bucket.
+/// Measured 2026-11-08 to settle the review's open question; see the plan doc.
+#[tokio::test]
+#[ignore = "needs a throwaway RustFS: WEFTOS_RELEASE_TEST_RUSTFS_ENV"]
+async fn live_archiving_a_locked_release_store() {
+    use weftos_store::{RustfsBackend, RustfsConfig};
+    let f = std::env::var("WEFTOS_RELEASE_TEST_RUSTFS_ENV").expect("WEFTOS_RELEASE_TEST_RUSTFS_ENV");
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = RustfsConfig::from_env_file(std::path::Path::new(&f), dir.path().join("secrets")).unwrap();
+    let (svc, probe) = tokio::task::spawn_blocking(move || {
+        let be = Arc::new(RustfsBackend::new(cfg).unwrap());
+        let svc = Arc::new(
+            StoreService::open(
+                Config { node_id: "pg-1".into(), state_path: None, clock: || std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64 },
+                be.clone(),
+                be.clone(),
+                Arc::new(OpenGate),
+                Arc::new(MemSink::default()),
+                Arc::new(NoChain),
+            )
+            .unwrap(),
+        );
+        (svc, be)
+    })
+    .await
+    .unwrap();
+    let channel = format!("a{}", &ulid::Ulid::new().to_string().to_lowercase()[16..]);
+    let store = ReleaseStoreName::new("pg-mesh", ULID, &channel).unwrap();
+    let name = StoreName::parse(&store.uri()).unwrap();
+    let (s, n) = (svc.clone(), name.clone());
+    tokio::task::spawn_blocking(move || {
+        s.create_locked_store(&n, "daemon", Parties::default()).unwrap();
+        s.grant(&n, who("ci"), Access::Append, "op").unwrap();
+    })
+    .await
+    .unwrap();
+    let ci = ServiceBackend::new(svc.clone(), Caller::local(who("ci")), &store).unwrap();
+    let sg = signer();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    let p = ReleasePublisher::new(&ci, &store, &sg).with_lock(LockPolicy::new(LockMode::Governance, 3_600).unwrap());
+    p.publish(rq("b1", now - 10, &[("bin/weaver", b"ELF")]), now).await.unwrap();
+
+    let (s, n) = (svc.clone(), name.clone());
+    let archived = tokio::task::spawn_blocking(move || s.archive(&n, true, "op")).await.unwrap();
+    println!("ARCHIVE(delete=true) on a locked release store -> {archived:?}");
+
+    // what landed in the archive bucket, and does the copy carry the lock?
+    let (pr, bucket) = (probe.clone(), weftos_store::service::ARCHIVE_BUCKET.to_string());
+    let copies = tokio::task::spawn_blocking(move || {
+        let vs = pr.list_versions(&bucket, "").unwrap_or_default();
+        vs.into_iter()
+            .filter(|v| !v.is_delete_marker)
+            .map(|v| (v.key.clone(), pr.get_retention(&bucket, &v.key, &v.version_id).map(|r| r.is_some())))
+            .collect::<Vec<_>>()
+    })
+    .await
+    .unwrap();
+    println!("archive bucket copies (key, has retention): {copies:?}");
+    let live = {
+        let (pr, b) = (probe.clone(), name.bucket());
+        tokio::task::spawn_blocking(move || pr.list_versions(&b, "").map(|v| v.len())).await.unwrap()
+    };
+    println!("versions still in the locked source bucket: {live:?}");
+    // Measured: the copy lands in the (unlocked) archive bucket, the delete cannot finish, and the locked
+    // source keeps every version (2 objects + 2 delete markers) while looking empty to a plain listing.
+    assert!(format!("{archived:?}").contains("BucketNotEmpty"), "{archived:?}");
+    assert_eq!(copies.len(), 2);
+    assert!(copies.iter().all(|(_, r)| r.is_err() || *r == Ok(false)), "archive copies carry no retention: {copies:?}");
+    assert_eq!(live, Ok(4));
+    tokio::task::spawn_blocking(move || drop((ci, svc, probe))).await.unwrap();
+}
