@@ -45,10 +45,15 @@ pub enum ArchiveError {
 
 /// S1's archive-on-unpair, as this crate needs it.
 pub trait NodeArchiver {
-    /// Copy the node's bucket to the archive and empty it. Idempotent: a bucket
-    /// that is already empty or gone returns a receipt with `objects: 0`.
+    /// Archive the node's bucket and return only when EVERY object is copied;
+    /// a partial copy must be an `Err`, never an `Ok`, because the caller deletes
+    /// the user on `Ok`. Emptying the bucket is optional: S1's
+    /// `retire_node_store` copies and leaves the bucket, and refuses the id for
+    /// good, so against S1 the unseal path below never fires (the id stays
+    /// retired). Repeating after success is harmless.
     async fn archive_node(&self, node_id: &str) -> Result<ArchiveReceipt, ArchiveError>;
-    /// True when the node's bucket holds nothing (or does not exist).
+    /// True when the node's bucket holds nothing (or does not exist). S1 has
+    /// no such call; a `list` does it.
     async fn bucket_is_empty(&self, node_id: &str) -> Result<bool, ArchiveError>;
 }
 
