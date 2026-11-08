@@ -112,3 +112,27 @@ async fn hostile_build_ids_are_refused_before_anything_is_written() {
     }
     assert_portable(&be.keys().into_iter().collect());
 }
+
+/// Length guard: the longest key S4 can write (a 128-character build id) and the bucket it sits in must leave
+/// room under a Windows 260-character path for the host's data directory and RustFS's own per-object files,
+/// and must fit S1's 512-byte key rule with S1's archive prefix (78 bytes) in front.
+#[tokio::test]
+async fn the_longest_key_s4_writes_stays_inside_the_path_and_key_budgets() {
+    let (be, st, sg) = (MemoryBackend::new(), store(), signer());
+    let id = "a".repeat(128);
+    ReleasePublisher::new(&be, &st, &sg).publish(req(&id, 100, &[("x", b"x")]), NOW).await.unwrap();
+    let tk = TrustedKeys(vec![sg.trusted()]);
+    let keep = RetentionPolicy::new(1, 0).unwrap();
+    let mut seen: std::collections::BTreeSet<String> = be.keys().into_iter().collect();
+    ReleasePublisher::new(&be, &st, &sg).publish(req("b2", 200, &[("y", b"y")]), NOW).await.unwrap();
+    for _ in 0..3 {
+        Sweeper::new(&be, &st, &tk).sweep(&keep, 1_000, 500, "t").await.unwrap();
+        seen.extend(be.keys());
+    }
+    // bucket of a release store: `r-` + 26-char project id + `-` + 12-hex channel hash
+    let bucket = 2 + 26 + 1 + 12;
+    let longest = seen.iter().map(String::len).max().unwrap();
+    assert_eq!(longest, "releases/".len() + 128 + "/manifest.json".len());
+    assert!(bucket + 1 + longest <= 200, "bucket+key is {} bytes; 200 leaves 60 of 260 for the data dir and RustFS's own files", bucket + 1 + longest);
+    assert!(longest + 78 <= 512, "plus S1's archive prefix");
+}
