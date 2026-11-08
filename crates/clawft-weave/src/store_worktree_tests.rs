@@ -181,3 +181,87 @@ fn with_the_registry_switch_on_entries_live_in_a_store_only_the_daemon_writes() 
     let off = names_with("local", PROJ, "feat-r", false).unwrap();
     assert_eq!(off.reg, off.pr);
 }
+
+#[test]
+fn a_landed_worktree_leaves_the_registry_so_followers_do_not_see_a_forgotten_claim() {
+    let (_d, svc) = rig();
+    call(&svc, "create", json!({"project": PROJ, "slug": "feat-l", "branch": "feat/l", "base": "abc"}), 1).unwrap();
+    let src = tempfile::tempdir().unwrap();
+    let (paths, unc, chg) = files(src.path());
+    call(&svc, "publish", json!({"project": PROJ, "slug": "feat-l", "root": src.path().to_string_lossy(), "branch": "feat/l", "base": "abc",
+        "head": "def", "paths_z": paths, "uncommitted_z": unc, "changes_z": chg, "handoff": "go"}), 2).unwrap();
+    call(&svc, "claim", json!({"project": PROJ, "slug": "feat-l", "agent": "bob", "host": "m2"}), 3).unwrap();
+    let st = src.path().join("f.json");
+    let f = call(&svc, "follow", json!({"project": PROJ, "state": st.to_string_lossy()}), 4).unwrap();
+    assert_eq!(f["changes"][0]["change"], "new");
+
+    call(&svc, "promote", json!({"project": PROJ, "slug": "feat-l", "agent": "bob", "host": "m2", "epoch": 1}), 5).unwrap();
+    let day = 3 * 24 * 3600 * 1000;
+    let left = call(&svc, "leftovers", json!({"project": PROJ}), day).unwrap();
+    assert_eq!(left["leftovers"], json!([]), "a landed worktree is not an abandoned claim");
+    let f = call(&svc, "follow", json!({"project": PROJ, "state": st.to_string_lossy(), "confirmed": true}), 6).unwrap();
+    assert_eq!(f["changes"][0]["change"], "gone");
+}
+
+#[test]
+fn with_signing_on_the_daemon_signs_and_a_strict_follower_hides_forged_entries() {
+    let (_d, svc) = rig();
+    let key = [7u8; 32];
+    let pubkey = ed25519_dalek::SigningKey::from_bytes(&key).verifying_key().to_bytes();
+    let strict = SignCfg::new(Some(key), Some(vec![pubkey]), true);
+    let other = SignCfg::new(None, Some(vec![[9u8; 32]]), true); // trusts a different key
+    let on = |cfg: &SignCfg, verb: &str, p: Value, now: u64| run_full(&svc, "local", &format!("store.worktree.{verb}"), p, now, false, cfg);
+    on(&strict, "create", json!({"project": PROJ, "slug": "feat-s", "branch": "feat/s", "base": "abc"}), 1).unwrap();
+    let src = tempfile::tempdir().unwrap();
+    let (paths, unc, chg) = files(src.path());
+    let pubp = json!({"project": PROJ, "slug": "feat-s", "root": src.path().to_string_lossy(), "branch": "feat/s", "base": "abc",
+        "head": "def", "paths_z": paths, "uncommitted_z": unc, "changes_z": chg});
+    on(&strict, "publish", pubp, 2).unwrap();
+
+    let n = names("local", PROJ, "feat-s").unwrap();
+    let b = Op(svc.operator_objects());
+    assert!(S1::get(&*svc.operator_objects(), &n.reg, "worktrees.sig/feat-s.json").is_ok(), "the daemon wrote a signature");
+
+    let hits = |cfg: &SignCfg| on(cfg, "search", json!({"project": PROJ, "query": "plan"}), 3).unwrap()["hits"].as_array().unwrap().len();
+    assert_eq!(hits(&strict), 1, "a follower trusting the daemon key sees it");
+    assert_eq!(hits(&other), 0, "a follower trusting another key refuses it");
+    assert_eq!(hits(&SignCfg::off()), 1, "no trust config: behaves as before");
+
+    // someone with project write redirects the entry; the old signature no longer matches
+    let mut e = weftos_store::share_fetch::list_shared(&b, &n.reg).unwrap().remove(0);
+    e.head_commit = "forged".into();
+    weftos_store::share_fetch::write_registry_entry(&b, &n.reg, &e).unwrap();
+    assert_eq!(hits(&strict), 0, "an edited entry is hidden from a strict follower");
+    let st = src.path().join("f.json");
+    let f = on(&strict, "follow", json!({"project": PROJ, "state": st.to_string_lossy()}), 4).unwrap();
+    assert_eq!(f["changes"][0], json!({"change": "unreadable", "slug": "feat-s"}), "refused, and said so");
+}
+
+#[test]
+fn signing_settings_come_from_files_and_a_bad_file_is_an_error_not_unsigned() {
+    let d = tempfile::tempdir().unwrap();
+    let k = d.path().join("k");
+    let t = d.path().join("t");
+    std::fs::write(&k, format!("{}\n", "ab".repeat(32))).unwrap();
+    std::fs::write(&t, format!("# trusted\n{}\n", "cd".repeat(32))).unwrap();
+    let env = |k: &'static str, t: &'static str, r: Option<&'static str>| {
+        let (k, t) = (k.to_owned(), t.to_owned());
+        move |v: &str| match v {
+            "WEFTOS_WT_REGISTRY_SIGN_KEY" => (!k.is_empty()).then(|| k.clone()),
+            "WEFTOS_WT_REGISTRY_TRUSTED" => (!t.is_empty()).then(|| t.clone()),
+            "WEFTOS_WT_REGISTRY_REQUIRE_SIGNED" => r.map(str::to_owned),
+            _ => None,
+        }
+    };
+    let (ks, ts) = (k.to_string_lossy().into_owned(), t.to_string_lossy().into_owned());
+    let leak = |s: String| -> &'static str { Box::leak(s.into_boxed_str()) };
+    let (ks, ts) = (leak(ks), leak(ts));
+    let c = SignCfg::from_lookup(env(ks, ts, Some("1"))).unwrap();
+    assert!(c.key.is_some() && c.trusted.as_ref().unwrap().len() == 1 && c.require);
+    std::fs::write(&k, "tooshort").unwrap();
+    assert!(SignCfg::from_lookup(env(ks, ts, None)).is_err());
+    let missing = leak(d.path().join("missing").to_string_lossy().into_owned());
+    assert!(SignCfg::from_lookup(env(missing, ts, None)).err().unwrap().contains("missing"));
+    assert!(SignCfg::from_lookup(env("", "", Some("1"))).is_err(), "require without a trusted file is refused");
+    assert!(SignCfg::from_lookup(env("", "", None)).unwrap().key.is_none());
+}

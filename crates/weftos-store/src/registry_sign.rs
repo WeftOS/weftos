@@ -117,3 +117,59 @@ pub fn list_shared_verified<B: ObjectBackend>(
     }
     Ok(out)
 }
+
+/// Daemon-side: drop an entry and its signature object together, so no orphan signature stays
+/// behind to be paired with a later entry for a recreated slug.
+pub fn remove_registry_entry_signed<B: ObjectBackend>(
+    b: &B,
+    project_bucket: &str,
+    slug: &str,
+) -> Result<()> {
+    crate::follower::remove_registry_entry(b, project_bucket, slug)?;
+    b.delete(project_bucket, &format!("{SIG_PREFIX}{slug}.json"))
+}
+
+/// Entries with their trust, and the slugs that were refused or unreadable.
+pub type TrustedList = (Vec<(RegistryEntry, Trust)>, Vec<String>);
+
+/// [`crate::share_fetch::list_shared_lenient`] through a trust check. With `require_signed`, an
+/// entry that is not `Verified` is moved to the second list (the unreadable slugs), so a follower
+/// is told it exists and was refused instead of silently not seeing it. Without it, every entry is
+/// kept, and the caller gets each entry's trust to show.
+pub fn list_trusted_lenient<B: ObjectBackend>(
+    b: &B,
+    project_bucket: &str,
+    verifier: &dyn EntryVerifier,
+    require_signed: bool,
+) -> Result<TrustedList> {
+    let (entries, mut bad) = crate::share_fetch::list_shared_lenient(b, project_bucket)?;
+    let mut out = Vec::new();
+    for e in entries {
+        let t = verify_registry_entry(b, project_bucket, &e.slug, verifier)?;
+        if require_signed && t != Trust::Verified {
+            bad.push(e.slug);
+        } else {
+            out.push((e, t));
+        }
+    }
+    bad.sort();
+    Ok((out, bad))
+}
+
+/// [`crate::follower::poll`] over a registry filtered by [`list_trusted_lenient`].
+pub fn poll_verified<B: ObjectBackend>(
+    b: &B,
+    project_bucket: &str,
+    state: &mut crate::follower::FollowState,
+    verifier: &dyn EntryVerifier,
+    require_signed: bool,
+    allow_all_gone: bool,
+) -> Result<Vec<crate::follower::Change>> {
+    let (entries, bad) = list_trusted_lenient(b, project_bucket, verifier, require_signed)?;
+    crate::follower::diff_poll(
+        entries.into_iter().map(|(e, _)| e).collect(),
+        bad,
+        state,
+        allow_all_gone,
+    )
+}

@@ -20,8 +20,12 @@ use weftos_store::service::{ARCHIVE_BUCKET, Parties, archive_key};
 use weftos_store::share::{
     Actor, Limits, TreeSource, mark_handoff, mark_merged_at, parse_name_status_z, publish_tree,
 };
+use weftos_store::registry_sign::{
+    EntrySigner, EntryVerifier, list_trusted_lenient, poll_verified, remove_registry_entry_signed,
+    write_registry_entry_signed,
+};
 use weftos_store::share_fetch::{
-    RegistryEntry, Select, fetch_bundle, fetch_tree, list_shared, summarize, write_registry_entry,
+    RegistryEntry, Select, fetch_bundle, fetch_tree, summarize, write_registry_entry,
 };
 use weftos_store::{StoreName, StoreService};
 
@@ -165,6 +169,91 @@ fn registry_switch() -> bool {
     std::env::var("WEFTOS_WT_REGISTRY_STORE").is_ok_and(|v| v == "1")
 }
 
+/// Registry signing (ADR-126 S2, `docs/research/adr126-s2-registry-signing-and-claim-clock.md`).
+/// All three parts are off unless their env var is set, so a daemon started as before writes and
+/// reads unsigned entries exactly as it did.
+/// - `WEFTOS_WT_REGISTRY_SIGN_KEY`: file holding a 32-byte ed25519 seed as 64 hex characters.
+///   The daemon signs every registry entry it writes with it. Which key this is (the node key, a
+///   project key) is the owner's open decision; the daemon only reads the file it is pointed at.
+/// - `WEFTOS_WT_REGISTRY_TRUSTED`: file of trusted public keys, one 64-hex key per line (`#` comments).
+///   With it, follow/search/leftovers check each entry's signature.
+/// - `WEFTOS_WT_REGISTRY_REQUIRE_SIGNED=1`: with the trusted file, drop (and report) entries that do not verify.
+#[derive(Default)]
+pub struct SignCfg {
+    key: Option<ed25519_dalek::SigningKey>,
+    trusted: Option<Vec<[u8; 32]>>,
+    require: bool,
+}
+
+fn hex32(s: &str) -> Result<[u8; 32], String> {
+    let v = hex::decode(s.trim()).map_err(|e| format!("bad hex key: {e}"))?;
+    v.try_into().map_err(|_| "a key is 32 bytes (64 hex characters)".to_string())
+}
+
+impl SignCfg {
+    pub fn off() -> Self {
+        Self::default()
+    }
+
+    pub fn new(key: Option<[u8; 32]>, trusted: Option<Vec<[u8; 32]>>, require: bool) -> Self {
+        Self { key: key.map(|k| ed25519_dalek::SigningKey::from_bytes(&k)), trusted, require }
+    }
+
+    /// Read the three env settings. A named file that cannot be read is an error, never a silent
+    /// fall back to unsigned: someone who asked for signing must not get an unsigned registry.
+    pub fn from_env() -> Result<Self, String> {
+        Self::from_lookup(|v| std::env::var(v).ok())
+    }
+
+    /// [`Self::from_env`] with the variable lookup supplied.
+    pub fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Result<Self, String> {
+        let file = |var: &str| -> Result<Option<String>, String> {
+            match get(var) {
+                Some(p) if !p.is_empty() => std::fs::read_to_string(&p).map(Some).map_err(|e| format!("{var} {p}: {e}")),
+                _ => Ok(None),
+            }
+        };
+        let key = file("WEFTOS_WT_REGISTRY_SIGN_KEY")?.map(|t| hex32(&t)).transpose()?;
+        let trusted = file("WEFTOS_WT_REGISTRY_TRUSTED")?
+            .map(|t| {
+                t.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).map(hex32).collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()?;
+        let require = get("WEFTOS_WT_REGISTRY_REQUIRE_SIGNED").is_some_and(|v| v == "1");
+        if require && trusted.is_none() {
+            return Err("WEFTOS_WT_REGISTRY_REQUIRE_SIGNED=1 needs WEFTOS_WT_REGISTRY_TRUSTED".into());
+        }
+        Ok(Self::new(key, trusted, require))
+    }
+}
+
+struct Ed(ed25519_dalek::SigningKey);
+impl EntrySigner for Ed {
+    fn signer_id(&self) -> String {
+        hex::encode(self.0.verifying_key().to_bytes())
+    }
+    fn alg(&self) -> &'static str {
+        "ed25519"
+    }
+    fn sign(&self, msg: &[u8]) -> Vec<u8> {
+        use ed25519_dalek::Signer;
+        self.0.sign(msg).to_bytes().to_vec()
+    }
+}
+
+struct Trusted<'a>(&'a [[u8; 32]]);
+impl EntryVerifier for Trusted<'_> {
+    fn verify(&self, signer: &str, alg: &str, msg: &[u8], sig: &[u8]) -> bool {
+        use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+        let Ok(k) = hex32(signer) else { return false };
+        if alg != "ed25519" || !self.0.contains(&k) {
+            return false;
+        }
+        let (Ok(vk), Ok(sig)) = (VerifyingKey::from_bytes(&k), Signature::from_slice(sig)) else { return false };
+        vk.verify(msg, &sig).is_ok()
+    }
+}
+
 #[cfg(test)]
 fn names(mesh: &str, project: &str, slug: &str) -> Result<Names, String> {
     names_with(mesh, project, slug, false)
@@ -212,21 +301,39 @@ fn why_str(w: Why) -> &'static str {
 }
 
 /// Re-derive one worktree's registry entry from its own bucket (the daemon is the only writer).
-fn refresh(b: &Op, pr: &str, slug: &str, wt: &str) -> Result<(), String> {
+fn refresh(b: &Op, pr: &str, slug: &str, wt: &str, sign: &SignCfg) -> Result<(), String> {
     let e = |e: weftos_store::overlay::S2Error| e.to_string();
     if let Some(ent) = summarize(b, slug, wt).map_err(e)? {
-        write_registry_entry(b, pr, &ent).map_err(e)?;
+        match &sign.key {
+            Some(k) => write_registry_entry_signed(b, pr, &ent, &Ed(k.clone())).map_err(e)?,
+            None => write_registry_entry(b, pr, &ent).map_err(e)?,
+        }
     }
     Ok(())
 }
 
+/// The registry's entries as this follower should see them: all of them, or with a trusted-key
+/// file the ones that verify (all of them when `REQUIRE_SIGNED` is off).
+fn trusted_entries(b: &Op, reg: &str, sign: &SignCfg) -> weftos_store::overlay::Result<Vec<RegistryEntry>> {
+    Ok(match &sign.trusted {
+        Some(t) => list_trusted_lenient(b, reg, &Trusted(t), sign.require)?.0.into_iter().map(|(e, _)| e).collect(),
+        None => weftos_store::share_fetch::list_shared_lenient(b, reg)?.0,
+    })
+}
+
 /// Run one verb. `mesh` is the store-name mesh token of this daemon.
 pub fn run(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms: u64) -> Result<Value, String> {
-    run_with(svc, mesh, method, params, now_ms, registry_switch())
+    let sign = SignCfg::from_env()?;
+    run_full(svc, mesh, method, params, now_ms, registry_switch(), &sign)
 }
 
 /// [`run`] with the registry switch given explicitly.
 pub fn run_with(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms: u64, registry_store: bool) -> Result<Value, String> {
+    run_full(svc, mesh, method, params, now_ms, registry_store, &SignCfg::off())
+}
+
+/// [`run_with`] with registry signing given explicitly.
+pub fn run_full(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms: u64, registry_store: bool, sign: &SignCfg) -> Result<Value, String> {
     let names = |m: &str, pr: &str, s: &str| names_with(m, pr, s, registry_store);
     let p: P = serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
     let e = |e: weftos_store::overlay::S2Error| e.to_string();
@@ -301,7 +408,7 @@ pub fn run_with(svc: &StoreService, mesh: &str, method: &str, params: Value, now
             if let Some(note) = p.handoff.as_deref() {
                 mark_handoff(&b, &n.wt, &writer, note, now_ms).map_err(e)?;
             }
-            refresh(&b, &n.reg, slug, &n.wt)?;
+            refresh(&b, &n.reg, slug, &n.wt, sign)?;
             Ok(json!({
                 "uploaded": rep.uploaded, "unchanged": rep.unchanged, "removed": rep.removed,
                 "skipped": rep.skipped.iter().map(|(k, w)| format!("{k}: {w:?}")).collect::<Vec<_>>(),
@@ -331,7 +438,7 @@ pub fn run_with(svc: &StoreService, mesh: &str, method: &str, params: Value, now
                 let mut w = claim_watch().lock().map_err(|_| "claim watch poisoned".to_string())?;
                 claim_merge_observed(&b, &n.wt, &who(&p), &mut w, mono_ms(), now_ms).map_err(e)?
             };
-            refresh(&b, &n.reg, slug, &n.wt)?;
+            refresh(&b, &n.reg, slug, &n.wt, sign)?;
             Ok(json!({"state": h.state, "epoch": h.epoch,
                       "merger": h.merger.map(|m| format!("{}@{}", m.agent, m.host))}))
         }
@@ -356,6 +463,9 @@ pub fn run_with(svc: &StoreService, mesh: &str, method: &str, params: Value, now
             {
                 mark_merged_at(&b, &n.wt, &who(&p), p.epoch, "landed", now_ms).map_err(e)?;
             }
+            // Landed: nothing unmerged is left to see, so the entry (and its signature) goes. Left in
+            // place it would read as a forgotten claim to every follower.
+            remove_registry_entry_signed(&b, &n.reg, slug).map_err(e)?;
             Ok(json!({
                 "promoted": r.promoted, "deleted": r.deleted, "kept_project": r.kept_project,
                 "archived": r.archived.len(), "dropped_tombstones": r.dropped_tombstones,
@@ -365,14 +475,18 @@ pub fn run_with(svc: &StoreService, mesh: &str, method: &str, params: Value, now
             let n = names(mesh, &project, "x")?;
             let sp = PathBuf::from(need(&p.state, "state")?);
             let mut st = FollowState::load(&sp).map_err(e)?;
-            let ch = if p.confirmed { follower::poll_confirmed(&b, &n.reg, &mut st) } else { follower::poll(&b, &n.reg, &mut st) }
-                .map_err(e)?;
+            let ch = match &sign.trusted {
+                Some(t) => poll_verified(&b, &n.reg, &mut st, &Trusted(t), sign.require, p.confirmed),
+                None if p.confirmed => follower::poll_confirmed(&b, &n.reg, &mut st),
+                None => follower::poll(&b, &n.reg, &mut st),
+            }
+            .map_err(e)?;
             st.save(&sp).map_err(e)?;
             Ok(json!({"changes": ch.iter().map(change_json).collect::<Vec<_>>()}))
         }
         "search" => {
             let n = names(mesh, &project, "x")?;
-            let entries = list_shared(&b, &n.reg).map_err(e)?;
+            let entries = trusted_entries(&b, &n.reg, sign).map_err(e)?;
             let r = follower::search_docs(&b, &entries, need(&p.query, "query")?);
             Ok(json!({
                 "hits": r.hits.iter().map(|h| json!({"slug": h.slug, "path": h.path, "title": h.title, "state": h.state})).collect::<Vec<_>>(),
@@ -381,7 +495,7 @@ pub fn run_with(svc: &StoreService, mesh: &str, method: &str, params: Value, now
         }
         "leftovers" => {
             let n = names(mesh, &project, "x")?;
-            let entries = weftos_store::share_fetch::list_shared_lenient(&b, &n.reg).map_err(e)?.0;
+            let entries = trusted_entries(&b, &n.reg, sign).map_err(e)?;
             let l = follower::leftovers(&entries, now_ms, &LeftoverPolicy::default());
             Ok(json!({"leftovers": l.iter().map(|x| json!({"why": why_str(x.why), "idle_ms": x.idle_ms, "worktree": entry_json(&x.entry)})).collect::<Vec<_>>()}))
         }

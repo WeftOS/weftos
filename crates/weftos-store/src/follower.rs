@@ -128,6 +128,17 @@ fn poll_with<B: ObjectBackend>(
     allow_all_gone: bool,
 ) -> Result<Vec<Change>> {
     let (entries, bad) = list_shared_lenient(b, project_bucket)?;
+    diff_poll(entries, bad, state, allow_all_gone)
+}
+
+/// The comparison half of [`poll`], on an already-listed registry (`registry_sign::poll_verified`
+/// lists through a trust filter and shares this).
+pub(crate) fn diff_poll(
+    entries: Vec<RegistryEntry>,
+    bad: Vec<String>,
+    state: &mut FollowState,
+    allow_all_gone: bool,
+) -> Result<Vec<Change>> {
     if entries.is_empty() && bad.is_empty() && !state.seen.is_empty() && !allow_all_gone {
         return Err(S2Error::Invalid(format!(
             "registry is empty but {} worktree(s) were known; wrong project bucket? (poll_confirmed accepts it)",

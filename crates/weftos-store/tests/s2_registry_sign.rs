@@ -79,3 +79,42 @@ fn a_mangled_signature_object_is_bad_not_an_error() {
     assert_eq!(verify_registry_entry(&b, PR, "x", &Trusts("daemon")).unwrap(), Trust::Bad);
     assert!(verify_registry_entry(&b, PR, "../x", &Trusts("daemon")).is_err());
 }
+
+#[test]
+fn a_strict_follower_is_told_about_refused_entries_and_removal_leaves_no_orphan() {
+    use weftos_store::follower::{Change, FollowState};
+    let b = MemBackend::new();
+    write_registry_entry_signed(&b, PR, &entry("good"), &Toy("daemon")).unwrap();
+    write_registry_entry_signed(&b, PR, &entry("forged"), &Toy("intruder")).unwrap();
+    write_registry_entry(&b, PR, &entry("plain")).unwrap();
+    let v = Trusts("daemon");
+
+    let mut st = FollowState::default();
+    let ch = poll_verified(&b, PR, &mut st, &v, true, false).unwrap();
+    assert!(ch.iter().any(|c| matches!(c, Change::New(e) if e.slug == "good")));
+    // refused, not silently absent
+    for s in ["forged", "plain"] {
+        assert!(ch.iter().any(|c| matches!(c, Change::Unreadable { slug } if slug == s)), "{s}: {ch:?}");
+    }
+    assert!(!st.seen.contains_key("forged") && !st.seen.contains_key("plain"));
+
+    // lenient mode keeps everything and reports each entry's trust
+    let (all, bad) = list_trusted_lenient(&b, PR, &v, false).unwrap();
+    assert_eq!((all.len(), bad.len()), (3, 0));
+
+    // an entry that was trusted and then loses its signature goes Unreadable and is remembered
+    let mut st = FollowState::default();
+    poll_verified(&b, PR, &mut st, &v, true, false).unwrap();
+    let mut edited = entry("good");
+    edited.head_commit = "moved".into();
+    write_registry_entry(&b, PR, &edited).unwrap(); // rewritten without a fresh signature
+    let ch = poll_verified(&b, PR, &mut st, &v, true, false).unwrap();
+    assert!(ch.iter().any(|c| matches!(c, Change::Unreadable { slug } if slug == "good")), "{ch:?}");
+    assert!(st.seen.contains_key("good"), "previous state kept, so it is not reported as gone");
+
+    remove_registry_entry_signed(&b, PR, "good").unwrap();
+    assert!(b.get(PR, "worktrees/good.json").unwrap().is_none());
+    assert!(b.get(PR, "worktrees.sig/good.json").unwrap().is_none());
+    // removing an unsigned entry (no sidecar) is fine too
+    remove_registry_entry_signed(&b, PR, "plain").unwrap();
+}
