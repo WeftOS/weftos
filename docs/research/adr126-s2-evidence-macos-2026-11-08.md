@@ -383,3 +383,61 @@ daemon-driven numbers. The release build also removes any debug-build cost, so p
 that, but the earlier tests already showed the disk dominating. This was one run on a busy machine,
 with trees of 4 to 65 objects; it says nothing about Sansone-scale trees (gate item 3), and the
 previous "upper bound" wording for the item 1 table applies to the whole table above.
+
+## Second fix pass (F7, F13, F14, F19, F20)
+
+One commit per finding on `wt/adr126-s2-mac`. Each new test failed before its fix (F14 as a compile
+failure, because the helpers it tests did not exist).
+
+| Finding | Commit | Test |
+|---|---|---|
+| F7 promote after another's or an expired claim | `9f0ab5290` | `store_worktree::tests::promote_runs_when_someone_else_holds_the_claim_or_it_expired_and_records_the_lander` |
+| F13 denylist gaps | `2f2d50c55` | `s2_worktree::more_secret_names_are_refused_and_lookalikes_pass` |
+| F14 publish read from one handle | `b8c21affd` | `share::read_tests::{a_regular_file_is_read_whole, a_symlink_is_never_followed_even_if_it_appears_after_the_checks, a_file_over_the_cap_is_refused_and_a_missing_one_is_named}` |
+| F19 forged manifest and registry keys | `275f05cbe` | `s2_follower::{a_forged_manifest_cannot_touch_the_followers_own_files_or_leave_the_cache, a_registry_object_is_known_by_its_key_and_an_entry_claiming_another_slug_is_unreadable}` |
+| F20 case-only key collisions | `dcbcc7c04` | `fs::tests::keys_that_differ_only_by_case_are_refused_not_merged` |
+
+Design calls:
+
+- **F7.** New `share::mark_landed`, used by `store.worktree.promote`. A git land is the merge, so
+  the handoff becomes `Merged` whatever the state was (open, handoff, claimed by anyone, claim
+  expired), with the lander as `merger` and a displaced claimer named in the note. A worktree that
+  was never published has no handoff record; promotion still runs for it (as it did before) and no
+  record is invented. `scripts/worktree-store.sh` is unchanged. Its `store promote` stays best
+  effort, so a promotion that fails for another reason still only warns.
+- **F13.** `is_secret_path` now also refuses: any name containing `.env.` that is not a
+  `.example`/`.sample`/`.template` file (`prod.env.bak`), `*.tfvars`, `.pypirc`, `*.token`, anything
+  under a `.kube` or `store-secrets` directory, and `config.json` directly under `.docker`. I used
+  the suffix `*.token`, not `*token*`, to keep `token.rs` and similar source files shareable.
+- **F14.** The standard library has no `O_NOFOLLOW` and `weftos-store` has no `libc` dependency
+  (adding one is a diff-gate change). Instead publish opens the file, then requires the path to
+  still be a regular, non-symlink file with the same device and inode as the open handle (unix),
+  and reads at most the cap plus one byte from that handle. A swap before the open shows as a
+  symlink or another inode; a swap after it cannot change what the handle reads. Two new skip
+  reasons: `Changed`, and a read past the cap reports `TooLarge`. The total budget is rechecked on
+  the bytes actually read. Not covered: a path swapped for a FIFO between the stat and the open
+  would block the open; `O_NONBLOCK` would need the same constant problem solved.
+- **F19.** Path names starting `.wt-` or equal to `.wt` are now dangerous names, so a fetch refuses
+  them (listed under `refused`) and publish skips them. `sync_docs` drops such docs, names that fail
+  key validation and secret names before it writes its index, and opens its own index by fixed name
+  (replacing a symlink there). The second half of the finding, polling keyed on `entry.slug`, was
+  already closed by the F3 and F11 commits (both listing paths require the entry slug to equal the
+  object key); the new registry test pins it.
+- **F20.** `FsBackend` refuses a put whose key differs only by case from an existing key (any path
+  segment), on every host, not only on macOS, so a store reads the same everywhere. A get, head or
+  delete of the other case finds nothing instead of reaching the other object. Detection is by
+  Unicode lowercase; names that differ only by normalisation form are not detected. The check is a
+  directory scan per segment and is not atomic with the write, which is acceptable because the
+  daemon is the only writer of this backend.
+
+Tests, before and after:
+
+| Slice | Before | After |
+|---|---|---|
+| `scripts/build.sh test weftos-store --features rustfs` | 107 passed, 11 ignored | 114 passed, 11 ignored |
+| `scripts/build.sh test clawft-weave --filter store` | 51 passed | 52 passed |
+| `scripts/build.sh clippy weftos-store --features rustfs`, `scripts/build.sh clippy clawft-weave` | clean | clean |
+
+No real-RustFS run was made for this pass: none of the five fixes touches the RustFS transport,
+and the F7 verb was exercised against `FsBackend`. The shell test for `worktree-store.sh` was not
+re-run because the script did not change.
