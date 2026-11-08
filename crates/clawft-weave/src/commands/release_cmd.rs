@@ -19,7 +19,7 @@ use std::sync::Arc;
 use clap::{Args, Subcommand};
 use weftos_release::{
     Artifact, LockMode, LockPolicy, PublishOutcome, PublishRequest, ReleaseBackend, ReleasePublisher, ReleaseSigner, ReleaseStoreName,
-    s3::StoreBackend,
+    route::CiRoute, s3::StoreBackend,
 };
 
 /// Largest single artifact: it is read into memory (a streaming upload comes with multipart support).
@@ -62,10 +62,30 @@ pub enum ReleaseAction {
         /// Days to keep the manifest and new blobs, counted from now (1 to 3650).
         #[arg(long, requires = "lock")]
         lock_days: Option<u64>,
+        /// How CI reaches the bucket: `direct` (this key talks to the object store) or `daemon` (through the
+        /// weaver daemon's store service as an `append` principal). Default: `weftos_release::route::DEFAULT_CI_ROUTE`.
+        #[arg(long, value_parser = ["direct", "daemon"])]
+        ci_route: Option<String>,
         /// Print the receipt as JSON.
         #[arg(long)]
         json: bool,
     },
+}
+
+/// The route the flag names, or the library default.
+pub fn resolve_route(flag: Option<&str>) -> anyhow::Result<CiRoute> {
+    let route = match flag {
+        Some(s) => CiRoute::parse(s).map_err(|e| anyhow::anyhow!("{e}"))?,
+        None => CiRoute::default(),
+    };
+    if route == CiRoute::Daemon {
+        anyhow::bail!(
+            "CI route is daemon: that route runs inside the weaver daemon (svc.store, `append` grant), and this \
+             command has no daemon client yet. Use --ci-route direct with a CI key whose policy is \
+             weftos_release::s3::direct_ci_policy, or publish from the daemon."
+        );
+    }
+    Ok(route)
 }
 
 /// Every regular file under `dir`, as artifacts with `/`-separated relative paths, sorted.
@@ -184,7 +204,8 @@ fn parse_store(s: &str) -> anyhow::Result<ReleaseStoreName> {
 /// Run a release subcommand.
 pub async fn run(args: ReleaseArgs) -> anyhow::Result<()> {
     match args.action {
-        ReleaseAction::Publish { store, build_id, source_rev, dir, builder, signing_key, s3_env, lock, lock_days, json } => {
+        ReleaseAction::Publish { store, build_id, source_rev, dir, builder, signing_key, s3_env, lock, lock_days, ci_route, json } => {
+            let _route = resolve_route(ci_route.as_deref())?;
             let name = parse_store(&store)?;
             let signer = load_signer(&signing_key)?;
             let artifacts = collect_artifacts(&dir)?;
@@ -238,6 +259,20 @@ mod tests {
         assert!(m.contains("PutObjectRetention") && m.contains("append"), "{m}");
         let other = explain_denied(anyhow::anyhow!("build b1 is already published")).to_string();
         assert!(!other.contains("hint"), "{other}");
+    }
+
+    #[test]
+    fn the_ci_route_flag_picks_a_route_and_the_daemon_route_is_refused_here() {
+        assert_eq!(resolve_route(Some("direct")).unwrap(), CiRoute::Direct);
+        assert_eq!(resolve_route(None).unwrap(), weftos_release::route::DEFAULT_CI_ROUTE);
+        let e = resolve_route(Some("daemon")).unwrap_err().to_string();
+        assert!(e.contains("no daemon client") && e.contains("--ci-route direct"), "{e}");
+        assert!(resolve_route(Some("both")).is_err());
+        let args = |a: &[&str]| crate::commands::store_cmd::StoreArgs::try_parse_from(std::iter::once("store").chain(a.iter().copied()));
+        let base = ["release", "publish", "weftos://m/projects/x/releases/c/store", "--build-id", "b", "--source-rev", "r", "--dir", "d", "--signing-key", "k", "--s3-env", "e"];
+        assert!(args(&[&base[..], &["--ci-route", "direct"]].concat()).is_ok());
+        assert!(args(&[&base[..], &["--ci-route", "daemon"]].concat()).is_ok(), "parses; refused when run");
+        assert!(args(&[&base[..], &["--ci-route", "x"]].concat()).is_err());
     }
 
     #[test]
@@ -355,7 +390,7 @@ mod tests {
         let go = |id: &str, bytes_dir: &Path| ReleaseArgs {
             action: ReleaseAction::Publish {
                 store: name.clone(), build_id: id.into(), source_rev: "r".into(), dir: bytes_dir.to_path_buf(),
-                builder: "ci".into(), signing_key: key.clone(), s3_env: PathBuf::from(&env), lock: None, lock_days: None, json: true,
+                builder: "ci".into(), signing_key: key.clone(), s3_env: PathBuf::from(&env), lock: None, lock_days: None, ci_route: None, json: true,
             },
         };
         run(go("b1", &dist)).await.unwrap();
@@ -382,7 +417,7 @@ mod tests {
             action: ReleaseAction::Publish {
                 store: lname, build_id: "b1".into(), source_rev: "r".into(), dir: dist.clone(),
                 builder: "ci".into(), signing_key: key.clone(), s3_env: PathBuf::from(&env),
-                lock: Some("compliance".into()), lock_days: Some(2), json: true,
+                lock: Some("compliance".into()), lock_days: Some(2), ci_route: Some("direct".into()), json: true,
             },
         };
         run(locked).await.unwrap();
@@ -433,7 +468,7 @@ mod tests {
             action: ReleaseAction::Publish {
                 store: name.clone(), build_id: id.into(), source_rev: "r".into(), dir: dist.clone(),
                 builder: "ci".into(), signing_key: key.clone(), s3_env: s3.to_path_buf(),
-                lock: Some("compliance".into()), lock_days: Some(2), json: true,
+                lock: Some("compliance".into()), lock_days: Some(2), ci_route: Some("direct".into()), json: true,
             },
         };
         run(go("b1", &direct_env)).await.unwrap();

@@ -10,7 +10,7 @@ use std::sync::Arc;
 use weftos_store::backend::{LockMode as StoreMode, PutOpts, Retention};
 use weftos_store::{AdminBackend, BackendError as StoreErr, ObjectBackend, StoreName};
 
-use crate::backend::{BackendError, DeletableBackend, Lock, LockMode, PutOutcome, ReleaseBackend};
+use crate::backend::{BackendError, DeletableBackend, KeyVersion, Lock, LockMode, PutOutcome, ReleaseBackend};
 use crate::name::ReleaseStoreName;
 
 /// One release store's bucket on an S1 object backend.
@@ -113,6 +113,26 @@ impl<O: ObjectBackend + 'static> ReleaseBackend for StoreBackend<O> {
         let p = prefix.to_string();
         let metas = self.blocking(move |o, b| o.list(b, &p)).await.map_err(err)?;
         Ok(metas.into_iter().map(|m| m.key).collect())
+    }
+
+    async fn versions(&self, prefix: &str) -> Result<Option<Vec<KeyVersion>>, BackendError> {
+        let p = prefix.to_string();
+        match self.blocking(move |o, b| o.list_versions(b, &p)).await {
+            Ok(vs) => Ok(Some(
+                vs.into_iter()
+                    .map(|v| KeyVersion {
+                        key: v.key,
+                        version_id: v.version_id,
+                        is_latest: v.is_latest,
+                        is_delete_marker: v.is_delete_marker,
+                        etag: v.etag,
+                    })
+                    .collect(),
+            )),
+            // A bucket without versioning keeps no history to check.
+            Err(StoreErr::Unsupported(_)) => Ok(None),
+            Err(e) => Err(err(e)),
+        }
     }
 }
 

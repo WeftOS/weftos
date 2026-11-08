@@ -67,6 +67,50 @@ Our code on a locked, versioned bucket: publish, retry, refused rebuild, retenti
 7. **Audit.** Changes to versioning, lock configuration, lifecycle and policy leave no event, and neither do the lifecycle scanner's deletions. The log therefore cannot show who weakened a bucket or what the scanner removed. Lock retention itself is only as trustworthy as the control of who holds bucket-level admin; keep that to the owner and have the daemon read the configuration back and compare it to what was provisioned.
 8. **Streaming.** Retention headers on CreateMultipartUpload carry to the completed object and `If-None-Match: *` works on Complete, so a multipart path can keep both guarantees. S1's transport has no multipart yet.
 
+## Replaced-manifest detection and the CI route switch (2026-11-08)
+
+**Detection.** The current view cannot show a replaced object: a key written twice reads as its newest
+bytes, and a validly signed replacement verifies. `ReleaseReader::history()` lists every version through
+`ReleaseBackend::versions` (S1 `list_versions`) and reports:
+
+- `Replaced { key, contents }` when a manifest, tombstone or blob has more than one distinct content
+  (compared by etag). The sweeper's restore writes the same bytes again, so it is not a finding.
+- `ManifestDeleted { key }` when a manifest's newest entry is a delete marker and no tombstone retired the
+  build id (retention deletes the manifest only after writing the tombstone).
+- `checked: false` when the store keeps no history (a bucket without Object Lock). An empty report then
+  proves nothing, and the type says so.
+
+Proven on RustFS 1.0.4 (`live_release_store_on_a_locked_versioned_bucket`): after publishes, a retirement
+and a collection history is clean; after an unconditional put of a second signed manifest the plain read
+accepts it and history reports it. The reader needs a grant that lists versions (S1's read policy carries
+`ListBucketVersions`); it reports, it does not repair. Old versions are never removed by this crate.
+
+**The two CI routes, one switch** (`weftos_release::route`, `DEFAULT_CI_ROUTE`):
+
+| | Daemon (`append` through `svc.store`) | Direct (`direct_ci_policy`) |
+|---|---|---|
+| Write-once enforced by | the service: an `append` put without `If-None-Match` is refused | the publisher only; the key can replace what it can write |
+| Overwrite by a rogue CI key | refused and logged | succeeds; found afterwards by `history()` |
+| Lock headers | service uses root's key, so no IAM change | key needs `s3:PutObject` + `s3:PutObjectRetention` |
+| Needs | the weaver daemon in the publish path | S3 reachable from CI |
+| Audit | every put in the store's activity log by principal | RustFS audit stream only (no version ids) |
+| Today | library + tests; **no CLI client yet** | works end to end (`weaver store release publish`) |
+
+Both pass the same publish scenario (`tests/ci_route.rs`). The default is `Direct` because it is the only
+route a standalone CLI can run; flip the one constant to `Daemon` when the owner picks it. The verb then
+refuses with a message saying it has no daemon client yet, rather than quietly using the other route.
+`--ci-route direct|daemon` overrides per run.
+
+**Sweeper put, not yet granted.** S1's `sweep` role is read + delete. A sweep needs more than that, in
+order: a tombstone put, a quarantine copy (the service has no copy call, so the service route does get +
+put), and for a locked store a locked put on restore. Measured through the service
+(`the_sweep_role_cannot_run_a_sweep_and_deletes_nothing`): under `sweep` the first write (the tombstone) is
+refused with `PutObject needs append`, before any delete, so nothing is lost; under `write` the whole sweep
+runs (`the_write_role_runs_the_whole_sweep_including_quarantine`). Options for the owner: (a) give the
+sweeper `write` on the release store (it can then overwrite too, which weakens the sweeper's own
+separation from CI), (b) add a `sweep+put` level that may put under `tombstones/*`, `quarantine/*` and
+`blobs/*` only, plus a service copy call. (b) is the narrower grant and is what S1 is asked to prepare.
+
 ## Not verified
 
 - Whether lifecycle respects a retention date at real day scale (only a sped-up scanner against wall-clock dates was seen), and whether it expires a version once its retention has lapsed.
@@ -78,6 +122,6 @@ Our code on a locked, versioned bucket: publish, retry, refused rebuild, retenti
 ## Order of work
 
 1. S1: decide the CI route (daemon-mediated append, or the direct role above); a put for the `sweep` role (locked restore); list-versions; extend-retention call; default bucket retention; multipart (with lock headers on create); expose `--locked` on `weaver store create`.
-2. S4 (done in this branch): lock policy on publish, locked restore, locked-bucket helper, `--lock` on the verb, the direct CI policy, live tests with non-root keys.
+2. S4 (done in this branch): lock policy on publish, locked restore, locked-bucket helper, `--lock` on the verb, the direct CI policy, live tests with non-root keys, version-history audit (`history()`), both CI routes behind `DEFAULT_CI_ROUTE`.
 3. S4 next: stamp after commit once S1 has extend-retention; read-back check of lock configuration; lifecycle rule provisioning.
 4. Owner: pick the modes and floors per channel.

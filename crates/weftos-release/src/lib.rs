@@ -52,6 +52,15 @@
 //! id. Readers and the sweeper treat anything unsigned as untrusted, and the sweeper reports it and
 //! leaves it in place for the operator.
 //!
+//! # Version history and the CI route (feature `store`)
+//!
+//! A versioned (Object Lock) bucket keeps every write. [`ReleaseReader::history`] reads that history
+//! and reports a manifest, tombstone or blob replaced with different bytes, and a manifest deleted with
+//! no tombstone. It is how the direct CI route's one weakness (a key that can write can replace) is made
+//! visible. `route` holds the two ways CI reaches the bucket, daemon-mediated `append` and the direct
+//! role, behind one constant (`route::DEFAULT_CI_ROUTE`). See
+//! `docs/research/adr126-s4-release-bucket-immutability-2026-11-08.md`.
+//!
 //! # What this crate does not do
 //!
 //! The S3 adapter, the name-to-bucket mapping, grants and the `weaver` verb belong to
@@ -66,9 +75,11 @@ pub mod publish;
 pub mod read;
 pub mod retention;
 #[cfg(feature = "store")]
+pub mod route;
+#[cfg(feature = "store")]
 pub mod s3;
 
-pub use backend::{BackendError, DeletableBackend, Lock, LockMode, MemoryBackend, PutOutcome, ReleaseBackend};
+pub use backend::{BackendError, DeletableBackend, KeyVersion, Lock, LockMode, MemoryBackend, PutOutcome, ReleaseBackend};
 pub use error::{ReleaseError, Result};
 pub use manifest::{
     ArtifactRef, Manifest, ReleaseSigner, SignedManifest, TrustedKey, TrustedKeys, SCHEMA,
@@ -77,7 +88,7 @@ pub use name::ReleaseStoreName;
 pub use publish::{
     LockPolicy, MAX_BACKDATE_SECS, MAX_FUTURE_SKEW_SECS, MAX_LOCK_FLOOR_SECS, Artifact, PublishOutcome, PublishReceipt, PublishRequest, ReleasePublisher,
 };
-pub use read::{ReleaseReader, VerifiedManifest};
+pub use read::{HistoryFinding, HistoryReport, ReleaseReader, VerifiedManifest};
 pub use retention::{
     plan, KeepReason, ReleaseMeta, RetentionPlan, RetentionPolicy, SweepReport, Sweeper, Tombstone,
 };

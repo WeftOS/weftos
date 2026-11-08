@@ -706,3 +706,97 @@ async fn a_restore_in_a_locked_bucket_comes_back_locked() {
     let lock = be.lock_of(&format!("blobs/{h}")).expect("restored blob is locked again");
     assert_eq!((lock.mode, lock.until), (LockMode::Compliance, 1_600 + 5_000));
 }
+
+// ---- replaced-manifest detection from version history (ADR-126 S4, S1 list_versions) ----
+
+#[tokio::test]
+async fn history_is_unchecked_without_versioning() {
+    let (be, st, sg) = (MemoryBackend::new(), store("stable"), signer(1));
+    let tk = trusted(&sg);
+    ReleasePublisher::new(&be, &st, &sg).publish(req("b1", &[("a", b"x")]), NOW).await.unwrap();
+    be.tamper("releases/b1/manifest.json", b"{}");
+    let h = ReleaseReader::new(&be, &st, &tk).history().await.unwrap();
+    // No history kept: the replacement is invisible here, and the report must say so rather than
+    // look clean.
+    assert!(!h.checked);
+    assert!(h.findings.is_empty());
+}
+
+#[tokio::test]
+async fn untouched_store_has_a_clean_history() {
+    let (be, st, sg) = (locked_backend(), store("stable"), signer(1));
+    let tk = trusted(&sg);
+    seeded(&be, &st, &sg).await;
+    let h = ReleaseReader::new(&be, &st, &tk).history().await.unwrap();
+    assert!(h.checked);
+    assert!(h.findings.is_empty(), "{:?}", h.findings);
+}
+
+#[tokio::test]
+async fn a_replaced_manifest_is_found_even_though_the_current_one_verifies() {
+    let (be, st, sg) = (locked_backend(), store("stable"), signer(1));
+    let tk = trusted(&sg);
+    ReleasePublisher::new(&be, &st, &sg).publish(req("b1", &[("a", b"x")]), NOW).await.unwrap();
+    // A second validly signed manifest for the same build id, written over the first by a
+    // principal that can write the key (the direct CI role can).
+    let scratch = MemoryBackend::new();
+    ReleasePublisher::new(&scratch, &st, &sg).publish(req("b1", &[("a", b"EVIL")]), NOW).await.unwrap();
+    let forged = ReleaseBackendExt::raw(&scratch, "releases/b1/manifest.json").await;
+    be.tamper("releases/b1/manifest.json", &forged);
+
+    let rd = ReleaseReader::new(&be, &st, &tk);
+    assert!(rd.manifest("b1").await.is_ok(), "the replacement is signed, so the plain read trusts it");
+    let h = rd.history().await.unwrap();
+    assert_eq!(h.findings, vec![HistoryFinding::Replaced { key: "releases/b1/manifest.json".into(), contents: 2 }]);
+}
+
+#[tokio::test]
+async fn a_replaced_blob_and_a_replaced_tombstone_are_found() {
+    let (be, st, sg) = (locked_backend(), store("stable"), signer(1));
+    let tk = trusted(&sg);
+    seeded(&be, &st, &sg).await;
+    let pol = RetentionPolicy::new(1, 0).unwrap();
+    Sweeper::new(&be, &st, &tk).sweep(&pol, 1_000, 500, "keep-last=1").await.unwrap();
+    let h3 = blake3::hash(b"new").to_hex().to_string();
+    be.tamper(&format!("blobs/{h3}"), b"swapped");
+    be.tamper("tombstones/b1", b"{}");
+    let h = ReleaseReader::new(&be, &st, &tk).history().await.unwrap();
+    let keys: Vec<_> = h
+        .findings
+        .iter()
+        .map(|f| match f {
+            HistoryFinding::Replaced { key, .. } => key.clone(),
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(keys, vec![format!("blobs/{h3}"), "tombstones/b1".to_string()]);
+}
+
+#[tokio::test]
+async fn retention_and_the_sweepers_restore_are_not_findings() {
+    let (be, st, sg) = (locked_backend(), store("stable"), signer(1));
+    let tk = trusted(&sg);
+    seeded(&be, &st, &sg).await;
+    let pol = RetentionPolicy::new(1, 0).unwrap();
+    let sw = Sweeper::new(&be, &st, &tk).with_lock(LockPolicy::new(LockMode::Governance, 60).unwrap());
+    sw.sweep(&pol, 1_000, 500, "keep-last=1").await.unwrap();
+    sw.sweep(&pol, 1_600, 500, "keep-last=1").await.unwrap();
+    // A restore: park a blob, delete it, and put the same bytes back, as a lost publish/sweep race does.
+    let hs = blake3::hash(b"new").to_hex().to_string();
+    let bytes = ReleaseBackendExt::raw(&be, &format!("blobs/{hs}")).await;
+    be.delete(&format!("blobs/{hs}")).await.unwrap();
+    be.tamper(&format!("blobs/{hs}"), &bytes);
+    let h = ReleaseReader::new(&be, &st, &tk).history().await.unwrap();
+    assert!(h.checked);
+    assert!(h.findings.is_empty(), "retired manifests have tombstones and a restore has equal bytes: {:?}", h.findings);
+}
+
+#[tokio::test]
+async fn a_manifest_deleted_without_a_tombstone_is_found() {
+    let (be, st, sg) = (locked_backend(), store("stable"), signer(1));
+    let tk = trusted(&sg);
+    ReleasePublisher::new(&be, &st, &sg).publish(req("b1", &[("a", b"x")]), NOW).await.unwrap();
+    be.delete("releases/b1/manifest.json").await.unwrap(); // an operator, not retention
+    let h = ReleaseReader::new(&be, &st, &tk).history().await.unwrap();
+    assert_eq!(h.findings, vec![HistoryFinding::ManifestDeleted { key: "releases/b1/manifest.json".into() }]);
+}

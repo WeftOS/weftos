@@ -124,6 +124,7 @@ async fn live_release_store_on_a_locked_versioned_bucket() {
         .await
         .unwrap()
         .unwrap();
+    let raw_objects = objects.clone();
     let be = StoreBackend::for_release(objects, &st).unwrap();
     assert_eq!(be.bucket(), bucket);
 
@@ -170,4 +171,29 @@ async fn live_release_store_on_a_locked_versioned_bucket() {
     // a retired id stays retired even though its manifest key is only hidden by a marker
     let e = p.publish(rq("b1", now - 500, &[("bin/weaver", b"v1"), ("shared", b"s")]), now).await.unwrap_err();
     assert!(matches!(e, ReleaseError::Retired { .. }), "{e}");
+
+    // version history on the real server: after publishes, a retirement, a sweep and a restore-free
+    // collection, nothing is flagged...
+    let h = rd.history().await.unwrap();
+    assert!(h.checked, "a locked bucket keeps versions");
+    assert!(h.findings.is_empty(), "retention is not a replacement: {:?}", h.findings);
+
+    // ...then a principal that can write the key replaces b2's manifest with another validly signed
+    // one (the direct CI role can; S1's append role cannot). The plain read trusts it, history does not.
+    let scratch = MemoryBackend::new();
+    let mut evil = rq("b2", now - 400, &[("bin/weaver", b"EVIL")]);
+    evil.created_at = now - 400;
+    ReleasePublisher::new(&scratch, &st, &sg).publish(evil, now).await.unwrap();
+    let forged = scratch.get("releases/b2/manifest.json").await.unwrap().unwrap();
+    let (o, bk) = (raw_objects.clone(), bucket.clone());
+    tokio::task::spawn_blocking(move || {
+        use weftos_store::ObjectBackend;
+        o.put(&bk, "releases/b2/manifest.json", &forged, false)
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(rd.manifest("b2").await.is_ok(), "signed, so a plain read accepts the replacement");
+    let h = rd.history().await.unwrap();
+    assert_eq!(h.findings, vec![HistoryFinding::Replaced { key: "releases/b2/manifest.json".into(), contents: 2 }]);
 }

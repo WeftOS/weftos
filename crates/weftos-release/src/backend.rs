@@ -49,6 +49,19 @@ pub struct Lock {
     pub until: u64,
 }
 
+/// One stored version of a key, or a delete marker, as a versioned bucket keeps them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyVersion {
+    pub key: String,
+    pub version_id: String,
+    /// The newest entry for its key.
+    pub is_latest: bool,
+    /// A delete (the key reads as absent) rather than content.
+    pub is_delete_marker: bool,
+    /// Identifies the content: equal etags are equal bytes. Empty on a delete marker.
+    pub etag: String,
+}
+
 /// Write-once access to one release store (one bucket).
 pub trait ReleaseBackend: Send + Sync {
     /// Store `bytes` under `key` only if `key` does not exist. Must be atomic: of any number of
@@ -76,6 +89,13 @@ pub trait ReleaseBackend: Send + Sync {
 
     /// Every key that starts with `prefix`, in any order. Must follow pagination to the end.
     fn list(&self, prefix: &str) -> impl Future<Output = Result<Vec<String>, BackendError>> + Send;
+
+    /// Every stored version and delete marker under `prefix`, or `None` when this store keeps no
+    /// history (a bucket made without Object Lock). Needs a grant that lists versions.
+    /// [`ReleaseReader::history`](crate::ReleaseReader::history) uses it to find a replaced manifest.
+    fn versions(&self, _prefix: &str) -> impl Future<Output = Result<Option<Vec<KeyVersion>>, BackendError>> + Send {
+        async { Ok(None) }
+    }
 }
 
 /// The extra grant retention needs. Not given to CI.
@@ -127,6 +147,18 @@ struct MemInner {
     puts_total: usize,
     locks: BTreeMap<String, Lock>,
     lock_enabled: bool,
+    /// Per key, oldest first: `Some(etag)` is content, `None` a delete marker. Kept once versioning
+    /// is on (Object Lock turns it on).
+    history: BTreeMap<String, Vec<Option<String>>>,
+    versioned: bool,
+}
+
+impl MemInner {
+    fn record(&mut self, key: &str, bytes: Option<&[u8]>) {
+        if self.versioned {
+            self.history.entry(key.to_string()).or_default().push(bytes.map(crate::manifest::hash_bytes));
+        }
+    }
 }
 
 impl MemoryBackend {
@@ -160,7 +192,14 @@ impl MemoryBackend {
 
     /// Behave like a bucket made with Object Lock: `put_if_absent_locked` works.
     pub fn enable_lock(&self) {
-        self.inner.lock().unwrap().lock_enabled = true;
+        let mut g = self.inner.lock().unwrap();
+        g.lock_enabled = true;
+        g.versioned = true;
+    }
+
+    /// Keep every version, as a versioned bucket does, without Object Lock.
+    pub fn enable_versioning(&self) {
+        self.inner.lock().unwrap().versioned = true;
     }
 
     /// The lock stamped on the current version of `key`, if any.
@@ -215,7 +254,9 @@ impl MemoryBackend {
     /// damaged disk would. For adversarial tests only.
     #[doc(hidden)]
     pub fn tamper(&self, key: &str, bytes: &[u8]) {
-        self.inner.lock().unwrap().objects.insert(key.to_string(), bytes.to_vec());
+        let mut g = self.inner.lock().unwrap();
+        g.objects.insert(key.to_string(), bytes.to_vec());
+        g.record(key, Some(bytes));
     }
 }
 
@@ -234,6 +275,7 @@ impl ReleaseBackend for MemoryBackend {
             return Ok(PutOutcome::Exists);
         }
         g.objects.insert(key.to_string(), bytes.to_vec());
+        g.record(key, Some(bytes));
         Ok(PutOutcome::Created)
     }
 
@@ -258,6 +300,28 @@ impl ReleaseBackend for MemoryBackend {
         let g = self.inner.lock().unwrap();
         Ok(g.objects.keys().filter(|k| k.starts_with(prefix)).cloned().collect())
     }
+
+    async fn versions(&self, prefix: &str) -> Result<Option<Vec<KeyVersion>>, BackendError> {
+        self.pause().await;
+        let g = self.inner.lock().unwrap();
+        if !g.versioned {
+            return Ok(None);
+        }
+        let mut out = Vec::new();
+        for (key, hist) in g.history.iter().filter(|(k, _)| k.starts_with(prefix)) {
+            // Newest first, as S3 lists them.
+            for (i, v) in hist.iter().enumerate().rev() {
+                out.push(KeyVersion {
+                    key: key.clone(),
+                    version_id: format!("v{i}"),
+                    is_latest: i + 1 == hist.len(),
+                    is_delete_marker: v.is_none(),
+                    etag: v.clone().unwrap_or_default(),
+                });
+            }
+        }
+        Ok(Some(out))
+    }
 }
 
 impl DeletableBackend for MemoryBackend {
@@ -267,6 +331,7 @@ impl DeletableBackend for MemoryBackend {
         let Some(bytes) = g.objects.get(src).cloned() else {
             return Err(BackendError(format!("copy: {src} does not exist")));
         };
+        g.record(dst, Some(&bytes));
         g.objects.insert(dst.to_string(), bytes);
         Ok(())
     }
@@ -276,7 +341,9 @@ impl DeletableBackend for MemoryBackend {
         self.fire(key, false);
         {
             let mut g = self.inner.lock().unwrap();
-            g.objects.remove(key);
+            if g.objects.remove(key).is_some() {
+                g.record(key, None);
+            }
             g.locks.remove(key);
         }
         self.fire(key, true);
