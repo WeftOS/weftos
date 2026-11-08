@@ -89,7 +89,9 @@ Commit 4eda02ced (S1 approvals and project-store commit) exists locally and is c
 | Branch | Tip | Pointer |
 |---|---|---|
 | `main` | 0a05fe7 | `git -C /Volumes/ai-models/research/weftos-mesh-mock log --oneline -1 main` |
-| `feat/manifest-v2` | d9cb33a (merge of `feat/metadata-index`) | same, worktree `weftos-mesh-mock-wt-manifest` |
+| `feat/manifest-v2` | fe62f5b (d9cb33a plus bf7cf3a `rust-toolchain.toml` 1.95, 78458d3 `version =` next to each path dependency, fe62f5b repo-plan "Pinned inputs" table) | same, worktree `weftos-mesh-mock-wt-manifest` |
+
+2026-11-08 PM advance: the toolchain is pinned (1.95, a guess matching the WeftOS workspace; the toolchain behind the live SC binary is unknown), the three path dependencies carry versions (`weftos-tree-spike` 0.0.0, `weftos-integrator-spike` 0.0.0, `weftos-pq-sign` 0.8.4; none is a git repo, so the repo plan records a SHA-256 over each directory as the only real pin), `scripts/reproducible-build-check.sh` built `gcsmesh` twice into different target dirs with one hash (763b3892...; Mac arm64, not the x86-64 Linux binary the SC runs), 45 tests pass, mirror matches local. The Terraform pin (`sc_gcsmesh_sha256`, found in the `tf-gcp-seed` worktree, not under `~/weftos/gcp`) differs as expected and is untouched. Still the owner's: the remote and push rights, where the dependency crates get versioned, whether to deploy manifest v2 (CI-host x86-64 build, `sc-v...` tag, new pin).
 
 The main checkout shows one untracked path, `tools/seed-drive-d1/.claude-flow/`. The seed cone (SC)
 binary is pinned in Terraform `gcp/seed-store/variables.tf` (`sc_gcsmesh_sha256`, next-steps 3e).
