@@ -79,6 +79,7 @@ pub fn validate_build_id(id: &str) -> Result<()> {
 pub(crate) const BLOBS: &str = "blobs/";
 pub(crate) const RELEASES: &str = "releases/";
 pub(crate) const TOMBSTONES: &str = "tombstones/";
+pub(crate) const QUARANTINE: &str = "quarantine/";
 
 pub(crate) fn blob_key(hash: &str) -> String {
     format!("{BLOBS}{hash}")
@@ -86,6 +87,10 @@ pub(crate) fn blob_key(hash: &str) -> String {
 
 pub(crate) fn manifest_key(build_id: &str) -> String {
     format!("{RELEASES}{build_id}/manifest.json")
+}
+
+pub(crate) fn quarantine_key(hash: &str) -> String {
+    format!("{QUARANTINE}{hash}")
 }
 
 pub(crate) fn tombstone_key(build_id: &str) -> String {

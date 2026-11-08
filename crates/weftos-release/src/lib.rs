@@ -29,24 +29,24 @@
 //!   on `tombstones/*`, which a publish checks. No DeleteObject, and no PutObject on `tombstones/*`: a
 //!   writer there could retire build ids or nominate live-but-unreferenced blobs for collection.
 //! - **Daemon sweeper:** the only holder of DeleteObject and of PutObject on `tombstones/*`. It also
-//!   needs PutObject on `blobs/*`, to undo a delete (below).
+//!   needs PutObject and server-side copy on `blobs/*` and `quarantine/*`, to set a blob aside and undo a delete (below).
 //! - **Everyone else in the project:** read.
 //!
 //! # Publish versus sweep
 //!
 //! A publish may reuse a blob that a sweep is about to delete. Three steps close that, in order:
-//! the sweeper re-reads every manifest right before deleting a blob; it keeps the blob's bytes,
-//! deletes, then re-reads the manifests again and **puts the blob back** if any now names it (or if
-//! they cannot be read); and the publisher, after its manifest commits, re-puts every blob it needs.
-//! A manifest written before the sweeper's second read is seen by it; one written after is followed by
-//! the publisher's re-put, which finds the blob gone and fills it. Either way no committed release is
+//! the sweeper re-reads every manifest right before deleting a blob; it sets the blob aside with a
+//! server-side copy to `quarantine/<hash>` (the bytes never pass through the sweeper), deletes, then
+//! re-reads the manifests again and **copies the blob back** if any now names it (or if they cannot be
+//! read); and the publisher, after its manifest commits, re-puts every blob it needs. A manifest
+//! written before the sweeper's second read is seen by it; one written after is followed by the
+//! publisher's re-put, which finds the blob gone and fills it. Either way no committed release is
 //! left without its blob, provided the store lists and reads strongly consistently (S3 and RustFS do).
 //! A reader can see `Missing` for the instant between the delete and the restore and should retry.
 //!
-//! What remains: the sweeper process dying between the delete and the restore. The hole is visible
-//! to [`ReleaseReader::audit`], and re-running the publish for that build id (CI retries do) puts the
-//! bytes back. Holding a blob's bytes in memory during its delete is the cost; the streaming path
-//! will replace that with a server-side copy.
+//! A sweeper that dies in between leaves its `quarantine/` copy. The next sweep starts by putting back
+//! every set-aside blob a manifest still names, then drops the copies. Until then the hole is visible
+//! to [`ReleaseReader::audit`], and re-running the publish for that build id puts the bytes back too.
 //!
 //! A principal with write access but not the signing key can still plant junk objects or squat a build
 //! id. Readers and the sweeper treat anything unsigned as untrusted, and the sweeper reports it and

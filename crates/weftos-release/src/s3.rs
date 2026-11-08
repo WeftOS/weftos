@@ -79,6 +79,11 @@ impl<O: ObjectBackend + 'static> ReleaseBackend for StoreBackend<O> {
 }
 
 impl<O: ObjectBackend + 'static> DeletableBackend for StoreBackend<O> {
+    async fn copy(&self, src: &str, dst: &str) -> Result<(), BackendError> {
+        let (s, d) = (src.to_string(), dst.to_string());
+        self.blocking(move |o, b| o.copy(b, &s, b, &d).map(|_| ())).await.map_err(err)
+    }
+
     async fn delete(&self, key: &str) -> Result<(), BackendError> {
         let k = key.to_string();
         match self.blocking(move |o, b| o.delete(b, &k)).await {

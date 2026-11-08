@@ -527,18 +527,38 @@ async fn unreadable_manifest_after_the_delete_restores_the_blob() {
 }
 
 #[tokio::test]
-async fn a_blob_whose_bytes_do_not_match_its_name_is_not_touched() {
+async fn a_sweep_that_died_after_the_delete_is_finished_by_the_next_one() {
     let (be, st, sg) = (MemoryBackend::new(), store("stable"), signer(1));
     let tk = trusted(&sg);
     seeded(&be, &st, &sg).await;
     let sw = Sweeper::new(&be, &st, &tk);
     let pol = RetentionPolicy::new(1, 0).unwrap();
     sw.sweep(&pol, 1_000, 500, "t").await.unwrap();
+
+    // Crash state: the blob is set aside and deleted, and a release now names it.
     let h = blake3::hash(b"old-only").to_hex().to_string();
-    be.tamper(&format!("blobs/{h}"), b"bit rot");
+    DeletableBackend::copy(&be, &format!("blobs/{h}"), &format!("quarantine/{h}")).await.unwrap();
+    DeletableBackend::delete(&be, &format!("blobs/{h}")).await.unwrap();
+    be.tamper("releases/late/manifest.json", &late_manifest(&st, &sg).await);
+    let rd = ReleaseReader::new(&be, &st, &tk);
+    let m = rd.manifest("late").await.unwrap();
+    assert!(!rd.audit(&m).await.unwrap().is_empty(), "the hole is there");
+
     let r = sw.sweep(&pol, 1_600, 500, "t").await.unwrap();
-    assert!(r.blobs_skipped.iter().any(|(k, _)| k == &h), "{r:?}");
-    assert!(be.keys().contains(&format!("blobs/{h}")));
+    assert_eq!(r.blobs_recovered, vec![h.clone()]);
+    assert!(rd.audit(&m).await.unwrap().is_empty(), "the next sweep put it back");
+    assert!(!be.keys().iter().any(|k| k.starts_with("quarantine/")), "nothing left parked");
+}
+
+#[tokio::test]
+async fn a_parked_copy_of_an_unreferenced_blob_is_dropped() {
+    let (be, st, sg) = (MemoryBackend::new(), store("stable"), signer(1));
+    let tk = trusted(&sg);
+    seeded(&be, &st, &sg).await;
+    be.tamper("quarantine/deadbeef", b"x");
+    let r = Sweeper::new(&be, &st, &tk).sweep(&RetentionPolicy::new(3, 0).unwrap(), 1_000, 500, "t").await.unwrap();
+    assert!(r.blobs_recovered.is_empty());
+    assert!(!be.keys().contains(&"quarantine/deadbeef".to_string()));
 }
 
 #[tokio::test]

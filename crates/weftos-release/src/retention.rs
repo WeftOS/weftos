@@ -22,10 +22,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::backend::{DeletableBackend, PutOutcome};
 use crate::error::{invalid, ReleaseError, Result};
-use crate::manifest::{hash_bytes, Manifest, SignedManifest, TrustedKeys};
+use crate::manifest::{Manifest, SignedManifest, TrustedKeys};
 use crate::name::{
-    blob_key, build_id_from_manifest_key, manifest_key, tombstone_key, ReleaseStoreName, BLOBS,
-    RELEASES, TOMBSTONES,
+    blob_key, build_id_from_manifest_key, manifest_key, quarantine_key, tombstone_key,
+    ReleaseStoreName, BLOBS, QUARANTINE, RELEASES, TOMBSTONES,
 };
 
 #[derive(Clone, Debug)]
@@ -121,8 +121,8 @@ pub struct SweepReport {
     pub blobs_deleted: Vec<String>,
     /// Blobs a publish started referencing while they were being deleted, and that were put back.
     pub blobs_restored: Vec<String>,
-    /// Blobs left alone because their stored bytes do not match their name: (hash, why).
-    pub blobs_skipped: Vec<(String, String)>,
+    /// Blobs a previous, interrupted sweep had set aside and this one put back.
+    pub blobs_recovered: Vec<String>,
     /// Set when blob deletion was skipped because a manifest could not be parsed.
     pub blob_gc_skipped: Option<String>,
 }
@@ -146,6 +146,7 @@ impl<'a, B: DeletableBackend> Sweeper<'a, B> {
         reason: &str,
     ) -> Result<SweepReport> {
         let mut report = SweepReport::default();
+        self.recover_quarantine(&mut report).await?;
 
         // 1. Classify every manifest object.
         let mut verified: Vec<Manifest> = Vec::new();
@@ -244,14 +245,10 @@ impl<'a, B: DeletableBackend> Sweeper<'a, B> {
             if self.referenced_now().await?.contains(hash) {
                 continue;
             }
-            // Keep the bytes so the delete can be undone. Without this a publish that reused the
-            // blob, saw it present, and committed between the look above and the delete below
-            // would leave a manifest naming a blob that is gone.
-            let Some(bytes) = self.backend.get(&blob_key(hash)).await? else { continue };
-            if hash_bytes(&bytes) != *hash {
-                report.blobs_skipped.push((hash.clone(), "stored bytes do not match the name".into()));
-                continue;
-            }
+            // Set the blob aside with a server-side copy so the delete can be undone without the
+            // bytes passing through here, and so a crash leaves the copy for the next sweep.
+            let q = quarantine_key(hash);
+            self.backend.copy(&blob_key(hash), &q).await?;
             self.backend.delete(&blob_key(hash)).await?;
             // Look once more, now that the blob is gone. Every publish that could have been hurt
             // wrote its manifest before this read or heals after it: a manifest written first is seen
@@ -259,13 +256,18 @@ impl<'a, B: DeletableBackend> Sweeper<'a, B> {
             // re-put, which finds the blob absent. If the manifests cannot be read, undo the delete
             // rather than guess.
             match self.referenced_now().await {
-                Ok(still) if !still.contains(hash) => report.blobs_deleted.push(hash.clone()),
+                Ok(still) if !still.contains(hash) => {
+                    self.backend.delete(&q).await?;
+                    report.blobs_deleted.push(hash.clone());
+                }
                 Ok(_) => {
-                    self.backend.put_if_absent(&blob_key(hash), &bytes).await?;
+                    self.backend.copy(&q, &blob_key(hash)).await?;
+                    self.backend.delete(&q).await?;
                     report.blobs_restored.push(hash.clone());
                 }
                 Err(e) => {
-                    self.backend.put_if_absent(&blob_key(hash), &bytes).await?;
+                    self.backend.copy(&q, &blob_key(hash)).await?;
+                    self.backend.delete(&q).await?;
                     return Err(e);
                 }
             }
@@ -275,6 +277,28 @@ impl<'a, B: DeletableBackend> Sweeper<'a, B> {
 }
 
 impl<B: DeletableBackend> Sweeper<'_, B> {
+    /// Finish what an interrupted sweep started: a blob it set aside that a manifest still names
+    /// goes back, then the set-aside copy goes. If the manifests cannot be read, nothing is touched.
+    async fn recover_quarantine(&self, report: &mut SweepReport) -> Result<()> {
+        let parked = self.backend.list(QUARANTINE).await?;
+        if parked.is_empty() {
+            return Ok(());
+        }
+        let referenced = self.referenced_now().await?;
+        for key in parked {
+            let Some(hash) = key.strip_prefix(QUARANTINE) else { continue };
+            if referenced.contains(hash) && self.backend.get(&blob_key(hash)).await?.is_none() {
+                self.backend.copy(&key, &blob_key(hash)).await?;
+                report.blobs_recovered.push(hash.to_string());
+            }
+            // Still referenced and still present is also safe to drop: the blob is back.
+            if !referenced.contains(hash) || self.backend.get(&blob_key(hash)).await?.is_some() {
+                self.backend.delete(&key).await?;
+            }
+        }
+        Ok(())
+    }
+
     /// Hashes named by every manifest object right now, trusted or not. Unreadable means "everything
     /// is referenced" is not representable, so an unreadable manifest is an error and stops the delete.
     async fn referenced_now(&self) -> Result<BTreeSet<String>> {

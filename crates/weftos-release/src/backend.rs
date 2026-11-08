@@ -54,6 +54,10 @@ pub trait ReleaseBackend: Send + Sync {
 pub trait DeletableBackend: ReleaseBackend {
     /// Delete `key`. Deleting a key that does not exist succeeds.
     fn delete(&self, key: &str) -> impl Future<Output = Result<(), BackendError>> + Send;
+
+    /// Copy `src` to `dst` inside the store, server side: the bytes never pass through this
+    /// process. Overwrites `dst`. Fails if `src` does not exist.
+    fn copy(&self, src: &str, dst: &str) -> impl Future<Output = Result<(), BackendError>> + Send;
 }
 
 /// An in-memory backend with the same conditional-put semantics, for tests and local dry runs.
@@ -206,6 +210,16 @@ impl ReleaseBackend for MemoryBackend {
 }
 
 impl DeletableBackend for MemoryBackend {
+    async fn copy(&self, src: &str, dst: &str) -> Result<(), BackendError> {
+        self.pause().await;
+        let mut g = self.inner.lock().unwrap();
+        let Some(bytes) = g.objects.get(src).cloned() else {
+            return Err(BackendError(format!("copy: {src} does not exist")));
+        };
+        g.objects.insert(dst.to_string(), bytes);
+        Ok(())
+    }
+
     async fn delete(&self, key: &str) -> Result<(), BackendError> {
         self.pause().await;
         self.fire(key, false);

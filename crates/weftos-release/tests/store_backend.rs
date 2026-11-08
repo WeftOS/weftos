@@ -96,3 +96,12 @@ async fn a_missing_bucket_is_a_backend_error_not_an_absent_key() {
     assert!(be.get("x").await.is_err());
     assert!(be.put_if_absent("x", b"1").await.is_err());
 }
+
+#[tokio::test]
+async fn server_side_copy_moves_no_bytes_through_the_caller() {
+    let (mem, _st, be) = setup();
+    be.put_if_absent("blobs/a", b"payload").await.unwrap();
+    be.copy("blobs/a", "quarantine/a").await.unwrap();
+    assert_eq!(mem.get(be.bucket(), "quarantine/a").unwrap(), b"payload");
+    assert!(be.copy("blobs/none", "quarantine/none").await.is_err(), "a missing source is an error");
+}
