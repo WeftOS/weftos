@@ -418,6 +418,11 @@ impl StoreService {
         names.iter().filter_map(|n| StoreName::parse(n).ok()).filter_map(|n| self.info(&n).ok()).collect()
     }
 
+    /// `Some(archived)` if this daemon holds the store, `None` if it does not know it.
+    pub fn is_archived(&self, name: &StoreName) -> Option<bool> {
+        self.lock().stores.get(&name.to_string()).map(|r| r.archived)
+    }
+
     /// Whether the store is known to this daemon.
     pub fn has_store(&self, name: &StoreName) -> bool {
         self.lock().stores.contains_key(&name.to_string())

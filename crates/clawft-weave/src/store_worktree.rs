@@ -14,7 +14,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use weftos_store::backend::{BackendError, ObjectBackend as S1, ObjectMeta};
 use weftos_store::follower::{self, Change, FollowState, LeftoverPolicy, Why};
-use weftos_store::promote::{ArchiveTarget, PromotionPolicy, WorktreeMeta, promote, write_meta};
+use weftos_store::promote::{ArchiveTarget, PromotionPolicy, WorktreeMeta, is_promoted, promote, read_meta, write_meta};
 use weftos_store::service::{ARCHIVE_BUCKET, Parties, archive_key};
 use weftos_store::share::{
     Actor, Limits, TreeSource, claim_merge, mark_handoff, mark_merged, parse_name_status_z, publish_tree,
@@ -176,6 +176,28 @@ fn why_str(w: Why) -> &'static str {
     }
 }
 
+/// A verb that writes into a worktree must find a live, matching worktree (review F6, F8): not
+/// archived or closed, created (so its metadata names this project and slug, which also stops a
+/// slug whose 48-bit bucket hash collides with another from writing into that other's bucket).
+/// A store another daemon created is fine: it need not be known here, only be a real worktree.
+fn live_worktree(svc: &StoreService, b: &Op, n: &Names, project: &str, slug: &str) -> Result<(), String> {
+    for name in [&n.wt_name, &n.pr_name] {
+        if svc.is_archived(name) == Some(true) {
+            return Err(format!("{name} is archived; refusing"));
+        }
+    }
+    let meta = match read_meta(b, &n.wt) {
+        Ok(m) => m,
+        Err(weftos_store::overlay::S2Error::Backend(m)) if m.contains("no such bucket") => None,
+        Err(e) => return Err(e.to_string()),
+    };
+    match meta {
+        None => Err(format!("worktree {slug} was never created here (no metadata); run create first")),
+        Some(m) if m.slug == slug && m.project.eq_ignore_ascii_case(project) => Ok(()),
+        Some(m) => Err(format!("bucket {} belongs to worktree {} of project {}, not {slug}", n.wt, m.slug, m.project)),
+    }
+}
+
 /// Re-derive one worktree's registry entry from its own bucket (the daemon is the only writer).
 fn refresh(b: &Op, pr: &str, slug: &str, wt: &str) -> Result<(), String> {
     let e = |e: weftos_store::overlay::S2Error| e.to_string();
@@ -224,6 +246,21 @@ pub fn run_with(svc: &StoreService, mesh: &str, method: &str, params: Value, now
                     Err(e) => return Err(e.to_string()),
                 }
             }
+            // Re-creating a live worktree is idempotent and keeps its first creation time. A slug
+            // whose worktree already landed (or was archived) must not be reused until that store
+            // is archived and deleted: its handoff and promotion record would carry over.
+            let mut created_ms = now_ms;
+            if let Some(m) = read_meta(&b, &n.wt).map_err(e)? {
+                let landed = is_promoted(&b, &n.wt).map_err(e)?.is_some()
+                    || weftos_store::share::read_handoff(&b, &n.wt)
+                        .map_err(e)?
+                        .is_some_and(|h| matches!(h.state, weftos_store::share::State::Merged | weftos_store::share::State::Archived))
+                    || svc.is_archived(&n.wt_name) == Some(true);
+                if landed {
+                    return Err(format!("worktree {slug} already landed or was archived; run `store archive --delete` on it before reusing the slug"));
+                }
+                created_ms = m.created_ms;
+            }
             write_meta(
                 &b,
                 &n.wt,
@@ -232,7 +269,7 @@ pub fn run_with(svc: &StoreService, mesh: &str, method: &str, params: Value, now
                     project: project.clone(),
                     branch: need(&p.branch, "branch")?.into(),
                     base_commit: need(&p.base, "base")?.into(),
-                    created_ms: now_ms,
+                    created_ms,
                 },
             )
             .map_err(e)?;
@@ -241,6 +278,7 @@ pub fn run_with(svc: &StoreService, mesh: &str, method: &str, params: Value, now
         "publish" => {
             let slug = need(&p.slug, "slug")?;
             let n = names(mesh, &project, slug)?;
+            live_worktree(svc, &b, &n, &project, slug)?;
             let root = guard.check(need(&p.root, "root")?, "root", Use::ReadDir)?;
             // The hook publishes from the top of a git worktree; anything else is not a worktree.
             if !root.join(".git").exists() {
@@ -308,6 +346,7 @@ pub fn run_with(svc: &StoreService, mesh: &str, method: &str, params: Value, now
         "claim" => {
             let slug = need(&p.slug, "slug")?;
             let n = names(mesh, &project, slug)?;
+            live_worktree(svc, &b, &n, &project, slug)?;
             let h = claim_merge(&b, &n.wt, &who(&p), now_ms).map_err(e)?;
             refresh(&b, &n.pr, slug, &n.wt)?;
             Ok(json!({"state": h.state, "merger": h.merger.map(|m| format!("{}@{}", m.agent, m.host))}))
@@ -315,6 +354,7 @@ pub fn run_with(svc: &StoreService, mesh: &str, method: &str, params: Value, now
         "promote" => {
             let slug = need(&p.slug, "slug")?;
             let n = names(mesh, &project, slug)?;
+            live_worktree(svc, &b, &n, &project, slug)?;
             // A land that went through git is the merge: record it if a claimer did not.
             if let Ok(Some(h)) = weftos_store::share::read_handoff(&b, &n.wt)
                 && h.state == weftos_store::share::State::Claimed

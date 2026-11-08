@@ -373,3 +373,55 @@ fn fetch_never_writes_into_or_over_the_daemons_state_or_through_a_symlink() {
     // and the honest case still works
     assert_eq!(fetch(ok_dest.path(), json!({})).unwrap()["written"], 2);
 }
+
+// ---- F6, F8: reused slugs and closed or foreign buckets -------------------------------------------
+
+#[test]
+fn a_landed_slug_cannot_be_reused_until_its_store_is_deleted() {
+    let (_d, svc) = rig();
+    let src = tempfile::tempdir().unwrap();
+    published(&svc, "feat-r", src.path());
+    call(&svc, "claim", json!({"project": PROJ, "slug": "feat-r", "agent": "bob", "host": "m"}), 30).unwrap();
+    call(&svc, "promote", json!({"project": PROJ, "slug": "feat-r", "agent": "bob", "host": "m"}), 40).unwrap();
+    let e = call(&svc, "create", json!({"project": PROJ, "slug": "feat-r", "branch": "b", "base": "abc"}), 50).unwrap_err();
+    assert!(e.contains("already landed"), "{e}");
+    // an unlanded worktree can be created again, and keeps its first creation time
+    published(&svc, "feat-live", src.path());
+    let n = names("local", PROJ, "feat-live").unwrap();
+    let before = read_meta(&Op(svc.operator_objects()), &n.wt).unwrap().unwrap().created_ms;
+    call(&svc, "create", json!({"project": PROJ, "slug": "feat-live", "branch": "b", "base": "abc"}), 999).unwrap();
+    assert_eq!(read_meta(&Op(svc.operator_objects()), &n.wt).unwrap().unwrap().created_ms, before);
+}
+
+#[test]
+fn closed_unknown_and_foreign_buckets_take_no_publish_claim_or_promote() {
+    let (_d, svc) = rig();
+    let src = tempfile::tempdir().unwrap();
+    let (paths, unc, chg) = files(src.path());
+    let pubp = |slug: &str| {
+        call(&svc, "publish", json!({"project": PROJ, "slug": slug, "root": src.path().to_string_lossy(), "branch": "b", "base": "a", "head": "h",
+                                      "paths_z": paths, "uncommitted_z": unc, "changes_z": chg}), 60)
+    };
+    // never created
+    let e = pubp("feat-none").unwrap_err();
+    assert!(e.contains("never created"), "{e}");
+    // archived (closed, not deleted)
+    published(&svc, "feat-closed", src.path());
+    let n = names("local", PROJ, "feat-closed").unwrap();
+    svc.archive(&n.wt_name, false, "t").unwrap();
+    for verb in ["publish", "claim", "promote"] {
+        let mut p = json!({"project": PROJ, "slug": "feat-closed", "root": src.path().to_string_lossy(), "branch": "b", "base": "a", "head": "h", "paths_z": paths});
+        p["agent"] = json!("x");
+        let e = call(&svc, verb, p, 61).unwrap_err();
+        assert!(e.contains("archived"), "{verb}: {e}");
+    }
+    // a bucket whose metadata names another slug (a hash collision, or a forged redirect)
+    published(&svc, "feat-a", src.path());
+    let a = names("local", PROJ, "feat-a").unwrap();
+    let c = names("local", PROJ, "feat-c").unwrap();
+    svc.ensure_store(&c.wt_name, "t", Parties::defaults_for(&c.wt_name)).unwrap();
+    let meta = read_meta(&Op(svc.operator_objects()), &a.wt).unwrap().unwrap();
+    write_meta(&Op(svc.operator_objects()), &c.wt, &meta).unwrap(); // feat-c's bucket claims to be feat-a's
+    let e = pubp("feat-c").unwrap_err();
+    assert!(e.contains("belongs to worktree feat-a"), "{e}");
+}

@@ -621,6 +621,22 @@ fn a_same_size_project_edit_between_attempts_is_a_conflict_not_our_copy() {
 }
 
 #[test]
+fn a_promotion_record_from_an_earlier_life_of_a_slug_is_ignored() {
+    let b = setup();
+    let meta = |ms| WorktreeMeta { slug: "f".into(), project: "01abc".into(), branch: "f".into(), base_commit: "a".into(), created_ms: ms };
+    write_meta(&b, WT, &meta(100)).unwrap();
+    Overlay::new(&b, WT, PR).put("assets/a.bin", b"aaa").unwrap();
+    promote(&b, WT, PR, &ARCH, &policy(), 200).unwrap();
+    assert!(is_promoted(&b, WT).unwrap().is_some());
+    // the slug is reused: new metadata, same bucket, old promoted.json still there
+    write_meta(&b, WT, &meta(300)).unwrap();
+    assert!(is_promoted(&b, WT).unwrap().is_none(), "the old report must not stand in for the new worktree");
+    Overlay::new(&b, WT, PR).put("assets/new.bin", b"nnn").unwrap();
+    let r = promote(&b, WT, PR, &ARCH, &policy(), 400).unwrap();
+    assert!(r.promoted.contains(&"assets/new.bin".to_string()), "{r:?}");
+}
+
+#[test]
 fn private_key_content_and_secret_names_are_not_shared_but_secret_docs_are() {
     let d = tempfile::tempdir().unwrap();
     std::fs::write(
