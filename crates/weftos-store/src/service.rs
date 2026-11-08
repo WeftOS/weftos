@@ -418,6 +418,17 @@ impl StoreService {
         names.iter().filter_map(|n| StoreName::parse(n).ok()).filter_map(|n| self.info(&n).ok()).collect()
     }
 
+    /// Record an operator-plane act (an S2 worktree verb) in the activity log and, when `chain` is
+    /// given, on the chain. The operator plane skips grants, so whoever calls it records what it
+    /// did here (review F10). `actor` is the caller as the verb knows it.
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_act(&self, actor: &str, name: &StoreName, op: &str, key: Option<&str>, bytes: u64, outcome: Outcome, chain: Option<(&str, Value)>) {
+        if let Some((kind, payload)) = chain {
+            self.chain.record(kind, payload);
+        }
+        self.emit(actor, name, op, key, bytes, outcome, Source::Governed);
+    }
+
     /// `Some(archived)` if this daemon holds the store, `None` if it does not know it.
     pub fn is_archived(&self, name: &StoreName) -> Option<bool> {
         self.lock().stores.get(&name.to_string()).map(|r| r.archived)

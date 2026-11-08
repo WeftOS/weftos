@@ -425,3 +425,47 @@ fn closed_unknown_and_foreign_buckets_take_no_publish_claim_or_promote() {
     let e = pubp("feat-c").unwrap_err();
     assert!(e.contains("belongs to worktree feat-a"), "{e}");
 }
+
+// ---- F10: state-changing verbs are recorded -------------------------------------------------------
+
+#[derive(Default)]
+struct Chain(std::sync::Mutex<Vec<(String, Value)>>);
+impl weftos_store::service::ChainSink for Chain {
+    fn record(&self, k: &str, v: Value) {
+        self.0.lock().unwrap().push((k.to_owned(), v));
+    }
+}
+
+#[test]
+fn create_publish_claim_and_promote_are_in_the_activity_log_and_on_the_chain() {
+    let d = tempfile::tempdir().unwrap();
+    let be = Arc::new(FsBackend::open(d.path()).unwrap());
+    let sink = Arc::new(weftos_store::audit::MemSink::default());
+    let chain = Arc::new(Chain::default());
+    let svc = StoreService::open(
+        weftos_store::service::Config { node_id: "pg-1".into(), state_path: None, clock: || 5 },
+        be.clone(),
+        be,
+        Arc::new(weftos_store::service::OpenGate),
+        sink.clone(),
+        chain.clone(),
+    )
+    .unwrap();
+    let src = tempfile::tempdir().unwrap();
+    published(&svc, "feat-audit", src.path());
+    call(&svc, "claim", json!({"project": PROJ, "slug": "feat-audit", "agent": "bob", "host": "m2"}), 30).unwrap();
+    // a refused claim is recorded too
+    let e = call(&svc, "claim", json!({"project": PROJ, "slug": "feat-audit", "agent": "eve", "host": "m3"}), 31).unwrap_err();
+    call(&svc, "promote", json!({"project": PROJ, "slug": "feat-audit", "agent": "bob", "host": "m2"}), 40).unwrap();
+    // read verbs record nothing
+    call(&svc, "search", json!({"project": PROJ, "query": "plan"}), 41).unwrap();
+
+    let kinds: Vec<String> = chain.0.lock().unwrap().iter().map(|(k, _)| k.clone()).filter(|k| k.starts_with("store.worktree.")).collect();
+    assert_eq!(kinds, ["create", "publish", "claim", "claim", "promote"].map(|v| format!("store.worktree.{v}")));
+    let ev: Vec<(String, String, String)> = sink.events().into_iter().filter(|e| e.op.starts_with("Worktree")).map(|e| (e.op, e.principal, e.outcome.text())).collect();
+    assert_eq!(ev.len(), 5, "{ev:?}");
+    assert!(ev.iter().any(|(op, who, out)| op == "WorktreeClaim" && who == "bob@m2" && out == "ok"));
+    assert!(ev.iter().any(|(op, who, out)| op == "WorktreeClaim" && who == "eve@m3" && out == format!("error:{e}")));
+    assert!(ev.iter().any(|(op, _, _)| op == "WorktreePromote"));
+}
+

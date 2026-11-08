@@ -2,8 +2,9 @@
 //! follower view). `scripts/worktree-store.sh` calls these through `weaver store worktree <verb>`.
 //!
 //! Every verb is an Admin act on the local daemon (see `capability.rs`). They work on the raw data
-//! plane (`StoreService::operator_objects`), the same level as S1's promote and archive, and the
-//! ones that change shared state record a chain event. Paths in params (`root`, `dest`, `cache`,
+//! plane (`StoreService::operator_objects`), the same level as S1's promote and archive. The four
+//! that change shared state (create, publish, claim, promote) are recorded in the activity log and
+//! as a chain event, including when they fail (`record_verb`). Paths in params (`root`, `dest`, `cache`,
 //! the `*_z` lists) are read or written by the daemon itself, so client and daemon share a host.
 //! That is a premise, not a protection: every path is checked by `store_worktree_paths::Guard`
 //! (absolute, resolved, no symlinked final component, kept out of the daemon's own state).
@@ -223,6 +224,34 @@ pub fn run(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms: 
 
 /// [`run`] with an explicit set of protected paths.
 pub fn run_with(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms: u64, guard: &Guard) -> Result<Value, String> {
+    let verb = method.strip_prefix("store.worktree.").unwrap_or(method).to_owned();
+    let who = (params["project"].as_str().map(str::to_owned), params["slug"].as_str().map(str::to_owned), params["agent"].as_str().map(str::to_owned), params["host"].as_str().map(str::to_owned));
+    let r = dispatch(svc, mesh, method, params, now_ms, guard);
+    record_verb(svc, mesh, &verb, who, &r);
+    r
+}
+
+/// Activity-log and chain record for the verbs that change shared state, success or failure.
+fn record_verb(svc: &StoreService, mesh: &str, verb: &str, who: (Option<String>, Option<String>, Option<String>, Option<String>), r: &Result<Value, String>) {
+    let (kind, op) = match verb {
+        "create" => ("store.worktree.create", "WorktreeCreate"),
+        "publish" => ("store.worktree.publish", "WorktreePublish"),
+        "claim" => ("store.worktree.claim", "WorktreeClaim"),
+        "promote" => ("store.worktree.promote", "WorktreePromote"),
+        _ => return,
+    };
+    let (Some(project), Some(slug)) = (who.0, who.1) else { return };
+    let Ok(n) = names(mesh, &project, &slug) else { return };
+    let actor = format!("{}@{}", who.2.as_deref().unwrap_or("agent"), who.3.as_deref().unwrap_or("?"));
+    let (outcome, detail) = match r {
+        Ok(v) => (weftos_store::Outcome::Ok, v.clone()),
+        Err(e) => (weftos_store::Outcome::Error(e.clone()), json!({"error": e})),
+    };
+    let bytes = detail["uploaded"].as_u64().unwrap_or(0);
+    svc.record_act(&actor, &n.wt_name, op, None, bytes, outcome, Some((kind, json!({"store": n.wt_name.to_string(), "project": project, "slug": slug, "actor": actor, "result": detail}))));
+}
+
+fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms: u64, guard: &Guard) -> Result<Value, String> {
     let p: P = serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
     let e = |e: weftos_store::overlay::S2Error| e.to_string();
     let b = Op(svc.operator_objects());
