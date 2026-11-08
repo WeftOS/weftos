@@ -24,7 +24,7 @@ From the Mac session on branch `wt/adr126-e1-scoped-view` (owner item E-1). The 
   - One `#[ignore]` live test, `drive::view::live_tests::live_view_open_refresh_publish_close`. It
     passed against a throwaway RustFS on the Mac's loopback.
 - **Not done here.**
-  - The `weaver store view` verbs (specified in spec 6.3; not built).
+  - The `weaver store view` verbs were built later the same day on `wt/adr126-e1-view-verbs` 22431e4be (open, status, refresh, publish, resolve, renew, close; tests only, no weaver installed). The alignment note `docs/research/adr126-e3-scoped-view-alignment-2026-11-08.md` carries the frozen `view.json` contract and the open gaps.
   - Anything that runs bwrap, overlayfs or Landlock. The Mac has none of them.
   - Overlay whiteouts are detected in code (a character device 0/0 in the upper means a delete) but
     have never been exercised, because the Mac cannot create one.
