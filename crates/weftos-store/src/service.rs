@@ -140,14 +140,44 @@ struct StoreRec {
     /// Per-store override of how long this store's archives are kept (beats the kind's limit).
     #[serde(default)]
     archive_keep: Option<archive_gc::KeepFor>,
+    /// The `store.close` event is decided (every grant is off in the saved state) but not yet
+    /// recorded: it is recorded once the principals' keys in the backend match. Holds the actor
+    /// and the number of grants switched off.
+    #[serde(default)]
+    close_pending: Option<(String, usize)>,
 }
 
 fn yes() -> bool {
     true
 }
 
+/// One activity-log line that goes with a [`Pending`] event.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
+struct Act {
+    who: String,
+    store: String,
+    op: String,
+    key: Option<String>,
+    refused: Option<String>,
+}
+
+/// A grant-affecting change that is decided and saved but whose chain event and activity lines are
+/// not out yet. They go out once the principal's backend key and policy match the saved grants, so
+/// a push that failed is never announced as done; a retry of the same change, or `reconcile` (at
+/// start, and when the backend comes back), pushes and then records it, once.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
+struct Pending {
+    principal: String,
+    kind: String,
+    /// The chain payload without its `seq`, which is stamped when the event is recorded.
+    payload: Value,
+    activity: Vec<Act>,
+}
+
 #[derive(Serialize, Deserialize, Default)]
 struct State {
+    #[serde(default)]
+    pending: Vec<Pending>,
     grants: GrantTable,
     stores: BTreeMap<String, StoreRec>,
     /// principal -> access key id
@@ -304,14 +334,6 @@ impl StoreService {
         });
     }
 
-    /// An event about a principal rather than one store: one per store it holds a grant on.
-    fn emit_principal(&self, p: &Principal, op: &str, outcome: Outcome) {
-        let stores: Vec<String> = self.lock().grants.for_principal(p).into_iter().map(|g| g.store).collect();
-        for s in stores.iter().filter_map(|s| StoreName::parse(s).ok()) {
-            self.emit(&p.to_string(), &s, op, None, 0, outcome.clone(), Source::Governed);
-        }
-    }
-
     fn known(&self, name: &StoreName) -> Result<StoreRec, StoreError> {
         self.lock().stores.get(&name.to_string()).cloned().ok_or_else(|| StoreError::UnknownStore(name.to_string()))
     }
@@ -361,7 +383,7 @@ impl StoreService {
                 let _ = self.admin.delete_bucket(&name.bucket());
                 return Err(StoreError::Refused(format!("{name} belongs to a node that was unpaired and its store archived: a new node needs a new id")));
             }
-            g.stores.insert(name.to_string(), StoreRec { name: name.to_string(), created_ms: self.now(), archived: false, locked, archive_ts: None, archive_done: true, archive_count: 0, archive_keep: None });
+            g.stores.insert(name.to_string(), StoreRec { name: name.to_string(), created_ms: self.now(), archived: false, locked, archive_ts: None, archive_done: true, archive_count: 0, archive_keep: None, close_pending: None });
             let d = Parties::defaults_for(name);
             let ts = self.now();
             for (list, acc) in [(d.admins.iter().chain(&extra.admins), Access::Admin), (d.writers.iter().chain(&extra.writers), Access::Write), (d.appenders.iter().chain(&extra.appenders), Access::Append), (d.sweepers.iter().chain(&extra.sweepers), Access::Sweep), (d.readers.iter().chain(&extra.readers), Access::Read)] {
@@ -393,7 +415,14 @@ impl StoreService {
     /// The store, created if it is not there yet.
     pub fn ensure_store(&self, name: &StoreName, actor: &str, parties: Parties) -> Result<StoreInfo, StoreError> {
         match self.create_store(name, actor, parties) {
-            Err(StoreError::Exists(_)) if self.lock().stores.contains_key(&name.to_string()) => self.info(name),
+            // Already there: bring its principals' keys in line again (a create whose push failed
+            // is finished by asking for the store a second time), then describe it.
+            Err(StoreError::Exists(_)) if self.lock().stores.contains_key(&name.to_string()) => {
+                for p in self.principals_of(name) {
+                    self.apply_principal(&p)?;
+                }
+                self.info(name)
+            }
             r => r,
         }
     }
@@ -439,18 +468,23 @@ impl StoreService {
 
     /// Push a principal's grants into the backend: its key (created on first need), the key's
     /// policy, and whether the key is enabled (not while the principal is suspended, and not when
-    /// no enabled grant is left).
+    /// no enabled grant is left). Once the backend matches, the principal's pending events go out.
     fn apply_principal(&self, p: &Principal) -> Result<(), StoreError> {
         // One push at a time, and the grants are read inside it: an older snapshot can never
         // overwrite a newer policy (and so bring a revoked grant back in the backend).
         let _one = self.apply.lock().unwrap_or_else(|e| e.into_inner());
+        self.apply_locked(p)
+    }
+
+    /// [`Self::apply_principal`] with the `apply` lock already held by the caller.
+    fn apply_locked(&self, p: &Principal) -> Result<(), StoreError> {
         let (grants, suspended, key) = {
             let g = self.lock();
             (g.grants.for_principal(p), g.suspended.contains(p), g.keys.get(&p.to_string()).cloned())
         };
         let key = match key {
             Some(k) => k,
-            None if grants.is_empty() => return Ok(()),
+            None if grants.is_empty() => return self.flush_pending(p),
             None => {
                 let k = self.admin.create_access_key(&p.to_string())?.id;
                 let mut g = self.lock();
@@ -462,7 +496,82 @@ impl StoreService {
         self.admin.put_policy(&key, &policy::for_grants_with(&grants, &self.policy_opts()))?;
         let live = !suspended && grants.iter().any(|g| g.enabled);
         self.admin.set_key_enabled(&key, live)?;
+        self.flush_pending(p)
+    }
+
+    /// Record the chain events and activity lines of `p`'s saved changes, now that its backend
+    /// key matches them. Called with the `apply` lock held. Each is recorded once: they leave the
+    /// pending list in the same step that stamps them.
+    fn flush_pending(&self, p: &Principal) -> Result<(), StoreError> {
+        let mut st = self.lock();
+        let me = p.to_string();
+        if !st.pending.iter().any(|x| x.principal == me) {
+            return Ok(());
+        }
+        let (mine, rest): (Vec<Pending>, Vec<Pending>) = std::mem::take(&mut st.pending).into_iter().partition(|x| x.principal == me);
+        st.pending = rest;
+        let mut acts = Vec::new();
+        for pd in mine {
+            if Self::seq_room(&st).is_err() {
+                st.pending.push(pd);
+                continue;
+            }
+            let seq = self.stamp(&mut st);
+            let mut payload = pd.payload.clone();
+            payload["seq"] = json!(seq);
+            self.chain.record(&pd.kind, payload);
+            acts.extend(pd.activity);
+        }
+        self.persist(&st)?;
+        drop(st);
+        for a in acts {
+            if let Ok(n) = StoreName::parse(&a.store) {
+                let outcome = a.refused.map_or(Outcome::Ok, Outcome::Refused);
+                self.emit(&a.who, &n, &a.op, a.key.as_deref(), 0, outcome, Source::Governed);
+            }
+        }
         Ok(())
+    }
+
+    /// Record `store.close` once every principal of the store has its backend state. Called with
+    /// the `apply` lock held.
+    fn flush_close(&self, name: &StoreName) -> Result<(), StoreError> {
+        let mut st = self.lock();
+        let Some((actor, n)) = st.stores.get_mut(&name.to_string()).and_then(|r| r.close_pending.take()) else { return Ok(()) };
+        if Self::seq_room(&st).is_err() {
+            if let Some(r) = st.stores.get_mut(&name.to_string()) {
+                r.close_pending = Some((actor, n));
+            }
+            return Ok(());
+        }
+        let seq = self.stamp(&mut st);
+        self.persist(&st)?;
+        self.chain.record("store.close", json!({"seq": seq, "store": name.to_string(), "actor": actor, "grants_disabled": n}));
+        Ok(())
+    }
+
+    /// One grant-affecting change to `p`: `f` changes the saved state (and names the event that
+    /// goes with it), the state is saved, the backend is brought in line, and only then do the
+    /// chain event and activity lines go out. All of it under the `apply` lock, so two changes to
+    /// the same principal cannot interleave their backend pushes. If the push fails the change
+    /// stays saved (the service enforces it at once), the event stays pending, and the error is
+    /// returned; doing the same change again, or `reconcile`, finishes it.
+    fn change<R>(&self, p: &Principal, f: impl FnOnce(&mut State) -> Result<(R, Option<Pending>), StoreError>) -> Result<R, StoreError> {
+        let _one = self.apply.lock().unwrap_or_else(|e| e.into_inner());
+        let r = {
+            let mut st = self.lock();
+            Self::seq_room(&st)?;
+            let (r, pend) = f(&mut st)?;
+            if let Some(pd) = pend
+                && !st.pending.contains(&pd)
+            {
+                st.pending.push(pd);
+            }
+            self.persist(&st)?;
+            r
+        };
+        self.apply_locked(p)?;
+        Ok(r)
     }
 
     /// The owner's switches for the direct keys of the `append` and `sweep` roles.
@@ -476,55 +585,71 @@ impl StoreService {
         *self.policy_opts.lock().unwrap_or_else(|e| e.into_inner()) = opts;
     }
 
-    /// Push every principal's grants into the backend again. A grant change is saved before it
-    /// is pushed, so a push that failed (RustFS down, a crash between the two) leaves the backend
-    /// behind the saved state; call this at start and after the backend comes back. Returns the
-    /// principals whose push failed, with the reason.
+    /// Push every principal's grants into the backend again, and record the events of changes
+    /// whose push had failed. A grant change is saved before it is pushed, so a push that failed
+    /// (RustFS down, a crash between the two) leaves the backend behind the saved state; call this
+    /// at start and after the backend comes back. Covers every principal that has a key, a grant,
+    /// a suspension or an unannounced change, and every archived store whose close is unannounced.
+    /// Returns the principals whose push failed, with the reason.
     pub fn reconcile(&self) -> Vec<(Principal, String)> {
-        let mut ps: BTreeSet<Principal> = self.lock().keys.keys().filter_map(|k| Principal::parse(k).ok()).collect();
-        let stores: Vec<StoreName> = self.lock().stores.values().filter_map(|r| StoreName::parse(&r.name).ok()).collect();
+        let (mut ps, stores, closing): (BTreeSet<Principal>, Vec<StoreName>, Vec<StoreName>) = {
+            let g = self.lock();
+            let mut ps: BTreeSet<Principal> = g.keys.keys().filter_map(|k| Principal::parse(k).ok()).collect();
+            ps.extend(g.suspended.iter().cloned());
+            ps.extend(g.pending.iter().filter_map(|x| Principal::parse(&x.principal).ok()));
+            let stores = g.stores.values().filter_map(|r| StoreName::parse(&r.name).ok()).collect();
+            let closing = g.stores.values().filter(|r| r.close_pending.is_some()).filter_map(|r| StoreName::parse(&r.name).ok()).collect();
+            (ps, stores, closing)
+        };
         for s in &stores {
             ps.extend(self.principals_of(s));
         }
-        ps.into_iter().filter_map(|p| self.apply_principal(&p).err().map(|e| (p, e.to_string()))).collect()
+        let failed: Vec<(Principal, String)> = ps.into_iter().filter_map(|p| self.apply_principal(&p).err().map(|e| (p, e.to_string()))).collect();
+        if failed.is_empty() {
+            let _one = self.apply.lock().unwrap_or_else(|e| e.into_inner());
+            for s in &closing {
+                let _ = self.flush_close(s);
+            }
+        }
+        failed
     }
 
-    /// Grant (or change) access. Recorded on the chain and in the activity log.
+    /// Grant (or change) access. Recorded on the chain and in the activity log once the backend
+    /// holds it.
     pub fn grant(&self, name: &StoreName, principal: Principal, access: Access, actor: &str) -> Result<Grant, StoreError> {
         let rec = self.known(name)?;
         if rec.archived {
             return Err(StoreError::Refused(format!("{name} is archived")));
         }
-        let g = {
-            let mut st = self.lock();
-            Self::seq_room(&st)?;
+        self.change(&principal, |st| {
             let g = st.grants.grant(principal.clone(), name, access, actor, self.now());
-            let seq = self.stamp(&mut st);
-            self.persist(&st)?;
-            self.chain.record("store.grant", json!({"seq": seq, "store": name.to_string(), "principal": principal.to_string(), "access": access.as_str(), "actor": actor}));
-            g
-        };
-        self.emit(actor, name, "Grant", Some(&principal.to_string()), 0, Outcome::Ok, Source::Governed);
-        self.apply_principal(&principal)?;
-        Ok(g)
+            let pd = Pending {
+                principal: principal.to_string(),
+                kind: "store.grant".into(),
+                payload: json!({"store": name.to_string(), "principal": principal.to_string(), "access": access.as_str(), "actor": actor}),
+                activity: vec![Act { who: actor.to_owned(), store: name.to_string(), op: "Grant".into(), key: Some(principal.to_string()), refused: None }],
+            };
+            Ok((g, Some(pd)))
+        })
     }
 
-    /// Remove a grant. The principal's next request on the store is refused.
+    /// Remove a grant. The principal's next request on the store is refused. If the backend push
+    /// failed, the grant is already gone here and the error says so; calling `revoke` again
+    /// finishes the push and records the event (it does not answer "holds no grant").
     pub fn revoke(&self, name: &StoreName, principal: &Principal, actor: &str) -> Result<(), StoreError> {
         self.known(name)?;
-        {
-            let mut st = self.lock();
-            Self::seq_room(&st)?;
-            if !st.grants.revoke(principal, name) {
+        self.change(principal, |st| {
+            let pd = Pending {
+                principal: principal.to_string(),
+                kind: "store.revoke".into(),
+                payload: json!({"store": name.to_string(), "principal": principal.to_string(), "actor": actor}),
+                activity: vec![Act { who: actor.to_owned(), store: name.to_string(), op: "Revoke".into(), key: Some(principal.to_string()), refused: None }],
+            };
+            if !st.grants.revoke(principal, name) && !st.pending.contains(&pd) {
                 return Err(StoreError::Refused(format!("{principal} holds no grant on {name}")));
             }
-            let seq = self.stamp(&mut st);
-            self.persist(&st)?;
-            self.chain.record("store.revoke", json!({"seq": seq, "store": name.to_string(), "principal": principal.to_string(), "actor": actor}));
-        }
-        self.emit(actor, name, "Revoke", Some(&principal.to_string()), 0, Outcome::Ok, Source::Governed);
-        self.apply_principal(principal)?;
-        Ok(())
+            Ok(((), Some(pd)))
+        })
     }
 
     /// Disable or re-enable one grant without losing it.
@@ -533,51 +658,40 @@ impl StoreService {
             return Err(StoreError::Refused(format!("{name} is archived")));
         }
         self.known(name)?;
-        {
-            let mut st = self.lock();
-            Self::seq_room(&st)?;
+        self.change(principal, |st| {
             if !st.grants.set_enabled(principal, name, enabled) {
                 return Err(StoreError::Refused(format!("{principal} holds no grant on {name}")));
             }
-            let seq = self.stamp(&mut st);
-            self.persist(&st)?;
-            let kind = if enabled { "store.grant.enable" } else { "store.grant.disable" };
-            self.chain.record(kind, json!({"seq": seq, "store": name.to_string(), "principal": principal.to_string(), "actor": actor}));
-        }
-        self.emit(actor, name, if enabled { "GrantEnable" } else { "GrantDisable" }, Some(&principal.to_string()), 0, Outcome::Ok, Source::Governed);
-        self.apply_principal(principal)?;
-        Ok(())
+            let (kind, op) = if enabled { ("store.grant.enable", "GrantEnable") } else { ("store.grant.disable", "GrantDisable") };
+            let pd = Pending {
+                principal: principal.to_string(),
+                kind: kind.into(),
+                payload: json!({"store": name.to_string(), "principal": principal.to_string(), "actor": actor}),
+                activity: vec![Act { who: actor.to_owned(), store: name.to_string(), op: op.into(), key: Some(principal.to_string()), refused: None }],
+            };
+            Ok(((), Some(pd)))
+        })
     }
 
     /// A rule hit: disable the principal's key and every grant it holds. Proxied sessions are the
     /// caller's to drop; this refuses the next request.
     pub fn suspend_principal(&self, principal: &Principal, reason: &str) -> Result<(), StoreError> {
-        {
-            let mut st = self.lock();
-            Self::seq_room(&st)?;
+        self.change(principal, |st| {
             st.suspended.insert(principal.clone());
-            let seq = self.stamp(&mut st);
-            self.persist(&st)?;
-            self.chain.record("store.principal.suspend", json!({"seq": seq, "principal": principal.to_string(), "reason": reason}));
-        }
-        self.emit_principal(principal, "Suspend", Outcome::Refused(reason.to_owned()));
-        self.apply_principal(principal)?;
-        Ok(())
+            let activity = st.grants.for_principal(principal).into_iter().map(|g| Act { who: principal.to_string(), store: g.store, op: "Suspend".into(), key: None, refused: Some(reason.to_owned()) }).collect();
+            let pd = Pending { principal: principal.to_string(), kind: "store.principal.suspend".into(), payload: json!({"principal": principal.to_string(), "reason": reason}), activity };
+            Ok(((), Some(pd)))
+        })
     }
 
     /// Undo [`Self::suspend_principal`].
     pub fn resume_principal(&self, principal: &Principal) -> Result<(), StoreError> {
-        {
-            let mut st = self.lock();
-            Self::seq_room(&st)?;
+        self.change(principal, |st| {
             st.suspended.remove(principal);
-            let seq = self.stamp(&mut st);
-            self.persist(&st)?;
-            self.chain.record("store.principal.resume", json!({"seq": seq, "principal": principal.to_string()}));
-        }
-        self.emit_principal(principal, "Resume", Outcome::Ok);
-        self.apply_principal(principal)?;
-        Ok(())
+            let activity = st.grants.for_principal(principal).into_iter().map(|g| Act { who: principal.to_string(), store: g.store, op: "Resume".into(), key: None, refused: None }).collect();
+            let pd = Pending { principal: principal.to_string(), kind: "store.principal.resume".into(), payload: json!({"principal": principal.to_string()}), activity };
+            Ok(((), Some(pd)))
+        })
     }
 
     // ---- reading ------------------------------------------------------------------------------

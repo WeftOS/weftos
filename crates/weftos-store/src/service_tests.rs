@@ -381,6 +381,9 @@ fn put_if_match_through_the_service_is_gated_and_logged() {
 struct Flaky {
     inner: Arc<MemBackend>,
     down: AtomicBool,
+    /// Milliseconds a policy push takes, to widen the window two pushes could interleave in.
+    lag: std::sync::atomic::AtomicU64,
+    pushes: std::sync::atomic::AtomicU64,
 }
 impl Flaky {
     fn check(&self) -> Result<(), BackendError> {
@@ -409,6 +412,11 @@ impl AdminBackend for Flaky {
     }
     fn put_policy(&self, k: &str, p: &Value) -> Result<(), BackendError> {
         self.check()?;
+        // Every other push is slow: a push that read its grants first can land last.
+        let lag = if self.pushes.fetch_add(1, Ordering::SeqCst).is_multiple_of(2) { self.lag.load(Ordering::SeqCst) } else { 0 };
+        if lag > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(lag));
+        }
         self.inner.put_policy(k, p)
     }
     fn delete_access_key(&self, k: &str) -> Result<(), BackendError> {
@@ -418,7 +426,7 @@ impl AdminBackend for Flaky {
 
 fn flaky_rig() -> (StoreService, Arc<MemBackend>, Arc<Flaky>) {
     let be = Arc::new(MemBackend::new());
-    let fl = Arc::new(Flaky { inner: be.clone(), down: AtomicBool::new(false) });
+    let fl = Arc::new(Flaky { inner: be.clone(), down: AtomicBool::new(false), lag: Default::default(), pushes: Default::default() });
     let svc = StoreService::open(
         Config { node_id: "pg-1".into(), state_path: None, clock: || 1_000 },
         fl.clone(),
@@ -874,4 +882,153 @@ fn a_create_that_loses_a_race_with_a_retire_is_refused_and_leaves_no_bucket() {
     assert!(matches!(e, StoreError::Refused(_)) && e.to_string().contains("unpaired"), "{e}");
     assert!(!svc.has_store(&n), "no store recorded for a retired id");
     assert!(!be.bucket_exists(&n.bucket()).unwrap(), "the bucket made a moment ago is taken back");
+}
+
+// ---- F2: one push at a time, events only after the push, retry and recovery --------------------
+
+struct FlakyRig {
+    svc: StoreService,
+    be: Arc<MemBackend>,
+    fl: Arc<Flaky>,
+    chain: Arc<Chain>,
+    sink: Arc<MemSink>,
+}
+
+fn flaky_at(state: Option<PathBuf>, be: Arc<MemBackend>, down: bool) -> FlakyRig {
+    let fl = Arc::new(Flaky { inner: be.clone(), down: AtomicBool::new(down), lag: Default::default(), pushes: Default::default() });
+    let chain = Arc::new(Chain::default());
+    let sink = Arc::new(MemSink::default());
+    let svc = StoreService::open(Config { node_id: "pg-1".into(), state_path: state, clock: || 1_000 }, fl.clone(), be.clone(), Arc::new(Gate(AtomicBool::new(true))), sink.clone(), chain.clone()).unwrap();
+    FlakyRig { svc, be, fl, chain, sink }
+}
+
+fn chain_kinds(c: &Chain, kind: &str) -> usize {
+    c.0.lock().unwrap().iter().filter(|(k, _)| k == kind).count()
+}
+
+fn activity_ops(s: &MemSink, op: &str) -> usize {
+    s.events().iter().filter(|e| e.op == op).count()
+}
+
+#[test]
+fn a_revoke_whose_push_failed_is_not_announced_and_a_retry_finishes_it_once() {
+    let d = tempfile::tempdir().unwrap();
+    let r = flaky_at(Some(d.path().join("s.json")), Arc::new(MemBackend::new()), false);
+    let n = project();
+    r.svc.create_store(&n, "daemon", Parties::default()).unwrap();
+    let c = cog("c");
+    r.svc.grant(&n, c.clone(), Access::Write, "op").unwrap();
+    let key = r.be.keys_of(&c.to_string()).pop().unwrap();
+    assert_eq!((chain_kinds(&r.chain, "store.grant"), activity_ops(&r.sink, "Grant")), (1, 1), "a grant that reached the backend is announced");
+
+    r.fl.down.store(true, Ordering::SeqCst);
+    assert!(r.svc.revoke(&n, &c, "op").is_err(), "the policy push fails");
+    assert_eq!((chain_kinds(&r.chain, "store.revoke"), activity_ops(&r.sink, "Revoke")), (0, 0), "no success on the chain or in the activity log for a push that failed");
+    assert!(r.svc.get(&local("c"), &n, "x").is_err(), "the service already refuses the revoked principal");
+    assert!(r.be.authorize(&key, &n.bucket(), "s3:GetObject").is_ok(), "the backend policy is still the old one: it is behind");
+
+    // A retry while it is still down fails the same way: it does not claim there was no grant.
+    let again = r.svc.revoke(&n, &c, "op").unwrap_err().to_string();
+    assert!(!again.contains("holds no grant"), "{again}");
+
+    r.fl.down.store(false, Ordering::SeqCst);
+    r.svc.revoke(&n, &c, "op").expect("the retry pushes and finishes");
+    assert!(r.be.authorize(&key, &n.bucket(), "s3:GetObject").is_err(), "the backend refuses now");
+    assert_eq!((chain_kinds(&r.chain, "store.revoke"), activity_ops(&r.sink, "Revoke")), (1, 1), "announced once, after the push");
+    assert!(r.svc.revoke(&n, &c, "op").unwrap_err().to_string().contains("holds no grant"), "a revoke that is complete and repeated is the ordinary refusal");
+    assert_eq!(chain_kinds(&r.chain, "store.revoke"), 1);
+}
+
+#[test]
+fn a_restart_reconciles_a_failed_push_and_announces_it_then() {
+    let d = tempfile::tempdir().unwrap();
+    let sp = d.path().join("s.json");
+    let be = Arc::new(MemBackend::new());
+    let key;
+    let n = project();
+    let c = cog("c");
+    {
+        let r = flaky_at(Some(sp.clone()), be.clone(), false);
+        r.svc.create_store(&n, "daemon", Parties::default()).unwrap();
+        r.svc.grant(&n, c.clone(), Access::Write, "op").unwrap();
+        key = be.keys_of(&c.to_string()).pop().unwrap();
+        r.fl.down.store(true, Ordering::SeqCst);
+        assert!(r.svc.revoke(&n, &c, "op").is_err());
+        assert!(r.svc.suspend_principal(&c, "rule").is_err(), "suspension is saved too, and fails the same way");
+        assert_eq!(chain_kinds(&r.chain, "store.revoke") + chain_kinds(&r.chain, "store.principal.suspend"), 0);
+    }
+    // The daemon is restarted with RustFS back: open reconciles every principal, key state included.
+    let r = flaky_at(Some(sp), be.clone(), false);
+    assert!(r.svc.reconcile().is_empty());
+    assert!(be.authorize(&key, &n.bucket(), "s3:GetObject").is_err(), "policy brought in line");
+    assert_eq!(be.key_enabled(&key), Some(false), "key state brought in line (no grants, suspended)");
+    assert_eq!((chain_kinds(&r.chain, "store.revoke"), chain_kinds(&r.chain, "store.principal.suspend")), (1, 1), "each announced after its push, by the daemon that finished it");
+    assert!(r.svc.reconcile().is_empty());
+    assert_eq!((chain_kinds(&r.chain, "store.revoke"), chain_kinds(&r.chain, "store.principal.suspend")), (1, 1), "and only once");
+}
+
+#[test]
+fn a_grant_or_disable_whose_push_failed_waits_for_reconcile_to_be_announced() {
+    let r = flaky_at(None, Arc::new(MemBackend::new()), false);
+    let n = project();
+    r.svc.create_store(&n, "daemon", Parties::default()).unwrap();
+    let c = cog("c");
+    r.svc.grant(&n, c.clone(), Access::Read, "op").unwrap();
+    r.fl.down.store(true, Ordering::SeqCst);
+    assert!(r.svc.grant(&n, c.clone(), Access::Write, "op").is_err());
+    assert!(r.svc.set_grant_enabled(&n, &c, false, "op").is_err());
+    assert_eq!((chain_kinds(&r.chain, "store.grant"), chain_kinds(&r.chain, "store.grant.disable")), (1, 0));
+    assert!(!r.svc.reconcile().is_empty(), "still down: reported");
+    assert_eq!(chain_kinds(&r.chain, "store.grant"), 1, "still not announced");
+    r.fl.down.store(false, Ordering::SeqCst);
+    assert!(r.svc.reconcile().is_empty());
+    assert_eq!((chain_kinds(&r.chain, "store.grant"), chain_kinds(&r.chain, "store.grant.disable")), (2, 1));
+    let seq: Vec<u64> = seqs_of(&r.chain);
+    assert_eq!(seq, vec![1, 2, 3], "numbered in the order they were announced, gapless");
+}
+
+fn seqs_of(c: &Chain) -> Vec<u64> {
+    c.0.lock().unwrap().iter().filter_map(|(_, v)| v["seq"].as_u64()).collect()
+}
+
+#[test]
+fn concurrent_grants_and_revokes_leave_the_backend_policy_equal_to_the_saved_grants() {
+    for round in 0..6 {
+        let r = flaky_at(None, Arc::new(MemBackend::new()), false);
+        r.fl.lag.store(4, Ordering::SeqCst);
+        let (a, b) = (StoreName::project("weft", P).unwrap(), StoreName::project("weft", "01JBXK2M3N4P5Q6R7S8T9V0W2Y").unwrap());
+        r.svc.create_store(&a, "daemon", Parties::default()).unwrap();
+        r.svc.create_store(&b, "daemon", Parties::default()).unwrap();
+        let c = cog("c");
+        r.svc.grant(&a, c.clone(), Access::Read, "op").unwrap();
+        let svc = &r.svc;
+        std::thread::scope(|s| {
+            for t in 0..4usize {
+                let (a, b, c) = (a.clone(), b.clone(), c.clone());
+                s.spawn(move || {
+                    for i in 0..12usize {
+                        let n = if (i + t + round) % 2 == 0 { &a } else { &b };
+                        match (i + t) % 4 {
+                            0 => drop(svc.grant(n, c.clone(), Access::Write, "op")),
+                            1 => drop(svc.revoke(n, &c, "op")),
+                            2 => drop(svc.set_grant_enabled(n, &c, i % 8 < 4, "op")),
+                            _ => drop(svc.grant(n, c.clone(), Access::Read, "op")),
+                        }
+                    }
+                });
+            }
+        });
+        let key = r.be.keys_of(&c.to_string()).pop().unwrap();
+        let grants = r.svc.info(&a).unwrap().grants.into_iter().chain(r.svc.info(&b).unwrap().grants).filter(|g| g.principal == c).collect::<Vec<_>>();
+        let want = crate::policy::for_grants_with(&grants, &r.svc.policy_opts());
+        let sorted = |v: Value| {
+            let mut st: Vec<String> = v["Statement"].as_array().cloned().unwrap_or_default().iter().map(Value::to_string).collect();
+            st.sort();
+            st
+        };
+        assert_eq!(sorted(r.be.policy_of(&key).unwrap()), sorted(want), "round {round}: the policy the backend holds is the one the saved grants give");
+        assert_eq!(r.be.key_enabled(&key), Some(grants.iter().any(|g| g.enabled)), "round {round}: and so is the key state");
+        let nums = seqs_of(&r.chain);
+        assert_eq!(nums, (1..=nums.len() as u64).collect::<Vec<_>>(), "the chain sees every change numbered and in order");
+    }
 }

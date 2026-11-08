@@ -90,26 +90,28 @@ impl StoreService {
         let b = name.bucket();
         let principals = self.principals_of(name);
         if !rec.archived {
-            {
-                let now = self.now();
-                let mut st = self.lock();
-                Self::seq_room(&st)?;
-                for p in &principals {
-                    st.grants.set_enabled(p, name, false);
-                }
-                if let Some(r) = st.stores.get_mut(&name.to_string()) {
-                    r.archived = true;
-                    r.archive_done = false;
-                    r.archive_ts = Some(now);
-                }
-                // Every grant on the store went off at once: one stamped event says so.
-                let seq = self.stamp(&mut st);
-                self.persist(&st)?;
-                self.chain.record("store.close", json!({"seq": seq, "store": name.to_string(), "actor": actor, "grants_disabled": principals.len()}));
-            }
+            let now = self.now();
+            let mut st = self.lock();
+            Self::seq_room(&st)?;
             for p in &principals {
-                self.apply_principal(p)?;
+                st.grants.set_enabled(p, name, false);
             }
+            if let Some(r) = st.stores.get_mut(&name.to_string()) {
+                r.archived = true;
+                r.archive_done = false;
+                r.archive_ts = Some(now);
+                // Every grant on the store went off at once: one stamped event says so, recorded
+                // once the principals' backend keys match (see `flush_close`).
+                r.close_pending = Some((actor.to_owned(), principals.len()));
+            }
+            self.persist(&st)?;
+        }
+        if self.lock().stores.get(&name.to_string()).is_some_and(|r| r.close_pending.is_some()) {
+            let _one = self.apply.lock().unwrap_or_else(|e| e.into_inner());
+            for p in &principals {
+                self.apply_locked(p)?;
+            }
+            self.flush_close(name)?;
         }
         // The archive keys carry the time the archive began, kept across a resume.
         let ts = {
