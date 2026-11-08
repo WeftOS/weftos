@@ -1,10 +1,11 @@
 # weft-hub: the WeftOS-side computer hub for Tapestry
 
-> **Status: exploratory prep, superseded, unmerged.** The owner has not answered Phase 3
-> D1-D6. The standalone-binary-under-weaver placement (D1) and machine-list-as-data (D2)
-> below are my working assumptions, not decisions; the design stays open to the other D1
-> option (a daemon service). Only "hub on the WeftOS side" and "WeftOS-minted pass key"
-> came from the owner. Superseded by the test-only loopback hub (`tapestry/p3-test-hub`).
+> **Status: approved BACKUP plan (owner 2026-11-08 13:12), unmerged prep; D1 unanswered; the
+> primary path is the Tapestry test hub (`tapestry/p3-test-hub`).** The owner has not answered
+> Phase 3 D1 (hub placement). Both D1 options stay open: a standalone binary supervised by
+> weaver, or a daemon service. The standalone shape below is what this prep branch builds, not
+> a decision, and D2 (machine-list-as-data) is likewise a working assumption. Only "hub on the
+> WeftOS side" and "WeftOS-minted pass key" came from the owner.
 
 Package: `crates/weft-computer-hub/` (binary `weft-hub`, library `weft_hub`).
 Branch `feat/weft-computer-hub`, off WeftOS `target-0.8.5` at e3688fedb. Fork docs are
@@ -21,8 +22,8 @@ WeftOS-minted pass key, and relaying tool calls between a harness session and th
 server bound to it. It opens no outbound connection (`tokio-tungstenite` is built without
 its `connect` feature; the only socket calls are `bind` and `accept`).
 
-Owner decisions applied: D1 standalone binary that weaver supervises (own `[workspace]`
-table, not a member of the WeftOS workspace, same pattern as the leaf crates); D2 the
+Built as (D1 is NOT decided; the daemon-service option is equally open): a standalone binary that weaver would supervise (own `[workspace]`
+table, not a member of the WeftOS workspace, same pattern as the leaf crates); D2 (working assumption) the
 machine list is data (`config/hub.example.toml`), xpc is the only entry.
 
 `xai-computer-hub-core` is **not** used. It is a client-side `Transport`/`ToolRegistry`/

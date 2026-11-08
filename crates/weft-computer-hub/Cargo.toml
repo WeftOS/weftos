@@ -1,7 +1,7 @@
 # Standalone package: NOT a member of the WeftOS workspace (own empty-root
 # `[workspace]` table, same pattern as the leaf firmware crates). It carries
 # protocol types derived from the xAI grok-build fork (Apache-2.0) and is kept
-# out of the WeftOS runtime on purpose (owner decision D1). See
+# out of the WeftOS runtime on purpose (prep shape; owner decision D1 is unanswered, the daemon-service option is open). See
 # docs/tapestry-hub/weft-hub.md for how to build it against the local fork.
 [workspace]
 
