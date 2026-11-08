@@ -19,11 +19,17 @@ The activity log joins the three (`parse_audit`, `parse_notification`, `parse_de
 
 ## Steps
 
-1. **Receiver.** RustFS POSTs both streams to one HTTP URL. **The daemon has no receiver yet**
-   (the ingest functions exist in `weftos-store`; nothing in `weaver` listens). Until one exists
-   the activity log has the governed path only (the daemon's own record of requests it
-   authorised or refused), not direct-S3 activity. Pick the URL once the receiver lands.
-2. **Plan.** `scripts/store/rustfs-audit-plan.sh --receiver <url> --queue-dir <dir> --bucket n-<node> --bucket p-<ulid> --out <dir>`
+1. **Receiver.** The daemon has one (`crates/clawft-weave/src/store_ingest.rs`). It is **off unless**
+   `WEFTOS_STORE_INGEST_ADDR` is set in the daemon's environment (for example `127.0.0.1:7788`;
+   loopback only, anything else is refused), and it needs the RustFS backend (`WEFTOS_STORE_RUSTFS_ENV`).
+   On start it writes `store-ingest-urls` (0600) in the daemon's runtime dir: two lines,
+   `http://127.0.0.1:<port>/store/ingest/<secret>/audit` and `.../notify`. The secret is in the URL
+   because RustFS's webhook `auth_token` is not verified on 1.0.4; treat the file like a key
+   (`store-ingest-token` holds the secret and is stable across restarts). Use those two URLs as the
+   audit endpoint and the notify endpoint. A wrong secret is a plain 404; bodies over 1 MiB are refused.
+   What it logs: requests made with a principal's own key, for buckets that are this daemon's stores.
+   Not repeated: the daemon's own root-key requests (the governed path logged them) and any other bucket.
+2. **Plan.** `scripts/store/rustfs-audit-plan.sh --receiver <audit url> (the notify URL is the same with /notify) --queue-dir <dir> --bucket n-<node> --bucket p-<ulid> --out <dir>`
 3. **Env.** Add the printed block to the RustFS unit and restart it. The names that matter:
    - `RUSTFS_OUTBOUND_ALLOW_ORIGINS=<origin>` — RustFS refuses webhook endpoints (loopback too)
      unless the origin (scheme://host:port, no path) is listed. Without it the targets fail

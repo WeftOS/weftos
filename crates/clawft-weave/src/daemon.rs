@@ -1305,7 +1305,12 @@ pub async fn run(
             let reg = crate::expose_rt::start(&daemon_identity.node_id, &runtime_dir, home.as_deref(), audit_fn.clone()).await;
             // ADR-126 S1: the object store, with this node's own store created.
             match crate::store_rt::start(&daemon_identity.node_id, &runtime_dir, reg, audit_fn) {
-                Ok(_) => {}
+                Ok(svc) => {
+                    // Direct-S3 activity: RustFS's audit and notification posts (off unless WEFTOS_STORE_INGEST_ADDR is set).
+                    if let Err(e) = crate::store_ingest::start_from_env(svc, &runtime_dir).await {
+                        error!(error = %e, "store ingest receiver not started");
+                    }
+                }
                 Err(e) => error!(error = %e, "object store not started"),
             }
         }

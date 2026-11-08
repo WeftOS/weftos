@@ -8,7 +8,7 @@ set -euo pipefail
 usage() {
   cat <<'USAGE'
 Usage: rustfs-audit-plan.sh --receiver URL --queue-dir DIR [--target NAME] [--bucket B]... [--out DIR]
-  --receiver URL   where RustFS POSTs audit and notification records (the WeftOS receiver)
+  --receiver URL   the AUDIT url from the daemon's store-ingest-urls (ends /audit; the notify url is derived)
   --queue-dir DIR  RustFS-side directory for undelivered records (must exist, owned by RustFS)
   --target NAME    webhook target name, letters/digits/_/- (default: primary)
   --bucket B       a bucket to attach the notification to (repeatable; e.g. n-<node>, p-<ulid>)
@@ -52,7 +52,7 @@ RUSTFS_AUDIT_WEBHOOK_ENDPOINT_${T}=${receiver}
 RUSTFS_AUDIT_WEBHOOK_QUEUE_DIR_${T}=${queue}/audit
 RUSTFS_NOTIFY_ENABLE=true
 RUSTFS_NOTIFY_WEBHOOK_ENABLE_${T}=on
-RUSTFS_NOTIFY_WEBHOOK_ENDPOINT_${T}=${receiver}
+RUSTFS_NOTIFY_WEBHOOK_ENDPOINT_${T}=${receiver%/audit}/notify
 RUSTFS_NOTIFY_WEBHOOK_QUEUE_DIR_${T}=${queue}/notify"
 
 arn="arn:rustfs:sqs::${target}:webhook"

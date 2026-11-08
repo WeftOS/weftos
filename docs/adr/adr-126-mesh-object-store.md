@@ -269,38 +269,16 @@ percent-encoded. `parse_audit` was wrong before the capture (it returned `Object
 versioned operations, and `auth_token`. **Not yet done:** the daemon does not launch or configure RustFS (it is an external
 service), so setting those env names and issuing `PutBucketNotification` belongs to whoever deploys RustFS (Phase A):
 `docs/guides/rustfs-audit-deploy.md` is the runbook and `scripts/store/rustfs-audit-plan.sh` a dry run that prints it
-(`RustfsBackend::put_bucket_notification` is the call). **The daemon also has no HTTP receiver for either stream yet**
-(the ingest functions exist in `weftos-store` but nothing in `weaver` listens), so direct-S3 activity reaches the
-activity log only once that lands; it is the next S1 item after this one, and a listener will need its own diff-gate approval.
-
-**Conditional write (for S2).** `ObjectBackend::put_if_match(bucket, key, data, etag)` is a compare-and-swap (S3 `If-Match`): a
-changed key is `BackendError::Stale`, a missing key is `NoObject`. The service has `StoreService::put_if_match(who, store,
-key, data, etag)` (gated and logged like `put`), `svc.store` takes `"if_match": "<etag>"` on `put` (`store.v1`, not with
-`if_none_match`), and RustFS gets `If-Match`. Take the etag from the last `head` or `put` result of the same backend
-(opaque: MD5 on RustFS, BLAKE3 locally), and on `Stale` read again and retry. The local backend serialises swaps within the
-daemon process; across processes only RustFS is atomic. S2 should use this instead of unconditional `put` for any
-read-modify-write.
-
-**CI and sweeper roles (release stores).** Two narrow access levels exist besides read, write and admin: `append` (get, head,
-list, and a put that must carry `if_none_match`, so nothing is overwritten; no delete or copy) and `sweep` (get, head, list and
-delete; no put). A new release store gets the well-known principals `agent:ci` as `append` and `agent:store-sweeper` as
-`sweep` by default (`weaver store grant <name> <principal> append|sweep`). RustFS IAM has no condition for write-once, so the
-key's policy for `append` allows PutObject and a direct S3 call with that key could still overwrite: write-once holds on the
-governed path only. Immutability on the backend itself and retention are S4's. Readers of a release store (the project's
-members) are named when the store is made.
-
-Cogs reach the store through the cog data plane: the daemon serves `svc.store/<project ULID, lower
-case>` (default store: that project's) and `svc.store/<node>` (the node's store), schema `store.v1`
-(`contracts/cogs/README.md`), with ops put, get, head, list and delete. The caller becomes the principal
-`cog:<instance id>` and needs a grant, so an ungranted cog is refused and a disabled grant refuses the
-next call; one provider per project keeps a call inside its project, because a cross-project call
-needs a policy grant and the node's own bucket cannot be granted. A reply is limited to 64 KiB, so a
-larger object is an error, not a truncation. `store.put` and `store.get` on the weaver socket remain. Remote (mesh) callers
-are modelled (`Caller::mesh`, exposure check) but no mesh transport calls it yet. `project add` (the daemon's
-install action) creates the project store when the daemon runs an object store, and says so in its
-report; a failure there is a note, never a failed add. Other project stores come from
-`weaver store create`. Not done for PG:
-nothing here was deployed, and `WEFTOS_STORE_RUSTFS_ENV` is unset by default (local-directory backend).
+(`RustfsBackend::put_bucket_notification` is the call). **The daemon now has the receiver** (`clawft-weave/src/store_ingest.rs`, 2026-11-08): a loopback HTTP listener, off unless
+`WEFTOS_STORE_INGEST_ADDR` is set, POST only, 1 MiB cap, authenticated by a 256-bit secret in the URL path
+(`store-ingest-token`, 0600; the URLs are written to `store-ingest-urls`), because RustFS's webhook `auth_token` is unverified.
+It feeds `ingest_audit_line` and `ingest_notification`, which now drop records for buckets that are not the daemon's stores and
+the daemon's own root-key requests (already logged on the governed path), so a record reaches the activity log only if it came from a
+principal's own key. Notifications still invalidate caches whoever wrote. Verified end to end against a throwaway
+RustFS (`live_a_request_straight_to_rustfs_reaches_the_activity_log`, `--ignored`, `WEFTOS_STORE_TEST_RUSTFS_BIN`): a put made
+straight to RustFS with a cog's key shows as that cog's `PutObject` (audit) and a notification event. Not wired yet: attaching
+`PutBucketNotification` to buckets automatically when a store is created (the runbook does it by hand), and reading
+`rustfs.log` for 403 refusals (`ingest_log_line` has no caller).
 
 **Adversarial review of S1 (2026-11-08), fixed:** a grant change saved but not pushed (RustFS down, a crash between the two)
 is now made good by `StoreService::reconcile()` at daemon start, and backend pushes are serialised per service so an older snapshot
@@ -310,8 +288,7 @@ cog service startup no longer lists objects on the async runtime; `weaver store 
 record naming the operator. **Known and not fixed:** `archive` can lose an object put by a request that passed the gate just
 before it; listings and `FsBackend` etags read whole files (the local backend is the development path); a mesh-id change
 renames the stores' `weftos://` names (the bucket names do not move) and needs a migration; `project add`'s store hook
-joins a blocking thread; the ingest functions must authenticate the webhook and drop records whose bucket is not a known
-store when the receiver is built (they have no caller yet).
+joins a blocking thread; (the receiver now authenticates and drops unknown buckets; see above).
 
 ## Consequences
 
