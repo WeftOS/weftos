@@ -29,6 +29,7 @@ pub mod clock;
 pub mod creds;
 pub mod edge;
 pub mod grants;
+pub mod keygen;
 pub mod policy;
 pub mod rustfs;
 pub mod sigv4;

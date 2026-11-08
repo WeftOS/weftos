@@ -11,6 +11,8 @@ description = "ADR-126 S3: edge and Wasm nodes reach their node bucket through t
 [features]
 # In-memory RustFS stand-in (verifies SigV4, session tokens, policy, revocation).
 mock = []
+# OS-random node secret generation via getrandom (host side only).
+keygen = ["dep:getrandom"]
 
 [dependencies]
 serde = { workspace = true }
@@ -19,6 +21,7 @@ thiserror = { workspace = true }
 hmac = { workspace = true }
 sha2 = { workspace = true }
 zeroize = { workspace = true }
+getrandom = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

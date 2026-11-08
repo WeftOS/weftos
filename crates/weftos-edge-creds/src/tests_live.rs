@@ -423,3 +423,41 @@ fn session_floor_is_configurable_for_stores_that_allow_short_sessions() {
     assert!(run(mk(900).assume_role("node-wasm-1", &p, 60)).is_ok());
     assert!(run(mk(60).assume_role("node-wasm-1", &p, 60)).is_err());
 }
+
+#[test]
+fn keygen_secret_is_hex_of_entropy_and_refuses_constant_input() {
+    use crate::keygen::*;
+    let mut e = [0u8; SECRET_ENTROPY_BYTES];
+    assert_eq!(secret_from_entropy(&e), Err(KeygenError::Degenerate));
+    e = [7u8; SECRET_ENTROPY_BYTES];
+    assert_eq!(secret_from_entropy(&e), Err(KeygenError::Degenerate));
+    for (i, b) in e.iter_mut().enumerate() {
+        *b = i as u8 + 1;
+    }
+    let s = secret_from_entropy(&e).unwrap();
+    assert_eq!(s.len(), SECRET_LEN);
+    assert!(s.starts_with("0102030405"));
+}
+
+#[test]
+fn keygen_node_key_uses_principal_and_validates_id() {
+    use crate::keygen::*;
+    let mut e = [0u8; SECRET_ENTROPY_BYTES];
+    for (i, b) in e.iter_mut().enumerate() {
+        *b = (i * 13 + 1) as u8;
+    }
+    let k = node_key_from_entropy("edge-7", &e).unwrap();
+    assert_eq!(k.access_key, "node-edge-7");
+    assert!(node_key_from_entropy("Bad/Id", &e).is_err());
+    assert!(node_key_from_entropy("", &e).is_err());
+}
+
+#[cfg(feature = "keygen")]
+#[test]
+fn keygen_os_keys_differ_and_are_provisionable() {
+    use crate::keygen::*;
+    let a = generate_node_key("edge-7").unwrap();
+    let b = generate_node_key("edge-7").unwrap();
+    assert_ne!(a.secret_key, b.secret_key);
+    assert_eq!(a.secret_key.len(), SECRET_LEN);
+}
