@@ -31,6 +31,12 @@ mod watch;
 mod live_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_crash;
+#[cfg(test)]
+mod tests_hardening;
+#[cfg(all(test, feature = "rustfs"))]
+mod live_hardening;
 
 use std::path::Path;
 use std::time::Duration;
