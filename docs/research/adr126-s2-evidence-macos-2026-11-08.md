@@ -345,3 +345,41 @@ per second (25 objects in 0.72 s), but it excludes daemon, git and `wt.sh` overh
 like-for-like replacement for the 0.3 per second. The daemon-driven step timings in the item 1 table
 (33 s for `new`, 26 s for `share --handoff`, 22.9 s for `land`) are therefore still the external-disk
 numbers.
+
+### Two-daemon step times on the internal disk
+
+Re-run of the two-daemon `scripts/worktree-store.sh` flow ("two principals, one host") with the
+RustFS data directory and both daemons' runtime and HOME directories on the internal disk
+(APFS, `/private/tmp`, 291 GB free) instead of `/Volumes/ai-models`. Same RustFS 1.0.4 arm64 binary
+(single drive, no parity, console off, loopback only, random credentials in a 0600 file). The
+daemons were the **release** `weaver` built from this branch at `035111fde` (the earlier run used
+debug builds), with separate node keys, runtime dirs and HOME, `WEFTOS_AGENT`/`HOSTNAME` set per
+principal, and two scratch git repos with real `wt.sh new` and `land.sh`. One practical change: the
+runtime directories were reached through short symlinks, because the scratchpad path is longer than
+the macOS Unix-socket path limit; the data itself sits in the scratchpad on the internal disk.
+
+**Machine load.** The machine was busy with other sessions. `uptime` load averages (1, 5, 15
+minutes) were 5.78, 7.95, 9.93 when the flow started and 8.58, 8.29, 9.89 when it ended. Both are
+lower than during the external-disk run, so these numbers are not a quiet-machine best case either.
+
+| Step | External disk, debug daemons (before) | Internal disk, release daemons (after) |
+|---|---|---|
+| `new rooms` (A; first call also makes the project store) | 33.0 s | **0.7 s** |
+| `share --handoff` (A; 4 files + bundle, `.env` skipped as Secret) | 26.4 s (6 files) | **0.5 s** |
+| `land` (B; `land.sh` then promote) | 22.9 s | **0.8 s** |
+| First publish of a 60-file, 40 KB per file tree (`wt-big`, 65 objects) | 0.3 objects/s | **58 objects/s** (65 objects in 1.12 s) |
+| Unchanged re-publish of the same tree (0 uploaded, 65 unchanged) | not timed | **0.41 s** |
+
+The smaller steps were also fast: `search` 0.1 s, `sync-docs` 0.0 s, `claim` 0.1 s, `fetch` 0.1 s.
+The rooms flow differs slightly from the earlier one: the ignored `assets/` directory was excluded,
+so 4 files were uploaded instead of 6, and the "before" first-publish figure was for a different
+tree than `wt-big`'s count suggests (the earlier run recorded only the rate), so compare the rate,
+not the object counts.
+
+The step times fall by a factor of 30 to 50 and the first-publish rate rises by about 190 times, in
+line with the library-level result above (about 35 objects per second, 29 ms per object). The
+external volume, not the S2 code, the daemons or the shell script, was the cause of the earlier
+daemon-driven numbers. The release build also removes any debug-build cost, so part of the gain is
+that, but the earlier tests already showed the disk dominating. This was one run on a busy machine,
+with trees of 4 to 65 objects; it says nothing about Sansone-scale trees (gate item 3), and the
+previous "upper bound" wording for the item 1 table applies to the whole table above.
