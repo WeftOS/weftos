@@ -245,7 +245,7 @@ impl ScopedView {
     }
 
     fn opts(&self, read_only: bool) -> Options {
-        Options { limits: self.spec.limits.limits(), device: Some(self.device()), read_only }
+        Options { limits: self.spec.limits.limits(), device: Some(self.device()), read_only, ..Options::default() }
     }
 
     fn device(&self) -> String {
@@ -306,7 +306,7 @@ impl ScopedView {
             rep.took_over = prev.map(|p| p.holder);
             self.lease = Some(l);
         }
-        let opts = Options { limits: spec.limits.limits(), device: Some(holder.to_owned()), read_only: true };
+        let opts = Options { limits: spec.limits.limits(), device: Some(holder.to_owned()), read_only: true, ..Options::default() };
         let mut total = 0u64;
         let mut fill = |dest: &Path, prefix: &str, read_only: bool, rep: &mut OpenReport| -> Result<()> {
             let d = materialise_with(b, &spec.bucket, prefix, dest, &Options { read_only, ..opts.clone() })?;
