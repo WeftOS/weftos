@@ -8,7 +8,7 @@
 //! `--as` is `local:<principal>` (e.g. `local:cog:c1`), `weftos:<id>`, or
 //! `foreign:<64hex mesh>:<id>`. Anything else is refused before a request is sent.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
 use base64::Engine;
@@ -16,7 +16,11 @@ use clap::{Args, Subcommand};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use ed25519_dalek::SigningKey;
+
 use crate::protocol;
+use crate::store_account::{Access, CrossMeshGrant, MAX_GRANT_TTL_SECS};
+use crate::weftos_uri::{Kind, WeftosUri};
 
 /// Arguments of `weaver store client`.
 #[derive(Args)]
@@ -46,11 +50,24 @@ pub enum StoreClientAction {
     /// Trust a foreign mesh's key (both 64 hex chars).
     XmeshTrust { mesh: String, key: String },
     /// Install a cross-mesh grant from a JSON file.
-    XmeshInstall { grant: PathBuf },
+    XmeshInstall {
+        grant: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
     /// Revoke a cross-mesh grant from a JSON file.
-    XmeshRevoke { grant: PathBuf },
+    XmeshRevoke {
+        grant: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Sign a cross-mesh grant locally (no daemon call) as the owning mesh.
+    XmeshSign(XmeshSignArgs),
     /// Sweep expired/revoked state.
-    Sweep,
+    Sweep {
+        #[arg(long)]
+        json: bool,
+    },
     /// Write an object as `--as`.
     Put {
         name: String,
@@ -94,6 +111,157 @@ pub enum StoreClientAction {
         #[arg(long)]
         json: bool,
     },
+}
+
+/// Arguments of `weaver store client xmesh-sign`.
+#[derive(Args, Debug)]
+pub struct XmeshSignArgs {
+    /// File holding the owning mesh's ed25519 signing seed (64 hex chars; mode 0600).
+    #[arg(long)]
+    pub key_file: PathBuf,
+    /// Owning mesh id (64 hex).
+    #[arg(long)]
+    pub owner: String,
+    /// Receiving mesh id (64 hex).
+    #[arg(long)]
+    pub receiver: String,
+    /// Store name, `weftos://<owner>/projects/<ULID>/store`.
+    #[arg(long)]
+    pub store: String,
+    /// read, write or admin.
+    #[arg(long)]
+    pub access: String,
+    /// Monotonic grant sequence number.
+    #[arg(long)]
+    pub seq: u64,
+    /// Lifetime in seconds (1..=MAX_GRANT_TTL_SECS).
+    #[arg(long)]
+    pub ttl_secs: u64,
+    /// Override the issue time (unix seconds); for tests.
+    #[arg(long)]
+    pub now: Option<u64>,
+    /// Write the grant here instead of stdout.
+    #[arg(long)]
+    pub out: Option<PathBuf>,
+    /// Overwrite `--out` if it exists.
+    #[arg(long)]
+    pub force: bool,
+}
+
+fn hex32(what: &str, s: &str) -> Result<[u8; 32], String> {
+    if !is_hex(s, 64) {
+        return Err(format!("{what} must be 64 hex characters"));
+    }
+    let mut b = [0u8; 32];
+    hex::decode_to_slice(s, &mut b).map_err(|e| format!("{what}: {e}"))?;
+    Ok(b)
+}
+
+/// Read a signing seed file: exactly 64 hex chars (whitespace trimmed). On unix a file that
+/// group or others can access is refused. The key is never included in an error.
+pub fn read_key_file(p: &Path) -> Result<SigningKey, String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let md = std::fs::metadata(p).map_err(|e| format!("key file {}: {e}", p.display()))?;
+        if md.permissions().mode() & 0o077 != 0 {
+            return Err(format!(
+                "key file {} is accessible by group or others (mode {:o}); run chmod 600 on it",
+                p.display(),
+                md.permissions().mode() & 0o777
+            ));
+        }
+    }
+    let text = std::fs::read_to_string(p).map_err(|e| format!("key file {}: {e}", p.display()))?;
+    let seed = hex32("key file contents", text.trim()).map_err(|_| {
+        format!("key file {} must hold exactly 64 hex characters (a 32-byte seed)", p.display())
+    })?;
+    Ok(SigningKey::from_bytes(&seed))
+}
+
+fn access_of(s: &str) -> Result<Access, String> {
+    match s {
+        "read" => Ok(Access::Read),
+        "write" => Ok(Access::Write),
+        "admin" => Ok(Access::Admin),
+        _ => Err(format!("access must be read, write or admin (got {s:?})")),
+    }
+}
+
+/// Sign a cross-mesh grant as the owning mesh. Pure: no clock, no I/O.
+#[allow(clippy::too_many_arguments)]
+pub fn sign_grant(
+    key: &SigningKey, owner: &str, receiver: &str, store: &str, access: &str, seq: u64, ttl_secs: u64, now: u64,
+) -> Result<CrossMeshGrant, String> {
+    let owner_b = hex32("owner", owner)?;
+    let receiver_b = hex32("receiver", receiver)?;
+    let access = access_of(access)?;
+    if ttl_secs == 0 || ttl_secs > MAX_GRANT_TTL_SECS {
+        return Err(format!("ttl-secs must be 1..={MAX_GRANT_TTL_SECS} (got {ttl_secs})"));
+    }
+    let uri = WeftosUri::parse(store).map_err(|e| format!("store {store:?}: {e}"))?;
+    if uri.kind != Kind::Projects {
+        return Err(format!("store {store:?} must name a projects store"));
+    }
+    if uri.authority.0 != owner_b {
+        return Err(format!("store {store:?} is not owned by mesh {owner}"));
+    }
+    let expires = now.checked_add(ttl_secs).ok_or("now + ttl overflows")?;
+    Ok(CrossMeshGrant::sign(key, owner_b, receiver_b, store, access, seq, now, expires))
+}
+
+fn now_secs() -> anyhow::Result<u64> {
+    Ok(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs())
+}
+
+/// Write `text` to `p` with mode 0600 (unix); refuses an existing file unless `force`.
+fn write_private(p: &Path, text: &str, force: bool) -> anyhow::Result<()> {
+    use std::io::Write;
+    let mut o = std::fs::OpenOptions::new();
+    o.write(true);
+    if force {
+        o.create(true).truncate(true);
+    } else {
+        o.create_new(true);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        o.mode(0o600);
+    }
+    let mut f = o.open(p).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::AlreadyExists {
+            anyhow::anyhow!("{} exists; pass --force to overwrite", p.display())
+        } else {
+            anyhow::anyhow!("writing {}: {e}", p.display())
+        }
+    })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    f.write_all(text.as_bytes())?;
+    Ok(())
+}
+
+/// Run `xmesh-sign`: returns the text to print (empty when written to `--out`, with a note).
+pub fn run_xmesh_sign(a: &XmeshSignArgs) -> anyhow::Result<String> {
+    let key = read_key_file(&a.key_file).map_err(|e| anyhow::anyhow!(e))?;
+    let now = match a.now {
+        Some(n) => n,
+        None => now_secs()?,
+    };
+    let g = sign_grant(&key, &a.owner, &a.receiver, &a.store, &a.access, a.seq, a.ttl_secs, now)
+        .map_err(|e| anyhow::anyhow!(e))?;
+    let text = serde_json::to_string_pretty(&g.to_json())? + "\n";
+    match &a.out {
+        Some(p) => {
+            write_private(p, &text, a.force)?;
+            Ok(format!("wrote cross-mesh grant to {} (expires {})\n", p.display(), g.expires_at))
+        }
+        None => Ok(text),
+    }
 }
 
 fn is_hex(s: &str, len: usize) -> bool {
@@ -191,9 +359,10 @@ pub fn build(action: &StoreClientAction) -> anyhow::Result<(&'static str, Value)
             hex_arg("key", key, 64)?;
             ("store.client.xmesh_trust", json!({"mesh": mesh, "key": key}))
         }
-        A::XmeshInstall { grant } => ("store.client.xmesh_install", json!({"grant": grant_from_file(grant)?})),
-        A::XmeshRevoke { grant } => ("store.client.xmesh_revoke", json!({"grant": grant_from_file(grant)?})),
-        A::Sweep => ("store.client.sweep", json!({})),
+        A::XmeshInstall { grant, .. } => ("store.client.xmesh_install", json!({"grant": grant_from_file(grant)?})),
+        A::XmeshRevoke { grant, .. } => ("store.client.xmesh_revoke", json!({"grant": grant_from_file(grant)?})),
+        A::XmeshSign(_) => bail!("xmesh-sign is local and sends no request"),
+        A::Sweep { .. } => ("store.client.sweep", json!({})),
         A::Put { name, key, as_, text, file, .. } => {
             let as_v = parse_as(as_)?;
             let mut p = json!({"name": name, "key": key, "as": as_v});
@@ -215,7 +384,8 @@ pub fn build(action: &StoreClientAction) -> anyhow::Result<(&'static str, Value)
 
 fn wants_json(a: &StoreClientAction) -> bool {
     use StoreClientAction as A;
-    matches!(a, A::Status { json: true } | A::Put { json: true, .. } | A::Get { json: true, .. }
+    matches!(a, A::Status { json: true } | A::Sweep { json: true } | A::XmeshInstall { json: true, .. }
+        | A::XmeshRevoke { json: true, .. } | A::Put { json: true, .. } | A::Get { json: true, .. }
         | A::Ls { json: true, .. } | A::Delete { json: true, .. })
 }
 
@@ -227,20 +397,36 @@ fn cell(v: &Value, k: &str) -> String {
     }
 }
 
+fn grant_line(verb: &str, g: &Value) -> String {
+    let recv = cell(g, "receiver");
+    format!(
+        "{verb} cross-mesh grant: {} to {} access={} seq={} expires={}\n",
+        cell(g, "store"), recv.get(..12).unwrap_or(&recv), cell(g, "access"), cell(g, "seq"), cell(g, "expires_at")
+    )
+}
+
 /// Human rendering of a verb's result.
 pub fn render(action: &StoreClientAction, v: &Value) -> anyhow::Result<String> {
     use StoreClientAction as A;
     Ok(match action {
-        A::Status { .. } => serde_json::to_string_pretty(v)? + "\n",
+        A::Status { .. } => format!(
+            "account  {}\nuid      {}\nroot     {}\nlisten   {}\n",
+            cell(v, "account"), cell(v, "uid"), cell(v, "root"), cell(v, "listen")
+        ),
         A::Hold { ulid } => format!("held client account {ulid}\n"),
         A::Grant { name, principal, access } => format!("{principal} on {name}: {access}\n"),
         A::Revoke { name, principal } => format!("revoked {principal} on {name}\n"),
         A::WeftosGrant { name, id, access } => format!("weftos:{id} on {name}: {access}\n"),
         A::WeftosRevoke { name, id } => format!("revoked weftos:{id} on {name}\n"),
         A::XmeshTrust { mesh, .. } => format!("trusted mesh {mesh}\n"),
-        A::XmeshInstall { .. } => "installed cross-mesh grant\n".into(),
-        A::XmeshRevoke { .. } => "revoked cross-mesh grant\n".into(),
-        A::Sweep => format!("swept: {}\n", serde_json::to_string(v)?),
+        A::XmeshInstall { .. } => grant_line("installed", &v["installed"]),
+        A::XmeshRevoke { .. } => grant_line("revoked", &v["revoked"]),
+        A::XmeshSign(_) => bail!("xmesh-sign has no daemon result"),
+        A::Sweep { .. } => match v["expired"].as_u64() {
+            Some(0) => "no expired grants\n".into(),
+            Some(n) => format!("expired grants dropped: {n}\n"),
+            None => bail!("sweep result has no expired count"),
+        },
         A::Put { .. } => format!("wrote {} ({} bytes)\n", cell(v, "key"), cell(v, "size")),
         A::Get { .. } => match v["text"].as_str() {
             Some(t) => t.to_string(),
@@ -269,6 +455,10 @@ async fn call(method: &str, params: Value) -> anyhow::Result<Value> {
 
 /// Run `weaver store client`.
 pub async fn run(args: StoreClientArgs) -> anyhow::Result<()> {
+    if let StoreClientAction::XmeshSign(a) = &args.action {
+        print!("{}", run_xmesh_sign(a)?);
+        return Ok(());
+    }
     let (method, params) = build(&args.action)?;
     let v = call(method, params).await?;
     if wants_json(&args.action) {
@@ -409,5 +599,161 @@ mod tests {
         let g = parse(&["get", "n", "k", "--as", "weftos:w"]).unwrap();
         assert_eq!(render(&g, &json!({"text": "hello"})).unwrap(), "hello");
         assert!(render(&g, &json!({"size": 4})).is_err(), "binary refuses");
+    }
+
+    // ---- xmesh-sign ----
+
+    const ULID: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+    const NOW: u64 = 1_800_000_000;
+
+    fn skey() -> SigningKey {
+        SigningKey::from_bytes(&[7u8; 32])
+    }
+
+    fn store_of(owner: &str) -> String {
+        format!("weftos://{owner}/projects/{ULID}/store")
+    }
+
+    #[test]
+    fn sign_grant_round_trips_through_the_gate() {
+        use crate::store_account::StoreGate;
+        use crate::weftos_uri::Authority;
+        let (owner, recv) = (H64, H64B);
+        let g = sign_grant(&skey(), owner, recv, &store_of(owner), "write", 3, 600, NOW).unwrap();
+        assert_eq!((g.issued_at, g.expires_at, g.seq, g.access), (NOW, NOW + 600, 3, Access::Write));
+        // Survives the file form that xmesh-install reads.
+        let back = grant_from_str(&serde_json::to_string(&g.to_json()).unwrap()).unwrap();
+        assert_eq!(CrossMeshGrant::from_json(&back).unwrap(), g);
+        let mut gate = StoreGate::new(Authority(hex32("r", recv).unwrap()), "acme");
+        assert!(gate.install_xmesh(g.clone(), NOW).is_err(), "owner not trusted yet");
+        gate.trust_mesh(hex32("o", owner).unwrap(), skey().verifying_key());
+        assert!(gate.install_xmesh(g.clone(), NOW).is_ok());
+        // A different key's signature is refused.
+        let mut gate2 = StoreGate::new(Authority(hex32("r", recv).unwrap()), "acme");
+        gate2.trust_mesh(hex32("o", owner).unwrap(), SigningKey::from_bytes(&[8u8; 32]).verifying_key());
+        assert!(gate2.install_xmesh(g, NOW).is_err());
+    }
+
+    #[test]
+    fn sign_grant_refusals() {
+        let ok = |store: &str, access: &str, ttl: u64| sign_grant(&skey(), H64, H64B, store, access, 1, ttl, NOW);
+        let name = store_of(H64);
+        assert!(ok(&name, "read", 1).is_ok() && ok(&name, "admin", MAX_GRANT_TTL_SECS).is_ok());
+        assert!(ok(&store_of(H64B), "read", 10).unwrap_err().contains("not owned"), "wrong owner");
+        assert!(ok(&name, "read", 0).is_err(), "ttl 0");
+        assert!(ok(&name, "read", MAX_GRANT_TTL_SECS + 1).is_err(), "ttl too long");
+        assert!(ok(&name, "root", 10).is_err(), "bad access");
+        assert!(ok("not a uri", "read", 10).is_err());
+        assert!(ok(&format!("weftos://{H64}/goals/{ULID}"), "read", 10).is_err(), "not a projects store");
+        assert!(sign_grant(&skey(), "abc", H64B, &name, "read", 1, 10, NOW).is_err(), "short owner");
+        assert!(sign_grant(&skey(), H64, "zz", &name, "read", 1, 10, NOW).is_err(), "bad receiver");
+        assert!(sign_grant(&skey(), H64, H64B, &name, "read", 1, 10, u64::MAX).is_err(), "overflow");
+    }
+
+    fn key_file(dir: &Path, name: &str, body: &str, mode: u32) -> PathBuf {
+        let p = dir.join(name);
+        std::fs::write(&p, body).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(mode)).unwrap();
+        }
+        let _ = mode;
+        p
+    }
+
+    #[test]
+    fn key_file_validation() {
+        let d = tempfile::tempdir().unwrap();
+        let seed = "07".repeat(32);
+        let good = key_file(d.path(), "good", &format!("  {seed}\n"), 0o600);
+        assert_eq!(read_key_file(&good).unwrap().to_bytes(), [7u8; 32], "whitespace trimmed");
+        for (n, body) in [("short", "07".repeat(31)), ("nonhex", "zz".repeat(32)), ("long", "07".repeat(33)), ("empty", String::new())] {
+            let e = read_key_file(&key_file(d.path(), n, &body, 0o600)).unwrap_err();
+            assert!(e.contains("64 hex"), "{n}: {e}");
+            assert!(!e.contains(&body) || body.is_empty(), "key material must not be echoed");
+        }
+        assert!(read_key_file(&d.path().join("missing")).is_err());
+        #[cfg(unix)]
+        for mode in [0o640, 0o604, 0o644, 0o660] {
+            let e = read_key_file(&key_file(d.path(), "loose", &seed, mode)).unwrap_err();
+            assert!(e.contains("group or others") && !e.contains(&seed), "{mode:o}: {e}");
+        }
+    }
+
+    fn sign_args(d: &Path, extra: &[&str]) -> XmeshSignArgs {
+        let kf = key_file(d, "k", &"07".repeat(32), 0o600);
+        let (store, kfs) = (store_of(H64), kf.to_str().unwrap().to_string());
+        let mut a = vec!["xmesh-sign", "--key-file", &kfs, "--owner", H64, "--receiver", H64B, "--store", &store,
+            "--access", "read", "--seq", "5", "--ttl-secs", "100", "--now", "1800000000"];
+        a.extend_from_slice(extra);
+        match parse(&a).unwrap() {
+            StoreClientAction::XmeshSign(x) => x,
+            _ => panic!("not xmesh-sign"),
+        }
+    }
+
+    #[test]
+    fn xmesh_sign_args_parse() {
+        let d = tempfile::tempdir().unwrap();
+        let a = sign_args(d.path(), &[]);
+        assert_eq!((a.seq, a.ttl_secs, a.now, a.force), (5, 100, Some(NOW), false));
+        assert!(a.out.is_none());
+        let a = sign_args(d.path(), &["--out", "g.json", "--force"]);
+        assert!(a.force && a.out.is_some());
+        assert!(parse(&["xmesh-sign"]).is_err(), "required args");
+        assert!(parse(&["xmesh-sign", "--key-file", "k", "--owner", H64, "--receiver", H64B, "--store", "s",
+            "--access", "read", "--ttl-secs", "5"]).is_err(), "--seq required");
+        assert!(parse(&["xmesh-sign", "--key-file", "k", "--owner", H64, "--receiver", H64B, "--store", "s",
+            "--access", "read", "--seq", "1"]).is_err(), "--ttl-secs required");
+        assert!(build(&StoreClientAction::XmeshSign(a)).is_err(), "never sent to the daemon");
+    }
+
+    #[test]
+    fn xmesh_sign_stdout_and_out_file() {
+        let d = tempfile::tempdir().unwrap();
+        let text = run_xmesh_sign(&sign_args(d.path(), &[])).unwrap();
+        let v: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!((v["seq"].clone(), v["expires_at"].clone()), (json!(5), json!(NOW + 100)));
+        assert!(grant_from_str(&text).is_ok(), "xmesh-install can read it");
+
+        let out = d.path().join("grant.json");
+        let o = out.to_str().unwrap();
+        run_xmesh_sign(&sign_args(d.path(), &["--out", o])).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&out).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        assert_eq!(std::fs::read_to_string(&out).unwrap(), text);
+        std::fs::write(&out, "precious").unwrap();
+        let e = run_xmesh_sign(&sign_args(d.path(), &["--out", o])).unwrap_err().to_string();
+        assert!(e.contains("--force"), "{e}");
+        assert_eq!(std::fs::read_to_string(&out).unwrap(), "precious", "not overwritten");
+        run_xmesh_sign(&sign_args(d.path(), &["--out", o, "--force"])).unwrap();
+        assert_eq!(std::fs::read_to_string(&out).unwrap(), text);
+    }
+
+    #[test]
+    fn human_rendering_of_status_sweep_and_xmesh() {
+        let st = parse(&["status"]).unwrap();
+        let v = json!({"account": "acme", "uid": 2102, "root": "/data1/acme/store", "listen": "127.0.0.1:9100"});
+        assert_eq!(render(&st, &v).unwrap(),
+            "account  acme\nuid      2102\nroot     /data1/acme/store\nlisten   127.0.0.1:9100\n");
+        let sw = parse(&["sweep"]).unwrap();
+        assert_eq!(render(&sw, &json!({"expired": 0})).unwrap(), "no expired grants\n");
+        assert_eq!(render(&sw, &json!({"expired": 3})).unwrap(), "expired grants dropped: 3\n");
+        assert!(render(&sw, &json!({})).is_err(), "malformed result refuses");
+        let g = sign_grant(&skey(), H64, H64B, &store_of(H64), "read", 9, 60, NOW).unwrap().to_json();
+        let ins = parse(&["xmesh-install", "g.json"]).unwrap();
+        let t = render(&ins, &json!({"installed": g})).unwrap();
+        assert!(t.starts_with("installed") && t.contains(&store_of(H64)) && t.contains("bbbbbbbbbbbb")
+            && !t.contains(H64B) && t.contains("access=read") && t.contains("seq=9")
+            && t.contains(&format!("expires={}", NOW + 60)), "{t}");
+        let rev = parse(&["xmesh-revoke", "g.json"]).unwrap();
+        assert!(render(&rev, &json!({"revoked": g})).unwrap().starts_with("revoked"));
+        assert!(wants_json(&parse(&["sweep", "--json"]).unwrap()) && !wants_json(&sw));
+        assert!(wants_json(&parse(&["xmesh-install", "g", "--json"]).unwrap()));
+        assert!(wants_json(&parse(&["xmesh-revoke", "g", "--json"]).unwrap()));
     }
 }

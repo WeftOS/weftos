@@ -327,3 +327,27 @@ fn gate_state_round_trips_and_drops_a_grant_whose_key_is_gone() {
     let tampered = StoreGate::load(Authority(mesh(1)), "acme", &path).unwrap();
     assert!(tampered.xmesh.is_empty());
 }
+
+#[test]
+fn every_gate_event_round_trips_through_json_and_replays() {
+    let s = name(mesh(1), ULID);
+    let x = CrossMeshGrant::sign(&key(2), mesh(2), mesh(1), &name(mesh(2), ULID), Access::Read, 1, NOW - 10, NOW + 100);
+    let evs = [
+        GateEvent::Hold { ulid: ULID.into() },
+        GateEvent::Grant(StoreGrant { principal: weftos(), store: s.clone(), access: Access::Write }),
+        GateEvent::Grant(StoreGrant { principal: client("c1"), store: s.clone(), access: Access::Read }),
+        GateEvent::Revoke { principal: Principal::Foreign { mesh: mesh(3), id: "z".into() }, store: s.clone() },
+        GateEvent::Trust { mesh: mesh(2), key: key(2).verifying_key().to_bytes() },
+        GateEvent::XmeshInstall(x.clone()),
+        GateEvent::XmeshRevoke { id: x.id() },
+    ];
+    let mut g = StoreGate::new(Authority(mesh(1)), "acme");
+    for e in &evs {
+        let back = GateEvent::from_json(e.kind(), &e.to_json()).unwrap();
+        assert_eq!(&back, e, "{}", e.kind());
+        g.apply(&back, NOW).unwrap();
+    }
+    assert!(ok(&g, &client("c1"), &s, Access::Read));
+    assert!(GateEvent::from_json("nope", &serde_json::json!({})).is_err());
+    assert!(GateEvent::from_json("grant", &serde_json::json!({"store": "x"})).is_err());
+}

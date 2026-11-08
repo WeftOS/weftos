@@ -12,15 +12,18 @@ use std::path::Path;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use clawft_kernel::exposure::ExposureRegistry;
 use clawft_kernel::exposure::registry::now_ms;
+use clawft_kernel::exposure::{AuditFn, ExposureRegistry};
 use serde::Deserialize;
 use weftos_store::audit::AuditSink;
-use weftos_store::service::ExposureGate;
+use weftos_store::service::{ChainSink, ExposureGate};
 
 use crate::client_store::ClientStore;
+use crate::client_store_state::{EventLog, GateState, JournalState};
+#[cfg(feature = "exochain")]
+use crate::client_store_state::LoggedEvent;
 use crate::store_account::ClientStoreSpec;
-use crate::store_rt::{ActivitySink, RegistryGate};
+use crate::store_rt::{ActivitySink, ChainAudit, RegistryGate};
 use crate::weftos_uri::Authority;
 
 /// Name of the config file in the runtime dir.
@@ -59,20 +62,41 @@ fn mesh_of(t: &str) -> Option<Authority> {
     ok.then(|| hex::decode(t).ok()).flatten().and_then(|v| <[u8; 32]>::try_from(v).ok()).map(Authority)
 }
 
+/// The daemon's chain as the gate's event log: gate changes are `store.client.gate.*` events.
+#[cfg(feature = "exochain")]
+pub struct ChainLog(pub Arc<clawft_kernel::chain::ChainManager>);
+
+#[cfg(feature = "exochain")]
+impl EventLog for ChainLog {
+    fn append(&self, source: &str, kind: &str, payload: serde_json::Value) {
+        self.0.append(source, kind, Some(payload));
+    }
+    fn all(&self) -> Vec<LoggedEvent> {
+        self.0.tail(0).into_iter().map(|e| LoggedEvent { source: e.source, kind: e.kind, payload: e.payload }).collect()
+    }
+}
+
 /// Build the store for `cfg` as the process uid `euid`. Everything the daemon decides is here, so
 /// it can be tested without a real client user: the spec, the mesh and the on-disk check.
+/// With `log` the gate is rebuilt from, and recorded to, that event log (the chain); without
+/// it the gate lives in `gate.json` under the client root.
 #[cfg(unix)]
 pub fn open_as(
     cfg: &ClientStoreConfig, euid: u32, mesh_token: &str, exposure: Arc<dyn ExposureGate>, audit: Arc<dyn AuditSink>,
+    chain: Arc<dyn ChainSink>, log: Option<Arc<dyn EventLog>>,
 ) -> Result<ClientStore, String> {
     let mesh = mesh_of(mesh_token).ok_or_else(|| "this node has no mesh id yet; the client store waits for one".to_owned())?;
     let spec = ClientStoreSpec::standard(&cfg.account, euid, cfg.port).map_err(|e| e.to_string())?;
-    ClientStore::open_fs(spec, mesh, exposure, audit, now_ms).map_err(|e| e.to_string())
+    let state = log.map(|l| Arc::new(JournalState::new(l, mesh, &cfg.account)) as Arc<dyn GateState>);
+    ClientStore::open_fs_with(spec, mesh, exposure, audit, chain, state, now_ms).map_err(|e| e.to_string())
 }
 
-/// Start the client store if `dir` has a config. `Ok(None)` when it does not.
+/// Start the client store if `dir` has a config. `Ok(None)` when it does not. `chain` is the
+/// audit function S1's service records grants through; `log` is the gate's event log.
 #[cfg(unix)]
-pub fn start(dir: &Path, exposures: Arc<ExposureRegistry>) -> Result<Option<Arc<ClientStore>>, String> {
+pub fn start(
+    dir: &Path, exposures: Arc<ExposureRegistry>, chain: Option<AuditFn>, log: Option<Arc<dyn EventLog>>,
+) -> Result<Option<Arc<ClientStore>>, String> {
     if let Some(g) = global() {
         return Ok(Some(g));
     }
@@ -83,13 +107,18 @@ pub fn start(dir: &Path, exposures: Arc<ExposureRegistry>) -> Result<Option<Arc<
     };
     let cfg = parse_config(&text)?;
     let euid = nix::unistd::geteuid().as_raw();
-    let cs = open_as(&cfg, euid, &crate::store_rt::mesh_token(), Arc::new(RegistryGate(exposures.clone())), Arc::new(ActivitySink(exposures)))?;
+    let cs = open_as(
+        &cfg, euid, &crate::store_rt::mesh_token(), Arc::new(RegistryGate(exposures.clone())), Arc::new(ActivitySink(exposures)),
+        Arc::new(ChainAudit(chain)), log,
+    )?;
     Ok(Some(GLOBAL.get_or_init(|| Arc::new(cs)).clone()))
 }
 
 /// Without unix there are no client uids to check: nothing starts.
 #[cfg(not(unix))]
-pub fn start(_dir: &Path, _exposures: Arc<ExposureRegistry>) -> Result<Option<Arc<ClientStore>>, String> {
+pub fn start(
+    _dir: &Path, _exposures: Arc<ExposureRegistry>, _chain: Option<AuditFn>, _log: Option<Arc<dyn EventLog>>,
+) -> Result<Option<Arc<ClientStore>>, String> {
     Ok(None)
 }
 

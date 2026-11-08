@@ -235,3 +235,85 @@ impl StoreGate {
         Ok(g)
     }
 }
+
+/// One change to the gate. The chain journal records these in order; replaying them through
+/// [`StoreGate::apply`] rebuilds the gate (ADR-126 S5), checked by the same rules as a live change.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GateEvent {
+    Hold { ulid: String },
+    Grant(StoreGrant),
+    Revoke { principal: Principal, store: String },
+    Trust { mesh: [u8; 32], key: [u8; 32] },
+    XmeshInstall(CrossMeshGrant),
+    XmeshRevoke { id: [u8; 64] },
+}
+
+fn str_of<'a>(v: &'a serde_json::Value, k: &str) -> Result<&'a str, String> {
+    v.get(k).and_then(|x| x.as_str()).ok_or_else(|| format!("missing {k}"))
+}
+
+impl GateEvent {
+    /// The kind suffix: the chain event is `store.client.gate.<kind>`.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Hold { .. } => "hold",
+            Self::Grant(_) => "grant",
+            Self::Revoke { .. } => "revoke",
+            Self::Trust { .. } => "trust",
+            Self::XmeshInstall(_) => "xmesh_install",
+            Self::XmeshRevoke { .. } => "xmesh_revoke",
+        }
+    }
+
+    pub fn to_json(&self) -> serde_json::Value {
+        use serde_json::json;
+        match self {
+            Self::Hold { ulid } => json!({ "ulid": ulid }),
+            Self::Grant(g) => json!({
+                "principal": serde_json::to_value(sprincipal(&g.principal)).unwrap_or_default(),
+                "store": g.store, "access": access_str(g.access),
+            }),
+            Self::Revoke { principal, store } => json!({
+                "principal": serde_json::to_value(sprincipal(principal)).unwrap_or_default(), "store": store,
+            }),
+            Self::Trust { mesh, key } => json!({ "mesh": hex::encode(mesh), "key": hex::encode(key) }),
+            Self::XmeshInstall(g) => json!({ "grant": g.to_json() }),
+            Self::XmeshRevoke { id } => json!({ "id": hex::encode(id) }),
+        }
+    }
+
+    pub fn from_json(kind: &str, v: &serde_json::Value) -> Result<Self, String> {
+        let principal = || -> Result<Principal, String> {
+            principal_of(serde_json::from_value(v.get("principal").cloned().unwrap_or_default()).map_err(|e| e.to_string())?)
+        };
+        match kind {
+            "hold" => Ok(Self::Hold { ulid: str_of(v, "ulid")?.to_owned() }),
+            "grant" => Ok(Self::Grant(StoreGrant {
+                principal: principal()?,
+                store: str_of(v, "store")?.to_owned(),
+                access: access_of(str_of(v, "access")?)?,
+            })),
+            "revoke" => Ok(Self::Revoke { principal: principal()?, store: str_of(v, "store")?.to_owned() }),
+            "trust" => Ok(Self::Trust { mesh: hex_n::<32>(str_of(v, "mesh")?)?, key: hex_n::<32>(str_of(v, "key")?)? }),
+            "xmesh_install" => Ok(Self::XmeshInstall(CrossMeshGrant::from_json(v.get("grant").ok_or("missing grant")?)?)),
+            "xmesh_revoke" => Ok(Self::XmeshRevoke { id: hex_n::<64>(str_of(v, "id")?)? }),
+            o => Err(format!("unknown gate event {o:?}")),
+        }
+    }
+}
+
+impl StoreGate {
+    /// Apply one journalled change. A cross-mesh install is checked against `now` (unix
+    /// seconds) like a live one, so an expired grant does not come back on replay.
+    pub fn apply(&mut self, ev: &GateEvent, now: u64) -> Result<(), Refused> {
+        match ev {
+            GateEvent::Hold { ulid } => self.hold_project(ulid),
+            GateEvent::Grant(g) => self.grant(g.clone()),
+            GateEvent::Revoke { principal, store } => self.revoke(principal, store),
+            GateEvent::Trust { mesh, key } => self.trust_mesh(*mesh, VerifyingKey::from_bytes(key).map_err(|_| Refused)?),
+            GateEvent::XmeshInstall(g) => self.install_xmesh(g.clone(), now)?,
+            GateEvent::XmeshRevoke { id } => self.revoke_xmesh(*id),
+        }
+        Ok(())
+    }
+}

@@ -1316,7 +1316,12 @@ pub async fn run(
                 Err(e) => error!(error = %e, "object store not started"),
             }
             // ADR-126 S5: a daemon running as a client user also serves that account's own store.
-            match crate::client_store_rt::start(&runtime_dir, reg) {
+            // The gate's history is the chain's `store.client.gate.*` events; without a chain it
+            // falls back to gate.json under the client root.
+            let gate_log = chain.clone().map(|c| {
+                Arc::new(crate::client_store_rt::ChainLog(c)) as Arc<dyn crate::client_store_state::EventLog>
+            });
+            match crate::client_store_rt::start(&runtime_dir, reg, audit_fn, gate_log) {
                 Ok(Some(cs)) => {
                     info!(account = %cs.spec.account, root = %cs.root().display(), "client store started");
                     crate::client_store_rt::spawn_sweeper(cs);

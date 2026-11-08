@@ -11,6 +11,7 @@
 - **Updated**: 2026-11-07 (S3 implemented in `crates/weftos-edge-creds` against a mock store; see "S3 results". The ADR stays Proposed: S1, S2, S4, S5 are not landed)
 - **Updated**: 2026-11-07 (S5 gate and per-account instance spec in `crates/clawft-weave/src/store_account.rs`; wiring to `weftos-store` waits on S1)
 - **Updated**: 2026-11-07 (S5 gate and per-account instance spec in `crates/clawft-weave/src/store_account.rs`; `client_store.rs` puts the gate in front of S1's `StoreService`, tested on local directories, not yet on RustFS)
+- **Updated**: 2026-11-08 (S5 gate state is rebuilt from the daemon's chain: every gate change is a `store.client.gate.*` event and open replays them; `gate.json` remains only as the no-chain fallback; `weaver store client xmesh-sign` produces a cross-mesh grant file; see "S5 status")
 - **Updated**: 2026-11-08 (S5 daemon wiring in code only: a daemon running as a client user opens that account's `ClientStore` when `<runtime dir>/client-store.json` names it (`client_store_rt.rs`); `store.client.*` verbs and `weaver store client` (`client_store_rpc.rs`, `commands/store_client_cmd.rs`); gate state persisted in `gate.json` under the client root; not installed or run on any machine, local directories only)
 - **Updated**: 2026-11-07 (S1 built on `feat/adr126-s1`: `weftos-store` crate, `weaver store`, daemon wiring, local-directory backend; no RustFS backend or S3 transport yet, see "S1 status")
 - **Deciders**: owner
@@ -974,6 +975,16 @@ Flip: build the chain with `with_schedule(...)`; nothing else changes.
 
 Recommendation: A now, and C when the anchor can carry the field. B has a bootstrap loop (a follower needs a snapshot to learn which store to read), so S3 advises against it for grants.
 Flip: the owner names A, B or C; the wiring is `GrantLedger::signed_snapshot` on the chain side.
+
+## S5 status (2026-11-08)
+
+Built on `feat/adr126-s5`, tested on local directories only; nothing is installed on any machine and RustFS is not yet behind it.
+
+- **Per account:** `ClientStoreSpec` pins one instance to `/data1/<account>/store`, the client uid (2102 to 59999, no system names), a loopback or tailnet listener, and a systemd unit that runs as the client user and sees only its own tree. A daemon opens a `ClientStore` only when `<runtime dir>/client-store.json` names the account and the daemon's own euid is that account's.
+- **Two layers:** `StoreGate` decides first (held project, local grant, WeftOS-account grant, cross-mesh grant); S1's `StoreService` then applies its own grants, exposure and audit. Every refusal reads `refused`; the cause goes to the audit line.
+- **Gate state is the chain's:** each change (hold, grant, revoke, trust, cross-mesh install or revoke) is appended as `store.client.gate.<kind>` with the account and mesh it was written for; opening replays them in order through the same checks as a live change. Events for another account or mesh, or from another source, are ignored. An event for this account that does not parse stops the store opening. A cross-mesh grant that expired while the daemon was down is not restored. A daemon with no chain keeps the gate in `gate.json` (0600, atomic) under the client root.
+- **Operator surface:** `store.client.*` verbs (Admin, by the `store.` prefix) and `weaver store client <verb>`. `xmesh-sign` signs a cross-mesh grant locally from a 0600 key file and writes the JSON that `xmesh-install` reads.
+- **Not done:** the RustFS backend behind `ClientStore` (S1's transport), a live install as a client user on PG, the owner's diff-gate approval for the `weftos-store` dependency, and compaction of the gate's chain history (replay reads every event).
 
 ## Consequences
 

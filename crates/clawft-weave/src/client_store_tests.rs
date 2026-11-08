@@ -294,3 +294,122 @@ fn open_fs_refuses_a_symlinked_data_dir() {
     symlink(elsewhere.path(), d.path().join("data")).unwrap();
     assert!(ClientStore::open_fs(sp, mesh(), Arc::new(OpenGate), Arc::new(MemSink::default()), clock).is_err());
 }
+
+mod journal {
+    use serde_json::json;
+    use weftos_store::service::NoChain;
+
+    use super::*;
+    use crate::client_store_state::{EventLog, JournalState, LoggedEvent, MemLog};
+
+    fn far_future() -> u64 {
+        MS + 1_000_000 * 1000
+    }
+    fn open_j(account: &str, root: &Path, log: &Arc<MemLog>, clock: fn() -> u64, m: Authority) -> Result<ClientStore, StoreError> {
+        let be = Arc::new(FsBackend::open(&root.join("data")).unwrap());
+        let state = Arc::new(JournalState::new(log.clone(), m, account));
+        ClientStore::open_with(spec(account, root), m, be.clone(), be, Arc::new(OpenGate), Arc::new(MemSink::default()), Arc::new(NoChain), Some(state), clock)
+    }
+
+    #[test]
+    fn the_gate_is_rebuilt_from_the_journal_with_no_gate_file() {
+        let d = tempfile::tempdir().unwrap();
+        let log = Arc::new(MemLog::default());
+        let g = CrossMeshGrant::sign(&key(), [1; 32], [2; 32], &format!("weftos://{}/projects/{ULID}/store", mesh()), Access::Read, 1, MS / 1000 - 10, MS / 1000 + 100);
+        let (c1, w, f) = (ClientCaller::Local(cog("c1")), ClientCaller::Weftos { id: "weaver".into() }, ClientCaller::Foreign { mesh: [2; 32], id: "x".into() });
+        let name = {
+            let s = open_j("acme", d.path(), &log, clock, mesh()).unwrap();
+            let name = s.hold_project(ULID, "op").unwrap();
+            s.grant_local(&cog("c1"), &name, Access::Write, "op").unwrap();
+            s.grant_weftos("weaver", &name, Access::Read, "owner").unwrap();
+            s.grant_weftos("gone", &name, Access::Read, "owner").unwrap();
+            s.revoke_weftos("gone", &name, "owner").unwrap();
+            s.trust_mesh([1; 32], key().verifying_key()).unwrap();
+            s.install_xmesh(g.clone(), "owner").unwrap();
+            s.put(&c1, &name, "k", b"v", false).unwrap();
+            name
+        };
+        assert!(!d.path().join("gate.json").exists(), "the journal replaces the file");
+        let kinds: Vec<_> = log.all().into_iter().map(|e| e.kind).collect();
+        assert!(kinds.iter().all(|k| k.starts_with("store.client.gate.")), "{kinds:?}");
+        assert_eq!(kinds.first().unwrap(), "store.client.gate.hold");
+        let s = open_j("acme", d.path(), &log, clock, mesh()).unwrap();
+        assert_eq!(s.get(&c1, &name, "k").unwrap(), b"v");
+        assert_eq!(s.get(&w, &name, "k").unwrap(), b"v");
+        assert_eq!(s.get(&f, &name, "k").unwrap(), b"v");
+        assert!(matches!(s.get(&ClientCaller::Weftos { id: "gone".into() }, &name, "k"), Err(StoreError::Refused(_))), "a revoke replays after its grant");
+        assert!(s.install_xmesh(g, "owner").is_err(), "the replay counter was rebuilt");
+    }
+
+    #[test]
+    fn replay_drops_an_expired_grant_and_keeps_a_revoke_revoked() {
+        let d = tempfile::tempdir().unwrap();
+        let log = Arc::new(MemLog::default());
+        let g = CrossMeshGrant::sign(&key(), [1; 32], [2; 32], &format!("weftos://{}/projects/{ULID}/store", mesh()), Access::Read, 1, MS / 1000 - 10, MS / 1000 + 100);
+        let name = {
+            let s = open_j("acme", d.path(), &log, clock, mesh()).unwrap();
+            let name = s.hold_project(ULID, "op").unwrap();
+            s.grant_local(&cog("c1"), &name, Access::Write, "op").unwrap();
+            s.trust_mesh([1; 32], key().verifying_key()).unwrap();
+            s.install_xmesh(g, "owner").unwrap();
+            s.grant_local(&cog("c2"), &name, Access::Write, "op").unwrap();
+            s.revoke_local(&cog("c2"), &name, "op").unwrap();
+            name
+        };
+        let s = open_j("acme", d.path(), &log, far_future, mesh()).unwrap();
+        let f = ClientCaller::Foreign { mesh: [2; 32], id: "x".into() };
+        let refused = |r: Result<Vec<u8>, StoreError>| matches!(r, Err(StoreError::Refused(_)));
+        assert!(refused(s.get(&f, &name, "k")), "expired while the daemon was down");
+        assert!(refused(s.get(&ClientCaller::Local(cog("c2")), &name, "k")), "a revoke replays after its grant");
+        assert!(s.put(&ClientCaller::Local(cog("c1")), &name, "k", b"v", false).is_ok(), "c1's grant has no expiry");
+    }
+
+    #[test]
+    fn another_accounts_or_meshs_events_and_other_sources_are_ignored() {
+        let d = tempfile::tempdir().unwrap();
+        let log = Arc::new(MemLog::default());
+        let name = {
+            let s = open_j("acme", d.path(), &log, clock, mesh()).unwrap();
+            s.hold_project(ULID, "op").unwrap()
+        };
+        let grant_ev = |account: &str, mesh_hex: &str| {
+            json!({"account": account, "mesh": mesh_hex, "ev": {
+                "principal": {"kind": "weftos", "account": null, "mesh": null, "id": "weaver"},
+                "store": name.to_string(), "access": "admin"}})
+        };
+        let me = mesh().to_string();
+        let push = |source: &str, p: serde_json::Value| {
+            log.push(LoggedEvent { source: source.into(), kind: "store.client.gate.grant".into(), payload: Some(p) })
+        };
+        push("store.client", grant_ev("rival", &me));
+        push("store.client", grant_ev("acme", &Authority([7; 32]).to_string()));
+        push("kernel", grant_ev("acme", &me));
+        log.push(LoggedEvent { source: "store.client".into(), kind: "store.client.gate.grant".into(), payload: None });
+        let s = open_j("acme", d.path(), &log, clock, mesh()).unwrap();
+        let w = ClientCaller::Weftos { id: "weaver".into() };
+        assert!(matches!(s.get(&w, &name, "k"), Err(StoreError::Refused(_))), "none of those grants reached acme's gate");
+    }
+
+    #[test]
+    fn a_garbled_event_for_this_account_stops_the_store_opening() {
+        let d = tempfile::tempdir().unwrap();
+        let log = Arc::new(MemLog::default());
+        open_j("acme", d.path(), &log, clock, mesh()).unwrap();
+        log.push(LoggedEvent {
+            source: "store.client".into(),
+            kind: "store.client.gate.grant".into(),
+            payload: Some(json!({"account": "acme", "mesh": mesh().to_string(), "ev": {"principal": 5}})),
+        });
+        assert!(open_j("acme", d.path(), &log, clock, mesh()).is_err());
+    }
+
+    #[test]
+    fn a_journal_for_another_account_or_mesh_is_not_accepted() {
+        let d = tempfile::tempdir().unwrap();
+        let log = Arc::new(MemLog::default());
+        let be = Arc::new(FsBackend::open(&d.path().join("data")).unwrap());
+        let state = Arc::new(JournalState::new(log, mesh(), "acme"));
+        let r = ClientStore::open_with(spec("rival", d.path()), mesh(), be.clone(), be, Arc::new(OpenGate), Arc::new(MemSink::default()), Arc::new(NoChain), Some(state), clock);
+        assert!(r.is_err());
+    }
+}

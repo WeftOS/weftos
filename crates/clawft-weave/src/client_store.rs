@@ -19,14 +19,15 @@ use std::path::Path;
 use std::sync::Arc;
 
 use weftos_store::audit::{AuditEvent, AuditSink, Outcome, Source};
-use weftos_store::service::{Caller, Config, ExposureGate, NoChain, Parties};
+use weftos_store::service::{Caller, ChainSink, Config, ExposureGate, NoChain, Parties};
 use weftos_store::{
     Access as S1Access, AdminBackend, FsBackend, ObjectBackend, ObjectMeta, Op, Principal as S1Principal,
     PrincipalKind, StoreError, StoreName, StoreService,
 };
 
+use crate::client_store_state::{FileState, GateState};
 use crate::store_account::{
-    Access, ClientStoreSpec, CrossMeshGrant, Principal, Refused, SpecError, StoreGate, StoreGrant,
+    Access, ClientStoreSpec, CrossMeshGrant, GateEvent, Principal, Refused, SpecError, StoreGate, StoreGrant,
 };
 use crate::weftos_uri::Authority;
 use ed25519_dalek::VerifyingKey;
@@ -76,6 +77,7 @@ pub struct ClientStore {
     gate: std::sync::Mutex<StoreGate>,
     svc: StoreService,
     audit: Arc<dyn AuditSink>,
+    state: Arc<dyn GateState>,
     clock: fn() -> u64,
 }
 
@@ -87,6 +89,16 @@ impl ClientStore {
         spec: ClientStoreSpec, mesh: Authority, exposure: Arc<dyn ExposureGate>, audit: Arc<dyn AuditSink>,
         clock: fn() -> u64,
     ) -> Result<Self, StoreError> {
+        Self::open_fs_with(spec, mesh, exposure, audit, Arc::new(NoChain), None, clock)
+    }
+
+    /// [`open_fs`](Self::open_fs) with the service's chain sink and a gate state store. `None`
+    /// keeps the gate in `gate.json` under the root; the daemon passes the chain journal.
+    #[cfg(unix)]
+    pub fn open_fs_with(
+        spec: ClientStoreSpec, mesh: Authority, exposure: Arc<dyn ExposureGate>, audit: Arc<dyn AuditSink>,
+        chain: Arc<dyn ChainSink>, state: Option<Arc<dyn GateState>>, clock: fn() -> u64,
+    ) -> Result<Self, StoreError> {
         spec.verify_on_disk().map_err(|e: SpecError| StoreError::State(e.to_string()))?;
         // Nothing inside the root may be a link: a client-writable link could aim the daemon
         // at another account's tree.
@@ -96,7 +108,7 @@ impl ClientStore {
             }
         }
         let be = Arc::new(FsBackend::open(&spec.root.join("data"))?);
-        Self::open(spec, mesh, be.clone(), be, exposure, audit, clock)
+        Self::open_with(spec, mesh, be.clone(), be, exposure, audit, chain, state, clock)
     }
 
     /// Open on explicit backends (RustFS, or memory in tests). The caller has already
@@ -105,20 +117,33 @@ impl ClientStore {
         spec: ClientStoreSpec, mesh: Authority, admin: Arc<dyn AdminBackend>, objects: Arc<dyn ObjectBackend>,
         exposure: Arc<dyn ExposureGate>, audit: Arc<dyn AuditSink>, clock: fn() -> u64,
     ) -> Result<Self, StoreError> {
+        Self::open_with(spec, mesh, admin, objects, exposure, audit, Arc::new(NoChain), None, clock)
+    }
+
+    /// [`open`](Self::open) with the service's chain sink and a gate state store. With no state
+    /// store the gate is kept in `gate.json` under the root.
+    #[allow(clippy::too_many_arguments)]
+    pub fn open_with(
+        spec: ClientStoreSpec, mesh: Authority, admin: Arc<dyn AdminBackend>, objects: Arc<dyn ObjectBackend>,
+        exposure: Arc<dyn ExposureGate>, audit: Arc<dyn AuditSink>, chain: Arc<dyn ChainSink>,
+        state: Option<Arc<dyn GateState>>, clock: fn() -> u64,
+    ) -> Result<Self, StoreError> {
         let state_path = spec.root.join("state.json");
         let cfg = Config { node_id: format!("store-{}", spec.account), state_path: Some(state_path), clock };
-        let svc = StoreService::open(cfg, admin, objects, exposure, audit.clone(), Arc::new(NoChain))?;
-        let gate = StoreGate::load(mesh, &spec.account, &spec.root.join("gate.json")).map_err(StoreError::State)?;
-        Ok(Self { spec, gate: std::sync::Mutex::new(gate), svc, audit, clock })
+        let svc = StoreService::open(cfg, admin, objects, exposure, audit.clone(), chain)?;
+        let state: Arc<dyn GateState> = state.unwrap_or_else(|| Arc::new(FileState { path: spec.root.join("gate.json") }));
+        let gate = state.load(mesh, &spec.account, clock() / 1000).map_err(StoreError::State)?;
+        Ok(Self { spec, gate: std::sync::Mutex::new(gate), svc, audit, state, clock })
     }
 
     fn gate(&self) -> std::sync::MutexGuard<'_, StoreGate> {
         self.gate.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Write the gate's state so a restart picks it up.
-    fn persist(&self) -> Result<(), StoreError> {
-        self.gate().save(&self.spec.root.join("gate.json")).map_err(|e| StoreError::State(e.to_string()))
+    /// Make one gate change durable so a restart rebuilds it.
+    fn persist(&self, ev: &GateEvent) -> Result<(), StoreError> {
+        let g = self.gate();
+        self.state.record(&g, ev).map_err(StoreError::State)
     }
 
     fn mesh_hex(&self) -> String {
@@ -130,7 +155,7 @@ impl ClientStore {
         let name = StoreName::project(&self.mesh_hex(), ulid)?;
         self.svc.ensure_store(&name, actor, Parties::default())?;
         self.gate().hold_project(ulid);
-        self.persist()?;
+        self.persist(&GateEvent::Hold { ulid: ulid.to_owned() })?;
         Ok(name)
     }
 
@@ -157,8 +182,9 @@ impl ClientStore {
             return Err(StoreError::Refused("refused".into()));
         }
         let gp = Principal::Client { account: self.spec.account.clone(), id: p.to_string() };
-        self.gate().grant(StoreGrant { principal: gp, store: name.to_string(), access: a });
-        self.persist()?;
+        let sg = StoreGrant { principal: gp, store: name.to_string(), access: a };
+        self.gate().grant(sg.clone());
+        self.persist(&GateEvent::Grant(sg))?;
         self.svc.grant(name, p.clone(), to_s1_access(a), actor).map(|_| ())
     }
 
@@ -168,30 +194,33 @@ impl ClientStore {
             return Err(StoreError::Refused("refused".into()));
         }
         let gp = Principal::Client { account: self.spec.account.clone(), id: p.to_string() };
-        self.gate().revoke(&gp, &name.to_string());
-        self.persist()?;
+        let store = name.to_string();
+        self.gate().revoke(&gp, &store);
+        self.persist(&GateEvent::Revoke { principal: gp, store })?;
         self.svc.revoke(name, p, actor)
     }
 
     /// Grant the WeftOS account. This is the only way it gets in.
     pub fn grant_weftos(&self, id: &str, name: &StoreName, a: Access, actor: &str) -> Result<(), StoreError> {
         let m = mapped(WEFTOS_PREFIX, id).map_err(|_| StoreError::Refused("refused".into()))?;
-        self.gate().grant(StoreGrant { principal: Principal::WeftosAccount { id: id.into() }, store: name.to_string(), access: a });
-        self.persist()?;
+        let sg = StoreGrant { principal: Principal::WeftosAccount { id: id.into() }, store: name.to_string(), access: a };
+        self.gate().grant(sg.clone());
+        self.persist(&GateEvent::Grant(sg))?;
         self.svc.grant(name, m, to_s1_access(a), actor).map(|_| ())
     }
 
     /// Revoke the WeftOS account's grant.
     pub fn revoke_weftos(&self, id: &str, name: &StoreName, actor: &str) -> Result<(), StoreError> {
         let m = mapped(WEFTOS_PREFIX, id).map_err(|_| StoreError::Refused("refused".into()))?;
-        self.gate().revoke(&Principal::WeftosAccount { id: id.into() }, &name.to_string());
-        self.persist()?;
+        let (principal, store) = (Principal::WeftosAccount { id: id.into() }, name.to_string());
+        self.gate().revoke(&principal, &store);
+        self.persist(&GateEvent::Revoke { principal, store })?;
         self.svc.revoke(name, &m, actor)
     }
 
     pub fn trust_mesh(&self, mesh: [u8; 32], key: VerifyingKey) -> Result<(), StoreError> {
         self.gate().trust_mesh(mesh, key);
-        self.persist()
+        self.persist(&GateEvent::Trust { mesh, key: key.to_bytes() })
     }
 
     /// Install a cross-mesh grant (ADR-114 N5) and give its mesh member the matching S1 grant.
@@ -202,13 +231,14 @@ impl ClientStore {
         // The S1 member exists only for grants where we own the store; on the receiving side
         // our own principals are granted with `grant_local`.
         let member = if g.owner_mesh == own { Some(member.map_err(|_| StoreError::Refused("refused".into()))?) } else { None };
+        let ev = GateEvent::XmeshInstall(g.clone());
         self.gate().install_xmesh(g, now).map_err(|_| StoreError::Refused("refused".into()))?;
-        self.persist()?;
+        self.persist(&ev)?;
         let granted = member.map_or(Ok(()), |m| self.svc.grant(&name, m, to_s1_access(access), actor).map(|_| ()));
         if granted.is_err() {
             // Leave nothing half-installed: the gate must not allow what the service does not.
             self.gate().revoke_xmesh(id);
-            let _ = self.persist();
+            let _ = self.persist(&GateEvent::XmeshRevoke { id });
         }
         granted
     }
@@ -219,7 +249,7 @@ impl ClientStore {
         // would cut off the newer grant.
         let live = self.gate().xmesh_installed(g.id());
         self.gate().revoke_xmesh(g.id());
-        self.persist()?;
+        self.persist(&GateEvent::XmeshRevoke { id: g.id() })?;
         if live {
             self.drop_member(g, actor)?;
         }
@@ -243,11 +273,10 @@ impl ClientStore {
         let ex = self.gate().take_expired(now);
         for g in &ex {
             self.gate().revoke_xmesh(g.id());
+            // If this write fails the grant is expired anyway: replay and reload refuse it by time.
+            let _ = self.persist(&GateEvent::XmeshRevoke { id: g.id() });
             let _ = self.drop_member(g, actor);
         }
-        // If this write fails the old file still lists the grants; they are expired, so the
-        // gate refuses them by time after a reload and the next sweep drops them again.
-        let _ = self.persist();
         ex.len()
     }
 

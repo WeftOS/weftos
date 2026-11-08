@@ -424,6 +424,7 @@ pub fn iam_policy(bucket: &str, access: Access) -> Result<String, SpecError> {
 
 #[path = "store_account_persist.rs"]
 mod persist;
+pub use persist::GateEvent;
 
 #[cfg(test)]
 #[path = "store_account_tests.rs"]

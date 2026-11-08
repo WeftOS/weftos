@@ -285,6 +285,8 @@ pub mod mesh_pair;
 pub mod mesh_pairings;
 /// ADR-126 S5: a client account's store, the isolation gate in front of S1's service.
 pub mod client_store;
+/// ADR-126 S5: where a client store's gate state lives (chain journal, or a file).
+pub mod client_store_state;
 /// ADR-126 S5: the daemon's client store (started only as the client user).
 pub mod client_store_rt;
 /// ADR-126 S5: `store.client.*` operator verbs.
