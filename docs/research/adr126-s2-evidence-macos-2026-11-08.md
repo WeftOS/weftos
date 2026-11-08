@@ -228,3 +228,76 @@ cfbb5e7d2 test(store): real-RustFS drills for leftovers, stale claims, corrupt e
 Tests run: `scripts/build.sh test weftos-store --features rustfs` (98 passed, 11 ignored),
 `scripts/build.sh test clawft-weave --filter store` (39 passed), `bash scripts/tests/worktree-store.test.sh`
 (39 assertions passed). No full workspace suite was run, and clippy was not run on the changed crates.
+
+## Fixes after the adversarial review (2026-11-08)
+
+Review: `docs/research/adr126-s1-s2-adversarial-review-2026-11-08.md` (on `wt/adr126-s2-hooks`).
+Each commit below is on `wt/adr126-s2-mac`; the test named is the one that fails without the fix.
+
+| Finding | Commit | Test |
+|---|---|---|
+| F1 path params | `c1427ae7f` | `store_worktree::tests::{every_path_param_must_be_absolute, publish_refuses_the_daemons_own_state_and_non_worktree_roots, a_bundle_that_is_a_symlink_to_something_else_is_not_uploaded, fetch_never_writes_into_or_over_the_daemons_state_or_through_a_symlink}`, `store_worktree_paths::tests` |
+| F3 cross-project registry entry | `2c20565b6` | `s2_follower::a_registry_entry_pointing_at_another_projects_worktree_is_unreadable_not_followed` |
+| F4 forged `.wt/*` | `13f3231e5` | `service_tests::principals_cannot_write_a_worktrees_control_state_or_a_projects_registry`, `policy::tests::worktree_and_project_grants_deny_writes_to_control_state` |
+| F5 retry match on size | `f1a0391a5` | `s2_worktree::a_same_size_project_edit_between_attempts_is_a_conflict_not_our_copy` |
+| F6 reused slug, F8 closed buckets | `81f087f6a` | `s2_worktree::a_promotion_record_from_an_earlier_life_of_a_slug_is_ignored`, `store_worktree::tests::{a_landed_slug_cannot_be_reused_until_its_store_is_deleted, closed_unknown_and_foreign_buckets_take_no_publish_claim_or_promote}` |
+| F11 limits and bundle hash | `0d47a95d7` | `s2_worktree::readers_enforce_size_and_count_ceilings_and_check_the_bundle_hash` |
+| F12 claim identity and skew | `18b0a5ea1` | `s2_worktree::a_claim_stamped_far_in_the_future_does_not_hold_the_merge`, `store_cmd::tests::plist_host_names_are_read_without_a_process` |
+| F10 audit of S2 verbs | `3093608e1`, test repaired in `03fb53c4c` | `store_worktree::tests::create_publish_claim_and_promote_are_in_the_activity_log_and_on_the_chain` |
+| Drill follow-up: archive from a second daemon | `22a133390` | `service_tests::a_second_daemon_can_archive_and_delete_a_worktree_store_the_first_created` |
+| Drill follow-up: `overlaps` names both bases | `03fb53c4c` | `s2_follower::different_bases_mark_overlaps_as_unreliable`, `store_worktree::tests::overlaps_names_both_bases_so_callers_can_discount_it` |
+| Metadata follow-up: parallel fetch and digest | `03fb53c4c` | `s2_follower::a_poll_with_the_digest_fetches_only_entries_that_changed` |
+
+Decisions taken conservatively, each reversible:
+
+- **F1.** `--root` must be an absolute, resolved directory with a `.git` entry (the hook publishes
+  from the top of a git worktree). Lists and the bundle must be regular files that are not symlinks.
+  `--dest` and `--cache` may not be inside the daemon's runtime directory or contain it (so
+  `--dest $HOME` is refused). `--state` and `--bundle-out` are not followed through a symlink, and
+  `fetch_bundle` now writes a temp file and renames it. The runtime directory and the RustFS env
+  file are recorded by `store_rt::start`. Not done: restricting the verbs to the same-uid socket
+  owner, because the transport is not visible to the verb; the paths are checked instead.
+- **F4.** Control state is protected where writers reach it: the governed path refuses `.wt/` keys
+  in worktree stores and `worktrees/` keys in project stores, and the principal IAM policy carries a
+  `Deny` for the same prefixes (the live RustFS tests still pass with it). Promotion therefore keeps
+  trusting `.wt/promoted.json`, `.wt/promoting.json` and `.wt/base/*`, because only the operator
+  plane writes them. Anyone with the RustFS root credential can still forge them.
+- **F6.** A landed or archived worktree's slug cannot be created again until its store is archived
+  with `--delete`. A promotion report also records the metadata's `created_ms` and is ignored when
+  the metadata is newer. Not done: making `slug_of` injective in `worktree-store.sh` (`feat/x` and
+  `feat-x` still share a store).
+- **F8.** Publish, claim and promote refuse a store this daemon knows to be archived, a bucket with
+  no metadata, and a bucket whose metadata names another slug or project. They do not refuse a
+  store this daemon does not know, because the drill lane showed worktrees created by another daemon
+  on the same backend must work.
+- **F12.** On macOS the host comes from `LocalHostName` in the system preferences file, read as a
+  file. `gethostname` through `nix` would be cleaner but needs a new `nix` feature, which the diff
+  gate treats as a dependency change. With no name available the CLI refuses and asks for `--host`.
+  A claim stamped more than 10 minutes ahead of the daemon clock is no longer treated as live, so it
+  can be taken over instead of blocking the merge indefinitely. The ADR wording about whose clock is
+  compared still needs correcting (it compares the asked daemon's clock with the claimer's stamp).
+- **Archive from any daemon.** Only for worktree stores and only with `--delete`: the objects and
+  bucket are on the shared backend, but closing a store means disabling grants held in the creating
+  daemon's state. That daemon's record and grants stay until it drops them, which is harmless once
+  the bucket is gone.
+- **Digest.** `worktrees/_digest.json` maps slug to the registry object's etag and is rewritten from
+  a fresh listing on every registry change. It is a hint: two daemons refreshing at once can leave it
+  one update behind until the next refresh. `follow --full` ignores it.
+
+Skipped, for aepod-xpc's S1 session: **F2** (grant and revoke locking in `service.rs`) and **F9**
+(RustFS audit ingestion). Not touched: F7, F13 to F20, and S1 `store.promote` prefix validation (F18).
+
+Tests, before and after:
+
+| Slice | Before | After |
+|---|---|---|
+| `scripts/build.sh test weftos-store --features rustfs` | 98 passed, 11 ignored | 107 passed, 11 ignored |
+| `scripts/build.sh test clawft-weave --filter store` | 39 passed (from the lane's earlier run) | 51 passed |
+| `scripts/build.sh test weftos-store --features rustfs --ignored` against a throwaway RustFS on the internal disk (loopback, random credentials in a 0600 file, stopped afterwards) | not run on this tip | 11 passed, the 1,005-key paging test in 73 s |
+| `scripts/build.sh clippy weftos-store --features rustfs`, `scripts/build.sh clippy clawft-weave` | not run | clean (one pre-existing lint in the drill test fixed) |
+
+The `worktree-store.sh` shell test was not re-run: the script did not change.
+
+Files a merge with aepod's S2 session will touch: `crates/weftos-store/src/{share,share_fetch,follower,promote,service,policy}.rs`,
+`crates/weftos-store/src/service/lifecycle.rs`, `crates/clawft-weave/src/{store_worktree,store_rt,lib}.rs`,
+`crates/clawft-weave/src/commands/store_cmd.rs`, and the new `store_worktree_paths.rs`.
