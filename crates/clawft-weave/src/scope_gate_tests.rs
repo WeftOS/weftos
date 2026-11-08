@@ -171,7 +171,7 @@ const INTERCEPTS: &[&str] = &["ipc.subscribe_stream", "substrate.subscribe", "ke
 
 /// Allow-listed methods whose handler is not a legacy arm (ext routes or
 /// owned by other Phase 1 packages).
-const NOT_LEGACY_ARMS: &[&str] = &["kernel.handshake", "project.list", "project.show", "auth.token.validate", "chain.subscribe", "fleet.snapshot", "route.list", "versions.list", "versions.tree", "versions.deps", "display.status", "cogbus.list", "workload.list"];
+const NOT_LEGACY_ARMS: &[&str] = &["kernel.handshake", "project.list", "project.show", "auth.token.validate", "chain.subscribe", "fleet.snapshot", "route.list", "versions.list", "versions.tree", "versions.deps", "display.status", "cogbus.list", "workload.list", "governance.check"];
 
 /// Allow-listed verbs that sit under a guard-prefix arm but were reviewed one by one
 /// (`workload_rpc::dispatch` lists registry state only for `workload.list`).

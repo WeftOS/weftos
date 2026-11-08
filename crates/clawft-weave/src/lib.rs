@@ -135,6 +135,9 @@ pub mod licence_role_gate;
 /// D12 scope gate: outside-project policy and the voice deny-list (ADR-103).
 #[cfg(any(unix, windows))]
 pub mod scope_gate;
+/// `governance.check`: read-only dry-run verdict from the governance engine (Tapestry R9).
+#[cfg(feature = "exochain")]
+pub mod governance_check_rpc;
 /// `governance.parent.push|update` and `governance.reload` (ADR-103 D8).
 #[cfg(any(unix, windows))]
 pub mod governance_push;

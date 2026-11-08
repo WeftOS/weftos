@@ -583,6 +583,13 @@ const ROUTES: &[ExtRoute] = &[
         capability: Capability::Admin,
         handler: crate::governance_push::handle_reload,
     },
+    // Tapestry R9: dry-run verdict from the live engine; Read, local, writes nothing.
+    #[cfg(feature = "exochain")]
+    ExtRoute {
+        prefix: "governance.check",
+        capability: Capability::Read,
+        handler: crate::governance_check_rpc::handle,
+    },
     // ADR-106 phase 3: Admin (a checkout spends licence budget); routed here
     // so the relay rate-limits and gates the caller's own principal.
     #[cfg(all(feature = "placement", unix))]
@@ -953,6 +960,13 @@ const ROUTES: &[ExtRoute] = &[
         prefix: "governance.reload",
         capability: Capability::Admin,
         handler: crate::governance_push::handle_reload,
+    },
+    // Tapestry R9: dry-run verdict from the live engine; Read, local, writes nothing.
+    #[cfg(feature = "exochain")]
+    ExtRoute {
+        prefix: "governance.check",
+        capability: Capability::Read,
+        handler: crate::governance_check_rpc::handle,
     },
     // ADR-106 phase 3: Admin (a checkout spends licence budget); routed here
     // so the relay rate-limits and gates the caller's own principal.

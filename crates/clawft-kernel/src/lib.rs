@@ -627,7 +627,7 @@ pub use floor::{
     floor_verdict_from_erl_config,
 };
 #[cfg(feature = "exochain")]
-pub use gate::{CapabilityGate, GateBackend, GateDecision, GovernanceGate};
+pub use gate::{CapabilityGate, GateBackend, GateDecision, GateVerdict, GovernanceGate};
 pub use governance::{
     EffectVector, GateEffectKind, GatePrincipal, GovernanceBranch, GovernanceDecision,
     GovernanceEngine, GovernanceRequest, GovernanceResult, GovernanceRule, GovernanceRuleType,
