@@ -11,6 +11,11 @@
 //! Entry points: [`materialise`] (first fill, and refresh), [`Watcher`] / [`watch_once`]
 //! (detect local changes after a quiet period), [`sync_up`], [`sync_down`], [`resolve`].
 //!
+//! A worktree bucket's `.wt/tree/` is a publish area only the daemon writes (the policy denies writer
+//! puts under `.wt/*`). Follow it read-only: set [`Options::read_only`] and use [`materialise_with`]
+//! and [`sync_down_with`]; [`sync_up_with`] then refuses with [`DriveError::ReadOnly`] before it
+//! scans or contacts the store.
+//!
 //! Library only: the daemon loop of ADR-131 is meant to call these same functions.
 
 mod cas;
@@ -66,6 +71,9 @@ pub enum DriveError {
     Json(String),
     #[error("{0}")]
     Invalid(String),
+    /// `sync_up` on a drive opened read-only (`Options::read_only`).
+    #[error("drive {0} is read-only: sync_up refuses; materialise and sync_down still work")]
+    ReadOnly(String),
 }
 
 impl From<std::io::Error> for DriveError {
@@ -132,6 +140,10 @@ pub struct Options {
     pub limits: Limits,
     /// Written into conflict records and tombstones. Default: the id stored in the index.
     pub device: Option<String>,
+    /// Refuse `sync_up` ([`DriveError::ReadOnly`]). `materialise` and `sync_down` are unaffected.
+    /// Use it for areas only the daemon writes, such as a worktree bucket's `.wt/tree/`, which the
+    /// policy denies to writers: a mistaken push then fails here, not at the server.
+    pub read_only: bool,
 }
 
 /// Normalise a prefix: empty, or ending in exactly one `/`.

@@ -44,6 +44,9 @@ pub fn sync_up<B: ObjectBackend + ?Sized>(backend: &B, dest: &Path) -> Result<Up
 }
 
 pub fn sync_up_with<B: ObjectBackend + ?Sized>(backend: &B, dest: &Path, opts: &Options) -> Result<UpReport> {
+    if opts.read_only {
+        return Err(DriveError::ReadOnly(dest.display().to_string()));
+    }
     let mut index = Index::load(dest)?.ok_or_else(|| DriveError::Invalid(format!("{} is not a drive", dest.display())))?;
     let mut rep = UpReport::default();
     let r = up(backend, dest, &mut index, opts, &mut rep);

@@ -450,7 +450,7 @@ fn the_size_ceilings_apply_both_ways() {
     s.seed("p/small", "tiny");
     s.seed("p/big", &"x".repeat(100));
     s.seed("p/z", "z");
-    let tight = Options { limits: crate::share::Limits { max_file: 10, max_files: 2, max_total: 1 << 20, max_bundle: 0 }, device: None };
+    let tight = Options { limits: crate::share::Limits { max_file: 10, max_files: 2, max_total: 1 << 20, max_bundle: 0 }, device: None, read_only: false };
     let d = tempfile::tempdir().unwrap();
     let dest = d.path().join("t");
     let r = materialise_with(&s, B, "p", &dest, &tight).unwrap();
@@ -534,4 +534,26 @@ fn a_backend_without_a_conditional_write_falls_back_to_head_then_write() {
     assert_eq!((r.put.clone(), r.deleted.clone()), (vec!["a.txt".to_string()], vec!["dir/b.txt".to_string()]));
     assert_eq!((r.conditional, r.head_then_write), (0, 2));
     assert_eq!(s.text("proj/a.txt").as_deref(), Some("alpha v2"));
+}
+
+#[test]
+fn a_read_only_drive_refuses_sync_up_but_still_materialises_and_syncs_down() {
+    let s = project();
+    let d = tempfile::tempdir().unwrap();
+    let dest = d.path().join("tree");
+    let ro = Options { read_only: true, ..Options::default() };
+    materialise_with(&s, B, "proj", &dest, &ro).unwrap();
+    assert_eq!(rd(&dest, "a.txt"), "alpha");
+    wr(&dest, "a.txt", "local edit");
+    s.reset();
+    let e = sync_up_with(&s, &dest, &ro).unwrap_err();
+    assert!(matches!(e, DriveError::ReadOnly(_)), "{e}");
+    assert!(e.to_string().contains("read-only"));
+    assert!(s.put_keys().is_empty() && s.text("proj/a.txt").as_deref() == Some("alpha"));
+    // A remote change still comes down, and the local edit to another path is not pushed.
+    s.seed("proj/new.txt", "fresh");
+    let r = sync_down_with(&s, &dest, &ro).unwrap();
+    assert_eq!(r.created, ["new.txt"]);
+    assert_eq!(rd(&dest, "new.txt"), "fresh");
+    assert!(s.put_keys().is_empty());
 }
