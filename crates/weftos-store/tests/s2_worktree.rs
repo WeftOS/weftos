@@ -1017,3 +1017,71 @@ fn overwritten_and_deleted_project_versions_are_archived() {
     assert_eq!(b.get(AR, &format!("{pre}/x.bin")).unwrap().unwrap(), b"old-x");
     assert_eq!(b.get(AR, &format!("{pre}/y.bin")).unwrap().unwrap(), b"old-y");
 }
+
+/// A backend that lets "someone else" write the project between a promotion's plan and its apply
+/// (the moment the promotion intent is recorded).
+struct Racy<'a> {
+    inner: &'a MemBackend,
+    race: Option<(&'static str, Option<&'static [u8]>)>, // key, Some(content) = write, None = delete
+}
+impl ObjectBackend for Racy<'_> {
+    fn head(&self, b: &str, k: &str) -> Result<Option<ObjectMeta>> {
+        self.inner.head(b, k)
+    }
+    fn get(&self, b: &str, k: &str) -> Result<Option<Vec<u8>>> {
+        self.inner.get(b, k)
+    }
+    fn put(&self, b: &str, k: &str, d: &[u8]) -> Result<ObjectMeta> {
+        if k.ends_with("promoting.json")
+            && let Some((rk, c)) = self.race
+        {
+            match c {
+                Some(c) => drop(self.inner.put(PR, rk, c)?),
+                None => self.inner.delete(PR, rk)?,
+            }
+        }
+        self.inner.put(b, k, d)
+    }
+    fn delete(&self, b: &str, k: &str) -> Result<()> {
+        self.inner.delete(b, k)
+    }
+    fn list(&self, b: &str, p: &str) -> Result<Vec<ObjectMeta>> {
+        self.inner.list(b, p)
+    }
+}
+
+#[test]
+fn a_project_write_between_plan_and_apply_aborts_the_copy() {
+    let b = setup();
+    Overlay::new(&b, WT, PR).put("assets/logo.png", b"mine").unwrap();
+    let racy = Racy { inner: &b, race: Some(("assets/logo.png", Some(b"racer"))) };
+    let e = promote(&racy, WT, PR, &ARCH, &policy(), 5_000).unwrap_err();
+    assert_eq!(e, S2Error::Conflict(vec!["assets/logo.png".into()]));
+    assert_eq!(b.get(PR, "assets/logo.png").unwrap().unwrap(), b"racer", "the racer's write survives");
+    assert!(is_promoted(&b, WT).unwrap().is_none());
+}
+
+#[test]
+fn a_project_change_between_plan_and_apply_aborts_the_delete() {
+    let b = setup();
+    Overlay::new(&b, WT, PR).delete("assets/old.txt").unwrap();
+    let racy = Racy { inner: &b, race: Some(("assets/old.txt", Some(b"edited"))) };
+    let e = promote(&racy, WT, PR, &ARCH, &policy(), 5_000).unwrap_err();
+    assert_eq!(e, S2Error::Conflict(vec!["assets/old.txt".into()]));
+    assert_eq!(b.get(PR, "assets/old.txt").unwrap().unwrap(), b"edited");
+}
+
+#[test]
+fn a_run_aborted_by_a_race_retries_cleanly_once_the_conflict_is_settled() {
+    let b = setup();
+    let ov = Overlay::new(&b, WT, PR);
+    ov.put("assets/a.txt", b"A").unwrap();
+    ov.put("assets/logo.png", b"mine").unwrap();
+    let racy = Racy { inner: &b, race: Some(("assets/logo.png", Some(b"racer"))) };
+    assert!(promote(&racy, WT, PR, &ARCH, &policy(), 5_000).is_err());
+    // the owner resolves it by choosing to overwrite; the retry completes and a.txt is not redone wrongly
+    let p = PromotionPolicy { on_conflict: OnConflict::Overwrite, ..policy() };
+    let r = promote(&b, WT, PR, &ARCH, &p, 6_000).unwrap();
+    assert!(r.promoted.contains(&"assets/logo.png".to_string()));
+    assert_eq!(b.get(AR, "archive/worktrees/s2/.wt/displaced/assets/logo.png").unwrap().unwrap(), b"racer");
+}

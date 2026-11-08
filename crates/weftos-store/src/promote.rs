@@ -151,6 +151,23 @@ fn displace<B: ObjectBackend>(
     Ok(())
 }
 
+/// Re-check, right before a write, that the project object is still the one the plan was made
+/// against. A change in between aborts the run with a conflict instead of overwriting it. This
+/// narrows the plan-to-apply window to one head call; closing it needs an if-match write from the
+/// backend. Earlier writes of the same run stay valid: a retry sees them as already promoted.
+fn still_unchanged<B: ObjectBackend>(
+    b: &B,
+    project: &str,
+    key: &str,
+    planned: Option<&str>,
+) -> Result<()> {
+    let now = b.head(project, key)?.map(|m| m.etag);
+    if now.as_deref() != planned {
+        return Err(S2Error::Conflict(vec![key.to_string()]));
+    }
+    Ok(())
+}
+
 pub fn promote<B: ObjectBackend>(
     b: &B,
     worktree_bucket: &str,
@@ -177,7 +194,7 @@ pub fn promote<B: ObjectBackend>(
 
     // Plan: no writes yet.
     enum Act {
-        Copy(String, u64),
+        Copy(String, u64, Option<String>),
         Keep(String),
         Archive(String),
     }
@@ -191,12 +208,13 @@ pub fn promote<B: ObjectBackend>(
             acts.push(Act::Archive(o.key.clone()));
             continue;
         }
+        let planned = b.head(project_bucket, &o.key)?.map(|m| m.etag);
         match b.head(project_bucket, &o.key)? {
             Some(p) if p.etag != o.etag && project_moved(b, worktree_bucket, &o.key, &p.etag)? => {
                 match policy.on_conflict {
                     OnConflict::Fail => conflicts.push(o.key.clone()),
                     OnConflict::KeepProject => acts.push(Act::Keep(o.key.clone())),
-                    OnConflict::Overwrite => acts.push(Act::Copy(o.key.clone(), o.size)),
+                    OnConflict::Overwrite => acts.push(Act::Copy(o.key.clone(), o.size, planned.clone())),
                 }
             }
             // The project deleted what this worktree edited: resurrecting it silently is a conflict.
@@ -204,13 +222,13 @@ pub fn promote<B: ObjectBackend>(
                 match policy.on_conflict {
                     OnConflict::Fail => conflicts.push(o.key.clone()),
                     OnConflict::KeepProject => acts.push(Act::Keep(o.key.clone())),
-                    OnConflict::Overwrite => acts.push(Act::Copy(o.key.clone(), o.size)),
+                    OnConflict::Overwrite => acts.push(Act::Copy(o.key.clone(), o.size, planned.clone())),
                 }
             }
-            _ => acts.push(Act::Copy(o.key.clone(), o.size)),
+            _ => acts.push(Act::Copy(o.key.clone(), o.size, planned.clone())),
         }
     }
-    let mut deletes = Vec::new();
+    let mut deletes: Vec<(String, String)> = Vec::new();
     let mut dropped = Vec::new();
     for k in ov.tombstones()? {
         // Object and tombstone together (a put that crashed before clearing it): the object wins.
@@ -232,7 +250,7 @@ pub fn promote<B: ObjectBackend>(
                 }
                 dropped.push(k);
             }
-            Some(_) => deletes.push(k),
+            Some(p) => deletes.push((k, p.etag)),
             None => dropped.push(k),
         }
     }
@@ -245,7 +263,7 @@ pub fn promote<B: ObjectBackend>(
         copy: acts
             .iter()
             .filter_map(|a| {
-                if let Act::Copy(k, n) = a {
+                if let Act::Copy(k, n, _) = a {
                     Some((k.clone(), *n))
                 } else {
                     None
@@ -275,7 +293,10 @@ pub fn promote<B: ObjectBackend>(
     }
     for a in acts {
         match a {
-            Act::Copy(k, _) => {
+            Act::Copy(k, _, planned) => {
+                if policy.on_conflict != OnConflict::Overwrite {
+                    still_unchanged(b, project_bucket, &k, planned.as_deref())?;
+                }
                 displace(b, project_bucket, &k, archive)?;
                 b.copy(worktree_bucket, &k, project_bucket, &k)?;
                 report.promoted.push(k);
@@ -284,7 +305,10 @@ pub fn promote<B: ObjectBackend>(
             Act::Archive(k) => report.archived.push(k),
         }
     }
-    for k in deletes {
+    for (k, planned) in deletes {
+        if policy.on_conflict != OnConflict::Overwrite {
+            still_unchanged(b, project_bucket, &k, Some(&planned))?;
+        }
         displace(b, project_bucket, &k, archive)?;
         b.delete(project_bucket, &k)?;
         report.deleted.push(k);
