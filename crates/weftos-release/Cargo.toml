@@ -17,6 +17,12 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 ulid = { workspace = true }
 weftos-pq-sign = { workspace = true }
+weftos-store = { path = "../weftos-store", optional = true }
+tokio = { workspace = true, optional = true }
+
+[features]
+# ReleaseBackend over weftos-store's ObjectBackend (RustFS or any S1 backend).
+store = ["dep:weftos-store", "dep:tokio"]
 
 [dev-dependencies]
 tokio = { workspace = true }

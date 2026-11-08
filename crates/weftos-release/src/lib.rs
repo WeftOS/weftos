@@ -65,6 +65,8 @@ pub mod name;
 pub mod publish;
 pub mod read;
 pub mod retention;
+#[cfg(feature = "store")]
+pub mod s3;
 
 pub use backend::{BackendError, DeletableBackend, MemoryBackend, PutOutcome, ReleaseBackend};
 pub use error::{ReleaseError, Result};
