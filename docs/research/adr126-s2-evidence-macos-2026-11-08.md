@@ -301,3 +301,47 @@ The `worktree-store.sh` shell test was not re-run: the script did not change.
 Files a merge with aepod's S2 session will touch: `crates/weftos-store/src/{share,share_fetch,follower,promote,service,policy}.rs`,
 `crates/weftos-store/src/service/lifecycle.rs`, `crates/clawft-weave/src/{store_worktree,store_rt,lib}.rs`,
 `crates/clawft-weave/src/commands/store_cmd.rs`, and the new `store_worktree_paths.rs`.
+
+## Internal-disk timings (2026-11-08)
+
+Re-run of the real-RustFS tests with the RustFS data directory on the Mac's internal disk
+(APFS, `/private/tmp`, 291 GB free) instead of the external `/Volumes/ai-models` volume. Same
+RustFS 1.0.4 arm64 binary, one drive, no parity, bound to `127.0.0.1` on a random high port with
+the console off, random credentials in a 0600 env file. Same branch tip (`effb58881`) and the same
+`scripts/build.sh test ... --ignored` path. The server and scratch directory were removed after.
+S2 tests ran one at a time (`NEXTEST_TEST_THREADS=1`); the S1 live tests ran with nextest's default
+parallelism.
+
+**Machine load.** Other sessions were running throughout. Load average was 15.6 at the start and
+rose to 47.8 during the S1 run; it was 27.0 at the start of the S2 run and 21.3 at the end, and 14.2
+after cleanup. The numbers below were taken under that load, so they are not a quiet-machine best case.
+
+| Measurement | External disk (before) | Internal disk (after) |
+|---|---|---|
+| `live_listing_pages_past_a_thousand_keys` (1,005 keys written, listed, deleted) | Not finished: 569 of 1,005 writes after 31 min, stopped | **Pass**, 70.0 s alone; 87.6 s when run with the other three live tests |
+| Other S1 live tests (`live_object_and_bucket_operations`, `live_service_done_when`, `live_a_key_is_scoped_then_disabled_then_refused`) | Pass (times not recorded) | Pass, 1.1 s, 1.7 s and 1.5 s |
+| `s2_done_when::two_machines_share_a_worktree_on_a_real_rustfs` | Pass, 82 to 111 s | **Pass, 0.72 s** |
+| `s2_real_rustfs_drills` (6 tests) | Pass (times not recorded) | Pass, 0.27 to 1.47 s each, 4.0 s together |
+| Small PUT, 4 KB, loopback, SigV4 via curl, 60 sequential | 1.4 to 4.4 s | **p50 12.5 ms**, p95 20 ms, max 28 ms (75 PUTs per second sequential) |
+| Per-object cost in `s2_done_when` (about 25 objects) | about 1 s | about 29 ms |
+
+For reference, the 2026-11-03 spike measured p50 PUT 50 ms on the internal disk and 1.4 ms on a RAM
+disk. This run's 12.5 ms sits between them.
+
+**What changed.** The external volume, not RustFS or the S2 code, was the cause of the slow numbers.
+The same tests that took 82 to 111 s, and a paging test that could not finish in 31 minutes, now
+pass in under a second and about 70 s. The paging test is 2,010 operations (1,005 writes and 1,005
+deletes), so its 70 s is about 35 ms per operation under heavy machine load, still dominated by
+per-object cost rather than listing. The earlier statement that every duration in this document is
+an upper bound for a laptop internal disk was right, and the S2 library times (publish, claim,
+fetch and the drills) should be read as sub-second to low seconds for small trees on this hardware.
+No test failed on either disk, so the internal disk changes timing only, not any pass or fail result.
+
+**Not reproduced.** The first-publish rate of 0.3 objects per second was measured through two weaver
+daemons and the `worktree-store.sh` flow (debug builds, two scratch git repos, `land.sh`). That flow
+was not re-run here, because it needs both daemons rebuilt and restarted and the machine was at load
+15 to 48. The library-level `s2_done_when` publish gives a comparable figure of about 35 objects
+per second (25 objects in 0.72 s), but it excludes daemon, git and `wt.sh` overhead, so it is not a
+like-for-like replacement for the 0.3 per second. The daemon-driven step timings in the item 1 table
+(33 s for `new`, 26 s for `share --handoff`, 22.9 s for `land`) are therefore still the external-disk
+numbers.
