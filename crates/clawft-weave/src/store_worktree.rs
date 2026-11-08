@@ -24,7 +24,7 @@ use weftos_store::share::{
     Actor, Limits, TreeSource, mark_handoff, mark_merged_at, parse_name_status_z, publish_tree,
 };
 use weftos_store::registry_sign::{
-    EntrySigner, EntryVerifier, list_trusted_lenient, poll_verified, remove_registry_entry_signed,
+    EntrySigner, EntryVerifier, list_trusted_gen, list_trusted_lenient, poll_verified, remove_registry_entry_signed,
     write_registry_entry_signed,
 };
 use weftos_store::share_fetch::{
@@ -192,7 +192,10 @@ fn registry_switch() -> bool {
 ///   project key) is the owner's open decision; the daemon only reads the file it is pointed at.
 /// - `WEFTOS_WT_REGISTRY_TRUSTED`: file of trusted public keys, one 64-hex key per line (`#` comments).
 ///   With it, follow/search/leftovers check each entry's signature.
-/// - `WEFTOS_WT_REGISTRY_REQUIRE_SIGNED=1`: with the trusted file, drop (and report) entries that do not verify.
+/// - `WEFTOS_WT_REGISTRY_REQUIRE_SIGNED`: with the trusted file, entries that do not verify are dropped
+///   (and reported by `follow` as unreadable). Setting a trusted file turns this on by itself; `=0`
+///   keeps unverified entries visible with their trust shown in each verb's `trust` field (an audit
+///   mode for rolling signing out). `=1` without a trusted file is an error.
 #[derive(Default)]
 pub struct SignCfg {
     key: Option<ed25519_dalek::SigningKey>,
@@ -242,16 +245,30 @@ impl SignCfg {
                 _ => Ok(None),
             }
         };
+        // A seed other users can read is no secret: refuse it rather than sign with it.
+        #[cfg(unix)]
+        if let Some(p) = get("WEFTOS_WT_REGISTRY_SIGN_KEY").filter(|p| !p.is_empty()) {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&p).map_err(|e| format!("WEFTOS_WT_REGISTRY_SIGN_KEY {p}: {e}"))?.permissions().mode();
+            if mode & 0o077 != 0 {
+                return Err(format!("WEFTOS_WT_REGISTRY_SIGN_KEY {p} is accessible to other users (mode {:o}); chmod 600 it", mode & 0o777));
+            }
+        }
         let key = file("WEFTOS_WT_REGISTRY_SIGN_KEY")?.map(|t| hex32(&t)).transpose()?;
         let trusted = file("WEFTOS_WT_REGISTRY_TRUSTED")?
             .map(|t| {
                 t.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).map(trusted_key).collect::<Result<Vec<_>, _>>()
             })
             .transpose()?;
-        let require = get("WEFTOS_WT_REGISTRY_REQUIRE_SIGNED").is_some_and(|v| v == "1");
-        if require && trusted.is_none() {
-            return Err("WEFTOS_WT_REGISTRY_REQUIRE_SIGNED=1 needs WEFTOS_WT_REGISTRY_TRUSTED".into());
-        }
+        let require = match get("WEFTOS_WT_REGISTRY_REQUIRE_SIGNED").as_deref() {
+            Some("1") if trusted.is_none() => {
+                return Err("WEFTOS_WT_REGISTRY_REQUIRE_SIGNED=1 needs WEFTOS_WT_REGISTRY_TRUSTED".into());
+            }
+            Some("1") => true,
+            Some("0") => false,
+            // unset: a trusted-key file means "filter", which is what setting one is for
+            _ => trusted.is_some(),
+        };
         Ok(Self::new(key, trusted, require))
     }
 }
@@ -377,6 +394,29 @@ fn trusted_entries(b: &Op, reg: &str, sign: &SignCfg) -> weftos_store::overlay::
         Some(t) => list_trusted_lenient(b, reg, &Trusted(t), sign.require)?.0.into_iter().map(|(e, _)| e).collect(),
         None => weftos_store::share_fetch::list_shared_lenient(b, reg)?.0,
     })
+}
+
+/// Each listed entry's trust, for verb output (`{}` when no trusted-key file is set).
+fn trust_json(b: &Op, reg: &str, sign: &SignCfg) -> Value {
+    let Some(t) = &sign.trusted else { return json!({}) };
+    match list_trusted_gen(b, reg, &Trusted(t), false) {
+        Ok((v, bad)) => {
+            let mut m = serde_json::Map::new();
+            for (e, tr, _) in v {
+                let name = match tr {
+                    weftos_store::registry_sign::Trust::Verified => "verified",
+                    weftos_store::registry_sign::Trust::Unsigned => "unsigned",
+                    weftos_store::registry_sign::Trust::Bad => "bad",
+                };
+                m.insert(e.slug, json!(name));
+            }
+            for s in bad {
+                m.insert(s, json!("refused"));
+            }
+            Value::Object(m)
+        }
+        Err(e) => json!({"error": e.to_string()}),
+    }
 }
 
 /// Run one verb. `mesh` is the store-name mesh token of this daemon.
@@ -623,7 +663,7 @@ pub fn run_full(svc: &StoreService, mesh: &str, method: &str, params: Value, now
             }
             .map_err(e)?;
             st.save(&sp).map_err(e)?;
-            Ok(json!({"changes": ch.iter().map(change_json).collect::<Vec<_>>()}))
+            Ok(json!({"changes": ch.iter().map(change_json).collect::<Vec<_>>(), "trust": trust_json(&b, &n.reg, sign)}))
         }
         "search" => {
             let n = names(mesh, &project, "x")?;
@@ -639,7 +679,8 @@ pub fn run_full(svc: &StoreService, mesh: &str, method: &str, params: Value, now
             let n = names(mesh, &project, "x")?;
             let entries = trusted_entries(&b, &n.reg, sign).map_err(e)?;
             let l = follower::leftovers(&entries, now_ms, &LeftoverPolicy::default());
-            Ok(json!({"leftovers": l.iter().map(|x| json!({"why": why_str(x.why), "idle_ms": x.idle_ms, "worktree": entry_json(&x.entry)})).collect::<Vec<_>>()}))
+            Ok(json!({"leftovers": l.iter().map(|x| json!({"why": why_str(x.why), "idle_ms": x.idle_ms, "worktree": entry_json(&x.entry)})).collect::<Vec<_>>(),
+                      "trust": trust_json(&b, &n.reg, sign)}))
         }
         "sync-docs" => {
             let slug = need(&p.slug, "slug")?;

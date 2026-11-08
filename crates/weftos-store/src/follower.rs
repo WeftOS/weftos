@@ -37,6 +37,10 @@ pub struct Seen {
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FollowState {
     pub seen: BTreeMap<String, Seen>,
+    /// Highest registry signature generation verified per worktree (`registry_sign::poll_verified`).
+    /// Kept after a worktree leaves the registry, so a replayed older entry is still refused.
+    #[serde(default)]
+    pub generations: BTreeMap<String, u64>,
 }
 
 impl FollowState {

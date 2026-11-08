@@ -35,7 +35,7 @@ Built, off unless configured (all on the daemon; nothing is installed):
 |---|---|
 | `WEFTOS_WT_REGISTRY_SIGN_KEY=<file>` | file with a 32-byte ed25519 seed as 64 hex chars; every registry entry the daemon writes gets a signature object `worktrees.sig/<slug>.json` over the stored bytes |
 | `WEFTOS_WT_REGISTRY_TRUSTED=<file>` | one 64-hex public key per line (`#` comments); `follow`, `search` and `leftovers` then check each entry |
-| `WEFTOS_WT_REGISTRY_REQUIRE_SIGNED=1` | with the trusted file: entries that do not verify are dropped from search and leftovers and reported by `follow` as `unreadable`, never silently absent |
+| `WEFTOS_WT_REGISTRY_REQUIRE_SIGNED` | with the trusted file, entries that do not verify are dropped from search and leftovers and reported by `follow` as `unreadable`, never silently absent. **A trusted file turns this on by itself** (S3 review #4); `=0` is an audit mode that keeps them visible; `=1` without a trusted file is an error. `follow`, `search` and `leftovers` return a `trust` map (`verified` / `unsigned` / `bad` / `refused`) per worktree whenever a trusted file is set |
 
 A named file that cannot be read or parsed is an error, not a quiet fall back to unsigned. With none set, behaviour is unchanged. Tests: `with_signing_on_the_daemon_signs...`, `signing_settings_come_from_files...`, and the `registry_sign` library tests.
 
@@ -81,3 +81,10 @@ WEFTOS_STORE_TEST_RUSTFS_ENV=<env file> WEFTOS_STORE_TEST_NOTIFY_FILE=<events fi
 4. For wake-ups: RustFS notify target plus the daemon's `WEFTOS_STORE_INGEST_ADDR` receiver on the PG host (S1), and the relay hook above.
 
 **A live daemon:** the verbs run through `daemon.rs` `store.worktree.*` with `StoreService` on the RustFS backend (`WEFTOS_STORE_RUSTFS_ENV`). It needs a built `weaver` binary started with `WEFTOS_STORE_RUSTFS_ENV` and, for signing, `WEFTOS_WT_REGISTRY_SIGN_KEY` / `_TRUSTED` / `_REQUIRE_SIGNED=1`, then `weaver store worktree create/publish/follow/search/promote` against it. Covered today by `store_worktree_tests` on a local-directory backend, which exercises the same verbs minus the RPC hop and the RustFS transport.
+
+## Review fixes to signing (2026-11-08, S3 review of S2)
+
+- **Registry entries name their own key** and are verified on the bytes that were parsed (#1). **`verify_strict`** and weak-key refusal (#2).
+- **What is signed (#3):** `"weftos-registry-v1\0" || registry bucket || \0 || slug || \0 || generation || \0 || entry bytes`. The signature object carries the generation (one more than the previous signature object, or the entry's `updated_ms` if larger, so it keeps rising across a remove-and-recreate). A signature for one project's registry or one worktree name does not verify anywhere else, and the old bare-bytes format is `Bad`. **Rollback:** `FollowState` keeps the highest verified generation per worktree (also after the worktree leaves) and `poll_verified` reports an older signed entry as `unreadable`, keeping the follower's previous view. Limits: a follower with no state file has no earlier generation to compare, so protection starts at its first sight of an entry; the generation rises with the daemon's clock, so a daemon clock stepped far backwards would be refused by followers until it catches up.
+- **Seed file (#5):** the signing key file must not be readable by group or others (mode `& 0o077`), or the daemon refuses to start with it; the seed in an error message is never echoed. Not done: wiping the seed from memory (needs a zeroize dependency; `ed25519-dalek` zeroizes its key on drop, but the hex text read from the file is a plain `String`).
+- **Left as is (#6):** the entry and its signature object are two writes, so a strict follower polling between them sees one `unreadable` poll and the previous view is kept; the next poll (or the settle delay in `Waker`) clears it. Making it atomic means putting the signature inside the entry object, a format change.

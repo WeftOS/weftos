@@ -250,6 +250,12 @@ fn signing_settings_come_from_files_and_a_bad_file_is_an_error_not_unsigned() {
     let k = d.path().join("k");
     let t = d.path().join("t");
     std::fs::write(&k, format!("{}\n", "ab".repeat(32))).unwrap();
+    // the seed file must be private; make it so (a fresh file is typically 0644)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&k, std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
     std::fs::write(&t, format!("# trusted\n{}\n", "cd".repeat(32))).unwrap();
     let env = |k: &'static str, t: &'static str, r: Option<&'static str>| {
         let (k, t) = (k.to_owned(), t.to_owned());
@@ -263,6 +269,12 @@ fn signing_settings_come_from_files_and_a_bad_file_is_an_error_not_unsigned() {
     let (ks, ts) = (k.to_string_lossy().into_owned(), t.to_string_lossy().into_owned());
     let leak = |s: String| -> &'static str { Box::leak(s.into_boxed_str()) };
     let (ks, ts) = (leak(ks), leak(ts));
+    #[cfg(unix)]
+    {
+        assert!(SignCfg::from_lookup(env(ks, ts, Some("1"))).err().unwrap().contains("accessible to other users"), "a world-readable seed is refused");
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&k, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
     let c = SignCfg::from_lookup(env(ks, ts, Some("1"))).unwrap();
     assert!(c.key.is_some() && c.trusted.as_ref().unwrap().len() == 1 && c.require);
     std::fs::write(&k, "tooshort").unwrap();
@@ -271,6 +283,10 @@ fn signing_settings_come_from_files_and_a_bad_file_is_an_error_not_unsigned() {
     assert!(SignCfg::from_lookup(env(missing, ts, None)).err().unwrap().contains("missing"));
     assert!(SignCfg::from_lookup(env("", "", Some("1"))).is_err(), "require without a trusted file is refused");
     assert!(SignCfg::from_lookup(env("", "", None)).unwrap().key.is_none());
+    // a trusted-key file filters by itself; `0` is the explicit audit mode
+    assert!(SignCfg::from_lookup(env("", ts, None)).unwrap().require, "trusted file implies filtering");
+    assert!(!SignCfg::from_lookup(env("", ts, Some("0"))).unwrap().require);
+    assert!(SignCfg::from_lookup(env("", "", Some("0"))).unwrap().trusted.is_none());
 }
 
 /// The daemon's real ed25519 signer and trusted-key verifier against a real RustFS (the bytes the
@@ -463,4 +479,45 @@ fn a_small_order_trusted_key_is_refused_at_load_and_at_verify_and_strict_checks_
     // a seed typo does not echo any of what was typed
     let e = hex32("zz-secret-ish").unwrap_err();
     assert!(!e.contains("zz") && !e.contains("secret"), "{e}");
+}
+
+/// S3 review S2 #4: a trusted-key file filters, and the verbs say how much each entry is trusted.
+#[test]
+fn a_trusted_key_file_filters_unless_audit_mode_and_every_verb_shows_trust() {
+    let (_d, svc) = rig();
+    let key = [7u8; 32];
+    let pubkey = ed25519_dalek::SigningKey::from_bytes(&key).verifying_key().to_bytes();
+    let signed = SignCfg::new(Some(key), Some(vec![pubkey]), true);
+    let on = |cfg: &SignCfg, verb: &str, p: Value, now: u64| run_full(&svc, "local", &format!("store.worktree.{verb}"), p, now, false, cfg);
+    on(&signed, "create", json!({"project": PROJ, "slug": "feat-t", "branch": "feat/t", "base": "abc"}), 1).unwrap();
+    let src = tempfile::tempdir().unwrap();
+    let (paths, unc, chg) = files(src.path());
+    // published by a daemon with no signing key: the entry is there but unsigned
+    on(&SignCfg::off(), "publish", json!({"project": PROJ, "slug": "feat-t", "root": src.path().to_string_lossy(), "branch": "feat/t",
+        "base": "abc", "head": "def", "paths_z": paths, "uncommitted_z": unc, "changes_z": chg}), 2).unwrap();
+
+    // from_lookup would have made this filter; `require` here is what a trusted file alone gives
+    let filtering = SignCfg::new(None, Some(vec![pubkey]), true);
+    let audit = SignCfg::new(None, Some(vec![pubkey]), false);
+    let s = on(&filtering, "search", json!({"project": PROJ, "query": "plan"}), 3).unwrap();
+    assert_eq!(s["hits"], json!([]), "unsigned entry hidden");
+    assert_eq!(s["trust"]["feat-t"], "unsigned", "the trust level is shown even for what is filtered out");
+    let s = on(&audit, "search", json!({"project": PROJ, "query": "plan"}), 3).unwrap();
+    assert_eq!(s["hits"].as_array().unwrap().len(), 1, "audit mode shows it");
+    assert_eq!(s["trust"]["feat-t"], "unsigned", "and says why it is not to be trusted");
+    let l = on(&audit, "leftovers", json!({"project": PROJ}), 3).unwrap();
+    assert_eq!(l["trust"]["feat-t"], "unsigned");
+    let st = src.path().join("f.json");
+    let f = on(&audit, "follow", json!({"project": PROJ, "state": st.to_string_lossy()}), 4).unwrap();
+    assert_eq!(f["trust"]["feat-t"], "unsigned");
+    // no trusted file: no trust field content, behaviour as before
+    assert_eq!(on(&SignCfg::off(), "search", json!({"project": PROJ, "query": "plan"}), 3).unwrap()["trust"], json!({}));
+
+    // a signed republish is verified, and the follower's state file remembers the generation
+    on(&signed, "publish", json!({"project": PROJ, "slug": "feat-t", "root": src.path().to_string_lossy(), "branch": "feat/t",
+        "base": "abc", "head": "def2", "paths_z": paths, "uncommitted_z": unc, "changes_z": chg}), 5).unwrap();
+    let st2 = src.path().join("f2.json");
+    let f = on(&filtering, "follow", json!({"project": PROJ, "state": st2.to_string_lossy()}), 6).unwrap();
+    assert_eq!(f["trust"]["feat-t"], "verified");
+    assert!(std::fs::read_to_string(&st2).unwrap().contains("\"generations\""));
 }

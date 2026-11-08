@@ -291,6 +291,11 @@ L1 as the tier for "unmerged layers that other nodes should see before integrati
   entry (it used to leave a landed worktree showing as an abandoned claim). Daemon signing is built
   and off unless `WEFTOS_WT_REGISTRY_SIGN_KEY` / `_TRUSTED` / `_REQUIRE_SIGNED` are set; the owner's
   remaining decision is which key.
+- **Signature binding and rollback (2026-11-08):** a registry signature covers a domain prefix, the registry
+  bucket, the slug, a generation and the entry bytes, so it cannot be replayed into another project or name;
+  followers remember the highest generation per worktree and refuse an older signed entry. A trusted-key
+  file filters by default (`REQUIRE_SIGNED=0` for an audit mode) and verbs return a `trust` field. See
+  `docs/research/adr126-s2-l1-follower-view.md`.
 - **Per-client stores:** a client project has its own buckets (ADR-131: one seed bucket and one
   inbox bucket per client), so a follower of a client project reads only that client's registry.
 - **Clocks:** ages compare the registry's writer-side timestamp with the follower's clock, so the
