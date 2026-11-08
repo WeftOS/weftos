@@ -81,6 +81,9 @@ impl StoreService {
     /// so nothing is accepted after the copy starts. A failed run can be repeated: archiving an
     /// archived store is refused only without `delete`. Returns the number of objects archived.
     pub fn archive(&self, name: &StoreName, delete: bool, actor: &str) -> Result<u64, StoreError> {
+        if !self.has_store(name) && matches!(name, StoreName::Worktree { .. }) {
+            return self.archive_foreign_worktree(name, delete, actor);
+        }
         let rec = self.known(name)?;
         if rec.archived && !delete {
             return Err(StoreError::Refused(format!("{name} is already archived")));
@@ -135,6 +138,42 @@ impl StoreService {
         }
         self.chain.record("store.archive", json!({"store": name.to_string(), "objects": objs.len(), "deleted": delete, "actor": actor}));
         self.emit(actor, name, if delete { "ArchiveDelete" } else { "Archive" }, None, objs.iter().map(|m| m.size).sum(), Outcome::Ok, Source::Governed);
+        Ok(objs.len() as u64)
+    }
+
+    /// Archive and delete a worktree store that another daemon created on the same backend. Store
+    /// records and grants live in each daemon's own state, so this daemon has neither to close;
+    /// the objects and the bucket are on the shared backend, and a worktree's bucket belongs to its
+    /// project, not to the daemon that happened to create it. Only deletion is accepted: closing
+    /// without deleting means disabling grants this daemon does not hold. The creating daemon's
+    /// record and grants for the store remain until it drops them (`store archive` there, or a
+    /// restart that reconciles), which is harmless because the bucket is gone.
+    fn archive_foreign_worktree(&self, name: &StoreName, delete: bool, actor: &str) -> Result<u64, StoreError> {
+        if !delete {
+            return Err(StoreError::Refused(format!(
+                "{name} was created by another daemon; only `--delete` can archive it from here (closing it means disabling grants this daemon does not hold)"
+            )));
+        }
+        self.ensure_archive()?;
+        let b = name.bucket();
+        let ts = self.now();
+        let objs = self.objects.list(&b, "")?;
+        let run = || -> Result<(), StoreError> {
+            for m in &objs {
+                self.objects.copy(&b, &m.key, ARCHIVE_BUCKET, &archive_key(&b, ts, &m.key))?;
+            }
+            for m in &objs {
+                self.objects.delete(&b, &m.key)?;
+            }
+            self.admin.delete_bucket(&b)?;
+            Ok(())
+        };
+        if let Err(e) = run() {
+            self.emit(actor, name, "Archive", None, 0, Outcome::Error(e.to_string()), Source::Governed);
+            return Err(e);
+        }
+        self.chain.record("store.archive", json!({"store": name.to_string(), "objects": objs.len(), "deleted": true, "actor": actor, "foreign": true}));
+        self.emit(actor, name, "ArchiveDelete", None, objs.iter().map(|m| m.size).sum(), Outcome::Ok, Source::Governed);
         Ok(objs.len() as u64)
     }
 }

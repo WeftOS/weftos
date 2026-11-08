@@ -350,3 +350,23 @@ fn principals_cannot_write_a_worktrees_control_state_or_a_projects_registry() {
     r.svc.put(&local("a1"), &wt, "assets/a", b"ok", false).unwrap();
     r.svc.put(&local("a1"), &project(), "assets/a", b"ok", false).unwrap();
 }
+
+#[test]
+fn a_second_daemon_can_archive_and_delete_a_worktree_store_the_first_created() {
+    let be = Arc::new(MemBackend::new());
+    let (a, b) = (rig_at(None, be.clone()), rig_at(None, be.clone()));
+    let wt = StoreName::worktree("weft", P, "feat-x").unwrap();
+    a.svc.create_store(&project(), "daemon", Parties::default()).unwrap();
+    a.svc.create_store(&wt, "daemon", Parties::default()).unwrap();
+    a.svc.grant(&wt, cog("a1"), Access::Write, "op").unwrap();
+    a.svc.put(&local("a1"), &wt, "assets/x.bin", b"x", false).unwrap();
+    assert!(!b.svc.has_store(&wt), "B has no record of A's store");
+    // closing without deleting would mean disabling grants B does not hold
+    assert!(b.svc.archive(&wt, false, "op").unwrap_err().to_string().contains("another daemon"));
+    // other kinds of store still need to be known
+    assert!(b.svc.archive(&project(), true, "op").is_err());
+    assert_eq!(b.svc.archive(&wt, true, "op").unwrap(), 1);
+    assert!(be.get(&wt.bucket(), "assets/x.bin").is_err(), "the bucket is gone");
+    assert_eq!(be.get(ARCHIVE_BUCKET, &archive_key(&wt.bucket(), 1_000, "assets/x.bin")).unwrap(), b"x");
+    assert!(b.chain.0.lock().unwrap().iter().any(|(k, v)| k == "store.archive" && v["foreign"] == true));
+}
