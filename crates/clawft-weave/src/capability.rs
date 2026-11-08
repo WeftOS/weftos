@@ -240,6 +240,8 @@ pub fn required_capability(method: &str) -> Capability {
         // Agent directory: this node's agents and exposures; a `node` or
         // `mesh` call contacts peers and needs Admin inside the handler.
         | "agent.sources"
+        // Joined directory with an etag; `mesh` is checked for Admin in the handler.
+        | "agent.directory"
         // ADR-122: topics, writers and counters; no payloads, no tokens.
         | "cogbus.list"
         // Fleet manager: one read-only document composed from sources the

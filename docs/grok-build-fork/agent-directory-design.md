@@ -2,8 +2,10 @@
 
 - **Status**: Built on `feat/agent-directory`, 2026-11-07 (two follow-ups the same day). Card c3d1051d.
 - **Surface**: MCP `control` profile tools `agent_list` and `agent_get` (attach mode).
-- **Code**: `crates/clawft-cli/src/commands/agent_directory.rs` (join), `mcp_attach.rs` (tools),
-  `crates/clawft-weave/src/agent_sources_rpc.rs` (`agent.sources`, mesh fetch).
+- **Code**: `crates/weftos/src/agent_directory.rs` (the join and the etag; shared by the CLI and
+  the daemon, re-exported from `crates/clawft-cli/src/commands/agent_directory.rs`),
+  `mcp_attach.rs` (tools), `crates/clawft-weave/src/agent_sources_rpc.rs` (`agent.sources`, mesh
+  fetch), `crates/clawft-weave/src/agent_directory_rpc.rs` (`agent.directory`). Card c1192c85.
 
 ## Identity
 
@@ -90,6 +92,32 @@ rule as `dashboard.status` and the bot directory). A read-only method needs a pe
 answer is a block `{node_id, ok:false, error}`, shown in `sources.nodes[]` with its error; it
 fails nothing and nothing is shown for it from memory. If the whole mesh call cannot be made
 (older daemon, no Admin) the tool errors instead of answering with the local view.
+
+## `agent.directory` (daemon RPC with an etag)
+
+`agent.directory {since_etag?, mesh?}` runs the same join inside the daemon (the join moved to
+the `weftos` crate, which both the CLI and `clawft-weave` already depend on; no new crate or
+dependency edge). It reads this node's block through the `agent.sources` code path, loads the
+declared tree like the MCP tools do (`$WEFTOS_AGENTS_DIR`, else the nearest `agents/`, else the
+embedded tree), and answers:
+
+- `{etag, directory}`: `directory` is exactly what `agent_list` returns (same shape, same
+  statuses and notes; without `mesh` rows carry no `node`);
+- `{etag, not_modified: true}` when `since_etag` equals the current etag. No directory body.
+
+Class: Read for this node; `mesh: true` needs Admin (it contacts peers), refused otherwise like
+`agent.sources`. A malformed `since_etag` or `mesh` is refused, never defaulted. Both are
+classified in `capability.rs` (Read) and `scope_gate.rs` (user-level, like `agent.sources`).
+A peer that does not answer is named in `directory.sources.nodes[]` with its error and its
+agents show `unknown`; it is never an empty list. If nothing at all can be read the call errors.
+
+Etag: `dir1-` plus the first 16 bytes (hex) of the SHA-256 of the canonical directory (object
+keys sorted). It changes when an agent starts or stops (pid, state), an exposure changes (state,
+audience, announced, added or removed), a peer goes down or comes back, or a declared package
+changes. The last is covered by `sources.declared.tree_sha256`, a digest over every file of the
+package tree, so an edit that leaves the parsed fields alone (a persona, a skill) still moves the
+etag. The live exposure counters `served` and `refused` are shown but excluded from the hash:
+they move on every request and would make every poll a change.
 
 ## When sources disagree
 

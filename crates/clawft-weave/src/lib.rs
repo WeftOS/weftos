@@ -205,6 +205,8 @@ mod infer_svc_tests;
 mod infer_hardening_tests;
 /// Agent directory, mesh view: `agent.sources` and its node-admin twin.
 pub mod agent_sources_rpc;
+/// Agent directory with an etag: `agent.directory`.
+pub mod agent_directory_rpc;
 #[cfg(all(test, feature = "placement", unix))]
 mod agent_sources_mesh_tests;
 pub mod expose_rpc;

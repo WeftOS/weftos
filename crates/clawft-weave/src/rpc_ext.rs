@@ -490,6 +490,11 @@ const ROUTES: &[ExtRoute] = &[
         handler: crate::agent_sources_rpc::handle,
     },
     ExtRoute {
+        prefix: "agent.directory",
+        capability: Capability::Read,
+        handler: crate::agent_directory_rpc::handle,
+    },
+    ExtRoute {
         prefix: "dashboard.token.rotate",
         capability: Capability::Admin,
         handler: crate::dashboard_rpc::handle,
@@ -866,6 +871,11 @@ const ROUTES: &[ExtRoute] = &[
         prefix: "agent.sources",
         capability: Capability::Read,
         handler: crate::agent_sources_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "agent.directory",
+        capability: Capability::Read,
+        handler: crate::agent_directory_rpc::handle,
     },
     ExtRoute {
         prefix: "dashboard.token.rotate",
