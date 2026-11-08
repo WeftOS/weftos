@@ -53,6 +53,10 @@ Option A. S1 owns principals, grants and policy and already has a stable, tested
 
 One-line switch if A: a host builds `BrokerConfig`/`RustfsConfig` with `user_naming = UserNaming::WkHash` and its `NodeKeys` keyed by the `wk-` name. If B: S1 merges `opt/adr126-s1-node-names` and the S3 default (`NodePrefix`) already agrees.
 
+## Rejected: a daemon dependency on `weftos-edge-creds` (owner, 2026-11-08 11:39)
+
+The idea was an adapter in the daemon implementing S3's `NodeKeys` over S1's `StoreService::node_key`, so the daemon would link `weftos-edge-creds`. The owner rejected it: S3 and S1 stay separate, and S3's node keys are not wired to S1 through that crate. No adapter code was committed; the option branch was not kept. What it would have cost, for the record: a new `[dependencies]` entry in `clawft-weave` (a diff-gate `new-dep` finding needing an owner approval entry); the daemon linking a second crate with its own types for keys and sessions; and a lookup that is linear in the mesh's node count whenever the principal is S1's `wk-` form, because the hash cannot be reversed to a node id. Whatever connects S3's `NodeKeys` to S1's node key later has to be chosen without that dependency; nothing is planned.
+
 ## S1's notes
 
 (S1 appends here.)
