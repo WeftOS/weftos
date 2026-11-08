@@ -252,3 +252,31 @@ not restructure code to avoid the findings. Approval is the owner's call. Full o
 Config location: an explicit `--config` wins; otherwise `$WEFT_HUB_HOME/hub.toml`, then
 `$XDG_CONFIG_HOME/weft-hub/hub.toml`, then `$HOME/.config/weft-hub/hub.toml`. Nothing in the
 hub defaults to or creates anything under `~/.weftos`.
+
+## Real-binary loopback run (2026-11-08, debug builds, this backup hub)
+
+Result: `PROBE_OK`, exit 0, on the first attempt, with no hub changes needed for the real binaries.
+
+- Hub: debug `weft-hub serve --config <throwaway>/hub.toml` on 127.0.0.1:19493 (the example config with the port changed), `env -i`
+  with HOME/TMPDIR inside the session scratchpad. Pass keys minted with `weft-hub mint` into 0600 files, same `--sub local-dev`: role
+  server with `--srv xpc` for the server, role harness for the probe. The hub refuses any server id that is not a configured machine,
+  so the server ran with `--server-id xpc` and the probe with `--session-id xpc`.
+- Server: Tapestry debug `xai-workspace-server --hub-url ws://127.0.0.1:19493/v1/tools --server-id xpc --pass-key-file KEY --cwd WORK`
+  (from `tapestry/p3-item4-onboarding`). Registered as `kind=tool_server sub=local-dev`. Startup took about 35 s before it connected.
+- Probe: `workspace-server-probe ... --session-id xpc --pass-key-file KEY --cwd WORK`: "servers visible: [xpc]", bound 3 tools,
+  `run_terminal_command` OK, `read_file` OK, `PROBE_OK`. The hub logged harness connect and disconnect.
+- Sockets: `lsof -nP -i` sampled every 0.5 s through the probe run. Only 127.0.0.1:19493 LISTEN and a 127.0.0.1 to 127.0.0.1
+  ESTABLISHED pair (server to hub) were seen. The probe's own short-lived connection fell between samples (its log shows it
+  to `ws://127.0.0.1:19493`). No non-loopback socket.
+- No `wfhub1` token appears in any hub, server or probe log.
+- Not exercised: a wrong or expired key against the real binaries (covered by the package tests only), the supervised-by-weaver
+  path, anything non-loopback, any non-macOS host.
+- Side effects found: the server's default `--diag-socket` is `/tmp/workspace-server.sock` and the probe writes
+  `/tmp/probe-nonce-*.txt`, both in the real `/tmp`. Both were removed by exact path afterwards. Pass `--diag-socket` under the
+  throwaway directory next time.
+
+## Local path overrides
+
+`crates/weft-computer-hub/.cargo/config.toml` patches the `https://github.com/WeftOS/grok-build` git dependency (`xai-tool-protocol`,
+`xai-tool-types`) to the local path `/Volumes/ai-models/research/tapestry/crates/common/`. The fork is not pushed, so the file stays as it is;
+the package builds only on a machine with that checkout. Remove it once the fork rev is on GitHub.
