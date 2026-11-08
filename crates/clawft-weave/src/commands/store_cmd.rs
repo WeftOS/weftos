@@ -149,6 +149,8 @@ pub enum StoreAction {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         rest: Vec<String>,
     },
+    /// Release stores: CI publishes a release once (ADR-126 S4).
+    Release(crate::commands::release_cmd::ReleaseArgs),
     /// Read an object as a principal.
     Get {
         name: String,
@@ -400,6 +402,7 @@ pub async fn run(args: StoreArgs) -> anyhow::Result<()> {
             let v = call(&format!("store.view.{verb}"), params).await?;
             println!("{}", serde_json::to_string_pretty(&v)?);
         }
+        StoreAction::Release(a) => crate::commands::release_cmd::run(a).await?,
         StoreAction::Get { name, key, principal } => {
             let v = call("store.get", json!({"name": name, "key": key, "principal": principal})).await?;
             match v["text"].as_str() {

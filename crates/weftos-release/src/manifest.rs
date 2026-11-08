@@ -212,6 +212,11 @@ impl ReleaseSigner {
         Self { ed, ml }
     }
 
+    /// Build a signer from the two 32-byte seeds (Ed25519, then ML-DSA-65).
+    pub fn from_seeds(ed_seed: &[u8; 32], ml_seed: &[u8; 32]) -> Self {
+        Self::new(ed25519_dalek::SigningKey::from_bytes(ed_seed), mldsa65::SigningKey::from_seed(ml_seed))
+    }
+
     pub fn key_id(&self) -> String {
         key_id(&self.ed.verifying_key(), self.ml.verifying_key())
     }

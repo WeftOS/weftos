@@ -67,6 +67,7 @@ weftos-cog-protocol = { path = "../weftos-cog-protocol" }
 weftos-cogbus = { path = "../weftos-cogbus" }
 # ADR-126: the mesh object store (names, grants, governed access, audit).
 weftos-store = { path = "../weftos-store", features = ["rustfs"] }
+weftos-release = { path = "../weftos-release", features = ["store"] }
 clap = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }

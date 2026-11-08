@@ -19,6 +19,7 @@ pub mod doctor_cmd;
 pub mod dashboard_cmd;
 pub mod expose_cmd;
 pub mod store_client_cmd;
+pub mod release_cmd;
 pub mod store_cmd;
 pub mod store_view_args;
 pub mod infer_cmd;
