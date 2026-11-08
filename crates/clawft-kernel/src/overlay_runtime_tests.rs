@@ -296,6 +296,57 @@ fn a_denied_action_is_denied_and_chained_with_the_hash() {
     assert!(evs.iter().any(|e| e.kind == "governance.permit" && e.rule_hash == Some(h)));
 }
 
+// ── check_detailed through the overlay gate ──────────────────────────────
+
+fn detailed(g: &Arc<dyn GateBackend>, action: &str) -> crate::gate::GateVerdict {
+    g.check_detailed("agent-1", action, &json!({}))
+        .expect("an overlay gate always has an engine behind it")
+}
+
+#[test]
+fn check_detailed_reports_an_overlay_deny_with_its_rule_id() {
+    use crate::governance::GovernanceDecision;
+    let f = fixture(&base_parent(), Some(&deny_toml("tool.shell_exec")));
+    let r = start(&f);
+    let v = detailed(&r.gate, "tool.shell_exec");
+    let GovernanceDecision::Deny(reason) = &v.decision else {
+        panic!("expected Deny, got {:?}", v.decision);
+    };
+    assert!(reason.contains("d1"), "{reason}");
+    assert!(v.evaluated_rules.iter().any(|id| id.contains("d1")), "{:?}", v.evaluated_rules);
+    // It agrees with `check`, and writes nothing to the chain.
+    assert!(is_deny(&check(&r.gate, "tool.shell_exec")));
+    let before = events(&r.cm).len();
+    let _ = detailed(&r.gate, "tool.shell_exec");
+    assert_eq!(events(&r.cm).len(), before);
+    assert!(matches!(detailed(&r.gate, "tool.read_file").decision, GovernanceDecision::Permit | GovernanceDecision::PermitWithWarning(_)));
+}
+
+#[test]
+fn check_detailed_reports_an_overlay_approval_rule_as_escalate() {
+    use crate::governance::GovernanceDecision;
+    let f = fixture(
+        &base_parent(),
+        Some("[[require_approval]]\nactions = [\"cron.add\"]\n"),
+    );
+    let r = start(&f);
+    let v = detailed(&r.gate, "cron.add");
+    assert!(matches!(v.decision, GovernanceDecision::EscalateToHuman(_)), "{:?}", v.decision);
+    assert!(matches!(check(&r.gate, "cron.add"), GateDecision::Defer { .. }));
+}
+
+#[test]
+fn check_detailed_keeps_a_base_deny_through_the_overlay() {
+    use crate::governance::GovernanceDecision;
+    // The overlay denies something else; the parent's `workload.*` deny stands.
+    let f = fixture(&base_parent(), Some(&deny_toml("tool.shell_exec")));
+    let r = start(&f);
+    let v = detailed(&r.gate, "workload.start");
+    assert!(matches!(v.decision, GovernanceDecision::Deny(_)), "{:?}", v.decision);
+    assert!(v.evaluated_rules.iter().any(|id| id == "WL-DENY"), "{:?}", v.evaluated_rules);
+    assert!(is_deny(&check(&r.gate, "workload.start")));
+}
+
 // ── reload and update ────────────────────────────────────────────────────
 
 #[test]

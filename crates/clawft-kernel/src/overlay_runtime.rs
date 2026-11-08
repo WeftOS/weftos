@@ -188,6 +188,22 @@ impl GateBackend for OverlayGate {
             .unwrap_or_else(|e| e.into_inner())
             .governance_snapshot()
     }
+
+    /// Delegate to the inner engine, which holds the merged parent + overlay
+    /// rules (the same strictest-wins set `check` evaluates). Without this the
+    /// trait default answers `None` ("no engine"), and a `governance.check`
+    /// caller treats governance as unavailable on a project kernel.
+    fn check_detailed(
+        &self,
+        agent_id: &str,
+        action: &str,
+        context: &serde_json::Value,
+    ) -> Option<crate::gate::GateVerdict> {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .check_detailed(agent_id, action, context)
+    }
 }
 
 /// The hashes and version of the rules a kernel is running.
