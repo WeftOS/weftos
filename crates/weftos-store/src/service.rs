@@ -622,6 +622,19 @@ impl StoreService {
         self.finish(who, name, Op::Put, Some(key), data.len() as u64, r)
     }
 
+    /// Stamp or lengthen the retention of one version after the upload is committed (CI puts the
+    /// artifact, then holds it). Only ever lengthens: a date not later than the current one is
+    /// refused, so the `append` role (CI) may call it, since it can only add protection. Gated and
+    /// logged as a put. Returns the retention now in force.
+    pub fn extend_retention(&self, who: &Caller, name: &StoreName, key: &str, version_id: &str, until_unix_s: u64, mode: crate::backend::LockMode) -> Result<crate::backend::Retention, StoreError> {
+        self.gate(who, name, Op::Put, Some(key), 0)?;
+        if !self.is_locked(name) {
+            return Err(StoreError::Refused(format!("{name} was not made with object lock")));
+        }
+        let r = self.objects.extend_retention(&name.bucket(), key, version_id, until_unix_s, mode);
+        self.finish(who, name, Op::Put, Some(key), 0, r)
+    }
+
     /// Conditional PutObject: write only if the key still has the etag the caller read (S3
     /// `If-Match`). A changed key is `BackendError::Stale`; read again and retry. Unlike `put`,
     /// a concurrent writer can never be overwritten blind.

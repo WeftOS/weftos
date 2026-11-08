@@ -13,7 +13,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use reqwest::blocking::Client;
 use serde_json::{Value, json};
 
-use crate::backend::{AccessKey, AdminBackend, BackendError, BucketTags, DefaultRetention, LockConfig, LockMode, LifecycleRule, LockedPut, ObjectBackend, ObjectMeta, ObjectVersion, PutOpts, check_key};
+use crate::backend::{AccessKey, AdminBackend, BackendError, BucketTags, DefaultRetention, LockConfig, LockMode, LifecycleRule, LockedPut, ObjectBackend, ObjectMeta, ObjectVersion, PutOpts, Retention, check_key};
 use crate::sigv4::{self, Req};
 
 /// Connection settings. `secrets_dir` receives one 0600 file per issued access key.
@@ -457,6 +457,37 @@ impl ObjectBackend for RustfsBackend {
         let extra: Vec<(&str, String)> = if bypass_governance { vec![("x-amz-bypass-governance-retention", "true".into())] } else { Vec::new() };
         let r = self.send("DELETE", &format!("/{bucket}/{key}"), &Self::q(&[("versionId", version_id)]), &[], &extra)?;
         self.check(r, Ctx::Object(bucket, key)).map(|_| ())
+    }
+
+    fn get_retention(&self, bucket: &str, key: &str, version_id: &str) -> Result<Option<Retention>, BackendError> {
+        check_key(key)?;
+        let r = self.send("GET", &format!("/{bucket}/{key}"), &Self::q(&[("retention", ""), ("versionId", version_id)]), &[], &[])?;
+        // An object with no retention answers 404 NoSuchObjectLockConfiguration.
+        if r.status == 404 && String::from_utf8_lossy(&r.body).contains("NoSuchObjectLockConfiguration") {
+            return Ok(None);
+        }
+        let r = self.check(r, Ctx::Object(bucket, key))?;
+        let x = String::from_utf8_lossy(&r.body);
+        let mode = match xml_tag(&x, "Mode").as_deref() {
+            Some("GOVERNANCE") => LockMode::Governance,
+            Some("COMPLIANCE") => LockMode::Compliance,
+            None => return Ok(None),
+            Some(o) => return Err(BackendError::Io(format!("retention: unknown mode {o:?}"))),
+        };
+        let until = xml_tag(&x, "RetainUntilDate").and_then(|d| sigv4::parse_iso(&d)).ok_or_else(|| BackendError::Io("retention: no readable RetainUntilDate".into()))?;
+        Ok(Some(Retention { mode, until_unix_s: until }))
+    }
+
+    fn put_retention(&self, bucket: &str, key: &str, version_id: &str, r: &Retention, bypass_governance: bool) -> Result<(), BackendError> {
+        check_key(key)?;
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).map_err(io)?.as_secs();
+        if r.until_unix_s <= now {
+            return Err(BackendError::BadKey(format!("retain-until {} is not in the future", r.until_unix_s)));
+        }
+        let body = format!("<Retention><Mode>{}</Mode><RetainUntilDate>{}</RetainUntilDate></Retention>", r.mode.as_str(), sigv4::iso_date(r.until_unix_s));
+        let extra: Vec<(&str, String)> = if bypass_governance { vec![("x-amz-bypass-governance-retention", "true".into())] } else { Vec::new() };
+        let resp = self.send("PUT", &format!("/{bucket}/{key}"), &Self::q(&[("retention", ""), ("versionId", version_id)]), body.as_bytes(), &extra)?;
+        self.check(resp, Ctx::Object(bucket, key)).map(|_| ())
     }
 
     fn get_lock_config(&self, bucket: &str) -> Result<LockConfig, BackendError> {

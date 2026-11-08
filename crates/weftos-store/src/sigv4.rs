@@ -68,6 +68,31 @@ pub fn iso_date(unix_s: u64) -> String {
     format!("{}-{}-{}T{}:{}:{}.000Z", &a[..4], &a[4..6], &a[6..8], &a[9..11], &a[11..13], &a[13..15])
 }
 
+/// Seconds since the epoch of an ISO 8601 UTC time (`YYYY-MM-DDTHH:MM:SS`, optional fraction,
+/// `Z` or `+00:00`). Anything else (another offset, a malformed date) is `None`.
+pub fn parse_iso(s: &str) -> Option<u64> {
+    let s = s.trim();
+    let s = s.strip_suffix('Z').or_else(|| s.strip_suffix("+00:00")).unwrap_or(s);
+    let (date, time) = s.split_once('T')?;
+    let time = time.split('.').next()?;
+    let num = |t: &str| t.parse::<u64>().ok();
+    let mut d = date.split('-');
+    let (y, m, day) = (num(d.next()?)?, num(d.next()?)?, num(d.next()?)?);
+    let mut t = time.split(':');
+    let (hh, mm, ss) = (num(t.next()?)?, num(t.next()?)?, num(t.next()?)?);
+    if d.next().is_some() || t.next().is_some() || !(1..=12).contains(&m) || !(1..=31).contains(&day) || hh > 23 || mm > 59 || ss > 60 || y < 1970 {
+        return None;
+    }
+    // Days from civil (Howard Hinnant's algorithm).
+    let (y, m) = if m <= 2 { (y - 1, m + 9) } else { (y, m - 3) };
+    let era = y / 400;
+    let yoe = y - era * 400;
+    let doy = (153 * m + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    Some(days * 86_400 + hh * 3600 + mm * 60 + ss)
+}
+
 /// What to sign.
 pub struct Req<'a> {
     pub method: &'a str,
@@ -116,6 +141,17 @@ mod tests {
     fn signing_key_matches_the_aws_documented_value() {
         let k = signing_key("wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY", "20120215", "us-east-1", "iam");
         assert_eq!(hex(&k), "f4780e2d9f65fa895f9c67b32ce1baf0b0d8a43505a000a1a9e090d414db404d");
+    }
+
+    #[test]
+    fn iso_dates_parse_back_to_the_instant_they_were_made_from() {
+        for t in [0u64, 86_399, 951_782_400, 1_700_000_000, 1_793_000_123, 4_102_444_800] {
+            assert_eq!(parse_iso(&iso_date(t)), Some(t), "{t}");
+        }
+        assert_eq!(parse_iso("2026-11-08T09:49:44+00:00"), parse_iso("2026-11-08T09:49:44.000Z"));
+        for bad in ["", "2026-11-08", "2026-13-08T00:00:00Z", "2026-11-08T25:00:00Z", "1969-12-31T23:59:59Z", "2026-11-08T09:49:44+02:00", "x"] {
+            assert_eq!(parse_iso(bad), None, "{bad}");
+        }
     }
 
     #[test]

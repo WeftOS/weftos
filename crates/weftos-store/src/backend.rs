@@ -193,6 +193,30 @@ pub trait ObjectBackend: Send + Sync {
     fn delete_version(&self, _bucket: &str, _key: &str, _version_id: &str, _bypass_governance: bool) -> Result<(), BackendError> {
         Err(BackendError::Unsupported("object lock".into()))
     }
+    /// The retention on one version (`None` if it has none).
+    fn get_retention(&self, _bucket: &str, _key: &str, _version_id: &str) -> Result<Option<Retention>, BackendError> {
+        Err(BackendError::Unsupported("object lock".into()))
+    }
+    /// Set the retention of one version, for example to stamp it after the upload is committed.
+    /// RustFS refuses to shorten it (and, under `Compliance`, to change it down in any way);
+    /// `bypass_governance` lets a `Governance` one be shortened. Prefer [`Self::extend_retention`].
+    fn put_retention(&self, _bucket: &str, _key: &str, _version_id: &str, _r: &Retention, _bypass_governance: bool) -> Result<(), BackendError> {
+        Err(BackendError::Unsupported("object lock".into()))
+    }
+    /// Move a version's retention date later, keeping its mode (or setting `mode` where it had
+    /// none). A date that is not later than the current one is refused before anything is sent,
+    /// so this can never shorten a hold. Returns the retention now in force.
+    fn extend_retention(&self, bucket: &str, key: &str, version_id: &str, until_unix_s: u64, mode: LockMode) -> Result<Retention, BackendError> {
+        let new = match self.get_retention(bucket, key, version_id)? {
+            Some(cur) if until_unix_s <= cur.until_unix_s => {
+                return Err(BackendError::BadKey(format!("retain-until {until_unix_s} does not extend the current {}", cur.until_unix_s)));
+            }
+            Some(cur) => Retention { mode: cur.mode, until_unix_s },
+            None => Retention { mode, until_unix_s },
+        };
+        self.put_retention(bucket, key, version_id, &new, false)?;
+        Ok(new)
+    }
     /// Read a bucket's Object Lock configuration. A bucket made without lock is `enabled: false`.
     fn get_lock_config(&self, _bucket: &str) -> Result<LockConfig, BackendError> {
         Err(BackendError::Unsupported("object lock".into()))

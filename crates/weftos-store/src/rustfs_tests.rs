@@ -674,3 +674,37 @@ fn live_lifecycle_rules_round_trip() {
     assert_eq!(be.get_lifecycle(&b).unwrap(), vec![]);
     be.delete_bucket(&b).unwrap();
 }
+
+/// Stamping retention after the upload, live: an object put with no retention is held afterwards,
+/// the hold only ever lengthens, and RustFS itself refuses to shorten a compliance hold.
+#[test]
+#[ignore = "needs a throwaway RustFS: WEFTOS_STORE_TEST_RUSTFS_ENV"]
+fn live_retention_is_stamped_after_commit_and_only_lengthens() {
+    use crate::backend::{LockMode, PutOpts, Retention};
+    let (cfg, _d) = live().expect("WEFTOS_STORE_TEST_RUSTFS_ENV");
+    let be = RustfsBackend::new(cfg).unwrap();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    let b = uniq("t-ret");
+    be.create_locked_bucket(&b, &[]).unwrap();
+    let v = be.put_locked(&b, "a.tar", b"build", &PutOpts { if_none_match: true, ..Default::default() }).unwrap().version_id.unwrap();
+    assert_eq!(be.get_retention(&b, "a.tar", &v).unwrap(), None, "committed with no hold");
+
+    // Stamp it.
+    let held = be.extend_retention(&b, "a.tar", &v, now + 3600, LockMode::Compliance).unwrap();
+    assert_eq!(held, Retention { mode: LockMode::Compliance, until_unix_s: now + 3600 });
+    assert_eq!(be.get_retention(&b, "a.tar", &v).unwrap(), Some(held), "read back as stamped");
+    assert!(matches!(be.delete_version(&b, "a.tar", &v, true), Err(BackendError::Forbidden(_))), "now held");
+    // Lengthen it; the mode stays, whatever mode the caller names.
+    let longer = be.extend_retention(&b, "a.tar", &v, now + 7200, LockMode::Governance).unwrap();
+    assert_eq!(longer, Retention { mode: LockMode::Compliance, until_unix_s: now + 7200 });
+    // Not later: refused before sending. Shortening straight at the API: refused by RustFS.
+    assert!(matches!(be.extend_retention(&b, "a.tar", &v, now + 7200, LockMode::Compliance), Err(BackendError::BadKey(_))), "equal is not an extension");
+    assert!(matches!(be.extend_retention(&b, "a.tar", &v, now + 60, LockMode::Compliance), Err(BackendError::BadKey(_))));
+    let shorter = be.put_retention(&b, "a.tar", &v, &Retention { mode: LockMode::Compliance, until_unix_s: now + 120 }, true);
+    eprintln!("RETENTION shorten compliance with bypass: {shorter:?}");
+    assert!(shorter.is_err(), "RustFS refuses to shorten a compliance hold");
+    assert_eq!(be.get_retention(&b, "a.tar", &v).unwrap().unwrap().until_unix_s, now + 7200, "unchanged");
+    // A past date is refused before sending; an unknown version is an error, not a stamp.
+    assert!(be.put_retention(&b, "a.tar", &v, &Retention { mode: LockMode::Compliance, until_unix_s: now - 1 }, false).is_err());
+    assert!(be.extend_retention(&b, "a.tar", "no-such-version", now + 9000, LockMode::Governance).is_err());
+}

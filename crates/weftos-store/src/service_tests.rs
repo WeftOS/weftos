@@ -544,3 +544,16 @@ fn lifecycle_provisioning_is_checked_recorded_and_unsupported_on_local_backends(
     assert!(matches!(r.svc.lifecycle(&n), Err(StoreError::Backend(BackendError::Unsupported(_)))));
     assert!(r.chain.0.lock().unwrap().iter().all(|(k, _)| k != "store.lifecycle"), "a refused provisioning leaves no record");
 }
+
+#[test]
+fn extending_retention_needs_a_grant_and_a_store_made_with_lock() {
+    let r = rig();
+    let rel = StoreName::release("weft", P, "stable").unwrap();
+    r.svc.create_store(&rel, "daemon", Parties::defaults_for(&rel)).unwrap();
+    let ci = Caller::local(Principal::parse(CI_PRINCIPAL).unwrap());
+    // CI (append) is allowed to call it; this store has no lock, so it is refused for that.
+    assert!(matches!(r.svc.extend_retention(&ci, &rel, "a", "v", 4_000_000_000, crate::backend::LockMode::Compliance), Err(StoreError::Refused(_))));
+    assert!(r.svc.extend_retention(&local("stranger"), &rel, "a", "v", 4_000_000_000, crate::backend::LockMode::Compliance).is_err(), "no grant");
+    r.svc.grant(&rel, cog("reader"), Access::Read, "op").unwrap();
+    assert!(r.svc.extend_retention(&local("reader"), &rel, "a", "v", 4_000_000_000, crate::backend::LockMode::Compliance).is_err(), "read cannot hold");
+}
