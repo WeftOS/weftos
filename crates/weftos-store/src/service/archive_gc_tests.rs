@@ -324,3 +324,30 @@ fn a_bad_schedule_is_refused_and_turning_it_off_stops_runs() {
     assert!(r.svc.archive_gc_tick().unwrap().is_none());
     assert_eq!(left(&r).len(), 1);
 }
+
+/// Owner decision, 2026-11-08: nothing expires yet. No default, run, schedule or tick may delete an
+/// archive until someone names a number of days.
+#[test]
+fn nothing_expires_by_default_through_any_path() {
+    let r = rig(10_000);
+    for (b, d) in [("n-a", 1), ("p-a", 1), ("r-a", 1), ("w-a", 1)] {
+        put_set(&r, b, d, &["x", "y/z"]);
+    }
+    let all = left(&r).len();
+    assert_eq!(ArchiveKeep::default(), ArchiveKeep { node_days: None, project_days: None, release_days: None });
+    // A confirmed run with no days.
+    let rep = r.svc.archive_gc(&ArchiveKeep::default(), true, "op").unwrap();
+    assert_eq!((rep.expired.len(), rep.deleted_objects), (0, 0));
+    // No schedule until one is set; and a schedule with no days still deletes nothing, however long it waits.
+    assert!(r.svc.archive_schedule().is_none());
+    NOW.store(100_000 * DAY, Ordering::SeqCst);
+    assert!(r.svc.archive_gc_tick().unwrap().is_none());
+    r.svc.set_archive_schedule(Some(ArchiveSchedule { every_hours: 1, keep: ArchiveKeep::default(), confirmed: true })).unwrap();
+    NOW.store(200_000 * DAY, Ordering::SeqCst);
+    assert!(r.svc.archive_gc_tick().unwrap().is_none());
+    assert_eq!(left(&r).len(), all, "40 000 years later, still every object");
+    // Stores carry no override unless an operator sets one.
+    let p = project(&r, PROJECT);
+    assert_eq!(r.svc.archive_keep(&p).unwrap(), None);
+    assert!(r.chain.0.lock().unwrap().iter().all(|(k, _)| k != "store.archive.gc"));
+}
