@@ -150,3 +150,34 @@ fn fetch_writes_the_bundle_when_one_was_published_and_says_so_when_not() {
     assert_eq!(r["bundle_head"], "def");
     assert_eq!(std::fs::read(&out).unwrap(), b"BUNDLE-BYTES");
 }
+
+#[test]
+fn with_the_registry_switch_on_entries_live_in_a_store_only_the_daemon_writes() {
+    let (_d, svc) = rig();
+    let run_on = |verb: &str, p: Value, now: u64| run_with(&svc, "local", &format!("store.worktree.{verb}"), p, now, true);
+    run_on("create", json!({"project": PROJ, "slug": "feat-r", "branch": "feat/r", "base": "abc"}), 1).unwrap();
+    let src = tempfile::tempdir().unwrap();
+    let (paths, unc, chg) = files(src.path());
+    run_on(
+        "publish",
+        json!({"project": PROJ, "slug": "feat-r", "root": src.path().to_string_lossy(), "branch": "feat/r", "base": "abc", "head": "def",
+               "paths_z": paths, "uncommitted_z": unc, "changes_z": chg}),
+        2,
+    )
+    .unwrap();
+    let on = names_with("local", PROJ, "feat-r", true).unwrap();
+    let b = Op(svc.operator_objects());
+    assert_eq!(weftos_store::share_fetch::list_shared(&b, &on.reg).unwrap().len(), 1, "registry is in its own store");
+    assert!(weftos_store::share_fetch::list_shared(&b, &on.pr).unwrap().is_empty(), "nothing in the project store");
+    // a follower sees it through the verb
+    let st = src.path().join("f.json");
+    let f = run_on("follow", json!({"project": PROJ, "state": st.to_string_lossy()}), 3).unwrap();
+    assert_eq!(f["changes"][0]["change"], "new");
+    // a governed principal cannot write into the registry store (no grants of any kind on it)
+    let who = weftos_store::service::Caller::local(weftos_store::Principal::parse("agent:mallory").unwrap());
+    let rn = weftos_store::StoreName::release("local", PROJ, REGISTRY_CHANNEL).unwrap();
+    assert!(svc.put(&who, &rn, "worktrees/feat-r.json", b"{}", false).is_err());
+    // default (switch off) keeps the registry in the project store, as before
+    let off = names_with("local", PROJ, "feat-r", false).unwrap();
+    assert_eq!(off.reg, off.pr);
+}

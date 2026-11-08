@@ -134,7 +134,8 @@ Only the daemon creates, grants access to, or deletes a store.
   the plan and the copy is a conflict, not an overwrite; deletes re-check the etag just before
   (no conditional delete exists). Claims carry a fencing epoch that `promote` can require, and the
   daemon decides claim expiry on silence it observed on its own monotonic clock. Registry signing
-  mechanism and the key options: see
+  mechanism, the key options and the off-by-default daemon-only registry store
+  (`WEFTOS_WT_REGISTRY_STORE=1`): see
   `docs/research/adr126-s2-registry-signing-and-claim-clock.md`. The daemon refuses to `create` a slug that has already landed. The run is idempotent and
   safe to retry after a partial failure; once the report is written, later writes to that
   worktree bucket are ignored.

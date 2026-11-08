@@ -67,6 +67,16 @@ being copied server-side.
 3. **A dedicated per-project signing key.** Cleanest separation, but a new secret to store, hand out
    and rotate, which is what the owner asked not to invent.
 
+**Option 2 as built (off by default).** S1's grants are per store, not per key prefix, so "grant
+`worktrees/` to the daemon alone" is not expressible inside the project store. Instead, with
+`WEFTOS_WT_REGISTRY_STORE=1` the daemon keeps the registry in its own store (a release-kind store,
+channel `wt-registry`) created with no admins, writers or appenders. Only the daemon's operator path
+can write it; a governed principal's put is refused (tested). Follow, search, leftovers and the
+registry refresh all read and write there. Off, nothing changes and entries stay in the project
+store, unsigned. Turning it on does not move existing entries: followers see an empty registry until
+each worktree is republished or claimed. This protects against project writers, not against a store
+admin or the operator credentials.
+
 Recommendation: do 2 now (it needs only grants), and 1 as the real fix once the owner names the
 trusted-key location. Skip 3. Whichever is picked, the mechanism in `registry_sign` is unchanged;
 only the `EntrySigner` and `EntryVerifier` implementations differ.

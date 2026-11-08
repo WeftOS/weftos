@@ -152,13 +152,34 @@ struct Names {
     wt: String,
     pr_name: StoreName,
     pr: String,
+    /// Where the shared-worktree registry lives: the project store, or (switch on) a store of its
+    /// own that only the daemon writes.
+    reg: String,
 }
 
+/// Channel of the registry-only store used when the registry switch is on.
+const REGISTRY_CHANNEL: &str = "wt-registry";
+
+/// The switch: `WEFTOS_WT_REGISTRY_STORE=1` moves the registry out of the project store. Off by default.
+fn registry_switch() -> bool {
+    std::env::var("WEFTOS_WT_REGISTRY_STORE").is_ok_and(|v| v == "1")
+}
+
+#[cfg(test)]
 fn names(mesh: &str, project: &str, slug: &str) -> Result<Names, String> {
+    names_with(mesh, project, slug, false)
+}
+
+fn names_with(mesh: &str, project: &str, slug: &str, registry_store: bool) -> Result<Names, String> {
     let e = |e: weftos_store::StoreError| e.to_string();
     let wt_name = StoreName::worktree(mesh, project_ok(project)?, slug_ok(slug)?).map_err(e)?;
     let pr_name = StoreName::project(mesh, project).map_err(e)?;
-    Ok(Names { wt: wt_name.bucket(), pr: pr_name.bucket(), wt_name, pr_name })
+    let reg_name = if registry_store {
+        StoreName::release(mesh, project, REGISTRY_CHANNEL).map_err(e)?
+    } else {
+        pr_name.clone()
+    };
+    Ok(Names { wt: wt_name.bucket(), pr: pr_name.bucket(), reg: reg_name.bucket(), wt_name, pr_name })
 }
 
 fn entry_json(e: &RegistryEntry) -> Value {
@@ -201,11 +222,23 @@ fn refresh(b: &Op, pr: &str, slug: &str, wt: &str) -> Result<(), String> {
 
 /// Run one verb. `mesh` is the store-name mesh token of this daemon.
 pub fn run(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms: u64) -> Result<Value, String> {
+    run_with(svc, mesh, method, params, now_ms, registry_switch())
+}
+
+/// [`run`] with the registry switch given explicitly.
+pub fn run_with(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms: u64, registry_store: bool) -> Result<Value, String> {
+    let names = |m: &str, pr: &str, s: &str| names_with(m, pr, s, registry_store);
     let p: P = serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
     let e = |e: weftos_store::overlay::S2Error| e.to_string();
     let b = Op(svc.operator_objects());
     let project = project_ok(need(&p.project, "project")?)?.to_owned();
     let verb = method.strip_prefix("store.worktree.").unwrap_or(method);
+    if registry_store && !matches!(verb, "buckets") {
+        // No admins, writers or appenders: only the daemon's operator path can write it. Idempotent,
+        // so a worktree created before the switch was turned on still finds its registry store.
+        let rn = StoreName::release(mesh, &project, REGISTRY_CHANNEL).map_err(|e| e.to_string())?;
+        svc.ensure_store(&rn, "cli", Parties::default()).map_err(|e| e.to_string())?;
+    }
     match verb {
         "buckets" => {
             let n = names(mesh, &project, need(&p.slug, "slug")?)?;
@@ -217,6 +250,7 @@ pub fn run(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms: 
             // The project store may not exist yet on a fresh node; create it, never fail on "exists".
             svc.ensure_store(&n.pr_name, "cli", Parties::defaults_for(&n.pr_name)).map_err(|e| e.to_string())?;
             svc.ensure_store(&n.wt_name, "cli", Parties::defaults_for(&n.wt_name)).map_err(|e| e.to_string())?;
+
             if weftos_store::promote::is_promoted(&b, &n.wt).map_err(e)?.is_some() {
                 return Err(format!("worktree {slug} was already landed; use a new slug"));
             }
@@ -267,7 +301,7 @@ pub fn run(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms: 
             if let Some(note) = p.handoff.as_deref() {
                 mark_handoff(&b, &n.wt, &writer, note, now_ms).map_err(e)?;
             }
-            refresh(&b, &n.pr, slug, &n.wt)?;
+            refresh(&b, &n.reg, slug, &n.wt)?;
             Ok(json!({
                 "uploaded": rep.uploaded, "unchanged": rep.unchanged, "removed": rep.removed,
                 "skipped": rep.skipped.iter().map(|(k, w)| format!("{k}: {w:?}")).collect::<Vec<_>>(),
@@ -297,7 +331,7 @@ pub fn run(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms: 
                 let mut w = claim_watch().lock().map_err(|_| "claim watch poisoned".to_string())?;
                 claim_merge_observed(&b, &n.wt, &who(&p), &mut w, mono_ms(), now_ms).map_err(e)?
             };
-            refresh(&b, &n.pr, slug, &n.wt)?;
+            refresh(&b, &n.reg, slug, &n.wt)?;
             Ok(json!({"state": h.state, "epoch": h.epoch,
                       "merger": h.merger.map(|m| format!("{}@{}", m.agent, m.host))}))
         }
@@ -331,14 +365,14 @@ pub fn run(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms: 
             let n = names(mesh, &project, "x")?;
             let sp = PathBuf::from(need(&p.state, "state")?);
             let mut st = FollowState::load(&sp).map_err(e)?;
-            let ch = if p.confirmed { follower::poll_confirmed(&b, &n.pr, &mut st) } else { follower::poll(&b, &n.pr, &mut st) }
+            let ch = if p.confirmed { follower::poll_confirmed(&b, &n.reg, &mut st) } else { follower::poll(&b, &n.reg, &mut st) }
                 .map_err(e)?;
             st.save(&sp).map_err(e)?;
             Ok(json!({"changes": ch.iter().map(change_json).collect::<Vec<_>>()}))
         }
         "search" => {
             let n = names(mesh, &project, "x")?;
-            let entries = list_shared(&b, &n.pr).map_err(e)?;
+            let entries = list_shared(&b, &n.reg).map_err(e)?;
             let r = follower::search_docs(&b, &entries, need(&p.query, "query")?);
             Ok(json!({
                 "hits": r.hits.iter().map(|h| json!({"slug": h.slug, "path": h.path, "title": h.title, "state": h.state})).collect::<Vec<_>>(),
@@ -347,7 +381,7 @@ pub fn run(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms: 
         }
         "leftovers" => {
             let n = names(mesh, &project, "x")?;
-            let entries = weftos_store::share_fetch::list_shared_lenient(&b, &n.pr).map_err(e)?.0;
+            let entries = weftos_store::share_fetch::list_shared_lenient(&b, &n.reg).map_err(e)?.0;
             let l = follower::leftovers(&entries, now_ms, &LeftoverPolicy::default());
             Ok(json!({"leftovers": l.iter().map(|x| json!({"why": why_str(x.why), "idle_ms": x.idle_ms, "worktree": entry_json(&x.entry)})).collect::<Vec<_>>()}))
         }

@@ -6,7 +6,8 @@
 #   worktree-store.sh land [land.sh args]       land.sh, then promote the store (only if it landed)
 #   worktree-store.sh fetch <slug> <dest> [--bundle-ref REF]
 #                                               pull a shared tree (and its commits) from another node
-#   worktree-store.sh claim <slug>              take the merge of a handed-off worktree
+#   worktree-store.sh claim <slug>              take the merge of a handed-off worktree (saves the claim epoch;
+#                                               `land` presents it, or WTS_EPOCH)
 #   worktree-store.sh follow [--state FILE]     what changed among unmerged worktrees since last look
 #   worktree-store.sh search <query>            docs/planning across all unmerged worktrees
 #   worktree-store.sh leftovers [--json]        forgotten / unclaimed / abandoned worktrees
@@ -58,6 +59,8 @@ project_id() {
     "$weaver" project id 2>/dev/null || die "cannot resolve project id; set WTS_PROJECT"
 }
 
+epoch_file() { printf '%s/weftos/claim-%s-%s.epoch' "${XDG_STATE_HOME:-$HOME/.local/state}" "$(project_id)" "$1"; }
+
 target_ref() { git rev-parse --verify --quiet "${AGF_TARGET_REF:-origin/HEAD}" 2>/dev/null || git rev-parse --verify --quiet master; }
 
 cmd=${1:-}; shift || true
@@ -107,7 +110,12 @@ share)
 land)
     slug=$(slug_of); check_slug "$slug"
     "$agf/land.sh" "$@"   # exits non-zero (set -e) if nothing landed: no promotion then
-    store promote --project "$(project_id)" --slug "$slug"
+    # A claimer lands under the epoch its claim returned (fencing): WTS_EPOCH, else the one `claim`
+    # saved for this slug. No epoch known = no fencing, as before.
+    epoch=${WTS_EPOCH:-}
+    [ -z "$epoch" ] && [ -f "$(epoch_file "$slug")" ] && epoch=$(cat "$(epoch_file "$slug")")
+    [ -z "$epoch" ] || [[ $epoch =~ ^[0-9]{1,18}$ ]] || die "bad epoch '$epoch'"
+    store promote --project "$(project_id)" --slug "$slug" ${epoch:+--epoch "$epoch"}
     ;;
 fetch)
     slug=${1:?usage: fetch <slug> <dest>}; dest=${2:?usage: fetch <slug> <dest>}; shift 2
@@ -128,7 +136,14 @@ fetch)
     ;;
 claim)
     slug=${1:?usage: claim <slug>}; check_slug "$slug"
-    store_must claim --project "$(project_id)" --slug "$slug"
+    out=$(store_must claim --project "$(project_id)" --slug "$slug")
+    printf '%s\n' "$out"
+    # Keep the epoch of this claim so `land` can present it.
+    epoch=$(printf '%s' "$out" | sed -n 's/.*"epoch"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n1)
+    if [ -n "$epoch" ]; then
+        mkdir -p "$(dirname "$(epoch_file "$slug")")" && printf '%s\n' "$epoch" >"$(epoch_file "$slug")"
+        warn "claim epoch $epoch saved for land"
+    fi
     ;;
 follow)
     pid=$(project_id); [[ $pid =~ ^[A-Za-z0-9]{1,40}$ ]] || die "unexpected project id '$pid'"

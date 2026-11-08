@@ -14,6 +14,7 @@ printf '%q ' "$@" >>"$WTS_LOG"; echo >>"$WTS_LOG"
 if [ "$1 $2 $3" = "store worktree buckets" ]; then echo "w-01abc-aaaaaaaaaaaa p-01abc"; fi
 if [ "$1 $2" = "project id" ]; then echo 01ABC; fi
 if [ "$1 $2 $3" = "store worktree fetch" ]; then : ; fi
+if [ "$1 $2 $3" = "store worktree claim" ]; then printf '{\n  "state": "claimed",\n  "epoch": %s\n}\n' "${CLAIM_EPOCH:-4}"; fi
 exit "${WEAVER_RC:-0}"
 W
 cat >"$t/agf/land.sh" <<'L'
@@ -43,6 +44,20 @@ ok "base is the master tip" "grep -q -- \"--base $(git rev-parse master)\" '$t/l
 # the path list handed to weaver includes the untracked doc and excludes ignored files
 pz=$(grep -o -- '--paths-z [^ ]*' "$t/log" | cut -d' ' -f2)
 ok "paths file removed after run (trap)" "[ ! -e '$pz' ]"
+
+# claim saves its epoch and land presents it; an explicit WTS_EPOCH wins; garbage is refused
+export XDG_STATE_HOME="$t/state"
+: >"$t/log"; "$here/worktree-store.sh" claim feat-s2 2>/dev/null
+ok "claim saved the epoch" "[ \"\$(cat '$t'/state/weftos/claim-01ABC-feat-s2.epoch)\" = 4 ]"
+: >"$t/log"; LAND_RC=0 "$here/worktree-store.sh" land
+ok "land presents the saved epoch" "grep -q -- '--epoch 4' '$t/log'"
+: >"$t/log"; WTS_EPOCH=9 "$here/worktree-store.sh" land
+ok "WTS_EPOCH overrides the saved epoch" "grep -q -- '--epoch 9' '$t/log' && ! grep -q -- '--epoch 4' '$t/log'"
+: >"$t/log"; WTS_EPOCH='1;rm' "$here/worktree-store.sh" land 2>/dev/null && rc=0 || rc=$?
+ok "a non-numeric epoch is refused" "[ $rc != 0 ] && ! grep -q promote '$t/log'"
+rm -f "$t"/state/weftos/claim-*.epoch
+: >"$t/log"; "$here/worktree-store.sh" land
+ok "no epoch known: promote without one" "grep -q '^store worktree promote' '$t/log' && ! grep -q -- '--epoch' '$t/log'"
 
 # land only promotes when land.sh succeeds
 : >"$t/log"; LAND_RC=2 "$here/worktree-store.sh" land && rc=0 || rc=$?
