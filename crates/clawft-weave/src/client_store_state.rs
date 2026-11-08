@@ -128,7 +128,7 @@ impl GateState for JournalState {
         }
         let (scope, mesh_hex) = (scope_of(account, &mesh), hex::encode(mesh.0));
         let mut events: Vec<ScopeEvent> = Vec::new();
-        let mut snaps: Vec<SignedGateSnapshot> = Vec::new();
+        let mut snaps: Vec<(u64, SignedGateSnapshot)> = Vec::new();
         for e in self.log.all() {
             if e.source != SOURCE {
                 continue;
@@ -139,7 +139,8 @@ impl GateState for JournalState {
             }
             if e.kind == SNAPSHOT_KIND {
                 // A snapshot record for this account that does not parse is a corrupt record.
-                snaps.push(serde_json::from_value(p.get("signed").cloned().unwrap_or(Value::Null)).map_err(|e| format!("snapshot record: {e}"))?);
+                let signed = serde_json::from_value(p.get("signed").cloned().unwrap_or(Value::Null)).map_err(|e| format!("snapshot record: {e}"))?;
+                snaps.push((e.seq, signed));
             } else if let Some(kind) = e.kind.strip_prefix(KIND_PREFIX) {
                 events.push((e.seq, kind.to_owned(), p.get("ev").cloned().unwrap_or(Value::Null)));
             }
@@ -151,10 +152,10 @@ impl GateState for JournalState {
         // gate back. One signed by a key we no longer hold is passed over; any other failure
         // means the chain's record is wrong: refuse to open.
         let mut best: Option<usize> = None;
-        for (i, s) in snaps.iter().enumerate() {
-            match verify_snapshot(s, &scope, key) {
+        for (i, (at, s)) in snaps.iter().enumerate() {
+            match verify_snapshot(s, &scope, key, *at) {
                 Ok(()) => {
-                    if best.is_none_or(|b| s.snapshot.through_seq >= snaps[b].snapshot.through_seq) {
+                    if best.is_none_or(|b| s.snapshot.through_seq >= snaps[b].1.snapshot.through_seq) {
                         best = Some(i);
                     }
                 }
@@ -162,7 +163,7 @@ impl GateState for JournalState {
                 Err(e) => return Err(bad(e)),
             }
         }
-        let start = best.map(|i| &snaps[i].snapshot);
+        let start = best.map(|i| &snaps[i].1.snapshot);
 
         // The events between where we start and any snapshot that claims more must all still be
         // here. Unverified snapshots are used only for this, only to say "something is missing":
@@ -170,7 +171,7 @@ impl GateState for JournalState {
         // event), never open on less than the chain holds.
         let upto = |q: u64| events.iter().filter(|(s, ..)| *s <= q).count() as u64;
         let (from, from_count) = start.map_or((0, 0), |s| (s.through_seq, s.event_count));
-        for s in snaps.iter().map(|s| &s.snapshot).filter(|s| s.through_seq > from || start.is_none()) {
+        for s in snaps.iter().map(|(_, s)| &s.snapshot).filter(|s| s.through_seq > from || start.is_none()) {
             if upto(s.through_seq) - upto(from) != s.event_count.saturating_sub(from_count) {
                 return Err("a snapshot covers events that are no longer here (history pruned past the snapshot we can verify)".into());
             }
@@ -253,28 +254,32 @@ impl GateState for JournalState {
     }
 }
 
-/// An in-memory log, for tests.
+/// An in-memory log, for tests. Sequence numbers only go up, as on a real chain, even if
+/// events are removed (pruned).
 #[derive(Default)]
-pub struct MemLog(Mutex<Vec<LoggedEvent>>);
+pub struct MemLog {
+    events: Mutex<Vec<LoggedEvent>>,
+    last_seq: std::sync::atomic::AtomicU64,
+}
 
 impl MemLog {
     pub fn len(&self) -> usize {
-        self.0.lock().unwrap_or_else(|e| e.into_inner()).len()
+        self.events.lock().unwrap_or_else(|e| e.into_inner()).len()
     }
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
     /// Append a raw record, as another writer on a shared chain would; its `seq` is assigned.
     pub fn push(&self, mut e: LoggedEvent) -> u64 {
-        let mut v = self.0.lock().unwrap_or_else(|x| x.into_inner());
-        e.seq = v.len() as u64 + 1;
+        let mut v = self.events.lock().unwrap_or_else(|x| x.into_inner());
+        e.seq = self.last_seq.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
         let seq = e.seq;
         v.push(e);
         seq
     }
     /// Edit the stored events in place (tests that tamper with the chain's record).
     pub fn edit(&self, f: impl FnOnce(&mut Vec<LoggedEvent>)) {
-        f(&mut self.0.lock().unwrap_or_else(|x| x.into_inner()));
+        f(&mut self.events.lock().unwrap_or_else(|x| x.into_inner()));
     }
 }
 
@@ -283,6 +288,6 @@ impl EventLog for MemLog {
         self.push(LoggedEvent { seq: 0, source: source.into(), kind: kind.into(), payload: Some(payload) })
     }
     fn all(&self) -> Vec<LoggedEvent> {
-        self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.events.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 }

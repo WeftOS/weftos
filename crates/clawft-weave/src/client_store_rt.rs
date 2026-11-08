@@ -19,7 +19,7 @@ use weftos_store::audit::AuditSink;
 use weftos_store::service::{ChainSink, ExposureGate};
 
 use crate::client_store::ClientStore;
-use crate::client_store_snapshot::SnapshotKey;
+use crate::client_store_snapshot::{Rotation, RotatingKey, SnapshotKey};
 use crate::client_store_state::{EventLog, GateState, JournalState};
 #[cfg(feature = "exochain")]
 use crate::client_store_state::LoggedEvent;
@@ -81,6 +81,47 @@ impl EventLog for ChainLog {
             .into_iter()
             .map(|e| LoggedEvent { seq: e.sequence, source: e.source, kind: e.kind, payload: e.payload })
             .collect()
+    }
+}
+
+/// The chain key rotations in `events` (`identity.key_rotation`, dual-signed by the old and new
+/// key). One that does not verify, or whose keys are malformed, is ignored.
+#[cfg(feature = "exochain")]
+pub fn rotations_in(events: &[LoggedEvent]) -> Vec<Rotation> {
+    use clawft_kernel::key_rotation::{KIND_KEY_ROTATION, KeyRotationPayload, SOURCE_IDENTITY, verify_key_rotation_payload};
+    events
+        .iter()
+        .filter(|e| e.source == SOURCE_IDENTITY && e.kind == KIND_KEY_ROTATION)
+        .filter_map(|e| {
+            let p = KeyRotationPayload::from_event_payload(e.payload.as_ref()?).ok()?;
+            verify_key_rotation_payload(&p).ok()?;
+            Some(Rotation { old: KeyRotationPayload::decode_pubkey(&p.old_pubkey_hex).ok()?, new: KeyRotationPayload::decode_pubkey(&p.new_pubkey_hex).ok()?, seq: e.seq })
+        })
+        .collect()
+}
+
+/// The daemon's chain key as the gate's snapshot key. It reads the chain's current signing key
+/// and rotation history at each use, so a rotation while the daemon runs is followed: new
+/// snapshots are signed by the new key and ones signed by a retired key still verify if they
+/// were written before it was rotated out.
+#[cfg(feature = "exochain")]
+pub struct ChainKey(pub Arc<clawft_kernel::chain::ChainManager>);
+
+#[cfg(feature = "exochain")]
+impl ChainKey {
+    fn current(&self) -> Option<RotatingKey> {
+        let key = self.0.signing_key_clone()?;
+        Some(RotatingKey { key, rotations: rotations_in(&ChainLog(self.0.clone()).all()) })
+    }
+}
+
+#[cfg(feature = "exochain")]
+impl SnapshotKey for ChainKey {
+    fn sign(&self, msg: &[u8]) -> Option<(String, Vec<u8>)> {
+        self.current()?.sign(msg)
+    }
+    fn verify(&self, signer: &str, msg: &[u8], sig: &[u8], at_seq: u64) -> bool {
+        self.current().is_some_and(|k| k.verify(signer, msg, sig, at_seq))
     }
 }
 

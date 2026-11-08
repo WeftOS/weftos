@@ -679,8 +679,8 @@ mod journal {
         fn sign(&self, m: &[u8]) -> Option<(String, Vec<u8>)> {
             self.1.sign(m)
         }
-        fn verify(&self, who: &str, m: &[u8], sig: &[u8]) -> bool {
-            self.0.verify(who, m, sig) || self.1.verify(who, m, sig)
+        fn verify(&self, who: &str, m: &[u8], sig: &[u8], at: u64) -> bool {
+            self.0.verify(who, m, sig, at) || self.1.verify(who, m, sig, at)
         }
     }
     fn key_n(n: u8) -> Ed25519Key {
@@ -789,5 +789,56 @@ mod journal {
         let again = open_k(d.path(), &log, clock, Some(sk())).unwrap();
         let full = open_k(d.path(), &without_snapshots(&log), clock, Some(sk())).unwrap();
         assert_eq!(state(&again), state(&full));
+    }
+
+    use crate::client_store_snapshot::{RotatingKey, Rotation, key_valid_at};
+
+    #[test]
+    fn a_retired_key_stands_only_for_records_before_its_rotation() {
+        let (k1, k2, k3) = ([1u8; 32], [2u8; 32], [3u8; 32]);
+        let r = [Rotation { old: k1, new: k2, seq: 10 }, Rotation { old: k2, new: k3, seq: 20 }];
+        assert!(key_valid_at(&k3, &r, &k3, 9999), "the current key");
+        assert!(key_valid_at(&k3, &r, &k2, 19) && !key_valid_at(&k3, &r, &k2, 20));
+        assert!(key_valid_at(&k3, &r, &k1, 9) && !key_valid_at(&k3, &r, &k1, 10));
+        assert!(!key_valid_at(&k3, &r, &[9u8; 32], 1), "a key never in the chain of rotations");
+        // A rotation that does not lead to the current key vouches for nothing.
+        assert!(!key_valid_at(&k3, &[Rotation { old: k1, new: k2, seq: 10 }], &k1, 5));
+        // A loop in the records does not hang.
+        assert!(!key_valid_at(&k3, &[Rotation { old: k3, new: k3, seq: 1 }], &k1, 0));
+    }
+
+    #[test]
+    fn a_snapshot_signed_before_a_key_rotation_still_verifies_and_one_signed_after_does_not() {
+        let d = tempfile::tempdir().unwrap();
+        let log = Arc::new(MemLog::default());
+        let name = {
+            let s = open_k(d.path(), &log, clock, Some(sk())).unwrap(); // key 5
+            let name = churn(&s);
+            s.snapshot().unwrap();
+            name
+        };
+        let rot_seq = log.append("identity", "identity.key_rotation", json!({}));
+        log.edit(|v| v.retain(|e| e.kind == SNAPSHOT_KIND || e.seq >= rot_seq)); // the old segment is pruned
+        let rotating: Arc<dyn SnapshotKey> = Arc::new(RotatingKey {
+            key: SigningKey::from_bytes(&[8; 32]),
+            rotations: vec![Rotation { old: key_n(5).0.verifying_key().to_bytes(), new: SigningKey::from_bytes(&[8; 32]).verifying_key().to_bytes(), seq: rot_seq }],
+        });
+        // The pre-rotation snapshot (key 5) is accepted under the new key's rotation history.
+        let s = open_k(d.path(), &log, clock, Some(rotating.clone())).unwrap();
+        assert!(s.put(&ClientCaller::Local(cog("c1")), &name, "k", b"v", false).is_ok());
+        drop(s);
+        // Someone holding the retired key forges a snapshot after the rotation.
+        let mut forged = snapshots(&log).pop().unwrap().snapshot;
+        forged.state["grants"].as_array_mut().unwrap().push(json!({
+            "principal": {"kind": "weftos", "account": null, "mesh": null, "id": "evil"},
+            "store": xname(), "access": "admin"}));
+        publish(&log, forged, true, &key_n(5));
+        let s = open_k(d.path(), &log, clock, Some(rotating)).unwrap();
+        let evil_in_gate = |s: &ClientStore| s.gate().authorize(&Principal::WeftosAccount { id: "evil".into() }, &xname(), Access::Read, MS / 1000).0.is_ok();
+        assert!(!evil_in_gate(&s), "the late forgery was passed over");
+        // Contrast: a key check blind to rotation takes that same record and the forgery gets in.
+        let s = open_k(d.path(), &log, clock, Some(sk())).unwrap();
+        assert!(evil_in_gate(&s), "without the sequence check the old key forges into the gate (S1's own grant table still refuses)");
+        assert!(refused(s.get(&ClientCaller::Weftos { id: "evil".into() }, &name, "k")), "the second layer holds");
     }
 }

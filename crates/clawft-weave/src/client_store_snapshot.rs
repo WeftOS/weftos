@@ -110,7 +110,36 @@ pub struct SignedGateSnapshot {
 pub trait SnapshotKey: Send + Sync {
     /// `(signer id, signature)`, or `None` if this key will not sign these bytes.
     fn sign(&self, msg: &[u8]) -> Option<(String, Vec<u8>)>;
-    fn verify(&self, signer: &str, msg: &[u8], sig: &[u8]) -> bool;
+    /// `at_seq` is the chain sequence of the record that carries the snapshot: a key that was
+    /// rotated out stands for snapshots written before its rotation, not after.
+    fn verify(&self, signer: &str, msg: &[u8], sig: &[u8], at_seq: u64) -> bool;
+}
+
+/// One accepted chain key rotation: `old` was replaced by `new` at chain sequence `seq`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Rotation {
+    pub old: [u8; 32],
+    pub new: [u8; 32],
+    pub seq: u64,
+}
+
+/// Was `signer` a key the chain could sign with at `at_seq`, given the current key and the
+/// rotations that led to it? The current key always; a retired one only for records before the
+/// rotation that retired it, reached by walking the rotations back from the current key.
+pub fn key_valid_at(current: &[u8; 32], rotations: &[Rotation], signer: &[u8; 32], at_seq: u64) -> bool {
+    if signer == current {
+        return true;
+    }
+    let mut cur = *current;
+    for _ in 0..=rotations.len() {
+        // The rotation into `cur`; if there are several, the latest.
+        let Some(r) = rotations.iter().filter(|r| r.new == cur && r.old != cur).max_by_key(|r| r.seq) else { return false };
+        if r.old == *signer {
+            return at_seq < r.seq;
+        }
+        cur = r.old;
+    }
+    false
 }
 
 /// An Ed25519 key as a [`SnapshotKey`]; verifies only its own signatures, with `verify_strict`.
@@ -123,7 +152,7 @@ impl SnapshotKey for Ed25519Key {
         }
         Some((hex::encode(self.0.verifying_key().to_bytes()), self.0.sign(msg).to_bytes().to_vec()))
     }
-    fn verify(&self, signer: &str, msg: &[u8], sig: &[u8]) -> bool {
+    fn verify(&self, signer: &str, msg: &[u8], sig: &[u8], _at_seq: u64) -> bool {
         let vk = self.0.verifying_key();
         signer == hex::encode(vk.to_bytes()) && Signature::from_slice(sig).is_ok_and(|s| vk.verify_strict(msg, &s).is_ok())
     }
@@ -152,13 +181,37 @@ pub fn signing_bytes(s: &GateSnapshot) -> Vec<u8> {
     v
 }
 
+/// An Ed25519 key with the rotations that led to it: signs with the current key and verifies
+/// snapshots from earlier keys that were rotated out after writing them.
+pub struct RotatingKey {
+    pub key: SigningKey,
+    pub rotations: Vec<Rotation>,
+}
+
+impl SnapshotKey for RotatingKey {
+    fn sign(&self, msg: &[u8]) -> Option<(String, Vec<u8>)> {
+        Ed25519Key(self.key.clone()).sign(msg)
+    }
+    fn verify(&self, signer: &str, msg: &[u8], sig: &[u8], at_seq: u64) -> bool {
+        let Some(who) = hex::decode(signer).ok().and_then(|v| <[u8; 32]>::try_from(v).ok()) else { return false };
+        if !key_valid_at(&self.key.verifying_key().to_bytes(), &self.rotations, &who, at_seq) {
+            return false;
+        }
+        let (Ok(vk), Ok(sig)) = (ed25519_dalek::VerifyingKey::from_bytes(&who), Signature::from_slice(sig)) else { return false };
+        vk.verify_strict(msg, &sig).is_ok()
+    }
+}
+
 /// The hash a snapshot carries for `state`.
 pub fn state_hash(state: &Value) -> String {
     sha256_hex(canonical(state).as_bytes())
 }
 
-/// Checks 1 to 3. `key` is `None` when the daemon has no chain key.
-pub fn verify_snapshot(signed: &SignedGateSnapshot, scope: &str, key: Option<&dyn SnapshotKey>) -> Result<(), SnapshotError> {
+/// Checks 1 to 3. `key` is `None` when the daemon has no chain key. `at_seq` is the chain
+/// sequence of the record that carries `signed`.
+pub fn verify_snapshot(
+    signed: &SignedGateSnapshot, scope: &str, key: Option<&dyn SnapshotKey>, at_seq: u64,
+) -> Result<(), SnapshotError> {
     let s = &signed.snapshot;
     if s.version != SNAPSHOT_VERSION {
         return Err(SnapshotError::Version(s.version));
@@ -171,7 +224,7 @@ pub fn verify_snapshot(signed: &SignedGateSnapshot, scope: &str, key: Option<&dy
     }
     let key = key.ok_or(SnapshotError::NoKey)?;
     let sig = hex::decode(&signed.signature).map_err(|_| SnapshotError::BadSignature)?;
-    if !key.verify(&signed.signer, &signing_bytes(s), &sig) {
+    if !key.verify(&signed.signer, &signing_bytes(s), &sig, at_seq) {
         return Err(SnapshotError::BadSignature);
     }
     Ok(())

@@ -1321,9 +1321,9 @@ pub async fn run(
             let gate_log = chain.clone().map(|c| {
                 Arc::new(crate::client_store_rt::ChainLog(c)) as Arc<dyn crate::client_store_state::EventLog>
             });
-            // Snapshots are signed with the chain's own key, so the daemon already trusts it.
-            let gate_key = chain.as_ref().and_then(|c| c.signing_key_clone()).map(|k| {
-                Arc::new(crate::client_store_snapshot::Ed25519Key(k)) as Arc<dyn crate::client_store_snapshot::SnapshotKey>
+            // Snapshots are signed with the chain's own key (following its rotations), which the daemon already trusts.
+            let gate_key = chain.as_ref().filter(|c| c.has_signing_key()).map(|c| {
+                Arc::new(crate::client_store_rt::ChainKey(c.clone())) as Arc<dyn crate::client_store_snapshot::SnapshotKey>
             });
             match crate::client_store_rt::start(&runtime_dir, reg, audit_fn, gate_log, gate_key) {
                 Ok(Some(cs)) => {
