@@ -31,6 +31,19 @@ use weftos_store::StoreService;
 pub const MAX_BODY: usize = 1024 * 1024;
 const BODY_TIME: Duration = Duration::from_secs(10);
 
+/// Told about every bucket notification that concerns one of this daemon's stores, after it has
+/// been logged. This is the hook for the follower wake-ups of ADR-126 §4a (S2): an implementation
+/// calls `weftos_store::wake::registry_hints(body, bucket)` and, when that is non-empty, publishes a
+/// wake message on the project's mesh relay topic. A wake is only a hint, so losing one is fine.
+///
+/// `notified` runs on a blocking thread, once per store bucket the body touches; keep it quick and do
+/// not hold the receiver up on the network (hand off to a channel). A panic in it is caught and
+/// logged, and does not change the answer to RustFS.
+pub trait WakeSink: Send + Sync {
+    /// `store` is the `weftos://` name, `bucket` its bucket, `body` the whole notification JSON.
+    fn notified(&self, store: &str, bucket: &str, body: &str);
+}
+
 /// Where a running receiver listens and the secret it checks.
 #[derive(Debug, Clone)]
 pub struct Receiver {
@@ -74,6 +87,11 @@ pub fn load_token(dir: &Path) -> Result<String, String> {
 
 /// Start the receiver on `addr` (loopback). Returns where it listens.
 pub async fn serve(svc: Arc<StoreService>, addr: SocketAddr, token: String) -> Result<Receiver, String> {
+    serve_with(svc, addr, token, None).await
+}
+
+/// [`serve`], with a [`WakeSink`] to tell about notifications for this daemon's stores.
+pub async fn serve_with(svc: Arc<StoreService>, addr: SocketAddr, token: String, wake: Option<Arc<dyn WakeSink>>) -> Result<Receiver, String> {
     if !addr.ip().is_loopback() {
         return Err(format!("store ingest address {addr}: loopback only"));
     }
@@ -91,9 +109,9 @@ pub async fn serve(svc: Arc<StoreService>, addr: SocketAddr, token: String) -> R
                     continue;
                 }
             };
-            let (svc, token) = (svc.clone(), token.clone());
+            let (svc, token, wake) = (svc.clone(), token.clone(), wake.clone());
             tokio::spawn(async move {
-                let f = hyper::service::service_fn(move |req| handle(req, svc.clone(), token.clone()));
+                let f = hyper::service::service_fn(move |req| handle(req, svc.clone(), token.clone(), wake.clone()));
                 if let Err(e) = hyper::server::conn::http1::Builder::new().serve_connection(TokioIo::new(stream), f).await {
                     tracing::debug!(error = %e, "store ingest connection ended");
                 }
@@ -114,7 +132,7 @@ fn same(a: &str, b: &str) -> bool {
     a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |d, (x, y)| d | (x ^ y)) == 0
 }
 
-async fn handle(req: Request<Incoming>, svc: Arc<StoreService>, token: Arc<str>) -> Result<Response<Full<Bytes>>, std::convert::Infallible> {
+async fn handle(req: Request<Incoming>, svc: Arc<StoreService>, token: Arc<str>, wake: Option<Arc<dyn WakeSink>>) -> Result<Response<Full<Bytes>>, std::convert::Infallible> {
     // /store/ingest/<token>/<stream>
     let path = req.uri().path().to_owned();
     let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
@@ -133,12 +151,12 @@ async fn handle(req: Request<Incoming>, svc: Arc<StoreService>, token: Arc<str>)
     };
     let Ok(text) = String::from_utf8(body.to_vec()) else { return Ok(reply(StatusCode::BAD_REQUEST, "not utf-8")) };
     // The service calls are quick but take locks and may reach a backend: not on the reactor.
-    let done = tokio::task::spawn_blocking(move || ingest(&svc, stream, &text)).await.unwrap_or(false);
+    let done = tokio::task::spawn_blocking(move || ingest(&svc, stream, &text, wake.as_deref())).await.unwrap_or(false);
     Ok(if done { reply(StatusCode::OK, "ok") } else { reply(StatusCode::BAD_REQUEST, "not a RustFS record") })
 }
 
 /// Hand one body to the service. False if it was not a record of that stream.
-fn ingest(svc: &StoreService, stream: &str, body: &str) -> bool {
+fn ingest(svc: &StoreService, stream: &str, body: &str, wake: Option<&dyn WakeSink>) -> bool {
     match stream {
         "audit" => {
             // One JSON object, or newline-separated ones.
@@ -148,18 +166,46 @@ fn ingest(svc: &StoreService, stream: &str, body: &str) -> bool {
             }
             any
         }
-        _ => !weftos_store::audit::parse_notification(body).is_empty() && {
+        _ => {
+            let recs = weftos_store::audit::parse_notification(body);
+            if recs.is_empty() {
+                return false;
+            }
             svc.ingest_notification(body);
+            if let Some(w) = wake {
+                tell(svc, w, &recs, body);
+            }
             true
-        },
+        }
+    }
+}
+
+/// Tell the sink once per store whose bucket the notification names. Records for buckets that are
+/// not this daemon's stores are not passed on, as with the activity log.
+fn tell(svc: &StoreService, w: &dyn WakeSink, recs: &[weftos_store::audit::Raw], body: &str) {
+    let mut seen = std::collections::BTreeSet::new();
+    for name in svc.store_names() {
+        let Ok(parsed) = weftos_store::StoreName::parse(&name) else { continue };
+        let bucket = parsed.bucket();
+        if recs.iter().any(|r| r.bucket == bucket) && seen.insert(bucket.clone()) {
+            let called = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| w.notified(&name, &bucket, body)));
+            if called.is_err() {
+                tracing::warn!(store = %name, "store ingest wake sink panicked; ignored");
+            }
+        }
     }
 }
 
 /// Start the receiver if `WEFTOS_STORE_INGEST_ADDR` is set. Writes the URLs to `dir/store-ingest-urls`.
 pub async fn start_from_env(svc: Arc<StoreService>, dir: &Path) -> Result<Option<Receiver>, String> {
+    start_from_env_with(svc, dir, None).await
+}
+
+/// [`start_from_env`], with a [`WakeSink`] (the daemon passes one once the mesh relay can carry wake messages).
+pub async fn start_from_env_with(svc: Arc<StoreService>, dir: &Path, wake: Option<Arc<dyn WakeSink>>) -> Result<Option<Receiver>, String> {
     let Some(a) = std::env::var("WEFTOS_STORE_INGEST_ADDR").ok().filter(|v| !v.is_empty()) else { return Ok(None) };
     let addr: SocketAddr = a.parse().map_err(|e| format!("WEFTOS_STORE_INGEST_ADDR {a:?}: {e}"))?;
-    let rx = serve(svc, addr, load_token(dir)?).await?;
+    let rx = serve_with(svc, addr, load_token(dir)?, wake).await?;
     let urls = format!("{}\n{}\n", rx.url("audit"), rx.url("notify"));
     write_private(&dir.join("store-ingest-urls"), urls.as_bytes()).map_err(|e| e.to_string())?;
     tracing::info!(addr = %rx.addr, "store ingest listening (URLs in store-ingest-urls)");

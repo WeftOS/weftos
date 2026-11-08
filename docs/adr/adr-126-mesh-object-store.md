@@ -352,6 +352,13 @@ Reaching it takes 1.8e19 appends, so this is a guard against a damaged or hostil
 Notes: `put_stream` through the service logs the real size. A multipart part PUT is retried (same part number replaces the part); nothing
 else that writes is. The breaker counts only "could not reach RustFS" (no connection, timeout, 502-504), not a 500 or 429.
 
+**Follower wake hook in the receiver (S2's ask, 2026-11-08).** `store_ingest::WakeSink::notified(store, bucket, body)` is called after a bucket
+notification has been logged, once per store of this daemon whose bucket the body names (other buckets, the audit stream, bad bodies and wrong
+tokens never reach it; a panic in the sink is caught and does not change the answer to RustFS). Pass one with `serve_with` /
+`start_from_env_with`; the daemon passes none yet. `weftos_store::wake::registry_hints` lives on S2's branch, not here, so the sink is the
+seam: after the two branches merge, S2's implementation is `fn notified(&self, _store, bucket, body) { let h = registry_hints(body, bucket);
+if !h.is_empty() { /* publish a wake on the project's relay topic */ } }`. The relay hop itself is the mesh transport card and is not started.
+
 **The daemon now has the receiver** (`clawft-weave/src/store_ingest.rs`, 2026-11-08): a loopback HTTP listener, off unless
 `WEFTOS_STORE_INGEST_ADDR` is set, POST only, 1 MiB cap, authenticated by a 256-bit secret in the URL path
 (`store-ingest-token`, 0600; the URLs are written to `store-ingest-urls`), because RustFS's webhook `auth_token` is unverified.

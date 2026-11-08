@@ -42,6 +42,30 @@ async fn rig() -> Rig {
     Rig { svc, sink, be, rx, store }
 }
 
+#[derive(Default)]
+struct Wakes(Mutex<Vec<(String, String, String)>>);
+impl WakeSink for Wakes {
+    fn notified(&self, store: &str, bucket: &str, body: &str) {
+        self.0.lock().unwrap().push((store.into(), bucket.into(), body.into()));
+    }
+}
+struct Boom;
+impl WakeSink for Boom {
+    fn notified(&self, _: &str, _: &str, _: &str) {
+        panic!("a bad sink");
+    }
+}
+
+fn notify_body(bucket: &str, key: &str, event: &str) -> String {
+    format!(r#"{{"EventName":"{event}","Key":"{bucket}/{key}","Records":[{{"eventVersion":"2.1","eventName":"{event}","userIdentity":{{"principalId":"AK1"}},"s3":{{"bucket":{{"name":"{bucket}"}},"object":{{"key":"{key}","size":6}}}}}}]}}"#)
+}
+
+async fn rig_with_wake(w: Arc<dyn WakeSink>) -> Rig {
+    let mut r = rig().await;
+    r.rx = serve_with(r.svc.clone(), "127.0.0.1:0".parse().unwrap(), "t".repeat(64), Some(w)).await.unwrap();
+    r
+}
+
 /// One raw HTTP/1.1 request; returns the status code.
 async fn post(rx: &Receiver, path: &str, method: &str, body: &[u8]) -> u16 {
     let mut s = TcpStream::connect(rx.addr).await.unwrap();
@@ -210,4 +234,39 @@ fn live_a_request_straight_to_rustfs_reaches_the_activity_log() {
     if let Err(e) = result {
         std::panic::resume_unwind(e);
     }
+}
+
+#[tokio::test]
+async fn a_notification_for_one_of_our_stores_wakes_the_sink_once_with_the_whole_body() {
+    let w = Arc::new(Wakes::default());
+    let r = rig_with_wake(w.clone()).await;
+    let path = format!("/store/ingest/{}/notify", r.rx.token);
+    let body = notify_body(&r.store.bucket(), "registry/wt-a.json", "s3:ObjectCreated:Put");
+    assert_eq!(post(&r.rx, &path, "POST", body.as_bytes()).await, 200);
+    let got = w.0.lock().unwrap().clone();
+    assert_eq!(got.len(), 1, "{got:?}");
+    assert_eq!((got[0].0.as_str(), got[0].1.as_str()), (r.store.to_string().as_str(), r.store.bucket().as_str()));
+    assert_eq!(got[0].2, body, "the sink gets the notification as it came, to decide for itself (registry_hints)");
+}
+
+#[tokio::test]
+async fn notifications_for_other_buckets_garbage_and_the_audit_stream_do_not_wake_the_sink() {
+    let w = Arc::new(Wakes::default());
+    let r = rig_with_wake(w.clone()).await;
+    let notify = format!("/store/ingest/{}/notify", r.rx.token);
+    let audit = format!("/store/ingest/{}/audit", r.rx.token);
+    assert_eq!(post(&r.rx, &notify, "POST", notify_body("someone-elses-bucket", "k", "s3:ObjectCreated:Put").as_bytes()).await, 200);
+    assert_eq!(post(&r.rx, &notify, "POST", b"not json").await, 400);
+    assert_eq!(post(&r.rx, &audit, "POST", put_record(&key_of(&r), &r.store.bucket()).as_bytes()).await, 200);
+    assert_eq!(post(&r.rx, &format!("/store/ingest/{}/notify", "x".repeat(64)), "POST", notify_body(&r.store.bucket(), "k", "s3:ObjectCreated:Put").as_bytes()).await, 404, "wrong token");
+    assert!(w.0.lock().unwrap().is_empty(), "{:?}", w.0.lock().unwrap());
+}
+
+#[tokio::test]
+async fn a_sink_that_panics_does_not_change_what_rustfs_is_told() {
+    let r = rig_with_wake(Arc::new(Boom)).await;
+    let path = format!("/store/ingest/{}/notify", r.rx.token);
+    assert_eq!(post(&r.rx, &path, "POST", notify_body(&r.store.bucket(), "k", "s3:ObjectCreated:Put").as_bytes()).await, 200);
+    // The receiver still serves the next request.
+    assert_eq!(post(&r.rx, &path, "POST", notify_body(&r.store.bucket(), "k2", "s3:ObjectCreated:Put").as_bytes()).await, 200);
 }
