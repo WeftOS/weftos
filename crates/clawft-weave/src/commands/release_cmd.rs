@@ -291,7 +291,7 @@ mod tests {
         run(go("b1", &dist)).await.unwrap();
         run(go("b1", &dist)).await.unwrap(); // identical retry
         std::fs::write(dist.join("SHA256SUMS"), b"REBUILT").unwrap();
-        let e = run(go("b1", &dist)).await.err().expect("a rebuild must be refused");
+        let e = run(go("b1", &dist)).await.expect_err("a rebuild must be refused");
         assert!(e.to_string().contains("already"), "{e}");
     }
 }
