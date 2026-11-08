@@ -60,7 +60,8 @@ impl FollowState {
 
     /// Write to `path` through a temp file in the same directory, then rename, so a crash or a
     /// concurrent poll never leaves a truncated file. Two pollers sharing one file can still
-    /// overwrite each other's last write; give each its own state file.
+    /// overwrite each other's last write (the loser's next run re-reports, it never skips); give each
+    /// its own state file.
     pub fn save(&self, path: &Path) -> Result<()> {
         let io =
             |e: std::io::Error| S2Error::Invalid(format!("follow state {}: {e}", path.display()));
@@ -489,10 +490,25 @@ pub fn overlaps<B: ObjectBackend>(
         .iter()
         .map(|f| (f.path.as_str(), f.sha256.as_str()))
         .collect();
+    // Every worktree holds the whole project tree, so a file one side edited and the other did not
+    // differs too. When both manifests say what they changed, only a path changed on both sides
+    // (and not deleted on either; that case is below) is a conflict candidate. With no change list
+    // on either side (a manifest from before the field existed) every differing path is reported,
+    // a superset.
+    let touched = |m: &crate::share::TreeManifest| -> std::collections::BTreeSet<String> {
+        m.changes
+            .iter()
+            .filter(|x| x.kind != ChangeKind::Deleted)
+            .map(|x| x.path.clone())
+            .collect()
+    };
+    let exact = !ma.changes.is_empty() && !mc.changes.is_empty();
+    let (ta, tc) = (touched(&ma), touched(&mc));
     let mut v: Vec<_> = ma
         .files
         .iter()
         .filter(|f| other.get(f.path.as_str()).is_some_and(|s| *s != f.sha256))
+        .filter(|f| !exact || (ta.contains(&f.path) && tc.contains(&f.path)))
         .map(|f| Overlap {
             path: f.path.clone(),
             in_a: a.slug.clone(),

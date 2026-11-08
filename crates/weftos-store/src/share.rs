@@ -517,15 +517,15 @@ pub fn publish_tree<B: ObjectBackend>(
         published_ms: now_ms,
     };
     b.put(bucket, MANIFEST_KEY, &serde_json::to_vec_pretty(&manifest)?)?;
-    // Stale objects go after the manifest no longer lists them, so a reader never sees a listed file missing.
-    if let Some(pm) = &prev {
-        let kept: std::collections::HashSet<&str> =
-            manifest.files.iter().map(|f| f.path.as_str()).collect();
-        for f in &pm.files {
-            if !kept.contains(f.path.as_str()) {
-                b.delete(bucket, &format!("{TREE_PREFIX}{}", f.path))?;
-                rep.removed += 1;
-            }
+    // Stale objects go after the manifest no longer lists them, so a reader never sees a listed file
+    // missing. Found by listing, not from the previous manifest: a publish killed after its manifest
+    // write but before this sweep leaves objects that no manifest names, and only a listing finds them.
+    let kept: std::collections::HashSet<&str> =
+        manifest.files.iter().map(|f| f.path.as_str()).collect();
+    for o in b.list(bucket, TREE_PREFIX)? {
+        if !kept.contains(&o.key[TREE_PREFIX.len()..]) {
+            b.delete(bucket, &o.key)?;
+            rep.removed += 1;
         }
     }
 
