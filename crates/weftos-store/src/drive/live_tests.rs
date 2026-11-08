@@ -93,3 +93,49 @@ fn live_drive_cycle() {
     }
     be.delete_bucket(&bucket).unwrap();
 }
+
+/// Does RustFS honour `If-Match` on PUT and DELETE? Prints what it did; asserts the right etag
+/// always works, and that a wrong etag is refused (412) or, if ignored, that the write landed.
+#[test]
+#[ignore = "needs a throwaway RustFS: WEFTOS_STORE_TEST_RUSTFS_ENV"]
+fn live_if_match_is_honoured_or_not() {
+    use crate::backend::BackendError;
+    let envf = std::env::var("WEFTOS_STORE_TEST_RUSTFS_ENV").expect("WEFTOS_STORE_TEST_RUSTFS_ENV");
+    let scratch = tempfile::tempdir().unwrap();
+    let be = RustfsBackend::new(RustfsConfig::from_env_file(Path::new(&envf), scratch.path().join("secrets")).unwrap()).unwrap();
+    let bucket = format!("t-ifm-{}", &ulid::Ulid::new().to_string().to_lowercase()[10..]);
+    be.create_bucket(&bucket, &[]).unwrap();
+
+    let v1 = be.put(&bucket, "k", b"one", false).unwrap();
+    let v2 = be.put_if_match(&bucket, "k", b"two", &v1.etag).expect("right etag must succeed");
+    assert_ne!(v1.etag, v2.etag);
+    assert_eq!(be.get(&bucket, "k").unwrap(), b"two");
+
+    // Wrong (stale) etag on PUT.
+    let put_stale = be.put_if_match(&bucket, "k", b"three", &v1.etag);
+    let after_put = be.get(&bucket, "k").unwrap();
+    eprintln!("PUT with stale If-Match: {put_stale:?}; object now {:?}", String::from_utf8_lossy(&after_put));
+    // Missing key.
+    let put_missing = be.put_if_match(&bucket, "absent", b"x", &v1.etag);
+    eprintln!("PUT If-Match on a missing key: {put_missing:?}; exists afterwards: {}", be.head(&bucket, "absent").is_ok());
+
+    // DELETE with a stale etag, then with the current one.
+    let cur = be.head(&bucket, "k").unwrap().etag;
+    let del_stale = be.delete_if_match(&bucket, "k", &v1.etag);
+    let still = be.head(&bucket, "k").is_ok();
+    eprintln!("DELETE with stale If-Match: {del_stale:?}; object still there: {still}");
+    if still {
+        let del_ok = be.delete_if_match(&bucket, "k", &cur);
+        eprintln!("DELETE with current If-Match: {del_ok:?}; gone: {}", be.head(&bucket, "k").is_err());
+    }
+
+    match put_stale {
+        Err(BackendError::PreconditionFailed(_)) => assert_eq!(after_put, b"two", "a refused put must leave the object"),
+        Ok(_) => assert_eq!(after_put, b"three", "RustFS ignored If-Match on PUT: the stale write landed"),
+        Err(e) => panic!("unexpected: {e}"),
+    }
+    for k in ["k", "absent"] {
+        let _ = be.delete(&bucket, k);
+    }
+    let _ = be.delete_bucket(&bucket);
+}
