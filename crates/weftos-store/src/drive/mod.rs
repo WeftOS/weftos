@@ -20,6 +20,7 @@
 
 mod cas;
 mod conflict;
+mod gc;
 mod index;
 mod materialise;
 mod remote;
@@ -34,6 +35,8 @@ mod tests;
 #[cfg(test)]
 mod tests_crash;
 #[cfg(test)]
+mod tests_gc;
+#[cfg(test)]
 mod tests_hardening;
 #[cfg(all(test, feature = "rustfs"))]
 mod live_hardening;
@@ -47,6 +50,7 @@ use crate::backend::BackendError;
 use crate::share::Limits;
 
 pub use conflict::{ConflictKind, Keep, resolve};
+pub use gc::{DEFAULT_GC_CAP, GcReport, PLACEHOLDER_RETENTION, collect_tombstones};
 pub use index::{Entry, Index, OpenConflict};
 pub use materialise::{DownReport, materialise, materialise_with, sync_down, sync_down_with};
 pub use scan::{Change, ChangeKind, Scan, scan};
@@ -140,7 +144,7 @@ impl Skipped {
 }
 
 /// Knobs shared by the sync functions.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Options {
     /// The existing S2 ceilings (16 MiB per file, 20,000 files, 512 MiB).
     pub limits: Limits,
@@ -150,6 +154,26 @@ pub struct Options {
     /// Use it for areas only the daemon writes, such as a worktree bucket's `.wt/tree/`, which the
     /// policy denies to writers: a mistaken push then fails here, not at the server.
     pub read_only: bool,
+    /// Let `sync_up` collect old delete markers after a successful push. Default off.
+    pub collect_tombstones: bool,
+    /// A marker older than this is collected. [`PLACEHOLDER_RETENTION`] is a placeholder: the
+    /// owner picks the number.
+    pub tombstone_retention: Duration,
+    /// Markers examined per pass at most (one read each), so a backlog never stalls a sync.
+    pub tombstone_gc_cap: usize,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            limits: Limits::default(),
+            device: None,
+            read_only: false,
+            collect_tombstones: false,
+            tombstone_retention: PLACEHOLDER_RETENTION,
+            tombstone_gc_cap: DEFAULT_GC_CAP,
+        }
+    }
 }
 
 /// Normalise a prefix: empty, or ending in exactly one `/`.

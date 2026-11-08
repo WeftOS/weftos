@@ -450,7 +450,7 @@ fn the_size_ceilings_apply_both_ways() {
     s.seed("p/small", "tiny");
     s.seed("p/big", &"x".repeat(100));
     s.seed("p/z", "z");
-    let tight = Options { limits: crate::share::Limits { max_file: 10, max_files: 2, max_total: 1 << 20, max_bundle: 0 }, device: None, read_only: false };
+    let tight = Options { limits: crate::share::Limits { max_file: 10, max_files: 2, max_total: 1 << 20, max_bundle: 0 }, device: None, read_only: false, ..Options::default() };
     let d = tempfile::tempdir().unwrap();
     let dest = d.path().join("t");
     let r = materialise_with(&s, B, "p", &dest, &tight).unwrap();
