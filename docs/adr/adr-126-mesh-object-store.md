@@ -474,6 +474,34 @@ joins a blocking thread; (the receiver now authenticates and drops unknown bucke
 - **F18** `store.promote` refuses an empty, unclean or reserved (`.wt/`, `worktrees/`) prefix, never copies a reserved-area object,
   and refuses a worktree that holds overlay state under `.wt/`, so S2's landing path and its conflict check cannot be bypassed.
 
+**S1 done-when rerun at the tip after F2/F9/F15-F18 (2026-11-08, `1153af0a`).** Against a throwaway
+RustFS 1.0.4 container (`docker.io/rustfs/rustfs:1.0.4`, podman, loopback `127.0.0.1` only, tmpfs data, root
+key made for the run; not the PG or photo-gallery RustFS). Commands: `cargo test -p weftos-store --features
+rustfs --lib -- --ignored --test-threads=1` and `cargo test -p clawft-weave --features weftos-store/rustfs
+--lib live_ -- --ignored --test-threads=1`, with `WEFTOS_STORE_TEST_RUSTFS_ENV` naming the throwaway env file.
+- `weftos-store`: 16 of 16 live tests pass in 27.05 s (34 s wall including the test-binary build).
+  This includes `live_service_done_when` (node and project stores; a disabled grant refused at the service and
+  at RustFS), the scoped-then-disabled key (a disabled key's next request is a 403), `put_if_match`, the
+  release roles, Object Lock, versions, multipart, and the F16 checksum and CopyObject check.
+- `clawft-weave`: `live_rustfs_backs_the_daemon_service` (node store through the daemon service) and
+  `live_a_cog_uses_svc_store_on_rustfs_and_a_disabled_grant_is_refused` (a cog's write appears in the
+  activity log; disabling its grant refuses the next request at the service and at RustFS) pass, 0.81 s for both
+  (72 s wall, mostly compiling).
+- Not part of this run: `live_a_request_straight_to_rustfs_reaches_the_activity_log` needs a local `rustfs`
+  binary (`WEFTOS_STORE_TEST_RUSTFS_BIN`), not a container, so it was not run here (it passed earlier on
+  the binary); `conv_postmortem::live_postmortem_distills_durable_fact` needs Hermes :8090 and is not S1; it
+  failed because that endpoint is not available.
+
+**Touch point with the Mac-side S3/drive work.** The additive `put_if_match` / `delete_if_match` default
+methods on the backend trait (`wt/adr126-s3-drive`, `2c43a95c5..1cade20f8`) are not in this repository, so
+they could not be diffed. From S1's side: `ObjectBackend::put_if_match` already exists here as a *required*
+method (`backend.rs`, implemented by the RustFS, local-directory and in-memory backends, and by the two test
+backends in `backend_tests.rs` and the `Flaky` backend in `service_tests.rs`), and there is no
+`delete_if_match`. A default `put_if_match` with the same signature will conflict textually in `backend.rs` at
+that declaration and must be taken as one definition (the default body is fine for backends without an
+override; the S1 implementations remain valid overrides). A new `delete_if_match` default does not break any S1
+implementation. Whether the signatures are identical is unconfirmed until the commits are available.
+
 ## Consequences
 
 - **Gains:**
