@@ -424,6 +424,8 @@ Not done: no schedule (an operator or a timer runs it), and no per-store overrid
   (the last-run time is in memory); a failed run is retried at the next interval, not in a loop; a due run with no day numbers and no override does nothing, not even a listing.
   A bad value is logged and leaves the schedule off, it does not stop the daemon. Scheduled deletes are chain events with `actor: "schedule"`.
 
+**Owner decision, 2026-11-08 11:21 ET: nothing expires yet.** Archive retention stays at its default (no expiry). The schedule stays off, no day numbers are set anywhere, and nothing is scheduled to delete archives; `archive_gc` and the per-store override exist for when the owner sets numbers.
+
 **The daemon now has the receiver** (`clawft-weave/src/store_ingest.rs`, 2026-11-08): a loopback HTTP listener, off unless
 `WEFTOS_STORE_INGEST_ADDR` is set, POST only, 1 MiB cap, authenticated by a 256-bit secret in the URL path
 (`store-ingest-token`, 0600; the URLs are written to `store-ingest-urls`), because RustFS's webhook `auth_token` is unverified.
