@@ -13,7 +13,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use reqwest::blocking::Client;
 use serde_json::{Value, json};
 
-use crate::backend::{AccessKey, AdminBackend, BackendError, BucketTags, ObjectBackend, ObjectMeta, check_key};
+use crate::backend::{AccessKey, AdminBackend, BackendError, BucketTags, LockedPut, ObjectBackend, ObjectMeta, PutOpts, check_key};
 use crate::sigv4::{self, Req};
 
 /// Connection settings. `secrets_dir` receives one 0600 file per issued access key.
@@ -60,6 +60,8 @@ struct Resp {
     status: u16,
     etag: Option<String>,
     len: Option<u64>,
+    /// `x-amz-version-id`, set by versioned (Object Lock) buckets.
+    version: Option<String>,
     body: Vec<u8>,
 }
 
@@ -158,8 +160,9 @@ impl RustfsBackend {
         let status = r.status().as_u16();
         let etag = r.headers().get("etag").and_then(|v| v.to_str().ok()).map(|v| v.trim_matches('"').to_owned());
         let len = r.headers().get("content-length").and_then(|v| v.to_str().ok()).and_then(|v| v.parse().ok());
+        let version = r.headers().get("x-amz-version-id").and_then(|v| v.to_str().ok()).map(str::to_owned);
         let body = r.bytes().map_err(io)?.to_vec();
-        Ok(Resp { status, etag, len, body })
+        Ok(Resp { status, etag, len, version, body })
     }
 
     /// Turn a non-2xx response into the matching [`BackendError`].
@@ -261,6 +264,42 @@ impl ObjectBackend for RustfsBackend {
         Ok(ObjectMeta { key: key.to_owned(), size: data.len() as u64, etag: r.etag.unwrap_or_default() })
     }
 
+    fn put_locked(&self, bucket: &str, key: &str, data: &[u8], opts: &PutOpts) -> Result<LockedPut, BackendError> {
+        check_key(key)?;
+        let mut extra: Vec<(&str, String)> = Vec::new();
+        if opts.if_none_match {
+            extra.push(("if-none-match", "*".into()));
+        }
+        if let Some(r) = opts.retention {
+            let now = SystemTime::now().duration_since(UNIX_EPOCH).map_err(io)?.as_secs();
+            if r.until_unix_s <= now {
+                return Err(BackendError::BadKey(format!("retain-until {} is not in the future", r.until_unix_s)));
+            }
+            extra.push(("x-amz-object-lock-mode", r.mode.as_str().into()));
+            extra.push(("x-amz-object-lock-retain-until-date", sigv4::iso_date(r.until_unix_s)));
+        }
+        if opts.legal_hold {
+            extra.push(("x-amz-object-lock-legal-hold", "ON".into()));
+        }
+        let r = self.send("PUT", &format!("/{bucket}/{key}"), &[], data, &extra)?;
+        let r = self.check(r, Ctx::Object(bucket, key))?;
+        Ok(LockedPut { meta: ObjectMeta { key: key.to_owned(), size: data.len() as u64, etag: r.etag.unwrap_or_default() }, version_id: r.version })
+    }
+
+    fn delete_version(&self, bucket: &str, key: &str, version_id: &str, bypass_governance: bool) -> Result<(), BackendError> {
+        check_key(key)?;
+        let extra: Vec<(&str, String)> = if bypass_governance { vec![("x-amz-bypass-governance-retention", "true".into())] } else { Vec::new() };
+        let r = self.send("DELETE", &format!("/{bucket}/{key}"), &Self::q(&[("versionId", version_id)]), &[], &extra)?;
+        self.check(r, Ctx::Object(bucket, key)).map(|_| ())
+    }
+
+    fn put_legal_hold(&self, bucket: &str, key: &str, version_id: &str, on: bool) -> Result<(), BackendError> {
+        check_key(key)?;
+        let body = format!("<LegalHold><Status>{}</Status></LegalHold>", if on { "ON" } else { "OFF" });
+        let r = self.send("PUT", &format!("/{bucket}/{key}"), &Self::q(&[("legal-hold", ""), ("versionId", version_id)]), body.as_bytes(), &[])?;
+        self.check(r, Ctx::Object(bucket, key)).map(|_| ())
+    }
+
     fn get(&self, bucket: &str, key: &str) -> Result<Vec<u8>, BackendError> {
         check_key(key)?;
         let r = self.send("GET", &format!("/{bucket}/{key}"), &[], &[], &[])?;
@@ -317,14 +356,15 @@ impl ObjectBackend for RustfsBackend {
     }
 }
 
-impl AdminBackend for RustfsBackend {
-    fn create_bucket(&self, bucket: &str, tags: &[(String, String)]) -> Result<(), BackendError> {
+impl RustfsBackend {
+    fn create_bucket_with(&self, bucket: &str, tags: &[(String, String)], locked: bool) -> Result<(), BackendError> {
         // RustFS answers 200 for a bucket the root already owns; an explicit check keeps the
         // contract ("already exists" is an error) the same as the other backends.
         if self.bucket_exists(bucket)? {
             return Err(BackendError::BucketExists(bucket.to_owned()));
         }
-        let r = self.send("PUT", &format!("/{bucket}"), &[], &[], &[])?;
+        let lock_hdr: &[(&str, String)] = if locked { &[("x-amz-bucket-object-lock-enabled", "true".into())] } else { &[] };
+        let r = self.send("PUT", &format!("/{bucket}"), &[], &[], lock_hdr)?;
         self.check(r, Ctx::Bucket(bucket))?;
         if !tags.is_empty() {
             let set: String = tags.iter().map(|(k, v)| format!("<Tag><Key>{}</Key><Value>{}</Value></Tag>", escape(k), escape(v))).collect();
@@ -336,6 +376,16 @@ impl AdminBackend for RustfsBackend {
             }
         }
         Ok(())
+    }
+}
+
+impl AdminBackend for RustfsBackend {
+    fn create_locked_bucket(&self, bucket: &str, tags: &[(String, String)]) -> Result<(), BackendError> {
+        self.create_bucket_with(bucket, tags, true)
+    }
+
+    fn create_bucket(&self, bucket: &str, tags: &[(String, String)]) -> Result<(), BackendError> {
+        self.create_bucket_with(bucket, tags, false)
     }
 
     fn delete_bucket(&self, bucket: &str) -> Result<(), BackendError> {

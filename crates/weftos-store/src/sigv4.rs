@@ -62,6 +62,12 @@ pub fn amz_date(unix_s: u64) -> String {
     format!("{y:04}{m:02}{d:02}T{:02}{:02}{:02}Z", rem / 3600, rem % 3600 / 60, rem % 60)
 }
 
+/// `YYYY-MM-DDTHH:MM:SS.000Z` (ISO 8601, what the Object Lock retain-until header takes).
+pub fn iso_date(unix_s: u64) -> String {
+    let a = amz_date(unix_s);
+    format!("{}-{}-{}T{}:{}:{}.000Z", &a[..4], &a[4..6], &a[6..8], &a[9..11], &a[11..13], &a[13..15])
+}
+
 /// What to sign.
 pub struct Req<'a> {
     pub method: &'a str,
@@ -117,6 +123,12 @@ mod tests {
         assert_eq!(amz_date(0), "19700101T000000Z");
         assert_eq!(amz_date(1_699_358_400), "20231107T120000Z");
         assert_eq!(amz_date(951_782_400), "20000229T000000Z");
+    }
+
+    #[test]
+    fn iso_dates() {
+        assert_eq!(iso_date(1_699_358_400), "2023-11-07T12:00:00.000Z");
+        assert_eq!(iso_date(0), "1970-01-01T00:00:00.000Z");
     }
 
     #[test]

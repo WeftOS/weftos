@@ -260,13 +260,16 @@ fn live_release_roles_ci_appends_and_the_sweeper_only_deletes() {
     )
     .unwrap();
     let rel = StoreName::release("weft", &ulid::Ulid::new().to_string(), "stable").unwrap();
-    svc.create_store(&rel, "daemon", Parties::defaults_for(&rel)).unwrap();
+    // Well-known roles with a unique suffix, so tests sharing one RustFS do not share keys.
+    let (ci_p, sw_p) = (format!("{CI_PRINCIPAL}-{}", &ulid::Ulid::new().to_string().to_lowercase()[16..]), format!("{SWEEPER_PRINCIPAL}-{}", &ulid::Ulid::new().to_string().to_lowercase()[16..]));
+    let parties = Parties { appenders: vec![Principal::parse(&ci_p).unwrap()], sweepers: vec![Principal::parse(&sw_p).unwrap()], ..Default::default() };
+    svc.create_store(&rel, "daemon", parties).unwrap();
     let b = rel.bucket();
-    let ci = as_key(&cfg, &be, &RustfsBackend::key_id_for(CI_PRINCIPAL));
-    let sw = as_key(&cfg, &be, &RustfsBackend::key_id_for(SWEEPER_PRINCIPAL));
+    let ci = as_key(&cfg, &be, &RustfsBackend::key_id_for(&ci_p));
+    let sw = as_key(&cfg, &be, &RustfsBackend::key_id_for(&sw_p));
 
     // CI creates an artifact through the service (write-once), and reads it with its own key.
-    let ci_caller = Caller::local(Principal::parse(CI_PRINCIPAL).unwrap());
+    let ci_caller = Caller::local(Principal::parse(&ci_p).unwrap());
     svc.put(&ci_caller, &rel, "v1/app.tar", b"build", true).unwrap();
     assert!(matches!(svc.put(&ci_caller, &rel, "v1/app.tar", b"evil", false), Err(crate::StoreError::Refused(_))), "service: overwrite refused");
     assert!(matches!(svc.delete(&ci_caller, &rel, "v1/app.tar"), Err(crate::StoreError::Refused(_))), "service: delete refused");
@@ -290,4 +293,86 @@ fn live_release_roles_ci_appends_and_the_sweeper_only_deletes() {
         be.delete(&b, &m.key).unwrap();
     }
     let _ = be.delete_bucket(&b);
+}
+
+/// Object Lock, live: a locked bucket, retention and legal-hold headers on put, and what RustFS
+/// does when a locked version is deleted.
+#[test]
+#[ignore = "needs a throwaway RustFS: WEFTOS_STORE_TEST_RUSTFS_ENV"]
+fn live_object_lock_bucket_retention_and_legal_hold() {
+    use crate::backend::{LockMode, PutOpts, Retention};
+    let (cfg, _d) = live().expect("WEFTOS_STORE_TEST_RUSTFS_ENV");
+    let be = RustfsBackend::new(cfg).unwrap();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    let plain = uniq("t-nolock");
+    be.create_bucket(&plain, &[]).unwrap();
+    assert!(be.put_locked(&plain, "k", b"x", &PutOpts { retention: Some(Retention { mode: LockMode::Compliance, until_unix_s: now + 3600 }), ..Default::default() }).is_err(), "a bucket made without lock refuses lock headers");
+    be.delete_bucket(&plain).unwrap();
+
+    let b = uniq("t-lock");
+    be.create_locked_bucket(&b, &[("store".into(), "release".into())]).unwrap();
+    assert!(matches!(be.create_locked_bucket(&b, &[]), Err(BackendError::BucketExists(_))));
+    let until = now + 3600;
+    let comp = be.put_locked(&b, "c.bin", b"compliance", &PutOpts { if_none_match: true, retention: Some(Retention { mode: LockMode::Compliance, until_unix_s: until }), legal_hold: false }).unwrap();
+    let gov = be.put_locked(&b, "g.bin", b"governance", &PutOpts { retention: Some(Retention { mode: LockMode::Governance, until_unix_s: until }), ..Default::default() }).unwrap();
+    let hold = be.put_locked(&b, "h.bin", b"hold", &PutOpts { legal_hold: true, ..Default::default() }).unwrap();
+    for p in [&comp, &gov, &hold] {
+        assert!(p.version_id.is_some(), "a versioned bucket returns a version id: {p:?}");
+    }
+    assert!(matches!(be.put_locked(&b, "c.bin", b"again", &PutOpts { if_none_match: true, ..Default::default() }), Err(BackendError::Exists(_))));
+    assert!(be.put_locked(&b, "past", b"x", &PutOpts { retention: Some(Retention { mode: LockMode::Compliance, until_unix_s: now - 5 }), ..Default::default() }).is_err(), "a past date is refused before sending");
+
+    let (cv, gv, hv) = (comp.version_id.unwrap(), gov.version_id.unwrap(), hold.version_id.unwrap());
+    let c = be.delete_version(&b, "c.bin", &cv, false);
+    let c_bypass = be.delete_version(&b, "c.bin", &cv, true);
+    let g = be.delete_version(&b, "g.bin", &gv, false);
+    let h = be.delete_version(&b, "h.bin", &hv, false);
+    eprintln!("LOCK compliance delete: {c:?}; compliance+bypass: {c_bypass:?}; governance delete: {g:?}; legal-hold delete: {h:?}");
+    assert!(matches!(c, Err(BackendError::Forbidden(_))), "compliance: version delete refused");
+    assert!(matches!(c_bypass, Err(BackendError::Forbidden(_))), "compliance: bypass does not help");
+    assert!(matches!(g, Err(BackendError::Forbidden(_))), "governance: refused without bypass");
+    assert!(matches!(h, Err(BackendError::Forbidden(_))), "legal hold: refused");
+    assert_eq!(be.get(&b, "c.bin").unwrap(), b"compliance", "still there");
+    // Lift the hold, then the version can go; governance can go with bypass.
+    be.put_legal_hold(&b, "h.bin", &hv, false).unwrap();
+    be.delete_version(&b, "h.bin", &hv, false).unwrap();
+    be.delete_version(&b, "g.bin", &gv, true).unwrap();
+}
+
+/// S4's path, live: a release store made with Object Lock, CI writing a retained artifact once
+/// through the service, the sweeper unable to remove it, and nobody able to overwrite it.
+#[test]
+#[ignore = "needs a throwaway RustFS: WEFTOS_STORE_TEST_RUSTFS_ENV"]
+fn live_locked_release_store_through_the_service() {
+    use crate::backend::{LockMode, PutOpts, Retention};
+    use crate::service::{CI_PRINCIPAL, SWEEPER_PRINCIPAL};
+    let (cfg, _d) = live().expect("WEFTOS_STORE_TEST_RUSTFS_ENV");
+    let be = Arc::new(RustfsBackend::new(cfg.clone()).unwrap());
+    let svc = StoreService::open(
+        Config { node_id: uniq("n").replace('_', "-"), state_path: None, clock: || 1_000 },
+        be.clone(),
+        be.clone(),
+        Arc::new(Open),
+        Arc::new(MemSink::default()),
+        Arc::new(Chain::default()),
+    )
+    .unwrap();
+    let rel = StoreName::release("weft", &ulid::Ulid::new().to_string(), "stable").unwrap();
+    let sfx = ulid::Ulid::new().to_string().to_lowercase()[16..].to_owned();
+    let (ci_p, sw_p) = (Principal::parse(&format!("{CI_PRINCIPAL}-{sfx}")).unwrap(), Principal::parse(&format!("{SWEEPER_PRINCIPAL}-{sfx}")).unwrap());
+    svc.create_locked_store(&rel, "daemon", Parties { appenders: vec![ci_p.clone()], sweepers: vec![sw_p.clone()], ..Default::default() }).unwrap();
+    assert!(svc.is_locked(&rel));
+    let ci = Caller::local(ci_p);
+    let sw = Caller::local(sw_p);
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    let opts = PutOpts { if_none_match: true, retention: Some(Retention { mode: LockMode::Compliance, until_unix_s: now + 3600 }), legal_hold: false };
+    let put = svc.put_locked(&ci, &rel, "v1/app.tar", b"build", &opts).unwrap();
+    assert!(put.version_id.is_some());
+    assert!(matches!(svc.put_locked(&ci, &rel, "v1/app.tar", b"evil", &opts), Err(crate::StoreError::Backend(BackendError::Exists(_)))), "no second version under the same key");
+    assert!(matches!(svc.put_locked(&ci, &rel, "v1/app.tar", b"evil", &PutOpts::default()), Err(crate::StoreError::Refused(_))), "append must be conditional");
+    // The sweeper's plain delete is allowed by the service; what it does to a locked key is RustFS's call.
+    let swept = svc.delete(&sw, &rel, "v1/app.tar");
+    eprintln!("LOCK sweeper plain delete: {swept:?}");
+    // The version itself cannot be removed.
+    assert!(matches!(be.delete_version(&rel.bucket(), "v1/app.tar", put.version_id.as_deref().unwrap(), true), Err(BackendError::Forbidden(_))));
 }

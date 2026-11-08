@@ -21,6 +21,9 @@ pub enum BackendError {
     /// The credential or its policy refuses this (HTTP 403).
     #[error("forbidden: {0}")]
     Forbidden(String),
+    /// The backend cannot do this (Object Lock on the local backends).
+    #[error("unsupported: {0}")]
+    Unsupported(String),
     #[error("bad object key: {0}")]
     BadKey(String),
     #[error("backend: {0}")]
@@ -34,6 +37,51 @@ pub struct ObjectMeta {
     pub size: u64,
     /// BLAKE3 hex of the content.
     pub etag: String,
+}
+
+/// S3 Object Lock retention mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LockMode {
+    /// Cannot be shortened or removed before the date, except by a caller who asks to bypass it
+    /// (`s3:BypassGovernanceRetention`).
+    Governance,
+    /// Cannot be shortened or removed by anyone, root included, until the date.
+    Compliance,
+}
+
+impl LockMode {
+    /// The header value.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Governance => "GOVERNANCE",
+            Self::Compliance => "COMPLIANCE",
+        }
+    }
+}
+
+/// Keep this version until `until_unix_s`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Retention {
+    pub mode: LockMode,
+    /// Seconds since the Unix epoch; must be in the future when the object is put.
+    pub until_unix_s: u64,
+}
+
+/// What a locked put asks for.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PutOpts {
+    /// Refuse an existing key (`If-None-Match: *`).
+    pub if_none_match: bool,
+    pub retention: Option<Retention>,
+    /// Put a legal hold on the version (no end date; lifted by `put_legal_hold(false)`).
+    pub legal_hold: bool,
+}
+
+/// A put into a versioned (locked) bucket: the object and the version that was written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LockedPut {
+    pub meta: ObjectMeta,
+    pub version_id: Option<String>,
 }
 
 /// An access key the backend issued for one principal.
@@ -54,6 +102,20 @@ pub trait ObjectBackend: Send + Sync {
     /// Take the etag from the last `put` or `head` of this backend: etags are opaque and differ
     /// between backends (BLAKE3 for the local ones, MD5 for RustFS).
     fn put_if_match(&self, bucket: &str, key: &str, data: &[u8], etag: &str) -> Result<ObjectMeta, BackendError>;
+    /// Put with Object Lock headers (retention and/or legal hold). Needs a bucket made with
+    /// [`AdminBackend::create_locked_bucket`]; others answer [`BackendError::Unsupported`].
+    fn put_locked(&self, _bucket: &str, _key: &str, _data: &[u8], _opts: &PutOpts) -> Result<LockedPut, BackendError> {
+        Err(BackendError::Unsupported("object lock".into()))
+    }
+    /// Delete one version. A locked version is refused ([`BackendError::Forbidden`]) until its
+    /// retention ends or its legal hold is lifted; `bypass_governance` overrides only `Governance`.
+    fn delete_version(&self, _bucket: &str, _key: &str, _version_id: &str, _bypass_governance: bool) -> Result<(), BackendError> {
+        Err(BackendError::Unsupported("object lock".into()))
+    }
+    /// Turn a legal hold on or off for one version.
+    fn put_legal_hold(&self, _bucket: &str, _key: &str, _version_id: &str, _on: bool) -> Result<(), BackendError> {
+        Err(BackendError::Unsupported("object lock".into()))
+    }
     fn get(&self, bucket: &str, key: &str) -> Result<Vec<u8>, BackendError>;
     fn head(&self, bucket: &str, key: &str) -> Result<ObjectMeta, BackendError>;
     fn delete(&self, bucket: &str, key: &str) -> Result<(), BackendError>;
@@ -66,6 +128,11 @@ pub trait ObjectBackend: Send + Sync {
 /// Buckets, access keys and policies (the RustFS admin API).
 pub trait AdminBackend: Send + Sync {
     fn create_bucket(&self, bucket: &str, tags: &[(String, String)]) -> Result<(), BackendError>;
+    /// Create a bucket with Object Lock enabled (which also turns versioning on). It can only be
+    /// chosen at creation. Local backends answer [`BackendError::Unsupported`].
+    fn create_locked_bucket(&self, _bucket: &str, _tags: &[(String, String)]) -> Result<(), BackendError> {
+        Err(BackendError::Unsupported("object lock".into()))
+    }
     /// Delete an empty bucket.
     fn delete_bucket(&self, bucket: &str) -> Result<(), BackendError>;
     fn bucket_exists(&self, bucket: &str) -> Result<bool, BackendError>;

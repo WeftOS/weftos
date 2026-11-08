@@ -288,6 +288,20 @@ copy or delete for an `append` principal. A CI job therefore writes artifacts th
 client, not with an S3 SDK and its own key. Immutability on the backend itself and retention are S4's. Readers of a release store (the project's
 members) are named when the store is made.
 
+**Object Lock (for S4), proven live on a throwaway RustFS 1.0.4 (2026-11-08).** `AdminBackend::create_locked_bucket` makes a bucket with
+`x-amz-bucket-object-lock-enabled` (versioned; chosen only at creation; the local backends answer `Unsupported`).
+`ObjectBackend::put_locked(bucket, key, data, &PutOpts{if_none_match, retention: Some(Retention{mode: Governance|Compliance, until_unix_s}), legal_hold})`
+sends the retention and legal-hold headers and returns the written `version_id`; `delete_version(bucket, key, version_id, bypass_governance)`
+and `put_legal_hold(.., on)` act on one version. Seen on RustFS: a bucket made without lock refuses lock headers; a locked
+version's delete is refused with `AccessDenied` under COMPLIANCE (bypass does not help), under GOVERNANCE (without bypass), and
+under a legal hold until it is lifted; a past retain-until date is refused before sending. At the service: `create_locked_store(name,
+actor, parties)`, `is_locked(name)` and `put_locked(who, store, key, data, &opts)` (gated and logged like `put`; an `append` principal must
+set `if_none_match`; a store not made locked refuses it). **Not covered:** a plain delete (no version id) in a locked bucket returned OK
+for the sweeper, which in S3 semantics adds a delete marker and leaves the retained version, but I did not check how RustFS lists or reads
+it afterwards; default bucket retention (`PutObjectLockConfiguration`) and `PutObjectRetention` on an existing version are not
+implemented; `archive(delete)` of a locked store will fail on its retained versions; the key policy for `sweep` still allows only
+`s3:DeleteObject`, not `s3:DeleteObjectVersion`/`s3:BypassGovernanceRetention`, which is what you want for retained versions.
+
 **The daemon now has the receiver** (`clawft-weave/src/store_ingest.rs`, 2026-11-08): a loopback HTTP listener, off unless
 `WEFTOS_STORE_INGEST_ADDR` is set, POST only, 1 MiB cap, authenticated by a 256-bit secret in the URL path
 (`store-ingest-token`, 0600; the URLs are written to `store-ingest-urls`), because RustFS's webhook `auth_token` is unverified.

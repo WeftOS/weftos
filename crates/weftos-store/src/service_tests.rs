@@ -470,3 +470,18 @@ fn an_archived_store_cannot_have_a_grant_switched_back_on() {
     r.svc.archive(&n, false, "op").unwrap();
     assert!(matches!(r.svc.set_grant_enabled(&n, &c, true, "op"), Err(StoreError::Refused(_))));
 }
+
+#[test]
+fn object_lock_needs_a_backend_that_has_it_and_a_store_made_for_it() {
+    let r = rig();
+    let rel = StoreName::release("weft", P, "stable").unwrap();
+    // The in-memory backend has no Object Lock: asking for a locked store is an error, and nothing is recorded.
+    assert!(matches!(r.svc.create_locked_store(&rel, "daemon", Parties::defaults_for(&rel)), Err(StoreError::Backend(BackendError::Unsupported(_)))));
+    assert!(!r.svc.has_store(&rel));
+    // An ordinary store takes no locked puts.
+    r.svc.create_store(&rel, "daemon", Parties::defaults_for(&rel)).unwrap();
+    assert!(!r.svc.is_locked(&rel));
+    let ci = Caller::local(Principal::parse(CI_PRINCIPAL).unwrap());
+    let opts = crate::backend::PutOpts { if_none_match: true, ..Default::default() };
+    assert!(matches!(r.svc.put_locked(&ci, &rel, "a", b"x", &opts), Err(StoreError::Refused(_))));
+}

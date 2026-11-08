@@ -118,6 +118,9 @@ struct StoreRec {
     created_ms: u64,
     #[serde(default)]
     archived: bool,
+    /// Made with Object Lock (retention and legal hold are available).
+    #[serde(default)]
+    locked: bool,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -263,12 +266,27 @@ impl StoreService {
     /// Create a store: its bucket (tagged), default and given grants, its exposure. Idempotent
     /// callers use [`Self::ensure_store`].
     pub fn create_store(&self, name: &StoreName, actor: &str, extra: Parties) -> Result<StoreInfo, StoreError> {
+        self.create_store_with(name, actor, extra, false)
+    }
+
+    /// Create a store whose bucket has Object Lock enabled (versioned; retention and legal hold
+    /// on puts, see [`Self::put_locked`]). Only the RustFS backend can; the local ones refuse. The
+    /// choice is made once, at creation.
+    pub fn create_locked_store(&self, name: &StoreName, actor: &str, extra: Parties) -> Result<StoreInfo, StoreError> {
+        self.create_store_with(name, actor, extra, true)
+    }
+
+    fn create_store_with(&self, name: &StoreName, actor: &str, extra: Parties, locked: bool) -> Result<StoreInfo, StoreError> {
         if self.lock().stores.contains_key(&name.to_string()) {
             return Err(StoreError::Exists(name.to_string()));
         }
         let mut tags = name.tags();
         tags.push(("created".into(), self.now().to_string()));
-        match self.admin.create_bucket(&name.bucket(), &tags) {
+        if locked {
+            tags.push(("object-lock".into(), "on".into()));
+        }
+        let made = if locked { self.admin.create_locked_bucket(&name.bucket(), &tags) } else { self.admin.create_bucket(&name.bucket(), &tags) };
+        match made {
             Ok(()) => {}
             // A bucket this daemon made but never recorded (a crash between the two steps, or a
             // state file lost): adopt it when its tags are this store's, refuse anything else.
@@ -278,7 +296,7 @@ impl StoreService {
         }
         {
             let mut g = self.lock();
-            g.stores.insert(name.to_string(), StoreRec { name: name.to_string(), created_ms: self.now(), archived: false });
+            g.stores.insert(name.to_string(), StoreRec { name: name.to_string(), created_ms: self.now(), archived: false, locked });
             let d = Parties::defaults_for(name);
             let ts = self.now();
             for (list, acc) in [(d.admins.iter().chain(&extra.admins), Access::Admin), (d.writers.iter().chain(&extra.writers), Access::Write), (d.appenders.iter().chain(&extra.appenders), Access::Append), (d.sweepers.iter().chain(&extra.sweepers), Access::Sweep), (d.readers.iter().chain(&extra.readers), Access::Read)] {
@@ -544,6 +562,25 @@ impl StoreService {
         self.gate(who, name, Op::Put, Some(key), data.len() as u64)?;
         self.write_once(who, name, key, data.len() as u64, if_none_match)?;
         let r = self.objects.put(&name.bucket(), key, data, if_none_match);
+        self.finish(who, name, Op::Put, Some(key), data.len() as u64, r)
+    }
+
+    /// Whether the store was made with Object Lock.
+    pub fn is_locked(&self, name: &StoreName) -> bool {
+        self.lock().stores.get(&name.to_string()).is_some_and(|r| r.locked)
+    }
+
+    /// PutObject with Object Lock retention and/or a legal hold, in a store made by
+    /// [`Self::create_locked_store`]. Gated and logged like `put`; an `append` principal (CI) must
+    /// set `opts.if_none_match`. Returns the version written. A locked version cannot be deleted
+    /// by anyone (compliance) or without a bypass (governance) until its date.
+    pub fn put_locked(&self, who: &Caller, name: &StoreName, key: &str, data: &[u8], opts: &crate::backend::PutOpts) -> Result<crate::backend::LockedPut, StoreError> {
+        self.gate(who, name, Op::Put, Some(key), data.len() as u64)?;
+        if !self.is_locked(name) {
+            return Err(StoreError::Refused(format!("{name} was not made with object lock")));
+        }
+        self.write_once(who, name, key, data.len() as u64, opts.if_none_match)?;
+        let r = self.objects.put_locked(&name.bucket(), key, data, opts);
         self.finish(who, name, Op::Put, Some(key), data.len() as u64, r)
     }
 
