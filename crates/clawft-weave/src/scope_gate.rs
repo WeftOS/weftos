@@ -94,6 +94,8 @@ pub const READ_ONLY_ALLOW: &[&str] = &[
     "chain.tail",
     // Streaming form of `chain.tail` (ADR-103 P2 D).
     "chain.subscribe",
+    // Tapestry R9: read-only dry-run verdict; a local client asks before it acts.
+    "governance.check",
     "ecc.status",
     "ecc.search",
     "ecc.calibrate",

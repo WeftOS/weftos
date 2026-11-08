@@ -112,6 +112,34 @@ pub trait GateBackend: Send + Sync {
     fn governance_snapshot(&self) -> Option<GovernanceSnapshot> {
         None
     }
+
+    /// Evaluate `action` for `agent_id` the way [`Self::check`] does, but
+    /// report the engine's own four-way verdict and the rules it evaluated,
+    /// and write nothing to the chain. Read-only: the `governance.check` RPC
+    /// uses it so a client can ask "would this be allowed?" before acting.
+    ///
+    /// `None` means this gate has no governance engine behind it; a caller
+    /// must treat that as "cannot decide" and never as a permit.
+    fn check_detailed(
+        &self,
+        _agent_id: &str,
+        _action: &str,
+        _context: &serde_json::Value,
+    ) -> Option<GateVerdict> {
+        None
+    }
+}
+
+/// The engine's verdict for one [`GateBackend::check_detailed`] call.
+#[derive(Debug, Clone)]
+pub struct GateVerdict {
+    /// What the engine decided, after any per-action exemption.
+    pub decision: crate::governance::GovernanceDecision,
+    /// Names of the rules the engine evaluated.
+    pub evaluated_rules: Vec<String>,
+    /// True when a per-action exemption turned a Deny / Escalate into a
+    /// Permit (the same override `check` applies).
+    pub grant_applied: bool,
 }
 
 /// The process and spawn caps a kernel runs under, as the limits a parent
@@ -449,6 +477,60 @@ impl GovernanceGate {
             })
     }
 
+    /// Build the governance request a gate check evaluates. Shared by
+    /// [`GateBackend::check`] and [`GateBackend::check_detailed`] so both
+    /// go through the same request construction.
+    fn build_request(
+        agent_id: &str,
+        action: &str,
+        context: &serde_json::Value,
+    ) -> crate::governance::GovernanceRequest {
+        let effect = Self::extract_effect(context);
+        let mut ctx_map = Self::extract_context(context);
+
+        // WEFT-634: ensure tool identity is available for tool_selector matching.
+        // Chat path uses `tool.{name}` action strings; callers may also pass
+        // an explicit `"tool"` context field.
+        if !ctx_map.contains_key("tool")
+            && let Some(tool) = action.strip_prefix("tool.")
+        {
+            ctx_map.insert("tool".into(), tool.to_owned());
+        }
+
+        // WEFT-636: build attributed principal from agent_id + optional
+        // user / parent / conv context keys.
+        let mut principal = crate::governance::GatePrincipal::agent(agent_id);
+        if let Some(uid) = ctx_map.get("user_id").cloned() {
+            principal = principal.with_user(uid);
+        }
+        if let Some(pid) = ctx_map
+            .get("parent_agent_id")
+            .cloned()
+            .or_else(|| ctx_map.get("parent_agent").cloned())
+        {
+            principal = principal.with_parent(pid);
+        }
+        if let Some(cid) = ctx_map
+            .get("conv_id")
+            .cloned()
+            .or_else(|| ctx_map.get("conversation_id").cloned())
+        {
+            principal = principal.with_conv(cid);
+        }
+
+        crate::governance::GovernanceRequest {
+            agent_id: agent_id.to_owned(),
+            action: action.to_owned(),
+            effect,
+            context: ctx_map,
+            node_id: None,
+            principal: Some(principal),
+        }
+        // ADR-103 A6: project and instance come from the kernel's own
+        // attestation; any `project_id` in the caller's context is dropped.
+        .attributed()
+    }
+
     /// Extract an [`EffectVector`] from the gate context JSON.
     ///
     /// Looks for an `"effect"` object with `risk`, `fairness`, `privacy`,
@@ -489,52 +571,34 @@ impl GateBackend for GovernanceGate {
         })
     }
 
+    fn check_detailed(
+        &self,
+        agent_id: &str,
+        action: &str,
+        context: &serde_json::Value,
+    ) -> Option<GateVerdict> {
+        use crate::governance::GovernanceDecision;
+        let request = Self::build_request(agent_id, action, context);
+        let result = self.engine.evaluate(&request);
+        let grant_applied = self.exempt_actions.contains(action)
+            && matches!(
+                result.decision,
+                GovernanceDecision::Deny(_) | GovernanceDecision::EscalateToHuman(_)
+            );
+        let decision = if grant_applied {
+            GovernanceDecision::Permit
+        } else {
+            result.decision
+        };
+        Some(GateVerdict {
+            decision,
+            evaluated_rules: result.evaluated_rules,
+            grant_applied,
+        })
+    }
+
     fn check(&self, agent_id: &str, action: &str, context: &serde_json::Value) -> GateDecision {
-        let effect = Self::extract_effect(context);
-        let mut ctx_map = Self::extract_context(context);
-
-        // WEFT-634: ensure tool identity is available for tool_selector matching.
-        // Chat path uses `tool.{name}` action strings; callers may also pass
-        // an explicit `"tool"` context field.
-        if !ctx_map.contains_key("tool")
-            && let Some(tool) = action.strip_prefix("tool.")
-        {
-            ctx_map.insert("tool".into(), tool.to_owned());
-        }
-
-        // WEFT-636: build attributed principal from agent_id + optional
-        // user / parent / conv context keys.
-        let mut principal = crate::governance::GatePrincipal::agent(agent_id);
-        if let Some(uid) = ctx_map.get("user_id").cloned() {
-            principal = principal.with_user(uid);
-        }
-        if let Some(pid) = ctx_map
-            .get("parent_agent_id")
-            .cloned()
-            .or_else(|| ctx_map.get("parent_agent").cloned())
-        {
-            principal = principal.with_parent(pid);
-        }
-        if let Some(cid) = ctx_map
-            .get("conv_id")
-            .cloned()
-            .or_else(|| ctx_map.get("conversation_id").cloned())
-        {
-            principal = principal.with_conv(cid);
-        }
-
-        let request = crate::governance::GovernanceRequest {
-            agent_id: agent_id.to_owned(),
-            action: action.to_owned(),
-            effect,
-            context: ctx_map,
-            node_id: None,
-            principal: Some(principal),
-        }
-        // ADR-103 A6: project and instance come from the kernel's own
-        // attestation; any `project_id` in the caller's context is dropped.
-        .attributed();
-
+        let request = Self::build_request(agent_id, action, context);
         let result = self.engine.evaluate(&request);
 
         use crate::governance::GovernanceDecision;
@@ -1234,6 +1298,78 @@ mod tests {
         let ctx = serde_json::json!({"effect": {"risk": 0.9}});
         let decision = gate.check("agent-1", "tool.exec", &ctx);
         assert!(decision.is_deny());
+    }
+
+    // ── check_detailed (read-only verdict for governance.check) ──
+
+    fn blocking_rule() -> GovernanceRule {
+        GovernanceRule {
+            id: "security-check".into(),
+            description: "Block high-risk actions".into(),
+            branch: GovernanceBranch::Judicial,
+            severity: RuleSeverity::Blocking,
+            active: true,
+            reference_url: None,
+            sop_category: None,
+            rule_type: Default::default(),
+            action_selector: None,
+            tool_selector: None,
+            force_on_match: false,
+        }
+    }
+
+    #[test]
+    fn check_detailed_agrees_with_check_on_deny_defer_permit() {
+        let high = serde_json::json!({ "effect": { "risk": 0.8, "security": 0.6 } });
+        let low = serde_json::json!({ "effect": { "risk": 0.1 } });
+
+        let deny_gate = GovernanceGate::new(0.5, false).add_rule(blocking_rule());
+        let v = deny_gate.check_detailed("a", "tool.exec", &high).unwrap();
+        assert!(matches!(v.decision, crate::governance::GovernanceDecision::Deny(_)));
+        assert!(deny_gate.check("a", "tool.exec", &high).is_deny());
+        assert!(!v.evaluated_rules.is_empty());
+
+        let defer_gate = GovernanceGate::new(0.5, true).add_rule(blocking_rule());
+        let v = defer_gate.check_detailed("a", "tool.exec", &high).unwrap();
+        assert!(matches!(
+            v.decision,
+            crate::governance::GovernanceDecision::EscalateToHuman(_)
+        ));
+
+        let v = deny_gate.check_detailed("a", "tool.read_file", &low).unwrap();
+        assert!(matches!(v.decision, crate::governance::GovernanceDecision::Permit));
+    }
+
+    #[test]
+    fn check_detailed_honours_exemption_like_check() {
+        let high = serde_json::json!({ "effect": { "risk": 0.8, "security": 0.6 } });
+        let gate = GovernanceGate::new(0.5, false)
+            .add_rule(blocking_rule())
+            .exempt_action("tool.exec");
+        let v = gate.check_detailed("a", "tool.exec", &high).unwrap();
+        assert!(v.grant_applied);
+        assert!(matches!(v.decision, crate::governance::GovernanceDecision::Permit));
+        assert!(gate.check("a", "tool.exec", &high).is_permit());
+    }
+
+    #[test]
+    fn check_detailed_writes_nothing_to_the_chain() {
+        let cm = std::sync::Arc::new(crate::chain::ChainManager::new(0, 100));
+        let gate = GovernanceGate::new(0.5, false)
+            .add_rule(blocking_rule())
+            .with_chain(std::sync::Arc::clone(&cm));
+        let before = cm.tail(0).len();
+        let high = serde_json::json!({ "effect": { "risk": 0.8, "security": 0.6 } });
+        let _ = gate.check_detailed("a", "tool.exec", &high);
+        assert_eq!(cm.tail(0).len(), before, "check_detailed must not append");
+        let _ = gate.check("a", "tool.exec", &high);
+        assert!(cm.tail(0).len() > before, "check still logs, so the test is not vacuous");
+    }
+
+    #[test]
+    fn gates_without_an_engine_return_no_verdict() {
+        let gate = CapabilityGate::new(Arc::new(ProcessTable::new(4)));
+        assert!(gate.check_detailed("a", "tool.x", &serde_json::json!({})).is_none());
     }
 }
 
