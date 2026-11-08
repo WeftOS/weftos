@@ -349,6 +349,12 @@ fn refresh(b: &Op, pr: &str, slug: &str, wt: &str, sign: &SignCfg) -> Result<(),
     Ok(())
 }
 
+/// This project's worktree stores on the node.
+fn worktree_stores(svc: &StoreService, mesh: &str, project: &str) -> Vec<weftos_store::StoreInfo> {
+    let marker = format!("weftos://{mesh}/projects/{project}/worktrees/");
+    svc.list_stores().into_iter().filter(|i| i.kind == "worktree" && i.name.to_lowercase().starts_with(&marker.to_lowercase())).collect()
+}
+
 /// The registry's entries as this follower should see them: all of them, or with a trusted-key
 /// file the ones that verify (all of them when `REQUIRE_SIGNED` is off).
 fn trusted_entries(b: &Op, reg: &str, sign: &SignCfg) -> weftos_store::overlay::Result<Vec<RegistryEntry>> {
@@ -496,6 +502,26 @@ pub fn run_full(svc: &StoreService, mesh: &str, method: &str, params: Value, now
         "promote" => {
             let slug = need(&p.slug, "slug")?;
             let n = names(mesh, &project, slug)?;
+            let on_conflict = match p.on_conflict.as_deref() {
+                None | Some("fail") => OnConflict::Fail,
+                Some("keep_project") => OnConflict::KeepProject,
+                Some("overwrite") => OnConflict::Overwrite,
+                Some(o) => return Err(format!("--on-conflict is fail, keep_project or overwrite, not '{o}'")),
+            };
+            let defaults = PromotionPolicy::default();
+            let policy = PromotionPolicy {
+                on_conflict,
+                max_promote_bytes: match p.max_bytes {
+                    Some(0) => None,
+                    Some(n) => Some(n),
+                    None => defaults.max_promote_bytes,
+                },
+                ..defaults
+            };
+            if p.dry_run {
+                let pv = weftos_store::promote::preview(&b, &n.wt, &n.pr, &policy).map_err(e)?;
+                return Ok(json!({"dry_run": true, "preview": pv}));
+            }
             svc.ensure_archive().map_err(|e| e.to_string())?;
             let prefix = archive_key(&n.wt, now_ms, "");
             let r = promote(
@@ -503,7 +529,7 @@ pub fn run_full(svc: &StoreService, mesh: &str, method: &str, params: Value, now
                 &n.wt,
                 &n.pr,
                 &ArchiveTarget { bucket: ARCHIVE_BUCKET, prefix: &prefix },
-                &PromotionPolicy::default(),
+                &policy,
                 now_ms,
             )
             .map_err(e)?;
@@ -521,6 +547,55 @@ pub fn run_full(svc: &StoreService, mesh: &str, method: &str, params: Value, now
                 "promoted": r.promoted, "deleted": r.deleted, "kept_project": r.kept_project,
                 "archived": r.archived.len(), "dropped_tombstones": r.dropped_tombstones,
             }))
+        }
+        "usage" => {
+            let n = names(mesh, &project, "x")?;
+            let (pobj, pbytes) = weftos_store::retention::usage(&b, &n.pr).map_err(e)?;
+            let quota = p.quota_bytes.unwrap_or(weftos_store::retention::DEFAULT_WORKTREE_QUOTA);
+            let mut wts = Vec::new();
+            for info in worktree_stores(svc, mesh, &project) {
+                let landed = weftos_store::promote::is_promoted(&b, &info.bucket).map_err(e)?.map(|r| r.promoted_ms);
+                wts.push(json!({
+                    "store": info.name, "objects": info.objects, "bytes": info.bytes,
+                    "landed_ms": landed, "over_quota": quota > 0 && info.bytes > quota,
+                }));
+            }
+            Ok(json!({"project": {"objects": pobj, "bytes": pbytes}, "worktrees": wts, "quota_bytes": quota}))
+        }
+        "gc" => {
+            use weftos_store::retention::{DAY_MS, DEFAULT_LANDED_KEEP_DAYS, expired_archive_keys, landed_before};
+            let keep = p.keep_days.unwrap_or(DEFAULT_LANDED_KEEP_DAYS);
+            let cutoff = now_ms.saturating_sub(keep.saturating_mul(DAY_MS));
+            let mut retire = Vec::new();
+            for info in worktree_stores(svc, mesh, &project) {
+                if landed_before(&b, &info.bucket, cutoff).map_err(e)?.is_some() {
+                    retire.push(info);
+                }
+            }
+            let mut expired = Vec::new();
+            if let Some(days) = p.archive_keep_days {
+                let prefix = format!("w-{}-", project.to_lowercase());
+                let cutoff = now_ms.saturating_sub(days.saturating_mul(DAY_MS));
+                svc.ensure_archive().map_err(|x| x.to_string())?;
+                expired = expired_archive_keys(&b, ARCHIVE_BUCKET, &prefix, cutoff).map_err(e)?;
+            }
+            let names: Vec<String> = retire.iter().map(|i| i.name.clone()).collect();
+            if !p.confirmed {
+                return Ok(json!({"dry_run": true, "retire": names, "expire_archived": expired.len(),
+                                 "keep_days": keep, "note": "nothing was changed; pass --confirmed to act"}));
+            }
+            let (mut retired, mut failed) = (Vec::new(), Vec::new());
+            for info in &retire {
+                let r = StoreName::parse(&info.name).map_err(|x| x.to_string()).and_then(|nm| svc.archive(&nm, true, "gc").map_err(|x| x.to_string()));
+                match r {
+                    Ok(_) => retired.push(info.name.clone()),
+                    Err(x) => failed.push(json!({"store": info.name, "error": x})),
+                }
+            }
+            for k in &expired {
+                weftos_store::overlay::ObjectBackend::delete(&b, ARCHIVE_BUCKET, k).map_err(e)?;
+            }
+            Ok(json!({"dry_run": false, "retired": retired, "failed": failed, "expired_archived": expired.len(), "keep_days": keep}))
         }
         "follow" => {
             let n = names(mesh, &project, "x")?;

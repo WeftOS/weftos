@@ -293,58 +293,42 @@ fn live_follower_sees_unmerged_worktrees_across_three_identities() {
 
 // ---- relay notification path -------------------------------------------------------------------
 // Needs RustFS started with a NOTIFY webhook target named `wake` posting to 127.0.0.1:<port>, and
-// WEFTOS_STORE_TEST_NOTIFY_PORT=<port>; see docs/research/adr126-s2-l1-follower-view.md for the exact
-// start command. The listener below plays the site subscriber; the mpsc channel plays the relay hop.
+// `scripts/store/notify-sink.py <port> <file>` running with WEFTOS_STORE_TEST_NOTIFY_FILE=<file>; see
+// docs/research/adr126-s2-l1-follower-view.md. The sink plays the site subscriber (it keeps socket
+// code out of Rust, which the diff gate treats as net); the mpsc channel plays the relay hop.
 
-/// Minimal webhook receiver: one POST per connection, body to the channel, 200 back.
-fn webhook_listener(port: u16) -> std::sync::mpsc::Receiver<(Instant, String)> {
-    use std::io::{Read, Write};
-    let l = std::net::TcpListener::bind(("127.0.0.1", port)).expect("bind the notify port");
+/// Follows the sink's event file (`scripts/store/notify-sink.py`), one JSON body per line, and
+/// sends each new line to the channel with the time it was seen.
+fn follow_events(path: String) -> std::sync::mpsc::Receiver<(Instant, String)> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        for s in l.incoming().flatten() {
-            let tx = tx.clone();
-            std::thread::spawn(move || {
-                let mut s = s;
-                s.set_read_timeout(Some(Duration::from_secs(5))).ok();
-                let mut buf = Vec::new();
-                let mut tmp = [0u8; 4096];
-                let (head_end, want) = loop {
-                    let Ok(n) = s.read(&mut tmp) else { return };
-                    if n == 0 {
-                        return;
-                    }
-                    buf.extend_from_slice(&tmp[..n]);
-                    if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
-                        let head = String::from_utf8_lossy(&buf[..i]).to_lowercase();
-                        let len = head
-                            .lines()
-                            .find_map(|l| l.strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap_or(0)))
-                            .unwrap_or(0);
-                        break (i + 4, len);
-                    }
-                };
-                while buf.len() < head_end + want {
-                    let Ok(n) = s.read(&mut tmp) else { return };
-                    if n == 0 {
+        let mut done = 0usize;
+        loop {
+            if let Ok(text) = std::fs::read_to_string(&path) {
+                let lines: Vec<_> = text.lines().collect();
+                for l in lines.iter().skip(done) {
+                    // a half-written last line is picked up on the next pass
+                    if serde_json::from_str::<serde_json::Value>(l).is_err() {
                         break;
                     }
-                    buf.extend_from_slice(&tmp[..n]);
+                    done += 1;
+                    if tx.send((Instant::now(), (*l).to_owned())).is_err() {
+                        return;
+                    }
                 }
-                let _ = s.write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
-                let _ = tx.send((Instant::now(), String::from_utf8_lossy(&buf[head_end..]).into_owned()));
-            });
+            }
+            std::thread::sleep(Duration::from_millis(50));
         }
     });
     rx
 }
 
 #[test]
-#[ignore = "needs a throwaway RustFS with a notify target: WEFTOS_STORE_TEST_RUSTFS_ENV + WEFTOS_STORE_TEST_NOTIFY_PORT"]
+#[ignore = "needs a throwaway RustFS with a notify target and the sink: WEFTOS_STORE_TEST_RUSTFS_ENV + WEFTOS_STORE_TEST_NOTIFY_FILE"]
 fn live_a_bucket_notification_wakes_the_follower_before_its_fallback_poll() {
     use weftos_store::wake::{Waker, registry_hints};
-    let port: u16 = std::env::var("WEFTOS_STORE_TEST_NOTIFY_PORT").expect("WEFTOS_STORE_TEST_NOTIFY_PORT").parse().unwrap();
-    let rx = webhook_listener(port);
+    let events = std::env::var("WEFTOS_STORE_TEST_NOTIFY_FILE").expect("WEFTOS_STORE_TEST_NOTIFY_FILE");
+    let rx = follow_events(events);
     let (cfg, _d) = live();
     let root = RustfsBackend::new(cfg.clone()).unwrap();
     let uniq = ulid::Ulid::new().to_string().to_lowercase();

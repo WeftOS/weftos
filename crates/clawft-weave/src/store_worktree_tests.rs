@@ -325,3 +325,106 @@ fn live_ed25519_signed_entries_verify_against_the_bytes_rustfs_holds() {
     }
     be.delete_bucket(&b).unwrap();
 }
+
+#[test]
+fn landing_can_be_previewed_and_the_conflict_policy_and_size_cap_are_chosen_per_land() {
+    let (_d, svc) = rig();
+    call(&svc, "create", json!({"project": PROJ, "slug": "feat-c", "branch": "feat/c", "base": "abc"}), 1).unwrap();
+    let n = names("local", PROJ, "feat-c").unwrap();
+    let b = Op(svc.operator_objects());
+    S1::put(&*svc.operator_objects(), &n.pr, "assets/logo.png", b"v1", false).unwrap();
+    let ov = weftos_store::overlay::Overlay::new(&b, &n.wt, &n.pr);
+    ov.put("assets/logo.png", b"mine").unwrap();
+    ov.put("assets/new.bin", &[1u8; 300]).unwrap();
+    S1::put(&*svc.operator_objects(), &n.pr, "assets/logo.png", b"teammate", false).unwrap();
+    let p = |extra: Value| {
+        let mut base = json!({"project": PROJ, "slug": "feat-c", "agent": "bob", "host": "m2"});
+        base.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        base
+    };
+
+    let pv = call(&svc, "promote", p(json!({"dry_run": true})), 10).unwrap();
+    assert_eq!(pv["dry_run"], true);
+    assert_eq!(pv["preview"]["conflicts"], json!([["assets/logo.png", "both_edited"]]));
+    assert_eq!(pv["preview"]["would_promote"], json!(["assets/new.bin"]));
+    assert!(weftos_store::promote::is_promoted(&b, &n.wt).unwrap().is_none(), "a preview lands nothing");
+
+    let e = call(&svc, "promote", p(json!({})), 11).unwrap_err();
+    assert!(e.contains("conflict") && e.contains("assets/logo.png"), "{e}");
+    assert!(call(&svc, "promote", p(json!({"on_conflict": "bogus"})), 12).is_err());
+    let cap = call(&svc, "promote", p(json!({"on_conflict": "keep_project", "max_bytes": 100})), 13).unwrap_err();
+    assert!(cap.contains("byte cap"), "{cap}");
+
+    let r = call(&svc, "promote", p(json!({"on_conflict": "keep_project", "max_bytes": 0})), 14).unwrap();
+    assert_eq!(r["promoted"], json!(["assets/new.bin"]));
+    assert_eq!(S1::get(&*svc.operator_objects(), &n.pr, "assets/logo.png").unwrap(), b"teammate", "the project version was kept");
+}
+
+#[test]
+fn usage_shows_each_worktree_and_gc_retires_only_landed_ones_after_the_keep_period_and_only_when_confirmed() {
+    let (_d, svc) = rig();
+    let day = weftos_store::retention::DAY_MS;
+    for s in ["feat-old", "feat-new", "feat-open"] {
+        call(&svc, "create", json!({"project": PROJ, "slug": s, "branch": s, "base": "abc"}), 1).unwrap();
+        let n = names("local", PROJ, s).unwrap();
+        weftos_store::overlay::Overlay::new(&Op(svc.operator_objects()), &n.wt, &n.pr).put(&format!("assets/{s}.bin"), &[9u8; 40]).unwrap();
+    }
+    call(&svc, "promote", json!({"project": PROJ, "slug": "feat-old"}), 2 * day).unwrap();
+    call(&svc, "promote", json!({"project": PROJ, "slug": "feat-new"}), 20 * day).unwrap();
+    let now = 21 * day;
+
+    let u = call(&svc, "usage", json!({"project": PROJ, "quota_bytes": 100}), now).unwrap();
+    let wts = u["worktrees"].as_array().unwrap();
+    assert_eq!(wts.len(), 3);
+    assert!(wts.iter().all(|w| w["over_quota"] == true), "each holds meta, base and 40 bytes: {u}");
+    assert!(u["project"]["bytes"].as_u64().unwrap() >= 80, "two landed assets");
+    let landed: Vec<_> = wts.iter().filter(|w| !w["landed_ms"].is_null()).collect();
+    assert_eq!(landed.len(), 2);
+
+    // dry run is the default and changes nothing
+    let g = call(&svc, "gc", json!({"project": PROJ}), now).unwrap();
+    assert_eq!(g["dry_run"], true);
+    let retire = g["retire"].as_array().unwrap();
+    assert_eq!(retire.len(), 1, "feat-old landed 19 days ago; feat-new 1 day ago; feat-open never: {g}");
+    assert!(retire[0].as_str().unwrap().ends_with("/worktrees/feat-old/store"));
+    assert_eq!(call(&svc, "usage", json!({"project": PROJ}), now).unwrap()["worktrees"].as_array().unwrap().len(), 3);
+
+    let g = call(&svc, "gc", json!({"project": PROJ, "confirmed": true}), now).unwrap();
+    assert_eq!(g["retired"].as_array().unwrap().len(), 1);
+    assert_eq!(g["failed"], json!([]));
+    let left = call(&svc, "usage", json!({"project": PROJ}), now).unwrap();
+    assert_eq!(left["worktrees"].as_array().unwrap().len(), 2, "the open worktree and the recent landing remain");
+    // what landed is still in the project, and the retired store's contents are archived
+    let nm = names("local", PROJ, "feat-old").unwrap();
+    assert_eq!(S1::get(&*svc.operator_objects(), &nm.pr, "assets/feat-old.bin").unwrap(), vec![9u8; 40]);
+    let arch = S1::list(&*svc.operator_objects(), ARCHIVE_BUCKET, &format!("{}@", nm.wt)).unwrap();
+    assert!(!arch.is_empty(), "retired store archived before deletion");
+
+    // archive expiry is opt-in; with a short keep period the old archived objects go
+    let none = call(&svc, "gc", json!({"project": PROJ}), 400 * day).unwrap();
+    assert_eq!(none["expire_archived"], 0, "no archive_keep_days: the archive is untouched");
+    let ex = call(&svc, "gc", json!({"project": PROJ, "archive_keep_days": 30, "confirmed": true}), 400 * day).unwrap();
+    assert!(ex["expired_archived"].as_u64().unwrap() > 0, "{ex}");
+    // keys archived at the promotion time (2 days in) are gone; the retire copies carry the service's
+    // real clock (newer than this test's cutoff) and stay
+    let rest = S1::list(&*svc.operator_objects(), ARCHIVE_BUCKET, &format!("{}@", nm.wt)).unwrap();
+    assert!(rest.iter().all(|m| weftos_store::retention::archive_key_parts(&m.key).is_some_and(|(_, ts)| ts > 400 * day - 30 * day)), "{rest:?}");
+}
+
+#[test]
+fn a_worktree_store_over_its_quota_refuses_another_publish() {
+    let (_d, svc) = rig();
+    call(&svc, "create", json!({"project": PROJ, "slug": "feat-q", "branch": "feat/q", "base": "abc"}), 1).unwrap();
+    let src = tempfile::tempdir().unwrap();
+    let (paths, unc, chg) = files(src.path());
+    let publish = |extra: Value, now| {
+        let mut p = json!({"project": PROJ, "slug": "feat-q", "root": src.path().to_string_lossy(), "branch": "feat/q", "base": "abc",
+            "head": "def", "paths_z": paths, "uncommitted_z": unc, "changes_z": chg});
+        p.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        call(&svc, "publish", p, now)
+    };
+    publish(json!({}), 2).unwrap();
+    let e = publish(json!({"quota_bytes": 10}), 3).unwrap_err();
+    assert!(e.contains("over its 10 byte quota"), "{e}");
+    publish(json!({"quota_bytes": 0}), 4).unwrap();
+}

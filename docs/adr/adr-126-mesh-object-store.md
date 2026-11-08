@@ -205,6 +205,25 @@ Only the daemon creates, grants access to, or deletes a store.
 - **One writer per path.** There's no cross-client locking. Parallel agents in one
   worktree write under `agents/<instance id>/`, and shared paths are read-mostly.
 
+#### Landing controls, quotas and retention (2026-11-08)
+
+- **Preview and conflict policy.** `weaver store worktree promote --dry-run` (`worktree-store.sh land-preview`)
+  reports what a land would do with no writes: keys to promote, keep, archive and delete, and each conflict
+  with its kind (`both_edited`, `project_deleted`, `deleted_but_project_edited`). `--on-conflict
+  fail|keep_project|overwrite` (`WTS_ON_CONFLICT` for `land`) chooses per land; `fail` stays the default.
+- **Size cap on a land.** A land that would copy more than 1 GiB into the project is refused before any
+  write (`--max-bytes N`, `0` = no cap, `WTS_MAX_BYTES`). Scratch that is archived does not count.
+- **Worktree store quota.** `publish` refuses when the store already holds more than 2 GiB
+  (`--quota-bytes N`, `0` = none). This is a check at publish, not a hard limit: an agent writing straight
+  to its bucket with its own key is not stopped (RustFS bucket quotas are not used). `store worktree usage`
+  lists objects, bytes, landed time and over-quota per worktree store.
+- **Retention.** `store worktree gc` is a dry run unless `--confirmed`. It retires worktree stores landed
+  at least `--keep-days` ago (default 14; archived then deleted through the store service) and never an
+  unlanded one, however old: that is what `leftovers` reports. With `--archive-keep-days N` it also deletes
+  archived worktree objects older than N days (default: never expire; this is recovery data).
+- Tests: library (`s2_worktree`), daemon (`store_worktree_tests`), script, and a live loopback RustFS run
+  (`s2_land_rustfs`, ignored: preview, conflicts, cap, `@`-bearing archive keys, retention listing).
+
 ### 4a. The L1 follower view: seeing unmerged worktrees before integration
 
 (Added 2026-11-07, owner decision: this is required leftover work, not optional. ADR-130 names

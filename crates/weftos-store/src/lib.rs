@@ -29,6 +29,7 @@ pub mod overlay;
 pub mod policy;
 pub mod promote;
 pub mod registry_sign;
+pub mod retention;
 #[cfg(feature = "rustfs")]
 pub mod integrity;
 #[cfg(feature = "rustfs")]

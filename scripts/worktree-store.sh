@@ -7,6 +7,7 @@
 #   worktree-store.sh store-promote             store half of `land`, for the agent-git-flow post-land hook
 #   worktree-store.sh share [--handoff NOTE]    publish this worktree's tree + unmerged commits
 #   worktree-store.sh land [land.sh args]       land.sh, then promote the store (only if it landed)
+#   worktree-store.sh land-preview              what landing would do to the project, no writes (WTS_ON_CONFLICT)
 #   worktree-store.sh fetch <slug> <dest> [--bundle-ref REF]
 #                                               pull a shared tree (and its commits) from another node
 #   worktree-store.sh claim <slug>              take the merge of a handed-off worktree (saves the claim epoch;
@@ -162,7 +163,20 @@ land)
     epoch=${WTS_EPOCH:-}
     [ -z "$epoch" ] && [ -f "$(epoch_file "$slug")" ] && epoch=$(cat "$(epoch_file "$slug")")
     [ -z "$epoch" ] || [[ $epoch =~ ^[0-9]{1,18}$ ]] || die "bad epoch '$epoch'"
-    store promote --project "$(project_id)" --slug "$slug" ${epoch:+--epoch "$epoch"}
+    # Conflict policy and size cap for this land: WTS_ON_CONFLICT=fail|keep_project|overwrite (default
+    # fail), WTS_MAX_BYTES (0 = no cap; default 1 GiB). Run `land-preview` first to see conflicts.
+    oc=${WTS_ON_CONFLICT:-}
+    [ -z "$oc" ] || [[ $oc =~ ^(fail|keep_project|overwrite)$ ]] || die "WTS_ON_CONFLICT is fail, keep_project or overwrite"
+    mb=${WTS_MAX_BYTES:-}
+    [ -z "$mb" ] || [[ $mb =~ ^[0-9]{1,18}$ ]] || die "bad WTS_MAX_BYTES '$mb'"
+    store promote --project "$(project_id)" --slug "$slug" ${epoch:+--epoch "$epoch"} ${oc:+--on-conflict "$oc"} ${mb:+--max-bytes "$mb"}
+    ;;
+land-preview)
+    # What landing would do to the project right now, with no writes: conflicts by kind, byte total.
+    slug=$(slug_of); check_slug "$slug"
+    oc=${WTS_ON_CONFLICT:-}
+    [ -z "$oc" ] || [[ $oc =~ ^(fail|keep_project|overwrite)$ ]] || die "WTS_ON_CONFLICT is fail, keep_project or overwrite"
+    store_must promote --project "$(project_id)" --slug "$slug" --dry-run ${oc:+--on-conflict "$oc"}
     ;;
 fetch)
     slug=${1:?usage: fetch <slug> <dest>}; dest=${2:?usage: fetch <slug> <dest>}; shift 2

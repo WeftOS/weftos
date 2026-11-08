@@ -59,6 +59,20 @@ rm -f "$t"/state/weftos/claim-*.epoch
 : >"$t/log"; "$here/worktree-store.sh" land
 ok "no epoch known: promote without one" "grep -q '^store worktree promote' '$t/log' && ! grep -q -- '--epoch' '$t/log'"
 
+# conflict policy and size cap are chosen per land; land-preview is a dry run and never needs git to land
+: >"$t/log"; WTS_ON_CONFLICT=keep_project WTS_MAX_BYTES=0 "$here/worktree-store.sh" land
+ok "land passes the conflict policy and cap" "grep -q -- '--on-conflict keep_project' '$t/log' && grep -q -- '--max-bytes 0' '$t/log'"
+: >"$t/log"; WTS_ON_CONFLICT=clobber "$here/worktree-store.sh" land 2>/dev/null && rc=0 || rc=$?
+ok "a bad conflict policy is refused before promoting" "[ $rc != 0 ] && ! grep -q promote '$t/log'"
+: >"$t/log"; WTS_MAX_BYTES=lots "$here/worktree-store.sh" land 2>/dev/null && rc=0 || rc=$?
+ok "a bad byte cap is refused" "[ $rc != 0 ] && ! grep -q promote '$t/log'"
+: >"$t/log"; LAND_RC=2 "$here/worktree-store.sh" land-preview
+ok "land-preview runs promote --dry-run and never calls land.sh" "grep -q -- 'store worktree promote' '$t/log' && grep -q -- '--dry-run' '$t/log'"
+: >"$t/log"; WTS_ON_CONFLICT=overwrite "$here/worktree-store.sh" land-preview
+ok "land-preview shows the chosen policy" "grep -q -- '--on-conflict overwrite' '$t/log'"
+: >"$t/log"; WEAVER_RC=1 "$here/worktree-store.sh" land-preview 2>/dev/null && rc=0 || rc=$?
+ok "a failed preview exits non-zero (unlike best-effort land)" "[ $rc != 0 ]"
+
 # land only promotes when land.sh succeeds
 : >"$t/log"; LAND_RC=2 "$here/worktree-store.sh" land && rc=0 || rc=$?
 ok "land failure propagates" "[ $rc = 2 ]"
