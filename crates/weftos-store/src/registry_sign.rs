@@ -231,7 +231,30 @@ pub fn poll_verified<B: ObjectBackend>(
     require_signed: bool,
     allow_all_gone: bool,
 ) -> Result<Vec<crate::follower::Change>> {
-    let (entries, mut bad) = list_trusted_gen(b, project_bucket, verifier, require_signed)?;
+    poll_verified_settled(b, project_bucket, state, verifier, require_signed, allow_all_gone, 0)
+}
+
+/// [`poll_verified`] with the follower retry (decision note, option B). The daemon writes an entry
+/// and then its signature object, so a poll between the two writes sees a worktree the follower
+/// already knew as refused. With `settle_ms > 0`, if any worktree this follower has seen before is
+/// refused, wait `settle_ms` and list once more before reporting; only the second listing counts.
+/// A genuine forgery or rollback is still refused after the retry (it costs one delay, nothing
+/// more), and a worktree never seen before is not retried. `0` is exactly [`poll_verified`].
+pub fn poll_verified_settled<B: ObjectBackend>(
+    b: &B,
+    project_bucket: &str,
+    state: &mut crate::follower::FollowState,
+    verifier: &dyn EntryVerifier,
+    require_signed: bool,
+    allow_all_gone: bool,
+    settle_ms: u64,
+) -> Result<Vec<crate::follower::Change>> {
+    let mut listing = list_trusted_gen(b, project_bucket, verifier, require_signed)?;
+    if settle_ms > 0 && listing.1.iter().any(|s| state.seen.contains_key(s)) {
+        std::thread::sleep(std::time::Duration::from_millis(settle_ms));
+        listing = list_trusted_gen(b, project_bucket, verifier, require_signed)?;
+    }
+    let (entries, mut bad) = listing;
     let mut keep = Vec::new();
     let mut gens = Vec::new();
     for (e, t, generation) in entries {

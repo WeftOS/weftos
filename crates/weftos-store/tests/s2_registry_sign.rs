@@ -286,3 +286,83 @@ fn an_old_state_file_without_generations_still_loads() {
     let st: FollowState = serde_json::from_str(r#"{"seen":{}}"#).unwrap();
     assert!(st.generations.is_empty());
 }
+
+/// Option B of the registry-format decision note: the follower retry for the two-write window.
+mod follower_retry {
+    use super::*;
+    use weftos_store::follower::{Change, FollowState};
+
+    /// The daemon has written the new entry and not yet its signature object.
+    fn half_written(b: &MemBackend) {
+        let mut e = entry("x");
+        e.head_commit = "moved".into();
+        write_registry_entry(b, PR, &e).unwrap();
+    }
+
+    #[test]
+    fn without_a_retry_the_window_is_one_noisy_unreadable_poll() {
+        let b = MemBackend::new();
+        let v = Trusts("daemon");
+        write_registry_entry_signed(&b, PR, &entry("x"), &Toy("daemon")).unwrap();
+        let mut st = FollowState::default();
+        poll_verified(&b, PR, &mut st, &v, true, false).unwrap();
+        half_written(&b);
+        let ch = poll_verified(&b, PR, &mut st, &v, true, false).unwrap();
+        assert!(matches!(&ch[..], [Change::Unreadable { slug }] if slug == "x"), "{ch:?}");
+    }
+
+    #[test]
+    fn with_a_retry_the_signature_arriving_during_the_settle_delay_hides_the_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let b = weftos_store::FsBackend::open(dir.path()).unwrap(); // Sync, so a second thread can be the daemon
+        weftos_store::AdminBackend::create_bucket(&b, PR, &[]).unwrap();
+        let v = Trusts("daemon");
+        write_registry_entry_signed(&b, PR, &entry("x"), &Toy("daemon")).unwrap();
+        let mut st = FollowState::default();
+        poll_verified(&b, PR, &mut st, &v, true, false).unwrap();
+        let mut e = entry("x");
+        e.head_commit = "moved".into();
+        write_registry_entry(&b, PR, &e).unwrap(); // the first of the two writes
+        let ch = std::thread::scope(|s| {
+            s.spawn(|| {
+                std::thread::sleep(std::time::Duration::from_millis(60));
+                write_registry_entry_signed(&b, PR, &e, &Toy("daemon")).unwrap(); // the second write lands
+            });
+            poll_verified_settled(&b, PR, &mut st, &v, true, false, 400).unwrap()
+        });
+        assert!(matches!(&ch[..], [Change::HeadMoved { entry, .. }] if entry.head_commit == "moved"), "{ch:?}");
+    }
+
+    #[test]
+    fn a_real_forgery_is_still_refused_after_the_retry_and_a_new_worktree_is_not_retried() {
+        let b = MemBackend::new();
+        let v = Trusts("daemon");
+        write_registry_entry_signed(&b, PR, &entry("x"), &Toy("daemon")).unwrap();
+        let mut st = FollowState::default();
+        poll_verified(&b, PR, &mut st, &v, true, false).unwrap();
+        half_written(&b); // and nobody ever completes it: an edit without a signature
+        let t = std::time::Instant::now();
+        let ch = poll_verified_settled(&b, PR, &mut st, &v, true, false, 150).unwrap();
+        assert!(t.elapsed().as_millis() >= 150, "a known worktree was retried");
+        assert!(matches!(&ch[..], [Change::Unreadable { slug }] if slug == "x"), "{ch:?}");
+
+        // never seen before: refused at once, no delay spent on it
+        write_registry_entry(&b, PR, &entry("fresh")).unwrap();
+        let mut st2 = FollowState::default();
+        let t = std::time::Instant::now();
+        poll_verified_settled(&b, PR, &mut st2, &v, true, false, 2_000).unwrap();
+        assert!(t.elapsed().as_millis() < 1_000, "an unknown worktree must not be retried");
+    }
+
+    #[test]
+    fn zero_is_exactly_the_old_poll() {
+        let b = MemBackend::new();
+        let v = Trusts("daemon");
+        write_registry_entry_signed(&b, PR, &entry("x"), &Toy("daemon")).unwrap();
+        let (mut a, mut c) = (FollowState::default(), FollowState::default());
+        let r1 = poll_verified(&b, PR, &mut a, &v, true, false).unwrap();
+        let r2 = poll_verified_settled(&b, PR, &mut c, &v, true, false, 0).unwrap();
+        assert_eq!(r1.len(), r2.len());
+        assert_eq!(serde_json::to_string(&a).unwrap(), serde_json::to_string(&c).unwrap());
+    }
+}

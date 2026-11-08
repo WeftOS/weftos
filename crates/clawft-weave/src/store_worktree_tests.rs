@@ -289,6 +289,17 @@ fn signing_settings_come_from_files_and_a_bad_file_is_an_error_not_unsigned() {
     assert!(SignCfg::from_lookup(env("", "", Some("0"))).unwrap().trusted.is_none());
 }
 
+#[test]
+fn follow_retry_is_off_by_default_and_validated() {
+    let with = |v: Option<&'static str>| SignCfg::from_lookup(move |k| (k == "WEFTOS_WT_FOLLOW_RETRY_MS").then(|| v.map(String::from)).flatten());
+    assert_eq!(with(None).unwrap().follow_retry_ms, 0, "off unless the owner picks option B");
+    assert_eq!(with(Some("")).unwrap().follow_retry_ms, 0);
+    assert_eq!(with(Some("750")).unwrap().follow_retry_ms, 750);
+    for bad in ["-1", "fast", "10001", "1.5"] {
+        assert!(with(Some(bad)).err().unwrap().contains("WEFTOS_WT_FOLLOW_RETRY_MS"), "{bad}");
+    }
+}
+
 /// The daemon's real ed25519 signer and trusted-key verifier against a real RustFS (the bytes the
 /// store holds are what is signed). Throwaway RustFS only: WEFTOS_STORE_TEST_RUSTFS_ENV.
 #[test]

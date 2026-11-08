@@ -24,7 +24,7 @@ use weftos_store::share::{
     Actor, Limits, TreeSource, mark_handoff, mark_merged_at, parse_name_status_z, publish_tree,
 };
 use weftos_store::registry_sign::{
-    EntrySigner, EntryVerifier, list_trusted_gen, list_trusted_lenient, poll_verified, remove_registry_entry_signed,
+    EntrySigner, EntryVerifier, list_trusted_gen, list_trusted_lenient, poll_verified_settled, remove_registry_entry_signed,
     write_registry_entry_signed,
 };
 use weftos_store::share_fetch::{
@@ -201,6 +201,9 @@ pub struct SignCfg {
     key: Option<ed25519_dalek::SigningKey>,
     trusted: Option<Vec<[u8; 32]>>,
     require: bool,
+    /// `WEFTOS_WT_FOLLOW_RETRY_MS`: re-list once after this many ms when a known worktree is refused
+    /// (option B in the registry-format decision note). 0 = off, the default.
+    follow_retry_ms: u64,
 }
 
 /// 32 bytes from 64 hex characters. The error never repeats any of the input: this parses a secret seed.
@@ -228,7 +231,7 @@ impl SignCfg {
     }
 
     pub fn new(key: Option<[u8; 32]>, trusted: Option<Vec<[u8; 32]>>, require: bool) -> Self {
-        Self { key: key.map(|k| ed25519_dalek::SigningKey::from_bytes(&k)), trusted, require }
+        Self { key: key.map(|k| ed25519_dalek::SigningKey::from_bytes(&k)), trusted, require, follow_retry_ms: 0 }
     }
 
     /// Read the three env settings. A named file that cannot be read is an error, never a silent
@@ -269,7 +272,17 @@ impl SignCfg {
             // unset: a trusted-key file means "filter", which is what setting one is for
             _ => trusted.is_some(),
         };
-        Ok(Self::new(key, trusted, require))
+        let retry = match get("WEFTOS_WT_FOLLOW_RETRY_MS").as_deref() {
+            None | Some("") => 0,
+            Some(v) => v.parse::<u64>().ok().filter(|n| *n <= 10_000).ok_or("WEFTOS_WT_FOLLOW_RETRY_MS is milliseconds, 0 to 10000")?,
+        };
+        Ok(Self::new(key, trusted, require).with_follow_retry_ms(retry))
+    }
+
+    /// Option B of the registry-format decision note: see `follow_retry_ms`.
+    pub fn with_follow_retry_ms(mut self, ms: u64) -> Self {
+        self.follow_retry_ms = ms;
+        self
     }
 }
 
@@ -657,7 +670,7 @@ pub fn run_full(svc: &StoreService, mesh: &str, method: &str, params: Value, now
             let sp = guard.check(need(&p.state, "state")?, "state", Use::WriteFile)?;
             let mut st = FollowState::load(&sp).map_err(e)?;
             let ch = match &sign.trusted {
-                Some(t) => poll_verified(&b, &n.reg, &mut st, &Trusted(t), sign.require, p.confirmed),
+                Some(t) => poll_verified_settled(&b, &n.reg, &mut st, &Trusted(t), sign.require, p.confirmed, sign.follow_retry_ms),
                 None if p.confirmed => follower::poll_confirmed(&b, &n.reg, &mut st),
                 None => follower::poll(&b, &n.reg, &mut st),
             }
