@@ -215,7 +215,7 @@ All live runs were noisy (load 3 to 13), so no timing from them counts as a desi
 | S3 on a real edge node; S4 wired into `release.sh`; S5 as a second RustFS on PG | **not run** | next-steps 7, steps 9, 10, 13 |
 | Tapestry: 16 Linux sandbox tests on PG | **done** 2026-11-08 PM: items 9+10 pass on photo-gallery, 104/104, 0 skips, all 16 Linux-only tests ok, no EPERM (commit eee49baf on `tapestry/p3-scoped-view`; `docs/tapestry/p3-linux-sandbox-pg-results-2026-11-08.md`; not verified from this Mac) | Tapestry lead, message 2026-11-08 13:12 |
 | Tapestry: loopback onboarding e2e | **done** 2026-11-08 PM, green in both probe roles (Tapestry lead delta; evidence `docs/tapestry/p3-workspace-loopback.md` on `tapestry/p3-item4-onboarding` and logs in `~/tapestry-p3-onboarding-logs-20261108/`; not verified from this Mac) | same |
-| Tapestry: Phase 1 gates (a), (b), (c) on the final integration build | **not run** | same |
+| Tapestry: Phase 1 gates (a), (b), (c) on the final integration build | **done** 2026-11-08 PM, all pass on `tapestry 1.0.45 (ef376c8d0250)`, a gate-only build, not installed: (c) strings scan 0 unexplained (x.ai 356: 350 ACP-exempt, 6 allowlisted; grok.com 1 exempt; mixpanel, sentry, googleapis 0); (a) no-key default session rc 0 with and without weft on PATH, sockets only 127.0.0.1:18181; (b) session plus subagent rc 0, 22 connects (9 loopback 18181, 13 unix kernel.sock R6 roster probe under the stand-in HOME, no daemon), 0 DNS, 0 non-loopback. Doc `docs/tapestry/p3-phase1-gates-rerun.md` on `tapestry/p3-closeout-docs` c1f4cec3; not verified from this Mac | Tapestry lead, delta 2026-11-08 PM |
 | WeftOS: the two daemon-boot tests under nextest on the real branch | **not run** (fail under nextest only, pass under cargo test, per the Tapestry lead) | same |
 | Tapestry and WeftOS full suites at release | **not run**, release only | same |
 
@@ -233,7 +233,7 @@ nothing pushed. I did not read it.
 | a | `tapestry/p3-scoped-view` | ab572851 | Items 9 and 10: Linux sandbox (bwrap, allow-list seccomp, Landlock TCP, tmpfs `/tmp`, opt-in `landlock_optional`) plus the file half over our view verbs | Contains `tapestry/p3-linux-sandbox` 2d27f635. Needs the Linux run on PG first. Needs our `wt/adr126-e1-view-verbs` landed first |
 | b | `tapestry/p3-item4-onboarding` | 01cfe6fa (= c3e1be5b, e242fa6a, 01cfe6fa) | Workspace server stops self-sandboxing; `--pass-key-file`; two stale upstream probe calls fixed plus the green loopback onboarding write-up (delta from the Tapestry lead, 2026-11-08 PM) | Do NOT land `tapestry/p3-hub-passkey` 847521bf (exploratory D5/D6) nor its backup `tapestry/p3-hub-passkey-full-backup` |
 | c | `tapestry/p3-test-hub` | 17c43e99 | Test-only loopback hub crate | In no shipped binary |
-| d | Docs: `p3-merge-rehearsal` e4146f9f, `p3-decision-memo` d4808a46, `p3-workspace-loopback` 23349d5d, `p3-prep-docs` cc216e50 | | Docs only | |
+| d | Docs: `p3-merge-rehearsal` e4146f9f, `p3-decision-memo` d4808a46, `p3-workspace-loopback` 23349d5d, `p3-prep-docs` cc216e50, `p3-closeout-docs` c1f4cec3 (Phase 1 gates rerun) | | Docs only | |
 | HELD | `tapestry/p2-r11-release` | cb216887 | R11 self-update and release workflow | Do not merge |
 | BACKUP | `feat/weft-computer-hub` | 99bad03c / b1b2726c0 | Approved backup plan: unmerged prep that stays unmerged while Phase 3 D1 is unanswered; work continues on it (owner clarification 2026-11-08 13:12, via the Tapestry lead) | Stays unmerged for this release unless the owner answers D1 in its favour |
 
