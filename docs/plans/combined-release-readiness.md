@@ -216,7 +216,7 @@ All live runs were noisy (load 3 to 13), so no timing from them counts as a desi
 | Tapestry: 16 Linux sandbox tests on PG | **done** 2026-11-08 PM: items 9+10 pass on photo-gallery, 104/104, 0 skips, all 16 Linux-only tests ok, no EPERM (commit eee49baf on `tapestry/p3-scoped-view`; `docs/tapestry/p3-linux-sandbox-pg-results-2026-11-08.md`; not verified from this Mac) | Tapestry lead, message 2026-11-08 13:12 |
 | Tapestry: loopback onboarding e2e | **done** 2026-11-08 PM, green in both probe roles (Tapestry lead delta; evidence `docs/tapestry/p3-workspace-loopback.md` on `tapestry/p3-item4-onboarding` and logs in `~/tapestry-p3-onboarding-logs-20261108/`; not verified from this Mac) | same |
 | Tapestry: Phase 1 gates (a), (b), (c) on the final integration build | **done** 2026-11-08 PM, all pass on `tapestry 1.0.45 (ef376c8d0250)`, a gate-only build, not installed: (c) strings scan 0 unexplained (x.ai 356: 350 ACP-exempt, 6 allowlisted; grok.com 1 exempt; mixpanel, sentry, googleapis 0); (a) no-key default session rc 0 with and without weft on PATH, sockets only 127.0.0.1:18181; (b) session plus subagent rc 0, 22 connects (9 loopback 18181, 13 unix kernel.sock R6 roster probe under the stand-in HOME, no daemon), 0 DNS, 0 non-loopback. Doc `docs/tapestry/p3-phase1-gates-rerun.md` on `tapestry/p3-closeout-docs` c1f4cec3; not verified from this Mac | Tapestry lead, delta 2026-11-08 PM |
-| WeftOS: the two daemon-boot tests under nextest on the real branch | **not run** (fail under nextest only, pass under cargo test, per the Tapestry lead) | same |
+| WeftOS: the two daemon-boot tests under nextest on the real branch | **not reproduced; timeout raised; confirm under the release suite.** On ee9d48efe `kernel_restart_e2e` and `legacy_adoption_boot` pass under nextest 5 of 5 and under cargo test; full clawft-weave nextest 1531/1532, the one failure `project_principal_population` also fails on the baseline; added CPU load did not make them fail. Likely cause: the spawned 169 MB debug weaver stalls in `_dyld_start` for 8 to 35 s before main (seen with `sample`) and both tests hard-coded a 60 s boot wait, exceeded under the rehearsal's 5-crate parallel run. Fix in tests only: `fix/daemon-boot-nextest` 93b52ca22 (BOOT_WAIT 300 s). Not established that the failure is gone under that load; rerun the 5-crate nextest slice at release | Tapestry lead, delta 2026-11-08 PM |
 | Tapestry and WeftOS full suites at release | **not run**, release only | same |
 
 ## Tapestry side
@@ -249,6 +249,7 @@ nothing pushed. I did not read it.
 | bc86bcd70 | K0 | yes |
 | 9492ec881 | wire fixtures | yes |
 | 98658b929 | merge tip | yes |
+| 93b52ca22 | `fix/daemon-boot-nextest` (tests only: `kernel_restart_e2e.rs` and `legacy_adoption_boot.rs` wait up to 300 s for the spawned weaver instead of 60 s; verified locally: 2 files, 17 insertions) | no, unmerged; owner merges |
 
 ### Tapestry test slices (all targeted, on the Mac)
 
@@ -259,7 +260,7 @@ nothing pushed. I did not read it.
 | Test hub | 20/20 | same |
 | Integration: weft-roster, weft-journal, xai-grok-agent | 631/632, 1 load-sensitive flake | same |
 | `xai-grok-shell` `weftos_roster` | 5/5 | same |
-| WeftOS crates for the merges | 6222/6229, 5 pre-existing failures; 2 daemon-boot tests fail under nextest only | same |
+| WeftOS crates for the merges | 6222/6229, 5 pre-existing failures; the 2 daemon-boot nextest failures were not reproduced on ee9d48efe (see the row above) | same |
 
 Needed before release is in section 4 (all **not run**). Owner calls are in section 3, tagged Tapestry.
 
