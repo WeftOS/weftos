@@ -104,7 +104,7 @@ pub struct ViewSpec {
 - **Single writer.** A view with a work tree holds a lease on `(bucket, work prefix)`. A read-only
   view takes no lease, so any number of read-only views can share a prefix.
 - **Who derives it.** The daemon derives the spec from the governance decision for the session's
-  principal (Tapestry R9's `governance.check`; ADR-126 section 3 grants). The session never
+  principal (Tapestry R9's `governance.check`; ADR-126 section 3 grants). The owner decided 2026-11-08 that any other node or person may sign grants, not only the daemon; the daemon derives the spec from a grant it verifies. The session never
   supplies a spec, a prefix or a path. The spec hash goes into `view.json` and is checked on every
   reload.
 
@@ -299,7 +299,7 @@ nothing.
 | Close with unpublished work | `CloseMode` | `Publish`: published first. `Discard`: dropped, by the caller's explicit choice. `status().pending` shows it beforehand |
 | Clock skew on the lease | a lease stamped more than 10 min ahead of our clock is not live (the S2 claim rule, `CLAIM_SKEW_MS`) | Taken over with a conditional put. A holder whose clock is behind by more than the TTL loses its lease early; the next publish fails with `LeaseLost` rather than writing |
 | Backend without conditional writes | `Unsupported` | A stale lease takeover is refused (`LeaseTakeoverUnsupported`). Renew and release fall back to head-then-write (not atomic). Data writes use the drive's head-then-write fallback |
-| Opaque directory in an overlay upper (`rmdir` then `mkdir` of the same name in the session) | **not detected**: it is an xattr, and reading one needs a dependency the crate does not have | Lower files under that directory are not deleted on publish. Open question 4 |
+| Opaque directory in an overlay upper (`rmdir` then `mkdir` of the same name in the session) | **not detected**: it is an xattr, and reading one needs a dependency the crate does not have. Decided 2026-11-08: read it with the `xattr` crate, no unsafe; implementation is pending the owner's diff-gate approvals entry for the new dependency | Lower files under that directory are not deleted on publish until then. Question 4 (decided) |
 
 ## 8. Enforcement map
 
@@ -334,9 +334,10 @@ nothing.
    tombstones"), so the read-only half is enforced at the store too? That is aepod's STS wiring.
 3. **Lease TTL and renewal.** Is 15 minutes, renewed before each publish, right? Should the daemon
    renew on a timer while a session runs?
-4. **Overlay mode.** Take `libc` (already a workspace dependency, owner-gated by the diff gate) to
-   read the `trusted.overlay.opaque` / `user.overlay.opaque` xattr. Or have the Linux launcher report
-   opaque directories. Or ship only `Clone` on Linux for now.
+4. **Overlay mode.** Decided 2026-11-08, implementation pending the approvals entry: read the
+   `trusted.overlay.opaque` / `user.overlay.opaque` xattr with the `xattr` crate, no unsafe. It is a
+   new dependency, so the owner's own entry in the diff-gate approvals comes first; this is a
+   follow-up, not done.
 5. **Refresh while an overlay is mounted.** `Empty` never refreshes the work prefix during a session.
    Is "refresh the work prefix at the next open" acceptable, or do sessions need live remote
    changes in `/work` (which means `Clone`)?
