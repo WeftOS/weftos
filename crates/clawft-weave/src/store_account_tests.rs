@@ -52,7 +52,7 @@ fn spec_refuses_weftos_account_low_uid_bad_name_and_wildcard_listen() {
 
 #[test]
 fn unit_runs_as_client_user_and_hides_other_trees() {
-    let u = ClientStoreSpec::standard("acme", 2102, 9100).unwrap().systemd_unit(Path::new("/opt/rustfs/rustfs"));
+    let u = ClientStoreSpec::standard("acme", 2102, 9100).unwrap().systemd_unit(Path::new("/opt/rustfs/rustfs")).unwrap();
     assert!(u.contains("User=acme\n"));
     assert!(u.contains("TemporaryFileSystem=/data1:ro"));
     assert!(u.contains("BindPaths=/data1/acme/store"));
@@ -249,4 +249,81 @@ fn a_newer_grant_replaces_the_older_so_a_downgrade_sticks() {
     g.install_xmesh(r, NOW).unwrap();
     assert!(ok(&g, &p, &s, Access::Read));
     assert!(!ok(&g, &p, &s, Access::Write));
+}
+
+#[test]
+fn listen_must_be_loopback_or_tailnet_in_every_spelling() {
+    let root = PathBuf::from("/data1/acme/store");
+    let spec = |a: &str| ClientStoreSpec::new("acme", 2102, root.clone(), a.parse().unwrap());
+    for ok in ["127.0.0.1:9100", "[::1]:9100", "100.101.102.103:9100", "[fd7a:115c:a1e0::1]:9100", "[::ffff:127.0.0.1]:9100"] {
+        assert!(spec(ok).is_ok(), "{ok}");
+    }
+    for bad in ["0.0.0.0:9100", "[::]:9100", "[::ffff:0.0.0.0]:9100", "203.0.113.5:9100", "192.168.1.5:9100", "100.128.0.1:9100", "[2001:db8::1]:9100"] {
+        assert_eq!(spec(bad), Err(SpecError::Listen), "{bad}");
+    }
+}
+
+#[test]
+fn system_user_names_and_out_of_range_uids_are_not_client_accounts() {
+    let l: SocketAddr = "127.0.0.1:9100".parse().unwrap();
+    for a in ["root", "postgres", "nobody", "sshd"] {
+        let r = PathBuf::from(format!("/data1/{a}/store"));
+        assert_eq!(ClientStoreSpec::new(a, 2102, r, l), Err(SpecError::NotClient), "{a}");
+    }
+    let r = PathBuf::from("/data1/acme/store");
+    assert_eq!(ClientStoreSpec::new("acme", 65534, r.clone(), l), Err(SpecError::UidRange(65534)));
+    assert!(ClientStoreSpec::new("acme", 59_999, r, l).is_ok());
+}
+
+#[test]
+fn unit_refuses_a_binary_path_that_could_inject_lines_and_allows_the_tailnet_listener() {
+    let s = ClientStoreSpec::standard("acme", 2102, 9100).unwrap();
+    for bad in ["/opt/x\nExecStartPre=/bin/sh", "rustfs", "/opt/a b/rustfs", "/opt/%n/rustfs", "/opt/$X/rustfs"] {
+        assert_eq!(s.systemd_unit(Path::new(bad)), Err(SpecError::Binary), "{bad:?}");
+    }
+    let t = ClientStoreSpec::new("acme", 2102, PathBuf::from("/data1/acme/store"), "100.64.1.2:9100".parse().unwrap()).unwrap();
+    assert!(t.systemd_unit(Path::new("/opt/rustfs")).unwrap().contains("IPAddressAllow=localhost 100.64.0.0/10"));
+}
+
+#[test]
+fn a_grant_dated_in_the_future_is_not_live() {
+    let mut g = gate();
+    g.trust_mesh(mesh(2), key(2).verifying_key());
+    let s = name(mesh(2), ULID);
+    let far = CrossMeshGrant::sign(&key(2), mesh(2), mesh(1), &s, Access::Read, 1, NOW + 10 * 365 * 24 * 3600, NOW + 11 * 365 * 24 * 3600);
+    assert!(g.install_xmesh(far, NOW).is_err(), "issued ten years ahead");
+    let near = CrossMeshGrant::sign(&key(2), mesh(2), mesh(1), &s, Access::Read, 2, NOW + 60, NOW + 3600);
+    assert!(g.install_xmesh(near, NOW).is_ok(), "a minute of skew is fine");
+}
+
+#[test]
+fn a_local_downgrade_takes_effect_in_the_gate_alone() {
+    let mut g = gate();
+    let s = name(mesh(1), ULID);
+    g.grant(StoreGrant { principal: client("c1"), store: s.clone(), access: Access::Write });
+    g.grant(StoreGrant { principal: client("c1"), store: s.clone(), access: Access::Read });
+    assert!(ok(&g, &client("c1"), &s, Access::Read));
+    assert!(!ok(&g, &client("c1"), &s, Access::Write));
+}
+
+#[test]
+fn gate_state_round_trips_and_drops_a_grant_whose_key_is_gone() {
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("gate.json");
+    let mut g = gate();
+    let s = name(mesh(1), ULID);
+    g.grant(StoreGrant { principal: weftos(), store: s.clone(), access: Access::Read });
+    g.trust_mesh(mesh(2), key(2).verifying_key());
+    let x = CrossMeshGrant::sign(&key(2), mesh(2), mesh(1), &name(mesh(2), ULID), Access::Read, 1, NOW - 10, NOW + 100);
+    g.install_xmesh(x.clone(), NOW).unwrap();
+    g.revoke_xmesh(x.id());
+    g.save(&path).unwrap();
+    let mut back = StoreGate::load(Authority(mesh(1)), "acme", &path).unwrap();
+    assert!(ok(&back, &weftos(), &s, Access::Read));
+    assert!(back.install_xmesh(x, NOW).is_err(), "seq and revocation came back");
+    // A file edited to carry a grant signed by someone else is not trusted on load.
+    let text = std::fs::read_to_string(&path).unwrap().replace(&hex::encode(key(2).verifying_key().to_bytes()), &hex::encode(key(3).verifying_key().to_bytes()));
+    std::fs::write(&path, text).unwrap();
+    let tampered = StoreGate::load(Authority(mesh(1)), "acme", &path).unwrap();
+    assert!(tampered.xmesh.is_empty());
 }

@@ -37,6 +37,8 @@ pub const WEFTOS_ACCOUNT: &str = "weftos";
 const GRANT_DOMAIN: &[u8] = b"weftos-store-xmesh-grant-v1\0";
 /// Longest a cross-mesh grant may live, in seconds (one year).
 pub const MAX_GRANT_TTL_SECS: u64 = 365 * 24 * 3600;
+/// How far ahead of our clock a grant's `issued_at` may be (clock skew between meshes).
+pub const CLOCK_SKEW_SECS: u64 = 300;
 
 /// Why a spec or path was refused (setup time, so the detail is fine to show).
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -51,6 +53,10 @@ pub enum SpecError {
     Root,
     #[error("store must listen on loopback or a tailnet address, not a wildcard")]
     Listen,
+    #[error("uid {0} is outside the client range")]
+    UidRange(u32),
+    #[error("binary must be an absolute path with no spaces, control characters or unit specifiers")]
+    Binary,
     #[error("store root is not owned by the client user with mode 0700")]
     Ownership,
 }
@@ -71,6 +77,29 @@ fn account_ok(a: &str) -> bool {
         && a.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
 }
 
+/// Names that are system users on a host; a client account may not take one, since the unit
+/// runs as `User=<account>` and that name would resolve to the system user.
+const RESERVED_ACCOUNTS: &[&str] = &[
+    "root", "postgres", "nobody", "daemon", "bin", "sys", "sshd", "admin", "wheel", "docker", "mail",
+    "www-data", "systemd-network", "systemd-resolve", "messagebus", "syslog", "ubuntu", "rustfs",
+];
+/// Highest uid a client account may have (below the 16-bit `nobody` range).
+pub const MAX_CLIENT_UID: u32 = 59_999;
+
+/// Tailnet ranges: CGNAT `100.64.0.0/10` and the Tailscale ULA `fd7a:115c:a1e0::/48`.
+fn tailnet(ip: &IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v) => v.octets()[0] == 100 && (v.octets()[1] & 0xc0) == 0x40,
+        IpAddr::V6(v) => v.segments()[..3] == [0xfd7a, 0x115c, 0xa1e0],
+    }
+}
+
+/// Loopback or tailnet only. An IPv4-mapped IPv6 address is judged as the IPv4 it maps to.
+fn listen_ok(addr: &SocketAddr) -> bool {
+    let ip = addr.ip().to_canonical();
+    addr.port() != 0 && !ip.is_unspecified() && (ip.is_loopback() || tailnet(&ip))
+}
+
 impl ClientStoreSpec {
     /// The standard instance for `account`: data under `/data1/<account>/store`,
     /// loopback on `port`.
@@ -84,18 +113,21 @@ impl ClientStoreSpec {
         if !account_ok(account) {
             return Err(SpecError::Account);
         }
-        if account == WEFTOS_ACCOUNT {
+        if account == WEFTOS_ACCOUNT || RESERVED_ACCOUNTS.contains(&account) {
             return Err(SpecError::NotClient);
         }
         if uid < MIN_CLIENT_UID {
             return Err(SpecError::Uid(uid));
+        }
+        if uid > MAX_CLIENT_UID {
+            return Err(SpecError::UidRange(uid));
         }
         if root.components().any(|c| matches!(c, Component::ParentDir | Component::CurDir))
             || root != Path::new(DATA_ROOT).join(account).join("store")
         {
             return Err(SpecError::Root);
         }
-        if listen.ip().is_unspecified() || listen.port() == 0 {
+        if !listen_ok(&listen) {
             return Err(SpecError::Listen);
         }
         Ok(Self { account: account.to_owned(), uid, root, listen })
@@ -113,21 +145,32 @@ impl ClientStoreSpec {
     }
 
     /// The systemd unit: runs as the client user, sees only its own tree.
-    pub fn systemd_unit(&self, binary: &Path) -> String {
+    pub fn systemd_unit(&self, binary: &Path) -> Result<String, SpecError> {
+        let b = binary.to_str().ok_or(SpecError::Binary)?;
+        if !binary.is_absolute() || b.chars().any(|c| c.is_control() || c.is_whitespace() || matches!(c, '%' | '$' | '"' | '\\' | '\'')) {
+            return Err(SpecError::Binary);
+        }
         let root = self.root.display();
-        format!(
+        let ip = self.listen.ip().to_canonical();
+        // Loopback is always allowed; a tailnet listener also needs its tailnet range.
+        let allow = match (ip.is_loopback(), ip) {
+            (true, _) => "localhost".to_owned(),
+            (false, IpAddr::V4(_)) => "localhost 100.64.0.0/10".to_owned(),
+            (false, IpAddr::V6(_)) => "localhost fd7a:115c:a1e0::/48".to_owned(),
+        };
+        Ok(format!(
             "[Unit]\nDescription=WeftOS store for account {acct} (ADR-126 S5)\nAfter=network-online.target\n\n\
              [Service]\nUser={acct}\nUMask=0077\nEnvironmentFile=-{data_root}/{acct}/store.env\n\
              Environment=RUSTFS_ADDRESS={listen}\nEnvironment=RUSTFS_AUDIT_ENABLE=true\n\
              ExecStart={bin} server {root}/data\nRestart=on-failure\n\
              NoNewPrivileges=true\nProtectSystem=strict\nProtectHome=true\nPrivateTmp=true\n\
              TemporaryFileSystem={data_root}:ro\nBindPaths={root}\n\
-             IPAddressAllow=localhost\nIPAddressDeny=any\n\n[Install]\nWantedBy=multi-user.target\n",
+             IPAddressAllow={allow}\nIPAddressDeny=any\n\n[Install]\nWantedBy=multi-user.target\n",
             acct = self.account,
             listen = self.listen,
-            bin = binary.display(),
+            bin = b,
             data_root = DATA_ROOT,
-        )
+        ))
     }
 }
 
@@ -173,7 +216,7 @@ pub struct CrossMeshGrant {
 }
 
 impl CrossMeshGrant {
-    fn signing_bytes(&self) -> Vec<u8> {
+    pub(crate) fn signing_bytes(&self) -> Vec<u8> {
         let mut b = GRANT_DOMAIN.to_vec();
         b.extend_from_slice(&self.owner_mesh);
         b.extend_from_slice(&self.receiver_mesh);
@@ -247,7 +290,10 @@ impl StoreGate {
         self.projects.insert(ulid.to_owned());
     }
 
+    /// Add a grant. A new grant for the same principal and store replaces the old one, so a
+    /// downgrade from write to read takes effect.
     pub fn grant(&mut self, g: StoreGrant) {
+        self.grants.retain(|o| !(o.principal == g.principal && o.store == g.store));
         self.grants.push(g);
     }
 
@@ -270,7 +316,9 @@ impl StoreGate {
         let ok_ttl = g.expires_at > g.issued_at && g.expires_at - g.issued_at <= MAX_GRANT_TTL_SECS;
         // Receiving side: the owner is another mesh. Owning side: the owner is us.
         let ours = g.receiver_mesh == self.mesh.0 || g.owner_mesh == self.mesh.0;
-        if !ours || name.authority.0 != g.owner_mesh || !ok_ttl || g.expires_at <= now {
+        if !ours || name.authority.0 != g.owner_mesh || !ok_ttl || g.expires_at <= now
+            || g.issued_at > now.saturating_add(CLOCK_SKEW_SECS)
+        {
             return Err(Refused);
         }
         let k = (g.owner_mesh, g.receiver_mesh, g.store.clone());
@@ -290,6 +338,11 @@ impl StoreGate {
         let (gone, keep): (Vec<_>, Vec<_>) = self.xmesh.drain(..).partition(|g| g.expires_at <= now);
         self.xmesh = keep;
         gone
+    }
+
+    /// Is this exact grant (by signature) the one currently installed?
+    pub fn xmesh_installed(&self, id: [u8; 64]) -> bool {
+        self.xmesh.iter().any(|g| g.id() == id)
     }
 
     /// Revoke a cross-mesh grant; takes effect on the next [`authorize`](Self::authorize).
@@ -322,7 +375,8 @@ impl StoreGate {
         let xmesh = |receiver: &[u8; 32]| {
             self.xmesh.iter().any(|g| {
                 g.owner_mesh == name.authority.0 && g.receiver_mesh == *receiver && g.store == store
-                    && g.access >= want && g.expires_at > now && !self.revoked.contains(&g.id())
+                    && g.access >= want && g.expires_at > now && g.issued_at <= now.saturating_add(CLOCK_SKEW_SECS)
+                    && !self.revoked.contains(&g.id())
             })
         };
         match who {
@@ -367,6 +421,9 @@ pub fn iam_policy(bucket: &str, access: Access) -> Result<String, SpecError> {
         "{{\"Version\":\"2012-10-17\",\"Statement\":[{{\"Effect\":\"Allow\",\"Action\":[{acts}],\"Resource\":[\"arn:aws:s3:::{bucket}\",\"arn:aws:s3:::{bucket}/*\"]}}]}}"
     ))
 }
+
+#[path = "store_account_persist.rs"]
+mod persist;
 
 #[cfg(test)]
 #[path = "store_account_tests.rs"]

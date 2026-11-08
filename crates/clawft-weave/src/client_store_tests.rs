@@ -110,7 +110,7 @@ fn cross_mesh_principal_needs_the_signed_grant_and_revoke_drops_both_layers() {
     s.put(&ClientCaller::Local(cog("c1")), &name, "k", b"v", false).unwrap();
     let f = ClientCaller::Foreign { mesh: [2; 32], id: "weaver".into() };
     assert!(s.get(&f, &name, "k").is_err());
-    s.trust_mesh([1; 32], key().verifying_key());
+    s.trust_mesh([1; 32], key().verifying_key()).unwrap();
     let g = CrossMeshGrant::sign(&key(), [1; 32], [2; 32], &name.to_string(), Access::Read, 1, MS / 1000 - 10, MS / 1000 + 100);
     s.install_xmesh(g.clone(), "owner").unwrap();
     assert_eq!(s.get(&f, &name, "k").unwrap(), b"v");
@@ -138,7 +138,7 @@ fn expiry_stops_a_cross_mesh_grant_and_sweep_removes_the_backend_grant() {
     let name = s.hold_project(ULID, "op").unwrap();
     s.grant_local(&cog("c1"), &name, Access::Write, "op").unwrap();
     s.put(&ClientCaller::Local(cog("c1")), &name, "k", b"v", false).unwrap();
-    s.trust_mesh([1; 32], key().verifying_key());
+    s.trust_mesh([1; 32], key().verifying_key()).unwrap();
     let g = CrossMeshGrant::sign(&key(), [1; 32], [2; 32], &name.to_string(), Access::Read, 1, MS / 1000 - 10, MS / 1000 + 100);
     s.install_xmesh(g, "owner").unwrap();
     let f = ClientCaller::Foreign { mesh: [2; 32], id: "w".into() };
@@ -162,27 +162,60 @@ fn revoking_a_local_grant_refuses_the_next_call() {
 }
 
 #[test]
-fn a_restart_fails_closed_until_the_gate_is_rebuilt() {
+fn a_restart_keeps_the_gate_and_a_revoke_stays_revoked() {
     let d = tempfile::tempdir().unwrap();
+    let (c1, w) = (ClientCaller::Local(cog("c1")), ClientCaller::Weftos { id: "weaver".into() });
+    let f = ClientCaller::Foreign { mesh: [2; 32], id: "x".into() };
+    let g = CrossMeshGrant::sign(&key(), [1; 32], [2; 32], &format!("weftos://{}/projects/{ULID}/store", mesh()), Access::Read, 1, MS / 1000 - 10, MS / 1000 + 100);
     let name = {
         let s = open("acme", d.path(), Arc::new(MemSink::default()));
         let name = s.hold_project(ULID, "op").unwrap();
         s.grant_local(&cog("c1"), &name, Access::Write, "op").unwrap();
-        s.grant_weftos("weaver", &name, Access::Admin, "owner").unwrap();
-        s.put(&ClientCaller::Local(cog("c1")), &name, "k", b"v", false).unwrap();
+        s.grant_weftos("weaver", &name, Access::Read, "owner").unwrap();
+        s.grant_weftos("gone", &name, Access::Read, "owner").unwrap();
+        s.revoke_weftos("gone", &name, "owner").unwrap();
+        s.trust_mesh([1; 32], key().verifying_key()).unwrap();
+        s.install_xmesh(g.clone(), "owner").unwrap();
+        s.put(&c1, &name, "k", b"v", false).unwrap();
         name
     };
-    // The service state persisted; the gate did not. Nobody gets in on the service's grants alone.
     let s = open("acme", d.path(), Arc::new(MemSink::default()));
-    let (c1, w) = (ClientCaller::Local(cog("c1")), ClientCaller::Weftos { id: "weaver".into() });
-    assert!(s.get(&c1, &name, "k").is_err());
-    assert!(s.get(&w, &name, "k").is_err());
+    assert_eq!(s.get(&c1, &name, "k").unwrap(), b"v");
+    assert_eq!(s.get(&w, &name, "k").unwrap(), b"v");
+    assert_eq!(s.get(&f, &name, "k").unwrap(), b"v", "the cross-mesh grant survived");
+    assert!(s.get(&ClientCaller::Weftos { id: "gone".into() }, &name, "k").is_err());
+    assert!(s.install_xmesh(g.clone(), "owner").is_err(), "the replay counter survived");
+    s.revoke_xmesh(&g, "owner").unwrap();
+    let s = open("acme", d.path(), Arc::new(MemSink::default()));
+    assert!(s.get(&f, &name, "k").is_err(), "a revoke survives a restart");
+    assert!(s.install_xmesh(g, "owner").is_err(), "and the revoked grant cannot come back");
+}
+
+#[test]
+fn unreadable_gate_state_does_not_open_the_store() {
+    let d = tempfile::tempdir().unwrap();
+    {
+        let s = open("acme", d.path(), Arc::new(MemSink::default()));
+        s.hold_project(ULID, "op").unwrap();
+    }
+    let be = || Arc::new(FsBackend::open(&d.path().join("data")).unwrap());
+    let reopen = |account: &str, m: Authority| ClientStore::open(spec(account, d.path()), m, be(), be(), Arc::new(OpenGate), Arc::new(MemSink::default()), clock);
+    assert!(reopen("acme", mesh()).is_ok());
+    assert!(reopen("rival", mesh()).is_err(), "another account's gate state is not accepted");
+    assert!(reopen("acme", Authority([7; 32])).is_err(), "nor another mesh's");
+    std::fs::write(d.path().join("gate.json"), b"{ not json").unwrap();
+    assert!(reopen("acme", mesh()).is_err(), "a corrupt file fails closed");
+}
+
+#[cfg(unix)]
+#[test]
+fn the_gate_file_is_private_to_the_client() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = tempfile::tempdir().unwrap();
+    let s = open("acme", d.path(), Arc::new(MemSink::default()));
     s.hold_project(ULID, "op").unwrap();
-    assert!(s.get(&c1, &name, "k").is_err(), "holding the project is not a grant");
-    assert!(s.get(&w, &name, "k").is_err());
-    s.grant_local(&cog("c1"), &name, Access::Write, "op").unwrap();
-    assert_eq!(s.get(&c1, &name, "k").unwrap(), b"v", "bytes survived the restart");
-    assert!(s.get(&w, &name, "k").is_err(), "the WeftOS account stays out until re-granted");
+    let m = std::fs::metadata(d.path().join("gate.json")).unwrap();
+    assert_eq!(m.permissions().mode() & 0o777, 0o600);
 }
 
 #[cfg(unix)]
@@ -197,4 +230,67 @@ fn open_fs_needs_a_root_owned_by_the_client_with_mode_0700() {
     assert!(open_it(sp.clone()).is_err());
     std::fs::set_permissions(d.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     assert!(open_it(sp).is_ok());
+}
+
+#[test]
+fn revoke_local_cannot_reach_the_reserved_members() {
+    let d = tempfile::tempdir().unwrap();
+    let s = open("acme", d.path(), Arc::new(MemSink::default()));
+    let name = s.hold_project(ULID, "op").unwrap();
+    s.grant_weftos("weaver", &name, Access::Read, "owner").unwrap();
+    let fake = S1Principal::new(PrincipalKind::Member, "weftos-weaver").unwrap();
+    assert!(s.revoke_local(&fake, &name, "op").is_err());
+}
+
+#[test]
+fn reserved_principals_leave_an_audit_line_and_the_same_refusal() {
+    let d = tempfile::tempdir().unwrap();
+    let sink = Arc::new(MemSink::default());
+    let s = open("acme", d.path(), sink.clone());
+    let name = s.hold_project(ULID, "op").unwrap();
+    let fake = ClientCaller::Local(S1Principal::new(PrincipalKind::Member, "xmesh-abc").unwrap());
+    assert!(matches!(s.get(&fake, &name, "k"), Err(StoreError::Refused(m)) if m == "refused"));
+    assert!(sink.events().iter().any(|e| matches!(&e.outcome, Outcome::Refused(r) if r == "gate:reserved_or_invalid_principal")));
+}
+
+#[test]
+fn a_service_refusal_reads_the_same_as_a_gate_refusal() {
+    let d = tempfile::tempdir().unwrap();
+    let s = open("acme", d.path(), Arc::new(MemSink::default()));
+    let name = s.hold_project(ULID, "op").unwrap();
+    // The gate has a grant the service does not: only the service refuses.
+    s.gate().grant(StoreGrant { principal: Principal::Client { account: "acme".into(), id: cog("c9").to_string() }, store: name.to_string(), access: Access::Read });
+    let a = s.get(&ClientCaller::Local(cog("c9")), &name, "k").unwrap_err().to_string();
+    let b = s.get(&ClientCaller::Local(cog("nobody")), &name, "k").unwrap_err().to_string();
+    assert_eq!(a, b);
+}
+
+#[test]
+fn revoking_a_replaced_cross_mesh_grant_leaves_the_newer_one_working() {
+    let d = tempfile::tempdir().unwrap();
+    let s = open("acme", d.path(), Arc::new(MemSink::default()));
+    let name = s.hold_project(ULID, "op").unwrap();
+    s.grant_local(&cog("c1"), &name, Access::Write, "op").unwrap();
+    s.put(&ClientCaller::Local(cog("c1")), &name, "k", b"v", false).unwrap();
+    s.trust_mesh([1; 32], key().verifying_key()).unwrap();
+    let mk = |seq| CrossMeshGrant::sign(&key(), [1; 32], [2; 32], &name.to_string(), Access::Read, seq, MS / 1000 - 10, MS / 1000 + 100);
+    let (old, new) = (mk(1), mk(2));
+    s.install_xmesh(old.clone(), "owner").unwrap();
+    s.install_xmesh(new, "owner").unwrap();
+    s.revoke_xmesh(&old, "owner").unwrap();
+    let f = ClientCaller::Foreign { mesh: [2; 32], id: "w".into() };
+    assert_eq!(s.get(&f, &name, "k").unwrap(), b"v", "the newer grant still stands");
+}
+
+#[cfg(unix)]
+#[test]
+fn open_fs_refuses_a_symlinked_data_dir() {
+    use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
+    let d = tempfile::tempdir().unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let mut sp = spec("acme", d.path());
+    sp.uid = std::fs::metadata(d.path()).unwrap().uid();
+    std::fs::set_permissions(d.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    symlink(elsewhere.path(), d.path().join("data")).unwrap();
+    assert!(ClientStore::open_fs(sp, mesh(), Arc::new(OpenGate), Arc::new(MemSink::default()), clock).is_err());
 }
