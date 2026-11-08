@@ -234,21 +234,46 @@ For `Empty` the second bind is
 `dest`. The manifest carries no credential and no store endpoint. The launcher must treat any other
 field as advisory.
 
-### 6.3 `weaver store view` verbs (specified, not built)
+### 6.3 `weaver store view` verbs (built 2026-11-08, unit and loopback tests only)
 
-They would be wired like `weaver store drive`: an Admin act through the daemon RPC
-`store.view.<verb>`, the root checked by the S2 `Guard` (absolute, resolved, outside daemon state,
-no write through a symlink), and the spec built by the daemon from the session's grant.
+Wired like `weaver store drive`: an Admin act through the daemon RPC `store.view.<verb>` (code:
+`crates/clawft-weave/src/store_view.rs`, flags in `commands/store_view_args.rs`), the root checked by
+the S2 `Guard` (absolute, resolved, outside daemon state), the view bound to the store `--name` names.
+The spec is given by the operator for now (`--spec` or flags); deriving it from the session's grant is
+still the daemon's job later. Differences from the first sketch, following the library: `resolve` and
+`renew` are verbs too, and `close` requires exactly one of `--publish` or `--discard` (the library
+refuses a publishing close only while conflicts stay open, never for plain unpublished edits).
 
-| Verb | RPC | Records |
-|---|---|---|
-| `open --name <store> --root <abs> --spec <file>` | `store.view.open` | activity `ViewOpen`, chain `store.view.open` (spec hash, lease id, counts) |
-| `status --root <abs>` | `store.view.status` | none |
-| `refresh --root <abs>` | `store.view.refresh` | none (it never writes the store) |
-| `publish --root <abs>` | `store.view.publish` | `ViewPublish`, chain `store.view.publish` (puts, deletes, conflicts, conditional count) |
-| `close --root <abs> --publish \| --discard` | `store.view.close` | `ViewClose`, chain `store.view.close` (mode, lease released, removed paths) |
+```text
+weaver store view open    --name <store> --root <abs> (--spec <file.json> | --include P[=AT].. [--work P [--work-start clone|empty]]
+                          [--deny PAT].. [--mount-point DIR].. [--lease-ttl-ms N] [--device D]) [--read-only]
+weaver store view status  --root <abs> [--name <store>]
+weaver store view refresh --root <abs> [--name <store>]
+weaver store view publish --name <store> --root <abs>
+weaver store view resolve --name <store> --root <abs> --path <rel> --keep local|remote
+weaver store view renew   --root <abs> [--name <store>]
+weaver store view close   --name <store> --root <abs> (--publish | --discard)
+```
 
-Success and failure are recorded alike, with counts and not file lists, as the drive verbs do.
+`--spec` is a `ViewSpec` JSON file without `bucket`, read by the CLI and sent as a param (the daemon
+opens no path the caller names for it); a `bucket` that differs from `--name`'s is refused. `--spec` and
+the spec flags are alternatives. `--include P=AT` places prefix `P` at `AT` under `base/` (default
+`base/` itself). `--read-only` drops the work tree: no lease, `publish` refused. Output is JSON.
+
+| Verb | RPC | Prints | Records |
+|---|---|---|---|
+| `open` | `store.view.open` | root, `view.json` path, spec hash, lease, files, bytes, fetched, recovered, took-over holder, skipped | activity `ViewOpen`, chain `store.view.open` |
+| `status` | `store.view.status` | the `view.json` manifest plus lease, expiry, per-include counts, pending changes, conflicts, tampered | none |
+| `refresh` | `store.view.refresh` | per-include down reports, repaired, work updated/removed/conflicts | none (never writes the store) |
+| `publish` | `store.view.publish` | the up report (put, deleted, conflicts, conditional writes), applied, held | `ViewPublish`, chain `store.view.publish` |
+| `resolve` | `store.view.resolve` | the path and side kept | `ViewResolve`, chain `store.view.resolve` |
+| `renew` | `store.view.renew` | the lease with its new expiry | none (the drive records no claim verbs either) |
+| `close` | `store.view.close` | mode, publish report, lease released, removed paths, root removed, names left | `ViewClose`, chain `store.view.close` |
+
+Success and failure are recorded alike, as the drive verbs do. The chain payload is
+`{store, actor, result}` where every list in the result is replaced by its length, at any depth: counts,
+spec hash and lease id, never file lists. A call that fails before it names a valid store records
+nothing.
 
 ## 7. Failure modes
 
