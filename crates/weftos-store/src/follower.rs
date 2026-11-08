@@ -344,8 +344,20 @@ pub fn sync_docs<B: ObjectBackend>(b: &B, e: &RegistryEntry, cache: &Path) -> Re
     std::fs::create_dir_all(&dest)?;
     let m = read_manifest(b, &e.bucket)?
         .ok_or_else(|| S2Error::Invalid("worktree has no published tree".into()))?;
-    let want: std::collections::BTreeSet<String> = m.docs.iter().map(|d| d.path.clone()).collect();
-    let idx = safe_join(&dest, INDEX)?;
+    // The manifest is untrusted: a doc that names the follower's own control files, a dangerous
+    // name or a path that leaves the cache is neither fetched nor tracked in the index.
+    let want: std::collections::BTreeSet<String> = m
+        .docs
+        .iter()
+        .map(|d| d.path.clone())
+        .filter(|p| validate_key(p).is_ok() && !crate::share::is_dangerous_path(p) && !crate::share::is_secret_path(p))
+        .collect();
+    // The index is the follower's own fixed name (`safe_join` refuses `.wt-` names on purpose, so
+    // a manifest cannot reach it). A symlink put there is replaced, not written through.
+    let idx = dest.join(INDEX);
+    if std::fs::symlink_metadata(&idx).is_ok_and(|m| m.file_type().is_symlink()) {
+        std::fs::remove_file(&idx)?;
+    }
     let old: Vec<String> = std::fs::read(&idx)
         .ok()
         .and_then(|d| serde_json::from_slice(&d).ok())

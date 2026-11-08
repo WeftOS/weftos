@@ -716,8 +716,9 @@ pub fn is_dangerous_path(rel: &str) -> bool {
         let s = seg.to_ascii_lowercase();
         matches!(
             s.as_str(),
-            ".git" | ".gitattributes" | ".gitmodules" | ".hg" | ".svn" | ".envrc"
-        ) || seg.contains(':')
+            ".git" | ".gitattributes" | ".gitmodules" | ".hg" | ".svn" | ".envrc" | ".wt"
+        ) || seg.starts_with(".wt-") // the follower's own control files (`.wt-index.json`, temp files)
+            || seg.contains(':')
             || seg.len() > 200
             || is_windows_hostile(seg)
     })
