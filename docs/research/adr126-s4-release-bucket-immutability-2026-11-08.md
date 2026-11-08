@@ -22,9 +22,27 @@ Spike: `scripts/store/release-lock-spike.sh` against a throwaway loopback RustFS
 | Copy | A copy does **not** carry the source's lock. A COMPLIANCE +3d source copied to a new key came back GOVERNANCE for the 1-day bucket default. |
 | Plain DELETE (no `versionId`) on a locked object | 204: it adds a delete marker. The locked version survives but the key reads 404. Object Lock does **not** stop a logical delete. |
 | Bucket policy `Deny s3:DeleteObject` | Stored, and enforced against the root key too (403). So it works as a backstop only if it can exclude the sweeper, which was not tested. |
-| Lifecycle (expiration, noncurrent-version expiration) | The configuration is accepted and read back. Whether RustFS acts on it was not observed (it needs days). |
+| Multipart upload with Object Lock | Retention set on CreateMultipartUpload carries to the completed object (COMPLIANCE, date kept) and its delete is refused (403). `If-None-Match: *` on CompleteMultipartUpload is enforced: 412 when the key existed before Create, and 412 when a plain PUT created it between Create and Complete. Abort leaves nothing listed; a 412'd Complete leaves the upload listed. |
+| Lifecycle, with the scanner sped up (`RUSTFS_ILM_DEBUG_DAY_SECS=5`, first action about 20 s in) | Expiration removes an expired plain object. On a versioned bucket it makes a delete marker. `NoncurrentVersionExpiration` removes noncurrent versions. An `ExpiredObjectDeleteMarker` rule removes an orphan marker. **A current version under COMPLIANCE, GOVERNANCE or a legal hold was skipped entirely** (no marker, nothing removed), and a retained noncurrent version stayed readable. Retention dates were real wall-clock +1 day, so retention won against the sped-up clock. |
 
-Our code on a locked, versioned bucket: publish, retry, refused rebuild, retention sweep with quarantine copy, listings, retired-id check and audit all pass unchanged (`live_release_store_on_a_locked_versioned_bucket`).
+### What the audit stream shows (RustFS audit webhook to a local sink)
+
+The multipart, audit and lifecycle probes were run by hand (curl SigV4 calls against a throwaway RustFS with `RUSTFS_AUDIT_ENABLE` and a python sink); only the versioning, lock and policy probes are scripted in `scripts/store/release-lock-spike.sh`. The sink log is not committed.
+
+| Call | Event? |
+|---|---|
+| CreateBucket with the lock header | Yes (`s3:BucketCreated:*`) |
+| PutObjectRetention, PutObjectLegalHold | Yes (`ObjectCreated:PutRetention`, `...:PutLegalHold`) |
+| CompleteMultipartUpload | Yes, no versionId; the 412'd ones arrive too, named `ObjectCreated:CompleteMultipartUpload` with **no status**, so the event name alone looks like a success |
+| DeleteObject creating a delete marker | Yes (`ObjectRemoved:DeleteMarkerCreated`, status 200) |
+| DeleteObject with `versionId` refused by a lock or hold (403) | Yes (`ObjectRemoved:Delete`), no status, no versionId. S0 said 403 refusals are not in the stream; these are, because the handler (not the authoriser) refuses them. |
+| **PutBucketVersioning, PutObjectLockConfiguration, PutBucketLifecycleConfiguration, DeleteBucketLifecycle, PutBucketPolicy, DeleteBucketPolicy** | **No event** |
+| CreateMultipartUpload, UploadPart, AbortMultipartUpload, ListMultipartUploads | No event |
+| Deletions done by the lifecycle scanner | No event |
+
+No event carries a `versionId`. Failed operations have no `status` field, so a consumer must not treat a bare event name as success.
+
+Our code on a locked, versioned bucket: publish, retry, refused rebuild, retention sweep with quarantine copy, listings, retired-id check and audit all pass unchanged, with S1's locked-bucket creation and locked puts, and the server really holds the COMPLIANCE retention and refuses to delete it (`live_release_store_on_a_locked_versioned_bucket`).
 
 ## What each mechanism buys us
 
@@ -35,29 +53,30 @@ Our code on a locked, versioned bucket: publish, retry, refused rebuild, retenti
 
 ## Recommendation
 
-1. **Create release buckets with Object Lock on.** It cannot be added later, so this is a creation-time decision. S1's `create_bucket` needs a `lock` option that sends the header. Release buckets are new, so there is nothing to migrate.
-2. **Set a bucket default retention** as a floor (GOVERNANCE, N days). Every version then carries at least that lock, including anything written with no headers. A copy gets only this default, never the source's stronger lock, so a restore by the sweeper (copy-back from `quarantine/`) must be re-stamped by the sweeper before it counts as protected.
-3. **Stamp manifests explicitly** with `retain-until = created_at + floor`. COMPLIANCE for the `stable` channel, GOVERNANCE elsewhere. This is the owner's call: COMPLIANCE cannot be undone, but a mistaken publish is already fixed by a new build id, so the cost is storage.
-4. **Blobs outlive every release that names them.** After the manifest commits, the publisher extends each blob's retention to the manifest's retain-until (extension is allowed under both modes; it needs the version id from the put or head response). Never shorten.
-5. **Retention then has two phases.** The sweeper's decision stays logical (tombstone, delete marker). Physical removal happens only after retain-until, either by lifecycle noncurrent expiration or by the sweeper deleting specific versions. Today `delete` only makes markers, so storage is never reclaimed; the S3 adapter needs a version-aware delete or a lifecycle rule, and which of those RustFS enforces needs to be observed first.
+1. **Create release buckets with Object Lock on.** It cannot be added later, so this is a creation-time decision. S1 now has `create_locked_bucket` and `create_locked_store`; `weftos_release::s3::create_locked_release_bucket` wraps it for provisioning. `weaver store create` does not expose it yet. Release buckets are new, so there is nothing to migrate.
+2. **Stamp what a publish writes.** `ReleasePublisher::with_lock(LockPolicy { mode, floor_secs })` locks the manifest and every new blob until `now + floor` (from the publisher's clock, not the claimed `created_at`). The verb takes `--lock governance|compliance --lock-days N`. COMPLIANCE for the `stable` channel, GOVERNANCE elsewhere is the suggestion; the owner decides. COMPLIANCE cannot be undone, but a mistaken publish is already fixed by a new build id, so the cost is storage. A policy on a backend without lock fails the publish rather than writing unprotected objects.
+3. **A blob shared by a later release keeps the lock it was first written with.** There is no way to extend it: S1 has no PutObjectRetention call and a second put is refused by `If-None-Match`. The logical rule (the sweeper never deletes a referenced blob) still holds; only the physical floor for the later release can be shorter than its own. Ask S1 for an extend-retention call, then stamp after commit.
+4. **A copy takes only the bucket default**, never the source's lock. The sweeper's quarantine copy is therefore unlocked, and a restore must write the bytes back locked: `Sweeper::with_lock` does that on the rare restore path (the normal delete still never reads the bytes). A bucket default retention (PutObjectLockConfiguration) would also cover this, but S1 does not set it yet.
+5. **Physical removal is the lifecycle scanner's job.** The sweeper's delete stays logical (delete marker). A rule with `NoncurrentVersionExpiration` plus `ExpiredObjectDeleteMarker` removed noncurrent versions and orphan markers, and skipped anything still under retention or a hold. That makes lifecycle the reclaim path, and makes the lock the thing that decides when. Only seen on RustFS 1.0.4 with a sped-up scanner.
 6. **Grants** (S1 owns them; this is the requirement):
-   - CI: PutObject, GetObject, PutObjectRetention (extend); no DeleteObject, no DeleteObjectVersion, no BypassGovernanceRetention, no bucket-level configuration (versioning, lock, policy, lifecycle).
-   - Sweeper: DeleteObject and DeleteObjectVersion, copy and put on `blobs/*` and `quarantine/*`, tombstone put; not BypassGovernanceRetention.
+   - CI: PutObject, GetObject; no DeleteObject, no DeleteObjectVersion, no BypassGovernanceRetention, no bucket-level configuration (versioning, lock, policy, lifecycle). Lock headers on its puts need no extra permission in RustFS 1.0.4 that we saw as root; whether a non-root key needs `s3:PutObjectRetention` for them was not checked.
+   - Sweeper: DeleteObject, copy and put on `blobs/*` and `quarantine/*`, tombstone put; not BypassGovernanceRetention.
    - Bypass: the owner only.
-7. **Audit.** RustFS does not audit PutBucketVersioning or bucket policy changes (ADR-126 S0). Whether it audits lock and lifecycle configuration was not checked. Lock settings are only as trustworthy as the log of who changed the bucket.
+7. **Audit.** Changes to versioning, lock configuration, lifecycle and policy leave no event, and neither do the lifecycle scanner's deletions. The log therefore cannot show who weakened a bucket or what the scanner removed. Lock retention itself is only as trustworthy as the control of who holds bucket-level admin; keep that to the owner and have the daemon read the configuration back and compare it to what was provisioned.
+8. **Streaming.** Retention headers on CreateMultipartUpload carry to the completed object and `If-None-Match: *` works on Complete, so a multipart path can keep both guarantees. S1's transport has no multipart yet.
 
 ## Not verified
 
-- That RustFS expires noncurrent versions or delete markers from a lifecycle rule.
+- Whether lifecycle respects a retention date at real day scale (only a sped-up scanner against wall-clock dates was seen), and whether it expires a version once its retention has lapsed.
+- Why an unlocked object's delete marker disappeared in the lock bucket without an `ExpiredObjectDeleteMarker` rule.
 - Bucket policy conditions that exempt the sweeper principal from a Deny.
-- Object Lock with multipart uploads (the streaming path).
-- Audit coverage of lock and lifecycle calls.
+- Whether a non-root CI key needs `s3:PutObjectRetention` to send lock headers on a put.
 - Behaviour at scale (many versions of one key, listing cost).
-- Whether S1's transport can send the lock headers (`x-amz-object-lock-mode`, `retain-until-date`) on a put; today it cannot.
+- Multipart through our own code: only the raw S3 behaviour was probed, since S1's transport has no multipart call.
 
 ## Order of work
 
-1. S1: `create_bucket` with lock; transport support for the lock headers and for versioned deletes. (Not in this worktree.)
-2. S4: a `Retention` stamp on publish (headers on manifest and blob puts, extension after commit); a version-aware delete in `DeletableBackend`.
-3. Observe lifecycle enforcement on a throwaway RustFS before relying on it.
+1. S1: extend-retention call; default bucket retention; multipart (with lock headers on create); expose `--locked` on `weaver store create`.
+2. S4 (done in this branch): lock policy on publish, locked restore, locked-bucket helper, `--lock` on the verb, live tests.
+3. S4 next: stamp after commit once S1 has extend-retention; read-back check of lock configuration; lifecycle rule provisioning.
 4. Owner: pick the modes and floors per channel.

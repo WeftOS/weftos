@@ -68,14 +68,14 @@ pub mod retention;
 #[cfg(feature = "store")]
 pub mod s3;
 
-pub use backend::{BackendError, DeletableBackend, MemoryBackend, PutOutcome, ReleaseBackend};
+pub use backend::{BackendError, DeletableBackend, Lock, LockMode, MemoryBackend, PutOutcome, ReleaseBackend};
 pub use error::{ReleaseError, Result};
 pub use manifest::{
     ArtifactRef, Manifest, ReleaseSigner, SignedManifest, TrustedKey, TrustedKeys, SCHEMA,
 };
 pub use name::ReleaseStoreName;
 pub use publish::{
-    MAX_BACKDATE_SECS, MAX_FUTURE_SKEW_SECS, Artifact, PublishOutcome, PublishReceipt, PublishRequest, ReleasePublisher,
+    LockPolicy, MAX_BACKDATE_SECS, MAX_FUTURE_SKEW_SECS, MAX_LOCK_FLOOR_SECS, Artifact, PublishOutcome, PublishReceipt, PublishRequest, ReleasePublisher,
 };
 pub use read::{ReleaseReader, VerifiedManifest};
 pub use retention::{

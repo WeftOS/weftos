@@ -33,6 +33,22 @@ pub enum PutOutcome {
     Exists,
 }
 
+/// S3 Object Lock retention mode (ADR-126 S4, `docs/research/adr126-s4-release-bucket-immutability-*`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LockMode {
+    /// Cannot be shortened or removed before the date except by a caller granted the bypass.
+    Governance,
+    /// Cannot be shortened or removed by anyone, root included.
+    Compliance,
+}
+
+/// Keep a written version until `until` (Unix seconds).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Lock {
+    pub mode: LockMode,
+    pub until: u64,
+}
+
 /// Write-once access to one release store (one bucket).
 pub trait ReleaseBackend: Send + Sync {
     /// Store `bytes` under `key` only if `key` does not exist. Must be atomic: of any number of
@@ -42,6 +58,18 @@ pub trait ReleaseBackend: Send + Sync {
         key: &str,
         bytes: &[u8],
     ) -> impl Future<Output = Result<PutOutcome, BackendError>> + Send;
+
+    /// Like [`put_if_absent`](Self::put_if_absent), and the written version is locked until
+    /// `lock.until`. Needs a bucket made with Object Lock. The default refuses, so a publisher asked
+    /// to lock on a backend that cannot fails instead of writing unprotected objects.
+    fn put_if_absent_locked(
+        &self,
+        _key: &str,
+        _bytes: &[u8],
+        _lock: &Lock,
+    ) -> impl Future<Output = Result<PutOutcome, BackendError>> + Send {
+        async { Err(BackendError("object lock is not supported by this backend".into())) }
+    }
 
     /// The object's bytes, or `None` when the key does not exist.
     fn get(&self, key: &str) -> impl Future<Output = Result<Option<Vec<u8>>, BackendError>> + Send;
@@ -97,6 +125,8 @@ struct MemInner {
     /// Puts left before every further put fails (simulates a crash or an outage mid-publish).
     puts_left: Option<usize>,
     puts_total: usize,
+    locks: BTreeMap<String, Lock>,
+    lock_enabled: bool,
 }
 
 impl MemoryBackend {
@@ -126,6 +156,16 @@ impl MemoryBackend {
     /// Number of put calls that reached the store (created or not).
     pub fn put_calls(&self) -> usize {
         self.inner.lock().unwrap().puts_total
+    }
+
+    /// Behave like a bucket made with Object Lock: `put_if_absent_locked` works.
+    pub fn enable_lock(&self) {
+        self.inner.lock().unwrap().lock_enabled = true;
+    }
+
+    /// The lock stamped on the current version of `key`, if any.
+    pub fn lock_of(&self, key: &str) -> Option<Lock> {
+        self.inner.lock().unwrap().locks.get(key).copied()
     }
 
     /// Every key, sorted.
@@ -197,6 +237,17 @@ impl ReleaseBackend for MemoryBackend {
         Ok(PutOutcome::Created)
     }
 
+    async fn put_if_absent_locked(&self, key: &str, bytes: &[u8], lock: &Lock) -> Result<PutOutcome, BackendError> {
+        if !self.inner.lock().unwrap().lock_enabled {
+            return Err(BackendError("bucket was not made with object lock".into()));
+        }
+        let out = self.put_if_absent(key, bytes).await?;
+        if out == PutOutcome::Created {
+            self.inner.lock().unwrap().locks.insert(key.to_string(), *lock);
+        }
+        Ok(out)
+    }
+
     async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, BackendError> {
         self.pause().await;
         Ok(self.inner.lock().unwrap().objects.get(key).cloned())
@@ -223,7 +274,11 @@ impl DeletableBackend for MemoryBackend {
     async fn delete(&self, key: &str) -> Result<(), BackendError> {
         self.pause().await;
         self.fire(key, false);
-        self.inner.lock().unwrap().objects.remove(key);
+        {
+            let mut g = self.inner.lock().unwrap();
+            g.objects.remove(key);
+            g.locks.remove(key);
+        }
         self.fire(key, true);
         Ok(())
     }

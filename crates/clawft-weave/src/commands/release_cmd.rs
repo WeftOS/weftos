@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use clap::{Args, Subcommand};
 use weftos_release::{
-    Artifact, PublishOutcome, PublishRequest, ReleaseBackend, ReleasePublisher, ReleaseSigner, ReleaseStoreName,
+    Artifact, LockMode, LockPolicy, PublishOutcome, PublishRequest, ReleaseBackend, ReleasePublisher, ReleaseSigner, ReleaseStoreName,
     s3::StoreBackend,
 };
 
@@ -55,6 +55,13 @@ pub enum ReleaseAction {
         /// Env file with the CI credential for the object store.
         #[arg(long)]
         s3_env: PathBuf,
+        /// Object Lock mode for what this publish writes: `governance` or `compliance`. The bucket must
+        /// have been made with Object Lock. `compliance` cannot be undone by anyone, owner included.
+        #[arg(long, value_parser = ["governance", "compliance"], requires = "lock_days")]
+        lock: Option<String>,
+        /// Days to keep the manifest and new blobs, counted from now (1 to 3650).
+        #[arg(long, requires = "lock")]
+        lock_days: Option<u64>,
         /// Print the receipt as JSON.
         #[arg(long)]
         json: bool,
@@ -126,8 +133,27 @@ pub async fn publish_dir<B: ReleaseBackend>(
     signer: &ReleaseSigner,
     req: PublishRequest,
     now: u64,
+    lock: Option<LockPolicy>,
 ) -> anyhow::Result<weftos_release::PublishReceipt> {
-    Ok(ReleasePublisher::new(backend, store, signer).publish(req, now).await?)
+    let mut p = ReleasePublisher::new(backend, store, signer);
+    if let Some(l) = lock {
+        p = p.with_lock(l);
+    }
+    Ok(p.publish(req, now).await?)
+}
+
+/// `--lock` and `--lock-days` as a policy.
+pub fn lock_policy(mode: Option<&str>, days: Option<u64>) -> anyhow::Result<Option<LockPolicy>> {
+    let (Some(m), Some(d)) = (mode, days) else { return Ok(None) };
+    let mode = match m {
+        "governance" => LockMode::Governance,
+        "compliance" => LockMode::Compliance,
+        other => anyhow::bail!("unknown lock mode {other:?}"),
+    };
+    if !(1..=3650).contains(&d) {
+        anyhow::bail!("--lock-days must be 1 to 3650");
+    }
+    Ok(Some(LockPolicy::new(mode, d * 86_400)?))
 }
 
 fn parse_store(s: &str) -> anyhow::Result<ReleaseStoreName> {
@@ -143,7 +169,7 @@ fn parse_store(s: &str) -> anyhow::Result<ReleaseStoreName> {
 /// Run a release subcommand.
 pub async fn run(args: ReleaseArgs) -> anyhow::Result<()> {
     match args.action {
-        ReleaseAction::Publish { store, build_id, source_rev, dir, builder, signing_key, s3_env, json } => {
+        ReleaseAction::Publish { store, build_id, source_rev, dir, builder, signing_key, s3_env, lock, lock_days, json } => {
             let name = parse_store(&store)?;
             let signer = load_signer(&signing_key)?;
             let artifacts = collect_artifacts(&dir)?;
@@ -155,7 +181,7 @@ pub async fn run(args: ReleaseArgs) -> anyhow::Result<()> {
             let backend = StoreBackend::for_release(objects, &name)?;
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs();
             let req = PublishRequest { build_id, source_rev, created_at: now, builder, artifacts };
-            let r = publish_dir(&backend, &name, &signer, req, now).await?;
+            let r = publish_dir(&backend, &name, &signer, req, now, lock_policy(lock.as_deref(), lock_days)?).await?;
             if json {
                 println!(
                     "{}",
@@ -178,6 +204,7 @@ pub async fn run(args: ReleaseArgs) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
     use weftos_release::{MemoryBackend, ReleaseError};
     use std::sync::Arc;
 
@@ -185,6 +212,23 @@ mod tests {
 
     fn req(arts: Vec<Artifact>, id: &str) -> PublishRequest {
         PublishRequest { build_id: id.into(), source_rev: "r".into(), created_at: 1_000, builder: "ci".into(), artifacts: arts }
+    }
+
+    #[test]
+    fn lock_flags_become_a_policy_or_an_error() {
+        assert!(lock_policy(None, None).unwrap().is_none());
+        let p = lock_policy(Some("compliance"), Some(30)).unwrap().unwrap();
+        assert_eq!((p.mode, p.floor_secs), (LockMode::Compliance, 30 * 86_400));
+        assert!(lock_policy(Some("governance"), Some(0)).is_err());
+        assert!(lock_policy(Some("governance"), Some(3651)).is_err());
+        assert!(lock_policy(Some("legal"), Some(1)).is_err());
+        let args = |a: &[&str]| crate::commands::store_cmd::StoreArgs::try_parse_from(std::iter::once("store").chain(a.iter().copied()));
+        let base = ["release", "publish", "weftos://m/projects/x/releases/c/store", "--build-id", "b", "--source-rev", "r", "--dir", "d", "--signing-key", "k", "--s3-env", "e"];
+        assert!(args(&base).is_ok());
+        assert!(args(&[&base[..], &["--lock", "compliance", "--lock-days", "30"]].concat()).is_ok());
+        assert!(args(&[&base[..], &["--lock", "compliance"]].concat()).is_err(), "needs --lock-days");
+        assert!(args(&[&base[..], &["--lock-days", "3"]].concat()).is_err(), "needs --lock");
+        assert!(args(&[&base[..], &["--lock", "nope", "--lock-days", "3"]].concat()).is_err());
     }
 
     #[test]
@@ -236,11 +280,11 @@ mod tests {
         let signer = ReleaseSigner::from_seeds(&[7; 32], &[9; 32]);
         let be = MemoryBackend::new();
         let a = |b: &[u8]| vec![Artifact { path: "bin/weaver".into(), bytes: b.to_vec() }];
-        let r = publish_dir(&be, &st, &signer, req(a(b"v1"), "b1"), 1_000).await.unwrap();
+        let r = publish_dir(&be, &st, &signer, req(a(b"v1"), "b1"), 1_000, None).await.unwrap();
         assert_eq!(r.outcome, PublishOutcome::Published);
-        let r = publish_dir(&be, &st, &signer, req(a(b"v1"), "b1"), 1_000).await.unwrap();
+        let r = publish_dir(&be, &st, &signer, req(a(b"v1"), "b1"), 1_000, None).await.unwrap();
         assert_eq!(r.outcome, PublishOutcome::AlreadyPresent);
-        let e = publish_dir(&be, &st, &signer, req(a(b"EVIL"), "b1"), 1_000).await.unwrap_err();
+        let e = publish_dir(&be, &st, &signer, req(a(b"EVIL"), "b1"), 1_000, None).await.unwrap_err();
         assert!(matches!(e.downcast_ref::<ReleaseError>(), Some(ReleaseError::AlreadyPublished { .. })), "{e}");
     }
 
@@ -285,7 +329,7 @@ mod tests {
         let go = |id: &str, bytes_dir: &Path| ReleaseArgs {
             action: ReleaseAction::Publish {
                 store: name.clone(), build_id: id.into(), source_rev: "r".into(), dir: bytes_dir.to_path_buf(),
-                builder: "ci".into(), signing_key: key.clone(), s3_env: PathBuf::from(&env), json: true,
+                builder: "ci".into(), signing_key: key.clone(), s3_env: PathBuf::from(&env), lock: None, lock_days: None, json: true,
             },
         };
         run(go("b1", &dist)).await.unwrap();
@@ -293,5 +337,28 @@ mod tests {
         std::fs::write(dist.join("SHA256SUMS"), b"REBUILT").unwrap();
         let e = run(go("b1", &dist)).await.expect_err("a rebuild must be refused");
         assert!(e.to_string().contains("already"), "{e}");
+
+        // a bucket without Object Lock refuses lock headers, and the publish writes no release
+        let mut with_lock = go("b2", &dist);
+        let ReleaseAction::Publish { lock, lock_days, .. } = &mut with_lock.action;
+        (*lock, *lock_days) = (Some("governance".into()), Some(1));
+        assert!(run(with_lock).await.is_err(), "lock on a plain bucket must fail");
+
+        // a locked bucket takes a locked publish
+        let lchan = format!("l{}", &ulid::Ulid::new().to_string().to_lowercase()[16..]);
+        let lname = format!("weftos://m/projects/{ULID}/releases/{lchan}/store");
+        let (lst, envp, ldir) = (parse_store(&lname).unwrap(), std::path::PathBuf::from(&env), d.path().join("root3"));
+        tokio::task::spawn_blocking(move || {
+            let be = weftos_store::RustfsBackend::new(weftos_store::RustfsConfig::from_env_file(&envp, ldir).unwrap()).unwrap();
+            weftos_release::s3::create_locked_release_bucket(&be, &lst)
+        }).await.unwrap().unwrap();
+        let locked = ReleaseArgs {
+            action: ReleaseAction::Publish {
+                store: lname, build_id: "b1".into(), source_rev: "r".into(), dir: dist.clone(),
+                builder: "ci".into(), signing_key: key.clone(), s3_env: PathBuf::from(&env),
+                lock: Some("compliance".into()), lock_days: Some(2), json: true,
+            },
+        };
+        run(locked).await.unwrap();
     }
 }

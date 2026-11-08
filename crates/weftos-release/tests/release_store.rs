@@ -622,3 +622,87 @@ async fn publish_and_sweep_interleaved_never_leave_a_release_without_its_blobs()
         }
     }
 }
+
+// ---- Object Lock wiring ---------------------------------------------------------------------
+
+fn locked_backend() -> MemoryBackend {
+    let be = MemoryBackend::new();
+    be.enable_lock();
+    be
+}
+
+#[tokio::test]
+async fn locked_publish_stamps_the_manifest_and_new_blobs_from_the_publishers_clock() {
+    let (be, st, sg) = (locked_backend(), store("stable"), signer(1));
+    let pol = LockPolicy::new(LockMode::Compliance, 30 * 86_400).unwrap();
+    let p = ReleasePublisher::new(&be, &st, &sg).with_lock(pol);
+    // created_at is backdated; the lock counts from `now`, not from the claimed build time
+    let mut r = req("b1", &[("a", b"alpha"), ("b", b"beta")]);
+    r.created_at = 700;
+    p.publish(r, NOW).await.unwrap();
+    let want = Lock { mode: LockMode::Compliance, until: NOW + 30 * 86_400 };
+    assert_eq!(be.lock_of("releases/b1/manifest.json"), Some(want));
+    for data in [b"alpha".as_slice(), b"beta"] {
+        let h = blake3::hash(data).to_hex().to_string();
+        assert_eq!(be.lock_of(&format!("blobs/{h}")), Some(want), "blob {h}");
+    }
+}
+
+#[tokio::test]
+async fn a_reused_blob_keeps_the_lock_it_was_written_with() {
+    let (be, st, sg) = (locked_backend(), store("stable"), signer(1));
+    let first = LockPolicy::new(LockMode::Governance, 1_000).unwrap();
+    ReleasePublisher::new(&be, &st, &sg).with_lock(first).publish(req("b1", &[("a", b"shared")]), NOW).await.unwrap();
+    let longer = LockPolicy::new(LockMode::Compliance, 9_000).unwrap();
+    ReleasePublisher::new(&be, &st, &sg).with_lock(longer).publish(req("b2", &[("a", b"shared")]), NOW).await.unwrap();
+    let h = blake3::hash(b"shared").to_hex().to_string();
+    // no way to extend: the blob stays at the first release's floor, the new manifest gets its own
+    assert_eq!(be.lock_of(&format!("blobs/{h}")).unwrap().until, NOW + 1_000);
+    assert_eq!(be.lock_of("releases/b2/manifest.json").unwrap().until, NOW + 9_000);
+}
+
+#[tokio::test]
+async fn asking_for_a_lock_on_a_backend_without_one_fails_and_writes_no_release() {
+    let (be, st, sg) = (MemoryBackend::new(), store("stable"), signer(1)); // lock not enabled
+    let pol = LockPolicy::new(LockMode::Governance, 100).unwrap();
+    let e = ReleasePublisher::new(&be, &st, &sg).with_lock(pol).publish(req("b1", &[("a", b"x")]), NOW).await.unwrap_err();
+    assert!(matches!(e, ReleaseError::Backend(_)), "{e}");
+    assert!(!be.keys().iter().any(|k| k.starts_with("releases/")), "no manifest");
+}
+
+#[tokio::test]
+async fn lock_floors_are_bounded() {
+    assert!(LockPolicy::new(LockMode::Compliance, 0).is_err());
+    assert!(LockPolicy::new(LockMode::Compliance, MAX_LOCK_FLOOR_SECS + 1).is_err());
+    assert!(LockPolicy::new(LockMode::Compliance, MAX_LOCK_FLOOR_SECS).is_ok());
+}
+
+#[tokio::test]
+async fn a_restore_in_a_locked_bucket_comes_back_locked() {
+    let (be, st, sg) = (locked_backend(), store("stable"), signer(1));
+    let tk = trusted(&sg);
+    let pol = LockPolicy::new(LockMode::Compliance, 5_000).unwrap();
+    let p = ReleasePublisher::new(&be, &st, &sg).with_lock(pol);
+    let mut r = req("b1", &[("a", b"old-only")]);
+    r.created_at = 100;
+    p.publish(r, NOW).await.unwrap();
+    let sw = Sweeper::new(&be, &st, &tk).with_lock(pol);
+    let keep = RetentionPolicy::new(1, 0).unwrap();
+    let mut r2 = req("b2", &[("a", b"newer")]);
+    r2.created_at = 200;
+    p.publish(r2, NOW).await.unwrap();
+    sw.sweep(&keep, 1_000, 500, "t").await.unwrap(); // b1 retired, grace running
+
+    // a release that reuses b1's blob lands exactly when the blob is being deleted
+    let h = blake3::hash(b"old-only").to_hex().to_string();
+    let scratch = locked_backend();
+    let mut late = req("late", &[("a", b"old-only")]);
+    late.created_at = 900;
+    ReleasePublisher::new(&scratch, &st, &sg).publish(late, NOW).await.unwrap();
+    let manifest = ReleaseBackendExt::raw(&scratch, "releases/late/manifest.json").await;
+    be.hook_before_delete(&format!("blobs/{h}"), move |b| b.tamper("releases/late/manifest.json", &manifest));
+    let r = sw.sweep(&RetentionPolicy::new(3, 0).unwrap(), 1_600, 500, "t").await.unwrap();
+    assert!(r.blobs_restored.contains(&h), "{r:?}");
+    let lock = be.lock_of(&format!("blobs/{h}")).expect("restored blob is locked again");
+    assert_eq!((lock.mode, lock.until), (LockMode::Compliance, 1_600 + 5_000));
+}

@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::backend::{PutOutcome, ReleaseBackend};
+use crate::backend::{Lock, LockMode, PutOutcome, ReleaseBackend};
 use crate::error::{invalid, ReleaseError, Result};
 use crate::manifest::{
     hash_bytes, validate_artifact_path, ArtifactRef, Manifest, ReleaseSigner, SignedManifest,
@@ -48,17 +48,49 @@ pub struct PublishReceipt {
     pub artifacts: Vec<ArtifactRef>,
 }
 
+/// How long, and how hard, to lock what a publish writes. Needs a bucket made with Object Lock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LockPolicy {
+    pub mode: LockMode,
+    /// Seconds from the publisher's `now`.
+    pub floor_secs: u64,
+}
+
+/// Longest floor accepted (ten years): a typo should not become an irrevocable COMPLIANCE lock.
+pub const MAX_LOCK_FLOOR_SECS: u64 = 10 * 365 * 24 * 3600;
+
+impl LockPolicy {
+    pub fn new(mode: LockMode, floor_secs: u64) -> Result<Self> {
+        if floor_secs == 0 || floor_secs > MAX_LOCK_FLOOR_SECS {
+            return Err(invalid("lock floor", "must be between one second and ten years"));
+        }
+        Ok(Self { mode, floor_secs })
+    }
+
+    pub(crate) fn at(&self, now: u64) -> Lock {
+        Lock { mode: self.mode, until: now.saturating_add(self.floor_secs) }
+    }
+}
+
 /// Writes releases into one release store. Holds only a [`ReleaseBackend`], so it cannot overwrite
 /// or delete anything.
 pub struct ReleasePublisher<'a, B: ReleaseBackend> {
     backend: &'a B,
     store: &'a ReleaseStoreName,
     signer: &'a ReleaseSigner,
+    lock: Option<LockPolicy>,
 }
 
 impl<'a, B: ReleaseBackend> ReleasePublisher<'a, B> {
     pub fn new(backend: &'a B, store: &'a ReleaseStoreName, signer: &'a ReleaseSigner) -> Self {
-        Self { backend, store, signer }
+        Self { backend, store, signer, lock: None }
+    }
+
+    /// Lock every object this publisher writes (manifest and new blobs) for the policy's floor. A blob
+    /// that already exists keeps the lock it was written with: the transport has no way to extend it.
+    pub fn with_lock(mut self, policy: LockPolicy) -> Self {
+        self.lock = Some(policy);
+        self
     }
 
     /// `now` is the publisher's clock (ADR-124). `created_at` must be at most [`MAX_FUTURE_SKEW_SECS`]
@@ -71,6 +103,7 @@ impl<'a, B: ReleaseBackend> ReleasePublisher<'a, B> {
             return Err(invalid("created_at", "too far from the publisher's clock"));
         }
         let manifest = self.build_manifest(&req)?;
+        let lock = self.lock.map(|p| p.at(now));
 
         // Existing manifest first, tombstone second. The sweeper writes the tombstone before it
         // deletes a manifest, so a manifest that is gone because it was retired always has its
@@ -79,7 +112,7 @@ impl<'a, B: ReleaseBackend> ReleasePublisher<'a, B> {
             let receipt = self.same_or_conflict(&manifest, &existing)?;
             // A retry is also the repair path: a sweeper that crashed after deleting a blob a
             // fresh release needed leaves a hole only the bytes in hand can fill.
-            self.heal(&req).await?;
+            self.heal(&req, lock.as_ref()).await?;
             return Ok(receipt);
         }
         if self.backend.get(&tombstone_key(&req.build_id)).await?.is_some() {
@@ -92,17 +125,23 @@ impl<'a, B: ReleaseBackend> ReleasePublisher<'a, B> {
         for a in &req.artifacts {
             let hash = hash_bytes(&a.bytes);
             if done.insert(hash.clone()) {
-                self.put_blob(&hash, &a.bytes).await?;
+                self.put_blob(&hash, &a.bytes, lock.as_ref()).await?;
             }
         }
 
         // The manifest is the commit point.
         let signed = self.signer.sign(manifest.clone())?;
-        match self.backend.put_if_absent(&manifest_key(&req.build_id), &signed.to_bytes()).await? {
+        let mkey = manifest_key(&req.build_id);
+        let mbytes = signed.to_bytes();
+        let put = match lock.as_ref() {
+            Some(l) => self.backend.put_if_absent_locked(&mkey, &mbytes, l).await?,
+            None => self.backend.put_if_absent(&mkey, &mbytes).await?,
+        };
+        match put {
             PutOutcome::Created => {
                 // A sweep that listed manifests before this commit may delete a blob we reused.
                 // The bytes are still in hand, so put them back; Exists is the normal answer.
-                self.heal(&req).await?;
+                self.heal(&req, lock.as_ref()).await?;
                 Ok(receipt(PublishOutcome::Published, &manifest))
             }
             PutOutcome::Exists => {
@@ -111,19 +150,19 @@ impl<'a, B: ReleaseBackend> ReleasePublisher<'a, B> {
                     ReleaseError::Missing { key: manifest_key(&req.build_id) }
                 })?;
                 let receipt = self.same_or_conflict(&manifest, &existing)?;
-                self.heal(&req).await?;
+                self.heal(&req, lock.as_ref()).await?;
                 Ok(receipt)
             }
         }
     }
 
     /// Put back any blob of this release that has gone missing. `Exists` is the normal answer.
-    async fn heal(&self, req: &PublishRequest) -> Result<()> {
+    async fn heal(&self, req: &PublishRequest, lock: Option<&Lock>) -> Result<()> {
         let mut done = BTreeSet::new();
         for a in &req.artifacts {
             let hash = hash_bytes(&a.bytes);
             if done.insert(hash.clone()) {
-                self.put_blob(&hash, &a.bytes).await?;
+                self.put_blob(&hash, &a.bytes, lock).await?;
             }
         }
         Ok(())
@@ -165,9 +204,13 @@ impl<'a, B: ReleaseBackend> ReleasePublisher<'a, B> {
     }
 
     /// Store a blob, or confirm the stored one is intact. Never overwrites.
-    async fn put_blob(&self, hash: &str, bytes: &[u8]) -> Result<()> {
+    async fn put_blob(&self, hash: &str, bytes: &[u8], lock: Option<&Lock>) -> Result<()> {
         let key = blob_key(hash);
-        if self.backend.put_if_absent(&key, bytes).await? == PutOutcome::Created {
+        let put = match lock {
+            Some(l) => self.backend.put_if_absent_locked(&key, bytes, l).await?,
+            None => self.backend.put_if_absent(&key, bytes).await?,
+        };
+        if put == PutOutcome::Created {
             return Ok(());
         }
         // Already there: a rebuild of the same bytes, or another release sharing the file. Do not

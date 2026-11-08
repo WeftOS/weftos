@@ -7,9 +7,10 @@
 
 use std::sync::Arc;
 
-use weftos_store::{BackendError as StoreErr, ObjectBackend, StoreName};
+use weftos_store::backend::{LockMode as StoreMode, PutOpts, Retention};
+use weftos_store::{AdminBackend, BackendError as StoreErr, ObjectBackend, StoreName};
 
-use crate::backend::{BackendError, DeletableBackend, PutOutcome, ReleaseBackend};
+use crate::backend::{BackendError, DeletableBackend, Lock, LockMode, PutOutcome, ReleaseBackend};
 use crate::name::ReleaseStoreName;
 
 /// One release store's bucket on an S1 object backend.
@@ -79,6 +80,26 @@ impl<O: ObjectBackend + 'static> ReleaseBackend for StoreBackend<O> {
         }
     }
 
+    async fn put_if_absent_locked(&self, key: &str, bytes: &[u8], lock: &Lock) -> Result<PutOutcome, BackendError> {
+        let (k, data) = (key.to_string(), bytes.to_vec());
+        let opts = PutOpts {
+            if_none_match: true,
+            retention: Some(Retention {
+                mode: match lock.mode {
+                    LockMode::Governance => StoreMode::Governance,
+                    LockMode::Compliance => StoreMode::Compliance,
+                },
+                until_unix_s: lock.until,
+            }),
+            legal_hold: false,
+        };
+        match self.blocking(move |o, b| o.put_locked(b, &k, &data, &opts)).await {
+            Ok(_) => Ok(PutOutcome::Created),
+            Err(StoreErr::Exists(_)) => Ok(PutOutcome::Exists),
+            Err(e) => Err(err(e)),
+        }
+    }
+
     async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, BackendError> {
         let k = key.to_string();
         match self.blocking(move |o, b| o.get(b, &k)).await {
@@ -108,4 +129,16 @@ impl<O: ObjectBackend + 'static> DeletableBackend for StoreBackend<O> {
             Err(e) => Err(err(e)),
         }
     }
+}
+
+/// Make the bucket for a release store with Object Lock on (versioning comes with it). The choice
+/// is only available at creation, so a release store that is meant to be locked must be made this
+/// way. S1's service does the same through `create_locked_store` when it owns the registry; this is
+/// for provisioning scripts and tests that hold an admin backend.
+pub fn create_locked_release_bucket<A: AdminBackend>(admin: &A, store: &ReleaseStoreName) -> Result<String, BackendError> {
+    let name = StoreName::parse(&store.uri()).map_err(|e| BackendError(e.to_string()))?;
+    let mut tags = name.tags();
+    tags.push(("object-lock".into(), "on".into()));
+    admin.create_locked_bucket(&name.bucket(), &tags).map_err(err)?;
+    Ok(name.bucket())
 }

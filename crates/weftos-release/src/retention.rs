@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::backend::{DeletableBackend, PutOutcome};
 use crate::error::{invalid, ReleaseError, Result};
+use crate::publish::LockPolicy;
 use crate::manifest::{Manifest, SignedManifest, TrustedKeys};
 use crate::name::{
     blob_key, build_id_from_manifest_key, manifest_key, quarantine_key, tombstone_key,
@@ -131,11 +132,33 @@ pub struct Sweeper<'a, B: DeletableBackend> {
     backend: &'a B,
     store: &'a ReleaseStoreName,
     trusted: &'a TrustedKeys,
+    lock: Option<LockPolicy>,
 }
 
 impl<'a, B: DeletableBackend> Sweeper<'a, B> {
     pub fn new(backend: &'a B, store: &'a ReleaseStoreName, trusted: &'a TrustedKeys) -> Self {
-        Self { backend, store, trusted }
+        Self { backend, store, trusted, lock: None }
+    }
+
+    /// In a bucket with Object Lock, a copy-back would carry no lock of its own (a copy takes only the
+    /// bucket default), so restore by reading the parked copy and writing it locked. Only the rare
+    /// restore path reads the bytes; the normal delete never does.
+    pub fn with_lock(mut self, policy: LockPolicy) -> Self {
+        self.lock = Some(policy);
+        self
+    }
+
+    async fn restore(&self, hash: &str, parked: &str, now: u64) -> Result<()> {
+        match self.lock {
+            None => self.backend.copy(parked, &blob_key(hash)).await?,
+            Some(p) => {
+                let Some(bytes) = self.backend.get(parked).await? else {
+                    return Err(ReleaseError::Missing { key: parked.to_string() });
+                };
+                self.backend.put_if_absent_locked(&blob_key(hash), &bytes, &p.at(now)).await?;
+            }
+        }
+        Ok(())
     }
 
     pub async fn sweep(
@@ -146,7 +169,7 @@ impl<'a, B: DeletableBackend> Sweeper<'a, B> {
         reason: &str,
     ) -> Result<SweepReport> {
         let mut report = SweepReport::default();
-        self.recover_quarantine(&mut report).await?;
+        self.recover_quarantine(&mut report, now).await?;
 
         // 1. Classify every manifest object.
         let mut verified: Vec<Manifest> = Vec::new();
@@ -261,12 +284,12 @@ impl<'a, B: DeletableBackend> Sweeper<'a, B> {
                     report.blobs_deleted.push(hash.clone());
                 }
                 Ok(_) => {
-                    self.backend.copy(&q, &blob_key(hash)).await?;
+                    self.restore(hash, &q, now).await?;
                     self.backend.delete(&q).await?;
                     report.blobs_restored.push(hash.clone());
                 }
                 Err(e) => {
-                    self.backend.copy(&q, &blob_key(hash)).await?;
+                    self.restore(hash, &q, now).await?;
                     self.backend.delete(&q).await?;
                     return Err(e);
                 }
@@ -279,7 +302,7 @@ impl<'a, B: DeletableBackend> Sweeper<'a, B> {
 impl<B: DeletableBackend> Sweeper<'_, B> {
     /// Finish what an interrupted sweep started: a blob it set aside that a manifest still names
     /// goes back, then the set-aside copy goes. If the manifests cannot be read, nothing is touched.
-    async fn recover_quarantine(&self, report: &mut SweepReport) -> Result<()> {
+    async fn recover_quarantine(&self, report: &mut SweepReport, now: u64) -> Result<()> {
         let parked = self.backend.list(QUARANTINE).await?;
         if parked.is_empty() {
             return Ok(());
@@ -288,7 +311,7 @@ impl<B: DeletableBackend> Sweeper<'_, B> {
         for key in parked {
             let Some(hash) = key.strip_prefix(QUARANTINE) else { continue };
             if referenced.contains(hash) && self.backend.get(&blob_key(hash)).await?.is_none() {
-                self.backend.copy(&key, &blob_key(hash)).await?;
+                self.restore(hash, &key, now).await?;
                 report.blobs_recovered.push(hash.to_string());
             }
             // Still referenced and still present is also safe to drop: the blob is back.
