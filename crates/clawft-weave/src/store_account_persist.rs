@@ -36,6 +36,7 @@ struct SGrant {
 }
 
 #[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SXmesh {
     owner: String,
     receiver: String,
@@ -66,6 +67,46 @@ struct Snap {
     xmesh: Vec<SXmesh>,
     revoked: Vec<String>,
     seqs: Vec<SSeq>,
+}
+
+impl SXmesh {
+    fn from_grant(g: &CrossMeshGrant) -> Self {
+        Self {
+            owner: hex::encode(g.owner_mesh),
+            receiver: hex::encode(g.receiver_mesh),
+            store: g.store.clone(),
+            access: access_str(g.access).into(),
+            seq: g.seq,
+            issued_at: g.issued_at,
+            expires_at: g.expires_at,
+            sig: hex::encode(g.sig),
+        }
+    }
+
+    fn into_grant(self) -> Result<CrossMeshGrant, String> {
+        Ok(CrossMeshGrant {
+            owner_mesh: hex_n::<32>(&self.owner)?,
+            receiver_mesh: hex_n::<32>(&self.receiver)?,
+            store: self.store,
+            access: access_of(&self.access)?,
+            seq: self.seq,
+            issued_at: self.issued_at,
+            expires_at: self.expires_at,
+            sig: hex_n::<64>(&self.sig)?,
+        })
+    }
+}
+
+impl CrossMeshGrant {
+    /// The grant as JSON (hex for meshes and signature), the form `weaver store client` carries.
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::to_value(SXmesh::from_grant(self)).unwrap_or(serde_json::Value::Null)
+    }
+
+    /// Parse the JSON form. This only checks shape; [`StoreGate::install_xmesh`] checks the signature.
+    pub fn from_json(v: &serde_json::Value) -> Result<Self, String> {
+        serde_json::from_value::<SXmesh>(v.clone()).map_err(|e| e.to_string())?.into_grant()
+    }
 }
 
 fn access_str(a: Access) -> &'static str {
@@ -124,20 +165,7 @@ impl StoreGate {
                 .map(|g| SGrant { principal: sprincipal(&g.principal), store: g.store.clone(), access: access_str(g.access).into() })
                 .collect(),
             mesh_keys: self.mesh_keys.iter().map(|(m, k)| (hex::encode(m), hex::encode(k.to_bytes()))).collect(),
-            xmesh: self
-                .xmesh
-                .iter()
-                .map(|g| SXmesh {
-                    owner: hex::encode(g.owner_mesh),
-                    receiver: hex::encode(g.receiver_mesh),
-                    store: g.store.clone(),
-                    access: access_str(g.access).into(),
-                    seq: g.seq,
-                    issued_at: g.issued_at,
-                    expires_at: g.expires_at,
-                    sig: hex::encode(g.sig),
-                })
-                .collect(),
+            xmesh: self.xmesh.iter().map(SXmesh::from_grant).collect(),
             revoked: self.revoked.iter().map(hex::encode).collect(),
             seqs: self
                 .seqs
@@ -189,16 +217,7 @@ impl StoreGate {
             g.grants.push(StoreGrant { principal: principal_of(sg.principal)?, store: sg.store, access: access_of(&sg.access)? });
         }
         for x in s.xmesh {
-            let grant = CrossMeshGrant {
-                owner_mesh: hex_n::<32>(&x.owner)?,
-                receiver_mesh: hex_n::<32>(&x.receiver)?,
-                store: x.store,
-                access: access_of(&x.access)?,
-                seq: x.seq,
-                issued_at: x.issued_at,
-                expires_at: x.expires_at,
-                sig: hex_n::<64>(&x.sig)?,
-            };
+            let grant = x.into_grant()?;
             // A grant that no longer verifies against a trusted key is not carried over.
             let verifies = g.mesh_keys.get(&grant.owner_mesh).is_some_and(|k| {
                 k.verify(&grant.signing_bytes(), &Signature::from_bytes(&grant.sig)).is_ok()

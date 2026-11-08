@@ -283,9 +283,15 @@ pub mod mesh_import;
 pub mod mesh_pair;
 /// What this node paired with, by project (resolves weftos:// project names).
 pub mod mesh_pairings;
-/// `weftos://` names (ADR-114).
+/// ADR-126 S5: a client account's store, the isolation gate in front of S1's service.
 pub mod client_store;
+/// ADR-126 S5: the daemon's client store (started only as the client user).
+pub mod client_store_rt;
+/// ADR-126 S5: `store.client.*` operator verbs.
+pub mod client_store_rpc;
+/// ADR-126 S5: per-client-account store instance spec and access gate.
 pub mod store_account;
+/// `weftos://` names (ADR-114).
 pub mod weftos_uri;
 /// Pending pair requests, reported in the heartbeat (ADR-108 P2b).
 pub mod mesh_pair_requests;

@@ -1304,7 +1304,7 @@ pub async fn run(
             let home = clawft_types::runtime_paths::home_dir();
             let reg = crate::expose_rt::start(&daemon_identity.node_id, &runtime_dir, home.as_deref(), audit_fn.clone()).await;
             // ADR-126 S1: the object store, with this node's own store created.
-            match crate::store_rt::start(&daemon_identity.node_id, &runtime_dir, reg, audit_fn) {
+            match crate::store_rt::start(&daemon_identity.node_id, &runtime_dir, reg.clone(), audit_fn.clone()) {
                 Ok(svc) => {
                     // Refusals RustFS logs (off unless WEFTOS_STORE_RUSTFS_LOG names its log file), and the suspension rule.
                     crate::store_watch::start_from_env(&svc);
@@ -1314,6 +1314,15 @@ pub async fn run(
                     }
                 }
                 Err(e) => error!(error = %e, "object store not started"),
+            }
+            // ADR-126 S5: a daemon running as a client user also serves that account's own store.
+            match crate::client_store_rt::start(&runtime_dir, reg) {
+                Ok(Some(cs)) => {
+                    info!(account = %cs.spec.account, root = %cs.root().display(), "client store started");
+                    crate::client_store_rt::spawn_sweeper(cs);
+                }
+                Ok(None) => {}
+                Err(e) => error!(error = %e, "client store not started"),
             }
         }
         let parts = crate::infer_wire::InitParts {
@@ -6577,6 +6586,8 @@ async fn dispatch(
         // mesh-placement-03: signed node facts (local + verified peers).
         #[cfg(any(feature = "mesh", feature = "exochain"))]
         "cluster.facts" => crate::node_facts_rpc::handle(params, kernel).await,
+        // ADR-126 S5: the client account's own store (checked before the S1 `store.*` verbs).
+        m if m.starts_with("store.client.") => crate::client_store_rpc::handle(m, params).await,
         // ADR-120: the exposure registry (list, switch, log).
         "expose.list" | "expose.set" | "expose.off_all" | "expose.log" => {
             crate::expose_rpc::handle(method.as_str(), params).await

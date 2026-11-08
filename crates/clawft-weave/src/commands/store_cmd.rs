@@ -156,6 +156,8 @@ pub enum StoreAction {
         #[arg(long = "as")]
         principal: String,
     },
+    /// Per-client-account store (ADR-126 S5).
+    Client(super::store_client_cmd::StoreClientArgs),
 }
 
 fn cell(v: &Value, k: &str) -> String {
@@ -317,6 +319,7 @@ fn agent_and_host(rest: &[String]) -> anyhow::Result<(String, String)> {
 /// Run the store subcommand.
 pub async fn run(args: StoreArgs) -> anyhow::Result<()> {
     match args.action {
+        StoreAction::Client(a) => return super::store_client_cmd::run(a).await,
         StoreAction::Ls { name, prefix, json: j } => {
             let v = call("store.ls", json!({"name": name, "prefix": prefix})).await?;
             if j {
