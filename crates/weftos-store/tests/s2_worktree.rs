@@ -606,6 +606,21 @@ fn retry_after_partial_promotion_is_not_a_false_conflict() {
 }
 
 #[test]
+fn a_same_size_project_edit_between_attempts_is_a_conflict_not_our_copy() {
+    let b = setup();
+    let ov = Overlay::new(&b, WT, PR);
+    ov.put("assets/a.bin", b"aaa").unwrap();
+    b.set_clock(5_000);
+    let flaky = Flaky { inner: &b, fail_after: std::cell::Cell::new(0) };
+    assert!(promote(&flaky, WT, PR, &ARCH, &policy(), 5_000).is_err(), "attempt 1 records its intent, then fails before copying");
+    // someone puts different content of the same size into the project
+    b.put(PR, "assets/a.bin", b"zzz").unwrap();
+    let r = promote(&b, WT, PR, &ARCH, &policy(), 6_000);
+    assert!(matches!(r, Err(S2Error::Conflict(ref k)) if k == &["assets/a.bin".to_string()]), "{r:?}");
+    assert_eq!(b.get(PR, "assets/a.bin").unwrap().unwrap(), b"zzz", "the project edit survived");
+}
+
+#[test]
 fn private_key_content_and_secret_names_are_not_shared_but_secret_docs_are() {
     let d = tempfile::tempdir().unwrap();
     std::fs::write(

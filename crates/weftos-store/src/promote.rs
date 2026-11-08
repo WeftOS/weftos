@@ -137,6 +137,28 @@ fn project_moved<B: ObjectBackend>(
     })
 }
 
+/// Do the worktree object and the project object hold the same bytes? Equal etags say so cheaply;
+/// a server-side copy of a multipart object changes the etag, so equal sizes fall back to a
+/// byte comparison (only on the rare retry path).
+fn same_content<B: ObjectBackend>(
+    b: &B,
+    worktree: &str,
+    project: &str,
+    w: &crate::overlay::ObjectMeta,
+    p: &crate::overlay::ObjectMeta,
+) -> Result<bool> {
+    if w.etag == p.etag {
+        return Ok(true);
+    }
+    if w.size != p.size {
+        return Ok(false);
+    }
+    Ok(match (b.get(worktree, &w.key)?, b.get(project, &w.key)?) {
+        (Some(x), Some(y)) => x == y,
+        _ => false,
+    })
+}
+
 pub fn promote<B: ObjectBackend>(
     b: &B,
     worktree_bucket: &str,
@@ -182,7 +204,12 @@ pub fn promote<B: ObjectBackend>(
             continue;
         }
         match b.head(project_bucket, &o.key)? {
-            Some(p) if prior.copy.iter().any(|(k, n)| k == &o.key && *n == p.size) => {
+            // Our own earlier copy only if the bytes are the worktree object's (review F5): a size
+            // match alone would let a changed project object be overwritten under `Fail`.
+            Some(p)
+                if prior.copy.iter().any(|(k, n)| k == &o.key && *n == p.size)
+                    && same_content(b, worktree_bucket, project_bucket, o, &p)? =>
+            {
                 acts.push(Act::Copy(o.key.clone(), o.size))
             }
             Some(p) if p.etag != o.etag && project_moved(b, worktree_bucket, &o.key, &p.etag)? => {
