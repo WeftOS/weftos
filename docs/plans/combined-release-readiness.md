@@ -22,6 +22,8 @@ both yes). The "Mac-only" column is `git rev-list --count aepod/feat/adr126-s2..
 
 ### 1a. Mac branches, in the landing order fixed in status page section 2
 
+**Integration branch (2026-11-08 PM):** `wt/adr126-mac-integration` d003ba3d1 (worktree `adr126-mac-integration`, 87 commits over `target-0.8.5`) = `wt/adr126-e1-view-verbs` plus `-s2-meta` (72f715126, clean), `-s2-hooks` (6226544ce, one conflict in `scripts/tests/worktree-store.test.sh`, all tests kept, two assertions adapted to the injective slug and the real `wt.sh list`), `-s1-names` (5cb177479, clean in git but it broke `store_rpc_tests.rs`, which expected `store.n-pg-1`; fixed to `node-pg-1`, a conflict git did not show). The e1 handoff doc is byte-identical to the `target-0.8.5` copy. `git merge-tree --write-tree target-0.8.5 wt/adr126-mac-integration` reports **no conflicts** (re-checked by the lead). In memory: weftos-store rustfs 189 passed, 22 skipped; clawft-weave store 76; shell suite 63 of 63; clippy clean on both crates; worktree diff gate OK with no approvals entry. Live on a throwaway loopback RustFS 1.0.4: all 22 weftos-store live tests pass (142.7 s, noisy, load 6 to 12) and both clawft-weave store live tests pass (daemon service 0.6 s, view verbs 6.2 s). Evidence: `docs/research/adr126-mac-integration-2026-11-08.md` on the branch; ADR-126 header there carries an Updated 2026-11-08 paragraph and a "Mac branches (unlanded)" list. Landing option for aepod (owner call, brief 17): land this one branch after S1 instead of the eight Mac branches one by one; if the owner rejects the names amendment, revert the `s1-names` merge and the `node-pg-1` test edit together, and re-run merge-tree at landing.
+
 | # | Branch | Tip now | Commits over target | Mac-only | Files |
 |---|---|---|---|---|---|
 | 1 | `wt/adr126-s2-mac` | 220952fe9 | 43 | 27 | 88 |
@@ -216,8 +218,8 @@ All live runs were noisy (load 3 to 13), so no timing from them counts as a desi
 | Item | State | Pointer |
 |---|---|---|
 | Full workspace suite, `scripts/build.sh gate` | **not run**, release only. Not to be run now | CLAUDE.md; status page section 6 |
-| Live tests on the merged final tip | **not run**. Mac live drive and view tests ran per branch, not on the merge | status page section 3, "Drive branches merged" |
-| aepod S1 done-when on a throwaway RustFS | **not run** on a merged tip; aepod ran it on its branch, not seen from here | next-steps section 1 |
+| Live tests on the merged final tip | **done on the Mac integration tip** d003ba3d1, 2026-11-08 PM: 22 of 22 weftos-store live tests (S2 drills, done-when, follower, drive cycle, hardening, gc, view) and 2 of 2 clawft-weave store live tests pass on loopback RustFS 1.0.4, noisy, load 6 to 12. Still to repeat on the final tip after aepod lands S1 | status page section 3, "Drive branches merged" |
+| aepod S1 done-when on a throwaway RustFS | **partly covered**: the S1-layer live tests that ship in weftos-store ran and passed on the integration tip (above); aepod's own done-when run on its branch is still not seen from here | next-steps section 1 |
 | Two-machine S2 drill (aepod plus Mac on one RustFS) | **not run** | next-steps 7, step 6 |
 | Windows native bucket load | **not run**, never tested | next-steps 7, step 7 |
 | D1 and D2 kill-criterion timings | **not run**, none exist. `gcloud auth login` works since 13:39 (d1 notes); blocked on a quiet 30 minute window and a signing path for a `drive-test/` chain; `sig_verified=false` in the join report needs a look | d1 notes; status page section 3 D1 row |
