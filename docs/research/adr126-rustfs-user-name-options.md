@@ -1,5 +1,7 @@
 # ADR-126: which name does a node's RustFS user get? (S3 and S1 disagree), 2026-11-08
 
+> **DECIDED (owner, 2026-11-08 11:43): option B.** The node's actual RustFS user is the readable `node-<id>`; S1 adopts it (`opt/adr126-one-creator-s1` and the S1 naming branch carry S1's side, unmerged). S3 needs no naming change: its default (`UserNaming::NodePrefix`, `node-<id>`) already agrees, so `opt/adr126-s3-wk-names` (option A) is not needed and stays unmerged. Only one lane creates each RustFS user, because a second create replaces the secret: that creator is S1 (`provision_node` / `apply_principal`); S3 creates only the node bucket (`opt/adr126-one-creator-s3`, unmerged) and otherwise assumes roles and disables/enables the user. S1 is to keep an alias from `wk-<hash>` to `node-<id>` for display and recognition (its own lane; feasibility note in `/tmp/weftos-owner-0440/aliases-1143-note.txt`). Do not merge the naming-option branches until the alias question is answered. The text below is the analysis that led here.
+
 Owner call. S3 and S1 have not been changed to agree; neither option is merged. Both sides are prepared as branches so the answer is one step. S1 adds its side's notes at the end of this page.
 
 ## What the live test showed
@@ -49,7 +51,7 @@ Good: readable names; S3's code, docs and tests stay as they are.
 
 ## Recommended default
 
-Option A. S1 owns principals, grants and policy and already has a stable, tested, generic rule that every other principal uses; S1 has users and secrets in the field and S3 has none; A needs no migration and no special case. Take A together with the follow-on above (one creator of the user). Choose B only if readable names in RustFS output matter more than avoiding two live rules while users are re-created.
+(Superseded by the owner's choice of B above.) Option A. S1 owns principals, grants and policy and already has a stable, tested, generic rule that every other principal uses; S1 has users and secrets in the field and S3 has none; A needs no migration and no special case. Take A together with the follow-on above (one creator of the user). Choose B only if readable names in RustFS output matter more than avoiding two live rules while users are re-created.
 
 One-line switch if A: a host builds `BrokerConfig`/`RustfsConfig` with `user_naming = UserNaming::WkHash` and its `NodeKeys` keyed by the `wk-` name. If B: S1 merges `opt/adr126-s1-node-names` and the S3 default (`NodePrefix`) already agrees.
 
