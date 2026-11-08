@@ -937,3 +937,82 @@ mod journal {
         }
     }
 }
+
+/// `ClientStore` on a real, throwaway RustFS. Ignored unless `WEFTOS_STORE_TEST_RUSTFS_BIN` is set.
+#[path = "client_store_live_tests.rs"]
+mod live;
+
+mod instance {
+    use std::sync::Arc;
+
+    use weftos_store::service::{Caller, Config, NoChain, Parties};
+    use weftos_store::{MemBackend, StoreService};
+
+    use super::*;
+    use crate::client_store_instance::{MARKER_BUCKET, claim_instance};
+
+    fn on(mem: &Arc<MemBackend>, account: &str, root: &Path) -> Result<ClientStore, StoreError> {
+        ClientStore::open_with(spec(account, root), mesh(), mem.clone(), mem.clone(), Arc::new(OpenGate), Arc::new(MemSink::default()), Arc::new(NoChain), None, clock)
+    }
+
+    #[test]
+    fn a_second_account_on_one_instance_is_refused_with_a_clear_error() {
+        let (da, dr) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let mem = Arc::new(MemBackend::default());
+        let acme = on(&mem, "acme", da.path()).unwrap();
+        let e = on(&mem, "rival", dr.path()).err().unwrap().to_string();
+        assert!(e.contains("already belongs to client account 'acme'"), "{e}");
+        assert!(e.contains("account 'rival' needs its own RustFS instance"), "{e}");
+        assert!(e.contains("one instance per client account"), "{e}");
+        // The owner is not disturbed, and may reopen; the marker is one bucket, tagged with the owner.
+        acme.hold_project(ULID, "op").unwrap();
+        assert!(on(&mem, "acme", da.path()).is_ok());
+        let marked: Vec<_> = weftos_store::AdminBackend::buckets(&*mem).unwrap().into_iter().filter(|(n, _)| n == MARKER_BUCKET).collect();
+        assert_eq!(marked.len(), 1);
+        assert!(marked[0].1.iter().any(|(k, v)| k == "client-account" && v == "acme"));
+        // A refused open left nothing of rival's behind.
+        assert!(!dr.path().join("gate.json").exists());
+    }
+
+    #[test]
+    fn when_accounts_race_for_an_instance_exactly_one_owns_it() {
+        let mem = Arc::new(MemBackend::default());
+        let results: Vec<Result<(), String>> = std::thread::scope(|sc| {
+            let hs: Vec<_> = (0..8).map(|i| { let m = mem.clone(); sc.spawn(move || claim_instance(&*m, &format!("acct{i}"), "the instance")) }).collect();
+            hs.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1, "{results:?}");
+        assert!(results.iter().filter_map(|r| r.as_ref().err()).all(|e| e.contains("already belongs to client account")));
+    }
+
+    #[test]
+    fn a_marker_with_no_owner_is_not_shared() {
+        let mem = Arc::new(MemBackend::default());
+        weftos_store::AdminBackend::create_bucket(&*mem, MARKER_BUCKET, &[]).unwrap();
+        let e = claim_instance(&*mem, "acme", "the instance").unwrap_err();
+        assert!(e.contains("no owner tag"), "{e}");
+    }
+
+    #[test]
+    fn a_client_store_rides_an_existing_service_without_touching_its_grants() {
+        let d = tempfile::tempdir().unwrap();
+        let mem = Arc::new(MemBackend::default());
+        let svc = Arc::new(StoreService::open(Config { node_id: "daemon".into(), state_path: None, clock }, mem.clone(), mem.clone(), Arc::new(OpenGate), Arc::new(MemSink::default()), Arc::new(NoChain)).unwrap());
+        // The daemon's own store, with its own principal.
+        let own = StoreName::project(&mesh().to_string(), "01J8ZQ4W2X9K3M5N7P0R2T4V70").unwrap();
+        svc.create_store(&own, "daemon", Parties::default()).unwrap();
+        svc.grant(&own, cog("daemon-cog"), weftos_store::Access::Write, "daemon").unwrap();
+        // The client store rides the same service.
+        let cs = ClientStore::over_service(spec("acme", d.path()), mesh(), svc.clone(), Arc::new(MemSink::default()), None, clock).unwrap();
+        let name = cs.hold_project(ULID, "op").unwrap();
+        cs.grant_local(&cog("c1"), &name, Access::Write, "op").unwrap();
+        cs.put(&ClientCaller::Local(cog("c1")), &name, "k", b"v", false).unwrap();
+        let listed: Vec<String> = svc.list_stores().into_iter().map(|i| i.name).collect();
+        assert!(listed.contains(&own.to_string()) && listed.contains(&name.to_string()), "one service holds both: {listed:?}");
+        // Revoking in the client store leaves the daemon's own grants alone.
+        cs.revoke_local(&cog("c1"), &name, "op").unwrap();
+        assert!(svc.put(&Caller::local(cog("daemon-cog")), &own, "x", b"y", false).is_ok());
+        assert!(cs.get(&ClientCaller::Local(cog("c1")), &name, "k").is_err());
+    }
+}
+

@@ -9,7 +9,7 @@ fn cfg(account: &str) -> ClientStoreConfig {
     ClientStoreConfig { account: account.into(), port: 9100 }
 }
 fn open(c: &ClientStoreConfig, euid: u32, mesh: &str) -> Result<ClientStore, String> {
-    open_as(c, euid, mesh, Arc::new(OpenGate), Arc::new(MemSink::default()), Arc::new(weftos_store::service::NoChain), None, None)
+    open_as(c, euid, mesh, Arc::new(OpenGate), Arc::new(MemSink::default()), Arc::new(weftos_store::service::NoChain), None, None, &DaemonService::default())
 }
 
 #[test]
@@ -86,5 +86,42 @@ mod chain_keys {
         let (id, sig) = ck.sign(b"msg").unwrap();
         assert_eq!(id, hex::encode(new_key.verifying_key().to_bytes()));
         assert!(ck.verify(&id, b"msg", &sig, rotation.sequence + 5));
+    }
+}
+
+mod shared {
+    use weftos_store::service::{Config, NoChain};
+    use weftos_store::{MemBackend, StoreService};
+
+    use super::*;
+
+    fn service() -> Arc<StoreService> {
+        let mem = Arc::new(MemBackend::default());
+        Arc::new(StoreService::open(Config { node_id: "daemon".into(), state_path: None, clock: || 1 }, mem.clone(), mem, Arc::new(OpenGate), Arc::new(MemSink::default()), Arc::new(NoChain)).unwrap())
+    }
+    fn env_for(dir: &std::path::Path, endpoint: &str) -> std::path::PathBuf {
+        let p = dir.join("daemon.env");
+        std::fs::write(&p, format!("MESH_S3_ENDPOINT={endpoint}\nMESH_S3_ACCESS_KEY=a\nMESH_S3_SECRET_KEY=b\n")).unwrap();
+        p
+    }
+
+    #[test]
+    fn a_client_store_rides_the_daemons_service_only_on_the_daemons_own_instance() {
+        let d = tempfile::tempdir().unwrap();
+        let (listen, svc) = ("127.0.0.1:9100".parse().unwrap(), service());
+        let daemon = |env: Option<std::path::PathBuf>, service: Option<Arc<StoreService>>| DaemonService { rustfs_env: env, service };
+        // The daemon's store is on local directories: the client store makes its own.
+        assert!(shared_service(&daemon(None, Some(svc.clone())), &listen).unwrap().is_none());
+        // The daemon's store is on another RustFS instance: the same.
+        assert!(shared_service(&daemon(Some(env_for(d.path(), "http://127.0.0.1:9999")), Some(svc.clone())), &listen).unwrap().is_none());
+        // On this account's instance and running: ride it, do not make a second service on it.
+        let same = env_for(d.path(), "http://127.0.0.1:9100");
+        let got = shared_service(&daemon(Some(same.clone()), Some(svc.clone())), &listen).unwrap().unwrap();
+        assert!(Arc::ptr_eq(&got, &svc));
+        // On this account's instance but not running: an error, not a second service.
+        let e = shared_service(&daemon(Some(same), None), &listen).err().unwrap();
+        assert!(e.contains("not running") && e.contains("second service"), "{e}");
+        // An unreadable env file is an error too.
+        assert!(shared_service(&daemon(Some(d.path().join("missing.env")), Some(svc)), &listen).is_err());
     }
 }

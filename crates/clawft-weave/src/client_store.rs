@@ -25,6 +25,7 @@ use weftos_store::{
     PrincipalKind, StoreError, StoreName, StoreService,
 };
 
+use crate::client_store_instance::claim_instance;
 use crate::client_store_state::{FileState, GateState};
 use crate::store_account::{
     Access, ClientStoreSpec, CrossMeshGrant, GateEvent, Principal, Refused, SpecError, StoreGate, StoreGrant,
@@ -75,7 +76,7 @@ fn uni<T>(r: Result<T, StoreError>) -> Result<T, StoreError> {
 pub struct ClientStore {
     pub spec: ClientStoreSpec,
     gate: std::sync::Mutex<StoreGate>,
-    svc: StoreService,
+    svc: Arc<StoreService>,
     audit: Arc<dyn AuditSink>,
     state: Arc<dyn GateState>,
     clock: fn() -> u64,
@@ -92,6 +93,19 @@ impl ClientStore {
         Self::open_fs_with(spec, mesh, exposure, audit, Arc::new(NoChain), None, clock)
     }
 
+    /// The root must be owned by the client uid with mode 0700, and nothing inside it a link: a
+    /// client-writable link could aim the daemon at another account's tree.
+    #[cfg(unix)]
+    fn verify_root(spec: &ClientStoreSpec) -> Result<(), StoreError> {
+        spec.verify_on_disk().map_err(|e: SpecError| StoreError::State(e.to_string()))?;
+        for leaf in ["data", "state.json", "gate.json", "gate.json.tmp", "secrets", "archive"] {
+            if std::fs::symlink_metadata(spec.root.join(leaf)).is_ok_and(|m| m.file_type().is_symlink()) {
+                return Err(StoreError::State(format!("{leaf} under the store root is a symlink")));
+            }
+        }
+        Ok(())
+    }
+
     /// [`open_fs`](Self::open_fs) with the service's chain sink and a gate state store. `None`
     /// keeps the gate in `gate.json` under the root; the daemon passes the chain journal.
     #[cfg(unix)]
@@ -99,16 +113,58 @@ impl ClientStore {
         spec: ClientStoreSpec, mesh: Authority, exposure: Arc<dyn ExposureGate>, audit: Arc<dyn AuditSink>,
         chain: Arc<dyn ChainSink>, state: Option<Arc<dyn GateState>>, clock: fn() -> u64,
     ) -> Result<Self, StoreError> {
-        spec.verify_on_disk().map_err(|e: SpecError| StoreError::State(e.to_string()))?;
-        // Nothing inside the root may be a link: a client-writable link could aim the daemon
-        // at another account's tree.
-        for leaf in ["data", "state.json", "gate.json", "gate.json.tmp"] {
-            if std::fs::symlink_metadata(spec.root.join(leaf)).is_ok_and(|m| m.file_type().is_symlink()) {
-                return Err(StoreError::State(format!("{leaf} under the store root is a symlink")));
-            }
-        }
+        Self::verify_root(&spec)?;
         let be = Arc::new(FsBackend::open(&spec.root.join("data"))?);
         Self::open_with(spec, mesh, be.clone(), be, exposure, audit, chain, state, clock)
+    }
+
+    /// The checks every RustFS-backed open makes, and the backend: the root must be the client's
+    /// and 0700, `env_file` a private regular file of the client uid, and its endpoint exactly
+    /// `http://<spec.listen>` (so a client store can never be pointed at a RustFS it shares with
+    /// another account). Per-principal keys are kept under `<root>/secrets/`.
+    #[cfg(unix)]
+    fn rustfs_backend(spec: &ClientStoreSpec, env_file: &Path) -> Result<Arc<weftos_store::RustfsBackend>, StoreError> {
+        use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+        Self::verify_root(spec)?;
+        let m = std::fs::symlink_metadata(env_file).map_err(|e| StoreError::State(format!("{}: {e}", env_file.display())))?;
+        if !m.is_file() || m.uid() != spec.uid || m.mode() & 0o077 != 0 {
+            return Err(StoreError::State(format!("{} must be a regular file owned by the client user with mode 0600", env_file.display())));
+        }
+        let secrets = spec.root.join("secrets");
+        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&secrets).map_err(|e| StoreError::State(e.to_string()))?;
+        let cfg = weftos_store::RustfsConfig::from_env_file(env_file, secrets).map_err(StoreError::Backend)?;
+        if cfg.endpoint != format!("http://{}", spec.listen) {
+            return Err(StoreError::State(format!("{} names {}, not this account's instance http://{}", env_file.display(), cfg.endpoint, spec.listen)));
+        }
+        Ok(Arc::new(weftos_store::RustfsBackend::new(cfg).map_err(StoreError::Backend)?))
+    }
+
+    /// Open on this account's own RustFS instance (S1's transport), the one the systemd unit runs
+    /// as the client user on `spec.listen`, with a store service of its own. `env_file` holds the
+    /// instance's root credential (`MESH_S3_ENDPOINT`, `MESH_S3_ACCESS_KEY`, `MESH_S3_SECRET_KEY`).
+    /// The instance is marked as this account's; one already marked for another is refused.
+    #[cfg(unix)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn open_rustfs(
+        spec: ClientStoreSpec, mesh: Authority, env_file: &Path, exposure: Arc<dyn ExposureGate>, audit: Arc<dyn AuditSink>,
+        chain: Arc<dyn ChainSink>, state: Option<Arc<dyn GateState>>, clock: fn() -> u64,
+    ) -> Result<Self, StoreError> {
+        let be = Self::rustfs_backend(&spec, env_file)?;
+        Self::open_with(spec, mesh, be.clone(), be, exposure, audit, chain, state, clock)
+    }
+
+    /// Like [`open_rustfs`](Self::open_rustfs), but on a store service that already runs on this
+    /// account's instance (the daemon's own S1 service, when `WEFTOS_STORE_RUSTFS_ENV` names the
+    /// same instance). Two services on one instance would overwrite each other's key policies, so
+    /// the client store rides the one that is there instead of making a second.
+    #[cfg(unix)]
+    pub fn open_rustfs_shared(
+        spec: ClientStoreSpec, mesh: Authority, env_file: &Path, svc: Arc<StoreService>, audit: Arc<dyn AuditSink>,
+        state: Option<Arc<dyn GateState>>, clock: fn() -> u64,
+    ) -> Result<Self, StoreError> {
+        let be = Self::rustfs_backend(&spec, env_file)?;
+        claim_instance(&*be, &spec.account, &format!("the RustFS instance at http://{}", spec.listen)).map_err(StoreError::State)?;
+        Self::over_service(spec, mesh, svc, audit, state, clock)
     }
 
     /// Open on explicit backends (RustFS, or memory in tests). The caller has already
@@ -130,7 +186,18 @@ impl ClientStore {
     ) -> Result<Self, StoreError> {
         let state_path = spec.root.join("state.json");
         let cfg = Config { node_id: format!("store-{}", spec.account), state_path: Some(state_path), clock };
-        let svc = StoreService::open(cfg, admin, objects, exposure, audit.clone(), chain)?;
+        // One instance per client account: refuse an instance another account already owns.
+        claim_instance(&*admin, &spec.account, &format!("the store instance at {}", spec.listen)).map_err(StoreError::State)?;
+        let svc = Arc::new(StoreService::open(cfg, admin, objects, exposure, audit.clone(), chain)?);
+        Self::over_service(spec, mesh, svc, audit, state, clock)
+    }
+
+    /// Put the gate in front of a store service that already exists. The caller has made sure the
+    /// service's instance is this account's (see [`claim_instance`]).
+    pub fn over_service(
+        spec: ClientStoreSpec, mesh: Authority, svc: Arc<StoreService>, audit: Arc<dyn AuditSink>,
+        state: Option<Arc<dyn GateState>>, clock: fn() -> u64,
+    ) -> Result<Self, StoreError> {
         let state: Arc<dyn GateState> = state.unwrap_or_else(|| Arc::new(FileState { path: spec.root.join("gate.json") }));
         let gate = state.load(mesh, &spec.account, clock() / 1000).map_err(StoreError::State)?;
         Ok(Self { spec, gate: std::sync::Mutex::new(gate), svc, audit, state, clock })
@@ -342,7 +409,9 @@ impl ClientStore {
         };
         let (r, a) = self.gate().authorize(&gp, &name.to_string(), match op.needs() {
             S1Access::Read => Access::Read,
-            S1Access::Write => Access::Write,
+            // S1's append and sweep are the narrow roles of a release store. A client project
+            // store has only read, write and admin, so a put or a delete needs write here.
+            S1Access::Append | S1Access::Sweep | S1Access::Write => Access::Write,
             S1Access::Admin => Access::Admin,
         }, now);
         if r.is_err() {

@@ -49,6 +49,23 @@ pub struct ClientStoreConfig {
     pub account: String,
     #[serde(default = "default_port")]
     pub port: u16,
+    /// Where the objects live: this account's own RustFS instance, or (default, for a daemon
+    /// with no RustFS yet) a local directory under the client root.
+    #[serde(default)]
+    pub backend: Backend,
+    /// The RustFS root credential file (backend `rustfs`); default `/data1/<account>/store.env`,
+    /// the file the systemd unit reads.
+    #[serde(default)]
+    pub env: Option<std::path::PathBuf>,
+}
+
+/// Which backend a client store uses.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Backend {
+    #[default]
+    Fs,
+    Rustfs,
 }
 
 fn default_port() -> u16 {
@@ -125,6 +142,41 @@ impl SnapshotKey for ChainKey {
     }
 }
 
+/// The daemon's own S1 store service, as far as the client store needs to know it: the env file
+/// `WEFTOS_STORE_RUSTFS_ENV` names (which RustFS instance it uses), and the running service.
+#[derive(Clone, Default)]
+pub struct DaemonService {
+    pub rustfs_env: Option<std::path::PathBuf>,
+    pub service: Option<Arc<weftos_store::StoreService>>,
+}
+
+impl DaemonService {
+    /// What this daemon is running right now.
+    pub fn current() -> Self {
+        Self {
+            rustfs_env: std::env::var_os("WEFTOS_STORE_RUSTFS_ENV").filter(|v| !v.is_empty()).map(Into::into),
+            service: crate::store_rt::global(),
+        }
+    }
+}
+
+/// Which store service a client store on RustFS at `listen` should use. One instance gets one
+/// service: if the daemon's own S1 service is on this very instance the client store rides it
+/// (`Some`); if that service is on another instance, or on local directories, the client store
+/// makes its own (`None`). A daemon whose env names this instance but whose service is not
+/// running is an error, not a reason to start a second service on the instance.
+pub fn shared_service(daemon: &DaemonService, listen: &std::net::SocketAddr) -> Result<Option<Arc<weftos_store::StoreService>>, String> {
+    let Some(env) = &daemon.rustfs_env else { return Ok(None) };
+    let theirs = weftos_store::RustfsConfig::from_env_file(env, std::path::PathBuf::new()).map_err(|e| e.to_string())?;
+    if theirs.endpoint != format!("http://{listen}") {
+        return Ok(None);
+    }
+    daemon.service.clone().map(Some).ok_or_else(|| {
+        format!("the daemon's store service is configured for this account's instance (http://{listen}, {}) but is not running; \
+                 not starting a second service on it", env.display())
+    })
+}
+
 /// Build the store for `cfg` as the process uid `euid`. Everything the daemon decides is here, so
 /// it can be tested without a real client user: the spec, the mesh and the on-disk check.
 /// With `log` the gate is rebuilt from, and recorded to, that event log (the chain); without
@@ -133,7 +185,7 @@ impl SnapshotKey for ChainKey {
 #[allow(clippy::too_many_arguments)]
 pub fn open_as(
     cfg: &ClientStoreConfig, euid: u32, mesh_token: &str, exposure: Arc<dyn ExposureGate>, audit: Arc<dyn AuditSink>,
-    chain: Arc<dyn ChainSink>, log: Option<Arc<dyn EventLog>>, key: Option<Arc<dyn SnapshotKey>>,
+    chain: Arc<dyn ChainSink>, log: Option<Arc<dyn EventLog>>, key: Option<Arc<dyn SnapshotKey>>, daemon: &DaemonService,
 ) -> Result<ClientStore, String> {
     let mesh = mesh_of(mesh_token).ok_or_else(|| "this node has no mesh id yet; the client store waits for one".to_owned())?;
     let spec = ClientStoreSpec::standard(&cfg.account, euid, cfg.port).map_err(|e| e.to_string())?;
@@ -144,7 +196,17 @@ pub fn open_as(
             None => j,
         }) as Arc<dyn GateState>
     });
-    ClientStore::open_fs_with(spec, mesh, exposure, audit, chain, state, now_ms).map_err(|e| e.to_string())
+    let opened = match cfg.backend {
+        Backend::Fs => ClientStore::open_fs_with(spec, mesh, exposure, audit, chain, state, now_ms),
+        Backend::Rustfs => {
+            let env = cfg.env.clone().unwrap_or_else(|| std::path::Path::new(crate::store_account::DATA_ROOT).join(&cfg.account).join("store.env"));
+            match shared_service(daemon, &spec.listen)? {
+                Some(svc) => ClientStore::open_rustfs_shared(spec, mesh, &env, svc, audit, state, now_ms),
+                None => ClientStore::open_rustfs(spec, mesh, &env, exposure, audit, chain, state, now_ms),
+            }
+        }
+    };
+    opened.map_err(|e| e.to_string())
 }
 
 /// Start the client store if `dir` has a config. `Ok(None)` when it does not. `chain` is the
@@ -166,7 +228,7 @@ pub fn start(
     let euid = nix::unistd::geteuid().as_raw();
     let cs = open_as(
         &cfg, euid, &crate::store_rt::mesh_token(), Arc::new(RegistryGate(exposures.clone())), Arc::new(ActivitySink(exposures)),
-        Arc::new(ChainAudit(chain)), log, key,
+        Arc::new(ChainAudit(chain)), log, key, &DaemonService::current(),
     )?;
     Ok(Some(GLOBAL.get_or_init(|| Arc::new(cs)).clone()))
 }
