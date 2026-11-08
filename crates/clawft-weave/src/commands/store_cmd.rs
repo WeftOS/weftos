@@ -225,6 +225,33 @@ fn wt_lines(verb: &str, v: &Value) -> Option<String> {
     }
 }
 
+/// This machine's name for claim identities: the kernel's hostname file, `/etc/hostname`, then the
+/// shell variables, then (macOS, which has none of those) the system preferences, whose
+/// `LocalHostName` is the Bonjour name. Reading a file avoids a process or an FFI call.
+fn local_host() -> Option<String> {
+    let clean = |s: &str| Some(s.trim().to_owned()).filter(|h| !h.is_empty() && h != "unknown" && h != "localhost");
+    for f in ["/proc/sys/kernel/hostname", "/etc/hostname"] {
+        if let Some(h) = std::fs::read_to_string(f).ok().and_then(|s| clean(&s)) {
+            return Some(h);
+        }
+    }
+    for v in ["HOSTNAME", "HOST"] {
+        if let Some(h) = std::env::var(v).ok().and_then(|s| clean(&s)) {
+            return Some(h);
+        }
+    }
+    let plist = std::fs::read_to_string("/Library/Preferences/SystemConfiguration/preferences.plist").ok()?;
+    ["LocalHostName", "HostName", "ComputerName"].iter().find_map(|k| plist_string(&plist, k).and_then(|s| clean(&s)))
+}
+
+/// The `<string>` that follows `<key>name</key>` in an XML property list (first match).
+fn plist_string(plist: &str, name: &str) -> Option<String> {
+    let after = &plist[plist.find(&format!("<key>{name}</key>"))? + name.len() + 11..];
+    let start = after.find("<string>")? + 8;
+    let end = after[start..].find("</string>")?;
+    Some(after[start..start + end].to_owned())
+}
+
 /// Run the store subcommand.
 pub async fn run(args: StoreArgs) -> anyhow::Result<()> {
     match args.action {
@@ -269,10 +296,12 @@ pub async fn run(args: StoreArgs) -> anyhow::Result<()> {
         }
         StoreAction::Worktree { verb, rest } => {
             let agent = std::env::var("WEFTOS_AGENT").or_else(|_| std::env::var("USER")).unwrap_or_else(|_| "agent".into());
-            let host = std::fs::read_to_string("/proc/sys/kernel/hostname")
-                .map(|h| h.trim().to_owned())
-                .or_else(|_| std::env::var("HOSTNAME"))
-                .unwrap_or_else(|_| "unknown".into());
+            // The host half of a claim identity must tell machines apart; never a shared fallback.
+            let host = match local_host() {
+                Some(h) => h,
+                None if rest.iter().any(|a| a == "--host") => String::new(),
+                None => anyhow::bail!("cannot tell this machine's host name; pass --host <name>"),
+            };
             let as_json = rest.iter().any(|a| a == "--json");
             let params = worktree_params(&rest, &agent, &host)?;
             let v = call(&format!("store.worktree.{verb}"), params).await?;
@@ -295,6 +324,23 @@ pub async fn run(args: StoreArgs) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plist_host_names_are_read_without_a_process() {
+        let p = "<dict><key>System</key><dict><key>Network</key><dict><key>HostNames</key><dict>\n<key>LocalHostName</key>\n\t<string>mac-studio</string></dict></dict><key>System</key><dict><key>ComputerName</key><string>Mac Studio</string></dict></dict></dict>";
+        assert_eq!(plist_string(p, "LocalHostName").as_deref(), Some("mac-studio"));
+        assert_eq!(plist_string(p, "ComputerName").as_deref(), Some("Mac Studio"));
+        assert_eq!(plist_string(p, "HostName"), None);
+        assert_eq!(plist_string("", "LocalHostName"), None);
+    }
+
+    #[test]
+    fn this_machine_has_a_host_name_that_is_not_the_shared_fallback() {
+        // On a Mac with no HOSTNAME exported this used to be "unknown".
+        if let Some(h) = local_host() {
+            assert!(!h.is_empty() && h != "unknown");
+        }
+    }
 
     #[test]
     fn verbs_parse_and_required_args_are_enforced() {

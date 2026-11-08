@@ -673,6 +673,25 @@ fn readers_enforce_size_and_count_ceilings_and_check_the_bundle_hash() {
 }
 
 #[test]
+fn a_claim_stamped_far_in_the_future_does_not_hold_the_merge() {
+    let b = setup();
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("a.txt"), "x").unwrap();
+    let ps = paths(&["a.txt"]);
+    let src = TreeSource { root: d.path(), paths: &ps, uncommitted: &[], changes: &[], branch: "f", base_commit: "a", head_commit: "h", bundle: None, writer: me("w", "h") };
+    publish_tree(&b, WT, &src, &Limits::default(), 1_000).unwrap();
+    let (bob, alice) = (me("bob", "m2"), me("alice", "m1"));
+    // bob's clock is a day ahead: his claim carries a stamp far past this daemon's clock
+    claim_merge(&b, WT, &bob, 1_000 + 24 * 3600 * 1000).unwrap();
+    // a modest skew still counts as live
+    let e = claim_merge(&b, WT, &alice, 1_000 + 24 * 3600 * 1000 - 5 * 60 * 1000).unwrap_err();
+    assert!(matches!(e, S2Error::Claimed(_)), "{e:?}");
+    // but at the daemon's own clock the stamp is more than ten minutes ahead: not trusted as live
+    let h = claim_merge(&b, WT, &alice, 2_000).unwrap();
+    assert_eq!(h.merger, Some(alice));
+}
+
+#[test]
 fn private_key_content_and_secret_names_are_not_shared_but_secret_docs_are() {
     let d = tempfile::tempdir().unwrap();
     std::fs::write(

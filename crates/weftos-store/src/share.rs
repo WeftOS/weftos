@@ -22,7 +22,18 @@ pub const BUNDLE_KEY: &str = ".wt/git/branch.bundle";
 pub const HANDOFF_KEY: &str = ".wt/handoff.json";
 pub const SCHEMA: u32 = 1;
 /// A merge claim older than this is considered abandoned.
+///
+/// The age is `now - updated_ms`, where `now` is the clock of the daemon being asked and
+/// `updated_ms` was written by the daemon that took the claim: two machines' clocks, not one.
 pub const CLAIM_TTL_MS: u64 = 30 * 60 * 1000;
+/// A claim stamped further ahead of this daemon's clock than this is not trusted as live (a
+/// claimer with a fast clock would otherwise hold the merge far past the TTL), so it can be taken.
+pub const CLAIM_SKEW_MS: u64 = 10 * 60 * 1000;
+
+/// Is this claim still live at `now_ms`: younger than the TTL, and not stamped from the future.
+fn claim_is_live(h: &Handoff, now_ms: u64) -> bool {
+    h.updated_ms <= now_ms.saturating_add(CLAIM_SKEW_MS) && now_ms.saturating_sub(h.updated_ms) < CLAIM_TTL_MS
+}
 
 /// Who wrote or claimed something. Advisory identity, not authority (grants are in RustFS IAM).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -470,7 +481,7 @@ fn write_handoff<B: ObjectBackend>(b: &B, bucket: &str, h: &Handoff) -> Result<(
 fn guard_live_claim(h: &Handoff, who: &Actor, now_ms: u64) -> Result<()> {
     if h.state == State::Claimed
         && let Some(m) = h.merger.as_ref().filter(|m| *m != who)
-        && now_ms.saturating_sub(h.updated_ms) < CLAIM_TTL_MS
+        && claim_is_live(h, now_ms)
     {
         return Err(S2Error::Claimed(format!("{}@{}", m.agent, m.host)));
     }
@@ -534,7 +545,7 @@ pub fn claim_merge<B: ObjectBackend>(
         State::Claimed => {
             let other = cur.merger.as_ref().filter(|m| *m != me);
             if let Some(m) = other
-                && now_ms.saturating_sub(cur.updated_ms) < CLAIM_TTL_MS
+                && claim_is_live(&cur, now_ms)
             {
                 return Err(S2Error::Claimed(format!("{}@{}", m.agent, m.host)));
             }
