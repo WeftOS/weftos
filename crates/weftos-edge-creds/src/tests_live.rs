@@ -721,3 +721,192 @@ mod compaction_spike {
         assert_eq!(verify_against_history(&snap, &real), Err(SnapshotError::HistoryMismatch("events_head")));
     }
 }
+
+// ---- S1's archive-on-unpair and seq guard: S3 consume side (mock backend) ----
+mod lifecycle_consume {
+    use super::*;
+    use crate::grants::{MaxSeqJump, SeqGuard};
+    use crate::lifecycle::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Mutex;
+
+    /// Stands in for S1's archive-on-unpair until its real calls land.
+    #[derive(Clone, Default)]
+    struct MockArchiver {
+        /// bucket -> object count
+        buckets: Arc<Mutex<HashMap<String, u64>>>,
+        down: Arc<AtomicBool>,
+        log: Arc<Mutex<Vec<String>>>,
+    }
+    impl MockArchiver {
+        fn fill(&self, node: &str, n: u64) {
+            self.buckets.lock().unwrap().insert(format!("n-{node}"), n);
+        }
+    }
+    impl NodeArchiver for MockArchiver {
+        async fn archive_node(&self, node_id: &str) -> Result<ArchiveReceipt, ArchiveError> {
+            if self.down.load(Ordering::SeqCst) {
+                return Err(ArchiveError::Unavailable("archive store down".into()));
+            }
+            let n = self.buckets.lock().unwrap().insert(format!("n-{node_id}"), 0).unwrap_or(0);
+            self.log.lock().unwrap().push(format!("archive:{node_id}"));
+            Ok(ArchiveReceipt { node_id: node_id.into(), location: format!("archive/n-{node_id}"), objects: n })
+        }
+        async fn bucket_is_empty(&self, node_id: &str) -> Result<bool, ArchiveError> {
+            if self.down.load(Ordering::SeqCst) {
+                return Err(ArchiveError::Unavailable("down".into()));
+            }
+            Ok(self.buckets.lock().unwrap().get(&format!("n-{node_id}")).copied().unwrap_or(0) == 0)
+        }
+    }
+
+    #[derive(Clone)]
+    struct Prov {
+        broker: Arc<Broker>,
+        log: Arc<Mutex<Vec<String>>>,
+    }
+    impl NodeProvisioner for Prov {
+        async fn deprovision(&self, node_id: &str) -> Result<(), crate::broker::StsError> {
+            self.log.lock().unwrap().push(format!("deprovision:{node_id}"));
+            self.broker.minter().deprovision_node(node_id).await
+        }
+    }
+
+    fn setup(node: &str) -> (Rig, MockArchiver, NodeLifecycle<MockArchiver, Prov>) {
+        let r = rig_unprovisioned(&[node]);
+        pair(&r, 1, node);
+        run(r.broker.minter().provision_node(node, &format!("generated-secret-{node}"))).unwrap();
+        let a = MockArchiver::default();
+        a.fill(node, 3);
+        let p = Prov { broker: r.broker.clone(), log: a.log.clone() };
+        let lc = NodeLifecycle::new(a.clone(), p);
+        (r, a, lc)
+    }
+
+    fn removed_user(r: &Rig) -> bool {
+        r.store.log().iter().any(|(_, _, _, p)| p.contains("remove-user"))
+    }
+
+    #[test]
+    fn unpair_archives_before_it_deletes_the_user() {
+        let (r, a, lc) = setup("wasm-9");
+        let rc = run(lc.unpair(&r.ledger, &r.broker, &GrantEvent::unpair(2, MESH, "wasm-9"))).unwrap();
+        assert_eq!((rc.objects, rc.node_id.as_str()), (3, "wasm-9"));
+        assert_eq!(*a.log.lock().unwrap(), vec!["archive:wasm-9", "deprovision:wasm-9"], "archive first, delete second");
+        assert!(removed_user(&r));
+        assert!(run(edge(&r, "wasm-9").put("k", b"v")).is_err(), "the node is cut off");
+        assert!(lc.is_sealed("wasm-9"));
+    }
+
+    #[test]
+    fn a_failed_archive_keeps_the_user_and_the_data_and_a_retry_finishes() {
+        let (r, a, lc) = setup("wasm-9");
+        a.down.store(true, Ordering::SeqCst);
+        let ev = GrantEvent::unpair(2, MESH, "wasm-9");
+        let e = run(lc.unpair(&r.ledger, &r.broker, &ev)).unwrap_err();
+        assert!(matches!(e, LifecycleError::Archive(ArchiveError::Unavailable(_))));
+        assert!(!removed_user(&r), "nothing is deleted before the archive exists");
+        assert!(lc.is_sealed("wasm-9"));
+        assert!(run(edge(&r, "wasm-9").put("k", b"v")).is_err(), "disabled in the meantime");
+
+        a.down.store(false, Ordering::SeqCst);
+        // The same event again is Stale in the ledger; the lifecycle still completes.
+        run(lc.unpair(&r.ledger, &r.broker, &ev)).unwrap();
+        assert!(removed_user(&r));
+        assert_eq!(*a.log.lock().unwrap(), vec!["archive:wasm-9", "deprovision:wasm-9"]);
+    }
+
+    #[test]
+    fn a_reused_id_is_refused_until_the_bucket_is_empty() {
+        let (r, a, lc) = setup("wasm-9");
+        // Never-unpaired ids pair freely, even with data in their bucket.
+        assert!(run(lc.check_pairable("wasm-9")).is_ok());
+        a.down.store(true, Ordering::SeqCst);
+        let _ = run(lc.unpair(&r.ledger, &r.broker, &GrantEvent::unpair(2, MESH, "wasm-9")));
+        a.down.store(false, Ordering::SeqCst);
+        // Archive never happened: the bucket still holds the old node's objects.
+        assert_eq!(run(lc.check_pairable("wasm-9")), Err(LifecycleError::IdRetired("wasm-9".into())));
+        // A broken probe fails closed.
+        a.down.store(true, Ordering::SeqCst);
+        assert_eq!(run(lc.check_pairable("wasm-9")), Err(LifecycleError::IdRetired("wasm-9".into())));
+        a.down.store(false, Ordering::SeqCst);
+
+        run(lc.unpair(&r.ledger, &r.broker, &GrantEvent::unpair(2, MESH, "wasm-9"))).unwrap();
+        assert!(run(lc.check_pairable("wasm-9")).is_ok(), "archived and emptied: the id may be used again");
+        assert!(!lc.is_sealed("wasm-9"));
+        assert!(run(lc.check_pairable("wasm-9")).is_ok());
+    }
+
+    #[test]
+    fn after_a_restart_the_chain_history_reseals_unpaired_ids() {
+        let (r, a, _lc) = setup("wasm-9");
+        let history = [GrantEvent::pairing(1, MESH, "wasm-9"), GrantEvent::unpair(2, MESH, "wasm-9"), GrantEvent::pairing(3, MESH, "wasm-2")];
+        let fresh = NodeLifecycle::new(a.clone(), Prov { broker: r.broker.clone(), log: a.log.clone() });
+        assert!(run(fresh.check_pairable("wasm-9")).is_ok(), "nothing known yet");
+        fresh.seal_from_history(history.iter());
+        assert!(fresh.is_sealed("wasm-9") && !fresh.is_sealed("wasm-2"));
+        assert!(run(fresh.check_pairable("wasm-9")).is_err(), "bucket still has 3 objects");
+    }
+
+    #[test]
+    fn only_an_unpair_event_starts_the_unpair_flow() {
+        let (r, a, lc) = setup("wasm-9");
+        let revoke_one = GrantEvent { seq: 2, principal: "wasm-9".into(), store: node_store_name(MESH, "wasm-9"), access: Access::Write, op: GrantOp::Revoke };
+        assert_eq!(run(lc.unpair(&r.ledger, &r.broker, &revoke_one)).unwrap_err(), LifecycleError::NotUnpair);
+        // A RevokeAll on someone else's store is not this node's unpair either.
+        let other = GrantEvent { seq: 3, principal: "wasm-9".into(), store: node_store_name(MESH, "other"), access: Access::Write, op: GrantOp::RevokeAll };
+        assert_eq!(run(lc.unpair(&r.ledger, &r.broker, &other)).unwrap_err(), LifecycleError::NotUnpair);
+        assert!(!lc.is_sealed("wasm-9") && a.log.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_seq_guard_stops_the_u64_max_freeze_and_a_real_revoke_still_applies() {
+        let ledger = GrantLedger::new();
+        ledger.set_seq_guard(MaxSeqJump(1_000_000));
+        ledger.apply(&GrantEvent::pairing(1, MESH, "wasm-1"));
+        let before = ledger.snapshot("s");
+        let bad = GrantEvent { seq: u64::MAX, principal: "wasm-1".into(), store: node_store_name(MESH, "wasm-1"), access: Access::Read, op: GrantOp::Grant };
+        assert_eq!(ledger.apply(&bad), Applied::OutOfRange);
+        assert_eq!(ledger.snapshot("s"), before, "a refused event changes nothing, not even the head");
+        let later = GrantEvent { seq: 5, principal: "wasm-1".into(), store: node_store_name(MESH, "wasm-1"), access: Access::Write, op: GrantOp::RevokeAll };
+        assert!(matches!(ledger.apply(&later), Applied::Changed { lost_write: true }));
+    }
+
+    #[test]
+    fn the_seq_guard_is_pluggable_and_must_be_reinstalled_after_restore() {
+        struct Never;
+        impl SeqGuard for Never {
+            fn admit(&self, _: u64, _: u64) -> bool {
+                false
+            }
+        }
+        let l = GrantLedger::new();
+        l.set_seq_guard(Never);
+        assert_eq!(l.apply(&GrantEvent::pairing(1, MESH, "a")), Applied::OutOfRange);
+        // A guard is part of the running ledger, not of a snapshot: a restored
+        // ledger has none until the host installs it again.
+        let live = GrantLedger::replay([GrantEvent::pairing(1, MESH, "a")]);
+        let signed = live.signed_snapshot("s", "k", |_| vec![1]);
+        struct Ok1;
+        impl crate::compaction::SnapshotVerifier for Ok1 {
+            fn verify(&self, _: &str, _: &[u8], _: &[u8]) -> bool {
+                true
+            }
+        }
+        let restored = GrantLedger::restore(&signed, "s", &Ok1, &[]).unwrap();
+        let far = GrantEvent { seq: u64::MAX, ..GrantEvent::pairing(0, MESH, "b") };
+        assert!(matches!(restored.apply(&far), Applied::Changed { .. }), "no guard until installed");
+        let again = GrantLedger::restore(&signed, "s", &Ok1, &[]).unwrap();
+        again.set_seq_guard(MaxSeqJump(10));
+        assert_eq!(again.apply(&far), Applied::OutOfRange);
+    }
+
+    #[test]
+    fn an_unpair_refused_by_the_seq_guard_does_not_archive() {
+        let (r, a, lc) = setup("wasm-9");
+        r.ledger.set_seq_guard(MaxSeqJump(5));
+        let e = run(lc.unpair(&r.ledger, &r.broker, &GrantEvent::unpair(500, MESH, "wasm-9"))).unwrap_err();
+        assert!(matches!(e, LifecycleError::Revoke(_)));
+        assert!(a.log.lock().unwrap().is_empty() && !removed_user(&r));
+    }
+}

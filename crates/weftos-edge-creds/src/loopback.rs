@@ -106,7 +106,7 @@ impl LoopbackChain {
     /// chain does not reorder.
     pub fn append(&mut self, ev: GrantEvent, now: u64) -> Result<Applied, ChainError> {
         let applied = self.ledger.apply(&ev);
-        if applied == Applied::Stale {
+        if matches!(applied, Applied::Stale | Applied::OutOfRange) {
             return Err(ChainError::OutOfOrder(ev.seq));
         }
         self.entries.push(ChainEntry::Grant(ev));

@@ -57,7 +57,7 @@ pub fn node_store_name(mesh: &str, node_id: &str) -> String {
 }
 
 /// The node id in `weftos://<mesh>/nodes/<id>/store`, if it is one.
-fn node_of_store(store: &str) -> Option<&str> {
+pub(crate) fn node_of_store(store: &str) -> Option<&str> {
     let rest = store.strip_prefix("weftos://")?;
     let mut it = rest.split('/');
     let (_mesh, nodes, id, store_seg, extra) = (it.next()?, it.next()?, it.next()?, it.next()?, it.next());
@@ -68,12 +68,32 @@ fn node_of_store(store: &str) -> Option<&str> {
 pub enum Applied {
     /// Seq not newer than the last applied event: ignored.
     Stale,
+    /// The installed [`SeqGuard`] refused the jump in `seq`; nothing changed.
+    OutOfRange,
     /// Applied. `lost_write` is true when the principal could write its own
     /// node store before this event and cannot now: the caller must revoke.
     Changed { lost_write: bool },
 }
 
+/// Decides whether a jump in `seq` is believable. S1's guard for the
+/// `seq = u64::MAX` freeze plugs in here when it lands; until then
+/// [`MaxSeqJump`] is a stand-in. Default is no guard (any later `seq` applies).
+pub trait SeqGuard: Send + Sync {
+    /// `last` is the newest applied `seq`, `seq` the incoming one (`seq > last`).
+    fn admit(&self, last: u64, seq: u64) -> bool;
+}
+
+/// Refuse a `seq` more than `n` past the last applied one.
+pub struct MaxSeqJump(pub u64);
+
+impl SeqGuard for MaxSeqJump {
+    fn admit(&self, last: u64, seq: u64) -> bool {
+        seq - last <= self.0
+    }
+}
+
 pub(crate) struct Table {
+    pub(crate) guard: Option<Box<dyn SeqGuard>>,
     pub(crate) last_seq: u64,
     pub(crate) held: HashMap<(String, String), HashSet<Access>>,
     /// Hash chain over the events applied so far (compaction, ADR-126).
@@ -82,7 +102,7 @@ pub(crate) struct Table {
 
 impl Default for Table {
     fn default() -> Self {
-        Self { last_seq: 0, held: HashMap::new(), events_head: crate::compaction::genesis_head() }
+        Self { guard: None, last_seq: 0, held: HashMap::new(), events_head: crate::compaction::genesis_head() }
     }
 }
 
@@ -92,6 +112,12 @@ pub struct GrantLedger(pub(crate) Mutex<Table>);
 impl GrantLedger {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Install a guard on `seq` jumps. A restored ledger (compaction) starts
+    /// with none, so install it again after `restore`.
+    pub fn set_seq_guard(&self, guard: impl SeqGuard + 'static) {
+        self.0.lock().expect("ledger").guard = Some(Box::new(guard));
     }
 
     /// Rebuild from chain events, in chain order.
@@ -119,6 +145,9 @@ impl GrantLedger {
         let mut t = self.0.lock().expect("ledger");
         if ev.seq <= t.last_seq {
             return Applied::Stale;
+        }
+        if t.guard.as_ref().is_some_and(|g| !g.admit(t.last_seq, ev.seq)) {
+            return Applied::OutOfRange;
         }
         t.last_seq = ev.seq;
         t.events_head = crate::compaction::extend_head(&t.events_head, ev);
