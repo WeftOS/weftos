@@ -4,7 +4,7 @@ Status: **interface spec plus a loopback prototype.** Owner item E-1. The protot
 module `crates/weftos-store/src/drive/view.rs` and `drive/view/` on branch
 `wt/adr126-e1-scoped-view`. The `weaver store view` verbs are specified here but not built. The
 Linux bwrap side belongs to photo-gallery's `weftos-pg` session; see
-[`docs/handoff-scoped-view-weftos-pg.md`](../handoff-scoped-view-weftos-pg.md).
+[`docs/research/adr126-e1-scoped-view-handoff-weftos-pg-2026-11-08.md`](../research/adr126-e1-scoped-view-handoff-weftos-pg-2026-11-08.md).
 
 Sources. Files marked "main checkout" are untracked files in `~/weftos`, not in this branch.
 

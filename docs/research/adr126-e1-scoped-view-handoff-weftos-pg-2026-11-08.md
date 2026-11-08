@@ -1,7 +1,7 @@
 # Handoff to `weftos-pg`: the Linux bwrap side of the store scoped view (2026-11-08)
 
 From the Mac session on branch `wt/adr126-e1-scoped-view` (owner item E-1). The interface spec is
-[`docs/architecture/store-scoped-view.md`](architecture/store-scoped-view.md). Read sections 2, 4,
+[`docs/architecture/store-scoped-view.md`](../architecture/store-scoped-view.md). Read sections 2, 4,
 6.2, 7 and 8 first. This note says what to build on Linux, what already exists, and what not to do.
 
 ## What is done here
