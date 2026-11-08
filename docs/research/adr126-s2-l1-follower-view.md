@@ -144,3 +144,57 @@ Once entries are signed in format 2, someone with project write could delete the
 | C. Format 2 as above | atomic, no orphans, one object | the rollout above, a downgrade guard, a day of work |
 
 Recommendation: **B now if the noise is ever seen in practice; C only when the registry format has to change for another reason** (for example signed worktree heads read from an untrusted relay, which ADR-126 §4a lists as an open question), so the rollout is paid once. Today nothing is wrong, only untidy: the two-write window fails safe, and the rollback and replay protections already hold. One-line decision for the owner: "A", "B", or "C, readers first".
+
+## Gate drills run on loopback RustFS (single machine)
+
+Date: 2026-11-08. ADR-126 §4a gate items 3 to 6, the part that needs one machine. Tests: `crates/weftos-store/tests/s2_follower_drills.rs`. Every store drill runs three ways: `mem` (in-memory), `fs` (the local-directory backend, real buckets) and `live` (ignored; a throwaway RustFS 1.0.4 on `127.0.0.1:19460` started with podman, own data dir, removed afterwards). 18 non-ignored tests plus 9 live ones, all passing. Live: `WEFTOS_STORE_TEST_RUSTFS_ENV=<env> cargo test -p weftos-store --features rustfs --test s2_follower_drills -- --ignored --nocapture`.
+
+Not repeated because they already exist: three identities and IAM (`s2_follower_rustfs`), concurrent claim races (`s2_handoff_cas`, `s2_land_rustfs`), claim expiry on observed silence and epoch fencing (`s2_follower`), empty-registry refusal, corrupt-entry-does-not-blind-poll, one interrupted-sync case, future-timestamp and stuck-cleanup verdicts at unit level.
+
+### Item 3: latency for a Sansone-sized worktree (measured)
+
+5003 files (4800 source files of 1 to 3 KB, 200 docs, 3 files of 20 MB), 66 MB, manifest 743 KB, one run on loopback:
+
+| Operation | Time |
+|---|---|
+| publish, first (5003 puts, 66 MB) | 56 s |
+| republish, nothing changed (5003 heads + one list) | 20 s |
+| republish after editing one doc | 24 s |
+| registry entry write | 43 ms |
+| **poll, 10 worktrees (1 list + 10 gets), first / quiet** | **49 ms / 35 ms** |
+| list of the big worktree bucket (5006 objects, paged) | 1.76 s |
+| head of the manifest / get of the manifest (743 KB) | 5 ms / 46 ms |
+| `search_docs` over 10 worktrees | 73 ms |
+| `sync_docs` first (200 docs) / again | 647 ms / 88 ms |
+| fetch the whole tree (5003 files, 66 MB) | 18 s |
+
+Reading: one-poll-per-worktree is affordable, because a poll reads only registry entries (a few hundred bytes each) and never lists a worktree bucket. Search and docs mirroring read one manifest per worktree. What is slow is the writer: a republish costs one head per file (about 4 ms each), so a 5000-file tree takes about 20 s even when nothing changed. That is writer-side, not on the poll path; a bulk "list then compare etags" would be the fix if it ever matters. The bounds the test asserts are generous (seconds to minutes); the numbers above are the point.
+
+### Items 4 to 6: what each drill proved
+
+- **Leftover end to end** (`leftover_drill`): open past 3 days is reported (not at 2), handoff seen as a state change, unclaimed after a day is flagged, a second principal claims (epoch 1) and the writer is then refused, a claim silent past 30 minutes is flagged, the tree reads back byte for byte, promote lands it, merged, entry removed, bucket deleted, follower sees `Gone`, nothing left to nag about. Observation: when the last worktree leaves, a plain `poll` returns an error ("wrong project bucket?") until `poll_confirmed`; followers that run `follow` against a project with exactly one worktree will see that error once at landing. By design, but surprising.
+- **Writer killed mid-publish** (`writer_kill`): killed after every possible write count (7 kill points). A follower never saw a change (the registry is refreshed only by the daemon), the old doc list stayed, no wrong bytes were ever served. In 4 of 7 kill points a changed doc had already been overwritten under the old manifest, so a follower's `sync_docs` was refused with a checksum mismatch until the retry finished. That is fail-safe (refusal, never wrong content) but it is a window where a mirror fails; closing it needs content-addressed object keys or write-then-switch, a format change, not done. Retrying the publish completed every time.
+- **Merger killed** (`merger_kill`): a claim killed right after is refused to others for the full TTL, visible to followers as `AbandonedClaim`, recoverable at exactly the TTL with epoch + 1, and the dead merger's late merge is fenced off. A land killed after each of 14 write counts left no `promoted` record; a second merger claimed after the window and re-ran promote to completion every time, with all objects whole and scratch kept out of the project.
+- **Daemon down** (`daemon_outage`): a failed registry refresh leaves the follower's previous view; on recovery it sees one head move, once. A store that is unreachable at any point of a poll (3 read points) is an error that leaves the follower's state untouched, and search reports an outage as `unreadable`, not as "no docs".
+- **Merged entry, cleanup never ran** (`merged_cleanup`): never searched as live work, flagged `StuckCleanup` only after a day, still mirrorable, cleared by later cleanup. The opposite (entry left after its bucket was deleted): poll cannot tell, search names it unreadable, mirror errors, removal clears it.
+- **Interrupted `sync_docs` then a deleted doc** (`interrupted_sync`): interrupted at 7 different read counts; every time the next sync left the mirror exactly the published docs, byte for byte.
+- **Damaged registries** (`damaged_registry`): corrupt, newer-state, mislabelled entries are reported as unreadable every poll and nothing else repeats; an entry with an extra field is read fine; a corrupt manifest is flagged by search and refused by mirror and overlaps; an empty project is not an error on first look and is an error (state kept) once worktrees were known; pointing at another project's registry flips the view wholesale in one poll (`gone` for all, `new` for theirs). Live: a nonexistent bucket is an error.
+- **Clocks** (`skewed_writer_clocks_give_sane_verdicts`): a writer a day ahead is reported as `FutureTimestamp` (idle 0), never a negative age; a merged entry stamped in the future is not nagged about until the follower's clock reaches it; 30 minutes ahead is just fresh. A writer a day behind: an open worktree is still not forgotten, but a fresh handoff shows as `UnclaimedHandoff` and a live claim shows as `AbandonedClaim` (reports only; takeover uses observed silence). Extremes (0, `u64::MAX`) do not panic.
+- **Overlaps, different bases** (`overlaps_report_only_paths_...`): see bug 2.
+- **Two follow runs, one state file**: last writer wins. The loser re-reports changes the other already reported (duplicates), never skips one; the file is always valid JSON and loadable; no temp files left. See bug 1.
+
+### Bugs found and fixed (all in `weftos-store`)
+
+1. **`FollowState::save` was not safe even in one process.** The temp file name was per pid only, so two saves at once shared it: a reader saw a torn file ("trailing characters") and a save failed with "No such file". Now unique per call. Test: `concurrent_saves_and_loads_never_see_a_torn_file_or_fail` (failed before).
+2. **`overlaps` reported most single-sided edits as conflicts.** Every worktree holds the whole project, so a file only one side edited also "differs". With 7 edits each and 2 truly shared, plain content comparison reported 12 (83% false positives); with different bases (10 files moved on main) 22, of which 20 false (91%). Now, when both manifests carry a change list, only paths changed on both sides are reported (2 of 2 in both cases). A manifest with no change list still gets the old superset, as documented. Test: `overlaps_report_only_paths_both_worktrees_changed_even_with_different_bases` (failed before).
+3. **A publish killed between its manifest write and its cleanup left orphan objects forever** (the cleanup was driven by the previous manifest, which no longer named them). Cleanup now lists the tree prefix and removes anything the new manifest does not list (one extra list per publish, 1.8 s at 5000 objects). Test: `writer_kill` (failed before: 1 of 7 kill points left an orphan).
+
+### Seen, not changed
+
+- Manifest `schema` is written but never checked on read; a manifest from a newer schema is read as if it were version 1 (unknown fields ignored). Fine while changes are additive; a breaking change needs a check first.
+- `verify_entry` checks the bucket names the same slug but not the same project; a registry entry in project A can point a follower at project B's worktree bucket if the follower has read on both.
+- The overwrite-before-manifest window above (mirror refused until retry).
+
+### What still needs two machines
+
+Gate item 1 (two principals on two hosts, real network, a follower seeing a publish within one poll interval), item 2 (Windows loading a bucket), real clock skew between hosts (here simulated by stamps), and two `follow` processes (not threads) sharing a state file across hosts or a network filesystem, where rename atomicity is weaker.
