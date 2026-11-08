@@ -216,3 +216,66 @@ fn rewriting_prev_head_to_skip_an_event_breaks_the_signature() {
     assert_eq!(f.ingest(&spliced), Err(FeedError::BadSignature));
     assert_eq!(state(&f).through_seq, 1);
 }
+
+// ---- who may sign: any other node or person (owner decision 2026-11-08 11:21) ----
+
+/// A verifier that trusts several identities, each with the same stand-in key.
+#[derive(Clone)]
+struct Many;
+impl SnapshotVerifier for Many {
+    fn verify(&self, signer: &str, message: &[u8], signature: &[u8]) -> bool {
+        ["person:ann", "node:b", "node:a", "a"].contains(&signer) && mac(KEY, message) == signature
+    }
+}
+
+fn signed_by(signer: &str, ev: GrantEvent, head: &str) -> ChainGrantEvent {
+    ChainGrantEvent::sign(SCOPE, ev, head, signer, |m| mac(KEY, m))
+}
+
+fn many() -> ChainFeed<Many> {
+    ChainFeed::new(Arc::new(GrantLedger::new()), SCOPE, Many)
+}
+
+#[test]
+fn a_person_or_another_node_may_sign_a_grant() {
+    let f = many();
+    f.ingest(&signed_by("person:ann", GrantEvent::pairing(1, MESH, "a"), &f.head())).unwrap();
+    f.ingest(&signed_by("node:b", GrantEvent::pairing(2, MESH, "c"), &f.head())).unwrap();
+    assert!(f.ledger().allows("a", Access::Write) && f.ledger().allows("c", Access::Write));
+}
+
+#[test]
+fn nobody_may_sign_a_grant_of_access_to_themselves() {
+    let f = many();
+    for (i, signer) in ["node:a", "a"].into_iter().enumerate() {
+        let ev = signed_by(signer, GrantEvent::pairing(1 + i as u64, MESH, "a"), &f.head());
+        assert_eq!(f.ingest(&ev), Err(FeedError::SelfGrant(1 + i as u64)), "{signer}");
+    }
+    assert!(!f.ledger().allows("a", Access::Write), "a refused self-grant changes nothing");
+    assert_eq!(f.head(), many().head());
+    // Another identity can still grant it.
+    f.ingest(&signed_by("node:b", GrantEvent::pairing(1, MESH, "a"), &f.head())).unwrap();
+    assert!(f.ledger().allows("a", Access::Write));
+}
+
+#[test]
+fn signing_your_own_revoke_is_allowed_because_it_gives_you_nothing() {
+    let f = many();
+    f.ingest(&signed_by("person:ann", GrantEvent::pairing(1, MESH, "a"), &f.head())).unwrap();
+    f.ingest(&signed_by("node:a", GrantEvent::unpair(2, MESH, "a"), &f.head())).unwrap();
+    assert!(!f.ledger().allows("a", Access::Write));
+}
+
+#[test]
+fn the_anyone_rule_turns_the_self_grant_check_off() {
+    let f = many().with_rule(SignerRule::Anyone);
+    f.ingest(&signed_by("node:a", GrantEvent::pairing(1, MESH, "a"), &f.head())).unwrap();
+    assert!(f.ledger().allows("a", Access::Write));
+}
+
+#[test]
+fn an_identity_the_verifier_does_not_trust_still_cannot_sign() {
+    let f = many();
+    let ev = signed_by("person:mallory", GrantEvent::pairing(1, MESH, "a"), &f.head());
+    assert_eq!(f.ingest(&ev), Err(FeedError::BadSignature));
+}

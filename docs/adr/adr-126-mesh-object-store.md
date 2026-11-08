@@ -383,7 +383,9 @@ What this settles and what it does not: a forged, edited, relabelled, replayed, 
 
 Three decisions are the chain owner's. Each is written as one switch with its options and S3's recommendation. S3 has decided none of them and no code depends on a choice: the crate takes the answer through the existing interfaces (`SnapshotVerifier`, `ChainGrantEvent`, `SnapshotSchedule`, `LoopbackChain`).
 
-**Switch 1. Who may sign grant events for which mesh.** Today the verifier only answers "did this signer sign these bytes". The feed also checks the scope, so a signer is currently trusted for every mesh the host's `SnapshotVerifier` accepts it for.
+**Switch 1. Who may sign grant events for which mesh. ANSWERED (owner, 2026-11-08 11:21): grants may be signed by any other node or person.** Built as `authchain::SignerRule::AnyOther` (the default): any identity the host's verifier trusts may sign, except that nobody may sign a `Grant` of access to themselves (`FeedError::SelfGrant`; their own revoke is allowed, it gives them nothing); `SignerRule::Anyone` switches that check off. Which identities the verifier trusts is still the host's. Cost to know about: with open signing, trust rests on the verifier's set of identities and on the self-grant check, which two colluding or sybil identities can pass, so the audit trail and the seq guard carry more weight; per-mesh key limits (options A to C below) remain available if the owner wants them back. The original options follow.
+
+ Today the verifier only answers "did this signer sign these bytes". The feed also checks the scope, so a signer is currently trusted for every mesh the host's `SnapshotVerifier` accepts it for.
 
 | Option | What it means | Cost |
 |---|---|---|
@@ -394,7 +396,7 @@ Three decisions are the chain owner's. Each is written as one switch with its op
 Recommendation: A to start. It needs no new chain event, and the `scope` field is already signed. Move to C when a mesh needs more than one signer.
 Flip: the owner names A, B or C; the change is in the host's `SnapshotVerifier` implementation, not in this crate.
 
-**Switch 2. Snapshot cadence.** `SnapshotSchedule` is off by default and supports `every_events(n)`, `every_secs(t)` or both.
+**Switch 2. Snapshot cadence. STILL OPEN (owner, 11:21): no cadence is approved; the recommendation below is not a decision and nothing sets one.** `SnapshotSchedule` is off by default and supports `every_events(n)`, `every_secs(t)` or both.
 
 | Option | Setting | Effect |
 |---|---|---|
@@ -405,7 +407,7 @@ Flip: the owner names A, B or C; the change is in the host's `SnapshotVerifier` 
 Recommendation: C, with `n` near the number of events a follower can replay in about a second and `t` of one day. S3 sets no numbers; they are the owner's. Pruning is never scheduled: `compact` (snapshot, archive, prune) is owner-run in every option.
 Flip: build the chain with `with_schedule(...)`; nothing else changes.
 
-**Switch 3. Where the signed snapshot lives.**
+**Switch 3. Where the signed snapshot lives. STILL OPEN (owner, 11:21): not approved.**
 
 | Option | Where | Cost |
 |---|---|---|

@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 use crate::broker::{AuditSink, EdgeBroker, StsMinter};
 use crate::clock::Clock;
 use crate::compaction::SnapshotVerifier;
-use crate::grants::{Applied, GrantEvent, GrantLedger};
+use crate::grants::{Applied, GrantEvent, GrantLedger, GrantOp};
 
 const SIG_DOMAIN: &str = "weftos/grant-ledger/event/v1\n";
 
@@ -75,11 +75,35 @@ pub enum FeedError {
     /// The event does not follow the ledger's head: reordered, or an earlier event is missing.
     #[error("event seq {0} does not follow the ledger head (reordered or missing earlier event)")]
     BrokenLink(u64),
+    /// A node or person signed a grant of access to itself.
+    #[error("event seq {0} grants access to its own signer")]
+    SelfGrant(u64),
     #[error("event seq {0} jumps too far (seq guard)")]
     OutOfRange(u64),
 }
 
+/// Who may sign a grant (owner decision 2026-11-08 11:21: "grants may be signed by
+/// any other node or person"). Which identities the host trusts at all is still
+/// the host's [`SnapshotVerifier`]; this rule only adds the "other".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SignerRule {
+    /// Any signer the verifier accepts, except that nobody may sign a grant of
+    /// access to themselves (`Grant` only: signing your own revoke gives you
+    /// nothing). The decided rule, and the default.
+    #[default]
+    AnyOther,
+    /// No self-grant check. For a host whose verifier already guarantees it.
+    Anyone,
+}
+
+/// A signer is the grantee when it names the same identity: the node id, or
+/// `node:<id>`.
+fn is_grantee(signer: &str, principal: &str) -> bool {
+    signer == principal || signer.strip_prefix("node:") == Some(principal)
+}
+
 pub struct ChainFeed<V> {
+    rule: SignerRule,
     ledger: Arc<GrantLedger>,
     scope: String,
     verifier: V,
@@ -89,7 +113,12 @@ pub struct ChainFeed<V> {
 
 impl<V: SnapshotVerifier> ChainFeed<V> {
     pub fn new(ledger: Arc<GrantLedger>, scope: &str, verifier: V) -> Self {
-        Self { ledger, scope: scope.into(), verifier, gate: std::sync::Mutex::new(()) }
+        Self { rule: SignerRule::default(), ledger, scope: scope.into(), verifier, gate: std::sync::Mutex::new(()) }
+    }
+
+    pub fn with_rule(mut self, rule: SignerRule) -> Self {
+        self.rule = rule;
+        self
     }
 
     pub fn ledger(&self) -> &Arc<GrantLedger> {
@@ -108,6 +137,9 @@ impl<V: SnapshotVerifier> ChainFeed<V> {
         }
         if !self.verifier.verify(&ev.signer, &event_signing_bytes(&ev.scope, &ev.event, &ev.prev_head), &ev.signature) {
             return Err(FeedError::BadSignature);
+        }
+        if self.rule == SignerRule::AnyOther && ev.event.op == GrantOp::Grant && is_grantee(&ev.signer, &ev.event.principal) {
+            return Err(FeedError::SelfGrant(ev.event.seq));
         }
         let _one_at_a_time = self.gate.lock().expect("feed gate");
         let snap = self.ledger.snapshot(&self.scope);
