@@ -113,28 +113,61 @@ async fn hostile_build_ids_are_refused_before_anything_is_written() {
     assert_portable(&be.keys().into_iter().collect());
 }
 
-/// Length guard: the longest key S4 can write (a 128-character build id) and the bucket it sits in must leave
-/// room under a Windows 260-character path for the host's data directory and RustFS's own per-object files,
-/// and must fit S1's 512-byte key rule with S1's archive prefix (78 bytes) in front.
+/// Length guard: derived from what the validators ACCEPT, not from constants copied into the test. It finds the
+/// longest build id and the longest artifact-path segment the publisher takes, then checks (1) no path segment
+/// of any key or artifact path is longer than a file name can be (255 bytes: Linux, macOS, Windows), (2) the
+/// longest key plus its bucket leaves room under a Windows 260-character path for the data directory and
+/// RustFS's own per-object files, and (3) it fits S1's 512-byte key rule with S1's archive prefix (78 bytes).
 #[tokio::test]
-async fn the_longest_key_s4_writes_stays_inside_the_path_and_key_budgets() {
-    let (be, st, sg) = (MemoryBackend::new(), store(), signer());
-    let id = "a".repeat(128);
-    ReleasePublisher::new(&be, &st, &sg).publish(req(&id, 100, &[("x", b"x")]), NOW).await.unwrap();
-    let tk = TrustedKeys(vec![sg.trusted()]);
+async fn the_longest_key_s4_writes_stays_inside_the_segment_path_and_key_budgets() {
+    const FILE_NAME_MAX: usize = 255;
+    let (st, sg) = (store(), signer());
+    let accepts_id = |n: usize| {
+        let (st, sg) = (store(), signer());
+        let id = "a".repeat(n);
+        async move { ReleasePublisher::new(&MemoryBackend::new(), &st, &sg).publish(req(&id, 100, &[("x", b"x")]), NOW).await.is_ok() }
+    };
+    let mut id_len = 0;
+    for n in (1..=400).rev() {
+        if accepts_id(n).await {
+            id_len = n;
+            break;
+        }
+    }
+    assert!(id_len > 0);
+
+    // every key a publish, tombstone and sweep writes for the longest id
+    let (be, tk) = (MemoryBackend::new(), TrustedKeys(vec![sg.trusted()]));
+    ReleasePublisher::new(&be, &st, &sg).publish(req(&"a".repeat(id_len), 100, &[("x", b"x")]), NOW).await.unwrap();
+    ReleasePublisher::new(&be, &st, &sg).publish(req("b2", 200, &[("y", b"y")]), NOW).await.unwrap();
     let keep = RetentionPolicy::new(1, 0).unwrap();
     let mut seen: std::collections::BTreeSet<String> = be.keys().into_iter().collect();
-    ReleasePublisher::new(&be, &st, &sg).publish(req("b2", 200, &[("y", b"y")]), NOW).await.unwrap();
     for _ in 0..3 {
         Sweeper::new(&be, &st, &tk).sweep(&keep, 1_000, 500, "t").await.unwrap();
         seen.extend(be.keys());
     }
-    // bucket of a release store: `r-` + 26-char project id + `-` + 12-hex channel hash
+    // (1) segments of keys
+    let longest_key_segment = seen.iter().flat_map(|k| k.split('/')).map(str::len).max().unwrap();
+    assert!(longest_key_segment <= FILE_NAME_MAX, "a key segment is {longest_key_segment} bytes (a build id of {id_len} is accepted): over a file name");
+    // (1) segments of artifact paths: the longest single-segment path the publisher takes
+    let mut longest_artifact_segment = 0;
+    for n in (1..=600).rev() {
+        let be = MemoryBackend::new();
+        let path = "s".repeat(n);
+        if ReleasePublisher::new(&be, &st, &sg).publish(req("b1", 100, &[(&path, b"x")]), NOW).await.is_ok() {
+            longest_artifact_segment = n;
+            break;
+        }
+    }
+    assert!(longest_artifact_segment > 0 && longest_artifact_segment <= FILE_NAME_MAX, "artifact path segments up to {longest_artifact_segment} bytes are accepted: over a file name");
+    // (2) path budget: bucket of a release store is `r-` + 26-char project id + `-` + 12-hex channel hash
     let bucket = 2 + 26 + 1 + 12;
     let longest = seen.iter().map(String::len).max().unwrap();
-    assert_eq!(longest, "releases/".len() + 128 + "/manifest.json".len());
-    assert!(bucket + 1 + longest <= 200, "bucket+key is {} bytes; 200 leaves 60 of 260 for the data dir and RustFS's own files", bucket + 1 + longest);
+    assert!(bucket + 1 + longest <= 200, "bucket+key is {} bytes (build id {id_len}); 200 leaves 60 of 260 for the data dir and RustFS's own files", bucket + 1 + longest);
+    // (3) S1's archive prefix
     assert!(longest + 78 <= 512, "plus S1's archive prefix");
+    // the pin: change the cap on purpose, re-check the three budgets, then move it
+    assert_eq!(id_len, 128, "the build id cap moved");
 }
 
 /// Segment length (the 11:05 pile): no path segment of anything S4 writes may exceed the 255 bytes a file
