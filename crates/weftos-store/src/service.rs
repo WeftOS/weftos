@@ -437,6 +437,16 @@ impl StoreService {
         if rec.archived {
             return refuse(format!("{name} is archived"));
         }
+        // Control state is the daemon's alone (review F4): a worktree's `.wt/` (promotion record,
+        // intent, bases, metadata) and a project's `worktrees/` registry. The S2 verbs write them
+        // on the operator plane; a principal that could write them could forge a promotion.
+        if matches!(op, Op::Put | Op::Copy | Op::Delete)
+            && let Some(k) = key
+            && ((matches!(name, StoreName::Worktree { .. }) && k.starts_with(".wt/"))
+                || (matches!(name, StoreName::Project { .. }) && k.starts_with("worktrees/")))
+        {
+            return refuse(format!("{k} is reserved control state of {name}; only the daemon writes it"));
+        }
         if who.remote
             && let Err(why) = self.exposure.check(&exposure_id(name))
         {

@@ -330,3 +330,23 @@ fn suspend_and_resume_are_in_the_activity_log() {
     let ops: Vec<String> = r.sink.events().into_iter().map(|e| e.op).collect();
     assert!(ops.contains(&"Suspend".to_string()) && ops.contains(&"Resume".to_string()), "{ops:?}");
 }
+
+#[test]
+fn principals_cannot_write_a_worktrees_control_state_or_a_projects_registry() {
+    let r = rig();
+    let wt = StoreName::worktree("weft", P, "feat-x").unwrap();
+    r.svc.create_store(&project(), "daemon", Parties::default()).unwrap();
+    r.svc.create_store(&wt, "daemon", Parties::default()).unwrap();
+    r.svc.grant(&wt, cog("a1"), Access::Write, "op").unwrap();
+    r.svc.grant(&project(), cog("a1"), Access::Write, "op").unwrap();
+    for k in [".wt/promoted.json", ".wt/promoting.json", ".wt/base/assets/a", ".wt/meta.json"] {
+        let e = r.svc.put(&local("a1"), &wt, k, b"forged", false).unwrap_err().to_string();
+        assert!(e.contains("reserved control state"), "{k}: {e}");
+        assert!(r.svc.delete(&local("a1"), &wt, k).is_err(), "{k}");
+        assert!(r.be.get(&wt.bucket(), k).is_err(), "{k} was not written");
+    }
+    assert!(r.svc.put(&local("a1"), &project(), "worktrees/feat-x.json", b"{}", false).is_err());
+    // ordinary objects are unaffected
+    r.svc.put(&local("a1"), &wt, "assets/a", b"ok", false).unwrap();
+    r.svc.put(&local("a1"), &project(), "assets/a", b"ok", false).unwrap();
+}
