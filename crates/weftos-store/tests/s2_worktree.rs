@@ -482,6 +482,7 @@ fn tampered_manifest_cannot_escape_dest() {
         changes: vec![],
         docs: vec![],
         has_bundle: false,
+        bundle_sha256: None,
         writer: me("w", "h"),
         published_ms: 1,
     };
@@ -637,6 +638,41 @@ fn a_promotion_record_from_an_earlier_life_of_a_slug_is_ignored() {
 }
 
 #[test]
+fn readers_enforce_size_and_count_ceilings_and_check_the_bundle_hash() {
+    let b = setup();
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("a.txt"), "hello").unwrap();
+    let bundle = d.path().join("in.bundle");
+    std::fs::write(&bundle, b"GOOD-BUNDLE").unwrap();
+    let ps = paths(&["a.txt"]);
+    let src = TreeSource { root: d.path(), paths: &ps, uncommitted: &[], changes: &[], branch: "f", base_commit: "a", head_commit: "h", bundle: Some(&bundle), writer: me("w", "h") };
+    publish_tree(&b, WT, &src, &Limits::default(), 1).unwrap();
+    assert!(read_manifest(&b, WT).unwrap().unwrap().bundle_sha256.is_some());
+
+    // a writer with direct S3 access swaps the bundle
+    b.put(WT, BUNDLE_KEY, b"EVIL-BUNDLE").unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let e = fetch_bundle(&b, WT, &out.path().join("x.bundle")).unwrap_err().to_string();
+    assert!(e.contains("checksum"), "{e}");
+    assert!(!out.path().join("x.bundle").exists());
+
+    // an object grown past the per-file ceiling after publishing is refused before it is read
+    let big = vec![b'x'; 2048];
+    b.put(WT, ".wt/tree/a.txt", &big).unwrap();
+    let lim = Limits { max_file: 1024, ..Limits::default() };
+    let dest = tempfile::tempdir().unwrap();
+    let e = fetch_tree_with(&b, WT, dest.path(), Select::All, true, &lim).unwrap_err().to_string();
+    assert!(e.contains("per-file limit"), "{e}");
+    let lim = Limits { max_total: 3, ..Limits::default() };
+    let e = fetch_tree_with(&b, WT, dest.path(), Select::All, true, &lim).unwrap_err().to_string();
+    assert!(e.contains("total limit"), "{e}");
+
+    // an enormous manifest is not loaded
+    b.put(WT, MANIFEST_KEY, &vec![b' '; (MAX_MANIFEST_BYTES + 1) as usize]).unwrap();
+    assert!(read_manifest(&b, WT).unwrap_err().to_string().contains("over the"));
+}
+
+#[test]
 fn private_key_content_and_secret_names_are_not_shared_but_secret_docs_are() {
     let d = tempfile::tempdir().unwrap();
     std::fs::write(
@@ -709,6 +745,7 @@ fn manifest_with(files: &[(&str, &[u8])]) -> TreeManifest {
         changes: vec![],
         docs: vec![],
         has_bundle: false,
+        bundle_sha256: None,
         writer: me("w", "h"),
         published_ms: 1,
     }

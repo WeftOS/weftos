@@ -107,6 +107,9 @@ pub struct TreeManifest {
     pub changes: Vec<PathChange>,
     pub docs: Vec<DocEntry>,
     pub has_bundle: bool,
+    /// SHA-256 of the bundle object, so a fetch can tell a swapped bundle from the published one.
+    #[serde(default)]
+    pub bundle_sha256: Option<String>,
     pub writer: Actor,
     pub published_ms: u64,
 }
@@ -243,9 +246,24 @@ fn md_title(path: &str, data: &[u8]) -> Option<String> {
     })
 }
 
+/// Largest manifest object a reader will load (review F11): a writer with direct S3 access could
+/// otherwise make every follower read an object of any size into memory.
+pub const MAX_MANIFEST_BYTES: u64 = 32 << 20;
+
 pub fn read_manifest<B: ObjectBackend>(b: &B, bucket: &str) -> Result<Option<TreeManifest>> {
+    let Some(h) = b.head(bucket, MANIFEST_KEY)? else { return Ok(None) };
+    if h.size > MAX_MANIFEST_BYTES {
+        return Err(S2Error::Invalid(format!("manifest is {} bytes, over the {MAX_MANIFEST_BYTES} limit", h.size)));
+    }
     match b.get(bucket, MANIFEST_KEY)? {
-        Some(d) => Ok(Some(serde_json::from_slice(&d)?)),
+        Some(d) => {
+            let m: TreeManifest = serde_json::from_slice(&d)?;
+            let lim = Limits::default();
+            if m.files.len() > lim.max_files || m.docs.len() > lim.max_files {
+                return Err(S2Error::Invalid(format!("manifest lists more than {} files", lim.max_files)));
+            }
+            Ok(Some(m))
+        }
         None => Ok(None),
     }
 }
@@ -366,6 +384,7 @@ pub fn publish_tree<B: ObjectBackend>(
         .as_ref()
         .map(|m| m.has_bundle && m.head_commit == src.head_commit)
         .unwrap_or(false);
+    let mut bundle_sha256 = if has_bundle { prev.as_ref().and_then(|m| m.bundle_sha256.clone()) } else { None };
     if let Some(bp) = src.bundle {
         if !has_bundle {
             let md = std::fs::metadata(bp)?;
@@ -376,7 +395,9 @@ pub fn publish_tree<B: ObjectBackend>(
                     limits.max_bundle
                 )));
             }
-            b.put(bucket, BUNDLE_KEY, &std::fs::read(bp)?)?;
+            let bytes = std::fs::read(bp)?;
+            bundle_sha256 = Some(sha256_hex(&bytes));
+            b.put(bucket, BUNDLE_KEY, &bytes)?;
             rep.bundle_uploaded = true;
             has_bundle = true;
         }
@@ -400,6 +421,7 @@ pub fn publish_tree<B: ObjectBackend>(
         changes: src.changes.to_vec(),
         docs,
         has_bundle,
+        bundle_sha256,
         writer: src.writer.clone(),
         published_ms: now_ms,
     };

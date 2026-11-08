@@ -163,8 +163,23 @@ pub fn fetch_tree<B: ObjectBackend>(
     sel: Select<'_>,
     force: bool,
 ) -> Result<FetchReport> {
+    fetch_tree_with(b, bucket, dest, sel, force, &Limits::default())
+}
+
+/// [`fetch_tree`] with explicit ceilings (review F11). The manifest is untrusted: a listed file
+/// over `max_file`, an object whose stored size is over it, or a selection over `max_total` is an
+/// error, checked before the bytes are read.
+pub fn fetch_tree_with<B: ObjectBackend>(
+    b: &B,
+    bucket: &str,
+    dest: &Path,
+    sel: Select<'_>,
+    force: bool,
+    lim: &Limits,
+) -> Result<FetchReport> {
     let m = read_manifest(b, bucket)?
         .ok_or_else(|| S2Error::Invalid("no shared tree in this worktree store".into()))?;
+    let mut total = 0u64;
     let doc_set: std::collections::HashSet<&str> = m.docs.iter().map(|d| d.path.as_str()).collect();
     let mut rep = FetchReport::default();
     let mut lower = std::collections::HashSet::new();
@@ -195,7 +210,19 @@ pub fn fetch_tree<B: ObjectBackend>(
                 continue;
             }
         }
-        let Some(data) = b.get(bucket, &format!("{TREE_PREFIX}{}", f.path))? else {
+        let key = format!("{TREE_PREFIX}{}", f.path);
+        let Some(h) = b.head(bucket, &key)? else {
+            rep.missing.push(f.path.clone());
+            continue;
+        };
+        if f.size > lim.max_file || h.size > lim.max_file {
+            return Err(S2Error::Invalid(format!("{} is over the {} byte per-file limit", f.path, lim.max_file)));
+        }
+        total += h.size;
+        if total > lim.max_total {
+            return Err(S2Error::Invalid(format!("selection is over the {} byte total limit", lim.max_total)));
+        }
+        let Some(data) = b.get(bucket, &key)? else {
             rep.missing.push(f.path.clone());
             continue;
         };
@@ -240,9 +267,20 @@ pub fn fetch_bundle<B: ObjectBackend>(b: &B, bucket: &str, out: &Path) -> Result
             "this tree was published without a git bundle".into(),
         ));
     }
+    let h = b
+        .head(bucket, BUNDLE_KEY)?
+        .ok_or_else(|| S2Error::Backend("manifest says bundle, object missing".into()))?;
+    if h.size > Limits::default().max_bundle {
+        return Err(S2Error::Invalid(format!("bundle is {} bytes, over the {} limit", h.size, Limits::default().max_bundle)));
+    }
     let data = b
         .get(bucket, BUNDLE_KEY)?
         .ok_or_else(|| S2Error::Backend("manifest says bundle, object missing".into()))?;
+    if let Some(want) = &m.bundle_sha256
+        && sha256_hex(&data) != *want
+    {
+        return Err(S2Error::Backend("bundle does not match the checksum in the manifest".into()));
+    }
     // Never write through a symlink: the final component is refused, and the bytes go to a fresh
     // exclusive temp file that is renamed over `out`, so a link or hard link at `out` is replaced.
     if std::fs::symlink_metadata(out).is_ok_and(|md| md.file_type().is_symlink()) {
