@@ -82,3 +82,73 @@ fn live_land_preview_conflicts_size_cap_archive_and_retention() {
         drain(&be, b);
     }
 }
+
+// ---- read-modify-write with S1's put_if_match, against the real conditional write -----------------
+
+fn actor(n: &str) -> weftos_store::share::Actor {
+    weftos_store::share::Actor { agent: n.into(), host: "h".into() }
+}
+
+fn published(be: &RustfsBackend, wt: &str) {
+    use weftos_store::share::*;
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("a.md"), "x").unwrap();
+    let ps = vec!["a.md".to_string()];
+    let src = TreeSource {
+        root: d.path(), paths: &ps, uncommitted: &[], changes: &[], branch: "b", base_commit: "b",
+        head_commit: "h", bundle: None, writer: actor("writer"),
+    };
+    publish_tree(be, wt, &src, &Limits::default(), 1_000).unwrap();
+}
+
+#[test]
+#[ignore = "needs a throwaway RustFS: WEFTOS_STORE_TEST_RUSTFS_ENV"]
+fn live_concurrent_claims_have_exactly_one_winner_and_a_handoff_cannot_erase_a_claim() {
+    use weftos_store::share::*;
+    let (cfg, _d) = live();
+    let be = RustfsBackend::new(cfg).unwrap();
+    let u = ulid::Ulid::new().to_string().to_lowercase();
+    let mut buckets = Vec::new();
+    for round in 0..8 {
+        let wt = format!("w-{u}-{round:012}");
+        be.create_bucket(&wt, &[]).unwrap();
+        buckets.push(wt.clone());
+        published(&be, &wt);
+        mark_handoff(&be, &wt, &actor("writer"), "ready", 1_001).unwrap();
+
+        // 16 claimers released together on one real store
+        let gate = std::sync::Barrier::new(16);
+        let results: Vec<_> = std::thread::scope(|s| {
+            let hs: Vec<_> = (0..16)
+                .map(|i| {
+                    let (be, wt, gate) = (&be, &wt, &gate);
+                    s.spawn(move || {
+                        gate.wait();
+                        claim_merge(be, wt, &actor(&format!("agent{i}")), 2_000)
+                    })
+                })
+                .collect();
+            hs.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        let winners: Vec<_> = results.iter().filter_map(|r| r.as_ref().ok()).collect();
+        assert_eq!(winners.len(), 1, "round {round}: exactly one claimer wins, got {}: {results:?}", winners.len());
+        for r in results.iter().filter(|r| r.is_err()) {
+            assert!(matches!(r, Err(S2Error::Claimed(_))), "losers are told someone holds it: {r:?}");
+        }
+        let h = read_handoff(&be, &wt).unwrap().unwrap();
+        assert_eq!((h.state, h.epoch), (State::Claimed, 1), "one epoch bump, not sixteen");
+        assert_eq!(h.merger.as_ref(), winners[0].merger.as_ref());
+
+        // the writer's late re-handoff cannot erase the claim
+        assert!(matches!(mark_handoff(&be, &wt, &actor("writer"), "again", 2_001), Err(S2Error::Claimed(_))));
+        // a loser's merge is refused; the winner's lands
+        let winner = h.merger.clone().unwrap();
+        let loser = results.iter().position(|r| r.is_err()).map(|i| actor(&format!("agent{i}"))).unwrap();
+        assert!(mark_merged_at(&be, &wt, &loser, Some(1), "no", 2_002).is_err());
+        mark_merged_at(&be, &wt, &winner, Some(1), "done", 2_003).unwrap();
+        assert_eq!(read_handoff(&be, &wt).unwrap().unwrap().state, State::Merged);
+    }
+    for b in &buckets {
+        drain(&be, b);
+    }
+}

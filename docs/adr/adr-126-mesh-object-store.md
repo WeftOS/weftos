@@ -224,6 +224,25 @@ Only the daemon creates, grants access to, or deletes a store.
 - Tests: library (`s2_worktree`), daemon (`store_worktree_tests`), script, and a live loopback RustFS run
   (`s2_land_rustfs`, ignored: preview, conflicts, cap, `@`-bearing archive keys, retention listing).
 
+#### Read-modify-write uses `put_if_match` (2026-11-08)
+
+The handoff record (`.wt/handoff.json`) is changed only with a conditional write. `claim_merge`,
+`mark_handoff` and `mark_merged_at` read the record's etag, then its body, decide, and write with
+`put_cas` (S1 `put_if_match`, or `if-none-match` when creating). If someone else changed it first the
+write reports "lost", the caller re-reads and decides again (up to 6 times, then a "being changed by
+others" error). Effects: of two claimers that read the same record exactly one write lands and the
+other is refused; a writer's late `mark_handoff` cannot erase a claim that landed after it read; a
+merge cannot land over a takeover that happened after its epoch check; a first publish cannot
+replace a record created between its check and its write. The etag is read before the body, so a
+change between the two calls makes the write fail rather than pass on a stale decision. Evidence:
+deterministic race tests (`s2_handoff_cas`, they fail on the unconditional code) and a live loopback
+RustFS run with 16 simultaneous claimers over 8 rounds (`s2_land_rustfs`; this one passes on the old
+code too, because RustFS answered fast enough that the old write-then-read-back rarely interleaved, so
+it shows the conditional path is correct on the real backend, not that the old one was wrong).
+Not converted: the registry refresh (a last-writer-wins pointer the daemon rewrites from the worktree
+bucket), the follower's state file (local), and `publish_tree`'s many-object write (one writer per
+worktree; the live-claim check before it is not atomic with it).
+
 ### 4a. The L1 follower view: seeing unmerged worktrees before integration
 
 (Added 2026-11-07, owner decision: this is required leftover work, not optional. ADR-130 names
