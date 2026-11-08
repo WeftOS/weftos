@@ -105,8 +105,8 @@ send the path back. Do not paste credentials or env files.
   directory and random credentials in a 0600 file, killed by PID afterwards.
 - **No PG credentials on the Mac**, and none in a message. Refer to a credential file by path.
 - **No edits to this branch's files, and no push of it.** Report back and let the lead merge.
-- **No entries in `config/diff-gate-approvals.toml`.** If overlay mode needs `libc` for the opaque
-  xattr, that is an owner decision (spec open question 4).
+- **No entries in `config/diff-gate-approvals.toml`.** Overlay opaque directories: the owner decided
+  2026-11-08 to read the xattr with the `xattr` crate, no unsafe (spec open question 4). It is a new dependency, so it needs the owner's own approvals entry and is not done yet.
 
 ## How to run the library tests
 

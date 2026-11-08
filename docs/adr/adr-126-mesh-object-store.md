@@ -85,6 +85,7 @@ Every store has one `weftos://` name. It is a `store` sub-resource of the thing 
 ### 3. The daemon owns the spaces
 
 Only the daemon creates, grants access to, or deletes a store.
+   Amended 2026-11-08 (owner): any other node or person may sign a grant; the daemon verifies and applies it. Creating and deleting a store stay with the daemon.
 
 - **Lifecycle follows the owner:**
   - pairing a node creates its bucket;
@@ -244,4 +245,5 @@ replication (single drive).
    and bad signatures. Whether RustFS can be extended to cover them is under study.
 2. How long do archived buckets (from a removed worktree, project or node) live before
    they're deleted?
+   Answered 2026-11-08: archives do not expire.
 3. Do cloud agent sessions get write access to worktree stores, or only read?

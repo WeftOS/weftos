@@ -84,7 +84,7 @@ Tagged by `kind` (spec.rs L206-214). `dest` assumes `base/` is `/`. A launcher t
 
 | # | Step | Our side | Tapestry launcher side | PG end-to-end | State |
 |---|---|---|---|---|---|
-| 1 | Decide scope | daemon builds the spec from the governance grant (SPEC 3, L106-109). Until then the operator supplies `--spec` (SPEC-V 6.3) | `governance.check` already gates tool calls (R L5-12); it does not yet produce a view spec | operator-written spec | grant derivation: planned. Operator spec: built |
+| 1 | Decide scope | daemon builds the spec from the governance grant (SPEC 3, L106-109); the owner decided 2026-11-08 that grants may be signed by any other node or person, not only the daemon, so the daemon verifies rather than signs. Until then the operator supplies `--spec` (SPEC-V 6.3) | `governance.check` already gates tool calls (R L5-12); it does not yet produce a view spec | operator-written spec | grant derivation: planned. Operator spec: built |
 | 2 | Open | `weaver store view open --name <store> --root <abs> --spec <file>`, RPC `store.view.open`. Reply names the `view.json` path (VERBS L113-122) | reads `view.json`, validates schema and paths under `root` | `open` on a throwaway RustFS | library and verb built. Launcher: item 10, blocked. PG check: not run |
 | 3 | Run | none, the library is idle | spawn bwrap from `binds` in order, Landlock inside the child, record the ABI | checks 1, 2, 4, 5 | launcher: items 9 and 10. PG: not run |
 | 4 | Refresh | `store.view.refresh {root}` on a timer, on a store notification, or before a command. Never writes the store (SPEC 5, L152-161) | supervisor makes the call; `base/` changes appear live through the ro bind | step times recorded (HAND L94) | verb built. Supervisor wiring: Tapestry's |
@@ -116,7 +116,7 @@ Activity and chain records: `ViewOpen`, `ViewPublish`, `ViewResolve`, `ViewClose
 |---|---|---|
 | 1. C2 isolation: `/` read-only, writes only in `/work`, `.state` invisible, no network | SPEC 2 (L47-54), 8 (L283-287) | none. `.state` is invisible because it is not in `binds` |
 | 2. Overlay end to end: edit, create, `rm`, `rm -r`, leave, publish, check store | SPEC 5 step 4 (L162-172), 7 (L260-262) | whiteouts are detected as char device 0/0 but never exercised (HAND L29-30). This is the first real run |
-| 3. `rmdir d && mkdir d` opaque directory | SPEC 7 last row (L277), 9 item 4 | library does not read the xattr. Expected result: lower files under `d` survive publish. Owner decision on `libc` |
+| 3. `rmdir d && mkdir d` opaque directory | SPEC 7 last row (L277), 9 item 4 | library does not read the xattr. Expected result: lower files under `d` survive publish. Decided 2026-11-08: read the marker with the `xattr` crate, no unsafe; implementation pending the owner's diff-gate approvals entry |
 | 4. `clone` route on a host without unprivileged overlayfs | SPEC 4 (L129-131), 7 | no surveyed host lacks `bwrap --overlay`. PG fails bare `unshare -Urm` but bwrap overlay works (SURVEY L22-23, L29). Force the route with `work_start: clone`, not with the host |
 | 5. Hard links: `base/` and `.state/drives/*` on one file system | SPEC 4 (L129-131) | `/mnt/d` is 9p on WSL and cannot hold the root (SURVEY L31). Put the root on the distro ext4 |
 
@@ -140,7 +140,7 @@ Library behaviour is SPEC 7 (L255-277). This table adds what each side sees.
 | Close with unpublished work | `--publish` publishes first and refuses with `Unpublished` while conflicts stay open, removing nothing. `--discard` drops work | pass one flag explicitly, never default to discard | root left empty after close |
 | `.state` exposure attempt | not bound, so absent. A symlink planted in `/work` is skipped, never uploaded (SPEC 7 L266) | never add a bind outside `binds` | check 1 |
 | Control names created in `/work` (`.drive`, `.wt`) | top-level `/work/.drive/` ignored silently, deeper ones reported `Reserved` (SPEC 7 L268) | none | optional |
-| Opaque directory in overlay upper | not detected, lower files survive publish (SPEC 7 L277) | optionally report opaque dirs if owner picks that route | check 3 |
+| Opaque directory in overlay upper | not detected, lower files survive publish (SPEC 7 L277) | none needed; the library will read the marker itself once the `xattr` dependency is approved (decided 2026-11-08) | check 3 |
 | `refresh` while overlay mounted | `work_not_refreshed: true`, base still refreshes (HAND L64-68) | do not expect remote work changes in `/work` | overlay check |
 | Crash mid-open or mid-publish | next open recovers; next publish retries staged paths (SPEC 7 L270-271) | on restart call `status`, then `open` or `publish` | no |
 
@@ -153,7 +153,7 @@ Items 1 to 7 are copied from SPEC 9 (L302-322). Items 8 to 12 are new from this 
 | 1 | Deny writes to `.drive/leases/*` and tombstones from anything but the drive principal in `policy.rs` | owner |
 | 2 | Per-prefix store credentials (STS) so the read-only half is enforced at the store | owner |
 | 3 | Lease TTL of 15 minutes, and whether the daemon renews on a timer while a session runs | owner |
-| 4 | Overlay mode: take `libc` for the opaque xattr (diff gate), or the launcher reports opaque dirs, or ship `clone` only on Linux | owner, with PG result as input |
+| 4 | Overlay mode: decided 2026-11-08, the opaque xattr is read with the `xattr` crate (no unsafe). A new dependency, so it needs the owner's own diff-gate approvals entry before the code lands; implementation is a follow-up | decided, implementation pending the approvals entry |
 | 5 | `empty` never refreshes the work prefix during a session: acceptable, or use `clone` for live remote changes | Tapestry |
 | 6 | Where the root lives: under the runtime dir, outside `.weftos` state, same file system as the drive cache | owner, PG verifies on `weftos-ci` |
 | 7 | Reword R9 per section 4.3 | Tapestry doc owner, after owner confirms (SPIKE L18) |
