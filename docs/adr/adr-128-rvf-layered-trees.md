@@ -145,6 +145,7 @@ A scheduled check every 2 hours watches these: it fixes CI failures, rebases, an
 - **G2, choose the mount route,** from the T1 and T2 numbers:
   - (a) JuiceFS, with a metadata adapter over RVF layers; or
   - (b) a WeftOS filesystem: FUSE metadata from RVF layers, data chunks in RustFS.
+  - **Answered by ADR-131 (2026-11-01):** neither. The seed drive is a materialised native tree plus a watcher (clonefile and FSEvents on the Mac, reflink or overlayfs and fanotify on Linux, ProjFS on Windows), not FUSE; the T1 macFUSE warm-stat numbers ruled FUSE out for client nodes. A read-mostly Linux server view may still use FUSE3 with long caches. The owner rejected an rclone mount on 2026-11-07.
 - **Later dependencies:** T3, T4 and T6 pass before the phases that depend on them.
 
 ## Plan
