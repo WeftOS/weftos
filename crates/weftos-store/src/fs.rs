@@ -9,8 +9,10 @@
 //! <root>/keys.json                    access keys, enabled flag, policy
 //! ```
 //!
-//! Limitation: a key that is a prefix of another (`a` and `a/b`) cannot coexist, because a
-//! path is either a file or a directory.
+//! Limitations: a key that is a prefix of another (`a` and `a/b`) cannot coexist, because a
+//! path is either a file or a directory. Keys that differ only by case (`A.txt`, `a.txt`) cannot
+//! coexist either: they are one file on a case-insensitive volume, so a put of the second is
+//! refused on every host and a get or delete of the second finds nothing.
 
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -94,6 +96,13 @@ impl FsBackend {
         Ok(p)
     }
 
+    /// The object's path, or `None` when an existing key differs from it only by case.
+    fn path_unless_case_twin(&self, bucket: &str, key: &str) -> Result<Option<PathBuf>, BackendError> {
+        let p = self.obj_path(bucket, key)?;
+        let base = self.bdir(bucket)?.join("data");
+        Ok(case_twin(&base, key)?.is_none().then_some(p))
+    }
+
     fn save_keys(&self, k: &Keys) -> Result<(), BackendError> {
         write_atomic(&self.root.join("keys.json"), &serde_json::to_vec_pretty(k).map_err(io)?).map_err(io)
     }
@@ -114,6 +123,38 @@ impl FsBackend {
     pub fn policy_of(&self, key_id: &str) -> Option<Value> {
         self.keys.lock().unwrap_or_else(|e| e.into_inner()).keys.get(key_id).and_then(|k| k.policy.clone())
     }
+}
+
+/// An existing path under `base` that spells some segment of `key` differently only by case
+/// (review F20). On a case-insensitive volume, such as the default macOS one, that existing path is
+/// the same file as `key`; on a case-sensitive one it is a different file. Either way the two keys
+/// are refused so that a store reads the same on every host. Names that differ only by Unicode
+/// normalisation are not detected.
+fn case_twin(base: &Path, key: &str) -> Result<Option<String>, BackendError> {
+    let mut dir = base.to_path_buf();
+    for seg in key.split('/') {
+        let (mut exact, mut twin) = (false, None);
+        match std::fs::read_dir(&dir) {
+            Ok(rd) => {
+                for ent in rd {
+                    let name = ent.map_err(io)?.file_name().to_string_lossy().into_owned();
+                    if name == seg {
+                        exact = true;
+                    } else if name.to_lowercase() == seg.to_lowercase() {
+                        twin = Some(name);
+                    }
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound || e.kind() == std::io::ErrorKind::NotADirectory => return Ok(None),
+            Err(e) => return Err(io(e)),
+        }
+        match (exact, twin) {
+            (true, _) => dir.push(seg),
+            (false, Some(t)) => return Ok(Some(t)),
+            (false, None) => return Ok(None),
+        }
+    }
+    Ok(None)
 }
 
 fn walk(dir: &Path, rel: &str, out: &mut Vec<ObjectMeta>) -> Result<(), BackendError> {
@@ -139,7 +180,9 @@ fn walk(dir: &Path, rel: &str, out: &mut Vec<ObjectMeta>) -> Result<(), BackendE
 
 impl ObjectBackend for FsBackend {
     fn put(&self, bucket: &str, key: &str, data: &[u8], if_none_match: bool) -> Result<ObjectMeta, BackendError> {
-        let dst = self.obj_path(bucket, key)?;
+        let Some(dst) = self.path_unless_case_twin(bucket, key)? else {
+            return Err(BackendError::BadKey(format!("{key:?}: differs only by case from an existing key in {bucket}")));
+        };
         let tmpdir = self.bdir(bucket)?.join("tmp");
         std::fs::create_dir_all(&tmpdir).map_err(io)?;
         if let Some(p) = dst.parent() {
@@ -164,7 +207,7 @@ impl ObjectBackend for FsBackend {
     }
 
     fn get(&self, bucket: &str, key: &str) -> Result<Vec<u8>, BackendError> {
-        let p = self.obj_path(bucket, key)?;
+        let Some(p) = self.path_unless_case_twin(bucket, key)? else { return Err(BackendError::NoObject(key.into())) };
         std::fs::read(&p).map_err(|e| if e.kind() == std::io::ErrorKind::NotFound || p.is_dir() { BackendError::NoObject(key.into()) } else { io(e) })
     }
 
@@ -173,7 +216,7 @@ impl ObjectBackend for FsBackend {
     }
 
     fn delete(&self, bucket: &str, key: &str) -> Result<(), BackendError> {
-        let p = self.obj_path(bucket, key)?;
+        let Some(p) = self.path_unless_case_twin(bucket, key)? else { return Err(BackendError::NoObject(key.into())) };
         std::fs::remove_file(&p).map_err(|e| if e.kind() == std::io::ErrorKind::NotFound { BackendError::NoObject(key.into()) } else { io(e) })?;
         // Prune now-empty parent directories up to the bucket's data dir.
         let stop = self.bdir(bucket)?.join("data");
@@ -348,5 +391,34 @@ mod tests {
         b.delete("n-one", "x/y/z").unwrap();
         assert!(!d.path().join("buckets/n-one/data/x").exists());
         assert!(d.path().join("buckets/n-one/data").exists());
+    }
+
+    #[test]
+    fn keys_that_differ_only_by_case_are_refused_not_merged() {
+        // The default macOS volume is case-insensitive, where `A.txt` and `a.txt` would be one
+        // file. The same rule applies everywhere so a store reads the same on any host.
+        let (_d, b) = be();
+        b.create_bucket("n-one", &[]).unwrap();
+        b.put("n-one", "Docs/A.txt", b"first", false).unwrap();
+        for (k, cond) in [("Docs/a.txt", false), ("Docs/a.txt", true), ("docs/A.txt", false), ("DOCS/A.TXT", true)] {
+            let e = b.put("n-one", k, b"second", cond).unwrap_err();
+            assert!(matches!(e, BackendError::BadKey(_)), "{k} {cond}: {e:?}");
+        }
+        assert_eq!(b.get("n-one", "Docs/A.txt").unwrap(), b"first", "the first object is untouched");
+        for k in ["Docs/a.txt", "docs/A.txt"] {
+            assert!(matches!(b.get("n-one", k), Err(BackendError::NoObject(_))), "{k} must not read the other case's object");
+            assert!(matches!(b.head("n-one", k), Err(BackendError::NoObject(_))), "{k}");
+            assert!(matches!(b.delete("n-one", k), Err(BackendError::NoObject(_))), "{k} must not delete the other case's object");
+        }
+        assert_eq!(b.get("n-one", "Docs/A.txt").unwrap(), b"first");
+        // overwriting the exact key, and different names, still work
+        b.put("n-one", "Docs/A.txt", b"again", false).unwrap();
+        b.put("n-one", "Docs/b.txt", b"b", false).unwrap();
+        assert_eq!(b.get("n-one", "Docs/A.txt").unwrap(), b"again");
+        assert_eq!(b.list("n-one", "").unwrap().len(), 2);
+        // once the key is gone its case is free again
+        b.delete("n-one", "Docs/A.txt").unwrap();
+        b.put("n-one", "Docs/a.txt", b"lower", false).unwrap();
+        assert_eq!(b.get("n-one", "Docs/a.txt").unwrap(), b"lower");
     }
 }
