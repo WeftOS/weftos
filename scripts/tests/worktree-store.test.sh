@@ -110,4 +110,17 @@ WTS_PROJECT='../x' "$here/worktree-store.sh" follow 2>/dev/null && rc=0 || rc=$?
 "$here/worktree-store.sh" overlaps 'a b' c 2>/dev/null && rc=0 || rc=$?; ok "overlaps validates slugs" "[ $rc != 0 ]"
 "$here/worktree-store.sh" sync-docs ../x "$t/c" 2>/dev/null && rc=0 || rc=$?; ok "sync-docs rejects traversal slug" "[ $rc != 0 ]"
 WEAVER_RC=1 "$here/worktree-store.sh" search q 2>/dev/null && rc=0 || rc=$?; ok "search failure is an error" "[ $rc != 0 ]"
+# new: the real wt.sh prints the lane path on stdout and its `list` shows lane names, not paths
+lane="$t/lanes/rooms"; mkdir -p "$t/lanes"; git -C "$r" worktree add -q -b wt/rooms "$lane" master
+cat >"$t/agf/wt.sh" <<W
+#!/usr/bin/env bash
+case "\$1" in
+new) echo "agf: lane \$2: $lane" >&2; echo "$lane" ;;
+list) printf 'LANE BRANCH\\nrooms wt/rooms\\n' ;;
+esac
+W
+chmod +x "$t/agf/wt.sh"
+: >"$t/log"; (cd "$r" && "$here/worktree-store.sh" new rooms >/dev/null 2>&1) && rc=0 || rc=$?
+ok "new succeeds with the real wt.sh output shape" "[ $rc = 0 ]"
+ok "new creates the store for the lane's branch slug" "grep -q 'store worktree create --project 01ABC --slug wt-rooms' '$t/log'"
 echo "passed=$pass failed=$fail"; [ "$fail" = 0 ]

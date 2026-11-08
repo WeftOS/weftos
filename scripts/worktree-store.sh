@@ -65,13 +65,12 @@ case "$cmd" in
 new)
     name=${1:?usage: new <name>}; shift
     check_slug "$name"
-    "$agf/wt.sh" new "$name" "$@"
-    root=""
-    while IFS= read -r line; do
-        path=${line%%[[:space:]]*}
-        [ "${path##*/}" = "$name" ] && { root=$path; break; }
-    done < <("$agf/wt.sh" list 2>/dev/null || true)
-    [ -n "$root" ] || { warn "cannot locate the new lane '$name'; store not created"; exit 0; }
+    # wt.sh prints the new lane's path as the last line of stdout (its list shows only the lane
+    # name, not a path, so the list cannot be used to find it).
+    out=$("$agf/wt.sh" new "$name" "$@")
+    root=$(printf '%s\n' "$out" | tail -n 1)
+    [ -d "$root" ] && [[ $root = /* ]] || { warn "cannot locate the new lane '$name' (wt.sh printed '$root'); store not created"; exit 0; }
+    printf '%s\n' "$out"
     # Slug comes from the branch (same rule share/land use), not from the lane name.
     (cd "$root" && slug=$(slug_of) && check_slug "$slug" && store create --project "$(project_id)" --slug "$slug" \
         --branch "$(git symbolic-ref --short HEAD)" --base "$(git rev-parse HEAD)")
