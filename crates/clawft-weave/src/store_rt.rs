@@ -74,10 +74,23 @@ impl ChainSink for ChainAudit {
     }
 }
 
-/// A node id as a store-name token: lowercase, anything else `-`, at most 61 characters.
-pub fn node_token(node_id: &str) -> String {
+/// A node id as a topic source id: lowercase, anything else `-`, at most 61 characters. Lossy on
+/// purpose (`pg.1` and `pg-1` give the same one): it names a topic, never storage. A node's
+/// *store* uses [`node_token`], which refuses an id that would collide.
+pub fn topic_token(node_id: &str) -> String {
     let t: String = node_id.to_lowercase().chars().map(|c| if c.is_ascii_lowercase() || c.is_ascii_digit() { c } else { '-' }).take(61).collect();
     if t.is_empty() { "node".into() } else { t }
+}
+
+/// A node id as the token of its store (`weftos://<mesh>/nodes/<token>/store`, bucket
+/// `n-<token>`). The bucket is the store's identity, so the token must be the id itself, never a
+/// cleaned-up one: `pg.1` and `pg-1` (or `PG-1` and `pg-1`) would be one bucket. An id that is not
+/// already 1 to 61 of lowercase letters, digits and `-` is refused, with the rule in the error.
+pub fn node_token(node_id: &str) -> Result<String, String> {
+    if !node_id.is_empty() && node_id.len() <= 61 && node_id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') {
+        return Ok(node_id.to_owned());
+    }
+    Err(format!("node id {node_id:?} cannot name a node store without colliding with another id's: it must be 1 to 61 of lowercase letters, digits and '-' as it is (a cleaned-up form would put {:?} and other ids in one bucket)", topic_token(node_id)))
 }
 
 /// The mesh part of store names: the licence store's mesh id (ADR-114), or `local` before one exists.
@@ -213,11 +226,24 @@ pub(crate) fn open_service(
     for (p, why) in svc.reconcile() {
         tracing::warn!(principal = %p, error = %why, "grants not pushed to the object store backend; refused by the service, but the backend key is behind");
     }
-    let node = StoreName::node(&mesh_token(), &node_token(node_id)).map_err(|e| e.to_string())?;
-    // A node store that cannot be created (for example the mesh id appeared since the bucket was
-    // made under `local`, or RustFS is down) must not take the other stores down: say so and carry on.
-    if let Err(e) = svc.ensure_store(&node, "daemon", weftos_store::service::Parties::defaults_for(&node)) {
-        tracing::warn!(error = %e, store = %node, "node store not created; other stores are served");
+    // The mesh id may have appeared since the stores were made under `local`: same buckets, so
+    // the stores, their grants and their keys just take the new name.
+    let mesh = mesh_token();
+    for r in svc.migrate_mesh(&mesh, "daemon") {
+        match r {
+            Ok(to) => tracing::info!(store = %to, "store moved from the local mesh name to the mesh id"),
+            Err(e) => tracing::warn!(error = %e, "a store could not move to the mesh id; it is served under its old name"),
+        }
+    }
+    // A node store that cannot be created (an id that is not a clean token, or RustFS is down)
+    // must not take the other stores down: say so and carry on.
+    match node_token(node_id).and_then(|t| StoreName::node(&mesh, &t).map_err(|e| e.to_string())) {
+        Ok(node) => {
+            if let Err(e) = svc.ensure_store(&node, "daemon", weftos_store::service::Parties::defaults_for(&node)) {
+                tracing::warn!(error = %e, store = %node, "node store not created; other stores are served");
+            }
+        }
+        Err(e) => tracing::warn!(error = %e, "node store not created; other stores are served"),
     }
     Ok(svc)
 }

@@ -41,7 +41,7 @@ const MAX_REPLY: usize = 64 * 1024;
 
 /// The topic's source id for this node.
 pub fn source_id(node_id: &str) -> String {
-    crate::store_rt::node_token(node_id)
+    crate::store_rt::topic_token(node_id)
 }
 
 /// Source id of a project's provider: its ULID in lower case.
@@ -58,7 +58,7 @@ pub fn call(svc: &StoreService, node_id: &str, from: &str, project: Option<&str>
     let name = match (&r.store, project) {
         (Some(s), _) => StoreName::parse(s).map_err(|e| e.to_string())?,
         (None, Some(p)) => StoreName::project(&mesh, p).map_err(|e| e.to_string())?,
-        (None, None) => StoreName::node(&mesh, &source_id(node_id)).map_err(|e| e.to_string())?,
+        (None, None) => StoreName::node(&mesh, &crate::store_rt::node_token(node_id)?).map_err(|e| e.to_string())?,
     };
     let e = |e: weftos_store::StoreError| e.to_string();
     let key = || r.key.clone().filter(|k| !k.is_empty()).ok_or_else(|| format!("{} needs a key", r.op));

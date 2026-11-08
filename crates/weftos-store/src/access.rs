@@ -237,6 +237,18 @@ impl GrantTable {
         self.grants.iter().filter(|g| g.principal == *p).cloned().collect()
     }
 
+    /// The store is now named `to` (the mesh id replaced `local`): its grants follow the name.
+    /// Returns how many grants moved.
+    pub fn rename_store(&mut self, from: &StoreName, to: &StoreName) -> usize {
+        let (f, t) = (from.to_string(), to.to_string());
+        let mut n = 0;
+        for g in self.grants.iter_mut().filter(|g| g.store == f) {
+            g.store.clone_from(&t);
+            n += 1;
+        }
+        n
+    }
+
     /// Drop every grant of a store (the store is gone).
     pub fn drop_store(&mut self, store: &StoreName) {
         let s = store.to_string();

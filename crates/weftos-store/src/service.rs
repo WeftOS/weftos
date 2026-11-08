@@ -360,6 +360,12 @@ impl StoreService {
         if self.lock().stores.contains_key(&name.to_string()) {
             return Err(StoreError::Exists(name.to_string()));
         }
+        // The bucket is the identity of a store and it does not carry the mesh: a second name for
+        // the same bucket (`weftos://local/...` and `weftos://<mesh id>/...`) is the same store,
+        // never a new one. `ensure_store` moves a `local` store to its mesh name.
+        if let Some(other) = self.same_bucket(name) {
+            return Err(StoreError::Exists(format!("{name}: its bucket {} is already the bucket of {other}", name.bucket())));
+        }
         let mut tags = name.tags();
         tags.push(("created".into(), self.now().to_string()));
         if locked {
@@ -404,7 +410,8 @@ impl StoreService {
 
     /// Whether the existing bucket of `name` carries exactly this store's identity tags.
     fn bucket_is_ours(&self, name: &StoreName) -> bool {
-        let want = name.tags();
+        // Not the `name` tag: it carries the mesh, which is not part of the bucket's identity.
+        let want: Vec<(String, String)> = name.tags().into_iter().filter(|(k, _)| k != "name").collect();
         self.admin
             .buckets()
             .ok()
@@ -412,8 +419,16 @@ impl StoreService {
             .is_some_and(|(_, have)| want.iter().all(|t| have.contains(t)))
     }
 
-    /// The store, created if it is not there yet.
+    /// The store, created if it is not there yet. A store this daemon made under the `local` mesh
+    /// name, asked for again under a mesh id, is that same store: it is renamed (see
+    /// [`Self::migrate_store`]) rather than created a second time.
     pub fn ensure_store(&self, name: &StoreName, actor: &str, parties: Parties) -> Result<StoreInfo, StoreError> {
+        if !self.has_store(name)
+            && let Some(other) = self.same_bucket(name)
+        {
+            let from = StoreName::parse(&other)?;
+            self.migrate_store(&from, name, actor)?;
+        }
         match self.create_store(name, actor, parties) {
             // Already there: bring its principals' keys in line again (a create whose push failed
             // is finished by asking for the store a second time), then describe it.
@@ -425,6 +440,91 @@ impl StoreService {
             }
             r => r,
         }
+    }
+
+    /// The name of a store (or retired node store) this service already holds under the same
+    /// bucket as `name` but a different name.
+    fn same_bucket(&self, name: &StoreName) -> Option<String> {
+        let (me, b) = (name.to_string(), name.bucket());
+        let g = self.lock();
+        g.stores.keys().chain(g.retired.iter()).find(|n| **n != me && StoreName::parse(n).is_ok_and(|x| x.bucket() == b)).cloned()
+    }
+
+    /// The mesh id appeared: the store held as `from` (a `local` name) is now `to`, the same name
+    /// with the mesh id. Same bucket, so nothing moves in the backend and every key's policy stays
+    /// as it is; the store's record, its grants, its retired mark and its unannounced events take
+    /// the new name, one stamped `store.migrate` event says so, and the exposure is registered
+    /// under the new name. Idempotent. Refused unless `from` is on the `local` mesh, `to` is not,
+    /// and both are the same bucket: a store never changes owner this way.
+    pub fn migrate_store(&self, from: &StoreName, to: &StoreName, actor: &str) -> Result<bool, StoreError> {
+        if from.bucket() != to.bucket() || from.kind() != to.kind() || from.mesh() != "local" || to.mesh() == "local" {
+            return Err(StoreError::Refused(format!("{to} cannot take the place of {from}: only a `local` store moves to a mesh id, and it stays the same store")));
+        }
+        let _one = self.apply.lock().unwrap_or_else(|e| e.into_inner());
+        {
+            let mut g = self.lock();
+            let (f, t) = (from.to_string(), to.to_string());
+            if g.stores.contains_key(&t) && !g.stores.contains_key(&f) {
+                return Ok(false);
+            }
+            if g.stores.contains_key(&t) {
+                return Err(StoreError::Refused(format!("{from} and {to} are both held: one bucket cannot be two stores")));
+            }
+            if !g.stores.contains_key(&f) {
+                if g.retired.remove(&f) {
+                    g.retired.insert(t);
+                    self.persist(&g)?;
+                    return Ok(true);
+                }
+                return Err(StoreError::UnknownStore(f));
+            }
+            Self::seq_room(&g)?;
+            let Some(mut rec) = g.stores.remove(&f) else { return Err(StoreError::UnknownStore(f)) };
+            rec.name.clone_from(&t);
+            g.stores.insert(t.clone(), rec);
+            let moved = g.grants.rename_store(from, to);
+            if g.retired.remove(&f) {
+                g.retired.insert(t.clone());
+            }
+            for pd in &mut g.pending {
+                if pd.payload["store"] == json!(f) {
+                    pd.payload["store"] = json!(t);
+                }
+                for a in &mut pd.activity {
+                    if a.store == f {
+                        a.store.clone_from(&t);
+                    }
+                }
+            }
+            let seq = self.stamp(&mut g);
+            self.persist(&g)?;
+            self.chain.record("store.migrate", json!({"seq": seq, "from": f, "to": t, "bucket": to.bucket(), "grants": moved, "actor": actor}));
+        }
+        self.exposure.register(&exposure_id(to), &to.to_string());
+        self.emit(actor, to, "Migrate", Some(&from.to_string()), 0, Outcome::Ok, Source::Governed);
+        Ok(true)
+    }
+
+    /// Move every store held under the `local` mesh name to `mesh` (the daemon calls this when
+    /// the mesh id is known). Returns the new names; a store that cannot move is reported, not
+    /// skipped silently.
+    pub fn migrate_mesh(&self, mesh: &str, actor: &str) -> Vec<Result<String, String>> {
+        if mesh == "local" {
+            return Vec::new();
+        }
+        let names: Vec<StoreName> = {
+            let g = self.lock();
+            g.stores.keys().chain(g.retired.iter()).filter_map(|n| StoreName::parse(n).ok()).filter(|n| n.mesh() == "local").collect()
+        };
+        let mut seen = BTreeSet::new();
+        names
+            .into_iter()
+            .filter(|n| seen.insert(n.to_string()))
+            .map(|from| {
+                let to = StoreName::parse(&from.to_string().replacen("weftos://local/", &format!("weftos://{mesh}/"), 1)).map_err(|e| e.to_string())?;
+                self.migrate_store(&from, &to, actor).map(|_| to.to_string()).map_err(|e| format!("{from}: {e}"))
+            })
+            .collect()
     }
 
     /// A node was unpaired: archive its node store (grants off, objects copied to the archive

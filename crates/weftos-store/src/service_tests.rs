@@ -1032,3 +1032,115 @@ fn concurrent_grants_and_revokes_leave_the_backend_policy_equal_to_the_saved_gra
         assert_eq!(nums, (1..=nums.len() as u64).collect::<Vec<_>>(), "the chain sees every change numbered and in order");
     }
 }
+
+// ---- F17: the bucket is the identity; the mesh id appearing renames the store, it does not fork it
+
+const MESH: &str = "0f1e2d3c4b5a69788796a5b4c3d2e1f0";
+
+fn at(mesh: &str, kind: &str) -> StoreName {
+    match kind {
+        "node" => StoreName::node(mesh, "pg-1").unwrap(),
+        _ => StoreName::project(mesh, P).unwrap(),
+    }
+}
+
+#[test]
+fn a_second_name_for_the_same_bucket_is_not_a_second_store() {
+    let r = rig();
+    r.svc.create_store(&at("local", "project"), "daemon", Parties::default()).unwrap();
+    let e = r.svc.create_store(&at(MESH, "project"), "daemon", Parties::default()).unwrap_err().to_string();
+    assert!(e.contains("already the bucket of") && e.contains("weftos://local/"), "{e}");
+    assert_eq!(r.svc.list_stores().len(), 1, "no second record, no second set of grants");
+    // Another real mesh does not take a mesh-id store either.
+    r.svc.migrate_store(&at("local", "project"), &at(MESH, "project"), "daemon").unwrap();
+    let other = at("aaaabbbbccccdddd", "project");
+    assert!(r.svc.ensure_store(&other, "daemon", Parties::default()).is_err(), "a store that already has a mesh id does not change it by being asked for under another");
+    assert_eq!(r.svc.list_stores().len(), 1);
+}
+
+#[test]
+fn the_mesh_id_appearing_renames_the_store_with_its_grants_and_ensure_is_idempotent() {
+    let d = tempfile::tempdir().unwrap();
+    let sp = d.path().join("s.json");
+    let be = Arc::new(MemBackend::new());
+    let (local, real) = (at("local", "project"), at(MESH, "project"));
+    let c = cog("c");
+    let key;
+    {
+        let r = rig_at(Some(sp.clone()), be.clone());
+        r.svc.create_store(&local, "daemon", Parties::default()).unwrap();
+        r.svc.grant(&local, c.clone(), Access::Write, "op").unwrap();
+        r.svc.put(&local_caller(&c), &local, "k", b"v", false).unwrap();
+        key = be.keys_of(&c.to_string()).pop().unwrap();
+        let policy_before = be.policy_of(&key);
+        // The S2 path: ensure under the new name.
+        let info = r.svc.ensure_store(&real, "s2", Parties::default()).unwrap();
+        assert_eq!(info.name, real.to_string());
+        assert_eq!(info.grants.len(), 1, "the grant came with the store");
+        assert_eq!(info.grants[0].store, real.to_string());
+        assert_eq!(be.policy_of(&key), policy_before, "same bucket: nothing changed at the backend");
+        assert!(r.svc.get(&local_caller(&c), &real, "k").is_ok(), "the principal reads under the new name");
+        assert!(r.svc.get(&local_caller(&c), &local, "k").is_err(), "the old name is not a store any more");
+        // Revoke by the NEW name works (it used to say unknown store), and the policy follows.
+        r.svc.revoke(&real, &c, "op").unwrap();
+        assert!(be.authorize(&key, &real.bucket(), "s3:GetObject").is_err());
+        assert!(r.svc.get(&local_caller(&c), &real, "k").is_err());
+        r.svc.grant(&real, c.clone(), Access::Read, "op").unwrap();
+        // Idempotent: asking again changes nothing and is not an error.
+        let again = r.svc.ensure_store(&real, "s2", Parties::default()).unwrap();
+        assert_eq!(again.name, real.to_string());
+        assert_eq!(r.svc.list_stores().len(), 1);
+        let migrates: Vec<_> = r.chain.0.lock().unwrap().iter().filter(|(k, _)| k == "store.migrate").map(|(_, v)| v.clone()).collect();
+        assert_eq!(migrates.len(), 1, "one event, for the one move");
+        assert_eq!((migrates[0]["from"].as_str(), migrates[0]["to"].as_str()), (Some(local.to_string().as_str()), Some(real.to_string().as_str())));
+        assert!(migrates[0]["seq"].as_u64().is_some(), "stamped like every grant-affecting event");
+    }
+    // The new name survives a restart.
+    let r = rig_at(Some(sp), be.clone());
+    assert_eq!(r.svc.list_stores().iter().map(|s| s.name.clone()).collect::<Vec<_>>(), vec![real.to_string()]);
+    assert!(r.svc.get(&local_caller(&c), &real, "k").is_ok());
+    assert!(r.svc.reconcile().is_empty());
+}
+
+fn local_caller(c: &Principal) -> Caller {
+    Caller::local(c.clone())
+}
+
+#[test]
+fn migrate_mesh_moves_every_local_store_and_a_move_is_only_ever_local_to_a_mesh_id() {
+    let r = rig();
+    let (n, p) = (at("local", "node"), at("local", "project"));
+    r.svc.create_store(&n, "daemon", Parties::default()).unwrap();
+    r.svc.create_store(&p, "daemon", Parties::default()).unwrap();
+    r.svc.grant(&p, cog("c"), Access::Read, "op").unwrap();
+    assert!(r.svc.migrate_mesh("local", "daemon").is_empty(), "nothing to do while there is no mesh id");
+    let moved = r.svc.migrate_mesh(MESH, "daemon");
+    assert_eq!(moved.len(), 2);
+    assert!(moved.iter().all(Result::is_ok), "{moved:?}");
+    assert!(r.svc.list_stores().iter().all(|s| s.name.contains(MESH)));
+    assert!(r.svc.migrate_mesh(MESH, "daemon").is_empty(), "a second call finds nothing left under local");
+    // Not other directions, other kinds, or other buckets.
+    let (a, b) = (at(MESH, "project"), at("aaaabbbbccccdddd", "project"));
+    assert!(r.svc.migrate_store(&a, &b, "x").is_err(), "mesh id to mesh id");
+    assert!(r.svc.migrate_store(&a, &at("local", "project"), "x").is_err(), "back to local");
+    assert!(r.svc.migrate_store(&at("local", "node"), &at(MESH, "project"), "x").is_err(), "different store");
+}
+
+#[test]
+fn a_retired_node_stays_retired_under_the_mesh_name_and_an_adopted_bucket_ignores_the_mesh_in_its_name_tag() {
+    let r = rig();
+    let n = at("local", "node");
+    r.svc.create_store(&n, "daemon", Parties::default()).unwrap();
+    r.svc.retire_node_store(&n, "unpair").unwrap();
+    let moved = r.svc.migrate_mesh(MESH, "daemon");
+    assert!(moved.iter().all(Result::is_ok), "{moved:?}");
+    assert_eq!(r.svc.retired_nodes(), vec![at(MESH, "node").to_string()]);
+    assert!(r.svc.create_store(&at(MESH, "node"), "daemon", Parties::default()).is_err(), "the id is still not handed out again");
+    assert!(r.svc.create_store(&n, "daemon", Parties::default()).is_err(), "nor under the old name");
+    // A bucket made under `local` whose record was lost is adopted under the mesh name.
+    let be = Arc::new(MemBackend::new());
+    let r1 = rig_at(None, be.clone());
+    r1.svc.create_store(&at("local", "project"), "daemon", Parties::default()).unwrap();
+    let r2 = rig_at(None, be);
+    assert!(r2.svc.create_store(&at(MESH, "project"), "daemon", Parties::default()).is_ok(), "same bucket, same owner and kind: ours");
+}

@@ -5,11 +5,22 @@ use clawft_kernel::exposure::ExposureRegistry;
 use super::*;
 
 #[test]
-fn node_ids_become_store_tokens() {
-    assert_eq!(node_token("PG_1.local"), "pg-1-local");
-    assert_eq!(node_token(""), "node");
-    assert_eq!(node_token(&"a".repeat(100)).len(), 61);
-    assert!(StoreName::node("m", &node_token("Weird Node/ID")).is_ok());
+fn node_ids_become_topic_tokens_and_only_a_clean_id_becomes_a_store_token() {
+    // The topic token is lossy on purpose.
+    assert_eq!(topic_token("PG_1.local"), "pg-1-local");
+    assert_eq!(topic_token(""), "node");
+    assert_eq!(topic_token(&"a".repeat(100)).len(), 61);
+    assert!(StoreName::node("m", &topic_token("Weird Node/ID")).is_ok());
+    // The store token is the id itself or nothing: nothing cleaned up can share a bucket.
+    assert_eq!(node_token("pg-1").unwrap(), "pg-1");
+    assert_eq!(node_token(&"a".repeat(61)).unwrap().len(), 61);
+    for lossy in ["pg.1", "PG-1", "pg_1", "pg 1", "pg/1", "", &"a".repeat(62), "pg-1\n"] {
+        let e = node_token(lossy).unwrap_err();
+        assert!(e.contains("collid"), "{lossy:?}: {e}");
+    }
+    // The ids that used to collide are told apart: one is a store token, the other is refused.
+    assert_eq!(topic_token("pg.1"), topic_token("pg-1"));
+    assert!(node_token("pg-1").is_ok() && node_token("pg.1").is_err());
 }
 
 fn env(pairs: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
