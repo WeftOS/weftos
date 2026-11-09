@@ -12,10 +12,11 @@ pub fn sha256_hex(data: &[u8]) -> String {
 
 pub fn hex(b: &[u8]) -> String {
     use std::fmt::Write;
-    b.iter().fold(String::with_capacity(b.len() * 2), |mut s, x| {
-        let _ = write!(s, "{x:02x}");
-        s
-    })
+    b.iter()
+        .fold(String::with_capacity(b.len() * 2), |mut s, x| {
+            let _ = write!(s, "{x:02x}");
+            s
+        })
 }
 
 fn hmac(key: &[u8], msg: &[u8]) -> Vec<u8> {
@@ -29,7 +30,10 @@ fn hmac(key: &[u8], msg: &[u8]) -> Vec<u8> {
 pub fn encode(s: &str, keep_slash: bool) -> String {
     let mut o = String::with_capacity(s.len());
     for &c in s.as_bytes() {
-        if c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b'.' | b'~') || (keep_slash && c == b'/') {
+        if c.is_ascii_alphanumeric()
+            || matches!(c, b'-' | b'_' | b'.' | b'~')
+            || (keep_slash && c == b'/')
+        {
             o.push(c as char);
         } else {
             o.push_str(&format!("%{c:02X}"));
@@ -59,7 +63,12 @@ pub fn amz_date(unix_s: u64) -> String {
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = yoe + era * 400 + i64::from(m <= 2);
-    format!("{y:04}{m:02}{d:02}T{:02}{:02}{:02}Z", rem / 3600, rem % 3600 / 60, rem % 60)
+    format!(
+        "{y:04}{m:02}{d:02}T{:02}{:02}{:02}Z",
+        rem / 3600,
+        rem % 3600 / 60,
+        rem % 60
+    )
 }
 
 /// The last second `iso_date` can write: 9999-12-31T23:59:59Z. A later one needs a fifth digit of year.
@@ -123,9 +132,15 @@ pub struct Req<'a> {
 
 /// Canonical query string: encoded, sorted pairs.
 pub fn canonical_query(q: &[(String, String)]) -> String {
-    let mut v: Vec<(String, String)> = q.iter().map(|(k, x)| (encode(k, false), encode(x, false))).collect();
+    let mut v: Vec<(String, String)> = q
+        .iter()
+        .map(|(k, x)| (encode(k, false), encode(x, false)))
+        .collect();
     v.sort();
-    v.iter().map(|(k, x)| format!("{k}={x}")).collect::<Vec<_>>().join("&")
+    v.iter()
+        .map(|(k, x)| format!("{k}={x}"))
+        .collect::<Vec<_>>()
+        .join("&")
 }
 
 /// The signed headers (`;`-joined names) and the canonical request for `r` signed at `amz_date`.
@@ -135,9 +150,17 @@ pub fn canonical_request(r: &Req, amz_date: &str) -> (String, String) {
         ("x-amz-content-sha256".into(), r.payload_sha256.to_owned()),
         ("x-amz-date".into(), amz_date.to_owned()),
     ];
-    hs.extend(r.extra.iter().map(|(k, v)| (k.to_ascii_lowercase(), v.trim().to_owned())));
+    hs.extend(
+        r.extra
+            .iter()
+            .map(|(k, v)| (k.to_ascii_lowercase(), v.trim().to_owned())),
+    );
     hs.sort();
-    let signed = hs.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>().join(";");
+    let signed = hs
+        .iter()
+        .map(|(k, _)| k.as_str())
+        .collect::<Vec<_>>()
+        .join(";");
     let heads: String = hs.iter().map(|(k, v)| format!("{k}:{v}\n")).collect();
     let canon = format!("{}\n{}\n{}\n{heads}\n{signed}\n{}", r.method, encode(r.path, true), canonical_query(r.query), r.payload_sha256);
     (signed, canon)
@@ -148,8 +171,14 @@ pub fn authorization(r: &Req, access: &str, secret: &str, region: &str, amz_date
     let date = &amz_date[..8];
     let (signed, canon) = canonical_request(r, amz_date);
     let scope = format!("{date}/{region}/s3/aws4_request");
-    let to_sign = format!("AWS4-HMAC-SHA256\n{amz_date}\n{scope}\n{}", sha256_hex(canon.as_bytes()));
-    let sig = hex(&hmac(&signing_key(secret, date, region, "s3"), to_sign.as_bytes()));
+    let to_sign = format!(
+        "AWS4-HMAC-SHA256\n{amz_date}\n{scope}\n{}",
+        sha256_hex(canon.as_bytes())
+    );
+    let sig = hex(&hmac(
+        &signing_key(secret, date, region, "s3"),
+        to_sign.as_bytes(),
+    ));
     format!("AWS4-HMAC-SHA256 Credential={access}/{scope}, SignedHeaders={signed}, Signature={sig}")
 }
 
@@ -159,8 +188,16 @@ mod tests {
 
     #[test]
     fn signing_key_matches_the_aws_documented_value() {
-        let k = signing_key("wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY", "20120215", "us-east-1", "iam");
-        assert_eq!(hex(&k), "f4780e2d9f65fa895f9c67b32ce1baf0b0d8a43505a000a1a9e090d414db404d");
+        let k = signing_key(
+            "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+            "20120215",
+            "us-east-1",
+            "iam",
+        );
+        assert_eq!(
+            hex(&k),
+            "f4780e2d9f65fa895f9c67b32ce1baf0b0d8a43505a000a1a9e090d414db404d"
+        );
     }
 
     #[test]
@@ -195,13 +232,19 @@ mod tests {
     fn encoding_and_canonical_query() {
         assert_eq!(encode("a b/c~d", true), "a%20b/c~d");
         assert_eq!(encode("a/b", false), "a%2Fb");
-        let q = [("prefix".to_owned(), "a/b c".to_owned()), ("list-type".to_owned(), "2".to_owned())];
+        let q = [
+            ("prefix".to_owned(), "a/b c".to_owned()),
+            ("list-type".to_owned(), "2".to_owned()),
+        ];
         assert_eq!(canonical_query(&q), "list-type=2&prefix=a%2Fb%20c");
     }
 
     #[test]
     fn empty_payload_hash_is_the_well_known_constant() {
-        assert_eq!(sha256_hex(b""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+        assert_eq!(
+            sha256_hex(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
     }
 
     // The four worked examples of "Signature Calculations for the Authorization Header" in the

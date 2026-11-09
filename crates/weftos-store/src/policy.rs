@@ -66,6 +66,27 @@ pub fn for_grants_with(grants: &[Grant], opts: &PolicyOpts) -> Value {
             "Resource": [format!("arn:aws:s3:::{b}"), format!("arn:aws:s3:::{b}/*")],
         }));
     }
+    // Control state is the daemon's alone (review F4); an explicit Deny beats any Allow above.
+    let mut deny = Vec::new();
+    for g in grants.iter().filter(|g| g.enabled) {
+        let Ok(name) = StoreName::parse(&g.store) else { continue };
+        let prefix = match name {
+            StoreName::Worktree { .. } => ".wt/",
+            StoreName::Project { .. } => "worktrees/",
+            _ => continue,
+        };
+        deny.push(format!("arn:aws:s3:::{}/{prefix}*", name.bucket()));
+    }
+    // Deterministic: the same grants give the same document whatever order they were read in.
+    deny.sort();
+    deny.dedup();
+    if !deny.is_empty() {
+        st.push(json!({
+            "Effect": "Deny",
+            "Action": ["s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload"],
+            "Resource": deny,
+        }));
+    }
     json!({"Version": "2012-10-17", "Statement": st})
 }
 
@@ -126,5 +147,17 @@ mod tests {
         let ci_on = PolicyOpts { ci_direct_put: true, ..Default::default() };
         assert!(acts(Access::Append, ci_on).contains(&put) && !acts(Access::Append, ci_on).contains(&"s3:DeleteObject".to_owned()));
         assert!(!acts(Access::Sweep, ci_on).contains(&put) && !acts(Access::Read, ci_on).contains(&put));
+    }
+
+    #[test]
+    fn worktree_and_project_grants_deny_writes_to_control_state() {
+        let w = StoreName::worktree("m", "01JBXK2M3N4P5Q6R7S8T9V0W1X", "feat-x").unwrap();
+        let p = StoreName::project("m", "01JBXK2M3N4P5Q6R7S8T9V0W1X").unwrap();
+        let pol = for_grants(&[g(&w.to_string(), Access::Write, true), g(&p.to_string(), Access::Write, true)]);
+        let st = pol["Statement"].as_array().unwrap();
+        let deny = st.iter().find(|s| s["Effect"] == "Deny").expect("a deny statement");
+        let res: Vec<&str> = deny["Resource"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+        assert!(res.contains(&format!("arn:aws:s3:::{}/.wt/*", w.bucket()).as_str()));
+        assert!(res.contains(&format!("arn:aws:s3:::{}/worktrees/*", p.bucket()).as_str()));
     }
 }

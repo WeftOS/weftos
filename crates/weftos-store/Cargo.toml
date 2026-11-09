@@ -18,11 +18,12 @@ ulid = { workspace = true }
 # SigV4-signed with the workspace hmac/sha2.
 reqwest = { workspace = true, features = ["blocking"], optional = true }
 hmac = { workspace = true, optional = true }
-sha2 = { workspace = true, optional = true }
+# sha2 is also used by the worktree sharing manifest (ADR-126 S2), so it is always on.
+sha2 = { workspace = true }
 
 [features]
 default = []
-rustfs = ["dep:reqwest", "dep:hmac", "dep:sha2"]
+rustfs = ["dep:reqwest", "dep:hmac"]
 
 [dev-dependencies]
 tempfile = { workspace = true }

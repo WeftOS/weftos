@@ -1183,9 +1183,10 @@ fn a_worktree_with_overlay_state_is_not_promoted_object_by_object() {
     r.svc.put(&local("a1"), &wt, "assets/a.bin", b"a", false).unwrap();
     r.svc.put(&local("a1"), &project(), "assets/gone.bin", b"project copy", false).unwrap();
     // S2's overlay records a delete of assets/gone.bin as a tombstone, and the base it started from.
-    r.svc.put(&local("a1"), &wt, ".wt/tombstones/assets/gone.bin", b"", false).unwrap();
-    r.svc.put(&local("a1"), &wt, ".wt/base/assets/a.bin", b"old", false).unwrap();
-    r.svc.put(&local("a1"), &wt, ".wt/meta.json", b"{}", false).unwrap();
+    // Planted at the backend: through the service a principal cannot write `.wt/` (S2, reserved control state).
+    r.be.put(&wt.bucket(), ".wt/tombstones/assets/gone.bin", b"", false).unwrap();
+    r.be.put(&wt.bucket(), ".wt/base/assets/a.bin", b"old", false).unwrap();
+    r.be.put(&wt.bucket(), ".wt/meta.json", b"{}", false).unwrap();
     let e = r.svc.promote(&wt, &["assets/".into()], true, "land").unwrap_err().to_string();
     assert!(e.contains("overlay state") && e.contains("tombstones"), "{e}");
     assert!(r.be.get(&project().bucket(), "assets/a.bin").is_err(), "nothing was copied");
@@ -1193,7 +1194,7 @@ fn a_worktree_with_overlay_state_is_not_promoted_object_by_object() {
     assert!(r.be.list(ARCHIVE_BUCKET, "").map(|l| l.is_empty()).unwrap_or(true), "nothing was archived either");
     // Even a bare tombstone is enough.
     let (r2, wt2) = wt_rig();
-    r2.svc.put(&local("a1"), &wt2, ".wt/tombstones/assets/x", b"", false).unwrap();
+    r2.be.put(&wt2.bucket(), ".wt/tombstones/assets/x", b"", false).unwrap();
     assert!(r2.svc.promote(&wt2, &["assets/".into()], false, "land").is_err());
 }
 
@@ -1302,4 +1303,44 @@ fn audit_lines_with_a_403_count_too_and_a_successful_audit_line_never_does() {
     r.svc.ingest_audit_line(&rec(403));
     r.svc.ingest_audit_line(&rec(403));
     assert_eq!(r.be.key_enabled(&key), Some(false));
+}
+
+#[test]
+fn principals_cannot_write_a_worktrees_control_state_or_a_projects_registry() {
+    let r = rig();
+    let wt = StoreName::worktree("weft", P, "feat-x").unwrap();
+    r.svc.create_store(&project(), "daemon", Parties::default()).unwrap();
+    r.svc.create_store(&wt, "daemon", Parties::default()).unwrap();
+    r.svc.grant(&wt, cog("a1"), Access::Write, "op").unwrap();
+    r.svc.grant(&project(), cog("a1"), Access::Write, "op").unwrap();
+    for k in [".wt/promoted.json", ".wt/promoting.json", ".wt/base/assets/a", ".wt/meta.json"] {
+        let e = r.svc.put(&local("a1"), &wt, k, b"forged", false).unwrap_err().to_string();
+        assert!(e.contains("reserved control state"), "{k}: {e}");
+        assert!(r.svc.delete(&local("a1"), &wt, k).is_err(), "{k}");
+        assert!(r.be.get(&wt.bucket(), k).is_err(), "{k} was not written");
+    }
+    assert!(r.svc.put(&local("a1"), &project(), "worktrees/feat-x.json", b"{}", false).is_err());
+    // ordinary objects are unaffected
+    r.svc.put(&local("a1"), &wt, "assets/a", b"ok", false).unwrap();
+    r.svc.put(&local("a1"), &project(), "assets/a", b"ok", false).unwrap();
+}
+
+#[test]
+fn a_second_daemon_can_archive_and_delete_a_worktree_store_the_first_created() {
+    let be = Arc::new(MemBackend::new());
+    let (a, b) = (rig_at(None, be.clone()), rig_at(None, be.clone()));
+    let wt = StoreName::worktree("weft", P, "feat-x").unwrap();
+    a.svc.create_store(&project(), "daemon", Parties::default()).unwrap();
+    a.svc.create_store(&wt, "daemon", Parties::default()).unwrap();
+    a.svc.grant(&wt, cog("a1"), Access::Write, "op").unwrap();
+    a.svc.put(&local("a1"), &wt, "assets/x.bin", b"x", false).unwrap();
+    assert!(!b.svc.has_store(&wt), "B has no record of A's store");
+    // closing without deleting would mean disabling grants B does not hold
+    assert!(b.svc.archive(&wt, false, "op").unwrap_err().to_string().contains("another daemon"));
+    // other kinds of store still need to be known
+    assert!(b.svc.archive(&project(), true, "op").is_err());
+    assert_eq!(b.svc.archive(&wt, true, "op").unwrap(), 1);
+    assert!(be.get(&wt.bucket(), "assets/x.bin").is_err(), "the bucket is gone");
+    assert_eq!(be.get(ARCHIVE_BUCKET, &archive_key(&wt.bucket(), 1_000, "assets/x.bin")).unwrap(), b"x");
+    assert!(b.chain.0.lock().unwrap().iter().any(|(k, v)| k == "store.archive" && v["foreign"] == true));
 }

@@ -302,6 +302,13 @@ impl StoreService {
         st.grant_seq
     }
 
+    /// The raw data plane, for operator-level work that spans stores (ADR-126 S2 worktree sharing,
+    /// promotion with conflict checks). Not a principal's path: it skips grants and exposure, so
+    /// only an Admin verb on the daemon may use it, and must record what it did itself.
+    pub fn operator_objects(&self) -> Arc<dyn ObjectBackend> {
+        self.objects.clone()
+    }
+
     fn lock(&self) -> MutexGuard<'_, State> {
         self.st.lock().unwrap_or_else(|e| e.into_inner())
     }
@@ -817,6 +824,22 @@ impl StoreService {
         names.iter().filter_map(|n| StoreName::parse(n).ok()).filter_map(|n| self.info(&n).ok()).collect()
     }
 
+    /// Record an operator-plane act (an S2 worktree verb) in the activity log and, when `chain` is
+    /// given, on the chain. The operator plane skips grants, so whoever calls it records what it
+    /// did here (review F10). `actor` is the caller as the verb knows it.
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_act(&self, actor: &str, name: &StoreName, op: &str, key: Option<&str>, bytes: u64, outcome: Outcome, chain: Option<(&str, Value)>) {
+        if let Some((kind, payload)) = chain {
+            self.chain.record(kind, payload);
+        }
+        self.emit(actor, name, op, key, bytes, outcome, Source::Governed);
+    }
+
+    /// `Some(archived)` if this daemon holds the store, `None` if it does not know it.
+    pub fn is_archived(&self, name: &StoreName) -> Option<bool> {
+        self.lock().stores.get(&name.to_string()).map(|r| r.archived)
+    }
+
     /// Whether the store is known to this daemon.
     /// Record on the chain that an operator made a request *as* `principal` (`weaver store put|get
     /// --as`). The activity log shows the request under that principal; this is the line that says who really asked.
@@ -846,6 +869,16 @@ impl StoreService {
         };
         if rec.archived {
             return refuse(format!("{name} is archived"));
+        }
+        // Control state is the daemon's alone (review F4): a worktree's `.wt/` (promotion record,
+        // intent, bases, metadata) and a project's `worktrees/` registry. The S2 verbs write them
+        // on the operator plane; a principal that could write them could forge a promotion.
+        if matches!(op, Op::Put | Op::Copy | Op::Delete)
+            && let Some(k) = key
+            && ((matches!(name, StoreName::Worktree { .. }) && k.starts_with(".wt/"))
+                || (matches!(name, StoreName::Project { .. }) && k.starts_with("worktrees/")))
+        {
+            return refuse(format!("{k} is reserved control state of {name}; only the daemon writes it"));
         }
         if who.remote
             && let Err(why) = self.exposure.check(&exposure_id(name))

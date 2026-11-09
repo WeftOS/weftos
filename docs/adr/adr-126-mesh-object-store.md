@@ -4,6 +4,7 @@
 - **Updated**: 2026-10-29 (§4's worktree overlay is re-expressed as RVF layers and branch metadata in ADR-128)
 - **Updated**: 2026-10-29 (S0 spike applied on PG and run; results in "S0 results"; open question 1 answered: import, not in place; §6 amended: the activity log must take RustFS's own log as well as its audit stream)
 - **Updated**: 2026-10-30 (ADR-130 adds a GCS seed bucket as the tier above this store; this store becomes the optional L1 staging tier)
+- **Updated**: 2026-11-07 (follower view §4a, Windows-safe fetch, notification/poll answers from ADR-131; S2 implemented on `feat/adr126-s2`, not yet landed: overlay, promotion, agent-git-flow hooks, union mount; §4 amended by the owner extension, board card f40828fb: the worktree tree itself is shared, so unmerged docs stay visible and another agent can merge)
 - **Updated**: 2026-11-07 (S1 built on `feat/adr126-s1`: `weftos-store` crate, `weaver store`, daemon wiring, local-directory backend; RustFS S3 + admin transport added and verified against a throwaway RustFS 1.0.4, audit-stream and notification parsers fixed from captured records, `put_if_match`, release-store `append`/`sweep` roles; see "S1 status")
 - **Deciders**: owner
 - **Research**: `docs/research/rclone-shared-filesystem-2026-10-29.md` (rclone, RustFS,
@@ -115,13 +116,127 @@ Only the daemon creates, grants access to, or deletes a store.
 - **Writes stay in the worktree bucket.**
 - **Promotion happens when the worktree lands** (agent-git-flow `land`). The worktree's
   objects under promotable paths are copied into the project bucket, and anything else is
-  archived or dropped.
+  archived or dropped. Promotable prefixes are `assets/` and `shared/` by default; `agents/<id>/`
+  scratch is archived. If a project object changed after the worktree was created and differs
+  from the worktree's, promotion fails before writing anything (or keeps the project copy, or
+  overwrites, by policy). Deleting a project object in a worktree leaves a tombstone, which
+  promotion turns into a delete in the project (skipped if the project object changed since the
+  worktree was created, unless the policy is overwrite). An object and a tombstone for the same key
+  mean the object wins. "Changed" is decided by etag, not by time: the first write or delete of a
+  key in a worktree records the project's etag for it (`.wt/base/<key>`, `-` if the project had
+  none), and promotion treats the project as changed when its etag now differs. No clock is
+  involved, so neither client nor server skew can hide or invent a conflict; an object written
+  around the overlay has no recorded base and is treated as a conflict (fail safe). Reads do not
+  record a base, so a project edit between a worktree's read and its first write goes unnoticed.
+  The run is idempotent and
+  safe to retry after a partial failure; once the report is written, later writes to that
+  worktree bucket are ignored.
 - **Who does the overlay:** the `weftos-store` client does it for daemons and agents. For a
   desktop mount, a small rclone `union` remote (worktree first, project as read-only)
   gives the same view.
-- **Git trees and `target/` stay on local disk.** The store holds the gitignored layer only.
+- **Git trees and `target/` stay on local disk as the working copy; the store also carries a
+  shared snapshot of the tree.** (Amended 2026-11-07, owner, card f40828fb. This replaces the
+  earlier rule "the store holds the gitignored layer only", which is why docs and planning
+  written in a never-merged worktree were invisible to everyone else.)
+  - **What is shared:** the files git can see (tracked, plus untracked and not ignored), under
+    the reserved `.wt/tree/` prefix of the worktree bucket; a `git bundle` of the unmerged
+    commits (`.wt/git/branch.bundle`); a manifest (`.wt/tree.manifest.json`) listing each file's
+    SHA-256, which paths are uncommitted, and an index of docs and planning with titles; and a
+    handoff record (`.wt/handoff.json`).
+  - **What is not:** `target/`, `node_modules/` and other ignored files (the overlay layer above
+    is how those travel), symlinks (or files under a symlinked directory), files over 16 MiB, and
+    anything that looks like a secret: names such as `.env*` (not `.env.example`), `*.env`,
+    `.envrc`, `*.pem`, `*.key`, `*.jks`, `id_*`, `credentials*`, `.pgpass`, `*.tfstate`,
+    `*secret*` (not Markdown), and any file containing `PRIVATE KEY-----`. This is a denylist and
+    is incomplete by nature; the writer stays responsible for what is in the tree.
+  - **A fetch treats the manifest as untrusted:** it refuses `.git/`, `.gitattributes`,
+    `.gitmodules`, `.envrc`, names with `:`, secret-looking names and case-insensitive
+    collisions, checks every object's SHA-256, and never overwrites a differing local file
+    without `--force`.
+  - **Git still lands code.** The store makes the handoff possible across agents and machines: a
+    second agent fetches the bundle and the tree, claims the merge, lands it with normal git, and
+    marks it merged (which requires holding the claim). Promotion (below) then runs. The claim is
+    advisory: there is no cross-client locking, two agents racing can both read back their own
+    write, so the merger must still land through git's compare-and-swap. While a claim is live,
+    only the holder can republish or re-hand-off; a claim older than 30 minutes can be taken over
+    (compared with the claimer's clock).
+  - **Reserved state never leaks:** everything under `.wt/` is hidden from overlay reads and
+    listings and is never promoted as an asset. On promotion the shared tree, bundle, manifest and handoff
+    record are archived with the rest.
+  - **Discovery:** the daemon writes a small registry entry per worktree into the project bucket
+    (`worktrees/<slug>.json`: branch, head, state, writer, merger, doc count). Worktree principals
+    cannot write there, so "writes stay in the worktree bucket" still holds for agents.
 - **One writer per path.** There's no cross-client locking. Parallel agents in one
   worktree write under `agents/<instance id>/`, and shared paths are read-mostly.
+
+### 4a. The L1 follower view: seeing unmerged worktrees before integration
+
+(Added 2026-11-07, owner decision: this is required leftover work, not optional. ADR-130 names
+L1 as the tier for "unmerged layers that other nodes should see before integration".)
+
+- **Follower:** any node with project read access. It is read-only; it never writes to a worktree
+  or project bucket. It keeps one small JSON state file of what it last reported.
+- **Source of truth:** the daemon-written registry in the project bucket (`worktrees/<slug>.json`),
+  then each worktree's manifest. The daemon refreshes a registry entry on every publish, handoff,
+  claim and merge, and removes it after promotion and bucket deletion.
+- **What a follower can do** (`weftos_store::follower`, `worktree-store.sh`):
+  - `poll` / `follow`: new, head-moved, state-changed, gone and unreadable worktrees since the last
+    look. A head move and a state change in one poll are both reported; a recreated slug (new
+    bucket) is gone-then-new; one corrupt registry entry is reported, not fatal; an empty registry
+    when worktrees were known is an error (wrong bucket?), not mass-gone, unless confirmed;
+  - `search_docs` / `search`: docs and planning across every unmerged worktree, by path or title;
+  - `sync_docs` / `sync-docs`: a read-only local mirror of one worktree's docs, pruned as docs leave;
+  - `leftovers`: open worktrees idle 3 days, handoffs unclaimed 1 day, claims past the 30-minute
+    TTL, merged entries still in the registry after a day (cleanup stuck), and timestamps in the
+    future (writer clock ahead, so idle time is unknown). This is the forgotten-work detector;
+  - `overlaps`: files two unmerged worktrees both changed differently, as a merge-conflict hint.
+    It reports whether both share a base commit; if not, it over-reports. It also reports a file one
+    worktree deleted that the other changed (a rename is a delete plus an add, so editing the old
+    name is caught). That needs the manifest's `changes` list, which the script builds from
+    `git diff --name-status --no-renames <base>` plus untracked files; a manifest published before
+    that field existed gets content comparison only. Paths are compared, never hunks, so absence
+    still does not prove a clean merge;
+  - **a registry entry is a pointer, not authority:** before reading a bucket a follower checks the
+    slug is well-formed and that the bucket's own `.wt/meta.json` names the same slug, so an entry
+    cannot aim a follower's read grants at another worktree's bucket.
+- **Waking and polling** (owner answers on ADR-131, 2026-11-07): head notifications reach devices
+  through the mesh relay from one site subscriber (the PG WeftOS daemon). Followers treat a
+  notification only as a wake-up and re-read the registry; a 30-60 s poll is the fallback and the
+  source of truth. Polling costs one list plus one get per worktree. Registry entries are not
+  signed in S2, so a follower trusts its own read grants and the bucket cross-check below; signed
+  worktree heads are an open question if followers ever read from an untrusted relay.
+- **Per-client stores:** a client project has its own buckets (ADR-131: one seed bucket and one
+  inbox bucket per client), so a follower of a client project reads only that client's registry.
+- **Clocks:** ages compare the registry's writer-side timestamp with the follower's clock, so the
+  thresholds are days. They are a nudge, not a lock.
+- **Not in scope:** an operator UI (card d18e1ab0), automatic merging, and enforcing that anyone
+  acts on a leftover.
+
+#### Gate for moving a project (Sansone) onto shared worktrees
+
+Card 4c4319e0 holds the move until these have passed. S2 supplies the code; the evidence is still
+owed and is **not** produced by the in-memory tests.
+
+1. Against real RustFS (not `MemBackend`): publish, poll, search, sync-docs and claim with two
+   different principals on two machines; a follower sees a publish within one poll interval.
+2. A Windows node loads a worktree bucket natively (never tested; in scope now on aepod-xpc as the
+   bucket-load proof, with the ProjFS drive after macOS D1 and Linux D2). Fetch already refuses
+   reserved names (`CON`, `NUL`, `COM1`), trailing dots/spaces, `<>:"|?*`, `git~1` aliases and
+   case-insensitive collisions on every platform; long paths and CRLF are still to try.
+3. Metadata caching is only partial: measure `list` and `head` latency for a worktree of Sansone's
+   size (file count, largest file) before assuming one-poll-per-worktree is affordable.
+4. Leftover drill: leave a worktree open past the threshold and confirm `leftovers` reports it;
+   hand one off and confirm a second agent on another machine lands it with git, then promotion
+   and bucket deletion complete and the registry entry disappears.
+5. Failure drill: kill the writer mid-publish, kill the merger mid-claim, take the daemon down
+   during a registry refresh. Nothing may be lost, and a stale claim must be recoverable.
+6. Follower drills on real clocks and a real registry: a writer machine a day ahead; a corrupt and
+   an unknown-schema entry; an empty or wrong project bucket; a merged entry whose cleanup never
+   ran; an interrupted `sync-docs` followed by a deleted doc; `overlaps` on two real worktrees with
+   different bases (measure the false-positive rate); two overlapping `follow` runs sharing a state
+   file (`FollowState::save` writes atomically via temp+rename but does not lock, so the last writer
+   wins; `load` errors on a corrupt file rather than resetting).
+7. ADR-131 D1 and D2 pass first (the card's prerequisite).
 
 ### 5. Edge and Wasm nodes hold no long-lived keys
 
@@ -503,6 +618,45 @@ RustFS, local-directory and in-memory backends, and by the two test backends in 
 unchanged. One detail to settle at merge: the Mac defaults return `BackendError::Unsupported` bare, while
 S1's `BackendError::Unsupported` carries a message (`Unsupported(String)`), so the `delete_if_match` default
 needs `Unsupported("conditional delete".into())` here.
+
+## S2 status (2026-11-07, branch `feat/adr126-s2`, not landed)
+
+- **Where the code is:** `crates/weftos-store/src/{overlay,promote,share,share_fetch,follower,testing,worktree_backend}.rs`
+  and `tests/s2_{worktree,follower,done_when}.rs`. The Rust uses only `std`, `serde`, `serde_json` and
+  `sha2` and spawns no processes. `worktree_backend.rs` implements `overlay::ObjectBackend` for every
+  S1 `ObjectBackend` (local directory, RustFS, in-memory), so the S2 code runs unchanged on any of
+  them; S1's backends report no modification time, which S2 no longer needs. Git work and the
+  desktop mount are in `scripts/worktree-store.sh` (tests: `scripts/tests/worktree-store.test.sh`,
+  `scripts/tests/worktree-union-mount.test.sh`). `sha2` is now a non-optional dependency of the crate.
+- **Merged with S1** (`feat/adr126-s1`, 2026-11-07): the modules are wired into `lib.rs`.
+- **The `weaver store worktree` verbs exist** (`crates/clawft-weave/src/store_worktree.rs`, CLI in
+  `commands/store_cmd.rs`, RPC `store.worktree.*`, Admin like every `store.*` verb): `create`,
+  `buckets`, `publish` (`--paths-z`, `--uncommitted-z`, `--changes-z`, `--bundle`, `--handoff`),
+  `fetch`, `claim`, `promote`, `follow`, `search`, `leftovers`, `sync-docs`, `overlaps`. They run on
+  the daemon's raw data plane (`StoreService::operator_objects`, added for this, as is the now-public
+  `ensure_archive`), the same level as S1's own promote and archive, so they skip per-principal
+  grants and the activity log; the daemon refreshes the project registry entry after publish and
+  claim, which is the only writer of `worktrees/<slug>.json`. Paths in params (`--root`, `--dest`,
+  `--cache`, the lists) are read and written by the daemon itself, so the CLI and daemon must share
+  a host and a user. Promotion archives into `weftos-archive` under `<bucket>@<ms>/`. Two S1 files
+  got small additive edits for this (`service.rs`, `service/lifecycle.rs`).
+- **Verified (in `weftos-store` and `clawft-weave`, clippy `-D warnings` clean; daemon test `store_worktree::tests` drives every verb from create through claim and land on an `FsBackend`):** 56 S2
+  integration tests plus `tests/s2_done_when.rs`, which runs the three done-when checks on S1's
+  `FsBackend` with two machines sharing only the store: publish, hand off, follow, search, fetch,
+  claim and merge across machines (a claimed merge cannot be overwritten by the writer); a new
+  worktree reads project assets with nothing copied into its bucket; landing promotes once and
+  archives the unmerged docs. Shell: 37 assertions including a real `git bundle` round trip, and 8
+  more in `worktree-union-mount.test.sh`, which does a real `rclone mount` (FUSE, rclone 1.75.2)
+  over the local-directory store layout: project files read through with no copy, new and edited
+  files land only in the worktree bucket, `.wt/` is hidden, deleting a project-only file is
+  refused, the project bucket is untouched. **Not verified:** a real RustFS (the same scenario is
+  `two_machines_share_a_worktree_on_a_real_rustfs`, ignored until `WEFTOS_STORE_TEST_RUSTFS_ENV`
+  names a throwaway server), the mount over an S3 remote, macOS or Windows, two physical machines,
+  or `agent-git-flow` calling the script (it has no hook seam; the repo wraps `wt.sh` and `land.sh`).
+- **Known limits:** claims are advisory; claim expiry uses client clocks; `rclone union` cannot
+  express tombstones, so deleting a project-only file through the mount is refused; rclone does not
+  flush its write cache on unmount, so `worktree-store.sh umount` waits for the write-back delay;
+  doc search matches path and title only, not content.
 
 ## Consequences
 

@@ -142,7 +142,10 @@ pub fn run(svc: &StoreService, method: &str, params: Value) -> Result<Value, Str
         "store.archive" => {
             let name = store(&p)?;
             let n = svc.archive(&name, p.delete, "cli").map_err(e)?;
-            Ok(json!({"store": name.to_string(), "archived_objects": n, "deleted": p.delete}))
+            // A deleted worktree store leaves the follower registry too; a failure here is reported
+            // but does not undo the archive (it is safe to repeat).
+            let registry = if p.delete { crate::store_worktree::forget(svc, &name).err() } else { None };
+            Ok(json!({"store": name.to_string(), "archived_objects": n, "deleted": p.delete, "registry_error": registry}))
         }
         "store.archive.gc" => {
             let keep = weftos_store::service::ArchiveKeep { node_days: p.node_days, project_days: p.project_days, release_days: p.release_days };

@@ -19,18 +19,26 @@ mod testrng;
 pub mod access;
 pub mod audit;
 pub mod backend;
+pub mod follower;
 pub mod fs;
 pub mod grant_seq;
 pub mod mem;
 pub mod name;
+pub mod overlay;
 pub mod policy;
+pub mod promote;
 #[cfg(feature = "rustfs")]
 pub mod integrity;
 #[cfg(feature = "rustfs")]
 pub mod rustfs;
 pub mod service;
+pub mod share;
+pub mod share_fetch;
 #[cfg(feature = "rustfs")]
 pub mod sigv4;
+#[doc(hidden)]
+pub mod testing;
+pub mod worktree_backend;
 
 pub use access::{Access, Grant, GrantTable, Op, Principal, PrincipalKind};
 pub use audit::{AuditEvent, AuditSink, Outcome, Source};
