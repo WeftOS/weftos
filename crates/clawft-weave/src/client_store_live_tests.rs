@@ -272,3 +272,59 @@ fn the_client_store_rides_the_daemons_own_service_on_the_same_rustfs() {
     assert!(daemon_svc.list_stores().iter().any(|s| s.name == name.to_string()), "the daemon's one service holds the client's store");
     assert_eq!(i.as_key("cog:sh").get(&name.bucket(), "k").unwrap(), b"v");
 }
+
+/// Joins S5 (`ClientStore` and its gate, riding a shared service via `open_rustfs_shared`), S1
+/// (`StoreService`, `RustfsBackend`) and S2 (the worktree store and its `promote` into the project
+/// store). A worktree of a project the client holds is promoted into the project store through the
+/// service. Proves: the promoted bytes are readable through the client gate by a granted local
+/// cog, exist on the client's own RustFS instance only (not the other account's), the unpromoted
+/// object stays out of the project store, and the WeftOS account is refused at the gate before
+/// and after the promotion (also for the worktree store, which the gate does not hold).
+#[test]
+#[ignore = "needs two throwaway RustFS: scripts/store/client-live-test.sh or scripts/store/integ-live-test.sh"]
+fn a_promoted_worktree_stays_on_the_clients_instance_and_the_weftos_account_stays_out() {
+    use weftos_store::service::{Caller, Config, NoChain, Parties};
+    let (a, r) = (Instance::get(0), Instance::get(1));
+    let be = Arc::new(a.root_be());
+    let svc = Arc::new(
+        weftos_store::StoreService::open(Config { node_id: "daemon".into(), state_path: None, clock }, be.clone(), be.clone(), Arc::new(OpenGate), Arc::new(MemSink::default()), Arc::new(NoChain)).unwrap(),
+    );
+    let store = ClientStore::open_rustfs_shared(a.spec("acme"), mesh(), &a.env_file(), svc.clone(), Arc::new(MemSink::default()), None, clock).unwrap();
+    let ulid = project();
+    let project_name = store.hold_project(&ulid, "op").unwrap();
+    let wt = StoreName::worktree(&mesh().to_string(), &ulid, "feat-x").unwrap();
+    let dev = cog("promo");
+    svc.create_store(&wt, "op", Parties { writers: vec![dev.clone()], ..Default::default() }).unwrap();
+    let dev_caller = Caller::local(dev.clone());
+    svc.put(&dev_caller, &wt, "assets/model.bin", b"client-weights", false).unwrap();
+    svc.put(&dev_caller, &wt, "scratch/tmp.txt", b"scratch", false).unwrap();
+
+    let w = ClientCaller::Weftos { id: "weaver".into() };
+    assert!(matches!(store.get(&w, &project_name, "assets/model.bin"), Err(StoreError::Refused(_))), "WeftOS refused before");
+
+    let rep = svc.promote(&wt, &["assets/".into()], false, "land").unwrap();
+    assert_eq!((rep.promoted, rep.left), (1, 1), "{rep:?}");
+
+    // A local cog the client grants read sees the promoted bytes through the gate, not the scratch file.
+    store.grant_local(&dev, &project_name, Access::Read, "op").unwrap();
+    let c = ClientCaller::Local(dev.clone());
+    assert_eq!(store.get(&c, &project_name, "assets/model.bin").unwrap(), b"client-weights");
+    assert!(store.get(&c, &project_name, "scratch/tmp.txt").is_err(), "unpromoted stays out of the project store");
+
+    // The bytes are on the client's instance and nowhere on the other account's.
+    let pb = project_name.bucket();
+    assert_eq!(a.root_be().get(&pb, "assets/model.bin").unwrap(), b"client-weights");
+    assert!(!r.root_be().bucket_exists(&pb).unwrap() && !r.root_be().bucket_exists(&wt.bucket()).unwrap());
+    assert!(files(&a.data).iter().any(|f| f.contains(&pb)) && files(&r.data).iter().all(|f| !f.contains(&pb)));
+
+    // The WeftOS account is still refused after the promotion, for the project and the worktree.
+    assert!(matches!(store.get(&w, &project_name, "assets/model.bin"), Err(StoreError::Refused(_))), "WeftOS refused after");
+    assert!(matches!(store.list(&w, &project_name, ""), Err(StoreError::Refused(_))));
+    assert!(matches!(store.get(&w, &wt, "assets/model.bin"), Err(StoreError::Refused(_))), "worktree store: refused");
+    let weftos_secret = a.root_be().secret_path(&RustfsBackend::key_id_for("member:weftos-weaver"));
+    assert!(!weftos_secret.exists() || forbidden(a.as_key("member:weftos-weaver").get(&pb, "assets/model.bin")), "no WeftOS key reaches the bytes");
+    // The granted cog's own key reads the promoted bytes at RustFS, and cannot write them.
+    let direct = a.as_key("cog:promo");
+    assert_eq!(direct.get(&pb, "assets/model.bin").unwrap(), b"client-weights");
+    assert!(forbidden(direct.put(&pb, "assets/model.bin", b"x", false)));
+}
