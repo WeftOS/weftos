@@ -320,3 +320,9 @@ Branch `feat/adr126-s5-on-s2land`, built on S2's `land/adr126-s2-on-s1land` (93a
 - Conflicts: Cargo.toml and the ADR (kept both sides); `daemon.rs` (S1's store-start block, with `reg.clone()` and `audit_fn.clone()`); `d4c92301` was written on top of the S1 merge 269cc903, so its `client_store*` files were taken whole.
 - Tests: `weftos-store --features rustfs` 228 passed; `clawft-weave --filter store` 202 passed (+1); `weftos-edge-creds` 99; `weftos-release` 28 + 1; scoped clippy clean.
 - Still flagged for the owner's approvals file: the 2 test-only dev-deps in `crates/weftos-release/Cargo.toml`.
+
+### Live and diff-gate run on `feat/adr126-s5-on-s2land` (2026-11-08, night)
+
+Throwaway loopback RustFS 1.0.4 (127.0.0.1, random ports and credentials, data under `target/`, removed afterwards; no rustfs process left). `scripts/store/integ-live-test.sh`: S1×S4 4, S1×S3 grant ledger 1 (plus the non-live bucket-name parity 1), S3 chain feed 1, S2 4 (two machines, land preview, concurrent claims, follower), S1's own live suite 19, S5 promotion 1: **30 live passed, 0 failed**. `scripts/store/client-live-test.sh`: 4 passed. `build.sh --ignored` needed a libtest fallback (the landed build.sh honoured it only under nextest, which is not installed, so the live tests silently ran as skipped); added in the same branch.
+
+Diff gate against target-0.8.5: REJECTED, 12 lines for the owner, 3 already approved. Owner approvals needed: `net` ×7 (store_ingest.rs 2, store_ingest_tests.rs 3, rustfs_tests.rs 2 loopback test sockets), `process` ×2 (store_ingest_tests.rs), `new-dep` ×2 (weftos-release dev-deps on weftos-store and weftos-edge-creds), `approvals-change` ×1 (the approvals file itself differs on this branch).
