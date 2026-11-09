@@ -83,7 +83,7 @@ pub struct ActivityRecord {
 }
 
 impl ActivityRecord {
-    fn digest(&self) -> String {
+    pub(super) fn digest(&self) -> String {
         let user = self.caller_user.as_deref().unwrap_or("");
         let text = format!(
             "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
@@ -116,6 +116,10 @@ struct Inner {
     /// Hash the first retained record chains from.
     base: String,
     next_seq: u64,
+    /// `seq` u64::MAX has been used: there is no next number. Appends are dropped (counted in
+    /// `dropped`), never wrapped to 0 and never a panic that would poison the log.
+    exhausted: bool,
+    dropped: u64,
 }
 
 impl Inner {
@@ -165,7 +169,16 @@ impl ActivityLog {
                 inner.records.push_back(r);
             }
             Self::check(&inner).map_err(|e| format!("{}: {e}", path.display()))?;
-            inner.next_seq = inner.records.back().map_or(0, |r| r.seq + 1);
+            match inner.records.back() {
+                None => {}
+                Some(r) => match r.seq.checked_add(1) {
+                    Some(n) => inner.next_seq = n,
+                    None => {
+                        inner.next_seq = u64::MAX;
+                        inner.exhausted = true;
+                    }
+                },
+            }
         }
         let log = Self { inner: Mutex::new(inner), path: Some(path.to_owned()), retention };
         log.prune(now_ms);
@@ -174,13 +187,34 @@ impl ActivityLog {
 
     fn check(inner: &Inner) -> Result<(), String> {
         let mut prev = inner.base.clone();
+        let mut last_seq: Option<u64> = None;
         for r in &inner.records {
-            if r.prev != prev || r.digest() != r.hash {
+            // Sequence numbers only go up: a repeat or a step back means lines were reordered or
+            // copied, which the hash chain alone would not catch if the digests were recomputed.
+            if r.prev != prev || r.digest() != r.hash || last_seq.is_some_and(|l| r.seq <= l) {
                 return Err(format!("chain broken at seq {}", r.seq));
             }
+            last_seq = Some(r.seq);
             prev = r.hash.clone();
         }
         Ok(())
+    }
+
+    /// Whether every sequence number has been used, so new records are being dropped.
+    pub fn is_exhausted(&self) -> bool {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).exhausted
+    }
+
+    /// How many records were dropped because the sequence ran out.
+    pub fn dropped(&self) -> u64 {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).dropped
+    }
+
+    /// Start numbering at `n` (tests reach u64::MAX without 1.8e19 appends).
+    #[cfg(test)]
+    pub(super) fn start_at(self, n: u64) -> Self {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).next_seq = n;
+        self
     }
 
     /// Check the whole retained chain.
@@ -189,8 +223,30 @@ impl ActivityLog {
     }
 
     /// Append a record for a request at `ts_ms`, then apply retention.
+    ///
+    /// If every sequence number has been used (`seq` u64::MAX was the last), the record is NOT
+    /// kept: it comes back with `seq` u64::MAX and an empty `hash`, and [`Self::dropped`] counts it.
     pub fn append(&self, a: NewActivity, ts_ms: u64) -> ActivityRecord {
         let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if g.exhausted {
+            g.dropped = g.dropped.saturating_add(1);
+            if g.dropped == 1 {
+                tracing::error!("exposure activity log: sequence numbers exhausted (u64::MAX used); further records are dropped");
+            }
+            return ActivityRecord {
+                seq: u64::MAX,
+                ts_ms,
+                exposure: clean(&a.exposure, 96),
+                caller_node: clean(&a.caller_node, 128),
+                caller_user: a.caller_user.map(|u| clean(&u, 64)).filter(|u| !u.is_empty()),
+                bytes_in: a.bytes_in,
+                bytes_out: a.bytes_out,
+                duration_ms: a.duration_ms,
+                outcome: clean(&a.outcome, MAX_OUTCOME),
+                prev: g.tip().to_owned(),
+                hash: String::new(),
+            };
+        }
         let mut r = ActivityRecord {
             seq: g.next_seq,
             ts_ms,
@@ -205,7 +261,10 @@ impl ActivityLog {
             hash: String::new(),
         };
         r.hash = r.digest();
-        g.next_seq += 1;
+        match g.next_seq.checked_add(1) {
+            Some(n) => g.next_seq = n,
+            None => g.exhausted = true,
+        }
         g.bytes += line_len(&r);
         g.records.push_back(r.clone());
         if let Some(p) = &self.path {

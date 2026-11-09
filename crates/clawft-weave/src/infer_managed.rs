@@ -6,7 +6,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use clawft_kernel::infer_proxy::{InferProxy, OccupiedPolicy, PlacementTable, Started, Target};
+use clawft_kernel::infer_proxy::{InferProxy, OccupiedPolicy, PlacementTable, ProxyError, Started, Target};
 use clawft_kernel::workload_runtime::infer::Reconcile;
 use clawft_kernel::workload_runtime::types::WorkloadRuntime;
 use serde_json::{Value, json};
@@ -20,6 +20,11 @@ use crate::infer_wire::{InferState, InitParts, ProxyState, RoleState, wl_cfg, wo
 const RETRY_AFTER: Duration = Duration::from_secs(30);
 /// Grace given to a server being stopped.
 const STOP_GRACE: Duration = Duration::from_secs(5);
+/// A refused loopback port is retried this many times, this far apart, before
+/// the role is left without a listener: a daemon restarted right after a stop
+/// can find its port still held by the old process for a few seconds.
+const BIND_RETRIES: u32 = 10;
+const BIND_RETRY_GAP: Duration = Duration::from_millis(500);
 
 fn record(p: &InitParts<'_>, kind: &str, role: &str, why: &str) {
     if let Some(a) = &p.audit {
@@ -47,16 +52,24 @@ pub(crate) async fn start_proxies(r: &Resolved, table: &Arc<PlacementTable>, p: 
         warn!(role = %role, %why, "inference proxy not started");
         (ProxyState::Refused(why), None)
     };
-    let local = match InferProxy::start(
-        role,
-        ([127, 0, 0, 1], port).into(),
-        policy,
-        table.clone(),
-        p.limits.clone(),
-        p.audit.clone(),
-    )
-    .await
-    {
+    let mut tries = 0;
+    let started = loop {
+        let res = InferProxy::start(
+            role,
+            ([127, 0, 0, 1], port).into(),
+            policy,
+            table.clone(),
+            p.limits.clone(),
+            p.audit.clone(),
+        )
+        .await;
+        if !matches!(res, Err(ProxyError::Occupied(_))) || tries >= BIND_RETRIES {
+            break res;
+        }
+        tries += 1;
+        tokio::time::sleep(BIND_RETRY_GAP).await;
+    };
+    let local = match started {
         Ok(Started::Running(px)) => (ProxyState::Listening(px.addr()), Some(px)),
         Ok(Started::Adopted(a)) => (ProxyState::Adopted(a), None),
         Err(e) => refused(e.to_string()),
@@ -211,7 +224,7 @@ impl InferState {
     /// served instance and update the table.
     pub async fn sync_once(&self) {
         self.sync_svc();
-        for r in self.roles.iter().filter(|r| r.cfg.svc.is_none()) {
+        for r in self.roles.iter().filter(|r| r.cfg.svc.is_none() && r.cfg.remote.is_none()) {
             if r.managed.is_some() {
                 self.drive(r).await;
             } else {
@@ -289,6 +302,7 @@ impl InferState {
             Some(Target::Local { .. }) => json!("local"),
             Some(Target::Remote { node_id }) => json!({"remote": node_id}),
             Some(Target::Svc { topic, .. }) => json!({"svc": topic}),
+            Some(Target::Hosted { route }) => json!({"remote": route.base_url}),
             None => Value::Null,
         };
         let (wanted, started, reason) = {
@@ -297,7 +311,14 @@ impl InferState {
         };
         let managed = r.managed.is_some() || r.cfg.mode.as_deref() == Some("managed");
         let svc = r.cfg.svc.as_ref();
-        let state = if svc.is_some() {
+        let key_missing = r.cfg.remote.as_ref().is_some_and(|c| std::env::var(&c.api_key_env).unwrap_or_default().trim().is_empty());
+        let reason = match &r.cfg.remote {
+            Some(c) if key_missing => Some(format!("environment variable {} is not set", c.api_key_env)),
+            _ => reason,
+        };
+        let state = if r.cfg.remote.is_some() {
+            if key_missing { "waiting" } else { "serving" }
+        } else if svc.is_some() {
             if serves.is_null() { "waiting" } else { "serving" }
         } else if managed {
             match (&reason, started) {
@@ -316,9 +337,9 @@ impl InferState {
         };
         json!({
             "role": r.cfg.role,
-            "mode": if svc.is_some() { "svc" } else if managed { "managed" } else { "adopted" },
+            "mode": if r.cfg.remote.is_some() { "remote" } else if svc.is_some() { "svc" } else if managed { "managed" } else { "adopted" },
             "svc": svc.map(|s| json!({"topic": s.topic, "model": s.model})),
-            "flavor": if svc.is_some() { "svc" } else { r.spec.runtime.id() },
+            "flavor": if r.cfg.remote.is_some() { "remote" } else if svc.is_some() { "svc" } else { r.spec.runtime.id() },
             "model": r.spec.model,
             "instance_port": r.spec.serve.port,
             "memory_gb": r.spec.memory.weights_bytes as f64 / 1e9,

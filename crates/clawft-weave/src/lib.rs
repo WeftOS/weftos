@@ -190,6 +190,10 @@ pub mod infer_managed;
 #[cfg(all(feature = "placement", unix))]
 pub mod infer_rpc;
 #[cfg(all(feature = "placement", unix))]
+pub mod infer_remote;
+#[cfg(all(feature = "placement", unix))]
+pub mod infer_resolve;
+#[cfg(all(feature = "placement", unix))]
 pub mod infer_svc;
 #[cfg(all(feature = "placement", unix))]
 pub mod infer_wire;
@@ -199,6 +203,8 @@ pub(crate) mod infer_wire_tests;
 mod infer_managed_tests;
 #[cfg(all(test, feature = "placement", unix))]
 mod infer_cfg_tests;
+#[cfg(all(test, feature = "placement", unix))]
+mod infer_remote_tests;
 #[cfg(all(test, feature = "placement", unix))]
 mod infer_svc_tests;
 #[cfg(all(test, feature = "placement", unix))]
@@ -212,6 +218,13 @@ mod agent_sources_mesh_tests;
 pub mod expose_rpc;
 pub mod expose_set;
 pub mod expose_rt;
+/// ADR-126 S1: the object store wired to exposure, activity log and chain.
+pub mod store_rt;
+pub mod store_ingest;
+pub mod store_watch;
+pub mod store_svc;
+/// ADR-126 S1: `store.*` operator verbs.
+pub mod store_rpc;
 pub mod node_facts_rpc;
 /// Operator location labels for the fleet manager (site and room per node).
 pub mod agent_install;

@@ -1302,7 +1302,19 @@ pub async fn run(
                 Arc::new(move |k: &str, v: serde_json::Value| a.record(k, v)) as clawft_kernel::exposure::AuditFn
             });
             let home = clawft_types::runtime_paths::home_dir();
-            crate::expose_rt::start(&daemon_identity.node_id, &runtime_dir, home.as_deref(), audit_fn).await;
+            let reg = crate::expose_rt::start(&daemon_identity.node_id, &runtime_dir, home.as_deref(), audit_fn.clone()).await;
+            // ADR-126 S1: the object store, with this node's own store created.
+            match crate::store_rt::start(&daemon_identity.node_id, &runtime_dir, reg, audit_fn) {
+                Ok(svc) => {
+                    // Refusals RustFS logs (off unless WEFTOS_STORE_RUSTFS_LOG names its log file), and the suspension rule.
+                    crate::store_watch::start_from_env(&svc);
+                    // Direct-S3 activity: RustFS's audit and notification posts (off unless WEFTOS_STORE_INGEST_ADDR is set).
+                    if let Err(e) = crate::store_ingest::start_from_env(svc, &runtime_dir).await {
+                        error!(error = %e, "store ingest receiver not started");
+                    }
+                }
+                Err(e) => error!(error = %e, "object store not started"),
+            }
         }
         let parts = crate::infer_wire::InitParts {
             dir: &runtime_dir,
@@ -6568,6 +6580,10 @@ async fn dispatch(
         // ADR-120: the exposure registry (list, switch, log).
         "expose.list" | "expose.set" | "expose.off_all" | "expose.log" => {
             crate::expose_rpc::handle(method.as_str(), params).await
+        }
+        // ADR-126: the object store (stores, grants, promote, archive).
+        "store.ls" | "store.create" | "store.grant" | "store.revoke" | "store.promote" | "store.archive" | "store.put" | "store.get" => {
+            crate::store_rpc::handle(method.as_str(), params).await
         }
         // ADR-122: the cog data plane broker's topics.
         #[cfg(all(feature = "placement", unix))]

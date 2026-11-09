@@ -198,6 +198,11 @@ pub async fn install_with(
             if let Err(e) = crate::cogbus_npu_facts::attach(&rt.broker) {
                 tracing::warn!(error = %e, "npu service state will not appear in node facts");
             }
+            // ADR-126: cogs reach the object store through `svc.store/<node>`.
+            match crate::store_svc::attach(&rt.broker, rt.broker.node_id()) {
+                Ok(true) | Ok(false) => {}
+                Err(e) => tracing::warn!(error = %e, "the object store is not offered to cogs"),
+            }
             let mut reg = Registrar::for_runtime(&rt);
             reg = reg.with_container(container, Some(rt.socket_report().gid));
             if let Some(s) = sink {

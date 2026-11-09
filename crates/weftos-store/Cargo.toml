@@ -1,0 +1,28 @@
+[package]
+name = "weftos-store"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "Mesh object store (ADR-126): name-to-bucket mapping, grants, governed access, audit. No kernel dependency."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+blake3 = { workspace = true }
+ulid = { workspace = true }
+# RustFS transport (ADR-126 S1, owner-approved 2026-11-07): S3 data plane + admin API over HTTP,
+# SigV4-signed with the workspace hmac/sha2.
+reqwest = { workspace = true, features = ["blocking"], optional = true }
+hmac = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+
+[features]
+default = []
+rustfs = ["dep:reqwest", "dep:hmac", "dep:sha2"]
+
+[dev-dependencies]
+tempfile = { workspace = true }

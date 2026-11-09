@@ -80,6 +80,9 @@ enum Commands {
     /// What this node exposes to the mesh: list, on, off, pause, log (ADR-120).
     Expose(commands::expose_cmd::ExposeArgs),
 
+    /// The mesh object store: ls, create, grant, revoke, promote, archive (ADR-126).
+    Store(commands::store_cmd::StoreArgs),
+
     /// Inference placement: status, expose (ADR-101).
     Infer(commands::infer_cmd::InferArgs),
 
@@ -219,6 +222,7 @@ async fn async_main() -> anyhow::Result<()> {
         Commands::Expose(args) => commands::expose_cmd::run(args).await?,
         Commands::Infer(args) => commands::infer_cmd::run(args).await?,
         Commands::Cogbus(args) => commands::cogbus_cmd::run(args).await?,
+        Commands::Store(args) => commands::store_cmd::run(args).await?,
         Commands::Route(args) => commands::route_cmd::run(args).await?,
         Commands::Chain(args) => commands::chain_cmd::run(args).await?,
         Commands::Custody(args) => commands::custody_cmd::run(args).await?,

@@ -51,3 +51,47 @@ path        = "**/Cargo.toml"
 pattern     = 'weftos-pq-sign([[:space:]]*=|\])'
 reason      = "ADR-129: in-tree ML-DSA-65 dual-signing crate"
 approved_by = "owner"
+
+# Approved by the owner on 2026-11-05 for the ADR-101 remote inference role.
+[[approval]]
+rule        = "net"
+path        = "crates/clawft-kernel/src/infer_proxy/hosted.rs"
+pattern     = "*"
+reason      = "ADR-101 remote role: hosted-API URL/header handling; key read from api_key_env"
+approved_by = "owner"
+
+[[approval]]
+rule        = "net"
+path        = "crates/clawft-kernel/src/infer_proxy/upstream.rs"
+pattern     = "reqwest::RequestBuilder"
+reason      = "ADR-101 remote role: shared upstream request builder"
+approved_by = "owner"
+
+[[approval]]
+rule        = "net"
+path        = "crates/clawft-kernel/src/infer_proxy/tests_hosted.rs"
+pattern     = "*"
+reason      = "loopback-only test listener"
+approved_by = "owner"
+
+# Approved by the owner in chat on 2026-11-07 for ADR-126 S1 (RustFS S3 + admin transport).
+[[approval]]
+rule        = "net"
+path        = "crates/weftos-store/src/rustfs.rs"
+pattern     = "reqwest::blocking::Client"
+reason      = "ADR-126 S1: blocking HTTP client for the RustFS S3/admin endpoints, SigV4-signed"
+approved_by = "owner"
+
+[[approval]]
+rule        = "net"
+path        = "crates/weftos-store/src/rustfs.rs"
+pattern     = "reqwest::Method::from_bytes"
+reason      = "ADR-126 S1: HTTP method for the signed RustFS requests"
+approved_by = "owner"
+
+[[approval]]
+rule        = "new-dep"
+path        = "crates/clawft-weave/Cargo.toml"
+pattern     = 'weftos-store[[:space:]]*='
+reason      = "ADR-126 S1: the daemon depends on weftos-store with the rustfs feature"
+approved_by = "owner"

@@ -172,6 +172,24 @@ async fn a_placed_role_is_served_through_the_stable_proxy() {
 }
 
 #[tokio::test]
+async fn a_proxy_port_freed_soon_after_boot_is_still_taken() {
+    // A restart right after a stop: the old daemon still holds the port briefly.
+    let up = fake().await;
+    let holder = fake().await;
+    let port = holder.addr.port();
+    let dir = tempfile::tempdir().unwrap();
+    write_cfg(dir.path(), serde_json::json!({"roles": [role(up.addr.port(), Some(port))]}));
+    let release = tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+        holder.task.abort();
+    });
+    let (st, _) = build(parts(dir.path(), None, false, None)).await.unwrap().unwrap();
+    release.await.unwrap();
+    let state = st.roles[0].proxy.lock().unwrap().clone();
+    assert!(matches!(state, ProxyState::Listening(a) if a.port() == port), "{state:?}");
+}
+
+#[tokio::test]
 async fn a_server_that_is_not_up_yet_is_picked_up_on_a_later_pass() {
     let dir = tempfile::tempdir().unwrap();
     // Reserve a port, then bring the fake up on it only after the first pass.

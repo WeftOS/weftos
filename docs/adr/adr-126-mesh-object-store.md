@@ -4,6 +4,7 @@
 - **Updated**: 2026-10-29 (§4's worktree overlay is re-expressed as RVF layers and branch metadata in ADR-128)
 - **Updated**: 2026-10-29 (S0 spike applied on PG and run; results in "S0 results"; open question 1 answered: import, not in place; §6 amended: the activity log must take RustFS's own log as well as its audit stream)
 - **Updated**: 2026-10-30 (ADR-130 adds a GCS seed bucket as the tier above this store; this store becomes the optional L1 staging tier)
+- **Updated**: 2026-11-07 (S1 built on `feat/adr126-s1`: `weftos-store` crate, `weaver store`, daemon wiring, local-directory backend; RustFS S3 + admin transport added and verified against a throwaway RustFS 1.0.4, audit-stream and notification parsers fixed from captured records, `put_if_match`, release-store `append`/`sweep` roles; see "S1 status")
 - **Deciders**: owner
 - **Research**: `docs/research/rclone-shared-filesystem-2026-10-29.md` (rclone, RustFS,
   OpenDAL, governance gaps). Board card `3605565e`.
@@ -221,6 +222,288 @@ policy covers only `s0-spike`.
 Not tested: bucket notifications (not configured in the spike), and erasure coding and
 replication (single drive).
 
+## S1 status (2026-11-07)
+
+Built: name-to-bucket mapping, grants (recorded on the chain, pushed into the backend as access
+keys and IAM policies), the exposure per store (`store.<bucket>`, ADR-120), governed
+get/put/head/delete/list with every request and refusal in the exposure activity log, parsers for
+RustFS audit, `s3_authorization_denied` log lines and bucket notifications, promote, archive, and
+`weaver store ls|create|grant|revoke|promote|archive|put|get`. The daemon creates its node store at
+start. Tests: `weftos-store` (32) and the `store` tests in `clawft-weave`.
+
+**RustFS transport (2026-11-07, owner approved the HTTP client and the `weftos-store` dependency):**
+`RustfsBackend` (feature `rustfs`, `crates/weftos-store/src/rustfs.rs`, `sigv4.rs`) implements both
+traits over blocking HTTP with SigV4 signed by the root credential: the S3 data plane (put with
+`If-None-Match`, get, head, delete, copy, list v2 with paging, buckets and tags) and the admin API
+(`/rustfs/admin/v3`: add-user, set-user-status, add-canned-policy, set-user-or-group-policy,
+remove-user, remove-canned-policy). The daemon selects it when `WEFTOS_STORE_RUSTFS_ENV` names an
+env file (`MESH_S3_ENDPOINT`, `MESH_S3_ACCESS_KEY`, `MESH_S3_SECRET_KEY`, optional `MESH_S3_REGION`);
+each principal's key id is `wk-<16 hex of blake3(principal)>` and its secret is kept 0600 under
+`<runtime dir>/store-secrets/`. It is called from blocking contexts only (the weave verbs already
+use `spawn_blocking`; start-up runs it on a plain thread).
+
+Verified against a throwaway RustFS 1.0.4 on loopback (not PG), by `cargo test -p weftos-store
+--features rustfs -- --ignored` with `WEFTOS_STORE_TEST_RUSTFS_ENV` set:
+- object and bucket operations, paging past 1000 keys, tags, a 412 on a conditional put;
+- a scoped key is refused outside its bucket, and **a disabled key's next request is a 403**;
+  re-creating a key keeps its secret and its disabled state; no grants becomes a deny-all policy
+  (RustFS rejects a policy with no statements: HTTP 500);
+- the S1 done-when end to end: node and project stores, a cog's write in the activity log, and
+  disabling the grant refuses the next request at the service and at RustFS.
+
+Findings that shaped the code: creating a bucket the root already owns returns 200 (so
+`create_bucket` checks first); a bucket name needs 3 or more characters; headers such as
+`If-None-Match` must be signed; `ObjectMeta.etag` is the backend's etag (MD5 on RustFS, BLAKE3 on
+the local backends).
+
+Audit parsers: the `s3_authorization_denied` line was captured from RustFS 1.0.4 and the parser fixed
+to match (`action` is `S3Action(GetObjectAction)`, `object` can be `"None"`). **Audit stream and notifications verified (2026-11-08)** against a throwaway loopback RustFS 1.0.4, and the
+parsers match the captured records. The earlier "no record" runs failed because RustFS rejects loopback webhook endpoints unless
+`RUSTFS_OUTBOUND_ALLOW_ORIGINS=http://127.0.0.1:<port>` is set at start; targets must be named
+(`RUSTFS_AUDIT_WEBHOOK_ENABLE_<NAME>`, `..._ENDPOINT_<NAME>`, and the same for `NOTIFY`), and `RUSTFS_AUDIT_ENABLE=true` is
+still needed. The admin `set-config-kv` call silently drops `enable` and `endpoint` for audit targets, so it is not a way to
+configure them. Notifications additionally need a `PutBucketNotification` pointing at `arn:rustfs:sqs::<name>:webhook`. An
+audit post is `{"EventName","Key","Records":[{"event","trigger","api":{"name":"s3:PutObject","bucket","object","status_code",...},"accessKey",...}]}`
+with a plain object key and no size. A notification post is a standard S3 event record, also with `EventName` and `Key`, whose object key is
+percent-encoded. `parse_audit` was wrong before the capture (it returned `ObjectCreated:Put`, not `PutObject`) and now reads
+`Records[0].api`; `parse_notification` decodes the key. Not yet verified: batched posts (`batch_size` above 1), multipart and
+versioned operations, and `auth_token`. **Not yet done:** the daemon does not launch or configure RustFS (it is an external
+service), so setting those env names and issuing `PutBucketNotification` belongs to whoever deploys RustFS (Phase A):
+`docs/guides/rustfs-audit-deploy.md` is the runbook and `scripts/store/rustfs-audit-plan.sh` a dry run that prints it
+(`RustfsBackend::put_bucket_notification` is the call). **Conditional write (for S2).** `ObjectBackend::put_if_match(bucket, key, data, etag)` is a compare-and-swap (S3 `If-Match`): a
+changed key is `BackendError::Stale`, a missing key is `NoObject`. The service has `StoreService::put_if_match(who, store,
+key, data, etag)` (gated and logged like `put`), `svc.store` takes `"if_match": "<etag>"` on `put` (`store.v1`, not with
+`if_none_match`), and RustFS gets `If-Match`. Take the etag from the last `head` or `put` result of the same backend
+(opaque: MD5 on RustFS, BLAKE3 locally), and on `Stale` read again and retry. The local backend serialises swaps within the
+daemon process; across processes only RustFS is atomic. S2 should use this instead of unconditional `put` for any
+read-modify-write.
+
+**CI and sweeper roles (release stores).** Two narrow access levels exist besides read, write and admin: `append` (get, head,
+list, and a put that must carry `if_none_match`, so nothing is overwritten; no delete or copy) and `sweep` (get, head, list and
+delete; no put). A new release store gets the well-known principals `agent:ci` as `append` and `agent:store-sweeper` as
+`sweep` by default (`weaver store grant <name> <principal> append|sweep`). Proven live on a throwaway RustFS 1.0.4: the `append` key can read and list, and is refused put, copy and
+delete when used straight against RustFS; the `sweep` key reads, lists and deletes and is refused put. RustFS IAM cannot state
+write-once (it rejects the `s3:if-none-match` condition key, and a plain PutObject allow lets a key overwrite or copy over an
+object), so CI's writes go through the daemon, which makes them `If-None-Match: *` with its own key and refuses an overwrite,
+copy or delete for an `append` principal. A CI job therefore writes artifacts through `store.put`/`svc.store` or a daemon-side
+client, not with an S3 SDK and its own key. Immutability on the backend itself and retention are S4's. Readers of a release store (the project's
+members) are named when the store is made.
+
+**Object Lock (for S4), proven live on a throwaway RustFS 1.0.4 (2026-11-08).** `AdminBackend::create_locked_bucket` makes a bucket with
+`x-amz-bucket-object-lock-enabled` (versioned; chosen only at creation; the local backends answer `Unsupported`).
+`ObjectBackend::put_locked(bucket, key, data, &PutOpts{if_none_match, retention: Some(Retention{mode: Governance|Compliance, until_unix_s}), legal_hold})`
+sends the retention and legal-hold headers and returns the written `version_id`; `delete_version(bucket, key, version_id, bypass_governance)`
+and `put_legal_hold(.., on)` act on one version. Seen on RustFS: a bucket made without lock refuses lock headers; a locked
+version's delete is refused with `AccessDenied` under COMPLIANCE (bypass does not help), under GOVERNANCE (without bypass), and
+under a legal hold until it is lifted; a past retain-until date is refused before sending. At the service: `create_locked_store(name,
+actor, parties)`, `is_locked(name)` and `put_locked(who, store, key, data, &opts)` (gated and logged like `put`; an `append` principal must
+set `if_none_match`; a store not made locked refuses it). **Listing versions (for S4's replaced-manifest check, live 2026-11-08):**
+`ObjectBackend::list_versions(bucket, prefix)` and `StoreService::list_versions(who, store, prefix)` (needs read, logged as a list)
+return every version and delete marker as `ObjectVersion{key, version_id, is_latest, is_delete_marker, size, etag, last_modified}`, sorted
+by key and newest first. A manifest put once with `if_none_match` shows one entry; a later plain put under the same key shows a
+second, newer entry with a different `version_id` and `etag` (the first keeps the etag its put returned), so S4 compares the
+newest entry to what it recorded. Local backends answer `Unsupported`. Paging was checked by forcing a page of 7 over 30 keys.
+Read keys now carry `s3:ListBucketVersions`, and a Read key listed versions at RustFS. A plain delete (no version id) in a locked bucket,
+as the sweeper does, adds a delete marker: the listing shows the marker newest and the retained version beneath it, and a get answers
+not found. **Not covered:** default bucket retention (`PutObjectLockConfiguration`) and `PutObjectRetention` on an existing version are not
+implemented; `archive(delete)` of a locked store will fail on its retained versions; the key policy for `sweep` still allows only
+`s3:DeleteObject`, not `s3:DeleteObjectVersion`/`s3:BypassGovernanceRetention`, which is what you want for retained versions.
+
+**Owner decisions on the release roles (2026-11-08). Each is ready as a switch, tested both ways; the defaults are the safe choice.**
+
+| Decision | Switch | Off (default) | On | Cost of turning it on |
+|---|---|---|---|---|
+| Sweeper may put | `WEFTOS_STORE_SWEEPER_PUT=1` (`PolicyOpts.sweeper_put`) | sweeper key: read, list, `s3:DeleteObject` | adds `s3:PutObject` and multipart actions | the key can overwrite or copy over any artifact; in a locked store the overwrite adds a version and the retained one stays (live: 2 versions, delete of the original still refused) |
+| CI uploads straight to RustFS | `WEFTOS_STORE_CI_DIRECT_PUT=1` (`PolicyOpts.ci_direct_put`) | CI key: read only; uploads go through the daemon (`store.put` / `svc.store`), which makes them write-once | adds `s3:PutObject` to the `append` key | RustFS IAM cannot express write-once (it rejects `s3:if-none-match`), so the key can overwrite and copy as well as create; delete stays refused; again only a locked store keeps the original |
+| Receiver diff-gate approvals | none; owner appends `docs/guides/rustfs-store-ingest-approvals.draft.toml` to `config/diff-gate-approvals.toml` | gate fails on `net` (listener, test sockets) and `process` (live test spawns RustFS) | all store_ingest findings become "approved" (checked on a scratch copy) | the entries are narrow (this file, these patterns), no other finding changes |
+
+The switches widen only the direct S3 key; the service gate is unchanged (a sweeper `put` through the service is still refused, and an
+`append` put still has to be write-once). Set the env var in the daemon's environment, restart, and the daemon pushes the new policy to
+existing keys at start (`reconcile`); `StoreService::set_policy_opts` then `reconcile()` does the same at run time. Tested: policy unit
+test (off, each switch alone, back off), service test (backend key policy after reconcile, both ways), and a live test on a throwaway
+RustFS 1.0.4 that flips both switches over a locked release store. Recommendation: leave both off. A locked release store with CI
+uploading through the daemon gives write-once, retention and no overwrite path; each switch trades that for convenience.
+
+**Transport hardening (2026-11-08).** `BackendError::Unavailable` (with `is_transient()`) now means the backend, not the request, was the
+problem: no connection, or HTTP 408/429/500/502/503/504 after retries. 401 maps to `Forbidden`; a 400 stays `Io` and is not transient.
+`RustfsBackend` retries 3 tries in all with waits of 100 ms then 400 ms (`Retry{attempts, base}`, `with_retry`; waits grow fourfold, cap 5 s).
+It repeats only what is safe: a connection that never opened (any request), a 503/429/408 (the server says it did not act), and for
+reads and plain deletes also 500/502/504 or a dropped connection. A timed-out or dropped write is not repeated, nor a delete of a
+named version, since a repeat could add a second version in a locked store or turn a conditional create into a false "exists".
+Tested without sockets (decision table, wait schedule, unreachable port, status-to-error map). Not done: no circuit breaker, so a
+dead RustFS costs 3 quick tries per call; a timeout still holds a caller for the full 30 s.
+
+**S3/S4 pile (2026-11-08), one commit per slice, each with unit tests and a live test on a throwaway loopback RustFS 1.0.4.**
+
+| # | What | API | Seen on RustFS |
+|---|---|---|---|
+| 1 | Read back Object Lock config | `ObjectBackend::get_lock_config(bucket) -> LockConfig{enabled, default}`, `put_default_retention`, `StoreService::lock_config(store)` | plain bucket: `enabled:false` (404 `ObjectLockConfigurationNotFoundError`); locked: `enabled:true`; a default retention reads back and a put with no headers inherits it |
+| 2 | Lifecycle rules | `AdminBackend::put_lifecycle(bucket, &[LifecycleRule])` (empty list removes), `get_lifecycle`, `StoreService::set_lifecycle(store, rules, actor)` (chain `store.lifecycle`) / `lifecycle(store)`; rule = id, prefix, enabled, `expire_days`, `noncurrent_days`, `abort_multipart_days` | written and read back identically, no Content-MD5 needed; Object Lock still wins over an expiry |
+| 3 | Extend retention after commit | `get_retention`, `put_retention`, `extend_retention(bucket, key, version, until, mode)` (only lengthens, keeps the current mode), `StoreService::extend_retention(who, ..)` (the `append` role may call it: it only adds protection) | an object put with no hold is stamped COMPLIANCE, lengthened, read back; RustFS refuses to shorten it even with bypass |
+| 4 | Multipart upload with lock headers | `create_multipart`/`upload_part`/`complete_multipart`/`abort_multipart`, `put_stream(bucket, key, reader, part_size, &PutOpts)` (8 MiB parts, one part in memory), `StoreService::put_stream(who, store, key, reader, &opts)` | 11 MiB in three parts, retention applied to the finished object, bytes identical, `If-None-Match` enforced at complete, abort leaves nothing; the 512 MiB whole-body limit no longer applies; local backends still read it whole and refuse lock options |
+| 5 | Retire a node on unpair | `StoreService::retire_node_store(node_store, actor)` and RPC `store.node.retire`: archives the store, records the id as retired (persists), `create_store`/`ensure_store` refuse it | data lands in the archive bucket, grants off, id refused |
+| 7 | Dead RustFS | `Breaker{threshold 5, cooldown 10 s}` (`with_breaker`, `breaker_open`), `with_timeout(d)` view sharing the breaker | after 5 failed-to-connect requests in a row calls fail at once with `Unavailable("circuit open")` for the cooldown, then one probe; any HTTP answer (403, 404, 500) closes it |
+
+Slice 6 (S3's ask) is in `clawft-kernel`, not the store: the exposure activity log (`ActivityLog`) did `next_seq + 1` unchecked, a panic in
+debug and a wrap to 0 in release at `u64::MAX`, and `open()` did `last.seq + 1` on a file, so a log whose last record was `u64::MAX` could not be opened. Now `u64::MAX` is a
+usable last number; after it, `append` keeps nothing, returns the record with `seq` `u64::MAX` and an empty `hash`, counts it in `dropped()`
+and logs once; `is_exhausted()` says so; `open()` of such a file opens exhausted; and `verify` rejects a sequence that repeats or steps back.
+Reaching it takes 1.8e19 appends, so this is a guard against a damaged or hostile file, not an expected state.
+
+Notes: `put_stream` through the service logs the real size. A multipart part PUT is retried (same part number replaces the part); nothing
+else that writes is. The breaker counts only "could not reach RustFS" (no connection, timeout, 502-504), not a 500 or 429.
+
+**Follower wake hook in the receiver (S2's ask, 2026-11-08).** `store_ingest::WakeSink::notified(store, bucket, body)` is called after a bucket
+notification has been logged, once per store of this daemon whose bucket the body names (other buckets, the audit stream, bad bodies and wrong
+tokens never reach it; a panic in the sink is caught and does not change the answer to RustFS). Pass one with `serve_with` /
+`start_from_env_with`; the daemon passes none yet. `weftos_store::wake::registry_hints` lives on S2's branch, not here, so the sink is the
+seam: after the two branches merge, S2's implementation is `fn notified(&self, _store, bucket, body) { let h = registry_hints(body, bucket);
+if !h.is_empty() { /* publish a wake on the project's relay topic */ } }`. The relay hop itself is the mesh transport card and is not started.
+
+**Grant event sequence: where it is stamped and what bound applies (decision for the chain owner to confirm, 2026-11-08).** S3's review found
+that the `seq = u64::MAX` freeze was not closed: my earlier guard covered the exposure activity log, a different sequence, and the ledger that
+S3 feeds from the chain (`GrantLedger::apply` ignores any event with `seq <=` the last applied) would stop applying all later events,
+revocations included, after one event claiming a huge `seq`. The decision, in `weftos_store::grant_seq` and `StoreService`:
+
+1. **Stamped by `StoreService`, the one writer of grant changes**, not by the chain feed and not by the consumer. A counter `grant_seq` is
+   part of the saved state and goes up by exactly one for each event that changes what a principal may do: `store.grant`, `store.revoke`,
+   `store.grant.enable`, `store.grant.disable`, `store.principal.suspend`, `store.principal.resume`, `store.close` (all grants of a store
+   went off at the start of an archive), `store.archive`, `store.node.retired`. It starts at 1, is gapless, is saved before the event is
+   recorded, and is never reused after a restart.
+2. **Stamped under the same lock as the change, and recorded to the chain before that lock is released**, so the order of the numbers is the
+   order the changes were made and the order the chain sees them (two threads cannot record 6 before 5). The `ChainSink` therefore must be quick
+   and must not call back into the service. A test makes 200 grants from 8 threads and requires the chain to see 1..=200 in order; moving the record out of
+   the lock fails it.
+3. **Upper bound on issuing: `CEILING = 2^62`.** At the ceiling every grant-affecting call is refused with a clear error before it changes anything; a state
+   file that claims a `grant_seq` above it is refused at open as damaged.
+4. **Bound on accepting, for every consumer: `grant_seq::admit(last, seq)`** is `last < seq <= last + MAX_GAP` and `seq <= CEILING`, with
+   `MAX_GAP = 1_000_000`. A forged or corrupt `seq` far ahead is refused without moving `last`, so the next honest event (`last + 1`) still applies.
+   The gap is allowed because a consumer may legitimately miss events (a feed filtered to its own principals, or an outage it repairs); 10^6
+   is far above any real burst and far below the ceiling. The bound limits the harm of a forgery that slips under it to at most `MAX_GAP` honest events being treated as stale, not a permanent freeze. A consumer that is refused must resync from a snapshot, not widen the bound.
+   For S3: `MaxSeqJump(MAX_GAP)` is the same rule except for the ceiling, so install `set_seq_guard` with a guard that calls `admit`, by default,
+   and again after every `restore`. S3's edge-creds crate does not depend on `weftos-store`, so the two numbers may be copied; they are public constants.
+
+What is NOT closed here: S1 stamps and bounds; whoever builds the chain feed must carry `seq` through (the field is in the chain payload now),
+and the ledger must install the guard. Events recorded before this change have no `seq`. Reasoning for the chain owner to confirm: a bound only
+at the consumer is not enough (a forged value just under it moves `last` far ahead and the ledger then accepts nothing honest until it passes that
+value), so the stamp must come from one trusted writer and be gapless, and the consumer's bound is then a check that the writer's promise holds.
+
+**S3 review of the S1 commits, fixes (2026-11-08).** HIGH 1 (retire after a cut-short archive reported success): `archive` now records when it
+started and whether it finished (`archive_ts`, `archive_done`, `archive_count` on the store record), so a retry resumes under the same archive keys, and
+`retire_node_store` returns `Ok` only when every object is copied, with the real count on a repeat. HIGH 2: see the grant event sequence above.
+Also fixed from the same review: the breaker no longer counts a timeout from a short `with_timeout` view (the caller's impatience is not news
+about RustFS), frees a probe slot after a local fault without closing the breaker, and gives up on a probe that never reports back after one cooldown;
+the retired-id check in `create_store` is repeated under the lock that records the store (a retire landing in between wins, and the bucket just made is
+removed); an `append` principal's `extend_retention` is capped at `APPEND_MAX_RETENTION_S` (5 years), since a Compliance hold cannot be undone by
+anyone (write and admin are not capped; the cap is a policy number for Mathew to change); retain-until dates past year 9999 are refused before sending and `parse_iso`
+rejects years outside 1970..=9999 and impossible days (Feb 31); `put_stream` on a backend without multipart refuses over 512 MiB and clamps `part_size` to 5 MiB..1 GiB.
+Not changed: a failed `abort_multipart` after a failed upload is still silent (the upload is orphaned until the `abort_multipart_days`
+lifecycle rule removes it, so set that rule on stores that stream large objects); the review's default-build note stands (`--features rustfs` is needed to
+compile and test `rustfs.rs`).
+
+**Archive retention (S1, for node, project and release stores; 2026-11-08).** Worktree archives are S2's (`store worktree gc --archive-keep-days`). For the rest,
+`StoreService::archive_gc(&ArchiveKeep{node_days, project_days, release_days}, confirmed, actor)`, RPC `store.archive.gc`, CLI `weaver store archive-gc
+[--node-days N] [--project-days N] [--release-days N] [--confirmed]`:
+- **Nothing expires unless a number of days is given for that kind**: an archive is recovery data, as with S2's default. Zero days is refused (it
+  would delete an archive the moment it was made).
+- **A dry run unless `confirmed`**; the report lists each expired set (bucket, kind, age in days, objects, bytes), what was kept, and what was left alone.
+- **Whole sets only.** The archive bucket keys are `<bucket>@<archive ms>/<key>`; a set is one archive of one store. A set is deleted when its age is at least
+  the days for its kind, never partly, and a half-deleted set is finished by the next run. Worktree sets (`w-`), unknown prefixes and keys that are not archive keys are
+  never touched (counted as `not_ours`).
+- **An archive that is still being written is never deleted**, however old: a store record with `archived` set and `archive_done` false protects the set
+  whose start time it holds (found by a mutation test).
+- A deleting run records `store.archive.gc` on the chain (not a grant event, no `seq`). The store record, and the live bucket of a store archived but not deleted,
+  are not the archive's to remove and are untouched.
+Not done: no schedule (an operator or a timer runs it), and no per-store override. The one question left for Mathew is the numbers; none is set.
+
+**Archive retention, scheduled and per store (S1, 2026-11-08).** Both are off and carry no day numbers; the numbers stay the owner's call.
+- **Per-store override.** `set_archive_keep(store, Some(Days(n)) | Some(Forever) | None)`, RPC `store.archive.keep {name, days? | forever?}` (neither clears it), CLI
+  `weaver store archive-keep <name> [--days N | --forever]`. It beats the kind's limit in both directions (shorter, longer, or exempt) and works when the kind has no limit.
+  Zero days, an unknown store and worktree stores (S2's) are refused. It lives on the store's record (saved with the rest) and is a chain event, `store.archive.keep`.
+- **Schedule.** Off unless `WEFTOS_STORE_ARCHIVE_GC_EVERY_HOURS` is set (at least 1). The days come only from `WEFTOS_STORE_ARCHIVE_{NODE,PROJECT,RELEASE}_DAYS` (a kind left out
+  keeps for ever). Unless `WEFTOS_STORE_ARCHIVE_GC_CONFIRM` is `1`/`true`/`on`, a scheduled run only reports (to the daemon log). The first run is one interval after start
+  (the last-run time is in memory); a failed run is retried at the next interval, not in a loop; a due run with no day numbers and no override does nothing, not even a listing.
+  A bad value is logged and leaves the schedule off, it does not stop the daemon. Scheduled deletes are chain events with `actor: "schedule"`.
+
+**Owner decision, 2026-11-08 11:21 ET: nothing expires yet.** Archive retention stays at its default (no expiry). The schedule stays off, no day numbers are set anywhere, and nothing is scheduled to delete archives; `archive_gc` and the per-store override exist for when the owner sets numbers.
+
+**The daemon now has the receiver** (`clawft-weave/src/store_ingest.rs`, 2026-11-08): a loopback HTTP listener, off unless
+`WEFTOS_STORE_INGEST_ADDR` is set, POST only, 1 MiB cap, authenticated by a 256-bit secret in the URL path
+(`store-ingest-token`, 0600; the URLs are written to `store-ingest-urls`), because RustFS's webhook `auth_token` is unverified.
+It feeds `ingest_audit_line` and `ingest_notification`, which now drop records for buckets that are not the daemon's stores and
+the daemon's own root-key requests (already logged on the governed path), so a record reaches the activity log only if it came from a
+principal's own key. Notifications still invalidate caches whoever wrote. Verified end to end against a throwaway
+RustFS (`live_a_request_straight_to_rustfs_reaches_the_activity_log`, `--ignored`, `WEFTOS_STORE_TEST_RUSTFS_BIN`): a put made
+straight to RustFS with a cog's key shows as that cog's `PutObject` (audit) and a notification event. Not wired yet: attaching
+`PutBucketNotification` to buckets automatically when a store is created (the runbook does it by hand). Reading `rustfs.log` for
+refusals is wired (see the close-out findings below).
+
+**Adversarial review of S1 (2026-11-08), fixed:** a grant change saved but not pushed (RustFS down, a crash between the two)
+is now made good by `StoreService::reconcile()` at daemon start, and backend pushes are serialised per service so an older snapshot
+cannot undo a newer policy; a bucket made but never recorded is adopted when its tags are the store's own (a foreign bucket still
+refuses); an archived store's grant cannot be switched back on; `svc.store get` checks the size before reading the object; the
+cog service startup no longer lists objects on the async runtime; `weaver store put|get --as` now leaves a `store.as` chain
+record naming the operator. **Known and not fixed:** `archive` can lose an object put by a request that passed the gate just
+before it; listings and `FsBackend` etags read whole files (the local backend is the development path); a mesh-id change
+renames the stores' `weftos://` names (the bucket names do not move; the migration is F17 below); `project add`'s store hook
+joins a blocking thread; (the receiver now authenticates and drops unknown buckets; see above).
+
+**Close-out findings F2, F9, F15, F16, F17, F18 (2026-11-08, owner order of 15:00), fixed on `feat/adr126-s1`:**
+- **F2** Every grant change (grant, revoke, enable, disable, suspend, resume, archive's close) runs under one lock with its
+  backend push. The chain event and activity lines are recorded only after the push succeeded; a change whose push failed
+  stays saved (the service enforces it at once) with its events pending, and doing the same change again or `reconcile`
+  (at start, and covering suspended and pending principals) finishes it and records it once. A repeated revoke no longer
+  answers "holds no grant" while its push is outstanding. `ensure_store` on an existing store re-pushes its principals.
+- **F9** The audit and notification receivers (path-secret authenticated, `WEFTOS_STORE_INGEST_ADDR`) were already called by
+  the daemon; new: the daemon follows RustFS's own log (`WEFTOS_STORE_RUSTFS_LOG`) into `ingest_log_line`, which now reads both
+  `s3_authorization_denied` and `SignatureDoesNotMatch` / `InvalidAccessKeyId` (the latter carry no account or bucket in
+  RustFS 1.0.4, so they are logged as an unattributed `Authenticate` refusal and cannot suspend anyone). A principal whose own
+  key is refused 20 times in 60 s (`WEFTOS_STORE_DENIAL_RULE=off|<max>/<s>`) is suspended through `suspend_principal`.
+  Field names: the denial and signature lines are real RustFS 1.0.4 lines; the audit and notification bodies are exercised by
+  the live test against a real RustFS (`live_a_request_straight_to_rustfs_reaches_the_activity_log`). Not validated: a
+  production (photo-gallery) log, which was not read.
+- **F15** `RustfsConfig` `Debug` redacts both root keys; the secrets directory is 0700 (a loose one of ours is tightened, another
+  user's is refused); the secret's temp file is `create_new` 0600; plain `http://` is accepted only to a loopback host.
+- **F16** SigV4 is checked against four AWS-documented canonical requests and signatures; every bucket string goes through
+  `check_bucket`; a CopyObject `200` with an `<Error>` body is an error and the body must be a `CopyObjectResult` that agrees with the
+  destination. Integrity: puts send `x-amz-checksum-sha256` (RustFS refuses a wrong one); a read is checked against Content-Length and
+  the stored SHA-256, else the single-part ETag (MD5), else reported `Unverified` (multipart ETags prove nothing about content).
+- **F17** The bucket is the store's identity. A second name for one bucket is refused; `ensure_store` and the daemon at start move
+  a `local` store to its mesh-id name (record, grants, retired mark, pending events, exposure) with one stamped `store.migrate`
+  event. Node store tokens must be the clean id (`pg.1` and `pg-1` no longer share `n-pg-1`). This is not the `n-<id>` to `node-<id>`
+  bucket rename, which stays an open owner decision.
+- **F18** `store.promote` refuses an empty, unclean or reserved (`.wt/`, `worktrees/`) prefix, never copies a reserved-area object,
+  and refuses a worktree that holds overlay state under `.wt/`, so S2's landing path and its conflict check cannot be bypassed.
+
+**S1 done-when rerun at the tip after F2/F9/F15-F18 (2026-11-08, `1153af0a`).** Against a throwaway
+RustFS 1.0.4 container (`docker.io/rustfs/rustfs:1.0.4`, podman, loopback `127.0.0.1` only, tmpfs data, root
+key made for the run; not the PG or photo-gallery RustFS). Commands: `cargo test -p weftos-store --features
+rustfs --lib -- --ignored --test-threads=1` and `cargo test -p clawft-weave --features weftos-store/rustfs
+--lib live_ -- --ignored --test-threads=1`, with `WEFTOS_STORE_TEST_RUSTFS_ENV` naming the throwaway env file.
+- `weftos-store`: 16 of 16 live tests pass in 27.05 s (34 s wall including the test-binary build).
+  This includes `live_service_done_when` (node and project stores; a disabled grant refused at the service and
+  at RustFS), the scoped-then-disabled key (a disabled key's next request is a 403), `put_if_match`, the
+  release roles, Object Lock, versions, multipart, and the F16 checksum and CopyObject check.
+- `clawft-weave`: `live_rustfs_backs_the_daemon_service` (node store through the daemon service) and
+  `live_a_cog_uses_svc_store_on_rustfs_and_a_disabled_grant_is_refused` (a cog's write appears in the
+  activity log; disabling its grant refuses the next request at the service and at RustFS) pass, 0.81 s for both
+  (72 s wall, mostly compiling).
+- Not part of this run: `live_a_request_straight_to_rustfs_reaches_the_activity_log` needs a local `rustfs`
+  binary (`WEFTOS_STORE_TEST_RUSTFS_BIN`), not a container, so it was not run here (it passed earlier on
+  the binary); `conv_postmortem::live_postmortem_distills_durable_fact` needs Hermes :8090 and is not S1; it
+  failed because that endpoint is not available.
+
+**Touch point with the Mac-side S3/drive work.** The additive `put_if_match` / `delete_if_match` default
+methods on the backend trait (`wt/adr126-s3-drive`, `2c43a95c5..1cade20f8`) touch S1's `backend.rs`.
+`ObjectBackend::put_if_match` already exists here as a *required* method (`backend.rs`, implemented by the
+RustFS, local-directory and in-memory backends, and by the two test backends in `backend_tests.rs` and the
+`Flaky` backend in `service_tests.rs`); there is no `delete_if_match`. Signature identical (confirmed against
+`1cade20f8`, per the owner's check of `backend.rs` in the Mac repo). At merge: one declaration of
+`put_if_match` (S1's, required), S1's implementations stand, and the `delete_if_match` default comes in
+unchanged. One detail to settle at merge: the Mac defaults return `BackendError::Unsupported` bare, while
+S1's `BackendError::Unsupported` carries a message (`Unsupported(String)`), so the `delete_if_match` default
+needs `Unsupported("conditional delete".into())` here.
+
 ## Consequences
 
 - **Gains:**
@@ -243,7 +526,8 @@ replication (single drive).
    2026-10-29: yes. Anyone with read access is assumed to see all of a store's metadata with a
    single read, so listings don't need an audit line. Multipart part uploads do, and so do refusals
    and bad signatures. Whether RustFS can be extended to cover them is under study.
-2. How long do archived buckets (from a removed worktree, project or node) live before
-   they're deleted?
-   Answered 2026-11-08: archives do not expire.
+2. ~~How long do archived buckets (from a removed worktree, project or node) live before
+   they're deleted?~~ Answered by the owner 2026-11-08: archives do not expire. S1 carries it as a
+   setting, not a number (see "Archive retention"): the default is for ever; the operator names days
+   per kind of store.
 3. Do cloud agent sessions get write access to worktree stores, or only read?

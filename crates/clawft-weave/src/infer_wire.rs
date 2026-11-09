@@ -327,6 +327,7 @@ pub async fn build(p: InitParts<'_>) -> Result<Option<(Arc<InferState>, FileCfg)
         } else {
             (Arc::new(InferRuntime::new(InferConfig::adopted(r.spec.runtime))), None)
         };
+        crate::infer_remote::apply(r, &table);
         let px = crate::infer_managed::start_proxies(r, &table, &p).await;
         let (proxy, handle) = px.local;
         let (exposed_state, exposed_handle) = match px.exposed {

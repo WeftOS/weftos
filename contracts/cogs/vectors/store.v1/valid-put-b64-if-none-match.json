@@ -1,0 +1,7 @@
+{
+  "op": "put",
+  "key": "k.bin",
+  "b64": "AAEC",
+  "if_none_match": true,
+  "store": "weftos://local/projects/01HZX3K9Q5M2N7P8R4T6V0WABC/store"
+}

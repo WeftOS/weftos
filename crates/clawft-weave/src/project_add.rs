@@ -94,6 +94,8 @@ pub struct AddReport {
     pub run: RunKind,
     pub process_compose_port: Option<u16>,
     pub route: RouteOutcome,
+    /// The project's object store (ADR-126), when the daemon runs one.
+    pub store: Option<String>,
     /// Names only; `set_here` says whether this process's environment has them.
     pub env_vars: Vec<EnvVar>,
     /// What was not found or could not be done, in plain words.
@@ -151,6 +153,20 @@ pub fn finish(env: &InstallEnv, f: Finish<'_>) -> AddReport {
     if let Err(e) = crate::project_add_receipt::write(&receipts_dir(&env.home), &receipt) {
         notes.push(format!("could not record what was added ({e}); `weaver project remove` will not find it"));
     }
+    let store = match crate::store_rt::project_added(&f.ulid) {
+        Ok(s) => {
+            if s.is_some()
+                && let Err(e) = crate::store_svc::project_added(&f.ulid)
+            {
+                notes.push(format!("the project's store is not offered to its cogs on the data plane ({e})"));
+            }
+            s
+        }
+        Err(e) => {
+            notes.push(format!("the project's object store was not created ({e}); it can be made later"));
+            None
+        }
+    };
     let next = next_steps(f.slug, &det, &route);
     AddReport {
         slug: f.slug.to_owned(),
@@ -162,6 +178,7 @@ pub fn finish(env: &InstallEnv, f: Finish<'_>) -> AddReport {
         run: det.run.clone(),
         process_compose_port: det.pc_http,
         route,
+        store,
         env_vars: det.env_vars.clone(),
         notes,
         next,

@@ -2180,6 +2180,7 @@ dependencies = [
  "weftos-leaf-scene",
  "weftos-leaf-types",
  "weftos-scene-builder",
+ "weftos-store",
 ]
 
 [[package]]
@@ -11662,6 +11663,21 @@ dependencies = [
  "serde",
  "thiserror 2.0.18",
  "weftos-worldmodel-core",
+]
+
+[[package]]
+name = "weftos-store"
+version = "0.8.4"
+dependencies = [
+ "blake3",
+ "hmac",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "ulid",
 ]
 
 [[package]]
