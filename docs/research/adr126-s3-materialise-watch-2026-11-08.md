@@ -213,3 +213,125 @@ weaver store drive watch       --root <abs dir>
 Tests: `store_drive_tests.rs` (round trip with `conditional` reported, conflict and `resolve`, relative
 and protected paths refused, read-only refusal, secret skipped, wrong-store refusal, records) and
 `store_worktree_tests.rs` (wrapper forwarding).
+
+## Hardening 2026-11-08
+
+Branch `wt/adr126-s3-harden`, based on `a757fe2cc`. Targeted tests for the three risky paths, run
+against the in-memory and file backends and, ignored, against a throwaway RustFS 1.0.4 on loopback
+(console off, random credentials in a 0600 file, data on the internal disk). Nothing touched PG.
+Each scenario is one generic function (`tests_hardening.rs`, `tests_crash.rs`) called by both the
+in-process test and the live test (`live_hardening.rs`), so the two cannot drift apart. Device B is
+always a second drive directory driven through the same verbs.
+
+**1. A remote write racing a local edit.** B pushes a new version of `x`; A edits `x` before any
+pull. Covered in three orders, each with two files so both `resolve` directions run:
+- *`sync_up` first.* The store refuses the conditional put, the path becomes `both_modified`, the
+  remote copy lands as `x.remote-<8 hex>`, one `conflicts.jsonl` row per path. B's bytes are
+  untouched, A's edit is untouched, the later `sync_down` adds no row. `resolve` remote restores
+  B's bytes and uploads nothing for that path; `resolve` local makes the next `sync_up` a
+  conditional put against B's etag, and B's next pull converges.
+- *`sync_down` first.* Same records. The watch reports nothing for held-open paths and `sync_up`
+  uploads nothing.
+- *Inside the quiet period.* B lands between A's first poll and the report: `sync_up` is refused.
+  A pulls in the middle of the quiet period: the batch dissolves and nothing is uploaded.
+Result: behaviour was correct on both backends. RustFS honoured `If-Match` on every refusal.
+
+**2. Tombstone replace.** A deletes (create-only marker, names A and the deleted etag); B pulls and
+recreates (marker cleared); A's next pull restores `x`. A stale marker left next to the live key is
+never consulted: pulls keep the file and a new device materialises it. A stale device whose delete
+is for the old version gets `remote_modified_local_deleted`, the object stays, and the marker is
+untouched. B's second delete replaces the older marker with `If-Match` on RustFS (the live version
+of the in-memory test) and the marker then names B and the deleted version. A third recreate clears
+it again. Result: correct, no bug.
+
+**3. Watch restart after a crash.** The committed test runs `watch_once` and then `sync_up` on a
+thread against a wrapper backend that panics right after the Nth data write lands. The panic
+unwinds through `sync_up_with` without reaching its index save and without cleanup, so the store
+holds the completed writes and `index.json` is the one from before the batch, which is what a killed
+process leaves. A real SIGKILL version (the test binary re-executed as a child, parked after the
+Nth write, killed by the parent) was built first and passed on the file backend and on RustFS; it
+is in commits 7f4eac450 and cbabe7727. `scripts/diff-gate.sh` rejects new `std::process::Command`
+use, and approvals are the owner's, so the tip simulates the death in-process. Restoring the
+SIGKILL form needs a gate approval for `tests_crash.rs`. Batch in path order: modify f0, modify f1,
+delete f2, delete f3, create n0, create n1.
+- *Dies after 3 writes* (f2's delete landed, its tombstone did not). *Dies after 5* (n0's
+  create landed, the index was not saved).
+- `index.json` was intact both times: it is written to a temp file and renamed, so a death leaves the
+  old index. Because the index is saved only at the end of `sync_up`, the index is always the state
+  before the batch.
+- Restart: a fresh watcher finds all six changes from the scan, stale temps are not among them.
+  `sync_up` writes only what had not landed (3: f3 delete, f3 tombstone, n0, n1; 5: n1). Landed
+  modifies and creates are recognised by content (a conditional put refused, remote bytes equal ->
+  adopt, one GET, no PUT). Deletes whose object is already gone are forgotten. The remote etags of
+  f0 and f1 do not change across the restart. Final index equals the store, a rescan is empty, a
+  second device sees one consistent state, and the half-written index temp is overwritten and gone.
+- Not produced by the death itself, planted instead (a death cannot be aimed at these windows): a
+  `.drive.tmp.*` beside a target, one in a subdirectory, a half-written `.drive/.drive.tmp.index`,
+  one in the CAS. They are ignored by the scan, never uploaded and not cleaned (the temp beside a
+  target stays on disk).
+- Known residue: a kill between a delete and its tombstone loses the tombstone for that key (it
+  only names the deleter in a later conflict). Restart forgets the delete without writing one.
+
+**Found and fixed (one bug).** A `sync_down` that placed a remote update and died before saving the
+index (the save is its last step) left the file "modified" against the old index entry, so the next
+pull recorded a false `both_modified` conflict although local and remote bytes were identical. The
+create case already adopted equal bytes; the modify case now does too (`materialise.rs`). The test
+simulates the crash by restoring the index file saved before the pull, for an update, a create and a
+remove at once. It failed before the fix on the in-memory backend and passes on both.
+
+**Observation, not changed.** Every create tries to clear its tombstone with a DELETE. RustFS
+answers 204 for a key that is not there, so a create costs one extra request on RustFS; the memory
+and file backends answer "no such object", which is ignored.
+
+Counts, `scripts/build.sh test weftos-store --features rustfs`: before this lane 141 passed, 13
+ignored; after 148 passed, 20 ignored. The 7 new in-process tests are the scenarios; the 7 new
+ignored tests are their live versions (all pass on RustFS).
+Timings (noisy, load 6-7): each live scenario 1 to 2.4 s wall, the test clock is virtual, so
+the 2.1 s quiet period costs no wall time.
+
+Not done: cleanup of stale `.drive.tmp.*`, tombstone collection, fsync of the index before rename
+(a power cut, as opposed to a kill, is not covered), a death inside `place_file`, a real SIGKILL in the committed tests, two real machines.
+
+### Hardening 2, 2026-11-08
+
+Branch `wt/adr126-s3-harden2`, based on `4082527e8`. Of the "not done" list above, stale temp
+cleanup and the index fsync are done here.
+
+**Stale temp cleanup at open.** `materialise_with` and `sync_down_with` (both go through
+`run_down`) first remove `.drive.tmp.*` regular files under the drive root whose mtime is at least
+`Options::stale_tmp_age` old, and report the count in `DownReport::stale_tmp_removed`. The walk
+covers the tree, `.drive/` and `.drive/cas/`. It never follows a symlink (a symlinked directory is
+not entered, a symlinked temp name is left alone), so it cannot leave the drive root. A temp this
+process is writing is never removed: every writer (`place_file`, `Cas::put`, `write_atomic`,
+`Index::save`) registers its temp path in a process-wide set for the life of the file, and the
+cleanup skips registered paths whatever their age. The age gate defaults to
+`DEFAULT_STALE_TMP_AGE` = 10 minutes. The number is an owner choice. A writer in another process
+on the same drive is protected only by the age gate. `sync_up` and `watch` do not clean.
+
+**Durable index save.** `Index::save` now writes the temp, `sync_all` on the file, renames, then
+`sync_all` on the parent directory (the mesh-mock order). `.drive/.drive.tmp.index` keeps its fixed
+name.
+
+**Crash tests** (`tests_durable.rs`, in-process, like `tests_crash.rs`: a test-only checkpoint
+inside `Index::save` panics on its own thread, so nothing after it runs):
+- *Death after the temp is written, before the rename.* `index.json` is the old one and loads; the
+  temp holds the complete new index; the placed file is on disk. Aged with `File::set_modified`,
+  the next open removes the temp (count 1), adopts the placed file by content (no conflict) and
+  saves the new index.
+- *Death after the rename.* The new index loads; no temp is left; the next pull fetches and places
+  nothing.
+- Cleanup: old temps in the root, a subdirectory and the CAS go, fresh ones and a non-temp name
+  stay; a registered live temp survives even with the gate at zero and goes once released; symlinks
+  to a directory, to a file and to the root itself are left alone and nothing outside the root is
+  touched; `materialise` counts too.
+
+**What they do not cover.** A power cut or kernel crash: fsync order cannot be observed from a test,
+so the order is read from the code, not proven. A death inside `place_file` or in the middle of a
+file write. The live-temp test registers the path directly; it does not race a real write, and the
+registry does not protect against another process. Real SIGKILL and two real machines are still
+not covered. Tombstone collection is another lane.
+
+Counts, `scripts/build.sh test weftos-store --features rustfs`: before 148 passed, 20 ignored; after
+153 passed, 20 ignored (the 5 new tests are in-process only). The 9 ignored drive tests (live
+hardening and drive cycle) pass on a throwaway RustFS on loopback: 50 s wall for the nine
+(noisy, load 6-7).

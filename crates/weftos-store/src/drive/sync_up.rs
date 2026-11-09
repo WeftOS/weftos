@@ -14,6 +14,7 @@
 use std::path::Path;
 
 use super::cas::hash_of;
+use super::gc::{GcReport, collect_tombstones};
 use super::conflict::{ConflictKind, record};
 use super::index::{Entry, Index};
 use super::remote::{clear_tombstone, read_tombstone, write_tombstone};
@@ -37,6 +38,10 @@ pub struct UpReport {
     /// Modifies and deletes that used head-then-write because the backend has no conditional write.
     pub head_then_write: usize,
     pub skipped: Vec<Skipped>,
+    /// Set when `Options::collect_tombstones` is on and the push succeeded.
+    pub gc: Option<GcReport>,
+    /// A failed collection never fails the sync; its error lands here.
+    pub gc_error: Option<String>,
 }
 
 pub fn sync_up<B: ObjectBackend + ?Sized>(backend: &B, dest: &Path) -> Result<UpReport> {
@@ -50,6 +55,12 @@ pub fn sync_up_with<B: ObjectBackend + ?Sized>(backend: &B, dest: &Path, opts: &
     let mut index = Index::load(dest)?.ok_or_else(|| DriveError::Invalid(format!("{} is not a drive", dest.display())))?;
     let mut rep = UpReport::default();
     let r = up(backend, dest, &mut index, opts, &mut rep);
+    if r.is_ok() && opts.collect_tombstones {
+        match collect_tombstones(backend, &index.bucket, &index.prefix, opts, super::now_ms()) {
+            Ok(g) => rep.gc = Some(g),
+            Err(e) => rep.gc_error = Some(e.to_string()),
+        }
+    }
     let saved = index.save(dest);
     r?;
     saved?;
