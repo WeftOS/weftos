@@ -57,18 +57,18 @@ Notes:
 
 ### 1c. aepod branches (aepod-xpc): what the local object database holds
 
-The task brief expected these to be absent. They are partly present. A remote-tracking set
+**Settled 2026-11-09 13:20 ET:** S1 to S5 are all on `origin/target-0.8.5` e58899bb0 (rows below updated; the stale-ref columns are kept for the record). The task brief expected these to be absent. They were partly present on 2026-11-08. A remote-tracking set
 `aepod/*` was fetched read-only on 2026-11-08 (next-steps section 1; `git branch -r | grep aepod`).
 The owner-named hashes are not present. Column "verified from this Mac: no" means the tests and
 state on aepod were not seen from here.
 
 | Slice | Owner-named tip | `git cat-file -t` | Local `aepod/*` ref now | Status page tip | Verified from this Mac |
 |---|---|---|---|---|---|
-| S1 `feat/adr126-s1` | 2a8a1327 (owner, S1-merge pile): findings through 1153af0a, done-when note 9efb7d7f, touch-point note 2a8a1327 | **fetched 2026-11-08 PM** over ssh from `aepod-xpc:/home/aepod/weftos-wt/s1`; `aepod/feat/adr126-s1` = 2a8a13272, contains 1153af0a | was 53d007a41 before the fetch; stale `origin/feat/adr126-s1` ccd11d361 not merged | ccd11d361 (exists locally) | **landed locally** on `integ/adr126-s1-land` 68e010acf (see section 2) |
-| S2 `feat/adr126-s2` | not named | n/a | be64b6014 (16 ahead) | be64b6014 | no, tests are aepod's |
-| S3 `feat/adr126-s3` | not named | n/a | 7d59f9618 (9 ahead) | 0b67861d (exists locally) | no |
-| S4 `feat/adr126-s4` | not named | n/a | f84191571 (4 ahead) | f84191571 | no |
-| S5 `feat/adr126-s5` | e5d6b9ac | not a valid object | e11d07b6b (7 ahead) | e11d07b6b | no |
+| S1 `feat/adr126-s1` | 2a8a1327 (owner, S1-merge pile) | commit | `aepod/feat/adr126-s1` = 2a8a13272 | ccd11d361 (stale) | **landed**: merge 68e010acf, Mac slices, approvals d26c0cbec, FF tip 15dcf72c3 (2026-11-09 AM); on `origin/target-0.8.5` e58899bb0 |
+| S2 `feat/adr126-s2` | not named | n/a | aepod tip d0db74233 (rebase plan) | be64b6014 (stale) | **landed**: `land/adr126-s2-on-s1land` cae1b0b25 (reconcile 93a3836b5) merged onto 15dcf72c3 as 7ba34b071; on `origin/target-0.8.5` e58899bb0 |
+| S3 `feat/adr126-s3` | not named | n/a | aepod tip fc9c081f7 | 0b67861d (stale) | **landed through S5**: fc9c081f7 merged into S5's rebased tip (96c78e454), nothing of S3 left to land. Unlanded S3 options on aepod: `prep/adr126-s3-reqwest-client` c9b85e569 (needs a reqwest diff-gate approval), `opt/adr126-nodekeys-adapter` 646b57ff5 |
+| S4 `feat/adr126-s4` | not named | n/a | aepod `rebase/adr126-s4-on-64c547f4a` = e58899bb0 | f84191571 (stale) | **landed**: rebased onto 64c547f4a as 35bcc00e8..3d4d52834, owner approvals e58899bb0 (clawft-weave -> weftos-release `store`; weftos-store entry reworded), pushed 13:00 ET; e58899bb0 is the settled tip |
+| S5 `feat/adr126-s5` | e5d6b9ac | not a valid object | aepod `feat/adr126-s5-on-s2-15dcf72c3` = 64c547f4a | e11d07b6b (stale) | **landed**: `feat/adr126-s5-on-s2land` 72be2ecc4 carried onto the S2 land as 64c547f4a (contains d26c0cbec, 15dcf72c3; approvals 3ddb1537e, 72be2ecc4 by weftos-s5); on `origin/target-0.8.5` e58899bb0 |
 | `integ/adr126-s1-s4` | 76a26504 and e0447e0e | both not valid objects | 28c2a65e1 (10 ahead) | 28c2a65e1 | no |
 
 Which of 76a26504 and e0447e0e is newer: unknown from here, neither is in the object database.
@@ -161,6 +161,8 @@ Next: aepod rebases S2 and S5 onto d26c0cbec (S5 re-applies an S1 commit); `feat
 synthetic commit was built with `git commit-tree` (objects only, no refs), so each step is "accumulated
 result so far plus the next branch". Where a step conflicted, the marker tree was kept and the run went on,
 so later conflicts in the same file can be knock-on effects.
+
+**Settled 2026-11-09 13:00 ET (origin).** `origin/target-0.8.5` = e58899bb0 with S1, S2, S5 (carrying S3) and S4 all landed, in that order: 15dcf72c3 (S1 + approvals) -> 7ba34b071 (S2 land `land/adr126-s2-on-15dcf72c3`) -> 64c547f4a (S5 `feat/adr126-s5-on-s2-15dcf72c3`, with `feat/adr126-s3` fc9c081f7 merged in at 96c78e454) -> 35bcc00e8..3d4d52834 (S4 rebased onto 64c547f4a) -> e58899bb0 (owner approvals for S4: `clawft-weave` -> `weftos-release` with `store`; the `weftos-store` entry reworded as not test-only). 17 approvals entries on the tip. Pushed by the aepod lane at 13:00 ET; the Mac checkout `~/weftos` was still at 64c547f4a when this was written and was not moved (backend:3's checkout, Mathew's uncommitted files). S3 had nothing left to land. Remaining: `feat/adr131-d1` (weftos-d1), `wt/adr126-s1-names` (owner confirmation), the Tapestry-side WeftOS branches `feat/computer-hub-service` and `feat/weave-wire-crate` (backend:3), and the CI gate `scripts/build.sh gate --with-release-dry-run` on `weftos-ci` (owner: CI is the record, not the Mac). Test slices rerun on e58899bb0: section 4.
 
 ### 2a. Accumulated, starting from target-0.8.5 (git 2.54.0)
 
@@ -261,6 +263,7 @@ Command form is the `scripts/build.sh` wrapper. Counts are from the sources; I d
 | `e1-scoped-view` | weftos-store rustfs 141 to 164 (23 view unit tests); clawft-weave store 61 | yes, 1 live cycle | clean | `diff-gate --worktree` | 2026-11-08 |
 | `e1-view-verbs` | weftos-store rustfs 185 passed on merge; clawft-weave store 61 to 76; 1 live handler-path cycle | yes, 1 | not recorded for the 068ea6723 tip | n/r | 2026-11-08 |
 | `feat/adr131-d1` | 91 targeted tests (89 to 91 with the D2 tests); `bucket_kill4.py` kill points 4 and 5 and `refresh_upper`, `recover_upper` on a throwaway RustFS through the `gcs2s3.py` facade; 19 overlay tests on `weftos-arm64` with `--features devtools` | yes, via facade; functional only, no timings | n/r | the gate **rejects** the crate (section 3) | 2026-11-08 12:20 pile |
+| `origin/target-0.8.5` e58899bb0 (S1 to S5 settled; fresh detached worktree, cold target dir) | `build.sh test weftos-store --features rustfs`: 343 passed, 47 skipped; `clawft-weave --filter store`: 204 passed, 1541 filtered, 1 leaky (`release_cmd::tests::store_names_parse_and_bad_ones_are_refused` left a child process behind; nextest counts it as a pass); `weftos-release --features store`: 69 passed, 13 skipped; `clawft-weave --filter release_cmd`: 7 passed. Baseline at 15dcf72c3 was 293/34 and 94; the S2, S4 and S5 tests account for the rise | not rerun (no RustFS started; the next live run belongs to the CI gate on `weftos-ci`) | not rerun | not rerun; the owner's 17 entries are the tip | 2026-11-09 13:20 pile |
 | `integ/adr126-s1-land` = `target-0.8.5` d26c0cbec (approvals commit on ac2f3a2be) | `build.sh test weftos-store --features rustfs`: 293 passed, 34 skipped; `clawft-weave --filter store`: 94 passed | not rerun (no store code change since 580a8df88) | not rerun | `--base target-0.8.5` (before FF): 19 approved, 0 S1 rows failed, only the owner-only `approvals-change` row | 2026-11-09 AM |
 | `integ/adr126-s1-land` 580a8df88 (S1 plus the seven Mac branches) | `build.sh test weftos-store --features rustfs`: 293 passed, 34 ignored; `clawft-weave --filter store`: 94 passed; shell `worktree-store.test.sh` 63/63 | yes: weftos-store live 27/27 and clawft-weave store live 4/4 on a throwaway loopback RustFS 1.0.4 | clean (scoped) | `--base target-0.8.5`: 10 approved, the same 10 S1 rows failed | 2026-11-08 late PM |
 | `integ/adr126-s1-land` 905d327a9 (S1 land on target) | `build.sh test weftos-store --features rustfs`: 148 passed, 16 ignored; `clawft-weave --filter store`: 50 passed; `clawft-weave --ignored --filter live`: 3 store live pass, 1 fail = `conv_postmortem` Hermes :8090 (not S1) | yes: 16/16 weftos-store live on a throwaway loopback RustFS 1.0.4, plus the three weave live store tests | clean (scoped `clippy weftos-store --features rustfs`) | `--base target-0.8.5`: 10 approved, 10 failed (section 3) | 2026-11-08 PM |
