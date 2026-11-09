@@ -6,7 +6,7 @@
 > `<runtime dir>/computer-hub/hub.toml` exists; pass keys are minted by the daemon through
 > `computer.hub.mint` (Admin), `computer.hub.revoke` (Admin) and `computer.hub.status` (Read), with
 > `host_kind` assigned from the minter. The standalone `weft-hub` binary below is now a dev tool. See
-> `docs/adr/adr-TBD-computer-workload-and-desktops.md`. The text below was written for the earlier
+> `docs/grok-build-fork/adr/gbf-003-computer-workload-and-desktops.md`. The text below was written for the earlier
 > standalone prep shape and is otherwise still accurate for the wire contract and pass-key scheme.
 
 Package: `crates/weft-computer-hub/` (binary `weft-hub`, library `weft_hub`).

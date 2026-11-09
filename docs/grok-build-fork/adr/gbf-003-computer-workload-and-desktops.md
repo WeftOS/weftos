@@ -1,13 +1,13 @@
-# ADR-TBD: The `computer` workload, first-class desktops, and computer-use access
+# GBF-003: The `computer` workload, first-class desktops, and computer-use access
 
-- **Status**: Proposed (2026-11-09). The owner assigns the ADR number; this file is named `adr-TBD-...` on
-  purpose. ADR-131 is taken by another lane; do not pick 132 from here.
+- **Status**: Proposed (2026-11-09).
+- **Series**: GBF (grok-build fork), after [GBF-001](gbf-001-hard-fork-seams.md) and [GBF-002](gbf-002-mesh-bots-and-cos-top-bot.md). The owner placed this ADR in the GBF series (2026-11-09), not in the main ADR numbers.
 - **Deciders**: owner
 - **Decisions recorded**: D1, D2 and D5 of the Tapestry Phase 3 questions, answered by the owner on
   2026-11-09 (11:49 and 11:56 ET). D3, D4 and D6 are not decided here.
 - **Source**: `docs/tapestry/phase3-prep.md` §4 and the decision memo
   `tapestry/p3-decision-memo:docs/tapestry/phase3-decisions.md` (Tapestry repo). Work items W3, W4, W5.
-- **Builds on**: ADR-099 (governed placement), ADR-100 and ADR-101 (workload kinds), ADR-103 (daemon topology),
+- **Main ADRs it relies on**: ADR-099 (governed placement), ADR-100 and ADR-101 (workload kinds), ADR-103 (daemon topology),
   ADR-108 (pairing), the `project` kind (`workload_kind/project.rs`) for a kind with no signed package.
 - **Prior decisions**: unknown. The decision store consult timed out when this was written (`decisions:
   unavailable`), so earlier decisions on a hub or on desktops may exist that this ADR does not cite.
@@ -108,5 +108,5 @@ The rule is code: `ComputerBody::verdict(app, display)` returns `Allow`, `Ask` o
 ## Open questions for the owner
 
 1. Confirm the trust tier and default access per desktop in the D2 table.
-2. Approve the `xai-tool-protocol` git dependency and its lockfile growth in `config/diff-gate-approvals.toml`.
-3. Which ADR number, and should the `computer-hub` feature become a default once approved?
+2. (Answered 2026-11-09: D1 covers the hub's new dependencies and network findings; the lead records the approval rows.)
+3. Should the `computer-hub` feature become a default once approved?
