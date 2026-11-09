@@ -49,3 +49,28 @@ Not S4's to close (owner or other lanes), none blocks the merge:
 - **Owner:** CI route pick (flip `DEFAULT_CI_ROUTE`), the sweeper put grant (a locked restore needs `put`; the `sweep` role is read plus delete), the three diff-gate entries above, lock modes and floors per channel, archive days (owner decision: nothing expires yet).
 - **S1:** delete-marker expiry in lifecycle rules, a streaming or ranged get, a retention read on the service route (removes the blind extension ask), refuse `archive` on a locked store, key rules shared across lanes (Windows-host findings K1 to K10).
 - **S3 / S1 together:** align node id validation (S1 takes 1 to 61 characters and a trailing `-`, S3 takes 1 to 48 and neither; with `node-<id>` as the user name S3's rule decides which nodes can lease), one creator of the node's bucket and user (S4 review X2/X3), revocation through S1's `suspend_principal` (X4).
+
+## Rebase plan onto landed S1 (rehearsed 2026-11-08)
+
+Rehearsed on the throwaway branch `rehearse/adr126-s4-on-s1-2a8a1327`: the 19
+non-merge S4 commits of `integ/adr126-s1-s4`, replayed with
+`git rebase --onto 2a8a1327 feat/adr126-s1` onto the local S1 tip `2a8a1327`.
+
+- Result: **no conflicts**. `weftos-release` tests pass on it (default features
+  53 tests; `--features store` 68 tests, 2 ignored live tests not run).
+- Merge commits of S1 into `integ/adr126-s1-s4` are dropped by the replay;
+  S1 arrives from the landed branch instead. The S1 content S4 used is a
+  subset of `2a8a1327` (its newest commits are doc and `put_if_match` note only).
+- Expected conflict spots if the landed S1 differs from `2a8a1327`:
+  `crates/clawft-weave/src/commands/mod.rs` and `store_cmd.rs` (keep both
+  sides: S4 adds `release_cmd`), `crates/clawft-weave/Cargo.toml` (S4 adds the
+  `weftos-release` dep), workspace `Cargo.toml` members. Resolution: keep both.
+- `weftos-release/Cargo.toml` dev-deps: keep one `weftos-edge-creds`/`weftos-store`
+  entry each (a merge with S5 once duplicated keys).
+- S4 does not re-apply an S1 commit, so no patch-id skipping is needed here
+  (S5 does; its rebase must follow S1 landing).
+- Real-branch step, after the MaxBook reports S1 landed: `git rebase --onto
+  <landed S1 tip> feat/adr126-s1 integ/adr126-s1-s4` (or the same on
+  `feat/adr126-s4`, which holds only `f8419157`), rerun
+  `scripts/build.sh test weftos-release --features store`, and report.
+- Not done: no merge to target-0.8.5, no push, no deploy, no weaver install.
