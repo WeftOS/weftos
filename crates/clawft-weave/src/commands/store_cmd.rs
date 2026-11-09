@@ -11,6 +11,8 @@
 //!   archives of node, project and release stores; a dry run without `--confirmed`.
 //! - `weaver store put|get <name> <key> --as <principal>`: a governed request as that principal.
 //! - `weaver store drive materialise|sync-down|sync-up|resolve|watch ...`: ADR-131 prototype.
+//! - `weaver store view open|status|refresh|publish|resolve|renew|close ...`: the scoped view
+//!   (ADR-126 E-1); flags in `store_view_args`.
 //!
 //! Names are `weftos://<mesh>/nodes/<id>/store`, `.../projects/<ULID>/store`,
 //! `.../worktrees/<slug>/store`, `.../releases/<channel>/store`. Principals are
@@ -136,6 +138,14 @@ pub enum StoreAction {
         verb: String,
         /// `--key value` pairs (and the flags `--json`, `--read-only`). `materialise` takes
         /// `--name --dest [--prefix]`; the others take `--root`, and `--name` for sync-up and resolve.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        rest: Vec<String>,
+    },
+    /// A scoped view of a store for one sandboxed session (ADR-126 E-1): open, status, refresh,
+    /// publish, resolve, renew, close. `open` takes `--name --root` and `--spec <file>` or
+    /// `--include P[=AT]`/`--work P`; `close` takes `--publish` or `--discard`.
+    View {
+        verb: String,
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         rest: Vec<String>,
     },
@@ -376,6 +386,12 @@ pub async fn run(args: StoreArgs) -> anyhow::Result<()> {
             let v = call(&format!("store.drive.{verb}"), params).await?;
             println!("{}", serde_json::to_string_pretty(&v)?);
         }
+        StoreAction::View { verb, rest } => {
+            let (agent, host) = agent_and_host(&rest)?;
+            let params = super::store_view_args::view_params(&rest, &agent, &host)?;
+            let v = call(&format!("store.view.{verb}"), params).await?;
+            println!("{}", serde_json::to_string_pretty(&v)?);
+        }
         StoreAction::Get { name, key, principal } => {
             let v = call("store.get", json!({"name": name, "key": key, "principal": principal})).await?;
             match v["text"].as_str() {
@@ -433,6 +449,9 @@ mod tests {
         let d = worktree_params(&a(&["--name", "n", "--root", "/r", "--read-only"]), "ag", "h1").unwrap();
         assert_eq!((d["read_only"].as_bool(), d["root"].as_str()), (Some(true), Some("/r")));
         assert!(StoreArgs::try_parse_from(["store", "drive", "sync-up", "--name", "n", "--root", "/r"]).is_ok());
+        assert!(StoreArgs::try_parse_from(["store", "view", "open", "--name", "n", "--root", "/r", "--include", "docs=docs", "--read-only"]).is_ok());
+        assert!(StoreArgs::try_parse_from(["store", "view", "close", "--name", "n", "--root", "/r", "--discard"]).is_ok());
+        assert!(StoreArgs::try_parse_from(["store", "view"]).is_err(), "a verb is required");
     }
 
     #[test]

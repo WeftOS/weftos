@@ -58,11 +58,11 @@ fn drive_root(p: &P) -> Result<&str, String> {
     }
 }
 
-fn skipped(v: &[drive::Skipped]) -> Value {
+pub(crate) fn skipped(v: &[drive::Skipped]) -> Value {
     v.iter().map(|s| json!({"path": s.path, "why": s.why, "detail": s.detail})).collect()
 }
 
-fn down_json(r: &DownReport) -> Value {
+pub(crate) fn down_json(r: &DownReport) -> Value {
     json!({
         "created": r.created, "updated": r.updated, "removed": r.removed, "conflicts": r.conflicts,
         "open_conflicts": r.open_conflicts, "unchanged": r.unchanged, "fetched": r.fetched,
@@ -70,7 +70,7 @@ fn down_json(r: &DownReport) -> Value {
     })
 }
 
-fn up_json(r: &UpReport) -> Value {
+pub(crate) fn up_json(r: &UpReport) -> Value {
     json!({
         "put": r.put, "deleted": r.deleted, "conflicts": r.conflicts, "open_conflicts": r.open_conflicts,
         "bytes_put": r.bytes_put, "conditional": r.conditional, "head_then_write": r.head_then_write,

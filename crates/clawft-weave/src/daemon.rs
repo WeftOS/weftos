@@ -6589,6 +6589,7 @@ async fn dispatch(
         m if m.starts_with("store.worktree.") => crate::store_worktree::handle(m, params).await,
         // ADR-131 prototype: materialise, sync and watch a prefix as a local tree.
         m if m.starts_with("store.drive.") => crate::store_drive::handle(m, params).await,
+        m if m.starts_with("store.view.") => crate::store_view::handle(m, params).await,
         // ADR-122: the cog data plane broker's topics.
         #[cfg(all(feature = "placement", unix))]
         "cogbus.list" => crate::cogbus_serve::handle(method.as_str(), params).await,
