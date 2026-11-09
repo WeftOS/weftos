@@ -144,9 +144,20 @@ Tests on 580a8df88: `weftos-store --features rustfs` 293 passed, 34 ignored; `cl
 live on a throwaway loopback RustFS 1.0.4: weftos-store 27/27 (S1, S2 drills, drive, gc, view), clawft-weave
 4/4 store live (`store_rt`, `store_svc`, `store_ingest`, `store_view`; the fifth `--filter live` hit is the
 Hermes :8090 postmortem test, not store); scoped clippy clean. `scripts/diff-gate.sh --base target-0.8.5`:
-still exactly the 10 S1 receiver rows, nothing new from the Mac branches. **Still not fast-forwarded**
-(owner-only approvals, section 3). Next after the owner's approvals: fast-forward `target-0.8.5` to
-580a8df88; aepod rebases S2 and S5 onto it (S5 re-applies an S1 commit); `feat/adr131-d1` lands last. Method: `git merge-tree --write-tree --name-only --messages`. After each step a
+still exactly the 10 S1 receiver rows, nothing new from the Mac branches. Was not fast-forwarded until the
+owner's approvals (section 3).
+
+**Fast-forwarded 2026-11-09 AM.** Owner answered card t213s943 at 08:34 ET: approve the S1 diff-gate lines and
+fast-forward locally, no push. The four S1 entries (the three from `docs/guides/rustfs-store-ingest-approvals.draft.toml`
+plus `crates/weftos-store/src/rustfs_tests.rs` `std::net::TcpListener::bind("127.0.0.1:0")`) were appended to
+`config/diff-gate-approvals.toml` as **d26c0cbec** on the land branch and `target-0.8.5` was fast-forwarded to it
+from 49ffd6cf6 (clean; the 38 dirty/untracked paths in `~/weftos` untouched). `scripts/diff-gate.sh --base target-0.8.5`
+on d26c0cbec before the FF: 19 approved, 0 S1 rows failed; the one remaining FAIL is the structural `approvals-change`
+row on the approvals file itself, which only `DIFF_GATE_OWNER_APPROVED=1` or the CI label clears (not set by this
+session). Tests on d26c0cbec: `weftos-store --features rustfs` 293 passed, 34 skipped; `clawft-weave --filter store`
+94 passed. S5's two `weftos-release` dev-dependency approvals are being added by weftos-s5 on xpc, not here. Not pushed.
+Next: aepod rebases S2 and S5 onto d26c0cbec (S5 re-applies an S1 commit); `feat/adr131-d1` lands last;
+`wt/adr126-s1-names` still waits for the node-<id> / pinned-creator confirmation. Method: `git merge-tree --write-tree --name-only --messages`. After each step a
 synthetic commit was built with `git commit-tree` (objects only, no refs), so each step is "accumulated
 result so far plus the next branch". Where a step conflicted, the marker tree was kept and the run went on,
 so later conflicts in the same file can be knock-on effects.
@@ -203,7 +214,7 @@ Diff-gate approvals are owner-only (CLAUDE.md, status page section 6); agents ne
 
 | Call | Where asked | What it blocks |
 |---|---|---|
-| **S1 receiver approvals.** `scripts/diff-gate.sh --base target-0.8.5` on `integ/adr126-s1-land` 905d327a9: 10 failed, all S1's: `net` at `crates/clawft-weave/src/store_ingest.rs:27,98` (the loopback webhook listener), `store_ingest_tests.rs:5,71,166`, `crates/weftos-store/src/rustfs_tests.rs:980,1119` (canned loopback servers in unit tests); `process` at `store_ingest_tests.rs:162,188` (the live test spawns RustFS); plus `approvals-change` on the file itself. aepod drafted three entries in `docs/guides/rustfs-store-ingest-approvals.draft.toml` (store_ingest.rs `TcpListener`; store_ingest_tests `(TcpStream|TcpListener)`; store_ingest_tests `std::process::|Command::new`); the draft does not cover `rustfs_tests.rs:980,1119`, so a fourth entry (`crates/weftos-store/src/rustfs_tests.rs`, `TcpListener`, loopback-only canned server) is needed. Only the owner appends them | S1 merge pile step 3; `docs/guides/adr-126-s1-merge-readiness.md` on the land branch | Fast-forwarding `target-0.8.5` to the S1 land and every later land step |
+| **S1 receiver approvals.** `scripts/diff-gate.sh --base target-0.8.5` on `integ/adr126-s1-land` 905d327a9: 10 failed, all S1's: `net` at `crates/clawft-weave/src/store_ingest.rs:27,98` (the loopback webhook listener), `store_ingest_tests.rs:5,71,166`, `crates/weftos-store/src/rustfs_tests.rs:980,1119` (canned loopback servers in unit tests); `process` at `store_ingest_tests.rs:162,188` (the live test spawns RustFS); plus `approvals-change` on the file itself. aepod drafted three entries in `docs/guides/rustfs-store-ingest-approvals.draft.toml` (store_ingest.rs `TcpListener`; store_ingest_tests `(TcpStream|TcpListener)`; store_ingest_tests `std::process::|Command::new`); the draft does not cover `rustfs_tests.rs:980,1119`, so a fourth entry (`crates/weftos-store/src/rustfs_tests.rs`, `TcpListener`, loopback-only canned server) is needed. Only the owner appends them. **Answered 2026-11-09 08:34 ET (card t213s943): approved; appended as d26c0cbec and `target-0.8.5` fast-forwarded to it (section 2)** | S1 merge pile step 3; `docs/guides/adr-126-s1-merge-readiness.md` on the land branch | Fast-forwarding `target-0.8.5` to the S1 land and every later land step |
 | Diff gate `xattr` (optional, Linux plus devtools). Owner chose the crate 2026-11-08, no approvals entry exists | d1 notes, 1138; status page section 4 last rows | Merging `tools/seed-drive-d1`; opaque-directory detection in the scoped view |
 | Diff gate `libc` (optional, devtools only, 2 unsafe lines in `src/devtools.rs`) | d1 notes, 2026-11-08 gate surface | Merging `tools/seed-drive-d1` |
 | Diff gate `notify` for D1. The Mac drive's `drive-notify` feature uses the existing workspace `notify` and the gate did not count it as new | next-steps 9a; d1 notes (new-dep list) | D1 crate only; the Mac drive library is not blocked by it |
@@ -250,6 +261,7 @@ Command form is the `scripts/build.sh` wrapper. Counts are from the sources; I d
 | `e1-scoped-view` | weftos-store rustfs 141 to 164 (23 view unit tests); clawft-weave store 61 | yes, 1 live cycle | clean | `diff-gate --worktree` | 2026-11-08 |
 | `e1-view-verbs` | weftos-store rustfs 185 passed on merge; clawft-weave store 61 to 76; 1 live handler-path cycle | yes, 1 | not recorded for the 068ea6723 tip | n/r | 2026-11-08 |
 | `feat/adr131-d1` | 91 targeted tests (89 to 91 with the D2 tests); `bucket_kill4.py` kill points 4 and 5 and `refresh_upper`, `recover_upper` on a throwaway RustFS through the `gcs2s3.py` facade; 19 overlay tests on `weftos-arm64` with `--features devtools` | yes, via facade; functional only, no timings | n/r | the gate **rejects** the crate (section 3) | 2026-11-08 12:20 pile |
+| `integ/adr126-s1-land` = `target-0.8.5` d26c0cbec (approvals commit on ac2f3a2be) | `build.sh test weftos-store --features rustfs`: 293 passed, 34 skipped; `clawft-weave --filter store`: 94 passed | not rerun (no store code change since 580a8df88) | not rerun | `--base target-0.8.5` (before FF): 19 approved, 0 S1 rows failed, only the owner-only `approvals-change` row | 2026-11-09 AM |
 | `integ/adr126-s1-land` 580a8df88 (S1 plus the seven Mac branches) | `build.sh test weftos-store --features rustfs`: 293 passed, 34 ignored; `clawft-weave --filter store`: 94 passed; shell `worktree-store.test.sh` 63/63 | yes: weftos-store live 27/27 and clawft-weave store live 4/4 on a throwaway loopback RustFS 1.0.4 | clean (scoped) | `--base target-0.8.5`: 10 approved, the same 10 S1 rows failed | 2026-11-08 late PM |
 | `integ/adr126-s1-land` 905d327a9 (S1 land on target) | `build.sh test weftos-store --features rustfs`: 148 passed, 16 ignored; `clawft-weave --filter store`: 50 passed; `clawft-weave --ignored --filter live`: 3 store live pass, 1 fail = `conv_postmortem` Hermes :8090 (not S1) | yes: 16/16 weftos-store live on a throwaway loopback RustFS 1.0.4, plus the three weave live store tests | clean (scoped `clippy weftos-store --features rustfs`) | `--base target-0.8.5`: 10 approved, 10 failed (section 3) | 2026-11-08 PM |
 | mesh-mock `feat/manifest-v2` | 45 tests at last count in the plan, not rerun | no | n/r | n/a (outside the workspace) | n/r |
