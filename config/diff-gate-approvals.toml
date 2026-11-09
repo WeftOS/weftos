@@ -109,6 +109,7 @@ approved_by = "owner"
 rule        = "new-dep"
 path        = "crates/weftos-release/Cargo.toml"
 pattern     = 'weftos-edge-creds[[:space:]]*='
+approved_by = "owner"
 reason      = "ADR-126 S5/S4: test-only path dep for S1 x S3 chain-feed integration tests"
 
 # Approved by the owner on 2026-11-09 (card t213s943) for the ADR-126 S1 store_ingest receiver
