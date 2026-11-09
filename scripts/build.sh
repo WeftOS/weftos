@@ -873,6 +873,10 @@ workspace_test() {
         env -u "$(cargo_runner_var)" cargo nextest run ${NEXTEST_CONFIG[@]+"${NEXTEST_CONFIG[@]}"} "${scope[@]}" ${extra[@]+"${extra[@]}"} ${ign[@]+"${ign[@]}"} ${filter[@]+"${filter[@]}"} \
             && { [ ${#filter[@]} -gt 0 ] || [ "$RUN_IGNORED" = true ] || run_doctests; }
     else
+        # Without nextest, --ignored goes to the libtest harness (no doctest pass for it).
+        if [ "$RUN_IGNORED" = true ]; then
+            if [ ${#cfilter[@]} -gt 0 ]; then cfilter+=(--ignored); else cfilter=(-- --ignored); fi
+        fi
         cargo test "${scope[@]}" ${extra[@]+"${extra[@]}"} ${cfilter[@]+"${cfilter[@]}"}
     fi
 }
