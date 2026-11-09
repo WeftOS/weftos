@@ -9,7 +9,6 @@
 //! That is a premise, not a protection: every path is checked by `store_worktree_paths::Guard`
 //! (absolute, resolved, no symlinked final component, kept out of the daemon's own state).
 
-use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
@@ -18,17 +17,15 @@ use serde_json::{Value, json};
 use weftos_store::backend::{BackendError, ObjectBackend as S1, ObjectMeta};
 use weftos_store::claim_watch::{ClaimWatch, claim_merge_observed};
 use weftos_store::follower::{self, Change, FollowState, LeftoverPolicy, Why};
-use weftos_store::promote::{ArchiveTarget, PromotionPolicy, WorktreeMeta, is_promoted, promote, read_meta, write_meta};
+use weftos_store::promote::{ArchiveTarget, OnConflict, PromotionPolicy, WorktreeMeta, is_promoted, promote, read_meta, write_meta};
 use weftos_store::service::{ARCHIVE_BUCKET, Parties, archive_key};
-use weftos_store::share::{
-    Actor, Limits, TreeSource, mark_handoff, mark_merged_at, parse_name_status_z, publish_tree,
-};
 use weftos_store::registry_sign::{
     EntrySigner, EntryVerifier, list_trusted_gen, list_trusted_lenient, poll_verified_settled, remove_registry_entry_signed,
     write_registry_entry_signed,
 };
+use weftos_store::share::{Actor, Limits, TreeSource, mark_handoff, parse_name_status_z, publish_tree};
 use weftos_store::share_fetch::{
-    RegistryEntry, Select, fetch_bundle, fetch_tree, summarize, write_registry_entry,
+    self, RegistryEntry, Select, fetch_bundle, fetch_tree, list_shared_lenient, summarize, write_registry_entry,
 };
 use weftos_store::{StoreName, StoreService};
 
@@ -40,9 +37,6 @@ pub(crate) struct Op(pub(crate) Arc<dyn S1>);
 impl S1 for Op {
     fn put(&self, b: &str, k: &str, d: &[u8], n: bool) -> Result<ObjectMeta, BackendError> {
         self.0.put(b, k, d, n)
-    }
-    fn put_if_match(&self, b: &str, k: &str, d: &[u8], etag: &str) -> Result<ObjectMeta, BackendError> {
-        self.0.put_if_match(b, k, d, etag)
     }
     fn get(&self, b: &str, k: &str) -> Result<Vec<u8>, BackendError> {
         self.0.get(b, k)
@@ -102,6 +96,21 @@ struct P {
     /// `follow`: list the registry instead of reading the digest.
     #[serde(default)]
     full: bool,
+    /// `promote`: what to do with a key the project changed since the worktree saw it
+    /// (`fail` by default, `keep_project`, `overwrite`).
+    on_conflict: Option<String>,
+    /// `promote`: report what landing would do and write nothing.
+    #[serde(default)]
+    dry_run: bool,
+    /// `promote`: refuse a land that copies more than this many bytes (default 1 GiB; 0 = no cap).
+    max_bytes: Option<u64>,
+    /// `publish`: refuse when the worktree store already holds more than this many bytes
+    /// (default 2 GiB; 0 = no quota).
+    quota_bytes: Option<u64>,
+    /// `gc`: retire worktree stores landed at least this many days ago (default 14).
+    keep_days: Option<u64>,
+    /// `gc`: also delete archived worktree objects older than this many days (default: never).
+    archive_keep_days: Option<u64>,
     /// Who is acting; filled in by the CLI from the environment.
     agent: Option<String>,
     host: Option<String>,
@@ -314,7 +323,6 @@ impl EntryVerifier for Trusted<'_> {
     }
 }
 
-#[cfg(test)]
 fn names(mesh: &str, project: &str, slug: &str) -> Result<Names, String> {
     names_with(mesh, project, slug, false)
 }
@@ -402,10 +410,13 @@ fn worktree_stores(svc: &StoreService, mesh: &str, project: &str) -> Vec<weftos_
 
 /// The registry's entries as this follower should see them: all of them, or with a trusted-key
 /// file the ones that verify (all of them when `REQUIRE_SIGNED` is off).
-fn trusted_entries(b: &Op, reg: &str, sign: &SignCfg) -> weftos_store::overlay::Result<Vec<RegistryEntry>> {
+fn trusted_entries(b: &Op, reg: &str, sign: &SignCfg) -> weftos_store::overlay::Result<(Vec<RegistryEntry>, Vec<String>)> {
     Ok(match &sign.trusted {
-        Some(t) => list_trusted_lenient(b, reg, &Trusted(t), sign.require)?.0.into_iter().map(|(e, _)| e).collect(),
-        None => weftos_store::share_fetch::list_shared_lenient(b, reg)?.0,
+        Some(t) => {
+            let (v, bad) = list_trusted_lenient(b, reg, &Trusted(t), sign.require)?;
+            (v.into_iter().map(|(e, _)| e).collect(), bad)
+        }
+        None => list_shared_lenient(b, reg)?,
     })
 }
 
@@ -432,19 +443,67 @@ fn trust_json(b: &Op, reg: &str, sign: &SignCfg) -> Value {
     }
 }
 
+/// After a worktree store is archived and its bucket deleted, drop its registry entry from the
+/// project bucket (ADR-126 §4a: the daemon "removes it after promotion and bucket deletion").
+/// Any other kind of store is a no-op. Removing an entry that is already gone is fine.
+pub fn forget(svc: &StoreService, name: &StoreName) -> Result<(), String> {
+    let StoreName::Worktree { mesh, project, slug } = name else { return Ok(()) };
+    let pr = StoreName::project(mesh, &project.to_string()).map_err(|e| e.to_string())?.bucket();
+    remove_registry_entry_signed(&Op(svc.operator_objects()), &pr, slug).map_err(|e| e.to_string())
+}
+
 /// Run one verb. `mesh` is the store-name mesh token of this daemon.
 pub fn run(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms: u64) -> Result<Value, String> {
     let sign = SignCfg::from_env()?;
-    run_full(svc, mesh, method, params, now_ms, registry_switch(), &sign)
+    run_full(svc, mesh, method, params, now_ms, registry_switch(), &sign, &Guard::from_runtime())
 }
 
-/// [`run`] with the registry switch given explicitly.
-pub fn run_with(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms: u64, registry_store: bool) -> Result<Value, String> {
-    run_full(svc, mesh, method, params, now_ms, registry_store, &SignCfg::off())
+/// [`run`] with an explicit set of protected paths.
+pub fn run_with(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms: u64, guard: &Guard) -> Result<Value, String> {
+    run_full(svc, mesh, method, params, now_ms, false, &SignCfg::off(), guard)
 }
 
-/// [`run_with`] with registry signing given explicitly.
-pub fn run_full(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms: u64, registry_store: bool, sign: &SignCfg) -> Result<Value, String> {
+/// [`run_with`] with the registry switch and registry signing given explicitly.
+#[allow(clippy::too_many_arguments)]
+pub fn run_full(
+    svc: &StoreService,
+    mesh: &str,
+    method: &str,
+    params: Value,
+    now_ms: u64,
+    registry_store: bool,
+    sign: &SignCfg,
+    guard: &Guard,
+) -> Result<Value, String> {
+    let verb = method.strip_prefix("store.worktree.").unwrap_or(method).to_owned();
+    let who = (params["project"].as_str().map(str::to_owned), params["slug"].as_str().map(str::to_owned), params["agent"].as_str().map(str::to_owned), params["host"].as_str().map(str::to_owned));
+    let r = dispatch(svc, mesh, method, params, now_ms, registry_store, sign, guard);
+    record_verb(svc, mesh, &verb, who, &r);
+    r
+}
+
+/// Activity-log and chain record for the verbs that change shared state, success or failure.
+fn record_verb(svc: &StoreService, mesh: &str, verb: &str, who: (Option<String>, Option<String>, Option<String>, Option<String>), r: &Result<Value, String>) {
+    let (kind, op) = match verb {
+        "create" => ("store.worktree.create", "WorktreeCreate"),
+        "publish" => ("store.worktree.publish", "WorktreePublish"),
+        "claim" => ("store.worktree.claim", "WorktreeClaim"),
+        "promote" => ("store.worktree.promote", "WorktreePromote"),
+        _ => return,
+    };
+    let (Some(project), Some(slug)) = (who.0, who.1) else { return };
+    let Ok(n) = names(mesh, &project, &slug) else { return };
+    let actor = format!("{}@{}", who.2.as_deref().unwrap_or("agent"), who.3.as_deref().unwrap_or("?"));
+    let (outcome, detail) = match r {
+        Ok(v) => (weftos_store::Outcome::Ok, v.clone()),
+        Err(e) => (weftos_store::Outcome::Error(e.clone()), json!({"error": e})),
+    };
+    let bytes = detail["uploaded"].as_u64().unwrap_or(0);
+    svc.record_act(&actor, &n.wt_name, op, None, bytes, outcome, Some((kind, json!({"store": n.wt_name.to_string(), "project": project, "slug": slug, "actor": actor, "result": detail}))));
+}
+
+#[allow(clippy::too_many_arguments)]
+fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms: u64, registry_store: bool, sign: &SignCfg, guard: &Guard) -> Result<Value, String> {
     let names = |m: &str, pr: &str, s: &str| names_with(m, pr, s, registry_store);
     let p: P = serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
     let e = |e: weftos_store::overlay::S2Error| e.to_string();
@@ -466,11 +525,29 @@ pub fn run_full(svc: &StoreService, mesh: &str, method: &str, params: Value, now
             let slug = need(&p.slug, "slug")?;
             let n = names(mesh, &project, slug)?;
             // The project store may not exist yet on a fresh node; create it, never fail on "exists".
-            svc.ensure_store(&n.pr_name, "cli", Parties::defaults_for(&n.pr_name)).map_err(|e| e.to_string())?;
-            svc.ensure_store(&n.wt_name, "cli", Parties::defaults_for(&n.wt_name)).map_err(|e| e.to_string())?;
-
-            if weftos_store::promote::is_promoted(&b, &n.wt).map_err(e)?.is_some() {
-                return Err(format!("worktree {slug} was already landed; use a new slug"));
+            // "Exists" is fine even when this daemon's own state does not know the store: another
+            // daemon on the same backend made it (the project store is shared; its record and
+            // grants live with the daemon that created it). The S2 verbs use the raw data plane.
+            for name in [&n.pr_name, &n.wt_name] {
+                match svc.ensure_store(name, "cli", Parties::defaults_for(name)) {
+                    Ok(_) | Err(weftos_store::StoreError::Exists(_)) => {}
+                    Err(e) => return Err(e.to_string()),
+                }
+            }
+            // Re-creating a live worktree is idempotent and keeps its first creation time. A slug
+            // whose worktree already landed (or was archived) must not be reused until that store
+            // is archived and deleted: its handoff and promotion record would carry over.
+            let mut created_ms = now_ms;
+            if let Some(m) = read_meta(&b, &n.wt).map_err(e)? {
+                let landed = is_promoted(&b, &n.wt).map_err(e)?.is_some()
+                    || weftos_store::share::read_handoff(&b, &n.wt)
+                        .map_err(e)?
+                        .is_some_and(|h| matches!(h.state, weftos_store::share::State::Merged | weftos_store::share::State::Archived))
+                    || svc.is_archived(&n.wt_name) == Some(true);
+                if landed {
+                    return Err(format!("worktree {slug} already landed or was archived; run `store archive --delete` on it before reusing the slug"));
+                }
+                created_ms = m.created_ms;
             }
             write_meta(
                 &b,
@@ -490,6 +567,20 @@ pub fn run_full(svc: &StoreService, mesh: &str, method: &str, params: Value, now
             let slug = need(&p.slug, "slug")?;
             let n = names(mesh, &project, slug)?;
             live_worktree(svc, &b, &n, &project, slug)?;
+            let quota = match p.quota_bytes {
+                Some(0) => None,
+                Some(q) => Some(q),
+                None => Some(weftos_store::retention::DEFAULT_WORKTREE_QUOTA),
+            };
+            if let Some(q) = quota {
+                let (_, used) = weftos_store::retention::usage(&b, &n.wt).map_err(e)?;
+                if used > q {
+                    return Err(format!(
+                        "worktree store {slug} holds {used} bytes, over its {q} byte quota; \
+                         land or clean it, or raise --quota-bytes"
+                    ));
+                }
+            }
             let root = guard.check(need(&p.root, "root")?, "root", Use::ReadDir)?;
             // The hook publishes from the top of a git worktree; anything else is not a worktree.
             if !root.join(".git").exists() {
@@ -557,6 +648,7 @@ pub fn run_full(svc: &StoreService, mesh: &str, method: &str, params: Value, now
         "claim" => {
             let slug = need(&p.slug, "slug")?;
             let n = names(mesh, &project, slug)?;
+            live_worktree(svc, &b, &n, &project, slug)?;
             // Expiry is judged on how long this daemon has watched the claim sit unchanged, on its
             // own monotonic clock; the stored stamp (some caller's wall clock) decides nothing.
             let h = {
@@ -570,6 +662,7 @@ pub fn run_full(svc: &StoreService, mesh: &str, method: &str, params: Value, now
         "promote" => {
             let slug = need(&p.slug, "slug")?;
             let n = names(mesh, &project, slug)?;
+            live_worktree(svc, &b, &n, &project, slug)?;
             let on_conflict = match p.on_conflict.as_deref() {
                 None | Some("fail") => OnConflict::Fail,
                 Some("keep_project") => OnConflict::KeepProject,
@@ -590,6 +683,18 @@ pub fn run_full(svc: &StoreService, mesh: &str, method: &str, params: Value, now
                 let pv = weftos_store::promote::preview(&b, &n.wt, &n.pr, &policy).map_err(e)?;
                 return Ok(json!({"dry_run": true, "preview": pv}));
             }
+            // A caller that names the epoch it claimed under is refused when the claim was taken over
+            // since (fencing); without one, a land that went through git is the merge whoever held
+            // the claim (a claim that is someone else's or has expired must not stop the assets
+            // reaching the project). A worktree that was never published has no handoff and gets none.
+            if let Some(ep) = p.epoch
+                && let Some(h) = weftos_store::share::read_handoff(&b, &n.wt).map_err(e)?
+                && h.state == weftos_store::share::State::Claimed
+                && h.epoch != ep
+            {
+                return Err(format!("claim epoch {ep} is stale (now {}); the claim was taken over", h.epoch));
+            }
+            weftos_store::share::mark_landed(&b, &n.wt, &who(&p), "landed", now_ms).map_err(e)?;
             svc.ensure_archive().map_err(|e| e.to_string())?;
             let prefix = archive_key(&n.wt, now_ms, "");
             let r = promote(
@@ -601,16 +706,9 @@ pub fn run_full(svc: &StoreService, mesh: &str, method: &str, params: Value, now
                 now_ms,
             )
             .map_err(e)?;
-            // A land that went through git is the merge: record it if a claimer did not. Only after
-            // the promotion succeeded, so a conflict leaves the handoff claimable and republishable.
-            if let Ok(Some(h)) = weftos_store::share::read_handoff(&b, &n.wt)
-                && h.state == weftos_store::share::State::Claimed
-            {
-                mark_merged_at(&b, &n.wt, &who(&p), p.epoch, "landed", now_ms).map_err(e)?;
-            }
-            // Landed: nothing unmerged is left to see, so the entry (and its signature) goes. Left in
-            // place it would read as a forgotten claim to every follower.
-            remove_registry_entry_signed(&b, &n.reg, slug).map_err(e)?;
+            // Followers must stop seeing a landed worktree as claimed (or open): the entry now says
+            // merged, and stays until the worktree store is archived and deleted (see `forget`).
+            refresh(&b, &n.reg, slug, &n.wt, sign)?;
             Ok(json!({
                 "promoted": r.promoted, "deleted": r.deleted, "kept_project": r.kept_project,
                 "archived": r.archived.len(), "dropped_tombstones": r.dropped_tombstones,
@@ -670,9 +768,9 @@ pub fn run_full(svc: &StoreService, mesh: &str, method: &str, params: Value, now
             let sp = guard.check(need(&p.state, "state")?, "state", Use::WriteFile)?;
             let mut st = FollowState::load(&sp).map_err(e)?;
             let ch = match &sign.trusted {
+                // With a trusted-key file every entry is read and verified; the digest shortcut would skip that.
                 Some(t) => poll_verified_settled(&b, &n.reg, &mut st, &Trusted(t), sign.require, p.confirmed, sign.follow_retry_ms),
-                None if p.confirmed => follower::poll_confirmed(&b, &n.reg, &mut st),
-                None => follower::poll(&b, &n.reg, &mut st),
+                None => follower::poll_fast(&b, &n.reg, &mut st, p.confirmed, !p.full, share_fetch::FETCH_JOBS),
             }
             .map_err(e)?;
             st.save(&sp).map_err(e)?;
@@ -680,17 +778,20 @@ pub fn run_full(svc: &StoreService, mesh: &str, method: &str, params: Value, now
         }
         "search" => {
             let n = names(mesh, &project, "x")?;
-            let entries = trusted_entries(&b, &n.reg, sign).map_err(e)?;
+            // One corrupt or unknown-schema registry entry must not blind the search (it does not
+            // blind `follow` or `leftovers`): search the readable ones and name the others.
+            let (entries, bad_entries) = trusted_entries(&b, &n.reg, sign).map_err(e)?;
             let r = follower::search_docs(&b, &entries, need(&p.query, "query")?);
             Ok(json!({
                 "hits": r.hits.iter().map(|h| json!({"slug": h.slug, "path": h.path, "title": h.title, "state": h.state})).collect::<Vec<_>>(),
                 "unreadable": r.unreadable,
                 "unreadable_entries": bad_entries,
+                "trust": trust_json(&b, &n.reg, sign),
             }))
         }
         "leftovers" => {
             let n = names(mesh, &project, "x")?;
-            let entries = trusted_entries(&b, &n.reg, sign).map_err(e)?;
+            let entries = trusted_entries(&b, &n.reg, sign).map_err(e)?.0;
             let l = follower::leftovers(&entries, now_ms, &LeftoverPolicy::default());
             Ok(json!({"leftovers": l.iter().map(|x| json!({"why": why_str(x.why), "idle_ms": x.idle_ms, "worktree": entry_json(&x.entry)})).collect::<Vec<_>>(),
                       "trust": trust_json(&b, &n.reg, sign)}))

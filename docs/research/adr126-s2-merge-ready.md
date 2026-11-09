@@ -53,3 +53,17 @@ Rehearsed on throwaway branch `rehearse/s2-onto-s1-2a8a1327` (worktree `s2-rehea
 - A plain merge of `2a8a1327` into S2 would conflict in `sigv4.rs` and `docs/adr/adr-126-mesh-object-store.md` (doc conflict: S1 and S2 status text both edited; keep both).
 - Registry format stays A; no format2/B/C commit is involved.
 - When the MaxBook reports S1 landed: `git rebase --rebase-merges <landed tip>` on `feat/adr126-s2`, resolve `sigv4.rs` as above, run `scripts/build.sh check` and the targeted `weftos-store` and `clawft-weave` store tests.
+
+## Landed onto S1 (branch `land/adr126-s2-on-s1land`, 2026-11-08 night)
+
+The landed S1 (`integ/adr126-s1-land` b8c42295f) also carries the Mac S2 line (`s2-mac`, `s2-meta`, `s2-hooks`) that fixed the same ground independently. Owner call: the Mac branches win where the two overlap, S2 is replayed on top, the stricter check stays where they differ. Registry format stays A.
+
+Mac won (kept as landed): worktree verb path guard (F1) and live/archived/foreign-bucket checks (F6, F8); activity-log and chain record of create/publish/claim/promote (F10); `mark_landed` (a git land is the merge whoever held the claim, F7) and the registry entry staying as `merged` until the store is archived and deleted (`forget`); registry-entry bucket check (F3); manifest cannot name control files (F19); `FollowState::save` unique temp name; follow digest and parallel fetch (`poll_fast`); `overlaps` with both bases and change-list narrowing; injective branch-to-slug rule in `worktree-store.sh`; claim stamps from the future are not live (`claim_is_live`).
+
+S2 replayed on top: registry signing and trust (`registry_sign`, `SignCfg`, trust in verb output); option B follower retry (off by default); claim watch (observed-time expiry) and claim epoch; CAS handoff writes (`mark_landed` now conditional too); land preview, conflict policy, size cap, publish quota, `usage` and `gc` verbs; the registry-only store switch; gate drills and their three fixes; the publish sweep by listing.
+
+Where they differ and the stricter rule was kept: a caller that names a claim epoch is refused when the claim was taken over (Mac's land would not check); with a trusted-key file `follow` reads and verifies every entry (no digest shortcut); `claim_merge` treats a far-future stamp as not live (Mac) in addition to my observed-time expiry.
+
+Dropped: my test "a landed worktree leaves the registry" (opposite of Mac's decision that the merged entry stays until deletion); `promote` no longer removes the registry entry itself, `forget` removes it with its signature sidecar when the store is archived and deleted.
+
+Checks on the tip: `weftos-store` all tests (182 lib, plus s2_* suites), `clawft-weave --lib store` 102 passed 5 ignored (live), clippy clean on both crates with `--tests`, `scripts/tests/worktree-store.test.sh` 74/74 and `worktree-union-mount.test.sh` 8/8, diff gate against the landed S1 OK (0 failed, 0 approved).

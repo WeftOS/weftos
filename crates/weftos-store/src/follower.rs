@@ -142,18 +142,47 @@ fn poll_with<B: ObjectBackend>(
     allow_all_gone: bool,
 ) -> Result<Vec<Change>> {
     let (entries, bad) = list_shared_lenient(b, project_bucket)?;
-    diff_poll(entries, bad, state, allow_all_gone)
+    let total = entries.len() + bad.len();
+    poll_core(state, entries.into_iter().map(|e| (e, None)).collect(), bad, Vec::new(), total, allow_all_gone)
 }
 
-/// The comparison half of [`poll`], on an already-listed registry (`registry_sign::poll_verified`
-/// lists through a trust filter and shares this).
-pub(crate) fn diff_poll(
-    entries: Vec<RegistryEntry>,
-    bad: Vec<String>,
+/// [`poll`] for a backend that can be read from several threads: the registry entries are fetched
+/// `jobs` at a time, and with `use_digest` the daemon-written digest replaces the listing, so only
+/// entries whose etag changed since this follower last looked are fetched at all. Same results as
+/// [`poll`]; a missing digest falls back to listing.
+pub fn poll_fast<B: ObjectBackend + Sync>(
+    b: &B,
+    project_bucket: &str,
     state: &mut FollowState,
     allow_all_gone: bool,
+    use_digest: bool,
+    jobs: usize,
 ) -> Result<Vec<Change>> {
-    if entries.is_empty() && bad.is_empty() && !state.seen.is_empty() && !allow_all_gone {
+    let current = match use_digest.then(|| crate::share_fetch::read_digest(b, project_bucket)).transpose()?.flatten() {
+        Some(d) => d.entries,
+        None => crate::share_fetch::registry_listing(b, project_bucket)?,
+    };
+    let (mut want, mut carried) = (Vec::new(), Vec::new());
+    for (slug, etag) in &current {
+        match state.seen.get(slug) {
+            Some(s) if s.etag.as_ref() == Some(etag) => carried.push((slug.clone(), s.clone())),
+            _ => want.push(slug.clone()),
+        }
+    }
+    let (fresh, bad) = crate::share_fetch::fetch_entries(b, project_bucket, &want, jobs)?;
+    let fresh = fresh.into_iter().map(|e| { let t = current.get(&e.slug).cloned(); (e, t) }).collect();
+    poll_core(state, fresh, bad, carried, current.len(), allow_all_gone)
+}
+
+fn poll_core(
+    state: &mut FollowState,
+    fresh: Vec<(RegistryEntry, Option<String>)>,
+    bad: Vec<String>,
+    carried: Vec<(String, Seen)>,
+    total: usize,
+    allow_all_gone: bool,
+) -> Result<Vec<Change>> {
+    if total == 0 && !state.seen.is_empty() && !allow_all_gone {
         return Err(S2Error::Invalid(format!(
             "registry is empty but {} worktree(s) were known; wrong project bucket? (poll_confirmed accepts it)",
             state.seen.len()
@@ -210,6 +239,18 @@ pub(crate) fn diff_poll(
     }
     state.seen = now_seen;
     Ok(out)
+}
+
+/// The comparison half of [`poll`], on an already-listed registry (`registry_sign::poll_verified`
+/// lists through a trust filter and shares this).
+pub(crate) fn diff_poll(
+    entries: Vec<RegistryEntry>,
+    bad: Vec<String>,
+    state: &mut FollowState,
+    allow_all_gone: bool,
+) -> Result<Vec<Change>> {
+    let total = entries.len() + bad.len();
+    poll_core(state, entries.into_iter().map(|e| (e, None)).collect(), bad, Vec::new(), total, allow_all_gone)
 }
 
 /// A registry entry is a pointer, not authority: before reading a bucket on its say-so, check the

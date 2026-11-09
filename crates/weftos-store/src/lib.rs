@@ -20,6 +20,7 @@ pub mod access;
 pub mod audit;
 pub mod backend;
 pub mod claim_watch;
+pub mod drive;
 pub mod follower;
 pub mod fs;
 pub mod grant_seq;

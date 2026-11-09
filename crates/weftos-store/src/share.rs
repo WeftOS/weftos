@@ -637,9 +637,8 @@ pub fn claim_merge<B: ObjectBackend>(
     me: &Actor,
     now_ms: u64,
 ) -> Result<Handoff> {
-    claim_merge_with(b, bucket, me, now_ms, |cur| {
-        now_ms.saturating_sub(cur.updated_ms) >= CLAIM_TTL_MS
-    })
+    // Not live: older than the TTL, or stamped from further in the future than the allowed skew.
+    claim_merge_with(b, bucket, me, now_ms, |cur| !claim_is_live(cur, now_ms))
 }
 
 /// [`claim_merge`] with the expiry decision supplied by the caller: `expired(current)` says whether
@@ -757,20 +756,22 @@ pub fn mark_landed<B: ObjectBackend>(
     note: &str,
     now_ms: u64,
 ) -> Result<bool> {
-    let Some(cur) = read_handoff(b, bucket)? else { return Ok(false) };
-    if matches!(cur.state, State::Merged | State::Archived) {
-        return Ok(false);
+    // Conditional, like the other handoff writes: the decision holds for exactly the version written over.
+    for _ in 0..HANDOFF_RETRIES {
+        let Some((cur, etag)) = read_handoff_versioned(b, bucket)? else { return Ok(false) };
+        if matches!(cur.state, State::Merged | State::Archived) {
+            return Ok(false);
+        }
+        let note = match cur.merger.as_ref().filter(|m| *m != lander && cur.state == State::Claimed) {
+            Some(m) => format!("{note} (claim was held by {}@{})", m.agent, m.host),
+            None => note.to_string(),
+        };
+        let next = Handoff { state: State::Merged, note, merger: Some(lander.clone()), updated_ms: now_ms, ..cur };
+        if write_handoff_if(b, bucket, &next, Some(&etag))? {
+            return Ok(true);
+        }
     }
-    let note = match cur.merger.as_ref().filter(|m| *m != lander && cur.state == State::Claimed) {
-        Some(m) => format!("{note} (claim was held by {}@{})", m.agent, m.host),
-        None => note.to_string(),
-    };
-    write_handoff(
-        b,
-        bucket,
-        &Handoff { state: State::Merged, note, merger: Some(lander.clone()), updated_ms: now_ms, ..cur },
-    )?;
-    Ok(true)
+    Err(contended())
 }
 
 /// Path segments that must never be written by a fetch: VCS control dirs and files that make a

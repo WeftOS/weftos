@@ -904,7 +904,7 @@ fn concurrent_saves_and_loads_never_see_a_torn_file_or_fail() {
     let state = |i: usize| {
         let mut s = FollowState::default();
         for k in 0..200 {
-            s.seen.insert(format!("wt-{k}"), Seen { bucket: format!("w-{i}-{k}"), head_commit: "h".repeat(40), state: State::Open });
+            s.seen.insert(format!("wt-{k}"), Seen { etag: None, bucket: format!("w-{i}-{k}"), head_commit: "h".repeat(40), state: State::Open });
         }
         s
     };

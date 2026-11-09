@@ -156,22 +156,6 @@ pub fn write_registry_entry<B: ObjectBackend>(
     Ok(())
 }
 
-/// Every shared worktree of a project, newest first. Readable from any node with project read.
-pub fn list_shared<B: ObjectBackend>(b: &B, project_bucket: &str) -> Result<Vec<RegistryEntry>> {
-    let mut v = Vec::new();
-    for o in b.list(project_bucket, REGISTRY_PREFIX)?.into_iter().filter(|o| o.key != DIGEST_KEY) {
-        if let Some(d) = b.get(project_bucket, &o.key)? {
-            v.push(serde_json::from_slice::<RegistryEntry>(&d)?);
-        }
-    }
-    v.sort_by(|a, c| {
-        c.updated_ms
-            .cmp(&a.updated_ms)
-            .then_with(|| a.slug.cmp(&c.slug))
-    });
-    Ok(v)
-}
-
 /// The bucket worktree `slug` of the project whose bucket is `project_bucket` must have. `None`
 /// when `project_bucket` is not a real project bucket (`p-<ULID>`), as in fixtures that use
 /// made-up names; the cross-check is then skipped.
@@ -180,29 +164,37 @@ pub fn expected_worktree_bucket(project_bucket: &str, slug: &str) -> Option<Stri
     crate::StoreName::worktree("x", ulid, slug).ok().map(|n| n.bucket())
 }
 
-/// Like [`list_shared`] but a corrupt or unknown-schema entry is reported, not fatal: returns the
-/// readable entries and the slugs of the unreadable ones.
-pub fn list_shared_lenient<B: ObjectBackend>(
+/// One registry object as read: the slug in its key, the exact bytes, and what they parse to.
+pub(crate) struct RawEntry {
+    pub key_slug: String,
+    pub bytes: Vec<u8>,
+    pub entry: RegistryEntry,
+}
+
+/// Read the registry once: each object is fetched a single time, so whatever is later checked
+/// (a signature, say) is checked against the very bytes that were parsed. An entry whose body names
+/// a different slug than its key, or a bucket other than this project's worktree bucket for that
+/// slug (review F3), is refused: its key's slug goes to the second list with the unparseable ones.
+pub(crate) fn read_registry<B: ObjectBackend>(
     b: &B,
     project_bucket: &str,
 ) -> Result<(Vec<RawEntry>, Vec<String>)> {
     let (mut v, mut bad) = (Vec::new(), Vec::new());
     for o in b.list(project_bucket, REGISTRY_PREFIX)?.into_iter().filter(|o| o.key != DIGEST_KEY) {
-        let slug = o
+        let key_slug = o
             .key
             .trim_start_matches(REGISTRY_PREFIX)
             .trim_end_matches(".json")
             .to_string();
-        match b
-            .get(project_bucket, &o.key)?
-            .map(|d| serde_json::from_slice::<RegistryEntry>(&d))
-        {
-            // A registry entry is a pointer, not authority (review F3): it must name the bucket
-            // this project's worktree of that slug has, and the slug its own key carries.
-            Some(Ok(e)) if e.slug == slug && expected_worktree_bucket(project_bucket, &e.slug).is_none_or(|x| x == e.bucket) => {
-                v.push(e)
+        let Some(bytes) = b.get(project_bucket, &o.key)? else { continue };
+        match serde_json::from_slice::<RegistryEntry>(&bytes) {
+            Ok(entry)
+                if entry.slug == key_slug
+                    && expected_worktree_bucket(project_bucket, &entry.slug).is_none_or(|x| x == entry.bucket) =>
+            {
+                v.push(RawEntry { key_slug, bytes, entry })
             }
-            _ => bad.push(slug),
+            _ => bad.push(key_slug),
         }
     }
     v.sort_by(|a, c| {

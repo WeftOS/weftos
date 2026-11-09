@@ -47,8 +47,8 @@ ok "paths file removed after run (trap)" "[ ! -e '$pz' ]"
 
 # claim saves its epoch and land presents it; an explicit WTS_EPOCH wins; garbage is refused
 export XDG_STATE_HOME="$t/state"
-: >"$t/log"; "$here/worktree-store.sh" claim feat-s2 2>/dev/null
-ok "claim saved the epoch" "[ \"\$(cat '$t'/state/weftos/claim-01ABC-feat-s2.epoch)\" = 4 ]"
+: >"$t/log"; "$here/worktree-store.sh" claim feat--s2 2>/dev/null
+ok "claim saved the epoch" "[ \"\$(cat '$t'/state/weftos/claim-01ABC-feat--s2.epoch)\" = 4 ]"
 : >"$t/log"; LAND_RC=0 "$here/worktree-store.sh" land
 ok "land presents the saved epoch" "grep -q -- '--epoch 4' '$t/log'"
 : >"$t/log"; WTS_EPOCH=9 "$here/worktree-store.sh" land
