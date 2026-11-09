@@ -95,3 +95,33 @@ path        = "crates/clawft-weave/Cargo.toml"
 pattern     = 'weftos-store[[:space:]]*='
 reason      = "ADR-126 S1: the daemon depends on weftos-store with the rustfs feature"
 approved_by = "owner"
+
+# Approved by the owner on 2026-11-09 (card t213s943) for the ADR-126 S1 store_ingest receiver
+# (RustFS audit/notification webhooks) and the weftos-store canned RustFS test servers.
+[[approval]]
+rule        = "net"
+path        = "crates/clawft-weave/src/store_ingest.rs"
+pattern     = 'TcpListener'
+reason      = "ADR-126 S1: loopback-only listener (127.0.0.1, POST only, 1 MiB cap, secret path token) receiving RustFS audit/notification webhooks; off unless WEFTOS_STORE_INGEST_ADDR is set"
+approved_by = "owner"
+
+[[approval]]
+rule        = "net"
+path        = "crates/clawft-weave/src/store_ingest_tests.rs"
+pattern     = '(TcpStream|TcpListener)'
+reason      = "ADR-126 S1: tests talk to the receiver and bind a free loopback port"
+approved_by = "owner"
+
+[[approval]]
+rule        = "process"
+path        = "crates/clawft-weave/src/store_ingest_tests.rs"
+pattern     = 'std::process::|Command::new'
+reason      = "ADR-126 S1: the ignored live test starts a throwaway loopback RustFS binary named by WEFTOS_STORE_TEST_RUSTFS_BIN"
+approved_by = "owner"
+
+[[approval]]
+rule        = "net"
+path        = "crates/weftos-store/src/rustfs_tests.rs"
+pattern     = 'std::net::TcpListener::bind\("127.0.0.1:0"\)'
+reason      = "ADR-126 S1: two local-only canned RustFS test servers (Canned::start and the checksum-header test) on an ephemeral loopback port"
+approved_by = "owner"
