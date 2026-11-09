@@ -412,6 +412,11 @@ impl VerifiedWorkload {
                 Vec::new(),
                 Vec::new(),
             ),
+            WorkloadSource::Computer(_) => (
+                format!("computer.{}.{}", self.id, self.version),
+                Vec::new(),
+                Vec::new(),
+            ),
         }
     }
 
@@ -427,6 +432,9 @@ impl VerifiedWorkload {
             ))),
             WorkloadSource::Inference(_) => Err(RuntimeError::AdmissionRefused(format!(
                 "{runtime} runs only signed packages; inference workloads go through the infer.* adapters"
+            ))),
+            WorkloadSource::Computer(_) => Err(RuntimeError::AdmissionRefused(format!(
+                "{runtime} runs only signed packages; computer workloads go through the computer hub"
             ))),
         }
     }

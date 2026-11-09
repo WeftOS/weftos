@@ -37,7 +37,7 @@ impl WorkloadKind for Echo {
 #[test]
 fn builtin_registry_has_cog() {
     let r = KindRegistry::builtin();
-    assert_eq!(r.ids(), vec![KIND_COG, "project"]);
+    assert_eq!(r.ids(), vec![KIND_COG, "computer", "project"]);
     assert_eq!(r.get(KIND_COG).unwrap().id(), KIND_COG);
     assert!(r.require(KIND_COG).is_ok());
 }
@@ -57,7 +57,7 @@ fn unknown_kind_is_a_structured_error() {
 fn registering_a_kind_makes_it_resolvable() {
     let mut r = KindRegistry::builtin();
     r.register(Arc::new(Echo)).unwrap();
-    assert_eq!(r.ids(), vec![KIND_COG, "echo", "project"]);
+    assert_eq!(r.ids(), vec![KIND_COG, "computer", "echo", "project"]);
     let env = ManifestEnvelope::new("echo", json!({"anything": 1}));
     assert!(validate_envelope(&r, &env).is_ok());
     // The builtin registry stays untouched (no global state).

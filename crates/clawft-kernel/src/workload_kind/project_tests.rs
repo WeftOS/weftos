@@ -64,7 +64,7 @@ fn facts<'a>(
 #[test]
 fn the_kind_is_builtin_has_no_package_and_runs_on_logical_only() {
     let r = KindRegistry::builtin();
-    assert_eq!(r.ids(), vec![KIND_COG, KIND_PROJECT]);
+    assert_eq!(r.ids(), vec![KIND_COG, "computer", KIND_PROJECT]);
     let k = r.require(KIND_PROJECT).unwrap();
     // `logical` (also fronting Seatbelt and container drivers) and the explicit Wasmtime adapter.
     assert_eq!(k.adapters(), ["logical", "wasmtime-project-v1"]);

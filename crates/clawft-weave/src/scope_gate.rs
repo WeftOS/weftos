@@ -177,6 +177,11 @@ pub const USER_LEVEL_ALLOW: &[&str] = &[
     "agent.sources",
     // Joined directory with an etag (`mesh` asks peers, Admin in the handler).
     "agent.directory",
+    // D1: the computer hub is a machine-level service (status is Read; mint and
+    // revoke are Admin, checked by the route's capability).
+    "computer.hub.status",
+    "computer.hub.mint",
+    "computer.hub.revoke",
     // ADR-116: re-reading every project's compose/ports.yaml belongs to the machine.
     "route.reload",
     // ADR-108 P3b: the remote helper fetches a project onto this machine; the

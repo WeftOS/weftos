@@ -114,7 +114,7 @@ pub use seed_creds::FileCredentials;
 pub use seed_http::{HttpSeedTransport, SeedCredentials, SeedTransport};
 pub use seed_ops::{SeedBackup, UpgradeOutcome};
 pub use types::{
-    Admission, ControlMode, InferencePayload, InstanceHandle, InstanceState, InstanceStatus,
+    Admission, ComputerPayload, ControlMode, InferencePayload, InstanceHandle, InstanceState, InstanceStatus,
     LinkSecurity, Preemption, ProjectPayload, RunMode, RuntimeError, VerifiedWorkload, WorkloadConfig, WorkloadRuntime,
     WorkloadSource,
 };

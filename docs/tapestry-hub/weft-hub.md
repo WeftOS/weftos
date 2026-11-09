@@ -1,11 +1,13 @@
 # weft-hub: the WeftOS-side computer hub for Tapestry
 
-> **Status: approved BACKUP plan (owner 2026-11-08 13:12), unmerged prep; D1 unanswered; the
-> primary path is the Tapestry test hub (`tapestry/p3-test-hub`).** The owner has not answered
-> Phase 3 D1 (hub placement). Both D1 options stay open: a standalone binary supervised by
-> weaver, or a daemon service. The standalone shape below is what this prep branch builds, not
-> a decision, and D2 (machine-list-as-data) is likewise a working assumption. Only "hub on the
-> WeftOS side" and "WeftOS-minted pass key" came from the owner.
+> **Status (2026-11-09): D1 answered. The hub is a service inside the WeftOS daemon, one per mesh.**
+> `clawft-weave` hosts this library (feature `computer-hub`, off by default until the owner approves the
+> `xai-tool-protocol` git dependency in the diff gate). The service starts when
+> `<runtime dir>/computer-hub/hub.toml` exists; pass keys are minted by the daemon through
+> `computer.hub.mint` (Admin), `computer.hub.revoke` (Admin) and `computer.hub.status` (Read), with
+> `host_kind` assigned from the minter. The standalone `weft-hub` binary below is now a dev tool. See
+> `docs/adr/adr-TBD-computer-workload-and-desktops.md`. The text below was written for the earlier
+> standalone prep shape and is otherwise still accurate for the wire contract and pass-key scheme.
 
 Package: `crates/weft-computer-hub/` (binary `weft-hub`, library `weft_hub`).
 Branch `feat/weft-computer-hub`, off WeftOS `target-0.8.5` at e3688fedb. Fork docs are

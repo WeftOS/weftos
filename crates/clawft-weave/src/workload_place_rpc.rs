@@ -793,6 +793,9 @@ pub async fn route(plane: &PlacementControlPlane, m: &str, params: Value) -> Res
                 let rec = plane.place_store_pin(&o).await.map_err(|e| e.to_string())?;
                 Ok(json!({ "placed": rec, "route": clawft_kernel::workload_ctl::SEED_ROUTE }))
             }
+            "workload.place" | "workload.explain" if params.get("computer").is_some() => {
+                crate::workload_computer::declare(&params)
+            }
             "workload.place" | "workload.explain" => {
                 let p: PlaceParams = serde_json::from_value(params).map_err(|e| format!("invalid {m} params: {e}"))?;
                 let policy = LifecyclePolicy {

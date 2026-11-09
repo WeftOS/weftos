@@ -1365,6 +1365,14 @@ pub async fn run(
                 Err(e) => error!(error = %e, "client store not started"),
             }
         }
+        // D1: the Tapestry computer hub, when this node hosts one (`computer-hub/hub.toml`
+        // under the runtime dir). A broken config is an error in the log, not a silent skip.
+        #[cfg(feature = "computer-hub")]
+        match crate::computer_hub_svc::start_global(&runtime_dir).await {
+            Ok(Some(h)) => info!(addr = %h.addr(), "computer hub serving"),
+            Ok(None) => {}
+            Err(e) => error!(error = %e, "computer hub not started"),
+        }
         let parts = crate::infer_wire::InitParts {
             dir: &runtime_dir,
             node_id: daemon_identity.node_id.clone(),

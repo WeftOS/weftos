@@ -102,6 +102,8 @@ pub(crate) struct State {
 
 pub struct Hub {
     cfg: HubConfig,
+    /// `jti` values revoked at run time (on top of `cfg.revoked_jti`).
+    revoked: Mutex<std::collections::HashSet<String>>,
     state: Mutex<State>,
     pub(crate) next: AtomicU64,
 }
@@ -126,6 +128,7 @@ impl Hub {
     pub fn new(cfg: HubConfig) -> Arc<Self> {
         Arc::new(Self {
             cfg,
+            revoked: Mutex::new(std::collections::HashSet::new()),
             state: Mutex::new(State::default()),
             next: AtomicU64::new(1),
         })
@@ -139,6 +142,24 @@ impl Hub {
         // A poisoned lock means a routing bug panicked mid-update; continuing
         // on half-updated state would mis-route, so propagate.
         self.state.lock().expect("hub state poisoned")
+    }
+
+    /// Refuse every future connection that presents the pass key `jti`.
+    /// Already-open connections are not closed. Returns false when `jti` was
+    /// already revoked. The set lives in memory: it is not kept across a
+    /// restart (a daemon restart keeps `revoked_jti` from the config only).
+    pub fn revoke(&self, jti: &str) -> bool {
+        self.revoked
+            .lock()
+            .expect("hub revocation set poisoned")
+            .insert(jti.to_owned())
+    }
+
+    /// Machine ids that have a tool server connected right now, sorted.
+    pub fn connected_servers(&self) -> Vec<String> {
+        let mut ids: Vec<String> = self.st().servers.keys().cloned().collect();
+        ids.sort();
+        ids
     }
 
     /// Number of live connections (tests, status).
@@ -162,6 +183,14 @@ impl Hub {
             now,
         )
         .map_err(|e| Refusal::new(401, e.to_string()))?;
+        if self
+            .revoked
+            .lock()
+            .expect("hub revocation set poisoned")
+            .contains(&claims.jti)
+        {
+            return Err(Refusal::new(401, passkey::PassKeyError::Revoked.to_string()));
+        }
         if !claims.roles.contains(&role) {
             return Err(Refusal::new(403, "pass key does not grant this role"));
         }
@@ -425,5 +454,44 @@ impl Hub {
         if let Some(c) = self.st().conns.get(&cid) {
             send(&c.tx, frame);
         }
+    }
+}
+
+#[cfg(test)]
+mod revoke_tests {
+    use super::*;
+    use crate::config::Minter;
+
+    fn hub() -> (Arc<Hub>, Minter) {
+        let m = Minter {
+            id: "m".into(),
+            host_kind: HostKind::Desktop,
+            key: vec![7; 32],
+        };
+        let cfg = HubConfig {
+            addr: "127.0.0.1:0".into(),
+            allow_non_loopback: false,
+            max_ttl_secs: 3600,
+            revoked_jti: vec![],
+            minters: [(m.id.clone(), m.clone())].into(),
+            machines: HashMap::new(),
+        };
+        (Hub::new(cfg), m)
+    }
+
+    #[test]
+    fn a_revoked_pass_key_is_refused_with_401() {
+        let (h, m) = hub();
+        let now = now_secs();
+        let t = passkey::mint(&m, "u", &[Role::Harness], 600, None, now).unwrap();
+        let ok = h.authenticate(Some(&t), Role::Harness, now).unwrap();
+        assert!(h.revoke(&ok.claims.jti));
+        assert!(!h.revoke(&ok.claims.jti), "second revoke reports no change");
+        let e = h.authenticate(Some(&t), Role::Harness, now).unwrap_err();
+        assert_eq!(e.status, 401);
+        assert!(e.reason.contains("revoked"));
+        // A different key is unaffected.
+        let t2 = passkey::mint(&m, "u", &[Role::Harness], 600, None, now).unwrap();
+        assert!(h.authenticate(Some(&t2), Role::Harness, now).is_ok());
     }
 }

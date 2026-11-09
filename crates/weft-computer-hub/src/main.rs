@@ -1,11 +1,10 @@
 //! `weft-hub`: serve the computer hub, mint pass keys, generate minter keys.
 
 use std::collections::HashMap;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use weft_hub::config::HubConfig;
+use weft_hub::config::{HubConfig, generate_key_hex, write_secret};
 use weft_hub::hub::{Hub, now_secs};
 use weft_hub::passkey::{self, Role};
 use weft_hub::server;
@@ -51,30 +50,9 @@ fn need<'a>(f: &'a HashMap<String, String>, k: &str) -> Result<&'a str, String> 
         .ok_or_else(|| format!("--{k} is required"))
 }
 
-/// Create `path` exclusively with mode 0600 and write `content`.
-fn write_secret(path: &Path, content: &str) -> Result<(), String> {
-    use std::fs::OpenOptions;
-    let mut o = OpenOptions::new();
-    o.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        o.mode(0o600);
-    }
-    let mut f = o
-        .open(path)
-        .map_err(|e| format!("{}: {e}", path.display()))?;
-    f.write_all(content.as_bytes())
-        .map_err(|e| format!("{}: {e}", path.display()))
-}
-
 fn cmd_keygen(args: &[String]) -> Result<(), String> {
     let f = parse_flags(args, &["out"], &[])?;
-    let mut buf = [0u8; 32];
-    std::fs::File::open("/dev/urandom")
-        .and_then(|mut r| std::io::Read::read_exact(&mut r, &mut buf))
-        .map_err(|e| format!("reading /dev/urandom: {e}"))?;
-    let hex: String = buf.iter().map(|b| format!("{b:02x}")).collect();
+    let hex = generate_key_hex()?;
     write_secret(Path::new(need(&f, "out")?), &format!("{hex}\n"))
 }
 
@@ -148,7 +126,7 @@ async fn cmd_serve(args: &[String]) -> Result<(), String> {
     };
     let cfg = HubConfig::load(&cfg_path).map_err(|e| e.to_string())?;
     let addr = f.get("addr").cloned().unwrap_or_else(|| cfg.addr.clone());
-    let sa = server::check_bind(&addr, f.contains_key("allow-non-loopback"))?;
+    let sa = server::check_bind(&addr, f.contains_key("allow-non-loopback") || cfg.allow_non_loopback)?;
     let listener = tokio::net::TcpListener::bind(sa)
         .await
         .map_err(|e| format!("bind {sa}: {e}"))?;

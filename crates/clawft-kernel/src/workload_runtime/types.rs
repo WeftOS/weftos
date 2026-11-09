@@ -80,6 +80,25 @@ pub enum WorkloadSource {
     /// `infer.*` adapter. Authorised by the operator's request and the
     /// operator-attested model manifest, not by a signed package.
     Inference(Box<InferencePayload>),
+    /// A desktop a bot may work on (D1, D2, D5): authorised by the operator's
+    /// own validated declaration, not a signed package. Adapter: the daemon's
+    /// computer hub.
+    Computer(Box<ComputerPayload>),
+}
+
+/// The spec of a [`WorkloadSource::Computer`] workload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComputerPayload {
+    /// The desktop's machine id on the hub.
+    pub desktop: String,
+    /// `desktop`, `container` or `sandbox`.
+    pub host_kind: String,
+    /// What the bot may do there.
+    pub capabilities: Vec<String>,
+    /// Own (full access) or granted (per-action ask plus allowlist).
+    pub access: crate::workload_kind::ComputerAccess,
+    /// The allowlist of a granted computer.
+    pub allowlist: Option<crate::workload_kind::ComputerAllowlist>,
 }
 
 /// The spec of a [`WorkloadSource::Inference`] workload.

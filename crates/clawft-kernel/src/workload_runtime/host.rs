@@ -98,6 +98,8 @@ impl WorkloadHost {
             // `PackageTrust::ProjectCert`: matched only by a permit that
             // names it (the supervisor's, see `project_supervisor_permit`).
             WorkloadSource::Project(_) => ("project_cert", 0.25),
+            // The operator's own declaration of a desktop; nothing runs on the node.
+            WorkloadSource::Computer(_) => ("operator_attested", 0.0),
             // Managed: model weights are operator-attested hash manifests
             // (ADR-101 section 3). Adopted: a server the operator started
             // is only observed, nothing is verified. Cost is the share of a

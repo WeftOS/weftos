@@ -1,8 +1,14 @@
-# Standalone package: NOT a member of the WeftOS workspace (own empty-root
-# `[workspace]` table, same pattern as the leaf firmware crates). It carries
-# protocol types derived from the xAI grok-build fork (Apache-2.0) and is kept
-# out of the WeftOS runtime on purpose (prep shape; owner decision D1 is unanswered, the daemon-service option is open). See
-# docs/tapestry-hub/weft-hub.md for how to build it against the local fork.
+# Library hosted by the WeftOS daemon (`clawft-weave`, feature `computer-hub`;
+# owner decision D1, 2026-11-09: the hub is a service inside the daemon, one per
+# mesh). It carries protocol types derived from the xAI grok-build fork
+# (Apache-2.0) through `xai-tool-protocol`. The `weft-hub` binary stays as a
+# dev tool (serve / mint / keygen against a hub.toml). See
+# docs/tapestry-hub/weft-hub.md.
+#
+# Not a workspace member: own `[workspace]` table and listed in the root
+# `exclude`, the same arrangement as the leaf crates that `clawft-weave` also
+# path-depends on. `scripts/build.sh check|clippy|test weft-computer-hub` runs
+# cargo inside this directory.
 [workspace]
 
 [package]

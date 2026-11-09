@@ -43,11 +43,16 @@ struct RawConfig {
 struct RawListen {
     #[serde(default = "default_addr")]
     addr: String,
+    /// Serve beyond loopback (the hub node is reached over the tailnet by the
+    /// other desktops). Pass keys are still required.
+    #[serde(default)]
+    allow_non_loopback: bool,
 }
 impl Default for RawListen {
     fn default() -> Self {
         Self {
             addr: default_addr(),
+            allow_non_loopback: false,
         }
     }
 }
@@ -118,6 +123,8 @@ pub struct Machine {
 #[derive(Debug, Clone)]
 pub struct HubConfig {
     pub addr: String,
+    /// `[listen] allow_non_loopback`: the file's own opt-in to a non-loopback bind.
+    pub allow_non_loopback: bool,
     pub max_ttl_secs: u64,
     pub revoked_jti: Vec<String>,
     pub minters: HashMap<String, Minter>,
@@ -136,6 +143,32 @@ pub fn parse_host_kind(s: &str) -> Result<HostKind, ConfigError> {
             "host_kind {other:?} is not one of desktop, container, sandbox"
         ))),
     }
+}
+
+/// Create `path` exclusively with mode 0600 and write `content`.
+pub fn write_secret(path: &Path, content: &str) -> Result<(), String> {
+    use std::io::Write as _;
+    let mut o = std::fs::OpenOptions::new();
+    o.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        o.mode(0o600);
+    }
+    let mut f = o
+        .open(path)
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    f.write_all(content.as_bytes())
+        .map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// A fresh 32-byte minter key as lowercase hex (from the OS random source).
+pub fn generate_key_hex() -> Result<String, String> {
+    let mut buf = [0u8; 32];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut r| std::io::Read::read_exact(&mut r, &mut buf))
+        .map_err(|e| format!("reading /dev/urandom: {e}"))?;
+    Ok(buf.iter().map(|b| format!("{b:02x}")).collect())
 }
 
 /// Read a key file: hex text, at least [`MIN_KEY_BYTES`] bytes decoded, and
@@ -178,6 +211,40 @@ pub fn decode_hex(s: &str) -> Option<Vec<u8>> {
 }
 
 impl HubConfig {
+    /// Like [`HubConfig::load`], but first creates any minter key file that
+    /// does not exist yet (mode 0600, never overwriting a present file). The
+    /// daemon uses this: the keys are the daemon's own, minted on first start.
+    pub fn load_ensuring_keys(path: &Path) -> Result<Self, ConfigError> {
+        let text = std::fs::read_to_string(path)
+            .map_err(|e| ConfigError::Read(format!("{}: {e}", path.display())))?;
+        let base = path.parent().unwrap_or_else(|| Path::new("."));
+        let raw: RawConfig =
+            toml::from_str(&text).map_err(|e| ConfigError::Parse(e.to_string()))?;
+        for m in &raw.auth.minters {
+            let key_path = if m.key_file.is_absolute() {
+                m.key_file.clone()
+            } else {
+                base.join(&m.key_file)
+            };
+            if key_path.exists() {
+                continue;
+            }
+            if let Some(dir) = key_path.parent() {
+                std::fs::create_dir_all(dir)
+                    .map_err(|e| ConfigError::Read(format!("{}: {e}", dir.display())))?;
+            }
+            let hex = generate_key_hex().map_err(ConfigError::Read)?;
+            write_secret(&key_path, &format!("{hex}\n")).map_err(ConfigError::Read)?;
+        }
+        Self::from_toml(&text, base)
+    }
+
+    /// The minter whose credentials serve machine `id`, and so the
+    /// `host_kind` every server under it reports.
+    pub fn minter_of_machine(&self, id: &str) -> Option<&Minter> {
+        self.minters.get(&self.machines.get(id)?.minter)
+    }
+
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
         let text = std::fs::read_to_string(path)
             .map_err(|e| ConfigError::Read(format!("{}: {e}", path.display())))?;
@@ -254,6 +321,7 @@ impl HubConfig {
         }
         Ok(Self {
             addr: raw.listen.addr,
+            allow_non_loopback: raw.listen.allow_non_loopback,
             max_ttl_secs: raw.auth.max_ttl_secs,
             revoked_jti: raw.auth.revoked_jti,
             minters,
@@ -339,6 +407,27 @@ minter = "xpc-mint"
         assert!(
             matches!(HubConfig::from_toml(&bad, d.path()), Err(ConfigError::Invalid(m)) if m.contains("host_kind"))
         );
+    }
+
+    #[test]
+    fn load_ensuring_keys_creates_a_missing_key_once_and_never_overwrites() {
+        let d = tempfile::tempdir().unwrap();
+        let toml = good(d.path());
+        std::fs::remove_file(d.path().join("k")).unwrap();
+        let p = d.path().join("hub.toml");
+        std::fs::write(&p, &toml).unwrap();
+        let c = HubConfig::load_ensuring_keys(&p).unwrap();
+        assert_eq!(c.minters["xpc-mint"].key.len(), 32);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(d.path().join("k")).unwrap().permissions().mode();
+            assert_eq!(mode & 0o077, 0, "key must be private");
+        }
+        let again = HubConfig::load_ensuring_keys(&p).unwrap();
+        assert_eq!(again.minters["xpc-mint"].key, c.minters["xpc-mint"].key);
+        assert_eq!(c.minter_of_machine("xpc").unwrap().id, "xpc-mint");
+        assert!(c.minter_of_machine("nope").is_none());
     }
 
     #[cfg(unix)]
