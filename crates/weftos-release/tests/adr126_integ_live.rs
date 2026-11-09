@@ -137,6 +137,11 @@ impl DeletableBackend for SvcBackend {
             Err(e) => Err(rerr(e)),
         }
     }
+    // The service has no copy call: get, then an unconditional put (needs `write`; see ServiceBackend::copy).
+    async fn copy(&self, src: &str, dst: &str) -> Result<(), RBackendError> {
+        let data = self.svc.get(&self.who, &self.name, src).map_err(rerr)?;
+        self.svc.put(&self.who, &self.name, dst, &data, false).map(|_| ()).map_err(rerr)
+    }
 }
 
 fn signer(seed: u8) -> rel::ReleaseSigner {
@@ -262,6 +267,9 @@ impl DeletableBackend for DirectBackend {
             Ok(()) | Err(BackendError::NoObject(_)) => Ok(()),
             Err(e) => Err(RBackendError(e.to_string())),
         }
+    }
+    async fn copy(&self, src: &str, dst: &str) -> Result<(), RBackendError> {
+        self.be.copy(&self.bucket, src, &self.bucket, dst).map(|_| ()).map_err(|e| RBackendError(e.to_string()))
     }
 }
 

@@ -26,10 +26,8 @@ store = ["dep:weftos-store", "dep:tokio"]
 
 [dev-dependencies]
 weftos-store = { path = "../weftos-store", features = ["rustfs"] }
-tempfile = { workspace = true }
-tokio = { workspace = true }
 # ADR-126 integration tests (S1 x S4, S1 x S3): in-tree crates only, test-only edges.
-weftos-store = { path = "../weftos-store", features = ["rustfs"] }
 weftos-edge-creds = { path = "../weftos-edge-creds" }
 tempfile = { workspace = true }
+tokio = { workspace = true }
 serde_json = { workspace = true }
