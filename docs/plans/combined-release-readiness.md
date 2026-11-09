@@ -123,7 +123,30 @@ scoped clippy clean. **Not fast-forwarded onto `target-0.8.5`:** `scripts/diff-g
 target-0.8.5` on the land tip reports 10 approved and 10 failed, and the failed ten are S1's receiver and
 its loopback test listeners, which only the owner can approve (section 3 row "S1 receiver approvals").
 The Mac branches (`wt/adr126-*`) all share merge-base ccd11d361 with S1, so they merge onto the land
-branch as ordinary three-way merges; not started, per the stop rule. Method: `git merge-tree --write-tree --name-only --messages`. After each step a
+branch as ordinary three-way merges.
+
+**Mac land order done on the land branch, 2026-11-08 late PM (owner 21:20: continue without a separate go).**
+Tip `integ/adr126-s1-land` **580a8df88** (first-parent chain: 68e010acf S1, 905d327a9 macOS fix, 30ea93478
+s2-mac, f2bae2592 s2-meta, 18059aebd s2-hooks, 8ebb36618 s3-drive, 61fb7d931 s3-harden2, 4e8a26668
+e1-view-verbs carrying e1-scoped-view, then a merge of target's docs commit 9bf35b717 so target is an ancestor
+again). `wt/adr126-s1-names` skipped as told. Per step: s2-mac had four textual conflicts (policy.rs tests,
+sigv4.rs, service_tests.rs, ADR-126 Updated lines) and two semantic ones (S1's F18 test wrote `.wt/` through
+the service, which S2 refuses, so it plants the overlay state at the backend; S2's Deny resource list is now
+sorted so the same grants give one policy document, which S1's concurrent-grants test demands); s2-meta clean;
+s2-hooks one conflict in `scripts/tests/worktree-store.test.sh`, resolved as on the integration branch, shell
+63/63; s3-drive three conflicts (backend.rs, fs.rs, mem.rs) resolved with the keep-S1 rule, plus a touch point
+the earlier notes missed: S1's `BackendError::Stale(String)` is the 412 error and the Mac's
+`PreconditionFailed(String)` is gone (16 sites, all in `crates/weftos-store/src`: backend, fs, mem, rustfs,
+drive remote/sync_up/gc/live_tests/view lease and the contract tests); the Mac's duplicate RustFS
+`put_if_match` dropped, its `delete_if_match` quotes the etag like S1's; s3-harden2 clean (three variant sites
+in gc fixed); e1-view-verbs one add/add on the weftos-pg handoff note (target copy kept), six lease sites fixed.
+Tests on 580a8df88: `weftos-store --features rustfs` 293 passed, 34 ignored; `clawft-weave --filter store` 94;
+live on a throwaway loopback RustFS 1.0.4: weftos-store 27/27 (S1, S2 drills, drive, gc, view), clawft-weave
+4/4 store live (`store_rt`, `store_svc`, `store_ingest`, `store_view`; the fifth `--filter live` hit is the
+Hermes :8090 postmortem test, not store); scoped clippy clean. `scripts/diff-gate.sh --base target-0.8.5`:
+still exactly the 10 S1 receiver rows, nothing new from the Mac branches. **Still not fast-forwarded**
+(owner-only approvals, section 3). Next after the owner's approvals: fast-forward `target-0.8.5` to
+580a8df88; aepod rebases S2 and S5 onto it (S5 re-applies an S1 commit); `feat/adr131-d1` lands last. Method: `git merge-tree --write-tree --name-only --messages`. After each step a
 synthetic commit was built with `git commit-tree` (objects only, no refs), so each step is "accumulated
 result so far plus the next branch". Where a step conflicted, the marker tree was kept and the run went on,
 so later conflicts in the same file can be knock-on effects.
@@ -169,6 +192,7 @@ Textual merges that report clean do not prove the result builds. Not run: any bu
 | ADR-131 text | Edited on `feat/adr131-d1` (D1 status, D1-1, D1-2 decisions) and on `target-0.8.5` this morning (Q5, Q8, Q9 lines). Auto-merges (step 9). The two must agree on Q5 and Q8 answered, Q9 noted owner-side | status page section 8 |
 | aepod S5 carries a copy of S1's first commit | f89d3608a re-applies a8f123e02, so S5 must be rebased on landed S1 | next-steps section 1 |
 | `BackendError::Unsupported` shape | S1: `Unsupported(String)`; Mac: bare `Unsupported`. Keep S1's; change the Mac defaults to `Unsupported("...".into())` and the arms to `Unsupported(_)` at the 15 sites listed in section 1a (backend.rs defaults and Bare test, drive gc, remote, sync_up, view lease, drive test backends). `ViewError::Unsupported(String)` is a different enum and stays | owner relay of aepod s1, 2026-11-08 18:08; lead's `git grep` |
+| `BackendError::Stale` vs `PreconditionFailed` | **Resolved on the land branch 2026-11-08 PM:** S1 names the 412 error `Stale(String)`, the Mac drive branches `PreconditionFailed(String)`. Keep S1's; the Mac variant is removed and its 16 sites use `Stale(_)` | land commit 8ebb36618 |
 | `Backend::put_if_match` declared twice | S1 declares it as required (`backend.rs:210`); the Mac drive branch declares the same signature as a default returning `Unsupported` (1cade20f8). Identical signatures, so git may auto-merge into a duplicate or a conflict; keep S1's required declaration and let the Mac `mem`, `fs`, `rustfs` impls collapse to one each. `delete_if_match` is Mac-only and stays | owner relay of aepod s1, 2026-11-08 17:48 |
 
 ## 3. Open owner calls that block release
@@ -226,6 +250,7 @@ Command form is the `scripts/build.sh` wrapper. Counts are from the sources; I d
 | `e1-scoped-view` | weftos-store rustfs 141 to 164 (23 view unit tests); clawft-weave store 61 | yes, 1 live cycle | clean | `diff-gate --worktree` | 2026-11-08 |
 | `e1-view-verbs` | weftos-store rustfs 185 passed on merge; clawft-weave store 61 to 76; 1 live handler-path cycle | yes, 1 | not recorded for the 068ea6723 tip | n/r | 2026-11-08 |
 | `feat/adr131-d1` | 91 targeted tests (89 to 91 with the D2 tests); `bucket_kill4.py` kill points 4 and 5 and `refresh_upper`, `recover_upper` on a throwaway RustFS through the `gcs2s3.py` facade; 19 overlay tests on `weftos-arm64` with `--features devtools` | yes, via facade; functional only, no timings | n/r | the gate **rejects** the crate (section 3) | 2026-11-08 12:20 pile |
+| `integ/adr126-s1-land` 580a8df88 (S1 plus the seven Mac branches) | `build.sh test weftos-store --features rustfs`: 293 passed, 34 ignored; `clawft-weave --filter store`: 94 passed; shell `worktree-store.test.sh` 63/63 | yes: weftos-store live 27/27 and clawft-weave store live 4/4 on a throwaway loopback RustFS 1.0.4 | clean (scoped) | `--base target-0.8.5`: 10 approved, the same 10 S1 rows failed | 2026-11-08 late PM |
 | `integ/adr126-s1-land` 905d327a9 (S1 land on target) | `build.sh test weftos-store --features rustfs`: 148 passed, 16 ignored; `clawft-weave --filter store`: 50 passed; `clawft-weave --ignored --filter live`: 3 store live pass, 1 fail = `conv_postmortem` Hermes :8090 (not S1) | yes: 16/16 weftos-store live on a throwaway loopback RustFS 1.0.4, plus the three weave live store tests | clean (scoped `clippy weftos-store --features rustfs`) | `--base target-0.8.5`: 10 approved, 10 failed (section 3) | 2026-11-08 PM |
 | mesh-mock `feat/manifest-v2` | 45 tests at last count in the plan, not rerun | no | n/r | n/a (outside the workspace) | n/r |
 
