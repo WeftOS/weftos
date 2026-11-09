@@ -312,3 +312,11 @@ Rehearsed on throwaway branch `rehearsal/s5-on-s1-2a8a1327` (worktree removed; t
 - **S5's own first commit re-applies S1's first commit** (`f89d3608`, the weftos-store crate): once S1 is in the target, that commit and the S1 merges drop out of a rebase as already applied. If git does not drop `f89d3608` as patch-identical, skip it by hand (`git rebase --skip`).
 - S2 stays on registry format A; no S2 file is in the conflict set.
 - When the MaxBook reports S1 landed: rebase (or merge) the real `feat/adr126-s5` onto that tip, apply the resolutions above, re-run `scripts/build.sh test weftos-store --features rustfs` and `clawft-weave --filter store`, and report.
+
+## S5 on the landed S1 and S2's rebased tip (2026-11-08, night)
+
+Branch `feat/adr126-s5-on-s2land`, built on S2's `land/adr126-s2-on-s1land` (93a3836b, which sits on the landed S1 `mac/integ/adr126-s1-land` b8c42295). `feat/adr126-s5` is unchanged. A straight rebase of S5's interleaved history conflicted repeatedly, so the branch was rebuilt: merge `feat/adr126-s3`, merge `feat/adr126-s4`, cherry-pick S5's own gate/ClientStore commits (skipping S1's `f89d3608`, already landed), then restore the S5-owned files (client_store*, integration tests, scripts/store, these docs) from `feat/adr126-s5`. S2's content is untouched.
+
+- Conflicts: Cargo.toml and the ADR (kept both sides); `daemon.rs` (S1's store-start block, with `reg.clone()` and `audit_fn.clone()`); `d4c92301` was written on top of the S1 merge 269cc903, so its `client_store*` files were taken whole.
+- Tests: `weftos-store --features rustfs` 228 passed; `clawft-weave --filter store` 202 passed (+1); `weftos-edge-creds` 99; `weftos-release` 28 + 1; scoped clippy clean.
+- Still flagged for the owner's approvals file: the 2 test-only dev-deps in `crates/weftos-release/Cargo.toml`.

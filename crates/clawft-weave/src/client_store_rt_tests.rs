@@ -6,7 +6,7 @@ use super::*;
 const MESH: &str = "0101010101010101010101010101010101010101010101010101010101010101";
 
 fn cfg(account: &str) -> ClientStoreConfig {
-    ClientStoreConfig { account: account.into(), port: 9100 }
+    ClientStoreConfig { account: account.into(), port: 9100, backend: Backend::Fs, env: None }
 }
 fn open(c: &ClientStoreConfig, euid: u32, mesh: &str) -> Result<ClientStore, String> {
     open_as(c, euid, mesh, Arc::new(OpenGate), Arc::new(MemSink::default()), Arc::new(weftos_store::service::NoChain), None, None, &DaemonService::default())
@@ -18,6 +18,9 @@ fn config_has_a_default_port_and_refuses_unknown_fields() {
     assert_eq!(parse_config(r#"{"account":"acme","port":9200}"#).unwrap().port, 9200);
     assert!(parse_config(r#"{"account":"acme","root":"/tmp/x"}"#).is_err(), "the root is not configurable");
     assert!(parse_config("not json").is_err());
+    let r = parse_config(r#"{"account":"acme","backend":"rustfs","env":"/data1/acme/store.env"}"#).unwrap();
+    assert_eq!((r.backend, r.env.as_deref()), (Backend::Rustfs, Some(std::path::Path::new("/data1/acme/store.env"))));
+    assert!(parse_config(r#"{"account":"acme","backend":"s3"}"#).is_err(), "only fs and rustfs");
 }
 
 #[test]

@@ -11644,10 +11644,13 @@ dependencies = [
  "ed25519-dalek",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "ulid",
+ "weftos-edge-creds",
  "weftos-pq-sign",
+ "weftos-store",
 ]
 
 [[package]]
