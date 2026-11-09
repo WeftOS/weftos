@@ -1024,7 +1024,7 @@ fn live_sansone_sized_worktree_listing_and_poll_latency() {
     assert_eq!(fr.written.len(), 0);
     let out = tempfile::tempdir().unwrap();
     let t1 = Instant::now();
-    let fr = fetch_tree(&be, &wb, out.path(), Select::All, false).unwrap();
+    let fr = fetch_tree_with(&be, &wb, out.path(), Select::All, false, &lim).unwrap();
     let fetch_all = ms(t1);
     assert_eq!(fr.written.len(), 5003);
 

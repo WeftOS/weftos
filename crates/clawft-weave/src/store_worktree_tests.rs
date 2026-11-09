@@ -688,7 +688,7 @@ fn live_ed25519_signed_entries_verify_against_the_bytes_rustfs_holds() {
     let trusted = [daemon.verifying_key().to_bytes()];
     let entry = |slug: &str| RegistryEntry {
         slug: slug.into(),
-        bucket: format!("w-01abc-{slug}"),
+        bucket: weftos_store::share_fetch::expected_worktree_bucket(&b, slug).unwrap(),
         branch: "feat/x".into(),
         head_commit: "abc".into(),
         state: weftos_store::share::State::Open,
@@ -718,6 +718,10 @@ fn live_ed25519_signed_entries_verify_against_the_bytes_rustfs_holds() {
 
     for s in ["good", "forged", "plain"] {
         remove_registry_entry_signed(&be, &b, s).unwrap();
+    }
+    // the daemon-written digest is not an entry: sweep what is left before the bucket can go
+    for m in weftos_store::backend::ObjectBackend::list(&be, &b, "").unwrap() {
+        weftos_store::backend::ObjectBackend::delete(&be, &b, &m.key).unwrap();
     }
     be.delete_bucket(&b).unwrap();
 }

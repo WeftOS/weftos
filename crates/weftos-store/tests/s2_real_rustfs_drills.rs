@@ -285,12 +285,10 @@ fn drill_overlaps_with_different_bases_over_reports() {
     let fp = paths.iter().filter(|p| !real.contains(p)).count();
     eprintln!("EVIDENCE overlaps-different-bases: reported {} paths, {} real conflict, {} false positives ({}%): {:?}", paths.len(), real.len(), fp, fp * 100 / paths.len(), paths);
     assert!(paths.contains(&"src/m2.rs"), "the real conflict is always found");
-    // Measured on 2026-11-08: 9 reported, 1 real, 8 false positives (89%). Every file that differs
-    // between the two trees is reported, including the ones that differ only because B's base has
-    // upstream edits A never saw, and files only one side changed. The manifests' `changes` lists
-    // (each worktree's edits against its own base) would remove all 8; `overlaps` does not use them
-    // for BothChanged yet. This assertion records the current behavior, not a wish.
-    assert_eq!((paths.len(), fp), (9, 8));
+    // Measured on 2026-11-08 before the change-list narrowing landed from the S1 land (the Mac S2 line):
+    // 9 reported, 1 real, 8 false positives (89%). With both manifests carrying their `changes` lists,
+    // `overlaps` now reports only a path changed on both sides: 1 reported, 0 false positives.
+    assert_eq!((paths.len(), fp), (1, 0));
 }
 
 /// Item 6: a `sync-docs` run that died after tracking new docs but before fetching them, followed by
