@@ -43,3 +43,13 @@ The notification wake-up test also needs `scripts/store/notify-sink.py` and `WEF
 ## What S2 does not close
 
 Two physical machines and a live daemon (barred by the no-install rule; what they need is written in the research note), the S1-side hook that feeds `registry_hints` from `store_ingest` and the mesh-relay hop, a decision on the manifest `schema` field being checked on read and on `verify_entry` checking the project, and the publish-killed-after-overwriting-a-changed-doc window (fails safe; needs a format change).
+
+## Rebase onto landed S1 (rehearsal, 2026-11-08)
+
+Rehearsed on throwaway branch `rehearse/s2-onto-s1-2a8a1327` (worktree `s2-rehearse`) against S1 tip `2a8a1327`. The real branch `feat/adr126-s2` was not touched.
+
+- Method that works: `git rebase --rebase-merges <landed S1 tip>`. A plain `git rebase` replays 30 commits including the two earlier S1 merges and conflicts at the first commit (ADR doc). `--onto` from the second merge drops S2 code; do not use it.
+- Expected conflicts: only `crates/weftos-store/src/sigv4.rs`, at the second S1 merge commit. S1 moved the canonical-request code into `canonical_request()` and `authorization()`; S2's side only carries a rustfmt reflow of the same `format!`. Resolution: take S1's file whole (`git checkout <S1 tip> -- crates/weftos-store/src/sigv4.rs`), `git add`, `git rebase --continue`. S2 has no sigv4 change of its own.
+- A plain merge of `2a8a1327` into S2 would conflict in `sigv4.rs` and `docs/adr/adr-126-mesh-object-store.md` (doc conflict: S1 and S2 status text both edited; keep both).
+- Registry format stays A; no format2/B/C commit is involved.
+- When the MaxBook reports S1 landed: `git rebase --rebase-merges <landed tip>` on `feat/adr126-s2`, resolve `sigv4.rs` as above, run `scripts/build.sh check` and the targeted `weftos-store` and `clawft-weave` store tests.
