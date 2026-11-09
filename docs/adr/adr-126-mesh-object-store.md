@@ -158,11 +158,38 @@ Only the daemon creates, grants access to, or deletes a store.
     marks it merged (which requires holding the claim). Promotion (below) then runs. The claim is
     advisory: there is no cross-client locking, two agents racing can both read back their own
     write, so the merger must still land through git's compare-and-swap. While a claim is live,
-    only the holder can republish or re-hand-off; a claim older than 30 minutes can be taken over
-    (compared with the claimer's clock).
+    only the holder can republish or re-hand-off; a claim older than 30 minutes can be taken over.
+    The daemon evaluating the claim compares the claim's stamp (written by the claimer's clock)
+    with its own clock. A claim stamped more than 10 minutes ahead of that clock is treated as
+    expired, not refused, so a claimer with a bad clock cannot block a merge forever. The claim
+    host is never "unknown": macOS reads `LocalHostName` from the system preferences, and the CLI
+    requires `--host` when no name is found.
   - **Reserved state never leaks:** everything under `.wt/` is hidden from overlay reads and
     listings and is never promoted as an asset. On promotion the shared tree, bundle, manifest and handoff
     record are archived with the rest.
+  - **Control state is daemon-only:** `.wt/` in a worktree store and `worktrees/` in a project
+    store are written only by the daemon. The governed path refuses those keys, and the
+    per-principal IAM policy carries a `Deny` for the same prefixes. Promotion still trusts
+    `.wt/promoted.json`, `.wt/promoting.json` and `.wt/base/*`, which is safe unless someone holds
+    the RustFS root credential, because that credential can forge them.
+  - **Ceilings and the bundle hash:** the manifest is untrusted, so `fetch`, `sync-docs` and
+    `search` enforce limits on the manifest's size, the number of files and docs it lists, each
+    file's size, the total selected and the bundle's size, and refuse over-limit input as an error
+    rather than truncating. The manifest records the bundle's SHA-256, and a fetch refuses a bundle
+    that does not match it.
+  - **Slug and bucket rules:** a registry entry must name this project's bucket and the slug it is
+    filed under, or it is unreadable and not followed. A landed or archived worktree's slug cannot
+    be created again until its store is archived with `--delete`, and a promotion record from an
+    earlier life of a slug is ignored. `publish`, `claim` and `promote` refuse a store this daemon
+    knows to be archived, a bucket with no metadata, and a bucket whose metadata names another
+    slug or project. A second daemon on the same backend can archive and delete a worktree store
+    the first created (with `--delete` only); the creating daemon's own record and grants stay
+    until it drops them, which is harmless once the bucket is gone.
+  - **Path rules for the `store.worktree` verbs:** the daemon reads and writes the paths itself,
+    so every path parameter must be absolute and resolved. They must lie outside the daemon's own
+    state (`--dest` and `--cache` may not be inside the runtime directory or contain it),
+    `--root` must contain `.git`, and the lists and the bundle must be regular files. No verb
+    writes through a symlink, and `fetch_bundle` writes a temporary file and renames it.
   - **Discovery:** the daemon writes a small registry entry per worktree into the project bucket
     (`worktrees/<slug>.json`: branch, head, state, writer, merger, doc count). Worktree principals
     cannot write there, so "writes stay in the worktree bucket" still holds for agents.
@@ -181,7 +208,10 @@ L1 as the tier for "unmerged layers that other nodes should see before integrati
   claim and merge, and removes it after promotion and bucket deletion.
 - **What a follower can do** (`weftos_store::follower`, `worktree-store.sh`):
   - `poll` / `follow`: new, head-moved, state-changed, gone and unreadable worktrees since the last
-    look. A head move and a state change in one poll are both reported; a recreated slug (new
+    look. It fetches registry entries eight at a time and reads `worktrees/_digest.json`, a hint the
+    daemon rewrites from a fresh listing on every registry change, so only entries whose etag
+    moved are fetched. Two daemons refreshing at once can leave the digest one update behind until
+    the next refresh; `follow --full` skips it. A head move and a state change in one poll are both reported; a recreated slug (new
     bucket) is gone-then-new; one corrupt registry entry is reported, not fatal; an empty registry
     when worktrees were known is an error (wrong bucket?), not mass-gone, unless confirmed;
   - `search_docs` / `search`: docs and planning across every unmerged worktree, by path or title;
@@ -190,12 +220,15 @@ L1 as the tier for "unmerged layers that other nodes should see before integrati
     TTL, merged entries still in the registry after a day (cleanup stuck), and timestamps in the
     future (writer clock ahead, so idle time is unknown). This is the forgotten-work detector;
   - `overlaps`: files two unmerged worktrees both changed differently, as a merge-conflict hint.
-    It reports whether both share a base commit; if not, it over-reports. It also reports a file one
+    It names both base commits so a caller can discount a result when they differ, because with
+    different bases it over-reports. It also reports a file one
     worktree deleted that the other changed (a rename is a delete plus an add, so editing the old
     name is caught). That needs the manifest's `changes` list, which the script builds from
     `git diff --name-status --no-renames <base>` plus untracked files; a manifest published before
     that field existed gets content comparison only. Paths are compared, never hunks, so absence
     still does not prove a clean merge;
+  - **audit:** the S2 verbs a follower's operator runs (create, publish, claim, promote) appear in
+    the activity log and on the chain, failures included;
   - **a registry entry is a pointer, not authority:** before reading a bucket a follower checks the
     slug is well-formed and that the bucket's own `.wt/meta.json` names the same slug, so an entry
     cannot aim a follower's read grants at another worktree's bucket.
@@ -208,7 +241,8 @@ L1 as the tier for "unmerged layers that other nodes should see before integrati
 - **Per-client stores:** a client project has its own buckets (ADR-131: one seed bucket and one
   inbox bucket per client), so a follower of a client project reads only that client's registry.
 - **Clocks:** ages compare the registry's writer-side timestamp with the follower's clock, so the
-  thresholds are days. They are a nudge, not a lock.
+  thresholds are days. They are a nudge, not a lock. Claims are the exception and are checked as
+  described in §4.
 - **Not in scope:** an operator UI (card d18e1ab0), automatic merging, and enforcing that anyone
   acts on a leftover.
 
@@ -635,7 +669,8 @@ needs `Unsupported("conditional delete".into())` here.
   `fetch`, `claim`, `promote`, `follow`, `search`, `leftovers`, `sync-docs`, `overlaps`. They run on
   the daemon's raw data plane (`StoreService::operator_objects`, added for this, as is the now-public
   `ensure_archive`), the same level as S1's own promote and archive, so they skip per-principal
-  grants and the activity log; the daemon refreshes the project registry entry after publish and
+  grants. `create`, `publish`, `claim` and `promote` are recorded in the activity log and on the
+  chain, failures included. The daemon refreshes the project registry entry after publish and
   claim, which is the only writer of `worktrees/<slug>.json`. Paths in params (`--root`, `--dest`,
   `--cache`, the lists) are read and written by the daemon itself, so the CLI and daemon must share
   a host and a user. Promotion archives into `weftos-archive` under `<bucket>@<ms>/`. Two S1 files
@@ -653,10 +688,33 @@ needs `Unsupported("conditional delete".into())` here.
   `two_machines_share_a_worktree_on_a_real_rustfs`, ignored until `WEFTOS_STORE_TEST_RUSTFS_ENV`
   names a throwaway server), the mount over an S3 remote, macOS or Windows, two physical machines,
   or `agent-git-flow` calling the script (it has no hook seam; the repo wraps `wt.sh` and `land.sh`).
-- **Known limits:** claims are advisory; claim expiry uses client clocks; `rclone union` cannot
+- **Known limits:** claims are advisory; claim expiry compares the claimer's stamp with the
+  evaluating daemon's clock (§4); `rclone union` cannot
   express tombstones, so deleting a project-only file through the mount is refused; rclone does not
   flush its write cache on unmount, so `worktree-store.sh umount` waits for the write-back delay;
   doc search matches path and title only, not content.
+
+- **After the adversarial review (2026-11-08):** the findings fixed on `wt/adr126-s2-mac` are
+  described in §4 and §4a (path rules, control state, slug and bucket checks, ceilings, claim
+  host and skew, audit, digest). Evidence and per-finding tests are in
+  `docs/research/adr126-s2-evidence-macos-2026-11-08.md`.
+- **Still open:**
+  - F2, grant and revoke locking, and F9, RustFS audit ingestion. Both are in the S1 layer and
+    belong to the S1 session.
+  - F7, F13, F14, F19 and F20 are fixed in the S2 layer (a land closes the handoff as merged
+    whatever the claim state; a wider secret denylist; publish reads one open handle checked
+    against the path; fetched manifests cannot name the follower's control files; `FsBackend`
+    refuses keys that differ only by case). Still open in the S1 layer, for the S1 session: F15
+    (`RustfsConfig` derives `Debug` with the root key; secrets dir mode), F16 (no SigV4 known-vector
+    test; bucket strings unvalidated), F17 (the bucket name omits the mesh id, so `local` and
+    `<hex>` names alias one bucket), F18 (S1 `store.promote` accepts `""`, `.wt/` and `worktrees/`
+    prefixes). See `docs/research/adr126-s1-s2-adversarial-review-2026-11-08.md`.
+  - `slug_of` in `worktree-store.sh` is now injective (`/` becomes `--`; branches containing `--`, `-/` or `/-` are refused and `WTS_SLUG` overrides). Existing stores created under the old slashed-branch slugs (`feat/s2` was `feat-s2`, now `feat--s2`) are not found by the script until renamed or re-created; none are known to exist outside drills.
+  - The owner rejected the rclone mount. The union mount (`mount-config`, `mount`, `umount`) is
+    proposed to be parked: kept in the code, dropped from the S2 done-when and from any gate, and
+    marked parked in the script help and §4 (proposal in §1 of
+    `docs/plans/mesh-store-next-steps-2026-11-08.md`, awaiting the owner). The desktop access
+    path is the materialise-and-watch route in ADR-131.
 
 ## Consequences
 

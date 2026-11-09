@@ -36,7 +36,7 @@ export AGF_TARGET_REF=master
 
 "$here/worktree-store.sh" share --handoff "please merge"
 ok "share calls publish" "grep -q '^store worktree publish' '$t/log'"
-ok "slug derived from branch" "grep -q -- '--slug feat-s2' '$t/log'"
+ok "slug derived from branch" "grep -q -- '--slug feat--s2' '$t/log'"
 ok "handoff note passed as one argument" "grep -qF -- '--handoff please\\ merge' '$t/log'"
 ok "bundle passed" "grep -q -- '--bundle ' '$t/log'"
 ok "base is the master tip" "grep -q -- \"--base $(git rev-parse master)\" '$t/log'"
@@ -122,5 +122,58 @@ W
 chmod +x "$t/agf/wt.sh"
 : >"$t/log"; (cd "$r" && "$here/worktree-store.sh" new rooms >/dev/null 2>&1) && rc=0 || rc=$?
 ok "new succeeds with the real wt.sh output shape" "[ $rc = 0 ]"
-ok "new creates the store for the lane's branch slug" "grep -q 'store worktree create --project 01ABC --slug wt-rooms' '$t/log'"
+ok "new creates the store for the lane's branch slug" "grep -q 'store worktree create --project 01ABC --slug wt--rooms' '$t/log'"
+
+# hook verbs: store-create / store-promote, driven by the agent-git-flow hook env (WTS_SLUG unset)
+env_hook() { env -u WTS_SLUG AGF_HOOK_SLUG=wt-h1 AGF_HOOK_BRANCH=wt/h1 AGF_HOOK_BASE=abc123 AGF_HOOK_COMMIT=def456 "$@"; }
+: >"$t/log"; env_hook "$here/worktree-store.sh" store-create
+ok "store-create calls create" "grep -q '^store worktree create' '$t/log'"
+ok "store-create takes slug, branch, base from the hook env" "grep -q -- '--slug wt--h1 --branch wt/h1 --base abc123' '$t/log'"
+: >"$t/log"; env -u WTS_SLUG "$here/worktree-store.sh" store-create --branch x/y --base 111
+ok "store-create flags override the env and derive the slug from the branch" "grep -q -- '--slug feat--s2 --branch x/y --base 111' '$t/log'"
+: >"$t/log"; env -u WTS_SLUG "$here/worktree-store.sh" store-create
+ok "store-create without env uses the current branch and HEAD" "grep -q -- \"--slug feat--s2 --branch feat/s2 --base $(git rev-parse HEAD)\" '$t/log'"
+env_hook "$here/worktree-store.sh" store-create --bogus 2>/dev/null && rc=0 || rc=$?
+ok "store-create rejects unknown arguments" "[ $rc != 0 ]"
+AGF_HOOK_SLUG='A b' env -u WTS_SLUG "$here/worktree-store.sh" store-create 2>/dev/null && rc=0 || rc=$?
+ok "store-create rejects a bad hook slug" "[ $rc != 0 ]"
+WEAVER_RC=1 env_hook "$here/worktree-store.sh" store-create 2>/dev/null && rc=0 || rc=$?
+ok "store-create failure is a warning (exit 0)" "[ $rc = 0 ]"
+WEAVER_RC=1 WTS_STRICT=1 env_hook "$here/worktree-store.sh" store-create 2>/dev/null && rc=0 || rc=$?
+ok "store-create under WTS_STRICT=1 is fatal" "[ $rc != 0 ]"
+: >"$t/log"; env_hook "$here/worktree-store.sh" store-promote
+ok "store-promote calls promote with the hook slug" "grep -q -- '^store worktree promote --project 01ABC --slug wt--h1' '$t/log'"
+ok "store-promote does not call land.sh or pass the commit" "! grep -q def456 '$t/log'"
+WEAVER_RC=1 env_hook "$here/worktree-store.sh" store-promote 2>/dev/null && rc=0 || rc=$?
+ok "store-promote failure is a warning (exit 0)" "[ $rc = 0 ]"
+WEAVER_RC=1 WTS_STRICT=1 env_hook "$here/worktree-store.sh" store-promote 2>/dev/null && rc=0 || rc=$?
+ok "store-promote under WTS_STRICT=1 is fatal" "[ $rc != 0 ]"
+WTS_WEAVER=/nonexistent env_hook "$here/worktree-store.sh" store-promote 2>/dev/null && rc=0 || rc=$?
+ok "store-promote with a missing weaver is a warning" "[ $rc = 0 ]"
+: >"$t/log"; env_hook "$here/worktree-store.sh" land
+ok "land (verb) still promotes through the shared path" "grep -q -- 'promote --project 01ABC --slug wt--h1' '$t/log'"
+
+# new (verb): wt.sh new, locate the lane, then the shared store-create path (runs inside the lane)
+lane="$t/lanes/nl"; mkdir -p "$t/lanes"; git -C "$r" worktree add -q -b wt/nl "$lane" master
+cat >"$t/agf/wt.sh" <<'WT'
+#!/usr/bin/env bash
+[ "$1" = new ] && echo "$WT_LANE"; exit 0
+WT
+chmod +x "$t/agf/wt.sh"
+: >"$t/log"; WT_LANE="$lane" env -u WTS_SLUG "$here/worktree-store.sh" new nl
+ok "new verb creates the store for the lane branch" "grep -q -- '--slug wt--nl --branch wt/nl --base $(git -C "$lane" rev-parse HEAD)' '$t/log'"
+
+# slugs are injective: '/' encodes as '--', branches that would collide are refused, WTS_SLUG overrides
+: >"$t/log"; env -u WTS_SLUG AGF_HOOK_BRANCH=feat/x "$here/worktree-store.sh" store-create --base 1; s1=$(grep -o -- '--slug [^ ]*' "$t/log")
+: >"$t/log"; env -u WTS_SLUG AGF_HOOK_BRANCH=feat-x "$here/worktree-store.sh" store-create --base 1; s2=$(grep -o -- '--slug [^ ]*' "$t/log")
+ok "feat/x and feat-x get different slugs" "[ -n '$s1' ] && [ -n '$s2' ] && [ '$s1' != '$s2' ]"
+ok "plain branch slug is unchanged" "[ '$s2' = '--slug feat-x' ]"
+for bad in feat--x 'a-/b' 'a/-b'; do
+    : >"$t/log"; env -u WTS_SLUG AGF_HOOK_BRANCH="$bad" "$here/worktree-store.sh" store-create --base 1 2>"$t/err" && rc=0 || rc=$?
+    ok "branch '$bad' is refused" "[ $rc != 0 ] && ! grep -q create '$t/log'"
+    ok "refusal for '$bad' names WTS_SLUG" "grep -q WTS_SLUG '$t/err'"
+done
+: >"$t/log"; WTS_SLUG=custom--ok AGF_HOOK_BRANCH=feat--x "$here/worktree-store.sh" store-create --base 1
+ok "WTS_SLUG overrides a refused branch" "grep -q -- '--slug custom--ok ' '$t/log'"
+
 echo "passed=$pass failed=$fail"; [ "$fail" = 0 ]

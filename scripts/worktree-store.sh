@@ -2,6 +2,9 @@
 # ADR-126 S2 hooks: worktree stores around agent-git-flow, plus the desktop union mount.
 #
 #   worktree-store.sh new <name> [wt.sh args]   wt.sh new, then create the worktree store
+#   worktree-store.sh store-create [--branch B] [--base C]
+#                                               store half of `new`, for the agent-git-flow post-new hook
+#   worktree-store.sh store-promote             store half of `land`, for the agent-git-flow post-land hook
 #   worktree-store.sh share [--handoff NOTE]    publish this worktree's tree + unmerged commits
 #   worktree-store.sh land [land.sh args]       land.sh, then promote the store (only if it landed)
 #   worktree-store.sh fetch <slug> <dest> [--bundle-ref REF]
@@ -18,10 +21,16 @@
 # All store operations go through `weaver store worktree <verb>` (S1 owns the `weaver store` surface;
 # the verbs are create|publish|promote|fetch|claim|done|list). Git work stays here, not in Rust.
 # Store failures never block git flow: they warn and exit 0 unless WTS_STRICT=1.
+# Hook use (.agent-git.env): store-create / store-promote read AGF_HOOK_SLUG, AGF_HOOK_BRANCH and
+# AGF_HOOK_BASE (AGF_HOOK_COMMIT is accepted but `promote` takes no commit), so wt.sh and land.sh
+# are not wrapped:
+#   AGF_HOOK_POST_NEW='scripts/worktree-store.sh store-create'
+#   AGF_HOOK_POST_LAND='scripts/worktree-store.sh store-promote'
 #
 # Env: WTS_WEAVER (default: weaver), WTS_AGF (default: ~/.claude/skills/agent-git-flow/scripts),
 #      WTS_DRY_RUN=1 print the weaver calls instead of running them, WTS_SLUG (default: branch
-#      with '/' -> '-'), WTS_PROJECT (project ULID; default: from `weaver project id`).
+#      with '/' -> '--', colliding branches refused; AGF_HOOK_SLUG only if no branch),
+#      WTS_PROJECT (project ULID; default: from `weaver project id`).
 set -euo pipefail
 
 weaver=${WTS_WEAVER:-weaver}
@@ -31,7 +40,41 @@ strict=${WTS_STRICT:-0}
 warn() { printf 'worktree-store: %s\n' "$*" >&2; }
 die() { warn "$*"; exit 1; }
 
-slug_of() { printf '%s' "${WTS_SLUG:-$(git symbolic-ref --quiet --short HEAD | tr '/' '-')}"; }
+# Slug = branch with '/' encoded as '--'. Injective: a branch containing '--', '-/' or '/-' is refused
+# (feat/x -> feat--x, so feat--x or a-/b vs a/-b would collide). WTS_SLUG overrides; AGF_HOOK_SLUG is
+# only trusted when no branch is known (the hook's own slug is the lossy '/' -> '-').
+slug_of() {
+    local b
+    if [ -n "${WTS_SLUG:-}" ]; then printf '%s' "$WTS_SLUG"; return; fi
+    b=${AGF_HOOK_BRANCH:-}
+    if [ -z "$b" ] && [ -n "${AGF_HOOK_SLUG:-}" ]; then printf '%s' "$AGF_HOOK_SLUG"; return; fi
+    [ -n "$b" ] || b=$(git symbolic-ref --quiet --short HEAD)
+    case "$b" in
+        *--*|*-/*|*/-*) die "branch '$b' has '--', '-/' or '/-', which would collide with another branch's store slug; set WTS_SLUG to choose the slug" ;;
+    esac
+    printf '%s' "${b//\//--}"
+}
+
+# Store halves of `new` and `land`: one code path for the verbs and for the agent-git-flow hooks.
+# store_create [--branch B] [--base C]: run inside the lane (cwd).
+store_create() {
+    local branch=${AGF_HOOK_BRANCH:-} base=${AGF_HOOK_BASE:-} slug
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --branch) branch=${2:?--branch needs a value}; shift 2 ;;
+            --base) base=${2:?--base needs a value}; shift 2 ;;
+            *) die "store-create: unknown argument $1" ;;
+        esac
+    done
+    [ -n "$branch" ] || branch=$(git symbolic-ref --short HEAD)
+    [ -n "$base" ] || base=$(git rev-parse HEAD)
+    slug=$(slug_of); check_slug "$slug"
+    store create --project "$(project_id)" --slug "$slug" --branch "$branch" --base "$base"
+}
+store_promote() {
+    local slug; slug=$(slug_of); check_slug "$slug"
+    store promote --project "$(project_id)" --slug "$slug"
+}
 
 # Slugs become part of bucket names and tags: lowercase [a-z0-9-], 1..48 chars.
 check_slug() { [[ $1 =~ ^[a-z0-9][a-z0-9-]{0,47}$ ]] || die "bad slug '$1' (want [a-z0-9-], max 48)"; }
@@ -72,8 +115,13 @@ new)
     [ -d "$root" ] && [[ $root = /* ]] || { warn "cannot locate the new lane '$name' (wt.sh printed '$root'); store not created"; exit 0; }
     printf '%s\n' "$out"
     # Slug comes from the branch (same rule share/land use), not from the lane name.
-    (cd "$root" && slug=$(slug_of) && check_slug "$slug" && store create --project "$(project_id)" --slug "$slug" \
-        --branch "$(git symbolic-ref --short HEAD)" --base "$(git rev-parse HEAD)")
+    (cd "$root" && store_create)
+    ;;
+store-create)
+    store_create "$@"
+    ;;
+store-promote)
+    store_promote
     ;;
 share)
     note=""
@@ -106,7 +154,7 @@ share)
 land)
     slug=$(slug_of); check_slug "$slug"
     "$agf/land.sh" "$@"   # exits non-zero (set -e) if nothing landed: no promotion then
-    store promote --project "$(project_id)" --slug "$slug"
+    store_promote
     ;;
 fetch)
     slug=${1:?usage: fetch <slug> <dest>}; dest=${2:?usage: fetch <slug> <dest>}; shift 2
