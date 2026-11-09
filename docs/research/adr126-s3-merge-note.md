@@ -39,3 +39,16 @@ scripts/diff-gate.sh                              # expect OK
 ```
 
 Live S1 x S3 tests run through `scripts/store/integ-live-test.sh` on the integration branch against a throwaway loopback RustFS only; they passed on `feat/adr126-s5` (see the integration status). Gate C6 on the PG instance has not been run and is not part of this close-out.
+
+## Rebase plan onto landed S1 (rehearsed 2026-11-08)
+
+Rehearsed on the throwaway branch `rehearsal/adr126-s3-on-s1-2a8a1327` (S1 tip `2a8a1327`; merge base `527ea4db`; 22 S3 commits replayed). The real branch was not rebased.
+
+- Files touched by both lanes: `Cargo.toml`, `Cargo.lock`, `docs/adr/adr-126-mesh-object-store.md`. Nothing else overlaps.
+- `Cargo.toml` (1 conflict, first commit): workspace `members` list. Keep both lines: S1's `crates/weftos-store` and S3's `crates/weftos-edge-creds`.
+- `Cargo.lock`: auto-merged. After the rebase run a targeted `cargo check -p weftos-edge-creds` so the lock is regenerated if it drifts; never hand-edit it.
+- ADR (conflicts in 4 of the 22 commits: the `Updated` header line, the S1 status section against the S3 results section, and three later appends): keep both sides each time, S1's text first. The two sections are independent.
+- Result of the rehearsal: `crates/weftos-edge-creds` is byte-identical to `feat/adr126-s3`; `cargo test -p weftos-edge-creds --lib --features mock,keygen,loopback-chain`: 100 passed, 2 ignored (by design). No conflict markers remain.
+- `scripts/diff-gate.sh` on the rebased tip rejects only S1's own entries (daemon dependency on `weftos-store`), which are the owner's S1 approvals; S3 adds nothing new to the gate.
+- Option branches (`opt/*`, `prep/*`, `test/*`) stay unmerged and are not rebased until the owner picks; `opt/adr126-nodekeys-adapter` will conflict in `crates/clawft-weave/Cargo.toml` with S1's daemon edit (keep both dependencies).
+- When the MaxBook reports S1 landed: `git rebase <landed-tip>` on `feat/adr126-s3`, resolve as above, rerun the targeted test, report the new tip.
