@@ -1,0 +1,68 @@
+# ADR-126: which name does a node's RustFS user get? (S3 and S1 disagree), 2026-11-08
+
+> **DECIDED (owner, 2026-11-08 11:43): option B.** The node's actual RustFS user is the readable `node-<id>`; S1 adopts it (`opt/adr126-one-creator-s1` and the S1 naming branch carry S1's side, unmerged). S3 needs no naming change: its default (`UserNaming::NodePrefix`, `node-<id>`) already agrees, so `opt/adr126-s3-wk-names` (option A) is not needed and stays unmerged. Only one lane creates each RustFS user, because a second create replaces the secret: that creator is S1 (`provision_node` / `apply_principal`); S3 creates only the node bucket (`opt/adr126-one-creator-s3`, unmerged) and otherwise assumes roles and disables/enables the user. S1 is to keep an alias from `wk-<hash>` to `node-<id>` for display and recognition (its own lane; feasibility note in `/tmp/weftos-owner-0440/aliases-1143-note.txt`). Do not merge the naming-option branches until the alias question is answered. The text below is the analysis that led here.
+
+Owner call. S3 and S1 have not been changed to agree; neither option is merged. Both sides are prepared as branches so the answer is one step. S1 adds its side's notes at the end of this page.
+
+## What the live test showed
+
+`s1_s3_node_bucket_names_agree_but_rustfs_user_names_do_not` (in `crates/weftos-release/tests/adr126_integ_live.rs`, passing on `feat/adr126-s5`, run 2026-11-08 against a throwaway loopback RustFS) pins the gap:
+
+| | Bucket | RustFS user for node `n1` |
+|---|---|---|
+| S3 (`weftos-edge-creds`, `policy::principal_for`) | `n-n1` (agrees) | `node-n1` |
+| S1 (`weftos-store`, `RustfsBackend::key_id_for("node:n1")`) | `n-n1` (agrees) | `wk-` and the first 16 hex of blake3 of `node:n1` |
+
+What it breaks today: S3's revoke path disables `node-n1` and assumes roles for `node-n1`; S1 creates, scopes and enables/disables `wk-...`. S3 would disable a user S1 never made, and the user S1 did make would stay enabled. The bucket rule is not affected.
+
+It is not only a naming difference. Both lanes also create the user, a policy and a secret:
+
+| | S1 (`StoreService::apply_principal`) | S3 (`RustfsMinter::provision_node`) |
+|---|---|---|
+| User | `create_access_key`, key id kept in state (`keys` map), re-used on restart | `add-user` with a secret from the parent's `NodeKeys` |
+| Policy | `p-<key id>`, built from the principal's grants; replaced on every grant change | named like the user; write on the node bucket |
+| Enabled | live only while a grant is enabled and the principal is not suspended | enabled by provisioning, disabled by revoke |
+| Secret | file under S1's secrets dir, mode 0600 | whatever `NodeKeys` returns |
+
+Under either option below, exactly one side must create the user and attach the policy, or each overwrites the other's policy. Recommendation for that (needed in both options): S1 creates and scopes the user; S3 only assumes roles and disables/enables it, reading the secret through `NodeKeys` from S1's secrets dir; S3's `provision_node` reduces to creating the bucket. That follow-on is not built.
+
+## Option A: S3 adopts `wk-<hash>`
+
+Prepared: branch `opt/adr126-s3-wk-names` (code in `601cc5e9`, on top of `feat/adr126-s5`; the tip also carries this page). Adds `policy::UserNaming { NodePrefix (default), WkHash }`; `BrokerConfig.user_naming` and `RustfsConfig.user_naming` select it; `keygen::node_key_named`. The default is unchanged, so merging the branch alone changes nothing; a host chooses `WkHash` to adopt. `blake3` (already a workspace dependency) is added to `weftos-edge-creds`; the diff gate did not flag it. Tests: 5 unit tests (default unchanged; format and stability; revoke disables the named user and no other, both ways; lease for the named user; generated keys carry the name) and the S1 x S3 parity test, which asserts equality with S1's `key_id_for` for five node ids. Planted defects (wrong hash label, broker ignoring the naming on disable) each fail a test. 99 unit tests pass, clippy and the wasm check are clean.
+
+What it breaks or costs:
+- The name is no longer readable in RustFS admin output and logs (`wk-3f9a...` instead of `node-n1`); S3 audit must record the mapping.
+- S3's docs and tests that say `node-<id>` need updating when a host adopts it.
+- A node user S3 already provisioned under `node-<id>` would be orphaned. S3 has provisioned only throwaway users (live use is gate C6, not yet run), so there is nothing to migrate.
+- The host's `NodeKeys::key_for` must be keyed by the `wk-` name (S1's secret file is already keyed that way).
+
+Good: S1's persisted state, key ids and secrets stay as they are, so no migration on the S1 side; one rule for every principal; 19 characters, fixed length.
+
+## Option B: S1 adopts `node-<id>` for node principals
+
+Prepared by S1: branch `opt/adr126-s1-node-names` (S1's lane; notes below when it lands).
+
+What it breaks or costs:
+- S1's `key_id_for` takes any principal label; node principals would need a special case, and `node-<id>` can be up to 53 characters. RustFS 1.0.4 accepts access-key ids up to at least 128 characters (checked 2026-11-08 on a throwaway instance at lengths 3, 19, 20, 21, 32, 53, 64 and 128), so length is not a blocker.
+- Users S1 already created under `wk-...` stay under that name (the state keeps the key id), so the field would hold two rules until they are re-created. RustFS cannot rename a user: it is delete, create, new secret, so live sessions drop.
+- A node id is chosen by the paired node's owner, not by S1; `node-<id>` puts that text into a RustFS identity name where `wk-<hash>` cannot be influenced. The id is validated (lowercase, digits, hyphen, 48 characters), so this is a tidiness point, not a hole.
+
+Good: readable names; S3's code, docs and tests stay as they are.
+
+## Recommended default
+
+(Superseded by the owner's choice of B above.) Option A. S1 owns principals, grants and policy and already has a stable, tested, generic rule that every other principal uses; S1 has users and secrets in the field and S3 has none; A needs no migration and no special case. Take A together with the follow-on above (one creator of the user). Choose B only if readable names in RustFS output matter more than avoiding two live rules while users are re-created.
+
+One-line switch if A: a host builds `BrokerConfig`/`RustfsConfig` with `user_naming = UserNaming::WkHash` and its `NodeKeys` keyed by the `wk-` name. If B: S1 merges `opt/adr126-s1-node-names` and the S3 default (`NodePrefix`) already agrees.
+
+## The NodeKeys bridge and the `weftos-edge-creds` dependency (owner: 11:39 no, corrected at 11:40)
+
+At 11:39 the owner rejected a daemon dependency on `weftos-edge-creds`; at 11:40 that was corrected: S1 (the daemon) may take the crate **only behind a feature flag, and the daemon must start and run with the flag off and without S3**. S3 itself takes no dependency on S1 or on `weftos-store`, and `weftos-edge-creds` depends on nothing of S1's (checked: its `Cargo.toml` has no store or release crate).
+
+Option branch `opt/adr126-nodekeys-adapter` (unmerged, built on both one-creator branches) shows the shape: in `clawft-weave`, an optional dependency `weftos-edge-creds` behind `edge-creds = ["dep:weftos-edge-creds"]` (off by default) and a module `store_nodekeys::S1NodeKeys` implementing S3's `NodeKeys` over S1's `StoreService::node_key`. Flag off: `cargo tree -p clawft-weave` shows no `weftos-edge-creds`. Flag on: four tests pass. Under naming B (the choice) the lookup is direct, because the principal S3 computes (`node-<id>`) is S1's key id; under naming A the adapter returns nothing rather than guess. The flag-on test found a real S1 point: `node_key` is keyed by the principal (`node:<id>`), which carries no mesh, so it answers for a node paired in another mesh; the adapter therefore checks that the node's store is in its own mesh. S1 may want the same check in `node_key`.
+
+What it costs if taken: one optional `[dependencies]` line (the diff gate flags a new dependency until the owner approves an entry), a second crate's key and session types linked into the daemon only when the flag is on, and nothing when it is off.
+
+## S1's notes
+
+(S1 appends here.)

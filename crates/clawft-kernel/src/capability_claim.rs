@@ -157,7 +157,7 @@ pub fn sign_claim(
 pub fn verify_signed_advertisement(
     advert: &SignedCapabilityAdvertisement,
 ) -> Result<(), CapabilityClaimError> {
-    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+    use ed25519_dalek::{Signature, VerifyingKey};
 
     if advert.public_key.len() != 32 {
         return Err(CapabilityClaimError::BadPublicKeyLen(advert.public_key.len()));
@@ -185,7 +185,7 @@ pub fn verify_signed_advertisement(
     );
 
     let bytes = advert.claim.signing_bytes()?;
-    vk.verify(&bytes, &sig)
+    vk.verify_strict(&bytes, &sig)
         .map_err(|_| CapabilityClaimError::BadSignature)?;
     Ok(())
 }

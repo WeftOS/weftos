@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use chrono::{DateTime, Utc};
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use tracing::info;
@@ -223,10 +223,10 @@ pub fn verify_key_rotation_payload(
     let new_sig = Signature::from_bytes(&new_sig_bytes);
 
     old_vk
-        .verify(&msg, &old_sig)
+        .verify_strict(&msg, &old_sig)
         .map_err(|_| KeyRotationError::Verification("old-key signature invalid".into()))?;
     new_vk
-        .verify(&msg, &new_sig)
+        .verify_strict(&msg, &new_sig)
         .map_err(|_| KeyRotationError::Verification("new-key signature invalid".into()))?;
 
     Ok(())

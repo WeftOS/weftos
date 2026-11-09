@@ -1,0 +1,29 @@
+[package]
+name = "weftos-edge-creds"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "ADR-126 S3: edge and Wasm nodes reach their node bucket through the parent daemon with short-lived STS credentials or presigned URLs. No long-lived key on the edge, no I/O, wasm-clean."
+
+[features]
+# In-memory RustFS stand-in (verifies SigV4, session tokens, policy, revocation).
+mock = []
+# OS-random node secret generation via getrandom (host side only).
+keygen = ["dep:getrandom"]
+# In-memory loopback chain for the compaction spike (no I/O, no live chain).
+loopback-chain = []
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+hmac = { workspace = true }
+sha2 = { workspace = true }
+zeroize = { workspace = true }
+getrandom = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

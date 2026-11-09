@@ -6,6 +6,9 @@
 - **Updated**: 2026-10-30 (ADR-130 adds a GCS seed bucket as the tier above this store; this store becomes the optional L1 staging tier)
 - **Updated**: 2026-11-07 (follower view §4a, Windows-safe fetch, notification/poll answers from ADR-131; S2 implemented on `feat/adr126-s2`, not yet landed: overlay, promotion, agent-git-flow hooks, union mount; §4 amended by the owner extension, board card f40828fb: the worktree tree itself is shared, so unmerged docs stay visible and another agent can merge)
 - **Updated**: 2026-11-07 (S1 built on `feat/adr126-s1`: `weftos-store` crate, `weaver store`, daemon wiring, local-directory backend; RustFS S3 + admin transport added and verified against a throwaway RustFS 1.0.4, audit-stream and notification parsers fixed from captured records, `put_if_match`, release-store `append`/`sweep` roles; see "S1 status")
+- **Updated**: 2026-11-08 (chain compaction proposal and grant-ledger spike; review fixes and handoffs). Earlier: 2026-11-07 (live run against RustFS 1.0.4 in a loopback container: results in "S3 results"; edge presign fixed)
+- **Updated**: 2026-11-07 (card b76c74a7: live STS minter and chain-fed grant ledger added to `weftos-edge-creds`, still tested against a mock store)
+- **Updated**: 2026-11-07 (S3 implemented in `crates/weftos-edge-creds` against a mock store; see "S3 results". The ADR stays Proposed: S1, S2, S4, S5 are not landed)
 - **Deciders**: owner
 - **Research**: `docs/research/rclone-shared-filesystem-2026-10-29.md` (rclone, RustFS,
   OpenDAL, governance gaps). Board card `3605565e`.
@@ -773,6 +776,200 @@ needs `Unsupported("conditional delete".into())` here.
     marked parked in the script help and §4 (proposal in §1 of
     `docs/plans/mesh-store-next-steps-2026-11-08.md`, awaiting the owner). The desktop access
     path is the materialise-and-watch route in ADR-131.
+## S3 results (2026-11-07)
+
+S3 is built in `crates/weftos-edge-creds`, separate from S1's `weftos-store`. It does no I/O and
+reads no clock, so the host supplies the parent link, the HTTP client and the time. It depends on
+S1 only through two traits, `StsMinter` (RustFS AssumeRole and user disable/enable, card b76c74a7)
+and `GrantCheck` (the chain-recorded grant).
+
+- **Parent side (`EdgeBroker`).** For a node the link has authenticated, it checks the revoked set,
+  a per-node rate limit (30 per minute) and the grant. It derives the bucket `n-<node id>` from the
+  node id, never from the request. It then asks RustFS for an STS session as the node's own RustFS
+  user, with an inline policy naming only that bucket. The user's long-lived key stays on the
+  parent. For a presigned URL it mints a session scoped to one object and one action, and signs
+  with that, so the edge can hold no credentials at all.
+- **Edge side (`EdgeNodeStore`).** It is built with no key. It signs with SigV4 and the session
+  token, refreshes inside the last 60 s, and retries once with a fresh lease on a 403. It refuses
+  any credential with no session token or a lifetime above 15 minutes plus 60 s of skew, so a
+  parent that leaked a long-lived key is rejected.
+- **Revocation.** `revoke` records the node, then disables its RustFS user. A live session is
+  refused at its next request (S0: about 0.22 s), and the parent refuses a new lease.
+
+Verified against an in-memory store that checks SigV4, the session token, expiry, the user's
+enabled flag and the session policy (`cargo test -p weftos-edge-creds`, 21 tests):
+
+- the SigV4 header and presign code reproduces AWS's two published S3 example signatures;
+- a Wasm-style node writes, reads, conditionally creates and deletes in its own bucket, and the
+  store only ever saw STS access keys;
+- a session aimed at another node's bucket is refused, and a presigned URL is bound to its key,
+  bucket and host;
+- expiry is refreshed transparently; a node revoked mid-session is refused on its next request;
+- planted defects (revoke without disabling the user, a wildcard session policy, a removed TTL
+  cap, skipped key validation) each fail a test.
+
+**Live minter and grants (card b76c74a7).** `RustfsMinter` implements `StsMinter`:
+
+- **Mint:** a signed (SigV4, service `sts`) `AssumeRole` form POST using the node user's own
+  long-lived key, with the inline session policy and `DurationSeconds` fixed at 900. STS
+  intersects the session policy with the user's attached policy, so a session never exceeds its
+  user. The 2048-byte policy limit is checked before anything is sent.
+- **Disable and enable:** an admin-signed `PUT <prefix>/set-user-status`. The prefix defaults to
+  `/rustfs/admin/v3` and is configurable.
+- **Pairing and unpairing:** `provision_node` creates the node's policy, user, policy attachment and
+  bucket; `deprovision_node` removes the user and policy.
+- **Keys:** the per-node user keys sit behind `NodeKeys` on the parent, are redacted in `Debug`
+  and zeroed on drop, and never appear in anything sent to the edge.
+
+`GrantLedger` implements `GrantCheck` from chain `GrantEvent`s (grant, revoke, revoke-all, with a
+sequence number so a replayed or out-of-order event is ignored). A node is allowed only on its own
+`weftos://<mesh>/nodes/<id>/store`, and write implies read. `apply_and_enforce` applies an event
+and, when the node lost write, revokes it at once, rather than waiting for its session to expire.
+The native HTTP client is the host's: a `reqwest` client here would trip the diff gate's `net`
+rule, which only the owner can approve.
+
+Tested end to end (37 tests) against a store that verifies signatures, session tokens, expiry and
+the user-policy intersection, and serves STS and admin calls with the 900 s minimum and the
+2048-byte limit. Seven planted defects in the new code each fail a test. Acceptance for the card:
+a node gets a session for its own bucket only, another node is refused, and revocation refuses
+the next request.
+
+**Live run (2026-11-07, RustFS 1.0.4 in a loopback container, not PG).** The real broker, minter and
+edge store ran against it from a throwaway harness kept outside the repo (its raw-socket client would
+trip the diff gate's `net` rule). Results:
+
+| Check | Result |
+|---|---|
+| Pairing: policy, user, attach, bucket | all four calls work with plain JSON bodies on `/rustfs/admin/v3`. The `/minio/admin/v3` prefix wants an encrypted body and refuses plain JSON |
+| STS lease, edge write, read, delete | work; the session lasts 900 s |
+| Conditional create | `If-None-Match: *` gives 412 on the second write |
+| Presigned PUT | works, **only with `Host` as the sole header**. RustFS refuses a presigned request that carries an `x-amz-*` header outside the signed set (`presigned_unsigned_amz_header`). The first live run caught this; the edge is fixed and the mock now enforces it |
+| Cross-node | node A's session writing to node B's bucket: 403. A's user asking for a session policy that names B's bucket, then writing: 403 |
+| Revocation | `set-user-status` disabled: the first request after the call, on a session still 14 min from expiry, got 403, about 7 ms after the revoke started; the edge's next write was refused by the parent. Restore works |
+| Removal | after `remove-user`, AssumeRole as that user: 403 |
+| Session floor | RustFS accepted `DurationSeconds=60`. The 900 s minimum is MinIO's, so the floor is a config field defaulting to 900 |
+
+Also checked: the crate compiles for `wasm32-unknown-unknown`.
+
+**Not yet verified:** the spike's gate C6 on PG itself (this run used a local container); real edge
+hardware; the link between a node and its parent (cogbus, mesh-local or a WebSocket), which is the
+host's. Since built: key generation (`keygen`). Prepared, awaiting the owner: the native HTTP client (see below). Still not built: moving archived
+buckets (S1's archive-on-unpair). `node_bucket` is the one-line ADR rule and should be replaced by S1's mapping when S1
+lands.
+
+### Adversarial review fixes (2026-11-08)
+
+A read-only review of the crate found four defects, all fixed with a test that fails when the fix is removed:
+
+- The 900 s cap was enforced only on the edge. The broker now refuses any session whose expiry is above `now + 900 + 60`, whatever the store returned.
+- Revoke could fail open: disabling the RustFS user looked up the node key first, so a missing key left existing sessions alive. The disable now names the principal directly and signs with the admin key.
+- `Debug` on `HttpRequest`, `HttpResponse` and `Presigned` printed session tokens, the node secret on the add-user path and presigned URLs. They now print shape only.
+- Presigned keys containing `*`, `?` or `$` are refused, since they would widen the one-object session policy.
+- Refusals sent to the edge carried store error text. The edge now sees "credential service unavailable"; the detail goes to the audit sink.
+
+Node secrets come from `keygen` (160 bits of host entropy, constant input refused; `generate_node_key` behind the `keygen` feature).
+
+Open from the review, not fixed: a grant event with `seq = u64::MAX` freezes the ledger, so only chain-authenticated events may reach `apply`; reusing a node id after unpair inherits the old bucket unless S1 archives it.
+
+### Handoffs to other lanes (2026-11-08)
+
+The two review items this crate cannot fix are now ignored regression tests in `crates/weftos-edge-creds/src/tests_live.rs`. Run `cargo test -p weftos-edge-creds --lib -- --ignored` to see both fail today. Remove the `#[ignore]` when the owner lands the fix.
+
+| Gap | Test | Owner | What the fix needs |
+|---|---|---|---|
+| A grant event with `seq = u64::MAX` makes every later event `Stale`, so a later revoke is dropped | `a_far_future_seq_cannot_freeze_later_revocations` | S1 (weftos-store) and whoever feeds chain events to `GrantLedger::apply` | Only chain-authenticated events reach `apply`, or `apply` bounds a jump in `seq` |
+| Reusing a node id after unpair inherits the old `n-<id>` bucket | `a_reused_node_id_does_not_inherit_the_previous_nodes_objects` | S1 (archive on unpair, section 3) | Archive and empty the bucket before the id can be paired again, or never reuse an id |
+
+Ed25519 verification audit: the S3 crate and ledger verify no signatures (grant events arrive already chain-authenticated), and there is no `weftos-store` crate in this worktree yet. S1 and S5 must use `verify_strict` for any signature they check. In the mesh paths here, `node_facts_advert`, `placement_vocabulary`, `capability_claim`, `key_rotation` and `seed_bind` moved from `verify` to `verify_strict`; `clawft-mesh-local` cert checks already used it. Small-order key rejection tests: `cert_tests::small_order_machine_key_is_rejected` and `node_facts_advert::tests::small_order_key_with_a_trivial_signature_is_refused`. Still on plain `verify`, outside the mesh scope, for their owners: `http_facade`, `wasm_runner/types`, `workload_ctl/msg`, `workload_ctl/host_journal`, `clawft-delegation`, `exo-resource-tree` delegation, `tree_manager`, `weftos-cos` `mcp_catalog`, `clawft-weave` `project_forward`.
+
+## Chain compaction (proposal, 2026-11-08)
+
+**Status: proposed. A spike exists for the grant ledger (`crates/weftos-edge-creds/src/compaction.rs`), exercised against an in-memory loopback chain; nothing is wired to a live chain and no schedule is on.**
+
+**Problem.** The grant ledger (S3) and the S5 gate state both rebuild by replaying every event they ever wrote. Start-up time and the cost of a new follower grow with the length of the chain, and revoked history is carried for ever.
+
+**Design: snapshot plus tail.**
+
+1. *Snapshot.* The daemon periodically folds the table into a `Snapshot`: `version`, `scope` (for example `grants/<mesh>`, or `gate/<account>/<mesh>` for S5), `through_seq`, the folded `state` in canonical order, `state_hash` (SHA-256 of the canonical state) and `events_head`.
+2. *`events_head`.* A hash chain over the events folded so far: `head' = SHA256(head || "\n" || canonical_event_json)`, starting from a fixed genesis value. Events the sequence rule ignores do not extend it.
+3. *Publication.* The snapshot is appended to the chain as one signed event (`store.snapshot`) by the same signer that signs grant events, using the domain `weftos/grant-ledger/snapshot/v1`. The signature covers the canonical snapshot JSON, so `through_seq` and `scope` cannot be moved.
+4. *Restore.* A follower takes the newest snapshot it trusts and replays only the events with `seq > through_seq`. A tail event at or before `through_seq` is an error: it means two histories were mixed.
+5. *Archive before prune.* The segment up to `through_seq` is written to cold storage and its range hash recorded before any chain segment is pruned. The snapshot alone cannot answer who held what, when. Pruning is a separate, owner-run step, never part of taking a snapshot.
+
+**How a follower verifies a snapshot.**
+
+- *Fresh follower (no old events).* Checks `version`, `scope`, `state_hash` against the state, then the signature with `verify_strict` under a key it already trusts for chain events. This trusts the signer for the past. A compromised signer could sign a snapshot that omits a revoke.
+- *Follower that kept the events.* Also calls `verify_against_history`: re-fold the old events and compare `through_seq`, `events_head` and the state. This catches a validly signed but false snapshot, and a state that matches by a different history (the head differs).
+- *Cross-check.* Two followers that disagree on `events_head` for the same `(scope, through_seq)` raise an alert; the archived segment settles it.
+
+**What a snapshot must not do.** It carries no tokens or keys. A revoke is carried by the absence of the grant, and the existing sequence rule drops stale pre-snapshot events. The first snapshot after a signer rotation is signed by the new signer and must also chain to the old one by the chain's own key-rotation event, which the chain layer verifies, not this crate.
+
+**S5 gate state.** The gate's `store.client.gate.<kind>` events (hold, grant, revoke, trust, cross-mesh install or revoke) fold the same way. S5 implements the fold and canonical bytes for its own state and reuses `head_extend`, the hashing rules and the verification steps above. Two points are S5's to settle: expiry (a cross-mesh grant that expired must not survive into a snapshot, so the snapshot is taken at a stated time and drops expired entries), and the per-account scope, since events for other accounts are ignored on replay.
+
+**Open.**
+
+- Cadence: every N events or every T hours, and whether a snapshot may be taken without a quiet point (the spike folds under the ledger lock).
+- Where the signed snapshot lives on the chain and how chain-level pruning refers to it; this belongs to the chain owner.
+- Whether `events_head` should be anchored in the existing chain anchor so a fresh follower has a second source besides the signer.
+
+**Spike results.** The ledger now keeps `events_head`; `GrantLedger::snapshot`, `signed_snapshot`, `restore` and `verify_against_history` exist. Seven tests: snapshot plus tail equals full replay; a pre-snapshot event in the tail is refused; a follower refuses an edited, re-hashed, wrong-scope, rewound or foreign-signed snapshot; a follower with history catches a signed but false snapshot; the head catches a different history with the same state; the head depends on order and content; 1000 pair and unpair events fold to an empty snapshot. Each check was removed in turn and a test failed.
+
+**Loopback wiring and schedule (2026-11-08).** `loopback::LoopbackChain` (feature `loopback-chain`, or tests) is an in-memory, append-only stand-in for the chain: grant events and signed snapshots, no I/O, no clock, no live chain. It adds `append`, `snapshot_now`, `recover` (newest snapshot that passes the follower checks, then an older one, then a full replay while nothing is pruned), `archive` (copies the events to cold storage and requires them to reproduce the signed snapshot) and `prune` (only after `archive`, only up to the newest usable snapshot). `SnapshotSchedule` is the scheduled-snapshot option: **off by default**, `every_events(n)` and/or `every_secs(t)`, never due when nothing is new; the chain takes a snapshot on `append` only if the host built it with an enabled schedule. Nothing in the crate turns it on. Twelve tests; a forged newest snapshot falls back, a forged one after a prune is an error rather than a silent partial ledger, prune is refused without a matching archive, and the schedule defaults off. Five planted defects (schedule always due, prune without the archive check, unchecked newest snapshot, ignoring the pruned bound, archive without the history check) each fail a test. `tick(now)` lets a host timer take a snapshot when only the time rule is due, and `compact(verifier, now)` is the owner-run snapshot, archive, prune sequence (the schedule never calls it; each stage refuses to go on if the one before did not hold). A repeat `snapshot_now` with nothing new returns the existing snapshot. A property test runs seven cadences against every compaction point and checks recovery equals a full replay. Still the chain owner's: the real signer, where the snapshot event sits, and the cadence to use (see the switches below).
+
+**Bucket name parity with S1 (2026-11-08).** S1's `StoreName::Node` (weftos-store `name.rs`) derives `n-<id>` with an id of lowercase `[a-z0-9-]`, at most 61 characters. This crate's `node_bucket` accepts a strict subset (at most 48, no leading or trailing dash), so every id it accepts maps to the bucket S1 derives; `node_bucket_agrees_with_s1s_store_name_rule_and_is_never_looser` pins that. When S1's crate lands as a dependency, replace `node_bucket` with `StoreName::bucket` and drop the extra restriction only if the owner wants ids S1 allows.
+
+**Native HTTP client, prepared and unmerged (2026-11-08).** Branch `prep/adr126-s3-reqwest-client` (commit c9b85e56, on top of this branch) adds `reqwest_transport::ReqwestTransport`, an `ObjectTransport` over `reqwest` behind the off-by-default feature `reqwest-client` (host side only, not wasm-clean). It sends the already-signed request with the signer's own percent-encoding, never follows redirects (a signed request must not be replayed elsewhere), and returns generic errors with no URL (a presigned query would leak). Four tests against a loopback listener; three planted defects (redirects followed, error text with the URL, URL encoding) fail a test. The diff gate rejects it, as expected: `new-dep` for `reqwest` in `crates/weftos-edge-creds/Cargo.toml` (already a workspace dependency, optional here) and `net` for `crates/weftos-edge-creds/src/reqwest_transport.rs` (the client and the test listeners). **The owner's choice is one step:** add the two approvals for those paths in `config/diff-gate-approvals.toml` and merge the branch; or decline, and the host keeps supplying its own `ObjectTransport`. Nothing on this branch is needed by the rest of the crate.
+
+**Consume side of S1's archive-on-unpair and seq guard (2026-11-08).** S1 had not posted either call when this was written (its branch has no unpair archive and no seq guard), so S3 holds the contract as traits and tests it against mocks. When S1 posts commit ids, implement the traits over the real calls; nothing else changes.
+
+- **`lifecycle::NodeLifecycle`** with `NodeArchiver` (S1: `archive_node` copies the bucket to the archive and empties it, idempotently; `bucket_is_empty`) and `NodeProvisioner` (`RustfsMinter` implements it). `unpair` applies the event and cuts the node off, seals the id, archives, and only then deletes the user and policy. A failed archive leaves the user disabled, not deleted, and the id sealed; calling `unpair` again finishes. `check_pairable` refuses a sealed id until its bucket is empty, and fails closed when the probe errors. The sealed set is memory only: after a restart `seal_from_history` rebuilds it from the chain's unpair events, and the empty-bucket probe is what unseals.
+- **`grants::SeqGuard`** (`GrantLedger::set_seq_guard`; `MaxSeqJump(n)` as a stand-in). A refused event returns `Applied::OutOfRange` and changes nothing, head included. Default is no guard, because the chain's `seq` is shared with other events and a legitimate gap size is the chain owner's call. A ledger rebuilt by `restore` has no guard until the host installs it again. The two `#[ignore]` regression tests still describe the unguarded default; the guard is covered by separate tests.
+- Eight tests; five planted defects (delete before archive, no sealing, probe fails open, guard ignored, state changed before the guard refuses) each fail a test.
+
+**What gate C6 needs.** The repository does not define C6; the card (b76c74a7) states it as: a WeftOS principal gets a scoped STS session for one folder, another principal is refused, and revocation refuses the next request within 1 s, all with WeftOS-minted credentials, on the PG RustFS from S0. Everything but the PG instance is built and was run against a loopback RustFS 1.0.4. What is needed from the owner: (1) permission to run a harness against the PG RustFS (barred to agents today); (2) its endpoint and an admin key supplied at run time, not committed; (3) an HTTP client for the minter, either the owner-approved `reqwest` branch or the throwaway harness kept outside the repo; (4) two throwaway node ids and a bucket prefix agreed so the run cannot touch real stores; (5) the run window and who removes the test users afterwards. Expected result is the loopback table above, with the revoke time measured on PG.
+
+**Chain-authenticated feed (2026-11-08).** S5 found that `GrantLedger::apply` trusts whatever it is handed. `authchain::ChainFeed` is now the way events reach the ledger: `ingest(&ChainGrantEvent)` accepts an event only if (1) its scope (a mesh, `grants/<mesh>`) is the feed's, (2) the signature verifies through the same `SnapshotVerifier` interface the snapshots use, under its own signing domain `weftos/grant-ledger/event/v1`, with the signature covering scope, event (so `seq` and `op`) and `prev_head`, (3) its `seq` is after the last applied one (otherwise `Replay`, harmless and safe to drop), and (4) `prev_head` equals the ledger's current `events_head` (otherwise `BrokenLink`: reordered, or an earlier event is missing, and nothing after the gap applies). The link reuses the head kept for compaction, so it survives a snapshot restore. Ingests are serialised, a refused event changes nothing, and `ingest_and_enforce` revokes at once when a node lost write, returning the failure if the RustFS disable fails. Ten tests; seven planted defects (no signature check, no link check, no scope check, signature without scope, signature without `prev_head`, no replay check, guard refusal returned as success) each fail a test; the `prev_head` case needed a new test (a relay rewriting `prev_head` to skip a revoke).
+
+What this settles and what it does not: a forged, edited, relabelled, replayed, reordered or gap-spliced event is refused, and a relay cannot add a far-future `seq` (it is signed). It does not stop a trusted signer from signing `seq = u64::MAX`; the seq guard does that (`OutOfRange`), and a feed that refuses such an event cannot follow a chain that moved on, which is deliberate: an operator has to look. Still the chain owner's: the real signer and its key trust, how the chain wraps a grant event (this crate defines `ChainGrantEvent` as the shape it needs), who is allowed to sign grants for which meshes, and the snapshot cadence and placement.
+
+### Chain-owner switches for S3 (2026-11-08)
+
+Three decisions are the chain owner's. Each is written as one switch with its options and S3's recommendation. S3 has decided none of them and no code depends on a choice: the crate takes the answer through the existing interfaces (`SnapshotVerifier`, `ChainGrantEvent`, `SnapshotSchedule`, `LoopbackChain`).
+
+**Switch 1. Who may sign grant events for which mesh. ANSWERED (owner, 2026-11-08 11:21): grants may be signed by any other node or person.** Built as `authchain::SignerRule::AnyOther` (the default): any identity the host's verifier trusts may sign, except that nobody may sign a `Grant` of access to themselves (`FeedError::SelfGrant`; their own revoke is allowed, it gives them nothing); `SignerRule::Anyone` switches that check off. Which identities the verifier trusts is still the host's. Cost to know about: with open signing, trust rests on the verifier's set of identities and on the self-grant check, which two colluding or sybil identities can pass, so the audit trail and the seq guard carry more weight; per-mesh key limits (options A to C below) remain available if the owner wants them back. The original options follow.
+
+ Today the verifier only answers "did this signer sign these bytes". The feed also checks the scope, so a signer is currently trusted for every mesh the host's `SnapshotVerifier` accepts it for.
+
+| Option | What it means | Cost |
+|---|---|---|
+| A. One signer key per mesh | The verifier maps `scope` (`grants/<mesh>`) to exactly one trusted key. | Smallest blast radius. Key rotation is per mesh. |
+| B. The account's owner key signs all its meshes | One trusted key per account; scope must start with that account's meshes. | One key to protect. A leak affects every mesh of the account. |
+| C. Delegated signers | The owner key signs a short-lived delegation to a signer for named meshes; the verifier checks the delegation. | Most flexible. Needs a delegation event, expiry and revoke on the chain. |
+
+Recommendation: A to start. It needs no new chain event, and the `scope` field is already signed. Move to C when a mesh needs more than one signer.
+Flip: the owner names A, B or C; the change is in the host's `SnapshotVerifier` implementation, not in this crate.
+
+**Switch 2. Snapshot cadence. STILL OPEN (owner, 11:21): no cadence is approved; the recommendation below is not a decision and nothing sets one.** `SnapshotSchedule` is off by default and supports `every_events(n)`, `every_secs(t)` or both.
+
+| Option | Setting | Effect |
+|---|---|---|
+| A. Stay off | No schedule; a person runs `snapshot_now` or `compact`. | No new load. A follower replays the whole chain. |
+| B. By count | `every_events(n)` | Tail length stays under `n`. The cost follows write rate. |
+| C. By count and time | `every_events(n).or_every_secs(t)` | Bounded tail and bounded staleness on a quiet mesh. |
+
+Recommendation: C, with `n` near the number of events a follower can replay in about a second and `t` of one day. S3 sets no numbers; they are the owner's. Pruning is never scheduled: `compact` (snapshot, archive, prune) is owner-run in every option.
+Flip: build the chain with `with_schedule(...)`; nothing else changes.
+
+**Switch 3. Where the signed snapshot lives. STILL OPEN (owner, 11:21): not approved.**
+
+| Option | Where | Cost |
+|---|---|---|
+| A. On the chain as an event | `store.snapshot`, signed by the grant signer. | One source of truth. Chain-level pruning needs a rule that refers to it. |
+| B. In the mesh store, with a hash on the chain | The snapshot is an object; the chain holds its hash and `through_seq`. | Keeps the chain small. Followers need store access to bootstrap. |
+| C. A and anchored `events_head` | As A, plus `events_head` in the existing chain anchor. | A fresh follower has a second source besides the signer. Needs the anchor to carry one more field. |
+
+Recommendation: A now, and C when the anchor can carry the field. B has a bootstrap loop (a follower needs a snapshot to learn which store to read), so S3 advises against it for grants.
+Flip: the owner names A, B or C; the wiring is `GrantLedger::signed_snapshot` on the chain side.
 
 ## Consequences
 
