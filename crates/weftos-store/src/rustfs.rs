@@ -865,6 +865,19 @@ impl ObjectBackend for RustfsBackend {
         Ok(ObjectMeta { key: key.to_owned(), size: r.len.unwrap_or(0), etag: r.etag.unwrap_or_default() })
     }
 
+    fn delete_if_match(&self, bucket: &str, key: &str, etag: &str) -> Result<(), BackendError> {
+        check_bucket(bucket)?;
+        check_key(key)?;
+        // As in `put_if_match`: the header value is quoted, the caller's `ObjectMeta` etag is bare.
+        let q = if etag.starts_with('"') { etag.to_owned() } else { format!("\"{etag}\"") };
+        let extra = [("if-match", q)];
+        let r = self.send("DELETE", &format!("/{bucket}/{key}"), &[], &[], &extra)?;
+        if r.status == 412 {
+            return Err(BackendError::Stale(key.to_owned()));
+        }
+        self.check(r, Ctx::Object(bucket, key)).map(|_| ())
+    }
+
     fn delete(&self, bucket: &str, key: &str) -> Result<(), BackendError> {
         check_bucket(bucket)?;
         check_key(key)?;

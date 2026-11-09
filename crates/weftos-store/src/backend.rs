@@ -345,6 +345,12 @@ pub trait ObjectBackend: Send + Sync {
     }
     fn get(&self, bucket: &str, key: &str) -> Result<Vec<u8>, BackendError>;
     fn head(&self, bucket: &str, key: &str) -> Result<ObjectMeta, BackendError>;
+    /// Delete an object only if its current etag is `etag` (HTTP `If-Match`). Same errors as
+    /// [`Self::put_if_match`]. The default says [`BackendError::Unsupported`]; the drive falls back
+    /// to head-then-delete.
+    fn delete_if_match(&self, _bucket: &str, _key: &str, _etag: &str) -> Result<(), BackendError> {
+        Err(BackendError::Unsupported("conditional delete".into()))
+    }
     fn delete(&self, bucket: &str, key: &str) -> Result<(), BackendError>;
     /// Copy within or across buckets.
     fn copy(&self, src_bucket: &str, src_key: &str, dst_bucket: &str, dst_key: &str) -> Result<ObjectMeta, BackendError>;

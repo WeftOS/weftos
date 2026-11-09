@@ -28,7 +28,7 @@ use weftos_store::{StoreName, StoreService};
 use crate::store_worktree_paths::{Guard, Use};
 
 /// Delegates to the service's shared backend so the S2 code (generic over a sized backend) can use it.
-struct Op(Arc<dyn S1>);
+pub(crate) struct Op(pub(crate) Arc<dyn S1>);
 
 impl S1 for Op {
     fn put(&self, b: &str, k: &str, d: &[u8], n: bool) -> Result<ObjectMeta, BackendError> {
@@ -39,6 +39,9 @@ impl S1 for Op {
     }
     fn head(&self, b: &str, k: &str) -> Result<ObjectMeta, BackendError> {
         self.0.head(b, k)
+    }
+    fn delete_if_match(&self, b: &str, k: &str, e: &str) -> Result<(), BackendError> {
+        self.0.delete_if_match(b, k, e)
     }
     fn delete(&self, b: &str, k: &str) -> Result<(), BackendError> {
         self.0.delete(b, k)

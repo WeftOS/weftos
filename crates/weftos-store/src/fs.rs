@@ -56,8 +56,9 @@ struct Keys {
 pub struct FsBackend {
     root: PathBuf,
     keys: Mutex<Keys>,
-    /// Serialises `put_if_match` so two compare-and-swaps cannot both pass.
-    cas: Mutex<()>,
+    /// Serialises writes in this process so a conditional put's compare and rename cannot interleave
+    /// with another write. Another process on the same directory is not covered.
+    wlock: Mutex<()>,
 }
 
 fn io(e: impl std::fmt::Display) -> BackendError {
@@ -74,7 +75,7 @@ impl FsBackend {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Keys::default(),
             Err(e) => return Err(StoreError::State(format!("{}: {e}", kp.display()))),
         };
-        Ok(Self { root: root.to_owned(), keys: Mutex::new(keys), cas: Mutex::new(()) })
+        Ok(Self { root: root.to_owned(), keys: Mutex::new(keys), wlock: Mutex::new(()) })
     }
 
     fn bdir(&self, bucket: &str) -> Result<PathBuf, BackendError> {
@@ -172,8 +173,12 @@ fn walk(dir: &Path, rel: &str, out: &mut Vec<ObjectMeta>) -> Result<(), BackendE
     Ok(())
 }
 
-impl ObjectBackend for FsBackend {
-    fn put(&self, bucket: &str, key: &str, data: &[u8], if_none_match: bool) -> Result<ObjectMeta, BackendError> {
+impl FsBackend {
+    fn wguard(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.wlock.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn put_unlocked(&self, bucket: &str, key: &str, data: &[u8], if_none_match: bool) -> Result<ObjectMeta, BackendError> {
         let Some(dst) = self.path_unless_case_twin(bucket, key)? else {
             return Err(BackendError::BadKey(format!("{key:?}: differs only by case from an existing key in {bucket}")));
         };
@@ -200,26 +205,7 @@ impl ObjectBackend for FsBackend {
         Ok(ObjectMeta { key: key.to_owned(), size: data.len() as u64, etag: etag_of(data) })
     }
 
-    fn put_if_match(&self, bucket: &str, key: &str, data: &[u8], etag: &str) -> Result<ObjectMeta, BackendError> {
-        // Atomic against other writers in this process (the daemon is the only writer of its
-        // local store); the replace itself is the usual rename.
-        let _g = self.cas.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if self.head(bucket, key)?.etag != etag.trim_matches('"') {
-            return Err(BackendError::Stale(key.into()));
-        }
-        self.put(bucket, key, data, false)
-    }
-
-    fn get(&self, bucket: &str, key: &str) -> Result<Vec<u8>, BackendError> {
-        let Some(p) = self.path_unless_case_twin(bucket, key)? else { return Err(BackendError::NoObject(key.into())) };
-        std::fs::read(&p).map_err(|e| if e.kind() == std::io::ErrorKind::NotFound || p.is_dir() { BackendError::NoObject(key.into()) } else { io(e) })
-    }
-
-    fn head(&self, bucket: &str, key: &str) -> Result<ObjectMeta, BackendError> {
-        self.get(bucket, key).map(|d| ObjectMeta { key: key.to_owned(), size: d.len() as u64, etag: etag_of(&d) })
-    }
-
-    fn delete(&self, bucket: &str, key: &str) -> Result<(), BackendError> {
+    fn delete_unlocked(&self, bucket: &str, key: &str) -> Result<(), BackendError> {
         let Some(p) = self.path_unless_case_twin(bucket, key)? else { return Err(BackendError::NoObject(key.into())) };
         std::fs::remove_file(&p).map_err(|e| if e.kind() == std::io::ErrorKind::NotFound { BackendError::NoObject(key.into()) } else { io(e) })?;
         // Prune now-empty parent directories up to the bucket's data dir.
@@ -232,6 +218,43 @@ impl ObjectBackend for FsBackend {
             d = dir.parent().map(Path::to_path_buf);
         }
         Ok(())
+    }
+
+    fn check_etag(&self, bucket: &str, key: &str, etag: &str) -> Result<(), BackendError> {
+        if self.head(bucket, key)?.etag == etag.trim_matches('"') { Ok(()) } else { Err(BackendError::Stale(key.into())) }
+    }
+}
+
+impl ObjectBackend for FsBackend {
+    fn put(&self, bucket: &str, key: &str, data: &[u8], if_none_match: bool) -> Result<ObjectMeta, BackendError> {
+        let _g = self.wguard();
+        self.put_unlocked(bucket, key, data, if_none_match)
+    }
+
+    fn put_if_match(&self, bucket: &str, key: &str, data: &[u8], etag: &str) -> Result<ObjectMeta, BackendError> {
+        let _g = self.wguard();
+        self.check_etag(bucket, key, etag)?;
+        self.put_unlocked(bucket, key, data, false)
+    }
+
+    fn delete_if_match(&self, bucket: &str, key: &str, etag: &str) -> Result<(), BackendError> {
+        let _g = self.wguard();
+        self.check_etag(bucket, key, etag)?;
+        self.delete_unlocked(bucket, key)
+    }
+
+    fn get(&self, bucket: &str, key: &str) -> Result<Vec<u8>, BackendError> {
+        let Some(p) = self.path_unless_case_twin(bucket, key)? else { return Err(BackendError::NoObject(key.into())) };
+        std::fs::read(&p).map_err(|e| if e.kind() == std::io::ErrorKind::NotFound || p.is_dir() { BackendError::NoObject(key.into()) } else { io(e) })
+    }
+
+    fn head(&self, bucket: &str, key: &str) -> Result<ObjectMeta, BackendError> {
+        self.get(bucket, key).map(|d| ObjectMeta { key: key.to_owned(), size: d.len() as u64, etag: etag_of(&d) })
+    }
+
+    fn delete(&self, bucket: &str, key: &str) -> Result<(), BackendError> {
+        let _g = self.wguard();
+        self.delete_unlocked(bucket, key)
     }
 
     fn copy(&self, sb: &str, sk: &str, db: &str, dk: &str) -> Result<ObjectMeta, BackendError> {

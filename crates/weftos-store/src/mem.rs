@@ -110,6 +110,18 @@ impl ObjectBackend for MemBackend {
         Ok(meta(key, data))
     }
 
+    fn delete_if_match(&self, bucket: &str, key: &str, etag: &str) -> Result<(), BackendError> {
+        let mut g = self.lock();
+        let b = g.buckets.get_mut(bucket).ok_or_else(|| BackendError::NoBucket(bucket.into()))?;
+        match b.objects.get(key) {
+            None => return Err(BackendError::NoObject(key.into())),
+            Some(cur) if etag_of(cur) != etag.trim_matches('"') => return Err(BackendError::Stale(key.into())),
+            Some(_) => {}
+        }
+        b.objects.remove(key);
+        Ok(())
+    }
+
     fn get(&self, bucket: &str, key: &str) -> Result<Vec<u8>, BackendError> {
         let g = self.lock();
         let b = g.buckets.get(bucket).ok_or_else(|| BackendError::NoBucket(bucket.into()))?;

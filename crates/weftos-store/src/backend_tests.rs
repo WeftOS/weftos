@@ -245,3 +245,57 @@ fn check_key_agrees_with_its_rules_over_random_keys_and_a_backend_refuses_the_sa
         }
     }
 }
+
+// ---- conditional write and delete contract (from the Mac drive branch, S1 error variants) ----
+
+/// The contract every backend with a conditional write must meet.
+fn conditional_contract<B: ObjectBackend + AdminBackend>(b: &B) {
+    b.create_bucket("b-cond", &[]).unwrap();
+    let v1 = b.put("b-cond", "k", b"one", false).unwrap();
+    // Right etag: written, new etag returned.
+    let v2 = b.put_if_match("b-cond", "k", b"two", &v1.etag).unwrap();
+    assert_eq!(v2.etag, etag_of(b"two"));
+    assert_eq!(b.get("b-cond", "k").unwrap(), b"two");
+    // Stale etag: refused, object untouched.
+    assert!(matches!(b.put_if_match("b-cond", "k", b"three", &v1.etag), Err(BackendError::Stale(_))));
+    assert_eq!(b.get("b-cond", "k").unwrap(), b"two");
+    // Missing key: NoObject, nothing created.
+    assert!(matches!(b.put_if_match("b-cond", "gone", b"x", &v1.etag), Err(BackendError::NoObject(_))));
+    assert!(b.get("b-cond", "gone").is_err());
+    // Conditional delete: stale refused and untouched, right one deletes.
+    assert!(matches!(b.delete_if_match("b-cond", "k", &v1.etag), Err(BackendError::Stale(_))));
+    assert_eq!(b.get("b-cond", "k").unwrap(), b"two");
+    b.delete_if_match("b-cond", "k", &v2.etag).unwrap();
+    assert!(matches!(b.get("b-cond", "k"), Err(BackendError::NoObject(_))));
+    assert!(matches!(b.delete_if_match("b-cond", "k", &v2.etag), Err(BackendError::NoObject(_))));
+}
+
+#[test]
+fn mem_backend_meets_the_conditional_contract() {
+    conditional_contract(&crate::mem::MemBackend::new());
+}
+
+#[test]
+fn fs_backend_meets_the_conditional_contract() {
+    let d = tempfile::tempdir().unwrap();
+    conditional_contract(&crate::fs::FsBackend::open(d.path()).unwrap());
+}
+
+#[test]
+fn a_backend_with_no_conditional_delete_says_unsupported() {
+    struct Bare;
+    impl ObjectBackend for Bare {
+        fn put(&self, _: &str, k: &str, d: &[u8], _: bool) -> Result<ObjectMeta, BackendError> {
+            Ok(ObjectMeta { key: k.into(), size: d.len() as u64, etag: etag_of(d) })
+        }
+        fn put_if_match(&self, _: &str, _: &str, _: &[u8], _: &str) -> Result<ObjectMeta, BackendError> {
+            Err(BackendError::Unsupported("bare".into()))
+        }
+        fn get(&self, _: &str, _: &str) -> Result<Vec<u8>, BackendError> { Err(BackendError::Unsupported("bare".into())) }
+        fn head(&self, _: &str, _: &str) -> Result<ObjectMeta, BackendError> { Err(BackendError::Unsupported("bare".into())) }
+        fn delete(&self, _: &str, _: &str) -> Result<(), BackendError> { Ok(()) }
+        fn copy(&self, _: &str, _: &str, _: &str, _: &str) -> Result<ObjectMeta, BackendError> { Err(BackendError::Unsupported("bare".into())) }
+        fn list(&self, _: &str, _: &str) -> Result<Vec<ObjectMeta>, BackendError> { Ok(vec![]) }
+    }
+    assert!(matches!(Bare.delete_if_match("b", "k", "e"), Err(BackendError::Unsupported(_))));
+}

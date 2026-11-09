@@ -10,6 +10,7 @@
 //! - `weaver store archive-gc [--node-days N] [--project-days N] [--release-days N] [--confirmed]`: expire old
 //!   archives of node, project and release stores; a dry run without `--confirmed`.
 //! - `weaver store put|get <name> <key> --as <principal>`: a governed request as that principal.
+//! - `weaver store drive materialise|sync-down|sync-up|resolve|watch ...`: ADR-131 prototype.
 //!
 //! Names are `weftos://<mesh>/nodes/<id>/store`, `.../projects/<ULID>/store`,
 //! `.../worktrees/<slug>/store`, `.../releases/<channel>/store`. Principals are
@@ -129,6 +130,15 @@ pub enum StoreAction {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         rest: Vec<String>,
     },
+    /// Materialise a store prefix as a local tree and keep it in sync (ADR-131 prototype):
+    /// materialise, sync-down, sync-up, resolve, watch. `watch` is one scan per call.
+    Drive {
+        verb: String,
+        /// `--key value` pairs (and the flags `--json`, `--read-only`). `materialise` takes
+        /// `--name --dest [--prefix]`; the others take `--root`, and `--name` for sync-up and resolve.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        rest: Vec<String>,
+    },
     /// Read an object as a principal.
     Get {
         name: String,
@@ -189,7 +199,7 @@ async fn call(method: &str, params: Value) -> anyhow::Result<Value> {
     Ok(resp.result.unwrap_or_default())
 }
 
-const WT_FLAGS: &[&str] = &["json", "force", "confirmed", "full"];
+const WT_FLAGS: &[&str] = &["json", "force", "confirmed", "full", "read_only"];
 
 /// `--key value` pairs to the daemon's params: hyphens become underscores, `--json`, `--force` and
 /// `--confirmed` are flags. The acting agent and host come from the environment.
@@ -277,6 +287,18 @@ fn plist_string(plist: &str, name: &str) -> Option<String> {
     Some(after[start..start + end].to_owned())
 }
 
+/// Who is acting: the agent from the environment, and the host half of a claim identity, which must
+/// tell machines apart (never a shared fallback).
+fn agent_and_host(rest: &[String]) -> anyhow::Result<(String, String)> {
+    let agent = std::env::var("WEFTOS_AGENT").or_else(|_| std::env::var("USER")).unwrap_or_else(|_| "agent".into());
+    let host = match local_host() {
+        Some(h) => h,
+        None if rest.iter().any(|a| a == "--host") => String::new(),
+        None => anyhow::bail!("cannot tell this machine's host name; pass --host <name>"),
+    };
+    Ok((agent, host))
+}
+
 /// Run the store subcommand.
 pub async fn run(args: StoreArgs) -> anyhow::Result<()> {
     match args.action {
@@ -339,13 +361,7 @@ pub async fn run(args: StoreArgs) -> anyhow::Result<()> {
             println!("wrote {} ({} bytes)", cell(&v, "key"), cell(&v, "size"));
         }
         StoreAction::Worktree { verb, rest } => {
-            let agent = std::env::var("WEFTOS_AGENT").or_else(|_| std::env::var("USER")).unwrap_or_else(|_| "agent".into());
-            // The host half of a claim identity must tell machines apart; never a shared fallback.
-            let host = match local_host() {
-                Some(h) => h,
-                None if rest.iter().any(|a| a == "--host") => String::new(),
-                None => anyhow::bail!("cannot tell this machine's host name; pass --host <name>"),
-            };
+            let (agent, host) = agent_and_host(&rest)?;
             let as_json = rest.iter().any(|a| a == "--json");
             let params = worktree_params(&rest, &agent, &host)?;
             let v = call(&format!("store.worktree.{verb}"), params).await?;
@@ -353,6 +369,12 @@ pub async fn run(args: StoreArgs) -> anyhow::Result<()> {
                 (false, Some(t)) => print!("{t}"),
                 _ => println!("{}", serde_json::to_string_pretty(&v)?),
             }
+        }
+        StoreAction::Drive { verb, rest } => {
+            let (agent, host) = agent_and_host(&rest)?;
+            let params = worktree_params(&rest, &agent, &host)?;
+            let v = call(&format!("store.drive.{verb}"), params).await?;
+            println!("{}", serde_json::to_string_pretty(&v)?);
         }
         StoreAction::Get { name, key, principal } => {
             let v = call("store.get", json!({"name": name, "key": key, "principal": principal})).await?;
@@ -408,6 +430,9 @@ mod tests {
         assert!(worktree_params(&a(&["stray"]), "a", "h").is_err());
         assert_eq!(wt_lines("buckets", &json!({"worktree": "w-1", "project": "p-1"})).unwrap(), "w-1 p-1\n");
         assert!(StoreArgs::try_parse_from(["store", "worktree", "publish", "--project", "X", "--changes-z", "/f"]).is_ok());
+        let d = worktree_params(&a(&["--name", "n", "--root", "/r", "--read-only"]), "ag", "h1").unwrap();
+        assert_eq!((d["read_only"].as_bool(), d["root"].as_str()), (Some(true), Some("/r")));
+        assert!(StoreArgs::try_parse_from(["store", "drive", "sync-up", "--name", "n", "--root", "/r"]).is_ok());
     }
 
     #[test]

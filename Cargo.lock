@@ -11671,6 +11671,7 @@ version = "0.8.4"
 dependencies = [
  "blake3",
  "hmac",
+ "notify",
  "reqwest",
  "serde",
  "serde_json",

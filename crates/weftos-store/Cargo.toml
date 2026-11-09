@@ -20,10 +20,15 @@ reqwest = { workspace = true, features = ["blocking"], optional = true }
 hmac = { workspace = true, optional = true }
 # sha2 is also used by the worktree sharing manifest (ADR-126 S2), so it is always on.
 sha2 = { workspace = true }
+# Optional: wake the drive watcher on file-system events instead of only on its poll timer. Already a
+# workspace dependency (clawft-core, clawft-services); the diff gate does not count a workspace = true
+# entry for it as new. The scanner stays the source of truth either way.
+notify = { workspace = true, optional = true }
 
 [features]
 default = []
 rustfs = ["dep:reqwest", "dep:hmac"]
+drive-notify = ["dep:notify"]
 
 [dev-dependencies]
 tempfile = { workspace = true }

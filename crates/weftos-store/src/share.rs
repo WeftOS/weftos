@@ -257,7 +257,7 @@ pub fn is_secret_path(path: &str) -> bool {
 /// open, then require that the path still names a regular file that is the very file the handle
 /// is on (same device and inode on unix). A swap before the open shows as a symlink or another
 /// inode, a swap after it cannot change what the handle reads. `Err(None)` is a real I/O error.
-fn read_regular(path: &Path, max: u64) -> std::result::Result<Vec<u8>, Option<Skip>> {
+pub(crate) fn read_regular(path: &Path, max: u64) -> std::result::Result<Vec<u8>, Option<Skip>> {
     let file = match std::fs::File::open(path) {
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(Some(Skip::Missing)),
@@ -299,7 +299,7 @@ fn read_open_regular(file: std::fs::File, path: &Path, max: u64) -> std::result:
 }
 
 /// PEM/OpenSSH private key material, whatever the file is called.
-fn looks_like_private_key(data: &[u8]) -> bool {
+pub(crate) fn looks_like_private_key(data: &[u8]) -> bool {
     const NEEDLE: &[u8] = b"PRIVATE KEY-----";
     data.len() >= NEEDLE.len() && data.windows(NEEDLE.len()).any(|w| w == NEEDLE)
 }
