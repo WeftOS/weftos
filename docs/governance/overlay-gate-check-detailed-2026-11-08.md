@@ -42,6 +42,15 @@ inherits the fix.
 - overlay `require_approval` returns EscalateToHuman;
 - parent `WL-DENY` still wins through an overlay that adds an unrelated deny.
 
-Not added: a weave RPC-level case. The existing `governance_check_rpc` tests drive a bare
-`GovernanceGate`; building a project-kernel overlay there needs the kernel fixture. The kernel
-tests cover the gate the RPC calls.
+RPC level (`crates/clawft-weave/tests/governance_check_project_kernel.rs`, one-test binary):
+boots a real `profile = "project"` kernel in-process (child root from
+`overlay_runtime::test_support::install_child_fixture`, overlay written to the child's
+overlay path), then calls `governance.check` through `daemon::handle_connection` over a unix
+socket, so routing, the capability check and `governance_check_rpc::handle` are all on the path.
+It asserts: overlay `[[deny]]` d1 gives `deny` naming `d1`; overlay `[[require_approval]]` gives
+`escalate_to_human`; an uncovered action gives `permit`; and no answer is `no_governance_engine`.
+Checked to bite: with the `check_detailed` impl removed (parent commit's overlay_runtime.rs) the
+test fails with `no_governance_engine`; with it, it passes.
+
+Not covered: a real `weaver`/daemon process and the Unix socket auth path of a spawned daemon
+(the test calls the connection handler directly); overlay reload while serving.
