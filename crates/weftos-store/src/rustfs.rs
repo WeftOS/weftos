@@ -600,15 +600,27 @@ impl RustfsBackend {
     /// The secrets directory: made 0700, and an existing one is tightened to 0700, so no other
     /// user can list or read the per-key secret files.
     fn private_dir(dir: &Path) -> Result<(), BackendError> {
-        use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+        use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
         std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir).map_err(io)?;
         let md = std::fs::metadata(dir).map_err(io)?;
         if md.permissions().mode() & 0o777 != 0o700 {
             // Only a directory of ours is tightened: a shared one (a temp dir, say) is refused
-            // rather than having its permissions changed under other users.
-            let me = std::fs::metadata("/proc/self").map_err(io)?.uid();
-            if md.uid() != me {
-                return Err(io(format!("{}: secrets directory belongs to another user and is not 0700", dir.display())));
+            // rather than having its permissions changed under other users. Our own uid is read
+            // from a probe file made here (std only: `/proc/self` is Linux-only and macOS has no
+            // `/proc`); a directory we cannot create in is not ours either.
+            let probe = dir.join(".owner-probe");
+            let _ = std::fs::remove_file(&probe);
+            let mine = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&probe)
+                .and_then(|f| f.metadata())
+                .map(|m| m.uid());
+            let _ = std::fs::remove_file(&probe);
+            match mine {
+                Ok(me) if md.uid() == me => {}
+                _ => return Err(io(format!("{}: secrets directory belongs to another user and is not 0700", dir.display()))),
             }
             std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).map_err(io)?;
         }
