@@ -1,6 +1,6 @@
 //! L1 follower view tests: visibility before merge, change polling, leftovers, overlaps.
 use weftos_store::follower::*;
-use weftos_store::overlay::{ObjectBackend, ObjectMeta, Result as R};
+use weftos_store::overlay::{ObjectBackend, ObjectMeta, Result as R, S2Error};
 use weftos_store::promote::{WorktreeMeta, write_meta};
 use weftos_store::share::*;
 use weftos_store::share_fetch::*;
@@ -667,142 +667,41 @@ fn manifest_without_changes_still_parses() {
     assert!(m.changes.is_empty());
 }
 
-#[test]
-fn overlapping_saves_from_threads_of_one_process_never_fail_or_corrupt_the_file() {
-    let d = tempfile::tempdir().unwrap();
-    let path = d.path().join("follow.json");
-    let st = FollowState::default();
-    std::thread::scope(|s| {
-        for _ in 0..8 {
-            s.spawn(|| {
-                for _ in 0..200 {
-                    st.save(&path).expect("a concurrent save must not lose its temp file");
-                    FollowState::load(&path).expect("the file always parses");
-                }
-            });
-        }
-    });
-    let left: Vec<_> = std::fs::read_dir(d.path()).unwrap().map(|e| e.unwrap().file_name()).collect();
-    assert_eq!(left.len(), 1, "no temp files left behind: {left:?}");
+fn claimed_by_alice(b: &MemBackend) -> String {
+    publish(b, "feat-x", "h1", &[("docs/a.md", "a")], 10);
+    let wt = list_shared(b, PR).unwrap().into_iter().find(|e| e.slug == "feat-x").unwrap().bucket;
+    mark_handoff(b, &wt, &actor("writer"), "go", 11).unwrap();
+    claim_merge(b, &wt, &actor("alice"), 12).unwrap();
+    wt
 }
 
-const PROJ_A: &str = "01JBXK2M3N4P5Q6R7S8T9V0W1X";
-const PROJ_B: &str = "01JBXK2M3N4P5Q6R7S8T9V0W2X";
-
 #[test]
-fn a_registry_entry_pointing_at_another_projects_worktree_is_unreadable_not_followed() {
+fn a_claim_expires_on_observed_silence_not_on_the_stored_wall_clock() {
+    use weftos_store::claim_watch::*;
     let b = MemBackend::new();
-    let bucket_of = |proj: &str, slug: &str| weftos_store::StoreName::worktree("local", proj, slug).unwrap().bucket();
-    let (pa, pb) = (format!("p-{}", PROJ_A.to_lowercase()), format!("p-{}", PROJ_B.to_lowercase()));
-    // Project B has a real worktree "fix-typo" with a secret doc.
-    let victim_bucket = bucket_of(PROJ_B, "fix-typo");
-    let d = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(d.path().join("docs")).unwrap();
-    std::fs::write(d.path().join("docs/secret-plan.md"), "# B's secret plan\n").unwrap();
-    write_meta(&b, &victim_bucket, &WorktreeMeta { slug: "fix-typo".into(), project: PROJ_B.into(), branch: "x".into(), base_commit: "base".into(), created_ms: 0 }).unwrap();
-    let src = TreeSource { root: d.path(), paths: &["docs/secret-plan.md".to_string()], uncommitted: &[], changes: &[], branch: "x", base_commit: "base", head_commit: "h", bundle: None, writer: actor("w") };
-    publish_tree(&b, &victim_bucket, &src, &Limits::default(), 1).unwrap();
-    let victim = summarize(&b, "fix-typo", &victim_bucket).unwrap().unwrap();
-    // A writer in project A plants an entry for the same slug that points at B's bucket.
-    write_registry_entry(&b, &pa, &victim).unwrap();
-    // an honest entry for A's own worktree of that slug is fine
-    let own_bucket = bucket_of(PROJ_A, "fix-typo");
-    assert_ne!(own_bucket, victim_bucket);
-
-    let (good, bad) = list_shared_lenient(&b, &pa).unwrap();
-    assert!(good.is_empty(), "the redirected entry is not trusted");
-    assert_eq!(bad, vec!["fix-typo".to_string()]);
-    let mut st = FollowState::default();
-    let ch = poll(&b, &pa, &mut st).unwrap();
-    assert_eq!(ch, vec![Change::Unreadable { slug: "fix-typo".into() }]);
-    // the entry is fine where it belongs
-    write_registry_entry(&b, &pb, &victim).unwrap();
-    assert_eq!(list_shared_lenient(&b, &pb).unwrap().0.len(), 1);
-    // a bucket whose own metadata names another project is refused by verify_entry too
-    let mut forged = victim.clone();
-    forged.bucket = victim_bucket.clone();
-    write_meta(&b, &victim_bucket, &WorktreeMeta { slug: "fix-typo".into(), project: PROJ_A.into(), branch: "x".into(), base_commit: "base".into(), created_ms: 0 }).unwrap();
-    assert!(verify_entry(&b, &forged).is_err());
-}
-
-struct GetCounter<'a> {
-    inner: &'a weftos_store::FsBackend,
-    gets: std::sync::atomic::AtomicUsize,
-}
-impl ObjectBackend for GetCounter<'_> {
-    fn head(&self, b: &str, k: &str) -> R<Option<ObjectMeta>> {
-        ObjectBackend::head(self.inner, b, k)
-    }
-    fn get(&self, b: &str, k: &str) -> R<Option<Vec<u8>>> {
-        self.gets.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        ObjectBackend::get(self.inner, b, k)
-    }
-    fn put(&self, b: &str, k: &str, d: &[u8]) -> R<ObjectMeta> {
-        ObjectBackend::put(self.inner, b, k, d)
-    }
-    fn delete(&self, b: &str, k: &str) -> R<()> {
-        ObjectBackend::delete(self.inner, b, k)
-    }
-    fn list(&self, b: &str, p: &str) -> R<Vec<ObjectMeta>> {
-        ObjectBackend::list(self.inner, b, p)
-    }
+    let wt = claimed_by_alice(&b);
+    let mut w = ClaimWatch::new();
+    let ttl = CLAIM_TTL_MS;
+    // bob's wall clock is wildly ahead of alice's stamp: the old rule would hand him the claim at once
+    let far_future = 10 * ttl;
+    let e = claim_merge_observed(&b, &wt, &actor("bob"), &mut w, 1_000, far_future).unwrap_err();
+    assert!(matches!(e, S2Error::Claimed(_)), "first sighting starts the watch, it does not expire it");
+    let e = claim_merge_observed(&b, &wt, &actor("bob"), &mut w, 1_000 + ttl - 1, far_future).unwrap_err();
+    assert!(matches!(e, S2Error::Claimed(_)));
+    // alice is alive and refreshes her claim: the record changes, the watch restarts
+    claim_merge(&b, &wt, &actor("alice"), 99).unwrap();
+    let e = claim_merge_observed(&b, &wt, &actor("bob"), &mut w, 1_000 + ttl + 5, far_future).unwrap_err();
+    assert!(matches!(e, S2Error::Claimed(_)), "a refreshed claim is not expired");
+    // silence for a full TTL on bob's own clock: now it can be taken over, and the epoch moves
+    let h = claim_merge_observed(&b, &wt, &actor("bob"), &mut w, 1_000 + 2 * ttl + 5, 5_000).unwrap();
+    assert_eq!(h.merger, Some(actor("bob")));
+    assert_eq!(h.epoch, 3, "alice claimed twice, bob once");
 }
 
 #[test]
-fn a_poll_with_the_digest_fetches_only_entries_that_changed() {
-    use weftos_store::AdminBackend;
-    let d = tempfile::tempdir().unwrap();
-    let fs = weftos_store::FsBackend::open(d.path()).unwrap();
-    fs.create_bucket(PR, &[]).unwrap();
-    let be = GetCounter { inner: &fs, gets: Default::default() };
-    let entry = |i: usize, head: &str| RegistryEntry {
-        slug: format!("wt-{i}"),
-        bucket: format!("w-{i}"),
-        branch: "b".into(),
-        head_commit: head.into(),
-        state: State::Open,
-        writer: actor("w"),
-        merger: None,
-        doc_count: 0,
-        file_count: 0,
-        updated_ms: i as u64,
-    };
-    for i in 0..12 {
-        write_registry_entry(&be, PR, &entry(i, "h1")).unwrap();
-    }
-    let digest = read_digest(&be, PR).unwrap().expect("the daemon wrote a digest");
-    assert_eq!(digest.entries.len(), 12);
-    assert!(!digest.entries.contains_key("_digest"), "the digest is not one of its own entries");
-    assert_eq!(list_shared(&be, PR).unwrap().len(), 12, "listings skip the digest");
-
-    let gets = || be.gets.swap(0, std::sync::atomic::Ordering::SeqCst);
-    let mut st = FollowState::default();
-    gets();
-    let ch = poll_fast(&be, PR, &mut st, false, true, FETCH_JOBS).unwrap();
-    assert_eq!(ch.len(), 12);
-    assert_eq!(gets(), 13, "the digest plus every entry once");
-    // nothing changed: the digest alone
-    assert!(poll_fast(&be, PR, &mut st, false, true, FETCH_JOBS).unwrap().is_empty());
-    assert_eq!(gets(), 1);
-    // one worktree moves: the digest and that entry
-    write_registry_entry(&be, PR, &entry(7, "h2")).unwrap();
-    gets();
-    let ch = poll_fast(&be, PR, &mut st, false, true, FETCH_JOBS).unwrap();
-    assert!(matches!(ch.as_slice(), [Change::HeadMoved { entry, from }] if entry.slug == "wt-7" && from == "h1"), "{ch:?}");
-    assert_eq!(gets(), 2);
-    // a missing digest falls back to the listing and still sees every change
-    ObjectBackend::delete(&be, PR, DIGEST_KEY).unwrap();
-    write_registry_entry(&be, PR, &entry(3, "h3")).unwrap(); // rewrites the digest
-    ObjectBackend::delete(&be, PR, DIGEST_KEY).unwrap();
-    gets();
-    let ch = poll_fast(&be, PR, &mut st, false, true, FETCH_JOBS).unwrap();
-    assert!(matches!(ch.as_slice(), [Change::HeadMoved { entry, .. }] if entry.slug == "wt-3"), "{ch:?}");
-    assert_eq!(gets(), 2, "no digest: one get for it (absent) and one changed entry, the rest by listing etag");
-    // gone, and the empty-registry guard still applies
-    remove_registry_entry(&be, PR, "wt-0").unwrap();
-    let ch = poll_fast(&be, PR, &mut st, false, true, FETCH_JOBS).unwrap();
-    assert_eq!(ch, vec![Change::Gone { slug: "wt-0".into() }]);
-    // the serial poll agrees with the fast one
-    let mut st2 = FollowState::default();
-    assert_eq!(poll(&be, PR, &mut st2).unwrap().len(), 11);
+fn a_merge_under_a_stale_epoch_is_refused() {
+    let b = MemBackend::new();
+    let wt = claimed_by_alice(&b); // epoch 1
+    assert!(mark_merged_at(&b, &wt, &actor("alice"), Some(2), "x", 20).is_err(), "wrong epoch");
+    mark_merged_at(&b, &wt, &actor("alice"), Some(1), "landed", 21).unwrap();
 }

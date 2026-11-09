@@ -225,3 +225,58 @@ fn two_machines_share_a_worktree_on_a_real_rustfs() {
         &format!("t-a-{u}"),
     );
 }
+
+/// A real compare-and-swap catches a project write that lands between a promotion's plan and its
+/// copy, on S1's `FsBackend` through the adapter (not the in-memory fallback).
+#[test]
+fn promotion_copy_is_a_real_compare_and_swap_on_the_fs_backend() {
+    use weftos_store::overlay::{ObjectMeta, Result};
+    struct Racy<'a>(&'a FsBackend);
+    impl ObjectBackend for Racy<'_> {
+        fn head(&self, b: &str, k: &str) -> Result<Option<ObjectMeta>> {
+            ObjectBackend::head(self.0, b, k)
+        }
+        fn get(&self, b: &str, k: &str) -> Result<Option<Vec<u8>>> {
+            ObjectBackend::get(self.0, b, k)
+        }
+        fn put(&self, b: &str, k: &str, d: &[u8]) -> Result<ObjectMeta> {
+            if k.ends_with("promoting.json") {
+                S1::put(self.0, "p-cas", "assets/a.bin", b"racer", false).unwrap();
+            }
+            ObjectBackend::put(self.0, b, k, d)
+        }
+        fn delete(&self, b: &str, k: &str) -> Result<()> {
+            ObjectBackend::delete(self.0, b, k)
+        }
+        fn list(&self, b: &str, p: &str) -> Result<Vec<ObjectMeta>> {
+            ObjectBackend::list(self.0, b, p)
+        }
+        fn put_cas(&self, b: &str, k: &str, d: &[u8], e: Option<&str>) -> Result<bool> {
+            ObjectBackend::put_cas(self.0, b, k, d, e) // S1's put_if_match / if_none_match
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let fs = FsBackend::open(dir.path()).unwrap();
+    for b in ["p-cas", "w-cas"] {
+        AdminBackend::create_bucket(&fs, b, &[]).unwrap();
+    }
+    S1::put(&fs, "p-cas", "assets/a.bin", b"v1", false).unwrap();
+    write_meta(
+        &fs,
+        "w-cas",
+        &WorktreeMeta { slug: "cas".into(), project: "cas".into(), branch: "b".into(), base_commit: "c".into(), created_ms: 1 },
+    )
+    .unwrap();
+    Overlay::new(&fs, "w-cas", "p-cas").get("assets/a.bin").unwrap(); // pin the base
+    Overlay::new(&fs, "w-cas", "p-cas").put("assets/a.bin", b"mine").unwrap();
+    let arch = ArchiveTarget { bucket: "p-cas", prefix: "archive/cas/" };
+    let e = promote(&Racy(&fs), "w-cas", "p-cas", &arch, &PromotionPolicy::default(), 5).unwrap_err();
+    assert!(matches!(e, weftos_store::overlay::S2Error::Conflict(ref k) if k == &["assets/a.bin".to_string()]), "{e:?}");
+    assert_eq!(S1::get(&fs, "p-cas", "assets/a.bin").unwrap(), b"racer");
+    // the racer's version is a real conflict now; choosing to overwrite lands it and archives theirs
+    assert!(promote(&fs, "w-cas", "p-cas", &arch, &PromotionPolicy::default(), 6).is_err());
+    let ow = PromotionPolicy { on_conflict: weftos_store::promote::OnConflict::Overwrite, ..PromotionPolicy::default() };
+    promote(&fs, "w-cas", "p-cas", &arch, &ow, 7).unwrap();
+    assert_eq!(S1::get(&fs, "p-cas", "assets/a.bin").unwrap(), b"mine");
+    assert_eq!(S1::get(&fs, "p-cas", "archive/cas/.wt/displaced/assets/a.bin").unwrap(), b"racer");
+}

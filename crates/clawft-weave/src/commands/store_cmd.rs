@@ -209,7 +209,7 @@ async fn call(method: &str, params: Value) -> anyhow::Result<Value> {
     Ok(resp.result.unwrap_or_default())
 }
 
-const WT_FLAGS: &[&str] = &["json", "force", "confirmed", "full", "read_only"];
+const WT_FLAGS: &[&str] = &["json", "force", "confirmed", "full", "read_only", "dry_run"];
 
 /// `--key value` pairs to the daemon's params: hyphens become underscores, `--json`, `--force` and
 /// `--confirmed` are flags. The acting agent and host come from the environment.
@@ -225,7 +225,12 @@ pub fn worktree_params(rest: &[String], agent: &str, host: &str) -> anyhow::Resu
             m.insert(k, Value::Bool(true));
         } else {
             let v = it.next().ok_or_else(|| anyhow::anyhow!("--{k} needs a value"))?;
-            m.insert(k, Value::String(v.clone()));
+            if matches!(k.as_str(), "epoch" | "max_bytes" | "quota_bytes" | "keep_days" | "archive_keep_days") {
+                let n: u64 = v.parse().map_err(|_| anyhow::anyhow!("--{} needs a whole number", k.replace('_', "-")))?;
+                m.insert(k, Value::from(n));
+            } else {
+                m.insert(k, Value::String(v.clone()));
+            }
         }
     }
     m.entry("agent").or_insert_with(|| Value::String(agent.into()));
@@ -442,6 +447,9 @@ mod tests {
         let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         let p = worktree_params(&a(&["--project", "01ABC", "--paths-z", "/t/p.z", "--force", "--json"]), "ag", "h1").unwrap();
         assert_eq!((p["project"].as_str(), p["paths_z"].as_str(), p["force"].as_bool(), p["agent"].as_str()), (Some("01ABC"), Some("/t/p.z"), Some(true), Some("ag")));
+        let d = worktree_params(&a(&["--project", "01ABC", "--slug", "x", "--dry-run", "--on-conflict", "keep_project", "--max-bytes", "9"]), "ag", "h1").unwrap();
+        assert_eq!((d["dry_run"].as_bool(), d["on_conflict"].as_str(), d["max_bytes"].as_u64()), (Some(true), Some("keep_project"), Some(9)));
+        assert!(worktree_params(&a(&["--max-bytes", "lots"]), "a", "h").is_err());
         assert!(worktree_params(&a(&["--project"]), "a", "h").is_err(), "value required");
         assert!(worktree_params(&a(&["stray"]), "a", "h").is_err());
         assert_eq!(wt_lines("buckets", &json!({"worktree": "w-1", "project": "p-1"})).unwrap(), "w-1 p-1\n");

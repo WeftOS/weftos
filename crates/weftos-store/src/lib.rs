@@ -19,6 +19,7 @@ mod testrng;
 pub mod access;
 pub mod audit;
 pub mod backend;
+pub mod claim_watch;
 pub mod drive;
 pub mod follower;
 pub mod fs;
@@ -28,6 +29,8 @@ pub mod name;
 pub mod overlay;
 pub mod policy;
 pub mod promote;
+pub mod registry_sign;
+pub mod retention;
 #[cfg(feature = "rustfs")]
 pub mod integrity;
 #[cfg(feature = "rustfs")]
@@ -39,6 +42,7 @@ pub mod share_fetch;
 pub mod sigv4;
 #[doc(hidden)]
 pub mod testing;
+pub mod wake;
 pub mod worktree_backend;
 
 pub use access::{Access, Grant, GrantTable, Op, Principal, PrincipalKind};

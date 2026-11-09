@@ -143,6 +143,10 @@ pub struct Handoff {
     pub writer: Actor,
     pub merger: Option<Actor>,
     pub updated_ms: u64,
+    /// Counts claims. A merger that sees a higher epoch than the one it claimed under knows its
+    /// claim was taken over (fencing), whatever the clocks say.
+    #[serde(default)]
+    pub epoch: u64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -513,31 +517,33 @@ pub fn publish_tree<B: ObjectBackend>(
         published_ms: now_ms,
     };
     b.put(bucket, MANIFEST_KEY, &serde_json::to_vec_pretty(&manifest)?)?;
-    // Stale objects go after the manifest no longer lists them, so a reader never sees a listed file missing.
-    if let Some(pm) = &prev {
-        let kept: std::collections::HashSet<&str> =
-            manifest.files.iter().map(|f| f.path.as_str()).collect();
-        for f in &pm.files {
-            if !kept.contains(f.path.as_str()) {
-                b.delete(bucket, &format!("{TREE_PREFIX}{}", f.path))?;
-                rep.removed += 1;
-            }
+    // Stale objects go after the manifest no longer lists them, so a reader never sees a listed file
+    // missing. Found by listing, not from the previous manifest: a publish killed after its manifest
+    // write but before this sweep leaves objects that no manifest names, and only a listing finds them.
+    let kept: std::collections::HashSet<&str> =
+        manifest.files.iter().map(|f| f.path.as_str()).collect();
+    for o in b.list(bucket, TREE_PREFIX)? {
+        if !kept.contains(&o.key[TREE_PREFIX.len()..]) {
+            b.delete(bucket, &o.key)?;
+            rep.removed += 1;
         }
     }
 
-    if read_handoff(b, bucket)?.is_none() {
-        write_handoff(
-            b,
-            bucket,
-            &Handoff {
-                state: State::Open,
-                note: String::new(),
-                writer: src.writer.clone(),
-                merger: None,
-                updated_ms: now_ms,
-            },
-        )?;
-    }
+    // Create the record only if none exists. Conditional, so a handoff or claim written between a
+    // check and this write is never overwritten with a fresh `Open`; losing the race is fine.
+    write_handoff_if(
+        b,
+        bucket,
+        &Handoff {
+            state: State::Open,
+            note: String::new(),
+            writer: src.writer.clone(),
+            merger: None,
+            updated_ms: now_ms,
+            epoch: 0,
+        },
+        None,
+    )?;
     Ok(rep)
 }
 
@@ -548,9 +554,31 @@ pub fn read_handoff<B: ObjectBackend>(b: &B, bucket: &str) -> Result<Option<Hand
     }
 }
 
-fn write_handoff<B: ObjectBackend>(b: &B, bucket: &str, h: &Handoff) -> Result<()> {
-    b.put(bucket, HANDOFF_KEY, &serde_json::to_vec_pretty(h)?)?;
-    Ok(())
+/// The handoff record with the etag it was read at, for a conditional write. The etag is taken
+/// *before* the body: if the record changes between the two calls the etag is the older one and the
+/// conditional write fails (safe), whereas the other order could pair a new etag with an old body
+/// and let a stale decision through.
+fn read_handoff_versioned<B: ObjectBackend>(b: &B, bucket: &str) -> Result<Option<(Handoff, String)>> {
+    let Some(meta) = b.head(bucket, HANDOFF_KEY)? else {
+        return Ok(None);
+    };
+    match b.get(bucket, HANDOFF_KEY)? {
+        Some(d) => Ok(Some((serde_json::from_slice(&d)?, meta.etag))),
+        None => Ok(None),
+    }
+}
+
+/// Write the record only if it is still the version `expect` was read at (`None`: only if absent).
+/// `false` means someone else changed it first: re-read and decide again.
+fn write_handoff_if<B: ObjectBackend>(b: &B, bucket: &str, h: &Handoff, expect: Option<&str>) -> Result<bool> {
+    b.put_cas(bucket, HANDOFF_KEY, &serde_json::to_vec_pretty(h)?, expect)
+}
+
+/// Attempts at a read-decide-write cycle on the handoff record before giving up as contended.
+const HANDOFF_RETRIES: usize = 6;
+
+fn contended() -> S2Error {
+    S2Error::Backend("handoff record is being changed by others; try again".into())
 }
 
 /// Refuse changes by anyone but the merger while a live claim exists.
@@ -577,71 +605,83 @@ pub fn mark_handoff<B: ObjectBackend>(
             "nothing published to hand off; publish the tree first".into(),
         ));
     }
-    let cur = read_handoff(b, bucket)?;
-    if let Some(h) = &cur {
-        if matches!(h.state, State::Merged | State::Archived) {
-            return Err(S2Error::Invalid(format!(
-                "worktree is already {:?}",
-                h.state
-            )));
+    for _ in 0..HANDOFF_RETRIES {
+        let seen = read_handoff_versioned(b, bucket)?;
+        if let Some((h, _)) = &seen {
+            if matches!(h.state, State::Merged | State::Archived) {
+                return Err(S2Error::Invalid(format!("worktree is already {:?}", h.state)));
+            }
+            guard_live_claim(h, writer, now_ms)?;
         }
-        guard_live_claim(h, writer, now_ms)?;
-    }
-    write_handoff(
-        b,
-        bucket,
-        &Handoff {
+        let next = Handoff {
             state: State::Handoff,
             note: note.into(),
             writer: writer.clone(),
             merger: None,
             updated_ms: now_ms,
-        },
-    )
+            epoch: seen.as_ref().map_or(0, |(h, _)| h.epoch),
+        };
+        if write_handoff_if(b, bucket, &next, seen.as_ref().map(|(_, e)| e.as_str()))? {
+            return Ok(());
+        }
+    }
+    Err(contended())
 }
 
-/// Take the merge. Advisory (the store has no cross-client locking, ADR-126 §4): write, re-read,
-/// and lose if someone else's claim is the one that stuck. A claim older than [`CLAIM_TTL_MS`]
-/// can be taken over.
+/// Take the merge. The record is written with a compare-and-swap on the version the decision was
+/// made on, so two claimers cannot both win; the loser re-reads and is refused. A claim older than
+/// [`CLAIM_TTL_MS`] can be taken over.
 pub fn claim_merge<B: ObjectBackend>(
     b: &B,
     bucket: &str,
     me: &Actor,
     now_ms: u64,
 ) -> Result<Handoff> {
-    let cur = read_handoff(b, bucket)?
-        .ok_or_else(|| S2Error::Invalid("worktree has no handoff record".into()))?;
-    match cur.state {
-        State::Merged | State::Archived => {
-            return Err(S2Error::Invalid(format!(
-                "worktree is already {:?}",
-                cur.state
-            )));
-        }
-        State::Claimed => {
-            let other = cur.merger.as_ref().filter(|m| *m != me);
-            if let Some(m) = other
-                && claim_is_live(&cur, now_ms)
-            {
-                return Err(S2Error::Claimed(format!("{}@{}", m.agent, m.host)));
+    // Not live: older than the TTL, or stamped from further in the future than the allowed skew.
+    claim_merge_with(b, bucket, me, now_ms, |cur| !claim_is_live(cur, now_ms))
+}
+
+/// [`claim_merge`] with the expiry decision supplied by the caller: `expired(current)` says whether
+/// a live claim by someone else may be taken over. `claim_watch` uses it to decide on elapsed time
+/// the caller observed itself instead of on the stored wall-clock stamp.
+pub fn claim_merge_with<B: ObjectBackend>(
+    b: &B,
+    bucket: &str,
+    me: &Actor,
+    now_ms: u64,
+    mut expired: impl FnMut(&Handoff) -> bool,
+) -> Result<Handoff> {
+    for _ in 0..HANDOFF_RETRIES {
+        let (cur, etag) = read_handoff_versioned(b, bucket)?
+            .ok_or_else(|| S2Error::Invalid("worktree has no handoff record".into()))?;
+        match cur.state {
+            State::Merged | State::Archived => {
+                return Err(S2Error::Invalid(format!("worktree is already {:?}", cur.state)));
             }
+            State::Claimed => {
+                let other = cur.merger.as_ref().filter(|m| *m != me);
+                if let Some(m) = other
+                    && !expired(&cur)
+                {
+                    return Err(S2Error::Claimed(format!("{}@{}", m.agent, m.host)));
+                }
+            }
+            State::Open | State::Handoff => {}
         }
-        State::Open | State::Handoff => {}
+        let next = Handoff {
+            state: State::Claimed,
+            merger: Some(me.clone()),
+            updated_ms: now_ms,
+            epoch: cur.epoch + 1,
+            ..cur
+        };
+        // Conditional on the version we decided on: of two claimers reading the same record, exactly
+        // one write lands, and the other re-reads, sees a live claim and is refused.
+        if write_handoff_if(b, bucket, &next, Some(&etag))? {
+            return Ok(next);
+        }
     }
-    let next = Handoff {
-        state: State::Claimed,
-        merger: Some(me.clone()),
-        updated_ms: now_ms,
-        ..cur
-    };
-    write_handoff(b, bucket, &next)?;
-    let back = read_handoff(b, bucket)?
-        .ok_or_else(|| S2Error::Backend("handoff vanished after write".into()))?;
-    match &back.merger {
-        Some(m) if m == me => Ok(back),
-        Some(m) => Err(S2Error::Claimed(format!("{}@{}", m.agent, m.host))),
-        None => Err(S2Error::Backend("claim not recorded".into())),
-    }
+    Err(contended())
 }
 
 /// The merger finished: git has landed the branch. Promotion and bucket cleanup follow (§3, §4).
@@ -652,32 +692,55 @@ pub fn mark_merged<B: ObjectBackend>(
     note: &str,
     now_ms: u64,
 ) -> Result<()> {
-    let cur = read_handoff(b, bucket)?
-        .ok_or_else(|| S2Error::Invalid("worktree has no handoff record".into()))?;
-    if cur.state != State::Claimed {
-        return Err(S2Error::Invalid(format!(
-            "claim the merge before marking it merged (state is {:?})",
-            cur.state
-        )));
-    }
-    if cur.merger.as_ref() != Some(me) {
-        return Err(S2Error::Claimed(
-            cur.merger
-                .map(|m| format!("{}@{}", m.agent, m.host))
-                .unwrap_or_default(),
-        ));
-    }
-    write_handoff(
-        b,
-        bucket,
-        &Handoff {
+    mark_merged_at(b, bucket, me, None, note, now_ms)
+}
+
+/// [`mark_merged`] that also demands the claim epoch the merger claimed under. If the claim was
+/// taken over and re-taken by the same actor in between, or the record was rewritten, the epoch has
+/// moved and the merge is refused (fencing), whatever the clocks say.
+pub fn mark_merged_at<B: ObjectBackend>(
+    b: &B,
+    bucket: &str,
+    me: &Actor,
+    epoch: Option<u64>,
+    note: &str,
+    now_ms: u64,
+) -> Result<()> {
+    for _ in 0..HANDOFF_RETRIES {
+        let (cur, etag) = read_handoff_versioned(b, bucket)?
+            .ok_or_else(|| S2Error::Invalid("worktree has no handoff record".into()))?;
+        if cur.state != State::Claimed {
+            return Err(S2Error::Invalid(format!(
+                "claim the merge before marking it merged (state is {:?})",
+                cur.state
+            )));
+        }
+        if cur.merger.as_ref() != Some(me) {
+            return Err(S2Error::Claimed(
+                cur.merger.map(|m| format!("{}@{}", m.agent, m.host)).unwrap_or_default(),
+            ));
+        }
+        if let Some(e) = epoch
+            && e != cur.epoch
+        {
+            return Err(S2Error::Claimed(format!(
+                "claim epoch {e} is stale (now {}); the claim was taken over",
+                cur.epoch
+            )));
+        }
+        // Conditional: the epoch and merger checks above hold for exactly the version written over.
+        let next = Handoff {
             state: State::Merged,
             note: note.into(),
             merger: Some(me.clone()),
             updated_ms: now_ms,
             ..cur
-        },
-    )
+        };
+        if write_handoff_if(b, bucket, &next, Some(&etag))? {
+            return Ok(());
+        }
+    }
+    Err(contended())
 }
 
 /// The branch landed through git, so the worktree is merged whoever held the claim. Unlike
@@ -693,20 +756,22 @@ pub fn mark_landed<B: ObjectBackend>(
     note: &str,
     now_ms: u64,
 ) -> Result<bool> {
-    let Some(cur) = read_handoff(b, bucket)? else { return Ok(false) };
-    if matches!(cur.state, State::Merged | State::Archived) {
-        return Ok(false);
+    // Conditional, like the other handoff writes: the decision holds for exactly the version written over.
+    for _ in 0..HANDOFF_RETRIES {
+        let Some((cur, etag)) = read_handoff_versioned(b, bucket)? else { return Ok(false) };
+        if matches!(cur.state, State::Merged | State::Archived) {
+            return Ok(false);
+        }
+        let note = match cur.merger.as_ref().filter(|m| *m != lander && cur.state == State::Claimed) {
+            Some(m) => format!("{note} (claim was held by {}@{})", m.agent, m.host),
+            None => note.to_string(),
+        };
+        let next = Handoff { state: State::Merged, note, merger: Some(lander.clone()), updated_ms: now_ms, ..cur };
+        if write_handoff_if(b, bucket, &next, Some(&etag))? {
+            return Ok(true);
+        }
     }
-    let note = match cur.merger.as_ref().filter(|m| *m != lander && cur.state == State::Claimed) {
-        Some(m) => format!("{note} (claim was held by {}@{})", m.agent, m.host),
-        None => note.to_string(),
-    };
-    write_handoff(
-        b,
-        bucket,
-        &Handoff { state: State::Merged, note, merger: Some(lander.clone()), updated_ms: now_ms, ..cur },
-    )?;
-    Ok(true)
+    Err(contended())
 }
 
 /// Path segments that must never be written by a fetch: VCS control dirs and files that make a

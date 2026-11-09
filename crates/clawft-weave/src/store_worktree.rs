@@ -9,17 +9,21 @@
 //! That is a premise, not a protection: every path is checked by `store_worktree_paths::Guard`
 //! (absolute, resolved, no symlinked final component, kept out of the daemon's own state).
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Instant;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
 use weftos_store::backend::{BackendError, ObjectBackend as S1, ObjectMeta};
+use weftos_store::claim_watch::{ClaimWatch, claim_merge_observed};
 use weftos_store::follower::{self, Change, FollowState, LeftoverPolicy, Why};
-use weftos_store::promote::{ArchiveTarget, PromotionPolicy, WorktreeMeta, is_promoted, promote, read_meta, write_meta};
+use weftos_store::promote::{ArchiveTarget, OnConflict, PromotionPolicy, WorktreeMeta, is_promoted, promote, read_meta, write_meta};
 use weftos_store::service::{ARCHIVE_BUCKET, Parties, archive_key};
-use weftos_store::share::{
-    Actor, Limits, TreeSource, claim_merge, mark_handoff, parse_name_status_z, publish_tree,
+use weftos_store::registry_sign::{
+    EntrySigner, EntryVerifier, list_trusted_gen, list_trusted_lenient, poll_verified_settled, remove_registry_entry_signed,
+    write_registry_entry_signed,
 };
+use weftos_store::share::{Actor, Limits, TreeSource, mark_handoff, parse_name_status_z, publish_tree};
 use weftos_store::share_fetch::{
     self, RegistryEntry, Select, fetch_bundle, fetch_tree, list_shared_lenient, summarize, write_registry_entry,
 };
@@ -79,6 +83,8 @@ struct P {
     bundle: Option<String>,
     bundle_out: Option<String>,
     handoff: Option<String>,
+    /// The claim epoch the caller claimed under; `promote` refuses a merge made under another.
+    epoch: Option<u64>,
     #[serde(default)]
     force: bool,
     /// Output format; the CLI formats, the daemon ignores it.
@@ -90,6 +96,21 @@ struct P {
     /// `follow`: list the registry instead of reading the digest.
     #[serde(default)]
     full: bool,
+    /// `promote`: what to do with a key the project changed since the worktree saw it
+    /// (`fail` by default, `keep_project`, `overwrite`).
+    on_conflict: Option<String>,
+    /// `promote`: report what landing would do and write nothing.
+    #[serde(default)]
+    dry_run: bool,
+    /// `promote`: refuse a land that copies more than this many bytes (default 1 GiB; 0 = no cap).
+    max_bytes: Option<u64>,
+    /// `publish`: refuse when the worktree store already holds more than this many bytes
+    /// (default 2 GiB; 0 = no quota).
+    quota_bytes: Option<u64>,
+    /// `gc`: retire worktree stores landed at least this many days ago (default 14).
+    keep_days: Option<u64>,
+    /// `gc`: also delete archived worktree objects older than this many days (default: never).
+    archive_keep_days: Option<u64>,
     /// Who is acting; filled in by the CLI from the environment.
     agent: Option<String>,
     host: Option<String>,
@@ -136,6 +157,17 @@ fn nul_list(raw: &[u8]) -> Result<Vec<String>, String> {
         .collect()
 }
 
+fn claim_watch() -> &'static Mutex<ClaimWatch> {
+    static W: OnceLock<Mutex<ClaimWatch>> = OnceLock::new();
+    W.get_or_init(|| Mutex::new(ClaimWatch::new()))
+}
+
+/// Milliseconds on a monotonic clock, from the first call in this process.
+fn mono_ms() -> u64 {
+    static T0: OnceLock<Instant> = OnceLock::new();
+    T0.get_or_init(Instant::now).elapsed().as_millis() as u64
+}
+
 fn who(p: &P) -> Actor {
     Actor {
         agent: p.agent.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| "agent".into()),
@@ -148,13 +180,163 @@ struct Names {
     wt: String,
     pr_name: StoreName,
     pr: String,
+    /// Where the shared-worktree registry lives: the project store, or (switch on) a store of its
+    /// own that only the daemon writes.
+    reg: String,
+}
+
+/// Channel of the registry-only store used when the registry switch is on.
+const REGISTRY_CHANNEL: &str = "wt-registry";
+
+/// The switch: `WEFTOS_WT_REGISTRY_STORE=1` moves the registry out of the project store. Off by default.
+fn registry_switch() -> bool {
+    std::env::var("WEFTOS_WT_REGISTRY_STORE").is_ok_and(|v| v == "1")
+}
+
+/// Registry signing (ADR-126 S2, `docs/research/adr126-s2-registry-signing-and-claim-clock.md`).
+/// All three parts are off unless their env var is set, so a daemon started as before writes and
+/// reads unsigned entries exactly as it did.
+/// - `WEFTOS_WT_REGISTRY_SIGN_KEY`: file holding a 32-byte ed25519 seed as 64 hex characters.
+///   The daemon signs every registry entry it writes with it. Which key this is (the node key, a
+///   project key) is the owner's open decision; the daemon only reads the file it is pointed at.
+/// - `WEFTOS_WT_REGISTRY_TRUSTED`: file of trusted public keys, one 64-hex key per line (`#` comments).
+///   With it, follow/search/leftovers check each entry's signature.
+/// - `WEFTOS_WT_REGISTRY_REQUIRE_SIGNED`: with the trusted file, entries that do not verify are dropped
+///   (and reported by `follow` as unreadable). Setting a trusted file turns this on by itself; `=0`
+///   keeps unverified entries visible with their trust shown in each verb's `trust` field (an audit
+///   mode for rolling signing out). `=1` without a trusted file is an error.
+#[derive(Default)]
+pub struct SignCfg {
+    key: Option<ed25519_dalek::SigningKey>,
+    trusted: Option<Vec<[u8; 32]>>,
+    require: bool,
+    /// `WEFTOS_WT_FOLLOW_RETRY_MS`: re-list once after this many ms when a known worktree is refused
+    /// (option B in the registry-format decision note). 0 = off, the default.
+    follow_retry_ms: u64,
+}
+
+/// 32 bytes from 64 hex characters. The error never repeats any of the input: this parses a secret seed.
+fn hex32(s: &str) -> Result<[u8; 32], String> {
+    const BAD: &str = "a key is 32 bytes written as 64 hex characters";
+    let v = hex::decode(s.trim()).map_err(|_| BAD.to_string())?;
+    v.try_into().map_err(|_| BAD.to_string())
+}
+
+/// A public key that may be trusted: 32 bytes that decode to a curve point that is not small-order.
+/// A small-order (weak) key makes signatures forgeable without knowing any secret, so it is refused
+/// where trusted keys are loaded as well as where signatures are checked.
+fn trusted_key(s: &str) -> Result<[u8; 32], String> {
+    let k = hex32(s)?;
+    let vk = ed25519_dalek::VerifyingKey::from_bytes(&k).map_err(|_| "a trusted key is not a valid ed25519 public key".to_string())?;
+    if vk.is_weak() {
+        return Err("a trusted key is a small-order (weak) point; refusing it".into());
+    }
+    Ok(k)
+}
+
+impl SignCfg {
+    pub fn off() -> Self {
+        Self::default()
+    }
+
+    pub fn new(key: Option<[u8; 32]>, trusted: Option<Vec<[u8; 32]>>, require: bool) -> Self {
+        Self { key: key.map(|k| ed25519_dalek::SigningKey::from_bytes(&k)), trusted, require, follow_retry_ms: 0 }
+    }
+
+    /// Read the three env settings. A named file that cannot be read is an error, never a silent
+    /// fall back to unsigned: someone who asked for signing must not get an unsigned registry.
+    pub fn from_env() -> Result<Self, String> {
+        Self::from_lookup(|v| std::env::var(v).ok())
+    }
+
+    /// [`Self::from_env`] with the variable lookup supplied.
+    pub fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Result<Self, String> {
+        let file = |var: &str| -> Result<Option<String>, String> {
+            match get(var) {
+                Some(p) if !p.is_empty() => std::fs::read_to_string(&p).map(Some).map_err(|e| format!("{var} {p}: {e}")),
+                _ => Ok(None),
+            }
+        };
+        // A seed other users can read is no secret: refuse it rather than sign with it.
+        #[cfg(unix)]
+        if let Some(p) = get("WEFTOS_WT_REGISTRY_SIGN_KEY").filter(|p| !p.is_empty()) {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&p).map_err(|e| format!("WEFTOS_WT_REGISTRY_SIGN_KEY {p}: {e}"))?.permissions().mode();
+            if mode & 0o077 != 0 {
+                return Err(format!("WEFTOS_WT_REGISTRY_SIGN_KEY {p} is accessible to other users (mode {:o}); chmod 600 it", mode & 0o777));
+            }
+        }
+        let key = file("WEFTOS_WT_REGISTRY_SIGN_KEY")?.map(|t| hex32(&t)).transpose()?;
+        let trusted = file("WEFTOS_WT_REGISTRY_TRUSTED")?
+            .map(|t| {
+                t.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).map(trusted_key).collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()?;
+        let require = match get("WEFTOS_WT_REGISTRY_REQUIRE_SIGNED").as_deref() {
+            Some("1") if trusted.is_none() => {
+                return Err("WEFTOS_WT_REGISTRY_REQUIRE_SIGNED=1 needs WEFTOS_WT_REGISTRY_TRUSTED".into());
+            }
+            Some("1") => true,
+            Some("0") => false,
+            // unset: a trusted-key file means "filter", which is what setting one is for
+            _ => trusted.is_some(),
+        };
+        let retry = match get("WEFTOS_WT_FOLLOW_RETRY_MS").as_deref() {
+            None | Some("") => 0,
+            Some(v) => v.parse::<u64>().ok().filter(|n| *n <= 10_000).ok_or("WEFTOS_WT_FOLLOW_RETRY_MS is milliseconds, 0 to 10000")?,
+        };
+        Ok(Self::new(key, trusted, require).with_follow_retry_ms(retry))
+    }
+
+    /// Option B of the registry-format decision note: see `follow_retry_ms`.
+    pub fn with_follow_retry_ms(mut self, ms: u64) -> Self {
+        self.follow_retry_ms = ms;
+        self
+    }
+}
+
+struct Ed(ed25519_dalek::SigningKey);
+impl EntrySigner for Ed {
+    fn signer_id(&self) -> String {
+        hex::encode(self.0.verifying_key().to_bytes())
+    }
+    fn alg(&self) -> &'static str {
+        "ed25519"
+    }
+    fn sign(&self, msg: &[u8]) -> Vec<u8> {
+        use ed25519_dalek::Signer;
+        self.0.sign(msg).to_bytes().to_vec()
+    }
+}
+
+struct Trusted<'a>(&'a [[u8; 32]]);
+impl EntryVerifier for Trusted<'_> {
+    fn verify(&self, signer: &str, alg: &str, msg: &[u8], sig: &[u8]) -> bool {
+        use ed25519_dalek::{Signature, VerifyingKey};
+        let Ok(k) = hex32(signer) else { return false };
+        if alg != "ed25519" || !self.0.contains(&k) {
+            return false;
+        }
+        let (Ok(vk), Ok(sig)) = (VerifyingKey::from_bytes(&k), Signature::from_slice(sig)) else { return false };
+        // Strict: rejects non-canonical signatures and small-order components; a weak key is never trusted.
+        !vk.is_weak() && vk.verify_strict(msg, &sig).is_ok()
+    }
 }
 
 fn names(mesh: &str, project: &str, slug: &str) -> Result<Names, String> {
+    names_with(mesh, project, slug, false)
+}
+
+fn names_with(mesh: &str, project: &str, slug: &str, registry_store: bool) -> Result<Names, String> {
     let e = |e: weftos_store::StoreError| e.to_string();
     let wt_name = StoreName::worktree(mesh, project_ok(project)?, slug_ok(slug)?).map_err(e)?;
     let pr_name = StoreName::project(mesh, project).map_err(e)?;
-    Ok(Names { wt: wt_name.bucket(), pr: pr_name.bucket(), wt_name, pr_name })
+    let reg_name = if registry_store {
+        StoreName::release(mesh, project, REGISTRY_CHANNEL).map_err(e)?
+    } else {
+        pr_name.clone()
+    };
+    Ok(Names { wt: wt_name.bucket(), pr: pr_name.bucket(), reg: reg_name.bucket(), wt_name, pr_name })
 }
 
 fn entry_json(e: &RegistryEntry) -> Value {
@@ -209,12 +391,56 @@ fn live_worktree(svc: &StoreService, b: &Op, n: &Names, project: &str, slug: &st
 }
 
 /// Re-derive one worktree's registry entry from its own bucket (the daemon is the only writer).
-fn refresh(b: &Op, pr: &str, slug: &str, wt: &str) -> Result<(), String> {
+fn refresh(b: &Op, pr: &str, slug: &str, wt: &str, sign: &SignCfg) -> Result<(), String> {
     let e = |e: weftos_store::overlay::S2Error| e.to_string();
     if let Some(ent) = summarize(b, slug, wt).map_err(e)? {
-        write_registry_entry(b, pr, &ent).map_err(e)?;
+        match &sign.key {
+            Some(k) => write_registry_entry_signed(b, pr, &ent, &Ed(k.clone())).map_err(e)?,
+            None => write_registry_entry(b, pr, &ent).map_err(e)?,
+        }
     }
     Ok(())
+}
+
+/// This project's worktree stores on the node.
+fn worktree_stores(svc: &StoreService, mesh: &str, project: &str) -> Vec<weftos_store::StoreInfo> {
+    let marker = format!("weftos://{mesh}/projects/{project}/worktrees/");
+    svc.list_stores().into_iter().filter(|i| i.kind == "worktree" && i.name.to_lowercase().starts_with(&marker.to_lowercase())).collect()
+}
+
+/// The registry's entries as this follower should see them: all of them, or with a trusted-key
+/// file the ones that verify (all of them when `REQUIRE_SIGNED` is off).
+fn trusted_entries(b: &Op, reg: &str, sign: &SignCfg) -> weftos_store::overlay::Result<(Vec<RegistryEntry>, Vec<String>)> {
+    Ok(match &sign.trusted {
+        Some(t) => {
+            let (v, bad) = list_trusted_lenient(b, reg, &Trusted(t), sign.require)?;
+            (v.into_iter().map(|(e, _)| e).collect(), bad)
+        }
+        None => list_shared_lenient(b, reg)?,
+    })
+}
+
+/// Each listed entry's trust, for verb output (`{}` when no trusted-key file is set).
+fn trust_json(b: &Op, reg: &str, sign: &SignCfg) -> Value {
+    let Some(t) = &sign.trusted else { return json!({}) };
+    match list_trusted_gen(b, reg, &Trusted(t), false) {
+        Ok((v, bad)) => {
+            let mut m = serde_json::Map::new();
+            for (e, tr, _) in v {
+                let name = match tr {
+                    weftos_store::registry_sign::Trust::Verified => "verified",
+                    weftos_store::registry_sign::Trust::Unsigned => "unsigned",
+                    weftos_store::registry_sign::Trust::Bad => "bad",
+                };
+                m.insert(e.slug, json!(name));
+            }
+            for s in bad {
+                m.insert(s, json!("refused"));
+            }
+            Value::Object(m)
+        }
+        Err(e) => json!({"error": e.to_string()}),
+    }
 }
 
 /// After a worktree store is archived and its bucket deleted, drop its registry entry from the
@@ -223,19 +449,35 @@ fn refresh(b: &Op, pr: &str, slug: &str, wt: &str) -> Result<(), String> {
 pub fn forget(svc: &StoreService, name: &StoreName) -> Result<(), String> {
     let StoreName::Worktree { mesh, project, slug } = name else { return Ok(()) };
     let pr = StoreName::project(mesh, &project.to_string()).map_err(|e| e.to_string())?.bucket();
-    follower::remove_registry_entry(&Op(svc.operator_objects()), &pr, slug).map_err(|e| e.to_string())
+    remove_registry_entry_signed(&Op(svc.operator_objects()), &pr, slug).map_err(|e| e.to_string())
 }
 
 /// Run one verb. `mesh` is the store-name mesh token of this daemon.
 pub fn run(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms: u64) -> Result<Value, String> {
-    run_with(svc, mesh, method, params, now_ms, &Guard::from_runtime())
+    let sign = SignCfg::from_env()?;
+    run_full(svc, mesh, method, params, now_ms, registry_switch(), &sign, &Guard::from_runtime())
 }
 
 /// [`run`] with an explicit set of protected paths.
 pub fn run_with(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms: u64, guard: &Guard) -> Result<Value, String> {
+    run_full(svc, mesh, method, params, now_ms, false, &SignCfg::off(), guard)
+}
+
+/// [`run_with`] with the registry switch and registry signing given explicitly.
+#[allow(clippy::too_many_arguments)]
+pub fn run_full(
+    svc: &StoreService,
+    mesh: &str,
+    method: &str,
+    params: Value,
+    now_ms: u64,
+    registry_store: bool,
+    sign: &SignCfg,
+    guard: &Guard,
+) -> Result<Value, String> {
     let verb = method.strip_prefix("store.worktree.").unwrap_or(method).to_owned();
     let who = (params["project"].as_str().map(str::to_owned), params["slug"].as_str().map(str::to_owned), params["agent"].as_str().map(str::to_owned), params["host"].as_str().map(str::to_owned));
-    let r = dispatch(svc, mesh, method, params, now_ms, guard);
+    let r = dispatch(svc, mesh, method, params, now_ms, registry_store, sign, guard);
     record_verb(svc, mesh, &verb, who, &r);
     r
 }
@@ -260,12 +502,20 @@ fn record_verb(svc: &StoreService, mesh: &str, verb: &str, who: (Option<String>,
     svc.record_act(&actor, &n.wt_name, op, None, bytes, outcome, Some((kind, json!({"store": n.wt_name.to_string(), "project": project, "slug": slug, "actor": actor, "result": detail}))));
 }
 
-fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms: u64, guard: &Guard) -> Result<Value, String> {
+#[allow(clippy::too_many_arguments)]
+fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms: u64, registry_store: bool, sign: &SignCfg, guard: &Guard) -> Result<Value, String> {
+    let names = |m: &str, pr: &str, s: &str| names_with(m, pr, s, registry_store);
     let p: P = serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
     let e = |e: weftos_store::overlay::S2Error| e.to_string();
     let b = Op(svc.operator_objects());
     let project = project_ok(need(&p.project, "project")?)?.to_owned();
     let verb = method.strip_prefix("store.worktree.").unwrap_or(method);
+    if registry_store && !matches!(verb, "buckets") {
+        // No admins, writers or appenders: only the daemon's operator path can write it. Idempotent,
+        // so a worktree created before the switch was turned on still finds its registry store.
+        let rn = StoreName::release(mesh, &project, REGISTRY_CHANNEL).map_err(|e| e.to_string())?;
+        svc.ensure_store(&rn, "cli", Parties::default()).map_err(|e| e.to_string())?;
+    }
     match verb {
         "buckets" => {
             let n = names(mesh, &project, need(&p.slug, "slug")?)?;
@@ -317,6 +567,20 @@ fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms:
             let slug = need(&p.slug, "slug")?;
             let n = names(mesh, &project, slug)?;
             live_worktree(svc, &b, &n, &project, slug)?;
+            let quota = match p.quota_bytes {
+                Some(0) => None,
+                Some(q) => Some(q),
+                None => Some(weftos_store::retention::DEFAULT_WORKTREE_QUOTA),
+            };
+            if let Some(q) = quota {
+                let (_, used) = weftos_store::retention::usage(&b, &n.wt).map_err(e)?;
+                if used > q {
+                    return Err(format!(
+                        "worktree store {slug} holds {used} bytes, over its {q} byte quota; \
+                         land or clean it, or raise --quota-bytes"
+                    ));
+                }
+            }
             let root = guard.check(need(&p.root, "root")?, "root", Use::ReadDir)?;
             // The hook publishes from the top of a git worktree; anything else is not a worktree.
             if !root.join(".git").exists() {
@@ -356,7 +620,7 @@ fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms:
             if let Some(note) = p.handoff.as_deref() {
                 mark_handoff(&b, &n.wt, &writer, note, now_ms).map_err(e)?;
             }
-            refresh(&b, &n.pr, slug, &n.wt)?;
+            refresh(&b, &n.reg, slug, &n.wt, sign)?;
             Ok(json!({
                 "uploaded": rep.uploaded, "unchanged": rep.unchanged, "removed": rep.removed,
                 "skipped": rep.skipped.iter().map(|(k, w)| format!("{k}: {w:?}")).collect::<Vec<_>>(),
@@ -385,17 +649,51 @@ fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms:
             let slug = need(&p.slug, "slug")?;
             let n = names(mesh, &project, slug)?;
             live_worktree(svc, &b, &n, &project, slug)?;
-            let h = claim_merge(&b, &n.wt, &who(&p), now_ms).map_err(e)?;
-            refresh(&b, &n.pr, slug, &n.wt)?;
-            Ok(json!({"state": h.state, "merger": h.merger.map(|m| format!("{}@{}", m.agent, m.host))}))
+            // Expiry is judged on how long this daemon has watched the claim sit unchanged, on its
+            // own monotonic clock; the stored stamp (some caller's wall clock) decides nothing.
+            let h = {
+                let mut w = claim_watch().lock().map_err(|_| "claim watch poisoned".to_string())?;
+                claim_merge_observed(&b, &n.wt, &who(&p), &mut w, mono_ms(), now_ms).map_err(e)?
+            };
+            refresh(&b, &n.reg, slug, &n.wt, sign)?;
+            Ok(json!({"state": h.state, "epoch": h.epoch,
+                      "merger": h.merger.map(|m| format!("{}@{}", m.agent, m.host))}))
         }
         "promote" => {
             let slug = need(&p.slug, "slug")?;
             let n = names(mesh, &project, slug)?;
             live_worktree(svc, &b, &n, &project, slug)?;
-            // A land that went through git is the merge, whoever held the claim (a claim that is
-            // someone else's or has expired must not stop the assets reaching the project). A
-            // worktree that was never published has no handoff and gets none.
+            let on_conflict = match p.on_conflict.as_deref() {
+                None | Some("fail") => OnConflict::Fail,
+                Some("keep_project") => OnConflict::KeepProject,
+                Some("overwrite") => OnConflict::Overwrite,
+                Some(o) => return Err(format!("--on-conflict is fail, keep_project or overwrite, not '{o}'")),
+            };
+            let defaults = PromotionPolicy::default();
+            let policy = PromotionPolicy {
+                on_conflict,
+                max_promote_bytes: match p.max_bytes {
+                    Some(0) => None,
+                    Some(n) => Some(n),
+                    None => defaults.max_promote_bytes,
+                },
+                ..defaults
+            };
+            if p.dry_run {
+                let pv = weftos_store::promote::preview(&b, &n.wt, &n.pr, &policy).map_err(e)?;
+                return Ok(json!({"dry_run": true, "preview": pv}));
+            }
+            // A caller that names the epoch it claimed under is refused when the claim was taken over
+            // since (fencing); without one, a land that went through git is the merge whoever held
+            // the claim (a claim that is someone else's or has expired must not stop the assets
+            // reaching the project). A worktree that was never published has no handoff and gets none.
+            if let Some(ep) = p.epoch
+                && let Some(h) = weftos_store::share::read_handoff(&b, &n.wt).map_err(e)?
+                && h.state == weftos_store::share::State::Claimed
+                && h.epoch != ep
+            {
+                return Err(format!("claim epoch {ep} is stale (now {}); the claim was taken over", h.epoch));
+            }
             weftos_store::share::mark_landed(&b, &n.wt, &who(&p), "landed", now_ms).map_err(e)?;
             svc.ensure_archive().map_err(|e| e.to_string())?;
             let prefix = archive_key(&n.wt, now_ms, "");
@@ -404,43 +702,99 @@ fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms:
                 &n.wt,
                 &n.pr,
                 &ArchiveTarget { bucket: ARCHIVE_BUCKET, prefix: &prefix },
-                &PromotionPolicy::default(),
+                &policy,
                 now_ms,
             )
             .map_err(e)?;
             // Followers must stop seeing a landed worktree as claimed (or open): the entry now says
             // merged, and stays until the worktree store is archived and deleted (see `forget`).
-            refresh(&b, &n.pr, slug, &n.wt)?;
+            refresh(&b, &n.reg, slug, &n.wt, sign)?;
             Ok(json!({
                 "promoted": r.promoted, "deleted": r.deleted, "kept_project": r.kept_project,
                 "archived": r.archived.len(), "dropped_tombstones": r.dropped_tombstones,
             }))
         }
+        "usage" => {
+            let n = names(mesh, &project, "x")?;
+            let (pobj, pbytes) = weftos_store::retention::usage(&b, &n.pr).map_err(e)?;
+            let quota = p.quota_bytes.unwrap_or(weftos_store::retention::DEFAULT_WORKTREE_QUOTA);
+            let mut wts = Vec::new();
+            for info in worktree_stores(svc, mesh, &project) {
+                let landed = weftos_store::promote::is_promoted(&b, &info.bucket).map_err(e)?.map(|r| r.promoted_ms);
+                wts.push(json!({
+                    "store": info.name, "objects": info.objects, "bytes": info.bytes,
+                    "landed_ms": landed, "over_quota": quota > 0 && info.bytes > quota,
+                }));
+            }
+            Ok(json!({"project": {"objects": pobj, "bytes": pbytes}, "worktrees": wts, "quota_bytes": quota}))
+        }
+        "gc" => {
+            use weftos_store::retention::{DAY_MS, DEFAULT_LANDED_KEEP_DAYS, expired_archive_keys, landed_before};
+            let keep = p.keep_days.unwrap_or(DEFAULT_LANDED_KEEP_DAYS);
+            let cutoff = now_ms.saturating_sub(keep.saturating_mul(DAY_MS));
+            let mut retire = Vec::new();
+            for info in worktree_stores(svc, mesh, &project) {
+                if landed_before(&b, &info.bucket, cutoff).map_err(e)?.is_some() {
+                    retire.push(info);
+                }
+            }
+            let mut expired = Vec::new();
+            if let Some(days) = p.archive_keep_days {
+                let prefix = format!("w-{}-", project.to_lowercase());
+                let cutoff = now_ms.saturating_sub(days.saturating_mul(DAY_MS));
+                svc.ensure_archive().map_err(|x| x.to_string())?;
+                expired = expired_archive_keys(&b, ARCHIVE_BUCKET, &prefix, cutoff).map_err(e)?;
+            }
+            let names: Vec<String> = retire.iter().map(|i| i.name.clone()).collect();
+            if !p.confirmed {
+                return Ok(json!({"dry_run": true, "retire": names, "expire_archived": expired.len(),
+                                 "keep_days": keep, "note": "nothing was changed; pass --confirmed to act"}));
+            }
+            let (mut retired, mut failed) = (Vec::new(), Vec::new());
+            for info in &retire {
+                let r = StoreName::parse(&info.name).map_err(|x| x.to_string()).and_then(|nm| svc.archive(&nm, true, "gc").map_err(|x| x.to_string()));
+                match r {
+                    Ok(_) => retired.push(info.name.clone()),
+                    Err(x) => failed.push(json!({"store": info.name, "error": x})),
+                }
+            }
+            for k in &expired {
+                weftos_store::overlay::ObjectBackend::delete(&b, ARCHIVE_BUCKET, k).map_err(e)?;
+            }
+            Ok(json!({"dry_run": false, "retired": retired, "failed": failed, "expired_archived": expired.len(), "keep_days": keep}))
+        }
         "follow" => {
             let n = names(mesh, &project, "x")?;
             let sp = guard.check(need(&p.state, "state")?, "state", Use::WriteFile)?;
             let mut st = FollowState::load(&sp).map_err(e)?;
-            let ch = follower::poll_fast(&b, &n.pr, &mut st, p.confirmed, !p.full, share_fetch::FETCH_JOBS).map_err(e)?;
+            let ch = match &sign.trusted {
+                // With a trusted-key file every entry is read and verified; the digest shortcut would skip that.
+                Some(t) => poll_verified_settled(&b, &n.reg, &mut st, &Trusted(t), sign.require, p.confirmed, sign.follow_retry_ms),
+                None => follower::poll_fast(&b, &n.reg, &mut st, p.confirmed, !p.full, share_fetch::FETCH_JOBS),
+            }
+            .map_err(e)?;
             st.save(&sp).map_err(e)?;
-            Ok(json!({"changes": ch.iter().map(change_json).collect::<Vec<_>>()}))
+            Ok(json!({"changes": ch.iter().map(change_json).collect::<Vec<_>>(), "trust": trust_json(&b, &n.reg, sign)}))
         }
         "search" => {
             let n = names(mesh, &project, "x")?;
             // One corrupt or unknown-schema registry entry must not blind the search (it does not
             // blind `follow` or `leftovers`): search the readable ones and name the others.
-            let (entries, bad_entries) = list_shared_lenient(&b, &n.pr).map_err(e)?;
+            let (entries, bad_entries) = trusted_entries(&b, &n.reg, sign).map_err(e)?;
             let r = follower::search_docs(&b, &entries, need(&p.query, "query")?);
             Ok(json!({
                 "hits": r.hits.iter().map(|h| json!({"slug": h.slug, "path": h.path, "title": h.title, "state": h.state})).collect::<Vec<_>>(),
                 "unreadable": r.unreadable,
                 "unreadable_entries": bad_entries,
+                "trust": trust_json(&b, &n.reg, sign),
             }))
         }
         "leftovers" => {
             let n = names(mesh, &project, "x")?;
-            let entries = weftos_store::share_fetch::list_shared_lenient(&b, &n.pr).map_err(e)?.0;
+            let entries = trusted_entries(&b, &n.reg, sign).map_err(e)?.0;
             let l = follower::leftovers(&entries, now_ms, &LeftoverPolicy::default());
-            Ok(json!({"leftovers": l.iter().map(|x| json!({"why": why_str(x.why), "idle_ms": x.idle_ms, "worktree": entry_json(&x.entry)})).collect::<Vec<_>>()}))
+            Ok(json!({"leftovers": l.iter().map(|x| json!({"why": why_str(x.why), "idle_ms": x.idle_ms, "worktree": entry_json(&x.entry)})).collect::<Vec<_>>(),
+                      "trust": trust_json(&b, &n.reg, sign)}))
         }
         "sync-docs" => {
             let slug = need(&p.slug, "slug")?;

@@ -6,7 +6,7 @@
 //! buckets untouched. The run is idempotent: the report is stored at `.wt/promoted.json`.
 
 use crate::overlay::{
-    ObjectBackend, Overlay, Result, S2Error, is_reserved, read_base, validate_key,
+    BASE_ABSENT, ObjectBackend, Overlay, Result, S2Error, is_reserved, read_base, validate_key,
 };
 use serde::{Deserialize, Serialize};
 
@@ -38,6 +38,8 @@ pub struct PromotionPolicy {
     /// Key prefixes (ending in `/`) whose objects are promoted. Everything else is archived.
     pub promote_prefixes: Vec<String>,
     pub on_conflict: OnConflict,
+    /// Refuse a land that would copy more than this many bytes into the project (`None`: no cap).
+    pub max_promote_bytes: Option<u64>,
 }
 
 impl Default for PromotionPolicy {
@@ -46,15 +48,28 @@ impl Default for PromotionPolicy {
         Self {
             promote_prefixes: vec!["assets/".into(), "shared/".into()],
             on_conflict: OnConflict::Fail,
+            max_promote_bytes: Some(DEFAULT_MAX_PROMOTE_BYTES),
         }
     }
 }
+
+/// Default cap on one land: 1 GiB copied into the project.
+pub const DEFAULT_MAX_PROMOTE_BYTES: u64 = 1 << 30;
 
 impl PromotionPolicy {
     fn promotable(&self, key: &str) -> bool {
         self.promote_prefixes
             .iter()
             .any(|p| key.starts_with(p.as_str()))
+    }
+    fn check_size(&self, bytes: u64) -> Result<()> {
+        match self.max_promote_bytes {
+            Some(max) if bytes > max => Err(S2Error::Invalid(format!(
+                "landing would copy {bytes} bytes into the project, over the {max} byte cap; \
+                 promote a prefix at a time or raise the cap"
+            ))),
+            _ => Ok(()),
+        }
     }
     fn validate(&self) -> Result<()> {
         for p in &self.promote_prefixes {
@@ -147,26 +162,194 @@ fn project_moved<B: ObjectBackend>(
     })
 }
 
-/// Do the worktree object and the project object hold the same bytes? Equal etags say so cheaply;
-/// a server-side copy of a multipart object changes the etag, so equal sizes fall back to a
-/// byte comparison (only on the rare retry path).
-fn same_content<B: ObjectBackend>(
+/// Keep the project version that a promotion is about to overwrite or delete, under the archive's
+/// reserved `.wt/displaced/` prefix (worktree keys can never start with `.wt/`).
+fn displace<B: ObjectBackend>(
     b: &B,
-    worktree: &str,
     project: &str,
-    w: &crate::overlay::ObjectMeta,
-    p: &crate::overlay::ObjectMeta,
-) -> Result<bool> {
-    if w.etag == p.etag {
-        return Ok(true);
+    key: &str,
+    archive: &ArchiveTarget<'_>,
+) -> Result<()> {
+    if b.head(project, key)?.is_some() {
+        b.copy(project, key, archive.bucket, &format!("{}.wt/displaced/{}", archive.prefix, key))?;
     }
-    if w.size != p.size {
-        return Ok(false);
+    Ok(())
+}
+
+/// Re-check, right before a delete, that the project object is still the one the plan was made
+/// against (backends have no conditional delete, so this narrows the window to one head call
+/// rather than closing it). Copies use [`ObjectBackend::put_cas`] instead. Earlier writes of the
+/// same run stay valid: a retry sees them as already promoted.
+fn still_unchanged<B: ObjectBackend>(
+    b: &B,
+    project: &str,
+    key: &str,
+    planned: Option<&str>,
+) -> Result<()> {
+    let now = b.head(project, key)?.map(|m| m.etag);
+    if now.as_deref() != planned {
+        return Err(S2Error::Conflict(vec![key.to_string()]));
     }
-    Ok(match (b.get(worktree, &w.key)?, b.get(project, &w.key)?) {
-        (Some(x), Some(y)) => x == y,
-        _ => false,
-    })
+    Ok(())
+}
+
+enum Act {
+    Copy(String, u64, Option<String>),
+    Keep(String),
+    Archive(String),
+}
+
+/// Why a key cannot be landed under `OnConflict::Fail`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConflictKind {
+    /// The worktree edited it and the project changed it too since the worktree first saw it.
+    BothEdited,
+    /// The worktree edited it and the project deleted it.
+    ProjectDeleted,
+    /// The worktree deleted it and the project changed it since.
+    DeletedButProjectEdited,
+}
+
+struct Plan {
+    acts: Vec<Act>,
+    deletes: Vec<(String, String)>,
+    dropped: Vec<String>,
+    conflicts: Vec<(String, ConflictKind)>,
+    /// Bytes the land would copy into the project.
+    total_bytes: u64,
+}
+
+/// Decide what landing would do. Reads only; nothing is written.
+fn plan<B: ObjectBackend>(
+    b: &B,
+    ov: &Overlay<'_, B>,
+    worktree_bucket: &str,
+    project_bucket: &str,
+    policy: &PromotionPolicy,
+) -> Result<Plan> {
+    let locals = ov.local_objects()?;
+    let mut total_bytes = 0u64;
+    let local_keys: std::collections::HashSet<&str> =
+        locals.iter().map(|o| o.key.as_str()).collect();
+    let mut acts = Vec::new();
+    let mut conflicts: Vec<(String, ConflictKind)> = Vec::new();
+    for o in &locals {
+        if !policy.promotable(&o.key) {
+            acts.push(Act::Archive(o.key.clone()));
+            continue;
+        }
+        let planned = b.head(project_bucket, &o.key)?.map(|m| m.etag);
+        match b.head(project_bucket, &o.key)? {
+            Some(p) if p.etag != o.etag && project_moved(b, worktree_bucket, &o.key, &p.etag)? => {
+                match policy.on_conflict {
+                    OnConflict::Fail => conflicts.push((o.key.clone(), ConflictKind::BothEdited)),
+                    OnConflict::KeepProject => acts.push(Act::Keep(o.key.clone())),
+                    OnConflict::Overwrite => {
+                        total_bytes += o.size;
+                        acts.push(Act::Copy(o.key.clone(), o.size, planned.clone()))
+                    }
+                }
+            }
+            // The project deleted what this worktree edited: resurrecting it silently is a conflict.
+            None if matches!(read_base(b, worktree_bucket, &o.key)?, Some(base) if base != BASE_ABSENT) => {
+                match policy.on_conflict {
+                    OnConflict::Fail => conflicts.push((o.key.clone(), ConflictKind::ProjectDeleted)),
+                    OnConflict::KeepProject => acts.push(Act::Keep(o.key.clone())),
+                    OnConflict::Overwrite => {
+                        total_bytes += o.size;
+                        acts.push(Act::Copy(o.key.clone(), o.size, planned.clone()))
+                    }
+                }
+            }
+            _ => {
+                total_bytes += o.size;
+                acts.push(Act::Copy(o.key.clone(), o.size, planned.clone()))
+            }
+        }
+    }
+    let mut deletes: Vec<(String, String)> = Vec::new();
+    let mut dropped = Vec::new();
+    for k in ov.tombstones()? {
+        // Object and tombstone together (a put that crashed before clearing it): the object wins.
+        if local_keys.contains(k.as_str()) {
+            dropped.push(k);
+            continue;
+        }
+        if !policy.promotable(&k) {
+            dropped.push(k);
+            continue;
+        }
+        match b.head(project_bucket, &k)? {
+            Some(p)
+                if policy.on_conflict != OnConflict::Overwrite
+                    && project_moved(b, worktree_bucket, &k, &p.etag)? =>
+            {
+                if policy.on_conflict == OnConflict::Fail {
+                    conflicts.push((k.clone(), ConflictKind::DeletedButProjectEdited));
+                }
+                dropped.push(k);
+            }
+            Some(p) => deletes.push((k, p.etag)),
+            None => dropped.push(k),
+        }
+    }
+    Ok(Plan { acts, deletes, dropped, conflicts, total_bytes })
+}
+
+/// What a land would do right now, without doing it.
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
+pub struct Preview {
+    pub would_promote: Vec<String>,
+    pub would_keep_project: Vec<String>,
+    pub would_archive: Vec<String>,
+    pub would_delete: Vec<String>,
+    pub would_drop_tombstones: Vec<String>,
+    /// Keys that make a land fail under `OnConflict::Fail`, with why. Empty under the other policies.
+    pub conflicts: Vec<(String, ConflictKind)>,
+    pub promote_bytes: u64,
+    /// The land would be refused for size (`PromotionPolicy::max_promote_bytes`).
+    pub over_size_cap: bool,
+    /// Already landed; the other fields are then empty.
+    pub already_promoted: bool,
+}
+
+/// [`promote`] as a dry run: the same plan, reported, with no writes (not even the intent record).
+pub fn preview<B: ObjectBackend>(
+    b: &B,
+    worktree_bucket: &str,
+    project_bucket: &str,
+    policy: &PromotionPolicy,
+) -> Result<Preview> {
+    policy.validate()?;
+    if worktree_bucket == project_bucket {
+        return Err(S2Error::Invalid("worktree and project bucket are the same".into()));
+    }
+    if is_promoted(b, worktree_bucket)?.is_some() {
+        return Ok(Preview { already_promoted: true, ..Default::default() });
+    }
+    read_meta(b, worktree_bucket)?.ok_or_else(|| {
+        S2Error::Invalid("worktree has no .wt/meta.json; refusing to promote".into())
+    })?;
+    let ov = Overlay::new(b, worktree_bucket, project_bucket);
+    let Plan { acts, deletes, dropped, mut conflicts, total_bytes } = plan(b, &ov, worktree_bucket, project_bucket, policy)?;
+    conflicts.sort_by(|x, y| x.0.cmp(&y.0));
+    let mut pv = Preview {
+        would_delete: deletes.into_iter().map(|d| d.0).collect(),
+        would_drop_tombstones: dropped,
+        conflicts,
+        promote_bytes: total_bytes,
+        over_size_cap: policy.check_size(total_bytes).is_err(),
+        ..Default::default()
+    };
+    for a in acts {
+        match a {
+            Act::Copy(k, ..) => pv.would_promote.push(k),
+            Act::Keep(k) => pv.would_keep_project.push(k),
+            Act::Archive(k) => pv.would_archive.push(k),
+        }
+    }
+    Ok(pv)
 }
 
 pub fn promote<B: ObjectBackend>(
@@ -192,82 +375,18 @@ pub fn promote<B: ObjectBackend>(
     })?;
     // Presence is the check; `created_ms` identifies this life of the slug.
     let ov = Overlay::new(b, worktree_bucket, project_bucket);
-
-    // Plan: no writes yet.
-    enum Act {
-        Copy(String, u64),
-        Keep(String),
-        Archive(String),
-    }
-    let prior: Intent = match b.get(worktree_bucket, PROMOTING_KEY)? {
-        Some(d) => serde_json::from_slice(&d)?,
-        None => Intent::default(),
-    };
-    let locals = ov.local_objects()?;
-    let local_keys: std::collections::HashSet<&str> =
-        locals.iter().map(|o| o.key.as_str()).collect();
-    let mut acts = Vec::new();
-    let mut conflicts = Vec::new();
-    for o in &locals {
-        if !policy.promotable(&o.key) {
-            acts.push(Act::Archive(o.key.clone()));
-            continue;
-        }
-        match b.head(project_bucket, &o.key)? {
-            // Our own earlier copy only if the bytes are the worktree object's (review F5): a size
-            // match alone would let a changed project object be overwritten under `Fail`.
-            Some(p)
-                if prior.copy.iter().any(|(k, n)| k == &o.key && *n == p.size)
-                    && same_content(b, worktree_bucket, project_bucket, o, &p)? =>
-            {
-                acts.push(Act::Copy(o.key.clone(), o.size))
-            }
-            Some(p) if p.etag != o.etag && project_moved(b, worktree_bucket, &o.key, &p.etag)? => {
-                match policy.on_conflict {
-                    OnConflict::Fail => conflicts.push(o.key.clone()),
-                    OnConflict::KeepProject => acts.push(Act::Keep(o.key.clone())),
-                    OnConflict::Overwrite => acts.push(Act::Copy(o.key.clone(), o.size)),
-                }
-            }
-            _ => acts.push(Act::Copy(o.key.clone(), o.size)),
-        }
-    }
-    let mut deletes = Vec::new();
-    let mut dropped = Vec::new();
-    for k in ov.tombstones()? {
-        // Object and tombstone together (a put that crashed before clearing it): the object wins.
-        if local_keys.contains(k.as_str()) {
-            dropped.push(k);
-            continue;
-        }
-        if !policy.promotable(&k) {
-            dropped.push(k);
-            continue;
-        }
-        match b.head(project_bucket, &k)? {
-            Some(p)
-                if policy.on_conflict != OnConflict::Overwrite
-                    && project_moved(b, worktree_bucket, &k, &p.etag)? =>
-            {
-                if policy.on_conflict == OnConflict::Fail {
-                    conflicts.push(k.clone());
-                }
-                dropped.push(k);
-            }
-            Some(_) => deletes.push(k),
-            None => dropped.push(k),
-        }
-    }
+    let Plan { acts, deletes, dropped, mut conflicts, total_bytes } = plan(b, &ov, worktree_bucket, project_bucket, policy)?;
     if !conflicts.is_empty() {
-        conflicts.sort();
-        return Err(S2Error::Conflict(conflicts));
+        conflicts.sort_by(|x, y| x.0.cmp(&y.0));
+        return Err(S2Error::Conflict(conflicts.into_iter().map(|c| c.0).collect()));
     }
+    policy.check_size(total_bytes)?;
 
     let intent = Intent {
         copy: acts
             .iter()
             .filter_map(|a| {
-                if let Act::Copy(k, n) = a {
+                if let Act::Copy(k, n, _) = a {
                     Some((k.clone(), *n))
                 } else {
                     None
@@ -298,15 +417,30 @@ pub fn promote<B: ObjectBackend>(
     }
     for a in acts {
         match a {
-            Act::Copy(k, _) => {
-                b.copy(worktree_bucket, &k, project_bucket, &k)?;
+            Act::Copy(k, _, planned) => {
+                displace(b, project_bucket, &k, archive)?;
+                if policy.on_conflict == OnConflict::Overwrite {
+                    b.copy(worktree_bucket, &k, project_bucket, &k)?;
+                } else {
+                    // Compare-and-swap against the version the plan was made on.
+                    let data = b.get(worktree_bucket, &k)?.ok_or_else(|| {
+                        S2Error::Backend(format!("worktree object vanished: {k}"))
+                    })?;
+                    if !b.put_cas(project_bucket, &k, &data, planned.as_deref())? {
+                        return Err(S2Error::Conflict(vec![k]));
+                    }
+                }
                 report.promoted.push(k);
             }
             Act::Keep(k) => report.kept_project.push(k),
             Act::Archive(k) => report.archived.push(k),
         }
     }
-    for k in deletes {
+    for (k, planned) in deletes {
+        if policy.on_conflict != OnConflict::Overwrite {
+            still_unchanged(b, project_bucket, &k, Some(&planned))?;
+        }
+        displace(b, project_bucket, &k, archive)?;
         b.delete(project_bucket, &k)?;
         report.deleted.push(k);
     }

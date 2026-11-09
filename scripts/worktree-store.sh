@@ -7,9 +7,11 @@
 #   worktree-store.sh store-promote             store half of `land`, for the agent-git-flow post-land hook
 #   worktree-store.sh share [--handoff NOTE]    publish this worktree's tree + unmerged commits
 #   worktree-store.sh land [land.sh args]       land.sh, then promote the store (only if it landed)
+#   worktree-store.sh land-preview              what landing would do to the project, no writes (WTS_ON_CONFLICT)
 #   worktree-store.sh fetch <slug> <dest> [--bundle-ref REF]
 #                                               pull a shared tree (and its commits) from another node
-#   worktree-store.sh claim <slug>              take the merge of a handed-off worktree
+#   worktree-store.sh claim <slug>              take the merge of a handed-off worktree (saves the claim epoch;
+#                                               `land` presents it, or WTS_EPOCH)
 #   worktree-store.sh follow [--state FILE]     what changed among unmerged worktrees since last look
 #   worktree-store.sh search <query>            docs/planning across all unmerged worktrees
 #   worktree-store.sh leftovers [--json]        forgotten / unclaimed / abandoned worktrees
@@ -101,6 +103,8 @@ project_id() {
     "$weaver" project id 2>/dev/null || die "cannot resolve project id; set WTS_PROJECT"
 }
 
+epoch_file() { printf '%s/weftos/claim-%s-%s.epoch' "${XDG_STATE_HOME:-$HOME/.local/state}" "$(project_id)" "$1"; }
+
 target_ref() { git rev-parse --verify --quiet "${AGF_TARGET_REF:-origin/HEAD}" 2>/dev/null || git rev-parse --verify --quiet master; }
 
 cmd=${1:-}; shift || true
@@ -154,7 +158,25 @@ share)
 land)
     slug=$(slug_of); check_slug "$slug"
     "$agf/land.sh" "$@"   # exits non-zero (set -e) if nothing landed: no promotion then
-    store_promote
+    # A claimer lands under the epoch its claim returned (fencing): WTS_EPOCH, else the one `claim`
+    # saved for this slug. No epoch known = no fencing, as before.
+    epoch=${WTS_EPOCH:-}
+    [ -z "$epoch" ] && [ -f "$(epoch_file "$slug")" ] && epoch=$(cat "$(epoch_file "$slug")")
+    [ -z "$epoch" ] || [[ $epoch =~ ^[0-9]{1,18}$ ]] || die "bad epoch '$epoch'"
+    # Conflict policy and size cap for this land: WTS_ON_CONFLICT=fail|keep_project|overwrite (default
+    # fail), WTS_MAX_BYTES (0 = no cap; default 1 GiB). Run `land-preview` first to see conflicts.
+    oc=${WTS_ON_CONFLICT:-}
+    [ -z "$oc" ] || [[ $oc =~ ^(fail|keep_project|overwrite)$ ]] || die "WTS_ON_CONFLICT is fail, keep_project or overwrite"
+    mb=${WTS_MAX_BYTES:-}
+    [ -z "$mb" ] || [[ $mb =~ ^[0-9]{1,18}$ ]] || die "bad WTS_MAX_BYTES '$mb'"
+    store promote --project "$(project_id)" --slug "$slug" ${epoch:+--epoch "$epoch"} ${oc:+--on-conflict "$oc"} ${mb:+--max-bytes "$mb"}
+    ;;
+land-preview)
+    # What landing would do to the project right now, with no writes: conflicts by kind, byte total.
+    slug=$(slug_of); check_slug "$slug"
+    oc=${WTS_ON_CONFLICT:-}
+    [ -z "$oc" ] || [[ $oc =~ ^(fail|keep_project|overwrite)$ ]] || die "WTS_ON_CONFLICT is fail, keep_project or overwrite"
+    store_must promote --project "$(project_id)" --slug "$slug" --dry-run ${oc:+--on-conflict "$oc"}
     ;;
 fetch)
     slug=${1:?usage: fetch <slug> <dest>}; dest=${2:?usage: fetch <slug> <dest>}; shift 2
@@ -175,7 +197,14 @@ fetch)
     ;;
 claim)
     slug=${1:?usage: claim <slug>}; check_slug "$slug"
-    store_must claim --project "$(project_id)" --slug "$slug"
+    out=$(store_must claim --project "$(project_id)" --slug "$slug")
+    printf '%s\n' "$out"
+    # Keep the epoch of this claim so `land` can present it.
+    epoch=$(printf '%s' "$out" | sed -n 's/.*"epoch"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n1)
+    if [ -n "$epoch" ]; then
+        mkdir -p "$(dirname "$(epoch_file "$slug")")" && printf '%s\n' "$epoch" >"$(epoch_file "$slug")"
+        warn "claim epoch $epoch saved for land"
+    fi
     ;;
 follow)
     pid=$(project_id); [[ $pid =~ ^[A-Za-z0-9]{1,40}$ ]] || die "unexpected project id '$pid'"

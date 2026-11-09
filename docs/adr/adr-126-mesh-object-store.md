@@ -126,9 +126,18 @@ Only the daemon creates, grants access to, or deletes a store.
   key in a worktree records the project's etag for it (`.wt/base/<key>`, `-` if the project had
   none), and promotion treats the project as changed when its etag now differs. No clock is
   involved, so neither client nor server skew can hide or invent a conflict; an object written
-  around the overlay has no recorded base and is treated as a conflict (fail safe). Reads do not
-  record a base, so a project edit between a worktree's read and its first write goes unnoticed.
-  The run is idempotent and
+  around the overlay has no recorded base and is treated as a conflict (fail safe). An overlay
+  read that falls through to a project object records the base too (best effort), so a stale edit
+  of something read earlier conflicts; a read made around the overlay still records none. A
+  project-side delete of a file the worktree edited is a conflict as well. Every project version
+  that promotion overwrites or deletes is first copied to the archive under `.wt/displaced/`.
+  Promotion copies use S1's `put_if_match` (or an if-none-match create) so a project write between
+  the plan and the copy is a conflict, not an overwrite; deletes re-check the etag just before
+  (no conditional delete exists). Claims carry a fencing epoch that `promote` can require, and the
+  daemon decides claim expiry on silence it observed on its own monotonic clock. Registry signing
+  mechanism, the key options and the off-by-default daemon-only registry store
+  (`WEFTOS_WT_REGISTRY_STORE=1`): see
+  `docs/research/adr126-s2-registry-signing-and-claim-clock.md`. The daemon refuses to `create` a slug that has already landed. The run is idempotent and
   safe to retry after a partial failure; once the report is written, later writes to that
   worktree bucket are ignored.
 - **Who does the overlay:** the `weftos-store` client does it for daemons and agents. For a
@@ -196,6 +205,44 @@ Only the daemon creates, grants access to, or deletes a store.
 - **One writer per path.** There's no cross-client locking. Parallel agents in one
   worktree write under `agents/<instance id>/`, and shared paths are read-mostly.
 
+#### Landing controls, quotas and retention (2026-11-08)
+
+- **Preview and conflict policy.** `weaver store worktree promote --dry-run` (`worktree-store.sh land-preview`)
+  reports what a land would do with no writes: keys to promote, keep, archive and delete, and each conflict
+  with its kind (`both_edited`, `project_deleted`, `deleted_but_project_edited`). `--on-conflict
+  fail|keep_project|overwrite` (`WTS_ON_CONFLICT` for `land`) chooses per land; `fail` stays the default.
+- **Size cap on a land.** A land that would copy more than 1 GiB into the project is refused before any
+  write (`--max-bytes N`, `0` = no cap, `WTS_MAX_BYTES`). Scratch that is archived does not count.
+- **Worktree store quota.** `publish` refuses when the store already holds more than 2 GiB
+  (`--quota-bytes N`, `0` = none). This is a check at publish, not a hard limit: an agent writing straight
+  to its bucket with its own key is not stopped (RustFS bucket quotas are not used). `store worktree usage`
+  lists objects, bytes, landed time and over-quota per worktree store.
+- **Retention.** `store worktree gc` is a dry run unless `--confirmed`. It retires worktree stores landed
+  at least `--keep-days` ago (default 14; archived then deleted through the store service) and never an
+  unlanded one, however old: that is what `leftovers` reports. With `--archive-keep-days N` it also deletes
+  archived worktree objects older than N days (default: never expire; this is recovery data).
+- Tests: library (`s2_worktree`), daemon (`store_worktree_tests`), script, and a live loopback RustFS run
+  (`s2_land_rustfs`, ignored: preview, conflicts, cap, `@`-bearing archive keys, retention listing).
+
+#### Read-modify-write uses `put_if_match` (2026-11-08)
+
+The handoff record (`.wt/handoff.json`) is changed only with a conditional write. `claim_merge`,
+`mark_handoff` and `mark_merged_at` read the record's etag, then its body, decide, and write with
+`put_cas` (S1 `put_if_match`, or `if-none-match` when creating). If someone else changed it first the
+write reports "lost", the caller re-reads and decides again (up to 6 times, then a "being changed by
+others" error). Effects: of two claimers that read the same record exactly one write lands and the
+other is refused; a writer's late `mark_handoff` cannot erase a claim that landed after it read; a
+merge cannot land over a takeover that happened after its epoch check; a first publish cannot
+replace a record created between its check and its write. The etag is read before the body, so a
+change between the two calls makes the write fail rather than pass on a stale decision. Evidence:
+deterministic race tests (`s2_handoff_cas`, they fail on the unconditional code) and a live loopback
+RustFS run with 16 simultaneous claimers over 8 rounds (`s2_land_rustfs`; this one passes on the old
+code too, because RustFS answered fast enough that the old write-then-read-back rarely interleaved, so
+it shows the conditional path is correct on the real backend, not that the old one was wrong).
+Not converted: the registry refresh (a last-writer-wins pointer the daemon rewrites from the worktree
+bucket), the follower's state file (local), and `publish_tree`'s many-object write (one writer per
+worktree; the live-claim check before it is not atomic with it).
+
 ### 4a. The L1 follower view: seeing unmerged worktrees before integration
 
 (Added 2026-11-07, owner decision: this is required leftover work, not optional. ADR-130 names
@@ -238,6 +285,17 @@ L1 as the tier for "unmerged layers that other nodes should see before integrati
   source of truth. Polling costs one list plus one get per worktree. Registry entries are not
   signed in S2, so a follower trusts its own read grants and the bucket cross-check below; signed
   worktree heads are an open question if followers ever read from an untrusted relay.
+- **Spike evidence and signing wiring (2026-11-08):** `docs/research/adr126-s2-l1-follower-view.md`.
+  Against a throwaway loopback RustFS with scoped keys, a read-only follower sees, searches, mirrors
+  and overlaps unmerged worktrees, and is refused every write. `promote` now removes the registry
+  entry (it used to leave a landed worktree showing as an abandoned claim). Daemon signing is built
+  and off unless `WEFTOS_WT_REGISTRY_SIGN_KEY` / `_TRUSTED` / `_REQUIRE_SIGNED` are set; the owner's
+  remaining decision is which key.
+- **Signature binding and rollback (2026-11-08):** a registry signature covers a domain prefix, the registry
+  bucket, the slug, a generation and the entry bytes, so it cannot be replayed into another project or name;
+  followers remember the highest generation per worktree and refuse an older signed entry. A trusted-key
+  file filters by default (`REQUIRE_SIGNED=0` for an audit mode) and verbs return a `trust` field. See
+  `docs/research/adr126-s2-l1-follower-view.md`.
 - **Per-client stores:** a client project has its own buckets (ADR-131: one seed bucket and one
   inbox bucket per client), so a follower of a client project reads only that client's registry.
 - **Clocks:** ages compare the registry's writer-side timestamp with the follower's clock, so the
