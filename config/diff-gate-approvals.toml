@@ -96,13 +96,14 @@ pattern     = 'weftos-store[[:space:]]*='
 reason      = "ADR-126 S1: the daemon depends on weftos-store with the rustfs feature"
 approved_by = "owner"
 
-# Approved by the owner in chat on 2026-11-09 for ADR-126 S5
-# (S4 path deps carried on the S5 integration branch; test-only).
+# Approved by the owner in chat on 2026-11-09 for ADR-126 S5/S4
+# (weftos-release optional weftos-store; owner reworded 12:53 PM ET so it is not test-only:
+# S4 uses weftos-store as an optional non-test dependency via the store feature).
 [[approval]]
 rule        = "new-dep"
 path        = "crates/weftos-release/Cargo.toml"
 pattern     = 'weftos-store[[:space:]]*='
-reason      = "ADR-126 S5/S4: test-only path dep for S1 x S4 integration tests over weftos-store"
+reason      = "ADR-126 S5/S4: optional weftos-store path dep for the store feature (ReleaseBackend over ObjectBackend) and for S1 x S4 integration tests"
 approved_by = "owner"
 
 [[approval]]
@@ -111,6 +112,15 @@ path        = "crates/weftos-release/Cargo.toml"
 pattern     = 'weftos-edge-creds[[:space:]]*='
 approved_by = "owner"
 reason      = "ADR-126 S5/S4: test-only path dep for S1 x S3 chain-feed integration tests"
+
+# Approved by the owner in chat on 2026-11-09 ~12:53 PM ET (card answering t221s1013)
+# for ADR-126 S4: clawft-weave depends on weftos-release with the store feature.
+[[approval]]
+rule        = "new-dep"
+path        = "crates/clawft-weave/Cargo.toml"
+pattern     = 'weftos-release[[:space:]]*='
+reason      = "ADR-126 S4: daemon depends on weftos-release with the store feature (release stores over weftos-store)"
+approved_by = "owner"
 
 # Approved by the owner on 2026-11-09 (card t213s943) for the ADR-126 S1 store_ingest receiver
 # (RustFS audit/notification webhooks) and the weftos-store canned RustFS test servers.
