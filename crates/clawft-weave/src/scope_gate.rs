@@ -146,6 +146,13 @@ pub const READ_ONLY_ALLOW: &[&str] = &[
 pub const USER_LEVEL_ALLOW: &[&str] = &[
     // Owner control of the user daemon remains Admin-only.
     "kernel.shutdown",
+    // Tapestry R8 (2026-11-10): a local agent host journals its signed session
+    // record on the user daemon's chain. Append is `Write`, checkpoint is `Admin`;
+    // both are listed here so only an Admin caller (the socket owner) passes outside
+    // a project. Reads (`chain.get*`) stay project-only; `chain.local` and
+    // `chain.export` stay excluded.
+    "chain.append",
+    "chain.checkpoint",
     "instance.nested.register",
     "instance.nested.start",
     "instance.nested.stop",

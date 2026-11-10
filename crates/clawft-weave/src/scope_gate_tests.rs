@@ -591,3 +591,28 @@ fn display_verbs_are_user_level_admin_outside_a_project() {
 fn display_status_is_a_read_outside_a_project() {
     assert!(decide(OutsideProjectPolicy::ReadOnly, "display.status", false, || false).is_ok());
 }
+
+/// Tapestry R8: the user daemon accepts the journal write path (`chain.append`,
+/// `chain.checkpoint`) from an Admin caller outside a project, and nothing wider.
+#[test]
+fn journal_write_methods_are_user_level_admin_outside_a_project() {
+    for m in ["chain.append", "chain.checkpoint"] {
+        assert!(decide(OutsideProjectPolicy::ReadOnly, m, true, || false).is_ok(), "{m} for Admin");
+        let d = decide(OutsideProjectPolicy::ReadOnly, m, false, || false).unwrap_err();
+        assert_eq!(d.kind, "project_required", "{m} for a non-Admin");
+        assert!(decide(OutsideProjectPolicy::DenyAll, m, true, || false).is_err(), "{m} under deny_all");
+        assert!(!READ_ONLY_ALLOW.contains(&m), "{m} must not be anonymous-callable");
+    }
+}
+
+/// Tapestry R8: opening the journal write path must not open any other chain
+/// method, nor any other mutating method, to an Admin caller outside a project.
+#[test]
+fn journal_allowance_opens_no_other_chain_method() {
+    for m in ["chain.get", "chain.get_range", "chain.local", "chain.export", "chain.reset", "chain.status.x", "chain.append.x"] {
+        assert!(decide(OutsideProjectPolicy::ReadOnly, m, true, || false).is_err(), "{m} still denied for Admin");
+    }
+    // The only user-level entries that touch the chain are the two journal methods.
+    let chain: Vec<_> = USER_LEVEL_ALLOW.iter().filter(|m| m.starts_with("chain.")).collect();
+    assert_eq!(chain, vec![&"chain.append", &"chain.checkpoint"]);
+}
