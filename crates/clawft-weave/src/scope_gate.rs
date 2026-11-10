@@ -149,10 +149,14 @@ pub const USER_LEVEL_ALLOW: &[&str] = &[
     // Tapestry R8 (2026-11-10): a local agent host journals its signed session
     // record on the user daemon's chain. Append is `Write`, checkpoint is `Admin`;
     // both are listed here so only an Admin caller (the socket owner) passes outside
-    // a project. Reads (`chain.get*`) stay project-only; `chain.local` and
-    // `chain.export` stay excluded.
+    // a project. `chain.local` and `chain.export` stay excluded.
     "chain.append",
     "chain.checkpoint",
+    // Owner decision 2026-11-10: the journal's read-back (`sessions verify`) uses
+    // `chain.get` / `chain.get_range`, so these are user-level Admin too. They return
+    // whole payloads, so they are never on `READ_ONLY_ALLOW`.
+    "chain.get",
+    "chain.get_range",
     "instance.nested.register",
     "instance.nested.start",
     "instance.nested.stop",

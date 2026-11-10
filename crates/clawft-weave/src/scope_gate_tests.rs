@@ -255,7 +255,9 @@ fn allow_list_excludes_known_sensitive_reads() {
         assert!(READ_ONLY_ALLOW.contains(&m), "{m}");
     }
     // `chain.get` is Read like `chain.tail`, but returns whole payloads rather than a
-    // 60-character preview, so it stays inside a project like `chain.local`.
+    // 60-character preview, so it is never anonymous-callable outside a project. Owner
+    // decision 2026-11-10: it and `chain.get_range` may be Admin-only at user level
+    // (`USER_LEVEL_ALLOW`, for `sessions verify`), but stay off `READ_ONLY_ALLOW`.
     for m in ["chain.get", "chain.get_range", "chain.local", "chain.export", "agent.chat", "ipc.subscribe_stream"] {
         assert!(!READ_ONLY_ALLOW.contains(&m), "{m}");
     }
@@ -592,11 +594,12 @@ fn display_status_is_a_read_outside_a_project() {
     assert!(decide(OutsideProjectPolicy::ReadOnly, "display.status", false, || false).is_ok());
 }
 
-/// Tapestry R8: the user daemon accepts the journal write path (`chain.append`,
-/// `chain.checkpoint`) from an Admin caller outside a project, and nothing wider.
+/// Tapestry R8: the user daemon accepts the journal path (`chain.append`,
+/// `chain.checkpoint`, and the read-back `chain.get`, `chain.get_range`) from an Admin
+/// caller outside a project, and nothing wider.
 #[test]
 fn journal_write_methods_are_user_level_admin_outside_a_project() {
-    for m in ["chain.append", "chain.checkpoint"] {
+    for m in ["chain.append", "chain.checkpoint", "chain.get", "chain.get_range"] {
         assert!(decide(OutsideProjectPolicy::ReadOnly, m, true, || false).is_ok(), "{m} for Admin");
         let d = decide(OutsideProjectPolicy::ReadOnly, m, false, || false).unwrap_err();
         assert_eq!(d.kind, "project_required", "{m} for a non-Admin");
@@ -609,10 +612,10 @@ fn journal_write_methods_are_user_level_admin_outside_a_project() {
 /// method, nor any other mutating method, to an Admin caller outside a project.
 #[test]
 fn journal_allowance_opens_no_other_chain_method() {
-    for m in ["chain.get", "chain.get_range", "chain.local", "chain.export", "chain.reset", "chain.status.x", "chain.append.x"] {
+    for m in ["chain.local", "chain.export", "chain.reset", "chain.status.x", "chain.append.x", "chain.get.x"] {
         assert!(decide(OutsideProjectPolicy::ReadOnly, m, true, || false).is_err(), "{m} still denied for Admin");
     }
-    // The only user-level entries that touch the chain are the two journal methods.
+    // The only user-level entries that touch the chain are the journal write and read-back methods.
     let chain: Vec<_> = USER_LEVEL_ALLOW.iter().filter(|m| m.starts_with("chain.")).collect();
-    assert_eq!(chain, vec![&"chain.append", &"chain.checkpoint"]);
+    assert_eq!(chain, vec![&"chain.append", &"chain.checkpoint", &"chain.get", &"chain.get_range"]);
 }
