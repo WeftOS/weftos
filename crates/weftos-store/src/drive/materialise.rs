@@ -9,11 +9,11 @@ use std::path::Path;
 
 use super::cas::{Cas, prune_empty_parents};
 use super::conflict::{ConflictKind, record};
-use super::index::{Entry, Index, Local, local_state, mtime_ns};
+use super::index::{Entry, Index, Local, is_exec, local_state, mtime_ns};
 use super::remote::{self, fetch_to_cas, read_tombstone};
 use super::tmp::{Live, remove_stale};
 use super::{DRIVE_DIR, DriveError, Options, Result, Skipped, TMP_PREFIX, log_event, norm_prefix};
-use crate::backend::{ObjectBackend, ObjectMeta};
+use crate::backend::{BackendError, ObjectBackend, ObjectMeta};
 
 #[derive(Debug, Default, Clone)]
 pub struct DownReport {
@@ -87,14 +87,21 @@ fn run_down<B: ObjectBackend + ?Sized>(backend: &B, dest: &Path, index: &mut Ind
     Ok(rep)
 }
 
-/// Place a blob at `rel` through a temp file in the same directory.
-fn place_file(dest: &Path, cas: &Cas, rel: &str, hash: &str) -> Result<(u64, u64)> {
+/// Place a blob at `rel` through a temp file in the same directory. `exec` makes the file 0755
+/// (the CAS blob is shared by every path with these bytes, so the mode is set on the clone).
+fn place_file(dest: &Path, cas: &Cas, rel: &str, hash: &str, exec: bool) -> Result<(u64, u64)> {
     let target = crate::share::safe_join(dest, rel).map_err(|e| DriveError::Invalid(e.to_string()))?;
     let dir = target.parent().ok_or_else(|| DriveError::Io(format!("{rel}: no parent")))?;
     std::fs::create_dir_all(dir)?;
     let tmp = dir.join(format!("{TMP_PREFIX}{}", ulid::Ulid::new()));
     let _live = Live::new(&tmp);
-    let res = cas.clone_to(hash, &tmp).and_then(|()| std::fs::rename(&tmp, &target).map_err(Into::into));
+    let res = cas.clone_to(hash, &tmp).and_then(|()| {
+        if exec {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))?;
+        }
+        std::fs::rename(&tmp, &target).map_err(Into::into)
+    });
     if res.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
@@ -149,7 +156,15 @@ fn apply_remote<B: ObjectBackend + ?Sized>(
             (_, Local::NotFile) => rep.skipped.push(Skipped::io(rel, "a directory, symlink or oversized file is in the way")),
             (true, Local::Unchanged) | (false, Local::Missing) => {
                 let hash = fetch(rep)?;
-                place(dest, &cas, index, rel, &hash, meta, entry.is_none(), rep);
+                // One HEAD for the attributes, only for an object that is placed (not for the
+                // unchanged ones). A mode-only change on the store (same bytes) is not seen here:
+                // the etag and size match the index and the object is skipped above.
+                let exec = match b.attrs(&bucket, &key) {
+                    Ok(a) => a.executable,
+                    Err(BackendError::NoObject(_)) => false,
+                    Err(e) => return Err(e.into()),
+                };
+                place(dest, &cas, index, rel, &hash, meta, entry.is_none(), exec, rep);
             }
             (true, Local::Missing) => {
                 let hash = fetch(rep)?;
@@ -165,7 +180,7 @@ fn apply_remote<B: ObjectBackend + ?Sized>(
                     let md = std::fs::metadata(dest.join(rel))?;
                     index.entries.insert(
                         rel.clone(),
-                        Entry { size: md.len(), mtime_ns: mtime_ns(&md), hash, etag: meta.etag.clone() },
+                        Entry { size: md.len(), mtime_ns: mtime_ns(&md), hash, etag: meta.etag.clone(), exec: is_exec(&md) },
                     );
                     rep.unchanged += 1;
                     continue;
@@ -181,7 +196,7 @@ fn apply_remote<B: ObjectBackend + ?Sized>(
                     let md = std::fs::metadata(dest.join(rel))?;
                     index.entries.insert(
                         rel.clone(),
-                        Entry { size: md.len(), mtime_ns: mtime_ns(&md), hash, etag: meta.etag.clone() },
+                        Entry { size: md.len(), mtime_ns: mtime_ns(&md), hash, etag: meta.etag.clone(), exec: is_exec(&md) },
                     );
                 } else {
                     let bytes = cas.read(&hash)?;
@@ -231,10 +246,10 @@ fn apply_remote<B: ObjectBackend + ?Sized>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn place(dest: &Path, cas: &Cas, index: &mut Index, rel: &str, hash: &str, meta: &ObjectMeta, created: bool, rep: &mut DownReport) {
-    match place_file(dest, cas, rel, hash) {
+fn place(dest: &Path, cas: &Cas, index: &mut Index, rel: &str, hash: &str, meta: &ObjectMeta, created: bool, exec: bool, rep: &mut DownReport) {
+    match place_file(dest, cas, rel, hash, exec) {
         Ok((size, mt)) => {
-            index.entries.insert(rel.to_owned(), Entry { size, mtime_ns: mt, hash: hash.to_owned(), etag: meta.etag.clone() });
+            index.entries.insert(rel.to_owned(), Entry { size, mtime_ns: mt, hash: hash.to_owned(), etag: meta.etag.clone(), exec });
             if created {
                 rep.created.push(rel.to_owned());
                 log_event(dest, "place", rel);

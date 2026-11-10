@@ -1,17 +1,19 @@
 //! An in-memory backend for tests. Besides the two backend traits it can answer
 //! "would the backend itself refuse this key", which is how RustFS enforces a policy.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 
 use serde_json::Value;
 
-use crate::backend::{AccessKey, AdminBackend, BackendError, ObjectBackend, ObjectMeta, check_key, etag_of};
+use crate::backend::{AccessKey, AdminBackend, BackendError, ObjectAttrs, ObjectBackend, ObjectMeta, check_key, etag_of};
 
 #[derive(Default)]
 struct Bucket {
     tags: Vec<(String, String)>,
     objects: BTreeMap<String, Vec<u8>>,
+    /// Keys whose current version was put executable.
+    exec: BTreeSet<String>,
 }
 
 struct KeyState {
@@ -81,12 +83,24 @@ impl MemBackend {
     }
 }
 
+fn set_exec(b: &mut Bucket, key: &str, attrs: ObjectAttrs) {
+    if attrs.executable {
+        b.exec.insert(key.to_owned());
+    } else {
+        b.exec.remove(key);
+    }
+}
+
 fn meta(key: &str, data: &[u8]) -> ObjectMeta {
     ObjectMeta { key: key.to_owned(), size: data.len() as u64, etag: etag_of(data) }
 }
 
 impl ObjectBackend for MemBackend {
     fn put(&self, bucket: &str, key: &str, data: &[u8], if_none_match: bool) -> Result<ObjectMeta, BackendError> {
+        self.put_attrs(bucket, key, data, if_none_match, ObjectAttrs::default())
+    }
+
+    fn put_attrs(&self, bucket: &str, key: &str, data: &[u8], if_none_match: bool, attrs: ObjectAttrs) -> Result<ObjectMeta, BackendError> {
         check_key(key)?;
         let mut g = self.lock();
         let b = g.buckets.get_mut(bucket).ok_or_else(|| BackendError::NoBucket(bucket.into()))?;
@@ -94,10 +108,24 @@ impl ObjectBackend for MemBackend {
             return Err(BackendError::Exists(key.into()));
         }
         b.objects.insert(key.to_owned(), data.to_vec());
+        set_exec(b, key, attrs);
         Ok(meta(key, data))
     }
 
     fn put_if_match(&self, bucket: &str, key: &str, data: &[u8], etag: &str) -> Result<ObjectMeta, BackendError> {
+        self.put_if_match_attrs(bucket, key, data, etag, ObjectAttrs::default())
+    }
+
+    fn attrs(&self, bucket: &str, key: &str) -> Result<ObjectAttrs, BackendError> {
+        let g = self.lock();
+        let b = g.buckets.get(bucket).ok_or_else(|| BackendError::NoBucket(bucket.into()))?;
+        if !b.objects.contains_key(key) {
+            return Err(BackendError::NoObject(key.into()));
+        }
+        Ok(ObjectAttrs { executable: b.exec.contains(key) })
+    }
+
+    fn put_if_match_attrs(&self, bucket: &str, key: &str, data: &[u8], etag: &str, attrs: ObjectAttrs) -> Result<ObjectMeta, BackendError> {
         check_key(key)?;
         let mut g = self.lock();
         let b = g.buckets.get_mut(bucket).ok_or_else(|| BackendError::NoBucket(bucket.into()))?;
@@ -107,6 +135,7 @@ impl ObjectBackend for MemBackend {
             Some(_) => {}
         }
         b.objects.insert(key.to_owned(), data.to_vec());
+        set_exec(b, key, attrs);
         Ok(meta(key, data))
     }
 
@@ -119,6 +148,7 @@ impl ObjectBackend for MemBackend {
             Some(_) => {}
         }
         b.objects.remove(key);
+        b.exec.remove(key);
         Ok(())
     }
 
@@ -135,12 +165,14 @@ impl ObjectBackend for MemBackend {
     fn delete(&self, bucket: &str, key: &str) -> Result<(), BackendError> {
         let mut g = self.lock();
         let b = g.buckets.get_mut(bucket).ok_or_else(|| BackendError::NoBucket(bucket.into()))?;
+        b.exec.remove(key);
         b.objects.remove(key).map(|_| ()).ok_or_else(|| BackendError::NoObject(key.into()))
     }
 
     fn copy(&self, sb: &str, sk: &str, db: &str, dk: &str) -> Result<ObjectMeta, BackendError> {
         let data = self.get(sb, sk)?;
-        self.put(db, dk, &data, false)
+        let attrs = self.attrs(sb, sk)?;
+        self.put_attrs(db, dk, &data, false, attrs)
     }
 
     fn list(&self, bucket: &str, prefix: &str) -> Result<Vec<ObjectMeta>, BackendError> {
@@ -156,7 +188,7 @@ impl AdminBackend for MemBackend {
         if g.buckets.contains_key(bucket) {
             return Err(BackendError::BucketExists(bucket.into()));
         }
-        g.buckets.insert(bucket.to_owned(), Bucket { tags: tags.to_vec(), objects: BTreeMap::new() });
+        g.buckets.insert(bucket.to_owned(), Bucket { tags: tags.to_vec(), objects: BTreeMap::new(), exec: BTreeSet::new() });
         Ok(())
     }
 
@@ -204,5 +236,31 @@ impl AdminBackend for MemBackend {
     fn delete_access_key(&self, key_id: &str) -> Result<(), BackendError> {
         self.lock().keys.remove(key_id);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_executable_attribute_follows_the_object() {
+        let m = MemBackend::new();
+        m.create_bucket("b-mem", &[]).unwrap();
+        let x = ObjectAttrs { executable: true };
+        m.put("b-mem", "plain", b"p", false).unwrap();
+        assert_eq!(m.attrs("b-mem", "plain").unwrap(), ObjectAttrs::default());
+        let v1 = m.put_attrs("b-mem", "run", b"r", true, x).unwrap();
+        assert!(m.attrs("b-mem", "run").unwrap().executable);
+        m.copy("b-mem", "run", "b-mem", "run2").unwrap();
+        assert!(m.attrs("b-mem", "run2").unwrap().executable);
+        assert!(matches!(m.put_attrs("b-mem", "run", b"x", true, ObjectAttrs::default()), Err(BackendError::Exists(_))), "a refused put changes nothing");
+        assert!(m.attrs("b-mem", "run").unwrap().executable);
+        m.put_if_match_attrs("b-mem", "run", b"r2", &v1.etag, ObjectAttrs::default()).unwrap();
+        assert!(!m.attrs("b-mem", "run").unwrap().executable, "a replace without the attribute clears it");
+        m.delete("b-mem", "run2").unwrap();
+        m.put("b-mem", "run2", b"fresh", false).unwrap();
+        assert!(!m.attrs("b-mem", "run2").unwrap().executable, "a deleted key does not keep it");
+        assert!(matches!(m.attrs("b-mem", "none"), Err(BackendError::NoObject(_))));
     }
 }

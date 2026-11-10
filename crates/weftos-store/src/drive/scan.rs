@@ -7,7 +7,7 @@ use std::path::Path;
 use serde::Serialize;
 
 use super::cas::hash_of;
-use super::index::{Index, mtime_ns};
+use super::index::{Index, is_exec, mtime_ns};
 use super::{DRIVE_DIR, DriveError, Result, SkipWhy, Skipped, TMP_PREFIX, check_rel};
 use crate::share::{Limits, Skip, read_regular};
 
@@ -27,6 +27,9 @@ pub struct Change {
     pub mtime_ns: u64,
     /// Set for `Modify` (it was hashed to tell it from a touch); `None` for `Create` and `Delete`.
     pub hash: Option<String>,
+    /// The file has an execute bit now (`false` for `Delete`). A `Modify` can be only this: same
+    /// bytes, the bit flipped.
+    pub exec: bool,
 }
 
 #[derive(Debug, Default)]
@@ -88,7 +91,7 @@ pub fn scan(dest: &Path, index: &Index, limits: &Limits) -> Result<Scan> {
     }
     for (rel, e) in &index.entries {
         if !seen.contains(rel) && !index.conflicts.contains_key(rel) {
-            out.changes.push(Change { path: rel.clone(), kind: ChangeKind::Delete, size: e.size, mtime_ns: e.mtime_ns, hash: None });
+            out.changes.push(Change { path: rel.clone(), kind: ChangeKind::Delete, size: e.size, mtime_ns: e.mtime_ns, hash: None, exec: false });
         }
     }
     out.changes.sort_by(|a, b| a.path.cmp(&b.path));
@@ -96,22 +99,32 @@ pub fn scan(dest: &Path, index: &Index, limits: &Limits) -> Result<Scan> {
 }
 
 fn classify(dest: &Path, index: &Index, limits: &Limits, rel: &str, md: &std::fs::Metadata, out: &mut Scan) -> Result<()> {
-    let (size, mt) = (md.len(), mtime_ns(md));
+    let (size, mt, exec) = (md.len(), mtime_ns(md), is_exec(md));
     let Some(e) = index.entries.get(rel) else {
-        out.changes.push(Change { path: rel.to_owned(), kind: ChangeKind::Create, size, mtime_ns: mt, hash: None });
+        out.changes.push(Change { path: rel.to_owned(), kind: ChangeKind::Create, size, mtime_ns: mt, hash: None, exec });
         return Ok(());
     };
+    // A chmod moves neither size nor mtime: the execute bit is compared on its own, and a flip with
+    // the same bytes is a modify (the new attribute goes out with a put of the same content).
+    let mode_only = |out: &mut Scan| {
+        out.changes.push(Change { path: rel.to_owned(), kind: ChangeKind::Modify, size, mtime_ns: mt, hash: Some(e.hash.clone()), exec });
+    };
     if e.size == size && e.mtime_ns == mt {
+        if e.exec != exec && !e.hash.is_empty() {
+            mode_only(out);
+        }
         return Ok(());
     }
     match read_regular(&dest.join(rel), limits.max_file) {
-        Ok(d) if hash_of(&d) == e.hash => out.touched.push((rel.to_owned(), d.len() as u64, mt)),
+        Ok(d) if hash_of(&d) == e.hash && e.exec == exec => out.touched.push((rel.to_owned(), d.len() as u64, mt)),
+        Ok(d) if hash_of(&d) == e.hash => mode_only(out),
         Ok(d) => out.changes.push(Change {
             path: rel.to_owned(),
             kind: ChangeKind::Modify,
             size: d.len() as u64,
             mtime_ns: mt,
             hash: Some(hash_of(&d)),
+            exec,
         }),
         Err(Some(Skip::Missing)) => out.skipped.push(Skipped::new(rel, SkipWhy::Changed)),
         Err(Some(Skip::TooLarge)) => out.skipped.push(Skipped::new(rel, SkipWhy::TooLarge)),

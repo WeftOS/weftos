@@ -49,6 +49,17 @@ pub struct Entry {
     pub mtime_ns: u64,
     pub hash: String,
     pub etag: String,
+    /// The file is executable (any execute bit), mirroring the object's
+    /// [`ObjectAttrs::executable`](crate::backend::ObjectAttrs). Absent in an index written
+    /// before the attribute existed, which reads as `false`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub exec: bool,
+}
+
+/// Whether a file's mode has any execute bit.
+pub(crate) fn is_exec(md: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    md.permissions().mode() & 0o111 != 0
 }
 
 /// A path whose local and remote versions disagree and nobody has chosen yet. While it is open the
