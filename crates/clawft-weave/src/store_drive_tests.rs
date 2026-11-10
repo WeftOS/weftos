@@ -96,6 +96,29 @@ fn the_verbs_carry_a_tree_down_edit_it_back_up_and_report_the_conditional_write(
 }
 
 #[test]
+fn an_executable_keeps_its_execute_bit_through_the_verbs_and_the_daemon_wrapper() {
+    use std::os::unix::fs::PermissionsExt;
+    let r = rig();
+    r.seed("proj/old.sh", "#!/bin/sh\n");
+    let t = tempfile::tempdir().unwrap();
+    let (a, b) = (t.path().join("a"), t.path().join("b"));
+    let m = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    r.call("materialise", json!({"name": r.name, "prefix": "proj", "dest": path(&a)})).unwrap();
+    assert_eq!(m(&a.join("old.sh")) & 0o111, 0, "an object stored before the attribute is not executable");
+    std::fs::write(a.join("run.sh"), "#!/bin/sh\necho hi\n").unwrap();
+    std::fs::set_permissions(a.join("run.sh"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::set_permissions(a.join("old.sh"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let u = r.call("sync-up", json!({"name": r.name, "root": path(&a)})).unwrap();
+    assert_eq!(u["put"].as_array().unwrap().len(), 2, "{u}");
+    let ops = r.svc.operator_objects();
+    assert!(ops.attrs(&r.bucket, "proj/run.sh").unwrap().executable, "the wrapper forwards the attribute on a create");
+    assert!(ops.attrs(&r.bucket, "proj/old.sh").unwrap().executable, "and on a modify with the same bytes");
+    assert_eq!(u["conditional"], 1, "the chmod went out as a conditional write: {u}");
+    r.call("materialise", json!({"name": r.name, "prefix": "proj", "dest": path(&b)})).unwrap();
+    assert_eq!((m(&b.join("run.sh")), m(&b.join("old.sh"))), (0o755, 0o755));
+}
+
+#[test]
 fn a_conflict_is_resolved_with_the_resolve_verb() {
     let r = rig();
     r.seed("proj/a.txt", "alpha");

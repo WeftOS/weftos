@@ -47,7 +47,7 @@ pub mod worktree_backend;
 
 pub use access::{Access, Grant, GrantTable, Op, Principal, PrincipalKind};
 pub use audit::{AuditEvent, AuditSink, Outcome, Source};
-pub use backend::{AccessKey, AdminBackend, BackendError, DefaultRetention, LifecycleRule, LockConfig, LockMode, LockedPut, ObjectBackend, ObjectMeta, ObjectVersion, Part, PutOpts, Retention};
+pub use backend::{AccessKey, AdminBackend, BackendError, DefaultRetention, LifecycleRule, LockConfig, LockMode, LockedPut, ObjectAttrs, ObjectBackend, ObjectMeta, ObjectVersion, Part, PutOpts, Retention};
 pub use fs::FsBackend;
 pub use mem::MemBackend;
 pub use name::StoreName;

@@ -58,6 +58,19 @@ pub struct ObjectMeta {
     pub etag: String,
 }
 
+/// Per-object attributes kept beside the bytes (S3 user metadata `x-amz-meta-weft-exec` on RustFS,
+/// the file's own unix mode bits on the directory backend, a set in memory).
+///
+/// Only the executable intent is stored, as one bool: any of the owner, group or other execute
+/// bits was set on the file when it was put. Write bits, setuid and the rest are policy of whoever
+/// materialises the object (a view makes base files read-only), so they are not part of the
+/// object. An object written without the attribute (all data from before it existed, and any
+/// backend or caller that does not carry it) reads as `executable: false`, which is what it was.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ObjectAttrs {
+    pub executable: bool,
+}
+
 /// One stored version of a key in a versioned (locked) bucket, or a delete marker.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObjectVersion {
@@ -208,6 +221,21 @@ pub trait ObjectBackend: Send + Sync {
     /// Take the etag from the last `put` or `head` of this backend: etags are opaque and differ
     /// between backends (BLAKE3 for the local ones, MD5 for RustFS).
     fn put_if_match(&self, bucket: &str, key: &str, data: &[u8], etag: &str) -> Result<ObjectMeta, BackendError>;
+    /// [`Self::put`] that also records `attrs`. The default drops them: a backend that cannot
+    /// carry attributes still stores the bytes, and [`Self::attrs`] reads back the default.
+    fn put_attrs(&self, bucket: &str, key: &str, data: &[u8], if_none_match: bool, _attrs: ObjectAttrs) -> Result<ObjectMeta, BackendError> {
+        self.put(bucket, key, data, if_none_match)
+    }
+    /// [`Self::put_if_match`] that also records `attrs` (replacing the previous ones). The default
+    /// drops them.
+    fn put_if_match_attrs(&self, bucket: &str, key: &str, data: &[u8], etag: &str, _attrs: ObjectAttrs) -> Result<ObjectMeta, BackendError> {
+        self.put_if_match(bucket, key, data, etag)
+    }
+    /// The attributes stored with the object; the default (all false) for a backend that keeps
+    /// none or an object that was written without any. A missing object is [`BackendError::NoObject`].
+    fn attrs(&self, bucket: &str, key: &str) -> Result<ObjectAttrs, BackendError> {
+        self.head(bucket, key).map(|_| ObjectAttrs::default())
+    }
     /// Put with Object Lock headers (retention and/or legal hold). Needs a bucket made with
     /// [`AdminBackend::create_locked_bucket`]; others answer [`BackendError::Unsupported`].
     fn put_locked(&self, _bucket: &str, _key: &str, _data: &[u8], _opts: &PutOpts) -> Result<LockedPut, BackendError> {

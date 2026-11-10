@@ -14,7 +14,7 @@ use std::time::Instant;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
-use weftos_store::backend::{BackendError, ObjectBackend as S1, ObjectMeta};
+use weftos_store::backend::{BackendError, ObjectAttrs, ObjectBackend as S1, ObjectMeta};
 use weftos_store::claim_watch::{ClaimWatch, claim_merge_observed};
 use weftos_store::follower::{self, Change, FollowState, LeftoverPolicy, Why};
 use weftos_store::promote::{ArchiveTarget, OnConflict, PromotionPolicy, WorktreeMeta, is_promoted, promote, read_meta, write_meta};
@@ -52,6 +52,15 @@ impl S1 for Op {
     }
     fn put_if_match(&self, b: &str, k: &str, d: &[u8], e: &str) -> Result<ObjectMeta, BackendError> {
         self.0.put_if_match(b, k, d, e)
+    }
+    fn put_attrs(&self, b: &str, k: &str, d: &[u8], n: bool, a: ObjectAttrs) -> Result<ObjectMeta, BackendError> {
+        self.0.put_attrs(b, k, d, n, a)
+    }
+    fn put_if_match_attrs(&self, b: &str, k: &str, d: &[u8], e: &str, a: ObjectAttrs) -> Result<ObjectMeta, BackendError> {
+        self.0.put_if_match_attrs(b, k, d, e, a)
+    }
+    fn attrs(&self, b: &str, k: &str) -> Result<ObjectAttrs, BackendError> {
+        self.0.attrs(b, k)
     }
     fn copy(&self, sb: &str, sk: &str, db: &str, dk: &str) -> Result<ObjectMeta, BackendError> {
         self.0.copy(sb, sk, db, dk)

@@ -14,7 +14,7 @@ use super::tree::{self, clone_into, write_into};
 use super::{Layout, Result, ScopedView, ViewError, ViewSpec, WorkStart, is_control_key, lease};
 use crate::backend::ObjectBackend;
 use crate::drive::cas::{hash_of, prune_empty_parents};
-use crate::drive::index::{Entry, Index, Local, local_state, mtime_ns};
+use crate::drive::index::{Entry, Index, Local, is_exec, local_state, mtime_ns};
 use crate::drive::{
     ChangeKind, DownReport, Keep, SkipWhy, Skipped, UpReport, check_rel, now_ms, resolve, scan, sync_down_with, sync_up_with,
 };
@@ -171,7 +171,7 @@ fn upper_changes(v: &ScopedView, ix: &Index, skipped: &mut Vec<Skipped>) -> Resu
                     }
                 };
                 match ix.entries.get(&r) {
-                    Some(ent) if ent.hash == hash_of(&data) => {}
+                    Some(ent) if ent.hash == hash_of(&data) && ent.exec == is_exec(&md) => {}
                     Some(ent) => out.push(WorkChange { path: r, kind: ChangeKind::Modify, base: Some(ent.clone()) }),
                     None => out.push(WorkChange { path: r, kind: ChangeKind::Create, base: None }),
                 }
@@ -247,7 +247,8 @@ impl ScopedView {
                             continue;
                         }
                     };
-                    if let Err(e) = write_into(&sd, &c.path, &data) {
+                    let exec = std::fs::symlink_metadata(src_root.join(&c.path)).is_ok_and(|m| is_exec(&m));
+                    if let Err(e) = write_into(&sd, &c.path, &data, exec) {
                         rep.skipped.push(Skipped::io(&c.path, e));
                         continue;
                     }
@@ -370,7 +371,7 @@ impl ScopedView {
         match (keep, after.entries.get(path)) {
             // Force the next publish to see a modify against the remote version.
             (Keep::Local, Some(e)) => {
-                wi.entries.insert(path.to_owned(), Entry { size: 0, mtime_ns: 0, hash: String::new(), etag: e.etag.clone() });
+                wi.entries.insert(path.to_owned(), Entry { size: 0, mtime_ns: 0, hash: String::new(), etag: e.etag.clone(), exec: e.exec });
             }
             (Keep::Local, None) => {
                 wi.entries.remove(path);

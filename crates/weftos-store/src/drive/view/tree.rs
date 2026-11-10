@@ -16,9 +16,18 @@ use crate::drive::{DriveError, SkipWhy, Skipped, TMP_PREFIX, norm_prefix, now_ms
 use crate::share::{Limits, safe_join};
 
 const RO_DIR: u32 = 0o555;
-const RO_FILE: u32 = 0o444;
 const RW_DIR: u32 = 0o755;
-const RW_FILE: u32 = 0o644;
+
+/// A file's mode: read-only (0444) or writable (0644), plus the execute bits when it is
+/// executable (0555, 0755). Write bits are the view's policy; the execute bit is the object's.
+fn file_mode(read_only: bool, exec: bool) -> u32 {
+    match (read_only, exec) {
+        (true, false) => 0o444,
+        (true, true) => 0o555,
+        (false, false) => 0o644,
+        (false, true) => 0o755,
+    }
+}
 
 fn root_err(root: &Path, why: &str) -> ViewError {
     ViewError::Root(root.display().to_string(), why.to_owned())
@@ -63,11 +72,12 @@ fn set_mode(p: &Path, mode: u32) -> std::io::Result<()> {
     std::fs::set_permissions(p, std::fs::Permissions::from_mode(mode))
 }
 
-/// Walk `dir` without following symlinks and set every directory and regular file to the
-/// read-only (0555/0444) or the writable (0755/0644) modes. Directories are made writable before
-/// they are entered, and read-only after.
+/// Walk `dir` without following symlinks and set every directory to 0555 (read-only) or 0755, and
+/// every regular file to 0444/0644, or 0555/0755 for one that already has an execute bit (the
+/// bit is kept, never added or removed here). Directories are made writable before they are
+/// entered, and read-only after.
 pub(crate) fn set_tree_mode(dir: &Path, read_only: bool) -> Result<()> {
-    let (dm, fm) = if read_only { (RO_DIR, RO_FILE) } else { (RW_DIR, RW_FILE) };
+    let dm = if read_only { RO_DIR } else { RW_DIR };
     let md = match std::fs::symlink_metadata(dir) {
         Ok(m) => m,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -86,7 +96,7 @@ pub(crate) fn set_tree_mode(dir: &Path, read_only: bool) -> Result<()> {
         if m.is_dir() {
             set_tree_mode(&p, read_only)?;
         } else if m.is_file() {
-            set_mode(&p, fm)?;
+            set_mode(&p, file_mode(read_only, m.permissions().mode() & 0o111 != 0))?;
         }
     }
     if read_only {
@@ -283,6 +293,8 @@ pub(crate) fn repair(drive: &Path, limits: &Limits) -> Result<Vec<String>> {
                 std::fs::create_dir_all(dir)?;
                 let tmp = dir.join(format!("{TMP_PREFIX}{}", ulid::Ulid::new()));
                 cas.clone_to(&e.hash, &tmp)?;
+                // The CAS blob is shared by every path with these bytes: the mode is the entry's.
+                set_mode(&tmp, if e.exec { 0o755 } else { 0o644 })?;
                 std::fs::rename(&tmp, &path)?;
                 let md = std::fs::metadata(&path)?;
                 ix.touch(&ch.path, md.len(), mtime_ns(&md));
@@ -298,27 +310,31 @@ pub(crate) fn repair(drive: &Path, limits: &Limits) -> Result<Vec<String>> {
     Ok(fixed)
 }
 
-/// Write `data` at `root/rel` through a temp file (mode 0644), refusing traversal and symlinked
-/// parents.
-pub(crate) fn write_into(root: &Path, rel: &str, data: &[u8]) -> Result<()> {
+/// Write `data` at `root/rel` through a temp file (mode 0644, or 0755 when `exec`), refusing
+/// traversal and symlinked parents.
+pub(crate) fn write_into(root: &Path, rel: &str, data: &[u8], exec: bool) -> Result<()> {
     let dst = safe_join(root, rel).map_err(|e| ViewError::Spec(e.to_string()))?;
     let dir = dst.parent().ok_or_else(|| DriveError::Io(format!("{rel}: no parent")))?;
     std::fs::create_dir_all(dir)?;
     let tmp = dir.join(format!("{TMP_PREFIX}{}", ulid::Ulid::new()));
-    let r = std::fs::write(&tmp, data).and_then(|()| set_mode(&tmp, RW_FILE)).and_then(|()| std::fs::rename(&tmp, &dst));
+    let r = std::fs::write(&tmp, data).and_then(|()| set_mode(&tmp, file_mode(false, exec))).and_then(|()| std::fs::rename(&tmp, &dst));
     if r.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
     Ok(r?)
 }
 
-/// Clone a daemon-owned file into the work tree (APFS clone where `std::fs::copy` clones), mode 0644.
+/// Clone a daemon-owned file into the work tree (APFS clone where `std::fs::copy` clones), mode
+/// 0644, or 0755 when the source has an execute bit.
 pub(crate) fn clone_into(src: &Path, root: &Path, rel: &str) -> Result<std::fs::Metadata> {
     let dst = safe_join(root, rel).map_err(|e| ViewError::Spec(e.to_string()))?;
     let dir = dst.parent().ok_or_else(|| DriveError::Io(format!("{rel}: no parent")))?;
     std::fs::create_dir_all(dir)?;
     let tmp = dir.join(format!("{TMP_PREFIX}{}", ulid::Ulid::new()));
-    let r = std::fs::copy(src, &tmp).and_then(|_| set_mode(&tmp, RW_FILE)).and_then(|()| std::fs::rename(&tmp, &dst));
+    let r = std::fs::copy(src, &tmp)
+        .and_then(|_| std::fs::metadata(src))
+        .and_then(|sm| set_mode(&tmp, file_mode(false, sm.permissions().mode() & 0o111 != 0)))
+        .and_then(|()| std::fs::rename(&tmp, &dst));
     if r.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }

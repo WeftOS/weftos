@@ -88,7 +88,7 @@ pub fn resolve(dest: &Path, path: &str, keep: Keep) -> Result<()> {
                 .entries
                 .entry(path.to_owned())
                 .and_modify(|e| e.etag = etag.to_owned())
-                .or_insert_with(|| Entry { size: 0, mtime_ns: 0, hash: String::new(), etag: etag.to_owned() });
+                .or_insert_with(|| Entry { size: 0, mtime_ns: 0, hash: String::new(), etag: etag.to_owned(), exec: false });
         }
         (Keep::Local, None) => {
             // The remote object is gone: the local file is a new file again.
@@ -101,7 +101,7 @@ pub fn resolve(dest: &Path, path: &str, keep: Keep) -> Result<()> {
             let md = std::fs::metadata(&target)?;
             index.entries.insert(
                 path.to_owned(),
-                Entry { size: md.len(), mtime_ns: mtime_ns(&md), hash: hash_of(&bytes), etag: etag.to_owned() },
+                Entry { size: md.len(), mtime_ns: mtime_ns(&md), hash: hash_of(&bytes), etag: etag.to_owned(), exec: false },
             );
         }
         (Keep::Remote, None) => {

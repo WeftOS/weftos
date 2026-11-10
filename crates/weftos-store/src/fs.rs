@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::StoreError;
-use crate::backend::{AccessKey, AdminBackend, BackendError, ObjectBackend, ObjectMeta, check_bucket, check_key, etag_of};
+use crate::backend::{AccessKey, AdminBackend, BackendError, ObjectAttrs, ObjectBackend, ObjectMeta, check_bucket, check_key, etag_of};
 
 static TMP: AtomicU64 = AtomicU64::new(0);
 
@@ -178,7 +178,9 @@ impl FsBackend {
         self.wlock.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    fn put_unlocked(&self, bucket: &str, key: &str, data: &[u8], if_none_match: bool) -> Result<ObjectMeta, BackendError> {
+    /// The executable attribute is the data file's own execute bits (0755 when set; otherwise the
+    /// default mode, as before attributes existed). A put makes a new file, so it replaces the old attribute.
+    fn put_unlocked(&self, bucket: &str, key: &str, data: &[u8], if_none_match: bool, attrs: ObjectAttrs) -> Result<ObjectMeta, BackendError> {
         let Some(dst) = self.path_unless_case_twin(bucket, key)? else {
             return Err(BackendError::BadKey(format!("{key:?}: differs only by case from an existing key in {bucket}")));
         };
@@ -190,6 +192,10 @@ impl FsBackend {
         let tmp = tmpdir.join(format!("{}-{}", std::process::id(), TMP.fetch_add(1, Ordering::Relaxed)));
         let mut f = std::fs::File::create(&tmp).map_err(io)?;
         f.write_all(data).and_then(|()| f.sync_all()).map_err(io)?;
+        if attrs.executable {
+            use std::os::unix::fs::PermissionsExt;
+            f.set_permissions(std::fs::Permissions::from_mode(0o755)).map_err(io)?;
+        }
         let res = if if_none_match {
             // A hard link fails if the target exists: an atomic create-if-absent.
             let r = std::fs::hard_link(&tmp, &dst);
@@ -227,14 +233,33 @@ impl FsBackend {
 
 impl ObjectBackend for FsBackend {
     fn put(&self, bucket: &str, key: &str, data: &[u8], if_none_match: bool) -> Result<ObjectMeta, BackendError> {
+        self.put_attrs(bucket, key, data, if_none_match, ObjectAttrs::default())
+    }
+
+    fn put_attrs(&self, bucket: &str, key: &str, data: &[u8], if_none_match: bool, attrs: ObjectAttrs) -> Result<ObjectMeta, BackendError> {
         let _g = self.wguard();
-        self.put_unlocked(bucket, key, data, if_none_match)
+        self.put_unlocked(bucket, key, data, if_none_match, attrs)
     }
 
     fn put_if_match(&self, bucket: &str, key: &str, data: &[u8], etag: &str) -> Result<ObjectMeta, BackendError> {
+        self.put_if_match_attrs(bucket, key, data, etag, ObjectAttrs::default())
+    }
+
+    fn put_if_match_attrs(&self, bucket: &str, key: &str, data: &[u8], etag: &str, attrs: ObjectAttrs) -> Result<ObjectMeta, BackendError> {
         let _g = self.wguard();
         self.check_etag(bucket, key, etag)?;
-        self.put_unlocked(bucket, key, data, false)
+        self.put_unlocked(bucket, key, data, false, attrs)
+    }
+
+    fn attrs(&self, bucket: &str, key: &str) -> Result<ObjectAttrs, BackendError> {
+        use std::os::unix::fs::PermissionsExt;
+        let Some(p) = self.path_unless_case_twin(bucket, key)? else { return Err(BackendError::NoObject(key.into())) };
+        match std::fs::metadata(&p) {
+            Ok(m) if m.is_file() => Ok(ObjectAttrs { executable: m.permissions().mode() & 0o111 != 0 }),
+            Ok(_) => Err(BackendError::NoObject(key.into())),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(BackendError::NoObject(key.into())),
+            Err(e) => Err(io(e)),
+        }
     }
 
     fn delete_if_match(&self, bucket: &str, key: &str, etag: &str) -> Result<(), BackendError> {
@@ -259,7 +284,8 @@ impl ObjectBackend for FsBackend {
 
     fn copy(&self, sb: &str, sk: &str, db: &str, dk: &str) -> Result<ObjectMeta, BackendError> {
         let data = self.get(sb, sk)?;
-        self.put(db, dk, &data, false)
+        let attrs = self.attrs(sb, sk)?;
+        self.put_attrs(db, dk, &data, false, attrs)
     }
 
     fn list(&self, bucket: &str, prefix: &str) -> Result<Vec<ObjectMeta>, BackendError> {
@@ -375,6 +401,31 @@ mod tests {
         b.delete("p-two", "copied").unwrap();
         b.delete_bucket("p-two").unwrap();
         assert_eq!(b.buckets().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn the_executable_attribute_is_the_data_files_execute_bits() {
+        use std::os::unix::fs::PermissionsExt;
+        let (d, b) = be();
+        b.create_bucket("n-one", &[]).unwrap();
+        let x = ObjectAttrs { executable: true };
+        b.put("n-one", "plain", b"p", false).unwrap();
+        assert_eq!(b.attrs("n-one", "plain").unwrap(), ObjectAttrs::default(), "a plain put has no attribute");
+        let v1 = b.put_attrs("n-one", "bin/run", b"#!/bin/sh\n", true, x).unwrap();
+        assert!(b.attrs("n-one", "bin/run").unwrap().executable);
+        assert_eq!(b.get("n-one", "bin/run").unwrap(), b"#!/bin/sh\n");
+        let on_disk = std::fs::metadata(d.path().join("buckets/n-one/data/bin/run")).unwrap().permissions().mode() & 0o777;
+        assert_eq!(on_disk, 0o755);
+        // A copy keeps it; a replace without it clears it; a conditional replace sets it.
+        b.copy("n-one", "bin/run", "n-one", "bin/run2").unwrap();
+        assert!(b.attrs("n-one", "bin/run2").unwrap().executable);
+        let v2 = b.put_if_match_attrs("n-one", "bin/run", b"#!/bin/sh\necho\n", &v1.etag, ObjectAttrs::default()).unwrap();
+        assert!(!b.attrs("n-one", "bin/run").unwrap().executable);
+        b.put_if_match_attrs("n-one", "bin/run", b"#!/bin/sh\n", &v2.etag, x).unwrap();
+        assert!(b.attrs("n-one", "bin/run").unwrap().executable);
+        assert!(matches!(b.attrs("n-one", "nope"), Err(BackendError::NoObject(_))));
+        // Listing and etags are unaffected by the mode.
+        assert_eq!(b.list("n-one", "bin/").unwrap().len(), 2);
     }
 
     #[test]

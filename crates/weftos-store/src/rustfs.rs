@@ -14,7 +14,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use reqwest::blocking::Client;
 use serde_json::{Value, json};
 
-use crate::backend::{AccessKey, AdminBackend, BackendError, BucketTags, DefaultRetention, LockConfig, LockMode, LifecycleRule, LockedPut, ObjectBackend, ObjectMeta, ObjectVersion, Part, PutOpts, Retention, check_bucket, check_key};
+use crate::backend::{AccessKey, AdminBackend, BackendError, BucketTags, DefaultRetention, LockConfig, LockMode, LifecycleRule, LockedPut, ObjectAttrs, ObjectBackend, ObjectMeta, ObjectVersion, Part, PutOpts, Retention, check_bucket, check_key};
 use crate::integrity;
 use crate::sigv4::{self, Req};
 
@@ -252,6 +252,9 @@ fn should_retry(method: &str, query: &[(String, String)], r: &Result<u16, &Xport
     }
 }
 
+/// The S3 user-metadata header that carries [`ObjectAttrs::executable`]; present (as `1`) only when set.
+const EXEC_HEADER: &str = "x-amz-meta-weft-exec";
+
 #[derive(Debug)]
 struct Resp {
     status: u16,
@@ -261,6 +264,8 @@ struct Resp {
     version: Option<String>,
     /// `x-amz-checksum-sha256` (base64), when the store returns one.
     sha256: Option<String>,
+    /// `x-amz-meta-weft-exec` was `1`.
+    exec: bool,
     body: Vec<u8>,
 }
 
@@ -544,11 +549,12 @@ impl RustfsBackend {
         let len = r.headers().get("content-length").and_then(|v| v.to_str().ok()).and_then(|v| v.parse().ok());
         let version = r.headers().get("x-amz-version-id").and_then(|v| v.to_str().ok()).map(str::to_owned);
         let sha256 = r.headers().get("x-amz-checksum-sha256").and_then(|v| v.to_str().ok()).map(str::to_owned);
+        let exec = r.headers().get(EXEC_HEADER).and_then(|v| v.to_str().ok()).is_some_and(|v| v == "1");
         let body = match r.bytes() {
             Ok(b) => b.to_vec(),
             Err(e) => return Ok(Err(Xport { msg: format!("reading the response: {e}"), never_sent: false, timed_out: e.is_timeout() })),
         };
-        Ok(Ok(Resp { status, etag, len, version, sha256, body }))
+        Ok(Ok(Resp { status, etag, len, version, sha256, exec, body }))
     }
 
     /// Turn a non-2xx response into the matching [`BackendError`].
@@ -685,11 +691,18 @@ impl RustfsBackend {
 
 impl ObjectBackend for RustfsBackend {
     fn put(&self, bucket: &str, key: &str, data: &[u8], if_none_match: bool) -> Result<ObjectMeta, BackendError> {
+        self.put_attrs(bucket, key, data, if_none_match, ObjectAttrs::default())
+    }
+
+    fn put_attrs(&self, bucket: &str, key: &str, data: &[u8], if_none_match: bool, attrs: ObjectAttrs) -> Result<ObjectMeta, BackendError> {
         check_bucket(bucket)?;
         check_key(key)?;
         let mut extra: Vec<(&str, String)> = vec![("x-amz-checksum-sha256", integrity::checksum_sha256(data))];
         if if_none_match {
             extra.push(("if-none-match", "*".into()));
+        }
+        if attrs.executable {
+            extra.push((EXEC_HEADER, "1".into()));
         }
         let r = self.send("PUT", &format!("/{bucket}/{key}"), &[], data, &extra)?;
         let r = self.check(r, Ctx::Object(bucket, key))?;
@@ -697,11 +710,19 @@ impl ObjectBackend for RustfsBackend {
     }
 
     fn put_if_match(&self, bucket: &str, key: &str, data: &[u8], etag: &str) -> Result<ObjectMeta, BackendError> {
+        self.put_if_match_attrs(bucket, key, data, etag, ObjectAttrs::default())
+    }
+
+    fn put_if_match_attrs(&self, bucket: &str, key: &str, data: &[u8], etag: &str, attrs: ObjectAttrs) -> Result<ObjectMeta, BackendError> {
         check_bucket(bucket)?;
         check_key(key)?;
         // An ETag header value is quoted; accept the bare value the caller got from `ObjectMeta`.
         let q = if etag.starts_with('"') { etag.to_owned() } else { format!("\"{etag}\"") };
-        let r = self.send("PUT", &format!("/{bucket}/{key}"), &[], data, &[("if-match", q), ("x-amz-checksum-sha256", integrity::checksum_sha256(data))])?;
+        let mut extra = vec![("if-match", q), ("x-amz-checksum-sha256", integrity::checksum_sha256(data))];
+        if attrs.executable {
+            extra.push((EXEC_HEADER, "1".into()));
+        }
+        let r = self.send("PUT", &format!("/{bucket}/{key}"), &[], data, &extra)?;
         let r = self.check(r, Ctx::Object(bucket, key)).map_err(|e| match e {
             BackendError::Exists(k) => BackendError::Stale(k),
             e => e,
@@ -863,6 +884,14 @@ impl ObjectBackend for RustfsBackend {
         let r = self.send("HEAD", &format!("/{bucket}/{key}"), &[], &[], &[])?;
         let r = self.check(r, Ctx::Object(bucket, key))?;
         Ok(ObjectMeta { key: key.to_owned(), size: r.len.unwrap_or(0), etag: r.etag.unwrap_or_default() })
+    }
+
+    fn attrs(&self, bucket: &str, key: &str) -> Result<ObjectAttrs, BackendError> {
+        check_bucket(bucket)?;
+        check_key(key)?;
+        let r = self.send("HEAD", &format!("/{bucket}/{key}"), &[], &[], &[])?;
+        let r = self.check(r, Ctx::Object(bucket, key))?;
+        Ok(ObjectAttrs { executable: r.exec })
     }
 
     fn delete_if_match(&self, bucket: &str, key: &str, etag: &str) -> Result<(), BackendError> {

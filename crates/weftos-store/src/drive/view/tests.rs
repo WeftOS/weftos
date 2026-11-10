@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::*;
-use crate::backend::{AdminBackend, BackendError, ObjectMeta};
+use crate::backend::{AdminBackend, BackendError, ObjectAttrs, ObjectMeta};
 use crate::drive::{ChangeKind, Keep, SkipWhy};
 use crate::mem::MemBackend;
 
@@ -53,6 +53,20 @@ impl ObjectBackend for Probe {
         self.up()?;
         self.puts.lock().unwrap().push(k.to_owned());
         self.inner.put_if_match(b, k, d, e)
+    }
+    fn put_attrs(&self, b: &str, k: &str, d: &[u8], n: bool, a: ObjectAttrs) -> std::result::Result<ObjectMeta, BackendError> {
+        self.up()?;
+        self.puts.lock().unwrap().push(k.to_owned());
+        self.inner.put_attrs(b, k, d, n, a)
+    }
+    fn put_if_match_attrs(&self, b: &str, k: &str, d: &[u8], e: &str, a: ObjectAttrs) -> std::result::Result<ObjectMeta, BackendError> {
+        self.up()?;
+        self.puts.lock().unwrap().push(k.to_owned());
+        self.inner.put_if_match_attrs(b, k, d, e, a)
+    }
+    fn attrs(&self, b: &str, k: &str) -> std::result::Result<ObjectAttrs, BackendError> {
+        self.up()?;
+        self.inner.attrs(b, k)
     }
     fn delete_if_match(&self, b: &str, k: &str, e: &str) -> std::result::Result<(), BackendError> {
         self.up()?;
@@ -204,6 +218,9 @@ fn open_places_only_the_included_prefixes_and_no_control_state() {
 #[test]
 fn base_is_read_only_after_open() {
     let s = probe();
+    // One executable in each tree: its execute bit survives, its write bits do not (base) or do (work).
+    s.inner.put_attrs(B, "docs/bin/run.sh", b"#!/bin/sh\n", false, ObjectAttrs { executable: true }).unwrap();
+    s.inner.put_attrs(B, "proj/tool.sh", b"#!/bin/sh\n", false, ObjectAttrs { executable: true }).unwrap();
     let (_d, t) = tmp();
     let root = t.join("v");
     ScopedView::open(&s, &rw(WorkStart::Clone), &root).unwrap();
@@ -211,9 +228,12 @@ fn base_is_read_only_after_open() {
     assert_eq!(mode(&base), 0o555);
     assert_eq!(mode(&base.join("docs/guide")), 0o555);
     assert_eq!(mode(&base.join("docs/readme.md")), 0o444);
+    assert_eq!(mode(&base.join("docs/bin/run.sh")), 0o555, "an executable base file keeps its execute bits and has no write bit");
     assert!(std::fs::write(base.join("docs/readme.md"), "x").is_err());
+    assert!(std::fs::write(base.join("docs/bin/run.sh"), "x").is_err());
     assert!(std::fs::write(base.join("docs/new.md"), "x").is_err());
     assert_eq!(mode(&root.join("work/a.txt")), 0o644);
+    assert_eq!(mode(&root.join("work/tool.sh")), 0o755, "an executable work file stays writable and executable");
     std::fs::write(root.join("work/a.txt"), "edited").unwrap();
 }
 

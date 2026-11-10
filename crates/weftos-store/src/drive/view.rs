@@ -39,6 +39,8 @@ mod live_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod tests_exec;
+#[cfg(test)]
 mod tests_fail;
 
 pub use lease::{LEASE_PREFIX, LEASE_SKEW_MS, Lease, LeaseBody, lease_key};

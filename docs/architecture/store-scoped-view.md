@@ -6,6 +6,9 @@ module `crates/weftos-store/src/drive/view.rs` and `drive/view/` on branch
 Linux bwrap side belongs to photo-gallery's `weftos-pg` session; see
 [`docs/research/adr126-e1-scoped-view-handoff-weftos-pg-2026-11-08.md`](../research/adr126-e1-scoped-view-handoff-weftos-pg-2026-11-08.md).
 
+Updated 2026-11-10: file modes. Each object carries one execute attribute; the view applies it
+(section 2, "File modes"). Before this, every base file was 0444 and nothing in a root image could run.
+
 Sources. Files marked "main checkout" are untracked files in `~/weftos`, not in this branch.
 
 - Tapestry Phase 3 prep, section 5 E-1 and work item 10 ("E3 / R9 Linux backend"):
@@ -46,11 +49,36 @@ A view root on the host has this layout. The session sees only the first two ent
 
 | Host path | In the sandbox | What it is |
 |---|---|---|
-| `<root>/base/` | `/` (or under a chroot path) | The read-only includes, each at its `at` path, plus empty mount points. Directories 0555, files 0444 |
+| `<root>/base/` | `/` (or under a chroot path) | The read-only includes, each at its `at` path, plus empty mount points. Directories 0555, files 0444, or 0555 for an executable object |
 | `<root>/work/` | `/work` | The writable tree. `Clone`: a full copy of the work prefix. `Empty`: an empty overlay upper; the upper is the change set |
 | `<root>/lower/` | overlay lower of `/work` | `Empty` only: a read-only mirror of the work prefix |
 | `<root>/.state/` | never bound | One drive per include, the work drive, the lease record, the work index, the staged-path set, the overlay workdir |
 | `<root>/view.json` | never bound | The manifest the launcher reads |
+
+**File modes.** The object store keeps one attribute per object, `executable` (a bool): the file had
+any execute bit when it was put. It is S3 user metadata `x-amz-meta-weft-exec: 1` on RustFS, the data
+file's own execute bits on the directory backend, and a set in memory. Only the execute bit is the
+object's; write bits are the view's policy, and setuid, setgid and the sticky bit are never carried.
+
+| Where | Not executable | Executable |
+|---|---|---|
+| `base/` and `lower/` | 0444 | 0555 |
+| `work/` (clone) | 0644 | 0755 |
+
+- **Put.** `store drive sync-up` and a view publish read the file's mode. A create or modify puts the
+  bytes with the attribute (`put_attrs`, `put_if_match_attrs`). A chmod with the same bytes is a modify
+  (a put of the same content, same etag, new attribute), and clearing the bit clears the attribute.
+- **Materialise.** A drive fetches the attribute once per placed object (one HEAD) and sets 0755 on the
+  placed file; the view then sets 0555/0444 (base) or keeps 0755/0644 (work). Changing an execute bit
+  in `base/` is reported in `status().tampered` and put back by refresh.
+- **Old data.** An object with no attribute reads as not executable, so it materialises 0444/0644 as
+  before. An `index.json` with no `exec` field loads as not executable and is written back without one
+  for a non-executable file. A backend that does not carry attributes (the trait default) stores the
+  bytes and reads back the default.
+- **Not covered.** A mode-only change made by another device (same bytes, same etag) is not pulled by
+  refresh, because an unchanged etag and size skip the object without a HEAD. It arrives with the next
+  content change or a fresh open. A conflict's remote copy and a `Keep::Remote` resolve do not carry
+  the attribute. Multipart and Object Lock puts do not carry it either.
 
 **No store control state is visible.** None of these is ever placed in `base/`, `lower/` or `work/`:
 - drive state (`.drive/`) and delete markers (`.drive-tombstones/`) at any depth;
@@ -129,7 +157,7 @@ pub struct ViewSpec {
 - **Cost.** `base/` and `lower/` are hard links to the drive's files, so they take no extra bytes on
   any file system. The work clone is `std::fs::copy`: a clone on APFS, a full copy on ext4 without
   reflinks. The drive's content-addressed cache holds each blob once.
-- **macOS limits.** There is no bwrap and no overlayfs. 0555/0444 modes are advisory, because the
+- **macOS limits.** There is no bwrap and no overlayfs. 0555/0444 (0555 on an executable) modes are advisory, because the
   owner can `chmod` them back. A base file written in place through its hard link changes the
   drive's copy too. That is detected (`status().tampered`) and repaired from the cache on the next
   refresh. The Seatbelt profile is what really denies writes outside `/work`.

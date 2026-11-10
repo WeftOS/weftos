@@ -20,7 +20,7 @@ use super::index::{Entry, Index};
 use super::remote::{clear_tombstone, read_tombstone, write_tombstone};
 use super::scan::{Change, ChangeKind, scan};
 use super::{DriveError, Options, Result, SkipWhy, Skipped, log_event};
-use crate::backend::{BackendError, ObjectBackend};
+use crate::backend::{BackendError, ObjectAttrs, ObjectBackend};
 use crate::share::{Skip, looks_like_private_key, read_regular};
 
 #[derive(Debug, Default, Clone)]
@@ -99,7 +99,7 @@ fn up<B: ObjectBackend + ?Sized>(b: &B, dest: &Path, index: &mut Index, opts: &O
             ChangeKind::Create => {
                 let Some(data) = read_for_upload(dest, &ch, opts.limits.max_file, rep) else { continue };
                 let hash = hash_of(&data);
-                match b.put(&bucket, &key, &data, true) {
+                match b.put_attrs(&bucket, &key, &data, true, ObjectAttrs { executable: ch.exec }) {
                     Ok(m) => {
                         uploaded(dest, index, &ch, &data, hash, m.etag, rep);
                         clear_tombstone(b, &bucket, &prefix, &ch.path)?;
@@ -109,7 +109,7 @@ fn up<B: ObjectBackend + ?Sized>(b: &B, dest: &Path, index: &mut Index, opts: &O
                         let m = b.head(&bucket, &key)?;
                         let rb = b.get(&bucket, &key)?;
                         if hash_of(&rb) == hash {
-                            index.entries.insert(ch.path.clone(), Entry { size: data.len() as u64, mtime_ns: ch.mtime_ns, hash, etag: m.etag });
+                            index.entries.insert(ch.path.clone(), Entry { size: data.len() as u64, mtime_ns: ch.mtime_ns, hash, etag: m.etag, exec: ch.exec });
                         } else {
                             record(dest, index, &ch.path, ConflictKind::BothCreated, Some((&m.etag, &rb)), Some(&hash), "")?;
                             rep.conflicts.push(ch.path.clone());
@@ -123,7 +123,7 @@ fn up<B: ObjectBackend + ?Sized>(b: &B, dest: &Path, index: &mut Index, opts: &O
                 let Some(data) = read_for_upload(dest, &ch, opts.limits.max_file, rep) else { continue };
                 let hash = hash_of(&data);
                 // Conditional first: the store checks the etag as part of the write.
-                match b.put_if_match(&bucket, &key, &data, &entry.etag) {
+                match b.put_if_match_attrs(&bucket, &key, &data, &entry.etag, ObjectAttrs { executable: ch.exec }) {
                     Ok(m) => {
                         rep.conditional += 1;
                         uploaded(dest, index, &ch, &data, hash, m.etag, rep);
@@ -145,7 +145,7 @@ fn up<B: ObjectBackend + ?Sized>(b: &B, dest: &Path, index: &mut Index, opts: &O
                     Ok(m) if m.etag != entry.etag => {
                         let rb = b.get(&bucket, &key)?;
                         if hash_of(&rb) == hash {
-                            index.entries.insert(ch.path.clone(), Entry { size: data.len() as u64, mtime_ns: ch.mtime_ns, hash, etag: m.etag });
+                            index.entries.insert(ch.path.clone(), Entry { size: data.len() as u64, mtime_ns: ch.mtime_ns, hash, etag: m.etag, exec: ch.exec });
                         } else {
                             record(dest, index, &ch.path, ConflictKind::BothModified, Some((&m.etag, &rb)), Some(&hash), "")?;
                             rep.conflicts.push(ch.path.clone());
@@ -154,7 +154,7 @@ fn up<B: ObjectBackend + ?Sized>(b: &B, dest: &Path, index: &mut Index, opts: &O
                     Ok(_) => {
                         // Unsupported backend, or a refusal whose etag now matches (a backend whose
                         // etag form differs between put and head): the older unconditional write.
-                        let m = b.put(&bucket, &key, &data, false)?;
+                        let m = b.put_attrs(&bucket, &key, &data, false, ObjectAttrs { executable: ch.exec })?;
                         rep.head_then_write += 1;
                         uploaded(dest, index, &ch, &data, hash, m.etag, rep);
                     }
@@ -205,7 +205,7 @@ fn up<B: ObjectBackend + ?Sized>(b: &B, dest: &Path, index: &mut Index, opts: &O
 }
 
 fn uploaded(dest: &Path, index: &mut Index, ch: &Change, data: &[u8], hash: String, etag: String, rep: &mut UpReport) {
-    index.entries.insert(ch.path.clone(), Entry { size: data.len() as u64, mtime_ns: ch.mtime_ns, hash, etag });
+    index.entries.insert(ch.path.clone(), Entry { size: data.len() as u64, mtime_ns: ch.mtime_ns, hash, etag, exec: ch.exec });
     rep.put.push(ch.path.clone());
     rep.bytes_put += data.len() as u64;
     log_event(dest, "put", &ch.path);
