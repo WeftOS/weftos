@@ -254,7 +254,7 @@ turn
 ### Phase 1 as built (2026-10-04, WEFT-732)
 
 - `crates/clawft-core/src/agent/memory_recall.rs`: `MemoryRecall` (select → render → attribute),
-  `MemoryRetriever` (frozen; `HashRetriever` = SimHash cosine under `vector-memory`),
+  `MemoryRetriever` (frozen; `OnnxRetriever` = nomic-embed-text-v1.5 cosine under `onnx-embeddings`, and an explicit opt-in `LexicalRetriever` = SimHash cosine that logs a warning; with no model and lexical not requested, recall is off, an error is logged and the full `MEMORY.md` is injected; since 2026-11-11 there is no silent hash fallback),
   `MemoryReranker` (`IdentityMemoryReranker` default; `SonaSkillReranker` implements it under
   `hybrid-rerank`, scoring snippets by text, `+1`→quality 1.0 / `-1`→0.0 per candidate).
 - `ContextBuilder::build_messages_with_query` injects at most `top_m` (default 5) of `top_k`

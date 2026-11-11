@@ -19,6 +19,9 @@ forensic-domain = []
 html-export = ["dep:html-escape"]
 neo4j-export = []
 kernel-bridge = ["dep:clawft-kernel", "dep:async-trait"]
+# Test-only: real nomic-embed-text-v1.5 for the bridge recall test; needs
+# WEFTOS_TEST_EMBED_MODEL_DIR. Without it the test prints a SKIP and returns.
+real-embedder-tests = ["kernel-bridge", "clawft-kernel/real-embedder-tests"]
 # Real HTTP for URL ingest (reqwest + rustls). Production binaries
 # (weaver) enable this; unit tests keep StubHttpClient / mock clients.
 http-client = ["dep:reqwest"]
