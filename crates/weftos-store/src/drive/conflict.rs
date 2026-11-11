@@ -35,6 +35,16 @@ pub enum Keep {
     Remote,
 }
 
+/// Make a placed file executable (0755) or leave it as written. Only the execute attribute is
+/// carried; the other bits are the writer's default.
+fn set_exec(target: &Path, exec: bool) -> Result<()> {
+    if exec {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(target, std::fs::Permissions::from_mode(0o755))?;
+    }
+    Ok(())
+}
+
 /// Record a conflict on `path`: write the remote copy (if any), log it, hold it open. The caller
 /// has checked that `path` has no open conflict yet and that `path` passed `check_rel`.
 pub(crate) fn record(
@@ -42,17 +52,18 @@ pub(crate) fn record(
     index: &mut Index,
     path: &str,
     kind: ConflictKind,
-    remote: Option<(&str, &[u8])>,
+    remote: Option<(&str, &[u8], bool)>,
     local_hash: Option<&str>,
     detail: &str,
 ) -> Result<()> {
     let mut copy_rel = None;
     let mut remote_hash = None;
-    if let Some((_, bytes)) = remote {
+    if let Some((_, bytes, exec)) = remote {
         let h = hash_of(bytes);
         let rel = format!("{path}.remote-{}", &h[..8]);
         let target = crate::share::safe_join(dest, &rel).map_err(|e| DriveError::Invalid(e.to_string()))?;
         write_atomic(&target, bytes)?;
+        set_exec(&target, exec)?;
         remote_hash = Some(h);
         copy_rel = Some(rel);
     }
@@ -62,14 +73,14 @@ pub(crate) fn record(
         "conflicts.jsonl",
         &serde_json::json!({
             "ts_ms": at_ms, "device": index.device, "path": path, "kind": kind,
-            "local_hash": local_hash, "remote_etag": remote.map(|r| r.0), "remote_hash": remote_hash,
+            "local_hash": local_hash, "remote_etag": remote.map(|r| r.0), "remote_hash": remote_hash, "remote_exec": remote.is_some_and(|r| r.2),
             "remote_copy": copy_rel, "detail": detail,
         }),
     )?;
     log_event(dest, "conflict", path);
     index.conflicts.insert(
         path.to_owned(),
-        OpenConflict { kind, remote_copy: copy_rel, remote_etag: remote.map(|r| r.0.to_owned()), at_ms },
+        OpenConflict { kind, remote_copy: copy_rel, remote_etag: remote.map(|r| r.0.to_owned()), at_ms, remote_exec: remote.is_some_and(|r| r.2) },
     );
     Ok(())
 }
@@ -88,7 +99,7 @@ pub fn resolve(dest: &Path, path: &str, keep: Keep) -> Result<()> {
                 .entries
                 .entry(path.to_owned())
                 .and_modify(|e| e.etag = etag.to_owned())
-                .or_insert_with(|| Entry { size: 0, mtime_ns: 0, hash: String::new(), etag: etag.to_owned(), exec: false });
+                .or_insert_with(|| Entry { size: 0, mtime_ns: 0, hash: String::new(), etag: etag.to_owned(), exec: false, stamp: String::new() });
         }
         (Keep::Local, None) => {
             // The remote object is gone: the local file is a new file again.
@@ -98,10 +109,11 @@ pub fn resolve(dest: &Path, path: &str, keep: Keep) -> Result<()> {
             let copy = c.remote_copy.as_deref().ok_or_else(|| DriveError::Invalid("conflict has no remote copy".into()))?;
             let bytes = std::fs::read(dest.join(copy))?;
             write_atomic(&target, &bytes)?;
+            set_exec(&target, c.remote_exec)?;
             let md = std::fs::metadata(&target)?;
             index.entries.insert(
                 path.to_owned(),
-                Entry { size: md.len(), mtime_ns: mtime_ns(&md), hash: hash_of(&bytes), etag: etag.to_owned(), exec: false },
+                Entry { size: md.len(), mtime_ns: mtime_ns(&md), hash: hash_of(&bytes), etag: etag.to_owned(), exec: c.remote_exec, stamp: String::new() },
             );
         }
         (Keep::Remote, None) => {

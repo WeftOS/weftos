@@ -180,6 +180,13 @@ impl ObjectBackend for MemBackend {
         let b = g.buckets.get(bucket).ok_or_else(|| BackendError::NoBucket(bucket.into()))?;
         Ok(b.objects.iter().filter(|(k, _)| k.starts_with(prefix)).map(|(k, v)| meta(k, v)).collect())
     }
+
+    /// The stamp is the execute attribute: it moves exactly when a mode-only change lands.
+    fn list_stamped(&self, bucket: &str, prefix: &str) -> Result<Vec<(ObjectMeta, String)>, BackendError> {
+        let g = self.lock();
+        let b = g.buckets.get(bucket).ok_or_else(|| BackendError::NoBucket(bucket.into()))?;
+        Ok(b.objects.iter().filter(|(k, _)| k.starts_with(prefix)).map(|(k, v)| (meta(k, v), if b.exec.contains(k) { "x" } else { "-" }.to_owned())).collect())
+    }
 }
 
 impl AdminBackend for MemBackend {

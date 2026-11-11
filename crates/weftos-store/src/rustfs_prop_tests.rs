@@ -160,7 +160,7 @@ fn retain_until_is_accepted_only_in_the_future_and_the_header_round_trips() {
         };
         let mode = if r.chance(2) { LockMode::Compliance } else { LockMode::Governance };
         let hold = r.chance(3);
-        let opts = PutOpts { if_none_match: r.chance(2), retention: Some(Retention { mode, until_unix_s: until }), legal_hold: hold };
+        let opts = PutOpts { if_none_match: r.chance(2), retention: Some(Retention { mode, until_unix_s: until }), legal_hold: hold, attrs: Default::default() };
         let want_ok = until > now + 120 && until <= MAX_ISO_SECS;
         let past_or_far = until <= now.saturating_sub(10) || until > MAX_ISO_SECS;
         match be.lock_headers(&opts) {

@@ -296,6 +296,27 @@ impl ObjectBackend for FsBackend {
         out.sort_by(|a, b| a.key.cmp(&b.key));
         Ok(out)
     }
+
+    /// The stamp is the data file's mtime (ns) and its execute attribute: a put makes a new file,
+    /// so it moves on a mode-only put too.
+    fn list_stamped(&self, bucket: &str, prefix: &str) -> Result<Vec<(ObjectMeta, String)>, BackendError> {
+        use std::os::unix::fs::PermissionsExt;
+        let data = self.bdir(bucket)?.join("data");
+        let mut out = Vec::new();
+        for m in self.list(bucket, prefix)? {
+            let mut p = data.clone();
+            p.extend(m.key.split('/'));
+            let stamp = match std::fs::metadata(&p) {
+                Ok(md) => {
+                    let ns = md.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos());
+                    format!("{ns}:{}", md.permissions().mode() & 0o111 != 0)
+                }
+                Err(_) => String::new(),
+            };
+            out.push((m, stamp));
+        }
+        Ok(out)
+    }
 }
 
 impl AdminBackend for FsBackend {

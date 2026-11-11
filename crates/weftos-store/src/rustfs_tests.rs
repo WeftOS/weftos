@@ -87,7 +87,7 @@ fn an_unreachable_backend_is_retried_then_reported_as_unavailable() {
 #[test]
 fn http_statuses_map_to_the_error_that_says_what_to_do() {
     let be = RustfsBackend::new(RustfsConfig { endpoint: "http://127.0.0.1:1".into(), region: "r".into(), root_access_key: "a".into(), root_secret_key: "b".into(), secrets_dir: tempfile::tempdir().unwrap().keep(), timeout: Duration::from_secs(1) }).unwrap();
-    let resp = |status, code: &str| Resp { status, etag: None, len: None, version: None, sha256: None, body: format!("<Error><Code>{code}</Code><Message>m</Message></Error>").into_bytes() };
+    let resp = |status, code: &str| Resp { status, etag: None, len: None, version: None, sha256: None, exec: false, body: format!("<Error><Code>{code}</Code><Message>m</Message></Error>").into_bytes() };
     let ob = Ctx::Object("b", "k");
     assert!(matches!(be.check(resp(401, "InvalidAccessKeyId"), ob), Err(BackendError::Forbidden(_))));
     assert!(matches!(be.check(resp(403, "AccessDenied"), ob), Err(BackendError::Forbidden(_))));
@@ -539,7 +539,7 @@ fn live_object_lock_bucket_retention_and_legal_hold() {
     be.create_locked_bucket(&b, &[("store".into(), "release".into())]).unwrap();
     assert!(matches!(be.create_locked_bucket(&b, &[]), Err(BackendError::BucketExists(_))));
     let until = now + 3600;
-    let comp = be.put_locked(&b, "c.bin", b"compliance", &PutOpts { if_none_match: true, retention: Some(Retention { mode: LockMode::Compliance, until_unix_s: until }), legal_hold: false }).unwrap();
+    let comp = be.put_locked(&b, "c.bin", b"compliance", &PutOpts { if_none_match: true, retention: Some(Retention { mode: LockMode::Compliance, until_unix_s: until }), legal_hold: false, ..Default::default() }).unwrap();
     let gov = be.put_locked(&b, "g.bin", b"governance", &PutOpts { retention: Some(Retention { mode: LockMode::Governance, until_unix_s: until }), ..Default::default() }).unwrap();
     let hold = be.put_locked(&b, "h.bin", b"hold", &PutOpts { legal_hold: true, ..Default::default() }).unwrap();
     for p in [&comp, &gov, &hold] {
@@ -591,7 +591,7 @@ fn live_locked_release_store_through_the_service() {
     let ci = Caller::local(ci_p);
     let sw = Caller::local(sw_p);
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
-    let opts = PutOpts { if_none_match: true, retention: Some(Retention { mode: LockMode::Compliance, until_unix_s: now + 3600 }), legal_hold: false };
+    let opts = PutOpts { if_none_match: true, retention: Some(Retention { mode: LockMode::Compliance, until_unix_s: now + 3600 }), legal_hold: false, ..Default::default() };
     let put = svc.put_locked(&ci, &rel, "v1/app.tar", b"build", &opts).unwrap();
     assert!(put.version_id.is_some());
     assert!(matches!(svc.put_locked(&ci, &rel, "v1/app.tar", b"evil", &opts), Err(crate::StoreError::Backend(BackendError::Exists(_)))), "no second version under the same key");
@@ -620,7 +620,7 @@ fn live_list_versions_shows_a_replaced_manifest_and_a_delete_marker() {
 
     let b = uniq("t-ver");
     be.create_locked_bucket(&b, &[]).unwrap();
-    let keep = PutOpts { if_none_match: true, retention: Some(Retention { mode: LockMode::Governance, until_unix_s: now + 3600 }), legal_hold: false };
+    let keep = PutOpts { if_none_match: true, retention: Some(Retention { mode: LockMode::Governance, until_unix_s: now + 3600 }), legal_hold: false, ..Default::default() };
     let first = be.put_locked(&b, "release/manifest.json", b"{\"sha\":\"good\"}", &keep).unwrap();
     be.put_locked(&b, "release/other.bin", b"o", &keep).unwrap();
     let v = be.list_versions(&b, "release/").unwrap();
@@ -700,7 +700,7 @@ fn live_owner_switches_let_the_ci_and_sweeper_keys_put_and_the_lock_keeps_the_or
     let ci = as_key(&cfg, &be, &RustfsBackend::key_id_for(&ci_p.to_string()));
     let sw = as_key(&cfg, &be, &RustfsBackend::key_id_for(&sw_p.to_string()));
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
-    let keep = PutOpts { if_none_match: true, retention: Some(Retention { mode: LockMode::Compliance, until_unix_s: now + 3600 }), legal_hold: false };
+    let keep = PutOpts { if_none_match: true, retention: Some(Retention { mode: LockMode::Compliance, until_unix_s: now + 3600 }), legal_hold: false, ..Default::default() };
     let orig = svc.put_locked(&Caller::local(ci_p.clone()), &rel, "v1/app.tar", b"build", &keep).unwrap();
 
     // Off: both keys refused.
@@ -834,7 +834,7 @@ fn live_multipart_upload_carries_lock_headers_and_aborts_clean() {
     let total = 11 * 1024 * 1024usize;
     let pattern = |i: usize| (i.wrapping_mul(31) % 251) as u8;
     let want: Vec<u8> = (0..total).map(pattern).collect();
-    let opts = PutOpts { if_none_match: true, retention: Some(Retention { mode: LockMode::Compliance, until_unix_s: now + 3600 }), legal_hold: false };
+    let opts = PutOpts { if_none_match: true, retention: Some(Retention { mode: LockMode::Compliance, until_unix_s: now + 3600 }), legal_hold: false, ..Default::default() };
     let put = be.put_stream(&b, "big.bin", &mut std::io::Cursor::new(want.clone()), MIN_PART, &opts).unwrap();
     eprintln!("MULTIPART put: {put:?}");
     assert_eq!(put.meta.size, total as u64);
@@ -1169,4 +1169,74 @@ fn live_reads_are_checked_against_the_stored_checksum_and_a_copy_is_a_copy_resul
     let m = be.copy(&b, "a.txt", &b, "b.txt").unwrap();
     assert_eq!(m.etag, "5d41402abc4b2a76b9719d911017c592");
     assert!(matches!(be.copy(&b, "missing.txt", &b, "c.txt"), Err(BackendError::NoObject(_))));
+}
+
+/// The execute attribute against a real RustFS (item 5 of the store-attrs follow-ups): the
+/// `x-amz-meta-weft-exec` header round-trips on every put path, CopyObject keeps it, a locked put
+/// and a multipart upload carry it, and the listing's `LastModified` moves when only the attribute
+/// changes (what a refresh's mode-only check relies on).
+#[test]
+#[ignore = "needs a throwaway RustFS: WEFTOS_STORE_TEST_RUSTFS_ENV"]
+fn live_exec_attribute_round_trips_through_every_put_path_and_copy() {
+    use crate::backend::{LockMode, MIN_PART, PutOpts, Retention};
+    let x = ObjectAttrs { executable: true };
+    let (cfg, _d) = live().expect("WEFTOS_STORE_TEST_RUSTFS_ENV");
+    let be = RustfsBackend::new(cfg).unwrap();
+    let b = uniq("t-exec");
+    be.create_bucket(&b, &[]).unwrap();
+
+    // put, put_if_match: set, read back, replaced.
+    let v1 = be.put_attrs(&b, "bin/run", b"#!/bin/sh\n", true, x).unwrap();
+    assert!(be.attrs(&b, "bin/run").unwrap().executable, "put_attrs");
+    be.put(&b, "plain", b"data", false).unwrap();
+    assert!(!be.attrs(&b, "plain").unwrap().executable);
+    // A mode-only put (same bytes): the etag stays, the attribute and the listing stamp change.
+    let stamp = |be: &RustfsBackend, k: &str| be.list_stamped(&b, "").unwrap().into_iter().find(|(m, _)| m.key == k).unwrap().1;
+    let (s0, e0) = (stamp(&be, "bin/run"), be.head(&b, "bin/run").unwrap().etag);
+    let v2 = be.put_if_match_attrs(&b, "bin/run", b"#!/bin/sh\n", &v1.etag, ObjectAttrs::default()).unwrap();
+    let s1 = stamp(&be, "bin/run");
+    eprintln!("EXEC LIVE: etag {e0} -> {}; LastModified {s0:?} -> {s1:?} (no sleep between the puts)", v2.etag);
+    assert_eq!(v2.etag, e0, "same bytes, same etag: a mode-only change is invisible to the etag");
+    assert!(!be.attrs(&b, "bin/run").unwrap().executable, "a replace without the attribute clears it");
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    be.put_if_match_attrs(&b, "bin/run", b"#!/bin/sh\n", &v2.etag, x).unwrap();
+    let s2 = stamp(&be, "bin/run");
+    assert_ne!(s1, s2, "LastModified moved on a mode-only put (a second later)");
+    assert!(be.attrs(&b, "bin/run").unwrap().executable);
+
+    // CopyObject: the default metadata directive copies the user metadata.
+    be.copy(&b, "bin/run", &b, "copy/run").unwrap();
+    assert!(be.attrs(&b, "copy/run").unwrap().executable, "CopyObject keeps x-amz-meta-weft-exec");
+    be.copy(&b, "plain", &b, "copy/plain").unwrap();
+    assert!(!be.attrs(&b, "copy/plain").unwrap().executable);
+
+    // Multipart (two parts: MIN_PART + 1 byte): the attribute is set when the upload is created.
+    let big: Vec<u8> = (0..MIN_PART + 1).map(|i| (i % 251) as u8).collect();
+    let m = be.put_stream(&b, "big/run", &mut std::io::Cursor::new(big.clone()), MIN_PART, &PutOpts { attrs: x, ..Default::default() }).unwrap();
+    assert_eq!(m.meta.size, big.len() as u64);
+    assert!(be.attrs(&b, "big/run").unwrap().executable, "multipart upload");
+    be.put_stream(&b, "big/data", &mut std::io::Cursor::new(big.clone()), MIN_PART, &PutOpts::default()).unwrap();
+    assert!(!be.attrs(&b, "big/data").unwrap().executable);
+    // A single-part stream goes through put_locked.
+    be.put_stream(&b, "small/run", &mut std::io::Cursor::new(b"x".to_vec()), MIN_PART, &PutOpts { attrs: x, ..Default::default() }).unwrap();
+    assert!(be.attrs(&b, "small/run").unwrap().executable, "single-part stream");
+
+    // Object Lock: a locked put carries it too.
+    let lb = uniq("t-exec-lock");
+    be.create_locked_bucket(&lb, &[]).unwrap();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    let hold = PutOpts { legal_hold: true, attrs: x, ..Default::default() };
+    let lp = be.put_locked(&lb, "bin/locked", b"locked", &hold).unwrap();
+    assert!(be.attrs(&lb, "bin/locked").unwrap().executable, "put_locked");
+    let gov = PutOpts { retention: Some(Retention { mode: LockMode::Governance, until_unix_s: now + 3600 }), attrs: x, ..Default::default() };
+    let gp = be.put_locked(&lb, "bin/gov", b"gov", &gov).unwrap();
+    assert!(be.attrs(&lb, "bin/gov").unwrap().executable, "put_locked with retention");
+    be.put_legal_hold(&lb, "bin/locked", lp.version_id.as_deref().unwrap(), false).unwrap();
+    let _ = be.delete_version(&lb, "bin/locked", lp.version_id.as_deref().unwrap(), false);
+    let _ = be.delete_version(&lb, "bin/gov", gp.version_id.as_deref().unwrap(), true);
+
+    for m in be.list(&b, "").unwrap() {
+        be.delete(&b, &m.key).unwrap();
+    }
+    be.delete_bucket(&b).unwrap();
 }

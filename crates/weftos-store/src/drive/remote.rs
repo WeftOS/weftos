@@ -10,6 +10,8 @@ use crate::share::Limits;
 pub(crate) struct Listing {
     /// Accepted objects by path relative to the prefix.
     pub objects: BTreeMap<String, ObjectMeta>,
+    /// The store's modification stamp for each accepted object (empty when the backend has none).
+    pub stamps: BTreeMap<String, String>,
     /// Every relative path the store has, accepted or not. A path missing here is deleted.
     pub seen: BTreeSet<String>,
     pub skipped: Vec<Skipped>,
@@ -22,12 +24,12 @@ fn control_area(bucket: &str, rel: &str) -> bool {
 }
 
 pub(crate) fn list<B: ObjectBackend + ?Sized>(b: &B, bucket: &str, prefix: &str, limits: &Limits) -> Result<Listing> {
-    let mut metas = b.list(bucket, prefix)?;
-    metas.sort_by(|x, y| x.key.cmp(&y.key));
-    let mut out = Listing { objects: BTreeMap::new(), seen: BTreeSet::new(), skipped: Vec::new() };
+    let mut metas = b.list_stamped(bucket, prefix)?;
+    metas.sort_by(|x, y| x.0.key.cmp(&y.0.key));
+    let mut out = Listing { objects: BTreeMap::new(), stamps: BTreeMap::new(), seen: BTreeSet::new(), skipped: Vec::new() };
     let mut lower: BTreeSet<String> = BTreeSet::new();
     let mut total = 0u64;
-    for m in metas {
+    for (m, stamp) in metas {
         let Some(rel) = m.key.strip_prefix(prefix).filter(|r| !r.is_empty()) else { continue };
         if rel.split('/').next() == Some(TOMBSTONE_DIR) {
             continue;
@@ -57,9 +59,20 @@ pub(crate) fn list<B: ObjectBackend + ?Sized>(b: &B, bucket: &str, prefix: &str,
             continue;
         }
         total += m.size;
+        out.stamps.insert(rel.to_owned(), stamp);
         out.objects.insert(rel.to_owned(), m);
     }
     Ok(out)
+}
+
+/// Whether the object is executable (its attribute); a key that is gone reads as not executable.
+/// One HEAD: callers use it only where the answer is needed (placing, a conflict, a stamp that moved).
+pub(crate) fn attr_exec<B: ObjectBackend + ?Sized>(b: &B, bucket: &str, key: &str) -> Result<bool> {
+    match b.attrs(bucket, key) {
+        Ok(a) => Ok(a.executable),
+        Err(BackendError::NoObject(_)) => Ok(false),
+        Err(e) => Err(e.into()),
+    }
 }
 
 pub(crate) fn tombstone_key(prefix: &str, rel: &str) -> String {

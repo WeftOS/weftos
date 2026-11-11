@@ -10,7 +10,7 @@ use std::path::Path;
 use super::cas::{Cas, prune_empty_parents};
 use super::conflict::{ConflictKind, record};
 use super::index::{Entry, Index, Local, is_exec, local_state, mtime_ns};
-use super::remote::{self, fetch_to_cas, read_tombstone};
+use super::remote::{self, attr_exec, fetch_to_cas, read_tombstone};
 use super::tmp::{Live, remove_stale};
 use super::{DRIVE_DIR, DriveError, Options, Result, Skipped, TMP_PREFIX, log_event, norm_prefix};
 use crate::backend::{BackendError, ObjectBackend, ObjectMeta};
@@ -19,6 +19,9 @@ use crate::backend::{BackendError, ObjectBackend, ObjectMeta};
 pub struct DownReport {
     pub created: Vec<String>,
     pub updated: Vec<String>,
+    /// The subset of `updated` where only the execute attribute changed on the store (same bytes);
+    /// the local file's mode was changed in place.
+    pub mode_updated: Vec<String>,
     /// Remote deletes applied to unmodified local files.
     pub removed: Vec<String>,
     /// Conflicts recorded by this run.
@@ -131,8 +134,17 @@ fn apply_remote<B: ObjectBackend + ?Sized>(
             continue;
         }
         let entry = index.entries.get(rel).cloned();
-        if entry.as_ref().is_some_and(|e| e.etag == meta.etag && e.size == meta.size) {
-            rep.unchanged += 1;
+        let stamp = listing.stamps.get(rel).map_or("", String::as_str);
+        if let Some(e) = entry.as_ref().filter(|e| e.etag == meta.etag && e.size == meta.size) {
+            // Same bytes. A mode-only change on the store (a put of the same bytes with another
+            // execute attribute) keeps the etag and size, and shows only in the listing's stamp:
+            // ask for the object's attributes only where the stamp moved (or is not known yet),
+            // never one HEAD per object on every refresh.
+            if stamp.is_empty() || e.stamp == stamp {
+                rep.unchanged += 1;
+            } else {
+                mode_check(b, dest, index, rel, stamp, max, rep)?;
+            }
             continue;
         }
         let local = match local_state(dest, rel, entry.as_ref(), max) {
@@ -157,19 +169,15 @@ fn apply_remote<B: ObjectBackend + ?Sized>(
             (true, Local::Unchanged) | (false, Local::Missing) => {
                 let hash = fetch(rep)?;
                 // One HEAD for the attributes, only for an object that is placed (not for the
-                // unchanged ones). A mode-only change on the store (same bytes) is not seen here:
-                // the etag and size match the index and the object is skipped above.
-                let exec = match b.attrs(&bucket, &key) {
-                    Ok(a) => a.executable,
-                    Err(BackendError::NoObject(_)) => false,
-                    Err(e) => return Err(e.into()),
-                };
-                place(dest, &cas, index, rel, &hash, meta, entry.is_none(), exec, rep);
+                // unchanged ones; a mode-only change on the store is found by `mode_check`).
+                let exec = attr_exec(b, &bucket, &key)?;
+                place(dest, &cas, index, rel, &hash, meta, stamp, entry.is_none(), exec, rep);
             }
             (true, Local::Missing) => {
                 let hash = fetch(rep)?;
                 let bytes = cas.read(&hash)?;
-                record(dest, index, rel, ConflictKind::RemoteModifiedLocalDeleted, Some((&meta.etag, &bytes)), None, "")?;
+                let rexec = attr_exec(b, &bucket, &key)?;
+                record(dest, index, rel, ConflictKind::RemoteModifiedLocalDeleted, Some((&meta.etag, &bytes, rexec)), None, "")?;
                 rep.conflicts.push(rel.clone());
             }
             (true, Local::Modified { hash: lh }) => {
@@ -180,13 +188,14 @@ fn apply_remote<B: ObjectBackend + ?Sized>(
                     let md = std::fs::metadata(dest.join(rel))?;
                     index.entries.insert(
                         rel.clone(),
-                        Entry { size: md.len(), mtime_ns: mtime_ns(&md), hash, etag: meta.etag.clone(), exec: is_exec(&md) },
+                        Entry { size: md.len(), mtime_ns: mtime_ns(&md), hash, etag: meta.etag.clone(), exec: is_exec(&md), stamp: String::new() },
                     );
                     rep.unchanged += 1;
                     continue;
                 }
                 let bytes = cas.read(&hash)?;
-                record(dest, index, rel, ConflictKind::BothModified, Some((&meta.etag, &bytes)), Some(&lh), "")?;
+                let rexec = attr_exec(b, &bucket, &key)?;
+                record(dest, index, rel, ConflictKind::BothModified, Some((&meta.etag, &bytes, rexec)), Some(&lh), "")?;
                 rep.conflicts.push(rel.clone());
             }
             (false, Local::Untracked { hash: lh }) => {
@@ -196,11 +205,12 @@ fn apply_remote<B: ObjectBackend + ?Sized>(
                     let md = std::fs::metadata(dest.join(rel))?;
                     index.entries.insert(
                         rel.clone(),
-                        Entry { size: md.len(), mtime_ns: mtime_ns(&md), hash, etag: meta.etag.clone(), exec: is_exec(&md) },
+                        Entry { size: md.len(), mtime_ns: mtime_ns(&md), hash, etag: meta.etag.clone(), exec: is_exec(&md), stamp: String::new() },
                     );
                 } else {
                     let bytes = cas.read(&hash)?;
-                    record(dest, index, rel, ConflictKind::BothCreated, Some((&meta.etag, &bytes)), Some(&lh), "")?;
+                    let rexec = attr_exec(b, &bucket, &key)?;
+                    record(dest, index, rel, ConflictKind::BothCreated, Some((&meta.etag, &bytes, rexec)), Some(&lh), "")?;
                     rep.conflicts.push(rel.clone());
                 }
             }
@@ -246,10 +256,10 @@ fn apply_remote<B: ObjectBackend + ?Sized>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn place(dest: &Path, cas: &Cas, index: &mut Index, rel: &str, hash: &str, meta: &ObjectMeta, created: bool, exec: bool, rep: &mut DownReport) {
+fn place(dest: &Path, cas: &Cas, index: &mut Index, rel: &str, hash: &str, meta: &ObjectMeta, stamp: &str, created: bool, exec: bool, rep: &mut DownReport) {
     match place_file(dest, cas, rel, hash, exec) {
         Ok((size, mt)) => {
-            index.entries.insert(rel.to_owned(), Entry { size, mtime_ns: mt, hash: hash.to_owned(), etag: meta.etag.clone(), exec });
+            index.entries.insert(rel.to_owned(), Entry { size, mtime_ns: mt, hash: hash.to_owned(), etag: meta.etag.clone(), exec, stamp: stamp.to_owned() });
             if created {
                 rep.created.push(rel.to_owned());
                 log_event(dest, "place", rel);
@@ -260,4 +270,72 @@ fn place(dest: &Path, cas: &Cas, index: &mut Index, rel: &str, hash: &str, meta:
         }
         Err(e) => rep.skipped.push(Skipped::io(rel, e)),
     }
+}
+
+/// The listing says this object has the bytes the index holds but a different modification stamp:
+/// read its attributes (one HEAD) and, if the execute attribute changed, apply it to the file in
+/// place. A file the user has edited, deleted or chmod-ed since the last sync is left alone (the
+/// stamp is still recorded, so there is no HEAD on the next refresh); a local mode change then
+/// goes out with the next `sync_up`, last writer wins.
+fn mode_check<B: ObjectBackend + ?Sized>(
+    b: &B,
+    dest: &Path,
+    index: &mut Index,
+    rel: &str,
+    stamp: &str,
+    max: u64,
+    rep: &mut DownReport,
+) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let key = index.key(rel);
+    let remote_exec = match b.attrs(&index.bucket, &key) {
+        Ok(a) => a.executable,
+        // Gone between the listing and now: the next refresh sees the delete.
+        Err(BackendError::NoObject(_)) => {
+            rep.unchanged += 1;
+            return Ok(());
+        }
+        Err(e) => return Err(e.into()),
+    };
+    let Some(e) = index.entries.get(rel).cloned() else { return Ok(()) };
+    let mut next = Entry { stamp: stamp.to_owned(), ..e.clone() };
+    if remote_exec == e.exec {
+        index.entries.insert(rel.to_owned(), next);
+        rep.unchanged += 1;
+        return Ok(());
+    }
+    let path = crate::share::safe_join(dest, rel).map_err(|x| DriveError::Invalid(x.to_string()))?;
+    match (local_state(dest, rel, Some(&e), max), std::fs::symlink_metadata(&path)) {
+        (Ok(Local::Unchanged), Ok(md)) if md.is_file() => {
+            let mode = md.permissions().mode();
+            if is_exec(&md) == e.exec {
+                // Untouched locally: apply the store's attribute in place (same inode, so a
+                // hard-linked view base follows).
+                let new_mode = if remote_exec { 0o755 } else { mode & !0o111 };
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(new_mode))?;
+                next.exec = remote_exec;
+                index.entries.insert(rel.to_owned(), next);
+                rep.updated.push(rel.to_owned());
+                rep.mode_updated.push(rel.to_owned());
+                log_event(dest, "mode", rel);
+                return Ok(());
+            }
+            // The local mode was changed too: the same value is adopted, a different one stays
+            // pending and is pushed by the next sync_up.
+            if is_exec(&md) == remote_exec {
+                next.exec = remote_exec;
+            }
+            index.entries.insert(rel.to_owned(), next);
+            rep.unchanged += 1;
+        }
+        (Ok(Local::NotFile), _) | (Err(_), _) => {
+            rep.skipped.push(Skipped::io(rel, "cannot apply the store's execute attribute: not a regular file here"));
+        }
+        // Edited or deleted locally: leave it; the local change is pushed (or conflicts) later.
+        _ => {
+            index.entries.insert(rel.to_owned(), next);
+            rep.unchanged += 1;
+        }
+    }
+    Ok(())
 }

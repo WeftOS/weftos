@@ -64,7 +64,7 @@ pub(crate) fn skipped(v: &[drive::Skipped]) -> Value {
 
 pub(crate) fn down_json(r: &DownReport) -> Value {
     json!({
-        "created": r.created, "updated": r.updated, "removed": r.removed, "conflicts": r.conflicts,
+        "created": r.created, "updated": r.updated, "mode_updated": r.mode_updated, "removed": r.removed, "conflicts": r.conflicts,
         "open_conflicts": r.open_conflicts, "unchanged": r.unchanged, "fetched": r.fetched,
         "bytes_fetched": r.bytes_fetched, "skipped": skipped(&r.skipped),
     })

@@ -9,6 +9,9 @@ Linux bwrap side belongs to photo-gallery's `weftos-pg` session; see
 Updated 2026-11-10: file modes. Each object carries one execute attribute; the view applies it
 (section 2, "File modes"). Before this, every base file was 0444 and nothing in a root image could run.
 
+Updated 2026-11-10 (attribute follow-ups): a refresh pulls a mode-only change made elsewhere; a conflict's remote
+copy and `Keep::Remote` carry the attribute; multipart and Object Lock puts carry it (section 2, "File modes").
+
 Updated 2026-11-10 (overlay lower): `lower/` is writable (section 2, "File modes"). Overlayfs copy-up keeps the
 lower's mode, so a read-only lower made an in-place edit of an existing file fail with "Permission denied".
 Only `base/` is read-only now.
@@ -73,16 +76,36 @@ object's; write bits are the view's policy, and setuid, setgid and the sticky bi
   bytes with the attribute (`put_attrs`, `put_if_match_attrs`). A chmod with the same bytes is a modify
   (a put of the same content, same etag, new attribute), and clearing the bit clears the attribute.
 - **Materialise.** A drive fetches the attribute once per placed object (one HEAD) and sets 0755 on the
-  placed file; the view then sets 0555/0444 (base) or keeps 0755/0644 (work, and the overlay `lower/`). Changing an execute bit
+  placed file (the HEAD is skipped for an unchanged object; see "Refresh pulls a mode-only change"); the view then sets 0555/0444 (base) or keeps 0755/0644 (work, and the overlay `lower/`). Changing an execute bit
   in `base/` is reported in `status().tampered` and put back by refresh.
 - **Old data.** An object with no attribute reads as not executable, so it materialises 0444/0644 as
   before. An `index.json` with no `exec` field loads as not executable and is written back without one
   for a non-executable file. A backend that does not carry attributes (the trait default) stores the
   bytes and reads back the default.
-- **Not covered.** A mode-only change made by another device (same bytes, same etag) is not pulled by
-  refresh, because an unchanged etag and size skip the object without a HEAD. It arrives with the next
-  content change or a fresh open. A conflict's remote copy and a `Keep::Remote` resolve do not carry
-  the attribute. Multipart and Object Lock puts do not carry it either.
+- **Refresh pulls a mode-only change.** A put of the same bytes with another attribute keeps the etag and
+  size, so the etag alone cannot see it. `ObjectBackend::list_stamped` returns, with each object, an opaque
+  modification stamp that moves when the bytes or the attributes change (RustFS: the listing's
+  `LastModified`; the directory backend: mtime and the execute bit; memory: the execute attribute). The
+  index entry records the stamp of the version it was checked against. A refresh asks for an object's
+  attributes (one HEAD) only when its listing stamp differs from the entry's, so an unchanged tree costs
+  one listing and no HEAD, and one flipped object costs one HEAD. An entry with no stamp (an index from
+  before, a file this device just uploaded, a backend with no stamps) is checked once and then recorded.
+  If the attribute differs and the local file is untouched, its mode is changed in place (0755, or the
+  execute bits cleared); `DownReport::mode_updated` lists these, and they are in `updated` too. A file the
+  user edited, deleted or chmod-ed is left alone and its stamp recorded; a local mode change then goes out
+  with the next `sync_up` (last writer wins), and a local mode equal to the store's is adopted. In a view,
+  base files are hard links to the drive's files, so the chmod reaches `base/` and the lock is re-applied;
+  a `work/` file whose mode the session changed is adopted when it equals the store's and is a
+  `work_conflicts` entry when the store also changed its bytes.
+- **Conflicts carry it.** The remote copy of a conflict is written 0755 when the remote object is
+  executable, the open conflict records `remote_exec`, and `Keep::Remote` places the remote bytes with that
+  mode and sets the entry's `exec`. Recording a conflict costs one HEAD.
+- **Multipart and Object Lock.** `PutOpts` has an `attrs` field. `put_locked` sends the metadata header; a
+  multipart upload sends it with the create request (S3 takes user metadata there, not on the complete);
+  `put_stream` passes it on, including the local backends' whole-body fallback.
+- **Not covered.** A mode-only put inside the stamp's resolution of the previous put (RustFS
+  `LastModified` is a timestamp text) is not seen by the stamp check. A third writer's mode change between
+  the listing and the HEAD is picked up on the next refresh. Only the execute bit is carried.
 
 **The overlay lower is writable.** `lower/` directories are 0755 and files 0644/0755, the same as `work/`.
 Overlayfs copy-up gives the upper file the lower's mode and owner, so a 0444 lower made every copied-up

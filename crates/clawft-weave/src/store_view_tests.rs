@@ -122,6 +122,27 @@ fn an_edit_is_refreshed_published_and_reported_as_a_conditional_write() {
     assert_eq!((c["mode"].as_str(), c["root_removed"].as_bool()), (Some("publish"), Some(true)), "{c}");
 }
 
+/// The E3 note "work.open_conflicts is empty while the top-level open_conflicts lists the paths" came
+/// from a grep over the pretty-printed status: the empty array was the base include's, at a deeper
+/// indent. There is no top-level key; the work prefix's conflicts are under `work`, each include's under
+/// `includes[]`. This pins that shape.
+#[test]
+fn status_lists_the_work_prefixs_open_conflicts_under_work_and_has_no_top_level_key() {
+    let r = rig();
+    let root = r.root("view");
+    r.open(&root);
+    std::fs::write(file(&root, "work/a.txt"), "mine").unwrap();
+    r.seed("proj/a.txt", "theirs");
+    let p = r.call("publish", json!({"name": r.name, "root": root})).unwrap();
+    assert_eq!(p["conflicts"], json!(["a.txt"]), "{p}");
+    let s = r.call("status", json!({"root": root})).unwrap();
+    assert_eq!(s["work"]["open_conflicts"], json!(["a.txt"]), "{s}");
+    assert!(s.get("open_conflicts").is_none(), "no top-level open_conflicts in status: {s}");
+    for i in s["includes"].as_array().unwrap() {
+        assert_eq!(i["open_conflicts"], json!([]), "a base include has none: {s}");
+    }
+}
+
 #[test]
 fn publish_is_refused_on_a_read_only_view_and_no_lease_is_taken() {
     let r = rig();

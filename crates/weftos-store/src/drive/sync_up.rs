@@ -17,7 +17,7 @@ use super::cas::hash_of;
 use super::gc::{GcReport, collect_tombstones};
 use super::conflict::{ConflictKind, record};
 use super::index::{Entry, Index};
-use super::remote::{clear_tombstone, read_tombstone, write_tombstone};
+use super::remote::{attr_exec, clear_tombstone, read_tombstone, write_tombstone};
 use super::scan::{Change, ChangeKind, scan};
 use super::{DriveError, Options, Result, SkipWhy, Skipped, log_event};
 use crate::backend::{BackendError, ObjectAttrs, ObjectBackend};
@@ -109,9 +109,10 @@ fn up<B: ObjectBackend + ?Sized>(b: &B, dest: &Path, index: &mut Index, opts: &O
                         let m = b.head(&bucket, &key)?;
                         let rb = b.get(&bucket, &key)?;
                         if hash_of(&rb) == hash {
-                            index.entries.insert(ch.path.clone(), Entry { size: data.len() as u64, mtime_ns: ch.mtime_ns, hash, etag: m.etag, exec: ch.exec });
+                            index.entries.insert(ch.path.clone(), Entry { size: data.len() as u64, mtime_ns: ch.mtime_ns, hash, etag: m.etag, exec: ch.exec, stamp: String::new() });
                         } else {
-                            record(dest, index, &ch.path, ConflictKind::BothCreated, Some((&m.etag, &rb)), Some(&hash), "")?;
+                            let rexec = attr_exec(b, &bucket, &key)?;
+                            record(dest, index, &ch.path, ConflictKind::BothCreated, Some((&m.etag, &rb, rexec)), Some(&hash), "")?;
                             rep.conflicts.push(ch.path.clone());
                         }
                     }
@@ -145,9 +146,10 @@ fn up<B: ObjectBackend + ?Sized>(b: &B, dest: &Path, index: &mut Index, opts: &O
                     Ok(m) if m.etag != entry.etag => {
                         let rb = b.get(&bucket, &key)?;
                         if hash_of(&rb) == hash {
-                            index.entries.insert(ch.path.clone(), Entry { size: data.len() as u64, mtime_ns: ch.mtime_ns, hash, etag: m.etag, exec: ch.exec });
+                            index.entries.insert(ch.path.clone(), Entry { size: data.len() as u64, mtime_ns: ch.mtime_ns, hash, etag: m.etag, exec: ch.exec, stamp: String::new() });
                         } else {
-                            record(dest, index, &ch.path, ConflictKind::BothModified, Some((&m.etag, &rb)), Some(&hash), "")?;
+                            let rexec = attr_exec(b, &bucket, &key)?;
+                            record(dest, index, &ch.path, ConflictKind::BothModified, Some((&m.etag, &rb, rexec)), Some(&hash), "")?;
                             rep.conflicts.push(ch.path.clone());
                         }
                     }
@@ -183,7 +185,8 @@ fn up<B: ObjectBackend + ?Sized>(b: &B, dest: &Path, index: &mut Index, opts: &O
                     Err(e) => return Err(e.into()),
                     Ok(m) if m.etag != entry.etag => {
                         let rb = b.get(&bucket, &key)?;
-                        record(dest, index, &ch.path, ConflictKind::RemoteModifiedLocalDeleted, Some((&m.etag, &rb)), None, "")?;
+                        let rexec = attr_exec(b, &bucket, &key)?;
+                        record(dest, index, &ch.path, ConflictKind::RemoteModifiedLocalDeleted, Some((&m.etag, &rb, rexec)), None, "")?;
                         rep.conflicts.push(ch.path.clone());
                     }
                     Ok(_) => {
@@ -205,7 +208,7 @@ fn up<B: ObjectBackend + ?Sized>(b: &B, dest: &Path, index: &mut Index, opts: &O
 }
 
 fn uploaded(dest: &Path, index: &mut Index, ch: &Change, data: &[u8], hash: String, etag: String, rep: &mut UpReport) {
-    index.entries.insert(ch.path.clone(), Entry { size: data.len() as u64, mtime_ns: ch.mtime_ns, hash, etag, exec: ch.exec });
+    index.entries.insert(ch.path.clone(), Entry { size: data.len() as u64, mtime_ns: ch.mtime_ns, hash, etag, exec: ch.exec, stamp: String::new() });
     rep.put.push(ch.path.clone());
     rep.bytes_put += data.len() as u64;
     log_event(dest, "put", &ch.path);

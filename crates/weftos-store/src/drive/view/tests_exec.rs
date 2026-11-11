@@ -224,3 +224,53 @@ fn the_base_is_still_read_only_when_the_lower_is_writable() {
     chmod(&root.join("base/docs/readme.md"), 0o644);
     assert_eq!(v.status().unwrap().tampered, [] as [&str; 0], "a write bit alone is not content or exec tampering");
 }
+
+/// Put the same bytes again with another execute attribute: the etag and size do not move.
+fn set_attr(s: &super::tests::Probe, key: &str, bytes: &str, a: ObjectAttrs) {
+    let e = s.inner.head(B, key).unwrap().etag;
+    s.inner.put_if_match_attrs(B, key, bytes.as_bytes(), &e, a).unwrap();
+}
+
+#[test]
+fn a_mode_only_change_on_the_store_reaches_the_base_and_the_work_tree_on_refresh() {
+    let s = probe();
+    let (_d, t) = tmp();
+    let root = t.join("v");
+    let (mut v, _) = ScopedView::open(&s, &rw(WorkStart::Clone), &root).unwrap();
+    assert_eq!((mode(&root.join("base/docs/readme.md")), mode(&root.join("work/a.txt"))), (0o444, 0o644));
+    set_attr(&s, "docs/readme.md", "docs", EXEC);
+    set_attr(&s, "proj/a.txt", "alpha", EXEC);
+    let r = v.refresh(&s).unwrap();
+    assert_eq!(mode(&root.join("base/docs/readme.md")), 0o555, "the base follows the store, read-only");
+    assert_eq!(mode(&root.join("work/a.txt")), 0o755);
+    assert!(r.work_updated.contains(&"a.txt".to_owned()) && r.work_conflicts.is_empty(), "{r:?}");
+    assert_eq!(r.base[0].mode_updated, ["readme.md"], "{r:?}");
+    let st = v.status().unwrap();
+    assert!(st.tampered.is_empty() && st.pending.is_empty(), "{st:?}");
+    // The other way.
+    set_attr(&s, "proj/a.txt", "alpha", ObjectAttrs::default());
+    v.refresh(&s).unwrap();
+    assert_eq!(mode(&root.join("work/a.txt")), 0o644);
+}
+
+#[test]
+fn a_mode_the_session_set_is_adopted_when_equal_and_never_overwritten_by_a_content_refresh() {
+    let s = probe();
+    let (_d, t) = tmp();
+    let root = t.join("v");
+    let (mut v, _) = ScopedView::open(&s, &rw(WorkStart::Clone), &root).unwrap();
+    chmod(&root.join("work/a.txt"), 0o755);
+    chmod(&root.join("work/d.txt"), 0o755);
+    // The store flips d.txt to executable too: the session already has it, so it is adopted.
+    set_attr(&s, "proj/d.txt", "delta", EXEC);
+    let r = v.refresh(&s).unwrap();
+    assert!(r.work_conflicts.is_empty(), "{r:?}");
+    assert_eq!((mode(&root.join("work/a.txt")), mode(&root.join("work/d.txt"))), (0o755, 0o755));
+    assert_eq!(v.status().unwrap().pending, [("a.txt".to_owned(), ChangeKind::Modify)], "only the session's own chmod is pending");
+    // New bytes for a.txt from the store while the session holds its own mode: not overwritten.
+    let e = s.inner.head(B, "proj/a.txt").unwrap().etag;
+    s.inner.put_if_match(B, "proj/a.txt", b"alpha 2", &e).unwrap();
+    let r = v.refresh(&s).unwrap();
+    assert_eq!(r.work_conflicts, ["a.txt"], "{r:?}");
+    assert_eq!((mode(&root.join("work/a.txt")), std::fs::read_to_string(root.join("work/a.txt")).unwrap()), (0o755, "alpha".to_owned()));
+}

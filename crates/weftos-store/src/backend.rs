@@ -124,6 +124,9 @@ pub struct PutOpts {
     pub retention: Option<Retention>,
     /// Put a legal hold on the version (no end date; lifted by `put_legal_hold(false)`).
     pub legal_hold: bool,
+    /// The attributes recorded with the object, as for [`ObjectBackend::put_attrs`]: on a locked
+    /// put, and on a multipart upload (sent when the upload is created).
+    pub attrs: ObjectAttrs,
 }
 
 /// A put into a versioned (locked) bucket: the object and the version that was written.
@@ -236,6 +239,16 @@ pub trait ObjectBackend: Send + Sync {
     fn attrs(&self, bucket: &str, key: &str) -> Result<ObjectAttrs, BackendError> {
         self.head(bucket, key).map(|_| ObjectAttrs::default())
     }
+    /// [`Self::list`] with, for each object, an opaque modification stamp: a token that changes
+    /// whenever the object's bytes **or its attributes** change (on RustFS the `LastModified` text
+    /// of the listing; the local backends derive one from the mtime and the execute attribute). A
+    /// refresh uses it to find a mode-only change (same etag and size) without a HEAD per object:
+    /// only an object whose stamp moved is asked for its attributes. An empty stamp means the
+    /// backend cannot say, and the caller must not assume anything changed. The default has no
+    /// stamps.
+    fn list_stamped(&self, bucket: &str, prefix: &str) -> Result<Vec<(ObjectMeta, String)>, BackendError> {
+        Ok(self.list(bucket, prefix)?.into_iter().map(|m| (m, String::new())).collect())
+    }
     /// Put with Object Lock headers (retention and/or legal hold). Needs a bucket made with
     /// [`AdminBackend::create_locked_bucket`]; others answer [`BackendError::Unsupported`].
     fn put_locked(&self, _bucket: &str, _key: &str, _data: &[u8], _opts: &PutOpts) -> Result<LockedPut, BackendError> {
@@ -272,7 +285,7 @@ pub trait ObjectBackend: Send + Sync {
             // Fits in one part: one request, lock headers and all.
             return match self.put_locked(bucket, key, &first, opts) {
                 Err(BackendError::Unsupported(_)) if opts.retention.is_none() && !opts.legal_hold => {
-                    let meta = self.put(bucket, key, &first, opts.if_none_match)?;
+                    let meta = self.put_attrs(bucket, key, &first, opts.if_none_match, opts.attrs)?;
                     Ok(LockedPut { meta, version_id: None })
                 }
                 other => other,
@@ -289,7 +302,7 @@ pub trait ObjectBackend: Send + Sync {
                 if all.len() > LOCAL_MAX {
                     return Err(BackendError::BadKey(format!("over {} MiB: this backend has no multipart upload", LOCAL_MAX / (1024 * 1024))));
                 }
-                let meta = self.put(bucket, key, &all, opts.if_none_match)?;
+                let meta = self.put_attrs(bucket, key, &all, opts.if_none_match, opts.attrs)?;
                 return Ok(LockedPut { meta, version_id: None });
             }
             Err(e) => return Err(e),

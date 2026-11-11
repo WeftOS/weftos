@@ -88,6 +88,12 @@ impl ObjectBackend for Probe {
         self.up()?;
         self.inner.copy(sb, sk, db, dk)
     }
+    fn list_stamped(&self, b: &str, p: &str) -> std::result::Result<Vec<(ObjectMeta, String)>, BackendError> {
+        self.up()?;
+        let mut v = self.inner.list_stamped(b, p)?;
+        v.extend(self.ghosts.iter().filter(|k| k.starts_with(p)).map(|k| (ObjectMeta { key: k.clone(), size: 3, etag: "x".into() }, String::new())));
+        Ok(v)
+    }
     fn list(&self, b: &str, p: &str) -> std::result::Result<Vec<ObjectMeta>, BackendError> {
         self.up()?;
         let mut v = self.inner.list(b, p)?;

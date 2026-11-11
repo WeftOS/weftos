@@ -54,6 +54,12 @@ pub struct Entry {
     /// before the attribute existed, which reads as `false`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub exec: bool,
+    /// The store's modification stamp for the version this entry was last checked against
+    /// ([`ObjectBackend::list_stamped`](crate::backend::ObjectBackend::list_stamped)); empty when
+    /// unknown (an entry from before stamps, a file this device just uploaded, a backend with none).
+    /// A refresh asks for an object's attributes only when the listing's stamp differs from this.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub stamp: String,
 }
 
 /// Whether a file's mode has any execute bit.
@@ -72,6 +78,11 @@ pub struct OpenConflict {
     /// The remote etag at conflict time; `None` means the remote object was deleted.
     pub remote_etag: Option<String>,
     pub at_ms: u64,
+    /// The remote version was executable (its object attribute). The remote copy is written with
+    /// the execute bit, and `Keep::Remote` keeps it. Absent in a record from before, which reads
+    /// as `false`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub remote_exec: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -325,7 +325,20 @@ impl ScopedView {
                 continue;
             }
             let prev = wi.entries.get(p).cloned();
+            // The session changed the file's mode (bytes the same): that is its edit, not to be
+            // overwritten by a refresh. A store mode equal to it is adopted; a content change from
+            // the store over it is a conflict.
+            let work_exec = std::fs::symlink_metadata(lay.work().join(p)).ok().filter(|m| m.is_file()).map(|m| is_exec(&m));
+            let mode_edited = matches!((&prev, work_exec), (Some(pe), Some(w)) if w != pe.exec);
             match (prev.is_some(), local_state(&lay.work(), p, prev.as_ref(), max)) {
+                (true, Ok(Local::Unchanged)) if mode_edited => {
+                    if work_exec == Some(e.exec) {
+                        let md = std::fs::symlink_metadata(lay.work().join(p))?;
+                        wi.entries.insert(p.clone(), Entry { size: md.len(), mtime_ns: mtime_ns(&md), ..e.clone() });
+                    } else {
+                        rep.work_conflicts.push(p.clone());
+                    }
+                }
                 (true, Ok(Local::Unchanged)) | (false, Ok(Local::Missing)) => {
                     let md = clone_into(&lay.work_drive().join(p), &lay.work(), p)?;
                     wi.entries.insert(p.clone(), Entry { size: md.len(), mtime_ns: mtime_ns(&md), ..e.clone() });
@@ -371,7 +384,7 @@ impl ScopedView {
         match (keep, after.entries.get(path)) {
             // Force the next publish to see a modify against the remote version.
             (Keep::Local, Some(e)) => {
-                wi.entries.insert(path.to_owned(), Entry { size: 0, mtime_ns: 0, hash: String::new(), etag: e.etag.clone(), exec: e.exec });
+                wi.entries.insert(path.to_owned(), Entry { size: 0, mtime_ns: 0, hash: String::new(), etag: e.etag.clone(), exec: e.exec, stamp: String::new() });
             }
             (Keep::Local, None) => {
                 wi.entries.remove(path);

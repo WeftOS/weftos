@@ -68,6 +68,9 @@ impl S1 for Op {
     fn list(&self, b: &str, p: &str) -> Result<Vec<ObjectMeta>, BackendError> {
         self.0.list(b, p)
     }
+    fn list_stamped(&self, b: &str, p: &str) -> Result<Vec<(ObjectMeta, String)>, BackendError> {
+        self.0.list_stamped(b, p)
+    }
 }
 
 #[derive(Deserialize, Default)]

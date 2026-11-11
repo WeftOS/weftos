@@ -735,6 +735,9 @@ impl ObjectBackend for RustfsBackend {
         check_key(key)?;
         let mut extra = self.lock_headers(opts)?;
         extra.push(("x-amz-checksum-sha256", integrity::checksum_sha256(data)));
+        if opts.attrs.executable {
+            extra.push((EXEC_HEADER, "1".into()));
+        }
         if opts.if_none_match {
             extra.push(("if-none-match", "*".into()));
         }
@@ -746,7 +749,11 @@ impl ObjectBackend for RustfsBackend {
     fn create_multipart(&self, bucket: &str, key: &str, opts: &PutOpts) -> Result<String, BackendError> {
         check_bucket(bucket)?;
         check_key(key)?;
-        let extra = self.lock_headers(opts)?;
+        let mut extra = self.lock_headers(opts)?;
+        // User metadata is set when the upload is created; Complete carries none.
+        if opts.attrs.executable {
+            extra.push((EXEC_HEADER, "1".into()));
+        }
         let r = self.send("POST", &format!("/{bucket}/{key}"), &Self::q(&[("uploads", "")]), &[], &extra)?;
         let r = self.check(r, Ctx::Object(bucket, key))?;
         xml_tag(&String::from_utf8_lossy(&r.body), "UploadId").filter(|u| !u.is_empty()).ok_or_else(|| BackendError::Io("multipart: no UploadId in the answer".into()))
@@ -936,6 +943,12 @@ impl ObjectBackend for RustfsBackend {
     }
 
     fn list(&self, bucket: &str, prefix: &str) -> Result<Vec<ObjectMeta>, BackendError> {
+        Ok(self.list_stamped(bucket, prefix)?.into_iter().map(|(m, _)| m).collect())
+    }
+
+    /// The stamp is the listing's `LastModified` text (S3 moves it on every put, a put of the same
+    /// bytes with other metadata included).
+    fn list_stamped(&self, bucket: &str, prefix: &str) -> Result<Vec<(ObjectMeta, String)>, BackendError> {
         check_bucket(bucket)?;
         let mut out = Vec::new();
         let mut token = String::new();
@@ -948,18 +961,21 @@ impl ObjectBackend for RustfsBackend {
             let r = self.check(r, Ctx::Bucket(bucket))?;
             let text = String::from_utf8_lossy(&r.body).into_owned();
             for c in xml_blocks(&text, "Contents") {
-                out.push(ObjectMeta {
-                    key: xml_tag(c, "Key").unwrap_or_default(),
-                    size: xml_tag(c, "Size").and_then(|s| s.parse().ok()).unwrap_or(0),
-                    etag: xml_tag(c, "ETag").unwrap_or_default().trim_matches('"').to_owned(),
-                });
+                out.push((
+                    ObjectMeta {
+                        key: xml_tag(c, "Key").unwrap_or_default(),
+                        size: xml_tag(c, "Size").and_then(|s| s.parse().ok()).unwrap_or(0),
+                        etag: xml_tag(c, "ETag").unwrap_or_default().trim_matches('"').to_owned(),
+                    },
+                    xml_tag(c, "LastModified").unwrap_or_default(),
+                ));
             }
             match (xml_tag(&text, "IsTruncated").as_deref(), xml_tag(&text, "NextContinuationToken")) {
                 (Some("true"), Some(t)) if !t.is_empty() => token = t,
                 _ => break,
             }
         }
-        out.sort_by(|a, b| a.key.cmp(&b.key));
+        out.sort_by(|a, b| a.0.key.cmp(&b.0.key));
         Ok(out)
     }
 }
@@ -1186,3 +1202,7 @@ mod tests;
 #[cfg(test)]
 #[path = "rustfs_prop_tests.rs"]
 mod prop_tests;
+
+#[cfg(test)]
+#[path = "rustfs_attrs_tests.rs"]
+mod attrs_tests;

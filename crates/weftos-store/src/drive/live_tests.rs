@@ -139,3 +139,54 @@ fn live_if_match_is_honoured_or_not() {
     }
     let _ = be.delete_bucket(&bucket);
 }
+
+/// A mode-only change on a real RustFS reaches a refreshed drive: same bytes, same etag and size,
+/// found through the listing's `LastModified` and one HEAD, and a conflict's remote copy carries
+/// the attribute.
+#[test]
+#[ignore = "needs a throwaway RustFS: WEFTOS_STORE_TEST_RUSTFS_ENV"]
+fn live_a_mode_only_change_reaches_a_refreshed_drive_and_conflicts_carry_it() {
+    use crate::backend::ObjectAttrs;
+    use std::os::unix::fs::PermissionsExt;
+    let x = ObjectAttrs { executable: true };
+    let envf = std::env::var("WEFTOS_STORE_TEST_RUSTFS_ENV").expect("WEFTOS_STORE_TEST_RUSTFS_ENV");
+    let scratch = tempfile::tempdir().unwrap();
+    let be = RustfsBackend::new(RustfsConfig::from_env_file(Path::new(&envf), scratch.path().join("secrets")).unwrap()).unwrap();
+    let bucket = format!("t-mode-{}", &ulid::Ulid::new().to_string().to_lowercase()[10..]);
+    be.create_bucket(&bucket, &[]).unwrap();
+    let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+
+    be.put(&bucket, "p/tool", b"#!/bin/sh\n", false).unwrap();
+    be.put(&bucket, "p/conf", b"one\n", false).unwrap();
+    let d = scratch.path().join("d");
+    materialise(&be, &bucket, "p", &d).unwrap();
+    assert_eq!(mode(&d.join("tool")) & 0o111, 0);
+    let r = sync_down(&be, &d).unwrap();
+    assert_eq!((r.unchanged, r.mode_updated.len()), (2, 0), "{r:?}");
+
+    // Mode-only put a second later (LastModified is whole seconds on some stores).
+    std::thread::sleep(Duration::from_millis(1100));
+    let e = be.head(&bucket, "p/tool").unwrap().etag;
+    be.put_if_match_attrs(&bucket, "p/tool", b"#!/bin/sh\n", &e, x).unwrap();
+    let r = sync_down(&be, &d).unwrap();
+    assert_eq!(r.mode_updated, ["tool"], "{r:?}");
+    assert_eq!(mode(&d.join("tool")), 0o755);
+    assert!(sync_up(&be, &d).unwrap().put.is_empty());
+
+    // A conflict whose remote side is executable.
+    std::fs::write(d.join("conf"), "local\n").unwrap();
+    let e = be.head(&bucket, "p/conf").unwrap().etag;
+    be.put_if_match_attrs(&bucket, "p/conf", b"remote\n", &e, x).unwrap();
+    let r = sync_down(&be, &d).unwrap();
+    assert_eq!(r.conflicts, ["conf"], "{r:?}");
+    let copy = Index::load(&d).unwrap().unwrap().conflicts["conf"].remote_copy.clone().unwrap();
+    assert_eq!(mode(&d.join(&copy)), 0o755);
+    resolve(&d, "conf", Keep::Remote).unwrap();
+    assert_eq!(mode(&d.join("conf")), 0o755);
+    assert!(sync_up(&be, &d).unwrap().put.is_empty());
+
+    for m in be.list(&bucket, "").unwrap() {
+        be.delete(&bucket, &m.key).unwrap();
+    }
+    be.delete_bucket(&bucket).unwrap();
+}
