@@ -45,12 +45,9 @@ New ignores in `CARGO_AUDIT_IGNORES`:
   leak of private-key operations. Production code only verifies RS256 signatures with
   public keys (`EncodingKey` appears only in `teams/jwt_tests.rs` with throwaway test keys).
   Revisit when a fixed `rsa` is published or `jsonwebtoken` drops it.
-- **RUSTSEC-2026-0367, -0368, -0369** (zip 1.1.4: `extract()` SUID/SGID and symlink issues,
-  fix >= 9.0.0). Reached only through `candle-core` 0.8.4, behind the optional `candle`
-  feature of `weftos-worldmodel-impls`. The only candle use in the tree is
-  `use candle_core::Device` (`candle/mod.rs`); no npz/zip loading and no `extract` call exists.
-  No candle release uses zip 9 (0.9.1: zip 1; 0.9.2 and 0.10: zip 7; 0.11.0: zip 8.6).
-  Revisit when candle moves to zip >= 9, or if the candle feature starts loading archives.
+- **RUSTSEC-2026-0367, -0368, -0369** (zip 1.1.4): cleared 2026-11-10. `candle-core`/`candle-nn`
+  moved 0.8 -> 0.11 (needs zip ^9.1.3), so no zip < 9 remains in `Cargo.lock` and the three
+  ignores are removed.
 - **RUSTSEC-2026-0374** (basic-toml unmaintained). Only via `askama_derive` <- `askama` <-
   `uniffi_bindgen`, a build-time template macro reading its own config; not resolved in
   any host-target build (`cargo tree -i basic-toml` is empty). All askama_derive releases
@@ -68,3 +65,28 @@ New ignores in `CARGO_AUDIT_IGNORES`:
   Revisit when `jsonwebtoken` ships on `elliptic-curve` 0.14 / `crypto-bigint` 0.7, or if
   any ES* algorithm is accepted.
 - **clipboard-win 5.4.1 yanked**: lockfile bump to a non-yanked release (no ignore).
+
+## 2026-11-10: advisories published after the 10-25 review
+
+Fixed by lockfile bumps (no ignore): wasmtime, wasmtime-wasi and the cranelift/pulley/wiggle
+family 48.0.7 -> 48.0.8 (RUSTSEC-2026-0420, -0422, -0423, -0424; still 48.x, no Rust bump),
+pulldown-cmark 0.13.5 -> 0.13.6 (RUSTSEC-2026-0433, via `egui_commonmark`),
+hyper 1.8.1 -> 1.12.0 (drops the unmaintained `pin-utils`, RUSTSEC-2026-0441),
+wayland-scanner 0.31.10 -> 0.31.11 (moves its quick-xml 0.39.4 to 0.41.0).
+
+- **RUSTSEC-2026-0194, -0195, quick-xml 0.37.5** (fix >= 0.41.0). The remaining copy is
+  `oxrdfio` -> `oxrdfxml`; every oxrdfxml release up to 0.2.5 (the latest) pins `quick-xml ^0.37`,
+  and `oxrdfio` has no feature to drop the RDF/XML parser. Reach: `clawft-graphify`
+  `rdf-ingest` accepts only Turtle, JSON-LD and N-Triples (`RdfIngestFormat`, extensions
+  `.ttl/.jsonld/.json/.nt`); `RdfFormat::RdfXml` is never constructed, so the XML parser is
+  linked but not invoked. Ignores stay. Revisit when oxrdfxml moves to quick-xml >= 0.41,
+  or if RDF/XML is ever accepted.
+- **Not in the `scripts/build.sh audit` scope** (standalone firmware lockfiles, each its own
+  workspace, not audited by the gate): `clawft-edge-pad-idf` has crossbeam-epoch 0.9.18
+  (RUSTSEC-2026-0204, fix >= 0.9.20; build-time dep via `ignore`/`embuild`), anyhow 1.0.102
+  (RUSTSEC-2026-0190), proc-macro-error2 (unmaintained) and a yanked enumset 1.1.12;
+  `weftos-n6-leaf` and `weftos-n6-node` have bare-metal 0.2.5 (deprecated);
+  `clawft-edge-pad`, `lgfx-bus-rgb-rs` have paste and unsafe-libyaml. None run on a host
+  or ship in a host binary. The `clawft-edge-pad-idf` lock is stale against its Cargo.toml
+  (a bare `cargo update` adds 7 packages) and needs the `esp` toolchain, so it is left for
+  the firmware owner.
