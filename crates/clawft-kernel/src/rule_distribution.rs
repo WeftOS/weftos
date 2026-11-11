@@ -197,9 +197,33 @@ impl RuleDistribution {
             Ordering::Equal => match remote.updated_at_unix.cmp(&local.updated_at_unix) {
                 Ordering::Greater => true,
                 Ordering::Less => false,
-                Ordering::Equal => remote.origin_node > local.origin_node,
+                Ordering::Equal => match remote.origin_node.cmp(&local.origin_node) {
+                    Ordering::Greater => true,
+                    Ordering::Less => false,
+                    // Same version, time and origin but a different body (a
+                    // restored node, a reused node id). Both sides must pick
+                    // the same one or the cluster never converges (G3): the
+                    // stricter body wins, then the canonical JSON text.
+                    Ordering::Equal => Self::body_wins(&local.rule, &remote.rule),
+                },
             },
         }
+    }
+
+    /// Total order on rule bodies for an exact version tie: `remote` wins when
+    /// it is strictly greater. Stricter first (active, higher severity,
+    /// `force_on_match`), then the serialized text, so the result does not
+    /// depend on which side runs the merge.
+    fn body_wins(local: &GovernanceRule, remote: &GovernanceRule) -> bool {
+        let key = |r: &GovernanceRule| {
+            (
+                r.active,
+                r.severity.clone(),
+                r.force_on_match,
+                serde_json::to_string(r).unwrap_or_default(),
+            )
+        };
+        key(remote) > key(local)
     }
 
     /// After a local Deny, decide whether to escalate to a peer that holds
@@ -385,5 +409,197 @@ mod tests {
         let back: RuleGossipEnvelope = serde_json::from_str(&json).unwrap();
         assert_eq!(back.from_node, "n1");
         assert_eq!(back.rules.len(), 1);
+    }
+
+    // ---- G3: cross-node rule order and precedence (WO-036) ----
+
+    use crate::governance::{GovernanceEngine, GovernanceRequest};
+
+    fn versioned(id: &str, sev: RuleSeverity, version: u64, ts: u64, origin: &str) -> VersionedRule {
+        VersionedRule {
+            version,
+            updated_at_unix: ts,
+            origin_node: origin.into(),
+            rule: rule(id, sev),
+        }
+    }
+
+    fn env(from: &str, rules: Vec<VersionedRule>) -> RuleGossipEnvelope {
+        RuleGossipEnvelope { from_node: from.into(), rules, set_version: 0 }
+    }
+
+    /// Order-independent fingerprint of a node's whole rule table.
+    fn canon(d: &RuleDistribution) -> Vec<String> {
+        let mut v: Vec<String> = d
+            .rules
+            .values()
+            .map(|r| serde_json::to_string(r).unwrap())
+            .collect();
+        v.sort();
+        v
+    }
+
+    fn perms<T: Clone>(xs: &[T]) -> Vec<Vec<T>> {
+        if xs.len() <= 1 {
+            return vec![xs.to_vec()];
+        }
+        let mut out = Vec::new();
+        for i in 0..xs.len() {
+            let mut rest = xs.to_vec();
+            let head = rest.remove(i);
+            for mut p in perms(&rest) {
+                p.insert(0, head.clone());
+                out.push(p);
+            }
+        }
+        out
+    }
+
+    fn converge(order: &[RuleGossipEnvelope]) -> RuleDistribution {
+        let mut d = RuleDistribution::new("observer");
+        for e in order {
+            d.merge(e);
+        }
+        d
+    }
+
+    #[test]
+    fn exact_version_tie_converges_and_the_stricter_body_wins() {
+        // Same version, time and origin, different bodies: a restored node or
+        // a reused node id. Before the fix each side kept what it saw first.
+        let e1 = env("p", vec![versioned("r", RuleSeverity::Warning, 1, 100, "node-x")]);
+        let e2 = env("q", vec![versioned("r", RuleSeverity::Critical, 1, 100, "node-x")]);
+        let ab = converge(&[e1.clone(), e2.clone()]);
+        let ba = converge(&[e2, e1]);
+        assert_eq!(canon(&ab), canon(&ba), "merge order changed the result");
+        assert_eq!(ab.active_rules()[0].severity, RuleSeverity::Critical);
+    }
+
+    #[test]
+    fn merge_converges_in_every_delivery_order() {
+        let e1 = env(
+            "n1",
+            vec![
+                versioned("a", RuleSeverity::Blocking, 2, 50, "n1"),
+                versioned("b", RuleSeverity::Warning, 1, 10, "n1"),
+                versioned("t", RuleSeverity::Advisory, 1, 100, "n1"),
+            ],
+        );
+        let e2 = env(
+            "n2",
+            vec![
+                versioned("a", RuleSeverity::Advisory, 2, 60, "n2"),
+                versioned("b", RuleSeverity::Critical, 3, 5, "n2"),
+                versioned("t", RuleSeverity::Blocking, 1, 100, "n1"),
+            ],
+        );
+        let e3 = env(
+            "n3",
+            vec![
+                versioned("a", RuleSeverity::Critical, 2, 60, "n3"),
+                versioned("b", RuleSeverity::Blocking, 3, 5, "n3"),
+                versioned("t", RuleSeverity::Critical, 1, 100, "n1"),
+            ],
+        );
+        let all = [e1, e2, e3];
+        let reference = canon(&converge(&all));
+        for order in perms(&all) {
+            let once = converge(&order);
+            assert_eq!(canon(&once), reference);
+            // Re-delivery is a no-op.
+            let mut twice = converge(&order);
+            for e in &order {
+                assert_eq!(twice.merge(e), 0, "a second delivery must change nothing");
+            }
+            assert_eq!(canon(&twice), reference);
+        }
+    }
+
+    fn kinds_for(rules: Vec<GovernanceRule>, human: bool) -> Vec<std::mem::Discriminant<GovernanceDecision>> {
+        let mut e = GovernanceEngine::new(0.5, human)
+            .with_eval_rate_limit(crate::rate_limit::RateLimitConfig::unlimited());
+        for r in rules {
+            e.add_rule(r);
+        }
+        let mut out = Vec::new();
+        for action in ["tool.read", "tool.shell", "net.fetch"] {
+            for risk in [0.0, 0.9] {
+                let mut req = GovernanceRequest::new("agent", action);
+                req.effect.risk = risk;
+                out.push(std::mem::discriminant(&e.evaluate(&req).decision));
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn converged_nodes_decide_alike_whatever_order_their_rules_load_in() {
+        let mut forced = rule("shell-deny", RuleSeverity::Blocking);
+        forced.action_selector = Some("tool.shell".into());
+        forced.force_on_match = true;
+        let e1 = env(
+            "n1",
+            vec![
+                VersionedRule::new(rule("mag", RuleSeverity::Critical), "n1", 1),
+                VersionedRule::new(rule("warn", RuleSeverity::Warning), "n1", 1),
+            ],
+        );
+        let e2 = env("n2", vec![VersionedRule::new(forced, "n2", 2)]);
+        for human in [false, true] {
+            let mut reference = None;
+            for order in perms(&[e1.clone(), e2.clone()]) {
+                let d = converge(&order);
+                let mut rules = d.active_rules();
+                for _ in 0..2 {
+                    let got = kinds_for(rules.clone(), human);
+                    assert_eq!(*reference.get_or_insert_with(|| got.clone()), got);
+                    rules.reverse();
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn known_hazard_a_newer_edit_can_loosen_a_rule_everywhere() {
+        // Characterization, not an endorsement: merge is last-writer-wins on
+        // version, not tighten-only, and an envelope carries no signature
+        // here. A higher version with `active = false` disables a blocking
+        // rule on every node it reaches. Owner decision recorded in
+        // docs/governance/r9-g3-rule-order-review.md (finding F2).
+        let mut a = RuleDistribution::new("node-a");
+        let mut forced = rule("guard", RuleSeverity::Critical);
+        forced.force_on_match = true;
+        a.upsert_local(forced.clone(), 1);
+        let mut b = RuleDistribution::new("node-b");
+        b.merge(&a.gossip_full());
+        forced.active = false;
+        b.upsert_local(forced, 2);
+        assert_eq!(a.merge(&b.gossip_full()), 1);
+        let mut e = GovernanceEngine::new(0.5, false)
+            .with_eval_rate_limit(crate::rate_limit::RateLimitConfig::unlimited());
+        for r in a.active_rules() {
+            e.add_rule(r);
+        }
+        assert!(matches!(
+            e.evaluate(&GovernanceRequest::new("agent", "tool.x")).decision,
+            GovernanceDecision::Permit
+        ));
+    }
+
+    #[test]
+    fn known_gap_escalation_cannot_forward_after_a_real_merge() {
+        // Characterization (finding F3): a merge accepts any higher version,
+        // so no hint can ever stay above the local version; `escalate` only
+        // forwards in the unit test that writes `remote_hints` directly.
+        let mut local = RuleDistribution::new("node-a");
+        local.upsert_local(rule("cron-guard", RuleSeverity::Blocking), 100);
+        let mut peer = RuleDistribution::new("node-b");
+        peer.merge(&local.gossip_full());
+        for t in 0..5 {
+            peer.upsert_local(rule("cron-guard", RuleSeverity::Blocking), 200 + t);
+        }
+        local.merge(&peer.gossip_full());
+        let out = local.escalate("a", "cron.add", &GovernanceDecision::Deny("x".into()), 9);
+        assert_eq!(out, EscalationOutcome::LocalStand);
     }
 }

@@ -239,6 +239,8 @@ mod governance_overlay_tests;
 #[cfg(all(test, feature = "exochain"))]
 mod governance_overlay_prop_tests;
 #[cfg(all(test, feature = "exochain"))]
+mod governance_g3_order_tests;
+#[cfg(all(test, feature = "exochain"))]
 mod overlay_runtime_tests;
 #[cfg(all(test, feature = "exochain"))]
 mod overlay_swap_tests;
