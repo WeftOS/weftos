@@ -365,13 +365,26 @@ impl NestedSupervisor {
                             .await,
                         Ok(Some(()))
                     );
+                    // `Child::wait` closes the child's stdin before it waits, and EOF on
+                    // that pipe makes the child SIGTERM itself. After an accepted
+                    // `kernel.shutdown` that second signal races the shutdown the RPC
+                    // started: if it lands once the guard has begun, the daemon hard-exits
+                    // ("SIGTERM during shutdown") before it saves its chain. So hold the
+                    // pipe open until the child has exited; close it early only when the
+                    // RPC was refused, which is the case the EOF cascade exists for.
+                    let held = child.stdin.take();
                     if !accepted {
                         // This pipe belongs to our Child handle. EOF invokes
                         // the child's existing SIGTERM/cascade watcher; no PID
                         // lookup or signal to a recovered process is involved.
-                        drop(child.stdin.take());
+                        drop(held);
+                        child.wait().await
+                    } else {
+                        // `held` is no longer in `child`, so `wait` has nothing to close.
+                        let status = child.wait().await;
+                        drop(held);
+                        status
                     }
-                    child.wait().await
                 };
                 if !matches!(
                     tokio::time::timeout(std::time::Duration::from_secs(15), graceful).await,
