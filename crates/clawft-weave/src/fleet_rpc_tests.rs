@@ -116,6 +116,10 @@ fn snapshot_merges_every_source_and_labels_each_field() {
     assert_eq!(snap["nodes"][0]["local"], true);
     assert_eq!(snap["nodes"][0]["instances"]["value"][0]["placement"]["workload"], "cog-b");
 
+    // Only the local node carries a MeshId: no peer wire reports one.
+    assert_eq!(snap["nodes"][0]["mesh_id"], json!({ "value": "m1", "provenance": "daemon_observed" }));
+    assert!(node(&snap, "zeta").get("mesh_id").is_none());
+
     let z = node(&snap, "zeta");
     assert_eq!(z["cluster"]["provenance"], "daemon_observed");
     assert_eq!(z["cluster"]["value"]["last_announce"], "2023-11-14T22:13:20Z");

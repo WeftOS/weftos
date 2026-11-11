@@ -56,6 +56,23 @@ async fn heartbeat_sends_the_expected_body_and_bearer() {
     assert_eq!(st["last_heartbeat"], "ok");
     assert_eq!(st["consecutive_failures"], 0);
     assert!(!st.to_string().contains(&tok));
+    assert_eq!(st["mesh_id"], Value::Null, "no MeshId on this node: reported as null, not guessed");
+}
+
+#[tokio::test]
+async fn the_node_mesh_id_is_in_the_heartbeat_report_and_in_status() {
+    use clawft_kernel::licence::{LocalMeshId, MeshId};
+    let fake = FakeDash::start().await;
+    fake.answer(HB, &[(200, "{}")]);
+    let (_d, path) = token_dir(&token('a'));
+    let dash = dashboard(config(&fake.url, &path));
+    let id = MeshId::derive(&[1; 32], &[2; 32]);
+    assert!(dash.set_mesh_id_source(LocalMeshId::new(id)));
+    assert_eq!(dash.heartbeat_once().await, Beat::Ok);
+    let body: Value = serde_json::from_str(&fake.requests(HB)[0].body).unwrap();
+    assert_eq!(body["node_id"], NODE_ID);
+    assert_eq!(body["report"]["mesh_id"], id.to_hex());
+    assert_eq!(dash.status_json()["mesh_id"], id.to_hex());
 }
 
 #[tokio::test]

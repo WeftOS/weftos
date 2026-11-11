@@ -13,6 +13,7 @@
 //! | `announced` | platform and address the peer announced (an unverified peer chooses them) | `peer_claimed` |
 //! | `facts` | signed node facts cache (`cluster.facts`) | `signed_fact` |
 //! | `mesh` | live connection detail (class, verified, heartbeat, last pong, smoothed RTT, missed pongs) | `daemon_observed` |
+//! | `mesh_id` | this daemon's own MeshId (local node only; no peer wire carries one) | `daemon_observed` |
 //! | `host` | this daemon's own hostname (local node only) | `daemon_observed` |
 //! | `load` | load average, cores, memory: this daemon's own, or what a verified peer attached to its last pong | `daemon_observed` (own) / `peer_claimed` (peer) |
 //! | `revoked` | host revocation list (`mesh.revoked`) | `daemon_observed` |
@@ -356,6 +357,11 @@ pub(crate) fn assemble(raw: Raw, extra: Extra, now: u64) -> Value {
         "placement",
     );
     let infer = section(extra.infer, &extra.infer_why, DAEMON_OBSERVED, &mut degraded, "infer");
+    // Only this daemon's own MeshId is known here: a peer's is not carried on any wire it sends,
+    // so no other node gets one (a peer's membership of this mesh is not a MeshId observation).
+    if let Some(id) = extra.licence.as_ref().and_then(|l| l["mesh_id"].as_str()) {
+        touch(&mut nodes, &raw.local_id).insert("mesh_id".into(), field(json!(id), DAEMON_OBSERVED));
+    }
     let licence = section(extra.licence, "licence runtime not started", DAEMON_OBSERVED, &mut degraded, "licence");
     let revocations = field(
         json!(raw.revoked.iter().map(|r| json!({
