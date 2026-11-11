@@ -290,6 +290,15 @@ impl MemoryRetriever for LexicalRetriever {
     }
 }
 
+/// Error from [`try_from_config`]. Without `vector-memory` (for example the
+/// browser build) no retriever is built in and nothing can fail, so the error
+/// type is uninhabited; with it, the embedding error names what was looked for.
+#[cfg(feature = "vector-memory")]
+pub type RecallBuildError = crate::embeddings::EmbeddingError;
+/// Error from [`try_from_config`]; uninhabited without `vector-memory`.
+#[cfg(not(feature = "vector-memory"))]
+pub type RecallBuildError = std::convert::Infallible;
+
 /// Build the recall for an agent from config.
 ///
 /// `Ok(None)` when disabled or when no retriever is built in. When enabled, the
@@ -299,7 +308,7 @@ impl MemoryRetriever for LexicalRetriever {
 /// hashes.
 pub fn try_from_config(
     cfg: &clawft_types::config::MemoryRecallConfig,
-) -> Result<Option<Arc<MemoryRecall>>, crate::embeddings::EmbeddingError> {
+) -> Result<Option<Arc<MemoryRecall>>, RecallBuildError> {
     if !cfg.enabled {
         return Ok(None);
     }
