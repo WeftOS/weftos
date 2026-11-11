@@ -28,9 +28,17 @@ fn team_record(
 ) -> Result<Option<LockTeam>, InitError> {
     // A team the source does not hold (init falls back to every package) has no record.
     let Some(slots) = team_slots(src, name)? else { return Ok(None) };
+    // A preset's `active` overrides are what was applied, so the lock records them.
+    let overrides = match (&opts.preset, super::teamspec::read(src, name)?) {
+        (Some(p), Some(spec)) if !spec.legacy => spec.preset(p)?.active.clone(),
+        _ => Default::default(),
+    };
     let slots = slots
         .into_iter()
-        .map(|s| LockSlot { agent: s.agent, position: s.position, active: s.active })
+        .map(|s| {
+            let active = overrides.get(&s.agent).copied().unwrap_or(s.active);
+            LockSlot { agent: s.agent, position: s.position, active }
+        })
         .collect();
     let mut hosts = prior.map(|p| p.hosts.clone()).unwrap_or_default();
     for h in &opts.hosts {
@@ -45,6 +53,11 @@ fn team_record(
         version: team_version(src, name),
         hosts,
         slots,
+        preset: if opts.agents.is_empty() {
+            opts.preset.clone()
+        } else {
+            prior.and_then(|p| p.preset.clone())
+        },
     }))
 }
 

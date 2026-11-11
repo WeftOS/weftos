@@ -22,7 +22,7 @@ pub fn render(p: &Package) -> Vec<Rendered> {
             let names: Vec<&str> = p.skills.iter().map(|s| s.name.as_str()).collect();
             fm.push_str(&format!("skills: {}\n", names.join(", ")));
         }
-        fm.push_str("model: inherit\n---\n\n");
+        fm.push_str(&format!("model: {}\n---\n\n", persona.model.as_deref().unwrap_or("inherit")));
         out.push(Rendered {
             path: format!(".claude/agents/{}.md", p.id),
             bytes: (fm + &persona.body).into_bytes(),

@@ -18,6 +18,7 @@ mod render_codex;
 mod render_grok;
 pub mod source;
 pub mod team;
+pub mod teamspec;
 
 pub use plan::{AgentInitOptions, Plan};
 pub use render::Host;

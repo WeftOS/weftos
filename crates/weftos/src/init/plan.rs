@@ -11,6 +11,7 @@ use super::lock::{LOCK_PATH, Lock, sha256_hex};
 use super::next_lock::next_lock;
 use super::birth::detect;
 use super::package::{Package, team_members};
+use super::teamspec::{self, TeamSpec};
 use super::render::{Host, Layout, Merge, Rendered, project_context_template, render_host};
 use super::source::AgentSource;
 
@@ -28,6 +29,11 @@ pub struct AgentInitOptions {
     pub from: Option<PathBuf>,
     pub team: Option<String>,
     pub agents: Vec<String>,
+    /// A preset declared by the team (`presets:` in team.yaml): overrides member
+    /// `active` and puts a member on one host.
+    pub preset: Option<String>,
+    /// Drop the preset the lock remembers for this team (`--no-preset`).
+    pub clear_preset: bool,
     /// Uninstall: packages to take out of the lock (selection is skipped).
     pub remove: Vec<String>,
     /// Uninstall: team records to drop from the lock.
@@ -142,13 +148,43 @@ fn load_source(opts: &AgentInitOptions) -> Result<AgentSource, InitError> {
     Ok(src)
 }
 
-/// Package ids requested by `--agent` / `--team` (before lock carry-over).
+/// What `--agent` / `--team` (and `--preset`) pick, before lock carry-over.
+struct Selection {
+    ids: Vec<String>,
+    team: Option<String>,
+    /// Preset: a member rendered for this one host only.
+    host_only: BTreeMap<String, Host>,
+}
+
+/// The team this run applies, if any: `--team`, else the default unless
+/// single agents were named.
+fn team_name(opts: &AgentInitOptions, removing: bool) -> Option<String> {
+    if removing {
+        return None;
+    }
+    if opts.agents.is_empty() {
+        Some(opts.team.clone().unwrap_or_else(|| DEFAULT_TEAM.to_string()))
+    } else {
+        opts.team.clone()
+    }
+}
+
 fn select(
     src: &AgentSource,
     opts: &AgentInitOptions,
+    current: Option<&TeamSpec>,
     warnings: &mut Vec<String>,
-) -> Result<(Vec<String>, Option<String>), InitError> {
+) -> Result<Selection, InitError> {
     let known = src.package_ids();
+    let preset = match (&opts.preset, current) {
+        (None, _) => None,
+        (Some(name), Some(spec)) if !spec.legacy && opts.agents.is_empty() => Some(spec.preset(name)?),
+        (Some(name), _) => {
+            return Err(InitError::Other(format!(
+                "--preset {name} needs a team with `schema: 1` and no --agent"
+            )));
+        }
+    };
     if !opts.agents.is_empty() {
         for id in &opts.agents {
             if !known.contains(id) {
@@ -158,14 +194,41 @@ fn select(
                 )));
             }
         }
-        return Ok((opts.agents.clone(), opts.team.clone()));
+        return Ok(Selection { ids: opts.agents.clone(), team: opts.team.clone(), host_only: BTreeMap::new() });
     }
     let team = opts
         .team
         .clone()
         .unwrap_or_else(|| DEFAULT_TEAM.to_string());
     match team_members(src, &team)? {
-        Some(members) => {
+        Some(mut members) => {
+            let mut host_only = BTreeMap::new();
+            if let Some(p) = preset {
+                for (id, on) in &p.active {
+                    let (from, to) = if *on {
+                        (&mut members.inactive, &mut members.active)
+                    } else {
+                        (&mut members.active, &mut members.inactive)
+                    };
+                    if let Some(i) = from.iter().position(|x| x == id) {
+                        let moved = from.remove(i);
+                        if !to.contains(&moved) {
+                            to.push(moved);
+                        }
+                    }
+                }
+                for (id, host) in &p.hosts {
+                    if !opts.hosts.contains(host) {
+                        return Err(InitError::Other(format!(
+                            "preset {}: `{id}` goes on {}, which this run does not render (add --{})",
+                            opts.preset.as_deref().unwrap_or_default(),
+                            host.as_str(),
+                            host.as_str()
+                        )));
+                    }
+                    host_only.insert(id.clone(), *host);
+                }
+            }
             let (ok, missing): (Vec<_>, Vec<_>) = members
                 .active
                 .into_iter()
@@ -176,12 +239,20 @@ fn select(
                 ));
             }
             if !members.inactive.is_empty() {
+                let phased: Vec<String> = members
+                    .inactive
+                    .iter()
+                    .map(|id| match current.and_then(|c| c.member(id)).and_then(|m| m.phase) {
+                        Some(ph) => format!("{id} (phase {ph})"),
+                        None => id.clone(),
+                    })
+                    .collect();
                 warnings.push(format!(
                     "team {team}: inactive members not installed (add with --agent): {}",
-                    members.inactive.join(", ")
+                    phased.join(", ")
                 ));
             }
-            Ok((ok, Some(team)))
+            Ok(Selection { ids: ok, team: Some(team), host_only })
         }
         None => {
             warnings.push(format!(
@@ -193,7 +264,7 @@ fn select(
                     all.push(id);
                 }
             }
-            Ok((all, Some(team)))
+            Ok(Selection { ids: all, team: Some(team), host_only: BTreeMap::new() })
         }
     }
 }
@@ -218,13 +289,69 @@ pub fn plan(opts: &AgentInitOptions) -> Result<Plan, InitError> {
     let src = load_source(opts)?;
     let mut warnings = Vec::new();
     let removing = !opts.remove.is_empty() || !opts.drop_teams.is_empty();
-    let (base, team) = if removing {
-        (Vec::new(), None)
-    } else {
-        select(&src, opts, &mut warnings)?
-    };
     let prior = Lock::read(&opts.root)?;
     let prior_lock = prior.clone().unwrap_or_else(Lock::empty);
+    // The team being applied is read strictly (a bad field refuses the run);
+    // teams already in the lock only shape the agents they share, and a team
+    // that no longer reads is reported, not fatal, so uninstall stays possible.
+    let wanted = team_name(opts, removing);
+    let current = match &wanted {
+        Some(t) => teamspec::read(&src, t)?,
+        None => None,
+    };
+    // A preset applied earlier is reused until another is named or it is cleared.
+    let resolved;
+    let opts = match (&wanted, &opts.preset) {
+        (Some(w), None) if !opts.clear_preset && opts.agents.is_empty() => {
+            let kept = prior_lock.teams.iter().find(|t| &t.name == w).and_then(|t| t.preset.clone());
+            if kept.is_some() {
+                resolved = AgentInitOptions { preset: kept, ..opts.clone() };
+                &resolved
+            } else {
+                opts
+            }
+        }
+        _ => opts,
+    };
+    if opts.clear_preset && opts.preset.is_some() {
+        return Err(InitError::Other("--preset and --no-preset together".into()));
+    }
+    let sel = if removing {
+        Selection { ids: Vec::new(), team: None, host_only: BTreeMap::new() }
+    } else {
+        select(&src, opts, current.as_ref(), &mut warnings)?
+    };
+    let (base, team) = (sel.ids, sel.team);
+    let mut specs: Vec<TeamSpec> = Vec::new();
+    let mut spec_names: BTreeSet<String> = prior_lock
+        .teams
+        .iter()
+        .filter(|t| !opts.drop_teams.contains(&t.name))
+        .map(|t| t.name.clone())
+        .collect();
+    if let Some(t) = &team {
+        spec_names.insert(t.clone());
+    }
+    for name in spec_names {
+        let spec = if wanted.as_deref() == Some(name.as_str()) {
+            current.clone()
+        } else if team.as_deref() == Some(name.as_str()) {
+            teamspec::read(&src, &name)?
+        } else {
+            match teamspec::read(&src, &name) {
+                Ok(s) => s,
+                Err(e) => {
+                    warnings.push(format!("team {name}: not applied to its agents: {e}"));
+                    None
+                }
+            }
+        };
+        if let Some(spec) = spec {
+            warnings.extend(spec.legacy_warning());
+            specs.push(spec);
+        }
+    }
+    let mut tier_unapplied: BTreeMap<Host, BTreeSet<String>> = BTreeMap::new();
     let prior_files = prior_lock.files_by_path();
     let known = src.package_ids();
     let layout = Layout {
@@ -236,7 +363,11 @@ pub fn plan(opts: &AgentInitOptions) -> Result<Plan, InitError> {
     let mut selected: BTreeSet<String> = BTreeSet::new();
     for &host in &opts.hosts {
         // Installs are cumulative per host: agents already in the lock stay.
-        let mut ids: Vec<String> = base.clone();
+        let mut ids: Vec<String> = base
+            .iter()
+            .filter(|id| sel.host_only.get(*id).is_none_or(|h| *h == host))
+            .cloned()
+            .collect();
         for id in prior_lock.agents_for(host) {
             if known.contains(&id) && !ids.contains(&id) {
                 ids.push(id);
@@ -250,7 +381,11 @@ pub fn plan(opts: &AgentInitOptions) -> Result<Plan, InitError> {
                 cache.insert(id.clone(), Package::load(&src, id)?);
             }
             selected.insert(id.clone());
-            pkgs.push(cache.remove(id).expect("cached"));
+            let (shaped, unapplied) = teamspec::shape(&specs, cache[id].clone(), host)?;
+            if unapplied {
+                tier_unapplied.entry(host).or_default().insert(id.clone());
+            }
+            pkgs.push(shaped);
         }
         for r in render_host(host, &pkgs, layout) {
             safe_rel(&r.path)?;
@@ -264,9 +399,14 @@ pub fn plan(opts: &AgentInitOptions) -> Result<Plan, InitError> {
             }
             rendered.insert(r.path.clone(), r);
         }
-        for p in pkgs {
-            cache.insert(p.id.clone(), p);
-        }
+    }
+
+    for (host, ids) in &tier_unapplied {
+        warnings.push(format!(
+            "model_tier is applied on claude only; not applied on {} for: {}",
+            host.as_str(),
+            ids.iter().cloned().collect::<Vec<_>>().join(", ")
+        ));
     }
 
     let mut items = Vec::new();

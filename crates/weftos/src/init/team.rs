@@ -38,6 +38,10 @@ pub struct ApplyRequest {
     pub pin: Option<String>,
     /// Plan and report; write nothing.
     pub dry_run: bool,
+    /// A preset the team declares (teams only).
+    pub preset: Option<String>,
+    /// Forget the preset the lock remembers for this team.
+    pub clear_preset: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -152,6 +156,8 @@ pub fn apply_request(req: &ApplyRequest) -> Result<Applied, TeamError> {
         root: req.root.clone(),
         hosts: req.hosts.clone(),
         from: req.from.clone(),
+        preset: req.preset.clone(),
+        clear_preset: req.clear_preset,
         ..Default::default()
     };
     match req.subject {
@@ -295,8 +301,18 @@ fn finish_uninstall(
         ..Default::default()
     };
     let p = plan(&opts).map_err(|e| fail(format!("planning the uninstall failed: {e}")))?;
+    // A package shared with the team being removed is re-rendered without that
+    // team's charter: that change is the uninstall's own, not source drift.
+    let reshaped: BTreeSet<&str> = lock
+        .teams
+        .iter()
+        .filter(|t| dropped(t.name.as_str(), &opts.drop_teams))
+        .flat_map(|t| t.slots.iter().map(|s| s.agent.as_str()))
+        .collect();
     if let Some(i) = p.items.iter().find(|i| {
-        matches!(i.action, Action::Create | Action::Update | Action::Overwrite) && i.merge == Merge::File
+        matches!(i.action, Action::Create | Action::Update | Action::Overwrite)
+            && i.merge == Merge::File
+            && !reshaped.contains(i.owner.as_str())
     }) {
         return Err(refuse(format!(
             "{} would change for a package that stays; re-apply that package first",
@@ -310,6 +326,10 @@ fn finish_uninstall(
         apply(&p).map_err(|e| fail(format!("writing the uninstall failed: {e}")))?
     };
     Ok(Uninstalled { plan: p, touched, removed: remove.into_iter().filter(|a| a != INDEX_OWNER).collect(), kept })
+}
+
+fn dropped(name: &str, drop: &[String]) -> bool {
+    drop.iter().any(|d| d == name)
 }
 
 #[derive(Debug, Serialize)]
@@ -329,6 +349,7 @@ pub struct TeamStatus {
     pub digest: String,
     pub hosts: Vec<String>,
     pub slots: Vec<String>,
+    pub preset: Option<String>,
     /// Digest of the source's current bundle, when the source has this team.
     pub source_digest: Option<String>,
 }
@@ -357,6 +378,7 @@ pub fn status(root: &std::path::Path, from: &Option<PathBuf>) -> Result<Status, 
                 .iter()
                 .map(|s| format!("{}{}", s.agent, if s.active { "" } else { " (inactive)" }))
                 .collect(),
+            preset: t.preset.clone(),
             source_digest: src.as_ref().and_then(|s| bundle_digest(s, Subject::Team, &t.name).ok()),
         })
         .collect();
@@ -400,6 +422,9 @@ pub fn format_status(s: &Status) -> String {
             "team {} {} sha256:{}{moved}\n  hosts: {}\n  slots: {}\n",
             t.name, t.version, t.digest, t.hosts.join(", "), t.slots.join(", ")
         ));
+        if let Some(p) = &t.preset {
+            out.push_str(&format!("  preset: {p}\n"));
+        }
     }
     for a in &s.agents {
         let state = if a.modified.is_empty() && a.missing.is_empty() {

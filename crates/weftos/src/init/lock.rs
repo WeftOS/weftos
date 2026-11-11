@@ -56,6 +56,10 @@ pub struct LockTeam {
     pub version: String,
     pub hosts: Vec<Host>,
     pub slots: Vec<LockSlot>,
+    /// The preset applied with the team; a re-apply reuses it until `--preset`
+    /// names another or `--no-preset` clears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset: Option<String>,
 }
 
 /// The project-context file apply seeded (removed again only if unmodified).
