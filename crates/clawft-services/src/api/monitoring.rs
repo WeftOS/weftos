@@ -114,7 +114,7 @@ pub enum PipelineRunStatus {
 async fn token_usage(State(state): State<ApiState>) -> Json<TokenUsageSummary> {
     use std::collections::HashMap;
 
-    let entries = state.routing_history.recent(state.routing_history.capacity());
+    let entries = state.routing_history.recent(usize::MAX);
 
     // Aggregate by (provider, model) and by principal (sender_id, D6).
     let mut by_key: HashMap<(String, String), TokenUsage> = HashMap::new();
@@ -154,8 +154,11 @@ async fn token_usage(State(state): State<ApiState>) -> Json<TokenUsageSummary> {
         sess.output_tokens = sess.output_tokens.saturating_add(out);
     }
 
-    let by_provider: Vec<TokenUsage> = by_key.into_values().collect();
-    let by_session: Vec<SessionTokenUsage> = by_session_map.into_values().collect();
+    // HashMap order differs per request; sort so the UI tables do not reshuffle on each poll.
+    let mut by_provider: Vec<TokenUsage> = by_key.into_values().collect();
+    by_provider.sort_by(|a, b| (&a.provider, &a.model).cmp(&(&b.provider, &b.model)));
+    let mut by_session: Vec<SessionTokenUsage> = by_session_map.into_values().collect();
+    by_session.sort_by(|a, b| a.session_key.cmp(&b.session_key));
     let total_requests = by_provider.iter().map(|p| p.request_count).sum();
     let total_input = by_provider.iter().map(|p| p.input_tokens).sum();
     let total_output = by_provider.iter().map(|p| p.output_tokens).sum();
@@ -172,7 +175,7 @@ async fn token_usage(State(state): State<ApiState>) -> Json<TokenUsageSummary> {
 async fn cost_breakdown(State(state): State<ApiState>) -> Json<CostBreakdown> {
     use std::collections::HashMap;
 
-    let entries = state.routing_history.recent(state.routing_history.capacity());
+    let entries = state.routing_history.recent(usize::MAX);
 
     let mut by_key: HashMap<(String, String), ProviderCost> = HashMap::new();
     let mut by_tier_map: HashMap<String, TierCost> = HashMap::new();
@@ -206,9 +209,11 @@ async fn cost_breakdown(State(state): State<ApiState>) -> Json<CostBreakdown> {
         tier_slot.total_cost_usd += cost;
     }
 
-    let by_provider: Vec<ProviderCost> = by_key.into_values().collect();
+    let mut by_provider: Vec<ProviderCost> = by_key.into_values().collect();
+    by_provider.sort_by(|a, b| (&a.provider, &a.model).cmp(&(&b.provider, &b.model)));
     let mut by_tier: Vec<TierCost> = by_tier_map.into_values().collect();
-    by_tier.sort_by_key(|t| t.tier);
+    // Unknown tier names all map to 0, so break ties by label.
+    by_tier.sort_by(|a, b| (a.tier, &a.label).cmp(&(b.tier, &b.label)));
     let total_cost_usd = by_provider.iter().map(|p| p.total_cost_usd).sum();
 
     Json(CostBreakdown {
@@ -223,13 +228,19 @@ async fn pipeline_runs(State(state): State<ApiState>) -> Json<Vec<PipelineRun>> 
     // yet). Complexity is not on `RoutingDecisionEntry`; report 0 rather
     // than inventing it. Fallback/escalation is visible via
     // `/admin/routing/decisions`.
-    let entries = state.routing_history.recent(200);
-    let runs: Vec<PipelineRun> = entries
+    // Filter to finished calls over the whole ring first, then page: taking the
+    // newest 200 before dropping unfinished ones let a burst of in-flight calls
+    // hide every finished run.
+    let history = &state.routing_history;
+    let runs: Vec<PipelineRun> = history
+        .recent(usize::MAX)
         .into_iter()
         .filter(|e| e.ok.is_some())
-        .enumerate()
-        .map(|(i, e)| PipelineRun {
-            id: format!("route-{}", entries_id_suffix(&e.ts, i)),
+        .take(PIPELINE_RUNS_PAGE)
+        .map(|e| PipelineRun {
+            // The ring-unique entry id is stable across requests; an index
+            // into this response is not (it shifts when newer runs arrive).
+            id: format!("route-{}", e.id),
             session_key: e.principal.unwrap_or_else(|| "anonymous".into()),
             model: e.model,
             complexity: 0.0,
@@ -241,20 +252,8 @@ async fn pipeline_runs(State(state): State<ApiState>) -> Json<Vec<PipelineRun>> 
     Json(runs)
 }
 
-/// Stable-ish id fragment from timestamp + index (no extra deps).
-fn entries_id_suffix(ts: &str, idx: usize) -> String {
-    // Prefer compact alphanumeric; fall back to index alone.
-    let compact: String = ts
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric())
-        .take(16)
-        .collect();
-    if compact.is_empty() {
-        format!("{idx}")
-    } else {
-        format!("{compact}-{idx}")
-    }
-}
+/// Max rows returned by `/monitoring/pipeline-runs` (newest first).
+const PIPELINE_RUNS_PAGE: usize = 200;
 
 /// Best-effort map of tier name → numeric tier for the UI.
 fn tier_label_to_number(label: &str) -> u32 {
