@@ -8,7 +8,7 @@ use serde::Serialize;
 
 use super::cas::hash_of;
 use super::index::{Index, is_exec, mtime_ns};
-use super::{DRIVE_DIR, DriveError, Result, SkipWhy, Skipped, TMP_PREFIX, check_rel};
+use super::{DRIVE_DIR, DriveError, Result, SkipWhy, Skipped, TMP_PREFIX, check_rel, is_os_metadata};
 use crate::share::{Limits, Skip, read_regular};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -56,6 +56,11 @@ pub fn scan(dest: &Path, index: &Index, limits: &Limits) -> Result<Scan> {
                 continue;
             };
             if (dir_rel.is_empty() && name == DRIVE_DIR) || name.starts_with(TMP_PREFIX) {
+                continue;
+            }
+            // Finder and volume metadata: not content, and Finder rewrites it constantly, so it is
+            // not listed as skipped either (and a directory of it is not entered).
+            if is_os_metadata(&name) {
                 continue;
             }
             let rel = if dir_rel.is_empty() { name } else { format!("{dir_rel}/{name}") };

@@ -49,6 +49,8 @@ mod tests_exec;
 mod tests_gc;
 #[cfg(test)]
 mod tests_hardening;
+#[cfg(test)]
+mod tests_mac;
 #[cfg(all(test, feature = "rustfs"))]
 mod live_hardening;
 
@@ -127,6 +129,8 @@ pub enum SkipWhy {
     TooLarge,
     /// Over `Limits::max_files` or `Limits::max_total`.
     OverBudget,
+    /// macOS Finder and volume metadata (`.DS_Store`, `._*`, `.Spotlight-V100`, ...): per machine, never content.
+    OsMetadata,
     /// Two remote keys differ only by case; the first (in key order) wins.
     CaseCollision,
     /// A symlink; never followed, never uploaded.
@@ -210,6 +214,9 @@ pub(crate) fn check_rel(rel: &str) -> std::result::Result<(), SkipWhy> {
     if first == DRIVE_DIR || first == TOMBSTONE_DIR || rel.split('/').any(|s| s.starts_with(TMP_PREFIX)) {
         return Err(SkipWhy::Reserved);
     }
+    if rel.split('/').any(is_os_metadata) {
+        return Err(SkipWhy::OsMetadata);
+    }
     if crate::share::is_dangerous_path(rel) {
         return Err(SkipWhy::Dangerous);
     }
@@ -217,6 +224,29 @@ pub(crate) fn check_rel(rel: &str) -> std::result::Result<(), SkipWhy> {
         return Err(SkipWhy::Secret);
     }
     Ok(())
+}
+
+/// A path segment macOS writes on its own: Finder's `.DS_Store` and custom-icon file, the AppleDouble
+/// `._<name>` companion a non-HFS volume or archive gets for extended attributes, and the volume
+/// service directories. They differ per machine and per user, so they are never uploaded, and a key
+/// with one is never materialised. APFS compares names without case, so the match ignores case.
+pub(crate) fn is_os_metadata(seg: &str) -> bool {
+    let s = seg.to_ascii_lowercase();
+    s.starts_with("._")
+        || matches!(
+            s.as_str(),
+            ".ds_store"
+                | ".appledouble"
+                | ".lsoverride"
+                | ".apdisk"
+                | ".volumeicon.icns"
+                | ".spotlight-v100"
+                | ".fseventsd"
+                | ".trashes"
+                | ".temporaryitems"
+                | ".documentrevisions-v100"
+                | "icon\r"
+        )
 }
 
 pub(crate) fn now_ms() -> u64 {
