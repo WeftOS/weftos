@@ -35,6 +35,29 @@ pub const DEFAULT_JWKS_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 /// Minimum gap between refreshes triggered by an unknown `kid`.
 pub const DEFAULT_MIN_REFRESH: Duration = Duration::from_secs(60);
 
+/// Claims of a verified token that callers need.
+#[derive(Debug, Clone, Default)]
+pub struct VerifiedClaims {
+    /// The `serviceurl` claim the Bot Connector put in the token, if any.
+    pub service_url: Option<String>,
+}
+
+/// Bind a verified token to the activity it arrived with: when the
+/// activity carries a `serviceUrl`, the token must carry the same
+/// `serviceurl` claim (case-insensitive, trailing `/` ignored). An
+/// activity with no `serviceUrl` has nothing to bind.
+pub fn check_service_url(claim: Option<&str>, activity_url: &str) -> Result<(), String> {
+    if activity_url.is_empty() {
+        return Ok(());
+    }
+    let norm = |s: &str| s.trim().trim_end_matches('/').to_ascii_lowercase();
+    match claim {
+        None => Err("teams: token has no serviceurl claim but the activity has a serviceUrl".into()),
+        Some(c) if norm(c) == norm(activity_url) => Ok(()),
+        Some(_) => Err("teams: activity serviceUrl does not match the token serviceurl claim".into()),
+    }
+}
+
 /// Source of the OpenID metadata and JWKS documents.
 #[async_trait]
 pub trait JwksSource: Send + Sync {
@@ -114,6 +137,12 @@ impl TeamsJwtVerifier {
     /// Verify `token`; `Ok(())` only for a correctly signed, in-date
     /// RS256 token issued by Bot Framework for this app id.
     pub async fn verify(&self, token: &str) -> Result<(), String> {
+        self.verify_claims(token).await.map(|_| ())
+    }
+
+    /// Like [`verify`](Self::verify), but returns the verified claims the
+    /// caller needs to bind the token to the request (`serviceurl`).
+    pub async fn verify_claims(&self, token: &str) -> Result<VerifiedClaims, String> {
         if token.is_empty() {
             return Err("missing bearer token".into());
         }
@@ -133,7 +162,13 @@ impl TeamsJwtVerifier {
         v.set_audience(&[self.app_id.as_str()]);
         v.set_required_spec_claims(&["exp", "iss", "aud"]);
         jsonwebtoken::decode::<serde_json::Value>(token, &key, &v)
-            .map(|_| ())
+            .map(|d| VerifiedClaims {
+                service_url: d
+                    .claims
+                    .get("serviceurl")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string),
+            })
             .map_err(|e| format!("teams: JWT rejected: {e}"))
     }
 

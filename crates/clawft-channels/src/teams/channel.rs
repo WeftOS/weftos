@@ -32,7 +32,7 @@ use clawft_plugin::error::PluginError;
 use clawft_plugin::message::MessagePayload;
 use clawft_plugin::traits::{ChannelAdapter, ChannelAdapterHost};
 
-use super::jwt::{HttpJwksSource, TeamsJwtVerifier};
+use super::jwt::{HttpJwksSource, TeamsJwtVerifier, check_service_url};
 use super::types::TeamsAdapterConfig;
 
 /// Cached OAuth2 access token entry.
@@ -385,7 +385,7 @@ fn build_router(
 async fn handle_activity(
     axum::extract::State(state): axum::extract::State<WebhookState>,
     headers: axum::http::HeaderMap,
-    axum::Json(activity): axum::Json<Activity>,
+    body: axum::body::Bytes,
 ) -> axum::http::StatusCode {
     // Extract Authorization: Bearer <jwt>; reject otherwise.
     let auth = match headers
@@ -398,9 +398,33 @@ async fn handle_activity(
             return axum::http::StatusCode::UNAUTHORIZED;
         }
     };
-    let token = auth.strip_prefix("Bearer ").unwrap_or(auth);
-    if let Err(e) = state.verifier.verify(token).await {
-        warn!(error = %e, "teams webhook: rejected activity with invalid JWT");
+    // Scheme is mandatory: a bare token without `Bearer ` is refused.
+    let token = match auth.get(..7) {
+        Some(p) if p.eq_ignore_ascii_case("bearer ") => &auth[7..],
+        _ => {
+            warn!("teams webhook: rejected activity without Bearer scheme");
+            return axum::http::StatusCode::UNAUTHORIZED;
+        }
+    };
+    let claims = match state.verifier.verify_claims(token).await {
+        Ok(c) => c,
+        Err(e) => {
+            warn!(error = %e, "teams webhook: rejected activity with invalid JWT");
+            return axum::http::StatusCode::UNAUTHORIZED;
+        }
+    };
+
+    // Only now is the body parsed: a bad token is 401 whatever the body is.
+    let activity: Activity = match serde_json::from_slice(&body) {
+        Ok(a) => a,
+        Err(e) => {
+            debug!(error = %e, "teams webhook: unparseable activity body");
+            return axum::http::StatusCode::BAD_REQUEST;
+        }
+    };
+
+    if let Err(e) = check_service_url(claims.service_url.as_deref(), &activity.service_url) {
+        warn!(error = %e, "teams webhook: rejected activity, serviceUrl not bound to token");
         return axum::http::StatusCode::UNAUTHORIZED;
     }
 
@@ -461,7 +485,9 @@ mod tests {
 
     use clawft_types::secret::SecretString;
 
-    use super::super::jwt_tests::fixture_verifier_and_token;
+    use super::super::jwt_tests::{
+        fixture_verifier_and_token, fixture_verifier_and_token_with_serviceurl,
+    };
 
     fn make_config() -> TeamsAdapterConfig {
         TeamsAdapterConfig {
@@ -681,7 +707,7 @@ mod tests {
             "type": "message",
             "id": "act-1",
             "text": "hi from teams",
-            "serviceUrl": "https://smba.example.com/amer/",
+            "serviceUrl": "https://smba.example/",
             "from": {"id": "user-7", "name": "Alice"},
             "conversation": {"id": "convo-77"}
         });
@@ -763,6 +789,88 @@ mod tests {
         }
         assert!(host.delivered.lock().unwrap().is_empty());
         server_handle.abort();
+    }
+
+    /// Router plus host; requests go in-process via `oneshot` (no sockets).
+    fn serve(verifier: TeamsJwtVerifier) -> (Arc<MockHost>, axum::Router) {
+        let host = Arc::new(MockHost::default());
+        let app = build_router(host.clone(), Vec::new(), Arc::new(verifier));
+        (host, app)
+    }
+
+    async fn post(
+        app: &axum::Router,
+        auth: Option<String>,
+        body: impl Into<axum::body::Body>,
+    ) -> u16 {
+        use tower::ServiceExt;
+        let mut req = axum::http::Request::builder()
+            .method("POST")
+            .uri("/api/messages")
+            .header("content-type", "application/json");
+        if let Some(a) = auth {
+            req = req.header("authorization", a);
+        }
+        let resp = app
+            .clone()
+            .oneshot(req.body(body.into()).unwrap())
+            .await
+            .unwrap();
+        resp.status().as_u16()
+    }
+
+    fn msg(service_url: &str) -> String {
+        serde_json::json!({"type":"message","id":"a","text":"hi","serviceUrl":service_url,
+            "from":{"id":"u"},"conversation":{"id":"c"}})
+        .to_string()
+    }
+
+    #[tokio::test]
+    async fn inbound_rejects_token_without_bearer_scheme() {
+        let (verifier, jwt) = fixture_verifier_and_token();
+        let (host, app) = serve(verifier);
+        for auth in [jwt.clone(), format!("Basic {jwt}"), format!("Bearer{jwt}")] {
+            assert_eq!(post(&app, Some(auth), msg("https://smba.example/")).await, 401);
+        }
+        assert!(host.delivered.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn inbound_bad_token_is_401_whatever_the_body() {
+        let (verifier, _) = fixture_verifier_and_token();
+        let (host, app) = serve(verifier);
+        for body in ["not json at all", "{\"type\":42}", ""] {
+            let st = post(&app, Some("Bearer not-a-jwt".into()), body.to_string()).await;
+            assert_eq!(st, 401, "body {body:?}");
+        }
+        assert!(host.delivered.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn inbound_valid_token_bad_body_is_400() {
+        let (verifier, jwt) = fixture_verifier_and_token();
+        let (_, app) = serve(verifier);
+        assert_eq!(post(&app, Some(format!("Bearer {jwt}")), "not json".to_string()).await, 400);
+    }
+
+    #[tokio::test]
+    async fn inbound_rejects_serviceurl_mismatch() {
+        let (verifier, jwt) = fixture_verifier_and_token();
+        let (host, app) = serve(verifier);
+        let st = post(&app, Some(format!("Bearer {jwt}")), msg("https://attacker.example/")).await;
+        assert_eq!(st, 401);
+        assert!(host.delivered.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn inbound_rejects_missing_serviceurl_claim() {
+        let (verifier, jwt) = fixture_verifier_and_token_with_serviceurl(None);
+        let (host, app) = serve(verifier);
+        let auth = Some(format!("Bearer {jwt}"));
+        assert_eq!(post(&app, auth.clone(), msg("https://smba.example/")).await, 401);
+        // An activity with no serviceUrl has nothing to bind: accepted.
+        assert_eq!(post(&app, auth, msg("")).await, 200);
+        assert_eq!(host.delivered.lock().unwrap().len(), 1);
     }
 
     // -- Mock host ---------------------------------------------------
