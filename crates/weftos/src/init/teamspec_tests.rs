@@ -4,11 +4,11 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::apply::apply;
-use super::plan::{AgentInitOptions, Plan, plan};
-use super::render::Host;
-use super::team::{ApplyRequest, apply_request, uninstall};
-use super::digest::Subject;
+use crate::init::apply::apply;
+use crate::init::plan::{AgentInitOptions, Plan, plan};
+use crate::init::render::Host;
+use crate::init::team::{ApplyRequest, apply_request, uninstall};
+use crate::init::digest::Subject;
 
 fn put(root: &Path, rel: &str, text: &str) {
     let p = root.join(rel);
