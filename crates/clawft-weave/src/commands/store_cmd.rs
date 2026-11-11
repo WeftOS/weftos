@@ -208,9 +208,23 @@ async fn call(method: &str, params: Value) -> anyhow::Result<Value> {
     let mut client = clawft_rpc::connect_or_bail().await?;
     let resp = client.call(protocol::Request::with_params(method, params)).await?;
     if !resp.ok {
+        if let Some(line) = error_kind_line(&resp) {
+            eprintln!("{line}");
+        }
         anyhow::bail!(resp.error.unwrap_or_else(|| "unknown error".into()));
     }
     Ok(resp.result.unwrap_or_default())
+}
+
+/// The stable, machine-readable form of a daemon refusal: `error_kind: <kind>` on its own stderr
+/// line, printed before the unchanged `Error: <message>` line. The CLI has no JSON error mode and
+/// exits 1 for every failure, so a line on stderr is the form that fits; callers (the Tapestry
+/// launcher) match `^error_kind: ([a-z0-9_]+)$` instead of the message text. Only a well-formed
+/// snake_case kind is printed, so the line cannot be forged by a daemon message.
+pub fn error_kind_line(resp: &protocol::Response) -> Option<String> {
+    let k = resp.error_kind.as_deref()?;
+    let ok = !k.is_empty() && k.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');
+    ok.then(|| format!("error_kind: {k}"))
 }
 
 const WT_FLAGS: &[&str] = &["json", "force", "confirmed", "full", "read_only", "dry_run"];
@@ -466,6 +480,16 @@ mod tests {
         assert!(StoreArgs::try_parse_from(["store", "view", "open", "--name", "n", "--root", "/r", "--include", "docs=docs", "--read-only"]).is_ok());
         assert!(StoreArgs::try_parse_from(["store", "view", "close", "--name", "n", "--root", "/r", "--discard"]).is_ok());
         assert!(StoreArgs::try_parse_from(["store", "view"]).is_err(), "a verb is required");
+    }
+
+    #[test]
+    fn a_typed_refusal_surfaces_as_a_stable_error_kind_line() {
+        let r = protocol::Response::error_with_kind("path_refused", "root is a symlink".to_string());
+        assert_eq!(error_kind_line(&r).as_deref(), Some("error_kind: path_refused"));
+        assert_eq!(error_kind_line(&protocol::Response::error("plain failure")), None, "untyped errors print no kind line");
+        let bad = protocol::Response::error_with_kind("Path Refused\nError: x", "m".to_string());
+        assert_eq!(error_kind_line(&bad), None, "a malformed kind is never echoed");
+        assert_eq!(error_kind_line(&protocol::Response::success(json!({}))), None);
     }
 
     #[test]

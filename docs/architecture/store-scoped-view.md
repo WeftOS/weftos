@@ -338,6 +338,10 @@ params return `"invalid_params"`. Clients branch on the kind, not the message te
 (`daemon_facade.rs`) does not route `store.view.*`, so the kind reaches RPC clients (`weaver`, Tapestry)
 only. Other failures keep no kind.
 
+The `weaver store` CLI surfaces the kind on stderr as its own line, `error_kind: path_refused`,
+printed before the unchanged `Error: <message>` line (exit status 1 as for every failure). Untyped
+failures print no such line. Scripts match `^error_kind: ([a-z0-9_]+)$` rather than the message.
+
 | Verb | RPC | Prints | Records |
 |---|---|---|---|
 | `open` | `store.view.open` | root, `view.json` path, spec hash, lease, files, bytes, fetched, recovered, took-over holder, skipped | activity `ViewOpen`, chain `store.view.open` |
