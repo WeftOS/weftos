@@ -255,6 +255,7 @@ fn install(env: &AgentInstallEnv, p: &AgentInstallPayload) -> Result<Value, Refu
         },
         pin: Some(p.pin_hex().to_string()),
         dry_run: false,
+        preset: None,
     };
     let applied = apply_request(&req).map_err(|e| Refusal { refused: e.refused, message: e.message })?;
     let (first, touched, already) = (applied.plan, applied.touched, applied.already);

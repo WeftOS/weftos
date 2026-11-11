@@ -49,6 +49,7 @@ impl Lab {
             from: Some(self.agents.clone()),
             pin: None,
             dry_run: false,
+            preset: None,
         }
     }
 

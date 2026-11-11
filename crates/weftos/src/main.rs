@@ -44,6 +44,9 @@ enum Cli {
         /// Team to install (agents/teams/<team>/team.yaml; default weftos-core)
         #[arg(long)]
         team: Option<String>,
+        /// Apply a preset the team declares (presets: in team.yaml)
+        #[arg(long, value_name = "NAME")]
+        preset: Option<String>,
         /// Install an individual agent package (repeatable)
         #[arg(long = "agent", value_name = "ID")]
         agents: Vec<String>,
@@ -86,6 +89,7 @@ async fn main() {
             global,
             from,
             team,
+            preset,
             agents,
         } => {
             let hosts: Vec<weftos::init::Host> = [
@@ -97,7 +101,7 @@ async fn main() {
             .filter_map(|(on, h)| on.then_some(h))
             .collect();
             let agent_flags =
-                plan || apply || global || from.is_some() || team.is_some() || !agents.is_empty();
+                plan || apply || global || from.is_some() || team.is_some() || preset.is_some() || !agents.is_empty();
             if !hosts.is_empty() {
                 let root = if global {
                     match std::env::var_os("HOME") {
@@ -118,6 +122,7 @@ async fn main() {
                     global,
                     from,
                     team,
+                    preset,
                     agents,
                     ..Default::default()
                 };
@@ -125,7 +130,7 @@ async fn main() {
             }
             if agent_flags {
                 eprintln!(
-                    "--plan/--apply/--global/--from/--team/--agent need a host flag: --claude, --grok and/or --codex"
+                    "--plan/--apply/--global/--from/--team/--preset/--agent need a host flag: --claude, --grok and/or --codex"
                 );
                 std::process::exit(2);
             }

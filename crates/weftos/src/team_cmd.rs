@@ -49,6 +49,9 @@ pub enum TeamCmd {
         /// Refuse unless the bundle digest is this (sha256:<hex>)
         #[arg(long, value_name = "DIGEST")]
         pin: Option<String>,
+        /// Apply a preset the team declares (presets: in team.yaml)
+        #[arg(long, value_name = "NAME", conflicts_with = "package")]
+        preset: Option<String>,
         /// Report what would happen; write nothing
         #[arg(long)]
         plan: bool,
@@ -95,7 +98,7 @@ fn report(e: &TeamError) -> i32 {
 
 pub fn run(cmd: TeamCmd) -> i32 {
     match cmd {
-        TeamCmd::Apply { name, project, package, hosts: h, from, pin, plan, json } => {
+        TeamCmd::Apply { name, project, package, hosts: h, from, pin, preset, plan, json } => {
             let req = ApplyRequest {
                 root: project,
                 subject: if package { Subject::Agent } else { Subject::Team },
@@ -104,6 +107,7 @@ pub fn run(cmd: TeamCmd) -> i32 {
                 from,
                 pin: pin.map(|p| p.strip_prefix("sha256:").unwrap_or(&p).to_string()),
                 dry_run: plan,
+                preset,
             };
             match apply_request(&req) {
                 Ok(a) if json => {

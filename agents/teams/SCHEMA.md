@@ -4,8 +4,25 @@ ADR-112 section 1. A team with `schema: 1` is checked by `scripts/agents-team-va
 (called from `scripts/agents-validate.mjs`, so the `agents-validate` command and gate check
 17 cover it; fixtures and tests: `scripts/agents-team-validate.test.mjs`,
 `scripts/fixtures/agents-teams/`). A file without `schema` is a legacy team and only gets the
-old checks. `weftos init` still reads `lead`, `members[].agent` (a trailing `@version` is
-ignored), `members[].active` and `shared_skills`; every other field is ignored by it today.
+old checks. `weftos init` and `weftos team apply` read a `schema: 1` team strictly: an undeclared
+field, a wrong type or an unknown value refuses the run and names the field. What they do with each:
+
+| Field | Applied as |
+|---|---|
+| `schema`, `name`, `version`, `description` | Checked (`schema` must be 1, `name` must equal the directory, the rest must be text). |
+| `lead`, `shared_skills`, `members[].agent` | Selected for install; `agent@version` must equal the catalog version. |
+| `members[].active`, `phase` | Inactive members are not installed; the plan names their phase. `active` must be a boolean. |
+| `members[].position` | Order of the lock slots. |
+| `members[].tools` | Claude `tools:` (narrowing only). Refused on grok and codex, whose agent files have no tool list. |
+| `members[].model_tier` | Claude `model:` (`top` opus, `mid` sonnet, `small` haiku). Not applied on grok or codex; the plan warns. |
+| `members[].nickname`, `one_job`, `authority`, `owner`, `tiers`, `must_not` | "Team charter" section in the rendered agent, every host. |
+| `edges`, `write_authority`, `team_rules` | Same section: the member's own edges, all write holders, all rules. |
+| `hosts` | The host's `tool_map` in that section, on that host only. |
+| `presets` | `--preset NAME` (`weftos init`, `weftos team apply`): overrides `active`, puts a member on one host. |
+
+A legacy team (no `schema`) is read as before and the plan lists the fields it does not apply.
+Two applied teams that share a package get both charters; they may not disagree on its `tools` or
+`model_tier`. The lock does not record the preset; `active` overrides are recorded in the slots.
 
 Method only: no project facts, client names or memory in a team file (ADR-112 section 6;
 `scripts/agents-leak-check.sh` enforces it).

@@ -10,6 +10,7 @@ use super::source::AgentSource;
 /// One file inside a skill directory, path relative to the skill root.
 pub type SkillFile = (String, Vec<u8>);
 
+#[derive(Clone)]
 pub struct Skill {
     pub name: String,
     pub description: String,
@@ -18,19 +19,24 @@ pub struct Skill {
 }
 
 /// The spawnable persona from `AGENT.md`.
+#[derive(Clone)]
 pub struct Persona {
     pub description: String,
     pub tools: Vec<String>,
+    /// Claude `model:` alias set by a team's `model_tier` (None renders `inherit`).
+    pub model: Option<String>,
     pub nickname: Option<String>,
     pub body: String,
 }
 
+#[derive(Clone)]
 pub struct ContextKey {
     pub key: String,
     pub description: String,
     pub required: bool,
 }
 
+#[derive(Clone)]
 pub struct Package {
     pub id: String,
     /// `kind:` from the manifest (`specialist`, `lane`, `skill`, `template`, ...).
@@ -134,6 +140,7 @@ impl Package {
                 Some(Persona {
                     description: str_field(&fm, "description").unwrap_or_default(),
                     tools: list_field(&fm, "tools"),
+                    model: None,
                     nickname: str_field(&fm, "nickname")
                         .or_else(|| str_field(&manifest, "nickname"))
                         .filter(|n| !n.starts_with('(')),
