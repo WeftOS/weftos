@@ -399,6 +399,16 @@ fn wire_licence(
     }))
 }
 
+/// A stop or unload on the node re-probes and publishes its facts before the
+/// answer (card b71cd973). Without this the daemon serves facts up to a probe
+/// interval old, and the controller judges the next placement on them.
+fn wire_facts_refresher(host: &WorkloadHostService, membership: Arc<clawft_kernel::cluster::ClusterMembership>) {
+    host.set_facts_refresher(Arc::new(move || {
+        let m = membership.clone();
+        Box::pin(crate::node_facts_rpc::refresh_live_now(m))
+    }));
+}
+
 async fn build(
     kernel: &Arc<RwLock<Kernel<NativePlatform>>>,
 ) -> Result<Arc<PlacementControlPlane>, String> {
@@ -547,11 +557,7 @@ async fn build(
     })?);
     // A stop or unload publishes the memory it freed before it answers, so the
     // controller's next placement is judged on it (card b71cd973).
-    let refresh_membership = membership.clone();
-    local.set_facts_refresher(Arc::new(move || {
-        let m = refresh_membership.clone();
-        Box::pin(crate::node_facts_rpc::refresh_live_now(m))
-    }));
+    wire_facts_refresher(&local, membership.clone());
     // ADR-106 phase 3: grant plus approval before a Cognitum-origin cog runs here.
     local.set_licence_gate(crate::licence_steward::run_gate(policy.store()));
     // Mesh-routed `dashboard.*` calls from an authorised controller key.
@@ -1029,6 +1035,10 @@ pub(crate) mod tests;
 #[cfg(test)]
 #[path = "workload_place_rpc_daemon_tests.rs"]
 mod daemon_tests;
+
+#[cfg(test)]
+#[path = "workload_place_rpc_facts_tests.rs"]
+mod facts_tests;
 
 #[cfg(test)]
 mod revocation_wiring_tests {
