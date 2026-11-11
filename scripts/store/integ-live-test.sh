@@ -27,11 +27,12 @@ rand_hex() { head -c "$1" /dev/urandom | od -An -tx1 | tr -d ' \n'; }
 
 start() {
     local name="$1" port access secret
+    local EXTRA_ENV=(); [ "$name" = n ] && EXTRA_ENV=("${NOTIFY_ENV[@]}")
     port="$(free_port)"
     access="live$(rand_hex 6)"
     secret="$(rand_hex 20)"
     mkdir -p "$WORK/$name/data"
-    RUSTFS_ACCESS_KEY="$access" RUSTFS_SECRET_KEY="$secret" \
+    env RUSTFS_ACCESS_KEY="$access" RUSTFS_SECRET_KEY="$secret" ${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"} \
         "$BIN" server --address "127.0.0.1:$port" "$WORK/$name/data" >"$WORK/$name/log" 2>&1 &
     PIDS+=("$!")
     local up=""
@@ -48,6 +49,18 @@ start() {
 
 start a
 start b
+# A third instance with a webhook notify target `wake` pointing at a loopback sink, for the L1 follower
+# relay test (needs RUSTFS_NOTIFY_ENABLE and RUSTFS_OUTBOUND_ALLOW_ORIGINS, or put_bucket_notification
+# fails with "No notify targets configured").
+SINK_PORT="$(free_port)"
+python3 "$REPO/scripts/store/notify-sink.py" "$SINK_PORT" "$WORK/events.jsonl" &
+PIDS+=("$!")
+: >"$WORK/events.jsonl"
+NOTIFY_ENV=(RUSTFS_OUTBOUND_ALLOW_ORIGINS="http://127.0.0.1:$SINK_PORT" RUSTFS_NOTIFY_ENABLE=true
+    RUSTFS_NOTIFY_WEBHOOK_ENABLE_WAKE=on RUSTFS_NOTIFY_WEBHOOK_ENDPOINT_WAKE="http://127.0.0.1:$SINK_PORT"
+    RUSTFS_NOTIFY_WEBHOOK_QUEUE_DIR_WAKE="$WORK/nq")
+mkdir -p "$WORK/nq"
+start n
 export WEFTOS_STORE_TEST_RUSTFS_ENV="$WORK/a.env"
 export WEFTOS_STORE_TEST_CLIENT_RUSTFS_ENVS="$WORK/a.env:$WORK/b.env"
 cd "$REPO"
@@ -69,6 +82,9 @@ run scripts/build.sh test weftos-store --features rustfs --filter live_follower_
 # S1's own live suite (RustFS transport, grants, Object Lock, retention; on a branch that carries S1's
 # one-creator change it also runs the one-creator provisioning proof). Slowest slice: 70 to 180 s.
 run scripts/build.sh test weftos-store --features rustfs --filter tests::live_ --ignored
+# S2 L1 follower relay: a bucket notification wakes the follower before its fallback poll
+WEFTOS_STORE_TEST_RUSTFS_ENV="$WORK/n.env" WEFTOS_STORE_TEST_NOTIFY_FILE="$WORK/events.jsonl" \
+    run scripts/build.sh test weftos-store --features rustfs --filter live_a_bucket_notification --ignored
 # S5 x S2/S1
 run scripts/build.sh test clawft-weave --filter a_promoted_worktree_stays_on_the_clients_instance --ignored
 exit $rc
