@@ -508,3 +508,11 @@ fn bad_specs_are_refused_before_anything_is_created() {
     assert!(rep.skipped.iter().any(|(_, k)| k.path == "dev/null" && k.why == SkipWhy::Reserved));
     let _ = ChangeKind::Create;
 }
+
+#[test]
+fn a_limits_object_naming_some_limits_keeps_the_defaults_for_the_rest() {
+    let l: ViewLimits = serde_json::from_str(r#"{"max_file": 1024}"#).unwrap();
+    let d = ViewLimits::default();
+    assert_eq!((l.max_file, l.max_files, l.max_total), (1024, d.max_files, d.max_total));
+    assert_eq!(serde_json::from_str::<ViewLimits>("{}").unwrap(), d);
+}
