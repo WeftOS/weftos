@@ -122,6 +122,39 @@ pub(crate) fn fixture_verifier_and_token() -> (TeamsJwtVerifier, String) {
     (verifier(&src), tok)
 }
 
+/// Same as [`fixture_verifier_and_token`] but the token's `serviceurl`
+/// claim is `service_url` (`None` omits the claim).
+pub(crate) fn fixture_verifier_and_token_with_serviceurl(
+    service_url: Option<&str>,
+) -> (TeamsJwtVerifier, String) {
+    let src = StubSource::new(&[key_a()]);
+    let mut c = good_claims();
+    match service_url {
+        Some(u) => c["serviceurl"] = serde_json::json!(u),
+        None => {
+            c.as_object_mut().unwrap().remove("serviceurl");
+        }
+    }
+    (verifier(&src), sign(key_a(), Some("key-a"), &c))
+}
+
+#[test]
+fn service_url_binding() {
+    assert!(check_service_url(Some("https://a.example/"), "https://A.example").is_ok());
+    assert!(check_service_url(Some("https://a.example/"), "").is_ok());
+    assert!(check_service_url(None, "").is_ok());
+    assert!(check_service_url(None, "https://a.example/").is_err());
+    assert!(check_service_url(Some("https://a.example/"), "https://evil.example/").is_err());
+}
+
+#[tokio::test]
+async fn verify_claims_returns_serviceurl() {
+    let src = StubSource::new(&[key_a()]);
+    let tok = sign(key_a(), Some("key-a"), &good_claims());
+    let c = verifier(&src).verify_claims(&tok).await.unwrap();
+    assert_eq!(c.service_url.as_deref(), Some("https://smba.example/"));
+}
+
 #[tokio::test]
 async fn valid_token_accepted() {
     let src = StubSource::new(&[key_a(), key_b()]);
