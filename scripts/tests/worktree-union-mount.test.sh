@@ -12,7 +12,6 @@ mkdir -p "$t/bin" "$t/mnt" "$t/store/buckets/p-01abc/assets/models" "$t/store/bu
 cat >"$t/bin/weaver" <<'W'
 #!/usr/bin/env bash
 [ "$1 $2 $3" = "store worktree buckets" ] && echo "w-01abc-aaaaaaaaaaaa p-01abc"
-[ "$1 $2" = "project id" ] && echo 01ABC
 exit 0
 W
 chmod +x "$t/bin/weaver"
