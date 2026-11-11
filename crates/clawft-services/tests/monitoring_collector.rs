@@ -499,3 +499,19 @@ async fn aggregate_rows_have_a_stable_sorted_order() {
     sorted.sort();
     assert_eq!(labels, sorted, "by_tier sorted by (tier, label)");
 }
+
+/// `with_capacity(0)` is documented as unbounded, but every handler asked for
+/// `capacity()` rows, i.e. zero, so an unbounded ring always read as empty.
+#[tokio::test]
+async fn unbounded_ring_is_not_reported_as_empty() {
+    let h = harness_with(RoutingDecisionHistory::with_capacity(0));
+    finish(&h.history, &dec("p", "m", Some("haiku"), "a", 0.5), true, 10, 4, 7);
+    let u = h.get("/api/monitoring/token-usage").await;
+    assert_eq!((u["total_input"].as_u64(), u["total_requests"].as_u64()), (Some(10), Some(1)));
+    let c = h.get("/api/monitoring/costs").await;
+    assert!((c["total_cost_usd"].as_f64().unwrap() - 0.5).abs() < 1e-9);
+    let r = h.get("/api/monitoring/pipeline-runs").await;
+    assert_eq!(r.as_array().unwrap().len(), 1);
+    assert_eq!(h.history.recent(10).len(), 1);
+    assert_eq!(h.history.query(Default::default()).len(), 1, "query() default limit");
+}
