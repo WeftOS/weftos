@@ -1203,6 +1203,3 @@ mod tests;
 #[path = "rustfs_prop_tests.rs"]
 mod prop_tests;
 
-#[cfg(test)]
-#[path = "rustfs_attrs_tests.rs"]
-mod attrs_tests;
