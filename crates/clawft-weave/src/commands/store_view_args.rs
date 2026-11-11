@@ -3,7 +3,8 @@
 //!
 //! ```text
 //! weaver store view open    --name <store> --root <abs> (--spec <file.json> | --include P[=AT].. [--work P [--work-start clone|empty]]
-//!                           [--deny PAT].. [--mount-point DIR].. [--lease-ttl-ms N] [--device D]) [--read-only]
+//!                           [--deny PAT].. [--mount-point DIR].. [--lease-ttl-ms N] [--device D]
+//!                           [--max-file BYTES] [--max-files N] [--max-total BYTES]) [--read-only]
 //! weaver store view status|refresh|renew --root <abs> [--name <store>]
 //! weaver store view publish --name <store> --root <abs>
 //! weaver store view resolve --name <store> --root <abs> --path <rel> --keep local|remote
@@ -12,13 +13,15 @@
 //!
 //! `--spec` is read here, by the CLI, and sent as the `spec` param: the daemon never opens a path the
 //! caller names for the spec. The file is a `ViewSpec` JSON without `bucket` (the bucket is the one
-//! `--name` binds to). `--spec` and the spec flags are alternatives; mixing them is refused.
+//! `--name` binds to; there is no `--bucket` flag and the CLI refuses one). `--spec` and the spec flags
+//! are alternatives; mixing them is refused. `limits` is `--max-file`, `--max-files`, `--max-total`
+//! (or `"limits": {...}` in the file); each omitted one keeps the daemon default.
 
 use serde_json::{Map, Value, json};
 
 const FLAGS: &[&str] = &["json", "read_only", "publish", "discard"];
 const REPEAT: &[&str] = &["include", "deny", "mount_point"];
-const SPEC_FLAGS: &[&str] = &["include", "work", "work_start", "deny", "mount_point", "lease_ttl_ms", "device"];
+const SPEC_FLAGS: &[&str] = &["include", "work", "work_start", "deny", "mount_point", "lease_ttl_ms", "device", "max_file", "max_files", "max_total"];
 
 /// `--key value` pairs to the daemon's params. `agent` and `host` come from the caller.
 pub fn view_params(rest: &[String], agent: &str, host: &str) -> anyhow::Result<Value> {
@@ -40,6 +43,9 @@ pub fn view_params(rest: &[String], agent: &str, host: &str) -> anyhow::Result<V
         } else {
             m.insert(k, Value::String(v));
         }
+    }
+    if m.contains_key("bucket") {
+        anyhow::bail!("there is no --bucket: the view's bucket is the one --name binds to");
     }
     let flagged = SPEC_FLAGS.iter().any(|f| m.contains_key(*f) || rep.contains_key(*f));
     if let Some(file) = m.remove("spec") {
@@ -92,6 +98,16 @@ fn flag_spec(m: &mut Map<String, Value>, rep: &Map<String, Value>) -> anyhow::Re
     if let Some(d) = m.remove("device") {
         spec.insert("device".into(), d);
     }
+    let mut limits = Map::new();
+    for (flag, field) in [("max_file", "max_file"), ("max_files", "max_files"), ("max_total", "max_total")] {
+        if let Some(v) = m.remove(flag) {
+            let n: u64 = v.as_str().unwrap_or_default().parse().map_err(|_| anyhow::anyhow!("--{} must be a whole number", flag.replace('_', "-")))?;
+            limits.insert(field.into(), json!(n));
+        }
+    }
+    if !limits.is_empty() {
+        spec.insert("limits".into(), Value::Object(limits));
+    }
     Ok(Value::Object(spec))
 }
 
@@ -124,6 +140,17 @@ mod tests {
         assert!(view_params(&a(&["--spec", "/no/such/spec.json"]), "ag", "h").is_err());
         std::fs::write(&f, "not json").unwrap();
         assert!(view_params(&a(&["--spec", fs]), "ag", "h").unwrap_err().to_string().contains("not JSON"));
+    }
+
+    #[test]
+    fn limit_flags_become_spec_limits_and_a_bucket_flag_is_refused() {
+        let p = view_params(&a(&["--name", "n", "--root", "/r", "--include", "d", "--max-file", "1024", "--max-total", "9000"]), "ag", "h").unwrap();
+        assert_eq!(p["spec"]["limits"], json!({"max_file": 1024, "max_total": 9000}));
+        let p = view_params(&a(&["--root", "/r", "--include", "d"]), "ag", "h").unwrap();
+        assert!(p["spec"].get("limits").is_none(), "no limit flag, no limits key (daemon defaults)");
+        assert!(view_params(&a(&["--include", "d", "--max-files", "many"]), "ag", "h").is_err());
+        let e = view_params(&a(&["--name", "n", "--root", "/r", "--include", "d", "--bucket", "p-x"]), "ag", "h").unwrap_err().to_string();
+        assert!(e.contains("--name binds"), "{e}");
     }
 
     #[test]
