@@ -118,7 +118,7 @@ impl RoutingDecisionEntry {
 /// Filter for querying the decision ring buffer.
 #[derive(Debug, Clone, Default)]
 pub struct DecisionHistoryFilter {
-    /// Max entries to return (newest first). `None` = capacity.
+    /// Max entries to return (newest first). `None` = all retained.
     pub limit: Option<usize>,
     /// Exact match on principal (sender_id).
     pub principal: Option<String>,
@@ -243,7 +243,8 @@ impl RoutingDecisionHistory {
         let Ok(guard) = self.entries.lock() else {
             return Vec::new();
         };
-        let limit = filter.limit.unwrap_or(self.capacity);
+        // Capacity 0 means unbounded, so it cannot double as the default limit.
+        let limit = filter.limit.unwrap_or(usize::MAX);
         guard
             .iter()
             .rev()
