@@ -545,6 +545,13 @@ async fn build(
         ingest: hooks,
         revocations: revocations.clone(),
     })?);
+    // A stop or unload publishes the memory it freed before it answers, so the
+    // controller's next placement is judged on it (card b71cd973).
+    let refresh_membership = membership.clone();
+    local.set_facts_refresher(Arc::new(move || {
+        let m = refresh_membership.clone();
+        Box::pin(crate::node_facts_rpc::refresh_live_now(m))
+    }));
     // ADR-106 phase 3: grant plus approval before a Cognitum-origin cog runs here.
     local.set_licence_gate(crate::licence_steward::run_gate(policy.store()));
     // Mesh-routed `dashboard.*` calls from an authorised controller key.

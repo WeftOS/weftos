@@ -33,7 +33,7 @@ use crate::workload_runtime::VerifiedWorkload;
 use super::facts::governance_tier;
 use super::lifecycle::LifecyclePolicy;
 use super::host_service::{CtlConfig, InstanceBody, PlaceBody};
-use super::msg::method;
+use super::msg::{RefusalCode, method};
 use super::plane::{
     Call, CallFailure, PLANE_CHAIN_SOURCE, PlacementControlPlane, PlacementRecord, PlaneError,
     now_ms,
@@ -446,6 +446,13 @@ impl PlacementControlPlane {
 
     /// Gate an instance transition on the controller (chained) and send it.
     pub async fn instance(&self, m: &str, instance_id: &str) -> Result<Value, PlaneError> {
+        self.instance_ex(m, instance_id, true).await
+    }
+
+    /// [`Self::instance`]; `operator` is false for the controller's own
+    /// unloads (a replaced copy on a returned node), which keep their own
+    /// backoff and leave no unload intent.
+    pub(super) async fn instance_ex(&self, m: &str, instance_id: &str, operator: bool) -> Result<Value, PlaneError> {
         let find = || {
             self.placements()
                 .into_iter()
@@ -511,21 +518,25 @@ impl PlacementControlPlane {
             include_departed: false,
         })
         .unwrap_or_default();
-        let out = self.call(&rec.node_id, m, decision_id, body).await?;
-        if m == method::UNLOAD
-            && let Ok(mut p) = self.placements.lock()
-        {
-            p.remove(instance_id);
+        if m == method::UNLOAD && operator {
+            // Saved before the request leaves: if the answer is lost, or this
+            // controller or the node restarts, the lifecycle finishes the
+            // unload instead of placing the missing instance again.
+            self.mark_unload_intent(instance_id);
         }
-        if m == method::UNLOAD {
-            // An unload is final: no lost record of the same order on that
-            // node may place the instance again (card 82a59d97).
-            let order = self.life_of(instance_id).and_then(|c| c.order);
-            self.drop_life(instance_id);
-            if let Some(o) = order {
-                self.supersede_lost(&rec.node_id, instance_id, &o, "its instance was unloaded");
+        let out = match self.call(&rec.node_id, m, decision_id, body).await {
+            Ok(v) => v,
+            // The node does not hold it: the unload is done.
+            Err(PlaneError::Call(CallFailure::Refused(r)))
+                if m == method::UNLOAD && r.code == RefusalCode::UnknownInstance =>
+            {
+                self.finish_unload(&rec);
+                return Err(PlaneError::Call(CallFailure::Refused(r)));
             }
-            self.persist();
+            Err(e) => return Err(e),
+        };
+        if m == method::UNLOAD {
+            self.finish_unload(&rec);
         }
         if method::is_teardown(m) {
             self.refresh_node_facts(&rec.node_id).await;
