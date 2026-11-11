@@ -9,6 +9,10 @@ Linux bwrap side belongs to photo-gallery's `weftos-pg` session; see
 Updated 2026-11-10: file modes. Each object carries one execute attribute; the view applies it
 (section 2, "File modes"). Before this, every base file was 0444 and nothing in a root image could run.
 
+Updated 2026-11-10 (overlay lower): `lower/` is writable (section 2, "File modes"). Overlayfs copy-up keeps the
+lower's mode, so a read-only lower made an in-place edit of an existing file fail with "Permission denied".
+Only `base/` is read-only now.
+
 Sources. Files marked "main checkout" are untracked files in `~/weftos`, not in this branch.
 
 - Tapestry Phase 3 prep, section 5 E-1 and work item 10 ("E3 / R9 Linux backend"):
@@ -51,7 +55,7 @@ A view root on the host has this layout. The session sees only the first two ent
 |---|---|---|
 | `<root>/base/` | `/` (or under a chroot path) | The read-only includes, each at its `at` path, plus empty mount points. Directories 0555, files 0444, or 0555 for an executable object |
 | `<root>/work/` | `/work` | The writable tree. `Clone`: a full copy of the work prefix. `Empty`: an empty overlay upper; the upper is the change set |
-| `<root>/lower/` | overlay lower of `/work` | `Empty` only: a read-only mirror of the work prefix |
+| `<root>/lower/` | overlay lower of `/work` | `Empty` only: a mirror of the work prefix, in the writable modes (see "File modes") |
 | `<root>/.state/` | never bound | One drive per include, the work drive, the lease record, the work index, the staged-path set, the overlay workdir |
 | `<root>/view.json` | never bound | The manifest the launcher reads |
 
@@ -62,14 +66,14 @@ object's; write bits are the view's policy, and setuid, setgid and the sticky bi
 
 | Where | Not executable | Executable |
 |---|---|---|
-| `base/` and `lower/` | 0444 | 0555 |
-| `work/` (clone) | 0644 | 0755 |
+| `base/` | 0444 | 0555 |
+| `lower/` (overlay) and `work/` (clone) | 0644 | 0755 |
 
 - **Put.** `store drive sync-up` and a view publish read the file's mode. A create or modify puts the
   bytes with the attribute (`put_attrs`, `put_if_match_attrs`). A chmod with the same bytes is a modify
   (a put of the same content, same etag, new attribute), and clearing the bit clears the attribute.
 - **Materialise.** A drive fetches the attribute once per placed object (one HEAD) and sets 0755 on the
-  placed file; the view then sets 0555/0444 (base) or keeps 0755/0644 (work). Changing an execute bit
+  placed file; the view then sets 0555/0444 (base) or keeps 0755/0644 (work, and the overlay `lower/`). Changing an execute bit
   in `base/` is reported in `status().tampered` and put back by refresh.
 - **Old data.** An object with no attribute reads as not executable, so it materialises 0444/0644 as
   before. An `index.json` with no `exec` field loads as not executable and is written back without one
@@ -79,6 +83,16 @@ object's; write bits are the view's policy, and setuid, setgid and the sticky bi
   refresh, because an unchanged etag and size skip the object without a HEAD. It arrives with the next
   content change or a fresh open. A conflict's remote copy and a `Keep::Remote` resolve do not carry
   the attribute. Multipart and Object Lock puts do not carry it either.
+
+**The overlay lower is writable.** `lower/` directories are 0755 and files 0644/0755, the same as `work/`.
+Overlayfs copy-up gives the upper file the lower's mode and owner, so a 0444 lower made every copied-up
+file 0444 and an in-place edit failed. A 0555 lower directory would likewise block creating a new file
+in an existing directory. Only `base/` needs to be read-only. The lower is never written by the
+session: overlayfs writes only to the upper, so the write bit does not let the sandbox change the lower's
+bytes. On the host, `lower/` files are hard links to the work drive's files, so a host process that
+writes through one would change the drive file; `status().tampered` and `refresh` repair detect and undo
+that for content and execute bits, as before. Write bits are not tamper evidence (scan compares content
+and the execute bit only). Plain (clone) mode and `base/` are unchanged.
 
 **No store control state is visible.** None of these is ever placed in `base/`, `lower/` or `work/`:
 - drive state (`.drive/`) and delete markers (`.drive-tombstones/`) at any depth;
