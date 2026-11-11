@@ -243,6 +243,9 @@ async fn retry_succeeds_once_the_server_appears() {
     };
     let mut cfg = ClientConfig::new(&sock, rec);
     cfg.server_peer = Some(Arc::new(InjectedPeer::uid(SERVICE_UID)));
+    // The injected server peer says uid 501; pin our own uid to match instead of
+    // assuming the runner's real uid is 501 (it is 1000 in the CI container).
+    cfg.own_uid = Some(501);
     let sock2 = sock.clone();
     let starter = tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(120)).await;
