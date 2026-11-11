@@ -120,9 +120,9 @@ pub enum StoreAction {
         key: String,
         /// Content.
         text: String,
-        /// The requesting principal. Default: `$WEAVER_STORE_AS`.
+        /// The requesting principal.
         #[arg(long = "as")]
-        principal: Option<String>,
+        principal: String,
     },
     /// Worktree stores and sharing (ADR-126 S2); the verbs `scripts/worktree-store.sh` calls:
     /// create, buckets, publish, fetch, claim, promote, follow, search, leftovers, sync-docs, overlaps.
@@ -155,9 +155,8 @@ pub enum StoreAction {
     Get {
         name: String,
         key: String,
-        /// The requesting principal. Default: `$WEAVER_STORE_AS`.
         #[arg(long = "as")]
-        principal: Option<String>,
+        principal: String,
     },
     /// Per-client-account store (ADR-126 S5).
     Client(super::store_client_cmd::StoreClientArgs),
@@ -319,19 +318,6 @@ fn agent_and_host(rest: &[String]) -> anyhow::Result<(String, String)> {
     Ok((agent, host))
 }
 
-/// The environment variable a script sets once instead of passing `--as` on every `put`/`get`.
-const AS_ENV: &str = "WEAVER_STORE_AS";
-
-/// The principal a `put`/`get` is made as: `--as`, else `$WEAVER_STORE_AS`. It is only a name for the
-/// request: the daemon gates it like any other (the principal needs a grant on the store), and every
-/// request made as a principal is recorded on the chain as made by the operator (`store.as`).
-fn request_principal(flag: Option<String>, env: Option<String>) -> anyhow::Result<String> {
-    flag.or(env)
-        .map(|s| s.trim().to_owned())
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("name the principal with --as <principal> (or set {AS_ENV}); it needs a grant on the store"))
-}
-
 /// Run the store subcommand.
 pub async fn run(args: StoreArgs) -> anyhow::Result<()> {
     match args.action {
@@ -391,7 +377,6 @@ pub async fn run(args: StoreArgs) -> anyhow::Result<()> {
             }
         }
         StoreAction::Put { name, key, text, principal } => {
-            let principal = request_principal(principal, std::env::var(AS_ENV).ok())?;
             let v = call("store.put", json!({"name": name, "key": key, "text": text, "principal": principal})).await?;
             println!("wrote {} ({} bytes)", cell(&v, "key"), cell(&v, "size"));
         }
@@ -419,7 +404,6 @@ pub async fn run(args: StoreArgs) -> anyhow::Result<()> {
         }
         StoreAction::Release(a) => crate::commands::release_cmd::run(a).await?,
         StoreAction::Get { name, key, principal } => {
-            let principal = request_principal(principal, std::env::var(AS_ENV).ok())?;
             let v = call("store.get", json!({"name": name, "key": key, "principal": principal})).await?;
             match v["text"].as_str() {
                 Some(t) => print!("{t}"),
@@ -460,17 +444,8 @@ mod tests {
         assert!(p(&["grant", "n", "cog:c", "--on", "--off"]).is_err());
         assert!(p(&["promote", "n"]).is_err() && p(&["promote", "n", "--prefix", "assets/"]).is_ok());
         assert!(p(&["archive", "n", "--delete"]).is_ok() && p(&["revoke", "n", "cog:c"]).is_ok());
-        assert!(p(&["put", "n", "k", "v", "--as", "cog:c"]).is_ok() && p(&["put", "n", "k", "v"]).is_ok(), "--as may come from the environment");
+        assert!(p(&["put", "n", "k", "v"]).is_err() && p(&["put", "n", "k", "v", "--as", "cog:c"]).is_ok());
         assert!(p(&["create", "n", "--write", "a", "--write", "b"]).is_ok());
-    }
-
-    #[test]
-    fn the_principal_comes_from_the_flag_then_the_environment_and_is_never_guessed() {
-        let some = |s: &str| Some(s.to_owned());
-        assert_eq!(request_principal(some("cog:a"), some("cog:b")).unwrap(), "cog:a", "the flag wins");
-        assert_eq!(request_principal(None, some("cog:b")).unwrap(), "cog:b");
-        assert!(request_principal(None, None).unwrap_err().to_string().contains("--as"));
-        assert!(request_principal(None, some("  ")).is_err() && request_principal(some(""), None).is_err());
     }
 
     #[test]

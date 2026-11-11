@@ -301,12 +301,6 @@ params return `"invalid_params"`. Clients branch on the kind, not the message te
 (`daemon_facade.rs`) does not route `store.view.*`, so the kind reaches RPC clients (`weaver`, Tapestry)
 only. Other failures keep no kind.
 
-Scripted callers: `weaver store put|get <name> <key> --as <principal>` takes the principal from
-`$WEAVER_STORE_AS` when `--as` is not given (the flag wins). The principal is a name for the request,
-not a credential: it must hold a grant on the store (`weaver store grant <name> <principal> write`),
-the same gate a cog's request meets, and the request is recorded on the chain as made by the operator
-(`store.as`).
-
 | Verb | RPC | Prints | Records |
 |---|---|---|---|
 | `open` | `store.view.open` | root, `view.json` path, spec hash, lease, files, bytes, fetched, recovered, took-over holder, skipped | activity `ViewOpen`, chain `store.view.open` |
