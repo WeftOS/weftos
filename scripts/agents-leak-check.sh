@@ -8,7 +8,11 @@
 # client-identifying content out of agents/ going forward, on every run, not just at
 # port time.
 #
-# Usage: scripts/agents-leak-check.sh
+# Usage: scripts/agents-leak-check.sh [DIR]
+#        scripts/agents-leak-check.sh --tracked
+# --tracked scans every git-tracked file in the repo (docs/, crates/, scripts/ ...) against the
+# PRIVATE patterns only, and prints file:count (never the matching text). The generic rules
+# (emails, home paths, roster keys) are for agents/ and would be noise repo-wide.
 # Exit code: 0 = clean, non-zero = at least one denylisted pattern matched.
 #
 # NOTE: client-identifying patterns are NOT kept in this public script. They are read
@@ -18,7 +22,13 @@
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TRACKED=0
+if [[ "${1:-}" == "--tracked" ]]; then
+  TRACKED=1
+  shift
+fi
 TARGET_DIR="${1:-$REPO_ROOT/agents}"
+[[ "$TRACKED" -eq 1 ]] && TARGET_DIR="$REPO_ROOT"
 
 if [[ ! -d "$TARGET_DIR" ]]; then
   echo "agents-leak-check: target directory not found: $TARGET_DIR" >&2
@@ -59,6 +69,24 @@ fi
 
 echo "agents-leak-check: scanning $TARGET_DIR"
 echo
+
+if [[ "$TRACKED" -eq 1 ]]; then
+  if [[ ! -r "$LEAK_PATTERNS_FILE" ]]; then
+    echo "agents-leak-check: --tracked needs the private patterns file ($LEAK_PATTERNS_FILE)" >&2
+    exit 2
+  fi
+  pats=$(grep -vE '^[[:space:]]*(#|$)' "$LEAK_PATTERNS_FILE")
+  # exit 0 if clean, 1 if any tracked file matches; this script itself is not scanned
+  counts=$(cd "$REPO_ROOT" && git ls-files -z | grep -zv '^scripts/agents-leak-check\.sh$' \
+    | xargs -0 grep -cIiE -e "$pats" 2>/dev/null | grep -v ':0$' || true)
+  if [[ -n "$counts" ]]; then
+    echo "agents-leak-check: FAILED — tracked files matching the private patterns (file:count)"
+    printf '%s\n' "$counts" | sed 's/^/      /'
+    exit 1
+  fi
+  echo "agents-leak-check: clean — no private patterns in tracked files"
+  exit 0
+fi
 
 for rule in "${RULES[@]}"; do
   IFS='|' read -r name pattern note <<<"$rule"
