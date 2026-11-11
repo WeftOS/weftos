@@ -1,7 +1,7 @@
 # ADR-126 S2 evidence: real RustFS on macOS (2026-11-08)
 
 Card 11b00a2e-4e82-4ba9-a5e6-eb70fb6dadde. Branch `wt/adr126-s2-mac`, based on `be64b6014`.
-This is evidence for the gate in ADR-126 section 4a ("Gate for moving a project (Sansone) onto
+This is evidence for the gate in ADR-126 section 4a ("Gate for moving a project (first client project) onto
 shared worktrees"). It does not change the ADR text.
 
 ## What this run is, and is not
@@ -36,7 +36,7 @@ shared worktrees"). It does not change the ADR text.
 |---|---|---|
 | 1. Real RustFS, two principals | **Pass** (one host) | Below. Two physical machines still owed. |
 | 2. Windows node | Not run | Out of lane. |
-| 3. Metadata latency at Sansone scale | Not run | Only small trees measured (4 worktrees, 64 files). |
+| 3. Metadata latency at client scale | Not run | Only small trees measured (4 worktrees, 64 files). |
 | 4. Leftover and handoff drill | **Pass** | Idle threshold by injected clock and edited registry; handoff on real flow. |
 | 5. Failure drill | **Pass**, with two findings | Kills were real `SIGKILL`s of the daemon. |
 | 6. Follower drills | **Pass**, with two defects fixed | One defect found per item below. |
@@ -209,7 +209,7 @@ Each fix has a test: shell assertions for `new`; `store_worktree::tests` for the
 
 - Two physical machines (item 1 as written).
 - Windows (item 2) and the ProjFS drive.
-- Metadata latency for a Sansone-sized worktree (item 3).
+- Metadata latency for a client-sized worktree (item 3).
 - ADR-131 D1 and D2 (item 7).
 - A re-run of the timing numbers on an internal disk.
 - A clock-skew drill that changes a real machine's clock (here only stored timestamps were skewed).
@@ -381,7 +381,7 @@ line with the library-level result above (about 35 objects per second, 29 ms per
 external volume, not the S2 code, the daemons or the shell script, was the cause of the earlier
 daemon-driven numbers. The release build also removes any debug-build cost, so part of the gain is
 that, but the earlier tests already showed the disk dominating. This was one run on a busy machine,
-with trees of 4 to 65 objects; it says nothing about Sansone-scale trees (gate item 3), and the
+with trees of 4 to 65 objects; it says nothing about client-scale trees (gate item 3), and the
 previous "upper bound" wording for the item 1 table applies to the whole table above.
 
 ## Second fix pass (F7, F13, F14, F19, F20)

@@ -261,7 +261,7 @@ and removed. No real merge, no push.
 
 No `git push`; no Phase A deploy; no `terraform apply`; no install or deploy of a store-capable `weaver`
 on any machine; no restart of weftos, shasta, meshd, rustfs or cog-host; no MaxBook weaver, gateway or MLX
-restart; no Sansone migration; no blind S3 mount (materialise and watch only); no live PG install; no
+restart; no client migration; no blind S3 mount (materialise and watch only); no live PG install; no
 full-workspace test run; the approvals file is the owner's.
 
 ## Running the live checks
