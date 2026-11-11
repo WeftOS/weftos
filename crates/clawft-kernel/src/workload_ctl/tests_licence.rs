@@ -334,7 +334,7 @@ async fn the_gate_hashes_the_binary_the_runtime_admits_and_refuses_another_varia
     // Container: it runs the first arch of its own order; another variant arch is refused.
     let tmp = tempfile::tempdir().unwrap();
     let runs = other_arch();
-    let pkg = package_from(tmp.path(), "fall-detect", &elf(runs), &[arch(), runs], Some(COGNITUM_URL));
+    let pkg = package_from(tmp.path(), "fall-detect", elf(runs), &[arch(), runs], Some(COGNITUM_URL));
     let (vp, w) = verified(&pkg);
     let chain = Arc::new(ChainManager::new(0, 1000));
     let wg = gate_for(&chain);

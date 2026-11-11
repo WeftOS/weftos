@@ -26,7 +26,7 @@ pub const EX_CONFIG: i32 = crate::service_units::REFUSED_EXIT;
 /// Flags that apply to one boot only and must not be replayed on re-exec.
 /// Set in the environment of a SIGHUP re-exec so the new image knows its
 /// instance lock may still be held, briefly, under its own pid.
-pub const REEXEC_ENV: &str = "WEFTOS_REEXEC";
+pub const REEXEC_ENV: &str = clawft_kernel::chain_storage::REEXEC_ENV;
 
 /// How long a re-exec waits for an inherited lock descriptor to close.
 pub const REEXEC_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
