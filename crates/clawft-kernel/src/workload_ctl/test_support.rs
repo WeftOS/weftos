@@ -57,19 +57,20 @@ pub fn package(root: &Path, id: &str, script: &str, arches: &[&str]) -> PathBuf 
 
 /// [`package`] with a release URL (one naming `cognitum` gives the package
 /// Cognitum origin, ADR-106).
-pub fn package_from(root: &Path, id: &str, script: &str, arches: &[&str], release_url: Option<&str>) -> PathBuf {
-    let per: Vec<(&str, &str)> = arches.iter().map(|a| (*a, script)).collect();
+pub fn package_from(root: &Path, id: &str, script: impl AsRef<[u8]>, arches: &[&str], release_url: Option<&str>) -> PathBuf {
+    let script = script.as_ref();
+    let per: Vec<(&str, &[u8])> = arches.iter().map(|a| (*a, script)).collect();
     package_bins(root, id, &per, release_url)
 }
 
 /// [`package_from`] with its own bytes per arch.
-pub fn package_bins(root: &Path, id: &str, bins_in: &[(&str, &str)], release_url: Option<&str>) -> PathBuf {
+pub fn package_bins<B: AsRef<[u8]>>(root: &Path, id: &str, bins_in: &[(&str, B)], release_url: Option<&str>) -> PathBuf {
     package_toml(root, id, bins_in, release_url, "")
 }
 
 /// [`package_bins`] with `extra` appended to `cog.toml` (`[[outputs]]`, ...).
-pub fn package_toml(root: &Path, id: &str, bins_in: &[(&str, &str)], release_url: Option<&str>, extra: &str) -> PathBuf {
-    let same = bins_in.windows(2).all(|w| w[0].1 == w[1].1);
+pub fn package_toml<B: AsRef<[u8]>>(root: &Path, id: &str, bins_in: &[(&str, B)], release_url: Option<&str>, extra: &str) -> PathBuf {
+    let same = bins_in.windows(2).all(|w| w[0].1.as_ref() == w[1].1.as_ref());
     let src = root.join("src");
     std::fs::create_dir_all(&src).unwrap();
     std::fs::write(
@@ -80,7 +81,7 @@ pub fn package_toml(root: &Path, id: &str, bins_in: &[(&str, &str)], release_url
     let mut bins = Vec::new();
     for (a, script) in bins_in {
         let p = root.join(format!("bin-{a}"));
-        std::fs::write(&p, script).unwrap();
+        std::fs::write(&p, script.as_ref()).unwrap();
         bins.push((a.to_string(), p));
     }
     // With the same bytes on every arch one provenance covers them all;
