@@ -1,7 +1,7 @@
 # ADR-126 S2 evidence: real RustFS on macOS (2026-11-08)
 
 Card 11b00a2e-4e82-4ba9-a5e6-eb70fb6dadde. Branch `wt/adr126-s2-mac`, based on `be64b6014`.
-This is evidence for the gate in ADR-126 section 4a ("Gate for moving a project (first client project) onto
+This is evidence for the gate in ADR-126 section 4a ("Gate for moving a client project onto
 shared worktrees"). It does not change the ADR text.
 
 ## What this run is, and is not
