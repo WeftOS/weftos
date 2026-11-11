@@ -258,3 +258,60 @@ fn an_over_budget_open_is_refused_and_cleaned_up() {
 
 use std::path::Path;
 use crate::backend::BackendError;
+
+fn overlay() -> (super::tests::Probe, tempfile::TempDir, std::path::PathBuf, ScopedView) {
+    let s = probe();
+    let (d, t) = tmp();
+    let root = t.join("v");
+    let (v, _) = ScopedView::open(&s, &rw(WorkStart::Empty), &root).unwrap();
+    (s, d, root, v)
+}
+
+#[test]
+fn an_extra_file_in_overlay_lower_is_tampered_blocks_publish_and_refresh_removes_it() {
+    let (s, _d, root, mut v) = overlay();
+    assert!(v.status().unwrap().tampered.is_empty());
+    wr(&root.join("lower/intruder.txt"), "x");
+    assert_eq!(v.status().unwrap().tampered, ["lower/intruder.txt"]);
+    assert!(matches!(v.publish(&s), Err(ViewError::Tampered(p)) if p == ["lower/intruder.txt"]));
+    v.refresh(&s).unwrap();
+    assert!(!root.join("lower/intruder.txt").exists());
+    assert!(v.status().unwrap().tampered.is_empty());
+    v.publish(&s).unwrap();
+}
+
+#[test]
+fn an_extra_file_in_a_new_lower_subdir_is_tampered_and_refresh_removes_the_dir() {
+    let (s, _d, root, mut v) = overlay();
+    wr(&root.join("lower/newdir/deep/c.txt"), "x");
+    assert_eq!(v.status().unwrap().tampered, ["lower/newdir/deep/c.txt"]);
+    assert!(matches!(v.publish(&s), Err(ViewError::Tampered(_))));
+    v.refresh(&s).unwrap();
+    assert!(!root.join("lower/newdir").exists());
+    assert!(v.status().unwrap().tampered.is_empty());
+}
+
+#[test]
+fn a_stamped_file_deleted_from_overlay_lower_is_tampered_and_refresh_restores_it() {
+    let (s, _d, root, mut v) = overlay();
+    let want = std::fs::read(root.join("lower/a.txt")).unwrap();
+    std::fs::remove_file(root.join("lower/a.txt")).unwrap();
+    assert_eq!(v.status().unwrap().tampered, ["lower/a.txt"]);
+    assert!(matches!(v.publish(&s), Err(ViewError::Tampered(_))));
+    v.refresh(&s).unwrap();
+    assert_eq!(std::fs::read(root.join("lower/a.txt")).unwrap(), want);
+    assert!(v.status().unwrap().tampered.is_empty());
+}
+
+#[test]
+fn a_stamped_file_replaced_in_overlay_lower_is_tampered_and_refresh_repairs_it() {
+    let (s, _d, root, mut v) = overlay();
+    let want = std::fs::read(root.join("lower/a.txt")).unwrap();
+    std::fs::remove_file(root.join("lower/a.txt")).unwrap();
+    wr(&root.join("lower/a.txt"), "forged");
+    assert_eq!(v.status().unwrap().tampered, ["lower/a.txt"]);
+    assert!(matches!(v.publish(&s), Err(ViewError::Tampered(_))));
+    v.refresh(&s).unwrap();
+    assert_eq!(std::fs::read(root.join("lower/a.txt")).unwrap(), want);
+    assert!(v.status().unwrap().tampered.is_empty());
+}

@@ -419,6 +419,10 @@ impl ScopedView {
             Some(w) => Some(inc_status(&self.lay.work_drive(), &norm_prefix(&w.prefix), None)?),
             None => None,
         };
+        if let Some(w) = self.spec.work.as_ref().filter(|w| w.start == WorkStart::Empty) {
+            let d = tree::lower_drift(&self.lay.work_drive(), &self.lay.lower(), &self.spec, &w.prefix, &limits)?;
+            tampered.extend(d.into_iter().map(|p| format!("{LOWER_DIR}/{p}")));
+        }
         let pending = match &self.spec.work {
             Some(_) => work::pending(self)?.into_iter().map(|c| (c.path, c.kind)).collect(),
             None => Vec::new(),

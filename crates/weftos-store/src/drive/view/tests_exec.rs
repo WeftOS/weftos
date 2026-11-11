@@ -109,7 +109,7 @@ fn a_published_executable_is_0555_in_another_views_base() {
     let (_d, t) = tmp();
     // A work prefix that is also a base include of the next view.
     let root = t.join("v");
-    let (mut v, _) = ScopedView::open(&s, &rw(WorkStart::Clone), &root).unwrap();
+    let (v, _) = ScopedView::open(&s, &rw(WorkStart::Clone), &root).unwrap();
     wr(&root.join("work/bin/hello"), "#!/bin/sh\n");
     chmod(&root.join("work/bin/hello"), 0o755);
     v.close(&s, CloseMode::Publish).unwrap();

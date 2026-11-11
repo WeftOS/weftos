@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 
 use super::tree::{self, clone_into, write_into};
-use super::{Layout, Result, ScopedView, ViewError, ViewSpec, WorkStart, is_control_key, lease};
+use super::{LOWER_DIR, Layout, Result, ScopedView, ViewError, ViewSpec, WorkStart, is_control_key, lease};
 use crate::backend::ObjectBackend;
 use crate::drive::cas::{hash_of, prune_empty_parents};
 use crate::drive::index::{Entry, Index, Local, is_exec, local_state, mtime_ns};
@@ -205,6 +205,10 @@ impl ScopedView {
         let mut ix = work_drive_index(&lay)?;
         let mut staged = load_staged(&lay)?;
         let foreign: Vec<String> = scan(&sd, &ix, &limits)?.changes.into_iter().map(|c| c.path).filter(|p| !staged.contains(p)).collect();
+        let mut foreign = foreign;
+        if w.start == WorkStart::Empty {
+            foreign.extend(tree::lower_drift(&sd, &lay.lower(), &self.spec, &w.prefix, &limits)?.into_iter().map(|p| format!("{LOWER_DIR}/{p}")));
+        }
         if !foreign.is_empty() {
             return Err(ViewError::Tampered(foreign));
         }
@@ -307,7 +311,17 @@ impl ScopedView {
                 self.apply_to_work(&d, &mut rep)?;
                 rep.work = Some(d);
             }
-            Some(WorkStart::Empty) => rep.work_not_refreshed = true,
+            Some(WorkStart::Empty) => {
+                // The lower is not brought forward under a running session, but it is put back to
+                // the stamped listing: edited files from the CAS, extras removed, missing relinked.
+                let prefix = self.spec.work.as_ref().map(|w| w.prefix.clone()).unwrap_or_default();
+                if load_staged(&lay)?.is_empty() {
+                    rep.repaired.extend(tree::repair(&lay.work_drive(), &limits)?);
+                }
+                tree::mirror(&lay.work_drive(), &lay.lower(), "", &prefix, &self.spec, &[], &mut rep.skipped)?;
+                tree::set_tree_mode(&lay.lower(), false)?;
+                rep.work_not_refreshed = true;
+            }
             None => {}
         }
         self.save_manifest()?;

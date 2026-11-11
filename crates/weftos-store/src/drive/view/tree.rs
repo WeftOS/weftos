@@ -274,6 +274,55 @@ pub(crate) fn mirror(
     Ok((n, bytes))
 }
 
+/// Where the overlay `lower/` differs from the work drive it mirrors: a file in `lower/` that is
+/// not in the drive's index (or any non-regular entry), an indexed file missing from `lower/`, and
+/// a file that is no longer the drive's own (replaced, so it is not the stamped bytes). Paths are
+/// relative to `lower/`. Content edited in place through the hard link shows in the work drive's
+/// own scan instead.
+pub(crate) fn lower_drift(drive: &Path, lower: &Path, spec: &ViewSpec, prefix: &str, limits: &Limits) -> Result<Vec<String>> {
+    let prefix = norm_prefix(prefix);
+    let ix = Index::load(drive)?.ok_or_else(|| ViewError::NotAView(drive.display().to_string()))?;
+    let mut expected = BTreeSet::new();
+    for rel in ix.entries.keys() {
+        if !is_control_key(&spec.bucket, &format!("{prefix}{rel}")) && !spec.denied(rel) {
+            expected.insert(rel.clone());
+        }
+    }
+    let mut drift = BTreeSet::new();
+    let mut seen = BTreeSet::new();
+    let mut stack = vec![(lower.to_path_buf(), String::new())];
+    while let Some((dir, rel)) = stack.pop() {
+        for e in std::fs::read_dir(&dir)? {
+            let e = e?;
+            let name = e.file_name().to_string_lossy().into_owned();
+            let r = if rel.is_empty() { name } else { format!("{rel}/{name}") };
+            let md = std::fs::symlink_metadata(e.path())?;
+            if md.is_dir() {
+                stack.push((e.path(), r));
+            } else if !md.is_file() || !expected.contains(&r) {
+                if !(md.is_file() && ix.conflicts.contains_key(&r)) {
+                    drift.insert(r);
+                }
+            } else {
+                seen.insert(r.clone());
+                let dm = std::fs::symlink_metadata(drive.join(&r))?;
+                if !same_file(&md, &dm) && md.len() <= limits.max_file {
+                    let (a, b) = (std::fs::read(e.path())?, std::fs::read(drive.join(&r))?);
+                    if a != b {
+                        drift.insert(r);
+                    }
+                }
+            }
+        }
+    }
+    for r in expected {
+        if !seen.contains(&r) && !ix.conflicts.contains_key(&r) {
+            drift.insert(r);
+        }
+    }
+    Ok(drift.into_iter().collect())
+}
+
 /// Put a drive tree back to its index from the CAS: a file changed under the view (a base file
 /// written through its hard link on a host with no bwrap) is replaced by a fresh copy, an extra
 /// file is removed. Returns the repaired paths.
