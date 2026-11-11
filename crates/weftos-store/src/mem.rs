@@ -270,4 +270,23 @@ mod tests {
         assert!(!m.attrs("b-mem", "run2").unwrap().executable, "a deleted key does not keep it");
         assert!(matches!(m.attrs("b-mem", "none"), Err(BackendError::NoObject(_))));
     }
+
+    #[test]
+    fn a_streamed_put_keeps_the_execute_attribute_on_the_local_fallbacks_and_lists_a_stamp_that_follows_it() {
+        use crate::backend::{MIN_PART, PutOpts};
+        let m = MemBackend::new();
+        m.create_bucket("b-mem", &[]).unwrap();
+        let x = PutOpts { attrs: ObjectAttrs { executable: true }, ..Default::default() };
+        // One part: put_locked is unsupported here, so the plain put path carries the attribute.
+        m.put_stream("b-mem", "small", &mut std::io::Cursor::new(b"s".to_vec()), MIN_PART, &x).unwrap();
+        assert!(m.attrs("b-mem", "small").unwrap().executable, "single-part stream");
+        // More than one part: multipart is unsupported here, so the whole-body fallback does.
+        m.put_stream("b-mem", "big", &mut std::io::Cursor::new(vec![7u8; MIN_PART + 1]), MIN_PART, &x).unwrap();
+        assert!(m.attrs("b-mem", "big").unwrap().executable, "whole-body fallback");
+        m.put_stream("b-mem", "plain", &mut std::io::Cursor::new(vec![7u8; MIN_PART + 1]), MIN_PART, &PutOpts::default()).unwrap();
+        assert!(!m.attrs("b-mem", "plain").unwrap().executable);
+        let st = |k: &str| m.list_stamped("b-mem", "").unwrap().into_iter().find(|(o, _)| o.key == k).unwrap().1;
+        let (a, b) = (st("small"), st("plain"));
+        assert_ne!(a, b, "the stamp differs between an executable and a plain object");
+    }
 }

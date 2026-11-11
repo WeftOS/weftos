@@ -450,6 +450,25 @@ mod tests {
     }
 
     #[test]
+    fn a_streamed_put_keeps_the_execute_attribute_and_the_stamp_moves_on_a_mode_only_put() {
+        use crate::backend::{MIN_PART, PutOpts};
+        let (_d, b) = be();
+        b.create_bucket("n-one", &[]).unwrap();
+        let x = PutOpts { attrs: ObjectAttrs { executable: true }, ..Default::default() };
+        b.put_stream("n-one", "small", &mut std::io::Cursor::new(b"s".to_vec()), MIN_PART, &x).unwrap();
+        assert!(b.attrs("n-one", "small").unwrap().executable, "single-part stream");
+        b.put_stream("n-one", "big", &mut std::io::Cursor::new(vec![7u8; MIN_PART + 1]), MIN_PART, &x).unwrap();
+        assert!(b.attrs("n-one", "big").unwrap().executable, "whole-body fallback");
+        // The same bytes put again with the attribute cleared: same etag, a different stamp.
+        let stamp = |k: &str| b.list_stamped("n-one", "").unwrap().into_iter().find(|(o, _)| o.key == k).unwrap().1;
+        let s0 = stamp("small");
+        let m = b.head("n-one", "small").unwrap();
+        b.put_if_match_attrs("n-one", "small", b"s", &m.etag, ObjectAttrs::default()).unwrap();
+        assert_eq!(b.head("n-one", "small").unwrap().etag, m.etag);
+        assert_ne!(stamp("small"), s0, "a mode-only put moves the stamp");
+    }
+
+    #[test]
     fn put_if_match_swaps_only_the_object_that_was_read() {
         let (_d, b) = be();
         b.create_bucket("n-one", &[]).unwrap();
