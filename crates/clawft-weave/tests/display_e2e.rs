@@ -363,6 +363,9 @@ async fn the_console_host_drives_the_pad_and_ptt_reaches_it() {
         let ptt_dot = |p: &WireLeaf| {
             p.sim().snapshot().nodes.into_iter().find(|n| n.id == NodeId::from_raw(204)).map(|n| n.style.visible)
         };
+        // The pad applies the scene in pieces: more than 20 nodes can be there
+        // before the status strip (nodes 200-206) is, so wait for the dot.
+        assert!(pad2.wait_for(WAIT, |p| ptt_dot(p).is_some()), "the status strip's ptt dot never reached the pad");
         assert_eq!(ptt_dot(&pad2), Some(false), "the status strip's ptt dot is on the pad, unlit");
 
         // Hold the pad's button: the host sees ptt.down and the strip lights.
