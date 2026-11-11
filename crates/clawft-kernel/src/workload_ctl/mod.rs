@@ -85,6 +85,8 @@ mod tests_life_unload;
 #[cfg(test)]
 mod tests_link;
 #[cfg(test)]
+mod tests_unload_intent;
+#[cfg(test)]
 mod tests_peers;
 #[cfg(test)]
 mod tests_reconcile;
@@ -113,7 +115,7 @@ pub use host_supervise::Supervised;
 pub use lifecycle::{
     InstanceLife, LifecyclePolicy, LifecycleState, RestartDecision, RestartPolicy, can_transition,
 };
-pub use host_service::{CtlConfig, FactsSource, HOST_CHAIN_SOURCE, WorkloadHostService};
+pub use host_service::{CtlConfig, FactsRefresher, FactsSource, HOST_CHAIN_SOURCE, WorkloadHostService};
 pub use msg::{
     CtlRequest, CtlResponse, NonceGuard, Refusal, RefusalCode, SignedCtl, WORKLOAD_HOST_SERVICE,
 };

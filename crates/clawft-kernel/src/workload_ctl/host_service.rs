@@ -145,6 +145,14 @@ pub(super) struct Placed {
 /// Fresh signed facts on demand (a daemon re-probes before the TTL ends).
 pub type FactsSource = Arc<dyn Fn() -> Option<SignedNodeFacts> + Send + Sync>;
 
+/// Re-probes and publishes this node's facts. A daemon wires it so a stop or
+/// unload is followed by facts that show the memory it freed (card b71cd973).
+pub type FactsRefresher =
+    Arc<dyn Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync>;
+
+/// Longest a teardown waits for the facts refresh before it answers anyway.
+const FACTS_REFRESH_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// A node's `workload-host`.
 pub struct WorkloadHostService {
     pub(super) node_id: String,
@@ -183,6 +191,9 @@ pub struct WorkloadHostService {
     /// a controller can tell them from instances lost with a restart (this
     /// list is in memory: a restart empties it, which is the signal).
     pub(super) departed: Mutex<std::collections::VecDeque<(String, &'static str)>>,
+    /// Re-probes this node's facts after a stop or unload; unset: the facts
+    /// source is read as it stands (it ages out on its own schedule).
+    pub(super) facts_refresher: std::sync::OnceLock<FactsRefresher>,
     /// Last request from a controller other than this node itself (ms).
     pub(super) last_contact_ms: std::sync::atomic::AtomicU64,
     /// The ADR-106 run gate for Cognitum-origin cogs (unset: not consulted).
@@ -252,6 +263,7 @@ impl WorkloadHostService {
             restart: super::lifecycle::RestartPolicy::default(),
             lease: None,
             departed: Mutex::new(std::collections::VecDeque::new()),
+            facts_refresher: std::sync::OnceLock::new(),
             last_contact_ms: std::sync::atomic::AtomicU64::new(now_ms()),
             licence_gate: std::sync::OnceLock::new(),
             node_admin: std::sync::OnceLock::new(),
@@ -343,6 +355,20 @@ impl WorkloadHostService {
     pub fn with_facts_source(mut self, source: FactsSource) -> Self {
         self.facts_source = Some(source);
         self
+    }
+
+    /// Have this node re-probe and publish its facts after a stop, unload or
+    /// revocation took memory back, so the controller's next `describe` shows
+    /// it. Set once; a second call is ignored.
+    pub fn set_facts_refresher(&self, f: FactsRefresher) {
+        let _ = self.facts_refresher.set(f);
+    }
+
+    /// Run the facts refresher, bounded; a slow probe never holds the answer.
+    pub(super) async fn facts_changed(&self) {
+        if let Some(f) = self.facts_refresher.get() {
+            let _ = tokio::time::timeout(FACTS_REFRESH_WAIT, f()).await;
+        }
     }
 
     fn current_facts(&self) -> Option<SignedNodeFacts> {
@@ -549,7 +575,12 @@ impl WorkloadHostService {
             m if method::is_node_admin(m) => self.node_admin_op(req).await.map(|(v, _)| v),
             method::PLACE | method::LOAD => self.place(req, fetch).await,
             method::START | method::STOP | method::UNLOAD | method::STATUS | method::LOGS => {
-                self.instance_op(req).await
+                let out = self.instance_op(req).await;
+                if out.is_ok() && method::is_teardown(req.method.as_str()) {
+                    // Memory came back: publish it before the controller asks.
+                    self.facts_changed().await;
+                }
+                out
             }
             m if m.starts_with(crate::workload_governance::policy::WORKLOAD_ACTION_PREFIX) => {
                 // Not in the message set: ask the gate so the refusal is on

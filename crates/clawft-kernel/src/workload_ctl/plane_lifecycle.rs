@@ -85,6 +85,13 @@ pub struct ControllerLife {
     /// Last orphan-unload failure (chained once per change).
     #[serde(default)]
     pub orphan_error: Option<String>,
+    /// The operator asked for this instance to be unloaded and the node has
+    /// not confirmed it yet (the answer was lost, or the node was away).
+    /// Saved before the request leaves, so a restart of either side cannot
+    /// turn the missing instance into a lost one and place it again. The
+    /// lifecycle finishes the unload and never reschedules it.
+    #[serde(default)]
+    pub unload_intent: bool,
 }
 
 fn yes() -> bool {
@@ -110,6 +117,7 @@ impl ControllerLife {
             orphan_attempts: 0,
             orphan_next_ms: 0,
             orphan_error: None,
+            unload_intent: false,
         }
     }
 }
@@ -122,7 +130,7 @@ pub struct LifecycleEvent {
     /// That node.
     pub node_id: String,
     /// `lost`, `rescheduled`, `replaced`, `alert`, `reschedule_failed`,
-    /// `orphan_unloaded`, `orphan_unload_failed`, `recovered`, `failed`,
+    /// `orphan_unloaded`, `orphan_unload_failed`, `unloaded`, `recovered`, `failed`,
     /// `gone` or `superseded`.
     pub action: String,
     /// Human-readable detail.
@@ -162,6 +170,75 @@ impl PlacementControlPlane {
             );
         }
         self.persist();
+    }
+
+    /// Record, and save, that the operator asked to unload `instance_id`.
+    pub(super) fn mark_unload_intent(&self, instance_id: &str) {
+        if let Ok(mut l) = self.lives.lock() {
+            l.entry(instance_id.to_string())
+                .or_insert_with(|| {
+                    ControllerLife::new(LifecycleState::Running, LifecyclePolicy::default(), None, 0)
+                })
+                .unload_intent = true;
+        }
+        self.persist();
+    }
+
+    pub(super) fn has_unload_intent(&self, instance_id: &str) -> bool {
+        self.life_of(instance_id).is_some_and(|c| c.unload_intent)
+    }
+
+    /// Finish the operator's unload of `instance_id` once its node has
+    /// confirmed it (or no longer holds it): forget it, and every lost record
+    /// of the same order, so nothing places it again.
+    pub(super) fn finish_unload(&self, rec: &PlacementRecord) {
+        if let Ok(mut p) = self.placements.lock() {
+            p.remove(&rec.instance_id);
+        }
+        // An unload is final: no lost record of the same order on that
+        // node may place the instance again (card 82a59d97).
+        let order = self.life_of(&rec.instance_id).and_then(|c| c.order);
+        self.drop_life(&rec.instance_id);
+        if let Some(o) = order {
+            self.supersede_lost(&rec.node_id, &rec.instance_id, &o, "its instance was unloaded");
+        }
+        self.persist();
+    }
+
+    /// Carry out every unload the operator asked for that is still open: the
+    /// answer was lost, or the node was away. A node that does not hold the
+    /// instance has done what was asked. An unreachable node is tried again
+    /// when it answers (nothing is rescheduled meanwhile).
+    async fn settle_unloads(&self, out: &mut Vec<LifecycleEvent>) {
+        for rec in self.placements() {
+            if !self.has_unload_intent(&rec.instance_id) {
+                continue;
+            }
+            let up = self.targets().iter().any(|t| t.node_id == rec.node_id && t.reachable);
+            if !up {
+                continue;
+            }
+            let now = now_ms();
+            if self.life_of(&rec.instance_id).is_some_and(|c| now < c.orphan_next_ms) {
+                continue;
+            }
+            match self.instance(method::UNLOAD, &rec.instance_id).await {
+                Ok(_) => out.push(event(&rec, "unloaded", "the operator's unload was completed")),
+                // The node did not hold it: done, as asked.
+                Err(_) if !self.has_unload_intent(&rec.instance_id) => {
+                    out.push(event(&rec, "unloaded", "the node no longer held it; the unload is settled"))
+                }
+                Err(e) => {
+                    let attempts = self.life_of(&rec.instance_id).map_or(1, |c| c.orphan_attempts + 1);
+                    let next = now + backoff_ms(self.cfg.retry_backoff.as_millis() as u64, attempts);
+                    self.update_life(&rec.instance_id, |l| {
+                        l.orphan_attempts = attempts;
+                        l.orphan_next_ms = next;
+                    });
+                    out.push(event(&rec, "alert", format!("unload not completed yet: {e}")));
+                }
+            }
+        }
     }
 
     pub(super) fn drop_life(&self, instance_id: &str) {
@@ -268,12 +345,18 @@ impl PlacementControlPlane {
         let now = now_ms();
         self.note_reachability(now);
         let mut out = Vec::new();
+        self.settle_unloads(&mut out).await;
         self.mirror_states(&mut out).await;
         let known: Vec<String> = self.targets().into_iter().map(|t| t.node_id).collect();
         for rec in self.placements() {
             // Seed placements and instances on nodes we have no target for
             // are not this pass's business (a Seed is hardware-bound).
             if !known.contains(&rec.node_id) {
+                continue;
+            }
+            // An unload the operator asked for and the node has not confirmed
+            // is settled above; it is never rescheduled or adopted.
+            if self.has_unload_intent(&rec.instance_id) {
                 continue;
             }
             let Some(state) = self.lifecycle_of(&rec.instance_id) else {
@@ -314,6 +397,9 @@ impl PlacementControlPlane {
                 continue;
             };
             for rec in mine {
+                if self.has_unload_intent(&rec.instance_id) {
+                    continue;
+                }
                 let state = self.lifecycle_of(&rec.instance_id);
                 if matches!(state, Some(LifecycleState::Rescheduled | LifecycleState::Lost)) {
                     continue; // handled by the rejoin path
@@ -380,7 +466,7 @@ impl PlacementControlPlane {
         if now < c.orphan_next_ms {
             return;
         }
-        let failure = match self.instance(method::UNLOAD, &rec.instance_id).await {
+        let failure = match self.instance_ex(method::UNLOAD, &rec.instance_id, false).await {
             Ok(_) => {
                 out.push(event(rec, "orphan_unloaded", "node returned; the replaced copy was unloaded"));
                 return;

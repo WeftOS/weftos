@@ -386,6 +386,21 @@ async fn probe_and_publish(
         .map_err(|e| format!("probe task failed: {e}"))?
 }
 
+/// Re-read this node's live state (free memory and the like) and publish it
+/// now, for a caller that just changed it: a stop or unload on the workload
+/// host. Not an operator-forced probe, so the forced-refresh floor does not
+/// apply; it still takes the refresh lock, so it never races the background
+/// tick. A no-op before [`init`]. Errors are logged, never returned: the
+/// facts then age out on their own schedule.
+pub async fn refresh_live_now(membership: Arc<ClusterMembership>) {
+    let Some(signer) = LOCAL.get().cloned() else {
+        return;
+    };
+    if let Err(e) = refresh(signer, membership, false).await {
+        warn!(error = %e, "node facts refresh after a teardown failed");
+    }
+}
+
 /// Chain an operator-forced probe: who asked is the RPC caller's concern;
 /// what the chain keeps is that a full probe ran on this node, and the `seq`
 /// it published.

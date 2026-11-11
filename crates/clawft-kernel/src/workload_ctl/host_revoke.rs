@@ -90,6 +90,9 @@ impl WorkloadHostService {
                 self.device_forget(&id);
                 self.note_departed(&id, "revoked");
             }
+            if gone {
+                self.facts_changed().await;
+            }
             out.push(ForcedTeardown {
                 instance_id: id,
                 workload,
