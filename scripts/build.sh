@@ -528,7 +528,7 @@ cmd_browser() {
     run_cmd "${args[@]}"
     timer_end
 
-    local wasm_file="target/wasm32-unknown-unknown/${profile}/clawft_wasm.wasm"
+    local wasm_file="${CARGO_TARGET_DIR:-$ROOT/target}/wasm32-unknown-unknown/${profile}/clawft_wasm.wasm"
     report_binary_size "$wasm_file" "Browser WASM (raw)"
 
     # Run wasm-bindgen to generate JS glue into www/pkg/ so the test
