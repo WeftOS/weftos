@@ -279,6 +279,11 @@ impl ScopedView {
             }
             reconcile(&lay, &after, &paths, limits.max_file)?;
         }
+        if w.start == WorkStart::Empty {
+            // The published files are the new stamped baseline: the lower follows the work drive.
+            tree::mirror(&sd, &lay.lower(), "", &w.prefix, &self.spec, &[], &mut rep.skipped)?;
+            tree::set_tree_mode(&lay.lower(), false)?;
+        }
         rep.up = up?;
         rep.open_conflicts = after.conflicts.len();
         self.save_manifest()?;
