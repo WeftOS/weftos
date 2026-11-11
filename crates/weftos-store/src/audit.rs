@@ -291,4 +291,20 @@ mod tests {
         assert_eq!((v[0].op.as_str(), v[0].bucket.as_str(), v[0].object.as_deref(), v[0].bytes, v[0].access_key.as_str()), ("ObjectCreated:Put", "auditbkt", Some("c/obj x.txt"), 6, "AK1"));
         assert_eq!(percent_decode("100%"), "100%", "a bare percent stays");
     }
+    /// Two records exactly as a throwaway RustFS 1.0.4 container posted them to the audit webhook
+    /// (2026-11-10: CreateBucket, then PutObject of `k/obj.txt`, root credential). The access key is
+    /// the throwaway's; the request headers arrive redacted. See `testdata/`.
+    #[test]
+    fn a_fixture_of_real_rustfs_1_0_4_audit_records_is_read() {
+        let lines: Vec<&str> = include_str!("../testdata/rustfs-1.0.4-audit.ndjson").lines().collect();
+        assert_eq!(lines.len(), 2);
+        let mk = parse_audit(lines[0]).unwrap();
+        assert_eq!((mk.op.as_str(), mk.bucket.as_str(), mk.object.as_deref(), mk.status), ("CreateBucket", "auditbkt", None, Some(200)));
+        let put = parse_audit(lines[1]).unwrap();
+        assert_eq!((put.op.as_str(), put.bucket.as_str(), put.object.as_deref(), put.status), ("PutObject", "auditbkt", Some("k/obj.txt"), Some(200)));
+        assert!(put.access_key.starts_with("w2proot"), "the record names the caller's key: {}", put.access_key);
+        for l in &lines {
+            assert!(!l.contains("Credential=") && !l.contains("Signature="), "no signed header text in the fixture");
+        }
+    }
 }
