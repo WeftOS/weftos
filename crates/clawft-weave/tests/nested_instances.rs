@@ -343,7 +343,14 @@ async fn nested_user_supervises_project_and_restarts_with_private_identity() {
     // The chain persists as `chain.rvf` beside the configured `chain.json` checkpoint path
     // when signed (kernel boot prefers RVF); either file is a saved chain.
     let chain = c.home.join(".weftos/chain/chain.json");
-    assert!(chain.exists() || chain.with_extension("rvf").exists(), "inner chain was not saved");
+    // The child writes its chain while it shuts down, which can finish a
+    // moment after `stop` returns on a loaded host: wait for it, bounded.
+    let saved = |p: &std::path::Path| p.exists() || p.with_extension("rvf").exists();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while !saved(&chain) && std::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(saved(&chain), "inner chain was not saved");
     sup.start(ID).await.unwrap();
     assert_eq!(
         std::fs::read(c.home.join(".weftos/user.key")).unwrap(),

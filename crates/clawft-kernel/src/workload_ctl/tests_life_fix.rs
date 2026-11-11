@@ -10,7 +10,7 @@ use ed25519_dalek::SigningKey;
 use super::lifecycle::{LifecyclePolicy, LifecycleState};
 use super::plane::PlaneConfig;
 use super::test_support::*;
-use super::tests_life_plane::{actions, chained, count, cfg, past_backoff, past_dead_after, rig};
+use super::tests_life_plane::{actions, chained, count, cfg, past_dead_after, rig};
 use crate::chain::{EVENT_KIND_WORKLOAD_LIFECYCLE, EVENT_KIND_WORKLOAD_MIGRATE, EVENT_KIND_WORKLOAD_UNLOAD};
 use crate::workload_governance::{NetworkPolicy, WorkloadGate, WorkloadPermitRule};
 use crate::workload_runtime::RunMode;
@@ -97,11 +97,17 @@ async fn a_reschedule_that_finds_no_node_is_retried_with_backoff_and_never_aband
     assert_eq!(actions(&ev), ["lost", "reschedule_failed"], "{ev:#?}");
     let attempts = |r: &super::tests_life_plane::Rig| r.plane.life_of(&placed.instance_id).unwrap().attempts;
     assert_eq!(attempts(&r), 1);
+    // The retry clock is the wall clock, so "inside the backoff" and "past the
+    // backoff" are set on the record, not slept: a loaded host cannot move a
+    // sleep across the 60 ms boundary.
+    let id = placed.instance_id.clone();
+    let set_next = |r: &super::tests_life_plane::Rig, at: u64| r.plane.update_life(&id, |l| l.next_attempt_ms = at);
     // Inside the backoff nothing is attempted.
+    set_next(&r, u64::MAX / 2);
     assert!(r.plane.lifecycle_tick().await.is_empty());
     assert_eq!(attempts(&r), 1);
     // The second failure reaches the attempt count that is announced.
-    past_backoff().await;
+    set_next(&r, 0);
     let ev = r.plane.lifecycle_tick().await;
     assert_eq!(actions(&ev), ["alert"], "{ev:#?}");
     assert!(ev[0].detail.contains("still retrying"), "{}", ev[0].detail);
@@ -109,7 +115,7 @@ async fn a_reschedule_that_finds_no_node_is_retried_with_backoff_and_never_aband
 
     // It never gives up for good: capacity returns later and it is placed.
     assert!(r.plane.set_tier(&r.b.id, TrustTier::Paired));
-    past_backoff().await;
+    set_next(&r, 0);
     let ev = r.plane.lifecycle_tick().await;
     assert_eq!(actions(&ev), ["rescheduled"], "{ev:#?}");
     assert_eq!(count(&r.b).await, 1);
