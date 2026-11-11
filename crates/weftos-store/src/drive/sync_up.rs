@@ -11,6 +11,7 @@
 //! which is not atomic: a writer that lands inside that window wins silently. The report counts
 //! which path each write took. The create path has no window either way.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use super::cas::hash_of;
@@ -89,7 +90,16 @@ fn up<B: ObjectBackend + ?Sized>(b: &B, dest: &Path, index: &mut Index, opts: &O
     rep.skipped.extend(s.skipped);
     rep.open_conflicts = index.conflicts.len();
     let (bucket, prefix, device) = (index.bucket.clone(), index.prefix.clone(), index.device.clone());
-    for ch in s.changes {
+    // A case-only rename on a case-insensitive volume (`readme.md` to `Readme.md`) is a delete plus
+    // a create, and path order puts the upper-case create first. A store that refuses a key
+    // differing only by case (the file-system backend) would reject that put while the old key
+    // still stands, and the whole push would stop. So a create whose path matches a pending delete
+    // apart from case runs after every other change; everything else keeps path order.
+    let deleted: BTreeSet<String> = s.changes.iter().filter(|c| c.kind == ChangeKind::Delete).map(|c| c.path.to_lowercase()).collect();
+    let (late, mut changes): (Vec<_>, Vec<_>) =
+        s.changes.into_iter().partition(|c| c.kind == ChangeKind::Create && deleted.contains(&c.path.to_lowercase()));
+    changes.extend(late);
+    for ch in changes {
         let key = index.key(&ch.path);
         if ch.kind != ChangeKind::Delete && rep.put.len() >= opts.limits.max_files {
             rep.skipped.push(Skipped::new(&ch.path, SkipWhy::OverBudget));
