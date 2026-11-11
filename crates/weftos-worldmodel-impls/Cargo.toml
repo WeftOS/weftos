@@ -26,8 +26,8 @@ candle = ["dep:candle-core", "dep:candle-nn", "std"]
 weftos-worldmodel-core = { workspace = true, default-features = false }
 
 # Optional ML stack — only resolved when `candle` feature is enabled.
-candle-core = { version = "0.8", optional = true, default-features = false }
-candle-nn = { version = "0.8", optional = true, default-features = false }
+candle-core = { version = "0.11", optional = true, default-features = false }
+candle-nn = { version = "0.11", optional = true, default-features = false }
 
 [dev-dependencies]
 weftos-worldmodel-core = { workspace = true, default-features = false }
