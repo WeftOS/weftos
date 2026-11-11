@@ -293,15 +293,15 @@ fn verified(pkg: &std::path::Path) -> (crate::workload_pkg::VerifiedPackage, cra
 }
 
 /// A minimal little-endian ELF64 header for `arch` (enough for admission).
-fn elf(arch: &str) -> String {
+fn elf(arch: &str) -> Vec<u8> {
     let m = crate::workload_runtime::native::elf_machine(arch).unwrap().to_le_bytes();
     let mut b = vec![0x7f, b'E', b'L', b'F', 2, 1, 1];
     b.resize(18, 0);
     b.extend_from_slice(&m);
     b.resize(64, 0);
-    // The package helper writes text; these bytes are all ASCII-safe except
-    // the header, so go through latin-1 to keep them byte for byte.
-    b.iter().map(|&c| c as char).collect()
+    // Raw bytes: e_machine for aarch64 is 0xB7, which a text round trip would
+    // write as the UTF-8 pair C2 B7.
+    b
 }
 
 /// The runtime's admission picks the arch: a placement whose variant names
