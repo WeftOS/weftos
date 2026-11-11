@@ -116,7 +116,7 @@ comparing against.
 > precision*, not for monostatic range resolution.
 >
 > **Canonical references for the matched-filter / pulse-compression
-> math underwriting both §2.2 CHIRP and clawft v2 chirp-spread
+> math supporting both §2.2 CHIRP and clawft v2 chirp-spread
 > TWTT**: Turin 1960 (*IRE TIT* 6:311, DOI
 > 10.1109/TIT.1960.1057571 — matched-filter foundations); Klauder
 > et al. 1960 (*Bell Sys. Tech. J.* 39:745, DOI

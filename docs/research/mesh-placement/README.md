@@ -1,6 +1,6 @@
 # Governed workload placement (cogs first, then inference and accelerators)
 
-> **Cogs project:** the operational detail for Cognitum Seeds, the Pi 5, fleets, tooling, testing on hardware and upstream work lives in the private cogs repo (`weave-logic-ai/cognitum-cogs`, `docs/`; locally `~/Clients/cognitum/cogs-main`). Its decision records are the COG-NNN series. This WeftOS doc keeps only what WeftOS implements.
+> **Cogs project:** the operational detail for Cognitum Seeds, the Pi 5, fleets, tooling, testing on hardware and upstream work lives in the private cogs repo (`weave-logic-ai/cognitum-cogs`, `docs/`; locally `<client workspace>/cognitum/cogs-main`). Its decision records are the COG-NNN series. This WeftOS doc keeps only what WeftOS implements.
 
 Design for a mesh-wide, governed placement layer. Cogs are the first workload kind, local inference the second, accelerator jobs (NPU/TPU/TSU) later.
 - ADRs (all Proposed, 2026-09-28): [ADR-099 placement layer](../../adr/adr-099-governed-workload-placement.md), [ADR-100 cog kind](../../adr/adr-100-cog-workload-kind.md), [ADR-101 inference kind and local-hosting migration](../../adr/adr-101-inference-workload-kind.md)

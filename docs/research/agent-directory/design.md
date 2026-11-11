@@ -382,7 +382,7 @@ Phase 2: **Documenter** (per-PR lane for Doc Path A), **Measurer** (read-only, p
 (grounds answers in a repo-owned cited brain, grades them documented, inferred
 or unknown, keeps content out of the agent file; from `client-domain-expert` and
 `proforma-domain-expert`) and `granted-system-reader` (read-only transport wall
-that turns write requests into findings for a named owner; from `smartsheet-expert`).
+that turns write requests into findings for a named owner; from `tracker-tool-expert`).
 
 **Image-analysis skill candidates**: none enter the base team.
 `geolocate-from-pixels` (MIT) is adapted into an **Urth pack** for `world-builder`,
@@ -399,7 +399,7 @@ repo, referenced by `git_url + path + commit`, and assigned only to that client;
 leak check keeps it out of public weftos. Its core is the **Client project context
 file** (brain paths, board schema, roster pointers, ADR list) that Stew, Doc and
 Liber read, plus `client-domain-expert`, `proforma-domain-expert`,
-`smartsheet-expert` and the measurer's MCP bindings. **Excluded**:
+`tracker-tool-expert` and the measurer's MCP bindings. **Excluded**:
 `client-roadmap-architect` (third-party IP), `weftos-core` (ours). Future scope: a
 **marketing team** from coreyhaines31/marketingskills (45 MIT skills with evals).
 

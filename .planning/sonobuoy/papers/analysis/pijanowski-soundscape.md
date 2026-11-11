@@ -260,7 +260,7 @@ octave bands.
 
 ## Sonobuoy integration plan — long-term PAM mode
 
-The Pijanowski framework directly underwrites a `sonobuoy-pam`
+The Pijanowski framework directly supports a `sonobuoy-pam`
 deployment profile that is distinct from the tactical-detection
 `sonobuoy-tactical` profile already sketched in the round-1 synthesis.
 

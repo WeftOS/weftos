@@ -78,7 +78,7 @@ operations after a dry run and backup review.
 | Legacy unsigned bare-metal leaf to certified leaf | `docs/plans/adr-103-leaf-implementation.md` | Certified leaf protocol, claim synchronization, reconnect cleanup, and ESP-IDF producer/NVS backlog are implemented; unsigned legacy mode remains off by default | Migration tooling and hardware rollout are still deferred. ESP-IDF built, but no device was flashed or power-loss tested. |
 | Legacy workspace registry to project manifests | `docs/plans/weave-topology-p1-plan.md` packages A/B and section 4; `docs/guides/kernel.md` owner migration | User-daemon startup reads `~/.clawft/workspaces.json` and idempotently seeds pending manifests under `~/.weftos/projects/`; `weft project init` adopts a seeded root and keeps its stable project id | Product code and tests are complete. This migrates registry metadata only: it does not copy repository files, classify clients, or enroll projects in the dashboard/fleet manager. |
 | Mac development and archived client source intake to photo-gallery | `docs/plans/dashboard-fleet-terraform-integration.md`; `docs/research/pg-source-intake.md` | Non-destructive, resumable `rsync` into `/data1/weavelogic-internal/_archive/`, followed by receipts, checksum verification, classification, and later promotion into governed roots | Copies of `~/dev/` and `~/aepod-xpc-sync/` were recorded as started on 2026-10-04; current completion and checksum verification are not established. Do not treat archive landing as project enrollment. |
-| Live `~/Clients/` projects to governed client homes | `docs/plans/dashboard-fleet-terraform-integration.md`; `docs/research/pg-source-intake.md` | Map each live source to client, project, owner and predecessor; then copy it under `/data1/weavelogic-clients/<client>/...` with a distinct project UID/runtime and bind dashboard UUID to certified WeftOS ULID explicitly | Inventory only. No general live-client transfer, UID provisioning, dashboard binding, or fleet enrollment is recorded as complete. |
+| Live `<client workspace>/` projects to governed client homes | `docs/plans/dashboard-fleet-terraform-integration.md`; `docs/research/pg-source-intake.md` | Map each live source to client, project, owner and predecessor; then copy it under `/data1/weavelogic-clients/<client>/...` with a distinct project UID/runtime and bind dashboard UUID to certified WeftOS ULID explicitly | Inventory only. No general live-client transfer, UID provisioning, dashboard binding, or fleet enrollment is recorded as complete. |
 
 The safe owner order is documented, rather than inferred. Chain and `user.key`
 migration are recorded complete. The remaining sequence is to stop or migrate
@@ -104,7 +104,7 @@ ledger is `docs/research/pg-source-intake.md`.
   of archives, including client-labelled material. Do not extract it or assume
   an archive is the newest source until provenance and predecessor relationships
   are reviewed.
-- `~/Clients/` was inventoried (client roots listed in the local-only
+- `<client workspace>/` was inventoried (client roots listed in the local-only
   `~/weavelogic.terraform` inventory, not here). Those live
   roots have **not** been generally transferred. Each selected project needs a
   destination under `/data1/weavelogic-clients/`, its own UID/runtime, explicit
@@ -180,7 +180,7 @@ ledger is `docs/research/pg-source-intake.md`.
    two recorded detached archive copies completed, capture checksums and skipped
    paths, then classify selected internal and client projects. Provision a
    distinct project identity and UID/runtime before promoting each source from
-   archive or `~/Clients/`. Do not bulk-enroll archive directory names as fleets.
+   archive or `<client workspace>/`. Do not bulk-enroll archive directory names as fleets.
 
 ## Resume here
 

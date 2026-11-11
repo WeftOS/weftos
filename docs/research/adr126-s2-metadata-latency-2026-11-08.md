@@ -1,7 +1,7 @@
-# ADR-126 S2: metadata latency at Sansone's size (2026-11-08)
+# ADR-126 S2: metadata latency at client scale (2026-11-08)
 
 Gate item 3 of the S2 worktree-store review: "Metadata caching is only partial: measure list and head
-latency for a worktree of Sansone's size before assuming one-poll-per-worktree is affordable." Board
+latency for a worktree of client scale before assuming one-poll-per-worktree is affordable." Board
 card 11b00a2e-4e82-4ba9-a5e6-eb70fb6dadde.
 
 **Answer:** yes, polling is affordable. A follower poll is one list plus one small get per registered
@@ -22,14 +22,14 @@ contended disk every object PUT took about 0.3 s, which makes a first publish of
 | Slow storage condition | RustFS data dir on the shared external volume (`/Volumes/ai-models`), busy with other lanes. Only partly measured, see below |
 | Client | every S2 timing is a whole `weaver store worktree <verb>` process (CLI start, RPC to the daemon, the daemon's S3 work). Raw S3 timings use a stdlib Python SigV4 client with one keep-alive connection |
 
-Synthetic tree "sansone" (seeded, deterministic, no client files): 9,517 tracked files, 800 untracked
+Synthetic tree "client-scale" (seeded, deterministic, no client files): 9,517 tracked files, 800 untracked
 not ignored, 2,395 `.md` with titles, 101 MB in total, 283 files of 50 KB or more, one `package-lock.json`
 of 411 KB (the brief said 450 KB; the generator truncates), one branch `feat/bench-work` three commits
 ahead of `master`, five uncommitted edits. Publish writes 10,317 tree objects plus the manifest, handoff,
 meta and the git bundle: the bucket holds 10,321 keys. The manifest is 2.0 MB. A registry entry is 355 bytes.
 
 Not done: the 6,000-file WeftOS-like profile. The generator supports it (`weftos`), but writing the
-sansone tree took 38 minutes on the contended volume, and the time went to the main profile.
+client-scale tree took 38 minutes on the contended volume, and the time went to the main profile.
 
 ## Results on the RAM-disk RustFS (median and worst of 3 unless noted)
 
@@ -133,7 +133,7 @@ over the tailnet was not measured (no credentials, so no large object to fetch).
 
 ## Conclusion
 
-- **One poll per worktree per 30 to 60 s is affordable** at Sansone's size, including N=20 (about 1.2 s of
+- **One poll per worktree per 30 to 60 s is affordable** at client scale, including N=20 (about 1.2 s of
   mostly waiting per poll). The registry entry is 355 bytes and does not grow with the tree.
 - **Where the time goes:** round trips. List 1.25 ms, gets 0.1 ms each, parse unmeasurable, all on loopback;
   at 58 ms per call the 21 sequential calls are the cost. Listing the worktree bucket (95 ms per 1000 keys)
@@ -177,17 +177,17 @@ DEV=$(hdiutil attach -nomount ram://3145728 | awk '{print $1}'); diskutil erasev
 export HOME=$S/home WEFTOS_RUNTIME_DIR=$S/rt WEFTOS_STORE_RUSTFS_ENV=$S/rustfs.env BENCH_DEST_ROOT=/Volumes/s2metaram
 cd $S && $W kernel start --new-chain
 # trees
-python3 -I $B/adr126_s2_meta_gen.py $S/trees/sansone sansone        # 38 min on the busy volume
+python3 -I $B/adr126_s2_meta_gen.py $S/trees/client-scale client-scale        # 38 min on the busy volume
 # measurements (each repeats 3 times and appends to $S/logs/results.jsonl)
-python3 -I $B/adr126_s2_meta_bench.py $W $S/rustfs.env $S create sansone sansone-a   # also -b, -c
-python3 -I $B/adr126_s2_meta_bench.py $W $S/rustfs.env $S publish sansone sansone-a  # then republish
-python3 -I $B/adr126_s2_meta_bench.py $W $S/rustfs.env $S fanout sansone-a 20        # pad the registry
-python3 -I $B/adr126_s2_meta_bench.py $W $S/rustfs.env $S follow sansone-a
+python3 -I $B/adr126_s2_meta_bench.py $W $S/rustfs.env $S create client-scale client-a   # also -b, -c
+python3 -I $B/adr126_s2_meta_bench.py $W $S/rustfs.env $S publish client-scale client-a  # then republish
+python3 -I $B/adr126_s2_meta_bench.py $W $S/rustfs.env $S fanout client-a 20        # pad the registry
+python3 -I $B/adr126_s2_meta_bench.py $W $S/rustfs.env $S follow client-a
 python3 -I $B/adr126_s2_meta_bench.py $W $S/rustfs.env $S search
 python3 -I $B/adr126_s2_meta_bench.py $W $S/rustfs.env $S leftovers
-python3 -I $B/adr126_s2_meta_bench.py $W $S/rustfs.env $S overlaps sansone-a sansone-b
-python3 -I $B/adr126_s2_meta_bench.py $W $S/rustfs.env $S syncdocs sansone-a
-python3 -I $B/adr126_s2_meta_bench.py $W $S/rustfs.env $S fetch sansone-a
+python3 -I $B/adr126_s2_meta_bench.py $W $S/rustfs.env $S overlaps client-a client-b
+python3 -I $B/adr126_s2_meta_bench.py $W $S/rustfs.env $S syncdocs client-a
+python3 -I $B/adr126_s2_meta_bench.py $W $S/rustfs.env $S fetch client-a
 # raw S3 metadata and the PG round trip
 python3 -I $B/adr126_s2_meta_s3.py s3 $S/rustfs.env w-01jbenchs2meta000000000a1a-abcf3259aa30 50
 python3 -I $B/adr126_s2_meta_s3.py net http://100.90.170.87:9700/ 20

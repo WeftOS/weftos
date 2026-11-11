@@ -155,7 +155,7 @@ Date: 2026-11-08. ADR-126 §4a gate items 3 to 6, the part that needs one machin
 
 Not repeated because they already exist: three identities and IAM (`s2_follower_rustfs`), concurrent claim races (`s2_handoff_cas`, `s2_land_rustfs`), claim expiry on observed silence and epoch fencing (`s2_follower`), empty-registry refusal, corrupt-entry-does-not-blind-poll, one interrupted-sync case, future-timestamp and stuck-cleanup verdicts at unit level.
 
-### Item 3: latency for a Sansone-sized worktree (measured)
+### Item 3: latency for a client-sized worktree (measured)
 
 5003 files (4800 source files of 1 to 3 KB, 200 docs, 3 files of 20 MB), 66 MB, manifest 743 KB, one run on loopback:
 

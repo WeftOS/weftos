@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Deterministic synthetic git tree for the ADR-126 S2 metadata latency bench.
 
-Usage: adr126_s2_meta_gen.py <outdir> <profile>   profile = sansone | weftos | tiny
+Usage: adr126_s2_meta_gen.py <outdir> <profile>   profile = client-scale | weftos | tiny
 No real client files are read or copied; every byte comes from a seeded PRNG.
 Profile shapes (tracked / untracked-not-ignored / .md files):
-  sansone  9500 / 800 / 2400   (md titles, sizes 1-20 KB, ~300 files 50-200 KB, one 450 KB package-lock.json)
+  client-scale  9500 / 800 / 2400   (md titles, sizes 1-20 KB, ~300 files 50-200 KB, one 450 KB package-lock.json)
   weftos   6000 / 150 /  900
   tiny       40 /   5 /   10
 The repo has branch master plus branch feat/bench-work with 3 unmerged commits
@@ -12,7 +12,7 @@ The repo has branch master plus branch feat/bench-work with 3 unmerged commits
 """
 import os, random, subprocess, sys
 
-PROFILES = {"sansone": (9500, 800, 2400), "weftos": (6000, 150, 900), "tiny": (40, 5, 10)}
+PROFILES = {"client-scale": (9500, 800, 2400), "weftos": (6000, 150, 900), "tiny": (40, 5, 10)}
 WORDS = ("alpha beta gamma delta route handler session token schema query client server ticket order invoice "
          "shipment customer render layout config deploy cache index record update delete create status audit "
          "report policy review draft final import export worker queue retry limit window buffer stream event").split()

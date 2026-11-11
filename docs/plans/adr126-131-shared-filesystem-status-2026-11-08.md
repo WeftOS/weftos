@@ -85,7 +85,7 @@ F18 (`store.promote` accepts empty prefix). Source: ADR-126 "Still open" on `wt/
 | ADR-131 Q1: waker-minted create-only inbox URLs | ADR-131 "Open questions" | Per-chain SC deploy | Owner (Terraform); aepod code |
 | ADR-131 Q2: client data in GCS, encrypted, with KMS | same | D4, any client seed | Owner (KMS enable); aepod |
 | ADR-131 Q3: bucket per client or prefix | same | S11 test pair; client seed layout | Owner (Terraform) |
-| ADR-131 Q4: first project after WeftOS and first client project | same | Cutover order. Owner has said Sansone first (card `4c4319e0`); not recorded as an answer to Q4 | PG session |
+| ADR-131 Q4: first project after WeftOS and first client project | same | Cutover order. Owner has said the first client project goes first (card `4c4319e0`); not recorded as an answer to Q4 | PG session |
 | ADR-131 Q5: sparse-by-path on macOS in v1 | same | D1 design. weftos-d1 notes record this as received 2026-11-07, but the ADR still lists it open | weftos-d1 |
 | ADR-131 Q6: Windows now or later | same | ProjFS work; the `/mnt/d` cost run | aepod Windows side |
 | ADR-131 Q7: client git history as encrypted bundle or PG only | same | Client import design | PG session |
@@ -129,7 +129,7 @@ F18 (`store.promote` accepts empty prefix). Source: ADR-126 "Still open" on `wt/
 
 ## 6. Standing constraints
 
-- No push. No Terraform apply. No production mounts. No Sansone migration.
+- No push. No Terraform apply. No production mounts. No client migration.
 - No restart of the weaver, the gateway, MLX or PG services. No store-capable weaver on the Mac, aepod or PG.
 - Targeted tests only, no full workspace suite. CI on aepod is the green of record.
 - No PG credentials on the Mac. Secret material moves by file path only.
