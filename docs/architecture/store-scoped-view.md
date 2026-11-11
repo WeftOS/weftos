@@ -1,8 +1,9 @@
 # Store scoped view: the filesystem half of the Linux sandbox backend (2026-11-08)
 
-Status: **interface spec plus a loopback prototype.** Owner item E-1. The prototype is the library
-module `crates/weftos-store/src/drive/view.rs` and `drive/view/` on branch
-`wt/adr126-e1-scoped-view`. The `weaver store view` verbs are specified here but not built. The
+Status: **interface spec, library and CLI built and landed.** Owner item E-1. The library is the
+module `crates/weftos-store/src/drive/view.rs` and `drive/view/` (landed from branch
+`wt/adr126-e1-scoped-view`). The `weaver store view` verbs are built (section 6.3; code in
+`crates/clawft-weave/src/store_view.rs`). The
 Linux bwrap side belongs to photo-gallery's `weftos-pg` session; see
 [`docs/research/adr126-e1-scoped-view-handoff-weftos-pg-2026-11-08.md`](../research/adr126-e1-scoped-view-handoff-weftos-pg-2026-11-08.md).
 
