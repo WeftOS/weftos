@@ -153,6 +153,10 @@ impl Layout {
     pub(crate) fn staged(&self) -> PathBuf {
         self.state().join("staged.json")
     }
+    /// The work drive's index as stamped when `lower/` was mirrored: what `lower/` must match.
+    pub(crate) fn lower_index(&self) -> PathBuf {
+        self.state().join("lower-index.json")
+    }
     pub(crate) fn ovl_workdir(&self) -> PathBuf {
         self.state().join("ovl-work")
     }
@@ -350,6 +354,7 @@ impl ScopedView {
                     let (n, _) = tree::mirror(&lay.work_drive(), &lay.lower(), "", &w.prefix, &spec, &[], &mut sk)?;
                     rep.files += n;
                     std::fs::create_dir_all(lay.ovl_workdir())?;
+                    tree::write_json(&lay.lower_index(), &work_index_of(&lay)?)?;
                     // Writable modes, not read-only: copy-up carries the lower's mode into the upper (see the module doc).
                     tree::set_tree_mode(&lay.lower(), false)?;
                 }
@@ -420,7 +425,7 @@ impl ScopedView {
             None => None,
         };
         if let Some(w) = self.spec.work.as_ref().filter(|w| w.start == WorkStart::Empty) {
-            let d = tree::lower_drift(&self.lay.work_drive(), &self.lay.lower(), &self.spec, &w.prefix, &limits)?;
+            let d = tree::lower_drift(&self.lay.lower_index(), &self.lay.lower(), &self.spec, &w.prefix, &limits)?;
             tampered.extend(d.into_iter().map(|p| format!("{LOWER_DIR}/{p}")));
         }
         let pending = match &self.spec.work {
@@ -471,4 +476,8 @@ impl ScopedView {
         }
         Ok(rep)
     }
+}
+
+fn work_index_of(lay: &Layout) -> Result<Index> {
+    Index::load(&lay.work_drive())?.ok_or_else(|| ViewError::NotAView(lay.work_drive().display().to_string()))
 }

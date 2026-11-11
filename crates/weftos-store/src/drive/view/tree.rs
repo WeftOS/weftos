@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use super::{Bind, Layout, Lease, RefreshEndpoint, Result, VIEW_SCHEMA, ViewError, ViewManifest, ViewSpec, WorkStart};
-use super::{REFRESH_RPC, WORK_MOUNT, is_control_key, lease};
+use super::{LOWER_DIR, REFRESH_RPC, WORK_MOUNT, is_control_key, lease};
 use crate::backend::ObjectBackend;
 use crate::drive::cas::Cas;
 use crate::drive::index::{Index, mtime_ns};
@@ -274,14 +274,17 @@ pub(crate) fn mirror(
     Ok((n, bytes))
 }
 
-/// Where the overlay `lower/` differs from the work drive it mirrors: a file in `lower/` that is
-/// not in the drive's index (or any non-regular entry), an indexed file missing from `lower/`, and
-/// a file that is no longer the drive's own (replaced, so it is not the stamped bytes). Paths are
-/// relative to `lower/`. Content edited in place through the hard link shows in the work drive's
-/// own scan instead.
-pub(crate) fn lower_drift(drive: &Path, lower: &Path, spec: &ViewSpec, prefix: &str, limits: &Limits) -> Result<Vec<String>> {
+fn load_lower_index(path: &Path) -> Result<Index> {
+    Ok(serde_json::from_slice(&std::fs::read(path)?)?)
+}
+
+/// Where the overlay `lower/` differs from the listing it was stamped with at open (`stamp`): a
+/// file in `lower/` that is not in the listing (or any non-regular entry), a stamped file missing
+/// from `lower/`, and a file whose bytes are not the stamped ones. Paths are relative to `lower/`.
+/// The work drive moves on at publish; the lower deliberately does not, so the stamp is the baseline.
+pub(crate) fn lower_drift(stamp: &Path, lower: &Path, spec: &ViewSpec, prefix: &str, limits: &Limits) -> Result<Vec<String>> {
     let prefix = norm_prefix(prefix);
-    let ix = Index::load(drive)?.ok_or_else(|| ViewError::NotAView(drive.display().to_string()))?;
+    let ix = load_lower_index(stamp)?;
     let mut expected = BTreeSet::new();
     for rel in ix.entries.keys() {
         if !is_control_key(&spec.bucket, &format!("{prefix}{rel}")) && !spec.denied(rel) {
@@ -305,12 +308,10 @@ pub(crate) fn lower_drift(drive: &Path, lower: &Path, spec: &ViewSpec, prefix: &
                 }
             } else {
                 seen.insert(r.clone());
-                let dm = std::fs::symlink_metadata(drive.join(&r))?;
-                if !same_file(&md, &dm) && md.len() <= limits.max_file {
-                    let (a, b) = (std::fs::read(e.path())?, std::fs::read(drive.join(&r))?);
-                    if a != b {
-                        drift.insert(r);
-                    }
+                let st = &ix.entries[&r];
+                let quick = md.len() == st.size && mtime_ns(&md) == st.mtime_ns;
+                if !quick && (md.len() > limits.max_file || crate::drive::cas::hash_of(&std::fs::read(e.path())?) != st.hash) {
+                    drift.insert(r);
                 }
             }
         }
@@ -321,6 +322,41 @@ pub(crate) fn lower_drift(drive: &Path, lower: &Path, spec: &ViewSpec, prefix: &
         }
     }
     Ok(drift.into_iter().collect())
+}
+
+/// Put `lower/` back to its stamp: extras removed (and directories left empty), edited or missing
+/// files restored from the work drive's CAS. Returns the repaired paths (`lower/...`).
+pub(crate) fn repair_lower(lay: &Layout, spec: &ViewSpec, prefix: &str, limits: &Limits) -> Result<Vec<String>> {
+    let lower = lay.lower();
+    let ix = load_lower_index(&lay.lower_index())?;
+    let cas = Cas::new(&lay.work_drive());
+    let mut fixed = Vec::new();
+    for rel in lower_drift(&lay.lower_index(), &lower, spec, prefix, limits)? {
+        let path = safe_join(&lower, &rel).map_err(|e| ViewError::Spec(e.to_string()))?;
+        match ix.entries.get(&rel) {
+            Some(e) if cas.has(&e.hash) => {
+                let dir = path.parent().ok_or_else(|| DriveError::Io("no parent".into()))?;
+                std::fs::create_dir_all(dir)?;
+                let tmp = dir.join(format!("{TMP_PREFIX}{}", ulid::Ulid::new()));
+                cas.clone_to(&e.hash, &tmp)?;
+                set_mode(&tmp, if e.exec { 0o755 } else { 0o644 })?;
+                std::fs::rename(&tmp, &path)?;
+            }
+            Some(_) => continue,
+            None => {
+                let _ = std::fs::remove_file(&path);
+                let mut cur = path.parent().map(Path::to_path_buf);
+                while let Some(d) = cur.filter(|d| *d != lower && d.starts_with(&lower)) {
+                    if std::fs::remove_dir(&d).is_err() {
+                        break;
+                    }
+                    cur = d.parent().map(Path::to_path_buf);
+                }
+            }
+        }
+        fixed.push(format!("{LOWER_DIR}/{rel}"));
+    }
+    Ok(fixed)
 }
 
 /// Put a drive tree back to its index from the CAS: a file changed under the view (a base file

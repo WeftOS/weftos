@@ -207,7 +207,7 @@ impl ScopedView {
         let foreign: Vec<String> = scan(&sd, &ix, &limits)?.changes.into_iter().map(|c| c.path).filter(|p| !staged.contains(p)).collect();
         let mut foreign = foreign;
         if w.start == WorkStart::Empty {
-            foreign.extend(tree::lower_drift(&sd, &lay.lower(), &self.spec, &w.prefix, &limits)?.into_iter().map(|p| format!("{LOWER_DIR}/{p}")));
+            foreign.extend(tree::lower_drift(&sd, &&lay.lower_index(), &self.spec, &w.prefix, &limits)?.into_iter().map(|p| format!("{LOWER_DIR}/{p}")));
         }
         if !foreign.is_empty() {
             return Err(ViewError::Tampered(foreign));
@@ -279,11 +279,6 @@ impl ScopedView {
             }
             reconcile(&lay, &after, &paths, limits.max_file)?;
         }
-        if w.start == WorkStart::Empty {
-            // The published files are the new stamped baseline: the lower follows the work drive.
-            tree::mirror(&sd, &lay.lower(), "", &w.prefix, &self.spec, &[], &mut rep.skipped)?;
-            tree::set_tree_mode(&lay.lower(), false)?;
-        }
         rep.up = up?;
         rep.open_conflicts = after.conflicts.len();
         self.save_manifest()?;
@@ -318,13 +313,13 @@ impl ScopedView {
             }
             Some(WorkStart::Empty) => {
                 // The lower is not brought forward under a running session, but it is put back to
-                // the stamped listing: edited files from the CAS, extras removed, missing relinked.
+                // the listing it was stamped with at open: extras removed, edited or missing files
+                // restored from the CAS.
                 let prefix = self.spec.work.as_ref().map(|w| w.prefix.clone()).unwrap_or_default();
                 if load_staged(&lay)?.is_empty() {
                     rep.repaired.extend(tree::repair(&lay.work_drive(), &limits)?);
                 }
-                tree::mirror(&lay.work_drive(), &lay.lower(), "", &prefix, &self.spec, &[], &mut rep.skipped)?;
-                tree::set_tree_mode(&lay.lower(), false)?;
+                rep.repaired.extend(tree::repair_lower(&lay, &self.spec, &prefix, &limits)?);
                 rep.work_not_refreshed = true;
             }
             None => {}
