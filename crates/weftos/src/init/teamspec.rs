@@ -457,12 +457,15 @@ impl TeamSpec {
     }
 }
 
+/// A declared value and the name of the team that declared it.
+type Declared<T> = Option<(String, T)>;
+
 /// The package with the teams' declarations applied for `host`, and whether a
 /// `model_tier` was declared that this host cannot apply. Two teams that
 /// disagree on `tools` or `model_tier` for one package are refused.
 pub fn shape(specs: &[TeamSpec], mut pkg: Package, host: Host) -> Result<(Package, bool), InitError> {
     let Some(persona) = pkg.persona.as_mut() else { return Ok((pkg, false)) };
-    let (mut tools, mut tier): (Option<(String, Vec<String>)>, Option<(String, ModelTier)>) = (None, None);
+    let (mut tools, mut tier): (Declared<Vec<String>>, Declared<ModelTier>) = (None, None);
     let mut charter = String::new();
     for spec in specs.iter().filter(|s| !s.legacy) {
         let Some(m) = spec.member(&pkg.id) else { continue };

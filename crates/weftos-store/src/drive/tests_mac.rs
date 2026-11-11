@@ -1,6 +1,5 @@
 //! macOS drive hardening (WO-076). Fixed: Finder junk uploaded (finder_junk, remote_junk); a case-only rename that sorts upper-case first aborted sync_up on the file-system backend (case_only_rename_upper, dir_case_flip). The rest pin behaviour found sound on APFS: normalisation twins become a conflict, a case twin never overwrites a local file, a symlinked root works.
 use std::path::Path;
-use super::tests_hardening::rd;
 use super::tests_hardening::{Rig, quiet_batch, wr};
 use super::*;
 use crate::backend::{AdminBackend, ObjectBackend};
