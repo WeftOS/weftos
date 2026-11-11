@@ -127,8 +127,8 @@ fn an_overlay_work_tree_publishes_an_exec_change_too() {
     let (_d, t) = tmp();
     let root = t.join("v");
     let (mut v, _) = ScopedView::open(&s, &rw(WorkStart::Empty), &root).unwrap();
-    assert_eq!(mode(&root.join("lower/run.sh")), 0o555, "the overlay lower is read-only but keeps the execute bits");
-    assert_eq!(mode(&root.join("lower/a.txt")), 0o444);
+    assert_eq!(mode(&root.join("lower/run.sh")), 0o755, "the overlay lower is writable and keeps the execute bits");
+    assert_eq!(mode(&root.join("lower/a.txt")), 0o644);
     // What overlayfs leaves in the upper: a copy-up of a.txt with the bit set, and a new script.
     wr(&root.join("work/a.txt"), "alpha");
     chmod(&root.join("work/a.txt"), 0o755);
@@ -168,4 +168,59 @@ fn a_refresh_repairs_a_tampered_base_file_and_keeps_the_execute_bit_of_the_other
     assert!(v.status().unwrap().tampered.is_empty());
     assert!(files(&root.join("base")).contains(&"docs/bin/run.sh".to_owned()));
     assert_eq!(rd(&base.join("bin/run.sh")), "#!/bin/sh\n");
+}
+
+/// What overlayfs copy-up does: a new file in the upper with the lower's mode and bytes.
+fn copy_up(root: &Path, rel: &str) {
+    let dst = root.join("work").join(rel);
+    std::fs::create_dir_all(dst.parent().unwrap()).unwrap();
+    std::fs::copy(root.join("lower").join(rel), &dst).unwrap(); // std::fs::copy keeps the mode
+}
+
+#[test]
+fn an_overlay_lower_file_is_writable_and_an_in_place_edit_publishes() {
+    let s = probe();
+    let (_d, t) = tmp();
+    let root = t.join("v");
+    let (mut v, _) = ScopedView::open(&s, &rw(WorkStart::Empty), &root).unwrap();
+    assert_eq!(mode(&root.join("lower/a.txt")), 0o644);
+    assert_eq!(mode(&root.join("lower/dir")), 0o755, "a lower directory is writable too: copy-up of it must allow new files");
+    copy_up(&root, "a.txt");
+    // The in-place edit, with no chmod: it fails on a 0444 copy-up.
+    std::fs::OpenOptions::new().write(true).truncate(true).open(root.join("work/a.txt")).unwrap();
+    std::fs::write(root.join("work/a.txt"), "edited in place").unwrap();
+    s.clear();
+    v.publish(&s).unwrap();
+    assert_eq!(s.data_puts(), ["proj/a.txt"]);
+    assert_eq!(rd(&root.join("lower/a.txt")), "alpha", "the lower is a separate drive file until the next open");
+    assert!(v.status().unwrap().tampered.is_empty(), "a writable lower file is not tampering");
+}
+
+#[test]
+fn an_overlay_lower_executable_is_0755_and_stays_executable_through_copy_up_and_publish() {
+    let s = probe();
+    s.inner.put_attrs(B, "proj/run.sh", b"#!/bin/sh\n", false, EXEC).unwrap();
+    let (_d, t) = tmp();
+    let root = t.join("v");
+    let (mut v, _) = ScopedView::open(&s, &rw(WorkStart::Empty), &root).unwrap();
+    assert_eq!(mode(&root.join("lower/run.sh")), 0o755);
+    copy_up(&root, "run.sh");
+    assert_eq!(mode(&root.join("work/run.sh")), 0o755, "copy-up keeps the execute bit and the write bit");
+    std::fs::write(root.join("work/run.sh"), "#!/bin/sh\necho edited\n").unwrap();
+    v.publish(&s).unwrap();
+    assert!(exec_of(&s, "proj/run.sh"), "the attribute survives an edit of the executable");
+    assert_eq!(mode(&root.join("work/run.sh")), 0o755);
+}
+
+#[test]
+fn the_base_is_still_read_only_when_the_lower_is_writable() {
+    let s = probe();
+    let (_d, t) = tmp();
+    let root = t.join("v");
+    let (v, _) = ScopedView::open(&s, &rw(WorkStart::Empty), &root).unwrap();
+    assert_eq!(mode(&root.join("base")), 0o555);
+    assert_eq!(mode(&root.join("base/docs/readme.md")), 0o444);
+    assert!(v.status().unwrap().tampered.is_empty());
+    chmod(&root.join("base/docs/readme.md"), 0o644);
+    assert_eq!(v.status().unwrap().tampered, [] as [&str; 0], "a write bit alone is not content or exec tampering");
 }

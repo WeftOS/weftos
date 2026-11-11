@@ -13,7 +13,9 @@
 //! - `work/`: the session's writable tree, bound at `/work`. [`WorkStart::Clone`]: a clone of the
 //!   work prefix, bound read-write. [`WorkStart::Empty`]: an empty overlayfs upper over `lower/`;
 //!   the upper is the change set.
-//! - `lower/` ([`WorkStart::Empty`] only): read-only mirror of the work prefix, the overlay lower.
+//! - `lower/` ([`WorkStart::Empty`] only): mirror of the work prefix, the overlay lower. Writable
+//!   modes like `work/` (directories 0755, files 0644, 0755 when executable): overlayfs copy-up keeps
+//!   the lower's mode, so a read-only lower would make an in-place edit fail. Only `base/` is read-only.
 //! - `.state/`: the daemon's alone, never bound: one drive per include, the work drive, the lease,
 //!   the work index, the overlay workdir.
 //! - `view.json`: the [`ViewManifest`] the launcher reads. Written last, so a root with the state
@@ -348,7 +350,8 @@ impl ScopedView {
                     let (n, _) = tree::mirror(&lay.work_drive(), &lay.lower(), "", &w.prefix, &spec, &[], &mut sk)?;
                     rep.files += n;
                     std::fs::create_dir_all(lay.ovl_workdir())?;
-                    tree::set_tree_mode(&lay.lower(), true)?;
+                    // Writable modes, not read-only: copy-up carries the lower's mode into the upper (see the module doc).
+                    tree::set_tree_mode(&lay.lower(), false)?;
                 }
             }
             rep.skipped.extend(sk.into_iter().map(|s| (w.prefix.clone(), s)));

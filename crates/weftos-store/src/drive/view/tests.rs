@@ -396,7 +396,7 @@ fn an_empty_work_tree_is_an_overlay_upper_whose_files_are_the_change_set() {
     let (mut v, _) = ScopedView::open(&s, &rw(WorkStart::Empty), &root).unwrap();
     assert!(files(&root.join("work")).is_empty());
     assert_eq!(files(&root.join("lower")), ["a.txt", "d.txt", "dir/", "dir/b.txt"]);
-    assert_eq!(mode(&root.join("lower/a.txt")), 0o444);
+    assert_eq!(mode(&root.join("lower/a.txt")), 0o644, "the overlay lower is writable so copy-up yields a writable upper file");
     assert!(matches!(&v.manifest().binds[1], Bind::Overlay { dest, .. } if dest == "/work"));
     // What overlayfs would leave in the upper: a modified copy and a new file.
     wr(&root.join("work/a.txt"), "alpha via overlay");
