@@ -1,7 +1,8 @@
 # ADR-131: The seed drive: a project mounted as a materialised native tree over the seed store, with the seed cone as the primary file holder and PG as standby and backup
 
-- **Status**: Proposed (2026-11-01). Design only: nothing in this ADR has been built, deployed or written to any bucket or server.
+- **Status**: Accepted (2026-11-10, owner). Was Proposed (2026-11-01). The design is accepted; the seed-drive tool (D1, branch `feat/adr131-d1-policy-a`) is built and tested on weftos-ci but has not landed, pending its own diff-gate approvals and owner merge call.
 - **Date**: 2026-11-01
+- **Updated**: 2026-11-10: accepted by the owner ("that adr needs to be accepted and then all that stuff merged into release and marked as such"). Landed on target-0.8.5 under it (local, not pushed): Tapestry R8 user-daemon journal access (`fix/r8-user-daemon-journal` 06bf25a85, 487a3d638: Admin-only `chain.append`, `chain.checkpoint`, `chain.get`, `chain.get_range` at user level), the store's per-object executable attribute (`feat/store-file-mode` 367bed4e7, merge 72a98d05c: scoped views keep the execute bit; unblocks Tapestry E3), and the ADR-126 and combined-readiness docs record (`docs/adr126-catchup-20261109` 4da5f3135).
 - **Deciders**: owner
 - **Prior decisions**: the decision store, consulted on 2026-11-01, holds nothing on a client-facing mount; ADR-126, ADR-128 and ADR-130 are the records on this topic.
 - **Research**: `docs/research/seed-drive-design-2026-11-01.md` (evidence, platform documentation, code citations, verified versus inferred).

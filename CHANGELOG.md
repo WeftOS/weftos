@@ -10,6 +10,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Staging area for changes after the 0.8.4 release.
 
 ### Added
+- **Store: per-object executable attribute (landed under ADR-131 Accepted 2026-11-10).** `ObjectBackend`
+  gains `put_attrs`, `put_if_match_attrs` and `attrs`; the first attribute is `executable` (RustFS:
+  `x-amz-meta-weft-exec`; directory backend: the file's execute bits). The drive index records it,
+  sync-up and view publish carry it, and scoped views materialise base files 0555/0444 and work files
+  0755/0644, so a root image in a view can run its programs. Objects without the attribute are unchanged.
+  Unblocks Tapestry E3 (bwrap/Landlock sessions over the store view). See
+  `docs/architecture/store-scoped-view.md`, File modes, and ADR-126.
+- **User daemon accepts the Tapestry session journal (R8, landed under ADR-131 Accepted 2026-11-10).**
+  Outside a project, `chain.append`, `chain.checkpoint`, `chain.get` and `chain.get_range` are allowed
+  for an Admin caller only (not on the read-only list); non-Admin callers still get `project_required`,
+  and every other `chain.*` method stays denied. `sessions verify` now reaches VERIFIED against a
+  `--profile user` daemon. ADR-103 amendment A17.
+- **ADR-131 (seed drive) Accepted 2026-11-10.** The design is accepted; the seed-drive tool itself has not
+  landed yet.
 - **Vision service contract (ADR-125, Proposed).** `svc.vision.{ocr,codes,faces,labels,embed,point,segment}`
   as cogbus services and one `vision.v1` request/reply schema in the cog schema registry, with golden
   vectors. Unknown fields and bodies over 64 KiB are refused; embeddings carry a registered kind
