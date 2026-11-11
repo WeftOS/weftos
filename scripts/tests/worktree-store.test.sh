@@ -12,7 +12,6 @@ cat >"$t/bin/weaver" <<'W'
 #!/usr/bin/env bash
 printf '%q ' "$@" >>"$WTS_LOG"; echo >>"$WTS_LOG"
 if [ "$1 $2 $3" = "store worktree buckets" ]; then echo "w-01abc-aaaaaaaaaaaa p-01abc"; fi
-if [ "$1 $2" = "project id" ]; then echo 01ABC; fi
 if [ "$1 $2 $3" = "store worktree fetch" ]; then : ; fi
 if [ "$1 $2 $3" = "store worktree claim" ]; then printf '{\n  "state": "claimed",\n  "epoch": %s\n}\n' "${CLAIM_EPOCH:-4}"; fi
 exit "${WEAVER_RC:-0}"
@@ -111,7 +110,6 @@ printf '%q ' "$@" >>"$WTS_LOG"; echo >>"$WTS_LOG"
 case "$*" in
   "store worktree publish"*) while [ $# -gt 0 ]; do [ "$1" = --bundle ] && cp "$2" "$WTS_STORE/bundle"; [ "$1" = --changes-z ] && cp "$2" "$WTS_STORE/changes.z"; shift; done ;;
   "store worktree fetch"*) while [ $# -gt 0 ]; do [ "$1" = --bundle-out ] && cp "$WTS_STORE/bundle" "$2"; shift; done ;;
-  "project id"*) echo 01ABC ;;
 esac
 exit "${WEAVER_RC:-0}"
 W
@@ -135,6 +133,10 @@ ok "search passes the query as one argument" "grep -qF -- '--query rooms\\ and\\
 "$here/worktree-store.sh" leftovers --json; ok "leftovers --json forwarded" "grep -q 'leftovers --project 01ABC --json' '$t/log'"
 "$here/worktree-store.sh" follow --state "$t/fs/state.json"; ok "follow creates the state dir" "[ -d '$t/fs' ]"
 "$here/worktree-store.sh" leftovers --project X 2>/dev/null && rc=0 || rc=$?; ok "leftovers rejects extra flags" "[ $rc != 0 ]"
+n0=$(wc -l <"$t/log"); env -u WTS_PROJECT "$here/worktree-store.sh" follow >"$t/noproj.err" 2>&1 && rc=0 || rc=$?
+ok "unset WTS_PROJECT is refused" "[ $rc != 0 ]"
+ok "refusal says how to find the project ULID" "grep -q 'WTS_PROJECT is not set' '$t/noproj.err' && grep -q 'weaver project status' '$t/noproj.err' && grep -q 'projects/<ULID>' '$t/noproj.err'"
+ok "refusal made no store call" "[ \"\$(wc -l <'$t/log')\" = \"$n0\" ]"
 WTS_PROJECT='../x' "$here/worktree-store.sh" follow 2>/dev/null && rc=0 || rc=$?; ok "follow rejects a path-like project id" "[ $rc != 0 ]"
 "$here/worktree-store.sh" overlaps 'a b' c 2>/dev/null && rc=0 || rc=$?; ok "overlaps validates slugs" "[ $rc != 0 ]"
 "$here/worktree-store.sh" sync-docs ../x "$t/c" 2>/dev/null && rc=0 || rc=$?; ok "sync-docs rejects traversal slug" "[ $rc != 0 ]"

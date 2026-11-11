@@ -32,7 +32,8 @@
 # Env: WTS_WEAVER (default: weaver), WTS_AGF (default: ~/.claude/skills/agent-git-flow/scripts),
 #      WTS_DRY_RUN=1 print the weaver calls instead of running them, WTS_SLUG (default: branch
 #      with '/' -> '--', colliding branches refused; AGF_HOOK_SLUG only if no branch),
-#      WTS_PROJECT (project ULID; default: from `weaver project id`).
+#      WTS_PROJECT (REQUIRED: the project ULID, the <ULID> in the project's weftos://<mesh>/projects/<ULID>
+#      name given to `weaver project add`; there is no `weaver project id` verb to look it up).
 set -euo pipefail
 
 weaver=${WTS_WEAVER:-weaver}
@@ -100,7 +101,7 @@ store_must() { store_run 1 "$@"; }
 project_id() {
     if [ -n "${WTS_PROJECT:-}" ]; then printf '%s' "$WTS_PROJECT"; return; fi
     [ "${WTS_DRY_RUN:-0}" = 1 ] && { printf 'DRYPROJECT'; return; }
-    "$weaver" project id 2>/dev/null || die "cannot resolve project id; set WTS_PROJECT"
+    die "WTS_PROJECT is not set. Set it to the project ULID: the <ULID> in the project's weftos://<mesh>/projects/<ULID> name (the one given to 'weaver project add'; 'weaver project status' lists the projects added on this machine). There is no 'weaver project id' to look it up."
 }
 
 epoch_file() { printf '%s/weftos/claim-%s-%s.epoch' "${XDG_STATE_HOME:-$HOME/.local/state}" "$(project_id)" "$1"; }
