@@ -72,6 +72,19 @@ pub enum SubscriberSink {
     ExternalStream(mpsc::Sender<Vec<u8>>),
 }
 
+impl SubscriberSink {
+    /// The in-kernel process behind this sink; `None` for an external
+    /// stream. (A method, not a `filter_map` match at each caller: without
+    /// the `native` feature every arm is `Some`, which clippy rejects.)
+    fn pid(&self) -> Option<Pid> {
+        match self {
+            SubscriberSink::PidInbox(pid) => Some(*pid),
+            #[cfg(feature = "native")]
+            SubscriberSink::ExternalStream(_) => None,
+        }
+    }
+}
+
 impl std::fmt::Debug for SubscriberSink {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -251,11 +264,7 @@ impl TopicRouter {
     pub fn live_subscribers(&self, topic: &str) -> Vec<Pid> {
         self.live_sinks(topic)
             .into_iter()
-            .filter_map(|(_, sink)| match sink {
-                SubscriberSink::PidInbox(pid) => Some(pid),
-                #[cfg(feature = "native")]
-                SubscriberSink::ExternalStream(_) => None,
-            })
+            .filter_map(|(_, sink)| sink.pid())
             .collect()
     }
 
@@ -267,11 +276,7 @@ impl TopicRouter {
             .get(topic)
             .map(|subs| {
                 subs.iter()
-                    .filter_map(|(_, sink)| match sink {
-                        SubscriberSink::PidInbox(pid) => Some(*pid),
-                        #[cfg(feature = "native")]
-                        SubscriberSink::ExternalStream(_) => None,
-                    })
+                    .filter_map(|(_, sink)| sink.pid())
                     .collect()
             })
             .unwrap_or_default()

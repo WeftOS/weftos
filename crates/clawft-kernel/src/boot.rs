@@ -308,8 +308,19 @@ impl<P: Platform> Kernel<P> {
         #[cfg(feature = "exochain")]
         let chain_lock = match pinned_chain.as_deref() {
             Some(ckpt) => Some(
-                crate::chain_storage::ChainLock::try_acquire(ckpt).map_err(|e| match e {
-                    crate::chain_storage::ChainLockError::InUse(m) => KernelError::BootRefused(m),
+                // A SIGHUP re-exec keeps its predecessor's pid: a lock that
+                // names it is still draining, not another kernel.
+                if std::env::var_os(crate::chain_storage::REEXEC_ENV).is_some() {
+                    crate::chain_storage::ChainLock::try_acquire_after_reexec(
+                        ckpt,
+                        crate::chain_storage::REEXEC_LOCK_WAIT,
+                    )
+                } else {
+                    crate::chain_storage::ChainLock::try_acquire(ckpt)
+                }
+                .map_err(|e| match e {
+                    crate::chain_storage::ChainLockError::InUse(m)
+                    | crate::chain_storage::ChainLockError::SelfHeld(m) => KernelError::BootRefused(m),
                     crate::chain_storage::ChainLockError::Other(m) => KernelError::Boot(m),
                 })?,
             ),

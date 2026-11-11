@@ -541,9 +541,22 @@ pub struct ChainLock {
 pub enum ChainLockError {
     /// Another kernel holds the lock.
     InUse(String),
+    /// A restart re-exec could not take back its own chain lock: the lock
+    /// file names this very pid (exec keeps the pid), so a process that
+    /// inherited the descriptor still holds it. The kernel is not running.
+    SelfHeld(String),
     /// Filesystem or locking failure.
     Other(String),
 }
+
+/// Set (to `1`) in the environment of a SIGHUP re-exec: the new image has the
+/// same pid as its predecessor, so a lock that names this pid is the
+/// predecessor's, still draining, not another kernel. Owned here so the
+/// kernel (chain lock) and the daemon (instance lock) agree on one name.
+pub const REEXEC_ENV: &str = "WEFTOS_REEXEC";
+
+/// How long a re-exec waits for an inherited chain-lock descriptor to close.
+pub const REEXEC_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
 impl ChainLock {
     /// Lock file path for a chain checkpoint (`chain.json` -> `chain.lock`).
@@ -559,7 +572,7 @@ impl ChainLock {
     /// `kernel.chain.checkpoint_path`).
     pub fn acquire(checkpoint: &Path) -> Result<Self, String> {
         Self::try_acquire(checkpoint).map_err(|e| match e {
-            ChainLockError::InUse(m) | ChainLockError::Other(m) => m,
+            ChainLockError::InUse(m) | ChainLockError::SelfHeld(m) | ChainLockError::Other(m) => m,
         })
     }
 
@@ -588,6 +601,39 @@ impl ChainLock {
                 holder_pid(&path)
             ))),
             Err(e) => Err(ChainLockError::Other(format!("cannot lock {}: {e}", path.display()))),
+        }
+    }
+
+    /// [`try_acquire`](Self::try_acquire) for a process that came up through
+    /// the SIGHUP re-exec (same pid as its predecessor). The predecessor's
+    /// lock is released by the exec, but a child it was spawning at that
+    /// instant can briefly hold an inherited descriptor, so a lock that names
+    /// this very pid is retried for `wait` before giving up with
+    /// [`ChainLockError::SelfHeld`]. A lock held under another pid fails at
+    /// once, as in `try_acquire`.
+    pub fn try_acquire_after_reexec(
+        checkpoint: &Path,
+        wait: std::time::Duration,
+    ) -> Result<Self, ChainLockError> {
+        let start = std::time::Instant::now();
+        loop {
+            match Self::try_acquire(checkpoint) {
+                Err(ChainLockError::InUse(m))
+                    if holder_pid(&Self::lock_path(checkpoint)) == std::process::id().to_string() =>
+                {
+                    if start.elapsed() >= wait {
+                        return Err(ChainLockError::SelfHeld(format!(
+                            "restart could not re-take the chain lock for {}: it is still held \
+                             under this process's own pid {} by a process that inherited the \
+                             descriptor; the kernel is NOT running, start it again ({m})",
+                            checkpoint.display(),
+                            std::process::id()
+                        )));
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+                other => return other,
+            }
         }
     }
 
@@ -980,6 +1026,36 @@ mod tests {
         ));
         drop(first);
         ChainLock::acquire(&ckpt).expect("free after drop");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reexec_chain_lock_naming_our_own_pid_is_retried_then_refused_clearly() {
+        let t = tempfile::tempdir().unwrap();
+        let ckpt = t.path().join("chain.json");
+        // The lock file names this pid, as after an exec that keeps it.
+        let holder = ChainLock::acquire(&ckpt).unwrap();
+        // A plain acquire (no re-exec) refuses at once.
+        let t0 = std::time::Instant::now();
+        assert!(matches!(ChainLock::try_acquire(&ckpt), Err(ChainLockError::InUse(_))));
+        assert!(t0.elapsed() < std::time::Duration::from_millis(100));
+        // The re-exec retries first, then says so.
+        let t0 = std::time::Instant::now();
+        let err = ChainLock::try_acquire_after_reexec(&ckpt, std::time::Duration::from_millis(300))
+            .expect_err("still held");
+        assert!(t0.elapsed() >= std::time::Duration::from_millis(300), "retried first");
+        match err {
+            ChainLockError::SelfHeld(m) => assert!(m.contains("NOT running"), "{m}"),
+            other => panic!("{other:?}"),
+        }
+        // Released while retrying: the re-exec comes up.
+        let c2 = ckpt.clone();
+        let j = std::thread::spawn(move || {
+            ChainLock::try_acquire_after_reexec(&c2, std::time::Duration::from_secs(5)).map(|_| ())
+        });
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        drop(holder);
+        j.join().unwrap().expect("acquired once the descriptor closed");
     }
 
     #[test]
