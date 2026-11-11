@@ -18,6 +18,11 @@
 - **Updated**: 2026-11-08 (S5 gate state is rebuilt from the daemon's chain: every gate change is a `store.client.gate.*` event and open replays them; `gate.json` remains only as the no-chain fallback; `weaver store client xmesh-sign` produces a cross-mesh grant file; see "S5 status")
 - **Updated**: 2026-11-08 (S5 daemon wiring in code only: a daemon running as a client user opens that account's `ClientStore` when `<runtime dir>/client-store.json` names it (`client_store_rt.rs`); `store.client.*` verbs and `weaver store client` (`client_store_rpc.rs`, `commands/store_client_cmd.rs`); gate state persisted in `gate.json` under the client root; not installed or run on any machine, local directories only)
 - **Updated**: 2026-11-07 (S1 built on `feat/adr126-s1`: `weftos-store` crate, `weaver store`, daemon wiring, local-directory backend; no RustFS backend or S3 transport yet, see "S1 status")
+- **Updated**: 2026-11-09 (S1 to S5 landed on `target-0.8.5`, origin tip e58899bb0: S1 merge 68e010acf with the Mac slices and approvals d26c0cbec (15dcf72c3); S2 land 7ba34b071; S5 on it, 64c547f4a (S3 came in through S5's merges 96c78e454 and 3fca8c95c, nothing of S3 left to land); S4 rebased onto 64c547f4a as 3d4d52834 with the owner's approvals e58899bb0. ADR stays Proposed. Still open: snapshot cadence and location ("Chain compaction" switch 2), `prep/adr126-s3-reqwest-client` (needs a reqwest diff-gate approval), `opt/adr126-nodekeys-adapter`; see "Phase status")
+- **Updated**: 2026-11-09 19:44 ET (owner decision: store-capable weavers are OK to install. The install stop on store-capable weavers is lifted; store support stays unconditional in `clawft-weave` and is not to be made optional. Reason: at `origin/target-0.8.5` 88b2fb172 no weaver can be built without the store code. Nothing installed yet; no push)
+- **Updated**: 2026-11-10 (Tapestry E3 / item 10 ran against the landed `weaver store view` verbs on `weftos-ci` with a throwaway daemon and a local-directory store: the interface matches with no functional mismatch, but the store keeps no file modes and the view writes base files 0444, so a root image has nothing executable and bwrap cannot exec `/bin/sh`; new open item: preserve or declare the exec bit. Evidence in agent-notes `scratch/p3-e3/results.md`)
+- **Updated**: 2026-11-10 17:08 ET (owner answer on the E3 exec bit: record each file's mode in the object metadata, not a view-spec list; base files keep write bits off and exec bits preserved; implemented by the Tapestry lead on `feat/store-file-mode` off 88b2fb172, local only; E3 to be rerun without the chmod workaround)
+- **Updated**: 2026-11-10 (object attributes, on WeftOS branch `feat/store-file-mode` 367bed4e7 off 88b2fb172, local, not landed. `ObjectBackend` gains `put_attrs`, `put_if_match_attrs` and `attrs`; the first attribute is `executable` (RustFS: `x-amz-meta-weft-exec`; directory backend: the file's execute bits). The drive records it in the index entry, sync_up puts it, materialise applies it, and the scoped view gives base 0555/0444 and work 0755/0644. See `docs/architecture/store-scoped-view.md`, "File modes". E3 reruns without the chmod workaround and passes; no diff-gate approvals needed)
 - **Deciders**: owner
 - **Research**: `docs/research/rclone-shared-filesystem-2026-10-29.md` (rclone, RustFS,
   OpenDAL, governance gaps). Board card `3605565e`.
@@ -393,6 +398,21 @@ owed and is **not** produced by the in-memory tests.
 | S4 | Release stores: CI writes once, retention, signed artifacts referenced by hash | a release build's artifacts land in its release store, and a rebuild can't overwrite them |
 | S5 | Clients: one instance per client account under `/data1` as the client user; cross-mesh grants (ADR-114 N5) | a client project's store lives only under the client user, and a WeftOS-account principal is refused unless granted |
 
+**Phase status (2026-11-09, 13:20 ET; `origin/target-0.8.5` settled at e58899bb0, pushed 13:00):**
+- **S0** done (PG spike, "S0 results").
+- **S1** landed: `aepod/feat/adr126-s1` 2a8a13272 merged as 68e010acf, macOS `private_dir` fix 905d327a9, the seven Mac `wt/adr126-*` slices, owner-approved diff-gate entries d26c0cbec (card t213s943), fast-forward tip 15dcf72c3. Done-when met against a throwaway RustFS 1.0.4; not yet run against the PG RustFS.
+- **S2** landed: aepod's `feat/adr126-s2` d0db74233 rebased onto the landed S1 (`land/adr126-s2-on-s1land` cae1b0b25, reconcile 93a3836b5: Mac wins on overlap, S2 signing, retry, claim epoch, preview, quota, gc and switch replayed on top) and merged onto 15dcf72c3 as 7ba34b071.
+- **S3** landed through S5: `feat/adr126-s3` fc9c081f7 was merged into S5's rebased tip (96c78e454), so the S3 code (`crates/weftos-edge-creds`, chain-fed grant ledger, compaction spike) is on `target-0.8.5` with S5; nothing of S3 was left to land on its own. Two S3 option branches stay unlanded on aepod: `prep/adr126-s3-reqwest-client` c9b85e569 (reqwest `ObjectTransport` for the STS minter behind feature `reqwest-client`; needs an owner diff-gate approval for the new dependency, do not merge without it) and `opt/adr126-nodekeys-adapter` 646b57ff5 (S3 `NodeKeys` over S1's `node_key` behind the default-off `edge-creds` feature; owner's 11:40 correction: `weftos-edge-creds` only behind a feature, the daemon runs without it).
+- **S4** landed: `feat/adr126-s4` rebased onto 64c547f4a (`rebase/adr126-s4-on-64c547f4a`, 20 commits 35bcc00e8..3d4d52834: `ReleaseBackend` over `weftos-store` behind the `store` feature, Object Lock publish and restore, non-root CI keys, S1 lock read-back, extend-retention, lifecycle and multipart, Windows-host key rules, per-segment path cap, `weaver store release publish`) plus the owner's approvals e58899bb0 (`clawft-weave` depends on `weftos-release` with `store`; the `weftos-store` entry reworded, not test-only). That commit is the settled tip.
+- **S5** landed: `feat/adr126-s5-on-s2-15dcf72c3` 64c547f4a on the S2 land (contains d26c0cbec and 15dcf72c3; approvals 3ddb1537e, 72be2ecc4 by weftos-s5).
+- **Diff-gate approvals** on the tip: 17 entries (10 before S1, 4 for S1 d26c0cbec, 2 for S5, 1 for S4; the two S5 `weftos-release` entries were merged into the S5/S4 wording at e58899bb0).
+- **Test slices on e58899bb0** (2026-11-09 PM, fresh worktree, cold target dir, targeted only): `weftos-store --features rustfs` 343 passed, 47 skipped (293/34 at 15dcf72c3; the S2, S4 and S5 tests account for the rise); `clawft-weave --filter store` 204 passed (94 at 15dcf72c3), one leaky test (`release_cmd::tests::store_names_parse_and_bad_ones_are_refused` left a child process behind; counted as a pass); `weftos-release --features store` 69 passed, 13 skipped; `clawft-weave --filter release_cmd` 7 passed. No live RustFS run and no gate here; both belong to the CI gate on `weftos-ci` (owner: CI is the record).
+- **Not landed, waiting on the owner:** `wt/adr126-s1-names` (node-<id> user names, pinned creator); the union mount parking proposal ("S2 status"); the snapshot cadence and where the snapshot event sits ("Chain compaction", switch 2: no cadence is approved and nothing sets one); `feat/adr131-d1` (ADR-131, weftos-d1's lane) lands after this.
+- **Not done anywhere:** nothing is pushed beyond `origin/target-0.8.5` itself, nothing is tagged, released or deployed; no store-capable weaver is installed yet (the store-capable install stop itself was lifted by the owner at 19:44 ET, next bullet); the PG RustFS has not run any S1 to S5 code.
+- **Found 2026-11-10 by the Tapestry E3 run (item 10), open, verbs owner:** the store keeps no file modes and `drive` materialises every base file 0444 (the view tests at 88b2fb172 assert it), so a root image materialised as a view has nothing executable and a bwrap/Landlock launch fails at `execvp /bin/sh`. With a test-only `chmod +x` on `base/` after open, the full E3 cycle passed (read, write, create, delete under `/work`; publish 2 puts, 1 delete, 0 conflicts; close releases the lease; objects correct, delete tombstoned). Needed: preserve or declare the exec bit. **Owner answer 2026-11-10 17:08 ET** (`instructions/20261110-1708-backend3-exec-bit-object-metadata.txt`, addressed to the Tapestry lead): record each file's mode in the object metadata, not a list in the view spec; store the mode on put, apply it when the view materialises base files (write bits stay off, exec bits preserved); update the 0444 view tests and add exec-bit round-trip tests; targeted per-crate tests only; then rerun E3 on `weftos-ci` with a weaver from that branch without the chmod workaround and record it in `scratch/p3-e3/results.md`; report any diff-gate approvals needed, do not touch the approvals file. Still in force: no push, tag, publish or release; hub branches unmerged (D1); do not merge hub-passkey; R8 waits for ADR-131. **Being implemented by the Tapestry lead** on WeftOS `feat/store-file-mode` off 88b2fb172, worktree `/Volumes/ai-models/weftos-worktrees/store-exec-bit`, local only (legacy objects with no mode stay 0444). This lane does not start a parallel branch; the result arrives as a delta for this row. Minor from the same run: path-guard refusals are unclassified (by message text); `limits` and `bucket` are only sent when `--spec` carries them. Evidence: agent-notes `scratch/p3-e3/results.md`; fork branch `tapestry/p3-item10-real-view` 2461d3ab (local). The run was a test container on `weftos-ci`, not an install. **Fixed 2026-11-10 by the Tapestry lead on `feat/store-file-mode` 367bed4e7 (one commit on 88b2fb172, 20 files, local, not landed):** object attributes as above; weftos-store 310/310 and clawft-weave `store_` 161/161 on `weftos-ci`, 7 tests fail with the mode logic reverted; diff gate 0 failed, 0 approved, no approvals needed; **E3 rerun without the workaround passes** (the sandbox runs `/bin/sh` from a 0555 base; publish 2 puts, 1 delete, 0 conflicts). Not covered: refresh ignores a mode-only remote change (same etag and size); conflict copies and `Keep::Remote` drop the attribute; multipart and Object Lock puts drop it; live RustFS (incl. CopyObject metadata) and macOS/APFS untested. Landing is an owner call.
+- **S2 / E-1 view, file modes (execute bit):** carried as of branch `feat/store-file-mode` 367bed4e7, not landed.
+- **Store-capable by default (2026-11-09 PM, checked with git at `origin/target-0.8.5` 88b2fb172):** `clawft-weave` depends on `weftos-store` (`rustfs`) and `weftos-release` (`store`) unconditionally, so since S1 every weaver built from `target-0.8.5` is store-capable and the owner's install stop applies to any build from the tip. Raised with the owner by the Tapestry lead. **Owner decision 2026-11-09 19:44 ET: change the rule, not the code.** Store-capable weavers are OK to install. Context he was given: `origin/target-0.8.5` 88b2fb172 cannot build a weaver without the store code, because since S1 `clawft-weave` always pulls in `weftos-store` and the store-enabled `weftos-release`. He chose to lift the install rule rather than make store support optional; store support is not to be made optional. What this lifts is the store-capable condition only; the other stops recorded here (no tag, no push, no install over the production weaver before the full RustFS plus Tapestry release) were not mentioned and are read as still standing until the owner says otherwise.
+
 ## S0 results (2026-10-29)
 
 These come from a spike on PG: RustFS 1.0.4, single drive, run as `weftos`. The Terraform is
@@ -441,7 +461,18 @@ policy covers only `s0-spike`.
 Not tested: bucket notifications (not configured in the spike), and erasure coding and
 replication (single drive).
 
-## S1 status (2026-11-07)
+## S1 status (2026-11-07; landed on `target-0.8.5` 2026-11-09)
+
+**Landed.** `aepod/feat/adr126-s1` 2a8a13272 (41 commits, findings through 1153af0a) was merged on 2026-11-08 as
+68e010acf on `integ/adr126-s1-land` off `target-0.8.5` f6af34678, followed by a macOS fix 905d327a9 (`private_dir`
+read `/proc/self`, which macOS lacks; now a probe-file uid), the Mac slices `wt/adr126-s2-mac`, `-s2-meta`,
+`-s2-hooks`, `-s3-drive`, `-s3-harden2`, `-e1-view-verbs` (contains `-e1-scoped-view`), and the owner's diff-gate
+approvals for the receiver and the canned test servers (d26c0cbec, card t213s943). `target-0.8.5` was fast-forwarded
+to it on 2026-11-09 (15dcf72c3). On that tip: `weftos-store --features rustfs` 293 passed, 34 ignored;
+`clawft-weave --filter store` 94; live on a throwaway loopback RustFS 1.0.4: weftos-store 27/27 and the four weave
+store live tests; `scripts/diff-gate.sh --base target-0.8.5` 0 S1 rows failed. S2, S5 (with S3) and S4 landed on top
+the same day; the settled tip is e58899bb0 ("Phase status"). Nothing deployed; no store-capable weaver installed at the time of writing, and the owner lifted the store-capable install stop on 2026-11-09 at 19:44 ET ("Phase status").
+Below is the build record as written on 2026-11-07/08.
 
 Built: name-to-bucket mapping, grants (recorded on the chain, pushed into the backend as access
 keys and IAM policies), the exposure per store (`store.<bucket>`, ADR-120), governed
@@ -722,8 +753,20 @@ RustFS, local-directory and in-memory backends, and by the two test backends in 
 unchanged. One detail to settle at merge: the Mac defaults return `BackendError::Unsupported` bare, while
 S1's `BackendError::Unsupported` carries a message (`Unsupported(String)`), so the `delete_if_match` default
 needs `Unsupported("conditional delete".into())` here.
+**Resolved at the merge (2026-11-08):** S1's `Unsupported(String)` and required `put_if_match` won; the Mac `delete_if_match`
+default returns `Unsupported("conditional delete".into())`; a second touch point not in the notes, the Mac
+`BackendError::PreconditionFailed(String)`, was replaced by S1's `Stale(String)` at 16 sites, and etag quoting is
+tolerated (`trim_matches('"')` in the fs and memory backends, quoted on the wire for RustFS).
 
-## S2 status (2026-11-07, branch `feat/adr126-s2`, not landed)
+## S2 status (2026-11-07, branch `feat/adr126-s2`; landed on `target-0.8.5` 2026-11-09)
+
+- **Landed (2026-11-09):** the Mac slices `wt/adr126-s2-mac` (path rules, `.wt/` control state refused to principals,
+  Deny policy statement), `-s2-meta` and `-s2-hooks` (agent-git-flow hooks, `scripts/tests/worktree-store.test.sh` 63/63)
+  went in with S1 (15dcf72c3). aepod's `feat/adr126-s2` d0db74233 was rebased onto that (`land/adr126-s2-on-s1land`
+  cae1b0b25; reconcile commit 93a3836b5: Mac wins on overlap, S2's registry signing, follower retry, claim epoch, land
+  preview, quota, gc and switch replayed on top, stricter check kept) and merged onto 15dcf72c3 as 7ba34b071, which is on
+  `origin/target-0.8.5` (e58899bb0). The union mount stays in the code and out of the done-when, pending the owner
+  (below).
 
 - **Where the code is:** `crates/weftos-store/src/{overlay,promote,share,share_fetch,follower,testing,worktree_backend}.rs`
   and `tests/s2_{worktree,follower,done_when}.rs`. The Rust uses only `std`, `serde`, `serde_json` and
@@ -769,16 +812,18 @@ needs `Unsupported("conditional delete".into())` here.
   host and skew, audit, digest). Evidence and per-finding tests are in
   `docs/research/adr126-s2-evidence-macos-2026-11-08.md`.
 - **Still open:**
-  - F2, grant and revoke locking, and F9, RustFS audit ingestion. Both are in the S1 layer and
-    belong to the S1 session.
+  - ~~F2, grant and revoke locking, and F9, RustFS audit ingestion.~~ Fixed on `feat/adr126-s1` (b93ca7079, 1153af0a9;
+    "Close-out findings" above) and on `target-0.8.5` since 2026-11-09.
   - F7, F13, F14, F19 and F20 are fixed in the S2 layer (a land closes the handoff as merged
     whatever the claim state; a wider secret denylist; publish reads one open handle checked
     against the path; fetched manifests cannot name the follower's control files; `FsBackend`
-    refuses keys that differ only by case). Still open in the S1 layer, for the S1 session: F15
+    refuses keys that differ only by case). ~~Still open in the S1 layer, for the S1 session: F15
     (`RustfsConfig` derives `Debug` with the root key; secrets dir mode), F16 (no SigV4 known-vector
     test; bucket strings unvalidated), F17 (the bucket name omits the mesh id, so `local` and
     `<hex>` names alias one bucket), F18 (S1 `store.promote` accepts `""`, `.wt/` and `worktrees/`
-    prefixes). See `docs/research/adr126-s1-s2-adversarial-review-2026-11-08.md`.
+    prefixes).~~ F15 a035b18ee, F16 4f439fcef, F17 4a63ad565, F18 4826568ac, all fixed on `feat/adr126-s1`
+    on 2026-11-08 and on `target-0.8.5` since 2026-11-09 (the F18 test plants `.wt/` state at the backend because the
+    S2 guard now refuses it through the service). See `docs/research/adr126-s1-s2-adversarial-review-2026-11-08.md`.
   - `slug_of` in `worktree-store.sh` is now injective (`/` becomes `--`; branches containing `--`, `-/` or `/-` are refused and `WTS_SLUG` overrides). Existing stores created under the old slashed-branch slugs (`feat/s2` was `feat-s2`, now `feat--s2`) are not found by the script until renamed or re-created; none are known to exist outside drills.
   - The owner rejected the rclone mount. The union mount (`mount-config`, `mount`, `umount`) is
     proposed to be parked: kept in the code, dropped from the S2 done-when and from any gate, and
@@ -980,7 +1025,14 @@ Flip: build the chain with `with_schedule(...)`; nothing else changes.
 Recommendation: A now, and C when the anchor can carry the field. B has a bootstrap loop (a follower needs a snapshot to learn which store to read), so S3 advises against it for grants.
 Flip: the owner names A, B or C; the wiring is `GrantLedger::signed_snapshot` on the chain side.
 
-## S5 status (2026-11-08)
+## S5 status (2026-11-08; landed on `target-0.8.5` 2026-11-09)
+
+**Landed.** `feat/adr126-s5` was rebased onto the S2 land as `feat/adr126-s5-on-s2land` 72be2ecc4 and carried onto
+15dcf72c3 as `feat/adr126-s5-on-s2-15dcf72c3` 64c547f4a (S5 re-applies an S1 commit, so it had to be rebased rather
+than merged); `feat/adr126-s3` fc9c081f7 and `feat/adr126-s4` were merged into it on the way (96c78e454, 3fca8c95c), so
+the S3 code landed with S5. Its `weftos-release` dev-dependencies (`weftos-store` with `rustfs`, `weftos-edge-creds`)
+carry owner-approved diff-gate entries (3ddb1537e, 72be2ecc4, reworded at e58899bb0 for S4). The record below is
+as written on 2026-11-08; "not done" items that name the RustFS backend are closed by the "On RustFS" bullet.
 
 Built on `feat/adr126-s5`, tested on local directories only; nothing is installed on any machine and RustFS is not yet behind it.
 
@@ -996,6 +1048,31 @@ Built on `feat/adr126-s5`, tested on local directories only; nothing is installe
 - **On RustFS (2026-11-08):** `ClientStore::open_rustfs` runs the service on S1's `RustfsBackend` against this account's own instance. The root credential comes from the client's `store.env` (`MESH_S3_ENDPOINT`, `MESH_S3_ACCESS_KEY`, `MESH_S3_SECRET_KEY`; `RUSTFS_ACCESS_KEY` and `RUSTFS_SECRET_KEY` for the unit can live in the same file). It must be a regular file owned by the client uid with no group or other access, and its endpoint must be exactly `http://<spec.listen>`, so a client store cannot be pointed at a RustFS it shares with another account. Per-principal keys are kept under `<root>/secrets/` (0700). `client-store.json` takes `"backend": "rustfs"` and an optional `"env"` (default `/data1/<account>/store.env`); the default stays `fs`. In the gate, S1's `append` and `sweep` roles (release stores) count as write: a client project store has read, write and admin. Live tests (`client_store::tests::live`, `#[ignore]`): `WEFTOS_STORE_TEST_RUSTFS_BIN=<rustfs> scripts/store/client-live-test.sh` starts two throwaway RustFS instances on loopback (random ports and credentials, data under `target/`), runs them with `scripts/build.sh test clawft-weave --filter client_store::tests::live --ignored`, and stops and removes them afterwards (the Rust code starts no process and binds no socket, so the diff gate has nothing of S5's to approve). Run 2026-11-08 against RustFS 1.0.4, 4 passed: two accounts on two instances share nothing (the bucket does not exist on the other instance, acme's cog key and root credential are refused by rival's RustFS, the bytes are under acme's data directory only); the WeftOS account is refused until granted, can read but not write after a read grant, and after revoke the same member key is refused by RustFS itself (403) with no gate or service in the way; a cross-mesh grant becomes a real RustFS policy for the receiving mesh's member, and revoke and the expiry sweep remove it there; `open_rustfs` refuses another instance's env file, group-readable or symlinked env files, and a file for another uid.
 - **One instance per client account, enforced:** every store opens by claiming its instance (`client_store_instance::claim_instance`): the marker bucket `weftos-instance` carries the owning account as a tag, the first to create it owns the instance (a race has exactly one winner), and an account opening on an instance marked for another is refused with `<place> already belongs to client account '<owner>'; account '<you>' needs its own RustFS instance (one instance per client account, ADR-126 S5)`. A marker with no owner tag is not shared. The point is concrete: a principal's RustFS key has a single policy owned by whichever service granted it last, so two services on one instance overwrite each other (live test `two_services_on_one_instance_overwrite_each_others_key_policy`). For the same reason, on a client daemon whose S1 service (`WEFTOS_STORE_RUSTFS_ENV`) is on this account's instance, `ClientStore::open_rustfs_shared` rides that one service instead of starting a second (`client_store_rt::shared_service`); if the env names this instance but the service is not running that is an error. Limits: the marker stops a different account, not a second service of the same account in another process, and an unmarked instance (for example the shared WeftOS one) would be claimed by whichever account opens it first, so the listener check (`http://<spec.listen>`) stays the first line and the shared instance should be pre-marked.
 - **Not done:** a live install as a client user on PG, the chain-side prune itself, and two `ClientStore`s on one log and account (not supported; each counts only its own events).
+
+## S3 and S4 status (landed 2026-11-09)
+
+- **S3** `feat/adr126-s3` fc9c081f7 (edge and Wasm nodes through the parent daemon, short-lived credentials; "S3
+  results" and "Chain compaction" above) reached `target-0.8.5` inside S5's rebased tip (merge 96c78e454, in 64c547f4a),
+  so nothing of S3 was left to land on its own. The chain-authenticated grant feed test `test/adr126-s3-chain-feed-e2e`
+  628d0b5a2 and the rebase rehearsal `feat/adr126-s3-on-s1land` 35a9e8ca2 are superseded by that. Still unlanded, on
+  aepod-xpc: `prep/adr126-s3-reqwest-client` c9b85e569 (reqwest `ObjectTransport` for the STS minter behind the
+  `reqwest-client` feature; it adds a dependency, so it needs an owner diff-gate approval before any merge) and
+  `opt/adr126-nodekeys-adapter` 646b57ff5 (S3 `NodeKeys` over S1's `node_key`, default-off `edge-creds` feature, four
+  tests with the flag on; an option, not a plan). The owner chose readable `node-<id>` user names and single-creator
+  ownership (c66b9f90c); the Mac `wt/adr126-s1-names` slice still waits for that confirmation.
+- **S4** `feat/adr126-s4` (release stores) was rebased onto 64c547f4a as `rebase/adr126-s4-on-64c547f4a` (plan a37fb4b5b,
+  rehearsed clean; merge-ready note 13772cab2) and is on `origin/target-0.8.5` as 35bcc00e8..3d4d52834 plus the owner's
+  approvals commit e58899bb0: `ReleaseBackend` over `weftos-store`'s `ObjectBackend` behind the `store` feature;
+  sweeper set-aside by server-side copy; `weaver store release publish`; Object Lock on release stores (locked publish
+  and restore, `--lock`); non-root CI keys on locked buckets with a direct CI policy; replaced-manifest detection from
+  `list_versions`; S1 lock read-back, extend-retention, lifecycle and multipart with a live proof on RustFS; Windows-host
+  key rules and a key-portability test; the S4 key and path length budget (255-byte segments, planted-defect proofs);
+  the retention and refused-delete test reads through S1's calls, not `curl` (9b65e506e). The approvals commit also
+  covers `clawft-weave` depending on `weftos-release` with `store`. Not done: S4 wired into `release.sh`, and any release
+  store on the PG RustFS.
+- **Land order as it happened:** S1 (15dcf72c3), S2 (7ba34b071), S5 with S3 (64c547f4a), S4 (e58899bb0).
+  `feat/adr131-d1` (ADR-131) lands next, by weftos-d1; `wt/adr126-s1-names` when confirmed. Recorded in
+  `docs/plans/combined-release-readiness.md`.
 
 ## Consequences
 
