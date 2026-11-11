@@ -367,8 +367,16 @@ fn literals(text: &str) -> Vec<usize> {
         let at = from + i;
         let line_start = text[..at].rfind('\n').map_or(0, |n| n + 1);
         let head = text[line_start..at].trim();
-        // Not the type's definition or an `impl GovernanceRequest {`.
-        if !(head.ends_with("struct") || head.ends_with("pub struct") || head.starts_with("impl") || head.contains("impl ")) {
+        // Not the type's definition, an `impl GovernanceRequest {`, or a
+        // function whose return type is `-> GovernanceRequest {` (its `{` opens
+        // the body; the literal inside is its own site and is scanned).
+        let is_return_type = head.contains("->");
+        if !(head.ends_with("struct")
+            || head.ends_with("pub struct")
+            || head.starts_with("impl")
+            || head.contains("impl ")
+            || is_return_type)
+        {
             v.push(at);
         }
         from = at + 1;
