@@ -72,12 +72,48 @@ fn kind_text(k: &ChangeKind) -> Value {
 }
 
 /// Run one verb. `method` is `store.view.<verb>`.
-pub fn run(svc: &StoreService, method: &str, params: Value) -> Result<Value, String> {
-    run_with(svc, method, params, &Guard::from_runtime())
+/// `error_kind` when `root` is refused by the path guard (not absolute, `..`, a symlink, or the
+/// daemon's own state). Clients branch on this, not on the message text.
+pub const PATH_REFUSED_KIND: &str = "path_refused";
+/// `error_kind` when the params are missing or malformed.
+pub const INVALID_PARAMS_KIND: &str = "invalid_params";
+
+/// A refusal: a message, and a stable kind when the refusal has one.
+#[derive(Debug)]
+pub struct Fail {
+    pub kind: Option<&'static str>,
+    pub msg: String,
 }
 
-/// [`run`] with an explicit set of protected paths.
+impl From<String> for Fail {
+    fn from(msg: String) -> Self {
+        Self { kind: None, msg }
+    }
+}
+
+impl From<&str> for Fail {
+    fn from(msg: &str) -> Self {
+        Self { kind: None, msg: msg.to_owned() }
+    }
+}
+
+impl Fail {
+    fn of(kind: &'static str, msg: String) -> Self {
+        Self { kind: Some(kind), msg }
+    }
+}
+
+pub fn run(svc: &StoreService, method: &str, params: Value) -> Result<Value, Fail> {
+    run_kinded(svc, method, params, &Guard::from_runtime())
+}
+
+/// [`run_kinded`] with the failure as its message only.
 pub fn run_with(svc: &StoreService, method: &str, params: Value, guard: &Guard) -> Result<Value, String> {
+    run_kinded(svc, method, params, guard).map_err(|f| f.msg)
+}
+
+/// Run one verb with an explicit set of protected paths; a failure carries its kind.
+pub fn run_kinded(svc: &StoreService, method: &str, params: Value, guard: &Guard) -> Result<Value, Fail> {
     let verb = method.strip_prefix("store.view.").unwrap_or(method).to_owned();
     let who = (params["name"].as_str().map(str::to_owned), params["agent"].as_str().map(str::to_owned), params["host"].as_str().map(str::to_owned));
     let r = dispatch(svc, &verb, params, guard);
@@ -85,7 +121,7 @@ pub fn run_with(svc: &StoreService, method: &str, params: Value, guard: &Guard) 
     r
 }
 
-fn record_verb(svc: &StoreService, verb: &str, who: (Option<String>, Option<String>, Option<String>), r: &Result<Value, String>) {
+fn record_verb(svc: &StoreService, verb: &str, who: (Option<String>, Option<String>, Option<String>), r: &Result<Value, Fail>) {
     let (kind, op) = match verb {
         "open" => ("store.view.open", "ViewOpen"),
         "publish" => ("store.view.publish", "ViewPublish"),
@@ -98,16 +134,19 @@ fn record_verb(svc: &StoreService, verb: &str, who: (Option<String>, Option<Stri
     let actor = format!("{}@{}", who.1.as_deref().unwrap_or("agent"), who.2.as_deref().unwrap_or("?"));
     let (outcome, detail) = match r {
         Ok(v) => (Outcome::Ok, counts(v)),
-        Err(e) => (Outcome::Error(e.clone()), json!({"error": e})),
+        Err(e) => (Outcome::Error(e.msg.clone()), json!({"error": e.msg})),
     };
     let bytes = detail["bytes"].as_u64().or_else(|| detail["published"]["bytes_put"].as_u64()).or_else(|| detail["bytes_put"].as_u64()).unwrap_or(0);
     svc.record_act(&actor, &name, op, None, bytes, outcome, Some((kind, json!({"store": name.to_string(), "actor": actor, "result": detail}))));
 }
 
-fn dispatch(svc: &StoreService, verb: &str, params: Value, guard: &Guard) -> Result<Value, String> {
-    let p: P = serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
+fn dispatch(svc: &StoreService, verb: &str, params: Value, guard: &Guard) -> Result<Value, Fail> {
+    let p: P = serde_json::from_value(params).map_err(|e| Fail::of(INVALID_PARAMS_KIND, format!("invalid params: {e}")))?;
     let name = live_store(svc, &p)?;
-    let root = || guard.check(need(&p.root, "root")?, "root", Use::WriteDir);
+    let root = || -> Result<std::path::PathBuf, Fail> {
+        let raw = need(&p.root, "root").map_err(|m| Fail::of(INVALID_PARAMS_KIND, m))?;
+        guard.check(raw, "root", Use::WriteDir).map_err(|m| Fail::of(PATH_REFUSED_KIND, m))
+    };
     let b = Op(svc.operator_objects());
     let e = |e: weftos_store::drive::view::ViewError| e.to_string();
     match verb {
@@ -155,7 +194,7 @@ fn dispatch(svc: &StoreService, verb: &str, params: Value, guard: &Guard) -> Res
             let keep = match need(&p.keep, "keep")? {
                 "local" => Keep::Local,
                 "remote" => Keep::Remote,
-                o => return Err(format!("--keep must be local or remote, not {o:?}")),
+                o => return Err(Fail::of(INVALID_PARAMS_KIND, format!("--keep must be local or remote, not {o:?}"))),
             };
             v.resolve(path, keep).map_err(e)?;
             Ok(json!({"resolved": path, "kept": p.keep}))
@@ -170,7 +209,7 @@ fn dispatch(svc: &StoreService, verb: &str, params: Value, guard: &Guard) -> Res
             let mode = match (p.publish, p.discard) {
                 (true, false) => CloseMode::Publish,
                 (false, true) => CloseMode::Discard,
-                _ => return Err("close needs exactly one of --publish, --discard".into()),
+                _ => return Err(Fail::of(INVALID_PARAMS_KIND, "close needs exactly one of --publish, --discard".into())),
             };
             let v = load(&root()?, Some(&name))?;
             let r = v.close(&b, mode).map_err(e)?;
@@ -180,7 +219,7 @@ fn dispatch(svc: &StoreService, verb: &str, params: Value, guard: &Guard) -> Res
                 "removed": r.removed, "root_removed": r.root_removed, "left": r.left,
             }))
         }
-        other => Err(format!("unknown view verb: {other}")),
+        other => Err(format!("unknown view verb: {other}").into()),
     }
 }
 
@@ -240,7 +279,8 @@ pub async fn handle(method: &str, params: Value) -> clawft_rpc::Response {
     let method = method.to_owned();
     match tokio::task::spawn_blocking(move || run(&svc, &method, params)).await {
         Ok(Ok(v)) => clawft_rpc::Response::success(v),
-        Ok(Err(e)) => clawft_rpc::Response::error(e),
+        Ok(Err(Fail { kind: Some(k), msg })) => clawft_rpc::Response::error_with_kind(k, msg),
+        Ok(Err(Fail { kind: None, msg })) => clawft_rpc::Response::error(msg),
         Err(e) => clawft_rpc::Response::error(format!("store task failed: {e}")),
     }
 }

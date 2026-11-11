@@ -257,6 +257,25 @@ fn the_daemons_own_state_is_off_limits_and_nothing_is_created_there() {
 }
 
 #[test]
+fn path_guard_and_param_refusals_carry_a_stable_error_kind() {
+    let r = rig();
+    let g = Guard::none();
+    let kind = |p: Value| run_kinded(&r.svc, "store.view.status", p, &g).unwrap_err().kind;
+    assert_eq!(kind(json!({"root": "relative/view"})), Some(PATH_REFUSED_KIND));
+    assert_eq!(kind(json!({"root": "/a/../b"})), Some(PATH_REFUSED_KIND));
+    let state = r.d.path().join("state");
+    std::fs::create_dir_all(&state).unwrap();
+    let gs = Guard::new([state.clone()]);
+    let e = run_kinded(&r.svc, "store.view.open", json!({"name": r.name, "root": state.join("v").to_string_lossy(), "spec": spec()}), &gs).unwrap_err();
+    assert_eq!((e.kind, e.msg.contains("daemon's own state")), (Some(PATH_REFUSED_KIND), true));
+    assert_eq!(kind(json!({})), Some(INVALID_PARAMS_KIND), "missing --root");
+    assert_eq!(kind(json!({"root": "/x", "bogus": 1})), Some(INVALID_PARAMS_KIND));
+    // an ordinary failure (no view at the root) has no kind
+    let missing = r.d.path().join("none").to_string_lossy().into_owned();
+    assert_eq!(kind(json!({"root": missing})), None);
+}
+
+#[test]
 fn a_view_bound_to_another_store_is_refused_and_so_is_a_spec_naming_another_bucket() {
     let r = rig();
     let root = r.root("view");

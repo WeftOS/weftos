@@ -326,6 +326,18 @@ opens no path the caller names for it); a `bucket` that differs from `--name`'s 
 the spec flags are alternatives. `--include P=AT` places prefix `P` at `AT` under `base/` (default
 `base/` itself). `--read-only` drops the work tree: no lease, `publish` refused. Output is JSON.
 
+Limits and bucket (2026-11-10). The spec's `limits` are three flags, `--max-file BYTES`, `--max-files N`,
+`--max-total BYTES`; an omitted one keeps the daemon default, and none given sends no `limits` key. They
+are CLI sugar for the same `ViewSpec` field a `--spec` file carries, so the daemon still has one
+source of truth. There is no `--bucket`: the bucket is always the one `--name` binds to, and the CLI
+refuses the flag (a spec file naming another bucket is refused by the daemon).
+
+Error kinds. A `root` the path guard refuses (not absolute, `.` or `..`, a symlink, inside the
+daemon's own state, or not a directory) returns `error_kind: "path_refused"`; missing or malformed
+params return `"invalid_params"`. Clients branch on the kind, not the message text. The HTTP facade
+(`daemon_facade.rs`) does not route `store.view.*`, so the kind reaches RPC clients (`weaver`, Tapestry)
+only. Other failures keep no kind.
+
 | Verb | RPC | Prints | Records |
 |---|---|---|---|
 | `open` | `store.view.open` | root, `view.json` path, spec hash, lease, files, bytes, fetched, recovered, took-over holder, skipped | activity `ViewOpen`, chain `store.view.open` |
