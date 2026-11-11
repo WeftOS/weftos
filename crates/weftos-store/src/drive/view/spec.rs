@@ -11,8 +11,10 @@ use crate::drive::{DRIVE_DIR, TMP_PREFIX, TOMBSTONE_DIR, check_rel};
 use crate::share::Limits;
 
 /// Size ceilings, per include. Defaults are the S2 ones (16 MiB a file, 20,000 files, 512 MiB).
-/// `max_total` is also checked across all includes together at open.
+/// `max_total` is also checked across all includes together at open. A limit left out of a spec
+/// keeps its default (`weaver store view open --max-file N` sends only `max_file`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ViewLimits {
     pub max_file: u64,
     pub max_files: usize,
