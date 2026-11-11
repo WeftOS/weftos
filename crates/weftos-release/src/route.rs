@@ -114,6 +114,7 @@ impl ReleaseBackend for ServiceBackend {
                 until_unix_s: lock.until,
             }),
             legal_hold: false,
+            ..Default::default()
         };
         match self.blocking(move |s, w, n| s.put_locked(w, n, &k, &d, &opts)).await {
             Ok(_) => Ok(PutOutcome::Created),
@@ -199,6 +200,7 @@ impl ReleaseBackend for ServiceBackend {
                 until_unix_s: l.until,
             }),
             legal_hold: false,
+            ..Default::default()
         };
         let r = self
             .blocking(move |s, w, n| {

@@ -28,7 +28,7 @@ fn as_key(cfg: &RustfsConfig, root: &RustfsBackend, id: &str) -> RustfsBackend {
 }
 
 fn locked(until_in: u64) -> PutOpts {
-    PutOpts { if_none_match: true, retention: Some(Retention { mode: LockMode::Compliance, until_unix_s: now() + until_in }), legal_hold: false }
+    PutOpts { if_none_match: true, retention: Some(Retention { mode: LockMode::Compliance, until_unix_s: now() + until_in }), legal_hold: false, ..Default::default() }
 }
 
 fn forbidden<T: std::fmt::Debug>(r: Result<T, BackendError>) -> bool {

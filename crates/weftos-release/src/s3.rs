@@ -117,6 +117,7 @@ impl<O: ObjectBackend + 'static> ReleaseBackend for StoreBackend<O> {
                 until_unix_s: lock.until,
             }),
             legal_hold: false,
+            ..Default::default()
         };
         match self.blocking(move |o, b| o.put_locked(b, &k, &data, &opts)).await {
             Ok(_) => Ok(PutOutcome::Created),
@@ -189,6 +190,7 @@ impl<O: ObjectBackend + 'static> ReleaseBackend for StoreBackend<O> {
             if_none_match: true,
             retention: lock.map(|l| Retention { mode: to_store_mode(l.mode), until_unix_s: l.until }),
             legal_hold: false,
+            ..Default::default()
         };
         let r = self
             .blocking(move |o, b| {
