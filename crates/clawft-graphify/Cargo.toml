@@ -21,7 +21,9 @@ neo4j-export = []
 kernel-bridge = ["dep:clawft-kernel", "dep:async-trait"]
 # Test-only: real nomic-embed-text-v1.5 for the bridge recall test; needs
 # WEFTOS_TEST_EMBED_MODEL_DIR. Without it the test prints a SKIP and returns.
-real-embedder-tests = ["kernel-bridge", "clawft-kernel/real-embedder-tests"]
+# clawft-kernel is a default-features-off workspace dep, so `-p clawft-graphify`
+# alone also needs the kernel's native + exochain modules to compile.
+real-embedder-tests = ["kernel-bridge", "clawft-kernel/real-embedder-tests", "clawft-kernel/native", "clawft-kernel/exochain"]
 # Real HTTP for URL ingest (reqwest + rustls). Production binaries
 # (weaver) enable this; unit tests keep StubHttpClient / mock clients.
 http-client = ["dep:reqwest"]
