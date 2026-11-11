@@ -151,3 +151,10 @@ path        = "crates/weftos-store/src/rustfs_tests.rs"
 pattern     = 'std::net::TcpListener::bind\("127.0.0.1:0"\)'
 reason      = "ADR-126 S1: two local-only canned RustFS test servers (Canned::start and the checksum-header test) on an ephemeral loopback port"
 approved_by = "owner"
+
+[[approval]]
+rule        = "process"
+path        = "crates/clawft-weave/tests/kernel_restart_e2e.rs"
+pattern     = 'Command::new\(env!\("CARGO_BIN_EXE_weaver"\)\)'
+reason      = "WO-089: the restart e2e spawns the crate's own weaver binary under a throwaway HOME/runtime dir; no external program"
+approved_by = "owner"
