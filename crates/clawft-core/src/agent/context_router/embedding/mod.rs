@@ -240,7 +240,7 @@ impl ContextRouter for EmbeddingRouter {
             return ContextDecision::default();
         }
 
-        let query = match self.embedder.embed(&request.content).await {
+        let query = match self.embedder.embed_query(&request.content).await {
             Ok(v) if v.len() == self.dim => v,
             Ok(v) => {
                 warn!(

@@ -235,7 +235,9 @@ pub async fn embedder() -> Arc<dyn EmbeddingProvider> {
     EMBEDDER
         .get_or_init(|| async {
             tokio::task::spawn_blocking(|| {
-                Arc::from(clawft_kernel::embedding::select_embedding_provider(None))
+                // Real model, else an "unavailable" provider: `shared.embed` then
+                // reports "semantic search unavailable" instead of serving hashes.
+                Arc::from(clawft_kernel::embedding::select_embedding_provider_or_unavailable(None))
             })
             .await
             .expect("embedder selection panicked")

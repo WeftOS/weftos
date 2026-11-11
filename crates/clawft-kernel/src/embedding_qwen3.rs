@@ -15,9 +15,11 @@
 //!   [`EmbeddingProvider::embed`] trait method is document mode.
 //!
 //! Without the `onnx-embeddings` feature, the model file, or the tokenizer, the
-//! provider degrades gracefully to a [`MockEmbeddingProvider`] so builds and
-//! tests never require the ~1.2 GB artifact. The BERT provider stays intact as a
-//! lower-priority fallback (see [`select_embedding_provider`](crate::embedding::select_embedding_provider)).
+//! provider is unavailable: construction still succeeds (builds and tests never
+//! need the ~1.2 GB artifact) but every embed call returns
+//! `EmbeddingError::ModelUnavailable` naming the missing path. There is no hash
+//! fallback. The BERT provider stays as a lower-priority real model (see
+//! [`select_embedding_provider`](crate::embedding::select_embedding_provider)).
 
 use std::path::{Path, PathBuf};
 #[cfg(feature = "onnx-embeddings")]
@@ -25,7 +27,7 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 
-use crate::embedding::{EmbeddingError, EmbeddingProvider, MockEmbeddingProvider};
+use crate::embedding::{EmbeddingError, EmbeddingProvider};
 
 /// MRL target dimensionality — the empirical sweet spot (ADR-059, recall@10 0.983).
 pub const QWEN3_DIMS: usize = 512;
@@ -119,12 +121,12 @@ pub struct Qwen3EmbeddingProvider {
     tokenizer_path: PathBuf,
     /// Output dimensionality (always [`QWEN3_DIMS`]).
     dimensions: usize,
-    /// Model name (real name when live, `*-mock-fallback` when degraded).
+    /// Model name (real name when live, `*-unavailable` otherwise).
     model_name: String,
     /// Whether real decoder-ONNX inference is active (model + tokenizer loaded).
     runtime_available: bool,
-    /// Degraded fallback (graceful Mock when no model/tokenizer/feature).
-    fallback: MockEmbeddingProvider,
+    /// Why the runtime is unavailable, naming the paths (None when live).
+    unavailable_reason: Option<String>,
     /// Qwen3 BPE tokenizer loaded from `tokenizer.json`.
     #[cfg(feature = "onnx-embeddings")]
     tokenizer: Option<tokenizers::Tokenizer>,
@@ -139,8 +141,9 @@ pub struct Qwen3EmbeddingProvider {
 impl Qwen3EmbeddingProvider {
     /// Create a provider pointing at `model_fp16.onnx` + `tokenizer.json`.
     ///
-    /// Degrades to Mock when the feature is off, files are missing, or loading
-    /// fails — never panics, never requires the model to construct.
+    /// When the feature is off, files are missing, or loading fails the provider
+    /// is unavailable (calls return `ModelUnavailable`) — never panics, never
+    /// requires the model to construct.
     pub fn new(model_path: impl Into<PathBuf>, tokenizer_path: impl Into<PathBuf>) -> Self {
         let model_path = model_path.into();
         let tokenizer_path = tokenizer_path.into();
@@ -159,18 +162,40 @@ impl Qwen3EmbeddingProvider {
         let runtime_available = tokenizer.is_some() && session.is_some();
         #[cfg(not(feature = "onnx-embeddings"))]
         let runtime_available = false;
+        let unavailable_reason = if runtime_available {
+            None
+        } else {
+            let mut why = Vec::new();
+            if !cfg!(feature = "onnx-embeddings") {
+                why.push("this build lacks the onnx-embeddings feature".to_string());
+            }
+            if !model_path.exists() {
+                why.push(format!("model file not found at {}", model_path.display()));
+            }
+            if !tokenizer_path.exists() {
+                why.push(format!("tokenizer not found at {}", tokenizer_path.display()));
+            }
+            if why.is_empty() {
+                why.push(format!(
+                    "model {} or tokenizer {} are present but failed to load (see the log)",
+                    model_path.display(),
+                    tokenizer_path.display()
+                ));
+            }
+            Some(why.join("; "))
+        };
 
         Self {
             model_name: if runtime_available {
                 QWEN3_MODEL_NAME.to_string()
             } else {
-                format!("{QWEN3_MODEL_NAME}-mock-fallback")
+                format!("{QWEN3_MODEL_NAME}-unavailable")
             },
             model_path,
             tokenizer_path,
             dimensions: QWEN3_DIMS,
             runtime_available,
-            fallback: MockEmbeddingProvider::new(QWEN3_DIMS),
+            unavailable_reason,
             #[cfg(feature = "onnx-embeddings")]
             tokenizer,
             #[cfg(feature = "onnx-embeddings")]
@@ -180,7 +205,7 @@ impl Qwen3EmbeddingProvider {
         }
     }
 
-    /// Whether real decoder-ONNX inference is active (vs. Mock fallback).
+    /// Whether real decoder-ONNX inference is active.
     pub fn is_runtime_available(&self) -> bool {
         self.runtime_available
     }
@@ -195,6 +220,15 @@ impl Qwen3EmbeddingProvider {
         &self.tokenizer_path
     }
 
+    fn unavailable_error(&self) -> EmbeddingError {
+        EmbeddingError::ModelUnavailable {
+            what: self.model_name.clone(),
+            detail: self.unavailable_reason.clone().unwrap_or_else(|| {
+                format!("model at {} is not loaded", self.model_path.display())
+            }),
+        }
+    }
+
     /// Embed a **query** (asymmetric lane): prepends the Qwen3 instruction prefix.
     pub async fn embed_query(&self, query: &str) -> Result<Vec<f32>, EmbeddingError> {
         #[cfg(feature = "onnx-embeddings")]
@@ -202,7 +236,8 @@ impl Qwen3EmbeddingProvider {
             let prompted = format!("{QUERY_INSTRUCTION}{query}");
             return self.qwen3_embed(&prompted);
         }
-        self.fallback.embed(query).await
+        let _ = query;
+        Err(self.unavailable_error())
     }
 
     #[cfg(feature = "onnx-embeddings")]
@@ -389,7 +424,8 @@ impl EmbeddingProvider for Qwen3EmbeddingProvider {
         if self.runtime_available {
             return self.qwen3_embed(text);
         }
-        self.fallback.embed(text).await
+        let _ = text;
+        Err(self.unavailable_error())
     }
 
     async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
@@ -411,7 +447,8 @@ impl EmbeddingProvider for Qwen3EmbeddingProvider {
             let prompted = format!("{QUERY_INSTRUCTION}{query}");
             return self.qwen3_embed(&prompted);
         }
-        self.fallback.embed(query).await
+        let _ = query;
+        Err(self.unavailable_error())
     }
 
     fn dimensions(&self) -> usize {

@@ -5057,8 +5057,11 @@ mod tests {
         assert_eq!(matches[0].context, "rust-backend");
     }
 
+    /// `find_patterns` ranks by how many context keywords a pattern's context
+    /// contains. It is a keyword-count API with no embedder involved, so this
+    /// test is about keyword hit counts and says nothing about semantic recall.
     #[test]
-    fn knowledge_base_find_patterns_sorted_by_relevance() {
+    fn knowledge_base_find_patterns_ranks_by_keyword_hit_count() {
         let kb = WeaverKnowledgeBase::new();
         kb.learn_pattern(StrategyPattern {
             decision_type: "A".into(),

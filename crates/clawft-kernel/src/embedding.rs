@@ -29,6 +29,15 @@ pub enum EmbeddingError {
     },
     /// Generic backend failure.
     BackendError(String),
+    /// A real embedding model was requested (or is the only acceptable kind)
+    /// but is not available. There is no silent fallback to hashing: the
+    /// message names what was looked for and where.
+    ModelUnavailable {
+        /// What was being loaded (provider / model name).
+        what: String,
+        /// Why it is unavailable, naming the paths searched.
+        detail: String,
+    },
     /// Rate-limited; caller should retry after the given duration.
     RateLimited {
         /// How long to wait before retrying.
@@ -44,6 +53,11 @@ impl fmt::Display for EmbeddingError {
                 write!(f, "dimension mismatch: expected {expected}, got {got}")
             }
             Self::BackendError(msg) => write!(f, "embedding backend error: {msg}"),
+            Self::ModelUnavailable { what, detail } => write!(
+                f,
+                "semantic search unavailable: embedding model `{what}` is not available ({detail}); \
+                 configure an embedding model, or opt in to lexical mode with WEFTOS_EMBEDDING_MODE=lexical"
+            ),
             Self::RateLimited { retry_after } => {
                 write!(f, "rate limited, retry after {}ms", retry_after.as_millis())
             }
@@ -111,10 +125,13 @@ pub trait EmbeddingProvider: Send + Sync {
 // MockEmbeddingProvider
 // ---------------------------------------------------------------------------
 
-/// Deterministic embedding provider for testing.
+/// Deterministic embedding provider for **plumbing tests only**.
 ///
-/// Produces vectors derived from a SHA-256 hash of the input text,
-/// ensuring reproducible results without any external model dependency.
+/// Produces vectors derived from a SHA-256 hash of the input text, so equal
+/// text maps to equal vectors and nothing else. It carries NO similarity
+/// signal and must never be used to judge retrieval or recall (owner rule
+/// 2026-11-11): use a real model (`embedding_support`) for that. It is not
+/// selected by [`select_embedding_provider`] under any circumstances.
 pub struct MockEmbeddingProvider {
     /// Output vector dimensionality.
     pub dims: usize,
@@ -193,25 +210,23 @@ impl Default for LlmEmbeddingConfig {
 /// LLM-backed embedding provider that calls the clawft-llm provider layer.
 ///
 /// Uses the model's embedding endpoint to produce real semantic vectors.
-/// When no API is configured (or the API is unavailable), falls back to
-/// [`MockEmbeddingProvider`] for deterministic hash-based embeddings.
+/// When no API is configured (or the API is unavailable) every call returns
+/// [`EmbeddingError::ModelUnavailable`]; there is no hash fallback.
 pub struct LlmEmbeddingProvider {
     config: LlmEmbeddingConfig,
-    fallback: MockEmbeddingProvider,
 }
 
 impl LlmEmbeddingProvider {
     /// Create a new LLM embedding provider with the given configuration.
     pub fn new(config: LlmEmbeddingConfig) -> Self {
-        let fallback = MockEmbeddingProvider::new(config.dimensions);
-        Self { config, fallback }
+        Self { config }
     }
 
     /// Create from a weave.toml-style configuration table.
     ///
     /// Expected keys: `model` (string), `dimensions` (int), `batch_size` (int).
     /// If the table is missing or incomplete, returns a provider with defaults
-    /// that falls back to mock embeddings.
+    /// whose calls fail with `ModelUnavailable` until the API is configured.
     pub fn from_config(table: &std::collections::HashMap<String, String>) -> Self {
         let model = table
             .get("model")
@@ -248,16 +263,21 @@ impl LlmEmbeddingProvider {
         &self.config
     }
 
+    fn unavailable(&self) -> EmbeddingError {
+        EmbeddingError::ModelUnavailable {
+            what: self.config.model.clone(),
+            detail: "LLM embedding API is not configured (api_available = false)".to_string(),
+        }
+    }
+
     /// Perform an LLM API embedding call.
     ///
     /// In a production deployment this would call the clawft-llm provider's
-    /// embed endpoint. Currently returns an error so that the `embed()` method
-    /// falls back to the mock provider.
+    /// embed endpoint. Until that is wired it returns an error, which `embed()`
+    /// surfaces to the caller unchanged.
     async fn call_llm_api(&self, _text: &str) -> Result<Vec<f32>, EmbeddingError> {
         if !self.config.api_available {
-            return Err(EmbeddingError::BackendError(
-                "LLM API not configured; using fallback".to_string(),
-            ));
+            return Err(self.unavailable());
         }
         // Production implementation would call:
         //   provider.embed(EmbedRequest { model, input: vec![text], dimensions })
@@ -270,9 +290,7 @@ impl LlmEmbeddingProvider {
     /// Perform a batched LLM API embedding call.
     async fn call_llm_api_batch(&self, _texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
         if !self.config.api_available {
-            return Err(EmbeddingError::BackendError(
-                "LLM API not configured; using fallback".to_string(),
-            ));
+            return Err(self.unavailable());
         }
         Err(EmbeddingError::BackendError(
             "LLM API batch call not yet wired to clawft-llm provider".to_string(),
@@ -283,37 +301,27 @@ impl LlmEmbeddingProvider {
 #[async_trait]
 impl EmbeddingProvider for LlmEmbeddingProvider {
     async fn embed(&self, text: &str) -> Result<Vec<f32>, EmbeddingError> {
-        // Try the LLM API first; fall back to mock on any error.
-        match self.call_llm_api(text).await {
-            Ok(vec) => {
-                if vec.len() != self.config.dimensions {
-                    return Err(EmbeddingError::DimensionMismatch {
-                        expected: self.config.dimensions,
-                        got: vec.len(),
-                    });
-                }
-                Ok(vec)
-            }
-            Err(_) => self.fallback.embed(text).await,
+        let vec = self.call_llm_api(text).await?;
+        if vec.len() != self.config.dimensions {
+            return Err(EmbeddingError::DimensionMismatch {
+                expected: self.config.dimensions,
+                got: vec.len(),
+            });
         }
+        Ok(vec)
     }
 
     async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
-        // Try the LLM API batch endpoint; fall back to mock.
-        match self.call_llm_api_batch(texts).await {
-            Ok(vecs) => {
-                for v in &vecs {
-                    if v.len() != self.config.dimensions {
-                        return Err(EmbeddingError::DimensionMismatch {
-                            expected: self.config.dimensions,
-                            got: v.len(),
-                        });
-                    }
-                }
-                Ok(vecs)
+        let vecs = self.call_llm_api_batch(texts).await?;
+        for v in &vecs {
+            if v.len() != self.config.dimensions {
+                return Err(EmbeddingError::DimensionMismatch {
+                    expected: self.config.dimensions,
+                    got: v.len(),
+                });
             }
-            Err(_) => self.fallback.embed_batch(texts).await,
         }
+        Ok(vecs)
     }
 
     fn dimensions(&self) -> usize {
@@ -329,68 +337,153 @@ impl EmbeddingProvider for LlmEmbeddingProvider {
 // select_embedding_provider
 // ---------------------------------------------------------------------------
 
-/// Select the best available embedding provider based on configuration.
+/// Environment variable that opts in to lexical (hash) embeddings. The only
+/// accepted value is `lexical`. Without it a missing model is an error.
+pub const EMBEDDING_MODE_ENV: &str = "WEFTOS_EMBEDDING_MODE";
+
+/// Environment variable naming a nomic-embed-text-v1.5 bundle directory
+/// (holding `onnx/model.onnx` and `tokenizer.json`).
+pub const EMBED_MODEL_DIR_ENV: &str = "WEFTOS_EMBED_MODEL_DIR";
+
+/// Select the best available **real** embedding provider.
 ///
 /// Priority order (ADR-059 + WEFT-640):
-/// 1. **Qwen3-Embedding-0.6B** — if `model_fp16.onnx` + `tokenizer.json` are
-///    present and the `onnx-embeddings` runtime loads them (project-canonical
-///    long-context semantic embedder: 32K ctx, MRL-512).
-/// 2. **e5-small-v2** ONNX — 384-d MIT BERT-family encoder (matches RVF/HNSW
-///    dim; lightweights CI/dev when staged under `.weftos/models/e5-small-v2/`).
-/// 3. **all-MiniLM-L6-v2** ONNX — the legacy BERT encoder fallback.
-/// 4. **LLM API** — if an `llm_embedding` config is present.
-/// 5. **Mock** — graceful fallback for tests / when no model is available.
+/// 1. **Qwen3-Embedding-0.6B** (`model_fp16.onnx` + `tokenizer.json`).
+/// 2. **nomic-embed-text-v1.5** (768-d; `onnx/model.onnx` + `tokenizer.json`
+///    under `$WEFTOS_EMBED_MODEL_DIR`, `.weftos/models/nomic-embed-text-v1.5/`
+///    or `$HOME/.weftos/models/nomic-embed-text-v1.5/`).
+/// 3. **e5-small-v2** ONNX (384-d).
+/// 4. **all-MiniLM-L6-v2** ONNX (legacy BERT encoder).
+/// 5. **LLM API**, only when its config says the API is available.
+/// 6. **Lexical**, only when `WEFTOS_EMBEDDING_MODE=lexical` is set; logs once
+///    that results are lexical, not semantic.
 ///
-/// Selection only promotes a model-backed provider when its runtime is actually
-/// live, so without the `onnx-embeddings` feature (or the artifacts) this always
-/// degrades cleanly to LLM or Mock. Model downloads are **not** required for
-/// CI — real inference is gated on staged artifacts + the `onnx-embeddings`
-/// feature.
+/// There is no silent fallback. When nothing above is live the result is
+/// `Err(EmbeddingError::ModelUnavailable)` naming every path searched. A model
+/// provider is only returned when its runtime actually loaded.
 pub fn select_embedding_provider(
     llm_config: Option<LlmEmbeddingConfig>,
-) -> Box<dyn EmbeddingProvider> {
+) -> Result<Box<dyn EmbeddingProvider>, EmbeddingError> {
+    let mut searched: Vec<String> = Vec::new();
+
     // 1. Qwen3 (preferred / project-canonical): needs model_fp16.onnx + tokenizer.json.
     for dir in qwen3_model_search_dirs() {
         let model = dir.join("model_fp16.onnx");
         let tokenizer = dir.join("tokenizer.json");
+        searched.push(model.display().to_string());
         if model.exists() && tokenizer.exists() {
             let provider = crate::embedding_qwen3::Qwen3EmbeddingProvider::new(&model, &tokenizer);
             if provider.is_runtime_available() {
                 tracing::info!("Using Qwen3 embedding provider from {}", dir.display());
-                return Box::new(provider);
+                return Ok(Box::new(provider));
             }
+            searched.push(format!("{} (present but failed to load)", model.display()));
         }
     }
 
-    // 2. e5-small-v2 (WEFT-640): 384-d, query:/passage: asymmetric prefixes.
+    // 2. nomic-embed-text-v1.5: 768-d, search_document:/search_query: prefixes.
+    for dir in nomic_model_search_dirs() {
+        let model = dir.join("onnx/model.onnx");
+        searched.push(model.display().to_string());
+        if model.exists() {
+            let provider = crate::embedding_onnx::OnnxEmbeddingProvider::nomic_embed_v1_5(&dir);
+            if provider.is_runtime_available() {
+                tracing::info!("Using nomic-embed-text-v1.5 embedding provider from {}", dir.display());
+                return Ok(Box::new(provider));
+            }
+            searched.push(format!("{} (present but failed to load)", model.display()));
+        }
+    }
+
+    // 3. e5-small-v2 (WEFT-640): 384-d, query:/passage: asymmetric prefixes.
     for path in &e5_model_search_paths() {
         if path.exists() {
             let provider = crate::embedding_e5::E5EmbeddingProvider::new(path);
             if provider.is_runtime_available() {
                 tracing::info!("Using e5-small-v2 embedding provider from {}", path.display());
-                return Box::new(provider);
+                return Ok(Box::new(provider));
             }
+            searched.push(format!("{} (present but failed to load)", path.display()));
         }
     }
 
-    // 3. all-MiniLM-L6-v2 ONNX (legacy BERT fallback).
+    // 4. all-MiniLM-L6-v2 ONNX (legacy BERT encoder).
     for path in &onnx_model_search_paths() {
         if path.exists() {
             let provider = crate::embedding_onnx::OnnxEmbeddingProvider::new(path);
             if provider.is_runtime_available() {
                 tracing::info!("Using ONNX embedding provider from {}", path.display());
-                return Box::new(provider);
+                return Ok(Box::new(provider));
             }
+            searched.push(format!("{} (present but failed to load)", path.display()));
         }
     }
 
-    // 4. LLM API.
+    // 5. LLM API: only when it is actually available.
     if let Some(config) = llm_config {
-        return Box::new(LlmEmbeddingProvider::new(config));
+        if config.api_available {
+            return Ok(Box::new(LlmEmbeddingProvider::new(config)));
+        }
+        searched.push(format!("LLM embedding API `{}` (api_available = false)", config.model));
     }
 
-    // 5. Mock.
-    Box::new(MockEmbeddingProvider::new(64))
+    // 6. Explicit opt-in lexical mode.
+    if lexical_mode_requested() {
+        return Ok(Box::new(crate::embedding_unavailable::LexicalEmbeddingProvider::new(
+            crate::embedding_unavailable::LexicalEmbeddingProvider::DEFAULT_DIMS,
+        )));
+    }
+
+    let mut detail = format!("searched: {}", searched.join(", "));
+    if !cfg!(feature = "onnx-embeddings") {
+        detail.push_str("; this build lacks the onnx-embeddings feature, so no local model can load");
+    }
+    Err(EmbeddingError::ModelUnavailable { what: "any embedding model".to_string(), detail })
+}
+
+/// Like [`select_embedding_provider`], for boot paths that must not fail
+/// offline. When no real model is available it logs an error and returns an
+/// [`UnavailableEmbeddingProvider`](crate::embedding_unavailable::UnavailableEmbeddingProvider)
+/// whose every call fails with `ModelUnavailable`; it never returns a hashing
+/// provider unless lexical mode was opted in explicitly.
+pub fn select_embedding_provider_or_unavailable(
+    llm_config: Option<LlmEmbeddingConfig>,
+) -> Box<dyn EmbeddingProvider> {
+    match select_embedding_provider(llm_config) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("{e}");
+            Box::new(crate::embedding_unavailable::UnavailableEmbeddingProvider::new(
+                crate::embedding_unavailable::UnavailableEmbeddingProvider::DEFAULT_DIMS,
+                e.to_string(),
+            ))
+        }
+    }
+}
+
+/// True when the operator explicitly asked for lexical (hash) embeddings.
+pub fn lexical_mode_requested() -> bool {
+    std::env::var(EMBEDDING_MODE_ENV).is_ok_and(|v| v.eq_ignore_ascii_case("lexical"))
+}
+
+/// Search directories for a nomic-embed-text-v1.5 bundle (each expected to hold
+/// `onnx/model.onnx` + `tokenizer.json`).
+pub fn nomic_model_search_dirs() -> Vec<std::path::PathBuf> {
+    let subdir = "nomic-embed-text-v1.5";
+    let mut dirs = Vec::new();
+    if let Ok(env_dir) = std::env::var(EMBED_MODEL_DIR_ENV)
+        && !env_dir.is_empty()
+    {
+        dirs.push(std::path::PathBuf::from(env_dir));
+    }
+    dirs.push(std::path::PathBuf::from(format!(".weftos/models/{subdir}")));
+    if let Some(home) = dirs_home() {
+        dirs.push(home.join(format!(".weftos/models/{subdir}")));
+    }
+    if let Ok(env_path) = std::env::var("WEFTOS_MODEL_PATH") {
+        dirs.push(std::path::PathBuf::from(env_path).join(subdir));
+    }
+    dirs
 }
 
 /// Standard search directories for the Qwen3 model bundle (each expected to hold
@@ -563,44 +656,18 @@ mod tests {
     // ── LlmEmbeddingProvider tests ───────────────────────────────────
 
     #[tokio::test]
-    async fn llm_provider_falls_back_to_mock_when_api_unavailable() {
+    async fn llm_provider_errors_when_api_unavailable_and_never_hashes() {
         let config = LlmEmbeddingConfig {
             api_available: false,
             dimensions: 64,
             ..Default::default()
         };
         let provider = LlmEmbeddingProvider::new(config);
-        // Should succeed via fallback, not error.
-        let vec = provider.embed("hello world").await.unwrap();
-        assert_eq!(vec.len(), 64);
-    }
-
-    #[tokio::test]
-    async fn llm_provider_fallback_is_deterministic() {
-        let config = LlmEmbeddingConfig {
-            api_available: false,
-            dimensions: 32,
-            ..Default::default()
-        };
-        let provider = LlmEmbeddingProvider::new(config);
-        let v1 = provider.embed("test").await.unwrap();
-        let v2 = provider.embed("test").await.unwrap();
-        assert_eq!(v1, v2);
-    }
-
-    #[tokio::test]
-    async fn llm_provider_batch_fallback() {
-        let config = LlmEmbeddingConfig {
-            api_available: false,
-            dimensions: 16,
-            ..Default::default()
-        };
-        let provider = LlmEmbeddingProvider::new(config);
-        let results = provider.embed_batch(&["a", "b", "c"]).await.unwrap();
-        assert_eq!(results.len(), 3);
-        for v in &results {
-            assert_eq!(v.len(), 16);
-        }
+        let err = provider.embed("hello world").await.unwrap_err();
+        assert!(matches!(err, EmbeddingError::ModelUnavailable { .. }), "{err}");
+        assert!(err.to_string().contains("semantic search unavailable"));
+        let err = provider.embed_batch(&["a", "b"]).await.unwrap_err();
+        assert!(matches!(err, EmbeddingError::ModelUnavailable { .. }), "{err}");
     }
 
     #[test]
@@ -658,11 +725,40 @@ mod tests {
         assert!(provider.is_api_available());
     }
 
+    /// True when this host has a model the selector could load, in which
+    /// case the "nothing available" assertions below do not apply.
+    fn host_has_a_model() -> bool {
+        lexical_mode_requested()
+            || nomic_model_search_dirs().iter().any(|d| d.join("onnx/model.onnx").exists())
+            || qwen3_model_search_dirs().iter().any(|d| d.join("model_fp16.onnx").exists())
+            || e5_model_search_paths().iter().any(|p| p.exists())
+            || onnx_model_search_paths().iter().any(|p| p.exists())
+    }
+
     #[test]
-    fn select_provider_returns_mock_when_no_config() {
-        let provider = select_embedding_provider(None);
-        assert_eq!(provider.dimensions(), 64);
-        assert_eq!(provider.model_name(), "mock-sha256");
+    fn select_provider_errors_naming_paths_when_no_model_is_available() {
+        if host_has_a_model() {
+            eprintln!("SKIP: this host has an embedding model; the no-model case does not apply");
+            return;
+        }
+        let err = select_embedding_provider(None).err().expect("must be an error, not a hash provider");
+        assert!(matches!(err, EmbeddingError::ModelUnavailable { .. }), "{err}");
+        let msg = err.to_string();
+        assert!(msg.contains("semantic search unavailable"), "{msg}");
+        assert!(msg.contains("nomic-embed-text-v1.5"), "names the searched paths: {msg}");
+    }
+
+    #[test]
+    fn select_provider_or_unavailable_never_returns_a_hashing_provider() {
+        if host_has_a_model() {
+            eprintln!("SKIP: this host has an embedding model");
+            return;
+        }
+        let p = select_embedding_provider_or_unavailable(None);
+        assert_eq!(p.model_name(), "unavailable");
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let err = rt.block_on(p.embed("anything")).unwrap_err();
+        assert!(matches!(err, EmbeddingError::ModelUnavailable { .. }), "{err}");
     }
 
     #[test]
@@ -686,14 +782,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn select_provider_priorities_skip_unavailable_qwen3() {
-        // No model artifacts present in the test cwd → Qwen3/e5/MiniLM runtimes
-        // are not live, so selection must fall through to Mock when no LLM config.
-        let provider = select_embedding_provider(None);
-        assert_eq!(provider.model_name(), "mock-sha256");
-    }
-
     #[tokio::test]
     async fn mock_embed_query_defaults_to_embed() {
         let provider = MockEmbeddingProvider::new(16);
@@ -703,29 +791,23 @@ mod tests {
     }
 
     #[test]
-    fn select_provider_returns_llm_when_config_present() {
+    fn select_provider_returns_llm_only_when_api_is_available() {
+        if host_has_a_model() {
+            eprintln!("SKIP: this host has an embedding model");
+            return;
+        }
         let config = LlmEmbeddingConfig {
             model: "test-embed".to_string(),
             dimensions: 256,
+            api_available: true,
             ..Default::default()
         };
-        let provider = select_embedding_provider(Some(config));
+        let provider = select_embedding_provider(Some(config)).expect("api available");
         assert_eq!(provider.dimensions(), 256);
         assert_eq!(provider.model_name(), "test-embed");
-    }
 
-    #[tokio::test]
-    async fn llm_provider_fallback_matches_mock() {
-        let config = LlmEmbeddingConfig {
-            api_available: false,
-            dimensions: 32,
-            ..Default::default()
-        };
-        let llm = LlmEmbeddingProvider::new(config);
-        let mock = MockEmbeddingProvider::new(32);
-        let llm_vec = llm.embed("same input").await.unwrap();
-        let mock_vec = mock.embed("same input").await.unwrap();
-        // Fallback should produce identical results to mock.
-        assert_eq!(llm_vec, mock_vec);
+        // An LLM config whose API is not available is NOT a provider.
+        let down = LlmEmbeddingConfig { api_available: false, ..Default::default() };
+        assert!(select_embedding_provider(Some(down)).is_err());
     }
 }

@@ -127,7 +127,7 @@ impl IntelligentRouter {
         }
 
         // Rule 2: Check policy store for cached routing.
-        let prompt_embedding = self.embedder.embed(prompt).await?;
+        let prompt_embedding = self.embedder.embed_query(prompt).await?;
         let policy_results = self.policy_store.search(&prompt_embedding, 5);
 
         if let Some(best) = policy_results.first()
@@ -194,7 +194,10 @@ impl IntelligentRouter {
 
         let embedding = match self.embedder.embed(pattern).await {
             Ok(e) => e,
-            Err(_) => return,
+            Err(e) => {
+                tracing::warn!("intelligent_router: policy not cached, embedding failed: {e}");
+                return;
+            }
         };
 
         let id = format!("policy-{}", self.policy_store.len());
@@ -282,8 +285,37 @@ mod tests {
     use super::*;
     use crate::embeddings::hash_embedder::HashEmbedder;
 
+    /// PLUMBING embedder: equal text maps to equal vectors and nothing more.
+    /// Similarity-threshold behaviour is judged with a real embedder below.
     fn make_embedder() -> Box<dyn Embedder> {
         Box::new(HashEmbedder::new(64))
+    }
+
+    /// Policy-cache similarity judged with a REAL embedding model (skipped with a
+    /// printed reason unless `onnx-embeddings` + `WEFTOS_TEST_EMBED_MODEL_DIR`):
+    /// an unrelated prompt must NOT hit a cached policy, and the identical prompt
+    /// must. Where a close paraphrase lands relative to the 0.85 threshold is
+    /// reported, not asserted: the threshold was calibrated for exact-text hits.
+    #[tokio::test]
+    async fn real_embedder_policy_cache_hits_identical_and_misses_unrelated() {
+        let Some(real) = crate::embeddings::test_support::real_embedder() else { return };
+        let mut router = IntelligentRouter::new(Box::new(real.clone())).await;
+        let ctx = RoutingContext::default();
+        let cached = "convert temperature from celsius to fahrenheit";
+        router.update_policy(cached, 2, true).await;
+
+        let same = router.route_request(cached, &ctx).await.unwrap();
+        assert!(same.reason.contains("cached policy match"), "{}", same.reason);
+
+        let unrelated = router
+            .route_request("summarise the quarterly sales report for the board", &ctx)
+            .await
+            .unwrap();
+        assert!(!unrelated.reason.contains("cached policy match"), "{}", unrelated.reason);
+
+        let para = "change degrees C into degrees F";
+        let score = crate::embeddings::test_support::cosine(&real.query(para), &real.doc(cached));
+        eprintln!("real-embedder policy cache: paraphrase cosine {score:.3} (threshold 0.85)");
     }
 
     // ── Tier 1: Agent Booster ──────────────────────────────────────
@@ -394,7 +426,7 @@ mod tests {
     // ── Policy cache ───────────────────────────────────────────────
 
     #[tokio::test]
-    async fn policy_cache_update_and_match() {
+    async fn policy_cache_update_and_match_plumbing() {
         let mut router = IntelligentRouter::new(make_embedder()).await;
         let ctx = RoutingContext::default();
 
@@ -415,7 +447,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn policy_cache_failure_not_stored() {
+    async fn policy_cache_failure_not_stored_plumbing() {
         let mut router = IntelligentRouter::new(make_embedder()).await;
 
         // Report a failure -- should NOT be cached.

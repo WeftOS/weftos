@@ -44,6 +44,11 @@ mesh = ["clawft-kernel/mesh", "clawft-kernel/quic", "dep:clawft-mesh-service"]
 # mesh-placement-12: placement control plane (runtime adapters + mesh).
 placement = ["clawft-kernel/workload-runtime", "mesh", "ecc", "exochain"]
 rvf-rpc = ["dep:rvf-wire", "dep:rvf-types"]
+# Real local embedding model (nomic-embed-text-v1.5 etc.) for the kernel session
+# tier, shared.embed and the core recall/router paths. Off by default (links ort);
+# without it, and without an API key or the explicit lexical opt-in, semantic
+# recall reports "semantic search unavailable: configure an embedding model".
+onnx-embeddings = ["clawft-kernel/onnx-embeddings", "clawft-core/onnx-embeddings"]
 # Stub installers for the `shared.*` services (integration tests only).
 test-support = ["clawft-kernel/test-support"]
 

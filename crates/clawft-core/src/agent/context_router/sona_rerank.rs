@@ -51,12 +51,21 @@ const LORA_DELTA_EPS: f32 = 1e-6;
 /// Tracing target for latency / accuracy instrumentation.
 pub const RERANK_TRACING_TARGET: &str = "context_router.hybrid_rerank";
 
+/// Text -> vector function used to embed queries and skill ids.
+pub type TextEmbedFn = Arc<dyn Fn(&str) -> Vec<f32> + Send + Sync>;
+
 /// Sona-backed skill reranker for HybridRouter v2.5.
+///
+/// [`new`](Self::new), [`with_config`](Self::with_config) and
+/// [`from_engine`](Self::from_engine) embed with the LEXICAL [`hash_embed`]
+/// (shared words only, not semantic). For semantic reranking build it with
+/// [`with_text_embedder`](Self::with_text_embedder) and a real model.
 pub struct SonaSkillReranker {
     engine: Arc<SonaEngine>,
     dim: usize,
     /// How many ReasoningBank neighbours to consult.
     pattern_k: usize,
+    embed: TextEmbedFn,
 }
 
 impl SonaSkillReranker {
@@ -74,13 +83,26 @@ impl SonaSkillReranker {
         })
     }
 
-    /// Build with an explicit SONA config (tests / tuning).
+    /// Build with an explicit SONA config (tests / tuning). Lexical hash embedding.
     pub fn with_config(config: SonaConfig) -> Self {
         let dim = config.hidden_dim.max(1);
         Self {
             engine: Arc::new(SonaEngine::with_config(config)),
             dim,
             pattern_k: 3,
+            embed: Arc::new(move |t| hash_embed(t, dim)),
+        }
+    }
+
+    /// Build with a real text embedder. `config.hidden_dim` and
+    /// `config.embedding_dim` must equal the embedder's output width.
+    pub fn with_text_embedder(config: SonaConfig, embed: TextEmbedFn) -> Self {
+        let dim = config.hidden_dim.max(1);
+        Self {
+            engine: Arc::new(SonaEngine::with_config(config)),
+            dim,
+            pattern_k: 3,
+            embed,
         }
     }
 
@@ -92,6 +114,7 @@ impl SonaSkillReranker {
             engine,
             dim,
             pattern_k: 3,
+            embed: Arc::new(move |t| hash_embed(t, dim)),
         }
     }
 
@@ -116,8 +139,16 @@ impl SonaSkillReranker {
     /// citation rewards. Memory rerank wants a list of `(id, ±1)` instead
     /// of one quality — keep the retriever frozen.
     pub fn observe(&self, query: &str, selected_skill: &str, quality: f32) {
-        let q = hash_embed(query, self.dim);
-        let skill_emb = hash_embed(selected_skill, self.dim);
+        let q = (self.embed)(query);
+        let skill_emb = (self.embed)(selected_skill);
+        if q.len() != self.dim || skill_emb.len() != self.dim {
+            tracing::warn!(
+                target: RERANK_TRACING_TARGET,
+                expected = self.dim, got = q.len(),
+                "SonaSkillReranker: embedder width does not match the SONA config; observation skipped"
+            );
+            return;
+        }
         let mut builder = self.engine.begin_trajectory(q);
         builder.add_step(skill_emb, vec![], quality.clamp(0.0, 1.0));
         builder.add_context(selected_skill);
@@ -182,7 +213,15 @@ impl SkillReranker for SonaSkillReranker {
         }
 
         let started = Instant::now();
-        let q = hash_embed(query, self.dim);
+        let q = (self.embed)(query);
+        if q.len() != self.dim {
+            tracing::warn!(
+                target: RERANK_TRACING_TARGET,
+                expected = self.dim, got = q.len(),
+                "SonaSkillReranker: embedder width does not match the SONA config; preserving primary order"
+            );
+            return candidates.to_vec();
+        }
 
         // Residual MicroLoRA: start from the query embedding so an
         // untrained (zero up-proj) adapter leaves the vector intact.
@@ -212,7 +251,7 @@ impl SkillReranker for SonaSkillReranker {
             .cloned()
             .enumerate()
             .map(|(idx, mut c)| {
-                let skill_emb = hash_embed(&c.id, self.dim);
+                let skill_emb = (self.embed)(&c.id);
                 let cos = cosine(&q_opt, &skill_emb);
                 let mut pattern_boost = 0.0f32;
                 for p in &patterns {
@@ -249,10 +288,10 @@ impl SkillReranker for SonaSkillReranker {
     }
 }
 
-/// Deterministic hash embedding (FNV-1a seeded per-dim).
+/// Deterministic hash embedding (FNV-1a seeded per-dim): LEXICAL, not semantic.
 ///
-/// Offline floor: same string always maps to the same unit vector.
-/// Not a semantic embedder — day-0 SONA still preserves primary order
+/// Same string always maps to the same unit vector; paraphrases are unrelated.
+/// Only the `SonaSkillReranker` lexical constructors use it. Day-0 SONA still preserves primary order
 /// (see fail-open above); learned patterns + MicroLoRA supply the
 /// adaptive signal over time.
 pub fn hash_embed(text: &str, dim: usize) -> Vec<f32> {
@@ -338,6 +377,59 @@ mod tests {
             out.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
             vec!["alpha", "beta", "gamma"]
         );
+    }
+
+    /// Reranking with a REAL embedder (skipped with a printed reason unless
+    /// `onnx-embeddings` + `WEFTOS_TEST_EMBED_MODEL_DIR`): the untrained contract
+    /// holds, the latency budget holds including the embedding, and after
+    /// training toward one skill the full candidate set is still returned. It
+    /// reports where the trained skill lands (hit@1 / rank) instead of asserting
+    /// a learning-efficacy number SONA does not guarantee.
+    #[test]
+    fn bench_rerank_with_real_embedder_latency_and_contract() {
+        use crate::embeddings::test_support::{TEST_MODEL_DIMS, real_embedder};
+        let Some(emb) = real_embedder() else { return };
+        const K: usize = 8;
+        let skills = [
+            "code-review", "write-poem", "plan-trip", "debug-rust-compile-error",
+            "summarize-meeting", "translate-text", "sql-query-tuning", "draft-email",
+        ];
+        let cands: Vec<RerankCandidate> = skills
+            .iter()
+            .enumerate()
+            .map(|(i, s)| RerankCandidate::new(*s, 1.0 / (i as f32 + 1.0)))
+            .collect();
+        let e = emb.clone();
+        let sona = SonaSkillReranker::with_text_embedder(
+            SonaConfig {
+                hidden_dim: TEST_MODEL_DIMS,
+                embedding_dim: TEST_MODEL_DIMS,
+                pattern_clusters: 16,
+                trajectory_capacity: 1024,
+                quality_threshold: 0.15,
+                ..SonaConfig::default()
+            },
+            Arc::new(move |t: &str| e.doc(t)),
+        );
+        let query = "the compiler keeps rejecting my borrow checker usage";
+
+        // Warm the embedding cache so the budget measures rerank, not model load.
+        let _ = sona.rerank(query, &cands);
+        let t = Instant::now();
+        let out = sona.rerank(query, &cands);
+        let day0_us = t.elapsed().as_micros();
+        assert_eq!(out[0].id, skills[0], "untrained SONA must preserve primary top-1 (day-0 fail-open)");
+        assert!(day0_us < 3_000, "day-0 rerank with real embeddings took {day0_us} us, over the 3 ms budget");
+
+        for i in 0..40 {
+            sona.observe(&format!("{query} variant {i}"), "debug-rust-compile-error", 0.95);
+        }
+        sona.force_learn();
+        sona.flush();
+        let trained = sona.rerank(query, &cands);
+        assert_eq!(trained.len(), K, "trained rerank must keep the full candidate set");
+        let rank = trained.iter().position(|c| c.id == "debug-rust-compile-error").unwrap() + 1;
+        eprintln!("real-embedder SONA bench: day0 {day0_us} us; trained skill rank {rank}/{K}");
     }
 
     #[test]

@@ -46,6 +46,10 @@ browser = [
 vector-memory = ["dep:rand", "dep:instant-distance"]
 rvf = ["vector-memory", "dep:rvf-runtime", "dep:rvf-types", "dep:reqwest", "dep:clawft-cow-memory"]
 signing = ["dep:ed25519-dalek", "dep:rand"]
+# Real in-process embedding model (nomic-embed-text-v1.5 ONNX via ort + the
+# model's own tokenizer.json). Opt-in: the default build links no ort. Without
+# it, semantic recall reports "unavailable" instead of hashing.
+onnx-embeddings = ["vector-memory", "dep:ort", "dep:tokenizers"]
 # agent-core-v1 Phase E2: enables EmbeddingRouter's production index
 # backed by ruvector-diskann@2.1 (Vamana + PQ + mmap). When the feature
 # is off, the router falls back to an in-memory brute-force cosine
@@ -109,6 +113,9 @@ tiktoken-rs = { workspace = true, optional = true }
 # (see `agent::tokenizer`); o200k_base stays the bundled, download-free
 # stand-in when no exact tokenizer is configured.
 tokenizers = { workspace = true, optional = true }
+# Same ort feature set as clawft-kernel (members cannot re-enable a workspace
+# dependency's default features).
+ort = { workspace = true, optional = true, features = ["std", "ndarray", "tracing", "download-binaries", "tls-native", "copy-dylibs", "api-24"] }
 rvf-runtime = { workspace = true, optional = true }
 rvf-types = { workspace = true, optional = true }
 # WEFT-616 Phase 2: per-turn COW memory checkpointing (BranchableMemory).

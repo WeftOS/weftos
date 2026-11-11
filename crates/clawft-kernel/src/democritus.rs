@@ -813,10 +813,15 @@ mod tests {
         assert_eq!(demo.total_nodes_added(), 3);
     }
 
-    // ── Test 7: Vector search returns relevant neighbors ──
+    // ── Test 7: Vector search wiring (plumbing, Mock embedder) ──
+    //
+    // The Mock embedder is a hash of the whole string: equal text maps to equal
+    // vectors, nothing more. This proves the second tick's search sees the first
+    // tick's insert. Neighbour QUALITY is judged by
+    // `real_embedder_neighbour_is_the_semantically_related_impulse` below.
 
     #[tokio::test]
-    async fn vector_returns_neighbors_on_second_tick() {
+    async fn vector_returns_prior_entries_on_second_tick_plumbing_mock_embedder() {
         let (_cg, vector, iq, _crs, demo) = make_loop();
 
         // First tick: insert a node.
@@ -843,6 +848,75 @@ mod tests {
             .expect("mock embed");
         let hits = vector.search(&query, 5);
         assert!(!hits.is_empty(), "vector backend must return prior entries");
+    }
+
+    // ── Test 7b: neighbour quality with a REAL embedding model ──
+
+    /// Skipped with a printed reason unless WEFTOS_TEST_EMBED_MODEL_DIR points at
+    /// a nomic-embed-text-v1.5 bundle. The query impulse shares no keyword with
+    /// the impulse it must be nearest to.
+    #[tokio::test]
+    async fn real_embedder_neighbour_is_the_semantically_related_impulse() {
+        let Some(emb) = crate::embedding_support::real_embedder() else { return };
+        let cg = Arc::new(CausalGraph::new());
+        let vector: Arc<dyn VectorBackend> = Arc::new(HnswBackend::new(HnswServiceConfig {
+            default_dimensions: crate::embedding_support::TEST_MODEL_DIMS,
+            ..HnswServiceConfig::default()
+        }));
+        let iq = Arc::new(ImpulseQueue::new());
+        let crs = Arc::new(CrossRefStore::new());
+        let demo = DemocritusLoop::new(
+            Arc::clone(&cg),
+            Arc::clone(&vector),
+            Arc::clone(&iq),
+            Arc::clone(&crs),
+            Arc::clone(&emb),
+            // The 15 ms default tick budget cannot cover a real model: embedding three
+            // impulses takes hundreds of ms, so the tick aborts after EMBED and inserts
+            // nothing. The budget is raised here so this test judges neighbour quality;
+            // the budget finding is reported separately.
+            DemocritusConfig { tick_budget_us: 120_000_000, ..DemocritusConfig::default() },
+        );
+
+        let payloads = [
+            "the nightly deploy crashed because the process ran out of memory",
+            "the customer asked for a dark colour theme on the dashboard",
+            "invoices go to the finance team on the first working day of the month",
+        ];
+        let ids: Vec<u64> = payloads
+            .iter()
+            .enumerate()
+            .map(|(i, text)| {
+                iq.emit(
+                    StructureTag::CausalGraph.as_u8(),
+                    [0u8; 32],
+                    StructureTag::HnswIndex.as_u8(),
+                    ImpulseType::BeliefUpdate,
+                    serde_json::json!({ "text": text }),
+                    100 + i as u64,
+                )
+            })
+            .collect();
+        demo.tick().await;
+        assert_eq!(vector.len(), 3);
+
+        // Same text shape the EMBED phase builds, with different words.
+        let query = emb
+            .embed(&format!(
+                "{}:{}",
+                ImpulseType::BeliefUpdate,
+                serde_json::json!({"text": "why did the release blow up with an OOM kill?"})
+            ))
+            .await
+            .expect("real embed");
+        let hits = vector.search(&query, 1);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(
+            hits[0].metadata["impulse_id"].as_u64(),
+            Some(ids[0]),
+            "nearest neighbour must be the out-of-memory impulse, got {:?}",
+            hits[0].metadata
+        );
     }
 
     // ── Test 8: Causal edge type selection ──

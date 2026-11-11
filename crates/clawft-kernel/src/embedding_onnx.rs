@@ -1,9 +1,15 @@
 //! ONNX, sentence-transformer, and AST-aware embedding backends (K3c-G2).
 //!
 //! These are alternative [`EmbeddingProvider`] implementations that complement
-//! the existing [`LlmEmbeddingProvider`] and [`MockEmbeddingProvider`].
+//! the existing [`LlmEmbeddingProvider`].
 //!
-//! - [`OnnxEmbeddingProvider`] -- local model inference (all-MiniLM-L6-v2, 384-d).
+//! - [`OnnxEmbeddingProvider`] -- local BERT-family model inference
+//!   (all-MiniLM-L6-v2 384-d, nomic-embed-text-v1.5 768-d, e5). Tokenisation is
+//!   the model's own `tokenizer.json` when present, else a `vocab.txt`
+//!   WordPiece (BERT-uncased ids only). With neither, or without the model
+//!   file or the `onnx-embeddings` feature, every call fails with
+//!   [`EmbeddingError::ModelUnavailable`] naming the path. There is NO hash
+//!   fallback.
 //! - [`SentenceTransformerProvider`] -- documentation-optimised paragraph embedder.
 //! - [`AstEmbeddingProvider`] -- hybrid structural + semantic embedder for Rust code.
 
@@ -16,7 +22,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::embedding::{EmbeddingError, EmbeddingProvider, MockEmbeddingProvider};
+use crate::embedding::{EmbeddingError, EmbeddingProvider};
 
 // ---------------------------------------------------------------------------
 // WordPiece tokenizer for BERT / all-MiniLM-L6-v2
@@ -30,8 +36,9 @@ use crate::embedding::{EmbeddingError, EmbeddingProvider, MockEmbeddingProvider}
 /// 3. Greedy longest-match WordPiece splitting (subwords prefixed with `##`)
 /// 4. [CLS] / [SEP] framing and [PAD] / truncation to `max_length`
 ///
-/// When no vocab file is available, [`WordPieceTokenizer::encode`] returns
-/// `None` so callers can fall back to hash-based tokenization.
+/// Special-token ids are the BERT **uncased** ones (101/102/100/0), so this
+/// only suits models sharing that vocabulary (all-MiniLM-L6-v2, e5-small-v2).
+/// Other BERT-family models (nomic, ...) use their own `tokenizer.json`.
 pub struct WordPieceTokenizer {
     /// Token string -> vocab ID.
     vocab: HashMap<String, i64>,
@@ -258,45 +265,8 @@ fn vocab_search_paths(model_path: &Path) -> Vec<PathBuf> {
 }
 
 // ---------------------------------------------------------------------------
-// Shared tokenisation helpers
+// Shared helpers
 // ---------------------------------------------------------------------------
-
-/// Simple whitespace tokeniser that lowercases and strips non-alphanumeric chars.
-fn simple_tokenize(text: &str, max_tokens: usize) -> Vec<String> {
-    text.to_lowercase()
-        .split_whitespace()
-        .take(max_tokens)
-        .map(|s| {
-            s.chars()
-                .filter(|c| c.is_alphanumeric())
-                .collect::<String>()
-        })
-        .filter(|s| !s.is_empty())
-        .collect()
-}
-
-/// Convert a token sequence into a fixed-size embedding via position-weighted
-/// SHA-256 hashing.  Produces consistent, deterministic vectors per token set.
-fn tokens_to_embedding(tokens: &[String], dims: usize) -> Vec<f32> {
-    let mut embedding = vec![0.0f32; dims];
-
-    for (i, token) in tokens.iter().enumerate() {
-        let mut hasher = Sha256::new();
-        hasher.update(token.as_bytes());
-        hasher.update((i as u32).to_le_bytes());
-        let hash = hasher.finalize();
-
-        // Scatter hash bytes across embedding dimensions.
-        for (j, &byte) in hash.iter().enumerate() {
-            let dim = (j + i * 32) % dims;
-            let val = (byte as f32 / 128.0) - 1.0; // [-1, 1]
-            embedding[dim] += val / (tokens.len() as f32).sqrt();
-        }
-    }
-
-    l2_normalize(&mut embedding);
-    embedding
-}
 
 /// In-place L2 normalisation.
 fn l2_normalize(vec: &mut [f32]) {
@@ -306,29 +276,31 @@ fn l2_normalize(vec: &mut [f32]) {
     }
 }
 
-/// Cosine similarity between two equal-length vectors.
-#[cfg(test)]
-fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    debug_assert_eq!(a.len(), b.len());
-    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
-    let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
-    let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm_a == 0.0 || norm_b == 0.0 {
-        return 0.0;
-    }
-    dot / (norm_a * norm_b)
-}
-
 // =========================================================================
 // Backend 1: OnnxEmbeddingProvider
 // =========================================================================
 
-/// ONNX Runtime embedding provider.
+/// How a model's text becomes ids.
+#[cfg(feature = "onnx-embeddings")]
+enum Tokenization {
+    /// The model's own HuggingFace `tokenizer.json` (nomic, BERT, e5, ...).
+    HfJson(Box<tokenizers::Tokenizer>),
+    /// A BERT-uncased `vocab.txt` WordPiece (MiniLM-class models only).
+    WordPiece(WordPieceTokenizer),
+}
+
+/// ONNX Runtime embedding provider for BERT-family encoders.
 ///
-/// Uses all-MiniLM-L6-v2 (384 dimensions) for semantic text embeddings.
-/// When the ONNX runtime is not available (no `onnx-embeddings` feature or
-/// missing model file), falls back to a position-aware token-hashing approach
-/// that is architecturally compatible with real inference.
+/// Defaults to all-MiniLM-L6-v2 (384-d); [`OnnxEmbeddingProvider::nomic_embed_v1_5`]
+/// builds a 768-d nomic-embed-text-v1.5 provider with its task prefixes. The
+/// model's own `tokenizer.json` is used when present (next to the model file or
+/// one directory up, which covers the `onnx/model.onnx` layout); otherwise a
+/// `vocab.txt` WordPiece for BERT-uncased models.
+///
+/// If the model, its tokenizer, or the `onnx-embeddings` feature is missing,
+/// [`is_runtime_available`](Self::is_runtime_available) is false and every
+/// embed call returns [`EmbeddingError::ModelUnavailable`] naming the path.
+/// It never substitutes hashed vectors.
 pub struct OnnxEmbeddingProvider {
     /// Path to the ONNX model file.
     model_path: PathBuf,
@@ -336,22 +308,26 @@ pub struct OnnxEmbeddingProvider {
     dimensions: usize,
     /// Model name for identification.
     model_name: String,
-    /// Whether the ONNX runtime session is available.
+    /// Whether the ONNX runtime session and a tokenizer are both live.
     runtime_available: bool,
+    /// Why the runtime is not available (names the path), when it is not.
+    unavailable_reason: Option<String>,
     /// Max input tokens.
     max_tokens: usize,
-    /// Fallback provider used when runtime is not available.
-    #[allow(dead_code)]
-    fallback: MockEmbeddingProvider,
-    /// WordPiece tokenizer loaded from vocab.txt (if available).
-    /// When `None`, ONNX inference falls back to hash-based token IDs.
+    /// Prefix applied by [`EmbeddingProvider::embed`] (document lane).
+    doc_prefix: String,
+    /// Prefix applied by [`EmbeddingProvider::embed_query`] (query lane).
+    query_prefix: String,
     #[cfg(feature = "onnx-embeddings")]
-    tokenizer: Option<WordPieceTokenizer>,
-    /// ONNX runtime session (only present when `onnx-embeddings` feature is active
-    /// and model was loaded successfully). Wrapped in a `Mutex` because ort's
-    /// `Session::run` takes `&mut self` in 2.0-rc.12.
+    tokenization: Option<Tokenization>,
+    /// ONNX runtime session (only present when `onnx-embeddings` is active and
+    /// the model loaded). Wrapped in a `Mutex` because ort's `Session::run`
+    /// takes `&mut self` in 2.0-rc.12.
     #[cfg(feature = "onnx-embeddings")]
     session: Option<Arc<Mutex<ort::session::Session>>>,
+    /// Whether the graph takes a `token_type_ids` input.
+    #[cfg(feature = "onnx-embeddings")]
+    has_type_ids: bool,
 }
 
 impl OnnxEmbeddingProvider {
@@ -361,38 +337,17 @@ impl OnnxEmbeddingProvider {
     pub const DEFAULT_MAX_TOKENS: usize = 128;
     /// Model identifier.
     pub const MODEL_NAME: &'static str = "all-MiniLM-L6-v2";
+    /// nomic-embed-text-v1.5 output dimensionality.
+    pub const NOMIC_DIMS: usize = 768;
+    /// nomic-embed-text-v1.5 identifier.
+    pub const NOMIC_MODEL_NAME: &'static str = "nomic-embed-text-v1.5";
 
-    /// Create a new ONNX provider pointing at the given model path.
+    /// Create a provider pointing at the given model path (all-MiniLM-L6-v2 defaults).
     ///
-    /// If the model file does not exist or the `onnx-embeddings` feature is
-    /// disabled, the provider transparently falls back to token-hashing.
+    /// Never panics and never needs the model to construct; check
+    /// [`is_runtime_available`](Self::is_runtime_available).
     pub fn new(model_path: impl Into<PathBuf>) -> Self {
-        let model_path = model_path.into();
-        #[cfg(feature = "onnx-embeddings")]
-        let session = Self::try_load_session(&model_path);
-        #[cfg(feature = "onnx-embeddings")]
-        let runtime_available = session.is_some();
-        #[cfg(not(feature = "onnx-embeddings"))]
-        let runtime_available = false;
-        #[cfg(feature = "onnx-embeddings")]
-        let tokenizer = Self::try_load_tokenizer(&model_path, Self::DEFAULT_MAX_TOKENS);
-
-        Self {
-            model_name: if runtime_available {
-                Self::MODEL_NAME.to_string()
-            } else {
-                format!("{}-hash-fallback", Self::MODEL_NAME)
-            },
-            model_path,
-            dimensions: Self::DEFAULT_DIMS,
-            runtime_available,
-            max_tokens: Self::DEFAULT_MAX_TOKENS,
-            fallback: MockEmbeddingProvider::new(Self::DEFAULT_DIMS),
-            #[cfg(feature = "onnx-embeddings")]
-            tokenizer,
-            #[cfg(feature = "onnx-embeddings")]
-            session,
-        }
+        Self::build(model_path.into(), Self::DEFAULT_DIMS, Self::DEFAULT_MAX_TOKENS, Self::MODEL_NAME)
     }
 
     /// Create a provider with custom dimensions and max tokens.
@@ -401,83 +356,158 @@ impl OnnxEmbeddingProvider {
         dimensions: usize,
         max_tokens: usize,
     ) -> Self {
-        let model_path = model_path.into();
+        Self::build(model_path.into(), dimensions, max_tokens, Self::MODEL_NAME)
+    }
+
+    /// nomic-embed-text-v1.5 from a bundle directory holding `onnx/model.onnx`
+    /// and `tokenizer.json`. 768-d, masked mean pooling, L2 normalised; applies
+    /// the model's required `search_document: ` / `search_query: ` prefixes.
+    pub fn nomic_embed_v1_5(model_dir: impl AsRef<Path>) -> Self {
+        let mut p = Self::build(
+            model_dir.as_ref().join("onnx/model.onnx"),
+            Self::NOMIC_DIMS,
+            510,
+            Self::NOMIC_MODEL_NAME,
+        );
+        p.doc_prefix = "search_document: ".to_string();
+        p.query_prefix = "search_query: ".to_string();
+        p
+    }
+
+    fn build(model_path: PathBuf, dimensions: usize, max_tokens: usize, name: &str) -> Self {
         #[cfg(feature = "onnx-embeddings")]
-        let session = Self::try_load_session(&model_path);
+        let (session, session_err) = Self::try_load_session(&model_path);
         #[cfg(feature = "onnx-embeddings")]
-        let runtime_available = session.is_some();
+        let (tokenization, tok_err) = Self::try_load_tokenization(&model_path, max_tokens);
+        #[cfg(feature = "onnx-embeddings")]
+        let has_type_ids = session
+            .as_ref()
+            .and_then(|s| s.lock().ok().map(|g| g.inputs().iter().any(|i| i.name() == "token_type_ids")))
+            .unwrap_or(false);
+
+        #[cfg(feature = "onnx-embeddings")]
+        let (runtime_available, unavailable_reason) = {
+            let errs: Vec<String> = session_err.into_iter().chain(tok_err).collect();
+            if session.is_some() && tokenization.is_some() {
+                (true, None)
+            } else {
+                (false, Some(errs.join("; ")))
+            }
+        };
         #[cfg(not(feature = "onnx-embeddings"))]
-        let runtime_available = false;
-        #[cfg(feature = "onnx-embeddings")]
-        let tokenizer = Self::try_load_tokenizer(&model_path, max_tokens);
+        let (runtime_available, unavailable_reason) = (
+            false,
+            Some(format!(
+                "this build lacks the onnx-embeddings feature, so {} cannot be loaded",
+                model_path.display()
+            )),
+        );
 
         Self {
             model_name: if runtime_available {
-                Self::MODEL_NAME.to_string()
+                name.to_string()
             } else {
-                format!("{}-hash-fallback", Self::MODEL_NAME)
+                format!("{name}-unavailable")
             },
             model_path,
             dimensions,
             runtime_available,
+            unavailable_reason,
             max_tokens,
-            fallback: MockEmbeddingProvider::new(dimensions),
+            doc_prefix: String::new(),
+            query_prefix: String::new(),
             #[cfg(feature = "onnx-embeddings")]
-            tokenizer,
+            tokenization,
             #[cfg(feature = "onnx-embeddings")]
             session,
+            #[cfg(feature = "onnx-embeddings")]
+            has_type_ids,
         }
     }
 
-    /// Attempt to load a WordPiece tokenizer from vocab.txt near the model.
+    /// Candidate locations for the model's own `tokenizer.json`.
+    #[cfg_attr(not(feature = "onnx-embeddings"), allow(dead_code))]
+    fn tokenizer_json_candidates(model_path: &Path) -> Vec<PathBuf> {
+        let mut v = Vec::new();
+        if let Some(dir) = model_path.parent() {
+            v.push(dir.join("tokenizer.json"));
+            if let Some(up) = dir.parent() {
+                v.push(up.join("tokenizer.json"));
+            }
+        }
+        v
+    }
+
+    /// Load the tokenizer: the model's `tokenizer.json`, else a `vocab.txt`
+    /// WordPiece. Returns the reason (naming the paths) when neither loads.
     #[cfg(feature = "onnx-embeddings")]
-    fn try_load_tokenizer(model_path: &Path, max_tokens: usize) -> Option<WordPieceTokenizer> {
+    fn try_load_tokenization(
+        model_path: &Path,
+        max_tokens: usize,
+    ) -> (Option<Tokenization>, Option<String>) {
+        let candidates = Self::tokenizer_json_candidates(model_path);
+        for path in &candidates {
+            if path.exists() {
+                return match tokenizers::Tokenizer::from_file(path) {
+                    Ok(t) => {
+                        tracing::info!("tokenizer.json loaded from {}", path.display());
+                        (Some(Tokenization::HfJson(Box::new(t))), None)
+                    }
+                    Err(e) => (None, Some(format!("tokenizer {} failed to load: {e}", path.display()))),
+                };
+            }
+        }
         for path in vocab_search_paths(model_path) {
             if path.exists()
                 && let Some(tok) = WordPieceTokenizer::load(&path)
             {
-                // max_tokens here refers to the token count limit; for
-                // WordPiece the max_length (including [CLS]/[SEP]) is
-                // max_tokens + 2, capped at 512 for BERT models.
+                // max_tokens is the token count limit; WordPiece max_length
+                // includes [CLS]/[SEP] and is capped at 512 for BERT models.
                 let max_len = (max_tokens + 2).min(512);
-                return Some(tok.with_max_length(max_len));
+                return (Some(Tokenization::WordPiece(tok.with_max_length(max_len))), None);
             }
         }
-        tracing::debug!(
-            "No vocab.txt found for WordPiece tokenizer near {}; \
-             ONNX inference will use hash-based token IDs (degraded quality)",
-            model_path.display()
-        );
-        None
+        let tried: Vec<String> = candidates.iter().map(|p| p.display().to_string()).collect();
+        (
+            None,
+            Some(format!(
+                "no tokenizer for {}: looked for tokenizer.json at [{}] and a BERT vocab.txt",
+                model_path.display(),
+                tried.join(", ")
+            )),
+        )
     }
 
     /// Attempt to load an ONNX runtime session from the model path.
     #[cfg(feature = "onnx-embeddings")]
-    fn try_load_session(model_path: &PathBuf) -> Option<Arc<Mutex<ort::session::Session>>> {
+    fn try_load_session(
+        model_path: &Path,
+    ) -> (Option<Arc<Mutex<ort::session::Session>>>, Option<String>) {
         if !model_path.exists() {
-            tracing::debug!(
-                "ONNX model not found at {}, using hash fallback",
-                model_path.display()
-            );
-            return None;
+            return (None, Some(format!("model file not found at {}", model_path.display())));
         }
         match ort::session::Session::builder()
             .and_then(|mut builder| builder.commit_from_file(model_path))
         {
             Ok(session) => {
                 tracing::info!("ONNX session loaded from {}", model_path.display());
-                Some(Arc::new(Mutex::new(session)))
+                (Some(Arc::new(Mutex::new(session))), None)
             }
-            Err(e) => {
-                tracing::warn!("Failed to load ONNX session: {e}, using hash fallback");
-                None
-            }
+            Err(e) => (
+                None,
+                Some(format!("ONNX session failed to load from {}: {e}", model_path.display())),
+            ),
         }
     }
 
-    /// Whether the real ONNX runtime is active (vs. fallback).
+    /// Whether the real ONNX runtime is active.
     pub fn is_runtime_available(&self) -> bool {
         self.runtime_available
+    }
+
+    /// Why the runtime is unavailable (names the path), if it is.
+    pub fn unavailable_reason(&self) -> Option<&str> {
+        self.unavailable_reason.as_deref()
     }
 
     /// Path to the configured model file.
@@ -490,99 +520,100 @@ impl OnnxEmbeddingProvider {
         self.max_tokens
     }
 
-    /// Embed using the token-hashing fallback.
-    fn hash_embed(&self, text: &str) -> Vec<f32> {
-        let tokens = simple_tokenize(text, self.max_tokens);
-        if tokens.is_empty() {
-            // Return zero vector for empty input.
-            return vec![0.0f32; self.dimensions];
+    fn unavailable_error(&self) -> EmbeddingError {
+        EmbeddingError::ModelUnavailable {
+            what: self.model_name.clone(),
+            detail: self
+                .unavailable_reason
+                .clone()
+                .unwrap_or_else(|| format!("model at {} is not loaded", self.model_path.display())),
         }
-        tokens_to_embedding(&tokens, self.dimensions)
     }
 
-    /// Run real ONNX inference on the input text.
-    ///
-    /// Uses the WordPiece tokenizer (if vocab.txt was loaded) to produce
-    /// correct token IDs for the all-MiniLM-L6-v2 model. Falls back to
-    /// hash-based token IDs when no vocab is available (degraded quality
-    /// but still structurally valid).
-    ///
-    /// Builds input tensors (input_ids, attention_mask, token_type_ids),
-    /// runs the model, and mean-pools the last hidden state (masked by
-    /// attention_mask) to produce a fixed-size embedding.
+    /// Embed `text` exactly as given (callers apply any task prefix).
+    fn embed_raw(&self, text: &str) -> Result<Vec<f32>, EmbeddingError> {
+        #[cfg(feature = "onnx-embeddings")]
+        if self.runtime_available {
+            return self.onnx_embed(text);
+        }
+        let _ = text;
+        Err(self.unavailable_error())
+    }
+
+    /// Run real ONNX inference: tokenise, run the graph, mask-weighted mean
+    /// pool the last hidden state, L2 normalise. A width other than
+    /// `dimensions` is an error, never a silent truncate or zero pad.
     #[cfg(feature = "onnx-embeddings")]
     fn onnx_embed(&self, text: &str) -> Result<Vec<f32>, EmbeddingError> {
         let session = self
             .session
             .as_ref()
             .ok_or_else(|| EmbeddingError::BackendError("ONNX session not loaded".to_string()))?;
+        let tokenization = self
+            .tokenization
+            .as_ref()
+            .ok_or_else(|| EmbeddingError::BackendError("tokenizer not loaded".to_string()))?;
 
-        // Tokenize using WordPiece if available, otherwise fall back to hashing.
-        let (input_ids, attention_mask, token_type_ids) =
-            if let Some(ref tokenizer) = self.tokenizer {
-                tokenizer.encode(text).ok_or_else(|| {
-                    EmbeddingError::BackendError("WordPiece tokenizer returned None".to_string())
-                })?
-            } else {
-                // Legacy hash-based fallback (produces structurally valid but
-                // semantically meaningless token IDs).
-                static WARNED: std::sync::atomic::AtomicBool =
-                    std::sync::atomic::AtomicBool::new(false);
-                if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                    tracing::warn!(
-                        "ONNX inference without WordPiece vocab — embeddings will not be semantic"
-                    );
+        let (input_ids, attention_mask, token_type_ids) = match tokenization {
+            Tokenization::WordPiece(wp) => wp.encode(text).ok_or_else(|| {
+                EmbeddingError::BackendError("WordPiece tokenizer has an empty vocabulary".to_string())
+            })?,
+            Tokenization::HfJson(tok) => {
+                let enc = tok
+                    .encode(text, true)
+                    .map_err(|e| EmbeddingError::BackendError(format!("tokenize error: {e}")))?;
+                let ids = enc.get_ids();
+                let mask = enc.get_attention_mask();
+                let max_len = (self.max_tokens + 2).min(512);
+                let n = ids.len().min(max_len);
+                let mut ids: Vec<i64> = ids[..n].iter().map(|&x| i64::from(x)).collect();
+                let mut mask: Vec<i64> = mask[..n].iter().map(|&x| i64::from(x)).collect();
+                // Truncation must keep the closing special token ([SEP]).
+                if enc.get_ids().len() > n
+                    && let Some(&last) = enc.get_ids().last()
+                {
+                    if let Some(slot) = ids.last_mut() {
+                        *slot = i64::from(last);
+                    }
+                    if let Some(slot) = mask.last_mut() {
+                        *slot = 1;
+                    }
                 }
-                let tokens = simple_tokenize(text, self.max_tokens);
-                let seq_len = tokens.len().max(1) + 2; // +2 for [CLS] and [SEP]
-
-                let mut ids = vec![CLS_ID];
-                for token in &tokens {
-                    let mut hasher = Sha256::new();
-                    hasher.update(token.as_bytes());
-                    let hash = hasher.finalize();
-                    let id = 1000
-                        + (u32::from_le_bytes([hash[0], hash[1], hash[2], hash[3]]) % 29000) as i64;
-                    ids.push(id);
-                }
-                ids.push(SEP_ID);
-
-                let mask = vec![1i64; seq_len];
-                let types = vec![0i64; seq_len];
+                let types = vec![0i64; ids.len()];
                 (ids, mask, types)
-            };
+            }
+        };
 
         let seq_len = input_ids.len();
         let shape = vec![1_i64, seq_len as i64];
-
-        // Build tensors via the (shape, Vec) form so we don't depend on ort's
-        // ndarray `From` impls (the `ort::inputs!` `name => value` arm wants a
-        // value that is `Into<SessionInputValue>`, which `Tensor<T>` satisfies).
-        let input_ids_t = ort::value::Tensor::from_array((shape.clone(), input_ids))
-            .map_err(|e| EmbeddingError::BackendError(format!("input_ids tensor: {e}")))?;
-        let attention_mask_t =
-            ort::value::Tensor::from_array((shape.clone(), attention_mask.clone()))
-                .map_err(|e| EmbeddingError::BackendError(format!("attention_mask tensor: {e}")))?;
-        let token_type_ids_t = ort::value::Tensor::from_array((shape, token_type_ids))
-            .map_err(|e| EmbeddingError::BackendError(format!("token_type_ids tensor: {e}")))?;
-
-        let inputs = ort::inputs![
-            "input_ids" => input_ids_t,
-            "attention_mask" => attention_mask_t,
-            "token_type_ids" => token_type_ids_t,
-        ];
+        let tensor = |v: Vec<i64>, what: &str| {
+            ort::value::Tensor::from_array((shape.clone(), v))
+                .map_err(|e| EmbeddingError::BackendError(format!("{what} tensor: {e}")))
+        };
+        let input_ids_t = tensor(input_ids, "input_ids")?;
+        let attention_mask_t = tensor(attention_mask.clone(), "attention_mask")?;
 
         // `run` needs `&mut Session`; the std mutex is held only across the
         // synchronous inference call (no await in between).
         let mut guard = session
             .lock()
             .map_err(|_| EmbeddingError::BackendError("ONNX session mutex poisoned".to_string()))?;
-        let outputs = guard
-            .run(inputs)
-            .map_err(|e| EmbeddingError::BackendError(format!("inference error: {e}")))?;
+        let outputs = if self.has_type_ids {
+            let token_type_ids_t = tensor(token_type_ids, "token_type_ids")?;
+            guard.run(ort::inputs![
+                "input_ids" => input_ids_t,
+                "attention_mask" => attention_mask_t,
+                "token_type_ids" => token_type_ids_t,
+            ])
+        } else {
+            guard.run(ort::inputs![
+                "input_ids" => input_ids_t,
+                "attention_mask" => attention_mask_t,
+            ])
+        }
+        .map_err(|e| EmbeddingError::BackendError(format!("inference error: {e}")))?;
 
-        // Extract the last_hidden_state output and mean-pool across the sequence.
-        // Output shape: (1, seq_len, hidden_dim)
+        // Output shape: (1, seq_len, hidden_dim).
         let output_tensor = match outputs.get("last_hidden_state") {
             Some(v) => v,
             None if outputs.len() > 0 => &outputs[0],
@@ -590,12 +621,9 @@ impl OnnxEmbeddingProvider {
                 return Err(EmbeddingError::BackendError("no output tensor".to_string()));
             }
         };
-
-        // rc.12 returns (shape, contiguous slice).
         let (out_shape, data) = output_tensor
             .try_extract_tensor::<f32>()
             .map_err(|e| EmbeddingError::BackendError(format!("extract error: {e}")))?;
-
         if out_shape.len() < 2 {
             return Err(EmbeddingError::BackendError(format!(
                 "unexpected output shape: {out_shape:?}"
@@ -603,17 +631,18 @@ impl OnnxEmbeddingProvider {
         }
         let hidden_dim = out_shape[out_shape.len() - 1] as usize;
         let seq = out_shape[1] as usize;
+        if hidden_dim != self.dimensions {
+            return Err(EmbeddingError::DimensionMismatch {
+                expected: self.dimensions,
+                got: hidden_dim,
+            });
+        }
 
         // Attention-masked mean pooling: only average over non-padding tokens.
         let mut embedding = vec![0.0f32; hidden_dim];
-
         let mut active_count: f32 = 0.0;
         for s in 0..seq {
-            let mask_val = if s < attention_mask.len() {
-                attention_mask[s] as f32
-            } else {
-                0.0
-            };
+            let mask_val = attention_mask.get(s).copied().unwrap_or(0) as f32;
             if mask_val > 0.0 {
                 for d in 0..hidden_dim {
                     embedding[d] += data[s * hidden_dim + d];
@@ -626,16 +655,7 @@ impl OnnxEmbeddingProvider {
                 *val /= active_count;
             }
         }
-
-        // L2 normalize.
         l2_normalize(&mut embedding);
-
-        // Truncate or pad to expected dimensions.
-        embedding.truncate(self.dimensions);
-        while embedding.len() < self.dimensions {
-            embedding.push(0.0);
-        }
-
         Ok(embedding)
     }
 }
@@ -643,11 +663,11 @@ impl OnnxEmbeddingProvider {
 #[async_trait]
 impl EmbeddingProvider for OnnxEmbeddingProvider {
     async fn embed(&self, text: &str) -> Result<Vec<f32>, EmbeddingError> {
-        #[cfg(feature = "onnx-embeddings")]
-        if self.runtime_available {
-            return self.onnx_embed(text);
+        if self.doc_prefix.is_empty() {
+            self.embed_raw(text)
+        } else {
+            self.embed_raw(&format!("{}{text}", self.doc_prefix))
         }
-        Ok(self.hash_embed(text))
     }
 
     async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
@@ -656,6 +676,15 @@ impl EmbeddingProvider for OnnxEmbeddingProvider {
             results.push(self.embed(text).await?);
         }
         Ok(results)
+    }
+
+    /// Query lane: applies the query prefix when the model defines one.
+    async fn embed_query(&self, query: &str) -> Result<Vec<f32>, EmbeddingError> {
+        if self.query_prefix.is_empty() {
+            self.embed_raw(query)
+        } else {
+            self.embed_raw(&format!("{}{query}", self.query_prefix))
+        }
     }
 
     fn dimensions(&self) -> usize {
@@ -728,9 +757,9 @@ impl SentenceTransformerProvider {
         self.max_tokens
     }
 
-    /// Embed a single sentence/paragraph through the base provider.
-    fn embed_text(&self, text: &str) -> Vec<f32> {
-        self.base.hash_embed(text)
+    /// Embed a single sentence/paragraph through the base (real-model) provider.
+    async fn embed_text(&self, text: &str) -> Result<Vec<f32>, EmbeddingError> {
+        self.base.embed(text).await
     }
 }
 
@@ -762,13 +791,13 @@ impl EmbeddingProvider for SentenceTransformerProvider {
         let cleaned = preprocess_markdown(text);
 
         if !self.split_sentences {
-            return Ok(self.embed_text(&cleaned));
+            return self.embed_text(&cleaned).await;
         }
 
         let sentences = split_sentences(&cleaned);
         if sentences.is_empty() {
             // Fall through to full-text embedding.
-            return Ok(self.embed_text(&cleaned));
+            return self.embed_text(&cleaned).await;
         }
 
         // Mean pooling across sentence embeddings.
@@ -777,7 +806,7 @@ impl EmbeddingProvider for SentenceTransformerProvider {
         let count = sentences.len() as f32;
 
         for sentence in &sentences {
-            let vec = self.embed_text(sentence);
+            let vec = self.embed_text(sentence).await?;
             for (i, val) in vec.iter().enumerate() {
                 summed[i] += val;
             }
@@ -965,10 +994,12 @@ pub struct AstEmbeddingProvider {
 }
 
 impl AstEmbeddingProvider {
-    /// Default total output dimensionality.
-    pub const DEFAULT_TOTAL_DIMS: usize = 256;
     /// Default structural feature dimensions.
     pub const DEFAULT_STRUCTURAL_DIMS: usize = 64;
+    /// Default total output dimensionality: the structural block plus the text
+    /// model's native width (no truncating a real embedding to fit).
+    pub const DEFAULT_TOTAL_DIMS: usize =
+        Self::DEFAULT_STRUCTURAL_DIMS + OnnxEmbeddingProvider::DEFAULT_DIMS;
     /// Default weight for structural features.
     pub const DEFAULT_STRUCTURAL_WEIGHT: f32 = 0.3;
 
@@ -1072,10 +1103,15 @@ impl AstEmbeddingProvider {
     }
 
     /// Produce the hybrid embedding for a Rust code snippet.
-    fn hybrid_embed(&self, code: &str) -> Vec<f32> {
+    ///
+    /// The structural block is a feature-hash of parsed signature facts (item
+    /// kind, visibility, types); that is deliberate structure encoding, not a
+    /// stand-in for semantics. The text block is the real model's embedding and
+    /// fails with `ModelUnavailable` when the model is absent.
+    async fn hybrid_embed(&self, code: &str) -> Result<Vec<f32>, EmbeddingError> {
         let features = extract_rust_features(code);
         let structural = self.encode_structural(&features);
-        let text = self.text_provider.hash_embed(code);
+        let text = self.text_provider.embed(code).await?;
 
         let w_s = self.structural_weight;
         let w_t = 1.0 - w_s;
@@ -1096,18 +1132,22 @@ impl AstEmbeddingProvider {
         }
 
         l2_normalize(&mut combined);
-        combined
+        Ok(combined)
     }
 }
 
 #[async_trait]
 impl EmbeddingProvider for AstEmbeddingProvider {
     async fn embed(&self, text: &str) -> Result<Vec<f32>, EmbeddingError> {
-        Ok(self.hybrid_embed(text))
+        self.hybrid_embed(text).await
     }
 
     async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
-        Ok(texts.iter().map(|t| self.hybrid_embed(t)).collect())
+        let mut out = Vec::with_capacity(texts.len());
+        for t in texts {
+            out.push(self.hybrid_embed(t).await?);
+        }
+        Ok(out)
     }
 
     fn dimensions(&self) -> usize {
@@ -1137,12 +1177,14 @@ mod tests {
     // OnnxEmbeddingProvider tests
     // =====================================================================
 
+    use crate::embedding_support::{cosine, real_embedder};
+
     #[test]
     fn onnx_construction_default() {
         let p = OnnxEmbeddingProvider::new("/nonexistent/model.onnx");
         assert_eq!(p.dimensions(), 384);
         assert!(!p.is_runtime_available());
-        assert!(p.model_name().contains("fallback"));
+        assert!(p.model_name().ends_with("-unavailable"));
     }
 
     #[test]
@@ -1152,62 +1194,46 @@ mod tests {
         assert_eq!(p.max_tokens(), 64);
     }
 
+    /// A missing model is an error naming the path. It is never a hash vector.
     #[tokio::test]
-    async fn onnx_embed_returns_correct_dimensions() {
-        let p = OnnxEmbeddingProvider::new("/tmp/model.onnx");
-        let vec = p.embed("hello world").await.unwrap();
-        assert_eq!(vec.len(), 384);
-    }
-
-    #[tokio::test]
-    async fn onnx_embed_deterministic() {
-        let p = OnnxEmbeddingProvider::new("/tmp/model.onnx");
-        let v1 = p.embed("test input").await.unwrap();
-        let v2 = p.embed("test input").await.unwrap();
-        assert_eq!(v1, v2);
-    }
-
-    #[tokio::test]
-    async fn onnx_embed_different_inputs_differ() {
-        let p = OnnxEmbeddingProvider::new("/tmp/model.onnx");
-        let v1 = p.embed("alpha").await.unwrap();
-        let v2 = p.embed("beta").await.unwrap();
-        assert_ne!(v1, v2);
-    }
-
-    #[tokio::test]
-    async fn onnx_embed_l2_normalized() {
-        let p = OnnxEmbeddingProvider::new("/tmp/model.onnx");
-        let vec = p.embed("normalisation check").await.unwrap();
-        let mag = vec_magnitude(&vec);
-        assert!((mag - 1.0).abs() < 0.01, "magnitude = {mag}, expected ~1.0");
-    }
-
-    #[tokio::test]
-    async fn onnx_embed_batch() {
-        let p = OnnxEmbeddingProvider::new("/tmp/model.onnx");
-        let results = p.embed_batch(&["a", "b", "c"]).await.unwrap();
-        assert_eq!(results.len(), 3);
-        for v in &results {
-            assert_eq!(v.len(), 384);
+    async fn onnx_missing_model_is_an_error_naming_the_path_not_a_hash_result() {
+        let p = OnnxEmbeddingProvider::new("/nonexistent/model.onnx");
+        for err in [
+            p.embed("hello world").await.unwrap_err(),
+            p.embed_query("hello world").await.unwrap_err(),
+            p.embed_batch(&["a", "b"]).await.unwrap_err(),
+        ] {
+            assert!(matches!(err, EmbeddingError::ModelUnavailable { .. }), "{err}");
+            let msg = err.to_string();
+            assert!(msg.contains("semantic search unavailable"), "{msg}");
+            assert!(msg.contains("/nonexistent/model.onnx"), "must name the path: {msg}");
         }
+        assert!(p.unavailable_reason().unwrap().contains("/nonexistent/model.onnx"));
     }
 
     #[tokio::test]
-    async fn onnx_similar_inputs_high_cosine() {
-        let p = OnnxEmbeddingProvider::new("/tmp/model.onnx");
-        let v1 = p.embed("the quick brown fox").await.unwrap();
-        let v2 = p.embed("the quick brown dog").await.unwrap();
-        let sim = cosine_similarity(&v1, &v2);
-        assert!(sim > 0.5, "similar inputs cosine = {sim}, expected > 0.5");
+    async fn nomic_provider_missing_bundle_names_the_bundle_path() {
+        let p = OnnxEmbeddingProvider::nomic_embed_v1_5("/nonexistent/nomic");
+        assert_eq!(p.dimensions(), 768);
+        let err = p.embed("x").await.unwrap_err();
+        assert!(err.to_string().contains("/nonexistent/nomic/onnx/model.onnx"), "{err}");
     }
 
+    /// Real model: the vector is the right width, unit length, deterministic,
+    /// and similarity tracks meaning rather than shared spelling.
     #[tokio::test]
-    async fn onnx_empty_input_returns_zero_vector() {
-        let p = OnnxEmbeddingProvider::new("/tmp/model.onnx");
-        let vec = p.embed("").await.unwrap();
-        assert_eq!(vec.len(), 384);
-        assert!(vec.iter().all(|x| *x == 0.0));
+    async fn real_model_embeds_semantically() {
+        let Some(p) = real_embedder() else { return };
+        let v = p.embed("The deploy ran out of memory while loading the model").await.unwrap();
+        assert_eq!(v.len(), 768);
+        assert!((vec_magnitude(&v) - 1.0).abs() < 1e-3);
+        assert_eq!(v, p.embed("The deploy ran out of memory while loading the model").await.unwrap());
+
+        let q = p.embed_query("why did the release crash with OOM?").await.unwrap();
+        let on_topic = p.embed("The deploy ran out of memory while loading the model").await.unwrap();
+        let off_topic = p.embed("Sourdough needs a long cold proof overnight").await.unwrap();
+        let (s_on, s_off) = (cosine(&q, &on_topic), cosine(&q, &off_topic));
+        assert!(s_on > s_off + 0.05, "on-topic {s_on} should clearly beat off-topic {s_off}");
     }
 
     // =====================================================================
@@ -1224,63 +1250,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sentence_embed_returns_correct_dimensions() {
-        let p = SentenceTransformerProvider::new("/tmp/model.onnx");
-        let vec = p
+    async fn sentence_missing_model_is_an_error_not_a_hash_result() {
+        let p = SentenceTransformerProvider::new("/nonexistent/model.onnx");
+        let err = p
             .embed("This is a test paragraph with enough words.")
             .await
-            .unwrap();
-        assert_eq!(vec.len(), 384);
-    }
-
-    #[tokio::test]
-    async fn sentence_embed_l2_normalized() {
-        let p = SentenceTransformerProvider::new("/tmp/model.onnx");
-        let vec = p
-            .embed("Testing normalisation of sentence embeddings here.")
-            .await
-            .unwrap();
-        let mag = vec_magnitude(&vec);
-        assert!((mag - 1.0).abs() < 0.01, "magnitude = {mag}, expected ~1.0");
-    }
-
-    #[tokio::test]
-    async fn sentence_embed_batch() {
-        let p = SentenceTransformerProvider::new("/tmp/model.onnx");
-        let results = p
-            .embed_batch(&[
-                "First paragraph with a decent amount of words in it.",
-                "Second paragraph also has a reasonable length for testing.",
-            ])
-            .await
-            .unwrap();
-        assert_eq!(results.len(), 2);
-        for v in &results {
-            assert_eq!(v.len(), 384);
-        }
-    }
-
-    #[tokio::test]
-    async fn sentence_similar_inputs_positive_cosine() {
-        let p = SentenceTransformerProvider::new("/tmp/model.onnx");
-        let v1 = p
-            .embed("The kernel boots up the system and runs all the services correctly.")
-            .await
-            .unwrap();
-        let v2 = p
-            .embed("The kernel boots up the system and runs all the services properly.")
-            .await
-            .unwrap();
-        let v3 = p
-            .embed("Quantum chromodynamics explains the strong interaction between quarks.")
-            .await
-            .unwrap();
-        let sim_similar = cosine_similarity(&v1, &v2);
-        let sim_different = cosine_similarity(&v1, &v3);
-        assert!(
-            sim_similar > sim_different,
-            "similar ({sim_similar}) should be closer than different ({sim_different})"
-        );
+            .unwrap_err();
+        assert!(matches!(err, EmbeddingError::ModelUnavailable { .. }), "{err}");
+        assert!(err.to_string().contains("/nonexistent/model.onnx"), "{err}");
     }
 
     #[test]
@@ -1344,69 +1321,33 @@ mod tests {
     #[test]
     fn ast_construction_default() {
         let p = AstEmbeddingProvider::new("/tmp/model.onnx");
-        assert_eq!(p.dimensions(), 256);
-        assert_eq!(p.total_dims(), 256);
+        assert_eq!(p.dimensions(), 448);
+        assert_eq!(p.total_dims(), AstEmbeddingProvider::DEFAULT_TOTAL_DIMS);
         assert!((p.structural_weight() - 0.3).abs() < 0.001);
         assert_eq!(p.model_name(), "ast-aware-hybrid");
     }
 
     #[tokio::test]
-    async fn ast_embed_returns_correct_dimensions() {
-        let p = AstEmbeddingProvider::new("/tmp/model.onnx");
-        let vec = p.embed("pub fn hello() -> String { }").await.unwrap();
-        assert_eq!(vec.len(), 256);
+    async fn ast_missing_model_is_an_error_not_a_hash_result() {
+        let p = AstEmbeddingProvider::new("/nonexistent/model.onnx");
+        let err = p.embed("pub fn hello() -> String { }").await.unwrap_err();
+        assert!(matches!(err, EmbeddingError::ModelUnavailable { .. }), "{err}");
+        assert!(err.to_string().contains("/nonexistent/model.onnx"), "{err}");
+        assert!(p.embed_batch(&["fn a() {}"]).await.is_err());
     }
 
-    #[tokio::test]
-    async fn ast_embed_l2_normalized() {
+    #[test]
+    fn ast_structural_block_encodes_signature_facts_deterministically() {
+        // The structural half is a deliberate feature-hash of parsed signature
+        // facts (kind, visibility, types); same facts, same block.
         let p = AstEmbeddingProvider::new("/tmp/model.onnx");
-        let vec = p.embed("pub fn hello() -> String { }").await.unwrap();
-        let mag = vec_magnitude(&vec);
-        assert!((mag - 1.0).abs() < 0.01, "magnitude = {mag}, expected ~1.0");
-    }
-
-    #[tokio::test]
-    async fn ast_embed_batch() {
-        let p = AstEmbeddingProvider::new("/tmp/model.onnx");
-        let results = p
-            .embed_batch(&["fn a() {}", "fn b() {}", "struct C {}"])
-            .await
-            .unwrap();
-        assert_eq!(results.len(), 3);
-        for v in &results {
-            assert_eq!(v.len(), 256);
-        }
-    }
-
-    #[tokio::test]
-    async fn ast_embed_different_inputs_differ() {
-        let p = AstEmbeddingProvider::new("/tmp/model.onnx");
-        let v1 = p.embed("pub fn alpha() -> u32 {}").await.unwrap();
-        let v2 = p.embed("struct Beta { x: f64 }").await.unwrap();
-        assert_ne!(v1, v2);
-    }
-
-    #[tokio::test]
-    async fn ast_structural_similarity_same_signature() {
-        // Two functions with same signature but different names should be
-        // closer than two items with different signatures.
-        let p = AstEmbeddingProvider::new("/tmp/model.onnx");
-        let v_foo = p
-            .embed("pub async fn foo(&self, x: u32) -> Result<(), Error> {}")
-            .await
-            .unwrap();
-        let v_bar = p
-            .embed("pub async fn bar(&self, x: u32) -> Result<(), Error> {}")
-            .await
-            .unwrap();
-        let v_struct = p.embed("pub struct Baz { count: usize }").await.unwrap();
-
-        let sim_fns = cosine_similarity(&v_foo, &v_bar);
-        let sim_fn_struct = cosine_similarity(&v_foo, &v_struct);
-        assert!(
-            sim_fns > sim_fn_struct,
-            "same-signature fns ({sim_fns}) should be more similar than fn-vs-struct ({sim_fn_struct})"
-        );
+        let f1 = extract_rust_features("pub async fn foo(&self, x: u32) -> Result<(), Error> {}");
+        let f2 = extract_rust_features("pub async fn bar(&self, x: u32) -> Result<(), Error> {}");
+        let f3 = extract_rust_features("pub struct Baz { count: usize }");
+        let (a, b, c) = (p.encode_structural(&f1), p.encode_structural(&f2), p.encode_structural(&f3));
+        assert_eq!(a, b, "same signature facts give the same structural block");
+        assert_ne!(a, c);
+        assert!((vec_magnitude(&a) - 1.0).abs() < 0.01);
     }
 
     // =====================================================================
@@ -1503,43 +1444,6 @@ pub async fn process_batch(&self, items: Vec<Item>) -> Result<(), Error> {
         assert!(f.attributes.contains(&"#[allow(dead_code)]".to_string()));
     }
 
-    // =====================================================================
-    // Tokenisation helper tests
-    // =====================================================================
-
-    #[test]
-    fn simple_tokenize_basic() {
-        let tokens = simple_tokenize("Hello World! Foo-bar", 10);
-        assert_eq!(tokens, vec!["hello", "world", "foobar"]);
-    }
-
-    #[test]
-    fn simple_tokenize_max_tokens() {
-        let tokens = simple_tokenize("a b c d e f", 3);
-        assert_eq!(tokens.len(), 3);
-    }
-
-    #[test]
-    fn simple_tokenize_empty() {
-        let tokens = simple_tokenize("", 10);
-        assert!(tokens.is_empty());
-    }
-
-    #[test]
-    fn tokens_to_embedding_deterministic() {
-        let tokens: Vec<String> = vec!["hello".into(), "world".into()];
-        let v1 = tokens_to_embedding(&tokens, 64);
-        let v2 = tokens_to_embedding(&tokens, 64);
-        assert_eq!(v1, v2);
-    }
-
-    #[test]
-    fn tokens_to_embedding_normalized() {
-        let tokens: Vec<String> = vec!["test".into()];
-        let v = tokens_to_embedding(&tokens, 128);
-        let mag = vec_magnitude(&v);
-        assert!((mag - 1.0).abs() < 0.01);
-    }
 
     // =====================================================================
     // WordPiece tokenizer tests

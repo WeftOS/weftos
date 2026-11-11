@@ -5,10 +5,13 @@
 //! fallback to `~/.nanobot/workspace/memory/MEMORY.md`).
 //!
 //! When the `vector-memory` feature is enabled, search queries use the
-//! [`VectorStore`](clawft_core::vector_store::VectorStore) with
-//! [`HashEmbedder`](clawft_core::embeddings::hash_embedder::HashEmbedder)
-//! for semantic similarity ranking. Otherwise, a simple substring paragraph
-//! match is used as a fallback.
+//! [`VectorStore`](clawft_core::vector_store::VectorStore) with a REAL embedding
+//! model chosen by [`select_embedder`](clawft_core::embeddings::select::select_embedder)
+//! (local nomic-embed-text-v1.5, or the embeddings API). With no model the tool
+//! returns "semantic search unavailable: configure an embedding model"; it never
+//! substitutes hashed vectors. `WEFTOS_EMBEDDING_MODE=lexical` is the explicit
+//! opt-in to lexical results. Without the `vector-memory` feature, a plain
+//! substring paragraph match is used (a build-time choice, not semantic).
 //!
 //! Tool I/O against MEMORY.md is not the same as prompt injection: the
 //! agent loop still dumps the whole file as `# Relevant Memory:` today.
@@ -60,6 +63,7 @@ async fn resolve_memory_path<P: Platform>(platform: &P) -> Result<PathBuf, ToolE
 ///
 /// Splits the content into paragraphs (separated by blank lines) and returns
 /// those that contain the query string (case-insensitive).
+#[cfg(any(test, not(feature = "vector-memory")))]
 fn search_paragraphs(content: &str, query: &str) -> Vec<String> {
     let query_lower = query.to_lowercase();
     content
@@ -70,19 +74,31 @@ fn search_paragraphs(content: &str, query: &str) -> Vec<String> {
         .collect()
 }
 
+/// The selected embedder, kept for the process (a model load is expensive).
+/// Only a successful selection is cached, so installing a model later works.
+#[cfg(feature = "vector-memory")]
+fn memory_embedder() -> Result<Arc<dyn clawft_core::embeddings::Embedder>, clawft_core::embeddings::EmbeddingError> {
+    use std::sync::OnceLock;
+    static EMBEDDER: OnceLock<Arc<dyn clawft_core::embeddings::Embedder>> = OnceLock::new();
+    if let Some(e) = EMBEDDER.get() {
+        return Ok(e.clone());
+    }
+    let e = clawft_core::embeddings::select::select_embedder()?;
+    Ok(EMBEDDER.get_or_init(|| e).clone())
+}
+
 /// Vector-based semantic search over paragraphs using cosine similarity.
 ///
-/// When the `vector-memory` feature is enabled, this function:
-/// 1. Splits content into paragraphs.
-/// 2. Embeds each paragraph using the `HashEmbedder`.
-/// 3. Embeds the query.
-/// 4. Performs cosine similarity search via `VectorStore`.
-/// 5. Returns paragraphs ranked by similarity score.
-///
-/// Falls back to `search_paragraphs` if embedding fails.
+/// Splits content into paragraphs, embeds each (document lane) and the query
+/// (query lane) with `embedder`, and returns paragraphs ranked by cosine
+/// similarity via `VectorStore`. Embedding failures are errors, not fallbacks.
 #[cfg(feature = "vector-memory")]
-fn search_paragraphs_vector(content: &str, query: &str, max_results: usize) -> Vec<String> {
-    use clawft_core::embeddings::hash_embedder::HashEmbedder;
+async fn search_paragraphs_with(
+    embedder: &dyn clawft_core::embeddings::Embedder,
+    content: &str,
+    query: &str,
+    max_results: usize,
+) -> Result<Vec<String>, clawft_core::embeddings::EmbeddingError> {
     use clawft_core::vector_store::VectorStore;
     use std::collections::HashMap;
 
@@ -93,14 +109,12 @@ fn search_paragraphs_vector(content: &str, query: &str, max_results: usize) -> V
         .collect();
 
     if paragraphs.is_empty() || query.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
-    let embedder = HashEmbedder::default_dimension();
     let mut store = VectorStore::new();
-
     for (i, paragraph) in paragraphs.iter().enumerate() {
-        let embedding = embedder.compute_embedding(paragraph);
+        let embedding = embedder.embed(paragraph).await?;
         store.add(
             format!("p{i}"),
             paragraph.to_string(),
@@ -110,10 +124,24 @@ fn search_paragraphs_vector(content: &str, query: &str, max_results: usize) -> V
         );
     }
 
-    let query_embedding = embedder.compute_embedding(query);
+    let query_embedding = embedder.embed_query(query).await?;
     let results = store.search(&query_embedding, max_results);
+    Ok(results.into_iter().map(|r| r.text).collect())
+}
 
-    results.into_iter().map(|r| r.text).collect()
+/// [`search_paragraphs_with`] using the process embedder from [`memory_embedder`].
+/// Errors with "semantic search unavailable ..." when no model is configured.
+#[cfg(feature = "vector-memory")]
+async fn search_paragraphs_vector(
+    content: &str,
+    query: &str,
+    max_results: usize,
+) -> Result<Vec<String>, clawft_core::embeddings::EmbeddingError> {
+    if content.trim().is_empty() || query.is_empty() {
+        return Ok(Vec::new());
+    }
+    let embedder = memory_embedder()?;
+    search_paragraphs_with(embedder.as_ref(), content, query, max_results).await
 }
 
 // ---------------------------------------------------------------------------
@@ -184,7 +212,9 @@ impl<P: Platform + 'static> Tool for MemoryReadTool<P> {
             Ok(json!({ "content": content }))
         } else {
             #[cfg(feature = "vector-memory")]
-            let matches = search_paragraphs_vector(&content, query, 20);
+            let matches = search_paragraphs_vector(&content, query, 20)
+                .await
+                .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
 
             #[cfg(not(feature = "vector-memory"))]
             let matches = search_paragraphs(&content, query);
@@ -523,44 +553,90 @@ mod tests {
     #[cfg(feature = "vector-memory")]
     mod vector_tests {
         use super::super::*;
+        use clawft_core::embeddings::select::LexicalEmbedder;
+        use clawft_core::embeddings::test_support::real_embedder;
 
-        #[test]
-        fn vector_search_returns_semantically_similar_paragraphs() {
-            let content = "Rust is a systems programming language.\n\nPython is great for scripting.\n\nRust provides memory safety without a garbage collector.\n\nJava runs on the JVM.";
-            let results = search_paragraphs_vector(content, "Rust memory safety", 2);
-            assert!(!results.is_empty(), "should return at least one result");
-            // The paragraph about memory safety should be in top results
-            let joined = results.join(" ");
+        const CONTENT: &str = "Rust is a systems programming language.\n\nPython is great for scripting.\n\nRust provides memory safety without a garbage collector.\n\nJava runs on the JVM.";
+
+        /// Real embedder (skipped with a printed reason unless `onnx-embeddings` +
+        /// `WEFTOS_TEST_EMBED_MODEL_DIR`). The query shares no content word with the
+        /// paragraph it must rank first. The full ranking is printed; only the top
+        /// result and "not behind the Java paragraph" are asserted, because the model's
+        /// order of the remaining paragraphs is evidence, not a contract.
+        #[tokio::test]
+        async fn vector_search_returns_semantically_similar_paragraphs() {
+            let Some(real) = real_embedder() else { return };
+            let results = search_paragraphs_with(
+                &real,
+                CONTENT,
+                "how does the language stop dangling pointers without needing a collector",
+                4,
+            )
+            .await
+            .unwrap();
+            assert_eq!(results.len(), 4);
             assert!(
-                joined.contains("memory safety") || joined.contains("Rust"),
-                "top results should be about Rust: {:?}",
-                results
+                results[0].contains("memory safety"),
+                "top result should be the memory-safety paragraph: {results:?}"
             );
+            eprintln!("real-embedder ranking: {results:?}");
+            let pos = |needle: &str| results.iter().position(|r| r.contains(needle)).unwrap();
+            assert!(pos("memory safety") < pos("JVM") && pos("memory safety") < pos("Python"), "{results:?}");
         }
 
-        #[test]
-        fn vector_search_empty_content_returns_empty() {
-            let results = search_paragraphs_vector("", "query", 5);
+        /// No model, no API key, no opt-in: an error naming what to configure,
+        /// never hashed results.
+        #[tokio::test]
+        async fn vector_search_without_a_model_is_an_error_not_a_hash_result() {
+            if clawft_core::embeddings::select::lexical_mode_requested()
+                || std::env::var("OPENAI_API_KEY").is_ok_and(|k| !k.is_empty())
+                || search_paragraphs_vector("a", "a", 1).await.is_ok()
+            {
+                eprintln!("SKIP: this host has a model, an API key, or lexical mode on");
+                return;
+            }
+            let err = search_paragraphs_vector(CONTENT, "memory safety", 2).await.unwrap_err();
+            let msg = err.to_string();
+            assert!(msg.contains("semantic search unavailable"), "{msg}");
+            assert!(msg.contains("configure an embedding model"), "{msg}");
+        }
+
+        /// The explicit lexical embedder works and matches shared words (PLUMBING).
+        #[tokio::test]
+        async fn vector_search_lexical_mode_matches_shared_words_plumbing() {
+            let results = search_paragraphs_with(&LexicalEmbedder::new(), CONTENT, "Rust memory safety", 2)
+                .await
+                .unwrap();
+            assert!(results[0].contains("memory safety"), "{results:?}");
+        }
+
+        #[tokio::test]
+        async fn vector_search_empty_content_returns_empty() {
+            let results = search_paragraphs_vector("", "query", 5).await.unwrap();
             assert!(results.is_empty());
         }
 
-        #[test]
-        fn vector_search_empty_query_returns_empty() {
-            let results = search_paragraphs_vector("some content", "", 5);
+        #[tokio::test]
+        async fn vector_search_empty_query_returns_empty() {
+            let results = search_paragraphs_vector("some content", "", 5).await.unwrap();
             assert!(results.is_empty());
         }
 
-        #[test]
-        fn vector_search_respects_max_results() {
+        #[tokio::test]
+        async fn vector_search_respects_max_results_plumbing() {
             let content = "Paragraph A\n\nParagraph B\n\nParagraph C\n\nParagraph D";
-            let results = search_paragraphs_vector(content, "paragraph", 2);
+            let results = search_paragraphs_with(&LexicalEmbedder::new(), content, "paragraph", 2)
+                .await
+                .unwrap();
             assert!(results.len() <= 2, "should respect max_results");
         }
 
-        #[test]
-        fn vector_search_single_paragraph() {
+        #[tokio::test]
+        async fn vector_search_single_paragraph_plumbing() {
             let content = "Only one paragraph here about Rust programming.";
-            let results = search_paragraphs_vector(content, "Rust", 5);
+            let results = search_paragraphs_with(&LexicalEmbedder::new(), content, "Rust", 5)
+                .await
+                .unwrap();
             assert_eq!(results.len(), 1);
             assert!(results[0].contains("Rust"));
         }

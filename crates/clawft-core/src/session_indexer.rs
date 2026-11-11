@@ -144,7 +144,7 @@ impl SessionIndexer {
         session_id: Option<&str>,
         top_k: usize,
     ) -> Result<Vec<TurnMatch>, IndexError> {
-        let query_embedding = self.embedder.embed(query).await?;
+        let query_embedding = self.embedder.embed_query(query).await?;
 
         // Search more results than needed if filtering by session,
         // to ensure we get enough matches after filtering.
@@ -222,8 +222,42 @@ mod tests {
     use super::*;
     use crate::embeddings::hash_embedder::HashEmbedder;
 
+    /// PLUMBING embedder: equal text maps to equal vectors and nothing more. Tests
+    /// that use it check indexing, filtering and counts and must not assert on
+    /// ranking or similarity; recall tests use `real_embedder()`.
     fn make_embedder() -> Box<dyn Embedder> {
         Box::new(HashEmbedder::new(64))
+    }
+
+    /// Recall judged with a REAL embedding model (skipped with a printed reason
+    /// unless `onnx-embeddings` + `WEFTOS_TEST_EMBED_MODEL_DIR`). No query shares
+    /// a content word with the turn it must find.
+    #[tokio::test]
+    async fn real_embedder_recalls_the_right_turn_for_a_paraphrase() {
+        let Some(real) = crate::embeddings::test_support::real_embedder() else { return };
+        let mut indexer = SessionIndexer::new(Box::new(real)).await;
+        let turns = [
+            ("s1", 0, "How do I fix the borrow checker complaining about my lifetimes?", "Annotate the lifetimes or clone the value."),
+            ("s1", 1, "Give me a pasta recipe for tonight", "Boil water, add spaghetti, cook ten minutes."),
+            ("s2", 0, "My database queries are slow", "Add an index on the filtered column."),
+            ("s2", 1, "Plan a weekend trip to the coast", "Book a hotel and check the tide times."),
+        ];
+        for (sess, id, u, a) in turns {
+            indexer.index_turn(&make_turn(sess, id, u, a)).await.unwrap();
+        }
+        for (query, sess, id) in [
+            ("compiler error about references living too long", "s1", 0),
+            ("what should I cook for dinner?", "s1", 1),
+            ("speed up SQL performance", "s2", 0),
+            ("holiday by the sea", "s2", 1),
+        ] {
+            let hits = indexer.search_turns(query, None, 1).await.unwrap();
+            assert_eq!(hits.len(), 1, "{query}");
+            assert_eq!((hits[0].session_id.as_str(), hits[0].turn_id), (sess, id), "query {query:?}");
+        }
+        // Session filter is still honoured with a real embedder.
+        let hits = indexer.search_turns("holiday by the sea", Some("s1"), 4).await.unwrap();
+        assert!(hits.iter().all(|h| h.session_id == "s1"));
     }
 
     fn make_turn(
@@ -243,7 +277,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn index_and_search_single_turn() {
+    async fn index_and_search_single_turn_plumbing() {
         let mut indexer = SessionIndexer::new(make_embedder()).await;
         let turn = make_turn(
             "sess1",
@@ -268,7 +302,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cross_session_search() {
+    async fn cross_session_search_plumbing() {
         let mut indexer = SessionIndexer::new(make_embedder()).await;
 
         indexer
@@ -369,8 +403,9 @@ mod tests {
         assert_eq!(indexer.len(), 0);
     }
 
+    /// PLUMBING: checks the descending-score ordering contract only (any embedder).
     #[tokio::test]
-    async fn search_results_sorted_by_score() {
+    async fn search_results_sorted_by_descending_score_plumbing() {
         let mut indexer = SessionIndexer::new(make_embedder()).await;
 
         indexer

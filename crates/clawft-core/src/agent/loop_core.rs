@@ -3658,7 +3658,12 @@ mod tests {
         let (agent, dir, _) = make_agent_loop_cfg(
             transport,
             "recall_turn",
-            |c| c.memory_recall.enabled = true,
+            // PLUMBING: this test is about citation stripping, not retrieval quality, so it
+            // opts in to the explicit lexical retriever (no embedding model needed).
+            |c| {
+                c.memory_recall.enabled = true;
+                c.memory_recall.lexical = true;
+            },
             "The user prefers tea over coffee.\n\nThe user lives in Denver.",
         )
         .await;

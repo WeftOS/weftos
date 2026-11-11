@@ -855,9 +855,9 @@ fn process_alive(pid: u32) -> bool {
 /// 1. Discovers skills via the same workspace-walk + user-dir lookup
 ///    the CLI's `weft agent` uses.
 /// 2. Selects [`ApiEmbedder::with_defaults`](clawft_core::embeddings::api_embedder::ApiEmbedder)
-///    when `OPENAI_API_KEY` is set, else
-///    [`ApiEmbedder::hash_only`](clawft_core::embeddings::api_embedder::ApiEmbedder)
-///    as the deterministic offline floor.
+///    when `OPENAI_API_KEY` is set, else a local real model
+///    (`select_embedder`: nomic-embed-text-v1.5, or the explicit lexical opt-in).
+///    With none of those it returns `None`: there is no hash floor.
 /// 3. Builds the index. On any failure (empty registry, discover
 ///    error, embedder/index build error) it emits a `warn!` and
 ///    returns `None` so callers can fall back to the next router in
@@ -911,9 +911,10 @@ async fn build_embedding_router_or_warn(
         }
     };
 
-    // Pick ApiEmbedder when an API key is configured, else the hash
-    // floor. ApiEmbedder itself collapses to its SHA-256 fallback
-    // per-call when the API errors, so production stays robust.
+    // Pick ApiEmbedder when an API key is configured, else a local real model
+    // (nomic-embed-text-v1.5), else the explicit lexical opt-in
+    // (`WEFTOS_EMBEDDING_MODE=lexical`). There is no silent hash floor: with none
+    // of those the router is unavailable and the caller falls back to NullRouter.
     let embedder: Arc<dyn clawft_core::embeddings::Embedder> = if let Some(remote) =
         crate::project_profile::project_embedder().await
     {
@@ -932,11 +933,16 @@ async fn build_embedding_router_or_warn(
         info!("agent-core: EmbeddingRouter using ApiEmbedder (OpenAI-compat /embeddings)");
         Arc::new(clawft_core::embeddings::api_embedder::ApiEmbedder::with_defaults())
     } else {
-        info!(
-            "agent-core: EmbeddingRouter using ApiEmbedder hash-only fallback \
-             (no OPENAI_API_KEY set)"
-        );
-        Arc::new(clawft_core::embeddings::api_embedder::ApiEmbedder::hash_only(384))
+        match clawft_core::embeddings::select::select_embedder() {
+            Ok(e) => {
+                info!(embedder = e.name(), "agent-core: EmbeddingRouter using the selected embedder");
+                e
+            }
+            Err(e) => {
+                warn!(error = %e, "agent-core: EmbeddingRouter unavailable; no embedding model is configured");
+                return None;
+            }
+        }
     };
 
     match clawft_core::agent::context_router::EmbeddingRouter::new(embedder, &skills).await {
@@ -1917,7 +1923,12 @@ pub async fn run(
                         match crate::project_profile::project_embedding_provider().await {
                             // Project profile: remote only; never load a local model.
                             Some(remote) => remote,
-                            None => Arc::from(clawft_kernel::embedding::select_embedding_provider(None)),
+                            // A real model when one is found; otherwise an "unavailable"
+                            // provider (logged once as an error). The daemon still boots
+                            // offline, and recall fails loudly instead of hashing.
+                            None => Arc::from(
+                                clawft_kernel::embedding::select_embedding_provider_or_unavailable(None),
+                            ),
                         };
                     let mut tier = clawft_service_agent::SessionTier::new(embedder, chain, None);
                     // ADR-062 §1.1 forest join: dual-write turns into the

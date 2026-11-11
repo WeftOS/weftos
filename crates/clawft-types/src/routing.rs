@@ -105,8 +105,9 @@ pub struct RoutingConfig {
     ///   in-memory `ruvector-diskann@2.1` index over hand-authored
     ///   skill descriptors at boot, retrieves top-K nearest skills per
     ///   turn via the crate-local `Embedder` trait (production:
-    ///   `ApiEmbedder` against an OpenAI-compat `/embeddings`;
-    ///   fallback: `HashEmbedder` SHA-256 floor).
+    ///   `ApiEmbedder` against an OpenAI-compat `/embeddings`, or a local
+    ///   real model; with neither configured the router is unavailable,
+    ///   there is no hash floor).
     /// - `"hybrid"` — v2.5 `HybridRouter` (Phase E3): chains a primary
     ///   (often v2 `EmbeddingRouter` or v3 `MicroLoraRouter`) with a
     ///   fallback (often v1 `LlmClassifierRouter`). Empty primary →

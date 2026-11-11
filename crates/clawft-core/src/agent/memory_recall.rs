@@ -207,58 +207,185 @@ fn strip_labels<'a>(text: &str, labels: impl Iterator<Item = &'a str>) -> String
     s
 }
 
-/// Retriever over SimHash embeddings (cosine), built with `vector-memory`.
+/// Rank `snippets` by cosine of `embed(snippet)` against `q`, best first, document
+/// order on ties so results are stable.
 #[cfg(feature = "vector-memory")]
-pub struct HashRetriever {
+fn rank_by_cosine(
+    q: &[f32],
+    snippets: &[MemorySnippet],
+    k: usize,
+    mut embed: impl FnMut(&str) -> Option<Vec<f32>>,
+) -> Vec<MemorySnippet> {
+    let mut scored: Vec<(f32, usize)> = snippets
+        .iter()
+        .enumerate()
+        .filter_map(|(i, s)| embed(&s.text).map(|e| (q.iter().zip(&e).map(|(a, b)| a * b).sum::<f32>(), i)))
+        .collect();
+    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal).then(a.1.cmp(&b.1)));
+    scored.into_iter().take(k).map(|(_, i)| snippets[i].clone()).collect()
+}
+
+/// Retriever over a REAL embedding model (nomic-embed-text-v1.5, cosine). This is
+/// the production retriever. Needs the `onnx-embeddings` feature.
+#[cfg(feature = "onnx-embeddings")]
+pub struct OnnxRetriever {
+    embedder: crate::embeddings::onnx_embedder::OnnxEmbedder,
+}
+
+#[cfg(feature = "onnx-embeddings")]
+impl OnnxRetriever {
+    /// Load the model bundle in `dir`. Errors name the missing path.
+    pub fn from_dir(dir: &std::path::Path) -> Result<Self, crate::embeddings::EmbeddingError> {
+        Ok(Self { embedder: crate::embeddings::onnx_embedder::OnnxEmbedder::from_dir(dir)? })
+    }
+}
+
+#[cfg(feature = "onnx-embeddings")]
+impl MemoryRetriever for OnnxRetriever {
+    fn top_k(&self, query: &str, snippets: &[MemorySnippet], k: usize) -> Vec<MemorySnippet> {
+        let q = match self.embedder.query_vector(query) {
+            Ok(q) => q,
+            Err(e) => {
+                // Empty selection makes the caller fail open (full MEMORY.md); say so loudly.
+                tracing::error!("memory recall: query embedding failed ({e}); injecting the full MEMORY.md");
+                return Vec::new();
+            }
+        };
+        rank_by_cosine(&q, snippets, k, |t| match self.embedder.document_vector(t) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                tracing::error!("memory recall: snippet embedding failed ({e}); snippet skipped");
+                None
+            }
+        })
+    }
+}
+
+/// Retriever over SimHash embeddings (cosine) in the EXPLICIT lexical mode.
+///
+/// Matches shared words only; a paraphrase scores nothing. It is constructed
+/// only on opt-in (`agents.memory_recall.lexical` or `WEFTOS_EMBEDDING_MODE=lexical`)
+/// and warns once that results are lexical, not semantic. There is no `Default`.
+#[cfg(feature = "vector-memory")]
+pub struct LexicalRetriever {
     embedder: crate::embeddings::hash_embedder::HashEmbedder,
 }
 
 #[cfg(feature = "vector-memory")]
-impl Default for HashRetriever {
-    fn default() -> Self {
+// No `Default` on purpose: constructing it is an explicit opt-in that logs a warning.
+#[allow(clippy::new_without_default)]
+impl LexicalRetriever {
+    /// Build the lexical retriever (logs once that results are lexical).
+    pub fn new() -> Self {
+        crate::embeddings::select::warn_lexical_once();
         Self { embedder: crate::embeddings::hash_embedder::HashEmbedder::default_dimension() }
     }
 }
 
 #[cfg(feature = "vector-memory")]
-impl MemoryRetriever for HashRetriever {
+impl MemoryRetriever for LexicalRetriever {
     fn top_k(&self, query: &str, snippets: &[MemorySnippet], k: usize) -> Vec<MemorySnippet> {
         let q = self.embedder.compute_embedding(query);
-        let mut scored: Vec<(f32, usize)> = snippets
-            .iter()
-            .enumerate()
-            .map(|(i, s)| {
-                let e = self.embedder.compute_embedding(&s.text);
-                (q.iter().zip(&e).map(|(a, b)| a * b).sum::<f32>(), i)
-            })
-            .collect();
-        // Best first; document order on ties so results are stable.
-        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal).then(a.1.cmp(&b.1)));
-        scored.into_iter().take(k).map(|(_, i)| snippets[i].clone()).collect()
+        rank_by_cosine(&q, snippets, k, |t| Some(self.embedder.compute_embedding(t)))
     }
 }
 
-/// Build the recall for an agent from config: `None` when disabled or when no retriever is
-/// built in (without `vector-memory` the full file is injected as before).
-pub fn from_config(cfg: &clawft_types::config::MemoryRecallConfig) -> Option<Arc<MemoryRecall>> {
+/// Build the recall for an agent from config.
+///
+/// `Ok(None)` when disabled or when no retriever is built in. When enabled, the
+/// retriever is a REAL embedding model (`cfg.model_dir`, else the documented
+/// search path), or the lexical retriever only when explicitly opted in. With
+/// neither, this is an `Err` naming what was looked for; it never quietly
+/// hashes.
+pub fn try_from_config(
+    cfg: &clawft_types::config::MemoryRecallConfig,
+) -> Result<Option<Arc<MemoryRecall>>, crate::embeddings::EmbeddingError> {
     if !cfg.enabled {
-        return None;
+        return Ok(None);
     }
     #[cfg(feature = "vector-memory")]
     {
+        let retriever: Arc<dyn MemoryRetriever> =
+            if cfg.lexical || crate::embeddings::select::lexical_mode_requested() {
+                Arc::new(LexicalRetriever::new())
+            } else {
+                real_retriever(cfg)?
+            };
         let reranker: Arc<dyn MemoryReranker> = default_reranker();
-        Some(Arc::new(MemoryRecall::new(Arc::new(HashRetriever::default()), reranker, cfg.top_k, cfg.top_m)))
+        Ok(Some(Arc::new(MemoryRecall::new(retriever, reranker, cfg.top_k, cfg.top_m))))
     }
     #[cfg(not(feature = "vector-memory"))]
     {
         tracing::warn!("agents.memory_recall is enabled but this build has no retriever (vector-memory); injecting the full MEMORY.md");
-        None
+        Ok(None)
     }
 }
 
-#[cfg(all(feature = "vector-memory", feature = "hybrid-rerank"))]
+#[cfg(all(feature = "vector-memory", feature = "onnx-embeddings"))]
+fn real_retriever(
+    cfg: &clawft_types::config::MemoryRecallConfig,
+) -> Result<Arc<dyn MemoryRetriever>, crate::embeddings::EmbeddingError> {
+    let dir = match cfg.model_dir.as_deref().filter(|d| !d.is_empty()) {
+        Some(d) => std::path::PathBuf::from(d),
+        None => crate::embeddings::onnx_embedder::find_model_dir()?,
+    };
+    Ok(Arc::new(OnnxRetriever::from_dir(&dir)?))
+}
+
+#[cfg(all(feature = "vector-memory", not(feature = "onnx-embeddings")))]
+fn real_retriever(
+    _cfg: &clawft_types::config::MemoryRecallConfig,
+) -> Result<Arc<dyn MemoryRetriever>, crate::embeddings::EmbeddingError> {
+    Err(crate::embeddings::select::unavailable(
+        "this build lacks the onnx-embeddings feature, so no local model can load",
+    ))
+}
+
+/// Like [`try_from_config`] for boot paths that must not fail offline: on error it
+/// logs the reason and returns `None`, so the agent injects the full `MEMORY.md`
+/// (the same as recall being off). It never substitutes hashed retrieval.
+pub fn from_config(cfg: &clawft_types::config::MemoryRecallConfig) -> Option<Arc<MemoryRecall>> {
+    match try_from_config(cfg) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("agents.memory_recall is enabled but {e}; memory recall is OFF and the full MEMORY.md is injected");
+            None
+        }
+    }
+}
+
+/// Default rerank: SONA over REAL embeddings when a model is available, else no rerank
+/// (retriever order). It never reranks over hashed vectors.
+#[cfg(all(feature = "vector-memory", feature = "hybrid-rerank", feature = "onnx-embeddings"))]
 fn default_reranker() -> Arc<dyn MemoryReranker> {
-    Arc::new(crate::agent::context_router::sona_rerank::SonaSkillReranker::new())
+    use crate::agent::context_router::sona_rerank::SonaSkillReranker;
+    use crate::embeddings::onnx_embedder::{NOMIC_DIMS, OnnxEmbedder, find_model_dir};
+    let embedder = find_model_dir().and_then(|d| OnnxEmbedder::from_dir(&d));
+    match embedder {
+        Ok(e) => {
+            let e = Arc::new(e);
+            Arc::new(SonaSkillReranker::with_text_embedder(
+                ruvector_sona::SonaConfig {
+                    hidden_dim: NOMIC_DIMS,
+                    embedding_dim: NOMIC_DIMS,
+                    pattern_clusters: 16,
+                    trajectory_capacity: 1024,
+                    quality_threshold: 0.15,
+                    ..ruvector_sona::SonaConfig::default()
+                },
+                Arc::new(move |t: &str| e.document_vector(t).unwrap_or_default()),
+            ))
+        }
+        Err(e) => {
+            tracing::warn!("memory recall rerank disabled: {e}");
+            Arc::new(IdentityMemoryReranker)
+        }
+    }
+}
+#[cfg(all(feature = "vector-memory", feature = "hybrid-rerank", not(feature = "onnx-embeddings")))]
+fn default_reranker() -> Arc<dyn MemoryReranker> {
+    tracing::warn!("memory recall rerank disabled: this build lacks onnx-embeddings, and SONA is not run over hashed vectors");
+    Arc::new(IdentityMemoryReranker)
 }
 #[cfg(all(feature = "vector-memory", not(feature = "hybrid-rerank")))]
 fn default_reranker() -> Arc<dyn MemoryReranker> {

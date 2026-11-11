@@ -24,7 +24,9 @@ fn config(dir: &std::path::Path, token: bool) -> CosConfig {
         staging_dir: dir.join("staging"),
         tool_log: Some(dir.join("tool-log.jsonl")),
         harness: HarnessConfig { token_file, project_id: Some(common::TEST_PROJECT.into()), ..Default::default() },
-        brain: BrainConfig { path: Some(dir.join("cos.rvf")), installation: Some("weftos://local/installations/t".into()), package: Some(DIGEST.into()), catalog: None },
+        // PLUMBING: these tests are about what the host binds, not recall quality, so the
+        // brain opts in to the explicit lexical embedder (no model needed).
+        brain: BrainConfig { path: Some(dir.join("cos.rvf")), installation: Some("weftos://local/installations/t".into()), package: Some(DIGEST.into()), lexical: true, ..Default::default() },
         ..Default::default()
     }
 }
@@ -59,4 +61,27 @@ async fn a_brain_that_cannot_bind_is_reported_not_empty() {
     let built = weftos_cos::host::build(&cfg).await.unwrap();
     assert!(built.brain.is_none());
     assert!(built.unbound.iter().any(|(t, r)| t == "brain" && r.contains("sha256")), "{:?}", built.unbound);
+}
+
+/// No embedding model, no API key, no opt-in: the host still builds (an offline boot
+/// must not break) and reports the brain unbound with the reason. It never hashes.
+#[tokio::test]
+async fn without_an_embedding_model_the_brain_is_reported_unbound_and_the_host_still_builds() {
+    if clawft_core::embeddings::select::lexical_mode_requested()
+        || std::env::var("OPENAI_API_KEY").is_ok_and(|k| !k.is_empty())
+        || clawft_core::embeddings::select::select_embedder().is_ok()
+    {
+        eprintln!("SKIP: this host has a model, an API key, or lexical mode on");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let mut cfg = config(dir.path(), true);
+    cfg.brain.lexical = false;
+    let built = weftos_cos::host::build(&cfg).await.unwrap();
+    assert!(built.brain.is_none());
+    assert!(
+        built.unbound.iter().any(|(t, r)| t == "brain" && r.contains("semantic search unavailable")),
+        "{:?}",
+        built.unbound
+    );
 }

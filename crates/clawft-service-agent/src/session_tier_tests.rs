@@ -58,8 +58,11 @@ async fn append_and_index_as(
     ev.sequence
 }
 
+/// PLUMBING (Mock embedder): index then graft the identical string and check the
+/// witness citation is rendered. Recall quality is judged by
+/// `graft_recalls_a_paraphrase_with_witness_real_embedder`.
 #[tokio::test]
-async fn index_then_graft_recalls_with_witness() {
+async fn index_then_graft_exact_text_cites_witness_plumbing_mock_embedder() {
     let (tier, chain) = make_tier(64);
     let s = append_and_index(&tier, &chain, "c1", "the launch code is ZULU-7").await;
 
@@ -74,6 +77,33 @@ async fn index_then_graft_recalls_with_witness() {
         body.contains(&format!("chain_seq {s}")),
         "graft should cite the witness seq: {body}"
     );
+}
+
+/// Recall with a REAL embedding model (WEFTOS_TEST_EMBED_MODEL_DIR; skipped with
+/// a printed reason otherwise): the query is a paraphrase sharing no keyword
+/// with the stored turn, and the graft still cites that turn's witness seq.
+#[tokio::test]
+async fn graft_recalls_a_paraphrase_with_witness_real_embedder() {
+    let Some(embedder) = clawft_kernel::embedding_support::real_embedder() else { return };
+    let chain = Arc::new(ChainManager::new(0, 1000));
+    // k = 1: only the single nearest turn may come back, so the ranking is tested.
+    let tier = SessionTier::new(embedder, chain.clone(), None).with_graft_top_k(1);
+    let conv = "real-recall";
+    let s_fact = append_and_index(&tier, &chain, conv, "the launch code for the rocket is ZULU-7").await;
+    for text in [
+        "please remind me to water the plants on Friday",
+        "the quarterly invoice total was ninety thousand dollars",
+        "I prefer my coffee black with no sugar",
+    ] {
+        append_and_index(&tier, &chain, conv, text).await;
+    }
+
+    let block = tier.graft_block(conv, "what is the secret to start the spacecraft?").await;
+    assert_eq!(block.len(), 1, "a real embedder must recall the top turn");
+    let top = &block[0].content;
+    assert!(!top.contains("water the plants") && !top.contains("coffee"), "only the nearest turn: {top}");
+    assert!(top.contains("ZULU-7"), "top graft should be the launch-code turn: {top}");
+    assert!(top.contains(&format!("chain_seq {s_fact}")), "must cite the witness seq: {top}");
 }
 
 #[tokio::test]
@@ -461,7 +491,7 @@ const GRAFT_HOT_PATH_BUDGET_MS: u128 = 50;
 ///
 /// #[ignore]'d: needs the Qwen3 weights (staged out-of-tree, gitignored) AND the
 /// `clawft-kernel/onnx-embeddings` feature; without both, `select_embedding_provider`
-/// degrades to the Mock and the measurement is meaningless. Run live with:
+/// returns an error and this test panics (it never measures a hash embedder). Run live with:
 /// `cargo test -p clawft-service-agent --features clawft-kernel/onnx-embeddings \
 ///   -- --ignored budget_graft_latency`
 ///
@@ -476,9 +506,10 @@ async fn budget_graft_latency_under_hot_path() {
     use clawft_kernel::embedding::select_embedding_provider;
     use std::time::Instant;
 
-    // Real embedder when weights + feature are present; degrades to Mock
-    // otherwise (the #[ignore] gate means this only runs intentionally).
-    let embedder: Arc<dyn EmbeddingProvider> = Arc::from(select_embedding_provider(None));
+    // Real embedder when weights + feature are present; otherwise this is an error
+    // (the #[ignore] gate means this only runs intentionally).
+    let embedder: Arc<dyn EmbeddingProvider> =
+        Arc::from(select_embedding_provider(None).expect("a real embedding model is required for this measurement"));
     let chain = Arc::new(ChainManager::new(0, 1000));
     let tier = SessionTier::new(embedder, chain.clone(), None);
     let conv = "budget";
