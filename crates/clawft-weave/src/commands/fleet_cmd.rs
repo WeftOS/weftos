@@ -104,6 +104,11 @@ fn short(id: &str) -> String {
     }
 }
 
+/// First 12 hex characters of a MeshId, `-` for none; the full id is under the table.
+fn short_mesh_id(id: &str) -> String {
+    if id.chars().count() > 12 { format!("{}...", id.chars().take(12).collect::<String>()) } else { id.to_owned() }
+}
+
 fn age(now: u64, then: u64) -> String {
     let d = now.saturating_sub(then);
     match d {
@@ -135,7 +140,7 @@ pub fn render(snap: &Value, now: u64) -> String {
     let mut table = Table::new();
     table.load_preset(presets::UTF8_FULL_CONDENSED);
     table.set_header(vec![
-        "Node", "State", "Trust", "Address", "Last announce", "Mesh", "Load", "Cogs", "Location",
+        "Node", "State", "Trust", "Address", "Last announce", "Mesh", "Mesh ID", "Load", "Cogs", "Location",
     ]);
     for n in snap["nodes"].as_array().into_iter().flatten() {
         let id = n["node_id"].as_str().unwrap_or("?");
@@ -172,6 +177,7 @@ pub fn render(snap: &Value, now: u64) -> String {
             .to_owned(),
             _ => "-".to_owned(),
         };
+        let mesh_id = n["mesh_id"]["value"].as_str().map_or_else(|| "-".to_owned(), short_mesh_id);
         let load = load_cell(val(n, "load"), n["load"]["provenance"].as_str());
         let cogs = val(n, "instances").as_array().map_or(0, Vec::len);
         let loc = match val(n, "location") {
@@ -186,6 +192,7 @@ pub fn render(snap: &Value, now: u64) -> String {
             cell(&val(n, "announced")["address"]),
             seen,
             mesh,
+            mesh_id,
             load,
             cogs.to_string(),
             loc,
@@ -217,6 +224,7 @@ mod tests {
         json!({
             "nodes": [
                 { "node_id": "aaaaaaaaaaaaaaaaaaaa", "local": true, "name": { "value": "aaaaaaaaaaaaaaaaaaaa" },
+                  "mesh_id": { "value": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" },
                   "host": { "value": { "hostname": "mac" } },
                   "announced": { "value": { "address": "10.0.0.2:9" } },
                   "cluster": { "value": { "state": "active", "last_announce_unix": 990 } },
@@ -249,6 +257,7 @@ mod tests {
         assert!(out.contains("leaf unverified suspect"), "{out}");
         assert!(out.contains("node alive 4ms, pong 5s ago"), "{out}");
         assert!(out.contains("0.42 /4 cores (peer)"), "{out}");
+        assert!(out.contains("0123456789ab..."), "this node's MeshId is in its row: {out}");
         assert!(out.contains("mesh id: mesh-1") && out.contains("revoked hosts: 1"), "{out}");
         assert!(out.contains("not available: placement:"), "{out}");
     }

@@ -63,6 +63,7 @@ pub fn render_status(v: &Value) -> String {
     let mut out = String::new();
     out += &format!("dashboard reporter: on, every {}s\n", v["interval_secs"]);
     out += &format!("  url             {}\n  node            {}\n  installation    {}\n", s("url"), s("node_id"), s("installation_id"));
+    out += &format!("  mesh id         {}\n", v["mesh_id"].as_str().unwrap_or("none (no MeshId on this node)"));
     out += &format!("  token file      {} ({})\n", s("token_file"), s("token_file_check"));
     out += &format!("  last heartbeat  {} at {}\n", s("last_heartbeat"), s("last_heartbeat_at"));
     out += &format!("  failures        {} in a row\n", v["consecutive_failures"]);
@@ -147,6 +148,10 @@ mod tests {
             "last_heartbeat_at": "now", "consecutive_failures": 0, "token_unpersisted": true
         }));
         assert!(t.contains("every 60s") && t.contains("last heartbeat  ok") && t.contains("WARNING"), "{t}");
+        assert!(t.contains("mesh id         none"), "{t}");
+        let id = "ab".repeat(32);
+        let t = render_status(&json!({ "enabled": true, "mesh_id": id }));
+        assert!(t.contains(&format!("mesh id         {id}")), "{t}");
     }
 
     #[test]

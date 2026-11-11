@@ -377,11 +377,7 @@ impl Dashboard {
             }
             mesh_pair_requests::attach(&mut report, &src.pair_requests().await);
         }
-        #[cfg(all(feature = "placement", unix))]
-        let rt = crate::licence_boot::runtime();
-        #[cfg(not(all(feature = "placement", unix)))]
-        let rt: Option<std::sync::Arc<crate::mesh_genesis::NoLicenceRuntime>> = None;
-        let mesh_id = self.mesh_id.get().and_then(|l| l.get()).or_else(|| rt.as_ref().and_then(|r| r.local.get()));
+        let (mesh_id, rt) = self.local_mesh_id();
         crate::mesh_genesis::attach(&mut report, mesh_id, rt.as_ref().map(|r| r.dir.as_path()));
         dashboard_budget::fit(&mut report, dashboard_budget::REPORT_BUDGET_BYTES);
         json!({
@@ -483,6 +479,20 @@ impl Dashboard {
         })
     }
 
+    /// This node's MeshId (the explicit source, else the daemon's licence runtime) and that runtime.
+    #[cfg(all(feature = "placement", unix))]
+    fn local_mesh_id(&self) -> (Option<clawft_kernel::licence::MeshId>, Option<std::sync::Arc<crate::licence_boot::LicenceRuntime>>) {
+        let rt = crate::licence_boot::runtime();
+        let id = self.mesh_id.get().and_then(|l| l.get()).or_else(|| rt.as_ref().and_then(|r| r.local.get()));
+        (id, rt)
+    }
+    #[cfg(not(all(feature = "placement", unix)))]
+    fn local_mesh_id(
+        &self,
+    ) -> (Option<clawft_kernel::licence::MeshId>, Option<std::sync::Arc<crate::mesh_genesis::NoLicenceRuntime>>) {
+        (self.mesh_id.get().and_then(|l| l.get()), None)
+    }
+
     /// Reporter status for `dashboard.status`: no token material.
     pub fn status_json(&self) -> Value {
         let s = self.state.lock().unwrap_or_else(|e| e.into_inner()).clone();
@@ -497,6 +507,7 @@ impl Dashboard {
             "url": self.cfg.url,
             "node_id": self.cfg.node_id,
             "installation_id": self.cfg.installation_id,
+            "mesh_id": self.local_mesh_id().0.map(|m| m.to_hex()),
             "interval_secs": self.cfg.interval_secs,
             "token_file": self.cfg.token_file,
             "token_file_check": token_check,
