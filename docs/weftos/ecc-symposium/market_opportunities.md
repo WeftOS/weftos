@@ -68,9 +68,9 @@
   │ Precision ag on $5   │ $12-15B        │ unserved by AI-based ag │
   │ hardware             │                │  tools                  │
   ├──────────────────────┼────────────────┼─────────────────────────┤
-  │ InsureCausal —       │                │ Every underwriting      │
+  │ InsureCausal —       │                │ Every risk pricing      │
   │ Parametric insurance │ $15-18B        │ decision has Merkle     │
-  │  underwriting        │                │ provenance              │
+  │  risk pricing        │                │ provenance              │
   ├──────────────────────┼────────────────┼─────────────────────────┤
   │ CarbonTrace —        │ $1.5-2B →      │ SEC/EU/California       │
   │ Verifiable carbon    │ $6-8B          │ mandatory disclosure    │

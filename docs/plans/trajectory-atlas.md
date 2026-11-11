@@ -96,7 +96,7 @@ per-shard term filter so irrelevant shards are skipped.
 Privacy: transcripts contain secrets and client data. Ingest runs
 the existing credential redaction before writing shards. Shards stay local, or on
 PG for the mesh, and never go into the public repo. Client-confidential projects are
-excluded by default (`~/Clients/**` opt-in only).
+excluded by default (`<client workspace>/**` opt-in only).
 
 ## Phases
 

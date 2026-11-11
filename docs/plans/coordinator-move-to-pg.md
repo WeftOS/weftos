@@ -16,7 +16,7 @@
 
 ## What "the coordinator" is today
 
-`~/Clients/cognitum/weave-coordinator` on the Mac is a collapsed, project-rooted daemon
+`<client workspace>/cognitum/weave-coordinator` on the Mac is a collapsed, project-rooted daemon
 (`bin/weaver kernel start --foreground`, weaver 0.8.1). It is not a git checkout and has no
 project content: 70 MB, mostly `bin/` and `kernel.log`. Its state is `.weftos/runtime/`
 (6 MB): `chain.rvf`/`chain.key`/`chain.tree.json`, `node.key` (node id `c12684d4…`),
@@ -57,7 +57,7 @@ Each step lists its check. Stop at the first failed check and use the rollback.
    Check: `weaver --version` is 0.8.2; `weftos.service` active; the project child restarts
    on demand; `ss -ltn` still shows only `100.90.170.87:9489`.
 3. **Archive the coordinator state to PG.** From the Mac, as `weavelogic` on PG:
-   `rsync -a --no-owner --no-group --no-perms ~/Clients/cognitum/weave-coordinator/.weftos/runtime/
+   `rsync -a --no-owner --no-group --no-perms <client workspace>/cognitum/weave-coordinator/.weftos/runtime/
    …/_archive/weave-coordinator-20261005/runtime/` excluding `kernel.sock`, then a
    `--checksum --dry-run` pass. Keys are copied as files into a `weavelogic`-owned
    `0700` archive and never printed.
@@ -76,7 +76,7 @@ Each step lists its check. Stop at the first failed check and use the rollback.
    `http://100.90.170.87:18789`.
    Check: the console's Network tab lists PG, its project child and the Mac.
 6. **Stop the Mac coordinator and its gateway.** `bin/weaver kernel stop` from
-   `~/Clients/cognitum/weave-coordinator` (not `kernel restart`: card `ba258d78`), stop the
+   `<client workspace>/cognitum/weave-coordinator` (not `kernel restart`: card `ba258d78`), stop the
    `weft gateway` process.
    Check: no listener on `:9489` or `:18789` on the Mac; `kernel.pid` gone.
 7. **Start the Mac as a member.**
@@ -106,7 +106,7 @@ Each step lists its check. Stop at the first failed check and use the rollback.
 ## Out of scope
 
 - Machine mesh service and verified admission on either machine (D6).
-- Client projects under `~/Clients/` (each needs its own PG home and UID first).
+- Client projects under `<client workspace>/` (each needs its own PG home and UID first).
 - Cog Host on PG (held: explicit bind landed in `6eeb99ed8`, unit template in
   `deploy/photo-gallery/`, not deployed).
 - Retiring or deleting anything on the Mac.

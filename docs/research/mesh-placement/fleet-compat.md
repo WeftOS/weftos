@@ -1,6 +1,6 @@
 # Fleet compatibility: ruOS fleet and Cognitum Seed fleet
 
-> **Cogs project:** the operational detail for Cognitum Seeds, the Pi 5, fleets, tooling, testing on hardware and upstream work lives in the private cogs repo (`weave-logic-ai/cognitum-cogs`, `docs/`; locally `~/Clients/cognitum/cogs-main`). Its decision records are the COG-NNN series. This WeftOS doc keeps only what WeftOS implements.
+> **Cogs project:** the operational detail for Cognitum Seeds, the Pi 5, fleets, tooling, testing on hardware and upstream work lives in the private cogs repo (`weave-logic-ai/cognitum-cogs`, `docs/`; locally `<client workspace>/cognitum/cogs-main`). Its decision records are the COG-NNN series. This WeftOS doc keeps only what WeftOS implements.
 
 Date: 2026-09-29. Read-only research for the placement layer (ADR-099/100/101, cards `mesh-placement-01..21`). Nothing was enrolled, registered, provisioned or written to any live service. Only read calls were made: the ruos-fleet MCP `guide`, `cluster_peers`, `fleet_status`; the public `GET https://api.cognitum.one/v1/openapi` and `/v1/mcp/tools`; and local vendor source.
 
