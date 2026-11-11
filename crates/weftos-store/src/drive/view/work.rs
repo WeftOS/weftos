@@ -207,7 +207,7 @@ impl ScopedView {
         let foreign: Vec<String> = scan(&sd, &ix, &limits)?.changes.into_iter().map(|c| c.path).filter(|p| !staged.contains(p)).collect();
         let mut foreign = foreign;
         if w.start == WorkStart::Empty {
-            foreign.extend(tree::lower_drift(&sd, &&lay.lower_index(), &self.spec, &w.prefix, &limits)?.into_iter().map(|p| format!("{LOWER_DIR}/{p}")));
+            foreign.extend(tree::lower_drift(&lay.lower_index(), &lay.lower(), &self.spec, &w.prefix, &limits)?.into_iter().map(|p| format!("{LOWER_DIR}/{p}")));
         }
         if !foreign.is_empty() {
             return Err(ViewError::Tampered(foreign));
