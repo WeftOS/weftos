@@ -927,13 +927,13 @@ fn concurrent_saves_and_loads_never_see_a_torn_file_or_fail() {
 }
 
 // =====================================================================================================
-// Item 3: list and head latency for a Sansone-sized worktree (live only: numbers are the point)
+// Item 3: list and head latency for a client-sized worktree (live only: numbers are the point)
 // =====================================================================================================
 
 #[cfg(feature = "rustfs")]
 #[test]
 #[ignore = "needs a throwaway RustFS: WEFTOS_STORE_TEST_RUSTFS_ENV"]
-fn live_sansone_sized_worktree_listing_and_poll_latency() {
+fn live_client_sized_worktree_listing_and_poll_latency() {
     use std::time::Instant;
     use weftos_store::backend::ObjectBackend as S1;
     let (cfg, _d) = live_cfg();
@@ -965,8 +965,8 @@ fn live_sansone_sized_worktree_listing_and_poll_latency() {
     let total: usize = files.iter().map(|f| f.1.len()).sum();
     let t = tree_bytes(&files);
     let lim = Limits { max_file: 32 << 20, ..Limits::default() };
-    let wb = env.wt("sansone");
-    init_wt(&be, &wb, "sansone", "base");
+    let wb = env.wt("proj");
+    init_wt(&be, &wb, "proj", "base");
 
     let t1 = Instant::now();
     let rep = push(&be, &wb, &t, &Pub::default(), &lim).unwrap();
@@ -982,7 +982,7 @@ fn live_sansone_sized_worktree_listing_and_poll_latency() {
     let publish_one_edit = ms(t1);
     assert_eq!(rep.uploaded, 1);
     let t1 = Instant::now();
-    let e = register(&be, &pr, "sansone", &wb);
+    let e = register(&be, &pr, "proj", &wb);
     let registry_write = ms(t1);
 
     // nine small neighbours, so a poll lists and reads ten entries
