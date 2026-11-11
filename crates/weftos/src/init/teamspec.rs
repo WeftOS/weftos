@@ -438,7 +438,7 @@ impl TeamSpec {
         self.presets.get(name).ok_or_else(|| {
             let declared: Vec<&str> = self.presets.keys().map(String::as_str).collect();
             InitError::Other(format!(
-                "team {} has no preset `{name}` (declared: {})",
+                "team {} has no preset `{name}` (declared: {}; --no-preset clears a remembered one)",
                 self.name,
                 if declared.is_empty() { "none".into() } else { declared.join(", ") }
             ))

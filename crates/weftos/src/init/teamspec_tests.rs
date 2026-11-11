@@ -291,7 +291,7 @@ fn host_tool_maps_are_applied_per_host_and_checked() {
 
 // ---- presets ----
 
-const PRESETS: &str = "presets:\n  lean:\n    active: {b: false, c: true}\n  split:\n    hosts: {b: codex}\nhosts:\n  claude:\n    tool_map: {Task: Task}\n  codex:\n    tool_map: {Task: spawn_agent}\n";
+const PRESETS: &str = "presets:\n  full:\n    active: {}\n  lean:\n    active: {b: false, c: true}\n  split:\n    hosts: {b: codex}\nhosts:\n  claude:\n    tool_map: {Task: Task}\n  codex:\n    tool_map: {Task: spawn_agent}\n";
 const ABC: &str = "  - agent: a\n  - agent: b\n  - agent: c\n    active: false\n    phase: 2\n";
 
 fn with_preset(l: &Lab, preset: &str, hosts: &[Host]) -> AgentInitOptions {
@@ -331,6 +331,67 @@ fn an_unknown_preset_or_a_preset_without_a_team_is_refused() {
     assert!(refused(&team(AB, "presets:\n  p:\n    hosts: {a: codex}\n")).contains("not a declared host"));
 }
 
+fn apply_with(l: &Lab, preset: Option<&str>, clear: bool) -> Result<super::super::team::Applied, super::super::team::TeamError> {
+    apply_request(&ApplyRequest {
+        root: l.project.clone(),
+        subject: Subject::Team,
+        name: "t".into(),
+        hosts: vec![Host::Claude],
+        from: Some(l.agents.clone()),
+        pin: None,
+        dry_run: false,
+        preset: preset.map(str::to_string),
+        clear_preset: clear,
+    })
+}
+
+fn has(l: &Lab, id: &str) -> bool {
+    l.project.join(format!(".claude/agents/{id}.md")).exists()
+}
+
+fn recorded(l: &Lab) -> Option<String> {
+    let st = crate::init::team::status(&l.project, &Some(l.agents.clone())).unwrap();
+    st.teams[0].preset.clone()
+}
+
+#[test]
+fn a_re_apply_reuses_the_recorded_preset() {
+    let l = lab(&team(ABC, PRESETS));
+    apply_with(&l, Some("lean"), false).unwrap();
+    assert_eq!(recorded(&l).as_deref(), Some("lean"));
+    assert!(has(&l, "a") && has(&l, "c") && !has(&l, "b"));
+    let again = apply_with(&l, None, false).unwrap();
+    assert!(again.already, "re-applying with no flag must change nothing");
+    assert!(!has(&l, "b"), "the preset's deactivated member must stay out");
+}
+
+#[test]
+fn an_explicit_preset_overrides_the_recorded_one() {
+    let l = lab(&team(ABC, PRESETS));
+    apply_with(&l, Some("lean"), false).unwrap();
+    apply_with(&l, Some("full"), false).unwrap();
+    assert_eq!(recorded(&l).as_deref(), Some("full"));
+    assert!(has(&l, "b"));
+}
+
+#[test]
+fn no_preset_clears_the_recorded_one() {
+    let l = lab(&team(ABC, PRESETS));
+    apply_with(&l, Some("lean"), false).unwrap();
+    apply_with(&l, None, true).unwrap();
+    assert_eq!(recorded(&l), None);
+    assert!(has(&l, "b"));
+    apply_with(&l, None, false).unwrap();
+    assert_eq!(recorded(&l), None, "once cleared, a plain re-apply stays cleared");
+}
+
+#[test]
+fn preset_and_no_preset_together_are_refused() {
+    let l = lab(&team(ABC, PRESETS));
+    let o = AgentInitOptions { clear_preset: true, ..with_preset(&l, "lean", &ALL) };
+    assert!(plan(&o).unwrap_err().to_string().contains("--preset and --no-preset"));
+}
+
 // ---- legacy teams, apply and uninstall ----
 
 #[test]
@@ -367,6 +428,7 @@ fn removing_one_team_re_renders_an_agent_another_team_still_uses() {
         pin: None,
         dry_run: false,
         preset: None,
+        clear_preset: false,
     };
     apply_request(&req("t")).unwrap();
     apply_request(&req("u")).unwrap();
@@ -391,6 +453,7 @@ fn two_teams_that_disagree_on_a_model_tier_are_refused() {
         pin: None,
         dry_run: false,
         preset: None,
+        clear_preset: false,
     };
     apply_request(&req("t")).unwrap();
     let e = apply_request(&req("u")).unwrap_err();

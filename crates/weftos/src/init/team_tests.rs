@@ -50,6 +50,7 @@ impl Lab {
             pin: None,
             dry_run: false,
             preset: None,
+            clear_preset: false,
         }
     }
 

@@ -53,6 +53,11 @@ fn team_record(
         version: team_version(src, name),
         hosts,
         slots,
+        preset: if opts.agents.is_empty() {
+            opts.preset.clone()
+        } else {
+            prior.and_then(|p| p.preset.clone())
+        },
     }))
 }
 

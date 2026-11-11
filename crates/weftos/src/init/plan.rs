@@ -32,6 +32,8 @@ pub struct AgentInitOptions {
     /// A preset declared by the team (`presets:` in team.yaml): overrides member
     /// `active` and puts a member on one host.
     pub preset: Option<String>,
+    /// Drop the preset the lock remembers for this team (`--no-preset`).
+    pub clear_preset: bool,
     /// Uninstall: packages to take out of the lock (selection is skipped).
     pub remove: Vec<String>,
     /// Uninstall: team records to drop from the lock.
@@ -297,6 +299,23 @@ pub fn plan(opts: &AgentInitOptions) -> Result<Plan, InitError> {
         Some(t) => teamspec::read(&src, t)?,
         None => None,
     };
+    // A preset applied earlier is reused until another is named or it is cleared.
+    let resolved;
+    let opts = match (&wanted, &opts.preset) {
+        (Some(w), None) if !opts.clear_preset && opts.agents.is_empty() => {
+            let kept = prior_lock.teams.iter().find(|t| &t.name == w).and_then(|t| t.preset.clone());
+            if kept.is_some() {
+                resolved = AgentInitOptions { preset: kept, ..opts.clone() };
+                &resolved
+            } else {
+                opts
+            }
+        }
+        _ => opts,
+    };
+    if opts.clear_preset && opts.preset.is_some() {
+        return Err(InitError::Other("--preset and --no-preset together".into()));
+    }
     let sel = if removing {
         Selection { ids: Vec::new(), team: None, host_only: BTreeMap::new() }
     } else {
