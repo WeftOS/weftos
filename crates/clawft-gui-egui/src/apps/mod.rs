@@ -92,6 +92,19 @@ pub fn dispatch(
     }
 }
 
+/// Horizontal inset of an app body from the app rect's edges. Matches the
+/// x offset `paint_heading` uses, so heading and body share a left edge.
+pub(crate) const BODY_INSET_X: f32 = 24.0;
+/// Vertical inset between the body and the bottom edge of the app rect.
+pub(crate) const BODY_INSET_Y: f32 = 8.0;
+
+/// Body rect under a heading band of `band_h`, inset from the sidebar edge,
+/// the right edge and the bottom edge of the window.
+pub(crate) fn body_rect(rect: egui::Rect, band_h: f32) -> egui::Rect {
+    egui::Rect::from_min_max(egui::pos2(rect.left(), rect.top() + band_h), rect.max)
+        .shrink2(egui::vec2(BODY_INSET_X, BODY_INSET_Y))
+}
+
 /// Common header — heading text rendered top-left of the app rect.
 pub(crate) fn paint_heading(ui: &egui::Ui, rect: egui::Rect, heading: &str) {
     use crate::theming::Tokens;
@@ -104,4 +117,69 @@ pub(crate) fn paint_heading(ui: &egui::Ui, rect: egui::Rect, heading: &str) {
         egui::FontId::proportional(18.0),
         tokens.text_primary,
     );
+}
+
+/// Headless layout helpers shared by the app layout tests.
+#[cfg(test)]
+pub(crate) mod layout_test {
+    use eframe::egui;
+
+    /// One painted text run: its string, its bounding rect and the clip
+    /// rect it was painted under.
+    pub struct TextRun {
+        pub text: String,
+        pub bounds: egui::Rect,
+        pub clip: egui::Rect,
+    }
+
+    impl TextRun {
+        /// The part of the text that is actually visible (bounds ∩ clip).
+        pub fn visible(&self) -> egui::Rect {
+            self.bounds.intersect(self.clip)
+        }
+    }
+
+    fn collect(shape: &egui::epaint::Shape, clip: egui::Rect, out: &mut Vec<TextRun>) {
+        match shape {
+            egui::epaint::Shape::Text(t) => out.push(TextRun {
+                text: t.galley.text().to_string(),
+                bounds: shape.visual_bounding_rect(),
+                clip,
+            }),
+            egui::epaint::Shape::Vec(v) => v.iter().for_each(|s| collect(s, clip, out)),
+            _ => {}
+        }
+    }
+
+    /// Run `f` for a few frames in a headless context of `size` points
+    /// (egui needs a frame or two to settle layout) and return the text
+    /// runs painted by the last frame.
+    pub fn run_frames(
+        size: egui::Vec2,
+        mut input: impl FnMut(usize) -> Vec<egui::Event>,
+        mut f: impl FnMut(&mut egui::Ui, egui::Rect),
+    ) -> Vec<TextRun> {
+        let ctx = egui::Context::default();
+        // The app's own style (text sizes and spacing) decides the layout.
+        crate::theming::apply(&ctx);
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+        let mut runs = Vec::new();
+        for frame in 0..4 {
+            let raw = egui::RawInput {
+                screen_rect: Some(screen),
+                events: input(frame),
+                ..Default::default()
+            };
+            let out = ctx.run_ui(raw, |ui| {
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::NONE)
+                    .show_inside(ui, |ui| f(ui, screen));
+            });
+            runs.clear();
+            for clipped in &out.shapes {
+                collect(&clipped.shape, clipped.clip_rect, &mut runs);
+            }
+        }
+        runs
+    }
 }

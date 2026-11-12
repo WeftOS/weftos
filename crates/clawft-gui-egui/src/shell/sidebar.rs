@@ -715,4 +715,97 @@ mod tests {
         let n = instance_name();
         assert!(!n.is_empty());
     }
+    use crate::apps::layout_test::run_frames;
+
+    fn expanded_all() -> Sidebar {
+        let mut s = Sidebar::default();
+        for g in ["network", "logs", "apps"] {
+            s.apply(SidebarAction::ToggleGroup(g));
+        }
+        s
+    }
+
+    /// Paint the sidebar for a few frames at `h` points high, with `events`
+    /// injected on every frame after the first, and return the text runs.
+    fn paint_sidebar(
+        h: f32,
+        state: &Sidebar,
+        events: impl Fn() -> Vec<egui::Event>,
+    ) -> Vec<crate::apps::layout_test::TextRun> {
+        let snap = Snapshot::default();
+        run_frames(
+            egui::vec2(SIDEBAR_WIDTH_EXPANDED, h),
+            |frame| if frame == 0 { vec![] } else { events() },
+            |ui, screen| {
+                let _ = paint(ui, screen, state, &snap);
+            },
+        )
+    }
+
+    fn footer_top(h: f32) -> f32 {
+        h - FOOTER_HEIGHT
+    }
+
+    /// With Network, Logs and Apps expanded the menu is taller than the
+    /// window. No menu row may be visible over the pinned footer, and the
+    /// footer must still be there.
+    #[test]
+    fn expanded_menu_does_not_overprint_the_footer() {
+        for h in [800.0, 700.0] {
+            let runs = paint_sidebar(h, &expanded_all(), Vec::new);
+            let footer = runs
+                .iter()
+                .find(|r| r.text == "collapse")
+                .expect("footer label painted");
+            assert!(
+                footer.bounds.top() >= footer_top(h),
+                "footer moved at h={h}"
+            );
+            let footer_texts = ["collapse", "◀", "▶"];
+            for r in runs
+                .iter()
+                .filter(|r| !footer_texts.contains(&r.text.as_str()))
+            {
+                let v = r.visible();
+                let overlaps_footer = v.is_positive() && v.bottom() > footer_top(h) + 0.5;
+                assert!(
+                    !overlaps_footer || r.bounds.top() < 0.0,
+                    "h={h}: {:?} is visible over the footer (visible {:?}, footer top {})",
+                    r.text,
+                    v,
+                    footer_top(h)
+                );
+            }
+        }
+    }
+
+    /// The last row ("Developer") is out of reach unless the body scrolls:
+    /// scrolling the body must bring it fully above the footer.
+    #[test]
+    fn menu_scrolls_to_the_last_row() {
+        let h = 700.0;
+        let wheel = || {
+            vec![
+                egui::Event::PointerMoved(egui::pos2(60.0, 300.0)),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    phase: egui::TouchPhase::Move,
+                    delta: egui::vec2(0.0, -2000.0),
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]
+        };
+        let runs = paint_sidebar(h, &expanded_all(), wheel);
+        let dev = runs
+            .iter()
+            .find(|r| r.text == "· Developer")
+            .expect("Developer row painted");
+        assert!(
+            dev.visible().height() >= dev.bounds.height() - 0.5
+                && dev.bounds.bottom() <= footer_top(h),
+            "Developer not fully visible above the footer after scrolling: {:?}, footer top {}",
+            dev.bounds,
+            footer_top(h)
+        );
+    }
 }
