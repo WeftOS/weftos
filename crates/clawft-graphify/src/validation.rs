@@ -13,11 +13,11 @@
 
 use std::collections::HashMap;
 
+use crate::GraphifyError;
 use crate::entity::FileType;
 use crate::model::KnowledgeGraph;
 use crate::relationship::Confidence;
 use crate::topology::{EdgeTypeConfig, TopologySchema};
-use crate::GraphifyError;
 
 /// Valid file type strings (Python compatibility -- does NOT include "config" or "unknown"
 /// which are Rust-only extensions; the Python validator only knows these 4).
@@ -46,7 +46,11 @@ pub struct EdgeConstraint {
 
 impl EdgeConstraint {
     /// Construct a constraint with normalized (snake_case-ish lowercase) fields.
-    pub fn new(relation: impl Into<String>, from: impl Into<String>, to: impl Into<String>) -> Self {
+    pub fn new(
+        relation: impl Into<String>,
+        from: impl Into<String>,
+        to: impl Into<String>,
+    ) -> Self {
         Self {
             relation: normalize_type_key(&relation.into()),
             from: normalize_type_key(&from.into()),
@@ -133,9 +137,7 @@ impl EdgeValidationSchema {
             .get("propertyAttribute")
             .and_then(|v| v.as_array())
             .ok_or_else(|| {
-                GraphifyError::ValidationError(
-                    "VOWL schema missing propertyAttribute array".into(),
-                )
+                GraphifyError::ValidationError("VOWL schema missing propertyAttribute array".into())
             })?;
 
         // class id → type key (prefer IRI local name, then English label, then id)
@@ -157,10 +159,7 @@ impl EdgeValidationSchema {
             if relation.is_empty() {
                 continue;
             }
-            let domain_raw = prop
-                .get("domain")
-                .and_then(|v| v.as_str())
-                .unwrap_or("*");
+            let domain_raw = prop.get("domain").and_then(|v| v.as_str()).unwrap_or("*");
             let range_raw = prop.get("range").and_then(|v| v.as_str()).unwrap_or("*");
 
             let from = class_types
@@ -207,9 +206,9 @@ impl EdgeValidationSchema {
             return !self.strict_unknown_relations;
         }
 
-        matching.iter().any(|c| {
-            type_matches(&c.from, &from) && type_matches(&c.to, &to)
-        })
+        matching
+            .iter()
+            .any(|c| type_matches(&c.from, &from) && type_matches(&c.to, &to))
     }
 }
 
@@ -523,10 +522,7 @@ pub fn validate_extraction_edges(
         if !edge.is_object() {
             continue;
         }
-        let relation = edge
-            .get("relation")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let relation = edge.get("relation").and_then(|v| v.as_str()).unwrap_or("");
         let src_id = edge.get("source").and_then(|v| v.as_str()).unwrap_or("");
         let tgt_id = edge.get("target").and_then(|v| v.as_str()).unwrap_or("");
 
@@ -548,9 +544,7 @@ pub fn validate_extraction_edges(
             .iter()
             .any(|c| c.relation == normalize_type_key(relation) || c.relation == "*")
         {
-            format!(
-                "no constraint allows {src_type} -[{relation}]-> {tgt_type}"
-            )
+            format!("no constraint allows {src_type} -[{relation}]-> {tgt_type}")
         } else {
             format!("unknown relation type '{relation}' (not declared in schema)")
         };
@@ -600,16 +594,10 @@ pub fn validate_kg_edges(
         errors.push(EdgeValidationError {
             edge_index: Some(i),
             relation,
-            source_id: src
-                .legacy_id
-                .clone()
-                .unwrap_or_else(|| src.id.to_hex()),
+            source_id: src.legacy_id.clone().unwrap_or_else(|| src.id.to_hex()),
             source_type: src_type.to_string(),
             source_label: Some(src.label.clone()),
-            target_id: tgt
-                .legacy_id
-                .clone()
-                .unwrap_or_else(|| tgt.id.to_hex()),
+            target_id: tgt.legacy_id.clone().unwrap_or_else(|| tgt.id.to_hex()),
             target_type: tgt_type.to_string(),
             target_label: Some(tgt.label.clone()),
             reason,
@@ -904,7 +892,10 @@ mod tests {
 
         let msg1 = errs[1].to_message();
         assert!(msg1.contains("teleports"), "{msg1}");
-        assert!(msg1.contains("unknown relation") || msg1.contains("not declared"), "{msg1}");
+        assert!(
+            msg1.contains("unknown relation") || msg1.contains("not declared"),
+            "{msg1}"
+        );
     }
 
     #[test]
@@ -986,9 +977,7 @@ mod tests {
     #[test]
     fn non_strict_allows_unknown_relations() {
         let mut schema = EdgeValidationSchema::programmatic(vec![EdgeConstraint::new(
-            "calls",
-            "function",
-            "function",
+            "calls", "function", "function",
         )]);
         schema.strict_unknown_relations = false;
         assert!(schema.allows("calls", "function", "function"));
@@ -999,7 +988,8 @@ mod tests {
 
     #[test]
     fn wildcard_relation_constraint() {
-        let schema = EdgeValidationSchema::programmatic(vec![EdgeConstraint::new("*", "person", "*")]);
+        let schema =
+            EdgeValidationSchema::programmatic(vec![EdgeConstraint::new("*", "person", "*")]);
         assert!(schema.allows("anything", "person", "location"));
         assert!(!schema.allows("anything", "event", "location"));
     }

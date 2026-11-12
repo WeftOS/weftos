@@ -392,10 +392,7 @@ fn hop_to_score(hop: Option<usize>, max_hops: usize) -> f64 {
 
 /// For each non-seed neighbor of the seed set, max incident confidence weight.
 /// Seeds themselves get 1.0.
-fn seed_relation_weights(
-    kg: &KnowledgeGraph,
-    seeds: &HashSet<EntityId>,
-) -> HashMap<EntityId, f64> {
+fn seed_relation_weights(kg: &KnowledgeGraph, seeds: &HashSet<EntityId>) -> HashMap<EntityId, f64> {
     let mut map: HashMap<EntityId, f64> = HashMap::new();
     for s in seeds {
         map.insert(s.clone(), 1.0);

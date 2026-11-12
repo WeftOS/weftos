@@ -118,9 +118,7 @@ pub fn estimate_graph_bytes(n_nodes: usize, n_edges: usize) -> u64 {
     const PER_EDGE: u64 = 64 + 32 + 48 + 48;
     // HashMap index / communities slack
     const OVERHEAD: u64 = 1024 * 1024; // 1 MiB base
-    OVERHEAD
-        + (n_nodes as u64).saturating_mul(PER_NODE)
-        + (n_edges as u64).saturating_mul(PER_EDGE)
+    OVERHEAD + (n_nodes as u64).saturating_mul(PER_NODE) + (n_edges as u64).saturating_mul(PER_EDGE)
 }
 
 /// Token-reduction helper: corpus tokens (sum of extraction input tokens)

@@ -95,7 +95,10 @@ impl GraphifyBenchThresholds {
                 name: "regression_total".into(),
                 passed: reg_passed,
                 observed: format!("{measured:.0}ms (ratio={ratio:.3})"),
-                limit: format!("≤ {:.0}% of baseline {base_ms}ms", self.max_regression_ratio * 100.0),
+                limit: format!(
+                    "≤ {:.0}% of baseline {base_ms}ms",
+                    self.max_regression_ratio * 100.0
+                ),
                 detail: None,
             });
         }
@@ -159,7 +162,9 @@ pub struct GraphOpsThresholds {
 impl Default for GraphOpsThresholds {
     fn default() -> Self {
         // CI scale (128 nodes) should finish well under 5s even on slow hosts.
-        Self { max_total_ms: 5_000 }
+        Self {
+            max_total_ms: 5_000,
+        }
     }
 }
 
@@ -221,14 +226,15 @@ impl MemoryThresholds {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bench::extraction::{ExtractionHarness, CI_ENTITIES_PER_FILE, CI_FILE_COUNT};
-    use crate::bench::graph_ops::{GraphOpsHarness, CI_NODE_COUNT};
+    use crate::bench::extraction::{CI_ENTITIES_PER_FILE, CI_FILE_COUNT, ExtractionHarness};
+    use crate::bench::graph_ops::{CI_NODE_COUNT, GraphOpsHarness};
 
     #[test]
     fn default_thresholds_pass_ci_mock() {
         let t = GraphifyBenchThresholds::default();
         let mut ex = ExtractionHarness::new();
-        ex.run_mock_batch(CI_FILE_COUNT, CI_ENTITIES_PER_FILE).unwrap();
+        ex.run_mock_batch(CI_FILE_COUNT, CI_ENTITIES_PER_FILE)
+            .unwrap();
         let stats = ex.stats().unwrap();
 
         let mut g = GraphOpsHarness::new();
@@ -247,7 +253,11 @@ mod tests {
         let eval = t.evaluate(None, Some(&suite), Some(1));
         // Suite almost certainly > 1ms total → fails regression.
         assert!(!eval.passed);
-        assert!(eval.metrics.iter().any(|m| m.name == "regression_total" && !m.passed));
+        assert!(
+            eval.metrics
+                .iter()
+                .any(|m| m.name == "regression_total" && !m.passed)
+        );
     }
 
     #[test]

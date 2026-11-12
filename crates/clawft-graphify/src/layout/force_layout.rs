@@ -79,10 +79,10 @@ impl Quad {
     fn child(&self, index: usize) -> Quad {
         let half = self.size * 0.5;
         let (ox, oy) = match index {
-            0 => (0.0, 0.0),         // SW
-            1 => (half, 0.0),        // SE
-            2 => (0.0, half),        // NW
-            3 => (half, half),       // NE
+            0 => (0.0, 0.0),   // SW
+            1 => (half, 0.0),  // SE
+            2 => (0.0, half),  // NW
+            3 => (half, half), // NE
             _ => unreachable!(),
         };
         Quad {
@@ -633,7 +633,10 @@ mod tests {
         assert_eq!(positions.len(), n);
         for id in &ids {
             let (x, y) = positions[id];
-            assert!(x.is_finite() && y.is_finite(), "non-finite pos for {id:?}: ({x},{y})");
+            assert!(
+                x.is_finite() && y.is_finite(),
+                "non-finite pos for {id:?}: ({x},{y})"
+            );
         }
     }
 

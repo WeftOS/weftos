@@ -146,8 +146,10 @@ impl Pipeline {
 
         // WEFT-377: discover multi-node hyperedges (shared context, co-occurrence, schema)
         if self.config.discover_hyperedges {
-            let added =
-                hyperedge::apply_discovered_hyperedges(&mut graph, &self.config.hyperedge_discovery);
+            let added = hyperedge::apply_discovered_hyperedges(
+                &mut graph,
+                &self.config.hyperedge_discovery,
+            );
             tracing::debug!(
                 hyperedges_discovered = added,
                 hyperedges_total = graph.hyperedges.len(),
@@ -480,13 +482,18 @@ mod tests {
             "expected pipeline to discover hyperedges"
         );
         // Shared context for mod.rs (3 functions) and/or co-occurrence star.
-        assert!(result.graph.hyperedges.iter().any(|h| h.entity_ids.len() >= 3));
-        assert!(result.graph.hyperedges.iter().any(|h| {
-            h.metadata
-                .get("detector")
-                .and_then(|v| v.as_str())
-                == Some("weft-377")
-        }));
+        assert!(
+            result
+                .graph
+                .hyperedges
+                .iter()
+                .any(|h| h.entity_ids.len() >= 3)
+        );
+        assert!(
+            result.graph.hyperedges.iter().any(|h| {
+                h.metadata.get("detector").and_then(|v| v.as_str()) == Some("weft-377")
+            })
+        );
     }
 
     #[test]

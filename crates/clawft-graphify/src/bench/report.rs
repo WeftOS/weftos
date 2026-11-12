@@ -87,24 +87,21 @@ impl GraphifyBenchReport {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bench::extraction::{ExtractionHarness, CI_ENTITIES_PER_FILE, CI_FILE_COUNT};
-    use crate::bench::graph_ops::{GraphOpsHarness, CI_NODE_COUNT};
+    use crate::bench::extraction::{CI_ENTITIES_PER_FILE, CI_FILE_COUNT, ExtractionHarness};
+    use crate::bench::graph_ops::{CI_NODE_COUNT, GraphOpsHarness};
 
     #[test]
     fn report_json_contains_ticket() {
         let thresholds = GraphifyBenchThresholds::default();
         let mut ex = ExtractionHarness::new();
-        ex.run_mock_batch(CI_FILE_COUNT, CI_ENTITIES_PER_FILE).unwrap();
+        ex.run_mock_batch(CI_FILE_COUNT, CI_ENTITIES_PER_FILE)
+            .unwrap();
         let stats = ex.stats().unwrap();
         let mut g = GraphOpsHarness::new();
         let suite = g.run_suite(CI_NODE_COUNT);
         let eval = thresholds.evaluate(Some(&stats), Some(&suite), None);
-        let report = GraphifyBenchReport::from_evaluation(
-            thresholds,
-            eval,
-            Some(stats),
-            Some(suite),
-        );
+        let report =
+            GraphifyBenchReport::from_evaluation(thresholds, eval, Some(stats), Some(suite));
         let json = report.to_json_pretty().unwrap();
         assert!(json.contains("WEFT-370"));
         assert!(json.contains("extraction_files_per_sec"));

@@ -27,11 +27,11 @@ pub mod domain;
 // WEFT-375 / LightRAG P5: edge embeddings for relationship-level queries.
 pub mod edge_embed;
 // WEFT-517 / LightRAG: dual-level keyword retrieval (Guo et al. 2410.05779).
-pub mod lightrag;
 pub mod eml_models;
 pub mod entity;
 pub mod export;
 pub mod extract;
+pub mod lightrag;
 // WEFT-376 / LightRAG P4: graph-aware re-ranking of HNSW/vector hits.
 pub mod graph_rerank;
 pub mod hooks;
@@ -71,26 +71,26 @@ pub use alignment::{
     ProposalStatus, ScoreBreakdown, align_entities, propose_merges,
 };
 pub use build::MergeStats;
-pub use entity::{DomainTag, EntityId, EntityType, FileType};
-pub use hyperedge::{
-    HyperedgeDiscoveryConfig, apply_discovered_hyperedges, discover_hyperedges,
-    discover_hyperedges_with_config, merge_hyperedges,
-};
-pub use model::{
-    DetectionResult, Entity, ExtractionResult, ExtractionStats, GodNode, GraphDiff, Hyperedge,
-    KnowledgeGraph, SuggestedQuestion, SurprisingConnection,
-};
-pub use lightrag::{
-    DualLevelHit, DualLevelResult, TokenCostEstimate, dual_level_retrieve, split_levels,
-    token_cost_estimate, tokenize_keywords,
-};
 pub use edge_embed::{
     DEFAULT_EDGE_EMBED_DIMS, EDGE_HNSW_PREFIX, EdgeEmbeddingIndex, EdgeSearchResult,
     populate_edge_embeddings, query_relationships, query_relationships_dims,
     relationship_search_keys,
 };
+pub use entity::{DomainTag, EntityId, EntityType, FileType};
 pub use graph_rerank::{
     GraphRerankConfig, RerankFeatures, RerankedHit, VectorHit, graph_rerank, graph_rerank_top_k,
+};
+pub use hyperedge::{
+    HyperedgeDiscoveryConfig, apply_discovered_hyperedges, discover_hyperedges,
+    discover_hyperedges_with_config, merge_hyperedges,
+};
+pub use lightrag::{
+    DualLevelHit, DualLevelResult, TokenCostEstimate, dual_level_retrieve, split_levels,
+    token_cost_estimate, tokenize_keywords,
+};
+pub use model::{
+    DetectionResult, Entity, ExtractionResult, ExtractionStats, GodNode, GraphDiff, Hyperedge,
+    KnowledgeGraph, SuggestedQuestion, SurprisingConnection,
 };
 pub use relationship::{Confidence, RelationType, Relationship};
 // WEFT-378: vault domain hyperedges + SUGGEST → ratify → CRDT pipeline.

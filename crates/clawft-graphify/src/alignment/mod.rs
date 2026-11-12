@@ -65,6 +65,6 @@ pub use agent::{
 };
 pub use score::{
     AlignmentConfig, AlignmentEvidence, AlignmentMethod, EmbeddingLookup, EntityAlignment,
-    MapEmbeddingLookup, ScoreBreakdown, cosine_similarity, label_similarity,
-    local_label_embedding, normalize_label,
+    MapEmbeddingLookup, ScoreBreakdown, cosine_similarity, label_similarity, local_label_embedding,
+    normalize_label,
 };

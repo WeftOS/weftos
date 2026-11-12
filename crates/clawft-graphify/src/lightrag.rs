@@ -70,17 +70,15 @@ impl TokenCostEstimate {
 
 /// Stop words shared with conversation retrieval.
 const STOP: &[&str] = &[
-    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being", "have",
-    "has", "had", "do", "does", "did", "will", "would", "could", "should", "may",
-    "might", "must", "shall", "can", "need", "dare", "ought", "used", "to", "of",
-    "in", "for", "on", "with", "at", "by", "from", "as", "into", "through",
-    "during", "before", "after", "above", "below", "between", "out", "off",
-    "over", "under", "again", "further", "then", "once", "here", "there", "when",
-    "where", "why", "how", "all", "each", "few", "more", "most", "other", "some",
-    "such", "no", "nor", "not", "only", "own", "same", "so", "than", "too",
-    "very", "just", "and", "but", "if", "or", "because", "until", "while",
-    "about", "against", "what", "which", "who", "whom", "this", "that", "these",
-    "those", "i", "me", "my", "we", "our", "you", "your", "he", "him", "his",
+    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had",
+    "do", "does", "did", "will", "would", "could", "should", "may", "might", "must", "shall",
+    "can", "need", "dare", "ought", "used", "to", "of", "in", "for", "on", "with", "at", "by",
+    "from", "as", "into", "through", "during", "before", "after", "above", "below", "between",
+    "out", "off", "over", "under", "again", "further", "then", "once", "here", "there", "when",
+    "where", "why", "how", "all", "each", "few", "more", "most", "other", "some", "such", "no",
+    "nor", "not", "only", "own", "same", "so", "than", "too", "very", "just", "and", "but", "if",
+    "or", "because", "until", "while", "about", "against", "what", "which", "who", "whom", "this",
+    "that", "these", "those", "i", "me", "my", "we", "our", "you", "your", "he", "him", "his",
     "she", "her", "it", "its", "they", "them", "their",
 ];
 
@@ -141,9 +139,10 @@ pub fn split_levels(keywords: &[String]) -> (Vec<String>, Vec<String>) {
     // Always promote at least one high-level token so dual-level is
     // meaningful even for pure entity queries: reuse the longest low token.
     if high.is_empty()
-        && let Some(longest) = low.iter().max_by_key(|s| s.len()) {
-            high.push(longest.clone());
-        }
+        && let Some(longest) = low.iter().max_by_key(|s| s.len())
+    {
+        high.push(longest.clone());
+    }
     (low, high)
 }
 
@@ -254,12 +253,14 @@ pub fn dual_level_retrieve(
 
     let mut hits: Vec<DualLevelHit> = scores
         .into_iter()
-        .map(|(entity_id, (low_level_score, high_level_score))| DualLevelHit {
-            entity_id,
-            score: low_level_score + 0.8 * high_level_score,
-            low_level_score,
-            high_level_score,
-        })
+        .map(
+            |(entity_id, (low_level_score, high_level_score))| DualLevelHit {
+                entity_id,
+                score: low_level_score + 0.8 * high_level_score,
+                low_level_score,
+                high_level_score,
+            },
+        )
         .collect();
     hits.sort_by(|a, b| {
         b.score
@@ -332,7 +333,11 @@ mod tests {
         }
     }
 
-    fn sample_kg() -> (KnowledgeGraph, HashMap<EntityId, usize>, HashMap<usize, String>) {
+    fn sample_kg() -> (
+        KnowledgeGraph,
+        HashMap<EntityId, usize>,
+        HashMap<usize, String>,
+    ) {
         let mut kg = KnowledgeGraph::new();
         let auth = entity("AuthService");
         let mesh = entity("MeshRuntime");
@@ -379,7 +384,9 @@ mod tests {
             .filter_map(|h| kg.entity(&h.entity_id).map(|e| e.label.clone()))
             .collect();
         assert!(
-            labels_hit.iter().any(|l| l.contains("Auth") || l.contains("Governance")),
+            labels_hit
+                .iter()
+                .any(|l| l.contains("Auth") || l.contains("Governance")),
             "expected auth/governance hit, got {labels_hit:?}"
         );
         assert!(
