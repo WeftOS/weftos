@@ -1504,6 +1504,32 @@ mod imp {
         }
 
         #[test]
+        fn colsnap_terminal_native() {
+            use base64::Engine;
+            let live = crate::live::Live::test_stub(crate::live::Snapshot::default());
+            let data = base64::engine::general_purpose::STANDARD
+                .encode(crate::snap_support::ansi_test_stream());
+            crate::snap_support::render_checked(
+                "terminal_native",
+                crate::theming::apply,
+                crate::snap_support::click_then_drag(
+                    egui::pos2(40.0, 60.0),
+                    egui::pos2(40.0, 70.0),
+                    egui::pos2(300.0, 110.0),
+                ),
+                || {
+                    let live = live.clone();
+                    let mut t = Terminal::default();
+                    t.handle_output_value(json!({
+                        "tick": 1,
+                        "value": { "data": data, "ts_ms": 0 },
+                    }));
+                    move |ui: &mut egui::Ui| t.paint_ui(ui, &live)
+                },
+            );
+        }
+
+        #[test]
         fn handle_output_value_marks_exit() {
             let mut t = Terminal::default();
             t.session_id = Some("t-deadbeef0001".into());

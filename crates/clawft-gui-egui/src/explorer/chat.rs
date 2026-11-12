@@ -1821,6 +1821,44 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn colsnap_chat_panel() {
+        let live = crate::live::Live::test_stub(crate::live::Snapshot::default());
+        // Conversation ids embed `now_ms()` and a global counter: compare colours only.
+        crate::snap_support::render_checked_colours(
+            "chat_panel",
+            crate::theming::apply,
+            vec![],
+            || {
+                let live = live.clone();
+                let mut panel = ChatPanel::new();
+                {
+                    let v = panel.active_view_mut();
+                    v.history.push(ChatMessage::user("hello there"));
+                    v.history.push(ChatMessage::assistant(
+                        "Hi. Here is **bold**, `code`, and a list:\n\n- one\n- two\n\n```\nfn x() {}\n```",
+                    ));
+                    v.history.push(ChatMessage::user("trigger an error"));
+                    v.history.push(ChatMessage::error(
+                        "[transport] agent.chat: daemon unreachable",
+                    ));
+                    v.draft = "draft text".into();
+                    v.system = Some("You are a test.".into());
+                }
+                panel.new_conversation();
+                panel
+                    .active_view_mut()
+                    .history
+                    .push(ChatMessage::user("second thread"));
+                panel.select(0);
+                let sentinel = json!({ "kind": "chat", "model": "local" });
+                move |ui: &mut egui::Ui| {
+                    paint(ui, "substrate/chat/test", &sentinel, &mut panel, &live)
+                }
+            },
+        );
+    }
+
+    #[test]
     fn matches_returns_positive_for_chat_sentinel() {
         let v = json!({ "kind": "chat", "model": "local" });
         assert_eq!(matches(&v), PRIORITY);
