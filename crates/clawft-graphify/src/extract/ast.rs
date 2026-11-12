@@ -341,12 +341,12 @@ impl ExtractionContext {
         label_to_nid: &HashMap<String, String>,
         seen_call_pairs: &mut std::collections::HashSet<(String, String)>,
     ) {
-        if let Some(tgt_nid) = label_to_nid.get(&callee_name.to_lowercase()) {
-            if tgt_nid != caller_nid {
-                let pair = (caller_nid.to_string(), tgt_nid.to_string());
-                if seen_call_pairs.insert(pair) {
-                    self.add_edge(caller_nid, tgt_nid, "calls", line, "INFERRED", 0.8);
-                }
+        if let Some(tgt_nid) = label_to_nid.get(&callee_name.to_lowercase())
+            && tgt_nid != caller_nid
+        {
+            let pair = (caller_nid.to_string(), tgt_nid.to_string());
+            if seen_call_pairs.insert(pair) {
+                self.add_edge(caller_nid, tgt_nid, "calls", line, "INFERRED", 0.8);
             }
         }
     }
@@ -376,7 +376,7 @@ pub fn extract_ast(path: &Path, lang: LanguageId) -> Result<ExtractionResult, Gr
         LanguageId::Rust => super::lang::rust_lang::extract_rust(path),
         LanguageId::Go => super::lang::go::extract_go(path),
         // Stubs for languages not yet implemented with tree-sitter
-        _ => Ok(ExtractionResult::empty(path.to_path_buf())),
+        _ => Ok(ExtractionResult::empty(path)),
     }
 }
 

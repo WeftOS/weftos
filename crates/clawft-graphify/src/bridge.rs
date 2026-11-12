@@ -496,7 +496,7 @@ impl GraphifyBridge {
         }
 
         // Re-create relationships from CausalGraph edges.
-        for (causal_id, _entity_id) in &causal_to_entity {
+        for causal_id in causal_to_entity.keys() {
             for edge in self.causal_graph.get_forward_edges(*causal_id) {
                 let src_eid: Option<&EntityId> = causal_to_entity.get(&edge.source);
                 let tgt_eid: Option<&EntityId> = causal_to_entity.get(&edge.target);
@@ -717,19 +717,19 @@ pub fn analyze_kg_to_findings(kg: &KnowledgeGraph) -> Vec<Finding> {
     // Low-cohesion communities -> "architectural" findings.
     if let Some(communities) = &kg.communities {
         for (&cid, members) in communities {
-            if members.len() == 1 {
-                if let Some(entity) = kg.entity(&members[0]) {
-                    findings.push(Finding {
-                        severity: "info".into(),
-                        category: "architecture".into(),
-                        file: entity.source_file.clone().unwrap_or_default(),
-                        line: None,
-                        message: format!(
-                            "Singleton community {}: '{}' is isolated from all clusters.",
-                            cid, entity.label,
-                        ),
-                    });
-                }
+            if members.len() == 1
+                && let Some(entity) = kg.entity(&members[0])
+            {
+                findings.push(Finding {
+                    severity: "info".into(),
+                    category: "architecture".into(),
+                    file: entity.source_file.clone().unwrap_or_default(),
+                    line: None,
+                    message: format!(
+                        "Singleton community {}: '{}' is isolated from all clusters.",
+                        cid, entity.label,
+                    ),
+                });
             }
         }
     }
@@ -758,7 +758,7 @@ impl KnowledgeGraph {
                 })
             })
             .collect();
-        nodes.sort_by(|a, b| b.degree.cmp(&a.degree));
+        nodes.sort_by_key(|n| std::cmp::Reverse(n.degree));
         nodes.truncate(top_n);
         nodes
     }
@@ -988,8 +988,8 @@ mod tests {
     /// WEFT-376: HNSW search → graph re-rank end-to-end on the bridge.
     #[tokio::test]
     async fn bridge_search_graph_reranked() {
-        use clawft_kernel::hnsw_service::{HnswServiceConfig, MultiKey};
         use crate::graph_rerank::GraphRerankConfig;
+        use clawft_kernel::hnsw_service::{HnswServiceConfig, MultiKey};
 
         let causal = Arc::new(CausalGraph::new());
         let hnsw = Arc::new(HnswService::new(HnswServiceConfig::default()));
@@ -1055,10 +1055,7 @@ mod tests {
 
         // Hub (degree 1, same community as leaf, hop-close) should not
         // be last under topology-heavy weights when query is near isolated.
-        let hub_rank = ranked
-            .iter()
-            .position(|h| h.id == hub.id.to_hex())
-            .unwrap();
+        let hub_rank = ranked.iter().position(|h| h.id == hub.id.to_hex()).unwrap();
         let iso_rank = ranked
             .iter()
             .position(|h| h.id == isolated.id.to_hex())

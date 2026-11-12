@@ -62,7 +62,8 @@ struct LlmEntity {
     entity_type: String,
     #[serde(default)]
     description: String,
-    iri: None,
+    #[serde(default)]
+    iri: Option<String>,
 }
 
 #[cfg(feature = "semantic-extract")]
@@ -121,7 +122,7 @@ where
 
     let response = llm_complete(prompt)
         .await
-        .map_err(|e| GraphifyError::LlmError(e))?;
+        .map_err(GraphifyError::LlmError)?;
 
     // Try to parse JSON from the response, handling markdown fences.
     let json_str = extract_json_from_response(&response);
@@ -160,7 +161,7 @@ where
             file_type: FileType::Document,
             metadata: serde_json::Value::Object(metadata),
             legacy_id: None,
-            iri: None,
+            iri: llm_entity.iri.clone(),
         });
     }
 
@@ -207,10 +208,10 @@ where
 fn extract_json_from_response(response: &str) -> &str {
     let trimmed = response.trim();
     // Handle ```json ... ``` fences.
-    if let Some(start) = trimmed.find('{') {
-        if let Some(end) = trimmed.rfind('}') {
-            return &trimmed[start..=end];
-        }
+    if let Some(start) = trimmed.find('{')
+        && let Some(end) = trimmed.rfind('}')
+    {
+        return &trimmed[start..=end];
     }
     trimmed
 }

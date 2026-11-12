@@ -18,7 +18,9 @@ code-domain = []
 forensic-domain = []
 html-export = ["dep:html-escape"]
 neo4j-export = []
-kernel-bridge = ["dep:clawft-kernel", "dep:async-trait"]
+# clawft-kernel is a default-features-off workspace dep; standalone
+# `-p clawft-graphify --features kernel-bridge` needs its native + exochain modules.
+kernel-bridge = ["dep:clawft-kernel", "dep:async-trait", "clawft-kernel/native", "clawft-kernel/exochain"]
 # Real HTTP for URL ingest (reqwest + rustls). Production binaries
 # (weaver) enable this; unit tests keep StubHttpClient / mock clients.
 http-client = ["dep:reqwest"]

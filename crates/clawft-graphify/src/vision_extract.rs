@@ -101,7 +101,7 @@ where
         media_type.to_string(),
     )
     .await
-    .map_err(|e| GraphifyError::LlmError(e))?;
+    .map_err(GraphifyError::LlmError)?;
 
     // Re-use the semantic extraction JSON parser.
     let json_str = extract_json_from_response(&response);
@@ -175,10 +175,10 @@ where
 #[cfg(feature = "vision-extract")]
 fn extract_json_from_response(response: &str) -> &str {
     let trimmed = response.trim();
-    if let Some(start) = trimmed.find('{') {
-        if let Some(end) = trimmed.rfind('}') {
-            return &trimmed[start..=end];
-        }
+    if let Some(start) = trimmed.find('{')
+        && let Some(end) = trimmed.rfind('}')
+    {
+        return &trimmed[start..=end];
     }
     trimmed
 }
