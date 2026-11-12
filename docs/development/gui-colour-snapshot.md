@@ -56,8 +56,45 @@ checked on their colour view only (positions and strings ignored):
 `viewer_health*` and `viewer_time_series` render once per process because the
 sparkline history is process-global.
 
+## Interaction states
+
+`colsnap_state_*` tests drive a surface with scripted input events (a `Script` in
+`snap_support.rs`: hover, press and hold, click, drag, key, text) over a fixed
+number of frames at the same fixed clock and size, then dump the last frame.
+Widget positions come from a probe render of the same surface, so scripts do not
+hard-code layout. Each dump is rendered twice and must be identical. Files are
+named `state_<surface>_<state>`.
+
+| Surface | States |
+| --- | --- |
+| Widget gallery (`state_gal_*`, stock egui widgets) | hover, press, click for link, button, small button, disabled, checkbox, radio, selectable label, toggle, text edit, combo box, collapsing header, slider, drag value; Tab focus stops 1 to 14; Space and Enter on the focused button; text edit focus, typed text, select all, drag selection; slider drag; combo open, entry hover, press, pick; collapsing open and hover |
+| Same gallery with the WeftOS visuals in effect (`state_galvis_*`) | the same set; see the note below |
+| Patch editor (`state_edit_*`) | hover and press on nodes and toolbar buttons; select each node; deselect; selected node with the pointer on another; connect mode, connect source, hover on target, connect done, connect to self, back to select, selection then connect; add node, dirty, Reset hover, press and click; delete; node drag held and released; inspector label and kind (hover, focus, typed, select all), remove-edge hover, press and click; Tab stops 1 to 8; empty graph |
+| Conversation graph, fixture (`state_cg_*`) | select each node; dim each edge kind and intent and all; level-of-detail collapse; clusters off; scrub pinned before, at, after the data and at the ends; full-history hint; ArrowLeft, ArrowRight and L keys; pointer hover, press and click (not wired to any colour today) |
+| Conversation graph, every role x state x edge kind (`state_cgfull_*`) | plain with each of two topics, selected nodes, LOD collapse, clusters off, all edges dimmed, all intents dimmed, pinned |
+| Services and scheduler apps (`state_app_*`) | filter tab hover, press, click; row action buttons hover, press, click; Tab stops; scheduler add button hover, press, click; add form open; form buttons hover, press; failed submit showing the error line; name, interval and command fields focus, typed text, select all; Tab stops |
+| Chat panel (`state_chat_*`) | streaming turn in flight: thinking, partial plain, partial markdown, partial list, unclosed code fence, long, done, error; Send and Clear hover and press; draft focus, typed text, select all; Tab stops; click on Send |
+| Alacritty terminal (`state_term_native_*`) | hover, focus click, selection in progress, selection after release, single-row and reversed selection, selection cleared by a click, copy with a selection. Each selection dump asserts the overlay colour is present. The vt100 terminal was already covered by `terminal_vt100` |
+
+Notes:
+
+- `theming::apply` installs the WeftOS `Visuals` and then overwrites them with
+  egui's defaults, because `set_global_style` receives a `Style` that carries
+  default visuals. The older dumps (`themed_widgets`, the apps) therefore show
+  egui's stock widget colours for hover, press and focus. The `state_galvis_*`
+  tests set `Tokens::visuals()` again (through the test-only `visuals_for_test`
+  accessor) so the tints, and the tokens behind them, are exercised.
+- The chat panel's heartbeat dot takes its green channel from the wall clock.
+  In-flight chat dumps mask that colour (`rgba=#MASKED`) in both the check and
+  the written file; every other colour is exact.
+- Overlapping topic hulls in the conversation graph are drawn in `HashMap`
+  order, which differs between runs. `state_cgfull_*` uses one topic per dump for
+  that reason.
+
 ## Not covered
 
-Hover, pressed and focus states of widgets other than the terminal click and
-drag; selected and connect modes of the graph editor; the conversation graph
-under interaction; a streaming chat turn; surfaces that need a live daemon.
+Surfaces that need a live daemon; pixel rendering and glyph shapes; the
+heartbeat dot's green channel (masked); the settings app (it renders nothing
+without published config), so its category list and detail form are covered only
+through the gallery widgets they are built from; the vt100 terminal's focus and
+keyboard states.

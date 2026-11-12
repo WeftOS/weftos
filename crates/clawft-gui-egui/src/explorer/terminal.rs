@@ -1529,6 +1529,100 @@ mod imp {
             );
         }
 
+        // colsnap-states:begin
+        // Selection overlay and focus states of the alacritty terminal.
+        fn colsnap_term_states(name: &str, script: &crate::snap_support::Script) -> String {
+            use base64::Engine;
+            let live = crate::live::Live::test_stub(crate::live::Snapshot::default());
+            let data = base64::engine::general_purpose::STANDARD
+                .encode(crate::snap_support::ansi_test_stream());
+            crate::snap_support::render_script_checked(name, crate::theming::apply, script, || {
+                let live = live.clone();
+                let mut t = Terminal::default();
+                t.handle_output_value(json!({
+                    "tick": 1,
+                    "value": { "data": data, "ts_ms": 0 },
+                }));
+                move |ui: &mut egui::Ui| t.paint_ui(ui, &live)
+            })
+        }
+
+        #[test]
+        fn colsnap_state_terminal_native() {
+            use crate::snap_support::Script;
+            // The literal, so the same test compiles on the pre-token base.
+            let overlay = egui::Color32::from_rgba_unmultiplied(120, 160, 220, 80);
+            let overlay_hex = format!(
+                "rgba=#{:02x}{:02x}{:02x}{:02x}",
+                overlay.r(),
+                overlay.g(),
+                overlay.b(),
+                overlay.a()
+            );
+            let p = |x: f32, y: f32| egui::pos2(x, y);
+            let focus = Script::new().click(p(40.0, 60.0));
+            colsnap_term_states("state_term_native_plain", &Script::new());
+            colsnap_term_states(
+                "state_term_native_hover",
+                &Script::new().hover(p(100.0, 80.0)),
+            );
+            colsnap_term_states("state_term_native_focus", &focus);
+            // Selection in progress: button still held.
+            let dragging = focus
+                .clone()
+                .press(p(40.0, 70.0))
+                .drag_to(p(150.0, 80.0))
+                .drag_to(p(300.0, 110.0));
+            let d = colsnap_term_states("state_term_native_selecting", &dragging);
+            assert!(
+                d.contains(&overlay_hex),
+                "selection overlay not painted while dragging"
+            );
+            // Selection kept after release.
+            let released = dragging.clone().release(p(300.0, 110.0));
+            let d = colsnap_term_states("state_term_native_selected", &released);
+            assert!(
+                d.contains(&overlay_hex),
+                "selection overlay not painted after release"
+            );
+            // Single-row selection, and a reversed (right-to-left, bottom-to-top) one.
+            let d = colsnap_term_states(
+                "state_term_native_selected_row",
+                &focus
+                    .clone()
+                    .press(p(40.0, 70.0))
+                    .drag_to(p(100.0, 71.0))
+                    .drag_to(p(220.0, 71.0))
+                    .release(p(220.0, 71.0)),
+            );
+            assert!(d.contains(&overlay_hex));
+            let d = colsnap_term_states(
+                "state_term_native_selected_reversed",
+                &focus
+                    .clone()
+                    .press(p(300.0, 110.0))
+                    .drag_to(p(150.0, 90.0))
+                    .drag_to(p(40.0, 70.0))
+                    .release(p(40.0, 70.0)),
+            );
+            assert!(d.contains(&overlay_hex));
+            // A bare click afterwards clears it.
+            let d = colsnap_term_states(
+                "state_term_native_selection_cleared",
+                &released.clone().click(p(500.0, 300.0)),
+            );
+            assert!(
+                !d.contains(&overlay_hex),
+                "bare click should clear the selection"
+            );
+            // Copy with a selection in place.
+            colsnap_term_states(
+                "state_term_native_selected_copy",
+                &released.key(egui::Key::C, egui::Modifiers::COMMAND),
+            );
+        }
+        // colsnap-states:end
+
         #[test]
         fn handle_output_value_marks_exit() {
             let mut t = Terminal::default();

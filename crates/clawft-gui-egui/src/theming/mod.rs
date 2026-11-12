@@ -277,3 +277,14 @@ mod token_contract {
 
 #[cfg(test)]
 mod palette_contract;
+
+#[cfg(test)]
+impl Tokens {
+    /// The `Visuals` that `Tokens::visuals` builds. `apply` installs them and then
+    /// replaces them with egui's defaults (`set_global_style` of a `Style` that
+    /// carries default visuals), so colour-snapshot tests that want the widget
+    /// tints observable set them again with this.
+    pub(crate) fn visuals_for_test(&self) -> egui::Visuals {
+        self.visuals()
+    }
+}

@@ -1858,6 +1858,154 @@ mod tests {
         );
     }
 
+    // colsnap-states:begin
+    // Interaction and streaming states of the chat panel. In-flight scenarios
+    // mask the heartbeat dot (G channel comes from the wall clock); every other
+    // colour is compared exactly. See docs/development/gui-colour-snapshot.md.
+    fn colsnap_heartbeat_dot(hex: &str) -> bool {
+        hex.starts_with("50")
+            && hex.ends_with("c8ff")
+            && u8::from_str_radix(&hex[2..4], 16).is_ok_and(|g| (120..=200).contains(&g))
+    }
+
+    fn colsnap_chat_prep_stream(panel: &mut ChatPanel, frame: Value) {
+        let v = panel.active_view_mut();
+        let (tx, rx) = live::reply_channel();
+        // Keep the sender alive so the reply stays pending (turn in flight).
+        std::mem::forget(tx);
+        v.pending = Some(rx);
+        v.on_stream_frame(&frame);
+    }
+
+    fn colsnap_chat_states(
+        name: &str,
+        script: &crate::snap_support::Script,
+        in_flight: bool,
+        prep: impl Fn(&mut ChatPanel),
+    ) -> String {
+        let live = crate::live::Live::test_stub(crate::live::Snapshot::default());
+        let mk = || {
+            let live = live.clone();
+            let mut panel = ChatPanel::new();
+            {
+                let v = panel.active_view_mut();
+                v.history.push(ChatMessage::user("hello there"));
+                v.history
+                    .push(ChatMessage::assistant("Hi, here is **bold** and `code`."));
+                v.draft = "draft text".into();
+            }
+            prep(&mut panel);
+            let sentinel = json!({ "kind": "chat", "model": "local" });
+            move |ui: &mut egui::Ui| paint(ui, "substrate/chat/test", &sentinel, &mut panel, &live)
+        };
+        if in_flight {
+            crate::snap_support::render_script_masked(
+                name,
+                crate::theming::apply,
+                script,
+                mk,
+                colsnap_heartbeat_dot,
+            )
+        } else {
+            crate::snap_support::render_script_colours(name, crate::theming::apply, script, mk)
+        }
+    }
+
+    #[test]
+    fn colsnap_state_chat_streaming() {
+        use crate::snap_support::Script;
+        let none = Script::new();
+        let st = |n: &str, frame: Value| {
+            colsnap_chat_states(&format!("state_chat_stream_{n}"), &none, true, |p| {
+                colsnap_chat_prep_stream(p, frame.clone())
+            })
+        };
+        st(
+            "thinking",
+            json!({ "phase": "thinking", "text": "", "seq": 1, "done": false }),
+        );
+        st(
+            "partial_plain",
+            json!({ "phase": "generating", "text": "Streaming a reply that is still", "seq": 2, "done": false }),
+        );
+        st(
+            "partial_markdown",
+            json!({ "phase": "generating", "text": "Streaming **bold** and `co", "seq": 2, "done": false }),
+        );
+        st(
+            "partial_list",
+            json!({ "phase": "generating", "text": "Steps:\n\n- first\n- second\n- thi", "seq": 3, "done": false }),
+        );
+        st(
+            "partial_open_fence",
+            json!({ "phase": "generating", "text": "Here:\n\n```rust\nfn main() {\n    println!(\"hi", "seq": 3, "done": false }),
+        );
+        st(
+            "partial_long",
+            json!({ "phase": "generating", "text": "word ".repeat(300), "seq": 4, "done": false }),
+        );
+        st(
+            "done",
+            json!({ "phase": "done", "text": "Final text.", "seq": 5, "done": true }),
+        );
+        st(
+            "error",
+            json!({ "phase": "error", "text": "partial", "seq": 2, "done": true, "error": "boom" }),
+        );
+    }
+
+    #[test]
+    fn colsnap_state_chat_interaction() {
+        use crate::snap_support::{Script, probe, text_origin, text_target};
+        let live = crate::live::Live::test_stub(crate::live::Snapshot::default());
+        let base = probe(crate::theming::apply, &Script::new(), || {
+            let live = live.clone();
+            let mut panel = ChatPanel::new();
+            {
+                let v = panel.active_view_mut();
+                v.history.push(ChatMessage::user("hello there"));
+                v.history
+                    .push(ChatMessage::assistant("Hi, here is **bold** and `code`."));
+                v.draft = "draft text".into();
+            }
+            let sentinel = json!({ "kind": "chat", "model": "local" });
+            move |ui: &mut egui::Ui| paint(ui, "substrate/chat/test", &sentinel, &mut panel, &live)
+        });
+        let send = text_target(&base, "\"Send\"");
+        let clear = text_target(&base, "\"Clear\"");
+        let draft = text_origin(&base, "draft text").expect("draft") + egui::vec2(10.0, 6.0);
+        let idle =
+            |n: &str, s: Script| colsnap_chat_states(&format!("state_chat_{n}"), &s, false, |_| {});
+        idle("plain", Script::new());
+        idle("hover_send", Script::new().hover(send));
+        idle("press_send", Script::new().press(send));
+        idle("hover_clear", Script::new().hover(clear));
+        idle("press_clear", Script::new().press(clear));
+        idle("focus_draft", Script::new().click(draft));
+        idle("typed_draft", Script::new().click(draft).text("more"));
+        idle(
+            "select_all_draft",
+            Script::new()
+                .click(draft)
+                .key(egui::Key::A, egui::Modifiers::COMMAND),
+        );
+        for n in 1..=8usize {
+            let mut s = Script::new();
+            for _ in 0..n {
+                s = s.key(egui::Key::Tab, egui::Modifiers::NONE);
+            }
+            idle(&format!("tab_{n:02}"), s);
+        }
+        // Click Send: the draft is submitted and the turn goes in flight.
+        colsnap_chat_states(
+            "state_chat_click_send",
+            &Script::new().click(send),
+            true,
+            |_| {},
+        );
+    }
+    // colsnap-states:end
+
     #[test]
     fn matches_returns_positive_for_chat_sentinel() {
         let v = json!({ "kind": "chat", "model": "local" });
