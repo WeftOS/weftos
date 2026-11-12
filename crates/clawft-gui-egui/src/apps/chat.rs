@@ -48,10 +48,7 @@ pub fn show(
     _snap: &Snapshot,
 ) {
     super::paint_heading(ui, rect, "Chat · concierge-bot");
-    let body = egui::Rect::from_min_max(
-        egui::pos2(rect.left(), rect.top() + HEADING_BAND_H),
-        rect.max,
-    );
+    let body = super::body_rect(rect, HEADING_BAND_H);
 
     // Synthesised sentinel — seeds the WEFT-256 model chip strip until
     // `llm.models` lands. Cosmetic path only; RPC selection is owned

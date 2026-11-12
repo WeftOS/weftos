@@ -93,6 +93,11 @@ const STREAM_POLL_INTERVAL_MS: f64 = 120.0;
 
 /// Fixed width (px) of the WEFT-254 multi-conversation sidebar strip.
 const CONV_SIDEBAR_WIDTH: f32 = 196.0;
+/// Height reserved under the history scroll area (input, buttons, footer,
+/// spacers and the history frame's margin).
+const CHAT_BELOW_HISTORY_H: f32 = 175.0;
+/// Smallest history height; below this the panel is too short to be useful.
+const MIN_HISTORY_H: f32 = 60.0;
 
 /// Max characters shown for the first-message snippet in the sidebar.
 const SNIPPET_MAX_CHARS: usize = 48;
@@ -1302,10 +1307,11 @@ fn paint_active_conversation(
     // crowding the message field. Initial state is collapsed.
     paint_system_editor(ui, view, &system_salt);
 
-    // Reserve room for the input area at the bottom so the scroll area
-    // doesn't fight it for vertical space.
-    let input_h = 96.0;
-    let history_h = (ui.available_height() - input_h).max(120.0);
+    // Reserve room for everything below the history so the input row and
+    // Send button stay inside the window: multiline input (3 rows), the
+    // Send/Clear row, the spacers, separator and path footer, plus the
+    // history frame's own margin and stroke.
+    let history_h = (ui.available_height() - CHAT_BELOW_HISTORY_H).max(MIN_HISTORY_H);
 
     // WEFT-252: paint_history needs `&mut view` (CommonMarkCache lives
     // there). Splitting the closure body into a free fn keeps borrow

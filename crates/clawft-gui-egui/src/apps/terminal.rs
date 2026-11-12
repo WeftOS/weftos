@@ -43,10 +43,7 @@ pub fn show(
     _snap: &Snapshot,
 ) {
     super::paint_heading(ui, rect, "Terminal");
-    let body = egui::Rect::from_min_max(
-        egui::pos2(rect.left(), rect.top() + HEADING_BAND_H),
-        rect.max,
-    );
+    let body = super::body_rect(rect, HEADING_BAND_H);
     // Confine the terminal body to the rect carved out below the
     // heading. `scope_builder` (vs. raw `new_child`) wraps the child
     // Ui so its widget entry is finalised against actual bounds —
