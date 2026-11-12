@@ -1371,10 +1371,12 @@ mod tests {
         let r1 = demo.tick().await;
         assert_eq!(r1.impulses_sensed, 10);
 
-        // Queue was drained fully (drain_ready takes all), but only 10 processed.
-        // Remaining impulses are gone (drain clears the queue).
+        // The overflow stays queued (drain_ready_limited); the next tick
+        // takes the next 10 rather than finding the queue emptied.
+        assert_eq!(iq.len(), 490);
         let r2 = demo.tick().await;
-        assert_eq!(r2.impulses_sensed, 0);
+        assert_eq!(r2.impulses_sensed, 10);
+        assert_eq!(iq.len(), 480);
     }
 
     #[tokio::test]
