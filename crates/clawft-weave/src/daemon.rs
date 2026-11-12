@@ -962,15 +962,40 @@ async fn build_embedding_router_or_warn(
 }
 
 /// Open an existing `BranchableMemory` lineage at `dir`, or create a fresh
-/// one (WEFT-616 Phase 2). Open-then-create keeps restarts idempotent; the
-/// 384 dimension matches the brain's embedding width (rvf_real's default).
+/// one (WEFT-616 Phase 2). Open-then-create keeps restarts idempotent. A
+/// fresh lineage is created at `new_lineage_dim` (the exchange embedder's
+/// width, see [`cow_memory_embedder`]); an existing lineage keeps its own.
 fn open_or_create_cow_memory(
     dir: &std::path::Path,
+    new_lineage_dim: u16,
 ) -> Result<clawft_core::clawft_cow_memory::BranchableMemory, String> {
     use clawft_core::clawft_cow_memory::BranchableMemory;
     match BranchableMemory::open(dir) {
         Ok(mem) => Ok(mem),
-        Err(_) => BranchableMemory::create(dir, 384).map_err(|e| e.to_string()),
+        Err(_) => BranchableMemory::create(dir, new_lineage_dim).map_err(|e| e.to_string()),
+    }
+}
+
+/// Vector width for a NEW cow-memory lineage and the embedder that writes it.
+///
+/// A lineage has one dimension, fixed at creation, and the turn exchange is
+/// embedded by the real embedder (`select_embedder`: nomic-embed-text-v1.5, an
+/// API model, or the explicit lexical opt-in). A new lineage is created at that
+/// embedder's width. An existing lineage keeps its own width; if the embedder
+/// differs, the exchange write is refused with an explicit dimension-mismatch
+/// error (never truncated or padded). With no embedder available nothing is
+/// ingested and the lineage is created at the historical 384.
+fn cow_memory_embedder() -> (Option<Arc<dyn clawft_core::embeddings::Embedder>>, u16) {
+    match clawft_core::embeddings::select::select_embedder() {
+        Ok(e) => {
+            let dim = u16::try_from(e.dimension()).unwrap_or(384);
+            info!(embedder = e.name(), dim, "cow memory: turn exchanges embedded by the selected embedder");
+            (Some(e), dim)
+        }
+        Err(e) => {
+            warn!(error = %e, "cow memory: no embedding model; turn exchanges will not be ingested");
+            (None, 384)
+        }
     }
 }
 
@@ -2477,8 +2502,9 @@ pub async fn run(
             } else {
                 cow_memory_cfg.path.clone()
             };
+            let (cow_embedder, cow_new_dim) = cow_memory_embedder();
             match std::fs::create_dir_all(&path).map_err(|e| e.to_string()).and_then(|_| {
-                open_or_create_cow_memory(std::path::Path::new(&path))
+                open_or_create_cow_memory(std::path::Path::new(&path), cow_new_dim)
             }) {
                 Ok(mem) => {
                     let cow_handle = std::sync::Arc::new(std::sync::Mutex::new(mem));
@@ -2495,6 +2521,7 @@ pub async fn run(
                             == clawft_types::config::CowCadence::Tool,
                         review: anchor_cfg.proposal.mode
                             == clawft_types::config::ProposalMode::Review,
+                        embedder: cow_embedder,
                     });
                     info!(
                         path = %path,

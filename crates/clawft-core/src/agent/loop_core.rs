@@ -427,6 +427,12 @@ pub struct CowAttachment {
     pub tool_cadence: bool,
     /// Hold successful turns as pending proposals (WEFT-654 review gate).
     pub review: bool,
+    /// The real embedder for the exchange writes (owner decision
+    /// 2026-11-12: no hash embedding in production). Its dimension must equal
+    /// the lineage's: a mismatch refuses the write with an explicit error,
+    /// never a truncation or padding. `None` means no embedder is configured:
+    /// exchanges are not ingested (logged), nothing is hash-embedded.
+    pub embedder: Option<Arc<dyn crate::embeddings::Embedder>>,
 }
 
 pub struct AgentLoop<P: Platform> {
@@ -1039,11 +1045,15 @@ impl<P: Platform> AgentLoop<P> {
         self,
         mem: Arc<std::sync::Mutex<clawft_cow_memory::BranchableMemory>>,
     ) -> Self {
+        // No embedder is attached by this builder, so exchanges are not
+        // ingested (`ingest_turns: false`); the daemon wires the real
+        // embedder through `set_cow_memory`.
         let _ = self.cow_memory.set(CowAttachment {
             mem,
-            ingest_turns: true,
+            ingest_turns: false,
             tool_cadence: false,
             review: false,
+            embedder: None,
         });
         self
     }
@@ -1054,8 +1064,8 @@ impl<P: Platform> AgentLoop<P> {
     /// Write-once, same idiom as the reply-submitter/spawner late wiring.
     #[cfg(feature = "rvf")]
     /// `ingest_turns` = `CowMemoryConfig::ingest_turns`: when true, each
-    /// successful turn's exchange (user text + reply) is hash-embedded and
-    /// ingested into the checkpointed `working` node before promote — the
+    /// successful turn's exchange (user text + reply) is embedded by the
+    /// attachment's real embedder and ingested into the checkpointed `working` node before promote — the
     /// Phase-3 write routing that makes the bracket protect real data.
     /// Attach the loop's COW memory with its settings (WEFT-616/652/654).
     pub fn set_cow_memory(&self, attachment: CowAttachment) {
@@ -1291,26 +1301,44 @@ impl<P: Platform> AgentLoop<P> {
             if let Some((label, _)) = self.pending_hold_info() {
                 return Err(clawft_types::ClawftError::ProposalPending { label });
             }
-            let CowAttachment { mem, ingest_turns, review, .. } = att;
+            let CowAttachment { mem, ingest_turns, review, embedder, .. } = att;
             let label = format!("turn:{}:{}", msg.channel, msg.chat_id);
             // Capture the exchange inputs before `msg` moves into the turn.
             let user_text = msg.content.clone();
             let channel = msg.channel.clone();
             let chat_id = msg.chat_id.clone();
-            // Dimension comes from the attached lineage so the hash embedder
-            // always matches the store (the daemon creates at 384; tests may
-            // attach smaller stores).
+            // The lineage has one vector dimension, fixed at creation. The
+            // exchange is embedded by the real embedder and refused (an
+            // explicit error, logged by the bracket) if the widths differ:
+            // vectors are never truncated, padded or hash-substituted.
             let dim = {
                 let guard = mem.lock().unwrap_or_else(|p| p.into_inner());
                 guard.dimension()
             };
             let items_on_ok = move |out: &OutboundMessage| {
-                if !ingest_turns {
-                    return Vec::new();
+                let reply = out.content.clone();
+                async move {
+                    if !ingest_turns {
+                        return Ok(Vec::new());
+                    }
+                    let Some(embedder) = embedder else {
+                        return Err(clawft_types::ClawftError::CowMemory {
+                            reason: "semantic search unavailable: no embedding model is \
+                                     configured, so the turn exchange is not ingested \
+                                     (nothing is hash-embedded)"
+                                .into(),
+                        });
+                    };
+                    super::turn_checkpoint::exchange_items(
+                        embedder.as_ref(),
+                        dim,
+                        &channel,
+                        &chat_id,
+                        &user_text,
+                        &reply,
+                    )
+                    .await
                 }
-                super::turn_checkpoint::exchange_items(
-                    dim, &channel, &chat_id, &user_text, &out.content,
-                )
             };
             let mut held = None;
             // Clone the token so the checkpoint bracket's async future can
@@ -3808,6 +3836,7 @@ mod tests {
                 ingest_turns: false,
                 tool_cadence: true,
                 review: false,
+                embedder: None,
             })
             .ok();
         let rec = Arc::new(Rec::default());
@@ -3847,6 +3876,76 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(&dir).await;
     }
 
+    /// PLUMBING-ONLY embedder for the cow-memory bracket tests: equal text
+    /// gives equal vectors. Production has no hash path; recall quality is
+    /// never asserted with this.
+    #[cfg(feature = "rvf")]
+    struct CowPlumbingEmbedder(usize);
+
+    #[cfg(feature = "rvf")]
+    #[async_trait]
+    impl crate::embeddings::Embedder for CowPlumbingEmbedder {
+        async fn embed(&self, text: &str) -> std::result::Result<Vec<f32>, crate::embeddings::EmbeddingError> {
+            Ok(crate::embeddings::hash_embedder::HashEmbedder::new(self.0).compute_embedding(text))
+        }
+        fn dimension(&self) -> usize {
+            self.0
+        }
+        fn name(&self) -> &str {
+            "cow-plumbing-test-embedder"
+        }
+    }
+
+    /// The turn exchange is embedded by the attached embedder at the
+    /// lineage's dimension; an embedder of another width is refused with
+    /// nothing written (and the reply still goes out).
+    #[cfg(feature = "rvf")]
+    #[tokio::test]
+    async fn turn_exchange_uses_the_attached_embedder_and_refuses_a_mismatch() {
+        let msg = |content: &str| InboundMessage {
+            channel: "test".into(),
+            sender_id: "user1".into(),
+            chat_id: "chat1".into(),
+            content: content.into(),
+            timestamp: chrono::Utc::now(),
+            media: vec![],
+            metadata: HashMap::new(),
+        };
+        let count = |m: &Arc<std::sync::Mutex<clawft_cow_memory::BranchableMemory>>| {
+            let st = m.lock().unwrap().status();
+            st.base.total_vectors + st.working.total_vectors
+        };
+
+        for (embedder_dim, expect_written) in [(4usize, true), (8usize, false)] {
+            let transport = Arc::new(MockTransport::new("Hello from LLM!"));
+            let (agent, dir) = make_agent_loop(transport, "cow_dim").await;
+            let cow_dir = tempfile::TempDir::new().unwrap();
+            let mem = Arc::new(std::sync::Mutex::new(
+                clawft_cow_memory::BranchableMemory::create(cow_dir.path(), 4).unwrap(),
+            ));
+            agent
+                .cow_memory
+                .set(CowAttachment {
+                    mem: mem.clone(),
+                    ingest_turns: true,
+                    tool_cadence: false,
+                    review: false,
+                    embedder: Some(Arc::new(CowPlumbingEmbedder(embedder_dim))),
+                })
+                .ok();
+            let before = count(&mem);
+            let out = agent.handle_turn(msg("remember this"), &CancellationToken::new()).await;
+            assert!(out.is_ok(), "the reply must go out either way: {out:?}");
+            let written = count(&mem) - before;
+            if expect_written {
+                assert_eq!(written, 2, "user + assistant exchange written at the lineage dimension");
+            } else {
+                assert_eq!(written, 0, "an 8-d embedder on a 4-d lineage must write nothing");
+            }
+            let _ = tokio::fs::remove_dir_all(&dir).await;
+        }
+    }
+
     /// WEFT-654: review mode holds turn 1, fails turn 2 closed with
     /// ProposalPending, and accept_pending unblocks turn 3.
     #[cfg(feature = "rvf")]
@@ -3863,6 +3962,7 @@ mod tests {
                 ingest_turns: true,
                 tool_cadence: false,
                 review: true,
+                embedder: Some(Arc::new(CowPlumbingEmbedder(4))),
             })
             .ok();
 

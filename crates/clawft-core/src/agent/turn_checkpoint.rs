@@ -167,13 +167,15 @@ pub fn discard_held(
 /// `items_on_ok` produces the turn's memory writes from its successful
 /// result — called between turn-Ok and `promote()` so the writes land in
 /// the checkpointed `working` node and are therefore covered by the same
-/// promote/rollback the turn is. An empty vec skips the ingest. Ingest
-/// failure logs loudly but never fails the turn (the reply is not memory
+/// promote/rollback the turn is. It is async because embedding is. An empty
+/// vec skips the ingest. A failure to produce the items (no embedder, an
+/// embedder whose dimension differs from the lineage's, an embed error) or to
+/// ingest them logs loudly but never fails the turn (the reply is not memory
 /// infrastructure's to withhold) — the promote proceeds without the items.
 /// `review`: hold instead of promote on Ok (WEFT-654). The held turn is
 /// written into `held_out` for the caller to register; everything else
 /// (ingest, ledger checkpoint witness, Err rollback) behaves identically.
-pub(crate) async fn with_turn_checkpoint<F, Fut, T, I>(
+pub(crate) async fn with_turn_checkpoint<F, Fut, T, I, IFut>(
     mem: &Arc<Mutex<BranchableMemory>>,
     ledger: Option<&Arc<dyn TurnLedger>>,
     label: impl Into<String>,
@@ -185,7 +187,8 @@ pub(crate) async fn with_turn_checkpoint<F, Fut, T, I>(
 where
     F: FnOnce() -> Fut,
     Fut: Future<Output = clawft_types::Result<T>>,
-    I: FnOnce(&T) -> Vec<clawft_cow_memory::VectorItem>,
+    I: FnOnce(&T) -> IFut,
+    IFut: Future<Output = clawft_types::Result<Vec<clawft_cow_memory::VectorItem>>>,
 {
     let label: String = label.into();
     // `rollback(Some(id))` discards everything *newer* than `id` but keeps
@@ -244,7 +247,17 @@ where
             // checkpointed `working` node BEFORE promote, so promote carries
             // them and a (hypothetical) failure after this point would still
             // discard them with the branch — the bracket protects real data.
-            let items = items_on_ok(val);
+            let items = match items_on_ok(val).await {
+                Ok(items) => items,
+                Err(e) => {
+                    error!(
+                        error = %e,
+                        label,
+                        "turn-exchange memory write refused; the turn proceeds without the exchange"
+                    );
+                    Vec::new()
+                }
+            };
             if review {
                 // WEFT-654 review mode: ingest, then HOLD — no promote, no
                 // promote witness. The decision (accept = promote / discard
@@ -326,21 +339,34 @@ where
 
 /// Build the memory writes for one successful exchange (Phase 3 write
 /// routing): two entries — the user utterance and the assistant reply —
-/// hash-embedded at the lineage's own dimension (deterministic, model-free;
-/// the same zero-dependency default `memory_bootstrap` falls back to), each
+/// each embedded by the configured real `embedder` (document lane), each
 /// carrying its text payload and {channel, chat_id, role} tags. Two entries
 /// rather than one concatenated document so a recall hit identifies WHO said
 /// the matched text — mirroring how the kernel tier indexes user/assistant
 /// turns separately.
-pub(crate) fn exchange_items(
-    dim: u16,
+///
+/// There is no hash fallback. The lineage has ONE vector dimension, fixed
+/// when it was created (`lineage_dim`); an embedder of a different dimension
+/// is refused with an explicit [`CowMemoryError::DimensionMismatch`](clawft_cow_memory::CowMemoryError)
+/// before anything is embedded or written. Vectors are never truncated or
+/// padded, and a vector whose length disagrees with the lineage is refused
+/// too.
+pub(crate) async fn exchange_items(
+    embedder: &dyn crate::embeddings::Embedder,
+    lineage_dim: u16,
     channel: &str,
     chat_id: &str,
     user_text: &str,
     reply_text: &str,
-) -> Vec<clawft_cow_memory::VectorItem> {
+) -> clawft_types::Result<Vec<clawft_cow_memory::VectorItem>> {
     use clawft_cow_memory::VectorItem;
-    let embedder = crate::embeddings::hash_embedder::HashEmbedder::new(dim as usize);
+    let want = lineage_dim as usize;
+    if embedder.dimension() != want {
+        return Err(cow_err(clawft_cow_memory::CowMemoryError::DimensionMismatch {
+            expected: want,
+            got: embedder.dimension(),
+        }));
+    }
     let mut tags = clawft_cow_memory::VectorTags::new();
     tags.insert("channel".into(), channel.to_string());
     tags.insert("chat_id".into(), chat_id.to_string());
@@ -349,15 +375,20 @@ pub(crate) fn exchange_items(
         if text.trim().is_empty() {
             continue;
         }
+        let vector = embedder.embed(text).await.map_err(|e| ClawftError::CowMemory {
+            reason: format!("embedding the {role} text failed: {e}"),
+        })?;
+        if vector.len() != want {
+            return Err(cow_err(clawft_cow_memory::CowMemoryError::DimensionMismatch {
+                expected: want,
+                got: vector.len(),
+            }));
+        }
         let mut t = tags.clone();
         t.insert("role".into(), role.to_string());
-        items.push(
-            VectorItem::new(embedder.compute_embedding(text))
-                .with_text(text)
-                .with_tags(t),
-        );
+        items.push(VectorItem::new(vector).with_text(text).with_tags(t));
     }
-    items
+    Ok(items)
 }
 
 fn cow_err(e: clawft_cow_memory::CowMemoryError) -> ClawftError {
@@ -437,7 +468,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let mem = test_mem(&dir); // dim 4
         let items = |reply: &'static str| {
-            move |_: &String| exchange_items(4, "cli", "c1", "hello loom", reply)
+            move |_: &String| plumbing_items(4, "hello loom", reply)
         };
 
         let ok: clawft_types::Result<String> = with_turn_checkpoint(
@@ -487,9 +518,9 @@ mod tests {
         assert_eq!(before, after, "a failed turn must add nothing to memory");
     }
 
-    #[test]
-    fn exchange_items_shape() {
-        let items = exchange_items(8, "cli", "c1", "ask", "answer");
+    #[tokio::test]
+    async fn exchange_items_shape() {
+        let items = plumbing_items(8, "ask", "answer").await.expect("items");
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].tags.get("role").map(String::as_str), Some("user"));
         assert_eq!(
@@ -497,7 +528,7 @@ mod tests {
             Some("assistant")
         );
         assert!(items.iter().all(|i| i.vector.len() == 8));
-        assert_eq!(exchange_items(8, "cli", "c1", "ask", "  ").len(), 1);
+        assert_eq!(plumbing_items(8, "ask", "  ").await.expect("items").len(), 1);
     }
 
     #[tokio::test]
@@ -511,7 +542,7 @@ mod tests {
             guard.pause("test-park").expect("pause");
             assert!(guard.is_paused());
         }
-        let items = |_: &String| exchange_items(4, "cli", "c1", "wake up", "awake");
+        let items = |_: &String| plumbing_items(4, "wake up", "awake");
         let out: clawft_types::Result<String> =
             with_turn_checkpoint(&mem, None, "t-wake", || async { Ok("awake".to_string()) }, items, false, &mut None)
                 .await;
@@ -534,7 +565,7 @@ mod tests {
         let mem = test_mem(&dir);
         let concrete = Arc::new(RecordingLedger::default());
         let ledger: Arc<dyn TurnLedger> = concrete.clone();
-        let items = |_: &String| exchange_items(4, "cli", "c1", "hold me", "held reply");
+        let items = |_: &String| plumbing_items(4, "hold me", "held reply");
 
         let mut held = None;
         let out: clawft_types::Result<String> = with_turn_checkpoint(
@@ -574,7 +605,7 @@ mod tests {
         let mem = test_mem(&dir);
         let concrete = Arc::new(RecordingLedger::default());
         let ledger: Arc<dyn TurnLedger> = concrete.clone();
-        let items = |_: &String| exchange_items(4, "cli", "c1", "hold me", "unwanted");
+        let items = |_: &String| plumbing_items(4, "hold me", "unwanted");
 
         let mut held = None;
         let _: clawft_types::Result<String> = with_turn_checkpoint(
@@ -673,7 +704,7 @@ mod tests {
         let mut held = None;
         let _: clawft_types::Result<String> = with_turn_checkpoint(
             &mem, Some(&ledger), "t-disc", || async { Ok("x".to_string()) },
-            |_: &String| exchange_items(4, "cli", "c1", "q", "x"), true, &mut held,
+            |_: &String| plumbing_items(4, "q", "x"), true, &mut held,
         )
         .await;
         discard_held(&mem, Some(&ledger), held.unwrap(), "reviewer").unwrap();
@@ -689,8 +720,45 @@ mod tests {
     }
 
     /// The no-write items closure for tests that drive their own ingests.
-    fn no_items<T>(_: &T) -> Vec<clawft_cow_memory::VectorItem> {
-        Vec::new()
+    fn no_items<T>(
+        _: &T,
+    ) -> std::future::Ready<clawft_types::Result<Vec<clawft_cow_memory::VectorItem>>> {
+        std::future::ready(Ok(Vec::new()))
+    }
+
+    /// PLUMBING-ONLY test embedder: equal text gives equal vectors, nothing
+    /// more. These tests exercise the bracket and the dimension guard, never
+    /// recall quality; production has no hash path (see `exchange_items`).
+    struct PlumbingEmbedder {
+        inner: crate::embeddings::hash_embedder::HashEmbedder,
+        dim: usize,
+        /// Reported dimension, when it should disagree with the vectors.
+        claims: Option<usize>,
+    }
+    impl PlumbingEmbedder {
+        fn new(dim: usize) -> Self {
+            Self { inner: crate::embeddings::hash_embedder::HashEmbedder::new(dim), dim, claims: None }
+        }
+    }
+    #[async_trait::async_trait]
+    impl crate::embeddings::Embedder for PlumbingEmbedder {
+        async fn embed(&self, text: &str) -> Result<Vec<f32>, crate::embeddings::EmbeddingError> {
+            Ok(self.inner.compute_embedding(text))
+        }
+        fn dimension(&self) -> usize {
+            self.claims.unwrap_or(self.dim)
+        }
+        fn name(&self) -> &str {
+            "plumbing-test-embedder"
+        }
+    }
+
+    async fn plumbing_items(
+        dim: u16,
+        user: &str,
+        reply: &str,
+    ) -> clawft_types::Result<Vec<clawft_cow_memory::VectorItem>> {
+        exchange_items(&PlumbingEmbedder::new(dim as usize), dim, "cli", "c1", user, reply).await
     }
 
     fn test_mem(dir: &TempDir) -> Arc<Mutex<BranchableMemory>> {
@@ -762,5 +830,74 @@ mod tests {
         let status = guard.status();
         assert_eq!(status.dimension, 4);
         assert_eq!(status.own_checkpoint_depth, 0);
+    }
+
+    // ── Per-lineage vector dimension: refuse to mix (owner decision 2026-11-12) ──
+
+    fn total_vectors(mem: &Arc<Mutex<BranchableMemory>>) -> u64 {
+        let guard = mem.lock().unwrap();
+        let st = guard.status();
+        st.base.total_vectors + st.working.total_vectors
+    }
+
+    /// An embedder of another width than the lineage is refused with the
+    /// explicit dimension-mismatch error. Nothing is embedded, truncated or
+    /// padded, and the lineage stays as it was.
+    #[tokio::test]
+    async fn exchange_items_refuses_an_embedder_of_another_dimension() {
+        // Lineage is 4-d, embedder is 8-d (a real model is 768-d).
+        let err = exchange_items(&PlumbingEmbedder::new(8), 4, "cli", "c1", "ask", "answer")
+            .await
+            .expect_err("mixing dimensions must be refused");
+        let msg = err.to_string();
+        assert!(msg.contains("dimension mismatch: expected 4, got 8"), "{msg}");
+
+        // An embedder that CLAIMS the lineage width but returns another is
+        // refused per vector: no truncation, no padding.
+        let liar = PlumbingEmbedder { claims: Some(4), ..PlumbingEmbedder::new(8) };
+        let err = exchange_items(&liar, 4, "cli", "c1", "ask", "answer")
+            .await
+            .expect_err("a vector of the wrong length must be refused");
+        assert!(err.to_string().contains("dimension mismatch: expected 4, got 8"), "{err}");
+    }
+
+    /// Through the bracket: a turn whose exchange cannot be written because
+    /// of a dimension mismatch still returns its reply and promotes, but the
+    /// lineage gains nothing (no truncated or padded vector slipped in).
+    #[tokio::test]
+    async fn turn_with_a_mismatched_embedder_writes_nothing() {
+        let dir = TempDir::new().unwrap();
+        let mem = test_mem(&dir); // dim 4
+        let before = total_vectors(&mem);
+        let ok: clawft_types::Result<String> = with_turn_checkpoint(
+            &mem,
+            None,
+            "t-mismatch",
+            || async { Ok("reply".to_string()) },
+            |_: &String| async {
+                exchange_items(&PlumbingEmbedder::new(8), 4, "cli", "c1", "ask", "reply").await
+            },
+            false,
+            &mut None,
+        )
+        .await;
+        assert_eq!(ok.unwrap(), "reply", "the reply is not memory's to withhold");
+        assert_eq!(total_vectors(&mem), before, "a mismatched exchange must write nothing");
+    }
+
+    /// The lineage itself refuses to mix on both write and query.
+    #[test]
+    fn lineage_refuses_writes_and_queries_at_another_dimension() {
+        use clawft_cow_memory::{CowMemoryError, VectorItem};
+        let dir = TempDir::new().unwrap();
+        let mem = test_mem(&dir); // dim 4
+        let mut guard = mem.lock().unwrap();
+        let w = guard.ingest(&[VectorItem::new(vec![1.0; 8])]).expect_err("8-d write into a 4-d lineage");
+        assert!(matches!(w, CowMemoryError::DimensionMismatch { expected: 4, got: 8 }), "{w:?}");
+        let q = guard.query(&[1.0; 8], 3).expect_err("8-d query on a 4-d lineage");
+        assert!(matches!(q, CowMemoryError::DimensionMismatch { expected: 4, got: 8 }), "{q:?}");
+        // A 2-d vector is not padded up either.
+        let short = guard.ingest(&[VectorItem::new(vec![1.0; 2])]).expect_err("short write");
+        assert!(matches!(short, CowMemoryError::DimensionMismatch { expected: 4, got: 2 }), "{short:?}");
     }
 }
