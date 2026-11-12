@@ -268,9 +268,11 @@ impl DemocritusLoop {
 
     /// SENSE: drain the impulse queue up to the per-tick limit.
     fn sense(&self) -> Vec<Impulse> {
-        let mut impulses = self.impulse_queue.drain_ready();
-        impulses.truncate(self.config.max_impulses_per_tick);
-        impulses
+        // `drain_ready_limited` leaves the overflow queued for the next tick;
+        // the old `drain_ready().truncate(max)` dropped it (the same defect
+        // the Talk-Mode loop fixed, M2 D8).
+        self.impulse_queue
+            .drain_ready_limited(self.config.max_impulses_per_tick)
     }
 
     /// EMBED, submit half: hand the batch to a background task.
