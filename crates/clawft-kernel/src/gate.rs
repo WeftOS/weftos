@@ -1366,6 +1366,45 @@ mod tests {
         assert!(cm.tail(0).len() > before, "check still logs, so the test is not vacuous");
     }
 
+    /// `governance.check` (clawft-weave `governance_check_rpc`) calls
+    /// `check_detailed` with the caller-supplied `agent_id`, and the engine's
+    /// per-principal evaluation quota (WEFT-148, 256 per window) is keyed on
+    /// that id. So one caller that spends the quota naming `victim` locks the
+    /// real `victim` out. Single window, no sleeping: the default limiter is
+    /// used as shipped and every call lands well inside its window. The RPC
+    /// hands the gate nothing but `agent_id`, so "two callers" are two
+    /// sequences of the same call.
+    #[test]
+    #[ignore = "governance.check quota keyed on caller-supplied agent_id; owner call, card 9f8f872e"]
+    fn governance_check_quota_is_not_spendable_by_another_caller() {
+        let gate = GovernanceGate::new(0.5, false);
+        let ctx = serde_json::json!({});
+        let limit = crate::rate_limit::DEFAULT_GOVERNANCE_EVAL_RATE.max_per_window as usize;
+
+        // Caller A (an attacker, or a noisy peer) asks about `victim`.
+        for i in 0..=limit {
+            let v = gate
+                .check_detailed("victim", "tool.read_file", &ctx)
+                .expect("gate has an engine");
+            if i < limit {
+                assert!(
+                    matches!(v.decision, crate::governance::GovernanceDecision::Permit),
+                    "check {i} should still be within quota"
+                );
+            }
+        }
+
+        // Caller B is `victim` itself and has spent nothing.
+        let v = gate
+            .check_detailed("victim", "tool.read_file", &ctx)
+            .expect("gate has an engine");
+        assert!(
+            matches!(v.decision, crate::governance::GovernanceDecision::Permit),
+            "victim's own first check was denied by another caller's spend: {:?}",
+            v.decision
+        );
+    }
+
     #[test]
     fn gates_without_an_engine_return_no_verdict() {
         let gate = CapabilityGate::new(Arc::new(ProcessTable::new(4)));
