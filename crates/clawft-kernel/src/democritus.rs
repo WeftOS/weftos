@@ -919,6 +919,89 @@ mod tests {
         );
     }
 
+    // ── Test 7c: a slow embedder neither loses impulses nor blows the budget ──
+
+    /// Embedder that blocks like a local ONNX model does (a blocking sleep,
+    /// not an async one), delegating to the mock for the vectors.
+    struct SlowBlockingProvider {
+        inner: MockEmbeddingProvider,
+        delay: std::time::Duration,
+    }
+
+    #[async_trait::async_trait]
+    impl EmbeddingProvider for SlowBlockingProvider {
+        async fn embed(&self, text: &str) -> Result<Vec<f32>, crate::embedding::EmbeddingError> {
+            std::thread::sleep(self.delay);
+            self.inner.embed(text).await
+        }
+        async fn embed_batch(
+            &self,
+            texts: &[&str],
+        ) -> Result<Vec<Vec<f32>>, crate::embedding::EmbeddingError> {
+            std::thread::sleep(self.delay);
+            self.inner.embed_batch(texts).await
+        }
+        fn dimensions(&self) -> usize {
+            self.inner.dimensions()
+        }
+        fn model_name(&self) -> &str {
+            "slow-blocking-mock"
+        }
+    }
+
+    /// Default 15 ms tick budget, embedder that takes 200 ms. Before the
+    /// off-tick hand-off the tick ran the embedder inline, blew the budget,
+    /// returned right after EMBED and the drained impulses were gone (0 of 3
+    /// inserted). Now the tick stays within its budget and the impulses are
+    /// inserted by later ticks.
+    #[tokio::test]
+    async fn slow_embedder_keeps_tick_budget_and_loses_no_impulses() {
+        let cg = Arc::new(CausalGraph::new());
+        let vector: Arc<dyn VectorBackend> = Arc::new(HnswBackend::new(HnswServiceConfig {
+            default_dimensions: 8,
+            ..HnswServiceConfig::default()
+        }));
+        let iq = Arc::new(ImpulseQueue::new());
+        let crs = Arc::new(CrossRefStore::new());
+        let emb: Arc<dyn EmbeddingProvider> = Arc::new(SlowBlockingProvider {
+            inner: MockEmbeddingProvider::new(8),
+            delay: std::time::Duration::from_millis(200),
+        });
+        let demo = DemocritusLoop::new(
+            Arc::clone(&cg),
+            Arc::clone(&vector),
+            Arc::clone(&iq),
+            Arc::clone(&crs),
+            emb,
+            DemocritusConfig::default(), // tick_budget_us = 15_000
+        );
+
+        for i in 0..3 {
+            emit_test_impulse(&iq, ImpulseType::BeliefUpdate, i);
+        }
+
+        let first = demo.tick().await;
+        assert_eq!(first.impulses_sensed, 3);
+        assert!(
+            first.duration_us < 100_000,
+            "a 200 ms embedder must not hold the 15 ms tick: tick took {} us",
+            first.duration_us
+        );
+        assert!(first.budget_exceeded, "the tick could not finish within its budget");
+
+        // Later ticks collect the finished embeddings and apply them.
+        for _ in 0..100 {
+            if vector.len() == 3 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            let t = demo.tick().await;
+            assert!(t.duration_us < 100_000, "tick took {} us", t.duration_us);
+        }
+        assert_eq!(vector.len(), 3, "every drained impulse must reach the vector index");
+        assert_eq!(cg.node_count(), 3);
+    }
+
     // ── Test 8: Causal edge type selection ──
 
     #[tokio::test]
