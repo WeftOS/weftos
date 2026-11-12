@@ -108,6 +108,9 @@ impl Tokens {
 
         v.selection.bg_fill = self.accent_dim;
         v.selection.stroke = egui::Stroke::new(1.0, self.accent);
+        // Text caret in the accent colour (owner decision 2026-11-12); egui's
+        // width is kept, only the stock #c0deff colour is replaced.
+        v.text_cursor.stroke.color = self.accent;
 
         // Widget state tints
         let wv = &mut v.widgets;
@@ -313,6 +316,7 @@ mod apply_contract {
             "override_text_color"
         );
         assert_eq!(got.panel_fill, t.bg_panel, "panel_fill");
+        assert_eq!(got.text_cursor.stroke.color, t.accent, "text_cursor colour");
         // Whole struct.
         assert_eq!(
             got,
