@@ -94,6 +94,9 @@ pub struct DemocritusTickResult {
 /// One batch of impulses with their embeddings (empty vectors on failure).
 type EmbeddedBatch = (Vec<Impulse>, Vec<Vec<f32>>);
 
+/// An impulse with its embedding and the SEARCH neighbours `(node id, score)`.
+type SearchedImpulse = (Impulse, Vec<f32>, Vec<(String, f32)>);
+
 /// The DEMOCRITUS continuous cognitive loop.
 ///
 /// Runs every CognitiveTick cycle: Sense -> Embed -> Search -> Update -> Commit.
@@ -214,7 +217,7 @@ impl DemocritusLoop {
         // Neighbor keys are causal node id strings (see update()); scores
         // are cosine similarity recovered from backend distance so that
         // correlation_threshold stays calibrated for the HNSW default.
-        let mut searched: Vec<(Impulse, Vec<f32>, Vec<(String, f32)>)> =
+        let mut searched: Vec<SearchedImpulse> =
             Vec::with_capacity(work.len());
         let mut deferred: VecDeque<(Impulse, Vec<f32>)> = VecDeque::new();
         for (impulse, embedding) in work.drain(..) {
