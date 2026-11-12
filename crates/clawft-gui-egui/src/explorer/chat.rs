@@ -1080,7 +1080,7 @@ fn paint_conversation_sidebar(ui: &mut egui::Ui, panel: &mut ChatPanel) {
         egui::RichText::new("Conversations")
             .small()
             .strong()
-            .color(egui::Color32::from_rgb(180, 180, 190)),
+            .color(crate::theming::palette::CG_EDGE_DEFAULT),
     );
     ui.add_space(4.0);
 
@@ -1090,7 +1090,7 @@ fn paint_conversation_sidebar(ui: &mut egui::Ui, panel: &mut ChatPanel) {
             egui::Button::new(
                 egui::RichText::new("+ New conversation")
                     .small()
-                    .color(egui::Color32::from_rgb(200, 220, 240)),
+                    .color(crate::theming::palette::TEXT_ACTION_BLUE),
             ),
         )
         .clicked()
@@ -1134,14 +1134,14 @@ fn paint_conversation_sidebar(ui: &mut egui::Ui, panel: &mut ChatPanel) {
                 let inflight = session.view.is_in_flight();
 
                 let fill = if selected {
-                    egui::Color32::from_rgb(40, 55, 75)
+                    crate::theming::palette::ROW_SELECTED_FILL
                 } else {
-                    egui::Color32::from_rgb(28, 28, 34)
+                    crate::theming::palette::ROW_IDLE_FILL
                 };
                 let stroke = if selected {
-                    egui::Stroke::new(1.0, egui::Color32::from_rgb(90, 140, 200))
+                    egui::Stroke::new(1.0, crate::theming::palette::ROW_SELECTED_STROKE)
                 } else {
-                    egui::Stroke::new(1.0, egui::Color32::from_rgb(50, 50, 58))
+                    egui::Stroke::new(1.0, crate::theming::palette::ROW_IDLE_STROKE)
                 };
 
                 let frame = egui::Frame::new()
@@ -1158,13 +1158,13 @@ fn paint_conversation_sidebar(ui: &mut egui::Ui, panel: &mut ChatPanel) {
                                 ui.label(
                                     egui::RichText::new("●")
                                         .small()
-                                        .color(egui::Color32::from_rgb(100, 190, 230)),
+                                        .color(crate::theming::palette::TEXT_LIVE_DOT),
                                 );
                             } else if selected {
                                 ui.label(
                                     egui::RichText::new("▸")
                                         .small()
-                                        .color(egui::Color32::from_rgb(160, 190, 230)),
+                                        .color(crate::theming::palette::TEXT_SELECTED_MARK),
                                 );
                             } else {
                                 ui.label(
@@ -1179,9 +1179,9 @@ fn paint_conversation_sidebar(ui: &mut egui::Ui, panel: &mut ChatPanel) {
                                     .monospace()
                                     .strong()
                                     .color(if selected {
-                                        egui::Color32::from_rgb(220, 230, 245)
+                                        crate::theming::palette::ROW_SELECTED_TEXT
                                     } else {
-                                        egui::Color32::from_rgb(170, 175, 185)
+                                        crate::theming::palette::ROW_IDLE_TEXT
                                     }),
                             );
                         });
@@ -1189,12 +1189,12 @@ fn paint_conversation_sidebar(ui: &mut egui::Ui, panel: &mut ChatPanel) {
                             egui::RichText::new(&age)
                                 .small()
                                 .italics()
-                                .color(egui::Color32::from_rgb(130, 140, 150)),
+                                .color(crate::theming::palette::TEXT_META_FAINT),
                         );
                         ui.label(
                             egui::RichText::new(&snippet)
                                 .small()
-                                .color(egui::Color32::from_rgb(150, 155, 165)),
+                                .color(crate::theming::palette::TEXT_SNIPPET),
                         );
                     })
                     .response
@@ -1228,7 +1228,7 @@ fn paint_active_conversation(
         ui.label(
             egui::RichText::new("parallel agents")
                 .small()
-                .color(egui::Color32::from_rgb(140, 170, 210)),
+                .color(crate::theming::palette::TEXT_SECTION_BLUE),
         );
         let _ = ThreadDock::new("chat.thread_dock", &mut panel.thread_dock)
             .min_height(140.0)
@@ -1267,7 +1267,7 @@ fn paint_active_conversation(
 
     ui.label(
         egui::RichText::new(format!("chat · {model}"))
-            .color(egui::Color32::from_rgb(160, 160, 170))
+            .color(crate::theming::palette::TEXT_SUBTLE)
             .small(),
     );
     ui.add_space(2.0);
@@ -1277,7 +1277,7 @@ fn paint_active_conversation(
             egui::RichText::new(format!("· {session_id_label}"))
                 .small()
                 .monospace()
-                .color(egui::Color32::from_rgb(130, 140, 155)),
+                .color(crate::theming::palette::TEXT_SESSION_ID),
         );
     });
     ui.add_space(4.0);
@@ -1364,7 +1364,7 @@ fn paint_active_conversation(
         egui::RichText::new(format!("path: {path}"))
             .small()
             .monospace()
-            .color(egui::Color32::from_rgb(140, 140, 150)),
+            .color(crate::theming::palette::TEXT_LABEL_FAINT),
     );
 }
 
@@ -1377,7 +1377,7 @@ fn paint_history(ui: &mut egui::Ui, view: &mut ChatView) {
             ui.label(
                 egui::RichText::new("(no messages yet — type below to start)")
                     .italics()
-                    .color(egui::Color32::from_rgb(160, 160, 170)),
+                    .color(crate::theming::palette::TEXT_SUBTLE),
             );
         });
         return;
@@ -1407,7 +1407,7 @@ fn paint_history(ui: &mut egui::Ui, view: &mut ChatView) {
         ui.label(
             egui::RichText::new("▍")
                 .small()
-                .color(egui::Color32::from_rgb(120, 180, 200)),
+                .color(crate::theming::palette::TEXT_CURSOR),
         );
     }
 }
@@ -1490,7 +1490,7 @@ fn paint_model_chip_strip(ui: &mut egui::Ui, view: &mut ChatView) {
         ui.label(
             egui::RichText::new("model")
                 .small()
-                .color(egui::Color32::from_rgb(140, 140, 150)),
+                .color(crate::theming::palette::TEXT_LABEL_FAINT),
         );
         for chip in &chips {
             let selected = view.selected_model.as_deref() == Some(chip.id.as_str());
@@ -1500,19 +1500,19 @@ fn paint_model_chip_strip(ui: &mut egui::Ui, view: &mut ChatView) {
                 format!("{} · {}", chip.provider, chip.label)
             };
             let fill = if selected {
-                egui::Color32::from_rgb(55, 90, 130)
+                crate::theming::palette::CHIP_ON_FILL
             } else {
-                egui::Color32::from_rgb(40, 42, 50)
+                crate::theming::palette::CHIP_OFF_FILL
             };
             let stroke = if selected {
-                egui::Stroke::new(1.0, egui::Color32::from_rgb(120, 170, 220))
+                egui::Stroke::new(1.0, crate::theming::palette::CHIP_ON_STROKE)
             } else {
-                egui::Stroke::new(1.0, egui::Color32::from_rgb(70, 72, 80))
+                egui::Stroke::new(1.0, crate::theming::palette::CHIP_OFF_STROKE)
             };
             let text_color = if selected {
-                egui::Color32::from_rgb(230, 235, 245)
+                crate::theming::palette::CHIP_ON_TEXT
             } else {
-                egui::Color32::from_rgb(180, 185, 195)
+                crate::theming::palette::CHIP_OFF_TEXT
             };
             // Allocate a clickable chip rect, then paint into it.
             let font = egui::FontId::proportional(11.0);
@@ -1549,13 +1549,13 @@ fn paint_model_chip_strip(ui: &mut egui::Ui, view: &mut ChatView) {
                 egui::RichText::new("loading…")
                     .small()
                     .italics()
-                    .color(egui::Color32::from_rgb(140, 150, 160)),
+                    .color(crate::theming::palette::TEXT_HINT_FAINT),
             );
         } else if let Some(err) = view.models_error.as_deref() {
             ui.label(
                 egui::RichText::new(format!("catalog: {err}"))
                     .small()
-                    .color(egui::Color32::from_rgb(180, 140, 120)),
+                    .color(crate::theming::palette::TEXT_WARN_MUTED),
             )
             .on_hover_text("llm.models probe failed; using last known / sentinel catalog");
         }
@@ -1576,7 +1576,7 @@ fn paint_system_editor(ui: &mut egui::Ui, view: &mut ChatView, id_salt: &str) {
     egui::CollapsingHeader::new(
         egui::RichText::new("system prompt (optional)")
             .small()
-            .color(egui::Color32::from_rgb(170, 170, 180)),
+            .color(crate::theming::palette::TEXT_DISCLOSURE),
     )
     .id_salt(format!("chat-system-prompt-{id_salt}"))
     .default_open(view.system_expanded)
@@ -1608,7 +1608,7 @@ fn paint_identity_warning(ui: &mut egui::Ui, view: &ChatView) {
         return;
     };
     egui::Frame::new()
-        .fill(egui::Color32::from_rgb(70, 50, 20))
+        .fill(crate::theming::palette::DRIFT_BANNER_FILL)
         .inner_margin(egui::Margin::symmetric(8, 4))
         .corner_radius(4.0)
         .show(ui, |ui| {
@@ -1616,13 +1616,13 @@ fn paint_identity_warning(ui: &mut egui::Ui, view: &ChatView) {
                 ui.label(
                     egui::RichText::new("identity drift")
                         .strong()
-                        .color(egui::Color32::from_rgb(240, 200, 140)),
+                        .color(crate::theming::palette::DRIFT_TITLE),
                 );
                 ui.label(
                     egui::RichText::new(format!("source = `{source}`"))
                         .monospace()
                         .small()
-                        .color(egui::Color32::from_rgb(230, 220, 200)),
+                        .color(crate::theming::palette::DRIFT_SOURCE),
                 );
             });
             ui.label(
@@ -1632,7 +1632,7 @@ fn paint_identity_warning(ui: &mut egui::Ui, view: &ChatView) {
                      daemon logs and `IDENTITY.md`.",
                 )
                 .small()
-                .color(egui::Color32::from_rgb(220, 210, 190)),
+                .color(crate::theming::palette::DRIFT_BODY),
             );
         });
     ui.add_space(4.0);
@@ -1695,28 +1695,28 @@ fn paint_heartbeat(ui: &mut egui::Ui, view: &ChatView, live: &Arc<Live>) {
         // band per second so a stalled paint loop becomes visible.
         let t = (live::now_ms() / 1000.0).fract() as f32;
         let pulse = 120 + ((1.0 - t) * 80.0) as u8;
-        let dot_color = egui::Color32::from_rgb(80, pulse, 200);
+        let dot_color = crate::theming::palette::heartbeat_dot(pulse);
         let (rect, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
         ui.painter().circle_filled(rect.center(), 4.0, dot_color);
 
         ui.label(
             egui::RichText::new(format!("status: {status_word}"))
                 .small()
-                .color(egui::Color32::from_rgb(180, 200, 220)),
+                .color(crate::theming::palette::TEXT_STATUS),
         );
         if !age_label.is_empty() {
             ui.label(
                 egui::RichText::new(format!("({age_label})"))
                     .small()
                     .italics()
-                    .color(egui::Color32::from_rgb(140, 150, 160)),
+                    .color(crate::theming::palette::TEXT_HINT_FAINT),
             );
         }
         ui.label(
             egui::RichText::new(progress_hint)
                 .small()
                 .italics()
-                .color(egui::Color32::from_rgb(150, 160, 170)),
+                .color(crate::theming::palette::TEXT_PROGRESS),
         );
     });
     // Request a repaint at the stream-poll cadence so the typewriter
@@ -1745,20 +1745,20 @@ fn paint_bubble(ui: &mut egui::Ui, msg: &ChatMessage, md_cache: &mut CommonMarkC
                 egui::RichText::new(format!("[system] {}", msg.content))
                     .italics()
                     .small()
-                    .color(egui::Color32::from_rgb(150, 150, 160)),
+                    .color(crate::theming::palette::TEXT_SYSTEM_MSG),
             );
             ui.add_space(2.0);
         }
         "user" => {
             ui.with_layout(egui::Layout::top_down(egui::Align::RIGHT), |ui| {
                 egui::Frame::new()
-                    .fill(egui::Color32::from_rgb(50, 60, 80))
+                    .fill(crate::theming::palette::BUBBLE_USER_FILL)
                     .inner_margin(egui::Margin::symmetric(8, 4))
                     .corner_radius(6.0)
                     .show(ui, |ui| {
                         ui.label(
                             egui::RichText::new(&msg.content)
-                                .color(egui::Color32::from_rgb(225, 230, 240)),
+                                .color(crate::theming::palette::BUBBLE_USER_TEXT),
                         );
                     });
             });
@@ -1767,7 +1767,7 @@ fn paint_bubble(ui: &mut egui::Ui, msg: &ChatMessage, md_cache: &mut CommonMarkC
         "assistant" => {
             ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
                 egui::Frame::new()
-                    .fill(egui::Color32::from_rgb(40, 50, 50))
+                    .fill(crate::theming::palette::BUBBLE_ASSISTANT_FILL)
                     .inner_margin(egui::Margin::symmetric(8, 4))
                     .corner_radius(6.0)
                     .show(ui, |ui| {
@@ -1788,14 +1788,14 @@ fn paint_bubble(ui: &mut egui::Ui, msg: &ChatMessage, md_cache: &mut CommonMarkC
         "error" => {
             ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
                 egui::Frame::new()
-                    .fill(egui::Color32::from_rgb(70, 30, 30))
+                    .fill(crate::theming::palette::BUBBLE_ERROR_FILL)
                     .inner_margin(egui::Margin::symmetric(8, 4))
                     .corner_radius(6.0)
                     .show(ui, |ui| {
                         ui.label(
                             egui::RichText::new(format!("error: {}", msg.content))
                                 .strong()
-                                .color(egui::Color32::from_rgb(240, 170, 170)),
+                                .color(crate::theming::palette::BUBBLE_ERROR_TEXT),
                         );
                     });
             });

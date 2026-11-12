@@ -142,7 +142,7 @@ fn paint_toolbar(ui: &mut egui::Ui, session: &mut EditSession, value: &Value) {
                 session.doc.edges.len(),
                 if session.doc.dirty { " · dirty" } else { "" }
             ))
-            .color(egui::Color32::from_rgb(160, 160, 170))
+            .color(crate::theming::palette::TEXT_SUBTLE)
             .small(),
         );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -152,7 +152,7 @@ fn paint_toolbar(ui: &mut egui::Ui, session: &mut EditSession, value: &Value) {
                     GraphEditBackend::EguiNodeGraph => "backend: egui_node_graph",
                 })
                 .small()
-                .color(egui::Color32::from_rgb(100, 110, 130)),
+                .color(crate::theming::palette::GRAPH_EDIT_HINT),
             );
         });
     });
@@ -200,7 +200,7 @@ fn paint_toolbar(ui: &mut egui::Ui, session: &mut EditSession, value: &Value) {
         ui.label(
             egui::RichText::new(hint)
                 .small()
-                .color(egui::Color32::from_rgb(180, 200, 120)),
+                .color(crate::theming::palette::GRAPH_EDIT_STATUS_OK),
         );
     }
 }
@@ -214,7 +214,7 @@ fn paint_inspector(ui: &mut egui::Ui, session: &mut EditSession) {
             egui::RichText::new("no selection")
                 .italics()
                 .small()
-                .color(egui::Color32::from_rgb(140, 140, 150)),
+                .color(crate::theming::palette::TEXT_LABEL_FAINT),
         );
         return;
     };
@@ -223,7 +223,7 @@ fn paint_inspector(ui: &mut egui::Ui, session: &mut EditSession) {
         egui::RichText::new(format!("id · {sel}"))
             .small()
             .monospace()
-            .color(egui::Color32::from_rgb(160, 160, 170)),
+            .color(crate::theming::palette::TEXT_SUBTLE),
     );
 
     ui.horizontal(|ui| {
@@ -291,7 +291,7 @@ fn paint_canvas(ui: &mut egui::Ui, path: &str, session: &mut EditSession) {
     if session.doc.nodes.is_empty() {
         ui.label(
             egui::RichText::new("graph: no nodes — use + Node")
-                .color(egui::Color32::from_rgb(160, 160, 170))
+                .color(crate::theming::palette::TEXT_SUBTLE)
                 .italics(),
         );
         return;
@@ -302,7 +302,7 @@ fn paint_canvas(ui: &mut egui::Ui, path: &str, session: &mut EditSession) {
     let (rect, resp) = ui.allocate_exact_size(desired, egui::Sense::click_and_drag());
     let painter = ui.painter_at(rect);
 
-    painter.rect_filled(rect, 3.0, egui::Color32::from_rgb(20, 20, 28));
+    painter.rect_filled(rect, 3.0, crate::theming::palette::GRAPH_EDIT_CANVAS_BG);
 
     let mut positions = layout_session(&session.doc, rect);
 
@@ -457,7 +457,7 @@ fn hit_test(
 
 fn draw_edge(painter: &egui::Painter, src: egui::Pos2, tgt: egui::Pos2) {
     let mid = egui::pos2((src.x + tgt.x) * 0.5, (src.y + tgt.y) * 0.5);
-    let stroke = egui::Stroke::new(1.5, egui::Color32::from_rgb(110, 120, 140));
+    let stroke = egui::Stroke::new(1.5, crate::theming::palette::GRAPH_EDIT_EDGE);
     painter.line_segment([src, mid], stroke);
     painter.line_segment([mid, tgt], stroke);
     let dir = (tgt - src).normalized();
@@ -483,11 +483,11 @@ fn draw_node(
     let rect = egui::Rect::from_center_size(pos, egui::vec2(NODE_RADIUS * 2.0, NODE_RADIUS * 1.4));
     painter.rect_filled(rect, 4.0, fill);
     let stroke_color = if selected {
-        egui::Color32::from_rgb(255, 210, 90)
+        crate::theming::palette::GRAPH_EDIT_NODE_SELECTED
     } else if connect_src {
-        egui::Color32::from_rgb(120, 220, 140)
+        crate::theming::palette::GRAPH_EDIT_NODE_CONNECT_SRC
     } else {
-        egui::Color32::from_rgb(200, 200, 215)
+        crate::theming::palette::GRAPH_EDIT_NODE_OUTLINE
     };
     let stroke_w = if selected || connect_src { 2.0 } else { 1.0 };
     painter.rect_stroke(
@@ -501,13 +501,13 @@ fn draw_node(
         egui::Align2::CENTER_CENTER,
         truncate(&node.label, 10),
         egui::FontId::monospace(10.0),
-        egui::Color32::from_rgb(235, 235, 240),
+        crate::theming::palette::GRAPH_EDIT_NODE_LABEL,
     );
 }
 
 fn kind_color(kind: Option<&str>) -> egui::Color32 {
     match kind {
-        None => egui::Color32::from_rgb(60, 70, 100),
+        None => crate::theming::palette::GRAPH_EDIT_KIND_NONE,
         Some(k) => {
             let h: u32 = k.bytes().fold(2166136261u32, |acc, b| {
                 acc.wrapping_mul(16777619).wrapping_add(b as u32)
@@ -515,7 +515,7 @@ fn kind_color(kind: Option<&str>) -> egui::Color32 {
             let r = 60 + ((h & 0x3F) as u8);
             let g = 70 + (((h >> 6) & 0x3F) as u8);
             let b = 100 + (((h >> 12) & 0x3F) as u8);
-            egui::Color32::from_rgb(r, g, b)
+            crate::theming::palette::data_rgb(r, g, b)
         }
     }
 }

@@ -142,7 +142,7 @@ impl Terminal {
 
         if let Some(err) = &self.last_error {
             ui.colored_label(
-                egui::Color32::from_rgb(220, 120, 120),
+                crate::theming::palette::TERM_ERROR_TEXT,
                 format!("error: {err}"),
             );
             ui.separator();
@@ -677,14 +677,14 @@ fn paint_tab_strip(ui: &mut egui::Ui, panel: &mut TerminalPanel, live: &Arc<Live
             let selected = key == &active;
             let label = tab_label(panel.sessions.get(key));
             let fill = if selected {
-                egui::Color32::from_rgb(40, 55, 75)
+                crate::theming::palette::ROW_SELECTED_FILL
             } else {
-                egui::Color32::from_rgb(28, 28, 34)
+                crate::theming::palette::ROW_IDLE_FILL
             };
             let stroke = if selected {
-                egui::Stroke::new(1.0, egui::Color32::from_rgb(90, 140, 200))
+                egui::Stroke::new(1.0, crate::theming::palette::ROW_SELECTED_STROKE)
             } else {
-                egui::Stroke::new(1.0, egui::Color32::from_rgb(50, 50, 58))
+                egui::Stroke::new(1.0, crate::theming::palette::ROW_IDLE_STROKE)
             };
             let frame = egui::Frame::new()
                 .fill(fill)
@@ -702,9 +702,9 @@ fn paint_tab_strip(ui: &mut egui::Ui, panel: &mut TerminalPanel, live: &Arc<Live
                                     .monospace()
                                     .strong()
                                     .color(if selected {
-                                        egui::Color32::from_rgb(220, 230, 245)
+                                        crate::theming::palette::ROW_SELECTED_TEXT
                                     } else {
-                                        egui::Color32::from_rgb(170, 175, 185)
+                                        crate::theming::palette::ROW_IDLE_TEXT
                                     }),
                             )
                             .sense(egui::Sense::click()),
@@ -718,7 +718,7 @@ fn paint_tab_strip(ui: &mut egui::Ui, panel: &mut TerminalPanel, live: &Arc<Live
                             egui::Label::new(
                                 egui::RichText::new("×")
                                     .small()
-                                    .color(egui::Color32::from_rgb(160, 120, 120)),
+                                    .color(crate::theming::palette::TERM_EXIT_TEXT),
                             )
                             .sense(egui::Sense::click()),
                         )
@@ -736,7 +736,7 @@ fn paint_tab_strip(ui: &mut egui::Ui, panel: &mut TerminalPanel, live: &Arc<Live
                     egui::RichText::new("+")
                         .small()
                         .strong()
-                        .color(egui::Color32::from_rgb(140, 200, 160)),
+                        .color(crate::theming::palette::TERM_OK_HINT),
                 )
                 .frame(false),
             )
@@ -941,7 +941,7 @@ fn paint_selection(
     };
     let (start, end) = normalize_range(a, b);
     let (rows, cols) = size;
-    let overlay = egui::Color32::from_rgba_unmultiplied(120, 160, 220, 80);
+    let overlay = crate::theming::palette::TERM_SELECTION_OVERLAY;
 
     for row in start.row..=end.row {
         if row >= rows {
@@ -1049,7 +1049,7 @@ fn paint_header(ui: &mut egui::Ui, shell: &Option<String>, session_id: &Option<S
                     egui::RichText::new(format!("{shell}  ·  {id}"))
                         .monospace()
                         .small()
-                        .color(egui::Color32::from_rgb(150, 170, 200)),
+                        .color(crate::theming::palette::TERM_LABEL),
                 );
             }
             (Some(id), None) => {
@@ -1057,7 +1057,7 @@ fn paint_header(ui: &mut egui::Ui, shell: &Option<String>, session_id: &Option<S
                     egui::RichText::new(id)
                         .monospace()
                         .small()
-                        .color(egui::Color32::from_rgb(150, 170, 200)),
+                        .color(crate::theming::palette::TERM_LABEL),
                 );
             }
             (None, _) => {
@@ -1065,7 +1065,7 @@ fn paint_header(ui: &mut egui::Ui, shell: &Option<String>, session_id: &Option<S
                     egui::RichText::new("starting…")
                         .italics()
                         .small()
-                        .color(egui::Color32::from_rgb(170, 170, 180)),
+                        .color(crate::theming::palette::TEXT_DISCLOSURE),
                 );
             }
         }
@@ -1172,7 +1172,7 @@ fn color_for_fg(c: vt100::Color) -> egui::Color32 {
     match c {
         vt100::Color::Default => named_color_fg(),
         vt100::Color::Idx(i) => indexed_color(i),
-        vt100::Color::Rgb(r, g, b) => egui::Color32::from_rgb(r, g, b),
+        vt100::Color::Rgb(r, g, b) => crate::theming::palette::data_rgb(r, g, b),
     }
 }
 
@@ -1180,61 +1180,20 @@ fn color_for_bg(c: vt100::Color) -> egui::Color32 {
     match c {
         vt100::Color::Default => named_color_bg(),
         vt100::Color::Idx(i) => indexed_color(i),
-        vt100::Color::Rgb(r, g, b) => egui::Color32::from_rgb(r, g, b),
+        vt100::Color::Rgb(r, g, b) => crate::theming::palette::data_rgb(r, g, b),
     }
 }
 
 fn named_color_fg() -> egui::Color32 {
-    egui::Color32::from_rgb(220, 220, 225)
+    crate::theming::ansi::DEFAULT_FG
 }
 
 fn named_color_bg() -> egui::Color32 {
-    egui::Color32::from_rgb(12, 12, 16)
+    crate::theming::ansi::DEFAULT_BG
 }
 
 fn indexed_color(i: u8) -> egui::Color32 {
-    if i < 16 {
-        return ansi_16(i);
-    }
-    if i < 232 {
-        let i = i - 16;
-        let r = i / 36;
-        let g = (i / 6) % 6;
-        let b = i % 6;
-        let conv = |v: u8| -> u8 {
-            if v == 0 {
-                0
-            } else {
-                55 + v * 40
-            }
-        };
-        return egui::Color32::from_rgb(conv(r), conv(g), conv(b));
-    }
-    let v = 8 + (i - 232) * 10;
-    egui::Color32::from_rgb(v, v, v)
-}
-
-fn ansi_16(i: u8) -> egui::Color32 {
-    // Solarized-dark-ish, matches native palette.
-    match i {
-        0 => egui::Color32::from_rgb(7, 54, 66),
-        1 => egui::Color32::from_rgb(220, 50, 47),
-        2 => egui::Color32::from_rgb(133, 153, 0),
-        3 => egui::Color32::from_rgb(181, 137, 0),
-        4 => egui::Color32::from_rgb(38, 139, 210),
-        5 => egui::Color32::from_rgb(211, 54, 130),
-        6 => egui::Color32::from_rgb(42, 161, 152),
-        7 => egui::Color32::from_rgb(238, 232, 213),
-        8 => egui::Color32::from_rgb(88, 110, 117),
-        9 => egui::Color32::from_rgb(255, 90, 87),
-        10 => egui::Color32::from_rgb(180, 200, 0),
-        11 => egui::Color32::from_rgb(220, 180, 30),
-        12 => egui::Color32::from_rgb(100, 180, 240),
-        13 => egui::Color32::from_rgb(240, 90, 170),
-        14 => egui::Color32::from_rgb(80, 200, 190),
-        15 => egui::Color32::from_rgb(253, 246, 227),
-        _ => named_color_fg(),
-    }
+    crate::theming::ansi::indexed(i)
 }
 
 // ── Unit tests (host + wasm) ────────────────────────────────────────
@@ -1472,13 +1431,11 @@ mod tests {
     }
 
     #[test]
-    fn indexed_color_cube_and_gray() {
-        // Index 16 = black cube corner
-        assert_eq!(indexed_color(16), egui::Color32::from_rgb(0, 0, 0));
-        // Index 232 = first gray
-        assert_eq!(indexed_color(232), egui::Color32::from_rgb(8, 8, 8));
-        // Named red
-        assert_eq!(indexed_color(1), egui::Color32::from_rgb(220, 50, 47));
+    fn indexed_color_delegates_to_theming_ansi() {
+        // Values are pinned in `theming::palette_contract`.
+        for i in [0u8, 1, 15, 16, 196, 232, 255] {
+            assert_eq!(indexed_color(i), crate::theming::ansi::indexed(i));
+        }
     }
 
     #[test]

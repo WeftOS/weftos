@@ -85,7 +85,7 @@ impl Tokens {
         v.panel_fill = self.bg_panel;
         v.extreme_bg_color = self.bg_app;
         v.faint_bg_color = self.bg_app;
-        v.code_bg_color = egui::Color32::from_rgb(12, 12, 16);
+        v.code_bg_color = ansi::DEFAULT_BG;
 
         v.window_stroke = egui::Stroke::new(1.0, self.stroke_soft);
         // egui 0.34 renamed `*_rounding` → `*_corner_radius` and switched
@@ -174,6 +174,213 @@ impl Tokens {
         }
 
         s
+    }
+}
+
+/// Named colour palette for explorer / chat / graph surfaces.
+///
+/// Every value here is the exact RGBA that used to be a raw
+/// `Color32::from_rgb` literal at its call site (WEFT design-drift
+/// token pass, 2026-11-11); rendered colours are unchanged. Each entry
+/// is pinned by `palette_matches_legacy_literals` below. Where a role
+/// is later folded into a [`Tokens`] field, change it here once.
+pub mod palette {
+    use eframe::egui::Color32;
+    /// Selected list-row / tab fill.
+    pub const ROW_SELECTED_FILL: Color32 = Color32::from_rgb(40, 55, 75);
+    /// Idle list-row / tab fill.
+    pub const ROW_IDLE_FILL: Color32 = Color32::from_rgb(28, 28, 34);
+    /// Selected list-row / tab outline.
+    pub const ROW_SELECTED_STROKE: Color32 = Color32::from_rgb(90, 140, 200);
+    /// Idle list-row / tab outline.
+    pub const ROW_IDLE_STROKE: Color32 = Color32::from_rgb(50, 50, 58);
+    /// Selected list-row / tab text.
+    pub const ROW_SELECTED_TEXT: Color32 = Color32::from_rgb(220, 230, 245);
+    /// Idle list-row / tab text.
+    pub const ROW_IDLE_TEXT: Color32 = Color32::from_rgb(170, 175, 185);
+    /// Toggle chip fill, on.
+    pub const CHIP_ON_FILL: Color32 = Color32::from_rgb(55, 90, 130);
+    /// Toggle chip fill, off.
+    pub const CHIP_OFF_FILL: Color32 = Color32::from_rgb(40, 42, 50);
+    /// Toggle chip outline, on.
+    pub const CHIP_ON_STROKE: Color32 = Color32::from_rgb(120, 170, 220);
+    /// Toggle chip outline, off.
+    pub const CHIP_OFF_STROKE: Color32 = Color32::from_rgb(70, 72, 80);
+    /// Toggle chip text, on.
+    pub const CHIP_ON_TEXT: Color32 = Color32::from_rgb(230, 235, 245);
+    /// Toggle chip text, off.
+    pub const CHIP_OFF_TEXT: Color32 = Color32::from_rgb(180, 185, 195);
+    /// Muted small section heading.
+    pub const TEXT_HEADING_MUTED: Color32 = Color32::from_rgb(180, 180, 190);
+    /// Primary small action label (cool tint).
+    pub const TEXT_ACTION_BLUE: Color32 = Color32::from_rgb(200, 220, 240);
+    /// Live-conversation marker dot.
+    pub const TEXT_LIVE_DOT: Color32 = Color32::from_rgb(100, 190, 230);
+    /// Selected-conversation marker.
+    pub const TEXT_SELECTED_MARK: Color32 = Color32::from_rgb(160, 190, 230);
+    /// Faint metadata (age, timestamps).
+    pub const TEXT_META_FAINT: Color32 = Color32::from_rgb(130, 140, 150);
+    /// Conversation snippet text.
+    pub const TEXT_SNIPPET: Color32 = Color32::from_rgb(150, 155, 165);
+    /// Cool-tinted section label.
+    pub const TEXT_SECTION_BLUE: Color32 = Color32::from_rgb(140, 170, 210);
+    /// Subtle body / title text.
+    pub const TEXT_SUBTLE: Color32 = Color32::from_rgb(160, 160, 170);
+    /// Monospace session-id label.
+    pub const TEXT_SESSION_ID: Color32 = Color32::from_rgb(130, 140, 155);
+    /// Faint field label.
+    pub const TEXT_LABEL_FAINT: Color32 = Color32::from_rgb(140, 140, 150);
+    /// Streaming cursor glyph.
+    pub const TEXT_CURSOR: Color32 = Color32::from_rgb(120, 180, 200);
+    /// Faint italic hint (loading, age).
+    pub const TEXT_HINT_FAINT: Color32 = Color32::from_rgb(140, 150, 160);
+    /// Muted warm warning text.
+    pub const TEXT_WARN_MUTED: Color32 = Color32::from_rgb(180, 140, 120);
+    /// Collapsing-header label.
+    pub const TEXT_DISCLOSURE: Color32 = Color32::from_rgb(170, 170, 180);
+    /// Status line text.
+    pub const TEXT_STATUS: Color32 = Color32::from_rgb(180, 200, 220);
+    /// Progress hint text.
+    pub const TEXT_PROGRESS: Color32 = Color32::from_rgb(150, 160, 170);
+    /// System-message text.
+    pub const TEXT_SYSTEM_MSG: Color32 = Color32::from_rgb(150, 150, 160);
+    /// Identity-drift banner fill.
+    pub const DRIFT_BANNER_FILL: Color32 = Color32::from_rgb(70, 50, 20);
+    /// Identity-drift banner title.
+    pub const DRIFT_TITLE: Color32 = Color32::from_rgb(240, 200, 140);
+    /// Identity-drift banner source line.
+    pub const DRIFT_SOURCE: Color32 = Color32::from_rgb(230, 220, 200);
+    /// Identity-drift banner body.
+    pub const DRIFT_BODY: Color32 = Color32::from_rgb(220, 210, 190);
+    /// User chat bubble fill.
+    pub const BUBBLE_USER_FILL: Color32 = Color32::from_rgb(50, 60, 80);
+    /// User chat bubble text.
+    pub const BUBBLE_USER_TEXT: Color32 = Color32::from_rgb(225, 230, 240);
+    /// Assistant chat bubble fill.
+    pub const BUBBLE_ASSISTANT_FILL: Color32 = Color32::from_rgb(40, 50, 50);
+    /// Error chat bubble fill.
+    pub const BUBBLE_ERROR_FILL: Color32 = Color32::from_rgb(70, 30, 30);
+    /// Error chat bubble text.
+    pub const BUBBLE_ERROR_TEXT: Color32 = Color32::from_rgb(240, 170, 170);
+    /// VT100 terminal error text.
+    pub const TERM_ERROR_TEXT: Color32 = Color32::from_rgb(220, 120, 120);
+    /// VT100 terminal exited-session text.
+    pub const TERM_EXIT_TEXT: Color32 = Color32::from_rgb(160, 120, 120);
+    /// VT100 terminal success hint.
+    pub const TERM_OK_HINT: Color32 = Color32::from_rgb(140, 200, 160);
+    /// VT100 terminal selection overlay (unmultiplied).
+    pub const TERM_SELECTION_OVERLAY: Color32 = Color32::from_rgba_unmultiplied_const(120, 160, 220, 80);
+    /// VT100 terminal tab-bar label.
+    pub const TERM_LABEL: Color32 = Color32::from_rgb(150, 170, 200);
+    /// Graph editor placeholder / hint text.
+    pub const GRAPH_EDIT_HINT: Color32 = Color32::from_rgb(100, 110, 130);
+    /// Graph editor positive status text.
+    pub const GRAPH_EDIT_STATUS_OK: Color32 = Color32::from_rgb(180, 200, 120);
+    /// Graph editor canvas background.
+    pub const GRAPH_EDIT_CANVAS_BG: Color32 = Color32::from_rgb(20, 20, 28);
+    /// Graph editor edge stroke.
+    pub const GRAPH_EDIT_EDGE: Color32 = Color32::from_rgb(110, 120, 140);
+    /// Graph editor selected-node outline.
+    pub const GRAPH_EDIT_NODE_SELECTED: Color32 = Color32::from_rgb(255, 210, 90);
+    /// Graph editor connect-source node outline.
+    pub const GRAPH_EDIT_NODE_CONNECT_SRC: Color32 = Color32::from_rgb(120, 220, 140);
+    /// Graph editor default node outline.
+    pub const GRAPH_EDIT_NODE_OUTLINE: Color32 = Color32::from_rgb(200, 200, 215);
+    /// Graph editor node label.
+    pub const GRAPH_EDIT_NODE_LABEL: Color32 = Color32::from_rgb(235, 235, 240);
+    /// Graph editor fill for untyped nodes.
+    pub const GRAPH_EDIT_KIND_NONE: Color32 = Color32::from_rgb(60, 70, 100);
+    /// Conversation graph: speculative node fill.
+    pub const CG_SPECULATIVE_FILL: Color32 = Color32::from_rgb(180, 180, 200);
+    /// Conversation graph: speculative node outline.
+    pub const CG_SPECULATIVE_OUTLINE: Color32 = Color32::from_rgb(120, 120, 160);
+    /// Conversation graph: frontier node fill.
+    pub const CG_FRONTIER_FILL: Color32 = Color32::from_rgb(80, 160, 255);
+    /// Conversation graph: frontier node outline.
+    pub const CG_FRONTIER_OUTLINE: Color32 = Color32::from_rgb(40, 100, 220);
+    /// Conversation graph: committed node fill.
+    pub const CG_COMMITTED_FILL: Color32 = Color32::from_rgb(90, 140, 110);
+    /// Conversation graph: committed node outline.
+    pub const CG_COMMITTED_OUTLINE: Color32 = Color32::from_rgb(60, 90, 70);
+    /// Conversation graph: stale node fill.
+    pub const CG_STALE_FILL: Color32 = Color32::from_rgb(140, 140, 140);
+    /// Conversation graph: stale node outline.
+    pub const CG_STALE_OUTLINE: Color32 = Color32::from_rgb(100, 100, 100);
+    /// Conversation graph: pruned node fill.
+    pub const CG_PRUNED_FILL: Color32 = Color32::from_rgb(60, 60, 60);
+    /// Conversation graph: pruned node outline.
+    pub const CG_PRUNED_OUTLINE: Color32 = Color32::from_rgb(120, 80, 80);
+    /// Conversation graph: contradicts edge.
+    pub const CG_EDGE_CONTRADICTS: Color32 = Color32::from_rgb(220, 60, 60);
+    /// Conversation graph: enables / evidence edge.
+    pub const CG_EDGE_SUPPORTS: Color32 = Color32::from_rgb(100, 160, 220);
+    /// Conversation graph: speaker-type edge.
+    pub const CG_EDGE_SPEAKER: Color32 = Color32::from_rgb(140, 140, 160);
+    /// Conversation graph: default causal edge.
+    pub const CG_EDGE_DEFAULT: Color32 = Color32::from_rgb(180, 180, 190);
+
+    /// Colour derived from data (a hash, a truecolor escape) rather than
+    /// chosen by a designer. Not a palette entry; kept here so callers
+    /// never spell a raw `Color32` constructor.
+    pub const fn data_rgb(r: u8, g: u8, b: u8) -> Color32 {
+        Color32::from_rgb(r, g, b)
+    }
+
+    /// Chat heartbeat dot; the green channel pulses with `pulse`.
+    pub const fn heartbeat_dot(pulse: u8) -> Color32 {
+        Color32::from_rgb(80, pulse, 200)
+    }
+}
+
+/// ANSI / xterm-256 terminal palette. Terminal colours are data
+/// (Solarized-dark-ish, matching the native terminal), not UI chrome.
+pub mod ansi {
+    use eframe::egui::Color32;
+
+    /// Default terminal foreground.
+    pub const DEFAULT_FG: Color32 = Color32::from_rgb(220, 220, 225);
+    /// Default terminal background (also the code-block background).
+    pub const DEFAULT_BG: Color32 = Color32::from_rgb(12, 12, 16);
+
+    /// The 16 base ANSI colours, indices 0..=15.
+    pub const PALETTE_16: [Color32; 16] = [
+        Color32::from_rgb(7, 54, 66),
+        Color32::from_rgb(220, 50, 47),
+        Color32::from_rgb(133, 153, 0),
+        Color32::from_rgb(181, 137, 0),
+        Color32::from_rgb(38, 139, 210),
+        Color32::from_rgb(211, 54, 130),
+        Color32::from_rgb(42, 161, 152),
+        Color32::from_rgb(238, 232, 213),
+        Color32::from_rgb(88, 110, 117),
+        Color32::from_rgb(255, 90, 87),
+        Color32::from_rgb(180, 200, 0),
+        Color32::from_rgb(220, 180, 30),
+        Color32::from_rgb(100, 180, 240),
+        Color32::from_rgb(240, 90, 170),
+        Color32::from_rgb(80, 200, 190),
+        Color32::from_rgb(253, 246, 227),
+    ];
+
+    /// xterm-256 lookup: 0..16 base palette, 16..232 6x6x6 cube,
+    /// 232..256 greyscale ramp.
+    pub fn indexed(i: u8) -> Color32 {
+        if i < 16 {
+            return PALETTE_16[usize::from(i)];
+        }
+        if i < 232 {
+            let i = i - 16;
+            let conv = |v: u8| -> u8 {
+                if v == 0 {
+                    0
+                } else {
+                    55 + v * 40
+                }
+            };
+            return super::palette::data_rgb(conv(i / 36), conv((i / 6) % 6), conv(i % 6));
+        }
+        let v = 8 + (i - 232) * 10;
+        super::palette::data_rgb(v, v, v)
     }
 }
 
@@ -269,5 +476,132 @@ mod token_contract {
         assert_eq!(t.spacing.y, 6.0, "spacing.y");
         assert_eq!(t.button_padding.x, 10.0, "button_padding.x");
         assert_eq!(t.button_padding.y, 5.0, "button_padding.y");
+    }
+}
+
+#[cfg(test)]
+mod palette_contract {
+    use super::{ansi, palette};
+    use eframe::egui::Color32;
+
+    /// Each palette entry must equal the literal it replaced.
+    #[test]
+    fn palette_matches_legacy_literals() {
+        let rows: &[(&str, Color32, Color32)] = &[
+            ("ROW_SELECTED_FILL", palette::ROW_SELECTED_FILL, Color32::from_rgb(40, 55, 75)),
+            ("ROW_IDLE_FILL", palette::ROW_IDLE_FILL, Color32::from_rgb(28, 28, 34)),
+            ("ROW_SELECTED_STROKE", palette::ROW_SELECTED_STROKE, Color32::from_rgb(90, 140, 200)),
+            ("ROW_IDLE_STROKE", palette::ROW_IDLE_STROKE, Color32::from_rgb(50, 50, 58)),
+            ("ROW_SELECTED_TEXT", palette::ROW_SELECTED_TEXT, Color32::from_rgb(220, 230, 245)),
+            ("ROW_IDLE_TEXT", palette::ROW_IDLE_TEXT, Color32::from_rgb(170, 175, 185)),
+            ("CHIP_ON_FILL", palette::CHIP_ON_FILL, Color32::from_rgb(55, 90, 130)),
+            ("CHIP_OFF_FILL", palette::CHIP_OFF_FILL, Color32::from_rgb(40, 42, 50)),
+            ("CHIP_ON_STROKE", palette::CHIP_ON_STROKE, Color32::from_rgb(120, 170, 220)),
+            ("CHIP_OFF_STROKE", palette::CHIP_OFF_STROKE, Color32::from_rgb(70, 72, 80)),
+            ("CHIP_ON_TEXT", palette::CHIP_ON_TEXT, Color32::from_rgb(230, 235, 245)),
+            ("CHIP_OFF_TEXT", palette::CHIP_OFF_TEXT, Color32::from_rgb(180, 185, 195)),
+            ("TEXT_HEADING_MUTED", palette::TEXT_HEADING_MUTED, Color32::from_rgb(180, 180, 190)),
+            ("TEXT_ACTION_BLUE", palette::TEXT_ACTION_BLUE, Color32::from_rgb(200, 220, 240)),
+            ("TEXT_LIVE_DOT", palette::TEXT_LIVE_DOT, Color32::from_rgb(100, 190, 230)),
+            ("TEXT_SELECTED_MARK", palette::TEXT_SELECTED_MARK, Color32::from_rgb(160, 190, 230)),
+            ("TEXT_META_FAINT", palette::TEXT_META_FAINT, Color32::from_rgb(130, 140, 150)),
+            ("TEXT_SNIPPET", palette::TEXT_SNIPPET, Color32::from_rgb(150, 155, 165)),
+            ("TEXT_SECTION_BLUE", palette::TEXT_SECTION_BLUE, Color32::from_rgb(140, 170, 210)),
+            ("TEXT_SUBTLE", palette::TEXT_SUBTLE, Color32::from_rgb(160, 160, 170)),
+            ("TEXT_SESSION_ID", palette::TEXT_SESSION_ID, Color32::from_rgb(130, 140, 155)),
+            ("TEXT_LABEL_FAINT", palette::TEXT_LABEL_FAINT, Color32::from_rgb(140, 140, 150)),
+            ("TEXT_CURSOR", palette::TEXT_CURSOR, Color32::from_rgb(120, 180, 200)),
+            ("TEXT_HINT_FAINT", palette::TEXT_HINT_FAINT, Color32::from_rgb(140, 150, 160)),
+            ("TEXT_WARN_MUTED", palette::TEXT_WARN_MUTED, Color32::from_rgb(180, 140, 120)),
+            ("TEXT_DISCLOSURE", palette::TEXT_DISCLOSURE, Color32::from_rgb(170, 170, 180)),
+            ("TEXT_STATUS", palette::TEXT_STATUS, Color32::from_rgb(180, 200, 220)),
+            ("TEXT_PROGRESS", palette::TEXT_PROGRESS, Color32::from_rgb(150, 160, 170)),
+            ("TEXT_SYSTEM_MSG", palette::TEXT_SYSTEM_MSG, Color32::from_rgb(150, 150, 160)),
+            ("DRIFT_BANNER_FILL", palette::DRIFT_BANNER_FILL, Color32::from_rgb(70, 50, 20)),
+            ("DRIFT_TITLE", palette::DRIFT_TITLE, Color32::from_rgb(240, 200, 140)),
+            ("DRIFT_SOURCE", palette::DRIFT_SOURCE, Color32::from_rgb(230, 220, 200)),
+            ("DRIFT_BODY", palette::DRIFT_BODY, Color32::from_rgb(220, 210, 190)),
+            ("BUBBLE_USER_FILL", palette::BUBBLE_USER_FILL, Color32::from_rgb(50, 60, 80)),
+            ("BUBBLE_USER_TEXT", palette::BUBBLE_USER_TEXT, Color32::from_rgb(225, 230, 240)),
+            ("BUBBLE_ASSISTANT_FILL", palette::BUBBLE_ASSISTANT_FILL, Color32::from_rgb(40, 50, 50)),
+            ("BUBBLE_ERROR_FILL", palette::BUBBLE_ERROR_FILL, Color32::from_rgb(70, 30, 30)),
+            ("BUBBLE_ERROR_TEXT", palette::BUBBLE_ERROR_TEXT, Color32::from_rgb(240, 170, 170)),
+            ("TERM_ERROR_TEXT", palette::TERM_ERROR_TEXT, Color32::from_rgb(220, 120, 120)),
+            ("TERM_EXIT_TEXT", palette::TERM_EXIT_TEXT, Color32::from_rgb(160, 120, 120)),
+            ("TERM_OK_HINT", palette::TERM_OK_HINT, Color32::from_rgb(140, 200, 160)),
+            ("TERM_SELECTION_OVERLAY", palette::TERM_SELECTION_OVERLAY, Color32::from_rgba_unmultiplied(120, 160, 220, 80)),
+            ("TERM_LABEL", palette::TERM_LABEL, Color32::from_rgb(150, 170, 200)),
+            ("GRAPH_EDIT_HINT", palette::GRAPH_EDIT_HINT, Color32::from_rgb(100, 110, 130)),
+            ("GRAPH_EDIT_STATUS_OK", palette::GRAPH_EDIT_STATUS_OK, Color32::from_rgb(180, 200, 120)),
+            ("GRAPH_EDIT_CANVAS_BG", palette::GRAPH_EDIT_CANVAS_BG, Color32::from_rgb(20, 20, 28)),
+            ("GRAPH_EDIT_EDGE", palette::GRAPH_EDIT_EDGE, Color32::from_rgb(110, 120, 140)),
+            ("GRAPH_EDIT_NODE_SELECTED", palette::GRAPH_EDIT_NODE_SELECTED, Color32::from_rgb(255, 210, 90)),
+            ("GRAPH_EDIT_NODE_CONNECT_SRC", palette::GRAPH_EDIT_NODE_CONNECT_SRC, Color32::from_rgb(120, 220, 140)),
+            ("GRAPH_EDIT_NODE_OUTLINE", palette::GRAPH_EDIT_NODE_OUTLINE, Color32::from_rgb(200, 200, 215)),
+            ("GRAPH_EDIT_NODE_LABEL", palette::GRAPH_EDIT_NODE_LABEL, Color32::from_rgb(235, 235, 240)),
+            ("GRAPH_EDIT_KIND_NONE", palette::GRAPH_EDIT_KIND_NONE, Color32::from_rgb(60, 70, 100)),
+            ("CG_SPECULATIVE_FILL", palette::CG_SPECULATIVE_FILL, Color32::from_rgb(180, 180, 200)),
+            ("CG_SPECULATIVE_OUTLINE", palette::CG_SPECULATIVE_OUTLINE, Color32::from_rgb(120, 120, 160)),
+            ("CG_FRONTIER_FILL", palette::CG_FRONTIER_FILL, Color32::from_rgb(80, 160, 255)),
+            ("CG_FRONTIER_OUTLINE", palette::CG_FRONTIER_OUTLINE, Color32::from_rgb(40, 100, 220)),
+            ("CG_COMMITTED_FILL", palette::CG_COMMITTED_FILL, Color32::from_rgb(90, 140, 110)),
+            ("CG_COMMITTED_OUTLINE", palette::CG_COMMITTED_OUTLINE, Color32::from_rgb(60, 90, 70)),
+            ("CG_STALE_FILL", palette::CG_STALE_FILL, Color32::from_rgb(140, 140, 140)),
+            ("CG_STALE_OUTLINE", palette::CG_STALE_OUTLINE, Color32::from_rgb(100, 100, 100)),
+            ("CG_PRUNED_FILL", palette::CG_PRUNED_FILL, Color32::from_rgb(60, 60, 60)),
+            ("CG_PRUNED_OUTLINE", palette::CG_PRUNED_OUTLINE, Color32::from_rgb(120, 80, 80)),
+            ("CG_EDGE_CONTRADICTS", palette::CG_EDGE_CONTRADICTS, Color32::from_rgb(220, 60, 60)),
+            ("CG_EDGE_SUPPORTS", palette::CG_EDGE_SUPPORTS, Color32::from_rgb(100, 160, 220)),
+            ("CG_EDGE_SPEAKER", palette::CG_EDGE_SPEAKER, Color32::from_rgb(140, 140, 160)),
+            ("CG_EDGE_DEFAULT", palette::CG_EDGE_DEFAULT, Color32::from_rgb(180, 180, 190)),
+        ];
+        for (name, got, want) in rows {
+            assert_eq!(got, want, "palette::{name} drifted from its legacy literal");
+        }
+    }
+
+    #[test]
+    fn data_helpers_match_legacy_literals() {
+        assert_eq!(palette::heartbeat_dot(120), Color32::from_rgb(80, 120, 200));
+        assert_eq!(palette::data_rgb(1, 2, 3), Color32::from_rgb(1, 2, 3));
+    }
+
+    #[test]
+    fn ansi_defaults_match_legacy_literals() {
+        assert_eq!(ansi::DEFAULT_FG, Color32::from_rgb(220, 220, 225));
+        assert_eq!(ansi::DEFAULT_BG, Color32::from_rgb(12, 12, 16));
+    }
+
+    /// Round-trip: every base index maps to the legacy table entry, and
+    /// the cube / greyscale arithmetic is unchanged.
+    #[test]
+    fn ansi_palette_round_trips() {
+        let legacy: [(u8, u8, u8); 16] = [
+            (7, 54, 66),
+            (220, 50, 47),
+            (133, 153, 0),
+            (181, 137, 0),
+            (38, 139, 210),
+            (211, 54, 130),
+            (42, 161, 152),
+            (238, 232, 213),
+            (88, 110, 117),
+            (255, 90, 87),
+            (180, 200, 0),
+            (220, 180, 30),
+            (100, 180, 240),
+            (240, 90, 170),
+            (80, 200, 190),
+            (253, 246, 227),
+        ];
+        for (i, (r, g, b)) in legacy.iter().enumerate() {
+            assert_eq!(ansi::indexed(i as u8), Color32::from_rgb(*r, *g, *b), "ansi {i}");
+            assert_eq!(ansi::PALETTE_16[i], ansi::indexed(i as u8));
+        }
+        assert_eq!(ansi::indexed(16), Color32::from_rgb(0, 0, 0));
+        assert_eq!(ansi::indexed(231), Color32::from_rgb(255, 255, 255));
+        assert_eq!(ansi::indexed(196), Color32::from_rgb(255, 0, 0));
+        assert_eq!(ansi::indexed(232), Color32::from_rgb(8, 8, 8));
+        assert_eq!(ansi::indexed(255), Color32::from_rgb(238, 238, 238));
     }
 }
