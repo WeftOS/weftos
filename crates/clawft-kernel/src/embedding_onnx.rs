@@ -322,7 +322,7 @@ pub struct OnnxEmbeddingProvider {
     tokenization: Option<Tokenization>,
     /// ONNX runtime session (only present when `onnx-embeddings` is active and
     /// the model loaded). Wrapped in a `Mutex` because ort's `Session::run`
-    /// takes `&mut self` in 2.0-rc.12.
+    /// takes `&mut self` (2.0-rc.12 and rc.15).
     #[cfg(feature = "onnx-embeddings")]
     session: Option<Arc<Mutex<ort::session::Session>>>,
     /// Whether the graph takes a `token_type_ids` input.
@@ -486,7 +486,7 @@ impl OnnxEmbeddingProvider {
         if !model_path.exists() {
             return (None, Some(format!("model file not found at {}", model_path.display())));
         }
-        match ort::session::Session::builder()
+        match ort_env().and_then(ort::session::Session::builder)
             .and_then(|mut builder| builder.commit_from_file(model_path))
         {
             Ok(session) => {
@@ -1162,6 +1162,28 @@ impl EmbeddingProvider for AstEmbeddingProvider {
 // =========================================================================
 // Tests
 // =========================================================================
+
+#[cfg(feature = "onnx-embeddings")]
+/// The process-wide ONNX Runtime environment. ort rc.15 allows one
+/// `ort::init().build()` per process and offers no way to fetch it back, so the
+/// first crate to need it builds it and every other crate reuses it through
+/// `clawft_types::singleton` (core, kernel and the voice crates share a daemon).
+pub(crate) fn ort_env() -> ort::Result<&'static ort::environment::Environment> {
+    clawft_types::singleton::process_singleton(|| ort::init().build())
+}
+
+#[cfg(all(test, feature = "onnx-embeddings"))]
+mod ort_env_tests {
+    use super::ort_env;
+
+    /// Two calls give the same environment and neither panics.
+    #[test]
+    fn ort_env_is_built_once_and_shared() {
+        let a = ort_env().expect("environment builds");
+        let b = ort_env().expect("environment is reused");
+        assert!(std::ptr::eq(a, b));
+    }
+}
 
 #[cfg(test)]
 mod tests {

@@ -109,7 +109,7 @@ impl OnnxEmbedder {
         let load_err = |e: &dyn std::fmt::Display| {
             EmbeddingError::Internal(format!("ONNX model {} failed to load: {e}", onnx.display()))
         };
-        let mut builder = ort::session::Session::builder().map_err(|e| load_err(&e))?;
+        let mut builder = ort_env().and_then(ort::session::Session::builder).map_err(|e| load_err(&e))?;
         builder = builder.with_intra_threads(4).map_err(|e| load_err(&e))?;
         let session = builder.commit_from_file(&onnx).map_err(|e| load_err(&e))?;
         let has_type_ids = session.inputs().iter().any(|i| i.name() == "token_type_ids");
@@ -224,9 +224,25 @@ impl Embedder for OnnxEmbedder {
     }
 }
 
+/// The process-wide ONNX Runtime environment. ort rc.15 allows one
+/// `ort::init().build()` per process and offers no way to fetch it back, so the
+/// first crate to need it builds it and every other crate reuses it through
+/// `clawft_types::singleton` (core, kernel and the voice crates share a daemon).
+fn ort_env() -> ort::Result<&'static ort::environment::Environment> {
+    clawft_types::singleton::process_singleton(|| ort::init().build())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Two calls give the same environment and neither panics.
+    #[test]
+    fn ort_env_is_built_once_and_shared() {
+        let a = ort_env().expect("environment builds");
+        let b = ort_env().expect("environment is reused");
+        assert!(std::ptr::eq(a, b));
+    }
 
     /// The shipped bundle's default location is found with no environment
     /// override, and `WEFTOS_EMBED_MODEL_DIR` wins when set. Uses a temp dir as

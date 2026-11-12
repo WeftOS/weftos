@@ -142,6 +142,11 @@ cargo_features_args() {
 # Runtime at build time, and pyke publishes one only for the triples below:
 # there is none for musl or x86_64-apple-darwin, so those builds skip the
 # feature (with a message) instead of failing. wasm/edge builds never get it.
+# ort-sys 2.0.0-rc.15 (ONNX Runtime 1.31): the featureless ("none") prebuilt is
+# published for linux-gnu only; on aarch64-apple-darwin and *-windows-msvc the
+# build script falls back to the first published variant (CoreML / DirectML
+# bundled; not built on those hosts yet). Re-read ort-sys build/download/dist.tsv on
+# every ort bump.
 # Opt out with WEFTOS_NO_EMBEDDER=1.
 embedder_triple() {
     if [ -n "${CARGO_BUILD_TARGET:-}" ]; then

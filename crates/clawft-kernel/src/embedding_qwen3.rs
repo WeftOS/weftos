@@ -264,7 +264,7 @@ impl Qwen3EmbeddingProvider {
             tracing::debug!("Qwen3 ONNX model not found at {}", model_path.display());
             return None;
         }
-        match ort::session::Session::builder()
+        match crate::embedding_onnx::ort_env().and_then(ort::session::Session::builder)
             .and_then(|mut builder| builder.commit_from_file(model_path))
         {
             Ok(session) => {
