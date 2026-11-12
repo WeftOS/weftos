@@ -863,6 +863,66 @@ mod tests {
         assert!(err.to_string().contains("dimension mismatch: expected 4, got 8"), "{err}");
     }
 
+    /// An embedder that blocks its thread (a local ONNX model does, ~100 ms)
+    /// must not stall other tasks on the runtime.
+    struct SlowEmbedder {
+        dim: usize,
+        delay: std::time::Duration,
+    }
+    #[async_trait::async_trait]
+    impl crate::embeddings::Embedder for SlowEmbedder {
+        async fn embed(&self, _text: &str) -> Result<Vec<f32>, crate::embeddings::EmbeddingError> {
+            std::thread::sleep(self.delay); // deliberately blocking, like a model forward pass
+            Ok(vec![0.5; self.dim])
+        }
+        fn dimension(&self) -> usize {
+            self.dim
+        }
+        fn name(&self) -> &str {
+            "slow-test-embedder"
+        }
+    }
+
+    /// Run `exchange_items` with a 100 ms-per-call blocking embedder while a
+    /// ticker task counts 10 ms ticks. Returns (items, ticks seen).
+    async fn exchange_beside_a_ticker() -> (usize, usize) {
+        let ticks = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let t = Arc::clone(&ticks);
+        let ticker = tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                t.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        });
+        // Let the ticker start before the exchange begins.
+        tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+        let before = ticks.load(std::sync::atomic::Ordering::SeqCst);
+        let slow = SlowEmbedder { dim: 4, delay: std::time::Duration::from_millis(100) };
+        let items = exchange_items(&slow, 4, "cli", "c1", "ask", "answer")
+            .await
+            .expect("exchange");
+        let seen = ticks.load(std::sync::atomic::Ordering::SeqCst) - before;
+        ticker.abort();
+        (items.len(), seen)
+    }
+
+    /// current_thread: the only worker is the test thread itself.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_slow_embedder_does_not_stall_a_current_thread_runtime() {
+        let (n, ticks) = exchange_beside_a_ticker().await;
+        assert_eq!(n, 2);
+        // Two 100 ms embeds = ~200 ms; a free ticker sees ~20, a stalled one ~0-2.
+        assert!(ticks >= 8, "ticker advanced only {ticks} times during the embeds");
+    }
+
+    /// multi_thread with a single worker: the same stall without current_thread.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn a_slow_embedder_does_not_stall_a_multi_thread_worker() {
+        let (n, ticks) = exchange_beside_a_ticker().await;
+        assert_eq!(n, 2);
+        assert!(ticks >= 8, "ticker advanced only {ticks} times during the embeds");
+    }
+
     /// Through the bracket: a turn whose exchange cannot be written because
     /// of a dimension mismatch still returns its reply and promotes, but the
     /// lineage gains nothing (no truncated or padded vector slipped in).

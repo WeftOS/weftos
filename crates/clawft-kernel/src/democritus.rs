@@ -1267,6 +1267,36 @@ mod tests {
         assert_eq!(result.embeddings_produced, 2);
     }
 
+    /// A burst larger than `max_impulses_per_tick` is carried across ticks,
+    /// not truncated: every emitted impulse ends up in the causal graph.
+    /// (Before: `drain_ready` + `truncate` dropped the tail, so 2 of 5.)
+    #[tokio::test]
+    async fn burst_over_the_per_tick_cap_is_carried_to_later_ticks() {
+        let config = DemocritusConfig {
+            max_impulses_per_tick: 2,
+            ..DemocritusConfig::default()
+        };
+        let (cg, _vector, iq, _crs, demo) = make_loop_with_config(config);
+        for i in 0..5 {
+            emit_test_impulse(&iq, ImpulseType::BeliefUpdate, i);
+        }
+
+        let mut sensed = 0;
+        for _ in 0..40 {
+            let r = demo.tick().await;
+            assert!(r.impulses_sensed <= 2, "the cap still bounds each tick");
+            sensed += r.impulses_sensed;
+            if cg.node_count() == 5 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+
+        assert_eq!(sensed, 5, "every impulse is sensed exactly once over the ticks");
+        assert_eq!(cg.node_count(), 5, "no impulse is lost");
+        assert!(iq.is_empty(), "nothing is left queued");
+    }
+
     // ── Test 12: structure_tag_from_u8 mapping ──
 
     #[test]
