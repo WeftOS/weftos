@@ -18,9 +18,9 @@
 //! - State that survives daemon restart belongs at
 //!   `substrate/desktop/sidebar/*`. The first cut keeps it in-process;
 //!   persistence ships when Settings (Phase 3) wires `config.set`.
-//! - The active row is a `bg_active` lift plus a 3 px `text_primary`
-//!   stripe (neutral; NO chromatic accent, DESIGN.md §2.1/§5); hover is a
-//!   plain `bg_hover` lift with no stripe, so the two read as different.
+//! - The active row is a `bg_active` lift plus a 3 px `accent` stripe
+//!   (accent = "focus / active only", DESIGN.md §2.1); hover is a plain
+//!   `bg_hover` lift with no stripe, so the two read as different states.
 
 use std::collections::BTreeSet;
 
@@ -492,18 +492,18 @@ fn paint_row(
 
     if active {
         painter.rect_filled(rect, 0.0, tokens.bg_active);
-        // 3px left edge stripe in the brightest neutral (`text_primary`).
-        // Selection stays achromatic (DESIGN.md §5); a hovered row is a
-        // plain lift with no stripe, so the two states cannot be confused
-        // (bg_hover is darker than bg_sidebar, bg_active only marginally
-        // lighter).
+        // 3px left edge stripe in the accent: the active screen is the one
+        // place the sidebar uses accent ("focus / active only", DESIGN.md
+        // §2.1). A hovered row is a plain lift with no stripe, so the two
+        // states cannot be confused (bg_hover is darker than bg_sidebar and
+        // bg_active only marginally lighter).
         painter.rect_filled(
             egui::Rect::from_min_max(
                 egui::pos2(rect.left(), rect.top()),
                 egui::pos2(rect.left() + ACTIVE_STRIPE_W, rect.bottom()),
             ),
             0.0,
-            tokens.text_primary,
+            tokens.accent,
         );
     } else if response.hovered() {
         painter.rect_filled(rect, 0.0, tokens.bg_hover);
@@ -567,7 +567,7 @@ fn paint_subrow(
                 egui::pos2(rect.left() + ACTIVE_STRIPE_W, rect.bottom()),
             ),
             0.0,
-            tokens.text_primary,
+            tokens.accent,
         );
     } else if response.hovered() {
         painter.rect_filled(rect, 0.0, tokens.bg_hover);
@@ -866,8 +866,8 @@ mod tests {
     }
 
     /// Hover and selected tiles must be told apart at token level: the
-    /// selected row carries a neutral `text_primary` stripe (not accent, not
-    /// the old dim `text_dim`), the hovered row carries none, fills differ.
+    /// selected row carries an accent stripe (DESIGN.md: accent = active),
+    /// the hovered row carries none, and the fills differ.
     #[test]
     fn hover_and_selected_tiles_are_clearly_distinct() {
         let t = Tokens::default();
@@ -892,16 +892,7 @@ mod tests {
         assert_eq!(hov_fill, Some(t.bg_hover), "hover tile fill");
         assert!(hov_stripe.is_none(), "hover must not paint a stripe");
         let (c, w) = sel_stripe.expect("selected row paints a stripe");
-        assert_eq!(
-            c, t.text_primary,
-            "selected stripe is the neutral text_primary token"
-        );
-        assert_ne!(c, t.accent, "selection must not use the chromatic accent");
-        assert_ne!(
-            c, t.text_dim,
-            "stripe must be brighter than the old dim grey"
-        );
-        assert_ne!(sel_fill, hov_fill, "selected and hover fills differ");
+        assert_eq!(c, t.accent, "selected stripe uses the accent token");
         assert!(w >= 3.0, "selected stripe is at least 3 px, got {w}");
     }
 }
