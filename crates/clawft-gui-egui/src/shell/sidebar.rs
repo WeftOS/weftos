@@ -824,4 +824,68 @@ mod tests {
             footer_top(h)
         );
     }
+
+    /// Fills and the left-edge stripe painted for the row whose label is
+    /// `label`: (full-width tile fill, stripe colour and width).
+    fn row_paint(
+        shapes: &[egui::Shape],
+        label: &str,
+        pos: egui::Pos2,
+    ) -> (Option<egui::Color32>, Option<(egui::Color32, f32)>) {
+        let _ = label;
+        let mut tile = None;
+        let mut stripe = None;
+        for s in shapes {
+            if let egui::Shape::Rect(r) = s {
+                if r.rect.contains(pos) && r.rect.width() > 100.0 && r.rect.height() < 40.0 {
+                    tile = Some(r.fill);
+                }
+                if r.rect.width() <= 4.0
+                    && r.rect.top() <= pos.y
+                    && r.rect.bottom() >= pos.y
+                    && r.rect.left() < 4.0
+                {
+                    stripe = Some((r.fill, r.rect.width()));
+                }
+            }
+        }
+        (tile, stripe)
+    }
+
+    fn label_pos(label: &str) -> egui::Pos2 {
+        let runs = paint_sidebar(800.0, &Sidebar::default(), Vec::new);
+        let r = runs.iter().find(|r| r.text == label).expect("label");
+        r.bounds.center()
+    }
+
+    /// Hover and selected tiles must be told apart at token level: the
+    /// selected row carries an accent stripe (DESIGN.md: accent = active),
+    /// the hovered row carries none, and the fills differ.
+    #[test]
+    fn hover_and_selected_tiles_are_clearly_distinct() {
+        let t = Tokens::default();
+        let size = egui::vec2(SIDEBAR_WIDTH_EXPANDED, 800.0);
+        let snap = Snapshot::default();
+        let sel_pos = label_pos("Files");
+        let hov_pos = label_pos("Processes");
+        let paint_it = |ui: &mut egui::Ui, screen: egui::Rect| {
+            let _ = paint(ui, screen, &Sidebar::default(), &snap);
+        };
+        let hover = |frame: usize| {
+            if frame == 0 {
+                vec![]
+            } else {
+                vec![egui::Event::PointerMoved(hov_pos)]
+            }
+        };
+        let shapes = crate::apps::layout_test::run_shapes(size, hover, paint_it);
+        let (sel_fill, sel_stripe) = row_paint(&shapes, "Files", sel_pos);
+        let (hov_fill, hov_stripe) = row_paint(&shapes, "Processes", hov_pos);
+        assert_eq!(sel_fill, Some(t.bg_active), "selected tile fill");
+        assert_eq!(hov_fill, Some(t.bg_hover), "hover tile fill");
+        assert!(hov_stripe.is_none(), "hover must not paint a stripe");
+        let (c, w) = sel_stripe.expect("selected row paints a stripe");
+        assert_eq!(c, t.accent, "selected stripe uses the accent token");
+        assert!(w >= 3.0, "selected stripe is at least 3 px, got {w}");
+    }
 }

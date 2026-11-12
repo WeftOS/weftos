@@ -605,4 +605,35 @@ mod tests {
         assert!(kids[0].has_value);
         assert_eq!(kids[0].child_count, 0);
     }
+
+    /// An off filter toggle must still read as a control: it paints a frame
+    /// with a visible stroke.
+    #[test]
+    fn off_filter_toggle_paints_a_frame() {
+        let mut filters = TreeFilters::default();
+        let size = egui::vec2(600.0, 80.0);
+        let shapes = crate::apps::layout_test::run_shapes(size, |_| vec![], |ui, _| {
+            paint_filter_chips(ui, &mut filters);
+        });
+        // Locate the "sensors" label, then a stroked rect that encloses it.
+        let mut label = None;
+        for s in &shapes {
+            if let egui::Shape::Text(t) = s {
+                if t.galley.text() == "sensors" {
+                    label = Some(egui::Rect::from_min_size(t.pos, t.galley.size()).center());
+                }
+            }
+        }
+        let label = label.expect("sensors toggle painted");
+        let framed = shapes.iter().any(|s| match s {
+            egui::Shape::Rect(r) => {
+                r.rect.contains(label)
+                    && r.rect.width() < 120.0
+                    && r.stroke.width > 0.0
+                    && r.stroke.color.a() > 0
+            }
+            _ => false,
+        });
+        assert!(framed, "an off toggle must paint a stroked frame");
+    }
 }

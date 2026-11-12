@@ -151,6 +151,43 @@ pub(crate) mod layout_test {
         }
     }
 
+    /// Like [`run_frames`] but returns every shape the last frame painted
+    /// (nested `Shape::Vec`s flattened), so a test can assert fills and
+    /// strokes, not just text.
+    pub fn run_shapes(
+        size: egui::Vec2,
+        mut input: impl FnMut(usize) -> Vec<egui::Event>,
+        mut f: impl FnMut(&mut egui::Ui, egui::Rect),
+    ) -> Vec<egui::Shape> {
+        fn flat(s: &egui::Shape, out: &mut Vec<egui::Shape>) {
+            match s {
+                egui::Shape::Vec(v) => v.iter().for_each(|c| flat(c, out)),
+                other => out.push(other.clone()),
+            }
+        }
+        let ctx = egui::Context::default();
+        crate::theming::apply(&ctx);
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+        let mut shapes = Vec::new();
+        for frame in 0..4 {
+            let raw = egui::RawInput {
+                screen_rect: Some(screen),
+                events: input(frame),
+                ..Default::default()
+            };
+            let out = ctx.run_ui(raw, |ui| {
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::NONE)
+                    .show_inside(ui, |ui| f(ui, screen));
+            });
+            shapes.clear();
+            for clipped in &out.shapes {
+                flat(&clipped.shape, &mut shapes);
+            }
+        }
+        shapes
+    }
+
     /// Run `f` for a few frames in a headless context of `size` points
     /// (egui needs a frame or two to settle layout) and return the text
     /// runs painted by the last frame.
