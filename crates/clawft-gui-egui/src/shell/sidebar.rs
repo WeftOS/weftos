@@ -18,8 +18,9 @@
 //! - State that survives daemon restart belongs at
 //!   `substrate/desktop/sidebar/*`. The first cut keeps it in-process;
 //!   persistence ships when Settings (Phase 3) wires `config.set`.
-//! - Selection is signalled by surface lift only. NO chromatic accent
-//!   is used for selection — DESIGN.md §2.1 reserves color for state.
+//! - The active row is a `bg_active` lift plus a 3 px `accent` stripe
+//!   (accent = "focus / active only", DESIGN.md §2.1); hover is a plain
+//!   `bg_hover` lift with no stripe, so the two read as different states.
 
 use std::collections::BTreeSet;
 
@@ -458,6 +459,9 @@ fn paint_menu(ui: &mut egui::Ui, state: &Sidebar, tokens: &Tokens) -> Option<Sid
     action
 }
 
+/// Width of the active-row stripe, px.
+const ACTIVE_STRIPE_W: f32 = 3.0;
+
 enum MenuItem {
     Leaf(&'static str, &'static str, SidebarTarget),
     Group(
@@ -488,15 +492,18 @@ fn paint_row(
 
     if active {
         painter.rect_filled(rect, 0.0, tokens.bg_active);
-        // 2px left edge stripe in dim grey (DESIGN.md §5 — surface lift only,
-        // no chromatic accent).
+        // 3px left edge stripe in the accent: the active screen is the one
+        // place the sidebar uses accent ("focus / active only", DESIGN.md
+        // §2.1). A hovered row is a plain lift with no stripe, so the two
+        // states cannot be confused (bg_hover is darker than bg_sidebar and
+        // bg_active only marginally lighter).
         painter.rect_filled(
             egui::Rect::from_min_max(
                 egui::pos2(rect.left(), rect.top()),
-                egui::pos2(rect.left() + 2.0, rect.bottom()),
+                egui::pos2(rect.left() + ACTIVE_STRIPE_W, rect.bottom()),
             ),
             0.0,
-            tokens.text_dim,
+            tokens.accent,
         );
     } else if response.hovered() {
         painter.rect_filled(rect, 0.0, tokens.bg_hover);
@@ -557,10 +564,10 @@ fn paint_subrow(
         painter.rect_filled(
             egui::Rect::from_min_max(
                 egui::pos2(rect.left(), rect.top()),
-                egui::pos2(rect.left() + 2.0, rect.bottom()),
+                egui::pos2(rect.left() + ACTIVE_STRIPE_W, rect.bottom()),
             ),
             0.0,
-            tokens.text_dim,
+            tokens.accent,
         );
     } else if response.hovered() {
         painter.rect_filled(rect, 0.0, tokens.bg_hover);

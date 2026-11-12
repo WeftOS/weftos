@@ -357,6 +357,13 @@ fn last_segment(path: &str) -> &str {
 /// chips, and a "clear" pill that appears only when at least one
 /// filter is active. The row deliberately renders quietly when no
 /// filters are set so users who don't need it don't see chrome.
+/// A filter toggle that keeps its frame (fill + hairline stroke from the
+/// theme's inactive widget style) when off. `Button::selectable` drops the
+/// frame when unselected, which made an off toggle read as plain text.
+fn toggle_chip<'a>(on: bool, label: &'a str) -> egui::Button<'a> {
+    egui::Button::new(label).selected(on).frame(true)
+}
+
 fn paint_filter_chips(ui: &mut egui::Ui, filters: &mut TreeFilters) {
     ui.horizontal_wrapped(|ui| {
         ui.label(
@@ -374,24 +381,24 @@ fn paint_filter_chips(ui: &mut egui::Ui, filters: &mut TreeFilters) {
         );
         name_resp.on_hover_text("Filter rows by substring of the last path segment.");
 
-        // Toggle chips. `Button::selectable` gives us the inverted
-        // background that reads as "this filter is on".
+        // Toggle chips: framed in both states (DESIGN.md: a control must
+        // read as one when off); `selected` adds the on-state fill.
         if ui
-            .add(egui::Button::selectable(filters.active_only, "active"))
+            .add(toggle_chip(filters.active_only, "active"))
             .on_hover_text("Show only paths that have published recently.")
             .clicked()
         {
             filters.active_only = !filters.active_only;
         }
         if ui
-            .add(egui::Button::selectable(filters.sensors_only, "sensors"))
+            .add(toggle_chip(filters.sensors_only, "sensors"))
             .on_hover_text("Show only paths under .../sensor/...")
             .clicked()
         {
             filters.sensors_only = !filters.sensors_only;
         }
         if ui
-            .add(egui::Button::selectable(filters.hide_leaves, "no leaves"))
+            .add(toggle_chip(filters.hide_leaves, "no leaves"))
             .on_hover_text("Hide leaf paths to scan structure only.")
             .clicked()
         {
