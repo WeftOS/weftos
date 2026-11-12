@@ -118,6 +118,7 @@ fn paint_left_pane(ui: &mut egui::Ui, rect: egui::Rect, tree: &TreeNode, state: 
     );
 
     egui::ScrollArea::vertical()
+        .id_salt("files_tree_scroll")
         .auto_shrink([false, false])
         .show(&mut child, |ui| {
             if tree.children.is_empty() {
@@ -251,6 +252,7 @@ fn paint_right_pane(
         );
         child.add_space(4.0);
         egui::ScrollArea::vertical()
+            .id_salt("files_kids_scroll")
             .auto_shrink([false, false])
             .show(&mut child, |ui| {
                 for k in kids {
@@ -262,6 +264,7 @@ fn paint_right_pane(
 
     let pretty = serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string());
     egui::ScrollArea::both()
+        .id_salt("files_value_scroll")
         .auto_shrink([false, false])
         .show(&mut child, |ui| {
             ui.add(
