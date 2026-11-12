@@ -197,7 +197,20 @@ pub fn paint(
         egui::pos2(rect.left(), menu_top),
         egui::pos2(rect.right(), rect.bottom() - FOOTER_HEIGHT),
     );
-    if let Some(a) = paint_menu(ui, menu_rect, state, &tokens) {
+    // The body scrolls when the expanded groups outgrow the space between
+    // the header and the pinned footer; the scroll area clips its rows to
+    // `menu_rect` so they can never paint over the footer.
+    let mut menu_ui = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(menu_rect)
+            .layout(egui::Layout::top_down(egui::Align::LEFT)),
+    );
+    menu_ui.set_clip_rect(menu_rect.intersect(ui.clip_rect()));
+    let menu_out = egui::ScrollArea::vertical()
+        .id_salt("sidebar-menu")
+        .auto_shrink([false, false])
+        .show(&mut menu_ui, |ui| paint_menu(ui, state, &tokens));
+    if let Some(a) = menu_out.inner {
         action = Some(a);
     }
 
@@ -314,12 +327,11 @@ fn paint_kernel_chip(
     );
 }
 
-fn paint_menu(
-    ui: &mut egui::Ui,
-    rect: egui::Rect,
-    state: &Sidebar,
-    tokens: &Tokens,
-) -> Option<SidebarAction> {
+fn paint_menu(ui: &mut egui::Ui, state: &Sidebar, tokens: &Tokens) -> Option<SidebarAction> {
+    // Rows are placed by hand from the scroll area's origin; the content
+    // height is reported back with `allocate_exact_size` at the end.
+    let origin = ui.cursor().min;
+    let rect = egui::Rect::from_min_size(origin, egui::vec2(ui.available_width(), 0.0));
     let mut cursor_y = rect.top() + 4.0;
     let mut action: Option<SidebarAction> = None;
 
@@ -439,6 +451,9 @@ fn paint_menu(
             }
         }
     }
+
+    let total_h = cursor_y - origin.y;
+    ui.allocate_exact_size(egui::vec2(rect.width(), total_h), egui::Sense::hover());
 
     action
 }
@@ -715,6 +730,7 @@ mod tests {
         let n = instance_name();
         assert!(!n.is_empty());
     }
+
     use crate::apps::layout_test::run_frames;
 
     fn expanded_all() -> Sidebar {
