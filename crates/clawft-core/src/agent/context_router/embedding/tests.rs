@@ -103,6 +103,11 @@ fn req(content: &str) -> ContextRequest {
 /// Ranking judged with a REAL embedding model (skipped with a printed reason
 /// unless `onnx-embeddings` + `WEFTOS_TEST_EMBED_MODEL_DIR`). No query shares a
 /// content word with the skill it must route to.
+///
+/// Baseline model: nomic-embed-text-v1.5 (owner decision 2026-11-12, item 6:
+/// accept the model's ranking). With it, "the borrow checker is rejecting my
+/// program" ranks python-debug first and rust-debug second, so that one query
+/// is asserted at top-2; the other three stay at top-1.
 #[tokio::test]
 async fn embedding_router_routes_paraphrased_queries_with_a_real_embedder() {
     let Some(real) = crate::embeddings::test_support::real_embedder() else { return };
@@ -117,7 +122,7 @@ async fn embedding_router_routes_paraphrased_queries_with_a_real_embedder() {
     let router = EmbeddingRouter::new(Arc::new(real.clone()), &reg)
         .await
         .expect("router build")
-        .with_top_k(1)
+        .with_top_k(2)
         .with_confidence_threshold(-1.0);
     // Evidence for a miss: the raw cosine of each query against each skill descriptor,
     // computed straight from the embedder (no index), so a router/index bug can be told
@@ -138,14 +143,16 @@ async fn embedding_router_routes_paraphrased_queries_with_a_real_embedder() {
         raw.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
         eprintln!("raw cosine ranking for {query:?}: {raw:?}");
     }
-    for (query, want) in [
-        ("the borrow checker is rejecting my program", "rust-debug"),
-        ("write some verses about autumn leaves", "write-poem"),
-        ("organise a holiday abroad with flights and hotels", "plan-trip"),
-        ("my snake script crashed with a stack trace", "python-debug"),
+    for (query, want, depth) in [
+        // nomic-embed-text-v1.5 ranks python-debug above rust-debug here; accepted, top-2.
+        ("the borrow checker is rejecting my program", "rust-debug", 2usize),
+        ("write some verses about autumn leaves", "write-poem", 1),
+        ("organise a holiday abroad with flights and hotels", "plan-trip", 1),
+        ("my snake script crashed with a stack trace", "python-debug", 1),
     ] {
         let d = router.route(&req(query)).await;
-        assert_eq!(d.skills.first().map(String::as_str), Some(want), "query {query:?}, got {:?}", d.skills);
+        let top: Vec<&str> = d.skills.iter().take(depth).map(String::as_str).collect();
+        assert!(top.contains(&want), "query {query:?} should have {want} in its top {depth}, got {:?}", d.skills);
     }
 }
 

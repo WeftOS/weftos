@@ -347,6 +347,11 @@ mod tests {
     /// Recall judged with a REAL embedding model (skipped with a printed reason
     /// unless `onnx-embeddings` + `WEFTOS_TEST_EMBED_MODEL_DIR`). The query shares no
     /// content word with the note it must find.
+    ///
+    /// Baseline model: nomic-embed-text-v1.5 (owner decision 2026-11-12, item 6:
+    /// accept the model's ranking). It puts the invoices note above the
+    /// out-of-memory note for "why do CI jobs get OOM killed?", so that query is
+    /// asserted at top-2; the other three stay at top-1.
     #[tokio::test]
     async fn real_embedder_recalls_the_right_note_for_a_paraphrase() {
         let Some(real) = clawft_core::embeddings::test_support::real_embedder() else { return };
@@ -375,15 +380,19 @@ mod tests {
                 .collect();
             eprintln!("raw cosines for {query:?}: {raw:?}");
         }
-        for (query, want) in [
-            ("where should the assistant be hosted once the migration finishes?", 0),
-            ("which colour scheme does the client like for the UI?", 1),
-            ("when does billing happen?", 2),
-            ("why do CI jobs get OOM killed?", 3),
+        for (query, want, depth) in [
+            ("where should the assistant be hosted once the migration finishes?", 0, 1),
+            ("which colour scheme does the client like for the UI?", 1, 1),
+            ("when does billing happen?", 2, 1),
+            // nomic-embed-text-v1.5 ranks the invoices note first here; accepted, top-2.
+            ("why do CI jobs get OOM killed?", 3, 2),
         ] {
-            let hits = b.search(query, 1).await.unwrap();
-            let got = b.get(&hits[0].0).map(|m| m["summary"].clone());
-            assert_eq!(hits[0].0, ids[want], "query {query:?} should find note {want}; top hit was {got:?}");
+            let hits = b.search(query, depth).await.unwrap();
+            let got: Vec<_> = hits.iter().map(|h| b.get(&h.0).map(|m| m["summary"].clone())).collect();
+            assert!(
+                hits.iter().any(|h| h.0 == ids[want]),
+                "query {query:?} should find note {want} in its top {depth}; hits were {got:?}"
+            );
         }
     }
 
