@@ -352,7 +352,7 @@ where
 /// padded, and a vector whose length disagrees with the lineage is refused
 /// too.
 pub(crate) async fn exchange_items(
-    embedder: &dyn crate::embeddings::Embedder,
+    embedder: Arc<dyn crate::embeddings::Embedder>,
     lineage_dim: u16,
     channel: &str,
     chat_id: &str,
@@ -375,7 +375,7 @@ pub(crate) async fn exchange_items(
         if text.trim().is_empty() {
             continue;
         }
-        let vector = embedder.embed(text).await.map_err(|e| ClawftError::CowMemory {
+        let vector = embed_off_worker(&embedder, text).await.map_err(|e| ClawftError::CowMemory {
             reason: format!("embedding the {role} text failed: {e}"),
         })?;
         if vector.len() != want {
@@ -389,6 +389,25 @@ pub(crate) async fn exchange_items(
         items.push(VectorItem::new(vector).with_text(text).with_tags(t));
     }
     Ok(items)
+}
+
+/// Run one document-lane embed on the blocking pool.
+///
+/// A local model blocks its thread for ~100 ms per call. Awaiting it inline
+/// would hold an async worker for that long on every turn, so the call runs
+/// on `spawn_blocking` (the same hand-off Democritus uses) and the async
+/// worker is free for other tasks meanwhile. Works on current_thread and
+/// multi_thread runtimes alike, since the blocking pool is separate.
+async fn embed_off_worker(
+    embedder: &Arc<dyn crate::embeddings::Embedder>,
+    text: &str,
+) -> Result<Vec<f32>, crate::embeddings::EmbeddingError> {
+    let embedder = Arc::clone(embedder);
+    let text = text.to_string();
+    let handle = tokio::runtime::Handle::current();
+    tokio::task::spawn_blocking(move || handle.block_on(embedder.embed(&text)))
+        .await
+        .map_err(|e| crate::embeddings::EmbeddingError::Internal(format!("embed task failed: {e}")))?
 }
 
 fn cow_err(e: clawft_cow_memory::CowMemoryError) -> ClawftError {
@@ -758,7 +777,7 @@ mod tests {
         user: &str,
         reply: &str,
     ) -> clawft_types::Result<Vec<clawft_cow_memory::VectorItem>> {
-        exchange_items(&PlumbingEmbedder::new(dim as usize), dim, "cli", "c1", user, reply).await
+        exchange_items(Arc::new(PlumbingEmbedder::new(dim as usize)), dim, "cli", "c1", user, reply).await
     }
 
     fn test_mem(dir: &TempDir) -> Arc<Mutex<BranchableMemory>> {
@@ -846,7 +865,7 @@ mod tests {
     #[tokio::test]
     async fn exchange_items_refuses_an_embedder_of_another_dimension() {
         // Lineage is 4-d, embedder is 8-d (a real model is 768-d).
-        let err = exchange_items(&PlumbingEmbedder::new(8), 4, "cli", "c1", "ask", "answer")
+        let err = exchange_items(Arc::new(PlumbingEmbedder::new(8)), 4, "cli", "c1", "ask", "answer")
             .await
             .err()
             .expect("mixing dimensions must be refused");
@@ -856,7 +875,7 @@ mod tests {
         // An embedder that CLAIMS the lineage width but returns another is
         // refused per vector: no truncation, no padding.
         let liar = PlumbingEmbedder { claims: Some(4), ..PlumbingEmbedder::new(8) };
-        let err = exchange_items(&liar, 4, "cli", "c1", "ask", "answer")
+        let err = exchange_items(Arc::new(liar), 4, "cli", "c1", "ask", "answer")
             .await
             .err()
             .expect("a vector of the wrong length must be refused");
@@ -898,9 +917,14 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
         let before = ticks.load(std::sync::atomic::Ordering::SeqCst);
         let slow = SlowEmbedder { dim: 4, delay: std::time::Duration::from_millis(100) };
-        let items = exchange_items(&slow, 4, "cli", "c1", "ask", "answer")
-            .await
-            .expect("exchange");
+        // Spawned so the exchange occupies a runtime worker (on a one-worker
+        // multi_thread runtime that is THE worker), as a turn does in production.
+        let items = tokio::spawn(async move {
+            exchange_items(Arc::new(slow), 4, "cli", "c1", "ask", "answer").await
+        })
+        .await
+        .expect("join")
+        .expect("exchange");
         let seen = ticks.load(std::sync::atomic::Ordering::SeqCst) - before;
         ticker.abort();
         (items.len(), seen)
@@ -937,7 +961,7 @@ mod tests {
             "t-mismatch",
             || async { Ok("reply".to_string()) },
             |_: &String| async {
-                exchange_items(&PlumbingEmbedder::new(8), 4, "cli", "c1", "ask", "reply").await
+                exchange_items(Arc::new(PlumbingEmbedder::new(8)), 4, "cli", "c1", "ask", "reply").await
             },
             false,
             &mut None,

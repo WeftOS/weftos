@@ -1330,7 +1330,7 @@ impl<P: Platform> AgentLoop<P> {
                         });
                     };
                     super::turn_checkpoint::exchange_items(
-                        embedder.as_ref(),
+                        embedder,
                         dim,
                         &channel,
                         &chat_id,
