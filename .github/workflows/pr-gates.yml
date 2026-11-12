@@ -717,12 +717,12 @@ jobs:
 
       # scripts/build.sh test pins an isolated test runtime itself.
       - name: Test voice crates with onnx
-        run: scripts/build.sh test clawft-voice-onnx clawft-voice-tts clawft-voice-talk --features onnx
+        run: scripts/build.sh test clawft-voice-onnx clawft-voice-tts clawft-voice-talk --features onnx --no-fail-fast
 
       # The kernel lib suite is ~3800 tests and 4+ minutes; only the embedding
       # modules (embedding*, embedding_support) see the onnx-embeddings code.
       - name: Test clawft-kernel embeddings with onnx-embeddings
-        run: scripts/build.sh test clawft-kernel --features onnx-embeddings --filter embedding
+        run: scripts/build.sh test clawft-kernel --features onnx-embeddings --filter embedding --no-fail-fast
 
   # -------------------------------------------------------------------
   # UI: lint and type-check (when ui/ directory exists)
