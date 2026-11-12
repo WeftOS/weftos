@@ -339,37 +339,3 @@ fn colsnap_state_app_scheduler() {
         st(&format!("form_tab_{n:02}"), s, scheduler_open);
     }
 }
-
-// ---------------------------------------------------------------------------
-// Widget gallery with the WeftOS visuals actually in effect
-// ---------------------------------------------------------------------------
-
-/// `theming::apply` installs the WeftOS `Visuals` and then overwrites them with
-/// egui's defaults (`set_global_style` of a `Style` with default visuals), so
-/// the dumps above show egui's stock widget colours. Setting the visuals again
-/// makes the hover / press / active / selection tints, and the wiring of the
-/// tokens behind them, observable.
-fn setup_visuals(ctx: &egui::Context) {
-    crate::theming::apply(ctx);
-    ctx.set_visuals(crate::theming::Tokens::default().visuals_for_test());
-}
-
-#[test]
-fn colsnap_state_galvis_pointer() {
-    crate::snap_support::gallery_pointer("state_galvis", &setup_visuals);
-}
-
-#[test]
-fn colsnap_state_galvis_focus_keyboard() {
-    crate::snap_support::gallery_focus_keyboard("state_galvis", &setup_visuals);
-}
-
-#[test]
-fn colsnap_state_galvis_text_edit() {
-    crate::snap_support::gallery_text_edit("state_galvis", &setup_visuals);
-}
-
-#[test]
-fn colsnap_state_galvis_slider_and_combo() {
-    crate::snap_support::gallery_slider_and_combo("state_galvis", &setup_visuals);
-}

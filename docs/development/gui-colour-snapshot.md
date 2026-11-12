@@ -3,6 +3,14 @@
 Proves that a refactor of `clawft-gui-egui` (for example moving colour literals
 into `theming::palette`) left every rendered colour unchanged.
 
+**Baseline note.** The commit that made `Tokens::style()` carry the WeftOS
+`Visuals` (so `theming::apply` really installs them) changed the colour of every
+surface that uses stock egui widgets, on purpose: hover, press, selection and
+text colours moved from egui's stock values to the WeftOS tokens. A base-vs-tip
+compare across that commit is therefore not expected to be zero. Treat that
+commit as the new baseline: take the "base" dumps at or after it. Compares
+between commits that both include it should be zero again.
+
 ## What it does
 
 Each `colsnap_*` test renders one surface through egui at a fixed screen size
@@ -68,7 +76,6 @@ named `state_<surface>_<state>`.
 | Surface | States |
 | --- | --- |
 | Widget gallery (`state_gal_*`, stock egui widgets) | hover, press, click for link, button, small button, disabled, checkbox, radio, selectable label, toggle, text edit, combo box, collapsing header, slider, drag value; Tab focus stops 1 to 14; Space and Enter on the focused button; text edit focus, typed text, select all, drag selection; slider drag; combo open, entry hover, press, pick; collapsing open and hover |
-| Same gallery with the WeftOS visuals in effect (`state_galvis_*`) | the same set; see the note below |
 | Patch editor (`state_edit_*`) | hover and press on nodes and toolbar buttons; select each node; deselect; selected node with the pointer on another; connect mode, connect source, hover on target, connect done, connect to self, back to select, selection then connect; add node, dirty, Reset hover, press and click; delete; node drag held and released; inspector label and kind (hover, focus, typed, select all), remove-edge hover, press and click; Tab stops 1 to 8; empty graph |
 | Conversation graph, fixture (`state_cg_*`) | select each node; dim each edge kind and intent and all; level-of-detail collapse; clusters off; scrub pinned before, at, after the data and at the ends; full-history hint; ArrowLeft, ArrowRight and L keys; pointer hover, press and click (not wired to any colour today) |
 | Conversation graph, every role x state x edge kind (`state_cgfull_*`) | plain with each of two topics, selected nodes, LOD collapse, clusters off, all edges dimmed, all intents dimmed, pinned |
@@ -78,12 +85,12 @@ named `state_<surface>_<state>`.
 
 Notes:
 
-- `theming::apply` installs the WeftOS `Visuals` and then overwrites them with
-  egui's defaults, because `set_global_style` receives a `Style` that carries
-  default visuals. The older dumps (`themed_widgets`, the apps) therefore show
-  egui's stock widget colours for hover, press and focus. The `state_galvis_*`
-  tests set `Tokens::visuals()` again (through the test-only `visuals_for_test`
-  accessor) so the tints, and the tokens behind them, are exercised.
+- Before the baseline commit, `theming::apply` installed the WeftOS `Visuals`
+  and then overwrote them with egui's defaults, so hover, press and focus dumps
+  showed stock colours; a `state_galvis_*` set and a test-only accessor worked
+  around that. Both are gone: `state_gal_*` now shows the WeftOS tints, and
+  `theming::apply_contract` asserts that `apply` leaves `Tokens::visuals()`
+  installed.
 - The chat panel's heartbeat dot takes its green channel from the wall clock.
   In-flight chat dumps mask that colour (`rgba=#MASKED`) in both the check and
   the written file; every other colour is exact.

@@ -25,6 +25,8 @@ The egui theme at `crates/clawft-gui-egui/src/theming/` is the runtime carrier. 
 
 The module is `theming/mod.rs` (`Tokens`, `apply`), `theming/palette.rs` (exact-value named colours for surfaces not yet folded into `Tokens`, plus the `data_rgb` / `data_rgba` helpers for data-derived colours), and `theming/ansi.rs` (the terminal 16-colour / xterm-256 table). `theming/palette_contract.rs` pins every palette and ANSI value. The `audit-theme.sh` D-TK01 check exempts the whole `theming/` directory.
 
+`apply(ctx)` installs the tokens' `egui::Visuals` through `Tokens::style()` (`style.visuals = Tokens::visuals()`), so the widget tints, selection colours and `override_text_color` in §2.1 are what egui draws. `theming::apply_contract` fails if the context's visuals ever differ from `Tokens::visuals()` (before 2026-11-12 egui's stock visuals silently replaced them).
+
 ### 2.1 Palette
 
 | Role | Token | sRGB | Notes |

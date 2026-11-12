@@ -11,9 +11,10 @@ use eframe::egui;
 /// Apply the WeftOS egui style to the given context. Idempotent — call
 /// once during app creation.
 pub fn apply(ctx: &egui::Context) {
-    let tokens = Tokens::default();
-    ctx.set_visuals(tokens.visuals());
-    ctx.set_global_style(tokens.style());
+    // `Tokens::style()` carries the WeftOS `Visuals`, so one call installs both.
+    // (A separate `set_visuals` before `set_global_style` is overwritten by the
+    // style's own visuals, which is how egui's stock colours once won.)
+    ctx.set_global_style(Tokens::default().style());
 }
 
 /// Neutral design tokens. No brand color at the base; `accent` is the
@@ -144,7 +145,10 @@ impl Tokens {
     }
 
     fn style(&self) -> egui::Style {
-        let mut s = egui::Style::default();
+        let mut s = egui::Style {
+            visuals: self.visuals(),
+            ..Default::default()
+        };
         s.spacing.item_spacing = self.spacing;
         s.spacing.button_padding = self.button_padding;
         s.spacing.menu_margin = egui::Margin::symmetric(6, 4);
@@ -279,12 +283,41 @@ mod token_contract {
 mod palette_contract;
 
 #[cfg(test)]
-impl Tokens {
-    /// The `Visuals` that `Tokens::visuals` builds. `apply` installs them and then
-    /// replaces them with egui's defaults (`set_global_style` of a `Style` that
-    /// carries default visuals), so colour-snapshot tests that want the widget
-    /// tints observable set them again with this.
-    pub(crate) fn visuals_for_test(&self) -> egui::Visuals {
-        self.visuals()
+mod apply_contract {
+    use super::{Tokens, apply};
+    use eframe::egui;
+
+    /// `apply` must leave the WeftOS `Visuals` installed. `Tokens::style()`
+    /// once started from `egui::Style::default()`, and installing that style
+    /// after `set_visuals` silently replaced the WeftOS visuals with egui's.
+    #[test]
+    fn apply_installs_weftos_visuals() {
+        let ctx = egui::Context::default();
+        apply(&ctx);
+        let t = Tokens::default();
+        let got = ctx.global_style().visuals.clone();
+
+        assert_eq!(
+            got.widgets.hovered.weak_bg_fill, t.bg_hover,
+            "hovered.weak_bg_fill"
+        );
+        assert_eq!(got.widgets.hovered.bg_fill, t.bg_hover, "hovered.bg_fill");
+        assert_eq!(
+            got.widgets.active.weak_bg_fill, t.bg_active,
+            "active.weak_bg_fill"
+        );
+        assert_eq!(got.selection.bg_fill, t.accent_dim, "selection.bg_fill");
+        assert_eq!(
+            got.override_text_color,
+            Some(t.text_primary),
+            "override_text_color"
+        );
+        assert_eq!(got.panel_fill, t.bg_panel, "panel_fill");
+        // Whole struct.
+        assert_eq!(
+            got,
+            t.visuals(),
+            "ctx visuals differ from Tokens::visuals()"
+        );
     }
 }
