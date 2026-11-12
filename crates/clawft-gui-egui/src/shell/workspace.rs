@@ -290,7 +290,7 @@ pub fn show(ui: &mut egui::Ui, rect: egui::Rect, ws: &mut AgentWorkspace) {
     painter.rect_filled(
         rect,
         0.0,
-        egui::Color32::from_rgba_unmultiplied(8, 8, 12, 180),
+        crate::theming::palette::WORKSPACE_SCRIM,
     );
 
     // Heading

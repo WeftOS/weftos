@@ -21,7 +21,9 @@ This is *not* a brand book and *not* a component library. It is the ruleset that
 
 ## 2. Tokens
 
-The egui theme at `crates/clawft-gui-egui/src/theming.rs` is the runtime carrier. This section is the *spec*; the runtime must match.
+The egui theme at `crates/clawft-gui-egui/src/theming/` is the runtime carrier. This section is the *spec*; the runtime must match.
+
+The module is `theming/mod.rs` (`Tokens`, `apply`), `theming/palette.rs` (exact-value named colours for surfaces not yet folded into `Tokens`, plus the `data_rgb` / `data_rgba` helpers for data-derived colours), and `theming/ansi.rs` (the terminal 16-colour / xterm-256 table). `theming/palette_contract.rs` pins every palette and ANSI value. The `audit-theme.sh` D-TK01 check exempts the whole `theming/` directory.
 
 ### 2.1 Palette
 
@@ -363,7 +365,7 @@ Each has a mandatory `empty_state` + `offline_state` per §5.
 - `references/archetypes.md` — §4 templates as TOML skeletons.
 - `scripts/scaffold-surface.sh` — generate a TOML stub from `--archetype <id> --substrate <path>`.
 - `scripts/audit-surface.sh` — lint a TOML against §2 tokens, §3 usage rules, §5 empty/loading/offline coverage, §7 a11y; report violations with file:line.
-- `scripts/audit-theme.sh` — lint `theming.rs` + `desktop.rs:render_empty_hint` etc. against §2.
+- `scripts/audit-theme.sh` — lint `theming/` + `desktop.rs:render_empty_hint` etc. against §2.
 
 DESIGN.md changes require running `scripts/audit-surface.sh` against every fixture in `crates/clawft-surface/fixtures/` and `crates/clawft-app/fixtures/` before commit.
 

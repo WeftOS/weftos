@@ -118,7 +118,7 @@ pub fn paint(ui: &mut egui::Ui, ex: &mut Explorer) -> Option<String> {
                     ui.label(
                         egui::RichText::new("⚠ backend")
                             .small()
-                            .color(egui::Color32::from_rgb(220, 170, 90)),
+                            .color(crate::theming::palette::ACCENT_AMBER),
                     )
                     .on_hover_text(msg);
                 });
@@ -131,7 +131,7 @@ pub fn paint(ui: &mut egui::Ui, ex: &mut Explorer) -> Option<String> {
                         egui::RichText::new("(no nodes registered yet)")
                             .italics()
                             .small()
-                            .color(egui::Color32::from_rgb(140, 140, 150)),
+                            .color(crate::theming::palette::TEXT_LABEL_FAINT),
                     );
                 }
                 Some(kids) => {
@@ -160,7 +160,7 @@ pub fn paint(ui: &mut egui::Ui, ex: &mut Explorer) -> Option<String> {
                             egui::RichText::new("(no rows match the current filter)")
                                 .italics()
                                 .small()
-                                .color(egui::Color32::from_rgb(140, 140, 150)),
+                                .color(crate::theming::palette::TEXT_LABEL_FAINT),
                         );
                     }
                 }
@@ -169,7 +169,7 @@ pub fn paint(ui: &mut egui::Ui, ex: &mut Explorer) -> Option<String> {
                         egui::RichText::new("loading…")
                             .italics()
                             .small()
-                            .color(egui::Color32::from_rgb(140, 140, 150)),
+                            .color(crate::theming::palette::TEXT_LABEL_FAINT),
                     );
                 }
             }
@@ -249,9 +249,9 @@ fn render_node(
 
         // Activity dot (● if updated in the last ACTIVITY_WINDOW, ○ otherwise).
         let (dot, dot_color) = if has_activity {
-            ("●", egui::Color32::from_rgb(110, 210, 160))
+            ("●", crate::theming::palette::SHELL_OK)
         } else {
-            ("○", egui::Color32::from_rgb(90, 90, 100))
+            ("○", crate::theming::palette::TREE_OFFLINE_DOT)
         };
         ui.label(
             egui::RichText::new(dot)
@@ -292,7 +292,7 @@ fn render_node(
                     egui::RichText::new("(empty)")
                         .italics()
                         .small()
-                        .color(egui::Color32::from_rgb(140, 140, 150)),
+                        .color(crate::theming::palette::TEXT_LABEL_FAINT),
                 );
             });
         }
@@ -329,7 +329,7 @@ fn render_node(
                     egui::RichText::new("loading…")
                         .italics()
                         .small()
-                        .color(egui::Color32::from_rgb(140, 140, 150)),
+                        .color(crate::theming::palette::TEXT_LABEL_FAINT),
                 );
             });
         }
@@ -362,7 +362,7 @@ fn paint_filter_chips(ui: &mut egui::Ui, filters: &mut TreeFilters) {
         ui.label(
             egui::RichText::new("filter:")
                 .small()
-                .color(egui::Color32::from_rgb(140, 140, 150)),
+                .color(crate::theming::palette::TEXT_LABEL_FAINT),
         );
 
         // Name search: small TextEdit. ~14ch wide so the row still fits

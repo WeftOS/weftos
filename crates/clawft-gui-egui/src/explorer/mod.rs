@@ -599,7 +599,7 @@ impl Explorer {
                 ui.label(
                     egui::RichText::new("Select a path from the tree")
                         .italics()
-                        .color(egui::Color32::from_rgb(170, 170, 180)),
+                        .color(crate::theming::palette::TEXT_DISCLOSURE),
                 );
             });
             return;
@@ -671,7 +671,7 @@ impl Explorer {
                     ui.label(
                         egui::RichText::new("reading…")
                             .italics()
-                            .color(egui::Color32::from_rgb(170, 170, 180)),
+                            .color(crate::theming::palette::TEXT_DISCLOSURE),
                     );
                 });
             }
@@ -743,7 +743,7 @@ impl Explorer {
                     egui::RichText::new(msg)
                         .small()
                         .italics()
-                        .color(egui::Color32::from_rgb(140, 200, 160)),
+                        .color(crate::theming::palette::TERM_OK_HINT),
                 );
             }
         });
@@ -790,7 +790,7 @@ fn paint_object_type_badge(ui: &mut egui::Ui, inferred: crate::ontology::Inferre
         let label = egui::RichText::new(format!("[{}]", inferred.display))
             .monospace()
             .small()
-            .color(egui::Color32::from_rgb(140, 175, 220));
+            .color(crate::theming::palette::ACCENT_STEEL);
         ui.label(label);
     });
     ui.add_space(2.0);

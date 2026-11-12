@@ -44,7 +44,7 @@ impl SubstrateViewer for AudioMeterViewer {
 
         ui.label(
             egui::RichText::new(format!("audio meter · {path}"))
-                .color(egui::Color32::from_rgb(160, 160, 170))
+                .color(crate::theming::palette::TEXT_SUBTLE)
                 .small(),
         );
         ui.add_space(4.0);
@@ -57,9 +57,9 @@ impl SubstrateViewer for AudioMeterViewer {
         // Optional scalars — shown as plain text if present.
         if let Some(available) = obj.get("available").and_then(Value::as_bool) {
             let (txt, col) = if available {
-                ("available", egui::Color32::from_rgb(110, 200, 150))
+                ("available", crate::theming::palette::STATUS_OK)
             } else {
-                ("unavailable", egui::Color32::from_rgb(220, 120, 120))
+                ("unavailable", crate::theming::palette::TEXT_ERROR_SOFT)
             };
             ui.label(egui::RichText::new(txt).color(col).strong());
         }
@@ -81,7 +81,7 @@ fn paint_bar(ui: &mut egui::Ui, label: &str, db: f64) {
     let painter = ui.painter_at(rect);
 
     // Background track.
-    painter.rect_filled(rect, 2.0, egui::Color32::from_rgb(24, 24, 32));
+    painter.rect_filled(rect, 2.0, crate::theming::palette::METER_BG);
 
     // Filled portion.
     let mut fill = rect;
@@ -95,17 +95,17 @@ fn paint_bar(ui: &mut egui::Ui, label: &str, db: f64) {
         egui::Align2::LEFT_CENTER,
         readout,
         egui::FontId::monospace(11.0),
-        egui::Color32::from_rgb(230, 230, 235),
+        crate::theming::palette::METER_TEXT,
     );
 }
 
 fn level_color(db: f64) -> egui::Color32 {
     if db >= -30.0 {
-        egui::Color32::from_rgb(110, 200, 150) // green
+        crate::theming::palette::STATUS_OK // green
     } else if db >= -45.0 {
-        egui::Color32::from_rgb(220, 180, 80) // amber
+        crate::theming::palette::STATUS_WARN // amber
     } else {
-        egui::Color32::from_rgb(200, 90, 90) // red
+        crate::theming::palette::STATUS_ERR // red
     }
 }
 

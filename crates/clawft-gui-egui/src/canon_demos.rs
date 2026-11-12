@@ -327,17 +327,17 @@ fn show_strip(ui: &mut egui::Ui) {
         .body(|strip| {
             strip.cell(|ui| {
                 ui.painter()
-                    .rect_filled(ui.max_rect(), 4.0, egui::Color32::from_rgb(60, 80, 120));
+                    .rect_filled(ui.max_rect(), 4.0, crate::theming::palette::DEMO_BLOCK_A);
                 ui.label("25%");
             });
             strip.cell(|ui| {
                 ui.painter()
-                    .rect_filled(ui.max_rect(), 4.0, egui::Color32::from_rgb(40, 60, 90));
+                    .rect_filled(ui.max_rect(), 4.0, crate::theming::palette::DEMO_BLOCK_B);
                 ui.label("remainder");
             });
             strip.cell(|ui| {
                 ui.painter()
-                    .rect_filled(ui.max_rect(), 4.0, egui::Color32::from_rgb(80, 60, 120));
+                    .rect_filled(ui.max_rect(), 4.0, crate::theming::palette::DEMO_BLOCK_C);
                 ui.label("120px");
             });
         })

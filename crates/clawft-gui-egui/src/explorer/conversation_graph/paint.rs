@@ -37,7 +37,7 @@ pub fn paint_graph(
         let dim = interact.edge_dimmed(&e.kind);
         let mut c = style.color;
         if dim {
-            c = Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), 40);
+            c = crate::theming::palette::data_rgba(c.r(), c.g(), c.b(), 40);
         }
         let p0 = origin + Vec2::new(x0, y0);
         let p1 = origin + Vec2::new(x1, y1);
@@ -136,7 +136,7 @@ pub fn paint_graph(
             painter.vline(
                 x,
                 rect.y_range(),
-                Stroke::new(1.5, Color32::from_rgb(255, 200, 80)),
+                Stroke::new(1.5, crate::theming::palette::CG_HIGHLIGHT),
             );
         }
     }
@@ -178,7 +178,7 @@ fn paint_topic_hulls(
             Pos2::new(max_x + pad, max_y + pad),
         );
         let hue = encode::topic_hue(&topic);
-        let fill = Color32::from_rgba_unmultiplied(hue.r(), hue.g(), hue.b(), 28);
+        let fill = crate::theming::palette::data_rgba(hue.r(), hue.g(), hue.b(), 28);
         painter.rect_filled(r, 8.0, fill);
         painter.rect_stroke(
             r,
@@ -208,7 +208,7 @@ fn paint_dashed_line(painter: &egui::Painter, a: Pos2, b: Pos2, stroke: Stroke) 
 
 fn with_opacity(c: Color32, opacity: f32) -> Color32 {
     let a = (opacity.clamp(0.0, 1.0) * 255.0) as u8;
-    Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), a)
+    crate::theming::palette::data_rgba(c.r(), c.g(), c.b(), a)
 }
 
 fn truncate(s: &str, max: usize) -> String {
