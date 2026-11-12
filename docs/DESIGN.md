@@ -252,8 +252,8 @@ NO rounded corners. NO drop shadow. NO outer padding.
 
 [ MENU — vertical stack, 32px row height, 12px L padding, 13px label, dim grey #AAA8B4 ]
   · Row format: [16px monoline icon] [8px gap] [label]  + optional ▾ chevron right-aligned for groups
-  · Selected row: full-width tile (bg_active) with a 3px left edge stripe in `accent`
-                  (accent = active). A hovered row is bg_hover only, with no stripe.
+  · Selected row: full-width tile with bg #34343C and 2px left edge stripe in dim grey
+                  (NOT colored — selection is by surface lift only)
   · Items in this exact order, every screen:
       Files            (folder icon)
       Processes        (equalizer-sliders icon)
