@@ -222,6 +222,38 @@ mod tests {
         assert!(edges.iter().all(|e| e.confidence == Confidence::Inferred));
     }
 
+    /// Real extractor output (not hand-built fixtures) must reach the
+    /// resolver: it matches on `RelationType::ImportsFrom`, so the AST
+    /// conversion has to emit that variant for `imports_from` edges.
+    #[cfg(feature = "lang-python")]
+    #[test]
+    fn cross_file_python_resolution_from_real_extraction() {
+        use crate::extract::ast::extract_ast;
+        use crate::extract::lang::LanguageId;
+
+        let dir = tempfile::tempdir().unwrap();
+        let models = dir.path().join("models.py");
+        let auth = dir.path().join("auth.py");
+        std::fs::write(&models, "class Response:\n    pass\n").unwrap();
+        std::fs::write(
+            &auth,
+            "from .models import Response\n\nclass DigestAuth:\n    pass\n",
+        )
+        .unwrap();
+
+        let per_file = vec![
+            extract_ast(&models, LanguageId::Python).unwrap(),
+            extract_ast(&auth, LanguageId::Python).unwrap(),
+        ];
+        let edges = resolve_cross_file_imports(&per_file, &[models, auth]);
+        let src = EntityId::from_legacy_string(&make_id(&["auth", "DigestAuth"]));
+        let tgt = EntityId::from_legacy_string(&make_id(&["models", "Response"]));
+        assert!(
+            edges.iter().any(|e| e.source == src && e.target == tgt),
+            "DigestAuth -> Response not resolved: {edges:?}"
+        );
+    }
+
     #[test]
     fn non_python_files_skipped() {
         let js_result = ExtractionResult {
