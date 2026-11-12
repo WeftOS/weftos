@@ -12,7 +12,8 @@ use egui_dock::{DockState, NodeIndex, TabViewer};
 use crate::canon::{
     self, AgentThread, Canvas, Chip, ChipTone, Dock, Field, FieldKind, FieldValue, Gauge, Grid,
     Media, MediaFit, Modal, Modality, Pressable, Select, Sheet, Slider, Stack, StreamView, Strip,
-    Tabs, ThreadDock, ThreadDockState, ThreadPhase, Thresholds, Toggle, ToggleStyle, Tree, TreeNode,
+    Tabs, ThreadDock, ThreadDockState, ThreadPhase, Thresholds, Toggle, ToggleStyle, Tree,
+    TreeNode,
 };
 use crate::canon::{CanonResponse, CanonWidget};
 
@@ -729,7 +730,9 @@ impl CanonDemoState {
         let _ = self
             .thread_dock
             .set_phase("swarm/reviewer", ThreadPhase::Streaming);
-        let _ = self.thread_dock.set_token_rate("swarm/coder", 40.0 + n as f32);
+        let _ = self
+            .thread_dock
+            .set_token_rate("swarm/coder", 40.0 + n as f32);
         a && b
     }
 }

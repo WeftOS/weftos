@@ -749,8 +749,7 @@ mod imp {
 
             if self.order.is_empty() {
                 let fresh = mint_local_tab_key();
-                self.sessions
-                    .insert(fresh.clone(), Terminal::default());
+                self.sessions.insert(fresh.clone(), Terminal::default());
                 self.order.push(fresh.clone());
                 self.active = fresh;
                 return;
@@ -762,10 +761,8 @@ mod imp {
                 let next = closed_idx
                     .and_then(|i| self.order.get(i).cloned())
                     .or_else(|| {
-                        closed_idx.and_then(|i| {
-                            i.checked_sub(1)
-                                .and_then(|j| self.order.get(j).cloned())
-                        })
+                        closed_idx
+                            .and_then(|i| i.checked_sub(1).and_then(|j| self.order.get(j).cloned()))
                     })
                     .or_else(|| self.order.last().cloned())
                     .expect("order non-empty after close");

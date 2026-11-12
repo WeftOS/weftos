@@ -7,11 +7,11 @@
 //! so we keep a single read-only graph primitive (`ui://graph`).
 
 use super::SubstrateViewer;
-use crate::ontology::types::lineage::{
-    Lineage, LINEAGE_PRIORITY, resolve_target_path, source_paths,
-};
 use crate::ontology::ObjectType;
-use serde_json::{json, Value};
+use crate::ontology::types::lineage::{
+    LINEAGE_PRIORITY, Lineage, resolve_target_path, source_paths,
+};
+use serde_json::{Value, json};
 
 pub struct LineageViewer;
 
@@ -140,11 +140,7 @@ fn paint_path_link(ui: &mut egui::Ui, path: &str, hover: &str) {
 }
 
 /// Materialise a GraphViewer-compatible value from lineage fields.
-fn build_lineage_graph(
-    sources: &[String],
-    via_actor: Option<&str>,
-    target: Option<&str>,
-) -> Value {
+fn build_lineage_graph(sources: &[String], via_actor: Option<&str>, target: Option<&str>) -> Value {
     let mut nodes: Vec<Value> = Vec::new();
     let mut edges: Vec<Value> = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -170,20 +166,18 @@ fn build_lineage_graph(
 
     let actor_id = via_actor.map(|a| format!("actor:{a}"));
     if let Some(ref aid) = actor_id {
-        push_node(
-            &mut nodes,
-            &mut seen,
-            aid,
-            "actor",
-        );
+        push_node(&mut nodes, &mut seen, aid, "actor");
         // Prefer a human label on the actor node.
-        if let Some(node) = nodes.iter_mut().find(|n| n.get("id").and_then(Value::as_str) == Some(aid.as_str()))
-            && let Some(obj) = node.as_object_mut() {
-                obj.insert(
-                    "label".into(),
-                    Value::String(via_actor.unwrap_or("actor").to_owned()),
-                );
-            }
+        if let Some(node) = nodes
+            .iter_mut()
+            .find(|n| n.get("id").and_then(Value::as_str) == Some(aid.as_str()))
+            && let Some(obj) = node.as_object_mut()
+        {
+            obj.insert(
+                "label".into(),
+                Value::String(via_actor.unwrap_or("actor").to_owned()),
+            );
+        }
     }
 
     if let Some(tgt) = target {
@@ -302,10 +296,7 @@ mod tests {
 
     #[test]
     fn short_label_uses_last_two_segments() {
-        assert_eq!(
-            short_label("substrate/n-6f3a9c/sensor/mic"),
-            "sensor/mic"
-        );
+        assert_eq!(short_label("substrate/n-6f3a9c/sensor/mic"), "sensor/mic");
         assert_eq!(short_label("mic"), "mic");
     }
 

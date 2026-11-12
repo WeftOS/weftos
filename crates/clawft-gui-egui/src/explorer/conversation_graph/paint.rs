@@ -2,11 +2,11 @@
 //!
 //! Custom egui painter only — no graph library (ADR-067 D1).
 
+use super::ViewTime;
 use super::encode::{self, NodeShape};
 use super::interact::InteractState;
-use super::layout::{position_map, PlacedNode};
+use super::layout::{PlacedNode, position_map};
 use super::model::GraphModel;
-use super::ViewTime;
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, Vec2};
 
 const NODE_R: f32 = 14.0;
@@ -69,11 +69,7 @@ pub fn paint_graph(
         match shape {
             NodeShape::Circle | NodeShape::Ring => {
                 painter.circle_filled(center, NODE_R, fill);
-                painter.circle_stroke(
-                    center,
-                    NODE_R,
-                    Stroke::new(style.outline_width, outline),
-                );
+                painter.circle_stroke(center, NODE_R, Stroke::new(style.outline_width, outline));
             }
             NodeShape::RoundedSquare => {
                 let r = Rect::from_center_size(center, Vec2::splat(NODE_R * 1.8));
@@ -157,12 +153,13 @@ fn paint_topic_hulls(
         std::collections::HashMap::new();
     for n in &model.nodes {
         if let Some(topic) = n.classification.topic.as_ref()
-            && let Some(&(x, y)) = pos.get(&n.id) {
-                by_topic
-                    .entry(topic.clone())
-                    .or_default()
-                    .push(origin + Vec2::new(x, y));
-            }
+            && let Some(&(x, y)) = pos.get(&n.id)
+        {
+            by_topic
+                .entry(topic.clone())
+                .or_default()
+                .push(origin + Vec2::new(x, y));
+        }
     }
     for (topic, pts) in by_topic {
         if pts.len() < 2 {

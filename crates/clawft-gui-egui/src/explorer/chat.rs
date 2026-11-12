@@ -1047,7 +1047,13 @@ fn format_age_label(last_active_ms: f64) -> String {
 /// (used only to surface the model name).
 ///
 /// Layout (WEFT-254): left conversation list + right active transcript.
-pub fn paint(ui: &mut egui::Ui, path: &str, value: &Value, panel: &mut ChatPanel, live: &Arc<Live>) {
+pub fn paint(
+    ui: &mut egui::Ui,
+    path: &str,
+    value: &Value,
+    panel: &mut ChatPanel,
+    live: &Arc<Live>,
+) {
     panel.drain_all(live);
 
     ui.horizontal_top(|ui| {
@@ -1432,8 +1438,7 @@ fn restore_model_selection(ui: &mut egui::Ui, view: &mut ChatView) {
 fn persist_model_selection(ui: &mut egui::Ui, view: &ChatView) {
     if let Some(model) = view.selected_model.as_ref() {
         let id = egui::Id::new(MODEL_SELECTION_MEM_ID);
-        ui.ctx()
-            .data_mut(|d| d.insert_persisted(id, model.clone()));
+        ui.ctx().data_mut(|d| d.insert_persisted(id, model.clone()));
     }
 }
 
@@ -2111,10 +2116,7 @@ mod tests {
             Some("llm_error")
         );
         // Legacy string-only errors have no kind.
-        assert_eq!(
-            chat_error_kind("agent.chat: agent service not wired"),
-            None
-        );
+        assert_eq!(chat_error_kind("agent.chat: agent service not wired"), None);
     }
 
     // ── WEFT-253 stream frame state machine ──────────────────────
@@ -2145,7 +2147,11 @@ mod tests {
             "done": false,
         }));
         assert_eq!(view.stream_phase(), Some("thinking"));
-        assert_eq!(view.streaming_draft(), None, "empty thinking keeps draft None");
+        assert_eq!(
+            view.streaming_draft(),
+            None,
+            "empty thinking keeps draft None"
+        );
 
         view.on_stream_frame(&json!({
             "phase": "generating",
@@ -2191,7 +2197,10 @@ mod tests {
         assert_eq!(view.streaming_draft(), None);
         assert_eq!(view.stream_phase(), None);
         assert_eq!(view.stream_seq, 0);
-        assert_eq!(view.history.last().map(|m| m.content.as_str()), Some("partial final"));
+        assert_eq!(
+            view.history.last().map(|m| m.content.as_str()),
+            Some("partial final")
+        );
     }
 
     #[test]
@@ -2224,7 +2233,10 @@ mod tests {
     fn new_conversation_appends_and_selects() {
         let mut panel = ChatPanel::new();
         let a = panel.active_index();
-        panel.active_view_mut().history.push(ChatMessage::user("first thread"));
+        panel
+            .active_view_mut()
+            .history
+            .push(ChatMessage::user("first thread"));
         let b = panel.new_conversation();
         assert_eq!(panel.len(), 2);
         assert_eq!(b, 1);
@@ -2233,10 +2245,7 @@ mod tests {
         // New session is empty; previous keeps its history.
         assert!(panel.active_view().history.is_empty());
         assert_eq!(panel.sessions()[0].view().history.len(), 1);
-        assert_eq!(
-            panel.sessions()[0].first_snippet(),
-            "first thread"
-        );
+        assert_eq!(panel.sessions()[0].first_snippet(), "first thread");
     }
 
     #[test]
@@ -2459,11 +2468,7 @@ mod tests {
         panel.upsert_agent_thread(AgentThread::new("a", "coder"));
         panel.upsert_agent_thread(AgentThread::new("b", "reviewer"));
         assert!(panel.feed_agent_stream("a", "hello\nfrom coder", Some(ThreadPhase::Streaming)));
-        assert!(panel.feed_agent_stream(
-            "b",
-            "hello\nfrom reviewer",
-            Some(ThreadPhase::Streaming)
-        ));
+        assert!(panel.feed_agent_stream("b", "hello\nfrom reviewer", Some(ThreadPhase::Streaming)));
         // Grow each stream independently.
         assert!(panel.feed_agent_stream(
             "a",
@@ -2493,7 +2498,10 @@ mod tests {
         );
         assert_eq!(panel.thread_dock().len(), 2);
         assert_eq!(panel.thread_dock().get("a").unwrap().label, "coder-v2");
-        assert_eq!(panel.thread_dock().get("a").unwrap().phase, ThreadPhase::Done);
+        assert_eq!(
+            panel.thread_dock().get("a").unwrap().phase,
+            ThreadPhase::Done
+        );
         panel.clear_agent_threads();
         assert!(!panel.shows_thread_dock());
         assert!(panel.thread_dock().is_empty());

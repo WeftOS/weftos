@@ -159,7 +159,10 @@ mod tests {
     #[test]
     fn shapes_and_edges() {
         assert_eq!(shape_for_role(NodeRole::User), NodeShape::Circle);
-        assert_eq!(shape_for_role(NodeRole::Assistant), NodeShape::RoundedSquare);
+        assert_eq!(
+            shape_for_role(NodeRole::Assistant),
+            NodeShape::RoundedSquare
+        );
         assert!(style_for_edge_kind("Contradicts").zigzag);
         assert!(style_for_edge_kind("Speaker").dashed);
         assert!(!style_for_edge_kind("Follows").dashed);

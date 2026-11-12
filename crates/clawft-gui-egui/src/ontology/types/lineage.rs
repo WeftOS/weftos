@@ -156,9 +156,10 @@ pub fn resolve_target_path(value: &Value, selected_path: &str) -> Option<String>
         .as_object()
         .and_then(|o| o.get("target_path"))
         .and_then(Value::as_str)
-        && !t.is_empty() {
-            return Some(t.to_owned());
-        }
+        && !t.is_empty()
+    {
+        return Some(t.to_owned());
+    }
     strip_meta_lineage_suffix(selected_path)
 }
 
@@ -167,9 +168,10 @@ pub fn strip_meta_lineage_suffix(path: &str) -> Option<String> {
     let trimmed = path.trim_end_matches('/');
     const SUFFIX: &str = "/meta/lineage";
     if let Some(base) = trimmed.strip_suffix(SUFFIX)
-        && !base.is_empty() {
-            return Some(base.to_owned());
-        }
+        && !base.is_empty()
+    {
+        return Some(base.to_owned());
+    }
     None
 }
 
@@ -246,8 +248,7 @@ mod tests {
     #[test]
     fn smoke_derived_path_with_lineage_attached() {
         // AC smoke: derived transcript path + sibling meta/lineage document.
-        let derived =
-            "substrate/n-daemon/derived/transcript/n-6f3a9c/mic";
+        let derived = "substrate/n-daemon/derived/transcript/n-6f3a9c/mic";
         let meta_path = format!("{derived}/meta/lineage");
         let doc = json!({
             "kind": "lineage",

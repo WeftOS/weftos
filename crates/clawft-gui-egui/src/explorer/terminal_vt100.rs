@@ -313,11 +313,7 @@ impl Terminal {
             // starting at 0, so end_col is exclusive width. Pass end.col+1.
             end.col.saturating_add(1),
         );
-        if text.is_empty() {
-            None
-        } else {
-            Some(text)
-        }
+        if text.is_empty() { None } else { Some(text) }
     }
 
     fn fire_spawn(&mut self, live: &Arc<Live>) {
@@ -576,8 +572,7 @@ impl TerminalPanel {
 
         if self.order.is_empty() {
             let fresh = mint_local_tab_key();
-            self.sessions
-                .insert(fresh.clone(), Terminal::default());
+            self.sessions.insert(fresh.clone(), Terminal::default());
             self.order.push(fresh.clone());
             self.active = fresh;
             return;
@@ -587,10 +582,8 @@ impl TerminalPanel {
             let next = closed_idx
                 .and_then(|i| self.order.get(i).cloned())
                 .or_else(|| {
-                    closed_idx.and_then(|i| {
-                        i.checked_sub(1)
-                            .and_then(|j| self.order.get(j).cloned())
-                    })
+                    closed_idx
+                        .and_then(|i| i.checked_sub(1).and_then(|j| self.order.get(j).cloned()))
                 })
                 .or_else(|| self.order.last().cloned())
                 .expect("order non-empty after close");
@@ -842,11 +835,7 @@ fn paint_grid(
                 fg = fg.linear_multiply(0.7);
             }
 
-            let cell_width = if cell.is_wide() {
-                cell_w * 2.0
-            } else {
-                cell_w
-            };
+            let cell_width = if cell.is_wide() { cell_w * 2.0 } else { cell_w };
 
             if bg != global_bg {
                 let bg_rect = egui::Rect::from_min_size(
@@ -860,7 +849,8 @@ fn paint_grid(
             if !contents.is_empty() && contents != " " {
                 // Paint first non-space char (combining chars rare in TUI).
                 if let Some(c) = contents.chars().next()
-                    && c != ' ' && c != '\0'
+                    && c != ' '
+                    && c != '\0'
                 {
                     paint_glyph(
                         painter,
@@ -1310,10 +1300,7 @@ mod tests {
     fn selection_round_trips_via_contents_between() {
         let mut t = Terminal::default();
         t.parser.process(b"hello");
-        t.selection = Some((
-            CellPos { row: 0, col: 0 },
-            CellPos { row: 0, col: 4 },
-        ));
+        t.selection = Some((CellPos { row: 0, col: 0 }, CellPos { row: 0, col: 4 }));
         let s = t.selection_to_string().unwrap_or_default();
         assert_eq!(s, "hello");
     }

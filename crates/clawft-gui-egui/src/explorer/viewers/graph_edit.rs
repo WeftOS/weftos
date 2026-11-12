@@ -17,7 +17,7 @@
 //! [`GraphDocument::to_value`] for future write-back.
 
 use super::graph_adapter::{
-    GraphDocument, GraphEditBackend, GraphEdge, GraphNode, GraphPatchEditor,
+    GraphDocument, GraphEdge, GraphEditBackend, GraphNode, GraphPatchEditor,
 };
 use serde_json::Value;
 use std::collections::HashMap;
@@ -67,7 +67,12 @@ impl EditSession {
     }
 
     fn sync_inspector_from_selection(&mut self) {
-        match self.doc.selected.as_deref().and_then(|id| self.doc.node(id)) {
+        match self
+            .doc
+            .selected
+            .as_deref()
+            .and_then(|id| self.doc.node(id))
+        {
             Some(n) => {
                 self.label_buf = n.label.clone();
                 self.kind_buf = n.kind.clone().unwrap_or_default();
@@ -89,8 +94,7 @@ impl EditSession {
         if !self.doc.dirty {
             let selected = self.doc.selected.clone();
             self.doc = GraphDocument::from_value(value);
-            self.doc.selected = selected
-                .filter(|id| self.doc.nodes.iter().any(|n| n.id == *id));
+            self.doc.selected = selected.filter(|id| self.doc.nodes.iter().any(|n| n.id == *id));
             self.source_fp = fp;
             self.sync_inspector_from_selection();
         }
@@ -129,8 +133,7 @@ pub fn paint(ui: &mut egui::Ui, path: &str, value: &Value) {
         paint_inspector(ui, &mut session);
     }
 
-    ui.ctx()
-        .data_mut(|d| d.insert_temp(session_id, session));
+    ui.ctx().data_mut(|d| d.insert_temp(session_id, session));
 }
 
 fn paint_toolbar(ui: &mut egui::Ui, session: &mut EditSession, value: &Value) {
@@ -178,10 +181,11 @@ fn paint_toolbar(ui: &mut egui::Ui, session: &mut EditSession, value: &Value) {
         if ui
             .add_enabled(can_del, egui::Button::new("Delete"))
             .clicked()
-            && let Some(id) = session.doc.selected.clone() {
-                session.doc.remove_node(&id);
-                session.sync_inspector_from_selection();
-            }
+            && let Some(id) = session.doc.selected.clone()
+        {
+            session.doc.remove_node(&id);
+            session.sync_inspector_from_selection();
+        }
 
         if ui
             .add_enabled(session.doc.dirty, egui::Button::new("Reset"))
@@ -234,9 +238,7 @@ fn paint_inspector(ui: &mut egui::Ui, session: &mut EditSession) {
                 .font(egui::TextStyle::Monospace),
         );
         if resp.changed() {
-            session
-                .doc
-                .set_node_label(&sel, session.label_buf.clone());
+            session.doc.set_node_label(&sel, session.label_buf.clone());
         }
     });
 
@@ -309,19 +311,18 @@ fn paint_canvas(ui: &mut egui::Ui, path: &str, session: &mut EditSession) {
     // Drag selected node.
     if resp.dragged()
         && let Some(id) = session.doc.selected.clone()
-            && let Some(&old) = positions.get(&id) {
-                let mut pos = old + resp.drag_delta();
-                // Clamp inside canvas with inset.
-                let inset = NODE_RADIUS + 4.0;
-                pos.x = pos.x.clamp(rect.min.x + inset, rect.max.x - inset);
-                pos.y = pos.y.clamp(rect.min.y + inset, rect.max.y - inset);
-                // Store as canvas-local coords so layout reuses them.
-                let local = pos - rect.min;
-                session
-                    .doc
-                    .set_node_pos(&id, (local.x, local.y));
-                positions.insert(id, pos);
-            }
+        && let Some(&old) = positions.get(&id)
+    {
+        let mut pos = old + resp.drag_delta();
+        // Clamp inside canvas with inset.
+        let inset = NODE_RADIUS + 4.0;
+        pos.x = pos.x.clamp(rect.min.x + inset, rect.max.x - inset);
+        pos.y = pos.y.clamp(rect.min.y + inset, rect.max.y - inset);
+        // Store as canvas-local coords so layout reuses them.
+        let local = pos - rect.min;
+        session.doc.set_node_pos(&id, (local.x, local.y));
+        positions.insert(id, pos);
+    }
 
     // Edges under nodes.
     for edge in &session.doc.edges {
@@ -336,9 +337,10 @@ fn paint_canvas(ui: &mut egui::Ui, path: &str, session: &mut EditSession) {
     let pointer = resp.interact_pointer_pos();
     let mut clicked_id: Option<String> = None;
     if resp.clicked()
-        && let Some(p) = pointer {
-            clicked_id = hit_test(&session.doc.nodes, &positions, p);
-        }
+        && let Some(p) = pointer
+    {
+        clicked_id = hit_test(&session.doc.nodes, &positions, p);
+    }
 
     for node in &session.doc.nodes {
         let Some(pos) = positions.get(&node.id) else {
@@ -386,8 +388,16 @@ fn layout_session(doc: &GraphDocument, rect: egui::Rect) -> HashMap<String, egui
     if all_positioned {
         // If positions look like canvas-local (within rect size * 2),
         // treat as local; else fit bounding box (substrate-normalised).
-        let xs: Vec<f32> = doc.nodes.iter().filter_map(|n| n.pos.map(|p| p.0)).collect();
-        let ys: Vec<f32> = doc.nodes.iter().filter_map(|n| n.pos.map(|p| p.1)).collect();
+        let xs: Vec<f32> = doc
+            .nodes
+            .iter()
+            .filter_map(|n| n.pos.map(|p| p.0))
+            .collect();
+        let ys: Vec<f32> = doc
+            .nodes
+            .iter()
+            .filter_map(|n| n.pos.map(|p| p.1))
+            .collect();
         let max_x = xs.iter().copied().fold(f32::NEG_INFINITY, f32::max);
         let max_y = ys.iter().copied().fold(f32::NEG_INFINITY, f32::max);
         let local_ish = max_x <= rect.width() * 2.0 && max_y <= rect.height() * 2.0 && max_x >= 0.0;
@@ -551,9 +561,7 @@ mod tests {
         session.sync_inspector_from_selection();
         assert_eq!(session.label_buf, "A");
         session.label_buf = "Alpha".into();
-        session
-            .doc
-            .set_node_label("n1", session.label_buf.clone());
+        session.doc.set_node_label("n1", session.label_buf.clone());
         assert!(session.doc.dirty);
         let out = session.doc.to_value();
         assert_eq!(out["nodes"][0]["label"], "Alpha");
@@ -629,9 +637,6 @@ mod tests {
             hit_test(&nodes, &positions, egui::pos2(100.0, 100.0)),
             Some("x".into())
         );
-        assert_eq!(
-            hit_test(&nodes, &positions, egui::pos2(0.0, 0.0)),
-            None
-        );
+        assert_eq!(hit_test(&nodes, &positions, egui::pos2(0.0, 0.0)), None);
     }
 }
