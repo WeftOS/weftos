@@ -762,6 +762,16 @@ mod tests {
     }
 
     #[test]
+    fn nomic_search_dirs_include_the_users_default_bundle_location() {
+        // Path strings only; nothing under the real home directory is read.
+        let dirs = nomic_model_search_dirs();
+        assert!(
+            dirs.iter().any(|d| d.ends_with(".weftos/models/nomic-embed-text-v1.5")),
+            "expected ~/.weftos/models/nomic-embed-text-v1.5 in the search path, got: {dirs:?}"
+        );
+    }
+
+    #[test]
     fn qwen3_search_dirs_include_project_local_bundle() {
         let dirs = qwen3_model_search_dirs();
         assert!(

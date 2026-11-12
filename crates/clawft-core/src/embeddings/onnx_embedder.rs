@@ -33,16 +33,28 @@ const MAX_TOKENS: usize = 512;
 
 /// Directories searched for the bundle, in order: `$WEFTOS_EMBED_MODEL_DIR`,
 /// `.weftos/models/nomic-embed-text-v1.5`, `$HOME/.weftos/models/nomic-embed-text-v1.5`.
+///
+/// The last one is the default install location of the shipped bundle
+/// (owner decision 2026-11-12): `~/.weftos/models/nomic-embed-text-v1.5`.
 pub fn default_model_dirs() -> Vec<PathBuf> {
+    model_dirs_for(
+        std::env::var(EMBED_MODEL_DIR_ENV).ok().as_deref(),
+        std::env::var("HOME").ok().as_deref(),
+    )
+}
+
+/// [`default_model_dirs`] with the environment passed in (testable without
+/// touching the process environment or the real home directory).
+fn model_dirs_for(env_dir: Option<&str>, home: Option<&str>) -> Vec<PathBuf> {
     let sub = "nomic-embed-text-v1.5";
     let mut v = Vec::new();
-    if let Ok(d) = std::env::var(EMBED_MODEL_DIR_ENV)
+    if let Some(d) = env_dir
         && !d.is_empty()
     {
         v.push(PathBuf::from(d));
     }
     v.push(PathBuf::from(format!(".weftos/models/{sub}")));
-    if let Ok(home) = std::env::var("HOME") {
+    if let Some(home) = home {
         v.push(PathBuf::from(home).join(format!(".weftos/models/{sub}")));
     }
     v
@@ -209,5 +221,31 @@ impl Embedder for OnnxEmbedder {
 
     fn name(&self) -> &str {
         "nomic-embed-text-v1.5"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The shipped bundle's default location is found with no environment
+    /// override, and `WEFTOS_EMBED_MODEL_DIR` wins when set. Uses a temp dir as
+    /// HOME; the real `~/.weftos` is never read or written.
+    #[test]
+    fn default_location_is_the_users_weftos_models_dir_and_the_env_dir_wins() {
+        let home = tempfile::tempdir().unwrap();
+        let bundle = home.path().join(".weftos/models/nomic-embed-text-v1.5");
+        std::fs::create_dir_all(bundle.join("onnx")).unwrap();
+        std::fs::write(bundle.join("onnx/model.onnx"), b"stub").unwrap();
+        let home_s = home.path().to_str().unwrap();
+
+        let dirs = model_dirs_for(None, Some(home_s));
+        let found = dirs.iter().find(|d| d.join("onnx/model.onnx").exists());
+        assert_eq!(found, Some(&bundle), "default lookup must reach ~/.weftos/models/nomic-embed-text-v1.5");
+
+        let other = tempfile::tempdir().unwrap();
+        let dirs = model_dirs_for(other.path().to_str(), Some(home_s));
+        assert_eq!(dirs[0], other.path(), "WEFTOS_EMBED_MODEL_DIR is searched first");
+        assert_eq!(dirs.last(), Some(&bundle));
     }
 }

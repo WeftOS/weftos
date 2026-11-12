@@ -112,6 +112,7 @@ Feature flags control which optional components are compiled in. They propagate 
 | `services` | Yes | `dep:clawft-services` | Cron, heartbeat, MCP server/client |
 | `vector-memory` | No | `clawft-core/vector-memory` | Vector store for semantic memory |
 | `delegate` | No | `clawft-services/delegate`, `clawft-tools/delegate` | Task delegation to Claude AI / Claude Flow |
+| `onnx-embeddings` | No (on in `scripts/build.sh native` release builds, see below) | `clawft-core/onnx-embeddings`, `clawft-tools/onnx-embeddings`, `weftos-cos/onnx-embeddings` | Real local embedding model runtime (ONNX Runtime via `ort`) |
 
 ### `clawft-core` Features
 
@@ -196,6 +197,28 @@ panic = "abort"    # No unwinding (smaller binary, no catch_unwind)
 ```
 
 This produces binaries under 15 MB. Compile time is significantly longer than debug.
+
+### Embedding model (`onnx-embeddings`)
+
+Semantic recall needs a real embedding model; there is no silent hash fallback.
+Without one, recall reports "semantic search unavailable: configure an embedding
+model".
+
+- **Desktop and server release builds** (`scripts/build.sh native`, release
+  profile) turn `onnx-embeddings` on. The model is a runtime file, not part of
+  the binary: put the nomic-embed-text-v1.5 bundle (`onnx/model.onnx` and
+  `tokenizer.json`) at `~/.weftos/models/nomic-embed-text-v1.5`. The loader looks
+  at `$WEFTOS_EMBED_MODEL_DIR`, then `./.weftos/models/nomic-embed-text-v1.5`,
+  then `~/.weftos/models/nomic-embed-text-v1.5`.
+- The `ort` crate downloads a prebuilt ONNX Runtime at build time, and one exists
+  only for x86_64/aarch64 Linux (glibc), aarch64 macOS and Windows (MSVC).
+  `scripts/build.sh` therefore skips the feature, with a message, for musl and
+  x86_64-apple-darwin builds. Set `WEFTOS_NO_EMBEDDER=1` to opt out anywhere.
+- **wasm and edge builds** (`wasi`, `browser`, `wasm-project`) stay off. To give
+  a build that does have the feature a model somewhere else, point
+  `WEFTOS_EMBED_MODEL_DIR` at a directory holding `onnx/model.onnx` and
+  `tokenizer.json`. `WEFTOS_EMBEDDING_MODE=lexical` is the explicit, warned
+  opt-in to word-overlap (non-semantic) matching.
 
 ### Release-WASM
 
