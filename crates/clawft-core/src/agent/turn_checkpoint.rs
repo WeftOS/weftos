@@ -848,7 +848,8 @@ mod tests {
         // Lineage is 4-d, embedder is 8-d (a real model is 768-d).
         let err = exchange_items(&PlumbingEmbedder::new(8), 4, "cli", "c1", "ask", "answer")
             .await
-            .expect_err("mixing dimensions must be refused");
+            .err()
+            .expect("mixing dimensions must be refused");
         let msg = err.to_string();
         assert!(msg.contains("dimension mismatch: expected 4, got 8"), "{msg}");
 
@@ -857,7 +858,8 @@ mod tests {
         let liar = PlumbingEmbedder { claims: Some(4), ..PlumbingEmbedder::new(8) };
         let err = exchange_items(&liar, 4, "cli", "c1", "ask", "answer")
             .await
-            .expect_err("a vector of the wrong length must be refused");
+            .err()
+            .expect("a vector of the wrong length must be refused");
         assert!(err.to_string().contains("dimension mismatch: expected 4, got 8"), "{err}");
     }
 
