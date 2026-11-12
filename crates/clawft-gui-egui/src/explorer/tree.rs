@@ -625,10 +625,10 @@ mod tests {
         // Locate the "sensors" label, then a stroked rect that encloses it.
         let mut label = None;
         for s in &shapes {
-            if let egui::Shape::Text(t) = s {
-                if t.galley.text() == "sensors" {
-                    label = Some(egui::Rect::from_min_size(t.pos, t.galley.size()).center());
-                }
+            if let egui::Shape::Text(t) = s
+                && t.galley.text() == "sensors"
+            {
+                label = Some(egui::Rect::from_min_size(t.pos, t.galley.size()).center());
             }
         }
         let label = label.expect("sensors toggle painted");
