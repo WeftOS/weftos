@@ -429,10 +429,16 @@ fn colsnap_state_conversation_graph_dim_and_scrub() {
     );
 }
 
-/// One topic for every node: overlapping topic hulls are drawn in `HashMap`
-/// iteration order (random per run), so a multi-topic model is not
-/// reproducible. Each topic gets its own dump instead.
+/// One topic for every node. Topic hulls are drawn largest first (ties by topic
+/// id), so a multi-topic model is reproducible too; see
+/// `colsnap_state_conversation_graph_two_topics`.
 fn full_model(topic: &str) -> GraphModel {
+    full_model_topics(&[topic])
+}
+
+/// [`full_model`] with the nodes dealt round-robin across `topics`, so the
+/// topic hulls overlap.
+fn full_model_topics(topics: &[&str]) -> GraphModel {
     let roles = [
         NodeRole::User,
         NodeRole::Assistant,
@@ -461,7 +467,7 @@ fn full_model(topic: &str) -> GraphModel {
                 ts_ms: 1_000 + i * 500,
                 classification: Classification {
                     intent: Some(intents[(i % 3) as usize].into()),
-                    topic: Some(topic.into()),
+                    topic: Some(topics[(i as usize) % topics.len()].into()),
                     emotion: if i.is_multiple_of(4) {
                         Some("calm".into())
                     } else {
@@ -572,4 +578,33 @@ fn colsnap_state_conversation_graph_full_model() {
     cg_full("state_cgfull_pinned_mid", &Script::new(), |p| {
         p.view_time = ViewTime::Pinned(5_000);
     });
+}
+
+/// Two interleaved topics give two overlapping hulls. Their draw order used to
+/// follow `HashMap` iteration order, which differs per map, so the z-order and
+/// the tessellated shape order changed from run to run. Each render builds a
+/// fresh map (fresh hash seed); every dump must be identical.
+#[test]
+fn colsnap_state_conversation_graph_two_topics() {
+    let render_one = || {
+        let c = egui::Context::default();
+        setup(&c);
+        let mut p = ConversationGraphPanel {
+            model: full_model_topics(&["alpha", "beta"]),
+            view_time: ViewTime::Live,
+            interact: Default::default(),
+            ecc_enabled: true,
+            use_fixture: false,
+        };
+        snap_support::render(&c, Vec::new(), move |ui: &mut egui::Ui| p.show(ui))
+    };
+    let first = render_one();
+    for run in 1..32 {
+        assert_eq!(
+            first,
+            render_one(),
+            "conversation graph with two overlapping topics differs on run {run}"
+        );
+    }
+    snap_support::emit("state_cgfull_two_topics", &first);
 }

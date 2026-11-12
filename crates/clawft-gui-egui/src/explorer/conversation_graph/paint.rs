@@ -161,6 +161,7 @@ fn paint_topic_hulls(
                 .push(origin + Vec2::new(x, y));
         }
     }
+    let mut hulls: Vec<(String, Rect)> = Vec::new();
     for (topic, pts) in by_topic {
         if pts.len() < 2 {
             continue;
@@ -174,6 +175,12 @@ fn paint_topic_hulls(
             Pos2::new(min_x - pad, min_y - pad),
             Pos2::new(max_x + pad, max_y + pad),
         );
+        hulls.push((topic, r));
+    }
+    // Largest hull first so smaller ones stay visible on top; ties by topic id.
+    // `by_topic` is a HashMap, so its own order must never reach the painter.
+    hulls.sort_by(|(ta, ra), (tb, rb)| rb.area().total_cmp(&ra.area()).then_with(|| ta.cmp(tb)));
+    for (topic, r) in hulls {
         let hue = encode::topic_hue(&topic);
         let fill = crate::theming::palette::data_rgba(hue.r(), hue.g(), hue.b(), 28);
         painter.rect_filled(r, 8.0, fill);
