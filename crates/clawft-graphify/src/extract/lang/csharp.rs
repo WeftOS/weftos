@@ -201,7 +201,6 @@ namespace Demo.App
     }
 
     #[test]
-    #[ignore = "blocked: Cargo.lock pins tree-sitter-c-sharp 0.23.5 (ABI 15) but tree-sitter 0.24 loads ABI <= 14; passes with the lock pinned to 0.23.1 (needs owner approval)"]
     fn types_and_methods_through_namespaces() {
         let d = tempfile::tempdir().unwrap();
         let r = extract(&d, "Service.cs", SRC);
@@ -229,7 +228,6 @@ namespace Demo.App
     }
 
     #[test]
-    #[ignore = "blocked: Cargo.lock pins tree-sitter-c-sharp 0.23.5 (ABI 15) but tree-sitter 0.24 loads ABI <= 14; passes with the lock pinned to 0.23.1 (needs owner approval)"]
     fn base_list_binds_local_and_phantoms_external() {
         let d = tempfile::tempdir().unwrap();
         let r = extract(&d, "Service.cs", SRC);
@@ -242,7 +240,6 @@ namespace Demo.App
     }
 
     #[test]
-    #[ignore = "blocked: Cargo.lock pins tree-sitter-c-sharp 0.23.5 (ABI 15) but tree-sitter 0.24 loads ABI <= 14; passes with the lock pinned to 0.23.1 (needs owner approval)"]
     fn usings_become_imports_from_edges() {
         let d = tempfile::tempdir().unwrap();
         let r = extract(&d, "Service.cs", SRC);
@@ -260,7 +257,6 @@ namespace Demo.App
     }
 
     #[test]
-    #[ignore = "blocked: Cargo.lock pins tree-sitter-c-sharp 0.23.5 (ABI 15) but tree-sitter 0.24 loads ABI <= 14; passes with the lock pinned to 0.23.1 (needs owner approval)"]
     fn call_edges() {
         let d = tempfile::tempdir().unwrap();
         let r = extract(&d, "Service.cs", SRC);
@@ -274,7 +270,6 @@ namespace Demo.App
     }
 
     #[test]
-    #[ignore = "blocked: Cargo.lock pins tree-sitter-c-sharp 0.23.5 (ABI 15) but tree-sitter 0.24 loads ABI <= 14; passes with the lock pinned to 0.23.1 (needs owner approval)"]
     fn malformed_source_does_not_panic() {
         let d = tempfile::tempdir().unwrap();
         let r = extract(&d, "Bad.cs", "class { void ( namespace");

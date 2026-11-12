@@ -79,7 +79,11 @@ tree-sitter-java = { version = "0.23", optional = true }
 tree-sitter-c = { version = "0.23", optional = true }
 tree-sitter-cpp = { version = "0.23", optional = true }
 tree-sitter-ruby = { version = "0.23", optional = true }
-tree-sitter-c-sharp = { version = "0.23", optional = true }
+# Pinned exactly (owner decision 2026-11-12): 0.23.5 ships grammar ABI 15, but
+# tree-sitter 0.24.x loads ABI 13-14 only, so extract_csharp fails with
+# "Incompatible language version 15". 0.23.1 is ABI 14. Do not loosen until
+# tree-sitter itself is bumped.
+tree-sitter-c-sharp = { version = "=0.23.1", optional = true }
 html-escape = { version = "0.2", optional = true }
 async-trait = { workspace = true, optional = true }
 clawft-kernel = { workspace = true, optional = true, features = ["ecc"] }
