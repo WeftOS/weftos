@@ -679,7 +679,8 @@ jobs:
   #
   #   1. cargo check --all-targets on the three voice crates with `onnx`
   #   2. cargo check --all-targets on clawft-kernel with `onnx-embeddings`
-  #   3. tests for the same feature sets (scripts/build.sh test)
+  #   3. tests for the same feature sets (scripts/build.sh test; kernel
+  #      narrowed to the embedding tests)
   #
   # No model download: the real-model tests are `#[ignore]`d (voice) or skip
   # without the `real-embedder-tests` feature (kernel), which is not enabled
@@ -718,8 +719,10 @@ jobs:
       - name: Test voice crates with onnx
         run: scripts/build.sh test clawft-voice-onnx clawft-voice-tts clawft-voice-talk --features onnx
 
-      - name: Test clawft-kernel with onnx-embeddings
-        run: scripts/build.sh test clawft-kernel --features onnx-embeddings
+      # The kernel lib suite is ~3800 tests and 4+ minutes; only the embedding
+      # modules (embedding*, embedding_support) see the onnx-embeddings code.
+      - name: Test clawft-kernel embeddings with onnx-embeddings
+        run: scripts/build.sh test clawft-kernel --features onnx-embeddings --filter embedding
 
   # -------------------------------------------------------------------
   # UI: lint and type-check (when ui/ directory exists)
