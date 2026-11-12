@@ -340,6 +340,9 @@ async fn one_unverified_connection_cannot_mint_more_than_its_quota() {
 #[tokio::test]
 async fn a_flooding_connection_is_cut_off_before_anything_is_verified() {
     let b = node(31);
+    // The bucket refills with wall time (20/s); on a loaded host the 40 junk
+    // frames can take long enough to earn a token back. Freeze its clock.
+    b.ex.freeze_budget_clock();
     let (id, s) = signed_for(110, 1);
     let ctxu = ctx(&id, false);
     // Garbage frames drain the budget (the parse fails, but each is charged first).
