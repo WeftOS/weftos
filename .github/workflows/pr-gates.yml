@@ -669,6 +669,59 @@ jobs:
         run: cargo test -p clawft-graphify --features vision-extract
 
   # -------------------------------------------------------------------
+  # Optional ONNX feature gate — WO-202 follow-up.
+  #
+  # `ort` is an optional dependency behind clawft-voice-onnx/-tts/-talk
+  # `onnx` and clawft-kernel `onnx-embeddings`, so no default-feature job
+  # compiles it. A lock refresh moved `ort` rc.12 -> rc.15 (a prerelease
+  # requirement floats on `cargo update`), which broke every one of those
+  # builds with E0061 while this workflow stayed green. This job:
+  #
+  #   1. cargo check --all-targets on the three voice crates with `onnx`
+  #   2. cargo check --all-targets on clawft-kernel with `onnx-embeddings`
+  #   3. tests for the same feature sets (scripts/build.sh test)
+  #
+  # No model download: the real-model tests are `#[ignore]`d (voice) or skip
+  # without the `real-embedder-tests` feature (kernel), which is not enabled
+  # here. `ort` itself fetches its ONNX Runtime binary at build time.
+  # Not covered here: the libasound features (audio, bridge, live-audio) and
+  # meson-based webrtc-aec, which need system packages.
+  # -------------------------------------------------------------------
+  onnx-features:
+    name: ONNX optional features
+    needs: diff-gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-onnx-features-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-onnx-features-
+
+      - name: Check voice crates with onnx
+        run: cargo check --all-targets -p clawft-voice-onnx -p clawft-voice-tts -p clawft-voice-talk --features onnx
+
+      - name: Check clawft-kernel with onnx-embeddings
+        run: cargo check --all-targets -p clawft-kernel --features onnx-embeddings
+
+      # scripts/build.sh test pins an isolated test runtime itself.
+      - name: Test voice crates with onnx
+        run: scripts/build.sh test clawft-voice-onnx clawft-voice-tts clawft-voice-talk --features onnx
+
+      - name: Test clawft-kernel with onnx-embeddings
+        run: scripts/build.sh test clawft-kernel --features onnx-embeddings
+
+  # -------------------------------------------------------------------
   # UI: lint and type-check (when ui/ directory exists)
   # -------------------------------------------------------------------
   ui-check:
