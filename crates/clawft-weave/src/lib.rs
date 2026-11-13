@@ -222,10 +222,14 @@ pub mod expose_rt;
 pub mod store_rt;
 pub mod store_ingest;
 pub mod store_watch;
+/// Needs the cogbus broker (`cogbus_serve`), which is Unix-only with `placement`.
+#[cfg(all(feature = "placement", unix))]
 pub mod store_svc;
 /// ADR-126 S1: `store.*` operator verbs.
 pub mod store_rpc;
 pub mod store_drive;
+/// Needs `weftos_store::drive::view`, which is Unix-only; `store.view.*` answers "not supported" elsewhere.
+#[cfg(unix)]
 pub mod store_view;
 pub mod store_worktree;
 pub mod store_worktree_paths;
