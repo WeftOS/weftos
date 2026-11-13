@@ -167,3 +167,18 @@ path        = ".github/workflows/pr-gates.yml"
 pattern     = "*"
 reason      = "Owner approval 2026-11-13: onnx-features job (WO-202) and graphify lang-all/full jobs"
 approved_by = "owner"
+
+# Approved by the owner on 2026-11-13 5:58 AM ET (relayed by Cogs Bot): ADR-132 release embedder.
+[[approval]]
+rule        = "new-dep"
+path        = "Cargo.toml"
+pattern     = '(^|[^-[:alnum:]])tract-onnx[[:space:]]*='
+reason      = "ADR-132: tract-onnx 0.23.10, pure-Rust ONNX engine for the release embedder (dist archives, Docker, musl, x86_64-apple-darwin)"
+approved_by = "owner"
+
+[[approval]]
+rule        = "new-dep"
+path        = "crates/clawft-core/Cargo.toml"
+pattern     = '(^|[^-[:alnum:]])tract-onnx[[:space:]]*='
+reason      = "ADR-132: clawft-core tract-embeddings uses the workspace tract-onnx"
+approved_by = "owner"
