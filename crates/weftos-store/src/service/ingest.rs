@@ -73,7 +73,10 @@ impl StoreService {
         let outcome = match raw.status {
             Some(s) if (200..300).contains(&s) => Outcome::Ok,
             Some(403) => Outcome::Refused(raw.reason.clone().unwrap_or_else(|| "403".into())),
-            Some(s) => Outcome::Error(format!("status {s}")),
+            Some(s) => Outcome::Error(match &raw.reason {
+                Some(why) => format!("status {s}: {why}"),
+                None => format!("status {s}"),
+            }),
             None => Outcome::Ok,
         };
         Some(AuditEvent { ts_ms: self.now(), principal, store, bucket: raw.bucket, op: raw.op, key: raw.object, bytes: raw.bytes, outcome, source })
@@ -139,8 +142,16 @@ impl StoreService {
     }
 
     /// One line of RustFS's audit stream into the activity log. False if it was not an audit line.
+    ///
+    /// RustFS 1.0.5 also audits authorization denials (`tags.denialReason`). The same refusal is an
+    /// `s3_authorization_denied` line in RustFS's log, which [`Self::ingest_log_line`] reads, and the
+    /// log is complete where the audit entry is rate-limited, so the audit copy is read (it is an
+    /// audit line) but not logged or counted a second time.
     pub fn ingest_audit_line(&self, line: &str) -> bool {
         let Some(r) = audit::parse_audit(line) else { return false };
+        if r.audited_denial {
+            return true;
+        }
         self.take(r, Source::RustfsAudit);
         true
     }

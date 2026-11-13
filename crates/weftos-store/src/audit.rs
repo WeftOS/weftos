@@ -92,6 +92,10 @@ pub struct Raw {
     pub status: Option<u16>,
     pub bytes: u64,
     pub reason: Option<String>,
+    /// An audit entry RustFS (1.0.5 and later) wrote for an authorization denial: `tags.denialReason`
+    /// is set. The same refusal is also an `s3_authorization_denied` line in RustFS's log, so the
+    /// ingest must not count it a second time.
+    pub audited_denial: bool,
 }
 
 fn find<'a>(v: &'a Value, names: &[&str]) -> Option<&'a Value> {
@@ -132,6 +136,7 @@ pub fn parse_audit(line: &str) -> Option<Raw> {
     if api.get("status_code").is_some()
         && let (Some(op), Some(bucket)) = (api["name"].as_str(), api["bucket"].as_str().filter(|b| !b.is_empty()))
     {
+        let denial = rec["tags"]["denialReason"].as_str().filter(|r| !r.is_empty());
         return Some(Raw {
             access_key: rec["accessKey"].as_str().unwrap_or_default().to_owned(),
             bucket: bucket.to_owned(),
@@ -139,7 +144,8 @@ pub fn parse_audit(line: &str) -> Option<Raw> {
             op: op.trim_start_matches("s3:").to_owned(),
             status: api["status_code"].as_u64().and_then(|n| u16::try_from(n).ok()),
             bytes: 0,
-            reason: None,
+            reason: denial.or_else(|| rec["error"].as_str().filter(|e| !e.is_empty())).map(str::to_owned),
+            audited_denial: denial.is_some(),
         });
     }
     let bucket = text(&v, &["bucket", "bucketName"])?;
@@ -152,6 +158,7 @@ pub fn parse_audit(line: &str) -> Option<Raw> {
         status: num(&v, &["statusCode", "status_code", "status"]).and_then(|n| u16::try_from(n).ok()),
         bytes: num(&v, &["contentLength", "size", "rx", "bytes"]).unwrap_or(0),
         reason: None,
+        audited_denial: false,
     })
 }
 
@@ -193,7 +200,7 @@ pub fn parse_auth_failure(line: &str) -> Option<Raw> {
     let v: Value = serde_json::from_str(line.trim()).ok()?;
     let msg = ["error", "err", "message"].iter().find_map(|k| v[*k].as_str().filter(|m| m.contains("code: ")))?;
     let code = ["SignatureDoesNotMatch", "InvalidAccessKeyId"].into_iter().find(|c| msg.contains(&format!("code: {c}")))?;
-    Some(Raw { access_key: String::new(), bucket: String::new(), object: None, op: String::new(), status: Some(403), bytes: 0, reason: Some(code.to_owned()) })
+    Some(Raw { access_key: String::new(), bucket: String::new(), object: None, op: String::new(), status: Some(403), bytes: 0, reason: Some(code.to_owned()), audited_denial: false })
 }
 
 /// One `s3_authorization_denied` line of RustFS's JSON log.
@@ -210,6 +217,7 @@ pub fn parse_denial(line: &str) -> Option<Raw> {
         status: Some(403),
         bytes: 0,
         reason: text(&v, &["reason"]),
+        audited_denial: false,
     })
 }
 
@@ -230,6 +238,7 @@ pub fn parse_notification(body: &str) -> Vec<Raw> {
                 status: Some(200),
                 bytes: r["s3"]["object"]["size"].as_u64().unwrap_or(0),
                 reason: None,
+                audited_denial: false,
             })
         })
         .collect()
@@ -307,6 +316,7 @@ mod tests {
             assert!(!l.contains("Credential=") && !l.contains("Signature="), "no signed header text in the fixture");
         }
     }
+
     /// Nine records exactly as a throwaway RustFS 1.0.5 container (sha256:b81d16a9...) posted them to the
     /// audit webhook (2026-11-13): the entries 1.0.5 added (UploadPart, a bucket policy write, authorization
     /// denials with `tags.denialReason`, the anonymous one with an empty `accessKey`), the multipart events
