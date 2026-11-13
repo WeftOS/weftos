@@ -272,4 +272,67 @@ mod tests {
         assert_eq!(required_capability("governance.check"), Capability::Read);
         assert!(crate::scope_gate::READ_ONLY_ALLOW.contains(&"governance.check"));
     }
+    /// Drives the quota problem through the real RPC path: `authorize_with`
+    /// then `dispatch_ext_with` on the builtin registry, against one booted
+    /// kernel (one governance gate, one limiter). Two callers are two
+    /// `CallerCtx` values with their own `Read` caps; nothing in the request
+    /// but `agent_id` names who is asked about, and the handler never looks
+    /// at the caller. Caller A spends the per-principal quota naming
+    /// `victim`; caller B then checks as `victim` and is refused.
+    #[tokio::test]
+    #[ignore = "governance.check quota keyed on caller-supplied agent_id; owner call, card 9f8f872e"]
+    async fn rpc_governance_check_quota_is_not_spendable_by_another_caller() {
+        use crate::capability::CallerCapabilities;
+        use crate::rpc_ext::{CallerCtx, ExtRegistry, KernelRef, authorize_with, dispatch_ext_with};
+        use clawft_platform::NativePlatform;
+        use clawft_types::config::{ChainConfig, Config, KernelConfig};
+
+        let kcfg = KernelConfig {
+            chain: Some(ChainConfig::isolated_in(&tempfile::tempdir().unwrap().keep())),
+            ..KernelConfig::default()
+        };
+        let kernel: KernelRef = std::sync::Arc::new(tokio::sync::RwLock::new(
+            clawft_kernel::boot::Kernel::boot(Config::default(), kcfg, std::sync::Arc::new(NativePlatform::new()))
+                .await
+                .expect("kernel boots"),
+        ));
+        let limit = clawft_kernel::rate_limit::DEFAULT_GOVERNANCE_EVAL_RATE.max_per_window as usize;
+
+        let reg = ExtRegistry::builtin();
+        let caps = CallerCapabilities::from_scopes(["read"]);
+        let caller_a = CallerCtx::from_auth(Some("read".into()));
+        let caller_b = CallerCtx::from_auth(Some("read".into()));
+        let params = json!({"agent_id": "victim", "action": "tool.read_file"});
+
+        let call = |caller: CallerCtx| {
+            let (reg, caps, params, kernel) = (reg.clone(), caps.clone(), params.clone(), kernel.clone());
+            async move {
+                authorize_with(&reg, &caller, &caps, "governance.check", &params, &kernel)
+                    .await
+                    .expect("read caller may call governance.check");
+                dispatch_ext_with(&reg, &caller, &caps, "governance.check", &params, &kernel)
+                    .await
+                    .expect("governance.check is routed")
+            }
+        };
+        let limited = |r: &Response| {
+            r.ok && result(r)["reason"].as_str().is_some_and(|s| s.contains("rate limited"))
+        };
+
+        // Caller A spends the whole quota and one more, all naming `victim`.
+        for i in 0..=limit {
+            let r = call(caller_a.clone()).await;
+            assert!(r.ok, "check {i} must answer: {:?}", r.error);
+            assert_eq!(limited(&r), i == limit, "A's check {i}: quota should trip only past {limit}");
+        }
+
+        // Caller B is `victim` itself and has spent nothing.
+        let r = call(caller_b).await;
+        assert!(r.ok, "B's check must answer: {:?}", r.error);
+        assert!(
+            !limited(&r),
+            "victim's own first check was rate limited by another caller's spend: {}",
+            result(&r)["reason"]
+        );
+    }
 }
