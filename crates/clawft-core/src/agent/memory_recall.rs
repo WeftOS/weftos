@@ -227,12 +227,12 @@ fn rank_by_cosine(
 
 /// Retriever over a REAL embedding model (nomic-embed-text-v1.5, cosine). This is
 /// the production retriever. Needs the `onnx-embeddings` feature.
-#[cfg(feature = "onnx-embeddings")]
+#[cfg(any(feature = "onnx-embeddings", feature = "tract-embeddings"))]
 pub struct OnnxRetriever {
     embedder: crate::embeddings::onnx_embedder::OnnxEmbedder,
 }
 
-#[cfg(feature = "onnx-embeddings")]
+#[cfg(any(feature = "onnx-embeddings", feature = "tract-embeddings"))]
 impl OnnxRetriever {
     /// Load the model bundle in `dir`. Errors name the missing path.
     pub fn from_dir(dir: &std::path::Path) -> Result<Self, crate::embeddings::EmbeddingError> {
@@ -240,7 +240,7 @@ impl OnnxRetriever {
     }
 }
 
-#[cfg(feature = "onnx-embeddings")]
+#[cfg(any(feature = "onnx-embeddings", feature = "tract-embeddings"))]
 impl MemoryRetriever for OnnxRetriever {
     fn top_k(&self, query: &str, snippets: &[MemorySnippet], k: usize) -> Vec<MemorySnippet> {
         let q = match self.embedder.query_vector(query) {
@@ -330,7 +330,7 @@ pub fn try_from_config(
     }
 }
 
-#[cfg(all(feature = "vector-memory", feature = "onnx-embeddings"))]
+#[cfg(all(feature = "vector-memory", any(feature = "onnx-embeddings", feature = "tract-embeddings")))]
 fn real_retriever(
     cfg: &clawft_types::config::MemoryRecallConfig,
 ) -> Result<Arc<dyn MemoryRetriever>, crate::embeddings::EmbeddingError> {
@@ -341,12 +341,12 @@ fn real_retriever(
     Ok(Arc::new(OnnxRetriever::from_dir(&dir)?))
 }
 
-#[cfg(all(feature = "vector-memory", not(feature = "onnx-embeddings")))]
+#[cfg(all(feature = "vector-memory", not(any(feature = "onnx-embeddings", feature = "tract-embeddings"))))]
 fn real_retriever(
     _cfg: &clawft_types::config::MemoryRecallConfig,
 ) -> Result<Arc<dyn MemoryRetriever>, crate::embeddings::EmbeddingError> {
     Err(crate::embeddings::select::unavailable(
-        "this build lacks the onnx-embeddings feature, so no local model can load",
+        "this build has no local embedding engine (onnx-embeddings or tract-embeddings), so no local model can load",
     ))
 }
 
@@ -365,7 +365,7 @@ pub fn from_config(cfg: &clawft_types::config::MemoryRecallConfig) -> Option<Arc
 
 /// Default rerank: SONA over REAL embeddings when a model is available, else no rerank
 /// (retriever order). It never reranks over hashed vectors.
-#[cfg(all(feature = "vector-memory", feature = "hybrid-rerank", feature = "onnx-embeddings"))]
+#[cfg(all(feature = "vector-memory", feature = "hybrid-rerank", any(feature = "onnx-embeddings", feature = "tract-embeddings")))]
 fn default_reranker() -> Arc<dyn MemoryReranker> {
     use crate::agent::context_router::sona_rerank::SonaSkillReranker;
     use crate::embeddings::onnx_embedder::{NOMIC_DIMS, OnnxEmbedder, find_model_dir};
@@ -391,7 +391,7 @@ fn default_reranker() -> Arc<dyn MemoryReranker> {
         }
     }
 }
-#[cfg(all(feature = "vector-memory", feature = "hybrid-rerank", not(feature = "onnx-embeddings")))]
+#[cfg(all(feature = "vector-memory", feature = "hybrid-rerank", not(any(feature = "onnx-embeddings", feature = "tract-embeddings"))))]
 fn default_reranker() -> Arc<dyn MemoryReranker> {
     tracing::warn!("memory recall rerank disabled: this build lacks onnx-embeddings, and SONA is not run over hashed vectors");
     Arc::new(IdentityMemoryReranker)

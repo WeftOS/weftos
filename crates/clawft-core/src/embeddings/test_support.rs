@@ -15,7 +15,7 @@
 //! [`HashEmbedder`](super::hash_embedder::HashEmbedder) and must say so in their
 //! names; they must not assert on similarity or ranking.
 
-#[cfg(feature = "onnx-embeddings")]
+#[cfg(any(feature = "onnx-embeddings", feature = "tract-embeddings"))]
 use std::sync::Arc;
 
 /// Environment variable naming the test model bundle directory.
@@ -27,18 +27,18 @@ pub const TEST_MODEL_DIMS: usize = 768;
 /// The real test embedder (document and query lanes). Cheap to clone.
 #[derive(Clone)]
 pub struct TestEmbedder {
-    #[cfg(feature = "onnx-embeddings")]
+    #[cfg(any(feature = "onnx-embeddings", feature = "tract-embeddings"))]
     inner: Arc<super::onnx_embedder::OnnxEmbedder>,
 }
 
 impl TestEmbedder {
     /// Embed stored text (document lane).
     pub fn doc(&self, text: &str) -> Vec<f32> {
-        #[cfg(feature = "onnx-embeddings")]
+        #[cfg(any(feature = "onnx-embeddings", feature = "tract-embeddings"))]
         {
             self.inner.document_vector(text).expect("real embedder: document embed")
         }
-        #[cfg(not(feature = "onnx-embeddings"))]
+        #[cfg(not(any(feature = "onnx-embeddings", feature = "tract-embeddings")))]
         {
             let _ = text;
             unreachable!("TestEmbedder cannot exist without onnx-embeddings")
@@ -47,11 +47,11 @@ impl TestEmbedder {
 
     /// Embed a query (query lane).
     pub fn query(&self, text: &str) -> Vec<f32> {
-        #[cfg(feature = "onnx-embeddings")]
+        #[cfg(any(feature = "onnx-embeddings", feature = "tract-embeddings"))]
         {
             self.inner.query_vector(text).expect("real embedder: query embed")
         }
-        #[cfg(not(feature = "onnx-embeddings"))]
+        #[cfg(not(any(feature = "onnx-embeddings", feature = "tract-embeddings")))]
         {
             let _ = text;
             unreachable!("TestEmbedder cannot exist without onnx-embeddings")
@@ -103,7 +103,7 @@ pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
 
 /// The real test embedder, or `None` with the skip reason printed to stderr.
 pub fn real_embedder() -> Option<TestEmbedder> {
-    #[cfg(not(feature = "onnx-embeddings"))]
+    #[cfg(not(any(feature = "onnx-embeddings", feature = "tract-embeddings")))]
     {
         eprintln!(
             "SKIP real-embedder test: built without the onnx-embeddings feature \
@@ -111,7 +111,7 @@ pub fn real_embedder() -> Option<TestEmbedder> {
         );
         None
     }
-    #[cfg(feature = "onnx-embeddings")]
+    #[cfg(any(feature = "onnx-embeddings", feature = "tract-embeddings"))]
     {
         use std::sync::OnceLock;
         static MODEL: OnceLock<Option<TestEmbedder>> = OnceLock::new();

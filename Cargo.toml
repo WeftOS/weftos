@@ -326,6 +326,11 @@ tiktoken-rs = "0.6"
 # ticket 290bdbb3-b6d7-432c-9b30-58be29b7230e, key ef-ort-rc15-port):
 # `Session::builder` now takes the process-global `Environment`.
 ort = { version = "=2.0.0-rc.15", default-features = false }
+# Pure-Rust ONNX engine for the release embedder on targets ort has no prebuilt
+# runtime for (musl, x86_64-apple-darwin) and for the cargo-dist archives and
+# Docker image (ADR-132). Exact pin: the engine's numerics are part of the
+# recall baseline. 0.23 is the line ruvector-embed-core 2.4 uses.
+tract-onnx = { version = "=0.23.10" }
 ndarray = "0.16"
 # Pure-Rust FFT — mel-fbank front-end for the native ONNX voice models.
 rustfft = "6"

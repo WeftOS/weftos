@@ -33,6 +33,8 @@ onnx = ["clawft-voice-onnx/onnx"]
 # it (and without an API key or the explicit lexical opt-in) the brain is unbound
 # with "semantic search unavailable: configure an embedding model".
 onnx-embeddings = ["clawft-core/onnx-embeddings"]
+# Same model on the pure-Rust tract engine (musl / Intel mac / release archives; ADR-132).
+tract-embeddings = ["clawft-core/tract-embeddings"]
 # Test-only: real-embedder recall tests (also need WEFTOS_TEST_EMBED_MODEL_DIR).
 real-embedder-tests = ["onnx-embeddings"]
 

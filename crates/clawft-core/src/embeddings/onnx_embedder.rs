@@ -1,13 +1,16 @@
 //! Real in-process embedder: nomic-embed-text-v1.5 ONNX (768-d).
 //!
-//! Tokenised with the model's own `tokenizer.json`, run through `ort`, masked
+//! Tokenised with the model's own `tokenizer.json`, run through [`super::onnx_graph`]
+//! (ONNX Runtime or the pure-Rust tract engine), masked
 //! mean pooled over the last hidden state, then L2 normalised. The model's task
 //! prefixes (`search_document: ` for stored text, `search_query: ` for queries)
 //! are applied by [`OnnxEmbedder::document_vector`] / [`OnnxEmbedder::query_vector`]
 //! (and the [`Embedder::embed`] / [`Embedder::embed_query`] trait methods).
 //!
 //! This is the recall embedder for crates that cannot reach the kernel's
-//! providers (core, tools, cos). Opt-in via the `onnx-embeddings` feature.
+//! providers (core, tools, cos). Opt-in via `onnx-embeddings` (ONNX Runtime)
+//! or `tract-embeddings` (pure-Rust tract engine, for musl / Intel-mac / the
+//! release archives); see [`super::onnx_graph`].
 //! When the bundle is missing, [`OnnxEmbedder::from_dir`] returns an error naming
 //! the path; nothing here ever substitutes hashed vectors.
 //!
@@ -81,9 +84,7 @@ pub fn find_model_dir() -> Result<PathBuf, EmbeddingError> {
 /// nomic-embed-text-v1.5 ONNX embedder (see module docs).
 pub struct OnnxEmbedder {
     tok: tokenizers::Tokenizer,
-    session: Mutex<ort::session::Session>,
-    has_type_ids: bool,
-    out_name: String,
+    graph: super::onnx_graph::OnnxGraph,
     cache: Mutex<HashMap<String, Vec<f32>>>,
     dir: PathBuf,
 }
@@ -106,19 +107,8 @@ impl OnnxEmbedder {
         })?;
         // Fixed thread count so float reduction order does not depend on the
         // host core count (bit-identical embeddings across machines).
-        let load_err = |e: &dyn std::fmt::Display| {
-            EmbeddingError::Internal(format!("ONNX model {} failed to load: {e}", onnx.display()))
-        };
-        let mut builder = ort_env().and_then(ort::session::Session::builder).map_err(|e| load_err(&e))?;
-        builder = builder.with_intra_threads(4).map_err(|e| load_err(&e))?;
-        let session = builder.commit_from_file(&onnx).map_err(|e| load_err(&e))?;
-        let has_type_ids = session.inputs().iter().any(|i| i.name() == "token_type_ids");
-        let out_name = session
-            .outputs()
-            .first()
-            .map(|o| o.name().to_string())
-            .ok_or_else(|| EmbeddingError::Internal(format!("{} has no outputs", onnx.display())))?;
-        Ok(Self { tok, session: Mutex::new(session), has_type_ids, out_name, cache: Mutex::new(HashMap::new()), dir })
+        let graph = super::onnx_graph::OnnxGraph::load(&onnx, Some(4)).map_err(EmbeddingError::Internal)?;
+        Ok(Self { tok, graph, cache: Mutex::new(HashMap::new()), dir })
     }
 
     /// Load from [`find_model_dir`].
@@ -129,6 +119,11 @@ impl OnnxEmbedder {
     /// Bundle directory this embedder was loaded from.
     pub fn dir(&self) -> &Path {
         &self.dir
+    }
+
+    /// Inference engine this build runs the model on (`onnxruntime` or `tract`).
+    pub fn engine(&self) -> &'static str {
+        super::onnx_graph::ENGINE
     }
 
     /// Embed stored text (document lane).
@@ -157,22 +152,11 @@ impl OnnxEmbedder {
             *slot = i64::from(last);
             *m = 1;
         }
-        let shape = vec![1_i64, n as i64];
-        let t = |v: Vec<i64>| {
-            ort::value::Tensor::from_array((shape.clone(), v)).map_err(|e| err("tensor", &e))
-        };
-        let (ids_t, mask_t) = (t(ids)?, t(mask.clone())?);
-        let mut sess = self.session.lock().unwrap_or_else(|e| e.into_inner());
-        let outputs = if self.has_type_ids {
-            sess.run(ort::inputs!["input_ids" => ids_t, "attention_mask" => mask_t, "token_type_ids" => t(vec![0i64; n])?])
-        } else {
-            sess.run(ort::inputs!["input_ids" => ids_t, "attention_mask" => mask_t])
-        }
-        .map_err(|e| err("inference", &e))?;
-        let (shp, data) = outputs[self.out_name.as_str()]
-            .try_extract_tensor::<f32>()
-            .map_err(|e| err("extract", &e))?;
-        let hid = shp[shp.len() - 1] as usize;
+        let (shp, data) = self
+            .graph
+            .run(ids, mask.clone(), vec![0i64; n])
+            .map_err(|e| EmbeddingError::Internal(format!("inference: {e}")))?;
+        let hid = shp.last().copied().unwrap_or(0);
         if hid != NOMIC_DIMS {
             return Err(EmbeddingError::Internal(format!(
                 "model {} produced {hid}-wide vectors, expected {NOMIC_DIMS}",
@@ -192,8 +176,6 @@ impl OnnxEmbedder {
         v.iter_mut().for_each(|x| *x /= cnt.max(1.0));
         let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-12);
         v.iter_mut().for_each(|x| *x /= norm);
-        drop(outputs);
-        drop(sess);
         let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
         if cache.len() > 4096 {
             cache.clear();
@@ -224,25 +206,9 @@ impl Embedder for OnnxEmbedder {
     }
 }
 
-/// The process-wide ONNX Runtime environment. ort rc.15 allows one
-/// `ort::init().build()` per process and offers no way to fetch it back, so the
-/// first crate to need it builds it and every other crate reuses it through
-/// `clawft_types::singleton` (core, kernel and the voice crates share a daemon).
-fn ort_env() -> ort::Result<&'static ort::environment::Environment> {
-    clawft_types::singleton::process_singleton(|| ort::init().build())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Two calls give the same environment and neither panics.
-    #[test]
-    fn ort_env_is_built_once_and_shared() {
-        let a = ort_env().expect("environment builds");
-        let b = ort_env().expect("environment is reused");
-        assert!(std::ptr::eq(a, b));
-    }
 
     /// The shipped bundle's default location is found with no environment
     /// override, and `WEFTOS_EMBED_MODEL_DIR` wins when set. Uses a temp dir as

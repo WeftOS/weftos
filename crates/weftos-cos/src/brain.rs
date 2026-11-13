@@ -105,14 +105,14 @@ impl Brain {
         if cfg.lexical || select::lexical_mode_requested() {
             return Ok(Arc::new(select::LexicalEmbedder::new()));
         }
-        #[cfg(feature = "onnx-embeddings")]
+        #[cfg(any(feature = "onnx-embeddings", feature = "tract-embeddings"))]
         if let Some(dir) = &cfg.model_dir {
             return Ok(Arc::new(clawft_core::embeddings::onnx_embedder::OnnxEmbedder::from_dir(dir)?));
         }
-        #[cfg(not(feature = "onnx-embeddings"))]
+        #[cfg(not(any(feature = "onnx-embeddings", feature = "tract-embeddings")))]
         if let Some(dir) = &cfg.model_dir {
             return Err(select::unavailable(&format!(
-                "brain.model_dir {} is set but this build lacks the onnx-embeddings feature",
+                "brain.model_dir {} is set but this build has no local embedding engine (onnx-embeddings or tract-embeddings)",
                 dir.display()
             )));
         }

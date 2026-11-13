@@ -435,8 +435,8 @@ pub fn select_embedding_provider(
     }
 
     let mut detail = format!("searched: {}", searched.join(", "));
-    if !cfg!(feature = "onnx-embeddings") {
-        detail.push_str("; this build lacks the onnx-embeddings feature, so no local model can load");
+    if !cfg!(any(feature = "onnx-embeddings", feature = "tract-embeddings")) {
+        detail.push_str("; this build has no local embedding engine (onnx-embeddings or tract-embeddings), so no local model can load");
     }
     Err(EmbeddingError::ModelUnavailable { what: "any embedding model".to_string(), detail })
 }

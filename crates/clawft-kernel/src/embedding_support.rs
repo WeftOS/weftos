@@ -27,15 +27,15 @@ pub const TEST_MODEL_DIMS: usize = 768;
 
 /// The real test embedder, or `None` with the skip reason printed to stderr.
 pub fn real_embedder() -> Option<Arc<dyn EmbeddingProvider>> {
-    #[cfg(not(feature = "onnx-embeddings"))]
+    #[cfg(not(any(feature = "onnx-embeddings", feature = "tract-embeddings")))]
     {
         eprintln!(
-            "SKIP real-embedder test: built without the onnx-embeddings feature \
+            "SKIP real-embedder test: built without a local embedding engine (onnx-embeddings or tract-embeddings) \
              (use --features real-embedder-tests); not falling back to hashing"
         );
         None
     }
-    #[cfg(feature = "onnx-embeddings")]
+    #[cfg(any(feature = "onnx-embeddings", feature = "tract-embeddings"))]
     {
         use std::sync::OnceLock;
         static MODEL: OnceLock<Option<Arc<dyn EmbeddingProvider>>> = OnceLock::new();

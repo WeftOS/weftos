@@ -86,7 +86,7 @@ pub fn unavailable(detail: &str) -> EmbeddingError {
 pub fn select_embedder() -> Result<Arc<dyn Embedder>, EmbeddingError> {
     let mut why: Vec<String> = Vec::new();
 
-    #[cfg(feature = "onnx-embeddings")]
+    #[cfg(any(feature = "onnx-embeddings", feature = "tract-embeddings"))]
     match super::onnx_embedder::find_model_dir() {
         Ok(dir) => match super::onnx_embedder::OnnxEmbedder::from_dir(&dir) {
             Ok(e) => return Ok(Arc::new(e)),
@@ -94,8 +94,8 @@ pub fn select_embedder() -> Result<Arc<dyn Embedder>, EmbeddingError> {
         },
         Err(e) => why.push(e.to_string()),
     }
-    #[cfg(not(feature = "onnx-embeddings"))]
-    why.push("this build lacks the onnx-embeddings feature, so no local model can load".into());
+    #[cfg(not(any(feature = "onnx-embeddings", feature = "tract-embeddings")))]
+    why.push("this build has no local embedding engine (onnx-embeddings or tract-embeddings), so no local model can load".into());
 
     #[cfg(feature = "rvf")]
     if std::env::var("OPENAI_API_KEY").is_ok_and(|k| !k.is_empty()) {

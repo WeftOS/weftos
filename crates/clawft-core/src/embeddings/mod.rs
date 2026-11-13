@@ -13,8 +13,11 @@ pub mod hash_embedder;
 pub mod hnsw_store;
 #[cfg(feature = "vector-memory")]
 pub mod micro_hnsw;
-/// Real in-process nomic-embed-text-v1.5 embedder (opt-in `onnx-embeddings`).
-#[cfg(feature = "onnx-embeddings")]
+/// Engine-neutral ONNX graph runner (ort or tract) behind the local embedders.
+#[cfg(any(feature = "onnx-embeddings", feature = "tract-embeddings"))]
+pub mod onnx_graph;
+/// Real in-process nomic-embed-text-v1.5 embedder (opt-in `onnx-embeddings` or `tract-embeddings`).
+#[cfg(any(feature = "onnx-embeddings", feature = "tract-embeddings"))]
 pub mod onnx_embedder;
 /// Embedder selection with no silent hash fallback.
 #[cfg(feature = "vector-memory")]
@@ -69,11 +72,11 @@ pub mod rvf_backend {
 /// True when a local embedding model bundle is present on this host.
 #[cfg(all(test, feature = "vector-memory"))]
 pub(crate) fn onnx_embedder_present() -> bool {
-    #[cfg(feature = "onnx-embeddings")]
+    #[cfg(any(feature = "onnx-embeddings", feature = "tract-embeddings"))]
     {
         onnx_embedder::find_model_dir().is_ok()
     }
-    #[cfg(not(feature = "onnx-embeddings"))]
+    #[cfg(not(any(feature = "onnx-embeddings", feature = "tract-embeddings")))]
     {
         false
     }
