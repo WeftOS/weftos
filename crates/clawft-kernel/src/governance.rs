@@ -114,6 +114,22 @@ pub struct GovernanceRule {
     /// ignore magnitude and do not consult this flag.
     #[serde(default)]
     pub force_on_match: bool,
+
+    /// Optional principal selector (owner 2026-11-13, Tapestry R16 asker).
+    ///
+    /// When set, the rule only applies when the request's `agent_id` matches:
+    /// exact, or prefix when the selector ends with `*` (same form as
+    /// [`Self::action_selector`]; ids use `A-Za-z0-9 . _ : @ -`, see
+    /// [`clawft_types::config::overlay::valid_principal_selector`]). `None`
+    /// means every principal, so a rule without it behaves exactly as before
+    /// and serialises without the key (stored hashes do not move).
+    ///
+    /// A selector the engine cannot read (it reached the rule through the
+    /// wire or the chain without the load-time check) matches every
+    /// principal: a restriction that stops applying would be the unsafe way
+    /// to fail.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub principal_selector: Option<String>,
 }
 
 /// `sop_category` tag of a project-overlay deny rule (ADR-103 D8). A matching
@@ -154,8 +170,16 @@ impl GovernanceRule {
     /// - No selectors set → always matches (magnitude-only rule).
     /// - Action selector: matches `request.action`.
     /// - Tool selector: matches `context["tool"]`, else `context["gate_action"]`.
-    /// - Both set → both must match (AND).
+    /// - Principal selector: matches `request.agent_id` (see
+    ///   [`Self::principal_selector`]); unreadable → matches everyone.
+    /// - All set → all must match (AND).
     pub fn selectors_match(&self, request: &GovernanceRequest) -> bool {
+        if let Some(sel) = self.principal_selector.as_deref()
+            && clawft_types::config::overlay::valid_principal_selector(sel)
+            && !selector_matches(sel, &request.agent_id)
+        {
+            return false;
+        }
         if let Some(sel) = self.action_selector.as_deref()
             && !selector_matches(sel, &request.action)
         {
@@ -189,6 +213,7 @@ impl GovernanceRule {
             action_selector: None,
             tool_selector: None,
             force_on_match: false,
+            principal_selector: None,
         }
     }
 
@@ -209,6 +234,7 @@ impl GovernanceRule {
             action_selector: None,
             tool_selector: None,
             force_on_match: false,
+            principal_selector: None,
         }
     }
 
@@ -234,6 +260,7 @@ impl GovernanceRule {
             action_selector: Some("tool.agent_spawn".into()),
             tool_selector: Some("agent_spawn".into()),
             force_on_match: true,
+            principal_selector: None,
         }
     }
 }
@@ -1872,6 +1899,7 @@ mod tests {
             action_selector: None,
             tool_selector: None,
             force_on_match: false,
+            principal_selector: None,
         }
     }
 
@@ -2403,6 +2431,7 @@ mod tests {
             action_selector: None,
             tool_selector: None,
             force_on_match: false,
+            principal_selector: None,
         });
         assert_eq!(engine.active_rules().len(), 0);
     }
@@ -2502,6 +2531,7 @@ mod tests {
                 action_selector: None,
                 tool_selector: None,
                 force_on_match: false,
+                principal_selector: None,
             },
             GovernanceRule {
                 id: "SOP-J001".into(),
@@ -2515,6 +2545,7 @@ mod tests {
                 action_selector: None,
                 tool_selector: None,
                 force_on_match: false,
+                principal_selector: None,
             },
             GovernanceRule {
                 id: "GOV-001".into(),
@@ -2528,6 +2559,7 @@ mod tests {
                 action_selector: None,
                 tool_selector: None,
                 force_on_match: false,
+                principal_selector: None,
             },
         ];
         let ethics = GovernanceRule::filter_by_category(&rules, "ethics");
@@ -2555,6 +2587,7 @@ mod tests {
             action_selector: None,
             tool_selector: None,
             force_on_match: false,
+            principal_selector: None,
         };
         let json = serde_json::to_string(&rule).unwrap();
         assert!(json.contains("reference_url"));
@@ -2697,6 +2730,7 @@ mod tests {
             action_selector: None,
             tool_selector: None,
             force_on_match: false,
+            principal_selector: None,
         }
     }
 
@@ -3729,6 +3763,7 @@ mod tests {
             action_selector: None,
             tool_selector: None,
             force_on_match: false,
+            principal_selector: None,
         };
         let json = serde_json::to_string(&rule).unwrap();
         let restored: GovernanceRule = serde_json::from_str(&json).unwrap();
@@ -3892,6 +3927,7 @@ mod tests {
                 action_selector: None,
                 tool_selector: None,
                 force_on_match: false,
+                principal_selector: None,
             });
 
             let request = GovernanceRequest {
@@ -3932,6 +3968,7 @@ mod tests {
                 action_selector: None,
                 tool_selector: None,
                 force_on_match: false,
+                principal_selector: None,
             });
 
             let request = GovernanceRequest {
@@ -3991,6 +4028,7 @@ mod tests {
                 action_selector: None,
                 tool_selector: None,
                 force_on_match: false,
+                principal_selector: None,
             });
 
             let request = GovernanceRequest {

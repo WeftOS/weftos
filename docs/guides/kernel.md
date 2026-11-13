@@ -540,6 +540,11 @@ id = "project.no-shell"
 actions = ["tool.shell_exec", "workload.place*"]
 reason = "this project never runs shell tools"
 
+[[deny]]                        # only for one principal (the asker's id)
+id = "project.bot-no-write"
+actions = ["tool.write"]
+principal = "mesh-agent-7"      # exact id, or a prefix ending in *; omit = everyone
+
 [[require_approval]]            # force human approval for these actions
 actions = ["workload.start*"]
 
@@ -557,7 +562,13 @@ reuse a parent rule id, or raise a limit. Any of those, or a parse error,
 refuses the boot with the offending key named. `human_approval_required =
 true` in an overlay never turns a parent deny into an approval prompt: the
 parent's blocking rules stay hard denies, and only actions the parent
-permits ask for approval. Editing the file does nothing until the
+permits ask for approval. `principal` (optional on `deny` and
+`require_approval`) limits an entry to the principal ids it matches (the
+`agent_id` of a gate or `governance.check` call; letters, digits and
+`. _ : @ -`, at most 128 bytes); without it the entry applies to everyone,
+and a malformed `principal` refuses the boot naming the key. It scopes
+policy, it does not authenticate: the id is whatever the caller declares.
+Editing the file does nothing until the
 `governance.reload` RPC on the child's socket or a restart. `max_processes` and
 `spawn_budget` take effect at boot only.
 

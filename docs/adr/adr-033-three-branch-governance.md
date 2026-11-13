@@ -2,6 +2,7 @@
 
 **Date**: 2026-04-03
 **Status**: Accepted
+**Updated**: 2026-11-13. Rules may carry an optional `principal_selector` (exact id or trailing `*`) matched against the request's `agent_id`; absent means every principal. See ADR-103 A18.
 **Deciders**: K2 Symposium (Governance Design), K3 Symposium (Gate Actions), kernel-governance.md specification
 
 ## Context

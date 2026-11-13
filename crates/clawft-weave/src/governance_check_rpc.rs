@@ -3,7 +3,7 @@
 //!
 //! | field | meaning |
 //! |---|---|
-//! | `agent_id` (alias `principal`) | who is acting; required, non-empty. The engine's rules match on it |
+//! | `agent_id` (alias `principal`) | who is acting; required, non-empty. A rule with a `principal_selector` (ADR-103 A18) applies only to matching ids; rules without one apply to every id. Self-declared by the caller, so a selector scopes policy and does not authenticate |
 //! | `action` | the gate action string, e.g. `tool.shell_exec` |
 //! | `tool` | tool name; when `action` is absent the action is `tool.<tool>`; also set as the `tool` context key for tool selectors |
 //! | `context` | optional object; string values pass through, others are stringified (the gate's own rule) |
@@ -153,6 +153,7 @@ mod tests {
             action_selector: None,
             tool_selector: tool.map(String::from),
             force_on_match: false,
+            principal_selector: None,
         }
     }
 

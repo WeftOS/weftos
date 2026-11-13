@@ -300,6 +300,7 @@ async fn verdict_round_trip_through_a_real_gate_rule() {
         action_selector: Some("cluster.join".into()),
         tool_selector: None,
         force_on_match: true,
+        principal_selector: None,
     }));
     let (chain, _) = open_chain();
     let h = spawn(link, deps(Arc::new(Recorder::default()), Some(gate), chain, Arc::new(MeshStateCell::new())));
