@@ -158,3 +158,12 @@ path        = "crates/clawft-weave/tests/kernel_restart_e2e.rs"
 pattern     = 'Command::new\(env!\("CARGO_BIN_EXE_weaver"\)\)'
 reason      = "WO-089: the restart e2e spawns the crate's own weaver binary under a throwaway HOME/runtime dir; no external program"
 approved_by = "owner"
+
+# Approved by the owner on 2026-11-13 12:20 AM ET (relayed by Cogs Bot) for the onnx-features
+# CI job (WO-202) and the graphify lang-all/full jobs in pr-gates.yml.
+[[approval]]
+rule        = "ci-workflow"
+path        = ".github/workflows/pr-gates.yml"
+pattern     = "*"
+reason      = "Owner approval 2026-11-13: onnx-features job (WO-202) and graphify lang-all/full jobs"
+approved_by = "owner"
