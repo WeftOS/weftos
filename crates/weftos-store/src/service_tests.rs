@@ -1323,6 +1323,55 @@ fn a_denial_that_rustfs_1_0_5_reports_in_both_the_log_and_the_audit_stream_count
     assert_eq!(r.be.key_enabled(&key), Some(false), "the second refusal reaches the rule's count of 2");
 }
 
+/// RustFS 1.0.5 audits a HeadObject of a missing key as status 500 with this error while the client
+/// gets a 404 (WeftOS N20, owner decision 2026-11-13: map it to not-found). The line is a real one
+/// from the fixture, with the bucket and key swapped for the rig's.
+const HEAD_MISSING_500: &str = include_str!("../testdata/rustfs-1.0.5-audit.ndjson");
+const MISSING_KEY_ERROR: &str = "Operation ended before reporting its outcome";
+
+fn head_missing_line(key: &str, bucket: &str) -> String {
+    let line = HEAD_MISSING_500.lines().nth(4).unwrap();
+    assert!(line.contains(MISSING_KEY_ERROR) && line.contains(r#""status_code":500"#), "fixture line 4 is the HeadObject 500");
+    line.replace("rfsupve075cdcf9d47", key).replace("s0-w2w", bucket)
+}
+
+fn last_audit_outcome(r: &Rig, line: &str) -> String {
+    let before = r.sink.events().len();
+    assert!(r.svc.ingest_audit_line(line), "it is an audit line");
+    let evs = r.sink.events();
+    assert_eq!(evs.len() - before, 1, "one activity entry");
+    evs.last().unwrap().outcome.text()
+}
+
+#[test]
+fn a_head_of_a_missing_key_that_rustfs_1_0_5_audits_as_500_is_recorded_as_not_found() {
+    let (r, n, _c, key) = denial_rig();
+    r.svc.set_denial_rule(Some(DenialRule { max: 1, window_ms: 60_000 }));
+    assert_eq!(last_audit_outcome(&r, &head_missing_line(&key, &n.bucket())), "not_found");
+    assert_eq!(r.be.key_enabled(&key), Some(true), "not a refusal either");
+}
+
+#[test]
+fn a_500_on_head_object_from_another_cause_is_still_an_error() {
+    let (r, n, _c, key) = denial_rig();
+    let line = head_missing_line(&key, &n.bucket());
+    let other = line.replace(MISSING_KEY_ERROR, "disk quorum lost");
+    assert_eq!(last_audit_outcome(&r, &other), "error:status 500: disk quorum lost");
+    let bare = line.replace(&format!(r#","error":"{MISSING_KEY_ERROR}""#), "");
+    assert!(!bare.contains("error"), "the error field is gone");
+    assert_eq!(last_audit_outcome(&r, &bare), "error:status 500");
+}
+
+#[test]
+fn the_same_500_on_another_operation_is_still_an_error() {
+    let (r, n, _c, key) = denial_rig();
+    let line = head_missing_line(&key, &n.bucket());
+    for op in ["GetObject", "PutObject", "DeleteObject", "HeadBucket"] {
+        let other = line.replace("s3:HeadObject", &format!("s3:{op}"));
+        assert_eq!(last_audit_outcome(&r, &other), format!("error:status 500: {MISSING_KEY_ERROR}"), "{op}");
+    }
+}
+
 #[test]
 fn principals_cannot_write_a_worktrees_control_state_or_a_projects_registry() {
     let r = rig();
