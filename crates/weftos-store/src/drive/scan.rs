@@ -109,6 +109,8 @@ fn classify(dest: &Path, index: &Index, limits: &Limits, rel: &str, md: &std::fs
         out.changes.push(Change { path: rel.to_owned(), kind: ChangeKind::Create, size, mtime_ns: mt, hash: None, exec });
         return Ok(());
     };
+    // Where the platform has no execute bit the recorded attribute stands (see fsmode).
+    let exec = crate::fsmode::observed_exec(md, e.exec);
     // A chmod moves neither size nor mtime: the execute bit is compared on its own, and a flip with
     // the same bytes is a modify (the new attribute goes out with a put of the same content).
     let mode_only = |out: &mut Scan| {

@@ -2,6 +2,7 @@
 //! and cannot be made to read past the size cap by a file that grows after the stat.
 use super::*;
 
+#[cfg(unix)]
 fn open(p: &Path) -> std::fs::File {
     std::fs::File::open(p).unwrap()
 }

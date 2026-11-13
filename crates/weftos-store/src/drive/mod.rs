@@ -41,9 +41,9 @@ mod tests;
 mod tests_crash;
 #[cfg(test)]
 mod tests_durable;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests_attrs;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests_exec;
 #[cfg(test)]
 mod tests_gc;
