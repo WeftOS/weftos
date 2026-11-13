@@ -7,7 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Staging area for changes after the 0.8.4 release.
+## [0.8.5-rc.1] - 2026-11-13
+
+First release candidate for 0.8.5.
+
+### Highlights
+- **Real embeddings in the release artefacts (ADR-132).** The cargo-dist archives and the Docker
+  (musl) image now ship a real nomic-embed-text-v1.5 embedder on the pure-Rust tract engine. The
+  silent hash fallback is gone: recall is judged with a real embedder, and tests that need a model
+  fail without one instead of passing vacuously. Desktop and server builds enable
+  `onnx-embeddings`; `WEFTOS_EMBED_MODEL_DIR` points at the model.
+- **Governance rules can match the asker.** A rule may carry `principal_selector`, and project
+  `overlay.toml` deny / require-approval entries take an optional `principal`. Unscoped rules and
+  their hashes are unchanged.
+- **ort 2.0.0-rc.15**, pinned exactly, fixes the optional ONNX builds (voice `onnx`, kernel
+  `onnx-embeddings`) that a lockfile refresh had broken; pr-gates now builds and tests them.
+- **GUI:** colours come from design tokens (the theming palette), the selected sidebar row gets the
+  accent stripe, and the Files panes, sidebar footer, chat and terminal layouts are fixed.
+- **Graphify:** Java, C, C++, Ruby and C# extractors (C# grammar pinned to ABI 14), and pr-gates
+  builds the all-languages and full feature sets.
+- **Kernel:** Democritus embeds off the tick and carries a burst over the impulse cap to the next
+  tick instead of dropping it; turn exchanges embed on the blocking pool at the lineage's own
+  dimension and refuse to mix dimensions.
 
 ### Added
 - **Store: per-object executable attribute (landed under ADR-131 Accepted 2026-11-10).** `ObjectBackend`
@@ -2371,7 +2392,8 @@ data structure as an interactive, drillable topology graph.
 - Release profile with LTO, strip, single codegen unit, and abort-on-panic
 - 1,029 tests across the workspace
 
-[Unreleased]: https://github.com/WeftOS/weftos/compare/v0.8.4...HEAD
+[Unreleased]: https://github.com/WeftOS/weftos/compare/v0.8.5-rc.1...HEAD
+[0.8.5-rc.1]: https://github.com/WeftOS/weftos/compare/v0.8.4...v0.8.5-rc.1
 [0.8.4]: https://github.com/WeftOS/weftos/compare/v0.8.3...v0.8.4
 [0.8.3]: https://github.com/WeftOS/weftos/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/WeftOS/weftos/compare/v0.8.1...v0.8.2
