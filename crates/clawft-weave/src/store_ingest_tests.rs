@@ -5,7 +5,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use weftos_store::audit::MemSink;
 use weftos_store::service::{Config, Parties};
-use weftos_store::{Access, ChainSink, ExposureGate, MemBackend, Principal, Source, StoreName};
+use weftos_store::{Access, AuditEvent, ChainSink, ExposureGate, MemBackend, Outcome, Principal, Source, StoreName};
 
 use super::*;
 
@@ -286,4 +286,193 @@ async fn refusals_posted_to_the_audit_url_suspend_the_key_through_the_service() 
     assert_eq!(r.be.key_enabled(&key), Some(false), "the third refusal disabled the key at the backend, by way of suspend_principal");
     // A wrong token reaches nothing, so it can neither log nor count.
     assert_eq!(post(&r.rx, "/store/ingest/nope/audit", "POST", denied(403).as_bytes()).await, 404);
+}
+
+// ---- RustFS's own log and audit stream through the daemon's two readers --------------------
+// The receiver (this file's `serve`) and the log tail (`store_watch::spawn_tail`, the thread the
+// daemon starts from WEFTOS_STORE_RUSTFS_LOG) read one throwaway RustFS, whose stdout/stderr is the
+// log file. A tee sits in front of the receiver so the test can see which audit posts RustFS sent.
+// RustFS 1.0.5 audits a denial as well as logging it; each denial must still count once.
+#[derive(Default)]
+struct Kinds(Mutex<Vec<String>>);
+impl ChainSink for Kinds {
+    fn record(&self, k: &str, _: Value) {
+        self.0.lock().unwrap().push(k.to_owned());
+    }
+}
+
+/// Reads one HTTP request from `s`: its path and body.
+async fn read_request(s: &mut TcpStream) -> Option<(String, Vec<u8>)> {
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        let n = s.read(&mut chunk).await.ok()?;
+        if n == 0 {
+            return None;
+        }
+        buf.extend_from_slice(&chunk[..n]);
+        let Some(end) = buf.windows(4).position(|w| w == b"\r\n\r\n") else { continue };
+        let head = String::from_utf8_lossy(&buf[..end]).to_string();
+        let path = head.lines().next()?.split_whitespace().nth(1)?.to_owned();
+        let len = head.lines().find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").and_then(|v| v.trim().parse::<usize>().ok())).unwrap_or(0);
+        while buf.len() < end + 4 + len {
+            let n = s.read(&mut chunk).await.ok()?;
+            if n == 0 {
+                return None;
+            }
+            buf.extend_from_slice(&chunk[..n]);
+        }
+        return Some((path, buf[end + 4..end + 4 + len].to_vec()));
+    }
+}
+
+#[test]
+#[ignore = "needs a rustfs binary: WEFTOS_STORE_TEST_RUSTFS_BIN"]
+fn live_each_refusal_rustfs_logs_and_audits_is_counted_once_and_the_rest_is_recorded() {
+    use std::process::{Command, Stdio};
+    use weftos_store::{AdminBackend, ObjectBackend, Part, PutOpts, RustfsBackend, RustfsConfig};
+
+    let bin = std::env::var("WEFTOS_STORE_TEST_RUSTFS_BIN").expect("WEFTOS_STORE_TEST_RUSTFS_BIN");
+    let free = || std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let (p_rfs, p_rx, p_tee) = (free(), free(), free());
+    let d = tempfile::tempdir().unwrap();
+    for sub in ["data", "aq", "secrets", "logs"] {
+        std::fs::create_dir(d.path().join(sub)).unwrap();
+    }
+    let (access, secret) = ("liveroot".to_owned() + &ulid::Ulid::new().to_string()[..8].to_lowercase(), ulid::Ulid::new().to_string() + &ulid::Ulid::new().to_string());
+    let cfg = RustfsConfig {
+        endpoint: format!("http://127.0.0.1:{p_rfs}"),
+        region: "us-east-1".into(),
+        root_access_key: access.clone(),
+        root_secret_key: secret.clone(),
+        secrets_dir: d.path().join("secrets"),
+        timeout: Duration::from_secs(30),
+    };
+    let be = Arc::new(RustfsBackend::new(cfg.clone()).unwrap());
+    let sink = Arc::new(MemSink::default());
+    let chain = Arc::new(Kinds::default());
+    let svc = Arc::new(StoreService::open(Config { node_id: "pg-live".into(), state_path: None, clock: || 1_000 }, be.clone(), be.clone(), Arc::new(Open), sink.clone(), chain.clone()).unwrap());
+    svc.set_denial_rule(Some(weftos_store::service::DenialRule { max: 3, window_ms: 600_000 }));
+    let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
+    let rx = rt.block_on(serve(svc.clone(), format!("127.0.0.1:{p_rx}").parse().unwrap(), "f".repeat(64))).unwrap();
+    // The tee: RustFS posts here, the body is kept, and the same request goes on to the receiver.
+    let tee_bodies = Arc::new(Mutex::new(Vec::<String>::new()));
+    {
+        let (bodies, rx) = (tee_bodies.clone(), rx.clone());
+        rt.block_on(async move {
+            let l = tokio::net::TcpListener::bind(format!("127.0.0.1:{p_tee}")).await.unwrap();
+            tokio::spawn(async move {
+                loop {
+                    let Ok((mut s, _)) = l.accept().await else { return };
+                    let (bodies, rx) = (bodies.clone(), rx.clone());
+                    tokio::spawn(async move {
+                        let Some((path, body)) = read_request(&mut s).await else { return };
+                        bodies.lock().unwrap().push(String::from_utf8_lossy(&body).into_owned());
+                        let code = post(&rx, &path, "POST", &body).await;
+                        let _ = s.write_all(format!("HTTP/1.1 {code} X\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).await;
+                    });
+                }
+            });
+        });
+    }
+    // RustFS writes its JSON log to `<RUSTFS_OBS_LOG_DIRECTORY>/rustfs.log` (as the packaged image does with /logs).
+    let log = d.path().join("logs").join("rustfs.log");
+    let origin = format!("http://127.0.0.1:{p_tee}");
+    let audit_url = format!("{origin}/store/ingest/{}/audit", rx.token);
+    let mut child = Command::new(bin)
+        .args(["server", "--address", &format!("127.0.0.1:{p_rfs}")])
+        .arg(d.path().join("data"))
+        .env("RUSTFS_ACCESS_KEY", &access)
+        .env("RUSTFS_SECRET_KEY", &secret)
+        .env("RUSTFS_OUTBOUND_ALLOW_ORIGINS", &origin)
+        .env("RUSTFS_AUDIT_ENABLE", "true")
+        .env("RUSTFS_AUDIT_WEBHOOK_ENABLE_PRIMARY", "on")
+        .env("RUSTFS_AUDIT_WEBHOOK_ENDPOINT_PRIMARY", &audit_url)
+        .env("RUSTFS_AUDIT_WEBHOOK_QUEUE_DIR_PRIMARY", d.path().join("aq"))
+        .env("RUSTFS_OBS_LOG_DIRECTORY", d.path().join("logs"))
+        .env("RUSTFS_OBS_LOGGER_LEVEL", "warn")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let up = (0..120).any(|_| {
+            std::thread::sleep(Duration::from_millis(500));
+            be.bucket_exists("probe-up").is_ok()
+        });
+        assert!(up, "rustfs did not come up");
+        crate::store_watch::spawn_tail(&svc, log.clone(), Duration::from_millis(50));
+        std::thread::sleep(Duration::from_millis(300));
+        let store = StoreName::project("weft", &ulid::Ulid::new().to_string()).unwrap();
+        let bucket = store.bucket();
+        svc.create_store(&store, "daemon", Parties::default()).unwrap();
+        let (rw, ro) = (Principal::parse("cog:rw").unwrap(), Principal::parse("cog:ro").unwrap());
+        svc.grant(&store, rw.clone(), Access::Write, "op").unwrap();
+        svc.grant(&store, ro.clone(), Access::Read, "op").unwrap();
+        let direct = |who: &str| {
+            let id = RustfsBackend::key_id_for(who);
+            RustfsBackend::new(RustfsConfig { root_access_key: id.clone(), root_secret_key: std::fs::read_to_string(be.secret_path(&id)).unwrap(), ..cfg.clone() }).unwrap()
+        };
+        let (c_rw, c_ro) = (direct("cog:rw"), direct("cog:ro"));
+        let evs = || sink.events();
+        let wait = |what: &str, f: &dyn Fn() -> bool| {
+            for _ in 0..120 {
+                if f() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(250));
+            }
+            panic!("timed out waiting for {what}; events: {:#?}", evs().iter().map(|e| (e.principal.clone(), e.op.clone(), e.key.clone(), e.outcome.text(), e.source)).collect::<Vec<_>>());
+        };
+        let of = |op: &'static str, who: &'static str| move |e: &&AuditEvent| e.op == op && e.principal == who;
+
+        // An allowed put, a multipart upload, a head of a key that exists and of one that does not.
+        c_rw.put(&bucket, "a/ok.txt", b"hello", false).unwrap();
+        let up = c_rw.create_multipart(&bucket, "mp/big.bin", &PutOpts::default()).unwrap();
+        let p1 = c_rw.upload_part(&bucket, "mp/big.bin", &up, 1, &vec![7u8; 5 * 1024 * 1024]).unwrap();
+        let p2 = c_rw.upload_part(&bucket, "mp/big.bin", &up, 2, b"tail").unwrap();
+        c_rw.complete_multipart(&bucket, "mp/big.bin", &up, &[Part { number: 1, etag: p1 }, Part { number: 2, etag: p2 }], &PutOpts::default()).unwrap();
+        c_rw.head(&bucket, "a/ok.txt").unwrap();
+        assert!(c_rw.head(&bucket, "nope/missing").is_err());
+        wait("the put, the multipart and both heads in the activity log", &|| {
+            let e = evs();
+            e.iter().filter(of("PutObject", "cog:rw")).count() >= 1 && e.iter().filter(of("UploadPart", "cog:rw")).count() >= 2 && e.iter().filter(of("CompleteMultipartUpload", "cog:rw")).count() >= 1 && e.iter().filter(of("HeadObject", "cog:rw")).count() >= 2
+        });
+        let e = evs();
+        let put = e.iter().find(|e| e.op == "PutObject" && e.principal == "cog:rw" && e.key.as_deref() == Some("a/ok.txt")).expect("the put");
+        assert_eq!((&put.outcome, put.source, put.store.as_str()), (&Outcome::Ok, Source::RustfsAudit, store.to_string().as_str()));
+        assert!(e.iter().filter(of("UploadPart", "cog:rw")).all(|e| e.outcome == Outcome::Ok), "parts: {e:#?}");
+        assert!(e.iter().filter(of("CompleteMultipartUpload", "cog:rw")).all(|e| e.outcome == Outcome::Ok));
+        // A head of a key that is not there, and one that is, are not refusals and not errors of the caller's making.
+        for h in e.iter().filter(of("HeadObject", "cog:rw")) {
+            eprintln!("HEAD {:?} -> {}", h.key, h.outcome.text());
+            assert!(!matches!(h.outcome, Outcome::Refused(_)), "{h:?}");
+        }
+        assert!(chain.0.lock().unwrap().iter().all(|k| k != "store.principal.suspend"), "no refusal yet, no suspension");
+
+        // Two refusals of a put by the read-only cog: one activity line each, from the log, and the key still on
+        // (the rule is 3; counted twice each they would already have suspended it).
+        for i in 0..2 {
+            assert!(c_ro.put(&bucket, &format!("denied/{i}"), b"x", false).is_err());
+        }
+        let refused = |src: Source| evs().into_iter().filter(|e| e.principal == "cog:ro" && matches!(e.outcome, Outcome::Refused(_)) && e.source == src).count();
+        wait("two refusals from the log", &|| refused(Source::RustfsLog) >= 2);
+        wait("RustFS to post its audit copies of both refusals", &|| tee_bodies.lock().unwrap().iter().filter(|b| b.contains("denialReason")).count() >= 2);
+        std::thread::sleep(Duration::from_secs(3));
+        assert_eq!(refused(Source::RustfsLog), 2, "each refusal is one line from the log");
+        assert_eq!(refused(Source::RustfsAudit), 0, "the audit copy is read but not logged again");
+        assert!(chain.0.lock().unwrap().iter().all(|k| k != "store.principal.suspend"), "two refusals are under the rule of three: counted once each");
+        // The third reaches it, and the key is suspended once.
+        assert!(c_ro.put(&bucket, "denied/2", b"x", false).is_err());
+        wait("the suspension", &|| chain.0.lock().unwrap().iter().any(|k| k == "store.principal.suspend"));
+        std::thread::sleep(Duration::from_secs(2));
+        assert_eq!(chain.0.lock().unwrap().iter().filter(|k| *k == "store.principal.suspend").count(), 1);
+        assert_eq!(refused(Source::RustfsAudit), 0);
+        assert!(c_ro.get(&bucket, "a/ok.txt").is_err(), "the suspended key is off at RustFS");
+    }));
+    let _ = child.kill();
+    let _ = child.wait();
+    if let Err(e) = result {
+        std::panic::resume_unwind(e);
+    }
 }
