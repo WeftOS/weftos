@@ -50,8 +50,19 @@ signing = ["dep:ed25519-dalek", "dep:rand"]
 # model's own tokenizer.json). Opt-in: the default build links no ort. Without
 # it, semantic recall reports "unavailable" instead of hashing.
 onnx-embeddings = ["vector-memory", "dep:ort", "dep:tokenizers"]
+# The same nomic-embed-text-v1.5 embedder on tract, a pure-Rust ONNX engine
+# (the engine ruvector-embed-core uses for its non-ort backend). No native
+# library, so it builds for musl and x86_64-apple-darwin, which ort has no
+# prebuilt runtime for; the cargo-dist archives and the Docker image use it.
+# Vectors match the ort path to cosine >= 0.99999. If both are on, ort wins.
+# ADR-132.
+tract-embeddings = ["vector-memory", "dep:tract-onnx", "dep:tokenizers"]
 # Test-only: real-model recall tests run (and fail without WEFTOS_TEST_EMBED_MODEL_DIR).
-real-embedder-tests = ["onnx-embeddings"]
+# `real-embedder-tests` runs them on ONNX Runtime, `real-embedder-tests-tract` on
+# tract; both turn on the internal `real-embedder-harness` marker the tests gate on.
+real-embedder-tests = ["onnx-embeddings", "real-embedder-harness"]
+real-embedder-tests-tract = ["tract-embeddings", "real-embedder-harness"]
+real-embedder-harness = []
 # agent-core-v1 Phase E2: enables EmbeddingRouter's production index
 # backed by ruvector-diskann@2.1 (Vamana + PQ + mmap). When the feature
 # is off, the router falls back to an in-memory brute-force cosine
@@ -118,6 +129,7 @@ tokenizers = { workspace = true, optional = true }
 # Same ort feature set as clawft-kernel (members cannot re-enable a workspace
 # dependency's default features).
 ort = { workspace = true, optional = true, features = ["std", "ndarray", "tracing", "download-binaries", "tls-native", "copy-dylibs", "api-24"] }
+tract-onnx = { workspace = true, optional = true }
 rvf-runtime = { workspace = true, optional = true }
 rvf-types = { workspace = true, optional = true }
 # WEFT-616 Phase 2: per-turn COW memory checkpointing (BranchableMemory).

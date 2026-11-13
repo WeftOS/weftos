@@ -18,6 +18,12 @@ path = "src/main.rs"
 
 [package.metadata.dist]
 dist = true
+# Every dist archive (and so the Homebrew formula and the shell/powershell
+# installers) ships a real embedder: nomic-embed-text-v1.5 on the pure-Rust
+# tract engine, which builds for all dist targets including musl and
+# x86_64-apple-darwin, where ort has no prebuilt ONNX Runtime (ADR-132).
+# dist builds each package on its own (precise-builds) to apply this.
+features = ["tract-embeddings"]
 
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }{ archive-suffix }"
@@ -43,6 +49,10 @@ api = ["clawft-services/api"]
 # 2026-11-12). The model bundle itself is a runtime file, see
 # docs/guides/embedding-models.md.
 onnx-embeddings = ["clawft-core/onnx-embeddings", "clawft-tools/onnx-embeddings", "weftos-cos/onnx-embeddings"]
+# The same embedder on tract, a pure-Rust ONNX engine: no native runtime, so it
+# builds for every dist target (musl static, x86_64-apple-darwin included). The
+# cargo-dist archives and the Docker image ship this (ADR-132).
+tract-embeddings = ["clawft-core/tract-embeddings", "clawft-tools/tract-embeddings", "weftos-cos/tract-embeddings"]
 
 [dependencies]
 clawft-rpc = { workspace = true }

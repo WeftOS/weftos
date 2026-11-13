@@ -966,7 +966,7 @@ mod tests {
     /// a nomic-embed-text-v1.5 bundle. The query impulse shares no keyword with
     /// the impulse it must be nearest to.
     #[tokio::test]
-    #[cfg_attr(not(feature = "real-embedder-tests"), ignore = "needs --features real-embedder-tests and WEFTOS_TEST_EMBED_MODEL_DIR (nomic-embed-text-v1.5 bundle)")]
+    #[cfg_attr(not(feature = "real-embedder-harness"), ignore = "needs --features real-embedder-tests and WEFTOS_TEST_EMBED_MODEL_DIR (nomic-embed-text-v1.5 bundle)")]
     async fn real_embedder_neighbour_is_the_semantically_related_impulse() {
         let Some(emb) = crate::embedding_support::real_embedder() else { return };
         let cg = Arc::new(CausalGraph::new());

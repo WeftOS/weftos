@@ -109,7 +109,7 @@ fn req(content: &str) -> ContextRequest {
 /// program" ranks python-debug first and rust-debug second, so that one query
 /// is asserted at top-2; the other three stay at top-1.
 #[tokio::test]
-#[cfg_attr(not(feature = "real-embedder-tests"), ignore = "needs --features real-embedder-tests and WEFTOS_TEST_EMBED_MODEL_DIR (nomic-embed-text-v1.5 bundle)")]
+#[cfg_attr(not(feature = "real-embedder-harness"), ignore = "needs --features real-embedder-tests and WEFTOS_TEST_EMBED_MODEL_DIR (nomic-embed-text-v1.5 bundle)")]
 async fn embedding_router_routes_paraphrased_queries_with_a_real_embedder() {
     let Some(real) = crate::embeddings::test_support::real_embedder() else { return };
     let skills = vec![

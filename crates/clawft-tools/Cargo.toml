@@ -35,8 +35,13 @@ canvas = []
 vector-memory = ["clawft-core/vector-memory"]
 # Real embedding model for semantic memory search (needs a model bundle at run time).
 onnx-embeddings = ["vector-memory", "clawft-core/onnx-embeddings"]
+# Same model on the pure-Rust tract engine (musl / Intel mac / release archives; ADR-132).
+tract-embeddings = ["vector-memory", "clawft-core/tract-embeddings"]
 # Test-only: real-embedder recall tests (also need WEFTOS_TEST_EMBED_MODEL_DIR).
-real-embedder-tests = ["onnx-embeddings", "clawft-core/real-embedder-tests"]
+real-embedder-tests = ["onnx-embeddings", "clawft-core/real-embedder-tests", "real-embedder-harness"]
+# The same tests on the tract engine (ADR-132).
+real-embedder-tests-tract = ["tract-embeddings", "clawft-core/real-embedder-tests-tract", "real-embedder-harness"]
+real-embedder-harness = []
 delegate = ["clawft-services/delegate"]
 # WEFT-214 / WEFT-671: live stack (clawft-channels STT/TTS), not plugin scaffold.
 # WEFT-233: multi-format audio decode via symphonia (WAV/MP3/OGG/WebM).

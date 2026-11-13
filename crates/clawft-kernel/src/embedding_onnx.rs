@@ -15,8 +15,8 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-#[cfg(feature = "onnx-embeddings")]
-use std::sync::{Arc, Mutex};
+#[cfg(any(feature = "onnx-embeddings", feature = "tract-embeddings"))]
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -281,7 +281,7 @@ fn l2_normalize(vec: &mut [f32]) {
 // =========================================================================
 
 /// How a model's text becomes ids.
-#[cfg(feature = "onnx-embeddings")]
+#[cfg(any(feature = "onnx-embeddings", feature = "tract-embeddings"))]
 enum Tokenization {
     /// The model's own HuggingFace `tokenizer.json` (nomic, BERT, e5, ...).
     HfJson(Box<tokenizers::Tokenizer>),
@@ -318,16 +318,13 @@ pub struct OnnxEmbeddingProvider {
     doc_prefix: String,
     /// Prefix applied by [`EmbeddingProvider::embed_query`] (query lane).
     query_prefix: String,
-    #[cfg(feature = "onnx-embeddings")]
+    #[cfg(any(feature = "onnx-embeddings", feature = "tract-embeddings"))]
     tokenization: Option<Tokenization>,
-    /// ONNX runtime session (only present when `onnx-embeddings` is active and
-    /// the model loaded). Wrapped in a `Mutex` because ort's `Session::run`
-    /// takes `&mut self` (2.0-rc.12 and rc.15).
-    #[cfg(feature = "onnx-embeddings")]
-    session: Option<Arc<Mutex<ort::session::Session>>>,
-    /// Whether the graph takes a `token_type_ids` input.
-    #[cfg(feature = "onnx-embeddings")]
-    has_type_ids: bool,
+    /// The loaded graph (only present when a local engine feature is on and the
+    /// model loaded): ONNX Runtime under `onnx-embeddings`, the pure-Rust tract
+    /// engine under `tract-embeddings` (clawft-core's `onnx_graph`, ADR-132).
+    #[cfg(any(feature = "onnx-embeddings", feature = "tract-embeddings"))]
+    session: Option<Arc<clawft_core::embeddings::onnx_graph::OnnxGraph>>,
 }
 
 impl OnnxEmbeddingProvider {
@@ -375,17 +372,12 @@ impl OnnxEmbeddingProvider {
     }
 
     fn build(model_path: PathBuf, dimensions: usize, max_tokens: usize, name: &str) -> Self {
-        #[cfg(feature = "onnx-embeddings")]
+        #[cfg(any(feature = "onnx-embeddings", feature = "tract-embeddings"))]
         let (session, session_err) = Self::try_load_session(&model_path);
-        #[cfg(feature = "onnx-embeddings")]
+        #[cfg(any(feature = "onnx-embeddings", feature = "tract-embeddings"))]
         let (tokenization, tok_err) = Self::try_load_tokenization(&model_path, max_tokens);
-        #[cfg(feature = "onnx-embeddings")]
-        let has_type_ids = session
-            .as_ref()
-            .and_then(|s| s.lock().ok().map(|g| g.inputs().iter().any(|i| i.name() == "token_type_ids")))
-            .unwrap_or(false);
 
-        #[cfg(feature = "onnx-embeddings")]
+        #[cfg(any(feature = "onnx-embeddings", feature = "tract-embeddings"))]
         let (runtime_available, unavailable_reason) = {
             let errs: Vec<String> = session_err.into_iter().chain(tok_err).collect();
             if session.is_some() && tokenization.is_some() {
@@ -394,11 +386,11 @@ impl OnnxEmbeddingProvider {
                 (false, Some(errs.join("; ")))
             }
         };
-        #[cfg(not(feature = "onnx-embeddings"))]
+        #[cfg(not(any(feature = "onnx-embeddings", feature = "tract-embeddings")))]
         let (runtime_available, unavailable_reason) = (
             false,
             Some(format!(
-                "this build lacks the onnx-embeddings feature, so {} cannot be loaded",
+                "this build has no local embedding engine (onnx-embeddings or tract-embeddings), so {} cannot be loaded",
                 model_path.display()
             )),
         );
@@ -416,17 +408,15 @@ impl OnnxEmbeddingProvider {
             max_tokens,
             doc_prefix: String::new(),
             query_prefix: String::new(),
-            #[cfg(feature = "onnx-embeddings")]
+            #[cfg(any(feature = "onnx-embeddings", feature = "tract-embeddings"))]
             tokenization,
-            #[cfg(feature = "onnx-embeddings")]
+            #[cfg(any(feature = "onnx-embeddings", feature = "tract-embeddings"))]
             session,
-            #[cfg(feature = "onnx-embeddings")]
-            has_type_ids,
         }
     }
 
     /// Candidate locations for the model's own `tokenizer.json`.
-    #[cfg_attr(not(feature = "onnx-embeddings"), allow(dead_code))]
+    #[cfg_attr(not(any(feature = "onnx-embeddings", feature = "tract-embeddings")), allow(dead_code))]
     fn tokenizer_json_candidates(model_path: &Path) -> Vec<PathBuf> {
         let mut v = Vec::new();
         if let Some(dir) = model_path.parent() {
@@ -440,7 +430,7 @@ impl OnnxEmbeddingProvider {
 
     /// Load the tokenizer: the model's `tokenizer.json`, else a `vocab.txt`
     /// WordPiece. Returns the reason (naming the paths) when neither loads.
-    #[cfg(feature = "onnx-embeddings")]
+    #[cfg(any(feature = "onnx-embeddings", feature = "tract-embeddings"))]
     fn try_load_tokenization(
         model_path: &Path,
         max_tokens: usize,
@@ -478,20 +468,23 @@ impl OnnxEmbeddingProvider {
         )
     }
 
-    /// Attempt to load an ONNX runtime session from the model path.
-    #[cfg(feature = "onnx-embeddings")]
+    /// Load the model graph (ONNX Runtime or tract, per the build's engine).
+    #[cfg(any(feature = "onnx-embeddings", feature = "tract-embeddings"))]
     fn try_load_session(
         model_path: &Path,
-    ) -> (Option<Arc<Mutex<ort::session::Session>>>, Option<String>) {
+    ) -> (Option<Arc<clawft_core::embeddings::onnx_graph::OnnxGraph>>, Option<String>) {
         if !model_path.exists() {
             return (None, Some(format!("model file not found at {}", model_path.display())));
         }
-        match ort_env().and_then(ort::session::Session::builder)
-            .and_then(|mut builder| builder.commit_from_file(model_path))
-        {
-            Ok(session) => {
-                tracing::info!("ONNX session loaded from {}", model_path.display());
-                (Some(Arc::new(Mutex::new(session))), None)
+        // `None`: the engine's default thread count, as before the shared runner.
+        match clawft_core::embeddings::onnx_graph::OnnxGraph::load(model_path, None) {
+            Ok(graph) => {
+                tracing::info!(
+                    "ONNX session loaded from {} ({})",
+                    model_path.display(),
+                    clawft_core::embeddings::onnx_graph::ENGINE
+                );
+                (Some(Arc::new(graph)), None)
             }
             Err(e) => (
                 None,
@@ -532,7 +525,7 @@ impl OnnxEmbeddingProvider {
 
     /// Embed `text` exactly as given (callers apply any task prefix).
     fn embed_raw(&self, text: &str) -> Result<Vec<f32>, EmbeddingError> {
-        #[cfg(feature = "onnx-embeddings")]
+        #[cfg(any(feature = "onnx-embeddings", feature = "tract-embeddings"))]
         if self.runtime_available {
             return self.onnx_embed(text);
         }
@@ -543,7 +536,7 @@ impl OnnxEmbeddingProvider {
     /// Run real ONNX inference: tokenise, run the graph, mask-weighted mean
     /// pool the last hidden state, L2 normalise. A width other than
     /// `dimensions` is an error, never a silent truncate or zero pad.
-    #[cfg(feature = "onnx-embeddings")]
+    #[cfg(any(feature = "onnx-embeddings", feature = "tract-embeddings"))]
     fn onnx_embed(&self, text: &str) -> Result<Vec<f32>, EmbeddingError> {
         let session = self
             .session
@@ -584,53 +577,16 @@ impl OnnxEmbeddingProvider {
             }
         };
 
-        let seq_len = input_ids.len();
-        let shape = vec![1_i64, seq_len as i64];
-        let tensor = |v: Vec<i64>, what: &str| {
-            ort::value::Tensor::from_array((shape.clone(), v))
-                .map_err(|e| EmbeddingError::BackendError(format!("{what} tensor: {e}")))
-        };
-        let input_ids_t = tensor(input_ids, "input_ids")?;
-        let attention_mask_t = tensor(attention_mask.clone(), "attention_mask")?;
-
-        // `run` needs `&mut Session`; the std mutex is held only across the
-        // synchronous inference call (no await in between).
-        let mut guard = session
-            .lock()
-            .map_err(|_| EmbeddingError::BackendError("ONNX session mutex poisoned".to_string()))?;
-        let outputs = if self.has_type_ids {
-            let token_type_ids_t = tensor(token_type_ids, "token_type_ids")?;
-            guard.run(ort::inputs![
-                "input_ids" => input_ids_t,
-                "attention_mask" => attention_mask_t,
-                "token_type_ids" => token_type_ids_t,
-            ])
-        } else {
-            guard.run(ort::inputs![
-                "input_ids" => input_ids_t,
-                "attention_mask" => attention_mask_t,
-            ])
-        }
-        .map_err(|e| EmbeddingError::BackendError(format!("inference error: {e}")))?;
-
-        // Output shape: (1, seq_len, hidden_dim).
-        let output_tensor = match outputs.get("last_hidden_state") {
-            Some(v) => v,
-            None if outputs.len() > 0 => &outputs[0],
-            None => {
-                return Err(EmbeddingError::BackendError("no output tensor".to_string()));
-            }
-        };
-        let (out_shape, data) = output_tensor
-            .try_extract_tensor::<f32>()
-            .map_err(|e| EmbeddingError::BackendError(format!("extract error: {e}")))?;
+        let (out_shape, data) = session
+            .run(input_ids, attention_mask.clone(), token_type_ids)
+            .map_err(EmbeddingError::BackendError)?;
         if out_shape.len() < 2 {
             return Err(EmbeddingError::BackendError(format!(
                 "unexpected output shape: {out_shape:?}"
             )));
         }
-        let hidden_dim = out_shape[out_shape.len() - 1] as usize;
-        let seq = out_shape[1] as usize;
+        let hidden_dim = out_shape[out_shape.len() - 1];
+        let seq = out_shape[1];
         if hidden_dim != self.dimensions {
             return Err(EmbeddingError::DimensionMismatch {
                 expected: self.dimensions,
@@ -1244,7 +1200,7 @@ mod tests {
     /// Real model: the vector is the right width, unit length, deterministic,
     /// and similarity tracks meaning rather than shared spelling.
     #[tokio::test]
-    #[cfg_attr(not(feature = "real-embedder-tests"), ignore = "needs --features real-embedder-tests and WEFTOS_TEST_EMBED_MODEL_DIR (nomic-embed-text-v1.5 bundle)")]
+    #[cfg_attr(not(feature = "real-embedder-harness"), ignore = "needs --features real-embedder-tests and WEFTOS_TEST_EMBED_MODEL_DIR (nomic-embed-text-v1.5 bundle)")]
     async fn real_model_embeds_semantically() {
         let Some(p) = real_embedder() else { return };
         let v = p.embed("The deploy ran out of memory while loading the model").await.unwrap();

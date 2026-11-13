@@ -297,7 +297,7 @@ mod tests {
     /// must. Where a close paraphrase lands relative to the 0.85 threshold is
     /// reported, not asserted: the threshold was calibrated for exact-text hits.
     #[tokio::test]
-    #[cfg_attr(not(feature = "real-embedder-tests"), ignore = "needs --features real-embedder-tests and WEFTOS_TEST_EMBED_MODEL_DIR (nomic-embed-text-v1.5 bundle)")]
+    #[cfg_attr(not(feature = "real-embedder-harness"), ignore = "needs --features real-embedder-tests and WEFTOS_TEST_EMBED_MODEL_DIR (nomic-embed-text-v1.5 bundle)")]
     async fn real_embedder_policy_cache_hits_identical_and_misses_unrelated() {
         let Some(real) = crate::embeddings::test_support::real_embedder() else { return };
         let mut router = IntelligentRouter::new(Box::new(real.clone())).await;

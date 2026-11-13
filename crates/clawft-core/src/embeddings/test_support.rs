@@ -16,7 +16,7 @@
 //! [`HashEmbedder`](super::hash_embedder::HashEmbedder) and must say so in their
 //! names; they must not assert on similarity or ranking.
 
-#[cfg(feature = "onnx-embeddings")]
+#[cfg(any(feature = "onnx-embeddings", feature = "tract-embeddings"))]
 use std::sync::Arc;
 
 /// Environment variable naming the test model bundle directory.
@@ -28,18 +28,18 @@ pub const TEST_MODEL_DIMS: usize = 768;
 /// The real test embedder (document and query lanes). Cheap to clone.
 #[derive(Clone)]
 pub struct TestEmbedder {
-    #[cfg(feature = "onnx-embeddings")]
+    #[cfg(any(feature = "onnx-embeddings", feature = "tract-embeddings"))]
     inner: Arc<super::onnx_embedder::OnnxEmbedder>,
 }
 
 impl TestEmbedder {
     /// Embed stored text (document lane).
     pub fn doc(&self, text: &str) -> Vec<f32> {
-        #[cfg(feature = "onnx-embeddings")]
+        #[cfg(any(feature = "onnx-embeddings", feature = "tract-embeddings"))]
         {
             self.inner.document_vector(text).expect("real embedder: document embed")
         }
-        #[cfg(not(feature = "onnx-embeddings"))]
+        #[cfg(not(any(feature = "onnx-embeddings", feature = "tract-embeddings")))]
         {
             let _ = text;
             unreachable!("TestEmbedder cannot exist without onnx-embeddings")
@@ -48,11 +48,11 @@ impl TestEmbedder {
 
     /// Embed a query (query lane).
     pub fn query(&self, text: &str) -> Vec<f32> {
-        #[cfg(feature = "onnx-embeddings")]
+        #[cfg(any(feature = "onnx-embeddings", feature = "tract-embeddings"))]
         {
             self.inner.query_vector(text).expect("real embedder: query embed")
         }
-        #[cfg(not(feature = "onnx-embeddings"))]
+        #[cfg(not(any(feature = "onnx-embeddings", feature = "tract-embeddings")))]
         {
             let _ = text;
             unreachable!("TestEmbedder cannot exist without onnx-embeddings")
@@ -111,15 +111,15 @@ pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
 /// `--ignored`). The `Option` is kept so call sites stay `let Some(..) = .. else`;
 /// it is always `Some` when this returns.
 pub fn real_embedder() -> Option<TestEmbedder> {
-    #[cfg(not(feature = "real-embedder-tests"))]
+    #[cfg(not(feature = "real-embedder-harness"))]
     {
         panic!(
             "real-embedder test run without the `real-embedder-tests` feature; \
-             rerun with --features real-embedder-tests and {TEST_MODEL_DIR_ENV} set \
+             rerun with --features real-embedder-tests (ort) or real-embedder-tests-tract (tract) and {TEST_MODEL_DIR_ENV} set \
              (a nomic-embed-text-v1.5 bundle: onnx/model.onnx + tokenizer.json)"
         )
     }
-    #[cfg(feature = "real-embedder-tests")]
+    #[cfg(feature = "real-embedder-harness")]
     {
         use std::sync::OnceLock;
         static MODEL: OnceLock<TestEmbedder> = OnceLock::new();

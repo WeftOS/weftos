@@ -202,7 +202,7 @@ async fn index_chunk_then_graft_exact_text_plumbing_mock_embedder() {
 /// with a printed reason otherwise): the query shares no keyword with the
 /// chunk it must find, and the right chunk is the top graft.
 #[tokio::test]
-#[cfg_attr(not(feature = "real-embedder-tests"), ignore = "needs --features real-embedder-tests and WEFTOS_TEST_EMBED_MODEL_DIR (nomic-embed-text-v1.5 bundle)")]
+#[cfg_attr(not(feature = "real-embedder-harness"), ignore = "needs --features real-embedder-tests and WEFTOS_TEST_EMBED_MODEL_DIR (nomic-embed-text-v1.5 bundle)")]
 async fn graft_recalls_a_paraphrase_with_a_real_embedder() {
     let Some(embedder) = crate::embedding_support::real_embedder() else { return };
     let view = SessionView::for_embedder("s1", embedder.as_ref());

@@ -105,14 +105,14 @@ impl Brain {
         if cfg.lexical || select::lexical_mode_requested() {
             return Ok(Arc::new(select::LexicalEmbedder::new()));
         }
-        #[cfg(feature = "onnx-embeddings")]
+        #[cfg(any(feature = "onnx-embeddings", feature = "tract-embeddings"))]
         if let Some(dir) = &cfg.model_dir {
             return Ok(Arc::new(clawft_core::embeddings::onnx_embedder::OnnxEmbedder::from_dir(dir)?));
         }
-        #[cfg(not(feature = "onnx-embeddings"))]
+        #[cfg(not(any(feature = "onnx-embeddings", feature = "tract-embeddings")))]
         if let Some(dir) = &cfg.model_dir {
             return Err(select::unavailable(&format!(
-                "brain.model_dir {} is set but this build lacks the onnx-embeddings feature",
+                "brain.model_dir {} is set but this build has no local embedding engine (onnx-embeddings or tract-embeddings)",
                 dir.display()
             )));
         }
@@ -355,7 +355,7 @@ mod tests {
     /// from the owner's "top-2" (for Mathew to confirm): the note is 3rd, top-2
     /// cannot pass. The other three stay at top-1.
     #[tokio::test]
-    #[cfg_attr(not(feature = "real-embedder-tests"), ignore = "needs --features real-embedder-tests and WEFTOS_TEST_EMBED_MODEL_DIR (nomic-embed-text-v1.5 bundle)")]
+    #[cfg_attr(not(feature = "real-embedder-harness"), ignore = "needs --features real-embedder-tests and WEFTOS_TEST_EMBED_MODEL_DIR (nomic-embed-text-v1.5 bundle)")]
     async fn real_embedder_recalls_the_right_note_for_a_paraphrase() {
         let Some(real) = clawft_core::embeddings::test_support::real_embedder() else { return };
         let dir = tempfile::tempdir().unwrap();

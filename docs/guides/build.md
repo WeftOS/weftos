@@ -112,7 +112,8 @@ Feature flags control which optional components are compiled in. They propagate 
 | `services` | Yes | `dep:clawft-services` | Cron, heartbeat, MCP server/client |
 | `vector-memory` | No | `clawft-core/vector-memory` | Vector store for semantic memory |
 | `delegate` | No | `clawft-services/delegate`, `clawft-tools/delegate` | Task delegation to Claude AI / Claude Flow |
-| `onnx-embeddings` | No (on in `scripts/build.sh native` release builds, see below) | `clawft-core/onnx-embeddings`, `clawft-tools/onnx-embeddings`, `weftos-cos/onnx-embeddings` | Real local embedding model runtime (ONNX Runtime via `ort`) |
+| `onnx-embeddings` | No (on in `scripts/build.sh native` release builds on the ort triples, see below) | `clawft-core/onnx-embeddings`, `clawft-tools/onnx-embeddings`, `weftos-cos/onnx-embeddings` | Real local embedding model runtime (ONNX Runtime via `ort`) |
+| `tract-embeddings` | No (on in the cargo-dist archives, the Docker image and `scripts/build.sh native` on musl / x86_64-apple-darwin) | `clawft-core/tract-embeddings`, `clawft-tools/tract-embeddings`, `weftos-cos/tract-embeddings` | The same model on tract, a pure-Rust ONNX engine (no native library; ADR-132) |
 
 ### `clawft-core` Features
 
@@ -198,27 +199,38 @@ panic = "abort"    # No unwinding (smaller binary, no catch_unwind)
 
 This produces binaries under 15 MB. Compile time is significantly longer than debug.
 
-### Embedding model (`onnx-embeddings`)
+### Embedding model (`onnx-embeddings`, `tract-embeddings`)
 
 Semantic recall needs a real embedding model; there is no silent hash fallback.
 Without one, recall reports "semantic search unavailable: configure an embedding
-model".
+model". The model is a runtime file, not part of the binary: put the
+nomic-embed-text-v1.5 bundle (`onnx/model.onnx` and `tokenizer.json`) at
+`~/.weftos/models/nomic-embed-text-v1.5`. The loader looks at
+`$WEFTOS_EMBED_MODEL_DIR`, then `./.weftos/models/nomic-embed-text-v1.5`, then
+`~/.weftos/models/nomic-embed-text-v1.5`.
 
-- **Desktop and server release builds** (`scripts/build.sh native`, release
-  profile) turn `onnx-embeddings` on. The model is a runtime file, not part of
-  the binary: put the nomic-embed-text-v1.5 bundle (`onnx/model.onnx` and
-  `tokenizer.json`) at `~/.weftos/models/nomic-embed-text-v1.5`. The loader looks
-  at `$WEFTOS_EMBED_MODEL_DIR`, then `./.weftos/models/nomic-embed-text-v1.5`,
-  then `~/.weftos/models/nomic-embed-text-v1.5`.
-- The `ort` crate downloads a prebuilt ONNX Runtime at build time, and one exists
-  only for x86_64/aarch64 Linux (glibc), aarch64 macOS and Windows (MSVC).
-  `scripts/build.sh` therefore skips the feature, with a message, for musl and
-  x86_64-apple-darwin builds. Set `WEFTOS_NO_EMBEDDER=1` to opt out anywhere.
-- **wasm and edge builds** (`wasi`, `browser`, `wasm-project`) stay off. To give
-  a build that does have the feature a model somewhere else, point
-  `WEFTOS_EMBED_MODEL_DIR` at a directory holding `onnx/model.onnx` and
-  `tokenizer.json`. `WEFTOS_EMBEDDING_MODE=lexical` is the explicit, warned
-  opt-in to word-overlap (non-semantic) matching.
+Two engines run the same `.onnx` file (ADR-132). Their vectors agree to cosine
+0.9999993 or better on nomic-embed-text-v1.5:
+
+| Engine | Feature | Where it is used |
+|---|---|---|
+| ONNX Runtime (`ort`, prebuilt, downloaded at build time) | `onnx-embeddings` | `scripts/build.sh native` (release) on x86_64/aarch64 Linux (glibc), aarch64 macOS and Windows (MSVC): the triples pyke publishes a runtime for |
+| tract (pure Rust, no native library) | `tract-embeddings` | every cargo-dist archive (`[package.metadata.dist] features` of `clawft-cli` and `clawft-weave`), the Docker image (static musl), and `scripts/build.sh native` on any other triple (musl, x86_64-apple-darwin) |
+
+- If both features are on, ort is used. The Qwen3 embedding provider is ort-only.
+- Check a binary with `weft memory embed "some text"`: it prints the model, the
+  `engine` (`onnxruntime` or `tract`), the width and the vector, or fails with
+  "semantic search unavailable". `scripts/release/embedder-smoke.sh` runs that
+  against a release binary or image and compares with recorded reference vectors
+  (`tests/fixtures/embedder/nomic-v1.5-reference.json`, from the native ort
+  build).
+- The Docker image does not contain the model. Mount the bundle at
+  `/home/weft/.weftos/models/nomic-embed-text-v1.5`, for example
+  `-v ~/.weftos/models:/home/weft/.weftos/models:ro`.
+- Set `WEFTOS_NO_EMBEDDER=1` to build `scripts/build.sh native` without either.
+- **wasm and edge builds** (`wasi`, `browser`, `wasm-project`) stay off.
+  `WEFTOS_EMBEDDING_MODE=lexical` is the explicit, warned opt-in to
+  word-overlap (non-semantic) matching.
 
 ### Release-WASM
 

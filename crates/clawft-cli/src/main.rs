@@ -256,6 +256,22 @@ enum MemoryCmd {
         config: Option<String>,
     },
 
+    /// Embed one text with the configured embedder and print it as JSON.
+    ///
+    /// A diagnostic for "does this binary have a working semantic embedder":
+    /// prints `model`, `engine` (`onnxruntime` / `tract` for the local model),
+    /// `dims` and the unit-length `vector`. Fails with "semantic search
+    /// unavailable" when no real embedder is configured.
+    Embed {
+        /// Text to embed.
+        text: String,
+
+        /// Use the query lane (`search_query:` for nomic) instead of the
+        /// document lane.
+        #[arg(long)]
+        query: bool,
+    },
+
     /// Export memory to a file.
     Export {
         /// Agent ID to export memory for.
@@ -542,6 +558,9 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 MemoryCmd::Reindex { config } => {
                     let cfg = commands::load_config(&platform, config.as_deref()).await?;
                     commands::memory_cmd::memory_reindex(&cfg).await?;
+                }
+                MemoryCmd::Embed { text, query } => {
+                    commands::memory_cmd::memory_embed(&text, query).await?;
                 }
                 MemoryCmd::Export {
                     agent,

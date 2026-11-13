@@ -139,9 +139,9 @@ fn identity_reranker_preserves_retriever_order() {
 /// unless `onnx-embeddings` + `WEFTOS_TEST_EMBED_MODEL_DIR` are present). Each
 /// query shares no keyword with the snippet it must rank first, so a lexical
 /// match cannot pass it.
-#[cfg(feature = "onnx-embeddings")]
+#[cfg(any(feature = "onnx-embeddings", feature = "tract-embeddings"))]
 #[test]
-#[cfg_attr(not(feature = "real-embedder-tests"), ignore = "needs --features real-embedder-tests and WEFTOS_TEST_EMBED_MODEL_DIR (nomic-embed-text-v1.5 bundle)")]
+#[cfg_attr(not(feature = "real-embedder-harness"), ignore = "needs --features real-embedder-tests and WEFTOS_TEST_EMBED_MODEL_DIR (nomic-embed-text-v1.5 bundle)")]
 fn onnx_retriever_ranks_the_paraphrased_snippet_first() {
     use crate::embeddings::test_support::{TEST_MODEL_DIR_ENV, real_embedder};
     if real_embedder().is_none() {

@@ -34,15 +34,15 @@ pub const TEST_MODEL_DIMS: usize = 768;
 /// are `#[ignore]`d then, so only `--ignored` reaches it). The `Option` is kept
 /// so call sites stay `let Some(..) = .. else`; it is always `Some` on return.
 pub fn real_embedder() -> Option<Arc<dyn EmbeddingProvider>> {
-    #[cfg(not(feature = "real-embedder-tests"))]
+    #[cfg(not(feature = "real-embedder-harness"))]
     {
         panic!(
             "real-embedder test run without the `real-embedder-tests` feature; \
-             rerun with --features real-embedder-tests and {TEST_MODEL_DIR_ENV} set \
+             rerun with --features real-embedder-tests (ort) or real-embedder-tests-tract (tract) and {TEST_MODEL_DIR_ENV} set \
              (a nomic-embed-text-v1.5 bundle: onnx/model.onnx + tokenizer.json)"
         )
     }
-    #[cfg(feature = "real-embedder-tests")]
+    #[cfg(feature = "real-embedder-harness")]
     {
         use std::sync::OnceLock;
         static MODEL: OnceLock<Arc<dyn EmbeddingProvider>> = OnceLock::new();

@@ -77,10 +77,20 @@ quantum-braket = ["ecc", "dep:reqwest"]
 diskann = ["ecc", "dep:ruvector-diskann"]
 # Bench-only: RaBitQ runner in benches/vector_backend_bench.rs.
 rabitq-bench = ["dep:ruvector-rabitq"]
-onnx-embeddings = ["dep:ort", "dep:ndarray", "dep:tokenizers", "dep:half"]
+# The ONNX graph itself runs through clawft-core's engine-neutral runner
+# (embeddings::onnx_graph), hence clawft-core/onnx-embeddings; ort stays a direct
+# dep for the Qwen3 provider and the shared ort environment.
+onnx-embeddings = ["clawft-core/onnx-embeddings", "dep:ort", "dep:ndarray", "dep:tokenizers", "dep:half"]
+# The same nomic/BERT providers on tract, a pure-Rust ONNX engine (musl, Intel
+# mac, cargo-dist archives, Docker; ADR-132). Qwen3 stays ort-only.
+tract-embeddings = ["clawft-core/tract-embeddings", "dep:tokenizers"]
 # Test-only: exposes `embedding_support` (real nomic-embed-text-v1.5 helper for
 # recall tests in this crate and its dependents). Needs WEFTOS_TEST_EMBED_MODEL_DIR.
-real-embedder-tests = ["onnx-embeddings"]
+real-embedder-tests = ["onnx-embeddings", "real-embedder-harness"]
+# The same tests on the tract engine (ADR-132).
+real-embedder-tests-tract = ["tract-embeddings", "real-embedder-harness"]
+# Internal marker the real-model tests gate on (either engine).
+real-embedder-harness = []
 wasm-sandbox = ["dep:wasmtime", "dep:wasmtime-wasi"]
 os-patterns = ["exochain"]
 treesitter = ["dep:clawft-plugin-treesitter"]

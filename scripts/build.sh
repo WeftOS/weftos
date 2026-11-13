@@ -134,20 +134,22 @@ cargo_features_args() {
     fi
 }
 
-# ── Release embedder (EF item 5, owner decision 2026-11-12) ──────────
-# Desktop and server release builds link a real embedding model runtime
-# (`onnx-embeddings`), so semantic recall works out of the box once the
-# nomic-embed-text-v1.5 bundle is at ~/.weftos/models/nomic-embed-text-v1.5
-# (or $WEFTOS_EMBED_MODEL_DIR). The `ort` crate downloads a prebuilt ONNX
-# Runtime at build time, and pyke publishes one only for the triples below:
-# there is none for musl or x86_64-apple-darwin, so those builds skip the
-# feature (with a message) instead of failing. wasm/edge builds never get it.
-# ort-sys 2.0.0-rc.15 (ONNX Runtime 1.31): the featureless ("none") prebuilt is
-# published for linux-gnu only; on aarch64-apple-darwin and *-windows-msvc the
-# build script falls back to the first published variant (CoreML / DirectML
-# bundled; not built on those hosts yet). Re-read ort-sys build/download/dist.tsv on
-# every ort bump.
-# Opt out with WEFTOS_NO_EMBEDDER=1.
+# ── Release embedder (EF item 5, owner decision 2026-11-12; ADR-132) ──
+# Desktop and server release builds link a real embedding engine, so semantic
+# recall works out of the box once the nomic-embed-text-v1.5 bundle is at
+# ~/.weftos/models/nomic-embed-text-v1.5 (or $WEFTOS_EMBED_MODEL_DIR).
+#   * onnx-embeddings: ONNX Runtime via `ort`, which downloads a prebuilt
+#     runtime at build time. pyke publishes one only for the triples below.
+#     ort-sys 2.0.0-rc.15 (ONNX Runtime 1.31): the featureless ("none") prebuilt
+#     is published for linux-gnu only; on aarch64-apple-darwin and
+#     *-windows-msvc the build script falls back to the first published variant
+#     (CoreML / DirectML bundled). Re-read ort-sys build/download/dist.tsv on
+#     every ort bump.
+#   * tract-embeddings: the same model on tract, a pure-Rust ONNX engine (no
+#     native library). Used for every other native triple: musl (static) and
+#     x86_64-apple-darwin, which ort has no prebuilt for. The cargo-dist archives
+#     and the Docker image use it too (Cargo.toml [package.metadata.dist]).
+# wasm/edge builds never get either. Opt out with WEFTOS_NO_EMBEDDER=1.
 embedder_triple() {
     if [ -n "${CARGO_BUILD_TARGET:-}" ]; then
         echo "$CARGO_BUILD_TARGET"
@@ -158,9 +160,9 @@ embedder_triple() {
 
 # Prints the feature to add to FEATURES for this build, or nothing.
 release_embedder_feature() {
-    case ",$FEATURES," in *,onnx-embeddings,*) return 0 ;; esac
+    case ",$FEATURES," in *,onnx-embeddings,*|*,tract-embeddings,*) return 0 ;; esac
     if [ "${WEFTOS_NO_EMBEDDER:-}" = 1 ]; then
-        info "WEFTOS_NO_EMBEDDER=1: building without onnx-embeddings" >&2
+        info "WEFTOS_NO_EMBEDDER=1: building without a local embedder" >&2
         return 0
     fi
     local triple
@@ -168,8 +170,11 @@ release_embedder_feature() {
     case "$triple" in
         x86_64-unknown-linux-gnu|aarch64-unknown-linux-gnu|aarch64-apple-darwin|x86_64-pc-windows-msvc|aarch64-pc-windows-msvc)
             echo onnx-embeddings ;;
+        wasm*|"")
+            info "no local embedder for '${triple:-unknown}'" >&2 ;;
         *)
-            info "no prebuilt ONNX Runtime for '${triple:-unknown}': building without onnx-embeddings (see docs/guides/build.md)" >&2 ;;
+            info "no prebuilt ONNX Runtime for '$triple': using the pure-Rust tract engine (tract-embeddings, see docs/guides/build.md)" >&2
+            echo tract-embeddings ;;
     esac
 }
 
