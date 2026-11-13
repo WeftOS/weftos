@@ -90,10 +90,7 @@ mod tests {
         let placed = layout_timeline(&m, Vec2::new(800.0, 400.0));
         assert!(!placed.is_empty());
 
-        let mut main: Vec<_> = placed
-            .iter()
-            .filter(|p| p.lane == Lane::Main)
-            .collect();
+        let mut main: Vec<_> = placed.iter().filter(|p| p.lane == Lane::Main).collect();
         main.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap());
         // xs strictly non-decreasing for main turns with increasing ts
         for w in main.windows(2) {

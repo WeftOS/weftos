@@ -101,7 +101,7 @@ fn paint_string(ui: &mut egui::Ui, id_prefix: &str, s: &str, _depth: usize) {
             ui.label(
                 egui::RichText::new(format!("[{} bytes]", len))
                     .small()
-                    .color(egui::Color32::from_rgb(140, 140, 150)),
+                    .color(crate::theming::palette::TEXT_LABEL_FAINT),
             );
             if ui.small_button("copy").clicked() {
                 ui.ctx().copy_text(s.to_string());
@@ -282,12 +282,12 @@ fn clip_string(s: &str, max: usize) -> (String, bool) {
 
 // ── Colors ──────────────────────────────────────────────────────────
 
-const NULL_COLOR: egui::Color32 = egui::Color32::from_rgb(140, 140, 150);
-const BOOL_COLOR: egui::Color32 = egui::Color32::from_rgb(220, 160, 100);
-const NUM_COLOR: egui::Color32 = egui::Color32::from_rgb(110, 200, 240);
-const STR_COLOR: egui::Color32 = egui::Color32::from_rgb(150, 210, 150);
-const ARRAY_COLOR: egui::Color32 = egui::Color32::from_rgb(200, 170, 220);
-const OBJECT_COLOR: egui::Color32 = egui::Color32::from_rgb(220, 190, 130);
+const NULL_COLOR: egui::Color32 = crate::theming::palette::TEXT_LABEL_FAINT;
+const BOOL_COLOR: egui::Color32 = crate::theming::palette::JSON_BOOL;
+const NUM_COLOR: egui::Color32 = crate::theming::palette::ACCENT_CYAN;
+const STR_COLOR: egui::Color32 = crate::theming::palette::JSON_STR;
+const ARRAY_COLOR: egui::Color32 = crate::theming::palette::JSON_ARRAY;
+const OBJECT_COLOR: egui::Color32 = crate::theming::palette::JSON_OBJECT;
 
 #[cfg(test)]
 mod tests {

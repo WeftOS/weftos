@@ -1,7 +1,7 @@
 //! Interaction state — scrub, zoom/pan, select, filters (G3 / G4 scaffold).
 
-use super::model::{GNode, GraphModel};
 use super::ViewTime;
+use super::model::{GNode, GraphModel};
 use eframe::egui::{self, Key};
 use std::collections::HashSet;
 
@@ -56,9 +56,10 @@ impl InteractState {
 
     pub fn node_dimmed(&self, n: &GNode) -> bool {
         if let Some(intent) = n.classification.intent.as_deref()
-            && self.dim_intents.contains(intent) {
-                return true;
-            }
+            && self.dim_intents.contains(intent)
+        {
+            return true;
+        }
         false
     }
 

@@ -38,10 +38,10 @@ if [[ ! -d "$GUI" ]]; then
   echo "no GUI crate at $GUI" >&2; exit 2
 fi
 
-# Find all color literals outside theming.rs
+# Find all color literals outside theming (theming.rs or the theming/ module dir)
 offenders=$(grep -rnE 'Color32::from_(rgb|rgba_unmultiplied)\(' "$GUI" \
   --include="*.rs" \
-  | grep -v "theming.rs" \
+  | grep -v -e "theming.rs" -e "/theming/" \
   || true)
 
 if [[ -z "$offenders" ]]; then

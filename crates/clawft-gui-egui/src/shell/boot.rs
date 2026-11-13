@@ -32,7 +32,7 @@ pub fn show(ui: &mut egui::Ui, started: web_time::Instant, sfx_played: &mut bool
         let painter = ui.painter();
         painter.rect_filled(rect, 0.0, egui::Color32::BLACK);
 
-        let halo_color = egui::Color32::from_rgba_unmultiplied(80, 60, 20, (alpha * 150.0) as u8);
+        let halo_color = crate::theming::palette::boot_halo((alpha * 150.0) as u8);
         painter.circle_filled(center, 300.0, halo_color);
 
         let subtitle_alpha = (alpha * 0.55 * 255.0) as u8;
@@ -41,7 +41,7 @@ pub fn show(ui: &mut egui::Ui, started: web_time::Instant, sfx_played: &mut bool
             egui::Align2::CENTER_CENTER,
             "weave the machine",
             egui::FontId::new(13.0, egui::FontFamily::Proportional),
-            egui::Color32::from_rgba_unmultiplied(210, 195, 160, subtitle_alpha),
+            crate::theming::palette::boot_subtitle(subtitle_alpha),
         );
     }
 
@@ -49,7 +49,7 @@ pub fn show(ui: &mut egui::Ui, started: web_time::Instant, sfx_played: &mut bool
     // above the halo painted above.
     let logo_size = egui::vec2(420.0, 368.0);
     let logo_rect = egui::Rect::from_center_size(center, logo_size);
-    let tint = egui::Color32::from_rgba_unmultiplied(255, 255, 255, (alpha * 255.0) as u8);
+    let tint = crate::theming::palette::boot_tint((alpha * 255.0) as u8);
     egui::Image::from_bytes("bytes://weftos-gold.png", LOGO_PNG)
         .fit_to_exact_size(logo_size)
         .tint(tint)

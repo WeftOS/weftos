@@ -31,40 +31,40 @@ pub struct EdgeStyle {
 pub fn style_for_state(state: NodeStateTag) -> NodeStyle {
     match state {
         NodeStateTag::Speculative => NodeStyle {
-            fill: Color32::from_rgb(180, 180, 200),
-            outline: Color32::from_rgb(120, 120, 160),
+            fill: crate::theming::palette::CG_SPECULATIVE_FILL,
+            outline: crate::theming::palette::CG_SPECULATIVE_OUTLINE,
             outline_width: 1.5,
             opacity: 0.4,
             dashed: true,
             tombstone: false,
         },
         NodeStateTag::Frontier => NodeStyle {
-            fill: Color32::from_rgb(80, 160, 255),
-            outline: Color32::from_rgb(40, 100, 220),
+            fill: crate::theming::palette::CG_FRONTIER_FILL,
+            outline: crate::theming::palette::CG_FRONTIER_OUTLINE,
             outline_width: 2.5,
             opacity: 1.0,
             dashed: false,
             tombstone: false,
         },
         NodeStateTag::Committed => NodeStyle {
-            fill: Color32::from_rgb(90, 140, 110),
-            outline: Color32::from_rgb(60, 90, 70),
+            fill: crate::theming::palette::CG_COMMITTED_FILL,
+            outline: crate::theming::palette::CG_COMMITTED_OUTLINE,
             outline_width: 1.0,
             opacity: 1.0,
             dashed: false,
             tombstone: false,
         },
         NodeStateTag::Stale => NodeStyle {
-            fill: Color32::from_rgb(140, 140, 140),
-            outline: Color32::from_rgb(100, 100, 100),
+            fill: crate::theming::palette::CG_STALE_FILL,
+            outline: crate::theming::palette::CG_STALE_OUTLINE,
             outline_width: 1.0,
             opacity: 0.7,
             dashed: false,
             tombstone: false,
         },
         NodeStateTag::Pruned => NodeStyle {
-            fill: Color32::from_rgb(60, 60, 60),
-            outline: Color32::from_rgb(120, 80, 80),
+            fill: crate::theming::palette::CG_PRUNED_FILL,
+            outline: crate::theming::palette::CG_PRUNED_OUTLINE,
             outline_width: 1.0,
             opacity: 0.3,
             dashed: false,
@@ -95,26 +95,26 @@ pub fn shape_for_role(role: NodeRole) -> NodeShape {
 pub fn style_for_edge_kind(kind: &str) -> EdgeStyle {
     match kind {
         "Contradicts" => EdgeStyle {
-            color: Color32::from_rgb(220, 60, 60),
+            color: crate::theming::palette::CG_EDGE_CONTRADICTS,
             width: 1.5,
             dashed: false,
             zigzag: true,
         },
         "Enables" | "EvidenceFor" => EdgeStyle {
-            color: Color32::from_rgb(100, 160, 220),
+            color: crate::theming::palette::CG_EDGE_SUPPORTS,
             width: 1.2,
             dashed: true,
             zigzag: false,
         },
         "Speaker" | "Continuer" | "EmotionCause" | "GoalMotivation" => EdgeStyle {
-            color: Color32::from_rgb(140, 140, 160),
+            color: crate::theming::palette::CG_EDGE_SPEAKER,
             width: 1.0,
             dashed: true,
             zigzag: false,
         },
         // Follows and default causal
         _ => EdgeStyle {
-            color: Color32::from_rgb(180, 180, 190),
+            color: crate::theming::palette::CG_EDGE_DEFAULT,
             width: 1.2,
             dashed: false,
             zigzag: false,
@@ -132,7 +132,7 @@ pub fn topic_hue(topic: &str) -> Color32 {
     let r = 80 + (h & 0x7f) as u8;
     let g = 80 + ((h >> 8) & 0x7f) as u8;
     let b = 80 + ((h >> 16) & 0x7f) as u8;
-    Color32::from_rgb(r, g, b)
+    crate::theming::palette::data_rgb(r, g, b)
 }
 
 #[cfg(test)]
@@ -159,7 +159,10 @@ mod tests {
     #[test]
     fn shapes_and_edges() {
         assert_eq!(shape_for_role(NodeRole::User), NodeShape::Circle);
-        assert_eq!(shape_for_role(NodeRole::Assistant), NodeShape::RoundedSquare);
+        assert_eq!(
+            shape_for_role(NodeRole::Assistant),
+            NodeShape::RoundedSquare
+        );
         assert!(style_for_edge_kind("Contradicts").zigzag);
         assert!(style_for_edge_kind("Speaker").dashed);
         assert!(!style_for_edge_kind("Follows").dashed);

@@ -30,7 +30,7 @@ impl SubstrateViewer for HealthViewer {
 
         ui.label(
             egui::RichText::new(format!("health · {path}"))
-                .color(egui::Color32::from_rgb(160, 160, 170))
+                .color(crate::theming::palette::TEXT_SUBTLE)
                 .small(),
         );
         ui.add_space(4.0);
@@ -51,14 +51,14 @@ impl SubstrateViewer for HealthViewer {
                 ui.label(
                     egui::RichText::new("⤴ node:")
                         .small()
-                        .color(egui::Color32::from_rgb(140, 140, 150)),
+                        .color(crate::theming::palette::TEXT_LABEL_FAINT),
                 );
                 let link = ui
                     .link(
                         egui::RichText::new(node_path)
                             .monospace()
                             .small()
-                            .color(egui::Color32::from_rgb(140, 175, 220)),
+                            .color(crate::theming::palette::ACCENT_STEEL),
                     )
                     .on_hover_text("Navigate to the publishing node.");
                 if link.clicked() {
@@ -88,7 +88,7 @@ impl SubstrateViewer for HealthViewer {
                         ui.label(
                             egui::RichText::new(unit)
                                 .small()
-                                .color(egui::Color32::from_rgb(140, 140, 150)),
+                                .color(crate::theming::palette::TEXT_LABEL_FAINT),
                         );
                         ui.end_row();
                     }
@@ -122,7 +122,7 @@ impl SubstrateViewer for HealthViewer {
             ui.label(
                 egui::RichText::new("actions")
                     .small()
-                    .color(egui::Color32::from_rgb(140, 140, 150)),
+                    .color(crate::theming::palette::TEXT_LABEL_FAINT),
             );
             for a in caps.applicable_actions {
                 ui.label(egui::RichText::new(format!("  • {a}")).monospace().small());
@@ -161,13 +161,13 @@ fn format_scalar(v: &Value) -> String {
 ///   else    poor      (red)
 fn paint_rssi_chip(ui: &mut egui::Ui, rssi: i64) {
     let (label, color) = if rssi >= -50 {
-        ("excellent", egui::Color32::from_rgb(110, 200, 150))
+        ("excellent", crate::theming::palette::STATUS_OK)
     } else if rssi >= -65 {
-        ("good", egui::Color32::from_rgb(170, 200, 110))
+        ("good", crate::theming::palette::HEALTH_LIME)
     } else if rssi >= -75 {
-        ("fair", egui::Color32::from_rgb(220, 180, 80))
+        ("fair", crate::theming::palette::STATUS_WARN)
     } else {
-        ("poor", egui::Color32::from_rgb(200, 90, 90))
+        ("poor", crate::theming::palette::STATUS_ERR)
     };
     ui.horizontal(|ui| {
         let dot_size = egui::vec2(12.0, 12.0);

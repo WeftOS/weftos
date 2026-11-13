@@ -69,7 +69,7 @@ impl SubstrateViewer for WaveformViewer {
                 sr = sample_rate,
                 dur = duration_ms,
             ))
-            .color(egui::Color32::from_rgb(160, 160, 170))
+            .color(crate::theming::palette::TEXT_SUBTLE)
             .small(),
         );
         ui.add_space(4.0);
@@ -79,7 +79,7 @@ impl SubstrateViewer for WaveformViewer {
         let (rect, _resp) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
         let painter = ui.painter_at(rect);
 
-        painter.rect_filled(rect, 2.0, egui::Color32::from_rgb(18, 18, 24));
+        painter.rect_filled(rect, 2.0, crate::theming::palette::PLOT_BG);
 
         if samples.len() < 2 {
             painter.text(
@@ -87,7 +87,7 @@ impl SubstrateViewer for WaveformViewer {
                 egui::Align2::CENTER_CENTER,
                 "no samples",
                 egui::FontId::proportional(11.0),
-                egui::Color32::from_rgb(130, 130, 140),
+                crate::theming::palette::TEXT_DIM,
             );
             return;
         }
@@ -134,7 +134,7 @@ impl SubstrateViewer for WaveformViewer {
                     egui::pos2(rect.left(), y_zero),
                     egui::pos2(rect.right(), y_zero),
                 ],
-                egui::Stroke::new(1.0, egui::Color32::from_rgb(60, 60, 72)),
+                egui::Stroke::new(1.0, crate::theming::palette::PLOT_GRID),
             );
         }
 
@@ -149,7 +149,7 @@ impl SubstrateViewer for WaveformViewer {
         }
         painter.add(egui::epaint::PathShape::line(
             points,
-            egui::Stroke::new(1.5, egui::Color32::from_rgb(110, 200, 150)),
+            egui::Stroke::new(1.5, crate::theming::palette::STATUS_OK),
         ));
 
         // Peak/trough markers — little dots at the extrema.
@@ -158,14 +158,14 @@ impl SubstrateViewer for WaveformViewer {
             let x = rect.left() + t * rect.width();
             let n = ((peak_val - lo) / span).clamp(0.0, 1.0) as f32;
             let y = rect.bottom() - n * rect.height();
-            painter.circle_filled(egui::pos2(x, y), 3.0, egui::Color32::from_rgb(220, 180, 80));
+            painter.circle_filled(egui::pos2(x, y), 3.0, crate::theming::palette::STATUS_WARN);
         }
         if trough_val.is_finite() {
             let t = trough_idx as f32 / denom;
             let x = rect.left() + t * rect.width();
             let n = ((trough_val - lo) / span).clamp(0.0, 1.0) as f32;
             let y = rect.bottom() - n * rect.height();
-            painter.circle_filled(egui::pos2(x, y), 3.0, egui::Color32::from_rgb(200, 90, 90));
+            painter.circle_filled(egui::pos2(x, y), 3.0, crate::theming::palette::STATUS_ERR);
         }
 
         ui.add_space(4.0);
@@ -174,7 +174,7 @@ impl SubstrateViewer for WaveformViewer {
                 "y: {lo:.3} … {hi:.3}   peak: {peak_val:.3}   trough: {trough_val:.3}"
             ))
             .small()
-            .color(egui::Color32::from_rgb(150, 150, 160)),
+            .color(crate::theming::palette::TEXT_SYSTEM_MSG),
         );
     }
 }

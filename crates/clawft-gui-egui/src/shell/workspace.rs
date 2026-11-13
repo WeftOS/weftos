@@ -16,13 +16,11 @@ use eframe::egui;
 use web_time::Instant;
 
 use super::window_intent::{
-    intent_from_key, ArrangeMode, ExternalIntentSource, ExternalIntentTx, IntentEnvelope,
-    IntentSource, KeyModifiers, PaneId, PaneKind, WindowIntent, WindowIntentBus,
-    WindowIntentProducer,
+    ArrangeMode, ExternalIntentSource, ExternalIntentTx, IntentEnvelope, IntentSource,
+    KeyModifiers, PaneId, PaneKind, WindowIntent, WindowIntentBus, WindowIntentProducer,
+    intent_from_key,
 };
-use super::window_manager::{
-    AttentionState, WindowManager, RESIZE_HANDLE, TITLE_BAR_H,
-};
+use super::window_manager::{AttentionState, RESIZE_HANDLE, TITLE_BAR_H, WindowManager};
 use crate::theming::Tokens;
 
 /// Minimum interval between attention events for the same pane.
@@ -90,9 +88,7 @@ impl AgentWorkspace {
             Some(PaneId::new("demo-terminal")),
         );
         self.wm.spawn(
-            PaneKind::App {
-                app: "chat".into(),
-            },
+            PaneKind::App { app: "chat".into() },
             Some(PaneId::new("demo-chat")),
         );
         let agent = self
@@ -124,8 +120,7 @@ impl AgentWorkspace {
     /// Poll external + drain bus + apply.
     pub fn tick(&mut self) {
         for env in self.external_src.poll_intents() {
-            self.bus
-                .push(env.intent, env.source);
+            self.bus.push(env.intent, env.source);
         }
         let envelopes = self.bus.drain();
         for env in envelopes {
@@ -201,16 +196,16 @@ impl AgentWorkspace {
     pub fn signal_attention(&mut self, id: &PaneId, reason: &str) -> bool {
         let now = Instant::now();
         if let Some(last) = self.attention_last.get(id.as_str())
-            && now.duration_since(*last) < ATTENTION_COOLDOWN {
-                return false;
-            }
+            && now.duration_since(*last) < ATTENTION_COOLDOWN
+        {
+            return false;
+        }
         self.attention_last.insert(id.0.clone(), now);
         self.attention_until
             .insert(id.0.clone(), now + ATTENTION_HOLD);
         self.wm.set_attention(id, AttentionState::NeedsHuman);
         if let Some(p) = self.wm.get_mut(id) {
-            p.body_text
-                .push_str(&format!("⚠ needs human: {reason}\n"));
+            p.body_text.push_str(&format!("⚠ needs human: {reason}\n"));
         }
         self.status = format!("Attention: {id} — {reason}");
         true
@@ -238,35 +233,34 @@ impl AgentWorkspace {
                     _ => false,
                 }
             });
-            if pressed
-                && let Some(intent) = intent_from_key(mods, key, focused.as_ref()) {
-                    // Fill demo agent title for spawn chord.
-                    let intent = match intent {
+            if pressed && let Some(intent) = intent_from_key(mods, key, focused.as_ref()) {
+                // Fill demo agent title for spawn chord.
+                let intent = match intent {
+                    WindowIntent::Spawn {
+                        kind:
+                            PaneKind::Agent {
+                                session_id,
+                                role,
+                                title: _,
+                                background,
+                            },
+                        id,
+                    } => {
+                        let n = self.wm.pane_count() + 1;
                         WindowIntent::Spawn {
-                            kind:
-                                PaneKind::Agent {
-                                    session_id,
-                                    role,
-                                    title: _,
-                                    background,
-                                },
+                            kind: PaneKind::Agent {
+                                session_id,
+                                role,
+                                title: format!("Agent {n}"),
+                                background,
+                            },
                             id,
-                        } => {
-                            let n = self.wm.pane_count() + 1;
-                            WindowIntent::Spawn {
-                                kind: PaneKind::Agent {
-                                    session_id,
-                                    role,
-                                    title: format!("Agent {n}"),
-                                    background,
-                                },
-                                id,
-                            }
                         }
-                        other => other,
-                    };
-                    self.bus.push(intent, IntentSource::Keyboard);
-                }
+                    }
+                    other => other,
+                };
+                self.bus.push(intent, IntentSource::Keyboard);
+            }
         }
     }
 }
@@ -287,11 +281,7 @@ pub fn show(ui: &mut egui::Ui, rect: egui::Rect, ws: &mut AgentWorkspace) {
     let painter = ui.painter_at(rect);
 
     // Dim stage backdrop (wallpaper shows through slightly).
-    painter.rect_filled(
-        rect,
-        0.0,
-        egui::Color32::from_rgba_unmultiplied(8, 8, 12, 180),
-    );
+    painter.rect_filled(rect, 0.0, crate::theming::palette::WORKSPACE_SCRIM);
 
     // Heading
     painter.text(
@@ -345,7 +335,14 @@ pub fn show(ui: &mut egui::Ui, rect: egui::Rect, ws: &mut AgentWorkspace) {
 
     for pane in &panes {
         let abs = pane.rect.to_abs(stage);
-        paint_pane(ui, abs, pane, focused.as_ref() == Some(&pane.id), &tokens, ws);
+        paint_pane(
+            ui,
+            abs,
+            pane,
+            focused.as_ref() == Some(&pane.id),
+            &tokens,
+            ws,
+        );
     }
 
     // Attention chips strip (rate-limited visual bus)
@@ -386,9 +383,7 @@ fn paint_toolbar(ui: &mut egui::Ui, rect: egui::Rect, ws: &mut AgentWorkspace, t
     }
     if child.button("＋ Chat").clicked() {
         ws.push_gui(WindowIntent::Spawn {
-            kind: PaneKind::App {
-                app: "chat".into(),
-            },
+            kind: PaneKind::App { app: "chat".into() },
             id: None,
         });
     }
@@ -417,26 +412,29 @@ fn paint_toolbar(ui: &mut egui::Ui, rect: egui::Rect, ws: &mut AgentWorkspace, t
         .button("Summarize")
         .on_hover_text("Summarize focused agent wall")
         .clicked()
-        && let Some(id) = ws.wm.focused.clone() {
-            ws.push_gui(WindowIntent::Summarize {
-                id,
-                max_chars: Some(120),
-            });
-        }
+        && let Some(id) = ws.wm.focused.clone()
+    {
+        ws.push_gui(WindowIntent::Summarize {
+            id,
+            max_chars: Some(120),
+        });
+    }
     if child
         .button("⚠ Attention")
         .on_hover_text("Signal needs-human on focused pane (rate-limited)")
         .clicked()
-        && let Some(id) = ws.wm.focused.clone() {
-            ws.signal_attention(&id, "manual demo");
-        }
+        && let Some(id) = ws.wm.focused.clone()
+    {
+        ws.signal_attention(&id, "manual demo");
+    }
     if child.button("Close").on_hover_text("Mod+W").clicked()
-        && let Some(id) = ws.wm.focused.clone() {
-            ws.push_gui(WindowIntent::Close {
-                id,
-                cancel_agent: false,
-            });
-        }
+        && let Some(id) = ws.wm.focused.clone()
+    {
+        ws.push_gui(WindowIntent::Close {
+            id,
+            cancel_agent: false,
+        });
+    }
 
     child.add_space(8.0);
     child.label(
@@ -491,10 +489,8 @@ fn paint_pane(
     );
 
     // Title bar
-    let title_rect = egui::Rect::from_min_max(
-        abs.min,
-        egui::pos2(abs.right(), abs.top() + TITLE_BAR_H),
-    );
+    let title_rect =
+        egui::Rect::from_min_max(abs.min, egui::pos2(abs.right(), abs.top() + TITLE_BAR_H));
     painter.rect_filled(
         title_rect,
         egui::CornerRadius {
@@ -560,11 +556,12 @@ fn paint_pane(
     let drag_id = egui::Id::new(("ws-drag", pane.id.as_str()));
     let drag_resp = ui.interact(drag_rect, drag_id, egui::Sense::click_and_drag());
     if drag_resp.drag_started()
-        && let Some(pos) = drag_resp.interact_pointer_pos() {
-            // grab_offset is pointer relative to pane min
-            let grab = pos - abs.min;
-            ws.wm.begin_drag(pane.id.clone(), grab);
-        }
+        && let Some(pos) = drag_resp.interact_pointer_pos()
+    {
+        // grab_offset is pointer relative to pane min
+        let grab = pos - abs.min;
+        ws.wm.begin_drag(pane.id.clone(), grab);
+    }
     if drag_resp.clicked() {
         ws.push_gui(WindowIntent::Focus {
             id: pane.id.clone(),
@@ -686,20 +683,14 @@ fn install_resize_handles(
             false,
         ),
         (
-            egui::Rect::from_min_size(
-                egui::pos2(abs.right() - h, abs.top()),
-                egui::vec2(h, h),
-            ),
+            egui::Rect::from_min_size(egui::pos2(abs.right() - h, abs.top()), egui::vec2(h, h)),
             false,
             true,
             true,
             false,
         ),
         (
-            egui::Rect::from_min_size(
-                egui::pos2(abs.left(), abs.bottom() - h),
-                egui::vec2(h, h),
-            ),
+            egui::Rect::from_min_size(egui::pos2(abs.left(), abs.bottom() - h), egui::vec2(h, h)),
             true,
             false,
             false,
@@ -826,9 +817,7 @@ mod tests {
         ws.wm = WindowManager::new();
         let tx = ws.external_tx();
         tx.submit_mcp(WindowIntent::Spawn {
-            kind: PaneKind::App {
-                app: "logs".into(),
-            },
+            kind: PaneKind::App { app: "logs".into() },
             id: Some(PaneId::new("from-mcp")),
         })
         .unwrap();

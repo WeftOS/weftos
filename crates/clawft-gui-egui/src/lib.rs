@@ -79,3 +79,8 @@ pub async fn weft_start(canvas_id: String) -> Result<(), wasm_bindgen::JsValue> 
         .await?;
     Ok(())
 }
+
+#[cfg(test)]
+pub(crate) mod snap_support;
+#[cfg(test)]
+mod snap_tests;

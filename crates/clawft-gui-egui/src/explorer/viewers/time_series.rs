@@ -69,7 +69,7 @@ pub fn embed_sparkline(ui: &mut egui::Ui, path: &str, value: &Value, height: f32
     let w = ui.available_width().clamp(120.0, 480.0);
     let (rect, _resp) = ui.allocate_exact_size(egui::vec2(w, height), egui::Sense::hover());
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 2.0, egui::Color32::from_rgb(18, 18, 24));
+    painter.rect_filled(rect, 2.0, crate::theming::palette::PLOT_BG);
     if history.len() < 2 {
         return;
     }
@@ -104,7 +104,7 @@ pub fn embed_sparkline(ui: &mut egui::Ui, path: &str, value: &Value, height: f32
     }
     painter.add(egui::epaint::PathShape::line(
         points,
-        egui::Stroke::new(1.2, egui::Color32::from_rgb(110, 200, 240)),
+        egui::Stroke::new(1.2, crate::theming::palette::ACCENT_CYAN),
     ));
 }
 
@@ -140,7 +140,7 @@ impl SubstrateViewer for TimeSeriesViewer {
 
         ui.label(
             egui::RichText::new(format!("time series · {path}"))
-                .color(egui::Color32::from_rgb(160, 160, 170))
+                .color(crate::theming::palette::TEXT_SUBTLE)
                 .small(),
         );
         ui.add_space(4.0);
@@ -149,7 +149,7 @@ impl SubstrateViewer for TimeSeriesViewer {
         ui.label(
             egui::RichText::new(format!("{current}"))
                 .heading()
-                .color(egui::Color32::from_rgb(160, 200, 230))
+                .color(crate::theming::palette::ACCENT_SKY)
                 .strong(),
         );
 
@@ -159,7 +159,7 @@ impl SubstrateViewer for TimeSeriesViewer {
         let h = 64.0_f32;
         let (rect, _resp) = ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 2.0, egui::Color32::from_rgb(18, 18, 24));
+        painter.rect_filled(rect, 2.0, crate::theming::palette::PLOT_BG);
 
         if history.len() < 2 {
             painter.text(
@@ -167,7 +167,7 @@ impl SubstrateViewer for TimeSeriesViewer {
                 egui::Align2::CENTER_CENTER,
                 "collecting…",
                 egui::FontId::proportional(11.0),
-                egui::Color32::from_rgb(130, 130, 140),
+                crate::theming::palette::TEXT_DIM,
             );
             return;
         }
@@ -204,7 +204,7 @@ impl SubstrateViewer for TimeSeriesViewer {
         }
         painter.add(egui::epaint::PathShape::line(
             points,
-            egui::Stroke::new(1.5, egui::Color32::from_rgb(110, 200, 240)),
+            egui::Stroke::new(1.5, crate::theming::palette::ACCENT_CYAN),
         ));
 
         ui.add_space(2.0);
@@ -214,7 +214,7 @@ impl SubstrateViewer for TimeSeriesViewer {
                 history.len()
             ))
             .small()
-            .color(egui::Color32::from_rgb(150, 150, 160)),
+            .color(crate::theming::palette::TEXT_SYSTEM_MSG),
         );
     }
 }

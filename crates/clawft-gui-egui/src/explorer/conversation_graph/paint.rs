@@ -2,11 +2,11 @@
 //!
 //! Custom egui painter only — no graph library (ADR-067 D1).
 
+use super::ViewTime;
 use super::encode::{self, NodeShape};
 use super::interact::InteractState;
-use super::layout::{position_map, PlacedNode};
+use super::layout::{PlacedNode, position_map};
 use super::model::GraphModel;
-use super::ViewTime;
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, Vec2};
 
 const NODE_R: f32 = 14.0;
@@ -37,7 +37,7 @@ pub fn paint_graph(
         let dim = interact.edge_dimmed(&e.kind);
         let mut c = style.color;
         if dim {
-            c = Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), 40);
+            c = crate::theming::palette::data_rgba(c.r(), c.g(), c.b(), 40);
         }
         let p0 = origin + Vec2::new(x0, y0);
         let p1 = origin + Vec2::new(x1, y1);
@@ -69,11 +69,7 @@ pub fn paint_graph(
         match shape {
             NodeShape::Circle | NodeShape::Ring => {
                 painter.circle_filled(center, NODE_R, fill);
-                painter.circle_stroke(
-                    center,
-                    NODE_R,
-                    Stroke::new(style.outline_width, outline),
-                );
+                painter.circle_stroke(center, NODE_R, Stroke::new(style.outline_width, outline));
             }
             NodeShape::RoundedSquare => {
                 let r = Rect::from_center_size(center, Vec2::splat(NODE_R * 1.8));
@@ -136,7 +132,7 @@ pub fn paint_graph(
             painter.vline(
                 x,
                 rect.y_range(),
-                Stroke::new(1.5, Color32::from_rgb(255, 200, 80)),
+                Stroke::new(1.5, crate::theming::palette::CG_HIGHLIGHT),
             );
         }
     }
@@ -157,13 +153,15 @@ fn paint_topic_hulls(
         std::collections::HashMap::new();
     for n in &model.nodes {
         if let Some(topic) = n.classification.topic.as_ref()
-            && let Some(&(x, y)) = pos.get(&n.id) {
-                by_topic
-                    .entry(topic.clone())
-                    .or_default()
-                    .push(origin + Vec2::new(x, y));
-            }
+            && let Some(&(x, y)) = pos.get(&n.id)
+        {
+            by_topic
+                .entry(topic.clone())
+                .or_default()
+                .push(origin + Vec2::new(x, y));
+        }
     }
+    let mut hulls: Vec<(String, Rect)> = Vec::new();
     for (topic, pts) in by_topic {
         if pts.len() < 2 {
             continue;
@@ -177,8 +175,14 @@ fn paint_topic_hulls(
             Pos2::new(min_x - pad, min_y - pad),
             Pos2::new(max_x + pad, max_y + pad),
         );
+        hulls.push((topic, r));
+    }
+    // Largest hull first so smaller ones stay visible on top; ties by topic id.
+    // `by_topic` is a HashMap, so its own order must never reach the painter.
+    hulls.sort_by(|(ta, ra), (tb, rb)| rb.area().total_cmp(&ra.area()).then_with(|| ta.cmp(tb)));
+    for (topic, r) in hulls {
         let hue = encode::topic_hue(&topic);
-        let fill = Color32::from_rgba_unmultiplied(hue.r(), hue.g(), hue.b(), 28);
+        let fill = crate::theming::palette::data_rgba(hue.r(), hue.g(), hue.b(), 28);
         painter.rect_filled(r, 8.0, fill);
         painter.rect_stroke(
             r,
@@ -208,7 +212,7 @@ fn paint_dashed_line(painter: &egui::Painter, a: Pos2, b: Pos2, stroke: Stroke) 
 
 fn with_opacity(c: Color32, opacity: f32) -> Color32 {
     let a = (opacity.clamp(0.0, 1.0) * 255.0) as u8;
-    Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), a)
+    crate::theming::palette::data_rgba(c.r(), c.g(), c.b(), a)
 }
 
 fn truncate(s: &str, max: usize) -> String {

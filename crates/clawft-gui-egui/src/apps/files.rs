@@ -118,6 +118,7 @@ fn paint_left_pane(ui: &mut egui::Ui, rect: egui::Rect, tree: &TreeNode, state: 
     );
 
     egui::ScrollArea::vertical()
+        .id_salt("files_tree_scroll")
         .auto_shrink([false, false])
         .show(&mut child, |ui| {
             if tree.children.is_empty() {
@@ -251,6 +252,7 @@ fn paint_right_pane(
         );
         child.add_space(4.0);
         egui::ScrollArea::vertical()
+            .id_salt("files_kids_scroll")
             .auto_shrink([false, false])
             .show(&mut child, |ui| {
                 for k in kids {
@@ -262,6 +264,7 @@ fn paint_right_pane(
 
     let pretty = serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string());
     egui::ScrollArea::both()
+        .id_salt("files_value_scroll")
         .auto_shrink([false, false])
         .show(&mut child, |ui| {
             ui.add(
@@ -387,5 +390,45 @@ mod tests {
         assert!(out.contains("a"));
         assert!(out.contains("a/b"));
         assert!(!out.contains("a/d")); // leaf, not branch
+    }
+
+    /// Both panes build a `ScrollArea` inside a `new_child` of the same parent
+    /// Ui. Without an explicit `id_salt` they get the same id, and egui draws
+    /// "First use of ScrollArea ID ..." over the panes (debug builds) and
+    /// shares one scroll offset between the tree and the detail pane. The
+    /// right pane only builds its scroll area once a node is selected.
+    #[test]
+    fn tree_and_detail_panes_do_not_share_a_scroll_area_id() {
+        let ctx = egui::Context::default();
+        let mut desk = Desktop::default();
+        let live = Live::spawn();
+        desk.files_state.expanded.insert("substrate".into());
+        desk.files_state.selected = Some("substrate".into());
+        let snap = Snapshot::default();
+        let mut text = String::new();
+        // A few frames: egui reports the clash on the frame after first use.
+        for _ in 0..3 {
+            let out = ctx.run_ui(Default::default(), |ui| {
+                egui::CentralPanel::default().show_inside(ui, |ui| {
+                    let rect = ui.max_rect();
+                    show(ui, rect, &mut desk, &live, &snap);
+                });
+            });
+            for clipped in &out.shapes {
+                collect_text(&clipped.shape, &mut text);
+            }
+        }
+        assert!(
+            !text.contains("ScrollArea ID"),
+            "egui flagged a duplicate ScrollArea id: {text}"
+        );
+    }
+
+    fn collect_text(shape: &egui::epaint::Shape, out: &mut String) {
+        match shape {
+            egui::epaint::Shape::Text(t) => out.push_str(t.galley.text()),
+            egui::epaint::Shape::Vec(v) => v.iter().for_each(|s| collect_text(s, out)),
+            _ => {}
+        }
     }
 }

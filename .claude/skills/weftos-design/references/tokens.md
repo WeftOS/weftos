@@ -1,7 +1,7 @@
 # WeftOS design tokens — machine-readable reference
 
 Mirrors `docs/DESIGN.md` §2. Audit scripts read this file; the egui
-runtime at `crates/clawft-gui-egui/src/theming.rs` must agree.
+runtime at `crates/clawft-gui-egui/src/theming/` must agree.
 
 ## Palette
 

@@ -21,7 +21,7 @@ pub fn show(ui: &mut egui::Ui, snap: &Snapshot) {
             Connection::Connected => {
                 ui.label(
                     egui::RichText::new("Connected — polling kernel.status every 1s")
-                        .color(egui::Color32::from_rgb(110, 210, 140)),
+                        .color(crate::theming::palette::BLOCK_TEXT_OK),
                 );
                 if let Some(status) = &snap.status {
                     let state = status.get("state").and_then(|v| v.as_str()).unwrap_or("?");
@@ -47,7 +47,7 @@ pub fn show(ui: &mut egui::Ui, snap: &Snapshot) {
             Connection::Disconnected => {
                 ui.label(
                     egui::RichText::new("Offline — is the daemon running?")
-                        .color(egui::Color32::from_rgb(240, 150, 150)),
+                        .color(crate::theming::palette::SHELL_ERR_SOFT),
                 );
                 ui.label("Start it with: weaver kernel start");
             }

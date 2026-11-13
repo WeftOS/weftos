@@ -444,7 +444,7 @@ pub(crate) fn render_chip_detail(
         }
         None => {
             ui.colored_label(
-                egui::Color32::from_rgb(170, 170, 180),
+                crate::theming::palette::TEXT_DISCLOSURE,
                 "No adapter data yet for this subsystem.",
             );
         }
@@ -457,14 +457,12 @@ pub(crate) fn render_chip_detail(
 /// the connection's state without hunting for it.
 pub(crate) fn connection_pill(ui: &mut egui::Ui, conn: crate::live::Connection) {
     let (text, color) = match conn {
-        crate::live::Connection::Connected => {
-            ("● connected", egui::Color32::from_rgb(110, 210, 160))
-        }
+        crate::live::Connection::Connected => ("● connected", crate::theming::palette::SHELL_OK),
         crate::live::Connection::Connecting => {
-            ("◐ connecting…", egui::Color32::from_rgb(240, 200, 110))
+            ("◐ connecting…", crate::theming::palette::SHELL_CONNECTING)
         }
         crate::live::Connection::Disconnected => {
-            ("◯ disconnected", egui::Color32::from_rgb(240, 150, 150))
+            ("◯ disconnected", crate::theming::palette::SHELL_ERR_SOFT)
         }
     };
     ui.label(egui::RichText::new(text).monospace().color(color));
@@ -517,14 +515,14 @@ pub(crate) fn render_empty_hint(ui: &mut egui::Ui, chip: tray::ChipId, snap: &Sn
     ui.label(
         egui::RichText::new(body)
             .italics()
-            .color(egui::Color32::from_rgb(170, 170, 180)),
+            .color(crate::theming::palette::TEXT_DISCLOSURE),
     );
     if show_error && let Some(err) = &snap.last_error {
         ui.add_space(4.0);
         ui.label(
             egui::RichText::new(format!("last error: {err}"))
                 .monospace()
-                .color(egui::Color32::from_rgb(220, 140, 140)),
+                .color(crate::theming::palette::SHELL_ERR_TEXT),
         );
     }
 }
@@ -532,10 +530,10 @@ pub(crate) fn render_empty_hint(ui: &mut egui::Ui, chip: tray::ChipId, snap: &Sn
 #[allow(dead_code)] // wired up by graduations needing floating windows
 pub(crate) fn window_frame() -> egui::Frame {
     egui::Frame::window(&egui::Style::default())
-        .fill(egui::Color32::from_rgba_unmultiplied(18, 18, 24, 235))
+        .fill(crate::theming::palette::SHELL_POPUP_FILL)
         .stroke(egui::Stroke::new(
             1.0,
-            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 25),
+            crate::theming::palette::SHELL_POPUP_STROKE,
         ))
         .corner_radius(10.0)
         .inner_margin(egui::Margin::same(8))
@@ -680,7 +678,7 @@ pub(crate) fn render_selected_app(
     };
     let Some(tree) = desk.app_surfaces.get(app_id) else {
         ui.colored_label(
-            egui::Color32::from_rgb(220, 160, 60),
+            crate::theming::palette::SHELL_AMBER_A,
             format!("No surface description loaded for {app_id}"),
         );
         return;
@@ -695,13 +693,13 @@ pub(crate) fn render_selected_app(
         crate::live::Connection::Connected => {}
         crate::live::Connection::Connecting => {
             ui.colored_label(
-                egui::Color32::from_rgb(220, 180, 60),
+                crate::theming::palette::SHELL_AMBER_B,
                 "⏳ Connecting to kernel daemon…",
             );
         }
         crate::live::Connection::Disconnected => {
             ui.colored_label(
-                egui::Color32::from_rgb(240, 150, 150),
+                crate::theming::palette::SHELL_ERR_SOFT,
                 "◉ Demo mode — kernel daemon offline. \
                  Start with:  weaver kernel start",
             );

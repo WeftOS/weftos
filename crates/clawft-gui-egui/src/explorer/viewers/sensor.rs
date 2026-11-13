@@ -52,7 +52,7 @@ impl SubstrateViewer for SensorViewer {
 
         ui.label(
             egui::RichText::new(format!("sensor · {kind} · {path}"))
-                .color(egui::Color32::from_rgb(160, 160, 170))
+                .color(crate::theming::palette::TEXT_SUBTLE)
                 .small(),
         );
 
@@ -64,14 +64,14 @@ impl SubstrateViewer for SensorViewer {
                 ui.label(
                     egui::RichText::new("⤴ node:")
                         .small()
-                        .color(egui::Color32::from_rgb(140, 140, 150)),
+                        .color(crate::theming::palette::TEXT_LABEL_FAINT),
                 );
                 let link = ui
                     .link(
                         egui::RichText::new(node_path)
                             .monospace()
                             .small()
-                            .color(egui::Color32::from_rgb(140, 175, 220)),
+                            .color(crate::theming::palette::ACCENT_STEEL),
                     )
                     .on_hover_text("Navigate to the publishing node.");
                 if link.clicked() {
@@ -95,7 +95,7 @@ impl SubstrateViewer for SensorViewer {
             ui.label(
                 egui::RichText::new("view:")
                     .small()
-                    .color(egui::Color32::from_rgb(140, 140, 150)),
+                    .color(crate::theming::palette::TEXT_LABEL_FAINT),
             );
             for option in [Pane::Summary, Pane::Raw, Pane::Both] {
                 let avail = match option {
@@ -128,7 +128,7 @@ impl SubstrateViewer for SensorViewer {
                 ui.label(
                     egui::RichText::new("(no raw or summary payload)")
                         .italics()
-                        .color(egui::Color32::from_rgb(140, 140, 150)),
+                        .color(crate::theming::palette::TEXT_LABEL_FAINT),
                 );
                 return;
             }
@@ -151,7 +151,7 @@ impl SubstrateViewer for SensorViewer {
             ui.label(
                 egui::RichText::new("actions")
                     .small()
-                    .color(egui::Color32::from_rgb(140, 140, 150)),
+                    .color(crate::theming::palette::TEXT_LABEL_FAINT),
             );
             for a in caps.applicable_actions {
                 ui.label(egui::RichText::new(format!("  • {a}")).monospace().small());
@@ -196,7 +196,7 @@ fn paint_subtree(ui: &mut egui::Ui, parent_path: &str, label: &'static str, sub:
         egui::RichText::new(label)
             .strong()
             .small()
-            .color(egui::Color32::from_rgb(180, 200, 230)),
+            .color(crate::theming::palette::ACCENT_STEEL_LIGHT),
     );
     match sub {
         Some(v) => {
@@ -215,7 +215,7 @@ fn paint_subtree(ui: &mut egui::Ui, parent_path: &str, label: &'static str, sub:
                 egui::RichText::new("(missing)")
                     .italics()
                     .small()
-                    .color(egui::Color32::from_rgb(140, 140, 150)),
+                    .color(crate::theming::palette::TEXT_LABEL_FAINT),
             );
         }
     }

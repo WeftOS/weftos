@@ -11,9 +11,10 @@ use eframe::egui;
 /// Apply the WeftOS egui style to the given context. Idempotent — call
 /// once during app creation.
 pub fn apply(ctx: &egui::Context) {
-    let tokens = Tokens::default();
-    ctx.set_visuals(tokens.visuals());
-    ctx.set_global_style(tokens.style());
+    // `Tokens::style()` carries the WeftOS `Visuals`, so one call installs both.
+    // (A separate `set_visuals` before `set_global_style` is overwritten by the
+    // style's own visuals, which is how egui's stock colours once won.)
+    ctx.set_global_style(Tokens::default().style());
 }
 
 /// Neutral design tokens. No brand color at the base; `accent` is the
@@ -85,7 +86,7 @@ impl Tokens {
         v.panel_fill = self.bg_panel;
         v.extreme_bg_color = self.bg_app;
         v.faint_bg_color = self.bg_app;
-        v.code_bg_color = egui::Color32::from_rgb(12, 12, 16);
+        v.code_bg_color = ansi::DEFAULT_BG;
 
         v.window_stroke = egui::Stroke::new(1.0, self.stroke_soft);
         // egui 0.34 renamed `*_rounding` → `*_corner_radius` and switched
@@ -107,6 +108,9 @@ impl Tokens {
 
         v.selection.bg_fill = self.accent_dim;
         v.selection.stroke = egui::Stroke::new(1.0, self.accent);
+        // Text caret in the accent colour (owner decision 2026-11-12); egui's
+        // width is kept, only the stock #c0deff colour is replaced.
+        v.text_cursor.stroke.color = self.accent;
 
         // Widget state tints
         let wv = &mut v.widgets;
@@ -144,7 +148,10 @@ impl Tokens {
     }
 
     fn style(&self) -> egui::Style {
-        let mut s = egui::Style::default();
+        let mut s = egui::Style {
+            visuals: self.visuals(),
+            ..Default::default()
+        };
         s.spacing.item_spacing = self.spacing;
         s.spacing.button_padding = self.button_padding;
         s.spacing.menu_margin = egui::Margin::symmetric(6, 4);
@@ -176,6 +183,9 @@ impl Tokens {
         s
     }
 }
+
+pub mod ansi;
+pub mod palette;
 
 // ── Token contract test ─────────────────────────────────────────────
 //
@@ -269,5 +279,49 @@ mod token_contract {
         assert_eq!(t.spacing.y, 6.0, "spacing.y");
         assert_eq!(t.button_padding.x, 10.0, "button_padding.x");
         assert_eq!(t.button_padding.y, 5.0, "button_padding.y");
+    }
+}
+
+#[cfg(test)]
+mod palette_contract;
+
+#[cfg(test)]
+mod apply_contract {
+    use super::{Tokens, apply};
+    use eframe::egui;
+
+    /// `apply` must leave the WeftOS `Visuals` installed. `Tokens::style()`
+    /// once started from `egui::Style::default()`, and installing that style
+    /// after `set_visuals` silently replaced the WeftOS visuals with egui's.
+    #[test]
+    fn apply_installs_weftos_visuals() {
+        let ctx = egui::Context::default();
+        apply(&ctx);
+        let t = Tokens::default();
+        let got = ctx.global_style().visuals.clone();
+
+        assert_eq!(
+            got.widgets.hovered.weak_bg_fill, t.bg_hover,
+            "hovered.weak_bg_fill"
+        );
+        assert_eq!(got.widgets.hovered.bg_fill, t.bg_hover, "hovered.bg_fill");
+        assert_eq!(
+            got.widgets.active.weak_bg_fill, t.bg_active,
+            "active.weak_bg_fill"
+        );
+        assert_eq!(got.selection.bg_fill, t.accent_dim, "selection.bg_fill");
+        assert_eq!(
+            got.override_text_color,
+            Some(t.text_primary),
+            "override_text_color"
+        );
+        assert_eq!(got.panel_fill, t.bg_panel, "panel_fill");
+        assert_eq!(got.text_cursor.stroke.color, t.accent, "text_cursor colour");
+        // Whole struct.
+        assert_eq!(
+            got,
+            t.visuals(),
+            "ctx visuals differ from Tokens::visuals()"
+        );
     }
 }

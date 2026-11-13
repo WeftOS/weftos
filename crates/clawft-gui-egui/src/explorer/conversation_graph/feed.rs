@@ -8,7 +8,7 @@
 //! churn.
 
 use super::model::GraphModel;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// Parameters for the ADR-067 P0 RPC.
 #[derive(Debug, Clone)]

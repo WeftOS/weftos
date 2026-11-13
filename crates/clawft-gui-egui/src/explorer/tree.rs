@@ -118,7 +118,7 @@ pub fn paint(ui: &mut egui::Ui, ex: &mut Explorer) -> Option<String> {
                     ui.label(
                         egui::RichText::new("⚠ backend")
                             .small()
-                            .color(egui::Color32::from_rgb(220, 170, 90)),
+                            .color(crate::theming::palette::ACCENT_AMBER),
                     )
                     .on_hover_text(msg);
                 });
@@ -131,7 +131,7 @@ pub fn paint(ui: &mut egui::Ui, ex: &mut Explorer) -> Option<String> {
                         egui::RichText::new("(no nodes registered yet)")
                             .italics()
                             .small()
-                            .color(egui::Color32::from_rgb(140, 140, 150)),
+                            .color(crate::theming::palette::TEXT_LABEL_FAINT),
                     );
                 }
                 Some(kids) => {
@@ -160,7 +160,7 @@ pub fn paint(ui: &mut egui::Ui, ex: &mut Explorer) -> Option<String> {
                             egui::RichText::new("(no rows match the current filter)")
                                 .italics()
                                 .small()
-                                .color(egui::Color32::from_rgb(140, 140, 150)),
+                                .color(crate::theming::palette::TEXT_LABEL_FAINT),
                         );
                     }
                 }
@@ -169,7 +169,7 @@ pub fn paint(ui: &mut egui::Ui, ex: &mut Explorer) -> Option<String> {
                         egui::RichText::new("loading…")
                             .italics()
                             .small()
-                            .color(egui::Color32::from_rgb(140, 140, 150)),
+                            .color(crate::theming::palette::TEXT_LABEL_FAINT),
                     );
                 }
             }
@@ -249,9 +249,9 @@ fn render_node(
 
         // Activity dot (● if updated in the last ACTIVITY_WINDOW, ○ otherwise).
         let (dot, dot_color) = if has_activity {
-            ("●", egui::Color32::from_rgb(110, 210, 160))
+            ("●", crate::theming::palette::SHELL_OK)
         } else {
-            ("○", egui::Color32::from_rgb(90, 90, 100))
+            ("○", crate::theming::palette::TREE_OFFLINE_DOT)
         };
         ui.label(
             egui::RichText::new(dot)
@@ -292,7 +292,7 @@ fn render_node(
                     egui::RichText::new("(empty)")
                         .italics()
                         .small()
-                        .color(egui::Color32::from_rgb(140, 140, 150)),
+                        .color(crate::theming::palette::TEXT_LABEL_FAINT),
                 );
             });
         }
@@ -329,7 +329,7 @@ fn render_node(
                     egui::RichText::new("loading…")
                         .italics()
                         .small()
-                        .color(egui::Color32::from_rgb(140, 140, 150)),
+                        .color(crate::theming::palette::TEXT_LABEL_FAINT),
                 );
             });
         }
@@ -357,12 +357,19 @@ fn last_segment(path: &str) -> &str {
 /// chips, and a "clear" pill that appears only when at least one
 /// filter is active. The row deliberately renders quietly when no
 /// filters are set so users who don't need it don't see chrome.
+/// A filter toggle that keeps its frame (fill + hairline stroke from the
+/// theme's inactive widget style) when off. `Button::selectable` drops the
+/// frame when unselected, which made an off toggle read as plain text.
+fn toggle_chip<'a>(on: bool, label: &'a str) -> egui::Button<'a> {
+    egui::Button::new(label).selected(on).frame(true)
+}
+
 fn paint_filter_chips(ui: &mut egui::Ui, filters: &mut TreeFilters) {
     ui.horizontal_wrapped(|ui| {
         ui.label(
             egui::RichText::new("filter:")
                 .small()
-                .color(egui::Color32::from_rgb(140, 140, 150)),
+                .color(crate::theming::palette::TEXT_LABEL_FAINT),
         );
 
         // Name search: small TextEdit. ~14ch wide so the row still fits
@@ -374,24 +381,24 @@ fn paint_filter_chips(ui: &mut egui::Ui, filters: &mut TreeFilters) {
         );
         name_resp.on_hover_text("Filter rows by substring of the last path segment.");
 
-        // Toggle chips. `Button::selectable` gives us the inverted
-        // background that reads as "this filter is on".
+        // Toggle chips: framed in both states (DESIGN.md: a control must
+        // read as one when off); `selected` adds the on-state fill.
         if ui
-            .add(egui::Button::selectable(filters.active_only, "active"))
+            .add(toggle_chip(filters.active_only, "active"))
             .on_hover_text("Show only paths that have published recently.")
             .clicked()
         {
             filters.active_only = !filters.active_only;
         }
         if ui
-            .add(egui::Button::selectable(filters.sensors_only, "sensors"))
+            .add(toggle_chip(filters.sensors_only, "sensors"))
             .on_hover_text("Show only paths under .../sensor/...")
             .clicked()
         {
             filters.sensors_only = !filters.sensors_only;
         }
         if ui
-            .add(egui::Button::selectable(filters.hide_leaves, "no leaves"))
+            .add(toggle_chip(filters.hide_leaves, "no leaves"))
             .on_hover_text("Hide leaf paths to scan structure only.")
             .clicked()
         {
@@ -604,5 +611,36 @@ mod tests {
         assert_eq!(kids[0].path, "substrate/n-bfc4cd/sensor/mic/pcm_chunk");
         assert!(kids[0].has_value);
         assert_eq!(kids[0].child_count, 0);
+    }
+
+    /// An off filter toggle must still read as a control: it paints a frame
+    /// with a visible stroke.
+    #[test]
+    fn off_filter_toggle_paints_a_frame() {
+        let mut filters = TreeFilters::default();
+        let size = egui::vec2(600.0, 80.0);
+        let shapes = crate::apps::layout_test::run_shapes(size, |_| vec![], |ui, _| {
+            paint_filter_chips(ui, &mut filters);
+        });
+        // Locate the "sensors" label, then a stroked rect that encloses it.
+        let mut label = None;
+        for s in &shapes {
+            if let egui::Shape::Text(t) = s
+                && t.galley.text() == "sensors"
+            {
+                label = Some(egui::Rect::from_min_size(t.pos, t.galley.size()).center());
+            }
+        }
+        let label = label.expect("sensors toggle painted");
+        let framed = shapes.iter().any(|s| match s {
+            egui::Shape::Rect(r) => {
+                r.rect.contains(label)
+                    && r.rect.width() < 120.0
+                    && r.stroke.width > 0.0
+                    && r.stroke.color.a() > 0
+            }
+            _ => false,
+        });
+        assert!(framed, "an off toggle must paint a stroked frame");
     }
 }

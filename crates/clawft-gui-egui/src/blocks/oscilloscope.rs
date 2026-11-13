@@ -26,7 +26,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut DemoState) {
     }
 
     let points: PlotPoints = state.scope_samples.iter().map(|&(t, y)| [t, y]).collect();
-    let line = Line::new("scope", points).color(egui::Color32::from_rgb(120, 220, 160));
+    let line = Line::new("scope", points).color(crate::theming::palette::SCOPE_LINE);
 
     Plot::new("oscilloscope")
         .allow_zoom(false)

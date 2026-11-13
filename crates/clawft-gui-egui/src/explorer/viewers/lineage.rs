@@ -7,11 +7,11 @@
 //! so we keep a single read-only graph primitive (`ui://graph`).
 
 use super::SubstrateViewer;
-use crate::ontology::types::lineage::{
-    Lineage, LINEAGE_PRIORITY, resolve_target_path, source_paths,
-};
 use crate::ontology::ObjectType;
-use serde_json::{json, Value};
+use crate::ontology::types::lineage::{
+    LINEAGE_PRIORITY, Lineage, resolve_target_path, source_paths,
+};
+use serde_json::{Value, json};
 
 pub struct LineageViewer;
 
@@ -29,7 +29,7 @@ impl SubstrateViewer for LineageViewer {
 
         ui.label(
             egui::RichText::new(format!("lineage · {path}"))
-                .color(egui::Color32::from_rgb(160, 160, 170))
+                .color(crate::theming::palette::TEXT_SUBTLE)
                 .small(),
         );
         ui.add_space(4.0);
@@ -50,7 +50,7 @@ impl SubstrateViewer for LineageViewer {
                     ui.label(
                         egui::RichText::new(actor)
                             .monospace()
-                            .color(egui::Color32::from_rgb(200, 180, 120)),
+                            .color(crate::theming::palette::ACCENT_SAND),
                     );
                     ui.end_row();
                 }
@@ -80,7 +80,7 @@ impl SubstrateViewer for LineageViewer {
             ui.label(
                 egui::RichText::new("source paths")
                     .small()
-                    .color(egui::Color32::from_rgb(140, 140, 150)),
+                    .color(crate::theming::palette::TEXT_LABEL_FAINT),
             );
             for src in &sources {
                 paint_path_link(ui, src, "Navigate to source path");
@@ -90,7 +90,7 @@ impl SubstrateViewer for LineageViewer {
             ui.label(
                 egui::RichText::new("target path")
                     .small()
-                    .color(egui::Color32::from_rgb(140, 140, 150)),
+                    .color(crate::theming::palette::TEXT_LABEL_FAINT),
             );
             paint_path_link(ui, tgt, "Navigate to derived target");
         }
@@ -111,7 +111,7 @@ impl SubstrateViewer for LineageViewer {
         } else {
             ui.label(
                 egui::RichText::new("lineage: no sources or target to graph")
-                    .color(egui::Color32::from_rgb(160, 160, 170))
+                    .color(crate::theming::palette::TEXT_SUBTLE)
                     .italics(),
             );
         }
@@ -123,14 +123,14 @@ fn paint_path_link(ui: &mut egui::Ui, path: &str, hover: &str) {
         ui.label(
             egui::RichText::new("→")
                 .small()
-                .color(egui::Color32::from_rgb(140, 140, 150)),
+                .color(crate::theming::palette::TEXT_LABEL_FAINT),
         );
         let link = ui
             .link(
                 egui::RichText::new(path)
                     .monospace()
                     .small()
-                    .color(egui::Color32::from_rgb(140, 175, 220)),
+                    .color(crate::theming::palette::ACCENT_STEEL),
             )
             .on_hover_text(hover);
         if link.clicked() {
@@ -140,11 +140,7 @@ fn paint_path_link(ui: &mut egui::Ui, path: &str, hover: &str) {
 }
 
 /// Materialise a GraphViewer-compatible value from lineage fields.
-fn build_lineage_graph(
-    sources: &[String],
-    via_actor: Option<&str>,
-    target: Option<&str>,
-) -> Value {
+fn build_lineage_graph(sources: &[String], via_actor: Option<&str>, target: Option<&str>) -> Value {
     let mut nodes: Vec<Value> = Vec::new();
     let mut edges: Vec<Value> = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -170,20 +166,18 @@ fn build_lineage_graph(
 
     let actor_id = via_actor.map(|a| format!("actor:{a}"));
     if let Some(ref aid) = actor_id {
-        push_node(
-            &mut nodes,
-            &mut seen,
-            aid,
-            "actor",
-        );
+        push_node(&mut nodes, &mut seen, aid, "actor");
         // Prefer a human label on the actor node.
-        if let Some(node) = nodes.iter_mut().find(|n| n.get("id").and_then(Value::as_str) == Some(aid.as_str()))
-            && let Some(obj) = node.as_object_mut() {
-                obj.insert(
-                    "label".into(),
-                    Value::String(via_actor.unwrap_or("actor").to_owned()),
-                );
-            }
+        if let Some(node) = nodes
+            .iter_mut()
+            .find(|n| n.get("id").and_then(Value::as_str) == Some(aid.as_str()))
+            && let Some(obj) = node.as_object_mut()
+        {
+            obj.insert(
+                "label".into(),
+                Value::String(via_actor.unwrap_or("actor").to_owned()),
+            );
+        }
     }
 
     if let Some(tgt) = target {
@@ -302,10 +296,7 @@ mod tests {
 
     #[test]
     fn short_label_uses_last_two_segments() {
-        assert_eq!(
-            short_label("substrate/n-6f3a9c/sensor/mic"),
-            "sensor/mic"
-        );
+        assert_eq!(short_label("substrate/n-6f3a9c/sensor/mic"), "sensor/mic");
         assert_eq!(short_label("mic"), "mic");
     }
 

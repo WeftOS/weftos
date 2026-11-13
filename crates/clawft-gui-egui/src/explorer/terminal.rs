@@ -258,7 +258,7 @@ mod imp {
 
             if let Some(err) = &self.last_error {
                 ui.colored_label(
-                    egui::Color32::from_rgb(220, 120, 120),
+                    crate::theming::palette::TERM_ERROR_TEXT,
                     format!("error: {err}"),
                 );
                 ui.separator();
@@ -749,8 +749,7 @@ mod imp {
 
             if self.order.is_empty() {
                 let fresh = mint_local_tab_key();
-                self.sessions
-                    .insert(fresh.clone(), Terminal::default());
+                self.sessions.insert(fresh.clone(), Terminal::default());
                 self.order.push(fresh.clone());
                 self.active = fresh;
                 return;
@@ -762,10 +761,8 @@ mod imp {
                 let next = closed_idx
                     .and_then(|i| self.order.get(i).cloned())
                     .or_else(|| {
-                        closed_idx.and_then(|i| {
-                            i.checked_sub(1)
-                                .and_then(|j| self.order.get(j).cloned())
-                        })
+                        closed_idx
+                            .and_then(|i| i.checked_sub(1).and_then(|j| self.order.get(j).cloned()))
                     })
                     .or_else(|| self.order.last().cloned())
                     .expect("order non-empty after close");
@@ -861,14 +858,14 @@ mod imp {
                 let selected = key == &active;
                 let label = tab_label(panel.sessions.get(key));
                 let fill = if selected {
-                    egui::Color32::from_rgb(40, 55, 75)
+                    crate::theming::palette::ROW_SELECTED_FILL
                 } else {
-                    egui::Color32::from_rgb(28, 28, 34)
+                    crate::theming::palette::ROW_IDLE_FILL
                 };
                 let stroke = if selected {
-                    egui::Stroke::new(1.0, egui::Color32::from_rgb(90, 140, 200))
+                    egui::Stroke::new(1.0, crate::theming::palette::ROW_SELECTED_STROKE)
                 } else {
-                    egui::Stroke::new(1.0, egui::Color32::from_rgb(50, 50, 58))
+                    egui::Stroke::new(1.0, crate::theming::palette::ROW_IDLE_STROKE)
                 };
                 let frame = egui::Frame::new()
                     .fill(fill)
@@ -886,9 +883,9 @@ mod imp {
                                         .monospace()
                                         .strong()
                                         .color(if selected {
-                                            egui::Color32::from_rgb(220, 230, 245)
+                                            crate::theming::palette::ROW_SELECTED_TEXT
                                         } else {
-                                            egui::Color32::from_rgb(170, 175, 185)
+                                            crate::theming::palette::ROW_IDLE_TEXT
                                         }),
                                 )
                                 .sense(egui::Sense::click()),
@@ -902,7 +899,7 @@ mod imp {
                                 egui::Label::new(
                                     egui::RichText::new("×")
                                         .small()
-                                        .color(egui::Color32::from_rgb(160, 120, 120)),
+                                        .color(crate::theming::palette::TERM_EXIT_TEXT),
                                 )
                                 .sense(egui::Sense::click()),
                             )
@@ -920,7 +917,7 @@ mod imp {
                         egui::RichText::new("+")
                             .small()
                             .strong()
-                            .color(egui::Color32::from_rgb(140, 200, 160)),
+                            .color(crate::theming::palette::TERM_OK_HINT),
                     )
                     .frame(false),
                 )
@@ -1150,7 +1147,7 @@ mod imp {
         let display_offset = term.grid().display_offset() as i32;
         let screen_lines = term.grid().screen_lines() as i32;
         let cols = term.grid().columns() as i32;
-        let overlay = egui::Color32::from_rgba_unmultiplied(120, 160, 220, 80);
+        let overlay = crate::theming::palette::TERM_SELECTION_OVERLAY;
 
         let start = range.start;
         let end = range.end;
@@ -1293,83 +1290,45 @@ mod imp {
     /// Spec is direct RGB.
     fn color_for(c: &Color) -> egui::Color32 {
         match c {
-            Color::Spec(rgb) => egui::Color32::from_rgb(rgb.r, rgb.g, rgb.b),
+            Color::Spec(rgb) => crate::theming::palette::data_rgb(rgb.r, rgb.g, rgb.b),
             Color::Named(n) => named_color(*n),
             Color::Indexed(i) => indexed_color(*i),
         }
     }
 
+    /// Named entries come from the shared `theming::ansi` table. The
+    /// values are identical to the table this backend used to carry
+    /// (Solarized-dark-ish); Dim* variants map to the base colour.
     fn named_color(n: NamedColor) -> egui::Color32 {
-        // Solarized-dark-ish palette tuned to match egui's monospace
-        // text. Foreground=light, Background=dark — what most TUIs
-        // expect.
+        use crate::theming::ansi;
         match n {
-            NamedColor::Black | NamedColor::DimBlack => rgb(7, 54, 66),
-            NamedColor::Red | NamedColor::DimRed => rgb(220, 50, 47),
-            NamedColor::Green | NamedColor::DimGreen => rgb(133, 153, 0),
-            NamedColor::Yellow | NamedColor::DimYellow => rgb(181, 137, 0),
-            NamedColor::Blue | NamedColor::DimBlue => rgb(38, 139, 210),
-            NamedColor::Magenta | NamedColor::DimMagenta => rgb(211, 54, 130),
-            NamedColor::Cyan | NamedColor::DimCyan => rgb(42, 161, 152),
-            NamedColor::White | NamedColor::DimWhite => rgb(238, 232, 213),
-            NamedColor::BrightBlack => rgb(88, 110, 117),
-            NamedColor::BrightRed => rgb(255, 90, 87),
-            NamedColor::BrightGreen => rgb(180, 200, 0),
-            NamedColor::BrightYellow => rgb(220, 180, 30),
-            NamedColor::BrightBlue => rgb(100, 180, 240),
-            NamedColor::BrightMagenta => rgb(240, 90, 170),
-            NamedColor::BrightCyan => rgb(80, 200, 190),
-            NamedColor::BrightWhite => rgb(253, 246, 227),
-            NamedColor::Foreground | NamedColor::DimForeground => rgb(220, 220, 225),
-            NamedColor::BrightForeground => rgb(245, 245, 250),
-            NamedColor::Background => rgb(12, 12, 16),
-            NamedColor::Cursor => rgb(220, 220, 225),
+            NamedColor::Black | NamedColor::DimBlack => ansi::PALETTE_16[0],
+            NamedColor::Red | NamedColor::DimRed => ansi::PALETTE_16[1],
+            NamedColor::Green | NamedColor::DimGreen => ansi::PALETTE_16[2],
+            NamedColor::Yellow | NamedColor::DimYellow => ansi::PALETTE_16[3],
+            NamedColor::Blue | NamedColor::DimBlue => ansi::PALETTE_16[4],
+            NamedColor::Magenta | NamedColor::DimMagenta => ansi::PALETTE_16[5],
+            NamedColor::Cyan | NamedColor::DimCyan => ansi::PALETTE_16[6],
+            NamedColor::White | NamedColor::DimWhite => ansi::PALETTE_16[7],
+            NamedColor::BrightBlack => ansi::PALETTE_16[8],
+            NamedColor::BrightRed => ansi::PALETTE_16[9],
+            NamedColor::BrightGreen => ansi::PALETTE_16[10],
+            NamedColor::BrightYellow => ansi::PALETTE_16[11],
+            NamedColor::BrightBlue => ansi::PALETTE_16[12],
+            NamedColor::BrightMagenta => ansi::PALETTE_16[13],
+            NamedColor::BrightCyan => ansi::PALETTE_16[14],
+            NamedColor::BrightWhite => ansi::PALETTE_16[15],
+            NamedColor::Foreground | NamedColor::DimForeground | NamedColor::Cursor => {
+                ansi::DEFAULT_FG
+            }
+            NamedColor::BrightForeground => ansi::BRIGHT_FG,
+            NamedColor::Background => ansi::DEFAULT_BG,
         }
     }
 
+    /// xterm-256 lookup, shared with the vt100 backend.
     fn indexed_color(i: u8) -> egui::Color32 {
-        // 0-15: standard palette
-        if i < 16 {
-            return ansi_16(i);
-        }
-        // 16-231: 6×6×6 RGB cube
-        if i < 232 {
-            let i = i - 16;
-            let r = i / 36;
-            let g = (i / 6) % 6;
-            let b = i % 6;
-            let conv = |v: u8| -> u8 { if v == 0 { 0 } else { 55 + v * 40 } };
-            return egui::Color32::from_rgb(conv(r), conv(g), conv(b));
-        }
-        // 232-255: grayscale ramp
-        let v = 8 + (i - 232) * 10;
-        egui::Color32::from_rgb(v, v, v)
-    }
-
-    fn ansi_16(i: u8) -> egui::Color32 {
-        match i {
-            0 => named_color(NamedColor::Black),
-            1 => named_color(NamedColor::Red),
-            2 => named_color(NamedColor::Green),
-            3 => named_color(NamedColor::Yellow),
-            4 => named_color(NamedColor::Blue),
-            5 => named_color(NamedColor::Magenta),
-            6 => named_color(NamedColor::Cyan),
-            7 => named_color(NamedColor::White),
-            8 => named_color(NamedColor::BrightBlack),
-            9 => named_color(NamedColor::BrightRed),
-            10 => named_color(NamedColor::BrightGreen),
-            11 => named_color(NamedColor::BrightYellow),
-            12 => named_color(NamedColor::BrightBlue),
-            13 => named_color(NamedColor::BrightMagenta),
-            14 => named_color(NamedColor::BrightCyan),
-            15 => named_color(NamedColor::BrightWhite),
-            _ => unreachable!(),
-        }
-    }
-
-    fn rgb(r: u8, g: u8, b: u8) -> egui::Color32 {
-        egui::Color32::from_rgb(r, g, b)
+        crate::theming::ansi::indexed(i)
     }
 
     /// Translate egui keyboard / text events to PTY input bytes.
@@ -1481,7 +1440,7 @@ mod imp {
                         egui::RichText::new(format!("{shell}  ·  {id}"))
                             .monospace()
                             .small()
-                            .color(egui::Color32::from_rgb(150, 170, 200)),
+                            .color(crate::theming::palette::TERM_LABEL),
                     );
                 }
                 (Some(id), None) => {
@@ -1489,7 +1448,7 @@ mod imp {
                         egui::RichText::new(id)
                             .monospace()
                             .small()
-                            .color(egui::Color32::from_rgb(150, 170, 200)),
+                            .color(crate::theming::palette::TERM_LABEL),
                     );
                 }
                 (None, _) => {
@@ -1497,7 +1456,7 @@ mod imp {
                         egui::RichText::new("starting…")
                             .italics()
                             .small()
-                            .color(egui::Color32::from_rgb(170, 170, 180)),
+                            .color(crate::theming::palette::TEXT_DISCLOSURE),
                     );
                 }
             }
@@ -1543,6 +1502,126 @@ mod imp {
             // If we double-applied, col 1 would be 'a' too.
             assert_eq!(row[Column(1)].c, ' ');
         }
+
+        #[test]
+        fn colsnap_terminal_native() {
+            use base64::Engine;
+            let live = crate::live::Live::test_stub(crate::live::Snapshot::default());
+            let data = base64::engine::general_purpose::STANDARD
+                .encode(crate::snap_support::ansi_test_stream());
+            crate::snap_support::render_checked(
+                "terminal_native",
+                crate::theming::apply,
+                crate::snap_support::click_then_drag(
+                    egui::pos2(40.0, 60.0),
+                    egui::pos2(40.0, 70.0),
+                    egui::pos2(300.0, 110.0),
+                ),
+                || {
+                    let live = live.clone();
+                    let mut t = Terminal::default();
+                    t.handle_output_value(json!({
+                        "tick": 1,
+                        "value": { "data": data, "ts_ms": 0 },
+                    }));
+                    move |ui: &mut egui::Ui| t.paint_ui(ui, &live)
+                },
+            );
+        }
+
+        // colsnap-states:begin
+        // Selection overlay and focus states of the alacritty terminal.
+        fn colsnap_term_states(name: &str, script: &crate::snap_support::Script) -> String {
+            use base64::Engine;
+            let live = crate::live::Live::test_stub(crate::live::Snapshot::default());
+            let data = base64::engine::general_purpose::STANDARD
+                .encode(crate::snap_support::ansi_test_stream());
+            crate::snap_support::render_script_checked(name, crate::theming::apply, script, || {
+                let live = live.clone();
+                let mut t = Terminal::default();
+                t.handle_output_value(json!({
+                    "tick": 1,
+                    "value": { "data": data, "ts_ms": 0 },
+                }));
+                move |ui: &mut egui::Ui| t.paint_ui(ui, &live)
+            })
+        }
+
+        #[test]
+        fn colsnap_state_terminal_native() {
+            use crate::snap_support::Script;
+            // The literal, so the same test compiles on the pre-token base.
+            let overlay = egui::Color32::from_rgba_unmultiplied(120, 160, 220, 80);
+            let overlay_hex = format!(
+                "rgba=#{:02x}{:02x}{:02x}{:02x}",
+                overlay.r(),
+                overlay.g(),
+                overlay.b(),
+                overlay.a()
+            );
+            let p = |x: f32, y: f32| egui::pos2(x, y);
+            let focus = Script::new().click(p(40.0, 60.0));
+            colsnap_term_states("state_term_native_plain", &Script::new());
+            colsnap_term_states(
+                "state_term_native_hover",
+                &Script::new().hover(p(100.0, 80.0)),
+            );
+            colsnap_term_states("state_term_native_focus", &focus);
+            // Selection in progress: button still held.
+            let dragging = focus
+                .clone()
+                .press(p(40.0, 70.0))
+                .drag_to(p(150.0, 80.0))
+                .drag_to(p(300.0, 110.0));
+            let d = colsnap_term_states("state_term_native_selecting", &dragging);
+            assert!(
+                d.contains(&overlay_hex),
+                "selection overlay not painted while dragging"
+            );
+            // Selection kept after release.
+            let released = dragging.clone().release(p(300.0, 110.0));
+            let d = colsnap_term_states("state_term_native_selected", &released);
+            assert!(
+                d.contains(&overlay_hex),
+                "selection overlay not painted after release"
+            );
+            // Single-row selection, and a reversed (right-to-left, bottom-to-top) one.
+            let d = colsnap_term_states(
+                "state_term_native_selected_row",
+                &focus
+                    .clone()
+                    .press(p(40.0, 70.0))
+                    .drag_to(p(100.0, 71.0))
+                    .drag_to(p(220.0, 71.0))
+                    .release(p(220.0, 71.0)),
+            );
+            assert!(d.contains(&overlay_hex));
+            let d = colsnap_term_states(
+                "state_term_native_selected_reversed",
+                &focus
+                    .clone()
+                    .press(p(300.0, 110.0))
+                    .drag_to(p(150.0, 90.0))
+                    .drag_to(p(40.0, 70.0))
+                    .release(p(40.0, 70.0)),
+            );
+            assert!(d.contains(&overlay_hex));
+            // A bare click afterwards clears it.
+            let d = colsnap_term_states(
+                "state_term_native_selection_cleared",
+                &released.clone().click(p(500.0, 300.0)),
+            );
+            assert!(
+                !d.contains(&overlay_hex),
+                "bare click should clear the selection"
+            );
+            // Copy with a selection in place.
+            colsnap_term_states(
+                "state_term_native_selected_copy",
+                &released.key(egui::Key::C, egui::Modifiers::COMMAND),
+            );
+        }
+        // colsnap-states:end
 
         #[test]
         fn handle_output_value_marks_exit() {

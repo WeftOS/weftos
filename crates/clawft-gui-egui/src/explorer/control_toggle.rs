@@ -74,7 +74,7 @@ pub fn paint(ui: &mut egui::Ui, path: &str, value: &Value, live: &Arc<Live>) {
 
     ui.label(
         egui::RichText::new(format!("control · {kind}"))
-            .color(egui::Color32::from_rgb(160, 160, 170))
+            .color(crate::theming::palette::TEXT_SUBTLE)
             .small(),
     );
     ui.add_space(2.0);
@@ -83,9 +83,9 @@ pub fn paint(ui: &mut egui::Ui, path: &str, value: &Value, live: &Arc<Live>) {
 
     ui.horizontal(|ui| {
         let (status_text, status_color) = if enabled {
-            ("● enabled", egui::Color32::from_rgb(110, 200, 150))
+            ("● enabled", crate::theming::palette::STATUS_OK)
         } else {
-            ("○ disabled", egui::Color32::from_rgb(220, 120, 120))
+            ("○ disabled", crate::theming::palette::TEXT_ERROR_SOFT)
         };
         ui.label(
             egui::RichText::new(status_text)
@@ -119,20 +119,20 @@ pub fn paint(ui: &mut egui::Ui, path: &str, value: &Value, live: &Arc<Live>) {
         egui::RichText::new(format!("path: {path}"))
             .small()
             .monospace()
-            .color(egui::Color32::from_rgb(140, 140, 150)),
+            .color(crate::theming::palette::TEXT_LABEL_FAINT),
     );
     ui.label(
         egui::RichText::new(format!("target: {target}"))
             .small()
             .monospace()
-            .color(egui::Color32::from_rgb(140, 140, 150)),
+            .color(crate::theming::palette::TEXT_LABEL_FAINT),
     );
     if let Some(ts) = obj.get("updated_at_ms").and_then(Value::as_u64) {
         ui.label(
             egui::RichText::new(format!("updated_at_ms: {ts}"))
                 .small()
                 .monospace()
-                .color(egui::Color32::from_rgb(140, 140, 150)),
+                .color(crate::theming::palette::TEXT_LABEL_FAINT),
         );
     }
 }

@@ -12,7 +12,8 @@ use egui_dock::{DockState, NodeIndex, TabViewer};
 use crate::canon::{
     self, AgentThread, Canvas, Chip, ChipTone, Dock, Field, FieldKind, FieldValue, Gauge, Grid,
     Media, MediaFit, Modal, Modality, Pressable, Select, Sheet, Slider, Stack, StreamView, Strip,
-    Tabs, ThreadDock, ThreadDockState, ThreadPhase, Thresholds, Toggle, ToggleStyle, Tree, TreeNode,
+    Tabs, ThreadDock, ThreadDockState, ThreadPhase, Thresholds, Toggle, ToggleStyle, Tree,
+    TreeNode,
 };
 use crate::canon::{CanonResponse, CanonWidget};
 
@@ -327,17 +328,17 @@ fn show_strip(ui: &mut egui::Ui) {
         .body(|strip| {
             strip.cell(|ui| {
                 ui.painter()
-                    .rect_filled(ui.max_rect(), 4.0, egui::Color32::from_rgb(60, 80, 120));
+                    .rect_filled(ui.max_rect(), 4.0, crate::theming::palette::DEMO_BLOCK_A);
                 ui.label("25%");
             });
             strip.cell(|ui| {
                 ui.painter()
-                    .rect_filled(ui.max_rect(), 4.0, egui::Color32::from_rgb(40, 60, 90));
+                    .rect_filled(ui.max_rect(), 4.0, crate::theming::palette::DEMO_BLOCK_B);
                 ui.label("remainder");
             });
             strip.cell(|ui| {
                 ui.painter()
-                    .rect_filled(ui.max_rect(), 4.0, egui::Color32::from_rgb(80, 60, 120));
+                    .rect_filled(ui.max_rect(), 4.0, crate::theming::palette::DEMO_BLOCK_C);
                 ui.label("120px");
             });
         })
@@ -729,7 +730,9 @@ impl CanonDemoState {
         let _ = self
             .thread_dock
             .set_phase("swarm/reviewer", ThreadPhase::Streaming);
-        let _ = self.thread_dock.set_token_rate("swarm/coder", 40.0 + n as f32);
+        let _ = self
+            .thread_dock
+            .set_token_rate("swarm/coder", 40.0 + n as f32);
         a && b
     }
 }

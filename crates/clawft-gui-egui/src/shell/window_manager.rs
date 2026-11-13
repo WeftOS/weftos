@@ -189,7 +189,11 @@ impl WindowManager {
             }
         }
         if let Some(home) = std::env::var_os("HOME") {
-            return Some(PathBuf::from(home).join(".weftos").join("workspace-layout.json"));
+            return Some(
+                PathBuf::from(home)
+                    .join(".weftos")
+                    .join("workspace-layout.json"),
+            );
         }
         None
     }
@@ -210,7 +214,10 @@ impl WindowManager {
     /// Background agent spawns (`PaneKind::Agent { background: true }`)
     /// do **not** open a pane (explicit opt-in to invisible).
     pub fn spawn(&mut self, kind: PaneKind, id: Option<PaneId>) -> Option<PaneId> {
-        if let PaneKind::Agent { background: true, .. } = &kind {
+        if let PaneKind::Agent {
+            background: true, ..
+        } = &kind
+        {
             return None;
         }
         let id = id.unwrap_or_else(|| {
@@ -280,11 +287,7 @@ impl WindowManager {
             return false;
         }
         if self.focused.as_ref() == Some(id) {
-            self.focused = self
-                .panes
-                .iter()
-                .max_by_key(|p| p.z)
-                .map(|p| p.id.clone());
+            self.focused = self.panes.iter().max_by_key(|p| p.z).map(|p| p.id.clone());
         }
         self.dirty = true;
         true
@@ -345,15 +348,15 @@ impl WindowManager {
                 tool,
                 attached_to: _,
             } = &p.kind
-            {
-                let tool = tool.clone();
-                p.kind = PaneKind::Tool {
-                    tool,
-                    attached_to: Some(agent_id.0.clone()),
-                };
-                self.dirty = true;
-                return true;
-            }
+        {
+            let tool = tool.clone();
+            p.kind = PaneKind::Tool {
+                tool,
+                attached_to: Some(agent_id.0.clone()),
+            };
+            self.dirty = true;
+            return true;
+        }
         false
     }
 
@@ -436,8 +439,7 @@ impl WindowManager {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-            let file: LayoutFile =
-                serde_json::from_str(&text).map_err(|e| e.to_string())?;
+            let file: LayoutFile = serde_json::from_str(&text).map_err(|e| e.to_string())?;
             self.apply_layout_file(file)
         }
     }
@@ -579,14 +581,7 @@ impl WindowManager {
         self.drag = Some(DragState { id, grab_offset });
     }
 
-    pub fn begin_resize(
-        &mut self,
-        id: PaneId,
-        left: bool,
-        right: bool,
-        top: bool,
-        bottom: bool,
-    ) {
+    pub fn begin_resize(&mut self, id: PaneId, left: bool, right: bool, top: bool, bottom: bool) {
         self.focus(&id);
         self.resize = Some(ResizeState {
             id,
@@ -633,51 +628,53 @@ impl WindowManager {
         let Some(pos) = pointer else { return };
 
         if let Some(drag) = self.drag.clone()
-            && let Some(p) = self.get_mut(&drag.id) {
-                let abs = p.rect.to_abs(stage);
-                let new_min = pos - drag.grab_offset;
-                let mut moved = egui::Rect::from_min_size(new_min, abs.size());
-                // Clamp inside stage during drag (soft — hard snap on release).
-                if moved.left() < stage.left() {
-                    moved = moved.translate(egui::vec2(stage.left() - moved.left(), 0.0));
-                }
-                if moved.top() < stage.top() {
-                    moved = moved.translate(egui::vec2(0.0, stage.top() - moved.top()));
-                }
-                if moved.right() > stage.right() {
-                    moved = moved.translate(egui::vec2(stage.right() - moved.right(), 0.0));
-                }
-                if moved.bottom() > stage.bottom() {
-                    moved = moved.translate(egui::vec2(0.0, stage.bottom() - moved.bottom()));
-                }
-                p.rect = NormRect::from_abs(moved, stage);
-                self.dirty = true;
+            && let Some(p) = self.get_mut(&drag.id)
+        {
+            let abs = p.rect.to_abs(stage);
+            let new_min = pos - drag.grab_offset;
+            let mut moved = egui::Rect::from_min_size(new_min, abs.size());
+            // Clamp inside stage during drag (soft — hard snap on release).
+            if moved.left() < stage.left() {
+                moved = moved.translate(egui::vec2(stage.left() - moved.left(), 0.0));
             }
+            if moved.top() < stage.top() {
+                moved = moved.translate(egui::vec2(0.0, stage.top() - moved.top()));
+            }
+            if moved.right() > stage.right() {
+                moved = moved.translate(egui::vec2(stage.right() - moved.right(), 0.0));
+            }
+            if moved.bottom() > stage.bottom() {
+                moved = moved.translate(egui::vec2(0.0, stage.bottom() - moved.bottom()));
+            }
+            p.rect = NormRect::from_abs(moved, stage);
+            self.dirty = true;
+        }
 
         if let Some(rs) = self.resize.clone()
-            && let Some(p) = self.get_mut(&rs.id) {
-                let mut abs = p.rect.to_abs(stage);
-                let min_w = MIN_NORM_W * stage.width();
-                let min_h = MIN_NORM_H * stage.height();
-                if rs.left {
-                    let new_left = pos.x.clamp(stage.left(), abs.right() - min_w);
-                    abs.min.x = new_left;
-                }
-                if rs.right {
-                    let new_right = pos.x.clamp(abs.left() + min_w, stage.right());
-                    abs.max.x = new_right;
-                }
-                if rs.top {
-                    let new_top = pos.y.clamp(stage.top(), abs.bottom() - min_h);
-                    abs.min.y = new_top;
-                }
-                if rs.bottom {
-                    let new_bottom = pos.y.clamp(abs.top() + min_h, stage.bottom());
-                    abs.max.y = new_bottom;
-                }
-                p.rect = NormRect::from_abs(abs, stage);
-                self.dirty = true;
+            && let Some(p) = self.get_mut(&rs.id)
+        {
+            let mut abs = p.rect.to_abs(stage);
+            let min_w = MIN_NORM_W * stage.width();
+            let min_h = MIN_NORM_H * stage.height();
+            if rs.left {
+                let new_left = pos.x.clamp(stage.left(), abs.right() - min_w);
+                abs.min.x = new_left;
             }
+            if rs.right {
+                let new_right = pos.x.clamp(abs.left() + min_w, stage.right());
+                abs.max.x = new_right;
+            }
+            if rs.top {
+                let new_top = pos.y.clamp(stage.top(), abs.bottom() - min_h);
+                abs.min.y = new_top;
+            }
+            if rs.bottom {
+                let new_bottom = pos.y.clamp(abs.top() + min_h, stage.bottom());
+                abs.max.y = new_bottom;
+            }
+            p.rect = NormRect::from_abs(abs, stage);
+            self.dirty = true;
+        }
     }
 
     pub fn is_dragging(&self) -> bool {
@@ -726,7 +723,12 @@ mod tests {
     #[test]
     fn concurrent_apps_and_agent() {
         let mut wm = WindowManager::new();
-        wm.spawn(PaneKind::App { app: "terminal".into() }, None);
+        wm.spawn(
+            PaneKind::App {
+                app: "terminal".into(),
+            },
+            None,
+        );
         wm.spawn(PaneKind::App { app: "chat".into() }, None);
         wm.spawn(
             PaneKind::Agent {
@@ -743,12 +745,8 @@ mod tests {
     #[test]
     fn z_order_focus_raises() {
         let mut wm = WindowManager::new();
-        let a = wm
-            .spawn(PaneKind::App { app: "a".into() }, None)
-            .unwrap();
-        let b = wm
-            .spawn(PaneKind::App { app: "b".into() }, None)
-            .unwrap();
+        let a = wm.spawn(PaneKind::App { app: "a".into() }, None).unwrap();
+        let b = wm.spawn(PaneKind::App { app: "b".into() }, None).unwrap();
         let za = wm.get(&a).unwrap().z;
         let zb = wm.get(&b).unwrap().z;
         assert!(zb > za);
@@ -870,14 +868,16 @@ mod tests {
 
     #[test]
     fn native_layout_file_roundtrip() {
-        let dir = std::env::temp_dir().join(format!(
-            "weftos-wm-test-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("weftos-wm-test-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("layout.json");
         let mut wm = WindowManager::new();
-        wm.spawn(PaneKind::App { app: "terminal".into() }, None);
+        wm.spawn(
+            PaneKind::App {
+                app: "terminal".into(),
+            },
+            None,
+        );
         wm.spawn(PaneKind::App { app: "chat".into() }, None);
         wm.save_to_path(&path).unwrap();
         let mut wm2 = WindowManager::new();

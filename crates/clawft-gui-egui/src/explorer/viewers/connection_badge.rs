@@ -48,7 +48,7 @@ impl SubstrateViewer for ConnectionBadgeViewer {
 
         ui.label(
             egui::RichText::new(format!("connection · {path}"))
-                .color(egui::Color32::from_rgb(160, 160, 170))
+                .color(crate::theming::palette::TEXT_SUBTLE)
                 .small(),
         );
         ui.add_space(4.0);
@@ -90,10 +90,10 @@ impl SubstrateViewer for ConnectionBadgeViewer {
 
 fn state_color(state: &str) -> egui::Color32 {
     match state {
-        "connected" => egui::Color32::from_rgb(110, 200, 150),
-        "connecting" | "idle" => egui::Color32::from_rgb(220, 180, 80),
-        "disconnected" | "error" => egui::Color32::from_rgb(200, 90, 90),
-        _ => egui::Color32::from_rgb(140, 140, 150),
+        "connected" => crate::theming::palette::STATUS_OK,
+        "connecting" | "idle" => crate::theming::palette::STATUS_WARN,
+        "disconnected" | "error" => crate::theming::palette::STATUS_ERR,
+        _ => crate::theming::palette::TEXT_LABEL_FAINT,
     }
 }
 

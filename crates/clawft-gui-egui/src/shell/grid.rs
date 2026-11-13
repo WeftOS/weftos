@@ -66,7 +66,7 @@ const MASSES: [Mass; 4] = [
 
 pub fn paint(ui: &mut egui::Ui, rect: egui::Rect, time: f32) {
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(4, 4, 6));
+    painter.rect_filled(rect, 0.0, crate::theming::palette::GRID_BG);
 
     // Compute current mass positions once per frame.
     let positions: [egui::Pos2; 4] = std::array::from_fn(|i| MASSES[i].pos(time, rect));
@@ -82,15 +82,15 @@ pub fn paint(ui: &mut egui::Ui, rect: egui::Rect, time: f32) {
     let passes: [(egui::Vec2, egui::Color32); 3] = [
         (
             egui::vec2(-ABERRATION, 0.0),
-            egui::Color32::from_rgba_unmultiplied(80, 30, 48, 22),
+            crate::theming::palette::GRID_TINT_ROSE,
         ),
         (
             egui::vec2(0.0, 0.0),
-            egui::Color32::from_rgba_unmultiplied(55, 55, 72, 30),
+            crate::theming::palette::GRID_TINT_SLATE,
         ),
         (
             egui::vec2(ABERRATION, 0.0),
-            egui::Color32::from_rgba_unmultiplied(34, 56, 96, 22),
+            crate::theming::palette::GRID_TINT_BLUE,
         ),
     ];
 
@@ -123,7 +123,7 @@ pub fn paint(ui: &mut egui::Ui, rect: egui::Rect, time: f32) {
     }
 
     // Subtle vignette so the edges feel darker.
-    let vignette = egui::Color32::from_rgba_unmultiplied(0, 0, 0, 140);
+    let vignette = crate::theming::palette::GRID_VIGNETTE;
     painter.rect(
         rect,
         0.0,
