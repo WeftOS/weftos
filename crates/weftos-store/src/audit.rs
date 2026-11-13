@@ -14,6 +14,8 @@ use serde_json::Value;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
     Ok,
+    /// The object asked for is not there (the client got a 404). Not a failure of the backend.
+    NotFound,
     /// Exposure, grant or policy refused it.
     Refused(String),
     /// Allowed, but the backend failed it.
@@ -25,6 +27,7 @@ impl Outcome {
     pub fn text(&self) -> String {
         match self {
             Self::Ok => "ok".into(),
+            Self::NotFound => "not_found".into(),
             Self::Refused(w) => format!("refused:{w}"),
             Self::Error(w) => format!("error:{w}"),
         }
@@ -123,6 +126,18 @@ fn text(v: &Value, names: &[&str]) -> Option<String> {
 
 fn num(v: &Value, names: &[&str]) -> Option<u64> {
     find(v, names).and_then(|x| x.as_u64().or_else(|| x.as_str().and_then(|s| s.parse().ok())))
+}
+
+/// What RustFS 1.0.5 writes in `error` when a HeadObject of a missing key ends without the handler
+/// reporting an outcome. The client gets a 404; the audit entry says status 500.
+pub const HEAD_MISSING_KEY_AUDIT_ERROR: &str = "Operation ended before reporting its outcome";
+
+impl Raw {
+    /// RustFS 1.0.5's audit entry for a HeadObject of a missing key: that operation, status 500 and
+    /// exactly the reason above. Any other 500, or the same reason on another operation, is not it.
+    pub fn is_head_of_missing_key(&self) -> bool {
+        self.op == "HeadObject" && self.status == Some(500) && self.reason.as_deref() == Some(HEAD_MISSING_KEY_AUDIT_ERROR)
+    }
 }
 
 /// One line of RustFS's audit stream. RustFS 1.0.4 posts `{"EventName":..,"Key":..,"Records":[{..}]}`

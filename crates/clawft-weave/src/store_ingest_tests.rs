@@ -448,6 +448,10 @@ fn live_each_refusal_rustfs_logs_and_audits_is_counted_once_and_the_rest_is_reco
             eprintln!("HEAD {:?} -> {}", h.key, h.outcome.text());
             assert!(!matches!(h.outcome, Outcome::Refused(_)), "{h:?}");
         }
+        // RustFS 1.0.5 audits the head of the missing key as status 500; the client got a 404 (N20), so it is not-found.
+        let head_of = |k: &str| e.iter().find(|e| e.op == "HeadObject" && e.principal == "cog:rw" && e.key.as_deref() == Some(k)).cloned().expect("the head");
+        assert_eq!(head_of("a/ok.txt").outcome, Outcome::Ok);
+        assert_eq!(head_of("nope/missing").outcome, Outcome::NotFound, "{:?}", head_of("nope/missing"));
         assert!(chain.0.lock().unwrap().iter().all(|k| k != "store.principal.suspend"), "no refusal yet, no suspension");
 
         // Two refusals of a put by the read-only cog: one activity line each, from the log, and the key still on

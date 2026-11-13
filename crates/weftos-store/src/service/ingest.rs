@@ -72,6 +72,7 @@ impl StoreService {
         };
         let outcome = match raw.status {
             Some(s) if (200..300).contains(&s) => Outcome::Ok,
+            Some(500) if raw.is_head_of_missing_key() => Outcome::NotFound,
             Some(403) => Outcome::Refused(raw.reason.clone().unwrap_or_else(|| "403".into())),
             Some(s) => Outcome::Error(match &raw.reason {
                 Some(why) => format!("status {s}: {why}"),
