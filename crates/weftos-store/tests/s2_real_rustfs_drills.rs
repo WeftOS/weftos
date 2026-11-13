@@ -318,6 +318,8 @@ fn drill_interrupted_sync_docs_then_a_deleted_doc_converges() {
     #[cfg(not(unix))]
     {
         let mut perm = std::fs::metadata(dir.join("docs/b.md")).unwrap().permissions();
+        // The lint is about Unix (world-writable); this block is not compiled there.
+        #[allow(clippy::permissions_set_readonly_false)]
         perm.set_readonly(false);
         std::fs::set_permissions(dir.join("docs/b.md"), perm).unwrap();
     }
