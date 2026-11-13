@@ -155,6 +155,7 @@ pub fn finish(env: &InstallEnv, f: Finish<'_>) -> AddReport {
     }
     let store = match crate::store_rt::project_added(&f.ulid) {
         Ok(s) => {
+            #[cfg(all(feature = "placement", unix))]
             if s.is_some()
                 && let Err(e) = crate::store_svc::project_added(&f.ulid)
             {
