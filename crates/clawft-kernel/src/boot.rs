@@ -2798,6 +2798,14 @@ impl<P: Platform> Kernel<P> {
         self.chain.governance_gate.as_ref()
     }
 
+    /// Replace the governance gate. Test harness only: lets a test drive the
+    /// real RPC path against a booted kernel whose gate carries rules the
+    /// boot would not install. The feature is refused in release builds.
+    #[cfg(all(feature = "exochain", feature = "test-support"))]
+    pub fn set_governance_gate_for_test(&mut self, gate: Arc<dyn crate::gate::GateBackend>) {
+        self.chain.governance_gate = Some(gate);
+    }
+
     /// Get the external chain-head anchoring controller (WEFT-137), when configured.
     #[cfg(feature = "exochain")]
     pub fn chain_anchor(&self) -> Option<&Arc<crate::chain_anchor::AnchoringController>> {
