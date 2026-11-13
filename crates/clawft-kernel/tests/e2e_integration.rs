@@ -572,7 +572,7 @@ async fn dead_letter_queue_captures() {
 
     // Verify DLQ has at least 1 entry
     assert!(
-        dlq.len() >= 1,
+        !dlq.is_empty(),
         "DLQ should have at least 1 entry, got {}",
         dlq.len()
     );

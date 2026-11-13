@@ -505,28 +505,27 @@ impl A2ARouter {
                 Ok(())
             }
             Err(mpsc::error::TrySendError::Full(msg)) => {
-                let _rejected_msg = msg;
                 warn!(pid, "inbox full, dead-lettering");
                 #[cfg(feature = "os-patterns")]
                 if let Some(dlq) = self.dead_letter_queue.get() {
-                    dlq.intake(
-                        rejected_msg,
-                        crate::dead_letter::DeadLetterReason::InboxFull { pid },
-                    );
+                    dlq.intake(msg, crate::dead_letter::DeadLetterReason::InboxFull { pid });
                 }
+                #[cfg(not(feature = "os-patterns"))]
+                drop(msg);
                 Err(KernelError::Ipc(format!("inbox full for PID {pid}")))
             }
             Err(mpsc::error::TrySendError::Closed(msg)) => {
-                let _rejected_msg = msg;
                 warn!(pid, "inbox closed, removing and dead-lettering");
                 self.inboxes.remove(&pid);
                 #[cfg(feature = "os-patterns")]
                 if let Some(dlq) = self.dead_letter_queue.get() {
                     dlq.intake(
-                        rejected_msg,
+                        msg,
                         crate::dead_letter::DeadLetterReason::AgentExited { pid },
                     );
                 }
+                #[cfg(not(feature = "os-patterns"))]
+                drop(msg);
                 Err(KernelError::Ipc(format!("inbox closed for PID {pid}")))
             }
         }
@@ -1242,6 +1241,59 @@ mod tests {
 
         // Inbox should still exist (not removed on full, only on closed)
         assert!(router.has_inbox(target_pid));
+    }
+
+    /// A full inbox must hand the rejected message to the dead-letter queue
+    /// with reason `InboxFull` (os-patterns).
+    #[cfg(feature = "os-patterns")]
+    #[tokio::test]
+    async fn full_inbox_dead_letters_with_inbox_full() {
+        let (router, pids, _receivers) = setup_router(2);
+        let (sender, target) = (pids[0], pids[1]);
+        let dlq = Arc::new(crate::dead_letter::DeadLetterQueue::new(16));
+        router.set_dead_letter_queue(dlq.clone());
+
+        let (tx, _rx_target) = mpsc::channel(1);
+        router.inboxes.insert(target, tx);
+
+        let m1 = KernelMessage::text(sender, MessageTarget::Process(target), "fits");
+        router.send(m1).await.unwrap();
+        let m2 = KernelMessage::text(sender, MessageTarget::Process(target), "overflow");
+        assert!(router.send(m2).await.is_err());
+
+        let letters = dlq.query_by_reason("InboxFull");
+        assert_eq!(letters.len(), 1, "exactly one InboxFull dead letter");
+        assert!(matches!(
+            letters[0].reason,
+            crate::dead_letter::DeadLetterReason::InboxFull { pid } if pid == target
+        ));
+        assert!(matches!(
+            letters[0].message.payload,
+            MessagePayload::Text(ref t) if t == "overflow"
+        ));
+        assert_eq!(dlq.len(), 1);
+    }
+
+    /// A closed inbox must dead-letter the message with reason `AgentExited`
+    /// and drop the stale inbox (os-patterns).
+    #[cfg(feature = "os-patterns")]
+    #[tokio::test]
+    async fn closed_inbox_dead_letters_with_agent_exited() {
+        let (router, pids, _receivers) = setup_router(2);
+        let (sender, target) = (pids[0], pids[1]);
+        let dlq = Arc::new(crate::dead_letter::DeadLetterQueue::new(16));
+        router.set_dead_letter_queue(dlq.clone());
+
+        let (tx, rx_target) = mpsc::channel(1);
+        router.inboxes.insert(target, tx);
+        drop(rx_target);
+
+        let m = KernelMessage::text(sender, MessageTarget::Process(target), "gone");
+        assert!(router.send(m).await.is_err());
+
+        let letters = dlq.query_by_reason("AgentExited");
+        assert_eq!(letters.len(), 1);
+        assert!(!router.has_inbox(target));
     }
 
     #[tokio::test]

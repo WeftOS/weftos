@@ -2473,13 +2473,18 @@ cmd_cos_console_demo() {
     return $rc
 }
 
-# ── Gate check 13 helper: clawft-kernel diskann + bench feature matrix ──
+# ── Gate check 14 helper: clawft-kernel feature matrix ──
+# os-patterns and --all-features are here because docs.rs builds clawft-kernel
+# (and weftos) with all features; a cfg-gated arm that names a binding the
+# default build never declares (a2a.rs `rejected_msg`) broke every such build.
 check_kernel_diskann_and_bench_matrix() {
     # --tests included deliberately: cfg-gated test modules rot separately
     # from the lib (found live: stub-only cosine_distance tests failed to
     # compile under --features diskann while the lib checked clean).
     cargo check -p clawft-kernel --features diskann --tests --benches \
-        && cargo check -p clawft-kernel --tests --benches
+        && cargo check -p clawft-kernel --tests --benches \
+        && cargo check -p clawft-kernel --features os-patterns --tests \
+        && cargo check -p clawft-kernel --all-features --tests --benches
 }
 
 # ── Gate: full phase-gate checks ────────────────────────────────────
@@ -2885,7 +2890,7 @@ cmd_gate() {
     # feature states — `cargo check --workspace` (check 1 / cmd_check)
     # does not build [[bench]] targets by default, so without `--benches`
     # here the bench's diskann-gated arm could silently bit-rot.
-    run_gate_check 14 "diskann + bench feature compile (clawft-kernel)" \
+    run_gate_check 14 "diskann + os-patterns + all-features compile (clawft-kernel)" \
         check_kernel_diskann_and_bench_matrix
 
     # 15. WEFT-114: clawft-kernel wasm32-unknown-unknown with mesh OFF

@@ -772,6 +772,8 @@ mod tests {
                 max_cpu_time_ms: 100,
                 max_tool_calls: 5,
                 max_messages: 5,
+                #[cfg(feature = "os-patterns")]
+                max_disk_bytes: 100,
             },
             ..Default::default()
         };
@@ -794,6 +796,8 @@ mod tests {
                 max_cpu_time_ms: 500,
                 max_tool_calls: 10,
                 max_messages: 20,
+                #[cfg(feature = "os-patterns")]
+                max_disk_bytes: 2048,
             },
         };
         let json = serde_json::to_string(&caps).unwrap();
