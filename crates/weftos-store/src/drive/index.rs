@@ -64,8 +64,7 @@ pub struct Entry {
 
 /// Whether a file's mode has any execute bit.
 pub(crate) fn is_exec(md: &std::fs::Metadata) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    md.permissions().mode() & 0o111 != 0
+    crate::fsmode::has_exec_bit(md)
 }
 
 /// A path whose local and remote versions disagree and nobody has chosen yet. While it is open the

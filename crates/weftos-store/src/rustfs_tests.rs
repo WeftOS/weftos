@@ -923,6 +923,7 @@ fn plain_http_is_for_loopback_only() {
     assert!(RustfsBackend::new(cfg_in(d.path(), "http://127.0.0.1@evil.example:9000")).is_err());
 }
 
+#[cfg(unix)]
 #[test]
 fn the_secrets_directory_is_0700_a_loose_one_of_ours_is_tightened_and_a_secret_file_is_0600() {
     use std::os::unix::fs::PermissionsExt;
@@ -941,6 +942,7 @@ fn the_secrets_directory_is_0700_a_loose_one_of_ours_is_tightened_and_a_secret_f
     assert_eq!(mode(&be.secret_path("k1")), 0o600);
 }
 
+#[cfg(unix)]
 #[test]
 fn a_secret_is_written_with_create_new_a_leftover_is_replaced_and_a_planted_link_is_not_followed() {
     use std::os::unix::fs::PermissionsExt;

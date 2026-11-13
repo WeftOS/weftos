@@ -308,9 +308,18 @@ fn drill_interrupted_sync_docs_then_a_deleted_doc_converges() {
     // fetching it, leaving a half-written b.md behind
     let e2 = r.publish("sd", "b", "h2", &[("docs/a.md", "# A\n"), ("docs/b.md", "# B\n"), ("docs/c.md", "# C\n")], &[], now + MIN);
     std::fs::write(dir.join(".wt-index.json"), br#"["docs/a.md","docs/b.md","docs/c.md"]"#).unwrap();
+    // The follower leaves docs read-only: make b.md writable again (0644 on Unix; on Windows
+    // the read-only attribute is the whole story).
+    #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(dir.join("docs/b.md"), std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
+    #[cfg(not(unix))]
+    {
+        let mut perm = std::fs::metadata(dir.join("docs/b.md")).unwrap().permissions();
+        perm.set_readonly(false);
+        std::fs::set_permissions(dir.join("docs/b.md"), perm).unwrap();
     }
     std::fs::write(dir.join("docs/b.md"), "# B (half written").unwrap();
     assert!(!dir.join("docs/c.md").exists());
