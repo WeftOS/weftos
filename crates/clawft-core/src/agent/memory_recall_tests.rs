@@ -141,6 +141,7 @@ fn identity_reranker_preserves_retriever_order() {
 /// match cannot pass it.
 #[cfg(feature = "onnx-embeddings")]
 #[test]
+#[cfg_attr(not(feature = "real-embedder-tests"), ignore = "needs --features real-embedder-tests and WEFTOS_TEST_EMBED_MODEL_DIR (nomic-embed-text-v1.5 bundle)")]
 fn onnx_retriever_ranks_the_paraphrased_snippet_first() {
     use crate::embeddings::test_support::{TEST_MODEL_DIR_ENV, real_embedder};
     if real_embedder().is_none() {

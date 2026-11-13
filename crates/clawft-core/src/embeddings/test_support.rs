@@ -2,12 +2,13 @@
 //!
 //! Owner rule (2026-11-11): recall is judged with a REAL embedding model, never
 //! a fake or word-hashing one. Tests that rank text call [`real_embedder`]; when
-//! the gate is closed it prints why and returns `None`, and the test returns
-//! early. Hashing is never a substitute.
+//! the `real-embedder-tests` feature is on it fails loudly if the model is
+//! missing; without the feature the tests are `#[ignore]`d. Hashing is never a
+//! substitute.
 //!
 //! The gate is both of:
-//! - the `onnx-embeddings` feature of `clawft-core` (forwarded by dependents'
-//!   `real-embedder-tests` features), and
+//! - the `real-embedder-tests` feature of `clawft-core` (implies
+//!   `onnx-embeddings`; forwarded by dependents' `real-embedder-tests`), and
 //! - `WEFTOS_TEST_EMBED_MODEL_DIR` pointing at a nomic-embed-text-v1.5 bundle
 //!   (`onnx/model.onnx` + `tokenizer.json`).
 //!
@@ -101,34 +102,43 @@ pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
     if na == 0.0 || nb == 0.0 { 0.0 } else { dot / (na * nb) }
 }
 
-/// The real test embedder, or `None` with the skip reason printed to stderr.
+/// The real test embedder.
+///
+/// Never a silent skip: with `real-embedder-tests` on, a missing
+/// `WEFTOS_TEST_EMBED_MODEL_DIR` (or an unloadable bundle) panics with the env
+/// var and the expected files, and without the feature it panics too (the
+/// calling tests are `#[ignore]`d then, so this is only reached by
+/// `--ignored`). The `Option` is kept so call sites stay `let Some(..) = .. else`;
+/// it is always `Some` when this returns.
 pub fn real_embedder() -> Option<TestEmbedder> {
-    #[cfg(not(feature = "onnx-embeddings"))]
+    #[cfg(not(feature = "real-embedder-tests"))]
     {
-        eprintln!(
-            "SKIP real-embedder test: built without the onnx-embeddings feature \
-             (use --features real-embedder-tests / onnx-embeddings); not falling back to hashing"
-        );
-        None
+        panic!(
+            "real-embedder test run without the `real-embedder-tests` feature; \
+             rerun with --features real-embedder-tests and {TEST_MODEL_DIR_ENV} set \
+             (a nomic-embed-text-v1.5 bundle: onnx/model.onnx + tokenizer.json)"
+        )
     }
-    #[cfg(feature = "onnx-embeddings")]
+    #[cfg(feature = "real-embedder-tests")]
     {
         use std::sync::OnceLock;
-        static MODEL: OnceLock<Option<TestEmbedder>> = OnceLock::new();
-        MODEL
-            .get_or_init(|| {
-                let Some(dir) = std::env::var_os(TEST_MODEL_DIR_ENV) else {
-                    eprintln!(
-                        "SKIP real-embedder test: {TEST_MODEL_DIR_ENV} is not set; \
-                         not falling back to hashing"
-                    );
-                    return None;
-                };
-                match super::onnx_embedder::OnnxEmbedder::from_dir(&dir) {
-                    Ok(inner) => Some(TestEmbedder { inner: Arc::new(inner) }),
-                    Err(e) => panic!("{TEST_MODEL_DIR_ENV} is set but the model did not load: {e}"),
-                }
-            })
-            .clone()
+        static MODEL: OnceLock<TestEmbedder> = OnceLock::new();
+        let model = MODEL.get_or_init(|| {
+            let Some(dir) = std::env::var_os(TEST_MODEL_DIR_ENV) else {
+                panic!(
+                    "{TEST_MODEL_DIR_ENV} is not set: real-embedder-tests needs the \
+                     nomic-embed-text-v1.5 bundle (expected <dir>/onnx/model.onnx and \
+                     <dir>/tokenizer.json); refusing to pass without it"
+                );
+            };
+            match super::onnx_embedder::OnnxEmbedder::from_dir(&dir) {
+                Ok(inner) => TestEmbedder { inner: Arc::new(inner) },
+                Err(e) => panic!(
+                    "{TEST_MODEL_DIR_ENV}={} is set but the model did not load: {e}",
+                    std::path::Path::new(&dir).display()
+                ),
+            }
+        });
+        Some(model.clone())
     }
 }

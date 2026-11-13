@@ -564,6 +564,7 @@ mod tests {
         /// result and "not behind the Java paragraph" are asserted, because the model's
         /// order of the remaining paragraphs is evidence, not a contract.
         #[tokio::test]
+        #[cfg_attr(not(feature = "real-embedder-tests"), ignore = "needs --features real-embedder-tests and WEFTOS_TEST_EMBED_MODEL_DIR (nomic-embed-text-v1.5 bundle)")]
         async fn vector_search_returns_semantically_similar_paragraphs() {
             let Some(real) = real_embedder() else { return };
             let results = search_paragraphs_with(

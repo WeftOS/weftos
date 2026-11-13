@@ -1071,6 +1071,7 @@ mod tests {
 
     /// WEFT-375: relationship-level HNSW search ("how does X interact with Y?").
     #[tokio::test]
+    #[cfg_attr(not(feature = "real-embedder-tests"), ignore = "needs --features real-embedder-tests and WEFTOS_TEST_EMBED_MODEL_DIR (nomic-embed-text-v1.5 bundle)")]
     async fn bridge_relationship_hnsw_search() {
         use clawft_kernel::hnsw_service::HnswServiceConfig;
 

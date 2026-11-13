@@ -355,6 +355,7 @@ mod tests {
     /// from the owner's "top-2" (for Mathew to confirm): the note is 3rd, top-2
     /// cannot pass. The other three stay at top-1.
     #[tokio::test]
+    #[cfg_attr(not(feature = "real-embedder-tests"), ignore = "needs --features real-embedder-tests and WEFTOS_TEST_EMBED_MODEL_DIR (nomic-embed-text-v1.5 bundle)")]
     async fn real_embedder_recalls_the_right_note_for_a_paraphrase() {
         let Some(real) = clawft_core::embeddings::test_support::real_embedder() else { return };
         let dir = tempfile::tempdir().unwrap();

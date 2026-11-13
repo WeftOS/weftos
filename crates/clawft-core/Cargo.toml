@@ -50,6 +50,8 @@ signing = ["dep:ed25519-dalek", "dep:rand"]
 # model's own tokenizer.json). Opt-in: the default build links no ort. Without
 # it, semantic recall reports "unavailable" instead of hashing.
 onnx-embeddings = ["vector-memory", "dep:ort", "dep:tokenizers"]
+# Test-only: real-model recall tests run (and fail without WEFTOS_TEST_EMBED_MODEL_DIR).
+real-embedder-tests = ["onnx-embeddings"]
 # agent-core-v1 Phase E2: enables EmbeddingRouter's production index
 # backed by ruvector-diskann@2.1 (Vamana + PQ + mmap). When the feature
 # is off, the router falls back to an in-memory brute-force cosine

@@ -886,6 +886,7 @@ mod tests {
     /// shares no word with the snippet it must retrieve.
     #[cfg(feature = "vector-memory")]
     #[tokio::test]
+    #[cfg_attr(not(feature = "real-embedder-tests"), ignore = "needs --features real-embedder-tests and WEFTOS_TEST_EMBED_MODEL_DIR (nomic-embed-text-v1.5 bundle)")]
     async fn memory_recall_with_a_query_injects_cited_snippets_not_the_whole_file() {
         if crate::embeddings::test_support::real_embedder().is_none() {
             return;

@@ -83,6 +83,7 @@ async fn index_then_graft_exact_text_cites_witness_plumbing_mock_embedder() {
 /// a printed reason otherwise): the query is a paraphrase sharing no keyword
 /// with the stored turn, and the graft still cites that turn's witness seq.
 #[tokio::test]
+#[cfg_attr(not(feature = "real-embedder-tests"), ignore = "needs --features real-embedder-tests and WEFTOS_TEST_EMBED_MODEL_DIR (nomic-embed-text-v1.5 bundle)")]
 async fn graft_recalls_a_paraphrase_with_witness_real_embedder() {
     let Some(embedder) = clawft_kernel::embedding_support::real_embedder() else { return };
     let chain = Arc::new(ChainManager::new(0, 1000));

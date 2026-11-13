@@ -233,6 +233,7 @@ mod tests {
     /// unless `onnx-embeddings` + `WEFTOS_TEST_EMBED_MODEL_DIR`). No query shares
     /// a content word with the turn it must find.
     #[tokio::test]
+    #[cfg_attr(not(feature = "real-embedder-tests"), ignore = "needs --features real-embedder-tests and WEFTOS_TEST_EMBED_MODEL_DIR (nomic-embed-text-v1.5 bundle)")]
     async fn real_embedder_recalls_the_right_turn_for_a_paraphrase() {
         let Some(real) = crate::embeddings::test_support::real_embedder() else { return };
         let mut indexer = SessionIndexer::new(Box::new(real)).await;

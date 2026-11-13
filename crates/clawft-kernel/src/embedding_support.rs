@@ -2,11 +2,12 @@
 //!
 //! Recall and retrieval are judged with a REAL embedding model, never a fake
 //! or word-hashing one (owner rule 2026-11-11). Tests that rank text call
-//! [`real_embedder`]; when the gate is closed it prints why and returns
-//! `None`, and the test returns early. There is no hashing substitute.
+//! [`real_embedder`]; with `real-embedder-tests` on it fails loudly if the model
+//! is missing, and without the feature the tests are `#[ignore]`d. There is no
+//! hashing substitute.
 //!
 //! The gate is two things, both required:
-//! - the `onnx-embeddings` feature (turned on by `real-embedder-tests`), and
+//! - the `real-embedder-tests` feature (implies `onnx-embeddings`), and
 //! - `WEFTOS_TEST_EMBED_MODEL_DIR` pointing at a nomic-embed-text-v1.5 bundle
 //!   (`onnx/model.onnx` + `tokenizer.json`).
 //!
@@ -25,41 +26,46 @@ pub const TEST_MODEL_DIR_ENV: &str = "WEFTOS_TEST_EMBED_MODEL_DIR";
 /// Width of the test model (nomic-embed-text-v1.5).
 pub const TEST_MODEL_DIMS: usize = 768;
 
-/// The real test embedder, or `None` with the skip reason printed to stderr.
+/// The real test embedder.
+///
+/// Never a silent skip: with `real-embedder-tests` on, a missing
+/// `WEFTOS_TEST_EMBED_MODEL_DIR` (or an unloadable bundle) panics naming the
+/// env var and the expected files; without the feature it panics too (callers
+/// are `#[ignore]`d then, so only `--ignored` reaches it). The `Option` is kept
+/// so call sites stay `let Some(..) = .. else`; it is always `Some` on return.
 pub fn real_embedder() -> Option<Arc<dyn EmbeddingProvider>> {
-    #[cfg(not(feature = "onnx-embeddings"))]
+    #[cfg(not(feature = "real-embedder-tests"))]
     {
-        eprintln!(
-            "SKIP real-embedder test: built without the onnx-embeddings feature \
-             (use --features real-embedder-tests); not falling back to hashing"
-        );
-        None
+        panic!(
+            "real-embedder test run without the `real-embedder-tests` feature; \
+             rerun with --features real-embedder-tests and {TEST_MODEL_DIR_ENV} set \
+             (a nomic-embed-text-v1.5 bundle: onnx/model.onnx + tokenizer.json)"
+        )
     }
-    #[cfg(feature = "onnx-embeddings")]
+    #[cfg(feature = "real-embedder-tests")]
     {
         use std::sync::OnceLock;
-        static MODEL: OnceLock<Option<Arc<dyn EmbeddingProvider>>> = OnceLock::new();
-        MODEL
-            .get_or_init(|| {
-                let Some(dir) = std::env::var_os(TEST_MODEL_DIR_ENV) else {
-                    eprintln!(
-                        "SKIP real-embedder test: {TEST_MODEL_DIR_ENV} is not set; \
-                         not falling back to hashing"
-                    );
-                    return None;
-                };
-                let dir = std::path::PathBuf::from(dir);
-                let p = crate::embedding_onnx::OnnxEmbeddingProvider::nomic_embed_v1_5(&dir);
-                if !p.is_runtime_available() {
-                    panic!(
-                        "{TEST_MODEL_DIR_ENV}={} is set but the model did not load: {}",
-                        dir.display(),
-                        p.unavailable_reason().unwrap_or("unknown")
-                    );
-                }
-                Some(Arc::new(p) as Arc<dyn EmbeddingProvider>)
-            })
-            .clone()
+        static MODEL: OnceLock<Arc<dyn EmbeddingProvider>> = OnceLock::new();
+        let model = MODEL.get_or_init(|| {
+            let Some(dir) = std::env::var_os(TEST_MODEL_DIR_ENV) else {
+                panic!(
+                    "{TEST_MODEL_DIR_ENV} is not set: real-embedder-tests needs the \
+                     nomic-embed-text-v1.5 bundle (expected <dir>/onnx/model.onnx and \
+                     <dir>/tokenizer.json); refusing to pass without it"
+                );
+            };
+            let dir = std::path::PathBuf::from(dir);
+            let p = crate::embedding_onnx::OnnxEmbeddingProvider::nomic_embed_v1_5(&dir);
+            if !p.is_runtime_available() {
+                panic!(
+                    "{TEST_MODEL_DIR_ENV}={} is set but the model did not load: {}",
+                    dir.display(),
+                    p.unavailable_reason().unwrap_or("unknown")
+                );
+            }
+            Arc::new(p) as Arc<dyn EmbeddingProvider>
+        });
+        Some(model.clone())
     }
 }
 

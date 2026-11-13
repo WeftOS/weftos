@@ -1244,6 +1244,7 @@ mod tests {
     /// Real model: the vector is the right width, unit length, deterministic,
     /// and similarity tracks meaning rather than shared spelling.
     #[tokio::test]
+    #[cfg_attr(not(feature = "real-embedder-tests"), ignore = "needs --features real-embedder-tests and WEFTOS_TEST_EMBED_MODEL_DIR (nomic-embed-text-v1.5 bundle)")]
     async fn real_model_embeds_semantically() {
         let Some(p) = real_embedder() else { return };
         let v = p.embed("The deploy ran out of memory while loading the model").await.unwrap();

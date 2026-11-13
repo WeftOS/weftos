@@ -36,7 +36,7 @@ vector-memory = ["clawft-core/vector-memory"]
 # Real embedding model for semantic memory search (needs a model bundle at run time).
 onnx-embeddings = ["vector-memory", "clawft-core/onnx-embeddings"]
 # Test-only: real-embedder recall tests (also need WEFTOS_TEST_EMBED_MODEL_DIR).
-real-embedder-tests = ["onnx-embeddings"]
+real-embedder-tests = ["onnx-embeddings", "clawft-core/real-embedder-tests"]
 delegate = ["clawft-services/delegate"]
 # WEFT-214 / WEFT-671: live stack (clawft-channels STT/TTS), not plugin scaffold.
 # WEFT-233: multi-format audio decode via symphonia (WAV/MP3/OGG/WebM).

@@ -34,7 +34,7 @@ onnx = ["clawft-voice-onnx/onnx"]
 # with "semantic search unavailable: configure an embedding model".
 onnx-embeddings = ["clawft-core/onnx-embeddings"]
 # Test-only: real-embedder recall tests (also need WEFTOS_TEST_EMBED_MODEL_DIR).
-real-embedder-tests = ["onnx-embeddings"]
+real-embedder-tests = ["onnx-embeddings", "clawft-core/real-embedder-tests"]
 
 [dependencies]
 # Existing WeftOS model routing: `create_adapter_from_config` resolves the

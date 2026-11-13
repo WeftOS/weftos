@@ -386,6 +386,7 @@ mod tests {
     /// reports where the trained skill lands (hit@1 / rank) instead of asserting
     /// a learning-efficacy number SONA does not guarantee.
     #[test]
+    #[cfg_attr(not(feature = "real-embedder-tests"), ignore = "needs --features real-embedder-tests and WEFTOS_TEST_EMBED_MODEL_DIR (nomic-embed-text-v1.5 bundle)")]
     fn bench_rerank_with_real_embedder_latency_and_contract() {
         use crate::embeddings::test_support::{TEST_MODEL_DIMS, real_embedder};
         let Some(emb) = real_embedder() else { return };

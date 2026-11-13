@@ -142,8 +142,8 @@ pub mod embedding_qwen3;
 #[cfg(feature = "ecc")]
 pub mod embedding_unavailable;
 /// Shared real-embedder helper for tests (kernel and dependents). Always
-/// compiled so tests skip with a printed reason, rather than vanish, when the
-/// `real-embedder-tests` feature or the model dir is absent.
+/// compiled; with `real-embedder-tests` on it fails loudly when the model dir
+/// is absent, and without the feature the callers are `#[ignore]`d.
 #[cfg(feature = "ecc")]
 pub mod embedding_support;
 #[cfg(feature = "ecc")]
