@@ -595,7 +595,7 @@ cmd_browser() {
         pass "pkg/ ready — run: scripts/build.sh serve"
     else
         skip "wasm-bindgen CLI not found — pkg/ not generated"
-        info "Install with: cargo install wasm-bindgen-cli"
+        info "Install with: cargo install wasm-bindgen-cli --version <wasm-bindgen version in Cargo.lock> --locked"
     fi
 }
 
@@ -1309,6 +1309,22 @@ cmd_check_tests() {
 # mesh modules. It must never pull in the chain, resource tree, RVF runtime,
 # the governance tile, the operator CLI, or the kernel features that bring
 # them (exochain, cluster, tilezero, ecc).
+# Every `cargo install wasm-bindgen-cli` in CI / container files must be pinned
+# to the wasm-bindgen version in Cargo.lock (v0.8.5-rc.1 Browser WASM drift).
+cmd_check_wasm_bindgen_pin() {
+    header "Asserting wasm-bindgen-cli pins match Cargo.lock"
+    timer_start
+    if [ "$DRY_RUN" = true ]; then
+        printf "  ${YELLOW}DRY${NC}   scripts/check-wasm-bindgen-pin.sh\n"
+        timer_end
+        return 0
+    fi
+    local rc=0
+    bash "$ROOT/scripts/check-wasm-bindgen-pin.sh" || rc=$?
+    timer_end
+    return $rc
+}
+
 cmd_check_mesh_no_owned_state() {
     header "Asserting clawft-mesh-service owns no chain, governance or operator-CLI state"
     timer_start
@@ -1418,6 +1434,7 @@ cmd_check() {
     timer_end
 
     cmd_check_launcher
+    cmd_check_wasm_bindgen_pin || return $?
 
     # WEFT-114: hard local twin of the PR-gates wasm-kernel-no-mesh job.
     # Skipped only when the target is not installed (contributors without the
@@ -3126,6 +3143,10 @@ ${BOLD}Commands:${NC}
                   no-owned-state gate and check-mesh-only. Current user, tempdirs only
   check-tests     Compile (not run) the tests of the named packages: check-tests <pkg>…
   check-daemon-no-mesh-testing  Fail if the daemon's dependency graph enables clawft-mesh-local's testing feature
+  check-wasm-bindgen-pin
+                  Fail if any wasm-bindgen-cli install in .github/workflows, build.sh or a
+                  Containerfile is unpinned or differs from the wasm-bindgen version in Cargo.lock
+                  (also runs inside \`check\`)
   check-mesh-no-owned-state
                   Fail if \`cargo tree -p clawft-mesh-service -e normal,features\` contains
                   exo-resource-tree, rvf-runtime, cognitum-gate-tilezero, clawft-weave or
@@ -3502,6 +3523,7 @@ main() {
         check-rpc-reference) cmd_check_rpc_reference ;;
         test-mesh-service) cmd_test_mesh_service ;;
         check-tests)  cmd_check_tests ;;
+        check-wasm-bindgen-pin) cmd_check_wasm_bindgen_pin ;;
         check-mesh-no-owned-state) cmd_check_mesh_no_owned_state ;;
         check-daemon-no-mesh-testing) cmd_check_daemon_no_mesh_testing ;;
         diff-gate)    bash "$ROOT/scripts/diff-gate.sh" ${DIFF_GATE_ARGS[@]+"${DIFF_GATE_ARGS[@]}"} ;;
