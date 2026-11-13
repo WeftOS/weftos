@@ -1625,6 +1625,7 @@ impl<P: Platform> Kernel<P> {
                         action_selector: None,
                         tool_selector: None,
                         force_on_match: false,
+                        principal_selector: None,
                     },
                     GovernanceRule {
                         id: "GOV-002".into(),
@@ -1638,6 +1639,7 @@ impl<P: Platform> Kernel<P> {
                         action_selector: None,
                         tool_selector: None,
                         force_on_match: false,
+                        principal_selector: None,
                     },
                     GovernanceRule {
                         id: "GOV-003".into(),
@@ -1651,6 +1653,7 @@ impl<P: Platform> Kernel<P> {
                         action_selector: None,
                         tool_selector: None,
                         force_on_match: false,
+                        principal_selector: None,
                     },
                     GovernanceRule {
                         id: "GOV-004".into(),
@@ -1664,6 +1667,7 @@ impl<P: Platform> Kernel<P> {
                         action_selector: None,
                         tool_selector: None,
                         force_on_match: false,
+                        principal_selector: None,
                     },
                     GovernanceRule {
                         id: "GOV-005".into(),
@@ -1677,6 +1681,7 @@ impl<P: Platform> Kernel<P> {
                         action_selector: None,
                         tool_selector: None,
                         force_on_match: false,
+                        principal_selector: None,
                     },
                     GovernanceRule {
                         id: "GOV-006".into(),
@@ -1690,6 +1695,7 @@ impl<P: Platform> Kernel<P> {
                         action_selector: None,
                         tool_selector: None,
                         force_on_match: false,
+                        principal_selector: None,
                     },
                     GovernanceRule {
                         id: "GOV-007".into(),
@@ -1703,6 +1709,7 @@ impl<P: Platform> Kernel<P> {
                         action_selector: None,
                         tool_selector: None,
                         force_on_match: false,
+                        principal_selector: None,
                     },
                     // ── AI-SDLC SOP rules: Legislative (6) ──────────────────
                     GovernanceRule {
@@ -1717,6 +1724,7 @@ impl<P: Platform> Kernel<P> {
                         action_selector: None,
                         tool_selector: None,
                         force_on_match: false,
+                        principal_selector: None,
                     },
                     GovernanceRule {
                         id: "SOP-L002".into(),
@@ -1730,6 +1738,7 @@ impl<P: Platform> Kernel<P> {
                         action_selector: None,
                         tool_selector: None,
                         force_on_match: false,
+                        principal_selector: None,
                     },
                     GovernanceRule {
                         id: "SOP-L003".into(),
@@ -1743,6 +1752,7 @@ impl<P: Platform> Kernel<P> {
                         action_selector: None,
                         tool_selector: None,
                         force_on_match: false,
+                        principal_selector: None,
                     },
                     GovernanceRule {
                         id: "SOP-L004".into(),
@@ -1756,6 +1766,7 @@ impl<P: Platform> Kernel<P> {
                         action_selector: None,
                         tool_selector: None,
                         force_on_match: false,
+                        principal_selector: None,
                     },
                     GovernanceRule {
                         id: "SOP-L005".into(),
@@ -1769,6 +1780,7 @@ impl<P: Platform> Kernel<P> {
                         action_selector: None,
                         tool_selector: None,
                         force_on_match: false,
+                        principal_selector: None,
                     },
                     GovernanceRule {
                         id: "SOP-L006".into(),
@@ -1782,6 +1794,7 @@ impl<P: Platform> Kernel<P> {
                         action_selector: None,
                         tool_selector: None,
                         force_on_match: false,
+                        principal_selector: None,
                     },
                     // ── AI-SDLC SOP rules: Executive (5) ────────────────────
                     GovernanceRule {
@@ -1796,6 +1809,7 @@ impl<P: Platform> Kernel<P> {
                         action_selector: None,
                         tool_selector: None,
                         force_on_match: false,
+                        principal_selector: None,
                     },
                     GovernanceRule {
                         id: "SOP-E002".into(),
@@ -1809,6 +1823,7 @@ impl<P: Platform> Kernel<P> {
                         action_selector: None,
                         tool_selector: None,
                         force_on_match: false,
+                        principal_selector: None,
                     },
                     GovernanceRule {
                         id: "SOP-E003".into(),
@@ -1822,6 +1837,7 @@ impl<P: Platform> Kernel<P> {
                         action_selector: None,
                         tool_selector: None,
                         force_on_match: false,
+                        principal_selector: None,
                     },
                     GovernanceRule {
                         id: "SOP-E004".into(),
@@ -1835,6 +1851,7 @@ impl<P: Platform> Kernel<P> {
                         action_selector: None,
                         tool_selector: None,
                         force_on_match: false,
+                        principal_selector: None,
                     },
                     GovernanceRule {
                         id: "SOP-E005".into(),
@@ -1848,6 +1865,7 @@ impl<P: Platform> Kernel<P> {
                         action_selector: None,
                         tool_selector: None,
                         force_on_match: false,
+                        principal_selector: None,
                     },
                     // ── AI-SDLC SOP rules: Judicial (4) ─────────────────────
                     GovernanceRule {
@@ -1862,6 +1880,7 @@ impl<P: Platform> Kernel<P> {
                         action_selector: None,
                         tool_selector: None,
                         force_on_match: false,
+                        principal_selector: None,
                     },
                     GovernanceRule {
                         id: "SOP-J002".into(),
@@ -1875,6 +1894,7 @@ impl<P: Platform> Kernel<P> {
                         action_selector: None,
                         tool_selector: None,
                         force_on_match: false,
+                        principal_selector: None,
                     },
                     GovernanceRule {
                         id: "SOP-J003".into(),
@@ -1888,6 +1908,7 @@ impl<P: Platform> Kernel<P> {
                         action_selector: None,
                         tool_selector: None,
                         force_on_match: false,
+                        principal_selector: None,
                     },
                     GovernanceRule {
                         id: "SOP-J004".into(),
@@ -1901,6 +1922,7 @@ impl<P: Platform> Kernel<P> {
                         action_selector: None,
                         tool_selector: None,
                         force_on_match: false,
+                        principal_selector: None,
                     },
                     // ── Browser policy rules (S7 / WEFT-108) ────────────────
                     // Browser nodes are untrusted; these rules constrain IPC
@@ -2796,6 +2818,14 @@ impl<P: Platform> Kernel<P> {
     #[cfg(feature = "exochain")]
     pub fn governance_gate(&self) -> Option<&Arc<dyn crate::gate::GateBackend>> {
         self.chain.governance_gate.as_ref()
+    }
+
+    /// Replace the governance gate. Test harness only: lets a test drive the
+    /// real RPC path against a booted kernel whose gate carries rules the
+    /// boot would not install. The feature is refused in release builds.
+    #[cfg(all(feature = "exochain", feature = "test-support"))]
+    pub fn set_governance_gate_for_test(&mut self, gate: Arc<dyn crate::gate::GateBackend>) {
+        self.chain.governance_gate = Some(gate);
     }
 
     /// Get the external chain-head anchoring controller (WEFT-137), when configured.

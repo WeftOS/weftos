@@ -79,6 +79,7 @@ pub fn default_rules() -> Vec<GovernanceRule> {
         action_selector: Some(format!("{WORKLOAD_ACTION_PREFIX}*")),
         tool_selector: None,
         force_on_match: force,
+        principal_selector: None,
     };
     vec![
         rule(

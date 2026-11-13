@@ -19,6 +19,13 @@
 //! `*`. `workload.place*` therefore also matches `workload.placement.x`;
 //! that is the documented semantics, not a bug.
 //!
+//! An entry may carry `principal`: who the rule applies to. It uses the same
+//! exact-or-trailing-`*` form over the caller-supplied principal id (the
+//! `agent_id` of a gate or `governance.check` call), see
+//! [`valid_principal_selector`]. Without it the rule applies to every
+//! principal. A scoped rule only adds a restriction for the principals it
+//! names, so the tighten-only rule is unchanged.
+//!
 //! ```toml
 //! schema = 1
 //! [[deny]]
@@ -27,6 +34,10 @@
 //! reason = "this project never runs shell tools"
 //! [[require_approval]]
 //! actions = ["workload.start*"]
+//! [[deny]]
+//! id = "project.bot-no-write"
+//! actions = ["tool.write"]
+//! principal = "mesh-agent-7"   # only this asker; omit to apply to everyone
 //! [limits]
 //! risk_threshold = 0.5
 //! max_processes = 32
@@ -70,6 +81,10 @@ pub struct OverlayDeny {
     /// Why (shown in the denial).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// Apply only to this principal (exact id, or a prefix ending in one `*`).
+    /// `None`: every principal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub principal: Option<String>,
 }
 
 /// One `[[require_approval]]` entry: force human approval for these actions.
@@ -84,6 +99,10 @@ pub struct OverlayApproval {
     /// Why.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// Apply only to this principal (exact id, or a prefix ending in one `*`).
+    /// `None`: every principal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub principal: Option<String>,
 }
 
 /// `<root>/.weftos/overlay.toml`.
@@ -189,6 +208,10 @@ pub enum OverlayError {
     /// An action glob is empty, has whitespace or a `*` that is not last.
     #[error("`{key}`: malformed action glob {pattern:?}")]
     MalformedGlob { key: String, pattern: String },
+    /// A principal selector is empty, too long, has characters an id cannot
+    /// have, or a `*` that is not last.
+    #[error("`{key}`: malformed principal selector {pattern:?}")]
+    MalformedPrincipal { key: String, pattern: String },
     /// A limit is outside its valid range (NaN, negative, above 1).
     #[error("`{key}`: invalid value")]
     InvalidLimit { key: String },
@@ -205,6 +228,22 @@ pub enum OverlayError {
 pub fn valid_glob(pattern: &str) -> bool {
     let body = pattern.strip_suffix('*').unwrap_or(pattern);
     !pattern.is_empty() && !body.contains('*') && !pattern.chars().any(char::is_whitespace)
+}
+
+/// Longest principal id or selector, in bytes.
+pub const MAX_PRINCIPAL_LEN: usize = 128;
+
+/// True when `pattern` is a well-formed principal selector: an id (ASCII
+/// letters, digits and `. _ : @ -`, at most [`MAX_PRINCIPAL_LEN`] bytes), or
+/// such a prefix followed by one trailing `*`. The id alphabet is the one the
+/// Tapestry client allows for a directory id, so no valid id is unmatchable.
+pub fn valid_principal_selector(pattern: &str) -> bool {
+    let body = pattern.strip_suffix('*').unwrap_or(pattern);
+    !pattern.is_empty()
+        && pattern.len() <= MAX_PRINCIPAL_LEN
+        && body
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ':' | '@' | '-'))
 }
 
 /// Whether `action` matches `pattern` (exact, or prefix when it ends `*`).
@@ -241,6 +280,16 @@ fn check_actions(key: &str, actions: &[String]) -> Result<(), OverlayError> {
         }
     }
     Ok(())
+}
+
+fn check_principal(key: String, principal: Option<&str>) -> Result<(), OverlayError> {
+    match principal {
+        Some(p) if !valid_principal_selector(p) => Err(OverlayError::MalformedPrincipal {
+            key,
+            pattern: p.into(),
+        }),
+        _ => Ok(()),
+    }
 }
 
 fn tighten_rule_id(
@@ -347,6 +396,7 @@ pub fn merge(parent: &ParentView, overlay: &OverlayFile) -> Result<EffectiveOver
         let key = format!("deny[{i}]");
         tighten_rule_id(&key, &d.id, &parent_ids, &mut seen)?;
         check_actions(&format!("{key}.actions"), &d.actions)?;
+        check_principal(format!("{key}.principal"), d.principal.as_deref())?;
     }
     for (i, a) in overlay.require_approval.iter().enumerate() {
         let key = format!("require_approval[{i}]");
@@ -354,6 +404,7 @@ pub fn merge(parent: &ParentView, overlay: &OverlayFile) -> Result<EffectiveOver
             tighten_rule_id(&key, id, &parent_ids, &mut seen)?;
         }
         check_actions(&format!("{key}.actions"), &a.actions)?;
+        check_principal(format!("{key}.principal"), a.principal.as_deref())?;
     }
     let limits = merge_limits(&parent.limits, &overlay.limits)?;
     Ok(EffectiveOverlay {

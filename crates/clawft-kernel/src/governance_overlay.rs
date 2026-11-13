@@ -25,6 +25,12 @@
 //! Globs are an exact action or a prefix ending in one `*`: `workload.place*`
 //! also matches `workload.placement.x` (documented in package A).
 //!
+//! An entry's optional `principal` becomes the rule's `principal_selector`
+//! (exact id or one trailing `*`, matched against the request's `agent_id`),
+//! so the rule applies to that principal only. A parent rule scoped to a
+//! principal still counts as a parent deny when checking that an approval
+//! does not overlap one (conservative: it can only refuse more).
+//!
 //! # Hashes
 //!
 //! All three are SHA-256 over a domain tag plus canonical JSON
@@ -125,6 +131,7 @@ impl OverlayError {
                 | E::ShadowsParent { key, .. }
                 | E::EmptyActions { key }
                 | E::MalformedGlob { key, .. }
+                | E::MalformedPrincipal { key, .. }
                 | E::InvalidLimit { key }
                 | E::Relaxes { key, .. } => key.clone(),
             },
@@ -262,7 +269,12 @@ fn overlay_hash(f: &OverlayFile) -> [u8; 32] {
         .map(|d| {
             let mut actions = d.actions.clone();
             actions.sort();
-            json!({"id": norm_id(&d.id), "actions": actions, "reason": d.reason})
+            let mut v = json!({"id": norm_id(&d.id), "actions": actions, "reason": d.reason});
+            // Only when set, so an overlay without it keeps the hash it had.
+            if let Some(p) = &d.principal {
+                v["principal"] = json!(p);
+            }
+            v
         })
         .collect();
     deny.sort_by_key(canonical_json);
@@ -272,7 +284,11 @@ fn overlay_hash(f: &OverlayFile) -> [u8; 32] {
         .map(|a| {
             let mut actions = a.actions.clone();
             actions.sort();
-            json!({"id": a.id.as_deref().map(norm_id), "actions": actions, "reason": a.reason})
+            let mut v = json!({"id": a.id.as_deref().map(norm_id), "actions": actions, "reason": a.reason});
+            if let Some(p) = &a.principal {
+                v["principal"] = json!(p);
+            }
+            v
         })
         .collect();
     approval.sort_by_key(canonical_json);
@@ -336,6 +352,7 @@ fn selector_rule(
     reason: &str,
     severity: RuleSeverity,
     tag: &str,
+    principal: Option<&str>,
 ) -> GovernanceRule {
     GovernanceRule {
         id,
@@ -349,6 +366,7 @@ fn selector_rule(
         action_selector: Some(glob.to_owned()),
         tool_selector: None,
         force_on_match: true,
+        principal_selector: principal.map(str::to_owned),
     }
 }
 
@@ -358,6 +376,7 @@ fn expand(
     actions: &[String],
     reason: &str,
     tag: &str,
+    principal: Option<&str>,
     out: &mut Vec<GovernanceRule>,
 ) {
     for (n, glob) in actions.iter().enumerate() {
@@ -366,7 +385,7 @@ fn expand(
         } else {
             format!("{base}[{n}]")
         };
-        out.push(selector_rule(id, glob, reason, RuleSeverity::Blocking, tag));
+        out.push(selector_rule(id, glob, reason, RuleSeverity::Blocking, tag, principal));
     }
 }
 
@@ -470,6 +489,7 @@ pub fn merge(parent: &ParentPolicy, overlay: &Overlay) -> Result<Effective, Over
             &d.actions,
             d.reason.as_deref().unwrap_or("denied by the project overlay"),
             OVERLAY_DENY_TAG,
+            d.principal.as_deref(),
             &mut added,
         );
     }
@@ -485,6 +505,7 @@ pub fn merge(parent: &ParentPolicy, overlay: &Overlay) -> Result<Effective, Over
                 .as_deref()
                 .unwrap_or("human approval required by the project overlay"),
             OVERLAY_APPROVAL_TAG,
+            a.principal.as_deref(),
             &mut added,
         );
     }

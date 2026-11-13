@@ -41,6 +41,7 @@ pub(crate) fn rule(
         action_selector: selector.map(str::to_owned),
         tool_selector: None,
         force_on_match: force,
+        principal_selector: None,
     }
 }
 

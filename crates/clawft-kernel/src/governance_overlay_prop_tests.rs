@@ -101,6 +101,7 @@ fn random_overlay(r: &mut Rng) -> OverlayFile {
             id: (*r.pick(OVERLAY_IDS)).to_owned(),
             actions: actions(r),
             reason: r.coin().then(|| "why".to_owned()),
+            principal: None,
         });
     }
     for _ in 0..r.below(3) {
@@ -108,6 +109,7 @@ fn random_overlay(r: &mut Rng) -> OverlayFile {
             id: r.coin().then(|| (*r.pick(OVERLAY_IDS)).to_owned()),
             actions: actions(r),
             reason: None,
+            principal: None,
         });
     }
     f.limits = random_limits(r, true);

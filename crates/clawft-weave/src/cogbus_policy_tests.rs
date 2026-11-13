@@ -38,6 +38,7 @@ fn rule(id: &str, action: &str, tool: Option<&str>) -> GovernanceRule {
         action_selector: Some(action.into()),
         tool_selector: tool.map(String::from),
         force_on_match: true,
+        principal_selector: None,
     }
 }
 

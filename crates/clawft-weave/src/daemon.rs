@@ -2256,6 +2256,7 @@ pub async fn run(
                     action_selector: None,
                     tool_selector: None,
                     force_on_match: false,
+                    principal_selector: None,
                 })
                 // WEFT-342: hard-refuse on binding-thread mismatch each turn.
                 .add_rule(clawft_kernel::governance::GovernanceRule::binding_thread(
@@ -7635,6 +7636,7 @@ async fn dispatch(
                             action_selector: None,
                             tool_selector: None,
                             force_on_match: false,
+                            principal_selector: None,
                         })
                         .add_rule(GovernanceRule {
                             id: "cron-warn".into(),
@@ -7648,6 +7650,7 @@ async fn dispatch(
                             action_selector: None,
                             tool_selector: None,
                             force_on_match: false,
+                            principal_selector: None,
                         });
                     // ADR-103 D8: a project kernel's spawned agents are gated by
                     // its effective governance, not this fixed rule set.
