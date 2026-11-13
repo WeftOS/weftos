@@ -10,6 +10,7 @@ use std::path::Path;
 use super::cas::{Cas, prune_empty_parents};
 use super::conflict::{ConflictKind, record};
 use super::index::{Entry, Index, Local, is_exec, local_state, mtime_ns};
+use crate::fsmode::observed_exec;
 use super::remote::{self, attr_exec, fetch_to_cas, read_tombstone};
 use super::tmp::{Live, remove_stale};
 use super::{DRIVE_DIR, DriveError, Options, Result, Skipped, TMP_PREFIX, log_event, norm_prefix};
@@ -100,8 +101,7 @@ fn place_file(dest: &Path, cas: &Cas, rel: &str, hash: &str, exec: bool) -> Resu
     let _live = Live::new(&tmp);
     let res = cas.clone_to(hash, &tmp).and_then(|()| {
         if exec {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))?;
+            crate::fsmode::make_executable(&tmp)?;
         }
         std::fs::rename(&tmp, &target).map_err(Into::into)
     });
@@ -286,7 +286,6 @@ fn mode_check<B: ObjectBackend + ?Sized>(
     max: u64,
     rep: &mut DownReport,
 ) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
     let key = index.key(rel);
     let remote_exec = match b.attrs(&index.bucket, &key) {
         Ok(a) => a.executable,
@@ -307,14 +306,18 @@ fn mode_check<B: ObjectBackend + ?Sized>(
     let path = crate::share::safe_join(dest, rel).map_err(|x| DriveError::Invalid(x.to_string()))?;
     match (local_state(dest, rel, Some(&e), max), std::fs::symlink_metadata(&path)) {
         (Ok(Local::Unchanged), Ok(md)) if md.is_file() => {
-            let mode = md.permissions().mode();
-            if is_exec(&md) == e.exec {
+            if observed_exec(&md, e.exec) == e.exec {
                 // Untouched locally: apply the store's attribute in place (same inode, so a
-                // hard-linked view base follows).
-                let new_mode = if remote_exec { 0o755 } else { mode & !0o111 };
-                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(new_mode))?;
+                // hard-linked view base follows). Where the platform has no execute bit this
+                // only records the store's value; the file is not touched.
+                crate::fsmode::apply_exec(&path, &md, remote_exec)?;
                 next.exec = remote_exec;
                 index.entries.insert(rel.to_owned(), next);
+                if !crate::fsmode::EXEC_BIT_SUPPORTED {
+                    // Nothing on disk changed: the attribute is only recorded, so no update is reported.
+                    rep.unchanged += 1;
+                    return Ok(());
+                }
                 rep.updated.push(rel.to_owned());
                 rep.mode_updated.push(rel.to_owned());
                 log_event(dest, "mode", rel);
@@ -322,7 +325,7 @@ fn mode_check<B: ObjectBackend + ?Sized>(
             }
             // The local mode was changed too: the same value is adopted, a different one stays
             // pending and is pushed by the next sync_up.
-            if is_exec(&md) == remote_exec {
+            if observed_exec(&md, e.exec) == remote_exec {
                 next.exec = remote_exec;
             }
             index.entries.insert(rel.to_owned(), next);

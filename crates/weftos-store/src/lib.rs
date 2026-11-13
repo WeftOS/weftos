@@ -23,6 +23,7 @@ pub mod claim_watch;
 pub mod drive;
 pub mod follower;
 pub mod fs;
+mod fsmode;
 pub mod grant_seq;
 pub mod mem;
 pub mod name;
