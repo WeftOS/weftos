@@ -1024,6 +1024,8 @@ evaluated in order (first match wins).
 | Variable | Description |
 |----------|-------------|
 | `CLAWFT_CONFIG` | Override the config file path. Takes priority over all file-based discovery. |
+| `WEFTOS_EMBED_MODEL_DIR` | Directory of the embedding model bundle (`onnx/model.onnx` + `tokenizer.json`, nomic-embed-text-v1.5). Searched first; the default is `~/.weftos/models/nomic-embed-text-v1.5`. Needs a build with `onnx-embeddings` (see [build.md](build.md#embedding-model-onnx-embeddings)); wasm/edge builds do not have it. |
+| `WEFTOS_EMBEDDING_MODE` | `lexical` opts in to word-overlap matching (warned, not semantic). Unset means a real model or an explicit "semantic search unavailable" error. |
 | `RUST_LOG` | Controls log verbosity via `tracing`'s `EnvFilter` syntax. Examples: `info`, `debug`, `clawft_core=trace`, `clawft_llm=debug,info`. |
 | **Provider API Keys** | |
 | `OPENAI_API_KEY` | API key for OpenAI models. |

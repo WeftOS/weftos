@@ -20,9 +20,12 @@ fn brain_in(dir: &std::path::Path) -> Arc<Brain> {
         path: Some(dir.join("cos.rvf")),
         installation: Some("weftos://local/installations/cos-test".into()),
         package: Some(DIGEST.into()),
-        catalog: None,
+        ..Default::default()
     };
-    Arc::new(Brain::open(&cfg, dir).unwrap())
+    // Plumbing: these tests are about what a note writes and refuses, not recall
+    // quality, so they use the EXPLICIT lexical embedder (see `src/brain.rs` tests
+    // for the real-embedder recall test).
+    Arc::new(Brain::open_with(&cfg, dir, Arc::new(clawft_core::embeddings::select::LexicalEmbedder::new())).unwrap())
 }
 
 #[tokio::test]
@@ -47,7 +50,7 @@ async fn a_note_lands_in_history_and_in_the_brain_with_metadata() {
     assert_eq!(meta["author"], "chief-of-staff");
     assert_eq!(meta["installation"], "weftos://local/installations/cos-test");
     assert_eq!(meta["package"], DIGEST);
-    assert_eq!(b.search("agent to PG", 1)[0].0, id);
+    assert_eq!(b.search("agent to PG", 1).await.unwrap()[0].0, id);
 }
 
 #[tokio::test]

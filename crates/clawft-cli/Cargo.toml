@@ -37,6 +37,12 @@ delegate = ["clawft-services/delegate", "clawft-tools/delegate"]
 voice = ["clawft-tools/voice", "clawft-plugin/voice", "dep:clawft-voice-talk", "clawft-voice-talk/live-audio", "weftos-cos/mic"]
 voice-onnx = ["voice", "clawft-voice-talk/onnx", "weftos-cos/onnx"]
 api = ["clawft-services/api"]
+# Real local embedding model runtime (ort + tokenizers) for `weft memory`, the
+# memory tool and the chief-of-staff brain. Off by default; `scripts/build.sh
+# native` turns it on for desktop/server release builds (owner decision
+# 2026-11-12). The model bundle itself is a runtime file, see
+# docs/guides/embedding-models.md.
+onnx-embeddings = ["clawft-core/onnx-embeddings", "clawft-tools/onnx-embeddings", "weftos-cos/onnx-embeddings"]
 
 [dependencies]
 clawft-rpc = { workspace = true }

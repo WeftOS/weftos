@@ -16,12 +16,14 @@ categories = ["multimedia::audio"]
 # unit-test without ONNX Runtime or any model file. `onnx` opts into `ort` for
 # real inference (mirrors clawft-kernel's `onnx-embeddings` gate).
 default = []
-onnx = ["dep:ort"]
+onnx = ["dep:ort", "dep:clawft-types"]
 
 [dependencies]
 # The SpeakerEmbedder trait + VoiceError live in clawft-channels; this is a
 # bridge crate that implements that seam without pulling cpal/llm/kernel.
 clawft-channels = { workspace = true, features = ["voice"] }
+# Process-wide singleton registry (one ort Environment shared with core/kernel).
+clawft-types = { workspace = true, optional = true }
 async-trait = { workspace = true }
 tracing = { workspace = true }
 # Pure-Rust FFT for the mel-fbank front-end (always compiled + unit-tested).

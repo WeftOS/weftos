@@ -15,6 +15,8 @@ NC=$'\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT"
+# Cargo output root. Honours CARGO_TARGET_DIR (CI containers use /target).
+TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}"
 
 # ── Defaults ─────────────────────────────────────────────────────────
 PROFILE=""
@@ -132,12 +134,56 @@ cargo_features_args() {
     fi
 }
 
+# ── Release embedder (EF item 5, owner decision 2026-11-12) ──────────
+# Desktop and server release builds link a real embedding model runtime
+# (`onnx-embeddings`), so semantic recall works out of the box once the
+# nomic-embed-text-v1.5 bundle is at ~/.weftos/models/nomic-embed-text-v1.5
+# (or $WEFTOS_EMBED_MODEL_DIR). The `ort` crate downloads a prebuilt ONNX
+# Runtime at build time, and pyke publishes one only for the triples below:
+# there is none for musl or x86_64-apple-darwin, so those builds skip the
+# feature (with a message) instead of failing. wasm/edge builds never get it.
+# ort-sys 2.0.0-rc.15 (ONNX Runtime 1.31): the featureless ("none") prebuilt is
+# published for linux-gnu only; on aarch64-apple-darwin and *-windows-msvc the
+# build script falls back to the first published variant (CoreML / DirectML
+# bundled; not built on those hosts yet). Re-read ort-sys build/download/dist.tsv on
+# every ort bump.
+# Opt out with WEFTOS_NO_EMBEDDER=1.
+embedder_triple() {
+    if [ -n "${CARGO_BUILD_TARGET:-}" ]; then
+        echo "$CARGO_BUILD_TARGET"
+    else
+        rustc -vV 2>/dev/null | sed -n 's/^host: //p'
+    fi
+}
+
+# Prints the feature to add to FEATURES for this build, or nothing.
+release_embedder_feature() {
+    case ",$FEATURES," in *,onnx-embeddings,*) return 0 ;; esac
+    if [ "${WEFTOS_NO_EMBEDDER:-}" = 1 ]; then
+        info "WEFTOS_NO_EMBEDDER=1: building without onnx-embeddings" >&2
+        return 0
+    fi
+    local triple
+    triple="$(embedder_triple)"
+    case "$triple" in
+        x86_64-unknown-linux-gnu|aarch64-unknown-linux-gnu|aarch64-apple-darwin|x86_64-pc-windows-msvc|aarch64-pc-windows-msvc)
+            echo onnx-embeddings ;;
+        *)
+            info "no prebuilt ONNX Runtime for '${triple:-unknown}': building without onnx-embeddings (see docs/guides/build.md)" >&2 ;;
+    esac
+}
+
 # ── Subcommands ─────────────────────────────────────────────────────
 
 cmd_native() {
     local profile="${PROFILE:-release}"
     header "Building native CLI binary (profile: $profile)"
     force_clean_pkg clawft-cli
+    if [ "$profile" = "release" ]; then
+        local emb
+        emb="$(release_embedder_feature)"
+        [ -n "$emb" ] && FEATURES="${FEATURES:+$FEATURES,}$emb"
+    fi
     timer_start
     local args=(cargo build --bin weft --bin weaver)
     if [ "$profile" = "release" ] || [ "$profile" = "release-wasm" ]; then
@@ -147,14 +193,14 @@ cmd_native() {
     run_cmd "${args[@]}"
     timer_end
     if [ "$profile" = "release" ]; then
-        report_binary_size "target/release/weft" "Native binary (weft)"
-        report_binary_size "target/release/weaver" "Native binary (weaver)"
+        report_binary_size "$TARGET_DIR/release/weft" "Native binary (weft)"
+        report_binary_size "$TARGET_DIR/release/weaver" "Native binary (weaver)"
     elif [ "$profile" = "release-wasm" ]; then
-        report_binary_size "target/release-wasm/weft" "Native binary (weft)"
-        report_binary_size "target/release-wasm/weaver" "Native binary (weaver)"
+        report_binary_size "$TARGET_DIR/release-wasm/weft" "Native binary (weft)"
+        report_binary_size "$TARGET_DIR/release-wasm/weaver" "Native binary (weaver)"
     else
-        report_binary_size "target/debug/weft" "Native binary (weft)"
-        report_binary_size "target/debug/weaver" "Native binary (weaver)"
+        report_binary_size "$TARGET_DIR/debug/weft" "Native binary (weft)"
+        report_binary_size "$TARGET_DIR/debug/weaver" "Native binary (weaver)"
     fi
 }
 
@@ -166,8 +212,8 @@ cmd_native_debug() {
     [ -n "$FEATURES" ] && args+=(--features "$FEATURES")
     run_cmd "${args[@]}"
     timer_end
-    report_binary_size "target/debug/weft" "Native binary (weft, debug)"
-    report_binary_size "target/debug/weaver" "Native binary (weave, debug)"
+    report_binary_size "$TARGET_DIR/debug/weft" "Native binary (weft, debug)"
+    report_binary_size "$TARGET_DIR/debug/weaver" "Native binary (weave, debug)"
 }
 
 # ADR-118 C3: the chief-of-staff agent host. `--features mic` adds cpal
@@ -179,14 +225,14 @@ cmd_cos() {
     [ -n "$FEATURES" ] && args+=(--features "$FEATURES")
     run_cmd "${args[@]}" || { timer_end; return 1; }
     timer_end
-    report_binary_size "target/debug/weftos-cos" "Chief-of-staff host (weftos-cos, debug)"
+    report_binary_size "$TARGET_DIR/debug/weftos-cos" "Chief-of-staff host (weftos-cos, debug)"
     # A featured build is copied out of target/: any later `cargo test` or
     # gate run rebuilds target/debug/weftos-cos with default features at the
     # same path, which silently drops mic/onnx (STT) from whatever runs it.
     if [ -n "$FEATURES" ] && [ "$DRY_RUN" != true ]; then
         local stable="${WEFTOS_COS_BIN:-$HOME/.weftos/bin/weftos-cos}"
         mkdir -p "$(dirname "$stable")"
-        install -m 0755 "$ROOT/target/debug/weftos-cos" "$stable.tmp" && mv -f "$stable.tmp" "$stable"
+        install -m 0755 "$TARGET_DIR/debug/weftos-cos" "$stable.tmp" && mv -f "$stable.tmp" "$stable"
         printf "  Installed featured build (%s) to %s\n" "$FEATURES" "$stable"
     fi
 }
@@ -356,7 +402,7 @@ cmd_install() {
     run_cmd "${args[@]}"
     timer_end
 
-    local srcdir="target/$profile"
+    local srcdir="$TARGET_DIR/$profile"
 
     # Feature-regression guard: never silently strip subcommands the
     # installed binary already has (the `voice` incident). --force overrides.
@@ -421,11 +467,11 @@ cmd_gui_egui() {
     run_cmd "${args[@]}"
     timer_end
     if [ "$profile" = "release" ]; then
-        report_binary_size "target/release/weft-gui-egui" "weft-gui-egui (release)"
+        report_binary_size "$TARGET_DIR/release/weft-gui-egui" "weft-gui-egui (release)"
     elif [ "$profile" = "release-wasm" ]; then
-        report_binary_size "target/release-wasm/weft-gui-egui" "weft-gui-egui (release-wasm)"
+        report_binary_size "$TARGET_DIR/release-wasm/weft-gui-egui" "weft-gui-egui (release-wasm)"
     else
-        report_binary_size "target/debug/weft-gui-egui" "weft-gui-egui (debug)"
+        report_binary_size "$TARGET_DIR/debug/weft-gui-egui" "weft-gui-egui (debug)"
     fi
 }
 
@@ -450,7 +496,7 @@ cmd_wasi() {
     [ -n "$FEATURES" ] && args+=(--features "$FEATURES")
     run_cmd "${args[@]}"
     timer_end
-    report_binary_size "target/wasm32-wasip2/${profile}/clawft_wasm.wasm" "WASI WASM"
+    report_binary_size "$TARGET_DIR/wasm32-wasip2/${profile}/clawft_wasm.wasm" "WASI WASM"
 }
 
 # ADR-103 D9 Wasmtime project kernel. The guest is a core wasm32-wasip1 module
@@ -528,7 +574,7 @@ cmd_browser() {
     run_cmd "${args[@]}"
     timer_end
 
-    local wasm_file="target/wasm32-unknown-unknown/${profile}/clawft_wasm.wasm"
+    local wasm_file="${CARGO_TARGET_DIR:-$ROOT/target}/wasm32-unknown-unknown/${profile}/clawft_wasm.wasm"
     report_binary_size "$wasm_file" "Browser WASM (raw)"
 
     # Run wasm-bindgen to generate JS glue into www/pkg/ so the test
@@ -559,8 +605,8 @@ cmd_scope() {
     run_cmd cargo build -p "weftos-${name}-scope" --bin "weft-${name}-scope" --profile "$profile"
     timer_end
     local dir="$profile"; [ "$profile" = "dev" ] && dir="debug"
-    report_binary_size "target/${dir}/weft-${name}-scope" "weft-${name}-scope"
-    pass "built: target/${dir}/weft-${name}-scope (--help for its options)"
+    report_binary_size "$TARGET_DIR/${dir}/weft-${name}-scope" "weft-${name}-scope"
+    pass "built: $TARGET_DIR/${dir}/weft-${name}-scope (--help for its options)"
 }
 
 cmd_ui() {
@@ -1489,7 +1535,7 @@ cmd_clean() {
 # double-counts shared extents (du said 117G for a set that freed less).
 cmd_clean_stale() {
     local days="${CLEAN_STALE_DAYS:-7}"
-    local incr="$ROOT/target/debug/incremental"
+    local incr="$TARGET_DIR/debug/incremental"
     header "Pruning incremental caches older than ${days}d"
 
     if [ ! -d "$incr" ]; then

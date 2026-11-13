@@ -78,6 +78,9 @@ diskann = ["ecc", "dep:ruvector-diskann"]
 # Bench-only: RaBitQ runner in benches/vector_backend_bench.rs.
 rabitq-bench = ["dep:ruvector-rabitq"]
 onnx-embeddings = ["dep:ort", "dep:ndarray", "dep:tokenizers", "dep:half"]
+# Test-only: exposes `embedding_support` (real nomic-embed-text-v1.5 helper for
+# recall tests in this crate and its dependents). Needs WEFTOS_TEST_EMBED_MODEL_DIR.
+real-embedder-tests = ["onnx-embeddings"]
 wasm-sandbox = ["dep:wasmtime", "dep:wasmtime-wasi"]
 os-patterns = ["exochain"]
 treesitter = ["dep:clawft-plugin-treesitter"]

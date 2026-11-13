@@ -1356,6 +1356,7 @@ dependencies = [
  "instant-distance",
  "js-sys",
  "notify",
+ "ort",
  "percent-encoding",
  "rand 0.8.8",
  "reqwest",
@@ -2007,6 +2008,7 @@ version = "0.8.4"
 dependencies = [
  "async-trait",
  "clawft-channels",
+ "clawft-types",
  "hound",
  "ort",
  "rustfft",

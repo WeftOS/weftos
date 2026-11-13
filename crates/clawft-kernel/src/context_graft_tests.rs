@@ -161,11 +161,12 @@ fn graft_top_k_zero_is_empty() {
 
 use crate::embedding::MockEmbeddingProvider;
 
-/// Embedded events are indexed and retrievable (Done-when 3.3). The Mock
-/// embedder is deterministic, so embedding the same text for index and query
-/// yields the same vector and the chunk is recalled.
+/// PLUMBING only (Done-when 3.3): the hash-based Mock maps equal text to equal
+/// vectors and nothing else, so this proves index -> graft wiring for an
+/// identical string. It says nothing about recall; see
+/// `graft_recalls_a_paraphrase_with_a_real_embedder`.
 #[tokio::test]
-async fn index_chunk_then_graft_retrieves() {
+async fn index_chunk_then_graft_exact_text_plumbing_mock_embedder() {
     let embedder = MockEmbeddingProvider::new(32);
     let view = SessionView::for_embedder("s1", &embedder);
     assert_eq!(view.dims(), 32);
@@ -195,6 +196,42 @@ async fn index_chunk_then_graft_retrieves() {
         hits[0].content,
         GraftContent::Inline("the sky is blue".into())
     );
+}
+
+/// Recall with a REAL embedding model (WEFTOS_TEST_EMBED_MODEL_DIR; skipped
+/// with a printed reason otherwise): the query shares no keyword with the
+/// chunk it must find, and the right chunk is the top graft.
+#[tokio::test]
+async fn graft_recalls_a_paraphrase_with_a_real_embedder() {
+    let Some(embedder) = crate::embedding_support::real_embedder() else { return };
+    let view = SessionView::for_embedder("s1", embedder.as_ref());
+    assert_eq!(view.dims(), crate::embedding_support::TEST_MODEL_DIMS);
+
+    let facts = [
+        (1u64, "The nightly deploy crashed because the process ran out of memory while loading the model"),
+        (2, "The user wants the dashboard to use a dark colour theme"),
+        (3, "Invoices are sent to the finance team on the first working day of each month"),
+        (4, "The sourdough starter needs feeding twice a day in warm weather"),
+    ];
+    for (seq, text) in facts {
+        view.index_chunk(embedder.as_ref(), None, seq, "agent.chat.turn", text, 4096)
+            .await
+            .unwrap();
+    }
+    assert_eq!(view.len(), 4);
+
+    // (query, expected chain_seq): no query word appears in its chunk.
+    let cases = [
+        ("why did the release blow up with OOM?", 1u64),
+        ("what visual appearance does the user prefer for the UI?", 2),
+        ("when does accounting get billed?", 3),
+        ("how often should I look after my bread culture?", 4),
+    ];
+    for (q, want) in cases {
+        let hits = view.graft_text(embedder.as_ref(), q, 1).await.unwrap();
+        assert_eq!(hits.len(), 1, "{q}");
+        assert_eq!(hits[0].chain_seq, want, "query {q:?} should recall chunk {want}");
+    }
 }
 
 /// A large payload is externalized to a content-addressed blob; the chunk

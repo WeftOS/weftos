@@ -15,9 +15,12 @@
 //!
 //! This module is compiled only when the `ecc` feature is enabled.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Instant;
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use tokio::sync::mpsc;
 
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
@@ -41,7 +44,10 @@ pub struct DemocritusConfig {
     pub search_k: usize,
     /// Cosine similarity threshold above which two events are considered correlated.
     pub correlation_threshold: f32,
-    /// Budget for a single tick in microseconds. If exceeded, the tick stops early.
+    /// Budget for a single tick in microseconds. If exceeded, the tick stops
+    /// early and the remaining work is carried to the next tick (nothing is
+    /// dropped). Embedding runs off the tick (see [`DemocritusLoop::tick`]),
+    /// so a slow embedder cannot push a tick past this budget.
     pub tick_budget_us: u64,
 }
 
@@ -73,7 +79,9 @@ pub struct DemocritusTickResult {
     pub edges_added: usize,
     /// Number of cross-refs registered in the UPDATE phase.
     pub crossrefs_added: usize,
-    /// Whether the tick was cut short due to budget exhaustion.
+    /// Whether the tick was cut short due to budget exhaustion. Work that did
+    /// not fit (embeddings still in flight, embedded impulses not yet
+    /// searched or applied) is carried to the next tick, not dropped.
     pub budget_exceeded: bool,
     /// Wall-clock duration of the tick in microseconds.
     pub duration_us: u64,
@@ -82,6 +90,12 @@ pub struct DemocritusTickResult {
 // ---------------------------------------------------------------------------
 // DemocritusLoop
 // ---------------------------------------------------------------------------
+
+/// One batch of impulses with their embeddings (empty vectors on failure).
+type EmbeddedBatch = (Vec<Impulse>, Vec<Vec<f32>>);
+
+/// An impulse with its embedding and the SEARCH neighbours `(node id, score)`.
+type SearchedImpulse = (Impulse, Vec<f32>, Vec<(String, f32)>);
 
 /// The DEMOCRITUS continuous cognitive loop.
 ///
@@ -98,6 +112,17 @@ pub struct DemocritusLoop {
     impulse_queue: Arc<ImpulseQueue>,
     crossref_store: Arc<CrossRefStore>,
     embedding_provider: Arc<dyn EmbeddingProvider>,
+    // Off-tick EMBED hand-off. SENSE submits a batch to a background task;
+    // the task sends the finished batch here; a later (or the same) tick
+    // collects it. Nothing drained from the queue is dropped.
+    embed_tx: mpsc::UnboundedSender<EmbeddedBatch>,
+    embed_rx: tokio::sync::Mutex<mpsc::UnboundedReceiver<EmbeddedBatch>>,
+    /// Batches submitted to the embedder and not yet collected.
+    inflight: Arc<AtomicUsize>,
+    /// Serialises embedding jobs so batches finish in submission order.
+    embed_gate: Arc<tokio::sync::Mutex<()>>,
+    /// Embedded impulses waiting for SEARCH/UPDATE (budget carry-over).
+    backlog: Mutex<VecDeque<(Impulse, Vec<f32>)>>,
     // Configuration
     config: DemocritusConfig,
     // Tick statistics
@@ -119,12 +144,18 @@ impl DemocritusLoop {
         embedding_provider: Arc<dyn EmbeddingProvider>,
         config: DemocritusConfig,
     ) -> Self {
+        let (embed_tx, embed_rx) = mpsc::unbounded_channel();
         Self {
             causal_graph,
             vector,
             impulse_queue,
             crossref_store,
             embedding_provider,
+            embed_tx,
+            embed_rx: tokio::sync::Mutex::new(embed_rx),
+            inflight: Arc::new(AtomicUsize::new(0)),
+            embed_gate: Arc::new(tokio::sync::Mutex::new(())),
+            backlog: Mutex::new(VecDeque::new()),
             config,
             total_ticks: AtomicU64::new(0),
             total_nodes_added: AtomicU64::new(0),
@@ -157,18 +188,25 @@ impl DemocritusLoop {
         let impulses = self.sense();
         result.impulses_sensed = impulses.len();
 
-        if impulses.is_empty() {
-            result.duration_us = start.elapsed().as_micros() as u64;
-            self.commit(&result);
-            return result;
+        // ── EMBED (off-tick) ─────────────────────────────────────────
+        // Embedding is handed to a background task and its result comes
+        // back over a channel. A real model takes far longer than the tick
+        // budget, so the tick only waits for it within the remaining
+        // budget; anything not finished is collected by a later tick. The
+        // impulses are never dropped.
+        if !impulses.is_empty() {
+            self.submit_embed(impulses);
         }
+        let collected = self.collect_embedded(start).await;
+        result.embeddings_produced = collected;
 
-        // ── EMBED ────────────────────────────────────────────────────
-        let embedded = self.embed(&impulses).await;
-        result.embeddings_produced = embedded.len();
+        let mut work: Vec<(Impulse, Vec<f32>)> = {
+            let mut backlog = self.backlog.lock().unwrap_or_else(|e| e.into_inner());
+            backlog.drain(..).collect()
+        };
 
-        if self.budget_exceeded(start) {
-            result.budget_exceeded = true;
+        if work.is_empty() {
+            result.budget_exceeded = self.inflight.load(Ordering::Acquire) > 0;
             result.duration_us = start.elapsed().as_micros() as u64;
             self.commit(&result);
             return result;
@@ -179,39 +217,48 @@ impl DemocritusLoop {
         // Neighbor keys are causal node id strings (see update()); scores
         // are cosine similarity recovered from backend distance so that
         // correlation_threshold stays calibrated for the HNSW default.
-        let non_empty_queries: Vec<(usize, &[f32])> = embedded
-            .iter()
-            .enumerate()
-            .filter(|(_, emb)| !emb.is_empty())
-            .map(|(i, emb)| (i, emb.as_slice()))
-            .collect();
-
-        let mut search_results_by_index: Vec<Vec<(String, f32)>> = vec![Vec::new(); embedded.len()];
-        for &(orig_idx, query) in &non_empty_queries {
-            search_results_by_index[orig_idx] = self.search(query);
-        }
-        result.searches_performed = non_empty_queries.len();
-
-        type NeighborTriple<'a> = (&'a Impulse, &'a Vec<f32>, Vec<(String, f32)>);
-        let mut neighbors_per_event: Vec<NeighborTriple<'_>> = Vec::with_capacity(embedded.len());
-        for (i, (impulse, embedding)) in impulses.iter().zip(embedded.iter()).enumerate() {
-            if self.budget_exceeded(start) {
+        let mut searched: Vec<SearchedImpulse> =
+            Vec::with_capacity(work.len());
+        let mut deferred: VecDeque<(Impulse, Vec<f32>)> = VecDeque::new();
+        for (impulse, embedding) in work.drain(..) {
+            if !deferred.is_empty() || self.budget_exceeded(start) {
                 result.budget_exceeded = true;
-                break;
+                deferred.push_back((impulse, embedding));
+                continue;
             }
-            let neighbors = std::mem::take(&mut search_results_by_index[i]);
-            neighbors_per_event.push((impulse, embedding, neighbors));
+            let neighbors = self.search(&embedding);
+            if !embedding.is_empty() {
+                result.searches_performed += 1;
+            }
+            searched.push((impulse, embedding, neighbors));
         }
 
         // ── UPDATE ───────────────────────────────────────────────────
-        for (impulse, embedding, neighbors) in &neighbors_per_event {
-            if self.budget_exceeded(start) {
+        let mut unapplied: Vec<(Impulse, Vec<f32>)> = Vec::new();
+        for (impulse, embedding, neighbors) in searched {
+            if !unapplied.is_empty() || self.budget_exceeded(start) {
                 result.budget_exceeded = true;
-                break;
+                // Not yet applied: carry over (neighbors are recomputed).
+                unapplied.push((impulse, embedding));
+                continue;
             }
-            let (edges, crossrefs) = self.update(impulse, embedding, neighbors);
+            let (edges, crossrefs) = self.update(&impulse, &embedding, &neighbors);
             result.edges_added += edges;
             result.crossrefs_added += crossrefs;
+        }
+        // Unapplied items precede the ones deferred during SEARCH.
+        for item in unapplied.into_iter().rev() {
+            deferred.push_front(item);
+        }
+        if !deferred.is_empty() {
+            let mut backlog = self.backlog.lock().unwrap_or_else(|e| e.into_inner());
+            // Newly embedded work from a concurrent collect goes after.
+            while let Some(item) = deferred.pop_back() {
+                backlog.push_front(item);
+            }
+        }
+        if self.inflight.load(Ordering::Acquire) > 0 {
+            result.budget_exceeded = true;
         }
 
         // ── COMMIT ───────────────────────────────────────────────────
@@ -224,17 +271,21 @@ impl DemocritusLoop {
 
     /// SENSE: drain the impulse queue up to the per-tick limit.
     fn sense(&self) -> Vec<Impulse> {
-        let mut impulses = self.impulse_queue.drain_ready();
-        impulses.truncate(self.config.max_impulses_per_tick);
-        impulses
+        // `drain_ready_limited` leaves the overflow queued for the next tick;
+        // the old `drain_ready().truncate(max)` dropped it (the same defect
+        // the Talk-Mode loop fixed, M2 D8).
+        self.impulse_queue
+            .drain_ready_limited(self.config.max_impulses_per_tick)
     }
 
-    /// EMBED: convert each impulse's payload to a vector embedding.
+    /// EMBED, submit half: hand the batch to a background task.
     ///
-    /// On embedding failure, falls back to an empty vector (the impulse
-    /// will still be recorded in the causal graph but won't participate
-    /// in similarity search).
-    async fn embed(&self, impulses: &[Impulse]) -> Vec<Vec<f32>> {
+    /// The embedder may block for a long time (a local ONNX model does), so
+    /// the call runs on the blocking pool, off the tick and off the async
+    /// workers. On embedding failure the batch gets empty vectors (the
+    /// impulses are still recorded in the causal graph but do not
+    /// participate in similarity search).
+    fn submit_embed(&self, impulses: Vec<Impulse>) {
         let texts: Vec<String> = impulses
             .iter()
             .map(|imp| {
@@ -244,16 +295,75 @@ impl DemocritusLoop {
                 format!("{type_str}:{payload_str}")
             })
             .collect();
+        let provider = Arc::clone(&self.embedding_provider);
+        let gate = Arc::clone(&self.embed_gate);
+        let tx = self.embed_tx.clone();
+        self.inflight.fetch_add(1, Ordering::AcqRel);
+        tokio::spawn(async move {
+            let _order = gate.lock().await;
+            let n = impulses.len();
+            let handle = tokio::runtime::Handle::current();
+            let joined = tokio::task::spawn_blocking(move || {
+                let refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
+                handle.block_on(provider.embed_batch(&refs))
+            })
+            .await;
+            let vecs = match joined {
+                Ok(Ok(v)) if v.len() == n => v,
+                Ok(Ok(v)) => {
+                    warn!(
+                        "DEMOCRITUS embed returned {} vectors for {n} impulses, \
+                         falling back to empty vectors",
+                        v.len()
+                    );
+                    vec![Vec::new(); n]
+                }
+                Ok(Err(e)) => {
+                    warn!("DEMOCRITUS embed phase failed, falling back to empty vectors: {e}");
+                    vec![Vec::new(); n]
+                }
+                Err(e) => {
+                    warn!("DEMOCRITUS embed task failed, falling back to empty vectors: {e}");
+                    vec![Vec::new(); n]
+                }
+            };
+            // The receiver lives as long as the loop; a send error means the
+            // loop was dropped and the batch has nowhere to go.
+            let _ = tx.send((impulses, vecs));
+        });
+    }
 
-        let text_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
-
-        match self.embedding_provider.embed_batch(&text_refs).await {
-            Ok(vecs) => vecs,
-            Err(e) => {
-                warn!("DEMOCRITUS embed phase failed, falling back to empty vectors: {e}");
-                vec![Vec::new(); impulses.len()]
+    /// EMBED, collect half: move finished batches into the backlog.
+    ///
+    /// Takes whatever is already finished; if nothing is and a batch is in
+    /// flight, waits for one only for the remaining tick budget. Returns the
+    /// number of embeddings collected.
+    async fn collect_embedded(&self, start: Instant) -> usize {
+        let mut rx = self.embed_rx.lock().await;
+        let mut batches: Vec<EmbeddedBatch> = Vec::new();
+        while let Ok(b) = rx.try_recv() {
+            batches.push(b);
+        }
+        if batches.is_empty() && self.inflight.load(Ordering::Acquire) > 0 {
+            let spent = start.elapsed().as_micros() as u64;
+            let left = self.config.tick_budget_us.saturating_sub(spent);
+            if let Ok(Some(b)) =
+                tokio::time::timeout(Duration::from_micros(left), rx.recv()).await
+            {
+                batches.push(b);
+                while let Ok(b) = rx.try_recv() {
+                    batches.push(b);
+                }
             }
         }
+        let mut count = 0;
+        let mut backlog = self.backlog.lock().unwrap_or_else(|e| e.into_inner());
+        for (impulses, vecs) in batches {
+            self.inflight.fetch_sub(1, Ordering::AcqRel);
+            count += vecs.len();
+            backlog.extend(impulses.into_iter().zip(vecs));
+        }
+        count
     }
 
     /// SEARCH: query the vector backend for k nearest neighbors.
@@ -813,10 +923,15 @@ mod tests {
         assert_eq!(demo.total_nodes_added(), 3);
     }
 
-    // ── Test 7: Vector search returns relevant neighbors ──
+    // ── Test 7: Vector search wiring (plumbing, Mock embedder) ──
+    //
+    // The Mock embedder is a hash of the whole string: equal text maps to equal
+    // vectors, nothing more. This proves the second tick's search sees the first
+    // tick's insert. Neighbour QUALITY is judged by
+    // `real_embedder_neighbour_is_the_semantically_related_impulse` below.
 
     #[tokio::test]
-    async fn vector_returns_neighbors_on_second_tick() {
+    async fn vector_returns_prior_entries_on_second_tick_plumbing_mock_embedder() {
         let (_cg, vector, iq, _crs, demo) = make_loop();
 
         // First tick: insert a node.
@@ -843,6 +958,164 @@ mod tests {
             .expect("mock embed");
         let hits = vector.search(&query, 5);
         assert!(!hits.is_empty(), "vector backend must return prior entries");
+    }
+
+    // ── Test 7b: neighbour quality with a REAL embedding model ──
+
+    /// Skipped with a printed reason unless WEFTOS_TEST_EMBED_MODEL_DIR points at
+    /// a nomic-embed-text-v1.5 bundle. The query impulse shares no keyword with
+    /// the impulse it must be nearest to.
+    #[tokio::test]
+    async fn real_embedder_neighbour_is_the_semantically_related_impulse() {
+        let Some(emb) = crate::embedding_support::real_embedder() else { return };
+        let cg = Arc::new(CausalGraph::new());
+        let vector: Arc<dyn VectorBackend> = Arc::new(HnswBackend::new(HnswServiceConfig {
+            default_dimensions: crate::embedding_support::TEST_MODEL_DIMS,
+            ..HnswServiceConfig::default()
+        }));
+        let iq = Arc::new(ImpulseQueue::new());
+        let crs = Arc::new(CrossRefStore::new());
+        let demo = DemocritusLoop::new(
+            Arc::clone(&cg),
+            Arc::clone(&vector),
+            Arc::clone(&iq),
+            Arc::clone(&crs),
+            Arc::clone(&emb),
+            // Default 15 ms tick budget: the real model runs off-tick, so the
+            // budget no longer has to cover it.
+            DemocritusConfig::default(),
+        );
+
+        let payloads = [
+            "the nightly deploy crashed because the process ran out of memory",
+            "the customer asked for a dark colour theme on the dashboard",
+            "invoices go to the finance team on the first working day of the month",
+        ];
+        let ids: Vec<u64> = payloads
+            .iter()
+            .enumerate()
+            .map(|(i, text)| {
+                iq.emit(
+                    StructureTag::CausalGraph.as_u8(),
+                    [0u8; 32],
+                    StructureTag::HnswIndex.as_u8(),
+                    ImpulseType::BeliefUpdate,
+                    serde_json::json!({ "text": text }),
+                    100 + i as u64,
+                )
+            })
+            .collect();
+        // The model needs hundreds of ms for three impulses; later ticks
+        // collect the finished embeddings. None of the three may be lost.
+        for _ in 0..600 {
+            if vector.len() == 3 {
+                break;
+            }
+            demo.tick().await;
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert_eq!(vector.len(), 3);
+
+        // Same text shape the EMBED phase builds, with different words.
+        let query = emb
+            .embed(&format!(
+                "{}:{}",
+                ImpulseType::BeliefUpdate,
+                serde_json::json!({"text": "why did the release blow up with an OOM kill?"})
+            ))
+            .await
+            .expect("real embed");
+        let hits = vector.search(&query, 1);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(
+            hits[0].metadata["impulse_id"].as_u64(),
+            Some(ids[0]),
+            "nearest neighbour must be the out-of-memory impulse, got {:?}",
+            hits[0].metadata
+        );
+    }
+
+    // ── Test 7c: a slow embedder neither loses impulses nor blows the budget ──
+
+    /// Embedder that blocks like a local ONNX model does (a blocking sleep,
+    /// not an async one), delegating to the mock for the vectors.
+    struct SlowBlockingProvider {
+        inner: MockEmbeddingProvider,
+        delay: std::time::Duration,
+    }
+
+    #[async_trait::async_trait]
+    impl EmbeddingProvider for SlowBlockingProvider {
+        async fn embed(&self, text: &str) -> Result<Vec<f32>, crate::embedding::EmbeddingError> {
+            std::thread::sleep(self.delay);
+            self.inner.embed(text).await
+        }
+        async fn embed_batch(
+            &self,
+            texts: &[&str],
+        ) -> Result<Vec<Vec<f32>>, crate::embedding::EmbeddingError> {
+            std::thread::sleep(self.delay);
+            self.inner.embed_batch(texts).await
+        }
+        fn dimensions(&self) -> usize {
+            self.inner.dimensions()
+        }
+        fn model_name(&self) -> &str {
+            "slow-blocking-mock"
+        }
+    }
+
+    /// Default 15 ms tick budget, embedder that takes 200 ms. Before the
+    /// off-tick hand-off the tick ran the embedder inline, blew the budget,
+    /// returned right after EMBED and the drained impulses were gone (0 of 3
+    /// inserted). Now the tick stays within its budget and the impulses are
+    /// inserted by later ticks.
+    #[tokio::test]
+    async fn slow_embedder_keeps_tick_budget_and_loses_no_impulses() {
+        let cg = Arc::new(CausalGraph::new());
+        let vector: Arc<dyn VectorBackend> = Arc::new(HnswBackend::new(HnswServiceConfig {
+            default_dimensions: 8,
+            ..HnswServiceConfig::default()
+        }));
+        let iq = Arc::new(ImpulseQueue::new());
+        let crs = Arc::new(CrossRefStore::new());
+        let emb: Arc<dyn EmbeddingProvider> = Arc::new(SlowBlockingProvider {
+            inner: MockEmbeddingProvider::new(8),
+            delay: std::time::Duration::from_millis(200),
+        });
+        let demo = DemocritusLoop::new(
+            Arc::clone(&cg),
+            Arc::clone(&vector),
+            Arc::clone(&iq),
+            Arc::clone(&crs),
+            emb,
+            DemocritusConfig::default(), // tick_budget_us = 15_000
+        );
+
+        for i in 0..3 {
+            emit_test_impulse(&iq, ImpulseType::BeliefUpdate, i);
+        }
+
+        let first = demo.tick().await;
+        assert_eq!(first.impulses_sensed, 3);
+        assert!(
+            first.duration_us < 100_000,
+            "a 200 ms embedder must not hold the 15 ms tick: tick took {} us",
+            first.duration_us
+        );
+        assert!(first.budget_exceeded, "the tick could not finish within its budget");
+
+        // Later ticks collect the finished embeddings and apply them.
+        for _ in 0..100 {
+            if vector.len() == 3 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            let t = demo.tick().await;
+            assert!(t.duration_us < 100_000, "tick took {} us", t.duration_us);
+        }
+        assert_eq!(vector.len(), 3, "every drained impulse must reach the vector index");
+        assert_eq!(cg.node_count(), 3);
     }
 
     // ── Test 8: Causal edge type selection ──
@@ -999,6 +1272,36 @@ mod tests {
         assert_eq!(result.embeddings_produced, 2);
     }
 
+    /// A burst larger than `max_impulses_per_tick` is carried across ticks,
+    /// not truncated: every emitted impulse ends up in the causal graph.
+    /// (Before: `drain_ready` + `truncate` dropped the tail, so 2 of 5.)
+    #[tokio::test]
+    async fn burst_over_the_per_tick_cap_is_carried_to_later_ticks() {
+        let config = DemocritusConfig {
+            max_impulses_per_tick: 2,
+            ..DemocritusConfig::default()
+        };
+        let (cg, _vector, iq, _crs, demo) = make_loop_with_config(config);
+        for i in 0..5 {
+            emit_test_impulse(&iq, ImpulseType::BeliefUpdate, i);
+        }
+
+        let mut sensed = 0;
+        for _ in 0..40 {
+            let r = demo.tick().await;
+            assert!(r.impulses_sensed <= 2, "the cap still bounds each tick");
+            sensed += r.impulses_sensed;
+            if cg.node_count() == 5 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+
+        assert_eq!(sensed, 5, "every impulse is sensed exactly once over the ticks");
+        assert_eq!(cg.node_count(), 5, "no impulse is lost");
+        assert!(iq.is_empty(), "nothing is left queued");
+    }
+
     // ── Test 12: structure_tag_from_u8 mapping ──
 
     #[test]
@@ -1071,10 +1374,12 @@ mod tests {
         let r1 = demo.tick().await;
         assert_eq!(r1.impulses_sensed, 10);
 
-        // Queue was drained fully (drain_ready takes all), but only 10 processed.
-        // Remaining impulses are gone (drain clears the queue).
+        // The overflow stays queued (drain_ready_limited); the next tick
+        // takes the next 10 rather than finding the queue emptied.
+        assert_eq!(iq.len(), 490);
         let r2 = demo.tick().await;
-        assert_eq!(r2.impulses_sensed, 0);
+        assert_eq!(r2.impulses_sensed, 10);
+        assert_eq!(iq.len(), 480);
     }
 
     #[tokio::test]

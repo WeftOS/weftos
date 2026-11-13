@@ -1,8 +1,9 @@
 //! Embedding trait definitions and implementations.
 //!
 //! Provides the [`Embedder`] trait for generating vector embeddings from text,
-//! plus a [`hash_embedder::HashEmbedder`] that uses SimHash for local,
-//! deterministic embeddings with no API calls required.
+//! the real in-process [`onnx_embedder::OnnxEmbedder`] (opt-in), and a
+//! [`hash_embedder::HashEmbedder`] that uses SimHash for deterministic LEXICAL
+//! vectors (equal words match; it is not semantic and is never a silent default).
 //!
 //! All types in this module are gated behind the `vector-memory` feature flag.
 
@@ -12,6 +13,15 @@ pub mod hash_embedder;
 pub mod hnsw_store;
 #[cfg(feature = "vector-memory")]
 pub mod micro_hnsw;
+/// Real in-process nomic-embed-text-v1.5 embedder (opt-in `onnx-embeddings`).
+#[cfg(feature = "onnx-embeddings")]
+pub mod onnx_embedder;
+/// Embedder selection with no silent hash fallback.
+#[cfg(feature = "vector-memory")]
+pub mod select;
+/// Shared real-embedder helper for recall tests (core, tools, cos).
+#[cfg(feature = "vector-memory")]
+pub mod test_support;
 /// WEFT-385 / HNSW-EML #4: region → entry-node search-path prediction.
 #[cfg(feature = "vector-memory")]
 pub mod path_predict;
@@ -56,6 +66,19 @@ pub mod rvf_backend {
     pub use super::rvf_stub::{RvfEntry, RvfError, RvfQueryResult, RvfStore};
 }
 
+/// True when a local embedding model bundle is present on this host.
+#[cfg(all(test, feature = "vector-memory"))]
+pub(crate) fn onnx_embedder_present() -> bool {
+    #[cfg(feature = "onnx-embeddings")]
+    {
+        onnx_embedder::find_model_dir().is_ok()
+    }
+    #[cfg(not(feature = "onnx-embeddings"))]
+    {
+        false
+    }
+}
+
 use async_trait::async_trait;
 use std::fmt;
 
@@ -88,6 +111,16 @@ impl std::error::Error for EmbeddingError {}
 pub trait Embedder: Send + Sync {
     /// Generate a vector embedding for the given text.
     async fn embed(&self, text: &str) -> Result<Vec<f32>, EmbeddingError>;
+
+    /// Embed a **query** (the asymmetric retrieval lane).
+    ///
+    /// Defaults to [`embed`](Embedder::embed). Models trained with separate
+    /// document and query prefixes (nomic `search_document:`/`search_query:`,
+    /// e5 `passage:`/`query:`) override this; retrieval call sites must use it
+    /// for the text being searched WITH.
+    async fn embed_query(&self, text: &str) -> Result<Vec<f32>, EmbeddingError> {
+        self.embed(text).await
+    }
 
     /// Batch embed multiple texts.
     ///

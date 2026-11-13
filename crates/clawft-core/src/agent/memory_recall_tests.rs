@@ -135,13 +135,69 @@ fn identity_reranker_preserves_retriever_order() {
     assert_eq!(IdentityMemoryReranker.rerank("q", s.clone()), s);
 }
 
+/// Recall judged with a REAL embedding model (skipped with a printed reason
+/// unless `onnx-embeddings` + `WEFTOS_TEST_EMBED_MODEL_DIR` are present). Each
+/// query shares no keyword with the snippet it must rank first, so a lexical
+/// match cannot pass it.
+#[cfg(feature = "onnx-embeddings")]
+#[test]
+fn onnx_retriever_ranks_the_paraphrased_snippet_first() {
+    use crate::embeddings::test_support::{TEST_MODEL_DIR_ENV, real_embedder};
+    if real_embedder().is_none() {
+        return;
+    }
+    let dir = std::env::var(TEST_MODEL_DIR_ENV).unwrap();
+    let retriever = OnnxRetriever::from_dir(std::path::Path::new(&dir)).unwrap();
+    let s = split_snippets(MEM);
+    for (query, expect) in [
+        ("which hot drink does the person like best?", "The user prefers tea over coffee."),
+        ("what pet do they have?", "# Pets\nThe user has a dog named Rex."),
+        ("which city is home?", "The user lives in Denver."),
+        ("are there any animal allergies?", "The user is allergic to cats."),
+    ] {
+        let top = retriever.top_k(query, &s, 1);
+        assert_eq!(top.len(), 1, "{query}");
+        assert_eq!(top[0].text, expect, "query {query:?}");
+    }
+}
+
+/// The lexical mode is explicit and, being lexical, matches shared words only.
+/// This is a PLUMBING test of the opt-in path, not a recall test.
 #[cfg(feature = "vector-memory")]
 #[test]
-fn hash_retriever_ranks_the_matching_snippet_first() {
+fn lexical_retriever_matches_shared_words_plumbing() {
     let s = split_snippets(MEM);
-    let top = HashRetriever::default().top_k("tea or coffee preference", &s, 2);
+    let top = LexicalRetriever::new().top_k("tea or coffee preference", &s, 2);
     assert_eq!(top.len(), 2);
     assert_eq!(top[0].text, "The user prefers tea over coffee.");
+}
+
+/// Enabled recall with no embedding model is an error naming what to configure,
+/// not a hash retriever; the boot-path wrapper turns it into "recall off".
+#[cfg(feature = "vector-memory")]
+#[test]
+fn enabled_recall_without_a_model_is_an_error_not_a_hash_retriever() {
+    if crate::embeddings::select::lexical_mode_requested() || crate::embeddings::onnx_embedder_present() {
+        eprintln!("SKIP: this host has a model or lexical mode on");
+        return;
+    }
+    let cfg = clawft_types::config::MemoryRecallConfig {
+        enabled: true,
+        model_dir: Some("/nonexistent/embed-model".into()),
+        ..Default::default()
+    };
+    let err = try_from_config(&cfg).err().expect("must be an error");
+    let msg = err.to_string();
+    assert!(msg.contains("semantic search unavailable"), "{msg}");
+    assert!(from_config(&cfg).is_none(), "boot path: recall off, full MEMORY.md injected");
+}
+
+/// `lexical = true` is the explicit opt-in; it builds the lexical retriever.
+#[cfg(feature = "vector-memory")]
+#[test]
+fn explicit_lexical_config_builds_a_recall() {
+    let cfg = clawft_types::config::MemoryRecallConfig { enabled: true, lexical: true, ..Default::default() };
+    assert!(try_from_config(&cfg).unwrap().is_some());
 }
 
 #[test]

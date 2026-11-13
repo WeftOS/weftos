@@ -321,7 +321,11 @@ instant-distance = "0.6"
 tiktoken-rs = "0.6"
 
 # ONNX Runtime (embedding inference)
-ort = { version = "2.0.0-rc.12", default-features = false }
+# Exact pin: ort is a release candidate that changes its API between rcs, and a
+# caret requirement lets `cargo update` pull the next one. Ported to rc.15 (board
+# ticket 290bdbb3-b6d7-432c-9b30-58be29b7230e, key ef-ort-rc15-port):
+# `Session::builder` now takes the process-global `Environment`.
+ort = { version = "=2.0.0-rc.15", default-features = false }
 ndarray = "0.16"
 # Pure-Rust FFT — mel-fbank front-end for the native ONNX voice models.
 rustfft = "6"

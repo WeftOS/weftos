@@ -881,9 +881,15 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(&dir).await;
     }
 
+    /// Real-embedder test: skipped with a printed reason unless the model bundle is
+    /// available (`onnx-embeddings` + `WEFTOS_TEST_EMBED_MODEL_DIR`). The query
+    /// shares no word with the snippet it must retrieve.
     #[cfg(feature = "vector-memory")]
     #[tokio::test]
     async fn memory_recall_with_a_query_injects_cited_snippets_not_the_whole_file() {
+        if crate::embeddings::test_support::real_embedder().is_none() {
+            return;
+        }
         let (ctx, dir, memory, _) = setup("recall").await;
         memory
             .write_long_term("The user has a dog named Rex.\n\nThe user prefers tea over coffee.\n\n[[graft debris]]")
@@ -893,12 +899,14 @@ mod tests {
             enabled: true,
             top_k: 20,
             top_m: 1,
+            model_dir: std::env::var(crate::embeddings::test_support::TEST_MODEL_DIR_ENV).ok(),
+            lexical: false,
         });
         assert!(recall.is_some());
         let ctx = ctx.with_memory_recall(recall);
         let session = Session::new("test:recall");
 
-        let with_query = ctx.build_messages_with_query(&session, &[], "tea or coffee preference").await;
+        let with_query = ctx.build_messages_with_query(&session, &[], "which hot drink does the person like best?").await;
         let mem = with_query.iter().find(|m| m.content.contains("Relevant Memory")).unwrap();
         assert!(mem.content.contains("[m1] The user prefers tea over coffee."), "{}", mem.content);
         assert!(!mem.content.contains("Rex") && !mem.content.contains("graft debris"), "top_m = 1, no dump");

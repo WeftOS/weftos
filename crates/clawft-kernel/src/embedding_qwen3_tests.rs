@@ -58,40 +58,30 @@ fn mrl_zero_pads_short_input() {
     assert!(out[2..].iter().all(|&x| x == 0.0));
 }
 
-// -- tokenizer/model-absent fallback ----------------------------------
+// -- model-absent: an error naming the path, never a hash result ------
 
 #[tokio::test]
-async fn absent_model_degrades_to_mock() {
+async fn absent_model_is_unavailable_and_errors_naming_the_paths() {
     let p = Qwen3EmbeddingProvider::new("/nonexistent/model_fp16.onnx", "/nonexistent/tok.json");
     assert!(!p.is_runtime_available());
     assert_eq!(p.dimensions(), QWEN3_DIMS);
     assert!(p.model_name().starts_with(QWEN3_MODEL_NAME));
-    assert!(p.model_name().contains("fallback"));
+    assert!(p.model_name().ends_with("-unavailable"));
 
-    let v = p.embed("hello world").await.unwrap();
-    assert_eq!(v.len(), QWEN3_DIMS);
-    // Deterministic via the Mock SHA-256 backend.
-    let v2 = p.embed("hello world").await.unwrap();
-    assert_eq!(v, v2);
+    let err = p.embed("hello world").await.unwrap_err();
+    assert!(matches!(err, EmbeddingError::ModelUnavailable { .. }), "{err}");
+    let msg = err.to_string();
+    assert!(msg.contains("semantic search unavailable"), "{msg}");
+    assert!(msg.contains("/nonexistent/model_fp16.onnx"), "must name the model path: {msg}");
+    assert!(msg.contains("/nonexistent/tok.json"), "must name the tokenizer path: {msg}");
 }
 
 #[tokio::test]
-async fn fallback_query_embeds_without_model() {
+async fn absent_model_query_and_batch_lanes_error_too() {
     let p = Qwen3EmbeddingProvider::new("/nope.onnx", "/nope.json");
-    let q = p
-        .embed_query("what is the kernel boot order")
-        .await
-        .unwrap();
-    assert_eq!(q.len(), QWEN3_DIMS);
-}
-
-#[tokio::test]
-async fn fallback_batch_matches_individual() {
-    let p = Qwen3EmbeddingProvider::new("/nope.onnx", "/nope.json");
-    let batch = p.embed_batch(&["a", "b"]).await.unwrap();
-    let a = p.embed("a").await.unwrap();
-    assert_eq!(batch.len(), 2);
-    assert_eq!(batch[0], a);
+    assert!(p.embed_query("what is the kernel boot order").await.is_err());
+    assert!(<Qwen3EmbeddingProvider as EmbeddingProvider>::embed_query(&p, "q").await.is_err());
+    assert!(p.embed_batch(&["a", "b"]).await.is_err());
 }
 
 #[test]

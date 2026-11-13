@@ -10,8 +10,11 @@
 //! toolchain upgrades.
 //!
 //! This embedder requires no API calls, no model files, and no network access.
-//! It is suitable as a baseline for semantic similarity when true neural
-//! embeddings are not available.
+//! It is LEXICAL, not semantic: texts match to the extent they share words, and
+//! synonyms or paraphrases do not match at all. It must never be the silent
+//! default of a recall or retrieval path, and recall quality must not be judged
+//! with it; see [`super::select`] for the explicit lexical opt-in and
+//! [`super::test_support`] for the real-embedder test helper.
 
 use std::hash::{Hash, Hasher};
 

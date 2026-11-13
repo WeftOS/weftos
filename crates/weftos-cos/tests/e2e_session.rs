@@ -203,7 +203,14 @@ async fn a_scripted_session_runs_the_whole_loop() {
     let routes = ModelRoutes::from_app_config(&app, &models);
 
     let brain = Arc::new(
-        Brain::open(&BrainConfig { path: Some(dir.path().join("cos.rvf")), installation: Some("weftos://local/installations/e2e".into()), package: Some(DIGEST.into()), catalog: None }, dir.path()).unwrap(),
+        // Plumbing: this test is about the session wiring and the metadata a note carries,
+        // not recall quality, so it uses the EXPLICIT lexical embedder.
+        Brain::open_with(
+            &BrainConfig { path: Some(dir.path().join("cos.rvf")), installation: Some("weftos://local/installations/e2e".into()), package: Some(DIGEST.into()), ..Default::default() },
+            dir.path(),
+            Arc::new(clawft_core::embeddings::select::LexicalEmbedder::new()),
+        )
+        .unwrap(),
     );
     let client = harness_client(harness, Some(TEST_PROJECT));
     let focus = Focus::default();
@@ -273,7 +280,7 @@ async fn a_scripted_session_runs_the_whole_loop() {
     );
     // The brain holds the decision with its metadata.
     assert_eq!(brain.len(), 1);
-    let hit = &brain.search("pad button debounce", 1)[0];
+    let hit = &brain.search("pad button debounce", 1).await.unwrap()[0];
     assert_eq!(hit.2["kind"], "decision");
     assert_eq!(hit.2["why"], "the GPIO bounces for about 20 ms");
     assert_eq!(hit.2["where"], json!(["WEFT-902"]));

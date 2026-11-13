@@ -22,6 +22,11 @@ case "$1" in
 esac
 "#;
 
+/// A listener-style payload: with no arguments (what `RunMode::Listener`
+/// passes) it stays up until stopped. `SCRIPT` falls through its `case` and
+/// exits at once, which made "Running right after start" a race.
+const LISTENER_SCRIPT: &str = "#!/bin/sh\nexec sleep 30\n";
+
 fn toml(max_runtime: u64, output_limit: usize) -> String {
     format!(
         r#"[cog]
@@ -251,7 +256,7 @@ async fn interval_lifecycle_start_status_stop_unload() {
 #[tokio::test]
 async fn staging_over_a_directory_left_by_an_earlier_run_replaces_it() {
     use std::os::unix::fs::PermissionsExt;
-    let fx = signed_workload(&toml(15, 4096), &[(arch(), SCRIPT.as_bytes())]);
+    let fx = signed_workload(&toml(15, 4096), &[(arch(), LISTENER_SCRIPT.as_bytes())]);
     let rt = runtime(&fx.root.join("rt"), true);
     let c = cfg(RunMode::Listener);
     // What a daemon that restarted leaves behind: the instance directory with
@@ -274,7 +279,7 @@ async fn staging_over_a_directory_left_by_an_earlier_run_replaces_it() {
     );
     assert!(!dir.join("stray").exists(), "anything else is replaced");
     let staged = std::fs::read(dir.join("cog-script-cog")).unwrap();
-    assert_eq!(staged, SCRIPT.as_bytes(), "the new binary is staged");
+    assert_eq!(staged, LISTENER_SCRIPT.as_bytes(), "the new binary is staged");
     rt.start(&h).await.unwrap();
     assert_eq!(rt.status(&h).await.state, InstanceState::Running);
     rt.unload(h).await.unwrap();
