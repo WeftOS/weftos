@@ -1305,6 +1305,24 @@ fn audit_lines_with_a_403_count_too_and_a_successful_audit_line_never_does() {
     assert_eq!(r.be.key_enabled(&key), Some(false));
 }
 
+/// RustFS 1.0.5 audits authorization denials (`tags.denialReason`) and still writes the
+/// `s3_authorization_denied` log line for the same refusal. The pair is one refusal: counted once
+/// against the suspension rule and logged once.
+#[test]
+fn a_denial_that_rustfs_1_0_5_reports_in_both_the_log_and_the_audit_stream_counts_once() {
+    let (r, n, _c, key) = denial_rig();
+    r.svc.set_denial_rule(Some(DenialRule { max: 2, window_ms: 60_000 }));
+    let before = r.sink.events().len();
+    let audited = format!(r#"{{"EventName":"audit:S3:Operation","Key":"x/s3:GetObject","Records":[{{"event":"audit:S3:Operation","api":{{"name":"s3:GetObject","bucket":"{}","object":"x","status":"failure","status_code":403}},"tags":{{"denialReason":"no_policy_allows_action"}},"accessKey":"{key}","error":"Access Denied"}}]}}"#, n.bucket());
+    assert!(r.svc.ingest_audit_line(&audited), "it is an audit line");
+    assert!(r.svc.ingest_log_line(&denied_line(&key, &n.bucket())));
+    assert_eq!(r.be.key_enabled(&key), Some(true), "one refusal, reported twice, is one refusal");
+    assert_eq!(r.sink.events().len() - before, 1, "and one activity entry");
+    r.svc.ingest_audit_line(&audited);
+    r.svc.ingest_log_line(&denied_line(&key, &n.bucket()));
+    assert_eq!(r.be.key_enabled(&key), Some(false), "the second refusal reaches the rule's count of 2");
+}
+
 #[test]
 fn principals_cannot_write_a_worktrees_control_state_or_a_projects_registry() {
     let r = rig();

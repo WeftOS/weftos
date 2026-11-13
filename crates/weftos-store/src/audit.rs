@@ -307,4 +307,35 @@ mod tests {
             assert!(!l.contains("Credential=") && !l.contains("Signature="), "no signed header text in the fixture");
         }
     }
+    /// Nine records exactly as a throwaway RustFS 1.0.5 container (sha256:b81d16a9...) posted them to the
+    /// audit webhook (2026-11-13): the entries 1.0.5 added (UploadPart, a bucket policy write, authorization
+    /// denials with `tags.denialReason`, the anonymous one with an empty `accessKey`), the multipart events
+    /// 1.0.4 lost, and a HeadObject of a deleted key that 1.0.5 reports as status 500. See `testdata/`.
+    #[test]
+    fn a_fixture_of_real_rustfs_1_0_5_audit_records_is_read() {
+        let lines: Vec<&str> = include_str!("../testdata/rustfs-1.0.5-audit.ndjson").lines().collect();
+        assert_eq!(lines.len(), 9);
+        let p = |i: usize| parse_audit(lines[i]).unwrap_or_else(|| panic!("line {i} not read"));
+        let up = p(0);
+        assert_eq!((up.op.as_str(), up.bucket.as_str(), up.object.as_deref(), up.status, up.reason.as_deref()), ("UploadPart", "s0-w2w", Some("mp/big"), Some(200), None));
+        assert_eq!(p(1).op, "CreateMultipartUpload");
+        assert_eq!(p(2).op, "AbortMultipartUpload");
+        let pol = p(3);
+        assert_eq!((pol.op.as_str(), pol.bucket.as_str(), pol.status), ("PutBucketPolicy", "audbkt", Some(200)));
+        assert_eq!(pol.object, None);
+        let head = p(4);
+        assert_eq!((head.op.as_str(), head.status), ("HeadObject", Some(500)));
+        assert_eq!(head.reason.as_deref(), Some("Operation ended before reporting its outcome"));
+        let get = p(5);
+        assert_eq!((get.op.as_str(), get.bucket.as_str(), get.object.as_deref(), get.status, get.access_key.as_str()), ("GetObject", "audbkt", Some("k/obj.txt"), Some(403), "denyuser1"));
+        assert_eq!(get.reason.as_deref(), Some("no_policy_allows_action"), "the denial reason is in tags.denialReason");
+        assert_eq!((p(6).op.as_str(), p(6).status, p(6).reason.as_deref()), ("PutObject", Some(403), Some("no_policy_allows_action")));
+        let list = p(7);
+        assert_eq!((list.op.as_str(), list.object, list.reason.as_deref()), ("ListBucket", None, Some("no_policy_allows_action")));
+        let anon = p(8);
+        assert_eq!((anon.access_key.as_str(), anon.status, anon.reason.as_deref()), ("", Some(403), Some("no_policy_allows_action")));
+        for l in &lines {
+            assert!(!l.contains("Credential=") && !l.contains("Signature="), "no signed header text in the fixture");
+        }
+    }
 }
