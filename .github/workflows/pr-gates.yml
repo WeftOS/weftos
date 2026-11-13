@@ -669,6 +669,99 @@ jobs:
         run: cargo test -p clawft-graphify --features vision-extract
 
   # -------------------------------------------------------------------
+  # graphify lang-all feature gate.
+  #
+  # The per-language extractors (python/js/ts/rust/go/java/c/cpp/ruby/
+  # csharp) are each behind a lang-* feature and are NOT compiled by the
+  # default jobs, so a grammar/ABI regression would be silent. This job:
+  #
+  #   1. cargo check -p clawft-graphify --all-targets --features lang-all
+  #   2. cargo test  -p clawft-graphify --features lang-all
+  #
+  # tree-sitter-c-sharp is pinned =0.23.1 (grammar ABI 14; 0.23.5 is ABI
+  # 15 and tree-sitter 0.24 cannot load it). The C# tests run here.
+  # -------------------------------------------------------------------
+  graphify-lang-all:
+    name: graphify lang-all feature
+    needs: diff-gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-graphify-lang-all-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-graphify-lang-all-
+
+      - name: Check clawft-graphify with lang-all
+        run: cargo check -p clawft-graphify --all-targets --features lang-all
+
+      # Test binaries refuse to resolve a real runtime root (the guard in
+      # clawft-types); pin one under the runner's temp dir.
+      - name: Pin test runtime dir
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/weftos-test-runtime"
+          echo "WEFTOS_RUNTIME_DIR=$RUNNER_TEMP/weftos-test-runtime" >> "$GITHUB_ENV"
+
+      - name: Test clawft-graphify with lang-all
+        run: cargo test -p clawft-graphify --features lang-all
+
+  # -------------------------------------------------------------------
+  # graphify full feature gate.
+  #
+  # `full` is the superset (all extractors, domains, exports, mcp,
+  # kernel-bridge, http-client, rdf-ingest). Nothing else compiles it,
+  # so cross-feature breakage would be silent. This job:
+  #
+  #   1. cargo check -p clawft-graphify --all-targets --features full
+  #   2. cargo test  -p clawft-graphify --features full
+  # -------------------------------------------------------------------
+  graphify-full:
+    name: graphify full feature
+    needs: diff-gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-graphify-full-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-graphify-full-
+
+      - name: Check clawft-graphify with full
+        run: cargo check -p clawft-graphify --all-targets --features full
+
+      # Test binaries refuse to resolve a real runtime root (the guard in
+      # clawft-types); pin one under the runner's temp dir.
+      - name: Pin test runtime dir
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/weftos-test-runtime"
+          echo "WEFTOS_RUNTIME_DIR=$RUNNER_TEMP/weftos-test-runtime" >> "$GITHUB_ENV"
+
+      - name: Test clawft-graphify with full
+        run: cargo test -p clawft-graphify --features full
+
+  # -------------------------------------------------------------------
   # UI: lint and type-check (when ui/ directory exists)
   # -------------------------------------------------------------------
   ui-check:

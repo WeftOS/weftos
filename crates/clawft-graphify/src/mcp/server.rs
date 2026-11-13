@@ -228,16 +228,10 @@ mod tests {
         );
         let responses = run_session(&input, McpConfig::default()).await;
         assert_eq!(responses.len(), 2);
-        assert_eq!(
-            responses[0]["result"]["serverInfo"]["name"],
-            SERVER_NAME
-        );
+        assert_eq!(responses[0]["result"]["serverInfo"]["name"], SERVER_NAME);
         let tools = responses[1]["result"]["tools"].as_array().unwrap();
         assert_eq!(tools.len(), 4);
-        let names: Vec<&str> = tools
-            .iter()
-            .map(|t| t["name"].as_str().unwrap())
-            .collect();
+        let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"graphify_query"));
         assert!(names.contains(&"graphify_ingest"));
         assert!(names.contains(&"graphify_export"));

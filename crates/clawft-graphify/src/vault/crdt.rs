@@ -283,9 +283,7 @@ mod tests {
         let p = sample("1", ProposalLifecycle::Suggested);
         let id = p.id.clone();
         store.put(p);
-        store
-            .set_status(&id, ProposalLifecycle::Ratified)
-            .unwrap();
+        store.set_status(&id, ProposalLifecycle::Ratified).unwrap();
         assert_eq!(store.clock(), 2);
         assert_eq!(
             store.get(&id).unwrap().proposal.status,
@@ -366,9 +364,7 @@ mod tests {
         let p = sample("z", ProposalLifecycle::Suggested);
         let id = p.id.clone();
         store.put(p.clone());
-        store
-            .set_status(&id, ProposalLifecycle::Ratified)
-            .unwrap();
+        store.set_status(&id, ProposalLifecycle::Ratified).unwrap();
 
         let mut again = p;
         again.status = ProposalLifecycle::Suggested;

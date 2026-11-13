@@ -16,9 +16,9 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
+use crate::GraphifyError;
 use crate::entity::{EntityId, FileType};
 use crate::model::KnowledgeGraph;
-use crate::GraphifyError;
 
 /// Escape a string for safe embedding inside a Cypher single-quoted literal.
 ///
@@ -58,11 +58,7 @@ pub fn sanitize_node_label(raw: &str) -> String {
     for c in chars {
         out.push(c);
     }
-    if out.is_empty() {
-        "Entity".into()
-    } else {
-        out
-    }
+    if out.is_empty() { "Entity".into() } else { out }
 }
 
 /// Sanitize a relationship type for Cypher: uppercase, non-alnum → `_`.
@@ -88,9 +84,10 @@ pub fn sanitize_rel_type(relation: &str) -> String {
 
 fn entity_id_display(entity: &crate::model::Entity) -> String {
     if let Some(legacy) = entity.legacy_id.as_deref()
-        && !legacy.is_empty() {
-            return legacy.to_string();
-        }
+        && !legacy.is_empty()
+    {
+        return legacy.to_string();
+    }
     entity.id.to_hex()
 }
 
@@ -109,9 +106,8 @@ fn community_map(kg: &KnowledgeGraph) -> HashMap<&EntityId, usize> {
 /// Build Cypher script text without writing to disk.
 pub fn to_cypher_string(kg: &KnowledgeGraph) -> String {
     let communities = community_map(kg);
-    let mut lines: Vec<String> = Vec::with_capacity(
-        8 + kg.entity_count() * 3 + kg.relationship_count() * 4,
-    );
+    let mut lines: Vec<String> =
+        Vec::with_capacity(8 + kg.entity_count() * 3 + kg.relationship_count() * 4);
 
     lines.push("// Graphify Neo4j Cypher export".into());
     lines.push("// MERGE-based — safe to re-run".into());
@@ -198,14 +194,12 @@ fn file_type_str(ft: FileType) -> &'static str {
 pub fn to_cypher(kg: &KnowledgeGraph, output: &Path) -> Result<(), GraphifyError> {
     let body = to_cypher_string(kg);
     if let Some(parent) = output.parent()
-        && !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent).map_err(|e| {
-                GraphifyError::ExportError(format!(
-                    "create parent {}: {e}",
-                    parent.display()
-                ))
-            })?;
-        }
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent).map_err(|e| {
+            GraphifyError::ExportError(format!("create parent {}: {e}", parent.display()))
+        })?;
+    }
     fs::write(output, body).map_err(|e| {
         GraphifyError::ExportError(format!("Failed to write {}: {e}", output.display()))
     })?;
@@ -290,7 +284,10 @@ mod tests {
         assert!(body.contains("MERGE (n:Code {id: 'auth'})"), "{body}");
         assert!(body.contains("MERGE (n:Code {id: 'db'})"), "{body}");
         assert!(body.contains("MERGE (a)-[r:IMPORTS]->(b)"), "{body}");
-        assert!(body.contains("MATCH (a {id: 'auth'}), (b {id: 'db'})"), "{body}");
+        assert!(
+            body.contains("MATCH (a {id: 'auth'}), (b {id: 'db'})"),
+            "{body}"
+        );
         assert!(body.contains("r.confidence = 'EXTRACTED'"), "{body}");
         // Idempotent: MERGE only, never bare CREATE for nodes/edges.
         assert!(!body.contains("CREATE ("), "{body}");
@@ -341,7 +338,7 @@ mod tests {
 
     #[test]
     fn export_dispatcher_wires_cypher() {
-        use crate::export::{export, ExportFormat};
+        use crate::export::{ExportFormat, export};
         let tmp = TempDir::new().unwrap();
         let path = tmp.path().join("graph.cypher");
         let kg = sample_kg();

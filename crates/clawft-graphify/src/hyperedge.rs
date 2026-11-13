@@ -394,11 +394,7 @@ mod tests {
         }
     }
 
-    fn rel(
-        src: &Entity,
-        tgt: &Entity,
-        rt: RelationType,
-    ) -> Relationship {
+    fn rel(src: &Entity, tgt: &Entity, rt: RelationType) -> Relationship {
         Relationship {
             source: src.id.clone(),
             target: tgt.id.clone(),
@@ -492,7 +488,10 @@ mod tests {
                 && h.metadata.get("relation").and_then(|v| v.as_str()) == Some("calls")
                 && h.metadata.get("direction").and_then(|v| v.as_str()) == Some("outgoing")
         });
-        assert!(star.is_some(), "expected calls co-occurrence star, got {hes:?}");
+        assert!(
+            star.is_some(),
+            "expected calls co-occurrence star, got {hes:?}"
+        );
         let star = star.unwrap();
         // hub + 3 callees
         assert_eq!(star.entity_ids.len(), 4);
@@ -601,11 +600,7 @@ mod tests {
             rel(&c2, &iface, RelationType::Implements),
             rel(&c3, &iface, RelationType::Implements),
         ];
-        let kg = KnowledgeGraph::from_parts(
-            vec![iface, c1, c2, c3],
-            relationships,
-            vec![],
-        );
+        let kg = KnowledgeGraph::from_parts(vec![iface, c1, c2, c3], relationships, vec![]);
         let hes = discover_hyperedges_with_config(
             &kg,
             &HyperedgeDiscoveryConfig {

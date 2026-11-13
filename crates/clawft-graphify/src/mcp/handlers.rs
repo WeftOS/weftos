@@ -98,10 +98,7 @@ pub fn dispatch_tool(config: &McpConfig, name: &str, args: &Value) -> CallResult
                 .and_then(|v| v.as_str())
                 .map(PathBuf::from)
                 .unwrap_or_else(|| config.default_graph.clone());
-            let mode = args
-                .get("mode")
-                .and_then(|v| v.as_str())
-                .unwrap_or("bfs");
+            let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("bfs");
             let depth = args
                 .get("depth")
                 .and_then(|v| v.as_u64())
@@ -122,7 +119,10 @@ pub fn dispatch_tool(config: &McpConfig, name: &str, args: &Value) -> CallResult
                 Some(t) if !t.is_empty() => t,
                 _ => return CallResult::err("graphify_ingest requires 'target'"),
             };
-            let output = args.get("output").and_then(|v| v.as_str()).map(PathBuf::from);
+            let output = args
+                .get("output")
+                .and_then(|v| v.as_str())
+                .map(PathBuf::from);
             let contributor = args.get("contributor").and_then(|v| v.as_str());
             match ingest_target(config, target, output.as_deref(), contributor) {
                 Ok(s) => CallResult::ok(s),
@@ -139,7 +139,10 @@ pub fn dispatch_tool(config: &McpConfig, name: &str, args: &Value) -> CallResult
                 .and_then(|v| v.as_str())
                 .map(PathBuf::from)
                 .unwrap_or_else(|| config.default_graph.clone());
-            let output = args.get("output").and_then(|v| v.as_str()).map(PathBuf::from);
+            let output = args
+                .get("output")
+                .and_then(|v| v.as_str())
+                .map(PathBuf::from);
             match export_graph(config, format, &graph, output.as_deref()) {
                 Ok(s) => CallResult::ok(s),
                 Err(e) => CallResult::err(e.to_string()),
@@ -176,9 +179,8 @@ fn load_graph_json(path: &Path) -> Result<KnowledgeGraph, GraphifyError> {
             path.display()
         )));
     }
-    let data = std::fs::read_to_string(path).map_err(|e| {
-        GraphifyError::CacheError(format!("read {}: {e}", path.display()))
-    })?;
+    let data = std::fs::read_to_string(path)
+        .map_err(|e| GraphifyError::CacheError(format!("read {}: {e}", path.display())))?;
     let json_value: Value = serde_json::from_str(&data)?;
     let json_for_build = normalize_graph_json(json_value);
     build_from_json(&json_for_build)
@@ -188,9 +190,10 @@ fn load_graph_json(path: &Path) -> Result<KnowledgeGraph, GraphifyError> {
 fn normalize_graph_json(mut value: Value) -> Value {
     if value.get("edges").is_none()
         && let Some(links) = value.get("links").cloned()
-            && let Some(obj) = value.as_object_mut() {
-                obj.insert("edges".into(), links);
-            }
+        && let Some(obj) = value.as_object_mut()
+    {
+        obj.insert("edges".into(), links);
+    }
     value
 }
 
@@ -326,13 +329,14 @@ pub fn query_graph(
         };
         for id in visited {
             if seen.insert(id.clone())
-                && let Some(e) = kg.entity(&id) {
-                    neighbourhood.push(format!(
-                        "{} ({})",
-                        e.label,
-                        e.source_file.as_deref().unwrap_or("-")
-                    ));
-                }
+                && let Some(e) = kg.entity(&id)
+            {
+                neighbourhood.push(format!(
+                    "{} ({})",
+                    e.label,
+                    e.source_file.as_deref().unwrap_or("-")
+                ));
+            }
         }
     }
 
@@ -425,9 +429,8 @@ fn ingest_url(
         let out = output
             .map(|p| config.resolve(p))
             .unwrap_or_else(|| config.work_dir.join("graphify-out").join("memory"));
-        std::fs::create_dir_all(&out).map_err(|e| {
-            GraphifyError::IngestError(format!("create output dir: {e}"))
-        })?;
+        std::fs::create_dir_all(&out)
+            .map_err(|e| GraphifyError::IngestError(format!("create output dir: {e}")))?;
         let client = ReqwestHttpClient::new()?;
         let result = ingest::ingest(url, &out, &client, contributor)?;
         Ok(format!(
@@ -477,9 +480,8 @@ fn ingest_local(
     let out_dir = output
         .map(|p| config.resolve(p))
         .unwrap_or_else(|| root.join("graphify-out"));
-    std::fs::create_dir_all(&out_dir).map_err(|e| {
-        GraphifyError::ExportError(format!("create {}: {e}", out_dir.display()))
-    })?;
+    std::fs::create_dir_all(&out_dir)
+        .map_err(|e| GraphifyError::ExportError(format!("create {}: {e}", out_dir.display())))?;
 
     let mut graph = result.graph;
     if let Some(ref analysis) = result.analysis {
@@ -505,9 +507,7 @@ fn ingest_local(
 }
 
 /// File-level extractions without tree-sitter (same strategy as weaver graphify).
-fn build_extractions_from_detection(
-    detection: &detect::DetectionResult,
-) -> Vec<ExtractionResult> {
+fn build_extractions_from_detection(detection: &detect::DetectionResult) -> Vec<ExtractionResult> {
     let mut extractions: Vec<ExtractionResult> = Vec::new();
     let mut dir_entities: HashMap<String, Vec<(EntityId, String)>> = HashMap::new();
 
@@ -832,7 +832,10 @@ mod tests {
             default_graph: a.clone(),
         };
         let msg = graph_diff_paths(&cfg, &a, &b).unwrap();
-        assert!(msg.contains("no changes") || msg.contains("+nodes: 0"), "{msg}");
+        assert!(
+            msg.contains("no changes") || msg.contains("+nodes: 0"),
+            "{msg}"
+        );
     }
 
     #[test]

@@ -211,9 +211,7 @@ pub(crate) fn levenshtein(a: &str, b: &str) -> usize {
             } else {
                 1
             };
-            curr[j] = (prev[j] + 1)
-                .min(curr[j - 1] + 1)
-                .min(prev[j - 1] + cost);
+            curr[j] = (prev[j] + 1).min(curr[j - 1] + 1).min(prev[j - 1] + cost);
         }
         std::mem::swap(&mut prev, &mut curr);
     }
@@ -379,11 +377,7 @@ pub(crate) fn build_evidence(
 ) -> AlignmentEvidence {
     let ra = relation_summary(kg_a, &ea.id);
     let rb = relation_summary(kg_b, &eb.id);
-    let relation_summary = if ra == rb {
-        ra
-    } else {
-        format!("{ra}|{rb}")
-    };
+    let relation_summary = if ra == rb { ra } else { format!("{ra}|{rb}") };
     AlignmentEvidence {
         label_a: ea.label.clone(),
         label_b: eb.label.clone(),
@@ -479,7 +473,10 @@ mod tests {
 
         let d = local_label_embedding("zzzz_totally_unrelated_xyz", 64);
         let far = cosine_similarity(&a, &d);
-        assert!(far < sim, "unrelated should be farther: far={far} sim={sim}");
+        assert!(
+            far < sim,
+            "unrelated should be farther: far={far} sim={sim}"
+        );
     }
 
     #[test]

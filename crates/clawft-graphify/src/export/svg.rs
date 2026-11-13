@@ -38,12 +38,12 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
+use crate::GraphifyError;
 use crate::layout::layout_graph;
 use crate::layout::positioned::{PositionedEdge, PositionedGraph, PositionedNode};
 use crate::model::KnowledgeGraph;
 use crate::relationship::RelationType;
 use crate::topology::TopologySchema;
-use crate::GraphifyError;
 
 // ---------------------------------------------------------------------------
 // VOWL visual style (WebVOWL parity)
@@ -428,15 +428,15 @@ fn render_vowl_svg(graph: &PositionedGraph, ann: &VowlAnnotations) -> String {
 }
 
 fn resolve_node_owl(node: &PositionedNode, ann: &VowlAnnotations) -> (String, Vec<String>) {
-    let owl = ann
-        .node_owl
-        .get(&node.id)
-        .cloned()
-        .unwrap_or_else(|| match node.node_type.as_str() {
-            "constant" | "enum_" => "rdfs:Datatype".into(),
-            t if t.starts_with("owl:") || t.starts_with("rdfs:") => t.to_string(),
-            _ => "owl:Class".into(),
-        });
+    let owl =
+        ann.node_owl
+            .get(&node.id)
+            .cloned()
+            .unwrap_or_else(|| match node.node_type.as_str() {
+                "constant" | "enum_" => "rdfs:Datatype".into(),
+                t if t.starts_with("owl:") || t.starts_with("rdfs:") => t.to_string(),
+                _ => "owl:Class".into(),
+            });
     let attrs = ann.node_attrs.get(&node.id).cloned().unwrap_or_default();
     (owl, attrs)
 }
@@ -1027,10 +1027,7 @@ edges:
             svg.contains(r#"data-owl-type="rdfs:Datatype""#),
             "datatype nodes: {svg}"
         );
-        assert!(
-            svg.contains(r#"data-vowl-shape="rect""#),
-            "datatype → rect"
-        );
+        assert!(svg.contains(r#"data-vowl-shape="rect""#), "datatype → rect");
         assert!(svg.contains("#ffcc33"), "datatype yellow fill");
         assert!(
             svg.contains(r#"data-owl-type="owl:DatatypeProperty""#),
@@ -1063,16 +1060,16 @@ edges:
         ];
 
         for (name, kg) in cases {
-            let svg = to_svg_string(&kg, &schema, 720.0, 540.0)
-                .unwrap_or_else(|e| panic!("{name}: {e}"));
+            let svg =
+                to_svg_string(&kg, &schema, 720.0, 540.0).unwrap_or_else(|e| panic!("{name}: {e}"));
 
             // Structural invariants for every canonical ontology SVG.
-            assert!(
-                svg.starts_with("<?xml"),
-                "{name}: missing XML declaration"
-            );
+            assert!(svg.starts_with("<?xml"), "{name}: missing XML declaration");
             assert!(svg.contains("<svg "), "{name}: missing root svg");
-            assert!(svg.contains(r#"data-vowl="2""#), "{name}: missing VOWL flag");
+            assert!(
+                svg.contains(r#"data-vowl="2""#),
+                "{name}: missing VOWL flag"
+            );
             assert!(
                 svg.contains(r#"data-layer="nodes""#),
                 "{name}: missing nodes layer"
@@ -1081,14 +1078,8 @@ edges:
                 svg.contains(r#"data-layer="edges""#),
                 "{name}: missing edges layer"
             );
-            assert!(
-                svg.contains("class=\"vowl-node\""),
-                "{name}: no VOWL nodes"
-            );
-            assert!(
-                svg.contains("class=\"vowl-edge\""),
-                "{name}: no VOWL edges"
-            );
+            assert!(svg.contains("class=\"vowl-node\""), "{name}: no VOWL nodes");
+            assert!(svg.contains("class=\"vowl-edge\""), "{name}: no VOWL edges");
             // Every class shape must advertise its OWL type for tooling.
             let node_count = svg.matches("class=\"vowl-node\"").count();
             let typed = svg.matches("data-owl-type=").count();
@@ -1144,11 +1135,7 @@ edges:
     #[test]
     fn xml_special_chars_escaped_in_labels() {
         let mut kg = KnowledgeGraph::new();
-        let e = entity_with_meta(
-            "A&B<C>",
-            EntityType::Class,
-            serde_json::json!({}),
-        );
+        let e = entity_with_meta("A&B<C>", EntityType::Class, serde_json::json!({}));
         // Override label to include specials (entity name is used as label by helper).
         let mut e = e;
         e.label = "A&B<C>\"D".into();
