@@ -19,6 +19,9 @@ on:
       - 'fix/**'
       - 'chore/**'
       - 'docs/**'
+      # N25 (owner 2026-11-13): work lands on target-<version> branches; without this the
+      # gates (diff gate, reference drift, wasm, clippy, tests) never ran on them.
+      - 'target-*'
     paths-ignore:
       # Planning notes are not code and cannot break a build. Everything else —
       # including docs/ and *.md — still triggers, because pr-gates.yml has a
