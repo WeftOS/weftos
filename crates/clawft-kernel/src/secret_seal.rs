@@ -20,8 +20,10 @@
 //! need a key from an OS keystore or a sealed key file; that is not done
 //! here.
 
-use chacha20poly1305::aead::{Aead, AeadCore, KeyInit, OsRng, Payload};
+use chacha20poly1305::aead::rand_core::{CryptoRng, RngCore};
+use chacha20poly1305::aead::{Aead, KeyInit, OsRng, Payload};
 use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
+use zeroize::Zeroizing;
 
 /// Length of the XChaCha20 nonce prefixed to every sealed value.
 pub(crate) const NONCE_LEN: usize = 24;
@@ -32,7 +34,8 @@ pub(crate) const TAG_LEN: usize = 16;
 /// detail: the caller must not learn which byte or which check failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SealError {
-    /// Encryption failed (only possible for absurdly large inputs).
+    /// Encryption failed: the OS RNG could not supply a nonce, or the
+    /// input is absurdly large.
     Seal,
     /// The value is truncated, tampered, sealed under another key or
     /// bound to another slot.
@@ -55,24 +58,53 @@ pub(crate) struct SecretSeal {
 }
 
 impl SecretSeal {
-    /// Use a caller-supplied 256-bit key.
+    /// Use a caller-supplied 256-bit key. The 32 bytes are the key itself
+    /// (no KDF), so they must come from a CSPRNG or a real key store.
     pub(crate) fn from_key(key: &[u8; 32]) -> Self {
         Self {
             cipher: XChaCha20Poly1305::new(Key::from_slice(key)),
         }
     }
 
-    /// A fresh random key from the OS RNG, for this process only.
+    /// A fresh random key from the OS RNG, for this instance only.
+    ///
+    /// # Panics
+    ///
+    /// If the OS RNG fails, which only happens on a broken platform. The
+    /// infallible service constructors (`new_default`) rely on this; use
+    /// [`try_random_with`](Self::try_random_with) to handle the error.
     pub(crate) fn random() -> Self {
-        let key = XChaCha20Poly1305::generate_key(&mut OsRng);
-        Self {
-            cipher: XChaCha20Poly1305::new(&key),
+        match Self::try_random_with(&mut OsRng) {
+            Ok(seal) => seal,
+            Err(_) => panic!("OS RNG unavailable: cannot create a secret key"),
         }
+    }
+
+    /// A fresh random key from `rng`; an RNG failure is `SealError::Seal`.
+    /// The key bytes are zeroized once the cipher holds them.
+    pub(crate) fn try_random_with(rng: &mut (impl RngCore + CryptoRng)) -> Result<Self, SealError> {
+        let mut key = Zeroizing::new([0u8; 32]);
+        rng.try_fill_bytes(&mut key[..])
+            .map_err(|_| SealError::Seal)?;
+        Ok(Self::from_key(&key))
     }
 
     /// Seal `plaintext`, binding it to `slot`.
     pub(crate) fn seal(&self, slot: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, SealError> {
-        let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
+        self.seal_with(&mut OsRng, slot, plaintext)
+    }
+
+    /// [`seal`](Self::seal) with an explicit nonce source. An RNG failure is
+    /// returned as `SealError::Seal`, never a panic.
+    pub(crate) fn seal_with(
+        &self,
+        rng: &mut (impl RngCore + CryptoRng),
+        slot: &[u8],
+        plaintext: &[u8],
+    ) -> Result<Vec<u8>, SealError> {
+        let mut nonce = XNonce::default();
+        rng.try_fill_bytes(&mut nonce)
+            .map_err(|_| SealError::Seal)?;
         let ct = self
             .cipher
             .encrypt(
@@ -89,8 +121,13 @@ impl SecretSeal {
         Ok(out)
     }
 
-    /// Open a value sealed by [`seal`](Self::seal) for the same `slot`.
-    pub(crate) fn open(&self, slot: &[u8], sealed: &[u8]) -> Result<Vec<u8>, SealError> {
+    /// Open a value sealed by [`seal`](Self::seal) for the same `slot`. The
+    /// plaintext is zeroized when the caller drops it.
+    pub(crate) fn open(
+        &self,
+        slot: &[u8],
+        sealed: &[u8],
+    ) -> Result<Zeroizing<Vec<u8>>, SealError> {
         if sealed.len() < NONCE_LEN + TAG_LEN {
             return Err(SealError::Open);
         }
@@ -100,6 +137,7 @@ impl SecretSeal {
                 XNonce::from_slice(nonce),
                 Payload { msg: ct, aad: slot },
             )
+            .map(Zeroizing::new)
             .map_err(|_| SealError::Open)
     }
 }
@@ -114,7 +152,7 @@ mod tests {
         for pt in [&b""[..], b"x", b"a longer secret value with spaces"] {
             let sealed = s.seal(b"ns/k", pt).unwrap();
             assert_eq!(sealed.len(), NONCE_LEN + pt.len() + TAG_LEN);
-            assert_eq!(s.open(b"ns/k", &sealed).unwrap(), pt);
+            assert_eq!(&s.open(b"ns/k", &sealed).unwrap()[..], pt);
         }
     }
 
@@ -235,5 +273,74 @@ mod tests {
         let b = SecretSeal::from_key(&[0x5A; 32]);
         let sealed = a.seal(b"ns/k", b"shared").unwrap();
         assert_eq!(&b.open(b"ns/k", &sealed).unwrap()[..], b"shared");
+    }
+
+    // Card 10a2eb4a item 5: RNG failures are errors, not panics.
+    struct FailRng;
+    impl RngCore for FailRng {
+        fn next_u32(&mut self) -> u32 {
+            panic!("infallible RNG path used")
+        }
+        fn next_u64(&mut self) -> u64 {
+            panic!("infallible RNG path used")
+        }
+        fn fill_bytes(&mut self, _: &mut [u8]) {
+            panic!("infallible RNG path used")
+        }
+        fn try_fill_bytes(&mut self, _: &mut [u8]) -> Result<(), rand_core::Error> {
+            let code = std::num::NonZeroU32::new(rand_core::Error::CUSTOM_START).unwrap();
+            Err(rand_core::Error::from(code))
+        }
+    }
+    impl CryptoRng for FailRng {}
+
+    /// Yields the KAT nonce, so `seal_with` output is deterministic.
+    struct FixedRng;
+    impl RngCore for FixedRng {
+        fn next_u32(&mut self) -> u32 {
+            unreachable!()
+        }
+        fn next_u64(&mut self) -> u64 {
+            unreachable!()
+        }
+        fn fill_bytes(&mut self, dest: &mut [u8]) {
+            dest.copy_from_slice(&KAT_NONCE[..dest.len()]);
+        }
+        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand_core::Error> {
+            self.fill_bytes(dest);
+            Ok(())
+        }
+    }
+    impl CryptoRng for FixedRng {}
+
+    use chacha20poly1305::aead::rand_core;
+
+    #[test]
+    fn rng_failure_while_sealing_is_an_error() {
+        let s = SecretSeal::from_key(&[7u8; 32]);
+        assert_eq!(s.seal_with(&mut FailRng, b"ns/k", b"v"), Err(SealError::Seal));
+    }
+
+    #[test]
+    fn rng_failure_while_making_a_key_is_an_error() {
+        assert!(matches!(
+            SecretSeal::try_random_with(&mut FailRng),
+            Err(SealError::Seal)
+        ));
+    }
+
+    #[test]
+    fn caller_key_seals_known_answer_vector() {
+        let s = SecretSeal::from_key(&KAT_KEY);
+        let sealed = s.seal_with(&mut FixedRng, KAT_AAD, KAT_PLAINTEXT).unwrap();
+        assert_eq!(sealed, kat_sealed());
+    }
+
+    #[test]
+    fn opened_plaintext_is_zeroizing() {
+        let s = SecretSeal::from_key(&[7u8; 32]);
+        let sealed = s.seal(b"ns/k", b"v").unwrap();
+        let opened: Zeroizing<Vec<u8>> = s.open(b"ns/k", &sealed).unwrap();
+        assert_eq!(&opened[..], b"v");
     }
 }

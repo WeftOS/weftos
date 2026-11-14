@@ -20,6 +20,7 @@ use crate::health::HealthStatus;
 use crate::process::Pid;
 use crate::secret_seal::SecretSeal;
 use crate::service::{ServiceType, SystemService};
+use zeroize::Zeroizing;
 
 #[cfg(feature = "exochain")]
 use crate::chain::ChainManager;
@@ -115,6 +116,43 @@ pub struct SecretRef {
 }
 
 // ---------------------------------------------------------------------------
+// Slot names
+// ---------------------------------------------------------------------------
+
+/// Whether `part` may be used as a config/secret namespace or key.
+///
+/// Every store is keyed by `"{namespace}/{key}"`, and the same string is the
+/// AEAD associated data for secrets. If either part could contain `/`, then
+/// `("a/b", "c")` and `("a", "b/c")` would be one slot, and a write through
+/// one name would replace the value and the `scoped_to` ACL of the other
+/// (card 10a2eb4a). So a part must be non-empty, must not be `.` or `..`,
+/// and must not contain `/`, `\` or any control character. With that rule
+/// the joined string splits back into exactly one `(namespace, key)` pair.
+pub fn is_valid_slot_part(part: &str) -> bool {
+    !part.is_empty()
+        && part != "."
+        && part != ".."
+        && !part
+            .chars()
+            .any(|c| c == '/' || c == '\\' || c.is_control())
+}
+
+/// Build the slot string for `(namespace, key)`, or reject the pair.
+fn slot(namespace: &str, key: &str) -> Result<String, KernelError> {
+    if !is_valid_slot_part(namespace) {
+        return Err(KernelError::Config(
+            "invalid namespace: must be non-empty, not '.' or '..', and contain no '/', '\\' or control characters".into(),
+        ));
+    }
+    if !is_valid_slot_part(key) {
+        return Err(KernelError::Config(
+            "invalid key: must be non-empty, not '.' or '..', and contain no '/', '\\' or control characters".into(),
+        ));
+    }
+    Ok(format!("{namespace}/{key}"))
+}
+
+// ---------------------------------------------------------------------------
 // ConfigService
 // ---------------------------------------------------------------------------
 
@@ -124,6 +162,9 @@ pub struct SecretRef {
 /// secrets at `/kernel/secrets/{namespace}/{key}`, all in memory. Secret
 /// values are sealed with XChaCha20-Poly1305 and bound to their slot.
 /// Supports change notification via subscriptions.
+///
+/// Namespaces and keys must pass [`is_valid_slot_part`]: writes with any
+/// other name fail with `KernelError::Config`, reads return nothing.
 pub struct ConfigService {
     /// Config store: "namespace/key" -> value.
     configs: DashMap<String, serde_json::Value>,
@@ -135,7 +176,7 @@ pub struct ConfigService {
     secret_refs: DashMap<String, SecretRef>,
     /// Change subscribers: namespace -> list of subscription queues.
     subscribers: DashMap<String, Vec<Arc<RwLock<Vec<ConfigChange>>>>>,
-    /// AEAD key for secret values (caller-supplied or per-process random).
+    /// AEAD key for secret values (caller-supplied or per-instance random).
     seal: SecretSeal,
     /// Change log for auditing.
     change_log: RwLock<Vec<ConfigChange>>,
@@ -153,11 +194,13 @@ impl ConfigService {
     /// Create a new config service whose secrets are sealed under the given
     /// 256-bit key. The key never leaves this struct.
     pub fn new(encryption_key: [u8; 32]) -> Self {
-        Self::with_seal(SecretSeal::from_key(&encryption_key))
+        let key = Zeroizing::new(encryption_key);
+        Self::with_seal(SecretSeal::from_key(&key))
     }
 
     /// Create a config service with a fresh random secret key for this
-    /// process. Secrets are in memory only, so nothing needs the key later.
+    /// instance (each call draws a new key). Secrets are in memory only, so
+    /// nothing needs the key later.
     pub fn new_default() -> Self {
         Self::with_seal(SecretSeal::random())
     }
@@ -203,6 +246,8 @@ impl ConfigService {
         value: serde_json::Value,
         changed_by: Pid,
     ) -> Result<(), KernelError> {
+        let config_key = slot(namespace, key)?;
+
         // Governance gate: config changes are gated.
         #[cfg(feature = "exochain")]
         if let Some(ref gate) = self.governance_gate {
@@ -224,7 +269,6 @@ impl ConfigService {
             }
         }
 
-        let config_key = format!("{namespace}/{key}");
         let old_value = self.configs.get(&config_key).map(|v| v.value().clone());
         self.configs.insert(config_key, value.clone());
 
@@ -264,12 +308,14 @@ impl ConfigService {
 
     /// Get a configuration value.
     pub fn get(&self, namespace: &str, key: &str) -> Option<serde_json::Value> {
-        let config_key = format!("{namespace}/{key}");
+        let config_key = slot(namespace, key).ok()?;
         self.configs.get(&config_key).map(|v| v.value().clone())
     }
 
     /// Delete a configuration value.
     pub fn delete(&self, namespace: &str, key: &str, changed_by: Pid) -> Result<(), KernelError> {
+        let config_key = slot(namespace, key)?;
+
         // Governance gate: config deletion is gated.
         #[cfg(feature = "exochain")]
         if let Some(ref gate) = self.governance_gate {
@@ -291,7 +337,6 @@ impl ConfigService {
             }
         }
 
-        let config_key = format!("{namespace}/{key}");
         let old_value = self.configs.remove(&config_key).map(|(_, v)| v);
 
         let change = ConfigChange {
@@ -322,6 +367,9 @@ impl ConfigService {
 
     /// List all config keys in a namespace.
     pub fn list_keys(&self, namespace: &str) -> Vec<String> {
+        if !is_valid_slot_part(namespace) {
+            return Vec::new();
+        }
         let prefix = format!("{namespace}/");
         self.configs
             .iter()
@@ -340,7 +388,7 @@ impl ConfigService {
         value: ConfigValue,
         changed_by: Pid,
     ) -> Result<(), KernelError> {
-        let config_key = format!("{namespace}/{key}");
+        let config_key = slot(namespace, key)?;
         let json_value = value.to_json();
 
         // Also store in the legacy JSON map for backward compatibility.
@@ -374,12 +422,15 @@ impl ConfigService {
 
     /// Retrieve a typed configuration entry.
     pub fn get_typed(&self, namespace: &str, key: &str) -> Option<ConfigEntry> {
-        let config_key = format!("{namespace}/{key}");
+        let config_key = slot(namespace, key).ok()?;
         self.entries.get(&config_key).map(|e| e.value().clone())
     }
 
     /// List all typed entries in a namespace.
     pub fn list(&self, namespace: &str) -> Vec<ConfigEntry> {
+        if !is_valid_slot_part(namespace) {
+            return Vec::new();
+        }
         let prefix = format!("{namespace}/");
         self.entries
             .iter()
@@ -401,6 +452,8 @@ impl ConfigService {
         key: &str,
         changed_by: Pid,
     ) -> Result<bool, KernelError> {
+        let config_key = slot(namespace, key)?;
+
         // Governance gate: typed config deletion is gated.
         #[cfg(feature = "exochain")]
         if let Some(ref gate) = self.governance_gate {
@@ -422,7 +475,6 @@ impl ConfigService {
             }
         }
 
-        let config_key = format!("{namespace}/{key}");
         let removed = self.entries.remove(&config_key).is_some();
         // Also remove from legacy store.
         let old_value = self.configs.remove(&config_key).map(|(_, v)| v);
@@ -478,6 +530,8 @@ impl ConfigService {
         value: &[u8],
         scoped_to: Vec<Pid>,
     ) -> Result<(), KernelError> {
+        let secret_key = slot(namespace, key)?;
+
         // Governance gate: secret storage is a critical action.
         #[cfg(feature = "exochain")]
         if let Some(ref gate) = self.governance_gate {
@@ -497,8 +551,6 @@ impl ConfigService {
                 )));
             }
         }
-
-        let secret_key = format!("{namespace}/{key}");
 
         let sealed = self
             .seal
@@ -531,13 +583,14 @@ impl ConfigService {
 
     /// Retrieve a secret (opened). Checks PID authorization and expiry, and
     /// fails if the sealed value was tampered with or moved between slots.
+    /// The returned plaintext is zeroized when dropped.
     pub fn get_secret(
         &self,
         namespace: &str,
         key: &str,
         requester_pid: Pid,
-    ) -> Result<Vec<u8>, KernelError> {
-        let secret_key = format!("{namespace}/{key}");
+    ) -> Result<Zeroizing<Vec<u8>>, KernelError> {
+        let secret_key = slot(namespace, key)?;
 
         let secret_ref = self
             .secret_refs
@@ -690,7 +743,7 @@ mod tests {
         svc.set_secret("creds", "api_key", b"secret123", vec![pid(1)])
             .unwrap();
         let val = svc.get_secret("creds", "api_key", pid(1)).unwrap();
-        assert_eq!(val, b"secret123");
+        assert_eq!(&val[..], b"secret123");
     }
 
     #[test]
@@ -723,7 +776,7 @@ mod tests {
         let svc = ConfigService::new_default();
         svc.set_secret("open", "key", b"val", vec![]).unwrap();
         let val = svc.get_secret("open", "key", pid(42)).unwrap();
-        assert_eq!(val, b"val");
+        assert_eq!(&val[..], b"val");
     }
 
     #[test]
@@ -904,7 +957,7 @@ mod tests {
             );
         }
         svc.secrets.insert("creds/k".into(), original);
-        assert_eq!(svc.get_secret("creds", "k", pid(1)).unwrap(), b"tamper-me");
+        assert_eq!(&svc.get_secret("creds", "k", pid(1)).unwrap()[..], b"tamper-me");
     }
 
     #[test]

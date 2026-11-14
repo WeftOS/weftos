@@ -21,6 +21,7 @@ use crate::health::HealthStatus;
 use crate::process::Pid;
 use crate::secret_seal::SecretSeal;
 use crate::service::{ServiceType, SystemService};
+use zeroize::Zeroizing;
 
 #[cfg(feature = "exochain")]
 use crate::chain::ChainManager;
@@ -200,7 +201,7 @@ pub struct AuthService {
     auth_tokens: DashMap<String, AuthToken>,
     /// Audit log.
     audit_log: std::sync::RwLock<Vec<AuditEntry>>,
-    /// AEAD key for credential values (caller-supplied or per-process random).
+    /// AEAD key for credential values (caller-supplied or per-instance random).
     seal: SecretSeal,
     /// Monotonic token counter.
     token_counter: AtomicU64,
@@ -231,10 +232,12 @@ impl AuthService {
     /// Create a new AuthService whose credential values are sealed under the
     /// given 256-bit key. The key never leaves this struct.
     pub fn new(encryption_key: [u8; 32]) -> Self {
-        Self::with_seal(SecretSeal::from_key(&encryption_key))
+        let key = Zeroizing::new(encryption_key);
+        Self::with_seal(SecretSeal::from_key(&key))
     }
 
-    /// Create an AuthService with a fresh random key for this process.
+    /// Create an AuthService with a fresh random key for this instance
+    /// (each call draws a new key).
     /// Credentials are in memory only, so nothing needs the key later.
     pub fn new_default() -> Self {
         Self::with_seal(SecretSeal::random())
@@ -465,7 +468,7 @@ impl AuthService {
                 "auth",
                 crate::chain::EVENT_KIND_AUTH_TOKEN_ISSUE,
                 Some(serde_json::json!({
-                    "token_id": token.token_id,
+                    "token_fp": Self::token_fingerprint(&token.token_id),
                     "credential_name": request.credential_name,
                     "agent_id": request.agent_id,
                     "ttl_secs": request.ttl_secs,
@@ -474,7 +477,7 @@ impl AuthService {
         }
 
         info!(
-            token_id = %token.token_id,
+            token_fp = %Self::token_fingerprint(&token.token_id),
             credential = %request.credential_name,
             agent = %request.agent_id,
             ttl_secs = request.ttl_secs,
@@ -519,7 +522,7 @@ impl AuthService {
             use crate::governance::{GateEffectKind, with_effect_context};
             let ctx = with_effect_context(
                 serde_json::json!({
-                    "token_id": token_id,
+                    "token_fp": Self::token_fingerprint(token_id),
                 }),
                 &GateEffectKind::AuthTokenRevoke.effect_vector(),
             );
@@ -539,7 +542,7 @@ impl AuthService {
                 "auth",
                 crate::chain::EVENT_KIND_AUTH_TOKEN_REVOKE,
                 Some(serde_json::json!({
-                    "token_id": token_id,
+                    "token_fp": Self::token_fingerprint(token_id),
                 })),
             );
         }
@@ -556,6 +559,16 @@ impl AuthService {
     }
 
     // ── SHA-256 hashed credential operations ─────────────────────
+
+    /// Short, non-reversible fingerprint of a bearer token id for logs,
+    /// chain events and gate contexts: the first 8 bytes of
+    /// SHA-256(token_id), as 16 hex characters. A token id is the bearer
+    /// handle that `validate_token` / `check_scope` accept, so it must never
+    /// be logged or persisted itself (card 10a2eb4a).
+    pub fn token_fingerprint(token_id: &str) -> String {
+        let digest = Sha256::digest(token_id.as_bytes());
+        digest[..8].iter().map(|b| format!("{b:02x}")).collect()
+    }
 
     /// Compute the SHA-256 hash of a raw credential.
     fn sha256_hash(data: &[u8]) -> Vec<u8> {
@@ -679,12 +692,16 @@ impl AuthService {
                 Some(serde_json::json!({
                     "agent_id": agent_id,
                     "success": true,
-                    "token_id": token.token_id,
+                    "token_fp": Self::token_fingerprint(&token.token_id),
                 })),
             );
         }
 
-        info!(agent_id, token_id = %token.token_id, "agent authenticated");
+        info!(
+            agent_id,
+            token_fp = %Self::token_fingerprint(&token.token_id),
+            "agent authenticated"
+        );
         Ok(token)
     }
 
@@ -739,7 +756,7 @@ impl AuthService {
     /// Open a stored credential value. Nothing outside tests reads raw
     /// values (agents get tokens, not credentials), so this is test-only.
     #[cfg(test)]
-    fn open_credential(&self, name: &str) -> Result<Vec<u8>, KernelError> {
+    fn open_credential(&self, name: &str) -> Result<Zeroizing<Vec<u8>>, KernelError> {
         let cred = self
             .credentials
             .get(name)
@@ -1198,9 +1215,9 @@ mod tests {
         let svc = AuthService::new([0xAB; 32]);
         svc.register_credential("c", CredentialType::ApiKey, b"first", vec![])
             .unwrap();
-        assert_eq!(svc.open_credential("c").unwrap(), b"first");
+        assert_eq!(&svc.open_credential("c").unwrap()[..], b"first");
         svc.rotate_credential("c", b"second").unwrap();
-        assert_eq!(svc.open_credential("c").unwrap(), b"second");
+        assert_eq!(&svc.open_credential("c").unwrap()[..], b"second");
     }
 
     #[test]

@@ -1639,6 +1639,7 @@ dependencies = [
  "weftos-leaf-types",
  "weftos-pq-sign",
  "wiremock",
+ "zeroize",
 ]
 
 [[package]]

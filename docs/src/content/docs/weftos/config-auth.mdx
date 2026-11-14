@@ -8,11 +8,13 @@ Two kernel services provide runtime configuration and credential handling for ag
 **Source**: `crates/clawft-kernel/src/config_service.rs`, `crates/clawft-kernel/src/auth_service.rs`
 **Phase**: K5
 
-> **Security status.** Secret and credential values held by both services are sealed with XChaCha20-Poly1305 (`secret_seal.rs`): a fresh random 192-bit nonce per value, stored with the ciphertext, and the slot name (`namespace/key` or the credential name) as associated data, so a tampered, truncated or moved value fails to open. The key is the 32-byte key passed to `new`, or a per-process random key from `new_default()`. Values stay in process memory only and are not persisted, so the key lives beside the ciphertext: this does not protect against an attacker who can read the whole process memory, and it is not encryption at rest. Persisting either store would need a key from an OS keystore or a sealed key file, which these services do not have.
+> **Security status.** Secret and credential values held by both services are sealed with XChaCha20-Poly1305 (`secret_seal.rs`): a fresh random 192-bit nonce per value, stored with the ciphertext, and the slot name (`namespace/key` or the credential name) as associated data, so a tampered, truncated or moved value fails to open. The key is the 32-byte key passed to `new`, or a random key drawn by each `new_default()` call (per instance, not shared). Opened plaintext is returned as `Zeroizing<Vec<u8>>`, cleared on drop. Values stay in process memory only and are not persisted, so the key lives beside the ciphertext: this does not protect against an attacker who can read the whole process memory, and it is not encryption at rest. Persisting either store would need a key from an OS keystore or a sealed key file, which these services do not have.
 
 ## ConfigService
 
 Namespaced key-value configuration with change notification and a secret area. Mutating calls take the PID of the caller (`changed_by`), are gated by the governance gate when one is attached (actions `config.set` and the secret and delete equivalents), and with `exochain` append `config` events to the chain.
+
+Every store is keyed by `namespace/key`, so namespaces and keys must pass `is_valid_slot_part`: non-empty, not `.` or `..`, and free of `/`, `\` and control characters. Writes with any other name fail with `KernelError::Config` before the governance gate runs; reads and lists return nothing. Without this rule `("a/b", "c")` and `("a", "b/c")` were one slot, and a write through one name replaced the other's value and `scoped_to` list.
 
 ### Values
 
@@ -37,7 +39,7 @@ pub struct ConfigEntry {
 
 ```rust
 let config = ConfigService::new(encryption_key);        // [u8; 32]
-// or ConfigService::new_default()                     // per-process random key
+// or ConfigService::new_default()                     // per-instance random key
 
 // JSON values
 config.set("mesh", "peers", json!(["node-a"]), caller_pid)?;
@@ -105,6 +107,8 @@ pub struct IssuedToken {
 ### Path 2: hashed agent credentials
 
 `register_hashed_credential(agent_id, raw_credential, scopes)` stores only the SHA-256 hash. `authenticate(agent_id, raw_credential)` compares hashes and returns an `AuthToken` with the registered scopes and a fixed one-hour expiry. `validate_auth_token`, `revoke_auth_token` and `check_scope(token_id, scope)` follow. A failed attempt is audited and, with `exochain`, appended as an `auth` chain event.
+
+A `token_id` is a bearer handle: whoever holds it passes `validate_token` and `check_scope`. Logs, chain events and gate contexts therefore carry `token_fp` (`AuthService::token_fingerprint`: the first 8 bytes of SHA-256 of the id, as hex) and never the id itself.
 
 ```rust
 pub struct AuthToken {
