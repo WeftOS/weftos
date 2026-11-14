@@ -7,7 +7,7 @@ use weftos_worldmodel_core::{Action, Latent, Predictor, LATENT_DIM};
 use super::jepa::{train_jepa, FrameTransition, JepaTrainConfig, JepaTrainer};
 use super::synthetic::{generate, SyntheticConfig};
 use super::{
-    candle_default_device, metal_supported, AdaLnConfig, AdaLnPredictor, CandleVitEncoder, ComputeDevice, VitTinyConfig,
+    candle_default_device, metal_math_is_precise, metal_supported, AdaLnConfig, AdaLnPredictor, CandleVitEncoder, ComputeDevice, VitTinyConfig,
 };
 
 fn metal() -> Device {
@@ -138,4 +138,17 @@ fn adaln_training_runs_on_metal() {
     assert!(r.predictor.device().unwrap().is_metal());
     let s = &samples[0];
     assert!(r.predictor.predict(&s.z_t, &s.action).is_ok());
+}
+
+/// Precise math comes from `.cargo/config.toml` `[env]`, not from code. This reads the variable
+/// back: precise unless the caller exported an explicit truthy value, which cargo leaves alone.
+#[test]
+fn metal_math_default_is_precise_via_cargo_config_and_explicit_one_is_respected() {
+    let raw = std::env::var("CANDLE_METAL_ENABLE_FAST_MATH")
+        .expect("unset: run under cargo so .cargo/config.toml [env] applies, or export the variable");
+    let explicit_fast = matches!(raw.to_ascii_lowercase().as_str(), "true" | "t" | "yes" | "y" | "1");
+    assert_eq!(metal_math_is_precise(), !explicit_fast, "raw value {raw:?}");
+    if !explicit_fast {
+        assert!(matches!(raw.as_str(), "0" | "false" | "f" | "no" | "n"), "raw value {raw:?}");
+    }
 }
