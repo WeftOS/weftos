@@ -150,9 +150,11 @@ fn default_regression(device: super::ComputeDevice) {
     assert!(r.eval.collapsed_coords.is_empty(), "collapsed {:?}", r.eval.collapsed_coords);
     assert!(r.held_out_sigreg_health >= 0.85, "held-out health {}", r.held_out_sigreg_health);
     // The CPU run is deterministic and keeps lane J's margin on the θ pairing. A Metal run is
-    // not bit-identical (GPU summation order, fast-math shaders), so its trajectory differs; on
-    // seeds 21 and 23 the θ pairing lands 5 % under linear instead of the 10 % margin, while the
-    // ξ pairing, which matches what training optimises, beats both baselines on every seed.
+    // not bit-identical (reductions, fast-math exp/sqrt and erf differ by about one rounding;
+    // the matmuls agree), and training amplifies that like any last-bit perturbation (lane P):
+    // on seeds 21 and 23 the θ pairing lands 5 % under linear instead of the 10 % margin, while
+    // the ξ pairing, which matches what training optimises, beats both baselines on every seed.
+    // Lane P also measured the CPU θ pass on seed 21 at 2 of 5 under one-ulp init perturbations.
     let e = if strict_theta { &r.eval } else { &r.eval_target };
     assert!(e.beats_baselines, "model {} vs copy-last {} / linear {}", e.model_err, e.baselines.copy_last, e.baselines.linear);
     // The gate's probe (beats copy-last, owner 2026-11-14) must pass; temporal straightening still vetoes.

@@ -83,13 +83,31 @@ Single-frame inference is launch-bound: the small AdaLN is faster on CPU. Traini
 because the work per launch grows with the batch. The default JEPA regression (288 steps,
 `std` fixture, seed 21, release) takes 17.9 s on Metal against 75 s on CPU.
 
-**Accuracy caveat.** Metal is not bit-identical to CPU (GPU summation order, fast-math
-shaders), so a training run takes a different trajectory. On the same regression, held-out
-participation ratio is 10.07 / 9.93 / 9.98 on seeds 21 / 22 / 23 (CPU 10.63 / 9.97), with 0
-collapsed coordinates. The AdaLN error against the θ pairing beats both baselines by the
-required margin on seed 22 only (CPU: seeds 21 and 22); on seeds 21 and 23 it lands 5 %
-under linear. The ξ pairing beats both baselines on every Metal seed. The ignored Metal
-regression therefore asserts the ξ pairing, while the CPU one asserts θ.
+**Accuracy caveat.** Metal is not bit-identical to CPU, so a training run takes a different
+trajectory. On the same regression, held-out participation ratio is 10.07 / 9.93 / 9.98 on
+seeds 21 / 22 / 23 (CPU 10.63 / 9.97), with 0 collapsed coordinates. The AdaLN error against
+the θ pairing beats both baselines by the required margin on seed 22 only (CPU: seeds 21 and
+22); on seeds 21 and 23 it lands 5 % under linear. The ξ pairing beats both baselines on every
+Metal seed. The ignored Metal regression therefore asserts the ξ pairing, while the CPU one
+asserts θ.
+
+Why (lane P drift study, `candle/drift_tests.rs` and `candle/drift_chaos_tests.rs`):
+
+- The matmuls are bit-identical on every shape these models use (depth k ≤ 768). candle's CPU
+  gemm and Metal's MLX gemm both form each output as one F32 FMA chain in k order. The drift
+  comes from reductions (LayerNorm, softmax, mean-pool, the regulariser's batch statistics),
+  from `exp` and `sqrt` under fast math, and from Metal's polynomial `erf`. Each is about 1e-7
+  relative, one f32 rounding. Against an f64 reference neither backend is consistently closer.
+- Training amplifies any such difference. From identical init, CPU and Metal θ diverge at the
+  same rate as CPU against CPU with a one-ulp init perturbation, about 7 % per step on the
+  default config.
+- So the θ margin of one 288-step run is close to a coin flip near the 0.9 bar. Under one-ulp
+  init perturbations CPU passes 9 of 13 runs (seed 21: 2 of 5) and Metal 31 of 39. The
+  unperturbed CPU seed 21 run happens to pass.
+- Off-by-default knobs: `JepaTrainConfig::numerics` (`ReduceMode::Host` runs the loss-side
+  reductions on CPU, `ReduceMode::Pairwise` uses fixed-order sums) and candle's
+  `CANDLE_METAL_ENABLE_FAST_MATH=0`. None moves the mean θ ratio. Fast math off costs no time
+  and passed 29 of 30 perturbed runs, which is not significant against native (p ≈ 0.07).
 
 ## Candle models (feature `candle`)
 
