@@ -1,0 +1,4 @@
+[{"n":"temperature","v":21.4,"proof_":"MEASURED","u":"Cel","t":0,"sigma":0.3,"entity":"space:bedroom","bn":"sen-temp-1/","bt":1759500000}]
+[{"n":"temperature","v":21.4,"proof_":"MEASURED","u":"Cel","t":0,"bn":"sen-temp-1/","bt":1759500000},{"n":"humidity","v":48.2,"proof_":"MEASURED","u":"%RH","t":0},{"n":"pressure","v":101325.0,"proof_":"CODE","u":"Pa","t":0}]
+[{"n":"humidity","v":48.2,"proof_":"MEASURED","u":"%RH","t":0,"bn":"sen-env-1/","bt":1759500000}]
+[{"n":"heart_rate","v":62.0,"proof_":"MEASURED","u":"beat/min","t":0,"entity":"track:7","bn":"mmwave-1/","bt":1759500000}]
