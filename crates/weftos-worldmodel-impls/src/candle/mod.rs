@@ -76,14 +76,49 @@ pub const fn metal_supported() -> bool {
 /// Whether candle will compile Metal shaders with precise math, read from
 /// `CANDLE_METAL_ENABLE_FAST_MATH` the same way candle-metal-kernels does (unset means fast).
 ///
-/// The workspace `.cargo/config.toml` `[env]` sets the variable to `0`, so under `cargo run`,
-/// `cargo test` and `cargo bench` this is `true` unless the caller exports `=1`. A binary started
-/// outside cargo must have its launcher set the variable before the first Metal device exists.
-/// The crate cannot set it itself: `std::env::set_var` is `unsafe` in edition 2024.
+/// With the `metal` feature this crate defaults the variable to `0` itself before it opens its
+/// first Metal device (see `ensure_metal_precise_math_default`), and the workspace
+/// `.cargo/config.toml` `[env]` sets it too under cargo. Before either has run, an unset
+/// variable reads as fast math here, exactly as candle would see it.
 pub fn metal_math_is_precise() -> bool {
     !std::env::var("CANDLE_METAL_ENABLE_FAST_MATH")
         .map(|v| matches!(v.to_ascii_lowercase().as_str(), "true" | "t" | "yes" | "y" | "1"))
         .unwrap_or(true)
+}
+
+/// The value to install for `CANDLE_METAL_ENABLE_FAST_MATH` given what the environment holds:
+/// `Some("0")` (precise math) only when nothing is set, `None` (leave it alone) otherwise.
+#[cfg(feature = "metal")]
+fn precise_math_default_for(current: Option<&std::ffi::OsStr>) -> Option<&'static str> {
+    current.is_none().then_some("0")
+}
+
+/// Default Metal shader compilation to precise math, once per process, unless the caller already
+/// chose a value.
+///
+/// candle-metal-kernels 0.11.1 reads `CANDLE_METAL_ENABLE_FAST_MATH` when it compiles the first
+/// shader library, that is at first Metal device use, so this must run before that. Both Metal
+/// device creation sites in this crate ([`candle_default_device`] and [`ComputeDevice::resolve`])
+/// call it first. A value already in the environment, including `1` to re-enable fast math, is
+/// never overridden. Idempotent (a [`std::sync::Once`]).
+///
+/// A host that creates threads before its first Metal device should call this from `main`
+/// first, before spawning anything: setting an environment variable is only sound while no
+/// other thread reads or writes the environment.
+#[cfg(feature = "metal")]
+pub fn ensure_metal_precise_math_default() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let current = std::env::var_os("CANDLE_METAL_ENABLE_FAST_MATH");
+        if let Some(value) = precise_math_default_for(current.as_deref()) {
+            // SAFETY: the single `set_var` in this crate, owner-approved 2026-11-14 12:23 ET.
+            // It runs once, before any Metal device or shader library exists and before this
+            // crate spawns a thread; a host that already has threads must call this function
+            // from `main` first (see the function doc). A value already present is never
+            // overridden, so this only fills the unset case.
+            unsafe { std::env::set_var("CANDLE_METAL_ENABLE_FAST_MATH", value) };
+        }
+    });
 }
 
 /// The best device available: Metal GPU 0 with the `metal` feature, otherwise CPU.
@@ -93,6 +128,7 @@ pub fn metal_math_is_precise() -> bool {
 pub fn candle_default_device() -> Device {
     #[cfg(feature = "metal")]
     {
+        ensure_metal_precise_math_default();
         match Device::new_metal(0) {
             Ok(d) => return d,
             Err(e) => eprintln!("weftos-worldmodel-impls: metal device unavailable ({e}); falling back to CPU"),
@@ -122,7 +158,10 @@ impl ComputeDevice {
             Self::Cpu => Ok(Device::Cpu),
             Self::Auto => Ok(candle_default_device()),
             #[cfg(feature = "metal")]
-            Self::Metal => Ok(Device::new_metal(0)?),
+            Self::Metal => {
+                ensure_metal_precise_math_default();
+                Ok(Device::new_metal(0)?)
+            }
             #[cfg(not(feature = "metal"))]
             Self::Metal => invalid("ComputeDevice::Metal needs the `metal` feature"),
         }

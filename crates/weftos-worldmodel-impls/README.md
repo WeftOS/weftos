@@ -92,15 +92,20 @@ Metal seed. The single-run regressions therefore assert the ξ pairing on Metal 
 the ensemble regression below replaces both with one rule.
 
 **Math mode.** Metal shaders are compiled with precise math (relaxed mode, precise functions)
-by default, not candle's fast math. The workspace `.cargo/config.toml` sets
-`CANDLE_METAL_ENABLE_FAST_MATH = "0"` under `[env]`, so `cargo run`, `test` and `bench` get it.
+by default, not candle's fast math. The crate does this in code: `ensure_metal_precise_math_default()`
+(feature `metal`, one `std::sync::Once`) sets `CANDLE_METAL_ENABLE_FAST_MATH=0` when the variable is
+unset, and both Metal device creation sites call it before `Device::new_metal`. So binaries started
+outside cargo, such as the service and cogs, get precise math too. A value already in the
+environment is never overridden. The workspace `.cargo/config.toml` `[env]` entry stays as
+belt-and-braces for `cargo run`, `test` and `bench`.
 Why: lane P measured 29 of 30 perturbed θ passes with it off against 31 of 39 on native Metal
 (Fisher p 0.067), the same mean ratio and the same wall time, so it costs nothing. To turn
-fast math back on, export `CANDLE_METAL_ENABLE_FAST_MATH=1` (cargo does not overwrite a
-variable that is already set). A binary run outside cargo must have its launcher set the
-variable before the first Metal device is created; `metal_math_is_precise()` reports what
-candle will read. The crate cannot set it in code, because `std::env::set_var` is `unsafe`
-in edition 2024 and the diff gate rejects new `unsafe` without an owner approval row.
+fast math back on, put `CANDLE_METAL_ENABLE_FAST_MATH=1` in the environment before the process
+starts (cargo and the crate both leave a set value alone). `metal_math_is_precise()` reports what
+candle will read. The single `unsafe { set_var }` has an owner approval row in
+`config/diff-gate-approvals.toml` (2026-11-14 12:23 ET). A host that spawns threads before its
+first Metal device should call `ensure_metal_precise_math_default()` first thing in `main`,
+because mutating the environment is only sound while no other thread touches it.
 
 Why (lane P drift study, `candle/drift_tests.rs` and `candle/drift_chaos_tests.rs`):
 
