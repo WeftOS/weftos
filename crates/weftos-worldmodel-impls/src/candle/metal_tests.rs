@@ -7,7 +7,7 @@ use weftos_worldmodel_core::{Action, Latent, Predictor, LATENT_DIM};
 use super::jepa::{train_jepa, FrameTransition, JepaTrainConfig, JepaTrainer};
 use super::synthetic::{generate, SyntheticConfig};
 use super::{
-    candle_default_device, metal_math_is_precise, metal_supported, AdaLnConfig, AdaLnPredictor, CandleVitEncoder, ComputeDevice, VitTinyConfig,
+    candle_default_device, ensure_metal_precise_math_default, metal_math_is_precise, metal_supported, AdaLnConfig, AdaLnPredictor, CandleVitEncoder, ComputeDevice, VitTinyConfig,
 };
 
 fn metal() -> Device {
@@ -151,4 +151,36 @@ fn metal_math_default_is_precise_via_cargo_config_and_explicit_one_is_respected(
     if !explicit_fast {
         assert!(matches!(raw.as_str(), "0" | "false" | "f" | "no" | "n"), "raw value {raw:?}");
     }
+}
+
+/// The unset branch, tested as a pure decision: nothing set installs precise math (`0`), any
+/// existing value (fast or precise, even empty) is left alone. No second `unsafe` is needed,
+/// and the process environment is not touched.
+#[test]
+fn precise_math_default_only_fills_the_unset_case() {
+    use std::ffi::OsStr;
+    assert_eq!(super::precise_math_default_for(None), Some("0"));
+    for v in ["1", "0", "true", "false", ""] {
+        assert_eq!(super::precise_math_default_for(Some(OsStr::new(v))), None, "value {v:?}");
+    }
+}
+
+/// With the variable already present (cargo's `[env]` default, or an explicit `=1` from the
+/// caller) the function never changes it, and it is idempotent. The unset-then-`0` path is
+/// covered by the pure-decision test above, and by this test's first call when the suite runs
+/// outside cargo.
+#[test]
+fn ensure_metal_precise_math_default_is_idempotent_and_never_overrides() {
+    let before = std::env::var("CANDLE_METAL_ENABLE_FAST_MATH").ok();
+    ensure_metal_precise_math_default();
+    let after_first = std::env::var("CANDLE_METAL_ENABLE_FAST_MATH").ok();
+    ensure_metal_precise_math_default();
+    let after_second = std::env::var("CANDLE_METAL_ENABLE_FAST_MATH").ok();
+    if let Some(b) = &before {
+        assert_eq!(after_first.as_ref(), Some(b), "a preset value must not be overridden");
+    } else {
+        assert_eq!(after_first.as_deref(), Some("0"));
+        assert!(metal_math_is_precise());
+    }
+    assert_eq!(after_first, after_second);
 }

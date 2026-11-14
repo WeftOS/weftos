@@ -199,3 +199,12 @@ path        = "crates/weftos-worldmodel-dataset/src/store_upload.rs"
 pattern     = 'Command::new\(target\.bin\(\)\)'
 reason      = "Owner approval 2026-11-14: the one spawn site of `weaver store put <name> <key> --as <principal> --file <path>`"
 approved_by = "owner"
+
+# Approved by the owner on 2026-11-14 12:23 ET (LeWM Metal math default): the one `set_var` that
+# defaults CANDLE_METAL_ENABLE_FAST_MATH to 0 so binaries started outside cargo also get precise math.
+[[approval]]
+rule        = "unsafe"
+path        = "crates/weftos-worldmodel-impls/src/candle/mod.rs"
+pattern     = 'unsafe \{ std::env::set_var\("CANDLE_METAL_ENABLE_FAST_MATH", value\) \};'
+reason      = "Owner approval 2026-11-14 12:23 ET: single set_var, run once under std::sync::Once before any Metal device or thread, only when the variable is unset (a preset value is never overridden)"
+approved_by = "owner"
