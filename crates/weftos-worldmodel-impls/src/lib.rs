@@ -53,6 +53,7 @@ pub use weftos_worldmodel_core::{
     TrainingSurfaceKind, WorldModelError, WorldModelResult, EVENT_KIND_MODEL_HOT_SWAP,
     EVENT_KIND_ROLLBACK_GATE, EVENT_KIND_TRAINING_CYCLE, GATE_HELD_OUT_PROBE_MIN,
     GATE_SIGREG_HEALTH_MIN, GATE_TEMPORAL_STRAIGHTEN_MIN, GATE_VOE_DIFF_MIN,
+    LEWM_MODEL_SEGMENT_CODEC_RAW, LEWM_MODEL_SEGMENT_CODEC_SAFETENSORS,
     LEWM_MODEL_SEGMENT_DOMAIN_END, LEWM_MODEL_SEGMENT_DOMAIN_START, LATENT_DIM, LATENT_DIM_U16,
     SIGREG_HEALTH_ROLLBACK_THRESHOLD, SIGREG_HEALTH_WINDOW_SECS,
 };
@@ -74,10 +75,10 @@ pub use sigreg::{
     EVENT_KIND_SIGREG_HEALTH,
 };
 pub use training::{
-    decode_model_segment, encode_model_segment, model_segment_from_wire, model_segment_to_wire,
-    require_promoted, ImportanceReplayBuffer, LewmModelSegment, OfflineEdgePipeline,
+    codec_for_weights, decode_model_segment, is_safetensors_blob, encode_model_segment, model_segment_from_wire, model_segment_to_wire,
+    require_promoted, ActionLinearModel, ImportanceReplayBuffer, LewmModelSegment, OfflineEdgePipeline,
     SensorModelRegistry, SlotState, StreamingMergePipeline, DEFAULT_BOOT_VERSION,
-    DEFAULT_REPLAY_CAPACITY, SEGMENT_HEADER_LEN,
+    DEFAULT_REPLAY_CAPACITY, SEGMENT_HEADER_LEN, ACTION_LINEAR_BLOB_LEN, DEFAULT_RIDGE_LAMBDA,
 };
 
 #[cfg(feature = "candle")]
