@@ -1,9 +1,10 @@
 //! Configuration and secrets service (K5-G1).
 //!
 //! Provides [`ConfigService`] for runtime configuration management with
-//! change notification, typed values, and encrypted secret storage. Backed
-//! by in-memory stores (tree integration deferred to when `exochain`
-//! feature is enabled).
+//! change notification, typed values, and AEAD-sealed secret storage. Backed
+//! by in-memory stores only (tree integration deferred to when `exochain`
+//! feature is enabled); nothing here is persisted. Secrets are sealed with
+//! XChaCha20-Poly1305, see `secret_seal.rs` for the threat model.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
@@ -17,6 +18,7 @@ use tracing::info;
 use crate::error::KernelError;
 use crate::health::HealthStatus;
 use crate::process::Pid;
+use crate::secret_seal::SecretSeal;
 use crate::service::{ServiceType, SystemService};
 
 #[cfg(feature = "exochain")]
@@ -119,21 +121,22 @@ pub struct SecretRef {
 /// Configuration and secrets service.
 ///
 /// Stores configuration values at `/kernel/config/{namespace}/{key}` and
-/// secrets at `/kernel/secrets/{namespace}/{key}` (encrypted at rest).
+/// secrets at `/kernel/secrets/{namespace}/{key}`, all in memory. Secret
+/// values are sealed with XChaCha20-Poly1305 and bound to their slot.
 /// Supports change notification via subscriptions.
 pub struct ConfigService {
     /// Config store: "namespace/key" -> value.
     configs: DashMap<String, serde_json::Value>,
     /// Typed config entries: "namespace/key" -> ConfigEntry.
     entries: DashMap<String, ConfigEntry>,
-    /// Secret store: "namespace/key" -> encrypted bytes.
+    /// Secret store: "namespace/key" -> sealed bytes (nonce || ciphertext || tag).
     secrets: DashMap<String, Vec<u8>>,
     /// Secret metadata: "namespace/key" -> SecretRef.
     secret_refs: DashMap<String, SecretRef>,
     /// Change subscribers: namespace -> list of subscription queues.
     subscribers: DashMap<String, Vec<Arc<RwLock<Vec<ConfigChange>>>>>,
-    /// Encryption key (derived from genesis in production).
-    encryption_key: [u8; 32],
+    /// AEAD key for secret values (caller-supplied or per-process random).
+    seal: SecretSeal,
     /// Change log for auditing.
     change_log: RwLock<Vec<ConfigChange>>,
     /// Total config sets.
@@ -147,15 +150,26 @@ pub struct ConfigService {
 }
 
 impl ConfigService {
-    /// Create a new config service with a given encryption key.
+    /// Create a new config service whose secrets are sealed under the given
+    /// 256-bit key. The key never leaves this struct.
     pub fn new(encryption_key: [u8; 32]) -> Self {
+        Self::with_seal(SecretSeal::from_key(&encryption_key))
+    }
+
+    /// Create a config service with a fresh random secret key for this
+    /// process. Secrets are in memory only, so nothing needs the key later.
+    pub fn new_default() -> Self {
+        Self::with_seal(SecretSeal::random())
+    }
+
+    fn with_seal(seal: SecretSeal) -> Self {
         Self {
             configs: DashMap::new(),
             entries: DashMap::new(),
             secrets: DashMap::new(),
             secret_refs: DashMap::new(),
             subscribers: DashMap::new(),
-            encryption_key,
+            seal,
             change_log: RwLock::new(Vec::new()),
             set_count: AtomicU64::new(0),
             #[cfg(feature = "exochain")]
@@ -163,11 +177,6 @@ impl ConfigService {
             #[cfg(feature = "exochain")]
             governance_gate: None,
         }
-    }
-
-    /// Create a config service with a default (zero) encryption key (testing).
-    pub fn new_default() -> Self {
-        Self::new([0u8; 32])
     }
 
     /// Set the chain manager for exochain event logging.
@@ -461,7 +470,7 @@ impl ConfigService {
 
     // ── Secret operations ─────────────────────────────────────────
 
-    /// Store an encrypted secret.
+    /// Store a secret, sealed with XChaCha20-Poly1305 and bound to its slot.
     pub fn set_secret(
         &self,
         namespace: &str,
@@ -491,9 +500,11 @@ impl ConfigService {
 
         let secret_key = format!("{namespace}/{key}");
 
-        // Simple XOR encryption (production would use AEAD).
-        let encrypted = self.xor_encrypt(value);
-        self.secrets.insert(secret_key.clone(), encrypted);
+        let sealed = self
+            .seal
+            .seal(secret_key.as_bytes(), value)
+            .map_err(|e| KernelError::Service(e.to_string()))?;
+        self.secrets.insert(secret_key.clone(), sealed);
 
         let secret_ref = SecretRef {
             namespace: namespace.to_string(),
@@ -518,7 +529,8 @@ impl ConfigService {
         Ok(())
     }
 
-    /// Retrieve a secret (decrypted). Checks PID authorization and expiry.
+    /// Retrieve a secret (opened). Checks PID authorization and expiry, and
+    /// fails if the sealed value was tampered with or moved between slots.
     pub fn get_secret(
         &self,
         namespace: &str,
@@ -549,26 +561,14 @@ impl ConfigService {
             return Err(KernelError::Service("secret expired".into()));
         }
 
-        let encrypted = self
+        let sealed = self
             .secrets
             .get(&secret_key)
             .ok_or_else(|| KernelError::Service("secret data missing".into()))?;
 
-        Ok(self.xor_decrypt(&encrypted))
-    }
-
-    /// Simple XOR encryption with the key (for testing; production uses AEAD).
-    fn xor_encrypt(&self, data: &[u8]) -> Vec<u8> {
-        data.iter()
-            .enumerate()
-            .map(|(i, b)| b ^ self.encryption_key[i % 32])
-            .collect()
-    }
-
-    /// Decrypt XOR-encrypted data.
-    fn xor_decrypt(&self, data: &[u8]) -> Vec<u8> {
-        // XOR is symmetric.
-        self.xor_encrypt(data)
+        self.seal
+            .open(secret_key.as_bytes(), &sealed)
+            .map_err(|e| KernelError::Service(e.to_string()))
     }
 
     /// Get the change log (for auditing).
@@ -694,7 +694,7 @@ mod tests {
     }
 
     #[test]
-    fn secret_encrypted_at_rest() {
+    fn secret_stored_sealed_not_plaintext() {
         let key = [0xAB; 32];
         let svc = ConfigService::new(key);
         svc.set_secret("creds", "pass", b"plaintext", vec![pid(1)])
