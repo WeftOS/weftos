@@ -12,7 +12,7 @@ traits for the LeWM latent world model (WEFT-521).
 | `ActionLinearModel` | **Done** | 192 × 32 action matrix + bias; ridge least squares (offline) and normalised-LMS SGD (streaming), pure Rust `no_std`; `LWAL` weight blob |
 | `CemPlanner` / `MppiWarmPlanner` / `GradientPlanner` | **Done** | CEM default @ 10 Hz path; toy planning tests (WEFT-529) |
 | `WelfordSigRegMonitor` | **Done** | Online Welford + auto-rollback at 0.85 / 30 s (WEFT-528) |
-| `FourConditionRollbackGate` | **Done** | AND of SIGReg / held-out probe / VoE diff / temporal straighten (WEFT-530). Probe = fraction of held-out pairs where the model beats copy-last (`GateProbeKind::BeatsCopyLast`, default since 2026-11-14; legacy sign agreement via `with_probe_kind`) |
+| `FourConditionRollbackGate` | **Done** | AND of SIGReg / held-out probe / VoE diff / temporal straighten (WEFT-530). Probe = fraction of held-out pairs where the model beats copy-last (`GateProbeKind::BeatsCopyLast`, default since 2026-11-14; legacy sign agreement via `with_probe_kind`). Straightening = `1 − θ̄/π`, `θ` the angle between the predicted and the realised displacement over the last 16 transitions, floor 0.75 (`StraighteningKind::PredictedCurvature`, default since 2026-11-14; legacy chord / path of the observed latents, floor 0.50, via `with_straightening_kind`) |
 | `OfflineEdgePipeline` + `StreamingMergePipeline` | **Done** | Both train `ActionLinearModel`; AND-gated promote (WEFT-531) |
 | `ImportanceReplayBuffer` | **Done** | Per-class importance × surprise weighted draws |
 | `SensorModelRegistry` + RVF segment I/O | **Done** | transmit-gate / aggregate / encode slots, tick hot-swap, gate rollback (WEFT-532); codec `0x02` raw, `0x03` safetensors |
@@ -156,8 +156,10 @@ reg.commit_at_tick(10).unwrap();
    copy-last 350 and linear 204. Two more training seeds give ratio
    10.0 / 9.8 and health 0.87 / 0.84. `JepaTrainConfig::lane_g()` keeps the
    old behaviour, and a release-only ignored test guards the thresholds.
-   Still missing: the gate vetoes held-out probe accuracy and temporal
-   straightening, health sits near the 0.85 bar, and real data. Metal runs it
+   Still missing: the gate vetoes temporal straightening (since 2026-11-14 the
+   predicted-vs-realised displacement angle: 0.68-0.72 on seeds 21-23 against
+   the 0.75 floor; the probe now passes), health sits near the 0.85 bar, and
+   real data. Metal runs it
    4x faster (see above) with the baseline-margin caveat.
 2. Train on real data (W2 recording, held-out days), then the AdaLN bake-off
    against `ActionLinearModel` on the same split.

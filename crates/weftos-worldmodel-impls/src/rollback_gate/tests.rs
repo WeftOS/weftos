@@ -1,7 +1,8 @@
 use super::*;
+use alloc::vec::Vec;
 use weftos_worldmodel_core::{
-    zero_latent, GATE_HELD_OUT_PROBE_MIN, GATE_SIGREG_HEALTH_MIN, GATE_TEMPORAL_STRAIGHTEN_MIN,
-    GATE_VOE_DIFF_MIN,
+    zero_latent, GATE_HELD_OUT_PROBE_MIN, GATE_PREDICTED_CURVATURE_MIN, GATE_SIGREG_HEALTH_MIN, LATENT_DIM,
+    GATE_TEMPORAL_STRAIGHTEN_MIN, GATE_VOE_DIFF_MIN,
 };
 
 fn unit_step(i: usize, v: f32) -> Latent {
@@ -152,7 +153,7 @@ fn temporal_straightening_alone_vetoes() {
         sigreg_health: 0.99,
         held_out_probe_accuracy: 0.95,
         voe_surprise_diff: 0.95,
-        temporal_straightening: GATE_TEMPORAL_STRAIGHTEN_MIN - 0.05,
+        temporal_straightening: GATE_PREDICTED_CURVATURE_MIN - 0.05,
     };
     let v = GateVerdict::evaluate(metrics);
     assert!(!v.promote);
@@ -160,8 +161,8 @@ fn temporal_straightening_alone_vetoes() {
     assert!(v.sigreg_ok && v.probe_ok && v.voe_ok);
     assert_eq!(v.first_veto(), Some(GateCondition::TemporalStraightening));
 
-    // Online: highly curved path (oscillate) with perfect pred + health.
-    let mut g = FourConditionRollbackGate::new();
+    // Online, legacy kind: highly curved path (oscillate) with perfect pred + health.
+    let mut g = FourConditionRollbackGate::new().with_straightening_kind(StraighteningKind::ChordOverPath);
     g.min_samples = 2;
     g.trajectory_capacity = 12;
     for t in 0..12u64 {
@@ -180,6 +181,101 @@ fn temporal_straightening_alone_vetoes() {
     let v = g.verdict();
     assert!(!v.straighten_ok);
     assert!(v.blocks_promotion());
+
+    // Online, default kind: a model that predicts the opposite direction on every step.
+    let mut g = FourConditionRollbackGate::new();
+    g.min_samples = 2;
+    for t in 0..12u64 {
+        let z_t = unit_step(0, t as f32);
+        let z_tp1 = unit_step(0, (t + 1) as f32);
+        let v = g.observe_transition(&z_t, &unit_step(0, t as f32 - 1.0), &z_tp1, Some(0.99));
+        if t >= 2 {
+            assert!(!v.straighten_ok, "{:?}", v.metrics);
+        }
+    }
+    assert!(g.metrics().temporal_straightening < 0.01);
+    assert_eq!(g.verdict().failing().last(), Some(&GateCondition::TemporalStraightening));
+}
+
+// ── condition 4: temporal straightening (2026-11-14) ──────────────────────────
+
+#[test]
+fn default_straightening_is_predicted_curvature_and_legacy_is_selectable() {
+    let g = FourConditionRollbackGate::new();
+    assert_eq!(g.straightening_kind(), StraighteningKind::PredictedCurvature);
+    let g = g.with_straightening_kind(StraighteningKind::ChordOverPath);
+    assert_eq!(g.straightening_kind(), StraighteningKind::ChordOverPath);
+}
+
+#[test]
+fn oscillation_predicted_exactly_passes_the_new_kind_and_fails_the_legacy_one() {
+    let feed_bounce = |g: &mut FourConditionRollbackGate| {
+        g.min_samples = 2;
+        for t in 0..16u64 {
+            let (a, b) = if t % 2 == 0 { (0.0, 10.0) } else { (10.0, 0.0) };
+            g.observe_transition(&unit_step(0, a), &unit_step(0, b), &unit_step(0, b), Some(0.99));
+        }
+    };
+    let mut new = FourConditionRollbackGate::new();
+    feed_bounce(&mut new);
+    let (legacy_score, new_score) = new.straightening_scores();
+    assert!(new_score > 0.99 && new.verdict().straighten_ok, "{new_score}");
+    assert!(legacy_score < GATE_TEMPORAL_STRAIGHTEN_MIN);
+    assert!(new.verdict().promote);
+    let mut legacy = FourConditionRollbackGate::new().with_straightening_kind(StraighteningKind::ChordOverPath);
+    feed_bounce(&mut legacy);
+    assert_eq!(legacy.metrics().temporal_straightening, legacy_score);
+    assert!(!legacy.verdict().straighten_ok && !legacy.evaluate_now().promote);
+    // Both gates report the same pair of scores; only the one feeding condition 4 differs.
+    assert_eq!(legacy.straightening_scores(), new.straightening_scores());
+}
+
+#[test]
+fn copy_last_is_refused_by_the_new_straightening_kind() {
+    let mut g = FourConditionRollbackGate::new();
+    for t in 0..16u64 {
+        let z_t = unit_step(0, t as f32);
+        g.observe_transition(&z_t, &z_t, &unit_step(0, (t + 1) as f32), Some(0.99));
+    }
+    let m = g.metrics();
+    assert!((m.temporal_straightening - 0.5).abs() < 1e-6, "{m:?}");
+    assert!(!g.verdict().straighten_ok);
+    // The legacy score cannot tell copy-last from a perfect model on a straight path.
+    assert_eq!(g.straightening_scores().0, 1.0);
+}
+
+#[test]
+fn legacy_kind_is_judged_against_its_own_floor() {
+    // A window with chord / path between the two floors: a three-step zigzag in 2-D.
+    let mut g = FourConditionRollbackGate::new()
+        .with_straightening_kind(StraighteningKind::ChordOverPath)
+        .with_trajectory_capacity(3);
+    g.min_samples = 2;
+    let pts = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (2.0, 1.0)];
+    for w in pts.windows(2) {
+        let (mut a, mut b) = (zero_latent(), zero_latent());
+        (a[0], a[1], b[0], b[1]) = (w[0].0, w[0].1, w[1].0, w[1].1);
+        g.observe_transition(&a, &b, &b, Some(0.99));
+    }
+    let s = g.metrics().temporal_straightening;
+    assert!(s > GATE_TEMPORAL_STRAIGHTEN_MIN && s < GATE_PREDICTED_CURVATURE_MIN, "{s}");
+    assert!(g.verdict().straighten_ok, "legacy floor 0.50 applies to the legacy kind");
+}
+
+#[test]
+fn straightening_window_is_a_ring_and_cold_start_does_not_veto() {
+    let mut g = FourConditionRollbackGate::new().with_trajectory_capacity(4);
+    // Backwards predictions first, then exact ones: only the last four transitions count.
+    for t in 0..12u64 {
+        let z_t = unit_step(0, t as f32);
+        let z_tp1 = unit_step(0, (t + 1) as f32);
+        let hat = if t < 8 { unit_step(0, t as f32 - 1.0) } else { z_tp1 };
+        g.observe_transition(&z_t, &hat, &z_tp1, Some(0.99));
+    }
+    assert!(g.metrics().temporal_straightening > 0.99);
+    g.reset_stats();
+    assert_eq!(g.metrics().temporal_straightening, 1.0, "cold start after reset");
+    assert_eq!(g.straightening_scores(), (1.0, 1.0));
 }
 
 #[test]
@@ -190,9 +286,13 @@ fn and_requires_all_four() {
         sigreg_health: GATE_SIGREG_HEALTH_MIN,
         held_out_probe_accuracy: GATE_HELD_OUT_PROBE_MIN,
         voe_surprise_diff: GATE_VOE_DIFF_MIN,
-        temporal_straightening: GATE_TEMPORAL_STRAIGHTEN_MIN,
+        temporal_straightening: GATE_PREDICTED_CURVATURE_MIN,
     };
     assert!(GateVerdict::evaluate(m).promote);
+    // The online gate applies the same floors.
+    let mut g = FourConditionRollbackGate::new();
+    g.min_samples = 100;
+    assert!(g.evaluate_now().promote);
 }
 
 #[test]

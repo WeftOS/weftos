@@ -52,7 +52,7 @@ pub use weftos_worldmodel_core::{
     StreamingMergeTrainer, StreamingTrainResult, SubscriptionId, TrainingSample,
     TrainingSurfaceKind, WorldModelError, WorldModelResult, EVENT_KIND_MODEL_HOT_SWAP,
     EVENT_KIND_ROLLBACK_GATE, EVENT_KIND_TRAINING_CYCLE, GATE_HELD_OUT_PROBE_MIN,
-    GATE_SIGREG_HEALTH_MIN, GATE_TEMPORAL_STRAIGHTEN_MIN, GATE_VOE_DIFF_MIN,
+    GATE_SIGREG_HEALTH_MIN, GATE_PREDICTED_CURVATURE_MIN, GATE_TEMPORAL_STRAIGHTEN_MIN, GATE_VOE_DIFF_MIN,
     LEWM_MODEL_SEGMENT_CODEC_RAW, LEWM_MODEL_SEGMENT_CODEC_SAFETENSORS,
     LEWM_MODEL_SEGMENT_DOMAIN_END, LEWM_MODEL_SEGMENT_DOMAIN_START, LATENT_DIM, LATENT_DIM_U16,
     SIGREG_HEALTH_ROLLBACK_THRESHOLD, SIGREG_HEALTH_WINDOW_SECS,
@@ -67,8 +67,8 @@ pub use planner::{
 };
 pub use predictor::{IdentityPredictor, LinearPredPhi, NullPredictor, PredPhi};
 pub use rollback_gate::{
-    FourConditionRollbackGate, GateProbeKind, ProbePair, RollbackGateLog, DEFAULT_MIN_SAMPLES,
-    DEFAULT_PROBE_CAPACITY, DEFAULT_TRAJECTORY_CAPACITY,
+    FourConditionRollbackGate, GateProbeKind, ProbePair, RollbackGateLog, StraighteningKind,
+    DEFAULT_MIN_SAMPLES, DEFAULT_PROBE_CAPACITY, DEFAULT_TRAJECTORY_CAPACITY,
 };
 pub use sigreg::{
     NullSigRegMonitor, SigRegHealthEvent, SigRegHealthLog, WelfordSigRegMonitor,

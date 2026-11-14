@@ -160,8 +160,9 @@ impl StreamingMergeTrainer for StreamingMergePipeline {
         self.model.sgd_step(&batch, lr);
 
         // Refresh VoE / probe metrics under the updated model using
-        // **time-ordered** class samples (not the random batch). Random
-        // re-feeds would zigzag the temporal-straightening trajectory and
+        // **time-ordered** class samples (not the random batch). The default
+        // straightening score is per transition and ignores order, but the
+        // legacy chord / path kind would zigzag under random re-feeds and
         // false-veto healthy promotions.
         let ordered: Vec<TrainingSample> = self.replay.iter_class(class).copied().collect();
         // Soft reset trajectory-sensitive stats while keeping SIGReg health.

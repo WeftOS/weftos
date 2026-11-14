@@ -83,8 +83,8 @@ fn trained_adaln_reloads_from_disk_swaps_in_and_beats_copy_last() {
     let wm = DefaultWorldModel::with_adaln(reloaded);
     let r = evaluate(&data, |z, a| wm.predict(z, &action(a)).expect("predict"), cfg);
     eprintln!(
-        "adaln held-out err {:.6}, copy-last {:.6}, linear {:.6}, promote {}, vetoes {:?}",
-        r.model_err, r.baselines.copy_last, r.baselines.linear, r.promote, r.vetoes
+        "adaln held-out err {:.6}, copy-last {:.6}, linear {:.6}, promote {}, vetoes {:?}, straightening {:?}",
+        r.model_err, r.baselines.copy_last, r.baselines.linear, r.promote, r.vetoes, r.straightening
     );
     assert!(r.model_err < r.baselines.copy_last, "{r:?}");
     assert!(r.beats_baselines && r.promote, "vetoes {:?} gate {:?}", r.vetoes, r.gate);

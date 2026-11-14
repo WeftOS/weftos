@@ -94,6 +94,12 @@ pub(crate) fn print_diag(tag: &str, r: &JepaTrainReport) {
             "[{tag}] harness {name}: model {:.5} copy-last {:.5} linear {:.5} beats {} collapsed {} sigreg {:.4} promote {} vetoes {:?}",
             e.model_err, e.baselines.copy_last, e.baselines.linear, e.beats_baselines, e.collapsed_coords.len(), e.sigreg_health, e.promote, e.vetoes
         );
+        let st = &e.straightening;
+        eprintln!(
+            "[{tag}] straightening {name}: chord/path {:.4} (legacy floor 0.50 -> {}) | predicted curvature {:.4} (floor 0.75 -> {}) | held-out curvature {:.4} | gate metrics {:?}",
+            st.chord_over_path, st.chord_over_path >= 0.50, st.predicted_curvature, st.predicted_curvature >= 0.75,
+            st.predicted_curvature_held_out, e.gate.metrics
+        );
     }
 }
 
@@ -146,7 +152,9 @@ fn default_regression(device: super::ComputeDevice) {
     // ξ pairing, which matches what training optimises, beats both baselines on every seed.
     let e = if strict_theta { &r.eval } else { &r.eval_target };
     assert!(e.beats_baselines, "model {} vs copy-last {} / linear {}", e.model_err, e.baselines.copy_last, e.baselines.linear);
-    // The gate's probe (beats copy-last, owner 2026-11-14) must pass; temporal straightening still vetoes.
+    // The gate's probe (beats copy-last, owner 2026-11-14) must pass. Temporal straightening
+    // (predicted curvature since 2026-11-14) is reported by `print_diag`, not asserted: the lane
+    // Q note records its outcome on seeds 21-23.
     assert!(e.gate.probe_ok, "probe {:?}", e.gate.metrics);
 }
 

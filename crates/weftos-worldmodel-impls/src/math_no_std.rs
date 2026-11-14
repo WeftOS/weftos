@@ -83,3 +83,30 @@ pub fn cosf(x: f32) -> f32 {
         1.0 - t2 * (0.5 - t2 * (1.0 / 24.0 - t2 * (1.0 / 720.0 - t2 / 40320.0)))
     }
 }
+
+/// Arc cosine (radians, domain `[-1, 1]`, clamped).
+#[inline]
+pub fn acosf(x: f32) -> f32 {
+    let x = x.clamp(-1.0, 1.0);
+    #[cfg(feature = "std")]
+    {
+        x.acos()
+    }
+    #[cfg(not(feature = "std"))]
+    {
+        // Abramowitz & Stegun 4.4.46 on [0, 1] (|error| ≤ 2e-8), mirrored for x < 0.
+        let a = x.abs();
+        let p = 1.570_796_3
+            + a * (-0.214_598_8
+                + a * (0.088_978_99
+                    + a * (-0.050_174_3
+                        + a * (0.030_891_88
+                            + a * (-0.017_088_13 + a * (0.006_670_09 - a * 0.001_262_491))))));
+        let r = sqrtf(1.0 - a) * p;
+        if x < 0.0 {
+            core::f32::consts::PI - r
+        } else {
+            r
+        }
+    }
+}

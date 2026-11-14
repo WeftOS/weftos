@@ -62,7 +62,7 @@ pub use planner::{ActionPlan, LatentPlanner, PlanStep, PlannerKind};
 pub use predictor::Predictor;
 pub use rollback_gate::{
     GateCondition, GateVerdict, RollbackGate, RollbackGateMetrics, EVENT_KIND_ROLLBACK_GATE,
-    GATE_HELD_OUT_PROBE_MIN, GATE_SIGREG_HEALTH_MIN, GATE_TEMPORAL_STRAIGHTEN_MIN,
+    GATE_HELD_OUT_PROBE_MIN, GATE_SIGREG_HEALTH_MIN, GATE_PREDICTED_CURVATURE_MIN, GATE_TEMPORAL_STRAIGHTEN_MIN,
     GATE_VOE_DIFF_MIN,
 };
 pub use sigreg::{
