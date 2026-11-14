@@ -73,6 +73,19 @@ pub const fn metal_supported() -> bool {
     cfg!(feature = "metal")
 }
 
+/// Whether candle will compile Metal shaders with precise math, read from
+/// `CANDLE_METAL_ENABLE_FAST_MATH` the same way candle-metal-kernels does (unset means fast).
+///
+/// The workspace `.cargo/config.toml` `[env]` sets the variable to `0`, so under `cargo run`,
+/// `cargo test` and `cargo bench` this is `true` unless the caller exports `=1`. A binary started
+/// outside cargo must have its launcher set the variable before the first Metal device exists.
+/// The crate cannot set it itself: `std::env::set_var` is `unsafe` in edition 2024.
+pub fn metal_math_is_precise() -> bool {
+    !std::env::var("CANDLE_METAL_ENABLE_FAST_MATH")
+        .map(|v| matches!(v.to_ascii_lowercase().as_str(), "true" | "t" | "yes" | "y" | "1"))
+        .unwrap_or(true)
+}
+
 /// The best device available: Metal GPU 0 with the `metal` feature, otherwise CPU.
 ///
 /// When Metal was compiled in but cannot be opened, the reason goes to stderr and the result
