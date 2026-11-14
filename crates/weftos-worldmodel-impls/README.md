@@ -34,15 +34,62 @@ Default builds **never** depend on `candle-core` / `candle-nn` (same idiom as
 weftos-worldmodel-impls = { workspace = true }                 # default, no_std + alloc
 weftos-worldmodel-impls = { workspace = true, features = ["std"] }
 weftos-worldmodel-impls = { workspace = true, features = ["candle"] }  # ViT-tiny + AdaLN on CPU
+weftos-worldmodel-impls = { workspace = true, features = ["metal"] }   # candle + Apple GPU (macOS)
 ```
 
 - **default** — stubs plus the trained linear `pred_φ`, `no_std` + `alloc`
 - **std** — host marker forwarded to core
 - **candle** — `candle-core` / `candle-nn` **0.11** (lock: 0.11.1). Builds and
   passes `cargo test -p weftos-worldmodel-impls --features candle` on toolchain
-  1.95 (verified 2026-11-14). CPU only: candle's `metal` feature needs
-  `candle-metal-kernels` 0.11, which is not in the offline registry cache.
-  Default CI stays off this feature. (candle-core 0.2.x remains blocked, WEFT-216.)
+  1.95 (verified 2026-11-14). CPU by default. Default CI stays off this feature.
+  (candle-core 0.2.x remains blocked, WEFT-216.)
+- **metal** — implies `candle` and turns on `candle-core/metal` and `candle-nn/metal`
+  (adds `candle-metal-kernels` and `objc2-metal` to the lock, no new direct dependency).
+  macOS only, opt-in, never in CI. See "Metal" below.
+
+## Metal (feature `metal`)
+
+Everything that runs on CPU also runs on the Apple GPU, in F32, forward and backward.
+Nothing falls back to CPU and no precision is reduced. Measured on candle 0.11.1:
+
+| Path | On Metal | Notes |
+|---|---|---|
+| ViT-tiny encode (fused `layer_norm`, `softmax_last_dim`) | yes | matches CPU within 2e-3 |
+| AdaLN predict | yes | matches CPU within 2e-3 |
+| AdaLN training (`train_adaln_with`, AdamW) | yes | `AdaLnTrainConfig::device` |
+| JEPA training step and `train_jepa` (composed LayerNorm and softmax, `index_select`, EMA update) | yes | `JepaTrainConfig::device`; first 3 steps within 5 % of CPU |
+| safetensors load / export | yes | `*_on(&Device)` loaders read straight to the device; export copies back to the host |
+| Host-side work (fixture generation, SplitMix64 init, the eval harness, `to_vec` of results) | CPU | by design |
+
+Select a device with `ComputeDevice` (`Cpu` default, `Metal`, `Auto`), `candle_default_device()`
+(Metal with the reason logged when it cannot open, else CPU), or pass a `&Device` to
+`CandleVitEncoder::new_random_on`, `AdaLnPredictor::new_random_on` and the
+`from_safetensors_*_on` loaders. `ComputeDevice::Metal` is an error, never a silent CPU run,
+when the feature or a GPU is missing. `metal_supported()` is the compile-time flag.
+There is no op that needs a CPU route today, so no path is gated on it.
+
+**Speed** (`cargo bench -p weftos-worldmodel-impls --features metal --bench encode_predict`,
+release, Apple M5 Max, 2026-11-14, random init, machine under load from other jobs):
+
+| Call | CPU µs | Metal µs | Metal speed-up |
+|---|---|---|---|
+| ViT-tiny encode, 1 frame | 6 666 | 2 847 | 2.3x |
+| AdaLN predict, 1 latent | 217 | 654 | 0.33x (slower) |
+| encode + predict | 6 841 | 4 529 | 1.5x |
+| JEPA train step, batch 16 | 141 435 | 71 948 | 2.0x |
+| JEPA train step, batch 32 | 287 207 | 88 426 | 3.2x |
+
+Single-frame inference is launch-bound: the small AdaLN is faster on CPU. Training wins
+because the work per launch grows with the batch. The default JEPA regression (288 steps,
+`std` fixture, seed 21, release) takes 17.9 s on Metal against 75 s on CPU.
+
+**Accuracy caveat.** Metal is not bit-identical to CPU (GPU summation order, fast-math
+shaders), so a training run takes a different trajectory. On the same regression, held-out
+participation ratio is 10.07 / 9.93 / 9.98 on seeds 21 / 22 / 23 (CPU 10.63 / 9.97), with 0
+collapsed coordinates. The AdaLN error against the θ pairing beats both baselines by the
+required margin on seed 22 only (CPU: seeds 21 and 22); on seeds 21 and 23 it lands 5 %
+under linear. The ξ pairing beats both baselines on every Metal seed. The ignored Metal
+regression therefore asserts the ξ pairing, while the CPU one asserts θ.
 
 ## Candle models (feature `candle`)
 
@@ -58,7 +105,7 @@ weftos-worldmodel-impls = { workspace = true, features = ["candle"] }  # ViT-tin
 - **Delivery:** `to_model_checkpoint` wraps a blob as an Encode-slot
   `ModelCheckpoint`; on the wire it carries codec `0x03`. After a tick commit,
   `active_candle_model(&registry, class)` rebuilds the encoder or predictor.
-- **CPU timing** (`cargo bench -p weftos-worldmodel-impls --features candle --bench encode_predict`,
+- **CPU timing, earlier run** (`cargo bench -p weftos-worldmodel-impls --features candle --bench encode_predict`,
   Apple M5 Max, 2026-11-14, random init): ViT-tiny encode ≈ 5.1 ms per 64 px
   frame (≈ 197 frames/s), AdaLN predict (hidden 256, depth 2) ≈ 0.18 ms,
   encode + predict ≈ 6.5 ms (≈ 155 Hz, well over the 10 Hz plan target).
@@ -110,11 +157,11 @@ reg.commit_at_tick(10).unwrap();
    10.0 / 9.8 and health 0.87 / 0.84. `JepaTrainConfig::lane_g()` keeps the
    old behaviour, and a release-only ignored test guards the thresholds.
    Still missing: the gate vetoes held-out probe accuracy and temporal
-   straightening, health sits near the 0.85 bar, real data, and Metal.
+   straightening, health sits near the 0.85 bar, and real data. Metal runs it
+   4x faster (see above) with the baseline-margin caveat.
 2. Train on real data (W2 recording, held-out days), then the AdaLN bake-off
    against `ActionLinearModel` on the same split.
-3. Metal / MPS training (needs `candle-metal-kernels`, a new-dep gate item) or
-   PyTorch-on-Mac export into the safetensors layout above.
+3. PyTorch-on-Mac export into the safetensors layout above (Metal training is done).
 
 ## Usage (runtime defaults)
 
