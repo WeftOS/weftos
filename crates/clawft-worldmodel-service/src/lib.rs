@@ -21,7 +21,7 @@ use weftos_worldmodel::{
     attest_frame, Action, ActionEncoder, ActionPlan, AttestationError, ChainSink,
     DefaultWorldModel, GateVerdict, HashActionEncoder, HashEncoder, Latent, LatentPlanner,
     LatticeApi, MemoryChainSink, NullActionEncoder, ObservationFrame,
-    ObservationTuple, Predictor, SigRegHealth, Encoder as _,
+    ObservationTuple, SigRegHealth, Encoder as _,
     EVENT_KIND_ROLLBACK_GATE, EVENT_KIND_SIGREG_HEALTH, LATENT_DIM_U16,
     SIGREG_HEALTH_ROLLBACK_THRESHOLD, SIGREG_HEALTH_WINDOW_SECS,
 };
@@ -247,7 +247,6 @@ impl WorldModelService {
 
         let z_hat = self
             .model
-            .predictor
             .predict(&z_t, &action)
             .map_err(ServiceError::WorldModel)?;
 
