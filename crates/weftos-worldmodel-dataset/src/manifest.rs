@@ -3,6 +3,7 @@
 use crate::evidence::{EvidenceSummary, TypeCounts};
 use crate::layout::SessionLayout;
 use crate::proof::ProofCounts;
+use crate::ruview::CsiRecording;
 use crate::senml::ReadingsSummary;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -13,7 +14,7 @@ pub const MANIFEST_FILE: &str = "manifest.json";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FileEntry {
-    /// `evidence`, `csi`, `readings`, `protocol` or `consent`.
+    /// `evidence`, `csi`, `csi_meta`, `readings`, `protocol` or `consent`.
     pub role: String,
     pub name: String,
     pub bytes: u64,
@@ -57,8 +58,13 @@ pub struct ReadingsStats {
 pub struct Manifest {
     pub manifest_version: String,
     pub session: String,
-    /// Region id taken from the evidence lines.
+    /// Region id taken from the evidence lines. With several regions (only
+    /// when the archive was made with `allow_multi_region`) the first, sorted.
     pub room: String,
+    /// Every region in the evidence, sorted. Empty in manifests written before
+    /// this field existed, which held exactly one region, `room`.
+    #[serde(default)]
+    pub regions: Vec<String>,
     pub created_at: String,
     pub archiver: Archiver,
     pub layout: SessionLayout,
@@ -72,6 +78,9 @@ pub struct Manifest {
     pub shell_measure: Vec<Value>,
     /// `pose` records keyed by `node_id`, last wins, verbatim.
     pub node_poses: BTreeMap<String, Value>,
+    /// The RuView recording sidecar (`<session>.csi.meta.json`), when present.
+    #[serde(default)]
+    pub csi_recording: Option<CsiRecording>,
     pub protocol: Option<Value>,
     pub consent: Value,
     /// Whether the session's finished marker was present when archived.
@@ -85,6 +94,7 @@ pub(crate) struct ManifestInputs {
     pub files: Vec<FileEntry>,
     pub evidence: EvidenceSummary,
     pub readings: Option<ReadingsSummary>,
+    pub csi_recording: Option<CsiRecording>,
     pub protocol: Option<Value>,
     pub consent: Value,
     pub finished: bool,
@@ -108,7 +118,8 @@ impl Manifest {
         Manifest {
             manifest_version: MANIFEST_VERSION.into(),
             session: inp.session,
-            room: e.region,
+            room: e.regions.first().cloned().unwrap_or_default(),
+            regions: e.regions,
             created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             archiver: Archiver {
                 name: env!("CARGO_PKG_NAME").into(),
@@ -137,6 +148,7 @@ impl Manifest {
             }),
             shell_measure: e.shell_measures,
             node_poses: e.node_poses,
+            csi_recording: inp.csi_recording,
             protocol: inp.protocol,
             consent: inp.consent,
             finished: inp.finished,

@@ -52,6 +52,8 @@ pub enum DatasetError {
         "session is not finished: marker {0} is absent (the recording may still be in progress)"
     )]
     NotFinished(PathBuf),
+    #[error("csi recording metadata does not match the session: {0}")]
+    CsiMetaMismatch(String),
     #[error("source file changed while archiving: {0}")]
     SourceChanged(PathBuf),
     #[error("copy verification failed: {0}")]

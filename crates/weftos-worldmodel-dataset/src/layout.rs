@@ -1,6 +1,7 @@
-//! Session file naming. The RuView on-disk names are not confirmed, so every
-//! name is a template. `{session}` expands to the session id and `*` matches
-//! any run of characters inside a file name.
+//! Session file naming. Defaults follow RuView's sensing-server recording code
+//! (verified 2026-11-14, see the plan section 1b); every name stays a template
+//! so a difference is a config change. `{session}` expands to the session id
+//! and `*` matches any run of characters inside a file name.
 
 use crate::error::DatasetError;
 use serde::{Deserialize, Serialize};
@@ -10,10 +11,16 @@ use std::path::{Path, PathBuf};
 pub struct SessionLayout {
     /// Required SPATIAL evidence JSONL.
     pub evidence: String,
-    /// Optional SenML readings JSONL.
+    /// Optional SenML readings JSONL. A WeftOS-side convention: RuView does
+    /// not write a per-session readings file today.
     pub readings: String,
-    /// Optional CSI recording patterns. Every match is archived.
+    /// Optional CSI recording patterns. Every match is archived. The first is
+    /// RuView's exact name; the glob is the fallback for other recorders.
     pub csi: Vec<String>,
+    /// The metadata sidecar RuView writes when a recording stops. Parsed into
+    /// the manifest's `csi_recording` section and archived when present.
+    #[serde(default = "default_csi_meta")]
+    pub csi_meta: String,
     /// Optional protocol description, first existing candidate wins.
     pub protocol: Vec<String>,
     /// Optional consent record, first existing candidate wins.
@@ -22,13 +29,21 @@ pub struct SessionLayout {
     /// is closed. `None` disables the marker.
     #[serde(default = "default_marker")]
     pub finished_marker: Option<String>,
-    /// Refuse to archive a session whose finished marker is absent.
+    /// Refuse to archive a session whose finished marker is absent. A manifest
+    /// written before this field existed loads as `false`.
     #[serde(default)]
     pub require_finished: bool,
 }
 
+/// RuView writes this at recording stop, so its presence means "finished".
+const RUVIEW_META: &str = "{session}.csi.meta.json";
+
 fn default_marker() -> Option<String> {
-    Some("{session}.done".into())
+    Some(RUVIEW_META.into())
+}
+
+fn default_csi_meta() -> String {
+    RUVIEW_META.into()
 }
 
 impl Default for SessionLayout {
@@ -36,7 +51,8 @@ impl Default for SessionLayout {
         Self {
             evidence: "{session}.evidence.jsonl".into(),
             readings: "{session}.readings.jsonl".into(),
-            csi: vec!["{session}.csi*".into(), "{session}*.csi.*".into()],
+            csi: vec!["{session}.csi.jsonl".into(), "{session}.csi*".into()],
+            csi_meta: default_csi_meta(),
             protocol: vec![
                 "{session}.protocol.json".into(),
                 "{session}.protocol.txt".into(),
@@ -45,7 +61,7 @@ impl Default for SessionLayout {
             ],
             consent: vec!["{session}.consent.json".into(), "consent.json".into()],
             finished_marker: default_marker(),
-            require_finished: false,
+            require_finished: true,
         }
     }
 }
@@ -57,6 +73,8 @@ pub struct DiscoveredSession {
     pub evidence: PathBuf,
     pub csi: Vec<PathBuf>,
     pub readings: Option<PathBuf>,
+    /// The RuView metadata sidecar, when it exists.
+    pub csi_meta: Option<PathBuf>,
     pub protocol: Option<PathBuf>,
     pub consent: Option<PathBuf>,
     /// The finished marker, when the layout has one and it exists.
@@ -99,9 +117,10 @@ impl SessionLayout {
         }
         let readings_name = expand(&self.readings);
         let marker_name = self.finished_marker.as_deref().map(expand);
+        let meta_name = expand(&self.csi_meta);
         let csi: Vec<PathBuf> = names
             .iter()
-            .filter(|n| **n != evidence_name && **n != readings_name)
+            .filter(|n| **n != evidence_name && **n != readings_name && **n != meta_name)
             .filter(|n| marker_name.as_ref() != Some(*n))
             .filter(|n| self.csi.iter().any(|p| glob_match(&expand(p), n)))
             .map(|n| dir.join(n))
@@ -137,6 +156,7 @@ impl SessionLayout {
                 .contains(&readings_name)
                 .then(|| dir.join(&readings_name)),
             csi,
+            csi_meta: names.contains(&meta_name).then(|| dir.join(&meta_name)),
             protocol: first_existing(&self.protocol),
             consent: first_existing(&self.consent),
             id,
@@ -156,7 +176,7 @@ impl SessionLayout {
         let ids: Vec<&str> = names
             .iter()
             .filter_map(|n| n.strip_suffix(suffix))
-            .filter(|s| !s.is_empty())
+            .filter(|s| validate_session_id(s).is_ok())
             .collect();
         match ids.as_slice() {
             [one] => Ok((*one).to_string()),
@@ -220,7 +240,8 @@ mod tests {
     #[test]
     fn session_id_rules() {
         assert!(validate_session_id("room-1_2026.11").is_ok());
-        for bad in ["", ".hidden", "a/b", "..", "a b"] {
+        assert!(validate_session_id("walk.v2-20261114_101500").is_ok());
+        for bad in ["", ".hidden", "a/b", "..", "a b", "a\\b", "x\0y"] {
             assert!(validate_session_id(bad).is_err(), "{bad}");
         }
     }

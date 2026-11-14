@@ -11,6 +11,7 @@ pub mod evidence;
 pub mod layout;
 pub mod manifest;
 pub mod proof;
+pub mod ruview;
 pub mod senml;
 pub mod store_upload;
 
@@ -18,4 +19,5 @@ pub use archive::{ArchiveOutcome, ArchiveRequest, Verification, archive_session,
 pub use error::DatasetError;
 pub use layout::SessionLayout;
 pub use manifest::Manifest;
+pub use ruview::CsiRecording;
 pub use store_upload::{ObjectResult, ObjectStatus, StoreTarget, StoreUpload};

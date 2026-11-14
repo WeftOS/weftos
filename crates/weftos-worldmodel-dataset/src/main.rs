@@ -37,6 +37,12 @@ enum Cmd {
         /// Replace an existing archived session.
         #[arg(long)]
         overwrite: bool,
+        /// Archive a session whose RuView sidecar (<session>.csi.meta.json) is absent.
+        #[arg(long)]
+        allow_unfinished: bool,
+        /// Record every region instead of refusing evidence that spans more than one.
+        #[arg(long)]
+        allow_multi_region: bool,
         /// Also upload to this store with `weaver store put` (off by default).
         #[arg(long, requires = "principal")]
         store: Option<String>,
@@ -66,6 +72,8 @@ fn main() -> Result<()> {
             protocol,
             consent,
             overwrite,
+            allow_unfinished,
+            allow_multi_region,
             store,
             store_prefix,
             principal,
@@ -77,6 +85,8 @@ fn main() -> Result<()> {
             req.protocol = protocol;
             req.consent = consent.map(serde_json::Value::String);
             req.overwrite = overwrite;
+            req.allow_multi_region = allow_multi_region;
+            req.layout.require_finished = !allow_unfinished;
             if let (Some(name), Some(principal)) = (store, principal) {
                 let mut t = StoreTarget::new(name, store_prefix, principal);
                 t.weaver_bin = weaver_bin;
