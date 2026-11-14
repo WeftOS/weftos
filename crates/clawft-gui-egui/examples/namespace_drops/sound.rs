@@ -53,6 +53,7 @@ pub struct Event {
     pub at: f32,
     pub kind: u8,
     pub mag: f32,
+    #[allow(dead_code)]
     pub group: u8,
     /// Ground position of the stalk this landing belongs to.
     pub x: f32,
@@ -449,6 +450,7 @@ fn wash(v: &mut Voice, rate: f32, dt: f32) -> (f32, f32) {
 }
 
 /// Diatonic walk: keep the sequence, optionally invert it, then transpose.
+#[allow(dead_code)]
 pub fn develop(seq: &[i32], invert: bool, shift: i32) -> Vec<i32> {
     let mut out: Vec<i32> = seq.to_vec();
     if invert {
