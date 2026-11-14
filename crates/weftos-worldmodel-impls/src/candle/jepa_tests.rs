@@ -77,7 +77,7 @@ fn epps_pulley_penalty_matches_quadrature_of_its_definition() {
     let (b, d, k) = (7usize, 4usize, 3usize);
     let vals: Vec<f32> = (0..b * d).map(|i| ((i * 5 % 13) as f32 - 6.0) * 0.3).collect();
     let z = Tensor::from_vec(vals.clone(), (b, d), &Device::Cpu).unwrap();
-    let dirs = random_directions(&mut SplitMix64::new(8), d, k).unwrap();
+    let dirs = random_directions(&mut SplitMix64::new(8), d, k, &Device::Cpu).unwrap();
     let u: Vec<Vec<f32>> = dirs.to_vec2().unwrap();
     let want: f64 = (0..k)
         .map(|c| {
@@ -130,7 +130,7 @@ fn target_branch_gets_no_gradient_and_tau_follows_the_cosine_schedule() {
     let next: Vec<Option<&FrameTransition>> = (0..8).map(|i| Some(&data[i + 1])).collect();
     let cfg = JepaTrainConfig { multistep_weight: 1.0, vic_var_weight: 1.0, vic_cov_weight: 0.1, slice_test: SliceTest::EppsPulley, ..tiny_cfg() };
     let tr = JepaTrainer::new(cfg).unwrap();
-    let dirs = random_directions(&mut SplitMix64::new(1), LATENT_DIM, 16).unwrap();
+    let dirs = random_directions(&mut SplitMix64::new(1), LATENT_DIM, 16, &Device::Cpu).unwrap();
     let (total, _, pred2, _) = tr.losses(&batch, &next, true, &dirs).unwrap();
     assert!(scalar(&pred2) > 0.0, "two-step term active");
     let grads = total.backward().unwrap();

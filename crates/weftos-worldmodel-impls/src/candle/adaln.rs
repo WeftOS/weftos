@@ -97,6 +97,7 @@ fn modulate(h: &Tensor, shift: &Tensor, scale: &Tensor) -> candle_core::Result<T
 #[derive(Clone)]
 pub(crate) struct AdaNet {
     pub(crate) varmap: VarMap,
+    pub(crate) device: Device,
     in_proj: Linear,
     cond_fc1: Linear,
     cond_fc2: Linear,
@@ -113,10 +114,10 @@ impl std::fmt::Debug for AdaNet {
 }
 
 impl AdaNet {
-    pub(crate) fn build(cfg: &AdaLnConfig, seed: u64) -> CandleResult<Self> {
+    pub(crate) fn build(cfg: &AdaLnConfig, seed: u64, device: &Device) -> CandleResult<Self> {
         cfg.validate()?;
         let varmap = VarMap::new();
-        let vb = VarBuilder::from_varmap(&varmap, DType::F32, &Device::Cpu);
+        let vb = VarBuilder::from_varmap(&varmap, DType::F32, device);
         let (l, a, h) = (cfg.latent_dim, cfg.action_dim, cfg.hidden_dim);
         vb.get_with_hints(CONFIG_LEN, CONFIG_TENSOR, Init::Const(0.0))?;
         let blocks = (0..cfg.depth)
@@ -139,6 +140,7 @@ impl AdaNet {
             final_out: linear(h, l, vb.pp("final").pp("out"))?,
             stats: [stat(NORM_STATS[0])?, stat(NORM_STATS[1])?, stat(NORM_STATS[2])?, stat(NORM_STATS[3])?],
             varmap,
+            device: device.clone(),
         };
         seeded_reinit(&net.varmap, seed, |n| n.contains("adaln.") || n.starts_with("final.out."))?;
         set_var(&net.varmap, CONFIG_TENSOR, &config_tensor(ARCH_ADALN, cfg.params())?)?;
@@ -177,9 +179,9 @@ impl AdaNet {
 }
 
 /// Stack latents / actions into `(B, dim)` tensors.
-pub(crate) fn stack_rows<const N: usize>(rows: impl Iterator<Item = [f32; N]>, b: usize) -> CandleResult<Tensor> {
+pub(crate) fn stack_rows<const N: usize>(rows: impl Iterator<Item = [f32; N]>, b: usize, device: &Device) -> CandleResult<Tensor> {
     let flat: Vec<f32> = rows.flat_map(|r| r.into_iter()).collect();
-    Ok(Tensor::from_vec(flat, (b, N), &Device::Cpu)?)
+    Ok(Tensor::from_vec(flat, (b, N), device)?)
 }
 
 /// AdaLN `pred_φ`. Unloaded it returns [`WorldModelError::Unavailable`].
@@ -208,7 +210,12 @@ impl AdaLnPredictor {
 
     /// `config` with deterministic random weights from `seed`.
     pub fn new_random_with(config: AdaLnConfig, seed: u64) -> CandleResult<Self> {
-        let net = AdaNet::build(&config, seed)?;
+        Self::new_random_on(config, seed, &Device::Cpu)
+    }
+
+    /// [`Self::new_random_with`] on `device` (CPU or Metal).
+    pub fn new_random_on(config: AdaLnConfig, seed: u64, device: &Device) -> CandleResult<Self> {
+        let net = AdaNet::build(&config, seed, device)?;
         net.set_stats([&[0.0; LATENT_DIM], &[1.0; LATENT_DIM], &[0.0; LATENT_DIM], &[1.0; LATENT_DIM]])?;
         Ok(Self { weights_path: None, hidden_dim: config.hidden_dim, config, net: Some(net) })
     }
@@ -218,14 +225,19 @@ impl AdaLnPredictor {
         self.net.is_some()
     }
 
+    /// The device the weights live on (`None` when unloaded).
+    pub fn device(&self) -> Option<&Device> {
+        self.net.as_ref().map(|n| &n.device)
+    }
+
     /// Predict a batch in one forward pass.
     pub fn predict_batch(&self, z: &[Latent], actions: &[Action]) -> CandleResult<Vec<Latent>> {
         let net = self.net.as_ref().ok_or_else(|| CandleModelError::Invalid("adaln predictor has no weights".into()))?;
         if z.len() != actions.len() || z.is_empty() {
             return invalid(format!("adaln batch: {} latents vs {} actions", z.len(), actions.len()));
         }
-        let zt = stack_rows(z.iter().copied(), z.len())?;
-        let at = stack_rows(actions.iter().map(|a| a.code), z.len())?;
+        let zt = stack_rows(z.iter().copied(), z.len(), &net.device)?;
+        let at = stack_rows(actions.iter().map(|a| a.code), z.len(), &net.device)?;
         let rows: Vec<Vec<f32>> = net.forward(&zt, &at)?.to_vec2()?;
         Ok(rows.into_iter().map(|r| r.try_into().expect("latent width fixed by config")).collect())
     }

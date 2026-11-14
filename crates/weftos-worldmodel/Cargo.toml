@@ -25,6 +25,8 @@ std = [
 # Forward the candle ViT-tiny encoder + AdaLN pred_phi from impls (candle 0.11,
 # CPU) and DefaultWorldModel::with_adaln. Default CI never enables this.
 candle = ["weftos-worldmodel-impls/candle", "std"]
+# Forward the Metal GPU path of the candle models (macOS, opt-in; implies candle).
+metal = ["weftos-worldmodel-impls/metal", "candle"]
 # ServiceApi-shaped LatticeApi facade (WEFT-527). Pulls serde_json; implies std.
 service-api = ["std", "dep:serde_json"]
 

@@ -181,7 +181,7 @@ pub fn train_jepa(data: &[FrameTransition], cfg: JepaTrainConfig) -> CandleResul
             .iter()
             .map(|&i| TrainingSample { action: data[i].action, ..TrainingSample::basic(SensorClass::RgbD, z_t[i], z_tp1[i], i as u64) })
             .collect();
-        let rc = AdaLnTrainConfig { epochs: cfg.predictor_refit_epochs, seed: cfg.seed ^ 0x2EF1, model: cfg.predictor, ..AdaLnTrainConfig::default() };
+        let rc = AdaLnTrainConfig { epochs: cfg.predictor_refit_epochs, seed: cfg.seed ^ 0x2EF1, model: cfg.predictor, device: cfg.device, ..AdaLnTrainConfig::default() };
         train_adaln_with(&samples, rc)?.predictor
     } else {
         jepa_predictor.clone()

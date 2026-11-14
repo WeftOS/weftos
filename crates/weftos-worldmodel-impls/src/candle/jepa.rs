@@ -80,13 +80,13 @@
 //! `(f_θ(x_t), a, f_ξ(x_tp1))` with the JEPA `pred_φ` ([`JepaTrainReport::eval_target`]). With
 //! the default `τ = 0.99`, `τ^288 ≈ 0.06` and both pairings beat both baselines.
 
-use candle_core::{Tensor, Var};
+use candle_core::{Device, Tensor, Var};
 use candle_nn::{AdamW, Optimizer, ParamsAdamW, VarMap};
 use weftos_worldmodel_core::{Action, LATENT_DIM};
 
 use super::adaln::{stack_rows, AdaLnConfig, AdaNet, NORM_STATS};
 use super::vit::{set_var, VitNet, VitTinyConfig, VIT_POS_EMBED_STD};
-use super::{invalid, synthetic, AdaLnPredictor, CandleModelError, CandleResult, CandleVitEncoder, SplitMix64, CONFIG_TENSOR};
+use super::{assign, invalid, synthetic, AdaLnPredictor, CandleModelError, CandleResult, CandleVitEncoder, ComputeDevice, SplitMix64, CONFIG_TENSOR};
 pub(crate) use super::isotropy::random_directions;
 pub use super::isotropy::{epps_pulley_penalty, isotropy_penalty, participation_ratio, sliced_penalty, vicreg_terms, EP_BETA, ISO_STD_EPS};
 pub use super::jepa_diag::{EpochDiagnostics, LatentDiagnostics};
@@ -182,6 +182,8 @@ pub struct JepaTrainConfig {
     pub action_from_scalar: fn(f32) -> Action,
     /// Harness settings (`holdout_days` is overridden by the field above).
     pub eval: EvalConfig,
+    /// Device the trainer runs on (default CPU; `Metal` needs the `metal` feature).
+    pub device: ComputeDevice,
 }
 
 impl Default for JepaTrainConfig {
@@ -223,6 +225,7 @@ impl JepaTrainConfig {
             predictor: AdaLnConfig::default(),
             action_from_scalar: synthetic::action_code,
             eval: EvalConfig::default(),
+            device: ComputeDevice::Cpu,
         }
     }
 }
@@ -267,6 +270,7 @@ pub struct JepaTrainer {
     dir_rng: SplitMix64,
     /// Fixed directions for [`JepaTrainer::evaluate_loss`] (comparable across calls).
     eval_dirs: Tensor,
+    device: Device,
 }
 
 impl std::fmt::Debug for JepaTrainer {
@@ -285,8 +289,9 @@ impl JepaTrainer {
         if !(0.0..=1.0).contains(&cfg.ema_tau) || !(0.0..=1.0).contains(&cfg.ema_tau_start.unwrap_or(cfg.ema_tau)) || weights.iter().any(|w| *w < 0.0) || cfg.slice_projections == 0 {
             return invalid("jepa training: ema_tau must be in [0, 1], weights >= 0");
         }
-        let online = VitNet::build(&cfg.encoder, cfg.seed)?;
-        let target = VitNet::build(&cfg.encoder, cfg.seed)?;
+        let device = cfg.device.resolve()?;
+        let online = VitNet::build(&cfg.encoder, cfg.seed, &device)?;
+        let target = VitNet::build(&cfg.encoder, cfg.seed, &device)?;
         if cfg.pos_embed_std <= 0.0 {
             return invalid("jepa training: pos_embed_std must be > 0");
         }
@@ -296,7 +301,7 @@ impl JepaTrainer {
                 set_var(&net.varmap, "pos_embed", &pos)?;
             }
         }
-        let pred = AdaLnPredictor::new_random_with(cfg.predictor, cfg.seed ^ 0xADA1_17E5)?
+        let pred = AdaLnPredictor::new_random_on(cfg.predictor, cfg.seed ^ 0xADA1_17E5, &device)?
             .net
             .ok_or_else(|| CandleModelError::Invalid("adaln build returned no net".into()))?;
         let on = trainable(&online.varmap)?;
@@ -312,8 +317,8 @@ impl JepaTrainer {
         vars.extend(trainable(&pred.varmap)?.into_iter().map(|(_, v)| v));
         let opt = AdamW::new(vars, ParamsAdamW { lr: cfg.lr, weight_decay: cfg.weight_decay, ..ParamsAdamW::default() })?;
         let dir_rng = SplitMix64::new(cfg.seed ^ 0x51_1CED);
-        let eval_dirs = random_directions(&mut SplitMix64::new(cfg.seed ^ 0xE7A1), LATENT_DIM, cfg.slice_projections)?;
-        Ok(Self { cfg, online, target, pred, opt, ema_pairs, steps: 0, total_steps: 0, dir_rng, eval_dirs })
+        let eval_dirs = random_directions(&mut SplitMix64::new(cfg.seed ^ 0xE7A1), LATENT_DIM, cfg.slice_projections, &device)?;
+        Ok(Self { cfg, online, target, pred, opt, ema_pairs, steps: 0, total_steps: 0, dir_rng, eval_dirs, device })
     }
 
     /// Optimiser steps taken so far.
@@ -367,17 +372,17 @@ impl JepaTrainer {
         let ftp1: Vec<&[u8]> = batch.iter().map(|t| t.frame_tp1.as_slice()).collect();
         let z = self.online.forward(enc, &ft, train)?;
         let target = self.target.forward(enc, &ftp1, false)?.detach();
-        let a = stack_rows(batch.iter().map(|t| t.action.code), batch.len())?;
+        let a = stack_rows(batch.iter().map(|t| t.action.code), batch.len(), &self.device)?;
         let zhat = self.pred.forward(&z, &a)?;
         let pred = (&zhat - target)?.sqr()?.mean_all()?;
         let (reg_w, reg) = self.iso_terms(&z, dirs)?;
         let mut total = ((&pred * self.cfg.prediction_weight)? + reg_w)?;
-        let mut pred2 = Tensor::new(0.0f32, &candle_core::Device::Cpu)?;
+        let mut pred2 = Tensor::new(0.0f32, &self.device)?;
         let idx: Vec<u32> = (0..batch.len()).filter(|&i| matches!(next.get(i), Some(Some(_)))).map(|i| i as u32).collect();
         if self.cfg.multistep_weight > 0.0 && !idx.is_empty() {
             let succ: Vec<&FrameTransition> = idx.iter().filter_map(|&i| next[i as usize]).collect();
-            let sel = Tensor::from_vec(idx.clone(), idx.len(), &candle_core::Device::Cpu)?;
-            let a2 = stack_rows(succ.iter().map(|t| t.action.code), succ.len())?;
+            let sel = Tensor::from_vec(idx.clone(), idx.len(), &self.device)?;
+            let a2 = stack_rows(succ.iter().map(|t| t.action.code), succ.len(), &self.device)?;
             let ftp2: Vec<&[u8]> = succ.iter().map(|t| t.frame_tp1.as_slice()).collect();
             let target2 = self.target.forward(enc, &ftp2, false)?.detach();
             let zhat2 = self.pred.forward(&zhat.index_select(&sel, 0)?, &a2)?;
@@ -394,7 +399,7 @@ impl JepaTrainer {
 
     /// [`Self::step`] with each transition's same-session successor (for the multi-step term).
     pub fn step_multi(&mut self, batch: &[&FrameTransition], next: &[Option<&FrameTransition>]) -> CandleResult<JepaLoss> {
-        let dirs = random_directions(&mut self.dir_rng, LATENT_DIM, self.cfg.slice_projections)?;
+        let dirs = random_directions(&mut self.dir_rng, LATENT_DIM, self.cfg.slice_projections, &self.device)?;
         let (total, pred, pred2, iso) = self.losses(batch, next, true, &dirs)?;
         self.opt.backward_step(&total)?;
         self.ema_update(self.current_tau())?;
@@ -405,7 +410,7 @@ impl JepaTrainer {
     fn ema_update(&self, tau: f64) -> CandleResult<()> {
         for (xi, theta) in &self.ema_pairs {
             let mixed = ((xi.as_tensor().detach() * tau)? + (theta.as_tensor().detach() * (1.0 - tau))?)?;
-            xi.set(&mixed)?;
+            assign(xi, &mixed)?;
         }
         Ok(())
     }
@@ -425,7 +430,7 @@ impl JepaTrainer {
             let ftp1: Vec<&[u8]> = chunk.iter().map(|t| t.frame_tp1.as_slice()).collect();
             let z = self.online.forward(enc, &ft, false)?;
             let target = self.target.forward(enc, &ftp1, false)?;
-            let a = stack_rows(chunk.iter().map(|t| t.action.code), chunk.len())?;
+            let a = stack_rows(chunk.iter().map(|t| t.action.code), chunk.len(), &self.device)?;
             let err: f32 = (self.pred.forward(&z, &a)? - target)?.sqr()?.mean_all()?.to_scalar()?;
             pred_sum += err * chunk.len() as f32;
             zs.push(z);

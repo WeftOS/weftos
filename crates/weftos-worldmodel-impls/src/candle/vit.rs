@@ -151,6 +151,7 @@ fn norm(x: &Tensor, (w, b): &(Tensor, Tensor), train: bool) -> candle_core::Resu
 #[derive(Clone)]
 pub(crate) struct VitNet {
     pub(crate) varmap: VarMap,
+    pub(crate) device: Device,
     patch: Linear,
     pub(crate) pos: Tensor,
     blocks: Vec<Block>,
@@ -165,10 +166,10 @@ impl std::fmt::Debug for VitNet {
 }
 
 impl VitNet {
-    pub(crate) fn build(cfg: &VitTinyConfig, seed: u64) -> CandleResult<Self> {
+    pub(crate) fn build(cfg: &VitTinyConfig, seed: u64, device: &Device) -> CandleResult<Self> {
         cfg.validate().map_err(|e| CandleModelError::Invalid(format!("vit config: {e}")))?;
         let varmap = VarMap::new();
-        let vb = VarBuilder::from_varmap(&varmap, DType::F32, &Device::Cpu);
+        let vb = VarBuilder::from_varmap(&varmap, DType::F32, device);
         let (e, p) = (cfg.embed_dim, cfg.patch_size);
         let cfg_var = vb.get_with_hints(CONFIG_LEN, CONFIG_TENSOR, Init::Const(0.0))?;
         let patch = linear(3 * p * p, e, vb.pp("patch_embed").pp("proj"))?;
@@ -181,12 +182,12 @@ impl VitNet {
         seeded_reinit(&varmap, seed, |_| false)?;
         set_var(&varmap, CONFIG_TENSOR, &config_tensor(ARCH_VIT_TINY, cfg.params())?)?;
         drop(cfg_var);
-        Ok(Self { varmap, patch, pos, blocks, norm, head })
+        Ok(Self { varmap, device: device.clone(), patch, pos, blocks, norm, head })
     }
 
     /// `(B, latent_dim)` latents for `B` frames.
     pub(crate) fn forward(&self, cfg: &VitTinyConfig, frames: &[&[u8]], train: bool) -> CandleResult<Tensor> {
-        let patches = patchify(cfg, frames)?;
+        let patches = patchify(cfg, frames, &self.device)?;
         let mut x = self.patch.forward(&patches)?.broadcast_add(&self.pos)?;
         for blk in &self.blocks {
             x = blk.forward(&x, cfg.num_heads, train)?;
@@ -199,13 +200,13 @@ impl VitNet {
 pub(crate) fn set_var(varmap: &VarMap, name: &str, value: &Tensor) -> CandleResult<()> {
     let data = varmap.data().lock().map_err(|_| CandleModelError::Invalid("varmap lock poisoned".into()))?;
     match data.get(name) {
-        Some(var) => Ok(var.set(value)?),
+        Some(var) => Ok(super::assign(var, value)?),
         None => invalid(format!("no variable named {name}")),
     }
 }
 
 /// Frame bytes → `(B, N, 3·p·p)` patches in `(c, ky, kx)` order.
-fn patchify(cfg: &VitTinyConfig, frames: &[&[u8]]) -> CandleResult<Tensor> {
+fn patchify(cfg: &VitTinyConfig, frames: &[&[u8]], device: &Device) -> CandleResult<Tensor> {
     let (s, p) = (cfg.image_size, cfg.patch_size);
     if frames.is_empty() {
         return invalid("vit encoder: no frames");
@@ -222,7 +223,7 @@ fn patchify(cfg: &VitTinyConfig, frames: &[&[u8]]) -> CandleResult<Tensor> {
         data.extend(f.iter().map(|&v| v as f32 / 127.5 - 1.0));
     }
     let (b, g) = (frames.len(), s / p);
-    let t = Tensor::from_vec(data, vec![b, g, p, g, p, 3], &Device::Cpu)?;
+    let t = Tensor::from_vec(data, vec![b, g, p, g, p, 3], device)?;
     Ok(t.permute(vec![0, 1, 3, 5, 2, 4])?.contiguous()?.reshape((b, g * g, 3 * p * p))?)
 }
 
@@ -268,7 +269,18 @@ impl CandleVitEncoder {
 
     /// `config` with deterministic random weights from `seed`.
     pub fn new_random_with(config: VitTinyConfig, seed: u64) -> CandleResult<Self> {
-        Ok(Self { config, weights_path: None, net: Some(VitNet::build(&config, seed)?) })
+        Self::new_random_on(config, seed, &Device::Cpu)
+    }
+
+    /// [`Self::new_random_with`] on `device` (CPU or Metal). The init values are generated on
+    /// the host, so the weights are the same on every device.
+    pub fn new_random_on(config: VitTinyConfig, seed: u64, device: &Device) -> CandleResult<Self> {
+        Ok(Self { config, weights_path: None, net: Some(VitNet::build(&config, seed, device)?) })
+    }
+
+    /// The device the weights live on (`None` when unloaded).
+    pub fn device(&self) -> Option<&Device> {
+        self.net.as_ref().map(|n| &n.device)
     }
 
     /// Whether weights are present (loaded or random-initialised).
@@ -372,7 +384,7 @@ pub(crate) mod tests {
         // 2x2 image, patch 1: each patch is one pixel's (R, G, B).
         let cfg = VitTinyConfig { image_size: 2, patch_size: 1, embed_dim: 3, depth: 0, num_heads: 1, latent_dim: LATENT_DIM };
         let f: Vec<u8> = (0..12).map(|v| v as u8).collect();
-        let p: Vec<Vec<f32>> = patchify(&cfg, &[&f]).unwrap().squeeze(0).unwrap().to_vec2().unwrap();
+        let p: Vec<Vec<f32>> = patchify(&cfg, &[&f], &Device::Cpu).unwrap().squeeze(0).unwrap().to_vec2().unwrap();
         assert_eq!(p.len(), 4);
         assert!((p[1][0] - (3.0 / 127.5 - 1.0)).abs() < 1e-6, "patch 1 starts at pixel (0,1) R");
     }
