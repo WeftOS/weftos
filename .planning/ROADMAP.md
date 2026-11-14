@@ -198,37 +198,54 @@ x-ref: `.planning/sparc/weftos/0.1/10-sprint-plan.md` for full detail
 
 ## In-Flight Research: LeWM World Model (ADRs 048–058)
 
-**Status**: research + design · no runtime APIs yet · existing WeftOS installs unaffected
+**Status (updated 2026-11-14)**: crates landed (WEFT-519..534 and 543 Done): `weftos-worldmodel-core`, `weftos-worldmodel-impls`, `weftos-worldmodel`, `clawft-worldmodel-service`, plus ADR-090 invariant predicates, ADR-111 and `contracts/sensors/`. APIs, stubs, planners, SIGReg monitor, rollback gate, two training surfaces, RVF hot-swap and the W4 eval harness exist. **Residual is weights, the data path (W1 archiver, W2 recording), and a real dataset.** Existing WeftOS installs are unaffected.
+**Living plan**: `docs/plans/world-model-data-and-training.md` (W1 to W7 phases)
+**State report (2026-11-14)**: `/Volumes/ai-models/research/weftos-agent-notes/reports/lewm-worldmodel-state-20261114.md`
 **Tracking**: `.planning/symposiums/lewm-worldmodel/diagram.md` · `.planning/lewm-worldmodel-rs-page/`
 **Public page**: `https://weftos.weavelogic.ai/lewm-worldmodel-rs`
 
-A sensor-primary latent world model layered *under* the ECC causal DAG. The sensor pipeline is the primary, self-sufficient plane; a WorldModelService is an additive, optional consumer. Decoupling-invariant by design (ADR-058): a node running WeftOS today will keep working identically whether LeWM is present, absent, or removed later.
+A sensor-primary latent world model layered *under* the ECC causal DAG. The sensor pipeline is the primary, self-sufficient plane; a WorldModelService is an additive, optional consumer. Decoupling-invariant by design (ADR-090): a node running WeftOS today will keep working identically whether LeWM is present, absent, or removed later.
 
 ### What exists now (shipped to master)
 - Architecture diagram + infographic (`.planning/symposiums/lewm-worldmodel/diagram.md`)
 - Public narrative page `/lewm-worldmodel-rs` (scroll pop-up book, 12 beats)
 - Design notes `.planning/lewm-worldmodel-rs-page/{DESIGN-A,DESIGN-B,PLAN}.md`
 
-### Not implemented yet — plan around absence
-| Surface | Status | Notes for integrators |
-|---------|--------|----------------------|
-| `weftos-sensor-pipeline` crate (ADR-056) | **Not started** | Wire format will be CBOR, ≤ 2 KB/frame; schema subject to change until 1.0-freeze |
-| SIGReg-manifold encoder (ADR-050) | Research | 192-dim isotropic-Gaussian latent, no stable API |
-| `WorldModelService` (ADR-054) | Research | Single / Raft-standby / P2P deployment modes under evaluation |
-| `LatentPlanner` (ADR-051) | Research | CEM default, MPPI-warm + gradient under evaluation |
-| DEMOCRITUS 1 kHz servo loop (ADR-047) | Research | Self-calibrated heartbeat; runs *local* to node, not over mesh |
-| Mesh topics `mesh.sensor.v1.{encoded,consensus,control}` (ADR-053) | Reserved | Do not claim these topic prefixes in other features |
-| StructureTag::LatentWorldModel (ADR-048) | Reserved | Do not re-use this tag in CausalNode metadata |
-| RVF-hosted sensor models (ADR-057) | Research | Hot-swap + auto-rollback semantics drafted, not implemented |
+### What is real vs stub
+Plan around the stubs. The first group runs in-process today. The second group holds the residual work.
+
+| Piece | Reality in code (2026-11-14) |
+|-------|------------------------------|
+| `weftos-sensor-pipeline` and `weftos-sensor-pipeline-wire` (ADR-056) | Exist. The wire crate frames observations as CBOR with Ed25519 signing. Schema stays provisional until 1.0-freeze. |
+| Core traits and constants | Real. `LATENT_DIM = 192`, `Encoder`, `Predictor`, `LatentPlanner`, `LatticeApi`, `SigRegMonitor` (0.85 over 30 s), four-condition `RollbackGate`. |
+| Planners and SIGReg monitor | Real. CEM, MPPI-warm and gradient planners; Welford SIGReg monitor with auto-rollback. |
+| RVF hot-swap and rollback | Real. `SensorModelRegistry` commits at a tick and rolls back on gate failure. |
+| W4 eval harness | Real on synthetic fixtures only. No recorded data exists yet. |
+| `SensorClass` | Partial. Six classes exist (Generic, RgbD, Imu, Proprio, Lidar, Audio). mmWave, UWB, ToF, Wi-Fi CSI and SenML readings have no class yet. |
+| `pred_φ` | Stub. `LinearPredPhi` adds the action code to the first 32 latent dims with no learned parameters. |
+| Encoder | Stub. `HashEncoder` is the only non-null encoder. |
+| Training surfaces and optimisers | Stub. Both pipelines train a residual mean, not a neural model. Checkpoints hold a 768-byte residual vector. |
+| `candle` feature | Skeleton. `VitTinyConfig` and the ViT and AdaLN shells exist. They return `Unavailable` because no weights load. |
+| Dataset archiver | Missing. No code exists yet. |
+| Recorded dataset (W2) | Blocked on hardware and a recording session. |
+| Service topologies | Role metadata only. HotStandby and P2P run on the same local loop, with no Raft and no mesh wiring. |
+| DEMOCRITUS 1 kHz servo loop (ADR-047) | Research, not in tree. Self-calibrated heartbeat; runs *local* to node, not over mesh. |
+
+### Reserved identifiers
+| Identifier | Status |
+|------------|--------|
+| Mesh topics `mesh.sensor.v1.{encoded,consensus,control}` (ADR-053) | Reserved. Do not claim these topic prefixes in other features. |
+| StructureTag::LatentWorldModel (ADR-048) | Reserved. Do not re-use this tag in CausalNode metadata. |
 
 ### Stability contract for existing installs (v0.6.x and forward)
 - **Nothing in the LeWM research branch gates an existing release.** LeWM lands behind a feature flag when it lands.
-- **Mesh, ECC, ExoChain, governance, and kernel APIs are unchanged** by this work. The decoupling-invariant (ADR-058) is non-negotiable.
+- **Mesh, ECC, ExoChain, governance, and kernel APIs are unchanged** by this work. The decoupling-invariant (ADR-090) is non-negotiable.
 - **Reserved identifiers above will not be assigned to anything else.** Other teams building on mesh/causal-graph surfaces can safely ignore them.
 - **Sensor-pipeline wire format is considered provisional** until a `weftos-sensor-pipeline` crate ships with a version. Any integration before then must pin to a specific commit.
 
 ### Trigger to promote out of research
-- First `weftos-sensor-pipeline` crate published (even as 0.x)
+- W2 exit (plan §5): dataset card filed with hours per phase, held-out split by day, proof-tag counts and checksums, plus the ADR-384 step 4 validation record
+- W5 flat model beats the matched baseline on held-out days, passes the rollback gate, and runs at 10 Hz on the Mac
 - Decoupling-invariant test suite green (install-with-LeWM ≡ install-without-LeWM observability)
 - ADRs 048–058 moved from research to accepted
 

@@ -2,6 +2,7 @@
 
 > Known defects and live working-tree state. Source-of-truth: `.planning/reviews/`,
 > `.planning/sonobuoy/GAPS.md`, `docs/handoff.md`, `git status`. Compiled 2026-06-28.
+> Updated 2026-11-14: item 7 (LeWM) rewritten to the current state.
 
 ## 0. Reconciliation update — 2026-06-28
 
@@ -122,7 +123,13 @@ findings, all open at audit time:
    `ghcr.io/clawft/clawft` paths.
 6. KG-011/012 blocked on ruvllm-wasm 11-pattern HNSW cap; DiskANN backend is a
    HashMap linear-scan stub.
-7. JEPA/LeWM world-model: 7 crates don't exist on master; ADRs 048–058 greenfield.
+7. JEPA/LeWM world-model, state on 2026-11-14:
+   - The crates exist on master; the old "7 crates don't exist" claim is stale.
+   - No ML weights ship; the candle skeleton returns Unavailable until weights load.
+   - Both optimisers are residual-mean stubs, not neural training.
+   - `SensorClass` lacks the real sensors (mmWave, UWB, ToF, Wi-Fi CSI, readings); being added.
+   - No dataset archiver exists yet; being added.
+   - No recorded dataset exists; W2 is blocked on hardware and a recording session.
 8. Auth middleware exists but NOT wired into the Axum router (D-7).
 
 **cargo audit (2026-04-28)** — 21 finding rows / 18 advisory IDs, all transitive:
