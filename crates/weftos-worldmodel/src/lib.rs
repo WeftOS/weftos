@@ -23,7 +23,7 @@
 //! Both trainers fit the action-conditioned linear `pred_φ` (`ẑ = z + A·a + b`).
 //! The optional `candle` feature adds the ViT-tiny encoder and the AdaLN
 //! `pred_φ` (safetensors checkpoints, AdamW training);
-//! [`DefaultWorldModel::with_adaln`] swaps AdaLN in for prediction.
+//! `DefaultWorldModel::with_adaln` (feature `candle`) swaps AdaLN in for prediction.
 //!
 //! # Quick start (stubs)
 //!
@@ -52,10 +52,10 @@
 //!
 //! # ExoChain attestation (WEFT-533)
 //!
-//! With `feature = "std"`, [`attestation`] serializes
+//! With `feature = "std"`, `attestation` serializes
 //! [`ObservationTuple`] `(a_t, z_t, z_{t+1}, surprise)` with a
 //! version-tagged SIGReg manifold reference for append onto a
-//! [`ChainSink`] (in-memory or kernel ExoChain bridge).
+//! `ChainSink` (in-memory or kernel ExoChain bridge).
 //!
 //! # Feature flags
 //!
@@ -300,7 +300,7 @@ impl DefaultWorldModel {
     }
 
     /// Commit pending hot-swaps at DEMOCRITUS / mesh tick boundary. A committed `Encode`
-    /// checkpoint also rebuilds that class's `pred_φ` (see [`mod@autoload`] docs).
+    /// checkpoint also rebuilds that class's `pred_φ` (see the `autoload` module).
     pub fn commit_models_at_tick(
         &mut self,
         tick: u64,
