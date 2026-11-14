@@ -302,6 +302,14 @@ L1 as the tier for "unmerged layers that other nodes should see before integrati
     still does not prove a clean merge;
   - **audit:** the S2 verbs a follower's operator runs (create, publish, claim, promote) appear in
     the activity log and on the chain, failures included;
+  - **Browse without a checkout** (WO-069 dashboard reader; prototype, branch `w2/wo069-b-browse`):
+    `follower::browse_registry` (worktree list, lenient on a corrupt entry), `browse_ls` (one folder of the
+    shared tree, from the manifest, folders first, sizes, SHA-256, doc titles) and `browse_get` (one file,
+    capped at `min(max_bytes, 4 MiB)`; over the cap it returns `withheld` with size and checksum, not bytes).
+    The slug is resolved through the registry and the bucket's `.wt/meta.json` is cross-checked first; only
+    `.wt/tree/<path>` for a path the manifest lists is ever read, under the same path refusals as `fetch`.
+    `weaver store worktree browse` and `worktree-store.sh browse` call them; WO-067's `store.browse.*` RPC
+    gates them with `store-browse.json` (`worktrees/` in the project store, `.wt/tree/` per worktree store).
   - **a registry entry is a pointer, not authority:** before reading a bucket a follower checks the
     slug is well-formed and that the bucket's own `.wt/meta.json` names the same slug, so an entry
     cannot aim a follower's read grants at another worktree's bucket.

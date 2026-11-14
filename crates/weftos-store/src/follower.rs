@@ -18,6 +18,7 @@ use crate::share::{CLAIM_TTL_MS, ChangeKind, State, read_manifest, safe_join};
 use crate::share_fetch::{
     FetchReport, REGISTRY_PREFIX, RegistryEntry, Select, fetch_tree, list_shared_lenient,
 };
+pub use crate::follower_browse::{browse_get, browse_ls, browse_registry};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;

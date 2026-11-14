@@ -54,7 +54,7 @@ pub fn write_digest<B: ObjectBackend>(b: &B, project_bucket: &str) -> Result<()>
 }
 
 /// Parse and cross-check one registry object (see [`list_shared_lenient`]).
-fn check_entry(project_bucket: &str, slug: &str, data: Option<&[u8]>) -> Option<RegistryEntry> {
+pub(crate) fn check_entry(project_bucket: &str, slug: &str, data: Option<&[u8]>) -> Option<RegistryEntry> {
     let e: RegistryEntry = serde_json::from_slice(data?).ok()?;
     (e.slug == slug && expected_worktree_bucket(project_bucket, &e.slug).is_none_or(|x| x == e.bucket)).then_some(e)
 }

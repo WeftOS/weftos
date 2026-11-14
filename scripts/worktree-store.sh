@@ -15,6 +15,9 @@
 #   worktree-store.sh follow [--state FILE]     what changed among unmerged worktrees since last look
 #   worktree-store.sh search <query>            docs/planning across all unmerged worktrees
 #   worktree-store.sh leftovers [--json]        forgotten / unclaimed / abandoned worktrees
+#   worktree-store.sh browse [<slug> [path]] [--json]
+#                                               read-only browse, no checkout: no slug lists worktrees; a slug lists its
+#                                               root; `dir/` lists a folder; `file` prints it (4 MiB cap, --max-bytes N)
 #   worktree-store.sh sync-docs <slug> <cache>  read-only local mirror of a worktree's docs
 #   worktree-store.sh overlaps <slugA> <slugB>  files both changed differently (merge-conflict hint)
 #   worktree-store.sh mount-config <slug> [--local ROOT]   print the rclone union remote (worktree over project)
@@ -221,6 +224,20 @@ search)
 leftovers)
     case "${1:-}" in ""|--json) ;; *) die "usage: leftovers [--json]" ;; esac
     store_must leftovers --project "$(project_id)" ${1:+"$1"}
+    ;;
+browse)
+    args=(); slug=""; path=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+        --json) args+=(--json) ;;
+        --max-bytes) args+=(--max-bytes "${2:?--max-bytes needs a number}"); shift ;;
+        --*) die "usage: browse [<slug> [path]] [--json] [--max-bytes N]" ;;
+        *) if [ -z "$slug" ]; then slug=$1; elif [ -z "$path" ]; then path=$1; else die "usage: browse [<slug> [path]] [--json] [--max-bytes N]"; fi ;;
+        esac
+        shift
+    done
+    [ -n "$slug" ] && check_slug "$slug"
+    store_must browse --project "$(project_id)" ${slug:+--slug "$slug"} ${path:+--path "$path"} ${args[@]+"${args[@]}"}
     ;;
 sync-docs)
     slug=${1:?usage: sync-docs <slug> <cache>}; cache=${2:?usage: sync-docs <slug> <cache>}

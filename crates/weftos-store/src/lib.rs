@@ -22,6 +22,7 @@ pub mod backend;
 pub mod claim_watch;
 pub mod drive;
 pub mod follower;
+pub mod follower_browse;
 pub mod fs;
 pub mod grant_seq;
 pub mod mem;
