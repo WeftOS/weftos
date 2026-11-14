@@ -67,6 +67,15 @@ fn env_config(holdout_days: usize, n_train: usize) -> JepaTrainConfig {
         Ok("std") => c.slice_test = SliceTest::Std,
         _ => {}
     }
+    // Lane P numerics knobs: LEWM_REDUCE = native | host | pairwise, LEWM_JITTER (relative init
+    // perturbation, 0 = off), LEWM_JITTER_SEED. Fast math is candle's CANDLE_METAL_ENABLE_FAST_MATH.
+    c.numerics.reductions = match std::env::var("LEWM_REDUCE").as_deref() {
+        Ok("host") => super::ReduceMode::Host,
+        Ok("pairwise") => super::ReduceMode::Pairwise,
+        _ => super::ReduceMode::Native,
+    };
+    c.numerics.init_jitter = env_f("LEWM_JITTER", 0.0);
+    c.numerics.jitter_seed = env_f("LEWM_JITTER_SEED", 1.0) as u64;
     let steps = env_f("LEWM_STEPS", 288.0) as usize;
     let per_epoch = n_train.div_ceil(c.batch_size);
     c.epochs = steps.div_ceil(per_epoch);
@@ -147,9 +156,11 @@ fn default_regression(device: super::ComputeDevice) {
     assert!(r.eval.collapsed_coords.is_empty(), "collapsed {:?}", r.eval.collapsed_coords);
     assert!(r.held_out_sigreg_health >= 0.85, "held-out health {}", r.held_out_sigreg_health);
     // The CPU run is deterministic and keeps lane J's margin on the θ pairing. A Metal run is
-    // not bit-identical (GPU summation order, fast-math shaders), so its trajectory differs; on
-    // seeds 21 and 23 the θ pairing lands 5 % under linear instead of the 10 % margin, while the
-    // ξ pairing, which matches what training optimises, beats both baselines on every seed.
+    // not bit-identical (reductions, fast-math exp/sqrt and erf differ by about one rounding;
+    // the matmuls agree), and training amplifies that like any last-bit perturbation (lane P):
+    // on seeds 21 and 23 the θ pairing lands 5 % under linear instead of the 10 % margin, while
+    // the ξ pairing, which matches what training optimises, beats both baselines on every seed.
+    // Lane P also measured the CPU θ pass on seed 21 at 2 of 5 under one-ulp init perturbations.
     let e = if strict_theta { &r.eval } else { &r.eval_target };
     assert!(e.beats_baselines, "model {} vs copy-last {} / linear {}", e.model_err, e.baselines.copy_last, e.baselines.linear);
     // The gate's probe (beats copy-last, owner 2026-11-14) must pass. Temporal straightening

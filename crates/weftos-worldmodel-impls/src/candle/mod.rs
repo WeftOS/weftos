@@ -11,6 +11,7 @@
 //! | safetensors I/O | [`io`] | `from_safetensors_path` / `from_safetensors_bytes`, byte export, codec `0x03`, registry helper |
 //! | training | [`train`] | AdamW loop for the AdaLN predictor over [`weftos_worldmodel_core::TrainingSample`]s |
 //! | JEPA training | [`jepa`], [`jepa_report`], [`jepa_diag`] | Encoder + predictor self-supervised: EMA target ViT, SIGReg-style isotropy penalty, harness collapse checks |
+//! | numerics | [`numerics`] | Off-by-default reduction modes and init jitter for the Metal-vs-CPU drift study (lane P) |
 //! | fixtures | [`synthetic`] | SYNTHETIC moving-blob frames with actions and day/session tags (tests and bench only) |
 //!
 //! # Checkpoint layout
@@ -34,6 +35,7 @@ pub mod isotropy;
 pub mod jepa;
 pub mod jepa_diag;
 pub mod jepa_report;
+pub mod numerics;
 pub mod synthetic;
 pub mod train;
 pub mod vit;
@@ -41,7 +43,14 @@ pub mod vit;
 #[cfg(all(test, feature = "metal"))]
 mod metal_tests;
 
+#[cfg(all(test, feature = "metal"))]
+mod drift_tests;
+
+#[cfg(all(test, feature = "metal"))]
+mod drift_chaos_tests;
+
 pub use adaln::{AdaLnConfig, AdaLnPredictor};
+pub use numerics::{JepaNumerics, ReduceMode};
 pub use io::{active_candle_model, to_safetensors_bytes, CandleModel};
 pub use jepa::{train_jepa, EpochDiagnostics, FrameTransition, JepaLoss, JepaTrainConfig, JepaTrainReport, JepaTrainer, LatentDiagnostics, SliceTest};
 pub use train::{train_adaln, train_adaln_with, AdaLnTrainConfig, AdaLnTrainReport};

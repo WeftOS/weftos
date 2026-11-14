@@ -157,6 +157,8 @@ pub(crate) struct VitNet {
     blocks: Vec<Block>,
     norm: (Tensor, Tensor),
     head: Linear,
+    /// How the patch mean-pool is reduced ([`super::numerics::ReduceMode`], default native).
+    pub(crate) pool: super::numerics::ReduceMode,
 }
 
 impl std::fmt::Debug for VitNet {
@@ -182,7 +184,7 @@ impl VitNet {
         seeded_reinit(&varmap, seed, |_| false)?;
         set_var(&varmap, CONFIG_TENSOR, &config_tensor(ARCH_VIT_TINY, cfg.params())?)?;
         drop(cfg_var);
-        Ok(Self { varmap, device: device.clone(), patch, pos, blocks, norm, head })
+        Ok(Self { varmap, device: device.clone(), patch, pos, blocks, norm, head, pool: Default::default() })
     }
 
     /// `(B, latent_dim)` latents for `B` frames.
@@ -192,7 +194,7 @@ impl VitNet {
         for blk in &self.blocks {
             x = blk.forward(&x, cfg.num_heads, train)?;
         }
-        let x = norm(&x, &self.norm, train)?.mean(1)?;
+        let x = super::numerics::pool(&norm(&x, &self.norm, train)?, self.pool)?;
         Ok(self.head.forward(&x)?)
     }
 }
@@ -206,7 +208,7 @@ pub(crate) fn set_var(varmap: &VarMap, name: &str, value: &Tensor) -> CandleResu
 }
 
 /// Frame bytes → `(B, N, 3·p·p)` patches in `(c, ky, kx)` order.
-fn patchify(cfg: &VitTinyConfig, frames: &[&[u8]], device: &Device) -> CandleResult<Tensor> {
+pub(crate) fn patchify(cfg: &VitTinyConfig, frames: &[&[u8]], device: &Device) -> CandleResult<Tensor> {
     let (s, p) = (cfg.image_size, cfg.patch_size);
     if frames.is_empty() {
         return invalid("vit encoder: no frames");
