@@ -34,6 +34,56 @@ pub fn sliced_penalty(z: &Tensor, dirs: &Tensor) -> candle_core::Result<Tensor> 
     ((var + ISO_STD_EPS)?.sqrt()? - 1.0)?.sqr()?.mean_all()
 }
 
+/// Width `β` of the Gaussian weight `w(t) = N(t; 0, β²)` in [`epps_pulley_penalty`].
+pub const EP_BETA: f64 = 1.0;
+
+/// Sliced Epps-Pulley test (LeJEPA SIGReg, characteristic-function form). For each column
+/// `u_k` of `dirs` (`(d, k)`, unit columns) the projections `x_n = z_n · u_k` (not centred:
+/// the target is `N(0, 1)`, mean included) are scored by
+///
+/// ```text
+/// D_k = ∫ |φ̂(t) − e^{−t²/2}|² w(t) dt,   φ̂(t) = (1/B) Σ_n e^{i t x_n},   w = N(0, β²)
+///     = (1/B²) Σ_{m,n} e^{−β²(x_m − x_n)²/2}
+///       − (2/B) (1+β²)^{−½} Σ_n e^{−β² x_n² / (2(1+β²))}
+///       + (1+2β²)^{−½}
+/// ```
+///
+/// and the penalty is `mean_k D_k` (`β =` [`EP_BETA`]). `D_k ≥ 0`, and it is 0 only when the
+/// empirical characteristic function matches the standard normal's under `w`, so unlike the
+/// std form it also sees skew, heavy tails and clustered (multi-modal) projections. The
+/// `m = n` terms add a constant `1/B` with no gradient. `B ≥ 2`.
+pub fn epps_pulley_penalty(z: &Tensor, dirs: &Tensor) -> candle_core::Result<Tensor> {
+    let b2 = EP_BETA * EP_BETA;
+    let x = z.matmul(dirs)?; // (B, K)
+    let diff = x.unsqueeze(1)?.broadcast_sub(&x.unsqueeze(0)?)?; // (B, B, K)
+    let pair = (diff.sqr()? * (-0.5 * b2))?.exp()?.mean(0)?.mean(0)?; // (K)
+    let single = ((x.sqr()? * (-b2 / (2.0 * (1.0 + b2))))?.exp()?.mean(0)? * (2.0 / (1.0 + b2).sqrt()))?;
+    ((pair - single)? + 1.0 / (1.0 + 2.0 * b2).sqrt())?.mean_all()
+}
+
+/// VICReg variance and covariance terms of a `(B, d)` batch:
+/// `var = mean_i max(0, 1 − σ_i)` with `σ_i = √(C_ii + ε)`, and
+/// `cov = Σ_{i≠j} M_ij² / d` (`n − 1` covariance). `M = C` (VICReg) or, with `correlation`,
+/// `M_ij = C_ij / (σ_i σ_j)`: scale-free, so with `B ≤ d` it pushes rank up without pulling
+/// the diagonal under 1. `B ≥ 2`.
+pub fn vicreg_terms(z: &Tensor, correlation: bool) -> candle_core::Result<(Tensor, Tensor)> {
+    let (b, d) = z.dims2()?;
+    let zc = z.broadcast_sub(&z.mean(0)?)?;
+    let var = (zc.sqr()?.sum(0)? / (b as f64 - 1.0))?;
+    let std = (&var + ISO_STD_EPS)?.sqrt()?;
+    let hinge = (1.0 - &std)?.relu()?.mean_all()?;
+    // The correlation path uses its own tiny ε: with ISO_STD_EPS, shrinking every coordinate
+    // under ε would also shrink `ρ` and so lower the term (measured: it drives z to 0).
+    let zm = if correlation { zc.broadcast_div(&(&var + CORR_EPS)?.sqrt()?)? } else { zc };
+    let c = (zm.t()?.matmul(&zm)? / (b as f64 - 1.0))?;
+    let diag = (zm.sqr()?.sum(0)? / (b as f64 - 1.0))?;
+    let off = ((c.sqr()?.sum_all()? - diag.sqr()?.sum_all()?)? / d as f64)?;
+    Ok((hinge, off))
+}
+
+/// `ε` of the correlation normalisation in [`vicreg_terms`].
+pub const CORR_EPS: f64 = 1e-8;
+
 /// `ε` inside `σ_i = √(C_ii + ε)` of the isotropy penalty.
 pub const ISO_STD_EPS: f64 = 1e-4;
 

@@ -30,6 +30,8 @@ use super::{
 
 /// MLP hidden width = `MLP_RATIO · embed_dim`.
 pub const VIT_MLP_RATIO: usize = 4;
+/// Std of the random `pos_embed` init (timm's 0.02).
+pub const VIT_POS_EMBED_STD: f64 = 0.02;
 /// LayerNorm epsilon (timm ViT default).
 pub const VIT_LN_EPS: f64 = 1e-6;
 
@@ -150,7 +152,7 @@ fn norm(x: &Tensor, (w, b): &(Tensor, Tensor), train: bool) -> candle_core::Resu
 pub(crate) struct VitNet {
     pub(crate) varmap: VarMap,
     patch: Linear,
-    pos: Tensor,
+    pub(crate) pos: Tensor,
     blocks: Vec<Block>,
     norm: (Tensor, Tensor),
     head: Linear,

@@ -24,12 +24,25 @@
 //! (`code[0] = a`, a one-hot of the level in `code[1..6]`). The scalar is what
 //! [`crate::eval_harness::Transition::action`] carries.
 //!
-//! Everything is a pure function of [`SyntheticConfig::seed`].
+//! Everything is a pure function of [`SyntheticConfig::seed`]. The drift, distractor and
+//! day-background knobs exist for the collapse bake-off (lane J): with the defaults the random
+//! stream, and so every frame, is the same as before they were added.
 
 use weftos_worldmodel_core::Action;
 
 use super::jepa::FrameTransition;
 use super::SplitMix64;
+
+/// When the distractor (blob 1) is present.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Distractor {
+    /// In about half the sessions (a per-session coin flip; the default).
+    Random,
+    /// In every session (its presence no longer marks a session).
+    Always,
+    /// Never.
+    Never,
+}
 
 /// Discrete action levels.
 pub const ACTION_LEVELS: [f32; 5] = [-1.0, -0.5, 0.0, 0.5, 1.0];
@@ -53,6 +66,15 @@ pub struct SyntheticConfig {
     pub noise: u8,
     /// Seed for every random choice.
     pub seed: u64,
+    /// Per-session vertical drift of blob 0 is uniform in `[−drift_px, drift_px)` per step.
+    pub drift_px: f32,
+    /// Distractor velocity is uniform in `[−distractor_speed_px, distractor_speed_px)` per axis
+    /// per step.
+    pub distractor_speed_px: f32,
+    /// Distractor presence rule.
+    pub distractor: Distractor,
+    /// Background grey is `40 + (day_background_step · day mod 12)` (0 = no day shift).
+    pub day_background_step: u8,
 }
 
 impl Default for SyntheticConfig {
@@ -66,6 +88,10 @@ impl Default for SyntheticConfig {
             action_step_px: 6.0,
             noise: 8,
             seed: 0,
+            drift_px: 1.5,
+            distractor_speed_px: 3.0,
+            distractor: Distractor::Random,
+            day_background_step: 3,
         }
     }
 }
@@ -149,13 +175,18 @@ pub fn generate(cfg: &SyntheticConfig) -> Vec<FrameTransition> {
     let s = cfg.image_size as f32;
     let mut out = Vec::with_capacity(cfg.days as usize * cfg.sessions_per_day as usize * cfg.steps_per_session);
     for day in 0..cfg.days {
-        let background = 40 + ((day as u32 * 3) % 12) as u8;
+        let background = 40 + ((day as u32 * cfg.day_background_step as u32) % 12) as u8;
         for session in 0..cfg.sessions_per_day {
             let pos = |rng: &mut SplitMix64| (rng.uniform() * 0.5 + 0.5) * s;
             let mut blobs = vec![Blob { x: pos(&mut rng), y: pos(&mut rng), color: [220, 60, 60] }];
-            let drift_y = rng.uniform() * 1.5;
-            let distractor = rng.next_u64().is_multiple_of(2);
-            let (vx, vy) = (rng.uniform() * 3.0, rng.uniform() * 3.0);
+            let drift_y = rng.uniform() * cfg.drift_px;
+            let coin = rng.next_u64().is_multiple_of(2);
+            let distractor = match cfg.distractor {
+                Distractor::Random => coin,
+                Distractor::Always => true,
+                Distractor::Never => false,
+            };
+            let (vx, vy) = (rng.uniform() * cfg.distractor_speed_px, rng.uniform() * cfg.distractor_speed_px);
             if distractor {
                 blobs.push(Blob { x: pos(&mut rng), y: pos(&mut rng), color: [60, 200, 80] });
             }
@@ -191,7 +222,7 @@ mod tests {
     use super::*;
 
     fn small() -> SyntheticConfig {
-        SyntheticConfig { image_size: 16, days: 2, sessions_per_day: 2, steps_per_session: 5, blob_radius: 3.0, action_step_px: 2.0, noise: 4, seed: 9 }
+        SyntheticConfig { image_size: 16, days: 2, sessions_per_day: 2, steps_per_session: 5, blob_radius: 3.0, action_step_px: 2.0, noise: 4, seed: 9, ..SyntheticConfig::default() }
     }
 
     #[test]

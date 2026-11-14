@@ -95,15 +95,22 @@ reg.commit_at_tick(10).unwrap();
 ## Residual training work (honest)
 
 1. ~~Train the ViT encoder: JEPA loop~~ implemented on SYNTHETIC moving-blob
-   frames (`candle::jepa`, fixtures in `candle::synthetic`). On the tiny test
-   config the trained AdaLN beats both matched baselines on the held-out day
-   with no collapsed coordinates, but the gate still vetoes (probe accuracy,
-   temporal straightening). On the default ViT-tiny (64 px, depth 4) the
-   latents go **rank-one** (participation ratio 1.0) under the JEPA loss,
-   even with the sliced isotropy term at 10x weight; the encoder alone under
-   the penalty does not. Still missing: a fix for that dimensional collapse,
-   real data, Metal, and a hyper-parameter bake-off (lr, `τ`, isotropy,
-   sliced and off-diagonal weights, batch size).
+   frames (`candle::jepa`, fixtures in `candle::synthetic`).
+   ~~Dimensional collapse on the default ViT-tiny~~ fixed by the lane J
+   bake-off. Lane G's settings go rank one in the first epoch: the latent
+   becomes a session-constant scalar, because mean pooling with a 0.02-std
+   position embedding hides blob position while distractor presence and the
+   day background move the pooled vector. The variance penalty alone, with
+   no prediction term, collapses too. The new `JepaTrainConfig::default()`
+   adds batch 32, `τ = 0.99`, a VICReg variance hinge and decorrelation on
+   the batch correlation matrix. On 288 steps of the default fixture it
+   reaches held-out participation ratio 10.6 (lane G: 1.05), 0 collapsed
+   coordinates, held-out health 0.90, and an AdaLN error of 178 against
+   copy-last 350 and linear 204. Two more training seeds give ratio
+   10.0 / 9.8 and health 0.87 / 0.84. `JepaTrainConfig::lane_g()` keeps the
+   old behaviour, and a release-only ignored test guards the thresholds.
+   Still missing: the gate vetoes held-out probe accuracy and temporal
+   straightening, health sits near the 0.85 bar, real data, and Metal.
 2. Train on real data (W2 recording, held-out days), then the AdaLN bake-off
    against `ActionLinearModel` on the same split.
 3. Metal / MPS training (needs `candle-metal-kernels`, a new-dep gate item) or
