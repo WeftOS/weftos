@@ -1,0 +1,192 @@
+//! Session file naming. The RuView on-disk names are not confirmed, so every
+//! name is a template. `{session}` expands to the session id and `*` matches
+//! any run of characters inside a file name.
+
+use crate::error::DatasetError;
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionLayout {
+    /// Required SPATIAL evidence JSONL.
+    pub evidence: String,
+    /// Optional SenML readings JSONL.
+    pub readings: String,
+    /// Optional CSI recording patterns. Every match is archived.
+    pub csi: Vec<String>,
+    /// Optional protocol description, first existing candidate wins.
+    pub protocol: Vec<String>,
+    /// Optional consent record, first existing candidate wins.
+    pub consent: Vec<String>,
+}
+
+impl Default for SessionLayout {
+    fn default() -> Self {
+        Self {
+            evidence: "{session}.evidence.jsonl".into(),
+            readings: "{session}.readings.jsonl".into(),
+            csi: vec!["{session}.csi*".into(), "{session}*.csi.*".into()],
+            protocol: vec![
+                "{session}.protocol.json".into(),
+                "{session}.protocol.txt".into(),
+                "protocol.json".into(),
+                "protocol.txt".into(),
+            ],
+            consent: vec!["{session}.consent.json".into(), "consent.json".into()],
+        }
+    }
+}
+
+/// The files found for one session. Paths are absolute or as given.
+#[derive(Debug, Clone)]
+pub struct DiscoveredSession {
+    pub id: String,
+    pub evidence: PathBuf,
+    pub csi: Vec<PathBuf>,
+    pub readings: Option<PathBuf>,
+    pub protocol: Option<PathBuf>,
+    pub consent: Option<PathBuf>,
+}
+
+/// Session ids become directory names, so they are restricted.
+pub fn validate_session_id(id: &str) -> Result<(), DatasetError> {
+    let ok = !id.is_empty()
+        && id.len() <= 128
+        && !id.starts_with('.')
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
+    if ok {
+        Ok(())
+    } else {
+        Err(DatasetError::InvalidSession(id.to_string()))
+    }
+}
+
+impl SessionLayout {
+    /// Find the session's files in `dir`. With `session == None` the id is
+    /// inferred from the single file matching the evidence template.
+    pub fn discover(
+        &self,
+        dir: &Path,
+        session: Option<&str>,
+    ) -> Result<DiscoveredSession, DatasetError> {
+        let names = list_names(dir)?;
+        let id = match session {
+            Some(s) => s.to_string(),
+            None => self.infer_session(&names)?,
+        };
+        validate_session_id(&id)?;
+        let expand = |t: &str| t.replace("{session}", &id);
+        let evidence_name = expand(&self.evidence);
+        if !names.contains(&evidence_name) {
+            return Err(DatasetError::MissingEvidence(dir.join(evidence_name)));
+        }
+        let readings_name = expand(&self.readings);
+        let csi: Vec<PathBuf> = names
+            .iter()
+            .filter(|n| **n != evidence_name && **n != readings_name)
+            .filter(|n| self.csi.iter().any(|p| glob_match(&expand(p), n)))
+            .map(|n| dir.join(n))
+            .collect();
+        let first_existing = |cands: &[String]| {
+            cands
+                .iter()
+                .map(|c| expand(c))
+                .find(|c| names.contains(c))
+                .map(|c| dir.join(c))
+        };
+        Ok(DiscoveredSession {
+            evidence: dir.join(&evidence_name),
+            readings: names
+                .contains(&readings_name)
+                .then(|| dir.join(&readings_name)),
+            csi,
+            protocol: first_existing(&self.protocol),
+            consent: first_existing(&self.consent),
+            id,
+        })
+    }
+
+    fn infer_session(&self, names: &[String]) -> Result<String, DatasetError> {
+        let suffix = self
+            .evidence
+            .strip_prefix("{session}")
+            .filter(|s| !s.contains("{session}"))
+            .ok_or_else(|| {
+                DatasetError::SessionNotInferable(
+                    "evidence template does not start with {session}; pass the id".into(),
+                )
+            })?;
+        let ids: Vec<&str> = names
+            .iter()
+            .filter_map(|n| n.strip_suffix(suffix))
+            .filter(|s| !s.is_empty())
+            .collect();
+        match ids.as_slice() {
+            [one] => Ok((*one).to_string()),
+            [] => Err(DatasetError::SessionNotInferable(format!(
+                "no file ends with {suffix}"
+            ))),
+            many => Err(DatasetError::SessionNotInferable(format!(
+                "several sessions found: {many:?}"
+            ))),
+        }
+    }
+}
+
+fn list_names(dir: &Path) -> Result<Vec<String>, DatasetError> {
+    let rd = std::fs::read_dir(dir).map_err(|e| DatasetError::io(dir, e))?;
+    let mut names = Vec::new();
+    for entry in rd {
+        let entry = entry.map_err(|e| DatasetError::io(dir, e))?;
+        let is_file = entry.file_type().map(|t| t.is_file()).unwrap_or(false);
+        if let (true, Some(n)) = (is_file, entry.file_name().to_str()) {
+            names.push(n.to_string());
+        }
+    }
+    names.sort();
+    Ok(names)
+}
+
+/// Minimal glob: `*` matches any run (including empty), everything else literal.
+pub(crate) fn glob_match(pattern: &str, name: &str) -> bool {
+    let parts: Vec<&str> = pattern.split('*').collect();
+    if parts.len() == 1 {
+        return pattern == name;
+    }
+    let (first, last) = (parts[0], parts[parts.len() - 1]);
+    if !name.starts_with(first) || !name.ends_with(last) || name.len() < first.len() + last.len() {
+        return false;
+    }
+    let mut rest = &name[first.len()..name.len() - last.len()];
+    for mid in &parts[1..parts.len() - 1] {
+        match rest.find(mid) {
+            Some(i) => rest = &rest[i + mid.len()..],
+            None => return false,
+        }
+    }
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn glob() {
+        assert!(glob_match("s1.csi*", "s1.csi"));
+        assert!(glob_match("s1.csi*", "s1.csi.bin"));
+        assert!(glob_match("s1*.csi.*", "s1-node2.csi.dat"));
+        assert!(!glob_match("s1*.csi.*", "s1.evidence.jsonl"));
+        assert!(!glob_match("s1.csi*", "s10.csi"));
+    }
+
+    #[test]
+    fn session_id_rules() {
+        assert!(validate_session_id("room-1_2026.11").is_ok());
+        for bad in ["", ".hidden", "a/b", "..", "a b"] {
+            assert!(validate_session_id(bad).is_err(), "{bad}");
+        }
+    }
+}

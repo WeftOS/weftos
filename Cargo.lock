@@ -11910,6 +11910,20 @@ name = "weftos-worldmodel-core"
 version = "0.8.5-rc.1"
 
 [[package]]
+name = "weftos-worldmodel-dataset"
+version = "0.8.5-rc.1"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "weftos-worldmodel-impls"
 version = "0.8.5-rc.1"
 dependencies = [

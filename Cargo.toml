@@ -46,6 +46,8 @@ members = [
     "crates/weftos-worldmodel-impls",
     # WEFT-522: LeWM facade — re-exports core traits + default impls (single entrypoint).
     "crates/weftos-worldmodel",
+    # Plan W1: LeWM dataset archiver (session -> manifest -> checksummed copy).
+    "crates/weftos-worldmodel-dataset",
     # WEFT-523: LeWM sensor pipeline + CBOR/Ed25519 wire (mesh.sensor.v1.*).
     "crates/weftos-sensor-pipeline-wire",
     "crates/weftos-sensor-pipeline",
@@ -411,6 +413,7 @@ clawft-plugin-treesitter = { version = "0.8.5-rc.1", path = "crates/clawft-plugi
 weftos-worldmodel-core = { version = "0.8.5-rc.1", path = "crates/weftos-worldmodel-core", default-features = false }
 weftos-worldmodel-impls = { version = "0.8.5-rc.1", path = "crates/weftos-worldmodel-impls", default-features = false }
 weftos-worldmodel = { version = "0.8.5-rc.1", path = "crates/weftos-worldmodel", default-features = false }
+weftos-worldmodel-dataset = { path = "crates/weftos-worldmodel-dataset" }
 weftos-sensor-pipeline-wire = { version = "0.8.5-rc.1", path = "crates/weftos-sensor-pipeline-wire" }
 weftos-sensor-pipeline = { version = "0.8.5-rc.1", path = "crates/weftos-sensor-pipeline" }
 clawft-delegation = { version = "0.8.5-rc.1", path = "crates/clawft-delegation" }
