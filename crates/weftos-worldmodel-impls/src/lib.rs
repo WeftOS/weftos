@@ -67,7 +67,7 @@ pub use planner::{
 };
 pub use predictor::{IdentityPredictor, LinearPredPhi, NullPredictor, PredPhi};
 pub use rollback_gate::{
-    FourConditionRollbackGate, ProbePair, RollbackGateLog, DEFAULT_MIN_SAMPLES,
+    FourConditionRollbackGate, GateProbeKind, ProbePair, RollbackGateLog, DEFAULT_MIN_SAMPLES,
     DEFAULT_PROBE_CAPACITY, DEFAULT_TRAJECTORY_CAPACITY,
 };
 pub use sigreg::{

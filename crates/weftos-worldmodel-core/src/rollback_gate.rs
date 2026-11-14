@@ -17,7 +17,13 @@ use crate::sigreg::SIGREG_HEALTH_ROLLBACK_THRESHOLD;
 /// Minimum cluster SIGReg health for promotion (same as edge auto-rollback).
 pub const GATE_SIGREG_HEALTH_MIN: f32 = SIGREG_HEALTH_ROLLBACK_THRESHOLD;
 
-/// Minimum held-out linear-probe accuracy in `[0, 1]`.
+/// Minimum held-out probe accuracy in `[0, 1]`.
+///
+/// Since 2026-11-14 the score is the fraction of held-out transitions where the model beats
+/// copy-last (`weftos-worldmodel-impls::GateProbeKind::BeatsCopyLast`). The floor is unchanged:
+/// a model must beat the trivial predictor on at least 70 % of held-out pairs. On the synthetic
+/// fixtures a good model scores 1.0 and copy-last scores 0.0, so 0.70 separates them with wide
+/// margin and no tuning was needed.
 pub const GATE_HELD_OUT_PROBE_MIN: f32 = 0.70;
 
 /// Minimum VoE surprise differentiation score in `[0, 1]`.
