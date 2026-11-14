@@ -88,8 +88,8 @@ trajectory. On the same regression, held-out participation ratio is 10.07 / 9.93
 seeds 21 / 22 / 23 (CPU 10.63 / 9.97), with 0 collapsed coordinates. The AdaLN error against
 the θ pairing beats both baselines by the required margin on seed 22 only (CPU: seeds 21 and
 22); on seeds 21 and 23 it lands 5 % under linear. The ξ pairing beats both baselines on every
-Metal seed. The ignored Metal regression therefore asserts the ξ pairing, while the CPU one
-asserts θ.
+Metal seed. The single-run regressions therefore assert the ξ pairing on Metal and θ on CPU;
+the ensemble regression below replaces both with one rule.
 
 Why (lane P drift study, `candle/drift_tests.rs` and `candle/drift_chaos_tests.rs`):
 
@@ -108,6 +108,54 @@ Why (lane P drift study, `candle/drift_tests.rs` and `candle/drift_chaos_tests.r
   reductions on CPU, `ReduceMode::Pairwise` uses fixed-order sums) and candle's
   `CANDLE_METAL_ENABLE_FAST_MATH=0`. None moves the mean θ ratio. Fast math off costs no time
   and passed 29 of 30 perturbed runs, which is not significant against native (p ≈ 0.07).
+
+### JEPA regression: five-seed ensemble (lane S)
+
+The release-only ignored tests `default_vit_tiny_does_not_collapse` (CPU) and
+`default_vit_tiny_does_not_collapse_on_metal` train the default config on the `std` fixture
+(288 steps) with training seeds 21, 22, 23, 24 and 25, no init jitter. The same rule holds on
+both devices (`candle/jepa_ensemble_tests.rs`):
+
+| check | rule |
+|---|---|
+| θ ratio `model_err / min(copy_last, linear)`, held-out day | median over runs ≤ 0.90 (the harness margin) |
+| ξ ratio (target pairing) | median ≤ 0.90 |
+| held-out participation ratio | ≥ 8 on every run |
+| collapsed coordinates | 0 on every run |
+| held-out SIGReg health | median ≥ 0.85 |
+| gate probe, θ pairing | passes on a strict majority of runs |
+
+A median of 5 under 0.9 means at least 3 runs clear the margin. With lane P's per-run pass
+rates (Metal 31 of 39, CPU 9 of 13) a healthy model passes with probability about 0.94 on
+Metal and 0.83 on CPU. A model no better than the linear baseline (ratio about 1.0) passes with
+probability about 1e-7. A regression that moves the mean ratio onto the bar passes about half the time.
+Health is a median because CPU seed 23 sits at 0.835. Each run is deterministic per device,
+so a given build always gives the same five numbers.
+
+Run count: `LEWM_ENSEMBLE_N=k` (1 to 5) uses the first k seeds. The default is 5 on both
+devices, about 2 min on Metal and 6 to 10 min on CPU (release, 2026-11-14, loaded machine).
+Fewer runs weaken the rule. The old single-run tests remain, ignored, as
+`default_vit_tiny_single_run_does_not_collapse[_on_metal]`. Three ignored checks show the rule
+rejects broken models: `ensemble_rejects_action_blind_model`, `ensemble_rejects_lane_g_collapse` and
+`ensemble_rejects_untrained_model` (`LEWM_DEVICE=metal` for the GPU).
+
+Measured 2026-11-14 (release):
+
+| run | θ ratio, seeds 21 / 22 / 23 / 24 / 25 | median θ | median ξ | verdict |
+|---|---|---|---|---|
+| CPU, default | 0.874 / 0.823 / 0.822 / 0.826 / 0.855 | 0.826 | 0.813 | pass |
+| Metal, default | 0.947 / 0.833 / 0.935 / 0.859 / 0.905 | **0.905** | 0.854 | **fail** (θ median) |
+| Metal, action codes zeroed | 1.044 / 1.009 / 0.999 / 1.067 / 1.036 | 1.036 | 1.005 | fail |
+| Metal, `lane_g()` | 1.04 / 29.9 / 146 / 32.6 / 22.8 | 29.9 | 33.3 | fail (PR about 1, collapse) |
+| Metal, 0 epochs | 1.208 / 1.213 / 1.256 / 1.205 / 1.229 | 1.213 | 1.213 | fail |
+
+**The Metal ensemble fails.** Its median θ ratio is 0.905, 0.5 % over the bar. Every structural
+check passes: PR 9.8 to 10.2, 0 collapsed, median health 0.864, probe 5 of 5. On all five seeds the
+Metal θ ratio is higher than the CPU one, by a mean of 0.056. The config has no θ headroom on
+Metal. Raising the bar or picking other seeds would hide that, so neither was done.
+Post hoc, not part of the rule: with `CANDLE_METAL_ENABLE_FAST_MATH=0` the same five seeds
+give θ 0.891 / 0.786 / 0.890 / 0.810 / 0.861, median 0.861, and the ensemble passes. That is
+one more fixed draw, so it is suggestive (lane P: p ≈ 0.07), not a fix.
 
 ## Candle models (feature `candle`)
 
