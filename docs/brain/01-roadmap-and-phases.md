@@ -83,9 +83,14 @@ the ticket→delivery map.
 - **Sprint 17** — IN PROGRESS: prompt-injection defense, RPC auth, plugin supply
   chain (Ed25519 manifest signing), ontology graph pipeline (VOWL/OWL/RDF),
   namespace isolation + log redaction.
-- **LeWM world model (ADRs 048–058)** — NOT STARTED: sensor-primary latent
-  world model under the ECC causal DAG; 7 implementation crates don't exist yet;
-  feature-flagged when it lands (ADR-058 decoupling invariant).
+- **LeWM world model (ADRs 048–058)**: landed in the 0.8.4 cycle (updated
+  2026-11-14): sensor-primary latent world model under the ECC causal DAG. Crates
+  `weftos-worldmodel-core`, `weftos-worldmodel-impls`, `weftos-worldmodel` and
+  `clawft-worldmodel-service` exist, with APIs, planners, SIGReg monitor, rollback gate,
+  two training surfaces and RVF hot-swap. Stubs only for weights: the candle path is a
+  skeleton that returns Unavailable. Training hold lifted for the sensor world model on
+  2026-10-07; W1 to W7 phases are in `docs/plans/world-model-data-and-training.md`.
+  Residual is weights, the data path, and a real dataset. Decoupling invariant is ADR-090.
 - **Post-1.0 horizon** — DEFERRED: blockchain anchoring, ZK proofs, full PKI/CA,
   WASM snapshots, crates.io publication, FedRAMP/CMMC, Mentra glasses.
 
