@@ -91,6 +91,17 @@ the θ pairing beats both baselines by the required margin on seed 22 only (CPU:
 Metal seed. The single-run regressions therefore assert the ξ pairing on Metal and θ on CPU;
 the ensemble regression below replaces both with one rule.
 
+**Math mode.** Metal shaders are compiled with precise math (relaxed mode, precise functions)
+by default, not candle's fast math. The workspace `.cargo/config.toml` sets
+`CANDLE_METAL_ENABLE_FAST_MATH = "0"` under `[env]`, so `cargo run`, `test` and `bench` get it.
+Why: lane P measured 29 of 30 perturbed θ passes with it off against 31 of 39 on native Metal
+(Fisher p 0.067), the same mean ratio and the same wall time, so it costs nothing. To turn
+fast math back on, export `CANDLE_METAL_ENABLE_FAST_MATH=1` (cargo does not overwrite a
+variable that is already set). A binary run outside cargo must have its launcher set the
+variable before the first Metal device is created; `metal_math_is_precise()` reports what
+candle will read. The crate cannot set it in code, because `std::env::set_var` is `unsafe`
+in edition 2024 and the diff gate rejects new `unsafe` without an owner approval row.
+
 Why (lane P drift study, `candle/drift_tests.rs` and `candle/drift_chaos_tests.rs`):
 
 - The matmuls are bit-identical on every shape these models use (depth k ≤ 768). candle's CPU
