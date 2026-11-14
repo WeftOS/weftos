@@ -134,7 +134,7 @@ pub(crate) fn verdict(runs: &[RunStats]) -> Verdict {
 /// Model variants: the default, and the deliberately broken models the ensemble must reject.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Variant {
-    /// `JepaTrainConfig::default()`.
+    /// `JepaTrainConfig::default()` (lane U since 2026-11-14; lane J's is `lane_j()`).
     Default,
     /// Action codes zeroed for training and evaluation: the predictor cannot use the action.
     ActionBlind,
@@ -149,10 +149,68 @@ pub(crate) fn action_blind(data: &[FrameTransition]) -> Vec<FrameTransition> {
     data.iter().map(|t| FrameTransition { action: Action::null(), ..t.clone() }).collect()
 }
 
-/// The run's config: `variant` on `device`, training seed `seed`, 288 steps of the `std` fixture.
-pub(crate) fn variant_config(variant: Variant, device: ComputeDevice, seed: u64, holdout_days: usize, n_train: usize) -> JepaTrainConfig {
-    let base = if variant == Variant::LaneG { JepaTrainConfig::lane_g() } else { JepaTrainConfig::default() };
-    let epochs = if variant == Variant::Untrained { 0 } else { 288usize.div_ceil(n_train.div_ceil(base.batch_size)) };
+/// One change from the default for the lane U bake-off; `None` keeps the base config's value.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct Candidate {
+    /// Start from `lane_j()` instead of the default (how the lane U bake-off ran).
+    pub lane_j_base: bool,
+    pub steps: Option<usize>,
+    pub lr_final_ratio: Option<f64>,
+    pub vic_var_weight: Option<f64>,
+    pub vic_cov_weight: Option<f64>,
+    pub pred_hidden: Option<usize>,
+    pub pred_depth: Option<usize>,
+    pub ema_tau: Option<f64>,
+    pub batch_size: Option<usize>,
+}
+
+impl Candidate {
+    /// From `LEWM_BASE=lane_j`, `LEWM_STEPS`, `LEWM_LR_FINAL`, `LEWM_VICVAR`, `LEWM_VICCOV`, `LEWM_PRED_HIDDEN`,
+    /// `LEWM_PRED_DEPTH`, `LEWM_TAU` and `LEWM_BATCH` (unset = keep the default).
+    pub(crate) fn from_env() -> Self {
+        fn f<T: std::str::FromStr>(k: &str) -> Option<T> {
+            std::env::var(k).ok().and_then(|v| v.parse().ok())
+        }
+        Candidate {
+            lane_j_base: std::env::var("LEWM_BASE").as_deref() == Ok("lane_j"),
+            steps: f("LEWM_STEPS"),
+            lr_final_ratio: f("LEWM_LR_FINAL"),
+            vic_var_weight: f("LEWM_VICVAR"),
+            vic_cov_weight: f("LEWM_VICCOV"),
+            pred_hidden: f("LEWM_PRED_HIDDEN"),
+            pred_depth: f("LEWM_PRED_DEPTH"),
+            ema_tau: f("LEWM_TAU"),
+            batch_size: f("LEWM_BATCH"),
+        }
+    }
+
+    /// Apply to `c`. On [`Variant::LaneG`] the knobs that define lane J's delta from lane G
+    /// (batch, τ, hinge and decorrelation weights) keep lane G's values. The bake-off applied
+    /// candidates on top of `lane_j()` (the default then; `lane_j_base` reproduces it).
+    pub(crate) fn apply(&self, c: &mut JepaTrainConfig, variant: Variant) {
+        c.lr_final_ratio = self.lr_final_ratio.unwrap_or(c.lr_final_ratio);
+        c.predictor.hidden_dim = self.pred_hidden.unwrap_or(c.predictor.hidden_dim);
+        c.predictor.depth = self.pred_depth.unwrap_or(c.predictor.depth);
+        if variant != Variant::LaneG {
+            c.vic_var_weight = self.vic_var_weight.unwrap_or(c.vic_var_weight);
+            c.vic_cov_weight = self.vic_cov_weight.unwrap_or(c.vic_cov_weight);
+            c.ema_tau = self.ema_tau.unwrap_or(c.ema_tau);
+            c.batch_size = self.batch_size.unwrap_or(c.batch_size);
+        }
+    }
+}
+
+/// The run's config: `variant` with `cand` applied on `device`, training seed `seed`, 288
+/// steps (or `cand.steps`) of the `std` fixture.
+pub(crate) fn variant_config(variant: Variant, cand: &Candidate, device: ComputeDevice, seed: u64, holdout_days: usize, n_train: usize) -> JepaTrainConfig {
+    let mut base = match variant {
+        Variant::LaneG => JepaTrainConfig::lane_g(),
+        _ if cand.lane_j_base => JepaTrainConfig::lane_j(),
+        _ => JepaTrainConfig::default(),
+    };
+    cand.apply(&mut base, variant);
+    let steps = cand.steps.unwrap_or(288);
+    let epochs = if variant == Variant::Untrained { 0 } else { steps.div_ceil(n_train.div_ceil(base.batch_size)) };
     let mut c = JepaTrainConfig { seed, holdout_days, device, epochs, ..base };
     if variant == Variant::ActionBlind {
         c.action_from_scalar = |_| Action::null();
@@ -166,7 +224,7 @@ fn ensemble_n() -> usize {
 }
 
 /// Train `variant` on the first `n` ensemble seeds and print one `ENS|` line per run.
-pub(crate) fn ensemble_runs(device: ComputeDevice, n: usize, variant: Variant) -> Vec<RunStats> {
+pub(crate) fn ensemble_runs(device: ComputeDevice, n: usize, variant: Variant, cand: &Candidate) -> Vec<RunStats> {
     let (data, holdout) = fixture("std");
     let data = if variant == Variant::ActionBlind { action_blind(&data) } else { data };
     let n_days = data.iter().map(|t| t.day).max().unwrap_or(0) as usize + 1;
@@ -175,7 +233,7 @@ pub(crate) fn ensemble_runs(device: ComputeDevice, n: usize, variant: Variant) -
         .iter()
         .map(|&seed| {
             let t0 = std::time::Instant::now();
-            let r = train_jepa(&data, variant_config(variant, device, seed, holdout, n_train)).unwrap();
+            let r = train_jepa(&data, variant_config(variant, cand, device, seed, holdout, n_train)).unwrap();
             let s = RunStats::from_report(seed, &r);
             eprintln!(
                 "ENS|{device:?}|{variant:?}|seed {seed}|theta {:.1}/{:.1}/{:.1} ratio {:.4}|xi ratio {:.4}|PR {:.2}|collapsed {}|health {:.3}|probe {} ({:.3})|{:.1}s",
@@ -188,7 +246,11 @@ pub(crate) fn ensemble_runs(device: ComputeDevice, n: usize, variant: Variant) -
 }
 
 fn ensemble_verdict(device: ComputeDevice, n: usize, variant: Variant) -> Verdict {
-    let v = verdict(&ensemble_runs(device, n, variant));
+    ensemble_verdict_with(device, n, variant, &Candidate::default())
+}
+
+fn ensemble_verdict_with(device: ComputeDevice, n: usize, variant: Variant, cand: &Candidate) -> Verdict {
+    let v = verdict(&ensemble_runs(device, n, variant, cand));
     eprintln!(
         "ENSEMBLE|{device:?}|{variant:?}|n {n}|median theta {:.4}|median xi {:.4}|median health {:.3}|probe {}/{n}|passed {}|{:?}",
         v.theta_median, v.xi_median, v.health_median, v.probe_passes, v.passed(), v.failures
@@ -250,6 +312,28 @@ fn ensemble_rejects_lane_g_collapse() {
 #[ignore = "release only; LEWM_DEVICE=metal for the GPU"]
 fn ensemble_rejects_untrained_model() {
     assert!(!ensemble_verdict(broken_device(), ensemble_n(), Variant::Untrained).passed());
+}
+
+/// Lane U bake-off runner: the ensemble for `LEWM_VARIANT` (`default` | `action_blind` |
+/// `lane_g` | `untrained`) with [`Candidate::from_env`] applied, on `LEWM_DEVICE`. Prints
+/// the `ENSEMBLE|` verdict line and asserts nothing.
+///
+/// ```text
+/// LEWM_DEVICE=metal LEWM_STEPS=576 cargo test --release -p weftos-worldmodel-impls \
+///     --features metal candle::jepa::ensemble_tests::ensemble_candidate -- --ignored --exact --nocapture
+/// ```
+#[test]
+#[ignore = "release only; lane U bake-off runner, configured by LEWM_* env vars"]
+fn ensemble_candidate() {
+    let variant = match std::env::var("LEWM_VARIANT").as_deref() {
+        Ok("action_blind") => Variant::ActionBlind,
+        Ok("lane_g") => Variant::LaneG,
+        Ok("untrained") => Variant::Untrained,
+        _ => Variant::Default,
+    };
+    let cand = Candidate::from_env();
+    eprintln!("CAND|{}|{variant:?}|{cand:?}", std::env::var("LEWM_TAG").unwrap_or_default());
+    ensemble_verdict_with(broken_device(), ensemble_n(), variant, &cand);
 }
 
 #[cfg(test)]

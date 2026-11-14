@@ -62,8 +62,8 @@
 //! session markers from the fixture stops the session collapse (fraction 0.03) but leaves
 //! rank ≈ 2. One change at a time (batch 64 with `γ = 1`, Epps-Pulley with `K = 128`, AdaLN
 //! hidden 64, cosine `τ` 0.9 → 0.996, two-step targets, VICReg on `C`) none reaches a held-out
-//! ratio above 2. The default is lane G plus batch 32, `τ = 0.99`, `H` (weight 1) and `K` on
-//! the correlation matrix (weight 0.04): train / held-out ratio 12.6 / 10.6, 0 collapsed
+//! ratio above 2. Lane J's fix ([`JepaTrainConfig::lane_j`]) is lane G plus batch 32, `τ = 0.99`,
+//! `H` (weight 1) and `K` on the correlation matrix (weight 0.04): train / held-out ratio 12.6 / 10.6, 0 collapsed
 //! coordinates, held-out health 0.90, AdaLN held-out error 178 vs copy-last 350 and linear
 //! 204. Training seeds 22 and 23 give held-out ratio 10.0 / 9.8, health 0.87 / 0.84, and
 //! beat both baselines. Since the 2026-11-14 probe and straightening changes the gate judges
@@ -130,8 +130,11 @@ pub enum SliceTest {
 pub struct JepaTrainConfig {
     /// Passes over the training days.
     pub epochs: usize,
-    /// AdamW learning rate.
+    /// AdamW learning rate (at step 0).
     pub lr: f64,
+    /// Final learning rate as a fraction of [`Self::lr`]: the rate follows a cosine from `lr`
+    /// at step 0 to `lr · lr_final_ratio` at the last planned step (1 = constant).
+    pub lr_final_ratio: f64,
     /// AdamW decoupled weight decay.
     pub weight_decay: f64,
     /// Minibatch size (at least 2: the isotropy term needs a covariance).
@@ -193,51 +196,6 @@ pub struct JepaTrainConfig {
     pub numerics: JepaNumerics,
 }
 
-impl Default for JepaTrainConfig {
-    /// The lane J bake-off winner (see the module docs): [`Self::lane_g`] plus batch 32,
-    /// `τ = 0.99`, and the VICReg hinge (weight 1) and correlation decorrelation (weight
-    /// 0.04) on the online latents.
-    fn default() -> Self {
-        Self { batch_size: 32, ema_tau: 0.99, vic_var_weight: 1.0, vic_cov_weight: 0.04, vic_correlation: true, ..Self::lane_g() }
-    }
-}
-
-impl JepaTrainConfig {
-    /// The lane G settings (std sliced term, `K = 64`, constant `τ = 0.996`, no multi-step or
-    /// VICReg terms), which collapse the default ViT-tiny to rank one. Kept for comparison.
-    pub fn lane_g() -> Self {
-        Self {
-            epochs: 10,
-            lr: 1e-3,
-            weight_decay: 0.01,
-            batch_size: 16,
-            seed: 0,
-            ema_tau: 0.996,
-            prediction_weight: 1.0,
-            iso_weight: 1.0,
-            offdiag_weight: 0.0,
-            slice_weight: 1.0,
-            slice_projections: 64,
-            slice_test: SliceTest::Std,
-            ema_tau_start: None,
-            multistep_weight: 0.0,
-            vic_var_weight: 0.0,
-            vic_cov_weight: 0.0,
-            vic_correlation: false,
-            pos_embed_std: VIT_POS_EMBED_STD,
-            predictor_refit_epochs: 0,
-            diagnostics: false,
-            holdout_days: 1,
-            encoder: VitTinyConfig::default(),
-            predictor: AdaLnConfig::default(),
-            action_from_scalar: synthetic::action_code,
-            eval: EvalConfig::default(),
-            device: ComputeDevice::Cpu,
-            numerics: JepaNumerics::default(),
-        }
-    }
-}
-
 /// Loss terms (means over the transitions they were measured on).
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct JepaLoss {
@@ -290,8 +248,8 @@ impl std::fmt::Debug for JepaTrainer {
 impl JepaTrainer {
     /// Build both encoders from the same seed (so `ξ = θ` at step 0) and a fresh predictor.
     pub fn new(cfg: JepaTrainConfig) -> CandleResult<Self> {
-        if cfg.batch_size < 2 || cfg.lr <= 0.0 {
-            return invalid("jepa training: batch_size must be >= 2 and lr > 0");
+        if cfg.batch_size < 2 || cfg.lr <= 0.0 || cfg.lr_final_ratio <= 0.0 {
+            return invalid("jepa training: batch_size must be >= 2, lr and lr_final_ratio > 0");
         }
         let weights = [cfg.prediction_weight, cfg.iso_weight, cfg.offdiag_weight, cfg.slice_weight, cfg.multistep_weight, cfg.vic_var_weight, cfg.vic_cov_weight];
         if !(0.0..=1.0).contains(&cfg.ema_tau) || !(0.0..=1.0).contains(&cfg.ema_tau_start.unwrap_or(cfg.ema_tau)) || weights.iter().any(|w| *w < 0.0) || cfg.slice_projections == 0 {
@@ -344,16 +302,28 @@ impl JepaTrainer {
         self.total_steps = n;
     }
 
+    /// Cosine from `start` (step 0) to `end` (last planned step); `end` when no plan is set.
+    fn cosine(&self, start: f64, end: f64) -> f64 {
+        if self.total_steps <= 1 {
+            return end;
+        }
+        let frac = (self.steps as f64 / (self.total_steps - 1) as f64).min(1.0);
+        end - (end - start) * (1.0 + (std::f64::consts::PI * frac).cos()) / 2.0
+    }
+
     /// EMA rate used after the current step: cosine from `ema_tau_start` (step 0) to
     /// `ema_tau` (last planned step), `τ_s = τ_end − (τ_end − τ_0)·(1 + cos(π s / S)) / 2`.
     pub fn current_tau(&self) -> f64 {
-        let t1 = self.cfg.ema_tau;
-        let Some(t0) = self.cfg.ema_tau_start else { return t1 };
+        self.cfg.ema_tau_start.map_or(self.cfg.ema_tau, |t0| self.cosine(t0, self.cfg.ema_tau))
+    }
+
+    /// Learning rate of the current step: cosine from `lr` to `lr · lr_final_ratio`; `lr`
+    /// when no plan is set ([`Self::set_total_steps`]).
+    pub fn current_lr(&self) -> f64 {
         if self.total_steps <= 1 {
-            return t1;
+            return self.cfg.lr;
         }
-        let frac = (self.steps as f64 / (self.total_steps - 1) as f64).min(1.0);
-        t1 - (t1 - t0) * (1.0 + (std::f64::consts::PI * frac).cos()) / 2.0
+        self.cosine(self.cfg.lr, self.cfg.lr * self.cfg.lr_final_ratio)
     }
 
     /// `(λ · reg, reg)` with `reg = R + η · sliced + vic_var · hinge + vic_cov · cov`.
@@ -418,6 +388,9 @@ impl JepaTrainer {
     pub fn step_multi(&mut self, batch: &[&FrameTransition], next: &[Option<&FrameTransition>]) -> CandleResult<JepaLoss> {
         let dirs = random_directions(&mut self.dir_rng, LATENT_DIM, self.cfg.slice_projections, &self.device)?;
         let (total, pred, pred2, iso) = self.losses(batch, next, true, &dirs)?;
+        if self.cfg.lr_final_ratio != 1.0 {
+            self.opt.set_learning_rate(self.current_lr());
+        }
         self.opt.backward_step(&total)?;
         self.ema_update(self.current_tau())?;
         self.steps += 1;
@@ -477,6 +450,9 @@ impl JepaTrainer {
         AdaLnPredictor { weights_path: None, hidden_dim: self.cfg.predictor.hidden_dim, config: self.cfg.predictor, net: Some(self.pred.clone()) }
     }
 }
+
+#[path = "jepa_presets.rs"]
+mod presets;
 
 #[cfg(test)]
 #[path = "jepa_tests.rs"]
