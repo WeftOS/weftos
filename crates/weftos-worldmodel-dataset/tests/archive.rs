@@ -265,3 +265,153 @@ fn traversal_session_id_refused() {
         Err(DatasetError::InvalidSession(_))
     ));
 }
+
+fn evidence_path(dir: &Path) -> PathBuf {
+    dir.join(format!("{SESSION}.evidence.jsonl"))
+}
+
+#[test]
+fn duplicate_receipt_across_lines_aborts_with_both_line_numbers() {
+    let src = session_copy();
+    let p = evidence_path(src.path());
+    let mut lines: Vec<String> = fs::read_to_string(&p)
+        .unwrap()
+        .lines()
+        .map(String::from)
+        .collect();
+    let v: Value = serde_json::from_str(&lines[2]).unwrap();
+    let receipt = v["provenance"]["receipt"].as_str().unwrap().to_string();
+    let mut dup: Value = serde_json::from_str(&lines[9]).unwrap();
+    dup["provenance"]["receipt"] = json!(receipt);
+    lines[9] = dup.to_string();
+    fs::write(&p, lines.join("\n") + "\n").unwrap();
+    let dest = tempfile::tempdir().unwrap();
+    match archive_session(&request(src.path(), dest.path())) {
+        Err(DatasetError::Evidence { line, reason, .. }) => {
+            assert_eq!(line, 10);
+            assert!(
+                reason.contains("line 3") && reason.contains("line 10"),
+                "{reason}"
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(!dest.path().join("ruview-demo").exists());
+}
+
+#[test]
+fn finished_marker_is_recorded_and_not_archived_as_csi() {
+    let src = session_copy();
+    fs::write(src.path().join(format!("{SESSION}.done")), "").unwrap();
+    let dest = tempfile::tempdir().unwrap();
+    let mut req = request(src.path(), dest.path());
+    req.layout.require_finished = true;
+    let out = archive_session(&req).unwrap();
+    assert!(out.manifest.finished);
+    assert!(out.manifest.layout.require_finished);
+    assert_eq!(out.manifest.files.len(), 3);
+}
+
+#[test]
+fn absent_marker_refused_only_when_required() {
+    let src = session_copy();
+    let dest = tempfile::tempdir().unwrap();
+    let mut req = request(src.path(), dest.path());
+    let out = archive_session(&req).unwrap();
+    assert!(
+        !out.manifest.finished,
+        "default does not require the marker"
+    );
+
+    req.overwrite = true;
+    req.layout.require_finished = true;
+    match archive_session(&req) {
+        Err(DatasetError::NotFinished(p)) => {
+            assert!(p.ends_with(format!("{SESSION}.done")), "{p:?}");
+        }
+        other => panic!("{other:?}"),
+    }
+    // Existing dataset untouched by the refused run.
+    assert!(verify_archive(&out.dest_dir).unwrap().ok);
+
+    // A disabled marker cannot satisfy require_finished.
+    req.layout.finished_marker = None;
+    assert!(matches!(
+        archive_session(&req),
+        Err(DatasetError::BadLayout(..))
+    ));
+    req.layout.require_finished = false;
+    assert!(archive_session(&req).is_ok());
+}
+
+#[test]
+fn custom_marker_template() {
+    let src = session_copy();
+    fs::write(src.path().join("CLOSED"), "").unwrap();
+    let dest = tempfile::tempdir().unwrap();
+    let mut req = request(src.path(), dest.path());
+    req.layout.finished_marker = Some("CLOSED".into());
+    req.layout.require_finished = true;
+    assert!(archive_session(&req).unwrap().manifest.finished);
+}
+
+#[test]
+fn old_manifest_without_marker_fields_still_loads() {
+    let src = session_copy();
+    let dest = tempfile::tempdir().unwrap();
+    let out = archive_session(&request(src.path(), dest.path())).unwrap();
+    let mp = out.dest_dir.join("manifest.json");
+    let mut m: Value = serde_json::from_slice(&fs::read(&mp).unwrap()).unwrap();
+    m.as_object_mut().unwrap().remove("finished");
+    let layout = m["layout"].as_object_mut().unwrap();
+    layout.remove("finished_marker");
+    layout.remove("require_finished");
+    fs::write(&mp, serde_json::to_vec(&m).unwrap()).unwrap();
+    assert!(verify_archive(&out.dest_dir).unwrap().ok);
+}
+
+fn edit_manifest(dir: &Path, f: impl FnOnce(&mut Value)) {
+    let mp = dir.join("manifest.json");
+    let mut m: Value = serde_json::from_slice(&fs::read(&mp).unwrap()).unwrap();
+    f(&mut m);
+    fs::write(&mp, serde_json::to_vec_pretty(&m).unwrap()).unwrap();
+}
+
+#[test]
+fn edited_manifest_with_matching_bytes_is_caught() {
+    let src = session_copy();
+    let dest = tempfile::tempdir().unwrap();
+    let out = archive_session(&request(src.path(), dest.path())).unwrap();
+    assert!(out.verification.manifest_problems.is_empty());
+
+    type Edit = Box<dyn Fn(&mut Value)>;
+    let edits: [(&str, Edit); 5] = [
+        ("lines", Box::new(|m| m["evidence"]["lines"] = json!(21))),
+        (
+            "proof",
+            Box::new(|m| m["evidence"]["proof_total"]["MEASURED"] = json!(20)),
+        ),
+        (
+            "by_type",
+            Box::new(|m| m["evidence"]["by_type"]["pose"]["lines"] = json!(9)),
+        ),
+        (
+            "readings",
+            Box::new(|m| m["readings"]["records"] = json!(7)),
+        ),
+        (
+            "room",
+            Box::new(|m| m["room"] = json!("region/urth/meso/other")),
+        ),
+    ];
+    for (name, edit) in edits {
+        let pristine = fs::read(out.dest_dir.join("manifest.json")).unwrap();
+        edit_manifest(&out.dest_dir, edit);
+        let v = verify_archive(&out.dest_dir).unwrap();
+        assert!(v.files.iter().all(|f| f.ok), "{name}: bytes still match");
+        assert!(!v.ok, "{name}: edit must fail verify");
+        assert!(!v.manifest_problems.is_empty(), "{name}");
+        fs::write(out.dest_dir.join("manifest.json"), pristine).unwrap();
+    }
+    assert!(verify_archive(&out.dest_dir).unwrap().ok);
+}

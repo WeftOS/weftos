@@ -74,6 +74,9 @@ pub struct Manifest {
     pub node_poses: BTreeMap<String, Value>,
     pub protocol: Option<Value>,
     pub consent: Value,
+    /// Whether the session's finished marker was present when archived.
+    #[serde(default)]
+    pub finished: bool,
 }
 
 pub(crate) struct ManifestInputs {
@@ -84,6 +87,7 @@ pub(crate) struct ManifestInputs {
     pub readings: Option<ReadingsSummary>,
     pub protocol: Option<Value>,
     pub consent: Value,
+    pub finished: bool,
 }
 
 impl Manifest {
@@ -135,6 +139,7 @@ impl Manifest {
             node_poses: e.node_poses,
             protocol: inp.protocol,
             consent: inp.consent,
+            finished: inp.finished,
         }
     }
 }

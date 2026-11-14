@@ -48,6 +48,12 @@ pub enum DatasetError {
         #[source]
         source: serde_json::Error,
     },
+    #[error(
+        "session is not finished: marker {0} is absent (the recording may still be in progress)"
+    )]
+    NotFinished(PathBuf),
+    #[error("source file changed while archiving: {0}")]
+    SourceChanged(PathBuf),
     #[error("copy verification failed: {0}")]
     VerificationFailed(String),
 }
