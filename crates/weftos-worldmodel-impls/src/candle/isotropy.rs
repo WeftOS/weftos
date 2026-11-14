@@ -8,7 +8,7 @@ use super::{CandleResult, SplitMix64};
 
 /// `(d, k)` matrix of `k` random unit directions (Box-Muller normals from SplitMix64, each
 /// column normalised).
-pub(crate) fn random_directions(rng: &mut SplitMix64, d: usize, k: usize) -> CandleResult<Tensor> {
+pub(crate) fn random_directions(rng: &mut SplitMix64, d: usize, k: usize, device: &candle_core::Device) -> CandleResult<Tensor> {
     let mut v = vec![0.0f32; d * k];
     for x in v.iter_mut() {
         let u1 = ((rng.next_u64() >> 11) as f64 + 1.0) / (1u64 << 53) as f64;
@@ -21,7 +21,7 @@ pub(crate) fn random_directions(rng: &mut SplitMix64, d: usize, k: usize) -> Can
             v[r * k + c] = (v[r * k + c] as f64 / n) as f32;
         }
     }
-    Ok(Tensor::from_vec(v, (d, k), &candle_core::Device::Cpu)?)
+    Ok(Tensor::from_vec(v, (d, k), device)?)
 }
 
 /// Sliced isotropy term: `mean_k (σ_k − 1)²` with `σ_k = √(Var(z u_k) + ε)` over the columns

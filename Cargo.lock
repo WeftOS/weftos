@@ -917,6 +917,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d11c8be87cfbaef9ebb62fb3f850d1fc8e00cc1d11d393fdbe55a4d5c2cdb325"
 dependencies = [
  "byteorder",
+ "candle-metal-kernels",
  "float8",
  "gemm",
  "half",
@@ -925,6 +926,8 @@ dependencies = [
  "memmap2",
  "num-traits",
  "num_cpus",
+ "objc2-foundation 0.3.2",
+ "objc2-metal 0.3.2",
  "parking_lot",
  "rand 0.9.5",
  "rand_distr 0.5.1",
@@ -938,15 +941,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "candle-metal-kernels"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6e9fdf9f3fb13fb677fec22802f85515e4bdf9a2b8fa153efb5454eced755932"
+dependencies = [
+ "block2 0.6.2",
+ "half",
+ "objc2 0.6.5",
+ "objc2-foundation 0.3.2",
+ "objc2-metal 0.3.2",
+ "once_cell",
+ "thiserror 2.0.21",
+ "tracing",
+]
+
+[[package]]
 name = "candle-nn"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "437fabe77547c2447c7bdf3cc946e19db29a2832440176b419f77c80b0a9a05e"
 dependencies = [
  "candle-core",
+ "candle-metal-kernels",
  "half",
  "libc",
  "num-traits",
+ "objc2-metal 0.3.2",
  "rayon",
  "safetensors 0.8.0",
  "serde",
@@ -6588,7 +6609,7 @@ dependencies = [
  "block2 0.5.1",
  "objc2 0.5.3",
  "objc2-foundation 0.2.2",
- "objc2-metal",
+ "objc2-metal 0.2.2",
 ]
 
 [[package]]
@@ -6640,6 +6661,7 @@ checksum = "e3e0adef53c21f888deb4fa59fc59f7eb17404926ee8a6f59f5df0fd7f9f3272"
 dependencies = [
  "bitflags 2.13.2",
  "block2 0.6.2",
+ "libc",
  "objc2 0.6.5",
  "objc2-core-foundation",
 ]
@@ -6680,6 +6702,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "objc2-metal"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a0125f776a10d00af4152d74616409f0d4a2053a6f57fa5b7d6aa2854ac04794"
+dependencies = [
+ "bitflags 2.13.2",
+ "block2 0.6.2",
+ "dispatch2",
+ "objc2 0.6.5",
+ "objc2-core-foundation",
+ "objc2-foundation 0.3.2",
+]
+
+[[package]]
 name = "objc2-quartz-core"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6689,7 +6725,7 @@ dependencies = [
  "block2 0.5.1",
  "objc2 0.5.3",
  "objc2-foundation 0.2.2",
- "objc2-metal",
+ "objc2-metal 0.2.2",
 ]
 
 [[package]]

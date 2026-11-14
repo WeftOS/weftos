@@ -10,12 +10,12 @@
 //! encoder, SIGReg-style isotropy penalty, loss through this predictor) is the next step; the
 //! encoder graph already has a differentiable mode for it (`VitNet::forward(.., train = true)`).
 
-use candle_core::{Device, Tensor, Var, D};
+use candle_core::{Tensor, Var, D};
 use candle_nn::{AdamW, Optimizer, ParamsAdamW};
 use weftos_worldmodel_core::{TrainingSample, LATENT_DIM};
 
 use super::adaln::{stack_rows, AdaLnConfig, AdaNet, NORM_STATS};
-use super::{invalid, AdaLnPredictor, CandleModelError, CandleResult, SplitMix64, CONFIG_TENSOR};
+use super::{invalid, AdaLnPredictor, CandleModelError, CandleResult, ComputeDevice, SplitMix64, CONFIG_TENSOR};
 use crate::training::ImportanceReplayBuffer;
 
 /// Training settings.
@@ -33,11 +33,13 @@ pub struct AdaLnTrainConfig {
     pub weight_decay: f64,
     /// Architecture.
     pub model: AdaLnConfig,
+    /// Device the training runs on (default CPU).
+    pub device: ComputeDevice,
 }
 
 impl Default for AdaLnTrainConfig {
     fn default() -> Self {
-        Self { epochs: 20, lr: 1e-3, seed: 0, batch_size: 32, weight_decay: 0.0, model: AdaLnConfig::default() }
+        Self { epochs: 20, lr: 1e-3, seed: 0, batch_size: 32, weight_decay: 0.0, model: AdaLnConfig::default(), device: ComputeDevice::Cpu }
     }
 }
 
@@ -103,7 +105,8 @@ pub fn train_adaln_with(samples: &[TrainingSample], cfg: AdaLnTrainConfig) -> Ca
     let (z_mean, z_std) = mean_std(&zs);
     let (d_mean, d_std) = mean_std(&deltas);
 
-    let net = AdaNet::build(&cfg.model, cfg.seed)?;
+    let device = cfg.device.resolve()?;
+    let net = AdaNet::build(&cfg.model, cfg.seed, &device)?;
     net.set_stats([&z_mean, &z_std, &d_mean, &d_std])?;
 
     let targets = deltas.iter().map(|d| {
@@ -116,10 +119,10 @@ pub fn train_adaln_with(samples: &[TrainingSample], cfg: AdaLnTrainConfig) -> Ca
     let w_raw: Vec<f32> = used.iter().map(|s| ImportanceReplayBuffer::weight(s)).collect();
     let w_mean = w_raw.iter().sum::<f32>() / n as f32;
     let data = Data {
-        z: stack_rows(zs.iter().copied(), n)?,
-        a: stack_rows(used.iter().map(|s| s.action.code), n)?,
-        target: stack_rows(targets, n)?,
-        w: Tensor::from_vec(w_raw.iter().map(|w| w / w_mean).collect::<Vec<_>>(), (n, 1), &Device::Cpu)?,
+        z: stack_rows(zs.iter().copied(), n, &device)?,
+        a: stack_rows(used.iter().map(|s| s.action.code), n, &device)?,
+        target: stack_rows(targets, n, &device)?,
+        w: Tensor::from_vec(w_raw.iter().map(|w| w / w_mean).collect::<Vec<_>>(), (n, 1), &device)?,
     };
 
     let vars: Vec<Var> = {
@@ -143,7 +146,7 @@ pub fn train_adaln_with(samples: &[TrainingSample], cfg: AdaLnTrainConfig) -> Ca
             order.swap(i, (rng.next_u64() % (i as u64 + 1)) as usize);
         }
         for chunk in order.chunks(cfg.batch_size) {
-            let idx = Tensor::from_slice(chunk, chunk.len(), &Device::Cpu)?;
+            let idx = Tensor::from_slice(chunk, chunk.len(), &device)?;
             let pick = |t: &Tensor| t.index_select(&idx, 0);
             let loss = weighted_loss(&net, &pick(&data.z)?, &pick(&data.a)?, &pick(&data.target)?, &pick(&data.w)?)?;
             opt.backward_step(&loss)?;

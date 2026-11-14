@@ -68,6 +68,7 @@ fn trained_adaln_reloads_from_disk_swaps_in_and_beats_copy_last() {
         batch_size: 32,
         weight_decay: 1e-4,
         model: AdaLnConfig { hidden_dim: 64, depth: 1, ..AdaLnConfig::default() },
+        ..AdaLnTrainConfig::default()
     };
     let report = train_adaln_with(&samples, train).expect("train");
     assert!(report.final_loss < 0.2 * report.initial_loss, "{} -> {}", report.initial_loss, report.final_loss);

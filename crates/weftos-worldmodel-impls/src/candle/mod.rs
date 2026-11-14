@@ -1,8 +1,8 @@
 //! Candle ViT-tiny encoder + AdaLN `pred_φ` (`feature = "candle"`, plan W5).
 //!
-//! Built and tested on **candle-core / candle-nn 0.11.1** (CPU only; the `metal` feature is
-//! not enabled because `candle-metal-kernels` 0.11 is not in the offline registry). Default
-//! builds never pull candle.
+//! Built and tested on **candle-core / candle-nn 0.11.1**. CPU by default. With the `metal`
+//! feature every model can also run on the Apple GPU: see [`ComputeDevice`],
+//! [`candle_default_device`] and [`metal_supported`]. Default builds never pull candle.
 //!
 //! | Piece | Module | What it is |
 //! |---|---|---|
@@ -38,16 +38,73 @@ pub mod synthetic;
 pub mod train;
 pub mod vit;
 
+#[cfg(all(test, feature = "metal"))]
+mod metal_tests;
+
 pub use adaln::{AdaLnConfig, AdaLnPredictor};
 pub use io::{active_candle_model, to_safetensors_bytes, CandleModel};
 pub use jepa::{train_jepa, EpochDiagnostics, FrameTransition, JepaLoss, JepaTrainConfig, JepaTrainReport, JepaTrainer, LatentDiagnostics, SliceTest};
 pub use train::{train_adaln, train_adaln_with, AdaLnTrainConfig, AdaLnTrainReport};
 pub use vit::{CandleVitEncoder, VitTinyConfig};
 
-/// The CPU device every model in this module runs on.
+/// The CPU device every model in this module runs on unless told otherwise.
 #[inline]
 pub fn candle_cpu_device() -> Device {
     Device::Cpu
+}
+
+/// Whether this build can run candle on the Apple GPU (the `metal` feature is on).
+///
+/// `true` means [`ComputeDevice::Metal`] can be requested; it does not mean a GPU is present
+/// at runtime (`Device::new_metal` can still fail, and [`candle_default_device`] then logs the
+/// reason and falls back to CPU). Every op these models use has a Metal kernel in candle
+/// 0.11.1, forward and backward (see the crate README), so there is no per-path fallback.
+#[inline]
+pub const fn metal_supported() -> bool {
+    cfg!(feature = "metal")
+}
+
+/// The best device available: Metal GPU 0 with the `metal` feature, otherwise CPU.
+///
+/// When Metal was compiled in but cannot be opened, the reason goes to stderr and the result
+/// is CPU. Precision is never reduced: every model is F32 on either device.
+pub fn candle_default_device() -> Device {
+    #[cfg(feature = "metal")]
+    {
+        match Device::new_metal(0) {
+            Ok(d) => return d,
+            Err(e) => eprintln!("weftos-worldmodel-impls: metal device unavailable ({e}); falling back to CPU"),
+        }
+    }
+    Device::Cpu
+}
+
+/// Which device a model or a training run uses. `Copy`, so it can live in
+/// [`JepaTrainConfig`]; [`ComputeDevice::resolve`] opens the actual [`Device`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ComputeDevice {
+    /// CPU (the default; the only choice without the `metal` feature).
+    #[default]
+    Cpu,
+    /// Apple GPU 0. An error from [`ComputeDevice::resolve`] without the `metal` feature or
+    /// without a GPU: it never silently runs on CPU.
+    Metal,
+    /// [`candle_default_device`]: Metal when available, otherwise CPU.
+    Auto,
+}
+
+impl ComputeDevice {
+    /// Open the device.
+    pub fn resolve(self) -> CandleResult<Device> {
+        match self {
+            Self::Cpu => Ok(Device::Cpu),
+            Self::Auto => Ok(candle_default_device()),
+            #[cfg(feature = "metal")]
+            Self::Metal => Ok(Device::new_metal(0)?),
+            #[cfg(not(feature = "metal"))]
+            Self::Metal => invalid("ComputeDevice::Metal needs the `metal` feature"),
+        }
+    }
 }
 
 /// Name of the architecture/config tensor carried by every checkpoint.
@@ -204,6 +261,11 @@ pub(crate) fn config_tensor(arch: f32, params: [usize; 6]) -> CandleResult<Tenso
     let mut v = vec![arch, CHECKPOINT_FORMAT];
     v.extend(params.iter().map(|&p| p as f32));
     Ok(Tensor::from_vec(v, CONFIG_LEN, &Device::Cpu)?)
+}
+
+/// Write `value` into `var`, moving it to the variable's device first.
+pub(crate) fn assign(var: &candle_core::Var, value: &Tensor) -> candle_core::Result<()> {
+    var.set(&value.to_device(var.device())?)
 }
 
 /// Differentiable LayerNorm over the last dim without affine (candle's fused

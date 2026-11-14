@@ -84,7 +84,7 @@ fn load_into_varmap(varmap: &VarMap, mut loaded: HashMap<String, Tensor>) -> Can
         if t.dims() != var.dims() {
             return invalid(format!("tensor {name}: checkpoint shape {:?}, model expects {:?}", t.dims(), var.dims()));
         }
-        var.set(&t.to_dtype(DType::F32)?)?;
+        super::assign(var, &t.to_dtype(DType::F32)?)?;
     }
     if let Some(extra) = loaded.keys().min() {
         return invalid(format!("checkpoint has unknown tensor {extra} ({} extra in all)", loaded.len()));
@@ -97,13 +97,13 @@ fn config_of(loaded: &HashMap<String, Tensor>, arch: f32) -> CandleResult<[usize
     read_config(t, arch)
 }
 
-fn read_path(path: &Path) -> CandleResult<HashMap<String, Tensor>> {
-    candle_core::safetensors::load(path, &Device::Cpu)
+fn read_path(path: &Path, device: &Device) -> CandleResult<HashMap<String, Tensor>> {
+    candle_core::safetensors::load(path, device)
         .map_err(|e| CandleModelError::Invalid(format!("reading {}: {e}", path.display())))
 }
 
-fn read_bytes(bytes: &[u8]) -> CandleResult<HashMap<String, Tensor>> {
-    candle_core::safetensors::load_buffer(bytes, &Device::Cpu)
+fn read_bytes(bytes: &[u8], device: &Device) -> CandleResult<HashMap<String, Tensor>> {
+    candle_core::safetensors::load_buffer(bytes, device)
         .map_err(|e| CandleModelError::Invalid(format!("not a safetensors blob: {e}")))
 }
 
@@ -113,23 +113,33 @@ fn checkpoint(blob: Vec<u8>, class: SensorClass, version: u64, surface: Training
 }
 
 impl CandleVitEncoder {
-    fn from_tensors(loaded: HashMap<String, Tensor>) -> CandleResult<Self> {
+    fn from_tensors(loaded: HashMap<String, Tensor>, device: &Device) -> CandleResult<Self> {
         let cfg = VitTinyConfig::from_params(config_of(&loaded, ARCH_VIT_TINY)?)?;
-        let net = VitNet::build(&cfg, 0)?;
+        let net = VitNet::build(&cfg, 0, device)?;
         load_into_varmap(&net.varmap, loaded)?;
         Ok(Self { config: cfg, weights_path: None, net: Some(net) })
     }
 
     /// Load a checkpoint file.
     pub fn from_safetensors_path(path: impl AsRef<Path>) -> CandleResult<Self> {
-        let mut enc = Self::from_tensors(read_path(path.as_ref())?)?;
+        Self::from_safetensors_path_on(path, &Device::Cpu)
+    }
+
+    /// [`Self::from_safetensors_path`] with the weights placed on `device`.
+    pub fn from_safetensors_path_on(path: impl AsRef<Path>, device: &Device) -> CandleResult<Self> {
+        let mut enc = Self::from_tensors(read_path(path.as_ref(), device)?, device)?;
         enc.weights_path = Some(path.as_ref().display().to_string());
         Ok(enc)
     }
 
     /// Load a checkpoint blob (CAS object, RVF segment payload).
     pub fn from_safetensors_bytes(bytes: &[u8]) -> CandleResult<Self> {
-        Self::from_tensors(read_bytes(bytes)?)
+        Self::from_safetensors_bytes_on(bytes, &Device::Cpu)
+    }
+
+    /// [`Self::from_safetensors_bytes`] with the weights placed on `device`.
+    pub fn from_safetensors_bytes_on(bytes: &[u8], device: &Device) -> CandleResult<Self> {
+        Self::from_tensors(read_bytes(bytes, device)?, device)
     }
 
     fn net(&self) -> CandleResult<&VitNet> {
@@ -153,23 +163,33 @@ impl CandleVitEncoder {
 }
 
 impl AdaLnPredictor {
-    fn from_tensors(loaded: HashMap<String, Tensor>) -> CandleResult<Self> {
+    fn from_tensors(loaded: HashMap<String, Tensor>, device: &Device) -> CandleResult<Self> {
         let cfg = AdaLnConfig::from_params(config_of(&loaded, ARCH_ADALN)?)?;
-        let net = AdaNet::build(&cfg, 0)?;
+        let net = AdaNet::build(&cfg, 0, device)?;
         load_into_varmap(&net.varmap, loaded)?;
         Ok(Self { weights_path: None, hidden_dim: cfg.hidden_dim, config: cfg, net: Some(net) })
     }
 
     /// Load a checkpoint file.
     pub fn from_safetensors_path(path: impl AsRef<Path>) -> CandleResult<Self> {
-        let mut p = Self::from_tensors(read_path(path.as_ref())?)?;
+        Self::from_safetensors_path_on(path, &Device::Cpu)
+    }
+
+    /// [`Self::from_safetensors_path`] with the weights placed on `device`.
+    pub fn from_safetensors_path_on(path: impl AsRef<Path>, device: &Device) -> CandleResult<Self> {
+        let mut p = Self::from_tensors(read_path(path.as_ref(), device)?, device)?;
         p.weights_path = Some(path.as_ref().display().to_string());
         Ok(p)
     }
 
     /// Load a checkpoint blob (CAS object, RVF segment payload).
     pub fn from_safetensors_bytes(bytes: &[u8]) -> CandleResult<Self> {
-        Self::from_tensors(read_bytes(bytes)?)
+        Self::from_safetensors_bytes_on(bytes, &Device::Cpu)
+    }
+
+    /// [`Self::from_safetensors_bytes`] with the weights placed on `device`.
+    pub fn from_safetensors_bytes_on(bytes: &[u8], device: &Device) -> CandleResult<Self> {
+        Self::from_tensors(read_bytes(bytes, device)?, device)
     }
 
     fn net(&self) -> CandleResult<&AdaNet> {
@@ -204,7 +224,12 @@ pub enum CandleModel {
 impl CandleModel {
     /// Dispatch on the checkpoint's `lewm.config` architecture tag.
     pub fn from_safetensors_bytes(bytes: &[u8]) -> CandleResult<Self> {
-        let loaded = read_bytes(bytes)?;
+        Self::from_safetensors_bytes_on(bytes, &Device::Cpu)
+    }
+
+    /// [`Self::from_safetensors_bytes`] with the weights placed on `device`.
+    pub fn from_safetensors_bytes_on(bytes: &[u8], device: &Device) -> CandleResult<Self> {
+        let loaded = read_bytes(bytes, device)?;
         let arch = loaded
             .get(CONFIG_TENSOR)
             .ok_or_else(|| CandleModelError::Invalid(format!("checkpoint has no {CONFIG_TENSOR} tensor")))?
@@ -212,9 +237,9 @@ impl CandleModel {
             .get(0)?
             .to_scalar::<f32>()?;
         if arch == ARCH_VIT_TINY {
-            Ok(Self::Encoder(CandleVitEncoder::from_tensors(loaded)?))
+            Ok(Self::Encoder(CandleVitEncoder::from_tensors(loaded, device)?))
         } else if arch == ARCH_ADALN {
-            Ok(Self::Predictor(AdaLnPredictor::from_tensors(loaded)?))
+            Ok(Self::Predictor(AdaLnPredictor::from_tensors(loaded, device)?))
         } else {
             invalid(format!("checkpoint architecture {arch} is neither vit_tiny (1) nor adaln (2)"))
         }
