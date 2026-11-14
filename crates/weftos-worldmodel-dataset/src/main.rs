@@ -1,7 +1,9 @@
 use anyhow::{Result, bail};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
-use weftos_worldmodel_dataset::{ArchiveRequest, archive_session, verify_archive};
+use weftos_worldmodel_dataset::{
+    ArchiveRequest, ObjectStatus, StoreTarget, archive_session, verify_archive,
+};
 
 #[derive(Parser)]
 #[command(
@@ -35,6 +37,21 @@ enum Cmd {
         /// Replace an existing archived session.
         #[arg(long)]
         overwrite: bool,
+        /// Also upload to this store with `weaver store put` (off by default).
+        #[arg(long, requires = "principal")]
+        store: Option<String>,
+        /// Key prefix: objects are <prefix>/<session>/<file>.
+        #[arg(long, default_value = "", requires = "store")]
+        store_prefix: String,
+        /// Principal for the store upload (the weaver --as value). Never read from the environment.
+        #[arg(long = "as", requires = "store")]
+        principal: Option<String>,
+        /// `weaver` binary to run; defaults to `weaver` on PATH.
+        #[arg(long, requires = "store")]
+        weaver_bin: Option<String>,
+        /// Print the store commands without running them.
+        #[arg(long, requires = "store")]
+        store_dry_run: bool,
     },
     /// Re-check an archived dataset directory against its manifest.
     Verify { dataset_dir: PathBuf },
@@ -49,12 +66,23 @@ fn main() -> Result<()> {
             protocol,
             consent,
             overwrite,
+            store,
+            store_prefix,
+            principal,
+            weaver_bin,
+            store_dry_run,
         } => {
             let mut req = ArchiveRequest::new(session_dir, dest);
             req.session = session;
             req.protocol = protocol;
             req.consent = consent.map(serde_json::Value::String);
             req.overwrite = overwrite;
+            if let (Some(name), Some(principal)) = (store, principal) {
+                let mut t = StoreTarget::new(name, store_prefix, principal);
+                t.weaver_bin = weaver_bin;
+                t.dry_run = store_dry_run;
+                req.store = Some(t);
+            }
             let out = archive_session(&req)?;
             println!(
                 "archived {} ({} files, {} evidence lines) to {}",
@@ -68,6 +96,22 @@ fn main() -> Result<()> {
                     "missing optional files: {}",
                     out.manifest.missing.join(", ")
                 );
+            }
+            if let Some(up) = &out.store_upload {
+                for c in &up.commands {
+                    println!("{}", c.join(" "));
+                }
+                for o in &up.objects {
+                    if o.status != ObjectStatus::DryRun {
+                        println!("store {:?} {}", o.status, o.key);
+                    }
+                    if let Some(e) = &o.stderr_tail {
+                        eprintln!("store {}: {e}", o.key);
+                    }
+                }
+                if !up.ok {
+                    bail!("store upload failed; the filesystem copy is in place");
+                }
             }
         }
         Cmd::Verify { dataset_dir } => {

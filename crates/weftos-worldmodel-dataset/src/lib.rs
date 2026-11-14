@@ -12,8 +12,10 @@ pub mod layout;
 pub mod manifest;
 pub mod proof;
 pub mod senml;
+pub mod store_upload;
 
 pub use archive::{ArchiveOutcome, ArchiveRequest, Verification, archive_session, verify_archive};
 pub use error::DatasetError;
 pub use layout::SessionLayout;
 pub use manifest::Manifest;
+pub use store_upload::{ObjectResult, ObjectStatus, StoreTarget, StoreUpload};
