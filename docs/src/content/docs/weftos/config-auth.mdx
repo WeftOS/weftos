@@ -8,7 +8,7 @@ Two kernel services provide runtime configuration and credential handling for ag
 **Source**: `crates/clawft-kernel/src/config_service.rs`, `crates/clawft-kernel/src/auth_service.rs`
 **Phase**: K5
 
-> **Security status.** Secrets and credential values held by both services are obfuscated with a keyed XOR (`xor_encrypt` in each file; the source comment says "production would use AEAD"). That is not encryption against an attacker who can read process memory or knows the key, and the page that used to say "encrypted at rest" overstated it. Do not treat these services as a secret store for production credentials.
+> **Security status.** Secret and credential values held by both services are sealed with XChaCha20-Poly1305 (`secret_seal.rs`): a fresh random 192-bit nonce per value, stored with the ciphertext, and the slot name (`namespace/key` or the credential name) as associated data, so a tampered, truncated or moved value fails to open. The key is the 32-byte key passed to `new`, or a per-process random key from `new_default()`. Values stay in process memory only and are not persisted, so the key lives beside the ciphertext: this does not protect against an attacker who can read the whole process memory, and it is not encryption at rest. Persisting either store would need a key from an OS keystore or a sealed key file, which these services do not have.
 
 ## ConfigService
 
@@ -37,7 +37,7 @@ pub struct ConfigEntry {
 
 ```rust
 let config = ConfigService::new(encryption_key);        // [u8; 32]
-// or ConfigService::new_default()
+// or ConfigService::new_default()                     // per-process random key
 
 // JSON values
 config.set("mesh", "peers", json!(["node-a"]), caller_pid)?;
@@ -100,7 +100,7 @@ pub struct IssuedToken {
 }
 ```
 
-`register_credential(name, credential_type, value, allowed_agents)` stores a credential (value XOR-obfuscated) restricted to the listed agents; registration is a governed action (`auth.credential.register`). `rotate_credential`, `request_token`, `validate_token` and `revoke_token` complete the path. `CredentialType` is `ApiKey`, `BearerToken`, `Certificate` or `Custom(String)`.
+`register_credential(name, credential_type, value, allowed_agents)` stores a credential (value AEAD-sealed in memory) restricted to the listed agents; registration is a governed action (`auth.credential.register`). `rotate_credential`, `request_token`, `validate_token` and `revoke_token` complete the path. `CredentialType` is `ApiKey`, `BearerToken`, `Certificate` or `Custom(String)`.
 
 ### Path 2: hashed agent credentials
 

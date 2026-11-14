@@ -114,6 +114,8 @@ clawft-substrate = { workspace = true }
 # ADR-056 / WEFT-718: BVH spatial index (Phase C SpatialBackend).
 clawft-bvh = { workspace = true, optional = true }
 dashmap = { workspace = true }
+# AEAD sealing of in-memory secrets (secret_seal.rs, card a134bcf7).
+chacha20poly1305 = { workspace = true }
 tokio = { workspace = true, optional = true }
 tokio-util = { workspace = true, optional = true }
 ruvector-cluster = { workspace = true, optional = true }
