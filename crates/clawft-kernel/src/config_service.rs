@@ -875,4 +875,91 @@ mod tests {
             ConfigValue::Json(serde_json::json!({"a": 1}))
         );
     }
+    // ── card a134bcf7: secrets are sealed with an AEAD, not keyed XOR ──
+
+    #[test]
+    fn secret_same_plaintext_seals_differently() {
+        let svc = ConfigService::new([0xAB; 32]);
+        svc.set_secret("creds", "a", b"same-value", vec![]).unwrap();
+        svc.set_secret("creds", "b", b"same-value", vec![]).unwrap();
+        let a = svc.secrets.get("creds/a").unwrap().clone();
+        let b = svc.secrets.get("creds/b").unwrap().clone();
+        assert_ne!(a, b, "a fresh nonce per seal must change the ciphertext");
+        svc.set_secret("creds", "a", b"same-value", vec![]).unwrap();
+        assert_ne!(*svc.secrets.get("creds/a").unwrap(), a);
+    }
+
+    #[test]
+    fn every_flipped_secret_byte_fails_to_open() {
+        let svc = ConfigService::new([0xAB; 32]);
+        svc.set_secret("creds", "k", b"tamper-me", vec![]).unwrap();
+        let original = svc.secrets.get("creds/k").unwrap().clone();
+        for i in 0..original.len() {
+            let mut tampered = original.clone();
+            tampered[i] ^= 0x01;
+            svc.secrets.insert("creds/k".into(), tampered);
+            assert!(
+                svc.get_secret("creds", "k", pid(1)).is_err(),
+                "flipping byte {i} must be detected"
+            );
+        }
+        svc.secrets.insert("creds/k".into(), original);
+        assert_eq!(svc.get_secret("creds", "k", pid(1)).unwrap(), b"tamper-me");
+    }
+
+    #[test]
+    fn truncated_secret_fails_to_open() {
+        let svc = ConfigService::new([0xAB; 32]);
+        svc.set_secret("creds", "k", b"short", vec![]).unwrap();
+        let original = svc.secrets.get("creds/k").unwrap().clone();
+        for len in [0, 1, original.len() - 1] {
+            svc.secrets.insert("creds/k".into(), original[..len].to_vec());
+            assert!(svc.get_secret("creds", "k", pid(1)).is_err(), "len {len}");
+        }
+    }
+
+    #[test]
+    fn secret_sealed_under_other_key_does_not_open() {
+        let a = ConfigService::new([0x11; 32]);
+        let b = ConfigService::new([0x22; 32]);
+        a.set_secret("creds", "k", b"cross-key", vec![]).unwrap();
+        b.set_secret("creds", "k", b"placeholder", vec![]).unwrap();
+        let sealed = a.secrets.get("creds/k").unwrap().clone();
+        b.secrets.insert("creds/k".into(), sealed);
+        assert!(b.get_secret("creds", "k", pid(1)).is_err());
+    }
+
+    #[test]
+    fn sealed_secret_is_bound_to_its_slot() {
+        let svc = ConfigService::new([0xAB; 32]);
+        svc.set_secret("creds", "x", b"value-x", vec![]).unwrap();
+        svc.set_secret("creds", "y", b"value-y", vec![]).unwrap();
+        let x = svc.secrets.get("creds/x").unwrap().clone();
+        svc.secrets.insert("creds/y".into(), x);
+        assert!(
+            svc.get_secret("creds", "y", pid(1)).is_err(),
+            "a sealed value moved to another slot must not open"
+        );
+    }
+
+    #[test]
+    fn default_services_use_distinct_random_keys() {
+        let a = ConfigService::new_default();
+        let b = ConfigService::new_default();
+        a.set_secret("creds", "k", b"per-instance", vec![]).unwrap();
+        b.set_secret("creds", "k", b"placeholder", vec![]).unwrap();
+        let sealed = a.secrets.get("creds/k").unwrap().clone();
+        b.secrets.insert("creds/k".into(), sealed);
+        assert!(
+            b.get_secret("creds", "k", pid(1)).is_err(),
+            "new_default must not share a fixed (all-zero) key"
+        );
+    }
+
+    #[test]
+    fn no_keyed_xor_left_in_config_service() {
+        let src = include_str!("config_service.rs");
+        assert!(!src.contains(concat!("xor", "_encrypt")));
+        assert!(!src.contains(concat!("xor", "_decrypt")));
+    }
 }
