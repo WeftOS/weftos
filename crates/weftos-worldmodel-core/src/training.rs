@@ -32,6 +32,8 @@ use crate::types::Action;
 /// carries `radar_range` and `radar_track_point`, UWB carries `uwb_echo` and
 /// `radio_delay`, ToF carries `tof_depth`, CSI carries `rf_gaussian` and
 /// `rf_link_observation`, and Reading carries SenML readings (ADR-111 s2).
+/// Class 11 Acoustic carries `acoustic_range` (owner 2026-11-14: its own
+/// class, not under Audio).
 /// Discriminants are wire-stable and only ever appended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[non_exhaustive]
@@ -60,6 +62,8 @@ pub enum SensorClass {
     Csi = 9,
     /// SenML readings per ADR-111 section 2.
     Reading = 10,
+    /// Acoustic ranging: `acoustic_range` (sound ranging, snapshot sounding).
+    Acoustic = 11,
 }
 
 impl SensorClass {
@@ -77,6 +81,7 @@ impl SensorClass {
             Self::Tof => "tof",
             Self::Csi => "csi",
             Self::Reading => "reading",
+            Self::Acoustic => "acoustic",
         }
     }
 
@@ -85,17 +90,22 @@ impl SensorClass {
     pub const fn evidence_types(self) -> &'static [&'static str] {
         match self {
             Self::Imu => &["imu_event"],
-            Self::Audio => &["acoustic_range"],
+            Self::Acoustic => &["acoustic_range"],
             Self::MmWave => &["radar_range", "radar_track_point"],
             Self::Uwb => &["uwb_echo", "radio_delay"],
             Self::Tof => &["tof_depth"],
             Self::Csi => &["rf_gaussian", "rf_link_observation"],
-            Self::Generic | Self::RgbD | Self::Proprio | Self::Lidar | Self::Reading => &[],
+            Self::Generic
+            | Self::RgbD
+            | Self::Proprio
+            | Self::Lidar
+            | Self::Audio
+            | Self::Reading => &[],
         }
     }
 
     /// All named classes (tests / docs).
-    pub const ALL: [SensorClass; 11] = [
+    pub const ALL: [SensorClass; 12] = [
         Self::Generic,
         Self::RgbD,
         Self::Imu,
@@ -107,6 +117,7 @@ impl SensorClass {
         Self::Tof,
         Self::Csi,
         Self::Reading,
+        Self::Acoustic,
     ];
 }
 
@@ -126,6 +137,7 @@ impl TryFrom<u8> for SensorClass {
             8 => Ok(Self::Tof),
             9 => Ok(Self::Csi),
             10 => Ok(Self::Reading),
+            11 => Ok(Self::Acoustic),
             other => Err(other),
         }
     }
@@ -469,12 +481,12 @@ mod tests {
             assert!(!c.as_str().is_empty());
         }
         assert_eq!(SensorClass::try_from(99), Err(99));
-        assert_eq!(SensorClass::try_from(11), Err(11));
+        assert_eq!(SensorClass::try_from(12), Err(12));
     }
 
     #[test]
-    fn sensor_class_all_is_eleven_and_dense() {
-        assert_eq!(SensorClass::ALL.len(), 11);
+    fn sensor_class_all_is_twelve_and_dense() {
+        assert_eq!(SensorClass::ALL.len(), 12);
         for (i, c) in SensorClass::ALL.iter().enumerate() {
             assert_eq!(*c as u8 as usize, i);
         }
@@ -509,6 +521,7 @@ mod tests {
             (SensorClass::Tof, 8, "tof"),
             (SensorClass::Csi, 9, "csi"),
             (SensorClass::Reading, 10, "reading"),
+            (SensorClass::Acoustic, 11, "acoustic"),
         ];
         for (c, d, n) in hal {
             assert_eq!(c as u8, d);
@@ -524,7 +537,8 @@ mod tests {
         assert!(SensorClass::Lidar.evidence_types().is_empty());
         assert!(SensorClass::Reading.evidence_types().is_empty());
         assert_eq!(SensorClass::Imu.evidence_types(), &["imu_event"]);
-        assert_eq!(SensorClass::Audio.evidence_types(), &["acoustic_range"]);
+        assert!(SensorClass::Audio.evidence_types().is_empty());
+        assert_eq!(SensorClass::Acoustic.evidence_types(), &["acoustic_range"]);
         assert_eq!(
             SensorClass::MmWave.evidence_types(),
             &["radar_range", "radar_track_point"]
