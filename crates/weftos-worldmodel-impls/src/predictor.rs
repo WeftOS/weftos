@@ -2,17 +2,21 @@
 //!
 //! # Runtime path (WEFT-529)
 //!
-//! [`LinearPredPhi`] is the default weights-free production predictor: a
-//! linear residual map from the 32-d action code into the 192-d latent,
-//! `ẑ = z + scale · P a`. No trained network weights are required; residual
-//! AdaLN / candle paths remain under [`crate::candle`] when enabled.
-//!
-//! Full neural training (ViT-tiny encoder + AdaLN bake-off) is still residual
-//! work — see crate README.
+//! [`LinearPredPhi`] is the default production predictor. Untrained it is a
+//! weights-free linear residual map from the 32-d action code into the 192-d
+//! latent (`ẑ_i = z_i + scale · a_{i mod 32}`). Built with
+//! [`LinearPredPhi::from_checkpoint_weights`] it serves the learned
+//! action-conditioned model `ẑ = z + A·a + b` that both training surfaces
+//! emit ([`crate::training::ActionLinearModel`]). The AdaLN `pred_φ` lives
+//! under `crate::candle` (feature `candle`).
+
+use alloc::sync::Arc;
 
 use weftos_worldmodel_core::{
     zero_latent, Action, Latent, Predictor, WorldModelResult, LATENT_DIM,
 };
+
+use crate::training::ActionLinearModel;
 
 /// Stub predictor: returns the prior mean (zero latent), ignoring inputs.
 ///
@@ -40,37 +44,58 @@ impl Predictor for IdentityPredictor {
     }
 }
 
-/// Linear residual action-conditioned predictor `pred_φ`.
+/// Linear action-conditioned predictor `pred_φ`.
 ///
 /// ```text
-/// ẑ_i = z_i + scale * a_{i mod 32}
+/// untrained: ẑ_i = z_i + scale * a_{i mod 32}
+/// learned:   ẑ   = z + A·a + b          (scale ignored)
 /// ```
 ///
-/// This is the default runtime dynamics model used by [`crate::planner::CemPlanner`]
-/// until trained AdaLN weights are available. Deterministic, `no_std`, and
-/// unit-testable; action magnitude moves the latent along repeating action
-/// channels so CEM can optimise toward a goal.
-#[derive(Debug, Clone, Copy)]
+/// This is the default runtime dynamics model used by [`crate::planner::CemPlanner`].
+/// Deterministic, `no_std`, and unit-testable. The learned model is shared
+/// behind an `Arc`, so clones (planner rollouts, lattice copies) are cheap.
+#[derive(Debug, Clone)]
 pub struct LinearPredPhi {
-    /// Multiplier on the action residual (`ẑ = z + scale · broadcast(a)`).
+    /// Multiplier on the action residual of the untrained map.
     pub scale: f32,
+    /// Learned `A`, `b` from a training checkpoint, when loaded.
+    learned: Option<Arc<ActionLinearModel>>,
 }
 
 impl Default for LinearPredPhi {
     fn default() -> Self {
-        Self { scale: 1.0 }
+        Self::new(1.0)
     }
 }
 
 impl LinearPredPhi {
-    /// Construct with an explicit residual scale.
+    /// Construct the untrained map with an explicit residual scale.
     pub const fn new(scale: f32) -> Self {
-        Self { scale }
+        Self { scale, learned: None }
+    }
+
+    /// Serve a learned action-linear model.
+    pub fn from_model(model: ActionLinearModel) -> Self {
+        Self { scale: 1.0, learned: Some(Arc::new(model)) }
+    }
+
+    /// Build from `ModelCheckpoint.weights` produced by either training surface (`LWAL`
+    /// blob, or the legacy 768-byte residual).
+    pub fn from_checkpoint_weights(weights: &[u8]) -> WorldModelResult<Self> {
+        ActionLinearModel::from_weights(weights).map(Self::from_model)
+    }
+
+    /// Learned model, when one is loaded.
+    pub fn learned(&self) -> Option<&ActionLinearModel> {
+        self.learned.as_deref()
     }
 }
 
 impl Predictor for LinearPredPhi {
     fn predict(&self, z_t: &Latent, action: &Action) -> WorldModelResult<Latent> {
+        if let Some(m) = &self.learned {
+            return Ok(m.predict(z_t, action));
+        }
         let mut out = *z_t;
         let code = &action.code;
         let n_a = code.len(); // 32
@@ -119,6 +144,21 @@ mod tests {
         assert!((out[32] - (2.0 + 2.0 * 0.5)).abs() < 1e-5);
         // untouched channel stays put
         assert!((out[1] - 0.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn from_checkpoint_weights_serves_the_learned_model() {
+        let mut m = ActionLinearModel::zero();
+        m.a[0] = 2.0; // z[0] += 2 * a[0]
+        m.b[1] = 0.5;
+        let pred = LinearPredPhi::from_checkpoint_weights(&m.to_weights()).unwrap();
+        let mut a = Action::null();
+        a.code[0] = 0.25;
+        let out = pred.predict(&zero_latent(), &a).unwrap();
+        assert!((out[0] - 0.5).abs() < 1e-6 && (out[1] - 0.5).abs() < 1e-6);
+        assert!(out[32].abs() < 1e-6, "learned path does not broadcast the action");
+        assert!(pred.learned().is_some() && LinearPredPhi::default().learned().is_none());
+        assert!(LinearPredPhi::from_checkpoint_weights(&[0u8; 7]).is_err());
     }
 
     #[test]

@@ -7,7 +7,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "LeWM world-model trait implementations (null/stub default; optional candle ViT-tiny + AdaLN skeleton). WEFT-521."
+description = "LeWM world-model trait implementations (linear action-conditioned pred_phi by default; optional candle ViT-tiny encoder + AdaLN predictor). WEFT-521."
 keywords = ["weftos", "lewm", "world-model", "jepa", "candle"]
 categories = ["science", "algorithms"]
 
@@ -15,11 +15,9 @@ categories = ["science", "algorithms"]
 default = []
 # Optional host marker (crate is no_std + alloc by default for stub path).
 std = ["weftos-worldmodel-core/std"]
-# Candle-backed ViT-tiny encoder + AdaLN predictor skeleton.
-# Default builds never pull candle (weights + training remain follow-up —
-# see crate README). Enabling this feature requires a toolchain-compatible
-# candle line; historical candle-core 0.2.x is known broken on this workspace
-# (WEFT-216). Skeleton compiles module layout + Unavailable fallbacks.
+# Candle ViT-tiny encoder + AdaLN predictor (CPU), safetensors I/O and AdamW
+# training (plan W5). Builds and tests on candle-core / candle-nn 0.11.1.
+# Default builds never pull candle; CI stays on the default feature set.
 candle = ["dep:candle-core", "dep:candle-nn", "std"]
 
 [dependencies]
@@ -28,6 +26,11 @@ weftos-worldmodel-core = { workspace = true, default-features = false }
 # Optional ML stack — only resolved when `candle` feature is enabled.
 candle-core = { version = "0.11", optional = true, default-features = false }
 candle-nn = { version = "0.11", optional = true, default-features = false }
+
+[[bench]]
+name = "encode_predict"
+harness = false
+required-features = ["candle"]
 
 [dev-dependencies]
 weftos-worldmodel-core = { workspace = true, default-features = false }

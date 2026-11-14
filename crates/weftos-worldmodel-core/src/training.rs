@@ -189,6 +189,8 @@ pub const LEWM_MODEL_SEGMENT_DOMAIN_END: u8 = 0x6F;
 pub const LEWM_MODEL_SEGMENT_CODEC_JSON: u8 = 0x01;
 /// Raw little-endian weight blob codec.
 pub const LEWM_MODEL_SEGMENT_CODEC_RAW: u8 = 0x02;
+/// Safetensors blob codec (candle ViT-tiny / AdaLN `pred_φ` checkpoints, plan W5).
+pub const LEWM_MODEL_SEGMENT_CODEC_SAFETENSORS: u8 = 0x03;
 
 // ── Training surface kinds ─────────────────────────────────────────────────
 

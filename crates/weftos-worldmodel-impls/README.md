@@ -8,36 +8,60 @@ traits for the LeWM latent world model (WEFT-521).
 | Component | Status | Notes |
 |-----------|--------|--------|
 | `Null*` / stub `Encoder`, `Predictor`, `LatentPlanner`, `LatticeApi`, `SigRegMonitor` | **Done** | Default feature set; unit-tested; no ML weights |
-| `LinearPredPhi` (`pred_φ`) | **Done** | Weights-free linear residual action-conditioned dynamics (WEFT-529) |
+| `LinearPredPhi` (`pred_φ`) | **Done** | Untrained: weights-free action broadcast. `from_checkpoint_weights`: serves the learned `ẑ = z + A·a + b` |
+| `ActionLinearModel` | **Done** | 192 × 32 action matrix + bias; ridge least squares (offline) and normalised-LMS SGD (streaming), pure Rust `no_std`; `LWAL` weight blob |
 | `CemPlanner` / `MppiWarmPlanner` / `GradientPlanner` | **Done** | CEM default @ 10 Hz path; toy planning tests (WEFT-529) |
 | `WelfordSigRegMonitor` | **Done** | Online Welford + auto-rollback at 0.85 / 30 s (WEFT-528) |
 | `FourConditionRollbackGate` | **Done** | AND of SIGReg / held-out probe / VoE diff / temporal straighten (WEFT-530) |
-| `OfflineEdgePipeline` + `StreamingMergePipeline` | **Done** | Two training surfaces; residual-stub optimisers; AND-gated promote (WEFT-531) |
+| `OfflineEdgePipeline` + `StreamingMergePipeline` | **Done** | Both train `ActionLinearModel`; AND-gated promote (WEFT-531) |
 | `ImportanceReplayBuffer` | **Done** | Per-class importance × surprise weighted draws |
-| `SensorModelRegistry` + RVF segment I/O | **Done** | transmit-gate / aggregate / encode slots, tick hot-swap, gate rollback (WEFT-532) |
+| `SensorModelRegistry` + RVF segment I/O | **Done** | transmit-gate / aggregate / encode slots, tick hot-swap, gate rollback (WEFT-532); codec `0x02` raw, `0x03` safetensors |
 | `ActionEncoder` + `NullActionEncoder` / `HashActionEncoder` | **Done** | Maps control bytes → fixed-width `Action` code |
 | `StubLattice` composition | **Done** | Wires encoder + `pred_φ` + CEM for service scaffolding |
-| `candle` feature skeleton (`VitTinyConfig`, `CandleVitEncoder`, `AdaLnPredictor`) | **Skeleton** | Module layout + `Unavailable` without weights; no trained checkpoint |
-| Full ViT-tiny weights / real optimiser / AdaLN bake-off | **Residual** | Swap residual stubs for neural training; segment I/O already in place |
+| `candle`: `CandleVitEncoder` (ViT-tiny) | **Done, untrained** | Patch embed, learned position embedding, 4 pre-norm MHSA/MLP blocks, mean-pool, head to 192; random init or safetensors load |
+| `candle`: `AdaLnPredictor` | **Done, synthetic-trained** | adaLN-zero residual MLP conditioned on the 32-d action; AdamW training (`train_adaln`), safetensors export / load |
+| `candle`: safetensors + registry delivery | **Done** | `from_safetensors_path` / `from_safetensors_bytes`, `to_model_checkpoint`, `active_candle_model` |
+| ViT encoder training (JEPA: EMA target, SIGReg isotropy penalty) | **Residual** | Encoder graph has a differentiable mode; the loop is not written |
+| Weights trained on real data | **Blocked** | Needs the W2 recording |
 
 Default builds **never** depend on `candle-core` / `candle-nn` (same idiom as
 `clawft-voice-onnx` and its empty default features). CI and
-`scripts/build.sh test weftos-worldmodel-impls` exercise only the stub path.
+`scripts/build.sh test weftos-worldmodel-impls` exercise only the default path.
 
 ## Feature flags
 
 ```toml
-weftos-worldmodel-impls = { workspace = true }                 # stubs only
+weftos-worldmodel-impls = { workspace = true }                 # default, no_std + alloc
 weftos-worldmodel-impls = { workspace = true, features = ["std"] }
-weftos-worldmodel-impls = { workspace = true, features = ["candle"] }  # experimental
+weftos-worldmodel-impls = { workspace = true, features = ["candle"] }  # ViT-tiny + AdaLN on CPU
 ```
 
-- **default** — null/stub trait impls, `no_std` + `alloc`
+- **default** — stubs plus the trained linear `pred_φ`, `no_std` + `alloc`
 - **std** — host marker forwarded to core
-- **candle** — optional ML skeleton (`candle-core` / `candle-nn` 0.8). Without
-  loaded weights, encoder/predictor return `WorldModelError::Unavailable`.
-  **Do not enable in default CI** until a toolchain-compatible pin is proven
-  (candle-core 0.2.x is blocked — see WEFT-216).
+- **candle** — `candle-core` / `candle-nn` **0.11** (lock: 0.11.1). Builds and
+  passes `cargo test -p weftos-worldmodel-impls --features candle` on toolchain
+  1.95 (verified 2026-11-14). CPU only: candle's `metal` feature needs
+  `candle-metal-kernels` 0.11, which is not in the offline registry cache.
+  Default CI stays off this feature. (candle-core 0.2.x remains blocked, WEFT-216.)
+
+## Candle models (feature `candle`)
+
+- **Observation bytes for the ViT:** `3 · H · W` bytes, HWC interleaved RGB u8
+  (default 64 × 64 = 12 288 bytes), scaled to `[-1, 1]`. Any other length is
+  `WorldModelError::InvalidObservation`; `encode_checked` names the expected size.
+- **Checkpoints:** one safetensors file of F32 tensors with a `lewm.config`
+  tensor `[arch, format, params…]` (arch 1 = ViT-tiny, 2 = AdaLN), so loaders
+  rebuild the architecture from the file. Names follow timm's ViT
+  (`patch_embed.proj.weight`, `blocks.{i}.attn.qkv.weight`, …); a PyTorch
+  `Conv2d` patch kernel `(E, 3, p, p)` reshaped to `(E, 3·p·p)` loads unchanged.
+  Loading is strict: missing, extra or mis-shaped tensors are errors.
+- **Delivery:** `to_model_checkpoint` wraps a blob as an Encode-slot
+  `ModelCheckpoint`; on the wire it carries codec `0x03`. After a tick commit,
+  `active_candle_model(&registry, class)` rebuilds the encoder or predictor.
+- **CPU timing** (`cargo bench -p weftos-worldmodel-impls --features candle --bench encode_predict`,
+  Apple M5 Max, 2026-11-14, random init): ViT-tiny encode ≈ 5.1 ms per 64 px
+  frame (≈ 197 frames/s), AdaLN predict (hidden 256, depth 2) ≈ 0.18 ms,
+  encode + predict ≈ 6.5 ms (≈ 155 Hz, well over the 10 Hz plan target).
 
 ## Training surfaces (WEFT-531 / WEFT-532)
 
@@ -70,14 +94,12 @@ reg.commit_at_tick(10).unwrap();
 
 ## Residual training work (honest)
 
-Runtime monitors / planners / training **APIs** ship; neural weights do not:
-
-1. Pin a workspace-compatible candle line (or switch to ONNX / another edge runtime).
-2. Implement ViT-tiny patch embed + transformer blocks under `src/candle/`.
-3. Replace residual-mean stubs in `OfflineEdgePipeline` / `StreamingMergePipeline` with real optimisers.
-4. Train / export SIGReg-aligned weights (`LATENT_DIM = 192`, isotropic Gaussian prior).
-5. Replace [`LinearPredPhi`] with AdaLN-modulated `pred_φ(z_t, a_t)` once weights exist.
-6. Wire CAS / file path loaders behind the existing RVF segment + hot-swap registry.
+1. Train the ViT encoder: JEPA loop (encoder on frame bytes, EMA target
+   encoder, SIGReg-style isotropy penalty, loss through the AdaLN predictor).
+2. Train on real data (W2 recording, held-out days), then the AdaLN bake-off
+   against `ActionLinearModel` on the same split.
+3. Metal / MPS training (needs `candle-metal-kernels`, a new-dep gate item) or
+   PyTorch-on-Mac export into the safetensors layout above.
 
 ## Usage (runtime defaults)
 

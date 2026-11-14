@@ -72,7 +72,8 @@ pub use training::{
     fnv1a64, HotSwapOutcome, ModelCheckpoint, ModelHotSwap, OfflineEdgeTrainer, SensorClass,
     SmallModelKind, StreamingMergeTrainer, StreamingTrainResult, TrainingSample,
     TrainingSurfaceKind, EVENT_KIND_MODEL_HOT_SWAP, EVENT_KIND_TRAINING_CYCLE,
-    LEWM_MODEL_SEGMENT_CODEC_JSON, LEWM_MODEL_SEGMENT_CODEC_RAW, LEWM_MODEL_SEGMENT_DOMAIN_END,
+    LEWM_MODEL_SEGMENT_CODEC_JSON, LEWM_MODEL_SEGMENT_CODEC_RAW,
+    LEWM_MODEL_SEGMENT_CODEC_SAFETENSORS, LEWM_MODEL_SEGMENT_DOMAIN_END,
     LEWM_MODEL_SEGMENT_DOMAIN_START,
 };
 pub use types::{Action, NodeId, ObservationFrame, RecallHit, SubscriptionId};

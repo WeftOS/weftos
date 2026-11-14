@@ -1,21 +1,23 @@
 //! Online streaming-merge trainer with AND-gate promotion (WEFT-531 surface 2).
 //!
-//! Importance-weighted replay → residual batch update → four-condition AND
-//! gate. Checkpoints are only marked `promoted` when the gate allows.
+//! Importance-weighted replay → one normalised-LMS step of the action-linear
+//! `pred_φ` (`ẑ = z + A·a + b`, see [`super::action_linear`]) per batch →
+//! four-condition AND gate. Checkpoints are only marked `promoted` when the
+//! gate allows.
 
 extern crate alloc;
 
 use alloc::vec::Vec;
 
 use weftos_worldmodel_core::{
-    zero_latent, GateVerdict, Latent, ModelCheckpoint, RollbackGate, SensorClass, SmallModelKind,
+    Action, GateVerdict, Latent, ModelCheckpoint, RollbackGate, SensorClass, SmallModelKind,
     StreamingMergeTrainer, StreamingTrainResult, TrainingSample, TrainingSurfaceKind,
     WorldModelError, WorldModelResult,
 };
 
 use crate::rollback_gate::FourConditionRollbackGate;
 
-use super::offline_edge::OfflineEdgePipeline;
+use super::action_linear::ActionLinearModel;
 use super::replay::{ImportanceReplayBuffer, DEFAULT_REPLAY_CAPACITY};
 
 /// Promote only when the AND gate allowed the checkpoint.
@@ -40,15 +42,16 @@ pub struct StreamingMergePipeline {
     pub replay: ImportanceReplayBuffer,
     /// Four-condition AND gate (shared metrics with host service).
     pub gate: FourConditionRollbackGate,
-    /// Running residual weights (packed as latent).
-    residual: Latent,
+    /// Running action-linear model (trained by SGD).
+    model: ActionLinearModel,
     /// Next version tag.
     pub next_version: u64,
     /// Batch size per train step.
     pub batch_size: usize,
     /// Minimum samples in replay for a step.
     pub min_replay: usize,
-    /// Learning rate for residual EMA update.
+    /// Normalised-LMS step size (`0 < lr < 2`; with a null action this is the
+    /// EMA rate of the action-free residual).
     pub learning_rate: f32,
     /// Last gate verdict.
     last_gate: Option<GateVerdict>,
@@ -72,11 +75,11 @@ impl StreamingMergePipeline {
         Self {
             replay: ImportanceReplayBuffer::new(DEFAULT_REPLAY_CAPACITY),
             gate: FourConditionRollbackGate::new(),
-            residual: zero_latent(),
+            model: ActionLinearModel::zero(),
             next_version: 1,
             batch_size: DEFAULT_BATCH_SIZE,
             min_replay: DEFAULT_MIN_REPLAY,
-            learning_rate: 0.25,
+            learning_rate: 0.5,
             last_gate: None,
             promote_count: 0,
             reject_count: 0,
@@ -90,9 +93,19 @@ impl StreamingMergePipeline {
         self
     }
 
-    /// Current residual weights (latent view).
+    /// Current action-free residual `b` (latent view).
     pub fn residual(&self) -> &Latent {
-        &self.residual
+        &self.model.b
+    }
+
+    /// Current action-linear model.
+    pub fn model(&self) -> &ActionLinearModel {
+        &self.model
+    }
+
+    /// `ẑ_{t+1} = z_t + A·a + b` under the current model.
+    pub fn predict(&self, z_t: &Latent, action: &Action) -> Latent {
+        self.model.predict(z_t, action)
     }
 
     /// Feed a transition into the AND gate (host live path) so streaming
@@ -111,47 +124,16 @@ impl StreamingMergePipeline {
         v
     }
 
-    fn update_residual_from_batch(&mut self, batch: &[TrainingSample]) {
-        if batch.is_empty() {
-            return;
-        }
-        let mut mean = zero_latent();
-        let mut w_sum = 0.0f32;
-        for s in batch {
-            let w = ImportanceReplayBuffer::weight(s);
-            if w <= 0.0 {
-                continue;
-            }
-            let r = s.residual();
-            for (m, ri) in mean.iter_mut().zip(r.iter()) {
-                *m += w * ri;
-            }
-            w_sum += w;
-        }
-        if w_sum <= 0.0 {
-            return;
-        }
-        let lr = self.learning_rate;
-        for (res, m) in self.residual.iter_mut().zip(mean.iter()) {
-            let target = m / w_sum;
-            *res = (1.0 - lr) * *res + lr * target;
-        }
-    }
-
-    /// Predict `ẑ_{t+1} = z_t + residual` (stub dynamics for gate VoE).
+    /// Predict `ẑ_{t+1} = z_t + b` (action-free residual only).
     pub fn predict_residual(&self, z_t: &Latent) -> Latent {
-        let mut out = *z_t;
-        for (o, res) in out.iter_mut().zip(self.residual.iter()) {
-            *o += res;
-        }
-        out
+        self.model.predict(z_t, &Action::null())
     }
 }
 
 impl StreamingMergeTrainer for StreamingMergePipeline {
     fn push_sample(&mut self, sample: &TrainingSample) -> WorldModelResult<()> {
         // Also feed the gate so online metrics track live data.
-        let z_hat = self.predict_residual(&sample.z_t);
+        let z_hat = self.predict(&sample.z_t, &sample.action);
         let _ = self.gate.observe_transition(
             &sample.z_t,
             &z_hat,
@@ -174,9 +156,10 @@ impl StreamingMergeTrainer for StreamingMergePipeline {
         if batch.is_empty() {
             return Err(WorldModelError::TrainingFailed);
         }
-        self.update_residual_from_batch(&batch);
+        let lr = self.learning_rate;
+        self.model.sgd_step(&batch, lr);
 
-        // Refresh VoE / probe metrics under the updated residual using
+        // Refresh VoE / probe metrics under the updated model using
         // **time-ordered** class samples (not the random batch). Random
         // re-feeds would zigzag the temporal-straightening trajectory and
         // false-veto healthy promotions.
@@ -186,7 +169,7 @@ impl StreamingMergeTrainer for StreamingMergePipeline {
         self.gate.reset_stats();
         self.gate.set_sigreg_health(sigreg);
         for s in &ordered {
-            let z_hat = self.predict_residual(&s.z_t);
+            let z_hat = self.predict(&s.z_t, &s.action);
             let v = self
                 .gate
                 .observe_transition(&s.z_t, &z_hat, &s.z_tp1, None);
@@ -197,7 +180,7 @@ impl StreamingMergeTrainer for StreamingMergePipeline {
         self.last_gate = Some(gate);
         self.step_count = self.step_count.saturating_add(1);
 
-        let weights = OfflineEdgePipeline::pack_residual(&self.residual);
+        let weights = self.model.to_weights();
         let version = self.next_version;
         self.next_version = self.next_version.saturating_add(1);
         let checkpoint = ModelCheckpoint::new(
@@ -235,7 +218,8 @@ impl StreamingMergeTrainer for StreamingMergePipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use weftos_worldmodel_core::{GateCondition, LATENT_DIM, StreamingMergeTrainer};
+    use super::super::action_linear::{tests::action_fixture, ACTION_LINEAR_BLOB_LEN};
+    use weftos_worldmodel_core::{zero_latent, GateCondition, StreamingMergeTrainer};
 
     fn good_sample(t: u64) -> TrainingSample {
         // Straight residual + perfect match for residual predictor after train.
@@ -272,7 +256,29 @@ mod tests {
             result.gate
         );
         assert!(pipe.promote_count >= 1);
-        assert!(result.checkpoint.weights.len() == LATENT_DIM * 4);
+        assert_eq!(result.checkpoint.weights.len(), ACTION_LINEAR_BLOB_LEN);
+    }
+
+    #[test]
+    fn streaming_sgd_learns_the_action_over_a_few_hundred_samples() {
+        let (data, _) = action_fixture(360, SensorClass::RgbD, 0.001, 23);
+        let (stream, held) = data.split_at(300);
+        let mut pipe = StreamingMergePipeline::new();
+        pipe.replay = ImportanceReplayBuffer::new(32);
+        let initial = pipe.model().loss(held);
+        for (t, s) in stream.iter().enumerate() {
+            pipe.push_sample(s).unwrap();
+            if t >= 2 {
+                pipe.train_step(SensorClass::RgbD, SmallModelKind::Encode).unwrap();
+            }
+        }
+        let fin = pipe.model().loss(held);
+        assert!(fin < 0.1 * initial, "held-out loss {initial} -> {fin}");
+        let cp = ActionLinearModel::from_weights(
+            &pipe.train_step(SensorClass::RgbD, SmallModelKind::Encode).unwrap().checkpoint.weights,
+        )
+        .unwrap();
+        assert!(cp.loss(held) < 0.1 * initial);
     }
 
     #[test]
