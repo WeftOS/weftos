@@ -174,6 +174,8 @@ pub struct DefaultWorldModel {
     /// [`Self::predictor`].
     #[cfg(feature = "candle")]
     pub adaln: Option<AdaLnPredictor>,
+    /// Per-class predictors auto-loaded from committed `Encode` checkpoints.
+    class_models: autoload::ClassModels,
     /// CEM planner (default algorithm).
     pub planner: CemPlanner,
     /// Composed lattice API (observe / predict / plan / recall / subscribe).
@@ -206,6 +208,7 @@ impl DefaultWorldModel {
             predictor: LinearPredPhi::default(),
             #[cfg(feature = "candle")]
             adaln: None,
+            class_models: autoload::ClassModels::default(),
             planner: CemPlanner::default(),
             lattice: StubLattice::default(),
             sigreg: WelfordSigRegMonitor::new(1),
@@ -220,16 +223,6 @@ impl DefaultWorldModel {
     #[cfg(feature = "candle")]
     pub fn with_adaln(predictor: AdaLnPredictor) -> Self {
         Self { adaln: Some(predictor), ..Self::new() }
-    }
-
-    /// `ẑ_{t+1}` from the active `pred_φ`: AdaLN when one is set (feature `candle`),
-    /// otherwise [`Self::predictor`].
-    pub fn predict(&self, z_t: &Latent, action: &Action) -> WorldModelResult<Latent> {
-        #[cfg(feature = "candle")]
-        if let Some(p) = &self.adaln {
-            return p.predict(z_t, action);
-        }
-        self.predictor.predict(z_t, action)
     }
 
     /// Observe a frame through the composed lattice and update SIGReg health.
@@ -298,19 +291,29 @@ impl DefaultWorldModel {
             ModelHotSwap::stage(&mut self.sensor_models, cp)?;
         } else {
             // Veto: roll back active slot for this class/kind if a prior good exists.
-            let _ = self.sensor_models.apply_gate_verdict(class, kind, result.gate);
+            if let Ok(outcome) = self.sensor_models.apply_gate_verdict(class, kind, result.gate) {
+                self.note_encode_outcome(class, kind, outcome);
+            }
         }
         Ok(result)
     }
 
-    /// Commit pending hot-swaps at DEMOCRITUS / mesh tick boundary.
+    /// Commit pending hot-swaps at DEMOCRITUS / mesh tick boundary. A committed `Encode`
+    /// checkpoint also rebuilds that class's `pred_φ` (see [`mod@autoload`] docs).
     pub fn commit_models_at_tick(
         &mut self,
         tick: u64,
     ) -> WorldModelResult<alloc::vec::Vec<(SensorClass, SmallModelKind, HotSwapOutcome)>> {
-        ModelHotSwap::commit_at_tick(&mut self.sensor_models, tick)
+        let outcomes = ModelHotSwap::commit_at_tick(&mut self.sensor_models, tick)?;
+        for &(class, kind, outcome) in &outcomes {
+            self.note_encode_outcome(class, kind, outcome);
+        }
+        Ok(outcomes)
     }
 }
 
+mod autoload;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod autoload_tests;

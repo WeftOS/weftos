@@ -79,6 +79,11 @@ fn gram_inverse(p: &[f32], rows: usize, cols: usize) -> Option<Vec<f32>> {
     Some(inv)
 }
 
+/// Whether the row-major `rows × cols` basis has independent columns (`PᵀP` invertible).
+pub(super) fn basis_is_full_rank(p: &[f32], rows: usize, cols: usize) -> bool {
+    gram_inverse(p, rows, cols).is_some()
+}
+
 /// `‖P P⁺ z − z‖ / ‖z‖` with `P⁺ = (PᵀP)⁻¹Pᵀ`, given the Gram inverse. `None` for `z ≈ 0`.
 fn roundtrip(p: &[f32], rows: usize, cols: usize, ginv: &[f32], z: &[f32]) -> Option<f32> {
     let zz: f32 = z.iter().map(|v| v * v).sum();

@@ -9,7 +9,8 @@
 //!   The model must beat the better of the two by [`EvalConfig::beat_margin`].
 //! - **Activity floor** (collapse alarm): every latent coordinate keeps a minimum standard
 //!   deviation over the held-out window, checked per coordinate.
-//! - **Geometry audit** ([`orthonormality_error`], [`pseudoinverse_roundtrip_error`]).
+//! - **Geometry audit** ([`orthonormality_error`], [`pseudoinverse_roundtrip_error`]). With a learned
+//!   action basis, [`evaluate_with_basis`] also fills [`EvalReport::geometry`] ([`geometry_audit`]).
 //! - **Gate**: the held-out transitions are fed through [`FourConditionRollbackGate`] with the
 //!   SIGReg health from a [`WelfordSigRegMonitor`] run over all latents. Condition 2 uses the
 //!   gate's sign-agreement probe unless [`EvalConfig::probe`] selects [`ProbeKind::LinearLsq`].
@@ -18,6 +19,7 @@
 //! last [`EvalConfig::holdout_days`] distinct days, so a day never straddles the split.
 //! The verdict promotes only when the gate, the baselines and the activity floor all agree.
 
+mod basis_audit;
 mod geometry;
 mod probe;
 mod split;
@@ -32,11 +34,13 @@ use weftos_worldmodel_core::{
 
 use crate::rollback_gate::FourConditionRollbackGate;
 use crate::sigreg::WelfordSigRegMonitor;
+use crate::training::ActionLinearModel;
 
 pub use geometry::{
     orthonormality_error, pseudoinverse_roundtrip_error, pseudoinverse_roundtrip_error_batch,
     MAX_BASIS_COLS,
 };
+pub use basis_audit::{geometry_audit, GeometryAudit, GeometryAuditError};
 pub use probe::ProbeKind;
 
 /// One observed step: latent, the action taken (scalar code), next latent.
@@ -141,6 +145,12 @@ pub struct EvalReport {
     pub promote: bool,
     /// Reasons for refusing, empty when `promote`.
     pub vetoes: Vec<EvalVeto>,
+    /// Audit of the learned action basis against held-out residuals. `None` on
+    /// [`evaluate`] / [`evaluate_by_day`], and when the audit was refused (see
+    /// [`Self::geometry_error`]). Informational: it never vetoes.
+    pub geometry: Option<GeometryAudit>,
+    /// Why [`Self::geometry`] is `None` although a basis was supplied.
+    pub geometry_error: Option<GeometryAuditError>,
 }
 
 /// Day bookkeeping carried into the report.
@@ -167,6 +177,8 @@ fn refused(n_train: usize, n_held: usize, info: DayInfo, veto: EvalVeto) -> Eval
         gate: GateVerdict::evaluate(RollbackGateMetrics::perfect()),
         promote: false,
         vetoes: alloc::vec![veto],
+        geometry: None,
+        geometry_error: None,
     }
 }
 
@@ -183,7 +195,24 @@ pub fn evaluate(
         return refused(n_train, n_hold, DayInfo::default(), EvalVeto::TooFewTransitions);
     }
     let (train, held) = transitions.split_at(n_train);
-    run(transitions, train, held, DayInfo::default(), model, cfg)
+    run(transitions, train, held, DayInfo::default(), model, cfg, None)
+}
+
+/// [`evaluate`] plus a [`geometry_audit`] of `basis` against the held-out residuals.
+/// Every other field of the report is identical to [`evaluate`]'s.
+pub fn evaluate_with_basis(
+    transitions: &[Transition],
+    model: impl FnMut(&Latent, f32) -> Latent,
+    cfg: EvalConfig,
+    basis: &ActionLinearModel,
+) -> EvalReport {
+    let n_hold = ((transitions.len() as f32) * cfg.holdout_frac) as usize;
+    let n_train = transitions.len().saturating_sub(n_hold);
+    if n_train < 8 || n_hold < 8 {
+        return refused(n_train, n_hold, DayInfo::default(), EvalVeto::TooFewTransitions);
+    }
+    let (train, held) = transitions.split_at(n_train);
+    run(transitions, train, held, DayInfo::default(), model, cfg, Some(basis))
 }
 
 /// Run the harness with a held-out-by-day split. `days[i]` tags `transitions[i]`; the last
@@ -207,7 +236,30 @@ pub fn evaluate_by_day(
     if s.train.len() < 8 || s.held.len() < 8 {
         return refused(s.train.len(), s.held.len(), info, EvalVeto::TooFewTransitions);
     }
-    run(transitions, &s.train, &s.held, info, model, cfg)
+    run(transitions, &s.train, &s.held, info, model, cfg, None)
+}
+
+/// [`evaluate_by_day`] plus a [`geometry_audit`] of `basis` against the held-out residuals.
+pub fn evaluate_by_day_with_basis(
+    transitions: &[Transition],
+    days: &[u16],
+    model: impl FnMut(&Latent, f32) -> Latent,
+    cfg: EvalConfig,
+    basis: &ActionLinearModel,
+) -> EvalReport {
+    let s = match split::by_day(transitions, days, cfg.holdout_days) {
+        Ok(s) => s,
+        Err(veto) => return refused(0, 0, DayInfo::default(), veto),
+    };
+    let info = DayInfo {
+        n_train_days: s.n_train_days,
+        n_held_days: s.n_held_days,
+        held_days: s.held_days,
+    };
+    if s.train.len() < 8 || s.held.len() < 8 {
+        return refused(s.train.len(), s.held.len(), info, EvalVeto::TooFewTransitions);
+    }
+    run(transitions, &s.train, &s.held, info, model, cfg, Some(basis))
 }
 
 fn run(
@@ -217,6 +269,7 @@ fn run(
     info: DayInfo,
     mut model: impl FnMut(&Latent, f32) -> Latent,
     cfg: EvalConfig,
+    basis: Option<&ActionLinearModel>,
 ) -> EvalReport {
     let (alpha, beta) = probe::fit_linear(train);
 
@@ -271,6 +324,11 @@ fn run(
     if !collapsed_coords.is_empty() {
         vetoes.push(EvalVeto::ActivityCollapse);
     }
+    let (geometry, geometry_error) = match basis.map(|b| geometry_audit(b, held)) {
+        Some(Ok(g)) => (Some(g), None),
+        Some(Err(e)) => (None, Some(e)),
+        None => (None, None),
+    };
     EvalReport {
         n_train: train.len(),
         n_held_out: held.len(),
@@ -286,6 +344,8 @@ fn run(
         gate: verdict,
         promote: vetoes.is_empty(),
         vetoes,
+        geometry,
+        geometry_error,
     }
 }
 
