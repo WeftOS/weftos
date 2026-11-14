@@ -169,24 +169,27 @@ fn default_regression(device: super::ComputeDevice) {
     assert!(e.gate.probe_ok, "probe {:?}", e.gate.metrics);
 }
 
-/// Release-only regression for the default config on the default ViT-tiny: lane J's winner
-/// must stay out of dimensional collapse on the `std` fixture (288 steps, ~1.5 min release).
+/// The old single-run regression (seed 21), kept for comparison with the ensemble that
+/// replaced it ([`super::ensemble_tests`]): lane J's winner must stay out of dimensional
+/// collapse on the `std` fixture (288 steps, ~1.5 min release). Its θ margin is one chaotic
+/// draw (lane P), so it is not the regression of record.
 ///
 /// ```text
 /// cargo test --release -p weftos-worldmodel-impls --features candle \
-///     default_vit_tiny_does_not_collapse -- --ignored --nocapture
+///     default_vit_tiny_single_run_does_not_collapse -- --ignored --nocapture
 /// ```
 #[test]
-#[ignore = "release only, ~1.5 min of CPU"]
-fn default_vit_tiny_does_not_collapse() {
+#[ignore = "release only, ~1.5 min of CPU; superseded by the ensemble"]
+fn default_vit_tiny_single_run_does_not_collapse() {
     default_regression(super::ComputeDevice::Cpu);
 }
 
-/// The same regression on the Apple GPU (`--features metal`): no collapse, held-out health
-/// over 0.85, and the target pairing beats both baselines (see [`default_regression`]).
+/// The old single-run regression on the Apple GPU (`--features metal`): no collapse, held-out
+/// health over 0.85, and the target pairing beats both baselines (see [`default_regression`]).
+/// Kept for comparison with the ensemble.
 #[cfg(feature = "metal")]
 #[test]
-#[ignore = "release only, minutes of GPU"]
-fn default_vit_tiny_does_not_collapse_on_metal() {
+#[ignore = "release only, minutes of GPU; superseded by the ensemble"]
+fn default_vit_tiny_single_run_does_not_collapse_on_metal() {
     default_regression(super::ComputeDevice::Metal);
 }

@@ -485,3 +485,7 @@ mod tests;
 #[cfg(test)]
 #[path = "jepa_bakeoff_tests.rs"]
 pub(crate) mod bakeoff_tests;
+
+#[cfg(test)]
+#[path = "jepa_ensemble_tests.rs"]
+mod ensemble_tests;
