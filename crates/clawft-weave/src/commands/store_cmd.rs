@@ -125,7 +125,8 @@ pub enum StoreAction {
         principal: String,
     },
     /// Worktree stores and sharing (ADR-126 S2); the verbs `scripts/worktree-store.sh` calls:
-    /// create, buckets, publish, fetch, claim, promote, follow, search, leftovers, sync-docs, overlaps.
+    /// create, buckets, publish, fetch, claim, promote, follow, search, leftovers, sync-docs, overlaps,
+    /// browse (read-only: worktree list, a folder, or one file of a shared tree).
     Worktree {
         verb: String,
         /// `--key value` pairs (and the flags `--json`, `--force`, `--confirmed`).
@@ -281,6 +282,8 @@ fn wt_lines(verb: &str, v: &Value) -> Option<String> {
             }
             Some(out)
         }
+        // a file read prints its text; listings stay JSON
+        "browse" => v["text"].as_str().map(|t| t.to_string()),
         "leftovers" => {
             let l = v["leftovers"].as_array()?;
             Some(if l.is_empty() {

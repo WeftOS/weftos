@@ -86,6 +86,8 @@ struct P {
     cache: Option<String>,
     state: Option<String>,
     query: Option<String>,
+    /// `browse`: a folder (ends in `/`, or empty for the root) or one file of the shared tree.
+    path: Option<String>,
     a: Option<String>,
     b: Option<String>,
     #[serde(rename = "paths_z")]
@@ -807,6 +809,39 @@ fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms:
             let l = follower::leftovers(&entries, now_ms, &LeftoverPolicy::default());
             Ok(json!({"leftovers": l.iter().map(|x| json!({"why": why_str(x.why), "idle_ms": x.idle_ms, "worktree": entry_json(&x.entry)})).collect::<Vec<_>>(),
                       "trust": trust_json(&b, &n.reg, sign)}))
+        }
+        "browse" => {
+            // Read-only view of a shared tree (WO-069 lane B): no slug lists worktrees, a slug lists
+            // its root or the folder `--path D/`, and `--path F` reads one file under `--max-bytes`.
+            let n = names(mesh, &project, "x")?;
+            let trusted = |slug: &str| -> Result<(), String> {
+                // With a trusted-key file only a verified registry entry may be browsed.
+                if sign.trusted.is_some() && !trusted_entries(&b, &n.reg, sign).map_err(e)?.0.iter().any(|x| x.slug == slug) {
+                    return Err(format!("{slug} is not a trusted registry entry"));
+                }
+                Ok(())
+            };
+            let to_json = |r: Result<Value, serde_json::Error>| r.map_err(|x| x.to_string());
+            let Some(slug) = p.slug.as_deref().filter(|s| !s.is_empty()) else {
+                let mut r = follower::browse_registry(&b, &n.reg).map_err(e)?;
+                if sign.trusted.is_some() {
+                    let ok: Vec<String> = trusted_entries(&b, &n.reg, sign).map_err(e)?.0.into_iter().map(|x| x.slug).collect();
+                    r.worktrees.retain(|w| ok.contains(&w.slug));
+                }
+                return to_json(serde_json::to_value(r));
+            };
+            trusted(slug)?;
+            match p.path.as_deref().filter(|f| !f.is_empty() && !f.ends_with('/')) {
+                None => to_json(serde_json::to_value(follower::browse_ls(&b, &n.reg, slug, p.path.as_deref().unwrap_or("")).map_err(e)?)),
+                Some(f) => {
+                    let cap = p.max_bytes.unwrap_or(weftos_store::follower_browse::MAX_GET_BYTES);
+                    let mut r = follower::browse_get(&b, &n.reg, slug, f, cap).map_err(e)?;
+                    let text = r.data.take().and_then(|d| String::from_utf8(d).ok());
+                    let mut v = to_json(serde_json::to_value(&r))?;
+                    v["text"] = text.map_or(Value::Null, Value::String);
+                    Ok(v)
+                }
+            }
         }
         "sync-docs" => {
             let slug = need(&p.slug, "slug")?;

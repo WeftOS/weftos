@@ -81,6 +81,16 @@ fn the_verbs_carry_a_worktree_from_create_to_land_through_the_daemon_store() {
     assert_eq!(f["changes"][0]["change"], "new");
     let s = call(&svc, "search", json!({"project": PROJ, "query": "plan"}), 31).unwrap();
     assert_eq!(s["hits"][0]["path"], "docs/plan.md");
+    // a dashboard-style read of the same tree: list, folder, file, and a refusal outside the tree
+    let l = call(&svc, "browse", json!({"project": PROJ}), 31).unwrap();
+    assert_eq!(l["worktrees"][0]["slug"], "feat-rooms");
+    let ls = call(&svc, "browse", json!({"project": PROJ, "slug": "feat-rooms", "path": "docs/"}), 31).unwrap();
+    assert_eq!(ls["entries"][0]["path"], "docs/plan.md");
+    let g = call(&svc, "browse", json!({"project": PROJ, "slug": "feat-rooms", "path": "docs/plan.md"}), 31).unwrap();
+    assert_eq!((g["text"].as_str(), g["withheld"].as_bool()), (Some("# Rooms plan\n"), Some(false)));
+    let small = call(&svc, "browse", json!({"project": PROJ, "slug": "feat-rooms", "path": "docs/plan.md", "max_bytes": 3}), 31).unwrap();
+    assert_eq!((small["withheld"].as_bool(), small["text"].is_null()), (Some(true), true));
+    assert!(call(&svc, "browse", json!({"project": PROJ, "slug": "feat-rooms", "path": ".wt/meta.json"}), 31).is_err());
     let dest = tempfile::tempdir().unwrap();
     let fe = call(&svc, "fetch", json!({"project": PROJ, "slug": "feat-rooms", "dest": dest.path().to_string_lossy()}), 32).unwrap();
     assert_eq!(fe["written"], 2);
