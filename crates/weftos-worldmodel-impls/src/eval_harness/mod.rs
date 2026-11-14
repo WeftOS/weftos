@@ -15,7 +15,11 @@
 //!   SIGReg health from a [`WelfordSigRegMonitor`] run over all latents. Condition 2 uses the
 //!   gate's own probe, which since 2026-11-14 is [`GateProbeKind::BeatsCopyLast`] (see the
 //!   `rollback_gate` module doc). [`EvalConfig::probe`] can select the legacy
-//!   [`ProbeKind::SignAgreement`] or the fitted [`ProbeKind::LinearLsq`] instead.
+//!   [`ProbeKind::SignAgreement`] or the fitted [`ProbeKind::LinearLsq`] instead. Condition 4
+//!   uses the gate's straightening score, which since 2026-11-14 is
+//!   [`StraighteningKind::PredictedCurvature`] over the gate's 16-transition window;
+//!   [`EvalConfig::straightening`] can select the legacy [`StraighteningKind::ChordOverPath`].
+//!   [`EvalReport::straightening`] carries both scores whichever one fed the gate.
 //!
 //! Two splits: [`evaluate`] holds out the contiguous tail; [`evaluate_by_day`] holds out the
 //! last [`EvalConfig::holdout_days`] distinct days, so a day never straddles the split.
@@ -35,7 +39,8 @@ use weftos_worldmodel_core::{
 };
 
 use crate::rollback_gate::{
-    beats_copy_last, sign_agreement, FourConditionRollbackGate, GateProbeKind, ProbePair,
+    beats_copy_last, predicted_curvature, sign_agreement, FourConditionRollbackGate,
+    GateProbeKind, ProbePair, StraighteningKind,
 };
 use crate::sigreg::WelfordSigRegMonitor;
 use crate::training::ActionLinearModel;
@@ -71,6 +76,8 @@ pub struct EvalConfig {
     pub beat_margin: f32,
     /// Probe whose accuracy feeds the gate's condition 2. Default is the gate's own score.
     pub probe: ProbeKind,
+    /// Straightening score feeding the gate's condition 4. Default is the gate's own default.
+    pub straightening: StraighteningKind,
 }
 
 impl Default for EvalConfig {
@@ -81,6 +88,7 @@ impl Default for EvalConfig {
             activity_floor_std: 0.1,
             beat_margin: 0.9,
             probe: ProbeKind::BeatsCopyLast,
+            straightening: StraighteningKind::PredictedCurvature,
         }
     }
 }
@@ -120,6 +128,18 @@ pub struct ProbeAccuracies {
     pub linear_lsq: f32,
 }
 
+/// Both temporal-straightening scores, whichever one fed the gate.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StraighteningScores {
+    /// Legacy `chord / path` of the observed latents over the gate's window.
+    pub chord_over_path: f32,
+    /// `1 − θ̄/π` of predicted vs realised displacement over the gate's window (the default).
+    pub predicted_curvature: f32,
+    /// The same predicted-curvature score over every held-out transition. Informational: the
+    /// gate judges its window, this is the less noisy number for reports.
+    pub predicted_curvature_held_out: f32,
+}
+
 /// Harness result.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EvalReport {
@@ -145,6 +165,8 @@ pub struct EvalReport {
     pub sigreg_health: f32,
     /// Both probes' held-out accuracy (NaN when refused for too little data).
     pub probes: ProbeAccuracies,
+    /// Both straightening scores (NaN when refused for too little data).
+    pub straightening: StraighteningScores,
     /// Four-condition gate verdict on the held-out transitions.
     pub gate: GateVerdict,
     /// Everything agrees to promote.
@@ -183,6 +205,11 @@ fn refused(n_train: usize, n_held: usize, info: DayInfo, veto: EvalVeto) -> Eval
             sign_agreement: f32::NAN,
             beats_copy_last: f32::NAN,
             linear_lsq: f32::NAN,
+        },
+        straightening: StraighteningScores {
+            chord_over_path: f32::NAN,
+            predicted_curvature: f32::NAN,
+            predicted_curvature_held_out: f32::NAN,
         },
         gate: GateVerdict::evaluate(RollbackGateMetrics::perfect()),
         promote: false,
@@ -290,7 +317,8 @@ fn run(
     };
     let mut gate = FourConditionRollbackGate::new()
         .with_probe_capacity(held.len())
-        .with_probe_kind(gate_probe);
+        .with_probe_kind(gate_probe)
+        .with_straightening_kind(cfg.straightening);
     let mut pairs = Vec::with_capacity(held.len());
     // SIGReg judges the embedding distribution over the whole dataset, not just the held-out part.
     let mut monitor = WelfordSigRegMonitor::new(1);
@@ -327,12 +355,18 @@ fn run(
         beats_copy_last: beats_copy_last(pairs.iter()),
         linear_lsq: probe::linear_probe_accuracy(held, &alpha, &beta),
     };
+    let (chord, curvature) = gate.straightening_scores();
+    let straightening = StraighteningScores {
+        chord_over_path: chord,
+        predicted_curvature: curvature,
+        predicted_curvature_held_out: predicted_curvature(pairs.iter()),
+    };
     let verdict = match cfg.probe {
         ProbeKind::SignAgreement | ProbeKind::BeatsCopyLast => gate_verdict,
         ProbeKind::LinearLsq => {
             let mut m = gate_verdict.metrics;
             m.held_out_probe_accuracy = probes.linear_lsq;
-            GateVerdict::evaluate(m)
+            GateVerdict::evaluate_with_straighten_floor(m, cfg.straightening.floor())
         }
     };
 
@@ -360,6 +394,7 @@ fn run(
         collapsed_coords,
         sigreg_health: health,
         probes,
+        straightening,
         gate: verdict,
         promote: vetoes.is_empty(),
         vetoes,

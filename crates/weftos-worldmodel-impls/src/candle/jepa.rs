@@ -66,7 +66,10 @@
 //! the correlation matrix (weight 0.04): train / held-out ratio 12.6 / 10.6, 0 collapsed
 //! coordinates, held-out health 0.90, AdaLN held-out error 178 vs copy-last 350 and linear
 //! 204. Training seeds 22 and 23 give held-out ratio 10.0 / 9.8, health 0.87 / 0.84, and
-//! beat both baselines. The gate still vetoes on probe accuracy and temporal straightening.
+//! beat both baselines. Since the 2026-11-14 probe and straightening changes the gate judges
+//! the prediction itself on conditions 2 and 4. The probe passes; temporal straightening (the
+//! predicted-vs-realised displacement angle) still vetoes on seeds 21-23, at 0.68-0.72 on the
+//! gate window against the 0.75 floor (mean angle 50-58°).
 //! The report's participation ratio `(tr C)² / ‖C‖_F²` on train and held-out latents is the
 //! dimensional-collapse check; [`JepaTrainConfig::diagnostics`] traces it per epoch.
 //!

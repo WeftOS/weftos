@@ -85,7 +85,7 @@ pub use weftos_worldmodel_core::{
     SubscriptionId, TrainingSample, TrainingSurfaceKind, WorldModelError, WorldModelResult,
     ATTESTATION_SOURCE, EVENT_KIND_LEWM_FRAME_ATTESTATION, EVENT_KIND_MODEL_HOT_SWAP,
     EVENT_KIND_ROLLBACK_GATE, EVENT_KIND_TRAINING_CYCLE, GATE_HELD_OUT_PROBE_MIN,
-    GATE_SIGREG_HEALTH_MIN, GATE_TEMPORAL_STRAIGHTEN_MIN, GATE_VOE_DIFF_MIN,
+    GATE_SIGREG_HEALTH_MIN, GATE_PREDICTED_CURVATURE_MIN, GATE_TEMPORAL_STRAIGHTEN_MIN, GATE_VOE_DIFF_MIN,
     LATENT_DIM, LATENT_DIM_U16, LATENT_SCHEMA_MAJOR_V1, LATTICE_METHOD_COUNT, LATTICE_METHODS,
     LEWM_MODEL_SEGMENT_DOMAIN_END, LEWM_MODEL_SEGMENT_DOMAIN_START,
     SIGREG_HEALTH_ROLLBACK_THRESHOLD, SIGREG_HEALTH_WINDOW_SECS,
@@ -107,7 +107,7 @@ pub use attestation::{
 pub use weftos_worldmodel_impls::{
     decode_model_segment, encode_model_segment, model_segment_from_wire, model_segment_to_wire,
     planner_for_kind, require_promoted, ActionEncoder, CemPlanner, FourConditionRollbackGate,
-    GateProbeKind,
+    GateProbeKind, StraighteningKind,
     GradientPlanner, HashActionEncoder, HashEncoder, IdentityPredictor, ImportanceReplayBuffer,
     LewmModelSegment, LinearPredPhi, ActionLinearModel, MppiWarmPlanner, NullActionEncoder, NullEncoder, NullPlanner,
     NullPredictor, NullSigRegMonitor, OfflineEdgePipeline, PredPhi, ProbePair, RollbackGateLog,

@@ -7,7 +7,9 @@
 //! 1. **Cluster SIGReg health** — merged manifold health ≥ threshold
 //! 2. **Held-out probing accuracy** — linear probe on held-out latents
 //! 3. **VoE surprise differentiation** — real transitions surprise less than null
-//! 4. **Temporal-straightening score** — trajectory curvature is low enough
+//! 4. **Temporal-straightening score** — the realised trajectory turns the way the model
+//!    predicted (mean angle between predicted and realised displacement, since 2026-11-14;
+//!    the legacy chord / path score stays selectable in `weftos-worldmodel-impls`)
 //!
 //! See `.planning/symposiums/lewm-worldmodel/diagram.md` (training layer) and
 //! research stream T29 / D32.
@@ -32,8 +34,34 @@ pub const GATE_HELD_OUT_PROBE_MIN: f32 = 0.70;
 /// shuffled baselines (model explains variance of experience).
 pub const GATE_VOE_DIFF_MIN: f32 = 0.10;
 
-/// Minimum temporal-straightening score in `[0, 1]` (`chord / path`).
+/// Minimum legacy temporal-straightening score in `[0, 1]` (`chord / path` of the last 16
+/// observed latents). Used only by `weftos-worldmodel-impls::StraighteningKind::ChordOverPath`
+/// since 2026-11-14; the default kind uses [`GATE_PREDICTED_CURVATURE_MIN`].
 pub const GATE_TEMPORAL_STRAIGHTEN_MIN: f32 = 0.50;
+
+/// Minimum temporal-straightening score in `[0, 1]` for the default kind
+/// (`StraighteningKind::PredictedCurvature`, owner decision 2026-11-14).
+///
+/// The score is `1 − θ̄/π`, `θ̄` the mean angle over the window between the model's predicted
+/// displacement `ẑ − z_t` and the realised one `z_{t+1} − z_t`. 0.75 means `θ̄ ≤ 45°`. The floor
+/// was fixed from two arguments before any JEPA seed was run, and was not changed afterwards:
+///
+/// 1. **Chance with margin.** A predictor with no directional information scores 0.5 in
+///    expectation. The spread is largest when the latent is effectively one-dimensional (the
+///    rank-one collapse the bake-off found), because every angle is then 0 or π and the score is
+///    a binomial fraction: over the default 16-transition window its standard deviation is
+///    `0.5/√16 = 0.125`. Mean plus two standard deviations is 0.75, and a chance predictor
+///    reaches it with probability 2517/65536 ≈ 3.8 %. In two or more effective dimensions the
+///    spread is smaller (0.072 in 2-D), so 0.75 is the lowest floor that keeps a chance
+///    predictor under 5 % for every latent rank.
+/// 2. **Half the motion explained.** For a prediction scaled optimally along its own direction,
+///    `cos² θ` is the fraction of the realised displacement's squared length it explains.
+///    `θ = 45°` is `cos² θ = 1/2`: on average the model must account for at least half of each
+///    step's motion.
+///
+/// Copy-last scores exactly 0.5 on moving data. The floor is a contract value, not a fit to a
+/// fixture.
+pub const GATE_PREDICTED_CURVATURE_MIN: f32 = 0.75;
 
 /// Named gate conditions (for veto reporting / ExoChain logs).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -80,7 +108,8 @@ pub struct RollbackGateMetrics {
     pub held_out_probe_accuracy: f32,
     /// VoE surprise differentiation, `[0, 1]`.
     pub voe_surprise_diff: f32,
-    /// Temporal-straightening score (`chord / path`), `[0, 1]`.
+    /// Temporal-straightening score, `[0, 1]`: the gate's straightening kind (by default
+    /// `1 − θ̄/π` of predicted vs realised displacement; legacy `chord / path`).
     pub temporal_straightening: f32,
 }
 
@@ -105,13 +134,14 @@ impl RollbackGateMetrics {
         }
     }
 
-    /// Threshold for a named condition.
+    /// Threshold for a named condition (the default straightening kind's floor for
+    /// condition 4; see [`GateVerdict::evaluate_with_straighten_floor`] for the legacy kind).
     pub const fn threshold(cond: GateCondition) -> f32 {
         match cond {
             GateCondition::ClusterSigRegHealth => GATE_SIGREG_HEALTH_MIN,
             GateCondition::HeldOutProbeAccuracy => GATE_HELD_OUT_PROBE_MIN,
             GateCondition::VoeSurpriseDifferentiation => GATE_VOE_DIFF_MIN,
-            GateCondition::TemporalStraightening => GATE_TEMPORAL_STRAIGHTEN_MIN,
+            GateCondition::TemporalStraightening => GATE_PREDICTED_CURVATURE_MIN,
         }
     }
 
@@ -143,11 +173,19 @@ impl GateVerdict {
     ///
     /// Promotion is allowed iff every condition is at or above its threshold.
     /// Any single failure blocks promotion (rollback / hold last good segment).
+    /// Condition 4 uses the default straightening floor [`GATE_PREDICTED_CURVATURE_MIN`].
     pub fn evaluate(metrics: RollbackGateMetrics) -> Self {
+        Self::evaluate_with_straighten_floor(metrics, GATE_PREDICTED_CURVATURE_MIN)
+    }
+
+    /// [`Self::evaluate`] with an explicit condition-4 floor, for a gate whose straightening
+    /// score is not the default kind (the legacy `chord / path` uses
+    /// [`GATE_TEMPORAL_STRAIGHTEN_MIN`]). The other three thresholds are fixed.
+    pub fn evaluate_with_straighten_floor(metrics: RollbackGateMetrics, straighten_floor: f32) -> Self {
         let sigreg_ok = metrics.passes(GateCondition::ClusterSigRegHealth);
         let probe_ok = metrics.passes(GateCondition::HeldOutProbeAccuracy);
         let voe_ok = metrics.passes(GateCondition::VoeSurpriseDifferentiation);
-        let straighten_ok = metrics.passes(GateCondition::TemporalStraightening);
+        let straighten_ok = metrics.temporal_straightening >= straighten_floor;
         let promote = sigreg_ok && probe_ok && voe_ok && straighten_ok;
         Self {
             metrics,
@@ -293,6 +331,11 @@ mod tests {
         assert!((GATE_HELD_OUT_PROBE_MIN - 0.70).abs() < f32::EPSILON);
         assert!((GATE_VOE_DIFF_MIN - 0.10).abs() < f32::EPSILON);
         assert!((GATE_TEMPORAL_STRAIGHTEN_MIN - 0.50).abs() < f32::EPSILON);
+        assert!((GATE_PREDICTED_CURVATURE_MIN - 0.75).abs() < f32::EPSILON);
+        assert_eq!(
+            RollbackGateMetrics::threshold(GateCondition::TemporalStraightening),
+            GATE_PREDICTED_CURVATURE_MIN
+        );
         assert_eq!(EVENT_KIND_ROLLBACK_GATE, "lewm.rollback_gate");
         assert_eq!(GateCondition::ALL.len(), 4);
     }
@@ -303,8 +346,25 @@ mod tests {
             sigreg_health: GATE_SIGREG_HEALTH_MIN,
             held_out_probe_accuracy: GATE_HELD_OUT_PROBE_MIN,
             voe_surprise_diff: GATE_VOE_DIFF_MIN,
-            temporal_straightening: GATE_TEMPORAL_STRAIGHTEN_MIN,
+            temporal_straightening: GATE_PREDICTED_CURVATURE_MIN,
         };
         assert!(GateVerdict::evaluate(m).promote);
+    }
+
+    #[test]
+    fn legacy_straightening_floor_is_selectable() {
+        let m = RollbackGateMetrics {
+            temporal_straightening: 0.60,
+            ..RollbackGateMetrics::perfect()
+        };
+        // 0.60 passes the legacy chord / path floor and fails the default curvature floor.
+        assert!(!GateVerdict::evaluate(m).straighten_ok);
+        let legacy = GateVerdict::evaluate_with_straighten_floor(m, GATE_TEMPORAL_STRAIGHTEN_MIN);
+        assert!(legacy.straighten_ok && legacy.promote);
+        let at = RollbackGateMetrics {
+            temporal_straightening: GATE_TEMPORAL_STRAIGHTEN_MIN,
+            ..RollbackGateMetrics::perfect()
+        };
+        assert!(GateVerdict::evaluate_with_straighten_floor(at, GATE_TEMPORAL_STRAIGHTEN_MIN).promote);
     }
 }

@@ -349,3 +349,71 @@ fn probe_change_matrix_on_the_synthetic_fixtures() {
     line("mean-reverting good", &o, &n);
     assert!(!o.gate.probe_ok && n.gate.probe_ok);
 }
+
+/// Before/after matrix for the 2026-11-14 straightening change: legacy chord / path against the
+/// default predicted curvature, on the SYNTHETIC fixtures (`STRAIGHT|` rows in `--nocapture`).
+#[test]
+fn straightening_change_matrix_on_the_synthetic_fixtures() {
+    let legacy = EvalConfig { straightening: StraighteningKind::ChordOverPath, ..EvalConfig::default() };
+    let new = EvalConfig::default();
+    let halve = |z: &Latent, _: f32| {
+        let mut o = *z;
+        for v in o.iter_mut() {
+            *v *= 0.5;
+        }
+        o
+    };
+    let copy = |z: &Latent, _: f32| *z;
+    let line = |name: &str, old: &EvalReport, now: &EvalReport| {
+        eprintln!(
+            "STRAIGHT|harness|{name}|chord/path {:.3} curvature {:.3} (held-out {:.3})|legacy promote {} vetoes {:?}|new promote {} vetoes {:?}",
+            now.straightening.chord_over_path,
+            now.straightening.predicted_curvature,
+            now.straightening.predicted_curvature_held_out,
+            old.promote,
+            old.vetoes,
+            now.promote,
+            now.vetoes
+        );
+        // Both runs report the same pair of scores; only the one feeding condition 4 differs.
+        assert_eq!(old.straightening, now.straightening);
+        assert_eq!(now.gate.metrics.temporal_straightening, now.straightening.predicted_curvature);
+        assert_eq!(old.gate.metrics.temporal_straightening, old.straightening.chord_over_path);
+    };
+    let contiguous = fixture(240, 1.0, 0.0005, 7);
+    let (by_day, days) = day_fixture();
+    let reverting = mean_reverting(240);
+    let collapsed = fixture(240, 0.01, 0.0, 7);
+
+    let (o, n) = (evaluate(&contiguous, true_model(1.0), legacy), evaluate(&contiguous, true_model(1.0), new));
+    line("contiguous drift, good", &o, &n);
+    assert!(o.promote && n.promote && n.straightening.predicted_curvature > 0.99);
+    let (o, n) = (
+        evaluate_by_day(&by_day, &days, true_model(1.0), legacy),
+        evaluate_by_day(&by_day, &days, true_model(1.0), new),
+    );
+    line("by-day drift, good", &o, &n);
+    assert!(o.promote && n.promote);
+    let (o, n) = (evaluate(&contiguous, copy, legacy), evaluate(&contiguous, copy, new));
+    line("contiguous drift, copy-last", &o, &n);
+    // The legacy score passes copy-last; the new one refuses it on condition 4 as well.
+    assert!(o.gate.straighten_ok && !n.gate.straighten_ok);
+    assert!((n.straightening.predicted_curvature - 0.5).abs() < 1e-6);
+    let (o, n) = (evaluate_by_day(&by_day, &days, copy, legacy), evaluate_by_day(&by_day, &days, copy, new));
+    line("by-day drift, copy-last", &o, &n);
+    assert!(!n.gate.straighten_ok && !n.promote);
+    // Scale collapse with the dynamics intact: the direction is still exact, so condition 4
+    // passes under both kinds; the activity floor refuses it (a stated failure mode).
+    let (o, n) = (evaluate(&collapsed, true_model(0.01), legacy), evaluate(&collapsed, true_model(0.01), new));
+    line("contiguous drift, scale-collapsed, perfect model", &o, &n);
+    assert!(n.gate.straighten_ok && !n.promote && n.vetoes.contains(&EvalVeto::ActivityCollapse));
+    // Mean-reverting (iid pairs): the observed path is not a trajectory, so chord / path vetoes a
+    // perfect model; the new score passes it. Other conditions still veto this fixture.
+    let (o, n) = (evaluate(&reverting, halve, legacy), evaluate(&reverting, halve, new));
+    line("mean-reverting, good", &o, &n);
+    assert!(!o.gate.straighten_ok && n.gate.straighten_ok);
+    assert!(!n.vetoes.contains(&EvalVeto::Gate(GateCondition::TemporalStraightening)));
+    let (o, n) = (evaluate(&reverting, copy, legacy), evaluate(&reverting, copy, new));
+    line("mean-reverting, copy-last", &o, &n);
+    assert!(!n.gate.straighten_ok);
+}

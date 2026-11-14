@@ -8,7 +8,7 @@
 //! | 1 | Cluster SIGReg health | from [`WelfordSigRegMonitor`] / host |
 //! | 2 | Held-out probe accuracy | fraction of held-out pairs where the model beats copy-last |
 //! | 3 | VoE surprise differentiation | real vs null residual gap |
-//! | 4 | Temporal straightening | chord / path over a latent window |
+//! | 4 | Temporal straightening | mean angle between predicted and realised displacement over the window |
 //!
 //! Any single condition below its threshold blocks checkpoint promotion.
 //!
@@ -22,19 +22,33 @@
 //! [`FourConditionRollbackGate::with_probe_kind`]. The floor `GATE_HELD_OUT_PROBE_MIN` (0.70) is
 //! unchanged. The other three conditions and their thresholds are unchanged. See [`probe`] for
 //! the argument and the failure case.
+//!
+//! # Condition 4: temporal straightening (changed 2026-11-14, owner decision, plan item W4)
+//!
+//! The gate keeps the last [`DEFAULT_TRAJECTORY_CAPACITY`] transitions as [`ProbePair`]s. The
+//! default [`StraighteningKind::PredictedCurvature`] is the literature's curvature (the angle
+//! between consecutive displacements, Hénaff et al. 2019) measured against the model's own
+//! prediction instead of constant-velocity extrapolation: `1 − θ̄/π`, `θ` the angle between
+//! `ẑ − z_t` and `z_{t+1} − z_t`, floor `GATE_PREDICTED_CURVATURE_MIN` (0.75, a mean angle of
+//! at most 45°). The legacy `chord / path` of the observed latents never read the prediction,
+//! scored copy-last and a perfect model alike, and fell under its floor on any action-steered,
+//! turning or wrapping path; it stays reachable with
+//! [`FourConditionRollbackGate::with_straightening_kind`] and keeps its floor
+//! `GATE_TEMPORAL_STRAIGHTEN_MIN` (0.50). See [`straighten`] for the argument, the floor and
+//! the failure modes. The other three conditions and their thresholds are unchanged.
 
 pub mod probe;
+pub mod straighten;
 
 pub use probe::{beats_copy_last, sign_agreement, GateProbeKind};
+pub use straighten::{chord_over_path, predicted_curvature, StraighteningKind};
 
 extern crate alloc;
 
 use alloc::collections::VecDeque;
-use alloc::vec::Vec;
 
 use weftos_worldmodel_core::{
-    surprise_voe, GateCondition, GateVerdict, Latent, RollbackGate,
-    RollbackGateMetrics, LATENT_DIM,
+    surprise_voe, GateCondition, GateVerdict, Latent, RollbackGate, RollbackGateMetrics,
 };
 
 /// Default held-out pair buffer capacity.
@@ -74,10 +88,12 @@ pub struct FourConditionRollbackGate {
     probe_capacity: usize,
     /// Score feeding condition 2.
     probe_kind: GateProbeKind,
-    /// Recent latent trajectory for straightening.
-    trajectory: VecDeque<Latent>,
+    /// Recent transitions for temporal straightening (ring).
+    trajectory: VecDeque<ProbePair>,
     /// Capacity of the trajectory window.
     trajectory_capacity: usize,
+    /// Score feeding condition 4.
+    straightening_kind: StraighteningKind,
     /// Running mean of real VoE surprise.
     mean_real_surprise: f32,
     /// Running mean of null VoE surprise (`ẑ = z_t`, identity baseline).
@@ -110,6 +126,7 @@ impl FourConditionRollbackGate {
             probe_kind: GateProbeKind::default(),
             trajectory: VecDeque::with_capacity(DEFAULT_TRAJECTORY_CAPACITY),
             trajectory_capacity: DEFAULT_TRAJECTORY_CAPACITY,
+            straightening_kind: StraighteningKind::default(),
             mean_real_surprise: 0.0,
             mean_null_surprise: 0.0,
             n_transitions: 0,
@@ -135,6 +152,30 @@ impl FourConditionRollbackGate {
     /// The condition-2 score in use.
     pub fn probe_kind(&self) -> GateProbeKind {
         self.probe_kind
+    }
+
+    /// Select the condition-4 score. `ChordOverPath` restores the legacy behaviour and its
+    /// floor.
+    pub fn with_straightening_kind(mut self, kind: StraighteningKind) -> Self {
+        self.straightening_kind = kind;
+        self
+    }
+
+    /// The condition-4 score in use.
+    pub fn straightening_kind(&self) -> StraighteningKind {
+        self.straightening_kind
+    }
+
+    /// Both condition-4 scores on the current window, `(legacy chord / path, predicted
+    /// curvature)`, whichever one feeds the gate. Cold start reports 1.0 for both.
+    pub fn straightening_scores(&self) -> (f32, f32) {
+        if self.straightening_cold() {
+            return (1.0, 1.0);
+        }
+        (
+            StraighteningKind::ChordOverPath.score(self.trajectory.iter()),
+            StraighteningKind::PredictedCurvature.score(self.trajectory.iter()),
+        )
     }
 
     /// Override trajectory window capacity.
@@ -177,21 +218,22 @@ impl FourConditionRollbackGate {
         self.mean_real_surprise += (real - self.mean_real_surprise) / n;
         self.mean_null_surprise += (null - self.mean_null_surprise) / n;
 
+        let pair = ProbePair {
+            z_t: *z_t,
+            z_hat: *z_hat,
+            z_tp1: *z_tp1,
+        };
         // Held-out probe ring.
         if self.probe_buf.len() >= self.probe_capacity {
             self.probe_buf.pop_front();
         }
-        self.probe_buf.push_back(ProbePair {
-            z_t: *z_t,
-            z_hat: *z_hat,
-            z_tp1: *z_tp1,
-        });
+        self.probe_buf.push_back(pair);
 
-        // Trajectory for temporal straightening.
+        // Window for temporal straightening.
         if self.trajectory.len() >= self.trajectory_capacity {
             self.trajectory.pop_front();
         }
-        self.trajectory.push_back(*z_tp1);
+        self.trajectory.push_back(pair);
 
         let verdict = self.verdict();
         self.last_verdict = Some(verdict);
@@ -246,22 +288,15 @@ impl FourConditionRollbackGate {
         raw.clamp(0.0, 1.0)
     }
 
+    fn straightening_cold(&self) -> bool {
+        self.n_transitions < self.min_samples || self.trajectory.len() < 2
+    }
+
     fn compute_temporal_straightening(&self) -> f32 {
-        if self.n_transitions < self.min_samples || self.trajectory.len() < 2 {
-            return 1.0;
+        if self.straightening_cold() {
+            return 1.0; // cold start: do not veto
         }
-        // score = chord / path  (1 = perfectly straight trajectory)
-        let mut path = 0.0f32;
-        let traj: Vec<&Latent> = self.trajectory.iter().collect();
-        for w in traj.windows(2) {
-            path += l2(w[0], w[1]);
-        }
-        let chord = l2(traj[0], traj[traj.len() - 1]);
-        if path < 1e-9 {
-            // Stationary trajectory: treat as perfectly straight.
-            return 1.0;
-        }
-        (chord / path).clamp(0.0, 1.0)
+        self.straightening_kind.score(self.trajectory.iter())
     }
 
     fn snapshot_metrics(&self) -> RollbackGateMetrics {
@@ -277,6 +312,14 @@ impl FourConditionRollbackGate {
 impl RollbackGate for FourConditionRollbackGate {
     fn metrics(&self) -> RollbackGateMetrics {
         self.snapshot_metrics()
+    }
+
+    /// AND verdict with condition 4 judged against the selected straightening kind's floor.
+    fn verdict(&self) -> GateVerdict {
+        GateVerdict::evaluate_with_straighten_floor(
+            self.snapshot_metrics(),
+            self.straightening_kind.floor(),
+        )
     }
 }
 
@@ -318,15 +361,7 @@ impl FourConditionRollbackGate {
     }
 }
 
-#[inline]
-fn l2(a: &Latent, b: &Latent) -> f32 {
-    let mut acc = 0.0f32;
-    for i in 0..LATENT_DIM {
-        let d = a[i] - b[i];
-        acc += d * d;
-    }
-    crate::math_no_std::sqrtf(acc)
-}
-
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod straighten_tests;
