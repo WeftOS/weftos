@@ -327,6 +327,14 @@ L1 as the tier for "unmerged layers that other nodes should see before integrati
 - **Clocks:** ages compare the registry's writer-side timestamp with the follower's clock, so the
   thresholds are days. They are a nudge, not a lock. Claims are the exception and are checked as
   described in §4.
+- **Writer trigger, WO-069 (prototype, branch `w2/wo069-a-trigger`):** `worktree-store.sh register` records this
+  machine's worktrees (local state under `$XDG_STATE_HOME/weftos/worktree-store`); `sweep` publishes a registered
+  worktree only when its tree digest moved (SHA-256 over HEAD, sorted `ls-files -co` names, size and content hash
+  under 1 MiB, size+mtime above), so an idle worktree costs zero store calls and uncommitted docs are shared. A
+  registered path that vanished is marked `orphan` (last published head, first-missing time); nothing is archived or
+  deleted, which stays the gc policy question. `install-hook` adds a post-commit accelerator running
+  `sweep --only <slug>`: per-worktree `core.hooksPath` when `extensions.worktreeConfig` is set, else one shared hook
+  that ignores unregistered worktrees. A foreign post-commit is never overwritten (`--chain` keeps it running).
 - **Not in scope:** an operator UI (card d18e1ab0), automatic merging, and enforcing that anyone
   acts on a leftover.
 
