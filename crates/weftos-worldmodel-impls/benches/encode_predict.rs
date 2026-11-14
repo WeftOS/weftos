@@ -2,7 +2,9 @@
 //!
 //! Harness-free bench (no criterion dependency): `std::time::Instant` over 200 synthetic
 //! 64 × 64 RGB frames, one call per frame after a short warm-up. Prints mean µs per call and
-//! calls per second.
+//! calls per second. The last row is one JEPA training step (`JepaTrainer::step`, batch 16:
+//! online ViT forward + backward, EMA target forward, AdaLN forward + backward, AdamW, EMA
+//! update) on SYNTHETIC frames, timed over [`JEPA_STEPS`] steps after two warm-up steps.
 //!
 //! ```text
 //! cargo bench -p weftos-worldmodel-impls --features candle --bench encode_predict
@@ -11,13 +13,16 @@
 use std::hint::black_box;
 use std::time::Instant;
 
+use weftos_worldmodel_impls::candle::synthetic::{generate, SyntheticConfig};
 use weftos_worldmodel_impls::{
-    AdaLnPredictor, ActionLinearModel, Action, CandleVitEncoder, Encoder, HashEncoder, Latent,
-    LinearPredPhi, Predictor, VitTinyConfig,
+    AdaLnPredictor, ActionLinearModel, Action, CandleVitEncoder, Encoder, FrameTransition,
+    HashEncoder, JepaTrainConfig, JepaTrainer, Latent, LinearPredPhi, Predictor, VitTinyConfig,
 };
 
 const FRAMES: usize = 200;
 const WARMUP: usize = 10;
+/// Timed JEPA training steps (each one is a full batch-16 forward + backward).
+const JEPA_STEPS: usize = 10;
 
 fn frames(cfg: &VitTinyConfig) -> Vec<Vec<u8>> {
     let mut s = 0x2545_F491_4F6C_DD1Du64;
@@ -87,4 +92,19 @@ fn main() {
         let z = vit.encode(&data[i % FRAMES]).unwrap();
         black_box(adaln.predict(&z, &action).unwrap());
     });
+
+    let jcfg = JepaTrainConfig { batch_size: 16, ..JepaTrainConfig::default() };
+    let jdata = generate(&SyntheticConfig { days: 1, sessions_per_day: 1, steps_per_session: 16, ..SyntheticConfig::default() });
+    let batch: Vec<&FrameTransition> = jdata.iter().collect();
+    let mut trainer = JepaTrainer::new(jcfg).expect("jepa trainer");
+    for _ in 0..2 {
+        black_box(trainer.step(&batch).unwrap());
+    }
+    let t0 = Instant::now();
+    for _ in 0..JEPA_STEPS {
+        black_box(trainer.step(black_box(&batch)).unwrap());
+    }
+    let us = t0.elapsed().as_secs_f64() * 1e6 / JEPA_STEPS as f64;
+    println!("| {:<36} | {us:>12.1} | {:>12.2} |", "JEPA train step (batch 16)", 1e6 / us);
+    println!("JEPA step: {} frames/s through the online encoder (batch 16 / step time)", (16.0 * 1e6 / us).round());
 }
