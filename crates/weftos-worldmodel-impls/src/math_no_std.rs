@@ -42,7 +42,7 @@ pub fn lnf(x: f32) -> f32 {
         // AtanH series on (m-1)/(m+1) around 1.0 after shift to [√0.5, √2].
         // Simpler: range reduce to [2/3, 4/3] then padé-ish.
         let mut e = exp;
-        if m < 0.707_106_78 {
+        if m < core::f32::consts::FRAC_1_SQRT_2 {
             m *= 2.0;
             e -= 1;
         }
@@ -56,7 +56,7 @@ pub fn lnf(x: f32) -> f32 {
         s += t / 5.0;
         t *= y2;
         s += t / 7.0;
-        2.0 * s + (e as f32) * 0.693_147_18
+        2.0 * s + (e as f32) * core::f32::consts::LN_2
     }
 }
 
@@ -70,8 +70,8 @@ pub fn cosf(x: f32) -> f32 {
     #[cfg(not(feature = "std"))]
     {
         // Range reduce to [-π, π] then Taylor.
-        const PI: f32 = 3.141_592_65;
-        const TWO_PI: f32 = 6.283_185_3;
+        const PI: f32 = core::f32::consts::PI;
+        const TWO_PI: f32 = core::f32::consts::TAU;
         let mut t = x % TWO_PI;
         if t > PI {
             t -= TWO_PI;
