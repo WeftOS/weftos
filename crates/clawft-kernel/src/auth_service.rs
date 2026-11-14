@@ -1156,4 +1156,26 @@ mod tests {
         let svc = AuthService::new_default();
         assert!(!svc.check_scope("no-such-token", "read"));
     }
+    // ── card a134bcf7: credentials are sealed with an AEAD, not keyed XOR ──
+
+    #[test]
+    fn same_credential_value_seals_differently() {
+        let svc = AuthService::new([0xAB; 32]);
+        svc.register_credential("a", CredentialType::ApiKey, b"same-value", vec![])
+            .unwrap();
+        svc.register_credential("b", CredentialType::ApiKey, b"same-value", vec![])
+            .unwrap();
+        let a = svc.credentials.get("a").unwrap().encrypted_value.clone();
+        let b = svc.credentials.get("b").unwrap().encrypted_value.clone();
+        assert_ne!(a, b, "a fresh nonce per seal must change the ciphertext");
+        svc.rotate_credential("a", b"same-value").unwrap();
+        assert_ne!(svc.credentials.get("a").unwrap().encrypted_value, a);
+    }
+
+    #[test]
+    fn no_keyed_xor_left_in_auth_service() {
+        let src = include_str!("auth_service.rs");
+        assert!(!src.contains(concat!("xor", "_encrypt")));
+        assert!(!src.contains(concat!("xor", "_decrypt")));
+    }
 }
