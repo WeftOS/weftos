@@ -3,6 +3,7 @@
 use super::*;
 use crate::candle::synthetic::{generate, SyntheticConfig};
 use candle_core::Device;
+use weftos_worldmodel_core::{Latent, Predictor};
 
 /// Small encoder so debug-mode tests stay fast.
 fn tiny_encoder() -> VitTinyConfig {
@@ -23,7 +24,7 @@ fn tiny_cfg() -> JepaTrainConfig {
 }
 
 fn tiny_data() -> Vec<FrameTransition> {
-    generate(&SyntheticConfig { image_size: 32, days: 3, sessions_per_day: 2, steps_per_session: 16, blob_radius: 4.0, action_step_px: 3.0, noise: 6, seed: 11 })
+    generate(&SyntheticConfig { image_size: 32, days: 3, sessions_per_day: 2, steps_per_session: 16, blob_radius: 4.0, action_step_px: 3.0, noise: 6, seed: 11, ..SyntheticConfig::default() })
 }
 
 fn scalar(t: &Tensor) -> f64 {
@@ -50,6 +51,92 @@ fn isotropy_penalty_matches_a_brute_force_reference() {
     let flat = Tensor::from_vec(vec![0.5f32; 4 * d], (4, d), &Device::Cpu).unwrap();
     let want = 0.25 + (ISO_STD_EPS.sqrt() - 1.0).powi(2);
     assert!((scalar(&isotropy_penalty(&flat, 0.0).unwrap()) - want).abs() < 1e-5);
+}
+
+/// f64 Epps-Pulley statistic of one projection by trapezoid quadrature of the definition
+/// `∫ |φ̂(t) − e^{−t²/2}|² N(t; 0, β²) dt` (independent of the closed form under test).
+fn epps_pulley_quadrature(x: &[f64], beta: f64) -> f64 {
+    let (n, lim, m) = (x.len() as f64, 12.0 * beta, 24_001usize);
+    let h = 2.0 * lim / (m - 1) as f64;
+    (0..m)
+        .map(|i| {
+            let t = -lim + i as f64 * h;
+            let (re, im) = x.iter().fold((0.0, 0.0), |(r, s), v| (r + (t * v).cos() / n, s + (t * v).sin() / n));
+            let w = (-t * t / (2.0 * beta * beta)).exp() / (2.0 * std::f64::consts::PI * beta * beta).sqrt();
+            let f = ((re - (-t * t / 2.0).exp()).powi(2) + im * im) * w;
+            if i == 0 || i == m - 1 { f * h / 2.0 } else { f * h }
+        })
+        .sum()
+}
+
+#[test]
+fn epps_pulley_penalty_matches_quadrature_of_its_definition() {
+    let (b, d, k) = (7usize, 4usize, 3usize);
+    let vals: Vec<f32> = (0..b * d).map(|i| ((i * 5 % 13) as f32 - 6.0) * 0.3).collect();
+    let z = Tensor::from_vec(vals.clone(), (b, d), &Device::Cpu).unwrap();
+    let dirs = random_directions(&mut SplitMix64::new(8), d, k).unwrap();
+    let u: Vec<Vec<f32>> = dirs.to_vec2().unwrap();
+    let want: f64 = (0..k)
+        .map(|c| {
+            let x: Vec<f64> = (0..b).map(|r| (0..d).map(|j| vals[r * d + j] as f64 * u[j][c] as f64).sum()).collect();
+            epps_pulley_quadrature(&x, EP_BETA)
+        })
+        .sum::<f64>()
+        / k as f64;
+    let got = scalar(&epps_pulley_penalty(&z, &dirs).unwrap());
+    assert!((got - want).abs() < 1e-5, "{got} vs {want}");
+    // Collapsed at the origin: 1 − 2/√2 + 1/√3; standard-normal-like samples score far lower.
+    let zero = Tensor::zeros((b, d), candle_core::DType::F32, &Device::Cpu).unwrap();
+    let collapsed = 1.0 - 2.0 / 2f64.sqrt() + 1.0 / 3f64.sqrt();
+    assert!((scalar(&epps_pulley_penalty(&zero, &dirs).unwrap()) - collapsed).abs() < 1e-5);
+    let mut rng = SplitMix64::new(2);
+    let mut u01 = || ((rng.uniform() as f64 + 1.0) / 2.0).max(1e-9);
+    let gauss: Vec<f32> = (0..256 * d).map(|_| ((-2.0 * u01().ln()).sqrt() * (std::f64::consts::TAU * u01()).cos()) as f32).collect();
+    let g = Tensor::from_vec(gauss, (256, d), &Device::Cpu).unwrap();
+    assert!(scalar(&epps_pulley_penalty(&g, &dirs).unwrap()) < 0.01);
+}
+
+#[test]
+fn vicreg_terms_match_a_brute_force_reference() {
+    let (b, d) = (6usize, 4usize);
+    let vals: Vec<f32> = (0..b * d).map(|i| ((i * 7 % 11) as f32 - 5.0) * 0.15).collect();
+    let z = Tensor::from_vec(vals.clone(), (b, d), &Device::Cpu).unwrap();
+    let row = |i: usize| &vals[i * d..(i + 1) * d];
+    let mu: Vec<f64> = (0..d).map(|j| (0..b).map(|i| row(i)[j] as f64).sum::<f64>() / b as f64).collect();
+    let cov = |j: usize, k: usize| (0..b).map(|i| (row(i)[j] as f64 - mu[j]) * (row(i)[k] as f64 - mu[k])).sum::<f64>() / (b as f64 - 1.0);
+    let hinge: f64 = (0..d).map(|j| (1.0 - (cov(j, j) + ISO_STD_EPS).sqrt()).max(0.0)).sum::<f64>() / d as f64;
+    let off: f64 = (0..d).flat_map(|j| (0..d).map(move |k| (j, k))).filter(|(j, k)| j != k).map(|(j, k)| cov(j, k).powi(2)).sum::<f64>() / d as f64;
+    let (h, c) = vicreg_terms(&z).unwrap();
+    assert!((scalar(&h) - hinge).abs() < 1e-5, "{} vs {hinge}", scalar(&h));
+    assert!((scalar(&c) - off).abs() < 1e-5, "{} vs {off}", scalar(&c));
+}
+
+#[test]
+fn target_branch_gets_no_gradient_and_tau_follows_the_cosine_schedule() {
+    let data = tiny_data();
+    let batch: Vec<&FrameTransition> = data.iter().take(8).collect();
+    let next: Vec<Option<&FrameTransition>> = (0..8).map(|i| Some(&data[i + 1])).collect();
+    let cfg = JepaTrainConfig { multistep_weight: 1.0, vic_var_weight: 1.0, vic_cov_weight: 0.1, slice_test: SliceTest::EppsPulley, ..tiny_cfg() };
+    let tr = JepaTrainer::new(cfg).unwrap();
+    let dirs = random_directions(&mut SplitMix64::new(1), LATENT_DIM, 16).unwrap();
+    let (total, _, pred2, _) = tr.losses(&batch, &next, true, &dirs).unwrap();
+    assert!(scalar(&pred2) > 0.0, "two-step term active");
+    let grads = total.backward().unwrap();
+    let online_hit = trainable(&tr.online.varmap).unwrap().iter().filter(|(_, v)| grads.get(v.as_tensor()).is_some()).count();
+    assert!(online_hit > 0, "online encoder receives gradient");
+    for (name, v) in trainable(&tr.target.varmap).unwrap() {
+        assert!(grads.get(v.as_tensor()).is_none(), "target var {name} has a gradient");
+    }
+    // Cosine tau: start at ema_tau_start, end at ema_tau, monotone in between.
+    let mut tr = JepaTrainer::new(JepaTrainConfig { ema_tau_start: Some(0.5), ema_tau: 0.9, ..tiny_cfg() }).unwrap();
+    tr.set_total_steps(5);
+    let mut taus = vec![tr.current_tau()];
+    for _ in 0..4 {
+        tr.step(&batch).unwrap();
+        taus.push(tr.current_tau());
+    }
+    assert!((taus[0] - 0.5).abs() < 1e-12 && (taus[4] - 0.9).abs() < 1e-12 && (taus[2] - 0.7).abs() < 1e-12, "{taus:?}");
+    assert!(taus.windows(2).all(|w| w[1] > w[0]));
 }
 
 #[test]
@@ -121,8 +208,13 @@ fn print_report(tag: &str, r: &JepaTrainReport) {
 #[test]
 fn tiny_jepa_run_lowers_the_loss_keeps_latents_alive_and_reloads_identically() {
     let data = tiny_data();
-    let r = train_jepa(&data, tiny_cfg()).unwrap();
+    let r = train_jepa(&data, JepaTrainConfig { diagnostics: true, ..tiny_cfg() }).unwrap();
     print_report("tiny", &r);
+    assert_eq!(r.epoch_diagnostics.len(), tiny_cfg().epochs);
+    let d0 = r.epoch_diagnostics[0];
+    assert!(d0.target_gap > 0.0 && d0.target_gap.is_finite(), "target lags theta: {d0:?}");
+    assert!((0.0..=1.0).contains(&d0.online.session_fraction) && d0.prediction_share > 0.0 && d0.prediction_share < 1.0);
+    assert!(r.eval_target.model_err.is_finite() && r.held_out_diagnostics.participation_ratio == r.held_out_participation_ratio);
     assert_eq!((r.n_train, r.n_held_out, r.held_out_days.clone()), (64, 32, vec![2]));
     let cfg = tiny_cfg();
     assert_eq!(r.steps, cfg.epochs * 4);

@@ -85,8 +85,8 @@ pub use training::{
 pub use candle::{
     active_candle_model, candle_cpu_device, train_adaln, train_adaln_with, AdaLnConfig,
     AdaLnPredictor, AdaLnTrainConfig, AdaLnTrainReport, CandleModel, CandleModelError,
-    CandleVitEncoder, VitTinyConfig, train_jepa, FrameTransition, JepaLoss, JepaTrainConfig,
-    JepaTrainReport, JepaTrainer,
+    CandleVitEncoder, VitTinyConfig, train_jepa, EpochDiagnostics, FrameTransition, JepaLoss,
+    JepaTrainConfig, JepaTrainReport, JepaTrainer, LatentDiagnostics, SliceTest,
 };
 
 #[cfg(test)]

@@ -60,15 +60,16 @@
 
 use candle_core::{Tensor, Var};
 use candle_nn::{AdamW, Optimizer, ParamsAdamW, VarMap};
-use weftos_worldmodel_core::{Action, Latent, Predictor, LATENT_DIM};
+use weftos_worldmodel_core::{Action, LATENT_DIM};
 
 use super::adaln::{stack_rows, AdaLnConfig, AdaNet, NORM_STATS};
 use super::vit::{VitNet, VitTinyConfig};
 use super::{invalid, synthetic, AdaLnPredictor, CandleModelError, CandleResult, CandleVitEncoder, SplitMix64, CONFIG_TENSOR};
 pub(crate) use super::isotropy::random_directions;
-pub use super::isotropy::{isotropy_penalty, participation_ratio, sliced_penalty, ISO_STD_EPS};
-use crate::eval_harness::{evaluate_by_day, EvalConfig, EvalReport, Transition};
-use crate::sigreg::WelfordSigRegMonitor;
+pub use super::isotropy::{epps_pulley_penalty, isotropy_penalty, participation_ratio, sliced_penalty, vicreg_terms, EP_BETA, ISO_STD_EPS};
+pub use super::jepa_diag::{EpochDiagnostics, LatentDiagnostics};
+pub use super::jepa_report::{encode_all, train_jepa, JepaTrainReport};
+use crate::eval_harness::EvalConfig;
 
 /// One observed step on frame bytes (any source; [`synthetic::generate`] makes test ones).
 #[derive(Debug, Clone, PartialEq)]
@@ -85,6 +86,16 @@ pub struct FrameTransition {
     pub day: u16,
     /// Session tag within the day.
     pub session: u16,
+}
+
+/// Which sliced test the `η` term uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SliceTest {
+    /// `mean_k (σ_k − 1)²` over random directions ([`sliced_penalty`], lane G).
+    Std,
+    /// Sliced Epps-Pulley characteristic-function test against `N(0, 1)`
+    /// ([`epps_pulley_penalty`], LeJEPA SIGReg).
+    EppsPulley,
 }
 
 /// JEPA training settings.
@@ -110,6 +121,21 @@ pub struct JepaTrainConfig {
     pub slice_weight: f64,
     /// Random unit directions `K` drawn per step for the sliced term.
     pub slice_projections: usize,
+    /// Which sliced test the `η` term is.
+    pub slice_test: SliceTest,
+    /// EMA rate at step 0; `τ` follows a cosine from here to [`Self::ema_tau`] over the run.
+    /// `None` keeps `τ = ema_tau` constant.
+    pub ema_tau_start: Option<f64>,
+    /// Weight of the two-step target `MSE(pred(pred(z_t, a_t), a_{t+1}), sg f_ξ(x_{t+2}))`
+    /// on transitions whose successor in the same session is known (0 = off).
+    pub multistep_weight: f64,
+    /// Weight of the VICReg hinge `mean_i max(0, 1 − σ_i)` on the online latents.
+    pub vic_var_weight: f64,
+    /// Weight of the VICReg covariance `Σ_{i≠j} C_ij² / d` on the online latents.
+    pub vic_cov_weight: f64,
+    /// Record [`EpochDiagnostics`] after every epoch (re-encodes the train split twice per
+    /// epoch, so off by default).
+    pub diagnostics: bool,
     /// Latest distinct days held out from training and judged by the harness.
     pub holdout_days: usize,
     /// Encoder architecture.
@@ -124,6 +150,14 @@ pub struct JepaTrainConfig {
 
 impl Default for JepaTrainConfig {
     fn default() -> Self {
+        Self::lane_g()
+    }
+}
+
+impl JepaTrainConfig {
+    /// The lane G settings (std sliced term, `K = 64`, constant `τ = 0.996`, no multi-step or
+    /// VICReg terms), which collapse the default ViT-tiny to rank one. Kept for comparison.
+    pub fn lane_g() -> Self {
         Self {
             epochs: 10,
             lr: 1e-3,
@@ -135,6 +169,12 @@ impl Default for JepaTrainConfig {
             offdiag_weight: 0.0,
             slice_weight: 1.0,
             slice_projections: 64,
+            slice_test: SliceTest::Std,
+            ema_tau_start: None,
+            multistep_weight: 0.0,
+            vic_var_weight: 0.0,
+            vic_cov_weight: 0.0,
+            diagnostics: false,
             holdout_days: 1,
             encoder: VitTinyConfig::default(),
             predictor: AdaLnConfig::default(),
@@ -147,12 +187,14 @@ impl Default for JepaTrainConfig {
 /// Loss terms (means over the transitions they were measured on).
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct JepaLoss {
-    /// `prediction + λ · isotropy`.
+    /// `prediction + w₂ · prediction2 + λ · isotropy`.
     pub total: f32,
     /// MSE between `pred_φ(f_θ(x_t), a)` and `f_ξ(x_{t+1})`.
     pub prediction: f32,
-    /// Regulariser `R(f_θ(x_t)) + η · sliced(f_θ(x_t))` (std forms, see the module docs).
+    /// Regulariser `R + η · sliced + VICReg terms` on `f_θ(x_t)`, before `λ`.
     pub isotropy: f32,
+    /// Two-step prediction MSE (0 when the multi-step term is off or had no successors).
+    pub prediction2: f32,
 }
 
 fn trainable(varmap: &VarMap) -> CandleResult<Vec<(String, Var)>> {
@@ -176,6 +218,8 @@ pub struct JepaTrainer {
     /// `(target var, online var)`, same names, sorted.
     ema_pairs: Vec<(Var, Var)>,
     steps: usize,
+    /// Planned optimiser steps (for the `τ` schedule; 0 = constant `ema_tau`).
+    total_steps: usize,
     /// Draws the per-step sliced directions.
     dir_rng: SplitMix64,
     /// Fixed directions for [`JepaTrainer::evaluate_loss`] (comparable across calls).
@@ -194,7 +238,8 @@ impl JepaTrainer {
         if cfg.batch_size < 2 || cfg.lr <= 0.0 {
             return invalid("jepa training: batch_size must be >= 2 and lr > 0");
         }
-        if !(0.0..=1.0).contains(&cfg.ema_tau) || cfg.iso_weight < 0.0 || cfg.offdiag_weight < 0.0 || cfg.slice_weight < 0.0 || cfg.slice_projections == 0 {
+        let weights = [cfg.iso_weight, cfg.offdiag_weight, cfg.slice_weight, cfg.multistep_weight, cfg.vic_var_weight, cfg.vic_cov_weight];
+        if !(0.0..=1.0).contains(&cfg.ema_tau) || !(0.0..=1.0).contains(&cfg.ema_tau_start.unwrap_or(cfg.ema_tau)) || weights.iter().any(|w| *w < 0.0) || cfg.slice_projections == 0 {
             return invalid("jepa training: ema_tau must be in [0, 1], weights >= 0");
         }
         let online = VitNet::build(&cfg.encoder, cfg.seed)?;
@@ -216,7 +261,7 @@ impl JepaTrainer {
         let opt = AdamW::new(vars, ParamsAdamW { lr: cfg.lr, weight_decay: cfg.weight_decay, ..ParamsAdamW::default() })?;
         let dir_rng = SplitMix64::new(cfg.seed ^ 0x51_1CED);
         let eval_dirs = random_directions(&mut SplitMix64::new(cfg.seed ^ 0xE7A1), LATENT_DIM, cfg.slice_projections)?;
-        Ok(Self { cfg, online, target, pred, opt, ema_pairs, steps: 0, dir_rng, eval_dirs })
+        Ok(Self { cfg, online, target, pred, opt, ema_pairs, steps: 0, total_steps: 0, dir_rng, eval_dirs })
     }
 
     /// Optimiser steps taken so far.
@@ -224,15 +269,44 @@ impl JepaTrainer {
         self.steps
     }
 
-    /// `λ · (R + η · sliced)` for a batch of online latents.
-    fn iso_terms(&self, z: &Tensor, dirs: &Tensor) -> candle_core::Result<(Tensor, Tensor)> {
-        let iso = isotropy_penalty(z, self.cfg.offdiag_weight)?;
-        let sliced = sliced_penalty(z, dirs)?;
-        let reg = ((&iso + (&sliced * self.cfg.slice_weight)?)? * self.cfg.iso_weight)?;
-        Ok((reg, iso.add(&(sliced * self.cfg.slice_weight)?)?))
+    /// Plan `n` optimiser steps for the cosine `τ` schedule.
+    pub fn set_total_steps(&mut self, n: usize) {
+        self.total_steps = n;
     }
 
-    fn losses(&self, batch: &[&FrameTransition], train: bool, dirs: &Tensor) -> CandleResult<(Tensor, Tensor, Tensor)> {
+    /// EMA rate used after the current step: cosine from `ema_tau_start` (step 0) to
+    /// `ema_tau` (last planned step), `τ_s = τ_end − (τ_end − τ_0)·(1 + cos(π s / S)) / 2`.
+    pub fn current_tau(&self) -> f64 {
+        let t1 = self.cfg.ema_tau;
+        let Some(t0) = self.cfg.ema_tau_start else { return t1 };
+        if self.total_steps <= 1 {
+            return t1;
+        }
+        let frac = (self.steps as f64 / (self.total_steps - 1) as f64).min(1.0);
+        t1 - (t1 - t0) * (1.0 + (std::f64::consts::PI * frac).cos()) / 2.0
+    }
+
+    /// `(λ · reg, reg)` with `reg = R + η · sliced + vic_var · hinge + vic_cov · cov`.
+    fn iso_terms(&self, z: &Tensor, dirs: &Tensor) -> candle_core::Result<(Tensor, Tensor)> {
+        let c = &self.cfg;
+        let mut reg = isotropy_penalty(z, c.offdiag_weight)?;
+        if c.slice_weight > 0.0 {
+            let sliced = match c.slice_test {
+                SliceTest::Std => sliced_penalty(z, dirs)?,
+                SliceTest::EppsPulley => epps_pulley_penalty(z, dirs)?,
+            };
+            reg = (reg + (sliced * c.slice_weight)?)?;
+        }
+        if c.vic_var_weight > 0.0 || c.vic_cov_weight > 0.0 {
+            let (hinge, cov) = vicreg_terms(z)?;
+            reg = ((reg + (hinge * c.vic_var_weight)?)? + (cov * c.vic_cov_weight)?)?;
+        }
+        Ok(((&reg * c.iso_weight)?, reg))
+    }
+
+    /// `(total, prediction, prediction2, reg)`. `next[i]` is `batch[i]`'s successor in the
+    /// same session (empty slice = no multi-step term).
+    pub(crate) fn losses(&self, batch: &[&FrameTransition], next: &[Option<&FrameTransition>], train: bool, dirs: &Tensor) -> CandleResult<(Tensor, Tensor, Tensor, Tensor)> {
         if batch.len() < 2 {
             return invalid(format!("jepa batch needs >= 2 transitions, got {}", batch.len()));
         }
@@ -242,24 +316,41 @@ impl JepaTrainer {
         let z = self.online.forward(enc, &ft, train)?;
         let target = self.target.forward(enc, &ftp1, false)?.detach();
         let a = stack_rows(batch.iter().map(|t| t.action.code), batch.len())?;
-        let pred = (self.pred.forward(&z, &a)? - target)?.sqr()?.mean_all()?;
-        let (reg, iso) = self.iso_terms(&z, dirs)?;
-        let total = (&pred + reg)?;
-        Ok((total, pred, iso))
+        let zhat = self.pred.forward(&z, &a)?;
+        let pred = (&zhat - target)?.sqr()?.mean_all()?;
+        let (reg_w, reg) = self.iso_terms(&z, dirs)?;
+        let mut total = (&pred + reg_w)?;
+        let mut pred2 = Tensor::new(0.0f32, &candle_core::Device::Cpu)?;
+        let idx: Vec<u32> = (0..batch.len()).filter(|&i| matches!(next.get(i), Some(Some(_)))).map(|i| i as u32).collect();
+        if self.cfg.multistep_weight > 0.0 && !idx.is_empty() {
+            let succ: Vec<&FrameTransition> = idx.iter().filter_map(|&i| next[i as usize]).collect();
+            let sel = Tensor::from_vec(idx.clone(), idx.len(), &candle_core::Device::Cpu)?;
+            let a2 = stack_rows(succ.iter().map(|t| t.action.code), succ.len())?;
+            let ftp2: Vec<&[u8]> = succ.iter().map(|t| t.frame_tp1.as_slice()).collect();
+            let target2 = self.target.forward(enc, &ftp2, false)?.detach();
+            let zhat2 = self.pred.forward(&zhat.index_select(&sel, 0)?, &a2)?;
+            pred2 = (zhat2 - target2)?.sqr()?.mean_all()?;
+            total = (total + (&pred2 * self.cfg.multistep_weight)?)?;
+        }
+        Ok((total, pred, pred2, reg))
     }
 
     /// One AdamW step on `batch` followed by the EMA update. Returns the pre-step loss.
     pub fn step(&mut self, batch: &[&FrameTransition]) -> CandleResult<JepaLoss> {
-        let dirs = random_directions(&mut self.dir_rng, LATENT_DIM, self.cfg.slice_projections)?;
-        let (total, pred, iso) = self.losses(batch, true, &dirs)?;
-        self.opt.backward_step(&total)?;
-        self.ema_update()?;
-        self.steps += 1;
-        Ok(JepaLoss { total: total.to_scalar()?, prediction: pred.to_scalar()?, isotropy: iso.to_scalar()? })
+        self.step_multi(batch, &[])
     }
 
-    fn ema_update(&self) -> CandleResult<()> {
-        let tau = self.cfg.ema_tau;
+    /// [`Self::step`] with each transition's same-session successor (for the multi-step term).
+    pub fn step_multi(&mut self, batch: &[&FrameTransition], next: &[Option<&FrameTransition>]) -> CandleResult<JepaLoss> {
+        let dirs = random_directions(&mut self.dir_rng, LATENT_DIM, self.cfg.slice_projections)?;
+        let (total, pred, pred2, iso) = self.losses(batch, next, true, &dirs)?;
+        self.opt.backward_step(&total)?;
+        self.ema_update(self.current_tau())?;
+        self.steps += 1;
+        Ok(JepaLoss { total: total.to_scalar()?, prediction: pred.to_scalar()?, isotropy: iso.to_scalar()?, prediction2: pred2.to_scalar()? })
+    }
+
+    fn ema_update(&self, tau: f64) -> CandleResult<()> {
         for (xi, theta) in &self.ema_pairs {
             let mixed = ((xi.as_tensor().detach() * tau)? + (theta.as_tensor().detach() * (1.0 - tau))?)?;
             xi.set(&mixed)?;
@@ -267,10 +358,10 @@ impl JepaTrainer {
         Ok(())
     }
 
-    /// Loss over all of `data`, no update, inference-mode ops. The prediction term is the
-    /// mean over minibatches of `batch_size`; the isotropy term is computed **once over the
-    /// whole set** (it is a batch statistic, and an unshuffled chunk from one session would
-    /// score its own low spread rather than the encoder's).
+    /// Loss over all of `data`, no update, inference-mode ops, one-step term only. The
+    /// prediction term is the mean over minibatches of `batch_size`; the regulariser is
+    /// computed **once over the whole set** (it is a batch statistic, and an unshuffled chunk
+    /// from one session would score its own low spread rather than the encoder's).
     pub fn evaluate_loss(&self, data: &[&FrameTransition]) -> CandleResult<JepaLoss> {
         if data.len() < 2 {
             return invalid(format!("jepa evaluate_loss needs >= 2 transitions, got {}", data.len()));
@@ -289,7 +380,12 @@ impl JepaTrainer {
         }
         let prediction = pred_sum / data.len() as f32;
         let isotropy: f32 = self.iso_terms(&Tensor::cat(&zs, 0)?, &self.eval_dirs)?.1.to_scalar()?;
-        Ok(JepaLoss { total: prediction + self.cfg.iso_weight as f32 * isotropy, prediction, isotropy })
+        Ok(JepaLoss { total: prediction + self.cfg.iso_weight as f32 * isotropy, prediction, isotropy, prediction2: 0.0 })
+    }
+
+    /// The settings this trainer was built with.
+    pub fn config(&self) -> &JepaTrainConfig {
+        &self.cfg
     }
 
     /// The online encoder `f_θ` (shares weights with the trainer).
@@ -308,142 +404,10 @@ impl JepaTrainer {
     }
 }
 
-/// Result of [`train_jepa`]. All numbers are from whatever data was passed in.
-#[derive(Debug, Clone)]
-pub struct JepaTrainReport {
-    /// Trained online encoder `f_θ`.
-    pub encoder: CandleVitEncoder,
-    /// Trained predictor `pred_φ`.
-    pub predictor: AdaLnPredictor,
-    /// Encoder checkpoint (arch 1).
-    pub encoder_safetensors: Vec<u8>,
-    /// Predictor checkpoint (arch 2).
-    pub predictor_safetensors: Vec<u8>,
-    /// Train-split loss before the first step ([`JepaTrainer::evaluate_loss`]).
-    pub initial_loss: JepaLoss,
-    /// Train-split loss after the last step.
-    pub final_loss: JepaLoss,
-    /// Held-out-day loss after the last step.
-    pub held_out_loss: JepaLoss,
-    /// Mean step loss per epoch (pre-step losses, train mode, isotropy per shuffled batch).
-    pub epoch_losses: Vec<JepaLoss>,
-    /// Optimiser steps.
-    pub steps: usize,
-    /// Train transitions.
-    pub n_train: usize,
-    /// Held-out transitions.
-    pub n_held_out: usize,
-    /// Held-out day ids, ascending.
-    pub held_out_days: Vec<u16>,
-    /// [`WelfordSigRegMonitor`] health after the held-out `f_θ(x_t)` latents.
-    pub held_out_sigreg_health: f32,
-    /// Participation ratio `(tr C)² / ‖C‖_F²` of the held-out latents (1 = rank-one collapse).
-    pub held_out_participation_ratio: f32,
-    /// Same, on the train-split latents.
-    pub train_participation_ratio: f32,
-    /// Eval harness on the encoded transitions, held out by day.
-    pub eval: EvalReport,
-}
-
-/// Encode `frames` in chunks of 32 with the inference graph.
-pub fn encode_all(encoder: &CandleVitEncoder, frames: &[&[u8]]) -> CandleResult<Vec<Latent>> {
-    let mut out = Vec::with_capacity(frames.len());
-    for chunk in frames.chunks(32) {
-        out.extend(encoder.encode_batch(chunk)?);
-    }
-    Ok(out)
-}
-
-/// Train encoder + predictor on `data` with the latest `cfg.holdout_days` days held out, then
-/// run the collapse checks and the eval harness (see the module docs).
-pub fn train_jepa(data: &[FrameTransition], cfg: JepaTrainConfig) -> CandleResult<JepaTrainReport> {
-    let mut days: Vec<u16> = data.iter().map(|t| t.day).collect();
-    days.sort_unstable();
-    days.dedup();
-    let n_held_days = cfg.holdout_days.max(1);
-    if days.len() < n_held_days + 1 {
-        return invalid(format!("jepa training needs > {n_held_days} distinct days, got {}", days.len()));
-    }
-    let held_out_days = days[days.len() - n_held_days..].to_vec();
-    let first_held = held_out_days[0];
-    let (train, held): (Vec<&FrameTransition>, Vec<&FrameTransition>) = data.iter().partition(|t| t.day < first_held);
-    if train.len() < cfg.batch_size.max(2) || held.len() < 9 {
-        return invalid(format!("jepa training: {} train / {} held-out transitions is too few", train.len(), held.len()));
-    }
-
-    let mut trainer = JepaTrainer::new(cfg)?;
-    let initial_loss = trainer.evaluate_loss(&train)?;
-    let mut rng = SplitMix64::new(cfg.seed ^ 0x0E9A_5EED);
-    let mut order: Vec<usize> = (0..train.len()).collect();
-    let mut epoch_losses = Vec::with_capacity(cfg.epochs);
-    for _ in 0..cfg.epochs {
-        for i in (1..order.len()).rev() {
-            order.swap(i, (rng.next_u64() % (i as u64 + 1)) as usize);
-        }
-        let (mut acc, mut k) = (JepaLoss::default(), 0.0f32);
-        for chunk in order.chunks(cfg.batch_size).filter(|c| c.len() >= 2) {
-            let batch: Vec<&FrameTransition> = chunk.iter().map(|&i| train[i]).collect();
-            let l = trainer.step(&batch)?;
-            acc.total += l.total;
-            acc.prediction += l.prediction;
-            acc.isotropy += l.isotropy;
-            k += 1.0;
-        }
-        epoch_losses.push(JepaLoss { total: acc.total / k, prediction: acc.prediction / k, isotropy: acc.isotropy / k });
-    }
-    let final_loss = trainer.evaluate_loss(&train)?;
-    let held_out_loss = trainer.evaluate_loss(&held)?;
-    let (encoder, predictor) = (trainer.encoder(), trainer.predictor());
-    let steps = trainer.steps();
-    drop(trainer);
-
-    let z_t = encode_all(&encoder, &data.iter().map(|t| t.frame_t.as_slice()).collect::<Vec<_>>())?;
-    let z_tp1 = encode_all(&encoder, &data.iter().map(|t| t.frame_tp1.as_slice()).collect::<Vec<_>>())?;
-    let (held_z, train_z): (Vec<(&FrameTransition, &Latent)>, Vec<_>) = data.iter().zip(z_t.iter()).partition(|(t, _)| t.day >= first_held);
-    let held_z: Vec<Latent> = held_z.into_iter().map(|(_, z)| *z).collect();
-    let train_z: Vec<Latent> = train_z.into_iter().map(|(_, z)| *z).collect();
-    let mut monitor = WelfordSigRegMonitor::new(1);
-    let mut held_out_sigreg_health = 1.0f32;
-    for z in &held_z {
-        // Constant clock: offline pass, keep the online rollback timer out of the statistics.
-        if let Ok(h) = monitor.update_at(z, 0) {
-            held_out_sigreg_health = h.score;
-        }
-    }
-    let transitions: Vec<Transition> = data
-        .iter()
-        .zip(z_t.iter().zip(z_tp1.iter()))
-        .map(|(t, (a, b))| Transition { z_t: *a, action: t.action_scalar, z_tp1: *b })
-        .collect();
-    let tags: Vec<u16> = data.iter().map(|t| t.day).collect();
-    let to_code = cfg.action_from_scalar;
-    let eval = evaluate_by_day(
-        &transitions,
-        &tags,
-        |z, a| predictor.predict(z, &to_code(a)).unwrap_or(*z),
-        EvalConfig { holdout_days: n_held_days, ..cfg.eval },
-    );
-
-    Ok(JepaTrainReport {
-        encoder_safetensors: encoder.to_safetensors_bytes()?,
-        predictor_safetensors: predictor.to_safetensors_bytes()?,
-        encoder,
-        predictor,
-        initial_loss,
-        final_loss,
-        held_out_loss,
-        epoch_losses,
-        steps,
-        n_train: train.len(),
-        n_held_out: held.len(),
-        held_out_days,
-        held_out_sigreg_health,
-        held_out_participation_ratio: participation_ratio(&held_z),
-        train_participation_ratio: participation_ratio(&train_z),
-        eval,
-    })
-}
-
 #[cfg(test)]
 #[path = "jepa_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "jepa_bakeoff_tests.rs"]
+mod bakeoff_tests;
