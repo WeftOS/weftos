@@ -128,8 +128,20 @@ fn run_stats_from_a_tiny_report_match_the_harness() {
     let blind = action_blind(&data);
     assert!(blind.iter().all(|t| t.action.code.iter().all(|&c| c == 0.0)));
     assert!(blind.iter().zip(&data).all(|(b, d)| b.frame_t == d.frame_t && b.action_scalar == d.action_scalar && b.day == d.day));
-    let c = variant_config(Variant::ActionBlind, ComputeDevice::Cpu, 21, 1, 192);
+    let c = variant_config(Variant::ActionBlind, &Candidate::default(), ComputeDevice::Cpu, 21, 1, 192);
     assert!((c.action_from_scalar)(0.7).code.iter().all(|&x| x == 0.0));
-    assert_eq!(variant_config(Variant::Untrained, ComputeDevice::Cpu, 21, 1, 192).epochs, 0);
-    assert_eq!(variant_config(Variant::Default, ComputeDevice::Cpu, 21, 1, 192).epochs, 48);
+    assert_eq!(variant_config(Variant::Untrained, &Candidate::default(), ComputeDevice::Cpu, 21, 1, 192).epochs, 0);
+    assert_eq!(variant_config(Variant::Default, &Candidate::default(), ComputeDevice::Cpu, 21, 1, 192).epochs, 48);
+}
+
+#[test]
+fn candidate_overrides_the_default_and_spares_lane_g_s_delta() {
+    let cand = Candidate { steps: Some(576), lr_final_ratio: Some(0.1), vic_var_weight: Some(2.0), pred_depth: Some(3), ema_tau: Some(0.995), batch_size: Some(64), ..Candidate::default() };
+    let c = variant_config(Variant::Default, &cand, ComputeDevice::Cpu, 21, 1, 192);
+    assert_eq!((c.epochs, c.batch_size, c.predictor.depth, c.lr_final_ratio, c.vic_var_weight, c.ema_tau), (192, 64, 3, 0.1, 2.0, 0.995));
+    let g = variant_config(Variant::LaneG, &cand, ComputeDevice::Cpu, 21, 1, 192);
+    let lg = JepaTrainConfig::lane_g();
+    assert_eq!((g.batch_size, g.vic_var_weight, g.ema_tau, g.predictor.depth, g.lr_final_ratio), (lg.batch_size, lg.vic_var_weight, lg.ema_tau, 3, 0.1));
+    assert_eq!(g.epochs, 576usize.div_ceil(192usize.div_ceil(lg.batch_size)));
+    assert_eq!(variant_config(Variant::Untrained, &cand, ComputeDevice::Cpu, 21, 1, 192).epochs, 0);
 }

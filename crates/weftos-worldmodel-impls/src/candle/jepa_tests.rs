@@ -152,6 +152,26 @@ fn target_branch_gets_no_gradient_and_tau_follows_the_cosine_schedule() {
 }
 
 #[test]
+fn lr_follows_the_cosine_to_its_final_ratio() {
+    let data = tiny_data();
+    let batch: Vec<&FrameTransition> = data.iter().take(8).collect();
+    let mut tr = JepaTrainer::new(JepaTrainConfig { lr: 1e-2, lr_final_ratio: 0.1, ..tiny_cfg() }).unwrap();
+    tr.set_total_steps(5);
+    let mut lrs = vec![tr.current_lr()];
+    for _ in 0..4 {
+        tr.step(&batch).unwrap();
+        lrs.push(tr.current_lr());
+    }
+    assert!((lrs[0] - 1e-2).abs() < 1e-15 && (lrs[4] - 1e-3).abs() < 1e-15 && (lrs[2] - 5.5e-3).abs() < 1e-15, "{lrs:?}");
+    assert!(lrs.windows(2).all(|w| w[1] < w[0]));
+    // The optimiser ran the last step at the rate planned for it.
+    assert!((tr.opt.learning_rate() - lrs[3]).abs() < 1e-15);
+    // Ratio 1 (every preset) is constant, and a non-positive ratio is rejected.
+    assert_eq!(JepaTrainConfig::default().lr_final_ratio, 1.0);
+    assert!(JepaTrainer::new(JepaTrainConfig { lr_final_ratio: 0.0, ..tiny_cfg() }).is_err());
+}
+
+#[test]
 fn participation_ratio_sees_rank_one_collapse() {
     let mut rng = SplitMix64::new(5);
     let spread: Vec<Latent> = (0..400).map(|_| core::array::from_fn(|_| rng.uniform())).collect();
