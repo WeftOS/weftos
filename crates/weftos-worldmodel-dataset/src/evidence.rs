@@ -6,7 +6,7 @@ use crate::error::DatasetError;
 use crate::proof::ProofCounts;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -54,7 +54,7 @@ pub struct EvidenceSummary {
     pub node_poses: BTreeMap<String, Value>,
 }
 
-fn is_id(s: &str) -> bool {
+pub(crate) fn is_id(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 128
         && s.chars()
@@ -81,6 +81,7 @@ struct Envelope<'a> {
     t_ns: u64,
     region: &'a str,
     proof: &'a str,
+    receipt: &'a str,
 }
 
 fn check_envelope(v: &Value) -> Result<Envelope<'_>, String> {
@@ -109,7 +110,7 @@ fn check_envelope(v: &Value) -> Result<Envelope<'_>, String> {
         .get("provenance")
         .and_then(Value::as_object)
         .ok_or("`provenance` missing or not an object")?;
-    id_field(prov, "receipt").map_err(|e| format!("provenance: {e}"))?;
+    let receipt = id_field(prov, "receipt").map_err(|e| format!("provenance: {e}"))?;
     id_field(prov, "producer").map_err(|e| format!("provenance: {e}"))?;
     let proof = str_field(prov, "proof").map_err(|e| format!("provenance: {e}"))?;
     if !matches!(proof, "MEASURED" | "CODE" | "SYNTHETIC") {
@@ -120,6 +121,7 @@ fn check_envelope(v: &Value) -> Result<Envelope<'_>, String> {
         t_ns,
         region,
         proof,
+        receipt,
     })
 }
 
@@ -130,7 +132,9 @@ pub fn summarize_evidence_file(path: &Path) -> Result<EvidenceSummary, DatasetEr
 }
 
 /// Reader form of [`summarize_evidence_file`]; `path` is used in errors only.
-/// Blank lines are skipped but still counted for line numbers.
+/// Blank lines are skipped but still counted for line numbers. A
+/// `provenance.receipt` seen twice aborts the run (ADR-111 section 1.1: unique
+/// per record) and the error names both line numbers.
 pub fn summarize_evidence<R: BufRead>(
     mut reader: R,
     path: &Path,
@@ -149,6 +153,7 @@ pub fn summarize_evidence<R: BufRead>(
         node_poses: BTreeMap::new(),
     };
     let mut regions = BTreeSet::new();
+    let mut receipts: HashMap<String, usize> = HashMap::new();
     loop {
         buf.clear();
         let n = reader
@@ -178,6 +183,12 @@ pub fn summarize_evidence<R: BufRead>(
         let value: Value =
             serde_json::from_slice(&buf).map_err(|e| bad(format!("invalid JSON: {e}")))?;
         let env = check_envelope(&value).map_err(bad)?;
+        if let Some(first) = receipts.insert(env.receipt.to_string(), line_no) {
+            return Err(bad(format!(
+                "duplicate provenance.receipt {:?}: first seen on line {first}, again on line {line_no}",
+                env.receipt
+            )));
+        }
         sum.lines += 1;
         sum.min_t_ns = sum.min_t_ns.min(env.t_ns);
         sum.max_t_ns = sum.max_t_ns.max(env.t_ns);
@@ -229,12 +240,8 @@ mod tests {
 
     #[test]
     fn accepts_valid_and_counts() {
-        let s = run(&format!(
-            "{}\n\n{}\n",
-            line(",\"node_id\":\"n1\""),
-            line(",\"node_id\":\"n1\"")
-        ))
-        .unwrap();
+        let second = line(",\"node_id\":\"n1\"").replace("\"r1\"", "\"r2\"");
+        let s = run(&format!("{}\n\n{second}\n", line(",\"node_id\":\"n1\""))).unwrap();
         assert_eq!(s.lines, 2);
         assert_eq!(s.node_poses.len(), 1);
         assert_eq!(s.proof_total.measured, 2);
@@ -257,6 +264,23 @@ mod tests {
                 other => panic!("expected rejection of {b}: {other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn duplicate_receipt_aborts_with_both_line_numbers() {
+        let other = line("").replace("\"receipt\":\"r1\"", "\"receipt\":\"r2\"");
+        let text = format!("{}\n\n{other}\n{}\n", line(""), line(""));
+        match run(&text) {
+            Err(DatasetError::Evidence { line, reason, .. }) => {
+                assert_eq!(line, 4);
+                assert!(
+                    reason.contains("line 1") && reason.contains("line 4"),
+                    "{reason}"
+                );
+            }
+            other => panic!("expected duplicate receipt rejection: {other:?}"),
+        }
+        assert!(run(&format!("{}\n{other}\n", line(""))).is_ok());
     }
 
     #[test]

@@ -18,6 +18,17 @@ pub struct SessionLayout {
     pub protocol: Vec<String>,
     /// Optional consent record, first existing candidate wins.
     pub consent: Vec<String>,
+    /// Optional finished marker: a file the recorder writes when the session
+    /// is closed. `None` disables the marker.
+    #[serde(default = "default_marker")]
+    pub finished_marker: Option<String>,
+    /// Refuse to archive a session whose finished marker is absent.
+    #[serde(default)]
+    pub require_finished: bool,
+}
+
+fn default_marker() -> Option<String> {
+    Some("{session}.done".into())
 }
 
 impl Default for SessionLayout {
@@ -33,6 +44,8 @@ impl Default for SessionLayout {
                 "protocol.txt".into(),
             ],
             consent: vec!["{session}.consent.json".into(), "consent.json".into()],
+            finished_marker: default_marker(),
+            require_finished: false,
         }
     }
 }
@@ -46,6 +59,8 @@ pub struct DiscoveredSession {
     pub readings: Option<PathBuf>,
     pub protocol: Option<PathBuf>,
     pub consent: Option<PathBuf>,
+    /// The finished marker, when the layout has one and it exists.
+    pub finished: Option<PathBuf>,
 }
 
 /// Session ids become directory names, so they are restricted.
@@ -83,9 +98,11 @@ impl SessionLayout {
             return Err(DatasetError::MissingEvidence(dir.join(evidence_name)));
         }
         let readings_name = expand(&self.readings);
+        let marker_name = self.finished_marker.as_deref().map(expand);
         let csi: Vec<PathBuf> = names
             .iter()
             .filter(|n| **n != evidence_name && **n != readings_name)
+            .filter(|n| marker_name.as_ref() != Some(*n))
             .filter(|n| self.csi.iter().any(|p| glob_match(&expand(p), n)))
             .map(|n| dir.join(n))
             .collect();
@@ -96,7 +113,25 @@ impl SessionLayout {
                 .find(|c| names.contains(c))
                 .map(|c| dir.join(c))
         };
+        let finished = self
+            .finished_marker
+            .as_deref()
+            .map(expand)
+            .filter(|m| names.contains(m))
+            .map(|m| dir.join(m));
+        if self.require_finished {
+            let Some(template) = self.finished_marker.as_deref() else {
+                return Err(DatasetError::BadLayout(
+                    "finished_marker".into(),
+                    "require_finished needs a finished_marker template".into(),
+                ));
+            };
+            if finished.is_none() {
+                return Err(DatasetError::NotFinished(dir.join(expand(template))));
+            }
+        }
         Ok(DiscoveredSession {
+            finished,
             evidence: dir.join(&evidence_name),
             readings: names
                 .contains(&readings_name)

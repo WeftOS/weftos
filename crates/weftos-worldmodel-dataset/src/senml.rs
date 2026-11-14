@@ -3,7 +3,7 @@
 //! file's job and are not checked here.
 
 use crate::error::DatasetError;
-use crate::evidence::MAX_LINE_BYTES;
+use crate::evidence::{MAX_LINE_BYTES, is_id};
 use crate::proof::ProofCounts;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -94,12 +94,15 @@ fn check_pack(v: &Value, sum: &mut ReadingsSummary) -> Result<(), String> {
             let b = b
                 .as_str()
                 .ok_or_else(|| format!("record {i}: `bn` is not a string"))?;
-            if b.len() < 2 || !b.ends_with('/') {
+            if !b.strip_suffix('/').is_some_and(is_id) {
                 return Err(format!(
                     "record {i}: `bn` must be a source id ending in `/`"
                 ));
             }
             bn_seen = true;
+        }
+        if let Some(k) = obj.keys().find(|k| k.ends_with('_') && *k != "proof_") {
+            return Err(format!("record {i}: unknown must-understand field `{k}`"));
         }
         if !bn_seen {
             return Err(format!("record {i}: no `bn` in scope"));
@@ -155,6 +158,8 @@ mod tests {
             r#"[{"n":"x","v":1,"proof_":"MEASURED","bn":"a"}]"#,
             r#"[{"n":"x","v":1,"bn":"a/"}]"#,
             r#"[{"n":"x","v":1,"proof_":"CLAIMED","bn":"a/"}]"#,
+            r#"[{"n":"x","v":1,"proof_":"MEASURED","bn":"a b/"}]"#,
+            r#"[{"n":"x","v":1,"proof_":"MEASURED","bn":"a/","future_":1}]"#,
         ] {
             assert!(
                 matches!(run(bad), Err(DatasetError::Readings { line: 1, .. })),

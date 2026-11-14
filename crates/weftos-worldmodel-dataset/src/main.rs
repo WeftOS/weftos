@@ -75,6 +75,9 @@ fn main() -> Result<()> {
             for f in v.files.iter().filter(|f| !f.ok) {
                 eprintln!("MISMATCH {}", f.name);
             }
+            for p in &v.manifest_problems {
+                eprintln!("MANIFEST {p}");
+            }
             if !v.ok {
                 bail!("verification failed");
             }

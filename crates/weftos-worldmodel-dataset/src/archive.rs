@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 /// Project directory under the destination root.
 pub const PROJECT_DIR: &str = "ruview-demo";
@@ -55,8 +56,13 @@ pub struct FileCheck {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Verification {
+    /// True only when every file matches and the manifest counts agree.
     pub ok: bool,
     pub files: Vec<FileCheck>,
+    /// Manifest statements that disagree with a recount of the archived
+    /// evidence and readings files. Empty when they agree.
+    #[serde(default)]
+    pub manifest_problems: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -133,10 +139,62 @@ fn protocol_value(
 /// Archive one finished session. Nothing is published unless every copied
 /// file re-reads with the checksum recorded from the source.
 pub fn archive_session(req: &ArchiveRequest) -> Result<ArchiveOutcome, DatasetError> {
+    archive_inner(req, &mut |_| {})
+}
+
+/// Size and modification time of a source file, taken before it is read.
+#[derive(Debug, Clone)]
+struct Snapshot {
+    path: PathBuf,
+    len: u64,
+    modified: Option<SystemTime>,
+}
+
+impl Snapshot {
+    fn take(path: &Path) -> Result<Self, DatasetError> {
+        let md = fs::metadata(path).map_err(|e| DatasetError::io(path, e))?;
+        Ok(Self {
+            path: path.to_path_buf(),
+            len: md.len(),
+            modified: md.modified().ok(),
+        })
+    }
+
+    /// Fail when the file's size or mtime is no longer what was recorded.
+    fn ensure_unchanged(&self) -> Result<(), DatasetError> {
+        let now =
+            Self::take(&self.path).map_err(|_| DatasetError::SourceChanged(self.path.clone()))?;
+        if now.len == self.len && now.modified == self.modified {
+            Ok(())
+        } else {
+            Err(DatasetError::SourceChanged(self.path.clone()))
+        }
+    }
+}
+
+/// `between` runs after the hash pass and before the copy pass. Tests use it
+/// to change a source file at exactly that point.
+fn archive_inner(
+    req: &ArchiveRequest,
+    between: &mut dyn FnMut(&[PathBuf]),
+) -> Result<ArchiveOutcome, DatasetError> {
     let found = req
         .layout
         .discover(&req.session_dir, req.session.as_deref())?;
     validate_session_id(&found.id)?;
+    let sources: Vec<PathBuf> = std::iter::once(found.evidence.clone())
+        .chain(found.csi.iter().cloned())
+        .chain(
+            [&found.readings, &found.protocol, &found.consent]
+                .into_iter()
+                .flatten()
+                .cloned(),
+        )
+        .collect();
+    let snapshots = sources
+        .iter()
+        .map(|p| Snapshot::take(p))
+        .collect::<Result<Vec<_>, _>>()?;
     let evidence = summarize_evidence_file(&found.evidence)?;
     let readings = found
         .readings
@@ -164,15 +222,7 @@ pub fn archive_session(req: &ArchiveRequest) -> Result<ArchiveOutcome, DatasetEr
             files.push(entry(role, p)?);
         }
     }
-    let sources: Vec<PathBuf> = std::iter::once(found.evidence.clone())
-        .chain(found.csi.iter().cloned())
-        .chain(
-            [&found.readings, &found.protocol, &found.consent]
-                .into_iter()
-                .flatten()
-                .cloned(),
-        )
-        .collect();
+    between(&sources);
 
     let manifest = Manifest::build(ManifestInputs {
         session: found.id.clone(),
@@ -182,6 +232,7 @@ pub fn archive_session(req: &ArchiveRequest) -> Result<ArchiveOutcome, DatasetEr
         readings,
         protocol,
         consent,
+        finished: found.finished.is_some(),
     });
 
     let parent = dest
@@ -190,7 +241,7 @@ pub fn archive_session(req: &ArchiveRequest) -> Result<ArchiveOutcome, DatasetEr
         .to_path_buf();
     fs::create_dir_all(&parent).map_err(|e| DatasetError::io(&parent, e))?;
     let tmp = parent.join(format!(".tmp-{}-{}", found.id, std::process::id()));
-    let result = stage_and_publish(&tmp, &dest, &sources, &manifest, req.overwrite);
+    let result = stage_and_publish(&tmp, &dest, &sources, &snapshots, &manifest, req.overwrite);
     if result.is_err() {
         let _ = fs::remove_dir_all(&tmp);
     }
@@ -206,6 +257,7 @@ fn stage_and_publish(
     tmp: &Path,
     dest: &Path,
     sources: &[PathBuf],
+    snapshots: &[Snapshot],
     manifest: &Manifest,
     overwrite: bool,
 ) -> Result<Verification, DatasetError> {
@@ -216,6 +268,10 @@ fn stage_and_publish(
     for src in sources {
         let to = tmp.join(src.file_name().expect("source is a file"));
         fs::copy(src, &to).map_err(|e| DatasetError::io(&to, e))?;
+    }
+    // A recorder that is still writing would give a copy that matches no hash.
+    for snap in snapshots {
+        snap.ensure_unchanged()?;
     }
     let mpath = tmp.join(MANIFEST_FILE);
     let json = serde_json::to_vec_pretty(manifest).expect("manifest serialises");
@@ -266,8 +322,147 @@ pub fn verify_archive(dir: &Path) -> Result<Verification, DatasetError> {
             ok,
         });
     }
+    let manifest_problems = recount_problems(dir, &manifest);
     Ok(Verification {
-        ok: files.iter().all(|f| f.ok),
+        ok: files.iter().all(|f| f.ok) && manifest_problems.is_empty(),
         files,
+        manifest_problems,
     })
+}
+
+/// Recount the archived evidence and readings files and list every manifest
+/// statement that disagrees. A copy with matching bytes but an edited
+/// manifest fails here.
+fn recount_problems(dir: &Path, m: &Manifest) -> Vec<String> {
+    let mut problems = Vec::new();
+    let file_of = |role: &str| {
+        m.files
+            .iter()
+            .find(|f| f.role == role)
+            .map(|f| dir.join(&f.name))
+    };
+    let Some(path) = file_of("evidence") else {
+        return vec!["manifest lists no evidence file".into()];
+    };
+    match summarize_evidence_file(&path) {
+        Err(e) => problems.push(format!("evidence no longer validates: {e}")),
+        Ok(s) => {
+            let mut check = |what: &str, same: bool| {
+                if !same {
+                    problems.push(format!("manifest {what} disagrees with the evidence file"));
+                }
+            };
+            check("evidence.lines", m.evidence.lines == s.lines);
+            check("evidence.by_type", m.evidence.by_type == s.by_type);
+            check(
+                "evidence.proof_total",
+                m.evidence.proof_total == s.proof_total,
+            );
+            check(
+                "evidence.unknown_types",
+                m.evidence.unknown_types == s.unknown_types,
+            );
+            check("room", m.room == s.region);
+            check(
+                "time_span.evidence",
+                m.time_span.evidence.min_t_ns == s.min_t_ns
+                    && m.time_span.evidence.max_t_ns == s.max_t_ns,
+            );
+            check("shell_measure", m.shell_measure == s.shell_measures);
+            check("node_poses", m.node_poses == s.node_poses);
+        }
+    }
+    match (file_of("readings"), &m.readings) {
+        (None, None) => {}
+        (None, Some(_)) => {
+            problems.push("manifest has readings counts but no readings file".into())
+        }
+        (Some(_), None) => problems.push("manifest lists a readings file but no counts".into()),
+        (Some(p), Some(stats)) => match summarize_readings_file(&p) {
+            Err(e) => problems.push(format!("readings no longer validate: {e}")),
+            Ok(r) => {
+                if stats.packs != r.packs || stats.records != r.records || stats.proof != r.proof {
+                    problems
+                        .push("manifest readings counts disagree with the readings file".into());
+                }
+                let span = m
+                    .time_span
+                    .readings
+                    .as_ref()
+                    .map(|s| (s.min_t_ns, s.max_t_ns));
+                if span != r.min_t_ns.zip(r.max_t_ns) {
+                    problems.push(
+                        "manifest time_span.readings disagrees with the readings file".into(),
+                    );
+                }
+            }
+        },
+    }
+    problems
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    fn session() -> (tempfile::TempDir, ArchiveRequest, tempfile::TempDir) {
+        let src = tempfile::tempdir().unwrap();
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/session");
+        for e in fs::read_dir(fixtures).unwrap() {
+            let e = e.unwrap();
+            fs::copy(e.path(), src.path().join(e.file_name())).unwrap();
+        }
+        let dest = tempfile::tempdir().unwrap();
+        let mut req = ArchiveRequest::new(src.path(), dest.path());
+        req.consent = Some(serde_json::json!({"given": true}));
+        (src, req, dest)
+    }
+
+    fn csi(src: &Path) -> PathBuf {
+        src.join("demo-session-001.csi.bin")
+    }
+
+    #[test]
+    fn source_growing_between_hash_and_copy_is_refused() {
+        let (src, req, dest) = session();
+        let mut grow = |_: &[PathBuf]| {
+            let mut f = fs::OpenOptions::new()
+                .append(true)
+                .open(csi(src.path()))
+                .unwrap();
+            f.write_all(b"more").unwrap();
+        };
+        match archive_inner(&req, &mut grow) {
+            Err(DatasetError::SourceChanged(p)) => assert_eq!(p, csi(src.path())),
+            other => panic!("expected SourceChanged: {other:?}"),
+        }
+        // Nothing published, no temp directory left.
+        let datasets = dest.path().join("ruview-demo/datasets");
+        assert!(!datasets.join("demo-session-001").exists());
+        assert_eq!(fs::read_dir(datasets).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn mtime_only_change_is_refused() {
+        let (src, req, _dest) = session();
+        let mut touch = |_: &[PathBuf]| {
+            let f = fs::OpenOptions::new()
+                .write(true)
+                .open(csi(src.path()))
+                .unwrap();
+            f.set_modified(SystemTime::now() + std::time::Duration::from_secs(5))
+                .unwrap();
+        };
+        assert!(matches!(
+            archive_inner(&req, &mut touch),
+            Err(DatasetError::SourceChanged(_))
+        ));
+    }
+
+    #[test]
+    fn untouched_sources_pass_the_stability_check() {
+        let (_src, req, _dest) = session();
+        assert!(archive_inner(&req, &mut |_| {}).unwrap().verification.ok);
+    }
 }
