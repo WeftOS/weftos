@@ -96,7 +96,7 @@ pub fn acosf(x: f32) -> f32 {
     {
         // Abramowitz & Stegun 4.4.46 on [0, 1] (|error| ≤ 2e-8), mirrored for x < 0.
         let a = x.abs();
-        let p = 1.570_796_3
+        let p = core::f32::consts::FRAC_PI_2
             + a * (-0.214_598_8
                 + a * (0.088_978_99
                     + a * (-0.050_174_3
