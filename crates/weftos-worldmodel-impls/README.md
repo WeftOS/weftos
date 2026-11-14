@@ -21,7 +21,7 @@ traits for the LeWM latent world model (WEFT-521).
 | `candle`: `CandleVitEncoder` (ViT-tiny) | **Done, untrained** | Patch embed, learned position embedding, 4 pre-norm MHSA/MLP blocks, mean-pool, head to 192; random init or safetensors load |
 | `candle`: `AdaLnPredictor` | **Done, synthetic-trained** | adaLN-zero residual MLP conditioned on the 32-d action; AdamW training (`train_adaln`), safetensors export / load |
 | `candle`: safetensors + registry delivery | **Done** | `from_safetensors_path` / `from_safetensors_bytes`, `to_model_checkpoint`, `active_candle_model` |
-| ViT encoder training (JEPA: EMA target, SIGReg isotropy penalty) | **Residual** | Encoder graph has a differentiable mode; the loop is not written |
+| ViT encoder training (JEPA: EMA target, SIGReg isotropy penalty) | **Implemented, SYNTHETIC frames only** | `candle::jepa::train_jepa`: online ViT + EMA target, AdaLN `pred_φ`, std-form diagonal isotropy penalty (optional off-diagonal term), AdamW; held-out-by-day collapse checks via `evaluate_by_day` + `WelfordSigRegMonitor` + participation ratio; fixtures in `candle::synthetic` |
 | Weights trained on real data | **Blocked** | Needs the W2 recording |
 
 Default builds **never** depend on `candle-core` / `candle-nn` (same idiom as
@@ -94,8 +94,16 @@ reg.commit_at_tick(10).unwrap();
 
 ## Residual training work (honest)
 
-1. Train the ViT encoder: JEPA loop (encoder on frame bytes, EMA target
-   encoder, SIGReg-style isotropy penalty, loss through the AdaLN predictor).
+1. ~~Train the ViT encoder: JEPA loop~~ implemented on SYNTHETIC moving-blob
+   frames (`candle::jepa`, fixtures in `candle::synthetic`). On the tiny test
+   config the trained AdaLN beats both matched baselines on the held-out day
+   with no collapsed coordinates, but the gate still vetoes (probe accuracy,
+   temporal straightening). On the default ViT-tiny (64 px, depth 4) the
+   latents go **rank-one** (participation ratio 1.0) under the JEPA loss,
+   even with the sliced isotropy term at 10x weight; the encoder alone under
+   the penalty does not. Still missing: a fix for that dimensional collapse,
+   real data, Metal, and a hyper-parameter bake-off (lr, `τ`, isotropy,
+   sliced and off-diagonal weights, batch size).
 2. Train on real data (W2 recording, held-out days), then the AdaLN bake-off
    against `ActionLinearModel` on the same split.
 3. Metal / MPS training (needs `candle-metal-kernels`, a new-dep gate item) or
