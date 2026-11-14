@@ -1,23 +1,23 @@
 //! `weftos-worldmodel-impls` — concrete LeWM trait implementations (WEFT-521).
 //!
-//! Default path is **weights-free**: null/stub types plus runtime
-//! [`LinearPredPhi`], [`CemPlanner`], and [`WelfordSigRegMonitor`] that satisfy
-//! [`weftos_worldmodel_core`] traits without candle or model files. Optional
-//! `candle` feature exposes a ViT-tiny / AdaLN **skeleton** (layout +
-//! `Unavailable` fallbacks); trained weights remain residual work — see crate
-//! `README.md`.
+//! Default path needs no candle and no model files: null/stub types plus
+//! runtime [`LinearPredPhi`], [`CemPlanner`], and [`WelfordSigRegMonitor`]
+//! that satisfy [`weftos_worldmodel_core`] traits, and both training surfaces
+//! fit the action-conditioned linear `pred_φ` ([`ActionLinearModel`]). The
+//! optional `candle` feature adds a ViT-tiny encoder and an AdaLN `pred_φ` with
+//! safetensors I/O and AdamW training (candle 0.11, CPU) — see crate `README.md`.
 //!
 //! # Modules
 //!
 //! - [`action_encoder`] — control intent → fixed-width [`Action`] code
-//! - [`encoder`] — sensor → latent (null / hash stubs; candle ViT skeleton)
-//! - [`predictor`] — `pred_φ` ([`LinearPredPhi`]) + stubs + AdaLN skeleton
+//! - [`encoder`] — sensor → latent (null / hash stubs; candle ViT-tiny under `candle`)
+//! - [`predictor`] — `pred_φ` ([`LinearPredPhi`]) + stubs (AdaLN under `candle`)
 //! - [`planner`] — CEM default / MPPI-warm / gradient planners (WEFT-529)
 //! - [`lattice`] — composed [`StubLattice`] implementing [`LatticeApi`]
 //! - [`sigreg`] — Welford SIGReg monitor + auto-rollback (WEFT-528)
 //! - [`rollback_gate`] — four-condition AND promotion gate (WEFT-530)
 //! - [`training`] — offline edge + streaming-merge surfaces; RVF hot-swap (WEFT-531 / WEFT-532)
-//! - [`candle`] — optional ML skeleton (`feature = "candle"`)
+//! - `candle` — ViT-tiny encoder + AdaLN `pred_φ` (`feature = "candle"`)
 //!
 //! Designed for `no_std` + `alloc` on the default feature set. The `candle`
 //! feature implies `std`.
@@ -82,7 +82,11 @@ pub use training::{
 };
 
 #[cfg(feature = "candle")]
-pub use candle::{candle_cpu_device, AdaLnPredictor, CandleVitEncoder, VitTinyConfig};
+pub use candle::{
+    active_candle_model, candle_cpu_device, train_adaln, train_adaln_with, AdaLnConfig,
+    AdaLnPredictor, AdaLnTrainConfig, AdaLnTrainReport, CandleModel, CandleModelError,
+    CandleVitEncoder, VitTinyConfig,
+};
 
 #[cfg(test)]
 mod tests {
