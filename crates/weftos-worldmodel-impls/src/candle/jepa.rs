@@ -86,6 +86,8 @@ use weftos_worldmodel_core::{Action, LATENT_DIM};
 
 use super::adaln::{stack_rows, AdaLnConfig, AdaNet, NORM_STATS};
 use super::vit::{set_var, VitNet, VitTinyConfig, VIT_POS_EMBED_STD};
+use super::isotropy::{isotropy_penalty_in, sliced_penalty_in, vicreg_terms_in};
+use super::numerics::{jitter_varmap, JepaNumerics, Red, ReduceMode};
 use super::{assign, invalid, synthetic, AdaLnPredictor, CandleModelError, CandleResult, CandleVitEncoder, ComputeDevice, SplitMix64, CONFIG_TENSOR};
 pub(crate) use super::isotropy::random_directions;
 pub use super::isotropy::{epps_pulley_penalty, isotropy_penalty, participation_ratio, sliced_penalty, vicreg_terms, EP_BETA, ISO_STD_EPS};
@@ -184,6 +186,8 @@ pub struct JepaTrainConfig {
     pub eval: EvalConfig,
     /// Device the trainer runs on (default CPU; `Metal` needs the `metal` feature).
     pub device: ComputeDevice,
+    /// Reduction mode and init jitter ([`super::numerics`]); the default changes nothing.
+    pub numerics: JepaNumerics,
 }
 
 impl Default for JepaTrainConfig {
@@ -226,6 +230,7 @@ impl JepaTrainConfig {
             action_from_scalar: synthetic::action_code,
             eval: EvalConfig::default(),
             device: ComputeDevice::Cpu,
+            numerics: JepaNumerics::default(),
         }
     }
 }
@@ -290,8 +295,13 @@ impl JepaTrainer {
             return invalid("jepa training: ema_tau must be in [0, 1], weights >= 0");
         }
         let device = cfg.device.resolve()?;
-        let online = VitNet::build(&cfg.encoder, cfg.seed, &device)?;
-        let target = VitNet::build(&cfg.encoder, cfg.seed, &device)?;
+        let (mut online, mut target) = (VitNet::build(&cfg.encoder, cfg.seed, &device)?, VitNet::build(&cfg.encoder, cfg.seed, &device)?);
+        for net in [&mut online, &mut target] {
+            net.pool = cfg.numerics.reductions;
+            if cfg.numerics.init_jitter != 0.0 {
+                jitter_varmap(&net.varmap, cfg.numerics.init_jitter, cfg.numerics.jitter_seed)?;
+            }
+        }
         if cfg.pos_embed_std <= 0.0 {
             return invalid("jepa training: pos_embed_std must be > 0");
         }
@@ -345,17 +355,17 @@ impl JepaTrainer {
 
     /// `(λ · reg, reg)` with `reg = R + η · sliced + vic_var · hinge + vic_cov · cov`.
     fn iso_terms(&self, z: &Tensor, dirs: &Tensor) -> candle_core::Result<(Tensor, Tensor)> {
-        let c = &self.cfg;
-        let mut reg = isotropy_penalty(z, c.offdiag_weight)?;
+        let (c, mode) = (&self.cfg, self.cfg.numerics.reductions);
+        let mut reg = isotropy_penalty_in(z, c.offdiag_weight, mode)?;
         if c.slice_weight > 0.0 {
             let sliced = match c.slice_test {
-                SliceTest::Std => sliced_penalty(z, dirs)?,
+                SliceTest::Std => sliced_penalty_in(z, dirs, mode)?,
                 SliceTest::EppsPulley => epps_pulley_penalty(z, dirs)?,
             };
             reg = (reg + (sliced * c.slice_weight)?)?;
         }
         if c.vic_var_weight > 0.0 || c.vic_cov_weight > 0.0 {
-            let (hinge, cov) = vicreg_terms(z, c.vic_correlation)?;
+            let (hinge, cov) = vicreg_terms_in(z, c.vic_correlation, mode)?;
             reg = ((reg + (hinge * c.vic_var_weight)?)? + (cov * c.vic_cov_weight)?)?;
         }
         Ok(((&reg * c.iso_weight)?, reg))
@@ -374,10 +384,14 @@ impl JepaTrainer {
         let target = self.target.forward(enc, &ftp1, false)?.detach();
         let a = stack_rows(batch.iter().map(|t| t.action.code), batch.len(), &self.device)?;
         let zhat = self.pred.forward(&z, &a)?;
-        let pred = (&zhat - target)?.sqr()?.mean_all()?;
-        let (reg_w, reg) = self.iso_terms(&z, dirs)?;
+        let mode = self.cfg.numerics.reductions;
+        // Host mode: the loss-side reductions run on CPU, gradients flow back through to_device.
+        let host = |t: &Tensor| if mode == ReduceMode::Host { t.to_device(&Device::Cpu) } else { Ok(t.clone()) };
+        let (z_l, zhat_l, target_l, dirs_l) = (host(&z)?, host(&zhat)?, host(&target)?, host(dirs)?);
+        let pred = Red(mode).mean_all(&(&zhat_l - target_l)?.sqr()?)?;
+        let (reg_w, reg) = self.iso_terms(&z_l, &dirs_l)?;
         let mut total = ((&pred * self.cfg.prediction_weight)? + reg_w)?;
-        let mut pred2 = Tensor::new(0.0f32, &self.device)?;
+        let mut pred2 = Tensor::new(0.0f32, total.device())?;
         let idx: Vec<u32> = (0..batch.len()).filter(|&i| matches!(next.get(i), Some(Some(_)))).map(|i| i as u32).collect();
         if self.cfg.multistep_weight > 0.0 && !idx.is_empty() {
             let succ: Vec<&FrameTransition> = idx.iter().filter_map(|&i| next[i as usize]).collect();
@@ -386,7 +400,7 @@ impl JepaTrainer {
             let ftp2: Vec<&[u8]> = succ.iter().map(|t| t.frame_tp1.as_slice()).collect();
             let target2 = self.target.forward(enc, &ftp2, false)?.detach();
             let zhat2 = self.pred.forward(&zhat.index_select(&sel, 0)?, &a2)?;
-            pred2 = (zhat2 - target2)?.sqr()?.mean_all()?;
+            pred2 = (zhat2 - target2)?.sqr()?.mean_all()?.to_device(total.device())?;
             total = (total + (&pred2 * self.cfg.multistep_weight)?)?;
         }
         Ok((total, pred, pred2, reg))
@@ -467,4 +481,4 @@ mod tests;
 
 #[cfg(test)]
 #[path = "jepa_bakeoff_tests.rs"]
-mod bakeoff_tests;
+pub(crate) mod bakeoff_tests;

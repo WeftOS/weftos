@@ -67,6 +67,15 @@ fn env_config(holdout_days: usize, n_train: usize) -> JepaTrainConfig {
         Ok("std") => c.slice_test = SliceTest::Std,
         _ => {}
     }
+    // Lane P numerics knobs: LEWM_REDUCE = native | host | pairwise, LEWM_JITTER (relative init
+    // perturbation, 0 = off), LEWM_JITTER_SEED. Fast math is candle's CANDLE_METAL_ENABLE_FAST_MATH.
+    c.numerics.reductions = match std::env::var("LEWM_REDUCE").as_deref() {
+        Ok("host") => super::ReduceMode::Host,
+        Ok("pairwise") => super::ReduceMode::Pairwise,
+        _ => super::ReduceMode::Native,
+    };
+    c.numerics.init_jitter = env_f("LEWM_JITTER", 0.0);
+    c.numerics.jitter_seed = env_f("LEWM_JITTER_SEED", 1.0) as u64;
     let steps = env_f("LEWM_STEPS", 288.0) as usize;
     let per_epoch = n_train.div_ceil(c.batch_size);
     c.epochs = steps.div_ceil(per_epoch);

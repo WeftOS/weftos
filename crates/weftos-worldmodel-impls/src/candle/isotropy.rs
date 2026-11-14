@@ -4,6 +4,7 @@
 use candle_core::Tensor;
 use weftos_worldmodel_core::{Latent, LATENT_DIM};
 
+use super::numerics::{Red, ReduceMode};
 use super::{CandleResult, SplitMix64};
 
 /// `(d, k)` matrix of `k` random unit directions (Box-Muller normals from SplitMix64, each
@@ -28,10 +29,16 @@ pub(crate) fn random_directions(rng: &mut SplitMix64, d: usize, k: usize, device
 /// `u_k` of `dirs` (`(d, k)`, unit columns). `B ≥ 2`. For `z ~ N(0, I)` every direction has
 /// unit variance; a rank-deficient batch scores low variance on most directions.
 pub fn sliced_penalty(z: &Tensor, dirs: &Tensor) -> candle_core::Result<Tensor> {
+    sliced_penalty_in(z, dirs, ReduceMode::Native)
+}
+
+/// [`sliced_penalty`] with its reductions in `mode` ([`crate::candle::numerics`]).
+pub(crate) fn sliced_penalty_in(z: &Tensor, dirs: &Tensor, mode: ReduceMode) -> candle_core::Result<Tensor> {
+    let r = Red(mode);
     let b = z.dims2()?.0;
-    let zc = z.broadcast_sub(&z.mean(0)?)?;
-    let var = (zc.matmul(dirs)?.sqr()?.sum(0)? / (b as f64 - 1.0))?;
-    ((var + ISO_STD_EPS)?.sqrt()? - 1.0)?.sqr()?.mean_all()
+    let zc = z.broadcast_sub(&r.mean(z, 0)?)?;
+    let var = (r.sum(&r.matmul(&zc, dirs)?.sqr()?, 0)? / (b as f64 - 1.0))?;
+    r.mean_all(&((var + ISO_STD_EPS)?.sqrt()? - 1.0)?.sqr()?)
 }
 
 /// Width `β` of the Gaussian weight `w(t) = N(t; 0, β²)` in [`epps_pulley_penalty`].
@@ -67,17 +74,23 @@ pub fn epps_pulley_penalty(z: &Tensor, dirs: &Tensor) -> candle_core::Result<Ten
 /// `M_ij = C_ij / (σ_i σ_j)`: scale-free, so with `B ≤ d` it pushes rank up without pulling
 /// the diagonal under 1. `B ≥ 2`.
 pub fn vicreg_terms(z: &Tensor, correlation: bool) -> candle_core::Result<(Tensor, Tensor)> {
+    vicreg_terms_in(z, correlation, ReduceMode::Native)
+}
+
+/// [`vicreg_terms`] with its reductions in `mode` ([`crate::candle::numerics`]).
+pub(crate) fn vicreg_terms_in(z: &Tensor, correlation: bool, mode: ReduceMode) -> candle_core::Result<(Tensor, Tensor)> {
+    let r = Red(mode);
     let (b, d) = z.dims2()?;
-    let zc = z.broadcast_sub(&z.mean(0)?)?;
-    let var = (zc.sqr()?.sum(0)? / (b as f64 - 1.0))?;
+    let zc = z.broadcast_sub(&r.mean(z, 0)?)?;
+    let var = (r.sum(&zc.sqr()?, 0)? / (b as f64 - 1.0))?;
     let std = (&var + ISO_STD_EPS)?.sqrt()?;
-    let hinge = (1.0 - &std)?.relu()?.mean_all()?;
+    let hinge = r.mean_all(&(1.0 - &std)?.relu()?)?;
     // The correlation path uses its own tiny ε: with ISO_STD_EPS, shrinking every coordinate
     // under ε would also shrink `ρ` and so lower the term (measured: it drives z to 0).
     let zm = if correlation { zc.broadcast_div(&(&var + CORR_EPS)?.sqrt()?)? } else { zc };
-    let c = (zm.t()?.matmul(&zm)? / (b as f64 - 1.0))?;
-    let diag = (zm.sqr()?.sum(0)? / (b as f64 - 1.0))?;
-    let off = ((c.sqr()?.sum_all()? - diag.sqr()?.sum_all()?)? / d as f64)?;
+    let c = (r.gram(&zm)? / (b as f64 - 1.0))?;
+    let diag = (r.sum(&zm.sqr()?, 0)? / (b as f64 - 1.0))?;
+    let off = ((r.sum_all(&c.sqr()?)? - r.sum_all(&diag.sqr()?)?)? / d as f64)?;
     Ok((hinge, off))
 }
 
@@ -89,16 +102,22 @@ pub const ISO_STD_EPS: f64 = 1e-4;
 
 /// Isotropy penalty `R` of a `(B, d)` batch (see the module docs). `B ≥ 2`.
 pub fn isotropy_penalty(z: &Tensor, offdiag_weight: f64) -> candle_core::Result<Tensor> {
+    isotropy_penalty_in(z, offdiag_weight, ReduceMode::Native)
+}
+
+/// [`isotropy_penalty`] with its reductions in `mode` ([`crate::candle::numerics`]).
+pub(crate) fn isotropy_penalty_in(z: &Tensor, offdiag_weight: f64, mode: ReduceMode) -> candle_core::Result<Tensor> {
+    let r = Red(mode);
     let (b, d) = z.dims2()?;
-    let mu = z.mean(0)?;
+    let mu = r.mean(z, 0)?;
     let zc = z.broadcast_sub(&mu)?;
-    let var = (zc.sqr()?.sum(0)? / (b as f64 - 1.0))?;
+    let var = (r.sum(&zc.sqr()?, 0)? / (b as f64 - 1.0))?;
     let std = (&var + ISO_STD_EPS)?.sqrt()?;
-    let energy = (mu.sqr()?.sum_all()? + (std - 1.0)?.sqr()?.sum_all()?)?;
+    let energy = (r.sum_all(&mu.sqr()?)? + r.sum_all(&(std - 1.0)?.sqr()?)?)?;
     let mut pen = (energy / d as f64)?;
     if offdiag_weight > 0.0 {
-        let c = (zc.t()?.matmul(&zc)? / (b as f64 - 1.0))?;
-        let off = (c.sqr()?.sum_all()? - var.sqr()?.sum_all()?)?;
+        let c = (r.gram(&zc)? / (b as f64 - 1.0))?;
+        let off = (r.sum_all(&c.sqr()?)? - r.sum_all(&var.sqr()?)?)?;
         pen = (pen + (off * (offdiag_weight / d as f64))?)?;
     }
     Ok(pen)
