@@ -182,3 +182,20 @@ path        = "crates/clawft-core/Cargo.toml"
 pattern     = '(^|[^-[:alnum:]])tract-onnx[[:space:]]*='
 reason      = "ADR-132: clawft-core tract-embeddings uses the workspace tract-onnx"
 approved_by = "owner"
+
+# Approved by the owner on 2026-11-14 9:42 AM ET (Grok Bot chat, recorded in the fs-research
+# lane's notes) for the LeWM dataset archiver's optional `weaver store put` upload step
+# (plan W1 §1b): one child process per archived object, `--as <principal>` only, off by default.
+[[approval]]
+rule        = "process"
+path        = "crates/weftos-worldmodel-dataset/src/store_upload.rs"
+pattern     = 'use std::process::Command;'
+reason      = "Owner approval 2026-11-14: archiver runs the weaver binary for governed `store put` uploads (ADR-126 store); no library link to weftos-store by owner decision"
+approved_by = "owner"
+
+[[approval]]
+rule        = "process"
+path        = "crates/weftos-worldmodel-dataset/src/store_upload.rs"
+pattern     = 'Command::new\(target\.bin\(\)\)'
+reason      = "Owner approval 2026-11-14: the one spawn site of `weaver store put <name> <key> --as <principal> --file <path>`"
+approved_by = "owner"
