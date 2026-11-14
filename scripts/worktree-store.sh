@@ -17,6 +17,17 @@
 #   worktree-store.sh leftovers [--json]        forgotten / unclaimed / abandoned worktrees
 #   worktree-store.sh sync-docs <slug> <cache>  read-only local mirror of a worktree's docs
 #   worktree-store.sh overlaps <slugA> <slugB>  files both changed differently (merge-conflict hint)
+#   worktree-store.sh register [--path DIR] [--slug S]   WO-069 trigger (prototype, branch w2/wo069-a-trigger):
+#                                               record this machine's worktree for the periodic sweep
+#   worktree-store.sh unregister <slug>         forget it (touches nothing in the store)
+#   worktree-store.sh registered [--json]       list registered worktrees
+#   worktree-store.sh sweep [--only SLUG] [--json]
+#                                               per registered worktree: publish only if the tree digest moved
+#                                               (idle = zero store calls); a vanished path is marked `orphan`
+#                                               with its last published head, never deleted or archived here
+#   worktree-store.sh install-hook [--slug S] [--chain] | uninstall-hook
+#                                               post-commit accelerator running `sweep --only <slug>` in the
+#                                               background (shared hook or per-worktree core.hooksPath)
 #   worktree-store.sh mount-config <slug> [--local ROOT]   print the rclone union remote (worktree over project)
 #   worktree-store.sh mount <slug> <dir> [--local ROOT]    mount it (rclone, FUSE); umount <dir> unmounts
 #
@@ -33,12 +44,16 @@
 #      WTS_DRY_RUN=1 print the weaver calls instead of running them, WTS_SLUG (default: branch
 #      with '/' -> '--', colliding branches refused; AGF_HOOK_SLUG only if no branch),
 #      WTS_PROJECT (REQUIRED: the project ULID, the <ULID> in the project's weftos://<mesh>/projects/<ULID>
-#      name given to `weaver project add`; there is no `weaver project id` verb to look it up).
+#      name given to `weaver project add`; there is no `weaver project id` verb to look it up),
+#      WTS_STATE_DIR (register/sweep state; default $XDG_STATE_HOME/weftos/worktree-store),
+#      WTS_NOW (timestamp override, tests). register/sweep/hook code lives in worktree-store-sweep.sh
+#      (sourced; keeps this file under 500 lines); the tree-digest definition is documented there.
 set -euo pipefail
 
 weaver=${WTS_WEAVER:-weaver}
 agf=${WTS_AGF:-$HOME/.claude/skills/agent-git-flow/scripts}
 strict=${WTS_STRICT:-0}
+WTS_SELF=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")
 
 warn() { printf 'worktree-store: %s\n' "$*" >&2; }
 die() { warn "$*"; exit 1; }
@@ -108,8 +123,18 @@ epoch_file() { printf '%s/weftos/claim-%s-%s.epoch' "${XDG_STATE_HOME:-$HOME/.lo
 
 target_ref() { git rev-parse --verify --quiet "${AGF_TARGET_REF:-origin/HEAD}" 2>/dev/null || git rev-parse --verify --quiet master; }
 
+# shellcheck source=worktree-store-sweep.sh
+. "$(dirname "$WTS_SELF")/worktree-store-sweep.sh"
+
 cmd=${1:-}; shift || true
 case "$cmd" in
+register) wts_register "$@" ;;
+unregister) wts_unregister "$@" ;;
+registered) wts_registered "$@" ;;
+sweep) wts_sweep "$@" ;;
+slug-for-path) wts_slug_for_path "$@" ;;
+install-hook) wts_install_hook "$@" ;;
+uninstall-hook) wts_uninstall_hook "$@" ;;
 new)
     name=${1:?usage: new <name>}; shift
     check_slug "$name"
@@ -315,6 +340,6 @@ umount)
     sleep 3   # let the write-back cache upload (--vfs-write-back 1s); rclone does not flush on unmount
     fusermount3 -u "$dir" 2>/dev/null || fusermount -u "$dir" || die "unmount failed"
     ;;
--h|--help|"") sed -n '2,25p' "$0" ;;
+-h|--help|"") awk 'NR>1 && /^#/ {print; next} NR>1 {exit}' "$0" ;;
 *) die "unknown command: $cmd" ;;
 esac
