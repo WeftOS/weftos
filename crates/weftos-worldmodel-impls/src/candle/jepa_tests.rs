@@ -10,7 +10,7 @@ fn tiny_encoder() -> VitTinyConfig {
     VitTinyConfig { image_size: 32, patch_size: 8, embed_dim: 32, depth: 1, num_heads: 2, latent_dim: LATENT_DIM }
 }
 
-/// Lane G's settings on the tiny encoder. The lane J default (VICReg hinge + correlation
+/// Lane G's settings on the tiny encoder. The lane J/U defaults (VICReg hinge + correlation
 /// decorrelation) is tuned for the default ViT-tiny; on this tiny encoder at lr 1e-2 it drives
 /// every coordinate under the activity floor, so these tests keep the lane G loss.
 fn tiny_cfg() -> JepaTrainConfig {
@@ -166,8 +166,11 @@ fn lr_follows_the_cosine_to_its_final_ratio() {
     assert!(lrs.windows(2).all(|w| w[1] < w[0]));
     // The optimiser ran the last step at the rate planned for it.
     assert!((tr.opt.learning_rate() - lrs[3]).abs() < 1e-15);
-    // Ratio 1 (every preset) is constant, and a non-positive ratio is rejected.
-    assert_eq!(JepaTrainConfig::default().lr_final_ratio, 1.0);
+    // No plan keeps the base rate; ratio 1 (lane J and G) is constant; a non-positive ratio is rejected.
+    assert_eq!(JepaTrainer::new(JepaTrainConfig { lr: 1e-2, lr_final_ratio: 0.1, ..tiny_cfg() }).unwrap().current_lr(), 1e-2);
+    assert_eq!((JepaTrainConfig::lane_j().lr_final_ratio, JepaTrainConfig::lane_g().lr_final_ratio), (1.0, 1.0));
+    let (d, j) = (JepaTrainConfig::default(), JepaTrainConfig::lane_j());
+    assert_eq!((d.lr_final_ratio, d.vic_var_weight, d.ema_tau, d.batch_size, d.vic_cov_weight), (0.1, 2.0, 0.995, j.batch_size, j.vic_cov_weight));
     assert!(JepaTrainer::new(JepaTrainConfig { lr_final_ratio: 0.0, ..tiny_cfg() }).is_err());
 }
 
@@ -306,7 +309,7 @@ fn jepa_long_run_writes_checkpoints() {
         epochs,
         lr: env("LEWM_LR", 1e-3),
         iso_weight: env("LEWM_ISO", 1.0),
-        ema_tau: env("LEWM_TAU", 0.99),
+        ema_tau: env("LEWM_TAU", JepaTrainConfig::default().ema_tau),
         slice_weight: env("LEWM_SLICE", 1.0),
         offdiag_weight: env("LEWM_GAMMA", 0.0),
         seed: 21,

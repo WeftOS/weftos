@@ -62,8 +62,8 @@
 //! session markers from the fixture stops the session collapse (fraction 0.03) but leaves
 //! rank ≈ 2. One change at a time (batch 64 with `γ = 1`, Epps-Pulley with `K = 128`, AdaLN
 //! hidden 64, cosine `τ` 0.9 → 0.996, two-step targets, VICReg on `C`) none reaches a held-out
-//! ratio above 2. The default is lane G plus batch 32, `τ = 0.99`, `H` (weight 1) and `K` on
-//! the correlation matrix (weight 0.04): train / held-out ratio 12.6 / 10.6, 0 collapsed
+//! ratio above 2. Lane J's fix ([`JepaTrainConfig::lane_j`]) is lane G plus batch 32, `τ = 0.99`,
+//! `H` (weight 1) and `K` on the correlation matrix (weight 0.04): train / held-out ratio 12.6 / 10.6, 0 collapsed
 //! coordinates, held-out health 0.90, AdaLN held-out error 178 vs copy-last 350 and linear
 //! 204. Training seeds 22 and 23 give held-out ratio 10.0 / 9.8, health 0.87 / 0.84, and
 //! beat both baselines. Since the 2026-11-14 probe and straightening changes the gate judges
@@ -317,8 +317,12 @@ impl JepaTrainer {
         self.cfg.ema_tau_start.map_or(self.cfg.ema_tau, |t0| self.cosine(t0, self.cfg.ema_tau))
     }
 
-    /// Learning rate of the current step: cosine from `lr` to `lr · lr_final_ratio`.
+    /// Learning rate of the current step: cosine from `lr` to `lr · lr_final_ratio`; `lr`
+    /// when no plan is set ([`Self::set_total_steps`]).
     pub fn current_lr(&self) -> f64 {
+        if self.total_steps <= 1 {
+            return self.cfg.lr;
+        }
         self.cosine(self.cfg.lr, self.cfg.lr * self.cfg.lr_final_ratio)
     }
 

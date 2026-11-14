@@ -144,4 +144,10 @@ fn candidate_overrides_the_default_and_spares_lane_g_s_delta() {
     assert_eq!((g.batch_size, g.vic_var_weight, g.ema_tau, g.predictor.depth, g.lr_final_ratio), (lg.batch_size, lg.vic_var_weight, lg.ema_tau, 3, 0.1));
     assert_eq!(g.epochs, 576usize.div_ceil(192usize.div_ceil(lg.batch_size)));
     assert_eq!(variant_config(Variant::Untrained, &cand, ComputeDevice::Cpu, 21, 1, 192).epochs, 0);
+    // The lane U bake-off base: lane J plus the candidate reproduces the new default.
+    let x2 = Candidate { lane_j_base: true, lr_final_ratio: Some(0.1), vic_var_weight: Some(2.0), ema_tau: Some(0.995), ..Candidate::default() };
+    let (a, b) = (variant_config(Variant::Default, &x2, ComputeDevice::Cpu, 21, 1, 192), variant_config(Variant::Default, &Candidate::default(), ComputeDevice::Cpu, 21, 1, 192));
+    assert_eq!(format!("{a:?}"), format!("{b:?}"));
+    let j = variant_config(Variant::Default, &Candidate { lane_j_base: true, ..Candidate::default() }, ComputeDevice::Cpu, 21, 1, 192);
+    assert_eq!((j.lr_final_ratio, j.vic_var_weight, j.ema_tau), (1.0, 1.0, 0.99));
 }

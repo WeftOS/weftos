@@ -139,23 +139,45 @@ Fewer runs weaken the rule. The old single-run tests remain, ignored, as
 rejects broken models: `ensemble_rejects_action_blind_model`, `ensemble_rejects_lane_g_collapse` and
 `ensemble_rejects_untrained_model` (`LEWM_DEVICE=metal` for the GPU).
 
-Measured 2026-11-14 (release):
+Measured 2026-11-14 (release). `JepaTrainConfig::default()` is lane U's config since
+2026-11-14; the rows marked `lane_j()` are the previous default (lane S):
 
 | run | θ ratio, seeds 21 / 22 / 23 / 24 / 25 | median θ | median ξ | verdict |
 |---|---|---|---|---|
-| CPU, default | 0.874 / 0.823 / 0.822 / 0.826 / 0.855 | 0.826 | 0.813 | pass |
-| Metal, default | 0.947 / 0.833 / 0.935 / 0.859 / 0.905 | **0.905** | 0.854 | **fail** (θ median) |
-| Metal, action codes zeroed | 1.044 / 1.009 / 0.999 / 1.067 / 1.036 | 1.036 | 1.005 | fail |
+| CPU, default | 0.713 / 0.692 / 0.748 / 0.769 / 0.695 | **0.713** | 0.684 | pass |
+| Metal, default | 0.700 / 0.724 / 0.763 / 0.791 / 0.695 | **0.724** | 0.686 | pass |
+| Metal, default, action codes zeroed | 0.999 / 0.943 / 0.924 / 1.038 / 1.021 | 0.999 | 0.966 | fail |
 | Metal, `lane_g()` | 1.04 / 29.9 / 146 / 32.6 / 22.8 | 29.9 | 33.3 | fail (PR about 1, collapse) |
-| Metal, 0 epochs | 1.208 / 1.213 / 1.256 / 1.205 / 1.229 | 1.213 | 1.213 | fail |
+| Metal, default, 0 epochs | 1.208 / 1.213 / 1.256 / 1.205 / 1.229 | 1.213 | 1.213 | fail |
+| CPU, `lane_j()` | 0.874 / 0.823 / 0.822 / 0.826 / 0.855 | 0.826 | 0.813 | pass |
+| Metal, `lane_j()` | 0.947 / 0.833 / 0.935 / 0.859 / 0.905 | **0.905** | 0.854 | **fail** (θ median) |
 
-**The Metal ensemble fails.** Its median θ ratio is 0.905, 0.5 % over the bar. Every structural
-check passes: PR 9.8 to 10.2, 0 collapsed, median health 0.864, probe 5 of 5. On all five seeds the
-Metal θ ratio is higher than the CPU one, by a mean of 0.056. The config has no θ headroom on
-Metal. Raising the bar or picking other seeds would hide that, so neither was done.
-Post hoc, not part of the rule: with `CANDLE_METAL_ENABLE_FAST_MATH=0` the same five seeds
-give θ 0.891 / 0.786 / 0.890 / 0.810 / 0.861, median 0.861, and the ensemble passes. That is
-one more fixed draw, so it is suggestive (lane P: p ≈ 0.07), not a fix.
+**Lane U default.** `lane_j()` failed on Metal: median θ 0.905, 0.5 % over the bar, with every
+structural check passing. Lane U ran a pre-registered bake-off on Metal with fast math on. It
+made ten single changes and two combinations chosen by rule beforehand. Lane U's note has the
+full tables. The adopted config is `lane_j()` plus three changes:
+
+- the learning rate follows a cosine from 1e-3 to 1e-4 (`lr_final_ratio = 0.1`);
+- the VICReg hinge weight is 2;
+- `τ` is 0.995.
+
+It passes on both devices with about 0.18 of margin. All three broken models still fail.
+Steps, batch and architecture are unchanged, so compute and memory per run are the same.
+Single changes that hurt θ: 576 steps (median 1.02), batch 64 (0.96) and decorrelation weight
+0.08 (0.97). The first two both double the passes over the 4 training days, which points to
+overfitting. That was not measured directly.
+
+Margins to watch:
+
+- Minimum held-out participation ratio is 8.21 on Metal and 8.23 on CPU, against the floor of 8.
+  Lane J's default had 9.8. The hinge weight of 2 costs rank.
+- The action-blind null moves closer to the bar, with median 0.999 against 1.036 before. One
+  seed reaches 0.924. Part of the gain is action-free dynamics the linear baseline lacks.
+- With 12 candidates the winner's margin is biased low (winner's curse). The runner-up
+  combination, without `τ`, gives 0.740 on CPU and 0.728 on Metal.
+
+Post hoc for `lane_j()`, not part of the rule: with `CANDLE_METAL_ENABLE_FAST_MATH=0` the same
+five seeds give a median θ of 0.861. That is suggestive (lane P: p ≈ 0.07).
 
 ## Candle models (feature `candle`)
 
@@ -214,7 +236,9 @@ reg.commit_at_tick(10).unwrap();
    becomes a session-constant scalar, because mean pooling with a 0.02-std
    position embedding hides blob position while distractor presence and the
    day background move the pooled vector. The variance penalty alone, with
-   no prediction term, collapses too. The new `JepaTrainConfig::default()`
+   no prediction term, collapses too. `JepaTrainConfig::lane_j()` (the
+   default until lane U, which added the lr cosine, hinge weight 2 and
+   `τ = 0.995` for θ headroom on Metal; see the ensemble section)
    adds batch 32, `τ = 0.99`, a VICReg variance hinge and decorrelation on
    the batch correlation matrix. On 288 steps of the default fixture it
    reaches held-out participation ratio 10.6 (lane G: 1.05), 0 collapsed

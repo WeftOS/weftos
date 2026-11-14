@@ -29,10 +29,11 @@ fn env_f(k: &str, d: f64) -> f64 {
     std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d)
 }
 
-/// `JepaTrainConfig` from `LEWM_BASE` (`default` | `lane_g`) plus `LEWM_*` overrides.
+/// `JepaTrainConfig` from `LEWM_BASE` (`default` | `lane_j` | `lane_g`) plus `LEWM_*` overrides.
 fn env_config(holdout_days: usize, n_train: usize) -> JepaTrainConfig {
     let base = match std::env::var("LEWM_BASE").as_deref() {
         Ok("lane_g") => JepaTrainConfig::lane_g(),
+        Ok("lane_j") => JepaTrainConfig::lane_j(),
         _ => JepaTrainConfig::default(),
     };
     let mut c = JepaTrainConfig { seed: 21, holdout_days, diagnostics: std::env::var("LEWM_DIAG").is_ok(), ..base };
@@ -141,7 +142,7 @@ fn jepa_bakeoff_run() {
     );
 }
 
-/// Lane J's winner on the `std` fixture (288 steps, seed 21) on `device`; prints wall time.
+/// The default config on the `std` fixture (288 steps, seed 21) on `device`; prints wall time.
 fn default_regression(device: super::ComputeDevice) {
     let strict_theta = device == super::ComputeDevice::Cpu;
     let (data, holdout) = fixture("std");
@@ -170,7 +171,7 @@ fn default_regression(device: super::ComputeDevice) {
 }
 
 /// The old single-run regression (seed 21), kept for comparison with the ensemble that
-/// replaced it ([`super::ensemble_tests`]): lane J's winner must stay out of dimensional
+/// replaced it ([`super::ensemble_tests`]): the default must stay out of dimensional
 /// collapse on the `std` fixture (288 steps, ~1.5 min release). Its θ margin is one chaotic
 /// draw (lane P), so it is not the regression of record.
 ///
