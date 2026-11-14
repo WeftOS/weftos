@@ -237,3 +237,42 @@ fn four_condition_gate_wired_into_process_frame() {
         "expected lewm.rollback_gate ExoChain events"
     );
 }
+
+/// Lane H: a model trained through the facade's offline cycle and committed at a tick
+/// is what `process_frame` predicts with, so the frame's surprise drops.
+///
+/// SYNTHETIC stream: the service's null encoder maps every frame to the zero latent, so
+/// the world does not respond to the action. The untrained `pred_φ` still adds the
+/// action code to the latent and reports surprise; the trained one learns `A = 0`.
+#[test]
+fn committed_offline_model_lowers_frame_surprise() {
+    use weftos_worldmodel::{
+        zero_latent, Action, OfflineEdgeTrainer, SensorClass, SmallModelKind, TrainingSample,
+    };
+
+    let mut svc =
+        WorldModelService::new(ServiceConfig::for_topology(DeploymentTopology::Single)).unwrap();
+    svc.boot().unwrap();
+
+    let action = |i: usize| {
+        let mut a = Action::null();
+        for (k, c) in a.code.iter_mut().enumerate() {
+            *c = (((i * 7 + k * 13) % 17) as f32 - 8.0) / 8.0;
+        }
+        a
+    };
+    let before = svc.process_frame(b"frame", action(3), 0).unwrap().surprise;
+    assert!(before > 0.1, "untrained pred_phi should be surprised, got {before}");
+
+    for i in 0..40 {
+        let mut s = TrainingSample::basic(SensorClass::Imu, zero_latent(), zero_latent(), i as u64);
+        s.action = action(i as usize);
+        svc.model.offline_edge.push_sample(&s).unwrap();
+    }
+    svc.model.offline_edge_cycle(SensorClass::Imu, SmallModelKind::Encode, 5).unwrap();
+    svc.model.commit_models_at_tick(5).unwrap();
+    assert!(svc.model.has_learned_predictor(SensorClass::Imu));
+
+    let after = svc.process_frame(b"frame", action(3), 100).unwrap().surprise;
+    assert!(after < 0.01 * before, "surprise {before} -> {after}");
+}
