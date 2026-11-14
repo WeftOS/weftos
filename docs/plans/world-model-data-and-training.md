@@ -1,6 +1,6 @@
 # World model: data, labels and weights (plan)
 
-- **Updated:** 2026-10-26 (W4 harness status in §4).
+- **Updated:** 2026-11-14 (§1b session layout and archive destination, W1 exit criterion); earlier 2026-10-26 (W4 harness status in §4).
 - **Status:** Accepted 2026-10-07 (owner decisions in §8). Builds on RuView ADR-384 and the
   sensor-contracts plan (§1a). W7 is undecided.
 - **Asks:** "Do we have a plan to build the weights and labels we need, and does H-JEPA add
@@ -65,6 +65,37 @@ Consequences for this plan:
   sensor-contracts plan (§9 Q9) asks WeftOS to add three types to ADR-107: acoustic range,
   cooperative radio delay, and **clock correction**. Multi-node training needs the last one.
 
+## 1b. Session layout and archive destination (owner 2026-11-14)
+
+The owner accepted these defaults for the archiver (`weftos-worldmodel-dataset`). They live in
+`SessionLayout`, so a RuView difference is a config change.
+
+| Role | Default |
+|---|---|
+| Evidence (required) | `recordings/<session>.evidence.jsonl` |
+| CSI | `<session>.csi*` |
+| SenML readings | `<session>.readings.jsonl` |
+| Protocol (optional) | `protocol.json` or `protocol.txt` |
+| Consent | `consent.json`; archiving refuses without it |
+| Regions | one per session |
+| Finished marker | `<session>.done`, optional |
+
+Two destinations, in this order:
+
+1. **Filesystem copy** on photo-gallery under `<root>/ruview-demo/datasets/<session>/`, checksum
+   verified before it is renamed into place. Always runs.
+2. **`weaver store put`** through the ADR-126 store, one object per file
+   (`<prefix>/<session>/<file>`), when the store is set up on that host. Off by default
+   (`--store <name> --store-prefix <prefix> --as <principal>`; `--store-dry-run` prints the
+   commands). The principal comes only from `--as`. The manifest is uploaded last, after a
+   `store_upload` section with the per-object results is written into it, so the on-store
+   manifest is the one with that section. A store failure leaves the verified filesystem copy
+   in place and exits non-zero.
+
+Open RuView confirmations (no RuView checkout here, so these remain guesses): the exact
+recording file names above, whether RuView writes a `<session>.done` marker, and where it keeps
+protocol and consent files.
+
 ## 2. What H-JEPA adds
 
 1. **It is the same model family.** H-JEPA's baseline is LeWM, the design our crates
@@ -105,7 +136,7 @@ with an observed outcome, the one place we already have actions at scale.
 | Phase | Delivers | Done when |
 |---|---|---|
 | **W0 Decide** | Owner lifts the hold for the sensor world model; picks the training stack and the camera rule (§8). | Decisions recorded here and on the board. |
-| **W1 Data path** | Depends on RuView ADR-384 steps 1, 2 and 2b (inbound parsing, server ingest with recording, SenML readings). WeftOS side: publish the evidence contract as WeftOS ADR-111 with the clock-correction record and the two ranging types the RuView plan asks for; rebuild the cog0 `ld2450-radar` with the `spatial-evidence` feature and serve `GET /spatial` where RuView can pull it (owner: use cog0, no Mac build); publish the shared SenML quantity vocabulary in WeftOS (Q8, ADR-111); extend `SensorClass` to the ADR-384 HAL mapping; build the dataset archiver that copies a finished RuView session (`.evidence.jsonl`, CSI recording, readings) with a manifest (room, `shell_measure`, node `pose`s, protocol, consent, proof counts) to photo-gallery under the `ruview-demo` project. | A recorded session replays through RuView's file transport with identical counts, and the archived copy on PG checksums identical. |
+| **W1 Data path** | Depends on RuView ADR-384 steps 1, 2 and 2b (inbound parsing, server ingest with recording, SenML readings). WeftOS side: publish the evidence contract as WeftOS ADR-111 with the clock-correction record and the two ranging types the RuView plan asks for; rebuild the cog0 `ld2450-radar` with the `spatial-evidence` feature and serve `GET /spatial` where RuView can pull it (owner: use cog0, no Mac build); publish the shared SenML quantity vocabulary in WeftOS (Q8, ADR-111); extend `SensorClass` to the ADR-384 HAL mapping; build the dataset archiver that copies a finished RuView session (`.evidence.jsonl`, CSI recording, readings) with a manifest (room, `shell_measure`, node `pose`s, protocol, consent, proof counts) to photo-gallery under the `ruview-demo` project. | A recorded session replays through RuView's file transport with identical counts, and the archived copy on PG checksums identical, plus the store copy once the store exists on PG (the archiver's `--store` step, §1b). |
 | **W2 First real dataset** | ADR-384 step 4, extended for training: the measured test room, empty / walking / seated / two-person phases with `human_confirm` per phase, at least 3 hours over several days, CSI + LD2450 + LD6002 + ToF + readings, plus the camera teacher and ECG where §8 allows. Closes cards 61020daa and f491f12e. The room is the 12 × 12 ft room with its own Wi-Fi router (§8). | Dataset card: hours per phase, held-out split by day, proof-tag counts, checksums; ADR-384 step 4 validation record filed. |
 | **W3 Labels** | RuView's labeller over the recordings (`auto_label`, `verified` only for `MEASURED`), `human_confirm` phases, the tape shell, camera-teacher positions (RuView ADR-079), ECG for vitals bound to an anonymous track; all as label tracks separate from observations, never from `CODE`/`SYNTHETIC` records. | Held-out probe set; label agreement report alongside RuView's calibration-status diagnostics. |
 | **W4 Evaluation harness** | Matched baseline (copy-last and linear `pred_φ`), held-out probe, VoE diff, the activity-floor collapse alarm and geometry audit from jepa-anything.md, wired into the existing rollback gate and SIGReg monitor. | The gate can say no to a model on real data. **Status 2026-10-26:** harness built and tested on labelled SYNTHETIC fixtures only (`weftos-worldmodel-impls/src/eval_harness.rs`): contiguous held-out split, copy-last and per-dimension linear baselines, activity-floor collapse alarm, orthonormality audit, and the four-condition gate fed with SIGReg health from the Welford monitor; promotes only when all agree. **Follow-through 2026-11-14:** `evaluate_by_day` holds out whole days (never straddling the split), the geometry audit gained a pseudoinverse round-trip leg (`pseudoinverse_roundtrip_error`, synthetic bases only), and `EvalConfig::probe` can select a per-dimension linear probe (`ProbeKind::LinearLsq`) for the gate. Missing for "on real data": the W2 recording, real action channels, and a learned basis to audit. Finding: the gate's probe is a sign-agreement score against the mean residual, not a trained probe, and the SIGReg monitor's auto-rollback resets its statistics under sustained low health, so offline use needs a constant clock. |

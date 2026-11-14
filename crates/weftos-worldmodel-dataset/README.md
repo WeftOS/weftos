@@ -24,6 +24,25 @@ weftos-worldmodel-dataset archive <session_dir> --dest <root> [--session ID] [--
 weftos-worldmodel-dataset verify <root>/ruview-demo/datasets/<session>
 ```
 
+## Store upload (second destination)
+
+With `--store` (library: `ArchiveRequest::store = Some(StoreTarget {..})`) the archiver, after the filesystem copy
+verifies, runs `weaver store put <store> <prefix>/<session>/<file> --as <principal> --file <path>` once per archived
+file and then for `manifest.json`. `--store` is off by default so the plain copy works where no store is set up.
+
+- The principal comes only from `--as`. Nothing is read from the environment.
+- It stops at the first failure. Later objects are recorded as `skipped`; a failed object keeps the tail of stderr.
+- Results go into a `store_upload` section of the manifest copy on disk and into the returned `ArchiveOutcome`.
+  The file checksums are unchanged (`manifest.json` is not in its own file list) and `verify` still passes.
+  `manifest.json` is uploaded last, after the section is written, so the on-store manifest is the one with the
+  section; it lists the data files only, since it cannot record its own upload.
+- `--store-dry-run` prints the commands and runs nothing; the manifest is not modified.
+- A store failure keeps the verified filesystem copy and makes the CLI exit non-zero.
+- `--weaver-bin` / `StoreTarget::weaver_bin` overrides the `weaver` on PATH (tests use a fake script).
+
+Diff gate: spawning `weaver` is a `process` finding in `scripts/diff-gate.sh`. The feature is owner-approved; the
+approval row in `config/diff-gate-approvals.toml` is added by the owner only.
+
 ## Finished marker and in-progress guard
 
 `SessionLayout` has `finished_marker` (default `{session}.done`, `None` disables it) and `require_finished`
@@ -67,6 +86,8 @@ archiver's checks:
 It prints one summary line per group and fails only on a wrong verdict. Run with `-- --nocapture` to see it.
 
 ## RuView side: not confirmed
+
+Owner accepted these defaults on 2026-11-14 (plan section 1b); the open items are the RuView-side confirmations.
 
 There is no RuView checkout here. The defaults follow the plan's description of RuView's session recording
 (`<data-dir>/recordings/<session>.evidence.jsonl` next to the CSI recording) and everything else is a guess,

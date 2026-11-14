@@ -7,6 +7,7 @@ use crate::evidence::summarize_evidence_file;
 use crate::layout::{SessionLayout, validate_session_id};
 use crate::manifest::{FileEntry, MANIFEST_FILE, Manifest, ManifestInputs};
 use crate::senml::summarize_readings_file;
+use crate::store_upload::{StoreTarget, StoreUpload, upload};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
@@ -28,6 +29,8 @@ pub struct ArchiveRequest {
     /// Protocol text. Used only when the session has no protocol file.
     pub protocol: Option<String>,
     pub overwrite: bool,
+    /// Also upload to a store with `weaver store put` after the copy verifies.
+    pub store: Option<StoreTarget>,
 }
 
 impl ArchiveRequest {
@@ -40,6 +43,7 @@ impl ArchiveRequest {
             consent: None,
             protocol: None,
             overwrite: false,
+            store: None,
         }
     }
 }
@@ -71,6 +75,8 @@ pub struct ArchiveOutcome {
     pub dest_dir: PathBuf,
     /// Result of re-reading the copies before they were renamed into place.
     pub verification: Verification,
+    /// Present when the request carried a store target.
+    pub store_upload: Option<StoreUpload>,
 }
 
 pub fn dataset_dir(dest_root: &Path, session: &str) -> PathBuf {
@@ -246,10 +252,18 @@ fn archive_inner(
         let _ = fs::remove_dir_all(&tmp);
     }
     let verification = result?;
+    let store_upload = match &req.store {
+        Some(t) => {
+            let names: Vec<String> = manifest.files.iter().map(|f| f.name.clone()).collect();
+            Some(upload(t, &found.id, &dest, &names)?)
+        }
+        None => None,
+    };
     Ok(ArchiveOutcome {
         manifest,
         dest_dir: dest,
         verification,
+        store_upload,
     })
 }
 
