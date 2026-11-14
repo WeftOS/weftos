@@ -199,3 +199,250 @@ path        = "crates/weftos-worldmodel-dataset/src/store_upload.rs"
 pattern     = 'Command::new\(target\.bin\(\)\)'
 reason      = "Owner approval 2026-11-14: the one spawn site of `weaver store put <name> <key> --as <principal> --file <path>`"
 approved_by = "owner"
+
+# Approved by the owner on 2026-11-14 17:26 ET (card fa3b0bac): landing the gui-egui namespace_drops example.
+# macOS-only audio/speech/FFI and local-tool process spawns, confined to the example's files. Rows are per distinct added line.
+[[approval]]
+rule        = "ffi"
+path        = "crates/clawft-gui-egui/examples/namespace_drops.rs"
+pattern     = 'unsafe extern "C" \{'
+reason      = "Owner approval 2026-11-14 17:26, card fa3b0bac: namespace_drops example (macOS audio, speech and local tool use; example-only, not shipped)"
+approved_by = "owner (2026-11-14 17:26, card fa3b0bac)"
+
+[[approval]]
+rule        = "ffi"
+path        = "crates/clawft-gui-egui/examples/namespace_drops.rs"
+pattern     = 'let msg0: unsafe extern "C" fn\('
+reason      = "Owner approval 2026-11-14 17:26, card fa3b0bac: namespace_drops example (macOS audio, speech and local tool use; example-only, not shipped)"
+approved_by = "owner (2026-11-14 17:26, card fa3b0bac)"
+
+[[approval]]
+rule        = "ffi"
+path        = "crates/clawft-gui-egui/examples/namespace_drops.rs"
+pattern     = 'let set_pol: unsafe extern "C" fn\('
+reason      = "Owner approval 2026-11-14 17:26, card fa3b0bac: namespace_drops example (macOS audio, speech and local tool use; example-only, not shipped)"
+approved_by = "owner (2026-11-14 17:26, card fa3b0bac)"
+
+[[approval]]
+rule        = "ffi"
+path        = "crates/clawft-gui-egui/examples/namespace_drops.rs"
+pattern     = 'let act: unsafe extern "C" fn\(\*mut std::ffi::c_void, \*mut std::ffi::c_void, bool\) ='
+reason      = "Owner approval 2026-11-14 17:26, card fa3b0bac: namespace_drops example (macOS audio, speech and local tool use; example-only, not shipped)"
+approved_by = "owner (2026-11-14 17:26, card fa3b0bac)"
+
+[[approval]]
+rule        = "ffi"
+path        = "crates/clawft-gui-egui/examples/namespace_drops.rs"
+pattern     = 'let opt: unsafe extern "C" fn\(\*mut std::ffi::c_void, \*mut std::ffi::c_void, usize\) ='
+reason      = "Owner approval 2026-11-14 17:26, card fa3b0bac: namespace_drops example (macOS audio, speech and local tool use; example-only, not shipped)"
+approved_by = "owner (2026-11-14 17:26, card fa3b0bac)"
+
+[[approval]]
+rule        = "ffi"
+path        = "crates/clawft-gui-egui/examples/namespace_drops/sound.rs"
+pattern     = 'unsafe extern "C" \{'
+reason      = "Owner approval 2026-11-14 17:26, card fa3b0bac: namespace_drops example (macOS audio, speech and local tool use; example-only, not shipped)"
+approved_by = "owner (2026-11-14 17:26, card fa3b0bac)"
+
+[[approval]]
+rule        = "ffi"
+path        = "crates/clawft-gui-egui/examples/namespace_drops/sound.rs"
+pattern     = 'callback: extern "C" fn\(\*mut c_void, \*mut c_void, \*mut c_void\),'
+reason      = "Owner approval 2026-11-14 17:26, card fa3b0bac: namespace_drops example (macOS audio, speech and local tool use; example-only, not shipped)"
+approved_by = "owner (2026-11-14 17:26, card fa3b0bac)"
+
+[[approval]]
+rule        = "ffi"
+path        = "crates/clawft-gui-egui/examples/namespace_drops/sound.rs"
+pattern     = 'extern "C" fn on_audio\(user: \*mut c_void, aq: \*mut c_void, buf: \*mut c_void\) \{'
+reason      = "Owner approval 2026-11-14 17:26, card fa3b0bac: namespace_drops example (macOS audio, speech and local tool use; example-only, not shipped)"
+approved_by = "owner (2026-11-14 17:26, card fa3b0bac)"
+
+[[approval]]
+rule        = "process"
+path        = "crates/clawft-gui-egui/examples/namespace_drops.rs"
+pattern     = 'use std::process::\{Command, Stdio\};'
+reason      = "Owner approval 2026-11-14 17:26, card fa3b0bac: namespace_drops example (macOS audio, speech and local tool use; example-only, not shipped)"
+approved_by = "owner (2026-11-14 17:26, card fa3b0bac)"
+
+[[approval]]
+rule        = "process"
+path        = "crates/clawft-gui-egui/examples/namespace_drops.rs"
+pattern     = 'let _ = Command::new\("say"\)'
+reason      = "Owner approval 2026-11-14 17:26, card fa3b0bac: namespace_drops example (macOS audio, speech and local tool use; example-only, not shipped)"
+approved_by = "owner (2026-11-14 17:26, card fa3b0bac)"
+
+[[approval]]
+rule        = "process"
+path        = "crates/clawft-gui-egui/examples/namespace_drops.rs"
+pattern     = 'Command::new\("curl"\)'
+reason      = "Owner approval 2026-11-14 17:26, card fa3b0bac: namespace_drops example (macOS audio, speech and local tool use; example-only, not shipped)"
+approved_by = "owner (2026-11-14 17:26, card fa3b0bac)"
+
+[[approval]]
+rule        = "process"
+path        = "crates/clawft-gui-egui/examples/namespace_drops.rs"
+pattern     = 'let _ = Command::new\(\&script\)'
+reason      = "Owner approval 2026-11-14 17:26, card fa3b0bac: namespace_drops example (macOS audio, speech and local tool use; example-only, not shipped)"
+approved_by = "owner (2026-11-14 17:26, card fa3b0bac)"
+
+[[approval]]
+rule        = "process"
+path        = "crates/clawft-gui-egui/examples/namespace_drops.rs"
+pattern     = 'let Ok\(mut child\) = Command::new\("curl"\)'
+reason      = "Owner approval 2026-11-14 17:26, card fa3b0bac: namespace_drops example (macOS audio, speech and local tool use; example-only, not shipped)"
+approved_by = "owner (2026-11-14 17:26, card fa3b0bac)"
+
+[[approval]]
+rule        = "process"
+path        = "crates/clawft-gui-egui/examples/namespace_drops.rs"
+pattern     = 'Command::new\("afplay"\)'
+reason      = "Owner approval 2026-11-14 17:26, card fa3b0bac: namespace_drops example (macOS audio, speech and local tool use; example-only, not shipped)"
+approved_by = "owner (2026-11-14 17:26, card fa3b0bac)"
+
+[[approval]]
+rule        = "process"
+path        = "crates/clawft-gui-egui/examples/namespace_drops.rs"
+pattern     = 'let mut cmd = Command::new\(\&bin\);'
+reason      = "Owner approval 2026-11-14 17:26, card fa3b0bac: namespace_drops example (macOS audio, speech and local tool use; example-only, not shipped)"
+approved_by = "owner (2026-11-14 17:26, card fa3b0bac)"
+
+[[approval]]
+rule        = "process"
+path        = "crates/clawft-gui-egui/examples/namespace_drops.rs"
+pattern     = 'let ok = Command::new\(\&bin\)'
+reason      = "Owner approval 2026-11-14 17:26, card fa3b0bac: namespace_drops example (macOS audio, speech and local tool use; example-only, not shipped)"
+approved_by = "owner (2026-11-14 17:26, card fa3b0bac)"
+
+[[approval]]
+rule        = "process"
+path        = "crates/clawft-gui-egui/examples/namespace_drops/codegraph.rs"
+pattern     = 'use std::process::\{Command, Stdio\};'
+reason      = "Owner approval 2026-11-14 17:26, card fa3b0bac: namespace_drops example (macOS audio, speech and local tool use; example-only, not shipped)"
+approved_by = "owner (2026-11-14 17:26, card fa3b0bac)"
+
+[[approval]]
+rule        = "process"
+path        = "crates/clawft-gui-egui/examples/namespace_drops/codegraph.rs"
+pattern     = 'let mut cmd = Command::new\("gh"\);'
+reason      = "Owner approval 2026-11-14 17:26, card fa3b0bac: namespace_drops example (macOS audio, speech and local tool use; example-only, not shipped)"
+approved_by = "owner (2026-11-14 17:26, card fa3b0bac)"
+
+[[approval]]
+rule        = "process"
+path        = "crates/clawft-gui-egui/examples/namespace_drops/codegraph.rs"
+pattern     = 'let mut cmd = Command::new\("git"\);'
+reason      = "Owner approval 2026-11-14 17:26, card fa3b0bac: namespace_drops example (macOS audio, speech and local tool use; example-only, not shipped)"
+approved_by = "owner (2026-11-14 17:26, card fa3b0bac)"
+
+[[approval]]
+rule        = "process"
+path        = "crates/clawft-gui-egui/examples/namespace_drops/parse_history.rs"
+pattern     = 'use std::process::\{Command, Stdio\};'
+reason      = "Owner approval 2026-11-14 17:26, card fa3b0bac: namespace_drops example (macOS audio, speech and local tool use; example-only, not shipped)"
+approved_by = "owner (2026-11-14 17:26, card fa3b0bac)"
+
+[[approval]]
+rule        = "process"
+path        = "crates/clawft-gui-egui/examples/namespace_drops/parse_history.rs"
+pattern     = 'let mut cmd = Command::new\("gh"\);'
+reason      = "Owner approval 2026-11-14 17:26, card fa3b0bac: namespace_drops example (macOS audio, speech and local tool use; example-only, not shipped)"
+approved_by = "owner (2026-11-14 17:26, card fa3b0bac)"
+
+[[approval]]
+rule        = "process"
+path        = "crates/clawft-gui-egui/examples/namespace_drops/parse_history.rs"
+pattern     = 'let mut cmd = Command::new\("git"\);'
+reason      = "Owner approval 2026-11-14 17:26, card fa3b0bac: namespace_drops example (macOS audio, speech and local tool use; example-only, not shipped)"
+approved_by = "owner (2026-11-14 17:26, card fa3b0bac)"
+
+[[approval]]
+rule        = "process"
+path        = "crates/clawft-gui-egui/examples/namespace_drops/stream.rs"
+pattern     = 'let out = std::process::Command::new\("curl"\)'
+reason      = "Owner approval 2026-11-14 17:26, card fa3b0bac: namespace_drops example (macOS audio, speech and local tool use; example-only, not shipped)"
+approved_by = "owner (2026-11-14 17:26, card fa3b0bac)"
+
+[[approval]]
+rule        = "unsafe"
+path        = "crates/clawft-gui-egui/examples/namespace_drops.rs"
+pattern     = 'unsafe extern "C" \{'
+reason      = "Owner approval 2026-11-14 17:26, card fa3b0bac: namespace_drops example (macOS audio, speech and local tool use; example-only, not shipped)"
+approved_by = "owner (2026-11-14 17:26, card fa3b0bac)"
+
+[[approval]]
+rule        = "unsafe"
+path        = "crates/clawft-gui-egui/examples/namespace_drops.rs"
+pattern     = 'unsafe \{'
+reason      = "Owner approval 2026-11-14 17:26, card fa3b0bac: namespace_drops example (macOS audio, speech and local tool use; example-only, not shipped)"
+approved_by = "owner (2026-11-14 17:26, card fa3b0bac)"
+
+[[approval]]
+rule        = "unsafe"
+path        = "crates/clawft-gui-egui/examples/namespace_drops.rs"
+pattern     = 'let msg0: unsafe extern "C" fn\('
+reason      = "Owner approval 2026-11-14 17:26, card fa3b0bac: namespace_drops example (macOS audio, speech and local tool use; example-only, not shipped)"
+approved_by = "owner (2026-11-14 17:26, card fa3b0bac)"
+
+[[approval]]
+rule        = "unsafe"
+path        = "crates/clawft-gui-egui/examples/namespace_drops.rs"
+pattern     = 'let set_pol: unsafe extern "C" fn\('
+reason      = "Owner approval 2026-11-14 17:26, card fa3b0bac: namespace_drops example (macOS audio, speech and local tool use; example-only, not shipped)"
+approved_by = "owner (2026-11-14 17:26, card fa3b0bac)"
+
+[[approval]]
+rule        = "unsafe"
+path        = "crates/clawft-gui-egui/examples/namespace_drops.rs"
+pattern     = 'let act: unsafe extern "C" fn\(\*mut std::ffi::c_void, \*mut std::ffi::c_void, bool\) ='
+reason      = "Owner approval 2026-11-14 17:26, card fa3b0bac: namespace_drops example (macOS audio, speech and local tool use; example-only, not shipped)"
+approved_by = "owner (2026-11-14 17:26, card fa3b0bac)"
+
+[[approval]]
+rule        = "unsafe"
+path        = "crates/clawft-gui-egui/examples/namespace_drops.rs"
+pattern     = 'let opt: unsafe extern "C" fn\(\*mut std::ffi::c_void, \*mut std::ffi::c_void, usize\) ='
+reason      = "Owner approval 2026-11-14 17:26, card fa3b0bac: namespace_drops example (macOS audio, speech and local tool use; example-only, not shipped)"
+approved_by = "owner (2026-11-14 17:26, card fa3b0bac)"
+
+[[approval]]
+rule        = "unsafe"
+path        = "crates/clawft-gui-egui/examples/namespace_drops/sound.rs"
+pattern     = 'unsafe impl Send for Player \{\}'
+reason      = "Owner approval 2026-11-14 17:26, card fa3b0bac: namespace_drops example (macOS audio, speech and local tool use; example-only, not shipped)"
+approved_by = "owner (2026-11-14 17:26, card fa3b0bac)"
+
+[[approval]]
+rule        = "unsafe"
+path        = "crates/clawft-gui-egui/examples/namespace_drops/sound.rs"
+pattern     = 'unsafe \{'
+reason      = "Owner approval 2026-11-14 17:26, card fa3b0bac: namespace_drops example (macOS audio, speech and local tool use; example-only, not shipped)"
+approved_by = "owner (2026-11-14 17:26, card fa3b0bac)"
+
+[[approval]]
+rule        = "unsafe"
+path        = "crates/clawft-gui-egui/examples/namespace_drops/sound.rs"
+pattern     = 'unsafe extern "C" \{'
+reason      = "Owner approval 2026-11-14 17:26, card fa3b0bac: namespace_drops example (macOS audio, speech and local tool use; example-only, not shipped)"
+approved_by = "owner (2026-11-14 17:26, card fa3b0bac)"
+
+[[approval]]
+rule        = "unsafe"
+path        = "crates/clawft-gui-egui/examples/namespace_drops/sound.rs"
+pattern     = 'unsafe fn AudioQueueEnqueueBuffer\(_: \*mut c_void, _: \*mut c_void, _: u32, _: \*const c_void\) \-> i32 \{'
+reason      = "Owner approval 2026-11-14 17:26, card fa3b0bac: namespace_drops example (macOS audio, speech and local tool use; example-only, not shipped)"
+approved_by = "owner (2026-11-14 17:26, card fa3b0bac)"
+
+[[approval]]
+rule        = "unsafe"
+path        = "crates/clawft-gui-egui/examples/namespace_drops/sound.rs"
+pattern     = 'unsafe fn AudioQueueStop\(_: \*mut c_void, _: u8\) \-> i32 \{'
+reason      = "Owner approval 2026-11-14 17:26, card fa3b0bac: namespace_drops example (macOS audio, speech and local tool use; example-only, not shipped)"
+approved_by = "owner (2026-11-14 17:26, card fa3b0bac)"
+
+[[approval]]
+rule        = "unsafe"
+path        = "crates/clawft-gui-egui/examples/namespace_drops/sound.rs"
+pattern     = 'unsafe fn AudioQueueDispose\(_: \*mut c_void, _: u8\) \-> i32 \{'
+reason      = "Owner approval 2026-11-14 17:26, card fa3b0bac: namespace_drops example (macOS audio, speech and local tool use; example-only, not shipped)"
+approved_by = "owner (2026-11-14 17:26, card fa3b0bac)"
