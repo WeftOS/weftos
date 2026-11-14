@@ -6,11 +6,26 @@
 //! | # | Metric | Score |
 //! |---|--------|-------|
 //! | 1 | Cluster SIGReg health | from [`WelfordSigRegMonitor`] / host |
-//! | 2 | Held-out probe accuracy | sign-agreement of Δz on held-out pairs |
+//! | 2 | Held-out probe accuracy | fraction of held-out pairs where the model beats copy-last |
 //! | 3 | VoE surprise differentiation | real vs null residual gap |
 //! | 4 | Temporal straightening | chord / path over a latent window |
 //!
 //! Any single condition below its threshold blocks checkpoint promotion.
+//!
+//! # Condition 2: the probe (changed 2026-11-14, owner decision, plan item W4)
+//!
+//! The probe is computed online from the [`ProbePair`] window the gate keeps. Each pair now
+//! carries the model's prediction `ẑ`, so the default [`GateProbeKind::BeatsCopyLast`] can ask
+//! whether the prediction carries information beyond `ẑ = z_t`. The legacy sign-agreement score
+//! (`Δz` against the mean residual) never looked at the prediction and scored a perfect model
+//! 0.54 on mean-reverting dynamics, so it vetoed every synthetic model. It stays reachable with
+//! [`FourConditionRollbackGate::with_probe_kind`]. The floor `GATE_HELD_OUT_PROBE_MIN` (0.70) is
+//! unchanged. The other three conditions and their thresholds are unchanged. See [`probe`] for
+//! the argument and the failure case.
+
+pub mod probe;
+
+pub use probe::{beats_copy_last, sign_agreement, GateProbeKind};
 
 extern crate alloc;
 
@@ -18,7 +33,7 @@ use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 
 use weftos_worldmodel_core::{
-    surprise_voe, zero_latent, GateCondition, GateVerdict, Latent, RollbackGate,
+    surprise_voe, GateCondition, GateVerdict, Latent, RollbackGate,
     RollbackGateMetrics, LATENT_DIM,
 };
 
@@ -32,11 +47,13 @@ pub const DEFAULT_TRAJECTORY_CAPACITY: usize = 16;
 /// perfect-score regime (avoids false vetoes at boot).
 pub const DEFAULT_MIN_SAMPLES: u64 = 4;
 
-/// One held-out transition used by the linear probe.
+/// One held-out transition used by the probe.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ProbePair {
     /// Latent at step `t`.
     pub z_t: Latent,
+    /// Model prediction `ẑ = pred_φ(z_t, a_t)` for step `t+1`.
+    pub z_hat: Latent,
     /// Observed latent at step `t+1`.
     pub z_tp1: Latent,
 }
@@ -55,6 +72,8 @@ pub struct FourConditionRollbackGate {
     probe_buf: VecDeque<ProbePair>,
     /// Capacity of the probe buffer.
     probe_capacity: usize,
+    /// Score feeding condition 2.
+    probe_kind: GateProbeKind,
     /// Recent latent trajectory for straightening.
     trajectory: VecDeque<Latent>,
     /// Capacity of the trajectory window.
@@ -88,6 +107,7 @@ impl FourConditionRollbackGate {
             sigreg_health: 1.0,
             probe_buf: VecDeque::with_capacity(DEFAULT_PROBE_CAPACITY),
             probe_capacity: DEFAULT_PROBE_CAPACITY,
+            probe_kind: GateProbeKind::default(),
             trajectory: VecDeque::with_capacity(DEFAULT_TRAJECTORY_CAPACITY),
             trajectory_capacity: DEFAULT_TRAJECTORY_CAPACITY,
             mean_real_surprise: 0.0,
@@ -104,6 +124,17 @@ impl FourConditionRollbackGate {
     pub fn with_probe_capacity(mut self, cap: usize) -> Self {
         self.probe_capacity = cap.max(2);
         self
+    }
+
+    /// Select the condition-2 score. `SignAgreement` restores the legacy behaviour.
+    pub fn with_probe_kind(mut self, kind: GateProbeKind) -> Self {
+        self.probe_kind = kind;
+        self
+    }
+
+    /// The condition-2 score in use.
+    pub fn probe_kind(&self) -> GateProbeKind {
+        self.probe_kind
     }
 
     /// Override trajectory window capacity.
@@ -152,6 +183,7 @@ impl FourConditionRollbackGate {
         }
         self.probe_buf.push_back(ProbePair {
             z_t: *z_t,
+            z_hat: *z_hat,
             z_tp1: *z_tp1,
         });
 
@@ -200,37 +232,7 @@ impl FourConditionRollbackGate {
         if self.n_transitions < self.min_samples || self.probe_buf.len() < 2 {
             return 1.0; // cold start: do not veto
         }
-        // Cheap linear probe: mean residual direction as the "classifier",
-        // score = fraction of held-out pairs whose residual agrees in sign
-        // with the mean residual (per-dimension majority).
-        let mut mean_dz = zero_latent();
-        let n = self.probe_buf.len() as f32;
-        for p in &self.probe_buf {
-            for (i, m) in mean_dz.iter_mut().enumerate() {
-                *m += (p.z_tp1[i] - p.z_t[i]) / n;
-            }
-        }
-        let mut correct = 0u64;
-        let mut total = 0u64;
-        for p in &self.probe_buf {
-            for (i, &mean_i) in mean_dz.iter().enumerate() {
-                let dz = p.z_tp1[i] - p.z_t[i];
-                // Skip near-zero dims (no signal).
-                if dz.abs() < 1e-6 && mean_i.abs() < 1e-6 {
-                    continue;
-                }
-                total = total.saturating_add(1);
-                if dz.signum() == mean_i.signum()
-                    || (dz.abs() < 1e-6 && mean_i.abs() < 1e-6)
-                {
-                    correct = correct.saturating_add(1);
-                }
-            }
-        }
-        if total == 0 {
-            return 1.0;
-        }
-        (correct as f32 / total as f32).clamp(0.0, 1.0)
+        self.probe_kind.score(self.probe_buf.iter())
     }
 
     fn compute_voe_diff(&self) -> f32 {
@@ -327,213 +329,4 @@ fn l2(a: &Latent, b: &Latent) -> f32 {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use weftos_worldmodel_core::{
-        GATE_HELD_OUT_PROBE_MIN, GATE_SIGREG_HEALTH_MIN, GATE_TEMPORAL_STRAIGHTEN_MIN,
-        GATE_VOE_DIFF_MIN,
-    };
-
-    fn unit_step(i: usize, v: f32) -> Latent {
-        let mut z = zero_latent();
-        z[i] = v;
-        z
-    }
-
-    #[test]
-    fn cold_start_promotes() {
-        let mut g = FourConditionRollbackGate::new();
-        g.min_samples = 8;
-        let v = g.evaluate_now();
-        assert!(v.promote, "cold start must not false-veto: {v:?}");
-    }
-
-    #[test]
-    fn good_straight_trajectory_with_healthy_sigreg_promotes() {
-        let mut g = FourConditionRollbackGate::new();
-        g.min_samples = 3;
-        // Straight line in dim 0: z = 0,1,2,3,... with perfect prediction.
-        for t in 0..12u64 {
-            let z_t = unit_step(0, t as f32);
-            let z_tp1 = unit_step(0, (t + 1) as f32);
-            let z_hat = z_tp1; // perfect pred → real surprise 0
-            let v = g.observe_transition(&z_t, &z_hat, &z_tp1, Some(0.95));
-            if t + 1 >= g.min_samples {
-                assert!(
-                    v.promote,
-                    "t={t} expected promote, metrics={:?}",
-                    v.metrics
-                );
-            }
-        }
-        assert!(g.promote_count > 0);
-    }
-
-    #[test]
-    fn sigreg_alone_vetoes() {
-        let mut g = FourConditionRollbackGate::new();
-        g.min_samples = 2;
-        // Feed healthy dynamics first so other metrics pass.
-        for t in 0..6u64 {
-            let z_t = unit_step(0, t as f32);
-            let z_tp1 = unit_step(0, (t + 1) as f32);
-            let _ = g.observe_transition(&z_t, &z_tp1, &z_tp1, Some(0.95));
-        }
-        // Drop SIGReg only.
-        g.set_sigreg_health(GATE_SIGREG_HEALTH_MIN - 0.05);
-        let v = g.evaluate_now();
-        assert!(!v.promote);
-        assert!(!v.sigreg_ok);
-        assert!(v.probe_ok, "probe should still pass: {:?}", v.metrics);
-        assert!(v.voe_ok, "voe should still pass: {:?}", v.metrics);
-        assert!(
-            v.straighten_ok,
-            "straighten should still pass: {:?}",
-            v.metrics
-        );
-        assert_eq!(v.first_veto(), Some(GateCondition::ClusterSigRegHealth));
-    }
-
-    #[test]
-    fn held_out_probe_alone_vetoes() {
-        let mut g = FourConditionRollbackGate::new();
-        g.min_samples = 2;
-        // Incoherent residuals: random-ish sign flips so mean residual is
-        // useless → low sign agreement.
-        for t in 0..20u64 {
-            let mut z_t = zero_latent();
-            let mut z_tp1 = zero_latent();
-            // Different dims jump each step with alternating signs that
-            // disagree across the buffer.
-            for i in 0..LATENT_DIM {
-                let sign = if (t as usize + i).is_multiple_of(3) {
-                    1.0
-                } else if ((t as usize + i) % 3) == 1 {
-                    -1.0
-                } else {
-                    0.5 * if t % 2 == 0 { 1.0 } else { -1.0 }
-                };
-                z_t[i] = (t as f32) * 0.01 * sign;
-                z_tp1[i] = z_t[i] + sign * (1.0 + (i % 7) as f32);
-            }
-            // Perfect prediction + healthy SIGReg so only probe can fail.
-            let _ = g.observe_transition(&z_t, &z_tp1, &z_tp1, Some(0.99));
-        }
-        let v = g.verdict();
-        // Probe may or may not fall below 0.70 depending on residual pattern;
-        // force the metric path by constructing a verdict with only probe low.
-        let mut metrics = v.metrics;
-        metrics.held_out_probe_accuracy = GATE_HELD_OUT_PROBE_MIN - 0.05;
-        metrics.sigreg_health = 0.99;
-        metrics.voe_surprise_diff = 1.0;
-        metrics.temporal_straightening = 1.0;
-        let forced = GateVerdict::evaluate(metrics);
-        assert!(!forced.promote);
-        assert!(!forced.probe_ok);
-        assert!(forced.sigreg_ok);
-        assert!(forced.voe_ok);
-        assert!(forced.straighten_ok);
-        assert_eq!(
-            forced.first_veto(),
-            Some(GateCondition::HeldOutProbeAccuracy)
-        );
-    }
-
-    #[test]
-    fn voe_alone_vetoes() {
-        // Force metrics path: only VoE below threshold.
-        let metrics = RollbackGateMetrics {
-            sigreg_health: 0.99,
-            held_out_probe_accuracy: 0.95,
-            voe_surprise_diff: GATE_VOE_DIFF_MIN - 0.01,
-            temporal_straightening: 0.95,
-        };
-        let v = GateVerdict::evaluate(metrics);
-        assert!(!v.promote);
-        assert!(!v.voe_ok);
-        assert!(v.sigreg_ok && v.probe_ok && v.straighten_ok);
-        assert_eq!(
-            v.first_veto(),
-            Some(GateCondition::VoeSurpriseDifferentiation)
-        );
-
-        // Online path: bad predictor (z_hat far from z_tp1) → high real
-        // surprise; null may be similar or lower → low diff score.
-        let mut g = FourConditionRollbackGate::new();
-        g.min_samples = 2;
-        for t in 0..10u64 {
-            let z_t = unit_step(0, t as f32);
-            let z_tp1 = unit_step(0, (t + 1) as f32);
-            // Terrible prediction: point far away.
-            let z_hat = unit_step(0, 1000.0);
-            let _ = g.observe_transition(&z_t, &z_hat, &z_tp1, Some(0.99));
-        }
-        let m = g.metrics();
-        assert!(
-            m.voe_surprise_diff < GATE_VOE_DIFF_MIN,
-            "bad predictor should fail VoE diff: {}",
-            m.voe_surprise_diff
-        );
-    }
-
-    #[test]
-    fn temporal_straightening_alone_vetoes() {
-        let metrics = RollbackGateMetrics {
-            sigreg_health: 0.99,
-            held_out_probe_accuracy: 0.95,
-            voe_surprise_diff: 0.95,
-            temporal_straightening: GATE_TEMPORAL_STRAIGHTEN_MIN - 0.05,
-        };
-        let v = GateVerdict::evaluate(metrics);
-        assert!(!v.promote);
-        assert!(!v.straighten_ok);
-        assert!(v.sigreg_ok && v.probe_ok && v.voe_ok);
-        assert_eq!(v.first_veto(), Some(GateCondition::TemporalStraightening));
-
-        // Online: highly curved path (oscillate) with perfect pred + health.
-        let mut g = FourConditionRollbackGate::new();
-        g.min_samples = 2;
-        g.trajectory_capacity = 12;
-        for t in 0..12u64 {
-            // Bounce between two points → path long, chord ~0.
-            let v = if t % 2 == 0 { 0.0 } else { 10.0 };
-            let z_t = unit_step(0, v);
-            let z_tp1 = unit_step(0, if t % 2 == 0 { 10.0 } else { 0.0 });
-            let _ = g.observe_transition(&z_t, &z_tp1, &z_tp1, Some(0.99));
-        }
-        let m = g.metrics();
-        assert!(
-            m.temporal_straightening < GATE_TEMPORAL_STRAIGHTEN_MIN,
-            "oscillation should fail straighten: {}",
-            m.temporal_straightening
-        );
-        let v = g.verdict();
-        assert!(!v.straighten_ok);
-        assert!(v.blocks_promotion());
-    }
-
-    #[test]
-    fn and_requires_all_four() {
-        // Three good, one bad → no promote (already covered per-condition).
-        // All at threshold → promote.
-        let m = RollbackGateMetrics {
-            sigreg_health: GATE_SIGREG_HEALTH_MIN,
-            held_out_probe_accuracy: GATE_HELD_OUT_PROBE_MIN,
-            voe_surprise_diff: GATE_VOE_DIFF_MIN,
-            temporal_straightening: GATE_TEMPORAL_STRAIGHTEN_MIN,
-        };
-        assert!(GateVerdict::evaluate(m).promote);
-    }
-
-    #[test]
-    fn to_log_records_veto() {
-        let mut g = FourConditionRollbackGate::new();
-        g.set_sigreg_health(0.1);
-        g.min_samples = 100; // keep other metrics at 1.0
-        let _ = g.evaluate_now();
-        let log = g.to_log();
-        assert_eq!(log.kind, "lewm.rollback_gate");
-        assert!(!log.promote);
-        assert_eq!(log.first_veto, Some("cluster_sigreg_health"));
-    }
-}
+mod tests;

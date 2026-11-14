@@ -141,4 +141,6 @@ fn default_vit_tiny_does_not_collapse() {
     assert!(r.eval.collapsed_coords.is_empty(), "collapsed {:?}", r.eval.collapsed_coords);
     assert!(r.held_out_sigreg_health >= 0.85, "held-out health {}", r.held_out_sigreg_health);
     assert!(r.eval.beats_baselines, "model {} vs copy-last {} / linear {}", r.eval.model_err, r.eval.baselines.copy_last, r.eval.baselines.linear);
+    // The gate's probe (beats copy-last, 2026-11-14) must pass; temporal straightening still vetoes.
+    assert!(r.eval.gate.probe_ok, "probe {:?}", r.eval.gate.metrics);
 }

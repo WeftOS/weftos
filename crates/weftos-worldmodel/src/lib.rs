@@ -107,6 +107,7 @@ pub use attestation::{
 pub use weftos_worldmodel_impls::{
     decode_model_segment, encode_model_segment, model_segment_from_wire, model_segment_to_wire,
     planner_for_kind, require_promoted, ActionEncoder, CemPlanner, FourConditionRollbackGate,
+    GateProbeKind,
     GradientPlanner, HashActionEncoder, HashEncoder, IdentityPredictor, ImportanceReplayBuffer,
     LewmModelSegment, LinearPredPhi, ActionLinearModel, MppiWarmPlanner, NullActionEncoder, NullEncoder, NullPlanner,
     NullPredictor, NullSigRegMonitor, OfflineEdgePipeline, PredPhi, ProbePair, RollbackGateLog,

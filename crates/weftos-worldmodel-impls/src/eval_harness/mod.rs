@@ -13,7 +13,9 @@
 //!   action basis, [`evaluate_with_basis`] also fills [`EvalReport::geometry`] ([`geometry_audit`]).
 //! - **Gate**: the held-out transitions are fed through [`FourConditionRollbackGate`] with the
 //!   SIGReg health from a [`WelfordSigRegMonitor`] run over all latents. Condition 2 uses the
-//!   gate's sign-agreement probe unless [`EvalConfig::probe`] selects [`ProbeKind::LinearLsq`].
+//!   gate's own probe, which since 2026-11-14 is [`GateProbeKind::BeatsCopyLast`] (see the
+//!   `rollback_gate` module doc). [`EvalConfig::probe`] can select the legacy
+//!   [`ProbeKind::SignAgreement`] or the fitted [`ProbeKind::LinearLsq`] instead.
 //!
 //! Two splits: [`evaluate`] holds out the contiguous tail; [`evaluate_by_day`] holds out the
 //! last [`EvalConfig::holdout_days`] distinct days, so a day never straddles the split.
@@ -32,7 +34,9 @@ use weftos_worldmodel_core::{
     surprise_voe, zero_latent, GateCondition, GateVerdict, Latent, RollbackGateMetrics, LATENT_DIM,
 };
 
-use crate::rollback_gate::FourConditionRollbackGate;
+use crate::rollback_gate::{
+    beats_copy_last, sign_agreement, FourConditionRollbackGate, GateProbeKind, ProbePair,
+};
 use crate::sigreg::WelfordSigRegMonitor;
 use crate::training::ActionLinearModel;
 
@@ -65,7 +69,7 @@ pub struct EvalConfig {
     pub activity_floor_std: f32,
     /// Model error must be at most `beat_margin` times the better baseline's error.
     pub beat_margin: f32,
-    /// Probe whose accuracy feeds the gate's condition 2. Default keeps the gate's own score.
+    /// Probe whose accuracy feeds the gate's condition 2. Default is the gate's own score.
     pub probe: ProbeKind,
 }
 
@@ -76,7 +80,7 @@ impl Default for EvalConfig {
             holdout_days: 1,
             activity_floor_std: 0.1,
             beat_margin: 0.9,
-            probe: ProbeKind::SignAgreement,
+            probe: ProbeKind::BeatsCopyLast,
         }
     }
 }
@@ -108,8 +112,10 @@ pub struct BaselineErrors {
 /// Held-out accuracy of both probes, whichever one fed the gate.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ProbeAccuracies {
-    /// The gate's sign-agreement score against the mean residual.
+    /// The legacy sign-agreement score against the mean residual.
     pub sign_agreement: f32,
+    /// Fraction of held-out pairs where the model beats copy-last (the gate's default probe).
+    pub beats_copy_last: f32,
     /// Fraction of dimensions where the per-dimension linear probe beats copy-last.
     pub linear_lsq: f32,
 }
@@ -173,7 +179,11 @@ fn refused(n_train: usize, n_held: usize, info: DayInfo, veto: EvalVeto) -> Eval
         beats_baselines: false,
         collapsed_coords: Vec::new(),
         sigreg_health: f32::NAN,
-        probes: ProbeAccuracies { sign_agreement: f32::NAN, linear_lsq: f32::NAN },
+        probes: ProbeAccuracies {
+            sign_agreement: f32::NAN,
+            beats_copy_last: f32::NAN,
+            linear_lsq: f32::NAN,
+        },
         gate: GateVerdict::evaluate(RollbackGateMetrics::perfect()),
         promote: false,
         vetoes: alloc::vec![veto],
@@ -274,7 +284,14 @@ fn run(
     let (alpha, beta) = probe::fit_linear(train);
 
     let (mut e_copy, mut e_lin, mut e_model) = (0.0f32, 0.0f32, 0.0f32);
-    let mut gate = FourConditionRollbackGate::new().with_probe_capacity(held.len());
+    let gate_probe = match cfg.probe {
+        ProbeKind::SignAgreement => GateProbeKind::SignAgreement,
+        ProbeKind::BeatsCopyLast | ProbeKind::LinearLsq => GateProbeKind::BeatsCopyLast,
+    };
+    let mut gate = FourConditionRollbackGate::new()
+        .with_probe_capacity(held.len())
+        .with_probe_kind(gate_probe);
+    let mut pairs = Vec::with_capacity(held.len());
     // SIGReg judges the embedding distribution over the whole dataset, not just the held-out part.
     let mut monitor = WelfordSigRegMonitor::new(1);
     let mut health = 1.0f32;
@@ -295,6 +312,7 @@ fn run(
         e_lin += surprise_voe(&lin, &t.z_tp1);
         e_model += surprise_voe(&z_hat, &t.z_tp1);
         gate.observe_transition(&t.z_t, &z_hat, &t.z_tp1, Some(health));
+        pairs.push(ProbePair { z_t: t.z_t, z_hat, z_tp1: t.z_tp1 });
     }
     let n = held.len() as f32;
     let baselines = BaselineErrors { copy_last: e_copy / n, linear: e_lin / n };
@@ -305,11 +323,12 @@ fn run(
     let collapsed_coords = activity_collapse(held, cfg.activity_floor_std);
     let gate_verdict = gate.evaluate_now();
     let probes = ProbeAccuracies {
-        sign_agreement: gate_verdict.metrics.held_out_probe_accuracy,
+        sign_agreement: sign_agreement(pairs.iter()),
+        beats_copy_last: beats_copy_last(pairs.iter()),
         linear_lsq: probe::linear_probe_accuracy(held, &alpha, &beta),
     };
     let verdict = match cfg.probe {
-        ProbeKind::SignAgreement => gate_verdict,
+        ProbeKind::SignAgreement | ProbeKind::BeatsCopyLast => gate_verdict,
         ProbeKind::LinearLsq => {
             let mut m = gate_verdict.metrics;
             m.held_out_probe_accuracy = probes.linear_lsq;

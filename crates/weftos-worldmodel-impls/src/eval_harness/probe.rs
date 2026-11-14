@@ -6,8 +6,10 @@ use weftos_worldmodel_core::LATENT_DIM;
 /// Which held-out probe accuracy is fed to the rollback gate's condition 2.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ProbeKind {
-    /// The gate's own score: sign agreement of `Δz` with the mean residual direction.
+    /// The gate's default score: fraction of held-out pairs where the model beats copy-last.
     #[default]
+    BeatsCopyLast,
+    /// The legacy gate score: sign agreement of `Δz` with the mean residual direction.
     SignAgreement,
     /// Per-dimension linear probe `ẑ_i = α_i z_i + β_i` (fit on train); accuracy is the fraction
     /// of dimensions whose held-out error is below the copy-last error.

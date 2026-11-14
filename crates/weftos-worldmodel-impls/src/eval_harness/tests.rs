@@ -239,19 +239,26 @@ fn the_two_probes_differ_when_the_mean_residual_is_zero_but_dynamics_are_predict
         }
         o
     };
-    let sign = evaluate(&data, model, EvalConfig::default());
-    assert!(sign.probes.linear_lsq > 0.99, "{:?}", sign.probes);
-    assert!(sign.probes.sign_agreement < 0.7, "{:?}", sign.probes);
-    // Default keeps the sign-agreement behaviour, so the gate vetoes on the probe.
-    assert!(sign.gate.metrics.held_out_probe_accuracy < 0.7);
-    assert!(!sign.gate.probe_ok);
+    let default = evaluate(&data, model, EvalConfig::default());
+    assert!(default.probes.linear_lsq > 0.99, "{:?}", default.probes);
+    assert!(default.probes.beats_copy_last > 0.99, "{:?}", default.probes);
+    assert!(default.probes.sign_agreement < 0.7, "{:?}", default.probes);
+    // Default is the gate's own probe (beats copy-last), so a perfect model passes condition 2.
+    assert_eq!(default.gate.metrics.held_out_probe_accuracy, default.probes.beats_copy_last);
+    assert!(default.gate.probe_ok);
+    // The legacy sign-agreement probe still vetoes this model on condition 2.
+    let legacy_cfg = EvalConfig { probe: ProbeKind::SignAgreement, ..EvalConfig::default() };
+    let legacy = evaluate(&data, model, legacy_cfg);
+    assert_eq!(legacy.gate.metrics.held_out_probe_accuracy, legacy.probes.sign_agreement);
+    assert!(!legacy.gate.probe_ok);
     // Selecting the linear probe feeds its accuracy into the gate.
     let cfg = EvalConfig { probe: ProbeKind::LinearLsq, ..EvalConfig::default() };
     let lin = evaluate(&data, model, cfg);
     assert_eq!(lin.gate.metrics.held_out_probe_accuracy, lin.probes.linear_lsq);
     assert!(lin.gate.probe_ok);
-    // Both runs saw identical probe numbers.
-    assert_eq!(sign.probes, lin.probes);
+    // All runs saw identical probe numbers.
+    assert_eq!(default.probes, lin.probes);
+    assert_eq!(default.probes, legacy.probes);
 }
 
 #[test]
@@ -265,6 +272,8 @@ fn probe_accuracies_on_the_synthetic_fixtures() {
     let r = evaluate(&mean_reverting(240), |z, _| *z, EvalConfig::default());
     eprintln!("mean-reverting fixture probes: {:?}", r.probes);
     assert!(r.probes.linear_lsq.is_finite() && r.probes.sign_agreement.is_finite());
+    // Copy-last as the model: the new probe refuses it.
+    assert!(r.probes.beats_copy_last < 0.01, "{:?}", r.probes);
 }
 
 #[test]
@@ -284,4 +293,59 @@ fn the_offline_path_keeps_the_constant_clock_sigreg_health() {
     assert_eq!(by_day.sigreg_health, direct);
     // Health is computed over all latents, not only the held-out part.
     assert_eq!(by_day.gate.metrics.sigreg_health, direct.clamp(0.0, 1.0));
+}
+
+/// Before/after matrix for the 2026-11-14 probe change: legacy sign agreement against the gate's
+/// default beats-copy-last probe, on the SYNTHETIC fixtures.
+#[test]
+fn probe_change_matrix_on_the_synthetic_fixtures() {
+    let legacy = EvalConfig { probe: ProbeKind::SignAgreement, ..EvalConfig::default() };
+    let new = EvalConfig::default();
+    let contiguous = fixture(240, 1.0, 0.0005, 7);
+    let (by_day, days) = day_fixture();
+    let reverting = mean_reverting(240);
+    let halve = |z: &Latent, _: f32| {
+        let mut o = *z;
+        for v in o.iter_mut() {
+            *v *= 0.5;
+        }
+        o
+    };
+    let line = |name: &str, old: &EvalReport, now: &EvalReport| {
+        eprintln!(
+            "{name}: legacy promote={} probe={:.3} vetoes={:?} | new promote={} probe={:.3} vetoes={:?}",
+            old.promote,
+            old.gate.metrics.held_out_probe_accuracy,
+            old.vetoes,
+            now.promote,
+            now.gate.metrics.held_out_probe_accuracy,
+            now.vetoes
+        );
+    };
+    // Good model on both drift fixtures: promoted before and after.
+    let (o, n) = (
+        evaluate(&contiguous, true_model(1.0), legacy),
+        evaluate(&contiguous, true_model(1.0), new),
+    );
+    line("contiguous good", &o, &n);
+    assert!(n.promote && n.gate.probe_ok);
+    let (o, n) = (
+        evaluate_by_day(&by_day, &days, true_model(1.0), legacy),
+        evaluate_by_day(&by_day, &days, true_model(1.0), new),
+    );
+    line("by-day good", &o, &n);
+    assert!(n.promote && n.gate.probe_ok);
+    // Copy-last: refused before and after, and the new probe names it.
+    let n = evaluate(&contiguous, |z, _| *z, new);
+    line("contiguous copy-last", &evaluate(&contiguous, |z, _| *z, legacy), &n);
+    assert!(!n.promote && !n.gate.probe_ok);
+    // Collapsed latent with a perfect model: refused by the activity floor either way.
+    let collapsed = fixture(240, 0.01, 0.0, 7);
+    let n = evaluate(&collapsed, true_model(0.01), new);
+    line("collapsed", &evaluate(&collapsed, true_model(0.01), legacy), &n);
+    assert!(!n.promote && n.vetoes.contains(&EvalVeto::ActivityCollapse));
+    // Mean-reverting: the probe flips, the verdict may still be vetoed by another condition.
+    let (o, n) = (evaluate(&reverting, halve, legacy), evaluate(&reverting, halve, new));
+    line("mean-reverting good", &o, &n);
+    assert!(!o.gate.probe_ok && n.gate.probe_ok);
 }
