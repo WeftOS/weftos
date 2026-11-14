@@ -10,6 +10,9 @@ fn tiny_encoder() -> VitTinyConfig {
     VitTinyConfig { image_size: 32, patch_size: 8, embed_dim: 32, depth: 1, num_heads: 2, latent_dim: LATENT_DIM }
 }
 
+/// Lane G's settings on the tiny encoder. The lane J default (VICReg hinge + correlation
+/// decorrelation) is tuned for the default ViT-tiny; on this tiny encoder at lr 1e-2 it drives
+/// every coordinate under the activity floor, so these tests keep the lane G loss.
 fn tiny_cfg() -> JepaTrainConfig {
     JepaTrainConfig {
         epochs: 40,
@@ -19,7 +22,7 @@ fn tiny_cfg() -> JepaTrainConfig {
         ema_tau: 0.8,
         encoder: tiny_encoder(),
         predictor: AdaLnConfig { hidden_dim: 32, depth: 1, ..AdaLnConfig::default() },
-        ..JepaTrainConfig::default()
+        ..JepaTrainConfig::lane_g()
     }
 }
 
@@ -106,9 +109,18 @@ fn vicreg_terms_match_a_brute_force_reference() {
     let cov = |j: usize, k: usize| (0..b).map(|i| (row(i)[j] as f64 - mu[j]) * (row(i)[k] as f64 - mu[k])).sum::<f64>() / (b as f64 - 1.0);
     let hinge: f64 = (0..d).map(|j| (1.0 - (cov(j, j) + ISO_STD_EPS).sqrt()).max(0.0)).sum::<f64>() / d as f64;
     let off: f64 = (0..d).flat_map(|j| (0..d).map(move |k| (j, k))).filter(|(j, k)| j != k).map(|(j, k)| cov(j, k).powi(2)).sum::<f64>() / d as f64;
-    let (h, c) = vicreg_terms(&z).unwrap();
+    let (h, c) = vicreg_terms(&z, false).unwrap();
     assert!((scalar(&h) - hinge).abs() < 1e-5, "{} vs {hinge}", scalar(&h));
     assert!((scalar(&c) - off).abs() < 1e-5, "{} vs {off}", scalar(&c));
+    let sd = |j: usize| (cov(j, j) + crate::candle::isotropy::CORR_EPS).sqrt();
+    let rho = |j: usize, k: usize| cov(j, k) / (sd(j) * sd(k));
+    let off_r: f64 = (0..d).flat_map(|j| (0..d).map(move |k| (j, k))).filter(|(j, k)| j != k).map(|(j, k)| rho(j, k).powi(2)).sum::<f64>() / d as f64;
+    let (h2, c2) = vicreg_terms(&z, true).unwrap();
+    assert!((scalar(&h2) - hinge).abs() < 1e-5);
+    assert!((scalar(&c2) - off_r).abs() < 1e-4, "{} vs {off_r}", scalar(&c2));
+    // Scale-free: doubling z leaves the correlation term unchanged.
+    let (_, c3) = vicreg_terms(&(z * 2.0).unwrap(), true).unwrap();
+    assert!((scalar(&c3) - scalar(&c2)).abs() < 1e-3 * scalar(&c2).max(1.0));
 }
 
 #[test]

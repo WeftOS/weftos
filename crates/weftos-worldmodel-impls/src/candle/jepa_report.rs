@@ -1,10 +1,11 @@
 //! [`train_jepa`]: the JEPA training run, the collapse checks and the eval-harness report.
 //! See [`crate::candle::jepa`] for the loss.
 
-use weftos_worldmodel_core::{Latent, Predictor};
+use weftos_worldmodel_core::{Latent, Predictor, SensorClass, TrainingSample};
 
 use super::jepa::{FrameTransition, JepaLoss, JepaTrainConfig, JepaTrainer};
 use super::jepa_diag::{diagnose, relative_gap, EpochDiagnostics, LatentDiagnostics};
+use super::train::{train_adaln_with, AdaLnTrainConfig};
 use super::{invalid, AdaLnPredictor, CandleResult, CandleVitEncoder, SplitMix64};
 use crate::candle::isotropy::participation_ratio;
 use crate::eval_harness::{evaluate_by_day, EvalConfig, EvalReport, Transition};
@@ -15,8 +16,10 @@ use crate::sigreg::WelfordSigRegMonitor;
 pub struct JepaTrainReport {
     /// Trained online encoder `f_θ`.
     pub encoder: CandleVitEncoder,
-    /// Trained predictor `pred_φ`.
+    /// Deployed predictor: the refit AdaLN when `predictor_refit_epochs > 0`, else `pred_φ`.
     pub predictor: AdaLnPredictor,
+    /// The JEPA-trained `pred_φ` (targets `f_ξ`).
+    pub jepa_predictor: AdaLnPredictor,
     /// Encoder checkpoint (arch 1).
     pub encoder_safetensors: Vec<u8>,
     /// Predictor checkpoint (arch 2).
@@ -49,10 +52,11 @@ pub struct JepaTrainReport {
     pub train_diagnostics: LatentDiagnostics,
     /// Diagnostics of the final held-out `f_θ(x_t)` latents.
     pub held_out_diagnostics: LatentDiagnostics,
-    /// Eval harness on `(f_θ(x_t), a, f_θ(x_{t+1}))`, held out by day (the deployed pairing:
-    /// one encoder for both ends).
+    /// Eval harness on `(f_θ(x_t), a, f_θ(x_{t+1}))` with the deployed predictor, held out by
+    /// day (the deployed pairing: one encoder for both ends).
     pub eval: EvalReport,
-    /// Eval harness on `(f_θ(x_t), a, f_ξ(x_{t+1}))`: the pairing training optimises. Its
+    /// Eval harness on `(f_θ(x_t), a, f_ξ(x_{t+1}))` with the JEPA `pred_φ`: the pairing
+    /// training optimises. Its
     /// SIGReg and collapse checks see a mix of online and target latents.
     pub eval_target: EvalReport,
 }
@@ -151,7 +155,7 @@ pub fn train_jepa(data: &[FrameTransition], cfg: JepaTrainConfig) -> CandleResul
     }
     let final_loss = trainer.evaluate_loss(&train)?;
     let held_out_loss = trainer.evaluate_loss(&held)?;
-    let (encoder, predictor, target) = (trainer.encoder(), trainer.predictor(), trainer.target_encoder());
+    let (encoder, jepa_predictor, target) = (trainer.encoder(), trainer.predictor(), trainer.target_encoder());
     let steps = trainer.steps();
     drop(trainer);
 
@@ -172,8 +176,18 @@ pub fn train_jepa(data: &[FrameTransition], cfg: JepaTrainConfig) -> CandleResul
             held_out_sigreg_health = h.score;
         }
     }
+    let predictor = if cfg.predictor_refit_epochs > 0 {
+        let samples: Vec<TrainingSample> = train_idx
+            .iter()
+            .map(|&i| TrainingSample { action: data[i].action, ..TrainingSample::basic(SensorClass::RgbD, z_t[i], z_tp1[i], i as u64) })
+            .collect();
+        let rc = AdaLnTrainConfig { epochs: cfg.predictor_refit_epochs, seed: cfg.seed ^ 0x2EF1, model: cfg.predictor, ..AdaLnTrainConfig::default() };
+        train_adaln_with(&samples, rc)?.predictor
+    } else {
+        jepa_predictor.clone()
+    };
     let eval = harness(data, &z_t, &z_tp1, &predictor, &cfg, n_held_days);
-    let eval_target = harness(data, &z_t, &z_tp1_target, &predictor, &cfg, n_held_days);
+    let eval_target = harness(data, &z_t, &z_tp1_target, &jepa_predictor, &cfg, n_held_days);
     let (train_diagnostics, held_out_diagnostics) = (diagnose(&train_z, &train_tags), diagnose(&held_z, &held_tags));
 
     Ok(JepaTrainReport {
@@ -181,6 +195,7 @@ pub fn train_jepa(data: &[FrameTransition], cfg: JepaTrainConfig) -> CandleResul
         predictor_safetensors: predictor.to_safetensors_bytes()?,
         encoder,
         predictor,
+        jepa_predictor,
         initial_loss,
         final_loss,
         held_out_loss,

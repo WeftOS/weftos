@@ -24,6 +24,10 @@ pub struct LatentDiagnostics {
     pub top_pc_session_fraction: f32,
     /// Between-day over total variance along the top principal direction only.
     pub top_pc_day_fraction: f32,
+    /// SIGReg mean energy `mean_i μ_i²` (the Welford health is `1 / (1 + mean + var)`).
+    pub mean_energy: f32,
+    /// SIGReg variance energy `mean_i (C_ii − 1)²`.
+    pub var_energy: f32,
 }
 
 /// Per-epoch trace (only with `JepaTrainConfig::diagnostics`).
@@ -168,6 +172,8 @@ pub fn diagnose(zs: &[Latent], tags: &[(u16, u16)]) -> LatentDiagnostics {
         day_fraction: between_fraction(&rows, &day_keys) as f32,
         top_pc_session_fraction: between_fraction(&proj, &session_keys) as f32,
         top_pc_day_fraction: between_fraction(&proj, &day_keys) as f32,
+        mean_energy: (mean.iter().map(|m| m * m).sum::<f64>() / d as f64) as f32,
+        var_energy: ((0..d).map(|i| (c[i * d + i] - 1.0).powi(2)).sum::<f64>() / d as f64) as f32,
     }
 }
 

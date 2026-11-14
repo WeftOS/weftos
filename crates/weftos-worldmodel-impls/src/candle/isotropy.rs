@@ -63,16 +63,26 @@ pub fn epps_pulley_penalty(z: &Tensor, dirs: &Tensor) -> candle_core::Result<Ten
 
 /// VICReg variance and covariance terms of a `(B, d)` batch:
 /// `var = mean_i max(0, 1 − σ_i)` with `σ_i = √(C_ii + ε)`, and
-/// `cov = Σ_{i≠j} C_ij² / d` (`n − 1` covariance). `B ≥ 2`.
-pub fn vicreg_terms(z: &Tensor) -> candle_core::Result<(Tensor, Tensor)> {
+/// `cov = Σ_{i≠j} M_ij² / d` (`n − 1` covariance). `M = C` (VICReg) or, with `correlation`,
+/// `M_ij = C_ij / (σ_i σ_j)`: scale-free, so with `B ≤ d` it pushes rank up without pulling
+/// the diagonal under 1. `B ≥ 2`.
+pub fn vicreg_terms(z: &Tensor, correlation: bool) -> candle_core::Result<(Tensor, Tensor)> {
     let (b, d) = z.dims2()?;
     let zc = z.broadcast_sub(&z.mean(0)?)?;
     let var = (zc.sqr()?.sum(0)? / (b as f64 - 1.0))?;
-    let hinge = (1.0 - (&var + ISO_STD_EPS)?.sqrt()?)?.relu()?.mean_all()?;
-    let c = (zc.t()?.matmul(&zc)? / (b as f64 - 1.0))?;
-    let off = ((c.sqr()?.sum_all()? - var.sqr()?.sum_all()?)? / d as f64)?;
+    let std = (&var + ISO_STD_EPS)?.sqrt()?;
+    let hinge = (1.0 - &std)?.relu()?.mean_all()?;
+    // The correlation path uses its own tiny ε: with ISO_STD_EPS, shrinking every coordinate
+    // under ε would also shrink `ρ` and so lower the term (measured: it drives z to 0).
+    let zm = if correlation { zc.broadcast_div(&(&var + CORR_EPS)?.sqrt()?)? } else { zc };
+    let c = (zm.t()?.matmul(&zm)? / (b as f64 - 1.0))?;
+    let diag = (zm.sqr()?.sum(0)? / (b as f64 - 1.0))?;
+    let off = ((c.sqr()?.sum_all()? - diag.sqr()?.sum_all()?)? / d as f64)?;
     Ok((hinge, off))
 }
+
+/// `ε` of the correlation normalisation in [`vicreg_terms`].
+pub const CORR_EPS: f64 = 1e-8;
 
 /// `ε` inside `σ_i = √(C_ii + ε)` of the isotropy penalty.
 pub const ISO_STD_EPS: f64 = 1e-4;

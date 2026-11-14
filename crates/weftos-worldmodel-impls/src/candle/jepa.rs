@@ -4,7 +4,7 @@
 //! z_t    = f_θ(x_t)                       online ViT, differentiable (train mode)
 //! z*_tp1 = stopgrad f_ξ(x_{t+1})          EMA target ViT, same architecture, no grad
 //! ẑ_tp1  = pred_φ(z_t, a_t)               AdaLN predictor (adaLN-zero init: copy-last)
-//! L      = MSE(ẑ_tp1, z*_tp1) + λ · ( R(z_t) + η · S(z_t) )
+//! L      = MSE(ẑ_tp1, z*_tp1) + λ · ( R(z_t) + η · S(z_t) + v · H(z_t) + c · K(z_t) )
 //! ξ      ← τ ξ + (1 − τ) θ                after every optimiser step
 //! ```
 //!
@@ -22,7 +22,7 @@
 //!
 //! **Which variant.** The default is the **diagonal** part (`γ =`
 //! [`JepaTrainConfig::offdiag_weight`] `= 0`). Its minimum (`μ = 0`, every `C_ii = 1`) is
-//! where [`WelfordSigRegMonitor`] reports health 1: the monitor's energy is
+//! where [`crate::sigreg::WelfordSigRegMonitor`] reports health 1: the monitor's energy is
 //! `(‖μ‖² + Σ (C_ii − 1)²) / d`. The penalty uses the standard deviation, not the variance
 //! (as VICReg does), because the variance form has a vanishing gradient at collapse:
 //! `∂(C_ii − 1)²/∂θ ∝ σ_i`. Measured on the tiny test config: with the variance form, AdamW
@@ -37,33 +37,55 @@
 //! participation ratio fell from 3.27 to 1.00. `S` is the LeJEPA SIGReg idea in its
 //! cheapest form: draw `K =` [`JepaTrainConfig::slice_projections`] random unit directions
 //! `u_k` per step and penalise `mean_k (σ_k − 1)²`, `σ_k = √(Var(z·u_k) + ε)`. An isotropic
-//! batch has unit variance along every direction; a rank-one batch does not. **Open issue:**
-//! on the default ViT-tiny the sliced term does not prevent rank-one latents under the full
-//! JEPA loss (960 steps, `η = 1`, and 288 steps at `λ = 10`: participation ratio 1.00, sliced
-//! term parked at ≈ 0.4, the rank-one value `2 − 2·E|g|`), although optimising the encoder on
-//! `R + S` alone raises the ratio (2.5 → 4.5 in 300 steps on the tiny config). The tiny
-//! test config does not collapse (ratio ≈ 2).
+//! batch has unit variance along every direction; a rank-one batch does not.
+//! [`SliceTest::EppsPulley`] swaps it for the LeJEPA characteristic-function test
+//! ([`epps_pulley_penalty`]).
 //!
-//! `γ > 0` adds VICReg-style off-diagonal decorrelation instead. Only use it when the batch is
-//! larger than `d`: below that `C` has rank `< d`, so the off-diagonal term can only fall by
-//! pulling the diagonal under 1, which the monitor scores as unhealthy. The default batch is
-//! 16. The report's participation ratio `(tr C)² / ‖C‖_F²` on train and held-out latents is
-//! the dimensional-collapse check.
+//! **VICReg terms** `H = mean_i max(0, 1 − σ_i)` and `K = Σ_{i≠j} M_ij² / d`
+//! ([`vicreg_terms`], weights [`JepaTrainConfig::vic_var_weight`] and
+//! [`JepaTrainConfig::vic_cov_weight`]). With [`JepaTrainConfig::vic_correlation`] (default)
+//! `M` is the batch **correlation** matrix, otherwise `C`. `γ > 0` and `K` on `C` both fail
+//! when the batch is smaller than `d`: `C` then has rank `< d`, so the off-diagonal mass can
+//! only fall by pulling the diagonal under 1, which the monitor scores as unhealthy. The
+//! correlation form is scale-free, so it pushes rank up without touching the variance.
+//!
+//! # Dimensional collapse (lane J bake-off, SYNTHETIC)
+//!
+//! Default ViT-tiny, lane G's long-run fixture, 288 steps, seed 21. With [`JepaTrainConfig::lane_g`]
+//! the latents go rank one **inside the first epoch** (participation ratio 1.00, top eigenvalue
+//! 157 vs 0.03 next), and the surviving direction is constant within each session (between-
+//! session variance fraction 1.000). The cause is not the prediction term: the untrained
+//! encoder's top principal direction is already 98 % session-explained at tiny total variance
+//! (mean-pooling over patches with a 0.02-std position embedding hides blob position, while
+//! distractor presence and the day background move the pooled vector), and the variance
+//! penalty alone (prediction weight 0) also ends at ratio 1.00. Removing those frame-visible
+//! session markers from the fixture stops the session collapse (fraction 0.03) but leaves
+//! rank ≈ 2. One change at a time (batch 64 with `γ = 1`, Epps-Pulley with `K = 128`, AdaLN
+//! hidden 64, cosine `τ` 0.9 → 0.996, two-step targets, VICReg on `C`) none reaches a held-out
+//! ratio above 2. The default is lane G plus batch 32, `τ = 0.99`, `H` (weight 1) and `K` on
+//! the correlation matrix (weight 0.04): train / held-out ratio 12.6 / 10.6, 0 collapsed
+//! coordinates, held-out health 0.90, AdaLN held-out error 178 vs copy-last 350 and linear
+//! 204. Training seeds 22 and 23 give held-out ratio 10.0 / 9.8, health 0.87 / 0.84, and
+//! beat both baselines. The gate still vetoes on probe accuracy and temporal straightening.
+//! The report's participation ratio `(tr C)² / ‖C‖_F²` on train and held-out latents is the
+//! dimensional-collapse check; [`JepaTrainConfig::diagnostics`] traces it per epoch.
 //!
 //! # Collapse checks
 //!
 //! After training, [`train_jepa`] encodes every transition with the trained online encoder
-//! (`z_t = f_θ(x_t)`, `z_tp1 = f_θ(x_tp1)`), runs [`evaluate_by_day`] with the trained AdaLN
-//! as the model, and runs a fresh [`WelfordSigRegMonitor`] over the held-out latents. The
-//! harness predicts `f_θ(x_tp1)` while training targets `f_ξ(x_tp1)`; the two agree only once
-//! the target has caught up (`τ^steps` small), so short runs should use a smaller `τ`.
+//! (`z_t = f_θ(x_t)`, `z_tp1 = f_θ(x_tp1)`), runs [`crate::eval_harness::evaluate_by_day`]
+//! with the trained AdaLN as the model, and runs a fresh
+//! [`crate::sigreg::WelfordSigRegMonitor`] over the held-out latents. The harness predicts
+//! `f_θ(x_tp1)` while training targets `f_ξ(x_tp1)`, so the report also runs the harness on
+//! `(f_θ(x_t), a, f_ξ(x_tp1))` with the JEPA `pred_φ` ([`JepaTrainReport::eval_target`]). With
+//! the default `τ = 0.99`, `τ^288 ≈ 0.06` and both pairings beat both baselines.
 
 use candle_core::{Tensor, Var};
 use candle_nn::{AdamW, Optimizer, ParamsAdamW, VarMap};
 use weftos_worldmodel_core::{Action, LATENT_DIM};
 
 use super::adaln::{stack_rows, AdaLnConfig, AdaNet, NORM_STATS};
-use super::vit::{VitNet, VitTinyConfig};
+use super::vit::{set_var, VitNet, VitTinyConfig, VIT_POS_EMBED_STD};
 use super::{invalid, synthetic, AdaLnPredictor, CandleModelError, CandleResult, CandleVitEncoder, SplitMix64, CONFIG_TENSOR};
 pub(crate) use super::isotropy::random_directions;
 pub use super::isotropy::{epps_pulley_penalty, isotropy_penalty, participation_ratio, sliced_penalty, vicreg_terms, EP_BETA, ISO_STD_EPS};
@@ -78,7 +100,7 @@ pub struct FrameTransition {
     pub frame_t: Vec<u8>,
     /// Action code fed to `pred_φ`.
     pub action: Action,
-    /// Scalar action for the eval harness ([`Transition::action`]).
+    /// Scalar action for the eval harness ([`crate::eval_harness::Transition::action`]).
     pub action_scalar: f32,
     /// Frame at `t + 1`.
     pub frame_tp1: Vec<u8>,
@@ -113,6 +135,9 @@ pub struct JepaTrainConfig {
     pub seed: u64,
     /// EMA rate `τ` of the target encoder.
     pub ema_tau: f64,
+    /// Weight of the one-step prediction term (1; 0 trains on the regulariser alone, a
+    /// diagnostic).
+    pub prediction_weight: f64,
     /// Weight `λ` of the isotropy penalty.
     pub iso_weight: f64,
     /// Weight `γ` of the off-diagonal covariance term (0 = diagonal variant).
@@ -133,6 +158,17 @@ pub struct JepaTrainConfig {
     pub vic_var_weight: f64,
     /// Weight of the VICReg covariance `Σ_{i≠j} C_ij² / d` on the online latents.
     pub vic_cov_weight: f64,
+    /// Use the correlation matrix instead of `C` in the VICReg covariance term.
+    pub vic_correlation: bool,
+    /// Std of the initial `pos_embed` of both encoders (the ViT's own init uses 0.02; the
+    /// trainer rescales it when this differs). Position must reach the mean-pooled latent
+    /// through it, see the module docs.
+    pub pos_embed_std: f64,
+    /// After the JEPA phase, fit a fresh AdaLN for this many epochs on the frozen encoder's
+    /// own train pairs `(f_θ(x_t), a, f_θ(x_{t+1}))` with [`crate::candle::train_adaln_with`]
+    /// (residual normalisation stats from those pairs). It becomes the report's deployed
+    /// predictor; 0 keeps the JEPA `pred_φ`.
+    pub predictor_refit_epochs: usize,
     /// Record [`EpochDiagnostics`] after every epoch (re-encodes the train split twice per
     /// epoch, so off by default).
     pub diagnostics: bool,
@@ -149,8 +185,11 @@ pub struct JepaTrainConfig {
 }
 
 impl Default for JepaTrainConfig {
+    /// The lane J bake-off winner (see the module docs): [`Self::lane_g`] plus batch 32,
+    /// `τ = 0.99`, and the VICReg hinge (weight 1) and correlation decorrelation (weight
+    /// 0.04) on the online latents.
     fn default() -> Self {
-        Self::lane_g()
+        Self { batch_size: 32, ema_tau: 0.99, vic_var_weight: 1.0, vic_cov_weight: 0.04, vic_correlation: true, ..Self::lane_g() }
     }
 }
 
@@ -165,6 +204,7 @@ impl JepaTrainConfig {
             batch_size: 16,
             seed: 0,
             ema_tau: 0.996,
+            prediction_weight: 1.0,
             iso_weight: 1.0,
             offdiag_weight: 0.0,
             slice_weight: 1.0,
@@ -174,6 +214,9 @@ impl JepaTrainConfig {
             multistep_weight: 0.0,
             vic_var_weight: 0.0,
             vic_cov_weight: 0.0,
+            vic_correlation: false,
+            pos_embed_std: VIT_POS_EMBED_STD,
+            predictor_refit_epochs: 0,
             diagnostics: false,
             holdout_days: 1,
             encoder: VitTinyConfig::default(),
@@ -238,12 +281,21 @@ impl JepaTrainer {
         if cfg.batch_size < 2 || cfg.lr <= 0.0 {
             return invalid("jepa training: batch_size must be >= 2 and lr > 0");
         }
-        let weights = [cfg.iso_weight, cfg.offdiag_weight, cfg.slice_weight, cfg.multistep_weight, cfg.vic_var_weight, cfg.vic_cov_weight];
+        let weights = [cfg.prediction_weight, cfg.iso_weight, cfg.offdiag_weight, cfg.slice_weight, cfg.multistep_weight, cfg.vic_var_weight, cfg.vic_cov_weight];
         if !(0.0..=1.0).contains(&cfg.ema_tau) || !(0.0..=1.0).contains(&cfg.ema_tau_start.unwrap_or(cfg.ema_tau)) || weights.iter().any(|w| *w < 0.0) || cfg.slice_projections == 0 {
             return invalid("jepa training: ema_tau must be in [0, 1], weights >= 0");
         }
         let online = VitNet::build(&cfg.encoder, cfg.seed)?;
         let target = VitNet::build(&cfg.encoder, cfg.seed)?;
+        if cfg.pos_embed_std <= 0.0 {
+            return invalid("jepa training: pos_embed_std must be > 0");
+        }
+        if cfg.pos_embed_std != VIT_POS_EMBED_STD {
+            for net in [&online, &target] {
+                let pos = net.pos.affine(cfg.pos_embed_std / VIT_POS_EMBED_STD, 0.0)?;
+                set_var(&net.varmap, "pos_embed", &pos)?;
+            }
+        }
         let pred = AdaLnPredictor::new_random_with(cfg.predictor, cfg.seed ^ 0xADA1_17E5)?
             .net
             .ok_or_else(|| CandleModelError::Invalid("adaln build returned no net".into()))?;
@@ -298,7 +350,7 @@ impl JepaTrainer {
             reg = (reg + (sliced * c.slice_weight)?)?;
         }
         if c.vic_var_weight > 0.0 || c.vic_cov_weight > 0.0 {
-            let (hinge, cov) = vicreg_terms(z)?;
+            let (hinge, cov) = vicreg_terms(z, c.vic_correlation)?;
             reg = ((reg + (hinge * c.vic_var_weight)?)? + (cov * c.vic_cov_weight)?)?;
         }
         Ok(((&reg * c.iso_weight)?, reg))
@@ -319,7 +371,7 @@ impl JepaTrainer {
         let zhat = self.pred.forward(&z, &a)?;
         let pred = (&zhat - target)?.sqr()?.mean_all()?;
         let (reg_w, reg) = self.iso_terms(&z, dirs)?;
-        let mut total = (&pred + reg_w)?;
+        let mut total = ((&pred * self.cfg.prediction_weight)? + reg_w)?;
         let mut pred2 = Tensor::new(0.0f32, &candle_core::Device::Cpu)?;
         let idx: Vec<u32> = (0..batch.len()).filter(|&i| matches!(next.get(i), Some(Some(_)))).map(|i| i as u32).collect();
         if self.cfg.multistep_weight > 0.0 && !idx.is_empty() {

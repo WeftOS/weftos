@@ -36,6 +36,7 @@ fn env_config(holdout_days: usize, n_train: usize) -> JepaTrainConfig {
         _ => JepaTrainConfig::default(),
     };
     let mut c = JepaTrainConfig { seed: 21, holdout_days, diagnostics: std::env::var("LEWM_DIAG").is_ok(), ..base };
+    c.seed = env_f("LEWM_SEED", 21.0) as u64;
     c.batch_size = env_f("LEWM_BATCH", c.batch_size as f64) as usize;
     c.lr = env_f("LEWM_LR", c.lr);
     c.ema_tau = env_f("LEWM_TAU", c.ema_tau);
@@ -43,12 +44,18 @@ fn env_config(holdout_days: usize, n_train: usize) -> JepaTrainConfig {
         c.ema_tau_start = v.parse().ok();
     }
     c.iso_weight = env_f("LEWM_ISO", c.iso_weight);
+    c.prediction_weight = env_f("LEWM_PRED_W", c.prediction_weight);
+    c.pos_embed_std = env_f("LEWM_POS", c.pos_embed_std);
+    c.predictor_refit_epochs = env_f("LEWM_REFIT", c.predictor_refit_epochs as f64) as usize;
     c.slice_weight = env_f("LEWM_SLICE", c.slice_weight);
     c.offdiag_weight = env_f("LEWM_GAMMA", c.offdiag_weight);
     c.slice_projections = env_f("LEWM_K", c.slice_projections as f64) as usize;
     c.multistep_weight = env_f("LEWM_MULTI", c.multistep_weight);
     c.vic_var_weight = env_f("LEWM_VICVAR", c.vic_var_weight);
     c.vic_cov_weight = env_f("LEWM_VICCOV", c.vic_cov_weight);
+    if let Ok(v) = std::env::var("LEWM_VICCORR") {
+        c.vic_correlation = v == "1";
+    }
     c.predictor.hidden_dim = env_f("LEWM_PRED_HIDDEN", c.predictor.hidden_dim as f64) as usize;
     match std::env::var("LEWM_SLICE_TEST").as_deref() {
         Ok("ep") => c.slice_test = SliceTest::EppsPulley,
@@ -72,8 +79,9 @@ pub(crate) fn print_diag(tag: &str, r: &JepaTrainReport) {
     }
     for (name, d) in [("train", &r.train_diagnostics), ("held", &r.held_out_diagnostics)] {
         eprintln!(
-            "[{tag}] final {name}: PR {:.2} eig {:.3?} sess {:.3} day {:.3} pc1 sess {:.3} day {:.3}",
-            d.participation_ratio, d.top_eigenvalues, d.session_fraction, d.day_fraction, d.top_pc_session_fraction, d.top_pc_day_fraction
+            "[{tag}] final {name}: PR {:.2} eig {:.3?} sess {:.3} day {:.3} pc1 sess {:.3} day {:.3} | energy mean {:.3} var {:.3}",
+            d.participation_ratio, d.top_eigenvalues, d.session_fraction, d.day_fraction, d.top_pc_session_fraction, d.top_pc_day_fraction,
+            d.mean_energy, d.var_energy
         );
     }
     for (name, e) in [("theta", &r.eval), ("xi", &r.eval_target)] {
@@ -111,4 +119,26 @@ fn jepa_bakeoff_run() {
         r.held_out_participation_ratio, r.held_out_sigreg_health, r.eval.collapsed_coords.len(), r.eval.beats_baselines, r.eval.vetoes,
         r.eval_target.beats_baselines, r.eval_target.vetoes, wall
     );
+}
+
+/// Release-only regression for the default config on the default ViT-tiny: lane J's winner
+/// must stay out of dimensional collapse on the `std` fixture (288 steps, ~1.5 min release).
+///
+/// ```text
+/// cargo test --release -p weftos-worldmodel-impls --features candle \
+///     default_vit_tiny_does_not_collapse -- --ignored --nocapture
+/// ```
+#[test]
+#[ignore = "release only, ~1.5 min of CPU"]
+fn default_vit_tiny_does_not_collapse() {
+    let (data, holdout) = fixture("std");
+    let base = JepaTrainConfig::default();
+    let n_train = data.iter().filter(|t| t.day < 4).count();
+    let cfg = JepaTrainConfig { seed: 21, holdout_days: holdout, epochs: 288usize.div_ceil(n_train.div_ceil(base.batch_size)), ..base };
+    let r = train_jepa(&data, cfg).unwrap();
+    print_diag("regression", &r);
+    assert!(r.held_out_participation_ratio >= 8.0, "held-out PR {}", r.held_out_participation_ratio);
+    assert!(r.eval.collapsed_coords.is_empty(), "collapsed {:?}", r.eval.collapsed_coords);
+    assert!(r.held_out_sigreg_health >= 0.85, "held-out health {}", r.held_out_sigreg_health);
+    assert!(r.eval.beats_baselines, "model {} vs copy-last {} / linear {}", r.eval.model_err, r.eval.baselines.copy_last, r.eval.baselines.linear);
 }
