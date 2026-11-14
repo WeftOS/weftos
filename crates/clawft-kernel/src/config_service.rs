@@ -963,3 +963,7 @@ mod tests {
         assert!(!src.contains(concat!("xor", "_decrypt")));
     }
 }
+
+#[cfg(test)]
+#[path = "config_service_slot_tests.rs"]
+mod slot_tests;

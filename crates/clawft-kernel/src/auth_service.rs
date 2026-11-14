@@ -1254,3 +1254,7 @@ mod tests {
         assert!(!src.contains(concat!("xor", "_decrypt")));
     }
 }
+
+#[cfg(test)]
+#[path = "auth_service_redaction_tests.rs"]
+mod redaction_tests;
