@@ -39,7 +39,12 @@ pub struct TypeCounts {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EvidenceSummary {
     pub lines: u64,
+    /// The single region. With several (see [`summarize_evidence_regions`]) the
+    /// first, sorted.
     pub region: String,
+    /// Every region seen, sorted.
+    #[serde(default)]
+    pub regions: Vec<String>,
     pub min_t_ns: u64,
     pub max_t_ns: u64,
     pub by_type: BTreeMap<String, TypeCounts>,
@@ -126,9 +131,19 @@ fn check_envelope(v: &Value) -> Result<Envelope<'_>, String> {
 }
 
 /// Validate and summarise an evidence file. Aborts on the first bad line.
+/// More than one region is an error.
 pub fn summarize_evidence_file(path: &Path) -> Result<EvidenceSummary, DatasetError> {
+    summarize_evidence_regions(path, false)
+}
+
+/// Like [`summarize_evidence_file`]; with `allow_multi_region` a file that
+/// spans several regions is summarised instead of refused.
+pub fn summarize_evidence_regions(
+    path: &Path,
+    allow_multi_region: bool,
+) -> Result<EvidenceSummary, DatasetError> {
     let file = File::open(path).map_err(|e| DatasetError::io(path, e))?;
-    summarize_evidence(BufReader::new(file), path)
+    summarize(BufReader::new(file), path, allow_multi_region)
 }
 
 /// Reader form of [`summarize_evidence_file`]; `path` is used in errors only.
@@ -136,14 +151,23 @@ pub fn summarize_evidence_file(path: &Path) -> Result<EvidenceSummary, DatasetEr
 /// `provenance.receipt` seen twice aborts the run (ADR-111 section 1.1: unique
 /// per record) and the error names both line numbers.
 pub fn summarize_evidence<R: BufRead>(
+    reader: R,
+    path: &Path,
+) -> Result<EvidenceSummary, DatasetError> {
+    summarize(reader, path, false)
+}
+
+fn summarize<R: BufRead>(
     mut reader: R,
     path: &Path,
+    allow_multi_region: bool,
 ) -> Result<EvidenceSummary, DatasetError> {
     let mut buf = Vec::new();
     let mut line_no = 0usize;
     let mut sum = EvidenceSummary {
         lines: 0,
         region: String::new(),
+        regions: Vec::new(),
         min_t_ns: u64::MAX,
         max_t_ns: 0,
         by_type: BTreeMap::new(),
@@ -217,10 +241,11 @@ pub fn summarize_evidence<R: BufRead>(
     if sum.lines == 0 {
         return Err(DatasetError::EmptyEvidence(path.to_path_buf()));
     }
-    if regions.len() > 1 {
+    if regions.len() > 1 && !allow_multi_region {
         return Err(DatasetError::MultipleRegions(regions.into_iter().collect()));
     }
-    sum.region = regions.into_iter().next().unwrap_or_default();
+    sum.regions = regions.into_iter().collect();
+    sum.region = sum.regions.first().cloned().unwrap_or_default();
     Ok(sum)
 }
 

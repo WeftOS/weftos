@@ -3,9 +3,10 @@
 
 use crate::checksum::sha256_file;
 use crate::error::DatasetError;
-use crate::evidence::summarize_evidence_file;
+use crate::evidence::summarize_evidence_regions;
 use crate::layout::{SessionLayout, validate_session_id};
 use crate::manifest::{FileEntry, MANIFEST_FILE, Manifest, ManifestInputs};
+use crate::ruview::{check_csi_meta, fallback_protocol, read_csi_meta};
 use crate::senml::summarize_readings_file;
 use crate::store_upload::{StoreTarget, StoreUpload, upload};
 use serde::{Deserialize, Serialize};
@@ -29,6 +30,9 @@ pub struct ArchiveRequest {
     /// Protocol text. Used only when the session has no protocol file.
     pub protocol: Option<String>,
     pub overwrite: bool,
+    /// Record every region in the evidence instead of refusing a session that
+    /// spans more than one.
+    pub allow_multi_region: bool,
     /// Also upload to a store with `weaver store put` after the copy verifies.
     pub store: Option<StoreTarget>,
 }
@@ -43,6 +47,7 @@ impl ArchiveRequest {
             consent: None,
             protocol: None,
             overwrite: false,
+            allow_multi_region: false,
             store: None,
         }
     }
@@ -191,24 +196,34 @@ fn archive_inner(
     let sources: Vec<PathBuf> = std::iter::once(found.evidence.clone())
         .chain(found.csi.iter().cloned())
         .chain(
-            [&found.readings, &found.protocol, &found.consent]
-                .into_iter()
-                .flatten()
-                .cloned(),
+            [
+                &found.csi_meta,
+                &found.readings,
+                &found.protocol,
+                &found.consent,
+            ]
+            .into_iter()
+            .flatten()
+            .cloned(),
         )
         .collect();
     let snapshots = sources
         .iter()
         .map(|p| Snapshot::take(p))
         .collect::<Result<Vec<_>, _>>()?;
-    let evidence = summarize_evidence_file(&found.evidence)?;
+    let evidence = summarize_evidence_regions(&found.evidence, req.allow_multi_region)?;
+    let csi_recording = found.csi_meta.as_deref().map(read_csi_meta).transpose()?;
+    if let Some(meta) = &csi_recording {
+        check_csi_meta(meta, &found.id, &found.csi)?;
+    }
     let readings = found
         .readings
         .as_deref()
         .map(summarize_readings_file)
         .transpose()?;
     let consent = consent_value(found.consent.as_ref(), req.consent.as_ref())?;
-    let protocol = protocol_value(found.protocol.as_ref(), req.protocol.as_ref())?;
+    let protocol = protocol_value(found.protocol.as_ref(), req.protocol.as_ref())?
+        .or_else(|| fallback_protocol(csi_recording.as_ref(), &found.id));
 
     let dest = dataset_dir(&req.dest_root, &found.id);
     if dest.exists() && !req.overwrite {
@@ -220,6 +235,7 @@ fn archive_inner(
         files.push(entry("csi", p)?);
     }
     for (role, p) in [
+        ("csi_meta", &found.csi_meta),
         ("readings", &found.readings),
         ("protocol", &found.protocol),
         ("consent", &found.consent),
@@ -236,6 +252,7 @@ fn archive_inner(
         files,
         evidence,
         readings,
+        csi_recording,
         protocol,
         consent,
         finished: found.finished.is_some(),
@@ -358,7 +375,7 @@ fn recount_problems(dir: &Path, m: &Manifest) -> Vec<String> {
     let Some(path) = file_of("evidence") else {
         return vec!["manifest lists no evidence file".into()];
     };
-    match summarize_evidence_file(&path) {
+    match summarize_evidence_regions(&path, true) {
         Err(e) => problems.push(format!("evidence no longer validates: {e}")),
         Ok(s) => {
             let mut check = |what: &str, same: bool| {
@@ -377,6 +394,12 @@ fn recount_problems(dir: &Path, m: &Manifest) -> Vec<String> {
                 m.evidence.unknown_types == s.unknown_types,
             );
             check("room", m.room == s.region);
+            let listed = if m.regions.is_empty() {
+                vec![m.room.clone()]
+            } else {
+                m.regions.clone()
+            };
+            check("regions", listed == s.regions);
             check(
                 "time_span.evidence",
                 m.time_span.evidence.min_t_ns == s.min_t_ns
@@ -385,6 +408,20 @@ fn recount_problems(dir: &Path, m: &Manifest) -> Vec<String> {
             check("shell_measure", m.shell_measure == s.shell_measures);
             check("node_poses", m.node_poses == s.node_poses);
         }
+    }
+    match (file_of("csi_meta"), &m.csi_recording) {
+        (None, None) => {}
+        (None, Some(_)) => problems.push("manifest has csi_recording but no csi_meta file".into()),
+        (Some(_), None) => {
+            problems.push("manifest lists a csi_meta file but no csi_recording".into())
+        }
+        (Some(p), Some(rec)) => match read_csi_meta(&p) {
+            Err(e) => problems.push(format!("csi_meta no longer parses: {e}")),
+            Ok(actual) if actual != *rec => {
+                problems.push("manifest csi_recording disagrees with the csi_meta file".into())
+            }
+            Ok(_) => {}
+        },
     }
     match (file_of("readings"), &m.readings) {
         (None, None) => {}
@@ -416,67 +453,5 @@ fn recount_problems(dir: &Path, m: &Manifest) -> Vec<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
-
-    fn session() -> (tempfile::TempDir, ArchiveRequest, tempfile::TempDir) {
-        let src = tempfile::tempdir().unwrap();
-        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/session");
-        for e in fs::read_dir(fixtures).unwrap() {
-            let e = e.unwrap();
-            fs::copy(e.path(), src.path().join(e.file_name())).unwrap();
-        }
-        let dest = tempfile::tempdir().unwrap();
-        let mut req = ArchiveRequest::new(src.path(), dest.path());
-        req.consent = Some(serde_json::json!({"given": true}));
-        (src, req, dest)
-    }
-
-    fn csi(src: &Path) -> PathBuf {
-        src.join("demo-session-001.csi.bin")
-    }
-
-    #[test]
-    fn source_growing_between_hash_and_copy_is_refused() {
-        let (src, req, dest) = session();
-        let mut grow = |_: &[PathBuf]| {
-            let mut f = fs::OpenOptions::new()
-                .append(true)
-                .open(csi(src.path()))
-                .unwrap();
-            f.write_all(b"more").unwrap();
-        };
-        match archive_inner(&req, &mut grow) {
-            Err(DatasetError::SourceChanged(p)) => assert_eq!(p, csi(src.path())),
-            other => panic!("expected SourceChanged: {other:?}"),
-        }
-        // Nothing published, no temp directory left.
-        let datasets = dest.path().join("ruview-demo/datasets");
-        assert!(!datasets.join("demo-session-001").exists());
-        assert_eq!(fs::read_dir(datasets).unwrap().count(), 0);
-    }
-
-    #[test]
-    fn mtime_only_change_is_refused() {
-        let (src, req, _dest) = session();
-        let mut touch = |_: &[PathBuf]| {
-            let f = fs::OpenOptions::new()
-                .write(true)
-                .open(csi(src.path()))
-                .unwrap();
-            f.set_modified(SystemTime::now() + std::time::Duration::from_secs(5))
-                .unwrap();
-        };
-        assert!(matches!(
-            archive_inner(&req, &mut touch),
-            Err(DatasetError::SourceChanged(_))
-        ));
-    }
-
-    #[test]
-    fn untouched_sources_pass_the_stability_check() {
-        let (_src, req, _dest) = session();
-        assert!(archive_inner(&req, &mut |_| {}).unwrap().verification.ok);
-    }
-}
+#[path = "archive_tests.rs"]
+mod tests;

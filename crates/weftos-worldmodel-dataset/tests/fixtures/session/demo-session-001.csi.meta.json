@@ -1,0 +1,10 @@
+{
+  "id": "demo-session-001",
+  "name": "demo",
+  "label": null,
+  "started_at": "2025-10-03T14:00:00+00:00",
+  "ended_at": "2025-10-03T14:00:04+00:00",
+  "frame_count": 4,
+  "file_size_bytes": 576,
+  "file_path": "data/recordings/demo-session-001.csi.jsonl"
+}

@@ -45,17 +45,33 @@ approval row in `config/diff-gate-approvals.toml` is added by the owner only.
 
 ## Finished marker and in-progress guard
 
-`SessionLayout` has `finished_marker` (default `{session}.done`, `None` disables it) and `require_finished`
-(default false). The marker is never archived as a CSI file. The manifest records `finished` (marker present).
+`SessionLayout` has `finished_marker` (default `{session}.csi.meta.json`, `None` disables it) and
+`require_finished` (default **true**). RuView writes that sidecar only when a recording stops, so its presence
+means the recording is closed. The marker is never archived as a CSI file. The manifest records `finished`.
 With `require_finished` set and the marker absent, archiving refuses with `NotFinished`; a layout that requires
-the marker but disables it is a `BadLayout` error.
+the marker but disables it is a `BadLayout` error. CLI: `--allow-unfinished` clears `require_finished`.
+A manifest written before the field existed loads as not required.
 
 Independently of the marker, every source file's size and mtime is recorded before validation and hashing and
 checked again after the copy, before the checksum verify. A change means a recorder is still writing, and the
 run is refused with `SourceChanged`.
 
 Archiving refuses when consent is absent (no `consent.json` and no explicit consent), when the evidence spans
-more than one region, and when the destination exists without `--overwrite`.
+more than one region (unless `allow_multi_region` / `--allow-multi-region`, which records every region in the
+manifest's `regions` list; `room` is then the first, sorted), and when the destination exists without
+`--overwrite`.
+
+## RuView recording sidecar
+
+When `<session>.csi.meta.json` exists it is parsed (RuView's `RecordingSession`: `id`, `name`, `label`,
+`started_at`, `ended_at`, `frame_count`, `file_size_bytes`, `file_path`), archived with role `csi_meta` and
+recorded as the manifest's `csi_recording`. The archiver refuses (`CsiMetaMismatch`) when the sidecar `id` is not
+the session id, when the CSI file it describes is missing, or when `file_size_bytes` differs from that file's
+size. `verify` re-parses the archived sidecar and compares it with `csi_recording`.
+
+Protocol, when there is no protocol file and no explicit value: the sidecar `label` (if non-blank), then a class
+keyword found as a whole token in the session id (`empty|absent`, `still|sitting`, `walking|moving`,
+`active|exercise`, recorded as `empty`, `still`, `walking`, `active`), otherwise `null`.
 
 ## Not checked here
 
@@ -85,25 +101,26 @@ archiver's checks:
 
 It prints one summary line per group and fails only on a wrong verdict. Run with `-- --nocapture` to see it.
 
-## RuView side: not confirmed
+## RuView side: names verified 2026-11-14
 
-Owner accepted these defaults on 2026-11-14 (plan section 1b); the open items are the RuView-side confirmations.
+Checked against RuView's sensing-server `recording.rs` and `path_safety.rs` (main as of 2026-10-12) and the
+ADR-384 section 8 draft. Everything stays in `SessionLayout`, so a later RuView change is a config change.
 
-There is no RuView checkout here. The defaults follow the plan's description of RuView's session recording
-(`<data-dir>/recordings/<session>.evidence.jsonl` next to the CSI recording) and everything else is a guess,
-kept in `SessionLayout` so a wrong guess is a config change:
+| Role | Default template | Basis |
+|------|------------------|-------|
+| evidence (required) | `{session}.evidence.jsonl` | ADR-384 section 8; the ingest code is not merged upstream yet |
+| CSI | `{session}.csi.jsonl`, then `{session}.csi*` | exact RuView name, glob as fallback for other recorders |
+| CSI sidecar | `{session}.csi.meta.json` | written at recording stop; also the finished marker |
+| readings | `{session}.readings.jsonl` | WeftOS-side convention. RuView writes no readings file today |
+| protocol | `{session}.protocol.json`, `{session}.protocol.txt`, `protocol.json`, `protocol.txt` | WeftOS-side; falls back to the sidecar label |
+| consent | `{session}.consent.json`, `consent.json` | WeftOS rule; RuView has none. Archiving refuses without it |
 
-| Role | Default template |
-|------|------------------|
-| evidence (required) | `{session}.evidence.jsonl` |
-| readings | `{session}.readings.jsonl` |
-| CSI | `{session}.csi*`, `{session}*.csi.*` (top-level files only; the second pattern also matches a longer session id that shares the prefix) |
-| protocol | `{session}.protocol.json`, `{session}.protocol.txt`, `protocol.json`, `protocol.txt` |
-| consent | `{session}.consent.json`, `consent.json` |
-| finished marker | `{session}.done` (a guess; whether RuView writes one is unconfirmed, so `require_finished` is off by default) |
+Session ids use RuView's charset: 1-128 chars of `[A-Za-z0-9._-]`, no leading dot. A RuView id is
+`<name>-<YYYYmmdd_HHMMSS>`, and the name may contain dots. The old sibling CSI pattern `{session}*.csi.*` is no
+longer a default because it also matched another session's files when one id prefixed another.
 
 `node_poses` is keyed by the pose record's `node_id`, not `source_id`, because one tape measure (one
 `source_id`) places every node. The full records, including `source_id`, are kept verbatim.
 
 Fixtures in `tests/fixtures/session/` are built from `contracts/sensors/vectors` with `t_ns` and receipts varied
-and every proof tag left as the vector has it. The CSI file is 512 bytes of filler, not real CSI.
+and every proof tag left as the vector has it. The CSI fixture is four `RecordedFrame` lines with a matching `.csi.meta.json`; `tests/fixtures/legacy/` keeps an opaque `.csi.bin` for the glob-fallback tests. Neither is real CSI.

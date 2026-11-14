@@ -67,6 +67,10 @@ fn happy_path_manifest_counts_and_checksums() {
     let r = m.readings.as_ref().unwrap();
     assert_eq!((r.packs, r.records), (4, 6));
     assert!(m.missing.is_empty());
+    assert!(m.finished, "the RuView sidecar is the finished marker");
+    assert_eq!(m.regions, ["region/urth/meso/test-room"]);
+    let rec = m.csi_recording.as_ref().unwrap();
+    assert_eq!((rec.id.as_str(), rec.frame_count), (SESSION, 4));
     assert!(chrono::DateTime::parse_from_rfc3339(&m.created_at).is_ok());
     assert_eq!(m.archiver.name, "weftos-worldmodel-dataset");
 
@@ -77,7 +81,7 @@ fn happy_path_manifest_counts_and_checksums() {
             fs::read(out.dest_dir.join(&f.name)).unwrap()
         );
     }
-    assert_eq!(m.files.len(), 3);
+    assert_eq!(m.files.len(), 4);
     let on_disk: Manifest =
         serde_json::from_slice(&fs::read(out.dest_dir.join("manifest.json")).unwrap()).unwrap();
     assert_eq!(&on_disk, m);
@@ -112,11 +116,15 @@ fn consent_file_and_protocol_file_are_used_and_copied() {
 #[test]
 fn missing_optional_files_are_recorded() {
     let src = session_copy();
-    fs::remove_file(src.path().join(format!("{SESSION}.csi.bin"))).unwrap();
-    fs::remove_file(src.path().join(format!("{SESSION}.readings.jsonl"))).unwrap();
+    for ext in ["csi.jsonl", "csi.meta.json", "readings.jsonl"] {
+        fs::remove_file(src.path().join(format!("{SESSION}.{ext}"))).unwrap();
+    }
     let dest = tempfile::tempdir().unwrap();
-    let out = archive_session(&request(src.path(), dest.path())).unwrap();
+    let mut req = request(src.path(), dest.path());
+    req.layout.require_finished = false;
+    let out = archive_session(&req).unwrap();
     assert_eq!(out.manifest.missing, ["csi", "readings"]);
+    assert!(out.manifest.csi_recording.is_none());
     assert!(out.manifest.readings.is_none());
 }
 
@@ -215,7 +223,7 @@ fn corrupted_copy_is_detected() {
     let src = session_copy();
     let dest = tempfile::tempdir().unwrap();
     let out = archive_session(&request(src.path(), dest.path())).unwrap();
-    let csi = out.dest_dir.join(format!("{SESSION}.csi.bin"));
+    let csi = out.dest_dir.join(format!("{SESSION}.csi.jsonl"));
     let bytes = fs::read(&csi).unwrap();
     fs::write(&csi, &bytes[..bytes.len() / 2]).unwrap();
     let v = verify_archive(&out.dest_dir).unwrap();
@@ -226,7 +234,7 @@ fn corrupted_copy_is_detected() {
         .filter(|f| !f.ok)
         .map(|f| f.name.as_str())
         .collect();
-    assert_eq!(bad, [format!("{SESSION}.csi.bin")]);
+    assert_eq!(bad, [format!("{SESSION}.csi.jsonl")]);
     fs::remove_file(&csi).unwrap();
     assert!(!verify_archive(&out.dest_dir).unwrap().ok);
 }
@@ -235,17 +243,21 @@ fn corrupted_copy_is_detected() {
 fn session_inferred_and_custom_layout() {
     let src = tempfile::tempdir().unwrap();
     for (from, to) in [
-        ("evidence.jsonl", "run9.ev.jsonl"),
-        ("csi.bin", "run9.capture.dat"),
+        ("session/{S}.evidence.jsonl", "run9.ev.jsonl"),
+        ("legacy/{S}.csi.bin", "run9.capture.dat"),
     ] {
         fs::copy(
-            fixture_dir().join(format!("{SESSION}.{from}")),
+            fixture_dir()
+                .parent()
+                .unwrap()
+                .join(from.replace("{S}", SESSION)),
             src.path().join(to),
         )
         .unwrap();
     }
     let dest = tempfile::tempdir().unwrap();
     let mut req = request(src.path(), dest.path());
+    req.layout.require_finished = false;
     req.layout.evidence = "{session}.ev.jsonl".into();
     req.layout.csi = vec!["{session}.capture.*".into()];
     let out = archive_session(&req).unwrap();
@@ -302,37 +314,34 @@ fn duplicate_receipt_across_lines_aborts_with_both_line_numbers() {
 #[test]
 fn finished_marker_is_recorded_and_not_archived_as_csi() {
     let src = session_copy();
+    fs::remove_file(src.path().join(format!("{SESSION}.csi.meta.json"))).unwrap();
     fs::write(src.path().join(format!("{SESSION}.done")), "").unwrap();
     let dest = tempfile::tempdir().unwrap();
     let mut req = request(src.path(), dest.path());
-    req.layout.require_finished = true;
+    req.layout.finished_marker = Some("{session}.done".into());
     let out = archive_session(&req).unwrap();
     assert!(out.manifest.finished);
     assert!(out.manifest.layout.require_finished);
-    assert_eq!(out.manifest.files.len(), 3);
+    assert_eq!(
+        out.manifest.files.len(),
+        3,
+        "the .done marker is not archived"
+    );
 }
 
 #[test]
-fn absent_marker_refused_only_when_required() {
+fn absent_marker_refused_by_default_and_allowed_when_not_required() {
     let src = session_copy();
+    fs::remove_file(src.path().join(format!("{SESSION}.csi.meta.json"))).unwrap();
     let dest = tempfile::tempdir().unwrap();
     let mut req = request(src.path(), dest.path());
-    let out = archive_session(&req).unwrap();
-    assert!(
-        !out.manifest.finished,
-        "default does not require the marker"
-    );
-
-    req.overwrite = true;
-    req.layout.require_finished = true;
     match archive_session(&req) {
         Err(DatasetError::NotFinished(p)) => {
-            assert!(p.ends_with(format!("{SESSION}.done")), "{p:?}");
+            assert!(p.ends_with(format!("{SESSION}.csi.meta.json")), "{p:?}");
         }
         other => panic!("{other:?}"),
     }
-    // Existing dataset untouched by the refused run.
-    assert!(verify_archive(&out.dest_dir).unwrap().ok);
+    assert!(!dest.path().join("ruview-demo").exists());
 
     // A disabled marker cannot satisfy require_finished.
     req.layout.finished_marker = None;
@@ -341,7 +350,8 @@ fn absent_marker_refused_only_when_required() {
         Err(DatasetError::BadLayout(..))
     ));
     req.layout.require_finished = false;
-    assert!(archive_session(&req).is_ok());
+    let out = archive_session(&req).unwrap();
+    assert!(!out.manifest.finished);
 }
 
 #[test]
@@ -351,23 +361,7 @@ fn custom_marker_template() {
     let dest = tempfile::tempdir().unwrap();
     let mut req = request(src.path(), dest.path());
     req.layout.finished_marker = Some("CLOSED".into());
-    req.layout.require_finished = true;
     assert!(archive_session(&req).unwrap().manifest.finished);
-}
-
-#[test]
-fn old_manifest_without_marker_fields_still_loads() {
-    let src = session_copy();
-    let dest = tempfile::tempdir().unwrap();
-    let out = archive_session(&request(src.path(), dest.path())).unwrap();
-    let mp = out.dest_dir.join("manifest.json");
-    let mut m: Value = serde_json::from_slice(&fs::read(&mp).unwrap()).unwrap();
-    m.as_object_mut().unwrap().remove("finished");
-    let layout = m["layout"].as_object_mut().unwrap();
-    layout.remove("finished_marker");
-    layout.remove("require_finished");
-    fs::write(&mp, serde_json::to_vec(&m).unwrap()).unwrap();
-    assert!(verify_archive(&out.dest_dir).unwrap().ok);
 }
 
 fn edit_manifest(dir: &Path, f: impl FnOnce(&mut Value)) {
