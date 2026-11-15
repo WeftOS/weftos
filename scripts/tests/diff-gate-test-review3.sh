@@ -116,6 +116,14 @@ KNOWN_GAP=R3-B1 EXPECT="sensitive-crate" case_run "r3-b: a mod declaration split
 KNOWN_GAP=R3-B1 EXPECT="sensitive-crate" case_run "r3-b: deleting #[cfg(test)] above a split mod declaration" 1 \
     "$KB"'; printf "#[cfg(test)]\npub(crate) mod\n    supervise_tests;\n" >>crates/k/src/lib.rs' \
     'grep -v "^#\[cfg(test)\]\$" crates/k/src/lib.rs >l.tmp && mv l.tmp crates/k/src/lib.rs; '"$EVIL_T"
+# The name compared is the literal text, so an escape in the string hides it (rustc and Cargo
+# both decode it: "\x2E" and "\u002E" are ".").
+KNOWN_GAP=R3-B1 EXPECT="sensitive-crate" case_run "r3-b: a #[path] with an escaped dot is a reference" 1 \
+    "$KB"'; printf "#[path = \"supervise_tests\\\\x2Ers\"]\nmod helpers;\n" >>crates/k/src/lib.rs' "$EVIL_T"
+KNOWN_GAP=R3-B1 EXPECT="sensitive-crate" case_run "r3-b: a Cargo [[bin]] path with an escaped dot names the exempt file" 1 \
+    "$KB"'; printf "[package]\nname = \"k\"\n\n[[bin]]\nname = \"x\"\npath = \"src/supervise_tests\\\\u002Ers\"\n" >crates/k/Cargo.toml' "$EVIL_T"
+EXPECT="sensitive-crate" case_run "r3-b: control, a raw-string #[path] is a reference" 1 \
+    "$KB"'; printf "#[path = r\"supervise_tests.rs\"]\nmod helpers;\n" >>crates/k/src/lib.rs' "$EVIL_T"
 KNOWN_GAP=R3-B2 EXPECT="sensitive-crate" case_run "r3-b: a declaring file with a NUL byte (git grep -I skips it)" 1 \
     "$KB"'; printf "// \000\n#[path = \"supervise_tests.rs\"]\nmod helpers;\n" >>crates/k/src/lib.rs' "$EVIL_T"
 EXPECT="sensitive-crate" case_run "r3-b: control, the same declaration without the NUL byte" 1 \
@@ -231,11 +239,13 @@ EXPECT="ffi" case_run "r3-f: export_name inside cfg_attr" 1 : 'echo "#[cfg_attr(
 EXPECT="include" case_run "r3-f: include! of a computed path" 1 : 'echo "include!(concat!(env!(\"OUT_DIR\"), \"/x.rs\"));" >>src/lib.rs'
 export DOC_CONCAT='#[doc = concat!("```\n", "std::process::Command::new(\"sh\").status().unwrap();", "\n```")]
 pub fn d() {}'
-export DOC_CFG_ALL='#[cfg_attr(all(), doc = "```
-std::process::Command::new(\"sh\").status().unwrap();
-```")]
+# One line each, as rustfmt leaves them: the per-line lex sees only a string. (Written over
+# several lines, the code line is lexed on its own and the line lexer flags it; see below.)
+export DOC_CFG_ALL='#[cfg_attr(all(), doc = "```\nstd::process::Command::new(\"sh\").status().unwrap();\n```")]
 pub fn d() {}'
-export DOC_CFG_DOC='#[cfg_attr(doc, doc = "```
+export DOC_CFG_DOC='#[cfg_attr(doc, doc = "```\nstd::process::Command::new(\"sh\").status().unwrap();\n```")]
+pub fn d() {}'
+export DOC_CFG_ML='#[cfg_attr(all(), doc = "```
 std::process::Command::new(\"sh\").status().unwrap();
 ```")]
 pub fn d() {}'
@@ -250,6 +260,7 @@ if [ "$REAL_TOKENS" = 1 ]; then
     KNOWN_GAP=R3-F1 EXPECT="process" case_run "r3-f(real): doctest built with #[doc = concat!(...)]" 1 : 'printf "%s\n" "$DOC_CONCAT" >>src/lib.rs'
     KNOWN_GAP=R3-F1 EXPECT="process" case_run "r3-f(real): doctest in #[cfg_attr(all(), doc = \"...\")]" 1 : 'printf "%s\n" "$DOC_CFG_ALL" >>src/lib.rs'
     KNOWN_GAP=R3-F1 EXPECT="process" case_run "r3-f(real): doctest in #[cfg_attr(doc, doc = \"...\")]" 1 : 'printf "%s\n" "$DOC_CFG_DOC" >>src/lib.rs'
+    EXPECT="process" case_run "r3-f(real): control, a cfg_attr doc string over several lines (per-line lex)" 1 : 'printf "%s\n" "$DOC_CFG_ML" >>src/lib.rs'
     EXPECT="process" case_run "r3-f(real): doctest in a raw-string doc attribute" 1 : 'printf "%s\n" "$DOC_RAW" >>src/lib.rs'
     EXPECT="process" case_run "r3-f(real): an existing async_std alias, a new call" 1 \
         'printf "use async_std::process::Command as C;\nfn g() {}\n" >src/a.rs' 'printf "use async_std::process::Command as C;\nfn g() {}\nfn f() { C::new(\"sh\"); }\n" >src/a.rs'
