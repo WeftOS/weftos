@@ -708,5 +708,10 @@ fi
 # shellcheck source=scripts/tests/diff-gate-test-rv-fixes.sh
 . "$ROOT/scripts/tests/diff-gate-test-rv-fixes.sh"
 
+# 14. Review round 3 (2026-11-15): the Cargo reader, test-exemption references, trust inputs,
+# rows, robustness and Rust spellings. KNOWN_GAP cases: reports/review-diff-gate-combined-r3-20261115.md.
+# shellcheck source=scripts/tests/diff-gate-test-review3.sh
+. "$ROOT/scripts/tests/diff-gate-test-review3.sh"
+
 echo "diff-gate fixtures: $pass passed, $fail failed, $gaps known gaps"
 [ "$fail" -eq 0 ]
