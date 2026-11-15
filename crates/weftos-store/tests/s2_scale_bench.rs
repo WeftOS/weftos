@@ -159,9 +159,17 @@ fn scale_bench() {
             r
         });
         assert_eq!(rep.uploaded, n, "every file uploaded (skips: {:?})", &rep.skipped[..rep.skipped.len().min(3)]);
-        write_registry_entry(&be, &pb, &summarize(&be, &slug, &wb).unwrap().unwrap()).unwrap();
         let man = be.inner.get(&wb, MANIFEST_KEY).unwrap().unwrap();
         println!("BENCH|{n}|manifest|bytes={}|per_file={}", man.len(), man.len() / n);
+        if n > Limits::default().max_files {
+            // Every reader (and the next publish, which reads the previous manifest) refuses a manifest over the default file cap.
+            let r = read_manifest(&be, &wb);
+            println!("FINDING|scale|{n} files: read_manifest of the tree just published with raised limits answers: {} (parse_manifest hard-codes Limits::default().max_files = 20000 for every reader, and publish_tree reads the previous manifest, so a published tree over 20000 files can be neither read nor republished)", r.as_ref().map(|_| "ok".to_string()).unwrap_or_else(|e| e.to_string()));
+            assert!(r.is_err(), "expected the 20000-file reader cap to refuse this manifest");
+            measure(&be, n, "list_tree_prefix", |v: &usize| format!("objects={v} pages_of_1000={}", v.div_ceil(1000)), || ObjectBackend::list(&be, &wb, TREE_PREFIX).unwrap().len());
+            continue;
+        }
+        write_registry_entry(&be, &pb, &summarize(&be, &slug, &wb).unwrap().unwrap()).unwrap();
         // three repetitions each: the first numbers after a long upload are disturbed by the server's I/O backlog
         for rep in 1..=3u64 {
             measure(&be, n, &format!("publish_nochange#{rep}"), |r: &PublishReport| format!("uploaded={} unchanged={}", r.uploaded, r.unchanged), || publish(&paths, "head-1", 2_000 + rep));

@@ -5,8 +5,13 @@
 rustfs_start() { # sets RPORT RPID; writes $WORK/live.env (0600)
     local access secret code up=""
     RPORT=$(free_port); access="drl$(rand_hex 6)"; secret=$(rand_hex 20)
-    mkdir -p "$WORK/rfs-data"
-    env RUSTFS_ACCESS_KEY="$access" RUSTFS_SECRET_KEY="$secret" "$RUSTFS_BIN" server --address "127.0.0.1:$RPORT" "$WORK/rfs-data" >"$WORK/rustfs.log" 2>&1 &
+    # WEFTOS_DRILLS_DATA_DIR puts the server's data under another directory (a throwaway subdirectory is made there and removed on
+    # exit). On the build machine the external volume costs ~70 ms per create+fsync against ~0.1 ms on the internal disk, which
+    # dominates every PUT; the latency numbers say which disk they ran on.
+    DRILL_DATA="$WORK/rfs-data"
+    if [ -n "${WEFTOS_DRILLS_DATA_DIR:-}" ]; then mkdir -p "$WEFTOS_DRILLS_DATA_DIR"; DRILL_DATA="$(mktemp -d "$WEFTOS_DRILLS_DATA_DIR/wo069-drills-data.XXXXXX")"; DRILL_DATA_EXTERNAL_TO_WORK=1; fi
+    mkdir -p "$DRILL_DATA"
+    env RUSTFS_ACCESS_KEY="$access" RUSTFS_SECRET_KEY="$secret" "$RUSTFS_BIN" server --address "127.0.0.1:$RPORT" "$DRILL_DATA" >"$WORK/rustfs.log" 2>&1 &
     RPID=$!
     for _ in $(seq 1 360); do
         code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$RPORT/" || true)
@@ -17,6 +22,12 @@ rustfs_start() { # sets RPORT RPID; writes $WORK/live.env (0600)
     [ -n "$up" ] || return 1
     sleep 2
     ( umask 077; printf 'MESH_S3_ENDPOINT=http://127.0.0.1:%s\nMESH_S3_ACCESS_KEY=%s\nMESH_S3_SECRET_KEY=%s\n' "$RPORT" "$access" "$secret" >"$WORK/live.env" )
+}
+
+# teardown of the e2e lib, plus the data directory when it lives outside $WORK
+cleanup_all() {
+    teardown
+    [ -z "${DRILL_DATA_EXTERNAL_TO_WORK:-}" ] || { rm -rf "$DRILL_DATA"; echo "teardown: $DRILL_DATA removed"; }
 }
 
 use_external_rustfs() { # <env file>: a THROWAWAY RustFS on another host; never PG
@@ -128,13 +139,14 @@ cargo_live() { # <label> <test target> <extra env...>
 
 lib_drills() {
     echo "== library drills on the real RustFS (1a, 2l, 3a, 3b, 3c)"
-    cargo_live drills-1a-2l s2_drills_live "WEFTOS_STORE_TEST_RUSTFS_ENV=$WORK/live.env"
+    local bundle=""; [ -f "$WORK/fetch-f/.wt-branch.bundle" ] && bundle="WEFTOS_DRILL_BUNDLE=$WORK/fetch-f/.wt-branch.bundle"   # a real git bundle from d1, when d1 ran in this run
+    cargo_live drills-1a-2l s2_drills_live "WEFTOS_STORE_TEST_RUSTFS_ENV=$WORK/live.env" ${bundle:+"$bundle"}
     cargo_live drills-3 s2_drills_fail "WEFTOS_STORE_TEST_RUSTFS_ENV=$WORK/live.env"
 }
 
 scale_drills() {
     local sizes=1000,10000
-    [ -z "$SCALE" ] || sizes=1000,10000,50000
+    [ -z "$SCALE" ] || sizes=1000,10000,20000,50000
     sizes=${WEFTOS_SCALE_SIZES:-$sizes}   # override, e.g. WEFTOS_SCALE_SIZES=300 for a smoke run
     echo "== D4: client-scale trees, sizes $sizes (release build: $([ -n "$REL" ] && echo yes || echo NO, pass --release for latency numbers))"
     mkdir -p "$WORK/scale-tmp"
@@ -238,20 +250,20 @@ drill3() {
     new_wt k feat/k "Drill Kill"
     check "baseline publish" "as writer '$S' sweep --only $SK >'$WORK/last.out' 2>&1 && grep -q '^$SK	published' '$WORK/last.out'"
     if ! grep -q -- '--full' "$S"; then finding "D3-2 \`worktree-store.sh follow\` does not take --full (it passes only --state); the verb \`store worktree follow --full\` exists and the ADR documents \`follow --full\` as the way to skip a stale digest, so the documented command does not exist in the shell. Non-blocking; the drill calls the verb directly"; fi
-    for d in 1.0 3.5 7.0; do
-        # 200 files of ~21 kB: a publish of ~10 s on a loaded machine with the debug daemon, so the kill lands inside the upload loop or the refresh
+    for d in 0.8 2.5 4.5; do
+        # 200 files of ~21 kB: a publish of ~6 s with the data on the internal disk (~55 s on the external volume), so the kills land early, mid and late, so the kill lands inside the upload loop or the refresh
         mkdir -p "$WK/gen$d"; for i in $(seq 1 200); do head -c 16000 /dev/urandom | base64 >"$WK/gen$d/f$i.txt"; done
         local t0; t0=$(now_ms)
         ( as writer "$S" sweep --only $SK >"$WORK/kill-$d.out" 2>&1 ) & local sp=$!
         sleep "$d"
         local kids; kids=$(descendants "$DPID"); kill -9 "$DPID" 2>/dev/null; for i in $kids; do kill -9 "$i" 2>/dev/null; done
         wait "$sp" 2>/dev/null
-        printf 'D3\tdaemon killed %ss into a publish; sweep said: %s (%s ms after start)\n' "$d" "$(tr '\t\n' '  ' <"$WORK/kill-$d.out" | cut -c1-140)" "$(( $(now_ms) - t0 ))" | tee -a "$WORK/steps.tsv"
+        printf 'D3\tdaemon killed %ss into a publish [%s]; sweep said: %s (%s ms after start)\n' "$d" "$(grep -q 'failed\|Error' "$WORK/kill-$d.out" && echo 'KILLED MID-PUBLISH' || echo 'publish had already finished')" "$(tr '\t\n' '  ' <"$WORK/kill-$d.out" | cut -c1-110)" "$(( $(now_ms) - t0 ))" | tee -a "$WORK/steps.tsv"
         timed "daemon restart" "rm -f '$WORK/run'/*.sock 2>/dev/null; daemon_start"
         check "after restart: digest follower and --full follower agree on the registry" "as follower '$S' follow --state '$WORK/fs-digest-$d.json' >'$WORK/f1.out' 2>&1; as follower '$WEAVER' store worktree follow --project '$PROJECT' --state '$WORK/fs-full-$d.json' --full --json >'$WORK/f2.json' 2>&1; jq -r '.changes[] | \"\\(.change) \\(.worktree.slug)\"' '$WORK/f2.json' | sort >'$WORK/f2.out'; sed -E 's/^([a-z_]+) +([^ ]+) .*/\\1 \\2/' '$WORK/f1.out' | sort >'$WORK/f1n.out'; diff '$WORK/f1n.out' '$WORK/f2.out'"
         check "after restart: the registry entry is readable and names the old or the new file count" "as follower '$S' browse --json | jq -e '.worktrees[] | select(.slug==\"$SK\") | .file_count >= 2'"
         timed "rerun sweep completes the publish" "as writer '$S' sweep --only $SK"
-        check "rerun published; follower sees all files (browse root lists gen$d)" "grep -q '^$SK	published' '$WORK/last.out' && as follower '$S' browse $SK gen$d/ --json | jq -e '.entries | length >= 1'"
+        check "rerun left the worktree published (published, or unchanged when the kill came after the publish finished); follower sees all files (browse root lists gen$d)" "grep -qE '^$SK	(published|unchanged)' '$WORK/last.out' && as follower '$S' browse $SK gen$d/ --json | jq -e '.entries | length >= 1'"
         check "no checksum mismatch anywhere: fetch of the whole tree into a fresh dir has every file" "rm -rf '$WORK/fk-$d'; as follower '$S' fetch $SK '$WORK/fk-$d' >'$WORK/fk-$d.out' 2>&1; grep -qi 'checksum' '$WORK/fk-$d.out' && exit 1; [ \"\$(ls '$WORK/fk-$d'/gen$d | wc -l | tr -d ' ')\" = 200 ]"
         if grep -q 'published without a git bundle' "$WORK/fk-$d.out"; then finding "D1-3 \`worktree-store.sh fetch\` of a worktree with no commits past its base (uncommitted-only edits, so no bundle) writes the whole tree and then exits 1 ('this tree was published without a git bundle'), because the shell always passes --bundle-out and the verb treats a missing bundle as fatal. Expected: tree written, exit 0 with a note. Non-blocking; fix in the verb (return bundle_head null) or the shell (skip --bundle-out when the manifest has none)"; fi
     done

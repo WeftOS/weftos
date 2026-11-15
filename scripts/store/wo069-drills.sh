@@ -8,9 +8,10 @@
 #   d2     leftover drill and handoff drill (gate item 4)
 #   d3     daemon killed during a publish / registry refresh, restarted (gate item 5c)
 #   lib    the library drills on the real RustFS: 1a (two real S3 identities), 2l, 3a, 3b, 3c (s2_drills_live.rs)
-#   scale  drill 4, synthetic client-scale trees (s2_scale_bench.rs): 1k and 10k files; --scale adds 50k
+#   scale  drill 4, synthetic client-scale trees (s2_scale_bench.rs): 1k and 10k files; --scale adds 20k and 50k
 #
-# The default run is d1,d2,d3,lib (a few minutes). --scale is slower (the 50k tree writes about 600 MB) and is never in the default.
+# The default run is d1,d2,d3,lib (a few minutes). --scale is slower (the 50k tree writes about 1.5 GB and takes ~17 min to publish even on an internal disk) and is never in the default.
+# WEFTOS_DRILLS_DATA_DIR=<dir on the internal disk> keeps the throwaway server's data there (a subdirectory, removed on exit) instead of under target/.
 # --release builds the library tests in release mode (use it for the latency numbers; the weaver stays the debug build).
 #
 # Two machines (drill 1 with the RustFS on another host): do NOT pass a rustfs binary. Put the THROWAWAY server's endpoint and a
@@ -48,7 +49,7 @@ WORK="$(mktemp -d "$REPO/target/wo069-drills.XXXXXX")"
 . "$REPO/scripts/store/wo069-e2e-lib.sh"
 # shellcheck source=wo069-drills-lib.sh
 . "$REPO/scripts/store/wo069-drills-lib.sh"
-trap teardown EXIT INT TERM
+trap cleanup_all EXIT INT TERM
 S="$REPO/scripts/worktree-store.sh"
 ULID_CHARS=0123456789ABCDEFGHJKMNPQRSTVWXYZ
 PROJECT="01$(python3 -c "import random; print(''.join(random.choice('$ULID_CHARS') for _ in range(24)))")"
@@ -57,7 +58,7 @@ export GIT_CONFIG_GLOBAL="$WORK/gitconfig" GIT_CONFIG_NOSYSTEM=1
 G() { git -C "$1" "${@:2}"; }
 jqs() { jq -r "$1" "$WORK/last.out"; }
 : >"$WORK/findings.txt"
-finding() { printf 'FINDING\t%s\n' "$*" | tee -a "$WORK/findings.txt"; }
+finding() { grep -q "^FINDING	${1%% *} " "$WORK/findings.txt" && return 0; printf 'FINDING\t%s\n' "$*" | tee -a "$WORK/findings.txt"; }   # once per finding id
 
 echo "== host: $(sysctl -n machdep.cpu.brand_string 2>/dev/null || uname -m), $(( $(sysctl -n hw.memsize 2>/dev/null || echo 0) / 1073741824 )) GiB, load $(uptime | sed 's/.*averages*: //'), work dir $WORK on $(df -h "$WORK" | awk 'NR==2{print $1}')"
 if [ -n "$EXT_ENV" ]; then
@@ -70,6 +71,7 @@ else
         exit 1
     fi
 fi
+echo "== rustfs data dir: ${DRILL_DATA:-on the external host}"
 export WEFTOS_STORE_TEST_RUSTFS_ENV="$WORK/live.env"
 
 if want d1 || want d2 || want d3; then
