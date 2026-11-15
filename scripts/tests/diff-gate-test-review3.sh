@@ -209,9 +209,7 @@ EXPECT="unsafe" case_run "r3-e: a 200 KB line with unsafe at its end" 1 : \
     '{ printf "fn f() { "; yes "g();" | head -40000 | tr -d "\n"; printf " unsafe { g() } }\n"; } >src/long.rs'
 EXPECT="unsafe" case_run "r3-e: unsafe after a 100 KB string on the same line" 1 : \
     '{ printf "fn f() { let _s = \""; yes a | head -100000 | tr -d "\n"; printf "\"; unsafe { g() } }\n"; } >src/longs.rs'
-# No EXPECT: the 100 KB report line is longer than a pipe buffer, and check_result's
-# `echo | grep -q` then fails on SIGPIPE under pipefail. The only change is the new entry.
-case_run "r3-e: a 100 KB inline table with git at its end" 1 : \
+EXPECT="new-dep" case_run "r3-e: a 100 KB inline table with git at its end" 1 : \
     '{ printf "evil = { features = ["; yes "\"f\"," | head -20000 | tr -d "\n"; printf "], git = \"https://evil\" }\n"; } >>Cargo.toml'
 EXPECT="unsafe" case_run "r3-e: invalid UTF-8 in a comment does not hide the next line" 1 : \
     'printf "// \377\376\nfn f() { unsafe { g() } }\n" >>src/lib.rs'

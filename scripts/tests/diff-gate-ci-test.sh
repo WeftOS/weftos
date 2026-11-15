@@ -37,9 +37,9 @@ UNSAFE='fn f() { unsafe { g() } }'
 check_result() { # NAME WANT RC OUT; EXPECT="rules" must be FAIL findings, GREP="text" must appear
     local name="$1" want="$2" rc="$3" out="$4" r missing=""
     for r in ${EXPECT:-}; do
-        echo "$out" | grep -Eq "^  FAIL +$r +" || missing="$missing $r"
+        grep -Eq "^  FAIL +$r +" <<<"$out" || missing="$missing $r"
     done
-    if [ -n "${GREP:-}" ] && ! echo "$out" | grep -qF -- "$GREP"; then missing="$missing text:'$GREP'"; fi
+    if [ -n "${GREP:-}" ] && ! grep -qF -- "$GREP" <<<"$out"; then missing="$missing text:'$GREP'"; fi
     if [ "$rc" = "$want" ] && [ -z "$missing" ]; then pass=$((pass + 1)); printf '  ok    %s\n' "$name"
     else fail=$((fail + 1)); printf '  FAIL  %s (exit %s, wanted %s; missing:%s)\n%s\n' "$name" "$rc" "$want" "${missing:- none}" "$out" | sed 's/^/        /'; fi
 }

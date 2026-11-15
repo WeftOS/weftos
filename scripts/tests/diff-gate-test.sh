@@ -54,9 +54,9 @@ case_run() {
 check_result() {
     local name="$1" want="$2" rc="$3" out="$4" r missing=""
     for r in ${EXPECT:-}; do
-        echo "$out" | grep -Eq "^  FAIL +$r +" || missing="$missing $r"
+        grep -Eq "^  FAIL +$r +" <<<"$out" || missing="$missing $r"
     done
-    if [ -n "${GREP:-}" ] && ! echo "$out" | grep -qF -- "$GREP"; then missing="$missing text:'$GREP'"; fi
+    if [ -n "${GREP:-}" ] && ! grep -qF -- "$GREP" <<<"$out"; then missing="$missing text:'$GREP'"; fi
     # KNOWN_GAP=<id>: the case states what the spec requires and the gate does not do yet. It is
     # reported as KNOWN-GAP (counted, not a failure); once the gate meets the spec it fails as
     # "fixed", so the marker gets removed. DIFF_GATE_TEST_STRICT_GAPS=1 makes gaps fail too.
