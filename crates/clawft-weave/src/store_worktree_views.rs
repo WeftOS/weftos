@@ -45,6 +45,7 @@ pub(super) fn why_str(w: Why) -> &'static str {
         Why::UnclaimedHandoff => "unclaimed_handoff",
         Why::AbandonedClaim => "abandoned_claim",
         Why::StuckCleanup => "stuck_cleanup",
+        Why::Orphan => "orphan",
         Why::FutureTimestamp => "future_timestamp",
     }
 }

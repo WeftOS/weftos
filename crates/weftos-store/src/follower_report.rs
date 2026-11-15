@@ -35,6 +35,8 @@ pub enum Why {
     AbandonedClaim,
     /// Merged or archived but never removed from the registry.
     StuckCleanup,
+    /// Marked orphan by the daemon (its local path went missing); `idle_ms` is the orphan age.
+    Orphan,
     /// `updated_ms` is in the future: the writer's clock is ahead, so idle time is unknown.
     FutureTimestamp,
 }
@@ -61,6 +63,11 @@ pub fn leftovers(entries: &[RegistryEntry], now_ms: u64, p: &LeftoverPolicy) -> 
                     idle_ms: 0,
                     why: Why::FutureTimestamp,
                 });
+            }
+            if e.state == State::Orphan {
+                // an orphan stays visible until gc retires it; its age counts from when it was marked
+                let since = e.orphan.as_ref().map_or(e.updated_ms, |o| o.orphaned_at_ms);
+                return Some(Leftover { entry: e.clone(), idle_ms: now_ms.saturating_sub(since), why: Why::Orphan });
             }
             let why = match e.state {
                 State::Merged | State::Archived if idle >= p.unclaimed_ms => Why::StuckCleanup,

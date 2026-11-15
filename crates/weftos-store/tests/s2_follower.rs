@@ -527,6 +527,19 @@ fn leftovers_report_future_timestamps_and_stuck_cleanup() {
 }
 
 #[test]
+fn leftovers_keep_an_orphan_visible_with_its_orphan_age() {
+    let day = 24 * 3600 * 1000u64;
+    let b = MemBackend::new();
+    let now = 10 * day;
+    let mut orphan = publish(&b, "gone", "h", &[("docs/a.md", "#\n")], 8 * day);
+    orphan.state = State::Orphan;
+    orphan.orphan = Some(weftos_store::orphan::OrphanInfo { orphaned_at_ms: 4 * day, last_head: "h".into(), missing_since_ms: 3 * day });
+    let l = leftovers(&[orphan], now, &LeftoverPolicy::default());
+    assert_eq!(l.len(), 1, "{l:?}");
+    assert_eq!((l[0].why, l[0].idle_ms), (Why::Orphan, 6 * day), "age counts from when it was marked");
+}
+
+#[test]
 fn different_bases_mark_overlaps_as_unreliable() {
     let b = MemBackend::new();
     let a = publish(&b, "a", "h", &[("x.txt", "1")], 1);
