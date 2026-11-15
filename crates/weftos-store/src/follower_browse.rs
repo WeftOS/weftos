@@ -118,7 +118,7 @@ fn actor(a: &crate::share::Actor) -> String {
     format!("{}@{}", a.agent, a.host)
 }
 
-fn summary(e: &RegistryEntry) -> RegistrySummary {
+pub(crate) fn summary(e: &RegistryEntry) -> RegistrySummary {
     RegistrySummary {
         slug: e.slug.clone(),
         branch: e.branch.clone(),
@@ -139,7 +139,7 @@ pub fn browse_registry<B: ObjectBackend>(b: &B, project_bucket: &str) -> Result<
     Ok(RegistryBrowse { worktrees: entries.iter().map(summary).collect(), unreadable: bad })
 }
 
-fn slug_ok(s: &str) -> bool {
+pub(crate) fn slug_ok(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 48
         && s.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
@@ -166,7 +166,7 @@ fn open<B: ObjectBackend>(
 
 /// A path under the tree root, validated as a fetch validates one. `""` is the root when
 /// `allow_root` (folders), which also accepts a trailing `/`; a file path may not end in one.
-fn clean_path(raw: &str, allow_root: bool) -> Result<String> {
+pub(crate) fn clean_path(raw: &str, allow_root: bool) -> Result<String> {
     // A folder may be named with a trailing `/`; a file may not.
     let p = if allow_root { raw.strip_suffix('/').unwrap_or(raw) } else { raw };
     if p.is_empty() && raw != "/" {
@@ -212,12 +212,17 @@ pub fn browse_ls<B: ObjectBackend>(
 ) -> Result<BrowseListing> {
     let dir = clean_path(prefix, true)?;
     let (e, m) = open(b, project_bucket, slug)?;
-    let files = servable(&m);
+    ls_from(&e, &m, dir)
+}
+
+/// The listing half of [`browse_ls`], on an already-opened (or cached) entry and manifest.
+pub(crate) fn ls_from(e: &RegistryEntry, m: &TreeManifest, dir: String) -> Result<BrowseListing> {
+    let files = servable(m);
     if files.iter().any(|f| f.path == dir) {
         return Err(S2Error::Invalid(format!("{dir} is a file; use get")));
     }
     let base = if dir.is_empty() { String::new() } else { format!("{dir}/") };
-    let (titles, unc): (_, HashSet<&str>) = (titles(&m), m.uncommitted.iter().map(String::as_str).collect());
+    let (titles, unc): (_, HashSet<&str>) = (titles(m), m.uncommitted.iter().map(String::as_str).collect());
     let mut dirs: BTreeMap<&str, (u64, usize)> = BTreeMap::new();
     let mut leaves: BTreeMap<&str, &FileEntry> = BTreeMap::new();
     for f in files {
@@ -289,7 +294,20 @@ pub fn browse_get<B: ObjectBackend>(
 ) -> Result<BrowseFile> {
     let path = clean_path(path, false)?;
     let (e, m) = open(b, project_bucket, slug)?;
-    let f = servable(&m)
+    get_from(b, &e, &m, slug, &path, max_bytes)
+}
+
+/// The read half of [`browse_get`], on an already-opened (or cached) entry and manifest. `path`
+/// is already cleaned.
+pub(crate) fn get_from<B: ObjectBackend>(
+    b: &B,
+    e: &RegistryEntry,
+    m: &TreeManifest,
+    slug: &str,
+    path: &str,
+    max_bytes: u64,
+) -> Result<BrowseFile> {
+    let f = servable(m)
         .into_iter()
         .find(|f| f.path == path)
         .ok_or_else(|| S2Error::Invalid(format!("{path} is not in the shared tree of {slug}")))?;
@@ -302,7 +320,7 @@ pub fn browse_get<B: ObjectBackend>(
         path: f.path.clone(),
         size: f.size,
         sha256: f.sha256.clone(),
-        title: titles(&m).get(f.path.as_str()).map(|t| (*t).to_string()),
+        title: titles(m).get(f.path.as_str()).map(|t| (*t).to_string()),
         uncommitted: m.uncommitted.iter().any(|u| u == &f.path),
         withheld: false,
         withheld_reason: None,

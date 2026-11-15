@@ -159,10 +159,27 @@ pub fn poll_fast<B: ObjectBackend + Sync>(
     use_digest: bool,
     jobs: usize,
 ) -> Result<Vec<Change>> {
+    poll_fast_cached(b, project_bucket, state, allow_all_gone, use_digest, jobs, None)
+}
+
+/// [`poll_fast`] that also tells a browse [`crate::follower_cache::ManifestCache`] which registry
+/// entry etags it just saw, so a moved or removed worktree drops its cached manifest at once.
+pub fn poll_fast_cached<B: ObjectBackend + Sync>(
+    b: &B,
+    project_bucket: &str,
+    state: &mut FollowState,
+    allow_all_gone: bool,
+    use_digest: bool,
+    jobs: usize,
+    cache: Option<&mut crate::follower_cache::ManifestCache>,
+) -> Result<Vec<Change>> {
     let current = match use_digest.then(|| crate::share_fetch::read_digest(b, project_bucket)).transpose()?.flatten() {
         Some(d) => d.entries,
         None => crate::share_fetch::registry_listing(b, project_bucket)?,
     };
+    if let Some(c) = cache {
+        c.observe_registry(project_bucket, &current);
+    }
     let (mut want, mut carried) = (Vec::new(), Vec::new());
     for (slug, etag) in &current {
         match state.seen.get(slug) {

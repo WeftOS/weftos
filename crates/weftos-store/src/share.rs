@@ -336,16 +336,19 @@ pub fn read_manifest<B: ObjectBackend>(b: &B, bucket: &str) -> Result<Option<Tre
         return Err(S2Error::Invalid(format!("manifest is {} bytes, over the {MAX_MANIFEST_BYTES} limit", h.size)));
     }
     match b.get(bucket, MANIFEST_KEY)? {
-        Some(d) => {
-            let m: TreeManifest = serde_json::from_slice(&d)?;
-            let lim = Limits::default();
-            if m.files.len() > lim.max_files || m.docs.len() > lim.max_files {
-                return Err(S2Error::Invalid(format!("manifest lists more than {} files", lim.max_files)));
-            }
-            Ok(Some(m))
-        }
+        Some(d) => Ok(Some(parse_manifest(&d)?)),
         None => Ok(None),
     }
+}
+
+/// Parse manifest bytes and apply the file-count limit (shared with the follower manifest cache).
+pub(crate) fn parse_manifest(d: &[u8]) -> Result<TreeManifest> {
+    let m: TreeManifest = serde_json::from_slice(d)?;
+    let lim = Limits::default();
+    if m.files.len() > lim.max_files || m.docs.len() > lim.max_files {
+        return Err(S2Error::Invalid(format!("manifest lists more than {} files", lim.max_files)));
+    }
+    Ok(m)
 }
 
 /// Publish (or refresh) the worktree tree into its bucket. Re-runs upload only changed files and

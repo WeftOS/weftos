@@ -87,3 +87,71 @@ impl ObjectBackend for MemBackend {
             .collect())
     }
 }
+
+/// Calls and bytes seen by a [`CountingBackend`].
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Counts {
+    pub get: u64,
+    pub head: u64,
+    pub list: u64,
+    pub put: u64,
+    pub bytes_read: u64,
+}
+
+/// A spy around any [`ObjectBackend`]: counts calls and bytes returned by `get`. Atomic counters,
+/// so it also wraps a backend that is read from several threads.
+pub struct CountingBackend<B> {
+    pub inner: B,
+    get: std::sync::atomic::AtomicU64,
+    head: std::sync::atomic::AtomicU64,
+    list: std::sync::atomic::AtomicU64,
+    put: std::sync::atomic::AtomicU64,
+    bytes: std::sync::atomic::AtomicU64,
+}
+
+impl<B> CountingBackend<B> {
+    pub fn new(inner: B) -> Self {
+        let z = || std::sync::atomic::AtomicU64::new(0);
+        Self { inner, get: z(), head: z(), list: z(), put: z(), bytes: z() }
+    }
+    pub fn counts(&self) -> Counts {
+        use std::sync::atomic::Ordering::Relaxed;
+        Counts {
+            get: self.get.load(Relaxed),
+            head: self.head.load(Relaxed),
+            list: self.list.load(Relaxed),
+            put: self.put.load(Relaxed),
+            bytes_read: self.bytes.load(Relaxed),
+        }
+    }
+    pub fn reset(&self) {
+        use std::sync::atomic::Ordering::Relaxed;
+        for a in [&self.get, &self.head, &self.list, &self.put, &self.bytes] {
+            a.store(0, Relaxed);
+        }
+    }
+}
+
+impl<B: ObjectBackend> ObjectBackend for CountingBackend<B> {
+    fn head(&self, bucket: &str, key: &str) -> Result<Option<ObjectMeta>> {
+        self.head.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.inner.head(bucket, key)
+    }
+    fn get(&self, bucket: &str, key: &str) -> Result<Option<Vec<u8>>> {
+        self.get.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let r = self.inner.get(bucket, key)?;
+        self.bytes.fetch_add(r.as_ref().map_or(0, |d| d.len() as u64), std::sync::atomic::Ordering::Relaxed);
+        Ok(r)
+    }
+    fn put(&self, bucket: &str, key: &str, data: &[u8]) -> Result<ObjectMeta> {
+        self.put.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.inner.put(bucket, key, data)
+    }
+    fn delete(&self, bucket: &str, key: &str) -> Result<()> {
+        self.inner.delete(bucket, key)
+    }
+    fn list(&self, bucket: &str, prefix: &str) -> Result<Vec<ObjectMeta>> {
+        self.list.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.inner.list(bucket, prefix)
+    }
+}

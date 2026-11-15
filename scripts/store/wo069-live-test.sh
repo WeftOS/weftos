@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
 # WO-069 lane C: live check of the worktree browse reader against ONE throwaway loopback RustFS.
 #
-#   WEFTOS_STORE_TEST_RUSTFS_BIN=/path/to/rustfs scripts/store/wo069-live-test.sh
+#   WEFTOS_STORE_TEST_RUSTFS_BIN=/path/to/rustfs scripts/store/wo069-live-test.sh [--bench]
+#
+# --bench (lane F) skips the live tests and runs only the manifest-cache bench instead, printing its
+# `BENCH|` lines (browse, registry list and follower poll cost, with and without the cache).
 #
 # Never point this at PG or any shared RustFS. It starts its own server on 127.0.0.1 with a random
 # port and credentials under target/, runs the browse live test and the S2 two-machine scenario,
 # prints pass/fail per test, then kills the server and removes its data (trap). No weaver, no daemon.
 set -uo pipefail
 
+BENCH=""
+[ "${1:-}" = "--bench" ] && BENCH=1
 BIN="${WEFTOS_STORE_TEST_RUSTFS_BIN:?set WEFTOS_STORE_TEST_RUSTFS_BIN to the rustfs binary}"
 [ -x "$BIN" ] || { echo "not executable: $BIN" >&2; exit 1; }
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -53,6 +58,13 @@ run() {
     grep -E 'TIMING|test result|^test |panicked' "$WORK/$name.out"
     if grep -q 'test result: ok. 1 passed' "$WORK/$name.out"; then echo "PASS $name"; else echo "FAIL $name"; tail -25 "$WORK/$name.out"; rc=1; fi
 }
+if [ -n "$BENCH" ]; then
+    echo "== s2_browse_cache_bench"
+    cargo test -p weftos-store --features rustfs --test s2_browse_cache_bench -- --ignored --nocapture --test-threads=1 >"$WORK/bench.out" 2>&1 || rc=1
+    grep -E 'BENCH\||test result|panicked' "$WORK/bench.out"
+    [ "$rc" = 0 ] && echo "PASS s2_browse_cache_bench" || { echo "FAIL s2_browse_cache_bench"; tail -25 "$WORK/bench.out"; }
+    exit $rc
+fi
 run s2_browse_live cargo test -p weftos-store --features rustfs --test s2_browse_live
 run s2_done_when cargo test -p weftos-store --features rustfs --test s2_done_when two_machines_share_a_worktree_on_a_real_rustfs
 exit $rc
