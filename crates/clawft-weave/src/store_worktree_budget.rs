@@ -105,8 +105,14 @@ fn counting_rig() -> (tempfile::TempDir, StoreService, Arc<Tally>) {
         Arc::new(ChainAudit(None)),
     )
     .unwrap();
+    // WO-069 X2: the read cache with a TTL real test time never reaches; `wtcache::advance` lapses it.
+    wtcache::set_cfg(&svc, Some(CACHE));
     (d, svc, t)
 }
+
+const TTL: u64 = 600_000;
+const CACHE: weftos_store::follower_cache_shared::CacheCfg =
+    weftos_store::follower_cache_shared::CacheCfg { ttl_ms: TTL, max_age_ms: 2 * TTL, max_bytes: 32 << 20, max_entries: 64 };
 
 fn pin(got: K, want: K, label: &str) {
     assert_eq!(got, want, "{label}");
@@ -225,12 +231,22 @@ fn browse_registry_ls_get() {
     assert_eq!(v["worktrees"].as_array().unwrap().len() as u64, W);
     // LIST + W entry GET
     pin(c, [W, 0, 1, 0, 0, 0, 0, 0], "browse registry");
+    let (_, c) = r.run("browse", json!({"project": PROJ}));
+    // X2: the same listing, every entry etag unchanged: no entry GET (uncached: LIST + W GET again)
+    pin(c, [0, 0, 1, 0, 0, 0, 0, 0], "browse registry, warm");
     let (_, c) = r.run("browse", json!({"project": PROJ, "slug": "wt0"}));
-    // entry GET, meta GET, manifest HEAD + GET
-    pin(c, [3, 1, 0, 0, 0, 0, 0, 0], "browse ls");
+    // cold: entry HEAD + GET, meta GET, manifest HEAD + GET (uncached [3, 1]: the entry HEAD is the
+    // validator a later revalidation compares against)
+    pin(c, [3, 2, 0, 0, 0, 0, 0, 0], "browse ls, cold");
     let (_, c) = r.run("browse", json!({"project": PROJ, "slug": "wt0", "path": "docs/d0.md"}));
-    // open (3 GET + 1 HEAD) + object HEAD + GET
-    pin(c, [4, 2, 0, 0, 0, 0, 0, 0], "browse get");
+    // warm manifest: object HEAD + GET only (uncached [4, 2])
+    pin(c, [1, 1, 0, 0, 0, 0, 0, 0], "browse get, warm");
+    let (_, c) = r.run("browse", json!({"project": PROJ, "slug": "wt0", "path": "docs/"}));
+    pin(c, [0, 0, 0, 0, 0, 0, 0, 0], "browse ls, warm");
+    wtcache::advance(&r.svc, TTL);
+    let (_, c) = r.run("browse", json!({"project": PROJ, "slug": "wt0"}));
+    // TTL lapsed: entry HEAD + manifest HEAD, both unchanged
+    pin(c, [0, 2, 0, 0, 0, 0, 0, 0], "browse ls, TTL lapsed");
 }
 
 #[test]
@@ -250,11 +266,49 @@ fn follow_search_leftovers() {
     // one registry LIST, etags equal
     pin(c, [0, 0, 1, 0, 0, 0, 0, 0], "follow --full");
     let (_, c) = r.run("search", json!({"project": PROJ, "query": "doc"}));
-    // registry LIST + W entry GET; per worktree meta GET + manifest HEAD + GET: GET 3W, HEAD W
-    pin(c, [3 * W, W, 1, 0, 0, 0, 0, 0], "search");
+    // cold, as uncached: registry LIST + W entry GET; per worktree meta GET + manifest HEAD + GET
+    pin(c, [3 * W, W, 1, 0, 0, 0, 0, 0], "search, cold");
+    let (_, c) = r.run("search", json!({"project": PROJ, "query": "doc"}));
+    // X2 warm: the LIST alone (uncached [3W, W, 1] every time)
+    pin(c, [0, 0, 1, 0, 0, 0, 0, 0], "search, warm");
     let (_, c) = r.run("leftovers", json!({"project": PROJ}));
-    // LIST + W entry GET
-    pin(c, [W, 0, 1, 0, 0, 0, 0, 0], "leftovers");
+    // X2: the registry was just read; the LIST alone (uncached LIST + W entry GET)
+    pin(c, [0, 0, 1, 0, 0, 0, 0, 0], "leftovers, warm");
+    wtcache::advance(&r.svc, TTL);
+    let (_, c) = r.run("search", json!({"project": PROJ, "query": "doc"}));
+    // TTL lapsed: LIST + one manifest HEAD per worktree (the entry etags come from the LIST)
+    pin(c, [0, W, 1, 0, 0, 0, 0, 0], "search, TTL lapsed");
+}
+
+/// `WEFTOS_WORKTREE_CACHE_MB=0` (here: no cache configured) gives today's budgets exactly.
+#[test]
+fn cache_off_gives_the_uncached_budgets() {
+    let r = rig_w();
+    wtcache::set_cfg(&r.svc, None);
+    for _ in 0..2 {
+        pin(r.run("browse", json!({"project": PROJ})).1, [W, 0, 1, 0, 0, 0, 0, 0], "browse registry, off");
+        pin(r.run("browse", json!({"project": PROJ, "slug": "wt0"})).1, [3, 1, 0, 0, 0, 0, 0, 0], "browse ls, off");
+        pin(r.run("browse", json!({"project": PROJ, "slug": "wt0", "path": "docs/d0.md"})).1, [4, 2, 0, 0, 0, 0, 0, 0], "browse get, off");
+        pin(r.run("search", json!({"project": PROJ, "query": "doc"})).1, [3 * W, W, 1, 0, 0, 0, 0, 0], "search, off");
+        pin(r.run("leftovers", json!({"project": PROJ})).1, [W, 0, 1, 0, 0, 0, 0, 0], "leftovers, off");
+        pin(r.run("overlaps", json!({"project": PROJ, "a": "wt0", "b": "wt1"})).1, [8, 4, 0, 0, 0, 0, 0, 0], "overlaps, off");
+        pin(r.run("gc", json!({"project": PROJ})).1, gc_dry_run_uncached(), "gc dry run, off");
+    }
+}
+
+/// gc dry run with no orphans and nothing landed: the orphan plan's registry LIST + W entry GET; the
+/// service's store listing sizes each store it knows (the project store and W worktree stores: 1 + W
+/// LIST); then one landed-record GET per worktree store.
+fn gc_dry_run_uncached() -> K {
+    [W + W, 0, 1 + 1 + W, 0, 0, 0, 0, 0]
+}
+
+#[test]
+fn gc_dry_run_plan_reuses_registry_entries() {
+    let r = rig_w();
+    pin(r.run("gc", json!({"project": PROJ})).1, gc_dry_run_uncached(), "gc dry run, cold");
+    // X2: the display plan reuses the entries; the W landed checks still read the store
+    pin(r.run("gc", json!({"project": PROJ})).1, [W, 0, 1 + 1 + W, 0, 0, 0, 0, 0], "gc dry run, warm");
 }
 
 #[test]
@@ -269,8 +323,11 @@ fn sync_docs_overlaps_claim() {
     // 8 calls: 3 HEAD + 5 GET, the manifest read three times
     pin(c, [5, 3, 0, 0, 0, 0, 0, 0], "sync-docs repeat");
     let (_, c) = r.run("overlaps", json!({"project": PROJ, "a": "wt0", "b": "wt1"}));
-    // 12 calls: 2 summarize (3 each) + 2 meta GET + 2 manifest reads
-    pin(c, [8, 4, 0, 0, 0, 0, 0, 0], "overlaps one pair");
+    // X2 cold: two cold loads (entry HEAD + GET, meta GET, manifest HEAD + GET each): 10 calls
+    // (uncached 12: 2 summarize (3 each) + 2 meta GET + 2 manifest reads)
+    pin(c, [6, 4, 0, 0, 0, 0, 0, 0], "overlaps one pair, cold");
+    let (_, c) = r.run("overlaps", json!({"project": PROJ, "a": "wt0", "b": "wt1"}));
+    pin(c, [0, 0, 0, 0, 0, 0, 0, 0], "overlaps one pair, warm");
     let (_, c) = r.run("claim", json!({"project": PROJ, "slug": "wt0", "agent": "bob", "host": "m2"}));
     // meta GET, manifest HEAD + GET (the claimed head, 6a-1), handoff HEAD + GET, conditional PUT,
     // refresh [2 GET, 1 HEAD, 1 LIST, 2 PUT]: 12 calls
