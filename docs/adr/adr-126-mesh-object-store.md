@@ -588,7 +588,12 @@ owed and is **not** produced by the in-memory tests.
    under a lock, the rest is last writer wins; `load` errors on a corrupt file rather than resetting).
    - Evidence so far: none of this list on real clocks. Closest case touched: a merged entry
      whose cleanup never ran (the lane J fix removes the one cause found). Still owed: the whole
-     list.
+     list, except as decided below.
+   - **Decided 2026-11-15 (owner, Q13):** "a writer machine a day ahead" is accepted on the
+     injected-clock drill (`crates/weftos-store/tests/s2_drills_follower.rs`, drill 6a, in memory, on
+     the directory backend and on a live RustFS). It cannot be shown on real clocks without
+     changing a machine's system clock, which the gate runs never do, and the daemon has no clock
+     seam. The other sub-items of this list are still owed on real clocks.
 7. ADR-131 D1 and D2 pass first (the card's prerequisite).
    - Evidence so far: not touched by the drills.
 8. Every daemon that writes a worktree bucket runs a build with the claim fence and the conditional
