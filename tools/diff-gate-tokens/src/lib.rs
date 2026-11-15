@@ -11,6 +11,7 @@ pub mod doc;
 pub mod report;
 pub mod resolve;
 pub mod scan;
+pub mod uses;
 
 use proc_macro2::TokenStream;
 use std::collections::BTreeSet;

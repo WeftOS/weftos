@@ -4,7 +4,9 @@
 //! comments arrive as `#[doc = "..."]` attributes whose code blocks are scanned as doctests.
 
 use crate::doc::{self, DocLine};
-use crate::resolve::{by_name, classify, is_local_root, Aliases, Path};
+use crate::resolve::{by_name, classify, Aliases, Path};
+use crate::uses::{parse_extern_crate, parse_use};
+pub use crate::uses::collect_aliases;
 use proc_macro2::{Delimiter, Group, Spacing, Span, TokenStream, TokenTree};
 use std::collections::BTreeSet;
 
@@ -28,15 +30,15 @@ pub struct Occ {
 
 const MAX_DOC_DEPTH: usize = 3;
 
-fn start(s: Span) -> (usize, usize) {
+pub(crate) fn start(s: Span) -> (usize, usize) {
     let lc = s.start();
     (lc.line, lc.column)
 }
-fn end(s: Span) -> (usize, usize) {
+pub(crate) fn end(s: Span) -> (usize, usize) {
     let lc = s.end();
     (lc.line, lc.column)
 }
-fn tspan(s: Span) -> (usize, usize, usize) {
+pub(crate) fn tspan(s: Span) -> (usize, usize, usize) {
     let (l, c) = start(s);
     let (l2, c2) = end(s);
     (l, c, if l2 == l { c2 } else { c + 1 })
@@ -47,20 +49,20 @@ pub fn name(s: &str) -> String {
     s.strip_prefix("r#").unwrap_or(s).to_string()
 }
 
-fn ident_is(t: Option<&TokenTree>, s: &str) -> bool {
+pub(crate) fn ident_is(t: Option<&TokenTree>, s: &str) -> bool {
     matches!(t, Some(TokenTree::Ident(i)) if *i == s)
 }
-fn punct_is(t: Option<&TokenTree>, c: char) -> bool {
+pub(crate) fn punct_is(t: Option<&TokenTree>, c: char) -> bool {
     matches!(t, Some(TokenTree::Punct(p)) if p.as_char() == c)
 }
 fn colon2(v: &[TokenTree], k: usize) -> bool {
     matches!(v.get(k), Some(TokenTree::Punct(p)) if p.as_char() == ':' && p.spacing() == Spacing::Joint)
         && punct_is(v.get(k + 1), ':')
 }
-fn semi_after(v: &[TokenTree], i: usize) -> Option<usize> {
+pub(crate) fn semi_after(v: &[TokenTree], i: usize) -> Option<usize> {
     (i..v.len()).find(|&k| punct_is(v.get(k), ';'))
 }
-fn slice(v: &[TokenTree], a: usize, b: usize) -> TokenStream {
+pub(crate) fn slice(v: &[TokenTree], a: usize, b: usize) -> TokenStream {
     v[a..=b].iter().cloned().collect()
 }
 fn lit_str(t: Option<&TokenTree>) -> Option<(String, Span)> {
@@ -125,112 +127,6 @@ fn read_path(v: &[TokenTree], i: usize) -> Option<TokPath> {
         return None;
     }
     Some(TokPath { path: Path::new(absolute, segs), spans, next: k })
-}
-
-/// One leaf of a `use` tree: what it imports, what name it binds, and its tokens.
-pub struct Leaf {
-    pub full: Path,
-    pub bind: Option<String>,
-    pub glob: bool,
-    pub spans: Vec<(usize, usize, usize)>,
-}
-
-fn use_leaves(t: &syn::UseTree, pre: &mut Vec<(String, Span)>, abs: bool, out: &mut Vec<Leaf>) {
-    let mk = |pre: &Vec<(String, Span)>, extra: &[(String, Span)]| -> (Path, Vec<(usize, usize, usize)>) {
-        let segs = pre.iter().chain(extra.iter()).map(|(s, _)| s.clone()).collect();
-        let spans = pre.iter().chain(extra.iter()).map(|(_, sp)| tspan(*sp)).collect();
-        (Path::new(abs, segs), spans)
-    };
-    match t {
-        syn::UseTree::Path(p) => {
-            pre.push((name(&p.ident.to_string()), p.ident.span()));
-            use_leaves(&p.tree, pre, abs, out);
-            pre.pop();
-        }
-        syn::UseTree::Name(n) => {
-            let s = name(&n.ident.to_string());
-            if s == "self" {
-                let (full, mut spans) = mk(pre, &[]);
-                spans.push(tspan(n.ident.span()));
-                out.push(Leaf { bind: full.segs.last().cloned(), full, glob: false, spans });
-            } else {
-                let (full, spans) = mk(pre, &[(s.clone(), n.ident.span())]);
-                out.push(Leaf { full, bind: Some(s), glob: false, spans });
-            }
-        }
-        syn::UseTree::Rename(r) => {
-            let s = name(&r.ident.to_string());
-            let (full, mut spans) = if s == "self" { mk(pre, &[]) } else { mk(pre, &[(s, r.ident.span())]) };
-            spans.push(tspan(r.rename.span()));
-            out.push(Leaf { full, bind: Some(name(&r.rename.to_string())), glob: false, spans });
-        }
-        syn::UseTree::Glob(g) => {
-            let (mut full, mut spans) = mk(pre, &[]);
-            full.segs.push("*".into());
-            spans.push(tspan(g.star_token.span));
-            out.push(Leaf { full, bind: None, glob: true, spans });
-        }
-        syn::UseTree::Group(g) => {
-            for it in &g.items {
-                use_leaves(it, pre, abs, out);
-            }
-        }
-    }
-}
-
-/// `use ...;` starting at `i`: the leaves and the index of the `;`.
-fn parse_use(v: &[TokenTree], i: usize) -> Option<(Vec<Leaf>, usize)> {
-    let j = semi_after(v, i)?;
-    let item: syn::ItemUse = syn::parse2(slice(v, i, j)).ok()?;
-    let mut out = Vec::new();
-    use_leaves(&item.tree, &mut Vec::new(), item.leading_colon.is_some(), &mut out);
-    Some((out, j))
-}
-
-/// `extern crate NAME [as ALIAS];` starting at `i`: (name, alias, name span, index of `;`).
-fn parse_extern_crate(v: &[TokenTree], i: usize) -> Option<(String, Option<String>, Span, usize)> {
-    let j = semi_after(v, i)?;
-    let item: syn::ItemExternCrate = syn::parse2(slice(v, i, j)).ok()?;
-    let alias = item.rename.map(|(_, a)| name(&a.to_string()));
-    Some((name(&item.ident.to_string()), alias, item.ident.span(), j))
-}
-
-/// Pass 1: every binding in the stream, at any depth.
-pub fn collect_aliases(ts: TokenStream, a: &mut Aliases) {
-    let v: Vec<TokenTree> = ts.into_iter().collect();
-    let mut i = 0;
-    while i < v.len() {
-        if ident_is(v.get(i), "use") {
-            if let Some((leaves, j)) = parse_use(&v, i) {
-                for l in leaves {
-                    if l.glob {
-                        let mut p = l.full.clone();
-                        p.segs.pop();
-                        a.glob(p);
-                    } else if let Some(b) = l.bind {
-                        a.bind(&b, l.full);
-                    }
-                }
-                i = j + 1;
-                continue;
-            }
-        }
-        if ident_is(v.get(i), "extern") && ident_is(v.get(i + 1), "crate") {
-            if let Some((n, alias, _, j)) = parse_extern_crate(&v, i) {
-                if let Some(al) = alias {
-                    if !is_local_root(&n) {
-                        a.bind(&al, Path::new(false, vec![n]));
-                    }
-                }
-                i = j + 1;
-                continue;
-            }
-        }
-        if let TokenTree::Group(g) = &v[i] {
-            collect_aliases(g.stream(), a);
-        }
-        i += 1;
-    }
 }
 
 pub struct Scanner<'a> {
