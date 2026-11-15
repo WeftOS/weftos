@@ -382,7 +382,17 @@ pub fn publish_tree_listed<B: ObjectBackend>(
             held_ms: None,
         },
     )?;
-    b.put(bucket, MANIFEST_KEY, &bytes)?;
+    if let Err(e) = b.put(bucket, MANIFEST_KEY, &bytes) {
+        // Withdraw the announcement (lane Y, A5), else merges wait for it until it expires.
+        return Err(match withdraw(b, bucket, &mine, announced.previous) {
+            Ok(()) => e,
+            Err(w) => S2Error::Backend(format!(
+                "{e}; the publish announcement could not be withdrawn either ({w}), so merges of this \
+                 worktree wait until it expires ({} min) or the next publish",
+                CLAIM_TTL_MS / 60_000
+            )),
+        });
+    }
     // Stale objects go after the manifest no longer lists them, so a reader never sees a listed file
     // missing. Found by listing, not from the previous manifest: a publish killed after its manifest
     // write but before this sweep leaves objects that no manifest names, and only a listing finds them.

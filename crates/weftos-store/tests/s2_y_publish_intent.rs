@@ -1,6 +1,6 @@
-//! WO-069 lane Y, A4: a publish announces the manifest it is about to write in the handoff record
+//! WO-069 lane Y, A4/A5: a publish announces the manifest it is about to write in the handoff record
 //! (conditional write) before the manifest PUT, and a fenced merge or land refuses while one is
-//! pending. Design note
+//! pending; a failed manifest PUT withdraws the announcement. Design note
 //! `reports/wo069-fence-atomicity-design-20261115.md` §2. Deterministic, single-threaded: the hook
 //! backend runs an action just before a chosen call, or fails one.
 use std::cell::{Cell, RefCell};
@@ -195,6 +195,46 @@ fn a_publish_that_replaces_a_pending_announcement_holds_merges_until_it_expires(
     assert_eq!(again.claimed_head.as_deref(), Some("h2"));
     mark_merged_at(&b, WT, &who("bob"), Some(again.epoch), "m", later).unwrap();
     assert_eq!(head(&b), "h2", "the merge names the head that is published");
+}
+
+// ---- the manifest PUT fails (A5) ------------------------------------------------------------------------------------
+
+#[test]
+fn a_failed_manifest_put_withdraws_the_announcement() {
+    let (b, c) = claimed();
+    let before = record(&b).publishing;
+    let p = hooked(&b, Hook { fail_manifest_put: Cell::new(true), ..Hook::default() });
+    let e = publish(&p, "h2", NOW + 1).unwrap_err();
+    assert!(e.to_string().contains("manifest PUT failed") && !e.to_string().contains("withdrawn"), "{e}");
+    assert_eq!(record(&b).publishing, before, "the previous announcement is back");
+    assert_eq!(head(&b), "h1");
+    mark_merged_at(&b, WT, &who("bob"), Some(c.epoch), "m", NOW + 2).unwrap();
+}
+
+#[test]
+fn a_failed_first_publish_leaves_an_open_record_with_no_announcement() {
+    let b = MemBackend::new();
+    let p = hooked(&b, Hook { fail_manifest_put: Cell::new(true), ..Hook::default() });
+    assert!(publish(&p, "h1", NOW).is_err());
+    let h = record(&b);
+    assert_eq!((h.state, h.publishing), (State::Open, None));
+    assert!(read_manifest(&b, WT).unwrap().is_none());
+    publish(&b, "h1", NOW + 1).unwrap(); // the rerun is not blocked
+}
+
+#[test]
+fn when_the_withdrawal_fails_too_merges_wait_for_the_ttl_and_the_writer_does_not() {
+    let (b, c) = claimed();
+    // handoff put_cas #0 is the announcement, #1 the withdrawal
+    let p = hooked(&b, Hook { fail_manifest_put: Cell::new(true), fail_handoff_cas_at: Some(1), ..Hook::default() });
+    let e = publish(&p, "h2", NOW + 1).unwrap_err();
+    assert!(e.to_string().contains("could not be withdrawn"), "the error says merges wait: {e}");
+    assert!(in_flight(&mark_merged_at(&b, WT, &who("bob"), Some(c.epoch), "m", NOW + 2).unwrap_err()));
+    // the writer's next publish is not blocked; it carries the stuck stamp as a hold
+    publish(&b, "h1", NOW + 3).unwrap();
+    assert_eq!(record(&b).publishing.unwrap().held_ms, Some(NOW + 1));
+    assert!(in_flight(&mark_merged_at(&b, WT, &who("bob"), Some(c.epoch), "m", NOW + 4).unwrap_err()));
+    mark_merged_at(&b, WT, &who("bob"), Some(c.epoch), "m", NOW + 1 + CLAIM_TTL_MS).unwrap();
 }
 
 // ---- other cut points and interleavings -----------------------------------------------------------------------------

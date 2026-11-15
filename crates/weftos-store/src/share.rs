@@ -27,7 +27,7 @@ pub use handoff::{
     claim_merge, claim_merge_with, fence_claim, mark_handoff, mark_landed, mark_landed_at, mark_merged, mark_merged_at, read_handoff,
 };
 use handoff::{HANDOFF_RETRIES, contended, guard_live_claim, read_handoff_versioned, write_handoff_if};
-use intent::{announce, refuse_pending};
+use intent::{announce, refuse_pending, withdraw};
 pub(crate) use publish::{is_doc_path, looks_like_private_key, parse_manifest, read_manifest_bytes, read_regular};
 pub use publish::{MAX_MANIFEST_BYTES, Published, publish_tree, publish_tree_listed, read_manifest, summarize_with};
 #[cfg(test)]

@@ -1,4 +1,4 @@
-//! Publish announcements (WO-069 lane Y, A4; design note
+//! Publish announcements (WO-069 lane Y, A4/A5; design note
 //! `reports/wo069-fence-atomicity-design-20261115.md`). A child of `share`.
 //!
 //! The handoff record is the one object every decision about a worktree commits through with a
@@ -19,6 +19,8 @@ use super::*;
 pub(super) struct Announced {
     /// The record, when this announcement created it (no record existed): exactly what is stored.
     pub created: Option<Handoff>,
+    /// The announcement this one replaced, put back by [`withdraw`] if the manifest PUT fails.
+    pub previous: Option<PublishIntent>,
 }
 
 /// Is `i` still pending: its manifest is not the stored one (`manifest_sha`) and its stamp is live,
@@ -75,7 +77,7 @@ pub(super) fn announce<B: ObjectBackend>(
                 publishing: Some(next_intent),
             };
             if write_handoff_if(b, bucket, &fresh, None)? {
-                return Ok(Announced { created: Some(fresh) });
+                return Ok(Announced { created: Some(fresh), previous: None });
             }
             continue;
         };
@@ -92,7 +94,24 @@ pub(super) fn announce<B: ObjectBackend>(
         }
         let next = Handoff { publishing: Some(next_intent), ..h.clone() };
         if write_handoff_if(b, bucket, &next, Some(etag))? {
-            return Ok(Announced { created: None });
+            return Ok(Announced { created: None, previous: h.publishing.clone() });
+        }
+    }
+    Err(contended())
+}
+
+/// The manifest PUT failed: put back the announcement this publish replaced, so merges are not held
+/// for the TTL by a publish that is over. Only while the record still carries this publish's
+/// announcement (`mine`, its manifest digest); one written since is someone else's and stays.
+pub(super) fn withdraw<B: ObjectBackend>(b: &B, bucket: &str, mine: &str, previous: Option<PublishIntent>) -> Result<()> {
+    for _ in 0..HANDOFF_RETRIES {
+        let Some((h, etag)) = read_handoff_versioned(b, bucket)? else { return Ok(()) };
+        if h.publishing.as_ref().map(|i| i.manifest_sha256.as_str()) != Some(mine) {
+            return Ok(());
+        }
+        let next = Handoff { publishing: previous.clone(), ..h };
+        if write_handoff_if(b, bucket, &next, Some(&etag))? {
+            return Ok(());
         }
     }
     Err(contended())
