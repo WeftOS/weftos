@@ -11,6 +11,7 @@ mkdir -p "$t/bin"
 cat >"$t/bin/weaver" <<'W'
 #!/usr/bin/env bash
 printf '%q ' "$@" >>"$WTS_LOG"; echo >>"$WTS_LOG"
+case "$*" in "store worktree publish"*) [ -z "${WEAVER_REPLY:-}" ] || printf '%s\n' "$WEAVER_REPLY" ;; esac
 exit "${WEAVER_RC:-0}"
 W
 chmod +x "$t/bin/weaver"
@@ -154,5 +155,41 @@ git -C "$wf" switch -q --detach; : >"$t/log"; out=$("$S" sweep --only feat--h)
 ok "follow: a detached HEAD is reported, nothing is published" "echo '$out' | grep -q 'feat--h	failed	cannot derive' && [ ! -s '$t/log' ]"
 git -C "$wf" switch -q -C lane/d; : >"$t/log"; out=$("$S" sweep --only feat--h)
 ok "follow: a slug already registered elsewhere is refused" "echo '$out' | grep -q 'failed	slug lane--d is already registered' && [ ! -s '$t/log' ]"
+
+# ---- loud skips (scale-1): a publish that skipped files must say so, without changing what is published
+cd "$wa"; echo s1 >>"$wa/docs/plan.md"
+NOSKIP='{"uploaded":1,"unchanged":0,"removed":0,"skipped":[],"bundle_uploaded":false,"handoff":false}'
+WEAVER_REPLY=$NOSKIP "$S" sweep >"$t/o" 2>"$t/e"; rc=$?
+ok "no skips: plain published, no warning, exit 0" "[ $rc = 0 ] && grep -q 'lane--a	published	head=[0-9a-f]*$' '$t/o' && ! grep -qi 'not shared\|denylist' '$t/e'"
+DENY='{"uploaded":1,"skipped":[".env: Secret","keys/id_rsa: Secret"]}'
+echo s2 >>"$wa/docs/plan.md"
+WEAVER_REPLY=$DENY "$S" sweep >"$t/o" 2>"$t/e"; rc=$?
+ok "denylist-only skips: published (not partial), counted as expected, exit 0" "[ $rc = 0 ] && grep -q 'lane--a	published	.*skipped_secret=2' '$t/o' && ! grep -q 'published-partial' '$t/o' && grep -q 'note: 2 path(s) matched the secret denylist' '$t/e' && ! grep -q 'WARNING' '$t/e'"
+BUD='{"uploaded":1,"skipped":["big/a.bin: TooLarge","big/b.bin: OverBudget","c.txt: Secret"]}'
+echo s3 >>"$wa/docs/plan.md"
+WEAVER_REPLY=$BUD "$S" sweep >"$t/o" 2>"$t/e"; rc=$?
+ok "budget skips: published-partial with counts, exit 0" "[ $rc = 0 ] && grep -q 'lane--a	published-partial	.*skipped_budget=2 skipped_other=0 skipped_secret=1' '$t/o'"
+ok "budget skips: warning names the paths and says followers are missing" "grep -q 'WARNING: published, but 2 file(s) were NOT shared' '$t/e' && grep -q 'not shared (TooLarge): big/a.bin' '$t/e' && grep -q 'not shared (OverBudget): big/b.bin' '$t/e' && ! grep -q 'not shared (Secret)' '$t/e'"
+ok "the partial publish is recorded (digest stored: next sweep is idle)" ": >'$t/log'; $S sweep --only lane--a >/dev/null 2>&1; [ ! -s '$t/log' ]"
+MANY=$(perl -MJSON::PP -e 'print encode_json({skipped=>[map {"f$_.bin: OverBudget"} 1..13]})')
+echo s4 >>"$wa/docs/plan.md"; WEAVER_REPLY=$MANY "$S" sweep >"$t/o" 2>"$t/e"
+ok "long skip lists are capped at 10 then 'and N more'" "[ \$(grep -c 'not shared (OverBudget)' '$t/e') = 10 ] && grep -q '\.\.\. and 3 more' '$t/e'"
+echo s5 >>"$wa/docs/plan.md"
+WEAVER_REPLY=$BUD WTS_STRICT_SKIPS=1 "$S" sweep >"$t/o" 2>"$t/e" && rc=0 || rc=$?
+ok "WTS_STRICT_SKIPS=1 + budget skips: still published-partial, exit non-zero" "[ $rc != 0 ] && grep -q 'lane--a	published-partial' '$t/o' && grep -q 'WTS_STRICT_SKIPS=1' '$t/e'"
+echo s6 >>"$wa/docs/plan.md"
+WEAVER_REPLY=$DENY WTS_STRICT_SKIPS=1 "$S" sweep >"$t/o" 2>"$t/e" && rc=0 || rc=$?
+ok "WTS_STRICT_SKIPS=1 + denylist-only skips: exit 0" "[ $rc = 0 ]"
+echo s7 >>"$wa/docs/plan.md"
+WEAVER_REPLY=$BUD "$S" sweep --json >"$t/o" 2>/dev/null
+ok "sweep --json reports the partial status" "grep -q '\"status\":\"published-partial\"' '$t/o'"
+# share on its own
+cd "$wa"; echo s8 >>"$wa/docs/plan.md"
+WEAVER_REPLY=$BUD "$S" share >"$t/o" 2>"$t/e"; rc=$?
+ok "share: warns on stderr, still prints the reply, exit 0" "[ $rc = 0 ] && grep -q 'NOT shared' '$t/e' && grep -q 'TooLarge' '$t/o'"
+WEAVER_REPLY=$BUD WTS_STRICT_SKIPS=1 "$S" share >/dev/null 2>&1 && rc=0 || rc=$?
+ok "share: WTS_STRICT_SKIPS=1 exits 3 on budget skips" "[ $rc = 3 ]"
+WEAVER_REPLY=$NOSKIP WTS_STRICT_SKIPS=1 "$S" share >"$t/o" 2>"$t/e"; rc=$?
+ok "share: nothing skipped, strict on: exit 0, silent stderr" "[ $rc = 0 ] && [ ! -s '$t/e' ]"
 
 echo "passed=$pass failed=$fail"; [ "$fail" = 0 ]
