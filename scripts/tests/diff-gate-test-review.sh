@@ -193,7 +193,7 @@ cd "$ROOT" || exit 2
 d="$WORK/rv_wt_ignored" && fixture_repo "$d" && git add -A && git commit -qm base && base="$(git rev-parse HEAD)"
 echo "src/gen.rs" >.gitignore && echo "fn f() { unsafe { g() } }" >src/gen.rs && echo "mod gen;" >>src/lib.rs
 out="$(DIFF_GATE_BASE="$base" "$GATE" --worktree 2>&1)"; rc=$?
-KNOWN_GAP=RV-E1 EXPECT="unsafe" check_result "rv-e: worktree: git-ignored untracked .rs file is scanned" 1 "$rc" "$out"
+EXPECT="unsafe" check_result "rv-e: worktree: git-ignored untracked .rs file is scanned" 1 "$rc" "$out"
 cd "$ROOT" || exit 2
 
 # ── (f) sensitive-crate rule ─────────────────────────────────────────

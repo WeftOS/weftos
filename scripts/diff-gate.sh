@@ -499,13 +499,46 @@ if [ "$WORKTREE" = 1 ]; then
     read_raw <"$TMP/raw"
     "${GITC[@]}" diff "${DIFF_OPTS[@]}" "$BASE" -- >"$TMP/diff" || die "git diff failed"
     git ls-files -z -o --exclude-standard >"$TMP/untracked" || die "git ls-files failed"
+    add_untracked() {
+        local mode=100644; [ -L "$1" ] && mode=120000
+        add_entry A 000000 "$mode" "$1" "$(wt_blob "$1")"
+        "${GITC[@]}" diff --no-index "${DIFF_OPTS[@]}" -- /dev/null "$1" >>"$TMP/diff"
+        [ $? -le 1 ] || die "git diff --no-index failed for $1"
+    }
     while IFS= read -r -d '' f; do
         if [ -d "$f" ]; then add_entry A 000000 160000 "${f%/}" "" nohdr; continue; fi
-        mode=100644; [ -L "$f" ] && mode=120000
-        add_entry A 000000 "$mode" "$f" "$(wt_blob "$f")"
-        "${GITC[@]}" diff --no-index "${DIFF_OPTS[@]}" -- /dev/null "$f" >>"$TMP/diff"
-        [ $? -le 1 ] || die "git diff --no-index failed for $f"
+        add_untracked "$f"
     done <"$TMP/untracked"
+    # RV-E1: a git-ignored untracked file is still read by a local build (a gitignored
+    # src/gen.rs behind `mod gen;`). Ignored files of the kinds cargo reads (.rs, Cargo.toml,
+    # .cargo/config*, rust-toolchain*) are scanned like untracked ones, each with a warning.
+    # Inside an ignored directory they are looked for too, except under build output (target/,
+    # node_modules/, .embuild/) and in nested repositories. Ignored .gitattributes and workflow
+    # files are not: git and CI never read them.
+    in_scope() {
+        case "$1" in
+            *.[rR][sS]|[cC][aA][rR][gG][oO].[tT][oO][mM][lL]|*/[cC][aA][rR][gG][oO].[tT][oO][mM][lL]) return 0 ;;
+            .cargo/config*|*/.cargo/config*|rust-toolchain|rust-toolchain.toml|*/rust-toolchain|*/rust-toolchain.toml) return 0 ;;
+        esac
+        return 1
+    }
+    build_output() { case "/$1/" in */target/*|*/node_modules/*|*/.embuild/*|*/.git/*) return 0 ;; esac; return 1; }
+    git ls-files -z -o -i --exclude-standard --directory >"$TMP/ignored" || die "git ls-files failed"
+    : >"$TMP/ignored-scan"
+    while IFS= read -r -d '' f; do
+        case "$f" in
+            */) d="${f%/}"; build_output "$d" && continue; [ -e "$d/.git" ] && continue
+                find "$d" \( -name target -o -name node_modules -o -name .embuild -o -name .git \) -prune -o \( -type f -o -type l \) \
+                    \( -iname '*.rs' -o -iname cargo.toml -o -name 'rust-toolchain*' -o -path '*.cargo/config*' \) -print0 >>"$TMP/ignored-scan" \
+                    || die "find failed in $d" ;;
+            *) printf '%s\0' "$f" >>"$TMP/ignored-scan" ;;
+        esac
+    done <"$TMP/ignored"
+    while IFS= read -r -d '' f; do
+        f="${f#./}"; in_scope "$f" || continue; build_output "$f" && continue
+        echo "diff-gate: WARNING: git-ignored file scanned (--worktree; a local build can read it): $f" >&2
+        add_untracked "$f"
+    done <"$TMP/ignored-scan"
 else
     "${GITC[@]}" diff "${RAW_OPTS[@]}" "$BASE" "$HEAD_SHA" -- >"$TMP/raw" || die "git diff --raw failed"
     read_raw <"$TMP/raw"
@@ -806,7 +839,7 @@ if [ -s "$TMP/rs-added" ]; then
     done
     # Cargo target paths that resolve to an exempt file: such a file is a target, not a test module.
     awk '!s[$0]++' "$TMP/decl-hits" | while IFS= read -r m; do
-        case "$(printf '%s' "$m" | tr 'A-Z' 'a-z')" in cargo.toml|*/cargo.toml) ;; *) continue ;; esac
+        case "$(printf '%s' "$m" | tr '[:upper:]' '[:lower:]')" in cargo.toml|*/cargo.toml) ;; *) continue ;; esac
         show_at "$head_src" "$m" | cargo_entries | awk -F'\t' -v m="$m" '
             function normp(p,   n, a, i, o, k, st) { n = split(p, a, "/"); k = 0
                 for (i = 1; i <= n; i++) { if (a[i] == "" || a[i] == ".") continue; if (a[i] == "..") { if (k > 0) k--; continue } st[++k] = a[i] }

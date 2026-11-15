@@ -15,6 +15,17 @@ The idea of a static, pre-build gate over the diff comes from
   `--worktree`, `--base REF`.
 - `scripts/build.sh gate` runs it as check 0, with `--worktree` so uncommitted work counts. A
   rejected diff stops the gate before any compile step.
+- `--worktree` compares the working tree with the base: tracked changes, untracked files, and
+  (since 2026-11-15, RV-E1) git-ignored untracked files of the kinds cargo reads: `.rs`,
+  `Cargo.toml`, `.cargo/config*` and `rust-toolchain*`, also inside ignored directories. A
+  gitignored `src/gen.rs` behind `mod gen;` is compiled by a local build, so it is scanned like
+  any new file, and each one is named on stderr: `WARNING: git-ignored file scanned
+  (--worktree; a local build can read it): <path>`. Build output is skipped: anything under a
+  `target/`, `node_modules/` or `.embuild/` directory, and nested repositories. Ignored
+  `.gitattributes` and workflow files are not scanned; git and CI never read them. Commit mode
+  (CI) diffs committed blobs only, so ignored files never reach it. On this checkout on
+  2026-11-15 the scan finds two files (`wifi_secrets.rs` in the two edge-pad crates) and adds
+  about two seconds.
 - CI: `.github/workflows/diff-gate.yml` is a reusable workflow. `pr-gates.yml`, `wasm-build.yml`,
   `wasm-browser.yml`, `benchmarks.yml` and `mcp-server-smoke.yml` call it as their first job, and
   every job that builds, tests, lints or measures crates has `needs: diff-gate`. CI never runs
@@ -563,7 +574,10 @@ finding; an exempt file also reached by a non-test `#[path]`, by a declaration a
 on its line, by `include!`, as a Cargo `[[bin]]` target or under `src/bin/`; a `tests/`
 module declared by an exempt file that is not itself a test; controls for a test-declared
 parent, a multi-line `cfg(all(test, ...))`, a declaration inside an inline test module and a
-mention in a comment or string; and an untracked non-test declaration in `--worktree` mode.
+mention in a comment or string; and an untracked non-test declaration in `--worktree` mode. RV-E1 (`--worktree`): a `.rs` file
+in an ignored directory, an ignored Cargo.toml and an ignored `.cargo/config.toml` are scanned;
+controls that `target/`, `node_modules/` and `.embuild/` contents, an ignored `.gitattributes`,
+and ignored files in commit mode are not.
 
 `DIFF_GATE_TEST_TMP` puts the fixture repos on another disk (the default is `target/`).
 `DIFF_GATE_TEST_FILTER=<ERE>` runs only the `case_run` fixtures whose name matches.

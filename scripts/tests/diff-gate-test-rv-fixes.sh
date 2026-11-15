@@ -144,3 +144,31 @@ printf '#[path = "supervise_tests.rs"]\nmod alias;\n' >crates/k/src/untracked_de
 out="$(DIFF_GATE_BASE="$base" "$GATE" --worktree 2>&1)"; rc=$?
 EXPECT="sensitive-crate" GREP="untracked_decl.rs" check_result "fix-f1: worktree: an untracked non-test declaration counts" 1 "$rc" "$out"
 cd "$ROOT" || exit 2
+
+# ── RV-E1: --worktree and git-ignored files ──────────────────────────
+wt_ignored() { # NAME WANT SETUP: SETUP runs after the base commit; the gate runs with --worktree
+    local d="$WORK/$(echo "$1" | tr -c 'A-Za-z0-9\n' '_')"
+    fixture_repo "$d" && git add -A && git commit -qm base && local base; base="$(git rev-parse HEAD)"
+    eval "$3"
+    local out rc; out="$(DIFF_GATE_BASE="$base" "$GATE" --worktree 2>&1)"; rc=$?
+    check_result "$1" "$2" "$rc" "$out"
+    cd "$ROOT" || exit 2
+}
+EXPECT="unsafe" GREP="git-ignored file scanned" wt_ignored "fix-e1: worktree: a .rs file in an ignored directory is scanned" 1 \
+    'echo "src/gen/" >.gitignore; mkdir -p src/gen; echo "fn f() { unsafe { g() } }" >src/gen/mod.rs; echo "mod gen;" >>src/lib.rs'
+EXPECT="new-dep" wt_ignored "fix-e1: worktree: an ignored Cargo.toml is read" 1 \
+    'echo "vendored/" >.gitignore; mkdir -p vendored/x; printf "[package]\nname = \"x\"\n\n[dependencies]\nevil = \"1\"\n" >vendored/x/Cargo.toml'
+EXPECT="toolchain-config" wt_ignored "fix-e1: worktree: an ignored .cargo/config.toml is reported" 1 \
+    'echo ".cargo/" >.gitignore; mkdir -p .cargo; printf "[build]\nrustc-wrapper = \"/tmp/x\"\n" >.cargo/config.toml'
+wt_ignored "fix-e1: control, worktree: build output under target/ is not scanned" 0 \
+    'echo "target/" >.gitignore; mkdir -p target/debug/build/x/out; echo "fn f() { unsafe { g() } }" >target/debug/build/x/out/gen.rs'
+wt_ignored "fix-e1: control, worktree: ignored node_modules and .embuild are not scanned" 0 \
+    'printf "node_modules/\n.embuild/\n" >.gitignore; mkdir -p node_modules/x .embuild/y; echo "fn f() { unsafe { g() } }" | tee node_modules/x/a.rs >.embuild/y/b.rs'
+wt_ignored "fix-e1: control, worktree: an ignored .gitattributes is not a finding" 0 \
+    'printf ".gitattributes\n" >.gitignore; echo "*.rs -diff" >.gitattributes'
+# commit mode never reads untracked files, ignored or not
+d="$WORK/fix_e1_commit" && fixture_repo "$d" && git add -A && git commit -qm base && base="$(git rev-parse HEAD)"
+echo "src/gen.rs" >.gitignore && echo "fn f() { unsafe { g() } }" >src/gen.rs && git add .gitignore && git commit -qm change
+out="$(DIFF_GATE_BASE="$base" "$GATE" 2>&1)"; rc=$?
+check_result "fix-e1: control, commit mode ignores untracked ignored files" 0 "$rc" "$out"
+cd "$ROOT" || exit 2
