@@ -5,7 +5,7 @@
 use crate::VaultError;
 use crate::blob;
 use crate::hkdf_keys;
-use crate::keybag::{KIND_SIGNSEED, Keybag, Pins, Wrapper, WrapperBody, wrapper_aad};
+use crate::keybag::{KIND_HISTORY, KIND_SIGNSEED, Keybag, Pins, Wrapper, WrapperBody, wrapper_aad};
 use crate::tests::{PASS, T, new_vault, req};
 use crate::vault::Vault;
 use crate::wrap::{PasscodeSeal, passcode_wrapper, seal48};
@@ -208,4 +208,35 @@ fn commit_refuses_pins_of_another_signer() {
         (nv.vault.keybag_bytes(), &wrong),
         (&before[..], &other.pins)
     );
+}
+
+/// Review I1, probe P6: `remove_wrapper` refuses a key history entry (that is `drop_history`'s job,
+/// with its documented consequences), and the keybag is unchanged.
+#[test]
+fn remove_wrapper_refuses_a_history_entry() {
+    let mut nv = new_vault();
+    let old = nv
+        .vault
+        .seal_secret(&req("login/old-FAKE", b"FAKE"))
+        .unwrap();
+    nv.vault
+        .write_now(&mut nv.pins, |v, p| v.rotate_vk_unchecked(PASS, None, p))
+        .unwrap();
+    let hid = nv
+        .vault
+        .keybag()
+        .wrappers
+        .iter()
+        .find(|w| w.kind() == KIND_HISTORY)
+        .unwrap()
+        .id;
+    let before = nv.vault.keybag_bytes().to_vec();
+    assert_eq!(
+        nv.vault
+            .write_now(&mut nv.pins, |v, p| v.remove_wrapper(&hid, p))
+            .unwrap_err(),
+        VaultError::InvalidOperation("a key history entry is removed with drop_history")
+    );
+    assert_eq!(nv.vault.keybag_bytes(), &before[..]);
+    assert!(nv.vault.open_secret(&old.slot, &old.bytes).is_ok());
 }

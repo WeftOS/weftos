@@ -6,8 +6,8 @@ use zeroize::Zeroizing;
 use crate::error::{Result, VaultError};
 use crate::hkdf_keys::{self, Key};
 use crate::keybag::{
-    FLAG_DRAFT, KIND_DEVICE, KIND_PASSCODE, KIND_RECOVERY, KIND_SIGNSEED, Keybag, Pins, Wrapper,
-    WrapperBody, wrapper_aad,
+    FLAG_DRAFT, KIND_DEVICE, KIND_HISTORY, KIND_PASSCODE, KIND_RECOVERY, KIND_SIGNSEED, Keybag,
+    Pins, Wrapper, WrapperBody, wrapper_aad,
 };
 use crate::normalize;
 use crate::passcode_kdf::{KdfParams, derive_kek};
@@ -407,7 +407,9 @@ impl Vault {
     }
 
     /// Remove a wrapper. The signing seed wrapper and the last current-generation passcode wrapper
-    /// cannot be removed. Once committed, this device refuses the keybag that still had the wrapper.
+    /// cannot be removed, and a key history entry is removed only with [`Vault::drop_history`], which
+    /// documents that blobs of that generation stop opening (review R3 I1). Once committed, this device
+    /// refuses the keybag that still had the wrapper.
     pub fn remove_wrapper(&self, id: &[u8; 16], pins: &Pins) -> Result<PendingWrite<()>> {
         self.prepare(pins, None, (), |kb| {
             let pos = kb
@@ -415,10 +417,18 @@ impl Vault {
                 .iter()
                 .position(|w| &w.id == id)
                 .ok_or(VaultError::InvalidOperation("no such wrapper"))?;
-            if kb.wrappers[pos].kind() == KIND_SIGNSEED {
-                return Err(VaultError::InvalidOperation(
-                    "the signing seed wrapper cannot be removed",
-                ));
+            match kb.wrappers[pos].kind() {
+                KIND_SIGNSEED => {
+                    return Err(VaultError::InvalidOperation(
+                        "the signing seed wrapper cannot be removed",
+                    ));
+                }
+                KIND_HISTORY => {
+                    return Err(VaultError::InvalidOperation(
+                        "a key history entry is removed with drop_history",
+                    ));
+                }
+                _ => {}
             }
             kb.wrappers.remove(pos);
             Ok(())
