@@ -139,6 +139,27 @@ impl InstanceLock {
         }
     }
 
+    /// [`acquire`](Self::acquire) that tolerates a lock released a moment ago.
+    ///
+    /// Another thread forking a child while we held the lock copies the
+    /// descriptor, and the open file description (and so the flock) lives
+    /// until that child execs. A lock that is merely held for `wait` or
+    /// less is retried; one still held after that is refused as usual.
+    pub async fn acquire_settling(
+        paths: &RuntimePaths,
+        wait: std::time::Duration,
+    ) -> Result<Self, LockError> {
+        let start = std::time::Instant::now();
+        loop {
+            match Self::acquire(paths) {
+                Err(LockError::Held { .. }) if start.elapsed() < wait => {
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+                other => return other,
+            }
+        }
+    }
+
     /// Lock file path.
     pub fn path(&self) -> &Path {
         &self.path
@@ -309,6 +330,43 @@ mod tests {
 
         drop(first);
         InstanceLock::acquire(&paths).expect("lock free after drop");
+    }
+
+    /// A fork in flight on another thread copies the lock descriptor; the
+    /// flock outlives our `drop` until that child execs (card ae5cbc39).
+    /// Simulated safely: a `try_clone` shares the open file description.
+    #[tokio::test]
+    async fn lock_still_held_by_a_dup_settles_once_the_dup_closes() {
+        use std::os::fd::AsRawFd;
+        let dir = tempfile::tempdir().unwrap();
+        let paths = RuntimePaths::at(dir.path());
+        let original = open_lock_file(&paths.lock()).unwrap();
+        #[allow(deprecated)]
+        nix::fcntl::flock(original.as_raw_fd(), nix::fcntl::FlockArg::LockExclusiveNonblock)
+            .unwrap();
+        let dup = original.try_clone().unwrap();
+        drop(original); // closing one fd keeps the lock: the dup shares it
+        let closer = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            drop(dup);
+        });
+        assert!(
+            InstanceLock::acquire(&paths).is_err(),
+            "premise: a plain acquire fails while the dup is open"
+        );
+        let settled = InstanceLock::acquire_settling(&paths, std::time::Duration::from_millis(500))
+            .await
+            .expect("lock must settle once the dup closes");
+        closer.join().unwrap();
+        drop(settled);
+        // Still held past the bound: refused, not waited on forever.
+        let held = InstanceLock::acquire(&paths).unwrap();
+        let t = std::time::Instant::now();
+        let err =
+            InstanceLock::acquire_settling(&paths, std::time::Duration::from_millis(100)).await;
+        assert!(matches!(err, Err(LockError::Held { .. })));
+        assert!(t.elapsed() < std::time::Duration::from_secs(2));
+        drop(held);
     }
 
     #[test]

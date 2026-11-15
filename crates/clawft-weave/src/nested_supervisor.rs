@@ -401,8 +401,12 @@ impl NestedSupervisor {
         // runtime lock and socket probe jointly prove quiescence. Never signal
         // a recovered PID, or unlink an unowned endpoint that accepts calls.
         let paths = clawft_types::runtime_paths::RuntimePaths::at(&instance.contract.runtime);
-        let _lock = crate::instance_lock::InstanceLock::acquire(&paths)
-            .context("nested instance may still be alive; stop/revocation incomplete")?;
+        let _lock = crate::instance_lock::InstanceLock::acquire_settling(
+            &paths,
+            std::time::Duration::from_millis(500),
+        )
+        .await
+        .context("nested instance may still be alive; stop/revocation incomplete")?;
         crate::instance_lock::reclaim_stale_socket(&paths)
             .await
             .context("nested endpoint still live or unverifiable; stop/revocation incomplete")?;
