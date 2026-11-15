@@ -704,5 +704,9 @@ fi
 # shellcheck source=scripts/tests/diff-gate-test-review.sh
 . "$ROOT/scripts/tests/diff-gate-test-review.sh"
 
+# 13. Fixes for the review findings (RV-B1, RV-B2, RV-F1, RV-E1, RV-C1, RV-D1), 2026-11-15.
+# shellcheck source=scripts/tests/diff-gate-test-rv-fixes.sh
+. "$ROOT/scripts/tests/diff-gate-test-rv-fixes.sh"
+
 echo "diff-gate fixtures: $pass passed, $fail failed, $gaps known gaps"
 [ "$fail" -eq 0 ]

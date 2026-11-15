@@ -71,7 +71,8 @@ block from the workflow and runs it unchanged against fixture pushes.
 | Rule | Fails when the diff adds |
 |---|---|
 | `unsafe` | the `unsafe` keyword in a `.rs` file (any case of the extension), outside comments, strings and char literals, including in a doctest; also an added line inside an existing `unsafe { }` block, `unsafe fn` or `unsafe impl` body. See [How .rs files are read](#how-rs-files-are-read) |
-| `new-dep` | a new entry in any Cargo.toml dependency table, in `[patch.*]` or in `[replace]`, or a changed source on an existing entry (`git`, `path`, `registry`, `registry-index`, `package`, `rev`, `tag`, `branch`). Quoted and dotted keys count. `workspace = true` entries for a dependency the base workspace already declares are not new |
+| `new-dep` | a new entry in any Cargo.toml dependency table, in `[patch.*]` or in `[replace]`, or a changed source on an existing entry (`git`, `path`, `registry`, `registry-index`, `package`, `rev`, `tag`, `branch`). Every spelling Cargo resolves counts the same: a table header, a dotted key (`dependencies.evil = ...`, `[target.'cfg(unix)']` then `dependencies.evil`, `[workspace]` then `dependencies.evil`, `[patch]` then `crates-io.evil`), an inline table (`dependencies = { evil = ... }`), quoted and escaped key segments, and any line ending. `workspace = true` entries for a dependency the base workspace already declares are not new. See [How Cargo.toml is read](#how-cargotoml-is-read) |
+| `cargo-unparsed` | a Cargo.toml statement the gate's reader cannot read, or a key path that names a dependency table (a segment containing `dependencies`, or `patch`, `replace` or `target`) in a form it does not know, such as `[target.x.y.dependencies]` or `patch = "x"`. Fail closed: such a statement is never an OK. Statements the base already had are not reported again; an approval row clears it |
 | `build-script` | a new `build.rs` (also one created by a rename), or a `build` key in Cargo.toml in any form: bare, quoted, dotted (`package.build`) or inside an inline table (`package = { build = ... }`); `build = false` is fine. A quoted Cargo.toml key or table name with a backslash escape is reported here too, since it can spell `build` or `proc-macro` |
 | `proc-macro` | `proc-macro` / `proc_macro` `= true` in any of the same key forms (`lib = { proc-macro = true }`, `lib.proc-macro`) |
 | `net` | `std::net`, `tokio::net`, `async_std::net`, `mio::net` paths, `TcpStream`, `TcpListener`, `TcpSocket`, `UdpSocket`, `reqwest`, `ureq`, `hyper`, `isahc`, `surf`, `attohttpc`, `curl`, `socket2`, `tungstenite`, `quinn` paths or imports, `net` in a `std::{...}` import, `libc` socket calls. Address types (`SocketAddr`, `IpAddr` and friends) do no I/O and are ignored. Unix-domain sockets (`std::os::unix::net`) are local IPC, used by the daemon in about 75 files, and are not findings |
@@ -291,6 +292,40 @@ pin a content row to one reviewed version of its file.
 `blob` is part of the row's ledger hash (see [Owner ledger](#owner-ledger)), so a ledgered row
 cannot be re-pointed at another file version.
 
+### How Cargo.toml is read
+
+Pass 3 reads each changed Cargo.toml in full, on the base and on the head, with a small TOML
+reader (`cargo_entries` in the script; `scripts/diff-gate.sh --cargo-entries FILE` prints what
+it makes of a file). It is a tokenizer, not one regex per line:
+
+- **Line endings.** CRLF is a line ending; so is a lone CR (not a TOML newline, so Cargo rejects
+  such a file, but splitting there can only show more keys). Before 2026-11-15 a CRLF manifest
+  hid its tables: the header kept its CR and `[dependencies]\r` never matched (RV-B1). Pass 1's
+  `build` / `proc-macro` / escaped-key checks on added lines split on CR the same way.
+- **Keys.** Table and array-of-tables headers and dotted keys are split into segments: bare
+  (`A-Za-z0-9_-`), basic strings (`"..."`, escapes decoded: `\u0065` is `e`) and literal
+  strings (`'...'`), with spaces around the dots. Each key is resolved to its full path (header,
+  then the dotted key, then the keys of any inline table it holds) before it is classified.
+- **Values.** Basic, literal and both multi-line string forms, inline tables and arrays (both
+  also over several lines, with comments), and bare scalars.
+- **Classification.** A path is a dependency entry when it starts with `dependencies`,
+  `dev-dependencies`, `build-dependencies` (or the `_` spellings), `target.<T>.` one of those,
+  `workspace.dependencies`, `patch.<registry>` or `replace`; the next segment is the entry name.
+  So `[dependencies] evil = {...}`, `dependencies.evil = ...`, `dependencies = { evil = ... }`
+  and `[target.'cfg(unix)'] dependencies.evil = ...` are one and the same entry (RV-B2). A
+  `path` under `lib`, `bin`, `example`, `test` or `bench` is a target path.
+  `package.metadata`, `workspace.metadata` and `[features]` are skipped: Cargo resolves nothing
+  there.
+- **Fail closed.** A statement that does not parse, every key under a header that does not
+  parse, and any other key path with a segment containing `dependencies`, or equal to `patch`,
+  `replace` or `target`, is `cargo-unparsed`. The tables on the way to a dependency table
+  (`[target]`, `[target.<T>]`, `[patch]`, `[workspace]`) are not. Unparsed statements are keyed
+  by their table and text, so one the base already had is not reported again, while a new key
+  under a header the base already could not read is.
+
+On 2026-11-15 the reader gives the same entry keys as the old one on all 99 tracked Cargo.toml
+files and finds no unparsed statement in any of them.
+
 ### Cargo.toml findings
 
 For `new-dep`, `build-script` and `proc-macro` findings on a Cargo.toml line, and Cargo target
@@ -475,6 +510,17 @@ comments that still pass.
 `tools/diff-gate-tokens/tests/escapes.rs` (`cargo test --locked` in that directory) ports every
 Rust-rule fixture and every escape from the review rounds, and checks that strings, comments,
 `text` code blocks, `std::process::exit` and an aliased `clap::Command` are not findings.
+
+Review-fix cases (2026-11-15, `scripts/tests/diff-gate-test-rv-fixes.sh`, section 13): CRLF,
+mixed and lone-CR manifests (a dependency after a lone CR, a `build` key after one, a CRLF
+source change, a pure LF-to-CRLF conversion passing); dependency entries through `[workspace]`
+inline tables, dotted `replace`, a whole `target` inline table, `[target]` with a dotted cfg
+key, dotted `git` under `[patch.crates-io]`, a `\u0065` escape spelling `dependencies`,
+`dev_dependencies`, a two-line inline table and an empty `[dependencies.x]` table; controls that
+a form change with the same source, `package.metadata` and `[features]` pass; `cargo-unparsed`
+for an unknown dependency key path, a scalar where a table belongs, an unreadable header and a
+new key under a header the base already could not read; and `--cargo-entries` output for one
+manifest that spells every form.
 
 `DIFF_GATE_TEST_TMP` puts the fixture repos on another disk (the default is `target/`).
 `DIFF_GATE_TEST_FILTER=<ERE>` runs only the `case_run` fixtures whose name matches.

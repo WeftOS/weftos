@@ -39,30 +39,30 @@ EXPECT="new-dep" case_run "rv-b: workspace = true for a dep the base workspace l
     'mkdir -p crates/x && printf "[package]\nname=\"x\"\n[dependencies]\nevil = { workspace = true }\n" >crates/x/Cargo.toml'
 EXPECT="new-dep" case_run "rv-b: [patch.\"https://...\"] git URL key" 1 : 'printf "\n[patch.\"https://github.com/x/y\"]\nexisting = { path = \"../evil\" }\n" >>Cargo.toml'
 EXPECT="build-script" case_run "rv-b: CRLF build key" 1 : 'printf "[package]%s\nname = \"fx\"%s\nbuild = \"b.rs\"%s\n" "$CR" "$CR" "$CR" >Cargo.toml'
-# Gaps: a CRLF manifest hides its tables; deps declared through dotted keys of a parent table.
-KNOWN_GAP=RV-B1 EXPECT="new-dep" case_run "rv-b: CRLF Cargo.toml new dependency" 1 \
+# RV-B1/RV-B2 (fixed 2026-11-15): a CRLF manifest, and deps declared through dotted or inline keys of a parent table.
+EXPECT="new-dep" case_run "rv-b: CRLF Cargo.toml new dependency" 1 \
     'printf "[package]%s\nname = \"fx\"%s\n%s\n[dependencies]%s\nexisting = \"1\"%s\n" "$CR" "$CR" "$CR" "$CR" "$CR" >Cargo.toml' \
     'printf "evil = { git = \"https://evil\" }%s\n" "$CR" >>Cargo.toml'
-KNOWN_GAP=RV-B1 EXPECT="new-dep" case_run "rv-b: LF to CRLF conversion plus a new dependency" 1 : \
+EXPECT="new-dep" case_run "rv-b: LF to CRLF conversion plus a new dependency" 1 : \
     'sed -i.bak "s/\$/$CR/" Cargo.toml; rm Cargo.toml.bak; printf "evil = { git = \"https://evil\" }%s\n" "$CR" >>Cargo.toml'
-# [patch.X] still matches with a trailing CR (the table regex is loose), [replace] does not.
+# Before the RV-B1 fix [patch.X] matched with a trailing CR only because the table regex was loose; [replace] did not.
 EXPECT="new-dep" case_run "rv-b: CRLF [patch.crates-io] git redirect" 1 \
     'printf "[package]%s\nname = \"fx\"%s\n" "$CR" "$CR" >Cargo.toml' \
     'printf "%s\n[patch.crates-io]%s\nexisting = { git = \"https://evil\" }%s\n" "$CR" "$CR" "$CR" >>Cargo.toml'
-KNOWN_GAP=RV-B1 EXPECT="new-dep" case_run "rv-b: CRLF [replace] entry" 1 : \
+EXPECT="new-dep" case_run "rv-b: CRLF [replace] entry" 1 : \
     'printf "%s\n[replace]%s\n\"existing:1.0.0\" = { git = \"https://evil\" }%s\n" "$CR" "$CR" "$CR" >>Cargo.toml'
-KNOWN_GAP=RV-B1 EXPECT="include" case_run "rv-b: CRLF [lib] path to a non-.rs file" 1 : \
+EXPECT="include" case_run "rv-b: CRLF [lib] path to a non-.rs file" 1 : \
     'printf "%s\n[lib]%s\npath = \"src/lib.txt\"%s\n" "$CR" "$CR" "$CR" >>Cargo.toml'
-KNOWN_GAP=RV-B2 EXPECT="new-dep" case_run "rv-b: top-level dotted dependencies key" 1 : \
+EXPECT="new-dep" case_run "rv-b: top-level dotted dependencies key" 1 : \
     '{ printf "dependencies.evil = { git = \"https://evil\" }\n"; cat Cargo.toml; } >c.tmp && mv c.tmp Cargo.toml'
-KNOWN_GAP=RV-B2 EXPECT="new-dep" case_run "rv-b: top-level inline dependencies table" 1 \
+EXPECT="new-dep" case_run "rv-b: top-level inline dependencies table" 1 \
     'printf "[package]\nname = \"fx\"\n" >Cargo.toml' \
     '{ printf "dependencies = { evil = { git = \"https://evil\" } }\n"; cat Cargo.toml; } >c.tmp && mv c.tmp Cargo.toml'
-KNOWN_GAP=RV-B2 EXPECT="new-dep" case_run "rv-b: [target.cfg] table with a dotted dependencies key" 1 : \
+EXPECT="new-dep" case_run "rv-b: [target.cfg] table with a dotted dependencies key" 1 : \
     'printf "\n[target.\x27cfg(unix)\x27]\ndependencies.evil = { git = \"https://evil\" }\n" >>Cargo.toml'
-KNOWN_GAP=RV-B2 EXPECT="new-dep" case_run "rv-b: [patch] table with a dotted registry key" 1 : \
+EXPECT="new-dep" case_run "rv-b: [patch] table with a dotted registry key" 1 : \
     'printf "\n[patch]\ncrates-io.existing = { git = \"https://evil\" }\n" >>Cargo.toml'
-KNOWN_GAP=RV-B2 EXPECT="new-dep" case_run "rv-b: [workspace] table with a dotted dependencies key" 1 : \
+EXPECT="new-dep" case_run "rv-b: [workspace] table with a dotted dependencies key" 1 : \
     'printf "\n[workspace]\ndependencies.evil = { git = \"https://evil\" }\n" >>Cargo.toml'
 EXPECT="include" case_run "rv-b: top-level dotted lib.path to a non-.rs file" 1 : \
     '{ printf "lib.path = \"src/lib.txt\"\n"; cat Cargo.toml; } >c.tmp && mv c.tmp Cargo.toml'

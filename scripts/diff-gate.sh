@@ -9,9 +9,9 @@
 #
 # Only added lines and new files are inspected. Existing code never fails the gate.
 #
-# Rules: unsafe, new-dep, build-script, proc-macro, net, process, ffi, include, ci-workflow,
-#        rust-parse, rust-tokens (the token helper, tools/diff-gate-tokens, built from the base),
-#        gitattributes-change, toolchain-config, special-file, sensitive-crate, approvals-change.
+# Rules: unsafe, new-dep, cargo-unparsed, build-script, proc-macro, net, process, ffi, include,
+#        ci-workflow, rust-parse, rust-tokens (the token helper, tools/diff-gate-tokens, built from
+#        the base), gitattributes-change, toolchain-config, special-file, sensitive-crate, approvals-change.
 #
 # The diff is taken with --text --no-textconv --no-renames and pinned prefixes, quoting and
 # colour, so .gitattributes and git config cannot hide or misname hunks; any .gitattributes
@@ -26,12 +26,15 @@
 #
 # Usage: scripts/diff-gate.sh [--json] [--worktree] [--base REF] [--head REF]
 #        scripts/diff-gate.sh --ledger-hash [FILE]
+#        scripts/diff-gate.sh --cargo-entries FILE
 #   --json        machine-readable findings on stdout
 #   --worktree    compare the working tree (tracked changes + untracked files) with the
 #                 base instead of HEAD; this is what `scripts/build.sh gate` uses
 #   --base REF    same as DIFF_GATE_BASE
 #   --ledger-hash print "sha256 <TAB> rule <TAB> path <TAB> pattern" for each row of FILE
 #                 (default: the approvals file), for the owner to build ledger entries
+#   --cargo-entries print what the Cargo.toml reader (pass 3) makes of FILE: one line per
+#                 dependency entry, target path and unparsed statement (for tests and review)
 # Environment:
 #   DIFF_GATE_BASE            base commit-ish; the merge-base with HEAD is used. Default:
 #                             newest origin/<AGF_TARGET_PATTERN> (config/agent-git.env),
@@ -54,6 +57,7 @@ APPROVALS="config/diff-gate-approvals.toml"
 LEDGER="config/diff-gate-owner-ledger.toml"
 JSON=0
 LEDGER_HASH=""
+CARGO_ENTRIES=""
 WORKTREE=0
 BASE_REF="${DIFF_GATE_BASE:-}"
 HEAD_REF="${DIFF_GATE_HEAD:-HEAD}"
@@ -64,6 +68,7 @@ while [ $# -gt 0 ]; do
         --worktree) WORKTREE=1 ;;
         --base) BASE_REF="${2:-}"; shift ;;
         --head) HEAD_REF="${2:-}"; shift ;;
+        --cargo-entries) CARGO_ENTRIES="${2:-}"; [ -n "$CARGO_ENTRIES" ] || { echo "diff-gate: --cargo-entries needs a file" >&2; exit 2; }; shift ;;
         --ledger-hash) LEDGER_HASH="$APPROVALS"; case "${2:-}" in ""|-*) ;; *) LEDGER_HASH="$2"; shift ;; esac ;;
         -h|--help) sed -n '2,/^set -uo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "diff-gate: unknown argument: $1" >&2; exit 2 ;;
@@ -151,6 +156,267 @@ hash_rows() {
         printf '%s\t%s\t%s\t%s\t%s\n' "$h" "$ln" "$r" "$g" "$pt"
     done
 }
+
+# ── Cargo.toml key paths (pass 3) ────────────────────────────────────
+# cargo_entries: a Cargo.toml on stdin -> one line per dependency entry, Cargo target path and
+# unparsed statement: key <TAB> sources <TAB> workspace=true <TAB> line <TAB> text
+#   key  <section>|<name>   a dependency entry; section is dependencies, dev-dependencies,
+#                           build-dependencies (or the _ spellings), target.<T>.<one of those>,
+#                           workspace.dependencies, patch.<registry> or replace
+#        target-path|<v>    a [lib]/[[bin]]/[[example]]/[[test]]/[[bench]] path value
+#        unparsed|<ctx>|<text>|<n>  a statement it cannot read, or a key path that names a
+#                           dependency table in a form it does not know (fail closed)
+#   sources  the entry's git/path/registry/registry-index/package/rev/tag/branch values, sorted
+# A small TOML reader, not a regex per line: CRLF and a lone CR end a line; table headers,
+# array-of-tables headers, dotted keys, bare, basic ("..." with escapes) and literal ('...')
+# key segments, inline tables and arrays (also over several lines), and all four string forms.
+# Every key is resolved to its full path (header + dotted key + inline-table keys) before it is
+# classified, so `[dependencies] evil = ...`, `dependencies.evil = ...`, `dependencies = { evil
+# = ... }` and `[target.'cfg(unix)'] dependencies.evil = ...` are the same entry.
+cargo_entries() {
+    awk '
+    function tstrip(s,   i, n, c, q) { # drop a trailing TOML comment; a # inside a string stays
+        if (index(s, "#") == 0) return s
+        n = length(s); q = ""
+        for (i = 1; i <= n; i++) {
+            c = substr(s, i, 1)
+            if (q == "\"") { if (c == "\\") i++; else if (c == "\"") q = ""; continue }
+            if (q == "\047") { if (c == "\047") q = ""; continue }
+            if (c == "\"" || c == "\047") { q = c; continue }
+            if (c == "#") { s = substr(s, 1, i - 1); sub(/[ \t]+$/, "", s); return s }
+        }
+        return s
+    }
+    # Cursor over logical lines LT[1..NL]: pk(0) is the current character, "\n" at the end of a
+    # line, "" at the end of the file. Strings never look past the end of their line.
+    function pk(k,   p, L) {
+        if (li > NL) return ""
+        p = ci + k; L = length(LT[li])
+        if (p <= L) return substr(LT[li], p, 1)
+        return (p == L + 1) ? "\n" : ""
+    }
+    function adv() { if (li > NL) return; if (ci > length(LT[li])) { li++; ci = 1 } else ci++ }
+    function skipws() { while (pk(0) == " " || pk(0) == "\t") adv() }
+    function skipall(   c) { # spaces, newlines and comments
+        while (1) {
+            c = pk(0)
+            if (c == " " || c == "\t" || c == "\n") adv()
+            else if (c == "#") ci = length(LT[li]) + 1
+            else return
+        }
+    }
+    function hexn(n,   i, c, v, d) {
+        v = 0; HX = ""
+        for (i = 1; i <= n; i++) {
+            c = pk(0); d = index("0123456789abcdef", tolower(c))
+            if (c == "" || c == "\n" || d == 0) return -1
+            v = v * 16 + d - 1; HX = HX c; adv()
+        }
+        return v
+    }
+    function bstr(   s, c, h) { # "..." on one line, escapes decoded; sets SV
+        adv(); s = ""
+        while (1) {
+            c = pk(0)
+            if (c == "" || c == "\n") return 0
+            adv()
+            if (c == "\"") { SV = s; return 1 }
+            if (c != "\\") { s = s c; continue }
+            c = pk(0); if (c == "" || c == "\n") return 0
+            adv()
+            if (c == "u" || c == "U" || c == "x") {
+                h = hexn(c == "u" ? 4 : (c == "U" ? 8 : 2)); if (h < 0) return 0
+                s = s ((h > 0 && h < 128) ? sprintf("%c", h) : "\\u{" tolower(HX) "}"); continue
+            }
+            if (c == "\"" || c == "\\") s = s c
+            else if (c == "n") s = s "\n"; else if (c == "t") s = s "\t"; else if (c == "r") s = s "\r"
+            else if (c == "b") s = s "\b"; else if (c == "f") s = s "\f"; else if (c == "e") s = s "\033"
+            else return 0
+        }
+    }
+    function lstr(   s, c) { # literal string on one line; sets SV
+        adv(); s = ""
+        while (1) {
+            c = pk(0)
+            if (c == "" || c == "\n") return 0
+            adv()
+            if (c == "\047") { SV = s; return 1 }
+            s = s c
+        }
+    }
+    function mlstr(q,   s, c, n) { # """...""" or '\'''\''...; escapes kept as written; sets SV
+        adv(); adv(); adv(); s = ""
+        if (pk(0) == "\n") adv()   # a newline right after the opening quotes is not content
+        while (1) {
+            c = pk(0)
+            if (c == "") return 0
+            if (q == "\"" && c == "\\") { adv(); c = pk(0); if (c == "") return 0; s = s "\\" c; adv(); continue }
+            if (c == q && pk(1) == q && pk(2) == q) {
+                n = 0; while (pk(0) == q) { n++; adv() }
+                if (n > 5) return 0
+                while (n-- > 3) s = s q
+                SV = s; return 1
+            }
+            s = s c; adv()
+        }
+    }
+    function keyseg(   c, s) { # one key segment; sets SV
+        c = pk(0)
+        if (c == "\"") return bstr()
+        if (c == "\047") return lstr()
+        s = ""
+        while ((c = pk(0)) != "" && c ~ /^[A-Za-z0-9_-]$/) { s = s c; adv() }
+        if (s == "") return 0
+        SV = s; return 1
+    }
+    function parsekey(P,   q) { # dotted key -> KP, the full path below P (segments joined by SUBSEP)
+        q = P
+        while (1) {
+            skipws(); if (!keyseg()) return 0
+            q = (q == "" ? SV : q SUBSEP SV); skipws()
+            if (pk(0) != ".") { KP = q; return 1 }
+            adv()
+        }
+    }
+    function rec(t, P, v, l) { NRC++; RT[NRC] = t; RP[NRC] = P; RV[NRC] = v; RL[NRC] = l }
+    function value(P, l,   c, s) {
+        c = pk(0)
+        if (c == "\"" || c == "\047") {
+            if (pk(1) == c && pk(2) == c) { if (!mlstr(c)) return 0 }
+            else if (c == "\"") { if (!bstr()) return 0 }
+            else if (!lstr()) return 0
+            rec("V", P, SV, l); return 1
+        }
+        if (c == "{") return itable(P, l)
+        if (c == "[") return array(P, l)
+        s = ""
+        while ((c = pk(0)) != "" && c ~ /^[A-Za-z0-9_+.:-]$/) { s = s c; adv() }
+        if (s == "") return 0
+        if (s ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/ && pk(0) == " " && pk(1) ~ /^[0-9]$/) {
+            adv(); s = s " "; while ((c = pk(0)) != "" && c ~ /^[0-9:.Z+-]$/) { s = s c; adv() }
+        }
+        rec("V", P, s, l); return 1
+    }
+    function itable(P, l,   c, kl, q) { # { k = v, ... }; newlines and comments allowed (TOML 1.1)
+        adv(); rec("N", P, "", l); skipall()
+        if (pk(0) == "}") { adv(); return 1 }
+        while (1) {
+            skipall(); kl = li
+            if (!parsekey(P)) return 0
+            q = KP; skipws(); if (pk(0) != "=") return 0
+            adv(); skipws()
+            if (!value(q, kl)) return 0
+            skipall(); c = pk(0)
+            if (c == "}") { adv(); return 1 }
+            if (c != ",") return 0
+            adv(); skipall()
+            if (pk(0) == "}") { adv(); return 1 }
+        }
+    }
+    function array(P, l,   c) { # [ v, ... ]; every element has the array path
+        adv(); rec("N", P, "", l)
+        while (1) {
+            skipall()
+            if (pk(0) == "]") { adv(); return 1 }
+            if (!value(P, li)) return 0
+            skipall(); c = pk(0)
+            if (c == "]") { adv(); return 1 }
+            if (c != ",") return 0
+            adv()
+        }
+    }
+    function eol() { skipws(); if (pk(0) == "#") ci = length(LT[li]) + 1; return (pk(0) == "\n" || pk(0) == "") }
+    function unparsed(l) { # record the statement at line l, then resume on the line after the cursor
+        rec("U", H, "", l)
+        if (li < l) li = l
+        if (li <= NL) { ci = length(LT[li]) + 1; adv() }
+    }
+    function parse(   c, kl, aot, kp) {
+        li = 1; ci = 1; H = ""
+        while (1) {
+            skipall(); if (li > NL) return
+            kl = li
+            if (pk(0) == "[") {
+                adv(); aot = 0; if (pk(0) == "[") { adv(); aot = 1 }
+                skipws()
+                if (!parsekey("")) { H = UNK; unparsed(kl); continue }
+                skipws(); if (pk(0) != "]") { H = UNK; unparsed(kl); continue }
+                adv()
+                if (aot && pk(0) != "]") { H = UNK; unparsed(kl); continue }
+                if (aot) adv()
+                H = KP; rec("N", H, "", kl)
+                if (!eol()) unparsed(kl)
+                continue
+            }
+            if (!parsekey(H)) { unparsed(kl); continue }
+            kp = KP; skipws()
+            if (pk(0) != "=") { unparsed(kl); continue }
+            adv(); skipws()
+            if (!value(kp, kl) || !eol()) { unparsed(kl); continue }
+        }
+    }
+    function esc(s) { gsub(/%/, "%25", s); gsub(/\./, "%2E", s); gsub(/\|/, "%7C", s); gsub(/\t/, "%09", s); gsub(/\n/, "%0A", s); gsub(/\r/, "%0D", s); return s }
+    function escv(s) { gsub(/%/, "%25", s); gsub(/\t/, "%09", s); gsub(/\n/, "%0A", s); gsub(/\r/, "%0D", s); return s }
+    function jn(s, a, b,   i, o) { o = ""; for (i = a; i <= b; i++) o = o (i > a ? "." : "") esc(s[i]); return o }
+    function isdt(x) { return (x ~ /^(dev[-_]|build[-_])?dependencies$/) }
+    function text(l,   t) { t = tstrip(LT[l]); sub(/^[ \t]+/, "", t); sub(/[ \t]+$/, "", t); gsub(/\t/, " ", t); return t }
+    function unp(r,   t, k, n, s) {
+        n = split(RP[r], s, SUBSEP); t = text(RL[r]); k = "unparsed|" jn(s, 1, n) "|" esc(t); occ[k]++
+        print k "|" occ[k] "\t\t0\t" LN[RL[r]] "\t" t
+    }
+    # One logical line per LF; a CR before it is dropped, a CR anywhere else also ends a line (a
+    # lone CR is not a TOML newline, so Cargo rejects such a file; splitting there can only
+    # show more keys). LN maps a logical line to the physical line git numbers.
+    { r = $0; sub(/\r$/, "", r); n = split(r, part, "\r"); if (n == 0) { n = 1; part[1] = "" }
+      for (i = 1; i <= n; i++) { NL++; LT[NL] = part[i]; LN[NL] = NR } }
+    END {
+        UNK = "\001unknown-table"
+        parse()
+        nsrc = split("git path registry registry-index package rev tag branch", sl, " ")
+        for (i = 1; i <= nsrc; i++) SRC[sl[i]] = 1
+        for (r = 1; r <= NRC; r++) {
+            if (RT[r] == "U" || index(RP[r], UNK) == 1) { unp(r); continue }
+            n = split(RP[r], s, SUBSEP)
+            if (n >= 2 && (s[1] == "package" || s[1] == "workspace") && s[2] == "metadata") continue
+            if (s[1] == "features") continue
+            pl = 0
+            if (isdt(s[1])) pl = 1
+            else if (s[1] == "target" && n >= 3 && isdt(s[3])) pl = 3
+            else if (s[1] == "workspace" && n >= 2 && s[2] == "dependencies") pl = 2
+            else if (s[1] == "patch" && n >= 2) pl = 2
+            else if (s[1] == "replace") pl = 1
+            if (pl) {
+                if (n == pl) { if (RT[r] != "N") unp(r); continue }
+                k = jn(s, 1, pl) "|" esc(s[pl + 1])
+                if (!(k in el)) { el[k] = RL[r]; eo[++ne] = k }
+                if (n >= pl + 2 && RT[r] == "V") {
+                    if (s[pl + 2] in SRC) { ns[k]++; es[k, ns[k]] = jn(s, pl + 2, n) "=" escv(RV[r]) }
+                    if (n == pl + 2 && s[pl + 2] == "workspace" && RV[r] == "true") ew[k] = 1
+                }
+                continue
+            }
+            if (n == 2 && s[1] ~ /^(lib|bin|example|test|bench)$/ && s[2] == "path" && RT[r] == "V") {
+                print "target-path|" escv(RV[r]) "\t\t0\t" LN[RL[r]] "\t" text(RL[r]); continue
+            }
+            # tables on the way to a dependency table: [target], [target.<T>], [patch], [workspace]
+            if (RT[r] == "N" && ((n == 1 && s[1] ~ /^(target|patch|workspace)$/) || (n == 2 && s[1] == "target"))) continue
+            for (i = 1; i <= n; i++) if (s[i] ~ /dependencies/ || s[i] ~ /^(patch|replace|target)$/) { unp(r); break }
+        }
+        for (e = 1; e <= ne; e++) {
+            k = eo[e]; m = ns[k] + 0
+            for (i = 2; i <= m; i++) { v = es[k, i]; for (j = i - 1; j >= 1 && es[k, j] > v; j--) es[k, j + 1] = es[k, j]; es[k, j + 1] = v }
+            src = ""; for (i = 1; i <= m; i++) src = src es[k, i] ";"
+            print k "\t" src "\t" (ew[k] ? 1 : 0) "\t" LN[el[k]] "\t" text(el[k])
+        }
+    }
+    '
+}
+
+if [ -n "$CARGO_ENTRIES" ]; then
+    [ -f "$CARGO_ENTRIES" ] || { echo "diff-gate: $CARGO_ENTRIES not found" >&2; exit 2; }
+    cargo_entries <"$CARGO_ENTRIES"
+    exit $?
+fi
 
 if [ -n "$LEDGER_HASH" ]; then
     [ -f "$LEDGER_HASH" ] || { echo "diff-gate: $LEDGER_HASH not found" >&2; exit 2; }
@@ -320,13 +586,18 @@ FILENAME == flist {
 inhunk && !skipc && /^\+/ {
     text = substr($0, 2); this = ln; ln++
     if (iscargo) {
-        # A trailing comment is not part of the key or value, so it can neither trigger a rule
-        # nor be what an approval pattern matches (G2).
-        t = tstrip(text)
-        # build / proc-macro keys anywhere: bare, quoted, dotted, or inside an inline table
-        if (match(t, /(^|[{,. \t])["\047]?build["\047]?[ \t]*=/) && substr(t, RSTART + RLENGTH) !~ /^[ \t]*false/) emitc("build-script", cur, this, t)
-        if (t ~ /(^|[{,. \t])["\047]?proc[-_]macro["\047]?[ \t]*=[ \t]*true/) emitc("proc-macro", cur, this, t)
-        if (t ~ /"[^"]*\\[^"]*"[ \t]*[.=]/ || t ~ /^[ \t]*\[.*\\/) emitc("build-script", cur, this, "escaped key: " t)
+        # CRLF: the CR is not part of the line. A lone CR is read as a line break, as pass 3
+        # does, so a key after it is seen (RV-B1).
+        sub(/\r$/, "", text); ncr = split(text, crp, "\r"); if (ncr == 0) next
+        for (ci = 1; ci <= ncr; ci++) {
+            # A trailing comment is not part of the key or value, so it can neither trigger a
+            # rule nor be what an approval pattern matches (G2).
+            t = tstrip(crp[ci])
+            # build / proc-macro keys anywhere: bare, quoted, dotted, or inside an inline table
+            if (match(t, /(^|[{,. \t])["\047]?build["\047]?[ \t]*=/) && substr(t, RSTART + RLENGTH) !~ /^[ \t]*false/) emitc("build-script", cur, this, t)
+            if (t ~ /(^|[{,. \t])["\047]?proc[-_]macro["\047]?[ \t]*=[ \t]*true/) emitc("proc-macro", cur, this, t)
+            if (t ~ /"[^"]*\\[^"]*"[ \t]*[.=]/ || t ~ /^[ \t]*\[.*\\/) emitc("build-script", cur, this, "escaped key: " t)
+        }
         next
     }
     if (isrs) { gsub(/\t/, " ", text); print cur "\t" this "\t" text > rs_out }
@@ -717,78 +988,7 @@ END { for (i = 1; i <= no; i++) { k = ord[i]; split(rec[k], f, "\t"); print f[1]
 ' "$TMP/findings" >"$TMP/findings.m" && mv "$TMP/findings.m" "$TMP/findings" || die "merging findings failed"
 
 # ── Pass 3: Cargo.toml entries (needs the full file, not hunks) ──────
-# Emits per entry: key <TAB> source <TAB> workspace=true <TAB> line <TAB> text
-# Keys: <section>|<name> for dependency, [patch.*] and [replace] tables; target-path|<value>
-# for a [lib]/[[bin]]/... path that is not a .rs file.
-cargo_entries() {
-    awk '
-    function tstrip(s,   i, n, c, q) { # drop a trailing TOML comment; a # inside a string stays
-        if (index(s, "#") == 0) return s
-        n = length(s); q = ""
-        for (i = 1; i <= n; i++) {
-            c = substr(s, i, 1)
-            if (q == "\"") { if (c == "\\") i++; else if (c == "\"") q = ""; continue }
-            if (q == "\047") { if (c == "\047") q = ""; continue }
-            if (c == "\"" || c == "\047") { q = c; continue }
-            if (c == "#") { s = substr(s, 1, i - 1); sub(/[ \t]+$/, "", s); return s }
-        }
-        return s
-    }
-    function flush() {
-        if (intab) print key "\t" src "\t" ws "\t" tl "\t" tt
-        intab = 0
-    }
-    function sources(t,   s, ks, i, n) {
-        s = ""; n = split("git path registry registry-index package rev tag branch", ks, " ")
-        for (i = 1; i <= n; i++)
-            if (match(t, "(^|[^A-Za-z_-])[\"\047]?" ks[i] "[\"\047]?[ \t]*=[ \t]*(\"[^\"]*\"|\047[^\047]*\047)")) s = s substr(t, RSTART, RLENGTH)
-        return s
-    }
-    function norm(h,   out, i, c, q) { # unquote a dotted key; dots inside quotes become %2E
-        out = ""; q = ""
-        for (i = 1; i <= length(h); i++) {
-            c = substr(h, i, 1)
-            if (q != "") { if (c == q) q = ""; else out = out (c == "." ? "%2E" : c); continue }
-            if (c == "\"" || c == "\047") { q = c; continue }
-            if (c == " " || c == "\t") continue
-            out = out c
-        }
-        return out
-    }
-    function tpath(t) {
-        if (match(t, /(^|[^A-Za-z_-])["\047]?path["\047]?[ \t]*=[ \t]*("[^"]*"|\047[^\047]*\047)/)) {
-            v = substr(t, RSTART, RLENGTH); sub(/^[^=]*=[ \t]*/, "", v); v = substr(v, 2, length(v) - 2)
-            print "target-path|" v "\t\t0\t" NR "\t" t
-        }
-    }
-    { t = tstrip($0); sub(/^[ \t]+/, "", t); sub(/[ \t]+$/, "", t) }
-    t ~ /^\[/ {
-        flush(); mode = ""; started = 1
-        h = t; sub(/^\[+[ \t]*/, "", h); sub(/[ \t]*\]+[ \t]*(#.*)?$/, "", h); h = norm(h); target = (h ~ /^(lib|bin|example|test|bench)$/)
-        if (h ~ /^package\.metadata/) next
-        if (h ~ /(^|\.)(dev-|build-)?dependencies$/ || h ~ /^patch\.[^.]+$/ || h == "replace") { mode = "list"; sec = h }
-        else if (h ~ /(^|\.)(dev-|build-)?dependencies\.[^.]+$/ || h ~ /^patch\.[^.]+\.[^.]+$/ || h ~ /^replace\.[^.]+$/) {
-            mode = "tab"; name = h; sub(/.*\./, "", name)
-            sec = substr(h, 1, length(h) - length(name) - 1)
-            key = sec "|" name; intab = 1; src = ""; ws = 0; tl = NR; tt = t
-        }
-        next
-    }
-    target { tpath(t) }
-    !started && t ~ /^["\047]?(lib|bin|example|test|bench)["\047]?[ \t]*[.=]/ { tpath(t) }
-    mode == "list" && match(t, /^("[^"]*"|\047[^\047]*\047|[A-Za-z0-9_-]+)([ \t]*\.[ \t]*("[^"]*"|\047[^\047]*\047|[A-Za-z0-9_-]+))*[ \t]*=/) {
-        name = t; if (name ~ /^["\047]/) { q = substr(name, 1, 1); name = substr(name, 2); sub(q ".*$", "", name) } else sub(/[ \t.=].*$/, "", name)
-        print sec "|" norm("\"" name "\"") "\t" sources(t) "\t" (t ~ /workspace[ \t]*=[ \t]*true/ ? 1 : 0) "\t" NR "\t" t
-        next
-    }
-    mode == "tab" {
-        src = src sources(t)
-        if (t ~ /^workspace[ \t]*=[ \t]*true/) ws = 1
-    }
-    END { flush() }
-    '
-}
-
+# cargo_entries (defined above) reads each manifest in full on the base and the head.
 if [ -s "$TMP/cargo-paths" ]; then
     show_at "$BASE" Cargo.toml >"$TMP/root.toml"
     cargo_entries <"$TMP/root.toml" >"$TMP/root-entries" || die "cannot parse the base Cargo.toml"
@@ -807,6 +1007,12 @@ if [ -s "$TMP/cargo-paths" ]; then
         END {
             for (i = 1; i <= n; i++) {
                 k = order[i]; sec = substr(k, 1, index(k, "|") - 1)
+                if (sec == "unparsed") {
+                    # fail closed: a statement the reader cannot place, or a key path naming a
+                    # dependency table in a form it does not know, that the base did not have
+                    if (!(k in inbase)) printf "cargo-unparsed\t%s\t%s\tcannot classify this Cargo.toml statement: %s\t\t\t%s\n", path, hline[k], htext[k], htext[k]
+                    continue
+                }
                 if (sec == "target-path") {
                     if (k in inbase) continue
                     if (tolower(substr(k, 13)) !~ /\.rs$/) printf "include\t%s\t%s\ttarget path to a non-.rs file: %s\t\t\t%s\n", path, hline[k], htext[k], htext[k]
