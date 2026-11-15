@@ -47,8 +47,8 @@ fn publish(be: &Be, wb: &str, pb: &str, slug: &str) {
 
 fn report(workload: &str, mode: &str, wall: std::time::Duration, c: Counts) {
     println!(
-        "BENCH|{workload}|{mode}|wall_ms={}|get={}|head={}|list={}|bytes={}",
-        wall.as_millis(), c.get, c.head, c.list, c.bytes_read
+        "BENCH|{workload}|{mode}|wall_ms={}|get={}|head={}|list={}|put={}|put_cas={}|delete={}|copy={}|bytes={}",
+        wall.as_millis(), c.get, c.head, c.list, c.put, c.put_cas, c.delete, c.copy, c.bytes_read
     );
 }
 

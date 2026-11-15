@@ -89,7 +89,7 @@ fn make_tree(root: &std::path::Path, n: usize) -> (Vec<String>, u64, u64) {
 }
 
 fn report(n: usize, step: &str, wall: std::time::Duration, c: Counts, extra: &str) {
-    println!("BENCH|{n}|{step}|wall_ms={}|get={}|head={}|list={}|put={}|bytes_read={}|{extra}", wall.as_millis(), c.get, c.head, c.list, c.put, c.bytes_read);
+    println!("BENCH|{n}|{step}|wall_ms={}|get={}|head={}|list={}|put={}|put_cas={}|delete={}|copy={}|bytes_read={}|{extra}", wall.as_millis(), c.get, c.head, c.list, c.put, c.put_cas, c.delete, c.copy, c.bytes_read);
 }
 
 fn measure<T>(be: &Be, n: usize, step: &str, extra: impl FnOnce(&T) -> String, f: impl FnOnce() -> T) -> T {
