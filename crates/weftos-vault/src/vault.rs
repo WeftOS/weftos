@@ -323,6 +323,23 @@ impl Vault {
         self.keybag.is_draft()
     }
 
+    /// Ids of current-generation passcode wrappers whose KDF parameters are below the policy for new
+    /// wrappers. `unlock` still opens them (they are format-valid), but [`Vault::rotate_vk`] refuses to
+    /// carry them forward; the caller should prompt for [`Vault::change_passcode`] (review M2, L4).
+    pub fn below_policy_wrappers(&self) -> Vec<[u8; 16]> {
+        self.keybag
+            .wrappers
+            .iter()
+            .filter(|w| w.vk_generation == self.keybag.current_vk_generation)
+            .filter_map(|w| match &w.body {
+                WrapperBody::Passcode { params, .. } if params.check_new_policy().is_err() => {
+                    Some(w.id)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Apply `f` to a copy of the keybag, bump the sequence, re-sign, and record the result in `pins`
     /// (review M1: the device's own writes advance its pins, so the store cannot replay the keybag from
     /// before this write). Nothing changes, in the vault or in `pins`, if any step fails.

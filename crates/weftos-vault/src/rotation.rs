@@ -100,12 +100,37 @@ impl Vault {
     /// generation opens straight from the current VK. The signing seed is re-sealed (same seed, same
     /// `sign_pub`), the sequence is bumped, the keybag is re-signed and `pins` records the new sequence and
     /// generation. Blobs are not touched: they open by walking the history and move with
-    /// [`Vault::reseal_secret`]. Nothing changes, in the vault or in `pins`, if any step fails.
+    /// [`Vault::reseal_secret`].
+    ///
+    /// Refuses with [`VaultError::KdfPolicy`] when a passcode wrapper it would re-seal has KDF parameters
+    /// below the policy for new wrappers (review M2): change that passcode first with
+    /// [`Vault::change_passcode`]. Nothing changes, in the vault or in `pins`, if any step fails.
     pub fn rotate_vk(
         &mut self,
         passcode: &str,
         recovery: Option<&RecoveryKey>,
         pins: &mut Pins,
+    ) -> Result<RotationReport> {
+        self.rotate_inner(passcode, recovery, pins, true)
+    }
+
+    /// [`Vault::rotate_vk`] without the KDF policy check (fast test profile).
+    #[cfg(test)]
+    pub(crate) fn rotate_vk_unchecked(
+        &mut self,
+        passcode: &str,
+        recovery: Option<&RecoveryKey>,
+        pins: &mut Pins,
+    ) -> Result<RotationReport> {
+        self.rotate_inner(passcode, recovery, pins, false)
+    }
+
+    fn rotate_inner(
+        &mut self,
+        passcode: &str,
+        recovery: Option<&RecoveryKey>,
+        pins: &mut Pins,
+        enforce_policy: bool,
     ) -> Result<RotationReport> {
         let vault_id = self.keybag.vault_id;
         let old_gen = self.keybag.current_vk_generation;
@@ -134,6 +159,9 @@ impl Vault {
                     let kek = derive_kek(&pass, salt, *params)?;
                     let aad = wrapper_aad(&vault_id, &w.id, KIND_PASSCODE, old_gen);
                     if open32(&kek, nonce, &aad, ct).is_ok() {
+                        if enforce_policy {
+                            params.check_new_policy()?;
+                        }
                         out.push(passcode_wrapper(PasscodeSeal {
                             vault_id: &vault_id,
                             id: w.id,

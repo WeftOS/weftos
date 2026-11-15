@@ -2,7 +2,8 @@
 //! more per finding. All values are fake; Argon2id runs the TEST profile unless a test says otherwise.
 
 use crate::VaultError;
-use crate::keybag::{KIND_RECOVERY, Keybag, Pins};
+use crate::keybag::{KIND_RECOVERY, Keybag, Pins, WrapperBody};
+use crate::passcode_kdf::KdfParams;
 use crate::tests::{PASS, T, new_vault, pass_id};
 use crate::vault::{NewVault, Vault};
 
@@ -16,7 +17,9 @@ fn h1_pinned_device_refuses_a_pre_rotation_keybag_resigned_with_a_higher_sequenc
     let stolen = vault.signing.clone();
     let mut pins = Pins::default();
     Vault::unlock(vault.keybag_bytes(), PASS, &mut pins).unwrap();
-    vault.rotate_vk(PASS, None, &mut Pins::default()).unwrap();
+    vault
+        .rotate_vk_unchecked(PASS, None, &mut Pins::default())
+        .unwrap();
     // This device learns of the rotation by unlocking the new keybag (seq 2, generation 2).
     Vault::unlock(vault.keybag_bytes(), PASS, &mut pins).unwrap();
     assert_eq!(pins.vk_generation, 2);
@@ -60,7 +63,7 @@ fn m1_replay_of_the_keybag_from_before_a_rotation_is_refused() {
         ..
     } = new_vault(true);
     let before = vault.keybag_bytes().to_vec();
-    vault.rotate_vk(PASS, None, &mut pins).unwrap();
+    vault.rotate_vk_unchecked(PASS, None, &mut pins).unwrap();
     assert_eq!(
         Vault::unlock(&before, PASS, &mut pins).unwrap_err(),
         VaultError::GenerationRollback { got: 1, seen: 2 }
@@ -152,4 +155,46 @@ fn m1_writes_check_the_pins_and_a_failed_write_does_not_advance_them() {
         .id;
     assert!(vault.remove_wrapper(&seed, &mut pins).is_err());
     assert_eq!(pins.highest, snapshot.highest);
+}
+
+/// M2: rotation must not carry below-policy KDF parameters forward silently. It refuses, the vault and
+/// the pins stay as they were, `below_policy_wrappers` names the wrapper, and after a passcode change at
+/// policy the rotation goes through.
+#[test]
+fn m2_rotation_refuses_a_below_policy_passcode_wrapper() {
+    let NewVault {
+        mut vault,
+        mut pins,
+        ..
+    } = new_vault(true);
+    let before = vault.keybag_bytes().to_vec();
+    let id = pass_id(&vault);
+    assert_eq!(vault.below_policy_wrappers(), vec![id]);
+    assert_eq!(
+        vault.rotate_vk(PASS, None, &mut pins).unwrap_err(),
+        VaultError::KdfPolicy
+    );
+    assert_eq!(vault.keybag_bytes(), &before[..]);
+    assert_eq!(pins.highest.unwrap().sequence, 1);
+
+    // The cheapest parameters the policy allows (19 MiB, t=2) keep this test fast.
+    let floor = KdfParams {
+        m_kib: 19456,
+        t: 2,
+        p: 1,
+    };
+    floor.check_new_policy().unwrap();
+    vault
+        .change_passcode(&id, "FAKE-policy-passcode-0010", floor, &mut pins)
+        .unwrap();
+    assert!(vault.below_policy_wrappers().is_empty());
+    let r = vault
+        .rotate_vk("FAKE-policy-passcode-0010", None, &mut pins)
+        .unwrap();
+    assert_eq!((r.new_generation, r.passcode_resealed), (2, 1));
+    match &vault.keybag().wrapper(&id).unwrap().body {
+        WrapperBody::Passcode { params, .. } => assert_eq!(*params, floor),
+        other => panic!("not a passcode wrapper: {other:?}"),
+    }
+    assert_eq!((pins.highest.unwrap().sequence, pins.vk_generation), (3, 2));
 }

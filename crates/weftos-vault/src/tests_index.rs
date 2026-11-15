@@ -228,7 +228,8 @@ fn no_plaintext_names_in_the_stored_bytes() {
 fn an_index_sealed_before_a_rotation_still_opens() {
     let mut v = new_vault(true).vault;
     let old = v.seal_index_entries(&sample(), 1).unwrap();
-    v.rotate_vk(PASS, None, &mut Pins::default()).unwrap();
+    v.rotate_vk_unchecked(PASS, None, &mut Pins::default())
+        .unwrap();
     assert_eq!(
         by_name(v.open_index(&old.bytes).unwrap()),
         by_name(sample())

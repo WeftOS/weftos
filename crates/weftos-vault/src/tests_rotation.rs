@@ -22,7 +22,7 @@ fn rotate_then_old_blobs_still_open_and_new_blobs_use_the_new_generation() {
     assert_eq!(gen_of(&a.bytes), 1);
 
     let r = vault
-        .rotate_vk(PASS, Some(&recovery_key), &mut Pins::default())
+        .rotate_vk_unchecked(PASS, Some(&recovery_key), &mut Pins::default())
         .unwrap();
     assert_eq!(
         (
@@ -73,9 +73,13 @@ fn rotate_then_old_blobs_still_open_and_new_blobs_use_the_new_generation() {
 fn two_rotations_keep_every_generation_reachable() {
     let mut vault = new_vault(true).vault;
     let g1 = vault.seal_secret(&req("login/a", b"FAKE-g1")).unwrap();
-    vault.rotate_vk(PASS, None, &mut Pins::default()).unwrap();
+    vault
+        .rotate_vk_unchecked(PASS, None, &mut Pins::default())
+        .unwrap();
     let g2 = vault.seal_secret(&req("login/a", b"FAKE-g2")).unwrap();
-    let r = vault.rotate_vk(PASS, None, &mut Pins::default()).unwrap();
+    let r = vault
+        .rotate_vk_unchecked(PASS, None, &mut Pins::default())
+        .unwrap();
     assert_eq!((r.new_generation, r.history_entries), (3, 2));
     assert_eq!(vault.history_generations(), vec![1, 2]);
     let g3 = vault.seal_secret(&req("login/a", b"FAKE-g3")).unwrap();
@@ -105,7 +109,9 @@ fn two_rotations_keep_every_generation_reachable() {
 fn a_tampered_history_entry_fails() {
     let mut vault = new_vault(true).vault;
     let old = vault.seal_secret(&req("login/a", b"FAKE-old")).unwrap();
-    vault.rotate_vk(PASS, None, &mut Pins::default()).unwrap();
+    vault
+        .rotate_vk_unchecked(PASS, None, &mut Pins::default())
+        .unwrap();
     let signed = vault.keybag_bytes().to_vec();
 
     // Flipping a byte of the entry without re-signing breaks the keybag signature.
@@ -159,7 +165,9 @@ fn rotation_bumps_the_sequence_and_resigns() {
     let mut vault = new_vault(true).vault;
     let before = vault.keybag_bytes().to_vec();
     let kb0 = vault.keybag().clone();
-    vault.rotate_vk(PASS, None, &mut Pins::default()).unwrap();
+    vault
+        .rotate_vk_unchecked(PASS, None, &mut Pins::default())
+        .unwrap();
     let after = vault.keybag_bytes().to_vec();
     assert_ne!(before, after);
     assert_eq!(vault.keybag().sequence, kb0.sequence + 1);
@@ -189,7 +197,7 @@ fn a_wrong_passcode_changes_nothing() {
     let before = vault.keybag_bytes().to_vec();
     assert_eq!(
         vault
-            .rotate_vk("FAKE-wrong-passcode", None, &mut Pins::default())
+            .rotate_vk_unchecked("FAKE-wrong-passcode", None, &mut Pins::default())
             .unwrap_err(),
         VaultError::UnlockFailed
     );
@@ -204,7 +212,9 @@ fn recovery_wrapper_is_dropped_without_its_key() {
         recovery_key,
         ..
     } = new_vault(true);
-    let r = vault.rotate_vk(PASS, None, &mut Pins::default()).unwrap();
+    let r = vault
+        .rotate_vk_unchecked(PASS, None, &mut Pins::default())
+        .unwrap();
     assert_eq!((r.recovery_resealed, r.dropped), (0, 1));
     let bytes = vault.keybag_bytes().to_vec();
     assert_eq!(
@@ -221,7 +231,9 @@ fn recovery_wrapper_is_dropped_without_its_key() {
 fn reseal_moves_a_secret_to_the_new_generation_with_a_tombstone() {
     let mut vault = new_vault(true).vault;
     let old = vault.seal_secret(&req("login/a", b"FAKE-a-0001")).unwrap();
-    vault.rotate_vk(PASS, None, &mut Pins::default()).unwrap();
+    vault
+        .rotate_vk_unchecked(PASS, None, &mut Pins::default())
+        .unwrap();
 
     let r = vault.reseal_secret("login/a", &old.bytes).unwrap().unwrap();
     assert_eq!(r.old_slot, old.slot);
@@ -265,7 +277,9 @@ fn reseal_moves_a_secret_to_the_new_generation_with_a_tombstone() {
 fn history_can_be_dropped_after_the_pass_and_then_old_blobs_stop_opening() {
     let mut vault = new_vault(true).vault;
     let old = vault.seal_secret(&req("login/a", b"FAKE-a-0001")).unwrap();
-    vault.rotate_vk(PASS, None, &mut Pins::default()).unwrap();
+    vault
+        .rotate_vk_unchecked(PASS, None, &mut Pins::default())
+        .unwrap();
     let seq = vault.keybag().sequence;
     vault.drop_history(1, &mut Pins::default()).unwrap();
     assert_eq!(vault.keybag().sequence, seq + 1);
@@ -280,7 +294,9 @@ fn history_can_be_dropped_after_the_pass_and_then_old_blobs_stop_opening() {
 #[test]
 fn history_structure_rules_are_enforced() {
     let mut vault = new_vault(true).vault;
-    vault.rotate_vk(PASS, None, &mut Pins::default()).unwrap();
+    vault
+        .rotate_vk_unchecked(PASS, None, &mut Pins::default())
+        .unwrap();
     let hist = vault
         .keybag()
         .wrappers
