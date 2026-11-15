@@ -165,13 +165,19 @@ fn edited(mut f: Vec<(String, Vec<u8>)>, who: &str, idx: std::ops::Range<usize>)
 
 /// Publish two worktrees (A on base c1, B on `base_b`), with or without change lists, and return what `overlaps` says.
 fn report<B: S2>(env: &Env<'_, B>, tag: &str, fa: &[(String, Vec<u8>)], ca: &[PathChange], fb: &[(String, Vec<u8>)], cb: &[PathChange], base_b: &str) -> OverlapReport {
+    report_with(env, tag, fa, ca, fb, cb, base_b, false)
+}
+
+/// [`report`], with B's publish saying whether its change list was computed (`changes_recorded`).
+#[allow(clippy::too_many_arguments)]
+fn report_with<B: S2>(env: &Env<'_, B>, tag: &str, fa: &[(String, Vec<u8>)], ca: &[PathChange], fb: &[(String, Vec<u8>)], cb: &[PathChange], base_b: &str, recorded: bool) -> OverlapReport {
     let (be, pr) = (env.be, env.pr.as_str());
     let (sa, sb) = (format!("{tag}-a"), format!("{tag}-b"));
     let (wa, wb) = (env.wt(&sa), env.wt(&sb));
     init_wt(be, &wa, &sa, "c1");
     init_wt(be, &wb, &sb, base_b);
     push(be, &wa, &tree_bytes(fa), &Pub { base: "c1", changes: ca, ..Pub::default() }).unwrap();
-    push(be, &wb, &tree_bytes(fb), &Pub { base: base_b, changes: cb, ..Pub::default() }).unwrap();
+    push(be, &wb, &tree_bytes(fb), &Pub { base: base_b, changes: cb, recorded, ..Pub::default() }).unwrap();
     let (ea, eb) = (register(be, pr, &sa, &wa), register(be, pr, &sb, &wb));
     overlaps(be, &ea, &eb).unwrap()
 }
@@ -210,8 +216,12 @@ fn d6f_overlap_false_positives<B: S2>(env: &Env<'_, B>) {
     let idle = report(env, "idle", &fa, &ca, &base_files(0), &[], "c1");
     let idle_diff = report(env, "idled", &fa, &ca, &base_files(25), &[], "c2");
     println!("DETAIL|6f|B changed nothing: truth 0 conflicts; same base reports {}, different base reports {}", idle.overlaps.len(), idle_diff.overlaps.len());
+    // with the signal (a writer that computed its change list and found it empty) there is nothing to report
+    let idle_rec = report_with(env, "idler", &fa, &ca, &base_files(0), &[], "c1", true);
+    assert!(idle_rec.overlaps.is_empty(), "a recorded empty change list means no changes: {:?}", paths(&idle_rec));
+    fixed("6f", "a worktree that recorded an empty change list (`changes_recorded`) has no overlaps");
     if !idle.overlaps.is_empty() {
-        finding("6f", format!("a worktree that has changed nothing has an empty `changes` list, and `overlaps` treats an empty list as 'manifest from before the field existed' and falls back to comparing content, so every file the OTHER worktree edited is reported as a conflict: {} false positives on the same base and {} on different bases, against a truth of 0. The report is marked same_base=true so it reads as exact. Proposed: record `changes_recorded: true` in the manifest (or write the list as null for old manifests) so an empty list can mean 'no changes'", idle.overlaps.len(), idle_diff.overlaps.len()));
+        finding("6f", format!("WITHOUT the `changes_recorded` signal (a manifest from an older writer): a worktree that has changed nothing has an empty `changes` list, and `overlaps` treats an empty list as 'manifest from before the field existed' and falls back to comparing content, so every file the OTHER worktree edited is reported as a conflict: {} false positives on the same base and {} on different bases, against a truth of 0. The report is marked same_base=true so it reads as exact. Proposed: record `changes_recorded: true` in the manifest (or write the list as null for old manifests) so an empty list can mean 'no changes'", idle.overlaps.len(), idle_diff.overlaps.len()));
     }
     // mixed: only one side has a list: still the superset
     let mixed = report(env, "mixed", &fa, &ca, &edited(base_files(0), "b", 25..35).0, &[], "c1");
