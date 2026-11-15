@@ -111,7 +111,8 @@ fn signature_generations<B: S2>(env: &Env<'_, B>) {
     let mut st = FollowState::default();
     assert_eq!(kinds(&poll_verified(be, &pr, &mut st, &Toy, true, false).unwrap()), ["new:g"]);
 
-    // a far-future stamp pins the generation at u64::MAX: after that a later signed entry carries the same generation
+    // a far-future stamp used to pin the generation at u64::MAX; it is now clamped to GENERATION_STAMP_CEILING and every
+    // later write still increases it (fixed, WO-069 W1 6a-3), so the older signed entry replayed below is refused
     let mut e = mk("pin", u64::MAX, State::Open);
     write_registry_entry_signed(be, &pr, &e, &Toy).unwrap();
     let (old_e, old_s) = (S2::get(be, &pr, "worktrees/pin.json").unwrap().unwrap(), S2::get(be, &pr, "worktrees.sig/pin.json").unwrap().unwrap());
@@ -127,7 +128,9 @@ fn signature_generations<B: S2>(env: &Env<'_, B>) {
     if !kinds(&ch).iter().any(|k| k == "bad:pin") {
         finding("6a", "a worktree whose manifest or handoff is stamped u64::MAX makes every signed registry write for it carry generation u64::MAX (prev + 1 saturates), so a genuinely signed OLDER entry replays without being refused as a rollback: the generation check is `<`, and equal generations pass. Needs write access to that worktree's bucket (the stamp comes from its manifest). Proposed: clamp the stamp that feeds the generation to now + skew, or refuse an entry whose updated_ms is absurdly far ahead");
     }
-    line("6a", "signature generation with a +1 d stamp and with u64::MAX", t, format!("gen {g1} -> {g2}; pinned {g_old}"));
+    assert_eq!(g_new, GENERATION_STAMP_CEILING + 1, "the u64::MAX stamp is clamped and the next write still adds one");
+    assert_eq!(kinds(&ch), ["bad:pin"], "the replayed older signed entry is refused as a rollback");
+    line("6a", "signature generation with a +1 d stamp and with u64::MAX (clamped; a replay is refused)", t, format!("gen {g1} -> {g2}; u64::MAX stamp -> {} then {g_new}", GENERATION_STAMP_CEILING));
     for k in ["worktrees/g.json", "worktrees/pin.json", "worktrees.sig/g.json", "worktrees.sig/pin.json"] {
         let _ = S2::delete(be, &pr, k);
     }

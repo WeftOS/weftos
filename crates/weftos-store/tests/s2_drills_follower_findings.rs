@@ -45,7 +45,6 @@ fn pinned_entry(env: &Env<'_, MemBackend>, state: State) -> RegistryEntry {
 }
 
 #[test]
-#[ignore = "FINDING 6a-3: a u64::MAX stamp pins the signature generation, so an older signed entry replays without being refused"]
 fn an_older_signed_entry_is_refused_even_after_a_far_future_stamp() {
     let be = MemBackend::new();
     let env = Env::new(&be, None);
