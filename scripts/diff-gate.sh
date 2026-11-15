@@ -1287,26 +1287,6 @@ if [ -s "$TMP/cargo-paths" ]; then
     done <"$TMP/cargo-paths"
 fi
 
-# ── Approvals ────────────────────────────────────────────────────────
-# Read from the head commit (the working tree only in --worktree mode), the same source the
-# approvals-change check below compares, so a checkout that differs from --head cannot
-# approve anything.
-# Emits: rule <TAB> glob <TAB> pattern <TAB> literal(0|1) <TAB> reason <TAB> approved_by <TAB> blob <TAB> line
-head_src="$HEAD_SHA"; [ "$WORKTREE" = 1 ] && head_src=WORKTREE
-show_at "$BASE" "$APPROVALS" >"$TMP/appr.base.toml"
-show_at "$head_src" "$APPROVALS" >"$TMP/appr.head.toml"
-: >"$TMP/approvals"
-if [ -s "$TMP/appr.head.toml" ]; then
-    parse_approvals <"$TMP/appr.head.toml" >"$TMP/approvals.raw" || { echo "diff-gate: cannot use $APPROVALS" >&2; exit 2; }
-    while IFS="$(printf '\t')" read -r r g pt re ab ln b; do
-        lit=0
-        if [ "$pt" != "*" ]; then
-            printf '' | grep -Eq -e "$pt" 2>/dev/null; [ $? -eq 2 ] && lit=1
-        fi
-        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$r" "$g" "$pt" "$lit" "$re" "$ab" "$b" "$ln"
-    done <"$TMP/approvals.raw" >"$TMP/approvals"
-fi
-
 # matchall(re, rule): does the regex approve every finding of that rule, the way "*" does?
 # (RV-D1: ".*", "^.*$", ".+", "(.*)", "." ...). It is asked of a fixed, varied set of single
 # characters; a pattern that matches every one of them matches any non-empty text, and no
@@ -1322,17 +1302,42 @@ function matchall(re, rule,   n, i, pr, need) {
     for (i = 1; i <= n; i++) if (!match(pr[i], re) || (need && RLENGTH < 1)) return 0
     return 1
 }'
+
+# ── Approvals ────────────────────────────────────────────────────────
+# Read from the head commit (the working tree only in --worktree mode), the same source the
+# approvals-change check below compares, so a checkout that differs from --head cannot
+# approve anything.
+# Emits: rule <TAB> glob <TAB> pattern <TAB> literal(0|1) <TAB> reason <TAB> approved_by <TAB> blob <TAB> line
+#        <TAB> matches-everything(0|1): "*", or a regex matchall() says approves every finding (RV-D1)
+head_src="$HEAD_SHA"; [ "$WORKTREE" = 1 ] && head_src=WORKTREE
+show_at "$BASE" "$APPROVALS" >"$TMP/appr.base.toml"
+show_at "$head_src" "$APPROVALS" >"$TMP/appr.head.toml"
+: >"$TMP/approvals"
+if [ -s "$TMP/appr.head.toml" ]; then
+    parse_approvals <"$TMP/appr.head.toml" >"$TMP/approvals.raw" || { echo "diff-gate: cannot use $APPROVALS" >&2; exit 2; }
+    while IFS="$(printf '\t')" read -r r g pt re ab ln b; do
+        lit=0; all=0
+        if [ "$pt" = "*" ]; then all=1
+        else
+            printf '' | grep -Eq -e "$pt" 2>/dev/null; [ $? -eq 2 ] && lit=1
+            # in its own awk: a pattern grep accepts may not compile in awk, which is fatal there
+            [ "$lit" = 0 ] && DG_RE="$pt" DG_RULE="$r" awk "$MATCHALL_AWK"' BEGIN { exit !matchall(ENVIRON["DG_RE"], ENVIRON["DG_RULE"]) }' 2>/dev/null && all=1
+        fi
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$r" "$g" "$pt" "$lit" "$re" "$ab" "$b" "$ln" "$all"
+    done <"$TMP/approvals.raw" >"$TMP/approvals"
+fi
+
 # Unscoped rows. A path-rule finding (ci-workflow, build-script for a new build.rs,
 # toolchain-config, special-file, gitattributes-change) carries fixed text, so a row for it
 # without `blob` approves every future change to the matching files, whatever its pattern. A
 # "*" row without `blob` for any other rule approves every finding of that rule in the path.
 # Both still work; each is named on every run so it is not forgotten.
-awk -F'\t' "$MATCHALL_AWK"'
+awk -F'\t' '
 BEGIN { n = split("file changed|file deleted or moved away|file deleted|symlink added or changed|submodule or nested repository added or changed|new build.rs", fx, "|") }
 $7 != "" { next }
 {
     pathrule = ($1 ~ /^(ci-workflow|build-script|toolchain-config|special-file|gitattributes-change)$/)
-    hit = ($3 == "*" || ($4 == 0 && matchall($3, $1)))
+    hit = ($9 == 1)
     if (pathrule) for (i = 1; i <= n && !hit; i++) hit = (index(fx[i], $3) > 0 || ($4 == 0 && fx[i] ~ $3))
     if (!hit) next
     if (pathrule) printf "diff-gate: WARNING: unscoped approval row (approvals line %s): rule=%s path=%s has no blob, so it approves EVERY future change to that path\n", $8, $1, $2
@@ -1378,7 +1383,7 @@ fi
 # the line (a keyword, or one path expression such as std::net::TcpListener::bind) is approved
 # only by an approval match that overlaps one of its tokens, so a row cannot approve a second
 # occurrence elsewhere on the same line. Other findings match the whole reported text.
-awk -F'\t' -v owner="${DIFF_GATE_OWNER_APPROVED:-0}" -v apf="$TMP/approvals" -v flist="$TMP/files" "$G2R_AWK$MATCHALL_AWK"'
+awk -F'\t' -v owner="${DIFF_GATE_OWNER_APPROVED:-0}" -v apf="$TMP/approvals" -v flist="$TMP/files" "$G2R_AWK"'
 function covers(i, T, s, e,   rest, off, p, a, b) { # does a match of row i overlap T[s..e]?
     if (ap[i] == "*") return 1
     rest = T; off = 0
@@ -1401,7 +1406,7 @@ function bok(i, path) { return (abl[i] == "" || ((path in fb) && fb[path] == abl
 function why(i) { return ab[i] ": " aw[i] (abl[i] != "" ? " (blob " substr(abl[i], 1, 12) ")" : (us[i] ? " [UNSCOPED row: no blob]" : "")) }
 FILENAME == apf {
     na++; ar[na] = $1; ag[na] = g2r($2); ap[na] = $3; al[na] = $4; aw[na] = $5; ab[na] = $6; abl[na] = $7
-    us[na] = ($7 == "" && ($3 == "*" || ($4 == 0 && matchall($3, $1)) || $1 ~ /^(ci-workflow|build-script|toolchain-config|special-file|gitattributes-change)$/)); next
+    us[na] = ($7 == "" && ($9 == 1 || $1 ~ /^(ci-workflow|build-script|toolchain-config|special-file|gitattributes-change)$/)); next
 }
 FILENAME == flist { split($0, f, "\t"); fb[f[4]] = tolower(f[5]); next }
 {
