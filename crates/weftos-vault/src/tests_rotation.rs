@@ -16,7 +16,7 @@ fn rotate_then_old_blobs_still_open_and_new_blobs_use_the_new_generation() {
         mut vault,
         recovery_key,
         ..
-    } = new_vault(true);
+    } = new_vault();
     let a = vault.seal_secret(&req("login/a", b"FAKE-a-0001")).unwrap();
     let b = vault.seal_secret(&req("token/b", b"FAKE-b-0002")).unwrap();
     assert_eq!(gen_of(&a.bytes), 1);
@@ -73,7 +73,7 @@ fn rotate_then_old_blobs_still_open_and_new_blobs_use_the_new_generation() {
 
 #[test]
 fn two_rotations_keep_every_generation_reachable() {
-    let mut vault = new_vault(true).vault;
+    let mut vault = new_vault().vault;
     let g1 = vault.seal_secret(&req("login/a", b"FAKE-g1")).unwrap();
     vault
         .write_now(&mut Pins::default(), |v, p| {
@@ -113,7 +113,7 @@ fn two_rotations_keep_every_generation_reachable() {
 
 #[test]
 fn a_tampered_history_entry_fails() {
-    let mut vault = new_vault(true).vault;
+    let mut vault = new_vault().vault;
     let old = vault.seal_secret(&req("login/a", b"FAKE-old")).unwrap();
     vault
         .write_now(&mut Pins::default(), |v, p| {
@@ -170,7 +170,7 @@ fn a_tampered_history_entry_fails() {
 
 #[test]
 fn rotation_bumps_the_sequence_and_resigns() {
-    let mut vault = new_vault(true).vault;
+    let mut vault = new_vault().vault;
     let before = vault.keybag_bytes().to_vec();
     let kb0 = vault.keybag().clone();
     vault
@@ -203,7 +203,7 @@ fn rotation_bumps_the_sequence_and_resigns() {
 
 #[test]
 fn a_wrong_passcode_changes_nothing() {
-    let mut vault = new_vault(true).vault;
+    let mut vault = new_vault().vault;
     let before = vault.keybag_bytes().to_vec();
     assert_eq!(
         vault
@@ -225,7 +225,7 @@ fn recovery_wrapper_is_dropped_without_its_key() {
         mut vault,
         recovery_key,
         ..
-    } = new_vault(true);
+    } = new_vault();
     let r = vault
         .write_now(&mut Pins::default(), |v, p| {
             v.rotate_vk_unchecked(PASS, None, p)
@@ -247,7 +247,7 @@ fn recovery_wrapper_is_dropped_without_its_key() {
 
 #[test]
 fn reseal_moves_a_secret_to_the_new_generation_with_a_tombstone() {
-    let mut vault = new_vault(true).vault;
+    let mut vault = new_vault().vault;
     let old = vault.seal_secret(&req("login/a", b"FAKE-a-0001")).unwrap();
     vault
         .write_now(&mut Pins::default(), |v, p| {
@@ -298,7 +298,7 @@ fn reseal_moves_a_secret_to_the_new_generation_with_a_tombstone() {
 
 #[test]
 fn history_can_be_dropped_after_the_pass_and_then_old_blobs_stop_opening() {
-    let mut vault = new_vault(true).vault;
+    let mut vault = new_vault().vault;
     let old = vault.seal_secret(&req("login/a", b"FAKE-a-0001")).unwrap();
     vault
         .write_now(&mut Pins::default(), |v, p| {
@@ -324,7 +324,7 @@ fn history_can_be_dropped_after_the_pass_and_then_old_blobs_stop_opening() {
 
 #[test]
 fn history_structure_rules_are_enforced() {
-    let mut vault = new_vault(true).vault;
+    let mut vault = new_vault().vault;
     vault
         .write_now(&mut Pins::default(), |v, p| {
             v.rotate_vk_unchecked(PASS, None, p)

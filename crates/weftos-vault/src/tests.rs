@@ -21,8 +21,8 @@ pub(crate) fn unhex(s: &str) -> Vec<u8> {
 pub(crate) const PASS: &str = "FAKE-passcode-for-tests-0001";
 pub(crate) const T: KdfParams = KdfParams::TEST;
 
-pub(crate) fn new_vault(draft: bool) -> NewVault {
-    Vault::create_unchecked(PASS, T, draft).unwrap()
+pub(crate) fn new_vault() -> NewVault {
+    Vault::create_unchecked(PASS, T).unwrap()
 }
 
 pub(crate) fn req<'a>(name: &'a str, payload: &'a [u8]) -> SealRequest<'a> {
@@ -54,7 +54,7 @@ fn forge(v: &Vault, f: impl FnOnce(&mut Vec<u8>)) -> Vec<u8> {
 
 #[test]
 fn create_unlock_roundtrip_and_wrong_passcode() {
-    let nv = new_vault(true);
+    let nv = new_vault();
     let bytes = nv.vault.keybag_bytes().to_vec();
     assert!(Vault::unlock(&bytes, PASS, &mut Pins::default()).is_ok());
     assert_eq!(
@@ -65,7 +65,7 @@ fn create_unlock_roundtrip_and_wrong_passcode() {
 
 #[test]
 fn new_wrapper_policy_is_enforced_on_the_public_path() {
-    assert_eq!(Vault::create(PASS, T, true).unwrap_err(), VaultError::KdfPolicy);
+    assert_eq!(Vault::create(PASS, T).unwrap_err(), VaultError::KdfPolicy);
     assert_eq!(
         KdfParams {
             m_kib: 19456,
@@ -116,7 +116,7 @@ fn new_wrapper_policy_is_enforced_on_the_public_path() {
 
 #[test]
 fn passcode_change_rewraps_only_one_wrapper_and_bumps_sequence() {
-    let mut nv = new_vault(true);
+    let mut nv = new_vault();
     let old = nv.vault.keybag_bytes().to_vec();
     let id = pass_id(&nv.vault);
     let sealed = nv.vault.seal_secret(&req("login/a", b"FAKE-one")).unwrap();
@@ -148,7 +148,7 @@ fn passcode_change_rewraps_only_one_wrapper_and_bumps_sequence() {
 
 #[test]
 fn rolled_back_keybag_is_refused_and_forks_are_detected() {
-    let mut nv = new_vault(true);
+    let mut nv = new_vault();
     let v1 = nv.vault.keybag_bytes().to_vec();
     let id = pass_id(&nv.vault);
     nv.vault
@@ -184,8 +184,8 @@ fn rolled_back_keybag_is_refused_and_forks_are_detected() {
 
 #[test]
 fn pinned_signer_mismatch_is_refused() {
-    let a = new_vault(true);
-    let b = new_vault(true);
+    let a = new_vault();
+    let b = new_vault();
     let mut pins = Pins::default();
     Vault::unlock(a.vault.keybag_bytes(), PASS, &mut pins).unwrap();
     assert_eq!(
@@ -196,7 +196,7 @@ fn pinned_signer_mismatch_is_refused() {
 
 #[test]
 fn escrow_node_and_unknown_wrapper_kinds_are_rejected() {
-    let nv = new_vault(true);
+    let nv = new_vault();
     for kind in [0u8, 6, 7, 8, 255] {
         let forged = forge(&nv.vault, |u| u[86] = kind);
         assert_eq!(
@@ -208,7 +208,7 @@ fn escrow_node_and_unknown_wrapper_kinds_are_rejected() {
 
 #[test]
 fn reserved_platforms_and_other_structure_violations_are_rejected() {
-    let nv = new_vault(true);
+    let nv = new_vault();
     let v = &nv.vault;
     let signed_with = |mutate: &dyn Fn(&mut Keybag)| {
         let mut kb = v.keybag().clone();
@@ -283,7 +283,7 @@ fn reserved_platforms_and_other_structure_violations_are_rejected() {
 
 #[test]
 fn every_single_byte_change_and_every_truncation_fails() {
-    let nv = new_vault(true);
+    let nv = new_vault();
     let good = nv.vault.keybag_bytes().to_vec();
     assert!(Keybag::parse(&good, &Pins::default()).is_ok());
     for i in 0..good.len() {

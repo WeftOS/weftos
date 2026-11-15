@@ -3,7 +3,7 @@
 
 use crate::VaultError;
 use crate::blob;
-use crate::keybag::Pins;
+use crate::keybag::{FLAG_DRAFT, Pins};
 use crate::pins::PINS_LEN;
 use crate::tests::{PASS, new_vault, req};
 use crate::vault::Vault;
@@ -24,7 +24,7 @@ impl Store {
 
 /// Two devices, A and B, that have both unlocked the stored keybag (sequence 1, generation 1).
 fn two_devices() -> (Store, Vault, Pins, Vault, Pins) {
-    let store = Store(new_vault(true).vault.keybag_bytes().to_vec());
+    let store = Store(new_vault().vault.keybag_bytes().to_vec());
     let mut pins_a = Pins::default();
     let a = Vault::unlock(&store.0, PASS, &mut pins_a).unwrap();
     let mut pins_b = Pins::default();
@@ -132,7 +132,7 @@ fn r2_m1_commit_refuses_stale_foreign_and_superseded_writes() {
         a.commit_write(second, &mut pins_a).unwrap_err(),
         VaultError::StaleWrite
     );
-    let other = new_vault(true);
+    let other = new_vault();
     let foreign = other.vault.add_recovery_wrapper(&other.pins).unwrap();
     assert_eq!(
         a.commit_write(foreign, &mut pins_a).unwrap_err(),
@@ -153,10 +153,27 @@ fn r2_m1_commit_refuses_stale_foreign_and_superseded_writes() {
     assert_eq!(pins_b, pins_before);
 }
 
+/// R2-M2: every created vault carries the DRAFT flag, and writes keep it.
+#[test]
+fn r2_m2_a_vault_without_the_draft_flag_cannot_be_created() {
+    let mut nv = new_vault();
+    assert!(nv.vault.is_draft());
+    assert_eq!(nv.vault.keybag().flags, FLAG_DRAFT);
+    nv.vault
+        .write_now(&mut nv.pins, |v, p| v.rotate_vk_unchecked(PASS, None, p))
+        .unwrap();
+    nv.vault
+        .write_now(&mut nv.pins, |v, p| v.add_recovery_wrapper(p))
+        .unwrap();
+    assert_eq!(nv.vault.keybag().flags, FLAG_DRAFT);
+    let reopened = Vault::unlock(nv.vault.keybag_bytes(), PASS, &mut Pins::default()).unwrap();
+    assert!(reopened.is_draft());
+}
+
 /// R2-L1: pins are read through getters and persisted as bytes; loading is strict.
 #[test]
 fn r2_l1_pins_round_trip_as_bytes_and_loading_is_strict() {
-    let nv = new_vault(true);
+    let nv = new_vault();
     let b = nv.pins.to_bytes();
     assert_eq!(b.len(), PINS_LEN);
     assert_eq!(Pins::from_bytes(&b).unwrap(), nv.pins);

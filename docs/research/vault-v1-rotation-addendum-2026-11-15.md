@@ -55,6 +55,9 @@ followed the spec faithfully.
   records a keybag only after it verified it (an unlock, a create, a committed write). Callers read the pins through
   getters and persist them with `Pins::to_bytes` / `Pins::from_bytes` (82 bytes, strict parse). The persisted
   bytes are device-local trusted state: anyone who can rewrite them can reset the device to trust on first use.
+- **DRAFT is not optional (R2-M2).** `Vault::create` has no `draft` parameter. Every vault it creates carries the
+  DRAFT flag and refuses real credentials until the external format review (owner Q6). Lifting this is a code
+  change made after that review.
 - **The rotation doc is corrected.** `rotate_vk` no longer claims to recover from a compromise.
 - **Rotation does not carry weak KDF parameters forward (M2).** `rotate_vk` refuses (`KdfPolicy`) to re-seal a passcode
   wrapper whose parameters are below the policy for new wrappers. `Vault::below_policy_wrappers` lists those wrappers

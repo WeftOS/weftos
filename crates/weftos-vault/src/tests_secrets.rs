@@ -11,7 +11,7 @@ use crate::{RecoveryKey, SecretSeal, VaultError, hkdf_keys};
 
 #[test]
 fn secret_roundtrip_moved_blob_and_tamper() {
-    let nv = new_vault(true);
+    let nv = new_vault();
     let v = &nv.vault;
     let s = v
         .seal_secret(&req("login/work-mail", b"FAKE-secret-value-0001"))
@@ -33,7 +33,7 @@ fn secret_roundtrip_moved_blob_and_tamper() {
         );
     }
     // Another vault cannot open it, even at the same slot.
-    let nv2 = new_vault(true);
+    let nv2 = new_vault();
     assert!(nv2.vault.open_secret(&s.slot, &s.bytes).is_err());
     // Every byte change fails.
     for i in 0..s.bytes.len() {
@@ -58,7 +58,7 @@ fn secret_roundtrip_moved_blob_and_tamper() {
 
 #[test]
 fn blob_limits_padding_and_index() {
-    let nv = new_vault(true);
+    let nv = new_vault();
     let v = &nv.vault;
     for (len, total) in [
         (0usize, 42 + 256 + 16),
@@ -126,21 +126,23 @@ fn blob_limits_padding_and_index() {
 
 #[test]
 fn draft_vault_refuses_real_credentials() {
-    let draft = new_vault(true);
+    // Every created vault is DRAFT until the external format review (review R2-M2), so a real
+    // credential is always refused; a non-DRAFT vault is not reachable through `create`.
+    let draft = new_vault();
+    assert!(draft.vault.is_draft());
     let mut r = req("login/x", b"FAKE");
     r.real_credential = true;
     assert_eq!(
         draft.vault.seal_secret(&r).unwrap_err(),
         VaultError::DraftRefusesRealCredentials
     );
-    let reviewed = new_vault(false);
-    assert!(!reviewed.vault.is_draft());
-    assert!(reviewed.vault.seal_secret(&r).is_ok());
+    r.real_credential = false;
+    assert!(draft.vault.seal_secret(&r).is_ok());
 }
 
 #[test]
 fn wrapper_add_remove_and_recovery_unlock() {
-    let mut nv = new_vault(true);
+    let mut nv = new_vault();
     let mut pins = Pins::default();
     let rk = nv
         .vault
@@ -241,7 +243,7 @@ fn wrapper_add_remove_and_recovery_unlock() {
 
 #[test]
 fn recovery_code_roundtrip_and_typo_detection() {
-    let nv = new_vault(true);
+    let nv = new_vault();
     let code = nv.recovery_key.to_code();
     assert!(code.starts_with("WVR1-"));
     assert_eq!(code.len(), 5 + 55 + 13); // 13 separators between 14 groups
@@ -285,7 +287,7 @@ fn secret_seal_wire_format() {
 
 #[test]
 fn debug_and_display_never_show_secrets() {
-    let nv = new_vault(true);
+    let nv = new_vault();
     let r = req("login/fake-name-77", b"FAKE-DEBUG-PAYLOAD-77");
     let sealed = nv.vault.seal_secret(&r).unwrap();
     let opened = nv
@@ -373,7 +375,7 @@ fn global_capture() -> &'static Capture {
 #[test]
 fn no_secret_in_captured_log_output() {
     let cap = global_capture();
-    let mut nv = Vault::create_unchecked("FAKE-LOG-PASSCODE-xyz", T, true).unwrap();
+    let mut nv = Vault::create_unchecked("FAKE-LOG-PASSCODE-xyz", T).unwrap();
     let sealed = nv
         .vault
         .seal_secret(&req("login/fake-log-name", b"FAKE-LOG-SECRET-VALUE"))

@@ -15,7 +15,7 @@ use crate::vault::{NewVault, Vault};
 /// it, even though the signer matches and the sequence is higher.
 #[test]
 fn h1_pinned_device_refuses_a_pre_rotation_keybag_resigned_with_a_higher_sequence() {
-    let mut vault = new_vault(true).vault;
+    let mut vault = new_vault().vault;
     let old_kb = vault.keybag().clone();
     let stolen = vault.signing.clone();
     let mut pins = Pins::default();
@@ -47,11 +47,11 @@ fn h1_pinned_device_refuses_a_pre_rotation_keybag_resigned_with_a_higher_sequenc
 /// H1: the creating device is pinned from the start (signer, sequence 1, generation 1).
 #[test]
 fn h1_new_vault_returns_pins_for_the_creating_device() {
-    let NewVault { vault, pins, .. } = new_vault(true);
+    let NewVault { vault, pins, .. } = new_vault();
     assert_eq!(pins.sign_pub, Some(vault.keybag().sign_pub));
     assert_eq!(pins.highest.unwrap().sequence, 1);
     assert_eq!(pins.vk_generation, 1);
-    let other = new_vault(true).vault;
+    let other = new_vault().vault;
     let mut p = pins.clone();
     assert_eq!(
         Vault::unlock(other.keybag_bytes(), PASS, &mut p).unwrap_err(),
@@ -66,7 +66,7 @@ fn m1_replay_of_the_keybag_from_before_a_rotation_is_refused() {
         mut vault,
         mut pins,
         ..
-    } = new_vault(true);
+    } = new_vault();
     let before = vault.keybag_bytes().to_vec();
     vault
         .write_now(&mut pins, |v, p| v.rotate_vk_unchecked(PASS, None, p))
@@ -92,7 +92,7 @@ fn m1_replay_of_the_keybag_from_before_remove_wrapper_is_refused() {
         mut vault,
         recovery_key,
         mut pins,
-    } = new_vault(true);
+    } = new_vault();
     let before = vault.keybag_bytes().to_vec();
     let rec = vault
         .keybag()
@@ -117,7 +117,7 @@ fn m1_replay_of_the_keybag_from_before_change_passcode_is_refused() {
         mut vault,
         mut pins,
         ..
-    } = new_vault(true);
+    } = new_vault();
     let before = vault.keybag_bytes().to_vec();
     let id = pass_id(&vault);
     vault
@@ -139,7 +139,7 @@ fn m1_writes_check_the_pins_and_a_failed_write_does_not_advance_them() {
         mut vault,
         mut pins,
         ..
-    } = new_vault(true);
+    } = new_vault();
     let mut stale = Vault::unlock(vault.keybag_bytes(), PASS, &mut Pins::default()).unwrap();
     vault
         .write_now(&mut pins, |v, p| v.add_recovery_wrapper(p))
@@ -154,7 +154,7 @@ fn m1_writes_check_the_pins_and_a_failed_write_does_not_advance_them() {
     );
     assert_eq!(pins.highest, snapshot.highest);
 
-    let mut foreign = new_vault(true).pins;
+    let mut foreign = new_vault().pins;
     assert_eq!(
         vault
             .write_now(&mut foreign, |v, p| v.add_recovery_wrapper(p))
@@ -187,7 +187,7 @@ fn m2_rotation_refuses_a_below_policy_passcode_wrapper() {
         mut vault,
         mut pins,
         ..
-    } = new_vault(true);
+    } = new_vault();
     let before = vault.keybag_bytes().to_vec();
     let id = pass_id(&vault);
     assert_eq!(vault.below_policy_wrappers(), vec![id]);
@@ -229,7 +229,7 @@ fn m2_rotation_refuses_a_below_policy_passcode_wrapper() {
 /// L1, probe R4: a keybag at `u64::MAX` must give an error on the next write, never a wrap or a panic.
 #[test]
 fn l1_sequence_exhaustion_is_an_error() {
-    let mut vault = new_vault(true).vault;
+    let mut vault = new_vault().vault;
     vault.keybag.sequence = u64::MAX;
     vault.bytes = vault.keybag.sign(&vault.signing);
     let before = vault.keybag_bytes().to_vec();
@@ -279,7 +279,7 @@ fn with_extra_passcode_wrappers(
 /// `MAX_PASSCODE_WRAPPERS` passcode wrappers, and their total `m_kib * t` at most one maximal wrapper.
 #[test]
 fn l2_unlock_kdf_cost_is_bounded_at_parse() {
-    let v = new_vault(true).vault;
+    let v = new_vault().vault;
     let max = KdfParams {
         m_kib: 1_048_576,
         t: 10,
@@ -325,18 +325,18 @@ fn l2_unlock_kdf_cost_is_bounded_at_parse() {
 #[test]
 fn l4_empty_passcode_is_refused() {
     assert_eq!(
-        Vault::create_unchecked("", T, true).unwrap_err(),
+        Vault::create_unchecked("", T).unwrap_err(),
         VaultError::PasscodeRejected("empty")
     );
     assert_eq!(
-        Vault::create("", KdfParams::RECOMMENDED, true).unwrap_err(),
+        Vault::create("", KdfParams::RECOMMENDED).unwrap_err(),
         VaultError::PasscodeRejected("empty")
     );
     let NewVault {
         mut vault,
         mut pins,
         ..
-    } = new_vault(true);
+    } = new_vault();
     let id = pass_id(&vault);
     assert_eq!(
         vault
@@ -358,14 +358,14 @@ fn l4_unassigned_private_use_and_control_code_points_are_refused() {
         "FAKE-\u{10FFFF}-noncharacter",
     ] {
         assert_eq!(
-            Vault::create_unchecked(bad, T, true).unwrap_err(),
+            Vault::create_unchecked(bad, T).unwrap_err(),
             VaultError::PasscodeRejected("unassigned, private-use or control code point"),
             "passcode {} accepted",
             bad.escape_unicode()
         );
     }
     // Assigned non-ASCII is fine (a fullwidth letter NFKC-folds to ASCII), and unlocks by its NFKC twin.
-    let nv = Vault::create_unchecked("FAKE-\u{FF21}\u{00E9}-ok", T, true).unwrap();
+    let nv = Vault::create_unchecked("FAKE-\u{FF21}\u{00E9}-ok", T).unwrap();
     assert!(
         Vault::unlock(
             nv.vault.keybag_bytes(),
@@ -383,7 +383,7 @@ fn l6_index_payload_generation_must_match_the_blob() {
         mut vault,
         mut pins,
         ..
-    } = new_vault(true);
+    } = new_vault();
     let entries = vec![IndexEntry {
         name: "login/a-FAKE".into(),
         secret_type: crate::SecretType::Login,

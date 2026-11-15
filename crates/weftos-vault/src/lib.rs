@@ -4,9 +4,9 @@
 //! a signed keybag ([`keybag`]), unlock by passcode or recovery key ([`Vault`]), and per-secret
 //! sealed blobs bound to their slot ([`blob`]).
 //!
-//! **DRAFT.** The format has not had the external review the owner requires. Vaults created here
-//! carry the DRAFT flag and refuse real credentials ([`SealRequest::real_credential`]). Every value in
-//! the tests is fake.
+//! **DRAFT.** The format has not had the external review the owner requires. Every vault created here
+//! carries the DRAFT flag (there is no way to create one without it) and refuses real credentials
+//! ([`SealRequest::real_credential`]). Every value in the tests is fake.
 //!
 //! Keybag writes are two-phase ([`PendingWrite`], [`Vault::commit_write`]): nothing changes in the
 //! vault or the device pins until the caller reports that the store accepted the new keybag.

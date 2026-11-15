@@ -65,23 +65,33 @@ pub(crate) struct CreateInputs {
     pub wrapper_ids: [[u8; 16]; 3],
     pub nonces: [[u8; NONCE_LEN]; 3],
     pub now: u64,
-    pub draft: bool,
     pub params: KdfParams,
 }
 
 impl Vault {
     /// Create a vault (spec 9.1) with a random VK, signing seed and recovery key. The new passcode
-    /// wrapper must meet the KDF policy for new wrappers. The keybag carries the DRAFT flag when `draft`.
-    pub fn create(passcode: &str, params: KdfParams, draft: bool) -> Result<NewVault> {
+    /// wrapper must meet the KDF policy for new wrappers.
+    ///
+    /// The keybag always carries the DRAFT flag, so the vault refuses real credentials: the format has
+    /// not had its external review (spec Q6, review R2-M2). There is no way to ask for a vault without
+    /// the flag:
+    ///
+    /// ```no_run
+    /// # use weftos_vault::{KdfParams, Vault};
+    /// let nv = Vault::create("FAKE-passcode-0001", KdfParams::RECOMMENDED).unwrap();
+    /// assert!(nv.vault.is_draft());
+    /// ```
+    ///
+    /// ```compile_fail,E0061
+    /// # use weftos_vault::{KdfParams, Vault};
+    /// let nv = Vault::create("FAKE-passcode-0001", KdfParams::RECOMMENDED, false);
+    /// ```
+    pub fn create(passcode: &str, params: KdfParams) -> Result<NewVault> {
         params.check_new_policy()?;
-        Self::create_unchecked(passcode, params, draft)
+        Self::create_unchecked(passcode, params)
     }
 
-    pub(crate) fn create_unchecked(
-        passcode: &str,
-        params: KdfParams,
-        draft: bool,
-    ) -> Result<NewVault> {
+    pub(crate) fn create_unchecked(passcode: &str, params: KdfParams) -> Result<NewVault> {
         Self::create_with(
             passcode,
             CreateInputs {
@@ -101,7 +111,6 @@ impl Vault {
                     seal::random_bytes()?,
                 ],
                 now: now_unix(),
-                draft,
                 params,
             },
         )
@@ -140,7 +149,7 @@ impl Vault {
             },
         };
         let keybag = Keybag {
-            flags: if i.draft { FLAG_DRAFT } else { 0 },
+            flags: FLAG_DRAFT,
             vault_id: i.vault_id,
             sequence: 1,
             created_unix: i.now,
@@ -153,7 +162,7 @@ impl Vault {
         let bytes = keybag.sign(&signing);
         let mut pins = Pins::default();
         pins.record(&bytes, &keybag);
-        tracing::debug!(sequence = 1, wrappers = 3, draft = i.draft, "vault created");
+        tracing::debug!(sequence = 1, wrappers = 3, "vault created");
         Ok(NewVault {
             vault: Vault {
                 keybag,

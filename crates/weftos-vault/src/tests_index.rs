@@ -52,7 +52,7 @@ fn contains(hay: &[u8], needle: &[u8]) -> bool {
 
 #[test]
 fn index_round_trip() {
-    let v = new_vault(true).vault;
+    let v = new_vault().vault;
     let s = v.seal_index_entries(&sample(), 5).unwrap();
     assert_eq!(s.slot, "index");
     let got = v.open_index(&s.bytes).unwrap();
@@ -75,7 +75,7 @@ fn index_round_trip() {
 
 #[test]
 fn a_tampered_index_is_refused() {
-    let v = new_vault(true).vault;
+    let v = new_vault().vault;
     let s = v.seal_index_entries(&sample(), 5).unwrap();
     for i in 0..s.bytes.len() {
         let mut bad = s.bytes.clone();
@@ -87,7 +87,7 @@ fn a_tampered_index_is_refused() {
     longer.push(0);
     assert!(v.open_index(&longer).is_err());
     // Another vault, or the blob moved to a secret slot, refuses it.
-    assert!(new_vault(true).vault.open_index(&s.bytes).is_err());
+    assert!(new_vault().vault.open_index(&s.bytes).is_err());
     assert_eq!(
         v.open_secret(&format!("s/{}", "0".repeat(64)), &s.bytes)
             .unwrap_err(),
@@ -97,7 +97,7 @@ fn a_tampered_index_is_refused() {
 
 #[test]
 fn a_validly_sealed_but_non_canonical_payload_is_refused() {
-    let v = new_vault(true).vault;
+    let v = new_vault().vault;
     let a = entry("login/a-FAKE", SecretType::Login, &[], None);
     let b = entry("login/b-FAKE", SecretType::Login, &[], None);
     let pa = v.encode_index(std::slice::from_ref(&a)).unwrap();
@@ -160,7 +160,7 @@ fn a_validly_sealed_but_non_canonical_payload_is_refused() {
 
 #[test]
 fn input_rules_are_enforced() {
-    let v = new_vault(true).vault;
+    let v = new_vault().vault;
     let dup = [
         entry("a", SecretType::Login, &[], None),
         entry("a", SecretType::Token, &[], None),
@@ -193,7 +193,7 @@ fn input_rules_are_enforced() {
 
 #[test]
 fn no_plaintext_names_in_the_stored_bytes() {
-    let v = new_vault(true).vault;
+    let v = new_vault().vault;
     let s = v.seal_index_entries(&sample(), 5).unwrap();
     let needles: Vec<&[u8]> = vec![
         b"login/work-mail-FAKE",
@@ -226,7 +226,7 @@ fn no_plaintext_names_in_the_stored_bytes() {
 
 #[test]
 fn an_index_sealed_before_a_rotation_still_opens() {
-    let mut v = new_vault(true).vault;
+    let mut v = new_vault().vault;
     let old = v.seal_index_entries(&sample(), 1).unwrap();
     v.write_now(&mut Pins::default(), |v, p| {
         v.rotate_vk_unchecked(PASS, None, p)
