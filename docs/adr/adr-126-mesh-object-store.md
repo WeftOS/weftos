@@ -553,9 +553,23 @@ owed and is **not** produced by the in-memory tests.
      21 ms); `list` of the tree prefix took 3.97 s at 20 000 files. Publish is the cost that
      scales: a first publish of 20 000 files took 439.7 s (30 to 68 PUT/s). Since lane L a no-change
      republish makes one listing instead of one HEAD per file; that was measured on loopback
-     only. Still owed: the client project's real file count, total size, largest file and
-     directory shape, and the same measurements against PG's RustFS over the network. See the
-     size ceiling below, which decides whether such a tree fits at all.
+     only.
+   - **Evidence, 2026-11-15: the client project's real tree.** The project's own session ran the
+     counts-only script (`scripts/store/wo069-gate-item3-tree-stats.sh`; it prints no paths) on the
+     real tree. In git's view, which is what publish shares: 10 614 files, 141.7 MB in total,
+     largest file 4.1 MB, none over 16 MiB, 3 symlinks, 1 105 directories, maximum depth 10; 86 %
+     of the files are under 16 KiB. That is 11 % of the file ceiling (100 000) and 3 % of the size
+     ceiling (4 GiB), so the tree fits with room. The nearest measured size is the 10 000-file
+     synthetic tree (335 MiB, heavier than the real one) on the schema-2 code with a loopback
+     RustFS: first publish 139 s, no-change republish 2.4 s (1.6 s with the hash cache), one file
+     changed 2.4 s, fetch of the whole tree 16.4 s, follower poll one small GET. The 3 symlinks
+     are skipped and make a publish `published-partial` (owner decision Q7: keep).
+     The whole directory including ignored files (dependency and build output) is 2 596 002
+     files and 104.8 GB with 547 files over 16 MiB: far over every ceiling. Publish therefore has
+     to stay on git's view of the tree, as it does today (tracked plus untracked, not ignored).
+     Still owed for this item: the same latency measurements against PG's RustFS over the
+     network. The two-machine run against a throwaway store on a second host is recorded under
+     item 1.
 4. Leftover drill: leave a worktree open past the threshold and confirm `leftovers` reports it;
    hand one off and confirm a second agent on another machine lands it with git, then promotion
    and bucket deletion complete and the registry entry disappears.
