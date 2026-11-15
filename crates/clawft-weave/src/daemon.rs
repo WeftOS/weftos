@@ -4284,6 +4284,14 @@ async fn dispatch_authorized(
     dispatch_after_auth(&caller, &caps, method, params, kernel, shutdown_tx).await
 }
 
+/// Who is on the other end of one JSON connection: the daemon-minted
+/// connection id and the socket peer key the governance quota is charged to.
+#[derive(Clone, Copy)]
+struct ConnIdent<'a> {
+    conn_id: u64,
+    peer_key: Option<&'a str>,
+}
+
 async fn dispatch_json_line<W>(
     line: &str,
     kernel: &Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
@@ -4291,8 +4299,7 @@ async fn dispatch_json_line<W>(
     writer: &mut W,
     peer: crate::child_peer::PeerClass,
     endpoint: crate::rpc_ext::RpcEndpoint,
-    conn_id: u64,
-    peer_key: Option<&str>,
+    ident: ConnIdent<'_>,
 ) -> DispatchOutcome
 where
     W: AsyncWriteExt + Unpin,
@@ -4322,8 +4329,8 @@ where
                 crate::rpc_ext::CallerCtx::from_request(&req)
                     .with_peer(peer)
                     .with_endpoint(endpoint)
-                    .with_connection(conn_id)
-                    .with_peer_key(peer_key.map(str::to_owned));
+                    .with_connection(ident.conn_id)
+                    .with_peer_key(ident.peer_key.map(str::to_owned));
             // ADR-103 D14: refuse an unsupported `proto` / malformed
             // `project` before anything else looks at the request.
             let (caps, denial) = if let Some(refusal) =
@@ -4441,7 +4448,7 @@ async fn handle_json_connection<S>(
         return;
     }
     let first_line = format!("{}{}", String::from_utf8_lossy(&prefix), rest_of_first);
-    match dispatch_json_line(&first_line, &kernel, &shutdown_tx, &mut writer, peer, endpoint, conn_id, peer_key.as_deref()).await {
+    match dispatch_json_line(&first_line, &kernel, &shutdown_tx, &mut writer, peer, endpoint, ConnIdent { conn_id, peer_key: peer_key.as_deref() }).await {
         DispatchOutcome::Continue => {}
         DispatchOutcome::Stop => return,
         DispatchOutcome::StreamSubscribe {
@@ -4462,7 +4469,7 @@ async fn handle_json_connection<S>(
             Ok(_) => {}
             Err(_) => break,
         }
-        match dispatch_json_line(&line, &kernel, &shutdown_tx, &mut writer, peer, endpoint, conn_id, peer_key.as_deref()).await {
+        match dispatch_json_line(&line, &kernel, &shutdown_tx, &mut writer, peer, endpoint, ConnIdent { conn_id, peer_key: peer_key.as_deref() }).await {
             DispatchOutcome::Continue => {}
             DispatchOutcome::Stop => break,
             DispatchOutcome::StreamSubscribe {
