@@ -395,3 +395,24 @@ async fn feed_publish_address_and_network_exposure_follow_the_config() {
         .collect();
     assert!(runs[1].contains("-p [::]:25006:5006/udp"), "{}", runs[1]);
 }
+
+#[test]
+fn container_name_stays_inside_the_dns_label_limit_for_a_max_length_id() {
+    use super::container_cmd::CONTAINER_NAME_MAX;
+    let id_a = format!("{}-a", "x".repeat(160));
+    let id_b = format!("{}-b", "x".repeat(160));
+    assert_eq!(id_a.len(), 162);
+    let (a, b) = (container_name(&id_a), container_name(&id_b));
+    for n in [&a, &b] {
+        assert!(n.len() <= CONTAINER_NAME_MAX, "{n} is {} long", n.len());
+        // The console sibling adds "-console" and must still fit a hostname.
+        assert!(format!("{n}-console").len() <= 63);
+        assert!(n.starts_with("weftos-"));
+        assert!(n.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'));
+        assert!(!n.ends_with('-'));
+    }
+    assert_ne!(a, b, "ids differing only past the cut must not collide");
+    assert_eq!(a, container_name(&id_a), "stable");
+    // A short id is unchanged.
+    assert_eq!(container_name("Cog_1.x"), "weftos-cog-1-x");
+}

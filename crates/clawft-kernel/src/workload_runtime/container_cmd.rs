@@ -391,8 +391,15 @@ async fn capture<R: tokio::io::AsyncRead + Unpin>(
     cap
 }
 
-/// Container-name-safe form of an instance id.
+/// Longest container name this adapter makes. The `-console` sibling adds 8
+/// more, and a name can end up as a hostname (63-char DNS label limit).
+pub const CONTAINER_NAME_MAX: usize = 55;
+
+/// Container-name-safe form of an instance id. Ids can reach ~160 chars, so a
+/// long one is cut and given a stable hash of the whole id: two long ids never
+/// share a name, and the same id always gets the same one.
 pub fn container_name(iid: &str) -> String {
+    use sha2::{Digest, Sha256};
     let s: String = iid
         .chars()
         .map(|c| {
@@ -403,7 +410,16 @@ pub fn container_name(iid: &str) -> String {
             }
         })
         .collect();
-    format!("weftos-{s}")
+    let plain = format!("weftos-{s}");
+    if plain.len() <= CONTAINER_NAME_MAX {
+        return plain;
+    }
+    let digest = Sha256::digest(iid.as_bytes());
+    let tag: String = digest[..4].iter().map(|b| format!("{b:02x}")).collect();
+    // "weftos-" + cut + "-" + 8 hex: the cut leaves room for the tag.
+    let keep = CONTAINER_NAME_MAX - "weftos-".len() - 1 - tag.len();
+    let cut = s[..keep].trim_end_matches('-');
+    format!("weftos-{cut}-{tag}")
 }
 
 /// Allowance on top of `max_runtime_secs` for container creation / VM boot.
