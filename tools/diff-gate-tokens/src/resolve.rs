@@ -294,6 +294,13 @@ const TABLE: &[Entry] = &[
         exempt: &[],
         only: &["fork", "exec"],
     },
+    // nix 0.30+: the safe posix_spawn / posix_spawnp functions (R3-F2)
+    Entry {
+        rule: "process",
+        prefix: &["nix", "spawn"],
+        exempt: &[],
+        only: &["posix_spawn"],
+    },
     Entry {
         rule: "net",
         prefix: &["std", "net"],
@@ -441,6 +448,8 @@ mod tests {
         assert_eq!(classify(&p("libc::execvp")), vec!["process"]);
         assert_eq!(classify(&p("libc::*")), vec!["process", "net"]);
         assert!(classify(&p("libc::c_int")).is_empty());
+        assert_eq!(classify(&p("nix::spawn::posix_spawnp")), vec!["process"]);
+        assert_eq!(classify(&p("nix::spawn::posix_spawn")), vec!["process"]);
         assert_eq!(classify(&p("reqwest")), vec!["net"]);
         assert!(classify(&p("crate::process::Command")).is_empty());
     }
