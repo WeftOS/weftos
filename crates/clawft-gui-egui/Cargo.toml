@@ -85,6 +85,13 @@ name = "atlas_stress"
 path = "examples/atlas_stress.rs"
 required-features = ["native"]
 
+# Live sessions landing on a namespace field. Same mesh painter as
+# atlas_stress, plus a grid pick index and a zoom LOD the bench left open.
+[[example]]
+name = "namespace_drops"
+path = "examples/namespace_drops.rs"
+required-features = ["native"]
+
 [[example]]
 name = "canon_slider_windows_deadlock_repro"
 path = "examples/canon_slider_windows_deadlock_repro.rs"
