@@ -83,13 +83,13 @@ block from the workflow and runs it unchanged against fixture pushes.
 |---|---|
 | `unsafe` | the `unsafe` keyword in a `.rs` file (any case of the extension), outside comments, strings and char literals, including in a doctest; also an added line inside an existing `unsafe { }` block, `unsafe fn` or `unsafe impl` body. See [How .rs files are read](#how-rs-files-are-read) |
 | `new-dep` | a new entry in any Cargo.toml dependency table, in `[patch.*]` or in `[replace]`, or a changed source on an existing entry (`git`, `path`, `registry`, `registry-index`, `package`, `rev`, `tag`, `branch`). Every spelling Cargo resolves counts the same: a table header, a dotted key (`dependencies.evil = ...`, `[target.'cfg(unix)']` then `dependencies.evil`, `[workspace]` then `dependencies.evil`, `[patch]` then `crates-io.evil`), an inline table (`dependencies = { evil = ... }`), quoted and escaped key segments, and any line ending. `workspace = true` entries for a dependency the base workspace already declares are not new. See [How Cargo.toml is read](#how-cargotoml-is-read) |
-| `cargo-unparsed` | a Cargo.toml statement the gate's reader cannot read, or a key path that names a dependency table (a segment containing `dependencies`, or `patch`, `replace` or `target`) in a form it does not know, such as `[target.x.y.dependencies]` or `patch = "x"`. Fail closed: such a statement is never an OK. Statements the base already had are not reported again; an approval row clears it |
-| `build-script` | a new `build.rs` (also one created by a rename), or a `build` key in Cargo.toml in any form: bare, quoted, dotted (`package.build`) or inside an inline table (`package = { build = ... }`); `build = false` is fine. A quoted Cargo.toml key or table name with a backslash escape is reported here too, since it can spell `build` or `proc-macro` |
-| `proc-macro` | `proc-macro` / `proc_macro` `= true` in any of the same key forms (`lib = { proc-macro = true }`, `lib.proc-macro`) |
+| `cargo-unparsed` | a package Cargo itself cannot read on the head (`cargo metadata` fails), or cargo is not available to read it; a Cargo.toml statement the gate's reader cannot read, or a key path that names a dependency table (a segment containing `dependencies`, or `patch`, `replace` or `target`) in a form it does not know, such as `[target.x.y.dependencies]` or `patch = "x"`. Fail closed: such a statement is never an OK. Statements the base already had are not reported again; an approval row clears it |
+| `build-script` | a new `build.rs` (also one created by a rename), or a `build` key in Cargo.toml in any form: bare, quoted, dotted (`package.build`) or inside an inline table (`package = { build = ... }`); `build = false` is fine. A quoted Cargo.toml key or table name with a backslash escape is reported here too, since it can spell `build` or `proc-macro`. Also any build script Cargo reports that it did not before, whatever edit turned it on, and a new or changed `links` (see [What Cargo reports](#what-cargo-reports-cargo-metadata)) |
+| `proc-macro` | `proc-macro` / `proc_macro` `= true` in any of the same key forms (`lib = { proc-macro = true }`, `lib.proc-macro`), and any library Cargo reports as a proc-macro that was not one (`crate-type = ["proc-macro"]`, a key moved into `[lib]`) |
 | `net` | `std::net`, `tokio::net`, `async_std::net`, `mio::net` paths, `TcpStream`, `TcpListener`, `TcpSocket`, `UdpSocket`, `reqwest`, `ureq`, `hyper`, `isahc`, `surf`, `attohttpc`, `curl`, `socket2`, `tungstenite`, `quinn` paths or imports, `net` in a `std::{...}` import, `libc` socket calls. Address types (`SocketAddr`, `IpAddr` and friends) do no I/O and are ignored. Unix-domain sockets (`std::os::unix::net`) are local IPC, used by the daemon in about 75 files, and are not findings |
-| `process` | `process::Command` in any form (including `std::{process::Command as K}` and multi-line `std::process::{` imports), the `std::process` module imported or aliased, `Command::new`, `tokio::process`, `CommandExt`, `libc` / `nix` exec, fork, spawn and `system`. Paths are resolved through the file's `use` aliases and glob imports, so `use std::process as p; p::Command` and `use std::process::*; use Command as C; C::args` count. `std::process::exit`, `abort`, `id`, `ExitCode`, `ExitStatus`, `Stdio`, `Output` and the `Child` types do not spawn and are ignored |
-| `ffi` | the `extern` keyword in any form except `extern crate` (`extern "C"`, `extern "system"`, bare `extern {` / `extern fn`), `#[no_mangle]`, `export_name`, `link_section`, and `global_asm!` / `asm!` / `naked_asm!` (`global_asm!` needs no `unsafe`). An added declaration inside an existing `extern { }` block counts. `#[link(...)]` and `link_name` are not separate findings: they only act on an `extern` block, which is one |
-| `include` | code pulled into the build from something that is not a `.rs` file: `include!` whose argument is not a literal `.rs` path, `#[path = "..."]` to a non-`.rs` file, and a new Cargo target `path` (`[lib]`, `[[bin]]`, `[[example]]`, `[[test]]`, `[[bench]]`) to a non-`.rs` file. `#[path]` counts inside `cfg_attr`, over several lines. `include_str!` and `include_bytes!` are not findings in code: they produce a `&str` / `&[u8]` value, and turning data into code needs `unsafe`, which is its own finding. Inside an attribute they are (`#![doc = include_str!("README.md")]` turns that file's code blocks into doctests that `cargo test` runs). `paste!` and `concat_idents!` are findings too: they can build any identifier or path from pieces |
+| `process` | `process::Command` in any form (including `std::{process::Command as K}` and multi-line `std::process::{` imports), the `std::process` module imported or aliased, `Command::new`, `tokio::process`, `CommandExt`, `libc` / `nix` exec, fork, spawn and `system` (`nix::unistd` fork / exec, `nix::spawn::posix_spawn` / `posix_spawnp`). Paths are resolved through the file's `use` aliases and glob imports, so `use std::process as p; p::Command` and `use std::process::*; use Command as C; C::args` count. `std::process::exit`, `abort`, `id`, `ExitCode`, `ExitStatus`, `Stdio`, `Output` and the `Child` types do not spawn and are ignored |
+| `ffi` | a new `cdylib`, `staticlib` or `dylib` crate type Cargo reports; the `extern` keyword in any form except `extern crate` (`extern "C"`, `extern "system"`, bare `extern {` / `extern fn`), `#[no_mangle]`, `export_name`, `link_section`, and `global_asm!` / `asm!` / `naked_asm!` (`global_asm!` needs no `unsafe`). An added declaration inside an existing `extern { }` block counts. `#[link(...)]` and `link_name` are not separate findings: they only act on an `extern` block, which is one |
+| `include` | code pulled into the build from something that is not a `.rs` file: `include!` whose argument is not a literal `.rs` path, `#[path = "..."]` to a non-`.rs` file, a doc attribute whose value is not a string literal (`#[doc = concat!(...)]`, `#[doc = $x]`, `#[cfg_attr(p, doc = m!())]`: rustdoc runs the code blocks of the expanded value), and a new Cargo target `path` (`[lib]`, `[[bin]]`, `[[example]]`, `[[test]]`, `[[bench]]`) to a non-`.rs` file. `#[path]` counts inside `cfg_attr`, over several lines. `include_str!` and `include_bytes!` are not findings in code: they produce a `&str` / `&[u8]` value, and turning data into code needs `unsafe`, which is its own finding. Inside an attribute they are (`#![doc = include_str!("README.md")]` turns that file's code blocks into doctests that `cargo test` runs). `paste!` and `concat_idents!` are findings too: they can build any identifier or path from pieces |
 | `sensitive-crate` | any added non-blank `.rs` line in non-test code under a crate listed in `config/diff-gate-sensitive.toml` (a file exempt by name counts as test code only if nothing builds it outside a test cfg), a test cfg removed from a module declaration that stays, and in such a crate's Cargo.toml a new or changed target `path`. Interim posture (G1, option c); it runs alongside the token helper until the owner retires it; see [Sensitive crates](#sensitive-crates-interim) |
 | `ci-workflow` | any change under `.github/workflows/`, to `scripts/diff-gate.sh` or under `tools/diff-gate-tokens/` (the gate's own checker), including moving or deleting them |
 | `toolchain-config` | any change to `.cargo/config` or `.cargo/config.toml` at any depth (rustc wrapper, linker, rustflags, registries) or to `rust-toolchain` / `rust-toolchain.toml` (toolchain `path`) |
@@ -189,7 +189,7 @@ commit in CI), never from the checkout:
    checkout, so the checkout's `.cargo/config.toml` and `rust-toolchain.toml` do not apply).
    The binary is moved into place atomically. A cold build takes about 15 seconds plus the crate
    download; CI needs no workflow change, since GitHub's Ubuntu runners have cargo.
-4. The binary must answer `--protocol` with `diff-gate-tokens protocol 1`; its output must parse
+4. The binary must answer `--protocol` with `diff-gate-tokens protocol 2`; its output must parse
    (known paths, numeric lines, well-formed spans). Anything else is `rust-tokens`.
 
 Until the helper is on the base, every `.rs` change gets the owner-only `rust-tokens` finding:
@@ -252,45 +252,56 @@ reason      = "card 7306a144: RSS watchdog, reviewed"
 approved_by = "owner"
 ```
 
-Name-based exemption is checked against the declarations (RV-F1, 2026-11-15). Before, it
-assumed a `*_tests.rs`, `tests.rs` or `tests/` file was only compiled under a test cfg, so
-deleting the `#[cfg(test)]` line above its `mod` declaration (a pure deletion, no added line)
-moved new code in that file into the normal build with no finding. Now:
+Name-based exemption is judged by what the crate builds (review round 3, 2026-11-15; before,
+RV-F1). A `*_tests.rs`, `tests.rs` or `tests/` file is test-only only if no non-test target of
+its package builds it. Round 3 showed that looking for references by spelling never ends: an
+`include!(` over three lines (rustfmt's layout for a long path), `mod` split from its name, a
+`#[path]` or Cargo `[[bin]]` path with an escaped dot (`"x_tests\x2Ers"`), a declaring file
+with a NUL byte (`git grep -I` skipped it), a `#[path]` that differs in case, and a symlinked
+module file each built an exempt file with no finding (R3-B1 to R3-B4). The rule is now
+inverted:
 
-- **A file exempt by name is test-only only if nothing builds it outside a test cfg.** The gate
-  looks in every file under the `[[sensitive]]` globs at the head (the working tree, untracked
-  files included, with `--worktree`) for anything that can build it: a `mod <stem>;`
-  declaration in the file's directory or above (the stem is the file name without `.rs`, or the
-  directory name for `mod.rs`), and the file's name in a `#[path = "..."]` (also inside
-  `cfg_attr`), an `include!(...)` or any `path = "..."` (file names compare without case;
-  `dir/mod.rs` for a `mod.rs`). Comments and strings do not count. Each such reference must be
-  test-only: its attribute chain carries `#[cfg(test)]` or `#[cfg(all(test, ...))]` (also
-  written over several lines), it lies inside an inline test module, or the declaring file is
-  itself an exempt file that passes this check. A reference after other code on the same line
-  never counts as test-only. A file that is a Cargo target path in a sensitive Cargo.toml, or
-  that lies under `src/bin/` (a binary target), is never test-only. An exempt-named file
-  nothing refers to (an integration test under `<crate>/tests/`, or an orphan) stays exempt.
-  When a file fails the check its added lines are `sensitive-crate` findings, and the gate says
-  why on stderr: `... is not treated as test-only: declared or named without a test cfg at
-  <file>:<line>`.
-- **Taking a test cfg off a module declaration is a finding by itself.** In a sensitive file, a
-  removed line holding a `cfg` / `cfg_attr` attribute that names `test` is a `sensitive-crate`
-  finding when, on the base, the item it was attached to (after any other attributes, comments
-  and blank lines) is a `mod` declaration, file or inline, and that declaration line stays.
-  Changing the attribute (to `cfg(any(test, ...))`, `cfg(not(test))`, `cfg(unix)`, ...) removes
-  the old line, so it counts too. Deleting a whole test module, or a test cfg on a `fn`, does
-  not.
+- **Roots come from Cargo.** For each package with a changed name-exempt file, the gate takes
+  the targets `cargo metadata` reports on the head (see [What Cargo
+  reports](#what-cargo-reports-cargo-metadata)): lib, bin, proc-macro and build script targets
+  are non-test roots; test, bench and example targets are test roots. A Cargo target path
+  spelled with escapes is decoded by Cargo itself, so `[[bin]] path = "src/x_tests\u002Ers"`
+  makes `x_tests.rs` a root.
+- **The module walk runs on rustc's tokens.** The token helper (`diff-gate-tokens --reach`)
+  follows, from each non-test root: `mod name;` (to `name.rs` and `name/mod.rs`), `#[path]`
+  and `#[cfg_attr(pred, path = ...)]`, inline `mod name { ... }`, and `include!("...")` under
+  any path or alias that resolves to `include`. Layout, comments and string escapes do not
+  matter, because these are tokens and decoded literals. A reference is test-only when its
+  attributes, or an enclosing inline module's, carry `#[cfg(test)]` or `#[cfg(all(.., test,
+  ..))]`; a `cfg_attr` path is test-only when a predicate on its chain is one of those (so
+  `#[cfg_attr(test, path = "x_tests.rs")]` is now test-only, and `cfg_attr(not(test), ...)` is
+  not). Declarations inside macro bodies are followed (they may expand anywhere). Where rustc's
+  rules are subtle it over-approximates: children of every file are looked for both next to it
+  and in `<dir>/<stem>/`, and a spliced `include!` file also resolves in the including module's
+  directories.
+- **Paths.** File names compare without case (a case-insensitive disk builds `X_Tests.rs` for
+  `x_tests.rs`, so the walk treats it as built everywhere), and symlinks are followed inside the
+  extracted crate (`src/real.rs -> x_tests.rs` with `pub mod real;` builds `x_tests.rs`). The
+  crate is read from the head commit (`git archive`), or from the working tree with
+  `--worktree`, so a NUL byte or any other content no longer hides a file from the walk.
+- **Fail closed.** If the token helper is unavailable, if cargo gave no answer for the package
+  (it could not read it, or cargo is missing), or if the walk meets something it cannot follow
+  (an `include!` of a computed path, a file that does not tokenize or is not UTF-8), nothing in
+  that package is exempt. The gate says why on stderr: `... is not treated as test-only: a
+  non-test target of crates/k/Cargo.toml builds it` (or the reason it could not decide). With
+  the stub helper the bash suite uses, every name-exempt file in a sensitive crate is therefore
+  not exempt; the exemption fixtures run with the real helper.
+- **Taking a test cfg off a module declaration is a finding by itself** (RV-F1, kept). In a
+  sensitive file, a removed line holding a `cfg` / `cfg_attr` attribute that names `test` is a
+  `sensitive-crate` finding when, on the base, the item it was attached to (after any other
+  attributes, comments and blank lines) is a `mod` declaration, file or inline, and that
+  declaration line stays. This check is still line-based (a `mod` split from its name on the
+  next line is not matched), but new code in the file it exposes is caught by the walk above.
 
-On 2026-11-15, with a comment appended to all 274 name-exempt `.rs` files in the sensitive
-crates, every one passed the declaration check (no false positive). That diff took about 60
-seconds against about 40 before, because every module parent that names one of the files is
-read too; a normal landing touches a few such files.
-
-Limits: a `#[cfg_attr(test, path = "x_tests.rs")]` declaration is not recognised as test-only
-(the reference is in a `cfg_attr`, not under a test cfg), so new code in `x_tests.rs` is a
-finding; a declaration a macro builds from pieces is not seen (`paste!` and `concat_idents!`
-are findings of their own). A sensitive crate that builds a file outside the sensitive globs
-(`#[path = "../../other/x.rs"]`) is judged by that file's own crate.
+Limits: references from files outside the sensitive crates are not followed (a non-sensitive
+crate that `#[path]`s into a sensitive crate's exempt file builds it in that other crate); a
+declaration a macro builds from pieces is not seen (`paste!` and `concat_idents!` are findings of
+their own); a symlink that leaves the extracted crate is not followed.
 
 False-positive cost: this flags code, not risk. From 2026-11-01 to 2026-11-15, 280 commits on
 `target-0.8.5` added 89,136 `.rs` lines; 57,699 were in these crates, and 37,061 of those in
@@ -315,7 +326,18 @@ An approved finding is reported as `approved` and does not fail. Approvals live 
 `config/diff-gate-approvals.toml`; the file header documents the format. The gate reads the
 approvals from the head commit (`--head`, default `HEAD`), the same blob the `approvals-change`
 check compares, and from the working tree only in `--worktree` mode. An approvals file in a
-checkout that differs from `--head`, or an uncommitted one in commit mode, approves nothing. Each `[[approval]]`
+checkout that differs from `--head`, or an uncommitted one in commit mode, approves nothing.
+
+A row read from the head approves only when it is also trusted (round 3, 2026-11-15): the same
+row (same canonical hash, see [Owner ledger](#owner-ledger)) is in the approvals file at the
+**tip of the base ref**, or its hash is in the owner ledger there, or `DIFF_GATE_OWNER_APPROVED=1`.
+Before, a row the owner removed on the base tip still approved findings on any branch forked
+before the removal, and after the merge the code was in with no row; this mirrors the ledger
+fix (a revoked entry stops approving at once). A head row that is neither is ignored, with a
+note on stderr: `approval row at config/diff-gate-approvals.toml line N is not on the trusted
+base tip and has no owner ledger entry: it approves nothing`. A new row added by a change still
+needs its `approvals-change` clearance (ledger entry or owner flag), and the same ledger entry
+now also lets it approve. Each `[[approval]]`
 needs `rule`, `path` (glob), `pattern` (substring or regex of the added line, or `"*"` for the
 whole file), `reason` and `approved_by`.
 
@@ -351,16 +373,87 @@ pattern that matches any text is treated like `"*"`: `".*"`, `"^.*$"`, `".+"`, `
 and the like, found by asking the pattern (as an awk regex, the way the gate matches it) whether
 it matches each of a fixed, varied set of single characters. For `unsafe`, `net`, `process` and
 `ffi`, which are approved per token, the match must be at least one character long, so `"^"`
-approves none of their findings and is not named there; for the other rules it is. `blob` works on any rule, so it can also
+approves none of their findings and is not named there; for the other rules it is. Since round
+3 (R3-D1), for the rules matched as text (every rule but `unsafe`, `net`, `process` and `ffi`), a
+pattern is also unscoped when it is shorter than 4 characters, or when it matches 8 or more of
+16 fixed sample finding texts (dependency entries, `build`/`proc-macro`/`crate-type`/`links`
+lines, a target `path`, a `cargo-unparsed` text, a few lines of Rust). That catches `" "`,
+`"e"`, `"[^a]"` and `"[^<]"`, which each match every real finding of such a rule but leave out
+one single-character probe; a row written for one entry (`^serde[[:space:]]*=`, `signal_pgid`)
+matches at most one or two samples. The rule is a warning, like `"*"`: the row still approves. `blob` works on any rule, so it can also
 pin a content row to one reviewed version of its file.
 
 `blob` is part of the row's ledger hash (see [Owner ledger](#owner-ledger)), so a ledgered row
 cannot be re-pointed at another file version.
 
+### What Cargo reports (`cargo metadata`)
+
+Since review round 3 (2026-11-15) the gate judges a manifest by what Cargo itself reads, and
+keeps its own TOML reader (below) as a second opinion and as the line mapper. Each round had
+found a new spelling that reader missed: a `build` or `proc-macro` key moved into the table
+Cargo reads by deleting or renaming a header line, or by un-wrapping a multi-line string, with
+no added key line (R3-A1); `build = false` deleted next to an existing `build.rs`, or a manifest
+added next to one (R3-A2); `crate-type = ["proc-macro"]` (R3-A3); a UTF-8 BOM before the first
+header (R3-A4).
+
+- **Which packages.** Every changed Cargo.toml; the package around any `.rs` file added,
+  deleted or retyped (Cargo discovers `src/bin/*.rs`, `tests/*.rs`, `build.rs` and the rest by
+  file name); the package around a changed `.cargo/config*` or `rust-toolchain*` (forced, on top
+  of the `toolchain-config` finding); the package around any changed `.rs` file in a sensitive
+  crate (for the exemption walk); and a symlinked Cargo.toml whose target file changed.
+- **What runs.** `cargo metadata --no-deps --offline --frozen --format-version 1`, once per
+  workspace on each side (the merge-base and the head). The tree it reads is built in the
+  gate's temp directory: the bytes of every Cargo.toml (a symlinked one gets its target's bytes
+  when the target is a file in the same tree, else a line Cargo rejects) and an empty
+  placeholder for every `.rs` path, so target auto-discovery sees what it would see in the
+  checkout. No `.cargo/config` and no toolchain file is copied.
+- **Safety.** `metadata --no-deps` runs no build script and no proc-macro and needs no rustc.
+  The gate runs the toolchain's own `cargo` binary (`rustup which cargo`, resolved outside the
+  checkout, or `cargo` on `PATH` without rustup; `DIFF_GATE_CARGO` overrides it), not the rustup
+  proxy, so no `rust-toolchain` file can choose it, and a cargo inside the checkout is refused.
+  It runs under `env -i` with a throwaway `HOME` and `CARGO_HOME` (no user config, no
+  credentials), `PATH=/usr/bin:/bin`, `CARGO_NET_OFFLINE=true` and `RUSTC=/nonexistent/rustc`,
+  so a run that tried to compile anything would fail. `--offline --frozen` forbid the network
+  and lockfile writes. Checked on 2026-11-15 with cargo 1.95 (PG) and 1.99 (Mac): the real
+  workspace (70 members) and every fixture read without rustc and without a lockfile.
+- **Fail closed.** A head Cargo cannot read is `cargo-unparsed` (`cargo cannot read this
+  package: <cargo's error>`), never an OK. Without cargo every affected manifest gets
+  `cargo-unparsed` (`cargo metadata unavailable`). A package Cargo cannot read on the base
+  counts as new, so everything Cargo reports for it on the head is compared against nothing.
+- **What is compared.** For each package: its targets (kind, crate types, source path), the
+  build script target, `links`, and its dependencies (kind, target, rename, package, source,
+  path, registry). Version requirements and features are not findings, as before.
+- **Findings.** A build script that now runs where it did not (new, moved, or turned on by any
+  edit) is `build-script`, unless it is a `build.rs` the same diff adds (the path rule reports
+  that). A library that is now a proc-macro (`proc-macro = true` or `crate-type =
+  ["proc-macro"]`) is `proc-macro`. A new `cdylib`, `staticlib` or `dylib` crate type is `ffi`
+  (it exports symbols for foreign code). A `links` value that is new or changed is
+  `build-script` (it names the native library a build script links, and `.cargo/config` can
+  override that script's output by it); Cargo rejects `links` without a build script, so that is
+  `cargo-unparsed`. A target path that is new is `include` when it is not `.rs`, and in a
+  sensitive crate `sensitive-crate` (for an auto-discovered target only when it is a lib, bin,
+  proc-macro or build script and its file is not itself added by the diff). A dependency that
+  is new, or whose package, source, path or registry changed, is `new-dep`; a `workspace = true`
+  entry is not new when the base root declares it in `[workspace.dependencies]` and Cargo
+  resolves it to crates.io, to a package of the base workspace, or to an edge the base workspace
+  already had.
+- **Lines and rows.** Each finding is reported on the line the TOML reader finds for it (the
+  `build` key, the `[lib]` `crate-type`, the dependency entry, the target `path`), with the text
+  pass 1 and pass 3 use, so existing rows keep matching and a finding several stages see is
+  reported once. When no line is found it is reported on line 0, with text naming what Cargo
+  reports (`build script src/b.rs (Cargo runs it; no build key names it)`, `new entry in
+  [dependencies]: evil (as Cargo reads it: git+https://evil/)`); rows match that text.
+- **Not from Cargo.** `cargo metadata` does not report `[patch]`, `[replace]` or
+  `[workspace.dependencies]`; those stay with the TOML reader alone (`new-dep`, `cargo-unparsed`).
+- **Cost.** See [Tests](#tests) for the measured runtime.
+
 ### How Cargo.toml is read
 
 Pass 3 reads each changed Cargo.toml in full, on the base and on the head, with a small TOML
-reader (`cargo_entries` in the script; `scripts/diff-gate.sh --cargo-entries FILE` prints what
+reader. Since round 3 it is the second opinion beside [Cargo's own report](#what-cargo-reports-cargo-metadata)
+(both are reported; neither can clear the other), the only reader for `[patch]`, `[replace]` and
+`[workspace.dependencies]`, and the line mapper for Cargo's findings. A UTF-8 BOM before the
+first statement is stripped, as Cargo does (R3-A4). The reader (`cargo_entries` in the script; `scripts/diff-gate.sh --cargo-entries FILE` prints what
 it makes of a file). It is a tokenizer, not one regex per line:
 
 - **Line endings.** CRLF is a line ending; so is a lone CR (not a TOML newline, so Cargo rejects
@@ -510,8 +603,22 @@ ledger entries as well as the rows; a row whose hash stays on the ledger can be 
 - A glob import is applied only to upper-case names and listed functions: with
   `use reqwest::*;` already on the base, an added `get(url)` is not a finding.
 - Code a macro produces from pieces (a proc-macro that turns a string into a path) is not seen;
-  `paste!` and `concat_idents!` are findings, and a new proc-macro crate is a `new-dep` or
-  `proc-macro` finding.
+  `paste!` and `concat_idents!` are findings, and a library that becomes a proc-macro, in any
+  manifest spelling, is a `proc-macro` finding (Cargo reports it).
+- Doc text a macro builds from its arguments is not scanned as doctests: `m!("```\ncode\n```")`
+  where `m` puts its argument in `#[doc = $d]`. The macro definition's `#[doc = $d]` is an
+  `include` finding when it lands; later calls with new text are not.
+- `cargo metadata` sees only what a manifest declares. It does not report `[patch]`, `[replace]`
+  or `[workspace.dependencies]` (the TOML reader alone covers them), and it is given no
+  `.cargo/config` (its `[patch]`, source replacement and `[target.<triple>.<links>]` overrides
+  are `toolchain-config` path findings, not semantic ones).
+- A symlinked Cargo.toml is read through its target when that target is a file in the same tree
+  (and a change to the target re-runs the check); one that leaves the tree is a line Cargo
+  rejects, so `cargo-unparsed`. The link itself is a `special-file` finding when it lands.
+- Deleting a local item that shadowed an imported `Command` makes an unchanged
+  `Command::new("sh")` line spawn a process with no new finding. Over-approximation already
+  counted that line as a `process` finding on the base, so the comparison of finding keys does
+  not change.
 - A Markdown file pulled in with `#![doc = include_str!(...)]` becomes doctests, but later edits
   to that `.md` file are not scanned. Adding the include is an `include` finding; none exist
   today.
