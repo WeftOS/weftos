@@ -435,3 +435,66 @@ fn an_extern_fn_body_is_not_a_foreign_block() {
     let head = "extern \"C\" fn cb() {\n    a();\n    b();\n}\n";
     none(&change(base, head));
 }
+
+// ── Review round 3 (2026-11-15) ──────────────────────────────────────
+
+/// R3-F1: rustdoc runs the code blocks of any attribute that sets doc, not only a literal
+/// `#[doc = "..."]`. A literal inside cfg_attr (any depth, one line with \n escapes or several
+/// lines) is scanned as a doctest; any value that is not a string literal is an include finding.
+#[test]
+fn r3_f1_doc_attribute_forms() {
+    let cmd = r#"std::process::Command::new(\"sh\").status().unwrap();"#;
+    // one line, \n escapes: the doctest is on the attribute's own line
+    for attr in [
+        format!("#[cfg_attr(all(), doc = \"```\\n{cmd}\\n```\")]"),
+        format!("#[cfg_attr(doc, doc = \"```\\n{cmd}\\n```\")]"),
+        format!("#[cfg_attr(unix, cfg_attr(all(), doc = \"```\\n{cmd}\\n```\"))]"),
+        format!("#[doc = \"```\\n{cmd}\\n```\"]"),
+        format!("#![doc = \"```\\n{cmd}\\n```\"]"),
+    ] {
+        let src = format!("{attr}\npub fn d() {{}}\n");
+        let fs = new_file(&src);
+        assert!(has(&fs, "process", 1), "{attr}: {fs:#?}");
+        // only the attribute line added: still a finding
+        let base = "pub fn d() {}\n";
+        let fs = change(base, &src);
+        assert!(has(&fs, "process", 1), "{attr} as a change: {fs:#?}");
+    }
+    // several lines inside cfg_attr: the code line itself
+    let src = format!("#[cfg_attr(all(), doc = \"```\n{cmd}\n```\")]\npub fn d() {{}}\n");
+    assert!(rules(&new_file(&src)).contains(&"process".to_string()));
+    // computed values: include, whatever they hold
+    for attr in [
+        "#[doc = concat!(\"```\\n\", \"std::process::Command::new(\\\"sh\\\").status().unwrap();\", \"\\n```\")]",
+        "#[doc = stringify!(x)]",
+        "#[cfg_attr(all(), doc = concat!(\"a\", \"b\"))]",
+        "#[cfg_attr(unix, cfg_attr(all(), doc = some_macro!()))]",
+        "#[doc = include_str!(\"../README.md\")]",
+        "#[doc = 1]",
+    ] {
+        let src = format!("{attr}\npub fn d() {{}}\n");
+        let fs = new_file(&src);
+        assert!(has(&fs, "include", 1), "{attr}: {fs:#?}");
+    }
+    // a macro body that forwards a doc value is computed too
+    let fs = new_file("macro_rules! m { ($d:expr) => { #[doc = $d] pub fn f() {} }; }\n");
+    assert!(has(&fs, "include", 1), "{fs:#?}");
+    // controls: plain docs, doc(hidden), doc(alias), cfg_attr without doc
+    none(&new_file("/// Plain words.\n#[doc(hidden)]\n#[doc(alias = \"x\")]\n#[cfg_attr(unix, inline)]\n#[doc = \"no code\"]\npub fn d() {}\n"));
+    // an unchanged literal doc attribute stays quiet when another line is added
+    let base = format!("#[cfg_attr(all(), doc = \"```\\n{cmd}\\n```\")]\npub fn d() {{}}\n");
+    none(&change(&base, &format!("{base}fn z() {{}}\n")));
+}
+
+/// R3-F2: nix::spawn::posix_spawn / posix_spawnp spawn a process.
+#[test]
+fn r3_f2_nix_spawn() {
+    let fs = new_file("fn f() { let _ = nix::spawn::posix_spawnp(&a, &b, &c, &d, &e); }\n");
+    assert_eq!(rules(&fs), ["process"]);
+    let fs = new_file("use nix::spawn::posix_spawn;\n");
+    assert_eq!(rules(&fs), ["process"]);
+    let fs = new_file("use nix::spawn::*;\nfn f() { posix_spawnp(&a, &b, &c, &d, &e); }\n");
+    assert!(has(&fs, "process", 2), "{fs:#?}");
+    let fs = new_file("use nix::spawn;\nfn f() { spawn::posix_spawn(&a, &b, &c, &d, &e); }\n");
+    assert!(has(&fs, "process", 2), "{fs:#?}");
+}
