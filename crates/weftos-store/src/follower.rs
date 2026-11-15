@@ -176,7 +176,13 @@ pub fn poll_fast_cached<B: ObjectBackend + Sync>(
     jobs: usize,
     cache: Option<&mut crate::follower_cache::ManifestCache>,
 ) -> Result<Vec<Change>> {
-    let digest = use_digest.then(|| crate::share_fetch::read_digest(b, project_bucket)).transpose()?.flatten();
+    let mut digest = use_digest.then(|| crate::share_fetch::read_digest(b, project_bucket)).transpose()?.flatten();
+    // The digest is a hint. A follower that knows a worktree the digest does not list does not
+    // report it gone on the hint's word (a lost or half-written digest would): it falls back to the
+    // listing, which is the truth. The digest-hit poll where nothing known went missing is unchanged.
+    if digest.as_ref().is_some_and(|d| state.seen.keys().any(|k| !d.entries.contains_key(k))) {
+        digest = None;
+    }
     let mut current = match digest {
         Some(d) => d.entries,
         None => crate::share_fetch::registry_listing(b, project_bucket)?,

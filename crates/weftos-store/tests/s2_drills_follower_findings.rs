@@ -121,7 +121,6 @@ fn a_digest_slug_with_a_corrupt_object_is_still_unreadable() {
 }
 
 #[test]
-#[ignore = "FINDING 6c: a follower believes a partial or empty digest fully"]
 fn a_partial_digest_does_not_make_a_knowing_follower_report_worktrees_gone() {
     let d = tempfile::tempdir().unwrap();
     let be = weftos_store::FsBackend::open(d.path()).unwrap();
@@ -133,6 +132,38 @@ fn a_partial_digest_does_not_make_a_knowing_follower_report_worktrees_gone() {
     S2::put(&be, &env.pr, DIGEST_KEY, &serde_json::to_vec(&partial).unwrap()).unwrap();
     let r = poll_fast(&be, &env.pr, &mut st, false, true, 2);
     assert!(r.is_err() || !kinds(&r.unwrap()).iter().any(|k| k.starts_with("gone:")), "two of three worktrees vanished on the say-so of a hint");
+}
+
+#[test]
+fn a_digest_hit_with_nothing_changed_is_still_one_get_and_a_real_removal_is_still_reported() {
+    let d = tempfile::tempdir().unwrap();
+    let fs = weftos_store::FsBackend::open(d.path()).unwrap();
+    let env = Env::new(&fs, Some(&fs));
+    three(&env);
+    let be = weftos_store::testing::CountingBackend::new(weftos_store::FsBackend::open(d.path()).unwrap());
+    let mut st = FollowState::default();
+    poll_fast(&be, &env.pr, &mut st, false, true, 2).unwrap();
+    be.reset();
+    assert!(poll_fast(&be, &env.pr, &mut st, false, true, 2).unwrap().is_empty());
+    let c = be.counts();
+    assert_eq!((c.get, c.head, c.list), (1, 0, 0), "{c:?}");
+    // a removal the daemon did publish (digest rewritten): reported gone, via the listing fallback
+    remove_registry_entry(&be, &env.pr, "b").unwrap();
+    assert_eq!(kinds(&poll_fast(&be, &env.pr, &mut st, false, true, 2).unwrap()), ["gone:b"]);
+}
+
+#[test]
+fn an_empty_digest_does_not_blind_a_knowing_follower_when_the_registry_is_populated() {
+    let d = tempfile::tempdir().unwrap();
+    let be = weftos_store::FsBackend::open(d.path()).unwrap();
+    let env = Env::new(&be, Some(&be));
+    for s in ["a", "b"] {
+        up(&env, s, &[("docs/x.md", "# X\n")], &Pub::default());
+    }
+    let mut st = FollowState::default();
+    poll_fast(&be, &env.pr, &mut st, false, false, 2).unwrap();
+    S2::put(&be, &env.pr, DIGEST_KEY, br#"{"schema":1,"entries":{}}"#).unwrap();
+    assert!(poll_fast(&be, &env.pr, &mut st, false, true, 2).unwrap().is_empty());
 }
 
 #[test]

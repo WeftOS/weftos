@@ -280,11 +280,11 @@ fn d6c_wrong_project_bucket<B: S2 + Sync>(env: &Env<'_, B>) {
     let mut st = FollowState::default();
     poll_fast(be, pr, &mut st, false, false, 3).unwrap();
     put_digest(&cases[0].1);
-    assert!(poll_fast(be, pr, &mut st, false, true, 3).is_err(), "empty digest vs known worktrees: refused, not 'everything gone'");
+    assert_eq!(poll_fast(be, pr, &mut st, false, true, 3).unwrap(), vec![], "empty digest vs known worktrees: the listing is consulted, nothing is reported gone");
     put_digest(&cases[3].1);
     let c = kinds(&poll_fast(be, pr, &mut st, false, true, 3).unwrap());
-    assert_eq!(c.len(), 2, "a partial digest reads as two worktrees going away: {c:?}");
-    finding("6c", "the digest is a hint the daemon rewrites after each registry write, but a follower that uses it believes it fully: an empty digest shows a NEW follower no worktrees, and a digest that lost entries makes a knowing follower report them `Gone` (the all-empty guard only stops the empty case). A truncated or half-written digest object is the likely cause. Mitigation today: `follow --full` (listing). Proposed: a digest-driven follower cross-checks the digest's entry count against one cheap listing before trusting a drop");
+    assert!(c.is_empty(), "a partial digest no longer reads as worktrees going away: {c:?}");
+    finding("6c", "PASS (fixed): a knowing follower no longer believes a digest that lost known entries; it falls back to the listing. Still true for a NEW follower: an empty or partial digest shows it fewer worktrees (nothing to cross-check against; `follow --full` is the cure)");
     write_digest(be, pr).unwrap();
     assert_eq!(fresh_kinds(be, pr, "digest").len(), 3);
     line("6c", "empty, newer-schema, corrupt and partial digests", t, out.join("; "));
