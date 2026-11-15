@@ -72,12 +72,12 @@ fn sync_docs_first_and_repeat() {
     let cache = tempfile::tempdir().unwrap();
     let (r, c) = delta(&b, || sync_docs(&b, &e, cache.path()).unwrap());
     assert_eq!(r.written.len() as u64, D);
-    // meta GET; manifest read in sync_docs (HEAD + GET) and again in fetch_tree (HEAD + GET);
-    // then per doc: object HEAD + object GET
-    assert_eq!(c, [1 + 2 + D, 2 + D, 0, 0, 0, 0, 0], "meta GET, 2 manifest reads, D x (HEAD + GET)");
+    // meta GET; ONE manifest read (HEAD + GET) shared by the want-list, the fetch and the index;
+    // then per doc: object HEAD + object GET (D is under HEAD_LIST_THRESHOLD, so HEADs, no listing)
+    assert_eq!(c, [1 + 1 + D, 1 + D, 0, 0, 0, 0, 0], "meta GET, 1 manifest read, D x (HEAD + GET)");
     let (r, c) = delta(&b, || sync_docs(&b, &e, cache.path()).unwrap());
     assert_eq!(r.unchanged.len() as u64, D);
-    assert_eq!(c, [1 + 2, 2, 0, 0, 0, 0, 0], "meta GET + 2 manifest reads; local sha equal: no object calls");
+    assert_eq!(c, [1 + 1, 1, 0, 0, 0, 0, 0], "meta GET + 1 manifest read; local sha equal: no object calls");
 }
 
 #[test]

@@ -41,15 +41,23 @@ struct Hook<'a, B: ObjectBackend> {
     inner: &'a B,
     fail_put_key: Option<&'static str>,
     tree_heads: Cell<usize>,
+    tree_gets: Cell<usize>,
     fire_at: Option<usize>,
+    /// Same as `fire_at` but counted on tree-object `get`s (what `fetch_tree` / `sync_docs` have in
+    /// common whether they size objects by HEAD or by one listing).
+    fire_at_get: Option<usize>,
     action: RefCell<Option<Box<dyn FnOnce() + 'a>>>,
 }
 impl<'a, B: ObjectBackend> Hook<'a, B> {
     fn new(inner: &'a B) -> Self {
-        Self { inner, fail_put_key: None, tree_heads: Cell::new(0), fire_at: None, action: RefCell::new(None) }
+        Self { inner, fail_put_key: None, tree_heads: Cell::new(0), tree_gets: Cell::new(0), fire_at: None, fire_at_get: None, action: RefCell::new(None) }
     }
     fn failing_put(inner: &'a B, key: &'static str) -> Self {
         Self { fail_put_key: Some(key), ..Self::new(inner) }
+    }
+    /// Runs `f` just before the `at_get`th tree-object `get` (0-based).
+    fn firing_get(inner: &'a B, at_get: usize, f: impl FnOnce() + 'a) -> Self {
+        Self { fire_at_get: Some(at_get), action: RefCell::new(Some(Box::new(f))), ..Self::new(inner) }
     }
     fn firing(inner: &'a B, at_head: usize, f: impl FnOnce() + 'a) -> Self {
         Self { fire_at: Some(at_head), action: RefCell::new(Some(Box::new(f))), ..Self::new(inner) }
@@ -70,6 +78,16 @@ impl<B: ObjectBackend> ObjectBackend for Hook<'_, B> {
         self.inner.head(b, k)
     }
     fn get(&self, b: &str, k: &str) -> Result<Option<Vec<u8>>, S2Error> {
+        if k.starts_with(TREE_PREFIX) {
+            let n = self.tree_gets.get();
+            self.tree_gets.set(n + 1);
+            if self.fire_at_get == Some(n) {
+                let a = self.action.borrow_mut().take();
+                if let Some(f) = a {
+                    f();
+                }
+            }
+        }
         self.inner.get(b, k)
     }
     fn put(&self, b: &str, k: &str, d: &[u8]) -> Result<ObjectMeta, S2Error> {
@@ -236,7 +254,7 @@ fn v1<B: ObjectBackend>(be: &B, pb: &str, wb: &str, order: &[&str]) -> (Tree, Tr
     (t, m1, e)
 }
 
-/// W2a: `fetch_tree` with a publish v2 completing mid-call (before the 2nd tree object is read).
+/// W2a: `fetch_tree` with a publish v2 completing mid-call (before the 2nd tree object is read: the 2nd tree-object `get`).
 fn w2a<B: ObjectBackend>(be: &B, pb: &str, wb: &str, with_edit: bool) {
     let id = "W2a";
     let order: &[&str] = if with_edit { &["docs/c.md", "docs/a.md", "docs/b.md", "docs/d.md"] } else { &["docs/c.md", "docs/b.md", "docs/d.md"] };
@@ -244,7 +262,7 @@ fn w2a<B: ObjectBackend>(be: &B, pb: &str, wb: &str, with_edit: bool) {
     let dest = tempfile::tempdir().unwrap();
     let r = {
         let t = RefCell::new(&mut t);
-        let hook = Hook::firing(be, 1, || publish_v2(be, &mut t.borrow_mut(), wb));
+        let hook = Hook::firing_get(be, 1, || publish_v2(be, &mut t.borrow_mut(), wb));
         fetch_tree(&hook, wb, dest.path(), Select::All, false)
     };
     let per_file = classify(be, wb, &m1);
@@ -280,7 +298,7 @@ fn w2b<B: ObjectBackend>(be: &B, pb: &str, wb: &str, with_edit: bool) {
     let cache = tempfile::tempdir().unwrap();
     let r = {
         let t = RefCell::new(&mut t);
-        let hook = Hook::firing(be, 1, || publish_v2(be, &mut t.borrow_mut(), wb));
+        let hook = Hook::firing_get(be, 1, || publish_v2(be, &mut t.borrow_mut(), wb));
         sync_docs(&hook, &e, cache.path())
     };
     let mirror = cache.path().join(SLUG);

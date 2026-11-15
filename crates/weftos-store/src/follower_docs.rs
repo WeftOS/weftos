@@ -3,8 +3,8 @@
 
 use crate::overlay::{ObjectBackend, Result, S2Error, validate_key};
 use crate::promote::read_meta;
-use crate::share::{State, read_manifest, safe_join};
-use crate::share_fetch::{FetchReport, REGISTRY_PREFIX, RegistryEntry, Select, fetch_tree};
+use crate::share::{Limits, State, TreeManifest, read_manifest, safe_join};
+use crate::share_fetch::{FetchReport, REGISTRY_PREFIX, RegistryEntry, Select, fetch_tree_from};
 use std::path::Path;
 
 /// A registry entry is a pointer, not authority: before reading a bucket on its say-so, check the
@@ -159,11 +159,22 @@ fn rebuild_index(dest: &Path) -> Vec<String> {
 /// The cache is the follower's own: local edits in it are overwritten.
 pub fn sync_docs<B: ObjectBackend>(b: &B, e: &RegistryEntry, cache: &Path) -> Result<FetchReport> {
     verify_entry(b, e)?;
+    let m = read_manifest(b, &e.bucket)?
+        .ok_or_else(|| S2Error::Invalid("worktree has no published tree".into()))?;
+    sync_docs_inner(b, e, &m, cache)
+}
+
+/// [`sync_docs`] from a manifest the caller already read: the want-list, the fetch and the index
+/// all come from that one snapshot (the entry is verified here, as in `sync_docs`).
+pub fn sync_docs_from<B: ObjectBackend>(b: &B, e: &RegistryEntry, m: &TreeManifest, cache: &Path) -> Result<FetchReport> {
+    verify_entry(b, e)?;
+    sync_docs_inner(b, e, m, cache)
+}
+
+fn sync_docs_inner<B: ObjectBackend>(b: &B, e: &RegistryEntry, m: &TreeManifest, cache: &Path) -> Result<FetchReport> {
     // safe_join refuses a symlinked `cache/<slug>` as well as traversal.
     let dest = safe_join(cache, &e.slug)?;
     std::fs::create_dir_all(&dest)?;
-    let m = read_manifest(b, &e.bucket)?
-        .ok_or_else(|| S2Error::Invalid("worktree has no published tree".into()))?;
     // The manifest is untrusted: a doc that names the follower's own control files, a dangerous
     // name or a path that leaves the cache is neither fetched nor tracked in the index.
     let want: std::collections::BTreeSet<String> = m
@@ -203,7 +214,7 @@ pub fn sync_docs<B: ObjectBackend>(b: &B, e: &RegistryEntry, cache: &Path) -> Re
             let _ = std::fs::remove_file(f);
         }
     }
-    let rep = fetch_tree(b, &e.bucket, &dest, Select::DocsOnly, true)?;
+    let rep = fetch_tree_from(b, &e.bucket, m, &dest, Select::DocsOnly, true, &Limits::default())?;
     let keep: Vec<&String> = want.iter().collect();
     std::fs::write(&idx, serde_json::to_vec(&keep)?)?;
     #[cfg(unix)]

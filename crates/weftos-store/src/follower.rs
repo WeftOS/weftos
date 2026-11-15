@@ -17,7 +17,7 @@ use crate::share::State;
 use crate::share_fetch::{RegistryEntry, list_shared_lenient};
 pub use crate::follower_browse::{browse_get, browse_ls, browse_registry};
 pub use crate::follower_docs::{
-    DocHit, SearchResult, remove_registry_entry, search_docs, sync_docs, verify_entry,
+    DocHit, SearchResult, remove_registry_entry, search_docs, sync_docs, sync_docs_from, verify_entry,
 };
 pub use crate::follower_report::{
     Leftover, LeftoverPolicy, Overlap, OverlapKind, OverlapReport, Why, leftovers, overlaps,

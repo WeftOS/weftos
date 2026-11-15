@@ -104,10 +104,11 @@ fn d6e_interrupted_sync_then_delete<B: S2>(env: &Env<'_, B>) {
     let none: &dyn Fn(&Path) = &|_| {};
     // nested docs, interrupted at several reads, no damage: the mirror is exactly v2 (flat docs are covered elsewhere)
     let t = Instant::now();
-    for (i, k) in [0usize, 1, 3, 5, 6, 7].into_iter().enumerate() {
+    // reads of one sync: meta, manifest (once since WO-069 X1), then one per doc: 0..=6 interrupts each of them
+    for (i, k) in [0usize, 1, 2, 4, 5, 6].into_iter().enumerate() {
         assert_eq!(damaged_index_run(env, &format!("n{i}"), Some(k), none), (0, 0, vec![]), "k={k}");
     }
-    line("6e", "nested docs, interrupted at 6 read counts (0 to 7), then 3 deleted + 1 edited + 1 added", t, "mirror == v2 each time");
+    line("6e", "nested docs, interrupted at 6 read counts (0 to 6), then 3 deleted + 1 edited + 1 added", t, "mirror == v2 each time");
 
     // the index (the mirror's memory of what it holds) was damaged by the interruption itself: it is written with a plain write, not rename
     let t = Instant::now();
