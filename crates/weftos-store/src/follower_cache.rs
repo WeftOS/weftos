@@ -29,6 +29,13 @@
 //!   mandatory `.wt/meta.json` cross-check ([`verify_entry`]), then `head` + `get` of the manifest.
 //!   A failed load (missing entry, missing manifest, refused cross-check) stores nothing.
 //!
+//! A `get` through a slot served inside the TTL after a republish returns the PREVIOUS version's
+//! bytes (owner decision 2026-11-15, WO-069 lane D3): schema-2 objects are immutable and named by
+//! content, so the object the cached manifest names is still there for the grace period, and the
+//! bytes agree with the cached listing (snapshot-consistent, never wrong bytes, at most one TTL old).
+//! Only when that object is gone (a schema-1 tree, or past the grace) does the read fail, drop the
+//! slot and retry once cold. Nothing used for fencing (claims, merges, lands) reads through here.
+//!
 //! The split API ([`ManifestCache::lookup`], [`load_slot`], [`ManifestCache::install`]) lets a caller
 //! that shares the cache behind a lock do the backend calls with the lock released. An
 //! invalidation bumps an epoch; a load that started before it is served to its caller but not

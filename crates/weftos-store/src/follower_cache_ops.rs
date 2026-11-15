@@ -23,8 +23,9 @@ pub fn browse_ls_cached<B: ObjectBackend>(
 }
 
 /// [`crate::follower_browse::browse_get`] through the cache. The manifest comes from the cache; the
-/// tree object is always read live. If a cached manifest no longer matches the object (a republish
-/// inside the TTL), the slot is dropped and the read is retried once from a cold load.
+/// tree object is always read live. Inside the TTL after a republish that is the object the cached
+/// manifest names, so the previous version's bytes (see `follower_cache.rs`). If the read fails (a
+/// schema-1 object overwritten or gone), the slot is dropped and the read is retried once cold.
 pub fn browse_get_cached<B: ObjectBackend>(
     b: &B,
     cache: &mut ManifestCache,

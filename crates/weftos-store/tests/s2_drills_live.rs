@@ -179,7 +179,9 @@ fn drill_1a_two_principals_read_only_follower() {
     must_fail("write the handoff record", ObjectBackend::put(&follower, &wa, HANDOFF_KEY, b"{}").is_ok());
     must_fail("write a registry entry", ObjectBackend::put(&follower, &pb, "worktrees/forged.json", b"{}").is_ok());
     must_fail("write the digest", ObjectBackend::put(&follower, &pb, DIGEST_KEY, b"{}").is_ok());
-    must_fail("delete a tree object", ObjectBackend::delete(&follower, &wa, &format!("{TREE_PREFIX}src.rs")).is_ok());
+    // the pool object the manifest names for src.rs (schema 2, lane D3); the follower may read the manifest, not delete
+    let tree_obj = { let m = read_manifest(&follower, &wa).unwrap().unwrap(); m.object_key(m.files.iter().find(|f| f.path == "src.rs").unwrap()) };
+    must_fail("delete a tree object", ObjectBackend::delete(&follower, &wa, &tree_obj).is_ok());
     must_fail("publish_tree", publish_tree(&follower, &wa, &src("zz"), &Limits::default(), 2_000).is_ok());
     mark_handoff(&writer, &wa, &w, "ready", 3_000).unwrap();
     must_fail("claim_merge", claim_merge(&follower, &wa, &who("f", "m9"), 4_000).is_ok());

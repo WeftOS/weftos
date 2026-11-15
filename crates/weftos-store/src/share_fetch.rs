@@ -319,10 +319,8 @@ pub fn fetch_tree_with<B: ObjectBackend>(
 }
 
 /// A selection of up to this many objects to download is size-checked with one HEAD each; a larger
-/// one with a single listing of the object prefix (schema 1 `.wt/tree/`, schema 2 the pool), which
-/// answers presence and size for all of them.
-/// Either way no object is read before its stored size is known (and under the caps), so a
-/// manifest cannot make a follower download an oversized object.
+/// one with a single listing of the object prefix (schema 1 `.wt/tree/`, schema 2 the pool). Either
+/// way no object is read before its stored size is known and under the caps.
 pub const HEAD_LIST_THRESHOLD: usize = 8;
 
 /// [`fetch_tree_with`] from a manifest the caller already read, so a verb that needs the manifest
@@ -376,12 +374,9 @@ pub fn fetch_tree_from<B: ObjectBackend>(
     }
     // Presence and size of what is still to download: one listing for a big selection, one HEAD
     // per object for a small one. An object absent here, or by the time it is read, is `missing`.
-    let listed: Option<std::collections::HashMap<String, u64>> = if todo.len() > HEAD_LIST_THRESHOLD {
-        let prefix = if m.is_pooled() { OBJ_PREFIX } else { TREE_PREFIX };
-        Some(b.list(bucket, prefix)?.into_iter().map(|o| (o.key, o.size)).collect())
-    } else {
-        None
-    };
+    let prefix = if m.is_pooled() { OBJ_PREFIX } else { TREE_PREFIX };
+    let listed: Option<std::collections::HashMap<String, u64>> =
+        (todo.len() > HEAD_LIST_THRESHOLD).then(|| b.list(bucket, prefix)).transpose()?.map(|l| l.into_iter().map(|o| (o.key, o.size)).collect());
     let mut total = 0u64;
     for (f, target) in todo {
         let key = m.object_key(f);
@@ -466,8 +461,7 @@ pub fn fetch_bundle_from_with<B: ObjectBackend>(b: &B, bucket: &str, m: &TreeMan
             "this tree was published without a git bundle".into(),
         ));
     }
-    // Schema 2: the pool object the manifest names by sha (immutable, so a publish that replaced the
-    // bundle since this manifest was read leaves this one in place for the grace period).
+    // Schema 2: the pool object named by sha, left in place for the grace by any later publish.
     let key = m
         .bundle_object()
         .ok_or_else(|| S2Error::Invalid("manifest says bundle but names no bundle object".into()))?;

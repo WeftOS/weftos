@@ -16,6 +16,17 @@ fn me(a: &str, h: &str) -> Actor {
     }
 }
 
+/// The object the current manifest names for `path` (schema 2: a pool key, lane D3).
+fn obj(b: &MemBackend, path: &str) -> String {
+    let m = read_manifest(b, WT).unwrap().unwrap();
+    m.object_key(m.files.iter().find(|f| f.path == path).unwrap())
+}
+
+/// The bundle object the current manifest names.
+fn bundle_obj(b: &MemBackend) -> String {
+    read_manifest(b, WT).unwrap().unwrap().bundle_object().unwrap()
+}
+
 fn setup() -> MemBackend {
     let b = MemBackend::new();
     b.set_clock(1_000);
@@ -330,11 +341,16 @@ fn republish_is_incremental_and_removes_deleted_files() {
     std::fs::write(d.path().join("src/lib.rs"), "fn changed(){}").unwrap();
     let r = publish_tree(&b, WT, &mk(d.path(), &ps, "b2"), &Limits::default(), 7_000).unwrap();
     assert_eq!((r.uploaded, r.unchanged), (1, 1));
+    let lib = obj(&b, "src/lib.rs");
     let ps2 = paths(&["docs/grok-build-fork/rooms.md"]);
     let r = publish_tree(&b, WT, &mk(d.path(), &ps2, "b3"), &Limits::default(), 8_000).unwrap();
-    assert_eq!(r.removed, 1);
-    assert!(b.get(WT, ".wt/tree/src/lib.rs").unwrap().is_none());
+    // lane D3: the dropped file is retired (kept for the grace), then swept by a later publish
+    assert_eq!((r.removed, r.retired), (0, 1));
+    assert!(b.get(WT, &lib).unwrap().is_some());
     assert_eq!(read_manifest(&b, WT).unwrap().unwrap().files.len(), 1);
+    let r = publish_tree(&b, WT, &mk(d.path(), &ps2, "b3"), &Limits::default(), 8_000 + DEFAULT_GRACE_MS).unwrap();
+    assert!(r.removed >= 1, "{r:?}");
+    assert!(b.get(WT, &lib).unwrap().is_none());
 }
 
 #[test]
@@ -460,7 +476,7 @@ fn fetch_never_clobbers_local_edits_and_detects_corruption() {
         "fn main(){}"
     );
     // tamper with the stored object
-    b.put(WT, ".wt/tree/src/lib.rs", b"tampered").unwrap();
+    b.put(WT, &obj(&b, "src/lib.rs"), b"tampered").unwrap();
     let fresh = tempfile::tempdir().unwrap();
     assert!(fetch_tree(&b, WT, fresh.path(), Select::All, false).is_err());
 }
@@ -556,7 +572,7 @@ fn promotion_archives_the_shared_tree_and_never_promotes_it() {
     assert!(
         b.get(
             AR,
-            "archive/worktrees/s2/.wt/tree/docs/grok-build-fork/rooms.md"
+            &format!("archive/worktrees/s2/{}", obj(&b, "docs/grok-build-fork/rooms.md"))
         )
         .unwrap()
         .is_some()
@@ -656,7 +672,7 @@ fn readers_enforce_size_and_count_ceilings_and_check_the_bundle_hash() {
     assert!(read_manifest(&b, WT).unwrap().unwrap().bundle_sha256.is_some());
 
     // a writer with direct S3 access swaps the bundle
-    b.put(WT, BUNDLE_KEY, b"EVIL-BUNDLE").unwrap();
+    b.put(WT, &bundle_obj(&b), b"EVIL-BUNDLE").unwrap();
     let out = tempfile::tempdir().unwrap();
     let e = fetch_bundle(&b, WT, &out.path().join("x.bundle")).unwrap_err().to_string();
     assert!(e.contains("checksum"), "{e}");
@@ -664,7 +680,7 @@ fn readers_enforce_size_and_count_ceilings_and_check_the_bundle_hash() {
 
     // an object grown past the per-file ceiling after publishing is refused before it is read
     let big = vec![b'x'; 2048];
-    b.put(WT, ".wt/tree/a.txt", &big).unwrap();
+    b.put(WT, &obj(&b, "a.txt"), &big).unwrap();
     let lim = Limits { max_file: 1024, ..Limits::default() };
     let dest = tempfile::tempdir().unwrap();
     let e = fetch_tree_with(&b, WT, dest.path(), Select::All, true, &lim).unwrap_err().to_string();
@@ -726,7 +742,7 @@ fn private_key_content_and_secret_names_are_not_shared_but_secret_docs_are() {
         r.skipped.iter().filter(|(_, s)| *s == Skip::Secret).count(),
         2
     );
-    assert!(b.get(WT, ".wt/tree/secrets-policy.md").unwrap().is_some());
+    assert!(b.get(WT, &obj(&b, "secrets-policy.md")).unwrap().is_some());
 }
 
 #[test]
@@ -1007,8 +1023,9 @@ fn handoff_and_bundle_records_are_archived_on_promotion() {
     };
     publish_tree(&b, WT, &src, &Limits::default(), 1).unwrap();
     promote(&b, WT, PR, &ARCH, &policy(), 5_000).unwrap();
+    let bundle_key = bundle_obj(&b);
     for k in [
-        ".wt/git/branch.bundle",
+        bundle_key.as_str(),
         ".wt/tree.manifest.json",
         ".wt/handoff.json",
     ] {

@@ -44,18 +44,19 @@ impl ObjectBackend for Hooked<'_> {
         self.inner.get(b, k)
     }
     fn put(&self, b: &str, k: &str, d: &[u8]) -> R<ObjectMeta> {
+        if k.starts_with(TREE_PREFIX) || k.starts_with(OBJ_PREFIX) {
+            fire(&self.h.before_tree_put);
+        }
+        self.inner.put(b, k, d)
+    }
+    fn put_cas(&self, b: &str, k: &str, d: &[u8], e: Option<&str>) -> R<bool> {
+        // The manifest write is conditional since lane D3 (a `put_cas` on the version read).
         if k == MANIFEST_KEY {
             fire(&self.h.before_manifest_put);
             if self.h.fail_manifest_put.get() {
                 return Err(S2Error::Backend("injected: manifest PUT failed".into()));
             }
         }
-        if k.starts_with(TREE_PREFIX) {
-            fire(&self.h.before_tree_put);
-        }
-        self.inner.put(b, k, d)
-    }
-    fn put_cas(&self, b: &str, k: &str, d: &[u8], e: Option<&str>) -> R<bool> {
         if k == HANDOFF_KEY {
             fire(&self.h.before_handoff_cas);
             let n = self.h.handoff_cas.get();
@@ -167,34 +168,29 @@ fn every_fenced_path_refuses_while_an_announced_manifest_is_not_yet_written() {
 // ---- publish racing publish -----------------------------------------------------------------------------------------
 
 #[test]
-fn a_publish_that_replaces_a_pending_announcement_holds_merges_until_it_expires() {
+fn a_publish_that_loses_its_manifest_race_writes_nothing_and_the_winner_merges_at_once() {
+    // Lane D3 changed this: the manifest write is conditional on the version the publish read, so a
+    // publish whose announcement was replaced can no longer land late. Before, P's late PUT landed
+    // and the hold kept merges waiting for the TTL.
     let (b, _) = claimed();
-    // P announces h2; before P's manifest PUT, Q publishes h3 entirely and bob claims h3
+    // P announces h2; before P's manifest write, Q publishes h3 entirely and bob claims h3
     let bob = RefCell::new(None);
     let p = hooked(&b, Hook {
         before_manifest_put: RefCell::new(Some(Box::new(|| {
             publish(&b, "h3", NOW + 2).unwrap();
-            let held = record(&b).publishing.unwrap().held_ms;
-            assert_eq!(held, Some(NOW + 1), "Q carried P's pending stamp; Q itself was not blocked");
-            let c = claim_merge(&b, WT, &who("bob"), NOW + 3).unwrap();
-            // Q's manifest is the announced one, yet P's PUT may still land: the hold refuses the merge
-            assert!(in_flight(&mark_merged_at(&b, WT, &who("bob"), Some(c.epoch), "m", NOW + 4).unwrap_err()));
-            *bob.borrow_mut() = Some(c);
+            let q = record(&b).publishing.unwrap();
+            assert!(q.done && q.held_ms.is_none(), "Q's manifest landed, so Q settled and dropped P's hold: {q:?}");
+            *bob.borrow_mut() = Some(claim_merge(&b, WT, &who("bob"), NOW + 3).unwrap());
         }))),
         ..Hook::default()
     });
-    publish(&p, "h2", NOW + 1).unwrap();
+    let e = publish(&p, "h2", NOW + 1).unwrap_err();
+    assert!(e.to_string().contains("manifest changed while this publish ran"), "{e}");
     drop(p);
-    // P's late PUT landed (h2): bob's h3 claim is refused on head; once Q's announcement (now pending:
-    // the manifest is P's) and P's held stamp are past the TTL, a re-claim merges what is published
-    assert_eq!(head(&b), "h2");
+    assert_eq!(head(&b), "h3", "P wrote nothing");
     let c = bob.into_inner().unwrap();
-    assert!(mark_merged_at(&b, WT, &who("bob"), Some(c.epoch), "m", NOW + 5).is_err());
-    let later = NOW + 2 + CLAIM_TTL_MS;
-    let again = claim_merge(&b, WT, &who("bob"), later).unwrap();
-    assert_eq!(again.claimed_head.as_deref(), Some("h2"));
-    mark_merged_at(&b, WT, &who("bob"), Some(again.epoch), "m", later).unwrap();
-    assert_eq!(head(&b), "h2", "the merge names the head that is published");
+    assert_eq!(c.claimed_head.as_deref(), Some("h3"));
+    mark_merged_at(&b, WT, &who("bob"), Some(c.epoch), "m", NOW + 5).unwrap();
 }
 
 // ---- the manifest PUT fails (A5) ------------------------------------------------------------------------------------
@@ -223,33 +219,44 @@ fn a_failed_first_publish_leaves_an_open_record_with_no_announcement() {
 }
 
 #[test]
-fn when_the_withdrawal_fails_too_merges_wait_for_the_ttl_and_the_writer_does_not() {
+fn when_the_withdrawal_fails_too_merges_wait_until_the_next_publish_lands() {
     let (b, c) = claimed();
     // handoff put_cas #0 is the announcement, #1 the withdrawal
     let p = hooked(&b, Hook { fail_manifest_put: Cell::new(true), fail_handoff_cas_at: Some(1), ..Hook::default() });
     let e = publish(&p, "h2", NOW + 1).unwrap_err();
     assert!(e.to_string().contains("could not be withdrawn"), "the error says merges wait: {e}");
     assert!(in_flight(&mark_merged_at(&b, WT, &who("bob"), Some(c.epoch), "m", NOW + 2).unwrap_err()));
-    // the writer's next publish is not blocked; it carries the stuck stamp as a hold
+    // The writer's next publish is not blocked. It carries the stuck stamp as a hold while it runs;
+    // once its own conditional manifest write lands the stuck publish can never land (its write is
+    // on a version that is gone), so the hold is dropped (lane D3; before, merges waited the TTL).
     publish(&b, "h1", NOW + 3).unwrap();
-    assert_eq!(record(&b).publishing.unwrap().held_ms, Some(NOW + 1));
-    assert!(in_flight(&mark_merged_at(&b, WT, &who("bob"), Some(c.epoch), "m", NOW + 4).unwrap_err()));
-    mark_merged_at(&b, WT, &who("bob"), Some(c.epoch), "m", NOW + 1 + CLAIM_TTL_MS).unwrap();
+    let i = record(&b).publishing.unwrap();
+    assert!(i.done && i.held_ms.is_none(), "{i:?}");
+    mark_merged_at(&b, WT, &who("bob"), Some(c.epoch), "m", NOW + 4).unwrap();
 }
 
 // ---- other cut points and interleavings -----------------------------------------------------------------------------
 
 #[test]
 fn a_crash_after_the_manifest_leaves_nothing_pending() {
-    let b = MemBackend::new();
-    publish_on(&b, "h1", &[("a.md", "a"), ("b.md", "b")], NOW).unwrap();
-    mark_handoff(&b, WT, &who("writer"), "ready", NOW).unwrap();
-    // h2 drops b.md, then dies in the sweep that deletes it
-    let p = hooked(&b, Hook { fail_delete: Cell::new(true), ..Hook::default() });
-    assert!(publish_on(&p, "h2", &[("a.md", "a")], NOW + 1).is_err());
-    assert_eq!(head(&b), "h2");
-    let c = claim_merge(&b, WT, &who("bob"), NOW + 2).unwrap();
-    mark_merged_at(&b, WT, &who("bob"), Some(c.epoch), "m", NOW + 3).unwrap();
+    for cut in ["post-check", "sweep"] {
+        let b = MemBackend::new();
+        publish_on(&b, "h1", &[("a.md", "a"), ("b.md", "b")], NOW).unwrap();
+        mark_handoff(&b, WT, &who("writer"), "ready", NOW).unwrap();
+        // h2 drops b.md, then dies right after its manifest write: in the post-check's record write
+        // (handoff put_cas #1, #0 is the announcement), or in the sweep that deletes b.md's object
+        // (a zero grace, so the sweep runs at once)
+        let p = hooked(&b, Hook { fail_handoff_cas_at: (cut == "post-check").then_some(1), fail_delete: Cell::new(cut == "sweep"), ..Hook::default() });
+        let src_dir = tempfile::tempdir().unwrap();
+        std::fs::write(src_dir.path().join("a.md"), "a").unwrap();
+        let ps = vec!["a.md".to_string()];
+        let src = TreeSource { root: src_dir.path(), paths: &ps, uncommitted: &[], changes: &[], branch: "feat/y", base_commit: "base", head_commit: "h2", bundle: None, writer: who("writer") };
+        let opts = PublishOptions { grace_ms: 0, ..PublishOptions::default() };
+        assert!(publish_tree_opts(&p, WT, &src, &Limits::default(), NOW + 1, None, &opts).is_err(), "{cut}");
+        assert_eq!(head(&b), "h2", "{cut}");
+        let c = claim_merge(&b, WT, &who("bob"), NOW + 2).unwrap();
+        mark_merged_at(&b, WT, &who("bob"), Some(c.epoch), "m", NOW + 3).unwrap();
+    }
 }
 
 #[test]
@@ -279,7 +286,7 @@ fn a_merge_during_the_upload_refuses_the_publish_before_its_manifest() {
 /// A pending announcement stamped at `ms` (the manifest is not its bytes).
 fn plant(b: &MemBackend, ms: u64) {
     let mut h = record(b);
-    h.publishing = Some(PublishIntent { manifest_sha256: "0".repeat(64), head: "h9".into(), tree: "t1:x".into(), ms, writer: who("writer"), held_ms: None });
+    h.publishing = Some(PublishIntent { manifest_sha256: "0".repeat(64), head: "h9".into(), tree: "t1:x".into(), ms, writer: who("writer"), held_ms: None, done: false });
     ObjectBackend::put(b, WT, HANDOFF_KEY, &serde_json::to_vec(&h).unwrap()).unwrap();
 }
 

@@ -281,7 +281,11 @@ fn a_newer_manifest_error_names_both_schema_numbers_and_the_current_one_still_re
     S2::put(&be, &e.bucket, MANIFEST_KEY, &serde_json::to_vec(&m).unwrap()).unwrap();
     let msg = weftos_store::share::read_manifest(&be, &e.bucket).unwrap_err().to_string();
     assert!(msg.contains(&(max + 1).to_string()) && msg.contains(&max.to_string()), "{msg}");
-    m["schema"] = 0.into(); // an older schema is accepted
+    // An older schema is accepted: the same tree as schema 0 (the schema-1 shape, `files`). Its
+    // objects are then `.wt/tree/<path>`, which this check does not read.
+    m["schema"] = 0.into();
+    let entries = m.as_object_mut().unwrap().remove("entries").unwrap();
+    m["files"] = entries;
     S2::put(&be, &e.bucket, MANIFEST_KEY, &serde_json::to_vec(&m).unwrap()).unwrap();
     assert!(weftos_store::share::read_manifest(&be, &e.bucket).unwrap().is_some());
 }

@@ -182,14 +182,17 @@ fn scale_bench() {
         write_registry_entry(&be, &pb, &summarize(&be, &slug, &wb).unwrap().unwrap()).unwrap();
 
         // 4: list of the tree prefix, head latency
-        measure(&be, n, "list_tree_prefix", |v: &usize| format!("objects={v} pages_of_1000={}", v.div_ceil(1000)), || ObjectBackend::list(&be, &wb, TREE_PREFIX).unwrap().len());
+        // lane D3: the tree objects are the content-named pool (`.wt/obj/`), one per distinct content
+        measure(&be, n, "list_tree_prefix", |v: &usize| format!("objects={v} pages_of_1000={}", v.div_ceil(1000)), || ObjectBackend::list(&be, &wb, OBJ_PREFIX).unwrap().len());
+        let man = read_manifest(&be, &wb).unwrap().unwrap();
+        let obj_of: std::collections::HashMap<&str, String> = man.files.iter().map(|f| (f.path.as_str(), man.object_key(f))).collect();
         let mut rng = Rng(42);
         let mut lat = Vec::new();
         be.reset();
         for _ in 0..300 {
             let p = &paths[rng.below(n as u64) as usize];
             let t = Instant::now();
-            assert!(be.head(&wb, &format!("{TREE_PREFIX}{p}")).unwrap().is_some());
+            assert!(be.head(&wb, &obj_of[p.as_str()]).unwrap().is_some());
             lat.push(t.elapsed().as_micros());
         }
         println!("BENCH|{n}|head_latency|samples=300|p50_us={}|p95_us={}|max_us={}", pct(&mut lat.clone(), 0.5), pct(&mut lat.clone(), 0.95), pct(&mut lat, 1.0));

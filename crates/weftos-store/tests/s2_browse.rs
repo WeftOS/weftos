@@ -205,11 +205,15 @@ fn a_hostile_manifest_cannot_widen_what_is_listed_or_read() {
     publish(&b, "rooms", &[("docs/ok.md", b"# Ok\n")], &[]);
     let mut m = read_manifest(&b, "w-rooms").unwrap().unwrap();
     for (p, body) in [(".env", &b"K=V"[..]), ("../x", b"x"), ("a/.git/config", b"c"), ("sub/id_rsa", b"k"), (".wt/meta.json", b"m")] {
-        m.files.push(FileEntry { path: p.into(), size: body.len() as u64, sha256: sha256_hex(body), generation: None });
+        // a well-formed schema-2 entry with its object in the pool: only the path makes it hostile
+        let f = FileEntry { path: p.into(), size: body.len() as u64, sha256: sha256_hex(body), generation: Some(m.generation) };
+        let _ = b.put("w-rooms", &m.object_key(&f), body);
         let _ = b.put("w-rooms", &format!("{TREE_PREFIX}{p}"), body);
+        m.files.push(f);
     }
     b.put("w-rooms", MANIFEST_KEY, &serde_json::to_vec(&m).unwrap()).unwrap();
     b.put("w-rooms", ".wt/tree/planted.txt", b"not in manifest").unwrap();
+    b.put("w-rooms", &obj_key(&sha256_hex(b"planted"), 1), b"planted").unwrap();
     let root = browse_ls(&b, PR, "rooms", "").unwrap();
     assert_eq!(root.entries.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["docs"]);
     for p in [".env", "../x", "a/.git/config", "sub/id_rsa", ".wt/meta.json", "planted.txt"] {
@@ -252,10 +256,14 @@ fn browse_only_ever_reads_the_entry_meta_manifest_and_tree() {
     browse_get(&s, PR, "rooms", "docs/a.md", 99).unwrap();
     browse_get(&s, PR, "rooms", ".wt/git/branch.bundle", 99).unwrap_err();
     browse_get(&s, PR, "rooms", "overlay-file.txt", 99).unwrap_err();
+    // the one tree object read is the pool object the manifest names for docs/a.md (schema 2)
+    let man = read_manifest(&m, "w-rooms").unwrap().unwrap();
+    let a = man.object_key(man.files.iter().find(|f| f.path == "docs/a.md").unwrap());
+    assert!(a.starts_with(OBJ_PREFIX), "{a}");
     for (bucket, key) in s.reads.borrow().iter() {
         let ok = (bucket == PR && key == "worktrees/rooms.json")
-            || (bucket == "w-rooms" && (key == ".wt/meta.json" || key == MANIFEST_KEY || key == ".wt/tree/docs/a.md"));
+            || (bucket == "w-rooms" && (key == ".wt/meta.json" || key == MANIFEST_KEY || *key == a));
         assert!(ok, "unexpected read of {bucket}/{key}");
     }
-    assert!(s.reads.borrow().iter().any(|(_, k)| k == ".wt/tree/docs/a.md"));
+    assert!(s.reads.borrow().iter().any(|(_, k)| *k == a));
 }

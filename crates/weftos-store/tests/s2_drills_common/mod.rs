@@ -13,7 +13,8 @@ pub const MIN: u64 = 60_000;
 pub const H: u64 = 3_600_000;
 pub const D: u64 = 24 * H;
 
-/// Fails the (put_at+1)th put and every later one, and/or every delete from the (delete_at+1)th on.
+/// Fails the (put_at+1)th put and every later one, and/or every delete from the (delete_at+1)th on. The manifest write is a
+/// `put_cas` since lane D3; it counts as a put here, so a cut index still names "the Nth object or manifest write".
 pub struct Flaky<'a> {
     pub inner: &'a RustfsBackend,
     pub puts: AtomicUsize,
@@ -49,6 +50,9 @@ impl ObjectBackend for Flaky<'_> {
         self.inner.list(b, p)
     }
     fn put_cas(&self, b: &str, k: &str, d: &[u8], e: Option<&str>) -> Result<bool, S2Error> {
+        if k == MANIFEST_KEY && self.puts.fetch_add(1, SeqCst) >= self.put_at {
+            return Err(S2Error::Backend("injected: the writer died".into()));
+        }
         self.inner.put_cas(b, k, d, e)
     }
 }
@@ -75,6 +79,11 @@ pub fn line(id: &str, step: &str, ms: u128, detail: impl std::fmt::Display) {
 
 pub fn finding(id: &str, detail: impl std::fmt::Display) {
     println!("FINDING|{id}|{detail}");
+}
+
+/// A former finding that is now fixed: a DRILL line, so the drill run's findings count stays honest.
+pub fn fixed(id: &str, detail: impl std::fmt::Display) {
+    println!("DRILL|{id}|fixed|PASS|-|{detail}");
 }
 
 pub struct Tree {
@@ -104,11 +113,14 @@ impl Tree {
         self.paths.retain(|x| x != p);
     }
     pub fn publish<B: ObjectBackend>(&self, b: &B, wb: &str, head: &str, who: &Actor, now: u64) -> Result<PublishReport, S2Error> {
+        self.publish_opts(b, wb, head, who, now, &PublishOptions::default())
+    }
+    pub fn publish_opts<B: ObjectBackend>(&self, b: &B, wb: &str, head: &str, who: &Actor, now: u64, o: &PublishOptions) -> Result<PublishReport, S2Error> {
         let src = TreeSource {
             root: self.dir.path(), paths: &self.paths, uncommitted: &[], changes: &[], branch: "feat-x", base_commit: "base",
             head_commit: head, bundle: None, writer: who.clone(),
         };
-        publish_tree(b, wb, &src, &Limits::default(), now)
+        publish_tree_opts(b, wb, &src, &Limits::default(), now, None, o).map(|p| p.report)
     }
 }
 

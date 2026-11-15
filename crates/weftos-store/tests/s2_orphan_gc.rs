@@ -249,7 +249,13 @@ fn confirmed_gc_archives_everything_then_deletes_and_nothing_else_moves() {
     for (k, _) in &wt_before {
         assert!(b.inner.head(ARCH, &format!("w-a@{now}/{k}")).unwrap().is_some(), "archived {k}");
     }
-    assert!(wt_before.iter().any(|(k, _)| k.starts_with(".wt/tree/")) && wt_before.iter().any(|(k, _)| k == "scratch/notes.txt"));
+    assert!(wt_before.iter().any(|(k, _)| k.starts_with(OBJ_PREFIX)) && wt_before.iter().any(|(k, _)| k == "scratch/notes.txt"));
+    // self-describing (lane D3): the archived manifest resolves every object it names under the archive prefix
+    let am: TreeManifest = serde_json::from_slice(&b.inner.get(ARCH, &format!("w-a@{now}/{MANIFEST_KEY}")).unwrap().unwrap()).unwrap();
+    for f in &am.files {
+        let d = b.inner.get(ARCH, &format!("w-a@{now}/{}", am.object_key(f))).unwrap().expect("archived object");
+        assert_eq!(sha256_hex(&d), f.sha256, "{}", f.path);
+    }
     assert!(snapshot(&b, "w-a").is_empty(), "objects deleted");
     assert_eq!(entry_state(&b, "a"), None, "registry entry removed");
     assert!(!read_digest(&b, PR).unwrap().unwrap().entries.contains_key("a"));

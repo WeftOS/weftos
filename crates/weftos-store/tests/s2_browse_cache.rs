@@ -214,19 +214,31 @@ fn a_republish_is_never_served_stale_past_the_ttl() {
     assert_eq!(c.stats.revalidated, 0);
 }
 
+/// Lane D3 flipped this (owner decision 2026-11-15, "accept up to one cache TTL of previous-version
+/// bytes"): objects are immutable and content-named, so inside the TTL a get after a republish is
+/// served from the object the CACHED manifest names, the previous version, consistent with the
+/// cached listing. Before, that object had been overwritten, the checksum failed, and the slot was
+/// dropped for a cold retry that returned the new bytes.
 #[test]
-fn a_get_inside_the_ttl_after_a_republish_returns_the_new_bytes() {
+fn a_get_inside_the_ttl_after_a_republish_returns_the_previous_bytes_consistent_with_the_listing() {
     let b = spy();
     two(&b);
     let mut c = ManifestCache::new(60_000, 8, 1 << 20);
-    browse_ls_cached(&b, &mut c, 0, PR, "alpha", "").unwrap();
+    let before = browse_ls_cached(&b, &mut c, 0, PR, "alpha", "").unwrap();
+    let old = browse_get_cached(&b, &mut c, 1, PR, "alpha", "docs/a.md", 1 << 20).unwrap();
     publish(&b, "alpha", &[("docs/a.md", b"# A2 changed\n"), ("src/lib.rs", b"fn a(){}")], "h2");
     let f = browse_get_cached(&b, &mut c, 5, PR, "alpha", "docs/a.md", 1 << 20).unwrap();
-    assert_eq!(f.data.as_deref(), Some(&b"# A2 changed\n"[..]), "checksum mismatch dropped the slot, cold retry");
-    assert_eq!(f.sha256, sha256_hex(b"# A2 changed\n"));
-    // a file that left the tree is the same story: an error only if it is really gone
+    assert_eq!((f.data.as_deref(), &f.sha256), (old.data.as_deref(), &old.sha256), "the previous version, as the cached manifest says");
+    assert_ne!(f.data.as_deref(), Some(&b"# A2 changed\n"[..]));
+    assert_eq!(browse_ls_cached(&b, &mut c, 5, PR, "alpha", "").unwrap(), before, "and the listing it agrees with");
+    // a file that left the tree is the same story: still served from the cached snapshot (its
+    // object is retired, kept for the grace), an error only once it is really gone
     publish(&b, "alpha", &[("docs/a.md", b"# A2 changed\n")], "h3");
-    assert!(browse_get_cached(&b, &mut c, 6, PR, "alpha", "src/lib.rs", 1 << 20).is_err());
+    let f = browse_get_cached(&b, &mut c, 6, PR, "alpha", "src/lib.rs", 1 << 20).unwrap();
+    assert_eq!(f.data.as_deref(), Some(&b"fn a(){}"[..]));
+    // past the TTL the new manifest is loaded and its bytes served
+    let f = browse_get_cached(&b, &mut c, 60_000, PR, "alpha", "docs/a.md", 1 << 20).unwrap();
+    assert_eq!(f.data.as_deref(), Some(&b"# A2 changed\n"[..]));
 }
 
 #[test]

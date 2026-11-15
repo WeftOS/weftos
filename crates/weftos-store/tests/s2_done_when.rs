@@ -189,13 +189,13 @@ where
     )
     .unwrap();
     assert_eq!(again.promoted, r.promoted, "second land is a no-op");
-    // the unmerged planning doc was archived, not lost
-    assert!(
-        S1::list(be, abucket, "archive/worktrees/feat-rooms/")
-            .unwrap()
-            .iter()
-            .any(|m| m.key.contains(".wt/tree/docs/planning/rooms.md"))
-    );
+    // the unmerged planning doc was archived, not lost: the archive is self-describing (lane D3),
+    // its manifest names the doc and the object it names is archived beside it with the right bytes
+    let pre = "archive/worktrees/feat-rooms/";
+    let am: TreeManifest = serde_json::from_slice(&S1::get(be, abucket, &format!("{pre}{MANIFEST_KEY}")).unwrap()).unwrap();
+    let f = am.files.iter().find(|f| f.path == "docs/planning/rooms.md").expect("archived manifest names the doc");
+    let body = S1::get(be, abucket, &format!("{pre}{}", am.object_key(f))).unwrap();
+    assert_eq!(sha256_hex(&body), f.sha256);
 }
 
 #[test]

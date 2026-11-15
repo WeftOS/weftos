@@ -190,9 +190,9 @@ impl SharedCache {
         ls_from(&l.entry, &l.manifest, dir)
     }
 
-    /// `browse <slug> <file>`: the manifest from the cache, the object always live. A cached
-    /// manifest the object no longer matches (a republish inside the TTL) is dropped and the read
-    /// retried once from a cold load.
+    /// `browse <slug> <file>`: the manifest from the cache, the object always live: inside the TTL
+    /// after a republish, the previous version's bytes (the object the cached manifest names; see
+    /// `follower_cache.rs`). A read that fails (that object gone) drops the slot and retries once cold.
     pub fn browse_get<B: ObjectBackend>(
         &self,
         b: &B,

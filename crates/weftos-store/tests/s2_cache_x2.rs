@@ -86,8 +86,10 @@ fn max_age_drops_a_slot_whatever_its_etags_say() {
     assert_eq!(c.stats().0.expired, 1);
 }
 
+/// Lane D3 flipped this (see `s2_browse_cache.rs`): inside the TTL the previous version is served,
+/// the object the cached manifest names; past the TTL the new one.
 #[test]
-fn a_republish_inside_the_ttl_gives_the_new_bytes_on_get() {
+fn a_republish_inside_the_ttl_gives_the_previous_bytes_on_get_and_the_new_ones_after_it() {
     let b = spy();
     let s = project(&b, 1);
     let c = shared();
@@ -97,7 +99,9 @@ fn a_republish_inside_the_ttl_gives_the_new_bytes_on_get() {
     publish(&b, &slug(0), &s[0], "h0b", 6_000);
     refresh(&b, &slug(0));
     let f = c.browse_get(&b, PR, &slug(0), "docs/d0.md", 1 << 20, 1).unwrap();
-    assert_eq!(f.data.as_deref(), Some(&b"# Doc 0\nrepublished\n"[..]), "checksum mismatch dropped the slot; one cold retry");
+    assert!(String::from_utf8(f.data.unwrap()).unwrap().contains("t0"), "inside the TTL: the cached manifest's object");
+    let f = c.browse_get(&b, PR, &slug(0), "docs/d0.md", 1 << 20, 1 + TTL).unwrap();
+    assert_eq!(f.data.as_deref(), Some(&b"# Doc 0\nrepublished\n"[..]), "past the TTL: revalidated, the new bytes");
 }
 
 #[test]

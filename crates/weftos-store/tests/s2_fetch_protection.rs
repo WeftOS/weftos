@@ -17,8 +17,10 @@ fn published(n: u64) -> (Spy, Src) {
     (b, s)
 }
 
-fn key(i: u64) -> String {
-    format!("{TREE_PREFIX}src/f{i}.rs")
+/// The object holding `src/f{i}.rs`: the pool object the manifest names (schema 2, lane D3).
+fn key(b: &Spy, i: u64) -> String {
+    let m = read_manifest(&b.be.inner, &bucket("wt0")).unwrap().unwrap();
+    m.object_key(m.files.iter().find(|f| f.path == format!("src/f{i}.rs")).unwrap())
 }
 
 const SMALL: u64 = HEAD_LIST_THRESHOLD as u64;
@@ -28,7 +30,7 @@ const LARGE: u64 = HEAD_LIST_THRESHOLD as u64 + 12;
 fn a_missing_object_is_reported_missing_on_both_paths() {
     for n in [SMALL, LARGE] {
         let (b, _s) = published(n);
-        b.be.inner.delete(&bucket("wt0"), &key(3)).unwrap();
+        b.be.inner.delete(&bucket("wt0"), &key(&b, 3)).unwrap();
         let out = tempfile::tempdir().unwrap();
         let (r, c) = delta(&b, || fetch_tree(&b, &bucket("wt0"), out.path(), Select::All, false).unwrap());
         assert_eq!(r.missing, ["src/f3.rs"], "n = {n}");
@@ -48,7 +50,7 @@ fn an_object_over_the_cap_is_refused_before_download_and_never_written() {
     for n in [SMALL, LARGE] {
         let (b, _s) = published(n);
         // The manifest still says this file is a few bytes; the stored object is not.
-        b.be.inner.put(&bucket("wt0"), &key(2), &vec![b'x'; 5_000]).unwrap();
+        b.be.inner.put(&bucket("wt0"), &key(&b, 2), &vec![b'x'; 5_000]).unwrap();
         let lim = Limits { max_file: 1_000, ..Limits::default() };
         let out = tempfile::tempdir().unwrap();
         // manifest order is by path, not by number
@@ -93,7 +95,7 @@ fn the_total_cap_is_enforced_from_stored_sizes_on_both_paths() {
 fn a_body_that_differs_from_the_manifest_is_refused_by_the_checksum_on_both_paths() {
     for n in [SMALL, LARGE] {
         let (b, _s) = published(n);
-        b.be.inner.put(&bucket("wt0"), &key(1), b"tampered, and of another length").unwrap();
+        b.be.inner.put(&bucket("wt0"), &key(&b, 1), b"tampered, and of another length").unwrap();
         let out = tempfile::tempdir().unwrap();
         let e = fetch_tree(&b, &bucket("wt0"), out.path(), Select::All, false).unwrap_err().to_string();
         assert!(e.contains("checksum mismatch for src/f1.rs"), "n = {n}: {e}");
@@ -107,13 +109,14 @@ fn a_replaced_object_that_grew_after_the_listing_is_still_held_to_the_cap() {
     let (b, _s) = published(LARGE);
     let lim = Limits { max_file: 1_000, ..Limits::default() };
     let out = tempfile::tempdir().unwrap();
-    struct Grow<'a>(&'a Spy);
+    let grown = key(&b, 5);
+    struct Grow<'a>(&'a Spy, String);
     impl ObjectBackend for Grow<'_> {
         fn head(&self, b: &str, k: &str) -> weftos_store::overlay::Result<Option<weftos_store::overlay::ObjectMeta>> {
             self.0.head(b, k)
         }
         fn get(&self, b: &str, k: &str) -> weftos_store::overlay::Result<Option<Vec<u8>>> {
-            Ok(self.0.get(b, k)?.map(|d| if k.ends_with("src/f5.rs") { vec![b'y'; 5_000] } else { d }))
+            Ok(self.0.get(b, k)?.map(|d| if k == self.1 { vec![b'y'; 5_000] } else { d }))
         }
         fn put(&self, b: &str, k: &str, d: &[u8]) -> weftos_store::overlay::Result<weftos_store::overlay::ObjectMeta> {
             self.0.put(b, k, d)
@@ -125,7 +128,7 @@ fn a_replaced_object_that_grew_after_the_listing_is_still_held_to_the_cap() {
             self.0.list(b, p)
         }
     }
-    let e = fetch_tree_with(&Grow(&b), &bucket("wt0"), out.path(), Select::All, false, &lim).unwrap_err().to_string();
+    let e = fetch_tree_with(&Grow(&b, grown), &bucket("wt0"), out.path(), Select::All, false, &lim).unwrap_err().to_string();
     assert!(e.contains("per-file limit") && e.contains("src/f5.rs"), "{e}");
     assert!(!out.path().join("src/f5.rs").exists());
 }

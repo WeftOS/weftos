@@ -92,6 +92,8 @@ fn the_quota_holds_a_full_tree_plus_bundle_plus_control_objects_with_room_for_th
     assert!(DEFAULT_WORKTREE_QUOTA - full > 3 << 30, "room left for overlay objects: {}", DEFAULT_WORKTREE_QUOTA - full);
 }
 
+/// `n` files of `size` identical bytes. Since lane D3 identical content is stored once, so a test
+/// counts files published as `uploaded + unchanged` (one upload, the rest share its object).
 fn tree(n: usize, size: usize) -> (tempfile::TempDir, Vec<String>) {
     let d = tempfile::tempdir().unwrap();
     let paths: Vec<String> = (0..n).map(|i| format!("src/f{i}.txt")).collect();
@@ -116,7 +118,7 @@ fn a_tree_just_over_the_file_budget_skips_the_surplus_and_a_reader_with_the_same
     let b = MemBackend::new();
     let l = lim(5, 1 << 30);
     let r = publish_tree(&b, WT, &src(&d, &ps), &l, 1).unwrap();
-    assert_eq!((r.uploaded, r.skipped.len()), (5, 1));
+    assert_eq!((r.uploaded + r.unchanged, r.skipped.len()), (5, 1));
     assert_eq!(r.skipped[0], ("src/f5.txt".to_string(), Skip::OverBudget));
     assert_eq!(read_manifest_with(&b, WT, &l).unwrap().unwrap().files.len(), 5);
     // a reader on tighter limits refuses it, naming the limit it applied
@@ -125,7 +127,7 @@ fn a_tree_just_over_the_file_budget_skips_the_surplus_and_a_reader_with_the_same
     // exactly at the budget: nothing skipped
     let b2 = MemBackend::new();
     let r = publish_tree(&b2, WT, &src(&d, &ps), &lim(6, 1 << 30), 1).unwrap();
-    assert_eq!((r.uploaded, r.skipped.len()), (6, 0));
+    assert_eq!((r.uploaded + r.unchanged, r.skipped.len()), (6, 0));
 }
 
 #[test]
@@ -137,7 +139,7 @@ fn a_publish_reads_its_previous_manifest_under_its_own_limits() {
     assert!(publish_tree(&b, WT, &src(&d, &ps), &Limits::default(), 2).is_err(), "default limits cannot read it");
     let raised = lim(200_000, 4 << 30);
     let r = publish_tree(&b, WT, &src(&d, &ps), &raised, 3).unwrap();
-    assert_eq!(r.uploaded, 2);
+    assert_eq!(r.uploaded + r.unchanged, 2);
     assert_eq!(read_manifest_with(&b, WT, &raised).unwrap().unwrap().files.len(), 2);
 }
 
@@ -147,7 +149,7 @@ fn the_total_size_budget_boundary_is_inclusive() {
     for (budget, uploaded) in [(30u64, 3usize), (29, 2), (20, 2), (19, 1), (9, 0)] {
         let b = MemBackend::new();
         let r = publish_tree(&b, WT, &src(&d, &ps), &lim(10, budget), 1).unwrap();
-        assert_eq!(r.uploaded, uploaded, "budget {budget}");
+        assert_eq!(r.uploaded + r.unchanged, uploaded, "budget {budget}");
         assert_eq!(r.skipped.iter().filter(|(_, s)| *s == Skip::OverBudget).count(), 3 - uploaded, "budget {budget}");
     }
 }

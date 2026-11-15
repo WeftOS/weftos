@@ -24,16 +24,23 @@ mod publish;
 mod intent;
 #[path = "share_schema.rs"]
 mod schema;
+#[path = "share_gc.rs"]
+mod gc;
+#[path = "share_write.rs"]
+mod write;
 
 pub use handoff::{
     claim_merge, claim_merge_with, fence_claim, mark_handoff, mark_landed, mark_landed_at, mark_merged, mark_merged_at, read_handoff,
 };
 use handoff::{HANDOFF_RETRIES, contended, guard_live_claim, read_handoff_versioned, write_handoff_if};
-use intent::{announce, refuse_pending, withdraw};
-pub(crate) use publish::{is_doc_path, looks_like_private_key, parse_manifest, read_manifest_bytes, read_regular};
+use intent::{Settled, announce, refuse_pending, restore_base, settle, withdraw};
+pub(crate) use publish::{is_doc_path, looks_like_private_key, parse_manifest, read_manifest_bytes, read_manifest_versioned, read_regular};
+use publish::{check_manifest_len, md_title};
+pub use gc::{DEFAULT_BUNDLE_GRACE_MS, DEFAULT_GRACE_MS, KEPT_BUNDLES, PublishOptions};
+pub use write::{publish_tree, publish_tree_listed, publish_tree_opts};
 pub use schema::{LAYOUT, OBJ_PREFIX, READ_SCHEMA_MAX, Retiring, SCHEMA_V1, SCHEMA_V2, is_sha_hex, obj_key, parse_obj_key, tree_digest};
 pub use publish::{
-    MAX_MANIFEST_BYTES, Published, max_retiring, parse_manifest_with, publish_tree, publish_tree_listed, read_manifest, read_manifest_with, summarize_with,
+    MAX_MANIFEST_BYTES, Published, max_retiring, parse_manifest_with, read_manifest, read_manifest_with, summarize_with,
 };
 #[cfg(test)]
 use publish::read_open_regular;
@@ -44,7 +51,7 @@ pub const BUNDLE_KEY: &str = ".wt/git/branch.bundle";
 pub const HANDOFF_KEY: &str = ".wt/handoff.json";
 /// The schema this build writes by default (a writer can still be asked for schema 1, see
 /// `share_publish.rs`).
-pub const SCHEMA: u32 = SCHEMA_V1;
+pub const SCHEMA: u32 = SCHEMA_V2;
 /// A merge claim older than this is considered abandoned.
 ///
 /// The age is `now - updated_ms`, where `now` is the clock of the daemon being asked and
@@ -235,6 +242,12 @@ pub struct PublishIntent {
     /// blocked by it, only merges, and only for the TTL.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub held_ms: Option<u64>,
+    /// Set by the publisher's post-check once its conditional manifest write succeeded (WO-069 lane
+    /// D3): never pending again. The write that sets it is what makes a merger that read the record
+    /// earlier fail its own conditional write, and it can never bring the record back to bytes a
+    /// merger read before the announcement (the digest makes it unique).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub done: bool,
 }
 
 /// The size ceilings of one shared worktree tree. This is the ONE place the numbers live: the
@@ -306,7 +319,12 @@ pub enum Skip {
 pub struct PublishReport {
     pub uploaded: usize,
     pub unchanged: usize,
+    /// Objects this publish deleted (schema 2: past their grace; schema 1: stale tree objects too).
     pub removed: usize,
+    /// Pool objects this publish found unreferenced for the first time (now in `retiring`).
+    pub retired: usize,
+    /// Pool objects still inside their grace after this publish (left for a later sweep).
+    pub deferred: usize,
     pub skipped: Vec<(String, Skip)>,
     pub bundle_uploaded: bool,
 }

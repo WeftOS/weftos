@@ -20,7 +20,11 @@ fn drill_3a_publish_interrupted_midway() {
     let (be, _d) = backend();
     let me = who("writer", "m1");
     // Cut points: the Nth put fails. Changes in v2: d3 edited in place, d20..d22 new, d0 deleted.
-    // v2 needs 4 object puts (d3, d20, d21, d22) then the manifest (put #5); delete #0 is the first stale object (the publish no longer issues a blind DELETE of an absent bundle key).
+    // v2 needs 4 object puts (d3, d20, d21, d22) then the manifest (put #5, a put_cas since lane D3). The sweep cut is in the
+    // publish a grace period later, the first that deletes (lane D3: dropped objects are retired for DEFAULT_GRACE_MS first).
+    // Lane D3 (card 6b58589c) flipped this drill: objects are content-named and immutable, so at every cut the previous
+    // manifest reads clean (before: 1 checksum mismatch at "after_first_put" and "at_manifest_put").
+    const G: u64 = DEFAULT_GRACE_MS;
     for (label, put_at, delete_at) in [("before_any_put", 0usize, usize::MAX), ("after_first_put", 1, usize::MAX), ("at_manifest_put", 4, usize::MAX), ("during_stale_sweep", usize::MAX, 0)] {
         let u = uniq();
         let (pb, wb) = mk_buckets(&be, &u);
@@ -31,7 +35,6 @@ fn drill_3a_publish_interrupted_midway() {
         let mut t = Tree::new(&refs);
         t.publish(&be, &wb, "head-1", &me, 1_000).unwrap();
         write_registry_entry(&be, &pb, &summarize(&be, slug, &wb).unwrap().unwrap()).unwrap();
-        let m1 = be.get(&wb, MANIFEST_KEY).unwrap().unwrap();
         let (ok1, bad1, _) = read_all(&be, &pb, slug, &wb);
         assert_eq!((ok1, bad1), (20, 0));
 
@@ -40,10 +43,19 @@ fn drill_3a_publish_interrupted_midway() {
             t.write(&format!("docs/d{i}.md"), &format!("# Doc {i}\nnew in v2\n"));
         }
         t.remove("docs/d0.md");
+        let sweep_cut = delete_at != usize::MAX;
+        let cut_now = if sweep_cut {
+            // v2 lands; the cut is in the republish a grace later, whose sweep deletes old d3 and d0
+            t.publish(&be, &wb, "head-2", &me, 2_000).unwrap();
+            2_000 + G
+        } else {
+            2_000
+        };
+        let m1 = be.get(&wb, MANIFEST_KEY).unwrap().unwrap();
 
         let t0 = Instant::now();
         let flaky = Flaky::new(&be, put_at, delete_at);
-        let r = t.publish(&flaky, &wb, "head-2", &me, 2_000);
+        let r = t.publish(&flaky, &wb, "head-2", &me, cut_now);
         assert!(r.is_err(), "{label}: the injected failure must surface, got {r:?}");
         let m_after = be.get(&wb, MANIFEST_KEY).unwrap().unwrap();
         let manifest_is_old = m_after == m1;
@@ -57,24 +69,32 @@ fn drill_3a_publish_interrupted_midway() {
         // doc set reachable through the registry entry, as a follower sees it
         let still = summarize(&be, slug, &wb).unwrap().unwrap();
         println!("DETAIL|3a|{label}|manifest_old={manifest_is_old}|readable={ok}|checksum_mismatch={bad}|head_in_entry={}|failed_after={} ms", still.head_commit, t0.elapsed().as_millis());
-        if bad > 0 {
-            finding("3a", format!("{label}: with the previous manifest still served, {bad} file(s) of it fail with a checksum mismatch until the rerun (publish overwrites a changed object in place before it writes the new manifest)"));
-        }
+        assert_eq!(bad, 0, "{label}: finding 3a regressed: {bad} file(s) of the served manifest fail their checksum");
+        fixed("3a", format!("{label}: the served manifest reads clean through the cut ({ok} files, 0 checksum mismatches)"));
 
-        // rerun: completes, nothing lost, nothing stale
+        // rerun: completes, nothing lost; what the cut left is re-used or retired, never stray
         let t1 = Instant::now();
-        let rep = t.publish(&be, &wb, "head-2", &me, 3_000).unwrap();
+        let rerun_now = cut_now + 1_000;
+        let rep = t.publish(&be, &wb, "head-2", &me, rerun_now).unwrap();
         write_registry_entry(&be, &pb, &summarize(&be, slug, &wb).unwrap().unwrap()).unwrap();
         let (ok2, bad2, other2) = read_all(&be, &pb, slug, &wb);
         assert_eq!((ok2, bad2, other2), (22, 0, 0), "{label}: after the rerun all 22 files read clean");
-        let objs: Vec<_> = ObjectBackend::list(&be, &wb, TREE_PREFIX).unwrap().into_iter().map(|m| m.key).collect();
-        assert_eq!(objs.len(), 22, "{label}: no stale object left (d0 removed)");
-        assert!(!objs.iter().any(|k| k.ends_with("docs/d0.md")));
+        let m = read_manifest(&be, &wb).unwrap().unwrap();
+        let referenced: std::collections::HashSet<String> = m.files.iter().map(|f| m.object_key(f)).collect();
+        let retiring: std::collections::HashSet<String> = m.retiring.iter().map(|r| r.key()).collect();
+        let pool: Vec<String> = ObjectBackend::list(&be, &wb, OBJ_PREFIX).unwrap().into_iter().map(|m| m.key).collect();
+        assert_eq!(referenced.len(), 22);
+        assert!(pool.iter().all(|k| referenced.contains(k) || retiring.contains(k)), "{label}: no stray object: {pool:?}");
+        assert!(ObjectBackend::list(&be, &wb, TREE_PREFIX).unwrap().is_empty(), "{label}: no schema-1 object");
+        // a publish with a zero grace sweeps the pool down to exactly what the manifest names
+        t.publish_opts(&be, &wb, "head-2", &me, rerun_now + 1, &PublishOptions { grace_ms: 0, ..PublishOptions::default() }).unwrap();
+        let pool: std::collections::HashSet<String> = ObjectBackend::list(&be, &wb, OBJ_PREFIX).unwrap().into_iter().map(|m| m.key).collect();
+        assert_eq!(pool, referenced, "{label}: d0 and the old d3 swept, nothing else");
         let dest = tempfile::tempdir().unwrap();
         let fr = fetch_tree(&be, &wb, dest.path(), Select::All, false).unwrap();
         assert_eq!((fr.written.len(), fr.missing.len(), fr.conflicts.len(), fr.refused.len()), (22, 0, 0, 0));
         assert_eq!(std::fs::read_to_string(dest.path().join("docs/d3.md")).unwrap(), "# Doc 3\nSECOND version, longer, edited in place\n");
-        line("3a", label, t1.elapsed().as_millis(), format!("rerun uploaded={} unchanged={} removed={}; 22/22 read clean, fetch 22 written 0 missing", rep.uploaded, rep.unchanged, rep.removed));
+        line("3a", label, t1.elapsed().as_millis(), format!("rerun uploaded={} unchanged={} removed={} retired={}; 22/22 read clean, fetch 22 written 0 missing", rep.uploaded, rep.unchanged, rep.removed, rep.retired));
         wipe(&be, &[&wb, &pb]);
     }
 }
