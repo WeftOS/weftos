@@ -41,7 +41,9 @@ impl ObjectBackend for Counting<'_> {
         self.inner.delete(b, k)
     }
     fn list(&self, b: &str, p: &str) -> Result<Vec<ObjectMeta>> {
-        if p == TREE_PREFIX {
+        // WO-069 X3: the one listing is now of the whole bucket (it also shows a leftover bundle), so
+        // a listing of "" counts as the tree listing; the asserted number (one) is unchanged.
+        if p == TREE_PREFIX || p.is_empty() {
             self.tree_lists.set(self.tree_lists.get() + 1);
         }
         self.inner.list(b, p)
