@@ -167,7 +167,8 @@ pub struct Handoff {
     pub epoch: u64,
     /// The published head (`manifest.head_commit`) when the current claim was taken. A claim is a
     /// claim on that head: a merge is refused once the published head differs (WO-069 6a-1).
-    /// `None` outside a claim, and on a record written before the field existed (not fenced on head).
+    /// `None` outside a claim, and on a record written before the field existed: such a claim cannot be
+    /// fenced, so a fenced merge refuses it and the holder claims again (WO-069 lane Y, item 3).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claimed_head: Option<String>,
 }

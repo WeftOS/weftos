@@ -158,8 +158,9 @@ fn published_head<B: ObjectBackend>(b: &B, bucket: &str) -> Result<Option<String
 /// that is not live (older than the TTL, or stamped more than [`CLAIM_SKEW_MS`] ahead, ADR-126 §4)
 /// is allowed, so a bad clock cannot block the writer forever, but it moves the published head away
 /// from the claimed one and with that voids the claim for merging: the claimer must claim again
-/// (and so see, and fetch, the new head). A record from before `claimed_head` existed is not fenced
-/// on head.
+/// (and so see, and fetch, the new head). A claim recorded before `claimed_head` existed (every
+/// released binary up to rc.15) names no head, so it cannot be fenced and is refused: the holder
+/// claims again, which records the head (WO-069 lane Y, item 3; a claim lives 30 minutes anyway).
 fn fence_claim_on<B: ObjectBackend>(b: &B, bucket: &str, cur: &Handoff, epoch: Option<u64>) -> Result<()> {
     if let Some(e) = epoch
         && e != cur.epoch
@@ -169,15 +170,19 @@ fn fence_claim_on<B: ObjectBackend>(b: &B, bucket: &str, cur: &Handoff, epoch: O
             cur.epoch
         )));
     }
-    if let Some(claimed) = cur.claimed_head.as_deref() {
-        let now = published_head(b, bucket)?;
-        if now.as_deref() != Some(claimed) {
-            return Err(S2Error::Claimed(format!(
-                "the published head moved from {claimed} to {} since the claim (epoch {}); claim again to merge it",
-                now.as_deref().unwrap_or("nothing"),
-                cur.epoch
-            )));
-        }
+    let Some(claimed) = cur.claimed_head.as_deref() else {
+        return Err(S2Error::Claimed(format!(
+            "the claim (epoch {}) was recorded without the head it claims, by a daemon from before head fencing; claim again to merge it",
+            cur.epoch
+        )));
+    };
+    let now = published_head(b, bucket)?;
+    if now.as_deref() != Some(claimed) {
+        return Err(S2Error::Claimed(format!(
+            "the published head moved from {claimed} to {} since the claim (epoch {}); claim again to merge it",
+            now.as_deref().unwrap_or("nothing"),
+            cur.epoch
+        )));
     }
     Ok(())
 }

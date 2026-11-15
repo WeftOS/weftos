@@ -334,7 +334,7 @@ fn a_republish_of_the_claimed_head_by_the_holder_still_merges() {
 }
 
 #[test]
-fn a_record_from_before_claimed_head_still_parses_and_is_fenced_by_epoch_only() {
+fn a_record_from_before_claimed_head_still_parses_and_must_be_claimed_again() {
     let be = MemBackend::new();
     let env = Env::new(&be, None);
     let b = handed_off(&env, "legacy");
@@ -345,5 +345,9 @@ fn a_record_from_before_claimed_head_still_parses_and_is_fenced_by_epoch_only() 
     let h = read_handoff(&be, &b).unwrap().unwrap();
     assert_eq!((h.state, h.claimed_head), (State::Claimed, None));
     assert!(mark_merged_at(&be, &b, &actor("fast"), Some(c.epoch + 1), "x", NOW).is_err(), "epoch fencing still holds");
-    mark_merged_at(&be, &b, &actor("fast"), Some(c.epoch), "merged", NOW).unwrap();
+    // WO-069 lane Y (item 3): a claim that names no head cannot be fenced, so it is refused; claim again
+    let err = mark_merged_at(&be, &b, &actor("fast"), Some(c.epoch), "merged", NOW).unwrap_err();
+    assert!(err.to_string().contains("claim again"), "{err}");
+    let again = claim_merge(&be, &b, &actor("fast"), NOW + 1).unwrap();
+    mark_merged_at(&be, &b, &actor("fast"), Some(again.epoch), "merged", NOW + 1).unwrap();
 }
