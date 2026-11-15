@@ -223,7 +223,7 @@ fn a_forged_manifest_cannot_touch_the_followers_own_files_or_leave_the_cache() {
     let mut m = read_manifest(&b, &e.bucket).unwrap().unwrap();
     for (path, body) in [(".wt-index.json", "[\"docs/a.md\"]"), ("../escape.md", "x"), (".wt-other/n.md", "x"), ("docs/../../up.md", "x")] {
         b.put(&e.bucket, &format!("{TREE_PREFIX}{path}"), body.as_bytes()).unwrap();
-        m.files.push(FileEntry { path: path.into(), size: body.len() as u64, sha256: sha256_hex(body.as_bytes()) });
+        m.files.push(FileEntry { path: path.into(), size: body.len() as u64, sha256: sha256_hex(body.as_bytes()), generation: None });
         m.docs.push(DocEntry { path: path.into(), title: None });
     }
     b.put(&e.bucket, MANIFEST_KEY, &serde_json::to_vec(&m).unwrap()).unwrap();

@@ -205,7 +205,7 @@ fn a_hostile_manifest_cannot_widen_what_is_listed_or_read() {
     publish(&b, "rooms", &[("docs/ok.md", b"# Ok\n")], &[]);
     let mut m = read_manifest(&b, "w-rooms").unwrap().unwrap();
     for (p, body) in [(".env", &b"K=V"[..]), ("../x", b"x"), ("a/.git/config", b"c"), ("sub/id_rsa", b"k"), (".wt/meta.json", b"m")] {
-        m.files.push(FileEntry { path: p.into(), size: body.len() as u64, sha256: sha256_hex(body) });
+        m.files.push(FileEntry { path: p.into(), size: body.len() as u64, sha256: sha256_hex(body), generation: None });
         let _ = b.put("w-rooms", &format!("{TREE_PREFIX}{p}"), body);
     }
     b.put("w-rooms", MANIFEST_KEY, &serde_json::to_vec(&m).unwrap()).unwrap();

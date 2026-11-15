@@ -470,6 +470,7 @@ fn tampered_manifest_cannot_escape_dest() {
     let b = setup();
     let m = TreeManifest {
         schema: 1,
+        generation: 0,
         branch: "f".into(),
         base_commit: "a".into(),
         head_commit: "b".into(),
@@ -477,12 +478,17 @@ fn tampered_manifest_cannot_escape_dest() {
             path: "../evil".into(),
             size: 1,
             sha256: sha256_hex(b"x"),
+            generation: None,
         }],
         uncommitted: vec![],
         changes: vec![],
         docs: vec![],
         has_bundle: false,
         bundle_sha256: None,
+        changes_recorded: false,
+        bundle_gen: None,
+        retiring: vec![],
+        v1_retired_ms: None,
         writer: me("w", "h"),
         published_ms: 1,
     };
@@ -749,6 +755,7 @@ fn merged_worktree_cannot_be_republished() {
 fn manifest_with(files: &[(&str, &[u8])]) -> TreeManifest {
     TreeManifest {
         schema: 1,
+        generation: 0,
         branch: "f".into(),
         base_commit: "a".into(),
         head_commit: "b".into(),
@@ -758,6 +765,7 @@ fn manifest_with(files: &[(&str, &[u8])]) -> TreeManifest {
                 path: p.to_string(),
                 size: d.len() as u64,
                 sha256: sha256_hex(d),
+                generation: None,
             })
             .collect(),
         uncommitted: vec![],
@@ -765,6 +773,10 @@ fn manifest_with(files: &[(&str, &[u8])]) -> TreeManifest {
         docs: vec![],
         has_bundle: false,
         bundle_sha256: None,
+        changes_recorded: false,
+        bundle_gen: None,
+        retiring: vec![],
+        v1_retired_ms: None,
         writer: me("w", "h"),
         published_ms: 1,
     }

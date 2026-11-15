@@ -18,18 +18,23 @@ fn me() -> Actor {
 fn manifest(n: usize) -> TreeManifest {
     let sha = "a".repeat(64);
     TreeManifest {
-        schema: SCHEMA,
+        schema: SCHEMA_V2,
+        generation: 1,
         branch: "feat/x".into(),
         base_commit: "a".repeat(40),
         head_commit: "b".repeat(40),
         files: (0..n)
-            .map(|i| FileEntry { path: format!("crates/some-crate-{:03}/src/module_{i:05}.rs", i % 500), size: 1_000 + i as u64, sha256: sha.clone() })
+            .map(|i| FileEntry { path: format!("crates/some-crate-{:03}/src/module_{i:05}.rs", i % 500), size: 1_000 + i as u64, sha256: sha.clone(), generation: Some(1) })
             .collect(),
         uncommitted: vec![],
         changes: vec![],
         docs: vec![],
         has_bundle: false,
         bundle_sha256: None,
+        changes_recorded: false,
+        bundle_gen: None,
+        retiring: vec![],
+        v1_retired_ms: None,
         writer: me(),
         published_ms: 1,
     }

@@ -259,18 +259,23 @@ fn a_claim_recorded_before_claimed_tree_is_fenced_on_head_only() {
 fn the_tree_digest_follows_what_a_merger_fetches_and_ignores_the_rest() {
     let base = TreeManifest {
         schema: SCHEMA,
+        generation: 0,
         branch: "feat/y".into(),
         base_commit: "base".into(),
         head_commit: "h1".into(),
         files: vec![
-            FileEntry { path: "a.md".into(), size: 1, sha256: "aa".into() },
-            FileEntry { path: "b.md".into(), size: 2, sha256: "bb".into() },
+            FileEntry { path: "a.md".into(), size: 1, sha256: "aa".into(), generation: None },
+            FileEntry { path: "b.md".into(), size: 2, sha256: "bb".into(), generation: None },
         ],
         uncommitted: vec!["b.md".into()],
         changes: vec![],
         docs: vec![],
         has_bundle: false,
         bundle_sha256: None,
+        changes_recorded: false,
+        bundle_gen: None,
+        retiring: vec![],
+        v1_retired_ms: None,
         writer: who("writer"),
         published_ms: 1,
     };

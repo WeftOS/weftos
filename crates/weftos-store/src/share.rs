@@ -22,6 +22,8 @@ mod handoff;
 mod publish;
 #[path = "share_intent.rs"]
 mod intent;
+#[path = "share_schema.rs"]
+mod schema;
 
 pub use handoff::{
     claim_merge, claim_merge_with, fence_claim, mark_handoff, mark_landed, mark_landed_at, mark_merged, mark_merged_at, read_handoff,
@@ -29,8 +31,9 @@ pub use handoff::{
 use handoff::{HANDOFF_RETRIES, contended, guard_live_claim, read_handoff_versioned, write_handoff_if};
 use intent::{announce, refuse_pending, withdraw};
 pub(crate) use publish::{is_doc_path, looks_like_private_key, parse_manifest, read_manifest_bytes, read_regular};
+pub use schema::{LAYOUT, OBJ_PREFIX, READ_SCHEMA_MAX, Retiring, SCHEMA_V1, SCHEMA_V2, is_sha_hex, obj_key, parse_obj_key, tree_digest};
 pub use publish::{
-    MAX_MANIFEST_BYTES, Published, parse_manifest_with, publish_tree, publish_tree_listed, read_manifest, read_manifest_with, summarize_with,
+    MAX_MANIFEST_BYTES, Published, max_retiring, parse_manifest_with, publish_tree, publish_tree_listed, read_manifest, read_manifest_with, summarize_with,
 };
 #[cfg(test)]
 use publish::read_open_regular;
@@ -39,7 +42,9 @@ pub const TREE_PREFIX: &str = ".wt/tree/";
 pub const MANIFEST_KEY: &str = ".wt/tree.manifest.json";
 pub const BUNDLE_KEY: &str = ".wt/git/branch.bundle";
 pub const HANDOFF_KEY: &str = ".wt/handoff.json";
-pub const SCHEMA: u32 = 1;
+/// The schema this build writes by default (a writer can still be asked for schema 1, see
+/// `share_publish.rs`).
+pub const SCHEMA: u32 = SCHEMA_V1;
 /// A merge claim older than this is considered abandoned.
 ///
 /// The age is `now - updated_ms`, where `now` is the clock of the daemon being asked and
@@ -73,6 +78,10 @@ pub struct FileEntry {
     pub path: String,
     pub size: u64,
     pub sha256: String,
+    /// Schema 2: the generation of the pool object holding these bytes ([`obj_key`]). `None` in a
+    /// schema-1 manifest, where the object is `.wt/tree/<path>`.
+    #[serde(default, rename = "gen", skip_serializing_if = "Option::is_none")]
+    pub generation: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -129,24 +138,36 @@ pub struct DocEntry {
     pub title: Option<String>,
 }
 
+/// A published tree, either schema. Stored through [`schema::Wire`]: schema 1 lists `files` and keys
+/// objects by path, schema 2 lists `entries` and keys them by content (see `share_schema.rs`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(try_from = "schema::Wire", into = "schema::Wire")]
 pub struct TreeManifest {
     pub schema: u32,
+    /// Schema 2: previous generation + 1 (0 when absent, as in a schema-1 manifest from rc.1).
+    pub generation: u64,
     pub branch: String,
     pub base_commit: String,
     pub head_commit: String,
+    /// The tree's files (`files` on the schema-1 wire, `entries` on schema 2).
     pub files: Vec<FileEntry>,
     /// Paths whose working-tree content is not in `head_commit` (the bundle does not carry them).
     pub uncommitted: Vec<String>,
-    /// Paths changed relative to `base_commit`, including deletions. Empty for a manifest written
-    /// before this field existed, in which case `overlaps` can only compare file content.
-    #[serde(default)]
+    /// Paths changed relative to `base_commit`, including deletions.
     pub changes: Vec<PathChange>,
+    /// The writer computed `changes`, so an empty list means "changed nothing", not "unknown".
+    pub changes_recorded: bool,
     pub docs: Vec<DocEntry>,
     pub has_bundle: bool,
     /// SHA-256 of the bundle object, so a fetch can tell a swapped bundle from the published one.
-    #[serde(default)]
     pub bundle_sha256: Option<String>,
+    /// Schema 2: the bundle object's generation.
+    pub bundle_gen: Option<u64>,
+    /// Schema 2 pool objects no longer referenced, kept until their grace has passed.
+    pub retiring: Vec<Retiring>,
+    /// When a schema-2 publish first replaced a schema-1 tree in this bucket: the `.wt/tree/`
+    /// objects (and the old bundle key) are swept a grace period after it.
+    pub v1_retired_ms: Option<u64>,
     pub writer: Actor,
     pub published_ms: u64,
 }
@@ -214,40 +235,6 @@ pub struct PublishIntent {
     /// blocked by it, only merges, and only for the TTL.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub held_ms: Option<u64>,
-}
-
-/// What a claim is a claim on, as one digest of the manifest's content: base and head commits, every
-/// file (path, size, sha256), the uncommitted list and the bundle. Not `published_ms`, `writer`,
-/// `docs` or `changes` (derived, or different on a republish of the same tree), so republishing the
-/// same tree keeps the digest and any change to what a merger would fetch changes it. Versioned
-/// (`t1:`): a reader that does not know a recorded version refuses the merge, the safe side.
-pub fn tree_digest(m: &TreeManifest) -> String {
-    fn field(h: &mut Sha256, s: &[u8]) {
-        h.update((s.len() as u64).to_le_bytes());
-        h.update(s);
-    }
-    let mut h = Sha256::new();
-    field(&mut h, b"t1");
-    field(&mut h, m.base_commit.as_bytes());
-    field(&mut h, m.head_commit.as_bytes());
-    let mut files: Vec<&FileEntry> = m.files.iter().collect();
-    files.sort_by(|a, b| a.path.cmp(&b.path));
-    field(&mut h, &(files.len() as u64).to_le_bytes());
-    for f in files {
-        field(&mut h, f.path.as_bytes());
-        field(&mut h, &f.size.to_le_bytes());
-        field(&mut h, f.sha256.as_bytes());
-    }
-    let mut unc: Vec<&str> = m.uncommitted.iter().map(String::as_str).collect();
-    unc.sort_unstable();
-    field(&mut h, &(unc.len() as u64).to_le_bytes());
-    for u in unc {
-        field(&mut h, u.as_bytes());
-    }
-    field(&mut h, &[u8::from(m.has_bundle)]);
-    field(&mut h, m.bundle_sha256.as_deref().unwrap_or("").as_bytes());
-    let d = h.finalize();
-    format!("t1:{}", d.iter().map(|b| format!("{b:02x}")).collect::<String>())
 }
 
 /// The size ceilings of one shared worktree tree. This is the ONE place the numbers live: the

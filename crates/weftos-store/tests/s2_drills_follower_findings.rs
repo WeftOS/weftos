@@ -275,10 +275,12 @@ fn a_newer_manifest_error_names_both_schema_numbers_and_the_current_one_still_re
     let e = up(&env, "good", &[("docs/g.md", "# G\n")], &Pub::default());
     assert!(weftos_store::share::read_manifest(&be, &e.bucket).unwrap().is_some());
     let mut m: serde_json::Value = serde_json::from_slice(&S2::get(&be, &e.bucket, MANIFEST_KEY).unwrap().unwrap()).unwrap();
-    m["schema"] = (weftos_store::share::SCHEMA + 1).into();
+    // The newest schema this build reads is READ_SCHEMA_MAX (2, lane D3); one past it is refused.
+    let max = weftos_store::share::READ_SCHEMA_MAX;
+    m["schema"] = (max + 1).into();
     S2::put(&be, &e.bucket, MANIFEST_KEY, &serde_json::to_vec(&m).unwrap()).unwrap();
     let msg = weftos_store::share::read_manifest(&be, &e.bucket).unwrap_err().to_string();
-    assert!(msg.contains(&(weftos_store::share::SCHEMA + 1).to_string()) && msg.contains(&weftos_store::share::SCHEMA.to_string()), "{msg}");
+    assert!(msg.contains(&(max + 1).to_string()) && msg.contains(&max.to_string()), "{msg}");
     m["schema"] = 0.into(); // an older schema is accepted
     S2::put(&be, &e.bucket, MANIFEST_KEY, &serde_json::to_vec(&m).unwrap()).unwrap();
     assert!(weftos_store::share::read_manifest(&be, &e.bucket).unwrap().is_some());

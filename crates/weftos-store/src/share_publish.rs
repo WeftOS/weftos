@@ -119,18 +119,18 @@ pub(crate) fn read_manifest_bytes_with<B: ObjectBackend>(
 }
 
 /// Refuse a manifest written by a newer schema than this build understands: its fields may parse
-/// yet mean something else. The current and older schemas are accepted; a manifest with no readable
-/// `schema` number is left to the typed parse, which rejects it.
+/// yet mean something else. Schemas 1 and 2 are accepted (3 and later refused); a manifest with no
+/// readable `schema` number is left to the typed parse, which rejects it.
 fn check_manifest_schema(d: &[u8]) -> Result<()> {
     #[derive(serde::Deserialize)]
     struct Peek {
         schema: u32,
     }
     if let Ok(Peek { schema }) = serde_json::from_slice::<Peek>(d)
-        && schema > SCHEMA
+        && schema > READ_SCHEMA_MAX
     {
         return Err(S2Error::Invalid(format!(
-            "manifest is schema {schema}, newer than the schema {SCHEMA} this build reads; upgrade to read it"
+            "manifest is schema {schema}, newer than the schema {READ_SCHEMA_MAX} this build reads; upgrade to read it"
         )));
     }
     Ok(())
@@ -148,7 +148,15 @@ pub fn parse_manifest_with(d: &[u8], limits: &Limits) -> Result<TreeManifest> {
     if m.files.len() > limits.max_files || m.docs.len() > limits.max_files {
         return Err(S2Error::Invalid(format!("manifest lists more than the {} file limit", limits.max_files)));
     }
+    if m.retiring.len() > max_retiring(limits) {
+        return Err(S2Error::Invalid(format!("manifest retires more than the {} object limit", max_retiring(limits))));
+    }
     Ok(m)
+}
+
+/// Most pool objects one manifest may hold back from the sweep: twice the file ceiling.
+pub fn max_retiring(limits: &Limits) -> usize {
+    limits.max_files.saturating_mul(2)
 }
 
 /// Never write a manifest no reader would load: `read_manifest_with` refuses one over
@@ -343,6 +351,7 @@ pub fn publish_tree_listed<B: ObjectBackend>(
             path: p.clone(),
             size: data.len() as u64,
             sha256: sha,
+            generation: None,
         });
     }
 
@@ -381,15 +390,20 @@ pub fn publish_tree_listed<B: ObjectBackend>(
     };
     let manifest = TreeManifest {
         schema: SCHEMA,
+        generation: 0,
         branch: src.branch.into(),
         base_commit: src.base_commit.into(),
         head_commit: src.head_commit.into(),
         files,
         uncommitted,
         changes: src.changes.to_vec(),
+        changes_recorded: !src.changes.is_empty(),
         docs,
         has_bundle,
         bundle_sha256,
+        bundle_gen: None,
+        retiring: Vec::new(),
+        v1_retired_ms: None,
         writer: src.writer.clone(),
         published_ms: now_ms,
     };
