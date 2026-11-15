@@ -722,5 +722,10 @@ fi
 # shellcheck source=scripts/tests/diff-gate-test-review3.sh
 . "$ROOT/scripts/tests/diff-gate-test-review3.sh"
 
+# 15. Review round 4 (2026-11-15): the cargo metadata step, the reachability walk, row trust,
+# doc attributes and robustness. KNOWN_GAP cases: reports/review-diff-gate-combined-r4-20261115.md.
+# shellcheck source=scripts/tests/diff-gate-test-review4.sh
+. "$ROOT/scripts/tests/diff-gate-test-review4.sh"
+
 echo "diff-gate fixtures: $pass passed, $fail failed, $gaps known gaps"
 [ "$fail" -eq 0 ]
