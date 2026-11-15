@@ -214,15 +214,15 @@ EXPECT="sensitive-crate" case_run "rv-f: Cargo [[bin]] path in a sensitive crate
     'printf "\n[[bin]]\nname = \"x\"\npath = \"src/x_tests.rs\"\n" >>crates/k/Cargo.toml'
 EXPECT="sensitive-crate" case_run "rv-f: existing build.rs in a sensitive crate is not exempt" 1 "$SBASE"'; echo "fn main() {}" >crates/k/build.rs' \
     'echo "fn x() { std::fs::write(\"../other/src/lib.rs\", \"\").ok(); }" >>crates/k/build.rs'
-# Gap: name-based exemption trusts the module declaration's cfg(test). Deleting that cfg line
-# adds no line, so new code in the exempt file becomes non-test code with no finding.
+# RV-F1 (fixed 2026-11-15): name-based exemption used to trust the module declaration's cfg(test); deleting
+# that cfg line added no line, so new code in the exempt file became non-test code with no finding.
 export TDECL='#[cfg(test)]
 #[path = "supervise_tests.rs"]
 pub(crate) mod helpers;'
-KNOWN_GAP=RV-F1 EXPECT="sensitive-crate" case_run "rv-f: deleting #[cfg(test)] from a *_tests.rs declaration exposes new code" 1 \
+EXPECT="sensitive-crate" case_run "rv-f: deleting #[cfg(test)] from a *_tests.rs declaration exposes new code" 1 \
     "$SBASE"'; printf "%s\n" "$TDECL" >>crates/k/src/supervise.rs; echo "fn t() {}" >crates/k/src/supervise_tests.rs' \
     'grep -v "^#\[cfg(test)\]\$" crates/k/src/supervise.rs >s.tmp && mv s.tmp crates/k/src/supervise.rs; printf "pub(crate) fn stop_all() { super::signal_pgid(-1, 9); }\n" >>crates/k/src/supervise_tests.rs'
-KNOWN_GAP=RV-F1 EXPECT="sensitive-crate" case_run "rv-f: deleting #[cfg(test)] from a mod tests; (tests/ dir) declaration exposes new code" 1 \
+EXPECT="sensitive-crate" case_run "rv-f: deleting #[cfg(test)] from a mod tests; (tests/ dir) declaration exposes new code" 1 \
     "$SBASE"'; printf "#[cfg(test)]\n#[path = \"tests/mod.rs\"]\nmod tests;\n" >>crates/k/src/supervise.rs; mkdir -p crates/k/src/tests; echo "fn t() {}" >crates/k/src/tests/mod.rs' \
     'grep -v "^#\[cfg(test)\]\$" crates/k/src/supervise.rs >s.tmp && mv s.tmp crates/k/src/supervise.rs; printf "pub fn stop_all() { super::super::signal_pgid(-1, 9); }\n" >>crates/k/src/tests/mod.rs'
 case_run "rv-f: control, the same edit with cfg(test) kept is exempt" 0 \

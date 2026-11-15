@@ -83,3 +83,64 @@ want="$(printf '%s\n' \
 [ "$out" = "$want" ] || { rc="mismatch"; out="$(printf 'got:\n%s\nwant:\n%s\n' "$out" "$want")"; }
 check_result "fix-b2: --cargo-entries resolves every spelling to its key" 0 "$rc" "$out"
 cd "$ROOT" || exit 2
+
+# ── RV-F1: test cfgs on module declarations in sensitive crates ──────
+# SENS, SUP, SBASE, CALLER, TDECL come from diff-gate-test.sh section 9 and the review file.
+export EVIL='pub(crate) fn stop_all() { super::signal_pgid(-1, 9); }'
+TBASE="$SBASE"'; printf "%s\n" "$TDECL" >>crates/k/src/supervise.rs; echo "fn t() {}" >crates/k/src/supervise_tests.rs'
+# Part A: a removed test cfg on a declaration that stays is itself a finding, with no added line.
+EXPECT="sensitive-crate" case_run "fix-f1: deleting #[cfg(test)] from a file module declaration alone" 1 "$TBASE" \
+    'grep -v "^#\[cfg(test)\]\$" crates/k/src/supervise.rs >s.tmp && mv s.tmp crates/k/src/supervise.rs'
+EXPECT="sensitive-crate" case_run "fix-f1: deleting #[cfg(test)] from an inline test module alone" 1 \
+    "$SBASE"'; printf "#[cfg(test)]\nmod tests {\n    pub fn t() { super::signal_pgid(1, 0); }\n}\n" >>crates/k/src/supervise.rs' \
+    'grep -v "^#\[cfg(test)\]\$" crates/k/src/supervise.rs >s.tmp && mv s.tmp crates/k/src/supervise.rs'
+EXPECT="sensitive-crate" case_run "fix-f1: cfg(test) changed to cfg(not(test)) on a declaration" 1 "$TBASE" \
+    'sed -i.bak "s/^#\[cfg(test)\]\$/#[cfg(not(test))]/" crates/k/src/supervise.rs; rm crates/k/src/supervise.rs.bak'
+EXPECT="sensitive-crate" case_run "fix-f1: cfg(all(test, unix)) changed to cfg(unix) with an attribute between" 1 \
+    "$SBASE"'; printf "#[cfg(all(test, unix))]\n#[allow(dead_code)]\n// note\n#[path = \"supervise_tests.rs\"]\nmod helpers;\n" >>crates/k/src/supervise.rs; echo "fn t() {}" >crates/k/src/supervise_tests.rs' \
+    'sed -i.bak "s/^#\[cfg(all(test, unix))\]\$/#[cfg(unix)]/" crates/k/src/supervise.rs; rm crates/k/src/supervise.rs.bak'
+case_run "fix-f1: control, deleting a whole test module (cfg line and all) is not a finding" 0 \
+    "$SBASE"'; printf "#[cfg(test)]\nmod tests {\n    fn t() {}\n}\n" >>crates/k/src/supervise.rs' \
+    'printf "%s\n" "$SUP" >crates/k/src/supervise.rs'
+case_run "fix-f1: control, deleting #[cfg(test)] from a fn is not a module exposure" 0 \
+    "$SBASE"'; printf "#[cfg(test)]\nfn t() {}\n" >>crates/k/src/supervise.rs' \
+    'grep -v "^#\[cfg(test)\]\$" crates/k/src/supervise.rs >s.tmp && mv s.tmp crates/k/src/supervise.rs'
+case_run "fix-f1: control, cfg(test) outside a sensitive crate" 0 \
+    "$SBASE"'; printf "%s\n" "$TDECL" >>crates/other/src/supervise.rs' \
+    'grep -v "^#\[cfg(test)\]\$" crates/other/src/supervise.rs >s.tmp && mv s.tmp crates/other/src/supervise.rs'
+# Part B: an exempt file is test-only only if every declaration that can build it is a test one.
+EXPECT="sensitive-crate" GREP="is not treated as test-only" case_run "fix-f1: exempt file also pulled in by a non-test #[path] elsewhere" 1 \
+    "$TBASE"'; printf "#[path = \"supervise_tests.rs\"]\nmod alias;\n" >>crates/k/src/lib.rs' \
+    'printf "%s\n" "$EVIL" >>crates/k/src/supervise_tests.rs'
+EXPECT="sensitive-crate" case_run "fix-f1: exempt file declared after other code on the same line" 1 \
+    "$SBASE"'; printf "fn a() {} mod supervise_tests;\n" >>crates/k/src/lib.rs; echo "fn t() {}" >crates/k/src/supervise_tests.rs' \
+    'printf "%s\n" "$EVIL" >>crates/k/src/supervise_tests.rs'
+EXPECT="sensitive-crate" case_run "fix-f1: exempt file pulled in by include! outside a test cfg" 1 \
+    "$SBASE"'; printf "include!(\"supervise_tests.rs\");\n" >>crates/k/src/supervise.rs; echo "fn t() {}" >crates/k/src/supervise_tests.rs' \
+    'printf "%s\n" "$EVIL" >>crates/k/src/supervise_tests.rs'
+EXPECT="sensitive-crate" GREP="Cargo target path" case_run "fix-f1: exempt file that is a Cargo [[bin]] target on the base" 1 \
+    "$SBASE"'; printf "[package]\nname = \"k\"\n\n[[bin]]\nname = \"x\"\npath = \"src/x_tests.rs\"\n" >crates/k/Cargo.toml; echo "fn main() {}" >crates/k/src/x_tests.rs' \
+    'printf "%s\n" "$EVIL" >>crates/k/src/x_tests.rs'
+EXPECT="sensitive-crate" case_run "fix-f1: an exempt-named file under src/bin/ is a binary" 1 "$SBASE" \
+    'mkdir -p crates/k/src/bin && printf "fn main() {}\n%s\n" "$EVIL" >crates/k/src/bin/x_tests.rs'
+EXPECT="sensitive-crate" case_run "fix-f1: a tests/ module declared by an exempt file that is not itself a test" 1 \
+    "$SBASE"'; mkdir -p crates/k/src/tests; printf "pub mod helpers;\n" >crates/k/src/tests/mod.rs; echo "pub fn h() {}" >crates/k/src/tests/helpers.rs; printf "pub mod tests;\n" >>crates/k/src/supervise.rs' \
+    'printf "%s\n" "$EVIL" >>crates/k/src/tests/helpers.rs'
+case_run "fix-f1: control, a tests/ module declared by a test-declared exempt file is exempt" 0 \
+    "$SBASE"'; mkdir -p crates/k/src/tests; printf "pub mod helpers;\n" >crates/k/src/tests/mod.rs; echo "pub fn h() {}" >crates/k/src/tests/helpers.rs; printf "#[cfg(test)]\npub mod tests;\n" >>crates/k/src/supervise.rs' \
+    'printf "%s\n" "$EVIL" >>crates/k/src/tests/helpers.rs'
+case_run "fix-f1: control, a multi-line cfg(all(test, ...)) declaration is exempt" 0 \
+    "$SBASE"'; printf "#[cfg(all(\n    test,\n    unix\n))]\n#[path = \"supervise_tests.rs\"]\nmod helpers;\n" >>crates/k/src/supervise.rs; echo "fn t() {}" >crates/k/src/supervise_tests.rs' \
+    'printf "%s\n" "$EVIL" >>crates/k/src/supervise_tests.rs'
+case_run "fix-f1: control, a declaration inside an inline test module is exempt" 0 \
+    "$SBASE"'; printf "#[cfg(test)]\nmod t {\n    #[path = \"../supervise_tests.rs\"]\n    mod helpers;\n}\n" >>crates/k/src/supervise.rs; echo "fn t() {}" >crates/k/src/supervise_tests.rs' \
+    'printf "%s\n" "$EVIL" >>crates/k/src/supervise_tests.rs'
+case_run "fix-f1: control, a mention in a comment or string is not a declaration" 0 \
+    "$TBASE"'; printf "// mod supervise_tests;\nconst S: &str = \"supervise_tests.rs\";\n" >>crates/k/src/lib.rs' \
+    'printf "%s\n" "$EVIL" >>crates/k/src/supervise_tests.rs'
+# --worktree reads declarations from the working tree, untracked files included.
+d="$WORK/fix_f1_wt" && fixture_repo "$d" && eval "$TBASE" && git add -A && git commit -qm base && base="$(git rev-parse HEAD)"
+printf '#[path = "supervise_tests.rs"]\nmod alias;\n' >crates/k/src/untracked_decl.rs && printf '%s\n' "$EVIL" >>crates/k/src/supervise_tests.rs
+out="$(DIFF_GATE_BASE="$base" "$GATE" --worktree 2>&1)"; rc=$?
+EXPECT="sensitive-crate" GREP="untracked_decl.rs" check_result "fix-f1: worktree: an untracked non-test declaration counts" 1 "$rc" "$out"
+cd "$ROOT" || exit 2

@@ -79,7 +79,7 @@ block from the workflow and runs it unchanged against fixture pushes.
 | `process` | `process::Command` in any form (including `std::{process::Command as K}` and multi-line `std::process::{` imports), the `std::process` module imported or aliased, `Command::new`, `tokio::process`, `CommandExt`, `libc` / `nix` exec, fork, spawn and `system`. Paths are resolved through the file's `use` aliases and glob imports, so `use std::process as p; p::Command` and `use std::process::*; use Command as C; C::args` count. `std::process::exit`, `abort`, `id`, `ExitCode`, `ExitStatus`, `Stdio`, `Output` and the `Child` types do not spawn and are ignored |
 | `ffi` | the `extern` keyword in any form except `extern crate` (`extern "C"`, `extern "system"`, bare `extern {` / `extern fn`), `#[no_mangle]`, `export_name`, `link_section`, and `global_asm!` / `asm!` / `naked_asm!` (`global_asm!` needs no `unsafe`). An added declaration inside an existing `extern { }` block counts. `#[link(...)]` and `link_name` are not separate findings: they only act on an `extern` block, which is one |
 | `include` | code pulled into the build from something that is not a `.rs` file: `include!` whose argument is not a literal `.rs` path, `#[path = "..."]` to a non-`.rs` file, and a new Cargo target `path` (`[lib]`, `[[bin]]`, `[[example]]`, `[[test]]`, `[[bench]]`) to a non-`.rs` file. `#[path]` counts inside `cfg_attr`, over several lines. `include_str!` and `include_bytes!` are not findings in code: they produce a `&str` / `&[u8]` value, and turning data into code needs `unsafe`, which is its own finding. Inside an attribute they are (`#![doc = include_str!("README.md")]` turns that file's code blocks into doctests that `cargo test` runs). `paste!` and `concat_idents!` are findings too: they can build any identifier or path from pieces |
-| `sensitive-crate` | any added non-blank `.rs` line in non-test code under a crate listed in `config/diff-gate-sensitive.toml`, and in such a crate's Cargo.toml a new or changed target `path`. Interim posture (G1, option c); it runs alongside the token helper until the owner retires it; see [Sensitive crates](#sensitive-crates-interim) |
+| `sensitive-crate` | any added non-blank `.rs` line in non-test code under a crate listed in `config/diff-gate-sensitive.toml` (a file exempt by name counts as test code only if nothing builds it outside a test cfg), a test cfg removed from a module declaration that stays, and in such a crate's Cargo.toml a new or changed target `path`. Interim posture (G1, option c); it runs alongside the token helper until the owner retires it; see [Sensitive crates](#sensitive-crates-interim) |
 | `ci-workflow` | any change under `.github/workflows/`, to `scripts/diff-gate.sh` or under `tools/diff-gate-tokens/` (the gate's own checker), including moving or deleting them |
 | `toolchain-config` | any change to `.cargo/config` or `.cargo/config.toml` at any depth (rustc wrapper, linker, rustflags, registries) or to `rust-toolchain` / `rust-toolchain.toml` (toolchain `path`) |
 | `special-file` | an added or changed symlink (mode 120000) or submodule / nested repository (mode 160000). The gate never follows a link to scan its target |
@@ -203,7 +203,7 @@ crates as review-required:
 - In a sensitive crate's Cargo.toml, a new or changed target `path` (`[lib]`, `[[bin]]`, ...)
   is one too, so a target cannot be pointed at an exempt file.
 - Exempt (test-only): files matching an `[[exempt]]` glob (today `**/tests/**`,
-  `**/*_tests.rs`, `**/tests.rs`), and lines inside an inline `mod name { ... }` whose
+  `**/*_tests.rs`, `**/tests.rs`) that nothing builds outside a test cfg (see below), and lines inside an inline `mod name { ... }` whose
   attributes include `#[cfg(test)]` or `#[cfg(all(test, ...))]`. The region is found on the
   full-file lex: the cfg attribute, then only attributes, comments or blank lines, then
   `mod name {`; it ends at the matching `}`. Code after that brace on the same line is not
@@ -227,10 +227,45 @@ reason      = "card 7306a144: RSS watchdog, reviewed"
 approved_by = "owner"
 ```
 
-Name-based exemption assumes a `*_tests.rs` or `tests.rs` file is only compiled under a test
-cfg. On 2026-11-15 every such module in the sensitive crates was declared under `#[cfg(test)]`
-or `#[cfg(all(test, ...))]`, and none was pulled in by `include!`. A new declaration without
-that cfg is an added line in a sensitive file, so it is itself a finding.
+Name-based exemption is checked against the declarations (RV-F1, 2026-11-15). Before, it
+assumed a `*_tests.rs`, `tests.rs` or `tests/` file was only compiled under a test cfg, so
+deleting the `#[cfg(test)]` line above its `mod` declaration (a pure deletion, no added line)
+moved new code in that file into the normal build with no finding. Now:
+
+- **A file exempt by name is test-only only if nothing builds it outside a test cfg.** The gate
+  looks in every file under the `[[sensitive]]` globs at the head (the working tree, untracked
+  files included, with `--worktree`) for anything that can build it: a `mod <stem>;`
+  declaration in the file's directory or above (the stem is the file name without `.rs`, or the
+  directory name for `mod.rs`), and the file's name in a `#[path = "..."]` (also inside
+  `cfg_attr`), an `include!(...)` or any `path = "..."` (file names compare without case;
+  `dir/mod.rs` for a `mod.rs`). Comments and strings do not count. Each such reference must be
+  test-only: its attribute chain carries `#[cfg(test)]` or `#[cfg(all(test, ...))]` (also
+  written over several lines), it lies inside an inline test module, or the declaring file is
+  itself an exempt file that passes this check. A reference after other code on the same line
+  never counts as test-only. A file that is a Cargo target path in a sensitive Cargo.toml, or
+  that lies under `src/bin/` (a binary target), is never test-only. An exempt-named file
+  nothing refers to (an integration test under `<crate>/tests/`, or an orphan) stays exempt.
+  When a file fails the check its added lines are `sensitive-crate` findings, and the gate says
+  why on stderr: `... is not treated as test-only: declared or named without a test cfg at
+  <file>:<line>`.
+- **Taking a test cfg off a module declaration is a finding by itself.** In a sensitive file, a
+  removed line holding a `cfg` / `cfg_attr` attribute that names `test` is a `sensitive-crate`
+  finding when, on the base, the item it was attached to (after any other attributes, comments
+  and blank lines) is a `mod` declaration, file or inline, and that declaration line stays.
+  Changing the attribute (to `cfg(any(test, ...))`, `cfg(not(test))`, `cfg(unix)`, ...) removes
+  the old line, so it counts too. Deleting a whole test module, or a test cfg on a `fn`, does
+  not.
+
+On 2026-11-15, with a comment appended to all 274 name-exempt `.rs` files in the sensitive
+crates, every one passed the declaration check (no false positive). That diff took about 60
+seconds against about 40 before, because every module parent that names one of the files is
+read too; a normal landing touches a few such files.
+
+Limits: a `#[cfg_attr(test, path = "x_tests.rs")]` declaration is not recognised as test-only
+(the reference is in a `cfg_attr`, not under a test cfg), so new code in `x_tests.rs` is a
+finding; a declaration a macro builds from pieces is not seen (`paste!` and `concat_idents!`
+are findings of their own). A sensitive crate that builds a file outside the sensitive globs
+(`#[path = "../../other/x.rs"]`) is judged by that file's own crate.
 
 False-positive cost: this flags code, not risk. From 2026-11-01 to 2026-11-15, 280 commits on
 `target-0.8.5` added 89,136 `.rs` lines; 57,699 were in these crates, and 37,061 of those in
@@ -520,7 +555,15 @@ key, dotted `git` under `[patch.crates-io]`, a `\u0065` escape spelling `depende
 a form change with the same source, `package.metadata` and `[features]` pass; `cargo-unparsed`
 for an unknown dependency key path, a scalar where a table belongs, an unreadable header and a
 new key under a header the base already could not read; and `--cargo-entries` output for one
-manifest that spells every form.
+manifest that spells every form. RV-F1: a test cfg deleted from a file module declaration and
+from an inline test module with no line added, `cfg(test)` changed to `cfg(not(test))`,
+`cfg(all(test, unix))` changed to `cfg(unix)` with an attribute between; controls that deleting
+a whole test module, a test cfg on a `fn`, or a cfg outside the sensitive crates is not a
+finding; an exempt file also reached by a non-test `#[path]`, by a declaration after other code
+on its line, by `include!`, as a Cargo `[[bin]]` target or under `src/bin/`; a `tests/`
+module declared by an exempt file that is not itself a test; controls for a test-declared
+parent, a multi-line `cfg(all(test, ...))`, a declaration inside an inline test module and a
+mention in a comment or string; and an untracked non-test declaration in `--worktree` mode.
 
 `DIFF_GATE_TEST_TMP` puts the fixture repos on another disk (the default is `target/`).
 `DIFF_GATE_TEST_FILTER=<ERE>` runs only the `case_run` fixtures whose name matches.

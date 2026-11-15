@@ -518,7 +518,7 @@ tr '\000' '\001' <"$TMP/diff" >"$TMP/diff.t" && mv "$TMP/diff.t" "$TMP/diff" || 
 # Findings: rule <TAB> path <TAB> line <TAB> text. Added lines of .rs files go to rs-added
 # (path <TAB> line <TAB> text) for the lexer stage. Header paths are checked, in order,
 # against the -z file list; any mismatch is a setup error (exit 2).
-awk -v cargo_list="$TMP/cargo-paths" -v rs_out="$TMP/rs-added" -v flist="$TMP/files" -v hlist="$TMP/hdrs" '
+awk -v cargo_list="$TMP/cargo-paths" -v rs_out="$TMP/rs-added" -v rs_rm="$TMP/rs-removed" -v flist="$TMP/files" -v hlist="$TMP/hdrs" '
 function emit(rule, path, ln, text) {
     gsub(/\t/, " ", text); sub(/^[ \t]+/, "", text)
     if (length(text) > 160) text = substr(text, 1, 157) "..."
@@ -582,7 +582,10 @@ FILENAME == flist {
 }
 !inhunk && /^\+\+\+ \/dev\/null/ { skipc = 1; next }
 !inhunk && /^(\+\+\+|---) / { next }
-/^@@ / { s = $0; sub(/^@@ -[0-9,]+ \+/, "", s); ln = s + 0; inhunk = 1; next }
+/^@@ / { s = $0; sub(/^@@ -[0-9,]+ \+/, "", s); ln = s + 0; o = $0; sub(/^@@ -/, "", o); oln = o + 0; inhunk = 1; next }
+# removed .rs lines (path <TAB> old line <TAB> new-side line <TAB> text), for the sensitive-crate
+# check that a test cfg was not taken off a module declaration that stays (RV-F1)
+inhunk && !skipc && /^-/ { if (isrs) { text = substr($0, 2); gsub(/\t/, " ", text); print cur "\t" oln "\t" ln "\t" text > rs_rm } oln++; next }
 inhunk && !skipc && /^\+/ {
     text = substr($0, 2); this = ln; ln++
     if (iscargo) {
@@ -606,7 +609,7 @@ inhunk && !skipc && /^\+/ {
 inhunk && /^ / { ln++; next }
 END { if (!err && hi != nh) { print "diff-gate: diff has " hi " file header(s), file list expects " nh > "/dev/stderr"; exit 3 } }
 ' "$TMP/hdrs" "$TMP/files" "$TMP/diff" >"$TMP/findings" || die "pass 1 failed (diff could not be parsed)"
-: >>"$TMP/rs-added"
+: >>"$TMP/rs-added"; : >>"$TMP/rs-removed"
 
 show_at() { # <rev|WORKTREE> <path>: absent -> nothing; present but unreadable -> exit 2
     if [ "$1" = WORKTREE ]; then
@@ -673,6 +676,57 @@ is_sensitive() {
     END { print (s && !e) ? 1 : 0 }' "$TMP/sens"
 }
 
+# ── Sensitive crates: a test cfg taken off a module declaration (RV-F1) ──
+# Deleting the `#[cfg(test)]` line above a `mod` declaration adds no line, yet it moves the
+# module's existing code (an exempt *_tests.rs file, or an inline test module) into the normal
+# build. In a sensitive file, a removed line holding a cfg/cfg_attr attribute that names `test`
+# is a sensitive-crate finding when, on the base, the item it was attached to (after any other
+# attributes, comments and blank lines) is a `mod` declaration and that declaration line stays.
+# Changing the attribute (to cfg(any(test, ...)), cfg(not(test)), ...) removes the old line too.
+if [ -s "$TMP/rs-removed" ]; then
+    awk -F'\t' -v sensf="$TMP/sens" "$G2R_AWK"'
+    FILENAME == sensf { if ($1 == "S") sg[++ns] = g2r($2); next }
+    { x = $4; gsub(/[ \t]/, "", x); if (x !~ /#!?\[cfg(_attr)?\(/ || x !~ /(^|[^A-Za-z0-9_])test([^A-Za-z0-9_]|$)/) next
+      for (i = 1; i <= ns; i++) if ($1 ~ sg[i]) { if (!seen[$1]++) print $1; next } }
+    ' "$TMP/sens" "$TMP/rs-removed" >"$TMP/rm-paths" || die "removed-line scan failed"
+    while IFS= read -r p; do
+        show_at "$BASE" "$p" >"$TMP/rm-base.rs"
+        awk -F'\t' -v path="$p" -v rmf="$TMP/rs-removed" '
+        function after_attrs(t,   i, n, c, k) { # skip leading attributes and comments; AD/BC carry over lines
+            n = length(t); i = 1
+            while (1) {
+                if (BC) { k = index(substr(t, i), "*/"); if (!k) return ""; i += k + 1; BC = 0 }
+                if (AD > 0) {
+                    for (; i <= n; i++) { c = substr(t, i, 1); if (c == "[") AD++; else if (c == "]" && --AD == 0) { i++; break } }
+                    if (AD > 0) return ""
+                }
+                while (i <= n && substr(t, i, 1) ~ /[ \t]/) i++
+                if (i > n || substr(t, i, 2) == "//") return ""
+                if (substr(t, i, 2) == "/*") { BC = 1; i += 2; continue }
+                if (match(substr(t, i), /^#[ \t]*!?[ \t]*\[/)) { i += RLENGTH; AD = 1; continue }
+                return substr(t, i)
+            }
+        }
+        FILENAME == rmf {
+            if ($1 != path) next
+            R[$2] = 1; x = $4; gsub(/[ \t]/, "", x)
+            if (x ~ /#!?\[cfg(_attr)?\(/ && x ~ /(^|[^A-Za-z0-9_])test([^A-Za-z0-9_]|$)/) { C[++nc] = $2; CN[$2] = $3; CT[$2] = $4 }
+            next
+        }
+        { b = $0; sub(/\r$/, "", b); B[FNR] = b; nb = FNR }
+        END {
+            for (q = 1; q <= nc; q++) {
+                L = C[q]; AD = 0; BC = 0; j = L; rem = after_attrs(B[L])
+                while (rem == "" && j < nb) { j++; rem = after_attrs(B[j]) }
+                if (rem == "" || j == L || (j in R)) continue
+                if (rem !~ /^(pub[ \t]*(\([^)]*\))?[ \t]+)?(unsafe[ \t]+)?mod[ \t]+(r#)?[A-Za-z_][A-Za-z0-9_]*[ \t]*[;{]/) continue
+                t = CT[L]; sub(/^[ \t]+/, "", t); d = t; if (length(d) > 120) d = substr(d, 1, 117) "..."
+                printf "sensitive-crate\t%s\t%s\ttest cfg removed from a module declaration that stays (line %s on the base): %s\t\t\t%s\n", path, CN[L], L, d, t
+            }
+        }' "$TMP/rs-removed" "$TMP/rm-base.rs" >>"$TMP/findings" || die "removed-cfg check failed for $p"
+    done <"$TMP/rm-paths"
+fi
+
 # ── Pass 2: lex added .rs lines ──────────────────────────────────────
 # A line-by-line regex cannot know whether a line starts inside a string or a block comment,
 # so each .rs file with added lines is lexed in full (nested block comments, strings, raw
@@ -696,14 +750,159 @@ if [ -s "$TMP/rs-added" ]; then
         [ "${PIPESTATUS[0]}${PIPESTATUS[1]}" = 00 ] || die "cannot read $p"
         printf '%s\t%s\n' "$TMP/blobs/$n" "$p" >>"$TMP/rs-index"
     done <"$TMP/rs-paths"
+    # Name-exempt files (RV-F1). A file under a [[sensitive]] glob that is exempt by its name
+    # (tests/, *_tests.rs, ...) is test-only only if nothing builds it outside a test cfg. Find
+    # every file in the sensitive crates that could declare it (a `mod <stem>`, or its file
+    # name in a #[path], include! or Cargo target path), and the same again for any exempt
+    # file among them, so the lexer stage below can judge each declaration.
+    awk -F'\t' -v sensf="$TMP/sens" "$G2R_AWK"'
+    FILENAME == sensf { if ($1 == "S") sg[++ns] = g2r($2); else if ($1 == "E") eg[++ne] = g2r($2); next }
+    { s = 0; e = 0; for (i = 1; i <= ns; i++) if ($0 ~ sg[i]) s = 1; for (i = 1; i <= ne; i++) if ($0 ~ eg[i]) e = 1; if (s && e) print }
+    ' "$TMP/sens" "$TMP/rs-paths" >"$TMP/ex-todo" || die "exempt scan failed"
+    cp "$TMP/ex-todo" "$TMP/ex-cands"; : >"$TMP/ex-all"; : >"$TMP/decl-hits"; : >"$TMP/cargo-refs"
+    SPECS=(); while IFS="$(printf '\t')" read -r k g; do [ "$k" = S ] && SPECS+=(":(glob)$g"); done <"$TMP/sens"
+    round=0
+    while [ -s "$TMP/ex-todo" ] && [ ${#SPECS[@]} -gt 0 ]; do
+        round=$((round + 1)); [ "$round" -le 16 ] || die "exempt-file declarations nest too deep"
+        cat "$TMP/ex-todo" >>"$TMP/ex-all"
+        # Two fixed strings (fast; many -e patterns would each be tried per line), then the exact
+        # test per matched line: `mod <stem>` as a whole identifier, or a file-name token equal
+        # to the exempt file's name (dir/mod.rs for a mod.rs), compared without case.
+        awk '{ n = split($0, a, "/"); b = a[n]; if (b == "mod.rs" && n > 1) { st = a[n - 1]; b = a[n - 1] "/" b } else { st = b; sub(/\.[rR][sS]$/, "", st) }
+               print "S\t" st; print "B\t" tolower(b) }' "$TMP/ex-todo" | awk '!s[$0]++' >"$TMP/ex-keys"
+        if [ "$WORKTREE" = 1 ]; then
+            git grep --untracked -n -z -I -i -F -e mod -e .rs -- "${SPECS[@]}" >"$TMP/grep.out"; rc=$?
+        else
+            git grep -n -z -I -i -F -e mod -e .rs "$HEAD_SHA" -- "${SPECS[@]}" >"$TMP/grep.out"; rc=$?
+        fi
+        [ "$rc" -le 1 ] || die "git grep failed while looking for module declarations"
+        # git grep -z -n: <rev:>path NUL line NUL text (NUL becomes \001: awk strings end at NUL)
+        tr '\000' '\001' <"$TMP/grep.out" >"$TMP/grep.t" || die "tr failed"
+        awk -v keys="$TMP/ex-keys" -v pre="$HEAD_SHA:" -v wt="$WORKTREE" '
+            FILENAME == keys { split($0, f, "\t"); if (f[1] == "S") ST[f[2]] = 1; else BK[f[2]] = 1; next }
+            {
+                i = index($0, "\001"); if (!i) next
+                p = substr($0, 1, i - 1); r = substr($0, i + 1); j = index(r, "\001"); t = substr(r, j + 1)
+                if (wt != 1 && index(p, pre) == 1) p = substr(p, length(pre) + 1)
+                if (p in hit) next
+                if (p ~ /[[:cntrl:]]/) { print "diff-gate: path with a control character in the tree (refused)" > "/dev/stderr"; exit 3 }
+                x = tolower(t); gsub(/\\/, "/", x)
+                while (match(x, /[a-z0-9_.-]+\.rs/)) { if (substr(x, RSTART, RLENGTH) in BK) { hit[p] = 1; print p; next } x = substr(x, RSTART + RLENGTH) }
+                x = tolower(t); gsub(/\\/, "/", x)
+                while (match(x, /[a-z0-9_-]+\/mod\.rs/)) { if (substr(x, RSTART, RLENGTH) in BK) { hit[p] = 1; print p; next } x = substr(x, RSTART + RLENGTH) }
+                x = t
+                while (match(x, /(^|[^A-Za-z0-9_])mod[ \t]+(r#)?[A-Za-z_][A-Za-z0-9_]*/)) {
+                    m = substr(x, RSTART, RLENGTH); sub(/^.*mod[ \t]+/, "", m); sub(/^r#/, "", m)
+                    if (m in ST) { hit[p] = 1; print p; next }
+                    x = substr(x, RSTART + RLENGTH)
+                }
+            }' "$TMP/ex-keys" "$TMP/grep.t" >"$TMP/grep.paths" || die "git grep output unusable"
+        cat "$TMP/grep.paths" >>"$TMP/decl-hits"
+        awk -F'\t' -v sensf="$TMP/sens" -v done="$TMP/ex-all" "$G2R_AWK"'
+        FILENAME == sensf { if ($1 == "S") sg[++ns] = g2r($2); else if ($1 == "E") eg[++ne] = g2r($2); next }
+        FILENAME == done { d[$0] = 1; next }
+        tolower($0) ~ /\.rs$/ && !($0 in d) && !s[$0]++ { a = 0; e = 0; for (i = 1; i <= ns; i++) if ($0 ~ sg[i]) a = 1; for (i = 1; i <= ne; i++) if ($0 ~ eg[i]) e = 1; if (a && e) print }
+        ' "$TMP/sens" "$TMP/ex-all" "$TMP/grep.paths" >"$TMP/ex-todo" || die "exempt scan failed"
+    done
+    # Cargo target paths that resolve to an exempt file: such a file is a target, not a test module.
+    awk '!s[$0]++' "$TMP/decl-hits" | while IFS= read -r m; do
+        case "$(printf '%s' "$m" | tr 'A-Z' 'a-z')" in cargo.toml|*/cargo.toml) ;; *) continue ;; esac
+        show_at "$head_src" "$m" | cargo_entries | awk -F'\t' -v m="$m" '
+            function normp(p,   n, a, i, o, k, st) { n = split(p, a, "/"); k = 0
+                for (i = 1; i <= n; i++) { if (a[i] == "" || a[i] == ".") continue; if (a[i] == "..") { if (k > 0) k--; continue } st[++k] = a[i] }
+                o = ""; for (i = 1; i <= k; i++) o = o (i > 1 ? "/" : "") st[i]; return o }
+            index($1, "target-path|") == 1 { d = m; if (d ~ /\//) sub(/\/[^\/]*$/, "", d); else d = ""; print m "\t" normp(d "/" substr($1, 13)) }'
+    done >>"$TMP/cargo-refs"
+    # declaring .rs files not already read go to the lexer stage too, for their declarations only
+    awk -v idx="$TMP/rs-index" 'FILENAME == idx { split($0, f, "\t"); h[f[2]] = 1; next } tolower($0) ~ /\.rs$/ && !($0 in h) && !s[$0]++' \
+        "$TMP/rs-index" "$TMP/decl-hits" >"$TMP/decl-only" || die "declaration scan failed"
+    while IFS= read -r p; do
+        n=$((n + 1)); show_at "$head_src" "$p" | tr '\000' '\001' >"$TMP/blobs/$n"
+        [ "${PIPESTATUS[0]}${PIPESTATUS[1]}" = 00 ] || die "cannot read $p"
+        printf '%s\t%s\n' "$TMP/blobs/$n" "$p" >>"$TMP/rs-index"
+    done <"$TMP/decl-only"
     set -- "$TMP"/blobs/*
-    awk -v sensf="$TMP/sens" -v idx="$TMP/rs-index" -v add="$TMP/rs-added" -v addr_types='SocketAddrV4|SocketAddrV6|SocketAddr|IpAddr|Ipv4Addr|Ipv6Addr|AddrParseError' "$G2R_AWK"'
+    awk -v sensf="$TMP/sens" -v idx="$TMP/rs-index" -v add="$TMP/rs-added" -v exf="$TMP/ex-cands" -v crf="$TMP/cargo-refs" -v addr_types='SocketAddrV4|SocketAddrV6|SocketAddr|IpAddr|Ipv4Addr|Ipv6Addr|AddrParseError' "$G2R_AWK"'
     BEGIN { HASHES = "################################################################"; SP = "        " }
-    function insens(p,   i, hit) {
-        for (i = 1; i <= nsg; i++) if (p ~ sg[i]) hit = 1
-        if (!hit) return 0
-        for (i = 1; i <= neg; i++) if (p ~ eg[i]) return 0
+    function insg(p,   i) { for (i = 1; i <= nsg; i++) if (p ~ sg[i]) return 1; return 0 }
+    function insens(p,   i) { # sensitive and not test-only (RV-F1: a name-exempt file must be declared as a test)
+        if (!insg(p)) return 0
+        for (i = 1; i <= neg; i++) if (p ~ eg[i]) return !exok(p, 0)
         return 1
+    }
+    # Declarations (RV-F1) over the lexed text of every file in the sensitive crates this stage
+    # reads: `mod name;` (a NAME reference) and the file name in a #[path = "..."], include!(...)
+    # or path = "..." anywhere (a PATH reference). A reference is test-only when its attribute
+    # chain carried #[cfg(test)] / #[cfg(all(test, ...))], when it lies in an inline test module,
+    # or when the declaring file is itself a test-only exempt file.
+    function rawstr(r, p,   v, c) { v = ""; while (p <= length(r)) { c = substr(r, p, 1); if (c == "\\") { v = v substr(r, p + 1, 1); p += 2; continue } if (c == "\"") break; v = v c; p++ } return v }
+    function addref(k, v, ln, t) { NREF++; RK[NREF] = k; RN[NREF] = v; RF[NREF] = P; RLN[NREF] = ln; RTS[NREF] = t }
+    function dpaths(ln, t,   n, i, a) { n = split(DPATH, a, SUBSEP); for (i = 2; i <= n; i++) addref("P", a[i], ln, t) }
+    function dattr(a, r,   x, off) { # one whole attribute, lexed a and raw r at the same positions
+        if (testattr(a)) DPT = 1
+        x = a; off = 0
+        while (match(x, /(^|[^A-Za-z0-9_])path[ \t]*=[ \t]*(r#*)?"/)) { DPATH = DPATH SUBSEP rawstr(r, off + RSTART + RLENGTH); off += RSTART + RLENGTH - 1; x = substr(x, RSTART + RLENGTH) }
+    }
+    function midscan(o, s, pos,   x, off, m) { # references after other code on the line: never test-attributed
+        x = substr(o, pos); off = pos - 1
+        while (match(x, /(^|[^A-Za-z0-9_])(mod[ \t]+(r#)?[A-Za-z_][A-Za-z0-9_]*[ \t]*;|path[ \t]*=[ \t]*(r#*)?"|include[ \t]*![ \t]*[(\[{][ \t]*(r#*)?")/)) {
+            m = substr(x, RSTART, RLENGTH)
+            if (m ~ /"$/) addref("P", rawstr(s, off + RSTART + RLENGTH), DLN, 0)
+            else { sub(/[ \t]*;$/, "", m); sub(/^.*mod[ \t]+/, "", m); sub(/^r#/, "", m); addref("N", m, DLN, 0) }
+            off += RSTART + RLENGTH - 1; x = substr(x, RSTART + RLENGTH)
+        }
+    }
+    function decls(o, s, ln,   pos, rest, e, m, d, i, c) {
+        DLN = ln; pos = 1
+        if (DAD > 0) { # inside an attribute that started on an earlier line
+            for (i = 1; i <= length(o); i++) { c = substr(o, i, 1); if (c == "[") DAD++; else if (c == "]" && --DAD == 0) break }
+            if (DAD > 0) { DAB = DAB " " o; DAR = DAR " " s; return }
+            dattr(DAB " " substr(o, 1, i), DAR " " substr(s, 1, i)); pos = i + 1
+        }
+        while (1) {
+            rest = substr(o, pos)
+            if (rest ~ /^[ \t]*$/) return
+            if (match(rest, /^[ \t]*#[ \t]*!?[ \t]*\[/)) {
+                e = attr_end(o, pos + RLENGTH - 1)
+                if (!e) { d = 0; for (i = pos + RLENGTH - 1; i <= length(o); i++) { c = substr(o, i, 1); if (c == "[") d++; else if (c == "]") d-- }
+                          DAD = d; DAB = substr(o, pos); DAR = substr(s, pos); return }
+                dattr(substr(o, pos, e - pos + 1), substr(s, pos, e - pos + 1)); pos = e + 1; continue
+            }
+            if (match(rest, /^[ \t]*(pub[ \t]*(\([^)]*\))?[ \t]+)?(unsafe[ \t]+)?mod[ \t]+(r#)?[A-Za-z_][A-Za-z0-9_]*[ \t]*;/)) {
+                m = substr(rest, RSTART, RLENGTH); sub(/[ \t]*;$/, "", m); sub(/^.*mod[ \t]+/, "", m); sub(/^r#/, "", m)
+                addref("N", m, ln, DPT); dpaths(ln, DPT); DPT = 0; DPATH = ""; pos += RLENGTH; continue
+            }
+            dpaths(ln, DPT)
+            if (match(rest, /^[ \t]*include[ \t]*![ \t]*[(\[{][ \t]*(r#*)?"/)) { addref("P", rawstr(s, pos + RLENGTH), ln, DPT); pos += RLENGTH }
+            DPT = 0; DPATH = ""
+            midscan(o, s, pos)
+            return
+        }
+    }
+    function stem(f,   n, a, b) { n = split(f, a, "/"); b = a[n]; if (b == "mod.rs" && n > 1) return a[n - 1]; sub(/\.[rR][sS]$/, "", b); return b }
+    function bkey(f,   n, a) { gsub(/\\/, "/", f); n = split(f, a, "/"); if (a[n] == "mod.rs" && n > 1) return a[n - 1] "/" a[n]; return a[n] }
+    function dirn(f) { if (f !~ /\//) return ""; sub(/\/[^\/]*$/, "", f); return f }
+    function refsf(i, F,   d) {
+        if (RK[i] == "N") { d = dirn(RF[i]); return (RN[i] == stem(F) && (d == "" || index(F, d "/") == 1)) }
+        return (bkey(RN[i]) == bkey(F))
+    }
+    function isex(p,   i) { if (!insg(p)) return 0; for (i = 1; i <= neg; i++) if (p ~ eg[i]) return 1; return 0 }
+    function exok(F, depth,   i, ok, D, why) { # is the name-exempt file F built only under a test cfg?
+        if (F in EXV) return EXV[F]
+        if (depth > 16 || (F in EXW)) return 0
+        EXW[F] = 1; ok = 1; why = ""
+        if (F ~ /(^|\/)src\/bin\//) { ok = 0; why = "it is a binary target under src/bin/" }
+        if (ok && (F in CREF)) { ok = 0; why = "it is a Cargo target path in " CREF[F] }
+        for (i = 1; i <= NREF && ok; i++) {
+            if (!refsf(i, F)) continue
+            if (RTS[i] || ((RF[i] SUBSEP RLN[i]) in TST)) continue
+            D = RF[i]
+            if (D != F && isex(D) && exok(D, depth + 1)) continue
+            ok = 0; why = "declared or named without a test cfg at " D ":" RLN[i]
+        }
+        delete EXW[F]; EXV[F] = ok
+        if (!ok && (F in EXC)) print "diff-gate: " F " is not treated as test-only: " why > "/dev/stderr"
+        return ok
     }
     # Test-region tracking over the lexed full file (strings, chars and comments are blank).
     function attr_end(s, i,   d, n, c) { # s[i] is "[": index of its matching "]", 0 if none
@@ -757,6 +956,7 @@ if [ -s "$TMP/rs-added" ]; then
     function finish(   n, i, t) { # end of a file: keep its test lines only if its braces balanced
         if (!BROKEN && !TR && DEP == 0) { n = split(FT, t, " "); for (i = 1; i <= n; i++) TST[PP SUBSEP t[i]] = 1 }
         DEP = 0; TR = 0; TRD = 0; PEND = 0; BROKEN = 0; RL = ""; PL = ""; FT = ""
+        DPT = 0; DPATH = ""; DAD = 0; DAB = ""; DAR = ""
     }
     function sp(k) { while (length(SP) < k) SP = SP SP; return substr(SP, 1, k) }
     function lex(s,   out, i, n, c, c2, j, h, k, m, a, b, rest, term) {
@@ -863,8 +1063,10 @@ if [ -s "$TMP/rs-added" ]; then
         split($0, f, "\t"); k = f[1] SUBSEP f[2]; want[k] = 1
         na++; ap[na] = f[1]; al[na] = f[2]; at[na] = substr($0, length(f[1]) + length(f[2]) + 3); next
     }
-    FNR == 1 { if (PP != "") finish(); LB = 0; LS = 0; LH = 0; P = pathof[FILENAME]; PP = P; SENSP = insens(P) }
-    { s = $0; sub(/\r$/, "", s); o = lex(s); if (SENSP) track(o, FNR); if ((P SUBSEP FNR) in want) { full[P SUBSEP FNR] = o; ftxt[P SUBSEP FNR] = s } }
+    FILENAME == exf { EXC[$0] = 1; next }
+    FILENAME == crf { split($0, f, "\t"); CREF[f[2]] = f[1]; next }
+    FNR == 1 { if (PP != "") finish(); LB = 0; LS = 0; LH = 0; P = pathof[FILENAME]; PP = P; SENSG = insg(P) }
+    { s = $0; sub(/\r$/, "", s); o = lex(s); if (SENSG) { track(o, FNR); decls(o, s, FNR) } if ((P SUBSEP FNR) in want) { full[P SUBSEP FNR] = o; ftxt[P SUBSEP FNR] = s } }
     END {
         if (PP != "") finish()
         for (q = 1; q <= na; q++) {
@@ -894,7 +1096,7 @@ if [ -s "$TMP/rs-added" ]; then
                 print r "\t" ap[q] "\t" al[q] "\t" d "\t\t" out "\t" T
             }
         }
-    }' "$TMP/sens" "$TMP/rs-index" "$TMP/rs-added" "$@" >>"$TMP/findings" || die "lexer stage failed"
+    }' "$TMP/sens" "$TMP/rs-index" "$TMP/rs-added" "$TMP/ex-cands" "$TMP/cargo-refs" "$@" >>"$TMP/findings" || die "lexer stage failed"
 fi
 
 # ── Pass 2b: token scan (tools/diff-gate-tokens, built from the trusted base) ──
