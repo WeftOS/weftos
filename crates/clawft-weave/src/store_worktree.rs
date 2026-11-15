@@ -131,7 +131,7 @@ struct P {
     /// `promote`: refuse a land that copies more than this many bytes (default 1 GiB; 0 = no cap).
     max_bytes: Option<u64>,
     /// `publish`: refuse when the worktree store already holds more than this many bytes
-    /// (default 2 GiB; 0 = no quota).
+    /// (default 8 GiB, `retention::DEFAULT_WORKTREE_QUOTA`; 0 = no quota).
     quota_bytes: Option<u64>,
     /// `gc`: retire worktree stores landed at least this many days ago (default 14).
     keep_days: Option<u64>,

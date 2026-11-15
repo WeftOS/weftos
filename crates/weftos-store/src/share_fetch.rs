@@ -313,7 +313,7 @@ pub fn fetch_tree_with<B: ObjectBackend>(
     force: bool,
     lim: &Limits,
 ) -> Result<FetchReport> {
-    let m = read_manifest(b, bucket)?
+    let m = read_manifest_with(b, bucket, lim)?
         .ok_or_else(|| S2Error::Invalid("no shared tree in this worktree store".into()))?;
     fetch_tree_from(b, bucket, &m, dest, sel, force, lim)
 }
@@ -339,6 +339,11 @@ pub fn fetch_tree_from<B: ObjectBackend>(
     let mut rep = FetchReport::default();
     let mut lower = std::collections::HashSet::new();
     let mut todo = Vec::new();
+    // A set, not a scan of the selection per file: 100 000 files by 10 000 selected paths is quadratic.
+    let picked: std::collections::HashSet<&str> = match &sel {
+        Select::Paths(ps) => ps.iter().map(|p| p.as_str()).collect(),
+        _ => Default::default(),
+    };
     for f in &m.files {
         if is_dangerous_path(&f.path)
             || is_secret_path(&f.path)
@@ -350,7 +355,7 @@ pub fn fetch_tree_from<B: ObjectBackend>(
         let wanted = match &sel {
             Select::All => true,
             Select::DocsOnly => doc_set.contains(f.path.as_str()),
-            Select::Paths(ps) => ps.iter().any(|p| p == &f.path),
+            Select::Paths(_) => picked.contains(f.path.as_str()),
         };
         if !wanted {
             continue;
@@ -437,13 +442,23 @@ fn write_new(dest: &Path, target: &Path, data: &[u8]) -> Result<()> {
 
 /// Download the unmerged-commits bundle to `out`; returns the head commit it carries.
 pub fn fetch_bundle<B: ObjectBackend>(b: &B, bucket: &str, out: &Path) -> Result<String> {
-    let m = read_manifest(b, bucket)?
+    fetch_bundle_with(b, bucket, out, &Limits::default())
+}
+
+/// [`fetch_bundle`] under explicit `lim` (the manifest file-count cap and the bundle cap).
+pub fn fetch_bundle_with<B: ObjectBackend>(b: &B, bucket: &str, out: &Path, lim: &Limits) -> Result<String> {
+    let m = read_manifest_with(b, bucket, lim)?
         .ok_or_else(|| S2Error::Invalid("no shared tree in this worktree store".into()))?;
-    fetch_bundle_from(b, bucket, &m, out)
+    fetch_bundle_from_with(b, bucket, &m, out, lim)
 }
 
 /// [`fetch_bundle`] from a manifest the caller already read.
 pub fn fetch_bundle_from<B: ObjectBackend>(b: &B, bucket: &str, m: &TreeManifest, out: &Path) -> Result<String> {
+    fetch_bundle_from_with(b, bucket, m, out, &Limits::default())
+}
+
+/// [`fetch_bundle_from`] with the bundle cap taken from `lim.max_bundle`.
+pub fn fetch_bundle_from_with<B: ObjectBackend>(b: &B, bucket: &str, m: &TreeManifest, out: &Path, lim: &Limits) -> Result<String> {
     if !m.has_bundle {
         return Err(S2Error::Invalid(
             "this tree was published without a git bundle".into(),
@@ -452,8 +467,8 @@ pub fn fetch_bundle_from<B: ObjectBackend>(b: &B, bucket: &str, m: &TreeManifest
     let h = b
         .head(bucket, BUNDLE_KEY)?
         .ok_or_else(|| S2Error::Backend("manifest says bundle, object missing".into()))?;
-    if h.size > Limits::default().max_bundle {
-        return Err(S2Error::Invalid(format!("bundle is {} bytes, over the {} limit", h.size, Limits::default().max_bundle)));
+    if h.size > lim.max_bundle {
+        return Err(S2Error::Invalid(format!("bundle is {} bytes, over the {} limit", h.size, lim.max_bundle)));
     }
     let data = b
         .get(bucket, BUNDLE_KEY)?

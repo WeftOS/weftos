@@ -164,7 +164,7 @@ impl Skipped {
 /// Knobs shared by the sync functions.
 #[derive(Debug, Clone)]
 pub struct Options {
-    /// The existing S2 ceilings (16 MiB per file, 20,000 files, 512 MiB).
+    /// The existing S2 ceilings (16 MiB per file, 100,000 files, 4 GiB; `Limits::default()`).
     pub limits: Limits,
     /// Written into conflict records and tombstones. Default: the id stored in the index.
     pub device: Option<String>,

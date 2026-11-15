@@ -463,7 +463,7 @@ fn quota_zero_is_unlimited_and_takes_its_listing_inside_the_publish() {
     let (r, c) = counted(&svc, &t, "publish", republish_params(src.path(), Some(0)), 31);
     assert_eq!(r["unchanged"], json!(N));
     // no quota listing in the daemon: publish_tree lists the bucket itself, so the call count is the
-    // same as with a quota, and the default quota (2 GiB) takes the shared-listing path
+    // same as with a quota, and the default quota (8 GiB) takes the shared-listing path
     pin(c, [4, 1, 2, 3, 0, 0, 0, 0], "quota 0");
     let (_, c) = counted(&svc, &t, "publish", republish_params(src.path(), None), 32);
     pin(c, [4, 1, 2, 3, 0, 0, 0, 0], "default quota");

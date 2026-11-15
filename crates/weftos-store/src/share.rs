@@ -26,7 +26,9 @@ pub use handoff::{
 };
 use handoff::{guard_live_claim, write_handoff_if};
 pub(crate) use publish::{is_doc_path, looks_like_private_key, parse_manifest, read_regular};
-pub use publish::{MAX_MANIFEST_BYTES, Published, publish_tree, publish_tree_listed, read_manifest, summarize_with};
+pub use publish::{
+    MAX_MANIFEST_BYTES, Published, parse_manifest_with, publish_tree, publish_tree_listed, read_manifest, read_manifest_with, summarize_with,
+};
 #[cfg(test)]
 use publish::read_open_regular;
 
@@ -213,6 +215,16 @@ pub fn tree_digest(m: &TreeManifest) -> String {
     format!("t1:{}", d.iter().map(|b| format!("{b:02x}")).collect::<String>())
 }
 
+/// The size ceilings of one shared worktree tree. This is the ONE place the numbers live: the
+/// writer (`publish_tree`) takes a `Limits`, and every reader that applies a file-count cap
+/// (`read_manifest_with`, `parse_manifest_with`, `fetch_tree_with`) takes the same `Limits`, so a
+/// tree published under some limits can be read back under those limits. The plain readers
+/// (`read_manifest`, `fetch_tree`) use `Limits::default()`, which is what the daemon publishes with.
+///
+/// Owner decision 2026-11-15 (ADR-126 section 4a): 100 000 files and 4 GiB per worktree. The
+/// 16 MiB per-file and 256 MiB bundle caps are unchanged. The dependent caps are derived from these
+/// and pinned by tests: `MAX_MANIFEST_BYTES` (`share_publish.rs`) and
+/// `retention::DEFAULT_WORKTREE_QUOTA`.
 #[derive(Debug, Clone, Copy)]
 pub struct Limits {
     pub max_file: u64,
@@ -220,13 +232,23 @@ pub struct Limits {
     pub max_total: u64,
     pub max_bundle: u64,
 }
+impl Limits {
+    /// Largest single file a publish takes.
+    pub const DEFAULT_MAX_FILE: u64 = 16 << 20;
+    /// Most files a tree may list (also the most a reader accepts in a manifest).
+    pub const DEFAULT_MAX_FILES: usize = 100_000;
+    /// Most bytes of file content in one tree.
+    pub const DEFAULT_MAX_TOTAL: u64 = 4 << 30;
+    /// Largest git bundle a publish takes.
+    pub const DEFAULT_MAX_BUNDLE: u64 = 256 << 20;
+}
 impl Default for Limits {
     fn default() -> Self {
         Self {
-            max_file: 16 << 20,
-            max_files: 20_000,
-            max_total: 512 << 20,
-            max_bundle: 256 << 20,
+            max_file: Self::DEFAULT_MAX_FILE,
+            max_files: Self::DEFAULT_MAX_FILES,
+            max_total: Self::DEFAULT_MAX_TOTAL,
+            max_bundle: Self::DEFAULT_MAX_BUNDLE,
         }
     }
 }

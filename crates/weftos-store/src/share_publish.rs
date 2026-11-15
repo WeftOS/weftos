@@ -79,16 +79,26 @@ fn md_title(path: &str, data: &[u8]) -> Option<String> {
 }
 
 /// Largest manifest object a reader will load (review F11): a writer with direct S3 access could
-/// otherwise make every follower read an object of any size into memory.
+/// otherwise make every follower read an object of any size into memory. Sized against
+/// `Limits::DEFAULT_MAX_FILES`: a pretty-printed manifest is 157 to 175 bytes a file (see the
+/// `manifest_cap_*` test), so 100 000 files is 15.7 to 17.6 MB and the cap (33.5 MB) is hit at about
+/// 190 000 to 213 000 files; the publish itself refuses a manifest over this cap rather than write
+/// an unreadable tree.
 pub const MAX_MANIFEST_BYTES: u64 = 32 << 20;
 
 pub fn read_manifest<B: ObjectBackend>(b: &B, bucket: &str) -> Result<Option<TreeManifest>> {
+    read_manifest_with(b, bucket, &Limits::default())
+}
+
+/// [`read_manifest`] under explicit `limits`: the file-count cap is `limits.max_files`, the same
+/// value the writer of that tree used.
+pub fn read_manifest_with<B: ObjectBackend>(b: &B, bucket: &str, limits: &Limits) -> Result<Option<TreeManifest>> {
     let Some(h) = b.head(bucket, MANIFEST_KEY)? else { return Ok(None) };
     if h.size > MAX_MANIFEST_BYTES {
         return Err(S2Error::Invalid(format!("manifest is {} bytes, over the {MAX_MANIFEST_BYTES} limit", h.size)));
     }
     match b.get(bucket, MANIFEST_KEY)? {
-        Some(d) => Ok(Some(parse_manifest(&d)?)),
+        Some(d) => Ok(Some(parse_manifest_with(&d, limits)?)),
         None => Ok(None),
     }
 }
@@ -113,13 +123,28 @@ fn check_manifest_schema(d: &[u8]) -> Result<()> {
 
 /// Parse manifest bytes and apply the file-count limit (shared with the follower manifest cache).
 pub(crate) fn parse_manifest(d: &[u8]) -> Result<TreeManifest> {
+    parse_manifest_with(d, &Limits::default())
+}
+
+/// [`parse_manifest`] with the file-count cap taken from `limits` (the writer's own value).
+pub fn parse_manifest_with(d: &[u8], limits: &Limits) -> Result<TreeManifest> {
     check_manifest_schema(d)?;
     let m: TreeManifest = serde_json::from_slice(d)?;
-    let lim = Limits::default();
-    if m.files.len() > lim.max_files || m.docs.len() > lim.max_files {
-        return Err(S2Error::Invalid(format!("manifest lists more than {} files", lim.max_files)));
+    if m.files.len() > limits.max_files || m.docs.len() > limits.max_files {
+        return Err(S2Error::Invalid(format!("manifest lists more than the {} file limit", limits.max_files)));
     }
     Ok(m)
+}
+
+/// Never write a manifest no reader would load: `read_manifest_with` refuses one over
+/// [`MAX_MANIFEST_BYTES`].
+pub(crate) fn check_manifest_len(len: u64, files: usize) -> Result<()> {
+    if len > MAX_MANIFEST_BYTES {
+        return Err(S2Error::Invalid(format!(
+            "manifest would be {len} bytes for {files} files, over the {MAX_MANIFEST_BYTES} byte limit; publish fewer files"
+        )));
+    }
+    Ok(())
 }
 
 /// What a publish produced, for a caller that goes on to derive the registry entry (WO-069 X3).
@@ -197,7 +222,7 @@ pub fn publish_tree_listed<B: ObjectBackend>(
             )));
         }
     }
-    let prev = read_manifest(b, bucket)?;
+    let prev = read_manifest_with(b, bucket, limits)?;
     let prev_sha: std::collections::HashMap<&str, &str> = prev
         .as_ref()
         .map(|m| {
@@ -329,12 +354,12 @@ pub fn publish_tree_listed<B: ObjectBackend>(
         b.delete(bucket, BUNDLE_KEY)?;
     }
 
-    let uncommitted = src
-        .uncommitted
-        .iter()
-        .filter(|u| files.iter().any(|f| &f.path == *u))
-        .cloned()
-        .collect();
+    // A set, not a scan of `files` per path: with 100 000 files and many uncommitted paths the scan
+    // is quadratic.
+    let uncommitted = {
+        let published: std::collections::HashSet<&str> = files.iter().map(|f| f.path.as_str()).collect();
+        src.uncommitted.iter().filter(|u| published.contains(u.as_str())).cloned().collect()
+    };
     let manifest = TreeManifest {
         schema: SCHEMA,
         branch: src.branch.into(),
@@ -349,7 +374,9 @@ pub fn publish_tree_listed<B: ObjectBackend>(
         writer: src.writer.clone(),
         published_ms: now_ms,
     };
-    b.put(bucket, MANIFEST_KEY, &serde_json::to_vec_pretty(&manifest)?)?;
+    let body = serde_json::to_vec_pretty(&manifest)?;
+    check_manifest_len(body.len() as u64, manifest.files.len())?;
+    b.put(bucket, MANIFEST_KEY, &body)?;
     // Stale objects go after the manifest no longer lists them, so a reader never sees a listed file
     // missing. Found by listing, not from the previous manifest: a publish killed after its manifest
     // write but before this sweep leaves objects that no manifest names, and only a listing finds them.
@@ -382,4 +409,16 @@ pub fn publish_tree_listed<B: ObjectBackend>(
         }
     }
     Ok(Published { report: rep, manifest, handoff_created })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_manifest_over_the_reader_cap_is_refused_at_publish_and_the_cap_itself_is_allowed() {
+        assert!(check_manifest_len(MAX_MANIFEST_BYTES, 1).is_ok());
+        let e = check_manifest_len(MAX_MANIFEST_BYTES + 1, 7).unwrap_err().to_string();
+        assert!(e.contains("7 files") && e.contains(&MAX_MANIFEST_BYTES.to_string()), "{e}");
+    }
 }
