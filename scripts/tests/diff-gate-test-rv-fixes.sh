@@ -172,3 +172,26 @@ echo "src/gen.rs" >.gitignore && echo "fn f() { unsafe { g() } }" >src/gen.rs &&
 out="$(DIFF_GATE_BASE="$base" "$GATE" 2>&1)"; rc=$?
 check_result "fix-e1: control, commit mode ignores untracked ignored files" 0 "$rc" "$out"
 cd "$ROOT" || exit 2
+
+# ── RV-C1: the helper cache must resolve outside the checkout ────────
+# Each case: base with tools/diff-gate-tokens, a .rs change, no prebuilt helper, no cargo on PATH.
+c1_case() { # NAME WANT GREP SETUP: SETUP runs in the fixture repo after both commits ($tree is set)
+    local d="$WORK/$(echo "$1" | tr -c 'A-Za-z0-9\n' '_')" base tree out rc
+    fixture_repo "$d" && mkdir -p tools/diff-gate-tokens && echo x >tools/diff-gate-tokens/README.md
+    git add -A && git commit -qm base && base="$(git rev-parse HEAD)" && tree="$(git rev-parse HEAD:tools/diff-gate-tokens)"
+    echo "fn z() {}" >>src/lib.rs && git add -A && git commit -qm change
+    eval "$4"
+    out="$(env DIFF_GATE_BASE="$base" DIFF_GATE_TOKENS_BIN="" DIFF_GATE_CACHE="$C1CACHE" PATH="/usr/bin:/bin" "$GATE" 2>&1)"; rc=$?
+    EXPECT="rust-tokens" GREP="$3" check_result "$1" "$2" "$rc" "$out"
+    cd "$ROOT" || exit 2
+}
+c1_case "fix-c1: a cache under a parent symlinked into the checkout, not created yet" 1 "inside the checkout" \
+    'mkdir -p target/p && ln -s "$PWD/target/p" "$WORK/c1-parent" && C1CACHE="$WORK/c1-parent/new/cache"'
+c1_case "fix-c1: tokens-<tree> symlinked into the checkout" 1 "resolves into the checkout" \
+    'mkdir -p target/t "$WORK/c1-t" && cp "$STUB" target/t/diff-gate-tokens && ln -s "$PWD/target/t" "$WORK/c1-t/tokens-$tree" && C1CACHE="$WORK/c1-t"'
+c1_case "fix-c1: a cached helper that is a symlink is refused" 1 "is a symlink" \
+    'mkdir -p "$WORK/c1-l/tokens-$tree" && ln -s "$STUB" "$WORK/c1-l/tokens-$tree/diff-gate-tokens" && C1CACHE="$WORK/c1-l"'
+c1_case "fix-c1: a .. in the part of the cache path that does not exist yet" 1 "cannot be resolved" \
+    'C1CACHE="$WORK/c1-none/../c1-none2"'
+c1_case "fix-c1: control, a symlink to a directory outside the checkout is accepted" 1 "cargo not found" \
+    'mkdir -p "$WORK/c1-out" && ln -s "$WORK/c1-out" "$WORK/c1-outlink" && C1CACHE="$WORK/c1-outlink"'

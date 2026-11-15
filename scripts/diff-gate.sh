@@ -1164,8 +1164,20 @@ while IFS= read -r p; do
 done <"$TMP/tok-paths"
 
 TOK_WHY=""; TOK_BIN=""
+# real_path <path>: the path with every symlink in its existing part resolved (cd -P); the part
+# that does not exist yet is kept as written, and a ".." in it fails (it could climb anywhere).
+real_path() {
+    local p="$1" rest="" d
+    while [ ! -d "$p" ]; do
+        case "${p##*/}" in ..|.) return 1 ;; esac
+        rest="/${p##*/}$rest"; p="${p%/*}"; [ -n "$p" ] || p=/
+    done
+    d="$(cd -P -- "$p" 2>/dev/null && pwd -P)" || return 1
+    printf '%s%s\n' "${d%/}" "$rest"
+}
+REALROOT="$(cd -P -- "$ROOT" && pwd -P)" || die "cannot resolve the checkout path"
 tokens_bin() { # sets TOK_BIN, or TOK_WHY and fails; runs in this shell (no subshell)
-    local ref tree cache bin stage
+    local ref tree cache bin stage realcache realbin
     if [ -n "${DIFF_GATE_TOKENS_BIN:-}" ]; then
         echo "diff-gate: token helper from DIFF_GATE_TOKENS_BIN=$DIFF_GATE_TOKENS_BIN (not built from the base)" >&2
         bin="$DIFF_GATE_TOKENS_BIN"
@@ -1175,6 +1187,10 @@ tokens_bin() { # sets TOK_BIN, or TOK_WHY and fails; runs in this shell (no subs
         cache="${DIFF_GATE_CACHE:-${RUNNER_TEMP:-${XDG_CACHE_HOME:-$HOME/.cache}}/weftos-diff-gate}"
         case "$cache" in /*) ;; *) cache="$ROOT/$cache" ;; esac
         case "$cache/" in "$ROOT"/*) TOK_WHY="cache $cache is inside the checkout (refused)"; return 1 ;; esac
+        # RV-C1: compare resolved paths, so a symlink (anywhere in the cache path) into the
+        # checkout is refused too. A change could commit a binary at the predictable path.
+        realcache="$(real_path "$cache")" || { TOK_WHY="cache $cache cannot be resolved (refused)"; return 1; }
+        case "$realcache/" in "$REALROOT"/*) TOK_WHY="cache $cache is inside the checkout (refused; it resolves to $realcache)"; return 1 ;; esac
         bin="$cache/tokens-$tree/diff-gate-tokens"
         if [ ! -x "$bin" ]; then
             command -v cargo >/dev/null 2>&1 || { TOK_WHY="cargo not found to build tools/diff-gate-tokens"; return 1; }
@@ -1189,6 +1205,11 @@ tokens_bin() { # sets TOK_BIN, or TOK_WHY and fails; runs in this shell (no subs
                 && { mv "$stage/out" "$cache/tokens-$tree" 2>/dev/null || true; }
             rm -rf "$stage"
         fi
+    fi
+    if [ -z "${DIFF_GATE_TOKENS_BIN:-}" ]; then # the cached binary: a plain file whose directory is outside the checkout
+        [ -L "$bin" ] && { TOK_WHY="helper $bin is a symlink (refused)"; return 1; }
+        realbin="$(real_path "${bin%/*}")" || { TOK_WHY="cannot resolve ${bin%/*} (refused)"; return 1; }
+        case "$realbin/" in "$REALROOT"/*) TOK_WHY="helper directory ${bin%/*} resolves into the checkout (refused)"; return 1 ;; esac
     fi
     [ -x "$bin" ] || { TOK_WHY="helper $bin is not executable"; return 1; }
     [ "$("$bin" --protocol 2>/dev/null)" = "$TOKENS_PROTOCOL" ] || { TOK_WHY="helper $bin does not speak '$TOKENS_PROTOCOL'"; return 1; }

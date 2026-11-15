@@ -178,7 +178,11 @@ commit in CI), never from the checkout:
 2. The binary is cached at `<cache>/tokens-<tree hash>/diff-gate-tokens`, where `<cache>` is
    `$DIFF_GATE_CACHE`, else `$RUNNER_TEMP/weftos-diff-gate` (CI), else
    `${XDG_CACHE_HOME:-~/.cache}/weftos-diff-gate`. A cache inside the checkout is refused: a
-   change could commit a binary at the predictable path.
+   change could commit a binary at the predictable path. The check compares resolved paths
+   (RV-C1, 2026-11-15): every symlink in the existing part of the cache path is resolved first,
+   so a cache that is, or sits under, a symlink into the checkout is refused, and so is a `..`
+   in the part that does not exist yet. The `tokens-<tree hash>` directory must also resolve
+   outside the checkout, and the cached binary must not be a symlink.
 3. On a miss, `git archive <tree>` is extracted into a fresh directory under the cache and built
    with `cargo build --release --locked` (its own `[workspace]` and `Cargo.lock`, exact version
    pins, so the root Cargo.toml and Cargo.lock cannot change it; the extract is outside the
@@ -194,6 +198,16 @@ bootstrap: the first landing is owner-approved anyway (it changes `scripts/diff-
 A change to `tools/diff-gate-tokens/` is a `ci-workflow` finding, like a change to the script.
 Never cache `<cache>` with `actions/cache`: a cache saved by one run is a binary the next run
 trusts.
+
+**Local runs trust `~/.cache`.** The gate runs whatever binary is at
+`<cache>/tokens-<tree hash>/diff-gate-tokens` once it exists. On a developer machine that is
+`~/.cache/weftos-diff-gate` (or `$XDG_CACHE_HOME`), which any process running as you can write:
+a local `cargo build` or `cargo test` of a change under review runs its build scripts and tests
+as you, and one of them could replace that binary with plain `std::fs` (no rule flags a file
+write), so the next local gate run would trust it. CI is not affected: `RUNNER_TEMP` is fresh for
+every job. A local gate result is therefore only as good as what has run on that machine since
+the helper was built. To start clean, delete the cache directory (the next run rebuilds from the
+base) or point `DIFF_GATE_CACHE` at a directory that untrusted builds cannot write.
 
 `DIFF_GATE_TOKENS_BIN` points the script at a prebuilt helper, and `DIFF_GATE_TOKENS_REF` picks
 another ref to build it from. Both are for local testing; CI sets neither, and the script says
@@ -577,7 +591,10 @@ parent, a multi-line `cfg(all(test, ...))`, a declaration inside an inline test 
 mention in a comment or string; and an untracked non-test declaration in `--worktree` mode. RV-E1 (`--worktree`): a `.rs` file
 in an ignored directory, an ignored Cargo.toml and an ignored `.cargo/config.toml` are scanned;
 controls that `target/`, `node_modules/` and `.embuild/` contents, an ignored `.gitattributes`,
-and ignored files in commit mode are not.
+and ignored files in commit mode are not. RV-C1: a cache under a parent symlinked into the
+checkout (not created yet), a `tokens-<tree>` directory symlinked into it, a cached helper that
+is a symlink and a `..` in the part of the cache path that does not exist are refused; a symlink
+to a directory outside the checkout is accepted.
 
 `DIFF_GATE_TEST_TMP` puts the fixture repos on another disk (the default is `target/`).
 `DIFF_GATE_TEST_FILTER=<ERE>` runs only the `case_run` fixtures whose name matches.

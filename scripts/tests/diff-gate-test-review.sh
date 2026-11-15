@@ -85,7 +85,7 @@ d="$WORK/rv_cache_link" && fixture_repo "$d" && mkdir -p tools/diff-gate-tokens 
 git add -A && git commit -qm base && base="$(git rev-parse HEAD)" && echo "fn z() {}" >>src/lib.rs && git add -A && git commit -qm change
 mkdir -p "$d/target/c" && ln -s "$d/target/c" "$WORK/rv-cache-link"
 out="$(DIFF_GATE_BASE="$base" DIFF_GATE_TOKENS_BIN="" DIFF_GATE_CACHE="$WORK/rv-cache-link" PATH="/usr/bin:/bin" "$GATE" 2>&1)"; rc=$?
-KNOWN_GAP=RV-C1 EXPECT="rust-tokens" GREP="inside the checkout" check_result "rv-c: a cache path that is a symlink into the checkout is refused" 1 "$rc" "$out"
+EXPECT="rust-tokens" GREP="inside the checkout" check_result "rv-c: a cache path that is a symlink into the checkout is refused" 1 "$rc" "$out"
 cd "$ROOT" || exit 2
 # The helper is built from the base tree, never from the change: a base helper that reports a
 # finding still reports it when the change rewrites the helper to report nothing. Needs cargo;
