@@ -93,6 +93,8 @@ mod tests_reconcile;
 #[cfg(test)]
 mod tests_restart;
 #[cfg(test)]
+mod tests_restart_ctl;
+#[cfg(test)]
 mod tests_revoke;
 #[cfg(test)]
 mod tests_seed;

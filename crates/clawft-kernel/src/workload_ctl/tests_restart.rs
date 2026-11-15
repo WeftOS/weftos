@@ -25,13 +25,13 @@ use crate::workload_runtime::{NativeConfig, NativeRuntime, WorkloadHost};
 
 const NODE_SEED: u8 = 31;
 
-fn ctl_key() -> SigningKey {
+pub(super) fn ctl_key() -> SigningKey {
     SigningKey::from_bytes(&[30; 32])
 }
 
 /// The node `NODE_SEED` over `root` (instance dir), `ex` (artifact store) and
 /// `journal`: what the daemon builds at every start.
-fn host(root: &Path, ex: &Arc<ArtifactExchange>, chain: &Arc<ChainManager>, journal: &Path) -> Arc<WorkloadHostService> {
+pub(super) fn host(root: &Path, ex: &Arc<ArtifactExchange>, chain: &Arc<ChainManager>, journal: &Path) -> Arc<WorkloadHostService> {
     host_with(root, ex, Some(chain), journal, &ctl_key(), None)
 }
 
@@ -80,16 +80,16 @@ fn host_with(
     Arc::new(svc)
 }
 
-struct Rig {
-    tmp: tempfile::TempDir,
-    pkg: PathBuf,
-    runs: PathBuf,
-    chain: Arc<ChainManager>,
-    ex: Arc<ArtifactExchange>,
+pub(super) struct Rig {
+    pub(super) tmp: tempfile::TempDir,
+    pub(super) pkg: PathBuf,
+    pub(super) runs: PathBuf,
+    pub(super) chain: Arc<ChainManager>,
+    pub(super) ex: Arc<ArtifactExchange>,
 }
 
 impl Rig {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let tmp = tempfile::tempdir().unwrap();
         let runs = tmp.path().join("runs");
         // Each launch appends a line, so a restart shows as a second one.
@@ -105,19 +105,19 @@ impl Rig {
         Self { tmp, pkg, runs, chain, ex }
     }
 
-    fn root(&self) -> PathBuf {
+    pub(super) fn root(&self) -> PathBuf {
         self.tmp.path().join("instances")
     }
 
-    fn journal(&self) -> PathBuf {
+    pub(super) fn journal(&self) -> PathBuf {
         self.tmp.path().join("journal.json")
     }
 
-    fn host(&self) -> Arc<WorkloadHostService> {
+    pub(super) fn host(&self) -> Arc<WorkloadHostService> {
         host(&self.root(), &self.ex, &self.chain, &self.journal())
     }
 
-    fn launches(&self) -> usize {
+    pub(super) fn launches(&self) -> usize {
         std::fs::read_to_string(&self.runs).map(|t| t.lines().count()).unwrap_or(0)
     }
 
@@ -128,7 +128,7 @@ impl Rig {
         std::fs::write(self.journal(), serde_json::to_vec_pretty(&v).unwrap()).unwrap();
     }
 
-    async fn wait_launches(&self, n: usize) {
+    pub(super) async fn wait_launches(&self, n: usize) {
         for _ in 0..1_500 {
             if self.launches() >= n {
                 return;
