@@ -236,8 +236,14 @@ impl BrowserLlmClient {
         let status = response.status();
 
         if !status.is_success() {
+            let retry_after = parse_retry_after_header(response.headers());
             let body = response.text().await.unwrap_or_default();
-            return Err(classify_error(status.as_u16(), &body, &request.model));
+            return Err(classify_error(
+                status.as_u16(),
+                &body,
+                &request.model,
+                retry_after,
+            ));
         }
 
         let chat_response: ChatResponse = response.json().await.map_err(|e| {
@@ -303,8 +309,14 @@ impl BrowserLlmClient {
         let status = response.status();
 
         if !status.is_success() {
+            let retry_after = parse_retry_after_header(response.headers());
             let body = response.text().await.unwrap_or_default();
-            return Err(classify_error(status.as_u16(), &body, &request.model));
+            return Err(classify_error(
+                status.as_u16(),
+                &body,
+                &request.model,
+                retry_after,
+            ));
         }
 
         // Read the SSE stream via bytes_stream (works on both native and WASM).
@@ -370,11 +382,34 @@ impl BrowserLlmClient {
     }
 }
 
+/// Read the server-requested wait from a rate-limit response's headers.
+///
+/// Prefers `retry-after-ms` (sent by OpenAI) and falls back to the standard
+/// `Retry-After` header in its delta-seconds form. Returns `None` when
+/// neither is present or parseable, so the caller keeps its default.
+fn parse_retry_after_header(headers: &HeaderMap) -> Option<u64> {
+    let header = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
+    if let Some(ms) = header("retry-after-ms").and_then(|v| v.trim().parse::<u64>().ok()) {
+        return Some(ms);
+    }
+    header("retry-after")
+        .and_then(llm_wasm::retry::parse_retry_after_seconds)
+        .map(|secs| u64::from(secs) * 1000)
+}
+
 /// Classify an HTTP error status code into a [`ProviderError`].
-fn classify_error(status: u16, body: &str, model: &str) -> ProviderError {
+///
+/// `retry_after_ms` is the server-requested wait for a 429, if the response
+/// carried one; otherwise 1 second is used.
+fn classify_error(
+    status: u16,
+    body: &str,
+    model: &str,
+    retry_after_ms: Option<u64>,
+) -> ProviderError {
     match status {
         429 => ProviderError::RateLimited {
-            retry_after_ms: 1000,
+            retry_after_ms: retry_after_ms.unwrap_or(1000),
         },
         401 | 403 => ProviderError::AuthFailed(body.to_string()),
         404 => ProviderError::ModelNotFound(format!("model '{model}': {body}")),
@@ -626,32 +661,80 @@ mod tests {
 
     #[test]
     fn classify_error_429() {
-        let err = classify_error(429, "rate limited", "gpt-4");
+        let err = classify_error(429, "rate limited", "gpt-4", None);
         assert!(matches!(err, ProviderError::RateLimited { .. }));
     }
 
     #[test]
+    fn classify_error_429_defaults_to_one_second() {
+        let err = classify_error(429, "rate limited", "gpt-4", None);
+        assert!(matches!(
+            err,
+            ProviderError::RateLimited {
+                retry_after_ms: 1000
+            }
+        ));
+    }
+
+    #[test]
+    fn classify_error_429_uses_retry_after() {
+        let err = classify_error(429, "rate limited", "gpt-4", Some(30_000));
+        assert!(matches!(
+            err,
+            ProviderError::RateLimited {
+                retry_after_ms: 30_000
+            }
+        ));
+    }
+
+    #[test]
+    fn parse_retry_after_header_seconds() {
+        let mut headers = HeaderMap::new();
+        headers.insert("retry-after", "20".parse().unwrap());
+        assert_eq!(parse_retry_after_header(&headers), Some(20_000));
+    }
+
+    #[test]
+    fn parse_retry_after_header_prefers_ms() {
+        let mut headers = HeaderMap::new();
+        headers.insert("retry-after", "20".parse().unwrap());
+        headers.insert("retry-after-ms", "1500".parse().unwrap());
+        assert_eq!(parse_retry_after_header(&headers), Some(1500));
+    }
+
+    #[test]
+    fn parse_retry_after_header_missing_or_date() {
+        let mut headers = HeaderMap::new();
+        assert_eq!(parse_retry_after_header(&headers), None);
+        headers.insert(
+            "retry-after",
+            "Wed, 21 Oct 2015 07:28:00 GMT".parse().unwrap(),
+        );
+        assert_eq!(parse_retry_after_header(&headers), None);
+    }
+
+    #[test]
     fn classify_error_401() {
-        let err = classify_error(401, "unauthorized", "gpt-4");
+        let err = classify_error(401, "unauthorized", "gpt-4", None);
         assert!(matches!(err, ProviderError::AuthFailed(_)));
     }
 
     #[test]
     fn classify_error_403() {
-        let err = classify_error(403, "forbidden", "gpt-4");
+        let err = classify_error(403, "forbidden", "gpt-4", None);
         assert!(matches!(err, ProviderError::AuthFailed(_)));
     }
 
     #[test]
     fn classify_error_404() {
-        let err = classify_error(404, "not found", "gpt-5-turbo");
+        let err = classify_error(404, "not found", "gpt-5-turbo", None);
         assert!(matches!(err, ProviderError::ModelNotFound(_)));
         assert!(err.to_string().contains("gpt-5-turbo"));
     }
 
     #[test]
     fn classify_error_500() {
-        let err = classify_error(500, "internal error", "gpt-4");
+        let err = classify_error(500, "internal error", "gpt-4", None);
         assert!(matches!(
             err,
             ProviderError::ServerError { status: 500, .. }
@@ -660,7 +743,7 @@ mod tests {
 
     #[test]
     fn classify_error_503() {
-        let err = classify_error(503, "service unavailable", "gpt-4");
+        let err = classify_error(503, "service unavailable", "gpt-4", None);
         assert!(matches!(
             err,
             ProviderError::ServerError { status: 503, .. }
@@ -669,7 +752,7 @@ mod tests {
 
     #[test]
     fn classify_error_other() {
-        let err = classify_error(418, "I'm a teapot", "gpt-4");
+        let err = classify_error(418, "I'm a teapot", "gpt-4", None);
         assert!(matches!(err, ProviderError::RequestFailed(_)));
         assert!(err.to_string().contains("418"));
     }
