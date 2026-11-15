@@ -4,13 +4,10 @@
 
 use super::*;
 
-fn have_python() -> bool {
-    std::process::Command::new("python3")
-        .arg("-c")
-        .arg("pass")
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+fn python() -> Option<&'static str> {
+    ["/usr/bin/python3", "/usr/local/bin/python3"]
+        .into_iter()
+        .find(|p| std::path::Path::new(p).exists())
 }
 
 fn spec_sh(script: &str, limits: ProcLimits) -> LaunchSpec {
@@ -26,10 +23,10 @@ fn spec_sh(script: &str, limits: ProcLimits) -> LaunchSpec {
     }
 }
 
-fn spec_py(code: &str, limits: ProcLimits) -> LaunchSpec {
+fn spec_py(py: &str, code: &str, limits: ProcLimits) -> LaunchSpec {
     LaunchSpec {
-        program: "/usr/bin/env".into(),
-        args: vec!["python3".into(), "-c".into(), code.into()],
+        program: py.into(),
+        args: vec!["-c".into(), code.into()],
         ..spec_sh("", limits)
     }
 }
@@ -79,10 +76,10 @@ async fn address_space_cap_is_opt_in() {
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn a_cog_that_maps_4_gib_but_touches_50_mib_runs_under_ram_mb_256() {
-    if !have_python() {
+    let Some(py) = python() else {
         eprintln!("skip: python3 not available");
         return;
-    }
+    };
     let code = "import mmap,time\n\
         m=mmap.mmap(-1,4<<30,prot=mmap.PROT_NONE)\n\
         b=bytearray(b'x'*(50<<20))\n\
@@ -90,7 +87,7 @@ async fn a_cog_that_maps_4_gib_but_touches_50_mib_runs_under_ram_mb_256() {
         print('ok',len(b))";
     let mut l = ProcLimits::for_ram_mb(256);
     l.rss_poll = Duration::from_millis(100);
-    let ev = Supervised::spawn(spec_py(code, l))
+    let ev = Supervised::spawn(spec_py(py, code, l))
         .unwrap()
         .wait_for(Duration::from_secs(20))
         .await;
@@ -102,10 +99,10 @@ async fn a_cog_that_maps_4_gib_but_touches_50_mib_runs_under_ram_mb_256() {
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn a_resident_memory_hog_is_stopped_and_reported() {
-    if !have_python() {
+    let Some(py) = python() else {
         eprintln!("skip: python3 not available");
         return;
-    }
+    };
     // Touches 16 MiB every 100 ms up to 640 MiB; ram_mb = 128 must stop it
     // well before the RLIMIT_DATA backstop (256 MiB) or the end.
     let code = "import time\n\
@@ -116,7 +113,7 @@ async fn a_resident_memory_hog_is_stopped_and_reported() {
         print('finished')";
     let mut l = ProcLimits::for_ram_mb(128);
     l.rss_poll = Duration::from_millis(50);
-    let ev = Supervised::spawn(spec_py(code, l))
+    let ev = Supervised::spawn(spec_py(py, code, l))
         .unwrap()
         .wait_for(Duration::from_secs(30))
         .await;

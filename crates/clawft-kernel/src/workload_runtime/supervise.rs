@@ -175,13 +175,6 @@ fn apply_in_child(plan: &ChildPlan) -> std::io::Result<()> {
     Ok(())
 }
 
-fn signal_pgid(pgid: libc::pid_t, sig: libc::c_int) {
-    // SAFETY: signalling the process group the supervisor created.
-    unsafe {
-        libc::kill(-pgid, sig);
-    }
-}
-
 /// Parse `VmRSS` (kB) out of a `/proc/<pid>/status` body, in bytes.
 pub(crate) fn parse_vmrss(status: &str) -> Option<u64> {
     let line = status.lines().find(|l| l.starts_with("VmRSS:"))?;
@@ -237,9 +230,9 @@ fn spawn_watchdog(
             };
             if rss > limit {
                 flag.store(true, Ordering::SeqCst);
-                signal_pgid(pgid, libc::SIGTERM);
+                signal_pgid(Some(pgid), libc::SIGTERM);
                 tokio::time::sleep(TIMEOUT_GRACE).await;
-                signal_pgid(pgid, libc::SIGKILL);
+                signal_pgid(Some(pgid), libc::SIGKILL);
                 return;
             }
         }
@@ -263,6 +256,15 @@ fn pump<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
             }
         }
     })
+}
+
+fn signal_pgid(pgid: Option<libc::pid_t>, sig: libc::c_int) {
+    if let Some(pgid) = pgid {
+        // SAFETY: signalling the process group this supervisor created.
+        unsafe {
+            libc::kill(-pgid, sig);
+        }
+    }
 }
 
 impl Supervised {
@@ -342,9 +344,7 @@ impl Supervised {
     }
 
     fn signal_group(&self, sig: libc::c_int) {
-        if let Some(pgid) = self.pgid {
-            signal_pgid(pgid, sig);
-        }
+        signal_pgid(self.pgid, sig);
     }
 
     /// Wait up to `max`; on timeout terminate, then kill after
