@@ -50,6 +50,19 @@ contract here and in [`docs/deployment/release.md`](../docs/deployment/release.m
 - **Same isolation model** as `build-kb` (own `[workspace]`, own lockfile).
 - Invoked from docs generation scripts, not the root workspace gate.
 
+### `diff-gate-tokens`
+
+- **Purpose:** The token scanner behind `scripts/diff-gate.sh`'s Rust rules
+  (proc-macro2 + syn): `use` aliases, globs, doctests, attributes, parse
+  failures. See `docs/development/diff-gate.md` ("The token helper").
+- **Built by the gate itself**, from the base ref's tip, never from the change
+  under review, into a cache outside the checkout keyed by the tree hash.
+  **Not** cached with `actions/cache` (contract item 4 does not apply: a
+  restored binary would be one the next run trusts).
+- **Changes need the owner:** anything under `tools/diff-gate-tokens/` is a
+  `ci-workflow` finding, like the gate script.
+- **Tests:** `cargo test --locked` in `tools/diff-gate-tokens/`.
+
 ## Contract for new tools under `tools/`
 
 1. Declare a **standalone** `[workspace]` in the tool's `Cargo.toml` (empty
