@@ -251,6 +251,8 @@ fn create_on_a_second_daemon_sharing_the_backend_succeeds() {
 
 #[path = "store_worktree_budget.rs"]
 mod budget;
+#[path = "store_worktree_cache_tests.rs"]
+mod cache;
 #[path = "store_worktree_tests_guard.rs"]
 mod guard;
 #[path = "store_worktree_tests_signing.rs"]

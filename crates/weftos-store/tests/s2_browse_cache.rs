@@ -85,13 +85,14 @@ fn get_reads_the_object_live_but_not_the_manifest() {
 }
 
 #[test]
-fn ttl_expiry_costs_exactly_one_head_and_restarts_the_age() {
+fn ttl_expiry_costs_one_entry_head_and_one_manifest_head_and_restarts_the_age() {
     let b = spy();
     two(&b);
     let mut c = ManifestCache::new(1_000, 8, 1 << 20);
     browse_ls_cached(&b, &mut c, 0, PR, "alpha", "").unwrap();
     let d = delta(&b, || { browse_ls_cached(&b, &mut c, 1_000, PR, "alpha", "").unwrap(); });
-    assert_eq!(d, Counts { head: 1, ..Counts::default() });
+    // WO-069 X2: the entry is re-checked too (it was not, so an entry-only change had no bound)
+    assert_eq!(d, Counts { head: 2, ..Counts::default() });
     assert_eq!(c.stats.revalidated, 1);
     // the age restarted at 1_000, so 1_999 is fresh again
     let d = delta(&b, || { browse_ls_cached(&b, &mut c, 1_999, PR, "alpha", "").unwrap(); });

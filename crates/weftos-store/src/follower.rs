@@ -21,6 +21,7 @@ pub use crate::follower_docs::{
 };
 pub use crate::follower_report::{
     Leftover, LeftoverPolicy, Overlap, OverlapKind, OverlapReport, Why, leftovers, overlaps,
+    overlaps_from,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -226,6 +227,25 @@ pub fn poll_fast_cached<B: ObjectBackend + Sync>(
     jobs: usize,
     cache: Option<&mut crate::follower_cache::ManifestCache>,
 ) -> Result<Vec<Change>> {
+    match cache {
+        Some(c) => poll_fast_observed(b, project_bucket, state, allow_all_gone, use_digest, jobs, &mut |cur| {
+            c.observe_registry(project_bucket, cur);
+        }),
+        None => poll_fast_observed(b, project_bucket, state, allow_all_gone, use_digest, jobs, &mut |_| {}),
+    }
+}
+
+/// [`poll_fast_cached`] for a cache the caller shares behind a lock: `observe` gets the registry's
+/// `slug -> entry etag` after the reads are done, so the lock is taken only for the observation.
+pub fn poll_fast_observed<B: ObjectBackend + Sync>(
+    b: &B,
+    project_bucket: &str,
+    state: &mut FollowState,
+    allow_all_gone: bool,
+    use_digest: bool,
+    jobs: usize,
+    observe: &mut dyn FnMut(&BTreeMap<String, String>),
+) -> Result<Vec<Change>> {
     let mut digest = use_digest.then(|| crate::share_fetch::read_digest(b, project_bucket)).transpose()?.flatten();
     // The digest is a hint. A follower that knows a worktree the digest does not list does not
     // report it gone on the hint's word (a lost or half-written digest would): it falls back to the
@@ -250,9 +270,7 @@ pub fn poll_fast_cached<B: ObjectBackend + Sync>(
     for slug in &missing {
         current.remove(slug);
     }
-    if let Some(c) = cache {
-        c.observe_registry(project_bucket, &current);
-    }
+    observe(&current);
     let fresh = fresh.into_iter().map(|e| { let t = current.get(&e.slug).cloned(); (e, t) }).collect();
     poll_core(state, fresh, bad, carried, current.len(), allow_all_gone)
 }

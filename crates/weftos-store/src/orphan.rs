@@ -248,8 +248,15 @@ fn list_or_empty<B: ObjectBackend>(b: &B, bucket: &str) -> Result<Vec<crate::ove
 /// Every orphan in the project's registry with its age and size. Reads only.
 pub fn plan_orphans<B: ObjectBackend>(b: &B, project_bucket: &str, now_ms: u64, policy: &OrphanPolicy) -> Result<Vec<OrphanCandidate>, S2Error> {
     policy.validate()?;
+    plan_orphans_from(b, list_shared_lenient(b, project_bucket)?.0, now_ms, policy)
+}
+
+/// [`plan_orphans`] on registry entries the caller already read (a display plan, WO-069 X2). An act
+/// (a confirmed gc) must plan from a fresh read, never from cached entries.
+pub fn plan_orphans_from<B: ObjectBackend>(b: &B, entries: Vec<RegistryEntry>, now_ms: u64, policy: &OrphanPolicy) -> Result<Vec<OrphanCandidate>, S2Error> {
+    policy.validate()?;
     let mut out = Vec::new();
-    for e in list_shared_lenient(b, project_bucket)?.0 {
+    for e in entries {
         let (State::Orphan, Some(o)) = (e.state, e.orphan.as_ref()) else { continue };
         let orphan_ms = now_ms.saturating_sub(o.orphaned_at_ms);
         let objs = list_or_empty(b, &e.bucket)?;

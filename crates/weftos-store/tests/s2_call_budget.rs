@@ -7,6 +7,8 @@ use s2_budget_common::*;
 use weftos_store::follower::*;
 use weftos_store::follower_browse::{browse_get, browse_ls, browse_registry};
 use weftos_store::follower_cache::*;
+use weftos_store::follower_cache_shared::{CacheCfg, SharedCache};
+use weftos_store::follower_registry_cache::{RegistryCache, list_shared_cached};
 use weftos_store::share_fetch::*;
 
 fn rig() -> Spy {
@@ -102,7 +104,9 @@ fn browse_cached_cold_warm_revalidate_and_registry() {
     let (_, c) = delta(&b, || browse_ls_cached(&b, &mut cache, 500, PR, &slug(0), "docs").unwrap());
     assert_eq!(c, [0, 0, 0, 0, 0, 0, 0], "warm inside the TTL");
     let (_, c) = delta(&b, || browse_ls_cached(&b, &mut cache, 1_000, PR, &slug(0), "").unwrap());
-    assert_eq!(c, [0, 1, 0, 0, 0, 0, 0], "TTL lapsed: one manifest HEAD");
+    // WO-069 X2: was [0, 1] (manifest HEAD only, so a claim or merge, which change the entry and not
+    // the manifest, was never seen); the entry HEAD is the one revalidation call added
+    assert_eq!(c, [0, 2, 0, 0, 0, 0, 0], "TTL lapsed: entry HEAD + manifest HEAD");
     let (f, c) = delta(&b, || browse_get_cached(&b, &mut cache, 1_001, PR, &slug(0), "docs/d0.md", 1 << 20).unwrap());
     assert!(f.data.is_some());
     assert_eq!(c, [1, 1, 0, 0, 0, 0, 0], "warm manifest; object HEAD + GET only");
@@ -121,4 +125,45 @@ fn overlaps_one_pair() {
     assert!(!r.overlaps.is_empty());
     // per side: meta GET (verify_entry); then per side manifest HEAD + GET
     assert_eq!(c, [2 + 2, 2, 0, 0, 0, 0, 0], "2 meta GET + 2 manifest reads");
+}
+
+/// WO-069 X2: the verbs as the daemon runs them through its shared cache. Cold, warm (inside the
+/// TTL) and TTL lapsed. Uncached budgets for comparison are the tests above.
+#[test]
+fn shared_cache_registry_search_browse_overlaps() {
+    let b = rig();
+    let c = SharedCache::new(CacheCfg { ttl_ms: 1_000, max_age_ms: 60_000, max_bytes: 1 << 20, max_entries: 8 });
+    // registry (leftovers, browse list, orphan display plan): uncached LIST + W GET every call
+    let (_, k) = delta(&b, || c.registry(&b, PR).unwrap());
+    assert_eq!(k, [W, 0, 1, 0, 0, 0, 0], "cold: LIST + W entry GET (as uncached)");
+    let (_, k) = delta(&b, || c.registry(&b, PR).unwrap());
+    assert_eq!(k, [0, 0, 1, 0, 0, 0, 0], "warm: the LIST alone, every etag unchanged");
+    let mut rc = RegistryCache::default();
+    let (_, k) = delta(&b, || list_shared_cached(&b, &mut rc, PR).unwrap());
+    assert_eq!(k, [W, 0, 1, 0, 0, 0, 0], "library form, cold");
+    // search: uncached [3W, W, 1] every call
+    let (r, k) = delta(&b, || c.search(&b, PR, "doc", 0).unwrap());
+    assert_eq!(r.0.hits.len() as u64, W * D);
+    assert_eq!(k, [2 * W, W, 1, 0, 0, 0, 0], "registry warm: LIST; per worktree meta GET + manifest HEAD + GET");
+    let (_, k) = delta(&b, || c.search(&b, PR, "doc", 500).unwrap());
+    assert_eq!(k, [0, 0, 1, 0, 0, 0, 0], "warm: the LIST alone");
+    let (_, k) = delta(&b, || c.search(&b, PR, "doc", 1_000).unwrap());
+    assert_eq!(k, [0, W, 1, 0, 0, 0, 0], "TTL lapsed: LIST + W manifest HEAD (entry etags come from the LIST)");
+    // browse ls / get by slug (no listing): uncached [3, 1] and [4, 2]
+    let c = SharedCache::new(CacheCfg { ttl_ms: 1_000, max_age_ms: 60_000, max_bytes: 1 << 20, max_entries: 8 });
+    let (_, k) = delta(&b, || c.browse_ls(&b, PR, &slug(0), "", 0).unwrap());
+    assert_eq!(k, [3, 2, 0, 0, 0, 0, 0], "cold: entry HEAD + GET, meta GET, manifest HEAD + GET (+1 HEAD on uncached)");
+    let (_, k) = delta(&b, || c.browse_ls(&b, PR, &slug(0), "docs", 999).unwrap());
+    assert_eq!(k, [0, 0, 0, 0, 0, 0, 0], "warm");
+    let (_, k) = delta(&b, || c.browse_get(&b, PR, &slug(0), "docs/d0.md", 1 << 20, 999).unwrap());
+    assert_eq!(k, [1, 1, 0, 0, 0, 0, 0], "warm get: object HEAD + GET");
+    let (_, k) = delta(&b, || c.browse_ls(&b, PR, &slug(0), "", 1_000).unwrap());
+    assert_eq!(k, [0, 2, 0, 0, 0, 0, 0], "TTL lapsed: entry HEAD + manifest HEAD");
+    // overlaps: uncached [8, 4] in the daemon (summarize x2 + library [4, 2])
+    let (_, k) = delta(&b, || c.overlaps(&b, PR, &slug(1), &slug(2), 1_000).unwrap());
+    assert_eq!(k, [6, 4, 0, 0, 0, 0, 0], "cold: two cold loads");
+    let (_, k) = delta(&b, || c.overlaps(&b, PR, &slug(1), &slug(2), 1_500).unwrap());
+    assert_eq!(k, [0, 0, 0, 0, 0, 0, 0], "warm: no call");
+    let (_, k) = delta(&b, || c.overlaps(&b, PR, &slug(1), &slug(2), 2_000).unwrap());
+    assert_eq!(k, [0, 4, 0, 0, 0, 0, 0], "TTL lapsed: entry HEAD + manifest HEAD per side");
 }
