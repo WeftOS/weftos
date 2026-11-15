@@ -22,7 +22,7 @@ mod handoff;
 mod publish;
 
 pub use handoff::{
-    claim_merge, claim_merge_with, mark_handoff, mark_landed, mark_merged, mark_merged_at, read_handoff,
+    claim_merge, claim_merge_with, fence_claim, mark_handoff, mark_landed, mark_merged, mark_merged_at, read_handoff,
 };
 use handoff::{guard_live_claim, write_handoff_if};
 pub(crate) use publish::{is_doc_path, looks_like_private_key, parse_manifest, read_regular};
@@ -165,6 +165,11 @@ pub struct Handoff {
     /// claim was taken over (fencing), whatever the clocks say.
     #[serde(default)]
     pub epoch: u64,
+    /// The published head (`manifest.head_commit`) when the current claim was taken. A claim is a
+    /// claim on that head: a merge is refused once the published head differs (WO-069 6a-1).
+    /// `None` outside a claim, and on a record written before the field existed (not fenced on head).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claimed_head: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy)]

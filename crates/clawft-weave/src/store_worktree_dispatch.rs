@@ -191,15 +191,12 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
                 return Ok(json!({"dry_run": true, "preview": pv}));
             }
             // A caller that names the epoch it claimed under is refused when the claim was taken over
-            // since (fencing); without one, a land that went through git is the merge whoever held
-            // the claim (a claim that is someone else's or has expired must not stop the assets
-            // reaching the project). A worktree that was never published has no handoff and gets none.
-            if let Some(ep) = p.epoch
-                && let Some(h) = weftos_store::share::read_handoff(&b, &n.wt).map_err(e)?
-                && h.state == weftos_store::share::State::Claimed
-                && h.epoch != ep
-            {
-                return Err(format!("claim epoch {ep} is stale (now {}); the claim was taken over", h.epoch));
+            // since, or the published head is no longer the one it claimed (fencing, `fence_claim`);
+            // without one, a land that went through git is the merge whoever held the claim (a claim
+            // that is someone else's or has expired must not stop the assets reaching the project).
+            // A worktree that was never published has no handoff and gets none.
+            if let Some(ep) = p.epoch {
+                weftos_store::share::fence_claim(&b, &n.wt, ep).map_err(e)?;
             }
             weftos_store::share::mark_landed(&b, &n.wt, &who(&p), "landed", now_ms).map_err(e)?;
             svc.ensure_archive().map_err(|e| e.to_string())?;

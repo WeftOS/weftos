@@ -14,7 +14,6 @@ use weftos_store::share_fetch::*;
 use weftos_store::testing::MemBackend;
 
 #[test]
-#[ignore = "FINDING 6a-1: a claim stamped a day ahead lets the writer republish, and the claimer still marks the old head merged"]
 fn a_merge_is_refused_when_the_head_changed_under_the_claim() {
     let be = MemBackend::new();
     let env = Env::new(&be, None);
@@ -27,7 +26,6 @@ fn a_merge_is_refused_when_the_head_changed_under_the_claim() {
 }
 
 #[test]
-#[ignore = "FINDING 6a-2: an orphan whose entry is stamped far ahead is reported as FutureTimestamp, not Orphan"]
 fn an_orphan_stamped_ahead_is_still_reported_as_an_orphan() {
     let be = MemBackend::new();
     let env = Env::new(&be, None);
@@ -46,7 +44,6 @@ fn pinned_entry(env: &Env<'_, MemBackend>, state: State) -> RegistryEntry {
 }
 
 #[test]
-#[ignore = "FINDING 6a-3: a u64::MAX stamp pins the signature generation, so an older signed entry replays without being refused"]
 fn an_older_signed_entry_is_refused_even_after_a_far_future_stamp() {
     let be = MemBackend::new();
     let env = Env::new(&be, None);
@@ -259,7 +256,6 @@ fn a_worktree_that_changed_nothing_has_no_overlaps() {
 }
 
 #[test]
-#[ignore = "FINDING 6g: the last saver of a shared FollowState file can lower the stored signature generation"]
 fn saving_an_older_view_does_not_lower_a_remembered_generation() {
     let d = tempfile::tempdir().unwrap();
     let path = d.path().join("follow.json");

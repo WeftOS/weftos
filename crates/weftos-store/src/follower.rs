@@ -63,9 +63,20 @@ impl FollowState {
     }
 
     /// Write to `path` through a temp file in the same directory, then rename, so a crash or a
-    /// concurrent poll never leaves a truncated file. Two pollers sharing one file can still
-    /// overwrite each other's last write (the loser's next run re-reports, it never skips); give each
-    /// its own state file.
+    /// concurrent poll never leaves a truncated file.
+    ///
+    /// Invariant (WO-069 6g): a save never lowers a signature generation already in the file. The
+    /// generations are what refuse a replayed older signed entry, so a run with an older view that
+    /// saves last must not take that protection away. The save re-reads the file and writes the
+    /// per-slug maximum of its `generations` and ours, under an exclusive `flock` on the state
+    /// directory (std `File::lock`, no lock file is created) so the re-read and the rename are one
+    /// step for every saver. Where the directory cannot be locked (Windows, a filesystem without
+    /// `flock`) the merge still runs, unlocked, which leaves only a narrow interleaving. A file that
+    /// cannot be parsed contributes nothing and is replaced (that is how an operator recovers it).
+    ///
+    /// Only the generations are merged. `seen` is last writer wins: two pollers sharing one file can
+    /// overwrite each other's view, and the loser's next run re-reports, it never skips; give each
+    /// its own state file. The in-memory `self` is not changed.
     pub fn save(&self, path: &Path) -> Result<()> {
         let io =
             |e: std::io::Error| S2Error::Invalid(format!("follow state {}: {e}", path.display()));
@@ -74,6 +85,36 @@ impl FollowState {
             .filter(|d| !d.as_os_str().is_empty())
             .unwrap_or(Path::new("."));
         std::fs::create_dir_all(dir).map_err(io)?;
+        let _lock = lock_dir(dir);
+        let merged = self.with_generations_on_disk(path);
+        merged.as_ref().unwrap_or(self).write_replacing(path, dir, &io)
+    }
+
+    /// `self` with every generation in the file at `path` that is higher than ours, or `None` when
+    /// the file adds nothing (missing, unreadable, or no higher generation).
+    fn with_generations_on_disk(&self, path: &Path) -> Option<Self> {
+        #[derive(Deserialize)]
+        struct Generations {
+            #[serde(default)]
+            generations: BTreeMap<String, u64>,
+        }
+        // Only the generations are read, so a file whose `seen` this version cannot parse (a newer
+        // state, say) still contributes them.
+        let disk: Generations = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+        let higher: Vec<_> = disk
+            .generations
+            .into_iter()
+            .filter(|(slug, g)| self.generations.get(slug).is_none_or(|ours| ours < g))
+            .collect();
+        if higher.is_empty() {
+            return None;
+        }
+        let mut out = self.clone();
+        out.generations.extend(higher);
+        Some(out)
+    }
+
+    fn write_replacing(&self, path: &Path, dir: &Path, io: &dyn Fn(std::io::Error) -> S2Error) -> Result<()> {
         let name = path
             .file_name()
             .and_then(|n| n.to_str())
@@ -91,6 +132,15 @@ impl FollowState {
             io(e)
         })
     }
+}
+
+/// An exclusive advisory lock on `dir`, held until the returned handle drops. `flock` on a directory
+/// handle works on Linux and macOS and creates no file. `None` when the directory cannot be opened
+/// or locked; the caller then proceeds without it.
+fn lock_dir(dir: &Path) -> Option<std::fs::File> {
+    let f = std::fs::File::open(dir).ok()?;
+    f.lock().ok()?;
+    Some(f)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

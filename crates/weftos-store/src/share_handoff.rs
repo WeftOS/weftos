@@ -77,6 +77,7 @@ pub fn mark_handoff<B: ObjectBackend>(
             merger: None,
             updated_ms: now_ms,
             epoch: seen.as_ref().map_or(0, |(h, _)| h.epoch),
+            claimed_head: None,
         };
         if write_handoff_if(b, bucket, &next, seen.as_ref().map(|(_, e)| e.as_str()))? {
             return Ok(());
@@ -109,6 +110,9 @@ pub fn claim_merge_with<B: ObjectBackend>(
     mut expired: impl FnMut(&Handoff) -> bool,
 ) -> Result<Handoff> {
     for _ in 0..HANDOFF_RETRIES {
+        // The head is read before the record: a publish landing in between makes the recorded head
+        // older than the published one, so the merge is refused (safe), never the reverse.
+        let head = published_head(b, bucket)?;
         let (cur, etag) = read_handoff_versioned(b, bucket)?
             .ok_or_else(|| S2Error::Invalid("worktree has no handoff record".into()))?;
         match cur.state {
@@ -130,6 +134,7 @@ pub fn claim_merge_with<B: ObjectBackend>(
             merger: Some(me.clone()),
             updated_ms: now_ms,
             epoch: cur.epoch + 1,
+            claimed_head: head,
             ..cur
         };
         // Conditional on the version we decided on: of two claimers reading the same record, exactly
@@ -139,6 +144,52 @@ pub fn claim_merge_with<B: ObjectBackend>(
         }
     }
     Err(contended())
+}
+
+/// The head the worktree has published now (`None`: nothing published).
+fn published_head<B: ObjectBackend>(b: &B, bucket: &str) -> Result<Option<String>> {
+    Ok(read_manifest(b, bucket)?.map(|m| m.head_commit))
+}
+
+/// The fencing checks on a `Claimed` record, shared by [`mark_merged_at`] and [`fence_claim`].
+///
+/// Invariant (WO-069 6a-1): a claimer can record a merge only of the head it claimed. Epochs fence a
+/// claim against another claim; the head fences it against a republish. A republish under a claim
+/// that is not live (older than the TTL, or stamped more than [`CLAIM_SKEW_MS`] ahead, ADR-126 §4)
+/// is allowed, so a bad clock cannot block the writer forever, but it moves the published head away
+/// from the claimed one and with that voids the claim for merging: the claimer must claim again
+/// (and so see, and fetch, the new head). A record from before `claimed_head` existed is not fenced
+/// on head.
+fn fence_claim_on<B: ObjectBackend>(b: &B, bucket: &str, cur: &Handoff, epoch: Option<u64>) -> Result<()> {
+    if let Some(e) = epoch
+        && e != cur.epoch
+    {
+        return Err(S2Error::Claimed(format!(
+            "claim epoch {e} is stale (now {}); the claim was taken over",
+            cur.epoch
+        )));
+    }
+    if let Some(claimed) = cur.claimed_head.as_deref() {
+        let now = published_head(b, bucket)?;
+        if now.as_deref() != Some(claimed) {
+            return Err(S2Error::Claimed(format!(
+                "the published head moved from {claimed} to {} since the claim (epoch {}); claim again to merge it",
+                now.as_deref().unwrap_or("nothing"),
+                cur.epoch
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// For a caller about to land under a claim (the daemon's `promote --epoch`): refuse when the claim
+/// was taken over since `epoch` or the published head is no longer the one claimed. Passes when the
+/// worktree is not `Claimed` (nothing to fence) or has no handoff record.
+pub fn fence_claim<B: ObjectBackend>(b: &B, bucket: &str, epoch: u64) -> Result<()> {
+    match read_handoff(b, bucket)? {
+        Some(h) if h.state == State::Claimed => fence_claim_on(b, bucket, &h, Some(epoch)),
+        _ => Ok(()),
+    }
 }
 
 /// The merger finished: git has landed the branch. Promotion and bucket cleanup follow (§3, §4).
@@ -177,15 +228,8 @@ pub fn mark_merged_at<B: ObjectBackend>(
                 cur.merger.map(|m| format!("{}@{}", m.agent, m.host)).unwrap_or_default(),
             ));
         }
-        if let Some(e) = epoch
-            && e != cur.epoch
-        {
-            return Err(S2Error::Claimed(format!(
-                "claim epoch {e} is stale (now {}); the claim was taken over",
-                cur.epoch
-            )));
-        }
-        // Conditional: the epoch and merger checks above hold for exactly the version written over.
+        fence_claim_on(b, bucket, &cur, epoch)?;
+        // Conditional: the epoch, head and merger checks above hold for exactly the version written over.
         let next = Handoff {
             state: State::Merged,
             note: note.into(),

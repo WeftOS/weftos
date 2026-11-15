@@ -57,7 +57,8 @@ fn d6a_clock_ahead<B: S2>(env: &Env<'_, B>) {
     mark_merged_at(be, &e.bucket, &actor("slow"), Some(2), "done", now).unwrap();
     line("6a", "claim stamped +1 d is taken over at once; the displaced claimer is fenced", t, "epoch 1 -> 2");
 
-    // the same fast claim does not hold off the writer: a publish at the normal clock goes through (claim_is_live is false for it)
+    // the same fast claim does not hold off the writer: a publish at the normal clock goes through (claim_is_live is false for it,
+    // ADR-126 section 4 skew rule); the republish moves the head, so the fast claimer's merge of h1 is refused (fixed, WO-069 W1 6a-1)
     let t = Instant::now();
     let w = up(env, "under", &[("docs/u.md", "# U\n")], &Pub { now, ..Pub::default() });
     mark_handoff(be, &w.bucket, &actor("writer"), "go", now).unwrap();
@@ -69,9 +70,12 @@ fn d6a_clock_ahead<B: S2>(env: &Env<'_, B>) {
     if republished.is_ok() && merged.is_ok() && head_now == "h2" {
         finding("6a", "a claim stamped a day ahead is not live for anyone, so the writer republished (h1 -> h2) under it and the claimer (never displaced, epoch 1) still recorded the merge as done; the record says merged while the tree it merged (h1) is no longer the published head (h2). A claim is only fenced by another claim, not by a head change. Proposed: mark_merged_at takes the head it merged and refuses if the manifest head differs");
     }
-    line("6a", "writer publishes under a +1 d claim", t, format!("publish ok={} merged ok={} head {head_now}", republished.is_ok(), merged.is_ok()));
+    assert!(republished.is_ok(), "a claim stamped +1 d is not live, so the writer may republish");
+    assert!(merged.is_err(), "the claim was on h1; the published head is {head_now}, so the merge is refused");
+    assert_eq!(read_handoff(be, &w.bucket).unwrap().unwrap().state, State::Claimed, "nothing was recorded as merged");
+    line("6a", "writer publishes under a +1 d claim: allowed; the claimer's merge of the old head is refused", t, format!("publish ok={} merged ok={} head {head_now}", republished.is_ok(), merged.is_ok()));
 
-    // an orphan stamped far ahead: the orphan state is hidden behind FutureTimestamp
+    // an orphan stamped far ahead: still reported as an orphan, aged from the daemon's orphaned_at_ms (fixed, WO-069 W1 6a-2)
     let t = Instant::now();
     let o = up(env, "orph", &[("docs/o.md", "# O\n")], &Pub { now: now + 3 * DAY, ..Pub::default() });
     let marked = mark_orphan(be, pr, "orph", now + 25 * 3600 * 1000, now, &OrphanPolicy::default()).unwrap();
@@ -80,8 +84,11 @@ fn d6a_clock_ahead<B: S2>(env: &Env<'_, B>) {
     if !l.iter().any(|x| x.why == Why::Orphan) {
         finding("6a", "an orphan whose entry carries a writer stamp more than the skew allowance ahead is reported as FutureTimestamp, never as Orphan: leftovers checks the future stamp before the state, so the orphan and its age are hidden until the stamp passes. gc's plan (orphaned_at_ms, the daemon's own clock) is unaffected. Proposed: test State::Orphan before the future-stamp check");
     }
+    assert_eq!((l.len(), l[0].why, l[0].idle_ms), (1, Why::Orphan, 0), "an orphan stamped +3 d is an orphan, aged from orphaned_at_ms (just marked)");
+    let later = leftovers(std::slice::from_ref(&marked), now + 26 * 3600 * 1000, &pol);
+    assert_eq!((later[0].why, later[0].idle_ms), (Why::Orphan, 3600 * 1000), "its age runs on the daemon's orphaned_at_ms, not the +3 d stamp");
     let _ = o;
-    line("6a", "orphan marked while the entry is stamped +3 d", t, format!("{:?}", l.iter().map(|x| x.why).collect::<Vec<_>>()));
+    line("6a", "orphan marked while the entry is stamped +3 d: reported as Orphan, aged from orphaned_at_ms", t, format!("{:?}", l.iter().map(|x| x.why).collect::<Vec<_>>()));
 
     signature_generations(env);
 }
@@ -108,7 +115,8 @@ fn signature_generations<B: S2>(env: &Env<'_, B>) {
     let mut st = FollowState::default();
     assert_eq!(kinds(&poll_verified(be, &pr, &mut st, &Toy, true, false).unwrap()), ["new:g"]);
 
-    // a far-future stamp pins the generation at u64::MAX: after that a later signed entry carries the same generation
+    // a far-future stamp used to pin the generation at u64::MAX; it is now clamped to GENERATION_STAMP_CEILING and every
+    // later write still increases it (fixed, WO-069 W1 6a-3), so the older signed entry replayed below is refused
     let mut e = mk("pin", u64::MAX, State::Open);
     write_registry_entry_signed(be, &pr, &e, &Toy).unwrap();
     let (old_e, old_s) = (S2::get(be, &pr, "worktrees/pin.json").unwrap().unwrap(), S2::get(be, &pr, "worktrees.sig/pin.json").unwrap().unwrap());
@@ -124,7 +132,9 @@ fn signature_generations<B: S2>(env: &Env<'_, B>) {
     if !kinds(&ch).iter().any(|k| k == "bad:pin") {
         finding("6a", "a worktree whose manifest or handoff is stamped u64::MAX makes every signed registry write for it carry generation u64::MAX (prev + 1 saturates), so a genuinely signed OLDER entry replays without being refused as a rollback: the generation check is `<`, and equal generations pass. Needs write access to that worktree's bucket (the stamp comes from its manifest). Proposed: clamp the stamp that feeds the generation to now + skew, or refuse an entry whose updated_ms is absurdly far ahead");
     }
-    line("6a", "signature generation with a +1 d stamp and with u64::MAX", t, format!("gen {g1} -> {g2}; pinned {g_old}"));
+    assert_eq!(g_new, GENERATION_STAMP_CEILING + 1, "the u64::MAX stamp is clamped and the next write still adds one");
+    assert_eq!(kinds(&ch), ["bad:pin"], "the replayed older signed entry is refused as a rollback");
+    line("6a", "signature generation with a +1 d stamp and with u64::MAX (clamped; a replay is refused)", t, format!("gen {g1} -> {g2}; u64::MAX stamp -> {} then {g_new}", GENERATION_STAMP_CEILING));
     for k in ["worktrees/g.json", "worktrees/pin.json", "worktrees.sig/g.json", "worktrees.sig/pin.json"] {
         let _ = S2::delete(be, &pr, k);
     }

@@ -303,7 +303,8 @@ fn d6g_corrupt_state_files<B: S2>(env: &Env<'_, B>) {
 drill!(corrupt_state_files, d6g_corrupt_state_files);
 
 /// Two runs loaded the same file; the slower one saves last with an older view. Besides the re-report the docs promise, the loser's
-/// state carries an older signature generation, so a rollback that a run holding the newer state would refuse goes unnoticed.
+/// state carries an older signature generation, so a rollback that a run holding the newer state would refuse used to go unnoticed.
+/// Fixed (WO-069 W1 6g): `save` merges the generations already on disk, so the file keeps the higher one and the replay is refused.
 fn d6g_interleaved_runs_and_generations<B: S2>(env: &Env<'_, B>) {
     let (be, pr) = (env.be, env.pr.as_str());
     let t = Instant::now();
@@ -331,7 +332,8 @@ fn d6g_interleaved_runs_and_generations<B: S2>(env: &Env<'_, B>) {
     x_state.save(&path).unwrap();
     y_state.save(&path).unwrap(); // the loser saves last
     let g_after = FollowState::load(&path).unwrap().generations["wt"];
-    assert!(g_after < g_new, "last writer wins: the file now holds the older generation ({g_after} < {g_new})");
+    // fixed (WO-069 W1 6g): save merges the generations on disk, so the loser's save keeps the newer one
+    assert_eq!(g_after, g_new, "the older view saved last, but the file keeps the higher generation ({g_after} vs {g_new})");
     // a rollback: the genuinely signed v1 is put back
     S2::put(be, pr, "worktrees/wt.json", &v1).unwrap();
     S2::put(be, pr, "worktrees.sig/wt.json", &s1).unwrap();
@@ -341,10 +343,11 @@ fn d6g_interleaved_runs_and_generations<B: S2>(env: &Env<'_, B>) {
     let silent = kinds(&poll_verified(be, pr, &mut from_file, &Toy, true, false).unwrap());
     println!("DETAIL|6g|rollback replay: a run holding the newer generation reports {refused:?}; a run loading the clobbered file reports {silent:?}");
     assert_eq!(refused, ["bad:wt"]);
+    assert_eq!(silent, ["bad:wt"], "a run loading the file after the older view saved last refuses the replay too");
     if silent.is_empty() {
         finding("6g", "FollowState::save is last-writer-wins, and the state carries the signature generations that refuse a rollback. Two overlapping `follow` runs on one file can leave the file with the OLDER generation and the OLDER seen state; a genuinely signed old entry replayed afterwards is then accepted silently (the next run reports nothing at all, and believes the worktree is still in the old state), where a run that kept the newer generation reports it as unreadable. The documented 'loser re-reports, never skips' holds for changes but not for rollback protection. Proposed: make save merge, taking the per-slug maximum of `generations` with what is on disk, or give each run its own file");
     }
-    line("6g", "two runs, the older view saves last: rollback protection regresses", t, format!("generation {g_new} -> {g_after}; replay: newer-state run {refused:?}, clobbered-file run {silent:?}"));
+    line("6g", "two runs, the older view saves last: the file keeps the higher generation, the replay is refused", t, format!("generation {g_new} -> {g_after}; replay: newer-state run {refused:?}, clobbered-file run {silent:?}"));
 }
 drill!(interleaved_generations, d6g_interleaved_runs_and_generations);
 

@@ -318,6 +318,7 @@ pub fn publish_tree<B: ObjectBackend>(
             merger: None,
             updated_ms: now_ms,
             epoch: 0,
+            claimed_head: None,
         },
         None,
     )?;
