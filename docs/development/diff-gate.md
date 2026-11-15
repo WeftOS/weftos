@@ -29,13 +29,20 @@ The gate step in `diff-gate.yml` picks one trusted commit already on a protected
 `scripts/diff-gate.sh` from it into `$RUNNER_TEMP`, and passes the same commit as the base. The
 gate reads the base-side approvals rows and the owner ledger from git at that base, and nothing
 from the checkout once a base is set, so all three come from protected history. Protected
-branches are the repository default branch, `master`, `main` and `target-*`. "Newest protected
-tip" means the version-sorted newest `origin/target-*`, else the default branch, `master`,
-`main`, skipping the branch being pushed.
+branches are the repository default branch, `master` and `target-*`. "Newest protected tip"
+means the version-sorted newest `origin/target-*`, else the default branch, then `master`,
+skipping the branch being pushed.
+
+`main` is not protected by name. It does not exist in this repository, and a branch name that
+anyone with push rights can create first must not become a trust root: before 2026-11-15 a
+self-made `main` was judged once against another protected tip and from then on by its own
+gate, and a PR into it trusted its tip. It counts as protected only if it becomes the
+repository default branch.
 
 | Event | Trusted commit (gate copy and base) |
 |---|---|
-| `pull_request` | the PR base SHA |
+| `pull_request` into a protected branch | the PR base SHA |
+| `pull_request` into any other branch (or with no base branch name) | the newest protected tip. The base branch never passed review, so its gate, rows and ledger are not trusted; `wasm-browser.yml` runs on PRs into any branch |
 | push to a protected branch | its previous tip (`before`) |
 | push to a protected branch, `before` not an ancestor (force-push) | `before`; the gate diffs from the merge-base, which is protected history, so every rewritten commit is judged |
 | force-push whose `before` is not in the clone | none: fail closed (exit 2). Land it by PR or owner review |
@@ -128,6 +135,50 @@ checkout that differs from `--head`, or an uncommitted one in commit mode, appro
 needs `rule`, `path` (glob), `pattern` (substring or regex of the added line, or `"*"` for the
 whole file), `reason` and `approved_by`.
 
+Unknown keys in an `[[approval]]` (a misspelt `blob`, say) are a setup error (exit 2), so a
+typo can never silently widen a row.
+
+### Scoping a row to one file version (`blob`)
+
+A row may carry `blob = "<git blob id>"`, 40 hex digits (64 in a SHA-256 repository). It then
+approves a finding only when the file's post-change content has exactly that id; any later
+edit of the file is a new blob and needs a new row. Compute the id from the content you have
+reviewed:
+
+```
+git rev-parse <commit>:<path>          # a committed version
+git hash-object --no-filters <path>    # the working-tree bytes
+```
+
+For a symlink the id is that of its target string (`printf %s <target> | git hash-object
+--stdin`); for a deletion it is 40 zeros. In `--worktree` mode the gate hashes the bytes on
+disk, without clean filters or eol conversion, since that is what a local build reads; CI
+compares committed blob ids.
+
+`blob` is what makes path-rule rows narrow. `ci-workflow`, `build-script` (a new `build.rs`),
+`toolchain-config`, `special-file` and `gitattributes-change` findings carry fixed text such as
+`file changed`, so a row for one of them without `blob` approves every future change to the
+matching path, whatever its `pattern`: the `ci-workflow pr-gates.yml "*"` row approved
+appending `run: curl ... | sh` to that workflow. Such rows, and `"*"` rows of any rule without
+`blob`, still work for backward compatibility, but every run prints a
+`WARNING: unscoped approval row` line for each (stderr and the CI step summary), and a finding
+they approve is reported with `[UNSCOPED row: no blob]`. `blob` works on any rule, so it can also
+pin a content row to one reviewed version of its file.
+
+`blob` is part of the row's ledger hash (see [Owner ledger](#owner-ledger)), so a ledgered row
+cannot be re-pointed at another file version.
+
+### Cargo.toml findings
+
+For `new-dep`, `build-script` and `proc-macro` findings on a Cargo.toml line, and Cargo target
+`include` findings, `pattern` is matched against the entry line itself with any trailing TOML
+comment removed (a `#` inside a quoted string stays), not against the report wording
+(`new entry in [dependencies]: ...`). So `^` anchors at the start of the entry, and a comment
+cannot carry an approved name: before 2026-11-15 the `rvf-(crypto|wire)` row approved
+`evil = { git = "..." } # rvf-crypto =`. A commented-out key (`# build = "b.rs"`) is not a
+finding. A pattern still sees the whole entry, including its quoted values; anchor it on the
+name (`^rvf-crypto[[:space:]]*=`) so it cannot match inside a `git` URL.
+
 Approvals for `unsafe`, `net`, `process`, `ffi` and `include` are per occurrence. Each
 occurrence on the line (a keyword, or one path expression such as
 `std::net::TcpListener::bind`) is approved only by an approval match that overlaps it, so a row
@@ -158,6 +209,9 @@ parsed values, so quoting style and key order do not change it:
 ```
 rule=<rule>\npath=<path>\npattern=<pattern>\nreason=<reason>\napproved_by=<approved_by>\n
 ```
+
+followed by `blob=<blob>\n` when the row has a `blob`. Rows without one hash exactly as before
+blobs existed, so existing ledger entries stay valid.
 
 `scripts/diff-gate.sh --ledger-hash [FILE]` prints the hash, rule, path and pattern of every row
 in FILE (default: the approvals file).
@@ -210,6 +264,10 @@ ledger entries as well as the rows; a row whose hash stays on the ledger can be 
   (PRs required, `diff-gate` a required check, CODEOWNERS review for `.github/`) covers it.
 - The trusted commit is only as good as branch protection on the default branch and `target-*`,
   including who may create a `target-*` branch: the newest `origin/target-*` is a trust root.
+- `blob` is read only by gates from 2026-11-15 on. An older gate copy ignores the key and treats
+  the row as unscoped. CI runs another branch's gate only when the trusted base has none (see
+  [CI: which gate runs](#ci-which-gate-runs)), so this matters only until every protected
+  branch carries the new gate.
 - `--worktree` mode runs locally against the local git config. `--text --no-textconv
   --no-ext-diff` neutralise attribute and diff-driver tricks, but a local clean `filter=` driver
   still rewrites working-tree content before the diff. That only fools the local run; CI diffs
