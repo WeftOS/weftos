@@ -9,7 +9,10 @@
 #                                               files the publish skipped are reported on stderr (never silent):
 #                                               secret-denylist paths are counted as expected; size/budget skips (over
 #                                               the per-file cap or the file-count / total-size budget) warn that
-#                                               followers are MISSING content. The publish is kept either way
+#                                               followers are MISSING content. The publish is kept either way.
+#                                               The daemon writes manifest schema 2 (content-named objects, dropped
+#                                               ones swept after 24 h); its WEFTOS_WORKTREE_MANIFEST_SCHEMA=1 (rollback)
+#                                               and WEFTOS_WORKTREE_SWEEP=off (kill switch) are read there, not here
 #   worktree-store.sh land [land.sh args]       land.sh, then promote the store (only if it landed)
 #   worktree-store.sh land-preview              what landing would do to the project, no writes (WTS_ON_CONFLICT)
 #   worktree-store.sh fetch <slug> <dest> [--bundle-ref REF]

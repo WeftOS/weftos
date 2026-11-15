@@ -174,11 +174,12 @@ Only the daemon creates, grants access to, or deletes a store.
   shared snapshot of the tree.** (Amended 2026-11-07, owner, card f40828fb. This replaces the
   earlier rule "the store holds the gitignored layer only", which is why docs and planning
   written in a never-merged worktree were invisible to everyone else.)
-  - **What is shared:** the files git can see (tracked, plus untracked and not ignored), under
-    the reserved `.wt/tree/` prefix of the worktree bucket; a `git bundle` of the unmerged
-    commits (`.wt/git/branch.bundle`); a manifest (`.wt/tree.manifest.json`) listing each file's
-    SHA-256, which paths are uncommitted, and an index of docs and planning with titles; and a
-    handoff record (`.wt/handoff.json`).
+  - **What is shared:** the files git can see (tracked, plus untracked and not ignored) and a
+    `git bundle` of the unmerged commits, as content-named objects in the reserved `.wt/obj/` pool
+    of the worktree bucket (schema 2, WO-069 lane D3, below; schema 1 kept them at `.wt/tree/<path>`
+    and `.wt/git/branch.bundle`); a manifest (`.wt/tree.manifest.json`) listing each file's
+    SHA-256 and object, which paths are uncommitted, and an index of docs and planning with titles;
+    and a handoff record (`.wt/handoff.json`).
   - **What is not:** `target/`, `node_modules/` and other ignored files (the overlay layer above
     is how those travel), symlinks (or files under a symlinked directory), files over 16 MiB, and
     anything that looks like a secret: names such as `.env*` (not `.env.example`), `*.env`,
@@ -302,16 +303,83 @@ write. Now:
 - A failed manifest PUT withdraws the announcement (puts back the one it replaced). If that fails too,
   merges wait until the stamp expires and the publish error says so; the writer is never blocked.
 - Liveness of a stamp is the claim rule (30 minutes, 10 minutes of skew), so a bad clock holds nothing
-  longer than that. Residual: a publisher stalled longer than that between its announcement and its
-  PUT, or with a clock that far behind, can still land a manifest after a merge; closing that needs a
-  conditional manifest write (owner question). Unfenced land (`promote` without `--epoch`) is
-  unchanged: git is the truth.
+  longer than that. The residual this left (design note B1: a publisher stalled longer than that between
+  its announcement and its PUT, or with a clock that far behind, landing a manifest after a merge) is
+  closed by lane D3 (below): the manifest write is conditional on the version the publish read, and a
+  post-check re-reads the record right after it; merged or archived meanwhile, the publish puts the
+  previous manifest back (conditionally) and fails without sweeping; otherwise it marks its announcement
+  `done` with a conditional write, so a merger that read the record earlier fails its own write and
+  re-reads. Unfenced land (`promote` without `--epoch`) is unchanged: git is the truth.
 - Cost: a republish makes two calls more (the record HEAD for its etag, the announcement); a first
   publish none; claim and merge none; `promote --epoch` one fewer. The fields are additive (serde
   defaults); a daemon from before them drops them when it rewrites the record, so the guarantee holds
   when every daemon writing a worktree bucket runs this code. Design and proof sketch:
   `research/weftos-agent-notes/reports/wo069-fence-atomicity-design-20261115.md`; tests
   `s2_y_fence_atomic`, `s2_y_publish_intent`.
+
+#### Content-addressed objects and the grace sweep (WO-069 lane D3, 2026-11-15)
+
+Owner decision 2026-11-15 ("take the recommendations" of
+`research/weftos-agent-notes/reports/wo069-content-addressed-keys-proposal-20261115.md`). Closes
+finding 3a at every cut point and the follower-across-a-completed-publish window (drills W1, W2).
+
+- **Objects.** Each distinct content (files and the bundle) is one immutable object,
+  `.wt/obj/sha256/<first 2 hex>/<sha256>.g<generation>`. Nothing a manifest names is ever
+  overwritten. SHA-256, with the algorithm segment in the key. The generation is a deviation from the
+  proposal's plain sha key: a publish only ever PUTs a key of a generation newer than every manifest
+  it can see, so a PUT can never re-create a key another publish's sweep is about to delete (with plain
+  keys, a publish built on manifest N re-uses or re-PUTs an object N's own sweep deletes next; the
+  property test finds that at once when the rule is reverted). Re-use without a PUT: an object the
+  base manifest names, one it is retiring that is younger than half its grace, or a stray of a newer
+  generation than the base (what a cut or losing publish of the same base left), so a rerun uploads
+  nothing twice. Renames and duplicate files cost no upload.
+- **Manifest schema 2** (same key). `entries` (renamed from `files` so an rc.1 reader fails closed with
+  `missing field files`), `objects: "sha256-fan2-gen"` (a reader refuses any other layout), `generation`,
+  each entry's object generation, `bundle_sha256` + `bundle_gen`, `retiring`, `v1_retired_ms`,
+  `changes_recorded` (finding 6f). Readers read schemas 1 and 2 and refuse 3 and later with an upgrade
+  message; the tree digest a claim fences on is the same for one tree under either schema.
+- **Publish.** Upload what is not in the pool; build the manifest with its `retiring` list (every object
+  the base named that the new one drops, `since_ms` = now; carried entries keep their stamp; strays
+  are recorded on first sight, because the S2 listing carries no usable modification time, it is 0 on
+  every S2 backend); announce (lane Y); write the manifest with `put_cas` on the version read at the
+  start. A lost race is refused, not retried: nothing is written or swept, the announcement is
+  withdrawn, and the rerun builds on the new manifest and re-uses the uploads (key choices, generation
+  and retiring list all depend on the base). Then the post-check (B1, above), then the sweep.
+- **Sweep.** An object is deleted only when the manifest just written does not name it and its
+  `retiring` record is at least the grace old (`now - since_ms`, a stamp from the future counting as
+  now). Grace 24 h; bundles: the two newest retiring keep 24 h, older ones go after 1 h. A publish
+  whose retiring list (not counting what it deletes) would exceed twice the file ceiling fails loudly
+  and writes nothing. The graces and the clock are parameters (`PublishOptions`, `now_ms`); the
+  daemon's `WEFTOS_WORKTREE_SWEEP=off` is the kill switch: retire in the manifest, delete nothing.
+- **Readers** resolve a path to its object through the manifest (`TreeManifest::object_key`,
+  `bundle_object`): browse, fetch, sync-docs, search, overlaps, summarize and the caches. A reader
+  holding a manifest replaced less than the grace ago reads it clean. The browse cache inside its TTL
+  after a republish now serves the previous version's bytes, consistent with its cached listing (owner
+  decision: at most one TTL old, never wrong bytes); nothing used for fencing reads through a cache.
+- **Migration, no flag day** (whether a real schema-1 bucket exists outside throwaway stores is
+  unknown, so both are handled). The first schema-2 publish of a schema-1 bucket uploads into the pool
+  (a bundle it has no file for is copied server-side), stamps `v1_retired_ms`, and the `.wt/tree/`
+  objects and the old bundle key are swept a grace later; a follower holding the schema-1 manifest
+  reads clean meanwhile. Rollback lever: `WEFTOS_WORKTREE_MANIFEST_SCHEMA=1` makes this build write
+  schema 1 again (path-named objects, removed at once as before; the rc.1 shape, with the extra fields an
+  rc.1 reader ignores), conditionally and post-checked, and still sweeps the pool. An rc.1 binary meets
+  a schema-2 manifest and fails closed: reads error, a publish refuses.
+- **Archive.** Orphan retirement and promotion copy every object of the bucket, so an archive holds the
+  manifest, every object it names and the retiring ones still inside the grace, and resolves under its
+  prefix with the same `object_key`.
+- **Residuals.** Publisher clocks more than half a grace apart (half an hour for bundles), or a publish
+  stalled that long between taking `now` and reading the manifest; a manifest deleted by hand (re-share)
+  while a sweep of the old tree is still running; old binaries writing the bucket (B3: their manifest
+  PUT is unconditional). Each would surface as a loud `missing`, healed by the next publish (an object
+  the manifest names that the listing lacks is uploaded again, to a fresh key).
+- **Cost.** A no-change republish is 10 store calls in the library (was 7): the manifest PUT is a
+  `put_cas` (same count) and the post-check adds HEAD + GET + `put_cas` of the record; 15 through the
+  daemon (was 12). No object PUT, no DELETE. The one listing per publish is unchanged.
+- Code: `share_schema.rs`, `share_gc.rs`, `share_write.rs`, `share_intent.rs`; gate test
+  `s2_d3_gc_prop` (random publish sequences with cuts at every call, a second publisher run inside one
+  at a random call or at its first delete, skewed and backward-stepping clocks, quiet periods past the
+  grace; every delete call is checked against the current and every recently replaced manifest), and
+  `s2_d3_publish`, `share::schema::tests`.
 
 ### 4a. The L1 follower view: seeing unmerged worktrees before integration
 
@@ -353,9 +421,14 @@ L1 as the tier for "unmerged layers that other nodes should see before integrati
     shared tree, from the manifest, folders first, sizes, SHA-256, doc titles) and `browse_get` (one file,
     capped at `min(max_bytes, 4 MiB)`; over the cap it returns `withheld` with size and checksum, not bytes).
     The slug is resolved through the registry and the bucket's `.wt/meta.json` is cross-checked first; only
-    `.wt/tree/<path>` for a path the manifest lists is ever read, under the same path refusals as `fetch`.
+    the object the manifest names for a path it lists is ever read (schema 1 `.wt/tree/<path>`, schema 2 its
+    `.wt/obj/` pool object), under the same path refusals as `fetch`.
     `weaver store worktree browse` and `worktree-store.sh browse` call them; WO-067's `store.browse.*` RPC
     gates them with `store-browse.json` (`worktrees/` in the project store, `.wt/tree/` per worktree store).
+    Since lane D3 `.wt/tree/` there is a logical name checked before `browse_ls` / `browse_get`, not a key
+    prefix; no rule may name `.wt/obj/` (a listing of it is hashes and sizes, past the manifest's
+    refusals), and the generic `store.browse.ls` must refuse `.wt/` on a worktree store (to be applied
+    where that verb lives, `w2/wo067-daemon`; it is not on this branch).
   - **Manifest cache** (WO-069 lane F; on the local integration branch `w2/wo069-worktree-mirror`, not on `target-0.8.5`, not pushed; answers Q14):
     `follower_cache::ManifestCache` (default TTL 5 s, 64 slots, 32 MiB of manifest JSON, caller supplies `now_ms`)
     holds per project and slug the registry entry and its etag, the manifest etag and the parsed manifest.
@@ -530,13 +603,16 @@ addendum). Branch `w2/wo069-worktree-mirror`, local.
   two machines with two keys, not two labels on one daemon. No code changes with this decision. A
   caller identity the daemon can verify, which several principals sharing one daemon would need,
   is separate work (board card 6f0bc9c8) and is not part of the gate.
-- **Interrupted publish (finding 3a, board card 6b58589c).** `publish_tree` overwrites a changed
-  object in place before it writes the new manifest. If the publish stops after that overwrite and
-  before the manifest write, the previous manifest is still served byte for byte, but reading that
-  changed file through it fails with `checksum mismatch` (never wrong bytes), and `fetch_tree`
-  aborts at the first such file, until the writer reruns the publish. In the drill, one file of 20
-  was affected at two of four cut points. The card records content-addressed object keys as the
-  recommended fix; no code is written until the owner answers. Open owner question.
+- **Interrupted publish (finding 3a, board card 6b58589c). Decided 2026-11-15 (owner), done in lane D3.**
+  Was: `publish_tree` overwrote a changed object in place before it wrote the new manifest, so a cut in
+  between left the previous manifest naming overwritten bytes (`checksum mismatch`, one file of 20 at
+  two of four cut points), and a follower holding the previous manifest through a completed publish hit
+  the same mismatches and silently missing files. Now objects are content-addressed and immutable, the
+  manifest write is conditional, and dropped objects are swept only a grace period later (section 4,
+  "Content-addressed objects and the grace sweep"). Drill 3a reads clean at all four cut points
+  (the sweep cut is now in the publish a grace later, the first that deletes); W1a/W1b serve the old
+  bundle; W2a/W2b/W2c read every file of the previous manifest clean; the writer-kill drill leaves no
+  follower refused.
 
 **Running the drills.** `scripts/store/wo069-drills.sh` runs against a throwaway RustFS it starts on
 127.0.0.1 (`WEFTOS_STORE_TEST_RUSTFS_BIN=<rustfs binary>`; a weaver built with
@@ -968,6 +1044,11 @@ tolerated (`trim_matches('"')` in the fs and memory backends, quoted on the wire
   preview, quota, gc and switch replayed on top, stricter check kept) and merged onto 15dcf72c3 as 7ba34b071, which is on
   `origin/target-0.8.5` (e58899bb0). The union mount stays in the code and out of the done-when, pending the owner
   (below).
+
+- **WO-069 lane D3 (2026-11-15, branch `w2/wo069-d3-content-addressed`, card 6b58589c):** manifest
+  schema 2 and content-addressed objects with a grace sweep (section 4), the conditional manifest write
+  and post-check (closes B1), `changes_recorded` (finding 6f), the daemon switches
+  `WEFTOS_WORKTREE_MANIFEST_SCHEMA` and `WEFTOS_WORKTREE_SWEEP`. Not pushed.
 
 - **WO-069 additions (2026-11-15):** lanes A (sweep trigger), B (browse), E (orphan marking and gc), F
   (manifest cache), the file splits (`follower*`, `share_*`, `store_worktree_*`), the drill harness and
