@@ -268,4 +268,10 @@ if [ "$REAL_TOKENS" = 1 ]; then
         'printf "use smol::process::*;\nfn g() {}\n" >src/a.rs' 'printf "use smol::process::*;\nfn g() {}\nfn f() { Command::new(\"sh\"); }\n" >src/a.rs'
     EXPECT="net" case_run "r3-f(real): extern crate std as core alias to net" 1 : \
         'printf "extern crate std as k;\nfn f() { let _ = k::net::TcpStream::connect(\"x:1\"); }\n" >src/k.rs'
+    # Limit: deleting a local item that shadowed an imported Command makes an unchanged
+    # Command::new line spawn. Over-approximation already counted it on the base (where it was
+    # a process finding), so the key counts do not change. Pinned at exit 0.
+    case_run "r3-f(real): limit, deleting a local shadow of an imported Command" 0 \
+        'printf "use std::process::Command;\nfn f() {\n    struct Command;\n    impl Command { fn new(_: &str) -> Self { Command } }\n    let _ = Command::new(\"sh\");\n}\n" >src/s.rs' \
+        'printf "use std::process::Command;\nfn f() {\n    let _ = Command::new(\"sh\");\n}\n" >src/s.rs'
 fi
