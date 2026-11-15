@@ -47,6 +47,17 @@ fn default_limits_keep_address_space_off() {
     assert_eq!(l.mem_bytes, 256 << 20);
 }
 
+/// Pins the experiment-chosen backstop (reports/rlimit-data-experiment-20261115.md).
+#[test]
+fn data_backstop_is_twice_ram_plus_fixed_headroom() {
+    assert_eq!(DATA_BACKSTOP_HEADROOM_MB, 1280);
+    for (ram_mb, want_mb) in [(64u32, 1408u64), (256, 1792), (1024, 3328)] {
+        assert_eq!(ProcLimits::for_ram_mb(ram_mb).data_limit_bytes(), want_mb << 20);
+    }
+    // No overflow on absurd inputs.
+    assert_eq!(ProcLimits::for_ram_mb(u32::MAX).data_limit_bytes(), (u64::from(u32::MAX) << 21) + (1280 << 20));
+}
+
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn rlimit_data_backstop_is_set_and_address_space_stays_unlimited() {
@@ -57,8 +68,8 @@ async fn rlimit_data_backstop_is_set_and_address_space_stays_unlimited() {
     .unwrap()
     .wait_for(Duration::from_secs(10))
     .await;
-    // ulimit reports KiB: 2 x 256 MiB.
-    assert!(ev.stdout.contains("data=524288 vmem=unlimited"), "{ev:?}");
+    // ulimit reports KiB: 2 x 256 MiB + 1280 MiB headroom = 1792 MiB.
+    assert!(ev.stdout.contains("data=1835008 vmem=unlimited"), "{ev:?}");
 }
 
 #[cfg(target_os = "linux")]
@@ -108,7 +119,7 @@ async fn a_resident_memory_hog_is_stopped_and_reported() {
         return;
     };
     // Touches 16 MiB every 100 ms up to 640 MiB; ram_mb = 128 must stop it
-    // well before the RLIMIT_DATA backstop (256 MiB) or the end.
+    // well before the RLIMIT_DATA backstop (1536 MiB) or the end.
     let code = "import time\n\
         keep=[]\n\
         for i in range(40):\n\

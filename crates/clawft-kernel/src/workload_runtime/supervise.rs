@@ -20,13 +20,23 @@ pub const TIMEOUT_GRACE: Duration = Duration::from_secs(2);
 /// How often the RSS watchdog samples the process group.
 pub const RSS_POLL: Duration = Duration::from_millis(500);
 
+/// Fixed headroom added to the `RLIMIT_DATA` backstop, in MiB. Allocators and
+/// runtimes map read-write address space they do not touch (mimalloc about
+/// 1 GiB, V8 about 0.6 GiB, jemalloc with many threads about 0.5 GiB), a cost
+/// that does not scale with `ram_mb`, so a pure multiplier false-kills small
+/// cogs. Measured in reports/rlimit-data-experiment-20261115.md: the worst
+/// legitimate overhead above 2x `ram_mb` was 933 MiB; 1280 MiB leaves 37%
+/// margin and still bounds a runaway to about one watchdog poll of growth.
+pub const DATA_BACKSTOP_HEADROOM_MB: u64 = 1280;
+
 /// Resource limits: rlimits applied in the child plus a resident-memory
 /// watchdog in the supervisor (ADR-100 memory amendment, card 7306a144).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProcLimits {
     /// Resident-memory cap in bytes for the whole process group. The
     /// watchdog stops the group above it (Linux; elsewhere not enforced).
-    /// `RLIMIT_DATA` is set to twice this as a kernel backstop on Linux.
+    /// `RLIMIT_DATA` is set to twice this plus [`DATA_BACKSTOP_HEADROOM_MB`]
+    /// as a loose kernel backstop on Linux (see [`ProcLimits::data_limit_bytes`]).
     /// Caveat: `RLIMIT_DATA` counts private writable mappings, so a runtime
     /// that maps read-write arenas it never touches can hit it before the
     /// watchdog does; `PROT_NONE` reservations (Go, most allocators) do not
@@ -47,6 +57,15 @@ pub struct ProcLimits {
 }
 
 impl ProcLimits {
+    /// The `RLIMIT_DATA` value for these limits: `2 * mem_bytes` plus the fixed
+    /// headroom. The RSS watchdog is the real enforcement; this only bounds a
+    /// hog that outruns one poll interval.
+    pub fn data_limit_bytes(&self) -> u64 {
+        self.mem_bytes
+            .saturating_mul(2)
+            .saturating_add(DATA_BACKSTOP_HEADROOM_MB << 20)
+    }
+
     /// Limits for a cog with `ram_mb` memory.
     pub fn for_ram_mb(ram_mb: u32) -> Self {
         Self {
@@ -141,10 +160,7 @@ fn set_limit(resource: libc::c_int, value: u64) -> std::io::Result<()> {
 fn apply_in_child(plan: &ChildPlan) -> std::io::Result<()> {
     let limits = plan.limits;
     if cfg!(target_os = "linux") {
-        set_limit(
-            libc::RLIMIT_DATA as libc::c_int,
-            limits.mem_bytes.saturating_mul(2),
-        )?;
+        set_limit(libc::RLIMIT_DATA as libc::c_int, limits.data_limit_bytes())?;
     }
     if let Some(bytes) = limits.address_space_bytes {
         let r = set_limit(libc::RLIMIT_AS as libc::c_int, bytes);

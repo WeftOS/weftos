@@ -151,9 +151,9 @@ async fn console_run_gets_the_host_contract_a_clean_env_rlimits_and_a_private_da
     if cfg!(target_os = "linux") {
         // [resources].ram_mb = 64 is enforced as resident memory: no
         // RLIMIT_AS (address space stays unlimited), RLIMIT_DATA at twice
-        // ram_mb as a backstop, in KiB.
+        // ram_mb plus 1280 MiB headroom as a backstop, in KiB.
         assert_eq!(l["vmem"], "unlimited");
-        assert_eq!(l["data"], "131072");
+        assert_eq!(l["data"], "1441792");
     }
     assert_eq!(l["args"], "--once --threshold 1.5");
     assert!(dir.join("data/wrote").exists());
