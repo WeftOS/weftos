@@ -25,6 +25,7 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
         "create" => {
             let slug = need(&p.slug, "slug")?;
             let n = names(mesh, &project, slug)?;
+            let _inv = wtcache::on_exit(svc, &n.reg, slug);
             // The project store may not exist yet on a fresh node; create it, never fail on "exists".
             // "Exists" is fine even when this daemon's own state does not know the store: another
             // daemon on the same backend made it (the project store is shared; its record and
@@ -67,6 +68,7 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
         "publish" => {
             let slug = need(&p.slug, "slug")?;
             let n = names(mesh, &project, slug)?;
+            let _inv = wtcache::on_exit(svc, &n.reg, slug);
             live_worktree(svc, &b, &n, &project, slug)?;
             let quota = match p.quota_bytes {
                 Some(0) => None,
@@ -155,6 +157,7 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
         "claim" => {
             let slug = need(&p.slug, "slug")?;
             let n = names(mesh, &project, slug)?;
+            let _inv = wtcache::on_exit(svc, &n.reg, slug);
             live_worktree(svc, &b, &n, &project, slug)?;
             // Expiry is judged on how long this daemon has watched the claim sit unchanged, on its
             // own monotonic clock; the stored stamp (some caller's wall clock) decides nothing.
@@ -169,6 +172,7 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
         "promote" => {
             let slug = need(&p.slug, "slug")?;
             let n = names(mesh, &project, slug)?;
+            let _inv = wtcache::on_exit(svc, &n.reg, slug);
             live_worktree(svc, &b, &n, &project, slug)?;
             let on_conflict = match p.on_conflict.as_deref() {
                 None | Some("fail") => OnConflict::Fail,
@@ -221,6 +225,7 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
         "orphan" => {
             let slug = need(&p.slug, "slug")?;
             let n = names(mesh, &project, slug)?;
+            let _inv = wtcache::on_exit(svc, &n.reg, slug);
             orphan::mark(svc, &b, &n, slug, p.since.ok_or("missing --since (ms since the epoch)")?, now_ms, sign)
         }
         "usage" => {
@@ -239,7 +244,11 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
         }
         "gc" => {
             use weftos_store::retention::{DAY_MS, DEFAULT_LANDED_KEEP_DAYS, expired_archive_keys, landed_before};
-            let orph = orphan::gc(svc, &b, mesh, &project, &names(mesh, &project, "x")?.reg, now_ms, p.confirmed, registry_store)?;
+            let reg = names(mesh, &project, "x")?.reg;
+            let _inv = p.confirmed.then(|| wtcache::on_exit_project(svc, &reg));
+            // a dry run is a display plan and may reuse cached registry entries; a confirmed gc reads the store
+            let plan_cache = wtcache::cache(svc).filter(|_| !p.confirmed && sign.trusted.is_none());
+            let orph = orphan::gc(svc, &b, mesh, &project, &reg, now_ms, p.confirmed, registry_store, plan_cache)?;
             let keep = p.keep_days.unwrap_or(DEFAULT_LANDED_KEEP_DAYS);
             let cutoff = now_ms.saturating_sub(keep.saturating_mul(DAY_MS));
             let mut retire = Vec::new();
@@ -284,7 +293,12 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
             let ch = match &sign.trusted {
                 // With a trusted-key file every entry is read and verified; the digest shortcut would skip that.
                 Some(t) => poll_verified_settled(&b, &n.reg, &mut st, &Trusted(t), sign.require, p.confirmed, sign.follow_retry_ms),
-                None => follower::poll_fast(&b, &n.reg, &mut st, p.confirmed, !p.full, share_fetch::FETCH_JOBS),
+                // unsigned: the poll also tells the cache which entry etags it saw (moved slots drop)
+                None => {
+                    let c = wtcache::cache(svc);
+                    let mut observe = |cur: &std::collections::BTreeMap<String, String>| c.iter().for_each(|c| c.observe(&n.reg, cur));
+                    follower::poll_fast_observed(&b, &n.reg, &mut st, p.confirmed, !p.full, share_fetch::FETCH_JOBS, &mut observe)
+                }
             }
             .map_err(e)?;
             st.save(&sp).map_err(e)?;
@@ -294,8 +308,14 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
             let n = names(mesh, &project, "x")?;
             // One corrupt or unknown-schema registry entry must not blind the search (it does not
             // blind `follow` or `leftovers`): search the readable ones and name the others.
-            let (entries, bad_entries) = trusted_entries(&b, &n.reg, sign).map_err(e)?;
-            let r = follower::search_docs(&b, &entries, need(&p.query, "query")?);
+            // Unsigned, cache on: the same search over reused registry entries and cached manifests.
+            let (r, bad_entries) = match wtcache::cache(svc).filter(|_| sign.trusted.is_none()) {
+                Some(c) => c.search(&b, &n.reg, need(&p.query, "query")?, wtcache::now(svc)).map_err(e)?,
+                None => {
+                    let (entries, bad_entries) = trusted_entries(&b, &n.reg, sign).map_err(e)?;
+                    (follower::search_docs(&b, &entries, need(&p.query, "query")?), bad_entries)
+                }
+            };
             Ok(json!({
                 "hits": r.hits.iter().map(|h| json!({"slug": h.slug, "path": h.path, "title": h.title, "state": h.state})).collect::<Vec<_>>(),
                 "unreadable": r.unreadable,
@@ -305,7 +325,10 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
         }
         "leftovers" => {
             let n = names(mesh, &project, "x")?;
-            let entries = trusted_entries(&b, &n.reg, sign).map_err(e)?.0;
+            let entries = match wtcache::cache(svc).filter(|_| sign.trusted.is_none()) {
+                Some(c) => c.registry(&b, &n.reg).map_err(e)?.into_entries(),
+                None => trusted_entries(&b, &n.reg, sign).map_err(e)?.0,
+            };
             let l = follower::leftovers(&entries, now_ms, &LeftoverPolicy::default());
             Ok(json!({"leftovers": l.iter().map(|x| json!({"why": why_str(x.why), "idle_ms": x.idle_ms, "worktree": entry_json(&x.entry)})).collect::<Vec<_>>(),
                       "trust": trust_json(&b, &n.reg, sign)}))
@@ -322,8 +345,14 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
                 Ok(())
             };
             let to_json = |r: Result<Value, serde_json::Error>| r.map_err(|x| x.to_string());
+            // Signed registries bypass the cache: every browse re-verifies as before.
+            let cached = wtcache::cache(svc).filter(|_| sign.trusted.is_none());
             let Some(slug) = p.slug.as_deref().filter(|s| !s.is_empty()) else {
-                let mut r = follower::browse_registry(&b, &n.reg).map_err(e)?;
+                let mut r = match &cached {
+                    Some(c) => c.browse_registry(&b, &n.reg),
+                    None => follower::browse_registry(&b, &n.reg),
+                }
+                .map_err(e)?;
                 if sign.trusted.is_some() {
                     let ok: Vec<String> = trusted_entries(&b, &n.reg, sign).map_err(e)?.0.into_iter().map(|x| x.slug).collect();
                     r.worktrees.retain(|w| ok.contains(&w.slug));
@@ -332,10 +361,21 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
             };
             trusted(slug)?;
             match p.path.as_deref().filter(|f| !f.is_empty() && !f.ends_with('/')) {
-                None => to_json(serde_json::to_value(follower::browse_ls(&b, &n.reg, slug, p.path.as_deref().unwrap_or("")).map_err(e)?)),
+                None => {
+                    let dir = p.path.as_deref().unwrap_or("");
+                    let r = match &cached {
+                        Some(c) => c.browse_ls(&b, &n.reg, slug, dir, wtcache::now(svc)),
+                        None => follower::browse_ls(&b, &n.reg, slug, dir),
+                    };
+                    to_json(serde_json::to_value(r.map_err(e)?))
+                }
                 Some(f) => {
                     let cap = p.max_bytes.unwrap_or(weftos_store::follower_browse::MAX_GET_BYTES);
-                    let mut r = follower::browse_get(&b, &n.reg, slug, f, cap).map_err(e)?;
+                    let mut r = match &cached {
+                        Some(c) => c.browse_get(&b, &n.reg, slug, f, cap, wtcache::now(svc)),
+                        None => follower::browse_get(&b, &n.reg, slug, f, cap),
+                    }
+                    .map_err(e)?;
                     let text = r.data.take().and_then(|d| String::from_utf8(d).ok());
                     let mut v = to_json(serde_json::to_value(&r))?;
                     v["text"] = text.map_or(Value::Null, Value::String);
@@ -353,9 +393,17 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
         "overlaps" => {
             let (sa, sb) = (need(&p.a, "a")?, need(&p.b, "b")?);
             let (na, nb) = (names(mesh, &project, sa)?, names(mesh, &project, sb)?);
-            let ea = summarize(&b, sa, &na.wt).map_err(e)?.ok_or_else(|| format!("{sa} has nothing published"))?;
-            let eb = summarize(&b, sb, &nb.wt).map_err(e)?.ok_or_else(|| format!("{sb} has nothing published"))?;
-            let r = follower::overlaps(&b, &ea, &eb).map_err(e)?;
+            // Cache on, unsigned: both manifests from the cache. Any failure there takes the uncached
+            // path, so errors (and their wording) are exactly as before.
+            let cached = wtcache::cache(svc).filter(|_| sign.trusted.is_none());
+            let r = match cached.and_then(|c| c.overlaps(&b, &na.reg, sa, sb, wtcache::now(svc)).ok()) {
+                Some(r) => r,
+                None => {
+                    let ea = summarize(&b, sa, &na.wt).map_err(e)?.ok_or_else(|| format!("{sa} has nothing published"))?;
+                    let eb = summarize(&b, sb, &nb.wt).map_err(e)?.ok_or_else(|| format!("{sb} has nothing published"))?;
+                    follower::overlaps(&b, &ea, &eb).map_err(e)?
+                }
+            };
             Ok(json!({
                 "same_base": r.same_base,
                 // On different bases a path can differ only because the base moved: discount it.

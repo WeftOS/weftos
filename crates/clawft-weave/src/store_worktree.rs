@@ -31,6 +31,8 @@ use weftos_store::{StoreName, StoreService};
 
 use crate::store_worktree_paths::{Guard, Use};
 
+#[path = "store_worktree_cache.rs"]
+mod wtcache;
 #[path = "store_worktree_dispatch.rs"]
 mod dispatch;
 #[path = "store_worktree_orphan.rs"]
@@ -354,6 +356,7 @@ impl EntryVerifier for Trusted<'_> {
 /// Any other kind of store is a no-op. Removing an entry that is already gone is fine.
 pub fn forget(svc: &StoreService, name: &StoreName) -> Result<(), String> {
     let StoreName::Worktree { mesh, project, slug } = name else { return Ok(()) };
+    let _inv = wtcache::on_exit_slug(svc, slug);
     let pr = StoreName::project(mesh, &project.to_string()).map_err(|e| e.to_string())?.bucket();
     remove_registry_entry_signed(&Op(svc.operator_objects()), &pr, slug).map_err(|e| e.to_string())
 }

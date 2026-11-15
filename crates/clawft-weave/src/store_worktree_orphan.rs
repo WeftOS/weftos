@@ -4,7 +4,7 @@
 //! as `now_ms`, entries are signed when a key is set, a retired store's bucket is dropped through
 //! the store service, and marking and retiring are recorded in the activity log and the chain.
 
-use weftos_store::orphan::{OrphanError, OrphanPolicy, Refusal, mark_orphan_with, plan_orphans, retire_orphan};
+use weftos_store::orphan::{OrphanError, OrphanPolicy, Refusal, mark_orphan_with, plan_orphans, plan_orphans_from, retire_orphan};
 use weftos_store::overlay::S2Error;
 
 use super::*;
@@ -48,9 +48,24 @@ pub(super) fn mark(svc: &StoreService, b: &Op, n: &Names, slug: &str, since_ms: 
 /// The orphan part of `gc`: always a plan (every orphan with its age, size and whether it is due);
 /// with `confirmed`, each due one is archived and deleted. Returns the keys to merge into gc's answer.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn gc(svc: &StoreService, b: &Op, mesh: &str, project: &str, reg: &str, now_ms: u64, confirmed: bool, registry_store: bool) -> Result<Value, String> {
+/// `plan_cache`: a display plan (a dry run) may list the registry through the daemon's cache.
+pub(super) fn gc(
+    svc: &StoreService,
+    b: &Op,
+    mesh: &str,
+    project: &str,
+    reg: &str,
+    now_ms: u64,
+    confirmed: bool,
+    registry_store: bool,
+    plan_cache: Option<std::sync::Arc<weftos_store::follower_cache_shared::SharedCache>>,
+) -> Result<Value, String> {
     let pol = policy()?;
-    let plan = plan_orphans(b, reg, now_ms, &pol).map_err(|x| x.to_string())?;
+    let plan = match plan_cache.filter(|_| !confirmed) {
+        Some(c) => c.registry(b, reg).and_then(|l| plan_orphans_from(b, l.into_entries(), now_ms, &pol)),
+        None => plan_orphans(b, reg, now_ms, &pol),
+    }
+    .map_err(|x| x.to_string())?;
     let (mut retired, mut failed) = (Vec::new(), Vec::new());
     if confirmed {
         for c in plan.iter().filter(|c| c.due) {
