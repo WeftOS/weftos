@@ -126,7 +126,7 @@ fn passcode_change_rewraps_only_one_wrapper_and_bumps_sequence() {
     let before = nv.vault.keybag().clone();
     let new = nv
         .vault
-        .change_passcode_unchecked(&id, "FAKE-new-passcode-0002", T)
+        .change_passcode_unchecked(&id, "FAKE-new-passcode-0002", T, &mut Pins::default())
         .unwrap()
         .to_vec();
     let after = nv.vault.keybag();
@@ -155,7 +155,7 @@ fn rolled_back_keybag_is_refused_and_forks_are_detected() {
     let id = pass_id(&nv.vault);
     let v2 = nv
         .vault
-        .change_passcode_unchecked(&id, "FAKE-two", T)
+        .change_passcode_unchecked(&id, "FAKE-two", T, &mut Pins::default())
         .unwrap()
         .to_vec();
 
@@ -171,7 +171,7 @@ fn rolled_back_keybag_is_refused_and_forks_are_detected() {
     // A second, different keybag at sequence 2 (built from the same v1) is a fork.
     let mut other = Vault::unlock(&v1, PASS, &mut Pins::default()).unwrap();
     let v2b = other
-        .change_passcode_unchecked(&id, "FAKE-two", T)
+        .change_passcode_unchecked(&id, "FAKE-two", T, &mut Pins::default())
         .unwrap()
         .to_vec();
     assert_ne!(v2, v2b);

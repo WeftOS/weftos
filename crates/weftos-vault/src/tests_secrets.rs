@@ -142,7 +142,7 @@ fn draft_vault_refuses_real_credentials() {
 fn wrapper_add_remove_and_recovery_unlock() {
     let mut nv = new_vault(true);
     let mut pins = Pins::default();
-    let rk = nv.vault.add_recovery_wrapper().unwrap();
+    let rk = nv.vault.add_recovery_wrapper(&mut Pins::default()).unwrap();
     assert_eq!(nv.vault.keybag().sequence, 2);
     let bytes = nv.vault.keybag_bytes().to_vec();
     assert!(Vault::unlock_with_recovery(&bytes, &rk, &mut pins).is_ok());
@@ -158,7 +158,11 @@ fn wrapper_add_remove_and_recovery_unlock() {
         .find(|w| w.kind() == 3)
         .unwrap()
         .id;
-    let after = nv.vault.remove_wrapper(&id).unwrap().to_vec();
+    let after = nv
+        .vault
+        .remove_wrapper(&id, &mut Pins::default())
+        .unwrap()
+        .to_vec();
     assert_eq!(nv.vault.keybag().sequence, 3);
     assert_eq!(
         Vault::unlock_with_recovery(&after, &rk, &mut Pins::default()).unwrap_err(),
@@ -168,13 +172,18 @@ fn wrapper_add_remove_and_recovery_unlock() {
     // Device wrapper: the closure gets the id, AAD and VK, and the platform blob is stored opaque.
     let dev = nv
         .vault
-        .add_device_wrapper(1, b"fake-key-ref", |id, aad, vk| {
-            assert_eq!(aad.len(), 13 + 16 + 16 + 1 + 4);
-            assert_eq!(id.len(), 16);
-            let mut blob = b"FAKE-DEVICE-BLOB".to_vec();
-            blob.push(vk[0]);
-            Ok(blob)
-        })
+        .add_device_wrapper(
+            1,
+            b"fake-key-ref",
+            |id, aad, vk| {
+                assert_eq!(aad.len(), 13 + 16 + 16 + 1 + 4);
+                assert_eq!(id.len(), 16);
+                let mut blob = b"FAKE-DEVICE-BLOB".to_vec();
+                blob.push(vk[0]);
+                Ok(blob)
+            },
+            &mut Pins::default(),
+        )
         .unwrap();
     let reparsed = Keybag::parse(nv.vault.keybag_bytes(), &Pins::default()).unwrap();
     assert!(matches!(
@@ -183,11 +192,11 @@ fn wrapper_add_remove_and_recovery_unlock() {
     ));
     assert_eq!(
         nv.vault
-            .add_device_wrapper(3, b"", |_, _, _| Ok(vec![]))
+            .add_device_wrapper(3, b"", |_, _, _| Ok(vec![]), &mut Pins::default())
             .unwrap_err(),
         VaultError::RejectedPlatform(3)
     );
-    nv.vault.remove_wrapper(&dev).unwrap();
+    nv.vault.remove_wrapper(&dev, &mut Pins::default()).unwrap();
 
     // The signing seed wrapper and the last passcode wrapper cannot be removed.
     let seed = nv
@@ -198,13 +207,21 @@ fn wrapper_add_remove_and_recovery_unlock() {
         .find(|w| w.kind() == KIND_SIGNSEED)
         .unwrap()
         .id;
-    assert!(nv.vault.remove_wrapper(&seed).is_err());
+    assert!(
+        nv.vault
+            .remove_wrapper(&seed, &mut Pins::default())
+            .is_err()
+    );
     let pid = pass_id(&nv.vault);
     assert!(matches!(
-        nv.vault.remove_wrapper(&pid),
+        nv.vault.remove_wrapper(&pid, &mut Pins::default()),
         Err(VaultError::Malformed(_))
     ));
-    assert!(nv.vault.remove_wrapper(&[0xee; 16]).is_err());
+    assert!(
+        nv.vault
+            .remove_wrapper(&[0xee; 16], &mut Pins::default())
+            .is_err()
+    );
     // A failed change leaves the keybag as it was.
     assert_eq!(nv.vault.keybag().sequence, 5);
 }
@@ -355,7 +372,7 @@ fn no_secret_in_captured_log_output() {
     let _ = nv.vault.open_secret("index", &sealed.bytes);
     let id = pass_id(&nv.vault);
     nv.vault
-        .change_passcode_unchecked(&id, "FAKE-LOG-NEW-PASSCODE", T)
+        .change_passcode_unchecked(&id, "FAKE-LOG-NEW-PASSCODE", T, &mut Pins::default())
         .unwrap();
     let _ = Vault::unlock(
         nv.vault.keybag_bytes(),

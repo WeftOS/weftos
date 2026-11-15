@@ -73,6 +73,9 @@ pub struct NewVault {
     pub vault: Vault,
     /// Shown once; WeftOS never stores it.
     pub recovery_key: RecoveryKey,
+    /// The creating device's pins for this vault, already recording the new keybag. Persist them and
+    /// pass them to every later unlock and write, so the creator never trusts the store on first use.
+    pub pins: Pins,
 }
 
 /// Everything random about a new vault, injectable so test vectors reproduce byte for byte.
@@ -217,6 +220,8 @@ impl Vault {
         };
         keybag.validate_structure()?;
         let bytes = keybag.sign(&signing);
+        let mut pins = Pins::default();
+        pins.record(&bytes, &keybag);
         tracing::debug!(sequence = 1, wrappers = 3, draft = i.draft, "vault created");
         Ok(NewVault {
             vault: Vault {
@@ -226,6 +231,7 @@ impl Vault {
                 signing,
             },
             recovery_key: RecoveryKey::from_bytes(i.recovery),
+            pins,
         })
     }
 
@@ -317,10 +323,29 @@ impl Vault {
         self.keybag.is_draft()
     }
 
-    pub(crate) fn commit(&mut self, f: impl FnOnce(&mut Keybag) -> Result<()>) -> Result<&[u8]> {
+    /// Apply `f` to a copy of the keybag, bump the sequence, re-sign, and record the result in `pins`
+    /// (review M1: the device's own writes advance its pins, so the store cannot replay the keybag from
+    /// before this write). Nothing changes, in the vault or in `pins`, if any step fails.
+    pub(crate) fn commit(
+        &mut self,
+        pins: &mut Pins,
+        f: impl FnOnce(&mut Keybag) -> Result<()>,
+    ) -> Result<&[u8]> {
+        if pins.sign_pub.is_some_and(|p| p != self.keybag.sign_pub) {
+            return Err(VaultError::SignerMismatch);
+        }
         let mut kb = self.keybag.clone();
         f(&mut kb)?;
         kb.sequence += 1;
+        if let Some(h) = pins.highest
+            && kb.sequence <= h.sequence
+        {
+            // This vault is behind a keybag the device has already seen; the write would be refused.
+            return Err(VaultError::Rollback {
+                got: kb.sequence,
+                seen: h.sequence,
+            });
+        }
         kb.updated_unix = now_unix().max(kb.updated_unix);
         kb.validate_structure()?;
         let bytes = kb.sign(&self.signing);
@@ -332,32 +357,47 @@ impl Vault {
             wrappers = kb.wrappers.len(),
             "keybag rewritten"
         );
+        pins.record(&bytes, &kb);
         self.keybag = kb;
         self.bytes = bytes;
         Ok(&self.bytes)
     }
 
     /// Re-seal one passcode wrapper under a new passcode (spec 9.3): new salt and nonce, sequence
-    /// bumped, keybag re-signed. No blob changes. Returns the new keybag bytes.
+    /// bumped, keybag re-signed, `pins` advanced. No blob changes. Returns the new keybag bytes.
     pub fn change_passcode(
         &mut self,
         wrapper_id: &[u8; 16],
         new_passcode: &str,
         params: KdfParams,
+        pins: &mut Pins,
     ) -> Result<&[u8]> {
         params.check_new_policy()?;
-        self.change_passcode_unchecked(wrapper_id, new_passcode, params)
+        self.change_passcode_with(wrapper_id, new_passcode, params, pins)
     }
 
+    /// [`Vault::change_passcode`] without the KDF policy check (fast test profile).
+    #[cfg(test)]
     pub(crate) fn change_passcode_unchecked(
         &mut self,
         wrapper_id: &[u8; 16],
         new_passcode: &str,
         params: KdfParams,
+        pins: &mut Pins,
+    ) -> Result<&[u8]> {
+        self.change_passcode_with(wrapper_id, new_passcode, params, pins)
+    }
+
+    fn change_passcode_with(
+        &mut self,
+        wrapper_id: &[u8; 16],
+        new_passcode: &str,
+        params: KdfParams,
+        pins: &mut Pins,
     ) -> Result<&[u8]> {
         let (vk, vault_id) = (self.vk.clone(), self.keybag.vault_id);
         let (salt, nonce) = (seal::random_bytes()?, seal::random_bytes()?);
-        self.commit(|kb| {
+        self.commit(pins, |kb| {
             let w = kb
                 .wrappers
                 .iter_mut()
@@ -377,8 +417,9 @@ impl Vault {
         })
     }
 
-    /// Add a recovery wrapper and return its key (shown once). The new keybag is `keybag_bytes()`.
-    pub fn add_recovery_wrapper(&mut self) -> Result<RecoveryKey> {
+    /// Add a recovery wrapper and return its key (shown once). The new keybag is `keybag_bytes()`;
+    /// `pins` is advanced.
+    pub fn add_recovery_wrapper(&mut self, pins: &mut Pins) -> Result<RecoveryKey> {
         let key = RecoveryKey::random()?;
         let (id, nonce) = (seal::random_bytes()?, seal::random_bytes()?);
         let (vk, vault_id, generation) = (
@@ -386,7 +427,7 @@ impl Vault {
             self.keybag.vault_id,
             self.keybag.current_vk_generation,
         );
-        self.commit(|kb| {
+        self.commit(pins, |kb| {
             kb.wrappers.push(recovery_wrapper(
                 &vault_id, id, &vk, &key.0, nonce, generation,
             )?);
@@ -396,12 +437,13 @@ impl Vault {
     }
 
     /// Add a device wrapper (platform 1 = Apple, 2 = Android). `make_blob` receives the wrapper id,
-    /// the wrapper AAD and the VK, and returns the platform-sealed inner blob.
+    /// the wrapper AAD and the VK, and returns the platform-sealed inner blob. `pins` is advanced.
     pub fn add_device_wrapper(
         &mut self,
         platform: u8,
         key_ref: &[u8],
         make_blob: impl FnOnce(&[u8; 16], &[u8], &[u8; 32]) -> Result<Vec<u8>>,
+        pins: &mut Pins,
     ) -> Result<[u8; 16]> {
         if !matches!(platform, 1 | 2) {
             return Err(VaultError::RejectedPlatform(platform));
@@ -420,7 +462,7 @@ impl Vault {
         if blob.len() > 16000 {
             return Err(VaultError::TooLarge("device blob"));
         }
-        self.commit(|kb| {
+        self.commit(pins, |kb| {
             kb.wrappers.push(Wrapper {
                 id,
                 vk_generation: generation,
@@ -436,8 +478,9 @@ impl Vault {
     }
 
     /// Remove a wrapper. The signing seed wrapper and the last passcode wrapper cannot be removed.
-    pub fn remove_wrapper(&mut self, id: &[u8; 16]) -> Result<&[u8]> {
-        self.commit(|kb| {
+    /// `pins` is advanced, so this device refuses the keybag that still had the wrapper.
+    pub fn remove_wrapper(&mut self, id: &[u8; 16], pins: &mut Pins) -> Result<&[u8]> {
+        self.commit(pins, |kb| {
             let pos = kb
                 .wrappers
                 .iter()

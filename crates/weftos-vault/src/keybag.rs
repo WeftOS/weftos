@@ -154,6 +154,10 @@ pub struct Keybag {
 }
 
 /// What a device has already seen for one vault: the signer pin and the highest keybag.
+///
+/// Pins carry no `vault_id`: a caller keeps one `Pins` per vault and must not share it between vaults.
+/// Persist the pins after every unlock and after every write made through [`crate::Vault`]; the write
+/// methods advance them (review M1).
 #[derive(Debug, Clone, Default)]
 pub struct Pins {
     /// Pinned `sign_pub` (trust on first use, or from enrolment).

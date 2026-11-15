@@ -44,6 +44,8 @@ mod tests;
 #[cfg(test)]
 mod tests_index;
 #[cfg(test)]
+mod tests_review;
+#[cfg(test)]
 mod tests_rotation;
 #[cfg(test)]
 mod tests_secrets;

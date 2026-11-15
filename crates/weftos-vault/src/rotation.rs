@@ -6,7 +6,8 @@ use crate::blob::{self, Policy, SecretType};
 use crate::error::{Result, VaultError};
 use crate::hkdf_keys;
 use crate::keybag::{
-    KIND_HISTORY, KIND_PASSCODE, KIND_RECOVERY, KIND_SIGNSEED, Wrapper, WrapperBody, wrapper_aad,
+    KIND_HISTORY, KIND_PASSCODE, KIND_RECOVERY, KIND_SIGNSEED, Pins, Wrapper, WrapperBody,
+    wrapper_aad,
 };
 use crate::normalize;
 use crate::passcode_kdf::derive_kek;
@@ -89,12 +90,14 @@ impl Vault {
     /// dropped (the platform seal needs the device, so re-enrol). The old VK goes into a kind 4 entry sealed
     /// under the new VK's history key, and older kind 4 entries are re-sealed the same way, so every
     /// generation opens straight from the current VK. The signing seed is re-sealed (same seed, same
-    /// `sign_pub`), the sequence is bumped and the keybag is re-signed. Blobs are not touched: they open by
-    /// walking the history and move with [`Vault::reseal_secret`]. Nothing changes if any step fails.
+    /// `sign_pub`), the sequence is bumped, the keybag is re-signed and `pins` records the new keybag.
+    /// Blobs are not touched: they open by walking the history and move with [`Vault::reseal_secret`].
+    /// Nothing changes, in the vault or in `pins`, if any step fails.
     pub fn rotate_vk(
         &mut self,
         passcode: &str,
         recovery: Option<&RecoveryKey>,
+        pins: &mut Pins,
     ) -> Result<RotationReport> {
         let vault_id = self.keybag.vault_id;
         let old_gen = self.keybag.current_vk_generation;
@@ -198,7 +201,7 @@ impl Vault {
             new_gen,
         )?);
         report.history_entries = out.iter().filter(|w| w.kind() == KIND_HISTORY).count();
-        self.commit(|kb| {
+        self.commit(pins, |kb| {
             kb.wrappers = out;
             kb.current_vk_generation = new_gen;
             Ok(())
@@ -270,9 +273,11 @@ impl Vault {
         g
     }
 
-    /// Remove the kind 4 entry for `generation` once no blob uses it any more (spec 9.4). Bumps the sequence.
-    pub fn drop_history(&mut self, generation: u32) -> Result<&[u8]> {
-        self.commit(|kb| {
+    /// Remove the kind 4 entry for `generation` once no blob uses it any more (spec 9.4). Bumps the
+    /// sequence and advances `pins`. Checking that the lazy re-seal pass is complete is the caller's job:
+    /// a blob still at `generation` stops opening afterwards.
+    pub fn drop_history(&mut self, generation: u32, pins: &mut Pins) -> Result<&[u8]> {
+        self.commit(pins, |kb| {
             let pos = kb
                 .wrappers
                 .iter()
