@@ -208,3 +208,21 @@ path        = "crates/weftos-worldmodel-impls/src/candle/mod.rs"
 pattern     = 'unsafe \{ std::env::set_var\("CANDLE_METAL_ENABLE_FAST_MATH", value\) \};'
 reason      = "Owner approval 2026-11-14 12:23 ET: single set_var, run once under std::sync::Once before any Metal device or thread, only when the variable is unset (a preset value is never overridden)"
 approved_by = "owner"
+
+# card a134bcf7: AEAD for ConfigService/AuthService in-memory secrets. chacha20poly1305 0.10.1
+# is already in Cargo.lock (via snow, the mesh Noise transport); this makes it a direct dep.
+# Approved by the owner 2026-11-14 17:46; lock lines accepted 22:49
+# (scratch/mathew-decisions-20261114-1746-a134bcf7-aead-rows.md, -2249-lock-lines-and-restart.md).
+[[approval]]
+rule        = "new-dep"
+path        = "Cargo.toml"
+pattern     = '(^|[^-[:alnum:]])chacha20poly1305[[:space:]]*='
+reason      = "card a134bcf7: XChaCha20-Poly1305 sealing of ConfigService/AuthService secrets (replaces keyed XOR); same 0.10.1 already locked via snow"
+approved_by = "owner"
+
+[[approval]]
+rule        = "new-dep"
+path        = "crates/clawft-kernel/Cargo.toml"
+pattern     = '(^|[^-[:alnum:]])chacha20poly1305[[:space:]]*='
+reason      = "card a134bcf7: clawft-kernel secret_seal.rs uses the workspace chacha20poly1305"
+approved_by = "owner"
