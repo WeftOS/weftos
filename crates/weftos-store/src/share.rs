@@ -134,6 +134,10 @@ pub enum State {
     Claimed,
     Merged,
     Archived,
+    /// Registry only, written by the daemon (`orphan::mark_orphan`): the worktree's local path has
+    /// been gone past the grace period and it never landed. Never written to `handoff.json`; the
+    /// next publish re-derives the entry from the worktree's own bucket, which clears it.
+    Orphan,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -655,7 +659,7 @@ pub fn claim_merge_with<B: ObjectBackend>(
         let (cur, etag) = read_handoff_versioned(b, bucket)?
             .ok_or_else(|| S2Error::Invalid("worktree has no handoff record".into()))?;
         match cur.state {
-            State::Merged | State::Archived => {
+            State::Merged | State::Archived | State::Orphan => {
                 return Err(S2Error::Invalid(format!("worktree is already {:?}", cur.state)));
             }
             State::Claimed => {

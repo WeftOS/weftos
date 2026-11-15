@@ -247,6 +247,15 @@ Only the daemon creates, grants access to, or deletes a store.
   at least `--keep-days` ago (default 14; archived then deleted through the store service) and never an
   unlanded one, however old: that is what `leftovers` reports. With `--archive-keep-days N` it also deletes
   archived worktree objects older than N days (default: never expire; this is recovery data).
+- **Orphans (WO-069 lane E, prototype on `w2/wo069-e-orphan-gc`, not merged).** A worktree removed without
+  landing keeps its store. The sweep records when the local path first went missing and calls
+  `store worktree orphan <slug> --since <ms>`; the daemon marks the registry entry `orphan` (with
+  `orphaned_at_ms`, `last_head`, `missing_since_ms`) once the path has been gone `WEFTOS_WORKTREE_ORPHAN_AFTER_HOURS`
+  (default 24). Only an `open`, unlanded store can become one; claimed, handed-off, merged and archived stores are
+  refused. `gc` lists orphans in its dry run. `gc --confirmed` archives every object of an orphan's bucket
+  (`.wt/*` and overlay objects), verifies the copies, deletes the bucket and its registry entry, once it has been an orphan
+  `WEFTOS_WORKTREE_ORPHAN_ARCHIVE_AFTER_DAYS` (default 14). It writes nothing outside that bucket, its entry (and
+  signature object) and the registry digest. A republish clears the orphan state. Time comes in as `now_ms`; tests drive it.
 - Tests: library (`s2_worktree`), daemon (`store_worktree_tests`), script, and a live loopback RustFS run
   (`s2_land_rustfs`, ignored: preview, conflicts, cap, `@`-bearing archive keys, retention listing).
 

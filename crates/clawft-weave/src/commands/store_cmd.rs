@@ -126,7 +126,7 @@ pub enum StoreAction {
     },
     /// Worktree stores and sharing (ADR-126 S2); the verbs `scripts/worktree-store.sh` calls:
     /// create, buckets, publish, fetch, claim, promote, follow, search, leftovers, sync-docs, overlaps,
-    /// browse (read-only: worktree list, a folder, or one file of a shared tree).
+    /// orphan, gc, browse (read-only: worktree list, a folder, or one file of a shared tree).
     Worktree {
         verb: String,
         /// `--key value` pairs (and the flags `--json`, `--force`, `--confirmed`).
@@ -244,7 +244,7 @@ pub fn worktree_params(rest: &[String], agent: &str, host: &str) -> anyhow::Resu
             m.insert(k, Value::Bool(true));
         } else {
             let v = it.next().ok_or_else(|| anyhow::anyhow!("--{k} needs a value"))?;
-            if matches!(k.as_str(), "epoch" | "max_bytes" | "quota_bytes" | "keep_days" | "archive_keep_days") {
+            if matches!(k.as_str(), "epoch" | "max_bytes" | "quota_bytes" | "keep_days" | "archive_keep_days" | "since") {
                 let n: u64 = v.parse().map_err(|_| anyhow::anyhow!("--{} needs a whole number", k.replace('_', "-")))?;
                 m.insert(k, Value::from(n));
             } else {

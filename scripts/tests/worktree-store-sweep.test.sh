@@ -77,9 +77,17 @@ ok "WTS_STRICT=1 makes a failed publish fatal" "[ $rc != 0 ]"
 rm -rf "$wb"; git -C "$r" worktree prune
 : >"$t/log"; WTS_NOW=2026-11-14T10:00:00Z "$S" sweep >"$t/o"
 ok "removed path is reported orphan with last head and first-missing time" "grep -q 'lane--b	orphan	last_head=[0-9a-f]\{40\} .*missing_since=2026-11-14T10:00:00Z' '$t/o'"
-ok "orphan marking makes no weaver call" "[ ! -s '$t/log' ] || ! grep -q lane--b '$t/log'"
-WTS_NOW=2026-11-15T10:00:00Z "$S" sweep >"$t/o"
-ok "first-missing time is persisted, not refreshed" "grep -q 'missing_since=2026-11-14T10:00:00Z' '$t/o'"
+ok "a missing path makes no publish call" "[ \$(calls) = 0 ]"
+ok "it tells the daemon once, with the first-missing time in ms (policy is the daemon's)" "[ \$(grep -c '^store worktree orphan' '$t/log') = 1 ] && grep -q -- 'orphan --project 01ABC --slug lane--b --since 1794650400000' '$t/log'"
+: >"$t/log"; WTS_NOW=2026-11-15T10:00:00Z "$S" sweep >"$t/o"
+ok "first-missing time is persisted, not refreshed" "grep -q 'missing_since=2026-11-14T10:00:00Z' '$t/o' && grep -q -- '--since 1794650400000' '$t/log'"
+: >"$t/log"; WTS_DRY_RUN=1 "$S" sweep >"$t/o" 2>&1
+ok "a dry run never calls orphan" "! grep -q orphan '$t/log' && ! grep -q 'DRY.*orphan' '$t/o'"
+wd="$t/wt-d"; git -C "$r" worktree add -q -b lane/d "$wd" master; ( cd "$wd" && "$S" register >/dev/null ); rm -rf "$wd"; git -C "$r" worktree prune
+: >"$t/log"; "$S" sweep >"$t/o"
+ok "a worktree that never published has nothing to orphan: no call" "grep -q 'lane--d	orphan' '$t/o' && ! grep -q 'slug lane--d' '$t/log'"
+: >"$t/log"; WEAVER_RC=1 "$S" sweep >"$t/o" 2>"$t/err" && rc=0 || rc=$?
+ok "a failing orphan call warns and the sweep still exits 0 (best effort, like every store step)" "[ $rc = 0 ] && grep -q 'store step failed: orphan' '$t/err'"
 ok "the registration survives (nothing deleted)" "[ -f '$t/state/reg/01ABC/lane--b' ]"
 ok "sweep --json carries the orphan status" "$S sweep --only lane--b --json | grep -q '\"status\":\"orphan\"'"
 

@@ -27,6 +27,7 @@ pub mod fs;
 pub mod grant_seq;
 pub mod mem;
 pub mod name;
+pub mod orphan;
 pub mod overlay;
 pub mod policy;
 pub mod promote;
