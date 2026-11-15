@@ -310,6 +310,17 @@ L1 as the tier for "unmerged layers that other nodes should see before integrati
     `.wt/tree/<path>` for a path the manifest lists is ever read, under the same path refusals as `fetch`.
     `weaver store worktree browse` and `worktree-store.sh browse` call them; WO-067's `store.browse.*` RPC
     gates them with `store-browse.json` (`worktrees/` in the project store, `.wt/tree/` per worktree store).
+  - **Manifest cache** (WO-069 lane F; prototype, branch `w2/wo069-f-manifest-cache`; answers Q14):
+    `follower_cache::ManifestCache` (default TTL 5 s, 64 slots, 32 MiB of manifest JSON, caller supplies `now_ms`)
+    holds per project and slug the registry entry and its etag, the manifest etag and the parsed manifest.
+    Inside the TTL a hit reads nothing, and skips the `.wt/meta.json` cross-check because the slot was made by
+    a load that ran it on that same entry; after the TTL one `head` of the manifest decides, and a moved etag
+    means a full cold load, cross-check included. A moved entry etag (digest, listing or `poll_fast_cached`)
+    drops that slug, and `browse_get_cached` retries once cold if the object no longer matches the cached
+    manifest. Measured on a loopback RustFS, 5 worktrees of 200 files, 50 `browse_ls` plus 50 `browse_get`:
+    758 ms, 350 gets, 150 heads, 4.3 MB read uncached against 170 ms, 65 gets, 65 heads, 0.25 MB cached; 20
+    registry lists from the digest 91 ms and 100 gets against 12 ms and 25 gets. `poll_fast` already reads
+    only the digest and changed entries, so the cache does not change its cost (25 gets either way).
   - **a registry entry is a pointer, not authority:** before reading a bucket a follower checks the
     slug is well-formed and that the bucket's own `.wt/meta.json` names the same slug, so an entry
     cannot aim a follower's read grants at another worktree's bucket.
