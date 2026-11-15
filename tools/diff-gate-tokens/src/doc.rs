@@ -15,7 +15,13 @@ pub struct Code {
 }
 
 const RUST_TAGS: &[&str] = &[
-    "rust", "ignore", "should_panic", "no_run", "compile_fail", "test_harness", "standalone_crate",
+    "rust",
+    "ignore",
+    "should_panic",
+    "no_run",
+    "compile_fail",
+    "test_harness",
+    "standalone_crate",
     "allow_fail",
 ];
 
@@ -23,7 +29,10 @@ const RUST_TAGS: &[&str] = &[
 pub fn is_rust_info(info: &str) -> bool {
     let mut unknown = false;
     let mut rusty = false;
-    for t in info.split(|c: char| c == ',' || c.is_whitespace()).filter(|t| !t.is_empty()) {
+    for t in info
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|t| !t.is_empty())
+    {
         if RUST_TAGS.contains(&t) || t.starts_with("edition") || t.starts_with("ignore-") {
             rusty = true;
         } else {
@@ -34,7 +43,10 @@ pub fn is_rust_info(info: &str) -> bool {
 }
 
 fn indent(s: &str) -> usize {
-    s.chars().take_while(|c| *c == ' ' || *c == '\t').map(|c| if c == '\t' { 4 } else { 1 }).sum()
+    s.chars()
+        .take_while(|c| *c == ' ' || *c == '\t')
+        .map(|c| if c == '\t' { 4 } else { 1 })
+        .sum()
 }
 
 fn strip_cols(s: &str, n: usize) -> &str {
@@ -72,8 +84,16 @@ fn fence(t: &str) -> Option<(char, usize, &str)> {
 }
 
 pub fn code_blocks(lines: &[DocLine]) -> Vec<Code> {
-    let common = lines.iter().filter(|l| !l.text.trim().is_empty()).map(|l| indent(&l.text)).min().unwrap_or(0);
-    let body: Vec<(usize, &str)> = lines.iter().map(|l| (l.line, strip_cols(&l.text, common))).collect();
+    let common = lines
+        .iter()
+        .filter(|l| !l.text.trim().is_empty())
+        .map(|l| indent(&l.text))
+        .min()
+        .unwrap_or(0);
+    let body: Vec<(usize, &str)> = lines
+        .iter()
+        .map(|l| (l.line, strip_cols(&l.text, common)))
+        .collect();
     let mut out = Vec::new();
     let mut k = 0;
     let mut prev_blank = true;
@@ -82,7 +102,10 @@ pub fn code_blocks(lines: &[DocLine]) -> Vec<Code> {
         let t = text.trim_start();
         if let Some((c, n, info)) = fence(t) {
             let rust = is_rust_info(info.trim());
-            let mut code = Code { text: String::new(), map: Vec::new() };
+            let mut code = Code {
+                text: String::new(),
+                map: Vec::new(),
+            };
             k += 1;
             while k < body.len() {
                 let (l, s) = body[k];
@@ -104,7 +127,10 @@ pub fn code_blocks(lines: &[DocLine]) -> Vec<Code> {
             continue;
         }
         if prev_blank && indent(text) >= 4 && !t.is_empty() {
-            let mut code = Code { text: String::new(), map: Vec::new() };
+            let mut code = Code {
+                text: String::new(),
+                map: Vec::new(),
+            };
             while k < body.len() && (indent(body[k].1) >= 4 || body[k].1.trim().is_empty()) {
                 code.text.push_str(&unhide(strip_cols(body[k].1, 4)));
                 code.text.push('\n');

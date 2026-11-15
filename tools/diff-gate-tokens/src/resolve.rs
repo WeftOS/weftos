@@ -21,7 +21,11 @@ impl Path {
     }
     pub fn text(&self) -> String {
         let s = self.segs.join("::");
-        if self.absolute { format!("::{s}") } else { s }
+        if self.absolute {
+            format!("::{s}")
+        } else {
+            s
+        }
     }
 }
 
@@ -42,7 +46,10 @@ impl Aliases {
             return;
         }
         let renamed = target.segs.last().map(|l| l != name).unwrap_or(true);
-        self.map.entry(name.to_string()).or_default().insert((target, renamed));
+        self.map
+            .entry(name.to_string())
+            .or_default()
+            .insert((target, renamed));
     }
     pub fn glob(&mut self, prefix: Path) {
         self.globs.insert(prefix);
@@ -74,13 +81,21 @@ impl Aliases {
             if is_local_root(head) {
                 continue;
             }
-            let lower = head.chars().next().map(|c| !c.is_ascii_uppercase()).unwrap_or(true);
+            let lower = head
+                .chars()
+                .next()
+                .map(|c| !c.is_ascii_uppercase())
+                .unwrap_or(true);
             let disguised_so_far = counts && depth > 0;
             if let Some(ts) = self.map.get(head) {
                 for (t, renamed) in ts {
                     let mut segs = t.segs.clone();
                     segs.extend_from_slice(&cur.segs[1..]);
-                    work.push((Path::new(t.absolute, segs), depth + 1, disguised_so_far || *renamed || lower));
+                    work.push((
+                        Path::new(t.absolute, segs),
+                        depth + 1,
+                        disguised_so_far || *renamed || lower,
+                    ));
                 }
             }
             for g in &self.globs {
@@ -101,22 +116,63 @@ impl Aliases {
 /// table lists for that module (`libc::fork`). Otherwise `use std::process::*;` would make
 /// every identifier in the file a process finding.
 fn glob_name_ok(g: &Path, name: &str) -> bool {
-    if name.chars().next().map(|c| c.is_ascii_uppercase()).unwrap_or(false) {
+    if name
+        .chars()
+        .next()
+        .map(|c| c.is_ascii_uppercase())
+        .unwrap_or(false)
+    {
         return true;
     }
     let segs: Vec<&str> = g.segs.iter().map(|s| norm_root(s.as_str())).collect();
-    TABLE.iter().any(|e| !e.only.is_empty() && segs == e.prefix && e.only.iter().any(|o| name.starts_with(o)))
-        || (segs.len() < 2 && matches!(name, "process" | "net" | "os" | "arch" | "include" | "unistd"))
+    TABLE.iter().any(|e| {
+        !e.only.is_empty() && segs == e.prefix && e.only.iter().any(|o| name.starts_with(o))
+    }) || (segs.len() < 2
+        && matches!(
+            name,
+            "process" | "net" | "os" | "arch" | "include" | "unistd"
+        ))
 }
 
 /// Rust keywords: never the start of a path we need to resolve.
 pub fn is_keyword(s: &str) -> bool {
     matches!(
         s,
-        "as" | "async" | "await" | "break" | "const" | "continue" | "dyn" | "else" | "enum" | "extern"
-            | "false" | "fn" | "for" | "if" | "impl" | "in" | "let" | "loop" | "match" | "mod" | "move"
-            | "mut" | "pub" | "ref" | "return" | "static" | "struct" | "trait" | "true" | "type"
-            | "unsafe" | "use" | "where" | "while" | "yield" | "macro_rules"
+        "as" | "async"
+            | "await"
+            | "break"
+            | "const"
+            | "continue"
+            | "dyn"
+            | "else"
+            | "enum"
+            | "extern"
+            | "false"
+            | "fn"
+            | "for"
+            | "if"
+            | "impl"
+            | "in"
+            | "let"
+            | "loop"
+            | "match"
+            | "mod"
+            | "move"
+            | "mut"
+            | "pub"
+            | "ref"
+            | "return"
+            | "static"
+            | "struct"
+            | "trait"
+            | "true"
+            | "type"
+            | "unsafe"
+            | "use"
+            | "where"
+            | "while"
+            | "yield"
+            | "macro_rules"
     )
 }
 
@@ -145,37 +201,153 @@ struct Entry {
 }
 
 const ADDR_TYPES: &[&str] = &[
-    "SocketAddrV4", "SocketAddrV6", "SocketAddr", "IpAddr", "Ipv4Addr", "Ipv6Addr", "AddrParseError",
+    "SocketAddrV4",
+    "SocketAddrV6",
+    "SocketAddr",
+    "IpAddr",
+    "Ipv4Addr",
+    "Ipv6Addr",
+    "AddrParseError",
 ];
 const PROCESS_EXEMPT: &[&str] = &[
-    "exit", "abort", "id", "ExitCode", "ExitStatus", "ExitStatusError", "Termination", "Stdio",
-    "Output", "Child", "ChildStdin", "ChildStdout", "ChildStderr",
+    "exit",
+    "abort",
+    "id",
+    "ExitCode",
+    "ExitStatus",
+    "ExitStatusError",
+    "Termination",
+    "Stdio",
+    "Output",
+    "Child",
+    "ChildStdin",
+    "ChildStdout",
+    "ChildStderr",
 ];
 const LIBC_PROCESS: &[&str] = &["exec", "fork", "vfork", "system", "posix_spawn", "popen"];
 const LIBC_NET: &[&str] = &["socket", "connect", "bind", "listen", "accept"];
 const NET_CRATES: &[&str] = &[
-    "reqwest", "ureq", "hyper", "isahc", "surf", "attohttpc", "curl", "socket2", "tungstenite", "quinn",
+    "reqwest",
+    "ureq",
+    "hyper",
+    "isahc",
+    "surf",
+    "attohttpc",
+    "curl",
+    "socket2",
+    "tungstenite",
+    "quinn",
 ];
 
 const TABLE: &[Entry] = &[
-    Entry { rule: "process", prefix: &["std", "process"], exempt: PROCESS_EXEMPT, only: &[] },
-    Entry { rule: "process", prefix: &["std", "os", "unix", "process"], exempt: &[], only: &[] },
-    Entry { rule: "process", prefix: &["std", "os", "windows", "process"], exempt: &[], only: &[] },
-    Entry { rule: "process", prefix: &["tokio", "process"], exempt: &[], only: &[] },
-    Entry { rule: "process", prefix: &["async_std", "process"], exempt: &[], only: &[] },
-    Entry { rule: "process", prefix: &["smol", "process"], exempt: &[], only: &[] },
-    Entry { rule: "process", prefix: &["async_process"], exempt: &[], only: &[] },
-    Entry { rule: "process", prefix: &["libc"], exempt: &[], only: LIBC_PROCESS },
-    Entry { rule: "process", prefix: &["nix", "unistd"], exempt: &[], only: &["fork", "exec"] },
-    Entry { rule: "net", prefix: &["std", "net"], exempt: ADDR_TYPES, only: &[] },
-    Entry { rule: "net", prefix: &["tokio", "net"], exempt: &[], only: &[] },
-    Entry { rule: "net", prefix: &["async_std", "net"], exempt: &[], only: &[] },
-    Entry { rule: "net", prefix: &["mio", "net"], exempt: &[], only: &[] },
-    Entry { rule: "net", prefix: &["libc"], exempt: &[], only: LIBC_NET },
-    Entry { rule: "include", prefix: &["std", "include"], exempt: &[], only: &[] },
-    Entry { rule: "ffi", prefix: &["std", "arch", "global_asm"], exempt: &[], only: &[] },
-    Entry { rule: "ffi", prefix: &["std", "arch", "naked_asm"], exempt: &[], only: &[] },
-    Entry { rule: "ffi", prefix: &["std", "arch", "asm"], exempt: &[], only: &[] },
+    Entry {
+        rule: "process",
+        prefix: &["std", "process"],
+        exempt: PROCESS_EXEMPT,
+        only: &[],
+    },
+    Entry {
+        rule: "process",
+        prefix: &["std", "os", "unix", "process"],
+        exempt: &[],
+        only: &[],
+    },
+    Entry {
+        rule: "process",
+        prefix: &["std", "os", "windows", "process"],
+        exempt: &[],
+        only: &[],
+    },
+    Entry {
+        rule: "process",
+        prefix: &["tokio", "process"],
+        exempt: &[],
+        only: &[],
+    },
+    Entry {
+        rule: "process",
+        prefix: &["async_std", "process"],
+        exempt: &[],
+        only: &[],
+    },
+    Entry {
+        rule: "process",
+        prefix: &["smol", "process"],
+        exempt: &[],
+        only: &[],
+    },
+    Entry {
+        rule: "process",
+        prefix: &["async_process"],
+        exempt: &[],
+        only: &[],
+    },
+    Entry {
+        rule: "process",
+        prefix: &["libc"],
+        exempt: &[],
+        only: LIBC_PROCESS,
+    },
+    Entry {
+        rule: "process",
+        prefix: &["nix", "unistd"],
+        exempt: &[],
+        only: &["fork", "exec"],
+    },
+    Entry {
+        rule: "net",
+        prefix: &["std", "net"],
+        exempt: ADDR_TYPES,
+        only: &[],
+    },
+    Entry {
+        rule: "net",
+        prefix: &["tokio", "net"],
+        exempt: &[],
+        only: &[],
+    },
+    Entry {
+        rule: "net",
+        prefix: &["async_std", "net"],
+        exempt: &[],
+        only: &[],
+    },
+    Entry {
+        rule: "net",
+        prefix: &["mio", "net"],
+        exempt: &[],
+        only: &[],
+    },
+    Entry {
+        rule: "net",
+        prefix: &["libc"],
+        exempt: &[],
+        only: LIBC_NET,
+    },
+    Entry {
+        rule: "include",
+        prefix: &["std", "include"],
+        exempt: &[],
+        only: &[],
+    },
+    Entry {
+        rule: "ffi",
+        prefix: &["std", "arch", "global_asm"],
+        exempt: &[],
+        only: &[],
+    },
+    Entry {
+        rule: "ffi",
+        prefix: &["std", "arch", "naked_asm"],
+        exempt: &[],
+        only: &[],
+    },
+    Entry {
+        rule: "ffi",
+        prefix: &["std", "arch", "asm"],
+        exempt: &[],
+        only: &[],
+    },
 ];
 
 /// Sensitive rules for one resolved path. A trailing `*` segment is a glob import: it is
@@ -187,7 +359,11 @@ pub fn classify(p: &Path) -> Vec<&'static str> {
     }
     segs[0] = norm_root(segs[0]);
     let glob = segs.last() == Some(&"*");
-    let body = if glob { &segs[..segs.len() - 1] } else { &segs[..] };
+    let body = if glob {
+        &segs[..segs.len() - 1]
+    } else {
+        &segs[..]
+    };
     let mut out = Vec::new();
     for e in TABLE {
         if hit(e, body, glob) && !out.contains(&e.rule) {
@@ -227,13 +403,18 @@ pub fn by_name(segs: &[String]) -> Vec<&'static str> {
     let mut out = Vec::new();
     for (i, s) in segs.iter().enumerate() {
         let s = s.as_str();
-        if matches!(s, "TcpStream" | "TcpListener" | "TcpSocket" | "UdpSocket") && !out.contains(&"net") {
+        if matches!(s, "TcpStream" | "TcpListener" | "TcpSocket" | "UdpSocket")
+            && !out.contains(&"net")
+        {
             out.push("net");
         }
         if s == "CommandExt" && !out.contains(&"process") {
             out.push("process");
         }
-        if s == "Command" && segs.get(i + 1).map(|n| n == "new").unwrap_or(false) && !out.contains(&"process") {
+        if s == "Command"
+            && segs.get(i + 1).map(|n| n == "new").unwrap_or(false)
+            && !out.contains(&"process")
+        {
             out.push("process");
         }
     }
@@ -251,7 +432,10 @@ mod tests {
         assert_eq!(classify(&p("std::process::Command")), vec!["process"]);
         assert!(classify(&p("std::process::exit")).is_empty());
         assert_eq!(classify(&p("std::process")), vec!["process"]);
-        assert_eq!(classify(&p("std::*")), vec!["process", "net", "include", "ffi"]);
+        assert_eq!(
+            classify(&p("std::*")),
+            vec!["process", "net", "include", "ffi"]
+        );
         assert!(classify(&p("std::net::SocketAddr")).is_empty());
         assert_eq!(classify(&p("core::net::TcpStream")), vec!["net"]);
         assert_eq!(classify(&p("libc::execvp")), vec!["process"]);
@@ -269,9 +453,13 @@ mod tests {
         assert!(c.contains(&(p("std::process::Command"), true)));
         let mut g = Aliases::default();
         g.glob(p("std::process"));
-        assert!(g.expand(&p("Command")).contains(&(p("std::process::Command"), true)));
+        assert!(g
+            .expand(&p("Command"))
+            .contains(&(p("std::process::Command"), true)));
         let mut t = Aliases::default();
         t.bind("StatusCode", p("hyper::StatusCode"));
-        assert!(t.expand(&p("StatusCode::OK")).contains(&(p("hyper::StatusCode::OK"), false)));
+        assert!(t
+            .expand(&p("StatusCode::OK"))
+            .contains(&(p("hyper::StatusCode::OK"), false)));
     }
 }

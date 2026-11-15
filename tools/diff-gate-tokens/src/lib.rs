@@ -45,14 +45,26 @@ fn prepare(src: &str) -> String {
 /// Scan one file. Err is (line, message) when the file does not tokenize.
 pub fn scan_source(src: &str) -> Result<Scan, (usize, String)> {
     let prepared = prepare(src);
-    let ts: TokenStream = prepared.parse().map_err(|e: proc_macro2::LexError| (e.span().start().line.max(1), format!("does not tokenize: {e}")))?;
+    let ts: TokenStream = prepared.parse().map_err(|e: proc_macro2::LexError| {
+        (
+            e.span().start().line.max(1),
+            format!("does not tokenize: {e}"),
+        )
+    })?;
     let mut aliases = resolve::Aliases::default();
     scan::collect_aliases(ts.clone(), &mut aliases);
     let mut sc = scan::Scanner::new(&aliases, 0);
     sc.scan(ts, false);
     let parse_error = match syn::parse_file(src) {
         Ok(_) => None,
-        Err(e) => Some((e.span().start().line.max(1), format!("syn cannot parse the file: {e}"))),
+        Err(e) => Some((
+            e.span().start().line.max(1),
+            format!("syn cannot parse the file: {e}"),
+        )),
     };
-    Ok(Scan { occs: sc.occs, token_lines: sc.token_lines, parse_error })
+    Ok(Scan {
+        occs: sc.occs,
+        token_lines: sc.token_lines,
+        parse_error,
+    })
 }

@@ -35,8 +35,10 @@ fn run() -> Result<(), String> {
         }
         k += 1;
     }
-    let manifest = manifest.ok_or("usage: diff-gate-tokens --manifest FILE [--json] | --protocol")?;
-    let text = std::fs::read_to_string(&manifest).map_err(|e| format!("cannot read {manifest}: {e}"))?;
+    let manifest =
+        manifest.ok_or("usage: diff-gate-tokens --manifest FILE [--json] | --protocol")?;
+    let text =
+        std::fs::read_to_string(&manifest).map_err(|e| format!("cannot read {manifest}: {e}"))?;
     let mut all: Vec<(String, Vec<report::Finding>)> = Vec::new();
     for (n, line) in text.lines().enumerate() {
         if line.is_empty() {
@@ -44,11 +46,18 @@ fn run() -> Result<(), String> {
         }
         let f: Vec<&str> = line.split('\t').collect();
         if f.len() != 4 {
-            return Err(format!("manifest line {} has {} fields, wanted 4", n + 1, f.len()));
+            return Err(format!(
+                "manifest line {} has {} fields, wanted 4",
+                n + 1,
+                f.len()
+            ));
         }
         let mut added = BTreeSet::new();
         for a in f[3].split(',').filter(|a| !a.is_empty()) {
-            added.insert(a.parse::<usize>().map_err(|_| format!("manifest line {}: bad line number {a}", n + 1))?);
+            added.insert(
+                a.parse::<usize>()
+                    .map_err(|_| format!("manifest line {}: bad line number {a}", n + 1))?,
+            );
         }
         let fs = match read(f[1])? {
             None => vec![report::Finding {
@@ -61,14 +70,24 @@ fn run() -> Result<(), String> {
             Some(head) => {
                 // An unreadable or non-UTF-8 base gives no base: every head occurrence on an
                 // unchanged line then counts as a meaning change, which fails closed.
-                let base = if f[2].is_empty() { None } else { Some(read(f[2])?.unwrap_or_default()) };
+                let base = if f[2].is_empty() {
+                    None
+                } else {
+                    Some(read(f[2])?.unwrap_or_default())
+                };
                 report::findings(&head, base.as_deref(), &added)
             }
         };
         all.push((f[0].to_string(), fs));
     }
-    let out = if as_json { report::json(&all) } else { all.iter().map(|(p, fs)| report::tsv(p, fs)).collect() };
-    std::io::stdout().write_all(out.as_bytes()).map_err(|e| format!("write failed: {e}"))
+    let out = if as_json {
+        report::json(&all)
+    } else {
+        all.iter().map(|(p, fs)| report::tsv(p, fs)).collect()
+    };
+    std::io::stdout()
+        .write_all(out.as_bytes())
+        .map_err(|e| format!("write failed: {e}"))
 }
 
 fn main() -> ExitCode {

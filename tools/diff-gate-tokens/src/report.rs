@@ -31,13 +31,24 @@ struct Lines {
 
 impl Lines {
     fn new(src: &str) -> Self {
-        Lines { raw: src.split('\n').map(|l| l.strip_suffix('\r').unwrap_or(l).to_string()).collect() }
+        Lines {
+            raw: src
+                .split('\n')
+                .map(|l| l.strip_suffix('\r').unwrap_or(l).to_string())
+                .collect(),
+        }
     }
     fn raw(&self, line: usize) -> &str {
-        self.raw.get(line.wrapping_sub(1)).map(|s| s.as_str()).unwrap_or("")
+        self.raw
+            .get(line.wrapping_sub(1))
+            .map(|s| s.as_str())
+            .unwrap_or("")
     }
     fn lead(&self, line: usize) -> usize {
-        self.raw(line).bytes().take_while(|b| *b == b' ' || *b == b'\t').count()
+        self.raw(line)
+            .bytes()
+            .take_while(|b| *b == b' ' || *b == b'\t')
+            .count()
     }
     /// The gate's text for a line: tabs as spaces, leading blanks trimmed.
     fn text(&self, line: usize) -> String {
@@ -79,11 +90,27 @@ pub fn findings(head: &str, base: Option<&str>, added: &BTreeSet<usize>) -> Vec<
     let hl = Lines::new(head);
     let scan = match scan_source(head) {
         Ok(s) => s,
-        Err((line, msg)) => return vec![Finding { rule: "rust-parse".into(), line, text: msg, groups: vec![], note: String::new() }],
+        Err((line, msg)) => {
+            return vec![Finding {
+                rule: "rust-parse".into(),
+                line,
+                text: msg,
+                groups: vec![],
+                note: String::new(),
+            }]
+        }
     };
     let mut out: BTreeMap<(String, usize), Finding> = BTreeMap::new();
     let mut add = |rule: &str, line: usize, group: (usize, usize), note: String, text: String| {
-        let f = out.entry((rule.to_string(), line)).or_insert_with(|| Finding { rule: rule.into(), line, text, groups: vec![], note: String::new() });
+        let f = out
+            .entry((rule.to_string(), line))
+            .or_insert_with(|| Finding {
+                rule: rule.into(),
+                line,
+                text,
+                groups: vec![],
+                note: String::new(),
+            });
         if !f.groups.contains(&group) {
             f.groups.push(group);
         }
@@ -93,7 +120,13 @@ pub fn findings(head: &str, base: Option<&str>, added: &BTreeSet<usize>) -> Vec<
     };
     let mut parse_finding = None;
     if let Some((line, msg)) = &scan.parse_error {
-        parse_finding = Some(Finding { rule: "rust-parse".into(), line: *line, text: msg.clone(), groups: vec![], note: String::new() });
+        parse_finding = Some(Finding {
+            rule: "rust-parse".into(),
+            line: *line,
+            text: msg.clone(),
+            groups: vec![],
+            note: String::new(),
+        });
     }
 
     let mut reported = vec![false; scan.occs.len()];
@@ -108,7 +141,13 @@ pub fn findings(head: &str, base: Option<&str>, added: &BTreeSet<usize>) -> Vec<
                 if l != o.line && scan.token_lines.contains(&l) {
                     let t = hl.text(l);
                     let g = (1, t.len().max(1));
-                    add(o.rule, l, g, format!("inside the {} block opened at line {}", o.what, o.line), t);
+                    add(
+                        o.rule,
+                        l,
+                        g,
+                        format!("inside the {} block opened at line {}", o.what, o.line),
+                        t,
+                    );
                 }
             }
         }
@@ -120,12 +159,17 @@ pub fn findings(head: &str, base: Option<&str>, added: &BTreeSet<usize>) -> Vec<
         let mut base_count: HashMap<(String, String, String), usize> = HashMap::new();
         if let Ok(bs) = scan_source(b) {
             for o in &bs.occs {
-                *base_count.entry((o.rule.into(), o.what.clone(), bl.text(o.line))).or_default() += 1;
+                *base_count
+                    .entry((o.rule.into(), o.what.clone(), bl.text(o.line)))
+                    .or_default() += 1;
             }
         }
         let mut by_key: HashMap<(String, String, String), Vec<usize>> = HashMap::new();
         for (k, o) in scan.occs.iter().enumerate() {
-            by_key.entry((o.rule.into(), o.what.clone(), hl.text(o.line))).or_default().push(k);
+            by_key
+                .entry((o.rule.into(), o.what.clone(), hl.text(o.line)))
+                .or_default()
+                .push(k);
         }
         for (key, idx) in by_key {
             let via_added = idx.iter().filter(|&&k| reported[k]).count();
@@ -133,7 +177,13 @@ pub fn findings(head: &str, base: Option<&str>, added: &BTreeSet<usize>) -> Vec<
             if idx.len() > base_n && idx.len() - base_n > via_added {
                 for &k in idx.iter().filter(|&&k| !reported[k]) {
                     let o = &scan.occs[k];
-                    add(o.rule, o.line, hl.group(o), "meaning changed by an edit elsewhere in the file".into(), hl.text(o.line));
+                    add(
+                        o.rule,
+                        o.line,
+                        hl.group(o),
+                        "meaning changed by an edit elsewhere in the file".into(),
+                        hl.text(o.line),
+                    );
                 }
             }
         }
@@ -148,7 +198,15 @@ pub fn findings(head: &str, base: Option<&str>, added: &BTreeSet<usize>) -> Vec<
 }
 
 fn clean(s: &str) -> String {
-    s.chars().map(|c| if c == '\t' || c == '\n' || c == '\r' { ' ' } else { c }).collect()
+    s.chars()
+        .map(|c| {
+            if c == '\t' || c == '\n' || c == '\r' {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect()
 }
 
 fn display(t: &str) -> String {
@@ -168,14 +226,28 @@ pub fn tsv(path: &str, fs: &[Finding]) -> String {
     let mut s = String::new();
     for f in fs {
         if f.groups.is_empty() {
-            s.push_str(&format!("{}\t{}\t{}\t{}\n", f.rule, clean(path), f.line, clean(&f.text)));
+            s.push_str(&format!(
+                "{}\t{}\t{}\t{}\n",
+                f.rule,
+                clean(path),
+                f.line,
+                clean(&f.text)
+            ));
         } else {
             let mut d = display(&clean(&f.text));
             if !f.note.is_empty() {
                 d = format!("{d}  [{}]", f.note);
             }
             let g: Vec<String> = f.groups.iter().map(|(a, b)| format!("{a}-{b}")).collect();
-            s.push_str(&format!("{}\t{}\t{}\t{}\t\t{}\t{}\n", f.rule, clean(path), f.line, d, g.join("|"), clean(&f.text)));
+            s.push_str(&format!(
+                "{}\t{}\t{}\t{}\t\t{}\t{}\n",
+                f.rule,
+                clean(path),
+                f.line,
+                d,
+                g.join("|"),
+                clean(&f.text)
+            ));
         }
     }
     s
@@ -203,7 +275,12 @@ pub fn json(all: &[(String, Vec<Finding>)]) -> String {
             let spans: Vec<String> = f.groups.iter().map(|(a, b)| format!("[{a},{b}]")).collect();
             items.push(format!(
                 "{{\"path\":{},\"rule\":{},\"line\":{},\"text\":{},\"spans\":[{}],\"note\":{}}}",
-                js(path), js(&f.rule), f.line, js(&f.text), spans.join(","), js(&f.note)
+                js(path),
+                js(&f.rule),
+                f.line,
+                js(&f.text),
+                spans.join(","),
+                js(&f.note)
             ));
         }
     }

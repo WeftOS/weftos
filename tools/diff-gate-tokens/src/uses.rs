@@ -14,9 +14,19 @@ pub struct Leaf {
 }
 
 fn use_leaves(t: &syn::UseTree, pre: &mut Vec<(String, Span)>, abs: bool, out: &mut Vec<Leaf>) {
-    let mk = |pre: &Vec<(String, Span)>, extra: &[(String, Span)]| -> (Path, Vec<(usize, usize, usize)>) {
-        let segs = pre.iter().chain(extra.iter()).map(|(s, _)| s.clone()).collect();
-        let spans = pre.iter().chain(extra.iter()).map(|(_, sp)| tspan(*sp)).collect();
+    let mk = |pre: &Vec<(String, Span)>,
+              extra: &[(String, Span)]|
+     -> (Path, Vec<(usize, usize, usize)>) {
+        let segs = pre
+            .iter()
+            .chain(extra.iter())
+            .map(|(s, _)| s.clone())
+            .collect();
+        let spans = pre
+            .iter()
+            .chain(extra.iter())
+            .map(|(_, sp)| tspan(*sp))
+            .collect();
         (Path::new(abs, segs), spans)
     };
     match t {
@@ -30,23 +40,47 @@ fn use_leaves(t: &syn::UseTree, pre: &mut Vec<(String, Span)>, abs: bool, out: &
             if s == "self" {
                 let (full, mut spans) = mk(pre, &[]);
                 spans.push(tspan(n.ident.span()));
-                out.push(Leaf { bind: full.segs.last().cloned(), full, glob: false, spans });
+                out.push(Leaf {
+                    bind: full.segs.last().cloned(),
+                    full,
+                    glob: false,
+                    spans,
+                });
             } else {
                 let (full, spans) = mk(pre, &[(s.clone(), n.ident.span())]);
-                out.push(Leaf { full, bind: Some(s), glob: false, spans });
+                out.push(Leaf {
+                    full,
+                    bind: Some(s),
+                    glob: false,
+                    spans,
+                });
             }
         }
         syn::UseTree::Rename(r) => {
             let s = name(&r.ident.to_string());
-            let (full, mut spans) = if s == "self" { mk(pre, &[]) } else { mk(pre, &[(s, r.ident.span())]) };
+            let (full, mut spans) = if s == "self" {
+                mk(pre, &[])
+            } else {
+                mk(pre, &[(s, r.ident.span())])
+            };
             spans.push(tspan(r.rename.span()));
-            out.push(Leaf { full, bind: Some(name(&r.rename.to_string())), glob: false, spans });
+            out.push(Leaf {
+                full,
+                bind: Some(name(&r.rename.to_string())),
+                glob: false,
+                spans,
+            });
         }
         syn::UseTree::Glob(g) => {
             let (mut full, mut spans) = mk(pre, &[]);
             full.segs.push("*".into());
             spans.push(tspan(g.star_token.span));
-            out.push(Leaf { full, bind: None, glob: true, spans });
+            out.push(Leaf {
+                full,
+                bind: None,
+                glob: true,
+                spans,
+            });
         }
         syn::UseTree::Group(g) => {
             for it in &g.items {
@@ -61,12 +95,20 @@ pub(crate) fn parse_use(v: &[TokenTree], i: usize) -> Option<(Vec<Leaf>, usize)>
     let j = semi_after(v, i)?;
     let item: syn::ItemUse = syn::parse2(slice(v, i, j)).ok()?;
     let mut out = Vec::new();
-    use_leaves(&item.tree, &mut Vec::new(), item.leading_colon.is_some(), &mut out);
+    use_leaves(
+        &item.tree,
+        &mut Vec::new(),
+        item.leading_colon.is_some(),
+        &mut out,
+    );
     Some((out, j))
 }
 
 /// `extern crate NAME [as ALIAS];` starting at `i`: (name, alias, name span, index of `;`).
-pub(crate) fn parse_extern_crate(v: &[TokenTree], i: usize) -> Option<(String, Option<String>, Span, usize)> {
+pub(crate) fn parse_extern_crate(
+    v: &[TokenTree],
+    i: usize,
+) -> Option<(String, Option<String>, Span, usize)> {
     let j = semi_after(v, i)?;
     let item: syn::ItemExternCrate = syn::parse2(slice(v, i, j)).ok()?;
     let alias = item.rename.map(|(_, a)| name(&a.to_string()));
@@ -110,4 +152,3 @@ pub fn collect_aliases(ts: TokenStream, a: &mut Aliases) {
         i += 1;
     }
 }
-

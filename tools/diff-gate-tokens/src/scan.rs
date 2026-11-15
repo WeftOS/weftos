@@ -5,8 +5,8 @@
 
 use crate::doc::{self, DocLine};
 use crate::resolve::{by_name, classify, Aliases, Path};
-use crate::uses::{parse_extern_crate, parse_use};
 pub use crate::uses::collect_aliases;
+use crate::uses::{parse_extern_crate, parse_use};
 use proc_macro2::{Delimiter, Group, Spacing, Span, TokenStream, TokenTree};
 use std::collections::BTreeSet;
 
@@ -69,7 +69,9 @@ fn lit_str(t: Option<&TokenTree>) -> Option<(String, Span)> {
     match t {
         Some(TokenTree::Literal(l)) => {
             let ts: TokenStream = TokenTree::Literal(l.clone()).into();
-            syn::parse2::<syn::LitStr>(ts).ok().map(|s| (s.value(), l.span()))
+            syn::parse2::<syn::LitStr>(ts)
+                .ok()
+                .map(|s| (s.value(), l.span()))
         }
         _ => None,
     }
@@ -97,7 +99,11 @@ fn read_path(v: &[TokenTree], i: usize) -> Option<TokPath> {
         segs.push("$crate".to_string());
         k += 2;
         if !colon2(v, k) {
-            return Some(TokPath { path: Path::new(false, segs), spans, next: k });
+            return Some(TokPath {
+                path: Path::new(false, segs),
+                spans,
+                next: k,
+            });
         }
         k += 2;
     }
@@ -108,15 +114,10 @@ fn read_path(v: &[TokenTree], i: usize) -> Option<TokPath> {
             }
         }
     }
-    loop {
-        match v.get(k) {
-            Some(TokenTree::Ident(id)) => {
-                segs.push(name(&id.to_string()));
-                spans.push(tspan(id.span()));
-                k += 1;
-            }
-            _ => break,
-        }
+    while let Some(TokenTree::Ident(id)) = v.get(k) {
+        segs.push(name(&id.to_string()));
+        spans.push(tspan(id.span()));
+        k += 1;
         if colon2(v, k) && matches!(v.get(k + 2), Some(TokenTree::Ident(_))) {
             k += 2;
         } else {
@@ -126,7 +127,11 @@ fn read_path(v: &[TokenTree], i: usize) -> Option<TokPath> {
     if segs.is_empty() {
         return None;
     }
-    Some(TokPath { path: Path::new(absolute, segs), spans, next: k })
+    Some(TokPath {
+        path: Path::new(absolute, segs),
+        spans,
+        next: k,
+    })
 }
 
 pub struct Scanner<'a> {
@@ -140,15 +145,37 @@ pub struct Scanner<'a> {
 
 impl<'a> Scanner<'a> {
     pub fn new(aliases: &'a Aliases, depth: usize) -> Self {
-        Scanner { aliases, occs: Vec::new(), token_lines: BTreeSet::new(), depth, attr: None }
+        Scanner {
+            aliases,
+            occs: Vec::new(),
+            token_lines: BTreeSet::new(),
+            depth,
+            attr: None,
+        }
     }
 
-    fn push(&mut self, rule: &'static str, what: String, spans: Vec<(usize, usize, usize)>, range: (usize, usize), note: &'static str) {
+    fn push(
+        &mut self,
+        rule: &'static str,
+        what: String,
+        spans: Vec<(usize, usize, usize)>,
+        range: (usize, usize),
+        note: &'static str,
+    ) {
         let line = spans.last().map(|s| s.0).unwrap_or(range.0);
         let (a0, a1) = self.attr.unwrap_or((line, line));
         let lo = range.0.min(line).min(a0);
         let hi = range.1.max(line).max(a1);
-        self.occs.push(Occ { rule, what, line, spans, lo, hi, block: None, note });
+        self.occs.push(Occ {
+            rule,
+            what,
+            line,
+            spans,
+            lo,
+            hi,
+            block: None,
+            note,
+        });
     }
 
     /// Rules for a path: resolved through the alias table, plus the name-based checks.
@@ -179,7 +206,10 @@ impl<'a> Scanner<'a> {
         if tp.path.segs.len() == 1 && tp.path.segs[0] == "include" {
             return true;
         }
-        self.aliases.expand(&tp.path).iter().any(|(c, _)| classify(c).contains(&"include"))
+        self.aliases
+            .expand(&tp.path)
+            .iter()
+            .any(|(c, _)| classify(c).contains(&"include"))
     }
 
     /// The first `{ }` after a keyword, before `;` or `,` at the same level.
@@ -208,7 +238,11 @@ impl<'a> Scanner<'a> {
             }
             // attribute: # [!] [ ... ]
             if punct_is(v.get(i), '#') {
-                let gi = if punct_is(v.get(i + 1), '!') { i + 2 } else { i + 1 };
+                let gi = if punct_is(v.get(i + 1), '!') {
+                    i + 2
+                } else {
+                    i + 1
+                };
                 if let Some(TokenTree::Group(g)) = v.get(gi) {
                     if g.delimiter() == Delimiter::Bracket {
                         if let Some(lines) = doc_attr(g) {
@@ -216,7 +250,8 @@ impl<'a> Scanner<'a> {
                         }
                         let outer = self.attr;
                         let here = (start(v[i].span()).0, end(g.span()).0);
-                        self.attr = Some(outer.map_or(here, |(a, b)| (a.min(here.0), b.max(here.1))));
+                        self.attr =
+                            Some(outer.map_or(here, |(a, b)| (a.min(here.0), b.max(here.1))));
                         self.scan(g.stream(), true);
                         self.attr = outer;
                         i = gi + 1;
@@ -241,7 +276,11 @@ impl<'a> Scanner<'a> {
                             if let Some((leaves, j)) = parse_use(&v, i) {
                                 let hi = start(v[j].span()).0;
                                 for leaf in leaves {
-                                    let tp = TokPath { path: leaf.full.clone(), spans: leaf.spans.clone(), next: 0 };
+                                    let tp = TokPath {
+                                        path: leaf.full.clone(),
+                                        spans: leaf.spans.clone(),
+                                        next: 0,
+                                    };
                                     for (r, what) in self.path_rules(&tp, false) {
                                         self.push(r, what, leaf.spans.clone(), (l, hi), "");
                                     }
@@ -253,7 +292,11 @@ impl<'a> Scanner<'a> {
                         "extern" => {
                             if ident_is(v.get(i + 1), "crate") {
                                 if let Some((n, _, nsp, j)) = parse_extern_crate(&v, i) {
-                                    let tp = TokPath { path: Path::new(false, vec![n]), spans: vec![tspan(nsp)], next: 0 };
+                                    let tp = TokPath {
+                                        path: Path::new(false, vec![n]),
+                                        spans: vec![tspan(nsp)],
+                                        next: 0,
+                                    };
                                     let hi = start(v[j].span()).0;
                                     for (r, what) in self.path_rules(&tp, false) {
                                         self.push(r, what, tp.spans.clone(), (l, hi), "");
@@ -264,10 +307,15 @@ impl<'a> Scanner<'a> {
                             } else {
                                 self.push("ffi", "extern".into(), sp, (l, l), "");
                                 // a foreign block `extern "C" { ... }`, not an `extern fn` body
-                                let k = if matches!(v.get(i + 1), Some(TokenTree::Literal(_))) { i + 2 } else { i + 1 };
+                                let k = if matches!(v.get(i + 1), Some(TokenTree::Literal(_))) {
+                                    i + 2
+                                } else {
+                                    i + 1
+                                };
                                 if let Some(TokenTree::Group(g)) = v.get(k) {
                                     if g.delimiter() == Delimiter::Brace {
-                                        self.occs.last_mut().unwrap().block = Some((start(g.span()).0, end(g.span()).0));
+                                        self.occs.last_mut().unwrap().block =
+                                            Some((start(g.span()).0, end(g.span()).0));
                                     }
                                 }
                                 i += 1;
@@ -295,7 +343,13 @@ impl<'a> Scanner<'a> {
                                     if let Some(t) = v.get(i + 2) {
                                         sp.push(tspan(t.span()));
                                     }
-                                    self.push("include", "#[path] to a non-.rs file".into(), sp, (l, l), "");
+                                    self.push(
+                                        "include",
+                                        "#[path] to a non-.rs file".into(),
+                                        sp,
+                                        (l, l),
+                                        "",
+                                    );
                                 }
                             }
                             i += 1;
@@ -306,7 +360,8 @@ impl<'a> Scanner<'a> {
                     self.path_at(&v, &mut i, in_attr);
                 }
                 TokenTree::Punct(_) => {
-                    if colon2(&v, i) || (punct_is(v.get(i), '$') && ident_is(v.get(i + 1), "crate")) {
+                    if colon2(&v, i) || (punct_is(v.get(i), '$') && ident_is(v.get(i + 1), "crate"))
+                    {
                         self.path_at(&v, &mut i, in_attr);
                     } else {
                         i += 1;
@@ -327,7 +382,8 @@ impl<'a> Scanner<'a> {
         };
         let lo = tp.spans.first().map(|s| s.0).unwrap_or(0);
         let hi = tp.spans.last().map(|s| s.0).unwrap_or(lo);
-        let mcall = punct_is(v.get(tp.next), '!') && matches!(v.get(tp.next + 1), Some(TokenTree::Group(_)));
+        let mcall = punct_is(v.get(tp.next), '!')
+            && matches!(v.get(tp.next + 1), Some(TokenTree::Group(_)));
         for (r, what) in self.path_rules(&tp, mcall) {
             self.push(r, what, tp.spans.clone(), (lo, hi), "");
         }
@@ -338,17 +394,46 @@ impl<'a> Scanner<'a> {
                 _ => unreachable!(),
             };
             let ghi = end(g.span()).0;
-            if matches!(last, "global_asm" | "asm" | "naked_asm") && !self.occs.iter().any(|o| o.rule == "ffi" && o.line == hi && o.lo == lo) {
-                self.push("ffi", format!("{last}! (assembly)"), tp.spans.clone(), (lo, ghi), "");
+            if matches!(last, "global_asm" | "asm" | "naked_asm")
+                && !self
+                    .occs
+                    .iter()
+                    .any(|o| o.rule == "ffi" && o.line == hi && o.lo == lo)
+            {
+                self.push(
+                    "ffi",
+                    format!("{last}! (assembly)"),
+                    tp.spans.clone(),
+                    (lo, ghi),
+                    "",
+                );
             }
             if self.is_include_macro(&tp) && !include_arg_ok(&g) {
-                self.push("include", "include! of a non-.rs or computed path".into(), tp.spans.clone(), (lo, ghi), "");
+                self.push(
+                    "include",
+                    "include! of a non-.rs or computed path".into(),
+                    tp.spans.clone(),
+                    (lo, ghi),
+                    "",
+                );
             }
             if in_attr && matches!(last, "include_str" | "include_bytes") {
-                self.push("include", format!("{last}! in an attribute (a doc include becomes doctests)"), tp.spans.clone(), (lo, ghi), "");
+                self.push(
+                    "include",
+                    format!("{last}! in an attribute (a doc include becomes doctests)"),
+                    tp.spans.clone(),
+                    (lo, ghi),
+                    "",
+                );
             }
             if matches!(last, "paste" | "concat_idents") {
-                self.push("include", format!("{last}! can build any identifier or path"), tp.spans.clone(), (lo, ghi), "");
+                self.push(
+                    "include",
+                    format!("{last}! can build any identifier or path"),
+                    tp.spans.clone(),
+                    (lo, ghi),
+                    "",
+                );
             }
         }
         *i = tp.next;
@@ -360,7 +445,9 @@ impl<'a> Scanner<'a> {
             return;
         }
         for code in doc::code_blocks(&lines) {
-            let Ok(ts) = code.text.parse::<TokenStream>() else { continue };
+            let Ok(ts) = code.text.parse::<TokenStream>() else {
+                continue;
+            };
             let mut a = Aliases::default();
             collect_aliases(ts.clone(), &mut a);
             let mut sub = Scanner::new(&a, self.depth + 1);
@@ -383,7 +470,11 @@ impl<'a> Scanner<'a> {
 /// `include!("x.rs")`: one string literal ending in .rs (an optional trailing comma).
 fn include_arg_ok(g: &Group) -> bool {
     let v: Vec<TokenTree> = g.stream().into_iter().collect();
-    let n = if punct_is(v.last(), ',') { v.len() - 1 } else { v.len() };
+    let n = if punct_is(v.last(), ',') {
+        v.len() - 1
+    } else {
+        v.len()
+    };
     n == 1 && matches!(lit_str(v.first()), Some((s, _)) if s.to_ascii_lowercase().ends_with(".rs"))
 }
 
@@ -395,5 +486,13 @@ fn doc_attr(g: &Group) -> Option<Vec<DocLine>> {
     }
     let (val, sp) = lit_str(v.get(2))?;
     let first = start(sp).0;
-    Some(val.split('\n').enumerate().map(|(k, t)| DocLine { line: first + k, text: t.to_string() }).collect())
+    Some(
+        val.split('\n')
+            .enumerate()
+            .map(|(k, t)| DocLine {
+                line: first + k,
+                text: t.to_string(),
+            })
+            .collect(),
+    )
 }
