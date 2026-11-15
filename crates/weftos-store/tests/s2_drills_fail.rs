@@ -20,8 +20,8 @@ fn drill_3a_publish_interrupted_midway() {
     let (be, _d) = backend();
     let me = who("writer", "m1");
     // Cut points: the Nth put fails. Changes in v2: d3 edited in place, d20..d22 new, d0 deleted.
-    // v2 needs 4 object puts (d3, d20, d21, d22) then the manifest (put #5); delete #0 is the absent bundle key, delete #1 the first stale object.
-    for (label, put_at, delete_at) in [("before_any_put", 0usize, usize::MAX), ("after_first_put", 1, usize::MAX), ("at_manifest_put", 4, usize::MAX), ("during_stale_sweep", usize::MAX, 1)] {
+    // v2 needs 4 object puts (d3, d20, d21, d22) then the manifest (put #5); delete #0 is the first stale object (the publish no longer issues a blind DELETE of an absent bundle key).
+    for (label, put_at, delete_at) in [("before_any_put", 0usize, usize::MAX), ("after_first_put", 1, usize::MAX), ("at_manifest_put", 4, usize::MAX), ("during_stale_sweep", usize::MAX, 0)] {
         let u = uniq();
         let (pb, wb) = mk_buckets(&be, &u);
         let slug = "feat-x";
