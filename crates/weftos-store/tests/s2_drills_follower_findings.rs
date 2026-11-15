@@ -167,7 +167,6 @@ fn an_empty_digest_does_not_blind_a_knowing_follower_when_the_registry_is_popula
 }
 
 #[test]
-#[ignore = "FINDING 6e: a damaged or missing .wt-index.json leaves deleted docs in the mirror"]
 fn a_missing_mirror_index_still_prunes_docs_deleted_upstream() {
     let be = MemBackend::new();
     let env = Env::new(&be, None);
@@ -179,6 +178,67 @@ fn a_missing_mirror_index_still_prunes_docs_deleted_upstream() {
     let e2 = register(&be, &env.pr, "m", &e1.bucket);
     sync_docs(&be, &e2, cache.path()).unwrap();
     assert!(!cache.path().join("m/docs/b.md").exists(), "b.md was deleted upstream");
+}
+
+/// Sync `m` with two docs, then lose the index, plant `extra`, delete b.md upstream and sync again.
+fn lose_index_then_sync(plant: impl FnOnce(&std::path::Path)) -> (tempfile::TempDir, std::path::PathBuf) {
+    let be = MemBackend::new();
+    let env = Env::new(&be, None);
+    let e1 = up(&env, "m", &[("docs/a.md", "# A\n"), ("docs/b.md", "# B\n")], &Pub::default());
+    let cache = tempfile::tempdir().unwrap();
+    sync_docs(&be, &e1, cache.path()).unwrap();
+    let mirror = cache.path().join("m");
+    std::fs::write(mirror.join(".wt-index.json"), b"[\"docs/a").unwrap(); // truncated
+    plant(&mirror);
+    push(&be, &e1.bucket, &tree(&[("docs/a.md", "# A\n")]), &Pub { head: "h2", now: T0 + 5, ..Pub::default() }).unwrap();
+    let e2 = register(&be, &env.pr, "m", &e1.bucket);
+    sync_docs(&be, &e2, cache.path()).unwrap();
+    assert!(!mirror.join("docs/b.md").exists());
+    assert!(mirror.join("docs/a.md").exists());
+    (cache, mirror)
+}
+
+#[test]
+fn a_rebuilt_index_never_deletes_what_the_mirror_did_not_write() {
+    let (_keep, mirror) = lose_index_then_sync(|m| {
+        std::fs::create_dir_all(m.join("docs")).unwrap();
+        std::fs::write(m.join("docs/notes-by-me.md"), b"mine").unwrap(); // doc-shaped but writable: not the mirror's
+        std::fs::write(m.join("scratch.bin"), b"x").unwrap(); // not doc-shaped
+    });
+    assert_eq!(std::fs::read(mirror.join("docs/notes-by-me.md")).unwrap(), b"mine");
+    assert!(mirror.join("scratch.bin").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_rebuilt_index_does_not_follow_a_symlink_out_of_the_mirror() {
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(outside.path().join("docs")).unwrap();
+    let victim = outside.path().join("docs/victim.md");
+    std::fs::write(&victim, b"keep").unwrap();
+    let mut p = std::fs::metadata(&victim).unwrap().permissions();
+    p.set_readonly(true);
+    std::fs::set_permissions(&victim, p).unwrap();
+    let out_path = outside.path().to_path_buf();
+    let (_keep, mirror) = lose_index_then_sync(|m| {
+        std::os::unix::fs::symlink(&out_path, m.join("link")).unwrap(); // a directory symlink
+        std::os::unix::fs::symlink(&victim, m.join("docs-link.md")).unwrap(); // a file symlink
+    });
+    assert_eq!(std::fs::read(&victim).unwrap(), b"keep", "nothing outside the mirror is touched");
+    assert!(std::fs::symlink_metadata(mirror.join("link")).is_ok());
+}
+
+#[test]
+fn a_rebuilt_index_prunes_nested_docs_too() {
+    let be = MemBackend::new();
+    let env = Env::new(&be, None);
+    let e1 = up(&env, "m", &[("docs/a.md", "# A\n"), ("docs/sub/deep/c.md", "# C\n")], &Pub::default());
+    let cache = tempfile::tempdir().unwrap();
+    sync_docs(&be, &e1, cache.path()).unwrap();
+    std::fs::write(cache.path().join("m/.wt-index.json"), b"").unwrap();
+    push(&be, &e1.bucket, &tree(&[("docs/a.md", "# A\n")]), &Pub { head: "h2", now: T0 + 5, ..Pub::default() }).unwrap();
+    sync_docs(&be, &register(&be, &env.pr, "m", &e1.bucket), cache.path()).unwrap();
+    assert!(!cache.path().join("m/docs/sub/deep/c.md").exists());
 }
 
 #[test]

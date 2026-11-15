@@ -58,7 +58,7 @@ pub(crate) fn looks_like_private_key(data: &[u8]) -> bool {
     data.len() >= NEEDLE.len() && data.windows(NEEDLE.len()).any(|w| w == NEEDLE)
 }
 
-fn is_doc_path(path: &str) -> bool {
+pub(crate) fn is_doc_path(path: &str) -> bool {
     path.starts_with("docs/")
         || path.starts_with(".planning/")
         || path.starts_with("planning/")

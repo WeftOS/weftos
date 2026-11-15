@@ -106,6 +106,53 @@ pub fn search_docs<B: ObjectBackend>(
 
 const INDEX: &str = ".wt-index.json";
 
+/// Rebuild the list of files this mirror wrote when its index is unusable. Only a file the mirror
+/// can be told to have written is listed: a regular file (symlinks are never followed, neither as
+/// files nor as directories, so nothing outside `dest` is reached) whose path is one the mirror
+/// would accept for a doc (valid key, not dangerous or secret, doc-shaped) and that is read-only.
+/// The mirror makes every file it completes read-only, and a file a person put there is not, so a
+/// writable file is left alone. A file from an interrupted sync that never got that far is also left
+/// (it is overwritten if still wanted, and goes at the next complete sync's prune once read-only).
+fn rebuild_index(dest: &Path) -> Vec<String> {
+    const MAX_DEPTH: usize = 32;
+    const MAX_FILES: usize = 100_000;
+    fn walk(dir: &Path, rel: &str, depth: usize, out: &mut Vec<String>) {
+        if depth > MAX_DEPTH {
+            return;
+        }
+        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        for ent in rd.flatten() {
+            if out.len() >= MAX_FILES {
+                return;
+            }
+            let Ok(name) = ent.file_name().into_string() else { continue };
+            if name.starts_with(".wt-") {
+                continue;
+            }
+            let Ok(md) = std::fs::symlink_metadata(ent.path()) else { continue };
+            let child = if rel.is_empty() { name } else { format!("{rel}/{name}") };
+            if md.file_type().is_symlink() {
+                continue;
+            }
+            if md.is_dir() {
+                walk(&ent.path(), &child, depth + 1, out);
+            } else if md.is_file()
+                && md.permissions().readonly()
+                && validate_key(&child).is_ok()
+                && !crate::share::is_dangerous_path(&child)
+                && !crate::share::is_secret_path(&child)
+                && crate::share::is_doc_path(&child)
+            {
+                out.push(child);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(dest, "", 0, &mut out);
+    out.sort();
+    out
+}
+
 /// Mirror one worktree's docs under `cache/<slug>/`, read-only, removing docs that left the tree.
 /// The cache is the follower's own: local edits in it are overwritten.
 pub fn sync_docs<B: ObjectBackend>(b: &B, e: &RegistryEntry, cache: &Path) -> Result<FetchReport> {
@@ -129,10 +176,12 @@ pub fn sync_docs<B: ObjectBackend>(b: &B, e: &RegistryEntry, cache: &Path) -> Re
     if std::fs::symlink_metadata(&idx).is_ok_and(|m| m.file_type().is_symlink()) {
         std::fs::remove_file(&idx)?;
     }
-    let old: Vec<String> = std::fs::read(&idx)
-        .ok()
-        .and_then(|d| serde_json::from_slice(&d).ok())
-        .unwrap_or_default();
+    // A missing, truncated or empty index (a crash while writing it, a full disk) is rebuilt from
+    // the mirror directory, so docs deleted upstream are still pruned.
+    let old: Vec<String> = match std::fs::read(&idx).ok().and_then(|d| serde_json::from_slice(&d).ok()) {
+        Some(v) => v,
+        None => rebuild_index(&dest),
+    };
     // Index first, as old + new, so a failed fetch below still leaves every file it may have
     // written (or that was there) tracked and prunable on the next run.
     let mut tracked: std::collections::BTreeSet<String> = old.iter().cloned().collect();
