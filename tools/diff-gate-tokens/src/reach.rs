@@ -51,6 +51,147 @@ struct Walk<'a> {
     aliases: Aliases,
     refs: Vec<Ref>,
     unknown: Option<String>,
+    /// `macro_rules!` definitions in this file: name and the macros its body invokes.
+    defs: Vec<(String, Vec<Vec<String>>)>,
+    /// Macros invoked in item position (module level), outside test code: every path the
+    /// invocation may stand for (as written and through `use` aliases).
+    item_calls: Vec<(String, Vec<Vec<String>>)>,
+}
+
+/// Item-position macros that cannot declare a module: std's `thread_local!` and
+/// `compile_error!`, and `cfg_if!`, whose expansion is its own body (which the walk reads).
+const ITEM_MACROS: &[&[&str]] = &[
+    &["thread_local"],
+    &["std", "thread_local"],
+    &["compile_error"],
+    &["std", "compile_error"],
+    &["core", "compile_error"],
+    &["cfg_if"],
+    &["cfg_if", "cfg_if"],
+];
+
+/// std macros a `macro_rules!` body may invoke without making its expansion unknown: none of
+/// them expands to an item.
+const EXPR_MACROS: &[&str] = &[
+    "assert",
+    "assert_eq",
+    "assert_ne",
+    "debug_assert",
+    "debug_assert_eq",
+    "debug_assert_ne",
+    "cfg",
+    "column",
+    "compile_error",
+    "concat",
+    "dbg",
+    "env",
+    "eprint",
+    "eprintln",
+    "file",
+    "format",
+    "format_args",
+    "line",
+    "matches",
+    "module_path",
+    "option_env",
+    "panic",
+    "print",
+    "println",
+    "stringify",
+    "todo",
+    "unimplemented",
+    "unreachable",
+    "vec",
+    "write",
+    "writeln",
+];
+
+fn is_std_root(s: &str) -> bool {
+    matches!(s, "std" | "core" | "alloc")
+}
+
+fn expr_macro_ok(segs: &[String]) -> bool {
+    match segs {
+        [n] => EXPR_MACROS.contains(&n.as_str()),
+        [r, n] => is_std_root(r) && EXPR_MACROS.contains(&n.as_str()),
+        _ => false,
+    }
+}
+
+fn item_macro_ok(segs: &[String]) -> bool {
+    ITEM_MACROS
+        .iter()
+        .any(|m| m.len() == segs.len() && m.iter().zip(segs).all(|(a, b)| *a == b))
+}
+
+/// A local macro named by `segs`: `name!`, `$crate::name!`, `crate::name!`, `self::name!`.
+fn local_macro_name(segs: &[String]) -> Option<&str> {
+    match segs {
+        [n] => Some(n.as_str()),
+        [r, n] if matches!(r.as_str(), "$crate" | "crate" | "self") => Some(n.as_str()),
+        _ => None,
+    }
+}
+
+/// What a `macro_rules!` body can produce, read on its tokens without expanding it. Returns
+/// (whether it can declare a module or a module path, the macros it invokes).
+fn macro_def_info(ts: TokenStream) -> (bool, Vec<Vec<String>>) {
+    fn go(v: &[TokenTree], in_attr: bool, out: &mut (bool, Vec<Vec<String>>)) {
+        let mut i = 0;
+        while i < v.len() {
+            match &v[i] {
+                TokenTree::Ident(id) if *id == "mod" => out.0 = true,
+                TokenTree::Ident(_) if in_attr && name_is(v.get(i), "path") => out.0 = true,
+                TokenTree::Punct(p) if p.as_char() == '#' => {
+                    let gi = if punct_is(v.get(i + 1), '!') {
+                        i + 2
+                    } else {
+                        i + 1
+                    };
+                    if let Some(TokenTree::Group(g)) = v.get(gi) {
+                        if g.delimiter() == Delimiter::Bracket {
+                            let inner: Vec<TokenTree> = g.stream().into_iter().collect();
+                            go(&inner, true, out);
+                            i = gi + 1;
+                            continue;
+                        }
+                    }
+                }
+                TokenTree::Group(g) => {
+                    let inner: Vec<TokenTree> = g.stream().into_iter().collect();
+                    go(&inner, in_attr, out);
+                }
+                _ => {}
+            }
+            let start = if punct_is(v.get(i), '$') && keyword_is(v.get(i + 1), "crate") {
+                Some(i + 1)
+            } else if matches!(v.get(i), Some(TokenTree::Ident(_))) || colon2(v, i) {
+                Some(i)
+            } else {
+                None
+            };
+            if let Some(st) = start {
+                if let Some((mut segs, _, k)) = path_at(v, st) {
+                    if st > i {
+                        segs[0] = "$crate".into(); // `$crate` reads as the ident `crate`
+                    }
+                    if punct_is(v.get(k), '!') {
+                        if segs.last().map(|l| l == "include").unwrap_or(false) {
+                            out.0 = true;
+                        }
+                        out.1.push(segs);
+                    }
+                    i = k.max(i + 1);
+                    continue;
+                }
+            }
+            i += 1;
+        }
+    }
+    let v: Vec<TokenTree> = ts.into_iter().collect();
+    let mut out = (false, Vec::new());
+    go(&v, false, &mut out);
+    out
 }
 
 /// `cfg(test)` or `cfg(all(.., test, ..))`: the only predicates that make an item test-only.
@@ -98,6 +239,8 @@ fn lit(t: Option<&TokenTree>) -> Option<String> {
 struct ModAttrs {
     test: bool,
     paths: Vec<(String, bool, bool)>, // (value, unconditional, test-only)
+    /// A `path` value that is not a string literal (`#[path = $p]`, `concat!(..)`).
+    computed_path: bool,
 }
 
 fn read_attr(v: &[TokenTree], under_test: bool, cond: bool, depth: usize, m: &mut ModAttrs) {
@@ -111,8 +254,9 @@ fn read_attr(v: &[TokenTree], under_test: bool, cond: bool, depth: usize, m: &mu
         return;
     }
     if name_is(v.first(), "path") && punct_is(v.get(1), '=') {
-        if let Some(p) = lit(v.get(2)) {
-            m.paths.push((p, !cond, under_test));
+        match lit(v.get(2)) {
+            Some(p) if v.len() == 3 => m.paths.push((p, !cond, under_test)),
+            _ => m.computed_path = true,
         }
         return;
     }
@@ -165,6 +309,46 @@ fn path_at(v: &[TokenTree], i: usize) -> Option<(Vec<String>, bool, usize)> {
     (!segs.is_empty()).then_some((segs, abs, k))
 }
 
+/// For each token of one level: whether an item starts there (after `;`, after a `{ }` group,
+/// at the level's start; attributes and `pub` / `pub(..)` keep the position).
+fn item_starts(v: &[TokenTree]) -> Vec<bool> {
+    let mut out = vec![false; v.len()];
+    let mut at = true;
+    let mut i = 0;
+    while i < v.len() {
+        out[i] = at;
+        if punct_is(v.get(i), '#') {
+            let gi = if punct_is(v.get(i + 1), '!') {
+                i + 2
+            } else {
+                i + 1
+            };
+            if matches!(v.get(gi), Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Bracket)
+            {
+                for o in out.iter_mut().take(gi + 1).skip(i) {
+                    *o = at;
+                }
+                i = gi + 1;
+                continue;
+            }
+        }
+        at = match &v[i] {
+            TokenTree::Punct(p) => p.as_char() == ';',
+            TokenTree::Group(g) => {
+                g.delimiter() == Delimiter::Brace
+                    || (g.delimiter() == Delimiter::Parenthesis
+                        && at
+                        && i > 0
+                        && keyword_is(v.get(i - 1), "pub"))
+            }
+            TokenTree::Ident(id) => *id == "pub" && at,
+            TokenTree::Literal(_) => false,
+        };
+        i += 1;
+    }
+    out
+}
+
 impl Walk<'_> {
     fn is_include(&self, segs: &[String], abs: bool) -> bool {
         if segs.len() == 1 && segs[0] == "include" {
@@ -178,8 +362,11 @@ impl Walk<'_> {
     }
 
     /// Walk one token level. `dirs`: where child modules of the current module live.
-    fn walk(&mut self, ts: TokenStream, dirs: &[PathBuf], test: bool) {
+    /// `items`: this level is a module body (file, inline module, or the body of a macro
+    /// invoked there), where a macro invocation may expand to a module declaration.
+    fn walk(&mut self, ts: TokenStream, dirs: &[PathBuf], test: bool, items: bool) {
         let v: Vec<TokenTree> = ts.into_iter().collect();
+        let starts = item_starts(&v);
         let mut attrs: Vec<Group> = Vec::new();
         let mut i = 0;
         while i < v.len() {
@@ -211,9 +398,19 @@ impl Walk<'_> {
                     continue;
                 }
                 TokenTree::Ident(id) if *id == "mod" => {
+                    let m = mod_attrs(&attrs);
+                    if !(test || m.test) {
+                        if !matches!(v.get(i + 1), Some(TokenTree::Ident(_))) {
+                            self.unknown =
+                                Some("a mod declaration whose name is not written out".into());
+                        } else if m.computed_path {
+                            self.unknown = Some(
+                                "a #[path] attribute whose value is not a string literal".into(),
+                            );
+                        }
+                    }
                     if let Some(TokenTree::Ident(n)) = v.get(i + 1) {
                         let nm = name(&n.to_string());
-                        let m = mod_attrs(&attrs);
                         let t = test || m.test;
                         match v.get(i + 2) {
                             Some(TokenTree::Punct(p)) if p.as_char() == ';' => {
@@ -249,7 +446,7 @@ impl Walk<'_> {
                                     child.push(self.file_dir.join(p));
                                     child.extend(dirs.iter().map(|d| d.join(p)));
                                 }
-                                self.walk(g.stream(), &child, t);
+                                self.walk(g.stream(), &child, t, true);
                                 attrs.clear();
                                 i += 3;
                                 continue;
@@ -262,7 +459,7 @@ impl Walk<'_> {
                     continue;
                 }
                 TokenTree::Group(g) => {
-                    self.walk(g.stream(), dirs, test);
+                    self.walk(g.stream(), dirs, test, false);
                     attrs.clear();
                     i += 1;
                     continue;
@@ -272,8 +469,39 @@ impl Walk<'_> {
             // a macro call `path!(...)`: include! adds a reference
             let t_here = test || mod_attrs(&attrs).test;
             if let Some((segs, abs, k)) = path_at(&v, i) {
+                // macro_rules! name { body }: the walk does not expand macros, so a body that
+                // can declare a module, a module path or an include makes this file unknown
+                if segs.len() == 1 && segs[0] == "macro_rules" && punct_is(v.get(k), '!') {
+                    if let (Some(TokenTree::Ident(n)), Some(TokenTree::Group(g))) =
+                        (v.get(k + 1), v.get(k + 2))
+                    {
+                        let nm = name(&n.to_string());
+                        let (creates, calls) = macro_def_info(g.stream());
+                        if creates && !t_here {
+                            self.unknown = Some(format!(
+                                "macro_rules! {nm} can declare a module, a #[path] or an include! (macros are not expanded)"
+                            ));
+                        }
+                        if !t_here {
+                            self.defs.push((nm, calls));
+                        }
+                        attrs.clear();
+                        i = k + 3;
+                        continue;
+                    }
+                }
                 if punct_is(v.get(k), '!') {
                     if let Some(TokenTree::Group(g)) = v.get(k + 1) {
+                        if items && starts[i] && !t_here && !self.is_include(&segs, abs) {
+                            let p = RPath::new(abs, segs.clone());
+                            let mut cands: Vec<Vec<String>> = vec![segs.clone()];
+                            for (c, _) in self.aliases.expand(&p) {
+                                if !cands.contains(&c.segs) {
+                                    cands.push(c.segs);
+                                }
+                            }
+                            self.item_calls.push((segs.join("::"), cands));
+                        }
                         if self.is_include(&segs, abs) {
                             let args: Vec<TokenTree> = g.stream().into_iter().collect();
                             let n = if punct_is(args.last(), ',') {
@@ -295,7 +523,7 @@ impl Walk<'_> {
                                 _ => {}
                             }
                         }
-                        self.walk(g.stream(), dirs, test);
+                        self.walk(g.stream(), dirs, test, items);
                         attrs.clear();
                         i = k + 2;
                         continue;
@@ -397,7 +625,9 @@ pub fn reach(root: &Path, roots: &[String]) -> Reach {
     let mut enqueue = |p: PathBuf,
                        extra: Vec<PathBuf>,
                        out: &mut Reach,
-                       queue: &mut VecDeque<(PathBuf, Vec<PathBuf>)>| {
+                       queue: &mut VecDeque<(PathBuf, Vec<PathBuf>)>|
+     -> bool {
+        let mut any = false;
         for found in resolve_ci(&normalize(&p)) {
             let Ok(canon) = found.canonicalize() else {
                 continue; // a dangling symlink builds nothing
@@ -417,14 +647,23 @@ pub fn reach(root: &Path, roots: &[String]) -> Reach {
                     dirs.push(d.clone());
                 }
             }
+            any = true;
             if seen.insert((canon.clone(), dirs.clone())) {
                 queue.push_back((canon, dirs));
             }
         }
+        any
     };
+    // A root is a target Cargo reported: one the walk cannot open is a failure, not a skip
+    // (R4-A2). Its own path is the unknown file.
     for r in roots {
-        enqueue(croot.join(r), Vec::new(), &mut out, &mut queue);
+        if !enqueue(croot.join(r), Vec::new(), &mut out, &mut queue) {
+            out.unknown
+                .insert(r.clone(), "a Cargo target root the walk cannot open".into());
+        }
     }
+    let mut defs: BTreeMap<String, Vec<Vec<String>>> = BTreeMap::new();
+    let mut calls: Vec<(String, String, Vec<Vec<String>>)> = Vec::new();
     while let Some((f, dirs)) = queue.pop_front() {
         visits += 1;
         let relf = rel(&croot, &f).unwrap_or_default();
@@ -452,10 +691,18 @@ pub fn reach(root: &Path, roots: &[String]) -> Reach {
             aliases,
             refs: Vec::new(),
             unknown: None,
+            defs: Vec::new(),
+            item_calls: Vec::new(),
         };
-        w.walk(ts, &dirs, false);
+        w.walk(ts, &dirs, false, true);
         if let Some(why) = w.unknown.take() {
             out.unknown.insert(relf.clone(), why);
+        }
+        for (n, c) in w.defs.drain(..) {
+            defs.entry(n).or_default().extend(c);
+        }
+        for (shown, c) in w.item_calls.drain(..) {
+            calls.push((relf.clone(), shown, c));
         }
         for r in w.refs {
             let extra = if r.splice { dirs.clone() } else { Vec::new() };
@@ -464,7 +711,50 @@ pub fn reach(root: &Path, roots: &[String]) -> Reach {
             }
         }
     }
+    // A macro invoked in item position may expand to a module declaration (R4-B1). It is
+    // followed only when it is std's thread_local! / compile_error!, cfg_if!, or a
+    // macro_rules! of this crate whose body invokes nothing but such macros and std's
+    // expression macros (a body that declares modules is already unknown above).
+    let mut memo: BTreeMap<String, bool> = BTreeMap::new();
+    for (f, shown, cands) in calls {
+        let ok = cands.iter().all(|c| {
+            item_macro_ok(c)
+                || local_macro_name(c).is_some_and(|n| clean_def(n, &defs, &mut memo, 0))
+        });
+        if !ok {
+            out.unknown.entry(f).or_insert(format!(
+                "{shown}! in item position may declare a module (macros are not expanded)"
+            ));
+        }
+    }
     out
+}
+
+/// A local `macro_rules!` whose expansion cannot declare a module: defined in the walked
+/// files, and invoking only std macros or other such local macros. A cycle is not clean.
+fn clean_def(
+    n: &str,
+    defs: &BTreeMap<String, Vec<Vec<String>>>,
+    memo: &mut BTreeMap<String, bool>,
+    depth: usize,
+) -> bool {
+    if let Some(&v) = memo.get(n) {
+        return v;
+    }
+    let Some(calls) = defs.get(n) else {
+        return false;
+    };
+    if depth > 32 {
+        return false;
+    }
+    memo.insert(n.to_string(), false); // a cycle reads as not clean
+    let ok = calls.iter().all(|c| {
+        expr_macro_ok(c)
+            || item_macro_ok(c)
+            || local_macro_name(c).is_some_and(|m| clean_def(m, defs, memo, depth + 1))
+    });
+    memo.insert(n.to_string(), ok);
+    ok
 }
 
 #[cfg(test)]
@@ -546,11 +836,74 @@ mod tests {
             ("src/s_tests.rs", T),
         ]);
         assert!(r.nontest.contains("src/s_tests.rs"));
+        // a module declared inside a macro_rules! body: the walk does not expand macros
         let r = built(&[
             ("src/lib.rs", "macro_rules! m { () => { mod s_tests; }; }\n"),
             ("src/s_tests.rs", T),
         ]);
+        assert!(r.unknown.contains_key("src/lib.rs"));
+    }
+
+    /// R4-B1: a macro can fill in a module's name or path, and a macro the walk cannot see
+    /// can expand to a module declaration. Each makes the declaring file unknown.
+    #[test]
+    fn macros_fail_closed() {
+        for lib in [
+            "macro_rules! decl { ($n:ident) => { pub mod $n; }; }\ndecl!(s_tests);\n",
+            "macro_rules! decl { ($($n:ident),*) => { $(pub mod $n;)* }; }\ndecl!(a, s_tests);\n",
+            "macro_rules! at { ($p:literal) => { #[path = $p] pub mod h; }; }\nat!(\"s_tests.rs\");\n",
+            "macro_rules! inc { ($p:literal) => { include!($p); }; }\n",
+            "macro_rules! at { ($p:literal) => { #[cfg_attr(unix, path = $p)] pub mod h; }; }\n",
+            // invoked in item position, defined elsewhere (another crate, a proc-macro)
+            "decl!(s_tests);\n",
+            "some_crate::decl! { s_tests }\n",
+            "pub mod inner { decl!(s_tests); }\n",
+            "#[cfg(unix)]\npub(crate) decl!(s_tests);\n",
+            "pub fn a() {}\ndecl!(s_tests);\n",
+            // a local macro that hands its input to a macro the walk cannot see
+            "macro_rules! wrap { ($n:ident) => { other::decl!($n); }; }\nwrap!(s_tests);\n",
+            // an allowlisted name bound to something else
+            "use evil::mk as thread_local;\nthread_local! { s_tests }\n",
+            // the module name or path written by a macro in a #[path] value
+            "#[path = concat!(\"s_tests\", \".rs\")]\nmod h;\n",
+        ] {
+            let r = built(&[("src/lib.rs", lib), ("src/s_tests.rs", T), ("src/a.rs", T)]);
+            assert!(r.unknown.contains_key("src/lib.rs"), "{lib}: {:?}", r.unknown);
+        }
+        // controls: std's item macros, cfg_if (its body is read), a local macro that only uses
+        // std macros, statement-position macros, and macros in test code
+        for lib in [
+            "thread_local! { static X: u8 = 0; }\ncompile_error!(\"x\");\n",
+            "std::thread_local! { static X: u8 = 0; }\n",
+            "cfg_if::cfg_if! { if #[cfg(unix)] { pub fn a() {} } }\n",
+            "macro_rules! k { ($e:expr) => { pub const K: &str = stringify!($e); }; }\nk!(1);\n",
+            "macro_rules! k { () => { pub fn k() { $crate::j!(); } }; }\nmacro_rules! j { () => { println!(\"x\") }; }\nk!();\n",
+            "pub fn f() { println!(\"x\"); tracing::info!(\"y\"); }\n",
+            "pub const V: &str = env!(\"CARGO_PKG_VERSION\");\nstatic S: &str = include_str!(\"x.txt\");\n",
+            "#[doc = include_str!(\"x.md\")]\npub struct D;\n",
+            "#[cfg(test)]\nmod t { decl!(s_tests); }\n",
+            "#[cfg(test)]\nmacro_rules! decl { ($n:ident) => { pub mod $n; }; }\n",
+        ] {
+            let r = built(&[("src/lib.rs", lib), ("src/s_tests.rs", T)]);
+            assert!(r.unknown.is_empty(), "{lib}: {:?}", r.unknown);
+            assert!(!r.nontest.contains("src/s_tests.rs"), "{lib}");
+        }
+    }
+
+    /// R4-A2: a root the walk cannot open is unknown, not skipped.
+    #[test]
+    fn unopenable_root_is_unknown() {
+        let d = tree(&[("src/lib%.rs", "mod s_tests;\n"), ("src/s_tests.rs", T)]);
+        let r = reach(&d.0, &["src/lib%25.rs".to_string()]);
+        assert!(r.unknown.contains_key("src/lib%25.rs"), "{:?}", r.unknown);
+        let r = reach(&d.0, &["src/lib%.rs".to_string()]);
+        assert!(r.unknown.is_empty());
         assert!(r.nontest.contains("src/s_tests.rs"));
+        for name in ["src/a b.rs", "src/\u{e9}t\u{e9}.rs"] {
+            let d = tree(&[(name, "mod s_tests;\n"), ("src/s_tests.rs", T)]);
+            let r = reach(&d.0, &[name.to_string()]);
+            assert!(r.nontest.contains("src/s_tests.rs"), "{name}");
+        }
     }
 
     #[test]
