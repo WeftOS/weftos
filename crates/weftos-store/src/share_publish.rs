@@ -139,6 +139,11 @@ pub fn publish_tree<B: ObjectBackend>(
                 .collect()
         })
         .unwrap_or_default();
+    // One listing of the tree prefix per publish, instead of one HEAD per file: a file is unchanged
+    // when its sha matches the previous manifest AND its object is listed with the same size. The
+    // same listing feeds the stale sweep at the end (objects put by this run are in `kept`).
+    let listed: std::collections::HashMap<String, u64> =
+        b.list(bucket, TREE_PREFIX)?.into_iter().map(|o| (o.key, o.size)).collect();
     let mut rep = PublishReport::default();
     let (mut files, mut docs, mut total) = (Vec::new(), Vec::new(), 0u64);
     let mut seen = std::collections::BTreeSet::new();
@@ -204,7 +209,7 @@ pub fn publish_tree<B: ObjectBackend>(
         }
         let sha = sha256_hex(&data);
         let key = format!("{TREE_PREFIX}{p}");
-        if prev_sha.get(p.as_str()) == Some(&sha.as_str()) && b.head(bucket, &key)?.is_some() {
+        if prev_sha.get(p.as_str()) == Some(&sha.as_str()) && listed.get(&key) == Some(&(data.len() as u64)) {
             rep.unchanged += 1;
         } else {
             b.put(bucket, &key, &data)?;
@@ -275,9 +280,9 @@ pub fn publish_tree<B: ObjectBackend>(
     // write but before this sweep leaves objects that no manifest names, and only a listing finds them.
     let kept: std::collections::HashSet<&str> =
         manifest.files.iter().map(|f| f.path.as_str()).collect();
-    for o in b.list(bucket, TREE_PREFIX)? {
-        if !kept.contains(&o.key[TREE_PREFIX.len()..]) {
-            b.delete(bucket, &o.key)?;
+    for key in listed.keys() {
+        if !kept.contains(&key[TREE_PREFIX.len()..]) {
+            b.delete(bucket, key)?;
             rep.removed += 1;
         }
     }
