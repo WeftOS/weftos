@@ -1,0 +1,121 @@
+//! WO-069 lane T: exact backend-call budgets of the S2 writer and landing verbs, as the library
+//! makes them (the daemon adds its own calls on top; see `clawft-weave` `store_worktree_budget`).
+//! Order of the six kinds everywhere: `[get, head, list, put, put_cas, delete, copy]`.
+mod s2_budget_common;
+use s2_budget_common::*;
+use weftos_store::overlay::Overlay;
+use weftos_store::orphan::{OrphanPolicy, mark_orphan};
+use weftos_store::promote::{ArchiveTarget, PromotionPolicy, promote};
+use weftos_store::share::*;
+use weftos_store::share_fetch::*;
+
+#[test]
+fn publish_first_no_change_one_changed_and_refresh() {
+    let b = spy();
+    let s = src(N, D, "t");
+    create(&b, "wt0");
+    // first publish_tree: handoff GET; manifest HEAD (no manifest yet); tree LIST; N object PUT;
+    // bundle DELETE (none given); manifest PUT; handoff create as ONE conditional put (put_cas)
+    let (r, c) = delta(&b, || publish(&b, "wt0", &s, "h0", 5_000));
+    assert_eq!((r.uploaded as u64, r.unchanged), (N, 0));
+    assert_eq!(c, [1, 1, 1, N + 1, 1, 1, 0], "first publish_tree");
+    // the daemon's refresh: manifest HEAD + GET, handoff GET, entry PUT, registry LIST, digest PUT
+    let (_, c) = delta(&b, || refresh(&b, "wt0"));
+    assert_eq!(c, [2, 1, 1, 2, 0, 0, 0], "refresh: summarize (manifest HEAD+GET, handoff GET), entry PUT, digest = LIST + PUT");
+    // nothing changed: the unchanged check uses the single tree LIST, no object is written; the
+    // manifest is still rewritten and the handoff create (None) loses its race: put_cas called once
+    let (r, c) = delta(&b, || publish(&b, "wt0", &s, "h0", 6_000));
+    assert_eq!((r.uploaded, r.unchanged as u64), (0, N));
+    assert_eq!(c, [2, 1, 1, 1, 1, 1, 0], "no-change publish_tree: handoff GET + manifest GET (the manifest now exists, so HEAD + GET)");
+    // one file changed: the same plus one object PUT
+    std::fs::write(s.dir.path().join("src/f10.rs"), "fn f10() { changed }\n").unwrap();
+    let (r, c) = delta(&b, || publish(&b, "wt0", &s, "h1", 7_000));
+    assert_eq!((r.uploaded, r.unchanged as u64), (1, N - 1));
+    assert_eq!(c, [2, 1, 1, 2, 1, 1, 0], "one-file-changed publish_tree = no-change + 1 object PUT");
+}
+
+#[test]
+fn fetch_tree_bundle_and_repeat() {
+    let b = spy();
+    let s = src(N, D, "t");
+    create(&b, "wt0");
+    let bdir = tempfile::tempdir().unwrap();
+    let bundle = bdir.path().join("x.bundle");
+    std::fs::write(&bundle, b"BUNDLE").unwrap();
+    publish_tree(&b, &bucket("wt0"), &tree_src(&s, "wt0", "h0", Some(&bundle)), &Limits::default(), 5_000).unwrap();
+    refresh(&b, "wt0");
+    let out = tempfile::tempdir().unwrap();
+    // whole tree, first: manifest HEAD + GET, then HEAD + GET per file
+    let (r, c) = delta(&b, || fetch_tree(&b, &bucket("wt0"), out.path(), Select::All, false).unwrap());
+    assert_eq!(r.written.len() as u64, N);
+    assert_eq!(c, [1 + N, 1 + N, 0, 0, 0, 0, 0], "manifest HEAD+GET, N x (HEAD + GET)");
+    // repeat, nothing changed: manifest only; local sha256 equal so no object call
+    let (r, c) = delta(&b, || fetch_tree(&b, &bucket("wt0"), out.path(), Select::All, false).unwrap());
+    assert_eq!(r.unchanged.len() as u64, N);
+    assert_eq!(c, [1, 1, 0, 0, 0, 0, 0], "repeat fetch: manifest HEAD + GET");
+    // bundle: manifest read again inside fetch_bundle, bundle HEAD + GET (whole bundle every time)
+    let bo = out.path().join("x.bundle");
+    let (_, c) = delta(&b, || fetch_bundle(&b, &bucket("wt0"), &bo).unwrap());
+    assert_eq!(c, [2, 2, 0, 0, 0, 0, 0], "fetch_bundle: manifest HEAD+GET, bundle HEAD+GET");
+    let (_, c) = delta(&b, || fetch_bundle(&b, &bucket("wt0"), &bo).unwrap());
+    assert_eq!(c, [2, 2, 0, 0, 0, 0, 0], "repeat bundle download is not skipped");
+}
+
+#[test]
+fn claim_and_mark_merged() {
+    let b = spy();
+    project(&b, 1);
+    // claim_merge: handoff GET with its version (HEAD + GET), conditional write (put_cas)
+    let (h, c) = delta(&b, || claim_merge(&b, &bucket("wt0"), &actor("bob"), 9_000).unwrap());
+    assert_eq!(h.epoch, 1);
+    assert_eq!(c, [1, 1, 0, 0, 1, 0, 0], "claim_merge");
+    let (_, c) = delta(&b, || refresh(&b, "wt0"));
+    assert_eq!(c, [2, 1, 1, 2, 0, 0, 0], "claim refresh");
+    let (_, c) = delta(&b, || mark_merged(&b, &bucket("wt0"), &actor("bob"), "done", 9_500).unwrap());
+    assert_eq!(c, [1, 1, 0, 0, 1, 0, 0], "mark_merged");
+}
+
+#[test]
+fn promote_scales_with_edits_and_reserved_objects() {
+    for e in [1u64, 3] {
+        let b = spy();
+        let s = src(N, D, "t");
+        create(&b, "wt0");
+        b.make_bucket("archive-bkt");
+        publish(&b, "wt0", &s, "h0", 5_000);
+        let (wt, pr) = (bucket("wt0"), PR);
+        let ov = Overlay::new(&b, &wt, pr);
+        for i in 0..e {
+            ov.put(&format!("assets/a{i}.bin"), b"x").unwrap();
+        }
+        let arch = ArchiveTarget { bucket: "archive-bkt", prefix: "wt0/" };
+        // Reserved objects archived at the end: N tree objects, manifest, handoff, meta, and one
+        // base record per edited key.
+        let r = N + 3 + e;
+        let (rep, c) = delta(&b, || promote(&b, &wt, pr, &arch, &PromotionPolicy::default(), 10_000).unwrap());
+        assert_eq!(rep.promoted.len() as u64, e);
+        // GET: is_promoted + read_meta (2), per edit: base read + data read for the CAS copy (2e)
+        // HEAD: per edit, plan HEADs the project key twice and `displace` once (3e)
+        // LIST: local objects, tombstones, reserved
+        // PUT: intent + PROMOTED record; CAS: one per promoted key; COPY: every reserved object
+        assert_eq!(c, [2 + 2 * e, 3 * e, 3, 2, e, 0, r], "promote e={e}");
+    }
+}
+
+#[test]
+fn orphan_mark_refusal_and_mark() {
+    let b = spy();
+    project(&b, 1);
+    let pol = OrphanPolicy::default();
+    // missing for less than the grace: three reads, refused TooSoon
+    let (r, c) = delta(&b, || mark_orphan(&b, PR, "wt0", 100_000, 99_000, &pol));
+    assert!(r.is_err());
+    assert_eq!(c, [3, 0, 0, 0, 0, 0, 0], "too soon: entry GET, is_promoted GET, handoff GET (no HEAD)");
+    let (r, c) = delta(&b, || mark_orphan(&b, PR, "wt0", 100_000_000, 1_000, &pol));
+    assert!(r.is_ok());
+    assert_eq!(c, [3, 0, 1, 2, 0, 0, 0], "marked: the three reads, entry PUT, digest = LIST + PUT");
+    // a later sweep pass over an orphan: the entry GET alone
+    let (r, c) = delta(&b, || mark_orphan(&b, PR, "wt0", 100_000_001, 1_000, &pol));
+    assert!(r.is_ok());
+    assert_eq!(c, [1, 0, 0, 0, 0, 0, 0], "already orphan: entry GET");
+}

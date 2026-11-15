@@ -249,6 +249,8 @@ fn create_on_a_second_daemon_sharing_the_backend_succeeds() {
     call(&b, "create", json!({"project": PROJ, "slug": "feat-one", "branch": "feat/one", "base": "abc"}), 12).unwrap();
 }
 
+#[path = "store_worktree_budget.rs"]
+mod budget;
 #[path = "store_worktree_tests_guard.rs"]
 mod guard;
 #[path = "store_worktree_tests_signing.rs"]
