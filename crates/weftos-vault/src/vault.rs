@@ -21,13 +21,18 @@ fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
-fn seal48(key: &[u8; 32], nonce: &[u8; NONCE_LEN], aad: &[u8], pt: &[u8; 32]) -> Result<[u8; 48]> {
+pub(crate) fn seal48(
+    key: &[u8; 32],
+    nonce: &[u8; NONCE_LEN],
+    aad: &[u8],
+    pt: &[u8; 32],
+) -> Result<[u8; 48]> {
     seal::encrypt(key, nonce, aad, pt)?
         .try_into()
         .map_err(|_| VaultError::AuthFailed)
 }
 
-fn open32(
+pub(crate) fn open32(
     key: &[u8; 32],
     nonce: &[u8; NONCE_LEN],
     aad: &[u8],
@@ -84,18 +89,18 @@ pub(crate) struct CreateInputs {
     pub params: KdfParams,
 }
 
-struct PasscodeSeal<'a> {
-    vault_id: &'a [u8; 16],
-    id: [u8; 16],
-    vk: &'a [u8; 32],
-    passcode: &'a str,
-    params: KdfParams,
-    salt: [u8; 16],
-    nonce: [u8; NONCE_LEN],
-    generation: u32,
+pub(crate) struct PasscodeSeal<'a> {
+    pub vault_id: &'a [u8; 16],
+    pub id: [u8; 16],
+    pub vk: &'a [u8; 32],
+    pub passcode: &'a str,
+    pub params: KdfParams,
+    pub salt: [u8; 16],
+    pub nonce: [u8; NONCE_LEN],
+    pub generation: u32,
 }
 
-fn passcode_wrapper(s: PasscodeSeal<'_>) -> Result<Wrapper> {
+pub(crate) fn passcode_wrapper(s: PasscodeSeal<'_>) -> Result<Wrapper> {
     let kek = derive_kek(&normalize::passcode(s.passcode), &s.salt, s.params)?;
     let aad = wrapper_aad(s.vault_id, &s.id, KIND_PASSCODE, s.generation);
     let ct = seal48(&kek, &s.nonce, &aad, s.vk)?;
@@ -111,7 +116,7 @@ fn passcode_wrapper(s: PasscodeSeal<'_>) -> Result<Wrapper> {
     })
 }
 
-fn recovery_wrapper(
+pub(crate) fn recovery_wrapper(
     vault_id: &[u8; 16],
     id: [u8; 16],
     vk: &[u8; 32],
@@ -312,7 +317,7 @@ impl Vault {
         self.keybag.is_draft()
     }
 
-    fn commit(&mut self, f: impl FnOnce(&mut Keybag) -> Result<()>) -> Result<&[u8]> {
+    pub(crate) fn commit(&mut self, f: impl FnOnce(&mut Keybag) -> Result<()>) -> Result<&[u8]> {
         let mut kb = self.keybag.clone();
         f(&mut kb)?;
         kb.sequence += 1;

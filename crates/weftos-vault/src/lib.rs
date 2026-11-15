@@ -16,8 +16,10 @@
 
 pub mod blob;
 pub mod error;
+pub mod index;
 pub mod keybag;
 pub mod recovery;
+pub mod rotation;
 pub mod seal;
 pub mod vault;
 
@@ -28,15 +30,21 @@ mod secrets;
 
 pub use blob::{OpenedSecret, Policy, SecretType};
 pub use error::VaultError;
+pub use index::IndexEntry;
 pub use keybag::{Keybag, Pins, SeenKeybag, Wrapper, WrapperBody};
 pub use passcode_kdf::KdfParams;
 pub use recovery::RecoveryKey;
+pub use rotation::{Resealed, RotationReport};
 pub use seal::SecretSeal;
 pub use secrets::{SealRequest, SealedSecret};
 pub use vault::{NewVault, Vault};
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_index;
+#[cfg(test)]
+mod tests_rotation;
 #[cfg(test)]
 mod tests_secrets;
 #[cfg(test)]

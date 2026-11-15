@@ -320,6 +320,24 @@ impl Keybag {
             .iter()
             .filter(|w| w.kind() == KIND_SIGNSEED)
             .count();
+        let mut hist: Vec<u32> = self
+            .wrappers
+            .iter()
+            .filter(|w| w.kind() == KIND_HISTORY)
+            .map(|w| w.vk_generation)
+            .collect();
+        hist.sort_unstable();
+        let n = hist.len();
+        hist.dedup();
+        if hist.len() != n
+            || hist
+                .last()
+                .is_some_and(|g| *g >= self.current_vk_generation)
+        {
+            return Err(VaultError::Malformed(
+                "key history must be one entry per older generation",
+            ));
+        }
         if seeds != 1 || all_seeds != 1 {
             return Err(VaultError::Malformed(
                 "need exactly one signing seed wrapper",

@@ -106,6 +106,14 @@ fn size_class(total: usize) -> Result<usize> {
     }
 }
 
+/// The VK generation recorded in a blob header, read before authentication (it is covered by the AAD).
+pub(crate) fn peek_generation(blob: &[u8]) -> Result<u32> {
+    if blob.len() < HEADER_LEN || blob[..4] != MAGIC {
+        return Err(VaultError::Malformed("bad blob header"));
+    }
+    Ok(u32::from_be_bytes(blob[6..10].try_into().expect("4 bytes")))
+}
+
 pub(crate) fn check_slot(slot: &str) -> Result<()> {
     if slot.is_empty() || slot.len() > 255 || !slot.is_ascii() {
         return Err(VaultError::TooLarge("slot"));

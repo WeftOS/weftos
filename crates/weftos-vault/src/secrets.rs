@@ -48,18 +48,20 @@ pub struct SealedSecret {
 impl Vault {
     /// Slot for a secret name under the current generation.
     pub fn slot_for_name(&self, name: &str) -> Result<String> {
-        let nk = hkdf_keys::name_key(
-            &self.keybag.vault_id,
-            &self.vk,
-            self.keybag.current_vk_generation,
-        );
+        self.slot_for_name_at(name, self.keybag.current_vk_generation)
+    }
+
+    /// Slot for a secret name under an older or the current generation (the name key is per generation).
+    pub fn slot_for_name_at(&self, name: &str, generation: u32) -> Result<String> {
+        let vk = self.vk_for_generation(generation)?;
+        let nk = hkdf_keys::name_key(&self.keybag.vault_id, &vk, generation);
         Ok(format!(
             "s/{}",
             blob::name_hash_hex(&nk, &normalize::name(name))?
         ))
     }
 
-    fn seal_params<'a>(
+    pub(crate) fn seal_params<'a>(
         &'a self,
         key: &'a [u8; 32],
         slot: &'a str,
@@ -113,25 +115,19 @@ impl Vault {
     }
 
     /// Open the blob stored at `slot`. A blob moved from another slot or vault fails.
+    /// A blob sealed under an older generation opens by walking the key history (spec 9.4).
     pub fn open_secret(&self, slot: &str, blob_bytes: &[u8]) -> Result<OpenedSecret> {
-        let key = hkdf_keys::blob_key(
-            &self.keybag.vault_id,
-            &self.vk,
-            self.keybag.current_vk_generation,
-        );
-        let out = blob::open_blob(
-            &self.keybag.vault_id,
-            &key,
-            self.keybag.current_vk_generation,
-            slot,
-            blob_bytes,
-        );
+        let generation = blob::peek_generation(blob_bytes)?;
+        let vk = self.vk_for_generation(generation)?;
+        let key = hkdf_keys::blob_key(&self.keybag.vault_id, &vk, generation);
+        let out = blob::open_blob(&self.keybag.vault_id, &key, generation, slot, blob_bytes);
         tracing::debug!(ok = out.is_ok(), "secret open attempted");
         out
     }
 
     /// Open the blob for a secret by name.
     pub fn open_named(&self, name: &str, blob_bytes: &[u8]) -> Result<OpenedSecret> {
-        self.open_secret(&self.slot_for_name(name)?, blob_bytes)
+        let generation = blob::peek_generation(blob_bytes)?;
+        self.open_secret(&self.slot_for_name_at(name, generation)?, blob_bytes)
     }
 }

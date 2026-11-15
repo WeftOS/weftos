@@ -37,3 +37,15 @@ pub(crate) fn signseed_key(vault_id: &[u8; 16], vk: &[u8; 32]) -> Key {
 pub(crate) fn recovery_kek(vault_id: &[u8; 16], recovery_key: &[u8; 32]) -> Key {
     derive(vault_id, recovery_key, &[b"weftos-vault/v1/recovery-kek"])
 }
+
+/// Key that seals kind 4 (key history) wrappers: derived from the NEW VK, info carries the NEW generation.
+pub(crate) fn history_key(vault_id: &[u8; 16], vk: &[u8; 32], new_generation: u32) -> Key {
+    derive(
+        vault_id,
+        vk,
+        &[
+            b"weftos-vault/v1/history-key",
+            &new_generation.to_be_bytes(),
+        ],
+    )
+}

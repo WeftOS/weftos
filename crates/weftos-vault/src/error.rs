@@ -50,8 +50,8 @@ pub enum VaultError {
     /// The unwrapped signing seed does not match the keybag's `sign_pub`.
     #[error("signing key does not match the keybag")]
     SigningKeyMismatch,
-    /// The blob was sealed under another VK generation (rotation is not implemented in V1).
-    #[error("blob generation {0} is not the current generation")]
+    /// The blob was sealed under a VK generation this vault has no key or history entry for.
+    #[error("no key for vault key generation {0}")]
     GenerationMismatch(u32),
     /// A recovery code failed its checksum or format check.
     #[error("recovery code is invalid")]
