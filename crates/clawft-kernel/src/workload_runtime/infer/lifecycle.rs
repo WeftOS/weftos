@@ -65,6 +65,8 @@ fn unlimited() -> ProcLimits {
     // is refused by some kernels when set as the hard limit.
     ProcLimits {
         mem_bytes: 1 << 46,
+        address_space_bytes: None,
+        rss_poll: crate::workload_runtime::supervise::RSS_POLL,
         cpu_secs: None,
         nofile: 4096,
         fsize_bytes: 1 << 44,

@@ -3,6 +3,7 @@
 //! user, a wall-clock cap, capped output capture, and terminate-then-kill.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -16,12 +17,27 @@ use super::types::RuntimeError;
 /// Grace before SIGKILL when a run exceeds its wall-clock cap.
 pub const TIMEOUT_GRACE: Duration = Duration::from_secs(2);
 
-/// Resource limits applied with `setrlimit` in the child.
+/// How often the RSS watchdog samples the process group.
+pub const RSS_POLL: Duration = Duration::from_millis(500);
+
+/// Resource limits: rlimits applied in the child plus a resident-memory
+/// watchdog in the supervisor (ADR-100 memory amendment, card 7306a144).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProcLimits {
-    /// Address-space cap (`RLIMIT_AS`) in bytes. Enforced on Linux; macOS
-    /// does not implement it, so there it is best effort.
+    /// Resident-memory cap in bytes for the whole process group. The
+    /// watchdog stops the group above it (Linux; elsewhere not enforced).
+    /// `RLIMIT_DATA` is set to twice this as a kernel backstop on Linux.
+    /// Caveat: `RLIMIT_DATA` counts private writable mappings, so a runtime
+    /// that maps read-write arenas it never touches can hit it before the
+    /// watchdog does; `PROT_NONE` reservations (Go, most allocators) do not
+    /// count, and neither does file-backed or shared memory.
     pub mem_bytes: u64,
+    /// Opt-in address-space cap (`RLIMIT_AS`). Off by default: runtimes that
+    /// reserve address space they never touch (Go, JIT, mmap-heavy) fail to
+    /// start under it. Linux only; macOS does not implement it.
+    pub address_space_bytes: Option<u64>,
+    /// RSS watchdog sampling interval.
+    pub rss_poll: Duration,
     /// CPU seconds (`RLIMIT_CPU`), for bounded runs.
     pub cpu_secs: Option<u64>,
     /// Open files (`RLIMIT_NOFILE`).
@@ -35,6 +51,8 @@ impl ProcLimits {
     pub fn for_ram_mb(ram_mb: u32) -> Self {
         Self {
             mem_bytes: u64::from(ram_mb) * 1024 * 1024,
+            address_space_bytes: None,
+            rss_poll: RSS_POLL,
             cpu_secs: None,
             nofile: 256,
             fsize_bytes: 64 * 1024 * 1024,
@@ -96,6 +114,9 @@ pub struct Supervised {
     pgid: Option<libc::pid_t>,
     args: Vec<String>,
     exited: Option<std::process::ExitStatus>,
+    /// Set by the watchdog when it stopped the group for resident memory.
+    mem_killed: Arc<AtomicBool>,
+    watchdog: Option<JoinHandle<()>>,
 }
 
 /// True when this process runs as root.
@@ -119,9 +140,17 @@ fn set_limit(resource: libc::c_int, value: u64) -> std::io::Result<()> {
 
 fn apply_in_child(plan: &ChildPlan) -> std::io::Result<()> {
     let limits = plan.limits;
-    let as_result = set_limit(libc::RLIMIT_AS as libc::c_int, limits.mem_bytes);
     if cfg!(target_os = "linux") {
-        as_result?;
+        set_limit(
+            libc::RLIMIT_DATA as libc::c_int,
+            limits.mem_bytes.saturating_mul(2),
+        )?;
+    }
+    if let Some(bytes) = limits.address_space_bytes {
+        let r = set_limit(libc::RLIMIT_AS as libc::c_int, bytes);
+        if cfg!(target_os = "linux") {
+            r?;
+        }
     }
     if let Some(cpu) = limits.cpu_secs {
         set_limit(libc::RLIMIT_CPU as libc::c_int, cpu)?;
@@ -144,6 +173,77 @@ fn apply_in_child(plan: &ChildPlan) -> std::io::Result<()> {
         }
     }
     Ok(())
+}
+
+fn signal_pgid(pgid: libc::pid_t, sig: libc::c_int) {
+    // SAFETY: signalling the process group the supervisor created.
+    unsafe {
+        libc::kill(-pgid, sig);
+    }
+}
+
+/// Parse `VmRSS` (kB) out of a `/proc/<pid>/status` body, in bytes.
+pub(crate) fn parse_vmrss(status: &str) -> Option<u64> {
+    let line = status.lines().find(|l| l.starts_with("VmRSS:"))?;
+    let kb: u64 = line.split_whitespace().nth(1)?.parse().ok()?;
+    Some(kb * 1024)
+}
+
+/// Process group id from a `/proc/<pid>/stat` body (field 5, after the
+/// parenthesised command name, which may itself contain spaces).
+pub(crate) fn parse_pgrp(stat: &str) -> Option<i32> {
+    let rest = &stat[stat.rfind(')')? + 1..];
+    rest.split_whitespace().nth(2)?.parse().ok()
+}
+
+/// Resident bytes summed over every process in group `pgid` under `proc`
+/// (a `/proc` directory). `None` when it cannot be read (not Linux).
+pub(crate) fn group_rss_bytes(proc: &std::path::Path, pgid: i32) -> Option<u64> {
+    let mut total = 0u64;
+    for e in std::fs::read_dir(proc).ok()?.flatten() {
+        if !e.file_name().to_string_lossy().bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        let dir = e.path();
+        let Ok(stat) = std::fs::read_to_string(dir.join("stat")) else {
+            continue;
+        };
+        if parse_pgrp(&stat) != Some(pgid) {
+            continue;
+        }
+        if let Ok(st) = std::fs::read_to_string(dir.join("status")) {
+            total += parse_vmrss(&st).unwrap_or(0);
+        }
+    }
+    Some(total)
+}
+
+/// Stop the group when its resident memory exceeds `limit`: SIGTERM, then
+/// SIGKILL after [`TIMEOUT_GRACE`]. Linux only; a no-op elsewhere.
+fn spawn_watchdog(
+    pgid: libc::pid_t,
+    limit: u64,
+    poll: Duration,
+    flag: Arc<AtomicBool>,
+) -> Option<JoinHandle<()>> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    Some(tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(poll).await;
+            let Some(rss) = group_rss_bytes(std::path::Path::new("/proc"), pgid) else {
+                return;
+            };
+            if rss > limit {
+                flag.store(true, Ordering::SeqCst);
+                signal_pgid(pgid, libc::SIGTERM);
+                tokio::time::sleep(TIMEOUT_GRACE).await;
+                signal_pgid(pgid, libc::SIGKILL);
+                return;
+            }
+        }
+    }))
 }
 
 fn pump<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
@@ -210,6 +310,10 @@ impl Supervised {
         if let Some(e) = child.stderr.take() {
             readers.push(pump(e, err.clone()));
         }
+        let mem_killed = Arc::new(AtomicBool::new(false));
+        let watchdog = pgid.and_then(|g| {
+            spawn_watchdog(g, spec.limits.mem_bytes, spec.limits.rss_poll, mem_killed.clone())
+        });
         Ok(Self {
             child,
             out,
@@ -219,6 +323,8 @@ impl Supervised {
             pgid,
             args: spec.args,
             exited: None,
+            mem_killed,
+            watchdog,
         })
     }
 
@@ -237,10 +343,7 @@ impl Supervised {
 
     fn signal_group(&self, sig: libc::c_int) {
         if let Some(pgid) = self.pgid {
-            // SAFETY: signalling the process group this supervisor created.
-            unsafe {
-                libc::kill(-pgid, sig);
-            }
+            signal_pgid(pgid, sig);
         }
     }
 
@@ -280,6 +383,9 @@ impl Supervised {
             Some(s) => Some(s),
             None => self.child.wait().await.ok(),
         };
+        if let Some(w) = self.watchdog.take() {
+            w.abort();
+        }
         // The leader is gone: nothing it forked may outlive it.
         self.signal_group(libc::SIGKILL);
         self.pgid = None;
@@ -290,6 +396,7 @@ impl Supervised {
         }
         use std::os::unix::process::ExitStatusExt;
         let ev = RunEvidence {
+            killed_for_memory: self.mem_killed.load(Ordering::SeqCst),
             args: self.args.clone(),
             exit_code: status.and_then(|s| s.code()),
             signal: status.and_then(|s| s.signal()),
@@ -314,6 +421,9 @@ impl Drop for Supervised {
     /// A supervisor dropped while its process still runs takes the whole
     /// group with it (`kill_on_drop` alone only reaches the leader).
     fn drop(&mut self) {
+        if let Some(w) = self.watchdog.take() {
+            w.abort();
+        }
         self.signal_group(libc::SIGKILL);
     }
 }
@@ -321,3 +431,7 @@ impl Drop for Supervised {
 #[cfg(test)]
 #[path = "supervise_identity_tests.rs"]
 mod identity_tests;
+
+#[cfg(test)]
+#[path = "supervise_memory_tests.rs"]
+mod memory_tests;

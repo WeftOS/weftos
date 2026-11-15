@@ -147,7 +147,9 @@ The cog manifest body has an optional field `redistributable` (default false, om
 
 **Compatibility.** `CogPackageBody` rejects unknown fields, so a verifier built before this change (v0.8.1 nodes, the cog repository, Seed tooling) rejects a manifest signed with `redistributable = true`. In a mixed-version mesh, upgrade every verifier before packing with the flag. Manifests without it verify everywhere as before.
 
-## Amendment (2026-10-26, Proposed): memory is a reservation, enforced as resident memory
+## Amendment (2026-10-26, Proposed; watchdog and RLIMIT_DATA implemented 2026-11-15): memory is a reservation, enforced as resident memory
+
+Implemented on `w2/card-7306a144`: the RSS watchdog (kill, `killed_for_memory` evidence), `RLIMIT_DATA` at 2x `ram_mb`, and `RLIMIT_AS` off by default (`ProcLimits.address_space_bytes`). Not implemented: cgroup v2, the `address_space_mb` manifest field, and `HOME`/`TMPDIR` (owner decisions below).
 
 Card 7306a144. `[resources].ram_mb` does two jobs today. The planner reserves it (`mem.system` free must cover it, section 2), and the native adapter also applies it as `RLIMIT_AS` to the cog and every child (`ProcLimits::for_ram_mb`, `workload_runtime/supervise.rs`). The second use is wrong for runtimes that reserve address space they never touch. GenieX (Go) dies at start under 256 MiB of address space ("failed to reserve page summary memory") while needing far less resident memory; any `mmap`-heavy or JIT child does the same. The workaround so far is to declare `ram_mb = 65536`, which makes the scheduling reservation absurd.
 

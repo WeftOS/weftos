@@ -360,8 +360,10 @@ Table `[resources]`. Struct `RawResources` at `crates/clawft-kernel/src/workload
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `ram_mb` | `Option<u32>` | `256` | Memory cap in MiB (1..=65536). |
+| `ram_mb` | `Option<u32>` | `256` | Resident-memory (RSS) cap in MiB (1..=65536), also the planner's memory reservation. The native adapter stops the cog's whole process group when its summed RSS passes it and records `killed_for_memory` in the run evidence. Address space is not capped, so runtimes that reserve address space they never touch (Go, JIT, mmap-heavy) start normally. |
 | `cpu_pct` | `Option<u32>` | `100` | CPU share in percent of one core (1..=400). |
+
+Enforcement (native adapter, Linux): a supervisor watchdog samples the group's `VmRSS` every 500 ms and stops it with SIGTERM, then SIGKILL after 2 s, above `ram_mb`. `RLIMIT_DATA` at twice `ram_mb` is a kernel backstop; it counts private writable mappings, so a runtime that maps read-write arenas it never touches can hit it first (`PROT_NONE` reservations do not count). `RLIMIT_AS` is not applied by default (`ProcLimits.address_space_bytes` is the opt-in; no manifest field yet). macOS does not enforce memory. cgroup v2 `memory.max` is not used yet: it needs a delegated cgroup subtree on the host.
 
 ## cog.toml [[outputs]]
 
