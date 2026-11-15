@@ -5,6 +5,9 @@
 
 pub struct DocLine {
     pub line: usize,
+    /// Last source line of the literal this line came from (`line` for a `///` comment). A
+    /// one-line `#[doc = "..."]` with `\n` escapes gives several doc lines on one source line.
+    pub hi: usize,
     pub text: String,
 }
 
@@ -12,6 +15,8 @@ pub struct Code {
     pub text: String,
     /// Source line of each line of `text`.
     pub map: Vec<usize>,
+    /// Last source line of the literal each line of `text` came from.
+    pub hi: Vec<usize>,
 }
 
 const RUST_TAGS: &[&str] = &[
@@ -90,25 +95,26 @@ pub fn code_blocks(lines: &[DocLine]) -> Vec<Code> {
         .map(|l| indent(&l.text))
         .min()
         .unwrap_or(0);
-    let body: Vec<(usize, &str)> = lines
+    let body: Vec<(usize, usize, &str)> = lines
         .iter()
-        .map(|l| (l.line, strip_cols(&l.text, common)))
+        .map(|l| (l.line, l.hi, strip_cols(&l.text, common)))
         .collect();
     let mut out = Vec::new();
     let mut k = 0;
     let mut prev_blank = true;
     while k < body.len() {
-        let (_, text) = body[k];
+        let (_, _, text) = body[k];
         let t = text.trim_start();
         if let Some((c, n, info)) = fence(t) {
             let rust = is_rust_info(info.trim());
             let mut code = Code {
                 text: String::new(),
                 map: Vec::new(),
+                hi: Vec::new(),
             };
             k += 1;
             while k < body.len() {
-                let (l, s) = body[k];
+                let (l, h, s) = body[k];
                 if let Some((c2, n2, rest)) = fence(s.trim_start()) {
                     if c2 == c && n2 >= n && rest.trim().is_empty() {
                         break;
@@ -117,6 +123,7 @@ pub fn code_blocks(lines: &[DocLine]) -> Vec<Code> {
                 code.text.push_str(&unhide(s));
                 code.text.push('\n');
                 code.map.push(l);
+                code.hi.push(h);
                 k += 1;
             }
             if rust && !code.map.is_empty() {
@@ -130,11 +137,13 @@ pub fn code_blocks(lines: &[DocLine]) -> Vec<Code> {
             let mut code = Code {
                 text: String::new(),
                 map: Vec::new(),
+                hi: Vec::new(),
             };
-            while k < body.len() && (indent(body[k].1) >= 4 || body[k].1.trim().is_empty()) {
-                code.text.push_str(&unhide(strip_cols(body[k].1, 4)));
+            while k < body.len() && (indent(body[k].2) >= 4 || body[k].2.trim().is_empty()) {
+                code.text.push_str(&unhide(strip_cols(body[k].2, 4)));
                 code.text.push('\n');
                 code.map.push(body[k].0);
+                code.hi.push(body[k].1);
                 k += 1;
             }
             out.push(code);

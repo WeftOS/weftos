@@ -245,11 +245,22 @@ impl<'a> Scanner<'a> {
                 };
                 if let Some(TokenTree::Group(g)) = v.get(gi) {
                     if g.delimiter() == Delimiter::Bracket {
-                        if let Some(lines) = doc_attr(g) {
-                            docs.extend(lines);
+                        let here = (start(v[i].span()).0, end(g.span()).0);
+                        for d in doc_values(g) {
+                            match d {
+                                DocVal::Lines(lines) => docs.extend(lines),
+                                // rustdoc expands the value and runs its code blocks, which
+                                // this scan cannot see: fail closed (R3-F1)
+                                DocVal::Computed(sp) => self.push(
+                                    "include",
+                                    "doc attribute with a computed value (rustdoc runs its code blocks as doctests)".into(),
+                                    vec![sp],
+                                    here,
+                                    "",
+                                ),
+                            }
                         }
                         let outer = self.attr;
-                        let here = (start(v[i].span()).0, end(g.span()).0);
                         self.attr =
                             Some(outer.map_or(here, |(a, b)| (a.min(here.0), b.max(here.1))));
                         self.scan(g.stream(), true);
@@ -453,11 +464,14 @@ impl<'a> Scanner<'a> {
             let mut sub = Scanner::new(&a, self.depth + 1);
             sub.scan(ts, false);
             let map = |l: usize| code.map.get(l.saturating_sub(1)).copied().unwrap_or(0);
+            let maphi = |l: usize| code.hi.get(l.saturating_sub(1)).copied().unwrap_or(0);
             for mut o in sub.occs {
                 let l = map(o.line);
+                // the whole literal the code came from: an added line anywhere in it counts
+                let h = maphi(o.line).max(maphi(o.hi));
                 o.line = l;
                 o.lo = map(o.lo).min(l);
-                o.hi = map(o.hi).max(l);
+                o.hi = map(o.hi).max(l).max(h);
                 o.spans.clear();
                 o.block = o.block.map(|(a, b)| (map(a), map(b)));
                 o.note = "doctest";
@@ -478,21 +492,71 @@ fn include_arg_ok(g: &Group) -> bool {
     n == 1 && matches!(lit_str(v.first()), Some((s, _)) if s.to_ascii_lowercase().ends_with(".rs"))
 }
 
-/// `doc = "..."` inside an attribute: its lines with their source line numbers.
-fn doc_attr(g: &Group) -> Option<Vec<DocLine>> {
-    let v: Vec<TokenTree> = g.stream().into_iter().collect();
-    if v.len() != 3 || !ident_is(v.first(), "doc") || !punct_is(v.get(1), '=') {
-        return None;
+/// What one attribute sets as documentation.
+enum DocVal {
+    /// A string literal: its lines with their source line numbers.
+    Lines(Vec<DocLine>),
+    /// Anything else (`concat!(...)`, `$x`, `include_str!(...)`, a macro call): the value is
+    /// only known after expansion. The span is the value's first token.
+    Computed((usize, usize, usize)),
+}
+
+/// Split a token list on its top-level commas.
+fn split_commas(v: &[TokenTree]) -> Vec<Vec<TokenTree>> {
+    let mut out = vec![Vec::new()];
+    for t in v {
+        if punct_is(Some(t), ',') {
+            out.push(Vec::new());
+        } else {
+            out.last_mut().unwrap().push(t.clone());
+        }
     }
-    let (val, sp) = lit_str(v.get(2))?;
-    let first = start(sp).0;
-    Some(
-        val.split('\n')
-            .enumerate()
-            .map(|(k, t)| DocLine {
-                line: first + k,
-                text: t.to_string(),
-            })
-            .collect(),
-    )
+    out.retain(|p| !p.is_empty());
+    out
+}
+
+/// `doc = <value>` in an attribute, also inside `cfg_attr(pred, ...)` at any depth: rustdoc
+/// applies a `cfg_attr` doc when its predicate holds (`all()`, `doc`, ...), so it is scanned
+/// like any doc comment (R3-F1).
+fn doc_values(g: &Group) -> Vec<DocVal> {
+    let v: Vec<TokenTree> = g.stream().into_iter().collect();
+    let mut out = Vec::new();
+    doc_values_in(&v, 0, &mut out);
+    out
+}
+
+fn doc_values_in(v: &[TokenTree], depth: usize, out: &mut Vec<DocVal>) {
+    if ident_is(v.first(), "doc") && punct_is(v.get(1), '=') {
+        if v.len() == 3 {
+            if let Some((val, sp)) = lit_str(v.get(2)) {
+                let first = start(sp).0;
+                let last = end(sp).0.max(first);
+                out.push(DocVal::Lines(
+                    val.split('\n')
+                        .enumerate()
+                        .map(|(k, t)| DocLine {
+                            // a one-line literal with \n escapes stays on its line
+                            line: (first + k).min(last),
+                            hi: last,
+                            text: t.to_string(),
+                        })
+                        .collect(),
+                ));
+                return;
+            }
+        }
+        let sp = v.get(2).or(v.first()).map(|t| tspan(t.span())).unwrap();
+        out.push(DocVal::Computed(sp));
+        return;
+    }
+    if ident_is(v.first(), "cfg_attr") && depth < 16 {
+        if let Some(TokenTree::Group(g)) = v.get(1) {
+            if g.delimiter() == Delimiter::Parenthesis {
+                let inner: Vec<TokenTree> = g.stream().into_iter().collect();
+                for part in split_commas(&inner).iter().skip(1) {
+                    doc_values_in(part, depth + 1, out);
+                }
+            }
+        }
+    }
 }
