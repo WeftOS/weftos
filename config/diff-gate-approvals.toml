@@ -244,3 +244,19 @@ path        = "crates/weftos-vault/Cargo.toml"
 pattern     = '(^|[^-[:alnum:]])argon2[[:space:]]*='
 reason      = "Vault V1: weftos-vault uses the workspace argon2"
 approved_by = "owner"
+
+# Vault V1 companion rows, approved by the owner 2026-11-15 12:47 PM ET (instruction 20261115-1248 item 2).
+# hkdf 0.12.4 and unicode-normalization 0.1.26 are already in Cargo.lock; these make them direct deps.
+[[approval]]
+rule        = "new-dep"
+path        = "Cargo.toml"
+pattern     = '(^|[^-[:alnum:]])(hkdf|unicode-normalization)[[:space:]]*='
+reason      = "Vault V1: HKDF-SHA256 key derivation and NFKC passcode normalization (both MIT OR Apache-2.0, already locked, no new lock package)"
+approved_by = "owner"
+
+[[approval]]
+rule        = "new-dep"
+path        = "crates/weftos-vault/Cargo.toml"
+pattern     = '(^|[^-[:alnum:]])(hkdf|unicode-normalization)[[:space:]]*='
+reason      = "Vault V1: weftos-vault uses the workspace hkdf and unicode-normalization"
+approved_by = "owner"
