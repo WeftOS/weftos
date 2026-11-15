@@ -34,12 +34,13 @@ jobs:
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
           PUSH_BEFORE: ${{ github.event.before }}
           PUSH_REF: ${{ github.ref }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           OWNER_VAR: ${{ vars.DIFF_GATE_OWNER_APPROVED }}
         # The gate never runs from the commit under review. This block picks a trusted commit
-        # already on a protected branch (default branch, master, main, target-*), takes
+        # already on a protected branch (default branch, master, target-*), takes
         # scripts/diff-gate.sh from it, and passes it as the base, so the approvals rows and the
         # owner ledger the gate reads also come from protected history. The rules per event are
         # in docs/development/diff-gate.md ("CI: which gate runs"); scripts/tests/diff-gate-ci-test.sh
@@ -57,16 +58,18 @@ jobs:
             exit 2
           }
           is_zero() { [ -z "$1" ] || printf '%s' "$1" | grep -Eqx '0+'; }
+          # `main` is not on this list: it does not exist in this repo, and a name anyone can
+          # create first must not become a trust root. It is protected only as the default branch.
           is_protected() {
-            case "$1" in master|main|target-*) return 0 ;; esac
+            case "$1" in master|target-*) return 0 ;; esac
             [ -n "${DEFAULT_BRANCH:-}" ] && [ "$1" = "$DEFAULT_BRANCH" ]
           }
           # protected_tip SKIP: tip of the newest protected remote branch other than SKIP:
-          # origin/target-* by version, then the default branch, master, main.
+          # origin/target-* by version, then the default branch, master.
           protected_tip() {
             local r
             for r in $(git for-each-ref --sort=-version:refname --format='%(refname:strip=3)' 'refs/remotes/origin/target-*') \
-                     "${DEFAULT_BRANCH:-}" master main; do
+                     "${DEFAULT_BRANCH:-}" master; do
               [ -n "$r" ] && [ "$r" != "$1" ] || continue
               if git rev-parse -q --verify "refs/remotes/origin/$r^{commit}" >/dev/null; then
                 git rev-parse "refs/remotes/origin/$r^{commit}"
@@ -78,7 +81,14 @@ jobs:
 
           case "$EVENT_NAME" in
             pull_request)
-              base="$PR_BASE_SHA"; why="pull request base"
+              if [ -n "${PR_BASE_REF:-}" ] && is_protected "$PR_BASE_REF"; then
+                base="$PR_BASE_SHA"; why="pull request base ($PR_BASE_REF)"
+              else
+                # A PR into an unprotected branch (wasm-browser.yml runs on PRs into any branch):
+                # that branch's tip never passed review, so judge against protected history.
+                base="$(protected_tip "")" || fail_closed "no protected branch to judge a pull request into ${PR_BASE_REF:-?} against"
+                why="pull request into unprotected ${PR_BASE_REF:-(unknown base)}: newest protected branch tip"
+              fi
               if gh api "repos/$REPO/issues/$PR_NUMBER/labels" --jq '.[].name' 2>/dev/null | grep -qx 'diff-gate-approved'; then
                 approved=1
               fi
