@@ -21,6 +21,9 @@
 mod cas;
 mod conflict;
 mod gc;
+/// Root-image layer attribute profile (ADR-131 §4, image kind). Unix only.
+#[cfg(unix)]
+pub mod image;
 mod index;
 mod materialise;
 mod remote;
@@ -45,6 +48,8 @@ mod tests_durable;
 mod tests_attrs;
 #[cfg(test)]
 mod tests_exec;
+#[cfg(all(test, unix))]
+mod tests_image;
 #[cfg(test)]
 mod tests_gc;
 #[cfg(test)]
