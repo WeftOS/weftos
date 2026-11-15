@@ -226,3 +226,52 @@ path        = "crates/clawft-kernel/Cargo.toml"
 pattern     = '(^|[^-[:alnum:]])chacha20poly1305[[:space:]]*='
 reason      = "card a134bcf7: clawft-kernel secret_seal.rs uses the workspace chacha20poly1305"
 approved_by = "owner"
+
+# Owner approval re-confirmed 2026-11-15 10:09 AM ET (instruction 20261115-1010 item 2): the six computer-hub rows below.
+
+# Approved by the owner (Mathew) on 2026-11-09, Tapestry Phase 3 decision D1: the computer hub
+# runs as a service inside the WeftOS daemon, one per mesh. The owner stated that D1 covers the
+# hub's new dependencies and network findings (instructions file
+# tapestry-owner-instructions-20261109-1156-phase3-d1-d6.txt plus the owner's relayed answer of
+# 2026-11-09). Rows recorded by the Tapestry lead on the owner's behalf; branch feat/computer-hub-service.
+[[approval]]
+rule        = "new-dep"
+path        = "crates/weft-computer-hub/Cargo.toml"
+pattern     = 'xai-tool-protocol[[:space:]]*=[[:space:]]*\{[[:space:]]*git[[:space:]]*=[[:space:]]*"https://github.com/WeftOS/grok-build",[[:space:]]*rev[[:space:]]*=[[:space:]]*"30302eb1"'
+reason      = "D1 (owner 2026-11-09): hub wire protocol from the Tapestry fork, pinned to rev 30302eb1"
+approved_by = "owner"
+
+[[approval]]
+rule        = "new-dep"
+path        = "crates/weft-computer-hub/Cargo.toml"
+pattern     = '(^|[^-[:alnum:]_])(tokio|tokio-tungstenite|futures-util|serde|serde_json|toml|hmac|sha2|base64|uuid|tracing|tracing-subscriber|tempfile)[[:space:]]*='
+reason      = "D1 (owner 2026-11-09): the hub crate's standard deps (tokio, websocket, serde, toml, HMAC/SHA-256 passkeys, base64, uuid, tracing; tempfile for tests)"
+approved_by = "owner"
+
+[[approval]]
+rule        = "new-dep"
+path        = "crates/clawft-weave/Cargo.toml"
+pattern     = 'weft-computer-hub[[:space:]]*=[[:space:]]*\{[[:space:]]*path[[:space:]]*=[[:space:]]*"../weft-computer-hub",[[:space:]]*optional[[:space:]]*=[[:space:]]*true'
+reason      = "D1 (owner 2026-11-09): the daemon hosts the hub, behind the off-by-default computer-hub feature"
+approved_by = "owner"
+
+[[approval]]
+rule        = "net"
+path        = "crates/weft-computer-hub/src/**"
+pattern     = '(TcpListener|TcpStream)'
+reason      = "D1 (owner 2026-11-09): hub websocket listener; loopback unless hub.toml sets allow_non_loopback"
+approved_by = "owner"
+
+[[approval]]
+rule        = "net"
+path        = "crates/weft-computer-hub/tests/**"
+pattern     = '(TcpListener|TcpStream)'
+reason      = "D1 (owner 2026-11-09): hub tests bind an ephemeral loopback port and connect to it"
+approved_by = "owner"
+
+[[approval]]
+rule        = "net"
+path        = "crates/clawft-weave/src/computer_hub_svc.rs"
+pattern     = 'TcpListener'
+reason      = "D1 (owner 2026-11-09): in-daemon hub listener, started only when <runtime dir>/computer-hub/hub.toml exists; loopback by default"
+approved_by = "owner"
