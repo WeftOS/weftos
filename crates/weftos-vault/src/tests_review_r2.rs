@@ -36,7 +36,7 @@ fn two_devices() -> (Store, Vault, Pins, Vault, Pins) {
 fn b_writes_first(store: &mut Store, b: &mut Vault, pins_b: &mut Pins) {
     let pending = b.add_recovery_wrapper(pins_b).unwrap();
     assert!(store.put_if_match(b.keybag_bytes(), pending.keybag_bytes()));
-    b.commit_write(pending, pins_b).unwrap();
+    b.commit_write(pending, &store.0, pins_b).unwrap();
 }
 
 /// R2-M1, probe P1: A rotates, B wrote first, A's `put_if_match` fails. A drops the pending write; its
@@ -69,7 +69,7 @@ fn r2_m1_p1_failed_store_write_after_rotation_does_not_lock_the_device_out() {
     let mut a2 = a2;
     let pending = a2.rotate_vk_unchecked(PASS, None, &pins_a).unwrap();
     assert!(store.put_if_match(a2.keybag_bytes(), pending.keybag_bytes()));
-    a2.commit_write(pending, &mut pins_a).unwrap();
+    a2.commit_write(pending, &store.0, &mut pins_a).unwrap();
     assert_eq!(
         (pins_a.highest().unwrap().sequence, pins_a.vk_generation()),
         (3, 2)
@@ -99,7 +99,7 @@ fn r2_m1_accepted_write_advances_the_pins() {
     let before = store.0.clone();
     let pending = a.rotate_vk_unchecked(PASS, None, &pins_a).unwrap();
     assert!(store.put_if_match(a.keybag_bytes(), pending.keybag_bytes()));
-    let report = a.commit_write(pending, &mut pins_a).unwrap();
+    let report = a.commit_write(pending, &store.0, &mut pins_a).unwrap();
     assert_eq!(report.new_generation, 2);
     assert_eq!(a.keybag_bytes(), &store.0[..]);
     assert_eq!(
@@ -115,7 +115,7 @@ fn r2_m1_accepted_write_advances_the_pins() {
     // The recovery key comes out of `commit_write`, after the store took the keybag.
     let pending = a.add_recovery_wrapper(&pins_a).unwrap();
     assert!(store.put_if_match(a.keybag_bytes(), pending.keybag_bytes()));
-    let key = a.commit_write(pending, &mut pins_a).unwrap();
+    let key = a.commit_write(pending, &store.0, &mut pins_a).unwrap();
     assert!(Vault::unlock_with_recovery(&store.0, &key, &mut pins_a).is_ok());
 }
 
@@ -126,28 +126,35 @@ fn r2_m1_commit_refuses_stale_foreign_and_superseded_writes() {
     let (mut store, mut a, mut pins_a, mut b, mut pins_b) = two_devices();
     let first = a.add_recovery_wrapper(&pins_a).unwrap();
     let second = a.add_recovery_wrapper(&pins_a).unwrap();
-    a.commit_write(first, &mut pins_a).unwrap();
+    assert!(store.put_if_match(a.keybag_bytes(), first.keybag_bytes()));
+    a.commit_write(first, &store.0, &mut pins_a).unwrap();
     let snapshot = (a.keybag_bytes().to_vec(), pins_a.clone());
+    let second_bytes = second.keybag_bytes().to_vec();
     assert_eq!(
-        a.commit_write(second, &mut pins_a).unwrap_err(),
+        a.commit_write(second, &second_bytes, &mut pins_a)
+            .unwrap_err(),
         VaultError::StaleWrite
     );
     let other = new_vault();
     let foreign = other.vault.add_recovery_wrapper(&other.pins).unwrap();
+    let foreign_bytes = foreign.keybag_bytes().to_vec();
     assert_eq!(
-        a.commit_write(foreign, &mut pins_a).unwrap_err(),
+        a.commit_write(foreign, &foreign_bytes, &mut pins_a)
+            .unwrap_err(),
         VaultError::StaleWrite
     );
     assert_eq!((a.keybag_bytes().to_vec(), pins_a.clone()), snapshot);
 
-    // Device B: its write loses the race, it unlocks the store's keybag (A's sequence 2), and a buggy
-    // caller then commits the refused write anyway. The pins catch the fork.
+    // Device B: its write loses the race and it unlocks the store's keybag (A's sequence 2). Its caller
+    // commits the refused write anyway and also reports B's own keybag as the store's read-back, which
+    // gets past the R3-L3 check (tests_review_r3 covers the honest read-back); the pins catch the fork.
     let lost = b.add_recovery_wrapper(&pins_b).unwrap();
-    store.0 = a.keybag_bytes().to_vec();
+    assert!(!store.put_if_match(b.keybag_bytes(), lost.keybag_bytes()));
     Vault::unlock(&store.0, PASS, &mut pins_b).unwrap();
     let pins_before = pins_b.clone();
+    let lost_bytes = lost.keybag_bytes().to_vec();
     assert_eq!(
-        b.commit_write(lost, &mut pins_b).unwrap_err(),
+        b.commit_write(lost, &lost_bytes, &mut pins_b).unwrap_err(),
         VaultError::Fork { sequence: 2 }
     );
     assert_eq!(pins_b, pins_before);

@@ -3,11 +3,25 @@
 //! fake; Argon2id runs the TEST profile.
 
 use crate::VaultError;
+use crate::blob;
 use crate::hkdf_keys;
 use crate::keybag::{KIND_SIGNSEED, Keybag, Pins, Wrapper, WrapperBody, wrapper_aad};
 use crate::tests::{PASS, T, new_vault, req};
 use crate::vault::Vault;
 use crate::wrap::{PasscodeSeal, passcode_wrapper, seal48};
+
+/// The store's object after the caller's `put_if_match`: what `commit_write` now compares against.
+struct Store(Vec<u8>);
+
+impl Store {
+    fn put_if_match(&mut self, base: &[u8], new: &[u8]) -> bool {
+        let ok = self.0 == base;
+        if ok {
+            self.0 = new.to_vec();
+        }
+        ok
+    }
+}
 
 /// A keybag whose header and wrappers are all at `generation`, sealed under the vault's VK and signed
 /// by its key, so only the structural rules can refuse it.
@@ -106,5 +120,92 @@ fn r3_l2_reader_refuses_a_keybag_without_the_draft_flag() {
     assert_eq!(
         nv.vault.seal_secret(&real).unwrap_err(),
         VaultError::DraftRefusesRealCredentials
+    );
+}
+
+/// R3-L3, probe P2: `commit_write` takes the bytes the store holds after `put_if_match` and refuses,
+/// changing nothing, when they are not the pending keybag. The refused rotation's VK never becomes the
+/// vault's, and the device then unlocks the store's keybag as usual.
+#[test]
+fn r3_l3_commit_refuses_when_the_store_holds_other_bytes() {
+    let created = new_vault();
+    let mut store = Store(created.vault.keybag_bytes().to_vec());
+    let mut pins_a = Pins::default();
+    let mut a = Vault::unlock(&store.0, PASS, &mut pins_a).unwrap();
+    let mut pins_b = Pins::default();
+    let mut b = Vault::unlock(&store.0, PASS, &mut pins_b).unwrap();
+
+    // B wins the race.
+    let pending_b = b.add_recovery_wrapper(&pins_b).unwrap();
+    assert!(store.put_if_match(b.keybag_bytes(), pending_b.keybag_bytes()));
+    b.commit_write(pending_b, &store.0, &mut pins_b).unwrap();
+
+    // A's rotation is refused, and A's caller commits it anyway with the store's read-back.
+    let before = (a.keybag_bytes().to_vec(), pins_a.clone());
+    let pending_a = a.rotate_vk_unchecked(PASS, None, &pins_a).unwrap();
+    assert!(!store.put_if_match(a.keybag_bytes(), pending_a.keybag_bytes()));
+    assert_eq!(
+        a.commit_write(pending_a, &store.0, &mut pins_a)
+            .unwrap_err(),
+        VaultError::StoreMismatch
+    );
+    assert_eq!((a.keybag_bytes().to_vec(), pins_a.clone()), before);
+    let sealed = a.seal_secret(&req("login/a-FAKE", b"FAKE-a")).unwrap();
+    assert_eq!(blob::peek_generation(&sealed.bytes).unwrap(), 1);
+
+    let a2 = Vault::unlock(&store.0, PASS, &mut pins_a).unwrap();
+    assert_eq!(
+        &a2.open_named("login/a-FAKE", &sealed.bytes)
+            .unwrap()
+            .payload[..],
+        b"FAKE-a"
+    );
+    assert_eq!(pins_a.highest(), pins_b.highest());
+}
+
+/// Commit-side `GenerationRollback`: the pins moved to a newer generation between prepare and commit
+/// (a sibling instance rotated and committed with the same pins). The older write is refused.
+#[test]
+fn commit_refuses_a_write_the_pins_have_passed_by_generation() {
+    let nv = new_vault();
+    let bytes = nv.vault.keybag_bytes().to_vec();
+    let mut pins = nv.pins.clone();
+    let mut a = Vault::unlock(&bytes, PASS, &mut pins).unwrap();
+    let mut b = Vault::unlock(&bytes, PASS, &mut pins).unwrap();
+    let pending_a = a.add_recovery_wrapper(&pins).unwrap();
+    let rot = b.rotate_vk_unchecked(PASS, None, &pins).unwrap();
+    let rot_bytes = rot.keybag_bytes().to_vec();
+    b.commit_write(rot, &rot_bytes, &mut pins).unwrap();
+    assert_eq!(pins.vk_generation(), 2);
+
+    let snapshot = (a.keybag_bytes().to_vec(), pins.clone());
+    // A caller that also reports A's keybag as the store's read-back gets past the store check; the
+    // generation pin still refuses it.
+    let claimed = pending_a.keybag_bytes().to_vec();
+    assert_eq!(
+        a.commit_write(pending_a, &claimed, &mut pins).unwrap_err(),
+        VaultError::GenerationRollback { got: 1, seen: 2 }
+    );
+    assert_eq!((a.keybag_bytes().to_vec(), pins), snapshot);
+}
+
+/// Commit-side `SignerMismatch`: the pins handed to `commit_write` belong to another vault's signer.
+#[test]
+fn commit_refuses_pins_of_another_signer() {
+    let mut nv = new_vault();
+    let other = new_vault();
+    let mut wrong = other.pins.clone();
+    let pending = nv.vault.add_recovery_wrapper(&nv.pins).unwrap();
+    let stored = pending.keybag_bytes().to_vec();
+    let before = nv.vault.keybag_bytes().to_vec();
+    assert_eq!(
+        nv.vault
+            .commit_write(pending, &stored, &mut wrong)
+            .unwrap_err(),
+        VaultError::SignerMismatch
+    );
+    assert_eq!(
+        (nv.vault.keybag_bytes(), &wrong),
+        (&before[..], &other.pins)
     );
 }

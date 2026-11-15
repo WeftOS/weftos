@@ -99,6 +99,10 @@ pub enum VaultError {
     /// (review R3-L2).
     #[error("keybag lacks the DRAFT flag this DRAFT reader requires")]
     NotDraft,
+    /// The bytes the store reports holding after `put_if_match` are not the pending keybag: the store
+    /// took another write, so this one must not be committed (review R3-L3).
+    #[error("store holds a different keybag than the pending write")]
+    StoreMismatch,
     /// The OS random source failed.
     #[error("random source failed")]
     Random,

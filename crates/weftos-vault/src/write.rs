@@ -3,8 +3,10 @@
 //! A write method (`change_passcode`, `add_recovery_wrapper`, `add_device_wrapper`, `remove_wrapper`,
 //! `rotate_vk`, `drop_history`) changes nothing. It returns a [`PendingWrite`] holding the new signed
 //! keybag. The caller stores [`PendingWrite::keybag_bytes`] with `put_if_match` against the bytes the
-//! vault was opened from, and only when the store accepts calls [`Vault::commit_write`], which installs
-//! the new keybag (and, after a rotation, the new VK) in the vault and advances the pins.
+//! vault was opened from, and only when the store accepts calls [`Vault::commit_write`] with the bytes
+//! the store now holds (a read-back, or the object the store returned). The commit checks those bytes
+//! are the pending keybag, then installs it (and, after a rotation, the new VK) in the vault and
+//! advances the pins.
 //!
 //! When the store refuses (another device wrote first) the caller drops the pending write. The vault and
 //! the pins are then exactly as before the attempt, so the device re-reads the store and unlocks its
@@ -117,17 +119,32 @@ impl Vault {
 
     /// Install a pending write the store has ACCEPTED: the vault takes the new keybag (and the new VK
     /// after a rotation) and `pins` record it, so the store cannot replay the keybag from before the
-    /// write to this device (review M1). Call it only after `put_if_match` succeeded; after a refusal,
-    /// drop the pending write instead.
+    /// write to this device (review M1).
+    ///
+    /// `stored` is the keybag the store holds after the caller's `put_if_match`: read it back, or pass
+    /// the object the store returned. The commit goes through only when its SHA-256 equals the pending
+    /// keybag's, so a write the store refused is not committed even when the caller misreads the
+    /// `put_if_match` result (review R3-L3, [`VaultError::StoreMismatch`]). After a refusal, drop the
+    /// pending write and unlock the store's keybag instead.
     ///
     /// Refused, with the vault and `pins` unchanged, when the write was built on other bytes than the
-    /// vault holds now ([`VaultError::StaleWrite`]), when `pins` belong to another signer, or when `pins`
-    /// have already seen a keybag at or past the write's sequence (`Rollback`, or `Fork` at the same
-    /// sequence with other bytes: the store took another device's keybag instead).
-    pub fn commit_write<T>(&mut self, pending: PendingWrite<T>, pins: &mut Pins) -> Result<T> {
+    /// vault holds now ([`VaultError::StaleWrite`]), when `stored` is not the pending keybag, when `pins`
+    /// belong to another signer (`SignerMismatch`), or when `pins` have already seen a newer generation
+    /// (`GenerationRollback`) or a keybag at or past the write's sequence (`Rollback`, or `Fork` at the
+    /// same sequence with other bytes: another device's keybag reached this device first).
+    pub fn commit_write<T>(
+        &mut self,
+        pending: PendingWrite<T>,
+        stored: &[u8],
+        pins: &mut Pins,
+    ) -> Result<T> {
         let base: [u8; 32] = Sha256::digest(&self.bytes).into();
         if pending.vault_id != self.keybag.vault_id || pending.base != base {
             return Err(VaultError::StaleWrite);
+        }
+        let digest: [u8; 32] = Sha256::digest(&pending.bytes).into();
+        if <[u8; 32]>::from(Sha256::digest(stored)) != digest {
+            return Err(VaultError::StoreMismatch);
         }
         let kb = &pending.keybag;
         if pins.sign_pub.is_some_and(|p| p != kb.sign_pub) {
@@ -146,7 +163,6 @@ impl Vault {
                     seen: h.sequence,
                 });
             }
-            let digest: [u8; 32] = Sha256::digest(&pending.bytes).into();
             if kb.sequence == h.sequence && h.digest != digest {
                 return Err(VaultError::Fork {
                     sequence: kb.sequence,
@@ -178,6 +194,7 @@ impl Vault {
         f: impl FnOnce(&Vault, &Pins) -> Result<PendingWrite<T>>,
     ) -> Result<T> {
         let pending = f(self, pins)?;
-        self.commit_write(pending, pins)
+        let stored = pending.bytes.clone();
+        self.commit_write(pending, &stored, pins)
     }
 }
