@@ -353,7 +353,10 @@ impl Vault {
         }
         let mut kb = self.keybag.clone();
         f(&mut kb)?;
-        kb.sequence += 1;
+        kb.sequence = kb
+            .sequence
+            .checked_add(1)
+            .ok_or(VaultError::SequenceExhausted)?;
         if let Some(h) = pins.highest
             && kb.sequence <= h.sequence
         {

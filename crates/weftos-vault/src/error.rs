@@ -74,6 +74,9 @@ pub enum VaultError {
     /// The requested keybag change would break a keybag rule.
     #[error("invalid operation: {0}")]
     InvalidOperation(&'static str),
+    /// The keybag sequence counter cannot advance (it is at `u64::MAX`).
+    #[error("keybag sequence counter exhausted")]
+    SequenceExhausted,
     /// The OS random source failed.
     #[error("random source failed")]
     Random,

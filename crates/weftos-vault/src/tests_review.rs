@@ -198,3 +198,19 @@ fn m2_rotation_refuses_a_below_policy_passcode_wrapper() {
     }
     assert_eq!((pins.highest.unwrap().sequence, pins.vk_generation), (3, 2));
 }
+
+/// L1, probe R4: a keybag at `u64::MAX` must give an error on the next write, never a wrap or a panic.
+#[test]
+fn l1_sequence_exhaustion_is_an_error() {
+    let mut vault = new_vault(true).vault;
+    vault.keybag.sequence = u64::MAX;
+    vault.bytes = vault.keybag.sign(&vault.signing);
+    let before = vault.keybag_bytes().to_vec();
+    let mut pins = Pins::default();
+    assert_eq!(
+        vault.add_recovery_wrapper(&mut pins).unwrap_err(),
+        VaultError::SequenceExhausted
+    );
+    assert_eq!(vault.keybag_bytes(), &before[..]);
+    assert!(pins.highest.is_none());
+}
