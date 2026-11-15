@@ -105,6 +105,8 @@ pub fn search_docs<B: ObjectBackend>(
 }
 
 const INDEX: &str = ".wt-index.json";
+/// Empty marker file: this directory is a docs mirror that has synced at least once.
+const MARKER: &str = ".wt-mirror";
 
 /// Rebuild the list of files this mirror wrote when its index is unusable. Only a file the mirror
 /// can be told to have written is listed: a regular file (symlinks are never followed, neither as
@@ -177,11 +179,20 @@ pub fn sync_docs<B: ObjectBackend>(b: &B, e: &RegistryEntry, cache: &Path) -> Re
         std::fs::remove_file(&idx)?;
     }
     // A missing, truncated or empty index (a crash while writing it, a full disk) is rebuilt from
-    // the mirror directory, so docs deleted upstream are still pruned.
+    // the mirror directory, so docs deleted upstream are still pruned. Only in a directory this
+    // mirror has synced before (its marker or an index file is there): a first sync into a
+    // directory that already holds someone's read-only docs must never delete them.
+    let marker = dest.join(MARKER);
+    if std::fs::symlink_metadata(&marker).is_ok_and(|m| m.file_type().is_symlink()) {
+        std::fs::remove_file(&marker)?;
+    }
+    let synced_before = marker.is_file() || idx.is_file();
     let old: Vec<String> = match std::fs::read(&idx).ok().and_then(|d| serde_json::from_slice(&d).ok()) {
         Some(v) => v,
-        None => rebuild_index(&dest),
+        None if synced_before => rebuild_index(&dest),
+        None => Vec::new(),
     };
+    std::fs::write(&marker, b"")?;
     // Index first, as old + new, so a failed fetch below still leaves every file it may have
     // written (or that was there) tracked and prunable on the next run.
     let mut tracked: std::collections::BTreeSet<String> = old.iter().cloned().collect();

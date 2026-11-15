@@ -59,7 +59,7 @@ fn mirror(root: &Path) -> Vec<(String, Vec<u8>)> {
             let p = e.unwrap().path();
             if p.is_dir() {
                 walk(&p, root, out);
-            } else if p.file_name().unwrap() != ".wt-index.json" {
+            } else if !p.file_name().unwrap().to_string_lossy().starts_with(".wt-") {
                 out.push((p.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/"), std::fs::read(&p).unwrap()));
             }
         }

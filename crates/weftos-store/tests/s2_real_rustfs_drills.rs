@@ -325,7 +325,7 @@ fn drill_interrupted_sync_docs_then_a_deleted_doc_converges() {
         left.push(f.strip_prefix(&dir).unwrap().to_string_lossy().into_owned());
     }
     left.sort();
-    assert_eq!(left, [".wt-index.json", "docs/a.md"], "deleted and half-written docs are gone: {rep:?}");
+    assert_eq!(left, [".wt-index.json", ".wt-mirror", "docs/a.md"], "deleted and half-written docs are gone: {rep:?}");
     assert_eq!(std::fs::read_to_string(dir.join("docs/a.md")).unwrap(), "# A\n");
 }
 

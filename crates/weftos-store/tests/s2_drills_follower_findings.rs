@@ -287,3 +287,24 @@ fn a_newer_manifest_error_names_both_schema_numbers_and_the_current_one_still_re
     S2::put(&be, &e.bucket, MANIFEST_KEY, &serde_json::to_vec(&m).unwrap()).unwrap();
     assert!(weftos_store::share::read_manifest(&be, &e.bucket).unwrap().is_some());
 }
+
+/// A first sync into a directory that was never a mirror (no index, no marker) must not prune:
+/// read-only docs someone already keeps there stay.
+#[cfg(unix)]
+#[test]
+fn a_first_sync_never_prunes_a_directory_it_has_not_synced_before() {
+    let be = MemBackend::new();
+    let env = Env::new(&be, None);
+    let e1 = up(&env, "m", &[("docs/a.md", "# A\n")], &Pub::default());
+    let cache = tempfile::tempdir().unwrap();
+    let theirs = cache.path().join("m/docs/kept.md");
+    std::fs::create_dir_all(theirs.parent().unwrap()).unwrap();
+    std::fs::write(&theirs, b"not the mirror's").unwrap();
+    let mut perm = std::fs::metadata(&theirs).unwrap().permissions();
+    perm.set_readonly(true);
+    std::fs::set_permissions(&theirs, perm).unwrap();
+    sync_docs(&be, &e1, cache.path()).unwrap();
+    assert_eq!(std::fs::read(&theirs).unwrap(), b"not the mirror's");
+    assert!(cache.path().join("m/docs/a.md").exists());
+    assert!(cache.path().join("m/.wt-mirror").exists());
+}
