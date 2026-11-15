@@ -101,7 +101,7 @@ fn signature_generations<B: S2>(env: &Env<'_, B>) {
     let gen_of = |slug: &str| serde_json::from_slice::<serde_json::Value>(&S2::get(be, &pr, &format!("worktrees.sig/{slug}.json")).unwrap().unwrap()).unwrap()["generation"].as_u64().unwrap();
     let mk = |slug: &str, updated: u64, st: State| RegistryEntry {
         slug: slug.into(), bucket: format!("w-x-{slug}"), branch: "b".into(), head_commit: "h".into(), state: st, writer: actor("w"), merger: None,
-        doc_count: 0, file_count: 0, updated_ms: updated, orphan: None,
+        doc_count: 0, file_count: 0, updated_ms: updated, orphan: None, writer_check: None,
     };
     let now = T0 + 10 * DAY;
     let mut e = mk("g", now + DAY, State::Open);

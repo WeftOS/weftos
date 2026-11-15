@@ -194,6 +194,7 @@ pub struct Published {
 /// The registry entry for a worktree from a manifest and handoff already in hand. Same mapping as
 /// `summarize` (`share_fetch.rs`), which reads the two objects first; a test pins them equal.
 pub fn summarize_with(slug: &str, bucket: &str, m: TreeManifest, h: Handoff) -> RegistryEntry {
+    let writer_check = Some(writer_check_for(Some(&m), Some(&h)));
     RegistryEntry {
         slug: slug.into(),
         bucket: bucket.into(),
@@ -206,6 +207,7 @@ pub fn summarize_with(slug: &str, bucket: &str, m: TreeManifest, h: Handoff) -> 
         file_count: m.files.len(),
         updated_ms: h.updated_ms.max(m.published_ms),
         orphan: None,
+        writer_check,
     }
 }
 

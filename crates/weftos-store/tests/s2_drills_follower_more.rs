@@ -321,7 +321,7 @@ fn d6g_interleaved_runs_and_generations<B: S2>(env: &Env<'_, B>) {
     let t = Instant::now();
     let mk = |state: State, updated: u64| RegistryEntry {
         slug: "wt".into(), bucket: format!("w-{}-wt", env.u), branch: "b".into(), head_commit: "h".into(), state, writer: actor("w"), merger: None,
-        doc_count: 0, file_count: 0, updated_ms: updated, orphan: None,
+        doc_count: 0, file_count: 0, updated_ms: updated, orphan: None, writer_check: None,
     };
     write_registry_entry_signed(be, pr, &mk(State::Claimed, 100), &Toy).unwrap();
     let (v1, s1) = (S2::get(be, pr, "worktrees/wt.json").unwrap().unwrap(), S2::get(be, pr, "worktrees.sig/wt.json").unwrap().unwrap());

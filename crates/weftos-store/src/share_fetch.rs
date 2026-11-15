@@ -7,15 +7,13 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 /// Registry prefix in the *project* bucket. Written by the daemon only (it holds the project
-/// grant); RustFS IAM refuses it to ordinary worktree principals, keeping "writes stay in the
-/// worktree bucket" (ADR-126 §4) true for agents.
+/// grant); RustFS IAM refuses it to worktree principals ("writes stay in the worktree bucket", §4).
 pub const REGISTRY_PREFIX: &str = "worktrees/";
 
-/// One object holding `slug -> etag of its registry entry`, rewritten by the daemon on every
-/// registry change. A follower that has seen those etags before can skip fetching those entries
-/// (ADR-126 section 4a poll cost): one GET instead of a listing plus one GET per worktree. It is a
-/// hint written from a fresh listing each time, so a lost update between two daemons heals on the
-/// next refresh; a follower falls back to the listing when it is missing or unreadable.
+/// One object holding `slug -> etag of its registry entry`, rewritten on every registry change, so
+/// a follower that has seen those etags skips those entries (ADR-126 section 4a poll cost). A hint
+/// from a fresh listing each time (a lost update heals on the next refresh); a follower falls back
+/// to the listing when it is missing or unreadable.
 pub const DIGEST_KEY: &str = "worktrees/_digest.json";
 
 /// How many entry fetches a follower runs at once.
@@ -136,6 +134,9 @@ pub struct RegistryEntry {
     /// Present only in state `orphan` (see `orphan.rs`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub orphan: Option<crate::orphan::OrphanInfo>,
+    /// The older-writer check of the daemon that wrote this entry (WO-069 F1); absent from an older daemon's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writer_check: Option<crate::share::WriterCheck>,
 }
 
 /// Build the registry entry for one worktree bucket from its own manifest and handoff.
@@ -150,8 +151,7 @@ pub fn summarize<B: ObjectBackend>(
     Ok(Some(summarize_from(slug, bucket, &m, &h)))
 }
 
-/// [`summarize`] from a manifest and handoff the caller already holds (no store calls), so a verb
-/// that needs both the entry and the manifest reads the manifest once.
+/// [`summarize`] from a manifest and handoff the caller already holds (no store calls).
 pub fn summarize_from(slug: &str, bucket: &str, m: &TreeManifest, h: &Handoff) -> RegistryEntry {
     RegistryEntry {
         slug: slug.into(),
@@ -165,6 +165,7 @@ pub fn summarize_from(slug: &str, bucket: &str, m: &TreeManifest, h: &Handoff) -
         file_count: m.files.len(),
         updated_ms: h.updated_ms.max(m.published_ms),
         orphan: None,
+        writer_check: Some(writer_check_for(Some(m), Some(h))),
     }
 }
 

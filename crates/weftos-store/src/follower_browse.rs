@@ -20,8 +20,8 @@
 use crate::follower::verify_entry;
 use crate::overlay::{ObjectBackend, Result, S2Error, validate_key};
 use crate::share::{
-    FileEntry, OBJ_PREFIX, State, TREE_PREFIX, TreeManifest, is_dangerous_path, is_secret_path, read_manifest,
-    sha256_hex,
+    FileEntry, OBJ_PREFIX, OlderWriter, State, TREE_PREFIX, TreeManifest, is_dangerous_path, is_secret_path, read_manifest,
+    entry_older_writer, sha256_hex,
 };
 use crate::share_fetch::{REGISTRY_PREFIX, RegistryEntry, check_entry, list_shared_lenient};
 use serde::Serialize;
@@ -47,6 +47,9 @@ pub struct RegistrySummary {
     pub file_count: usize,
     /// Latest of the last publish and the last handoff change.
     pub updated_ms: u64,
+    /// Set when the worktree was last written by an older daemon (WO-069 F1, ADR-126 gate item 8).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub older_writer: Option<OlderWriter>,
 }
 
 /// The registry list, newest first, with the entries that could not be read.
@@ -97,6 +100,9 @@ pub struct BrowseListing {
     pub path: String,
     pub entries: Vec<BrowseEntry>,
     pub truncated: bool,
+    /// Set when the worktree was last written by an older daemon (WO-069 F1, ADR-126 gate item 8).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub older_writer: Option<OlderWriter>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -113,6 +119,9 @@ pub struct BrowseFile {
     /// The cap that applied: the smaller of the caller's `max_bytes` and [`MAX_GET_BYTES`].
     pub cap: u64,
     pub data: Option<Vec<u8>>,
+    /// Set when the worktree was last written by an older daemon (WO-069 F1, ADR-126 gate item 8).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub older_writer: Option<OlderWriter>,
 }
 
 fn actor(a: &crate::share::Actor) -> String {
@@ -130,6 +139,7 @@ pub(crate) fn summary(e: &RegistryEntry) -> RegistrySummary {
         doc_count: e.doc_count,
         file_count: e.file_count,
         updated_ms: e.updated_ms,
+        older_writer: entry_older_writer(e),
     }
 }
 
@@ -280,6 +290,7 @@ pub(crate) fn ls_from(e: &RegistryEntry, m: &TreeManifest, dir: String) -> Resul
         path: dir,
         entries,
         truncated,
+        older_writer: entry_older_writer(e),
     })
 }
 
@@ -327,6 +338,7 @@ pub(crate) fn get_from<B: ObjectBackend>(
         withheld_reason: None,
         cap,
         data: None,
+        older_writer: entry_older_writer(e),
     };
     let over = |out: &mut BrowseFile| {
         out.withheld = true;

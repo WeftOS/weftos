@@ -18,7 +18,7 @@ use weftos_store::share_fetch::RegistryEntry;
 fn entry(slug: &str, state: State, updated_ms: u64, orphan: Option<OrphanInfo>) -> RegistryEntry {
     RegistryEntry {
         slug: slug.into(), bucket: format!("w-x-{slug}"), branch: "b".into(), head_commit: "h".into(), state, writer: actor("w"),
-        merger: None, doc_count: 0, file_count: 0, updated_ms, orphan,
+        merger: None, doc_count: 0, file_count: 0, updated_ms, orphan, writer_check: None,
     }
 }
 

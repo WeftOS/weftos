@@ -41,6 +41,7 @@ fn entry(slug: &str) -> RegistryEntry {
         file_count: 0,
         updated_ms: 1,
         orphan: None,
+        writer_check: None,
     }
 }
 

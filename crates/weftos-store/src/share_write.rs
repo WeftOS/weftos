@@ -104,6 +104,8 @@ pub fn publish_tree_cached<B: ObjectBackend>(
         }
     };
     rep.hash_cache = cache.finish();
+    // What this publish found: judged on the record and manifest it read to begin with (no call more).
+    rep.older_writer_before = detect_older_writer(prev.as_ref(), existing_handoff.as_ref().map(|(h, _)| h));
     let (has_bundle, bundle_sha256, bundle_gen) = if pooled {
         match pooled_bundle(b, bucket, src, limits, prev.as_ref(), &pool, &mut chooser, &mut rep)? {
             Some((s, g)) => (true, Some(s), Some(g)),

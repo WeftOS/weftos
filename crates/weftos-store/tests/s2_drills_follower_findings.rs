@@ -39,7 +39,7 @@ fn an_orphan_stamped_ahead_is_still_reported_as_an_orphan() {
 fn pinned_entry(env: &Env<'_, MemBackend>, state: State) -> RegistryEntry {
     RegistryEntry {
         slug: "pin".into(), bucket: format!("w-{}-pin", env.u), branch: "b".into(), head_commit: "h".into(), state, writer: actor("w"), merger: None,
-        doc_count: 0, file_count: 0, updated_ms: u64::MAX, orphan: None,
+        doc_count: 0, file_count: 0, updated_ms: u64::MAX, orphan: None, writer_check: None,
     }
 }
 

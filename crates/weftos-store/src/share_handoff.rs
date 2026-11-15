@@ -111,8 +111,22 @@ pub fn claim_merge_with<B: ObjectBackend>(
     bucket: &str,
     me: &Actor,
     now_ms: u64,
-    mut expired: impl FnMut(&Handoff) -> bool,
+    expired: impl FnMut(&Handoff) -> bool,
 ) -> Result<Handoff> {
+    claim_merge_checked(b, bucket, me, now_ms, expired, false).map(|(h, _)| h)
+}
+
+/// [`claim_merge_with`] that also says whether the bucket was last written by an older daemon (WO-069
+/// F1, ADR-126 gate item 8), judged on the manifest and record the claim reads anyway (no store call
+/// more). `refuse_older` turns the verdict into a refusal before anything is written.
+pub fn claim_merge_checked<B: ObjectBackend>(
+    b: &B,
+    bucket: &str,
+    me: &Actor,
+    now_ms: u64,
+    mut expired: impl FnMut(&Handoff) -> bool,
+    refuse_older: bool,
+) -> Result<(Handoff, Option<OlderWriter>)> {
     for _ in 0..HANDOFF_RETRIES {
         // The head is read before the record: a publish landing in between makes the recorded head
         // older than the published one, so the merge is refused (safe), never the reverse.
@@ -133,6 +147,10 @@ pub fn claim_merge_with<B: ObjectBackend>(
             }
             State::Open | State::Handoff => {}
         }
+        let older = detect_older_writer(published.as_ref().map(|p| &p.m), Some(&cur));
+        if refuse_older && let Some(o) = &older {
+            return Err(older_refusal(o));
+        }
         let next = Handoff {
             state: State::Claimed,
             merger: Some(me.clone()),
@@ -145,7 +163,7 @@ pub fn claim_merge_with<B: ObjectBackend>(
         // Conditional on the version we decided on: of two claimers reading the same record, exactly
         // one write lands, and the other re-reads, sees a live claim and is refused.
         if write_handoff_if(b, bucket, &next, Some(&etag))? {
-            return Ok(next);
+            return Ok((next, older));
         }
     }
     Err(contended())
@@ -157,10 +175,20 @@ struct Published {
     head: String,
     tree: String,
     sha: String,
+    /// The manifest itself (already read), for the older-writer check.
+    m: TreeManifest,
 }
 
 fn published<B: ObjectBackend>(b: &B, bucket: &str) -> Result<Option<Published>> {
-    Ok(read_manifest_bytes(b, bucket)?.map(|(m, d)| Published { tree: tree_digest(&m), sha: sha256_hex(&d), head: m.head_commit }))
+    Ok(read_manifest_bytes(b, bucket)?.map(|(m, d)| Published { tree: tree_digest(&m), sha: sha256_hex(&d), head: m.head_commit.clone(), m }))
+}
+
+/// The refusal of a caller that required current writers.
+fn older_refusal(o: &OlderWriter) -> S2Error {
+    S2Error::Invalid(format!(
+        "refused: the worktree was last written by an older daemon ({}); evidence: {}. Upgrade that writer (ADR-126 section 4a, gate item 8), or do not require current writers",
+        o.what, o.evidence
+    ))
 }
 
 /// The fencing checks on a `Claimed` record, shared by [`mark_merged_at`], [`mark_landed_at`] and
@@ -177,7 +205,7 @@ fn published<B: ObjectBackend>(b: &B, bucket: &str) -> Result<Option<Published>>
 /// Last, a publish announced on this record and not yet visible in the manifest refuses the merge
 /// (lane Y, A4): with the caller's conditional write on the same record version, the manifest the
 /// fence read is the one published when that write lands.
-fn fence_claim_on<B: ObjectBackend>(b: &B, bucket: &str, cur: &Handoff, epoch: Option<u64>, now_ms: u64) -> Result<()> {
+fn fence_claim_on<B: ObjectBackend>(b: &B, bucket: &str, cur: &Handoff, epoch: Option<u64>, now_ms: u64) -> Result<Option<Published>> {
     if let Some(e) = epoch
         && e != cur.epoch
     {
@@ -210,7 +238,8 @@ fn fence_claim_on<B: ObjectBackend>(b: &B, bucket: &str, cur: &Handoff, epoch: O
             cur.epoch
         )));
     }
-    refuse_pending(cur, now.as_ref().map(|p| p.sha.as_str()), now_ms)
+    refuse_pending(cur, now.as_ref().map(|p| p.sha.as_str()), now_ms)?;
+    Ok(now)
 }
 
 /// For a caller about to land under a claim (the daemon's `promote --epoch`): refuse when the claim
@@ -220,7 +249,7 @@ fn fence_claim_on<B: ObjectBackend>(b: &B, bucket: &str, cur: &Handoff, epoch: O
 /// 2026-11-15; before it these passed as "nothing to fence").
 pub fn fence_claim<B: ObjectBackend>(b: &B, bucket: &str, epoch: u64, now_ms: u64) -> Result<()> {
     match read_handoff(b, bucket)? {
-        Some(h) if h.state == State::Claimed => fence_claim_on(b, bucket, &h, Some(epoch), now_ms),
+        Some(h) if h.state == State::Claimed => fence_claim_on(b, bucket, &h, Some(epoch), now_ms).map(|_| ()),
         other => Err(not_claimed(other.as_ref(), epoch)),
     }
 }
@@ -334,26 +363,47 @@ pub fn mark_landed_at<B: ObjectBackend>(
     note: &str,
     now_ms: u64,
 ) -> Result<bool> {
+    mark_landed_checked(b, bucket, lander, epoch, note, now_ms, false).map(|(landed, _)| landed)
+}
+
+/// [`mark_landed_at`] that also says whether the bucket was last written by an older daemon (WO-069
+/// F1, ADR-126 gate item 8), with no store call more: the record always, and the manifest when the
+/// fence read it (`epoch` given). An unfenced land sees only the record. `refuse_older` turns the
+/// verdict into a refusal before anything is written.
+pub fn mark_landed_checked<B: ObjectBackend>(
+    b: &B,
+    bucket: &str,
+    lander: &Actor,
+    epoch: Option<u64>,
+    note: &str,
+    now_ms: u64,
+    refuse_older: bool,
+) -> Result<(bool, Option<OlderWriter>)> {
     // Conditional, like the other handoff writes: the decision holds for exactly the version written over.
     for _ in 0..HANDOFF_RETRIES {
         let seen = read_handoff_versioned(b, bucket)?;
+        let mut manifest: Option<TreeManifest> = None;
         let Some((cur, etag)) = seen else {
             // Nothing published: an unfenced land has nothing to record; a caller holding an epoch
             // asserts a claim that cannot exist (Q9).
             return match epoch {
                 Some(e) => Err(not_claimed(None, e)),
-                None => Ok(false),
+                None => Ok((false, None)),
             };
         };
         match (epoch, cur.state) {
             // A repeated promote after the land already recorded: the same actor under the same epoch
             // is the idempotent success (it resumes the promotion), nothing is written.
-            (Some(e), State::Merged) if e == cur.epoch && cur.merger.as_ref() == Some(lander) => return Ok(false),
-            (None, State::Merged | State::Archived) => return Ok(false),
+            (Some(e), State::Merged) if e == cur.epoch && cur.merger.as_ref() == Some(lander) => return Ok((false, None)),
+            (None, State::Merged | State::Archived) => return Ok((false, None)),
             // A presented epoch asserts "I hold claim N": anything but a `Claimed` record refuses (Q9).
             (Some(e), s) if s != State::Claimed => return Err(not_claimed(Some(&cur), e)),
-            (Some(e), _) => fence_claim_on(b, bucket, &cur, Some(e), now_ms)?,
+            (Some(e), _) => manifest = fence_claim_on(b, bucket, &cur, Some(e), now_ms)?.map(|p| p.m),
             (None, _) => {}
+        }
+        let older = detect_older_writer(manifest.as_ref(), Some(&cur));
+        if refuse_older && let Some(o) = &older {
+            return Err(older_refusal(o));
         }
         let note = match cur.merger.as_ref().filter(|m| *m != lander && cur.state == State::Claimed) {
             Some(m) => format!("{note} (claim was held by {}@{})", m.agent, m.host),
@@ -361,7 +411,7 @@ pub fn mark_landed_at<B: ObjectBackend>(
         };
         let next = Handoff { state: State::Merged, note, merger: Some(lander.clone()), updated_ms: now_ms, ..cur };
         if write_handoff_if(b, bucket, &next, Some(&etag))? {
-            return Ok(true);
+            return Ok((true, older));
         }
     }
     Err(contended())
