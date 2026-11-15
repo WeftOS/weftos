@@ -197,10 +197,14 @@ case_run "r4-c: control, a tip ledger entry trusts the row it hashes" 0 \
 # doctest in each form ran). rustdoc reads code blocks anywhere in the Markdown, including list
 # items and block quotes, strips the leading " * " of block doc comments, joins an item's outer
 # and inner docs into one text, and treats r#doc / r#cfg_attr like doc / cfg_attr.
-export DOC_LIST='/// Steps:
+export DOC_LIST_OWN='/// Steps:
 ///
 /// - run it:
 ///   ```
+///   std::process::Command::new("sh").status().unwrap();
+///   ```
+pub fn d() {}'
+export DOC_LIST='/// - ```
 ///   std::process::Command::new("sh").status().unwrap();
 ///   ```
 pub fn d() {}'
@@ -253,9 +257,7 @@ export DOC_AFTERFENCE='/// ```text
 /// ```
 ///     std::process::Command::new("sh").status().unwrap();
 pub fn d() {}'
-export DOC_NUMLIST='/// 1. step
-///
-///    ```
+export DOC_NUMLIST='/// 1. ```
 ///    std::process::Command::new("sh").status().unwrap();
 ///    ```
 pub fn d() {}'
@@ -264,11 +266,12 @@ export DOC_INCLUDE_KEY='#[doc(include = "x.md")]
 pub fn e() {}'
 if [ "$REAL_TOKENS" = 1 ]; then
     EXPECT="include" case_run "r4-d(real): #![doc = include_str!(...)] in a new module file" 1 : 'printf "%s\n" "$DOC_INNER_INCL" >src/inner.rs'
-    KNOWN_GAP=R4-D1 EXPECT="process" case_run "r4-d(real): a fenced doctest inside a list item" 1 : 'printf "%s\n" "$DOC_LIST" >>src/lib.rs'
+    EXPECT="process" case_run "r4-d(real): control, a fence on its own line inside a list item" 1 : 'printf "%s\n" "$DOC_LIST_OWN" >>src/lib.rs'
+    KNOWN_GAP=R4-D1 EXPECT="process" case_run "r4-d(real): a fence on the list marker line (- \`\`\`)" 1 : 'printf "%s\n" "$DOC_LIST" >>src/lib.rs'
     KNOWN_GAP=R4-D1 EXPECT="process" case_run "r4-d(real): a fenced doctest inside a block quote" 1 : 'printf "%s\n" "$DOC_QUOTE" >>src/lib.rs'
     KNOWN_GAP=R4-D1 EXPECT="process" case_run "r4-d(real): a /** */ doctest with leading stars (per-line lex blinded by a raw string)" 1 : 'printf "%s\n" "$DOC_STAR" >>src/lib.rs'
     EXPECT="process" case_run "r4-d(real): control, a /** */ doctest with leading stars (per-line lex sees it)" 1 : 'printf "%s\n" "$DOC_STAR_PLAIN" >>src/lib.rs'
-    KNOWN_GAP=R4-D1 EXPECT="process" case_run "r4-d(real): a fenced doctest inside a numbered list item" 1 : 'printf "%s\n" "$DOC_NUMLIST" >>src/lib.rs'
+    KNOWN_GAP=R4-D1 EXPECT="process" case_run "r4-d(real): a fence on a numbered list marker line (1. \`\`\`)" 1 : 'printf "%s\n" "$DOC_NUMLIST" >>src/lib.rs'
     KNOWN_GAP=R4-D1 EXPECT="process" case_run "r4-d(real): a fence whose info string is only a {.class}" 1 : 'printf "%s\n" "$DOC_CLASS" >>src/lib.rs'
     KNOWN_GAP=R4-D1 EXPECT="process" case_run "r4-d(real): an indented code block right after a heading" 1 : 'printf "%s\n" "$DOC_HEADING" >>src/lib.rs'
     KNOWN_GAP=R4-D1 EXPECT="process" case_run "r4-d(real): an indented code block right after a closing fence" 1 : 'printf "%s\n" "$DOC_AFTERFENCE" >>src/lib.rs'
