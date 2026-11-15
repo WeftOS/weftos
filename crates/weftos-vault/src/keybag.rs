@@ -153,7 +153,8 @@ pub struct Keybag {
     pub wrappers: Vec<Wrapper>,
 }
 
-/// What a device has already seen for one vault: the signer pin and the highest keybag.
+/// What a device has already seen for one vault: the signer pin, the highest keybag and the highest
+/// VK generation.
 ///
 /// Pins carry no `vault_id`: a caller keeps one `Pins` per vault and must not share it between vaults.
 /// Persist the pins after every unlock and after every write made through [`crate::Vault`]; the write
@@ -164,6 +165,9 @@ pub struct Pins {
     pub sign_pub: Option<[u8; 32]>,
     /// Highest keybag stored so far.
     pub highest: Option<SeenKeybag>,
+    /// Highest `current_vk_generation` seen (0 = none yet). A keybag with a lower generation is refused
+    /// even when its sequence is higher and its signature verifies (review H1).
+    pub vk_generation: u32,
 }
 
 /// Sequence and SHA-256 of the highest keybag seen.
@@ -176,7 +180,8 @@ pub struct SeenKeybag {
 }
 
 impl Pins {
-    /// Record a verified keybag as seen (pins the signer on first use, keeps the highest sequence).
+    /// Record a verified keybag as seen (pins the signer on first use, keeps the highest sequence and
+    /// the highest VK generation).
     pub fn record(&mut self, signed_bytes: &[u8], kb: &Keybag) {
         self.sign_pub.get_or_insert(kb.sign_pub);
         if self.highest.is_none_or(|h| kb.sequence >= h.sequence) {
@@ -185,6 +190,7 @@ impl Pins {
                 digest: Sha256::digest(signed_bytes).into(),
             });
         }
+        self.vk_generation = self.vk_generation.max(kb.current_vk_generation);
     }
 }
 
@@ -449,6 +455,12 @@ impl Keybag {
         vk.verify_strict(&msg, &sig)
             .map_err(|_| VaultError::BadSignature)?;
 
+        if current_vk_generation < pins.vk_generation {
+            return Err(VaultError::GenerationRollback {
+                got: current_vk_generation,
+                seen: pins.vk_generation,
+            });
+        }
         if let Some(h) = pins.highest {
             if sequence < h.sequence {
                 return Err(VaultError::Rollback {

@@ -171,10 +171,11 @@ fn rotation_bumps_the_sequence_and_resigns() {
     assert_eq!(kb1.sign_pub, kb0.sign_pub);
     let mut pins2 = Pins::default();
     Vault::unlock(&after, PASS, &mut pins2).unwrap();
-    assert!(matches!(
-        Keybag::parse(&before, &pins2),
-        Err(VaultError::Rollback { .. })
-    ));
+    // The generation pin (review H1) catches it before the sequence pin does.
+    assert_eq!(
+        Keybag::parse(&before, &pins2).unwrap_err(),
+        VaultError::GenerationRollback { got: 1, seen: 2 }
+    );
 
     // Exactly one signing-seed wrapper, at the new generation, and the vault_id is unchanged.
     assert_eq!(kb1.vault_id, kb0.vault_id);

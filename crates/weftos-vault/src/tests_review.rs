@@ -2,9 +2,54 @@
 //! more per finding. All values are fake; Argon2id runs the TEST profile unless a test says otherwise.
 
 use crate::VaultError;
-use crate::keybag::{KIND_RECOVERY, Pins};
+use crate::keybag::{KIND_RECOVERY, Keybag, Pins};
 use crate::tests::{PASS, T, new_vault, pass_id};
 use crate::vault::{NewVault, Vault};
+
+/// H1, probe R1: a device compromised before a rotation holds the old VK and the signing seed. It
+/// re-signs a pre-rotation keybag with a higher sequence. A device that has seen the rotation must refuse
+/// it, even though the signer matches and the sequence is higher.
+#[test]
+fn h1_pinned_device_refuses_a_pre_rotation_keybag_resigned_with_a_higher_sequence() {
+    let mut vault = new_vault(true).vault;
+    let old_kb = vault.keybag().clone();
+    let stolen = vault.signing.clone();
+    let mut pins = Pins::default();
+    Vault::unlock(vault.keybag_bytes(), PASS, &mut pins).unwrap();
+    vault.rotate_vk(PASS, None, &mut Pins::default()).unwrap();
+    // This device learns of the rotation by unlocking the new keybag (seq 2, generation 2).
+    Vault::unlock(vault.keybag_bytes(), PASS, &mut pins).unwrap();
+    assert_eq!(pins.vk_generation, 2);
+
+    let mut forged = old_kb.clone();
+    forged.sequence = 99;
+    let bytes = forged.sign(&stolen);
+    assert_eq!(
+        Vault::unlock(&bytes, PASS, &mut pins).unwrap_err(),
+        VaultError::GenerationRollback { got: 1, seen: 2 }
+    );
+    assert_eq!(
+        Keybag::parse(&bytes, &pins).unwrap_err(),
+        VaultError::GenerationRollback { got: 1, seen: 2 }
+    );
+    // The refusal leaves the pins where they were.
+    assert_eq!(pins.highest.unwrap().sequence, 2);
+}
+
+/// H1: the creating device is pinned from the start (signer, sequence 1, generation 1).
+#[test]
+fn h1_new_vault_returns_pins_for_the_creating_device() {
+    let NewVault { vault, pins, .. } = new_vault(true);
+    assert_eq!(pins.sign_pub, Some(vault.keybag().sign_pub));
+    assert_eq!(pins.highest.unwrap().sequence, 1);
+    assert_eq!(pins.vk_generation, 1);
+    let other = new_vault(true).vault;
+    let mut p = pins.clone();
+    assert_eq!(
+        Vault::unlock(other.keybag_bytes(), PASS, &mut p).unwrap_err(),
+        VaultError::SignerMismatch
+    );
+}
 
 /// M1, probe R2: the store replays the keybag from before a rotation to the device that did the rotation.
 #[test]
@@ -18,6 +63,13 @@ fn m1_replay_of_the_keybag_from_before_a_rotation_is_refused() {
     vault.rotate_vk(PASS, None, &mut pins).unwrap();
     assert_eq!(
         Vault::unlock(&before, PASS, &mut pins).unwrap_err(),
+        VaultError::GenerationRollback { got: 1, seen: 2 }
+    );
+    // Without the generation pin the sequence pin alone refuses it too.
+    let mut seq_only = pins.clone();
+    seq_only.vk_generation = 0;
+    assert_eq!(
+        Vault::unlock(&before, PASS, &mut seq_only).unwrap_err(),
         VaultError::Rollback { got: 1, seen: 2 }
     );
     assert!(Vault::unlock(vault.keybag_bytes(), PASS, &mut pins).is_ok());

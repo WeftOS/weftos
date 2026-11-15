@@ -35,6 +35,15 @@ pub enum VaultError {
         /// Highest sequence already stored.
         seen: u64,
     },
+    /// The keybag's `current_vk_generation` is lower than the highest this device has seen: a
+    /// pre-rotation keybag, possibly re-signed at a higher sequence by a compromised signer.
+    #[error("keybag vk generation {got} is older than the highest seen {seen}")]
+    GenerationRollback {
+        /// Generation in the presented keybag.
+        got: u32,
+        /// Highest generation already stored.
+        seen: u32,
+    },
     /// Same sequence, different bytes.
     #[error("keybag fork at sequence {sequence}")]
     Fork {

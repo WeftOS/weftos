@@ -83,16 +83,24 @@ impl Vault {
         open32(&key, nonce, &aad, ct)
     }
 
-    /// Rotate the vault key (spec 9.4), for example after a device compromise.
+    /// Rotate the vault key (spec 9.4).
+    ///
+    /// **This is not compromise recovery.** The signing seed and `sign_pub` survive rotation and the
+    /// passcode wrappers are re-sealed under the same passcode, so a device compromised before the
+    /// rotation (which held the old VK, the signing seed and probably the typed passcode) keeps full write
+    /// authority over the keybag. Pinned devices refuse a pre-rotation keybag (the generation pin, review
+    /// H1), but an unpinned device does not, and the attacker can still re-sign new keybags. Recovering
+    /// from a compromise needs a new signing seed, a new passcode and an authenticated pin transition: a
+    /// spec change, see `docs/research/vault-v1-rotation-addendum-2026-11-15.md`.
     ///
     /// A new VK takes generation g+1. Passcode wrappers that `passcode` opens are re-sealed under it (fresh
     /// salt and nonce); recovery wrappers are re-sealed only when `recovery` opens them; device wrappers are
     /// dropped (the platform seal needs the device, so re-enrol). The old VK goes into a kind 4 entry sealed
     /// under the new VK's history key, and older kind 4 entries are re-sealed the same way, so every
     /// generation opens straight from the current VK. The signing seed is re-sealed (same seed, same
-    /// `sign_pub`), the sequence is bumped, the keybag is re-signed and `pins` records the new keybag.
-    /// Blobs are not touched: they open by walking the history and move with [`Vault::reseal_secret`].
-    /// Nothing changes, in the vault or in `pins`, if any step fails.
+    /// `sign_pub`), the sequence is bumped, the keybag is re-signed and `pins` records the new sequence and
+    /// generation. Blobs are not touched: they open by walking the history and move with
+    /// [`Vault::reseal_secret`]. Nothing changes, in the vault or in `pins`, if any step fails.
     pub fn rotate_vk(
         &mut self,
         passcode: &str,
