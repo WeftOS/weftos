@@ -2,7 +2,9 @@
 //! more per finding. All values are fake; Argon2id runs the TEST profile unless a test says otherwise.
 
 use crate::VaultError;
-use crate::keybag::{KIND_RECOVERY, Keybag, Pins, WrapperBody};
+use crate::keybag::{
+    KIND_PASSCODE, KIND_RECOVERY, Keybag, MAX_PASSCODE_WRAPPERS, Pins, WrapperBody,
+};
 use crate::passcode_kdf::KdfParams;
 use crate::tests::{PASS, T, new_vault, pass_id};
 use crate::vault::{NewVault, Vault};
@@ -213,4 +215,81 @@ fn l1_sequence_exhaustion_is_an_error() {
     );
     assert_eq!(vault.keybag_bytes(), &before[..]);
     assert!(pins.highest.is_none());
+}
+
+/// Clone the vault's passcode wrapper `n` extra times with `params` and fresh ids, and sign. With
+/// `drop_recovery` the recovery wrapper is removed first, to make room for 63 passcode wrappers.
+fn with_extra_passcode_wrappers(
+    v: &Vault,
+    n: usize,
+    params: KdfParams,
+    drop_recovery: bool,
+) -> Vec<u8> {
+    let mut kb: Keybag = v.keybag().clone();
+    if drop_recovery {
+        kb.wrappers.retain(|w| w.kind() != KIND_RECOVERY);
+    }
+    let base = kb
+        .wrappers
+        .iter()
+        .find(|w| w.kind() == KIND_PASSCODE)
+        .unwrap()
+        .clone();
+    for i in 0..n {
+        let mut w = base.clone();
+        w.id = [0x70 ^ i as u8; 16];
+        if let WrapperBody::Passcode { params: p, .. } = &mut w.body {
+            *p = params;
+        }
+        kb.wrappers.push(w);
+    }
+    kb.sequence += 1;
+    kb.sign(&v.signing)
+}
+
+/// L2, probe R3: a signed keybag with 63 passcode wrappers at the format maximum would make one unlock
+/// run 63 Argon2id passes of 1 GiB, t=10. Parse refuses it before any KDF work: at most
+/// `MAX_PASSCODE_WRAPPERS` passcode wrappers, and their total `m_kib * t` at most one maximal wrapper.
+#[test]
+fn l2_unlock_kdf_cost_is_bounded_at_parse() {
+    let v = new_vault(true).vault;
+    let max = KdfParams {
+        m_kib: 1_048_576,
+        t: 10,
+        p: 16,
+    };
+    max.check_format().unwrap();
+    let r3 = with_extra_passcode_wrappers(&v, 62, max, true);
+    assert!((8000..9000).contains(&r3.len()), "R3 shape: an 8 KB keybag");
+    assert_eq!(
+        Keybag::parse(&r3, &Pins::default()).unwrap_err(),
+        VaultError::Malformed("too many passcode wrappers")
+    );
+    // Unlock refuses at parse, so it does no Argon2id run at all (this returns at once).
+    assert!(Vault::unlock(&r3, PASS, &mut Pins::default()).is_err());
+
+    // The count cap: four cheap wrappers parse, five do not.
+    let four = with_extra_passcode_wrappers(&v, MAX_PASSCODE_WRAPPERS - 1, T, false);
+    assert!(Keybag::parse(&four, &Pins::default()).is_ok());
+    let five = with_extra_passcode_wrappers(&v, MAX_PASSCODE_WRAPPERS, T, false);
+    assert_eq!(
+        Keybag::parse(&five, &Pins::default()).unwrap_err(),
+        VaultError::Malformed("too many passcode wrappers")
+    );
+
+    // The cost budget: one maximal wrapper next to a cheap one is over budget.
+    let over = with_extra_passcode_wrappers(&v, 1, max, false);
+    assert_eq!(
+        Keybag::parse(&over, &Pins::default()).unwrap_err(),
+        VaultError::KdfBounds
+    );
+    // A single maximal wrapper on its own is still within the budget (parse only; no KDF run here).
+    let mut single = v.keybag().clone();
+    for w in &mut single.wrappers {
+        if let WrapperBody::Passcode { params, .. } = &mut w.body {
+            *params = max;
+        }
+    }
+    single.sequence += 1;
+    assert!(Keybag::parse(&single.sign(&v.signing), &Pins::default()).is_ok());
 }

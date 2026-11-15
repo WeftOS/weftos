@@ -17,6 +17,13 @@ pub(crate) const MAX_LEN: usize = 65536;
 const MAX_WRAPPERS: usize = 64;
 const MAX_BODY: usize = 16384;
 const MAX_KEY_REF: usize = 256;
+/// Most passcode wrappers a keybag may carry. `unlock` tries each one at the current generation, so this
+/// caps the Argon2id runs a single unlock attempt can be made to do (review L2).
+pub const MAX_PASSCODE_WRAPPERS: usize = 4;
+/// Most total Argon2id work, as the sum of `m_kib * t` over all passcode wrappers, one keybag may ask
+/// for: the cost of one wrapper at the format maximum (1 GiB, t=10). A signed keybag can therefore never
+/// make one unlock cost more than the single worst format-valid wrapper (review L2, probe R3).
+pub const MAX_UNLOCK_KDF_COST: u64 = 1_048_576 * 10;
 const SIG_DOMAIN: &[u8] = b"WVLT-KEYBAG-SIG-v1\0";
 const WRAP_DOMAIN: &[u8] = b"WVLT-WRAP-v1\0";
 
@@ -352,6 +359,20 @@ impl Keybag {
             return Err(VaultError::Malformed(
                 "need exactly one signing seed wrapper",
             ));
+        }
+        let mut passcodes = 0usize;
+        let mut cost = 0u64;
+        for w in &self.wrappers {
+            if let WrapperBody::Passcode { params, .. } = &w.body {
+                passcodes += 1;
+                cost += u64::from(params.m_kib) * u64::from(params.t);
+            }
+        }
+        if passcodes > MAX_PASSCODE_WRAPPERS {
+            return Err(VaultError::Malformed("too many passcode wrappers"));
+        }
+        if cost > MAX_UNLOCK_KDF_COST {
+            return Err(VaultError::KdfBounds);
         }
         Ok(())
     }
