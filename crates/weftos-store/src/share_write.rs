@@ -12,6 +12,7 @@
 //! objects at once, as before, but also writes conditionally, post-checks, and sweeps the pool.
 
 use super::gc::{Chooser, Pool, PublishOptions, plan, references};
+use super::hashcache::HashCacheRun;
 use super::*;
 use crate::overlay::ObjectMeta;
 
@@ -50,6 +51,22 @@ pub fn publish_tree_opts<B: ObjectBackend>(
     listing: Option<Vec<ObjectMeta>>,
     opts: &PublishOptions,
 ) -> Result<Published> {
+    publish_tree_cached(b, bucket, src, limits, now_ms, listing, opts, None)
+}
+
+/// [`publish_tree_opts`] with the local hash cache (`share_hashcache.rs`): a file whose size, mtime,
+/// inode and ctime match its cache entry is not read. `None` publishes exactly as without a cache.
+#[allow(clippy::too_many_arguments)]
+pub fn publish_tree_cached<B: ObjectBackend>(
+    b: &B,
+    bucket: &str,
+    src: &TreeSource<'_>,
+    limits: &Limits,
+    now_ms: u64,
+    listing: Option<Vec<ObjectMeta>>,
+    opts: &PublishOptions,
+    hash_cache: Option<&HashCacheConfig>,
+) -> Result<Published> {
     if opts.schema != SCHEMA_V1 && opts.schema != SCHEMA_V2 {
         return Err(S2Error::Invalid(format!("cannot write manifest schema {}; this build writes 1 or 2", opts.schema)));
     }
@@ -74,9 +91,19 @@ pub fn publish_tree_opts<B: ObjectBackend>(
         Some(l) => l,
         None => b.list(bucket, "")?,
     });
-    let mut chooser = Chooser::new(prev.as_ref(), &pool, opts, now_ms);
-    let mut rep = PublishReport::default();
-    let (files, docs) = upload_files(b, bucket, src, limits, prev.as_ref(), &pool, pooled.then_some(&mut chooser), &mut rep)?;
+    let mut cache = HashCacheRun::open(hash_cache, src.root, now_ms);
+    // A cached entry whose bytes turn out to differ at upload time voids the cache: the whole pass
+    // runs again with it ignored (objects the first attempt put stay in the pool, same keys).
+    let (mut chooser, mut rep, files, docs) = loop {
+        let mut chooser = Chooser::new(prev.as_ref(), &pool, opts, now_ms);
+        let mut rep = PublishReport::default();
+        let done = upload_files(b, bucket, src, limits, prev.as_ref(), &pool, pooled.then_some(&mut chooser), &mut rep, &mut cache)?;
+        match done {
+            Some((files, docs)) => break (chooser, rep, files, docs),
+            None => cache.force_full("stale-entry"),
+        }
+    };
+    rep.hash_cache = cache.finish();
     let (has_bundle, bundle_sha256, bundle_gen) = if pooled {
         match pooled_bundle(b, bucket, src, limits, prev.as_ref(), &pool, &mut chooser, &mut rep)? {
             Some((s, g)) => (true, Some(s), Some(g)),
@@ -220,7 +247,9 @@ fn upload_files<B: ObjectBackend>(
     pool: &Pool,
     mut chooser: Option<&mut Chooser<'_>>,
     rep: &mut PublishReport,
-) -> Result<(Vec<FileEntry>, Vec<DocEntry>)> {
+    cache: &mut HashCacheRun,
+) -> Result<Option<(Vec<FileEntry>, Vec<DocEntry>)>> {
+    cache.sample_check(src.root, src.paths, limits.max_file);
     let prev_sha: std::collections::HashMap<&str, &str> =
         prev.map(|m| m.files.iter().map(|f| (f.path.as_str(), f.sha256.as_str())).collect()).unwrap_or_default();
     let (mut files, mut docs, mut total) = (Vec::new(), Vec::new(), 0u64);
@@ -261,53 +290,83 @@ fn upload_files<B: ObjectBackend>(
             rep.skipped.push((p.clone(), s));
             continue;
         }
-        let data = match read_regular(&full, limits.max_file) {
-            Ok(d) => d,
-            Err(Some(skip)) => {
-                rep.skipped.push((p.clone(), skip));
-                continue;
+        let stamp = HashCacheRun::stamp_of(&md);
+        let hit = stamp.as_ref().and_then(|st| cache.lookup(p, st)).cloned();
+        // Either the cache entry stands in for the read, or the file is read and checked as always.
+        let (sha, len, title, mut data) = match hit {
+            Some(e) => {
+                if total + e.stamp.size > limits.max_total {
+                    rep.skipped.push((p.clone(), Skip::OverBudget));
+                    continue;
+                }
+                cache.record_served(p, &e);
+                (e.sha256, e.stamp.size, e.title, None)
             }
-            Err(None) => return Err(S2Error::Backend(format!("cannot read {p}"))),
+            None => {
+                let data = match read_regular(&full, limits.max_file) {
+                    Ok(d) => d,
+                    Err(Some(skip)) => {
+                        rep.skipped.push((p.clone(), skip));
+                        continue;
+                    }
+                    Err(None) => return Err(S2Error::Backend(format!("cannot read {p}"))),
+                };
+                cache.note_read(data.len() as u64);
+                if total + data.len() as u64 > limits.max_total {
+                    rep.skipped.push((p.clone(), Skip::OverBudget));
+                    continue;
+                }
+                if looks_like_private_key(&data) {
+                    rep.skipped.push((p.clone(), Skip::Secret));
+                    continue;
+                }
+                let (sha, title) = (sha256_hex(&data), is_doc_path(p).then(|| md_title(p, &data)).flatten());
+                if let Some(st) = stamp {
+                    cache.record_hashed(p, st, &sha, title.clone());
+                }
+                (sha, data.len() as u64, title, Some(data))
+            }
         };
-        if total + data.len() as u64 > limits.max_total {
-            rep.skipped.push((p.clone(), Skip::OverBudget));
-            continue;
-        }
-        if looks_like_private_key(&data) {
-            rep.skipped.push((p.clone(), Skip::Secret));
-            continue;
-        }
-        let sha = sha256_hex(&data);
-        let len = data.len() as u64;
-        let generation = match chooser.as_deref_mut() {
+        let (generation, put) = match chooser.as_deref_mut() {
             Some(c) => {
                 let (g, put) = c.choose(&sha, len);
-                if put {
-                    b.put(bucket, &obj_key(&sha, g), &data)?;
-                    rep.uploaded += 1;
-                } else {
-                    rep.unchanged += 1;
-                }
-                Some(g)
+                (Some(g), put)
             }
             None => {
                 let key = format!("{TREE_PREFIX}{p}");
-                if prev_sha.get(p.as_str()) == Some(&sha.as_str()) && pool.tree.get(&key) == Some(&len) {
-                    rep.unchanged += 1;
-                } else {
-                    b.put(bucket, &key, &data)?;
-                    rep.uploaded += 1;
-                }
-                None
+                (None, !(prev_sha.get(p.as_str()) == Some(&sha.as_str()) && pool.tree.get(&key) == Some(&len)))
             }
         };
+        if put {
+            if data.is_none() {
+                // A cached file the store lacks: read it now and require the bytes to be the cached ones.
+                data = read_regular(&full, limits.max_file).ok().inspect(|d| cache.note_read(d.len() as u64)).filter(|d| sha256_hex(d) == sha);
+            }
+            let Some(d) = data else { return Ok(None) };
+            let key = match generation {
+                Some(g) => obj_key(&sha, g),
+                None => format!("{TREE_PREFIX}{p}"),
+            };
+            b.put(bucket, &key, &d)?;
+            rep.uploaded += 1;
+        } else {
+            rep.unchanged += 1;
+        }
         total += len;
         if is_doc_path(p) {
-            docs.push(DocEntry { path: p.clone(), title: md_title(p, &data) });
+            docs.push(DocEntry { path: p.clone(), title });
         }
         files.push(FileEntry { path: p.clone(), size: len, sha256: sha, generation });
     }
-    Ok((files, docs))
+    // Files served from the cache must still be what the entry says now that the tree is processed;
+    // one that moved is `Changed`, exactly as a swap between check and read is without the cache.
+    let changed = cache.changed_since(src.root);
+    if !changed.is_empty() {
+        files.retain(|f| !changed.contains(&f.path));
+        docs.retain(|d| !changed.contains(&d.path));
+        rep.skipped.extend(changed.into_iter().map(|p| (p, Skip::Changed)));
+    }
+    Ok(Some((files, docs)))
 }
 
 /// Schema 2: the bundle object the new manifest names. The base's, when the head did not move and

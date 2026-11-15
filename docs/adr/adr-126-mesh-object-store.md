@@ -390,6 +390,28 @@ finding 3a at every cut point and the follower-across-a-completed-publish window
   grace; every delete call is checked against the current and every recently replaced manifest), and
   `s2_d3_publish`, `share::schema::tests`.
 
+#### Publish hash cache (WO-069 lane E1, owner decision 2026-11-15)
+
+A no-change republish of 50 000 files took 294 to 525 s on a loaded machine because `publish` read and
+hashed every file every time (drills report, round 6 addendum). The publisher now keeps a local cache,
+one file per project and worktree on the publishing machine's disk under the daemon's runtime directory
+(`worktree-hash-cache/`), never in the store and never in the git worktree; the library takes it as an
+optional `HashCacheConfig` and reads no environment. It is keyed on the path relative to the worktree
+root. An entry holds the size, mtime (ns), on unix the inode and ctime (ns), the SHA-256, the time it was
+hashed and the markdown title (the only other fact derived from content; a file with private-key content
+is refused and never cached). An entry is used only if every validator matches exactly and its mtime is
+strictly more than 2 s older than the time it was hashed (git's racy-timestamp rule; younger files are
+hashed again next time). Every publish also re-hashes a rotating sample of the entries (1 %, at least 16),
+and one disagreement with a matching entry discards the cache and does a full pass in that same publish,
+reported as `mismatch`. A full pass, which ignores the cache and rewrites it, also happens when the file
+is missing, unreadable, corrupt, of another format version or for another root, and when the last full
+pass is `WEFTOS_WORKTREE_HASH_REHASH_HOURS` old (default 24; 0 = every publish). `WEFTOS_WORKTREE_HASH_CACHE=off`
+publishes as before the cache. Writes are temp-and-rename and a failed write never fails the publish. A
+change that keeps size and mtime goes unseen off unix (no ctime) until the sample reaches the file or the
+next full pass; on unix the ctime moves, so it is seen at once. The manifest for a tree
+is byte-identical with the cache off, cold or warm. The publish report and the daemon reply gain
+`hash_cache` (files hashed, bytes hashed, files from the cache, sampled, full pass and why).
+
 ### 4a. The L1 follower view: seeing unmerged worktrees before integration
 
 (Added 2026-11-07, owner decision: this is required leftover work, not optional. ADR-130 names
