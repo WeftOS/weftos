@@ -1,6 +1,7 @@
 //! The spec's published test vectors (section 10, all FAKE) must reproduce byte for byte.
 
 use sha2::{Digest, Sha256};
+use zeroize::Zeroizing;
 
 use crate::blob::{self, Policy, SealParams, SecretType};
 use crate::hkdf_keys;
@@ -20,10 +21,10 @@ fn seq<const N: usize>(start: u8) -> [u8; N] {
 fn inputs() -> CreateInputs {
     CreateInputs {
         vault_id: *VAULT_ID,
-        vk: seq(0x00),
-        signing_seed: seq(0x80),
+        vk: Zeroizing::new(seq(0x00)),
+        signing_seed: Zeroizing::new(seq(0x80)),
         salt: [0x11; 16],
-        recovery: seq(0x40),
+        recovery: Zeroizing::new(seq(0x40)),
         wrapper_ids: [seq(0xa0), seq(0xb0), seq(0xc0)],
         nonces: [seq(0x30), seq(0x50), seq(0x60)],
         now: 1_800_000_000,

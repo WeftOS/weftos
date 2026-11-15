@@ -78,13 +78,14 @@ pub struct NewVault {
     pub pins: Pins,
 }
 
-/// Everything random about a new vault, injectable so test vectors reproduce byte for byte.
+/// Everything random about a new vault, injectable so test vectors reproduce byte for byte. The key
+/// material is zeroized on drop (review L3).
 pub(crate) struct CreateInputs {
     pub vault_id: [u8; 16],
-    pub vk: [u8; 32],
-    pub signing_seed: [u8; 32],
+    pub vk: Zeroizing<[u8; 32]>,
+    pub signing_seed: Zeroizing<[u8; 32]>,
     pub salt: [u8; 16],
-    pub recovery: [u8; 32],
+    pub recovery: Zeroizing<[u8; 32]>,
     pub wrapper_ids: [[u8; 16]; 3],
     pub nonces: [[u8; NONCE_LEN]; 3],
     pub now: u64,
@@ -154,10 +155,10 @@ impl Vault {
             passcode,
             CreateInputs {
                 vault_id: seal::random_bytes()?,
-                vk: seal::random_bytes()?,
-                signing_seed: seal::random_bytes()?,
+                vk: Zeroizing::new(seal::random_bytes()?),
+                signing_seed: Zeroizing::new(seal::random_bytes()?),
                 salt: seal::random_bytes()?,
-                recovery: seal::random_bytes()?,
+                recovery: Zeroizing::new(seal::random_bytes()?),
                 wrapper_ids: [
                     seal::random_bytes()?,
                     seal::random_bytes()?,
@@ -176,8 +177,7 @@ impl Vault {
     }
 
     pub(crate) fn create_with(passcode: &str, i: CreateInputs) -> Result<NewVault> {
-        let vk = Zeroizing::new(i.vk);
-        let seed = Zeroizing::new(i.signing_seed);
+        let (vk, seed, recovery) = (i.vk, i.signing_seed, i.recovery);
         let signing = SigningKey::from_bytes(&seed);
         let pass = passcode_wrapper(PasscodeSeal {
             vault_id: &i.vault_id,
@@ -193,7 +193,7 @@ impl Vault {
             &i.vault_id,
             i.wrapper_ids[1],
             &vk,
-            &i.recovery,
+            &recovery,
             i.nonces[1],
             1,
         )?;
@@ -230,7 +230,7 @@ impl Vault {
                 vk,
                 signing,
             },
-            recovery_key: RecoveryKey::from_bytes(i.recovery),
+            recovery_key: RecoveryKey(recovery),
             pins,
         })
     }

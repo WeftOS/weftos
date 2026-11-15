@@ -9,6 +9,8 @@ use crate::error::{Result, VaultError};
 const ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const PREFIX: &str = "WVR1-";
 const CODE_CHARS: usize = 55;
+/// `WVR1-` plus 55 characters in groups of 4 (13 dashes).
+const CODE_LEN: usize = PREFIX.len() + CODE_CHARS + CODE_CHARS / 4;
 
 /// 32 random bytes that can unlock the vault. Redacted in `Debug`.
 pub struct RecoveryKey(pub(crate) Zeroizing<[u8; 32]>);
@@ -20,27 +22,29 @@ impl core::fmt::Debug for RecoveryKey {
 }
 
 impl RecoveryKey {
-    pub(crate) fn from_bytes(b: [u8; 32]) -> Self {
-        Self(Zeroizing::new(b))
-    }
-
     pub(crate) fn random() -> Result<Self> {
-        Ok(Self::from_bytes(crate::seal::random_bytes()?))
+        Ok(Self(Zeroizing::new(crate::seal::random_bytes()?)))
     }
 
     /// The display code shown once to the user.
+    ///
+    /// Every buffer that holds key or code bytes is sized up front and zeroized, so no reallocation
+    /// leaves an unwiped copy behind (review L3).
     pub fn to_code(&self) -> Zeroizing<String> {
-        let mut raw = Zeroizing::new(self.0.to_vec());
-        raw.extend(&Sha256::digest(*self.0)[..2]);
-        let chars = encode(&raw);
-        let mut out = String::from(PREFIX);
+        let mut raw = Zeroizing::new([0u8; 34]);
+        raw[..32].copy_from_slice(&self.0[..]);
+        raw[32..].copy_from_slice(&Sha256::digest(&self.0[..])[..2]);
+        let chars = encode(&raw[..]);
+        let mut out = Zeroizing::new(String::with_capacity(CODE_LEN));
+        out.push_str(PREFIX);
         for (i, ch) in chars.chars().enumerate() {
             if i > 0 && i % 4 == 0 {
                 out.push('-');
             }
             out.push(ch);
         }
-        Zeroizing::new(out)
+        debug_assert_eq!(out.len(), CODE_LEN);
+        out
     }
 
     /// Parse a display code; the checksum catches a typo before any unwrap attempt.
@@ -49,7 +53,8 @@ impl RecoveryKey {
         let rest = upper
             .strip_prefix(PREFIX)
             .ok_or(VaultError::BadRecoveryCode)?;
-        let chars: Zeroizing<String> = Zeroizing::new(rest.chars().filter(|c| *c != '-').collect());
+        let mut chars = Zeroizing::new(String::with_capacity(rest.len()));
+        chars.extend(rest.chars().filter(|c| *c != '-'));
         if chars.chars().count() != CODE_CHARS {
             return Err(VaultError::BadRecoveryCode);
         }
@@ -57,17 +62,17 @@ impl RecoveryKey {
         if raw.len() != 34 {
             return Err(VaultError::BadRecoveryCode);
         }
-        let mut key = [0u8; 32];
+        let mut key = Zeroizing::new([0u8; 32]);
         key.copy_from_slice(&raw[..32]);
-        if Sha256::digest(key)[..2] != raw[32..] {
+        if Sha256::digest(&key[..])[..2] != raw[32..] {
             return Err(VaultError::BadRecoveryCode);
         }
-        Ok(Self::from_bytes(key))
+        Ok(Self(key))
     }
 }
 
 fn encode(data: &[u8]) -> Zeroizing<String> {
-    let mut out = Zeroizing::new(String::new());
+    let mut out = Zeroizing::new(String::with_capacity((data.len() * 8).div_ceil(5)));
     let (mut acc, mut bits) = (0u32, 0u32);
     for &b in data {
         acc = (acc << 8) | u32::from(b);
@@ -85,7 +90,7 @@ fn encode(data: &[u8]) -> Zeroizing<String> {
 }
 
 fn decode(s: &str) -> Result<Zeroizing<Vec<u8>>> {
-    let mut out = Zeroizing::new(Vec::new());
+    let mut out = Zeroizing::new(Vec::with_capacity(s.len() * 5 / 8));
     let (mut acc, mut bits) = (0u32, 0u32);
     for ch in s.chars() {
         let ch = match ch {
