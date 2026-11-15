@@ -319,7 +319,8 @@ pub fn fetch_tree_with<B: ObjectBackend>(
 }
 
 /// A selection of up to this many objects to download is size-checked with one HEAD each; a larger
-/// one with a single listing of the tree prefix, which answers presence and size for all of them.
+/// one with a single listing of the object prefix (schema 1 `.wt/tree/`, schema 2 the pool), which
+/// answers presence and size for all of them.
 /// Either way no object is read before its stored size is known (and under the caps), so a
 /// manifest cannot make a follower download an oversized object.
 pub const HEAD_LIST_THRESHOLD: usize = 8;
@@ -376,13 +377,14 @@ pub fn fetch_tree_from<B: ObjectBackend>(
     // Presence and size of what is still to download: one listing for a big selection, one HEAD
     // per object for a small one. An object absent here, or by the time it is read, is `missing`.
     let listed: Option<std::collections::HashMap<String, u64>> = if todo.len() > HEAD_LIST_THRESHOLD {
-        Some(b.list(bucket, TREE_PREFIX)?.into_iter().map(|o| (o.key, o.size)).collect())
+        let prefix = if m.is_pooled() { OBJ_PREFIX } else { TREE_PREFIX };
+        Some(b.list(bucket, prefix)?.into_iter().map(|o| (o.key, o.size)).collect())
     } else {
         None
     };
     let mut total = 0u64;
     for (f, target) in todo {
-        let key = format!("{TREE_PREFIX}{}", f.path);
+        let key = m.object_key(f);
         let stored = match &listed {
             Some(l) => l.get(&key).copied(),
             None => b.head(bucket, &key)?.map(|h| h.size),
@@ -464,14 +466,19 @@ pub fn fetch_bundle_from_with<B: ObjectBackend>(b: &B, bucket: &str, m: &TreeMan
             "this tree was published without a git bundle".into(),
         ));
     }
+    // Schema 2: the pool object the manifest names by sha (immutable, so a publish that replaced the
+    // bundle since this manifest was read leaves this one in place for the grace period).
+    let key = m
+        .bundle_object()
+        .ok_or_else(|| S2Error::Invalid("manifest says bundle but names no bundle object".into()))?;
     let h = b
-        .head(bucket, BUNDLE_KEY)?
+        .head(bucket, &key)?
         .ok_or_else(|| S2Error::Backend("manifest says bundle, object missing".into()))?;
     if h.size > lim.max_bundle {
         return Err(S2Error::Invalid(format!("bundle is {} bytes, over the {} limit", h.size, lim.max_bundle)));
     }
     let data = b
-        .get(bucket, BUNDLE_KEY)?
+        .get(bucket, &key)?
         .ok_or_else(|| S2Error::Backend("manifest says bundle, object missing".into()))?;
     if let Some(want) = &m.bundle_sha256
         && sha256_hex(&data) != *want

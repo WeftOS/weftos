@@ -5,8 +5,9 @@
 //! Safety shape, all of it checked before an object is read:
 //! - the slug is resolved through the project registry, then [`verify_entry`] cross-checks the
 //!   bucket's `.wt/meta.json` (a registry entry is a pointer, not authority);
-//! - the only objects ever read are `.wt/tree/<path>` for a path the manifest lists, and the
-//!   manifest itself. Never `.wt/git/`, `.wt/handoff.json`, `.wt/base/`, `.wt/meta.json` contents,
+//! - the only objects ever read are the object the manifest names for a path it lists (schema 1:
+//!   `.wt/tree/<path>`; schema 2: the pool object `.wt/obj/sha256/..` of that entry's sha and
+//!   generation, see `share_schema.rs`), and the manifest itself. Never `.wt/git/`, `.wt/handoff.json`, `.wt/base/`, `.wt/meta.json` contents,
 //!   or the overlay layer. Listings are built from the manifest, not by listing the bucket;
 //! - a path is refused exactly as [`crate::share_fetch::fetch_tree_with`] refuses one: traversal,
 //!   absolute, VCS control names, `.wt`, secret-looking names, Windows-hostile names, and any file
@@ -19,7 +20,7 @@
 use crate::follower::verify_entry;
 use crate::overlay::{ObjectBackend, Result, S2Error, validate_key};
 use crate::share::{
-    FileEntry, State, TREE_PREFIX, TreeManifest, is_dangerous_path, is_secret_path, read_manifest,
+    FileEntry, OBJ_PREFIX, State, TREE_PREFIX, TreeManifest, is_dangerous_path, is_secret_path, read_manifest,
     sha256_hex,
 };
 use crate::share_fetch::{REGISTRY_PREFIX, RegistryEntry, check_entry, list_shared_lenient};
@@ -313,8 +314,8 @@ pub(crate) fn get_from<B: ObjectBackend>(
         .ok_or_else(|| S2Error::Invalid(format!("{path} is not in the shared tree of {slug}")))?;
     let cap = max_bytes.min(MAX_GET_BYTES);
     let bucket = e.bucket.as_str();
-    let object = format!("{TREE_PREFIX}{}", f.path);
-    debug_assert!(object.starts_with(TREE_PREFIX));
+    let object = m.object_key(f);
+    debug_assert!(object.starts_with(TREE_PREFIX) || object.starts_with(OBJ_PREFIX));
     let mut out = BrowseFile {
         slug: slug.to_string(),
         path: f.path.clone(),

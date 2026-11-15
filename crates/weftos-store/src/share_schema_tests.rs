@@ -183,3 +183,41 @@ fn the_retiring_list_is_capped_at_twice_the_file_ceiling() {
     m.retiring.truncate(4);
     assert!(super::super::parse_manifest_with(&bytes(&m), &lim).is_ok());
 }
+
+#[test]
+fn a_schema_2_tree_and_its_bundle_are_read_from_the_pool_objects_the_manifest_names() {
+    use crate::share_fetch::{Select, fetch_bundle, fetch_tree};
+    use crate::testing::MemBackend;
+    let (b, wt) = (MemBackend::new(), "w-d3-readers");
+    let entry = |path: &str, body: &[u8], g: u64| FileEntry { path: path.into(), size: body.len() as u64, sha256: sha256_hex(body), generation: Some(g) };
+    // Both read paths: up to HEAD_LIST_THRESHOLD objects are sized by HEAD, more by one listing.
+    for n in [2usize, 12] {
+        let mut m = manifest(SCHEMA_V2);
+        m.files = (0..n).map(|i| entry(&format!("src/f{i}.rs"), format!("body {}", i % 3).as_bytes(), 1 + (i % 3) as u64)).collect();
+        m.files.push(entry("docs/a.md", b"# A\n", 2));
+        m.bundle_sha256 = Some(sha256_hex(b"BUNDLE"));
+        m.bundle_gen = Some(1);
+        for f in &m.files {
+            let body = if f.path == "docs/a.md" { "# A\n".to_string() } else { format!("body {}", f.path[5..f.path.len() - 3].parse::<usize>().unwrap() % 3) };
+            b.put(wt, &m.object_key(f), body.as_bytes()).unwrap();
+            // a decoy where schema 1 would look: never read
+            b.put(wt, &format!("{TREE_PREFIX}{}", f.path), b"WRONG").unwrap();
+        }
+        b.put(wt, &m.bundle_object().unwrap(), b"BUNDLE").unwrap();
+        b.put(wt, BUNDLE_KEY, b"WRONG").unwrap();
+        b.put(wt, MANIFEST_KEY, &bytes(&m)).unwrap();
+        let dest = tempfile::tempdir().unwrap();
+        let rep = fetch_tree(&b, wt, dest.path(), Select::All, true).unwrap();
+        assert_eq!(rep.written.len(), n + 1, "{n}: {rep:?}");
+        assert_eq!(std::fs::read(dest.path().join("src/f1.rs")).unwrap(), b"body 1");
+        assert_eq!(std::fs::read(dest.path().join("docs/a.md")).unwrap(), b"# A\n");
+        let out = dest.path().join("b.bundle");
+        assert_eq!(fetch_bundle(&b, wt, &out).unwrap(), m.head_commit);
+        assert_eq!(std::fs::read(&out).unwrap(), b"BUNDLE");
+        // a missing pool object is reported missing, never read from the schema-1 key
+        b.delete(wt, &m.object_key(&m.files[0])).unwrap();
+        let again = tempfile::tempdir().unwrap();
+        let rep = fetch_tree(&b, wt, again.path(), Select::All, true).unwrap();
+        assert!(rep.missing.iter().any(|p| p == "src/f0.rs"), "{n}: {rep:?}");
+    }
+}
