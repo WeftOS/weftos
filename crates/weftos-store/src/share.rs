@@ -25,7 +25,7 @@ pub use handoff::{
     claim_merge, claim_merge_with, mark_handoff, mark_landed, mark_merged, mark_merged_at, read_handoff,
 };
 use handoff::{guard_live_claim, write_handoff_if};
-pub(crate) use publish::{looks_like_private_key, parse_manifest, read_regular};
+pub(crate) use publish::{is_doc_path, looks_like_private_key, parse_manifest, read_regular};
 pub use publish::{MAX_MANIFEST_BYTES, publish_tree, read_manifest};
 #[cfg(test)]
 use publish::read_open_regular;

@@ -199,12 +199,10 @@ fn d6b_damaged_entries<B: S2 + Sync>(env: &Env<'_, B>) {
     S2::put(be, &good.bucket, MANIFEST_KEY, &serde_json::to_vec(&m2).unwrap()).unwrap();
     let renamed = search_docs(be, &ok, "g");
     println!("DETAIL|6b|manifest schema 99 with an extra field: {} hit(s) {:?}; with `files` removed: {} hit(s), unreadable {:?}", extra.hits.len(), extra.unreadable, renamed.hits.len(), renamed.unreadable);
-    assert_eq!(extra.hits.len(), 1, "an additive newer manifest still reads");
+    assert_eq!(extra.hits.len(), 0, "a manifest from a newer schema is refused, not read as current");
+    assert_eq!(extra.unreadable, ["good"]);
     assert_eq!((renamed.hits.len(), renamed.unreadable.as_slice()), (0, ["good".to_string()].as_slice()));
-    if extra.hits.len() == 1 {
-        finding("6b", "the manifest `schema` number is written but never checked on read: a manifest claiming schema 99 is read as if it were the current one whenever its fields happen to parse, so a layout change that keeps field names but changes meaning would be served silently. Not blocking while the schema has only ever grown additively. Proposed: refuse schema > SCHEMA with the same unreadable verdict as a corrupt one");
-    }
-    line("6b", "manifest schema 99: additive reads, a renamed core field is flagged unreadable", t, "never an error for the rest");
+    line("6b", "manifest schema 99 is refused as unreadable (FIXED, was: read as current); a renamed core field is flagged too", t, "never an error for the rest");
 
     // the digest names a slug whose object was deleted after the digest was written (the daemon swallows a failed digest rewrite)
     let t = Instant::now();
@@ -215,12 +213,13 @@ fn d6b_damaged_entries<B: S2 + Sync>(env: &Env<'_, B>) {
     let known = kinds(&poll_fast(be, pr, &mut st, false, true, 3).unwrap());
     let fresh = fresh_kinds(be, pr, "digest");
     println!("DETAIL|6b|entry deleted, digest stale: a follower that knew it sees {known:?}; a new follower sees fwd as {:?}", fresh.iter().filter(|k| k.ends_with(":fwd")).collect::<Vec<_>>());
-    assert!(!known.contains(&"gone:fwd".to_string()), "a stale digest hides the removal from a follower that already knew the entry");
-    assert!(fresh.contains(&"bad:fwd".to_string()), "and shows it to a new follower as unreadable, not as absent");
-    finding("6b", "after an entry is deleted and the digest rewrite is swallowed (remove_registry_entry ignores that error), digest followers keep the worktree as live for a follower that knew it and report a NEW follower an `Unreadable` slug that does not exist, until the next digest write. Listing followers (poll, poll_fast without the digest) are right. Bounded by the next registry write; no repair path if the daemon is idle. Proposed: treat a digest slug whose object is missing as Gone, not Unreadable, and let `follow --full` be the documented cure");
+    // still hidden from a follower whose etag for it is unchanged: that is the one-GET poll, which cannot see a removal the digest does not show (documented in ADR 4a)
+    assert!(!known.contains(&"gone:fwd".to_string()), "an unchanged digest is one GET and cannot show the removal to a knowing follower: {known:?}");
+    assert!(!fresh.iter().any(|k| k.ends_with(":fwd")), "a new follower is not told about a slug whose object does not exist: {fresh:?}");
+    finding("6b", "PASS (fixed): a digest slug whose object is missing is dropped (Gone for a follower whose etag moved, not reported to a new one) instead of Unreadable. Still open by design: a knowing follower with an UNCHANGED digest etag keeps the worktree until the next digest write, because the digest-hit poll is one GET; `follow --full` is the cure");
     let healed = { write_digest(be, pr).unwrap(); kinds(&poll_fast(be, pr, &mut st, false, true, 3).unwrap()) };
     assert!(healed.contains(&"gone:fwd".to_string()), "the next digest write heals it: {healed:?}");
-    line("6b", "entry deleted under a stale digest: hidden from a knowing follower, 'unreadable' to a new one, healed by the next digest", t, "documented");
+    line("6b", "entry deleted under a stale digest: not unreadable to a new follower (FIXED); a knowing follower heals at the next digest write", t, "documented");
 }
 drill_sync!(damaged_entries, d6b_damaged_entries);
 
@@ -281,11 +280,11 @@ fn d6c_wrong_project_bucket<B: S2 + Sync>(env: &Env<'_, B>) {
     let mut st = FollowState::default();
     poll_fast(be, pr, &mut st, false, false, 3).unwrap();
     put_digest(&cases[0].1);
-    assert!(poll_fast(be, pr, &mut st, false, true, 3).is_err(), "empty digest vs known worktrees: refused, not 'everything gone'");
+    assert_eq!(poll_fast(be, pr, &mut st, false, true, 3).unwrap(), vec![], "empty digest vs known worktrees: the listing is consulted, nothing is reported gone");
     put_digest(&cases[3].1);
     let c = kinds(&poll_fast(be, pr, &mut st, false, true, 3).unwrap());
-    assert_eq!(c.len(), 2, "a partial digest reads as two worktrees going away: {c:?}");
-    finding("6c", "the digest is a hint the daemon rewrites after each registry write, but a follower that uses it believes it fully: an empty digest shows a NEW follower no worktrees, and a digest that lost entries makes a knowing follower report them `Gone` (the all-empty guard only stops the empty case). A truncated or half-written digest object is the likely cause. Mitigation today: `follow --full` (listing). Proposed: a digest-driven follower cross-checks the digest's entry count against one cheap listing before trusting a drop");
+    assert!(c.is_empty(), "a partial digest no longer reads as worktrees going away: {c:?}");
+    finding("6c", "PASS (fixed): a knowing follower no longer believes a digest that lost known entries; it falls back to the listing. Still true for a NEW follower: an empty or partial digest shows it fewer worktrees (nothing to cross-check against; `follow --full` is the cure)");
     write_digest(be, pr).unwrap();
     assert_eq!(fresh_kinds(be, pr, "digest").len(), 3);
     line("6c", "empty, newer-schema, corrupt and partial digests", t, out.join("; "));

@@ -59,7 +59,7 @@ fn mirror(root: &Path) -> Vec<(String, Vec<u8>)> {
             let p = e.unwrap().path();
             if p.is_dir() {
                 walk(&p, root, out);
-            } else if p.file_name().unwrap() != ".wt-index.json" {
+            } else if !p.file_name().unwrap().to_string_lossy().starts_with(".wt-") {
                 out.push((p.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/"), std::fs::read(&p).unwrap()));
             }
         }
@@ -123,10 +123,11 @@ fn d6e_interrupted_sync_then_delete<B: S2>(env: &Env<'_, B>) {
     for (label, stale) in &res {
         println!("DETAIL|6e|{label}: {} stale file(s) left after the deleted docs: {stale:?}", stale.len());
     }
-    if res.iter().any(|(_, s)| !s.is_empty()) {
-        finding("6e", format!("when the mirror's `.wt-index.json` is truncated, empty or missing, sync_docs cannot tell which files it wrote, so a doc deleted upstream is never pruned and stays in the follower's mirror as if it were live ({}). The index is written with std::fs::write (truncate then write), so a crash or a full disk at that point produces exactly this state, and the order in sync_docs writes it before the fetch. Silent: sync reports success. Proposed: write the index through temp + rename like FollowState::save, and when it cannot be read, prune every file under cache/<slug> that is not in the new doc list (the directory is the follower's own)", res.iter().map(|(l, s)| format!("{l}: {} stale", s.len())).collect::<Vec<_>>().join(", ")));
+    for (label, stale) in &res {
+        assert!(stale.is_empty(), "{label}: the index is rebuilt from the mirror and the deleted docs are pruned: {stale:?}");
     }
-    line("6e", "index truncated / zero bytes / missing, then docs deleted upstream", t, res.iter().map(|(l, s)| format!("{l}: {} stale", s.len())).collect::<Vec<_>>().join(", "));
+    finding("6e", "PASS (fixed): a truncated, empty or missing `.wt-index.json` is rebuilt from the mirror directory (read-only, doc-shaped, regular files, symlinks never followed) and the deleted docs are pruned");
+    line("6e", "index truncated / zero bytes / missing, then docs deleted upstream (FIXED, was: left stale)", t, res.iter().map(|(l, s)| format!("{l}: {} stale", s.len())).collect::<Vec<_>>().join(", "));
 
     // a tampered index naming files outside the mirror: pruning goes through safe_join, so nothing outside is touched
     let t = Instant::now();

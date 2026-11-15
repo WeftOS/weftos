@@ -176,13 +176,17 @@ pub fn poll_fast_cached<B: ObjectBackend + Sync>(
     jobs: usize,
     cache: Option<&mut crate::follower_cache::ManifestCache>,
 ) -> Result<Vec<Change>> {
-    let current = match use_digest.then(|| crate::share_fetch::read_digest(b, project_bucket)).transpose()?.flatten() {
+    let mut digest = use_digest.then(|| crate::share_fetch::read_digest(b, project_bucket)).transpose()?.flatten();
+    // The digest is a hint. A follower that knows a worktree the digest does not list does not
+    // report it gone on the hint's word (a lost or half-written digest would): it falls back to the
+    // listing, which is the truth. The digest-hit poll where nothing known went missing is unchanged.
+    if digest.as_ref().is_some_and(|d| state.seen.keys().any(|k| !d.entries.contains_key(k))) {
+        digest = None;
+    }
+    let mut current = match digest {
         Some(d) => d.entries,
         None => crate::share_fetch::registry_listing(b, project_bucket)?,
     };
-    if let Some(c) = cache {
-        c.observe_registry(project_bucket, &current);
-    }
     let (mut want, mut carried) = (Vec::new(), Vec::new());
     for (slug, etag) in &current {
         match state.seen.get(slug) {
@@ -190,7 +194,15 @@ pub fn poll_fast_cached<B: ObjectBackend + Sync>(
             _ => want.push(slug.clone()),
         }
     }
-    let (fresh, bad) = crate::share_fetch::fetch_entries(b, project_bucket, &want, jobs)?;
+    let (fresh, bad, missing) = crate::share_fetch::fetch_entries_split(b, project_bucket, &want, jobs)?;
+    // A slug the digest names but whose object does not exist was removed: not unreadable, and not
+    // reported at all to a follower that never knew it (one that did know it sees `Gone`).
+    for slug in &missing {
+        current.remove(slug);
+    }
+    if let Some(c) = cache {
+        c.observe_registry(project_bucket, &current);
+    }
     let fresh = fresh.into_iter().map(|e| { let t = current.get(&e.slug).cloned(); (e, t) }).collect();
     poll_core(state, fresh, bad, carried, current.len(), allow_all_gone)
 }

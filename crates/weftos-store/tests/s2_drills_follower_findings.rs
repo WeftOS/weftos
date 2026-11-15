@@ -63,7 +63,6 @@ fn an_older_signed_entry_is_refused_even_after_a_far_future_stamp() {
 }
 
 #[test]
-#[ignore = "FINDING 6b-1: the manifest schema number is never checked on read"]
 fn a_manifest_from_a_newer_schema_is_not_served_as_if_current() {
     let be = MemBackend::new();
     let env = Env::new(&be, None);
@@ -82,7 +81,6 @@ fn three(env: &Env<'_, weftos_store::FsBackend>) {
 }
 
 #[test]
-#[ignore = "FINDING 6b-2: a stale digest hides a removal from a knowing follower and shows a new one an unreadable slug"]
 fn a_digest_slug_with_no_object_is_gone_not_unreadable() {
     let d = tempfile::tempdir().unwrap();
     let be = weftos_store::FsBackend::open(d.path()).unwrap();
@@ -91,13 +89,38 @@ fn a_digest_slug_with_no_object_is_gone_not_unreadable() {
     let mut st = FollowState::default();
     poll_fast(&be, &env.pr, &mut st, false, true, 2).unwrap();
     S2::delete(&be, &env.pr, "worktrees/b.json").unwrap(); // the digest rewrite failed
-    assert!(kinds(&poll_fast(&be, &env.pr, &mut st, false, true, 2).unwrap()).contains(&"gone:b".to_string()));
     let fresh = kinds(&poll_fast(&be, &env.pr, &mut FollowState::default(), false, true, 2).unwrap());
-    assert!(!fresh.contains(&"bad:b".to_string()), "{fresh:?}");
+    assert!(!fresh.contains(&"bad:b".to_string()) && !fresh.contains(&"new:b".to_string()), "{fresh:?}");
+    // a follower whose recorded etag for b differs from the digest's fetches it, finds it absent, and reports it gone
+    st.seen.get_mut("b").unwrap().etag = Some("older".into());
+    assert!(kinds(&poll_fast(&be, &env.pr, &mut st, false, true, 2).unwrap()).contains(&"gone:b".to_string()));
 }
 
 #[test]
-#[ignore = "FINDING 6c: a follower believes a partial or empty digest fully"]
+#[ignore = "NOT PROMISED by ADR 126 4a: a knowing follower with an unchanged digest etag cannot see a removal the digest does not show; the digest-hit poll is one GET (ADR 4a poll cost)"]
+fn a_knowing_follower_sees_a_removal_even_when_the_digest_did_not_change() {
+    let d = tempfile::tempdir().unwrap();
+    let be = weftos_store::FsBackend::open(d.path()).unwrap();
+    let env = Env::new(&be, Some(&be));
+    three(&env);
+    let mut st = FollowState::default();
+    poll_fast(&be, &env.pr, &mut st, false, true, 2).unwrap();
+    S2::delete(&be, &env.pr, "worktrees/b.json").unwrap();
+    assert!(kinds(&poll_fast(&be, &env.pr, &mut st, false, true, 2).unwrap()).contains(&"gone:b".to_string()));
+}
+
+#[test]
+fn a_digest_slug_with_a_corrupt_object_is_still_unreadable() {
+    let d = tempfile::tempdir().unwrap();
+    let be = weftos_store::FsBackend::open(d.path()).unwrap();
+    let env = Env::new(&be, Some(&be));
+    three(&env);
+    S2::put(&be, &env.pr, "worktrees/b.json", b"{ nope").unwrap(); // present but damaged, digest stale
+    let fresh = kinds(&poll_fast(&be, &env.pr, &mut FollowState::default(), false, true, 2).unwrap());
+    assert!(fresh.contains(&"bad:b".to_string()), "{fresh:?}");
+}
+
+#[test]
 fn a_partial_digest_does_not_make_a_knowing_follower_report_worktrees_gone() {
     let d = tempfile::tempdir().unwrap();
     let be = weftos_store::FsBackend::open(d.path()).unwrap();
@@ -112,7 +135,38 @@ fn a_partial_digest_does_not_make_a_knowing_follower_report_worktrees_gone() {
 }
 
 #[test]
-#[ignore = "FINDING 6e: a damaged or missing .wt-index.json leaves deleted docs in the mirror"]
+fn a_digest_hit_with_nothing_changed_is_still_one_get_and_a_real_removal_is_still_reported() {
+    let d = tempfile::tempdir().unwrap();
+    let fs = weftos_store::FsBackend::open(d.path()).unwrap();
+    let env = Env::new(&fs, Some(&fs));
+    three(&env);
+    let be = weftos_store::testing::CountingBackend::new(weftos_store::FsBackend::open(d.path()).unwrap());
+    let mut st = FollowState::default();
+    poll_fast(&be, &env.pr, &mut st, false, true, 2).unwrap();
+    be.reset();
+    assert!(poll_fast(&be, &env.pr, &mut st, false, true, 2).unwrap().is_empty());
+    let c = be.counts();
+    assert_eq!((c.get, c.head, c.list), (1, 0, 0), "{c:?}");
+    // a removal the daemon did publish (digest rewritten): reported gone, via the listing fallback
+    remove_registry_entry(&be, &env.pr, "b").unwrap();
+    assert_eq!(kinds(&poll_fast(&be, &env.pr, &mut st, false, true, 2).unwrap()), ["gone:b"]);
+}
+
+#[test]
+fn an_empty_digest_does_not_blind_a_knowing_follower_when_the_registry_is_populated() {
+    let d = tempfile::tempdir().unwrap();
+    let be = weftos_store::FsBackend::open(d.path()).unwrap();
+    let env = Env::new(&be, Some(&be));
+    for s in ["a", "b"] {
+        up(&env, s, &[("docs/x.md", "# X\n")], &Pub::default());
+    }
+    let mut st = FollowState::default();
+    poll_fast(&be, &env.pr, &mut st, false, false, 2).unwrap();
+    S2::put(&be, &env.pr, DIGEST_KEY, br#"{"schema":1,"entries":{}}"#).unwrap();
+    assert!(poll_fast(&be, &env.pr, &mut st, false, true, 2).unwrap().is_empty());
+}
+
+#[test]
 fn a_missing_mirror_index_still_prunes_docs_deleted_upstream() {
     let be = MemBackend::new();
     let env = Env::new(&be, None);
@@ -126,8 +180,69 @@ fn a_missing_mirror_index_still_prunes_docs_deleted_upstream() {
     assert!(!cache.path().join("m/docs/b.md").exists(), "b.md was deleted upstream");
 }
 
+/// Sync `m` with two docs, then lose the index, plant `extra`, delete b.md upstream and sync again.
+fn lose_index_then_sync(plant: impl FnOnce(&std::path::Path)) -> (tempfile::TempDir, std::path::PathBuf) {
+    let be = MemBackend::new();
+    let env = Env::new(&be, None);
+    let e1 = up(&env, "m", &[("docs/a.md", "# A\n"), ("docs/b.md", "# B\n")], &Pub::default());
+    let cache = tempfile::tempdir().unwrap();
+    sync_docs(&be, &e1, cache.path()).unwrap();
+    let mirror = cache.path().join("m");
+    std::fs::write(mirror.join(".wt-index.json"), b"[\"docs/a").unwrap(); // truncated
+    plant(&mirror);
+    push(&be, &e1.bucket, &tree(&[("docs/a.md", "# A\n")]), &Pub { head: "h2", now: T0 + 5, ..Pub::default() }).unwrap();
+    let e2 = register(&be, &env.pr, "m", &e1.bucket);
+    sync_docs(&be, &e2, cache.path()).unwrap();
+    assert!(!mirror.join("docs/b.md").exists());
+    assert!(mirror.join("docs/a.md").exists());
+    (cache, mirror)
+}
+
 #[test]
-#[ignore = "FINDING 6f: a worktree with no changes is indistinguishable from an old manifest, so overlaps reports false conflicts"]
+fn a_rebuilt_index_never_deletes_what_the_mirror_did_not_write() {
+    let (_keep, mirror) = lose_index_then_sync(|m| {
+        std::fs::create_dir_all(m.join("docs")).unwrap();
+        std::fs::write(m.join("docs/notes-by-me.md"), b"mine").unwrap(); // doc-shaped but writable: not the mirror's
+        std::fs::write(m.join("scratch.bin"), b"x").unwrap(); // not doc-shaped
+    });
+    assert_eq!(std::fs::read(mirror.join("docs/notes-by-me.md")).unwrap(), b"mine");
+    assert!(mirror.join("scratch.bin").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_rebuilt_index_does_not_follow_a_symlink_out_of_the_mirror() {
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(outside.path().join("docs")).unwrap();
+    let victim = outside.path().join("docs/victim.md");
+    std::fs::write(&victim, b"keep").unwrap();
+    let mut p = std::fs::metadata(&victim).unwrap().permissions();
+    p.set_readonly(true);
+    std::fs::set_permissions(&victim, p).unwrap();
+    let out_path = outside.path().to_path_buf();
+    let (_keep, mirror) = lose_index_then_sync(|m| {
+        std::os::unix::fs::symlink(&out_path, m.join("link")).unwrap(); // a directory symlink
+        std::os::unix::fs::symlink(&victim, m.join("docs-link.md")).unwrap(); // a file symlink
+    });
+    assert_eq!(std::fs::read(&victim).unwrap(), b"keep", "nothing outside the mirror is touched");
+    assert!(std::fs::symlink_metadata(mirror.join("link")).is_ok());
+}
+
+#[test]
+fn a_rebuilt_index_prunes_nested_docs_too() {
+    let be = MemBackend::new();
+    let env = Env::new(&be, None);
+    let e1 = up(&env, "m", &[("docs/a.md", "# A\n"), ("docs/sub/deep/c.md", "# C\n")], &Pub::default());
+    let cache = tempfile::tempdir().unwrap();
+    sync_docs(&be, &e1, cache.path()).unwrap();
+    std::fs::write(cache.path().join("m/.wt-index.json"), b"").unwrap();
+    push(&be, &e1.bucket, &tree(&[("docs/a.md", "# A\n")]), &Pub { head: "h2", now: T0 + 5, ..Pub::default() }).unwrap();
+    sync_docs(&be, &register(&be, &env.pr, "m", &e1.bucket), cache.path()).unwrap();
+    assert!(!cache.path().join("m/docs/sub/deep/c.md").exists());
+}
+
+#[test]
+#[ignore = "FINDING 6f (not fixed in WO-069 W2): needs an additive manifest field `changes_recorded` AND a publish-side signal that the caller computed the list (TreeSource gains a field/Option, ~20 literals plus store_worktree_dispatch and the hook that sends changes-z); see lane-w2.md"]
 fn a_worktree_that_changed_nothing_has_no_overlaps() {
     let be = MemBackend::new();
     let env = Env::new(&be, None);
@@ -155,4 +270,41 @@ fn saving_an_older_view_does_not_lower_a_remembered_generation() {
     older.generations.insert("wt".into(), 100);
     older.save(&path).unwrap();
     assert!(FollowState::load(&path).unwrap().generations["wt"] >= 200);
+}
+
+#[test]
+fn a_newer_manifest_error_names_both_schema_numbers_and_the_current_one_still_reads() {
+    let be = MemBackend::new();
+    let env = Env::new(&be, None);
+    let e = up(&env, "good", &[("docs/g.md", "# G\n")], &Pub::default());
+    assert!(weftos_store::share::read_manifest(&be, &e.bucket).unwrap().is_some());
+    let mut m: serde_json::Value = serde_json::from_slice(&S2::get(&be, &e.bucket, MANIFEST_KEY).unwrap().unwrap()).unwrap();
+    m["schema"] = (weftos_store::share::SCHEMA + 1).into();
+    S2::put(&be, &e.bucket, MANIFEST_KEY, &serde_json::to_vec(&m).unwrap()).unwrap();
+    let msg = weftos_store::share::read_manifest(&be, &e.bucket).unwrap_err().to_string();
+    assert!(msg.contains(&(weftos_store::share::SCHEMA + 1).to_string()) && msg.contains(&weftos_store::share::SCHEMA.to_string()), "{msg}");
+    m["schema"] = 0.into(); // an older schema is accepted
+    S2::put(&be, &e.bucket, MANIFEST_KEY, &serde_json::to_vec(&m).unwrap()).unwrap();
+    assert!(weftos_store::share::read_manifest(&be, &e.bucket).unwrap().is_some());
+}
+
+/// A first sync into a directory that was never a mirror (no index, no marker) must not prune:
+/// read-only docs someone already keeps there stay.
+#[cfg(unix)]
+#[test]
+fn a_first_sync_never_prunes_a_directory_it_has_not_synced_before() {
+    let be = MemBackend::new();
+    let env = Env::new(&be, None);
+    let e1 = up(&env, "m", &[("docs/a.md", "# A\n")], &Pub::default());
+    let cache = tempfile::tempdir().unwrap();
+    let theirs = cache.path().join("m/docs/kept.md");
+    std::fs::create_dir_all(theirs.parent().unwrap()).unwrap();
+    std::fs::write(&theirs, b"not the mirror's").unwrap();
+    let mut perm = std::fs::metadata(&theirs).unwrap().permissions();
+    perm.set_readonly(true);
+    std::fs::set_permissions(&theirs, perm).unwrap();
+    sync_docs(&be, &e1, cache.path()).unwrap();
+    assert_eq!(std::fs::read(&theirs).unwrap(), b"not the mirror's");
+    assert!(cache.path().join("m/docs/a.md").exists());
+    assert!(cache.path().join("m/.wt-mirror").exists());
 }
