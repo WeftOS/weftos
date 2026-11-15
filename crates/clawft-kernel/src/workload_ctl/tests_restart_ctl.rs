@@ -82,7 +82,7 @@ async fn a_cog_whose_node_was_down_past_dead_after_is_adopted_back_when_it_resta
     // The daemon comes back over the same run root and restores the journal.
     let b = rig.host();
     let report = b.restore_instances().await;
-    assert_eq!(report.restored, [iid.clone()], "{report:?}");
+    assert_eq!(report.restored, std::slice::from_ref(&iid), "{report:?}");
     net.serve("restart-node", b);
     net.revive(&addr);
     let ev = plane.lifecycle_tick().await;
