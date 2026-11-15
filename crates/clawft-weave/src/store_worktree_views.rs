@@ -74,8 +74,31 @@ pub(super) fn live_worktree(svc: &StoreService, b: &Op, n: &Names, project: &str
 
 /// Re-derive one worktree's registry entry from its own bucket (the daemon is the only writer).
 pub(super) fn refresh(b: &Op, pr: &str, slug: &str, wt: &str, sign: &SignCfg) -> Result<(), String> {
+    refresh_with(b, pr, slug, wt, sign, None, None)
+}
+
+/// `refresh` with the manifest and/or handoff the caller already holds and knows are current (a
+/// publish just wrote them): each `Some` saves its read, each `None` is read as `summarize` does.
+pub(super) fn refresh_with(
+    b: &Op,
+    pr: &str,
+    slug: &str,
+    wt: &str,
+    sign: &SignCfg,
+    manifest: Option<weftos_store::share::TreeManifest>,
+    handoff: Option<weftos_store::share::Handoff>,
+) -> Result<(), String> {
     let e = |e: weftos_store::overlay::S2Error| e.to_string();
-    if let Some(ent) = summarize(b, slug, wt).map_err(e)? {
+    let m = match manifest {
+        Some(m) => Some(m),
+        None => weftos_store::share::read_manifest(b, wt).map_err(e)?,
+    };
+    let h = match handoff {
+        Some(h) => Some(h),
+        None => weftos_store::share::read_handoff(b, wt).map_err(e)?,
+    };
+    if let (Some(m), Some(h)) = (m, h) {
+        let ent = weftos_store::share::summarize_with(slug, wt, m, h);
         match &sign.key {
             Some(k) => write_registry_entry_signed(b, pr, &ent, &Ed(k.clone())).map_err(e)?,
             None => write_registry_entry(b, pr, &ent).map_err(e)?,

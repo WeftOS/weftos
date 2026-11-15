@@ -3,6 +3,8 @@
 //! every item here, so paths are unchanged.
 
 use super::*;
+use crate::overlay::ObjectMeta;
+use crate::share_fetch::RegistryEntry;
 
 /// Read a regular file for publishing from one open handle, never following a symlink and never
 /// reading more than `max` bytes (review F14). The checks made on the path before this are only
@@ -120,6 +122,36 @@ pub(crate) fn parse_manifest(d: &[u8]) -> Result<TreeManifest> {
     Ok(m)
 }
 
+/// What a publish produced, for a caller that goes on to derive the registry entry (WO-069 X3).
+#[derive(Debug)]
+pub struct Published {
+    pub report: PublishReport,
+    /// The manifest this publish just wrote.
+    pub manifest: TreeManifest,
+    /// The handoff record, only when THIS publish created it (the create-only put won), so it is
+    /// exactly what is stored. `None` when a record already existed (it may have changed since it
+    /// was read) or the create lost a race: the caller reads it fresh.
+    pub handoff_created: Option<Handoff>,
+}
+
+/// The registry entry for a worktree from a manifest and handoff already in hand. Same mapping as
+/// `summarize` (`share_fetch.rs`), which reads the two objects first; a test pins them equal.
+pub fn summarize_with(slug: &str, bucket: &str, m: TreeManifest, h: Handoff) -> RegistryEntry {
+    RegistryEntry {
+        slug: slug.into(),
+        bucket: bucket.into(),
+        branch: m.branch,
+        head_commit: m.head_commit,
+        state: h.state,
+        writer: m.writer,
+        merger: h.merger,
+        doc_count: m.docs.len(),
+        file_count: m.files.len(),
+        updated_ms: h.updated_ms.max(m.published_ms),
+        orphan: None,
+    }
+}
+
 /// Publish (or refresh) the worktree tree into its bucket. Re-runs upload only changed files and
 /// remove objects that left the tree. The manifest is written last, so a reader that sees it sees
 /// a complete tree.
@@ -130,7 +162,24 @@ pub fn publish_tree<B: ObjectBackend>(
     limits: &Limits,
     now_ms: u64,
 ) -> Result<PublishReport> {
-    if let Some(h) = read_handoff(b, bucket)? {
+    Ok(publish_tree_listed(b, bucket, src, limits, now_ms, None)?.report)
+}
+
+/// `publish_tree` with the bucket listing supplied by the caller. `listing` is the WHOLE bucket
+/// (`list(bucket, "")`), taken before any PUT; `None` lists it here, one call, as before (the
+/// tree-prefix listing it replaces was one call too). The tree objects and whether a bundle object
+/// exists are read from it, so no second listing and no blind bundle DELETE.
+pub fn publish_tree_listed<B: ObjectBackend>(
+    b: &B,
+    bucket: &str,
+    src: &TreeSource<'_>,
+    limits: &Limits,
+    now_ms: u64,
+    listing: Option<Vec<ObjectMeta>>,
+) -> Result<Published> {
+    let existing_handoff = read_handoff(b, bucket)?;
+    let handoff_exists = existing_handoff.is_some();
+    if let Some(h) = existing_handoff {
         if matches!(h.state, State::Merged | State::Archived) {
             return Err(S2Error::Invalid(format!(
                 "worktree is already {:?}; refusing to republish",
@@ -161,8 +210,13 @@ pub fn publish_tree<B: ObjectBackend>(
     // One listing of the tree prefix per publish, instead of one HEAD per file: a file is unchanged
     // when its sha matches the previous manifest AND its object is listed with the same size. The
     // same listing feeds the stale sweep at the end (objects put by this run are in `kept`).
+    let whole = match listing {
+        Some(l) => l,
+        None => b.list(bucket, "")?,
+    };
+    let bundle_listed = whole.iter().any(|o| o.key == BUNDLE_KEY);
     let listed: std::collections::HashMap<String, u64> =
-        b.list(bucket, TREE_PREFIX)?.into_iter().map(|o| (o.key, o.size)).collect();
+        whole.into_iter().filter(|o| o.key.starts_with(TREE_PREFIX)).map(|o| (o.key, o.size)).collect();
     let mut rep = PublishReport::default();
     let (mut files, mut docs, mut total) = (Vec::new(), Vec::new(), 0u64);
     let mut seen = std::collections::BTreeSet::new();
@@ -269,7 +323,9 @@ pub fn publish_tree<B: ObjectBackend>(
             rep.bundle_uploaded = true;
             has_bundle = true;
         }
-    } else if !has_bundle {
+    } else if !has_bundle && bundle_listed {
+        // Only when the listing shows a bundle object: no blind DELETE, but a leftover that no
+        // manifest names (a crash between the bundle PUT and the manifest PUT) is still removed.
         b.delete(bucket, BUNDLE_KEY)?;
     }
 
@@ -308,10 +364,10 @@ pub fn publish_tree<B: ObjectBackend>(
 
     // Create the record only if none exists. Conditional, so a handoff or claim written between a
     // check and this write is never overwritten with a fresh `Open`; losing the race is fine.
-    write_handoff_if(
-        b,
-        bucket,
-        &Handoff {
+    // Not attempted when the record was just read: that create-only put could only lose.
+    let mut handoff_created = None;
+    if !handoff_exists {
+        let fresh = Handoff {
             state: State::Open,
             note: String::new(),
             writer: src.writer.clone(),
@@ -319,8 +375,10 @@ pub fn publish_tree<B: ObjectBackend>(
             updated_ms: now_ms,
             epoch: 0,
             claimed_head: None,
-        },
-        None,
-    )?;
-    Ok(rep)
+        };
+        if write_handoff_if(b, bucket, &fresh, None)? {
+            handoff_created = Some(fresh);
+        }
+    }
+    Ok(Published { report: rep, manifest, handoff_created })
 }
