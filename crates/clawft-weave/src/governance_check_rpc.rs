@@ -98,7 +98,9 @@ pub fn check(gate: Option<&dyn GateBackend>, params: &Value) -> Response {
 /// connection (never the request body) and scopes the evaluation quota, so
 /// one caller cannot spend the budget of the principal it names, and the
 /// socket peer's aggregate ceiling bounds the load it can drive by
-/// reconnecting. `None` (in-process, no connection) is left as it was: the
+/// reconnecting or spawning new processes under the same uid. Windows named
+/// pipes and the child-only socket carry no peer key and so no aggregate
+/// ceiling (open item). `None` (in-process, no connection) is left as it was: the
 /// engine's own per-principal bucket and no aggregate ceiling, because such a
 /// caller is the daemon itself, not an unauthenticated peer.
 pub fn check_as(
@@ -455,16 +457,17 @@ mod tests {
                     .expect("routed")
             }
         };
-        let conn = |peer: &str| {
+        // Same uid, different processes: a new pid must not be a new budget.
+        let conn = |uid: u32, pid: i32| {
             CallerCtx::from_auth(Some("read".into()))
                 .with_connection(CallerCtx::next_connection_id())
-                .with_peer_key(Some(peer.to_owned()))
+                .with_peer_key(Some(crate::child_peer::peer_key(uid, Some(pid))))
         };
         let limited = |r: &Response| r.ok && result(r)["decision"] == "deny";
 
         let (mut allowed, mut denied) = (0usize, 0usize);
-        for _ in 0..(ceiling / per_conn + 2) {
-            let c = conn("uid:1000:pid:7");
+        for i in 0..(ceiling / per_conn + 2) {
+            let c = conn(1000, 100 + i as i32);
             for _ in 0..per_conn {
                 let r = call(c.clone()).await;
                 assert!(r.ok, "{:?}", r.error);
@@ -473,7 +476,7 @@ mod tests {
         }
         assert_eq!(allowed, ceiling, "exactly the aggregate ceiling is admitted");
         assert!(denied > 0, "checks past the ceiling are denied");
-        let r = call(conn("uid:1000:pid:8")).await;
+        let r = call(conn(1001, 100)).await;
         assert!(!limited(&r), "another peer must be unaffected: {}", result(&r)["reason"]);
     }
 }

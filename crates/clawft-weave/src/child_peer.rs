@@ -76,6 +76,14 @@ fn supervised_pids() -> Vec<u32> {
     Vec::new()
 }
 
+/// The aggregate-quota identity of a socket peer: the uid only. A pid is
+/// free to mint (a new process, a fork), so keying on it would let a caller
+/// escape the ceiling the same way reconnecting does; `_pid` is accepted for
+/// call-site symmetry and diagnostics, never part of the bucket key.
+pub fn peer_key(uid: u32, _pid: Option<i32>) -> String {
+    format!("uid:{uid}")
+}
+
 /// Classify the peer of an accepted unix stream.
 #[cfg(unix)]
 pub fn classify_peer(cred: std::io::Result<tokio::net::unix::UCred>) -> PeerClass {

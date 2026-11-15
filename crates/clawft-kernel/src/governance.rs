@@ -1086,7 +1086,7 @@ const CALLER_QUOTA_SEP: char = '\u{1f}';
 /// Who is asking, as established by the transport (never the request body).
 ///
 /// `connection` scopes the per-principal bucket so one connection cannot
-/// spend another's budget. `peer` (socket peer uid and pid) scopes an
+/// spend another's budget. `peer` (socket peer uid, never pid) scopes an
 /// aggregate ceiling over every connection that peer holds, so reconnecting
 /// does not mint fresh per-principal budgets. In-process callers have no
 /// `QuotaCaller` and keep the plain per-principal bucket with no aggregate.

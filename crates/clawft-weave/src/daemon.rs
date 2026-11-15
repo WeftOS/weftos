@@ -3500,10 +3500,11 @@ pub async fn run(
                                 // A supervised project kernel (same uid) is
                                 // classified by its process group (review S9).
                                 let cred = stream.peer_cred();
-                                let peer_key = cred.as_ref().ok().map(|c| match c.pid() {
-                                    Some(pid) => format!("uid:{}:pid:{pid}", c.uid()),
-                                    None => format!("uid:{}", c.uid()),
-                                });
+                                let peer_key = cred
+                                    .as_ref()
+                                    .ok()
+                                    .map(|c| crate::child_peer::peer_key(c.uid(), c.pid()));
+                                debug!(pid = ?cred.as_ref().ok().and_then(|c| c.pid()), peer_key = ?peer_key, "rpc peer accepted");
                                 let peer = crate::child_peer::classify_peer(cred);
                                 tokio::spawn(handle_connection_identified(stream, k, tx, peer, peer_key));
                             }

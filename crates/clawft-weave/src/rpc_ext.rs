@@ -145,9 +145,9 @@ pub struct CallerCtx {
     /// `None` for in-process callers. Keys per-caller quotas so one
     /// connection cannot spend another's budget.
     pub connection: Option<u64>,
-    /// Socket peer identity (uid, and pid when the OS reports it) read at
-    /// accept from the unix socket's peer credentials; never from the
-    /// request. Scopes the aggregate evaluation ceiling across every
+    /// Socket peer identity (`uid:<uid>`; the pid is deliberately not part of
+    /// it, since a new process is free) read at accept from the unix socket's
+    /// peer credentials; never from the request. Scopes the aggregate evaluation ceiling across every
     /// connection the peer holds. `None` for in-process callers and
     /// transports that cannot report it (those are not aggregated).
     pub peer_key: Option<String>,
