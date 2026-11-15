@@ -230,9 +230,9 @@ fn spawn_watchdog(
             };
             if rss > limit {
                 flag.store(true, Ordering::SeqCst);
-                signal_pgid(Some(pgid), libc::SIGTERM);
+                Supervised::signal_group(Some(pgid), libc::SIGTERM);
                 tokio::time::sleep(TIMEOUT_GRACE).await;
-                signal_pgid(Some(pgid), libc::SIGKILL);
+                Supervised::signal_group(Some(pgid), libc::SIGKILL);
                 return;
             }
         }
@@ -256,15 +256,6 @@ fn pump<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
             }
         }
     })
-}
-
-fn signal_pgid(pgid: Option<libc::pid_t>, sig: libc::c_int) {
-    if let Some(pgid) = pgid {
-        // SAFETY: signalling the process group this supervisor created.
-        unsafe {
-            libc::kill(-pgid, sig);
-        }
-    }
 }
 
 impl Supervised {
@@ -343,8 +334,13 @@ impl Supervised {
         self.exited
     }
 
-    fn signal_group(&self, sig: libc::c_int) {
-        signal_pgid(self.pgid, sig);
+    fn signal_group(pgid: Option<libc::pid_t>, sig: libc::c_int) {
+        if let Some(pgid) = pgid {
+            // SAFETY: signalling the process group this supervisor created.
+            unsafe {
+                libc::kill(-pgid, sig);
+            }
+        }
     }
 
     /// Wait up to `max`; on timeout terminate, then kill after
@@ -368,12 +364,12 @@ impl Supervised {
     }
 
     async fn terminate_inner(&mut self, grace: Duration) {
-        self.signal_group(libc::SIGTERM);
+        Self::signal_group(self.pgid, libc::SIGTERM);
         if tokio::time::timeout(grace, self.child.wait())
             .await
             .is_err()
         {
-            self.signal_group(libc::SIGKILL);
+            Self::signal_group(self.pgid, libc::SIGKILL);
             let _ = self.child.kill().await;
         }
     }
@@ -387,7 +383,7 @@ impl Supervised {
             w.abort();
         }
         // The leader is gone: nothing it forked may outlive it.
-        self.signal_group(libc::SIGKILL);
+        Self::signal_group(self.pgid, libc::SIGKILL);
         self.pgid = None;
         // Readers finish at EOF; a grandchild holding the pipe open is
         // bounded by this wait.
@@ -424,7 +420,7 @@ impl Drop for Supervised {
         if let Some(w) = self.watchdog.take() {
             w.abort();
         }
-        self.signal_group(libc::SIGKILL);
+        Self::signal_group(self.pgid, libc::SIGKILL);
     }
 }
 
