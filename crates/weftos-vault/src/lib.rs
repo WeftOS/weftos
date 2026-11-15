@@ -1,0 +1,43 @@
+//! Personal vault core (Vault V1, board card 02301ad0).
+//!
+//! Implements the byte formats of `docs/research/vault-v0-format-spec-2026-11-15.md`:
+//! a signed keybag ([`keybag`]), unlock by passcode or recovery key ([`Vault`]), and per-secret
+//! sealed blobs bound to their slot ([`blob`]).
+//!
+//! **DRAFT.** The format has not had the external review the owner requires. Vaults created here
+//! carry the DRAFT flag and refuse real credentials ([`SealRequest::real_credential`]). Every value in
+//! the tests is fake.
+//!
+//! No escrow wrapper, no node (unattended) wrapper: parsers reject those kinds. No type in this
+//! crate prints a secret in `Debug` or `Display`, and the crate logs only counts and sequence
+//! numbers.
+
+#![forbid(unsafe_code)]
+
+pub mod blob;
+pub mod error;
+pub mod keybag;
+pub mod recovery;
+pub mod seal;
+pub mod vault;
+
+mod hkdf_keys;
+mod normalize;
+mod passcode_kdf;
+mod secrets;
+
+pub use blob::{OpenedSecret, Policy, SecretType};
+pub use error::VaultError;
+pub use keybag::{Keybag, Pins, SeenKeybag, Wrapper, WrapperBody};
+pub use passcode_kdf::KdfParams;
+pub use recovery::RecoveryKey;
+pub use seal::SecretSeal;
+pub use secrets::{SealRequest, SealedSecret};
+pub use vault::{NewVault, Vault};
+
+#[cfg(test)]
+mod tests;
+#[cfg(test)]
+mod tests_secrets;
+#[cfg(test)]
+mod vectors;

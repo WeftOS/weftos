@@ -79,6 +79,7 @@ members = [
     "crates/weftos-store",
     # ADR-126 S3: short-lived credentials for edge and Wasm nodes (no I/O, wasm-clean).
     "crates/weftos-edge-creds",
+    "crates/weftos-vault",
     # ADR-106: wire types of the Seed licence proxy (shared by kernel + weft-licence).
     "crates/weft-licence-wire",
     # ADR-106 phase 2: the Seed-side licence proxy (own binary, user and unit).
@@ -350,6 +351,13 @@ snow = "0.10"
 # AEAD for in-memory secret sealing (ConfigService/AuthService, card a134bcf7).
 # Already in the lock via snow; same version, pure Rust.
 chacha20poly1305 = { version = "0.10.1", default-features = false, features = ["alloc", "getrandom"] }
+
+# Vault V1 (card 02301ad0): Argon2id passcode KDF, HKDF key derivation, NFKC/NFC text normalization.
+# argon2 is owner-approved (diff-gate rows). hkdf and unicode-normalization are already in the lock
+# transitively; their direct-dep rows are pending owner approval.
+argon2 = { version = "=0.5.3", default-features = false, features = ["alloc", "zeroize"] }
+hkdf = "0.12.4"
+unicode-normalization = "0.1.26"
 
 # QUIC mesh transport (WEFT-118 / ADR-026). Application crypto is Noise
 # (snow); quinn still needs TLS for the QUIC handshake, so we use
