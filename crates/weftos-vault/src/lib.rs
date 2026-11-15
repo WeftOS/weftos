@@ -8,6 +8,9 @@
 //! carry the DRAFT flag and refuse real credentials ([`SealRequest::real_credential`]). Every value in
 //! the tests is fake.
 //!
+//! Keybag writes are two-phase ([`PendingWrite`], [`Vault::commit_write`]): nothing changes in the
+//! vault or the device pins until the caller reports that the store accepted the new keybag.
+//!
 //! No escrow wrapper, no node (unattended) wrapper: parsers reject those kinds. No type in this
 //! crate prints a secret in `Debug` or `Display`, and the crate logs only counts and sequence
 //! numbers.
@@ -29,18 +32,20 @@ mod passcode_kdf;
 mod pins;
 mod secrets;
 mod wrap;
+mod write;
 
 pub use blob::{OpenedSecret, Policy, SecretType};
 pub use error::VaultError;
 pub use index::IndexEntry;
 pub use keybag::{Keybag, Pins, SeenKeybag, Wrapper, WrapperBody};
-pub use pins::PINS_LEN;
 pub use passcode_kdf::KdfParams;
+pub use pins::PINS_LEN;
 pub use recovery::RecoveryKey;
 pub use rotation::{Resealed, RotationReport};
 pub use seal::SecretSeal;
 pub use secrets::{SealRequest, SealedSecret};
 pub use vault::{NewVault, Vault};
+pub use write::PendingWrite;
 
 #[cfg(test)]
 mod tests;

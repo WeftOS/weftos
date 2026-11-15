@@ -6,16 +6,17 @@ use zeroize::Zeroizing;
 use crate::error::{Result, VaultError};
 use crate::hkdf_keys::{self, Key};
 use crate::keybag::{
-    FLAG_DRAFT, KIND_DEVICE, KIND_PASSCODE, KIND_RECOVERY, KIND_SIGNSEED, Keybag, MAX_LEN, Pins,
-    Wrapper, WrapperBody, wrapper_aad,
+    FLAG_DRAFT, KIND_DEVICE, KIND_PASSCODE, KIND_RECOVERY, KIND_SIGNSEED, Keybag, Pins, Wrapper,
+    WrapperBody, wrapper_aad,
 };
 use crate::normalize;
 use crate::passcode_kdf::{KdfParams, derive_kek};
 use crate::recovery::RecoveryKey;
 use crate::seal::{self, NONCE_LEN};
 use crate::wrap::{PasscodeSeal, open32, passcode_wrapper, recovery_wrapper, seal48};
+use crate::write::PendingWrite;
 
-fn now_unix() -> u64 {
+pub(crate) fn now_unix() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -238,7 +239,8 @@ impl Vault {
         })
     }
 
-    /// The current signed keybag bytes, to store with `put_if_match`.
+    /// The signed keybag this vault holds: the base for `put_if_match` when storing a
+    /// [`PendingWrite`].
     pub fn keybag_bytes(&self) -> &[u8] {
         &self.bytes
     }
@@ -270,59 +272,16 @@ impl Vault {
             .collect()
     }
 
-    /// Apply `f` to a copy of the keybag, bump the sequence, re-sign, and record the result in `pins`
-    /// (review M1: the device's own writes advance its pins, so the store cannot replay the keybag from
-    /// before this write). Nothing changes, in the vault or in `pins`, if any step fails.
-    pub(crate) fn commit(
-        &mut self,
-        pins: &mut Pins,
-        f: impl FnOnce(&mut Keybag) -> Result<()>,
-    ) -> Result<&[u8]> {
-        if pins.sign_pub.is_some_and(|p| p != self.keybag.sign_pub) {
-            return Err(VaultError::SignerMismatch);
-        }
-        let mut kb = self.keybag.clone();
-        f(&mut kb)?;
-        kb.sequence = kb
-            .sequence
-            .checked_add(1)
-            .ok_or(VaultError::SequenceExhausted)?;
-        if let Some(h) = pins.highest
-            && kb.sequence <= h.sequence
-        {
-            // This vault is behind a keybag the device has already seen; the write would be refused.
-            return Err(VaultError::Rollback {
-                got: kb.sequence,
-                seen: h.sequence,
-            });
-        }
-        kb.updated_unix = now_unix().max(kb.updated_unix);
-        kb.validate_structure()?;
-        let bytes = kb.sign(&self.signing);
-        if bytes.len() > MAX_LEN {
-            return Err(VaultError::TooLarge("keybag"));
-        }
-        tracing::debug!(
-            sequence = kb.sequence,
-            wrappers = kb.wrappers.len(),
-            "keybag rewritten"
-        );
-        pins.record(&bytes, &kb);
-        self.keybag = kb;
-        self.bytes = bytes;
-        Ok(&self.bytes)
-    }
-
     /// Re-seal one passcode wrapper under a new passcode (spec 9.3): new salt and nonce, sequence
-    /// bumped, keybag re-signed, `pins` advanced. No blob changes. Returns the new keybag bytes. The new
-    /// passcode must be non-empty and use only assigned, non-control code points.
+    /// bumped, keybag re-signed. No blob changes. The new passcode must meet the passcode rules
+    /// (`PasscodeRejected`). Returns a [`PendingWrite`]: store it, then [`Vault::commit_write`].
     pub fn change_passcode(
-        &mut self,
+        &self,
         wrapper_id: &[u8; 16],
         new_passcode: &str,
         params: KdfParams,
-        pins: &mut Pins,
-    ) -> Result<&[u8]> {
+        pins: &Pins,
+    ) -> Result<PendingWrite<()>> {
         params.check_new_policy()?;
         self.change_passcode_with(wrapper_id, new_passcode, params, pins)
     }
@@ -330,25 +289,25 @@ impl Vault {
     /// [`Vault::change_passcode`] without the KDF policy check (fast test profile).
     #[cfg(test)]
     pub(crate) fn change_passcode_unchecked(
-        &mut self,
+        &self,
         wrapper_id: &[u8; 16],
         new_passcode: &str,
         params: KdfParams,
-        pins: &mut Pins,
-    ) -> Result<&[u8]> {
+        pins: &Pins,
+    ) -> Result<PendingWrite<()>> {
         self.change_passcode_with(wrapper_id, new_passcode, params, pins)
     }
 
     fn change_passcode_with(
-        &mut self,
+        &self,
         wrapper_id: &[u8; 16],
         new_passcode: &str,
         params: KdfParams,
-        pins: &mut Pins,
-    ) -> Result<&[u8]> {
+        pins: &Pins,
+    ) -> Result<PendingWrite<()>> {
         let (vk, vault_id) = (self.vk.clone(), self.keybag.vault_id);
         let (salt, nonce) = (seal::random_bytes()?, seal::random_bytes()?);
-        self.commit(pins, |kb| {
+        self.prepare(pins, None, (), |kb| {
             let w = kb
                 .wrappers
                 .iter_mut()
@@ -368,9 +327,9 @@ impl Vault {
         })
     }
 
-    /// Add a recovery wrapper and return its key (shown once). The new keybag is `keybag_bytes()`;
-    /// `pins` is advanced.
-    pub fn add_recovery_wrapper(&mut self, pins: &mut Pins) -> Result<RecoveryKey> {
+    /// Add a recovery wrapper. [`Vault::commit_write`] returns its key (show it once, after the store
+    /// took the keybag).
+    pub fn add_recovery_wrapper(&self, pins: &Pins) -> Result<PendingWrite<RecoveryKey>> {
         let key = RecoveryKey::random()?;
         let (id, nonce) = (seal::random_bytes()?, seal::random_bytes()?);
         let (vk, vault_id, generation) = (
@@ -378,24 +337,23 @@ impl Vault {
             self.keybag.vault_id,
             self.keybag.current_vk_generation,
         );
-        self.commit(pins, |kb| {
-            kb.wrappers.push(recovery_wrapper(
-                &vault_id, id, &vk, &key.0, nonce, generation,
-            )?);
+        let wrapper = recovery_wrapper(&vault_id, id, &vk, &key.0, nonce, generation)?;
+        self.prepare(pins, None, key, |kb| {
+            kb.wrappers.push(wrapper);
             Ok(())
-        })?;
-        Ok(key)
+        })
     }
 
     /// Add a device wrapper (platform 1 = Apple, 2 = Android). `make_blob` receives the wrapper id,
-    /// the wrapper AAD and the VK, and returns the platform-sealed inner blob. `pins` is advanced.
+    /// the wrapper AAD and the VK, and returns the platform-sealed inner blob. [`Vault::commit_write`]
+    /// returns the new wrapper id.
     pub fn add_device_wrapper(
-        &mut self,
+        &self,
         platform: u8,
         key_ref: &[u8],
         make_blob: impl FnOnce(&[u8; 16], &[u8], &[u8; 32]) -> Result<Vec<u8>>,
-        pins: &mut Pins,
-    ) -> Result<[u8; 16]> {
+        pins: &Pins,
+    ) -> Result<PendingWrite<[u8; 16]>> {
         if !matches!(platform, 1 | 2) {
             return Err(VaultError::RejectedPlatform(platform));
         }
@@ -413,7 +371,7 @@ impl Vault {
         if blob.len() > 16000 {
             return Err(VaultError::TooLarge("device blob"));
         }
-        self.commit(pins, |kb| {
+        self.prepare(pins, None, id, |kb| {
             kb.wrappers.push(Wrapper {
                 id,
                 vk_generation: generation,
@@ -424,14 +382,13 @@ impl Vault {
                 },
             });
             Ok(())
-        })?;
-        Ok(id)
+        })
     }
 
-    /// Remove a wrapper. The signing seed wrapper and the last passcode wrapper cannot be removed.
-    /// `pins` is advanced, so this device refuses the keybag that still had the wrapper.
-    pub fn remove_wrapper(&mut self, id: &[u8; 16], pins: &mut Pins) -> Result<&[u8]> {
-        self.commit(pins, |kb| {
+    /// Remove a wrapper. The signing seed wrapper and the last current-generation passcode wrapper
+    /// cannot be removed. Once committed, this device refuses the keybag that still had the wrapper.
+    pub fn remove_wrapper(&self, id: &[u8; 16], pins: &Pins) -> Result<PendingWrite<()>> {
+        self.prepare(pins, None, (), |kb| {
             let pos = kb
                 .wrappers
                 .iter()

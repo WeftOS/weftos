@@ -81,6 +81,10 @@ pub enum VaultError {
     /// The keybag sequence counter cannot advance (it is at `u64::MAX`).
     #[error("keybag sequence counter exhausted")]
     SequenceExhausted,
+    /// A pending keybag write was built on other keybag bytes than the vault holds now (another write
+    /// was committed in between, or it belongs to another vault). Prepare it again.
+    #[error("pending write is stale")]
+    StaleWrite,
     /// The OS random source failed.
     #[error("random source failed")]
     Random,

@@ -27,12 +27,30 @@ followed the spec faithfully.
 - **Generation pin (H1).** `Pins` records the highest `current_vk_generation` seen. `Keybag::parse` refuses a keybag
   with a lower generation (`GenerationRollback`), even when its sequence is higher and its signature verifies. This
   protects only devices that have already seen the rotation.
-- **Own writes advance the pins (M1).** Every write (`change_passcode`, `add_recovery_wrapper`, `add_device_wrapper`,
-  `remove_wrapper`, `rotate_vk`, `drop_history`) takes the caller's `&mut Pins` and records the new keybag. A store
-  operator therefore cannot replay the keybag from before the write to the device that made it. A write is refused
-  when the pins belong to another signer (`SignerMismatch`) or are already past this vault's keybag (`Rollback`). A
-  failed write leaves the pins unchanged. `Vault::create` returns the creator's pins in `NewVault::pins`, so the
-  creating device never trusts the store on first use.
+- **Own writes advance the pins, once the store has them (M1, round-2 R2-M1).** Writes are two-phase. Every write
+  method (`change_passcode`, `add_recovery_wrapper`, `add_device_wrapper`, `remove_wrapper`, `rotate_vk`,
+  `drop_history`) takes `&self` and `&Pins` and changes nothing: it returns a `PendingWrite` holding the new signed
+  keybag. The caller stores `PendingWrite::keybag_bytes` with `put_if_match` against `Vault::keybag_bytes`. Only
+  when the store accepts does the caller call `Vault::commit_write(pending, &mut pins)`. That installs the new keybag
+  (and, after a rotation, the new VK) in the vault and records it in the pins, so a store operator cannot replay the
+  keybag from before the write to the device that made it. What holds:
+  - Preparing a write never changes the vault or the pins. It is refused when the pins belong to another signer
+    (`SignerMismatch`) or are already past this vault's keybag (`Rollback`).
+  - When the store refuses the write, the caller drops the `PendingWrite`. The vault and the pins are then byte for
+    byte as they were before the attempt, so the device re-reads the store and unlocks the other device's keybag
+    with no `Fork` and no `GenerationRollback` (review probes P1 and P1b are now tests).
+  - A VK made by `rotate_vk` lives only inside the `PendingWrite`. The vault keeps sealing under the stored
+    generation until the commit, so no secret is sealed under a VK that no stored wrapper holds.
+  - `commit_write` refuses, changing nothing, a write built on other bytes than the vault holds (`StaleWrite`: a
+    second write from the same base, or another vault's), and a write whose sequence the pins have already seen
+    with other bytes (`Fork`) or passed (`Rollback`, `GenerationRollback`). That catches a caller that commits a
+    write the store refused after it has already unlocked the store's keybag. It cannot catch a caller that commits
+    a refused write before re-reading the store: `commit_write` trusts the caller's report that the store
+    accepted. Such a caller is back in the round-2 P1 state, so the contract is "commit only after
+    `put_if_match` succeeded".
+  - `Vault::create` returns the creator's pins in `NewVault::pins`, so the creating device never trusts the store on
+    first use. Creating a vault is not two-phase: the first `put_if_match` (expecting no object) either stores it
+    or the caller discards the new vault and its pins.
 - **Pins are crate-recorded only (R2-L1).** `Pins` fields are private and `record` is crate-private. The crate
   records a keybag only after it verified it (an unlock, a create, a committed write). Callers read the pins through
   getters and persist them with `Pins::to_bytes` / `Pins::from_bytes` (82 bytes, strict parse). The persisted

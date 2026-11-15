@@ -9,11 +9,11 @@ use crate::keybag::Keybag;
 /// VK generation.
 ///
 /// Pins carry no `vault_id`: a caller keeps one `Pins` per vault and must not share it between vaults.
-/// Persist them with [`Pins::to_bytes`] after every unlock and after every write made through
-/// [`crate::Vault`] (the write methods advance them, review M1), and load them with [`Pins::from_bytes`].
+/// Persist them with [`Pins::to_bytes`] after every unlock and after every
+/// [`crate::Vault::commit_write`], and load them with [`Pins::from_bytes`].
 ///
 /// The fields are private and only the crate records a keybag, after it has verified the signature
-/// and the rollback rules (an unlock, a create, or one of its own writes). A caller cannot pin an unverified
+/// and the rollback rules (an unlock, a create, or a committed write). A caller cannot pin an unverified
 /// signer or overwrite the highest digest to hide a fork (review R2-L1):
 ///
 /// ```compile_fail,E0616

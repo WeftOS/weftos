@@ -16,6 +16,7 @@ use crate::seal;
 use crate::secrets::{SealRequest, SealedSecret};
 use crate::vault::Vault;
 use crate::wrap::{PasscodeSeal, open32, passcode_wrapper, recovery_wrapper, seal48};
+use crate::write::PendingWrite;
 
 /// What a rotation did to the wrapper list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,40 +100,45 @@ impl Vault {
     /// dropped (the platform seal needs the device, so re-enrol). The old VK goes into a kind 4 entry sealed
     /// under the new VK's history key, and older kind 4 entries are re-sealed the same way, so every
     /// generation opens straight from the current VK. The signing seed is re-sealed (same seed, same
-    /// `sign_pub`), the sequence is bumped, the keybag is re-signed and `pins` records the new sequence and
-    /// generation. Blobs are not touched: they open by walking the history and move with
-    /// [`Vault::reseal_secret`].
+    /// `sign_pub`), the sequence is bumped and the keybag is re-signed. Blobs are not touched: they open by
+    /// walking the history and move with [`Vault::reseal_secret`].
+    ///
+    /// Returns a [`PendingWrite`] and changes nothing yet (review R2-M1). The new VK lives only inside it,
+    /// so no secret can be sealed under the new generation before the store holds a wrapper for it. Store
+    /// [`PendingWrite::keybag_bytes`], then [`Vault::commit_write`] installs the new VK and keybag and
+    /// advances the pins to the new sequence and generation. If the store refuses, drop it: the vault and
+    /// the pins stay at the stored keybag, and the device can re-read the store and rotate again.
     ///
     /// Refuses with [`VaultError::KdfPolicy`] when a passcode wrapper it would re-seal has KDF parameters
     /// below the policy for new wrappers (review M2): change that passcode first with
-    /// [`Vault::change_passcode`]. Nothing changes, in the vault or in `pins`, if any step fails.
+    /// [`Vault::change_passcode`].
     pub fn rotate_vk(
-        &mut self,
+        &self,
         passcode: &str,
         recovery: Option<&RecoveryKey>,
-        pins: &mut Pins,
-    ) -> Result<RotationReport> {
+        pins: &Pins,
+    ) -> Result<PendingWrite<RotationReport>> {
         self.rotate_inner(passcode, recovery, pins, true)
     }
 
     /// [`Vault::rotate_vk`] without the KDF policy check (fast test profile).
     #[cfg(test)]
     pub(crate) fn rotate_vk_unchecked(
-        &mut self,
+        &self,
         passcode: &str,
         recovery: Option<&RecoveryKey>,
-        pins: &mut Pins,
-    ) -> Result<RotationReport> {
+        pins: &Pins,
+    ) -> Result<PendingWrite<RotationReport>> {
         self.rotate_inner(passcode, recovery, pins, false)
     }
 
     fn rotate_inner(
-        &mut self,
+        &self,
         passcode: &str,
         recovery: Option<&RecoveryKey>,
-        pins: &mut Pins,
+        pins: &Pins,
         enforce_policy: bool,
-    ) -> Result<RotationReport> {
+    ) -> Result<PendingWrite<RotationReport>> {
         let vault_id = self.keybag.vault_id;
         let old_gen = self.keybag.current_vk_generation;
         let new_gen = old_gen
@@ -238,14 +244,13 @@ impl Vault {
             new_gen,
         )?);
         report.history_entries = out.iter().filter(|w| w.kind() == KIND_HISTORY).count();
-        self.commit(pins, |kb| {
+        let pending = self.prepare(pins, Some(new_vk), report, |kb| {
             kb.wrappers = out;
             kb.current_vk_generation = new_gen;
             Ok(())
         })?;
-        self.vk = new_vk;
-        tracing::debug!(generation = new_gen, "vault key rotated");
-        Ok(report)
+        tracing::debug!(generation = new_gen, "vault key rotation prepared");
+        Ok(pending)
     }
 
     /// Move one secret sealed under an older generation to the current one (spec 9.4). `None` when the
@@ -311,10 +316,10 @@ impl Vault {
     }
 
     /// Remove the kind 4 entry for `generation` once no blob uses it any more (spec 9.4). Bumps the
-    /// sequence and advances `pins`. Checking that the lazy re-seal pass is complete is the caller's job:
-    /// a blob still at `generation` stops opening afterwards.
-    pub fn drop_history(&mut self, generation: u32, pins: &mut Pins) -> Result<&[u8]> {
-        self.commit(pins, |kb| {
+    /// sequence; returns a [`PendingWrite`]. Checking that the lazy re-seal pass is complete is the
+    /// caller's job: a blob still at `generation` stops opening afterwards.
+    pub fn drop_history(&self, generation: u32, pins: &Pins) -> Result<PendingWrite<()>> {
+        self.prepare(pins, None, (), |kb| {
             let pos = kb
                 .wrappers
                 .iter()

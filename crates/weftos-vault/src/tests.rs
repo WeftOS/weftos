@@ -65,10 +65,7 @@ fn create_unlock_roundtrip_and_wrong_passcode() {
 
 #[test]
 fn new_wrapper_policy_is_enforced_on_the_public_path() {
-    assert_eq!(
-        Vault::create(PASS, T, true).unwrap_err(),
-        VaultError::KdfPolicy
-    );
+    assert_eq!(Vault::create(PASS, T, true).unwrap_err(), VaultError::KdfPolicy);
     assert_eq!(
         KdfParams {
             m_kib: 19456,
@@ -124,11 +121,12 @@ fn passcode_change_rewraps_only_one_wrapper_and_bumps_sequence() {
     let id = pass_id(&nv.vault);
     let sealed = nv.vault.seal_secret(&req("login/a", b"FAKE-one")).unwrap();
     let before = nv.vault.keybag().clone();
-    let new = nv
-        .vault
-        .change_passcode_unchecked(&id, "FAKE-new-passcode-0002", T, &mut Pins::default())
-        .unwrap()
-        .to_vec();
+    nv.vault
+        .write_now(&mut Pins::default(), |v, p| {
+            v.change_passcode_unchecked(&id, "FAKE-new-passcode-0002", T, p)
+        })
+        .unwrap();
+    let new = nv.vault.keybag_bytes().to_vec();
     let after = nv.vault.keybag();
     assert_eq!(after.sequence, 2);
     assert_ne!(old, new);
@@ -153,11 +151,12 @@ fn rolled_back_keybag_is_refused_and_forks_are_detected() {
     let mut nv = new_vault(true);
     let v1 = nv.vault.keybag_bytes().to_vec();
     let id = pass_id(&nv.vault);
-    let v2 = nv
-        .vault
-        .change_passcode_unchecked(&id, "FAKE-two", T, &mut Pins::default())
-        .unwrap()
-        .to_vec();
+    nv.vault
+        .write_now(&mut Pins::default(), |v, p| {
+            v.change_passcode_unchecked(&id, "FAKE-two", T, p)
+        })
+        .unwrap();
+    let v2 = nv.vault.keybag_bytes().to_vec();
 
     let mut pins = Pins::default();
     Vault::unlock(&v2, "FAKE-two", &mut pins).unwrap();
@@ -170,10 +169,12 @@ fn rolled_back_keybag_is_refused_and_forks_are_detected() {
 
     // A second, different keybag at sequence 2 (built from the same v1) is a fork.
     let mut other = Vault::unlock(&v1, PASS, &mut Pins::default()).unwrap();
-    let v2b = other
-        .change_passcode_unchecked(&id, "FAKE-two", T, &mut Pins::default())
-        .unwrap()
-        .to_vec();
+    other
+        .write_now(&mut Pins::default(), |v, p| {
+            v.change_passcode_unchecked(&id, "FAKE-two", T, p)
+        })
+        .unwrap();
+    let v2b = other.keybag_bytes().to_vec();
     assert_ne!(v2, v2b);
     assert_eq!(
         Vault::unlock(&v2b, "FAKE-two", &mut pins).unwrap_err(),

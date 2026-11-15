@@ -27,8 +27,8 @@ fn inputs() -> CreateInputs {
         recovery: Zeroizing::new(seq(0x40)),
         wrapper_ids: [seq(0xa0), seq(0xb0), seq(0xc0)],
         nonces: [seq(0x30), seq(0x50), seq(0x60)],
-        now: 1_800_000_000,
         draft: true,
+        now: 1_800_000_000,
         params: KdfParams::RECOMMENDED,
     }
 }

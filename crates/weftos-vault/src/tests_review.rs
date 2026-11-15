@@ -21,7 +21,9 @@ fn h1_pinned_device_refuses_a_pre_rotation_keybag_resigned_with_a_higher_sequenc
     let mut pins = Pins::default();
     Vault::unlock(vault.keybag_bytes(), PASS, &mut pins).unwrap();
     vault
-        .rotate_vk_unchecked(PASS, None, &mut Pins::default())
+        .write_now(&mut Pins::default(), |v, p| {
+            v.rotate_vk_unchecked(PASS, None, p)
+        })
         .unwrap();
     // This device learns of the rotation by unlocking the new keybag (seq 2, generation 2).
     Vault::unlock(vault.keybag_bytes(), PASS, &mut pins).unwrap();
@@ -66,7 +68,9 @@ fn m1_replay_of_the_keybag_from_before_a_rotation_is_refused() {
         ..
     } = new_vault(true);
     let before = vault.keybag_bytes().to_vec();
-    vault.rotate_vk_unchecked(PASS, None, &mut pins).unwrap();
+    vault
+        .write_now(&mut pins, |v, p| v.rotate_vk_unchecked(PASS, None, p))
+        .unwrap();
     assert_eq!(
         Vault::unlock(&before, PASS, &mut pins).unwrap_err(),
         VaultError::GenerationRollback { got: 1, seen: 2 }
@@ -97,7 +101,9 @@ fn m1_replay_of_the_keybag_from_before_remove_wrapper_is_refused() {
         .find(|w| w.kind() == KIND_RECOVERY)
         .unwrap()
         .id;
-    vault.remove_wrapper(&rec, &mut pins).unwrap();
+    vault
+        .write_now(&mut pins, |v, p| v.remove_wrapper(&rec, p))
+        .unwrap();
     assert_eq!(
         Vault::unlock_with_recovery(&before, &recovery_key, &mut pins).unwrap_err(),
         VaultError::Rollback { got: 1, seen: 2 }
@@ -115,7 +121,9 @@ fn m1_replay_of_the_keybag_from_before_change_passcode_is_refused() {
     let before = vault.keybag_bytes().to_vec();
     let id = pass_id(&vault);
     vault
-        .change_passcode_unchecked(&id, "FAKE-new-passcode-0009", T, &mut pins)
+        .write_now(&mut pins, |v, p| {
+            v.change_passcode_unchecked(&id, "FAKE-new-passcode-0009", T, p)
+        })
         .unwrap();
     assert_eq!(
         Vault::unlock(&before, PASS, &mut pins).unwrap_err(),
@@ -133,18 +141,24 @@ fn m1_writes_check_the_pins_and_a_failed_write_does_not_advance_them() {
         ..
     } = new_vault(true);
     let mut stale = Vault::unlock(vault.keybag_bytes(), PASS, &mut Pins::default()).unwrap();
-    vault.add_recovery_wrapper(&mut pins).unwrap();
+    vault
+        .write_now(&mut pins, |v, p| v.add_recovery_wrapper(p))
+        .unwrap();
     // `stale` still holds sequence 1; the device has seen sequence 2.
     let snapshot = pins.clone();
     assert_eq!(
-        stale.add_recovery_wrapper(&mut pins).unwrap_err(),
+        stale
+            .write_now(&mut pins, |v, p| v.add_recovery_wrapper(p))
+            .unwrap_err(),
         VaultError::Rollback { got: 2, seen: 2 }
     );
     assert_eq!(pins.highest, snapshot.highest);
 
     let mut foreign = new_vault(true).pins;
     assert_eq!(
-        vault.add_recovery_wrapper(&mut foreign).unwrap_err(),
+        vault
+            .write_now(&mut foreign, |v, p| v.add_recovery_wrapper(p))
+            .unwrap_err(),
         VaultError::SignerMismatch
     );
 
@@ -156,7 +170,11 @@ fn m1_writes_check_the_pins_and_a_failed_write_does_not_advance_them() {
         .find(|w| w.kind() == crate::keybag::KIND_SIGNSEED)
         .unwrap()
         .id;
-    assert!(vault.remove_wrapper(&seed, &mut pins).is_err());
+    assert!(
+        vault
+            .write_now(&mut pins, |v, p| v.remove_wrapper(&seed, p))
+            .is_err()
+    );
     assert_eq!(pins.highest, snapshot.highest);
 }
 
@@ -174,7 +192,9 @@ fn m2_rotation_refuses_a_below_policy_passcode_wrapper() {
     let id = pass_id(&vault);
     assert_eq!(vault.below_policy_wrappers(), vec![id]);
     assert_eq!(
-        vault.rotate_vk(PASS, None, &mut pins).unwrap_err(),
+        vault
+            .write_now(&mut pins, |v, p| v.rotate_vk(PASS, None, p))
+            .unwrap_err(),
         VaultError::KdfPolicy
     );
     assert_eq!(vault.keybag_bytes(), &before[..]);
@@ -188,11 +208,15 @@ fn m2_rotation_refuses_a_below_policy_passcode_wrapper() {
     };
     floor.check_new_policy().unwrap();
     vault
-        .change_passcode(&id, "FAKE-policy-passcode-0010", floor, &mut pins)
+        .write_now(&mut pins, |v, p| {
+            v.change_passcode(&id, "FAKE-policy-passcode-0010", floor, p)
+        })
         .unwrap();
     assert!(vault.below_policy_wrappers().is_empty());
     let r = vault
-        .rotate_vk("FAKE-policy-passcode-0010", None, &mut pins)
+        .write_now(&mut pins, |v, p| {
+            v.rotate_vk("FAKE-policy-passcode-0010", None, p)
+        })
         .unwrap();
     assert_eq!((r.new_generation, r.passcode_resealed), (2, 1));
     match &vault.keybag().wrapper(&id).unwrap().body {
@@ -211,7 +235,9 @@ fn l1_sequence_exhaustion_is_an_error() {
     let before = vault.keybag_bytes().to_vec();
     let mut pins = Pins::default();
     assert_eq!(
-        vault.add_recovery_wrapper(&mut pins).unwrap_err(),
+        vault
+            .write_now(&mut pins, |v, p| v.add_recovery_wrapper(p))
+            .unwrap_err(),
         VaultError::SequenceExhausted
     );
     assert_eq!(vault.keybag_bytes(), &before[..]);
@@ -314,7 +340,7 @@ fn l4_empty_passcode_is_refused() {
     let id = pass_id(&vault);
     assert_eq!(
         vault
-            .change_passcode_unchecked(&id, "", T, &mut pins)
+            .write_now(&mut pins, |v, p| v.change_passcode_unchecked(&id, "", T, p))
             .unwrap_err(),
         VaultError::PasscodeRejected("empty")
     );
@@ -368,7 +394,9 @@ fn l6_index_payload_generation_must_match_the_blob() {
         source: None,
     }];
     let gen1_payload = vault.encode_index(&entries).unwrap();
-    vault.rotate_vk_unchecked(PASS, None, &mut pins).unwrap();
+    vault
+        .write_now(&mut pins, |v, p| v.rotate_vk_unchecked(PASS, None, p))
+        .unwrap();
     // Sealed now, so the blob is generation 2 while the payload says generation 1.
     let odd = vault.seal_index(&gen1_payload, 2).unwrap();
     assert_eq!(
