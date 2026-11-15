@@ -4,7 +4,7 @@
 
 use crate::follower::verify_entry;
 use crate::overlay::{ObjectBackend, Result, S2Error};
-use crate::share::{CLAIM_TTL_MS, ChangeKind, State, read_manifest};
+use crate::share::{CLAIM_TTL_MS, ChangeKind, State, TreeManifest, read_manifest};
 use crate::share_fetch::RegistryEntry;
 use std::collections::BTreeMap;
 
@@ -144,6 +144,13 @@ pub fn overlaps<B: ObjectBackend>(
         .ok_or_else(|| S2Error::Invalid(format!("{} has no published tree", a.slug)))?;
     let mc = read_manifest(b, &c.bucket)?
         .ok_or_else(|| S2Error::Invalid(format!("{} has no published tree", c.slug)))?;
+    Ok(overlaps_from(&a.slug, &ma, &c.slug, &mc))
+}
+
+/// The comparison half of [`overlaps`], on two manifests already read (and their entries already
+/// cross-checked), for example from a `ManifestCache`. Pure: no backend call.
+pub fn overlaps_from(a_slug: &str, ma: &TreeManifest, c_slug: &str, mc: &TreeManifest) -> OverlapReport {
+    let (a_slug, c_slug) = (a_slug.to_string(), c_slug.to_string());
     let other: BTreeMap<&str, &str> = mc
         .files
         .iter()
@@ -154,7 +161,7 @@ pub fn overlaps<B: ObjectBackend>(
     // (and not deleted on either; that case is below) is a conflict candidate. With no change list
     // on either side (a manifest from before the field existed) every differing path is reported,
     // a superset.
-    let touched = |m: &crate::share::TreeManifest| -> std::collections::BTreeSet<String> {
+    let touched = |m: &TreeManifest| -> std::collections::BTreeSet<String> {
         m.changes
             .iter()
             .filter(|x| x.kind != ChangeKind::Deleted)
@@ -162,7 +169,7 @@ pub fn overlaps<B: ObjectBackend>(
             .collect()
     };
     let exact = !ma.changes.is_empty() && !mc.changes.is_empty();
-    let (ta, tc) = (touched(&ma), touched(&mc));
+    let (ta, tc) = (touched(ma), touched(mc));
     let mut v: Vec<_> = ma
         .files
         .iter()
@@ -170,12 +177,12 @@ pub fn overlaps<B: ObjectBackend>(
         .filter(|f| !exact || (ta.contains(&f.path) && tc.contains(&f.path)))
         .map(|f| Overlap {
             path: f.path.clone(),
-            in_a: a.slug.clone(),
-            in_b: c.slug.clone(),
+            in_a: a_slug.clone(),
+            in_b: c_slug.clone(),
             kind: OverlapKind::BothChanged,
         })
         .collect();
-    for (del, del_slug, chg) in [(&ma, &a.slug, &mc), (&mc, &c.slug, &ma)] {
+    for (del, del_slug, chg) in [(ma, &a_slug, mc), (mc, &c_slug, ma)] {
         for d in del.changes.iter().filter(|x| x.kind == ChangeKind::Deleted) {
             let touched = chg
                 .changes
@@ -184,8 +191,8 @@ pub fn overlaps<B: ObjectBackend>(
             if touched {
                 v.push(Overlap {
                     path: d.path.clone(),
-                    in_a: a.slug.clone(),
-                    in_b: c.slug.clone(),
+                    in_a: a_slug.clone(),
+                    in_b: c_slug.clone(),
                     kind: OverlapKind::ModifyDelete {
                         deleted_in: del_slug.clone(),
                     },
@@ -194,10 +201,10 @@ pub fn overlaps<B: ObjectBackend>(
         }
     }
     v.sort_by(|x, y| x.path.cmp(&y.path));
-    Ok(OverlapReport {
+    OverlapReport {
         same_base: ma.base_commit == mc.base_commit,
         base_a: ma.base_commit.clone(),
         base_b: mc.base_commit.clone(),
         overlaps: v,
-    })
+    }
 }
