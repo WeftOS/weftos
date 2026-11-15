@@ -272,8 +272,9 @@ fn sync_docs_overlaps_claim() {
     // 12 calls: 2 summarize (3 each) + 2 meta GET + 2 manifest reads
     pin(c, [8, 4, 0, 0, 0, 0, 0, 0], "overlaps one pair");
     let (_, c) = r.run("claim", json!({"project": PROJ, "slug": "wt0", "agent": "bob", "host": "m2"}));
-    // meta GET, handoff HEAD + GET, conditional PUT, refresh [2 GET, 1 HEAD, 1 LIST, 2 PUT]: 10 calls
-    pin(c, [4, 2, 1, 2, 1, 0, 0, 0], "claim");
+    // meta GET, manifest HEAD + GET (the claimed head, 6a-1), handoff HEAD + GET, conditional PUT,
+    // refresh [2 GET, 1 HEAD, 1 LIST, 2 PUT]: 12 calls
+    pin(c, [5, 3, 1, 2, 1, 0, 0, 0], "claim");
 }
 
 #[test]

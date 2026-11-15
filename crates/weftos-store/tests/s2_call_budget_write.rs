@@ -65,14 +65,16 @@ fn fetch_tree_bundle_and_repeat() {
 fn claim_and_mark_merged() {
     let b = spy();
     project(&b, 1);
-    // claim_merge: handoff GET with its version (HEAD + GET), conditional write (put_cas)
+    // claim_merge: the published head (manifest HEAD + GET, recorded as the claimed head, 6a-1),
+    // handoff GET with its version (HEAD + GET), conditional write (put_cas)
     let (h, c) = delta(&b, || claim_merge(&b, &bucket("wt0"), &actor("bob"), 9_000).unwrap());
     assert_eq!(h.epoch, 1);
-    assert_eq!(c, [1, 1, 0, 0, 1, 0, 0], "claim_merge");
+    assert_eq!(c, [2, 2, 0, 0, 1, 0, 0], "claim_merge");
     let (_, c) = delta(&b, || refresh(&b, "wt0"));
     assert_eq!(c, [2, 1, 1, 2, 0, 0, 0], "claim refresh");
     let (_, c) = delta(&b, || mark_merged(&b, &bucket("wt0"), &actor("bob"), "done", 9_500).unwrap());
-    assert_eq!(c, [1, 1, 0, 0, 1, 0, 0], "mark_merged");
+    // + manifest HEAD + GET: the merge is fenced on the head that was claimed (6a-1)
+    assert_eq!(c, [2, 2, 0, 0, 1, 0, 0], "mark_merged");
 }
 
 #[test]
