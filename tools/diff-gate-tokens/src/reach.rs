@@ -282,14 +282,13 @@ impl Walk<'_> {
                                 args.len()
                             };
                             match lit(args.first()) {
-                                Some(p) if n == 1 => {
-                                    if !t_here {
-                                        self.refs.push(Ref {
-                                            cands: vec![self.file_dir.join(p)],
-                                            splice: true,
-                                        });
-                                    }
+                                Some(p) if n == 1 && !t_here => {
+                                    self.refs.push(Ref {
+                                        cands: vec![self.file_dir.join(p)],
+                                        splice: true,
+                                    });
                                 }
+                                Some(_) if n == 1 => {}
                                 _ if !t_here => {
                                     self.unknown = Some("include! of a computed path".into());
                                 }
