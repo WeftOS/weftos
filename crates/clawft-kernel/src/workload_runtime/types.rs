@@ -80,6 +80,25 @@ pub enum WorkloadSource {
     /// `infer.*` adapter. Authorised by the operator's request and the
     /// operator-attested model manifest, not by a signed package.
     Inference(Box<InferencePayload>),
+    /// A desktop a bot may work on (D1, D2, D5): authorised by the operator's
+    /// own validated declaration, not a signed package. Adapter: the daemon's
+    /// computer hub.
+    Computer(Box<ComputerPayload>),
+}
+
+/// The spec of a [`WorkloadSource::Computer`] workload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComputerPayload {
+    /// The desktop's machine id on the hub.
+    pub desktop: String,
+    /// `desktop`, `container` or `sandbox`.
+    pub host_kind: String,
+    /// What the bot may do there.
+    pub capabilities: Vec<String>,
+    /// Own (full access) or granted (per-action ask plus allowlist).
+    pub access: crate::workload_kind::ComputerAccess,
+    /// The allowlist of a granted computer.
+    pub allowlist: Option<crate::workload_kind::ComputerAllowlist>,
 }
 
 /// The spec of a [`WorkloadSource::Inference`] workload.
@@ -368,6 +387,13 @@ pub trait WorkloadRuntime: Send + Sync {
     async fn unload(&self, h: InstanceHandle) -> Result<(), RuntimeError>;
     /// Current status.
     async fn status(&self, h: &InstanceHandle) -> InstanceStatus;
+    /// How long ago the instance was last heard from, for adapters whose
+    /// health is a remote heartbeat (`computer`); the kind's `judge` weighs it.
+    /// `None` for adapters that watch a process, and when there is no
+    /// connection to measure.
+    async fn heartbeat_age_ms(&self, _h: &InstanceHandle) -> Option<u64> {
+        None
+    }
     /// Managed or adopted.
     fn control_mode(&self) -> ControlMode;
     /// The file an instance's binary was staged to, when the adapter runs it

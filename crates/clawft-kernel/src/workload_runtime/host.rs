@@ -98,6 +98,8 @@ impl WorkloadHost {
             // `PackageTrust::ProjectCert`: matched only by a permit that
             // names it (the supervisor's, see `project_supervisor_permit`).
             WorkloadSource::Project(_) => ("project_cert", 0.25),
+            // The operator's own declaration of a desktop; nothing runs on the node.
+            WorkloadSource::Computer(_) => ("operator_attested", 0.0),
             // Managed: model weights are operator-attested hash manifests
             // (ADR-101 section 3). Adopted: a server the operator started
             // is only observed, nothing is verified. Cost is the share of a
@@ -153,6 +155,18 @@ impl WorkloadHost {
         self.verdict(action, w, kind, emulated, true)
     }
 
+    /// Ask this host's gate whether `principal` (the requester, not the
+    /// node) may do `action` with `w`. Used before a package-less placement
+    /// so the permit's `principals` bind the controller who asked.
+    pub fn check_principal(
+        &self,
+        principal: &str,
+        action: &str,
+        w: &VerifiedWorkload,
+    ) -> Result<(), RuntimeError> {
+        self.verdict_as(principal, action, w, &w.kind, false, false)
+    }
+
     fn verdict(
         &self,
         action: &str,
@@ -161,11 +175,23 @@ impl WorkloadHost {
         emulated: bool,
         teardown: bool,
     ) -> Result<(), RuntimeError> {
+        self.verdict_as(&self.agent_id, action, w, kind, emulated, teardown)
+    }
+
+    fn verdict_as(
+        &self,
+        agent: &str,
+        action: &str,
+        w: &VerifiedWorkload,
+        kind: &str,
+        emulated: bool,
+        teardown: bool,
+    ) -> Result<(), RuntimeError> {
         let ctx = self.context(w, kind, emulated);
         let d = if teardown {
-            self.gate.check_teardown(&self.agent_id, action, &ctx)
+            self.gate.check_teardown(agent, action, &ctx)
         } else {
-            self.gate.check(&self.agent_id, action, &ctx)
+            self.gate.check(agent, action, &ctx)
         };
         match d {
             GateDecision::Permit { .. } => Ok(()),
@@ -519,5 +545,10 @@ impl WorkloadHost {
     /// Status (not gated: read-only).
     pub async fn status(&self, h: &InstanceHandle) -> InstanceStatus {
         self.runtime.status(h).await
+    }
+
+    /// Heartbeat age of a remote-heartbeat instance (not gated: read-only).
+    pub async fn heartbeat_age_ms(&self, h: &InstanceHandle) -> Option<u64> {
+        self.runtime.heartbeat_age_ms(h).await
     }
 }

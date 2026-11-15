@@ -200,6 +200,36 @@ pub fn project_supervisor_permit() -> WorkloadPermitRule {
     rule
 }
 
+/// The permit that lets the owner's own principals run the `computer` kind
+/// (owner decision 2, 2026-11-15). A computer has no signed package; its
+/// trust is the operator's own declaration, [`PackageTrust::OperatorAttested`],
+/// so the permit asks for exactly that and no more. `owners` is who may place
+/// one: the gate matches it against the request's principal (the signing
+/// controller's node id) and, for the host's own load/start/stop/unload, the
+/// node's own id, so list this node's id among them. An empty `owners` is
+/// refused by the gate's own validation of the permit (it would admit anyone).
+pub fn computer_owner_permit(owners: impl IntoIterator<Item = impl Into<String>>) -> WorkloadPermitRule {
+    let mut rule = WorkloadPermitRule::new(
+        COMPUTER_OWNER_PERMIT_ID,
+        [ACTION_PLACE, ACTION_LOAD, ACTION_START, ACTION_STOP, ACTION_UNLOAD],
+        ["computer"],
+    );
+    rule.description =
+        "the owner's own principals may place and run a computer workload (GBF-003, 2026-11-15)".into();
+    rule.min_package_trust = PackageTrust::OperatorAttested;
+    rule.min_node_tier = NodeTrustTier::Paired;
+    rule.max_network = NetworkPolicy::None;
+    rule.max_resource_cost = 0.0;
+    let mut principals: Vec<String> = owners.into_iter().map(Into::into).collect();
+    principals.sort();
+    principals.dedup();
+    rule.principals = principals;
+    rule
+}
+
+/// Id of [`computer_owner_permit`].
+pub const COMPUTER_OWNER_PERMIT_ID: &str = "COMPUTER-OWNER-PERMIT";
+
 impl WorkloadPermitRule {
     /// Strict permit for `actions` on workloads of `kinds`.
     pub fn new(
@@ -250,6 +280,12 @@ impl WorkloadPermitRule {
             return Err(format!(
                 "permit rule '{}' accepts unsigned packages, so it must name the principals it \
                  applies to (e.g. [\"{CATALOG_PRINCIPAL}\"] for the catalog verbs)",
+                self.id
+            ));
+        }
+        if self.id == COMPUTER_OWNER_PERMIT_ID && self.principals.is_empty() {
+            return Err(format!(
+                "permit rule '{}' must name the owner principals it applies to",
                 self.id
             ));
         }

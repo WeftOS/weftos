@@ -57,6 +57,10 @@ rvf-rpc = ["dep:rvf-wire", "dep:rvf-types"]
 onnx-embeddings = ["clawft-kernel/onnx-embeddings", "clawft-core/onnx-embeddings"]
 # The same embedders on the pure-Rust tract engine (cargo-dist archives, Docker; ADR-132).
 tract-embeddings = ["clawft-kernel/tract-embeddings", "clawft-core/tract-embeddings"]
+# D1 (2026-11-09): the Tapestry computer hub as a daemon service (one per
+# mesh). Off by default: it adds a git dependency (xai-tool-protocol from the
+# WeftOS grok-build fork) that needs the owner's diff-gate approval.
+computer-hub = ["dep:weft-computer-hub"]
 # Stub installers for the `shared.*` services (integration tests only).
 test-support = ["clawft-kernel/test-support"]
 
@@ -84,6 +88,8 @@ weftos-release = { path = "../weftos-release", features = ["store"] }
 clap = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
+# D1: the computer hub library (feature `computer-hub`).
+weft-computer-hub = { path = "../weft-computer-hub", optional = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 serde = { workspace = true }

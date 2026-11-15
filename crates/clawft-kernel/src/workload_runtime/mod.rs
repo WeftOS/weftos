@@ -27,6 +27,7 @@
 pub mod cog_decl;
 pub mod cog_devices;
 pub mod cog_spec;
+pub mod computer;
 pub mod container;
 pub mod container_cmd;
 pub mod container_relay;
@@ -54,6 +55,8 @@ pub mod types;
 mod test_support;
 #[cfg(test)]
 mod tests_cog_decl;
+#[cfg(test)]
+mod tests_computer;
 #[cfg(test)]
 mod tests_container;
 #[cfg(test)]
@@ -90,6 +93,7 @@ mod tests_seed_pin;
 mod tests_seed_transport;
 
 pub use cog_spec::{CogSpec, ConsoleLimits, Resources};
+pub use computer::{COMPUTER_ID, Clock, ComputerRuntime, HeartbeatSource, wall_clock_ms};
 pub use container::{ContainerRuntime, ContainerRuntimeConfig};
 pub use container_cmd::{CommandRunner, Engine, SystemRunner};
 pub use evidence::RunEvidence;
@@ -116,7 +120,7 @@ pub use seed_creds::FileCredentials;
 pub use seed_http::{HttpSeedTransport, SeedCredentials, SeedTransport};
 pub use seed_ops::{SeedBackup, UpgradeOutcome};
 pub use types::{
-    Admission, ControlMode, InferencePayload, InstanceHandle, InstanceState, InstanceStatus,
+    Admission, ComputerPayload, ControlMode, InferencePayload, InstanceHandle, InstanceState, InstanceStatus,
     LinkSecurity, Preemption, ProjectPayload, RunMode, RuntimeError, VerifiedWorkload, WorkloadConfig, WorkloadRuntime,
     WorkloadSource,
 };

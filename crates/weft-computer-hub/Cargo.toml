@@ -1,0 +1,54 @@
+# Library hosted by the WeftOS daemon (`clawft-weave`, feature `computer-hub`;
+# owner decision D1, 2026-11-09: the hub is a service inside the daemon, one per
+# mesh). It carries protocol types derived from the xAI grok-build fork
+# (Apache-2.0) through `xai-tool-protocol`. The `weft-hub` binary stays as a
+# dev tool (serve / mint / keygen against a hub.toml). See
+# docs/tapestry-hub/weft-hub.md.
+#
+# Not a workspace member: own `[workspace]` table and listed in the root
+# `exclude`, the same arrangement as the leaf crates that `clawft-weave` also
+# path-depends on. `scripts/build.sh check|clippy|test weft-computer-hub` runs
+# cargo inside this directory.
+[workspace]
+
+[package]
+name = "weft-computer-hub"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "WeftOS-side computer hub: the WebSocket service Tapestry's workspace server and harness connect through"
+publish = false
+
+[lib]
+name = "weft_hub"
+path = "src/lib.rs"
+
+[[bin]]
+name = "weft-hub"
+path = "src/main.rs"
+
+[dependencies]
+# Wire types only. The fork's xai-computer-hub-core is a client-side
+# Transport/registry/resolver library with no listener, so it is not used.
+xai-tool-protocol = { git = "https://github.com/WeftOS/grok-build", rev = "30302eb1" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "signal"] }
+# No "connect" feature: the hub can accept sockets but cannot dial out.
+tokio-tungstenite = { version = "0.28", default-features = false, features = ["handshake"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.9"
+hmac = "0.12"
+sha2 = "0.10"
+base64 = "0.22"
+uuid = { version = "1", features = ["v4"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tokio-tungstenite = { version = "0.28", features = ["connect"] }
+tempfile = "3"
+
+[profile.release]
+opt-level = 2
+lto = "thin"

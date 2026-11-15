@@ -77,7 +77,9 @@ fn default_csi_port() -> u16 {
 pub struct PlaceBody {
     /// Workload name (cog id).
     pub name: String,
-    /// BLAKE3 of the signed manifest (fetch key).
+    /// BLAKE3 of the signed manifest (fetch key). Absent (empty) only for a
+    /// package-less `computer` order, which carries [`Self::computer`] instead.
+    #[serde(default)]
     pub manifest_hash: String,
     /// Chosen variant (`aarch64-native`).
     pub variant: String,
@@ -89,6 +91,13 @@ pub struct PlaceBody {
     /// Project that placed the workload (ingest bridge destination).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_id: Option<String>,
+    /// The `computer` kind's manifest body (see `ComputerBody`), which names
+    /// the desktop by id. A computer has no signed package, so this replaces
+    /// `manifest_hash`: the order is validated, admitted by the governance
+    /// gate under the requester's principal and loaded by the `computer`
+    /// adapter. Any other kind keeps requiring a signed package.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub computer: Option<Value>,
 }
 
 /// Body of the instance verbs.
@@ -607,12 +616,14 @@ impl WorkloadHostService {
         let list_at_start = self.revocations.get().map(|l| l.generation());
         let b: PlaceBody = serde_json::from_value(req.body.clone())
             .map_err(|e| refuse(RefusalCode::InvalidRequest, format!("place body: {e}")))?;
+        let computer = b.computer.is_some();
         if !valid_token(&b.name, 64)
-            || !crate::workload_pkg::codec::is_lower_hex(&b.manifest_hash, 64)
+            || (!computer && !crate::workload_pkg::codec::is_lower_hex(&b.manifest_hash, 64))
+            || (computer && !b.manifest_hash.is_empty())
         {
             return Err(refuse(
                 RefusalCode::InvalidRequest,
-                "bad name or manifest hash",
+                "bad name or manifest hash (only a computer order is package-less, and it carries no hash)",
             ));
         }
         let route = route_of(&b.variant).to_string();
@@ -622,26 +633,30 @@ impl WorkloadHostService {
                 format!("no {route} adapter on this node for {}", b.variant),
             )
         })?;
-        let peers = fetch.ok_or_else(|| refuse(RefusalCode::Fetch, "no payload source"))?;
-        let pkg = self
-            .exchange
-            .fetch_package_in(peers, &b.manifest_hash, &self.anchors, &self.kinds)
-            .await
-            .map_err(|e| match e {
-                PackageExchangeError::Verify(v) => refuse(RefusalCode::Verify, v.to_string()),
-                other => refuse(RefusalCode::Fetch, other.to_string()),
-            })?;
-        let w =
-            VerifiedWorkload::from_package(&pkg.verified, &StoreSource::new(self.exchange.store()))
+        let (w, licence, package_id) = if let Some(body) = &b.computer {
+            (self.computer_order(&b, body, &route, &host, req)?, None, String::new())
+        } else {
+            let peers = fetch.ok_or_else(|| refuse(RefusalCode::Fetch, "no payload source"))?;
+            let pkg = self
+                .exchange
+                .fetch_package_in(peers, &b.manifest_hash, &self.anchors, &self.kinds)
+                .await
+                .map_err(|e| match e {
+                    PackageExchangeError::Verify(v) => refuse(RefusalCode::Verify, v.to_string()),
+                    other => refuse(RefusalCode::Fetch, other.to_string()),
+                })?;
+            let w = VerifiedWorkload::from_package(&pkg.verified, &StoreSource::new(self.exchange.store()))
                 .map_err(|e| refuse(RefusalCode::Verify, e.to_string()))?;
-        if w.id != b.name {
-            return Err(refuse(
-                RefusalCode::Verify,
-                "package id differs from the placed name",
-            ));
-        }
-        // ADR-106 run gate: before anything of a Cognitum-origin cog is installed.
-        let licence = self.licence_check_place(&pkg.verified, &w, &b.variant, &host, req).await?;
+            if w.id != b.name {
+                return Err(refuse(
+                    RefusalCode::Verify,
+                    "package id differs from the placed name",
+                ));
+            }
+            // ADR-106 run gate: before anything of a Cognitum-origin cog is installed.
+            let licence = self.licence_check_place(&pkg.verified, &w, &b.variant, &host, req).await?;
+            (w, licence, pkg.package_id.clone())
+        };
         if let Some(p) = &b.project_id
             && !crate::cog_ingest::valid_project_id(p)
         {
@@ -734,7 +749,8 @@ impl WorkloadHostService {
         if let Ok(mut d) = self.departed.lock() {
             d.retain(|(i, _)| i != &iid);
         }
-        let continuous = !matches!(b.config.mode, crate::workload_runtime::RunMode::Once);
+        // A computer is watched for as long as it is placed, whatever mode the order named.
+        let continuous = computer || !matches!(b.config.mode, crate::workload_runtime::RunMode::Once);
         let will_start = req.method == method::PLACE && b.start;
         let mut life = super::lifecycle::InstanceLife::new(
             super::lifecycle::LifecycleState::Loaded,
@@ -804,13 +820,13 @@ impl WorkloadHostService {
             json!({
                 "phase": "placed", "node": self.node_id, "requester": req.requester,
                 "decision_id": req.decision_id, "workload": b.name, "variant": b.variant,
-                "runtime": h.runtime, "instance_id": iid, "package_id": pkg.package_id,
+                "runtime": h.runtime, "instance_id": iid, "package_id": package_id,
                 "started": started,
             }),
         );
         Ok(json!({
             "instance_id": iid, "runtime": h.runtime, "variant": b.variant,
-            "package_id": pkg.package_id, "status": status, "node": self.node_id,
+            "package_id": package_id, "status": status, "node": self.node_id,
             "ingest": ingest_state,
             "devices": self.device_row(&iid),
         }))

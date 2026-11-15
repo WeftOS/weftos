@@ -1,0 +1,61 @@
+# Computer-hub configuration (owner decisions D1, D2, 2026-11-09).
+#
+# Hosted by the WeftOS daemon: copy this file to
+#   <runtime dir>/computer-hub/hub.toml
+# (the runtime dir is $WEFTOS_RUNTIME_DIR, default ~/.weftos). The service
+# starts only when that file exists. Minter key files named below are
+# created by the daemon on first start (hex, 32 bytes, mode 0600) when they
+# are missing; relative paths resolve against the file's directory.
+#
+# The `weft-hub` dev binary reads the same format:
+#   weft-hub keygen --out <dir>/keys/<minter>.key   (or let the daemon do it)
+
+[listen]
+# Loopback by default. The hub node is reached by the other desktops over the
+# tailnet: set addr to that interface and allow_non_loopback = true. Pass
+# keys are required either way.
+addr = "127.0.0.1:9490"
+allow_non_loopback = false
+
+[auth]
+# Longest pass-key lifetime the hub accepts (seconds).
+max_ttl_secs = 86400
+# jti values to refuse even though signature and expiry are good. Run-time
+# revocation (`computer.hub.revoke`) is in memory only; put a jti here to keep
+# it across a restart.
+revoked_jti = []
+
+# One minter per first-class desktop. host_kind (desktop | container | sandbox)
+# is assigned here, by the minter; a pass key cannot choose it. A minter's key
+# only serves the machine(s) that name it.
+[[auth.minters]]
+id = "weftos-macbook"
+host_kind = "desktop"
+key_file = "keys/weftos-macbook.key"
+
+[[auth.minters]]
+id = "weftos-xpc"
+host_kind = "desktop"
+key_file = "keys/weftos-xpc.key"
+
+[[auth.minters]]
+id = "weftos-photo-gallery"
+host_kind = "desktop"
+key_file = "keys/weftos-photo-gallery.key"
+
+# First-class desktops (D2): the list is data, not code. Add a machine here
+# and a minter above; nothing else changes.
+[[machines]]
+id = "macbook"
+description = "the owner's MacBook"
+minter = "weftos-macbook"
+
+[[machines]]
+id = "xpc"
+description = "aepod-xpc (RTX 4070, Windows + WSL)"
+minter = "weftos-xpc"
+
+[[machines]]
+id = "photo-gallery"
+description = "photo-gallery (the mesh hub node, tailnet)"
+minter = "weftos-photo-gallery"

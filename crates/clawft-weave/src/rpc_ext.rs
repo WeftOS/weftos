@@ -532,6 +532,27 @@ const ROUTES: &[ExtRoute] = &[
         capability: Capability::Read,
         handler: crate::agent_directory_rpc::handle,
     },
+    // D1 (2026-11-09): the Tapestry computer hub, hosted by this daemon. Status is a
+    // read; minting a pass key (the credential for reaching a desktop) and revoking one
+    // are Admin.
+    #[cfg(feature = "computer-hub")]
+    ExtRoute {
+        prefix: "computer.hub.status",
+        capability: Capability::Read,
+        handler: crate::computer_hub_svc::handle,
+    },
+    #[cfg(feature = "computer-hub")]
+    ExtRoute {
+        prefix: "computer.hub.mint",
+        capability: Capability::Admin,
+        handler: crate::computer_hub_svc::handle,
+    },
+    #[cfg(feature = "computer-hub")]
+    ExtRoute {
+        prefix: "computer.hub.revoke",
+        capability: Capability::Admin,
+        handler: crate::computer_hub_svc::handle,
+    },
     ExtRoute {
         prefix: "dashboard.token.rotate",
         capability: Capability::Admin,
@@ -914,6 +935,27 @@ const ROUTES: &[ExtRoute] = &[
         prefix: "agent.directory",
         capability: Capability::Read,
         handler: crate::agent_directory_rpc::handle,
+    },
+    // D1 (2026-11-09): the Tapestry computer hub, hosted by this daemon. Status is a
+    // read; minting a pass key (the credential for reaching a desktop) and revoking one
+    // are Admin.
+    #[cfg(feature = "computer-hub")]
+    ExtRoute {
+        prefix: "computer.hub.status",
+        capability: Capability::Read,
+        handler: crate::computer_hub_svc::handle,
+    },
+    #[cfg(feature = "computer-hub")]
+    ExtRoute {
+        prefix: "computer.hub.mint",
+        capability: Capability::Admin,
+        handler: crate::computer_hub_svc::handle,
+    },
+    #[cfg(feature = "computer-hub")]
+    ExtRoute {
+        prefix: "computer.hub.revoke",
+        capability: Capability::Admin,
+        handler: crate::computer_hub_svc::handle,
     },
     ExtRoute {
         prefix: "dashboard.token.rotate",

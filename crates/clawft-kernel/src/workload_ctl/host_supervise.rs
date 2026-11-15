@@ -51,7 +51,7 @@ pub(super) fn enter(life: &mut InstanceLife, to: LifecycleState) {
     let _ = life.transition(to, now_ms());
 }
 
-fn sample(st: &InstanceStatus, continuous: bool) -> HealthSample {
+fn sample(st: &InstanceStatus, continuous: bool, heartbeat_age_ms: Option<u64>) -> HealthSample {
     HealthSample {
         state: match st.state {
             InstanceState::Loaded => SampleState::Loaded,
@@ -62,6 +62,7 @@ fn sample(st: &InstanceStatus, continuous: bool) -> HealthSample {
         },
         exit_code: st.exit_code,
         continuous,
+        heartbeat_age_ms,
     }
 }
 
@@ -149,6 +150,10 @@ impl WorkloadHostService {
         out
     }
 
+    fn restarts(&self, kind: &str) -> bool {
+        self.kinds.get(kind).is_none_or(|k| k.restart_on_unhealthy())
+    }
+
     fn health_spec(&self, kind: &str) -> HealthSpec {
         self.kinds.get(kind).map_or_else(HealthSpec::default, |k| k.health())
     }
@@ -223,7 +228,8 @@ impl WorkloadHostService {
         }
         for d in due {
             let st = d.host.status(&d.handle).await;
-            let verdict = self.judge(&d.kind, &sample(&st, d.continuous));
+            let age = d.host.heartbeat_age_ms(&d.handle).await;
+            let verdict = self.judge(&d.kind, &sample(&st, d.continuous, age));
             if let Some(s) = self.apply_verdict(&d.id, &d.name, &d.kind, &d.handle, &d.host, verdict, now_ms).await {
                 out.extend(s);
             }
@@ -243,6 +249,8 @@ impl WorkloadHostService {
         now_ms: u64,
     ) -> Option<Vec<Supervised>> {
         let limit = self.health_spec(kind).miss_limit.max(1);
+        let restarts = self.restarts(kind);
+        let mut alert: Option<String> = None;
         let mut steps: Vec<Supervised> = Vec::new();
         let step = |from: LifecycleState, to: LifecycleState, reason: String| Supervised {
             instance_id: id.to_string(),
@@ -284,11 +292,16 @@ impl WorkloadHostService {
                     }
                     if from == LifecycleState::Running {
                         enter(&mut p.life, LifecycleState::Unhealthy);
-                        steps.push(step(
-                            from,
-                            LifecycleState::Unhealthy,
-                            format!("{} missed heartbeats: {why}", p.life.misses),
-                        ));
+                        let reason = format!("{} missed heartbeats: {why}", p.life.misses);
+                        if !restarts {
+                            alert = Some(reason.clone());
+                        }
+                        steps.push(step(from, LifecycleState::Unhealthy, reason));
+                    }
+                    if !restarts {
+                        // Alert, never restart: stay Unhealthy until the
+                        // verdict turns Healthy again.
+                        return self.finish_steps(steps, alert);
                     }
                     match p.life.restart_decision(&self.restart, now_ms) {
                         RestartDecision::Wait { .. } => restart_attempt = None,
@@ -348,8 +361,20 @@ impl WorkloadHostService {
                 }
             }
         }
+        self.finish_steps(steps, alert)
+    }
+
+    /// Chain each step; a step that raised an alert is chained as one
+    /// (`phase: alert`, the named reason) and logged at warn.
+    fn finish_steps(&self, steps: Vec<Supervised>, alert: Option<String>) -> Option<Vec<Supervised>> {
         for s in &steps {
-            self.chain_life(s, &self.node_id, json!({ "phase": "supervise" }));
+            match (&alert, s.to) {
+                (Some(why), LifecycleState::Unhealthy) => {
+                    tracing::warn!(instance = %s.instance_id, workload = %s.workload, reason = %why, "instance alert: unhealthy, not restarted");
+                    self.chain_life(s, &self.node_id, json!({ "phase": "alert", "alert": true, "restart": "never" }));
+                }
+                _ => self.chain_life(s, &self.node_id, json!({ "phase": "supervise" })),
+            }
         }
         (!steps.is_empty()).then_some(steps)
     }

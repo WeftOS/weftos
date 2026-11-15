@@ -53,6 +53,10 @@ pub struct HealthSample {
     /// The instance is meant to run until stopped (listener or interval
     /// mode); false for a one-shot run that ends by itself.
     pub continuous: bool,
+    /// How long ago the instance was last heard from, for kinds whose health
+    /// is a remote heartbeat (`computer`); `None` for process-backed kinds
+    /// and when the adapter has no connection to measure.
+    pub heartbeat_age_ms: Option<u64>,
 }
 
 /// A kind's verdict on one poll.

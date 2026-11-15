@@ -213,6 +213,15 @@ mod infer_hardening_tests;
 pub mod agent_sources_rpc;
 /// Agent directory with an etag: `agent.directory`.
 pub mod agent_directory_rpc;
+/// D1: the Tapestry computer hub as a daemon service (`computer.hub.*`).
+#[cfg(feature = "computer-hub")]
+pub mod computer_hub_svc;
+#[cfg(all(test, feature = "computer-hub"))]
+mod computer_hub_svc_tests;
+#[cfg(all(test, feature = "computer-hub", feature = "placement", unix))]
+mod computer_hub_heartbeat_tests;
+#[cfg(all(test, feature = "computer-hub", feature = "placement", unix))]
+mod computer_place_e2e_tests;
 #[cfg(all(test, feature = "placement", unix))]
 mod agent_sources_mesh_tests;
 pub mod expose_rpc;
@@ -343,6 +352,9 @@ pub mod workload_rpc;
 /// Placement control plane RPCs (ADR-099, mesh-placement-12).
 #[cfg(all(feature = "placement", unix))]
 pub mod workload_place_rpc;
+/// `workload.place|explain {computer: ...}`: validate a desktop declaration (D1, D2, D5).
+#[cfg(all(feature = "placement", unix))]
+pub mod workload_computer;
 /// Operator policy files for placement (mesh-placement-12).
 #[cfg(all(feature = "placement", unix))]
 pub mod workload_place_policy;
