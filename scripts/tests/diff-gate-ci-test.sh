@@ -65,6 +65,7 @@ commit() { # MSG SHELL: run SHELL in $W, commit, print the sha
 
 # ci_run NAME WANT EVENT BRANCH BEFORE SHA [PR_BASE]: clone $R the way actions/checkout does
 # (all branches as origin/*, detached at SHA) and run the extracted step there.
+# PRREF sets the pull request's base branch name; DEFBR the repository default branch (master).
 ci_run() {
     local name="$1" want="$2" ev="$3" br="$4" before="$5" sha="$6" prbase="${7:-}" c out rc
     c="$(mktemp -d "$WORK/ci.XXXXXX")"
@@ -73,7 +74,7 @@ ci_run() {
     out="$(cd "$c/repo" && env -u GITHUB_STEP_SUMMARY -u DIFF_GATE_OWNER_APPROVED -u DIFF_GATE_BASE -u DIFF_GATE_HEAD \
         PATH="$WORK/bin:$PATH" RUNNER_TEMP="$c/tmp" GH_TOKEN="" REPO="fixture/none" OWNER_VAR="" \
         EVENT_NAME="$ev" PUSH_REF="refs/heads/$br" PUSH_BEFORE="$before" PR_BASE_SHA="$prbase" PR_NUMBER="1" \
-        DEFAULT_BRANCH="master" bash "$STEP" 2>&1)"; rc=$?
+        PR_BASE_REF="${PRREF:-}" DEFAULT_BRANCH="${DEFBR:-master}" bash "$STEP" 2>&1)"; rc=$?
     check_result "$name" "$want" "$rc" "$out"
     cd "$W" || exit 2
 }
@@ -178,14 +179,50 @@ fresh pr
 git checkout -q -b feat/p
 F1="$(commit evil "printf '%s\n' \"\$EVIL_GATE\" >scripts/diff-gate.sh; echo \"\$UNSAFE\" >>src/lib.rs")"
 git push -q origin feat/p 2>/dev/null
-EXPECT="ci-workflow unsafe" GREP="pull request base" \
+EXPECT="ci-workflow unsafe" GREP="pull request base" PRREF=target-0.9 \
     ci_run "pull_request: base copy runs, FAILS" 1 pull_request feat/p "" "$F1" "$T0"
 fresh pr_old_base
 git checkout -q -b feat/o "$M0"
 F1="$(commit evil "mkdir -p scripts; printf '%s\n' \"\$EVIL_GATE\" >scripts/diff-gate.sh; echo \"\$UNSAFE\" >>src/lib.rs")"
 git push -q origin feat/o 2>/dev/null
-EXPECT="ci-workflow unsafe" GREP="trusted gate from $(git rev-parse --short "$T0")" \
+EXPECT="ci-workflow unsafe" GREP="trusted gate from $(git rev-parse --short "$T0")" PRREF=master \
     ci_run "pull_request: base without a gate uses another protected branch's, FAILS" 1 pull_request feat/o "" "$F1" "$M0"
+
+# 9. G4 (2026-11-15): a pull request into an UNPROTECTED branch is judged against the newest
+#    protected tip, not that branch's own gate (wasm-browser.yml runs on PRs into any branch).
+fresh pr_unprotected_base
+git checkout -q -b feat/base
+B1="$(commit evil "printf '%s\n' \"\$EVIL_GATE\" >scripts/diff-gate.sh")"
+git checkout -q -b feat/p2
+P1="$(commit unsafe "echo \"\$UNSAFE\" >>src/lib.rs")"
+git push -q origin feat/base feat/p2 2>/dev/null
+EXPECT="ci-workflow unsafe" GREP="pull request into unprotected feat/base" PRREF=feat/base \
+    ci_run "pull_request into an unprotected branch: its weakened gate is not trusted, FAILS" 1 pull_request feat/p2 "" "$P1" "$B1"
+EXPECT="ci-workflow unsafe" GREP="pull request into unprotected" \
+    ci_run "pull_request with no base branch name is treated as unprotected, FAILS" 1 pull_request feat/p2 "" "$P1" "$B1"
+grep -q 'uses: ./.github/workflows/diff-gate.yml' "$ROOT/.github/workflows/wasm-browser.yml" \
+    && pass=$((pass + 1)) && echo "  ok    wasm-browser.yml (PRs into any branch) runs this reusable gate step" \
+    || { fail=$((fail + 1)); echo "  FAIL  wasm-browser.yml does not call diff-gate.yml"; }
+
+# 10. G4: `main` does not exist in this repo, so it is not protected unless it is the default
+#     branch; whoever creates it first does not become a trust root.
+fresh self_made_main
+git checkout -q -b main
+N1="$(commit evil "printf '%s\n' \"\$EVIL_GATE\" >scripts/diff-gate.sh")"
+git push -q origin main 2>/dev/null
+N2="$(commit unsafe "echo \"\$UNSAFE\" >>src/lib.rs")"
+git push -q origin main 2>/dev/null
+EXPECT="ci-workflow unsafe" GREP="push to unprotected main" \
+    ci_run "main created by a push: a later push is not judged by its gate, FAILS" 1 push main "$N1" "$N2"
+git checkout -q -b feat/m && N3="$(commit unsafe2 "echo \"\$UNSAFE\" >>src/lib.rs")" && git push -q origin feat/m 2>/dev/null
+EXPECT="ci-workflow unsafe" GREP="pull request into unprotected main" PRREF=main \
+    ci_run "pull_request into a self-made main: its gate is not trusted, FAILS" 1 pull_request feat/m "" "$N3" "$N2"
+fresh main_default
+git checkout -q -b main && git push -q origin main 2>/dev/null && N0="$(git rev-parse HEAD)"
+N1="$(commit unsafe "echo \"\$UNSAFE\" >>src/lib.rs")"
+git push -q origin main 2>/dev/null
+EXPECT="unsafe" GREP="previous tip of protected main" DEFBR=main \
+    ci_run "main as the repository default branch is protected" 1 push main "$N0" "$N1"
 
 cd "$ROOT" || exit 2
 echo "diff-gate CI step fixtures: $pass passed, $fail failed"
