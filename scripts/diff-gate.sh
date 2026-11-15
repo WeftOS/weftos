@@ -74,7 +74,9 @@ TMP="$(mktemp -d)" || die "mktemp failed"
 trap 'rm -rf "$TMP"' EXIT
 
 # ── Approvals and ledger parsing ─────────────────────────────────────
-# parse_approvals: TOML on stdin -> rule <TAB> glob <TAB> pattern <TAB> reason <TAB> approved_by <TAB> line
+# parse_approvals: TOML on stdin -> rule <TAB> glob <TAB> pattern <TAB> reason <TAB> approved_by <TAB> line <TAB> blob
+# blob (optional) is a git blob id, 40 or 64 hex digits, lower-cased. Any other key is a setup
+# error, so a misspelt `blob` can never leave a row unscoped by accident.
 parse_approvals() {
     awk -v sq="'" '
     function val(s,   v) {
@@ -88,16 +90,20 @@ parse_approvals() {
         if (!open) return
         if (r == "" || p == "" || pt == "" || re == "" || ab == "") {
             print "diff-gate: malformed approval entry near line " start " (needs rule, path, pattern, reason, approved_by)" > "/dev/stderr"; bad = 1
-        } else print r "\t" p "\t" pt "\t" re "\t" ab "\t" start
+        } else if (hasb && (b !~ /^[0-9a-f]+$/ || (length(b) != 40 && length(b) != 64))) {
+            print "diff-gate: malformed approval entry near line " start " (blob must be a 40 or 64 hex digit git blob id)" > "/dev/stderr"; bad = 1
+        } else print r "\t" p "\t" pt "\t" re "\t" ab "\t" start "\t" b
         open = 0
     }
     /^[ \t]*#/ || /^[ \t]*$/ { next }
-    /^[ \t]*\[\[approval\]\]/ { flush(); open = 1; start = NR; r = p = pt = re = ab = ""; next }
+    /^[ \t]*\[\[approval\]\]/ { flush(); open = 1; start = NR; r = p = pt = re = ab = b = ""; hasb = 0; next }
+    /^[ \t]*blob[ \t]*=/ { b = tolower(val($0)); hasb = 1; next }
     /^[ \t]*rule[ \t]*=/ { r = val($0); next }
     /^[ \t]*path[ \t]*=/ { p = val($0); next }
     /^[ \t]*pattern[ \t]*=/ { pt = val($0); next }
     /^[ \t]*reason[ \t]*=/ { re = val($0); next }
     /^[ \t]*approved_by[ \t]*=/ { ab = val($0); next }
+    { print "diff-gate: unexpected line " NR " in approvals (keys: rule, path, pattern, blob, reason, approved_by)" > "/dev/stderr"; bad = 1 }
     END { flush(); exit bad }
     '
 }
@@ -134,11 +140,13 @@ sha256_stdin() {
 
 # hash_rows: parse_approvals output on stdin -> sha256 <TAB> line <TAB> rule <TAB> glob <TAB> pattern
 # The canonical row text is "rule=R\npath=P\npattern=X\nreason=Y\napproved_by=Z\n" over the
-# parsed values, so quoting style and key order do not change the hash; any value change does.
+# parsed values, plus "blob=B\n" when the row has a blob, so quoting style and key order do not
+# change the hash; any value change does. Rows without a blob hash as they did before blobs.
 hash_rows() {
-    local r g pt re ab ln h
-    while IFS="$(printf '\t')" read -r r g pt re ab ln; do
-        h="$(printf 'rule=%s\npath=%s\npattern=%s\nreason=%s\napproved_by=%s\n' "$r" "$g" "$pt" "$re" "$ab" | sha256_stdin)" || return 1
+    local r g pt re ab ln b h
+    while IFS="$(printf '\t')" read -r r g pt re ab ln b; do
+        h="$( { printf 'rule=%s\npath=%s\npattern=%s\nreason=%s\napproved_by=%s\n' "$r" "$g" "$pt" "$re" "$ab"
+                [ -z "$b" ] || printf 'blob=%s\n' "$b"; } | sha256_stdin)" || return 1
         printf '%s\t%s\t%s\t%s\t%s\n' "$h" "$ln" "$r" "$g" "$pt"
     done
 }
@@ -188,23 +196,34 @@ HEAD_SHA="$(git rev-parse "$HEAD_REF^{commit}")"
 GITC=(git -c core.quotePath=false -c color.ui=false -c diff.noprefix=false -c diff.mnemonicPrefix=false)
 COMMON=(--no-renames --no-ext-diff --no-textconv --no-relative --ignore-submodules=none)
 DIFF_OPTS=("${COMMON[@]}" -U0 --inter-hunk-context=0 --no-color --text --src-prefix=a/ --dst-prefix=b/ --submodule=short)
-RAW_OPTS=("${COMMON[@]}" --raw -z)
+RAW_OPTS=("${COMMON[@]}" --raw -z --full-index --no-abbrev)
 
-# add_entry <status> <oldmode> <newmode> <path>: file list for path rules; the patch must carry
-# one "diff --git" header per entry, two for a type change.
+# add_entry <status> <oldmode> <newmode> <path> <blob> [nohdr]: file list for path rules; the
+# patch must carry one "diff --git" header per entry, two for a type change. blob is the
+# post-change git blob id (all zeros for a deletion); approval rows with `blob` compare it.
 add_entry() {
     case "$4" in *[[:cntrl:]]*) die "path with a control character in the diff (refused)";; esac
-    printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" >>"$TMP/files"
-    [ -n "${5:-}" ] && return 0
+    printf '%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5" >>"$TMP/files"
+    [ -n "${6:-}" ] && return 0
     case "$1" in D|A|M) echo "$4" >>"$TMP/hdrs" ;; T) printf '%s\n%s\n' "$4" "$4" >>"$TMP/hdrs" ;; *) die "unexpected diff status '$1' for $4" ;; esac
 }
+# wt_blob <path>: blob id of the working-tree bytes, the content a local build reads: no clean
+# filter or eol conversion, and a symlink's target string, not the file it points to.
+wt_blob() {
+    if [ -L "$1" ]; then printf '%s' "$(readlink "$1")" | git hash-object --stdin
+    elif [ -f "$1" ]; then git hash-object --no-filters -- "$1"
+    fi
+}
 read_raw() { # git diff --raw -z output on stdin
-    local meta path
+    local meta path blob
     while IFS= read -r -d '' meta; do
         IFS= read -r -d '' path || die "truncated --raw diff"
         set -- $meta
         [ $# -eq 5 ] || die "unexpected --raw line: $meta"
-        add_entry "$5" "${1#:}" "$2" "$path"
+        blob="$4"
+        # against the working tree git prints zeros for a modified file: hash what is on disk
+        if [ "$WORKTREE" = 1 ] && [ "$5" != D ] && [ "$2" != 160000 ]; then blob="$(wt_blob "$path")"; fi
+        add_entry "$5" "${1#:}" "$2" "$path" "$blob"
     done
 }
 : >"$TMP/files"; : >"$TMP/hdrs"
@@ -214,9 +233,9 @@ if [ "$WORKTREE" = 1 ]; then
     "${GITC[@]}" diff "${DIFF_OPTS[@]}" "$BASE" -- >"$TMP/diff" || die "git diff failed"
     git ls-files -z -o --exclude-standard >"$TMP/untracked" || die "git ls-files failed"
     while IFS= read -r -d '' f; do
-        if [ -d "$f" ]; then add_entry A 000000 160000 "${f%/}" nohdr; continue; fi
+        if [ -d "$f" ]; then add_entry A 000000 160000 "${f%/}" "" nohdr; continue; fi
         mode=100644; [ -L "$f" ] && mode=120000
-        add_entry A 000000 "$mode" "$f"
+        add_entry A 000000 "$mode" "$f" "$(wt_blob "$f")"
         "${GITC[@]}" diff --no-index "${DIFF_OPTS[@]}" -- /dev/null "$f" >>"$TMP/diff"
         [ $? -le 1 ] || die "git diff --no-index failed for $f"
     done <"$TMP/untracked"
@@ -588,21 +607,39 @@ fi
 # Read from the head commit (the working tree only in --worktree mode), the same source the
 # approvals-change check below compares, so a checkout that differs from --head cannot
 # approve anything.
-# Emits: rule <TAB> glob <TAB> pattern <TAB> literal(0|1) <TAB> reason <TAB> approved_by
+# Emits: rule <TAB> glob <TAB> pattern <TAB> literal(0|1) <TAB> reason <TAB> approved_by <TAB> blob <TAB> line
 head_src="$HEAD_SHA"; [ "$WORKTREE" = 1 ] && head_src=WORKTREE
 show_at "$BASE" "$APPROVALS" >"$TMP/appr.base.toml"
 show_at "$head_src" "$APPROVALS" >"$TMP/appr.head.toml"
 : >"$TMP/approvals"
 if [ -s "$TMP/appr.head.toml" ]; then
     parse_approvals <"$TMP/appr.head.toml" >"$TMP/approvals.raw" || { echo "diff-gate: cannot use $APPROVALS" >&2; exit 2; }
-    while IFS="$(printf '\t')" read -r r g pt re ab _; do
+    while IFS="$(printf '\t')" read -r r g pt re ab ln b; do
         lit=0
         if [ "$pt" != "*" ]; then
             printf '' | grep -Eq -e "$pt" 2>/dev/null; [ $? -eq 2 ] && lit=1
         fi
-        printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$r" "$g" "$pt" "$lit" "$re" "$ab"
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$r" "$g" "$pt" "$lit" "$re" "$ab" "$b" "$ln"
     done <"$TMP/approvals.raw" >"$TMP/approvals"
 fi
+
+# Unscoped rows. A path-rule finding (ci-workflow, build-script for a new build.rs,
+# toolchain-config, special-file, gitattributes-change) carries fixed text, so a row for it
+# without `blob` approves every future change to the matching files, whatever its pattern. A
+# "*" row without `blob` for any other rule approves every finding of that rule in the path.
+# Both still work; each is named on every run so it is not forgotten.
+awk -F'\t' '
+BEGIN { n = split("file changed|file deleted or moved away|file deleted|symlink added or changed|submodule or nested repository added or changed|new build.rs", fx, "|") }
+$7 != "" { next }
+{
+    pathrule = ($1 ~ /^(ci-workflow|build-script|toolchain-config|special-file|gitattributes-change)$/)
+    hit = ($3 == "*")
+    if (pathrule) for (i = 1; i <= n && !hit; i++) hit = (index(fx[i], $3) > 0 || ($4 == 0 && fx[i] ~ $3))
+    if (!hit) next
+    if (pathrule) printf "diff-gate: WARNING: unscoped approval row (approvals line %s): rule=%s path=%s has no blob, so it approves EVERY future change to that path\n", $8, $1, $2
+    else printf "diff-gate: WARNING: unscoped approval row (approvals line %s): rule=%s path=%s pattern \"*\" has no blob, so it approves every %s finding there\n", $8, $1, $2, $1
+}' "$TMP/approvals" >"$TMP/unscoped" || die "approvals scan failed"
+[ -s "$TMP/unscoped" ] && cat "$TMP/unscoped" >&2
 
 # ── approvals-change: approvals rows and the owner ledger ────────────
 # Findings here carry a 5th field: the decision id that clears an added row.
@@ -638,7 +675,7 @@ fi
 # the line (a keyword, or one path expression such as std::net::TcpListener::bind) is approved
 # only by an approval match that overlaps one of its tokens, so a row cannot approve a second
 # occurrence elsewhere on the same line. Other findings match the whole reported text.
-awk -F'\t' -v owner="${DIFF_GATE_OWNER_APPROVED:-0}" -v apf="$TMP/approvals" '
+awk -F'\t' -v owner="${DIFF_GATE_OWNER_APPROVED:-0}" -v apf="$TMP/approvals" -v flist="$TMP/files" '
 function g2r(g,   r, i, c, n) {
     r = "^"; n = length(g)
     for (i = 1; i <= n; i++) {
@@ -672,7 +709,13 @@ function covers(i, T, s, e,   rest, off, p, a, b) { # does a match of row i over
     }
     return 0
 }
-FILENAME == apf { na++; ar[na] = $1; ag[na] = g2r($2); ap[na] = $3; al[na] = $4; aw[na] = $5; ab[na] = $6; next }
+function bok(i, path) { return (abl[i] == "" || ((path in fb) && fb[path] == abl[i])) } # blob scope
+function why(i) { return ab[i] ": " aw[i] (abl[i] != "" ? " (blob " substr(abl[i], 1, 12) ")" : (us[i] ? " [UNSCOPED row: no blob]" : "")) }
+FILENAME == apf {
+    na++; ar[na] = $1; ag[na] = g2r($2); ap[na] = $3; al[na] = $4; aw[na] = $5; ab[na] = $6; abl[na] = $7
+    us[na] = ($7 == "" && ($3 == "*" || $1 ~ /^(ci-workflow|build-script|toolchain-config|special-file|gitattributes-change)$/)); next
+}
+FILENAME == flist { split($0, f, "\t"); fb[f[4]] = tolower(f[5]); next }
 {
     status = "FAIL"; detail = ""
     if ($1 == "approvals-change") {
@@ -684,27 +727,27 @@ FILENAME == apf { na++; ar[na] = $1; ag[na] = g2r($2); ap[na] = $3; al[na] = $4;
         for (gi = 1; gi <= ng; gi++) {
             nt = split(groups[gi], toks, ";"); hit = 0
             for (i = 1; i <= na && !hit; i++) {
-                if (ar[i] != $1 || $2 !~ ag[i]) continue
+                if (ar[i] != $1 || $2 !~ ag[i] || !bok(i, $2)) continue
                 for (ti = 1; ti <= nt && !hit; ti++) { split(toks[ti], se, "-"); if (covers(i, $7, se[1] + 0, se[2] + 0)) hit = i }
             }
             if (hit) { if (!first) first = hit } else { open++; if (!col) { split(toks[1], se, "-"); col = se[1] } }
         }
-        if (!open) { status = "approved"; detail = ab[first] ": " aw[first] }
+        if (!open) { status = "approved"; detail = why(first) }
         else if (first) detail = open " of " ng " occurrences on the line not approved (first at column " col ")"
     } else {
         # Field 7, when present, is the text rows match: for Cargo.toml findings the entry line
         # itself (comment stripped), never the "new entry in [...]:" wording the gate adds.
         mt = ($7 != "" ? $7 : $4)
         for (i = 1; i <= na; i++) {
-            if (ar[i] != $1 || $2 !~ ag[i]) continue
+            if (ar[i] != $1 || $2 !~ ag[i] || !bok(i, $2)) continue
             if (ap[i] == "*" || index(mt, ap[i]) > 0 || (al[i] == 0 && mt ~ ap[i])) {
-                status = "approved"; detail = ab[i] ": " aw[i]; break
+                status = "approved"; detail = why(i); break
             }
         }
     }
     print status "\t" $1 "\t" $2 "\t" $3 "\t" $4 "\t" detail
 }
-' "$TMP/approvals" "$TMP/findings" >"$TMP/classified.u" || die "classification failed"
+' "$TMP/approvals" "$TMP/files" "$TMP/findings" >"$TMP/classified.u" || die "classification failed"
 sort -t"$(printf '\t')" -k1,1 -k2,2 -k3,3 -k4,4n "$TMP/classified.u" >"$TMP/classified" || die "sort failed"
 
 # ── Report ───────────────────────────────────────────────────────────
@@ -717,6 +760,7 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     {
         echo "### diff-gate"
         echo "Base \`$base_label\`, head \`$(git rev-parse --short "$HEAD_SHA")\`, $nfiles file(s) changed: **$nfail failed**, $napp approved."
+        if [ -s "$TMP/unscoped" ]; then echo; sed 's/^diff-gate: /- /' "$TMP/unscoped"; fi
         if [ -s "$TMP/classified" ]; then
             echo; echo "| Status | Rule | Location | Added line | Note |"; echo "|---|---|---|---|---|"
             awk -F'\t' '{ t = $5; gsub(/\|/, "\\|", t); d = $6; gsub(/\|/, "\\|", d)
