@@ -445,7 +445,16 @@ header (R3-A4).
   [dependencies]: evil (as Cargo reads it: git+https://evil/)`); rows match that text.
 - **Not from Cargo.** `cargo metadata` does not report `[patch]`, `[replace]` or
   `[workspace.dependencies]`; those stay with the TOML reader alone (`new-dep`, `cargo-unparsed`).
-- **Cost.** See [Tests](#tests) for the measured runtime.
+- **Cost** (PG, 2026-11-15, real helper, other jobs running). Two typical merges that touch
+  Cargo.toml: 0f43585da (22 files, 2 manifests) 5.1 s before, 10.5 s after; 63b9ce52d (35 files,
+  7 manifests) 4.4 s before, 10.1 s after. A traced run puts most of the extra time in
+  writing the manifest copies (one `git cat-file` per Cargo.toml, both sides, about 1.6 s), the
+  two cargo runs and reading their JSON (about 1.0 s), the placeholder tree (0.5 s) and the
+  listing (0.3 s). A diff that adds, deletes or retypes no `.rs` file and changes no manifest,
+  config or sensitive file runs no cargo at all; only the listing (well under a second). The
+  whole range 0fb580a9b..fc77db077 (3,456 commits, 6,298 files): 795 s before, 812 s after.
+  The manifests are copied as raw blobs on purpose: `git archive` would be faster but applies
+  `.gitattributes` (`export-ignore`, `export-subst`).
 
 ### How Cargo.toml is read
 
@@ -710,6 +719,25 @@ to a directory outside the checkout is accepted. RV-D1: rows without `blob` whos
 `'^.*$'`, `".+"`, `"(.*)"`, `"."` or `"(a|[^a])+"` are named as unscoped and their findings
 labelled `[UNSCOPED row: no blob]`; `"^"` is named for `new-dep`, not for `unsafe` (which it
 cannot approve); controls for a narrow regex row and a `".*"` row with `blob`.
+
+Section 14 (`scripts/tests/diff-gate-test-review3.sh`, round 3) pins every round 3 escape as a
+check now that the gate meets the spec: the five header, metadata-rename and multi-line-string
+moves of a `build` or `proc-macro` key, `build = false` deleted and a manifest added next to an
+existing `build.rs`, `crate-type = ["proc-macro"]`, a BOM before `[dependencies]`, `links` with
+and without a build script, an edit to the target of a symlinked Cargo.toml; the reference
+forms (multi-line `include!`, a split `mod`, a deleted cfg above it, escaped `#[path]` and
+`[[bin]]` paths, a NUL byte in the declaring file, a case-different `#[path]`, a symlinked
+module file, an `export-ignore` attribute on the declaring file); broad rows (`" "`, `"[^a]"`,
+`"[^<]"`, `"e"`); `nix::spawn::posix_spawnp`; doc attributes built with `concat!` or set in a
+one-line `cfg_attr` (real helper); and a row removed on the base tip, which no longer approves
+an older branch (with the owner-flag control). The token helper's own tests
+(`tools/diff-gate-tokens`, `cargo test`) cover each doc attribute form, `nix::spawn`, and the
+module walk (test cfgs, split and multi-line forms, escapes, case, aliases, `cfg_attr` paths,
+nesting, computed includes, symlinks).
+
+`NEEDS_REACH=1` before a `case_run` marks a case that expects a name-exempt file to stay
+exempt. Only the real helper's module walk can establish that, so under the stub the case
+instead checks that the gate fails closed (`sensitive-crate`, "is not treated as test-only").
 
 `DIFF_GATE_TEST_TMP` puts the fixture repos on another disk (the default is `target/`).
 `DIFF_GATE_TEST_FILTER=<ERE>` runs only the `case_run` fixtures whose name matches.
