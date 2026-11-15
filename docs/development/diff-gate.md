@@ -346,7 +346,12 @@ matching path, whatever its `pattern`: the `ci-workflow pr-gates.yml "*"` row ap
 appending `run: curl ... | sh` to that workflow. Such rows, and `"*"` rows of any rule without
 `blob`, still work for backward compatibility, but every run prints a
 `WARNING: unscoped approval row` line for each (stderr and the CI step summary), and a finding
-they approve is reported with `[UNSCOPED row: no blob]`. `blob` works on any rule, so it can also
+they approve is reported with `[UNSCOPED row: no blob]`. Since 2026-11-15 (RV-D1) a regex
+pattern that matches any text is treated like `"*"`: `".*"`, `"^.*$"`, `".+"`, `"(.*)"`, `"."`
+and the like, found by asking the pattern (as an awk regex, the way the gate matches it) whether
+it matches each of a fixed, varied set of single characters. For `unsafe`, `net`, `process` and
+`ffi`, which are approved per token, the match must be at least one character long, so `"^"`
+approves none of their findings and is not named there; for the other rules it is. `blob` works on any rule, so it can also
 pin a content row to one reviewed version of its file.
 
 `blob` is part of the row's ledger hash (see [Owner ledger](#owner-ledger)), so a ledgered row
@@ -594,7 +599,10 @@ controls that `target/`, `node_modules/` and `.embuild/` contents, an ignored `.
 and ignored files in commit mode are not. RV-C1: a cache under a parent symlinked into the
 checkout (not created yet), a `tokens-<tree>` directory symlinked into it, a cached helper that
 is a symlink and a `..` in the part of the cache path that does not exist are refused; a symlink
-to a directory outside the checkout is accepted.
+to a directory outside the checkout is accepted. RV-D1: rows without `blob` whose pattern is
+`'^.*$'`, `".+"`, `"(.*)"`, `"."` or `"(a|[^a])+"` are named as unscoped and their findings
+labelled `[UNSCOPED row: no blob]`; `"^"` is named for `new-dep`, not for `unsafe` (which it
+cannot approve); controls for a narrow regex row and a `".*"` row with `blob`.
 
 `DIFF_GATE_TEST_TMP` puts the fixture repos on another disk (the default is `target/`).
 `DIFF_GATE_TEST_FILTER=<ERE>` runs only the `case_run` fixtures whose name matches.

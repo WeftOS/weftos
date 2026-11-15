@@ -134,7 +134,7 @@ path = "src/**"
 pattern = ".*"
 reason = "fixture"
 approved_by = "owner"'
-KNOWN_GAP=RV-D1 GREP="unscoped approval row" case_run "rv-d: a match-anything regex row without blob is named as unscoped" 0 \
+GREP="unscoped approval row" case_run "rv-d: a match-anything regex row without blob is named as unscoped" 0 \
     'printf "%s\n" "$APPROVE_DOT" >'$A 'echo "fn f() { unsafe { g() } }" >>src/lib.rs'
 case_run "rv-d: content row with blob approves that file version" 0 \
     'appr unsafe src/lib.rs "$(hobj "pub fn a() {}

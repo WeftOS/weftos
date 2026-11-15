@@ -1307,21 +1307,37 @@ if [ -s "$TMP/appr.head.toml" ]; then
     done <"$TMP/approvals.raw" >"$TMP/approvals"
 fi
 
+# matchall(re, rule): does the regex approve every finding of that rule, the way "*" does?
+# (RV-D1: ".*", "^.*$", ".+", "(.*)", "." ...). It is asked of a fixed, varied set of single
+# characters; a pattern that matches every one of them matches any non-empty text, and no
+# finding text is empty. unsafe/net/process/ffi findings are approved per token, by a match of
+# at least one character, so for those an empty match ("^", "x*") does not count; other rules
+# (include too: a Cargo target path finding is matched as text) take any match. awk regexes, as
+# the classification below uses.
+MATCHALL_AWK='
+function matchall(re, rule,   n, i, pr, need) {
+    need = (rule ~ /^(unsafe|net|process|ffi)$/)
+    n = split("a x q Z 0 _ - # { } ; = ( ) [ ] : / . ~ <", pr, " ")
+    pr[++n] = " "; pr[++n] = "\t"; pr[++n] = "\""; pr[++n] = "\\"
+    for (i = 1; i <= n; i++) if (!match(pr[i], re) || (need && RLENGTH < 1)) return 0
+    return 1
+}'
 # Unscoped rows. A path-rule finding (ci-workflow, build-script for a new build.rs,
 # toolchain-config, special-file, gitattributes-change) carries fixed text, so a row for it
 # without `blob` approves every future change to the matching files, whatever its pattern. A
 # "*" row without `blob` for any other rule approves every finding of that rule in the path.
 # Both still work; each is named on every run so it is not forgotten.
-awk -F'\t' '
+awk -F'\t' "$MATCHALL_AWK"'
 BEGIN { n = split("file changed|file deleted or moved away|file deleted|symlink added or changed|submodule or nested repository added or changed|new build.rs", fx, "|") }
 $7 != "" { next }
 {
     pathrule = ($1 ~ /^(ci-workflow|build-script|toolchain-config|special-file|gitattributes-change)$/)
-    hit = ($3 == "*")
+    hit = ($3 == "*" || ($4 == 0 && matchall($3, $1)))
     if (pathrule) for (i = 1; i <= n && !hit; i++) hit = (index(fx[i], $3) > 0 || ($4 == 0 && fx[i] ~ $3))
     if (!hit) next
     if (pathrule) printf "diff-gate: WARNING: unscoped approval row (approvals line %s): rule=%s path=%s has no blob, so it approves EVERY future change to that path\n", $8, $1, $2
-    else printf "diff-gate: WARNING: unscoped approval row (approvals line %s): rule=%s path=%s pattern \"*\" has no blob, so it approves every %s finding there\n", $8, $1, $2, $1
+    else if ($3 == "*") printf "diff-gate: WARNING: unscoped approval row (approvals line %s): rule=%s path=%s pattern \"*\" has no blob, so it approves every %s finding there\n", $8, $1, $2, $1
+    else printf "diff-gate: WARNING: unscoped approval row (approvals line %s): rule=%s path=%s pattern \"%s\" matches any text and has no blob, so it approves every %s finding there, like \"*\"\n", $8, $1, $2, $3, $1
 }' "$TMP/approvals" >"$TMP/unscoped" || die "approvals scan failed"
 [ -s "$TMP/unscoped" ] && cat "$TMP/unscoped" >&2
 
@@ -1362,7 +1378,7 @@ fi
 # the line (a keyword, or one path expression such as std::net::TcpListener::bind) is approved
 # only by an approval match that overlaps one of its tokens, so a row cannot approve a second
 # occurrence elsewhere on the same line. Other findings match the whole reported text.
-awk -F'\t' -v owner="${DIFF_GATE_OWNER_APPROVED:-0}" -v apf="$TMP/approvals" -v flist="$TMP/files" "$G2R_AWK"'
+awk -F'\t' -v owner="${DIFF_GATE_OWNER_APPROVED:-0}" -v apf="$TMP/approvals" -v flist="$TMP/files" "$G2R_AWK$MATCHALL_AWK"'
 function covers(i, T, s, e,   rest, off, p, a, b) { # does a match of row i overlap T[s..e]?
     if (ap[i] == "*") return 1
     rest = T; off = 0
@@ -1385,7 +1401,7 @@ function bok(i, path) { return (abl[i] == "" || ((path in fb) && fb[path] == abl
 function why(i) { return ab[i] ": " aw[i] (abl[i] != "" ? " (blob " substr(abl[i], 1, 12) ")" : (us[i] ? " [UNSCOPED row: no blob]" : "")) }
 FILENAME == apf {
     na++; ar[na] = $1; ag[na] = g2r($2); ap[na] = $3; al[na] = $4; aw[na] = $5; ab[na] = $6; abl[na] = $7
-    us[na] = ($7 == "" && ($3 == "*" || $1 ~ /^(ci-workflow|build-script|toolchain-config|special-file|gitattributes-change)$/)); next
+    us[na] = ($7 == "" && ($3 == "*" || ($4 == 0 && matchall($3, $1)) || $1 ~ /^(ci-workflow|build-script|toolchain-config|special-file|gitattributes-change)$/)); next
 }
 FILENAME == flist { split($0, f, "\t"); fb[f[4]] = tolower(f[5]); next }
 {

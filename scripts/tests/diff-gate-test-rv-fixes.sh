@@ -195,3 +195,36 @@ c1_case "fix-c1: a .. in the part of the cache path that does not exist yet" 1 "
     'C1CACHE="$WORK/c1-none/../c1-none2"'
 c1_case "fix-c1: control, a symlink to a directory outside the checkout is accepted" 1 "cargo not found" \
     'mkdir -p "$WORK/c1-out" && ln -s "$WORK/c1-out" "$WORK/c1-outlink" && C1CACHE="$WORK/c1-outlink"'
+
+# ── RV-D1: a match-anything regex row is named as unscoped, like "*" ──
+d1_row() { printf '[[approval]]\nrule = "%s"\npath = "%s"\npattern = %s\nreason = "fixture"\napproved_by = "owner"\n' "${2:-unsafe}" "${3:-src/**}" "$1"; }
+export -f d1_row
+for p in "'^.*\$'" '".+"' '"(.*)"' '"."' '"(a|[^a])+"'; do
+    GREP="matches any text and has no blob" case_run "fix-d1: pattern $p without blob is unscoped" 0 \
+        "d1_row \"\$(printf %s '$p')\" >$A" 'echo "fn f() { unsafe { g() } }" >>src/lib.rs'
+done
+GREP="matches any text and has no blob" case_run "fix-d1: pattern \"^\" for a text-matched rule (new-dep) is unscoped" 0 \
+    'd1_row "\"^\"" new-dep Cargo.toml >'$A 'printf "evil = \"1\"\n" >>Cargo.toml'
+d="$WORK/fix_d1_caret" && fixture_repo "$d" && d1_row '"^"' >$A && git add -A && git commit -qm base && base="$(git rev-parse HEAD)"
+echo "fn f() { unsafe { g() } }" >>src/lib.rs && git add -A && git commit -qm change
+out="$(DIFF_GATE_BASE="$base" "$GATE" 2>&1)"; rc=$?
+echo "$out" | grep -q "unscoped approval row" && rc="warned"
+EXPECT="unsafe" check_result "fix-d1: control, \"^\" approves no unsafe token, so it is not unscoped there" 1 "$rc" "$out"
+cd "$ROOT" || exit 2
+GREP="[UNSCOPED row: no blob]" case_run "fix-d1: a finding approved by a .* row is labelled unscoped" 0 \
+    'd1_row "\".*\"" >'$A 'echo "fn f() { unsafe { g() } }" >>src/lib.rs'
+d="$WORK/fix_d1_narrow" && fixture_repo "$d" && d1_row "'unsafe \\{ g'" >$A && git add -A && git commit -qm base && base="$(git rev-parse HEAD)"
+echo "fn f() { unsafe { g() } }" >>src/lib.rs && git add -A && git commit -qm change
+out="$(DIFF_GATE_BASE="$base" "$GATE" 2>&1)"; rc=$?
+echo "$out" | grep -q "unscoped approval row" && rc="warned"
+check_result "fix-d1: control, a narrow regex row is not named as unscoped" 0 "$rc" "$out"
+cd "$ROOT" || exit 2
+d="$WORK/fix_d1_blob" && fixture_repo "$d" && git add -A && git commit -qm base0
+echo "fn f() { unsafe { g() } }" >>src/lib.rs && b="$(git hash-object src/lib.rs)" && git checkout -q src/lib.rs
+printf '[[approval]]\nrule = "unsafe"\npath = "src/lib.rs"\npattern = ".*"\nblob = "%s"\nreason = "fixture"\napproved_by = "owner"\n' "$b" >$A
+git add -A && git commit -qm base && base="$(git rev-parse HEAD)"
+echo "fn f() { unsafe { g() } }" >>src/lib.rs && git add -A && git commit -qm change
+out="$(DIFF_GATE_BASE="$base" "$GATE" 2>&1)"; rc=$?
+echo "$out" | grep -q "unscoped approval row" && rc="warned"
+check_result "fix-d1: control, a .* row with blob is scoped (no warning)" 0 "$rc" "$out"
+cd "$ROOT" || exit 2
