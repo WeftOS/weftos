@@ -55,6 +55,16 @@ pub fn leftovers(entries: &[RegistryEntry], now_ms: u64, p: &LeftoverPolicy) -> 
         .iter()
         .filter_map(|e| {
             let idle = now_ms.saturating_sub(e.updated_ms);
+            // Invariant (WO-069 6a-2): an entry in state `Orphan` is always reported as `Orphan`,
+            // whatever its writer stamp says. The orphan verdict and its age come from the daemon
+            // (`orphaned_at_ms`, its own clock), not from `updated_ms`, so a writer stamp far ahead
+            // must not hide it behind `FutureTimestamp`. Checked before the skew test for that reason.
+            if e.state == State::Orphan {
+                // an orphan stays visible until gc retires it; its age counts from when it was marked
+                // (an `orphaned_at_ms` ahead of this clock gives age 0, never a wrap)
+                let since = e.orphan.as_ref().map_or(e.updated_ms, |o| o.orphaned_at_ms);
+                return Some(Leftover { entry: e.clone(), idle_ms: now_ms.saturating_sub(since), why: Why::Orphan });
+            }
             if e.updated_ms > now_ms.saturating_add(p.skew_ms)
                 && !matches!(e.state, State::Merged | State::Archived)
             {
@@ -63,11 +73,6 @@ pub fn leftovers(entries: &[RegistryEntry], now_ms: u64, p: &LeftoverPolicy) -> 
                     idle_ms: 0,
                     why: Why::FutureTimestamp,
                 });
-            }
-            if e.state == State::Orphan {
-                // an orphan stays visible until gc retires it; its age counts from when it was marked
-                let since = e.orphan.as_ref().map_or(e.updated_ms, |o| o.orphaned_at_ms);
-                return Some(Leftover { entry: e.clone(), idle_ms: now_ms.saturating_sub(since), why: Why::Orphan });
             }
             let why = match e.state {
                 State::Merged | State::Archived if idle >= p.unclaimed_ms => Why::StuckCleanup,

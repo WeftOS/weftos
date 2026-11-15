@@ -27,7 +27,6 @@ fn a_merge_is_refused_when_the_head_changed_under_the_claim() {
 }
 
 #[test]
-#[ignore = "FINDING 6a-2: an orphan whose entry is stamped far ahead is reported as FutureTimestamp, not Orphan"]
 fn an_orphan_stamped_ahead_is_still_reported_as_an_orphan() {
     let be = MemBackend::new();
     let env = Env::new(&be, None);
