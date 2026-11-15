@@ -138,10 +138,11 @@ cargo_live() { # <label> <test target> <extra env...>
 }
 
 lib_drills() {
-    echo "== library drills on the real RustFS (1a, 2l, 3a, 3b, 3c)"
+    echo "== library drills on the real RustFS (1a, 2l, 3a, 3b, 3c, W1, W2)"
     local bundle=""; [ -f "$WORK/fetch-f/.wt-branch.bundle" ] && bundle="WEFTOS_DRILL_BUNDLE=$WORK/fetch-f/.wt-branch.bundle"   # a real git bundle from d1, when d1 ran in this run
     cargo_live drills-1a-2l s2_drills_live "WEFTOS_STORE_TEST_RUSTFS_ENV=$WORK/live.env" ${bundle:+"$bundle"}
     cargo_live drills-3 s2_drills_fail "WEFTOS_STORE_TEST_RUSTFS_ENV=$WORK/live.env"
+    cargo_live drills-window s2_drills_window "WEFTOS_STORE_TEST_RUSTFS_ENV=$WORK/live.env"
 }
 
 scale_drills() {
