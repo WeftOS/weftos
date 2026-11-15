@@ -10,13 +10,13 @@ usage: wo069-gate-item1-two-machines.sh --follower=library|daemon [--second-host
 Gate item 1: publish, poll, search, sync-docs, browse, fetch and claim with two principals on two machines; a follower sees a publish
 within one poll interval. Run wo069-gate-remote-rustfs.sh up and mint-keys first (the store lives on the second host).
 
-  --follower=library  NEEDS NO OWNER DECISION. The Mac runs the writer daemon (writer key) and a follower daemon (read-only key).
-                      The second host runs no weaver and no daemon: it runs a raw SigV4 probe (bash and curl only, fed over ssh
-                      stdin, read-only key) that polls the registry digest every poll interval on ITS clock, so the second
-                      clock sees every publish, and that attempts the eight write operations (all must be 403). Optionally,
-                      WO069_GATE_TEST_TARGET=<weftos-store test target> builds and runs a follower-half library test on the host in
-                      the CI container (see the runbook, item 1: that test file does not exist yet). Not covered: a claim made BY
-                      the second machine (it needs a daemon there); the claim is made on the Mac and recorded as NOT RUN here.
+  --follower=library  NEEDS NO OWNER DECISION. The Mac runs the writer half (the weftos-store test s2_follower_half, writer_half, with
+                      the writer key: it publishes a synthetic tree and refreshes the registry entry and digest as the daemon does)
+                      and, for the daemon-path verbs, a writer and a follower daemon. The second host runs NO weaver and NO daemon: it
+                      runs the same test binary built for Linux x86-64 in the CI container (follower_half, read-only key, inside the CI
+                      image under rootless podman): poll (digest, then --full), older-writer verdict, search, sync-docs, browse, fetch,
+                      and the eight refused writes, on ITS clock. It also runs the raw SigV4 probe (bash and curl, fed over ssh stdin) as
+                      a cross-check. Not covered: a claim made BY the second machine (it needs a daemon there); recorded as NOT RUN.
   --follower=daemon   The second host runs a follower daemon (read-only key) and a merger daemon (writer-key copy) in rootless
                       podman, and does follow, search, sync-docs, browse, fetch and the claim itself. REFUSES unless
                       WO069_OWNER_GO_Q3=1 (owner question 3: a store-capable weaver on aepod-xpc).
@@ -27,8 +27,10 @@ within one poll interval. Run wo069-gate-remote-rustfs.sh up and mint-keys first
 
 Environment: WO069_GATE_WRITER_ENV and WO069_GATE_FOLLOWER_ENV (0600 env files from mint-keys; required), WEFTOS_E2E_WEAVER (this
 branch's weaver, default target/debug/weaver), WO069_GATE_REMOTE_DIR (default ~/ci-jobs/wo069-gate-rfs), WO069_GATE_PROJECT (a project
-ULID; default a random one), WO069_GATE_TEST_TARGET, WO069_GATE_REMOTE_WEAVER and WO069_GATE_REMOTE_SRC (daemon mode: the Linux weaver
-and the ci-push source dir on the host), KEEP=1 (keep the work dir). Results: lines RESULT|item1|step|PASS/FAIL|ms|detail (paste them
+ULID; default a random one), WO069_GATE_FH_LINUX_BIN (library mode: the Linux x86-64 s2_follower_half binary built in CI, on the Mac; see
+the runbook, item 1), WO069_GATE_FH_BIN (library mode: a prebuilt Mac s2_follower_half binary; default: built here with a targeted cargo
+test --no-run), WO069_GATE_FH_IMAGE (the CI image the follower half runs in on the host), WO069_GATE_REMOTE_WEAVER and
+WO069_GATE_REMOTE_SRC (daemon mode: the Linux weaver and the ci-push source dir on the host), KEEP=1 (keep the work dir). Results: lines RESULT|item1|step|PASS/FAIL|ms|detail (paste them
 into the runbook's table). Credentials are used only by file path and are never printed.
 EOF
 }
@@ -111,42 +113,102 @@ step "grants: writer write, follower read, merger write on the project store" 'P
    && gx writer "$WEAVER" store grant "$PN" agent:follower read && gx writer "$WEAVER" store grant "$PN" agent:merger write'
 
 # --- 2: publish and the poll trials against the second host's clock
+SLUG=feat-fh                                   # the worktree the library halves publish (the daemon verbs below use feat--gate)
+HR=${RDIR/#\~/\$HOME}                          # the remote shell expands $HOME; a ~ inside a -v argument is not expanded
+FHIMG=${WO069_GATE_FH_IMAGE:-localhost/tapestry/build:1.95-ci-wasm}
+fh_follower_cmd() { # <expect head> <wait ms> <poll ms>: the follower half on the second host, in the CI image, read-only key, state kept in $RDIR
+    printf 'podman run --rm --pull=never --network host --userns=keep-id -e WEFTOS_FH_FOLLOWER_ENV=/rfs/follower.env -e WEFTOS_FH_PROJECT_BUCKET=%s -e WEFTOS_FH_SLUG=%s -e WEFTOS_FH_STATE=/rfs/fh-state.json -e WEFTOS_FH_EXPECT_HEAD=%s -e WEFTOS_FH_WAIT_MS=%s -e WEFTOS_FH_POLL_MS=%s -v %s:/rfs -w /rfs %s /rfs/s2_follower_half follower_half --exact --ignored --nocapture --test-threads=1' \
+        "$PB" "$SLUG" "$1" "$2" "$3" "$HR" "$FHIMG"
+}
+fh_writer() { # <round>: the writer half on the Mac with the writer key (round 1 also creates the two buckets)
+    env WEFTOS_FH_WRITER_ENV="$WENV" WEFTOS_FH_PROJECT_BUCKET="$PB" WEFTOS_FH_SLUG="$SLUG" WEFTOS_FH_ROUND="$1" WEFTOS_FH_CREATE=1 "$MACBIN" writer_half --exact --ignored --nocapture --test-threads=1
+}
+fh_pub() { sed -n 's/^FH|writer|round=[0-9]*|published_ms=\([0-9]*\)|.*/\1/p' "$1" | tail -1; }   # <writer log>: the local clock (ms) the registry refresh finished at
+PUBLISHED=()
 if [ "$MODE" = library ]; then
-    gate_note "second host: { cat wo069-gate-lib.sh; echo gate_probe_poll ...; } | ssh $HOST bash -s   (read-only key, poll every $IVAL ms, prints SEEN <remote epoch ms> <body sha256>)"
+    LBIN=${WO069_GATE_FH_LINUX_BIN:-}; MACBIN=${WO069_GATE_FH_BIN:-}
+    if [ "$GATE_DRY" = 1 ]; then
+        LBIN=${LBIN:-"<the Linux x86-64 s2_follower_half binary built in CI>"}
+        [ -n "$MACBIN" ] || { gate_run cargo test -p weftos-store --features rustfs --release --test s2_follower_half --no-run --message-format=json; MACBIN="<the Mac s2_follower_half binary>"; }
+    else
+        [ -s "$LBIN" ] || gate_die "set WO069_GATE_FH_LINUX_BIN to the Linux x86-64 s2_follower_half binary built in CI (runbook, item 1, 'Build the follower half')"
+        if [ -z "$MACBIN" ]; then
+            MACBIN=$(cd "$GATE_REPO" && cargo test -p weftos-store --features rustfs --release --test s2_follower_half --no-run --message-format=json 2>"$WORK/build.err" \
+                | jq -r 'select(.reason == "compiler-artifact" and .target.name == "s2_follower_half" and .executable != null) | .executable' | tail -1)
+        fi
+        [ -x "$MACBIN" ] || gate_die "no Mac s2_follower_half binary (see $WORK/build.err)"
+    fi
+    gate_note "copy the Linux binary to the host; the follower env is already there (mint-keys, 0600)"
+    gate_run scp -o BatchMode=yes "$LBIN" "$HOST:${RDIR#\~/}/s2_follower_half"
+    rx "chmod 755 $RDIR/s2_follower_half && rm -f $RDIR/fh-state.json"
+    gate_note "round 1 on the Mac: writer_half creates the project and worktree buckets and publishes head h1"
+    if [ "$GATE_DRY" = 1 ]; then gate_run env WEFTOS_FH_WRITER_ENV="$WENV" WEFTOS_FH_PROJECT_BUCKET="$PB" WEFTOS_FH_SLUG="$SLUG" WEFTOS_FH_ROUND=1 WEFTOS_FH_CREATE=1 "$MACBIN" writer_half --exact --ignored --nocapture --test-threads=1
+    else step "writer half round 1 on the Mac (buckets, publish h1, registry and digest)" 'fh_writer 1 | tee "$WORK/fh-w-1.log"'; fi
+    gate_note "follower half, first look (no wait): poll (digest and --full), older-writer verdict, search, sync-docs, browse, fetch tree and bundle, the eight refused writes"
+    if [ "$GATE_DRY" = 1 ]; then rx "$(fh_follower_cmd h1 0 2000)"
+    else
+        "${SSH[@]}" "$HOST" "$(fh_follower_cmd h1 0 2000)" >"$WORK/fh-f-1.log" 2>&1 && res "follower-half-on-second-host" PASS 0 "$(grep -c '|PASS|' "$WORK/fh-f-1.log") FH lines PASS (poll, poll-full, older-writer, search, sync-docs, browse, fetch, refused-1..8); see $WORK/fh-f-1.log" \
+            || { FAILS=$((FAILS + 1)); res "follower-half-on-second-host" FAIL 0 "$(grep -E 'panicked|FH\|' "$WORK/fh-f-1.log" | tail -3 | tr '\n' ' ')"; }
+        WBH=$(sed -n 's/^FH|writer|names|project_bucket=[^|]*|worktree_bucket=\([^|]*\)|.*/\1/p' "$WORK/fh-w-1.log" | tail -1)
+    fi
+    gate_note "second host: { cat wo069-gate-lib.sh; echo gate_probe_poll ...; } | ssh $HOST bash -s   (raw cross-check: read-only key, poll every $IVAL ms, prints SEEN <remote epoch ms> <body sha256>)"
     if [ "$GATE_DRY" = 1 ]; then gate_run "${SSH[@]}" "$HOST" "bash -s" '<' "$GATE_REPO/scripts/store/wo069-gate-lib.sh"
     else
         { cat "$GATE_REPO/scripts/store/wo069-gate-lib.sh"; printf 'gate_probe_poll %s/follower.env %s worktrees/_digest.json %s %s\n' "$RDIR" "$PB" "$IVAL" "$(( (TRIALS + 2) * (IVAL + 5000) ))"; } \
             | "${SSH[@]}" "$HOST" bash -s >"$WORK/seen.log" 2>"$WORK/seen.err" &
         PROBE=$!
-        sleep 3   # the first SEEN line is the digest as it is now (or an empty body): the baseline
+        sleep 3   # the first SEEN line is the digest as it is now (head h1): the baseline
     fi
+    # the trials: the follower half starts first on the host and polls every $IVAL ms on ITS clock; the writer half publishes at a different phase of that cycle each trial
+    FLATS=""; FOK=0; FPOLLS=""
+    for i in $(seq 2 $((TRIALS + 1))); do
+        if [ "$GATE_DRY" = 1 ]; then
+            gate_note "trial $i (head h$i): start the follower half on the host (below, in the background), sleep 2 s plus a phase of the poll cycle, run writer_half round $i on the Mac; latency = seen_ms - offset - published_ms"
+            gate_run "${SSH[@]}" "$HOST" "$(fh_follower_cmd "h$i" $((IVAL + 5000)) "$IVAL")"
+            gate_run env WEFTOS_FH_WRITER_ENV="$WENV" WEFTOS_FH_PROJECT_BUCKET="$PB" WEFTOS_FH_SLUG="$SLUG" WEFTOS_FH_ROUND="$i" "$MACBIN" writer_half --exact --ignored --nocapture --test-threads=1
+            break
+        fi
+        "${SSH[@]}" "$HOST" "$(fh_follower_cmd "h$i" $((IVAL + 5000)) "$IVAL")" >"$WORK/fh-f-$i.log" 2>&1 & FP=$!
+        sleep "$(awk "BEGIN{print 2 + ($i * 0.37 * $IVAL / 1000) % ($IVAL / 1000)}")"
+        fh_writer "$i" >"$WORK/fh-w-$i.log" 2>&1 || { FAILS=$((FAILS + 1)); res "writer-half-round-$i" FAIL 0 "$(tail -2 "$WORK/fh-w-$i.log" | tr '\n' ' ')"; }
+        PUBLISHED+=("$(fh_pub "$WORK/fh-w-$i.log")")
+        wait "$FP" || { FAILS=$((FAILS + 1)); res "follower-half-round-$i" FAIL 0 "$(grep -E 'panicked|expected head' "$WORK/fh-f-$i.log" | tail -2 | tr '\n' ' ')"; }
+        seen=$(sed -n 's/^FH|follower|poll|seen_ms=\([0-9]*\)|.*/\1/p' "$WORK/fh-f-$i.log" | tail -1)
+        if [ -n "$seen" ] && [ -n "${PUBLISHED[-1]}" ]; then
+            l=$(( seen - OFF - PUBLISHED[-1] )); FLATS="$FLATS $l"; [ "$l" -le "$((IVAL + 2000))" ] && FOK=$((FOK + 1))
+            FPOLLS="$FPOLLS $(sed -n 's/^FH|follower|poll|PASS|[0-9]* ms|digest path: \([0-9]*\) poll.*/\1/p' "$WORK/fh-f-$i.log" | tail -1)"
+        else FLATS="$FLATS MISSED"; fi
+    done
+    if [ "$GATE_DRY" = 0 ]; then
+        if [ "$FOK" = "$TRIALS" ]; then res "publish-seen-within-one-poll" PASS 0 "$FOK/$TRIALS within interval+2s on the second host's clock; latencies ms (offset ${OFF} +- $((RTT / 2))):$FLATS; polls per trial:$FPOLLS"
+        else FAILS=$((FAILS + 1)); res "publish-seen-within-one-poll" FAIL 0 "$FOK/$TRIALS; latencies ms:$FLATS"; fi
+        read -r OFF2 RTT2 < <(gate_clock_offset "$HOST"); res clocks-after PASS 0 "remote minus local ${OFF2} ms after the trials (before: ${OFF} ms); drift $(( OFF2 - OFF )) ms, rtt ${RTT2} ms"
+        wait "$PROBE" || true
+        # SEEN lines after the baseline map one to one onto the publishes (rounds 2 to N+1)
+        mapfile -t SEEN < <(awk '$1 == "SEEN" {print $2}' "$WORK/seen.log" | tail -n +2)
+        ok=0; lats=""
+        for i in "${!PUBLISHED[@]}"; do
+            if [ -n "${SEEN[$i]:-}" ]; then l=$(( SEEN[i] - OFF - PUBLISHED[i] )); lats="$lats $l"; [ "$l" -le "$((IVAL + 2000))" ] && ok=$((ok + 1)); else lats="$lats MISSED"; fi
+        done
+        if [ "$ok" = "$TRIALS" ]; then res "raw-probe-cross-check" PASS 0 "$ok/$TRIALS within interval+2s; latencies ms (raw digest GET, probe clock corrected by offset):$lats"
+        else FAILS=$((FAILS + 1)); res "raw-probe-cross-check" FAIL 0 "$ok/$TRIALS; latencies ms:$lats"; fi
+        { cat "$GATE_REPO/scripts/store/wo069-gate-lib.sh"; printf 'gate_probe_refuse %s/follower.env %s %s\n' "$RDIR" "$PB" "$WBH"; } | "${SSH[@]}" "$HOST" bash -s >"$WORK/refuse.log" 2>&1 \
+            && res "second-host-eight-writes-refused" PASS 0 "$(tail -1 "$WORK/refuse.log")" || { FAILS=$((FAILS + 1)); res "second-host-eight-writes-refused" FAIL 0 "$(tail -2 "$WORK/refuse.log" | tr '\n' ' ')"; }
+    else
+        gate_note "after the trials: re-measure the clock offset (drift), then on the host gate_probe_refuse (raw eight writes, all 403; the library follower half already refused its own eight)"
+    fi
+    # the daemon-path verbs below need one real sweep of feat--gate
+    step "writer: edit, commit, sweep feat--gate (for the daemon-path follower verbs)" 'printf "v%s\n" "$TRIALS" >>"$WORK/wt/docs/gate.md"; git -C "$WORK/wt" add -A; git -C "$WORK/wt" commit -qm "edit $TRIALS"; ( cd "$WORK/wt" && gx writer "$S" sweep --only feat--gate )'
 else
     gate_note "second host (daemon mode): podman run follower and merger containers from \$WO069_GATE_REMOTE_WEAVER; see the runbook, item 1, daemon mode"
     rx "podman run -d --name wo069-gate-fnode --pull=never --network host --userns=keep-id -e HOME=/node/home -e WEFTOS_RUNTIME_DIR=/node/run -e WEFTOS_AGENT=follower -e WEFTOS_STORE_RUSTFS_ENV=/node/follower.env -e WTS_WEAVER=/rfs/weaver -e WTS_PROJECT=$PROJECT -v $RDIR/node:/node -v $RDIR/follower.env:/node/follower.env:ro -v \$WO069_GATE_REMOTE_WEAVER:/rfs/weaver:ro -v \$WO069_GATE_REMOTE_SRC:/src:ro -w /src localhost/tapestry/build:1.95-ci-wasm sleep infinity"
     rx "podman exec -d wo069-gate-fnode /rfs/weaver kernel start --foreground --profile user"
-fi
-PUBLISHED=()
-for i in $(seq 1 "$TRIALS"); do
-    if [ "$GATE_DRY" = 1 ]; then gate_note "trial $i: edit a doc, commit, gx writer sweep --only feat--gate, record T_i (local clock) when sweep returns; wait $((IVAL + 5000)) ms"; continue; fi
-    printf 'v%s\n' "$i" >>"$WORK/wt/docs/gate.md"; git -C "$WORK/wt" add -A; git -C "$WORK/wt" commit -qm "edit $i"
-    ( cd "$WORK/wt" && gx writer "$S" sweep --only feat--gate ) >/dev/null 2>&1
-    PUBLISHED+=("$(gate_now_ms)"); sleep "$(awk "BEGIN{print ($IVAL + 5000)/1000}")"
-done
-if [ "$MODE" = library ] && [ "$GATE_DRY" = 0 ]; then
-    wait "$PROBE" || true
-    # SEEN lines after the baseline map one to one onto the publishes (the first publish also creates the worktree entry)
-    mapfile -t SEEN < <(awk '$1 == "SEEN" {print $2}' "$WORK/seen.log" | tail -n +2)
-    ok=0; lats=""
-    for i in "${!PUBLISHED[@]}"; do
-        if [ -n "${SEEN[$i]:-}" ]; then l=$(( SEEN[i] - OFF - PUBLISHED[i] )); lats="$lats $l"; [ "$l" -le "$((IVAL + 2000))" ] && ok=$((ok + 1)); else lats="$lats MISSED"; fi
+    for i in $(seq 1 "$TRIALS"); do
+        if [ "$GATE_DRY" = 1 ]; then gate_note "trial $i: edit a doc, commit, gx writer sweep --only feat--gate, record T_i (local clock) when sweep returns; wait $((IVAL + 5000)) ms"; continue; fi
+        printf 'v%s\n' "$i" >>"$WORK/wt/docs/gate.md"; git -C "$WORK/wt" add -A; git -C "$WORK/wt" commit -qm "edit $i"
+        ( cd "$WORK/wt" && gx writer "$S" sweep --only feat--gate ) >/dev/null 2>&1
+        PUBLISHED+=("$(gate_now_ms)"); sleep "$(awk "BEGIN{print ($IVAL + 5000)/1000}")"
     done
-    if [ "$ok" = "$TRIALS" ]; then res "publish-seen-within-one-poll" PASS 0 "$ok/$TRIALS within interval+2s; latencies ms (probe clock corrected by offset):$lats"
-    else FAILS=$((FAILS + 1)); res "publish-seen-within-one-poll" FAIL 0 "$ok/$TRIALS; latencies ms:$lats"; fi
-    WB=$(gx writer "$WEAVER" store get "$PN" worktrees/feat--gate.json --as agent:writer | jq -r .bucket)
-    { cat "$GATE_REPO/scripts/store/wo069-gate-lib.sh"; printf 'gate_probe_refuse %s/follower.env %s %s\n' "$RDIR" "$PB" "$WB"; } | "${SSH[@]}" "$HOST" bash -s >"$WORK/refuse.log" 2>&1 \
-        && res "second-host-eight-writes-refused" PASS 0 "$(tail -1 "$WORK/refuse.log")" || { FAILS=$((FAILS + 1)); res "second-host-eight-writes-refused" FAIL 0 "$(tail -2 "$WORK/refuse.log" | tr '\n' ' ')"; }
-else
-    gate_note "library mode: after the trials run on the second host: gate_probe_refuse (eight writes, all 403)"
 fi
 
 # --- 3: the follower verbs under the read-only key
@@ -159,9 +221,6 @@ step "follower governed put refused (project store, registry key, worktree store
 if [ "$MODE" = library ]; then
     res "claim-by-second-machine" NOTRUN 0 "needs a daemon on the second host (--follower=daemon, owner question 3); the claim below is the Mac's"
     step "claim and fetch on the Mac as merger (not the second machine)" '( cd "$WORK/wt" && gx writer "$S" share --handoff "gate handoff" ) && gx merger "$S" claim feat--gate'
-    if [ -n "${WO069_GATE_TEST_TARGET:-}" ]; then
-        gate_note "library follower test on the host: ci-push, ci-run (see runbook item 1) with WEFTOS_STORE_TEST_RUSTFS_ENV=\$RDIR/follower.env"
-    fi
 else
     rx "podman exec wo069-gate-fnode bash /src/scripts/worktree-store.sh follow"
     rx "podman exec wo069-gate-fnode bash /src/scripts/worktree-store.sh search Gate"

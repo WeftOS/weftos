@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Test for the WO-069 gate scripts (scripts/store/wo069-gate-*): every script answers --help and --dry-run with exit 0 and touches
 # nothing (a fake ssh, scp, curl, podman, nc, rsync and caffeinate on PATH record any call and fail it); the PG refusal; the owner-go
-# (WO069_OWNER_GO_Q3) refusal; the item 3 statistics script prints no path on a synthetic tree. No script is run for real.
+# (WO069_OWNER_GO_Q3) refusal; the fh step of the drills harness and the follower-half test file exist and are under 500 lines; the item 3 statistics script prints no path on a synthetic tree. No script is run for real.
 # shellcheck disable=SC2034,SC2010  # variables are read inside the eval strings of ok()
 set -uo pipefail
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
@@ -29,6 +29,7 @@ for n in "${scripts[@]}"; do
     ok "$n: --help exits 0 and prints usage" '[ $rc = 0 ] && echo "$out" | grep -qi "^usage"'
 done
 ok "lib and runbook: bash -n, under 500 lines" 'bash -n "$D/wo069-gate-lib.sh" && [ "$(wc -l <"$D/wo069-gate-lib.sh")" -lt 500 ] && [ "$(wc -l <"$REPO/docs/store/wo069-gate-runbook.md")" -lt 500 ]'
+ok "follower-half test and the drills harness (fh step): present, under 500 lines, bash -n" '[ -f "$REPO/crates/weftos-store/tests/s2_follower_half.rs" ] && [ "$(wc -l <"$REPO/crates/weftos-store/tests/s2_follower_half.rs")" -lt 500 ] && bash -n "$D/wo069-drills.sh" && bash -n "$D/wo069-drills-lib.sh" && [ "$(wc -l <"$D/wo069-drills-lib.sh")" -lt 500 ] && grep -q "^fh_drill()" "$D/wo069-drills-lib.sh" && grep -q "want fh" "$D/wo069-drills.sh"'
 ok "hold proxy parses" 'python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" "$D/wo069-gate-hold-proxy.py"'
 if command -v shellcheck >/dev/null 2>&1; then ok "shellcheck -S warning is clean on every gate script and this test" 'shellcheck -S warning "$D"/wo069-gate-*.sh "$0"'; else echo "(shellcheck not installed: skipped)"; fi
 
@@ -44,6 +45,9 @@ ok "remote-rustfs up: --pull=never, loopback port, ssh forward" 'echo "$up_out" 
 ok "remote-rustfs down: removes container and dir and checks them" 'echo "$down_out" | grep -q "podman rm -f" && echo "$down_out" | grep -q "container exists"'
 dry "item1 library" 0 "$D/wo069-gate-item1-two-machines.sh" --follower=library --dry-run
 ok "item1 library: shows the clock probe and the second-host poll" 'echo "$out" | grep -q "date +%s%3N" && echo "$out" | grep -q "gate_probe_poll"'
+ok "item1 library: shows the follower-half test on both machines (Linux binary copy, podman run in the CI image, writer half with its round, expected head)" 'echo "$out" | grep -q "^DRY: scp .*s2_follower_half" && echo "$out" | grep -q "podman run --rm --pull=never" && echo "$out" | grep -q "s2_follower_half follower_half --exact --ignored" && echo "$out" | grep -q "WEFTOS_FH_ROUND=2" && echo "$out" | grep -q "WEFTOS_FH_EXPECT_HEAD=h2" && echo "$out" | grep -q "writer_half --exact --ignored" && echo "$out" | grep -q "cargo test -p weftos-store --features rustfs --release --test s2_follower_half --no-run"'
+ok "item1 library: names the clock re-measure and the latency formula" 'echo "$out" | grep -q "re-measure the clock offset" && echo "$out" | grep -q "seen_ms - offset - published_ms"'
+ok "item1 library: the env files are named by path only (no key value in the output)" '! echo "$out" | grep -q "MESH_S3_SECRET_KEY=" && echo "$out" | grep -q "WEFTOS_FH_FOLLOWER_ENV=/rfs/follower.env"'
 dry "item1 daemon without the owner go" 3 "$D/wo069-gate-item1-two-machines.sh" --follower=daemon --dry-run
 ok "item1 daemon refusal names owner question 3" 'echo "$out" | grep -q "question 3"'
 WO069_OWNER_GO_Q3=1 dry "item1 daemon with WO069_OWNER_GO_Q3=1" 0 "$D/wo069-gate-item1-two-machines.sh" --follower=daemon --dry-run

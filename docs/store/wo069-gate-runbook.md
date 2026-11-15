@@ -2,7 +2,7 @@
 
 Lane F2, 2026-11-15, base `1fca1a1f9` (branch `w2/wo069-f2-gate-runbook`). This is the run plan and the scripts for the evidence the
 gate still owes. **No script in `scripts/store/wo069-gate-*` has been run for real**; each was tested with `--help`, `--dry-run`
-and `scripts/tests/wo069-gate-scripts.test.sh` only. Expect first-run defects and read the "first run" risks before trusting a result.
+and `scripts/tests/wo069-gate-scripts.test.sh` only. Lane F3 (2026-11-15) added the follower-half test `crates/weftos-store/tests/s2_follower_half.rs` and the `fh` step of `scripts/store/wo069-drills.sh`; `--only fh --release` was run for real on the Mac against a throwaway local RustFS (one machine, one clock; the two-machine path in item 1 is still unrun). Expect first-run defects and read the "first run" risks before trusting a result.
 Sources: ADR-126 section 4a (gate items 1 to 8), the drills report `wo069-4a-drills-20261114.md`, the harness in `scripts/store/wo069-drills*.sh`.
 
 ## Constraints (they shape every step)
@@ -33,7 +33,7 @@ Sources: ADR-126 section 4a (gate items 1 to 8), the drills report `wo069-4a-dri
 
 | id | finding | effect |
 |---|---|---|
-| F-1 | **Item 1, library follower: no follower-half test binary exists.** The ADR gate and the lead's brief assume a library follower on the second host. The tests in `crates/weftos-store/tests/` mint their own buckets and keys and publish from inside the test; none reads another machine's publish with a supplied read-only key. A new test file would be a Rust change, outside this lane. | `--follower=library` runs a raw SigV4 probe on the second host instead (bash + curl, fed over ssh stdin): it polls the registry digest on the second host's clock and tries the eight writes. That proves the second clock, the real network and the read-only key. It does **not** exercise follower code on that host. Spec for the missing test is in item 1, "optional library test". |
+| F-1 | **Item 1, library follower: no follower-half test binary existed (closed by lane F3).** The tests in `crates/weftos-store/tests/` minted their own buckets and keys and published from inside the test; none read another machine's publish with a supplied read-only key. | Lane F3 added `s2_follower_half.rs` (`writer_half`, `follower_half`, `both_halves_on_one_machine`). `--follower=library` now runs the follower half on the second host (Linux binary built in CI, run in the CI image) and keeps the raw SigV4 probe as a cross-check. See item 1. |
 | F-2 | **The daemon has no clock seam.** `now_ms` is `SystemTime::now` (`control.rs:218`); `LeftoverPolicy`, the 30 min claim TTL and the object grace are constants. | "A writer a day ahead" cannot be a real independent clock without libfaketime in a Linux container (Q3 plus a second decision: libfaketime is not in the CI image) or a system clock change (never done). Item 6a runs by **stamp injection** through raw S3, and says so. |
 | F-3 | **Prior two-machine evidence exists and is not cited in the ADR.** `scratch/drill-2machine/results.md` (2026-11-13, tip 54b830472, older than the fence and schema 2): two real nodes (an xpc container and a PG-host container, store on xpc), a writer killed mid-publish, a merger killed deterministically mid-claim, and a **real 30 minute stale claim** taken over by the other daemon at 30:01 of its own observation. | It shortens item 5 (the method is proven: hold the claim's PUT answer, kill, wait) but it ran older code, and the claim path has changed since (fence, announcement, 12 calls). It must be redone on this branch. It also shows a store-capable weaver ran on xpc and PG before this hold; I found no recorded owner go for that. |
 | F-4 | **Item 4: only two thresholds have an env override.** `WEFTOS_WORKTREE_ORPHAN_AFTER_HOURS` (24 h, whole hours, minimum 1) and `..._ORPHAN_ARCHIVE_AFTER_DAYS` (14 d, minimum 1). Forgotten-open 3 d, unclaimed handoff 24 h, stuck cleanup 24 h (`LeftoverPolicy::default`), the 30 min claim TTL, the 10 min skew and the 24 h object grace have none. The hash-cache re-hash has `WEFTOS_WORKTREE_HASH_REHASH_HOURS` (default 24, 0 = every publish). | Shortened runs are smoke tests only (table below). The long waits are unavoidable. |
@@ -64,26 +64,64 @@ Checks: **T+5 min** baseline (nothing listed); **T+23 h** negatives (nothing rep
 ## Item 1: two machines, two principals, two clocks
 
 **Requires.** Real RustFS, publish, poll, search, sync-docs, claim with two principals on two machines; a follower sees a publish within one poll interval.
-**Held.** One machine, two principals (14 of 14); two real S3 keys, 8 of 8 writes refused (`s2_drills_live`); store on aepod-xpc through one forward, publish seen on the first poll in 10 of 10 (median 392 ms) (drills report, lane I addendum). Clocks agreed to the second, daemons both on the Mac.
+**Held.** One machine, two principals (14 of 14); two real S3 keys, 8 of 8 writes refused (`s2_drills_live`); store on aepod-xpc through one forward, publish seen on the first poll in 10 of 10 (median 392 ms) (drills report, lane I addendum). Clocks agreed to the second, daemons both on the Mac. Lane F3: the writer half and the follower half as separate tests (`crates/weftos-store/tests/s2_follower_half.rs`), run together on one machine by `scripts/store/wo069-drills.sh --only fh --release`.
 **Owed.** Writer and follower on different machines on different clocks; the same against PG's store (out of this lane).
 
-**Run (decision-free): `--follower=library`.** About 25 minutes.
+**What runs where (`--follower=library`, no owner decision).** About 25 minutes.
+
+| machine | runs | key | clock |
+|---|---|---|---|
+| the Mac | `writer_half` (the test binary, macOS): creates the two buckets on round 1, publishes a small synthetic tree with head `h<round>`, refreshes the registry entry and the digest as the daemon does; a writer daemon and a follower daemon for the daemon-path verbs | writer key (RW on the project and worktree buckets) | local, prints `published_ms` |
+| aepod-xpc | `follower_half` (the same test, built for Linux x86-64, run in the CI image under rootless podman; no weaver, no daemon): poll (digest, then `--full`), older-writer verdict, search, sync-docs, browse, fetch (tree, and the bundle when the manifest has one), the eight refused writes; plus the raw SigV4 probe as a cross-check | read-only key | the host's, prints `seen_ms` |
+
+**Env files (by path, mode 0600, never printed).** `WO069_GATE_CRED_DIR` is a 0700 directory on the notes volume (not `/tmp`, not `$HOME`). `mint-keys` writes `writer.env` and `follower.env` there (`MESH_S3_ENDPOINT`, `MESH_S3_ACCESS_KEY`, `MESH_S3_SECRET_KEY`, `MESH_S3_REGION`; the endpoint is the Mac's ssh-forwarded port) and copies the follower one to `~/ci-jobs/wo069-gate-rfs/follower.env` on the host (0600; its endpoint is the host's own loopback). The writer env stays on the Mac: `WEFTOS_FH_WRITER_ENV=$WO069_GATE_CRED_DIR/writer.env`. The follower half reads `/rfs/follower.env` inside the container (the host directory is mounted at `/rfs`). The script refuses an env file that is not 0600, is under `/tmp` or `$HOME`, or names PG.
+
+**Build the follower half (Linux x86-64, in CI, then copy).** No Mac build for the Linux side (owner rule 2026-11-09). A test binary, not a daemon, so Q3 does not apply (the CI rule about a store-capable weaver concerns the weaver).
+```
+D=/Volumes/ai-models/research/weftos-agent-notes/scratch/ci
+$D/ci-push.sh wo069-fh <worktree> HEAD
+$D/ci-run.sh  wo069-fh build weftos 'cargo test -p weftos-store --features rustfs --release --test s2_follower_half --no-run'
+$D/ci-wait.sh wo069-fh build
+mkdir -p /Volumes/ai-models/research/weftos-agent-notes/scratch/wo069/bin
+B=$(ssh aepod@aepod-xpc 'ls -t ~/ci-jobs/wo069-fh/target/release/deps/s2_follower_half-* | grep -v "\.d$" | head -1')
+scp aepod@aepod-xpc:"${B#/home/aepod/}" /Volumes/ai-models/research/weftos-agent-notes/scratch/wo069/bin/s2_follower_half.linux-x86_64
+ssh aepod@aepod-xpc rm -rf ~/ci-jobs/wo069-fh
+```
+(`${B#/home/aepod/}` makes the path relative to the home directory, which `scp` resolves; adjust the prefix if the home differs.) The Mac binary is built by the script itself with a targeted `cargo test -p weftos-store --features rustfs --release --test s2_follower_half --no-run --message-format=json` (or pass a prebuilt one in `WO069_GATE_FH_BIN`). The Linux binary runs inside `localhost/tapestry/build:1.95-ci-wasm` so the glibc is the one it was built against.
+
+**Run.**
 1. `WO069_GATE_CRED_DIR=<notes dir> scripts/store/wo069-gate-remote-rustfs.sh up aepod@aepod-xpc` (2 min: image must be local, port 19431, 4 CPUs, 4 GiB, ssh forward).
 2. `... mint-keys aepod@aepod-xpc`: writer key (s3:* on all buckets of the throwaway, no admin) and read-only follower key; probes both; copies the follower env to the host (0600).
-3. `WO069_GATE_WRITER_ENV=... WO069_GATE_FOLLOWER_ENV=... scripts/store/wo069-gate-item1-two-machines.sh --follower=library --trials 10 --poll-interval-ms 30000`.
-   The Mac runs a writer daemon (writer key) and a follower daemon (read-only key). The host runs the raw probe against the registry digest every
-   poll interval. Per trial: edit, commit, `sweep` (publish; the daemon refreshes the registry synchronously), record T_pub; the probe prints the host epoch
-   when the digest body first changes. Latency = seen - clock offset - T_pub. The offset is measured by one ssh round trip (accuracy about rtt/2, 40 ms here).
-4. Follower verbs under the read-only key on the Mac: follow, search, sync-docs, browse, fetch (tree), governed put refused. On the host: the eight raw writes, all 403.
-5. `... remote-rustfs.sh down aepod@aepod-xpc` and read all six PASS lines.
+3. `WO069_GATE_WRITER_ENV=$WO069_GATE_CRED_DIR/writer.env WO069_GATE_FOLLOWER_ENV=$WO069_GATE_CRED_DIR/follower.env WO069_GATE_FH_LINUX_BIN=<the scp'd binary> scripts/store/wo069-gate-item1-two-machines.sh --follower=library --trials 10 --poll-interval-ms 30000`. `--dry-run` prints every command below and runs none.
+4. `... remote-rustfs.sh down aepod@aepod-xpc` and read the RESULT lines.
 
-**Expected lines.** `RESULT|item1|publish-seen-within-one-poll|PASS|...|10/10 within interval+2s`; `second-host-eight-writes-refused|PASS|...|REFUSED 8 of 8`; every `step` PASS.
-**Pass.** 10 of 10 seen within one poll interval + 2 s on the second clock; 8 of 8 refused; follower verbs pass under a real read-only key.
-**Not covered in library mode.** A claim by the second machine (recorded `NOTRUN`); follower code on the second host.
-**Optional library test (needs a Rust file, not in this lane).** `crates/weftos-store/tests/s2_gate_follower.rs`, `#[ignore]`, reads `WEFTOS_STORE_TEST_RUSTFS_ENV` (read-only env), `WO069_GATE_PROJECT`, `WO069_GATE_SLUG`; prints `DRILL|gate-f|<step>|PASS|<ms>` for poll, search, sync-docs, browse, fetch and eight refused writes. Run it on the host with
-`D=/Volumes/ai-models/research/weftos-agent-notes/scratch/ci; $D/ci-push.sh wo069-gate <worktree> HEAD; $D/ci-run.sh wo069-gate f1 weftos 'cargo test -p weftos-store --features rustfs --test s2_gate_follower -- --ignored --nocapture'; $D/ci-wait.sh wo069-gate f1; ssh aepod@aepod-xpc rm -rf ~/ci-jobs/wo069-gate`. A test binary, not a daemon, so Q3 does not apply (this is a library test inside the CI container's own loopback; the CI rule about a store-capable weaver concerns the weaver).
+**The commands, side by side (what the script runs; run them by hand to repeat one round).** `PB` is `p-` plus the lowercase project ULID; the worktree bucket is derived from it and the slug when `WEFTOS_FH_WORKTREE_BUCKET` is not set.
+```
+# Mac, round N (round 1 also creates the buckets with WEFTOS_FH_CREATE=1):
+env WEFTOS_FH_WRITER_ENV=$W WEFTOS_FH_PROJECT_BUCKET=$PB WEFTOS_FH_SLUG=feat-fh WEFTOS_FH_ROUND=N WEFTOS_FH_CREATE=1 \
+    $MACBIN writer_half --exact --ignored --nocapture --test-threads=1          # prints FH|writer|round=N|published_ms=<Mac ms>|head=hN
+# aepod-xpc, started BEFORE the writer round, waits up to WAIT_MS for head hN, polling every POLL_MS on its own clock:
+ssh aepod@aepod-xpc 'podman run --rm --pull=never --network host --userns=keep-id \
+    -e WEFTOS_FH_FOLLOWER_ENV=/rfs/follower.env -e WEFTOS_FH_PROJECT_BUCKET=<PB> -e WEFTOS_FH_SLUG=feat-fh -e WEFTOS_FH_STATE=/rfs/fh-state.json \
+    -e WEFTOS_FH_EXPECT_HEAD=hN -e WEFTOS_FH_WAIT_MS=35000 -e WEFTOS_FH_POLL_MS=30000 \
+    -v $HOME/ci-jobs/wo069-gate-rfs:/rfs -w /rfs localhost/tapestry/build:1.95-ci-wasm \
+    /rfs/s2_follower_half follower_half --exact --ignored --nocapture --test-threads=1'
+```
+The follower half prints `FH|follower|<step>|PASS|<ms>|<detail>` for `poll`, `poll-full`, `older-writer`, `search`, `sync-docs`, `browse`, `fetch`, `refused-1` to `refused-8` (each names the error it got) and `refuse-8-writes`; `FH|follower|clock|now_ms=<host ms>`; `FH|follower|poll|seen_ms=<host ms>|head=<head>`; and in the poll detail the number of polls it took. `older-writer` prints the verdict from the registry entry and from the bucket (lane F1's check; expected `clean`, a verdict fails the run). Each refusal is asserted to be an access error (`forbidden` / `AccessDenied`), not a missing object, a bad state or a transport error; the delete targets a pool object the manifest names and the test checks it is still there afterwards. The state file in `/rfs` is kept between rounds, so round N reports `HeadMoved` from `h(N-1)`; delete it to start from `New`.
+
+**Publish-to-seen latency across two clocks.** `latency = seen_ms - offset - published_ms`, where `published_ms` is the Mac's clock when the registry refresh finished (the `FH|writer|...` line), `seen_ms` is the host's clock when the first poll that reported the head returned (the `FH|follower|poll|seen_ms=` line) and `offset = host clock - Mac clock`. Measure the offset with one ssh round trip, the same way the script does (the `clocks` row), and again after the trials (`clocks-after`):
+```
+t0=$(python3 -c 'import time; print(int(time.time()*1000))'); r=$(ssh aepod@aepod-xpc 'date +%s%3N'); t1=$(python3 -c 'import time; print(int(time.time()*1000))')
+echo "offset_ms=$(( r - (t0 + t1) / 2 )) rtt_ms=$(( t1 - t0 ))"
+```
+**Caveat.** This is not NTP-grade: the offset is only good to about half the round trip (plus ssh and command startup asymmetry), here tens of ms, and the two clocks drift between the two measurements (the script reports the drift). Read a latency as `+- rtt/2 +- drift`. The pass criterion (a publish seen within one poll interval plus 2 s) is far looser than that error; a latency near zero or negative means the offset error is larger than the real latency, not that the follower saw the head before it existed. On one machine (`both_halves_on_one_machine`) there is one clock and no offset.
+
+**Expected lines.** `RESULT|item1|follower-half-on-second-host|PASS|...`; `publish-seen-within-one-poll|PASS|...|10/10 within interval+2s on the second host's clock`; `raw-probe-cross-check|PASS|...`; `second-host-eight-writes-refused|PASS|...|REFUSED 8 of 8`; `clocks` and `clocks-after`; every `step` PASS.
+**Pass.** 10 of 10 seen within one poll interval + 2 s on the second clock; the eight library refusals and the eight raw 403s; follower verbs pass under a real read-only key on both machines; older-writer verdict clean.
+**Not covered in library mode.** A claim by the second machine (recorded `NOTRUN`); a store-capable follower daemon on the second host.
+**One machine, any time (no ssh, no owner go).** `WEFTOS_STORE_TEST_RUSTFS_BIN=<rustfs> scripts/store/wo069-drills.sh --only fh --release`: starts a throwaway RustFS, mints a writer key and a read-only key, runs writer round 1, the follower half, writer round 2, the follower half again (head moved, seen within one poll), then removes the buckets and keys. It needs no weaver.
 **Run with the owner's go: `--follower=daemon` (needs owner go (Q3)).** Refuses without `WO069_OWNER_GO_Q3=1`. Prerequisites: a Linux weaver of the branch built in CI (`ci-push.sh`, `ci-run.sh ... 'scripts/build.sh native-debug'`, copy `target/debug/weaver` out of the lane target), the sources from the same push; set `WO069_GATE_REMOTE_WEAVER` and `WO069_GATE_REMOTE_SRC`. The host runs a follower daemon (read-only key) and a merger daemon (a copy of the writer key, agent `merger`) in rootless podman with their own HOME and runtime dir, and does follow, search, sync-docs, browse, fetch and the claim itself. About 40 minutes plus the build (11 min loaded). Cleanup: both containers and `$RDIR/node` removed and checked.
-**Risks.** R-mint, R-daemon-ro (above); a 30 s poll with ten trials is 6 minutes of idle waiting by design; the writer key is `s3:*` on every bucket of the throwaway, so "writer RW on its own bucket only" is not enforced here (lane H's 1a did that).
+**Risks.** R-mint, R-daemon-ro (above); R-fh (first run of the podman line: `--userns=keep-id` and a 0600 env file read inside the container, the host's WSL clock source); a 30 s poll with ten trials is about 6 minutes of idle waiting by design; the writer key is `s3:*` on every bucket of the throwaway, so "writer RW on its own bucket only" is not enforced here (lane H's 1a did that).
 **Needs the other session / owner.** PG-store variant: owner (read-only key, window).
 
 ## Item 2: a Windows node loads a worktree bucket natively
@@ -167,7 +205,9 @@ a writer stamp +24 h through raw S3 (real follower clock; **not** an independent
 | `WO069_GATE_REMOTE_DIR` | `~/ci-jobs/wo069-gate-rfs` | remote-rustfs, item1 | data, env files, tmp on the host (removed by `down`) |
 | `WO069_GATE_WRITER_ENV`, `WO069_GATE_FOLLOWER_ENV` | none | items 1, 5, 6 | 0600 env files (endpoint, access, secret, region) |
 | `WO069_GATE_PROJECT` | random ULID | item 1 | project id |
-| `WO069_GATE_TEST_TARGET`, `_REMOTE_WEAVER`, `_REMOTE_SRC` | none | item 1 | library test target; Linux weaver and source on the host (daemon mode) |
+| `WO069_GATE_FH_LINUX_BIN`, `_FH_BIN`, `_FH_IMAGE` | none, built by the script, `localhost/tapestry/build:1.95-ci-wasm` | item 1 | library mode: the Linux x86-64 `s2_follower_half` built in CI; a prebuilt Mac one; the image the follower half runs in |
+| `WO069_GATE_REMOTE_WEAVER`, `_REMOTE_SRC` | none | item 1 | daemon mode: Linux weaver and source on the host |
+| `WEFTOS_FH_*` | see item 1 | the `s2_follower_half` test | writer env file, follower env file, project bucket, worktree bucket (optional), slug, round, state file, expected head, wait and poll ms, bundle, create |
 | `WO069_GATE_STATE` | none | items 4, 5 | durable state dir (0700, notes volume) |
 | `WO069_GATE_FILES`, `_DELAYS` | 300, "0.5 1.5 3 5 8 12" | item 5 | publish size, kill offsets (s) |
 | `WO069_GATE_GAP`, `_PATHS` | 200, "docs/adr scripts/store" | item 6f | base distance, sparse paths |
@@ -183,9 +223,11 @@ loopback port chosen at run time. Nothing listens on a non-loopback address. Not
 
 | item 1 | value |
 |---|---|
-| clock offset, rtt (ms) | |
+| clock offset, rtt (ms), after the trials, drift | |
 | publish seen on the second clock: 10 latencies (ms) | |
-| eight writes refused on the host | /8 |
+| eight writes refused on the host (library half, raw probe) | /8, /8 |
+| older-writer verdict (follower half) | |
+| polls per trial, raw-probe cross-check latencies | |
 | follower verbs under the read-only key | follow / search / sync-docs / browse / fetch / put refused |
 | claim by the second machine (daemon mode only) | |
 

@@ -129,8 +129,8 @@ cargo_live() { # <label> <test target> <extra env...>
     local label=$1 target=$2; shift 2
     local out="$WORK/cargo-$label.out" t0 rc=0
     t0=$(now_ms)
-    ( cd "$REPO" && env "$@" cargo test -p weftos-store --features rustfs $REL --test "$target" -- --ignored --nocapture --test-threads=1 ) >"$out" 2>&1 || rc=$?
-    grep -E '^(DRILL|FINDING|BENCH|DETAIL)\||^test |test result|panicked' "$out" | sed 's/^/    /'
+    ( cd "$REPO" && env "$@" cargo test -p weftos-store --features rustfs $REL --test "$target" -- --ignored --nocapture --test-threads=1 ${LIVE_FILTER:+"$LIVE_FILTER"} ) >"$out" 2>&1 || rc=$?   # LIVE_FILTER: one test name
+    grep -E '^(DRILL|FINDING|BENCH|DETAIL|FH)\||^test |test result|panicked' "$out" | sed 's/^/    /'
     printf '%s\t%s ms\tcargo %s (%s)\n' "$([ $rc = 0 ] && echo PASS || echo FAIL)" "$(( $(now_ms) - t0 ))" "$target" "$label" | tee -a "$WORK/steps.tsv"
     if [ $rc != 0 ]; then FAILS=$((FAILS + 1)); tail -30 "$out" | sed 's/^/    | /'; fi
     grep -E '^FINDING\|' "$out" | sed 's/^FINDING|/FINDING\t/' >>"$WORK/findings.txt"
@@ -146,6 +146,14 @@ lib_drills() {
     # gate item 6 follower drills (6a-6g): the ignored live twins of the tests that also run in memory
     cargo_live drills-6a-6d s2_drills_follower "WEFTOS_STORE_TEST_RUSTFS_ENV=$WORK/live.env"
     cargo_live drills-6e-6g s2_drills_follower_more "WEFTOS_STORE_TEST_RUSTFS_ENV=$WORK/live.env"
+}
+
+# Gate item 1, follower half, on one machine: the writer half and the follower half of s2_follower_half.rs against this run's throwaway server.
+# `WEFTOS_STORE_TEST_RUSTFS_ENV` is an admin key; the test mints a writer key and a read-only key from it and removes them. The two-machine
+# drill runs the two halves separately (scripts/store/wo069-gate-item1-two-machines.sh).
+fh_drill() {
+    echo "== FH: gate item 1 writer half and follower half, two scoped keys, one machine (both_halves_on_one_machine)"
+    LIVE_FILTER=both_halves_on_one_machine cargo_live fh-both-halves s2_follower_half "WEFTOS_STORE_TEST_RUSTFS_ENV=$WORK/live.env"
 }
 
 scale_drills() {

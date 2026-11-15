@@ -2,12 +2,14 @@
 # WO-069 lane H: the ADR-126 section 4a gate drills that need no owner input, against a THROWAWAY RustFS only.
 #
 #   WEFTOS_STORE_TEST_RUSTFS_BIN=/path/to/rustfs [WEFTOS_E2E_WEAVER=target/debug/weaver] \
-#     scripts/store/wo069-drills.sh [--only d1,d2,d3,lib,scale] [--scale] [--release]
+#     scripts/store/wo069-drills.sh [--only d1,d2,d3,lib,fh,scale] [--scale] [--release]
 #
 #   d1     two local principals through a real weaver + throwaway daemon (gate item 1, one machine)
 #   d2     leftover drill and handoff drill (gate item 4)
 #   d3     daemon killed during a publish / registry refresh, restarted (gate item 5c)
 #   lib    the library drills on the real RustFS: 1a (two real S3 identities), 2l, 3a, 3b, 3c (s2_drills_live.rs)
+#   fh     gate item 1 follower half: the writer half and the follower half (s2_follower_half.rs, both_halves_on_one_machine) with two scoped
+#          keys on the throwaway server; needs no weaver. Never in the default run.
 #   scale  drill 4, synthetic client-scale trees (s2_scale_bench.rs): 1k and 10k files; --scale adds 20k and 50k
 #
 # The default run is d1,d2,d3,lib (a few minutes). --scale is slower (the 50k tree writes about 1.5 GB and takes ~17 min to publish even on an internal disk) and is never in the default.
@@ -33,7 +35,7 @@ while [ $# -gt 0 ]; do
         --only) ONLY="$2"; shift 2 ;;
         --scale) SCALE=1; ONLY="${ONLY},scale"; shift ;;
         --release) REL="--release"; shift ;;
-        -h|--help) sed -n 2,26p "${BASH_SOURCE[0]}"; exit 0 ;;
+        -h|--help) sed -n 2,28p "${BASH_SOURCE[0]}"; exit 0 ;;
         *) echo "unknown argument $1" >&2; exit 2 ;;
     esac
 done
@@ -82,6 +84,7 @@ want d1 && drill1
 want d2 && drill2
 want d3 && drill3
 if want lib; then lib_drills; fi
+if want fh; then fh_drill; fi
 if want scale; then scale_drills; fi
 
 echo "== summary: $(grep -c '^PASS' "$WORK/steps.tsv" 2>/dev/null || echo 0) passed, $FAILS failed; $(grep -c '^FINDING' "$WORK/findings.txt") finding(s)"
