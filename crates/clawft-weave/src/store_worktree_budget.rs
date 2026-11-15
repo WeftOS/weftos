@@ -263,11 +263,12 @@ fn sync_docs_overlaps_claim() {
     let cache = tempfile::tempdir().unwrap();
     let p = json!({"project": PROJ, "slug": "wt0", "cache": cache.path().to_string_lossy()});
     let (_, c) = r.run("sync-docs", p.clone());
-    // summarize (manifest HEAD + GET, handoff GET) + library sync_docs [3 + D, 2 + D] = 8 + 2D calls
-    pin(c, [5 + D, 3 + D, 0, 0, 0, 0, 0, 0], "sync-docs first");
+    // ONE manifest read (HEAD + GET) and the handoff GET (the entry), then sync_docs_from: meta GET and,
+    // per doc, object HEAD + GET (D is under HEAD_LIST_THRESHOLD): 4 + 2D calls
+    pin(c, [3 + D, 1 + D, 0, 0, 0, 0, 0, 0], "sync-docs first");
     let (_, c) = r.run("sync-docs", p);
-    // 8 calls: 3 HEAD + 5 GET, the manifest read three times
-    pin(c, [5, 3, 0, 0, 0, 0, 0, 0], "sync-docs repeat");
+    // 4 calls: manifest HEAD + GET, handoff GET, meta GET; local sha equal, no object calls
+    pin(c, [3, 1, 0, 0, 0, 0, 0, 0], "sync-docs repeat");
     let (_, c) = r.run("overlaps", json!({"project": PROJ, "a": "wt0", "b": "wt1"}));
     // 12 calls: 2 summarize (3 each) + 2 meta GET + 2 manifest reads
     pin(c, [8, 4, 0, 0, 0, 0, 0, 0], "overlaps one pair");
@@ -297,8 +298,8 @@ fn fetch_tree_repeat_and_with_bundle() {
     let p = json!({"project": PROJ, "slug": "wt0", "dest": dest.path().to_string_lossy()});
     let (v, c) = counted(&svc, &t, "fetch", p.clone(), 20);
     assert_eq!(v["written"], json!(N));
-    // manifest HEAD + GET, then HEAD + GET per file
-    pin(c, [1 + N, 1 + N, 0, 0, 0, 0, 0, 0], "fetch first");
+    // manifest HEAD + GET, then (N is over HEAD_LIST_THRESHOLD) one tree LIST and one GET per file, no per-file HEAD
+    pin(c, [1 + N, 1, 1, 0, 0, 0, 0, 0], "fetch first");
     let (v, c) = counted(&svc, &t, "fetch", p.clone(), 21);
     assert_eq!(v["unchanged"], json!(N));
     // local sha256 equal: the manifest read only
@@ -307,7 +308,7 @@ fn fetch_tree_repeat_and_with_bundle() {
     let mut pb = p;
     pb["bundle_out"] = json!(out.to_string_lossy());
     let (_, c) = counted(&svc, &t, "fetch", pb, 22);
-    // fetch_tree (manifest read) + the has_bundle check (manifest read) + fetch_bundle (manifest read,
-    // bundle HEAD + GET, the whole bundle again): 8 calls
-    pin(c, [4, 4, 0, 0, 0, 0, 0, 0], "fetch repeat with bundle");
+    // ONE manifest read (HEAD + GET) shared by the tree, the has_bundle check and the bundle, then the
+    // bundle HEAD + GET (the whole bundle again): 4 calls
+    pin(c, [2, 2, 0, 0, 0, 0, 0, 0], "fetch repeat with bundle");
 }

@@ -25,7 +25,7 @@ use weftos_store::registry_sign::{
 };
 use weftos_store::share::{Actor, Limits, TreeSource, mark_handoff, parse_name_status_z, publish_tree};
 use weftos_store::share_fetch::{
-    self, RegistryEntry, Select, fetch_bundle, fetch_tree, list_shared_lenient, summarize, write_registry_entry,
+    self, RegistryEntry, Select, list_shared_lenient, summarize, write_registry_entry,
 };
 use weftos_store::{StoreName, StoreService};
 

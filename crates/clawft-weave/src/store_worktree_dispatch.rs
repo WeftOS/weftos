@@ -136,13 +136,17 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
                 None => None,
             };
             std::fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
-            let r = fetch_tree(&b, &n.wt, &dest, Select::All, p.force).map_err(e)?;
+            // One manifest read serves the tree, the bundle check and the bundle.
+            let m = weftos_store::share::read_manifest(&b, &n.wt)
+                .map_err(e)?
+                .ok_or("no shared tree in this worktree store")?;
+            let r = share_fetch::fetch_tree_from(&b, &n.wt, &m, &dest, Select::All, p.force, &Limits::default()).map_err(e)?;
             let mut head = None;
             let mut note = None;
             if let Some(out) = &out {
                 // A tree with no commits past its base carries no bundle: the tree is still fetched.
-                if weftos_store::share::read_manifest(&b, &n.wt).map_err(e)?.is_some_and(|m| m.has_bundle) {
-                    head = Some(fetch_bundle(&b, &n.wt, out).map_err(e)?);
+                if m.has_bundle {
+                    head = Some(share_fetch::fetch_bundle_from(&b, &n.wt, &m, out).map_err(e)?);
                 } else {
                     note = Some("this tree was published without a git bundle; no commits to fetch");
                 }
@@ -346,8 +350,12 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
         "sync-docs" => {
             let slug = need(&p.slug, "slug")?;
             let n = names(mesh, &project, slug)?;
-            let entry = summarize(&b, slug, &n.wt).map_err(e)?.ok_or("worktree has nothing published")?;
-            let r = follower::sync_docs(&b, &entry, &guard.check(need(&p.cache, "cache")?, "cache", Use::WriteDir)?).map_err(e)?;
+            // The entry and the sync share one manifest read.
+            let m = weftos_store::share::read_manifest(&b, &n.wt).map_err(e)?;
+            let h = weftos_store::share::read_handoff(&b, &n.wt).map_err(e)?;
+            let (Some(m), Some(h)) = (m, h) else { return Err("worktree has nothing published".into()) };
+            let entry = share_fetch::summarize_from(slug, &n.wt, &m, &h);
+            let r = follower::sync_docs_from(&b, &entry, &m, &guard.check(need(&p.cache, "cache")?, "cache", Use::WriteDir)?).map_err(e)?;
             Ok(json!({"written": r.written.len(), "unchanged": r.unchanged.len(), "refused": r.refused}))
         }
         "overlaps" => {
