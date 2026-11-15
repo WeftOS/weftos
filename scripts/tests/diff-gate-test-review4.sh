@@ -165,6 +165,11 @@ NEEDS_REACH=1 case_run "r4-b: control, a cfg(test) outer module with a re-export
     "$R4KB"'; printf "#[cfg(test)]\npub mod t {\n    pub use super::supervise::*;\n    pub mod supervise_tests;\n}\n" >>crates/k/src/lib.rs; mkdir -p crates/k/src/t; echo "fn t() {}" >crates/k/src/t/supervise_tests.rs' \
     'printf "%s\n" "$EVIL" >>crates/k/src/t/supervise_tests.rs'
 
+# #[path] to a non-.rs file is an include finding; a raw identifier attribute name is the same
+# attribute to rustc (#[r#path] built on PG).
+EXPECT="include" case_run "r4-b: #[r#path = ...] to a non-.rs file" 1 : 'echo "pub fn g() {}" >src/gen.txt; printf "#[r#path = \"gen.txt\"]\nmod gen;\n" >>src/lib.rs'
+EXPECT="include" case_run "r4-b: #[cfg_attr(unix, r#path = ...)] to a non-.rs file" 1 : 'echo "pub fn g() {}" >src/gen.txt; printf "#[cfg_attr(unix, r#path = \"gen.txt\")]\nmod gen;\n" >>src/lib.rs'
+
 # ── (c) row trust ────────────────────────────────────────────────────
 # r4row FILE PATTERN [BLOB] [EXTRA]: an unsafe row for src/**; EXTRA is appended inside the row.
 r4row() { printf '[[approval]]\nrule = "unsafe"\npath = "src/**"\npattern = "%s"\n' "$1"; [ -n "${2:-}" ] && printf 'blob = "%s"\n' "$2"; printf 'reason = "fixture"\napproved_by = "owner"\n%s' "${3:-}"; }
@@ -261,6 +266,15 @@ export DOC_NUMLIST='/// 1. ```
 ///    std::process::Command::new("sh").status().unwrap();
 ///    ```
 pub fn d() {}'
+# Crate docs (//!) that end inside an open fence, then the first item's own docs: rustdoc reads
+# them as two texts (the crate block runs to its end); read as one, the item's fences pair up
+# the wrong way and its code lands outside every block.
+export DOC_TWO_ITEMS='//! ```
+//! assert!(true);
+/// ```
+/// std::process::Command::new("sh").status().unwrap();
+/// ```
+pub fn d() {}'
 # Not code: #[doc(include = ...)] was removed from rustdoc (1.95 warns "unknown doc attribute").
 export DOC_INCLUDE_KEY='#[doc(include = "x.md")]
 pub fn e() {}'
@@ -285,5 +299,6 @@ if [ "$REAL_TOKENS" = 1 ]; then
     EXPECT="process" case_run "r4-d(real): a literal doc attribute inside a macro_rules body" 1 : 'printf "%s\n" "$DOC_IN_MACRO" >>src/lib.rs'
     EXPECT="include" case_run "r4-d(real): #![doc = concat!(...)] inner attribute" 1 : 'printf "%s\n" "$DOC_INNER_CONCAT" >src/inner.rs'
     EXPECT="include" case_run "r4-d(real): #[doc = \$d] in a macro definition" 1 : 'printf "%s\n" "$DOC_MACRO_ATTR" >>src/lib.rs'
+    KNOWN_GAP=R4-D2 EXPECT="process" case_run "r4-d(real): crate docs that end inside a fence, then an item doctest" 1 : 'printf "%s\n" "$DOC_TWO_ITEMS" >src/two.rs'
     case_run "r4-d(real): control, #[doc(include = ...)] runs nothing" 0 : 'printf "%s\n" "$DOC_INCLUDE_KEY" >>src/lib.rs'
 fi
