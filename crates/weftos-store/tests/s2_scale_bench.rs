@@ -6,7 +6,8 @@
 //!
 //! Size mix: 90% of files 1-20 kB, 9% 20-200 kB, 1% 200 kB - 2 MiB, plus three big files (4, 8 and 16 MiB: the
 //! default per-file cap). Content is pseudo-random (incompressible), laid out in `src/mNN/sNN/` (code) and
-//! `docs/` (3% markdown). The default `Limits` (20 000 files, 512 MiB) are raised for the run and the bench says so.
+//! `docs/` (3% markdown). The run uses `Limits::default()` (100 000 files, 4 GiB since the 2026-11-15 owner decision), so the
+//! 50 000-file tree is expected to publish, read back and republish with no raised limits.
 #![cfg(feature = "rustfs")]
 
 use std::time::Instant;
@@ -113,7 +114,7 @@ fn scale_bench() {
     let d = tempfile::tempdir().unwrap();
     let cfg = RustfsConfig::from_env_file(std::path::Path::new(&f), d.path().join("secrets")).unwrap();
     let be: Be = CountingBackend::new(RustfsBackend::new(cfg).unwrap());
-    println!("BENCH|setup|sizes={sizes:?}|profile={}|limits=raised (default 20000 files / 512 MiB would refuse the larger trees)", if cfg!(debug_assertions) { "debug" } else { "release" });
+    println!("BENCH|setup|sizes={sizes:?}|profile={}|limits=default (100000 files / 4 GiB)", if cfg!(debug_assertions) { "debug" } else { "release" });
     let writer = Actor { agent: "agent-a".into(), host: "machine-a".into() };
     for &n in &sizes {
         let u = ulid::Ulid::new().to_string().to_lowercase();
@@ -136,7 +137,7 @@ fn scale_bench() {
         let t = Instant::now();
         let (mut paths, total, largest) = make_tree(tmp.path(), n);
         println!("BENCH|{n}|generate|wall_ms={}|files={n}|bytes={total}|largest={largest}", t.elapsed().as_millis());
-        let lim = Limits { max_file: 16 << 20, max_files: n + 100, max_total: 8 << 30, max_bundle: 256 << 20 };
+        let lim = Limits::default();
         write_meta(&be, &wb, &WorktreeMeta { slug: slug.clone(), project: "01abc".into(), branch: slug.clone(), base_commit: "base".into(), created_ms: 1 }).unwrap();
         let publish = |paths: &[String], head: &str, now: u64| {
             let src = TreeSource { root: tmp.path(), paths, uncommitted: &[], changes: &[], branch: &slug, base_commit: "base", head_commit: head, bundle: None, writer: writer.clone() };
@@ -161,14 +162,11 @@ fn scale_bench() {
         assert_eq!(rep.uploaded, n, "every file uploaded (skips: {:?})", &rep.skipped[..rep.skipped.len().min(3)]);
         let man = be.inner.get(&wb, MANIFEST_KEY).unwrap().unwrap();
         println!("BENCH|{n}|manifest|bytes={}|per_file={}", man.len(), man.len() / n);
-        if n > Limits::default().max_files {
-            // Every reader (and the next publish, which reads the previous manifest) refuses a manifest over the default file cap.
-            let r = read_manifest(&be, &wb);
-            println!("FINDING|scale|{n} files: read_manifest of the tree just published with raised limits answers: {} (parse_manifest hard-codes Limits::default().max_files = 20000 for every reader, and publish_tree reads the previous manifest, so a published tree over 20000 files can be neither read nor republished)", r.as_ref().map(|_| "ok".to_string()).unwrap_or_else(|e| e.to_string()));
-            assert!(r.is_err(), "expected the 20000-file reader cap to refuse this manifest");
-            measure(&be, n, "list_tree_prefix", |v: &usize| format!("objects={v} pages_of_1000={}", v.div_ceil(1000)), || ObjectBackend::list(&be, &wb, TREE_PREFIX).unwrap().len());
-            continue;
-        }
+        // Every reader (and the next publish, which reads the previous manifest) takes the same default file cap as the writer.
+        let read = read_manifest(&be, &wb).unwrap().expect("manifest");
+        assert_eq!(read.files.len(), n, "the tree just published is readable with default limits");
+        let again = publish(&paths, "head-1", 1_500);
+        assert_eq!((again.uploaded, again.unchanged), (0, n), "and republishable");
         write_registry_entry(&be, &pb, &summarize(&be, &slug, &wb).unwrap().unwrap()).unwrap();
         // three repetitions each: the first numbers after a long upload are disturbed by the server's I/O backlog
         for rep in 1..=3u64 {

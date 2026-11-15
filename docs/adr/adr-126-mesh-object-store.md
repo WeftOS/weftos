@@ -243,8 +243,8 @@ Only the daemon creates, grants access to, or deletes a store.
   fail|keep_project|overwrite` (`WTS_ON_CONFLICT` for `land`) chooses per land; `fail` stays the default.
 - **Size cap on a land.** A land that would copy more than 1 GiB into the project is refused before any
   write (`--max-bytes N`, `0` = no cap, `WTS_MAX_BYTES`). Scratch that is archived does not count.
-- **Worktree store quota.** `publish` refuses when the store already holds more than 2 GiB
-  (`--quota-bytes N`, `0` = none). This is a check at publish, not a hard limit: an agent writing straight
+- **Worktree store quota.** `publish` refuses when the store already holds more than 8 GiB
+  (`--quota-bytes N`, `0` = none; `retention::DEFAULT_WORKTREE_QUOTA`, twice the 4 GiB tree ceiling, raised from 2 GiB on 2026-11-15). This is a check at publish, not a hard limit: an agent writing straight
   to its bucket with its own key is not stopped (RustFS bucket quotas are not used). `store worktree usage`
   lists objects, bytes, landed time and over-quota per worktree store.
 - **Retention.** `store worktree gc` is a dry run unless `--confirmed`. It retires worktree stores landed
@@ -492,14 +492,29 @@ owed and is **not** produced by the in-memory tests.
 Source: the WO-069 drills report (`wo069-4a-drills-20261114.md`; lanes H, I, J and the round 4
 addendum). Branch `w2/wo069-worktree-mirror`, local.
 
-- **Size ceiling.** `Limits::default()` is 20 000 files, 512 MiB in total and 16 MiB per file
-  (`crates/weftos-store/src/share.rs`). The daemon's `publish` uses those limits, so a tree past them
-  has its surplus files skipped as `OverBudget`, listed in the verb's `skipped` output. A library
-  caller that raises the limits published 50 000 files (1.47 GiB, 730.7 s; manifest 7.9 MB), and
-  then neither a browse, a poll's summary, a fetch nor a republish could load that manifest:
-  `parse_manifest` (`share_publish.rs`) applies `Limits::default().max_files` to every reader and
-  fails with `manifest lists more than 20000 files`. Whether the client project fits is
-  unknown until its real file count and size are measured (gate item 3). Open owner question.
+- **Size ceiling (decided by the owner, 2026-11-15).** Before: `Limits::default()` was 20 000 files,
+  512 MiB in total and 16 MiB per file, and the daemon published with those, so a tree past them had
+  its surplus skipped as `OverBudget`. A library caller that raised the limits published 50 000 files
+  (1.47 GiB, 730.7 s; manifest 7.9 MB), and then no reader could load that manifest, because
+  `parse_manifest` applied `Limits::default().max_files` to every reader. Decision: a worktree may
+  hold **100 000 files and 4 GiB** in total; the 16 MiB per-file cap and the 256 MiB bundle cap are
+  unchanged. There is **one shared limit**: the writer (`publish_tree`) and every reader take their
+  file-count cap from the same `Limits`. In code: `Limits::DEFAULT_MAX_FILES` / `DEFAULT_MAX_TOTAL`
+  in `share.rs` are the single source; `parse_manifest_with`, `read_manifest_with`,
+  `fetch_tree_with` and `fetch_bundle_with` take a `Limits` (the plain readers use the default, and
+  `publish_tree` reads the previous manifest under its own limits). Dependent caps, checked by
+  arithmetic: a pretty-printed manifest entry is 157 bytes measured (175 with longer paths), so
+  100 000 files is 15.7 to 17.6 MB, and the 32 MiB `MAX_MANIFEST_BYTES` is hit at about 213 000
+  files (190 000 with the longer paths), 1.9 to 2.1 times the ceiling; a publish now refuses to write a manifest over that cap instead of writing a tree no
+  reader would load. The worktree store quota default rises from 2 GiB to **8 GiB**: a full tree
+  (4 GiB) plus a full bundle (256 MiB) plus the manifest (at most 32 MiB) plus control objects is
+  about 4.3 GiB, which leaves about 3.7 GiB for overlay objects. The daemon's manifest cache default
+  (32 MiB) is unchanged: it holds two full-size manifests, and a manifest bigger than the budget is
+  served uncached, never refused. Two per-file scans that were quadratic at this size (the
+  uncommitted-path filter in `publish_tree`, the `Select::Paths` match in `fetch_tree_from`) now use
+  sets. A 100 000-object listing is 100 pages of 1 000 on S3; it is paged already and is slow, not
+  unsafe. Still open: the client project's real file count and size (gate item 3), and a first
+  publish of 100 000 files is about 15 to 40 minutes at the measured 30 to 68 PUT/s.
 - **Who is trusted.** The `store.worktree.*` verbs and `store grant` run on the daemon's operator
   path and take the principal as a label the caller supplies. On one daemon, a principal that
   holds only read grants ran `share` (a publish), `claim` and `store grant` on itself, and all
@@ -526,7 +541,7 @@ addendum). Branch `w2/wo069-worktree-mirror`, local.
 **Running the drills.** `scripts/store/wo069-drills.sh` runs against a throwaway RustFS it starts on
 127.0.0.1 (`WEFTOS_STORE_TEST_RUSTFS_BIN=<rustfs binary>`; a weaver built with
 `scripts/build.sh native-debug`, or `WEFTOS_E2E_WEAVER`). `--only d1,d2,d3,lib,scale` picks drills
-(default `d1,d2,d3,lib`, about 4 minutes); `--scale` adds the 20 000 and 50 000 file trees (about
+(default `d1,d2,d3,lib`, about 4 minutes); `--scale` adds the 20 000 and 50 000 file trees (the 50 000 tree now reads back and republishes under the default limits) (about
 45 minutes); `--release` builds the library tests in release mode for latency numbers;
 `WEFTOS_DRILLS_DATA_DIR` puts the server's data on the internal disk. With
 `WEFTOS_DRILLS_RUSTFS_ENV=<0600 env file>` it uses a remote throwaway server instead (it refuses the

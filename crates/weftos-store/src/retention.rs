@@ -10,8 +10,13 @@ use crate::promote::is_promoted;
 pub const DAY_MS: u64 = 24 * 3600 * 1000;
 /// A landed worktree store is kept this long before `gc` offers to retire it.
 pub const DEFAULT_LANDED_KEEP_DAYS: u64 = 14;
-/// Default size past which a worktree store refuses further publishes (2 GiB).
-pub const DEFAULT_WORKTREE_QUOTA: u64 = 2 << 30;
+/// Default size past which a worktree store refuses further publishes (8 GiB). Derived from the
+/// tree ceiling (`Limits::DEFAULT_MAX_TOTAL`, 4 GiB): a full-size tree, plus a full bundle
+/// (`DEFAULT_MAX_BUNDLE`, 256 MiB), plus the manifest (at most `MAX_MANIFEST_BYTES`), the handoff
+/// and control objects, still leaves room for overlay objects (the worktree's own writes). The
+/// publish check is "refuse when the store already holds more than the quota", so a store at the
+/// ceiling is never refused for being at the ceiling.
+pub const DEFAULT_WORKTREE_QUOTA: u64 = 2 * crate::share::Limits::DEFAULT_MAX_TOTAL;
 
 /// `Some(promoted_ms)` if the worktree landed at or before `cutoff_ms`. Not landed, or landed after
 /// the cutoff, is `None`: an unlanded worktree is never a candidate, however old (it may hold the

@@ -268,6 +268,11 @@ fn usage_shows_each_worktree_and_gc_retires_only_landed_ones_after_the_keep_peri
     assert!(u["project"]["bytes"].as_u64().unwrap() >= 80, "two landed assets");
     let landed: Vec<_> = wts.iter().filter(|w| !w["landed_ms"].is_null()).collect();
     assert_eq!(landed.len(), 2);
+    // the default quota is 8 GiB (twice the 4 GiB tree ceiling): small stores are under it, and the
+    // reported figure is the one `publish` enforces
+    let d = call(&svc, "usage", json!({"project": PROJ}), now).unwrap();
+    assert_eq!(d["quota_bytes"], json!(8u64 << 30), "{d}");
+    assert!(d["worktrees"].as_array().unwrap().iter().all(|w| w["over_quota"] == false), "{d}");
 
     // dry run is the default and changes nothing
     let g = call(&svc, "gc", json!({"project": PROJ}), now).unwrap();
