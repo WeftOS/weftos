@@ -62,6 +62,9 @@ pub struct RunEvidence {
     pub signal: Option<i32>,
     /// Killed because it exceeded `[console].max_runtime_secs`.
     pub killed_for_timeout: bool,
+    /// Stopped because its resident memory exceeded `[resources].ram_mb`.
+    #[serde(default)]
+    pub killed_for_memory: bool,
     /// Wall time.
     pub elapsed_ms: u64,
     /// Captured stdout (capped).
@@ -101,7 +104,7 @@ impl RunEvidence {
 
     /// Exited 0 and was not killed.
     pub fn succeeded(&self) -> bool {
-        self.exit_code == Some(0) && !self.killed_for_timeout
+        self.exit_code == Some(0) && !self.killed_for_timeout && !self.killed_for_memory
     }
 
     /// Chain-safe summary: no output content.
@@ -112,6 +115,7 @@ impl RunEvidence {
             "exit_code": self.exit_code,
             "signal": self.signal,
             "killed_for_timeout": self.killed_for_timeout,
+            "killed_for_memory": self.killed_for_memory,
             "elapsed_ms": self.elapsed_ms,
             "stdout_bytes": self.stdout_bytes,
             "stderr_bytes": self.stderr_bytes,

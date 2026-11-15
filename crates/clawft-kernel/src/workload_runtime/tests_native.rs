@@ -13,8 +13,8 @@ use super::types::{
 const SCRIPT: &str = r#"#!/bin/sh
 case "$1" in
   --once)
-    printf '{"cycle":1,"bind":"%s","tok_len":%d,"home":"%s","nofile":"%s","core":"%s","vmem":"%s","args":"%s"}\n' \
-      "$COG_CSI_BIND" "${#COGNITUM_COG_TOKEN}" "$HOME" "$(ulimit -n)" "$(ulimit -c)" "$(ulimit -v)" "$*"
+    printf '{"cycle":1,"bind":"%s","tok_len":%d,"home":"%s","nofile":"%s","core":"%s","vmem":"%s","data":"%s","args":"%s"}\n' \
+      "$COG_CSI_BIND" "${#COGNITUM_COG_TOKEN}" "$HOME" "$(ulimit -n)" "$(ulimit -c)" "$(ulimit -v)" "$(ulimit -d)" "$*"
     touch "$COGNITUM_COG_DATA_DIR/wrote" && echo "data ok" >&2 ;;
   --spin) sleep 30 ;;
   --flood) i=0; while [ $i -lt 3000 ]; do echo "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"; i=$((i+1)); done ;;
@@ -149,9 +149,11 @@ async fn console_run_gets_the_host_contract_a_clean_env_rlimits_and_a_private_da
     assert_eq!(l["nofile"], "256");
     assert_eq!(l["core"], "0");
     if cfg!(target_os = "linux") {
-        // [resources].ram_mb = 64 as RLIMIT_AS, in KiB (macOS does not
-        // implement RLIMIT_AS, so it is only asserted on Linux).
-        assert_eq!(l["vmem"], "65536");
+        // [resources].ram_mb = 64 is enforced as resident memory: no
+        // RLIMIT_AS (address space stays unlimited), RLIMIT_DATA at twice
+        // ram_mb plus 1280 MiB headroom as a backstop, in KiB.
+        assert_eq!(l["vmem"], "unlimited");
+        assert_eq!(l["data"], "1441792");
     }
     assert_eq!(l["args"], "--once --threshold 1.5");
     assert!(dir.join("data/wrote").exists());

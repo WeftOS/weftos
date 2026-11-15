@@ -213,9 +213,9 @@ impl NativeRuntime {
             );
         }
         let ram = if arch == MACOS_AARCH64 {
-            "ram not enforced on macOS (RLIMIT_AS is ignored there)".to_string()
+            "ram not enforced on macOS (resident-memory watchdog is Linux only)".to_string()
         } else {
-            format!("ram {} MiB", p.spec.resources.ram_mb)
+            format!("ram {} MiB resident", p.spec.resources.ram_mb)
         };
         notes.push(format!(
             "limits: {ram}, console {} s, output {} B",
