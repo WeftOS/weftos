@@ -1062,7 +1062,17 @@ if [ -s "$TMP/ex-cands" ]; then
                 (find "$d" \( -name target -o -name .git \) -prune -o \( -type f -o -type l \) -print0 | tar --null -T - -cf - | tar -x -C "$R/tree") 2>/dev/null \
                     || { REACH_WHY="cannot copy $d"; break; }
             else
-                git archive --format=tar "$HEAD_SHA" -- "$d" | tar -x -C "$R/tree" || { REACH_WHY="cannot extract $d"; break; }
+                # raw blobs, one by one: git archive would apply .gitattributes (export-ignore
+                # drops a file, export-subst rewrites one), and the walk must see what rustc reads
+                git ls-tree -r -z --full-tree "$HEAD_SHA" -- "$d" | tr '\000' '\n' >"$R/ls" || { REACH_WHY="cannot list $d"; break; }
+                while IFS="$(printf '\t')" read -r meta f; do
+                    set -- $meta
+                    [ "$2" = blob ] || continue
+                    mkdir -p "$R/tree/$(dirname -- "$f")" || { REACH_WHY="cannot extract $d"; break; }
+                    if [ "$1" = 120000 ]; then ln -s -- "$(git cat-file blob "$3")" "$R/tree/$f"
+                    else git cat-file blob "$3" >"$R/tree/$f"; fi || { REACH_WHY="cannot extract $f"; break; }
+                done <"$R/ls"
+                [ -z "$REACH_WHY" ] || break
             fi
             awk -F'\t' -v mp="$mp" '$1 == "T" && $2 == mp && $3 !~ /(^|,)(test|bench|example)(,|$)/ { print $5 }' "$TMP/meta-head.rec" >>"$R/roots"
         done <"$R/pkgs"
