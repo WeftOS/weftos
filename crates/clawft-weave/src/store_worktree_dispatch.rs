@@ -110,7 +110,9 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
             let writer = who(&p);
             // WEFTOS_WORKTREE_MANIFEST_SCHEMA / WEFTOS_WORKTREE_SWEEP, read once (lane D3).
             let opts = super::publish_env::publish_options()?;
-            let published = weftos_store::share::publish_tree_opts(
+            // WEFTOS_WORKTREE_HASH_CACHE / WEFTOS_WORKTREE_HASH_REHASH_HOURS, read once (lane E1).
+            let hash_cache = super::publish_env::hash_cache_config(&n.wt)?;
+            let published = weftos_store::share::publish_tree_cached(
                 &b,
                 &n.wt,
                 &TreeSource {
@@ -130,12 +132,17 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
                 now_ms,
                 listing,
                 &opts,
+                hash_cache.as_ref(),
             )
             .map_err(e)?;
             // The registry entry is derived from the manifest just written and, when this publish
             // created it, the handoff just written; an existing record is read fresh (it may have
             // changed during the upload), and a handoff note rewrites it, so that is read too.
             let rep = published.report;
+            let hc = &rep.hash_cache;
+            if hc.mismatch || hc.write_error.is_some() {
+                tracing::warn!(worktree = %n.wt, mismatch = hc.mismatch, write_error = ?hc.write_error, "worktree publish hash cache: discarded or not written");
+            }
             let h = match p.handoff.as_deref() {
                 Some(note) => {
                     mark_handoff(&b, &n.wt, &writer, note, now_ms).map_err(e)?;
@@ -149,6 +156,12 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
                 "retired": rep.retired, "deferred": rep.deferred, "schema": opts.schema,
                 "skipped": rep.skipped.iter().map(|(k, w)| format!("{k}: {w:?}")).collect::<Vec<_>>(),
                 "bundle_uploaded": rep.bundle_uploaded, "handoff": p.handoff.is_some(),
+                "hash_cache": {
+                    "enabled": hc.enabled, "files_hashed": hc.hashed, "bytes_hashed": hc.hashed_bytes,
+                    "files_from_cache": hc.from_cache, "files_sampled": hc.sampled,
+                    "full_pass": hc.full_pass, "full_pass_reason": hc.full_pass_reason,
+                    "mismatch": hc.mismatch, "write_error": hc.write_error,
+                },
             }))
         }
         "fetch" => {

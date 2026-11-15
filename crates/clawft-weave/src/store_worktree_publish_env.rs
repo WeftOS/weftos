@@ -8,14 +8,26 @@
 //! - `WEFTOS_WORKTREE_SWEEP`: `on` (default) or `off`, the kill switch: publishes still retire
 //!   objects in the manifest but delete nothing.
 //!
+//! - `WEFTOS_WORKTREE_HASH_CACHE`: `on` (default) or `off`. Off publishes exactly as before the
+//!   cache (WO-069 E1): every file read and hashed on every publish.
+//! - `WEFTOS_WORKTREE_HASH_REHASH_HOURS`: hours between full passes that ignore the cache
+//!   (default 24; 0 = every publish is a full pass).
+//!
+//! The cache is one file per project and worktree under the daemon's runtime directory
+//! (`<runtime>/worktree-hash-cache/`), on the publishing machine's local disk: not in the store, not
+//! in the git worktree.
+//!
 //! Any other value is an error on every publish (never a silent default), so a typo in a rollback
 //! is seen at once.
 
 use std::sync::OnceLock;
-use weftos_store::share::{PublishOptions, SCHEMA_V1, SCHEMA_V2};
+use weftos_store::share::{DEFAULT_FULL_REHASH_MS, HashCacheConfig, PublishOptions, SCHEMA_V1, SCHEMA_V2};
 
 pub(crate) const SCHEMA_VAR: &str = "WEFTOS_WORKTREE_MANIFEST_SCHEMA";
 pub(crate) const SWEEP_VAR: &str = "WEFTOS_WORKTREE_SWEEP";
+pub(crate) const HASH_CACHE_VAR: &str = "WEFTOS_WORKTREE_HASH_CACHE";
+pub(crate) const REHASH_HOURS_VAR: &str = "WEFTOS_WORKTREE_HASH_REHASH_HOURS";
+const CACHE_DIR: &str = "worktree-hash-cache";
 
 /// The options this daemon publishes with, from its environment (read once).
 pub(crate) fn publish_options() -> Result<PublishOptions, String> {
@@ -38,6 +50,42 @@ pub(crate) fn parse(schema: Option<&str>, sweep: Option<&str>) -> Result<Publish
     Ok(PublishOptions { schema, sweep, ..PublishOptions::default() })
 }
 
+/// Milliseconds between full passes, or `None` when the cache is switched off (read once).
+pub(crate) fn hash_cache_interval() -> Result<Option<u64>, String> {
+    static O: OnceLock<Result<Option<u64>, String>> = OnceLock::new();
+    O.get_or_init(|| parse_cache(std::env::var(HASH_CACHE_VAR).ok().as_deref(), std::env::var(REHASH_HOURS_VAR).ok().as_deref())).clone()
+}
+
+pub(crate) fn parse_cache(switch: Option<&str>, hours: Option<&str>) -> Result<Option<u64>, String> {
+    match switch.map(str::trim).filter(|s| !s.is_empty()) {
+        None | Some("on") => {}
+        Some("off") => return Ok(None),
+        Some(v) => return Err(format!("{HASH_CACHE_VAR}={v:?}: use on or off")),
+    }
+    match hours.map(str::trim).filter(|s| !s.is_empty()) {
+        None => Ok(Some(DEFAULT_FULL_REHASH_MS)),
+        Some(h) => h
+            .parse::<u64>()
+            .ok()
+            .and_then(|h| h.checked_mul(3_600_000))
+            .map(Some)
+            .ok_or_else(|| format!("{REHASH_HOURS_VAR}={h:?}: use a whole number of hours (0 = every publish)")),
+    }
+}
+
+/// The cache for worktree bucket `wt` of this daemon, or `None` when it is off or the daemon has no
+/// runtime directory (a test, or no object store started): never a path outside that directory.
+pub(crate) fn hash_cache_config(wt: &str) -> Result<Option<HashCacheConfig>, String> {
+    let Some(every) = hash_cache_interval()? else { return Ok(None) };
+    let Some(dir) = crate::store_rt::protected_paths().into_iter().next() else { return Ok(None) };
+    Ok(Some(cache_config(&dir, wt, every)))
+}
+
+pub(crate) fn cache_config(runtime_dir: &std::path::Path, wt: &str, every_ms: u64) -> HashCacheConfig {
+    let name: String = wt.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
+    HashCacheConfig { path: runtime_dir.join(CACHE_DIR).join(format!("{name}.json")), full_rehash_every_ms: every_ms }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -53,5 +101,19 @@ mod tests {
         assert!(!off.sweep && off.grace_ms == d.grace_ms);
         assert!(parse(Some("3"), None).unwrap_err().contains(SCHEMA_VAR));
         assert!(parse(None, Some("false")).unwrap_err().contains(SWEEP_VAR));
+    }
+
+    #[test]
+    fn the_hash_cache_switch_hours_and_location() {
+        assert_eq!(parse_cache(None, None).unwrap(), Some(DEFAULT_FULL_REHASH_MS));
+        assert_eq!(parse_cache(Some("on"), Some(" 2 ")).unwrap(), Some(2 * 3_600_000));
+        assert_eq!(parse_cache(Some("on"), Some("0")).unwrap(), Some(0));
+        assert_eq!(parse_cache(Some("off"), Some("junk")).unwrap(), None, "off wins");
+        assert!(parse_cache(Some("no"), None).unwrap_err().contains(HASH_CACHE_VAR));
+        assert!(parse_cache(None, Some("-1")).unwrap_err().contains(REHASH_HOURS_VAR));
+        assert!(parse_cache(None, Some("x")).unwrap_err().contains(REHASH_HOURS_VAR));
+        let c = cache_config(std::path::Path::new("/run/weftos"), "t-w-01abc/../x", 5);
+        assert_eq!(c.path, std::path::PathBuf::from("/run/weftos/worktree-hash-cache/t-w-01abc____x.json"));
+        assert_eq!(c.full_rehash_every_ms, 5);
     }
 }
