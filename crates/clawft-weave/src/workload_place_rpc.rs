@@ -191,8 +191,41 @@ fn gate(
     chain: &Arc<ChainManager>,
     effective: Option<(Vec<clawft_kernel::governance::GovernanceRule>, f64, bool)>,
     revocations: Arc<clawft_kernel::revocation::RevocationList>,
+    builtin: Vec<clawft_kernel::workload_governance::WorkloadPermitRule>,
 ) -> Result<Arc<WorkloadGate>, String> {
-    crate::workload_gate::build(dir, chain, effective, revocations)
+    crate::workload_gate::build_with(dir, chain, effective, revocations, builtin)
+}
+
+/// The built-in permit for the `computer` kind: only on a node that runs the
+/// hub (so the adapter exists), and only for this node's own principal. The
+/// owner's own principal is the node identity this daemon signs placement
+/// requests with (`boot.key`, the same key as the local controller's); a remote
+/// controller listed in `workload-host.json` is deliberately not an owner for
+/// this kind. To admit one, add a `computer` permit with `principals` to
+/// `workload-permits.json` (list this node's id too: the host's own load and
+/// start are decided as the node).
+pub(crate) fn computer_permits(
+    node_id: &str,
+    hub_running: bool,
+) -> Vec<clawft_kernel::workload_governance::WorkloadPermitRule> {
+    if hub_running {
+        vec![clawft_kernel::workload_governance::computer_owner_permit([node_id])]
+    } else {
+        Vec::new()
+    }
+}
+
+/// The `computer` adapter over the daemon's hub: only with the `computer-hub`
+/// feature and a hub the daemon started.
+fn computer_adapter() -> Option<clawft_kernel::workload_runtime::ComputerRuntime> {
+    #[cfg(feature = "computer-hub")]
+    {
+        crate::computer_hub_svc::computer_runtime()
+    }
+    #[cfg(not(feature = "computer-hub"))]
+    {
+        None
+    }
 }
 
 /// Give the exchange this node's revocation list (a revoked package, signer
@@ -443,7 +476,8 @@ async fn build(
     let pk = boot.key.verifying_key().to_bytes();
     let id = clawft_kernel::node_id_from_pubkey(&pk);
     let anchors = load_anchors(dir)?;
-    let gate = gate(dir, &chain, effective, revocations.clone())?;
+    let computer = computer_adapter();
+    let gate = gate(dir, &chain, effective, revocations.clone(), computer_permits(&id, computer.is_some()))?;
     // `open_file` indexes the blobs already on disk (installed workloads'
     // files from earlier runs), so the exchange finds them present and never
     // takes ownership of, or evicts, bytes it did not create.
@@ -554,6 +588,7 @@ async fn build(
         container,
         ingest: hooks,
         revocations: revocations.clone(),
+        computer,
     })?);
     // A stop or unload publishes the memory it freed before it answers, so the
     // controller's next placement is judged on it (card b71cd973).

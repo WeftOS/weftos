@@ -85,18 +85,37 @@ The rule is code: `ComputerBody::verdict(app, display)` returns `Allow`, `Ask` o
 - `workload.place` and `workload.explain` accept `{ "computer": <body> }` alone, validate it, and reply with the
   spec. A bad body, an unknown field, or any other parameter next to `computer` is refused.
 
+## Placement, trust and supervision (owner decisions of 2026-11-15)
+
+- **A package-less place path.** `workload.ctl place` on the node's host accepts `{name, variant: "computer",
+  computer: <body>}` and no `manifest_hash`. `place` routes it to `WorkloadHostService::computer_order`
+  (`workload_ctl/host_computer.rs`): the order must route to the `computer` adapter, its `name` must be the desktop
+  id, and the body must pass `ComputerBody::parse` (desktop id `[a-z0-9][a-z0-9_-]*`, at most 64; host kind;
+  capabilities; the `own` / `granted` rule). Every other kind keeps requiring a signed package: a package-less
+  order without a computer body, or a computer body next to a hash, is refused as an invalid request.
+- **The desktop need not be connected yet.** A desktop is minted, then registers when its tool server starts, so
+  a place that arrives first is legitimate. Until it connects the adapter reports "no hub connection for this
+  desktop" and the supervisor alerts after the detection window. A node with no hub has no `computer` adapter, so
+  it refuses the order (`admission`).
+- **Governance.** Kind `computer` is admitted by `computer_owner_permit` (`workload_governance/policy.rs`, id
+  `COMPUTER-OWNER-PERMIT`): `min_package_trust = operator_attested` (what a declared computer carries), no
+  network, no cost, and only for the principals it names. `place` decides `workload.place` for the **requester's**
+  principal (the signing controller's node id); the host's own gated `load`, `start`, `stop` and `unload` decide
+  as the node. The daemon ships the permit only when the hub runs, naming exactly this node's own id: the
+  identity the daemon signs its own placement requests with. A controller listed in `workload-host.json` is not an
+  owner for this kind (the narrowest reading of "Mathew's own principals", since nothing in the codebase marks an
+  owner more precisely). To admit a remote controller, add a `computer` permit with `principals` to
+  `workload-permits.json`, naming this node's id too.
+- **Alert, never restart.** `ComputerKind::restart_on_unhealthy()` is `false`. After `miss_limit` (3) polls past
+  the 45 s heartbeat window (about 90 s from the last frame) the instance goes `Unhealthy`, a lifecycle event is
+  chained with `phase: alert`, `alert: true`, `restart: never` and the named reason, and a warning is logged.
+  The supervisor does not stop or start the watch. A later healthy poll returns the instance to `Running`.
+- **Wiring.** `workload_host_serve::local_host` registers the `computer` route from
+  `computer_hub_svc::computer_runtime()` behind the `computer-hub` feature; the daemon starts the hub before it
+  builds the host. `workload.place {computer}` alone (no host call) still only declares.
+
 ## Not done here (open)
 
-- **The `computer` runtime adapter exists but is not yet routed.** `ComputerRuntime`
-  (`clawft-kernel/src/workload_runtime/computer.rs`) judges a desktop by the hub's `last_seen_ms` for the
-  connection whose machine id equals the workload id (card 65f82b13); `ComputerKind::judge` calls a gap over
-  `interval_ms x miss_limit` (45 s) unhealthy with "hub heartbeat stale: last seen Ns ago", and no connection
-  unhealthy with its own reason. `workload.place {computer}` still only declares (`placed: false`);
-  `adapter_ready` is true on a node whose daemon runs the hub. The daemon does not yet register a
-  `WorkloadHost` route for the adapter: a package-less place path on the host and the governance permit come first.
-  `workload_ctl::tests_computer_supervise` shows the supervisor judging a computer instance once it is held.
-- **No governance permit** for `computer` yet. `workload.place` is default-deny; a permit rule for the kind (and
-  for the R9 ask) is needed before the adapter lands.
 - **Run-time revocation is in memory.** `computer.hub.revoke` lasts until the daemon restarts; a `jti` in
   `revoked_jti` of `hub.toml` is durable.
 - **Diff gate.** The hub library adds a git dependency (`xai-tool-protocol` from the WeftOS grok-build fork) and

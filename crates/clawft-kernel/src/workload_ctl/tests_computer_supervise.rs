@@ -16,7 +16,7 @@ use super::lifecycle::{InstanceLife, LifecycleState};
 use super::test_support::{anchors, exchange};
 use crate::chain::ChainManager;
 use crate::node_registry::node_id_from_pubkey;
-use crate::workload_governance::{NodeTrustTier, WorkloadGate, WorkloadPermitRule};
+use crate::workload_governance::{NodeTrustTier, WorkloadGate, computer_owner_permit};
 use crate::workload_kind::{KIND_COMPUTER, computer_workload};
 use crate::workload_pkg::ManifestEnvelope;
 use crate::workload_runtime::{
@@ -38,14 +38,9 @@ async fn a_silent_desktop_goes_unhealthy_through_the_supervisor_and_recovers() {
     let key = SigningKey::from_bytes(&[7; 32]);
     let id = node_id_from_pubkey(&key.verifying_key().to_bytes());
     let chain = Arc::new(ChainManager::new(0, 1000));
-    // The production permit for `computer` is not written yet (ADR GBF-003,
-    // open item); this test's own rule admits the operator-attested trust a
-    // declared computer carries.
-    let mut permit = WorkloadPermitRule::new("test-computer", ["workload.*"], [KIND_COMPUTER]);
-    permit.min_package_trust = crate::workload_governance::PackageTrust::OperatorAttested;
     let gate = Arc::new(
         WorkloadGate::exempt(0.95, false, "test")
-            .with_permit(permit)
+            .with_permit(computer_owner_permit([id.clone()]))
             .unwrap()
             .with_chain(chain.clone()),
     );
@@ -121,16 +116,25 @@ async fn a_silent_desktop_goes_unhealthy_through_the_supervisor_and_recovers() {
         .find(|s| s.to == LifecycleState::Unhealthy)
         .unwrap_or_else(|| panic!("no unhealthy step in {steps:?}"));
     assert!(unhealthy.reason.contains("hub heartbeat stale"), "{}", unhealthy.reason);
-    // The restart policy then acts on it (restarting the adapter's watch is
-    // all a restart can do for a desktop; the evidence stays in the chain).
-    assert!(
-        steps.iter().any(|s| s.to == LifecycleState::Restarting && s.reason.contains("hub heartbeat stale")),
-        "{steps:?}"
-    );
+    // Alert, never restart: the instance stays Unhealthy, no step restarts it,
+    // and the chain carries the alert with the named reason.
+    assert!(!steps.iter().any(|s| s.to == LifecycleState::Restarting), "{steps:?}");
+    assert_eq!(svc.lifecycle_of(&handle.instance_id).await, Some(LifecycleState::Unhealthy));
+    let alerts: Vec<_> = super::test_support::events(&chain, crate::chain::EVENT_KIND_WORKLOAD_LIFECYCLE)
+        .into_iter()
+        .filter(|(_, p)| p["alert"] == true)
+        .collect();
+    assert_eq!(alerts.len(), 1, "{alerts:?}");
+    assert!(alerts[0].1["reason"].as_str().unwrap().contains("hub heartbeat stale"));
+    assert_eq!(alerts[0].1["restart"], "never");
+    // Further silent polls neither restart it nor repeat the alert.
+    assert!(svc.supervise(at(105_000)).await.is_empty());
+    assert_eq!(svc.lifecycle_of(&handle.instance_id).await, Some(LifecycleState::Unhealthy));
 
     // The desktop pings again: the next polls are healthy and nothing moves.
     hub.0.lock().unwrap().insert("xpc".into(), T0 + 100_000);
-    assert!(svc.supervise(at(110_000)).await.is_empty());
+    let back = svc.supervise(at(120_000)).await;
+    assert!(back.iter().any(|s| s.to == LifecycleState::Running && s.reason == "health recovered"), "{back:?}");
     assert_eq!(svc.lifecycle_of(&handle.instance_id).await, Some(LifecycleState::Running));
-    assert!(svc.supervise(at(125_000)).await.is_empty());
+    assert!(svc.supervise(at(135_000)).await.is_empty());
 }

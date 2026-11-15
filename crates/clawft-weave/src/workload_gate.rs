@@ -24,7 +24,7 @@ use clawft_kernel::boot::Kernel;
 use clawft_kernel::chain::ChainManager;
 use clawft_kernel::governance::GovernanceRule;
 use clawft_kernel::revocation::RevocationList;
-use clawft_kernel::workload_governance::WorkloadGate;
+use clawft_kernel::workload_governance::{WorkloadGate, WorkloadPermitRule};
 use clawft_platform::NativePlatform;
 use tokio::sync::RwLock;
 
@@ -45,6 +45,19 @@ pub fn build(
     effective: Option<Effective>,
     revocations: Arc<RevocationList>,
 ) -> Result<Arc<WorkloadGate>, String> {
+    build_with(dir, chain, effective, revocations, Vec::new())
+}
+
+/// [`build`] plus built-in permits that ship with a wired feature (the
+/// `computer` owner permit, GBF-003). They come first, so an operator permit
+/// with the same id is refused as a duplicate rather than silently shadowing.
+pub fn build_with(
+    dir: &Path,
+    chain: &Arc<ChainManager>,
+    effective: Option<Effective>,
+    revocations: Arc<RevocationList>,
+    builtin: Vec<WorkloadPermitRule>,
+) -> Result<Arc<WorkloadGate>, String> {
     let base = match effective {
         Some((rules, threshold, human)) => {
             WorkloadGate::with_rules(threshold.min(MAX_THRESHOLD), human, rules, revocations)
@@ -52,7 +65,7 @@ pub fn build(
         None => WorkloadGate::new(MAX_THRESHOLD, false, revocations),
     };
     let mut g = base.with_chain(chain.clone());
-    for p in load_permits(dir)? {
+    for p in builtin.into_iter().chain(load_permits(dir)?) {
         g = g.with_permit(p)?;
     }
     Ok(Arc::new(g))

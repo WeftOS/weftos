@@ -95,6 +95,14 @@ pub trait WorkloadKind: Send + Sync {
         true
     }
 
+    /// Whether the supervisor restarts an instance of this kind that has
+    /// been unhealthy for `miss_limit` polls. A kind whose failure a restart
+    /// cannot fix (a desktop that went quiet) says `false`: the instance is
+    /// marked unhealthy and the reason is raised as an alert instead.
+    fn restart_on_unhealthy(&self) -> bool {
+        true
+    }
+
     #[cfg(all(feature = "workload-runtime", feature = "mesh", unix))]
     /// Verify the signed package in `package_dir` against `anchors` (with
     /// `kinds` as the registry the manifest is checked against) and load it

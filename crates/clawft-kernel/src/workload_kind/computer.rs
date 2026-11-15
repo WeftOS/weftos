@@ -282,6 +282,15 @@ impl WorkloadKind for ComputerKind {
         false
     }
 
+    /// Alert, never restart (owner decision 4, 2026-11-15): restarting the
+    /// adapter's watch cannot make a silent desktop answer, and a restart
+    /// loop would hide the outage. The instance goes `Unhealthy` with the
+    /// named reason, chained as an alert, and returns to `Running` when the
+    /// desktop pings again.
+    fn restart_on_unhealthy(&self) -> bool {
+        false
+    }
+
     fn validate(&self, envelope: &ManifestEnvelope) -> Result<(), ManifestError> {
         if envelope.kind != KIND_COMPUTER {
             return Err(invalid(format!("kind {:?} is not {KIND_COMPUTER:?}", envelope.kind)));

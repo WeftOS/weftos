@@ -154,6 +154,9 @@ pub struct HostParts<'a> {
     /// The node's revocation list: a `place` that races a revocation is
     /// caught and a revoked start is rolled back by the revocation.
     pub revocations: Arc<clawft_kernel::revocation::RevocationList>,
+    /// The `computer` adapter over the daemon's hub (`computer-hub`), when
+    /// this node runs one; it is registered as the `computer` route.
+    pub computer: Option<clawft_kernel::workload_runtime::ComputerRuntime>,
 }
 
 /// This node's `workload-host`: the native adapter (and the container
@@ -179,6 +182,13 @@ pub fn local_host(p: HostParts<'_>) -> Result<WorkloadHostService, String> {
     let container = p
         .container
         .map(|cfg| container_host(cfg, p.gate.clone(), &id, p.chain));
+    // The `computer` adapter exists only on a node that runs the computer hub.
+    let computer = p.computer.map(|rt| {
+        Arc::new(
+            WorkloadHost::new(Arc::new(rt), p.gate.clone(), id.clone(), NodeTrustTier::Pinned)
+                .with_chain(p.chain.clone()),
+        )
+    });
     let mut controllers = vec![pk];
     if let Some(cfg) = p.serving {
         controllers.extend(cfg.validate()?);
@@ -196,6 +206,9 @@ pub fn local_host(p: HostParts<'_>) -> Result<WorkloadHostService, String> {
     svc.set_revocations(p.revocations);
     if let Some(h) = p.ingest {
         svc = svc.with_ingest(h);
+    }
+    if let Some(h) = computer {
+        svc = svc.with_route("computer", h);
     }
     if let Some((h, routes)) = container {
         for r in routes {

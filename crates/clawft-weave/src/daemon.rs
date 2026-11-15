@@ -1274,6 +1274,16 @@ pub async fn run(
     // in service mode the box key belongs to the mesh service, so placement and
     // the licence steward sign with a daemon-local control key instead
     // (ADR-106 phase 3, `placement_boot`).
+    // D1: the Tapestry computer hub, when this node hosts one (`computer-hub/hub.toml`
+    // under the runtime dir). A broken config is an error in the log, not a silent skip.
+    // It starts before the workload host is built: the host registers the `computer`
+    // adapter only when a hub is running (GBF-003).
+    #[cfg(feature = "computer-hub")]
+    match crate::computer_hub_svc::start_global(&runtime_dir).await {
+        Ok(Some(h)) => info!(addr = %h.addr(), "computer hub serving"),
+        Ok(None) => {}
+        Err(e) => error!(error = %e, "computer hub not started"),
+    }
     crate::fleet_labels::init(&runtime_dir);
     #[cfg(all(feature = "placement", unix))]
     crate::placement_boot::start(&kernel, &daemon_identity, &runtime_dir).await;
@@ -1364,14 +1374,6 @@ pub async fn run(
                 Ok(None) => {}
                 Err(e) => error!(error = %e, "client store not started"),
             }
-        }
-        // D1: the Tapestry computer hub, when this node hosts one (`computer-hub/hub.toml`
-        // under the runtime dir). A broken config is an error in the log, not a silent skip.
-        #[cfg(feature = "computer-hub")]
-        match crate::computer_hub_svc::start_global(&runtime_dir).await {
-            Ok(Some(h)) => info!(addr = %h.addr(), "computer hub serving"),
-            Ok(None) => {}
-            Err(e) => error!(error = %e, "computer hub not started"),
         }
         let parts = crate::infer_wire::InitParts {
             dir: &runtime_dir,

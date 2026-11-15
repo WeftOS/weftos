@@ -95,6 +95,7 @@ async fn served_daemon(controller: &SigningKey) -> Daemon {
         container: None,
         revocations: list.clone(),
         ingest: None,
+        computer: None,
     })
     .unwrap();
     // The daemon's host constructor wires the list into the service: without

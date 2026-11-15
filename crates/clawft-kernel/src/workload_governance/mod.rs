@@ -15,12 +15,14 @@ pub mod policy;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_computer;
 
 pub use effect::{NetworkPolicy, NodeTrustTier, PackageTrust, WorkloadEffect, WorkloadRefs, WorkloadRequest};
 pub use gate::{
     WorkloadGate, chain_revocations, event_kind_for, revoke_and_record, unrevoke_and_record,
 };
 pub use policy::{
-    CATALOG_PRINCIPAL, DEFAULT_DENY_RULE_ID, EFFECT_CEILING_RULE_ID, GOVERNED_ACTIONS, SUPERVISOR_PRINCIPAL,
-    WorkloadPermitRule, default_rules, project_supervisor_permit, install_default_rules, is_governed_action,
+    CATALOG_PRINCIPAL, COMPUTER_OWNER_PERMIT_ID, DEFAULT_DENY_RULE_ID, EFFECT_CEILING_RULE_ID, GOVERNED_ACTIONS, SUPERVISOR_PRINCIPAL,
+    WorkloadPermitRule, computer_owner_permit, default_rules, project_supervisor_permit, install_default_rules, is_governed_action,
 };

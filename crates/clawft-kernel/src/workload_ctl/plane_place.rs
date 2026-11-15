@@ -339,6 +339,7 @@ impl PlacementControlPlane {
                 config: order.config.clone(),
                 start: order.start,
                 project_id: order.project_id.clone(),
+                computer: None,
             })
             .unwrap_or_default();
             let target = match self.target(&node) {

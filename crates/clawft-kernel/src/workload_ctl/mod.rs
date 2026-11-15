@@ -25,6 +25,7 @@ mod device_node;
 pub mod device_owner;
 mod device_sys;
 pub mod host_cogbus;
+mod host_computer;
 pub mod host_devices;
 pub mod facts;
 mod host_instances;
@@ -72,6 +73,8 @@ mod tests_kind;
 mod tests_kind_followups;
 #[cfg(test)]
 mod tests_computer_supervise;
+#[cfg(test)]
+mod tests_computer_place;
 #[cfg(test)]
 mod tests_life;
 #[cfg(test)]
