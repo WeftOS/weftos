@@ -124,6 +124,42 @@ wts_registered() {
     return 0
 }
 
+# Skipped files (WO-069 lane R): see report_skips below; status `published-partial` marks a sweep publish that left
+# size/budget content out. Env: WTS_STRICT_SKIPS=1 makes that fail the command (publish is kept).
+#
+# report_skips <publish reply JSON>: the verb lists skipped files as "path: Reason" in "skipped". Warn on stderr with a
+# count per reason and the first 10 paths. Secret = denylist (expected); TooLarge / OverBudget = real content missing
+# for followers (budget); anything else (symlink, not a file, vanished, bad path) is "other". Writes
+# "budget=N other=M secret=K" to $WTS_SKIP_FILE when set (the sweep reads it). Returns 3 only for
+# WTS_STRICT_SKIPS=1 with budget skips; the publish itself is never undone.
+report_skips() {
+    local lines n b o s line reason path shown=0 cap=10
+    [ -n "${1:-}" ] || return 0
+    lines=$(printf '%s' "$1" | perl -MJSON::PP -e 'local $/; my $j = eval { decode_json(<STDIN>) } or exit 0;
+        print "$_\n" for grep { !ref } @{ $j->{skipped} || [] };' 2>/dev/null) || lines=""
+    [ -n "$lines" ] || return 0
+    n=0; b=0; o=0; s=0
+    while IFS= read -r line; do
+        reason=${line##*: }
+        case "$reason" in Secret) s=$((s+1)) ;; TooLarge|OverBudget) b=$((b+1)) ;; *) o=$((o+1)) ;; esac
+        n=$((n+1))
+    done <<<"$lines"
+    [ -z "${WTS_SKIP_FILE:-}" ] || printf 'budget=%s other=%s secret=%s\n' "$b" "$o" "$s" >"$WTS_SKIP_FILE"
+    if [ $((b+o)) -gt 0 ]; then
+        warn "WARNING: published, but $((b+o)) file(s) were NOT shared; followers are missing them (size/budget: $b, other: $o; denylist: $s)"
+        while IFS= read -r line; do
+            reason=${line##*: }; path=${line%: *}
+            case "$reason" in Secret) continue ;; esac
+            [ $shown -lt $cap ] || break
+            warn "  not shared ($reason): $path"; shown=$((shown+1))
+        done <<<"$lines"
+        [ $((b+o)) -le $shown ] || warn "  ... and $((b+o-shown)) more"
+    fi
+    [ "$s" = 0 ] || warn "note: $s path(s) matched the secret denylist and were not shared (expected)"
+    if [ "$b" -gt 0 ] && [ "${WTS_STRICT_SKIPS:-0}" = 1 ]; then warn "WTS_STRICT_SKIPS=1: failing because of size/budget skips"; return 3; fi
+    return 0
+}
+
 # slug-for-path <dir>: the registered slug whose path is <dir> (used by the shared hook), or nothing.
 wts_slug_for_path() {
     local want=${1:?usage: slug-for-path <dir>} f
@@ -152,7 +188,7 @@ follow_slug() { # <reg file> <path>: print the slug to publish under; return 1 w
 
 # One registered worktree: sets $status and $detail. No weaver call unless the digest moved.
 sweep_one() {
-    local f=$1 slug proj path digest head lock="" rc want moved="" tref base drift="" cur regb
+    local f=$1 slug proj path digest head lock="" rc want moved="" tref base drift="" cur regb skipf sk sb so ss
     slug=$(rget "$f" slug); proj=$(rget "$f" project); path=$(rget "$f" path)
     dry=${WTS_DRY_RUN:-0}; detail=""
     if [ ! -d "$path" ] || [ ! -e "$path/.git" ]; then
@@ -197,7 +233,10 @@ sweep_one() {
             tref=$(cd "$path" && target_ref) && base=$(git -C "$path" merge-base "$tref" HEAD) || base=$head
             store_must create --project "$proj" --slug "$slug" --branch "$(git -C "$path" symbolic-ref --short HEAD)" --base "$base" >&2 || rc=$?
         fi
-        [ $rc != 0 ] || (cd "$path" && WTS_SLUG=$slug WTS_PROJECT=$proj "$WTS_SELF" share) >&2 || rc=$?
+        skipf="" ; [ "$dry" = 1 ] || skipf=$lock/skips
+        [ $rc != 0 ] || (cd "$path" && WTS_SKIP_FILE=$skipf WTS_SLUG=$slug WTS_PROJECT=$proj "$WTS_SELF" share) >&2 || rc=$?
+        # Exit 3 = published, but WTS_STRICT_SKIPS=1 and size/budget skips happened: keep the publish, fail the sweep at the end.
+        if [ $rc = 3 ]; then rc=0; nstrict=$((nstrict+1)); fi
         if [ $rc != 0 ]; then status=failed; detail="share exited $rc; will retry next sweep"
         elif [ "$dry" = 1 ]; then status=would-publish; detail="head=$head"
         else
@@ -205,6 +244,11 @@ sweep_one() {
             rset "$f" digest "$digest"; rset "$f" head "$head"; rset "$f" published_at "$(wts_now)"
             [ -z "$moved" ] || { rset "$f" slug "$slug"; rset "$f" prev_slug "$moved"; rset "$f" branch "$cur"; detail="slug-moved=$moved->$slug "; }
             status=published; detail="${detail}head=$head"
+            if [ -s "$skipf" ]; then   # skipped files: "published-partial" + the counts (secret-only skips stay "published")
+                sk=$(cat "$skipf"); sb=${sk#budget=}; sb=${sb%% *}; so=${sk#*other=}; so=${so%% *}; ss=${sk##*secret=}
+                [ $((sb+so)) = 0 ] || { status=published-partial; detail="${detail} skipped_budget=$sb skipped_other=$so"; }
+                [ "$ss" = 0 ] || detail="${detail} skipped_secret=$ss"
+            fi
         fi
     fi
     detail="$drift$detail"
@@ -212,7 +256,7 @@ sweep_one() {
 }
 
 wts_sweep() {
-    local only="" json=0 f slug nfail=0 first=1 status detail dry
+    local only="" json=0 f slug nfail=0 first=1 status detail dry; nstrict=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --only) only=${2:?--only needs a slug}; shift 2 ;;
@@ -240,6 +284,7 @@ wts_sweep() {
     [ "$json" = 1 ] && printf ']\n'
     # Same contract as the rest of the script: failures warn and exit 0 unless WTS_STRICT=1.
     if [ "$nfail" -gt 0 ]; then warn "$nfail worktree(s) failed to publish"; [ "$strict" = 1 ] && return 1; fi
+    if [ "$nstrict" -gt 0 ]; then warn "$nstrict worktree(s) published with size/budget skips (WTS_STRICT_SKIPS=1)"; return 1; fi
     return 0
 }
 

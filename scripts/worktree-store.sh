@@ -6,6 +6,10 @@
 #                                               store half of `new`, for the agent-git-flow post-new hook
 #   worktree-store.sh store-promote             store half of `land`, for the agent-git-flow post-land hook
 #   worktree-store.sh share [--handoff NOTE]    publish this worktree's tree + unmerged commits
+#                                               files the publish skipped are reported on stderr (never silent):
+#                                               secret-denylist paths are counted as expected; size/budget skips (over
+#                                               the per-file cap or the file-count / total-size budget) warn that
+#                                               followers are MISSING content. The publish is kept either way
 #   worktree-store.sh land [land.sh args]       land.sh, then promote the store (only if it landed)
 #   worktree-store.sh land-preview              what landing would do to the project, no writes (WTS_ON_CONFLICT)
 #   worktree-store.sh fetch <slug> <dest> [--bundle-ref REF]
@@ -29,7 +33,9 @@
 #   worktree-store.sh registered [--json]       list registered worktrees
 #   worktree-store.sh sweep [--only SLUG] [--json]
 #                                               per registered worktree: publish only if the tree digest moved
-#                                               (idle = zero store calls); a vanished path is marked `orphan`
+#                                               (idle = zero store calls); a publish that skipped files for size/budget
+#                                               reports `published-partial` (+ skipped_budget/other/secret counts);
+#                                               a vanished path is marked `orphan`
 #                                               with its last published head, never deleted or archived here
 #   worktree-store.sh install-hook [--slug S] [--chain] | uninstall-hook
 #                                               post-commit accelerator running `sweep --only <slug>` in the
@@ -40,6 +46,9 @@
 # All store operations go through `weaver store worktree <verb>` (S1 owns the `weaver store` surface;
 # the verbs are create|publish|promote|fetch|claim|done|list). Git work stays here, not in Rust.
 # Store failures never block git flow: they warn and exit 0 unless WTS_STRICT=1.
+# Skipped files also exit 0, unless WTS_STRICT_SKIPS=1 and a size/budget skip happened: then `share` exits 3
+# after the publish went through (the sweep records the publish, prints published-partial, and exits non-zero at
+# the end). Denylist-only skips never change the exit status. Nothing skipped: output and status are unchanged.
 # Hook use (.agent-git.env): store-create / store-promote read AGF_HOOK_SLUG, AGF_HOOK_BRANCH and
 # AGF_HOOK_BASE (AGF_HOOK_COMMIT is accepted but `promote` takes no commit), so wt.sh and land.sh
 # are not wrapped:
@@ -182,10 +191,12 @@ share)
             && bundle_args=(--bundle "$tmp/branch.bundle") || warn "bundle failed; sharing files without commits"
     fi
     handoff_args=(); [ -n "$note" ] && handoff_args=(--handoff "$note")
-    store_must publish --project "$(project_id)" --slug "$slug" --root "$top" \
+    reply=$(store_must publish --project "$(project_id)" --slug "$slug" --root "$top" \
         --branch "$(git symbolic-ref --short HEAD)" --base "$base" --head "$head" \
         --paths-z "$tmp/paths.z" --uncommitted-z "$tmp/uncommitted.z" --changes-z "$tmp/changes.z" \
-        ${bundle_args[@]+"${bundle_args[@]}"} ${handoff_args[@]+"${handoff_args[@]}"}
+        ${bundle_args[@]+"${bundle_args[@]}"} ${handoff_args[@]+"${handoff_args[@]}"})
+    [ -z "$reply" ] || printf '%s\n' "$reply"
+    report_skips "$reply" || exit $?
     ;;
 land)
     slug=$(slug_of); check_slug "$slug"
