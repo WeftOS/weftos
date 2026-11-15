@@ -12,7 +12,7 @@
 #                                               pull a shared tree (and its commits) from another node
 #   worktree-store.sh claim <slug>              take the merge of a handed-off worktree (saves the claim epoch;
 #                                               `land` presents it, or WTS_EPOCH)
-#   worktree-store.sh follow [--state FILE]     what changed among unmerged worktrees since last look
+#   worktree-store.sh follow [--state FILE] [--full]     what changed among unmerged worktrees since last look
 #   worktree-store.sh search <query>            docs/planning across all unmerged worktrees
 #   worktree-store.sh leftovers [--json]        forgotten / unclaimed / abandoned worktrees
 #   worktree-store.sh browse [<slug> [path]] [--json]
@@ -241,9 +241,17 @@ claim)
 follow)
     pid=$(project_id); [[ $pid =~ ^[A-Za-z0-9]{1,40}$ ]] || die "unexpected project id '$pid'"
     state=${XDG_STATE_HOME:-$HOME/.local/state}/weftos/follow-$pid.json
-    [ "${1:-}" = "--state" ] && { state=${2:?--state needs a file}; }
+    full=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+        --state) state=${2:?--state needs a file}; shift ;;
+        --full) full=(--full) ;;   # skip the digest and re-read every entry
+        *) die "usage: follow [--state FILE] [--full]" ;;
+        esac
+        shift
+    done
     mkdir -p "$(dirname "$state")"
-    store_must follow --project "$(project_id)" --state "$state"
+    store_must follow --project "$(project_id)" --state "$state" ${full[@]+"${full[@]}"}
     ;;
 search)
     q=${1:?usage: search <query>}

@@ -132,6 +132,14 @@ ok "bundle ref outside refs/shared rejected" "[ $rc != 0 ]"
 ok "search passes the query as one argument" "grep -qF -- '--query rooms\\ and\\ doors' '$t/log'"
 "$here/worktree-store.sh" leftovers --json; ok "leftovers --json forwarded" "grep -q 'leftovers --project 01ABC --json' '$t/log'"
 "$here/worktree-store.sh" follow --state "$t/fs/state.json"; ok "follow creates the state dir" "[ -d '$t/fs' ]"
+"$here/worktree-store.sh" follow --full --state "$t/fs/state.json"; ok "follow --full is forwarded to the verb" "grep -q 'follow --project 01ABC --state $t/fs/state.json --full' '$t/log'"
+: >"$t/log"; "$here/worktree-store.sh" follow --state "$t/fs/state.json"; ok "follow without --full does not pass it" "! grep -q -- '--full' '$t/log'"
+"$here/worktree-store.sh" follow --bogus 2>/dev/null && rc=0 || rc=$?; ok "follow rejects an unknown flag" "[ $rc != 0 ]"
+# a tree published without a bundle: the verb writes the tree and exits 0 without a bundle file
+nb="$t/nobundle"; git init -q "$nb"; cp "$t/bin/weaver" "$t/bin/weaver.keep"; printf '#!/usr/bin/env bash\nexit 0\n' >"$t/bin/weaver"
+"$here/worktree-store.sh" fetch feat-s2 "$nb" 2>/dev/null && rc=0 || rc=$?
+ok "fetch of a tree with no bundle exits 0" "[ $rc = 0 ] && [ ! -e '$nb/.wt-branch.bundle' ] && [ -z \"\$(git -C '$nb' for-each-ref refs/shared)\" ]"
+mv "$t/bin/weaver.keep" "$t/bin/weaver"
 "$here/worktree-store.sh" leftovers --project X 2>/dev/null && rc=0 || rc=$?; ok "leftovers rejects extra flags" "[ $rc != 0 ]"
 n0=$(wc -l <"$t/log"); env -u WTS_PROJECT "$here/worktree-store.sh" follow >"$t/noproj.err" 2>&1 && rc=0 || rc=$?
 ok "unset WTS_PROJECT is refused" "[ $rc != 0 ]"
