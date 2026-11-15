@@ -63,7 +63,6 @@ fn an_older_signed_entry_is_refused_even_after_a_far_future_stamp() {
 }
 
 #[test]
-#[ignore = "FINDING 6b-1: the manifest schema number is never checked on read"]
 fn a_manifest_from_a_newer_schema_is_not_served_as_if_current() {
     let be = MemBackend::new();
     let env = Env::new(&be, None);
@@ -155,4 +154,20 @@ fn saving_an_older_view_does_not_lower_a_remembered_generation() {
     older.generations.insert("wt".into(), 100);
     older.save(&path).unwrap();
     assert!(FollowState::load(&path).unwrap().generations["wt"] >= 200);
+}
+
+#[test]
+fn a_newer_manifest_error_names_both_schema_numbers_and_the_current_one_still_reads() {
+    let be = MemBackend::new();
+    let env = Env::new(&be, None);
+    let e = up(&env, "good", &[("docs/g.md", "# G\n")], &Pub::default());
+    assert!(weftos_store::share::read_manifest(&be, &e.bucket).unwrap().is_some());
+    let mut m: serde_json::Value = serde_json::from_slice(&S2::get(&be, &e.bucket, MANIFEST_KEY).unwrap().unwrap()).unwrap();
+    m["schema"] = (weftos_store::share::SCHEMA + 1).into();
+    S2::put(&be, &e.bucket, MANIFEST_KEY, &serde_json::to_vec(&m).unwrap()).unwrap();
+    let msg = weftos_store::share::read_manifest(&be, &e.bucket).unwrap_err().to_string();
+    assert!(msg.contains(&(weftos_store::share::SCHEMA + 1).to_string()) && msg.contains(&weftos_store::share::SCHEMA.to_string()), "{msg}");
+    m["schema"] = 0.into(); // an older schema is accepted
+    S2::put(&be, &e.bucket, MANIFEST_KEY, &serde_json::to_vec(&m).unwrap()).unwrap();
+    assert!(weftos_store::share::read_manifest(&be, &e.bucket).unwrap().is_some());
 }

@@ -199,12 +199,10 @@ fn d6b_damaged_entries<B: S2 + Sync>(env: &Env<'_, B>) {
     S2::put(be, &good.bucket, MANIFEST_KEY, &serde_json::to_vec(&m2).unwrap()).unwrap();
     let renamed = search_docs(be, &ok, "g");
     println!("DETAIL|6b|manifest schema 99 with an extra field: {} hit(s) {:?}; with `files` removed: {} hit(s), unreadable {:?}", extra.hits.len(), extra.unreadable, renamed.hits.len(), renamed.unreadable);
-    assert_eq!(extra.hits.len(), 1, "an additive newer manifest still reads");
+    assert_eq!(extra.hits.len(), 0, "a manifest from a newer schema is refused, not read as current");
+    assert_eq!(extra.unreadable, ["good"]);
     assert_eq!((renamed.hits.len(), renamed.unreadable.as_slice()), (0, ["good".to_string()].as_slice()));
-    if extra.hits.len() == 1 {
-        finding("6b", "the manifest `schema` number is written but never checked on read: a manifest claiming schema 99 is read as if it were the current one whenever its fields happen to parse, so a layout change that keeps field names but changes meaning would be served silently. Not blocking while the schema has only ever grown additively. Proposed: refuse schema > SCHEMA with the same unreadable verdict as a corrupt one");
-    }
-    line("6b", "manifest schema 99: additive reads, a renamed core field is flagged unreadable", t, "never an error for the rest");
+    line("6b", "manifest schema 99 is refused as unreadable (FIXED, was: read as current); a renamed core field is flagged too", t, "never an error for the rest");
 
     // the digest names a slug whose object was deleted after the digest was written (the daemon swallows a failed digest rewrite)
     let t = Instant::now();

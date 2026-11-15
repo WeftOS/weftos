@@ -91,8 +91,27 @@ pub fn read_manifest<B: ObjectBackend>(b: &B, bucket: &str) -> Result<Option<Tre
     }
 }
 
+/// Refuse a manifest written by a newer schema than this build understands: its fields may parse
+/// yet mean something else. The current and older schemas are accepted; a manifest with no readable
+/// `schema` number is left to the typed parse, which rejects it.
+fn check_manifest_schema(d: &[u8]) -> Result<()> {
+    #[derive(serde::Deserialize)]
+    struct Peek {
+        schema: u32,
+    }
+    if let Ok(Peek { schema }) = serde_json::from_slice::<Peek>(d) {
+        if schema > SCHEMA {
+            return Err(S2Error::Invalid(format!(
+                "manifest is schema {schema}, newer than the schema {SCHEMA} this build reads; upgrade to read it"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Parse manifest bytes and apply the file-count limit (shared with the follower manifest cache).
 pub(crate) fn parse_manifest(d: &[u8]) -> Result<TreeManifest> {
+    check_manifest_schema(d)?;
     let m: TreeManifest = serde_json::from_slice(d)?;
     let lim = Limits::default();
     if m.files.len() > lim.max_files || m.docs.len() > lim.max_files {
