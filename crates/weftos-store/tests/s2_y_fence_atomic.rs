@@ -176,12 +176,15 @@ fn without_an_epoch_the_land_is_unfenced_as_before_even_over_a_takeover() {
 }
 
 #[test]
-fn an_epoch_on_a_record_that_is_not_claimed_passes_as_before() {
-    // Today's behaviour, kept: design note B2 asks the owner whether this should refuse.
+fn an_epoch_on_a_record_that_is_not_claimed_is_refused() {
+    // Owner decision Q9 (2026-11-15): presenting an epoch asserts a claim, so a record that is not
+    // `Claimed` refuses. The full state table is in `s2_e2_epoch_refuse.rs`.
     let b = ready();
-    assert!(mark_landed_at(&b, WT, &who("bob"), Some(0), "landed", NOW).unwrap());
+    let e = mark_landed_at(&b, WT, &who("bob"), Some(0), "landed", NOW).unwrap_err();
+    assert!(matches!(e, S2Error::Claimed(_)) && e.to_string().contains("not claimed"), "{e}");
+    assert_eq!(state(&b).state, State::Handoff, "nothing landed");
     let b = MemBackend::new();
-    assert!(!mark_landed_at(&b, WT, &who("bob"), Some(0), "landed", NOW).unwrap(), "no record: nothing written");
+    assert!(mark_landed_at(&b, WT, &who("bob"), Some(0), "landed", NOW).unwrap_err().to_string().contains("no handoff record"));
 }
 
 #[test]

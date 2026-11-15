@@ -221,7 +221,15 @@ land)
     [ -z "$oc" ] || [[ $oc =~ ^(fail|keep_project|overwrite)$ ]] || die "WTS_ON_CONFLICT is fail, keep_project or overwrite"
     mb=${WTS_MAX_BYTES:-}
     [ -z "$mb" ] || [[ $mb =~ ^[0-9]{1,18}$ ]] || die "bad WTS_MAX_BYTES '$mb'"
-    store promote --project "$(project_id)" --slug "$slug" ${epoch:+--epoch "$epoch"} ${oc:+--on-conflict "$oc"} ${mb:+--max-bytes "$mb"}
+    # With an epoch the land asserts "I hold claim N" and the daemon refuses unless the worktree is
+    # still claimed at N (taken over, merged, or never claimed): that must be a non-zero exit with the
+    # next step, not a swallowed best-effort failure. Without an epoch the store stays best effort.
+    if [ -n "$epoch" ]; then
+        store_must promote --project "$(project_id)" --slug "$slug" --epoch "$epoch" ${oc:+--on-conflict "$oc"} ${mb:+--max-bytes "$mb"} \
+            || { warn "the land presented claim epoch $epoch and was refused (see above): claim again with '$(basename "$WTS_SELF") claim $slug', or remove the saved epoch $(epoch_file "$slug") to land without one"; exit 1; }
+    else
+        store promote --project "$(project_id)" --slug "$slug" ${oc:+--on-conflict "$oc"} ${mb:+--max-bytes "$mb"}
+    fi
     ;;
 land-preview)
     # What landing would do to the project right now, with no writes: conflicts by kind, byte total.

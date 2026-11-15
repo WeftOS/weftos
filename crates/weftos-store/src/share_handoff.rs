@@ -214,13 +214,38 @@ fn fence_claim_on<B: ObjectBackend>(b: &B, bucket: &str, cur: &Handoff, epoch: O
 }
 
 /// For a caller about to land under a claim (the daemon's `promote --epoch`): refuse when the claim
-/// was taken over since `epoch` or the published head is no longer the one claimed. Passes when the
-/// worktree is not `Claimed` (nothing to fence) or has no handoff record.
+/// was taken over since `epoch` or the published head is no longer the one claimed. A caller that
+/// presents an epoch asserts "I hold claim N", so a record that is not `Claimed` (absent, open,
+/// handed off, merged, archived) refuses too, with the state and the next step (owner decision Q9,
+/// 2026-11-15; before it these passed as "nothing to fence").
 pub fn fence_claim<B: ObjectBackend>(b: &B, bucket: &str, epoch: u64, now_ms: u64) -> Result<()> {
     match read_handoff(b, bucket)? {
         Some(h) if h.state == State::Claimed => fence_claim_on(b, bucket, &h, Some(epoch), now_ms),
-        _ => Ok(()),
+        other => Err(not_claimed(other.as_ref(), epoch)),
     }
+}
+
+/// The refusal for a caller that presents claim `epoch` while the record is not `Claimed` (Q9).
+fn not_claimed(cur: Option<&Handoff>, epoch: u64) -> S2Error {
+    let Some(h) = cur else {
+        return S2Error::Claimed(format!(
+            "claim epoch {epoch} presented, but the worktree has no handoff record (never published or handed off), so nothing is claimed; publish, hand off and claim it again, or land without an epoch"
+        ));
+    };
+    let next = match h.state {
+        State::Open | State::Handoff => "claim it again to merge it, or land without an epoch".to_string(),
+        State::Claimed => String::new(),
+        State::Merged => format!(
+            "it was merged by {} at epoch {}; there is nothing left to claim",
+            h.merger.as_ref().map_or_else(|| "someone".into(), |m| format!("{}@{}", m.agent, m.host)),
+            h.epoch
+        ),
+        State::Archived | State::Orphan => "it is gone from the shared store; there is nothing left to claim".to_string(),
+    };
+    S2Error::Claimed(format!(
+        "claim epoch {epoch} presented, but the worktree is {:?} (record epoch {}), not claimed; {next}",
+        h.state, h.epoch
+    ))
 }
 
 /// The merger finished: git has landed the branch. Promotion and bucket cleanup follow (§3, §4).
@@ -297,7 +322,10 @@ pub fn mark_landed<B: ObjectBackend>(
 /// and the write makes the write fail and the re-read refuse (WO-069 lane Y, A3). Calling
 /// [`fence_claim`] and then [`mark_landed`] left that window open. A publish landing between the
 /// fence's manifest read and the write is caught too: its announcement changes the record (lane Y,
-/// A4). With `epoch: None` this is [`mark_landed`], unfenced (design note B6).
+/// A4). A presented epoch needs a `Claimed` record: any other state refuses with what it is and what
+/// to do (owner decision Q9, 2026-11-15), except a repeat of a land this actor already recorded at
+/// this epoch, which stays the idempotent `Ok(false)`. With `epoch: None` this is [`mark_landed`],
+/// unfenced (design note B6, still open).
 pub fn mark_landed_at<B: ObjectBackend>(
     b: &B,
     bucket: &str,
@@ -308,16 +336,24 @@ pub fn mark_landed_at<B: ObjectBackend>(
 ) -> Result<bool> {
     // Conditional, like the other handoff writes: the decision holds for exactly the version written over.
     for _ in 0..HANDOFF_RETRIES {
-        let Some((cur, etag)) = read_handoff_versioned(b, bucket)? else { return Ok(false) };
-        if matches!(cur.state, State::Merged | State::Archived) {
-            return Ok(false);
-        }
-        // Only a `Claimed` record is fenced: an epoch on an open or handed-off record passes, as
-        // `fence_claim` always did. Whether it should refuse is an owner question (design note, B2).
-        if let Some(e) = epoch
-            && cur.state == State::Claimed
-        {
-            fence_claim_on(b, bucket, &cur, Some(e), now_ms)?;
+        let seen = read_handoff_versioned(b, bucket)?;
+        let Some((cur, etag)) = seen else {
+            // Nothing published: an unfenced land has nothing to record; a caller holding an epoch
+            // asserts a claim that cannot exist (Q9).
+            return match epoch {
+                Some(e) => Err(not_claimed(None, e)),
+                None => Ok(false),
+            };
+        };
+        match (epoch, cur.state) {
+            // A repeated promote after the land already recorded: the same actor under the same epoch
+            // is the idempotent success (it resumes the promotion), nothing is written.
+            (Some(e), State::Merged) if e == cur.epoch && cur.merger.as_ref() == Some(lander) => return Ok(false),
+            (None, State::Merged | State::Archived) => return Ok(false),
+            // A presented epoch asserts "I hold claim N": anything but a `Claimed` record refuses (Q9).
+            (Some(e), s) if s != State::Claimed => return Err(not_claimed(Some(&cur), e)),
+            (Some(e), _) => fence_claim_on(b, bucket, &cur, Some(e), now_ms)?,
+            (None, _) => {}
         }
         let note = match cur.merger.as_ref().filter(|m| *m != lander && cur.state == State::Claimed) {
             Some(m) => format!("{note} (claim was held by {}@{})", m.agent, m.host),

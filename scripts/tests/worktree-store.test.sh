@@ -14,6 +14,7 @@ printf '%q ' "$@" >>"$WTS_LOG"; echo >>"$WTS_LOG"
 if [ "$1 $2 $3" = "store worktree buckets" ]; then echo "w-01abc-aaaaaaaaaaaa p-01abc"; fi
 if [ "$1 $2 $3" = "store worktree fetch" ]; then : ; fi
 if [ "$1 $2 $3" = "store worktree claim" ]; then printf '{\n  "state": "claimed",\n  "epoch": %s\n}\n' "${CLAIM_EPOCH:-4}"; fi
+if [ "$1 $2 $3" = "store worktree promote" ] && [ -n "${PROMOTE_RC:-}" ]; then echo "error: claim epoch presented, but the worktree is Handoff" >&2; exit "$PROMOTE_RC"; fi
 exit "${WEAVER_RC:-0}"
 W
 cat >"$t/agf/land.sh" <<'L'
@@ -57,6 +58,18 @@ ok "a non-numeric epoch is refused" "[ $rc != 0 ] && ! grep -q promote '$t/log'"
 rm -f "$t"/state/weftos/claim-*.epoch
 : >"$t/log"; "$here/worktree-store.sh" land
 ok "no epoch known: promote without one" "grep -q '^store worktree promote' '$t/log' && ! grep -q -- '--epoch' '$t/log'"
+
+# Q9: a land that presents an epoch is refused by the daemon when the worktree is not claimed at it; that is a
+# non-zero exit with the next step. A land that presents none stays best effort (a refusal does not fail it).
+mkdir -p "$t/state/weftos"; printf '4\n' >"$t/state/weftos/claim-01ABC-feat--s2.epoch"
+: >"$t/log"; PROMOTE_RC=1 "$here/worktree-store.sh" land 2>"$t/err" && rc=0 || rc=$?
+ok "a refused fenced land (stale saved epoch) exits non-zero" "[ $rc != 0 ] && grep -q -- '--epoch 4' '$t/log'"
+ok "the refusal names the epoch and the next step" "grep -q 'epoch 4' '$t/err' && grep -q 'claim again' '$t/err' && grep -q 'claim-01ABC-feat--s2.epoch' '$t/err'"
+rm -f "$t"/state/weftos/claim-*.epoch
+: >"$t/log"; PROMOTE_RC=1 "$here/worktree-store.sh" land 2>/dev/null && rc=0 || rc=$?
+ok "a refused land with no epoch stays best effort (exit 0)" "[ $rc = 0 ] && grep -q '^store worktree promote' '$t/log'"
+: >"$t/log"; WTS_EPOCH=9 PROMOTE_RC=1 "$here/worktree-store.sh" land 2>/dev/null && rc=0 || rc=$?
+ok "a refused land under WTS_EPOCH exits non-zero" "[ $rc != 0 ]"
 
 # conflict policy and size cap are chosen per land; land-preview is a dry run and never needs git to land
 : >"$t/log"; WTS_ON_CONFLICT=keep_project WTS_MAX_BYTES=0 "$here/worktree-store.sh" land

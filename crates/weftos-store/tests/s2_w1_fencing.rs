@@ -311,11 +311,12 @@ fn a_republish_then_a_reclaim_fences_the_old_claim_and_admits_only_the_new_one()
 }
 
 #[test]
-fn fence_claim_refuses_a_moved_head_at_the_current_epoch_and_passes_when_nothing_is_claimed() {
+fn fence_claim_refuses_a_moved_head_at_the_current_epoch_and_refuses_when_nothing_is_claimed() {
     let be = MemBackend::new();
     let env = Env::new(&be, None);
     let b = handed_off(&env, "fence");
-    fence_claim(&be, &b, 0, NOW + 3).unwrap(); // handed off, not claimed: nothing to fence
+    // handed off, not claimed: an epoch asserts a claim that does not exist (owner decision Q9)
+    assert!(fence_claim(&be, &b, 0, NOW + 3).unwrap_err().to_string().contains("not claimed"));
     let c = claim_merge(&be, &b, &actor("fast"), NOW + DAY).unwrap();
     fence_claim(&be, &b, c.epoch, NOW + 3).unwrap();
     republish(&be, &b, "h2", NOW + 1).unwrap();
