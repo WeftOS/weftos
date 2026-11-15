@@ -14,7 +14,8 @@ use crate::passcode_kdf::derive_kek;
 use crate::recovery::RecoveryKey;
 use crate::seal;
 use crate::secrets::{SealRequest, SealedSecret};
-use crate::vault::{PasscodeSeal, Vault, open32, passcode_wrapper, recovery_wrapper, seal48};
+use crate::vault::Vault;
+use crate::wrap::{PasscodeSeal, open32, passcode_wrapper, recovery_wrapper, seal48};
 
 /// What a rotation did to the wrapper list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

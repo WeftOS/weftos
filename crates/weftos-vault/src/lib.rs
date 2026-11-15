@@ -26,7 +26,9 @@ pub mod vault;
 mod hkdf_keys;
 mod normalize;
 mod passcode_kdf;
+mod pins;
 mod secrets;
+mod wrap;
 
 pub use blob::{OpenedSecret, Policy, SecretType};
 pub use error::VaultError;
