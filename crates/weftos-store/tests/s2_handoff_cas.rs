@@ -131,7 +131,7 @@ fn publishing_never_overwrites_a_record_created_between_its_check_and_its_write(
         root: d.path(), paths: &ps, uncommitted: &[], changes: &[], branch: "b", base_commit: "b",
         head_commit: "h", bundle: None, writer: who("writer"),
     };
-    let planted = Handoff { state: State::Handoff, note: "n".into(), writer: who("w2"), merger: None, updated_ms: 5, epoch: 3, claimed_head: None };
+    let planted = Handoff { state: State::Handoff, note: "n".into(), writer: who("w2"), merger: None, updated_ms: 5, epoch: 3, claimed_head: None, claimed_tree: None };
     let racy = Hooked::once(&b, || {
         b.put(WT, ".wt/handoff.json", &serde_json::to_vec(&planted).unwrap()).unwrap();
     });

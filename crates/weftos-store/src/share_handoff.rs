@@ -78,6 +78,7 @@ pub fn mark_handoff<B: ObjectBackend>(
             updated_ms: now_ms,
             epoch: seen.as_ref().map_or(0, |(h, _)| h.epoch),
             claimed_head: None,
+            claimed_tree: None,
         };
         if write_handoff_if(b, bucket, &next, seen.as_ref().map(|(_, e)| e.as_str()))? {
             return Ok(());
@@ -112,7 +113,7 @@ pub fn claim_merge_with<B: ObjectBackend>(
     for _ in 0..HANDOFF_RETRIES {
         // The head is read before the record: a publish landing in between makes the recorded head
         // older than the published one, so the merge is refused (safe), never the reverse.
-        let head = published_head(b, bucket)?;
+        let published = published(b, bucket)?;
         let (cur, etag) = read_handoff_versioned(b, bucket)?
             .ok_or_else(|| S2Error::Invalid("worktree has no handoff record".into()))?;
         match cur.state {
@@ -134,7 +135,8 @@ pub fn claim_merge_with<B: ObjectBackend>(
             merger: Some(me.clone()),
             updated_ms: now_ms,
             epoch: cur.epoch + 1,
-            claimed_head: head,
+            claimed_head: published.as_ref().map(|(h, _)| h.clone()),
+            claimed_tree: published.map(|(_, t)| t),
             ..cur
         };
         // Conditional on the version we decided on: of two claimers reading the same record, exactly
@@ -146,9 +148,12 @@ pub fn claim_merge_with<B: ObjectBackend>(
     Err(contended())
 }
 
-/// The head the worktree has published now (`None`: nothing published).
-fn published_head<B: ObjectBackend>(b: &B, bucket: &str) -> Result<Option<String>> {
-    Ok(read_manifest(b, bucket)?.map(|m| m.head_commit))
+/// The head and [`tree_digest`] the worktree has published now (`None`: nothing published).
+fn published<B: ObjectBackend>(b: &B, bucket: &str) -> Result<Option<(String, String)>> {
+    Ok(read_manifest(b, bucket)?.map(|m| {
+        let t = tree_digest(&m);
+        (m.head_commit, t)
+    }))
 }
 
 /// The fencing checks on a `Claimed` record, shared by [`mark_merged_at`] and [`fence_claim`].
@@ -176,11 +181,25 @@ fn fence_claim_on<B: ObjectBackend>(b: &B, bucket: &str, cur: &Handoff, epoch: O
             cur.epoch
         )));
     };
-    let now = published_head(b, bucket)?;
-    if now.as_deref() != Some(claimed) {
+    let now = published(b, bucket)?;
+    let (head, tree) = match now.as_ref() {
+        Some((h, t)) => (Some(h.as_str()), Some(t.as_str())),
+        None => (None, None),
+    };
+    if head != Some(claimed) {
         return Err(S2Error::Claimed(format!(
             "the published head moved from {claimed} to {} since the claim (epoch {}); claim again to merge it",
-            now.as_deref().unwrap_or("nothing"),
+            head.unwrap_or("nothing"),
+            cur.epoch
+        )));
+    }
+    // Same head, other tree: a republish changed what a merger fetches (uncommitted files, the file
+    // list or the bundle). A claim from before `claimed_tree` is fenced on head only (lane Y, item 2).
+    if let Some(claimed_tree) = cur.claimed_tree.as_deref()
+        && tree != Some(claimed_tree)
+    {
+        return Err(S2Error::Claimed(format!(
+            "the published tree changed since the claim (same head {claimed}, epoch {}); claim again to merge it",
             cur.epoch
         )));
     }

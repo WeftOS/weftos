@@ -324,13 +324,20 @@ fn fence_claim_refuses_a_moved_head_at_the_current_epoch_and_passes_when_nothing
 }
 
 #[test]
-fn a_republish_of_the_claimed_head_by_the_holder_still_merges() {
+fn a_republish_of_the_claimed_tree_by_the_holder_still_merges_and_other_content_does_not() {
     let be = MemBackend::new();
     let env = Env::new(&be, None);
     let b = handed_off(&env, "holder");
     let c = claim_merge(&be, &b, &actor("writer"), NOW).unwrap();
-    republish(&be, &b, "h1", NOW + 1).unwrap(); // the holder may republish; the head is unchanged
+    // the holder may republish; the same tree (head and files) keeps the claim
+    push(&be, &b, &tree(&[("docs/u.md", "# U\n")]), &Pub { head: "h1", now: NOW + 1, ..Pub::default() }).unwrap();
     mark_merged_at(&be, &b, &actor("writer"), Some(c.epoch), "merged h1", NOW + 2).unwrap();
+    // WO-069 lane Y (item 2): the same head with other content is another tree, for the holder too
+    let b = handed_off(&env, "holder2");
+    let c = claim_merge(&be, &b, &actor("writer"), NOW).unwrap();
+    republish(&be, &b, "h1", NOW + 1).unwrap(); // docs/u.md now reads "# U h1"
+    let err = mark_merged_at(&be, &b, &actor("writer"), Some(c.epoch), "merged h1", NOW + 2).unwrap_err();
+    assert!(err.to_string().contains("tree changed"), "{err}");
 }
 
 #[test]

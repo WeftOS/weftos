@@ -193,3 +193,106 @@ fn a_publish_between_the_fence_read_and_the_land_write_refuses_the_fenced_land()
     });
     assert!(mark_landed_at(&racy, WT, &who("bob"), Some(c.epoch), "landed", NOW + 2).is_err());
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// A1 (item 2): the claim is on the tree it saw (`claimed_tree`), not only on its head (design note I2-a)
+// ---------------------------------------------------------------------------------------------------------------------
+
+#[test]
+fn a_republish_of_the_claimed_head_with_other_uncommitted_content_voids_the_claim_for_every_fenced_path() {
+    let b = ready();
+    let c = claim_merge(&b, WT, &who("bob"), NOW + CLAIM_SKEW_MS + 10).unwrap(); // stamped ahead: not live
+    // same head h1, but the uncommitted notes.md changed: allowed over a claim that is not live
+    publish(&b, "h1", &[("a.md", "a"), ("notes.md", "v2")], &["notes.md"], NOW + 1).unwrap();
+    for e in [
+        mark_merged_at(&b, WT, &who("bob"), Some(c.epoch), "m", NOW + 2).unwrap_err(),
+        mark_merged(&b, WT, &who("bob"), "m", NOW + 2).unwrap_err(),
+        fence_claim(&b, WT, c.epoch).unwrap_err(),
+        mark_landed_at(&b, WT, &who("bob"), Some(c.epoch), "landed", NOW + 2).unwrap_err(),
+    ] {
+        assert!(matches!(e, S2Error::Claimed(_)), "{e}");
+        assert!(e.to_string().contains("claim again"), "{e}");
+    }
+    assert_eq!(state(&b).state, State::Claimed, "nothing was written");
+    // a re-claim takes the new tree and merges it
+    let again = claim_merge(&b, WT, &who("bob"), NOW + 3).unwrap();
+    mark_merged_at(&b, WT, &who("bob"), Some(again.epoch), "m", NOW + 4).unwrap();
+}
+
+#[test]
+fn a_republish_of_the_same_tree_does_not_void_the_claim() {
+    let b = ready();
+    let c = claim_merge(&b, WT, &who("bob"), NOW + CLAIM_SKEW_MS + 10).unwrap();
+    // byte-for-byte the same tree at a later time: the manifest bytes change (published_ms), the claim holds
+    publish(&b, "h1", &[("a.md", "a"), ("notes.md", "v1")], &["notes.md"], NOW + 5).unwrap();
+    mark_merged_at(&b, WT, &who("bob"), Some(c.epoch), "m", NOW + 6).unwrap();
+}
+
+#[test]
+fn a_file_leaving_the_uncommitted_list_voids_the_claim() {
+    let b = ready();
+    let c = claim_merge(&b, WT, &who("bob"), NOW + CLAIM_SKEW_MS + 10).unwrap();
+    // same head, same bytes, but notes.md is now reported as committed: the merger's view of h1 differs
+    publish(&b, "h1", &[("a.md", "a"), ("notes.md", "v1")], &[], NOW + 1).unwrap();
+    assert!(mark_merged_at(&b, WT, &who("bob"), Some(c.epoch), "m", NOW + 2).is_err());
+}
+
+#[test]
+fn a_claim_records_the_tree_digest_of_the_manifest_it_read() {
+    let b = ready();
+    let c = claim_merge(&b, WT, &who("bob"), NOW).unwrap();
+    let m = read_manifest(&b, WT).unwrap().unwrap();
+    assert_eq!(c.claimed_tree, Some(tree_digest(&m)));
+    assert_eq!(state(&b).claimed_tree, c.claimed_tree, "stored, not only returned");
+    assert!(c.claimed_tree.unwrap().starts_with("t1:"));
+}
+
+#[test]
+fn a_claim_recorded_before_claimed_tree_is_fenced_on_head_only() {
+    let b = ready();
+    let c = claim_merge(&b, WT, &who("bob"), NOW + CLAIM_SKEW_MS + 10).unwrap();
+    strip(&b, "claimed_tree");
+    publish(&b, "h1", &[("a.md", "a"), ("notes.md", "v2")], &["notes.md"], NOW + 1).unwrap();
+    mark_merged_at(&b, WT, &who("bob"), Some(c.epoch), "m", NOW + 2).unwrap();
+}
+
+#[test]
+fn the_tree_digest_follows_what_a_merger_fetches_and_ignores_the_rest() {
+    let base = TreeManifest {
+        schema: SCHEMA,
+        branch: "feat/y".into(),
+        base_commit: "base".into(),
+        head_commit: "h1".into(),
+        files: vec![
+            FileEntry { path: "a.md".into(), size: 1, sha256: "aa".into() },
+            FileEntry { path: "b.md".into(), size: 2, sha256: "bb".into() },
+        ],
+        uncommitted: vec!["b.md".into()],
+        changes: vec![],
+        docs: vec![],
+        has_bundle: false,
+        bundle_sha256: None,
+        writer: who("writer"),
+        published_ms: 1,
+    };
+    let d = tree_digest(&base);
+    let same = |m: TreeManifest| assert_eq!(tree_digest(&m), d);
+    let differs = |m: TreeManifest, what: &str| assert_ne!(tree_digest(&m), d, "{what}");
+    same(TreeManifest { published_ms: 99, writer: who("other"), branch: "x".into(), ..base.clone() });
+    same(TreeManifest { docs: vec![DocEntry { path: "a.md".into(), title: Some("A".into()) }], ..base.clone() });
+    same(TreeManifest { changes: vec![PathChange { path: "a.md".into(), kind: ChangeKind::Added }], ..base.clone() });
+    same(TreeManifest { files: base.files.iter().rev().cloned().collect(), ..base.clone() });
+    differs(TreeManifest { head_commit: "h2".into(), ..base.clone() }, "head");
+    differs(TreeManifest { base_commit: "b2".into(), ..base.clone() }, "base");
+    let mut f = base.files.clone();
+    f[1].sha256 = "cc".into();
+    differs(TreeManifest { files: f, ..base.clone() }, "file content");
+    differs(TreeManifest { files: base.files[..1].to_vec(), ..base.clone() }, "file set");
+    differs(TreeManifest { uncommitted: vec![], ..base.clone() }, "uncommitted list");
+    differs(TreeManifest { has_bundle: true, bundle_sha256: Some("bs".into()), ..base.clone() }, "bundle");
+    // a path/size boundary cannot be shifted to collide: fields are length-prefixed
+    let mut g = base.files.clone();
+    g[0].path = "a.m".into();
+    g[0].sha256 = "daa".into();
+    differs(TreeManifest { files: g, ..base.clone() }, "length-prefixed");
+}

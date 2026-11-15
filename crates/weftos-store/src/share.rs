@@ -171,6 +171,46 @@ pub struct Handoff {
     /// fenced, so a fenced merge refuses it and the holder claims again (WO-069 lane Y, item 3).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claimed_head: Option<String>,
+    /// The published tree ([`tree_digest`] of the manifest) when the current claim was taken: a merge
+    /// is refused once it differs, so a republish of the same head with other uncommitted content
+    /// voids the claim too (WO-069 lane Y, item 2). `None` outside a claim, and on a claim recorded
+    /// before the field existed (fenced on head only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claimed_tree: Option<String>,
+}
+
+/// What a claim is a claim on, as one digest of the manifest's content: base and head commits, every
+/// file (path, size, sha256), the uncommitted list and the bundle. Not `published_ms`, `writer`,
+/// `docs` or `changes` (derived, or different on a republish of the same tree), so republishing the
+/// same tree keeps the digest and any change to what a merger would fetch changes it. Versioned
+/// (`t1:`): a reader that does not know a recorded version refuses the merge, the safe side.
+pub fn tree_digest(m: &TreeManifest) -> String {
+    fn field(h: &mut Sha256, s: &[u8]) {
+        h.update((s.len() as u64).to_le_bytes());
+        h.update(s);
+    }
+    let mut h = Sha256::new();
+    field(&mut h, b"t1");
+    field(&mut h, m.base_commit.as_bytes());
+    field(&mut h, m.head_commit.as_bytes());
+    let mut files: Vec<&FileEntry> = m.files.iter().collect();
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    field(&mut h, &(files.len() as u64).to_le_bytes());
+    for f in files {
+        field(&mut h, f.path.as_bytes());
+        field(&mut h, &f.size.to_le_bytes());
+        field(&mut h, f.sha256.as_bytes());
+    }
+    let mut unc: Vec<&str> = m.uncommitted.iter().map(String::as_str).collect();
+    unc.sort_unstable();
+    field(&mut h, &(unc.len() as u64).to_le_bytes());
+    for u in unc {
+        field(&mut h, u.as_bytes());
+    }
+    field(&mut h, &[u8::from(m.has_bundle)]);
+    field(&mut h, m.bundle_sha256.as_deref().unwrap_or("").as_bytes());
+    let d = h.finalize();
+    format!("t1:{}", d.iter().map(|b| format!("{b:02x}")).collect::<String>())
 }
 
 #[derive(Debug, Clone, Copy)]
