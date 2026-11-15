@@ -23,7 +23,7 @@
 //! "unknown": the gate then exempts nothing in that crate.
 
 use crate::resolve::{classify, Aliases, Path as RPath};
-use crate::scan::{ident_is, name, punct_is};
+use crate::scan::{keyword_is, name, name_is, punct_is};
 use crate::uses::collect_aliases;
 use proc_macro2::{Delimiter, Group, Spacing, TokenStream, TokenTree};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -55,15 +55,15 @@ struct Walk<'a> {
 
 /// `cfg(test)` or `cfg(all(.., test, ..))`: the only predicates that make an item test-only.
 fn is_test_pred(v: &[TokenTree]) -> bool {
-    if v.len() == 1 && ident_is(v.first(), "test") {
+    if v.len() == 1 && name_is(v.first(), "test") {
         return true;
     }
-    if v.len() == 2 && ident_is(v.first(), "all") {
+    if v.len() == 2 && name_is(v.first(), "all") {
         if let Some(TokenTree::Group(g)) = v.get(1) {
             let inner: Vec<TokenTree> = g.stream().into_iter().collect();
             return split_commas(&inner)
                 .iter()
-                .any(|p| p.len() == 1 && ident_is(p.first(), "test"));
+                .any(|p| p.len() == 1 && name_is(p.first(), "test"));
         }
     }
     false
@@ -101,7 +101,7 @@ struct ModAttrs {
 }
 
 fn read_attr(v: &[TokenTree], under_test: bool, cond: bool, depth: usize, m: &mut ModAttrs) {
-    if ident_is(v.first(), "cfg") && !cond {
+    if name_is(v.first(), "cfg") && !cond {
         if let Some(TokenTree::Group(g)) = v.get(1) {
             let inner: Vec<TokenTree> = g.stream().into_iter().collect();
             if is_test_pred(&inner) {
@@ -110,13 +110,13 @@ fn read_attr(v: &[TokenTree], under_test: bool, cond: bool, depth: usize, m: &mu
         }
         return;
     }
-    if ident_is(v.first(), "path") && punct_is(v.get(1), '=') {
+    if name_is(v.first(), "path") && punct_is(v.get(1), '=') {
         if let Some(p) = lit(v.get(2)) {
             m.paths.push((p, !cond, under_test));
         }
         return;
     }
-    if ident_is(v.first(), "cfg_attr") && depth < 16 {
+    if name_is(v.first(), "cfg_attr") && depth < 16 {
         if let Some(TokenTree::Group(g)) = v.get(1) {
             let inner: Vec<TokenTree> = g.stream().into_iter().collect();
             let parts = split_commas(&inner);
@@ -206,7 +206,7 @@ impl Walk<'_> {
                     }
                     continue;
                 }
-                TokenTree::Ident(id) if *id == "unsafe" && ident_is(v.get(i + 1), "mod") => {
+                TokenTree::Ident(id) if *id == "unsafe" && keyword_is(v.get(i + 1), "mod") => {
                     i += 1;
                     continue;
                 }
@@ -613,6 +613,30 @@ mod tests {
             "#[cfg(test)]\nmod t { include!(concat!(\"a\", \"b\")); }\n",
         )]);
         assert!(r.unknown.is_empty());
+    }
+
+    /// R4-B2: raw identifiers name the same attributes and cfg predicates (rustc 1.95):
+    /// `#[r#path]`, `#[r#cfg_attr(.., path = ..)]` are followed; `cfg(r#test)` is test-only.
+    #[test]
+    fn raw_identifier_attribute_names() {
+        for lib in [
+            "#[r#path = \"s_tests.rs\"]\nmod h;\n",
+            "#[r#cfg_attr(not(test), path = \"s_tests.rs\")]\nmod h;\n",
+            "#[cfg_attr(not(test), r#path = \"s_tests.rs\")]\nmod h;\n",
+            "#[r#cfg_attr(all(), r#cfg_attr(unix, r#path = \"s_tests.rs\"))]\nmod h;\n",
+        ] {
+            let r = built(&[("src/lib.rs", lib), ("src/s_tests.rs", T), ("src/h.rs", T)]);
+            assert!(r.nontest.contains("src/s_tests.rs"), "{lib}");
+        }
+        for lib in [
+            "#[cfg(r#test)]\nmod s_tests;\n",
+            "#[r#cfg(test)]\nmod s_tests;\n",
+            "#[r#cfg(r#all(unix, r#test))]\nmod s_tests;\n",
+            "#[r#cfg_attr(r#test, path = \"s_tests.rs\")]\nmod h;\n",
+        ] {
+            let r = built(&[("src/lib.rs", lib), ("src/s_tests.rs", T), ("src/h.rs", T)]);
+            assert!(!r.nontest.contains("src/s_tests.rs"), "{lib}");
+        }
     }
 
     #[cfg(unix)]

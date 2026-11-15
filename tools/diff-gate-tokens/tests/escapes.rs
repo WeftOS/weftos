@@ -498,3 +498,41 @@ fn r3_f2_nix_spawn() {
     let fs = new_file("use nix::spawn;\nfn f() { spawn::posix_spawn(&a, &b, &c, &d, &e); }\n");
     assert!(has(&fs, "process", 2), "{fs:#?}");
 }
+
+/// R4-D3: a raw identifier names the same attribute (`r#doc`, `r#cfg_attr`, `r#path`,
+/// `r#no_mangle`, `r#export_name`, `r#link_section`): rustdoc and rustc treat each like the
+/// plain form. Every attribute form, at the top level and nested.
+#[test]
+fn r4_d3_raw_identifier_attribute_names() {
+    let cmd = r#"std::process::Command::new(\"sh\").status().unwrap();"#;
+    for attr in [
+        format!("#[r#doc = \"```\\n{cmd}\\n```\"]"),
+        format!("#![r#doc = \"```\\n{cmd}\\n```\"]"),
+        format!("#[r#cfg_attr(all(), doc = \"```\\n{cmd}\\n```\")]"),
+        format!("#[cfg_attr(all(), r#doc = \"```\\n{cmd}\\n```\")]"),
+        format!("#[r#cfg_attr(all(), r#cfg_attr(unix, r#doc = \"```\\n{cmd}\\n```\"))]"),
+    ] {
+        let fs = new_file(&format!("{attr}\npub fn d() {{}}\n"));
+        assert!(has(&fs, "process", 1), "{attr}: {fs:#?}");
+    }
+    for attr in [
+        "#[r#doc = concat!(\"a\", \"b\")]",
+        "#[r#cfg_attr(all(), doc = concat!(\"a\", \"b\"))]",
+        "#[cfg_attr(all(), r#doc = include_str!(\"x.md\"))]",
+        "#[r#path = \"gen.txt\"]",
+        "#[cfg_attr(unix, r#path = \"gen.txt\")]",
+    ] {
+        let fs = new_file(&format!("{attr}\npub mod d;\n"));
+        assert!(has(&fs, "include", 1), "{attr}: {fs:#?}");
+    }
+    for attr in [
+        "#[r#no_mangle]",
+        "#[r#export_name = \"x\"]",
+        "#[r#link_section = \".x\"]",
+    ] {
+        let fs = new_file(&format!("{attr}\npub fn d() {{}}\n"));
+        assert!(has(&fs, "ffi", 1), "{attr}: {fs:#?}");
+    }
+    // a raw identifier is never a keyword: r#unsafe and r#extern are plain names
+    none(&new_file("fn r#unsafe() {}\nfn r#extern() {}\n"));
+}

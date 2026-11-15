@@ -44,12 +44,23 @@ pub(crate) fn tspan(s: Span) -> (usize, usize, usize) {
     (l, c, if l2 == l { c2 } else { c + 1 })
 }
 
-/// `r#foo` and `foo` are the same name (for anything that is not a keyword).
+/// `r#foo` and `foo` are the same name. rustc compares symbols, not spellings: `#[r#doc]`,
+/// `#[r#cfg_attr(..)]`, `#[r#path = ..]`, `#[r#cfg(r#test)]` and `cfg(r#all(r#test))` act
+/// exactly like the plain forms (checked with rustc 1.95; review round 4, R4-D3 / R4-B2).
+/// Every comparison of an identifier with a name (attribute names, macro names, path
+/// segments, cfg predicates) goes through this function or [`name_is`].
 pub fn name(s: &str) -> String {
     s.strip_prefix("r#").unwrap_or(s).to_string()
 }
 
-pub(crate) fn ident_is(t: Option<&TokenTree>, s: &str) -> bool {
+/// The identifier at `t` names `s`, written plainly or as a raw identifier.
+pub(crate) fn name_is(t: Option<&TokenTree>, s: &str) -> bool {
+    matches!(t, Some(TokenTree::Ident(i)) if name(&i.to_string()) == s)
+}
+
+/// The token at `t` is the keyword `s`. A raw identifier is never a keyword (`r#mod` is an
+/// identifier named `mod`), so this compares the spelling exactly. Only for keywords.
+pub(crate) fn keyword_is(t: Option<&TokenTree>, s: &str) -> bool {
     matches!(t, Some(TokenTree::Ident(i)) if *i == s)
 }
 pub(crate) fn punct_is(t: Option<&TokenTree>, c: char) -> bool {
@@ -92,7 +103,7 @@ fn read_path(v: &[TokenTree], i: usize) -> Option<TokPath> {
     if colon2(v, k) {
         absolute = true;
         k += 2;
-    } else if punct_is(v.get(k), '$') && ident_is(v.get(k + 1), "crate") {
+    } else if punct_is(v.get(k), '$') && keyword_is(v.get(k + 1), "crate") {
         if let Some(TokenTree::Punct(p)) = v.get(k) {
             spans.push(tspan(p.span()));
         }
@@ -282,7 +293,13 @@ impl<'a> Scanner<'a> {
                     let raw = id.to_string();
                     let sp = vec![tspan(id.span())];
                     let l = sp[0].0;
-                    match raw.as_str() {
+                    // keywords match the exact spelling; attribute names match through name()
+                    let nm = name(&raw);
+                    let key = match nm.as_str() {
+                        "no_mangle" | "export_name" | "link_section" | "path" => nm.as_str(),
+                        _ => raw.as_str(),
+                    };
+                    match key {
                         "use" => {
                             if let Some((leaves, j)) = parse_use(&v, i) {
                                 let hi = start(v[j].span()).0;
@@ -301,7 +318,7 @@ impl<'a> Scanner<'a> {
                             }
                         }
                         "extern" => {
-                            if ident_is(v.get(i + 1), "crate") {
+                            if keyword_is(v.get(i + 1), "crate") {
                                 if let Some((n, _, nsp, j)) = parse_extern_crate(&v, i) {
                                     let tp = TokPath {
                                         path: Path::new(false, vec![n]),
@@ -342,7 +359,7 @@ impl<'a> Scanner<'a> {
                             continue;
                         }
                         "no_mangle" | "export_name" | "link_section" => {
-                            self.push("ffi", raw.clone(), sp, (l, l), "");
+                            self.push("ffi", nm.clone(), sp, (l, l), "");
                             i += 1;
                             continue;
                         }
@@ -371,7 +388,8 @@ impl<'a> Scanner<'a> {
                     self.path_at(&v, &mut i, in_attr);
                 }
                 TokenTree::Punct(_) => {
-                    if colon2(&v, i) || (punct_is(v.get(i), '$') && ident_is(v.get(i + 1), "crate"))
+                    if colon2(&v, i)
+                        || (punct_is(v.get(i), '$') && keyword_is(v.get(i + 1), "crate"))
                     {
                         self.path_at(&v, &mut i, in_attr);
                     } else {
@@ -526,7 +544,7 @@ fn doc_values(g: &Group) -> Vec<DocVal> {
 }
 
 fn doc_values_in(v: &[TokenTree], depth: usize, out: &mut Vec<DocVal>) {
-    if ident_is(v.first(), "doc") && punct_is(v.get(1), '=') {
+    if name_is(v.first(), "doc") && punct_is(v.get(1), '=') {
         if v.len() == 3 {
             if let Some((val, sp)) = lit_str(v.get(2)) {
                 let first = start(sp).0;
@@ -549,7 +567,7 @@ fn doc_values_in(v: &[TokenTree], depth: usize, out: &mut Vec<DocVal>) {
         out.push(DocVal::Computed(sp));
         return;
     }
-    if ident_is(v.first(), "cfg_attr") && depth < 16 {
+    if name_is(v.first(), "cfg_attr") && depth < 16 {
         if let Some(TokenTree::Group(g)) = v.get(1) {
             if g.delimiter() == Delimiter::Parenthesis {
                 let inner: Vec<TokenTree> = g.stream().into_iter().collect();

@@ -2,7 +2,7 @@
 //! token slice between the keyword and its `;` (so they are found inside macro bodies too).
 
 use crate::resolve::{is_local_root, Aliases, Path};
-use crate::scan::{ident_is, name, semi_after, slice, tspan};
+use crate::scan::{keyword_is, name, semi_after, slice, tspan};
 use proc_macro2::{Span, TokenStream, TokenTree};
 
 /// One leaf of a `use` tree: what it imports, what name it binds, and its tokens.
@@ -120,7 +120,7 @@ pub fn collect_aliases(ts: TokenStream, a: &mut Aliases) {
     let v: Vec<TokenTree> = ts.into_iter().collect();
     let mut i = 0;
     while i < v.len() {
-        if ident_is(v.get(i), "use") {
+        if keyword_is(v.get(i), "use") {
             if let Some((leaves, j)) = parse_use(&v, i) {
                 for l in leaves {
                     if l.glob {
@@ -135,7 +135,7 @@ pub fn collect_aliases(ts: TokenStream, a: &mut Aliases) {
                 continue;
             }
         }
-        if ident_is(v.get(i), "extern") && ident_is(v.get(i + 1), "crate") {
+        if keyword_is(v.get(i), "extern") && keyword_is(v.get(i + 1), "crate") {
             if let Some((n, alias, _, j)) = parse_extern_crate(&v, i) {
                 if let Some(al) = alias {
                     if !is_local_root(&n) {
