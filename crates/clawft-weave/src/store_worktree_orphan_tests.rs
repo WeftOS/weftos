@@ -117,3 +117,15 @@ fn a_handed_off_worktree_is_never_marked() {
     let e = call(&svc, "orphan", json!({"project": PROJ, "slug": "feat-offer", "since": 1}), 10 * DAY).unwrap_err();
     assert!(e.contains("only an open one"), "{e}");
 }
+
+#[test]
+fn gc_of_a_landed_worktree_drops_its_registry_entry() {
+    let (_d, svc) = rig();
+    let d = tempfile::tempdir().unwrap();
+    publish(&svc, "feat-landed", d.path());
+    call(&svc, "promote", json!({"project": PROJ, "slug": "feat-landed"}), 30).unwrap();
+    assert_eq!(state_of(&svc, "feat-landed").as_deref(), Some("merged"));
+    let c = call(&svc, "gc", json!({"project": PROJ, "keep_days": 0, "confirmed": true}), 10 * DAY).unwrap();
+    assert_eq!((c["retired"].as_array().map(|a| a.len()), c["failed"].clone()), (Some(1), json!([])), "{c}");
+    assert_eq!(state_of(&svc, "feat-landed"), None, "the registry entry goes with the bucket");
+}

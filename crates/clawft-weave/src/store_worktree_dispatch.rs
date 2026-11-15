@@ -138,12 +138,18 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
             std::fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
             let r = fetch_tree(&b, &n.wt, &dest, Select::All, p.force).map_err(e)?;
             let mut head = None;
+            let mut note = None;
             if let Some(out) = &out {
-                head = Some(fetch_bundle(&b, &n.wt, out).map_err(e)?);
+                // A tree with no commits past its base carries no bundle: the tree is still fetched.
+                if weftos_store::share::read_manifest(&b, &n.wt).map_err(e)?.is_some_and(|m| m.has_bundle) {
+                    head = Some(fetch_bundle(&b, &n.wt, out).map_err(e)?);
+                } else {
+                    note = Some("this tree was published without a git bundle; no commits to fetch");
+                }
             }
             Ok(json!({
                 "written": r.written.len(), "unchanged": r.unchanged.len(), "conflicts": r.conflicts,
-                "missing": r.missing, "refused": r.refused, "bundle_head": head,
+                "missing": r.missing, "refused": r.refused, "bundle_head": head, "note": note,
             }))
         }
         "claim" => {
@@ -259,7 +265,11 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
             }
             let (mut retired, mut failed) = (Vec::new(), Vec::new());
             for info in &retire {
-                let r = StoreName::parse(&info.name).map_err(|x| x.to_string()).and_then(|nm| svc.archive(&nm, true, "gc").map_err(|x| x.to_string()));
+                let r = StoreName::parse(&info.name).map_err(|x| x.to_string()).and_then(|nm| {
+                    svc.archive(&nm, true, "gc").map_err(|x| x.to_string())?;
+                    // the bucket is gone: drop its registry entry too (ADR-126 4a), as `store archive --delete` does
+                    forget(svc, &nm).map_err(|x| format!("archived, but the registry entry stays: {x}"))
+                });
                 match r {
                     Ok(_) => retired.push(info.name.clone()),
                     Err(x) => failed.push(json!({"store": info.name, "error": x})),
