@@ -33,6 +33,10 @@ followed the spec faithfully.
   when the pins belong to another signer (`SignerMismatch`) or are already past this vault's keybag (`Rollback`). A
   failed write leaves the pins unchanged. `Vault::create` returns the creator's pins in `NewVault::pins`, so the
   creating device never trusts the store on first use.
+- **Pins are crate-recorded only (R2-L1).** `Pins` fields are private and `record` is crate-private. The crate
+  records a keybag only after it verified it (an unlock, a create, a committed write). Callers read the pins through
+  getters and persist them with `Pins::to_bytes` / `Pins::from_bytes` (82 bytes, strict parse). The persisted
+  bytes are device-local trusted state: anyone who can rewrite them can reset the device to trust on first use.
 - **The rotation doc is corrected.** `rotate_vk` no longer claims to recover from a compromise.
 - **Rotation does not carry weak KDF parameters forward (M2).** `rotate_vk` refuses (`KdfPolicy`) to re-seal a passcode
   wrapper whose parameters are below the policy for new wrappers. `Vault::below_policy_wrappers` lists those wrappers

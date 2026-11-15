@@ -34,6 +34,7 @@ pub use blob::{OpenedSecret, Policy, SecretType};
 pub use error::VaultError;
 pub use index::IndexEntry;
 pub use keybag::{Keybag, Pins, SeenKeybag, Wrapper, WrapperBody};
+pub use pins::PINS_LEN;
 pub use passcode_kdf::KdfParams;
 pub use recovery::RecoveryKey;
 pub use rotation::{Resealed, RotationReport};
@@ -47,6 +48,8 @@ mod tests;
 mod tests_index;
 #[cfg(test)]
 mod tests_review;
+#[cfg(test)]
+mod tests_review_r2;
 #[cfg(test)]
 mod tests_rotation;
 #[cfg(test)]
