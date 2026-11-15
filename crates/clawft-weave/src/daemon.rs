@@ -3499,8 +3499,14 @@ pub async fn run(
                                 // Unknown credentials fail closed.
                                 // A supervised project kernel (same uid) is
                                 // classified by its process group (review S9).
-                                let peer = crate::child_peer::classify_peer(stream.peer_cred());
-                                tokio::spawn(handle_connection_classed(stream, k, tx, peer));
+                                let cred = stream.peer_cred();
+                                let peer_key = cred
+                                    .as_ref()
+                                    .ok()
+                                    .map(|c| crate::child_peer::peer_key(c.uid(), c.pid()));
+                                debug!(pid = ?cred.as_ref().ok().and_then(|c| c.pid()), peer_key = ?peer_key, "rpc peer accepted");
+                                let peer = crate::child_peer::classify_peer(cred);
+                                tokio::spawn(handle_connection_identified(stream, k, tx, peer, peer_key));
                             }
                             Err(e) => {
                                 error!("accept error: {e}");
@@ -4011,7 +4017,24 @@ pub async fn handle_connection_classed<S>(
 ) where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    handle_connection_at(stream, kernel, shutdown_tx, peer, crate::rpc_ext::RpcEndpoint::Owner).await;
+    handle_connection_identified(stream, kernel, shutdown_tx, peer, None).await;
+}
+
+/// [`handle_connection_classed`] plus the socket peer's identity
+/// (`uid:<uid>[:pid:<pid>]`, read from the accepted unix stream), which
+/// scopes the aggregate evaluation ceiling across that peer's connections.
+pub async fn handle_connection_identified<S>(
+    stream: S,
+    kernel: Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
+    shutdown_tx: watch::Sender<bool>,
+    peer: crate::child_peer::PeerClass,
+    peer_key: Option<String>,
+) where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    handle_connection_at(
+        stream, kernel, shutdown_tx, peer, crate::rpc_ext::RpcEndpoint::Owner, peer_key,
+    ).await;
 }
 
 /// Accept a project-kernel connection on the separate child-only socket.
@@ -4025,7 +4048,7 @@ pub async fn handle_connection_child<S>(
 {
     handle_connection_at(
         stream, kernel, shutdown_tx, crate::child_peer::PeerClass::Child,
-        crate::rpc_ext::RpcEndpoint::Child,
+        crate::rpc_ext::RpcEndpoint::Child, None,
     ).await;
 }
 
@@ -4035,6 +4058,7 @@ async fn handle_connection_at<S>(
     shutdown_tx: watch::Sender<bool>,
     peer: crate::child_peer::PeerClass,
     endpoint: crate::rpc_ext::RpcEndpoint,
+    peer_key: Option<String>,
 ) where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
@@ -4047,11 +4071,11 @@ async fn handle_connection_at<S>(
     #[cfg(feature = "rvf-rpc")]
     if &header == b"RVFS" {
         if endpoint == crate::rpc_ext::RpcEndpoint::Child { return }
-        return handle_rvf_connection(stream, kernel, shutdown_tx, peer).await;
+        return handle_rvf_connection(stream, kernel, shutdown_tx, peer, peer_key).await;
     }
 
     // JSON mode: the 4 header bytes are the start of the first JSON line.
-    handle_json_connection(header, stream, kernel, shutdown_tx, peer, endpoint).await;
+    handle_json_connection(header, stream, kernel, shutdown_tx, peer, endpoint, peer_key).await;
 }
 
 /// Outcome of dispatching a single JSON-line request.
@@ -4267,6 +4291,8 @@ async fn dispatch_json_line<W>(
     writer: &mut W,
     peer: crate::child_peer::PeerClass,
     endpoint: crate::rpc_ext::RpcEndpoint,
+    conn_id: u64,
+    peer_key: Option<&str>,
 ) -> DispatchOutcome
 where
     W: AsyncWriteExt + Unpin,
@@ -4293,7 +4319,11 @@ where
             // extension gates) for every entry path, before any streaming
             // intercept or dispatch.
             let mut caller =
-                crate::rpc_ext::CallerCtx::from_request(&req).with_peer(peer).with_endpoint(endpoint);
+                crate::rpc_ext::CallerCtx::from_request(&req)
+                    .with_peer(peer)
+                    .with_endpoint(endpoint)
+                    .with_connection(conn_id)
+                    .with_peer_key(peer_key.map(str::to_owned));
             // ADR-103 D14: refuse an unsupported `proto` / malformed
             // `project` before anything else looks at the request.
             let (caps, denial) = if let Some(refusal) =
@@ -4397,11 +4427,13 @@ async fn handle_json_connection<S>(
     shutdown_tx: watch::Sender<bool>,
     peer: crate::child_peer::PeerClass,
     endpoint: crate::rpc_ext::RpcEndpoint,
+    peer_key: Option<String>,
 ) where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     let (reader, mut writer) = tokio::io::split(stream);
     let mut buf = BufReader::new(reader);
+    let conn_id = crate::rpc_ext::CallerCtx::next_connection_id();
 
     // Reconstruct the first line: the 4-byte prefix + the rest until '\n'.
     let mut rest_of_first = String::new();
@@ -4409,7 +4441,7 @@ async fn handle_json_connection<S>(
         return;
     }
     let first_line = format!("{}{}", String::from_utf8_lossy(&prefix), rest_of_first);
-    match dispatch_json_line(&first_line, &kernel, &shutdown_tx, &mut writer, peer, endpoint).await {
+    match dispatch_json_line(&first_line, &kernel, &shutdown_tx, &mut writer, peer, endpoint, conn_id, peer_key.as_deref()).await {
         DispatchOutcome::Continue => {}
         DispatchOutcome::Stop => return,
         DispatchOutcome::StreamSubscribe {
@@ -4430,7 +4462,7 @@ async fn handle_json_connection<S>(
             Ok(_) => {}
             Err(_) => break,
         }
-        match dispatch_json_line(&line, &kernel, &shutdown_tx, &mut writer, peer, endpoint).await {
+        match dispatch_json_line(&line, &kernel, &shutdown_tx, &mut writer, peer, endpoint, conn_id, peer_key.as_deref()).await {
             DispatchOutcome::Continue => {}
             DispatchOutcome::Stop => break,
             DispatchOutcome::StreamSubscribe {
@@ -4994,12 +5026,14 @@ async fn handle_rvf_connection<S>(
     kernel: Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
     shutdown_tx: watch::Sender<bool>,
     peer: crate::child_peer::PeerClass,
+    peer_key: Option<String>,
 ) where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     use crate::rvf_codec::{RvfFrameReader, RvfFrameWriter};
     use crate::rvf_rpc;
 
+    let conn_id = crate::rpc_ext::CallerCtx::next_connection_id();
     let (reader, writer) = tokio::io::split(stream);
     let mut frame_reader = RvfFrameReader::new(reader);
     let mut frame_writer = RvfFrameWriter::new(writer);
@@ -5019,7 +5053,9 @@ async fn handle_rvf_connection<S>(
             Ok(req) => {
                 let id = req.id.clone();
                 let caller = crate::rpc_ext::CallerCtx::from_request(&req)
-                    .with_peer(peer);
+                    .with_peer(peer)
+                    .with_connection(conn_id)
+                    .with_peer_key(peer_key.clone());
                 if let Some(refusal) =
                     crate::handshake_rpc::envelope_refusal(&req.method, req.proto, req.project.as_deref())
                 {

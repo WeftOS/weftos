@@ -63,6 +63,8 @@ mod tests {
                     project: None,
                     verified_project: None,
                     caps: CallerCapabilities::from_scopes(["admin"]),
+                    connection: None,
+                    peer_key: None,
                 },
             };
             let r = handle(call).await;

@@ -91,3 +91,10 @@ fn an_empty_group_is_pruned_when_the_leader_exit_is_seen() {
     prune_if_gone(pgid);
     assert!(!group_noted(pgid), "an empty group is dropped without waiting for an accept");
 }
+
+#[test]
+fn peer_key_is_uid_only_so_a_new_pid_is_not_a_new_budget() {
+    assert_eq!(super::peer_key(1000, Some(7)), super::peer_key(1000, Some(8)));
+    assert_eq!(super::peer_key(1000, Some(7)), super::peer_key(1000, None));
+    assert_ne!(super::peer_key(1000, Some(7)), super::peer_key(1001, Some(7)));
+}

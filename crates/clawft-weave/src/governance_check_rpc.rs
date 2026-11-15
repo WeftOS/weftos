@@ -91,6 +91,23 @@ fn parse(params: &Value) -> Result<Query, String> {
 /// Evaluate `params` against `gate`. Pure of daemon state so tests can drive
 /// it with a gate they built.
 pub fn check(gate: Option<&dyn GateBackend>, params: &Value) -> Response {
+    check_as(gate, None, params)
+}
+
+/// [`check`] for a transport-identified caller. `caller` comes from the
+/// connection (never the request body) and scopes the evaluation quota, so
+/// one caller cannot spend the budget of the principal it names, and the
+/// socket peer's aggregate ceiling bounds the load it can drive by
+/// reconnecting or spawning new processes under the same uid. Windows named
+/// pipes and the child-only socket carry no peer key and so no aggregate
+/// ceiling (open item). `None` (in-process, no connection) is left as it was: the
+/// engine's own per-principal bucket and no aggregate ceiling, because such a
+/// caller is the daemon itself, not an unauthenticated peer.
+pub fn check_as(
+    gate: Option<&dyn GateBackend>,
+    caller: Option<&clawft_kernel::governance::QuotaCaller<'_>>,
+    params: &Value,
+) -> Response {
     let q = match parse(params) {
         Ok(q) => q,
         Err(e) => return invalid(e),
@@ -101,7 +118,11 @@ pub fn check(gate: Option<&dyn GateBackend>, params: &Value) -> Response {
             "this kernel has no governance gate; cannot decide",
         );
     };
-    let Some(v) = gate.check_detailed(&q.agent_id, &q.action, &q.context) else {
+    let verdict = match caller {
+        Some(c) => gate.check_detailed_for_caller(c, &q.agent_id, &q.action, &q.context),
+        None => gate.check_detailed(&q.agent_id, &q.action, &q.context),
+    };
+    let Some(v) = verdict else {
         return Response::error_with_kind(
             "no_governance_engine",
             "the kernel's gate has no governance engine; cannot decide",
@@ -130,7 +151,12 @@ pub fn check(gate: Option<&dyn GateBackend>, params: &Value) -> Response {
 pub fn handle(call: ExtCall) -> ExtFuture {
     Box::pin(async move {
         let gate = call.ctx.kernel.read().await.governance_gate().cloned();
-        check(gate.as_deref(), &call.params)
+        let conn = call.ctx.connection.map(|c| format!("conn:{c}"));
+        let caller = conn.as_deref().map(|connection| clawft_kernel::governance::QuotaCaller {
+            connection,
+            peer: call.ctx.peer_key.as_deref(),
+        });
+        check_as(gate.as_deref(), caller.as_ref(), &call.params)
     })
 }
 
@@ -331,5 +357,126 @@ mod tests {
         assert_eq!(ask("mesh-agent-7", "shell_exec").await, "deny", "the asker, by the scoped rule");
         assert_eq!(ask("mesh-agent-7", "read_file").await, "permit", "the rule is about shell only");
         assert_eq!(ask("mesh-agent-8", "shell_exec").await, "permit", "another asker");
+    }
+
+    /// Drives the quota problem through the real RPC path: `authorize_with`
+    /// then `dispatch_ext_with` on the builtin registry, against one booted
+    /// kernel (one governance gate, one limiter). Two callers are two
+    /// `CallerCtx` values with their own `Read` caps; nothing in the request
+    /// but `agent_id` names who is asked about, and the handler never looks
+    /// at the caller. Caller A spends the per-principal quota naming
+    /// `victim`; caller B then checks as `victim` and is refused.
+    #[tokio::test]
+    async fn rpc_governance_check_quota_is_not_spendable_by_another_caller() {
+        use crate::capability::CallerCapabilities;
+        use crate::rpc_ext::{CallerCtx, ExtRegistry, KernelRef, authorize_with, dispatch_ext_with};
+        use clawft_platform::NativePlatform;
+        use clawft_types::config::{ChainConfig, Config, KernelConfig};
+
+        let kcfg = KernelConfig {
+            chain: Some(ChainConfig::isolated_in(&tempfile::tempdir().unwrap().keep())),
+            ..KernelConfig::default()
+        };
+        let kernel: KernelRef = std::sync::Arc::new(tokio::sync::RwLock::new(
+            clawft_kernel::boot::Kernel::boot(Config::default(), kcfg, std::sync::Arc::new(NativePlatform::new()))
+                .await
+                .expect("kernel boots"),
+        ));
+        let limit = clawft_kernel::rate_limit::DEFAULT_GOVERNANCE_EVAL_RATE.max_per_window as usize;
+
+        let reg = ExtRegistry::builtin();
+        let caps = CallerCapabilities::from_scopes(["read"]);
+        let caller_a = CallerCtx::from_auth(Some("read".into())).with_connection(CallerCtx::next_connection_id());
+        let caller_b = CallerCtx::from_auth(Some("read".into())).with_connection(CallerCtx::next_connection_id());
+        let params = json!({"agent_id": "victim", "action": "tool.read_file"});
+
+        let call = |caller: CallerCtx| {
+            let (reg, caps, params, kernel) = (reg.clone(), caps.clone(), params.clone(), kernel.clone());
+            async move {
+                authorize_with(&reg, &caller, &caps, "governance.check", &params, &kernel)
+                    .await
+                    .expect("read caller may call governance.check");
+                dispatch_ext_with(&reg, &caller, &caps, "governance.check", &params, &kernel)
+                    .await
+                    .expect("governance.check is routed")
+            }
+        };
+        let limited = |r: &Response| {
+            r.ok && result(r)["reason"].as_str().is_some_and(|s| s.contains("rate limited"))
+        };
+
+        // Caller A spends the whole quota and one more, all naming `victim`.
+        for i in 0..=limit {
+            let r = call(caller_a.clone()).await;
+            assert!(r.ok, "check {i} must answer: {:?}", r.error);
+            assert_eq!(limited(&r), i == limit, "A's check {i}: quota should trip only past {limit}");
+        }
+
+        // Caller B is `victim` itself and has spent nothing.
+        let r = call(caller_b).await;
+        assert!(r.ok, "B's check must answer: {:?}", r.error);
+        assert!(
+            !limited(&r),
+            "victim's own first check was rate limited by another caller's spend: {}",
+            result(&r)["reason"]
+        );
+    }
+
+    /// Reconnecting must not mint fresh budgets (card 9f8f872e): several
+    /// connections from one socket peer, each under the per-principal limit
+    /// but together over the peer's aggregate ceiling, are denied past the
+    /// ceiling, through the real RPC path; a connection from another peer
+    /// still gets its answer.
+    #[tokio::test]
+    async fn rpc_governance_check_peer_ceiling_binds_reconnecting_callers() {
+        use crate::capability::CallerCapabilities;
+        use crate::rpc_ext::{CallerCtx, ExtRegistry, KernelRef, authorize_with, dispatch_ext_with};
+        use clawft_platform::NativePlatform;
+        use clawft_types::config::{ChainConfig, Config, KernelConfig};
+
+        let kcfg = KernelConfig {
+            chain: Some(ChainConfig::isolated_in(&tempfile::tempdir().unwrap().keep())),
+            ..KernelConfig::default()
+        };
+        let kernel: KernelRef = std::sync::Arc::new(tokio::sync::RwLock::new(
+            clawft_kernel::boot::Kernel::boot(Config::default(), kcfg, std::sync::Arc::new(NativePlatform::new()))
+                .await
+                .expect("kernel boots"),
+        ));
+        let ceiling = clawft_kernel::rate_limit::DEFAULT_GOVERNANCE_PEER_EVAL_RATE.max_per_window as usize;
+        let per_conn = clawft_kernel::rate_limit::DEFAULT_GOVERNANCE_EVAL_RATE.max_per_window as usize - 56;
+        let reg = ExtRegistry::builtin();
+        let caps = CallerCapabilities::from_scopes(["read"]);
+        let params = json!({"agent_id": "victim", "action": "tool.read_file"});
+        let call = |caller: CallerCtx| {
+            let (reg, caps, params, kernel) = (reg.clone(), caps.clone(), params.clone(), kernel.clone());
+            async move {
+                authorize_with(&reg, &caller, &caps, "governance.check", &params, &kernel).await.expect("read");
+                dispatch_ext_with(&reg, &caller, &caps, "governance.check", &params, &kernel)
+                    .await
+                    .expect("routed")
+            }
+        };
+        // Same uid, different processes: a new pid must not be a new budget.
+        let conn = |uid: u32, pid: i32| {
+            CallerCtx::from_auth(Some("read".into()))
+                .with_connection(CallerCtx::next_connection_id())
+                .with_peer_key(Some(crate::child_peer::peer_key(uid, Some(pid))))
+        };
+        let limited = |r: &Response| r.ok && result(r)["decision"] == "deny";
+
+        let (mut allowed, mut denied) = (0usize, 0usize);
+        for i in 0..(ceiling / per_conn + 2) {
+            let c = conn(1000, 100 + i as i32);
+            for _ in 0..per_conn {
+                let r = call(c.clone()).await;
+                assert!(r.ok, "{:?}", r.error);
+                if limited(&r) { denied += 1 } else { allowed += 1 }
+            }
+        }
+        assert_eq!(allowed, ceiling, "exactly the aggregate ceiling is admitted");
+        assert!(denied > 0, "checks past the ceiling are denied");
+        let r = call(conn(1001, 100)).await;
+        assert!(!limited(&r), "another peer must be unaffected: {}", result(&r)["reason"]);
     }
 }
