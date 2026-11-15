@@ -21,7 +21,8 @@ default = ["native"]
 native = ["reqwest/rustls-tls", "dep:tokio", "clawft-types/native"]
 # gloo-timers provides a real wall-clock sleep on wasm32 for browser_delay
 # (WEFT-390). Host-side tests under the browser feature keep using tokio.
-browser = ["clawft-types/browser", "dep:gloo-timers"]
+# llm-wasm parses the Retry-After header on browser 429s.
+browser = ["clawft-types/browser", "dep:gloo-timers", "dep:llm-wasm"]
 
 [dependencies]
 # Always available
@@ -46,6 +47,8 @@ tokio = { workspace = true, optional = true }
 
 # Browser only — real timers for retry/backoff (WEFT-390)
 gloo-timers = { version = "0.3", optional = true, features = ["futures"] }
+# Browser only — Retry-After parsing for rate-limit errors
+llm-wasm = { version = "0.3", optional = true, default-features = false }
 
 [dev-dependencies]
 tokio = { workspace = true }
