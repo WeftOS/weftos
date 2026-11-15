@@ -105,6 +105,7 @@ pub(crate) struct PasscodeSeal<'a> {
 }
 
 pub(crate) fn passcode_wrapper(s: PasscodeSeal<'_>) -> Result<Wrapper> {
+    normalize::check_new_passcode(s.passcode)?;
     let kek = derive_kek(&normalize::passcode(s.passcode), &s.salt, s.params)?;
     let aad = wrapper_aad(s.vault_id, &s.id, KIND_PASSCODE, s.generation);
     let ct = seal48(&kek, &s.nonce, &aad, s.vk)?;
@@ -384,7 +385,8 @@ impl Vault {
     }
 
     /// Re-seal one passcode wrapper under a new passcode (spec 9.3): new salt and nonce, sequence
-    /// bumped, keybag re-signed, `pins` advanced. No blob changes. Returns the new keybag bytes.
+    /// bumped, keybag re-signed, `pins` advanced. No blob changes. Returns the new keybag bytes. The new
+    /// passcode must be non-empty and use only assigned, non-control code points.
     pub fn change_passcode(
         &mut self,
         wrapper_id: &[u8; 16],

@@ -74,6 +74,10 @@ pub enum VaultError {
     /// The requested keybag change would break a keybag rule.
     #[error("invalid operation: {0}")]
     InvalidOperation(&'static str),
+    /// A new passcode breaks the passcode rules: empty, or it contains an unassigned, private-use or
+    /// control code point (whose NFKC form is not stable across Unicode versions).
+    #[error("passcode rejected: {0}")]
+    PasscodeRejected(&'static str),
     /// The keybag sequence counter cannot advance (it is at `u64::MAX`).
     #[error("keybag sequence counter exhausted")]
     SequenceExhausted,

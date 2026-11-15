@@ -357,7 +357,7 @@ chacha20poly1305 = { version = "0.10.1", default-features = false, features = ["
 # transitively; their direct-dep rows are pending owner approval.
 argon2 = { version = "=0.5.3", default-features = false, features = ["alloc", "zeroize"] }
 hkdf = "0.12.4"
-unicode-normalization = "0.1.26"
+unicode-normalization = "=0.1.26"
 
 # QUIC mesh transport (WEFT-118 / ADR-026). Application crypto is Noise
 # (snow); quinn still needs TLS for the QUIC handshake, so we use

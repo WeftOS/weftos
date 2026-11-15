@@ -293,3 +293,58 @@ fn l2_unlock_kdf_cost_is_bounded_at_parse() {
     single.sequence += 1;
     assert!(Keybag::parse(&single.sign(&v.signing), &Pins::default()).is_ok());
 }
+
+/// L4: an empty passcode is refused when a passcode wrapper is written.
+#[test]
+fn l4_empty_passcode_is_refused() {
+    assert_eq!(
+        Vault::create_unchecked("", T, true).unwrap_err(),
+        VaultError::PasscodeRejected("empty")
+    );
+    assert_eq!(
+        Vault::create("", KdfParams::RECOMMENDED, true).unwrap_err(),
+        VaultError::PasscodeRejected("empty")
+    );
+    let NewVault {
+        mut vault,
+        mut pins,
+        ..
+    } = new_vault(true);
+    let id = pass_id(&vault);
+    assert_eq!(
+        vault
+            .change_passcode_unchecked(&id, "", T, &mut pins)
+            .unwrap_err(),
+        VaultError::PasscodeRejected("empty")
+    );
+    assert_eq!(vault.keybag().sequence, 1);
+}
+
+/// L4: passcodes with unassigned, private-use, noncharacter or control code points are refused when
+/// set (NFKC of an unassigned code point is not stable across Unicode versions).
+#[test]
+fn l4_unassigned_private_use_and_control_code_points_are_refused() {
+    for bad in [
+        "FAKE-\u{0378}-unassigned",
+        "FAKE-\u{E000}-private-use",
+        "FAKE-\u{0007}-control",
+        "FAKE-\u{10FFFF}-noncharacter",
+    ] {
+        assert_eq!(
+            Vault::create_unchecked(bad, T, true).unwrap_err(),
+            VaultError::PasscodeRejected("unassigned, private-use or control code point"),
+            "passcode {} accepted",
+            bad.escape_unicode()
+        );
+    }
+    // Assigned non-ASCII is fine (a fullwidth letter NFKC-folds to ASCII), and unlocks by its NFKC twin.
+    let nv = Vault::create_unchecked("FAKE-\u{FF21}\u{00E9}-ok", T, true).unwrap();
+    assert!(
+        Vault::unlock(
+            nv.vault.keybag_bytes(),
+            "FAKE-A\u{00E9}-ok",
+            &mut Pins::default()
+        )
+        .is_ok()
+    );
+}
