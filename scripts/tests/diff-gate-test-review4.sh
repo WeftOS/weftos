@@ -115,6 +115,16 @@ EXPECT="new-dep" case_run "r4-e: a 3000-entry [dependencies] table, one new git 
     'sed -i.bak "s|^d1500 = \"1\"|d1500 = { git = \"https://evil\" }|" Cargo.toml; rm Cargo.toml.bak'
 echo "        (3000-entry case took $(( $(date +%s) - t0 )) s)"
 
+# Package directories with unusual names: only cargo sees a build key moved by a deleted header,
+# so each case needs cargo's answer to be mapped back to the right package. R4-A2: the records
+# escape "%" as "%25" and the build-script check compares them with the raw file list.
+for dn in "my crate" "a%2Eb" "a|b" 'a\b' 'a"b' "$(printf '\303\251t\303\251')" "-x"; do
+    export R4DN="$dn"; g=""; case "$dn" in *%*) g=R4-A2 ;; esac
+    KNOWN_GAP="$g" EXPECT="build-script" case_run "r4-e: moved build key in a package directory named [$dn]" 1 \
+        'mkdir -p "crates/$R4DN/src" && : >"crates/$R4DN/src/lib.rs" && echo "fn main() {}" >"crates/$R4DN/b.rs" && printf "[package]\nname = \"x\"\nversion = \"0.1.0\"\n\n[package.metadata.x]\nbuild = \"b.rs\"\n" >"crates/$R4DN/Cargo.toml"' \
+        'grep -v "^\[package.metadata.x\]" "crates/$R4DN/Cargo.toml" >c.tmp && mv c.tmp "crates/$R4DN/Cargo.toml"'
+done
+
 # ── (b) the reachability walk (sensitive crates) ─────────────────────
 # KB: crate k declares supervise; supervise_tests.rs is exempt by name.
 R4KB="$SBASE"'; printf "pub mod supervise;\n" >crates/k/src/lib.rs; echo "fn t() {}" >crates/k/src/supervise_tests.rs'
@@ -144,6 +154,9 @@ EXPECT="sensitive-crate" case_run "r4-b: a file reached only from build.rs (a no
     "$R4KB"'; printf "#[path = \"src/supervise_tests.rs\"]\nmod h;\nfn main() {}\n" >crates/k/build.rs' "$R4EV"
 EXPECT="sensitive-crate" case_run "r4-b: a proc-macro library declaring the exempt file" 1 \
     "$R4KB"'; printf "[package]\nname = \"k\"\n\n[lib]\nproc-macro = true\n" >crates/k/Cargo.toml; printf "mod supervise_tests;\n" >>crates/k/src/lib.rs' "$R4EV"
+# R4-A2 again: a root whose path holds "%" reaches the helper as "%25" and is silently skipped.
+KNOWN_GAP="$(R4G R4-A2)" EXPECT="sensitive-crate" case_run "r4-b: a lib root whose file name holds % declares the exempt file" 1 \
+    "$SBASE"'; printf "[package]\nname = \"k\"\n\n[lib]\npath = \"src/lib%%.rs\"\n" >crates/k/Cargo.toml; printf "pub mod supervise;\nmod supervise_tests;\n" >"crates/k/src/lib%.rs"; rm crates/k/src/lib.rs; echo "fn t() {}" >crates/k/src/supervise_tests.rs' "$R4EV"
 NEEDS_REACH=1 case_run "r4-b: control, a file reached only from an example stays exempt" 0 \
     "$R4KB"'; mkdir -p crates/k/examples; printf "#[path = \"../src/supervise_tests.rs\"]\nmod h;\nfn main() {}\n" >crates/k/examples/e.rs' "$R4EV"
 NEEDS_REACH=1 case_run "r4-b: control, a file reached only from a bench stays exempt" 0 \
