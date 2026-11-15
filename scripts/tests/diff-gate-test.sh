@@ -597,6 +597,8 @@ EXPECT="sensitive-crate" case_run "sensitive: code on the closing line of a cfg(
     'printf "#[cfg(test)]\nmod tests {\n    fn t() {}\n} %s\n" "$CALLER" >>crates/k/src/supervise.rs'
 EXPECT="sensitive-crate" case_run "sensitive: a { in a string does not extend a cfg(test) module" 1 "$SBASE" \
     'printf "#[cfg(test)]\nmod tests {\n    const S: &str = \"{\";\n    const C: char = '\''{'\'';\n}\n%s\n" "$CALLER" >>crates/k/src/supervise.rs'
+EXPECT="sensitive-crate" case_run "sensitive: a cfg(test) module that never closes exempts nothing" 1 "$SBASE" \
+    'printf "#[cfg(test)]\nmod tests {\n    %s\n" "$CALLER" >>crates/k/src/supervise.rs'
 EXPECT="sensitive-crate" case_run "sensitive: cfg(any(test, ...)) is not exempt" 1 "$SBASE" \
     'printf "#[cfg(any(test, feature = \"x\"))]\nmod t {\n    %s\n}\n" "$CALLER" >>crates/k/src/supervise.rs'
 EXPECT="sensitive-crate" case_run "sensitive: cfg(test) on a fn is not treated as a module" 1 "$SBASE" \

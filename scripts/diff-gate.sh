@@ -10,7 +10,7 @@
 # Only added lines and new files are inspected. Existing code never fails the gate.
 #
 # Rules: unsafe, new-dep, build-script, proc-macro, net, process, ffi, include, ci-workflow,
-#        gitattributes-change, toolchain-config, special-file, approvals-change.
+#        gitattributes-change, toolchain-config, special-file, sensitive-crate, approvals-change.
 #
 # The diff is taken with --text --no-textconv --no-renames and pinned prefixes, quoting and
 # colour, so .gitattributes and git config cannot hide or misname hunks; any .gitattributes
@@ -347,12 +347,72 @@ show_at() { # <rev|WORKTREE> <path>: absent -> nothing; present but unreadable -
 }
 head_src="$HEAD_SHA"; [ "$WORKTREE" = 1 ] && head_src=WORKTREE
 
+# g2r: approvals glob -> anchored ERE (* within a directory, ** across). Shared by the awk stages.
+G2R_AWK='
+function g2r(g,   r, i, c, n) {
+    r = "^"; n = length(g)
+    for (i = 1; i <= n; i++) {
+        c = substr(g, i, 1)
+        if (c == "*") {
+            if (substr(g, i + 1, 1) == "*") {
+                i++
+                if (substr(g, i + 1, 1) == "/") { i++; r = r "(.*/)?" } else r = r ".*"
+            } else r = r "[^/]*"
+        } else if (c == "?") r = r "[^/]"
+        else if (index("\\.+(){}|^$[]", c) > 0) r = r "\\" c
+        else r = r c
+    }
+    return r "$"
+}'
+
+# ── Sensitive crates (G1 interim, owner option c) ────────────────────
+# config/diff-gate-sensitive.toml AT THE TIP OF THE BASE REF lists [[sensitive]] and [[exempt]]
+# path globs; the copy in the diff under review is never used (a change to it is an
+# approvals-change finding below). parse_sensitive: TOML on stdin -> S|E <TAB> glob.
+SENSITIVE="config/diff-gate-sensitive.toml"
+parse_sensitive() {
+    awk '
+    function val(s,   v) { v = s; sub(/^[^=]*=[ \t]*/, "", v); sub(/^["\047]/, "", v); sub(/["\047][ \t]*(#.*)?$/, "", v); gsub(/\t/, " ", v); return v }
+    function flush() {
+        if (!open) return
+        if (p == "" || re == "") { print "diff-gate: malformed sensitive-crate entry near line " start " (needs path, reason)" > "/dev/stderr"; bad = 1 }
+        else print kind "\t" p
+        open = 0
+    }
+    /^[ \t]*#/ || /^[ \t]*$/ { next }
+    /^[ \t]*\[\[sensitive\]\][ \t]*(#.*)?$/ { flush(); open = 1; kind = "S"; start = NR; p = re = ""; next }
+    /^[ \t]*\[\[exempt\]\][ \t]*(#.*)?$/ { flush(); open = 1; kind = "E"; start = NR; p = re = ""; next }
+    open && /^[ \t]*path[ \t]*=/ { p = val($0); next }
+    open && /^[ \t]*reason[ \t]*=/ { re = val($0); next }
+    { print "diff-gate: unexpected line " NR " in the sensitive-crate list" > "/dev/stderr"; bad = 1 }
+    END { flush(); exit bad }
+    '
+}
+show_at "$BASE_TIP" "$SENSITIVE" >"$TMP/sens.tip.toml"
+show_at "$BASE" "$SENSITIVE" >"$TMP/sens.base.toml"
+show_at "$head_src" "$SENSITIVE" >"$TMP/sens.head.toml"
+parse_sensitive <"$TMP/sens.tip.toml" >"$TMP/sens" || { echo "diff-gate: cannot use $SENSITIVE on the base" >&2; exit 2; }
+parse_sensitive <"$TMP/sens.head.toml" >/dev/null || { echo "diff-gate: cannot use $SENSITIVE" >&2; exit 2; }
+# is_sensitive <path>: 1 if path matches a [[sensitive]] glob and no [[exempt]] glob, else 0
+is_sensitive() {
+    awk -F'\t' -v p="$1" "$G2R_AWK"'
+    $1 == "S" && p ~ g2r($2) { s = 1 }
+    $1 == "E" && p ~ g2r($2) { e = 1 }
+    END { print (s && !e) ? 1 : 0 }' "$TMP/sens"
+}
+
 # ── Pass 2: lex added .rs lines ──────────────────────────────────────
 # A line-by-line regex cannot know whether a line starts inside a string or a block comment,
 # so each .rs file with added lines is lexed in full (nested block comments, strings, raw
 # strings, char literals vs lifetimes) and the added line is also lexed on its own. Rules run
 # on both results; either one finding a token is a finding (false positives over misses).
 # Lexed text keeps every byte position, so findings carry token spans for the approvals stage.
+# In a sensitive file every added non-blank line that is not test-only is also a sensitive-crate
+# finding. Test-only lines are found on the full-file lex: a #[cfg(test)] or
+# #[cfg(all(test, ...))] attribute, then only attributes, comments or blank lines, then
+# `mod name {`; the region ends where its brace closes. A line with code after the closing
+# brace is not test-only. A region counts only if it closes and the file's braces balance at
+# the end (and never go negative), so a lexer confusion cannot exempt code.
 # Emits: rule <TAB> path <TAB> line <TAB> text <TAB> "" <TAB> groups <TAB> trimmed text
 : >"$TMP/rs-index"
 if [ -s "$TMP/rs-added" ]; then
@@ -365,8 +425,67 @@ if [ -s "$TMP/rs-added" ]; then
         printf '%s\t%s\n' "$TMP/blobs/$n" "$p" >>"$TMP/rs-index"
     done <"$TMP/rs-paths"
     set -- "$TMP"/blobs/*
-    awk -v idx="$TMP/rs-index" -v add="$TMP/rs-added" -v addr_types='SocketAddrV4|SocketAddrV6|SocketAddr|IpAddr|Ipv4Addr|Ipv6Addr|AddrParseError' '
+    awk -v sensf="$TMP/sens" -v idx="$TMP/rs-index" -v add="$TMP/rs-added" -v addr_types='SocketAddrV4|SocketAddrV6|SocketAddr|IpAddr|Ipv4Addr|Ipv6Addr|AddrParseError' "$G2R_AWK"'
     BEGIN { HASHES = "################################################################"; SP = "        " }
+    function insens(p,   i, hit) {
+        for (i = 1; i <= nsg; i++) if (p ~ sg[i]) hit = 1
+        if (!hit) return 0
+        for (i = 1; i <= neg; i++) if (p ~ eg[i]) return 0
+        return 1
+    }
+    # Test-region tracking over the lexed full file (strings, chars and comments are blank).
+    function attr_end(s, i,   d, n, c) { # s[i] is "[": index of its matching "]", 0 if none
+        d = 0; n = length(s)
+        for (; i <= n; i++) { c = substr(s, i, 1); if (c == "[") d++; else if (c == "]" && --d == 0) return i }
+        return 0
+    }
+    function testattr(a) { gsub(/[ \t]/, "", a); return (a == "#[cfg(test)]" || substr(a, 1, 15) == "#[cfg(all(test,") }
+    function walk(o, from, bpos,   i, n, c) { # brace depth over o[from..]; opens the region at bpos; returns where it closes
+        n = length(o)
+        for (i = from; i <= n; i++) {
+            c = substr(o, i, 1)
+            if (c == "{") { if (i == bpos) { TR = 1; TRD = DEP } DEP++ }
+            else if (c == "}") { DEP--; if (DEP < 0) BROKEN = 1; if (TR && DEP == TRD) { TR = 0; return i } }
+        }
+        return 0
+    }
+    function closed(o, endp, ln) { # region closed at o[endp]: keep ln unless code follows
+        if (substr(o, endp + 1) ~ /^[ \t]*$/) RL = RL " " ln
+        FT = FT RL; RL = ""
+        walk(o, endp + 1, 0)
+    }
+    function track(o, ln,   pos, rest, e, endp) {
+        if (BROKEN) return
+        if (TR) {
+            endp = walk(o, 1, 0)
+            if (endp) closed(o, endp, ln); else RL = RL " " ln
+            return
+        }
+        pos = 1
+        while (1) {
+            rest = substr(o, pos)
+            if (rest ~ /^[ \t]*$/) break
+            if (match(rest, /^[ \t]*#[ \t]*\[/)) {
+                e = attr_end(o, pos + RLENGTH - 1)
+                if (!e) { PEND = 0; break }
+                if (testattr(substr(o, pos, e - pos + 1))) PEND = 1
+                pos = e + 1; continue
+            }
+            if (PEND && match(rest, /^[ \t]*(pub[ \t]*(\([^)]*\))?[ \t]+)?mod[ \t]+(r#)?[A-Za-z_][A-Za-z0-9_]*[ \t]*\{/)) {
+                RL = PL; PL = ""; PEND = 0
+                endp = walk(o, 1, pos + RLENGTH - 1)
+                if (endp) closed(o, endp, ln); else RL = RL " " ln
+                return
+            }
+            PEND = 0; break
+        }
+        walk(o, 1, 0)
+        if (PEND) PL = PL " " ln; else PL = ""
+    }
+    function finish(   n, i, t) { # end of a file: keep its test lines only if its braces balanced
+        if (!BROKEN && !TR && DEP == 0) { n = split(FT, t, " "); for (i = 1; i <= n; i++) TST[PP SUBSEP t[i]] = 1 }
+        DEP = 0; TR = 0; TRD = 0; PEND = 0; BROKEN = 0; RL = ""; PL = ""; FT = ""
+    }
     function sp(k) { while (length(SP) < k) SP = SP SP; return substr(SP, 1, k) }
     function lex(s,   out, i, n, c, c2, j, h, k, m, a, b, rest, term) {
         out = ""; i = 1; n = length(s)
@@ -466,14 +585,16 @@ if [ -s "$TMP/rs-added" ]; then
         scan("include", ns, "(^|[^A-Za-z0-9_])include([ \t]*![ \t]*[([{]|[ \t]+as([^A-Za-z0-9_]|$))", 0)
         if (ns ~ /#!?\[/) scan("include", ns, "(^|[^A-Za-z0-9_])path[ \t]*=", 0)
     }
+    FILENAME == sensf { if ($0 ~ /^S\t/) sg[++nsg] = g2r(substr($0, 3)); else if ($0 ~ /^E\t/) eg[++neg] = g2r(substr($0, 3)); next }
     FILENAME == idx { split($0, f, "\t"); pathof[f[1]] = f[2]; next }
     FILENAME == add {
         split($0, f, "\t"); k = f[1] SUBSEP f[2]; want[k] = 1
         na++; ap[na] = f[1]; al[na] = f[2]; at[na] = substr($0, length(f[1]) + length(f[2]) + 3); next
     }
-    FNR == 1 { LB = 0; LS = 0; LH = 0; P = pathof[FILENAME] }
-    { s = $0; sub(/\r$/, "", s); o = lex(s); if ((P SUBSEP FNR) in want) { full[P SUBSEP FNR] = o; ftxt[P SUBSEP FNR] = s } }
+    FNR == 1 { if (PP != "") finish(); LB = 0; LS = 0; LH = 0; P = pathof[FILENAME]; PP = P; SENSP = insens(P) }
+    { s = $0; sub(/\r$/, "", s); o = lex(s); if (SENSP) track(o, FNR); if ((P SUBSEP FNR) in want) { full[P SUBSEP FNR] = o; ftxt[P SUBSEP FNR] = s } }
     END {
+        if (PP != "") finish()
         for (q = 1; q <= na; q++) {
             k = ap[q] SUBSEP al[q]; TXT = at[q]; sub(/\r$/, "", TXT)
             if (!(k in full)) { print "diff-gate: added line " ap[q] ":" al[q] " not found in the file" > "/dev/stderr"; exit 3 }
@@ -481,6 +602,10 @@ if [ -s "$TMP/rs-added" ]; then
             delete TK; LB = 0; LS = 0; LH = 0
             rules(full[k]); rules(lex(TXT))
             lead = TXT; sub(/[^ \t].*$/, "", lead); off = length(lead); T = substr(TXT, off + 1)
+            if (T != "" && !(k in TST) && insens(ap[q])) {
+                d = T; if (length(d) > 160) d = substr(d, 1, 157) "..."
+                print "sensitive-crate\t" ap[q] "\t" al[q] "\t" d "\t\t\t" T
+            }
             for (r in TK) {
                 # dedupe tokens, shift into trimmed-text coordinates, and group: "s-e;s-e|s-e"
                 split(TK[r], tl, ";"); delete seen; delete gl; ng = 0; out = ""
@@ -497,7 +622,7 @@ if [ -s "$TMP/rs-added" ]; then
                 print r "\t" ap[q] "\t" al[q] "\t" d "\t\t" out "\t" T
             }
         }
-    }' "$TMP/rs-index" "$TMP/rs-added" "$@" >>"$TMP/findings" || die "lexer stage failed"
+    }' "$TMP/sens" "$TMP/rs-index" "$TMP/rs-added" "$@" >>"$TMP/findings" || die "lexer stage failed"
 fi
 
 # ── Pass 3: Cargo.toml entries (needs the full file, not hunks) ──────
@@ -542,7 +667,7 @@ cargo_entries() {
     function tpath(t) {
         if (match(t, /(^|[^A-Za-z_-])["\047]?path["\047]?[ \t]*=[ \t]*("[^"]*"|\047[^\047]*\047)/)) {
             v = substr(t, RSTART, RLENGTH); sub(/^[^=]*=[ \t]*/, "", v); v = substr(v, 2, length(v) - 2)
-            if (tolower(v) !~ /\.rs$/) print "target-path|" v "\t\t0\t" NR "\t" t
+            print "target-path|" v "\t\t0\t" NR "\t" t
         }
     }
     { t = tstrip($0); sub(/^[ \t]+/, "", t); sub(/[ \t]+$/, "", t) }
@@ -581,7 +706,7 @@ if [ -s "$TMP/cargo-paths" ]; then
         show_at "$BASE" "$p" >"$TMP/base.toml"; show_at "$head_src" "$p" >"$TMP/head.toml"
         cargo_entries <"$TMP/base.toml" >"$TMP/base-entries" || die "cannot parse $p on the base"
         cargo_entries <"$TMP/head.toml" >"$TMP/head-entries" || die "cannot parse $p"
-        awk -F'\t' -v path="$p" '
+        awk -F'\t' -v path="$p" -v sens="$(is_sensitive "$p")" '
         FILENAME ~ /ws-root$/ { wsroot[$1] = 1; next }
         FILENAME ~ /base-entries$/ { bsrc[$1] = bsrc[$1] $2; inbase[$1] = 1; next }
         {
@@ -591,7 +716,13 @@ if [ -s "$TMP/cargo-paths" ]; then
         END {
             for (i = 1; i <= n; i++) {
                 k = order[i]; sec = substr(k, 1, index(k, "|") - 1)
-                if (sec == "target-path") { if (!(k in inbase)) printf "include\t%s\t%s\ttarget path to a non-.rs file: %s\t\t\t%s\n", path, hline[k], htext[k], htext[k]; continue }
+                if (sec == "target-path") {
+                    if (k in inbase) continue
+                    if (tolower(substr(k, 13)) !~ /\.rs$/) printf "include\t%s\t%s\ttarget path to a non-.rs file: %s\t\t\t%s\n", path, hline[k], htext[k], htext[k]
+                    # in a sensitive crate any new target path counts: it could point at an exempt file
+                    if (sens == 1) printf "sensitive-crate\t%s\t%s\tnew or changed target path: %s\t\t\t%s\n", path, hline[k], htext[k], htext[k]
+                    continue
+                }
                 if (!(k in inbase)) {
                     if (sec !~ /^(patch|replace)/ && hws[k] && (("workspace.dependencies|" substr(k, index(k, "|") + 1)) in wsroot)) continue
                     printf "new-dep\t%s\t%s\tnew entry in [%s]: %s\t\t\t%s\n", path, hline[k], sec, htext[k], htext[k]
@@ -655,6 +786,9 @@ parse_ledger <"$TMP/ledger.head.toml" >/dev/null || { echo "diff-gate: cannot us
 if ! cmp -s "$TMP/ledger.base.toml" "$TMP/ledger.head.toml"; then
     printf 'approvals-change\t%s\t0\towner ledger changed\n' "$LEDGER" >>"$TMP/findings"
 fi
+if ! cmp -s "$TMP/sens.base.toml" "$TMP/sens.head.toml"; then
+    printf 'approvals-change\t%s\t0\tsensitive-crate list changed\n' "$SENSITIVE" >>"$TMP/findings"
+fi
 if ! cmp -s "$TMP/appr.base.toml" "$TMP/appr.head.toml"; then
     { parse_approvals <"$TMP/appr.base.toml" || echo "diff-gate: base $APPROVALS is malformed; its malformed entries are ignored" >&2; } >"$TMP/appr.base.raw"
     parse_approvals <"$TMP/appr.head.toml" >"$TMP/appr.head.raw" || { echo "diff-gate: cannot use $APPROVALS" >&2; exit 2; }
@@ -675,22 +809,7 @@ fi
 # the line (a keyword, or one path expression such as std::net::TcpListener::bind) is approved
 # only by an approval match that overlaps one of its tokens, so a row cannot approve a second
 # occurrence elsewhere on the same line. Other findings match the whole reported text.
-awk -F'\t' -v owner="${DIFF_GATE_OWNER_APPROVED:-0}" -v apf="$TMP/approvals" -v flist="$TMP/files" '
-function g2r(g,   r, i, c, n) {
-    r = "^"; n = length(g)
-    for (i = 1; i <= n; i++) {
-        c = substr(g, i, 1)
-        if (c == "*") {
-            if (substr(g, i + 1, 1) == "*") {
-                i++
-                if (substr(g, i + 1, 1) == "/") { i++; r = r "(.*/)?" } else r = r ".*"
-            } else r = r "[^/]*"
-        } else if (c == "?") r = r "[^/]"
-        else if (index("\\.+(){}|^$[]", c) > 0) r = r "\\" c
-        else r = r c
-    }
-    return r "$"
-}
+awk -F'\t' -v owner="${DIFF_GATE_OWNER_APPROVED:-0}" -v apf="$TMP/approvals" -v flist="$TMP/files" "$G2R_AWK"'
 function covers(i, T, s, e,   rest, off, p, a, b) { # does a match of row i overlap T[s..e]?
     if (ap[i] == "*") return 1
     rest = T; off = 0
@@ -745,6 +864,7 @@ FILENAME == flist { split($0, f, "\t"); fb[f[4]] = tolower(f[5]); next }
             }
         }
     }
+    if (status == "FAIL" && $1 == "sensitive-crate") detail = "sensitive crate: needs owner review; approve the reviewed file version with a blob row"
     print status "\t" $1 "\t" $2 "\t" $3 "\t" $4 "\t" detail
 }
 ' "$TMP/approvals" "$TMP/files" "$TMP/findings" >"$TMP/classified.u" || die "classification failed"

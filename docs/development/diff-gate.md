@@ -77,11 +77,12 @@ block from the workflow and runs it unchanged against fixture pushes.
 | `process` | `process::Command` in any form (including `std::{process::Command as K}` and multi-line `std::process::{` imports), the `std::process` module imported or aliased, `Command::new`, `tokio::process`, `CommandExt`, `libc` / `nix` exec, fork, spawn and `system` |
 | `ffi` | the `extern` keyword in any form except `extern crate` (`extern "C"`, `extern "system"`, bare `extern {` / `extern fn`), `#[no_mangle]`, `export_name`, `link_section`. `#[link(...)]` and `link_name` are not separate findings: they only act on an `extern` block, which is one |
 | `include` | code pulled into the build from something that is not a `.rs` file: `include!` whose argument is not a literal `.rs` path, `#[path = "..."]` to a non-`.rs` file, and a new Cargo target `path` (`[lib]`, `[[bin]]`, `[[example]]`, `[[test]]`, `[[bench]]`) to a non-`.rs` file. `include_str!` and `include_bytes!` are not findings: they produce a `&str` / `&[u8]` value, and turning data into code needs `unsafe`, which is its own finding |
+| `sensitive-crate` | any added non-blank `.rs` line in non-test code under a crate listed in `config/diff-gate-sensitive.toml`, and in such a crate's Cargo.toml a new or changed target `path`. Interim posture until the syn token helper lands; see [Sensitive crates](#sensitive-crates-interim) |
 | `ci-workflow` | any change under `.github/workflows/` or to `scripts/diff-gate.sh`, including moving or deleting them |
 | `toolchain-config` | any change to `.cargo/config` or `.cargo/config.toml` at any depth (rustc wrapper, linker, rustflags, registries) or to `rust-toolchain` / `rust-toolchain.toml` (toolchain `path`) |
 | `special-file` | an added or changed symlink (mode 120000) or submodule / nested repository (mode 160000). The gate never follows a link to scan its target |
 | `gitattributes-change` | an added, edited, moved or deleted `.gitattributes` at any depth. Owner-approvable by an approval row, like the content rules; `DIFF_GATE_OWNER_APPROVED` does not clear it |
-| `approvals-change` | an added, removed or edited row in `config/diff-gate-approvals.toml`, or any change to `config/diff-gate-owner-ledger.toml`. An added row whose hash is on the owner ledger at the base ref's tip is reported `approved` (see [Owner ledger](#owner-ledger)) |
+| `approvals-change` | an added, removed or edited row in `config/diff-gate-approvals.toml`, or any change to `config/diff-gate-owner-ledger.toml` or `config/diff-gate-sensitive.toml`. An added row whose hash is on the owner ledger at the base ref's tip is reported `approved` (see [Owner ledger](#owner-ledger)) |
 
 The file list comes from `git diff --raw -z --no-renames`, so a path is used byte for byte:
 non-ASCII names, quotes and a ` b/` inside a path cannot hide or rename a file. Every
@@ -121,6 +122,57 @@ This is still a regex lexer, not rustc, and it errs towards false positives:
 - Tokens are matched by name. An alias made in code already on the base (`use std::process::Command as K;`
   landed earlier, then `K::new` added) is not seen, and neither is a token produced by a
   macro from pieces. The import itself was a finding when it landed.
+
+### Sensitive crates (interim)
+
+Owner decision 2026-11-15 (G1, option c). Review rounds 2 and 4 each found Rust forms the
+token regexes miss (`std :: process`, glob imports and aliases, multi-line imports, attributes
+split over lines, doctests, `global_asm!`), and the 7306a144 change added new callers of an
+EXISTING `unsafe { libc::kill(...) }` line, which no content rule can see. Until a syn-based
+token helper replaces the regexes (a separate lane), the gate also treats code in sensitive
+crates as review-required:
+
+- Every added non-blank `.rs` line under a `[[sensitive]]` glob in
+  `config/diff-gate-sensitive.toml` is a `sensitive-crate` finding, comments and doc comments
+  included (doctests compile under `cargo test`).
+- In a sensitive crate's Cargo.toml, a new or changed target `path` (`[lib]`, `[[bin]]`, ...)
+  is one too, so a target cannot be pointed at an exempt file.
+- Exempt (test-only): files matching an `[[exempt]]` glob (today `**/tests/**`,
+  `**/*_tests.rs`, `**/tests.rs`), and lines inside an inline `mod name { ... }` whose
+  attributes include `#[cfg(test)]` or `#[cfg(all(test, ...))]`. The region is found on the
+  full-file lex: the cfg attribute, then only attributes, comments or blank lines, then
+  `mod name {`; it ends at the matching `}`. Code after that brace on the same line is not
+  exempt. The exemption counts only if the region closes and the file's braces balance (never
+  negative, zero at the end), so a lexer confusion exempts nothing. `#[cfg(any(test, ...))]`,
+  `#[cfg(test)]` on a `fn` or `use`, and `#![cfg(test)]` file attributes are not exempt.
+- The other rules (`unsafe`, `net`, `process`, ...) still apply to exempt files.
+
+The list is read at the tip of the base ref, like the owner ledger, and a change to it in the
+diff is an `approvals-change` finding (owner override only); removing a crate in the same diff
+as a change to it does not exempt that change. `DIFF_GATE_OWNER_APPROVED` does not clear
+`sensitive-crate` findings: an approval row does. Use one row per reviewed file version:
+
+```toml
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-kernel/src/workload_runtime/supervise.rs"
+pattern     = "*"
+blob        = "<git rev-parse <commit>:<path>>"
+reason      = "card 7306a144: RSS watchdog, reviewed"
+approved_by = "owner"
+```
+
+Name-based exemption assumes a `*_tests.rs` or `tests.rs` file is only compiled under a test
+cfg. On 2026-11-15 every such module in the sensitive crates was declared under `#[cfg(test)]`
+or `#[cfg(all(test, ...))]`, and none was pulled in by `include!`. A new declaration without
+that cfg is an added line in a sensitive file, so it is itself a finding.
+
+False-positive cost: this flags code, not risk. From 2026-11-01 to 2026-11-15, 280 commits on
+`target-0.8.5` added 89,136 `.rs` lines; 57,699 were in these crates, and 37,061 of those in
+194 non-exempt files (an upper bound: inline `#[cfg(test)]` blocks are exempt as well). So
+nearly every landing that touches a sensitive crate needs owner rows, about one blob row per
+touched file per landing, and the report lists every added line. That is the price the owner
+accepted for this interim; it ends when the syn helper takes over the content rules.
 
 A finding exits 1 with a per-finding report. `--json` prints the findings as JSON. In CI the
 findings table is also written to `$GITHUB_STEP_SUMMARY`.
@@ -192,6 +244,9 @@ Changing the approvals rows is itself a finding (`approvals-change`). Comment an
 edits, and reordering rows, carry no authority and are not findings. A row change passes only
 when the added row is on the owner ledger (below), or when the owner sets `DIFF_GATE_OWNER_APPROVED=1` locally, or in CI sets the repository variable
 `DIFF_GATE_OWNER_APPROVED=1` or the PR label `diff-gate-approved`. Both need maintainer rights.
+
+`config/diff-gate-sensitive.toml` is owner-only in the same way: any change to it is an
+`approvals-change` finding that only the override clears, and the gate reads it at the base tip.
 
 **Agents and automated lanes must never add, edit or remove approvals, and must never set
 `DIFF_GATE_OWNER_APPROVED`, the variable or the label.** If the gate rejects a diff, change the
@@ -308,7 +363,20 @@ paths; symlinks; renames to `.rs` and `build.rs`; upper-case `.RS`; `.cargo/conf
 `rust-toolchain*`; `[patch]`, `[replace]`, quoted keys, `registry`, `package`, inline and
 dotted `build` / `proc-macro` keys.
 
+Cases from 2026-11-15 (G1-G4 lane): Cargo patterns against comment-stripped entry lines
+(`# rvf-crypto =` after an evil `git` source, a `#` inside a quoted URL, `^` anchors, the
+report wording, build-key comments); `blob` rows for `ci-workflow`, `build-script`,
+`toolchain-config`, `gitattributes-change` and `special-file` (exact content approved, any
+other content fails, commit and `--worktree`), the unscoped-row warning, malformed blobs and
+unknown keys (exit 2), and `blob` in the ledger hash; `sensitive-crate`: the 7306a144 new
+caller of an existing `unsafe { libc::kill }`, doc comments, blank lines, `tests/`,
+`*_tests.rs`, inline `#[cfg(test)]` and `#[cfg(all(test, ...))]` modules, code after or on the
+closing line of a test module, a `{` in a string or char, an unclosed module, `cfg(any(...))`
+and `cfg(test)` on a `fn`, a Cargo target path into `tests/`, blob rows, the list read at the
+base tip, and list changes being owner-only.
+
 `DIFF_GATE_TEST_TMP` puts the fixture repos on another disk (the default is `target/`).
+`DIFF_GATE_TEST_FILTER=<ERE>` runs only the `case_run` fixtures whose name matches.
 
 `scripts/tests/diff-gate-ci-test.sh` runs the workflow's gate step against fixture remotes: a
 push that rewrites the gate to `exit 0` still fails (with a control showing that copy passes
@@ -316,3 +384,6 @@ itself), a second push on an unprotected branch cannot use a gate or ledger entr
 first, new branches and new protected branches are judged against another protected tip, a
 force-push is judged from the merge-base and fails closed when `before` is gone, and
 `workflow_dispatch` and pull requests (including a base without the gate) use a trusted copy.
+Since 2026-11-15 it also covers a PR into an unprotected branch carrying a weakened gate (and a
+PR with no base branch name), a self-made `main` (a later push and a PR into it), and `main`
+as the default branch staying protected.
