@@ -472,3 +472,38 @@ path        = "crates/clawft-gui-egui/examples/namespace_drops/sound.rs"
 pattern     = 'unsafe fn AudioQueueDispose\(_: \*mut c_void, _: u8\) \-> i32 \{'
 reason      = "Owner approval 2026-11-14 17:26, card fa3b0bac: namespace_drops example (macOS audio, speech and local tool use; example-only, not shipped)"
 approved_by = "owner (2026-11-14 17:26, card fa3b0bac)"
+
+
+# Vault V1 (spec: docs/research/vault-v0-format-spec-2026-11-15.md, card a6f0b37d; V1 card 02301ad0):
+# Argon2id passcode wrapper. argon2 =0.5.3, MIT OR Apache-2.0, pure Rust (RustCrypto). Lock adds
+# argon2 0.5.3 and password-hash 0.5.0; reuses blake2 0.10.6. Approved by the owner 2026-11-15 10:09
+# (instruction 20261115-1010 item 2; proposal scratch/mathew-proposal-20261115-vault-v1-argon2-row.md).
+[[approval]]
+rule        = "new-dep"
+path        = "Cargo.toml"
+pattern     = '(^|[^-[:alnum:]])argon2[[:space:]]*='
+reason      = "Vault V1: argon2 =0.5.3 (MIT OR Apache-2.0) for the Argon2id passcode wrapper; adds argon2 and password-hash 0.5.0 to Cargo.lock, reuses blake2 0.10.6"
+approved_by = "owner"
+
+[[approval]]
+rule        = "new-dep"
+path        = "crates/weftos-vault/Cargo.toml"
+pattern     = '(^|[^-[:alnum:]])argon2[[:space:]]*='
+reason      = "Vault V1: weftos-vault uses the workspace argon2"
+approved_by = "owner"
+
+# Vault V1 companion rows, approved by the owner 2026-11-15 12:47 PM ET (instruction 20261115-1248 item 2).
+# hkdf 0.12.4 and unicode-normalization 0.1.26 are already in Cargo.lock; these make them direct deps.
+[[approval]]
+rule        = "new-dep"
+path        = "Cargo.toml"
+pattern     = '(^|[^-[:alnum:]])(hkdf|unicode-normalization)[[:space:]]*='
+reason      = "Vault V1: HKDF-SHA256 key derivation and NFKC passcode normalization (both MIT OR Apache-2.0, already locked, no new lock package)"
+approved_by = "owner"
+
+[[approval]]
+rule        = "new-dep"
+path        = "crates/weftos-vault/Cargo.toml"
+pattern     = '(^|[^-[:alnum:]])(hkdf|unicode-normalization)[[:space:]]*='
+reason      = "Vault V1: weftos-vault uses the workspace hkdf and unicode-normalization"
+approved_by = "owner"

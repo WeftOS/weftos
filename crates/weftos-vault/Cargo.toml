@@ -1,0 +1,25 @@
+[package]
+name = "weftos-vault"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "Personal vault core (Vault V1): keybag, passcode unlock and per-secret seal, per docs/research/vault-v0-format-spec-2026-11-15.md. DRAFT format, fake values only until the external format review."
+
+[dependencies]
+argon2 = { workspace = true }
+blake3 = { workspace = true }
+chacha20poly1305 = { workspace = true }
+ed25519-dalek = { workspace = true }
+getrandom = { workspace = true }
+hkdf = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+unicode-normalization = { workspace = true }
+zeroize = { workspace = true }
+
+[dev-dependencies]
+tracing-subscriber = { workspace = true }
