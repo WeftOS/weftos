@@ -278,7 +278,7 @@ cargo_entries() {
             adv()
         }
     }
-    function rec(t, P, v, l) { NRC++; RT[NRC] = t; RP[NRC] = P; RV[NRC] = v; RL[NRC] = l }
+    function rec(t, P, v, l) { NRC++; RCT[NRC] = t; RCP[NRC] = P; RCV[NRC] = v; RCL[NRC] = l } # not RT: a gawk built-in
     function value(P, l,   c, s) {
         c = pk(0)
         if (c == "\"" || c == "\047") {
@@ -361,8 +361,8 @@ cargo_entries() {
     function isdt(x) { return (x ~ /^(dev[-_]|build[-_])?dependencies$/) }
     function text(l,   t) { t = tstrip(LT[l]); sub(/^[ \t]+/, "", t); sub(/[ \t]+$/, "", t); gsub(/\t/, " ", t); return t }
     function unp(r,   t, k, n, s) {
-        n = split(RP[r], s, SUBSEP); t = text(RL[r]); k = "unparsed|" jn(s, 1, n) "|" esc(t); occ[k]++
-        print k "|" occ[k] "\t\t0\t" LN[RL[r]] "\t" t
+        n = split(RCP[r], s, SUBSEP); t = text(RCL[r]); k = "unparsed|" jn(s, 1, n) "|" esc(t); occ[k]++
+        print k "|" occ[k] "\t\t0\t" LN[RCL[r]] "\t" t
     }
     # One logical line per LF; a CR before it is dropped, a CR anywhere else also ends a line (a
     # lone CR is not a TOML newline, so Cargo rejects such a file; splitting there can only
@@ -375,8 +375,8 @@ cargo_entries() {
         nsrc = split("git path registry registry-index package rev tag branch", sl, " ")
         for (i = 1; i <= nsrc; i++) SRC[sl[i]] = 1
         for (r = 1; r <= NRC; r++) {
-            if (RT[r] == "U" || index(RP[r], UNK) == 1) { unp(r); continue }
-            n = split(RP[r], s, SUBSEP)
+            if (RCT[r] == "U" || index(RCP[r], UNK) == 1) { unp(r); continue }
+            n = split(RCP[r], s, SUBSEP)
             if (n >= 2 && (s[1] == "package" || s[1] == "workspace") && s[2] == "metadata") continue
             if (s[1] == "features") continue
             pl = 0
@@ -386,20 +386,20 @@ cargo_entries() {
             else if (s[1] == "patch" && n >= 2) pl = 2
             else if (s[1] == "replace") pl = 1
             if (pl) {
-                if (n == pl) { if (RT[r] != "N") unp(r); continue }
+                if (n == pl) { if (RCT[r] != "N") unp(r); continue }
                 k = jn(s, 1, pl) "|" esc(s[pl + 1])
-                if (!(k in el)) { el[k] = RL[r]; eo[++ne] = k }
-                if (n >= pl + 2 && RT[r] == "V") {
-                    if (s[pl + 2] in SRC) { ns[k]++; es[k, ns[k]] = jn(s, pl + 2, n) "=" escv(RV[r]) }
-                    if (n == pl + 2 && s[pl + 2] == "workspace" && RV[r] == "true") ew[k] = 1
+                if (!(k in el)) { el[k] = RCL[r]; eo[++ne] = k }
+                if (n >= pl + 2 && RCT[r] == "V") {
+                    if (s[pl + 2] in SRC) { ns[k]++; es[k, ns[k]] = jn(s, pl + 2, n) "=" escv(RCV[r]) }
+                    if (n == pl + 2 && s[pl + 2] == "workspace" && RCV[r] == "true") ew[k] = 1
                 }
                 continue
             }
-            if (n == 2 && s[1] ~ /^(lib|bin|example|test|bench)$/ && s[2] == "path" && RT[r] == "V") {
-                print "target-path|" escv(RV[r]) "\t\t0\t" LN[RL[r]] "\t" text(RL[r]); continue
+            if (n == 2 && s[1] ~ /^(lib|bin|example|test|bench)$/ && s[2] == "path" && RCT[r] == "V") {
+                print "target-path|" escv(RCV[r]) "\t\t0\t" LN[RCL[r]] "\t" text(RCL[r]); continue
             }
             # tables on the way to a dependency table: [target], [target.<T>], [patch], [workspace]
-            if (RT[r] == "N" && ((n == 1 && s[1] ~ /^(target|patch|workspace)$/) || (n == 2 && s[1] == "target"))) continue
+            if (RCT[r] == "N" && ((n == 1 && s[1] ~ /^(target|patch|workspace)$/) || (n == 2 && s[1] == "target"))) continue
             for (i = 1; i <= n; i++) if (s[i] ~ /dependencies/ || s[i] ~ /^(patch|replace|target)$/) { unp(r); break }
         }
         for (e = 1; e <= ne; e++) {
