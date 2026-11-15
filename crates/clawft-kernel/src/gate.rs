@@ -132,10 +132,11 @@ pub trait GateBackend: Send + Sync {
     /// [`Self::check_detailed`] on behalf of an authenticated transport
     /// caller. `caller` is derived by the daemon from the connection, never
     /// from the request body, and scopes the evaluation quota so one caller
-    /// cannot spend another's budget by naming its `agent_id`.
+    /// cannot spend another's budget by naming its `agent_id`, and a peer's
+    /// aggregate ceiling bounds the load it can drive by reconnecting.
     fn check_detailed_for_caller(
         &self,
-        _caller: &str,
+        _caller: &crate::governance::QuotaCaller<'_>,
         agent_id: &str,
         action: &str,
         context: &serde_json::Value,
@@ -549,7 +550,7 @@ impl GovernanceGate {
     /// [`GateBackend::check_detailed_for_caller`]; `caller` scopes the quota.
     fn verdict(
         &self,
-        caller: Option<&str>,
+        caller: Option<&crate::governance::QuotaCaller<'_>>,
         agent_id: &str,
         action: &str,
         context: &serde_json::Value,
@@ -625,7 +626,7 @@ impl GateBackend for GovernanceGate {
 
     fn check_detailed_for_caller(
         &self,
-        caller: &str,
+        caller: &crate::governance::QuotaCaller<'_>,
         agent_id: &str,
         action: &str,
         context: &serde_json::Value,
@@ -1434,7 +1435,7 @@ mod tests {
         // Caller A (an attacker, or a noisy peer) asks about `victim`.
         for i in 0..=limit {
             let v = gate
-                .check_detailed_for_caller("conn:A", "victim", "tool.read_file", &ctx)
+                .check_detailed_for_caller(&conn("conn:A", None), "victim", "tool.read_file", &ctx)
                 .expect("gate has an engine");
             if i < limit {
                 assert!(
@@ -1453,13 +1454,50 @@ mod tests {
 
         // Caller B is `victim` itself and has spent nothing.
         let v = gate
-            .check_detailed_for_caller("conn:B", "victim", "tool.read_file", &ctx)
+            .check_detailed_for_caller(&conn("conn:B", None), "victim", "tool.read_file", &ctx)
             .expect("gate has an engine");
         assert!(
             matches!(v.decision, crate::governance::GovernanceDecision::Permit),
             "victim's own first check was denied by another caller's spend: {:?}",
             v.decision
         );
+    }
+
+    fn conn<'a>(connection: &'a str, peer: Option<&'a str>) -> crate::governance::QuotaCaller<'a> {
+        crate::governance::QuotaCaller { connection, peer }
+    }
+
+    /// Reconnecting must not mint fresh budgets: many connections from one
+    /// socket peer, each under the per-principal limit, are bounded together
+    /// by the peer's aggregate ceiling; another peer is untouched.
+    #[test]
+    fn governance_check_peer_aggregate_ceiling_binds_across_connections() {
+        use crate::governance::GovernanceDecision::{Deny, Permit};
+        let gate = GovernanceGate::new(0.5, false);
+        let ctx = serde_json::json!({});
+        let ceiling = crate::rate_limit::DEFAULT_GOVERNANCE_PEER_EVAL_RATE.max_per_window as usize;
+        let per_conn = crate::rate_limit::DEFAULT_GOVERNANCE_EVAL_RATE.max_per_window as usize - 56;
+        let conns: Vec<String> = (0..(ceiling / per_conn + 2)).map(|i| format!("conn:{i}")).collect();
+        let (mut allowed, mut denied) = (0usize, 0usize);
+        for c in &conns {
+            for _ in 0..per_conn {
+                let v = gate
+                    .check_detailed_for_caller(&conn(c, Some("uid:1000:pid:7")), "victim", "tool.read_file", &ctx)
+                    .expect("engine");
+                match v.decision {
+                    Permit => allowed += 1,
+                    Deny(_) => denied += 1,
+                    ref d => panic!("unexpected {d:?}"),
+                }
+            }
+        }
+        assert_eq!(allowed, ceiling, "exactly the aggregate ceiling is admitted");
+        assert!(denied > 0, "checks past the ceiling are denied");
+        // Another peer's connection, naming the same principal, is untouched.
+        let v = gate
+            .check_detailed_for_caller(&conn("conn:other", Some("uid:1000:pid:8")), "victim", "tool.read_file", &ctx)
+            .expect("engine");
+        assert!(matches!(v.decision, Permit), "other peer must be unaffected: {:?}", v.decision);
     }
 
     #[test]

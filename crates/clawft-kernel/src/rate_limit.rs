@@ -68,6 +68,15 @@ pub const DEFAULT_GOVERNANCE_EVAL_RATE: RateLimitConfig = RateLimitConfig {
     window: Duration::from_secs(1),
 };
 
+/// Default aggregate governance-evaluation ceiling per socket peer (uid and
+/// pid): 1024 evaluations per second across every connection that peer holds.
+/// Four times the per-principal limit, so a peer driving several principals
+/// is not throttled, while reconnecting cannot multiply a peer's load.
+pub const DEFAULT_GOVERNANCE_PEER_EVAL_RATE: RateLimitConfig = RateLimitConfig {
+    max_per_window: 1024,
+    window: Duration::from_secs(1),
+};
+
 /// Thread-safe sliding-window rate limiter keyed by an arbitrary string
 /// (source address, principal / agent id, etc.).
 pub struct KeyedRateLimiter {

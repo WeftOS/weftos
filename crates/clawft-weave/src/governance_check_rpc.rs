@@ -96,9 +96,16 @@ pub fn check(gate: Option<&dyn GateBackend>, params: &Value) -> Response {
 
 /// [`check`] for a transport-identified caller. `caller` comes from the
 /// connection (never the request body) and scopes the evaluation quota, so
-/// one caller cannot spend the budget of the principal it names. `None`
-/// (in-process, no connection) keeps the engine's own per-principal bucket.
-pub fn check_as(gate: Option<&dyn GateBackend>, caller: Option<&str>, params: &Value) -> Response {
+/// one caller cannot spend the budget of the principal it names, and the
+/// socket peer's aggregate ceiling bounds the load it can drive by
+/// reconnecting. `None` (in-process, no connection) is left as it was: the
+/// engine's own per-principal bucket and no aggregate ceiling, because such a
+/// caller is the daemon itself, not an unauthenticated peer.
+pub fn check_as(
+    gate: Option<&dyn GateBackend>,
+    caller: Option<&clawft_kernel::governance::QuotaCaller<'_>>,
+    params: &Value,
+) -> Response {
     let q = match parse(params) {
         Ok(q) => q,
         Err(e) => return invalid(e),
@@ -142,8 +149,12 @@ pub fn check_as(gate: Option<&dyn GateBackend>, caller: Option<&str>, params: &V
 pub fn handle(call: ExtCall) -> ExtFuture {
     Box::pin(async move {
         let gate = call.ctx.kernel.read().await.governance_gate().cloned();
-        let caller = call.ctx.connection.map(|c| format!("conn:{c}"));
-        check_as(gate.as_deref(), caller.as_deref(), &call.params)
+        let conn = call.ctx.connection.map(|c| format!("conn:{c}"));
+        let caller = conn.as_deref().map(|connection| clawft_kernel::governance::QuotaCaller {
+            connection,
+            peer: call.ctx.peer_key.as_deref(),
+        });
+        check_as(gate.as_deref(), caller.as_ref(), &call.params)
     })
 }
 
@@ -407,5 +418,62 @@ mod tests {
             "victim's own first check was rate limited by another caller's spend: {}",
             result(&r)["reason"]
         );
+    }
+
+    /// Reconnecting must not mint fresh budgets (card 9f8f872e): several
+    /// connections from one socket peer, each under the per-principal limit
+    /// but together over the peer's aggregate ceiling, are denied past the
+    /// ceiling, through the real RPC path; a connection from another peer
+    /// still gets its answer.
+    #[tokio::test]
+    async fn rpc_governance_check_peer_ceiling_binds_reconnecting_callers() {
+        use crate::capability::CallerCapabilities;
+        use crate::rpc_ext::{CallerCtx, ExtRegistry, KernelRef, authorize_with, dispatch_ext_with};
+        use clawft_platform::NativePlatform;
+        use clawft_types::config::{ChainConfig, Config, KernelConfig};
+
+        let kcfg = KernelConfig {
+            chain: Some(ChainConfig::isolated_in(&tempfile::tempdir().unwrap().keep())),
+            ..KernelConfig::default()
+        };
+        let kernel: KernelRef = std::sync::Arc::new(tokio::sync::RwLock::new(
+            clawft_kernel::boot::Kernel::boot(Config::default(), kcfg, std::sync::Arc::new(NativePlatform::new()))
+                .await
+                .expect("kernel boots"),
+        ));
+        let ceiling = clawft_kernel::rate_limit::DEFAULT_GOVERNANCE_PEER_EVAL_RATE.max_per_window as usize;
+        let per_conn = clawft_kernel::rate_limit::DEFAULT_GOVERNANCE_EVAL_RATE.max_per_window as usize - 56;
+        let reg = ExtRegistry::builtin();
+        let caps = CallerCapabilities::from_scopes(["read"]);
+        let params = json!({"agent_id": "victim", "action": "tool.read_file"});
+        let call = |caller: CallerCtx| {
+            let (reg, caps, params, kernel) = (reg.clone(), caps.clone(), params.clone(), kernel.clone());
+            async move {
+                authorize_with(&reg, &caller, &caps, "governance.check", &params, &kernel).await.expect("read");
+                dispatch_ext_with(&reg, &caller, &caps, "governance.check", &params, &kernel)
+                    .await
+                    .expect("routed")
+            }
+        };
+        let conn = |peer: &str| {
+            CallerCtx::from_auth(Some("read".into()))
+                .with_connection(CallerCtx::next_connection_id())
+                .with_peer_key(Some(peer.to_owned()))
+        };
+        let limited = |r: &Response| r.ok && result(r)["decision"] == "deny";
+
+        let (mut allowed, mut denied) = (0usize, 0usize);
+        for _ in 0..(ceiling / per_conn + 2) {
+            let c = conn("uid:1000:pid:7");
+            for _ in 0..per_conn {
+                let r = call(c.clone()).await;
+                assert!(r.ok, "{:?}", r.error);
+                if limited(&r) { denied += 1 } else { allowed += 1 }
+            }
+        }
+        assert_eq!(allowed, ceiling, "exactly the aggregate ceiling is admitted");
+        assert!(denied > 0, "checks past the ceiling are denied");
+        let r = call(conn("uid:1000:pid:8")).await;
+        assert!(!limited(&r), "another peer must be unaffected: {}", result(&r)["reason"]);
     }
 }

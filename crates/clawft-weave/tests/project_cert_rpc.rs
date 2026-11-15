@@ -196,6 +196,7 @@ async fn owner_flow_on_the_user_daemon() {
         verified_project: None,
         caps: clawft_weave::capability::CallerCapabilities::anonymous(),
         connection: None,
+        peer_key: None,
     };
     let issued = clawft_weave::project_cert_rpc::issue_for_register(&ctx, req).await.unwrap();
     assert!(issued.new);

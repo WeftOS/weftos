@@ -1083,6 +1083,21 @@ pub const QUOTA_KEY_CONTEXT: &str = "quota_key";
 /// A unit separator cannot appear in a caller id the daemon mints.
 const CALLER_QUOTA_SEP: char = '\u{1f}';
 
+/// Who is asking, as established by the transport (never the request body).
+///
+/// `connection` scopes the per-principal bucket so one connection cannot
+/// spend another's budget. `peer` (socket peer uid and pid) scopes an
+/// aggregate ceiling over every connection that peer holds, so reconnecting
+/// does not mint fresh per-principal budgets. In-process callers have no
+/// `QuotaCaller` and keep the plain per-principal bucket with no aggregate.
+#[derive(Debug, Clone, Copy)]
+pub struct QuotaCaller<'a> {
+    /// Transport-assigned connection id.
+    pub connection: &'a str,
+    /// Socket peer identity, when the transport could read it.
+    pub peer: Option<&'a str>,
+}
+
 /// Governance engine.
 ///
 /// Evaluates actions against governance rules and the environment's
@@ -1099,6 +1114,8 @@ pub struct GovernanceEngine {
     human_approval_required: bool,
     /// Per-principal evaluation rate limiter (WEFT-148).
     eval_limiter: crate::rate_limit::KeyedRateLimiter,
+    /// Aggregate evaluation ceiling per socket peer, across connections.
+    peer_limiter: crate::rate_limit::KeyedRateLimiter,
     /// Optional learned scorer (Finding #5). When `None` the engine
     /// scores effect vectors with the hardcoded L2 norm; when set and
     /// trained the scorer's learned composite is used instead.
@@ -1119,6 +1136,9 @@ impl GovernanceEngine {
             eval_limiter: crate::rate_limit::KeyedRateLimiter::new(
                 crate::rate_limit::DEFAULT_GOVERNANCE_EVAL_RATE,
             ),
+            peer_limiter: crate::rate_limit::KeyedRateLimiter::new(
+                crate::rate_limit::DEFAULT_GOVERNANCE_PEER_EVAL_RATE,
+            ),
             #[cfg(feature = "ecc")]
             scorer: None,
         }
@@ -1135,6 +1155,9 @@ impl GovernanceEngine {
             human_approval_required: false,
             eval_limiter: crate::rate_limit::KeyedRateLimiter::new(
                 crate::rate_limit::DEFAULT_GOVERNANCE_EVAL_RATE,
+            ),
+            peer_limiter: crate::rate_limit::KeyedRateLimiter::new(
+                crate::rate_limit::DEFAULT_GOVERNANCE_PEER_EVAL_RATE,
             ),
             #[cfg(feature = "ecc")]
             scorer: None,
@@ -1155,6 +1178,16 @@ impl GovernanceEngine {
     /// Replace the evaluation rate-limit configuration in place.
     pub fn set_eval_rate_limit(&self, config: crate::rate_limit::RateLimitConfig) {
         self.eval_limiter.set_config(config);
+    }
+
+    /// Replace the per-peer aggregate ceiling configuration in place.
+    pub fn set_peer_eval_rate_limit(&self, config: crate::rate_limit::RateLimitConfig) {
+        self.peer_limiter.set_config(config);
+    }
+
+    /// Current per-peer aggregate ceiling configuration.
+    pub fn peer_eval_rate_limit(&self) -> crate::rate_limit::RateLimitConfig {
+        self.peer_limiter.config()
     }
 
     /// Current evaluation rate-limit configuration.
@@ -1229,6 +1262,7 @@ impl GovernanceEngine {
     #[cfg(feature = "exochain")]
     pub(crate) fn inherit_config(&mut self, old: &GovernanceEngine) {
         self.set_eval_rate_limit(old.eval_rate_limit());
+        self.set_peer_eval_rate_limit(old.peer_eval_rate_limit());
         #[cfg(feature = "ecc")]
         {
             self.scorer = old.scorer.clone();
@@ -1299,27 +1333,40 @@ impl GovernanceEngine {
     pub fn evaluate_for_caller(
         &self,
         request: &GovernanceRequest,
-        caller: Option<&str>,
+        caller: Option<&QuotaCaller<'_>>,
     ) -> GovernanceResult {
         let attributed = request.resolved_principal();
         // WEFT-148: per-principal evaluation rate limit.
         let principal = Self::eval_principal_key(request);
-        let admitted = match caller {
-            Some(c) => self
-                .eval_limiter
-                .check(&format!("{c}{CALLER_QUOTA_SEP}{}", Self::eval_quota_key(request))),
-            None => self.eval_limiter.check(Self::eval_quota_key(request)),
-        };
+        // Aggregate ceiling first, per socket peer across all its
+        // connections: reconnecting cannot mint fresh per-principal budgets.
+        // A peer over its ceiling spends nothing of anyone else's.
+        let peer_over = caller
+            .and_then(|c| c.peer)
+            .is_some_and(|peer| !self.peer_limiter.check(peer));
+        let admitted = !peer_over
+            && match caller {
+                Some(c) => self.eval_limiter.check(&format!(
+                    "{}{CALLER_QUOTA_SEP}{}",
+                    c.connection,
+                    Self::eval_quota_key(request)
+                )),
+                None => self.eval_limiter.check(Self::eval_quota_key(request)),
+            };
         if !admitted {
             debug!(
                 principal = %principal,
                 action = %request.action,
+                peer_over,
                 "governance evaluation rate limited"
             );
+            let why = if peer_over {
+                "peer aggregate evaluation quota exceeded".to_owned()
+            } else {
+                format!("evaluation quota exceeded for principal '{principal}'")
+            };
             return GovernanceResult {
-                decision: GovernanceDecision::Deny(format!(
-                    "rate limited: evaluation quota exceeded for principal '{principal}'"
-                )),
+                decision: GovernanceDecision::Deny(format!("rate limited: {why}")),
                 evaluated_rules: Vec::new(),
                 effect: request.effect.clone(),
                 threshold_exceeded: false,
