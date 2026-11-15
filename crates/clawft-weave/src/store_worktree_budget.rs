@@ -163,11 +163,13 @@ fn publish_first_no_change_and_one_file_changed() {
     let src = tempfile::tempdir().unwrap();
     let (r, c) = create_and_publish(&svc, &t, "wt0", src.path(), "t", 10);
     assert_eq!(r["uploaded"], json!(N));
-    // meta GET (live check), quota LIST (whole bucket, `retention::usage`), handoff GET, manifest HEAD
-    // (none yet), tree LIST, N object PUT, bundle DELETE (none given), manifest PUT, handoff create
-    // as one conditional PUT; then refresh: manifest HEAD + GET, handoff GET, entry PUT, registry LIST,
-    // digest PUT. GET 1+1+2 = 4, HEAD 1+1 = 2, LIST 3, PUT N+1+2 = N+3, cas 1, DELETE 1: N + 14 calls.
-    pin(c, [4, 2, 3, N + 3, 1, 1, 0, 0], "first publish");
+    // meta GET (live check), ONE whole-bucket LIST (the quota check and, handed on, the publish's tree
+    // objects and bundle check), handoff GET, manifest HEAD (none yet), N object PUT, manifest PUT,
+    // handoff create as one conditional PUT; refresh gets the manifest and the created handoff from
+    // the publish: entry PUT, registry LIST, digest PUT. GET 1+1 = 2, HEAD 1, LIST 2, PUT N+1+2 = N+3,
+    // cas 1, DELETE 0 (no bundle object listed): N + 9 calls. WO-069 X3: was [4,2,3,N+3,1,1] = N + 14
+    // (quota LIST + tree LIST merged, bundle DELETE gone, refresh manifest HEAD + GET + handoff GET gone).
+    pin(c, [2, 1, 2, N + 3, 1, 0, 0, 0], "first publish");
     let publish = |now: u64, head: &str, edit: bool| {
         let (paths, unc, chg) = tree(src.path(), N, D, "t");
         if edit {
@@ -184,13 +186,14 @@ fn publish_first_no_change_and_one_file_changed() {
     };
     let (r, c) = publish(30, "def", false);
     assert_eq!((&r["uploaded"], &r["unchanged"]), (&json!(0), &json!(N)));
-    // The same walk with nothing uploaded: GET 1 (meta) + 2 (handoff, manifest) + 2 (refresh) = 5,
-    // HEAD 2, LIST 3 (quota, tree, registry), PUT 3 (manifest, entry, digest), cas 1 (loses, 412), DELETE 1.
-    // The 13 + L(N+5) + L(N) of the note at L = 1: 15 calls. Two full listings, N-dependent on S3.
-    pin(c, [5, 2, 3, 3, 1, 1, 0, 0], "no-change publish");
+    // The same walk with nothing uploaded: GET 1 (meta) + 2 (handoff, manifest) + 1 (refresh re-reads
+    // the existing handoff: it may have changed during the upload) = 4, HEAD 1 (manifest), LIST 2
+    // (whole bucket, registry), PUT 3 (manifest, entry, digest), cas 0 (handoff known), DELETE 0.
+    // X3: was [5,2,3,3,1,1] = 15 calls; now 10.
+    pin(c, [4, 1, 2, 3, 0, 0, 0, 0], "no-change publish");
     let (r, c) = publish(40, "def2", true);
     assert_eq!(r["uploaded"], json!(1));
-    pin(c, [5, 2, 3, 4, 1, 1, 0, 0], "one file changed = no-change + 1 object PUT");
+    pin(c, [4, 1, 2, 4, 0, 0, 0, 0], "one file changed = no-change + 1 object PUT");
 }
 
 /// W published worktrees `wt0..`, each its own tag; the source trees stay alive with the rig.
@@ -310,4 +313,78 @@ fn fetch_tree_repeat_and_with_bundle() {
     // fetch_tree (manifest read) + the has_bundle check (manifest read) + fetch_bundle (manifest read,
     // bundle HEAD + GET, the whole bundle again): 8 calls
     pin(c, [4, 4, 0, 0, 0, 0, 0, 0], "fetch repeat with bundle");
+}
+
+// ---- WO-069 X3: the quota check shares the publish's one listing; it must still refuse before any write ----
+
+fn republish_params(src: &Path, quota: Option<u64>) -> Value {
+    let (paths, unc, chg) = tree(src, N, D, "t");
+    let mut p = json!({"project": PROJ, "slug": "wt0", "root": src.to_string_lossy(), "branch": "wt0", "base": "abc", "head": "def",
+        "paths_z": paths, "uncommitted_z": unc, "changes_z": chg});
+    if let Some(q) = quota {
+        p["quota_bytes"] = json!(q);
+    }
+    p
+}
+
+/// Bytes the quota counts: every object in the worktree bucket, as `retention::usage` sums them.
+fn used(svc: &StoreService) -> u64 {
+    let n = names("local", PROJ, "wt0").unwrap();
+    weftos_store::retention::usage(&Op(svc.operator_objects()), &n.wt).unwrap().1
+}
+
+#[test]
+fn over_quota_by_one_byte_refuses_before_any_write_and_exactly_at_quota_passes() {
+    let (_d, svc, t) = counting_rig();
+    let src = tempfile::tempdir().unwrap();
+    create_and_publish(&svc, &t, "wt0", src.path(), "t", 10);
+    let u = used(&svc);
+    t.take();
+    let e = go(&svc, "publish", republish_params(src.path(), Some(u - 1)), 30).unwrap_err();
+    assert!(e.contains(&format!("holds {u} bytes, over its {} byte quota", u - 1)), "{e}");
+    // meta GET (live check) and the one listing; nothing else: no put, no put_cas, no delete, no copy
+    pin(t.take(), [1, 0, 1, 0, 0, 0, 0, 0], "refused publish makes no write");
+    assert_eq!(used(&svc), u, "the bucket is as it was");
+    let (r, c) = counted(&svc, &t, "publish", republish_params(src.path(), Some(u)), 31);
+    assert_eq!(r["unchanged"], json!(N), "exactly at quota is allowed (the check is `used > quota`)");
+    pin(c, [4, 1, 2, 3, 0, 0, 0, 0], "exactly at quota: the no-change publish");
+}
+
+#[test]
+fn overlay_objects_count_toward_the_quota() {
+    let (_d, svc, t) = counting_rig();
+    let src = tempfile::tempdir().unwrap();
+    create_and_publish(&svc, &t, "wt0", src.path(), "t", 10);
+    let u = used(&svc);
+    let n = names("local", PROJ, "wt0").unwrap();
+    weftos_store::overlay::Overlay::new(&Op(svc.operator_objects()), &n.wt, &n.pr).put("assets/o.bin", &[9u8; 40]).unwrap();
+    let u2 = used(&svc);
+    assert!(u2 > u, "the overlay object adds bytes to the bucket: {u} -> {u2}");
+    // the old total would pass; with the overlay object it is refused, and its exact total passes
+    t.take();
+    let e = go(&svc, "publish", republish_params(src.path(), Some(u)), 30).unwrap_err();
+    assert!(e.contains("over its"), "{e}");
+    let e = go(&svc, "publish", republish_params(src.path(), Some(u2 - 1)), 31).unwrap_err();
+    assert!(e.contains(&format!("holds {u2} bytes")), "{e}");
+    assert_eq!((t.take()[3..7]).iter().sum::<u64>(), 0, "neither refusal wrote anything");
+    go(&svc, "publish", republish_params(src.path(), Some(u2)), 32).unwrap();
+    // the publish's own sweep leaves the overlay object alone
+    assert_eq!(used(&svc), u2, "overlay object kept, tree unchanged");
+}
+
+#[test]
+fn quota_zero_is_unlimited_and_takes_its_listing_inside_the_publish() {
+    let (_d, svc, t) = counting_rig();
+    let src = tempfile::tempdir().unwrap();
+    create_and_publish(&svc, &t, "wt0", src.path(), "t", 10);
+    t.take();
+    assert!(go(&svc, "publish", republish_params(src.path(), Some(1)), 30).is_err(), "quota 1 refuses");
+    t.take();
+    let (r, c) = counted(&svc, &t, "publish", republish_params(src.path(), Some(0)), 31);
+    assert_eq!(r["unchanged"], json!(N));
+    // no quota listing in the daemon: publish_tree lists the bucket itself, so the call count is the
+    // same as with a quota, and the default quota (2 GiB) takes the shared-listing path
+    pin(c, [4, 1, 2, 3, 0, 0, 0, 0], "quota 0");
+    let (_, c) = counted(&svc, &t, "publish", republish_params(src.path(), None), 32);
+    pin(c, [4, 1, 2, 3, 0, 0, 0, 0], "default quota");
 }

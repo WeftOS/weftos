@@ -73,8 +73,14 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
                 Some(q) => Some(q),
                 None => Some(weftos_store::retention::DEFAULT_WORKTREE_QUOTA),
             };
+            // One whole-bucket listing serves the quota check and, handed on, the publish itself
+            // (its tree objects and the bundle-leftover check). Taken before any PUT, so an
+            // over-quota publish still writes nothing. Quota 0 (unlimited) lists nothing here.
+            let mut listing = None;
             if let Some(q) = quota {
-                let (_, used) = weftos_store::retention::usage(&b, &n.wt).map_err(e)?;
+                let l = weftos_store::overlay::ObjectBackend::list(&b, &n.wt, "").map_err(e)?;
+                let used: u64 = l.iter().map(|m| m.size).sum();
+                listing = Some(l);
                 if used > q {
                     return Err(format!(
                         "worktree store {slug} holds {used} bytes, over its {q} byte quota; \
@@ -100,7 +106,7 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
             };
             let bundle = bundle.as_deref();
             let writer = who(&p);
-            let rep = publish_tree(
+            let published = weftos_store::share::publish_tree_listed(
                 &b,
                 &n.wt,
                 &TreeSource {
@@ -116,12 +122,21 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
                 },
                 &Limits::default(),
                 now_ms,
+                listing,
             )
             .map_err(e)?;
-            if let Some(note) = p.handoff.as_deref() {
-                mark_handoff(&b, &n.wt, &writer, note, now_ms).map_err(e)?;
-            }
-            refresh(&b, &n.reg, slug, &n.wt, sign)?;
+            // The registry entry is derived from the manifest just written and, when this publish
+            // created it, the handoff just written; an existing record is read fresh (it may have
+            // changed during the upload), and a handoff note rewrites it, so that is read too.
+            let rep = published.report;
+            let h = match p.handoff.as_deref() {
+                Some(note) => {
+                    mark_handoff(&b, &n.wt, &writer, note, now_ms).map_err(e)?;
+                    None
+                }
+                None => published.handoff_created,
+            };
+            refresh_with(&b, &n.reg, slug, &n.wt, sign, Some(published.manifest), h)?;
             Ok(json!({
                 "uploaded": rep.uploaded, "unchanged": rep.unchanged, "removed": rep.removed,
                 "skipped": rep.skipped.iter().map(|(k, w)| format!("{k}: {w:?}")).collect::<Vec<_>>(),
