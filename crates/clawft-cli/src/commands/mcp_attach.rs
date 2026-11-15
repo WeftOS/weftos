@@ -781,6 +781,34 @@ mod tests {
         }
     }
 
+    #[test]
+    fn control_profile_serves_agent_list_and_agent_get() {
+        use crate::commands::mcp_profile::ProfileSet;
+        let control = ProfileSet::parse("control").unwrap();
+        let names: Vec<String> =
+            filter_attach_tools_by_profile(attach_tool_definitions(), |n| control.allows_tool(n))
+                .into_iter()
+                .map(|t| t.name)
+                .collect();
+        assert!(names.contains(&"agent_list".to_string()), "{names:?}");
+        assert!(names.contains(&"agent_get".to_string()), "{names:?}");
+        // Workspace alone must not carry them.
+        let ws = ProfileSet::parse("workspace").unwrap();
+        assert!(!ws.allows_tool("agent_list") && !ws.allows_tool("agent_get"));
+    }
+
+    #[tokio::test]
+    async fn agent_keeps_its_directory_id_across_a_daemon_restart() {
+        // Two providers over the same declared tree stand for the daemon before and
+        // after a restart: a fresh facade is a fresh process set (new pids, new uptime).
+        let (before, _t1) = provider(Arc::new(MockAttachFacade::new()), &["alpha"]);
+        let b = json_of(&before.call_tool("agent_get", json!({"id": "alpha"})).await.unwrap());
+        let (after, _t2) = provider(Arc::new(MockAttachFacade::new()), &["alpha"]);
+        let a = json_of(&after.call_tool("agent_get", json!({"id": "alpha"})).await.unwrap());
+        assert_eq!(b["id"], "weftos://agent/alpha");
+        assert_eq!(a["id"], b["id"]);
+    }
+
     #[tokio::test]
     async fn mesh_flag_asks_every_node_and_names_the_dead_one() {
         let (provider, _t) = provider(Arc::new(MockAttachFacade::new()), &["alpha", "gamma", "steward"]);
