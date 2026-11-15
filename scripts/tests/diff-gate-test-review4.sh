@@ -65,6 +65,11 @@ EXPECT="build-script" case_run "r4-a: a ./-prefixed build key moved into [packag
 EXPECT="build-script" case_run "r4-a: a build key through .. moved into [package] by deleting a header" 1 \
     'printf "[package]\nname = \"fx\"\n\n[package.metadata.x]\nbuild = \"src/../src/b.rs\"\n\n[dependencies]\nexisting = \"1\"\n" >Cargo.toml; echo "fn main() {}" >src/b.rs' \
     'grep -v "^\[package.metadata.x\]" Cargo.toml >c.tmp && mv c.tmp Cargo.toml'
+# A build.rs symlink that dangles on the base builds nothing (cargo checks is_file); the diff
+# adds its target, and cargo now runs it. The placeholder tree writes every .rs path as a plain
+# file, so both sides show a build script and no change is reported.
+KNOWN_GAP=R4-A1 EXPECT="build-script" case_run "r4-a: adding the target of a dangling build.rs symlink turns the build script on" 1 \
+    'ln -s tools/b.rs build.rs' 'mkdir -p tools && echo "fn main() {}" >tools/b.rs'
 # Auto-discovered targets: autobins / autoexamples / autotests.
 case_run "r4-a: control, deleting autobins = false outside a sensitive crate is not a finding" 0 \
     'sed -i.bak "s/^name = \"fx\"/name = \"fx\"\nautobins = false/" Cargo.toml; rm Cargo.toml.bak; mkdir -p src/bin; echo "fn main() {}" >src/bin/t.rs' \
@@ -223,6 +228,24 @@ pub fn x() {}'
 export DOC_INNER_INCL='#![doc = include_str!("../README.md")]
 pub fn x() {}'
 export DOC_MACRO_ATTR='macro_rules! documented { ($d:expr) => { #[doc = $d] pub fn f() {} }; }'
+export DOC_CLASS='/// ```{.example}
+/// std::process::Command::new("sh").status().unwrap();
+/// ```
+pub fn d() {}'
+export DOC_HEADING='/// # Example
+///     std::process::Command::new("sh").status().unwrap();
+pub fn d() {}'
+export DOC_AFTERFENCE='/// ```text
+/// output
+/// ```
+///     std::process::Command::new("sh").status().unwrap();
+pub fn d() {}'
+export DOC_NUMLIST='/// 1. step
+///
+///    ```
+///    std::process::Command::new("sh").status().unwrap();
+///    ```
+pub fn d() {}'
 # Not code: #[doc(include = ...)] was removed from rustdoc (1.95 warns "unknown doc attribute").
 export DOC_INCLUDE_KEY='#[doc(include = "x.md")]
 pub fn e() {}'
@@ -232,6 +255,10 @@ if [ "$REAL_TOKENS" = 1 ]; then
     KNOWN_GAP=R4-D1 EXPECT="process" case_run "r4-d(real): a fenced doctest inside a block quote" 1 : 'printf "%s\n" "$DOC_QUOTE" >>src/lib.rs'
     KNOWN_GAP=R4-D1 EXPECT="process" case_run "r4-d(real): a /** */ doctest with leading stars (per-line lex blinded by a raw string)" 1 : 'printf "%s\n" "$DOC_STAR" >>src/lib.rs'
     EXPECT="process" case_run "r4-d(real): control, a /** */ doctest with leading stars (per-line lex sees it)" 1 : 'printf "%s\n" "$DOC_STAR_PLAIN" >>src/lib.rs'
+    KNOWN_GAP=R4-D1 EXPECT="process" case_run "r4-d(real): a fenced doctest inside a numbered list item" 1 : 'printf "%s\n" "$DOC_NUMLIST" >>src/lib.rs'
+    KNOWN_GAP=R4-D1 EXPECT="process" case_run "r4-d(real): a fence whose info string is only a {.class}" 1 : 'printf "%s\n" "$DOC_CLASS" >>src/lib.rs'
+    KNOWN_GAP=R4-D1 EXPECT="process" case_run "r4-d(real): an indented code block right after a heading" 1 : 'printf "%s\n" "$DOC_HEADING" >>src/lib.rs'
+    KNOWN_GAP=R4-D1 EXPECT="process" case_run "r4-d(real): an indented code block right after a closing fence" 1 : 'printf "%s\n" "$DOC_AFTERFENCE" >>src/lib.rs'
     KNOWN_GAP=R4-D2 EXPECT="process" case_run "r4-d(real): a fence opened in outer docs and closed in inner docs" 1 : 'printf "%s\n" "$DOC_MERGE" >>src/lib.rs'
     KNOWN_GAP=R4-D2 EXPECT="process" case_run "r4-d(real): a fence opened on mod m; and closed in m.rs" 1 : \
         'printf "/// \`\`\`\npub mod m;\n" >>src/lib.rs; printf "//! std::process::Command::new(\"sh\").status().unwrap();\n//! \`\`\`\npub fn x() {}\n" >src/m.rs'
