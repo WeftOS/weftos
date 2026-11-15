@@ -10,6 +10,7 @@
 # Only added lines and new files are inspected. Existing code never fails the gate.
 #
 # Rules: unsafe, new-dep, build-script, proc-macro, net, process, ffi, include, ci-workflow,
+#        rust-parse, rust-tokens (the token helper, tools/diff-gate-tokens, built from the base),
 #        gitattributes-change, toolchain-config, special-file, approvals-change.
 #
 # The diff is taken with --text --no-textconv --no-renames and pinned prefixes, quoting and
@@ -262,7 +263,7 @@ function hdrpath(rest,   L, h, p1, p2) { # "a/P b/P" or "\"a/Q\" \"b/Q\"" -> P
 FILENAME == hlist { nh++; hp[nh] = $0; next }
 FILENAME == flist {
     split($0, f, "\t"); st = f[1]; nm = f[3]; p = f[4]; lp = tolower(p)
-    if (p ~ /^\.github\/workflows\// || p == "scripts/diff-gate.sh") emit("ci-workflow", p, 0, st == "D" ? "file deleted or moved away" : "file changed")
+    if (p ~ /^\.github\/workflows\// || p == "scripts/diff-gate.sh" || p ~ /^tools\/diff-gate-tokens\//) emit("ci-workflow", p, 0, st == "D" ? "file deleted or moved away" : "file changed")
     if (lp ~ /(^|\/)\.gitattributes$/) emit("gitattributes-change", p, 0, st == "D" ? "file deleted or moved away" : "file changed")
     if (lp ~ /(^|\/)\.cargo\/config/ || lp ~ /(^|\/)rust-toolchain(\.toml)?$/) emit("toolchain-config", p, 0, st == "D" ? "file deleted" : "file changed")
     if (st != "D" && nm == "120000") emit("special-file", p, 0, "symlink added or changed")
@@ -462,6 +463,91 @@ if [ -s "$TMP/rs-added" ]; then
     }' "$TMP/rs-index" "$TMP/rs-added" "$@" >>"$TMP/findings" || die "lexer stage failed"
 fi
 
+# ── Pass 2b: token scan (tools/diff-gate-tokens, built from the trusted base) ──
+# The line lexer above is a heuristic; this pass lexes every changed .rs file the way rustc
+# does (proc-macro2 tokens, syn for `use` trees), resolves aliases and globs within the file,
+# scans doctests, and also reports unchanged lines whose meaning an edit changed. Its
+# findings are merged with the lexer's. The helper is built from the base tip's
+# tools/diff-gate-tokens (never from the change under review) into a cache keyed by that
+# tree's hash, outside the checkout. If it cannot be built or run, every changed .rs file
+# gets an owner-only "rust-tokens" finding: never a silent pass.
+# DIFF_GATE_TOKENS_BIN (a prebuilt helper) is for local testing only; CI never sets it.
+TOKENS_PROTOCOL="diff-gate-tokens protocol 1"
+: >"$TMP/tok-manifest"; : >"$TMP/tok-out"; mkdir -p "$TMP/tok" || die "mkdir failed"
+awk -F'\t' '$1 != "D" && tolower($4) ~ /\.rs$/ { print $4 }' "$TMP/files" | awk '!s[$0]++' >"$TMP/tok-paths"
+n=0
+while IFS= read -r p; do
+    n=$((n + 1))
+    show_at "$head_src" "$p" | tr '\000' '\001' >"$TMP/tok/h$n"
+    [ "${PIPESTATUS[0]}${PIPESTATUS[1]}" = 00 ] || die "cannot read $p"
+    bfile=""
+    if git rev-parse --verify -q "$BASE:$p" >/dev/null 2>&1; then
+        show_at "$BASE" "$p" | tr '\000' '\001' >"$TMP/tok/b$n" || die "cannot read $p on the base"
+        bfile="$TMP/tok/b$n"
+    fi
+    added="$(awk -F'\t' -v p="$p" '$1 == p { printf "%s%s", (n++ ? "," : ""), $2 }' "$TMP/rs-added")"
+    printf '%s\t%s\t%s\t%s\n' "$p" "$TMP/tok/h$n" "$bfile" "$added" >>"$TMP/tok-manifest"
+done <"$TMP/tok-paths"
+
+TOK_WHY=""; TOK_BIN=""
+tokens_bin() { # sets TOK_BIN, or TOK_WHY and fails; runs in this shell (no subshell)
+    local ref tree cache bin stage
+    if [ -n "${DIFF_GATE_TOKENS_BIN:-}" ]; then
+        echo "diff-gate: token helper from DIFF_GATE_TOKENS_BIN=$DIFF_GATE_TOKENS_BIN (not built from the base)" >&2
+        bin="$DIFF_GATE_TOKENS_BIN"
+    else
+        ref="${DIFF_GATE_TOKENS_REF:-$BASE_TIP}"
+        tree="$(git rev-parse -q --verify "$ref:tools/diff-gate-tokens" 2>/dev/null)" || { TOK_WHY="no tools/diff-gate-tokens at the trusted base $(git rev-parse --short "$ref" 2>/dev/null)"; return 1; }
+        cache="${DIFF_GATE_CACHE:-${RUNNER_TEMP:-${XDG_CACHE_HOME:-$HOME/.cache}}/weftos-diff-gate}"
+        case "$cache" in /*) ;; *) cache="$ROOT/$cache" ;; esac
+        case "$cache/" in "$ROOT"/*) TOK_WHY="cache $cache is inside the checkout (refused)"; return 1 ;; esac
+        bin="$cache/tokens-$tree/diff-gate-tokens"
+        if [ ! -x "$bin" ]; then
+            command -v cargo >/dev/null 2>&1 || { TOK_WHY="cargo not found to build tools/diff-gate-tokens"; return 1; }
+            mkdir -p "$cache" && stage="$(mktemp -d "$cache/build.XXXXXX")" || { TOK_WHY="cannot create $cache"; return 1; }
+            mkdir -p "$stage/src" && git archive "$tree" | tar -x -C "$stage/src" || { TOK_WHY="cannot extract the helper source"; rm -rf "$stage"; return 1; }
+            echo "diff-gate: building the token helper from the base (tree $tree)" >&2
+            if ! (cd "$stage/src" && CARGO_TARGET_DIR="$stage/target" cargo build --release --locked --quiet) >"$stage/build.log" 2>&1; then
+                tail -5 "$stage/build.log" >&2; TOK_WHY="cargo build of tools/diff-gate-tokens failed"; rm -rf "$stage"; return 1
+            fi
+            # Publish atomically: a concurrent run either sees no binary or the whole one.
+            mkdir -p "$stage/out" && mv "$stage/target/release/diff-gate-tokens" "$stage/out/" \
+                && { mv "$stage/out" "$cache/tokens-$tree" 2>/dev/null || true; }
+            rm -rf "$stage"
+        fi
+    fi
+    [ -x "$bin" ] || { TOK_WHY="helper $bin is not executable"; return 1; }
+    [ "$("$bin" --protocol 2>/dev/null)" = "$TOKENS_PROTOCOL" ] || { TOK_WHY="helper $bin does not speak '$TOKENS_PROTOCOL'"; return 1; }
+    TOK_BIN="$bin"
+}
+if [ -s "$TMP/tok-manifest" ]; then
+    if tokens_bin; then
+        if ! "$TOK_BIN" --manifest "$TMP/tok-manifest" >"$TMP/tok-out" 2>"$TMP/tok-err"; then
+            TOK_WHY="helper failed: $(head -c 200 "$TMP/tok-err" | tr '\t\n' '  ')"
+        elif ! awk -F'\t' 'FILENAME == ARGV[1] { ok[$1] = 1; next }
+                 !(($2 in ok) && $3 ~ /^[0-9]+$/ && $1 ~ /^[a-z-]+$/ && (NF == 4 || (NF == 7 && $5 == "" && $6 ~ /^[0-9]+-[0-9]+(\|[0-9]+-[0-9]+)*$/))) { exit 1 }' \
+                 "$TMP/tok-paths" "$TMP/tok-out"; then
+            TOK_WHY="helper output is malformed"
+        fi
+    fi
+    if [ -n "$TOK_WHY" ]; then
+        echo "diff-gate: token helper unavailable: $TOK_WHY" >&2
+        awk -v why="$TOK_WHY" '{ gsub(/\t/, " ", why); print "rust-tokens\t" $0 "\t0\thelper unavailable: review-required (" why ")" }' "$TMP/tok-paths" >>"$TMP/findings"
+    else
+        cat "$TMP/tok-out" >>"$TMP/findings"
+    fi
+fi
+# One finding per rule and line: merge the lexer's and the helper's occurrence spans.
+awk -F'\t' -v OFS='\t' '
+NF == 7 {
+    k = $1 SUBSEP $2 SUBSEP $3 SUBSEP $7
+    if (k in g) { n = split($6, a, "|"); for (i = 1; i <= n; i++) if (index("|" g[k] "|", "|" a[i] "|") == 0) g[k] = g[k] "|" a[i]; next }
+    g[k] = $6; ord[++no] = k; rec[k] = $0; next
+}
+{ print }
+END { for (i = 1; i <= no; i++) { k = ord[i]; split(rec[k], f, "\t"); print f[1], f[2], f[3], f[4], f[5], g[k], f[7] } }
+' "$TMP/findings" >"$TMP/findings.m" && mv "$TMP/findings.m" "$TMP/findings" || die "merging findings failed"
+
 # ── Pass 3: Cargo.toml entries (needs the full file, not hunks) ──────
 # Emits per entry: key <TAB> source <TAB> workspace=true <TAB> line <TAB> text
 # Keys: <section>|<name> for dependency, [patch.*] and [replace] tables; target-path|<value>
@@ -644,7 +730,7 @@ function covers(i, T, s, e,   rest, off, p, a, b) { # does a match of row i over
 FILENAME == apf { na++; ar[na] = $1; ag[na] = g2r($2); ap[na] = $3; al[na] = $4; aw[na] = $5; ab[na] = $6; next }
 {
     status = "FAIL"; detail = ""
-    if ($1 == "approvals-change") {
+    if ($1 == "approvals-change" || $1 == "rust-tokens") {
         if (owner == "1") { status = "approved"; detail = "DIFF_GATE_OWNER_APPROVED=1" }
         else if ($5 != "") { status = "approved"; detail = "owner ledger (base tip): " $5 }
         else detail = "owner only: set DIFF_GATE_OWNER_APPROVED=1 (CI: diff-gate-approved label)"

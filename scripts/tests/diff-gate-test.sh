@@ -12,6 +12,13 @@ mkdir -p "$TMPBASE"
 WORK="$(mktemp -d "$TMPBASE/diff-gate-test.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 
+# The token helper (tools/diff-gate-tokens) is a Rust binary. By default every fixture uses a
+# stub that finds nothing, so this suite needs only bash and git. Set DIFF_GATE_TEST_TOKENS_BIN
+# to a built helper to run every fixture against the real one (plus the "tokens(real)" cases).
+STUB="$ROOT/scripts/tests/diff-gate-tokens-stub.sh"
+export DIFF_GATE_TOKENS_BIN="${DIFF_GATE_TEST_TOKENS_BIN:-$STUB}"
+REAL_TOKENS=0; [ -n "${DIFF_GATE_TEST_TOKENS_BIN:-}" ] && REAL_TOKENS=1
+
 pass=0; fail=0
 APPROVE_UNSAFE='[[approval]]
 rule = "unsafe"
@@ -64,7 +71,9 @@ echo "diff-gate fixtures"
 case_run "clean docs-only diff passes" 0 : 'echo hi >README.md'
 case_run "unsafe in a comment passes" 0 : 'echo "// unsafe { x }" >>src/lib.rs'
 case_run "unsafe in a string passes" 0 : 'echo "const S: &str = \"unsafe\";" >>src/lib.rs'
-case_run "unsafe_code attribute passes" 0 : 'echo "#![forbid(unsafe_code)]" >>src/lib.rs'
+# An inner attribute must come before any item (rustc rejects it later, and so does the
+# token helper's parse check), so this one is prepended.
+case_run "unsafe_code attribute passes" 0 : '{ echo "#![forbid(unsafe_code)]"; cat src/lib.rs; } >src/l.tmp && mv src/l.tmp src/lib.rs'
 
 # each rule: added -> fail, already on base -> pass
 case_run "unsafe added fails" 1 : 'echo "fn f() { unsafe { g() } }" >>src/lib.rs'
@@ -426,6 +435,59 @@ EXPECT="build-script" case_run "cargo: escaped quoted key can spell build" 1 : "
 EXPECT="unsafe" case_run "lexer: a NUL byte in a string does not end the line" 1 : "printf 'fn f() { let _s = \"a\\000b\"; unsafe { g() } }\n' >>src/lib.rs"
 EXPECT="include" case_run "include: include macro under an alias" 1 : "echo 'use core::include as inc; inc!(\"x.txt\");' >>src/lib.rs"
 case_run "cargo: version bump of an existing dep still passes" 0 : 'sed -i.bak "s/^existing = \"1\"/existing = \"1.2\"/" Cargo.toml; rm Cargo.toml.bak'
+
+# 10. Token helper (G1, option b). A helper that is missing, unbuildable, of another protocol,
+# failing or printing junk gives an owner-only rust-tokens finding per changed .rs file.
+ADD_RS='echo "fn z() {}" >>src/lib.rs'
+EXPECT="rust-tokens" case_run "tokens: missing helper is an owner-only finding" 1 : "$ADD_RS" DIFF_GATE_TOKENS_BIN=/nonexistent/diff-gate-tokens
+case_run "tokens: owner flag clears helper unavailable" 0 : "$ADD_RS" DIFF_GATE_TOKENS_BIN=/nonexistent/diff-gate-tokens DIFF_GATE_OWNER_APPROVED=1
+EXPECT="rust-tokens" case_run "tokens: an approval row does not clear helper unavailable" 1 \
+    "printf '%s\n' '[[approval]]
+rule = \"rust-tokens\"
+path = \"**\"
+pattern = \"*\"
+reason = \"r\"
+approved_by = \"o\"' >config/diff-gate-approvals.toml" "$ADD_RS" DIFF_GATE_TOKENS_BIN=/nonexistent/diff-gate-tokens
+EXPECT="rust-tokens" case_run "tokens: wrong protocol" 1 : "$ADD_RS" DIFF_GATE_TOKENS_BIN="$STUB" DIFF_GATE_STUB_PROTOCOL=other
+EXPECT="rust-tokens" case_run "tokens: helper exits non-zero" 1 : "$ADD_RS" DIFF_GATE_TOKENS_BIN="$STUB" DIFF_GATE_STUB_RC=3
+EXPECT="rust-tokens" case_run "tokens: malformed helper output" 1 : "$ADD_RS" DIFF_GATE_TOKENS_BIN="$STUB" DIFF_GATE_STUB_OUT=garbage
+EXPECT="rust-tokens" case_run "tokens: finding for a path not in the diff is malformed" 1 : "$ADD_RS" DIFF_GATE_TOKENS_BIN="$STUB" \
+    DIFF_GATE_STUB_OUT="$(printf 'unsafe\tsrc/other.rs\t1\tx')"
+EXPECT="process" case_run "tokens: a helper finding is reported" 1 : "$ADD_RS" DIFF_GATE_TOKENS_BIN="$STUB" \
+    DIFF_GATE_STUB_OUT="$(printf 'process\tsrc/lib.rs\t2\tfn z() {}\t\t1-2\tfn z() {}')"
+EXPECT="unsafe" case_run "tokens: helper and lexer findings on one line merge" 1 : 'echo "fn f() { unsafe { g() } }" >>src/lib.rs' DIFF_GATE_TOKENS_BIN="$STUB" \
+    DIFF_GATE_STUB_OUT="$(printf 'unsafe\tsrc/lib.rs\t2\tfn f() { unsafe { g() } }\t\t10-15\tfn f() { unsafe { g() } }')"
+case_run "tokens: docs-only diff needs no helper" 0 : 'echo hi >README.md' DIFF_GATE_TOKENS_BIN=/nonexistent/diff-gate-tokens
+EXPECT="rust-tokens" case_run "tokens: base without tools/diff-gate-tokens" 1 : "$ADD_RS" DIFF_GATE_TOKENS_BIN=
+EXPECT="ci-workflow" case_run "tokens: a change to the helper source is an owner finding" 1 : \
+    'mkdir -p tools/diff-gate-tokens && echo x >tools/diff-gate-tokens/README.md'
+EXPECT="rust-tokens" case_run "tokens: a cache inside the checkout is refused" 1 \
+    'mkdir -p tools/diff-gate-tokens && echo x >tools/diff-gate-tokens/README.md' "$ADD_RS" DIFF_GATE_TOKENS_BIN= DIFF_GATE_CACHE=target/tok-cache
+d="$WORK/tokens_merge" && fixture_repo "$d" && git add -A && git commit -qm base && base="$(git rev-parse HEAD)"
+echo "fn f() { unsafe { g() } }" >>src/lib.rs && git add -A && git commit -qm change
+out="$(DIFF_GATE_BASE="$base" DIFF_GATE_TOKENS_BIN="$STUB" DIFF_GATE_STUB_OUT="$(printf 'unsafe\tsrc/lib.rs\t2\tfn f() { unsafe { g() } }\t\t10-15\tfn f() { unsafe { g() } }')" "$GATE" 2>&1)"; rc=$?
+[ "$(echo "$out" | grep -c 'FAIL *unsafe')" = 1 ] || rc="dup"
+check_result "tokens: one merged finding, not two" 1 "$rc" "$out"
+cd "$ROOT" || exit 2
+
+# 11. With the real helper: the G1 escapes the line lexer missed.
+if [ "$REAL_TOKENS" = 1 ]; then
+    EXPECT="process" case_run "tokens(real): spaces around ::" 1 : 'echo "fn f() { std :: process :: Command :: new(\"sh\"); }" >>src/lib.rs'
+    EXPECT="process" case_run "tokens(real): glob plus alias" 1 : 'printf "use std::process::*;\nuse Command as C;\nfn f() { C::args; }\n" >src/g.rs'
+    EXPECT="process" case_run "tokens(real): multi-line brace import" 1 : 'printf "use std::{\n    process::{\n        Command as K,\n    },\n};\nfn f() { K::args; }\n" >src/m.rs'
+    EXPECT="net" case_run "tokens(real): use ::reqwest as r" 1 : 'printf "use ::reqwest as r;\nfn f() { let _ = r::get(1); }\n" >src/r.rs'
+    EXPECT="include" case_run "tokens(real): multi-line cfg_attr path" 1 : 'printf "#[cfg_attr(\n    unix,\n    path = \"x.txt\"\n)]\nmod m;\n" >>src/lib.rs'
+    EXPECT="process" case_run "tokens(real): doctest with Command" 1 : 'printf "/// \`\`\`\n/// std::process::Command::new(\"sh\");\n/// \`\`\`\npub fn d() {}\n" >>src/lib.rs'
+    EXPECT="include" case_run "tokens(real): doc include_str" 1 : 'printf "#![doc = include_str!(\"README.md\")]\n" >src/x.rs'
+    EXPECT="ffi" case_run "tokens(real): global_asm" 1 : 'echo "core::arch::global_asm!(\"nop\");" >>src/lib.rs'
+    EXPECT="unsafe" case_run "tokens(real): line added inside an existing unsafe block" 1 \
+        'printf "fn f() {\n    unsafe {\n        a();\n    }\n}\n" >src/u.rs' 'printf "fn f() {\n    unsafe {\n        a();\n        b();\n    }\n}\n" >src/u.rs'
+    EXPECT="process" case_run "tokens(real): an import edit changes an unchanged line" 1 \
+        'printf "use mock as p;\nfn f() { p::Command::args; }\n" >src/c.rs' 'printf "use std::process as p;\nfn f() { p::Command::args; }\n" >src/c.rs'
+    EXPECT="rust-parse" case_run "tokens(real): a file that does not parse" 1 : 'printf "fn broken() {\n" >src/b.rs'
+    case_run "tokens(real): strings and comments still pass" 0 : \
+        'printf "// std::process::Command::new\nconst S: &str = \"unsafe TcpStream\";\n/// text: \`unsafe\`\npub fn ok() {}\n" >>src/lib.rs'
+fi
 
 echo "diff-gate fixtures: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
