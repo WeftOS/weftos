@@ -1,8 +1,9 @@
 # Pre-build diff gate
 
 `scripts/diff-gate.sh` rejects risky changes before any crate compiles. It looks only at what a
-diff adds (added lines and new files); existing code never fails it. It needs only git, grep and
-awk and runs in about a second.
+diff adds (added lines and new files); existing code never fails it. It needs git, grep and awk,
+plus a small Rust helper for `.rs` files (`tools/diff-gate-tokens`, built from the trusted base;
+see [The token helper](#the-token-helper)).
 
 The idea of a static, pre-build gate over the diff comes from
 [ruvnet/rune](https://github.com/ruvnet/rune) (MIT). This is an independent implementation. See
@@ -62,18 +63,20 @@ block from the workflow and runs it unchanged against fixture pushes.
 
 | Rule | Fails when the diff adds |
 |---|---|
-| `unsafe` | the `unsafe` keyword in a `.rs` file (any case of the extension), outside comments, strings and char literals; see [How .rs lines are read](#how-rs-lines-are-read) |
+| `unsafe` | the `unsafe` keyword in a `.rs` file (any case of the extension), outside comments, strings and char literals, including in a doctest; also an added line inside an existing `unsafe { }` block, `unsafe fn` or `unsafe impl` body. See [How .rs files are read](#how-rs-files-are-read) |
 | `new-dep` | a new entry in any Cargo.toml dependency table, in `[patch.*]` or in `[replace]`, or a changed source on an existing entry (`git`, `path`, `registry`, `registry-index`, `package`, `rev`, `tag`, `branch`). Quoted and dotted keys count. `workspace = true` entries for a dependency the base workspace already declares are not new |
 | `build-script` | a new `build.rs` (also one created by a rename), or a `build` key in Cargo.toml in any form: bare, quoted, dotted (`package.build`) or inside an inline table (`package = { build = ... }`); `build = false` is fine. A quoted Cargo.toml key or table name with a backslash escape is reported here too, since it can spell `build` or `proc-macro` |
 | `proc-macro` | `proc-macro` / `proc_macro` `= true` in any of the same key forms (`lib = { proc-macro = true }`, `lib.proc-macro`) |
 | `net` | `std::net`, `tokio::net`, `async_std::net`, `mio::net` paths, `TcpStream`, `TcpListener`, `TcpSocket`, `UdpSocket`, `reqwest`, `ureq`, `hyper`, `isahc`, `surf`, `attohttpc`, `curl`, `socket2`, `tungstenite`, `quinn` paths or imports, `net` in a `std::{...}` import, `libc` socket calls. Address types (`SocketAddr`, `IpAddr` and friends) do no I/O and are ignored. Unix-domain sockets (`std::os::unix::net`) are local IPC, used by the daemon in about 75 files, and are not findings |
-| `process` | `process::Command` in any form (including `std::{process::Command as K}` and multi-line `std::process::{` imports), the `std::process` module imported or aliased, `Command::new`, `tokio::process`, `CommandExt`, `libc` / `nix` exec, fork, spawn and `system` |
-| `ffi` | the `extern` keyword in any form except `extern crate` (`extern "C"`, `extern "system"`, bare `extern {` / `extern fn`), `#[no_mangle]`, `export_name`, `link_section`. `#[link(...)]` and `link_name` are not separate findings: they only act on an `extern` block, which is one |
-| `include` | code pulled into the build from something that is not a `.rs` file: `include!` whose argument is not a literal `.rs` path, `#[path = "..."]` to a non-`.rs` file, and a new Cargo target `path` (`[lib]`, `[[bin]]`, `[[example]]`, `[[test]]`, `[[bench]]`) to a non-`.rs` file. `include_str!` and `include_bytes!` are not findings: they produce a `&str` / `&[u8]` value, and turning data into code needs `unsafe`, which is its own finding |
-| `ci-workflow` | any change under `.github/workflows/` or to `scripts/diff-gate.sh`, including moving or deleting them |
+| `process` | `process::Command` in any form (including `std::{process::Command as K}` and multi-line `std::process::{` imports), the `std::process` module imported or aliased, `Command::new`, `tokio::process`, `CommandExt`, `libc` / `nix` exec, fork, spawn and `system`. Paths are resolved through the file's `use` aliases and glob imports, so `use std::process as p; p::Command` and `use std::process::*; use Command as C; C::args` count. `std::process::exit`, `abort`, `id`, `ExitCode`, `ExitStatus`, `Stdio`, `Output` and the `Child` types do not spawn and are ignored |
+| `ffi` | the `extern` keyword in any form except `extern crate` (`extern "C"`, `extern "system"`, bare `extern {` / `extern fn`), `#[no_mangle]`, `export_name`, `link_section`, and `global_asm!` / `asm!` / `naked_asm!` (`global_asm!` needs no `unsafe`). An added declaration inside an existing `extern { }` block counts. `#[link(...)]` and `link_name` are not separate findings: they only act on an `extern` block, which is one |
+| `include` | code pulled into the build from something that is not a `.rs` file: `include!` whose argument is not a literal `.rs` path, `#[path = "..."]` to a non-`.rs` file, and a new Cargo target `path` (`[lib]`, `[[bin]]`, `[[example]]`, `[[test]]`, `[[bench]]`) to a non-`.rs` file. `#[path]` counts inside `cfg_attr`, over several lines. `include_str!` and `include_bytes!` are not findings in code: they produce a `&str` / `&[u8]` value, and turning data into code needs `unsafe`, which is its own finding. Inside an attribute they are (`#![doc = include_str!("README.md")]` turns that file's code blocks into doctests that `cargo test` runs). `paste!` and `concat_idents!` are findings too: they can build any identifier or path from pieces |
+| `ci-workflow` | any change under `.github/workflows/`, to `scripts/diff-gate.sh` or under `tools/diff-gate-tokens/` (the gate's own checker), including moving or deleting them |
 | `toolchain-config` | any change to `.cargo/config` or `.cargo/config.toml` at any depth (rustc wrapper, linker, rustflags, registries) or to `rust-toolchain` / `rust-toolchain.toml` (toolchain `path`) |
 | `special-file` | an added or changed symlink (mode 120000) or submodule / nested repository (mode 160000). The gate never follows a link to scan its target |
 | `gitattributes-change` | an added, edited, moved or deleted `.gitattributes` at any depth. Owner-approvable by an approval row, like the content rules; `DIFF_GATE_OWNER_APPROVED` does not clear it |
+| `rust-parse` | a changed `.rs` file that does not tokenize, or that syn cannot parse. rustc would reject the first; the second is reported so a file the checker cannot fully read never passes unread. The tokens it does read are still checked |
+| `rust-tokens` | the token helper could not be built, run, or gave output the gate does not accept. Reported once per changed `.rs` file, as `helper unavailable: review-required (reason)`. Owner only: an approval row does not clear it; `DIFF_GATE_OWNER_APPROVED` does |
 | `approvals-change` | an added, removed or edited row in `config/diff-gate-approvals.toml`, or any change to `config/diff-gate-owner-ledger.toml`. An added row whose hash is on the owner ledger at the base ref's tip is reported `approved` (see [Owner ledger](#owner-ledger)) |
 
 The file list comes from `git diff --raw -z --no-renames`, so a path is used byte for byte:
@@ -98,22 +101,83 @@ new build script. Moving an existing `.rs` file therefore reports its existing f
 The gate fails closed. A failed `git diff`, `git ls-files` or blob read, a parse stage that does
 not finish, or a diff that does not match the file list exits 2.
 
-### How .rs lines are read
+### How .rs files are read
 
-Each `.rs` file with added lines is lexed in full from the head blob: nested block comments,
-line comments, strings with escapes, raw strings (`r"..."`, `r#"..."#`, `br`, `cr`), char and
-byte literals versus lifetimes and labels. That tells the gate whether an added line starts
-inside a string or a comment. The added line is also lexed on its own, and a rule fires if it
-matches either result. Comment, string and char-literal contents are blanked, so `"unsafe"` in
-a string or `// unsafe` in a comment is not a finding.
+Two scanners read every changed `.rs` file, and their findings are merged (one finding per rule
+and line, with the occurrences of both):
 
-This is still a regex lexer, not rustc, and it errs towards false positives:
+1. **The line lexer** in the script. Each `.rs` file with added lines is lexed in full from the
+   head blob (nested block comments, line comments, strings with escapes, raw strings, char and
+   byte literals versus lifetimes), and the added line is also lexed on its own; a rule fires if
+   it matches either result. It errs towards false positives: a line inside a multi-line string
+   is also read as code by the per-line lex.
+2. **The token helper** (`tools/diff-gate-tokens`), which reads the file the way rustc does.
+   See [The token helper](#the-token-helper).
 
-- A line inside a multi-line string or block comment is also read as code by the per-line
-  lex, so a word like `unsafe` or `TcpStream` there is reported.
-- Tokens are matched by name. An alias made in code already on the base (`use std::process::Command as K;`
-  landed earlier, then `K::new` added) is not seen, and neither is a token produced by a
-  macro from pieces. The import itself was a finding when it landed.
+Comment, string and char-literal contents are never code, so `"unsafe"` in a string or
+`// unsafe` in a comment is not a finding. Doc comments are different: their Rust code blocks
+are doctests, which `cargo test` compiles and runs, so the helper scans them.
+
+### The token helper
+
+`tools/diff-gate-tokens` is a small Rust binary (proc-macro2 and syn, no other dependencies). The
+regex lexer kept missing valid Rust forms (`std :: process`, glob imports plus aliases,
+multi-line brace imports, `use ::reqwest as r`, `#[path]` split over a multi-line `cfg_attr`,
+doctests, `global_asm!`), so on 2026-11-15 the owner chose a real tokenizer over a third round of
+regexes. For each changed `.rs` file (added, modified or retyped; deleted files are skipped) it:
+
+- lexes the file with proc-macro2, so whitespace and comments between tokens do not matter,
+  `r#process` is `process`, and doc comments arrive as `#[doc]` attributes;
+- collects every `use` and `extern crate` binding in the file (any module or block, inside macro
+  bodies too) and resolves each path through them, glob imports included. This over-approximates
+  on purpose: a name that could mean `std::process::Command` anywhere in the file is treated as
+  meaning it everywhere. A glob is only applied to type-like (upper-case) names and to the
+  function names the table lists (`libc::fork`), or every identifier in a file with
+  `use std::process::*;` would be a finding;
+- checks the same rules as the lexer, plus the forms above, on the resolved paths, at any depth:
+  macro bodies, attributes (`#[cfg_attr(..., path = ...)]` over several lines) and doctests
+  (fenced blocks whose info string is Rust, indented blocks, hidden `# ` lines);
+- decides what the diff touched. A construct is a finding when any of its lines is added: all of
+  a `use` item, an attribute or a multi-line path, not only the line its leaf is on. Two more
+  cases need the base file. An added line inside an existing `unsafe { }` or `extern { }` block
+  is reported on that line. And an unchanged line whose meaning changed is reported: each
+  occurrence is keyed by (rule, what it resolves to, line text), and a key that occurs more
+  often in the head than in the base, beyond what added lines explain, reports its
+  occurrences. That catches `use mock as p;` becoming `use std::process as p;` with the
+  `p::Command` lines left alone;
+- fails closed: a file that does not tokenize, or that syn cannot parse, is a `rust-parse`
+  finding.
+
+Over the whole tree (2,736 `.rs` files on 2026-11-15) it reports no parse failures.
+
+**Trust and bootstrapping.** The helper is part of the gate, so a change must never pick its own
+checker. The script builds it from `tools/diff-gate-tokens` at the base ref's tip (the trusted
+commit in CI), never from the checkout:
+
+1. `git rev-parse <base tip>:tools/diff-gate-tokens` gives the helper's tree hash.
+2. The binary is cached at `<cache>/tokens-<tree hash>/diff-gate-tokens`, where `<cache>` is
+   `$DIFF_GATE_CACHE`, else `$RUNNER_TEMP/weftos-diff-gate` (CI), else
+   `${XDG_CACHE_HOME:-~/.cache}/weftos-diff-gate`. A cache inside the checkout is refused: a
+   change could commit a binary at the predictable path.
+3. On a miss, `git archive <tree>` is extracted into a fresh directory under the cache and built
+   with `cargo build --release --locked` (its own `[workspace]` and `Cargo.lock`, exact version
+   pins, so the root Cargo.toml and Cargo.lock cannot change it; the extract is outside the
+   checkout, so the checkout's `.cargo/config.toml` and `rust-toolchain.toml` do not apply).
+   The binary is moved into place atomically. A cold build takes about 15 seconds plus the crate
+   download; CI needs no workflow change, since GitHub's Ubuntu runners have cargo.
+4. The binary must answer `--protocol` with `diff-gate-tokens protocol 1`; its output must parse
+   (known paths, numeric lines, well-formed spans). Anything else is `rust-tokens`.
+
+Until the helper is on the base, every `.rs` change gets the owner-only `rust-tokens` finding:
+the landing that adds it, and any branch judged against a base without it. That is the
+bootstrap: the first landing is owner-approved anyway (it changes `scripts/diff-gate.sh`).
+A change to `tools/diff-gate-tokens/` is a `ci-workflow` finding, like a change to the script.
+Never cache `<cache>` with `actions/cache`: a cache saved by one run is a binary the next run
+trusts.
+
+`DIFF_GATE_TOKENS_BIN` points the script at a prebuilt helper, and `DIFF_GATE_TOKENS_REF` picks
+another ref to build it from. Both are for local testing; CI sets neither, and the script says
+so on stderr when the first is used.
 
 A finding exits 1 with a per-finding report. `--json` prints the findings as JSON. In CI the
 findings table is also written to `$GITHUB_STEP_SUMMARY`.
@@ -216,10 +280,23 @@ ledger entries as well as the rows; a row whose hash stays on the ledger can be 
   committed blobs, which filters do not touch.
 - The trust root is the base ref. A locally rewritten `origin/<target>` ref moves it on that
   machine only.
-- The content rules are a regex lexer and a token list (see
-  [How .rs lines are read](#how-rs-lines-are-read)). New ways to reach the network or spawn a
-  process through a crate the list does not name are only caught as the `new-dep` that brings
-  the crate in.
+- The content rules are a token list (see [How .rs files are read](#how-rs-files-are-read)).
+  New ways to reach the network or spawn a process through a crate the list does not name are
+  only caught as the `new-dep` that brings the crate in.
+- Resolution is per file. A re-export in another file (`pub use std::process::Command as Cmd;`
+  in `util.rs`, then `use crate::util::Cmd; Cmd::args` elsewhere) is only caught by name
+  (`Command::new`, `CommandExt`, the socket types), not by resolution. The re-export itself was a
+  finding when it landed.
+- A glob import is applied only to upper-case names and listed functions: with
+  `use reqwest::*;` already on the base, an added `get(url)` is not a finding.
+- Code a macro produces from pieces (a proc-macro that turns a string into a path) is not seen;
+  `paste!` and `concat_idents!` are findings, and a new proc-macro crate is a `new-dep` or
+  `proc-macro` finding.
+- A Markdown file pulled in with `#![doc = include_str!(...)]` becomes doctests, but later edits
+  to that `.md` file are not scanned. Adding the include is an `include` finding; none exist
+  today.
+- Over-approximation means false positives: a type mention such as `fn f(c: &mut Command)` in a
+  file that imports `std::process::Command` is a `process` finding.
 - Only `.rs` files, Cargo.toml, the paths above and the CI files are inspected. A change to a
   script the build or CI runs (for example `scripts/build.sh`) is not a finding.
 - `scripts/diff-gate.sh` is one file on purpose, although it is past the 500-line guideline:
@@ -249,6 +326,23 @@ and control-character paths (commit and `--worktree`); `include!`, `#[path]` and
 paths; symlinks; renames to `.rs` and `build.rs`; upper-case `.RS`; `.cargo/config*` and
 `rust-toolchain*`; `[patch]`, `[replace]`, quoted keys, `registry`, `package`, inline and
 dotted `build` / `proc-macro` keys.
+
+Token helper cases: a missing helper, the wrong protocol, a failing helper, malformed output
+and a finding for a path outside the diff all give the owner-only `rust-tokens` finding; an
+approval row does not clear it, the owner flag does; a docs-only diff needs no helper; a base
+without `tools/diff-gate-tokens` and a cache inside the checkout are refused; a change under
+`tools/diff-gate-tokens/` is `ci-workflow`; lexer and helper findings on one line merge into one.
+
+The suite needs only bash and git: every fixture runs with a stub helper
+(`scripts/tests/diff-gate-tokens-stub.sh`) that finds nothing unless told to. Set
+`DIFF_GATE_TEST_TOKENS_BIN` to a built helper to run every fixture against the real one, plus
+the `tokens(real)` cases: the G1 escapes listed above, a line added inside an `unsafe` block, an
+import edit that changes an unchanged line, a file that does not parse, and strings and
+comments that still pass.
+
+`tools/diff-gate-tokens/tests/escapes.rs` (`cargo test --locked` in that directory) ports every
+Rust-rule fixture and every escape from the review rounds, and checks that strings, comments,
+`text` code blocks, `std::process::exit` and an aliased `clap::Command` are not findings.
 
 `DIFF_GATE_TEST_TMP` puts the fixture repos on another disk (the default is `target/`).
 
