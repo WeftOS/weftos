@@ -12,11 +12,18 @@
 # Rules: unsafe, new-dep, build-script, proc-macro, net, process, ffi, ci-workflow,
 #        approvals-change.
 #
+# approvals-change: rows added to config/diff-gate-approvals.toml pass when their
+# canonical sha256 is in the owner ledger (config/diff-gate-owner-ledger.toml) AS IT IS
+# ON THE BASE. Removed or edited rows, and any change to the ledger, need the owner flag.
+#
 # Usage: scripts/diff-gate.sh [--json] [--worktree] [--base REF] [--head REF]
-#   --json       machine-readable findings on stdout
-#   --worktree   compare the working tree (tracked changes + untracked files) with the
-#                base instead of HEAD; this is what `scripts/build.sh gate` uses
-#   --base REF   same as DIFF_GATE_BASE
+#        scripts/diff-gate.sh --ledger-hash [FILE]
+#   --json        machine-readable findings on stdout
+#   --worktree    compare the working tree (tracked changes + untracked files) with the
+#                 base instead of HEAD; this is what `scripts/build.sh gate` uses
+#   --base REF    same as DIFF_GATE_BASE
+#   --ledger-hash print "sha256 <TAB> rule <TAB> path <TAB> pattern" for each row of FILE
+#                 (default: the approvals file), for the owner to build ledger entries
 # Environment:
 #   DIFF_GATE_BASE            base commit-ish; the merge-base with HEAD is used. Default:
 #                             newest origin/<AGF_TARGET_PATTERN> (config/agent-git.env),
@@ -32,7 +39,9 @@ ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "diff-gate: not in
 cd "$ROOT" || exit 2
 
 APPROVALS="config/diff-gate-approvals.toml"
+LEDGER="config/diff-gate-owner-ledger.toml"
 JSON=0
+LEDGER_HASH=""
 WORKTREE=0
 BASE_REF="${DIFF_GATE_BASE:-}"
 HEAD_REF="${DIFF_GATE_HEAD:-HEAD}"
@@ -43,7 +52,8 @@ while [ $# -gt 0 ]; do
         --worktree) WORKTREE=1 ;;
         --base) BASE_REF="${2:-}"; shift ;;
         --head) HEAD_REF="${2:-}"; shift ;;
-        -h|--help) sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --ledger-hash) LEDGER_HASH="$APPROVALS"; case "${2:-}" in ""|-*) ;; *) LEDGER_HASH="$2"; shift ;; esac ;;
+        -h|--help) sed -n '2,37p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "diff-gate: unknown argument: $1" >&2; exit 2 ;;
     esac
     shift
@@ -51,6 +61,83 @@ done
 
 TMP="$(mktemp -d)" || exit 2
 trap 'rm -rf "$TMP"' EXIT
+
+# ── Approvals and ledger parsing ─────────────────────────────────────
+# parse_approvals: TOML on stdin -> rule <TAB> glob <TAB> pattern <TAB> reason <TAB> approved_by <TAB> line
+parse_approvals() {
+    awk -v sq="'" '
+    function val(s,   v) {
+        v = s; sub(/^[^=]*=[ \t]*/, "", v)
+        if (v ~ /^"/) { sub(/^"/, "", v); sub(/"[ \t]*(#.*)?$/, "", v); gsub(/\\"/, "\"", v); gsub(/\\\\/, "\\", v) }
+        else if (substr(v, 1, 1) == sq) { v = substr(v, 2); sub(sq "[ \t]*(#.*)?$", "", v) }
+        gsub(/\t/, " ", v)
+        return v
+    }
+    function flush() {
+        if (!open) return
+        if (r == "" || p == "" || pt == "" || re == "" || ab == "") {
+            print "diff-gate: malformed approval entry near line " start " (needs rule, path, pattern, reason, approved_by)" > "/dev/stderr"; bad = 1
+        } else print r "\t" p "\t" pt "\t" re "\t" ab "\t" start
+        open = 0
+    }
+    /^[ \t]*#/ || /^[ \t]*$/ { next }
+    /^[ \t]*\[\[approval\]\]/ { flush(); open = 1; start = NR; r = p = pt = re = ab = ""; next }
+    /^[ \t]*rule[ \t]*=/ { r = val($0); next }
+    /^[ \t]*path[ \t]*=/ { p = val($0); next }
+    /^[ \t]*pattern[ \t]*=/ { pt = val($0); next }
+    /^[ \t]*reason[ \t]*=/ { re = val($0); next }
+    /^[ \t]*approved_by[ \t]*=/ { ab = val($0); next }
+    END { flush(); exit bad }
+    '
+}
+
+# parse_ledger: TOML on stdin -> sha256 <TAB> decision <TAB> date. Each [[entry]] needs
+# decision, date (YYYY-MM-DD) and sha256 (64 lowercase hex); anything else is a setup error.
+parse_ledger() {
+    awk '
+    function val(s,   v) { v = s; sub(/^[^=]*=[ \t]*/, "", v); sub(/^["\047]/, "", v); sub(/["\047][ \t]*(#.*)?$/, "", v); gsub(/\t/, " ", v); return v }
+    function flush() {
+        if (!open) return
+        if (d == "" || dt !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/ || h !~ /^[0-9a-f]+$/ || length(h) != 64) {
+            print "diff-gate: malformed owner ledger entry near line " start " (needs decision, date YYYY-MM-DD, sha256)" > "/dev/stderr"; bad = 1
+        } else print h "\t" d "\t" dt
+        open = 0
+    }
+    /^[ \t]*#/ || /^[ \t]*$/ { next }
+    /^[ \t]*\[\[entry\]\]/ { flush(); open = 1; start = NR; d = dt = h = ""; next }
+    /^[ \t]*decision[ \t]*=/ { d = val($0); next }
+    /^[ \t]*date[ \t]*=/ { dt = val($0); next }
+    /^[ \t]*sha256[ \t]*=/ { h = val($0); next }
+    /^[ \t]*[A-Za-z_]+[ \t]*=/ { next }
+    { print "diff-gate: unexpected line " NR " in owner ledger" > "/dev/stderr"; bad = 1 }
+    END { flush(); exit bad }
+    '
+}
+
+sha256_stdin() {
+    if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -d' ' -f1
+    elif command -v shasum >/dev/null 2>&1; then shasum -a 256 | cut -d' ' -f1
+    elif command -v openssl >/dev/null 2>&1; then openssl dgst -sha256 -r | cut -d' ' -f1
+    else echo "diff-gate: no sha256 tool (sha256sum, shasum or openssl)" >&2; return 1; fi
+}
+
+# hash_rows: parse_approvals output on stdin -> sha256 <TAB> line <TAB> rule <TAB> glob <TAB> pattern
+# The canonical row text is "rule=R\npath=P\npattern=X\nreason=Y\napproved_by=Z\n" over the
+# parsed values, so quoting style and key order do not change the hash; any value change does.
+hash_rows() {
+    local r g pt re ab ln h
+    while IFS="$(printf '\t')" read -r r g pt re ab ln; do
+        h="$(printf 'rule=%s\npath=%s\npattern=%s\nreason=%s\napproved_by=%s\n' "$r" "$g" "$pt" "$re" "$ab" | sha256_stdin)" || return 1
+        printf '%s\t%s\t%s\t%s\t%s\n' "$h" "$ln" "$r" "$g" "$pt"
+    done
+}
+
+if [ -n "$LEDGER_HASH" ]; then
+    [ -f "$LEDGER_HASH" ] || { echo "diff-gate: $LEDGER_HASH not found" >&2; exit 2; }
+    parse_approvals <"$LEDGER_HASH" >"$TMP/lh" || exit 2
+    hash_rows <"$TMP/lh" | cut -f1,3- || exit 2
+    exit 0
+fi
 
 # ── Base resolution ──────────────────────────────────────────────────
 default_base_ref() {
@@ -101,9 +188,10 @@ function emit(rule, path, ln, text) {
 }
 /^diff --git / {
     n = split($0, parts, " b/"); cur = parts[n]
+    old = parts[1]; sub(/^diff --git a\//, "", old)
     inhunk = 0; skipc = 0
     if (cur ~ /^\.github\/workflows\// || cur == "scripts/diff-gate.sh") emit("ci-workflow", cur, 0, "file changed")
-    if (cur == "config/diff-gate-approvals.toml") emit("approvals-change", cur, 0, "file changed")
+    else if (old ~ /^\.github\/workflows\// || old == "scripts/diff-gate.sh") emit("ci-workflow", old, 0, "file moved away")
     if (cur ~ /(^|\/)Cargo\.toml$/ && !(cur in seen)) { seen[cur] = 1; print cur > cargo_list }
     next
 }
@@ -219,36 +307,40 @@ fi
 # Emits: rule <TAB> glob <TAB> pattern <TAB> literal(0|1) <TAB> reason <TAB> approved_by
 : >"$TMP/approvals"
 if [ -f "$APPROVALS" ]; then
-    awk -v sq="'" '
-    function val(s,   v) {
-        v = s; sub(/^[^=]*=[ \t]*/, "", v)
-        if (v ~ /^"/) { sub(/^"/, "", v); sub(/"[ \t]*(#.*)?$/, "", v); gsub(/\\"/, "\"", v); gsub(/\\\\/, "\\", v) }
-        else if (substr(v, 1, 1) == sq) { v = substr(v, 2); sub(sq "[ \t]*(#.*)?$", "", v) }
-        return v
-    }
-    function flush() {
-        if (!open) return
-        if (r == "" || p == "" || pt == "" || re == "" || ab == "") {
-            print "diff-gate: malformed approval entry near line " start " (needs rule, path, pattern, reason, approved_by)" > "/dev/stderr"; bad = 1
-        } else print r "\t" p "\t" pt "\t" re "\t" ab
-        open = 0
-    }
-    /^[ \t]*#/ || /^[ \t]*$/ { next }
-    /^[ \t]*\[\[approval\]\]/ { flush(); open = 1; start = NR; r = p = pt = re = ab = ""; next }
-    /^[ \t]*rule[ \t]*=/ { r = val($0); next }
-    /^[ \t]*path[ \t]*=/ { p = val($0); next }
-    /^[ \t]*pattern[ \t]*=/ { pt = val($0); next }
-    /^[ \t]*reason[ \t]*=/ { re = val($0); next }
-    /^[ \t]*approved_by[ \t]*=/ { ab = val($0); next }
-    END { flush(); exit bad }
-    ' "$APPROVALS" >"$TMP/approvals.raw" || { echo "diff-gate: cannot use $APPROVALS" >&2; exit 2; }
-    while IFS="$(printf '\t')" read -r r g pt re ab; do
+    parse_approvals <"$APPROVALS" >"$TMP/approvals.raw" || { echo "diff-gate: cannot use $APPROVALS" >&2; exit 2; }
+    while IFS="$(printf '\t')" read -r r g pt re ab _; do
         lit=0
         if [ "$pt" != "*" ]; then
             printf '' | grep -Eq -e "$pt" 2>/dev/null; [ $? -eq 2 ] && lit=1
         fi
         printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$r" "$g" "$pt" "$lit" "$re" "$ab"
     done <"$TMP/approvals.raw" >"$TMP/approvals"
+fi
+
+# ── approvals-change: approvals rows and the owner ledger ────────────
+# Findings here carry a 5th field: the base-ledger decision id that clears an added row.
+head_src="$HEAD_SHA"; [ "$WORKTREE" = 1 ] && head_src=WORKTREE
+show_at "$BASE" "$LEDGER" >"$TMP/ledger.base.toml"
+show_at "$head_src" "$LEDGER" >"$TMP/ledger.head.toml"
+parse_ledger <"$TMP/ledger.base.toml" >"$TMP/ledger" || { echo "diff-gate: cannot use $LEDGER on the base" >&2; exit 2; }
+parse_ledger <"$TMP/ledger.head.toml" >/dev/null || { echo "diff-gate: cannot use $LEDGER" >&2; exit 2; }
+if ! cmp -s "$TMP/ledger.base.toml" "$TMP/ledger.head.toml"; then
+    printf 'approvals-change\t%s\t0\towner ledger changed\n' "$LEDGER" >>"$TMP/findings"
+fi
+show_at "$BASE" "$APPROVALS" >"$TMP/appr.base.toml"
+show_at "$head_src" "$APPROVALS" >"$TMP/appr.head.toml"
+if ! cmp -s "$TMP/appr.base.toml" "$TMP/appr.head.toml"; then
+    { parse_approvals <"$TMP/appr.base.toml" || echo "diff-gate: base $APPROVALS is malformed; its malformed entries are ignored" >&2; } >"$TMP/appr.base.raw"
+    parse_approvals <"$TMP/appr.head.toml" >"$TMP/appr.head.raw" || { echo "diff-gate: cannot use $APPROVALS" >&2; exit 2; }
+    hash_rows <"$TMP/appr.base.raw" >"$TMP/appr.base.h" || exit 2
+    hash_rows <"$TMP/appr.head.raw" >"$TMP/appr.head.h" || exit 2
+    awk -F'\t' -v path="$APPROVALS" '
+    function desc(r, g, p,   t) { t = "rule=" r " path=" g " pattern=" p; if (length(t) > 140) t = substr(t, 1, 137) "..."; return t }
+    FILENAME ~ /ledger$/ { led[$1] = $2; next }
+    FILENAME ~ /base\.h$/ { bc[$1]++; bd[$1] = desc($3, $4, $5); next }
+    { hc[$1]++; if (hc[$1] > bc[$1]) printf "approvals-change\t%s\t%s\trow added: %s\t%s\n", path, $2, desc($3, $4, $5), (($1 in led) ? led[$1] : "") }
+    END { for (h in bc) for (i = hc[h] + 0; i < bc[h]; i++) printf "approvals-change\t%s\t0\trow removed or edited: %s\t\n", path, bd[h] }
+    ' "$TMP/ledger" "$TMP/appr.base.h" "$TMP/appr.head.h" >>"$TMP/findings"
 fi
 
 # ── Classify: approved vs failed ─────────────────────────────────────
@@ -274,6 +366,7 @@ FILENAME == apf { na++; ar[na] = $1; ag[na] = g2r($2); ap[na] = $3; al[na] = $4;
     status = "FAIL"; detail = ""
     if ($1 == "approvals-change") {
         if (owner == "1") { status = "approved"; detail = "DIFF_GATE_OWNER_APPROVED=1" }
+        else if ($5 != "") { status = "approved"; detail = "owner ledger (base): " $5 }
         else detail = "owner only: set DIFF_GATE_OWNER_APPROVED=1 (CI: diff-gate-approved label)"
     } else {
         for (i = 1; i <= na; i++) {
