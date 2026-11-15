@@ -20,12 +20,15 @@ use std::path::{Path, PathBuf};
 mod handoff;
 #[path = "share_publish.rs"]
 mod publish;
+#[path = "share_intent.rs"]
+mod intent;
 
 pub use handoff::{
     claim_merge, claim_merge_with, fence_claim, mark_handoff, mark_landed, mark_landed_at, mark_merged, mark_merged_at, read_handoff,
 };
-use handoff::{guard_live_claim, write_handoff_if};
-pub(crate) use publish::{is_doc_path, looks_like_private_key, parse_manifest, read_regular};
+use handoff::{HANDOFF_RETRIES, contended, guard_live_claim, read_handoff_versioned, write_handoff_if};
+use intent::{announce, refuse_pending};
+pub(crate) use publish::{is_doc_path, looks_like_private_key, parse_manifest, read_manifest_bytes, read_regular};
 pub use publish::{MAX_MANIFEST_BYTES, Published, publish_tree, publish_tree_listed, read_manifest, summarize_with};
 #[cfg(test)]
 use publish::read_open_regular;
@@ -46,7 +49,14 @@ pub const CLAIM_SKEW_MS: u64 = 10 * 60 * 1000;
 
 /// Is this claim still live at `now_ms`: younger than the TTL, and not stamped from the future.
 fn claim_is_live(h: &Handoff, now_ms: u64) -> bool {
-    h.updated_ms <= now_ms.saturating_add(CLAIM_SKEW_MS) && now_ms.saturating_sub(h.updated_ms) < CLAIM_TTL_MS
+    stamp_is_live(h.updated_ms, now_ms)
+}
+
+/// The claim rule for any stamp another daemon wrote: younger than [`CLAIM_TTL_MS`] and not more
+/// than [`CLAIM_SKEW_MS`] ahead of this clock. A publish announcement is judged by it too, so a bad
+/// clock holds nothing for longer than the TTL plus the skew.
+fn stamp_is_live(stamp_ms: u64, now_ms: u64) -> bool {
+    stamp_ms <= now_ms.saturating_add(CLAIM_SKEW_MS) && now_ms.saturating_sub(stamp_ms) < CLAIM_TTL_MS
 }
 
 /// Who wrote or claimed something. Advisory identity, not authority (grants are in RustFS IAM).
@@ -177,6 +187,31 @@ pub struct Handoff {
     /// before the field existed (fenced on head only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claimed_tree: Option<String>,
+    /// The last publish announced, written with a conditional write just before its manifest PUT
+    /// (WO-069 lane Y, A4). A fenced merge or land refuses while it is pending (the manifest is not
+    /// yet the announced bytes) and live, so a manifest cannot change between a merger's fence and
+    /// its write. `None` on a record from before the field and outside any publish.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publishing: Option<PublishIntent>,
+}
+
+/// One publish's announcement: the manifest bytes it is about to PUT, by digest.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PublishIntent {
+    /// sha256 of the exact manifest bytes the publish writes: equal to the stored manifest's once
+    /// its PUT happened, which is how every reader tells a finished announcement from a pending one.
+    pub manifest_sha256: String,
+    pub head: String,
+    /// [`tree_digest`] of that manifest.
+    pub tree: String,
+    /// The publisher's clock when it announced (judged by [`CLAIM_TTL_MS`] / [`CLAIM_SKEW_MS`]).
+    pub ms: u64,
+    pub writer: Actor,
+    /// The stamp of an earlier announcement still pending when this one replaced it: its PUT may yet
+    /// land, so a fenced merge waits until that stamp is no longer live either. A publish is never
+    /// blocked by it, only merges, and only for the TTL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held_ms: Option<u64>,
 }
 
 /// What a claim is a claim on, as one digest of the manifest's content: base and head commits, every

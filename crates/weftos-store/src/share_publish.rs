@@ -83,12 +83,18 @@ fn md_title(path: &str, data: &[u8]) -> Option<String> {
 pub const MAX_MANIFEST_BYTES: u64 = 32 << 20;
 
 pub fn read_manifest<B: ObjectBackend>(b: &B, bucket: &str) -> Result<Option<TreeManifest>> {
+    Ok(read_manifest_bytes(b, bucket)?.map(|(m, _)| m))
+}
+
+/// [`read_manifest`] with the bytes it parsed (a publish announcement names them by digest). Same
+/// calls: HEAD (size check), GET.
+pub(crate) fn read_manifest_bytes<B: ObjectBackend>(b: &B, bucket: &str) -> Result<Option<(TreeManifest, Vec<u8>)>> {
     let Some(h) = b.head(bucket, MANIFEST_KEY)? else { return Ok(None) };
     if h.size > MAX_MANIFEST_BYTES {
         return Err(S2Error::Invalid(format!("manifest is {} bytes, over the {MAX_MANIFEST_BYTES} limit", h.size)));
     }
     match b.get(bucket, MANIFEST_KEY)? {
-        Some(d) => Ok(Some(parse_manifest(&d)?)),
+        Some(d) => Ok(Some((parse_manifest(&d)?, d))),
         None => Ok(None),
     }
 }
@@ -177,16 +183,17 @@ pub fn publish_tree_listed<B: ObjectBackend>(
     now_ms: u64,
     listing: Option<Vec<ObjectMeta>>,
 ) -> Result<Published> {
-    let existing_handoff = read_handoff(b, bucket)?;
-    let handoff_exists = existing_handoff.is_some();
-    if let Some(h) = existing_handoff {
+    // Read with its etag: the announcement before the manifest PUT is a conditional write on this
+    // version, so a record unchanged since needs no second read (WO-069 lane Y, A4).
+    let existing_handoff = read_handoff_versioned(b, bucket)?;
+    if let Some((h, _)) = &existing_handoff {
         if matches!(h.state, State::Merged | State::Archived) {
             return Err(S2Error::Invalid(format!(
                 "worktree is already {:?}; refusing to republish",
                 h.state
             )));
         }
-        guard_live_claim(&h, &src.writer, now_ms)?;
+        guard_live_claim(h, &src.writer, now_ms)?;
     }
     if let Some(bp) = src.bundle {
         let len = std::fs::metadata(bp)?.len();
@@ -197,7 +204,10 @@ pub fn publish_tree_listed<B: ObjectBackend>(
             )));
         }
     }
-    let prev = read_manifest(b, bucket)?;
+    let (prev, prev_manifest_sha) = match read_manifest_bytes(b, bucket)? {
+        Some((m, d)) => (Some(m), Some(sha256_hex(&d))),
+        None => (None, None),
+    };
     let prev_sha: std::collections::HashMap<&str, &str> = prev
         .as_ref()
         .map(|m| {
@@ -349,7 +359,30 @@ pub fn publish_tree_listed<B: ObjectBackend>(
         writer: src.writer.clone(),
         published_ms: now_ms,
     };
-    b.put(bucket, MANIFEST_KEY, &serde_json::to_vec_pretty(&manifest)?)?;
+    let bytes = serde_json::to_vec_pretty(&manifest)?;
+    // Announce the manifest in the handoff record, conditionally, right before writing it: a fenced
+    // merge that read the record before this write fails its own conditional write, one that reads
+    // it after refuses until the manifest below is the one announced (lane Y, A4). This also creates
+    // the record on a first publish, before the manifest, and refuses (nothing written) when the
+    // worktree was merged or claimed live by someone else while the files uploaded.
+    let mine = sha256_hex(&bytes);
+    let announced = announce(
+        b,
+        bucket,
+        &src.writer,
+        now_ms,
+        existing_handoff,
+        prev_manifest_sha,
+        PublishIntent {
+            manifest_sha256: mine.clone(),
+            head: manifest.head_commit.clone(),
+            tree: tree_digest(&manifest),
+            ms: now_ms,
+            writer: src.writer.clone(),
+            held_ms: None,
+        },
+    )?;
+    b.put(bucket, MANIFEST_KEY, &bytes)?;
     // Stale objects go after the manifest no longer lists them, so a reader never sees a listed file
     // missing. Found by listing, not from the previous manifest: a publish killed after its manifest
     // write but before this sweep leaves objects that no manifest names, and only a listing finds them.
@@ -362,24 +395,7 @@ pub fn publish_tree_listed<B: ObjectBackend>(
         }
     }
 
-    // Create the record only if none exists. Conditional, so a handoff or claim written between a
-    // check and this write is never overwritten with a fresh `Open`; losing the race is fine.
-    // Not attempted when the record was just read: that create-only put could only lose.
-    let mut handoff_created = None;
-    if !handoff_exists {
-        let fresh = Handoff {
-            state: State::Open,
-            note: String::new(),
-            writer: src.writer.clone(),
-            merger: None,
-            updated_ms: now_ms,
-            epoch: 0,
-            claimed_head: None,
-            claimed_tree: None,
-        };
-        if write_handoff_if(b, bucket, &fresh, None)? {
-            handoff_created = Some(fresh);
-        }
-    }
+    // The record was created, if none existed, by the announcement above.
+    let handoff_created = announced.created;
     Ok(Published { report: rep, manifest, handoff_created })
 }

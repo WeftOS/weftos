@@ -131,12 +131,16 @@ fn publishing_never_overwrites_a_record_created_between_its_check_and_its_write(
         root: d.path(), paths: &ps, uncommitted: &[], changes: &[], branch: "b", base_commit: "b",
         head_commit: "h", bundle: None, writer: who("writer"),
     };
-    let planted = Handoff { state: State::Handoff, note: "n".into(), writer: who("w2"), merger: None, updated_ms: 5, epoch: 3, claimed_head: None, claimed_tree: None };
+    let planted = Handoff { state: State::Handoff, note: "n".into(), writer: who("w2"), merger: None, updated_ms: 5, epoch: 3, claimed_head: None, claimed_tree: None, publishing: None };
     let racy = Hooked::once(&b, || {
         b.put(WT, ".wt/handoff.json", &serde_json::to_vec(&planted).unwrap()).unwrap();
     });
     publish_tree(&racy, WT, &src, &Limits::default(), 1_000).unwrap();
-    assert_eq!(read_handoff(&b, WT).unwrap().unwrap(), planted, "the Open record did not replace it");
+    // The Open record did not replace it. Lane Y A4: the publish announces itself on the record it
+    // found (a conditional write of the `publishing` field only); everything else is the planted record.
+    let got = read_handoff(&b, WT).unwrap().unwrap();
+    assert_eq!(got.publishing.as_ref().map(|i| i.head.as_str()), Some("h"));
+    assert_eq!(Handoff { publishing: None, ..got }, planted, "the Open record did not replace it");
 }
 
 #[test]

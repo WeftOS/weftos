@@ -1,0 +1,286 @@
+//! WO-069 lane Y, A4: a publish announces the manifest it is about to write in the handoff record
+//! (conditional write) before the manifest PUT, and a fenced merge or land refuses while one is
+//! pending. Design note
+//! `reports/wo069-fence-atomicity-design-20261115.md` §2. Deterministic, single-threaded: the hook
+//! backend runs an action just before a chosen call, or fails one.
+use std::cell::{Cell, RefCell};
+use weftos_store::overlay::{ObjectBackend, ObjectMeta, Result as R, S2Error};
+use weftos_store::share::*;
+use weftos_store::testing::MemBackend;
+
+const WT: &str = "w-01abc-cccccccccccc";
+const NOW: u64 = 1_000_000_000;
+/// A claim stamped this far ahead is not live, so the writer may republish under it (ADR-126 §4).
+const AHEAD: u64 = CLAIM_SKEW_MS + 10;
+
+type Act<'a> = RefCell<Option<Box<dyn FnOnce() + 'a>>>;
+
+#[derive(Default)]
+struct Hook<'a> {
+    before_manifest_put: Act<'a>,
+    before_tree_put: Act<'a>,
+    before_handoff_cas: Act<'a>,
+    fail_manifest_put: Cell<bool>,
+    fail_delete: Cell<bool>,
+    /// Fail the handoff `put_cas` with this 0-based index (counting every one this hook sees).
+    fail_handoff_cas_at: Option<usize>,
+    handoff_cas: Cell<usize>,
+}
+struct Hooked<'a> {
+    inner: &'a MemBackend,
+    h: Hook<'a>,
+}
+fn fire(a: &Act<'_>) {
+    let f = a.borrow_mut().take();
+    if let Some(f) = f {
+        f();
+    }
+}
+impl ObjectBackend for Hooked<'_> {
+    fn head(&self, b: &str, k: &str) -> R<Option<ObjectMeta>> {
+        self.inner.head(b, k)
+    }
+    fn get(&self, b: &str, k: &str) -> R<Option<Vec<u8>>> {
+        self.inner.get(b, k)
+    }
+    fn put(&self, b: &str, k: &str, d: &[u8]) -> R<ObjectMeta> {
+        if k == MANIFEST_KEY {
+            fire(&self.h.before_manifest_put);
+            if self.h.fail_manifest_put.get() {
+                return Err(S2Error::Backend("injected: manifest PUT failed".into()));
+            }
+        }
+        if k.starts_with(TREE_PREFIX) {
+            fire(&self.h.before_tree_put);
+        }
+        self.inner.put(b, k, d)
+    }
+    fn put_cas(&self, b: &str, k: &str, d: &[u8], e: Option<&str>) -> R<bool> {
+        if k == HANDOFF_KEY {
+            fire(&self.h.before_handoff_cas);
+            let n = self.h.handoff_cas.get();
+            self.h.handoff_cas.set(n + 1);
+            if self.h.fail_handoff_cas_at == Some(n) {
+                return Err(S2Error::Backend("injected: handoff write failed".into()));
+            }
+        }
+        self.inner.put_cas(b, k, d, e)
+    }
+    fn delete(&self, b: &str, k: &str) -> R<()> {
+        if self.h.fail_delete.get() {
+            return Err(S2Error::Backend("injected: the publish died in its sweep".into()));
+        }
+        self.inner.delete(b, k)
+    }
+    fn list(&self, b: &str, p: &str) -> R<Vec<ObjectMeta>> {
+        self.inner.list(b, p)
+    }
+}
+fn hooked<'a>(inner: &'a MemBackend, h: Hook<'a>) -> Hooked<'a> {
+    Hooked { inner, h }
+}
+
+fn who(n: &str) -> Actor {
+    Actor { agent: n.into(), host: "h".into() }
+}
+
+fn publish_on<B: ObjectBackend>(b: &B, head: &str, files: &[(&str, &str)], now: u64) -> R<PublishReport> {
+    let d = tempfile::tempdir().unwrap();
+    for (p, c) in files {
+        std::fs::write(d.path().join(p), c).unwrap();
+    }
+    let ps: Vec<String> = files.iter().map(|(p, _)| p.to_string()).collect();
+    let src = TreeSource {
+        root: d.path(),
+        paths: &ps,
+        uncommitted: &[],
+        changes: &[],
+        branch: "feat/y",
+        base_commit: "base",
+        head_commit: head,
+        bundle: None,
+        writer: who("writer"),
+    };
+    publish_tree(b, WT, &src, &Limits::default(), now)
+}
+fn publish<B: ObjectBackend>(b: &B, head: &str, now: u64) -> R<PublishReport> {
+    publish_on(b, head, &[("a.md", head)], now)
+}
+
+/// Published at h1, handed off, and claimed by bob with a stamp that is not live.
+fn claimed() -> (MemBackend, Handoff) {
+    let b = MemBackend::new();
+    publish(&b, "h1", NOW).unwrap();
+    mark_handoff(&b, WT, &who("writer"), "ready", NOW).unwrap();
+    let c = claim_merge(&b, WT, &who("bob"), NOW + AHEAD).unwrap();
+    (b, c)
+}
+fn record(b: &MemBackend) -> Handoff {
+    read_handoff(b, WT).unwrap().unwrap()
+}
+fn head(b: &MemBackend) -> String {
+    read_manifest(b, WT).unwrap().unwrap().head_commit
+}
+fn in_flight(e: &S2Error) -> bool {
+    e.to_string().contains("in flight")
+}
+
+// ---- the window between a fence's manifest read and its write -----------------------------------------------------
+
+#[test]
+fn a_publish_inside_the_merge_window_makes_the_merge_refuse() {
+    let (b, c) = claimed();
+    let racy = hooked(&b, Hook { before_handoff_cas: RefCell::new(Some(Box::new(|| { publish(&b, "h2", NOW + 1).unwrap(); }))), ..Hook::default() });
+    let e = mark_merged_at(&racy, WT, &who("bob"), Some(c.epoch), "m", NOW + 2).unwrap_err();
+    assert!(e.to_string().contains("from h1 to h2"), "the CAS lost to the announcement, the re-read saw h2: {e}");
+    assert_eq!((record(&b).state, head(&b)), (State::Claimed, "h2".into()));
+}
+
+#[test]
+fn every_fenced_path_refuses_while_an_announced_manifest_is_not_yet_written() {
+    for path in ["mark_merged_at", "mark_merged", "mark_landed_at", "fence_claim"] {
+        let (b, c) = claimed();
+        let seen = RefCell::new(None);
+        let p = hooked(&b, Hook {
+            before_manifest_put: RefCell::new(Some(Box::new(|| {
+                let r = match path {
+                    "mark_merged_at" => mark_merged_at(&b, WT, &who("bob"), Some(c.epoch), "m", NOW + 2),
+                    "mark_merged" => mark_merged(&b, WT, &who("bob"), "m", NOW + 2),
+                    "mark_landed_at" => mark_landed_at(&b, WT, &who("bob"), Some(c.epoch), "l", NOW + 2).map(|_| ()),
+                    _ => fence_claim(&b, WT, c.epoch, NOW + 2),
+                };
+                *seen.borrow_mut() = Some(r);
+            }))),
+            ..Hook::default()
+        });
+        // the same tree republished: only the announcement can stop the merge (head and tree still match)
+        publish_on(&p, "h1", &[("a.md", "h1")], NOW + 1).unwrap();
+        drop(p);
+        let e = seen.into_inner().unwrap().unwrap_err();
+        assert!(in_flight(&e), "{path}: {e}");
+        assert_eq!(record(&b).state, State::Claimed, "{path}");
+        // once the manifest is the announced one, the same merge goes through
+        mark_merged_at(&b, WT, &who("bob"), Some(c.epoch), "m", NOW + 3).unwrap();
+    }
+}
+
+// ---- publish racing publish -----------------------------------------------------------------------------------------
+
+#[test]
+fn a_publish_that_replaces_a_pending_announcement_holds_merges_until_it_expires() {
+    let (b, _) = claimed();
+    // P announces h2; before P's manifest PUT, Q publishes h3 entirely and bob claims h3
+    let bob = RefCell::new(None);
+    let p = hooked(&b, Hook {
+        before_manifest_put: RefCell::new(Some(Box::new(|| {
+            publish(&b, "h3", NOW + 2).unwrap();
+            let held = record(&b).publishing.unwrap().held_ms;
+            assert_eq!(held, Some(NOW + 1), "Q carried P's pending stamp; Q itself was not blocked");
+            let c = claim_merge(&b, WT, &who("bob"), NOW + 3).unwrap();
+            // Q's manifest is the announced one, yet P's PUT may still land: the hold refuses the merge
+            assert!(in_flight(&mark_merged_at(&b, WT, &who("bob"), Some(c.epoch), "m", NOW + 4).unwrap_err()));
+            *bob.borrow_mut() = Some(c);
+        }))),
+        ..Hook::default()
+    });
+    publish(&p, "h2", NOW + 1).unwrap();
+    drop(p);
+    // P's late PUT landed (h2): bob's h3 claim is refused on head; once Q's announcement (now pending:
+    // the manifest is P's) and P's held stamp are past the TTL, a re-claim merges what is published
+    assert_eq!(head(&b), "h2");
+    let c = bob.into_inner().unwrap();
+    assert!(mark_merged_at(&b, WT, &who("bob"), Some(c.epoch), "m", NOW + 5).is_err());
+    let later = NOW + 2 + CLAIM_TTL_MS;
+    let again = claim_merge(&b, WT, &who("bob"), later).unwrap();
+    assert_eq!(again.claimed_head.as_deref(), Some("h2"));
+    mark_merged_at(&b, WT, &who("bob"), Some(again.epoch), "m", later).unwrap();
+    assert_eq!(head(&b), "h2", "the merge names the head that is published");
+}
+
+// ---- other cut points and interleavings -----------------------------------------------------------------------------
+
+#[test]
+fn a_crash_after_the_manifest_leaves_nothing_pending() {
+    let b = MemBackend::new();
+    publish_on(&b, "h1", &[("a.md", "a"), ("b.md", "b")], NOW).unwrap();
+    mark_handoff(&b, WT, &who("writer"), "ready", NOW).unwrap();
+    // h2 drops b.md, then dies in the sweep that deletes it
+    let p = hooked(&b, Hook { fail_delete: Cell::new(true), ..Hook::default() });
+    assert!(publish_on(&p, "h2", &[("a.md", "a")], NOW + 1).is_err());
+    assert_eq!(head(&b), "h2");
+    let c = claim_merge(&b, WT, &who("bob"), NOW + 2).unwrap();
+    mark_merged_at(&b, WT, &who("bob"), Some(c.epoch), "m", NOW + 3).unwrap();
+}
+
+#[test]
+fn a_live_claim_taken_during_the_upload_refuses_the_publish_before_its_manifest() {
+    let b = MemBackend::new();
+    publish(&b, "h1", NOW).unwrap();
+    mark_handoff(&b, WT, &who("writer"), "ready", NOW).unwrap();
+    let m1 = ObjectBackend::get(&b, WT, MANIFEST_KEY).unwrap();
+    let p = hooked(&b, Hook { before_tree_put: RefCell::new(Some(Box::new(|| { claim_merge(&b, WT, &who("bob"), NOW + 1).unwrap(); }))), ..Hook::default() });
+    let e = publish(&p, "h2", NOW + 1).unwrap_err();
+    assert!(matches!(e, S2Error::Claimed(_)), "{e}");
+    assert_eq!(ObjectBackend::get(&b, WT, MANIFEST_KEY).unwrap(), m1, "the manifest was not written");
+    let c = record(&b);
+    mark_merged_at(&b, WT, &who("bob"), Some(c.epoch), "m", NOW + 2).unwrap();
+}
+
+#[test]
+fn a_merge_during_the_upload_refuses_the_publish_before_its_manifest() {
+    let (b, c) = claimed();
+    let m1 = ObjectBackend::get(&b, WT, MANIFEST_KEY).unwrap();
+    let p = hooked(&b, Hook { before_tree_put: RefCell::new(Some(Box::new(|| { mark_merged_at(&b, WT, &who("bob"), Some(c.epoch), "m", NOW + 1).unwrap(); }))), ..Hook::default() });
+    let e = publish(&p, "h2", NOW + 1).unwrap_err();
+    assert!(e.to_string().contains("became Merged"), "{e}");
+    assert_eq!(ObjectBackend::get(&b, WT, MANIFEST_KEY).unwrap(), m1);
+}
+
+/// A pending announcement stamped at `ms` (the manifest is not its bytes).
+fn plant(b: &MemBackend, ms: u64) {
+    let mut h = record(b);
+    h.publishing = Some(PublishIntent { manifest_sha256: "0".repeat(64), head: "h9".into(), tree: "t1:x".into(), ms, writer: who("writer"), held_ms: None });
+    ObjectBackend::put(b, WT, HANDOFF_KEY, &serde_json::to_vec(&h).unwrap()).unwrap();
+}
+
+#[test]
+fn a_stale_or_far_future_announcement_does_not_hold_a_merge_and_a_live_one_does() {
+    let at = NOW + DAY_MS;
+    for (ms, live) in [
+        (at - CLAIM_TTL_MS, false),
+        (at - CLAIM_TTL_MS + 1, true),
+        (at + CLAIM_SKEW_MS, true),
+        (at + CLAIM_SKEW_MS + 1, false),
+    ] {
+        let (b, c) = claimed();
+        plant(&b, ms);
+        let r = mark_merged_at(&b, WT, &who("bob"), Some(c.epoch), "m", at);
+        assert_eq!(r.is_err(), live, "stamp {ms} vs now {at}: {r:?}");
+    }
+}
+
+const DAY_MS: u64 = 24 * 3600 * 1000;
+
+#[test]
+fn the_announcement_is_kept_by_a_handoff_note_and_is_additive_on_the_wire() {
+    let (b, _) = claimed();
+    plant(&b, NOW);
+    mark_handoff(&b, WT, &who("writer"), "again", NOW + AHEAD + CLAIM_TTL_MS).unwrap(); // bob's claim expired
+    assert_eq!(record(&b).publishing.unwrap().ms, NOW, "a handoff note does not drop a pending announcement");
+    // a record from before the field parses; an old reader parses a new record (unknown fields ignored)
+    let mut v: serde_json::Value = serde_json::from_slice(&ObjectBackend::get(&b, WT, HANDOFF_KEY).unwrap().unwrap()).unwrap();
+    #[derive(serde::Deserialize)]
+    #[allow(dead_code)]
+    struct OldHandoff {
+        state: State,
+        note: String,
+        writer: Actor,
+        merger: Option<Actor>,
+        updated_ms: u64,
+        #[serde(default)]
+        epoch: u64,
+    }
+    serde_json::from_value::<OldHandoff>(v.clone()).unwrap();
+    v.as_object_mut().unwrap().remove("publishing");
+    assert_eq!(serde_json::from_value::<Handoff>(v).unwrap().publishing, None);
+}

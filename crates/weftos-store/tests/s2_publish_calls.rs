@@ -64,8 +64,12 @@ fn the_handoff_create_is_skipped_when_the_record_exists_and_reported_when_made()
     b.reset();
     let again = publish_tree_listed(&b, &bucket("wt0"), &tree_src(&s, "wt0", "h0", None), &Limits::default(), 6_000, None).unwrap();
     assert!(again.handoff_created.is_none());
-    assert_eq!(b.counts().put_cas, 0, "no create-only put on a republish");
-    assert_eq!(read_handoff(&b, &bucket("wt0")).unwrap().unwrap(), h, "the record is untouched");
+    // No create-only put on a republish. Lane Y A4: one conditional put, the publish announcement on
+    // the record read at the start; the record is otherwise untouched.
+    assert_eq!(b.counts().put_cas, 1, "the announcement, not a create");
+    let now = read_handoff(&b, &bucket("wt0")).unwrap().unwrap();
+    assert_eq!(now.publishing.as_ref().map(|i| i.ms), Some(6_000));
+    assert_eq!(Handoff { publishing: h.publishing.clone(), ..now }, h, "the record is otherwise untouched");
 }
 
 #[test]

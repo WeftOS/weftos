@@ -305,8 +305,8 @@ fn a_republish_then_a_reclaim_fences_the_old_claim_and_admits_only_the_new_one()
     let slow = claim_merge(&be, &b, &actor("slow"), NOW + 2).unwrap();
     assert!(mark_merged_at(&be, &b, &actor("fast"), Some(old.epoch), "late", NOW + 3).is_err());
     assert!(mark_merged(&be, &b, &actor("fast"), "late", NOW + 3).is_err());
-    assert!(fence_claim(&be, &b, old.epoch).is_err());
-    fence_claim(&be, &b, slow.epoch).unwrap();
+    assert!(fence_claim(&be, &b, old.epoch, NOW + 3).is_err());
+    fence_claim(&be, &b, slow.epoch, NOW + 3).unwrap();
     mark_merged_at(&be, &b, &actor("slow"), Some(slow.epoch), "merged h2", NOW + 3).unwrap();
 }
 
@@ -315,11 +315,11 @@ fn fence_claim_refuses_a_moved_head_at_the_current_epoch_and_passes_when_nothing
     let be = MemBackend::new();
     let env = Env::new(&be, None);
     let b = handed_off(&env, "fence");
-    fence_claim(&be, &b, 0).unwrap(); // handed off, not claimed: nothing to fence
+    fence_claim(&be, &b, 0, NOW + 3).unwrap(); // handed off, not claimed: nothing to fence
     let c = claim_merge(&be, &b, &actor("fast"), NOW + DAY).unwrap();
-    fence_claim(&be, &b, c.epoch).unwrap();
+    fence_claim(&be, &b, c.epoch, NOW + 3).unwrap();
     republish(&be, &b, "h2", NOW + 1).unwrap();
-    let err = fence_claim(&be, &b, c.epoch).unwrap_err();
+    let err = fence_claim(&be, &b, c.epoch, NOW + 3).unwrap_err();
     assert!(err.to_string().contains("from h1 to h2"), "the epoch is current, the head is not: {err}");
 }
 

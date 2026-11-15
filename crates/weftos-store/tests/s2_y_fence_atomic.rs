@@ -105,7 +105,7 @@ fn a_claim_without_a_claimed_head_is_refused_by_every_fenced_path_and_a_reclaim_
     for e in [
         mark_merged_at(&b, WT, &who("bob"), Some(c.epoch), "m", NOW).unwrap_err(),
         mark_merged(&b, WT, &who("bob"), "m", NOW).unwrap_err(),
-        fence_claim(&b, WT, c.epoch).unwrap_err(),
+        fence_claim(&b, WT, c.epoch, NOW + 2).unwrap_err(),
     ] {
         assert!(matches!(e, S2Error::Claimed(_)), "{e}");
         assert!(e.to_string().contains("claim again"), "the error names the next step: {e}");
@@ -184,7 +184,6 @@ fn an_epoch_on_a_record_that_is_not_claimed_passes_as_before() {
 }
 
 #[test]
-#[ignore = "open until WO-069 lane Y A4 (publish intent): a publish that lands between the fence's manifest read and the CAS"]
 fn a_publish_between_the_fence_read_and_the_land_write_refuses_the_fenced_land() {
     let b = ready();
     let c = claim_merge(&b, WT, &who("bob"), NOW + CLAIM_SKEW_MS + 10).unwrap(); // not live: the republish is allowed
@@ -207,7 +206,7 @@ fn a_republish_of_the_claimed_head_with_other_uncommitted_content_voids_the_clai
     for e in [
         mark_merged_at(&b, WT, &who("bob"), Some(c.epoch), "m", NOW + 2).unwrap_err(),
         mark_merged(&b, WT, &who("bob"), "m", NOW + 2).unwrap_err(),
-        fence_claim(&b, WT, c.epoch).unwrap_err(),
+        fence_claim(&b, WT, c.epoch, NOW + 2).unwrap_err(),
         mark_landed_at(&b, WT, &who("bob"), Some(c.epoch), "landed", NOW + 2).unwrap_err(),
     ] {
         assert!(matches!(e, S2Error::Claimed(_)), "{e}");

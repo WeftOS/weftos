@@ -14,26 +14,29 @@ fn publish_first_no_change_one_changed_and_refresh() {
     let b = spy();
     let s = src(N, D, "t");
     create(&b, "wt0");
-    // first publish_tree: handoff GET; manifest HEAD (no manifest yet); one whole-bucket LIST; N object
-    // PUT; no bundle DELETE (the listing shows no bundle object, WO-069 X3); manifest PUT; handoff
-    // create as ONE conditional put (put_cas)
+    // first publish_tree: handoff HEAD (no record; lane Y A4 reads it with its etag, so HEAD replaces
+    // the GET); manifest HEAD (no manifest yet); one whole-bucket LIST; N object PUT; no bundle DELETE
+    // (the listing shows no bundle object, WO-069 X3); the handoff create, now carrying the publish
+    // announcement and made BEFORE the manifest, as ONE conditional put (put_cas); manifest PUT
     let (r, c) = delta(&b, || publish(&b, "wt0", &s, "h0", 5_000));
     assert_eq!((r.uploaded as u64, r.unchanged), (N, 0));
-    assert_eq!(c, [1, 1, 1, N + 1, 1, 0, 0], "first publish_tree (X3: bundle DELETE gone, was delete 1)");
+    assert_eq!(c, [0, 2, 1, N + 1, 1, 0, 0], "first publish_tree (X3: bundle DELETE gone; Y A4: handoff GET -> HEAD)");
     // the daemon's refresh: manifest HEAD + GET, handoff GET, entry PUT, registry LIST, digest PUT
     let (_, c) = delta(&b, || refresh(&b, "wt0"));
     assert_eq!(c, [2, 1, 1, 2, 0, 0, 0], "refresh: summarize (manifest HEAD+GET, handoff GET), entry PUT, digest = LIST + PUT");
     // nothing changed: the unchanged check uses the single LIST, no object is written; the manifest
     // is still rewritten. X3: no bundle DELETE (none listed) and no handoff create (it was just
-    // read): delete 1 -> 0 and put_cas 1 -> 0
+    // read): delete 1 -> 0 and put_cas 1 -> 0. Lane Y A4 adds two: the handoff is read with its etag
+    // (+1 HEAD) and the publish announcement is one conditional put on that version before the
+    // manifest PUT (+1 put_cas), so a fenced merge cannot land between its fence and its write
     let (r, c) = delta(&b, || publish(&b, "wt0", &s, "h0", 6_000));
     assert_eq!((r.uploaded, r.unchanged as u64), (0, N));
-    assert_eq!(c, [2, 1, 1, 1, 0, 0, 0], "no-change publish_tree: handoff GET + manifest HEAD + GET, LIST, manifest PUT");
+    assert_eq!(c, [2, 2, 1, 1, 1, 0, 0], "no-change publish_tree: handoff HEAD + GET, manifest HEAD + GET, LIST, announcement put_cas, manifest PUT");
     // one file changed: the same plus one object PUT
     std::fs::write(s.dir.path().join("src/f10.rs"), "fn f10() { changed }\n").unwrap();
     let (r, c) = delta(&b, || publish(&b, "wt0", &s, "h1", 7_000));
     assert_eq!((r.uploaded, r.unchanged as u64), (1, N - 1));
-    assert_eq!(c, [2, 1, 1, 2, 0, 0, 0], "one-file-changed publish_tree = no-change + 1 object PUT");
+    assert_eq!(c, [2, 2, 1, 2, 1, 0, 0], "one-file-changed publish_tree = no-change + 1 object PUT");
 }
 
 #[test]
