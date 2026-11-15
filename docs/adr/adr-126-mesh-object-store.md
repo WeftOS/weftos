@@ -1,6 +1,7 @@
 # ADR-126: Mesh object store: WeftOS-governed buckets for nodes, projects, worktrees and releases
 
 - **Status**: Proposed (2026-10-29; the owner asked for a meshed S3 store and set the bucket model)
+- **Updated**: 2026-11-15 (WO-069: lanes A, B, E, F and the fixes from the §4a drills are together on the local branch `w2/wo069-worktree-mirror`, not on `target-0.8.5`, not pushed; drill evidence and open owner questions added to the gate in §4a; no gate item is passed)
 - **Updated**: 2026-10-29 (§4's worktree overlay is re-expressed as RVF layers and branch metadata in ADR-128)
 - **Updated**: 2026-10-29 (S0 spike applied on PG and run; results in "S0 results"; open question 1 answered: import, not in place; §6 amended: the activity log must take RustFS's own log as well as its audit stream)
 - **Updated**: 2026-10-30 (ADR-130 adds a GCS seed bucket as the tier above this store; this store becomes the optional L1 staging tier)
@@ -247,7 +248,7 @@ Only the daemon creates, grants access to, or deletes a store.
   at least `--keep-days` ago (default 14; archived then deleted through the store service) and never an
   unlanded one, however old: that is what `leftovers` reports. With `--archive-keep-days N` it also deletes
   archived worktree objects older than N days (default: never expire; this is recovery data).
-- **Orphans (WO-069 lane E, prototype on `w2/wo069-e-orphan-gc`, not merged).** A worktree removed without
+- **Orphans (WO-069 lane E; on the local integration branch `w2/wo069-worktree-mirror`, not on `target-0.8.5`, not pushed).** A worktree removed without
   landing keeps its store. The sweep records when the local path first went missing and calls
   `store worktree orphan <slug> --since <ms>`; the daemon marks the registry entry `orphan` (with
   `orphaned_at_ms`, `last_head`, `missing_since_ms`) once the path has been gone `WEFTOS_WORKTREE_ORPHAN_AFTER_HOURS`
@@ -293,14 +294,16 @@ L1 as the tier for "unmerged layers that other nodes should see before integrati
     look. It fetches registry entries eight at a time and reads `worktrees/_digest.json`, a hint the
     daemon rewrites from a fresh listing on every registry change, so only entries whose etag
     moved are fetched. Two daemons refreshing at once can leave the digest one update behind until
-    the next refresh; `follow --full` skips it. A head move and a state change in one poll are both reported; a recreated slug (new
+    the next refresh; `follow --full` (also accepted by `worktree-store.sh follow`) skips it. A head move and a state change in one poll are both reported; a recreated slug (new
     bucket) is gone-then-new; one corrupt registry entry is reported, not fatal; an empty registry
     when worktrees were known is an error (wrong bucket?), not mass-gone, unless confirmed;
   - `search_docs` / `search`: docs and planning across every unmerged worktree, by path or title;
   - `sync_docs` / `sync-docs`: a read-only local mirror of one worktree's docs, pruned as docs leave;
   - `leftovers`: open worktrees idle 3 days, handoffs unclaimed 1 day, claims past the 30-minute
-    TTL, merged entries still in the registry after a day (cleanup stuck), and timestamps in the
-    future (writer clock ahead, so idle time is unknown). This is the forgotten-work detector;
+    TTL, merged entries still in the registry after a day (cleanup stuck), orphans (`why: orphan`, with the
+    age counted from when the daemon marked it; they stay listed until `gc` retires them), and
+    timestamps in the future (writer clock ahead, so idle time is unknown). This is the
+    forgotten-work detector;
   - `overlaps`: files two unmerged worktrees both changed differently, as a merge-conflict hint.
     It names both base commits so a caller can discount a result when they differ, because with
     different bases it over-reports. It also reports a file one
@@ -311,7 +314,7 @@ L1 as the tier for "unmerged layers that other nodes should see before integrati
     still does not prove a clean merge;
   - **audit:** the S2 verbs a follower's operator runs (create, publish, claim, promote) appear in
     the activity log and on the chain, failures included;
-  - **Browse without a checkout** (WO-069 dashboard reader; prototype, branch `w2/wo069-b-browse`):
+  - **Browse without a checkout** (WO-069 dashboard reader, lane B; on the local integration branch `w2/wo069-worktree-mirror`, not on `target-0.8.5`, not pushed):
     `follower::browse_registry` (worktree list, lenient on a corrupt entry), `browse_ls` (one folder of the
     shared tree, from the manifest, folders first, sizes, SHA-256, doc titles) and `browse_get` (one file,
     capped at `min(max_bytes, 4 MiB)`; over the cap it returns `withheld` with size and checksum, not bytes).
@@ -319,7 +322,7 @@ L1 as the tier for "unmerged layers that other nodes should see before integrati
     `.wt/tree/<path>` for a path the manifest lists is ever read, under the same path refusals as `fetch`.
     `weaver store worktree browse` and `worktree-store.sh browse` call them; WO-067's `store.browse.*` RPC
     gates them with `store-browse.json` (`worktrees/` in the project store, `.wt/tree/` per worktree store).
-  - **Manifest cache** (WO-069 lane F; prototype, branch `w2/wo069-f-manifest-cache`; answers Q14):
+  - **Manifest cache** (WO-069 lane F; on the local integration branch `w2/wo069-worktree-mirror`, not on `target-0.8.5`, not pushed; answers Q14):
     `follower_cache::ManifestCache` (default TTL 5 s, 64 slots, 32 MiB of manifest JSON, caller supplies `now_ms`)
     holds per project and slug the registry entry and its etag, the manifest etag and the parsed manifest.
     Inside the TTL a hit reads nothing, and skips the `.wt/meta.json` cross-check because the slot was made by
@@ -355,7 +358,7 @@ L1 as the tier for "unmerged layers that other nodes should see before integrati
 - **Clocks:** ages compare the registry's writer-side timestamp with the follower's clock, so the
   thresholds are days. They are a nudge, not a lock. Claims are the exception and are checked as
   described in §4.
-- **Writer trigger, WO-069 (prototype, branch `w2/wo069-a-trigger`):** `worktree-store.sh register` records this
+- **Writer trigger, WO-069 lane A (on the local integration branch `w2/wo069-worktree-mirror`, not on `target-0.8.5`, not pushed):** `worktree-store.sh register` records this
   machine's worktrees (local state under `$XDG_STATE_HOME/weftos/worktree-store`); `sweep` publishes a registered
   worktree only when its tree digest moved (SHA-256 over HEAD, sorted `ls-files -co` names, size and content hash
   under 1 MiB, size+mtime above), so an idle worktree costs zero store calls and uncommitted docs are shared. A
@@ -363,6 +366,17 @@ L1 as the tier for "unmerged layers that other nodes should see before integrati
   deleted, which stays the gc policy question. `install-hook` adds a post-commit accelerator running
   `sweep --only <slug>`: per-worktree `core.hooksPath` when `extensions.worktreeConfig` is set, else one shared hook
   that ignores unregistered worktrees. A foreign post-commit is never overwritten (`--chain` keeps it running).
+- **Publish cost and fetch of a tree with no bundle (WO-069 lanes L and J; same local branch).**
+  `publish_tree` lists the tree prefix once and treats a file as unchanged when the previous
+  manifest has the same SHA-256 and the listing has its object at the same size; it no longer
+  sends a HEAD per file, and it reuses that listing for the stale sweep. A missing or wrong-size
+  object is uploaded again. An object another writer adds between the listing and the sweep is
+  swept by the next publish, not this one. Measured on a loopback RustFS (10 000 files, no-change
+  republish, release build, loaded machine): 10 002 HEAD calls before, 2 after; wall time 52 to
+  120 s before, 3.6 to 18.5 s after (call counts are exact, wall times are noisy). A first
+  publish is still one PUT per file. `fetch` of a tree with no commits past its base writes the
+  tree, exits 0 and returns a note (`bundle_head: null`); it used to exit 1.
+  Source: the WO-069 drills report (`wo069-4a-drills-20261114.md`, round 4 addendum).
 - **Not in scope:** an operator UI (card d18e1ab0), automatic merging, and enforcing that anyone
   acts on a leftover.
 
@@ -373,24 +387,104 @@ owed and is **not** produced by the in-memory tests.
 
 1. Against real RustFS (not `MemBackend`): publish, poll, search, sync-docs and claim with two
    different principals on two machines; a follower sees a publish within one poll interval.
+   - Evidence so far (2026-11-14 and 15, WO-069 drills against a throwaway RustFS 1.0.4, not PG): two
+     principals on one machine through one daemon (14 of 14 shell steps); two real S3 keys, a
+     read-write writer key and a read-only follower key, which refused all 8 write attempts; the store
+     on a second machine (aepod-xpc, reached over one ssh port forward, about 80 ms per request), with
+     the writer, follower and daemon on the MacBook. A publish was reported by the first poll after
+     it in 10 of 10 trials (median 40 ms on loopback, 392 ms against the second machine). Still
+     owed: two daemons on two machines on two clocks (the follower daemon on aepod-xpc needs a Linux
+     build of this branch's weaver, an open owner question), and the same run against the real
+     store on PG.
 2. A Windows node loads a worktree bucket natively (never tested; in scope now on aepod-xpc as the
    bucket-load proof, with the ProjFS drive after macOS D1 and Linux D2). Fetch already refuses
    reserved names (`CON`, `NUL`, `COM1`), trailing dots/spaces, `<>:"|?*`, `git~1` aliases and
    case-insensitive collisions on every platform; long paths and CRLF are still to try.
+   - Evidence so far: none. Not touched by the drills. Owed in full.
 3. Metadata caching is only partial: measure `list` and `head` latency for a worktree of a client-scale project's
    size (file count, largest file) before assuming one-poll-per-worktree is affordable.
+   - Evidence so far (synthetic trees of 1 000, 10 000 and 20 000 files on a loopback RustFS, loaded
+     machine): a follower poll that hits the digest is one 72-byte GET and does not grow with tree
+     size (under 1 ms to 3 ms); an uncached browse reads the whole manifest (3.2 MB at 20 000 files,
+     21 ms); `list` of the tree prefix took 3.97 s at 20 000 files. Publish is the cost that
+     scales: a first publish of 20 000 files took 439.7 s (30 to 68 PUT/s). Since lane L a no-change
+     republish makes one listing instead of one HEAD per file; that was measured on loopback
+     only. Still owed: the client project's real file count, total size, largest file and
+     directory shape, and the same measurements against PG's RustFS over the network. See the
+     size ceiling below, which decides whether such a tree fits at all.
 4. Leftover drill: leave a worktree open past the threshold and confirm `leftovers` reports it;
    hand one off and confirm a second agent on another machine lands it with git, then promotion
    and bucket deletion complete and the registry entry disappears.
+   - Evidence so far: thresholds crossed by injecting time (a registry entry moved back four days
+     is reported `forgotten_open`; orphan marking refused at 23 h and accepted at 24 h; `gc` dry
+     run, then due after the orphan age was moved to 15 days). A handoff was claimed, fetched,
+     landed with plain git on a second clone on the same machine, promoted and retired, and the
+     registry entry disappeared (after the lane J fix; before it `gc --confirmed` left a `merged`
+     entry). Still owed: a real leftover over a real day, and a handoff claimed and landed on a
+     second machine.
 5. Failure drill: kill the writer mid-publish, kill the merger mid-claim, take the daemon down
    during a registry refresh. Nothing may be lost, and a stale claim must be recoverable.
+   - Evidence so far: publish cut at four points (before any put, after the first put, at the
+     manifest put, during the stale sweep): the previous manifest was served each time, no read
+     returned wrong bytes, and the rerun completed with nothing lost; but two cut points leave one
+     changed file failing its checksum until the rerun (see the interrupted-publish window
+     below). Stale claims (library clock; the daemon's `claim` instead waits 31 minutes of its own observation): a claim 31 minutes old was taken over with a new epoch, a claim 29
+     minutes old was not, a claim stamped 9 minutes ahead stayed live, one stamped 11 minutes
+     ahead was taken over. Daemon killed with `kill -9` at 0.8 s, 2.5 s and 4.5 s into a 200-file
+     publish: restart, rerun, all files fetched. The registry refresh was cut only
+     deterministically in a library test (entry written, digest not), not at a random point in
+     the daemon. Still owed: killing the merger mid-claim and waiting out the daemon's own
+     30 minute observed expiry (a restart resets that watch), and a real writer process kill on a
+     machine that publishes directly with its own key.
 6. Follower drills on real clocks and a real registry: a writer machine a day ahead; a corrupt and
    an unknown-schema entry; an empty or wrong project bucket; a merged entry whose cleanup never
    ran; an interrupted `sync-docs` followed by a deleted doc; `overlaps` on two real worktrees with
    different bases (measure the false-positive rate); two overlapping `follow` runs sharing a state
    file (`FollowState::save` writes atomically via temp+rename but does not lock, so the last writer
    wins; `load` errors on a corrupt file rather than resetting).
+   - Evidence so far: none of this list on real clocks. Closest case touched: a merged entry
+     whose cleanup never ran (the lane J fix removes the one cause found). Still owed: the whole
+     list.
 7. ADR-131 D1 and D2 pass first (the card's prerequisite).
+   - Evidence so far: not touched by the drills.
+
+**Measured in the drills, each an open owner question (nothing below is a decision).**
+Source: the WO-069 drills report (`wo069-4a-drills-20261114.md`; lanes H, I, J and the round 4
+addendum). Branch `w2/wo069-worktree-mirror`, local.
+
+- **Size ceiling.** `Limits::default()` is 20 000 files, 512 MiB in total and 16 MiB per file
+  (`crates/weftos-store/src/share.rs`). The daemon's `publish` uses those limits, so a tree past them
+  has its surplus files skipped as `OverBudget`, listed in the verb's `skipped` output. A library
+  caller that raises the limits published 50 000 files (1.47 GiB, 730.7 s; manifest 7.9 MB), and
+  then neither a browse, a poll's summary, a fetch nor a republish could load that manifest:
+  `parse_manifest` (`share_publish.rs`) applies `Limits::default().max_files` to every reader and
+  fails with `manifest lists more than 20000 files`. Whether the client project fits is
+  unknown until its real file count and size are measured (gate item 3). Open owner question.
+- **Who is trusted.** The `store.worktree.*` verbs and `store grant` run on the daemon's operator
+  path and take the principal as a label the caller supplies. On one daemon, a principal that
+  holds only read grants ran `share` (a publish), `claim` and `store grant` on itself, and all
+  three were accepted. The governed data plane is gated: the same principal's `store put` into the
+  project store, the worktree store and a registry key was refused. Read-only held where an S3 key
+  with read-only scope was used (8 of 8 writes refused). So read-only followers are enforced by
+  the S3 key, not by the daemon, and one daemon is one trust domain. This does not change the two
+  machine case where each machine holds its own scoped key; it means the "two principals" of gate
+  item 1 on one daemon give no isolation. Open owner question.
+- **Interrupted publish (finding 3a, board card 6b58589c).** `publish_tree` overwrites a changed
+  object in place before it writes the new manifest. If the publish stops after that overwrite and
+  before the manifest write, the previous manifest is still served byte for byte, but reading that
+  changed file through it fails with `checksum mismatch` (never wrong bytes), and `fetch_tree`
+  aborts at the first such file, until the writer reruns the publish. In the drill, one file of 20
+  was affected at two of four cut points. The card records content-addressed object keys as the
+  recommended fix; no code is written until the owner answers. Open owner question.
+
+**Running the drills.** `scripts/store/wo069-drills.sh` runs against a throwaway RustFS it starts on
+127.0.0.1 (`WEFTOS_STORE_TEST_RUSTFS_BIN=<rustfs binary>`; a weaver built with
+`scripts/build.sh native-debug`, or `WEFTOS_E2E_WEAVER`). `--only d1,d2,d3,lib,scale` picks drills
+(default `d1,d2,d3,lib`, about 4 minutes); `--scale` adds the 20 000 and 50 000 file trees (about
+45 minutes); `--release` builds the library tests in release mode for latency numbers;
+`WEFTOS_DRILLS_DATA_DIR` puts the server's data on the internal disk. With
+`WEFTOS_DRILLS_RUSTFS_ENV=<0600 env file>` it uses a remote throwaway server instead (it refuses the
+PG address); pass credentials by file path only. Never point it at PG or any shared RustFS.
 
 ### 5. Edge and Wasm nodes hold no long-lived keys
 
@@ -814,6 +908,15 @@ tolerated (`trim_matches('"')` in the fs and memory backends, quoted on the wire
   `origin/target-0.8.5` (e58899bb0). The union mount stays in the code and out of the done-when, pending the owner
   (below).
 
+- **WO-069 additions (2026-11-15):** lanes A (sweep trigger), B (browse), E (orphan marking and gc), F
+  (manifest cache), the file splits (`follower*`, `share_*`, `store_worktree_*`), the drill harness and
+  the drill fixes (`gc --confirmed` removes a landed worktree's registry entry, `leftovers` reports
+  orphans, `fetch` of a tree with no bundle succeeds with a note, `worktree-store.sh follow --full`)
+  and one tree listing per publish are together on the local branch `w2/wo069-worktree-mirror`
+  (df4f723d1, from 40ff68976). It is not on `target-0.8.5` and not pushed. Verified on that
+  commit: `weftos-store` 371 tests, `clawft-weave store_` 168, clippy clean on both, shell suites 64
+  and 81, live drills 59 passed and 0 failed against a throwaway loopback RustFS. The §4a gate is
+  not passed.
 - **Where the code is:** `crates/weftos-store/src/{overlay,promote,share,share_fetch,follower,testing,worktree_backend}.rs`
   and `tests/s2_{worktree,follower,done_when}.rs`. The Rust uses only `std`, `serde`, `serde_json` and
   `sha2` and spawns no processes. `worktree_backend.rs` implements `overlay::ObjectBackend` for every
