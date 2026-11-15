@@ -5,7 +5,7 @@ use crate::VaultError;
 use crate::blob;
 use crate::keybag::{FLAG_DRAFT, Pins};
 use crate::pins::PINS_LEN;
-use crate::tests::{PASS, new_vault, req};
+use crate::tests::{PASS, T, new_vault, pass_id, req};
 use crate::vault::Vault;
 
 /// A store with `put_if_match`: the write lands only when the caller's base is still current.
@@ -238,5 +238,48 @@ fn r2_l2_reseal_refuses_a_replayed_stale_revision() {
         .open_named("login/a-FAKE", &moved.new_secret.bytes)
         .unwrap();
     assert_eq!((&o.payload[..], o.revision), (&b"FAKE-new"[..], 3));
+}
+
+/// R2-L3, probe P4: invisible code points and whitespace-only passcodes are refused when set.
+#[test]
+fn r2_l3_invisible_and_whitespace_only_passcodes_are_refused() {
+    for bad in [
+        "FAKE-\u{200B}-zwsp",
+        "FAKE-\u{200C}-zwnj",
+        "FAKE-\u{200D}-zwj",
+        "FAKE-\u{00AD}-soft-hyphen",
+        "FAKE-\u{FE0F}-variation-selector",
+        "FAKE-\u{E0001}-language-tag",
+        "FAKE-\u{E0041}-tag-letter",
+        "FAKE-\u{2028}-line-separator",
+        "FAKE-\u{2029}-paragraph-separator",
+        "FAKE-\u{202E}-rlo",
+        "FAKE-\u{2066}-lri",
+        "FAKE-\u{200F}-rlm",
+        "FAKE-\u{FEFF}-bom",
+    ] {
+        assert_eq!(
+            Vault::create_unchecked(bad, T).unwrap_err(),
+            VaultError::PasscodeRejected("invisible code point"),
+            "passcode {} accepted",
+            bad.escape_unicode()
+        );
+    }
+    for blank in [" ", " \t ", "\u{3000}"] {
+        assert_eq!(
+            Vault::create_unchecked(blank, T).unwrap_err(),
+            VaultError::PasscodeRejected("whitespace only")
+        );
+    }
+    // The rules apply on change too; a passcode with an inner space is fine.
+    let nv = new_vault();
+    let id = pass_id(&nv.vault);
+    assert_eq!(
+        nv.vault
+            .change_passcode_unchecked(&id, "FAKE-\u{200B}", T, &nv.pins)
+            .unwrap_err(),
+        VaultError::PasscodeRejected("invisible code point")
+    );
+    assert!(Vault::create_unchecked("FAKE passcode with spaces", T).is_ok());
 }
 

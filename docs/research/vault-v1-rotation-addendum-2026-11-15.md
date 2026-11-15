@@ -93,9 +93,13 @@ Until this lands, the user-facing response to a device compromise is to create a
   attempt cost more than the single worst format-valid wrapper. Review probe R3 (63 wrappers at 1 GiB, t=10) is refused
   at parse, before any Argon2id run. Both checks are part of the structural rules, so they apply on parse and on every
   write.
-- **Passcode rules when a passcode is set** (create, change, rotation re-seal). The passcode must not be empty. It
-  must contain no unassigned, private-use, noncharacter or control code point, as judged by the pinned
-  `unicode-normalization =0.1.26` (Unicode 18.0). NFKC of an unassigned code point can change when a later Unicode
+- **Passcode rules when a passcode is set** (create, change, rotation re-seal). The passcode must not be empty or
+  whitespace only. It must contain no unassigned, private-use, noncharacter or control code point, as judged by the
+  pinned `unicode-normalization =0.1.26` (Unicode 18.0). It must contain no invisible code point either (R2-L3):
+  no `Default_Ignorable_Code_Point` (ZWSP, ZWNJ, ZWJ, soft hyphen, word joiner, BOM, variation selectors, tag
+  characters, Hangul fillers, and the bidi controls U+061C, U+200E, U+200F, U+202A..U+202E, U+2066..U+2069), and no
+  line or paragraph separator (U+2028, U+2029). These are NFKC-stable, but a user cannot see them or reliably type
+  them again on another device. There is no minimum length: that is a policy for the setup UI. NFKC of an unassigned code point can change when a later Unicode
   version assigns it, which would lock the user out after a dependency bump. The crate is pinned with `=`, so a bump
   is a deliberate, reviewed change. Unlock does not apply these rules, so an existing wrapper always opens.
 
