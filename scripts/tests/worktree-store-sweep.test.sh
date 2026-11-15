@@ -11,7 +11,7 @@ mkdir -p "$t/bin"
 cat >"$t/bin/weaver" <<'W'
 #!/usr/bin/env bash
 printf '%q ' "$@" >>"$WTS_LOG"; echo >>"$WTS_LOG"
-case "$*" in "store worktree publish"*) [ -z "${WEAVER_REPLY:-}" ] || printf '%s\n' "$WEAVER_REPLY" ;; esac
+case "$*" in "store worktree publish"*) [ -z "${WEAVER_WARN:-}" ] || echo "$WEAVER_WARN" >&2; [ -z "${WEAVER_REPLY:-}" ] || printf '%s\n' "$WEAVER_REPLY" ;; esac
 exit "${WEAVER_RC:-0}"
 W
 chmod +x "$t/bin/weaver"
@@ -191,5 +191,17 @@ WEAVER_REPLY=$BUD WTS_STRICT_SKIPS=1 "$S" share >/dev/null 2>&1 && rc=0 || rc=$?
 ok "share: WTS_STRICT_SKIPS=1 exits 3 on budget skips" "[ $rc = 3 ]"
 WEAVER_REPLY=$NOSKIP WTS_STRICT_SKIPS=1 "$S" share >"$t/o" 2>"$t/e"; rc=$?
 ok "share: nothing skipped, strict on: exit 0, silent stderr" "[ $rc = 0 ] && [ ! -s '$t/e' ]"
+
+# ---- older-writer warnings (lane F1): the weaver's stderr line is forwarded once per affected worktree
+cd "$wa"; echo f1a >>"$wa/docs/plan.md"
+WARN='warning: worktree lane--a was last written by an older daemon (the record was rewritten). Upgrade that writer before a client project uses shared worktrees (ADR-126 section 4a, gate item 8).'
+WEAVER_WARN=$WARN WEAVER_REPLY=$NOSKIP "$S" sweep >"$t/o" 2>"$t/e"; rc=$?
+ok "sweep forwards the older-writer warning once, status published, exit 0" "[ $rc = 0 ] && [ \$(grep -c 'gate item 8' '$t/e') = 1 ] && grep -q 'lane--a	published' '$t/o' && ! grep -q 'gate item 8' '$t/o'"
+echo f1b >>"$wa/docs/plan.md"
+WEAVER_WARN=$WARN WEAVER_REPLY=$NOSKIP "$S" sweep --json >"$t/o" 2>/dev/null; rc=$?
+ok "sweep --json: the warning does not touch the JSON on stdout" "[ $rc = 0 ] && grep -q '\"status\":\"published\"' '$t/o' && ! grep -q 'gate item 8' '$t/o'"
+echo f1c >>"$wa/docs/plan.md"
+WEAVER_REPLY=$NOSKIP "$S" sweep >"$t/o" 2>"$t/e"
+ok "no warning from a clean weaver" "! grep -q 'gate item 8' '$t/e'"
 
 echo "passed=$pass failed=$fail"; [ "$fail" = 0 ]

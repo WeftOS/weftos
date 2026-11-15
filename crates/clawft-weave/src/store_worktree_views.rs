@@ -21,12 +21,22 @@ pub(super) fn names_with(mesh: &str, project: &str, slug: &str, registry_store: 
 }
 
 pub(super) fn entry_json(e: &RegistryEntry) -> Value {
-    json!({
+    let mut v = json!({
         "slug": e.slug, "branch": e.branch, "head": e.head_commit, "state": e.state,
         "writer": format!("{}@{}", e.writer.agent, e.writer.host),
         "merger": e.merger.as_ref().map(|m| format!("{}@{}", m.agent, m.host)),
         "docs": e.doc_count, "files": e.file_count, "updated_ms": e.updated_ms,
-    })
+    });
+    older_writer_into(&mut v, weftos_store::share::entry_older_writer(e));
+    v
+}
+
+/// Add `older_writer` (WO-069 F1, ADR-126 gate item 8) to a reply, only when something was found: a
+/// clean reply keeps exactly its old shape.
+pub(super) fn older_writer_into(v: &mut Value, w: Option<weftos_store::share::OlderWriter>) {
+    if let (Some(w), Some(o)) = (w, v.as_object_mut()) {
+        o.insert("older_writer".into(), serde_json::to_value(w).unwrap_or(Value::Null));
+    }
 }
 
 pub(super) fn change_json(c: &Change) -> Value {

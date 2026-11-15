@@ -151,7 +151,7 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
                 None => published.handoff_created,
             };
             refresh_with(&b, &n.reg, slug, &n.wt, sign, Some(published.manifest), h)?;
-            Ok(json!({
+            let mut reply = json!({
                 "uploaded": rep.uploaded, "unchanged": rep.unchanged, "removed": rep.removed,
                 "retired": rep.retired, "deferred": rep.deferred, "schema": opts.schema,
                 "skipped": rep.skipped.iter().map(|(k, w)| format!("{k}: {w:?}")).collect::<Vec<_>>(),
@@ -162,7 +162,10 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
                     "full_pass": hc.full_pass, "full_pass_reason": hc.full_pass_reason,
                     "mismatch": hc.mismatch, "write_error": hc.write_error,
                 },
-            }))
+            });
+            // What the bucket held before this publish replaced it (never a refusal: publishing is the cure).
+            older_writer_into(&mut reply, rep.older_writer_before);
+            Ok(reply)
         }
         "fetch" => {
             let n = names(mesh, &project, need(&p.slug, "slug")?)?;
@@ -199,13 +202,17 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
             live_worktree(svc, &b, &n, &project, slug)?;
             // Expiry is judged on how long this daemon has watched the claim sit unchanged, on its
             // own monotonic clock; the stored stamp (some caller's wall clock) decides nothing.
-            let h = {
+            // WEFTOS_WORKTREE_REQUIRE_CURRENT_WRITERS (lane F1): refuse a bucket an older daemon wrote.
+            let require = super::publish_env::require_current_writers()?;
+            let (h, older) = {
                 let mut w = claim_watch().lock().map_err(|_| "claim watch poisoned".to_string())?;
-                claim_merge_observed(&b, &n.wt, &who(&p), &mut w, mono_ms(), now_ms).map_err(e)?
+                claim_merge_observed_checked(&b, &n.wt, &who(&p), &mut w, mono_ms(), now_ms, CLAIM_TTL_MS, require).map_err(e)?
             };
             refresh(&b, &n.reg, slug, &n.wt, sign)?;
-            Ok(json!({"state": h.state, "epoch": h.epoch,
-                      "merger": h.merger.map(|m| format!("{}@{}", m.agent, m.host))}))
+            let mut reply = json!({"state": h.state, "epoch": h.epoch,
+                      "merger": h.merger.map(|m| format!("{}@{}", m.agent, m.host))});
+            older_writer_into(&mut reply, older);
+            Ok(reply)
         }
         "promote" => {
             let slug = need(&p.slug, "slug")?;
@@ -239,7 +246,10 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
             // git is the merge whoever held the claim (a claim that is someone else's or has expired
             // must not stop the assets reaching the project). A worktree that was never published has
             // no handoff and gets none.
-            weftos_store::share::mark_landed_at(&b, &n.wt, &who(&p), p.epoch, "landed", now_ms).map_err(e)?;
+            // The land sees the record, and the manifest when the fence read it (an epoch was given);
+            // with WEFTOS_WORKTREE_REQUIRE_CURRENT_WRITERS it refuses before writing (lane F1).
+            let require = super::publish_env::require_current_writers()?;
+            let (_, older) = mark_landed_checked(&b, &n.wt, &who(&p), p.epoch, "landed", now_ms, require).map_err(e)?;
             svc.ensure_archive().map_err(|e| e.to_string())?;
             let prefix = archive_key(&n.wt, now_ms, "");
             let r = promote(
@@ -254,10 +264,12 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
             // Followers must stop seeing a landed worktree as claimed (or open): the entry now says
             // merged, and stays until the worktree store is archived and deleted (see `forget`).
             refresh(&b, &n.reg, slug, &n.wt, sign)?;
-            Ok(json!({
+            let mut reply = json!({
                 "promoted": r.promoted, "deleted": r.deleted, "kept_project": r.kept_project,
                 "archived": r.archived.len(), "dropped_tombstones": r.dropped_tombstones,
-            }))
+            });
+            older_writer_into(&mut reply, older);
+            Ok(reply)
         }
         "orphan" => {
             let slug = need(&p.slug, "slug")?;

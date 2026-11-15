@@ -15,7 +15,7 @@ use std::time::Instant;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use weftos_store::backend::{BackendError, ObjectAttrs, ObjectBackend as S1, ObjectMeta};
-use weftos_store::claim_watch::{ClaimWatch, claim_merge_observed};
+use weftos_store::claim_watch::{ClaimWatch, claim_merge_observed_checked};
 use weftos_store::follower::{self, Change, FollowState, LeftoverPolicy, Why};
 use weftos_store::promote::{ArchiveTarget, OnConflict, PromotionPolicy, WorktreeMeta, is_promoted, promote, read_meta, write_meta};
 use weftos_store::service::{ARCHIVE_BUCKET, Parties, archive_key};
@@ -23,7 +23,7 @@ use weftos_store::registry_sign::{
     EntrySigner, EntryVerifier, list_trusted_gen, list_trusted_lenient, poll_verified_settled, remove_registry_entry_signed,
     write_registry_entry_signed,
 };
-use weftos_store::share::{Actor, Limits, TreeSource, mark_handoff, parse_name_status_z};
+use weftos_store::share::{Actor, CLAIM_TTL_MS, Limits, TreeSource, mark_handoff, mark_landed_checked, parse_name_status_z};
 use weftos_store::share_fetch::{
     self, RegistryEntry, Select, list_shared_lenient, summarize, write_registry_entry,
 };
@@ -433,3 +433,6 @@ pub async fn handle(method: &str, params: Value) -> clawft_rpc::Response {
 #[cfg(test)]
 #[path = "store_worktree_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "store_worktree_older_tests.rs"]
+mod older_tests;

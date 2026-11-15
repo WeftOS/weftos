@@ -605,7 +605,8 @@ owed and is **not** produced by the in-memory tests.
    key counts); a read-only follower on an older build is acceptable only if it can read manifest
    schema 2, and an rc.1 reader cannot: it fails closed on schema 2 (reads error), so rc.1 followers
    must be upgraded too or the project kept on `WEFTOS_WORKTREE_MANIFEST_SCHEMA=1` (which does not
-   restore the fence for an older writer).
+   restore the fence for an older writer). A build with the F1 check adds `older_writer` to the `publish`, `claim`, `promote`, `browse`, `leftovers` and `follow` replies and prints one stderr warning per worktree when a bucket's record, manifest or registry entry shows an older daemon wrote it last, and `WEFTOS_WORKTREE_REQUIRE_CURRENT_WRITERS=1` makes `claim` and `promote` (never `publish`) refuse such a bucket.
+   It sees only the marks an older daemon leaves (no publish announcement, a claim without its head, a manifest the last announcement does not name, a registry entry without the check), so it cannot see one that has not written since and an unfenced `promote` reads only the record; it supports the operator checks above and does not replace them.
    - Evidence so far: none. Owed in full (2026-11-15). No mixed-version drill has been run.
 
 **Measured in the drills. Each was an open owner question; decisions are recorded in place as they are made.**

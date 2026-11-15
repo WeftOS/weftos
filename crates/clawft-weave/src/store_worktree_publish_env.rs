@@ -17,6 +17,11 @@
 //! (`<runtime>/worktree-hash-cache/`), on the publishing machine's local disk: not in the store, not
 //! in the git worktree.
 //!
+//! - `WEFTOS_WORKTREE_REQUIRE_CURRENT_WRITERS`: `1` makes `claim` and `promote` refuse a worktree whose
+//!   bucket was last written by an older daemon (ADR-126 section 4a, gate item 8); `0`, unset or empty
+//!   (default) only warns. Never applies to `publish`: a current writer publishing over an older
+//!   writer's bucket is how the bucket heals.
+//!
 //! Any other value is an error on every publish (never a silent default), so a typo in a rollback
 //! is seen at once.
 
@@ -25,6 +30,7 @@ use weftos_store::share::{DEFAULT_FULL_REHASH_MS, HashCacheConfig, PublishOption
 
 pub(crate) const SCHEMA_VAR: &str = "WEFTOS_WORKTREE_MANIFEST_SCHEMA";
 pub(crate) const SWEEP_VAR: &str = "WEFTOS_WORKTREE_SWEEP";
+pub(crate) const REQUIRE_VAR: &str = "WEFTOS_WORKTREE_REQUIRE_CURRENT_WRITERS";
 pub(crate) const HASH_CACHE_VAR: &str = "WEFTOS_WORKTREE_HASH_CACHE";
 pub(crate) const REHASH_HOURS_VAR: &str = "WEFTOS_WORKTREE_HASH_REHASH_HOURS";
 const CACHE_DIR: &str = "worktree-hash-cache";
@@ -48,6 +54,30 @@ pub(crate) fn parse(schema: Option<&str>, sweep: Option<&str>) -> Result<Publish
         Some(v) => return Err(format!("{SWEEP_VAR}={v:?}: use on or off")),
     };
     Ok(PublishOptions { schema, sweep, ..PublishOptions::default() })
+}
+
+/// Whether `claim` and `promote` refuse a bucket last written by an older daemon (read once).
+pub(crate) fn require_current_writers() -> Result<bool, String> {
+    #[cfg(test)]
+    if let Some(v) = test_require::FORCE.with(std::cell::Cell::get) {
+        return Ok(v);
+    }
+    static O: OnceLock<Result<bool, String>> = OnceLock::new();
+    O.get_or_init(|| parse_require(std::env::var(REQUIRE_VAR).ok().as_deref())).clone()
+}
+
+/// Tests set the switch per thread: the real one is read once per process.
+#[cfg(test)]
+pub(crate) mod test_require {
+    thread_local! { pub(crate) static FORCE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) }; }
+}
+
+pub(crate) fn parse_require(v: Option<&str>) -> Result<bool, String> {
+    match v.map(str::trim).filter(|s| !s.is_empty()) {
+        None | Some("0") => Ok(false),
+        Some("1") => Ok(true),
+        Some(v) => Err(format!("{REQUIRE_VAR}={v:?}: use 1 (refuse older writers) or 0")),
+    }
 }
 
 /// Milliseconds between full passes, or `None` when the cache is switched off (read once).
@@ -101,6 +131,16 @@ mod tests {
         assert!(!off.sweep && off.grace_ms == d.grace_ms);
         assert!(parse(Some("3"), None).unwrap_err().contains(SCHEMA_VAR));
         assert!(parse(None, Some("false")).unwrap_err().contains(SWEEP_VAR));
+    }
+
+    #[test]
+    fn the_require_current_writers_switch_defaults_off_and_rejects_typos() {
+        assert_eq!(parse_require(None), Ok(false));
+        assert_eq!(parse_require(Some("")), Ok(false));
+        assert_eq!(parse_require(Some("0")), Ok(false));
+        assert_eq!(parse_require(Some(" 1 ")), Ok(true));
+        assert!(parse_require(Some("yes")).unwrap_err().contains(REQUIRE_VAR));
+        assert!(parse_require(Some("on")).unwrap_err().contains(REQUIRE_VAR));
     }
 
     #[test]

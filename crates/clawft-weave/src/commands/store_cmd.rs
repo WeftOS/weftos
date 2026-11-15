@@ -401,7 +401,12 @@ pub async fn run(args: StoreArgs) -> anyhow::Result<()> {
             let (agent, host) = agent_and_host(&rest)?;
             let as_json = rest.iter().any(|a| a == "--json");
             let params = worktree_params(&rest, &agent, &host)?;
+            let slug = params["slug"].as_str().map(str::to_owned);
             let v = call(&format!("store.worktree.{verb}"), params).await?;
+            // An older daemon last wrote the bucket (ADR-126 gate item 8): one stderr line per worktree.
+            for w in super::store_older_warn::older_writer_warnings(slug.as_deref(), &v) {
+                eprintln!("{w}");
+            }
             match (as_json, wt_lines(&verb, &v)) {
                 (false, Some(t)) => print!("{t}"),
                 _ => println!("{}", serde_json::to_string_pretty(&v)?),

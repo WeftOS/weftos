@@ -13,6 +13,9 @@ cat >"$t/bin/weaver" <<'W'
 printf '%q ' "$@" >>"$WTS_LOG"; echo >>"$WTS_LOG"
 if [ "$1 $2 $3" = "store worktree buckets" ]; then echo "w-01abc-aaaaaaaaaaaa p-01abc"; fi
 if [ "$1 $2 $3" = "store worktree fetch" ]; then : ; fi
+# the real CLI prints the older-writer warning on stderr and a refusal as an error (lane F1)
+[ -z "${WEAVER_WARN:-}" ] || echo "$WEAVER_WARN" >&2
+if [ -n "${WEAVER_REFUSE:-}" ] && [ "$1 $2 $3" = "store worktree claim" ]; then echo "error: $WEAVER_REFUSE" >&2; exit 1; fi
 if [ "$1 $2 $3" = "store worktree claim" ]; then printf '{\n  "state": "claimed",\n  "epoch": %s\n}\n' "${CLAIM_EPOCH:-4}"; fi
 if [ "$1 $2 $3" = "store worktree promote" ] && [ -n "${PROMOTE_RC:-}" ]; then echo "error: claim epoch presented, but the worktree is Handoff" >&2; exit "$PROMOTE_RC"; fi
 exit "${WEAVER_RC:-0}"
@@ -103,6 +106,24 @@ WEAVER_RC=1 "$here/worktree-store.sh" land 2>/dev/null && rc=0 || rc=$?
 ok "promote failure after land is a warning" "[ $rc = 0 ]"
 WEAVER_RC=1 WTS_STRICT=1 "$here/worktree-store.sh" land 2>/dev/null && rc=0 || rc=$?
 ok "WTS_STRICT makes it fatal" "[ $rc != 0 ]"
+
+# older-writer warnings (ADR-126 gate item 8, lane F1): the weaver prints one stderr line per affected
+# worktree; the script forwards it once, changes nothing on stdout and never the exit status. The
+# claim and land refusals under WEFTOS_WORKTREE_REQUIRE_CURRENT_WRITERS surface as a failed claim.
+WARN='warning: worktree feat--s2 was last written by an older daemon (the record was rewritten). Upgrade that writer before a client project uses shared worktrees (ADR-126 section 4a, gate item 8).'
+WEAVER_WARN=$WARN "$here/worktree-store.sh" claim feat--s2 >"$t/o" 2>"$t/e"; rc=$?
+ok "claim forwards the older-writer warning once" "[ $rc = 0 ] && [ \$(grep -c 'gate item 8' '$t/e') = 1 ] && grep -q '\"epoch\"' '$t/o' && ! grep -q 'gate item 8' '$t/o'"
+rm -f "$t"/state/weftos/claim-*.epoch
+WEAVER_WARN=$WARN "$here/worktree-store.sh" share >"$t/o" 2>"$t/e"; rc=$?
+ok "share forwards it once and exits 0" "[ $rc = 0 ] && [ \$(grep -c 'gate item 8' '$t/e') = 1 ]"
+WEAVER_WARN=$WARN "$here/worktree-store.sh" leftovers --json >"$t/o" 2>"$t/e"; rc=$?
+ok "leftovers --json: warning on stderr only, stdout untouched" "[ $rc = 0 ] && grep -q 'gate item 8' '$t/e' && [ ! -s '$t/o' ]"
+: >"$t/log"; "$here/worktree-store.sh" claim feat--s2 >/dev/null 2>"$t/e"
+ok "a clean claim prints no warning" "! grep -q 'gate item 8' '$t/e'"
+rm -f "$t"/state/weftos/claim-*.epoch
+WEAVER_REFUSE='refused: the worktree was last written by an older daemon (the record was rewritten); Upgrade that writer (ADR-126 section 4a, gate item 8)' \
+    "$here/worktree-store.sh" claim feat--s2 >"$t/o" 2>"$t/e" && rc=0 || rc=$?
+ok "a refused claim exits non-zero with the reason and saves no epoch" "[ $rc != 0 ] && grep -q 'gate item 8' '$t/e' && [ -z \"\$(ls '$t'/state/weftos/claim-*.epoch 2>/dev/null)\" ]"
 
 # input validation
 for bad in 'A' '../x' 'a b' '-x' "$(printf 'a%.0s' {1..60})"; do
