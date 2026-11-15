@@ -239,6 +239,23 @@ function emit(rule, path, ln, text) {
     print rule "\t" path "\t" ln "\t" text
 }
 function bad(msg) { print "diff-gate: " msg > "/dev/stderr"; err = 1; exit 3 }
+function emitc(rule, path, ln, text,   m) { # Cargo.toml line finding; field 7 is what rows match
+    gsub(/\t/, " ", text); sub(/^[ \t]+/, "", text); m = text
+    if (length(text) > 160) text = substr(text, 1, 157) "..."
+    print rule "\t" path "\t" ln "\t" text "\t\t\t" m
+}
+function tstrip(s,   i, n, c, q) { # drop a trailing TOML comment; a # inside a string stays
+    if (index(s, "#") == 0) return s
+    n = length(s); q = ""
+    for (i = 1; i <= n; i++) {
+        c = substr(s, i, 1)
+        if (q == "\"") { if (c == "\\") i++; else if (c == "\"") q = ""; continue }
+        if (q == "\047") { if (c == "\047") q = ""; continue }
+        if (c == "\"" || c == "\047") { q = c; continue }
+        if (c == "#") { s = substr(s, 1, i - 1); sub(/[ \t]+$/, "", s); return s }
+    }
+    return s
+}
 function cunq(q,   out, i, c, n, v, nd) { # C-style unquote of the inside of a git-quoted name
     out = ""; n = length(q)
     for (i = 1; i <= n; i++) {
@@ -283,11 +300,13 @@ FILENAME == flist {
 inhunk && !skipc && /^\+/ {
     text = substr($0, 2); this = ln; ln++
     if (iscargo) {
-        t = text
+        # A trailing comment is not part of the key or value, so it can neither trigger a rule
+        # nor be what an approval pattern matches (G2).
+        t = tstrip(text)
         # build / proc-macro keys anywhere: bare, quoted, dotted, or inside an inline table
-        if (match(t, /(^|[{,. \t])["\047]?build["\047]?[ \t]*=/) && substr(t, RSTART + RLENGTH) !~ /^[ \t]*false/) emit("build-script", cur, this, text)
-        if (t ~ /(^|[{,. \t])["\047]?proc[-_]macro["\047]?[ \t]*=[ \t]*true/) emit("proc-macro", cur, this, text)
-        if (t ~ /"[^"]*\\[^"]*"[ \t]*[.=]/ || t ~ /^[ \t]*\[.*\\/) emit("build-script", cur, this, "escaped key: " text)
+        if (match(t, /(^|[{,. \t])["\047]?build["\047]?[ \t]*=/) && substr(t, RSTART + RLENGTH) !~ /^[ \t]*false/) emitc("build-script", cur, this, t)
+        if (t ~ /(^|[{,. \t])["\047]?proc[-_]macro["\047]?[ \t]*=[ \t]*true/) emitc("proc-macro", cur, this, t)
+        if (t ~ /"[^"]*\\[^"]*"[ \t]*[.=]/ || t ~ /^[ \t]*\[.*\\/) emitc("build-script", cur, this, "escaped key: " t)
         next
     }
     if (isrs) { gsub(/\t/, " ", text); print cur "\t" this "\t" text > rs_out }
@@ -468,6 +487,18 @@ fi
 # for a [lib]/[[bin]]/... path that is not a .rs file.
 cargo_entries() {
     awk '
+    function tstrip(s,   i, n, c, q) { # drop a trailing TOML comment; a # inside a string stays
+        if (index(s, "#") == 0) return s
+        n = length(s); q = ""
+        for (i = 1; i <= n; i++) {
+            c = substr(s, i, 1)
+            if (q == "\"") { if (c == "\\") i++; else if (c == "\"") q = ""; continue }
+            if (q == "\047") { if (c == "\047") q = ""; continue }
+            if (c == "\"" || c == "\047") { q = c; continue }
+            if (c == "#") { s = substr(s, 1, i - 1); sub(/[ \t]+$/, "", s); return s }
+        }
+        return s
+    }
     function flush() {
         if (intab) print key "\t" src "\t" ws "\t" tl "\t" tt
         intab = 0
@@ -495,7 +526,7 @@ cargo_entries() {
             if (tolower(v) !~ /\.rs$/) print "target-path|" v "\t\t0\t" NR "\t" t
         }
     }
-    { t = $0; sub(/^[ \t]+/, "", t); sub(/[ \t]+$/, "", t) }
+    { t = tstrip($0); sub(/^[ \t]+/, "", t); sub(/[ \t]+$/, "", t) }
     t ~ /^\[/ {
         flush(); mode = ""; started = 1
         h = t; sub(/^\[+[ \t]*/, "", h); sub(/[ \t]*\]+[ \t]*(#.*)?$/, "", h); h = norm(h); target = (h ~ /^(lib|bin|example|test|bench)$/)
@@ -541,12 +572,12 @@ if [ -s "$TMP/cargo-paths" ]; then
         END {
             for (i = 1; i <= n; i++) {
                 k = order[i]; sec = substr(k, 1, index(k, "|") - 1)
-                if (sec == "target-path") { if (!(k in inbase)) printf "include\t%s\t%s\ttarget path to a non-.rs file: %s\n", path, hline[k], htext[k]; continue }
+                if (sec == "target-path") { if (!(k in inbase)) printf "include\t%s\t%s\ttarget path to a non-.rs file: %s\t\t\t%s\n", path, hline[k], htext[k], htext[k]; continue }
                 if (!(k in inbase)) {
                     if (sec !~ /^(patch|replace)/ && hws[k] && (("workspace.dependencies|" substr(k, index(k, "|") + 1)) in wsroot)) continue
-                    printf "new-dep\t%s\t%s\tnew entry in [%s]: %s\n", path, hline[k], sec, htext[k]
+                    printf "new-dep\t%s\t%s\tnew entry in [%s]: %s\t\t\t%s\n", path, hline[k], sec, htext[k], htext[k]
                 } else if (hsrc[k] != bsrc[k]) {
-                    printf "new-dep\t%s\t%s\tsource changed in [%s]: %s\n", path, hline[k], sec, htext[k]
+                    printf "new-dep\t%s\t%s\tsource changed in [%s]: %s\t\t\t%s\n", path, hline[k], sec, htext[k], htext[k]
                 }
             }
         }' "$TMP/ws-root" "$TMP/base-entries" "$TMP/head-entries" >>"$TMP/findings" || die "cargo pass failed for $p"
@@ -661,9 +692,12 @@ FILENAME == apf { na++; ar[na] = $1; ag[na] = g2r($2); ap[na] = $3; al[na] = $4;
         if (!open) { status = "approved"; detail = ab[first] ": " aw[first] }
         else if (first) detail = open " of " ng " occurrences on the line not approved (first at column " col ")"
     } else {
+        # Field 7, when present, is the text rows match: for Cargo.toml findings the entry line
+        # itself (comment stripped), never the "new entry in [...]:" wording the gate adds.
+        mt = ($7 != "" ? $7 : $4)
         for (i = 1; i <= na; i++) {
             if (ar[i] != $1 || $2 !~ ag[i]) continue
-            if (ap[i] == "*" || index($4, ap[i]) > 0 || (al[i] == 0 && $4 ~ ap[i])) {
+            if (ap[i] == "*" || index(mt, ap[i]) > 0 || (al[i] == 0 && mt ~ ap[i])) {
                 status = "approved"; detail = ab[i] ": " aw[i]; break
             }
         }
