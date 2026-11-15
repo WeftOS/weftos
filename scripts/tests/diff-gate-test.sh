@@ -19,7 +19,7 @@ STUB="$ROOT/scripts/tests/diff-gate-tokens-stub.sh"
 export DIFF_GATE_TOKENS_BIN="${DIFF_GATE_TEST_TOKENS_BIN:-$STUB}"
 REAL_TOKENS=0; [ -n "${DIFF_GATE_TEST_TOKENS_BIN:-}" ] && REAL_TOKENS=1
 
-pass=0; fail=0
+pass=0; fail=0; gaps=0
 APPROVE_UNSAFE='[[approval]]
 rule = "unsafe"
 path = "src/**"
@@ -57,6 +57,19 @@ check_result() {
         echo "$out" | grep -Eq "^  FAIL +$r +" || missing="$missing $r"
     done
     if [ -n "${GREP:-}" ] && ! echo "$out" | grep -qF -- "$GREP"; then missing="$missing text:'$GREP'"; fi
+    # KNOWN_GAP=<id>: the case states what the spec requires and the gate does not do yet. It is
+    # reported as KNOWN-GAP (counted, not a failure); once the gate meets the spec it fails as
+    # "fixed", so the marker gets removed. DIFF_GATE_TEST_STRICT_GAPS=1 makes gaps fail too.
+    if [ -n "${KNOWN_GAP:-}" ]; then
+        if [ "$rc" = "$want" ] && [ -z "$missing" ]; then
+            fail=$((fail + 1)); printf '  FAIL  %s (KNOWN-GAP %s now behaves as the spec requires: remove the marker)\n' "$name" "$KNOWN_GAP"
+        else
+            gaps=$((gaps + 1)); [ "${DIFF_GATE_TEST_STRICT_GAPS:-0}" = 1 ] && fail=$((fail + 1))
+            printf '  KNOWN-GAP %s  %s (exit %s, spec wants %s; missing FAIL:%s)\n' "$KNOWN_GAP" "$name" "$rc" "$want" "${missing:- none}"
+            echo "$out" | grep -E '^diff-gate: (base|OK|REJECTED)|^  (FAIL|approved)' | head -4 | sed 's/^/        /'
+        fi
+        return 0
+    fi
     if [ "$rc" = "$want" ] && [ -z "$missing" ]; then pass=$((pass + 1)); printf '  ok    %s\n' "$name"
     else fail=$((fail + 1)); printf '  FAIL  %s (exit %s, wanted %s; missing FAIL:%s)\n%s\n' "$name" "$rc" "$want" "${missing:- none}" "$out" | sed 's/^/        /'; fi
 }
@@ -685,5 +698,11 @@ if [ "$REAL_TOKENS" = 1 ]; then
         'printf "// std::process::Command::new\nconst S: &str = \"unsafe TcpStream\";\n/// text: \`unsafe\`\npub fn ok() {}\n" >>src/lib.rs'
 fi
 
-echo "diff-gate fixtures: $pass passed, $fail failed"
+# 12. Independent review round (2026-11-15, w2/diff-gate-review-fixtures): spellings, Cargo
+# forms, trust inputs, rows, input robustness and the sensitive-crate rule. Cases the gate gets
+# wrong today are marked KNOWN_GAP; see reports/review-diff-gate-combined-20261115.md.
+# shellcheck source=scripts/tests/diff-gate-test-review.sh
+. "$ROOT/scripts/tests/diff-gate-test-review.sh"
+
+echo "diff-gate fixtures: $pass passed, $fail failed, $gaps known gaps"
 [ "$fail" -eq 0 ]
