@@ -1,5 +1,10 @@
 //! diff-gate-tokens --manifest FILE [--json]
+//! diff-gate-tokens --reach TREE ROOTS
 //! diff-gate-tokens --protocol
+//!
+//! --reach: TREE is a directory, ROOTS a file of TREE-relative paths of non-test Cargo target
+//! roots, one per line. Prints `N <TAB> path` for each file those roots build and
+//! `U <TAB> path <TAB> reason` for each file the walk could not follow (see reach.rs).
 //!
 //! Each manifest line is: repo path <TAB> head file <TAB> base file (empty for a new file)
 //! <TAB> added line numbers, comma-separated. Findings go to stdout in the gate's TSV format
@@ -27,6 +32,28 @@ fn run() -> Result<(), String> {
                 return Ok(());
             }
             "--json" => as_json = true,
+            "--reach" => {
+                let tree = args.get(k + 1).ok_or("--reach needs TREE ROOTS")?;
+                let roots = args.get(k + 2).ok_or("--reach needs TREE ROOTS")?;
+                let text = std::fs::read_to_string(roots)
+                    .map_err(|e| format!("cannot read {roots}: {e}"))?;
+                let list: Vec<String> = text
+                    .lines()
+                    .filter(|l| !l.is_empty())
+                    .map(String::from)
+                    .collect();
+                let r = diff_gate_tokens::reach::reach(std::path::Path::new(tree), &list);
+                let mut out = String::new();
+                for p in &r.nontest {
+                    out.push_str(&format!("N\t{}\n", p.replace(['\t', '\n'], " ")));
+                }
+                for (p, why) in &r.unknown {
+                    out.push_str(&format!("U\t{}\t{why}\n", p.replace(['\t', '\n'], " ")));
+                }
+                return std::io::stdout()
+                    .write_all(out.as_bytes())
+                    .map_err(|e| format!("write failed: {e}"));
+            }
             "--manifest" => {
                 k += 1;
                 manifest = Some(args.get(k).ok_or("--manifest needs a file")?.clone());
@@ -35,8 +62,9 @@ fn run() -> Result<(), String> {
         }
         k += 1;
     }
-    let manifest =
-        manifest.ok_or("usage: diff-gate-tokens --manifest FILE [--json] | --protocol")?;
+    let manifest = manifest.ok_or(
+        "usage: diff-gate-tokens --manifest FILE [--json] | --reach TREE ROOTS | --protocol",
+    )?;
     let text =
         std::fs::read_to_string(&manifest).map_err(|e| format!("cannot read {manifest}: {e}"))?;
     let mut all: Vec<(String, Vec<report::Finding>)> = Vec::new();

@@ -8,6 +8,7 @@
 //! Fail closed: a file that does not tokenize, or that syn cannot parse, is itself a finding.
 
 pub mod doc;
+pub mod reach;
 pub mod report;
 pub mod resolve;
 pub mod scan;
@@ -19,7 +20,7 @@ use std::collections::BTreeSet;
 pub use scan::Occ;
 
 /// Wire protocol between the gate script and this binary. Bump on any output change.
-pub const PROTOCOL: &str = "diff-gate-tokens protocol 1";
+pub const PROTOCOL: &str = "diff-gate-tokens protocol 2";
 
 pub struct Scan {
     pub occs: Vec<Occ>,
@@ -30,7 +31,7 @@ pub struct Scan {
 }
 
 /// Blank a byte-order mark and a shebang line without moving any later token.
-fn prepare(src: &str) -> String {
+pub(crate) fn prepare(src: &str) -> String {
     let mut s = src.replacen('\u{feff}', " ", usize::from(src.starts_with('\u{feff}')));
     if let Some(rest) = s.strip_prefix("#!") {
         if !rest.trim_start().starts_with('[') {
