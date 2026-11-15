@@ -488,7 +488,7 @@ owed and is **not** produced by the in-memory tests.
 7. ADR-131 D1 and D2 pass first (the card's prerequisite).
    - Evidence so far: not touched by the drills.
 
-**Measured in the drills, each an open owner question (nothing below is a decision).**
+**Measured in the drills. Each was an open owner question; decisions are recorded in place as they are made.**
 Source: the WO-069 drills report (`wo069-4a-drills-20261114.md`; lanes H, I, J and the round 4
 addendum). Branch `w2/wo069-worktree-mirror`, local.
 
@@ -508,7 +508,13 @@ addendum). Branch `w2/wo069-worktree-mirror`, local.
   with read-only scope was used (8 of 8 writes refused). So read-only followers are enforced by
   the S3 key, not by the daemon, and one daemon is one trust domain. This does not change the two
   machine case where each machine holds its own scoped key; it means the "two principals" of gate
-  item 1 on one daemon give no isolation. Open owner question.
+  item 1 on one daemon give no isolation.
+  **Decided 2026-11-15 (owner):** for S2, one daemon is one trust domain. Isolation between
+  principals comes from a scoped S3 key per machine: a follower machine holds a read-only key, and
+  that key is what makes it read-only. Gate item 1's "two different principals" therefore means
+  two machines with two keys, not two labels on one daemon. No code changes with this decision. A
+  caller identity the daemon can verify, which several principals sharing one daemon would need,
+  is separate work (board card 6f0bc9c8) and is not part of the gate.
 - **Interrupted publish (finding 3a, board card 6b58589c).** `publish_tree` overwrites a changed
   object in place before it writes the new manifest. If the publish stops after that overwrite and
   before the manifest write, the previous manifest is still served byte for byte, but reading that
