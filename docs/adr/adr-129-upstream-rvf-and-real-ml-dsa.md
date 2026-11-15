@@ -1,6 +1,7 @@
 # ADR-129: Upstream rvf-crypto and rvf-wire, real ML-DSA-65 in weftos-pq-sign, and a legacy policy for placeholder chain signatures
 
-- **Status**: Proposed (2026-10-30; owner direction "go with your recommendation", relayed by the lead).
+- **Status**: Accepted (2026-11-02, owner). Proposed 2026-10-30 on owner direction "go with your recommendation", relayed by the lead. Implemented on target-0.8.5 in `be4d6c6c7` and `03d75b6ad`.
+- **Updated**: 2026-11-02: status Proposed to Accepted; the decision text is unchanged. Open questions 2 and 3 below are still open.
 - **Supersedes**: ADR-029 (weftos-rvf-crypto fork strategy).
 - **Fixes**: the ADR-028 finding of 2026-10-30, where the ML-DSA-65 half of the dual signature was an HMAC placeholder.
 - **Finishes**: ADR-128 T0 (workspace on rvf-runtime 0.5 and rvf-types 0.3).

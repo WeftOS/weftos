@@ -388,6 +388,22 @@ Unchanged in spirit but now instruments a real app layer:
 - wasm bundle size optimise (release-lto + wasm-opt-from-source →
   ~1.3 MB gzipped). Current debug bundle: 5.0 MB.
 
+### Canon crosswalk finding — queued for round-table (2026-11-06)
+A real-hardware crosswalk (Infineon XENSIV sensor shield dashboard on
+Arduino VENTUNO Q, built in Figma from the 21-item canon only) found
+4 primitive gaps + 1 variant gap, written up as **ADR-020**
+(`adrs/adr-020-sensor-telemetry-primitives.md`): `ui://radar-sensor`,
+`ui://spectrogram`, `ui://attitude-3d`, `ui://timeline-scrubber`
+(canon → 25, the foundations.md ceiling), plus a `ui://gauge`
+circular-heading variant. Not implemented; not yet round-table
+reviewed. ADR-020 also surfaces a pre-existing, unrelated drift: ADR-001
+row 20 (`ui://foreign`) was never built in `clawft-canon`;
+`ui://thread-dock` shipped in that slot instead, contrary to both
+ADR-001's table and this file's own M2 section above ("ships as an
+app-level composition ... not a new primitive"). Needs an owner
+decision on ADR-020 and a separate reconciliation pass on the
+thread-dock/foreign row — neither started here.
+
 ---
 
 ## 🛠️ Round 3 — open questions carried over

@@ -1,6 +1,6 @@
 # Capability crosscut (auto)
 
-Generated: 2026-10-13T18:02:42.284Z
+Generated: 2026-10-31T01:46:42.509Z
 
 **String:** `SEE → WIRE → BUILD → UPSTREAM`
 
