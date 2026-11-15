@@ -20,8 +20,11 @@
 #                                               root; `dir/` lists a folder; `file` prints it (4 MiB cap, --max-bytes N)
 #   worktree-store.sh sync-docs <slug> <cache>  read-only local mirror of a worktree's docs
 #   worktree-store.sh overlaps <slugA> <slugB>  files both changed differently (merge-conflict hint)
-#   worktree-store.sh register [--path DIR] [--slug S]   WO-069 trigger (prototype, branch w2/wo069-a-trigger):
-#                                               record this machine's worktree for the periodic sweep
+#   worktree-store.sh register [--path DIR] [--slug S] [--follow-branch]   WO-069 trigger (prototype, branch w2/wo069-a-trigger):
+#                                               record this machine's worktree for the periodic sweep. The slug is fixed
+#                                               at registration (sweep notes branch-drift if the branch moves);
+#                                               --follow-branch (or WTS_FOLLOW_BRANCH=1) re-derives it every sweep and
+#                                               creates the new branch's store (the old slug's store is left as it was)
 #   worktree-store.sh unregister <slug>         forget it (touches nothing in the store)
 #   worktree-store.sh registered [--json]       list registered worktrees
 #   worktree-store.sh sweep [--only SLUG] [--json]

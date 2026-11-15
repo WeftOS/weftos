@@ -55,11 +55,12 @@ tree_digest() { # <worktree dir>
 }
 
 wts_register() {
-    local path="" slug="" top proj f oldpath
+    local path="" slug="" top proj f oldpath follow=${WTS_FOLLOW_BRANCH:-0}
     while [ $# -gt 0 ]; do
         case "$1" in
             --path) path=${2:?--path needs a directory}; shift 2 ;;
             --slug) slug=${2:?--slug needs a value}; shift 2 ;;
+            --follow-branch) follow=1; shift ;;
             *) die "register: unknown argument $1" ;;
         esac
     done
@@ -73,12 +74,17 @@ wts_register() {
     f=$(wts_root)/reg/$proj/$slug
     mkdir -p "$(dirname "$f")"
     oldpath=$(rget "$f" path)
-    if [ -f "$f" ] && [ "$oldpath" = "$top" ]; then warn "already registered: $slug"; return 0; fi
+    if [ -f "$f" ] && [ "$oldpath" = "$top" ]; then
+        [ "$follow" != 1 ] || [ "$(rget "$f" follow_branch)" = 1 ] || rset "$f" follow_branch 1
+        warn "already registered: $slug"; return 0
+    fi
     # A new path under an old slug starts over: the old digest describes another tree.
     : >"$f"
     rset "$f" slug "$slug"; rset "$f" project "$proj"; rset "$f" path "$top"
     rset "$f" registered_at "$(wts_now)"
     rset "$f" digest ""; rset "$f" head ""; rset "$f" published_at ""; rset "$f" missing_since ""
+    [ "$follow" != 1 ] || rset "$f" follow_branch 1
+    rset "$f" branch "$(git -C "$top" symbolic-ref --quiet --short HEAD || true)"   # for the drift note in sweep
     printf 'registered %s %s\n' "$slug" "$top"
 }
 
@@ -122,9 +128,25 @@ wts_slug_for_path() {
     return 0
 }
 
+# Branch-change option (design note Q9). Default (today): the slug is fixed at registration, so a worktree that
+# later checks out another branch keeps publishing, under the OLD slug, the NEW branch's tree. With
+# `register --follow-branch` (or WTS_FOLLOW_BRANCH=1 at register time) the registration is identified by its
+# path: each sweep re-derives the slug from the checked-out branch, creates that store when the slug moved
+# (create is idempotent), publishes there and records prev_slug. The old slug's store is left as it was.
+follow_slug() { # <reg file> <path>: print the slug to publish under; return 1 with a reason on stdout
+    local f=$1 path=$2 want g
+    want=$(cd "$path" && unset WTS_SLUG AGF_HOOK_BRANCH AGF_HOOK_SLUG && slug_of 2>/dev/null) || want=""
+    if [ -z "$want" ] || ! (check_slug "$want") 2>/dev/null; then printf 'cannot derive a store slug from the checked-out branch (detached HEAD or unusable name)'; return 1; fi
+    while IFS= read -r g; do
+        [ "$g" != "$f" ] && [ "$(rget "$g" project)" = "$(rget "$f" project)" ] && [ "$(rget "$g" slug)" = "$want" ] \
+            && { printf 'slug %s is already registered for %s' "$want" "$(rget "$g" path)"; return 1; }
+    done < <(reg_files)
+    printf '%s' "$want"
+}
+
 # One registered worktree: sets $status and $detail. No weaver call unless the digest moved.
 sweep_one() {
-    local f=$1 slug proj path digest head lock="" rc
+    local f=$1 slug proj path digest head lock="" rc want moved="" tref base drift="" cur regb
     slug=$(rget "$f" slug); proj=$(rget "$f" project); path=$(rget "$f" path)
     dry=${WTS_DRY_RUN:-0}; detail=""
     if [ ! -d "$path" ] || [ ! -e "$path/.git" ]; then
@@ -134,27 +156,46 @@ sweep_one() {
         return 0
     fi
     [ -z "$(rget "$f" missing_since)" ] || { [ "$dry" = 1 ] || rset "$f" missing_since ""; }
-    lock=$(wts_root)/lock/$proj-$slug
+    lock=$(wts_root)/lock/$proj-$(basename "$f")   # keyed by the registration, which is stable when the slug follows the branch
     mkdir -p "$(dirname "$lock")"
     if ! mkdir "$lock" 2>/dev/null; then
         if kill -0 "$(cat "$lock/pid" 2>/dev/null)" 2>/dev/null; then status=busy; return 0; fi
         rm -rf "$lock"; mkdir "$lock" 2>/dev/null || { status=busy; return 0; }
     fi
     echo $$ >"$lock/pid"
+    if [ "$(rget "$f" follow_branch)" = 1 ]; then
+        if ! want=$(follow_slug "$f" "$path"); then status=failed; detail=$want; rm -rf "$lock"; return 0; fi
+        [ "$want" = "$slug" ] || moved=$slug
+        slug=$want
+    fi
+    cur=$(git -C "$path" symbolic-ref --quiet --short HEAD 2>/dev/null || true); regb=$(rget "$f" branch)
+    # Default mode: the slug stays what it was at registration. Say so when the branch has moved on (the sweep then
+    # publishes the new branch's tree into the old slug's store); `register --follow-branch` is the alternative.
+    if [ "$(rget "$f" follow_branch)" != 1 ] && [ -n "$regb" ] && [ "$cur" != "$regb" ]; then
+        drift="branch-drift=$regb->${cur:-detached} (still publishing under slug $slug; see register --follow-branch) "
+        warn "$slug: worktree is now on '${cur:-a detached HEAD}', registered on '$regb'; publishing under the old slug"
+    fi
     digest=$(tree_digest "$path") || digest=""
     head=$(git -C "$path" rev-parse --verify -q HEAD || echo none)
     if [ -z "$digest" ]; then status=failed; detail="cannot compute the tree digest (perl Digest::SHA?)"
-    elif [ "$digest" = "$(rget "$f" digest)" ]; then status=unchanged; detail="head=$head"
+    elif [ -z "$moved" ] && [ "$digest" = "$(rget "$f" digest)" ]; then status=unchanged; detail="head=$head"
     else
-        rc=0; (cd "$path" && WTS_SLUG=$slug WTS_PROJECT=$proj "$WTS_SELF" share) >&2 || rc=$?
+        rc=0
+        if [ -n "$moved" ] && [ "$dry" != 1 ]; then
+            tref=$(cd "$path" && target_ref) && base=$(git -C "$path" merge-base "$tref" HEAD) || base=$head
+            store_must create --project "$proj" --slug "$slug" --branch "$(git -C "$path" symbolic-ref --short HEAD)" --base "$base" >&2 || rc=$?
+        fi
+        [ $rc != 0 ] || (cd "$path" && WTS_SLUG=$slug WTS_PROJECT=$proj "$WTS_SELF" share) >&2 || rc=$?
         if [ $rc != 0 ]; then status=failed; detail="share exited $rc; will retry next sweep"
         elif [ "$dry" = 1 ]; then status=would-publish; detail="head=$head"
         else
             # The digest taken BEFORE publishing: an edit made during the publish shows on the next sweep.
             rset "$f" digest "$digest"; rset "$f" head "$head"; rset "$f" published_at "$(wts_now)"
-            status=published; detail="head=$head"
+            [ -z "$moved" ] || { rset "$f" slug "$slug"; rset "$f" prev_slug "$moved"; rset "$f" branch "$cur"; detail="slug-moved=$moved->$slug "; }
+            status=published; detail="${detail}head=$head"
         fi
     fi
+    detail="$drift$detail"
     rm -rf "$lock"
 }
 
@@ -173,6 +214,7 @@ wts_sweep() {
         [ -z "$only" ] || [ "$slug" = "$only" ] || continue
         status=""; detail=""
         sweep_one "$f" || { status=failed; detail="sweep error"; }
+        slug=$(rget "$f" slug)   # a follow-branch registration may have moved to a new slug
         [ "$status" = failed ] && nfail=$((nfail+1))
         if [ "$json" = 1 ]; then
             [ $first = 1 ] || printf ','; first=0
