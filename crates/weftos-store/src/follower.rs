@@ -71,14 +71,21 @@ impl FollowState {
     /// saves last must not take that protection away. The save re-reads the file and writes the
     /// per-slug maximum of its `generations` and ours, under an exclusive `flock` on the state
     /// directory (std `File::lock`, no lock file is created) so the re-read and the rename are one
-    /// step for every saver. Where the directory cannot be locked (Windows, a filesystem without
-    /// `flock`) the merge still runs, unlocked, which leaves only a narrow interleaving. A file that
+    /// step for every saver. Where the directory cannot be locked (Windows, a filesystem that refuses
+    /// a directory lock) a sibling `.<name>.lock` file is locked instead (WO-069 lane Y); only where
+    /// no advisory lock works at all does the merge run unlocked, leaving a narrow interleaving. A file that
     /// cannot be parsed contributes nothing and is replaced (that is how an operator recovers it).
     ///
     /// Only the generations are merged. `seen` is last writer wins: two pollers sharing one file can
     /// overwrite each other's view, and the loser's next run re-reports, it never skips; give each
     /// its own state file. The in-memory `self` is not changed.
     pub fn save(&self, path: &Path) -> Result<()> {
+        self.save_locked(path, true)
+    }
+
+    /// [`Self::save`] with the directory lock switchable, the seam the lock tests use to take the
+    /// path a platform without one takes.
+    pub(crate) fn save_locked(&self, path: &Path, dir_lock: bool) -> Result<()> {
         let io =
             |e: std::io::Error| S2Error::Invalid(format!("follow state {}: {e}", path.display()));
         let dir = path
@@ -86,7 +93,7 @@ impl FollowState {
             .filter(|d| !d.as_os_str().is_empty())
             .unwrap_or(Path::new("."));
         std::fs::create_dir_all(dir).map_err(io)?;
-        let _lock = lock_dir(dir);
+        let _lock = lock_state(dir, path, dir_lock);
         let merged = self.with_generations_on_disk(path);
         merged.as_ref().unwrap_or(self).write_replacing(path, dir, &io)
     }
@@ -137,9 +144,31 @@ impl FollowState {
 
 /// An exclusive advisory lock on `dir`, held until the returned handle drops. `flock` on a directory
 /// handle works on Linux and macOS and creates no file. `None` when the directory cannot be opened
-/// or locked; the caller then proceeds without it.
+/// or locked; [`lock_state`] then locks a file instead.
 fn lock_dir(dir: &Path) -> Option<std::fs::File> {
     let f = std::fs::File::open(dir).ok()?;
+    f.lock().ok()?;
+    Some(f)
+}
+
+/// The lock `save` holds across its read-merge-rename: the directory itself where that works, else
+/// (WO-069 lane Y, item 4) a sibling `.<name>.lock` file. A directory cannot be opened as a file on
+/// Windows (inferred, not run there) and some filesystems refuse a directory lock; without the
+/// fallback the merge ran unlocked there and a racing save could lower a generation. The lock file
+/// is left in place, empty: the OS drops the lock with its holder, so it is never stale, and
+/// removing it after use would let two savers lock two different files. `None` only on a
+/// filesystem with no advisory locks at all; the merge then runs unlocked, as before.
+fn lock_state(dir: &Path, path: &Path, dir_lock: bool) -> Option<std::fs::File> {
+    if dir_lock && let Some(f) = lock_dir(dir) {
+        return Some(f);
+    }
+    let name = path.file_name()?.to_str()?;
+    let f = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join(format!(".{name}.lock")))
+        .ok()?;
     f.lock().ok()?;
     Some(f)
 }
@@ -353,3 +382,7 @@ pub(crate) fn diff_poll(
     let total = entries.len() + bad.len();
     poll_core(state, entries.into_iter().map(|e| (e, None)).collect(), bad, Vec::new(), total, allow_all_gone)
 }
+
+#[cfg(test)]
+#[path = "follower_lock_tests.rs"]
+mod lock_tests;

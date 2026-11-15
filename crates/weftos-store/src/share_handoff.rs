@@ -78,6 +78,7 @@ pub fn mark_handoff<B: ObjectBackend>(
             updated_ms: now_ms,
             epoch: seen.as_ref().map_or(0, |(h, _)| h.epoch),
             claimed_head: None,
+            claimed_tree: None,
         };
         if write_handoff_if(b, bucket, &next, seen.as_ref().map(|(_, e)| e.as_str()))? {
             return Ok(());
@@ -112,7 +113,7 @@ pub fn claim_merge_with<B: ObjectBackend>(
     for _ in 0..HANDOFF_RETRIES {
         // The head is read before the record: a publish landing in between makes the recorded head
         // older than the published one, so the merge is refused (safe), never the reverse.
-        let head = published_head(b, bucket)?;
+        let published = published(b, bucket)?;
         let (cur, etag) = read_handoff_versioned(b, bucket)?
             .ok_or_else(|| S2Error::Invalid("worktree has no handoff record".into()))?;
         match cur.state {
@@ -134,7 +135,8 @@ pub fn claim_merge_with<B: ObjectBackend>(
             merger: Some(me.clone()),
             updated_ms: now_ms,
             epoch: cur.epoch + 1,
-            claimed_head: head,
+            claimed_head: published.as_ref().map(|(h, _)| h.clone()),
+            claimed_tree: published.map(|(_, t)| t),
             ..cur
         };
         // Conditional on the version we decided on: of two claimers reading the same record, exactly
@@ -146,9 +148,12 @@ pub fn claim_merge_with<B: ObjectBackend>(
     Err(contended())
 }
 
-/// The head the worktree has published now (`None`: nothing published).
-fn published_head<B: ObjectBackend>(b: &B, bucket: &str) -> Result<Option<String>> {
-    Ok(read_manifest(b, bucket)?.map(|m| m.head_commit))
+/// The head and [`tree_digest`] the worktree has published now (`None`: nothing published).
+fn published<B: ObjectBackend>(b: &B, bucket: &str) -> Result<Option<(String, String)>> {
+    Ok(read_manifest(b, bucket)?.map(|m| {
+        let t = tree_digest(&m);
+        (m.head_commit, t)
+    }))
 }
 
 /// The fencing checks on a `Claimed` record, shared by [`mark_merged_at`] and [`fence_claim`].
@@ -158,8 +163,9 @@ fn published_head<B: ObjectBackend>(b: &B, bucket: &str) -> Result<Option<String
 /// that is not live (older than the TTL, or stamped more than [`CLAIM_SKEW_MS`] ahead, ADR-126 §4)
 /// is allowed, so a bad clock cannot block the writer forever, but it moves the published head away
 /// from the claimed one and with that voids the claim for merging: the claimer must claim again
-/// (and so see, and fetch, the new head). A record from before `claimed_head` existed is not fenced
-/// on head.
+/// (and so see, and fetch, the new head). A claim recorded before `claimed_head` existed (every
+/// released binary up to rc.15) names no head, so it cannot be fenced and is refused: the holder
+/// claims again, which records the head (WO-069 lane Y, item 3; a claim lives 30 minutes anyway).
 fn fence_claim_on<B: ObjectBackend>(b: &B, bucket: &str, cur: &Handoff, epoch: Option<u64>) -> Result<()> {
     if let Some(e) = epoch
         && e != cur.epoch
@@ -169,15 +175,33 @@ fn fence_claim_on<B: ObjectBackend>(b: &B, bucket: &str, cur: &Handoff, epoch: O
             cur.epoch
         )));
     }
-    if let Some(claimed) = cur.claimed_head.as_deref() {
-        let now = published_head(b, bucket)?;
-        if now.as_deref() != Some(claimed) {
-            return Err(S2Error::Claimed(format!(
-                "the published head moved from {claimed} to {} since the claim (epoch {}); claim again to merge it",
-                now.as_deref().unwrap_or("nothing"),
-                cur.epoch
-            )));
-        }
+    let Some(claimed) = cur.claimed_head.as_deref() else {
+        return Err(S2Error::Claimed(format!(
+            "the claim (epoch {}) was recorded without the head it claims, by a daemon from before head fencing; claim again to merge it",
+            cur.epoch
+        )));
+    };
+    let now = published(b, bucket)?;
+    let (head, tree) = match now.as_ref() {
+        Some((h, t)) => (Some(h.as_str()), Some(t.as_str())),
+        None => (None, None),
+    };
+    if head != Some(claimed) {
+        return Err(S2Error::Claimed(format!(
+            "the published head moved from {claimed} to {} since the claim (epoch {}); claim again to merge it",
+            head.unwrap_or("nothing"),
+            cur.epoch
+        )));
+    }
+    // Same head, other tree: a republish changed what a merger fetches (uncommitted files, the file
+    // list or the bundle). A claim from before `claimed_tree` is fenced on head only (lane Y, item 2).
+    if let Some(claimed_tree) = cur.claimed_tree.as_deref()
+        && tree != Some(claimed_tree)
+    {
+        return Err(S2Error::Claimed(format!(
+            "the published tree changed since the claim (same head {claimed}, epoch {}); claim again to merge it",
+            cur.epoch
+        )));
     }
     Ok(())
 }
@@ -257,11 +281,36 @@ pub fn mark_landed<B: ObjectBackend>(
     note: &str,
     now_ms: u64,
 ) -> Result<bool> {
+    mark_landed_at(b, bucket, lander, None, note, now_ms)
+}
+
+/// [`mark_landed`] for a lander that names the claim epoch it landed under (the daemon's
+/// `promote --epoch`). The fence ([`fence_claim_on`]: epoch, then the claimed head) runs inside the
+/// conditional-write loop, on the very version the write replaces, so a takeover between the check
+/// and the write makes the write fail and the re-read refuse (WO-069 lane Y, A3). Calling
+/// [`fence_claim`] and then [`mark_landed`] left that window open. A publish landing between the
+/// fence's manifest read and the write is not caught yet: publish does not write the record (design
+/// note `wo069-fence-atomicity-design-20261115.md`, A4). With `epoch: None` this is [`mark_landed`].
+pub fn mark_landed_at<B: ObjectBackend>(
+    b: &B,
+    bucket: &str,
+    lander: &Actor,
+    epoch: Option<u64>,
+    note: &str,
+    now_ms: u64,
+) -> Result<bool> {
     // Conditional, like the other handoff writes: the decision holds for exactly the version written over.
     for _ in 0..HANDOFF_RETRIES {
         let Some((cur, etag)) = read_handoff_versioned(b, bucket)? else { return Ok(false) };
         if matches!(cur.state, State::Merged | State::Archived) {
             return Ok(false);
+        }
+        // Only a `Claimed` record is fenced: an epoch on an open or handed-off record passes, as
+        // `fence_claim` always did. Whether it should refuse is an owner question (design note, B2).
+        if let Some(e) = epoch
+            && cur.state == State::Claimed
+        {
+            fence_claim_on(b, bucket, &cur, Some(e))?;
         }
         let note = match cur.merger.as_ref().filter(|m| *m != lander && cur.state == State::Claimed) {
             Some(m) => format!("{note} (claim was held by {}@{})", m.agent, m.host),

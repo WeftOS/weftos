@@ -214,14 +214,13 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
                 return Ok(json!({"dry_run": true, "preview": pv}));
             }
             // A caller that names the epoch it claimed under is refused when the claim was taken over
-            // since, or the published head is no longer the one it claimed (fencing, `fence_claim`);
-            // without one, a land that went through git is the merge whoever held the claim (a claim
-            // that is someone else's or has expired must not stop the assets reaching the project).
-            // A worktree that was never published has no handoff and gets none.
-            if let Some(ep) = p.epoch {
-                weftos_store::share::fence_claim(&b, &n.wt, ep).map_err(e)?;
-            }
-            weftos_store::share::mark_landed(&b, &n.wt, &who(&p), "landed", now_ms).map_err(e)?;
+            // since, or the published head is no longer the one it claimed. The fence runs inside the
+            // land's conditional write (`mark_landed_at`), so a takeover between the check and the
+            // write cannot get through (WO-069 lane Y, A3). Without an epoch, a land that went through
+            // git is the merge whoever held the claim (a claim that is someone else's or has expired
+            // must not stop the assets reaching the project). A worktree that was never published has
+            // no handoff and gets none.
+            weftos_store::share::mark_landed_at(&b, &n.wt, &who(&p), p.epoch, "landed", now_ms).map_err(e)?;
             svc.ensure_archive().map_err(|e| e.to_string())?;
             let prefix = archive_key(&n.wt, now_ms, "");
             let r = promote(

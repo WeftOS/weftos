@@ -375,6 +375,7 @@ pub fn publish_tree_listed<B: ObjectBackend>(
             updated_ms: now_ms,
             epoch: 0,
             claimed_head: None,
+            claimed_tree: None,
         };
         if write_handoff_if(b, bucket, &fresh, None)? {
             handoff_created = Some(fresh);

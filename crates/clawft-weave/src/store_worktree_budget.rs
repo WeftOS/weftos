@@ -338,6 +338,28 @@ fn sync_docs_overlaps_claim() {
     pin(c, [5, 3, 1, 2, 1, 0, 0, 0], "claim");
 }
 
+/// `promote --epoch` on a W-rig worktree, as measured: the land (handoff HEAD + GET, manifest HEAD +
+/// GET, one conditional PUT) plus what promotion itself does (meta and promotion records, the archive
+/// copy of the N tree objects and the control objects, the registry refresh), which A3 left unchanged.
+const PROMOTE_FENCED: K = [7, 3, 4, 4, 1, 0, N + 3, 0];
+
+#[test]
+fn promote_with_and_without_a_claim_epoch() {
+    let r = rig_w();
+    let claim = |slug: &str| r.run("claim", json!({"project": PROJ, "slug": slug, "agent": "bob", "host": "m2"})).0["epoch"].as_u64().unwrap();
+    let ep = claim("wt0");
+    claim("wt1");
+    let (_, fenced) = r.run("promote", json!({"project": PROJ, "slug": "wt0", "agent": "bob", "host": "m2", "epoch": ep}));
+    let (_, plain) = r.run("promote", json!({"project": PROJ, "slug": "wt1", "agent": "bob", "host": "m2"}));
+    // The fence runs inside the land's conditional write (WO-069 lane Y, A3): handoff HEAD + GET,
+    // manifest HEAD + GET (the claimed head), one conditional PUT. Unfenced: handoff HEAD + GET, PUT.
+    // So the fence costs one manifest HEAD + GET. Before A3 it was a separate `fence_claim` (handoff
+    // GET, manifest HEAD + GET) ahead of the land's own read: one GET more.
+    let diff: K = std::array::from_fn(|i| fenced[i] - plain[i]);
+    pin(diff, [1, 1, 0, 0, 0, 0, 0, 0], "promote --epoch minus promote");
+    pin(fenced, PROMOTE_FENCED, "promote --epoch");
+}
+
 #[test]
 fn fetch_tree_repeat_and_with_bundle() {
     let (_d, svc, t) = counting_rig();
