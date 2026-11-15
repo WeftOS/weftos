@@ -81,7 +81,6 @@ fn three(env: &Env<'_, weftos_store::FsBackend>) {
 }
 
 #[test]
-#[ignore = "FINDING 6b-2: a stale digest hides a removal from a knowing follower and shows a new one an unreadable slug"]
 fn a_digest_slug_with_no_object_is_gone_not_unreadable() {
     let d = tempfile::tempdir().unwrap();
     let be = weftos_store::FsBackend::open(d.path()).unwrap();
@@ -90,9 +89,35 @@ fn a_digest_slug_with_no_object_is_gone_not_unreadable() {
     let mut st = FollowState::default();
     poll_fast(&be, &env.pr, &mut st, false, true, 2).unwrap();
     S2::delete(&be, &env.pr, "worktrees/b.json").unwrap(); // the digest rewrite failed
-    assert!(kinds(&poll_fast(&be, &env.pr, &mut st, false, true, 2).unwrap()).contains(&"gone:b".to_string()));
     let fresh = kinds(&poll_fast(&be, &env.pr, &mut FollowState::default(), false, true, 2).unwrap());
-    assert!(!fresh.contains(&"bad:b".to_string()), "{fresh:?}");
+    assert!(!fresh.contains(&"bad:b".to_string()) && !fresh.contains(&"new:b".to_string()), "{fresh:?}");
+    // a follower whose recorded etag for b differs from the digest's fetches it, finds it absent, and reports it gone
+    st.seen.get_mut("b").unwrap().etag = Some("older".into());
+    assert!(kinds(&poll_fast(&be, &env.pr, &mut st, false, true, 2).unwrap()).contains(&"gone:b".to_string()));
+}
+
+#[test]
+#[ignore = "NOT PROMISED by ADR 126 4a: a knowing follower with an unchanged digest etag cannot see a removal the digest does not show; the digest-hit poll is one GET (ADR 4a poll cost)"]
+fn a_knowing_follower_sees_a_removal_even_when_the_digest_did_not_change() {
+    let d = tempfile::tempdir().unwrap();
+    let be = weftos_store::FsBackend::open(d.path()).unwrap();
+    let env = Env::new(&be, Some(&be));
+    three(&env);
+    let mut st = FollowState::default();
+    poll_fast(&be, &env.pr, &mut st, false, true, 2).unwrap();
+    S2::delete(&be, &env.pr, "worktrees/b.json").unwrap();
+    assert!(kinds(&poll_fast(&be, &env.pr, &mut st, false, true, 2).unwrap()).contains(&"gone:b".to_string()));
+}
+
+#[test]
+fn a_digest_slug_with_a_corrupt_object_is_still_unreadable() {
+    let d = tempfile::tempdir().unwrap();
+    let be = weftos_store::FsBackend::open(d.path()).unwrap();
+    let env = Env::new(&be, Some(&be));
+    three(&env);
+    S2::put(&be, &env.pr, "worktrees/b.json", b"{ nope").unwrap(); // present but damaged, digest stale
+    let fresh = kinds(&poll_fast(&be, &env.pr, &mut FollowState::default(), false, true, 2).unwrap());
+    assert!(fresh.contains(&"bad:b".to_string()), "{fresh:?}");
 }
 
 #[test]

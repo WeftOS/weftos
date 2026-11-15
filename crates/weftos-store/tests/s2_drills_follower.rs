@@ -213,12 +213,13 @@ fn d6b_damaged_entries<B: S2 + Sync>(env: &Env<'_, B>) {
     let known = kinds(&poll_fast(be, pr, &mut st, false, true, 3).unwrap());
     let fresh = fresh_kinds(be, pr, "digest");
     println!("DETAIL|6b|entry deleted, digest stale: a follower that knew it sees {known:?}; a new follower sees fwd as {:?}", fresh.iter().filter(|k| k.ends_with(":fwd")).collect::<Vec<_>>());
-    assert!(!known.contains(&"gone:fwd".to_string()), "a stale digest hides the removal from a follower that already knew the entry");
-    assert!(fresh.contains(&"bad:fwd".to_string()), "and shows it to a new follower as unreadable, not as absent");
-    finding("6b", "after an entry is deleted and the digest rewrite is swallowed (remove_registry_entry ignores that error), digest followers keep the worktree as live for a follower that knew it and report a NEW follower an `Unreadable` slug that does not exist, until the next digest write. Listing followers (poll, poll_fast without the digest) are right. Bounded by the next registry write; no repair path if the daemon is idle. Proposed: treat a digest slug whose object is missing as Gone, not Unreadable, and let `follow --full` be the documented cure");
+    // still hidden from a follower whose etag for it is unchanged: that is the one-GET poll, which cannot see a removal the digest does not show (documented in ADR 4a)
+    assert!(!known.contains(&"gone:fwd".to_string()), "an unchanged digest is one GET and cannot show the removal to a knowing follower: {known:?}");
+    assert!(!fresh.iter().any(|k| k.ends_with(":fwd")), "a new follower is not told about a slug whose object does not exist: {fresh:?}");
+    finding("6b", "PASS (fixed): a digest slug whose object is missing is dropped (Gone for a follower whose etag moved, not reported to a new one) instead of Unreadable. Still open by design: a knowing follower with an UNCHANGED digest etag keeps the worktree until the next digest write, because the digest-hit poll is one GET; `follow --full` is the cure");
     let healed = { write_digest(be, pr).unwrap(); kinds(&poll_fast(be, pr, &mut st, false, true, 3).unwrap()) };
     assert!(healed.contains(&"gone:fwd".to_string()), "the next digest write heals it: {healed:?}");
-    line("6b", "entry deleted under a stale digest: hidden from a knowing follower, 'unreadable' to a new one, healed by the next digest", t, "documented");
+    line("6b", "entry deleted under a stale digest: not unreadable to a new follower (FIXED); a knowing follower heals at the next digest write", t, "documented");
 }
 drill_sync!(damaged_entries, d6b_damaged_entries);
 

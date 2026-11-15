@@ -68,6 +68,22 @@ pub fn fetch_entries<B: ObjectBackend + Sync>(
     slugs: &[String],
     jobs: usize,
 ) -> Result<(Vec<RegistryEntry>, Vec<String>)> {
+    let (good, mut bad, missing) = fetch_entries_split(b, project_bucket, slugs, jobs)?;
+    bad.extend(missing);
+    bad.sort();
+    Ok((good, bad))
+}
+
+/// [`fetch_entries`] with the slugs whose object does not exist reported apart from the corrupt
+/// ones: an absent object is a removal (the registry listing would not show it), not damage. A
+/// caller working from the digest uses this so a stale digest never turns a removed worktree into
+/// an `Unreadable` slug. Returns `(readable, corrupt, missing)`.
+pub fn fetch_entries_split<B: ObjectBackend + Sync>(
+    b: &B,
+    project_bucket: &str,
+    slugs: &[String],
+    jobs: usize,
+) -> Result<(Vec<RegistryEntry>, Vec<String>, Vec<String>)> {
     let next = std::sync::atomic::AtomicUsize::new(0);
     let results = std::sync::Mutex::new(Vec::with_capacity(slugs.len()));
     let first_err = std::sync::Mutex::new(None);
@@ -78,7 +94,7 @@ pub fn fetch_entries<B: ObjectBackend + Sync>(
                     let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     let Some(slug) = slugs.get(i) else { return };
                     match b.get(project_bucket, &format!("{REGISTRY_PREFIX}{slug}.json")) {
-                        Ok(d) => results.lock().unwrap_or_else(|e| e.into_inner()).push((slug.clone(), check_entry(project_bucket, slug, d.as_deref()))),
+                        Ok(d) => results.lock().unwrap_or_else(|e| e.into_inner()).push((slug.clone(), check_entry(project_bucket, slug, d.as_deref()), d.is_none())),
                         Err(e) => {
                             first_err.lock().unwrap_or_else(|x| x.into_inner()).get_or_insert(e);
                             return;
@@ -91,16 +107,18 @@ pub fn fetch_entries<B: ObjectBackend + Sync>(
     if let Some(e) = first_err.into_inner().unwrap_or_else(|e| e.into_inner()) {
         return Err(e);
     }
-    let (mut good, mut bad) = (Vec::new(), Vec::new());
-    for (slug, e) in results.into_inner().unwrap_or_else(|e| e.into_inner()) {
+    let (mut good, mut bad, mut missing) = (Vec::new(), Vec::new(), Vec::new());
+    for (slug, e, absent) in results.into_inner().unwrap_or_else(|e| e.into_inner()) {
         match e {
             Some(e) => good.push(e),
+            None if absent => missing.push(slug),
             None => bad.push(slug),
         }
     }
     good.sort_by(|a, c| c.updated_ms.cmp(&a.updated_ms).then_with(|| a.slug.cmp(&c.slug)));
     bad.sort();
-    Ok((good, bad))
+    missing.sort();
+    Ok((good, bad, missing))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
