@@ -127,6 +127,27 @@ struct Instance {
 pub struct NativeRuntime {
     cfg: NativeConfig,
     instances: Mutex<HashMap<String, Instance>>,
+    /// Instance ids being staged right now. `load` claims the id here under the
+    /// `instances` lock, then drops that lock for the slow disk work (`stage`
+    /// can chown a large `data/`), so `status`/`start`/`stop` on other
+    /// instances are never held up by it. A claimed id is refused as "already
+    /// loaded", which is what keeps two loads of one id from staging one
+    /// directory.
+    staging: std::sync::Mutex<std::collections::HashSet<String>>,
+}
+
+/// Releases a claimed id from `staging` however `load` ends.
+struct StagingClaim<'a> {
+    set: &'a std::sync::Mutex<std::collections::HashSet<String>>,
+    iid: String,
+}
+
+impl Drop for StagingClaim<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut s) = self.set.lock() {
+            s.remove(&self.iid);
+        }
+    }
 }
 
 impl NativeRuntime {
@@ -135,6 +156,7 @@ impl NativeRuntime {
         Self {
             cfg,
             instances: Mutex::new(HashMap::new()),
+            staging: std::sync::Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -374,12 +396,24 @@ impl WorkloadRuntime for NativeRuntime {
         cfg.host.validate()?;
         p.spec.validate_args(&cfg.args)?;
         let iid = instance_id(w, cfg)?;
-        let mut map = self.instances.lock().await;
-        if map.contains_key(&iid) {
-            return Err(RuntimeError::InvalidState(format!(
-                "{iid} is already loaded"
-            )));
-        }
+        // Claim the id under the map lock, then let go of it: staging walks
+        // the cog's `data/` and must not hold the lock other calls need.
+        let _claim = {
+            let map = self.instances.lock().await;
+            let mut staging = self
+                .staging
+                .lock()
+                .map_err(|_| RuntimeError::Backend("staging set poisoned".into()))?;
+            if map.contains_key(&iid) || !staging.insert(iid.clone()) {
+                return Err(RuntimeError::InvalidState(format!(
+                    "{iid} is already loaded"
+                )));
+            }
+            StagingClaim {
+                set: &self.staging,
+                iid: iid.clone(),
+            }
+        };
         let dir = self.cfg.root.join(&iid);
         let program = dir.join(format!("cog-{}", w.id));
         let bytes = p.binaries[&adm.arch].bytes.clone();
@@ -402,7 +436,7 @@ impl WorkloadRuntime for NativeRuntime {
             .map_err(|e| RuntimeError::Backend(e.to_string()))??;
         let mut args = cfg.mode.args();
         args.extend(cfg.args.iter().cloned());
-        map.insert(
+        self.instances.lock().await.insert(
             iid.clone(),
             Instance {
                 dir,
@@ -616,6 +650,27 @@ thread_local! {
     pub(super) static CRASH_AFTER_CLEAR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
+#[cfg(test)]
+type Hold = (std::path::PathBuf, std::sync::Arc<std::sync::Mutex<()>>);
+
+#[cfg(test)]
+/// Test hook: a `stage` of this directory waits on the held mutex, standing in
+/// for a slow chown of a huge `data/`.
+pub(super) static STAGE_HOLD: std::sync::Mutex<Option<Hold>> = std::sync::Mutex::new(None);
+
+#[cfg(test)]
+fn test_hold(dir: &std::path::Path) {
+    let hold = STAGE_HOLD
+        .lock()
+        .unwrap()
+        .as_ref()
+        .filter(|(d, _)| d == dir)
+        .map(|(_, m)| m.clone());
+    if let Some(m) = hold {
+        drop(m.lock().unwrap());
+    }
+}
+
 pub(super) fn stage(
     dir: &std::path::Path,
     program: &std::path::Path,
@@ -703,6 +758,8 @@ pub(super) fn stage(
     if CRASH_AFTER_CLEAR.with(|c| c.replace(false)) {
         return Err(RuntimeError::Backend("injected crash after the directory was cleared".into()));
     }
+    #[cfg(test)]
+    test_hold(dir);
     let data = dir.join("data");
     // `data/` is kept only if it is a real directory; a link or file there is replaced.
     match std::fs::symlink_metadata(&data) {

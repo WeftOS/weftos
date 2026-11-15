@@ -69,6 +69,8 @@ mod tests_live;
 #[cfg(test)]
 mod tests_native;
 #[cfg(test)]
+mod tests_native_lock;
+#[cfg(test)]
 mod tests_wasmtime;
 #[cfg(test)]
 mod tests_seed;
