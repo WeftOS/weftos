@@ -348,6 +348,7 @@ pub mod timer;
 // ── Content integrity & operational services (08c) ───────────────
 pub mod auth_service;
 pub mod config_service;
+pub(crate) mod secret_seal;
 #[cfg(feature = "http-api")]
 pub mod http_api;
 /// Transport-agnostic REST + SSE facade types (WEFT-122 / Cognitum gaps #6–#8).

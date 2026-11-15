@@ -19,7 +19,9 @@ use tracing::{info, warn};
 use crate::error::KernelError;
 use crate::health::HealthStatus;
 use crate::process::Pid;
+use crate::secret_seal::SecretSeal;
 use crate::service::{ServiceType, SystemService};
+use zeroize::Zeroizing;
 
 #[cfg(feature = "exochain")]
 use crate::chain::ChainManager;
@@ -59,14 +61,15 @@ impl std::fmt::Display for CredentialType {
 // StoredCredential
 // ---------------------------------------------------------------------------
 
-/// An encrypted credential stored by the AuthService.
+/// A credential stored by the AuthService, its value sealed with
+/// XChaCha20-Poly1305 in memory.
 #[derive(Debug, Clone)]
 pub struct StoredCredential {
     /// Human-readable credential name.
     pub name: String,
     /// Credential classification.
     pub credential_type: CredentialType,
-    /// Encrypted credential value (never exposed directly).
+    /// Sealed credential value: nonce || ciphertext || tag (never exposed).
     encrypted_value: Vec<u8>,
     /// Agent IDs allowed to request tokens for this credential.
     pub allowed_agents: Vec<String>,
@@ -182,12 +185,13 @@ impl AuthToken {
 
 /// Centralized credential management service (Factotum pattern).
 ///
-/// - Credentials are registered once, encrypted at rest.
+/// - Credentials are registered once and held in memory only, their values
+///   sealed with XChaCha20-Poly1305 (see `secret_seal.rs`).
 /// - Agents request scoped tokens; raw credentials are never exposed.
 /// - Token issuance and access are audited.
 /// - SHA-256 hashed credentials support agent authentication.
 pub struct AuthService {
-    /// Registered credentials (encrypted, name-based).
+    /// Registered credentials (sealed, name-based).
     credentials: DashMap<String, StoredCredential>,
     /// SHA-256 hashed credentials (agent-id-based).
     hashed_credentials: DashMap<String, HashedCredential>,
@@ -197,8 +201,8 @@ pub struct AuthService {
     auth_tokens: DashMap<String, AuthToken>,
     /// Audit log.
     audit_log: std::sync::RwLock<Vec<AuditEntry>>,
-    /// Encryption key for credentials.
-    encryption_key: [u8; 32],
+    /// AEAD key for credential values (caller-supplied or per-instance random).
+    seal: SecretSeal,
     /// Monotonic token counter.
     token_counter: AtomicU64,
     /// ExoChain manager for event logging.
@@ -225,26 +229,34 @@ pub struct AuditEntry {
 }
 
 impl AuthService {
-    /// Create a new AuthService with the given encryption key.
+    /// Create a new AuthService whose credential values are sealed under the
+    /// given 256-bit key. The key never leaves this struct.
     pub fn new(encryption_key: [u8; 32]) -> Self {
+        let key = Zeroizing::new(encryption_key);
+        Self::with_seal(SecretSeal::from_key(&key))
+    }
+
+    /// Create an AuthService with a fresh random key for this instance
+    /// (each call draws a new key).
+    /// Credentials are in memory only, so nothing needs the key later.
+    pub fn new_default() -> Self {
+        Self::with_seal(SecretSeal::random())
+    }
+
+    fn with_seal(seal: SecretSeal) -> Self {
         Self {
             credentials: DashMap::new(),
             hashed_credentials: DashMap::new(),
             active_tokens: DashMap::new(),
             auth_tokens: DashMap::new(),
             audit_log: std::sync::RwLock::new(Vec::new()),
-            encryption_key,
+            seal,
             token_counter: AtomicU64::new(0),
             #[cfg(feature = "exochain")]
             chain_manager: None,
             #[cfg(feature = "exochain")]
             governance_gate: None,
         }
-    }
-
-    /// Create with a default (zero) encryption key (testing only).
-    pub fn new_default() -> Self {
-        Self::new([0u8; 32])
     }
 
     /// Set the chain manager for exochain event logging.
@@ -297,7 +309,10 @@ impl AuthService {
             )));
         }
 
-        let encrypted = self.xor_encrypt(value);
+        let encrypted = self
+            .seal
+            .seal(name.as_bytes(), value)
+            .map_err(|e| KernelError::Service(e.to_string()))?;
         #[cfg(feature = "exochain")]
         let cred_type_for_chain = credential_type.to_string();
         self.credentials.insert(
@@ -352,7 +367,10 @@ impl AuthService {
             .credentials
             .get_mut(name)
             .ok_or_else(|| KernelError::Service(format!("credential not found: {name}")))?;
-        cred.encrypted_value = self.xor_encrypt(new_value);
+        cred.encrypted_value = self
+            .seal
+            .seal(name.as_bytes(), new_value)
+            .map_err(|e| KernelError::Service(e.to_string()))?;
 
         #[cfg(feature = "exochain")]
         if let Some(ref cm) = self.chain_manager {
@@ -450,7 +468,7 @@ impl AuthService {
                 "auth",
                 crate::chain::EVENT_KIND_AUTH_TOKEN_ISSUE,
                 Some(serde_json::json!({
-                    "token_id": token.token_id,
+                    "token_fp": Self::token_fingerprint(&token.token_id),
                     "credential_name": request.credential_name,
                     "agent_id": request.agent_id,
                     "ttl_secs": request.ttl_secs,
@@ -459,7 +477,7 @@ impl AuthService {
         }
 
         info!(
-            token_id = %token.token_id,
+            token_fp = %Self::token_fingerprint(&token.token_id),
             credential = %request.credential_name,
             agent = %request.agent_id,
             ttl_secs = request.ttl_secs,
@@ -504,7 +522,7 @@ impl AuthService {
             use crate::governance::{GateEffectKind, with_effect_context};
             let ctx = with_effect_context(
                 serde_json::json!({
-                    "token_id": token_id,
+                    "token_fp": Self::token_fingerprint(token_id),
                 }),
                 &GateEffectKind::AuthTokenRevoke.effect_vector(),
             );
@@ -524,7 +542,7 @@ impl AuthService {
                 "auth",
                 crate::chain::EVENT_KIND_AUTH_TOKEN_REVOKE,
                 Some(serde_json::json!({
-                    "token_id": token_id,
+                    "token_fp": Self::token_fingerprint(token_id),
                 })),
             );
         }
@@ -541,6 +559,16 @@ impl AuthService {
     }
 
     // ── SHA-256 hashed credential operations ─────────────────────
+
+    /// Short, non-reversible fingerprint of a bearer token id for logs,
+    /// chain events and gate contexts: the first 8 bytes of
+    /// SHA-256(token_id), as 16 hex characters. A token id is the bearer
+    /// handle that `validate_token` / `check_scope` accept, so it must never
+    /// be logged or persisted itself (card 10a2eb4a).
+    pub fn token_fingerprint(token_id: &str) -> String {
+        let digest = Sha256::digest(token_id.as_bytes());
+        digest[..8].iter().map(|b| format!("{b:02x}")).collect()
+    }
 
     /// Compute the SHA-256 hash of a raw credential.
     fn sha256_hash(data: &[u8]) -> Vec<u8> {
@@ -664,12 +692,16 @@ impl AuthService {
                 Some(serde_json::json!({
                     "agent_id": agent_id,
                     "success": true,
-                    "token_id": token.token_id,
+                    "token_fp": Self::token_fingerprint(&token.token_id),
                 })),
             );
         }
 
-        info!(agent_id, token_id = %token.token_id, "agent authenticated");
+        info!(
+            agent_id,
+            token_fp = %Self::token_fingerprint(&token.token_id),
+            "agent authenticated"
+        );
         Ok(token)
     }
 
@@ -719,13 +751,19 @@ impl AuthService {
         self.audit_log.read().map(|l| l.clone()).unwrap_or_default()
     }
 
-    // ── Encryption ────────────────────────────────────────────────
+    // ── Sealing ───────────────────────────────────────────────────
 
-    fn xor_encrypt(&self, data: &[u8]) -> Vec<u8> {
-        data.iter()
-            .enumerate()
-            .map(|(i, b)| b ^ self.encryption_key[i % 32])
-            .collect()
+    /// Open a stored credential value. Nothing outside tests reads raw
+    /// values (agents get tokens, not credentials), so this is test-only.
+    #[cfg(test)]
+    fn open_credential(&self, name: &str) -> Result<Zeroizing<Vec<u8>>, KernelError> {
+        let cred = self
+            .credentials
+            .get(name)
+            .ok_or_else(|| KernelError::Service(format!("credential not found: {name}")))?;
+        self.seal
+            .open(name.as_bytes(), &cred.encrypted_value)
+            .map_err(|e| KernelError::Service(e.to_string()))
     }
 }
 
@@ -1156,4 +1194,84 @@ mod tests {
         let svc = AuthService::new_default();
         assert!(!svc.check_scope("no-such-token", "read"));
     }
+    // ── card a134bcf7: credentials are sealed with an AEAD, not keyed XOR ──
+
+    #[test]
+    fn same_credential_value_seals_differently() {
+        let svc = AuthService::new([0xAB; 32]);
+        svc.register_credential("a", CredentialType::ApiKey, b"same-value", vec![])
+            .unwrap();
+        svc.register_credential("b", CredentialType::ApiKey, b"same-value", vec![])
+            .unwrap();
+        let a = svc.credentials.get("a").unwrap().encrypted_value.clone();
+        let b = svc.credentials.get("b").unwrap().encrypted_value.clone();
+        assert_ne!(a, b, "a fresh nonce per seal must change the ciphertext");
+        svc.rotate_credential("a", b"same-value").unwrap();
+        assert_ne!(svc.credentials.get("a").unwrap().encrypted_value, a);
+    }
+
+    #[test]
+    fn credential_round_trips_and_rotates() {
+        let svc = AuthService::new([0xAB; 32]);
+        svc.register_credential("c", CredentialType::ApiKey, b"first", vec![])
+            .unwrap();
+        assert_eq!(&svc.open_credential("c").unwrap()[..], b"first");
+        svc.rotate_credential("c", b"second").unwrap();
+        assert_eq!(&svc.open_credential("c").unwrap()[..], b"second");
+    }
+
+    #[test]
+    fn tampered_credential_fails_to_open() {
+        let svc = AuthService::new([0xAB; 32]);
+        svc.register_credential("c", CredentialType::ApiKey, b"tamper-me", vec![])
+            .unwrap();
+        let original = svc.credentials.get("c").unwrap().encrypted_value.clone();
+        for i in 0..original.len() {
+            let mut t = original.clone();
+            t[i] ^= 0x01;
+            svc.credentials.get_mut("c").unwrap().encrypted_value = t;
+            assert!(svc.open_credential("c").is_err(), "byte {i}");
+        }
+    }
+
+    #[test]
+    fn credential_under_other_key_or_name_does_not_open() {
+        let a = AuthService::new([0x11; 32]);
+        let b = AuthService::new([0x22; 32]);
+        a.register_credential("c", CredentialType::ApiKey, b"cross", vec![])
+            .unwrap();
+        a.register_credential("d", CredentialType::ApiKey, b"other", vec![])
+            .unwrap();
+        b.register_credential("c", CredentialType::ApiKey, b"placeholder", vec![])
+            .unwrap();
+        let sealed = a.credentials.get("c").unwrap().encrypted_value.clone();
+        b.credentials.get_mut("c").unwrap().encrypted_value = sealed.clone();
+        assert!(b.open_credential("c").is_err(), "wrong key must fail");
+        a.credentials.get_mut("d").unwrap().encrypted_value = sealed;
+        assert!(a.open_credential("d").is_err(), "wrong slot must fail");
+    }
+
+    #[test]
+    fn default_auth_services_use_distinct_random_keys() {
+        let a = AuthService::new_default();
+        let b = AuthService::new_default();
+        a.register_credential("c", CredentialType::ApiKey, b"v", vec![])
+            .unwrap();
+        b.register_credential("c", CredentialType::ApiKey, b"w", vec![])
+            .unwrap();
+        let sealed = a.credentials.get("c").unwrap().encrypted_value.clone();
+        b.credentials.get_mut("c").unwrap().encrypted_value = sealed;
+        assert!(b.open_credential("c").is_err());
+    }
+
+    #[test]
+    fn no_keyed_xor_left_in_auth_service() {
+        let src = include_str!("auth_service.rs");
+        assert!(!src.contains(concat!("xor", "_encrypt")));
+        assert!(!src.contains(concat!("xor", "_decrypt")));
+    }
 }
+
+#[cfg(test)]
+#[path = "auth_service_redaction_tests.rs"]
+mod redaction_tests;

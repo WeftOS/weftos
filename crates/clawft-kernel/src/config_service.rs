@@ -1,9 +1,10 @@
 //! Configuration and secrets service (K5-G1).
 //!
 //! Provides [`ConfigService`] for runtime configuration management with
-//! change notification, typed values, and encrypted secret storage. Backed
-//! by in-memory stores (tree integration deferred to when `exochain`
-//! feature is enabled).
+//! change notification, typed values, and AEAD-sealed secret storage. Backed
+//! by in-memory stores only (tree integration deferred to when `exochain`
+//! feature is enabled); nothing here is persisted. Secrets are sealed with
+//! XChaCha20-Poly1305, see `secret_seal.rs` for the threat model.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
@@ -17,7 +18,9 @@ use tracing::info;
 use crate::error::KernelError;
 use crate::health::HealthStatus;
 use crate::process::Pid;
+use crate::secret_seal::SecretSeal;
 use crate::service::{ServiceType, SystemService};
+use zeroize::Zeroizing;
 
 #[cfg(feature = "exochain")]
 use crate::chain::ChainManager;
@@ -113,27 +116,68 @@ pub struct SecretRef {
 }
 
 // ---------------------------------------------------------------------------
+// Slot names
+// ---------------------------------------------------------------------------
+
+/// Whether `part` may be used as a config/secret namespace or key.
+///
+/// Every store is keyed by `"{namespace}/{key}"`, and the same string is the
+/// AEAD associated data for secrets. If either part could contain `/`, then
+/// `("a/b", "c")` and `("a", "b/c")` would be one slot, and a write through
+/// one name would replace the value and the `scoped_to` ACL of the other
+/// (card 10a2eb4a). So a part must be non-empty, must not be `.` or `..`,
+/// and must not contain `/`, `\` or any control character. With that rule
+/// the joined string splits back into exactly one `(namespace, key)` pair.
+pub fn is_valid_slot_part(part: &str) -> bool {
+    !part.is_empty()
+        && part != "."
+        && part != ".."
+        && !part
+            .chars()
+            .any(|c| c == '/' || c == '\\' || c.is_control())
+}
+
+/// Build the slot string for `(namespace, key)`, or reject the pair.
+fn slot(namespace: &str, key: &str) -> Result<String, KernelError> {
+    if !is_valid_slot_part(namespace) {
+        return Err(KernelError::Config(
+            "invalid namespace: must be non-empty, not '.' or '..', and contain no '/', '\\' or control characters".into(),
+        ));
+    }
+    if !is_valid_slot_part(key) {
+        return Err(KernelError::Config(
+            "invalid key: must be non-empty, not '.' or '..', and contain no '/', '\\' or control characters".into(),
+        ));
+    }
+    Ok(format!("{namespace}/{key}"))
+}
+
+// ---------------------------------------------------------------------------
 // ConfigService
 // ---------------------------------------------------------------------------
 
 /// Configuration and secrets service.
 ///
 /// Stores configuration values at `/kernel/config/{namespace}/{key}` and
-/// secrets at `/kernel/secrets/{namespace}/{key}` (encrypted at rest).
+/// secrets at `/kernel/secrets/{namespace}/{key}`, all in memory. Secret
+/// values are sealed with XChaCha20-Poly1305 and bound to their slot.
 /// Supports change notification via subscriptions.
+///
+/// Namespaces and keys must pass [`is_valid_slot_part`]: writes with any
+/// other name fail with `KernelError::Config`, reads return nothing.
 pub struct ConfigService {
     /// Config store: "namespace/key" -> value.
     configs: DashMap<String, serde_json::Value>,
     /// Typed config entries: "namespace/key" -> ConfigEntry.
     entries: DashMap<String, ConfigEntry>,
-    /// Secret store: "namespace/key" -> encrypted bytes.
+    /// Secret store: "namespace/key" -> sealed bytes (nonce || ciphertext || tag).
     secrets: DashMap<String, Vec<u8>>,
     /// Secret metadata: "namespace/key" -> SecretRef.
     secret_refs: DashMap<String, SecretRef>,
     /// Change subscribers: namespace -> list of subscription queues.
     subscribers: DashMap<String, Vec<Arc<RwLock<Vec<ConfigChange>>>>>,
-    /// Encryption key (derived from genesis in production).
-    encryption_key: [u8; 32],
+    /// AEAD key for secret values (caller-supplied or per-instance random).
+    seal: SecretSeal,
     /// Change log for auditing.
     change_log: RwLock<Vec<ConfigChange>>,
     /// Total config sets.
@@ -147,15 +191,28 @@ pub struct ConfigService {
 }
 
 impl ConfigService {
-    /// Create a new config service with a given encryption key.
+    /// Create a new config service whose secrets are sealed under the given
+    /// 256-bit key. The key never leaves this struct.
     pub fn new(encryption_key: [u8; 32]) -> Self {
+        let key = Zeroizing::new(encryption_key);
+        Self::with_seal(SecretSeal::from_key(&key))
+    }
+
+    /// Create a config service with a fresh random secret key for this
+    /// instance (each call draws a new key). Secrets are in memory only, so
+    /// nothing needs the key later.
+    pub fn new_default() -> Self {
+        Self::with_seal(SecretSeal::random())
+    }
+
+    fn with_seal(seal: SecretSeal) -> Self {
         Self {
             configs: DashMap::new(),
             entries: DashMap::new(),
             secrets: DashMap::new(),
             secret_refs: DashMap::new(),
             subscribers: DashMap::new(),
-            encryption_key,
+            seal,
             change_log: RwLock::new(Vec::new()),
             set_count: AtomicU64::new(0),
             #[cfg(feature = "exochain")]
@@ -163,11 +220,6 @@ impl ConfigService {
             #[cfg(feature = "exochain")]
             governance_gate: None,
         }
-    }
-
-    /// Create a config service with a default (zero) encryption key (testing).
-    pub fn new_default() -> Self {
-        Self::new([0u8; 32])
     }
 
     /// Set the chain manager for exochain event logging.
@@ -194,6 +246,8 @@ impl ConfigService {
         value: serde_json::Value,
         changed_by: Pid,
     ) -> Result<(), KernelError> {
+        let config_key = slot(namespace, key)?;
+
         // Governance gate: config changes are gated.
         #[cfg(feature = "exochain")]
         if let Some(ref gate) = self.governance_gate {
@@ -215,7 +269,6 @@ impl ConfigService {
             }
         }
 
-        let config_key = format!("{namespace}/{key}");
         let old_value = self.configs.get(&config_key).map(|v| v.value().clone());
         self.configs.insert(config_key, value.clone());
 
@@ -255,12 +308,14 @@ impl ConfigService {
 
     /// Get a configuration value.
     pub fn get(&self, namespace: &str, key: &str) -> Option<serde_json::Value> {
-        let config_key = format!("{namespace}/{key}");
+        let config_key = slot(namespace, key).ok()?;
         self.configs.get(&config_key).map(|v| v.value().clone())
     }
 
     /// Delete a configuration value.
     pub fn delete(&self, namespace: &str, key: &str, changed_by: Pid) -> Result<(), KernelError> {
+        let config_key = slot(namespace, key)?;
+
         // Governance gate: config deletion is gated.
         #[cfg(feature = "exochain")]
         if let Some(ref gate) = self.governance_gate {
@@ -282,7 +337,6 @@ impl ConfigService {
             }
         }
 
-        let config_key = format!("{namespace}/{key}");
         let old_value = self.configs.remove(&config_key).map(|(_, v)| v);
 
         let change = ConfigChange {
@@ -313,6 +367,9 @@ impl ConfigService {
 
     /// List all config keys in a namespace.
     pub fn list_keys(&self, namespace: &str) -> Vec<String> {
+        if !is_valid_slot_part(namespace) {
+            return Vec::new();
+        }
         let prefix = format!("{namespace}/");
         self.configs
             .iter()
@@ -331,7 +388,7 @@ impl ConfigService {
         value: ConfigValue,
         changed_by: Pid,
     ) -> Result<(), KernelError> {
-        let config_key = format!("{namespace}/{key}");
+        let config_key = slot(namespace, key)?;
         let json_value = value.to_json();
 
         // Also store in the legacy JSON map for backward compatibility.
@@ -365,12 +422,15 @@ impl ConfigService {
 
     /// Retrieve a typed configuration entry.
     pub fn get_typed(&self, namespace: &str, key: &str) -> Option<ConfigEntry> {
-        let config_key = format!("{namespace}/{key}");
+        let config_key = slot(namespace, key).ok()?;
         self.entries.get(&config_key).map(|e| e.value().clone())
     }
 
     /// List all typed entries in a namespace.
     pub fn list(&self, namespace: &str) -> Vec<ConfigEntry> {
+        if !is_valid_slot_part(namespace) {
+            return Vec::new();
+        }
         let prefix = format!("{namespace}/");
         self.entries
             .iter()
@@ -392,6 +452,8 @@ impl ConfigService {
         key: &str,
         changed_by: Pid,
     ) -> Result<bool, KernelError> {
+        let config_key = slot(namespace, key)?;
+
         // Governance gate: typed config deletion is gated.
         #[cfg(feature = "exochain")]
         if let Some(ref gate) = self.governance_gate {
@@ -413,7 +475,6 @@ impl ConfigService {
             }
         }
 
-        let config_key = format!("{namespace}/{key}");
         let removed = self.entries.remove(&config_key).is_some();
         // Also remove from legacy store.
         let old_value = self.configs.remove(&config_key).map(|(_, v)| v);
@@ -461,7 +522,7 @@ impl ConfigService {
 
     // ── Secret operations ─────────────────────────────────────────
 
-    /// Store an encrypted secret.
+    /// Store a secret, sealed with XChaCha20-Poly1305 and bound to its slot.
     pub fn set_secret(
         &self,
         namespace: &str,
@@ -469,6 +530,8 @@ impl ConfigService {
         value: &[u8],
         scoped_to: Vec<Pid>,
     ) -> Result<(), KernelError> {
+        let secret_key = slot(namespace, key)?;
+
         // Governance gate: secret storage is a critical action.
         #[cfg(feature = "exochain")]
         if let Some(ref gate) = self.governance_gate {
@@ -489,11 +552,11 @@ impl ConfigService {
             }
         }
 
-        let secret_key = format!("{namespace}/{key}");
-
-        // Simple XOR encryption (production would use AEAD).
-        let encrypted = self.xor_encrypt(value);
-        self.secrets.insert(secret_key.clone(), encrypted);
+        let sealed = self
+            .seal
+            .seal(secret_key.as_bytes(), value)
+            .map_err(|e| KernelError::Service(e.to_string()))?;
+        self.secrets.insert(secret_key.clone(), sealed);
 
         let secret_ref = SecretRef {
             namespace: namespace.to_string(),
@@ -518,14 +581,16 @@ impl ConfigService {
         Ok(())
     }
 
-    /// Retrieve a secret (decrypted). Checks PID authorization and expiry.
+    /// Retrieve a secret (opened). Checks PID authorization and expiry, and
+    /// fails if the sealed value was tampered with or moved between slots.
+    /// The returned plaintext is zeroized when dropped.
     pub fn get_secret(
         &self,
         namespace: &str,
         key: &str,
         requester_pid: Pid,
-    ) -> Result<Vec<u8>, KernelError> {
-        let secret_key = format!("{namespace}/{key}");
+    ) -> Result<Zeroizing<Vec<u8>>, KernelError> {
+        let secret_key = slot(namespace, key)?;
 
         let secret_ref = self
             .secret_refs
@@ -549,26 +614,14 @@ impl ConfigService {
             return Err(KernelError::Service("secret expired".into()));
         }
 
-        let encrypted = self
+        let sealed = self
             .secrets
             .get(&secret_key)
             .ok_or_else(|| KernelError::Service("secret data missing".into()))?;
 
-        Ok(self.xor_decrypt(&encrypted))
-    }
-
-    /// Simple XOR encryption with the key (for testing; production uses AEAD).
-    fn xor_encrypt(&self, data: &[u8]) -> Vec<u8> {
-        data.iter()
-            .enumerate()
-            .map(|(i, b)| b ^ self.encryption_key[i % 32])
-            .collect()
-    }
-
-    /// Decrypt XOR-encrypted data.
-    fn xor_decrypt(&self, data: &[u8]) -> Vec<u8> {
-        // XOR is symmetric.
-        self.xor_encrypt(data)
+        self.seal
+            .open(secret_key.as_bytes(), &sealed)
+            .map_err(|e| KernelError::Service(e.to_string()))
     }
 
     /// Get the change log (for auditing).
@@ -690,11 +743,11 @@ mod tests {
         svc.set_secret("creds", "api_key", b"secret123", vec![pid(1)])
             .unwrap();
         let val = svc.get_secret("creds", "api_key", pid(1)).unwrap();
-        assert_eq!(val, b"secret123");
+        assert_eq!(&val[..], b"secret123");
     }
 
     #[test]
-    fn secret_encrypted_at_rest() {
+    fn secret_stored_sealed_not_plaintext() {
         let key = [0xAB; 32];
         let svc = ConfigService::new(key);
         svc.set_secret("creds", "pass", b"plaintext", vec![pid(1)])
@@ -723,7 +776,7 @@ mod tests {
         let svc = ConfigService::new_default();
         svc.set_secret("open", "key", b"val", vec![]).unwrap();
         let val = svc.get_secret("open", "key", pid(42)).unwrap();
-        assert_eq!(val, b"val");
+        assert_eq!(&val[..], b"val");
     }
 
     #[test]
@@ -875,4 +928,95 @@ mod tests {
             ConfigValue::Json(serde_json::json!({"a": 1}))
         );
     }
+    // ── card a134bcf7: secrets are sealed with an AEAD, not keyed XOR ──
+
+    #[test]
+    fn secret_same_plaintext_seals_differently() {
+        let svc = ConfigService::new([0xAB; 32]);
+        svc.set_secret("creds", "a", b"same-value", vec![]).unwrap();
+        svc.set_secret("creds", "b", b"same-value", vec![]).unwrap();
+        let a = svc.secrets.get("creds/a").unwrap().clone();
+        let b = svc.secrets.get("creds/b").unwrap().clone();
+        assert_ne!(a, b, "a fresh nonce per seal must change the ciphertext");
+        svc.set_secret("creds", "a", b"same-value", vec![]).unwrap();
+        assert_ne!(*svc.secrets.get("creds/a").unwrap(), a);
+    }
+
+    #[test]
+    fn every_flipped_secret_byte_fails_to_open() {
+        let svc = ConfigService::new([0xAB; 32]);
+        svc.set_secret("creds", "k", b"tamper-me", vec![]).unwrap();
+        let original = svc.secrets.get("creds/k").unwrap().clone();
+        for i in 0..original.len() {
+            let mut tampered = original.clone();
+            tampered[i] ^= 0x01;
+            svc.secrets.insert("creds/k".into(), tampered);
+            assert!(
+                svc.get_secret("creds", "k", pid(1)).is_err(),
+                "flipping byte {i} must be detected"
+            );
+        }
+        svc.secrets.insert("creds/k".into(), original);
+        assert_eq!(&svc.get_secret("creds", "k", pid(1)).unwrap()[..], b"tamper-me");
+    }
+
+    #[test]
+    fn truncated_secret_fails_to_open() {
+        let svc = ConfigService::new([0xAB; 32]);
+        svc.set_secret("creds", "k", b"short", vec![]).unwrap();
+        let original = svc.secrets.get("creds/k").unwrap().clone();
+        for len in [0, 1, original.len() - 1] {
+            svc.secrets.insert("creds/k".into(), original[..len].to_vec());
+            assert!(svc.get_secret("creds", "k", pid(1)).is_err(), "len {len}");
+        }
+    }
+
+    #[test]
+    fn secret_sealed_under_other_key_does_not_open() {
+        let a = ConfigService::new([0x11; 32]);
+        let b = ConfigService::new([0x22; 32]);
+        a.set_secret("creds", "k", b"cross-key", vec![]).unwrap();
+        b.set_secret("creds", "k", b"placeholder", vec![]).unwrap();
+        let sealed = a.secrets.get("creds/k").unwrap().clone();
+        b.secrets.insert("creds/k".into(), sealed);
+        assert!(b.get_secret("creds", "k", pid(1)).is_err());
+    }
+
+    #[test]
+    fn sealed_secret_is_bound_to_its_slot() {
+        let svc = ConfigService::new([0xAB; 32]);
+        svc.set_secret("creds", "x", b"value-x", vec![]).unwrap();
+        svc.set_secret("creds", "y", b"value-y", vec![]).unwrap();
+        let x = svc.secrets.get("creds/x").unwrap().clone();
+        svc.secrets.insert("creds/y".into(), x);
+        assert!(
+            svc.get_secret("creds", "y", pid(1)).is_err(),
+            "a sealed value moved to another slot must not open"
+        );
+    }
+
+    #[test]
+    fn default_services_use_distinct_random_keys() {
+        let a = ConfigService::new_default();
+        let b = ConfigService::new_default();
+        a.set_secret("creds", "k", b"per-instance", vec![]).unwrap();
+        b.set_secret("creds", "k", b"placeholder", vec![]).unwrap();
+        let sealed = a.secrets.get("creds/k").unwrap().clone();
+        b.secrets.insert("creds/k".into(), sealed);
+        assert!(
+            b.get_secret("creds", "k", pid(1)).is_err(),
+            "new_default must not share a fixed (all-zero) key"
+        );
+    }
+
+    #[test]
+    fn no_keyed_xor_left_in_config_service() {
+        let src = include_str!("config_service.rs");
+        assert!(!src.contains(concat!("xor", "_encrypt")));
+        assert!(!src.contains(concat!("xor", "_decrypt")));
+    }
 }
+
+#[cfg(test)]
+#[path = "config_service_slot_tests.rs"]
+mod slot_tests;
