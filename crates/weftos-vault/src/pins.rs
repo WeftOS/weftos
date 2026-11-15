@@ -12,6 +12,14 @@ use crate::keybag::Keybag;
 /// Persist them with [`Pins::to_bytes`] after every unlock and after every
 /// [`crate::Vault::commit_write`], and load them with [`Pins::from_bytes`].
 ///
+/// **Enrolment.** A joining device should not trust the store on first use. The approving device, which
+/// already holds verified pins for the vault, sends its [`Pins::to_bytes`] over the authenticated enrolment
+/// channel (spec 5.4; rotation addendum section 3, item 4); the joining device loads them with
+/// [`Pins::from_bytes`] and passes them to its first [`crate::Vault::unlock`]. That pins the signer, the
+/// sequence and the VK generation the approver had seen. The bytes carry no integrity protection of their
+/// own, so the enrolment channel must provide it. A device that starts from [`Pins::default`] trusts
+/// whatever keybag first opens with its passcode.
+///
 /// The fields are private and only the crate records a keybag, after it has verified the signature
 /// and the rollback rules (an unlock, a create, or a committed write). A caller cannot pin an unverified
 /// signer or overwrite the highest digest to hide a fork (review R2-L1):

@@ -118,3 +118,28 @@ Until this lands, the user-facing response to a device compromise is to create a
 - **Zeroization (L3).** Buffers holding the passcode, recovery key and recovery code are sized before they are filled
   and are zeroized, and `CreateInputs` holds its key material in `Zeroizing`. The normalizer's small internal buffer,
   and stack copies from `getrandom`, are outside the crate's control.
+
+## 6. Round-3 review follow-ups (implemented 2026-11-15)
+
+From `reports/review-vault-v1-crypto-r3-20261115.md` (verdict LAND-OK, three LOW findings).
+
+- **Generation 0 is refused (R3-L1).** `validate_structure`, which runs at parse and on every write, refuses a keybag
+  whose `current_vk_generation` is 0 or that carries any wrapper at generation 0 (spec 4.1: generations start at 1).
+  Pins therefore never record generation 0, which `Pins::from_bytes` would refuse.
+- **The reader requires DRAFT (R3-L2).** While the format is unreviewed, `validate_structure` refuses a keybag without
+  the DRAFT flag (`NotDraft`). A signer who clears the flag gets a keybag that no V1 device opens, so it cannot lift
+  the DRAFT rule and seal real credentials. A reviewed format comes with a new vault and a version bump (owner Q6),
+  with a reader that drops this rule.
+- **Commits check the store (R3-L3).** `commit_write(pending, stored, pins)` takes the bytes the store holds after
+  `put_if_match` (a read-back, or the object the store returned) and refuses (`StoreMismatch`, nothing changed)
+  unless their SHA-256 equals the pending keybag's. A caller that misreads a refused `put_if_match` can no longer
+  install a rotation the store never took. A caller that lies about the read-back is still caught by the pins when it
+  has already unlocked the store's keybag (`Fork`, `Rollback`, `GenerationRollback`), and not otherwise: the
+  read-back is the caller's to get right.
+- **History entries leave only through `drop_history` (I1).** `remove_wrapper` refuses a kind 4 entry, so the one
+  call that makes a generation's blobs unreadable is the one documented to do so.
+- **Enrolment pinning (I3).** A joining device loads the approver's `Pins::to_bytes`, sent over the authenticated
+  enrolment channel, with `Pins::from_bytes` and passes them to its first unlock. That carries the signer, sequence and
+  generation (section 3, item 4). Documented on `Pins`.
+- **Not changed:** I2 (`change_passcode` on an older-generation passcode wrapper), I4 (sibling instances, benign), I5
+  (zeroization residue) and I6 (unlock error classes) stay as the review left them.
