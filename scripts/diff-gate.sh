@@ -173,8 +173,8 @@ hash_rows() {
 # Every key is resolved to its full path (header + dotted key + inline-table keys) before it is
 # classified, so `[dependencies] evil = ...`, `dependencies.evil = ...`, `dependencies = { evil
 # = ... }` and `[target.'cfg(unix)'] dependencies.evil = ...` are the same entry.
-cargo_entries() {
-    awk '
+cargo_entries() { # [keys]: also print build / proc-macro / crate-type / links lines (line mapping only)
+    awk -v keys="${1:-}" '
     function tstrip(s,   i, n, c, q) { # drop a trailing TOML comment; a # inside a string stays
         if (index(s, "#") == 0) return s
         n = length(s); q = ""
@@ -367,6 +367,8 @@ cargo_entries() {
     # One logical line per LF; a CR before it is dropped, a CR anywhere else also ends a line (a
     # lone CR is not a TOML newline, so Cargo rejects such a file; splitting there can only
     # show more keys). LN maps a logical line to the physical line git numbers.
+    # A UTF-8 BOM before the first statement is not part of it (Cargo strips it too; R3-A4).
+    NR == 1 && substr($0, 1, 3) == "\357\273\277" { $0 = substr($0, 4) }
     { r = $0; sub(/\r$/, "", r); n = split(r, part, "\r"); if (n == 0) { n = 1; part[1] = "" }
       for (i = 1; i <= n; i++) { NL++; LT[NL] = part[i]; LN[NL] = NR } }
     END {
@@ -394,6 +396,13 @@ cargo_entries() {
                     if (n == pl + 2 && s[pl + 2] == "workspace" && RCV[r] == "true") ew[k] = 1
                 }
                 continue
+            }
+            if (keys != "" && RCT[r] == "V") { # for mapping what cargo metadata reports back to a line
+                kk = ""
+                if (n == 2 && s[1] == "package" && s[2] ~ /^(build|links)$/) kk = "pkg|" s[2]
+                else if (n == 2 && s[1] == "lib" && s[2] ~ /^proc[-_]macro$/) kk = "lib|proc-macro"
+                else if (n == 2 && s[1] ~ /^(lib|example|bin)$/ && s[2] ~ /^crate[-_]type$/) kk = s[1] "|crate-type"
+                if (kk != "" && !(kk in kseen)) { kseen[kk] = 1; print kk "|" escv(RCV[r]) "\t\t0\t" LN[RCL[r]] "\t" text(RCL[r]) }
             }
             if (n == 2 && s[1] ~ /^(lib|bin|example|test|bench)$/ && s[2] == "path" && RCT[r] == "V") {
                 print "target-path|" escv(RCV[r]) "\t\t0\t" LN[RCL[r]] "\t" text(RCL[r]); continue
@@ -760,6 +769,320 @@ if [ -s "$TMP/rs-removed" ]; then
     done <"$TMP/rm-paths"
 fi
 
+# ── The token helper (tools/diff-gate-tokens, built from the trusted base) ──
+# Located here because the reachability step (before pass 2) uses it as well as pass 2b.
+TOKENS_PROTOCOL="diff-gate-tokens protocol 2"
+TOK_WHY=""; TOK_BIN=""; TOK_TRIED=0
+# real_path <path>: the path with every symlink in its existing part resolved (cd -P); the part
+# that does not exist yet is kept as written, and a ".." in it fails (it could climb anywhere).
+real_path() {
+    local p="$1" rest="" d
+    while [ ! -d "$p" ]; do
+        case "${p##*/}" in ..|.) return 1 ;; esac
+        rest="/${p##*/}$rest"; p="${p%/*}"; [ -n "$p" ] || p=/
+    done
+    d="$(cd -P -- "$p" 2>/dev/null && pwd -P)" || return 1
+    printf '%s%s\n' "${d%/}" "$rest"
+}
+REALROOT="$(cd -P -- "$ROOT" && pwd -P)" || die "cannot resolve the checkout path"
+tokens_bin() { # sets TOK_BIN, or TOK_WHY and fails; runs in this shell (no subshell)
+    local ref tree cache bin stage realcache realbin
+    if [ -n "${DIFF_GATE_TOKENS_BIN:-}" ]; then
+        echo "diff-gate: token helper from DIFF_GATE_TOKENS_BIN=$DIFF_GATE_TOKENS_BIN (not built from the base)" >&2
+        bin="$DIFF_GATE_TOKENS_BIN"
+    else
+        ref="${DIFF_GATE_TOKENS_REF:-$BASE_TIP}"
+        tree="$(git rev-parse -q --verify "$ref:tools/diff-gate-tokens" 2>/dev/null)" || { TOK_WHY="no tools/diff-gate-tokens at the trusted base $(git rev-parse --short "$ref" 2>/dev/null)"; return 1; }
+        cache="${DIFF_GATE_CACHE:-${RUNNER_TEMP:-${XDG_CACHE_HOME:-$HOME/.cache}}/weftos-diff-gate}"
+        case "$cache" in /*) ;; *) cache="$ROOT/$cache" ;; esac
+        case "$cache/" in "$ROOT"/*) TOK_WHY="cache $cache is inside the checkout (refused)"; return 1 ;; esac
+        # RV-C1: compare resolved paths, so a symlink (anywhere in the cache path) into the
+        # checkout is refused too. A change could commit a binary at the predictable path.
+        realcache="$(real_path "$cache")" || { TOK_WHY="cache $cache cannot be resolved (refused)"; return 1; }
+        case "$realcache/" in "$REALROOT"/*) TOK_WHY="cache $cache is inside the checkout (refused; it resolves to $realcache)"; return 1 ;; esac
+        bin="$cache/tokens-$tree/diff-gate-tokens"
+        if [ ! -x "$bin" ]; then
+            command -v cargo >/dev/null 2>&1 || { TOK_WHY="cargo not found to build tools/diff-gate-tokens"; return 1; }
+            mkdir -p "$cache" && stage="$(mktemp -d "$cache/build.XXXXXX")" || { TOK_WHY="cannot create $cache"; return 1; }
+            mkdir -p "$stage/src" && git archive "$tree" | tar -x -C "$stage/src" || { TOK_WHY="cannot extract the helper source"; rm -rf "$stage"; return 1; }
+            echo "diff-gate: building the token helper from the base (tree $tree)" >&2
+            if ! (cd "$stage/src" && CARGO_TARGET_DIR="$stage/target" cargo build --release --locked --quiet) >"$stage/build.log" 2>&1; then
+                tail -5 "$stage/build.log" >&2; TOK_WHY="cargo build of tools/diff-gate-tokens failed"; rm -rf "$stage"; return 1
+            fi
+            # Publish atomically: a concurrent run either sees no binary or the whole one.
+            mkdir -p "$stage/out" && mv "$stage/target/release/diff-gate-tokens" "$stage/out/" \
+                && { mv "$stage/out" "$cache/tokens-$tree" 2>/dev/null || true; }
+            rm -rf "$stage"
+        fi
+    fi
+    if [ -z "${DIFF_GATE_TOKENS_BIN:-}" ]; then # the cached binary: a plain file whose directory is outside the checkout
+        [ -L "$bin" ] && { TOK_WHY="helper $bin is a symlink (refused)"; return 1; }
+        realbin="$(real_path "${bin%/*}")" || { TOK_WHY="cannot resolve ${bin%/*} (refused)"; return 1; }
+        case "$realbin/" in "$REALROOT"/*) TOK_WHY="helper directory ${bin%/*} resolves into the checkout (refused)"; return 1 ;; esac
+    fi
+    [ -x "$bin" ] || { TOK_WHY="helper $bin is not executable"; return 1; }
+    [ "$("$bin" --protocol 2>/dev/null)" = "$TOKENS_PROTOCOL" ] || { TOK_WHY="helper $bin does not speak '$TOKENS_PROTOCOL'"; return 1; }
+    TOK_BIN="$bin"
+}
+# tokens_ready: tokens_bin once per run (the reachability step and pass 2b both use it)
+tokens_ready() {
+    if [ "$TOK_TRIED" = 0 ]; then TOK_TRIED=1; tokens_bin || true; fi
+    [ -n "$TOK_BIN" ]
+}
+
+# ── Cargo's own reading of the manifests (R3-A1..A4, R3-B1) ──────────
+# The awk reader above is a second opinion. What Cargo builds is judged by Cargo: for every
+# package a change can affect, `cargo metadata --no-deps --offline --frozen` runs on the base
+# and on the head, and the gate compares what it reports (build script, proc-macro, crate
+# types, links, targets and their paths, dependencies with kind, target, rename and source).
+# Safety: the tree cargo reads is a copy in $TMP holding only the Cargo.toml files (their
+# bytes; a symlinked one gets its target's bytes when that target is a file in the same tree)
+# and empty placeholders for every .rs path, so target auto-discovery sees what it would see in
+# the checkout. No .cargo/config and no rust-toolchain file is copied: the path rules flag
+# those. cargo is the toolchain binary itself (`rustup which cargo`, resolved outside the
+# checkout), not the rustup proxy, so no toolchain file can pick it, and it runs under env -i
+# with a throwaway HOME and CARGO_HOME, PATH=/usr/bin:/bin, CARGO_NET_OFFLINE and
+# RUSTC=/nonexistent. `metadata --no-deps` runs no build script and no proc-macro and needs no
+# rustc; --offline --frozen forbid the network. A head that cargo cannot read is a
+# cargo-unparsed finding, never a pass.
+# Affected packages: every changed Cargo.toml; the package around any .rs file added, deleted
+# or retyped (target discovery), around a changed .cargo/config* or rust-toolchain* (forced),
+# and around any changed .rs file of a sensitive crate (reachability below); and a symlinked
+# Cargo.toml whose target file changed.
+META="$TMP/meta"; mkdir -p "$META/home" "$META/cargo-home" "$META/base" "$META/head" || die "mkdir failed"
+META="$(cd -P "$META" && pwd -P)" || die "cannot resolve $TMP"
+: >"$TMP/meta-findings"; : >"$TMP/meta-raw"; : >"$TMP/meta-head.rec"; : >"$TMP/meta-base.rec"
+META_STATE="ok"; META_WHY=""
+# meta_list <rev|WORKTREE>: "mode <TAB> path" for every file of that side (no nested repos)
+meta_list() {
+    if [ "$1" = WORKTREE ]; then
+        { git ls-files -z -c -o --exclude-standard; cat "$TMP/ignored-scan" 2>/dev/null; } | tr '\000' '\n' | awk '!s[$0]++' |
+            while IFS= read -r f; do f="${f#./}"; if [ -L "$f" ]; then printf '120000\t%s\n' "$f"; elif [ -f "$f" ]; then printf '100644\t%s\n' "$f"; fi; done
+    else
+        git ls-tree -r -z --full-tree "$1" | tr '\000' '\n' | awk -F'\t' '{ split($1, m, " "); if (m[2] == "blob") print m[1] "\t" $2 }'
+    fi
+}
+# meta_index <rev|WORKTREE> <dir>: list that side (dir.lst, dir.rs, dir.man) and resolve its
+# symlinked manifests (dir.links: manifest <TAB> target, "!" for one that leaves the tree)
+meta_index() {
+    local side="$1" dir="$2" mode p t
+    if [ "$side" = WORKTREE ]; then git ls-files -z -c -o --exclude-standard >"$TMP/nl.chk"; else git ls-tree -r -z --name-only --full-tree "$side" >"$TMP/nl.chk"; fi
+    [ "$(tr -cd '\n' <"$TMP/nl.chk" | wc -c)" -eq 0 ] || die "a path in the tree holds a newline (refused)"
+    meta_list "$side" >"$dir.lst" || die "cannot list $side"
+    awk -F'\t' 'tolower($2) ~ /\.rs$/ { print $2 }' "$dir.lst" >"$dir.rs"
+    awk -F'\t' '{ n = split(tolower($2), a, "/"); if (a[n] == "cargo.toml") print }' "$dir.lst" >"$dir.man"
+    : >"$dir.links"
+    while IFS="$(printf '\t')" read -r mode p; do
+        [ "$mode" = 120000 ] || continue
+        if [ "$side" = WORKTREE ]; then t="$(readlink "$p")"; else t="$(git cat-file blob "$side:$p")"; fi
+        case "$t" in /*) t="/!" ;; esac
+        case "$p" in */*) t="${p%/*}/$t" ;; esac
+        t="$(printf '%s' "$t" | awk -F/ '{ k = 0; for (i = 1; i <= NF; i++) { if ($i == "" || $i == ".") continue; if ($i == ".." || $i == "!") { if (k == 0 || $i == "!") { print "!"; exit } k--; continue } s[++k] = $i } o = ""; for (i = 1; i <= k; i++) o = o (i > 1 ? "/" : "") s[i]; print o }')"
+        printf '%s\t%s\n' "$p" "$t" >>"$dir.links"
+    done <"$dir.man"
+}
+# meta_build <rev|WORKTREE> <dir>: cargo's view of that side in dir: every Cargo.toml's bytes
+# (a symlinked one: its target's, when that is a file of this tree) and an empty file per .rs
+meta_build() {
+    local side="$1" dir="$2" mode p t
+    { awk '{ d = $0; if (sub(/\/[^\/]*$/, "", d)) print d }' "$dir.rs"; awk -F'\t' '{ d = $2; if (sub(/\/[^\/]*$/, "", d)) print d }' "$dir.man"; } |
+        sort -u | (cd "$dir" && tr '\n' '\000' | xargs -0 mkdir -p) || die "cannot build the cargo tree"
+    (cd "$dir" && tr '\n' '\000' | xargs -0 touch) <"$dir.rs" || die "cannot build the cargo tree"
+    while IFS="$(printf '\t')" read -r mode p; do
+        rm -f "$dir/$p"
+        if [ "$mode" = 120000 ]; then
+            t="$(awk -F'\t' -v p="$p" '$1 == p { print $2; exit }' "$dir.links")"
+            if [ "$t" != "!" ] && awk -F'\t' -v t="$t" '$2 == t && $1 != "120000" { f = 1 } END { exit !f }' "$dir.lst"; then
+                show_at "$side" "$t" >"$dir/$p"
+            else
+                printf 'symlinked manifest that leaves the tree or names no file\n' >"$dir/$p"
+            fi
+        else
+            show_at "$side" "$p" >"$dir/$p"
+        fi
+    done <"$dir.man"
+}
+# meta_affected: manifests (head or base paths) whose package a change can affect
+meta_affected() {
+    awk -F'\t' -v sensf="$TMP/sens" -v hm="$META/head.man" -v bm="$META/base.man" -v hl="$META/head.links" -v bl="$META/base.links" "$G2R_AWK"'
+    function near(p,   d) { d = p; while (1) { if (!sub(/\/[^\/]*$/, "", d)) d = ""; if ((d == "" ? "Cargo.toml" : d "/Cargo.toml") in M) { print (d == "" ? "Cargo.toml" : d "/Cargo.toml"); return } if (d == "") return } }
+    FILENAME == sensf { if ($1 == "S") sg[++ns] = g2r($2); next }
+    FILENAME == hm || FILENAME == bm { M[$2] = 1; next }
+    FILENAME == hl || FILENAME == bl { L[$2] = L[$2] SUBSEP $1; next }
+    {
+        st = $1; p = $4; lp = tolower(p); n = split(lp, a, "/")
+        if (a[n] == "cargo.toml") { print p; next }
+        if ((st == "A" || st == "D" || st == "T") && lp ~ /\.rs$/) near(p)
+        if (lp ~ /(^|\/)\.cargo\/config/ || lp ~ /(^|\/)rust-toolchain(\.toml)?$/) { q = p; sub(/(^|\/)\.[cC][aA][rR][gG][oO]\/[^\/]*$/, "", q); near(q "/x") }
+        if (lp ~ /\.rs$/) for (i = 1; i <= ns; i++) if (p ~ sg[i]) { near(p); break }
+        if (p in L) { k = split(substr(L[p], 2), b, SUBSEP); for (i = 1; i <= k; i++) print b[i] }
+    }' "$TMP/sens" "$META/head.man" "$META/base.man" "$META/head.links" "$META/base.links" "$TMP/files" | awk '!s[$0]++'
+}
+# meta_cargo: the cargo binary of the toolchain, resolved outside the checkout
+meta_cargo() {
+    local c=""
+    if [ -n "${DIFF_GATE_CARGO:-}" ]; then c="$DIFF_GATE_CARGO"
+    else
+        c="$(cd "$META" && rustup which cargo 2>/dev/null)" || c=""
+        [ -n "$c" ] || c="$(cd "$META" && command -v cargo 2>/dev/null)" || c=""
+    fi
+    [ -n "$c" ] && [ -x "$c" ] || { META_WHY="cargo not found"; return 1; }
+    case "$(real_path "${c%/*}" 2>/dev/null)/" in "$REALROOT"/*) META_WHY="cargo $c resolves into the checkout (refused)"; return 1 ;; esac
+    CARGO_BIN="$c"
+}
+# The JSON cargo prints, flattened by a small reader (cargo writes it, so it is well formed;
+# anything else fails closed), into records: P mp links / T mp kinds crate_types src name /
+# D mp kind target key package source path registry. Paths are relative to the side's tree.
+META_JSON_AWK='
+function hexv(h,   i, v) { v = 0; h = tolower(h); for (i = 1; i <= length(h); i++) v = v * 16 + index("0123456789abcdef", substr(h, i, 1)) - 1; return v }
+function escv(s) { gsub(/%/, "%25", s); gsub(/\t/, "%09", s); gsub(/\n/, "%0A", s); gsub(/\r/, "%0D", s); return s }
+function relp(p) { if (p == root) return "."; if (index(p, root "/") == 1) return substr(p, length(root) + 2); if (index(p, par "/") == 1) return "../" substr(p, length(par) + 2); return p }
+function push(t) { d++; T[d] = t; K[d] = (t == "a") ? 0 : ""; km = (t == "o") }
+function emit(ty, v,   n, m, f) {
+    if (d == 1 && K[1] == "workspace_root") return
+    if (K[1] != "packages" || d < 3) return
+    n = K[2] + 0; if (n > np) np = n
+    if (d == 3 && (K[3] == "manifest_path" || K[3] == "links")) { PK[n, K[3]] = (ty == "s" ? v : ""); return }
+    if (K[3] == "targets") {
+        m = K[4] + 0; if (m + 1 > nt[n]) nt[n] = m + 1; f = K[5]
+        if (d == 5 && (f == "src_path" || f == "name")) TG[n, m, f] = v
+        else if (d == 6 && (f == "kind" || f == "crate_types")) TG[n, m, f] = TG[n, m, f] (TG[n, m, f] == "" ? "" : ",") v
+        return
+    }
+    if (K[3] == "dependencies" && d == 5) { m = K[4] + 0; if (m + 1 > nd[n]) nd[n] = m + 1; DP[n, m, K[5]] = (ty == "s" ? v : "") }
+}
+function str(s) { if (T[d] == "o" && km) { K[d] = s; km = 0 } else emit("s", s) }
+function feed(c,   v) {
+    if (ins) {
+        if (uh > 0) { ux = ux c; if (--uh == 0) { v = hexv(ux); sb = sb ((v > 0 && v < 128) ? sprintf("%c", v) : "\\u{" tolower(ux) "}") } return }
+        if (es) { es = 0
+            if (c == "u") { uh = 4; ux = ""; return }
+            if (c == "n") c = "\n"; else if (c == "t") c = "\t"; else if (c == "r") c = "\r"; else if (c == "b") c = "\b"; else if (c == "f") c = "\f"
+            else if (c != "\"" && c != "\\" && c != "/") bad = 1
+            sb = sb c; return }
+        if (c == "\\") { es = 1; return }
+        if (c == "\"") { ins = 0; str(sb); return }
+        sb = sb c; return
+    }
+    if (c == "\"") { if (lt != "") bad = 1; ins = 1; sb = ""; return }
+    if (c ~ /[-0-9a-zA-Z.+]/) { lt = lt c; return }
+    if (lt != "") { emit("l", lt); lt = "" }
+    if (c == "{") { push("o"); return }
+    if (c == "[") { push("a"); return }
+    if (c == "}" || c == "]") { if (d < 1 || T[d] != (c == "}" ? "o" : "a")) bad = 1; d--; if (d < 0) d = 0; return }
+    if (c == ",") { if (T[d] == "a") K[d]++; else km = 1; return }
+    if (c == ":") { km = 0; return }
+    if (c != " " && c != "\t" && c != "\n" && c != "\r") bad = 1
+}
+BEGIN { RS = ","; par = root; sub(/\/[^\/]*$/, "", par); np = -1 }
+{ if (NR > 1) feed(","); L = length($0); for (i = 1; i <= L; i++) feed(substr($0, i, 1)) }
+END {
+    if (lt != "") emit("l", lt)
+    if (bad || ins || d != 0 || NR == 0) exit 3
+    for (n = 0; n <= np; n++) {
+        mp = relp(PK[n, "manifest_path"]); if (mp == "") exit 3
+        printf "P\t%s\t%s\n", escv(mp), escv(PK[n, "links"])
+        for (m = 0; m < nt[n]; m++) printf "T\t%s\t%s\t%s\t%s\t%s\n", escv(mp), escv(TG[n, m, "kind"]), escv(TG[n, m, "crate_types"]), escv(relp(TG[n, m, "src_path"])), escv(TG[n, m, "name"])
+        for (m = 0; m < nd[n]; m++) {
+            k = DP[n, m, "rename"]; if (k == "") k = DP[n, m, "name"]
+            pth = DP[n, m, "path"]; if (pth != "") pth = relp(pth)
+            printf "D\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", escv(mp), escv(DP[n, m, "kind"]), escv(DP[n, m, "target"]), escv(k), escv(DP[n, m, "name"]), escv(DP[n, m, "source"]), escv(pth), escv(DP[n, m, "registry"])
+        }
+    }
+}'
+# meta_run <base|head> <manifest>: cargo metadata for the workspace holding manifest (once per
+# workspace). Records go to meta-<side>.rec; a failure is noted in meta-<side>.fail.
+meta_run() {
+    local side="$1" mp="$2" dir="$META/$1" out rc err
+    grep -qxF -- "$mp" "$META/$side.covered" 2>/dev/null && return 0
+    [ -f "$dir/$mp" ] || return 0
+    out="$META/run.json"; err="$META/run.err"
+    (cd "$dir" && env -i PATH=/usr/bin:/bin HOME="$META/home" CARGO_HOME="$META/cargo-home" CARGO_NET_OFFLINE=true \
+        RUSTC=/nonexistent/rustc CARGO_TERM_COLOR=never "$CARGO_BIN" metadata --no-deps --offline --frozen --format-version 1 \
+        --manifest-path "$dir/$mp") >"$out" 2>"$err"; rc=$?
+    if [ "$rc" -ne 0 ] || ! awk -v root="$dir" "$META_JSON_AWK" <"$out" >"$META/run.rec"; then
+        [ "$rc" -ne 0 ] || printf 'cargo metadata output could not be read\n' >>"$err"
+        printf '%s\t%s\n' "$mp" "$(grep -v '^[[:space:]]*$' "$err" | sed "s|$dir/||g" | tr '\t\n' '  ' | cut -c1-300)" >>"$META/$side.fail"
+        echo "$mp" >>"$META/$side.covered"
+        return 0
+    fi
+    cat "$META/run.rec" >>"$TMP/meta-$side.rec"
+    { echo "$mp"; awk -F'\t' '$1 == "P" { print $2 }' "$META/run.rec"; } >>"$META/$side.covered"
+}
+: >"$META/base.fail"; : >"$META/head.fail"; : >"$META/base.covered"; : >"$META/head.covered"
+meta_index "$head_src" "$META/head"
+meta_index "$BASE" "$META/base"
+meta_affected >"$TMP/meta-affected" || die "cannot list the packages a change affects"
+if [ -s "$TMP/meta-affected" ]; then
+    meta_build "$head_src" "$META/head"
+    meta_build "$BASE" "$META/base"
+    if meta_cargo; then
+        while IFS= read -r mp; do meta_run head "$mp"; meta_run base "$mp"; done <"$TMP/meta-affected"
+    else
+        META_STATE="unavailable"
+        echo "diff-gate: cargo metadata unavailable: $META_WHY" >&2
+        while IFS= read -r mp; do
+            [ -f "$META/head/$mp" ] && printf 'cargo-unparsed\t%s\t0\tcargo metadata unavailable, cannot judge what Cargo builds (%s)\t\t\t%s\n' "$mp" "$META_WHY" "$META_WHY" >>"$TMP/meta-findings"
+        done <"$TMP/meta-affected"
+    fi
+fi
+# a head cargo cannot read is a finding; the package's records are then missing on that side
+while IFS="$(printf '\t')" read -r mp why; do
+    printf 'cargo-unparsed\t%s\t0\tcargo cannot read this package: %s\t\t\t%s\n' "$mp" "$why" "$why" >>"$TMP/meta-findings"
+done <"$META/head.fail"
+
+# ── Name-exempt files: built by a non-test root? (R3-B1..B4) ─────────
+# A file under a [[sensitive]] glob that is exempt by its name (tests/, *_tests.rs, ...) is
+# test-only only if no non-test Cargo target of its package builds it. The roots are what
+# cargo metadata (above) reports for that package on the head: lib, bin, proc-macro and build
+# script targets (test, bench and example targets are test roots). The token helper walks the
+# modules from them on rustc's tokens (`mod`, #[path], cfg_attr path, include!, at any layout,
+# with escapes decoded, case-insensitively, following symlinks inside the extracted crate).
+# Without the helper, without cargo's answer for the package, or when the walk meets something
+# it cannot follow (a computed include!), nothing in that package is exempt.
+: >"$TMP/ex-ok"; : >"$TMP/ex-cands"
+cut -f1 "$TMP/rs-added" | awk '!s[$0]++' | awk -F'\t' -v sensf="$TMP/sens" "$G2R_AWK"'
+    FILENAME == sensf { if ($1 == "S") sg[++ns] = g2r($2); else if ($1 == "E") eg[++ne] = g2r($2); next }
+    { s = 0; e = 0; for (i = 1; i <= ns; i++) if ($0 ~ sg[i]) s = 1; for (i = 1; i <= ne; i++) if ($0 ~ eg[i]) e = 1; if (s && e) print }
+    ' "$TMP/sens" - >"$TMP/ex-cands" || die "exempt scan failed"
+if [ -s "$TMP/ex-cands" ]; then
+    # each candidate's package: the nearest head package (from cargo metadata) above it
+    awk -F'\t' 'FILENAME == ARGV[1] { if ($1 == "P") { d = $2; if (!sub(/\/[^\/]*$/, "", d)) d = ""; PD[d] = $2 } next }
+        { d = $0; while (1) { if (!sub(/\/[^\/]*$/, "", d)) d = ""; if (d in PD) { print $0 "\t" PD[d] "\t" d; next } if (d == "") break } print $0 "\t\t" }' \
+        "$TMP/meta-head.rec" "$TMP/ex-cands" >"$TMP/ex-pkg" || die "exempt scan failed"
+    REACH_WHY=""
+    if [ "$META_STATE" != ok ]; then REACH_WHY="cargo metadata unavailable"
+    elif ! tokens_ready; then REACH_WHY="token helper unavailable: $TOK_WHY"
+    else
+        R="$TMP/reach"; mkdir -p "$R/tree" || die "mkdir failed"; : >"$R/roots"
+        awk -F'\t' '$2 != "" && !s[$2]++ { print $2 "\t" $3 }' "$TMP/ex-pkg" >"$R/pkgs"
+        while IFS="$(printf '\t')" read -r mp d; do
+            [ -n "$d" ] || d=.
+            if [ "$WORKTREE" = 1 ]; then
+                (find "$d" \( -name target -o -name .git \) -prune -o \( -type f -o -type l \) -print0 | tar --null -T - -cf - | tar -x -C "$R/tree") 2>/dev/null \
+                    || { REACH_WHY="cannot copy $d"; break; }
+            else
+                git archive --format=tar "$HEAD_SHA" -- "$d" | tar -x -C "$R/tree" || { REACH_WHY="cannot extract $d"; break; }
+            fi
+            awk -F'\t' -v mp="$mp" '$1 == "T" && $2 == mp && $3 !~ /(^|,)(test|bench|example)(,|$)/ { print $5 }' "$TMP/meta-head.rec" >>"$R/roots"
+        done <"$R/pkgs"
+        if [ -z "$REACH_WHY" ] && ! "$TOK_BIN" --reach "$R/tree" "$R/roots" >"$R/out" 2>"$R/err"; then
+            REACH_WHY="helper --reach failed: $(head -c 200 "$R/err" | tr '\t\n' '  ')"
+        fi
+    fi
+    # Emits the test-only ones to ex-ok; says why for the others.
+    awk -F'\t' -v why="$REACH_WHY" -v ro="$TMP/reach/out" '
+        FILENAME == ro { if ($1 == "N") N[$2] = 1; else if ($1 == "U") U[++nu] = $2 SUBSEP $3; next }
+        {
+            f = $1; mp = $2; d = $3; w = why
+            if (w == "" && mp == "") w = "cargo metadata names no package around it"
+            if (w == "" && (f in N)) w = "a non-test target of " mp " builds it"
+            for (i = 1; i <= nu && w == ""; i++) { split(U[i], u, SUBSEP); if (d == "" || index(u[1], d "/") == 1) w = "the module walk cannot follow " u[1] " (" u[2] ")" }
+            if (w == "") print f > "/dev/stdout"
+            else print "diff-gate: " f " is not treated as test-only: " w > "/dev/stderr"
+        }' "$(test -f "$TMP/reach/out" && echo "$TMP/reach/out" || echo /dev/null)" "$TMP/ex-pkg" >"$TMP/ex-ok" || die "exempt check failed"
+fi
+
 # ── Pass 2: lex added .rs lines ──────────────────────────────────────
 # A line-by-line regex cannot know whether a line starts inside a string or a block comment,
 # so each .rs file with added lines is lexed in full (nested block comments, strings, raw
@@ -783,159 +1106,14 @@ if [ -s "$TMP/rs-added" ]; then
         [ "${PIPESTATUS[0]}${PIPESTATUS[1]}" = 00 ] || die "cannot read $p"
         printf '%s\t%s\n' "$TMP/blobs/$n" "$p" >>"$TMP/rs-index"
     done <"$TMP/rs-paths"
-    # Name-exempt files (RV-F1). A file under a [[sensitive]] glob that is exempt by its name
-    # (tests/, *_tests.rs, ...) is test-only only if nothing builds it outside a test cfg. Find
-    # every file in the sensitive crates that could declare it (a `mod <stem>`, or its file
-    # name in a #[path], include! or Cargo target path), and the same again for any exempt
-    # file among them, so the lexer stage below can judge each declaration.
-    awk -F'\t' -v sensf="$TMP/sens" "$G2R_AWK"'
-    FILENAME == sensf { if ($1 == "S") sg[++ns] = g2r($2); else if ($1 == "E") eg[++ne] = g2r($2); next }
-    { s = 0; e = 0; for (i = 1; i <= ns; i++) if ($0 ~ sg[i]) s = 1; for (i = 1; i <= ne; i++) if ($0 ~ eg[i]) e = 1; if (s && e) print }
-    ' "$TMP/sens" "$TMP/rs-paths" >"$TMP/ex-todo" || die "exempt scan failed"
-    cp "$TMP/ex-todo" "$TMP/ex-cands"; : >"$TMP/ex-all"; : >"$TMP/decl-hits"; : >"$TMP/cargo-refs"
-    SPECS=(); while IFS="$(printf '\t')" read -r k g; do [ "$k" = S ] && SPECS+=(":(glob)$g"); done <"$TMP/sens"
-    round=0
-    while [ -s "$TMP/ex-todo" ] && [ ${#SPECS[@]} -gt 0 ]; do
-        round=$((round + 1)); [ "$round" -le 16 ] || die "exempt-file declarations nest too deep"
-        cat "$TMP/ex-todo" >>"$TMP/ex-all"
-        # Two fixed strings (fast; many -e patterns would each be tried per line), then the exact
-        # test per matched line: `mod <stem>` as a whole identifier, or a file-name token equal
-        # to the exempt file's name (dir/mod.rs for a mod.rs), compared without case.
-        awk '{ n = split($0, a, "/"); b = a[n]; if (b == "mod.rs" && n > 1) { st = a[n - 1]; b = a[n - 1] "/" b } else { st = b; sub(/\.[rR][sS]$/, "", st) }
-               print "S\t" st; print "B\t" tolower(b) }' "$TMP/ex-todo" | awk '!s[$0]++' >"$TMP/ex-keys"
-        if [ "$WORKTREE" = 1 ]; then
-            git grep --untracked -n -z -I -i -F -e mod -e .rs -- "${SPECS[@]}" >"$TMP/grep.out"; rc=$?
-        else
-            git grep -n -z -I -i -F -e mod -e .rs "$HEAD_SHA" -- "${SPECS[@]}" >"$TMP/grep.out"; rc=$?
-        fi
-        [ "$rc" -le 1 ] || die "git grep failed while looking for module declarations"
-        # git grep -z -n: <rev:>path NUL line NUL text (NUL becomes \001: awk strings end at NUL)
-        tr '\000' '\001' <"$TMP/grep.out" >"$TMP/grep.t" || die "tr failed"
-        awk -v keys="$TMP/ex-keys" -v pre="$HEAD_SHA:" -v wt="$WORKTREE" '
-            FILENAME == keys { split($0, f, "\t"); if (f[1] == "S") ST[f[2]] = 1; else BK[f[2]] = 1; next }
-            {
-                i = index($0, "\001"); if (!i) next
-                p = substr($0, 1, i - 1); r = substr($0, i + 1); j = index(r, "\001"); t = substr(r, j + 1)
-                if (wt != 1 && index(p, pre) == 1) p = substr(p, length(pre) + 1)
-                if (p in hit) next
-                if (p ~ /[[:cntrl:]]/) { print "diff-gate: path with a control character in the tree (refused)" > "/dev/stderr"; exit 3 }
-                x = tolower(t); gsub(/\\/, "/", x)
-                while (match(x, /[a-z0-9_.-]+\.rs/)) { if (substr(x, RSTART, RLENGTH) in BK) { hit[p] = 1; print p; next } x = substr(x, RSTART + RLENGTH) }
-                x = tolower(t); gsub(/\\/, "/", x)
-                while (match(x, /[a-z0-9_-]+\/mod\.rs/)) { if (substr(x, RSTART, RLENGTH) in BK) { hit[p] = 1; print p; next } x = substr(x, RSTART + RLENGTH) }
-                x = t
-                while (match(x, /(^|[^A-Za-z0-9_])mod[ \t]+(r#)?[A-Za-z_][A-Za-z0-9_]*/)) {
-                    m = substr(x, RSTART, RLENGTH); sub(/^.*mod[ \t]+/, "", m); sub(/^r#/, "", m)
-                    if (m in ST) { hit[p] = 1; print p; next }
-                    x = substr(x, RSTART + RLENGTH)
-                }
-            }' "$TMP/ex-keys" "$TMP/grep.t" >"$TMP/grep.paths" || die "git grep output unusable"
-        cat "$TMP/grep.paths" >>"$TMP/decl-hits"
-        awk -F'\t' -v sensf="$TMP/sens" -v done="$TMP/ex-all" "$G2R_AWK"'
-        FILENAME == sensf { if ($1 == "S") sg[++ns] = g2r($2); else if ($1 == "E") eg[++ne] = g2r($2); next }
-        FILENAME == done { d[$0] = 1; next }
-        tolower($0) ~ /\.rs$/ && !($0 in d) && !s[$0]++ { a = 0; e = 0; for (i = 1; i <= ns; i++) if ($0 ~ sg[i]) a = 1; for (i = 1; i <= ne; i++) if ($0 ~ eg[i]) e = 1; if (a && e) print }
-        ' "$TMP/sens" "$TMP/ex-all" "$TMP/grep.paths" >"$TMP/ex-todo" || die "exempt scan failed"
-    done
-    # Cargo target paths that resolve to an exempt file: such a file is a target, not a test module.
-    awk '!s[$0]++' "$TMP/decl-hits" | while IFS= read -r m; do
-        case "$(printf '%s' "$m" | tr '[:upper:]' '[:lower:]')" in cargo.toml|*/cargo.toml) ;; *) continue ;; esac
-        show_at "$head_src" "$m" | cargo_entries | awk -F'\t' -v m="$m" '
-            function normp(p,   n, a, i, o, k, st) { n = split(p, a, "/"); k = 0
-                for (i = 1; i <= n; i++) { if (a[i] == "" || a[i] == ".") continue; if (a[i] == "..") { if (k > 0) k--; continue } st[++k] = a[i] }
-                o = ""; for (i = 1; i <= k; i++) o = o (i > 1 ? "/" : "") st[i]; return o }
-            index($1, "target-path|") == 1 { d = m; if (d ~ /\//) sub(/\/[^\/]*$/, "", d); else d = ""; print m "\t" normp(d "/" substr($1, 13)) }'
-    done >>"$TMP/cargo-refs"
-    # declaring .rs files not already read go to the lexer stage too, for their declarations only
-    awk -v idx="$TMP/rs-index" 'FILENAME == idx { split($0, f, "\t"); h[f[2]] = 1; next } tolower($0) ~ /\.rs$/ && !($0 in h) && !s[$0]++' \
-        "$TMP/rs-index" "$TMP/decl-hits" >"$TMP/decl-only" || die "declaration scan failed"
-    while IFS= read -r p; do
-        n=$((n + 1)); show_at "$head_src" "$p" | tr '\000' '\001' >"$TMP/blobs/$n"
-        [ "${PIPESTATUS[0]}${PIPESTATUS[1]}" = 00 ] || die "cannot read $p"
-        printf '%s\t%s\n' "$TMP/blobs/$n" "$p" >>"$TMP/rs-index"
-    done <"$TMP/decl-only"
     set -- "$TMP"/blobs/*
-    awk -v sensf="$TMP/sens" -v idx="$TMP/rs-index" -v add="$TMP/rs-added" -v exf="$TMP/ex-cands" -v crf="$TMP/cargo-refs" -v addr_types='SocketAddrV4|SocketAddrV6|SocketAddr|IpAddr|Ipv4Addr|Ipv6Addr|AddrParseError' "$G2R_AWK"'
+    awk -v sensf="$TMP/sens" -v idx="$TMP/rs-index" -v add="$TMP/rs-added" -v exf="$TMP/ex-ok" -v addr_types='SocketAddrV4|SocketAddrV6|SocketAddr|IpAddr|Ipv4Addr|Ipv6Addr|AddrParseError' "$G2R_AWK"'
     BEGIN { HASHES = "################################################################"; SP = "        " }
     function insg(p,   i) { for (i = 1; i <= nsg; i++) if (p ~ sg[i]) return 1; return 0 }
-    function insens(p,   i) { # sensitive and not test-only (RV-F1: a name-exempt file must be declared as a test)
+    function insens(p,   i) { # sensitive and not test-only (a name-exempt file only when ex-ok says so)
         if (!insg(p)) return 0
-        for (i = 1; i <= neg; i++) if (p ~ eg[i]) return !exok(p, 0)
+        for (i = 1; i <= neg; i++) if (p ~ eg[i]) return !(p in EXOK)
         return 1
-    }
-    # Declarations (RV-F1) over the lexed text of every file in the sensitive crates this stage
-    # reads: `mod name;` (a NAME reference) and the file name in a #[path = "..."], include!(...)
-    # or path = "..." anywhere (a PATH reference). A reference is test-only when its attribute
-    # chain carried #[cfg(test)] / #[cfg(all(test, ...))], when it lies in an inline test module,
-    # or when the declaring file is itself a test-only exempt file.
-    function rawstr(r, p,   v, c) { v = ""; while (p <= length(r)) { c = substr(r, p, 1); if (c == "\\") { v = v substr(r, p + 1, 1); p += 2; continue } if (c == "\"") break; v = v c; p++ } return v }
-    function addref(k, v, ln, t) { NREF++; RK[NREF] = k; RN[NREF] = v; RF[NREF] = P; RLN[NREF] = ln; RTS[NREF] = t }
-    function dpaths(ln, t,   n, i, a) { n = split(DPATH, a, SUBSEP); for (i = 2; i <= n; i++) addref("P", a[i], ln, t) }
-    function dattr(a, r,   x, off) { # one whole attribute, lexed a and raw r at the same positions
-        if (testattr(a)) DPT = 1
-        x = a; off = 0
-        while (match(x, /(^|[^A-Za-z0-9_])path[ \t]*=[ \t]*(r#*)?"/)) { DPATH = DPATH SUBSEP rawstr(r, off + RSTART + RLENGTH); off += RSTART + RLENGTH - 1; x = substr(x, RSTART + RLENGTH) }
-    }
-    function midscan(o, s, pos,   x, off, m) { # references after other code on the line: never test-attributed
-        x = substr(o, pos); off = pos - 1
-        while (match(x, /(^|[^A-Za-z0-9_])(mod[ \t]+(r#)?[A-Za-z_][A-Za-z0-9_]*[ \t]*;|path[ \t]*=[ \t]*(r#*)?"|include[ \t]*![ \t]*[(\[{][ \t]*(r#*)?")/)) {
-            m = substr(x, RSTART, RLENGTH)
-            if (m ~ /"$/) addref("P", rawstr(s, off + RSTART + RLENGTH), DLN, 0)
-            else { sub(/[ \t]*;$/, "", m); sub(/^.*mod[ \t]+/, "", m); sub(/^r#/, "", m); addref("N", m, DLN, 0) }
-            off += RSTART + RLENGTH - 1; x = substr(x, RSTART + RLENGTH)
-        }
-    }
-    function decls(o, s, ln,   pos, rest, e, m, d, i, c) {
-        DLN = ln; pos = 1
-        if (DAD > 0) { # inside an attribute that started on an earlier line
-            for (i = 1; i <= length(o); i++) { c = substr(o, i, 1); if (c == "[") DAD++; else if (c == "]" && --DAD == 0) break }
-            if (DAD > 0) { DAB = DAB " " o; DAR = DAR " " s; return }
-            dattr(DAB " " substr(o, 1, i), DAR " " substr(s, 1, i)); pos = i + 1
-        }
-        while (1) {
-            rest = substr(o, pos)
-            if (rest ~ /^[ \t]*$/) return
-            if (match(rest, /^[ \t]*#[ \t]*!?[ \t]*\[/)) {
-                e = attr_end(o, pos + RLENGTH - 1)
-                if (!e) { d = 0; for (i = pos + RLENGTH - 1; i <= length(o); i++) { c = substr(o, i, 1); if (c == "[") d++; else if (c == "]") d-- }
-                          DAD = d; DAB = substr(o, pos); DAR = substr(s, pos); return }
-                dattr(substr(o, pos, e - pos + 1), substr(s, pos, e - pos + 1)); pos = e + 1; continue
-            }
-            if (match(rest, /^[ \t]*(pub[ \t]*(\([^)]*\))?[ \t]+)?(unsafe[ \t]+)?mod[ \t]+(r#)?[A-Za-z_][A-Za-z0-9_]*[ \t]*;/)) {
-                m = substr(rest, RSTART, RLENGTH); sub(/[ \t]*;$/, "", m); sub(/^.*mod[ \t]+/, "", m); sub(/^r#/, "", m)
-                addref("N", m, ln, DPT); dpaths(ln, DPT); DPT = 0; DPATH = ""; pos += RLENGTH; continue
-            }
-            dpaths(ln, DPT)
-            if (match(rest, /^[ \t]*include[ \t]*![ \t]*[(\[{][ \t]*(r#*)?"/)) { addref("P", rawstr(s, pos + RLENGTH), ln, DPT); pos += RLENGTH }
-            DPT = 0; DPATH = ""
-            midscan(o, s, pos)
-            return
-        }
-    }
-    function stem(f,   n, a, b) { n = split(f, a, "/"); b = a[n]; if (b == "mod.rs" && n > 1) return a[n - 1]; sub(/\.[rR][sS]$/, "", b); return b }
-    function bkey(f,   n, a) { gsub(/\\/, "/", f); n = split(f, a, "/"); if (a[n] == "mod.rs" && n > 1) return a[n - 1] "/" a[n]; return a[n] }
-    function dirn(f) { if (f !~ /\//) return ""; sub(/\/[^\/]*$/, "", f); return f }
-    function refsf(i, F,   d) {
-        if (RK[i] == "N") { d = dirn(RF[i]); return (RN[i] == stem(F) && (d == "" || index(F, d "/") == 1)) }
-        return (bkey(RN[i]) == bkey(F))
-    }
-    function isex(p,   i) { if (!insg(p)) return 0; for (i = 1; i <= neg; i++) if (p ~ eg[i]) return 1; return 0 }
-    function exok(F, depth,   i, ok, D, why) { # is the name-exempt file F built only under a test cfg?
-        if (F in EXV) return EXV[F]
-        if (depth > 16 || (F in EXW)) return 0
-        EXW[F] = 1; ok = 1; why = ""
-        if (F ~ /(^|\/)src\/bin\//) { ok = 0; why = "it is a binary target under src/bin/" }
-        if (ok && (F in CREF)) { ok = 0; why = "it is a Cargo target path in " CREF[F] }
-        for (i = 1; i <= NREF && ok; i++) {
-            if (!refsf(i, F)) continue
-            if (RTS[i] || ((RF[i] SUBSEP RLN[i]) in TST)) continue
-            D = RF[i]
-            if (D != F && isex(D) && exok(D, depth + 1)) continue
-            ok = 0; why = "declared or named without a test cfg at " D ":" RLN[i]
-        }
-        delete EXW[F]; EXV[F] = ok
-        if (!ok && (F in EXC)) print "diff-gate: " F " is not treated as test-only: " why > "/dev/stderr"
-        return ok
     }
     # Test-region tracking over the lexed full file (strings, chars and comments are blank).
     function attr_end(s, i,   d, n, c) { # s[i] is "[": index of its matching "]", 0 if none
@@ -989,7 +1167,6 @@ if [ -s "$TMP/rs-added" ]; then
     function finish(   n, i, t) { # end of a file: keep its test lines only if its braces balanced
         if (!BROKEN && !TR && DEP == 0) { n = split(FT, t, " "); for (i = 1; i <= n; i++) TST[PP SUBSEP t[i]] = 1 }
         DEP = 0; TR = 0; TRD = 0; PEND = 0; BROKEN = 0; RL = ""; PL = ""; FT = ""
-        DPT = 0; DPATH = ""; DAD = 0; DAB = ""; DAR = ""
     }
     function sp(k) { while (length(SP) < k) SP = SP SP; return substr(SP, 1, k) }
     function lex(s,   out, i, n, c, c2, j, h, k, m, a, b, rest, term) {
@@ -1084,7 +1261,7 @@ if [ -s "$TMP/rs-added" ]; then
         NS = nt
         scan("net", nt, "std::net|tokio::net|async_std::net|mio::net|TcpStream|TcpListener|TcpSocket|UdpSocket|(reqwest|ureq|hyper|isahc|surf|attohttpc|curl|socket2|tungstenite|quinn)::|(use|crate)[ \t]+(reqwest|ureq|hyper|isahc|surf|attohttpc|curl|socket2|tungstenite|quinn)([^A-Za-z0-9_]|$)|[{,][ \t]*net([ \t]*[,}]|[ \t]+as[ \t]|::\\*|::\\{|$)|libc::(socket|connect|bind|listen|accept)", 1)
         NS = ns
-        scan("process", ns, "process::\\{[^}]*Command|process::\\{|process::Command|Command::new|std::process[ \t]*(;|,|}|[ \t]as[ \t]|$)|[{,][ \t]*process[ \t]*(,|}|[ \t]as[ \t]|$)|tokio::process|async_process|CommandExt|libc::(exec[a-z]*|fork|vfork|system|posix_spawn[a-z]*|popen)|nix::unistd::(fork|exec[a-z]*)", 1)
+        scan("process", ns, "process::\\{[^}]*Command|process::\\{|process::Command|Command::new|std::process[ \t]*(;|,|}|[ \t]as[ \t]|$)|[{,][ \t]*process[ \t]*(,|}|[ \t]as[ \t]|$)|tokio::process|async_process|CommandExt|libc::(exec[a-z]*|fork|vfork|system|posix_spawn[a-z]*|popen)|nix::unistd::(fork|exec[a-z]*)|nix::spawn::posix_spawn[a-z]*", 1)
         # #[link] and link_name only act on an extern block, which is itself a finding
         scan("ffi", ns, "(^|[^A-Za-z0-9_])extern([^A-Za-z0-9_]|$)|(^|[^A-Za-z0-9_])(no_mangle|export_name|link_section)([^A-Za-z0-9_]|$)", 0)
         scan("include", ns, "(^|[^A-Za-z0-9_])include([ \t]*![ \t]*[([{]|[ \t]+as([^A-Za-z0-9_]|$))", 0)
@@ -1096,10 +1273,9 @@ if [ -s "$TMP/rs-added" ]; then
         split($0, f, "\t"); k = f[1] SUBSEP f[2]; want[k] = 1
         na++; ap[na] = f[1]; al[na] = f[2]; at[na] = substr($0, length(f[1]) + length(f[2]) + 3); next
     }
-    FILENAME == exf { EXC[$0] = 1; next }
-    FILENAME == crf { split($0, f, "\t"); CREF[f[2]] = f[1]; next }
+    FILENAME == exf { EXOK[$0] = 1; next }
     FNR == 1 { if (PP != "") finish(); LB = 0; LS = 0; LH = 0; P = pathof[FILENAME]; PP = P; SENSG = insg(P) }
-    { s = $0; sub(/\r$/, "", s); o = lex(s); if (SENSG) { track(o, FNR); decls(o, s, FNR) } if ((P SUBSEP FNR) in want) { full[P SUBSEP FNR] = o; ftxt[P SUBSEP FNR] = s } }
+    { s = $0; sub(/\r$/, "", s); o = lex(s); if (SENSG) track(o, FNR); if ((P SUBSEP FNR) in want) { full[P SUBSEP FNR] = o; ftxt[P SUBSEP FNR] = s } }
     END {
         if (PP != "") finish()
         for (q = 1; q <= na; q++) {
@@ -1129,7 +1305,7 @@ if [ -s "$TMP/rs-added" ]; then
                 print r "\t" ap[q] "\t" al[q] "\t" d "\t\t" out "\t" T
             }
         }
-    }' "$TMP/sens" "$TMP/rs-index" "$TMP/rs-added" "$TMP/ex-cands" "$TMP/cargo-refs" "$@" >>"$TMP/findings" || die "lexer stage failed"
+    }' "$TMP/sens" "$TMP/rs-index" "$TMP/rs-added" "$TMP/ex-ok" "$@" >>"$TMP/findings" || die "lexer stage failed"
 fi
 
 # ── Pass 2b: token scan (tools/diff-gate-tokens, built from the trusted base) ──
@@ -1141,7 +1317,6 @@ fi
 # tree's hash, outside the checkout. If it cannot be built or run, every changed .rs file
 # gets an owner-only "rust-tokens" finding: never a silent pass.
 # DIFF_GATE_TOKENS_BIN (a prebuilt helper) is for local testing only; CI never sets it.
-TOKENS_PROTOCOL="diff-gate-tokens protocol 1"
 : >"$TMP/tok-manifest"; : >"$TMP/tok-out"; mkdir -p "$TMP/tok" || die "mkdir failed"
 awk -F'\t' '$1 != "D" && tolower($4) ~ /\.rs$/ { print $4 }' "$TMP/files" | awk '!s[$0]++' >"$TMP/tok-paths"
 # Split the added .rs lines by file in one pass (rs-added-by/<n> for the n-th path), so the
@@ -1163,60 +1338,8 @@ while IFS= read -r p; do
     printf '%s\t%s\t%s\t%s\n' "$p" "$TMP/tok/h$n" "$bfile" "$added" >>"$TMP/tok-manifest"
 done <"$TMP/tok-paths"
 
-TOK_WHY=""; TOK_BIN=""
-# real_path <path>: the path with every symlink in its existing part resolved (cd -P); the part
-# that does not exist yet is kept as written, and a ".." in it fails (it could climb anywhere).
-real_path() {
-    local p="$1" rest="" d
-    while [ ! -d "$p" ]; do
-        case "${p##*/}" in ..|.) return 1 ;; esac
-        rest="/${p##*/}$rest"; p="${p%/*}"; [ -n "$p" ] || p=/
-    done
-    d="$(cd -P -- "$p" 2>/dev/null && pwd -P)" || return 1
-    printf '%s%s\n' "${d%/}" "$rest"
-}
-REALROOT="$(cd -P -- "$ROOT" && pwd -P)" || die "cannot resolve the checkout path"
-tokens_bin() { # sets TOK_BIN, or TOK_WHY and fails; runs in this shell (no subshell)
-    local ref tree cache bin stage realcache realbin
-    if [ -n "${DIFF_GATE_TOKENS_BIN:-}" ]; then
-        echo "diff-gate: token helper from DIFF_GATE_TOKENS_BIN=$DIFF_GATE_TOKENS_BIN (not built from the base)" >&2
-        bin="$DIFF_GATE_TOKENS_BIN"
-    else
-        ref="${DIFF_GATE_TOKENS_REF:-$BASE_TIP}"
-        tree="$(git rev-parse -q --verify "$ref:tools/diff-gate-tokens" 2>/dev/null)" || { TOK_WHY="no tools/diff-gate-tokens at the trusted base $(git rev-parse --short "$ref" 2>/dev/null)"; return 1; }
-        cache="${DIFF_GATE_CACHE:-${RUNNER_TEMP:-${XDG_CACHE_HOME:-$HOME/.cache}}/weftos-diff-gate}"
-        case "$cache" in /*) ;; *) cache="$ROOT/$cache" ;; esac
-        case "$cache/" in "$ROOT"/*) TOK_WHY="cache $cache is inside the checkout (refused)"; return 1 ;; esac
-        # RV-C1: compare resolved paths, so a symlink (anywhere in the cache path) into the
-        # checkout is refused too. A change could commit a binary at the predictable path.
-        realcache="$(real_path "$cache")" || { TOK_WHY="cache $cache cannot be resolved (refused)"; return 1; }
-        case "$realcache/" in "$REALROOT"/*) TOK_WHY="cache $cache is inside the checkout (refused; it resolves to $realcache)"; return 1 ;; esac
-        bin="$cache/tokens-$tree/diff-gate-tokens"
-        if [ ! -x "$bin" ]; then
-            command -v cargo >/dev/null 2>&1 || { TOK_WHY="cargo not found to build tools/diff-gate-tokens"; return 1; }
-            mkdir -p "$cache" && stage="$(mktemp -d "$cache/build.XXXXXX")" || { TOK_WHY="cannot create $cache"; return 1; }
-            mkdir -p "$stage/src" && git archive "$tree" | tar -x -C "$stage/src" || { TOK_WHY="cannot extract the helper source"; rm -rf "$stage"; return 1; }
-            echo "diff-gate: building the token helper from the base (tree $tree)" >&2
-            if ! (cd "$stage/src" && CARGO_TARGET_DIR="$stage/target" cargo build --release --locked --quiet) >"$stage/build.log" 2>&1; then
-                tail -5 "$stage/build.log" >&2; TOK_WHY="cargo build of tools/diff-gate-tokens failed"; rm -rf "$stage"; return 1
-            fi
-            # Publish atomically: a concurrent run either sees no binary or the whole one.
-            mkdir -p "$stage/out" && mv "$stage/target/release/diff-gate-tokens" "$stage/out/" \
-                && { mv "$stage/out" "$cache/tokens-$tree" 2>/dev/null || true; }
-            rm -rf "$stage"
-        fi
-    fi
-    if [ -z "${DIFF_GATE_TOKENS_BIN:-}" ]; then # the cached binary: a plain file whose directory is outside the checkout
-        [ -L "$bin" ] && { TOK_WHY="helper $bin is a symlink (refused)"; return 1; }
-        realbin="$(real_path "${bin%/*}")" || { TOK_WHY="cannot resolve ${bin%/*} (refused)"; return 1; }
-        case "$realbin/" in "$REALROOT"/*) TOK_WHY="helper directory ${bin%/*} resolves into the checkout (refused)"; return 1 ;; esac
-    fi
-    [ -x "$bin" ] || { TOK_WHY="helper $bin is not executable"; return 1; }
-    [ "$("$bin" --protocol 2>/dev/null)" = "$TOKENS_PROTOCOL" ] || { TOK_WHY="helper $bin does not speak '$TOKENS_PROTOCOL'"; return 1; }
-    TOK_BIN="$bin"
-}
 if [ -s "$TMP/tok-manifest" ]; then
-    if tokens_bin; then
+    if tokens_ready; then
         if ! "$TOK_BIN" --manifest "$TMP/tok-manifest" >"$TMP/tok-out" 2>"$TMP/tok-err"; then
             TOK_WHY="helper failed: $(head -c 200 "$TMP/tok-err" | tr '\t\n' '  ')"
         elif ! awk -F'\t' 'FILENAME == ARGV[1] { ok[$1] = 1; next }
@@ -1287,6 +1410,135 @@ if [ -s "$TMP/cargo-paths" ]; then
     done <"$TMP/cargo-paths"
 fi
 
+# ── Cargo's view, base against head (see "Cargo's own reading" above) ──
+# Findings: a build script that now runs (new, moved, or turned on: a build key out of
+# [package.metadata], `build = false` deleted, a manifest next to an existing build.rs); a
+# proc-macro library (proc-macro = true or crate-type = ["proc-macro"]); a new cdylib, staticlib
+# or dylib crate type (ffi); a links value (build-script); a target path that is new (include
+# when it is not .rs; sensitive-crate in a sensitive crate); a dependency that is new or whose
+# package, source, path or registry changed (new-dep). Each is reported on the manifest line
+# the awk reader finds for it, with the same text pass 3 uses, so existing rows keep matching
+# and a finding both see is reported once; when no line is found, on line 0 with a text that
+# names what cargo reports. A package cargo could not read on the base counts as new.
+if [ -s "$TMP/meta-head.rec" ]; then
+    [ -s "$TMP/ws-root" ] || { cargo_entries <"$META/base/Cargo.toml" 2>/dev/null | grep '^workspace\.dependencies|' | cut -f1 >"$TMP/ws-root"; } 2>/dev/null
+    : >>"$TMP/ws-root"
+    awk -F'\t' -v OFS='\t' -v bf="$META/base.fail" -v brec="$TMP/meta-base.rec" -v bx="$META/base.rs" -v hx="$META/head.rs" -v flist="$TMP/files" '
+    function has(list, x) { return index("," list ",", "," x ",") > 0 }
+    function bn(p,   a, n) { n = split(tolower(p), a, "/"); return a[n] }
+    FILENAME == bf { BF[$1] = 1; next }
+    FILENAME == bx { BX[$0] = 1; next }
+    FILENAME == hx { HX[$0] = 1; next }
+    FILENAME == flist { ST[$4] = $1; next }
+    FILENAME == brec {
+        if ($1 == "P") { BP[$2] = 1; BL[$2] = $3; d = $2; if (!sub(/\/[^\/]*$/, "", d)) d = "."; BDIR[d] = 1 }
+        else if ($1 == "T") {
+            BT[$2, $5] = 1
+            if (has($3, "custom-build")) BB[$2, $5] = 1
+            if (has($3, "proc-macro") || has($4, "proc-macro")) BPM[$2] = 1
+            n = split($4, c, ","); for (i = 1; i <= n; i++) BCT[$2, c[i]] = 1
+        } else if ($1 == "D") { BD[$2, $3, $4, $5] = $6 SUBSEP $7 SUBSEP $8 SUBSEP $9; BE[$6 SUBSEP $7 SUBSEP $8 SUBSEP $9] = 1 }
+        next
+    }
+    $1 == "P" { HPO[++nh] = $2; HL[$2] = $3; next }
+    $1 == "T" { HT[++nt] = $0; next }
+    $1 == "D" { HD[++nd] = $0; next }
+    END {
+        for (i = 1; i <= nh; i++) { mp = HPO[i]; known[mp] = ((mp in BP) && !(mp in BF)) }
+        for (i = 1; i <= nt; i++) {
+            split(HT[i], t, "\t"); mp = t[2]; k = known[mp]
+            # a build script whose file is missing builds nothing; a non-.rs one is assumed present
+            hx = (t[5] in HX) || tolower(t[5]) !~ /\.rs$/; bx = (t[5] in BX) || tolower(t[5]) !~ /\.rs$/
+            if (has(t[3], "custom-build") && hx && !(k && ((mp, t[5]) in BB) && bx)) {
+                if (!((ST[t[5]] == "A" || ST[t[5]] == "T") && bn(t[5]) == "build.rs")) print "BUILD", mp, t[5]
+            }
+            if ((has(t[3], "proc-macro") || has(t[4], "proc-macro")) && !(k && (mp in BPM)) && !pm[mp]++) print "PROCM", mp, t[5]
+            n = split(t[4], c, ","); for (j = 1; j <= n; j++) if (c[j] ~ /^(cdylib|staticlib|dylib)$/ && !(k && ((mp, c[j]) in BCT)) && !ct[mp, c[j]]++) print "CTYPE", mp, c[j], t[6]
+            if (!(k && ((mp, t[5]) in BT))) print "TPATH", mp, t[5], t[3], t[6]
+        }
+        for (i = 1; i <= nh; i++) { mp = HPO[i]; if (HL[mp] != "" && !(known[mp] && HL[mp] == BL[mp])) print "LINKS", mp, HL[mp] }
+        for (i = 1; i <= nd; i++) {
+            split(HD[i], x, "\t"); mp = x[2]; a = x[6] SUBSEP x[7] SUBSEP x[8] SUBSEP x[9]
+            if (!known[mp] || !((mp, x[3], x[4], x[5]) in BD)) {
+                b = (x[8] != "" && x[8] !~ /^(\.\.\/|\/)/ && (x[8] in BDIR)) || (a in BE) || (x[7] == "registry+https://github.com/rust-lang/crates.io-index" && x[8] == "" && x[9] == "")
+                print "DEPNEW", mp, x[3], x[4], x[5], x[6], x[7], x[8], x[9], b
+            } else if (BD[mp, x[3], x[4], x[5]] != a) print "DEPCHG", mp, x[3], x[4], x[5], x[6], x[7], x[8], x[9], 0
+        }
+    }' "$META/base.fail" "$META/base.rs" "$META/head.rs" "$TMP/files" "$TMP/meta-base.rec" "$TMP/meta-head.rec" >"$TMP/meta-raw" || die "cargo metadata comparison failed"
+    # the awk reader's lines for each manifest with a raw finding, for the line mapping
+    : >"$TMP/meta-ent"
+    cut -f2 "$TMP/meta-raw" | awk '!s[$0]++' | while IFS= read -r mp; do
+        cargo_entries keys <"$META/head/$mp" | awk -v mp="$mp" '{ print mp "\t" $0 }' >>"$TMP/meta-ent"
+    done
+    awk -F'\t' -v OFS='\t' -v ent="$TMP/meta-ent" -v wsf="$TMP/ws-root" -v sensf="$TMP/sens" -v flist="$TMP/files" "$G2R_AWK"'
+    function dec(s) { gsub(/%2E/, ".", s); gsub(/%7C/, "|", s); gsub(/%09/, "\t", s); gsub(/%0A/, "\n", s); gsub(/%0D/, "\r", s); gsub(/%25/, "%", s); return s }
+    function dirn(p) { if (!sub(/\/[^\/]*$/, "", p)) p = ""; return p }
+    function normp(p,   n, a, i, o, k, st) { n = split(p, a, "/"); k = 0
+        for (i = 1; i <= n; i++) { if (a[i] == "" || a[i] == ".") continue; if (a[i] == "..") { if (k > 0) k--; else st[++k] = ".."; continue } st[++k] = a[i] }
+        o = ""; for (i = 1; i <= k; i++) o = o (i > 1 ? "/" : "") st[i]; return o }
+    function disp(t) { gsub(/\t/, " ", t); return (length(t) > 160) ? substr(t, 1, 157) "..." : t }
+    function out(rule, mp, ln, msg, m) { print rule, mp, ln, disp(msg), "", "", m }
+    function sens(p,   i, s, e) { for (i = 1; i <= ns; i++) if (p ~ sg[i]) s = 1; for (i = 1; i <= ne; i++) if (p ~ eg[i]) e = 1; return s && !e }
+    function msec(kind, tgt) { return (tgt != "" ? "target." tgt "." : "") (kind == "dev" ? "dev-dependencies" : kind == "build" ? "build-dependencies" : "dependencies") }
+    FILENAME == sensf { if ($1 == "S") sg[++ns] = g2r($2); else if ($1 == "E") eg[++ne] = g2r($2); next }
+    FILENAME == wsf { WS[$1] = 1; next }
+    FILENAME == flist { ST[$4] = $1; next }
+    FILENAME == ent {
+        mp = $1; k = $2; ln = $5; tx = $6
+        if (k ~ /^(pkg|lib|bin|example)\|/) { split(k, q, "|"); kk = q[1] "|" q[2]; if (!((mp, kk) in KL)) { KL[mp, kk] = ln; KT[mp, kk] = tx } next }
+        if (index(k, "target-path|") == 1) { v = normp((dirn(mp) == "" ? "" : dirn(mp) "/") dec(substr(k, 13))); if (!((mp, v) in PL)) { PL[mp, v] = ln; PT[mp, v] = tx } next }
+        p = index(k, "|"); if (!p) next
+        sec = substr(k, 1, p - 1); nm = dec(substr(k, p + 1))
+        n = split(sec, sg2, "."); last = dec(sg2[n]); gsub(/_/, "-", last)
+        if (n == 1 && last ~ /^(dev-|build-)?dependencies$/) ns2 = last
+        else if (n == 3 && sg2[1] == "target" && last ~ /^(dev-|build-)?dependencies$/) ns2 = "target." dec(sg2[2]) "." last
+        else next
+        if (!((mp, ns2, nm) in DL)) { DL[mp, ns2, nm] = ln; DT[mp, ns2, nm] = tx; DS[mp, ns2, nm] = sec; DW[mp, ns2, nm] = $4 }
+        next
+    }
+    $1 == "BUILD" {
+        if (($2, "pkg|build") in KL) out("build-script", $2, KL[$2, "pkg|build"], KT[$2, "pkg|build"], KT[$2, "pkg|build"])
+        else out("build-script", $2, 0, "build script " $3 " (Cargo runs it; no build key names it)", "build script " $3)
+        next
+    }
+    $1 == "PROCM" {
+        if (($2, "lib|proc-macro") in KL) out("proc-macro", $2, KL[$2, "lib|proc-macro"], KT[$2, "lib|proc-macro"], KT[$2, "lib|proc-macro"])
+        else if (($2, "lib|crate-type") in KL) out("proc-macro", $2, KL[$2, "lib|crate-type"], KT[$2, "lib|crate-type"], KT[$2, "lib|crate-type"])
+        else out("proc-macro", $2, 0, "the library is a proc-macro crate (" $3 ")", "proc-macro " $3)
+        next
+    }
+    $1 == "CTYPE" {
+        for (kk in KL) { split(kk, q, SUBSEP); if (q[1] == $2 && q[2] ~ /crate-type$/) { out("ffi", $2, KL[kk], "new crate type " $3 ": " KT[kk], KT[kk]); next } }
+        out("ffi", $2, 0, "new crate type " $3 " on target " $4, "crate-type " $3); next
+    }
+    $1 == "LINKS" {
+        if (($2, "pkg|links") in KL) out("build-script", $2, KL[$2, "pkg|links"], "links changed: " KT[$2, "pkg|links"], KT[$2, "pkg|links"])
+        else out("build-script", $2, 0, "links = " $3, "links = " $3)
+        next
+    }
+    $1 == "TPATH" {
+        mp = $2; src = $3; mapped = ((mp, src) in PL)
+        if (tolower(src) !~ /\.rs$/) { if (mapped) out("include", mp, PL[mp, src], "target path to a non-.rs file: " PT[mp, src], PT[mp, src]); else out("include", mp, 0, "target path to a non-.rs file: " src, src) }
+        if (sens(mp)) {
+            if (mapped) out("sensitive-crate", mp, PL[mp, src], "new or changed target path: " PT[mp, src], PT[mp, src])
+            else if ($4 !~ /(^|,)(test|bench|example)(,|$)/ && ST[src] != "A") out("sensitive-crate", mp, 0, "new " $4 " target " $5 ": " src, src)
+        }
+        next
+    }
+    $1 == "DEPNEW" || $1 == "DEPCHG" {
+        mp = $2; s2 = msec($3, $4); key = $5; mapped = ((mp, s2, key) in DL)
+        if ($1 == "DEPNEW" && mapped && DW[mp, s2, key] == 1 && $10 == 1 && (("workspace.dependencies|" key) in WS)) next
+        what = ($1 == "DEPNEW" ? "new entry in [" : "source changed in [")
+        src = ($7 != "" ? $7 : ($8 != "" ? "path " $8 : "?")); if ($9 != "") src = src " registry " $9; if ($6 != key) src = src " package " $6
+        if (mapped) out("new-dep", mp, DL[mp, s2, key], what DS[mp, s2, key] "]: " DT[mp, s2, key], DT[mp, s2, key])
+        else out("new-dep", mp, 0, what s2 "]: " key " (as Cargo reads it: " src ")", key " = " src)
+        next
+    }' "$TMP/sens" "$TMP/ws-root" "$TMP/files" "$TMP/meta-ent" "$TMP/meta-raw" >>"$TMP/meta-findings" || die "cargo metadata mapping failed"
+fi
+cat "$TMP/meta-findings" >>"$TMP/findings"
+# one finding per rule, path, line and matched text: pass 1, pass 3 and cargo often see the same one
+awk -F'\t' '{ k = $1 FS $2 FS $3 FS (NF >= 7 ? $7 : $4) } !s[k]++' "$TMP/findings" >"$TMP/findings.d" && mv "$TMP/findings.d" "$TMP/findings" || die "dedupe failed"
+
 # matchall(re, rule): does the regex approve every finding of that rule, the way "*" does?
 # (RV-D1: ".*", "^.*$", ".+", "(.*)", "." ...). It is asked of a fixed, varied set of single
 # characters; a pattern that matches every one of them matches any non-empty text, and no
@@ -1301,6 +1553,19 @@ function matchall(re, rule,   n, i, pr, need) {
     pr[++n] = " "; pr[++n] = "\t"; pr[++n] = "\""; pr[++n] = "\\"
     for (i = 1; i <= n; i++) if (!match(pr[i], re) || (need && RLENGTH < 1)) return 0
     return 1
+}
+# broad(pat, lit, rule): R3-D1. For a rule whose findings rows match as text (every rule but
+# the token-matched unsafe, net, process and ffi), a pattern shorter than 4 characters, or one
+# that matches 8 or more of these 16 sample finding texts, approves nearly every finding of the
+# rule in its path, so it is named unscoped like "*". A row written for one entry (`evil = `,
+# `^serde = "1"`, `signal_pgid`) matches at most one or two of them.
+function broad(pat, lit, rule,   n, i, c, sm) {
+    if (rule ~ /^(unsafe|net|process|ffi)$/) return 0
+    if (length(pat) < 4) return 1
+    n = split("evil = { git = \"https://example.com/x\" }|serde = \"1.0\"|tokio = { version = \"1\", features = [\"full\"] }|build = \"build.rs\"|proc-macro = true|crate-type = [\"cdylib\"]|path = \"src/bin/tool.rs\"|cannot classify this Cargo.toml statement: [dependencies]|pub fn stop_all() { super::signal_pgid(-1, 9); }|let x = compute(42);|impl Drop for Guard { fn drop(&mut self) {} }|mod helpers;|#[path = \"x.rs\"]|links = \"z\"|version.workspace = true|}", sm, "|")
+    c = 0
+    for (i = 1; i <= n; i++) if (lit ? index(sm[i], pat) > 0 : match(sm[i], pat)) c++
+    return c >= 8
 }'
 
 # ── Approvals ────────────────────────────────────────────────────────
@@ -1312,9 +1577,14 @@ function matchall(re, rule,   n, i, pr, need) {
 head_src="$HEAD_SHA"; [ "$WORKTREE" = 1 ] && head_src=WORKTREE
 show_at "$BASE" "$APPROVALS" >"$TMP/appr.base.toml"
 show_at "$head_src" "$APPROVALS" >"$TMP/appr.head.toml"
-: >"$TMP/approvals"
+: >"$TMP/approvals"; : >"$TMP/appr.trusted"
 if [ -s "$TMP/appr.head.toml" ]; then
     parse_approvals <"$TMP/appr.head.toml" >"$TMP/approvals.raw" || { echo "diff-gate: cannot use $APPROVALS" >&2; exit 2; }
+    # head rows that are trusted: their hash is a row of the base tip's approvals or in the tip ledger
+    show_at "$BASE_TIP" "$APPROVALS" >"$TMP/appr.tip.toml"
+    { parse_approvals <"$TMP/appr.tip.toml" 2>/dev/null || true; } | hash_rows | cut -f1 >"$TMP/appr.tip.h" || exit 2
+    show_at "$BASE_TIP" "$LEDGER" | parse_ledger 2>/dev/null | cut -f1 >>"$TMP/appr.tip.h"
+    hash_rows <"$TMP/approvals.raw" | awk -F'\t' 'FILENAME == ARGV[1] { t[$1] = 1; next } ($1 in t) { print $2 }' "$TMP/appr.tip.h" - >"$TMP/appr.trusted" || exit 2
     while IFS="$(printf '\t')" read -r r g pt re ab ln b; do
         lit=0; all=0
         if [ "$pt" = "*" ]; then all=1
@@ -1322,6 +1592,15 @@ if [ -s "$TMP/appr.head.toml" ]; then
             printf '' | grep -Eq -e "$pt" 2>/dev/null; [ $? -eq 2 ] && lit=1
             # in its own awk: a pattern grep accepts may not compile in awk, which is fatal there
             [ "$lit" = 0 ] && DG_RE="$pt" DG_RULE="$r" awk "$MATCHALL_AWK"' BEGIN { exit !matchall(ENVIRON["DG_RE"], ENVIRON["DG_RULE"]) }' 2>/dev/null && all=1
+            [ "$all" = 0 ] && DG_RE="$pt" DG_RULE="$r" DG_LIT="$lit" awk "$MATCHALL_AWK"' BEGIN { exit !broad(ENVIRON["DG_RE"], ENVIRON["DG_LIT"] + 0, ENVIRON["DG_RULE"]) }' 2>/dev/null && all=2
+        fi
+        # Rows read from the head approve only when the same row (same canonical hash) is on the
+        # trusted base tip, or the owner ledger at the tip lists it, or the owner flag is set: a
+        # row the owner removed on the base tip stops approving older branches at once, as a
+        # revoked ledger entry does (round 3 limit).
+        if [ "${DIFF_GATE_OWNER_APPROVED:-0}" != 1 ] && ! grep -qxF -- "$ln" "$TMP/appr.trusted"; then
+            echo "diff-gate: approval row at $APPROVALS line $ln is not on the trusted base tip and has no owner ledger entry: it approves nothing" >&2
+            continue
         fi
         printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$r" "$g" "$pt" "$lit" "$re" "$ab" "$b" "$ln" "$all"
     done <"$TMP/approvals.raw" >"$TMP/approvals"
@@ -1337,12 +1616,13 @@ BEGIN { n = split("file changed|file deleted or moved away|file deleted|symlink 
 $7 != "" { next }
 {
     pathrule = ($1 ~ /^(ci-workflow|build-script|toolchain-config|special-file|gitattributes-change)$/)
-    hit = ($9 == 1)
+    hit = ($9 == 1 || $9 == 2)
     if (pathrule) for (i = 1; i <= n && !hit; i++) hit = (index(fx[i], $3) > 0 || ($4 == 0 && fx[i] ~ $3))
     if (!hit) next
     if (pathrule) printf "diff-gate: WARNING: unscoped approval row (approvals line %s): rule=%s path=%s has no blob, so it approves EVERY future change to that path\n", $8, $1, $2
     else if ($3 == "*") printf "diff-gate: WARNING: unscoped approval row (approvals line %s): rule=%s path=%s pattern \"*\" has no blob, so it approves every %s finding there\n", $8, $1, $2, $1
-    else printf "diff-gate: WARNING: unscoped approval row (approvals line %s): rule=%s path=%s pattern \"%s\" matches any text and has no blob, so it approves every %s finding there, like \"*\"\n", $8, $1, $2, $3, $1
+    else if ($9 == 1) printf "diff-gate: WARNING: unscoped approval row (approvals line %s): rule=%s path=%s pattern \"%s\" matches any text and has no blob, so it approves every %s finding there, like \"*\"\n", $8, $1, $2, $3, $1
+    else printf "diff-gate: WARNING: unscoped approval row (approvals line %s): rule=%s path=%s pattern \"%s\" is broad (shorter than 4 characters, or it matches most sample finding texts) and has no blob, so it approves nearly every %s finding there\n", $8, $1, $2, $3, $1
 }' "$TMP/approvals" >"$TMP/unscoped" || die "approvals scan failed"
 [ -s "$TMP/unscoped" ] && cat "$TMP/unscoped" >&2
 
@@ -1406,7 +1686,7 @@ function bok(i, path) { return (abl[i] == "" || ((path in fb) && fb[path] == abl
 function why(i) { return ab[i] ": " aw[i] (abl[i] != "" ? " (blob " substr(abl[i], 1, 12) ")" : (us[i] ? " [UNSCOPED row: no blob]" : "")) }
 FILENAME == apf {
     na++; ar[na] = $1; ag[na] = g2r($2); ap[na] = $3; al[na] = $4; aw[na] = $5; ab[na] = $6; abl[na] = $7
-    us[na] = ($7 == "" && ($9 == 1 || $1 ~ /^(ci-workflow|build-script|toolchain-config|special-file|gitattributes-change)$/)); next
+    us[na] = ($7 == "" && ($9 == 1 || $9 == 2 || $1 ~ /^(ci-workflow|build-script|toolchain-config|special-file|gitattributes-change)$/)); next
 }
 FILENAME == flist { split($0, f, "\t"); fb[f[4]] = tolower(f[5]); next }
 {
