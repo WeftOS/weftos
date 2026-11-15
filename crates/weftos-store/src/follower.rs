@@ -95,7 +95,14 @@ impl FollowState {
         std::fs::create_dir_all(dir).map_err(io)?;
         let _lock = lock_state(dir, path, dir_lock);
         let merged = self.with_generations_on_disk(path);
-        merged.as_ref().unwrap_or(self).write_replacing(path, dir, &io)
+        #[cfg(test)]
+        crate::follower_seam::fire(crate::follower_seam::Phase::AfterRead);
+        #[cfg(test)]
+        crate::follower_seam::fire(crate::follower_seam::Phase::BeforeRename);
+        let r = merged.as_ref().unwrap_or(self).write_replacing(path, dir, &io);
+        #[cfg(test)]
+        crate::follower_seam::fire(crate::follower_seam::Phase::AfterRename);
+        r
     }
 
     /// `self` with every generation in the file at `path` that is higher than ours, or `None` when
@@ -108,6 +115,8 @@ impl FollowState {
         }
         // Only the generations are read, so a file whose `seen` this version cannot parse (a newer
         // state, say) still contributes them.
+        #[cfg(test)]
+        crate::follower_seam::count_read();
         let disk: Generations = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
         let higher: Vec<_> = disk
             .generations
@@ -134,6 +143,8 @@ impl FollowState {
         let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let tmp = dir.join(format!(".{name}.{}.{seq}.tmp", std::process::id()));
         let json = serde_json::to_vec_pretty(self).map_err(|e| S2Error::Invalid(e.to_string()))?;
+        #[cfg(test)]
+        crate::follower_seam::count_write();
         std::fs::write(&tmp, json).map_err(io)?;
         std::fs::rename(&tmp, path).map_err(|e| {
             let _ = std::fs::remove_file(&tmp);
@@ -159,6 +170,10 @@ fn lock_dir(dir: &Path) -> Option<std::fs::File> {
 /// removing it after use would let two savers lock two different files. `None` only on a
 /// filesystem with no advisory locks at all; the merge then runs unlocked, as before.
 fn lock_state(dir: &Path, path: &Path, dir_lock: bool) -> Option<std::fs::File> {
+    #[cfg(test)]
+    if crate::follower_seam::no_locks() {
+        return None;
+    }
     if dir_lock && let Some(f) = lock_dir(dir) {
         return Some(f);
     }
@@ -386,3 +401,6 @@ pub(crate) fn diff_poll(
 #[cfg(test)]
 #[path = "follower_lock_tests.rs"]
 mod lock_tests;
+#[cfg(test)]
+#[path = "follower_repair_tests.rs"]
+mod repair_tests;
