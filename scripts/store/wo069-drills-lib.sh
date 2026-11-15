@@ -204,7 +204,7 @@ drill2() {
     check "gc --confirmed retired the orphan" "jq -e '.orphans_retired | index(\"$SO\") != null' '$WORK/last.out' && jq -e '.orphans_failed | length == 0' '$WORK/last.out'"
     check "its registry entry is gone and the other worktree's stays" "as writer '$S' browse --json | jq -e '([.worktrees[].slug] | index(\"$SO\") == null) and ([.worktrees[].slug] | index(\"$SB\") != null)'"
     check "its bucket is deleted" "helper 'exists|$WBK' | grep -q false"
-    check "the archive holds the tree (docs/o.md under the bucket's archive prefix)" "helper 'list|weftos-archive|$WBK@' | tee '$WORK/arch.out' | grep -q 'docs/o.md'"
+    check "the archive holds the tree (its manifest and the content-named objects it lists, under the bucket's archive prefix)" "helper 'list|weftos-archive|$WBK@' | tee '$WORK/arch.out' | grep -q '/.wt/tree.manifest.json' && grep -q '/.wt/obj/sha256/' '$WORK/arch.out'"
     cat "$WORK/arch.out" | sed 's/^/    /'
     drill2_handoff c gc
     drill2_handoff d archive
