@@ -2,6 +2,7 @@
 //! more per finding. All values are fake; Argon2id runs the TEST profile unless a test says otherwise.
 
 use crate::VaultError;
+use crate::index::IndexEntry;
 use crate::keybag::{
     KIND_PASSCODE, KIND_RECOVERY, Keybag, MAX_PASSCODE_WRAPPERS, Pins, WrapperBody,
 };
@@ -346,5 +347,32 @@ fn l4_unassigned_private_use_and_control_code_points_are_refused() {
             &mut Pins::default()
         )
         .is_ok()
+    );
+}
+
+/// L6: an index whose payload generation differs from its blob generation is refused.
+#[test]
+fn l6_index_payload_generation_must_match_the_blob() {
+    let NewVault {
+        mut vault,
+        mut pins,
+        ..
+    } = new_vault(true);
+    let entries = vec![IndexEntry {
+        name: "login/a-FAKE".into(),
+        secret_type: crate::SecretType::Login,
+        policy: crate::Policy::PerUse,
+        revision: 1,
+        last_used_unix: 0,
+        tags: vec![],
+        source: None,
+    }];
+    let gen1_payload = vault.encode_index(&entries).unwrap();
+    vault.rotate_vk_unchecked(PASS, None, &mut pins).unwrap();
+    // Sealed now, so the blob is generation 2 while the payload says generation 1.
+    let odd = vault.seal_index(&gen1_payload, 2).unwrap();
+    assert_eq!(
+        vault.open_index(&odd.bytes).unwrap_err(),
+        VaultError::Malformed("index generation differs from its blob generation")
     );
 }

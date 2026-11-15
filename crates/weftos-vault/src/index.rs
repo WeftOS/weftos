@@ -146,6 +146,13 @@ impl Vault {
             return Err(VaultError::UnsupportedVersion);
         }
         let generation = u32::from_be_bytes(r.num()?);
+        if generation != crate::blob::peek_generation(blob_bytes)? {
+            // The payload is authenticated, so this is a writer bug rather than an attack (review L6),
+            // but an index whose name hashes use another generation's key is not canonical.
+            return Err(VaultError::Malformed(
+                "index generation differs from its blob generation",
+            ));
+        }
         let nk = self.name_key_at(generation)?;
         let count = u32::from_be_bytes(r.num()?);
         let mut entries = Vec::new();
