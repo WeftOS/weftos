@@ -75,14 +75,15 @@ fn new_wrapper_policy_is_enforced_on_the_public_path() {
         .check_new_policy(),
         Err(VaultError::KdfPolicy)
     );
-    assert!(
+    // Allowed by the old spec 3.1 floor, refused since the 2026-11-15 floor change (tests_kdf_floor).
+    assert_eq!(
         KdfParams {
             m_kib: 46080,
             t: 1,
             p: 1
         }
-        .check_new_policy()
-        .is_ok()
+        .check_new_policy(),
+        Err(VaultError::KdfPolicy)
     );
     assert!(KdfParams::RECOMMENDED.check_new_policy().is_ok());
     assert_eq!(

@@ -200,12 +200,14 @@ fn m2_rotation_refuses_a_below_policy_passcode_wrapper() {
     assert_eq!(vault.keybag_bytes(), &before[..]);
     assert_eq!(pins.highest.unwrap().sequence, 1);
 
-    // The cheapest parameters the policy allows (19 MiB, t=2) keep this test fast.
+    // The policy floor (64 MiB, t=3 since 2026-11-15) is also the cheapest the policy allows. This test
+    // and `tests_kdf_floor::create_accepts_the_floor` are the only unit tests that pay full-cost Argon2id.
     let floor = KdfParams {
-        m_kib: 19456,
-        t: 2,
+        m_kib: KdfParams::MIN_NEW_M_KIB,
+        t: KdfParams::MIN_NEW_T,
         p: 1,
     };
+    assert_eq!(floor, KdfParams::RECOMMENDED);
     floor.check_new_policy().unwrap();
     vault
         .write_now(&mut pins, |v, p| {

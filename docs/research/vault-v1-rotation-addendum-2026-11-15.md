@@ -65,7 +65,8 @@ followed the spec faithfully.
 - **The rotation doc is corrected.** `rotate_vk` no longer claims to recover from a compromise.
 - **Rotation does not carry weak KDF parameters forward (M2).** `rotate_vk` refuses (`KdfPolicy`) to re-seal a passcode
   wrapper whose parameters are below the policy for new wrappers. `Vault::below_policy_wrappers` lists those wrappers
-  after an unlock, so the caller can prompt for `change_passcode` first.
+  after an unlock, so the caller can prompt for `change_passcode` first. Since the owner's 2026-11-15 floor change
+  that policy is 64 MiB and t=3 (`docs/research/vault-v1-kdf-floor-2026-11-15.md`, which supersedes spec 3.1's floor).
 
 ## 3. Recommended spec fix (not implemented; needs the external format review, owner Q6)
 

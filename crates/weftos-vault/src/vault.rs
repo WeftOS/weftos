@@ -265,8 +265,20 @@ impl Vault {
     }
 
     /// Ids of current-generation passcode wrappers whose KDF parameters are below the policy for new
-    /// wrappers. `unlock` still opens them (they are format-valid), but [`Vault::rotate_vk`] refuses to
-    /// carry them forward; the caller should prompt for [`Vault::change_passcode`] (review M2, L4).
+    /// wrappers ([`KdfParams::check_new_policy`]: 64 MiB, t=3 since the owner's 2026-11-15 floor change).
+    /// Check it after every unlock: a non-empty list means "ask the user to set the passcode again".
+    ///
+    /// Legacy wrappers (written under the older 19 MiB floor of spec 3.1) are treated like this:
+    /// - `unlock` still opens them, so no existing vault is locked out by the floor change;
+    /// - [`Vault::rotate_vk`] refuses with [`VaultError::KdfPolicy`] instead of re-sealing them with their
+    ///   old parameters, and [`Vault::change_passcode`] refuses any parameters below the floor, so no
+    ///   write ever produces a new below-floor wrapper;
+    /// - [`Vault::change_passcode`] at the floor replaces the wrapper and clears it from this list;
+    /// - writes that carry the wrapper unchanged (adding a recovery or device wrapper, removing another
+    ///   wrapper, dropping history) are allowed: they do not touch its KEK or ciphertext, and refusing
+    ///   them would block safety actions such as removing a lost device.
+    ///
+    /// See review M2 and `docs/research/vault-v1-kdf-floor-2026-11-15.md`.
     pub fn below_policy_wrappers(&self) -> Vec<[u8; 16]> {
         self.keybag
             .wrappers

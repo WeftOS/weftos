@@ -44,10 +44,23 @@ impl KdfParams {
         }
     }
 
-    /// Policy for NEW wrappers: at least 19456 KiB, and t of at least 2 below 46080 KiB.
+    /// Least memory, in KiB, a NEW or rewritten passcode wrapper may use (owner decision 2026-11-15,
+    /// `docs/research/vault-v1-kdf-floor-2026-11-15.md`; supersedes spec 3.1's 19456 KiB floor).
+    pub const MIN_NEW_M_KIB: u32 = 65536;
+    /// Least iterations a NEW or rewritten passcode wrapper may use (same decision; supersedes spec 3.1's
+    /// "t of at least 2 below 46080 KiB").
+    pub const MIN_NEW_T: u32 = 3;
+
+    /// Policy for NEW and REWRITTEN passcode wrappers: format-valid, `m_kib` at least
+    /// [`KdfParams::MIN_NEW_M_KIB`] (64 MiB) and `t` at least [`KdfParams::MIN_NEW_T`] (3). Lanes are
+    /// bounded by the format only (1 to 16); [`KdfParams::RECOMMENDED`] uses 1.
+    ///
+    /// Checked by [`crate::Vault::create`], [`crate::Vault::change_passcode`] and
+    /// [`crate::Vault::rotate_vk`] before any Argon2id work. A stored wrapper below this floor (one
+    /// written under the older spec 3.1 floor) still unlocks; see [`crate::Vault::below_policy_wrappers`].
     pub fn check_new_policy(&self) -> Result<()> {
         self.check_format()?;
-        if self.m_kib < 19456 || (self.m_kib < 46080 && self.t < 2) {
+        if self.m_kib < Self::MIN_NEW_M_KIB || self.t < Self::MIN_NEW_T {
             return Err(VaultError::KdfPolicy);
         }
         Ok(())
